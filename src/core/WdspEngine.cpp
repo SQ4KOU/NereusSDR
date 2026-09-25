@@ -9,6 +9,12 @@
 //                (fftw_make_planner_thread_safe), because WDSP's planning
 //                calls run on more than one thread. NereusSDR-original.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-39: the receive lane. RX channel create, destroy,
+//                rebuild and rate change run as lane barriers that quiesce
+//                the DSP worker; the PS feedback channel's WDSP calls and
+//                the S-meter reads go through the lane; the RX channel map
+//                is lock-guarded. NereusSDR-original. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
@@ -64,6 +70,7 @@ warren@wpratt.com
 */
 
 #include "WdspEngine.h"
+#include "DspControlThread.h"
 #include "RxChannel.h"
 
 #include <cmath>
@@ -203,7 +210,12 @@ void WdspEngine::prepareConfigDir(const QString& configDir)
 bool WdspEngine::setNnrModelPaths(const std::array<QString, 2>& paths, QString* reason)
 {
     if (reason) reason->clear();
-    if (m_initialized || m_initializationInProgress || !m_rxChannels.empty()) {
+    bool haveRxChannels = false;
+    {
+        std::shared_lock<std::shared_mutex> lock(m_rxChannelsMutex);
+        haveRxChannels = !m_rxChannels.empty();
+    }
+    if (m_initialized || m_initializationInProgress || haveRxChannels) {
         if (reason) *reason = QStringLiteral("NNR model changes apply after the radio is disconnected and connected again.");
         return false;
     }
@@ -425,6 +437,10 @@ void WdspEngine::shutdown()
 
     qCInfo(lcDsp) << "Shutting down WDSP...";
 
+    // R-R3-39: every receive-lane job already queued runs first, so none of
+    // them reaches a channel this teardown closes.
+    drainReceiveLane();
+
     // TX channels destroyed BEFORE RX: the TXA pipeline (post-uslew →
     // rsmpout → outmeter) feeds samples into shared output buffers; tearing
     // RX down first can leave the TXA chain reading freed channel state
@@ -451,13 +467,19 @@ void WdspEngine::shutdown()
     // Destroy all RX channels (collect IDs first to avoid iterator invalidation)
     {
         std::vector<int> channelIds;
-        for (const auto& [id, ch] : m_rxChannels) {
-            channelIds.push_back(id);
+        {
+            std::shared_lock<std::shared_mutex> lock(m_rxChannelsMutex);
+            for (const auto& [id, ch] : m_rxChannels) {
+                channelIds.push_back(id);
+            }
         }
         for (int id : channelIds) {
             destroyRxChannel(id);
         }
     }
+    // R-R3-39: the closes above are lane barriers; wait for them before the
+    // impulse cache below goes.
+    drainReceiveLane();
 
 #ifdef HAVE_WDSP
     // From Thetis radio.cs:163-177 [v2.10.3.13] (DestroyDSP):
@@ -508,11 +530,82 @@ RxChannel* WdspEngine::createRxChannel(int channelId,
         return nullptr;
     }
 
-    if (m_rxChannels.count(channelId)) {
-        qCWarning(lcDsp) << "Channel" << channelId << "already exists";
-        return m_rxChannels.at(channelId).get();
+    {
+        std::shared_lock<std::shared_mutex> lock(m_rxChannelsMutex);
+        if (m_rxChannels.count(channelId)) {
+            qCWarning(lcDsp) << "Channel" << channelId << "already exists";
+            return m_rxChannels.at(channelId).get();
+        }
     }
 
+    if (m_rxLane != nullptr && !m_rxLane->isCurrentThread()) {
+        // R-R3-39: the wrapper exists at once (silent until its channel is
+        // open) and takes setters straight away; they queue behind the
+        // barrier that opens the WDSP channel. No parent: the map owns it,
+        // and a retired wrapper is deleted after its lane barrier.
+        auto channel = std::make_unique<RxChannel>(channelId, inputBufferSize,
+                                                   inputSampleRate, m_rxLane, nullptr);
+        RxChannel* ptr = channel.get();
+        ptr->setWdspReady(false);
+        {
+            std::unique_lock<std::shared_mutex> lock(m_rxChannelsMutex);
+            m_rxChannels.emplace(channelId, std::move(channel));
+        }
+        m_rxLane->postBarrier([this, ptr, channelId, inputBufferSize, dspBufferSize,
+                               inputSampleRate, dspSampleRate, outputSampleRate]() {
+            openRxChannelWdsp(channelId, inputBufferSize, dspBufferSize,
+                              inputSampleRate, dspSampleRate, outputSampleRate);
+            // NbFamily's anb/nob objects, as the constructor makes them
+            // without a lane.
+            ptr->createWdspObjectsOnLane();
+            // Admit the channel to processIq with the worker quiesced, so no
+            // block starts half way through the switch.
+            const std::function<void()> release = quiesceRxWorker();
+            ptr->setWdspReady(true);
+            if (release) {
+                release();
+            }
+        });
+#ifdef HAVE_WDSP
+        // Queued behind the barrier above (see the no-lane path's note).
+        if (auto* nb = ptr->nb()) { nb->seedSnbFromSettings(); }
+#endif
+        emit rxChannelCreated(channelId);
+        return ptr;
+    }
+
+#ifdef HAVE_WDSP
+    openRxChannelWdsp(channelId, inputBufferSize, dspBufferSize,
+                      inputSampleRate, dspSampleRate, outputSampleRate);
+#endif
+
+    auto channel = std::make_unique<RxChannel>(channelId, inputBufferSize,
+                                               inputSampleRate, this);
+    RxChannel* ptr = channel.get();
+
+#ifdef HAVE_WDSP
+    // Push persisted SNB Setup defaults to the RXA channel now that both
+    // OpenChannel (above) and RxChannel ctor (just above — which created
+    // NbFamily + ran create_anbEXT/create_nobEXT) have run. SNB lives
+    // inside rxa[channelId].snba and requires OpenChannel first; we gate
+    // the seed here rather than inside NbFamily so unit tests that use
+    // fabricated channel ids (never Opened) don't null-deref SetRXASNBA*.
+    // (Codex review PR #120, P2 — 2026-04-23.)
+    if (auto* nb = ptr->nb()) { nb->seedSnbFromSettings(); }
+#endif
+
+    {
+        std::unique_lock<std::shared_mutex> lock(m_rxChannelsMutex);
+        m_rxChannels.emplace(channelId, std::move(channel));
+    }
+    emit rxChannelCreated(channelId);
+    return ptr;
+}
+
+void WdspEngine::openRxChannelWdsp(int channelId, int inputBufferSize, int dspBufferSize,
+                                   int inputSampleRate, int dspSampleRate,
+                                   int outputSampleRate)
+{
 #ifdef HAVE_WDSP
     // From Thetis cmaster.c:72-86 (create_rcvr OpenChannel call)
     OpenChannel(
@@ -557,31 +650,53 @@ RxChannel* WdspEngine::createRxChannel(int channelId,
     qCInfo(lcDsp) << "Created RX channel" << channelId
                    << "bufSize=" << inputBufferSize
                    << "rate=" << inputSampleRate;
+#else
+    Q_UNUSED(channelId);
+    Q_UNUSED(inputBufferSize);
+    Q_UNUSED(dspBufferSize);
+    Q_UNUSED(inputSampleRate);
+    Q_UNUSED(dspSampleRate);
+    Q_UNUSED(outputSampleRate);
 #endif
-
-    auto channel = std::make_unique<RxChannel>(channelId, inputBufferSize,
-                                               inputSampleRate, this);
-    RxChannel* ptr = channel.get();
-
-#ifdef HAVE_WDSP
-    // Push persisted SNB Setup defaults to the RXA channel now that both
-    // OpenChannel (above) and RxChannel ctor (just above — which created
-    // NbFamily + ran create_anbEXT/create_nobEXT) have run. SNB lives
-    // inside rxa[channelId].snba and requires OpenChannel first; we gate
-    // the seed here rather than inside NbFamily so unit tests that use
-    // fabricated channel ids (never Opened) don't null-deref SetRXASNBA*.
-    // (Codex review PR #120, P2 — 2026-04-23.)
-    if (auto* nb = ptr->nb()) { nb->seedSnbFromSettings(); }
-#endif
-
-    m_rxChannels.emplace(channelId, std::move(channel));
-    return ptr;
 }
 
 void WdspEngine::destroyRxChannel(int channelId)
 {
-    auto it = m_rxChannels.find(channelId);
-    if (it == m_rxChannels.end()) {
+    std::unique_ptr<RxChannel> owned;
+    {
+        std::unique_lock<std::shared_mutex> lock(m_rxChannelsMutex);
+        auto it = m_rxChannels.find(channelId);
+        if (it == m_rxChannels.end()) {
+            return;
+        }
+        owned = std::move(it->second);
+        m_rxChannels.erase(it);
+    }
+
+    if (m_rxLane != nullptr && !m_rxLane->isCurrentThread()) {
+        // R-R3-39: gone from the map at once; the lane closes it after every
+        // job already queued for it, with the DSP worker quiesced, and the
+        // wrapper is deleted back on this thread once nothing can reach it.
+        std::shared_ptr<RxChannel> channel(std::move(owned));
+        m_rxLane->postBarrier([this, channel, channelId]() mutable {
+            const std::function<void()> release = quiesceRxWorker();
+            channel->markRetired();
+#ifdef HAVE_WDSP
+            // Deactivate with drain
+            SetChannelState(channelId, 0, 1);
+            // Close the WDSP channel
+            CloseChannel(channelId);
+            // Its worker and flush threads are gone; their IDs may be reused.
+            ThreadPlacement::instance().forgetChannel(channelId);
+#endif
+            // NB / NB2 destroy, as ~NbFamily did after CloseChannel.
+            channel->destroyWdspObjectsOnLane();
+            if (release) {
+                release();
+            }
+            retireRxChannel(std::move(channel));
+            qCInfo(lcDsp) << "Destroyed RX channel" << channelId;
+        });
         return;
     }
 
@@ -598,12 +713,13 @@ void WdspEngine::destroyRxChannel(int channelId)
     ThreadPlacement::instance().forgetChannel(channelId);
 #endif
 
-    m_rxChannels.erase(it);
+    owned.reset();
     qCInfo(lcDsp) << "Destroyed RX channel" << channelId;
 }
 
 RxChannel* WdspEngine::rxChannel(int channelId) const
 {
+    std::shared_lock<std::shared_mutex> lock(m_rxChannelsMutex);
     auto it = m_rxChannels.find(channelId);
     if (it != m_rxChannels.end()) {
         return it->second.get();
@@ -846,17 +962,74 @@ qint64 WdspEngine::rebuildRxChannel(int channelId, const ChannelConfig& cfg)
         return -1;
     }
 
-    auto it = m_rxChannels.find(channelId);
-    if (it == m_rxChannels.end()) {
-        qCWarning(lcDsp) << "rebuildRxChannel: channel" << channelId << "not found";
-        return -1;
-    }
-
     QElapsedTimer timer;
     timer.start();
 
+    std::unique_ptr<RxChannel> old;
+    {
+        std::unique_lock<std::shared_mutex> lock(m_rxChannelsMutex);
+        auto it = m_rxChannels.find(channelId);
+        if (it == m_rxChannels.end()) {
+            qCWarning(lcDsp) << "rebuildRxChannel: channel" << channelId << "not found";
+            return -1;
+        }
+        old = std::move(it->second);
+        m_rxChannels.erase(it);
+    }
+
     // Capture DSP state before tearing down the channel.
-    const RxChannelState state = it->second->captureState();
+    const RxChannelState state = old->captureState();
+
+    if (m_rxLane != nullptr && !m_rxLane->isCurrentThread()) {
+        // R-R3-39: the new wrapper replaces the old one in the map at once;
+        // the close and the reopen run as one lane barrier after every job
+        // already queued for the old wrapper, with the DSP worker quiesced
+        // across both. The state is re-applied to the new wrapper after the
+        // barrier is posted, so its calls land on the reopened channel.
+        std::shared_ptr<RxChannel> retired(std::move(old));
+        auto channel = std::make_unique<RxChannel>(channelId, cfg.bufferSize,
+                                                   cfg.sampleRate, m_rxLane, nullptr);
+        RxChannel* ptr = channel.get();
+        ptr->setWdspReady(false);
+        {
+            std::unique_lock<std::shared_mutex> lock(m_rxChannelsMutex);
+            m_rxChannels.emplace(channelId, std::move(channel));
+        }
+        m_rxLane->postBarrier([this, retired, ptr, channelId, cfg]() mutable {
+            const std::function<void()> release = quiesceRxWorker();
+            retired->markRetired();
+#ifdef HAVE_WDSP
+            // Deactivate with drain before closing (mirrors destroyRxChannel).
+            SetChannelState(channelId, 0, 1);
+            // Close the old WDSP channel.
+            CloseChannel(channelId);
+            ThreadPlacement::instance().forgetChannel(channelId);
+#endif
+            // NB / NB2 destroy, as ~NbFamily did in the old wrapper.
+            retired->destroyWdspObjectsOnLane();
+            qCInfo(lcDsp) << "Rebuild: closed RX channel" << channelId;
+            openRxChannelWdsp(channelId, cfg.bufferSize, cfg.filterSize,
+                              cfg.sampleRate, cfg.sampleRate, cfg.sampleRate);
+            ptr->createWdspObjectsOnLane();
+            ptr->setWdspReady(true);
+            if (release) {
+                release();
+            }
+            retireRxChannel(std::move(retired));
+        });
+#ifdef HAVE_WDSP
+        // Re-seed SNB defaults (same pattern as createRxChannel).
+        if (auto* nb = ptr->nb()) { nb->seedSnbFromSettings(); }
+#endif
+        emit rxChannelCreated(channelId);
+        // Reapply captured DSP state to the new channel (queued behind the
+        // barrier).
+        ptr->applyState(state);
+        const qint64 elapsedMs = timer.elapsed();
+        qCInfo(lcDsp) << "Rebuild: RX channel" << channelId << "queued in"
+                      << elapsedMs << "ms";
+        return elapsedMs;
+    }
 
 #ifdef HAVE_WDSP
     // Deactivate with drain before closing (mirrors destroyRxChannel).
@@ -871,40 +1044,15 @@ qint64 WdspEngine::rebuildRxChannel(int channelId, const ChannelConfig& cfg)
 #endif
 
     // Destroy the old RxChannel C++ wrapper (runs ~NbFamily, ~DeepFilterFilter, etc.).
-    m_rxChannels.erase(it);
+    old.reset();
     qCInfo(lcDsp) << "Rebuild: closed RX channel" << channelId;
 
-#ifdef HAVE_WDSP
-    // Recreate the WDSP channel with the new config.
-    OpenChannel(
-        channelId,
-        cfg.bufferSize,             // in_size
-        cfg.filterSize,             // dsp_size
-        cfg.sampleRate,             // input sample rate
-        cfg.sampleRate,             // dsp sample rate
-        cfg.sampleRate,             // output sample rate
-        0,                          // type: 0=RX
-        0,                          // state: 0=off initially
-        0.010,                      // tdelayup  — from Thetis cmaster.c:82
-        0.025,                      // tslewup   — from Thetis cmaster.c:83
-        0.000,                      // tdelaydown — from Thetis cmaster.c:84
-        0.010,                      // tslewdown — from Thetis cmaster.c:85
-        1);                         // bfo: block until output available
-
-    // Re-seed WDSP defaults to match the RxChannel constructor defaults —
-    // same pattern as createRxChannel() so that applyState() early-return
-    // guards fire correctly for values that haven't changed.
-    SetRXAMode(channelId, static_cast<int>(DSPMode::LSB));
-    SetRXABandpassFreqs(channelId, -2850.0, -150.0);
-    RXANBPSetFreqs(channelId, -2850.0, -150.0);
-    SetRXAAGCMode(channelId, static_cast<int>(AGCMode::Med));
-    SetRXAAGCTop(channelId, 80.0);
-    SetRXAPanelBinaural(channelId, 0);
-
-    qCInfo(lcDsp) << "Rebuild: opened RX channel" << channelId
-                  << "bufSize=" << cfg.bufferSize
-                  << "rate=" << cfg.sampleRate;
-#endif
+    // Recreate the WDSP channel with the new config. Re-seeds WDSP defaults
+    // to match the RxChannel constructor defaults — same pattern as
+    // createRxChannel() so that applyState() early-return guards fire
+    // correctly for values that haven't changed.
+    openRxChannelWdsp(channelId, cfg.bufferSize, cfg.filterSize,
+                      cfg.sampleRate, cfg.sampleRate, cfg.sampleRate);
 
     // Construct a new RxChannel C++ wrapper.
     auto channel = std::make_unique<RxChannel>(channelId, cfg.bufferSize,
@@ -916,7 +1064,11 @@ qint64 WdspEngine::rebuildRxChannel(int channelId, const ChannelConfig& cfg)
     if (auto* nb = ptr->nb()) { nb->seedSnbFromSettings(); }
 #endif
 
-    m_rxChannels.emplace(channelId, std::move(channel));
+    {
+        std::unique_lock<std::shared_mutex> lock(m_rxChannelsMutex);
+        m_rxChannels.emplace(channelId, std::move(channel));
+    }
+    emit rxChannelCreated(channelId);
 
     // Reapply captured DSP state to the new channel.
     ptr->applyState(state);
@@ -955,13 +1107,11 @@ qint64 WdspEngine::rebuildRxChannel(int channelId, const ChannelConfig& cfg)
 
 bool WdspEngine::setRxChannelRate(int channelId, int newRateHz)
 {
-    auto it = m_rxChannels.find(channelId);
-    if (it == m_rxChannels.end()) {
+    RxChannel* ch = rxChannel(channelId);
+    if (ch == nullptr) {
         qCWarning(lcDsp) << "setRxChannelRate: channel" << channelId << "not found";
         return false;
     }
-
-    RxChannel* ch = it->second.get();
 
     // Idempotent guard mirrors cmaster.c:457 [v2.10.3.13]
     //   if (pcm->xcm_inrate[in_id] != rate) { ... }
@@ -969,20 +1119,141 @@ bool WdspEngine::setRxChannelRate(int channelId, int newRateHz)
         return true;
     }
 
+    if (m_rxLane != nullptr && !m_rxLane->isCurrentThread()) {
+        // R-R3-39: carried at once, applied on the lane as a barrier.
+        setRxChannelRateAsync(channelId, newRateHz, nullptr, {});
+        return true;
+    }
+
     // Update the C++-side carry first so the wrapper's accessors agree
     // with the WDSP-side state if a reader peeks between calls.
-    ch->setSampleRate(newRateHz);
-    const int newSize = ch->bufferSize();
+    ch->setSampleRateCarry(newRateHz);
+    applyRateOnLane(ch, newRateHz, ch->bufferSize());
+    return true;
+}
+
+void WdspEngine::applyRateOnLane(RxChannel* ch, int rateHz, int bufferSize)
+{
+    // The wrapper's WDSP half first (pending stop, NB rate, notch-width
+    // readout), as RxChannel::setSampleRate always ran ahead of the channel
+    // calls below.
+    ch->applySampleRateOnLane(rateHz, bufferSize);
 
 #ifdef HAVE_WDSP
     // From Thetis cmaster.c:473-474 [v2.10.3.13]
-    SetInputSamplerate(channelId, newRateHz);
-    SetInputBuffsize(channelId, newSize);
+    SetInputSamplerate(ch->channelId(), rateHz);
+    SetInputBuffsize(ch->channelId(), bufferSize);
 #endif
 
-    qCInfo(lcDsp) << "setRxChannelRate: channel" << channelId
-                  << "->" << newRateHz << "Hz, in_size=" << newSize;
+    qCInfo(lcDsp) << "setRxChannelRate: channel" << ch->channelId()
+                  << "->" << rateHz << "Hz, in_size=" << bufferSize;
+}
+
+bool WdspEngine::applyRxChannelRateOnLane(int channelId, int rateHz, int bufferSize)
+{
+    RxChannel* ch = rxChannel(channelId);
+    if (ch == nullptr) {
+        return false;
+    }
+    applyRateOnLane(ch, rateHz, bufferSize);
     return true;
+}
+
+void WdspEngine::setRxChannelRateAsync(int channelId, int rateHz, QObject* context,
+                                       std::function<void(bool)> done)
+{
+    RxChannel* ch = rxChannel(channelId);
+    const bool lane = m_rxLane != nullptr && !m_rxLane->isCurrentThread();
+    if (!lane) {
+        const bool ok = setRxChannelRate(channelId, rateHz);
+        if (done) {
+            done(ok);
+        }
+        return;
+    }
+    auto ok = std::make_shared<std::atomic<bool>>(false);
+    if (ch == nullptr) {
+        qCWarning(lcDsp) << "setRxChannelRateAsync: channel" << channelId << "not found";
+    } else if (ch->sampleRate() == rateHz) {
+        // Mirrors SetXcmInrate's guard, cmaster.c:457 [v2.10.3.13].
+        ok->store(true);
+    } else {
+        ch->setSampleRateCarry(rateHz);
+        const int bufferSize = ch->bufferSize();
+        m_rxLane->postBarrier([this, channelId, rateHz, bufferSize, ok]() {
+            const std::function<void()> release = quiesceRxWorker();
+            ok->store(applyRxChannelRateOnLane(channelId, rateHz, bufferSize));
+            if (release) {
+                release();
+            }
+        });
+    }
+    if (context != nullptr && done) {
+        // Answered after the barrier (FIFO), on the context's thread.
+        m_rxLane->request<bool>([ok]() { return ok->load(); }, context, std::move(done));
+    }
+}
+
+void WdspEngine::setReceiveLane(DspControlThread* lane)
+{
+    m_rxLane = lane;
+    if (m_psFeedbackChannel) {
+        m_psFeedbackChannel->setControlLane(lane);
+    }
+    std::shared_lock<std::shared_mutex> lock(m_rxChannelsMutex);
+    for (auto& [id, ch] : m_rxChannels) {
+        Q_UNUSED(id);
+        ch->setControlLane(lane);
+    }
+}
+
+void WdspEngine::setRxWorkerQuiesce(RxWorkerQuiesce quiesce)
+{
+    std::lock_guard<std::mutex> lock(m_rxQuiesceMutex);
+    m_rxQuiesce = std::move(quiesce);
+}
+
+std::function<void()> WdspEngine::quiesceRxWorker()
+{
+    RxWorkerQuiesce quiesce;
+    {
+        std::lock_guard<std::mutex> lock(m_rxQuiesceMutex);
+        quiesce = m_rxQuiesce;
+    }
+    if (!quiesce) {
+        return {};
+    }
+    return quiesce();
+}
+
+void WdspEngine::retireRxChannel(std::shared_ptr<RxChannel> channel)
+{
+    {
+        std::lock_guard<std::mutex> lock(m_retiredMutex);
+        m_retiredRxChannels.push_back(std::move(channel));
+    }
+    QMetaObject::invokeMethod(this, [this]() { reapRetiredRxChannels(); },
+                              Qt::QueuedConnection);
+}
+
+void WdspEngine::reapRetiredRxChannels()
+{
+    std::vector<std::shared_ptr<RxChannel>> retired;
+    {
+        std::lock_guard<std::mutex> lock(m_retiredMutex);
+        retired.swap(m_retiredRxChannels);
+    }
+    // Deleted here, on this object's thread, where they were made.
+}
+
+void WdspEngine::drainReceiveLane()
+{
+    if (m_rxLane == nullptr || m_rxLane->isCurrentThread()) {
+        return;
+    }
+    m_rxLane->stop();
+    m_rxLane->start();
+    reapRetiredRxChannels();
 }
 
 // ---------------------------------------------------------------------------
@@ -1440,36 +1711,45 @@ void WdspEngine::openPsFeedbackChannel()
     constexpr int kPsOutputSampleRate = 48000; // RX output rate
 
 #ifdef HAVE_WDSP
-    // From Thetis cmaster.c:72-86 (create_rcvr OpenChannel call) [v2.10.3.13]
-    OpenChannel(
-        kPsFeedbackChannelId,
-        kPsInputBufferSize,                 // in_size
-        kPsDspBufferSize,                   // dsp_size
-        kPsFeedbackDefaultSampleRate,       // input sample rate (192000 default)
-        kPsDspSampleRate,                   // dsp sample rate
-        kPsOutputSampleRate,                // output sample rate
-        kPsFeedbackChannelType,             // type=0 (RX) — from cmaster.c:184
-        0,                                  // state: 0=off initially
-        0.010,                              // tdelayup  — from cmaster.c:82
-        0.025,                              // tslewup   — from cmaster.c:83
-        0.000,                              // tdelaydown — from cmaster.c:84
-        0.010,                              // tslewdown — from cmaster.c:85
-        1);                                 // bfo: block until output available
+    // R-R3-39: on the receive lane when there is one, as a barrier.
+    auto open = [=]() {
+        // From Thetis cmaster.c:72-86 (create_rcvr OpenChannel call) [v2.10.3.13]
+        OpenChannel(
+            kPsFeedbackChannelId,
+            kPsInputBufferSize,                 // in_size
+            kPsDspBufferSize,                   // dsp_size
+            kPsFeedbackDefaultSampleRate,       // input sample rate (192000 default)
+            kPsDspSampleRate,                   // dsp sample rate
+            kPsOutputSampleRate,                // output sample rate
+            kPsFeedbackChannelType,             // type=0 (RX) — from cmaster.c:184
+            0,                                  // state: 0=off initially
+            0.010,                              // tdelayup  — from cmaster.c:82
+            0.025,                              // tslewup   — from cmaster.c:83
+            0.000,                              // tdelaydown — from cmaster.c:84
+            0.010,                              // tslewdown — from cmaster.c:85
+            1);                                 // bfo: block until output available
 
-    // Activate the channel immediately.  Mirrors createRxChannel's pattern
-    // where SetRXAMode et al. run on a state=0 channel and the channel is
-    // activated lazily; for PS feedback we activate up front because calcc
-    // reads autonomously and expects the channel live.  state=1, dmode=0
-    // (no drain — channel isn't running yet).
-    SetChannelState(kPsFeedbackChannelId, 1, 0);
+        // Activate the channel immediately.  Mirrors createRxChannel's pattern
+        // where SetRXAMode et al. run on a state=0 channel and the channel is
+        // activated lazily; for PS feedback we activate up front because calcc
+        // reads autonomously and expects the channel live.  state=1, dmode=0
+        // (no drain — channel isn't running yet).
+        SetChannelState(kPsFeedbackChannelId, 1, 0);
 
-    qCInfo(lcDsp) << "Opened PS feedback RX channel"
-                  << kPsFeedbackChannelId
-                  << "rate=" << kPsFeedbackDefaultSampleRate;
+        qCInfo(lcDsp) << "Opened PS feedback RX channel"
+                      << kPsFeedbackChannelId
+                      << "rate=" << kPsFeedbackDefaultSampleRate;
+    };
+    if (m_rxLane != nullptr && !m_rxLane->isCurrentThread()) {
+        m_rxLane->postBarrier(open);
+    } else {
+        open();
+    }
 #endif
 
     m_psFeedbackChannel = std::make_unique<PsFeedbackChannel>(
         kPsFeedbackChannelId, this);
+    m_psFeedbackChannel->setControlLane(m_rxLane);
 }
 
 void WdspEngine::closePsFeedbackChannel()
@@ -1479,12 +1759,20 @@ void WdspEngine::closePsFeedbackChannel()
     }
 
 #ifdef HAVE_WDSP
-    // Deactivate with drain before closing.  dmode=1: drain-mode close
-    // (mirrors destroyRxChannel pattern at WdspEngine.cpp:381).
-    SetChannelState(kPsFeedbackChannelId, 0, 1);
-    CloseChannel(kPsFeedbackChannelId);
-    ThreadPlacement::instance().forgetChannel(kPsFeedbackChannelId);
-    qCInfo(lcDsp) << "Closed PS feedback RX channel" << kPsFeedbackChannelId;
+    // R-R3-39: on the receive lane when there is one, as a barrier.
+    auto close = []() {
+        // Deactivate with drain before closing.  dmode=1: drain-mode close
+        // (mirrors destroyRxChannel pattern at WdspEngine.cpp:381).
+        SetChannelState(kPsFeedbackChannelId, 0, 1);
+        CloseChannel(kPsFeedbackChannelId);
+        ThreadPlacement::instance().forgetChannel(kPsFeedbackChannelId);
+        qCInfo(lcDsp) << "Closed PS feedback RX channel" << kPsFeedbackChannelId;
+    };
+    if (m_rxLane != nullptr && !m_rxLane->isCurrentThread()) {
+        m_rxLane->postBarrier(close);
+    } else {
+        close();
+    }
 #endif
 
     m_psFeedbackChannel.reset();
@@ -1632,6 +1920,11 @@ double WdspEngine::getRxaSignalAverage(int channel) const
     if (!m_initialized) {
         return -140.0;
     }
+    if (m_rxLane != nullptr && !m_rxLane->isCurrentThread()) {
+        // R-R3-39: the lane-refreshed meter cache, never WDSP here.
+        const RxChannel* ch = rxChannel(channel);
+        return ch ? ch->getMeter(RxMeterType::SignalAvg) : -140.0;
+    }
 #ifdef HAVE_WDSP
     // From Thetis Console/dsp.cs:387-388 [@501e3f5]
     // From Thetis Console/dsp.cs:957 [@501e3f5] (RXA_S_AV selector; preserves
@@ -1662,6 +1955,11 @@ double WdspEngine::getRxaSignalPeak(int channel) const
 {
     if (!m_initialized) {
         return -140.0;
+    }
+    if (m_rxLane != nullptr && !m_rxLane->isCurrentThread()) {
+        // R-R3-39: the lane-refreshed meter cache, never WDSP here.
+        const RxChannel* ch = rxChannel(channel);
+        return ch ? ch->getMeter(RxMeterType::SignalPeak) : -140.0;
     }
 #ifdef HAVE_WDSP
     // From Thetis Console/dsp.cs:387-388 [@501e3f5]

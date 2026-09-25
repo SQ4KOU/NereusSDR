@@ -364,6 +364,16 @@ if(TARGET wdsp_static)
     # library. REALTIME: it holds the event loop's 10 ms timer and every
     # post() to wall-clock bounds while a lane waits on a 200 ms DSP block.
     nereus_add_test(tst_dsp_control_thread EXTRA_LABELS core REALTIME)
+    # R-R3-39 (Task 31): receive DSP off the event loop. Two real channels
+    # on the receive lane with 150 ms blocks take setters, an off and on, a
+    # rate change and a destroy and recreate with no WDSP call on the event
+    # loop; the live rate change returns at once and finishes once; the
+    # MeterPoller reads the lane's cache. REALTIME: it holds the event
+    # loop's 10 ms timer to a wall-clock bound while the lane waits.
+    nereus_add_test(tst_dsp_control_receive EXTRA_LABELS core REALTIME)
+    # Its first OpenChannel plans FFTs with no wisdom (about 30 s alone, over
+    # 100 s under a loaded build), so the default 120 s is too close.
+    set_tests_properties(tst_dsp_control_receive PROPERTIES TIMEOUT 900)
     if(NOT WIN32)
         # R-R3-41: linux_port.c's thread-start hook fires once per channel
         # worker and flush thread, on that thread, with its kind and channel.

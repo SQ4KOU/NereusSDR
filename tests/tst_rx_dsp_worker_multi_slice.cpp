@@ -674,8 +674,12 @@ private slots:
 
         model.wdspEngine()->setExternalDiversityApiForTest(diversityApi());
         target->setDiversityEnabled(true);
+        // R-R3-39: the route starts and stops on the receive lane.
+        QVERIFY(model.waitForReceiveLaneForTest());
 
         target->setDiversityEnabled(false);
+        // R-R3-39: the route starts and stops on the receive lane.
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(record.runStops, 1);
         QCOMPARE(record.destroys, 1);
 
@@ -726,6 +730,8 @@ private slots:
 
         record.lifecycle.clear();
         target->setDiversityEnabled(true);
+        // R-R3-39: the route starts and stops on the receive lane.
+        QVERIFY(model.waitForReceiveLaneForTest());
 
         QCOMPARE(record.lifecycle, QStringList({
             QStringLiteral("create"),
@@ -773,6 +779,8 @@ private slots:
         worker.setExternalDiversityRouteHookForTest(&captureDiversityRoute);
         model.wdspEngine()->setExternalDiversityApiForTest(diversityApi());
         target->setDiversityEnabled(true);
+        // R-R3-39: the route starts and stops on the receive lane.
+        QVERIFY(model.waitForReceiveLaneForTest());
 
         record.lifecycle.clear();
         model.removeSlice(targetId);

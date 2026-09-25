@@ -681,6 +681,12 @@ const QList<ReasonSource>& reasonSources()
         {"src/core/dsp/DspAssetValidation.cpp", {QStringLiteral("isOperatorMessage")}, {}, 6},
         // The explanation it restores is one this file words.
         {"src/core/dsp/NnrAdapter.cpp", {}, {}, 6, {}, {QStringLiteral("before.explanation")}},
+        // R-R3-39: with a receive lane, RxChannel refuses at once with the
+        // same words NnrAdapter uses (the lane's own refusal is NnrAdapter's).
+        {"src/core/RxChannel.cpp",
+         {QStringLiteral("setNnrTuning"), QStringLiteral("setNnrDiagnostics"),
+          QStringLiteral("selectNr")},
+         {}, 4},
         // The model paths' refusal reaches nnr.applyModelSelection.
         {"src/core/WdspEngine.cpp", {QStringLiteral("setNnrModelPaths")}, {}, 2},
         // A refused PureSignal settings write (property.result).

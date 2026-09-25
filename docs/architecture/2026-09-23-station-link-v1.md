@@ -1069,6 +1069,15 @@ Side effects of a write on other properties go back as a `delta`. A peer
 that did not negotiate results, or wrote without a `writeId`, also gets its
 requested properties back in that `delta`.
 
+A receiver property the station accepted reads back with its new value at
+once: the station's receive DSP applies it afterwards, on its own thread,
+never in the thread that answers the write (R-R3-39). So the result and
+the `delta` show the value the station kept, not a value WDSP has already
+reached. A change WDSP itself still refuses afterwards (a noise-reduction
+model that is not loaded) comes back later as a `delta`: the slice's
+noise-reduction status carries the reason, and a refused noise-reduction
+selection returns to the one before it.
+
 A property write never keys the transmitter: `txPermitted` is false and
 the transmit safety gates stay at the station (section 17).
 

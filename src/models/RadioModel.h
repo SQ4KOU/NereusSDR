@@ -96,6 +96,13 @@
 //                names the Core only on a Core (NereusSDR in a window with
 //                no Core); stale slice-limit comments corrected.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-39: receive DSP off the event loop. A local model
+//                owns the receive lane (DspControlThread); the live sample
+//                rate change runs there (setSampleRateLiveAsync,
+//                sampleRateChangeFinished) and the calls into RxDspWorker
+//                that blocked the event loop became lane jobs. NereusSDR-
+//                original. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 //=================================================================
@@ -223,7 +230,9 @@
 #include <array>      // std::array (HL2 temp averaging ring)
 #include <functional> // R-R3-21 DSP > Options apply observer (test seam)
 #include <memory>  // std::unique_ptr
+#include <mutex>   // R-R3-39 RxWorkerTarget
 #include <optional>
+#include <vector>
 
 namespace NereusSDR {
 
@@ -231,6 +240,7 @@ class ReceiverManager;
 class AudioEngine;
 class WdspEngine;
 class RxDspWorker;
+class DspControlThread;
 class NoiseFloorTracker;
 // Remote Daemon R2 Task 12: per-slice S-meter QTimer (src/core/meters/).
 // Owned directly (constructed in the constructor body, Role::Local only);
@@ -2238,8 +2248,30 @@ public:
     //     dropped.  Callers should ensure MOX is off before calling.
     //   - dspChangeMeasured(qint64) signal (Task 1.8) is emitted on completion.
     //     The elapsed time is also returned synchronously.
+    //
+    // R-R3-39: the steps run on the receive lane now (setSampleRateLiveAsync);
+    // this form waits for them in a local event loop. Tests only; production
+    // callers use setSampleRateLiveAsync.
     qint64 setSampleRateLive(int newRateHz,
                              bool reconcileDiversity = true);
+
+    // R-R3-39: the same change without waiting. Returns at once; the twelve
+    // steps (Thetis setup.cs:7003-7159 [v2.10.3.13]) run in their order as
+    // one receive-lane barrier, and sampleRateChangeFinished(rate, ok)
+    // follows exactly once for each change it starts (ok false when there
+    // is no connection or WDSP is not ready, or when a later request
+    // replaced this one before it started). A request for the rate the
+    // radio is at, or is already changing to, starts nothing and emits
+    // nothing. A request made while a change runs starts when it finishes.
+    // The allocator state, the published sizes and the slices' rates change
+    // at once; each channel's rate when the lane re-rates it (step 6, as
+    // before); the wire rate (connectionSampleRateHz,
+    // wireSampleRateChanged) at the end.
+    void setSampleRateLiveAsync(int rateHz, bool reconcileDiversity = true);
+
+    // R-R3-39: the receive lane every RX WDSP call runs on (null on a
+    // remote model).
+    DspControlThread* receiveLane() const { return m_rxLane.get(); }
 
     // Task 1.7 — Active-RX-count live-apply coordinator.
     //
@@ -2439,6 +2471,9 @@ public:
     // FIRST, worker constructed second) and assert the bindings still reach
     // it. Non-owning, exactly like the production m_dspWorker.
     void attachDspWorkerForTest(RxDspWorker* w);
+    // R-R3-39: waits until every job on the receive lane has run and then
+    // delivers the answers they queued for this thread. False on timeout.
+    bool waitForReceiveLaneForTest(int timeoutMs = 600000);
     // Phase 3F Sub-Epic I closeout, defect F3: force the radio-state inputs
     // the codec branches on, so the PureSignal and diversity branches are
     // reachable without standing up a connection, a WDSP engine and a
@@ -3298,6 +3333,9 @@ signals:
     // known. MainWindow reacts by updating FFTEngine + SpectrumWidget so
     // bin math matches the wire rate (P1=192k, P2=768k).
     void wireSampleRateChanged(double rateHz);
+    // R-R3-39: a change setSampleRateLiveAsync started has finished (ok) or
+    // could not run.
+    void sampleRateChangeFinished(int rateHz, bool ok);
     // Task 1.7: emitted after setActiveRxCountLive() successfully applies
     // the new receiver count to both hardware and WDSP channels.
     void activeRxCountChanged(int newCount);
@@ -4366,6 +4404,53 @@ private:
     // connection from ReceiverManager::iqDataForReceiverStamped (R-R3-40).
     RxDspWorker*     m_dspWorker{nullptr};
 
+    // R-R3-39: the receive lane (local role only), and what its barriers
+    // park: the DSP worker and its thread, set while the worker runs and
+    // cleared (after the lane is drained) before either is deleted.
+    std::unique_ptr<DspControlThread> m_rxLane;
+    struct RxWorkerTarget {
+        std::mutex mutex;
+        RxDspWorker* worker{nullptr};
+        QThread* thread{nullptr};
+    };
+    std::shared_ptr<RxWorkerTarget> m_rxWorkerTarget{std::make_shared<RxWorkerTarget>()};
+    void setRxWorkerTarget(RxDspWorker* worker, QThread* thread);
+    // Runs `fn` on the DSP worker's thread and waits for it, from the lane
+    // (what the BlockingQueuedConnection calls did from the event loop).
+    // Runs it at once when the worker's thread is not running.
+    void runOnDspWorkerFromLane(RxDspWorker* worker, const std::function<void()>& fn);
+    // True when `worker` is the running DSP worker and its thread is not
+    // the caller's.
+    bool dspWorkerThreadRunning(RxDspWorker* worker) const;
+    // Connects a new RX channel's lane signals (NNR diagnostics and late
+    // refusals, DSP-options timing) to the slice that owns it.
+    void wireRxChannelLaneSignals(int channelId);
+    // Reads the AGC top back (on the lane) after an AGC-T set and puts it in
+    // the slice's RF gain. m_agcReadbackSerial keeps only the newest
+    // readback per slice.
+    void syncRfGainFromAgcTop(SliceModel* slice, RxChannel* channel);
+    QHash<const SliceModel*, quint64> m_agcReadbackSerial;
+    // The live rate change (setSampleRateLiveAsync).
+    struct SampleRateRequest {
+        int rateHz{0};
+        bool reconcileDiversity{true};
+        std::function<void(bool)> onFinished;
+    };
+    bool m_sampleRateChangeInFlight{false};
+    // An applyStreamDspGeometry that arrived while a change ran.
+    bool m_streamGeometryPending{false};
+    int m_sampleRateTargetHz{0};
+    std::vector<std::function<void(bool)>> m_sampleRateInFlightCallbacks;
+    std::optional<SampleRateRequest> m_pendingSampleRateChange;
+    quint64 m_sampleRateChangeGeneration{0};
+    void requestSampleRateChange(SampleRateRequest request);
+    void startSampleRateChange(SampleRateRequest request);
+    void finishSampleRateChange(int rateHz, bool reconcileDiversity,
+                                bool restartExternalDiversity, qint64 elapsedMs);
+    bool canChangeSampleRateLive() const;
+    // Ends an in-flight change at teardown: its callers hear ok=false.
+    void abandonSampleRateChange();
+
     // R-R3-40: per-slice DSP load snapshots, refreshed every
     // ReceiverDspLoadSampler::kSampleIntervalMs by m_dspLoadTimer (local
     // role only). Main thread only.
@@ -4551,6 +4636,9 @@ private:
     static constexpr int kExternalDiversityId = 0;
     static constexpr int kExternalDiversityTargetSliceId = 0;
     bool m_externalDiversityRouteActive{false};
+    // R-R3-39: bumped by every route start and stop, so a lane answer about
+    // an older start is ignored.
+    quint64 m_externalDiversityRouteGeneration{0};
     int m_externalDiversityPrimaryDdc{-1};
     int m_externalDiversitySecondaryDdc{-1};
     int m_externalDiversityChunkSize{0};

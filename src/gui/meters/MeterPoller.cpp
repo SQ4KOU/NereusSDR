@@ -42,6 +42,11 @@
 //                 dsp.cs:1056 [v2.10.3.15]); PROC off reads -30, not -400.
 //                 J.J. Boyd (KG4VCF), with AI-assisted transformation via
 //                 Anthropic Claude Code.
+//   2026-09-24: R-R3-39: the RX readings (RxChannel::getMeter and
+//                 WdspEngine::getRxaSignalPeak) come from the cache the
+//                 receive lane refreshes, so this GUI-thread poll makes no
+//                 RX WDSP call. J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -374,7 +379,9 @@ void MeterPoller::poll()
     //       console.cs:46828 -> ... = CalculateRXMeter(...) + offset;  // AVG_SIGNAL_STRENGTH
     const double rxOffsetDb = m_rxOffsetSource ? m_rxOffsetSource() : 0.0;
 
-    // Poll all RX meter types. GetRXAMeter is lock-free.
+    // Poll all RX meter types. R-R3-39: RxChannel::getMeter reads the cache
+    // the receive lane refreshes (GetRXAMeter takes a meter lock, so it
+    // never runs on this, the GUI, thread); with no lane it reads WDSP.
     double smeterDbm = -140.0;
     for (int bindingId = MeterBinding::SignalPeak;
          bindingId <= MeterBinding::AgcAvg; ++bindingId) {

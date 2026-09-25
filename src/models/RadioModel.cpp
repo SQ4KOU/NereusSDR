@@ -190,6 +190,12 @@
 //                names the Core only on a Core (NereusSDR in a window with
 //                no Core); stale slice-limit comments corrected.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-39: receive DSP off the event loop. The receive lane,
+//                the live sample-rate change as a lane barrier in the order
+//                of Thetis setup.cs:7003-7159 [v2.10.3.13], and the calls
+//                into RxDspWorker that blocked the event loop moved to the
+//                lane. NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -454,6 +460,7 @@ warren@wpratt.com
 #include "core/AudioEngine.h"
 #include "core/WdspEngine.h"
 #include "core/RxChannel.h"
+#include "core/DspControlThread.h"
 // Remote Daemon R2 Task 12: per-slice S-meter pump, constructed below only
 // for Role::Local.
 #include "core/meters/SliceMeterPump.h"
@@ -519,10 +526,13 @@ warren@wpratt.com
 
 #include <algorithm>
 #include <cmath>
+#include <condition_variable>
 #include <limits>
+#include <mutex>
 #include <tuple>
 #include <vector>
 
+#include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDateTime>
 #include <QElapsedTimer>
@@ -723,6 +733,57 @@ RadioModel::RadioModel(Role role, QObject* parent)
     , m_wdspEngine(new WdspEngine(this))
 {
     m_role = role;
+    // The lane is a Qt thread fed through Qt's event queue, which needs an
+    // application object: a model made without one (an app-less unit test)
+    // runs its WDSP calls at once, as before.
+    if (role == Role::Local && QCoreApplication::instance() != nullptr) {
+        // R-R3-39: every receive-side WDSP call runs on this lane, never on
+        // the event loop, so a slow DSP block cannot stall the timers,
+        // sessions and transmit safety that run here.
+        m_rxLane = std::make_unique<DspControlThread>(DspLane::Receive);
+        m_rxLane->start();
+        m_wdspEngine->setReceiveLane(m_rxLane.get());
+        // A lane barrier parks the DSP worker on its own thread for as long
+        // as it holds the release it returns. Called on the lane, so this
+        // never blocks the event loop.
+        m_wdspEngine->setRxWorkerQuiesce([target = m_rxWorkerTarget]() -> std::function<void()> {
+            RxDspWorker* worker = nullptr;
+            QThread* thread = nullptr;
+            {
+                std::lock_guard<std::mutex> lock(target->mutex);
+                worker = target->worker;
+                thread = target->thread;
+            }
+            if (worker == nullptr || thread == nullptr || !thread->isRunning()
+                || QThread::currentThread() == thread) {
+                return {};
+            }
+            struct Gate {
+                std::mutex mutex;
+                std::condition_variable changed;
+                bool parked{false};
+                bool released{false};
+            };
+            auto gate = std::make_shared<Gate>();
+            QMetaObject::invokeMethod(worker, [gate]() {
+                std::unique_lock<std::mutex> lock(gate->mutex);
+                gate->parked = true;
+                gate->changed.notify_all();
+                gate->changed.wait(lock, [&gate]() { return gate->released; });
+            }, Qt::QueuedConnection);
+            {
+                std::unique_lock<std::mutex> lock(gate->mutex);
+                gate->changed.wait(lock, [&gate]() { return gate->parked; });
+            }
+            return [gate]() {
+                std::lock_guard<std::mutex> lock(gate->mutex);
+                gate->released = true;
+                gate->changed.notify_all();
+            };
+        });
+        connect(m_wdspEngine, &WdspEngine::rxChannelCreated, this,
+                [this](int channelId) { wireRxChannelLaneSignals(channelId); });
+    }
     // R-R3-36: the PC microphone session demand follows the mic source.
     connect(&m_transmitModel, &TransmitModel::micSourceChanged, this,
             [this](MicSource) { updatePcCaptureDemand(); });
@@ -2686,6 +2747,14 @@ RadioModel::~RadioModel()
     m_rfKitBandFollow.reset();
     m_stationTci.reset();
     teardownConnection();
+    if (m_rxLane) {
+        // R-R3-39: every lane job runs before the lane goes; afterwards the
+        // engine (deleted after this body) runs its WDSP calls at once.
+        m_wdspEngine->drainReceiveLane();
+        m_rxLane->stop();
+        m_wdspEngine->setReceiveLane(nullptr);
+        m_wdspEngine->setRxWorkerQuiesce({});
+    }
     qDeleteAll(m_slices);
     qDeleteAll(m_panadapters);
 }
@@ -5112,11 +5181,32 @@ void RadioModel::wireNnrSettings(SliceModel* slice)
         // before switching NNR on, so a receiver that refused it earlier
         // (for example because the model was missing then) cannot run a
         // different model while the slice shows the saved one.
-        if (requested == NrSlot::NNR && !channel->setNnrTuning(slice->nnrSettings(), reason)) {
-            slice->updateNnrDiagnostics(channel->nnrDiagnostics());
-            return false;
+        //
+        // R-R3-39: with a receive lane both run there as one job
+        // (RxChannel::selectNr), decided here from what the lane last read;
+        // a refusal WDSP still makes there comes back through
+        // nnrRequestRefused (wireRxChannelLaneSignals).
+        bool accepted = false;
+        if (channel->controlLane() != nullptr) {
+            const NnrSettings saved = slice->nnrSettings();
+            QString tuningReason;
+            accepted = channel->selectNr(requested,
+                                         requested == NrSlot::NNR ? &saved : nullptr,
+                                         slice->activeNr(), &tuningReason);
+            if (!accepted && !tuningReason.isEmpty()) {
+                if (reason) {
+                    *reason = tuningReason;
+                }
+                slice->updateNnrDiagnostics(channel->nnrDiagnostics());
+                return false;
+            }
+        } else {
+            if (requested == NrSlot::NNR && !channel->setNnrTuning(slice->nnrSettings(), reason)) {
+                slice->updateNnrDiagnostics(channel->nnrDiagnostics());
+                return false;
+            }
+            accepted = channel->setActiveNr(requested);
         }
-        const bool accepted = channel->setActiveNr(requested);
         if (limited && requested != NrSlot::NNR) {
             clearNnrLimit(slice);
         }
@@ -5241,6 +5331,17 @@ void RadioModel::applyNnrStateToChannel(SliceModel* slice, RxChannel* channel)
     // Follow-up item 1 (R-R3-21): WDSP is never asked to run NR3 without a
     // usable NR3 model; the slice shows NR off with the reason instead.
     turnOffNr3WithoutModel(slice);
+    if (channel->controlLane() != nullptr) {
+        // R-R3-39: the same steps as one receive-lane job
+        // (RxChannel::applyNnrState); its diagnostics, with the tuning's
+        // refusal as their explanation, reach the slice through
+        // nnrDiagnosticsRefreshed.
+        const bool nr3Blocked = slice->activeNr() == NrSlot::NR3 && m_dspAssets
+            && !m_dspAssets->nr3Runnable();
+        channel->applyNnrState(slice->nnrLimit(), slice->nnrSettings(), slice->activeNr(),
+                               nr3Blocked);
+        return;
+    }
     QString reason;
     // R-R3-40: a new or reopened channel starts with the slice's runtime
     // limit, applied by the tuning call below.
@@ -5306,16 +5407,9 @@ void RadioModel::reconcileNotchCount(RxChannel* ch)
     // UpdateNBPFilters, which every mutation already pays and which designs
     // two filters, nbp0 plus recalc_bpsnba_filter (nbp.c:345-359 ->
     // snb.c:814-828).
-    const int expected = m_notchModel->notches().size();
-    const int actual   = ch->notchCount();
-    if (actual == expected) {
-        return;
-    }
-    qCWarning(lcDsp) << "Notch index divergence on RX channel"
-                     << ch->channelId() << "- WDSP holds" << actual
-                     << "notches, the model holds" << expected
-                     << "- resyncing";
-    ch->syncNotches(m_notchModel->notches());
+    // R-R3-39: the comparison and the resync run on the receive lane
+    // (RxChannel::reconcileNotchCount).
+    ch->reconcileNotchCount(m_notchModel->notches());
 }
 
 void RadioModel::syncNotchesToChannel(RxChannel* ch, int channelId)
@@ -5349,11 +5443,10 @@ void RadioModel::syncNotchesToChannel(RxChannel* ch, int channelId)
     SliceModel* owner = sliceById(channelId);
     const bool originResolvable = (owner != nullptr && owner->streamIndex() >= 0);
     if (!originResolvable) {
-        if (ch->notchCount() > 0) {
-            // Leaving stale notches on a channel we are declining to own is
-            // how the bug survived a reconnect.
-            ch->syncNotches({});
-        }
+        // Leaving stale notches on a channel we are declining to own is
+        // how the bug survived a reconnect. R-R3-39: an empty resync deletes
+        // whatever WDSP holds (nothing when it holds none), on the lane.
+        ch->syncNotches({});
         qCDebug(lcDsp).nospace()
             << "notch sync skipped for channel " << channelId
             << " (slice=" << (owner ? owner->sliceIndex() : -1)
@@ -5442,10 +5535,8 @@ void RadioModel::wireNotchModel()
             // mutation at all (third_party/wdsp/src/nbp.c:362-390). Design
             // section 6.2: surface it, and recover with a full resync rather
             // than an assert, which a release build compiles out.
-            if (!ch->addNotch(index, *n)) {
-                ch->syncNotches(m_notchModel->notches());
-            }
-            reconcileNotchCount(ch);
+            // R-R3-39: as one receive-lane job (addNotchReconciled).
+            ch->addNotchReconciled(index, *n, m_notchModel->notches());
 
         }
     });
@@ -5465,10 +5556,8 @@ void RadioModel::wireNotchModel()
             // the time this lands. WDSP shifts its own array down internally
             // (nbp.c:418-441) and our list does the same, so positions stay
             // aligned (design section 5.2).
-            if (!ch->deleteNotch(formerIndex)) {
-                ch->syncNotches(m_notchModel->notches());
-            }
-            reconcileNotchCount(ch);
+            // R-R3-39: as one receive-lane job (deleteNotchReconciled).
+            ch->deleteNotchReconciled(formerIndex, m_notchModel->notches());
         }
     });
 
@@ -6160,6 +6249,13 @@ void RadioModel::republishStreamBindings(int streamIndex)
 // over-read this ordering exists to prevent.
 void RadioModel::applyStreamDspGeometry()
 {
+    if (m_sampleRateChangeInFlight) {
+        // R-R3-39: a live rate change is re-rating every channel on the
+        // receive lane; reconcile after it, against the state it leaves
+        // (finishSampleRateChange, abandonSampleRateChange).
+        m_streamGeometryPending = true;
+        return;
+    }
     const int streamCount = m_streamAllocator.streamCount();
     if (streamCount <= 0) {
         return;
@@ -6209,6 +6305,73 @@ void RadioModel::applyStreamDspGeometry()
         }
     }
     if (!outOfStep) {
+        return;
+    }
+
+    if (m_rxLane && m_wdspEngine) {
+        // R-R3-39: the same steps as one receive-lane barrier, in the order
+        // below (quiesce, the worker's drain thresholds, every channel's
+        // rate, reconnect). What the event loop owns changes at once: the
+        // published sizes and each wrapper's rate carry. The lane, not the
+        // event loop, waits for the DSP worker.
+        struct RateJob {
+            int channelId;
+            int rateHz;
+            int bufferSize;
+        };
+        std::vector<std::pair<int, int>> thresholds;   // stream, in_size
+        if (m_dspWorker) {
+            for (int st = 0; st < streamCount; ++st) {
+                if (m_streamInSizePushed.value(st, -1) == inSizeFor[st]) {
+                    continue;
+                }
+                m_streamInSizePushed.insert(st, inSizeFor[st]);
+                thresholds.emplace_back(st, inSizeFor[st]);
+            }
+        }
+        std::vector<RateJob> rates;
+        for (SliceModel* s : std::as_const(m_slices)) {
+            if (!s) { continue; }
+            const int st = s->streamIndex();
+            if (st < 0 || st >= streamCount) { continue; }
+            RxChannel* ch = m_wdspEngine->rxChannel(s->sliceIndex());
+            // Idempotent, as WdspEngine::setRxChannelRate is.
+            if (!ch || ch->sampleRate() == rateFor[st]) { continue; }
+            ch->setSampleRateCarry(rateFor[st]);
+            rates.push_back({s->sliceIndex(), rateFor[st], ch->bufferSize()});
+        }
+        RxDspWorker* const worker = m_dspWorker;
+        ReceiverManager* const receivers = m_receiverManager;
+        WdspEngine* const engine = m_wdspEngine;
+        m_rxLane->postBarrier([this, worker, receivers, engine, thresholds, rates]() {
+            // Quiesce, from the lane: see the ordering note below. Only
+            // while the worker's thread runs, as before.
+            const bool quiesce = worker != nullptr && receivers != nullptr
+                                 && dspWorkerThreadRunning(worker);
+            if (quiesce) {
+                QObject::disconnect(receivers, &ReceiverManager::iqDataForReceiverStamped,
+                                    worker, &RxDspWorker::processStampedIqBatch);
+                runOnDspWorkerFromLane(worker, [worker]() { worker->resetAccumulator(); });
+            }
+            // Half 1: the worker's per-stream drain thresholds, queued to its
+            // thread ahead of the first batch after the reconnect.
+            for (const auto& [st, inSize] : thresholds) {
+                QMetaObject::invokeMethod(worker, [worker, st = st, inSize = inSize]() {
+                    worker->setStreamInputChunk(st, inSize);
+                }, Qt::QueuedConnection);
+            }
+            // Half 2: every bound slice's channel (Thetis cmaster.c:473-475
+            // [v2.10.3.15], see below).
+            for (const RateJob& job : rates) {
+                engine->applyRxChannelRateOnLane(job.channelId, job.rateHz, job.bufferSize);
+            }
+            if (quiesce) {
+                connect(receivers, &ReceiverManager::iqDataForReceiverStamped,
+                        worker, &RxDspWorker::processStampedIqBatch,
+                        static_cast<Qt::ConnectionType>(Qt::QueuedConnection
+                                                        | Qt::UniqueConnection));
+            }
+        });
         return;
     }
 
@@ -6727,6 +6890,26 @@ bool RadioModel::setStreamSampleRate(int streamIndex, int rateHz)
     }
 
     const bool isP1 = sampleRateIsRadioWide();
+    if (isP1 && m_rxLane) {
+        // R-R3-39: the radio-wide change runs on the receive lane. A refused
+        // wire update (no connection, WDSP not ready) is known now and
+        // leaves every client-side object intact; otherwise the plan is
+        // committed when the change finishes, so its DDC assignment reaches
+        // the connection after the stream restart, in the order the
+        // synchronous change kept.
+        if (rateHz != m_connectionSampleRateHz && !canChangeSampleRateLive()) {
+            qCWarning(lcConnection) << "setSampleRateLive: no active connection "
+                                       "or WDSP not initialized — ignoring";
+            return false;
+        }
+        const StreamRateChangePlan committed = *plan;
+        requestSampleRateChange({rateHz, false, [this, committed](bool ok) {
+            if (ok) {
+                commitStreamSampleRateChange(committed);
+            }
+        }});
+        return true;
+    }
     if (isP1) {
         // Protocol 1 carries one radio-wide wire rate. The complete allocator
         // transition is known valid before this can stop the stream or touch
@@ -7212,7 +7395,13 @@ void RadioModel::governNnrLoadWith(qint64 nowMs,
             RxChannel::DspLoadCounters counters;
             if (!channel->dspLoad(counters) || counters.blocks >= pending.value() + 2) {
                 m_nnrLimitReadbackPending.remove(sliceId);
-                slice->updateNnrDiagnostics(channel->nnrDiagnostics());
+                if (channel->controlLane() != nullptr) {
+                    // R-R3-39: read on the lane; nnrDiagnosticsRefreshed
+                    // brings it to the slice.
+                    channel->refreshNnrDiagnostics();
+                } else {
+                    slice->updateNnrDiagnostics(channel->nnrDiagnostics());
+                }
             }
         }
         NnrLoadGovernor::Receiver receiver;
@@ -8169,7 +8358,134 @@ void RadioModel::attachDspWorkerForTest(RxDspWorker* worker)
 {
     attachRadeRxWorker(worker);
 }
+
+bool RadioModel::waitForReceiveLaneForTest(int timeoutMs)
+{
+    if (!m_rxLane) {
+        return true;
+    }
+    QElapsedTimer timer;
+    timer.start();
+    // Twice: an answer delivered by the first pass may post more lane work.
+    for (int pass = 0; pass < 2; ++pass) {
+        const int left = std::max(0, timeoutMs - static_cast<int>(timer.elapsed()));
+        if (!m_rxLane->waitIdleForTest(left)) {
+            return false;
+        }
+        QCoreApplication::sendPostedEvents();
+        QCoreApplication::processEvents();
+    }
+    return m_rxLane->waitIdleForTest(std::max(0, timeoutMs - static_cast<int>(timer.elapsed())));
+}
 #endif
+
+// ── R-R3-39: the receive lane ───────────────────────────────────────────────
+//
+// NereusSDR-original. The DSP worker and its thread, as the lane's barriers
+// see them. Set when the worker starts, cleared at teardown after the lane
+// has drained and before either object is deleted.
+void RadioModel::setRxWorkerTarget(RxDspWorker* worker, QThread* thread)
+{
+    std::lock_guard<std::mutex> lock(m_rxWorkerTarget->mutex);
+    m_rxWorkerTarget->worker = worker;
+    m_rxWorkerTarget->thread = thread;
+}
+
+bool RadioModel::dspWorkerThreadRunning(RxDspWorker* worker) const
+{
+    std::lock_guard<std::mutex> lock(m_rxWorkerTarget->mutex);
+    return worker != nullptr && m_rxWorkerTarget->worker == worker
+        && m_rxWorkerTarget->thread != nullptr && m_rxWorkerTarget->thread->isRunning()
+        && QThread::currentThread() != m_rxWorkerTarget->thread;
+}
+
+// What the BlockingQueuedConnection calls into RxDspWorker did, from the
+// lane: the event loop no longer waits on the DSP thread, the lane does.
+void RadioModel::runOnDspWorkerFromLane(RxDspWorker* worker, const std::function<void()>& fn)
+{
+    QThread* thread = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(m_rxWorkerTarget->mutex);
+        if (m_rxWorkerTarget->worker == worker) {
+            thread = m_rxWorkerTarget->thread;
+        }
+    }
+    if (worker != nullptr && thread != nullptr && thread->isRunning()
+        && QThread::currentThread() != thread) {
+        QMetaObject::invokeMethod(worker, fn, Qt::BlockingQueuedConnection);
+    } else {
+        fn();
+    }
+}
+
+// R-R3-39: the RF-gain half of Thetis's AGC-T / RF-gain sync
+// (console.cs:45978 [v2.10.3.13], GetRXAAGCTop after SetRXAAGCThresh), as a
+// lane readback. The RF gain is written with m_syncingAgc set, so its own
+// handler neither turns auto AGC off nor calls WDSP again, as before.
+void RadioModel::syncRfGainFromAgcTop(SliceModel* slice, RxChannel* channel)
+{
+    const quint64 serial = ++m_agcReadbackSerial[slice];
+    channel->requestAgcReadBack(slice, [this, slice, serial](double top, double) {
+        // A newer AGC set on this slice has its own readback.
+        if (m_agcReadbackSerial.value(slice) != serial) {
+            return;
+        }
+        const int rfGain = static_cast<int>(std::round(top));
+        if (slice->rfGain() != rfGain) {
+            const bool wasSyncing = m_syncingAgc;
+            m_syncingAgc = true;
+            slice->setRfGain(rfGain);
+            m_syncingAgc = wasSyncing;
+        }
+    });
+}
+
+// A channel with a lane reports NNR back from the lane. Every signal looks
+// the channel up again: a queued signal from a retired wrapper finds a
+// different (or no) channel and does nothing.
+void RadioModel::wireRxChannelLaneSignals(int channelId)
+{
+    RxChannel* channel = m_wdspEngine ? m_wdspEngine->rxChannel(channelId) : nullptr;
+    if (channel == nullptr || channel->controlLane() == nullptr) {
+        return;
+    }
+    connect(channel, &RxChannel::nnrDiagnosticsRefreshed, this, [this, channel, channelId]() {
+        RxChannel* live = m_wdspEngine ? m_wdspEngine->rxChannel(channelId) : nullptr;
+        if (live != channel) {
+            return;
+        }
+        if (SliceModel* slice = sliceById(channelId)) {
+            slice->updateNnrDiagnostics(live->nnrDiagnostics());
+        }
+    });
+    connect(channel, &RxChannel::nnrRequestRefused, this,
+            [this, channel, channelId](const QString& reason, int previousSlot) {
+        RxChannel* live = m_wdspEngine ? m_wdspEngine->rxChannel(channelId) : nullptr;
+        SliceModel* slice = sliceById(channelId);
+        if (live != channel || slice == nullptr) {
+            return;
+        }
+        // WDSP refused, on the lane, a selection the slice took at once: the
+        // slice goes back to the selection it had, which the channel runs
+        // again (the answer a refusal at once would have left).
+        if (previousSlot >= 0 && live->activeNr() != slice->activeNr()) {
+            slice->setActiveNr(static_cast<NrSlot>(previousSlot));
+        }
+        QString why = reason;
+        if (why.isEmpty()) {
+            why = slice->nnrStatus().isEmpty()
+                ? tr("The requested noise reduction is unavailable.") : slice->nnrStatus();
+        }
+        slice->reportNnrEditResult(why);
+    });
+    connect(channel, &RxChannel::dspOptionsApplied, this, [this](qint64 elapsedMs) {
+        // Same gate as the RX path's synchronous return: only a change
+        // that took measurable time is reported.
+        if (elapsedMs > 0) {
+            emit dspChangeMeasured(elapsedMs);
+        }
+    });
+}
 
 quint64 RadioModel::publishRadeRxTarget(int sliceId, RadeChannel* channel,
                                         SliceModel* slice)
@@ -11939,6 +12255,8 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
             m_dspWorker, &RxDspWorker::processStampedExternalDiversityIqBatch,
             Qt::QueuedConnection);
     m_dspThread->start();
+    // R-R3-39: what the receive lane's barriers park.
+    setRxWorkerTarget(m_dspWorker, m_dspThread);
 
     // ── Phase 3F Sub-Epic I closeout, defect F1 ─────────────────────────
     //
@@ -12746,10 +13064,9 @@ void RadioModel::flushNotchEditPush()
             // once (nbp.c:345-359), which designs nbp0 AND recalculates bpsnba
             // (snb.c:814-828); syncNotches would pay that 2N times
             // (nbp.c:384, :435, :456). Design section 6.2.
-            if (!ch->editNotch(index, *n)) {
-                ch->syncNotches(m_notchModel->notches());
-            }
-            reconcileNotchCount(ch);
+            // R-R3-39: the edit, its resync and the count check run as one
+            // receive-lane job (RxChannel::editNotchReconciled).
+            ch->editNotchReconciled(index, *n, m_notchModel->notches());
         }
     }
 
@@ -13266,14 +13583,12 @@ void RadioModel::wireSliceSignals(SliceModel* slice)
         if (rxCh) {
             m_syncingAgc = true;
             rxCh->setAgcThreshold(dBu);
+            m_syncingAgc = false;
             // Read back resulting AGC Top and sync RF Gain display.
             // From Thetis console.cs:45978 — GetRXAAGCTop after SetRXAAGCThresh
-            double top = rxCh->readBackAgcTop();
-            int rfGain = static_cast<int>(std::round(top));
-            if (slice->rfGain() != rfGain) {
-                slice->setRfGain(rfGain);
-            }
-            m_syncingAgc = false;
+            // R-R3-39: read on the receive lane after the set; at once
+            // without a lane.
+            syncRfGainFromAgcTop(slice, rxCh);
         }
         scheduleSettingsSave();
     });
@@ -13887,13 +14202,24 @@ void RadioModel::wireSliceSignals(SliceModel* slice)
         if (rxCh) {
             m_syncingAgc = true;
             rxCh->setAgcTop(static_cast<double>(gain));
-            // Read back resulting threshold and sync AGC-T display.
-            double thresh = rxCh->readBackAgcThresh();
-            int threshInt = static_cast<int>(std::round(thresh));
-            if (slice->agcThreshold() != threshInt) {
-                slice->setAgcThreshold(threshInt);
-            }
             m_syncingAgc = false;
+            // Read back resulting threshold and sync AGC-T display.
+            // R-R3-39: read on the receive lane after the set; at once
+            // without a lane.
+            const quint64 serial = ++m_agcReadbackSerial[slice];
+            rxCh->requestAgcReadBack(slice, [this, slice, serial](double, double thresh) {
+                // A newer AGC set on this slice has its own readback.
+                if (m_agcReadbackSerial.value(slice) != serial) {
+                    return;
+                }
+                const int threshInt = static_cast<int>(std::round(thresh));
+                if (slice->agcThreshold() != threshInt) {
+                    const bool wasSyncing = m_syncingAgc;
+                    m_syncingAgc = true;
+                    slice->setAgcThreshold(threshInt);
+                    m_syncingAgc = wasSyncing;
+                }
+            });
         }
         scheduleSettingsSave();
     });
@@ -15159,11 +15485,8 @@ void RadioModel::updateAutoAgc()
             if (rxCh) {
                 rxCh->setAgcThreshold(threshInt);
                 // From Thetis v2.10.3.13 console.cs:45978 — readback AGC top
-                double top = rxCh->readBackAgcTop();
-                int rfGain = static_cast<int>(std::round(top));
-                if (slice->rfGain() != rfGain) {
-                    slice->setRfGain(rfGain);
-                }
+                // R-R3-39: read on the receive lane after the set.
+                syncRfGainFromAgcTop(slice, rxCh);
             }
 
             // Update model (UI sync) — handler won't re-enter WDSP
@@ -15862,6 +16185,16 @@ void RadioModel::teardownConnection()
     // (or not) by the next connectToRadio() call based on the new radio's
     // BoardCapabilities::hasMicJack.
     m_transmitModel.setMicSourceLocked(false);
+
+    // R-R3-39: a live rate change still running tells its callers it did
+    // not finish, and every receive-lane job already queued runs now,
+    // while the DSP worker it may park is still alive. Nothing parks the
+    // worker after this.
+    abandonSampleRateChange();
+    if (m_wdspEngine) {
+        m_wdspEngine->drainReceiveLane();
+    }
+    setRxWorkerTarget(nullptr, nullptr);
 
     // Disconnect signals into the DSP worker first so no new I/Q
     // batches can be posted onto the worker thread, then quit and
@@ -18158,16 +18491,102 @@ qint64 RadioModel::setSampleRateLive(int newRateHz,
 
     // Idempotent check first — safe even when disconnected, avoids the
     // spurious warning log on redundant calls from the settings-restore path.
-    if (newRateHz == m_connectionSampleRateHz) {
+    if (newRateHz == m_connectionSampleRateHz && !m_sampleRateChangeInFlight) {
         return 0;
     }
 
     // Guard: nothing to do if disconnected or WDSP not initialized.
-    if (!m_connection || !m_wdspEngine || !m_wdspEngine->isInitialized()) {
+    if (!canChangeSampleRateLive()) {
         qCWarning(lcConnection) << "setSampleRateLive: no active connection "
                                    "or WDSP not initialized — ignoring";
         return -1;
     }
+
+    // R-R3-39: the change runs on the receive lane; wait for it here, in a
+    // local event loop, for the callers that still want the old form.
+    bool finished = false;
+    bool finishedOk = false;
+    QEventLoop loop;
+    requestSampleRateChange({newRateHz, reconcileDiversity,
+                             [&finished, &finishedOk, &loop](bool ok) {
+                                 finished = true;
+                                 finishedOk = ok;
+                                 loop.quit();
+                             }});
+    if (!finished) {
+        loop.exec();
+    }
+    return finishedOk ? t.elapsed() : -1;
+}
+
+void RadioModel::setSampleRateLiveAsync(int rateHz, bool reconcileDiversity)
+{
+    requestSampleRateChange({rateHz, reconcileDiversity, {}});
+}
+
+bool RadioModel::canChangeSampleRateLive() const
+{
+    return m_connection != nullptr && m_wdspEngine != nullptr
+        && m_wdspEngine->isInitialized();
+}
+
+// R-R3-39. NereusSDR-original. One change at a time: a request made while a
+// change runs waits for it (the newest waiting request replaces an older
+// one, which finishes with ok false), and a request for the rate the radio
+// is at, or is changing to, starts nothing.
+void RadioModel::requestSampleRateChange(SampleRateRequest request)
+{
+    const int rateHz = request.rateHz;
+    if (m_sampleRateChangeInFlight) {
+        if (m_pendingSampleRateChange) {
+            SampleRateRequest replaced = std::move(*m_pendingSampleRateChange);
+            m_pendingSampleRateChange.reset();
+            emit sampleRateChangeFinished(replaced.rateHz, false);
+            if (replaced.onFinished) {
+                replaced.onFinished(false);
+            }
+        }
+        if (rateHz == m_sampleRateTargetHz) {
+            if (request.onFinished) {
+                m_sampleRateInFlightCallbacks.push_back(std::move(request.onFinished));
+            }
+            return;
+        }
+        m_pendingSampleRateChange = std::move(request);
+        return;
+    }
+    if (rateHz == m_connectionSampleRateHz) {
+        if (request.onFinished) {
+            request.onFinished(true);
+        }
+        return;
+    }
+    if (!canChangeSampleRateLive()) {
+        qCWarning(lcConnection) << "setSampleRateLiveAsync: no active connection "
+                                   "or WDSP not initialized — ignoring";
+        emit sampleRateChangeFinished(rateHz, false);
+        if (request.onFinished) {
+            request.onFinished(false);
+        }
+        return;
+    }
+    startSampleRateChange(std::move(request));
+}
+
+void RadioModel::startSampleRateChange(SampleRateRequest request)
+{
+    auto timer = std::make_shared<QElapsedTimer>();
+    timer->start();
+    const int newRateHz = request.rateHz;
+    const bool reconcileDiversity = request.reconcileDiversity;
+
+    m_sampleRateChangeInFlight = true;
+    m_sampleRateTargetHz = newRateHz;
+    m_sampleRateInFlightCallbacks.clear();
+    if (request.onFinished) {
+        m_sampleRateInFlightCallbacks.push_back(std::move(request.onFinished));
+    }
+    const quint64 generation = ++m_sampleRateChangeGeneration;
 
     qCInfo(lcConnection) << "setSampleRateLive:" << m_connectionSampleRateHz
                          << "Hz ->" << newRateHz << "Hz";
@@ -18176,6 +18595,7 @@ qint64 RadioModel::setSampleRateLive(int newRateHz,
     // target channel's input geometry. Stop its raw-DDC feed before changing
     // that geometry; it is recreated on the control path below, so the DSP hot
     // loop never has to allocate in response to a rate mismatch.
+    // (R-R3-39: its stop is itself a lane barrier, queued ahead of this one.)
     const bool restartExternalDiversity =
         m_externalDiversityRouteActive;
     if (restartExternalDiversity) {
@@ -18194,6 +18614,13 @@ qint64 RadioModel::setSampleRateLive(int newRateHz,
     // audio.cs::SampleRate1 setter [v2.10.3.13:637-649] only calls
     // SetXcmInrate(0, ...) for RX1 and SetXcmInrate(1, ...) for RX2;
     // SampleRateTX setter (lines 663-672) does NOT call SetXcmInrate.
+    //
+    // R-R3-39: the steps keep their order and their waits, but run as one
+    // receive-lane barrier, so the event loop never waits on the drain, the
+    // DSP worker or the sleeps. What the event loop owns (the allocator,
+    // the published sizes, the slices' rates) takes the new rate at once;
+    // each channel's rate changes at step 6 on the lane, and the wire rate
+    // when the lane is done (finishSampleRateChange).
 
     const int newInSize = bufferSizeForRate(newRateHz);
 
@@ -18211,35 +18638,6 @@ qint64 RadioModel::setSampleRateLive(int newRateHz,
     rxChannelIds.erase(std::unique(rxChannelIds.begin(), rxChannelIds.end()),
                        rxChannelIds.end());
 
-    // ── Step 1: Stop every running RX channel, the lowest last, drained ──
-    // Upstream switches off every receiver channel, the sub-receivers with
-    // no drain and the main channel last with a drain, while data is still
-    // flowing so each one slews down and flushes:
-    //   From Thetis setup.cs:7112-7115 [v2.10.3.15] (Protocol 1)
-    //     // turn OFF the RX DSP channels so they get flushed out (must do while data is flowing to get slew-down and flush)
-    //     WDSP.SetChannelState(3, 0, 0); // RX2_sub
-    //     WDSP.SetChannelState(2, 0, 0); // RX2_main
-    //     WDSP.SetChannelState(1, 0, 0); // RX1_sub
-    //     WDSP.SetChannelState(0, 0, 1);  // RX1_main
-    // Protocol 2 does the same for its pair at setup.cs:7043-7044
-    // [v2.10.3.15]: WDSP.id(0, 1) with no drain, then WDSP.id(0, 0) drained.
-    // Here that is every running slice's channel from the highest id down,
-    // each without a drain, and the lowest running channel (channel 0 while
-    // Slice A runs) last, drained, as upstream orders it.
-    //
-    // Both forms rely on I/Q still reaching the stopping channels: WDSP
-    // finishes a stop inside the channel's own exchanges, and a channel that
-    // is not fed is left with its slew-down pending (a no-drain stop) or
-    // waits out WDSP's 100 ms timeout (a draining one). The I/Q feed stays
-    // connected until step 2, and RxChannel keeps exchanging on a stopping
-    // channel until WDSP reports the stop done (Task 8, RxChannel::
-    // applyActive and processIq). So the drain takes a few blocks of input,
-    // not 100 ms, and the no-drain stops complete alongside it. A channel no
-    // I/Q reached after its stop is finished by its rebuild in step 6, or,
-    // when it is already at the new rate, by its restart in step 9
-    // (RxChannel::finishPendingStop). Fix wave 1 (C1) drained every channel
-    // until this was in place.
-    //
     // RxChannel is owned by WdspEngine; look each one up by channel ID rather
     // than caching a raw pointer. Record which were running, because step 9
     // restarts only those.
@@ -18250,97 +18648,30 @@ qint64 RadioModel::setSampleRateLive(int newRateHz,
             rxChannelsWereActive.push_back(*it);   // descending
         }
     }
-    for (std::size_t i = 0; i < rxChannelsWereActive.size(); ++i) {
-        RxChannel* rx = m_wdspEngine->rxChannel(rxChannelsWereActive[i]);
-        if (i + 1 < rxChannelsWereActive.size()) {
-            rx->deactivateWithoutDrain();   // dmode 0, as upstream's subs
-        } else {
-            rx->setActive(false);           // dmode 1: the last, drained
-        }
-    }
-    QThread::msleep(10);  // From Thetis setup.cs:7116 [v2.10.3.15]: Thread.Sleep(10)
 
-    // ── Step 2: Quiesce DSP worker ────────────────────────────────────────
-    // Disconnect the I/Q feed so no new batches land while the WDSP channel
-    // is being reconfigured.  resetAccumulator() via BlockingQueuedConnection
-    // ensures any in-flight batch completes before we proceed.
-    if (m_dspWorker && m_receiverManager) {
-        QObject::disconnect(m_receiverManager, &ReceiverManager::iqDataForReceiverStamped,
-                            m_dspWorker, &RxDspWorker::processStampedIqBatch);
-        if (m_dspThread && m_dspThread->isRunning()) {
-            QMetaObject::invokeMethod(m_dspWorker,
-                                      &RxDspWorker::resetAccumulator,
-                                      Qt::BlockingQueuedConnection);
+    // Step 6's idempotent guard (WdspEngine::setRxChannelRate), taken now.
+    // The wrappers' rate carry changes at step 6 itself, on the lane, as it
+    // did in the synchronous sequence: a channel reports the old rate while
+    // it stops and the new one when it restarts. applyStreamDspGeometry
+    // waits for the change (m_streamGeometryPending).
+    std::vector<int> rxChannelsToRate;
+    for (int ch : rxChannelIds) {
+        RxChannel* rx = m_wdspEngine->rxChannel(ch);
+        if (rx && rx->sampleRate() != newRateHz) {
+            rxChannelsToRate.push_back(ch);
         }
     }
 
     // ── Step 3: Pause AudioEngine ─────────────────────────────────────────
+    // (A hook with no work today, AudioEngine.cpp; called here on the event
+    // loop, which owns AudioEngine.)
     m_audioEngine->pauseInput();
 
-    // ── Step 4: Stop radio data flow ──────────────────────────────────────
-    // Thetis setup.cs:7020-7022 (P2 EnableRx) / 7092 (P1 SendStopToMetis)
-    // [v2.10.3.13].  In NereusSDR the stop+set-rate+start cycle is wrapped
-    // by P1RadioConnection::restartStreamWithRate (P1) or atomic-rate-update
-    // inside RadioConnection::setSampleRate (P2).  Both paths are queued
-    // to the connection thread; we wait below for inflight packets to drain.
-    if (auto* p1 = qobject_cast<P1RadioConnection*>(m_connection)) {
-        QMetaObject::invokeMethod(p1, [p1, newRateHz]() {
-            p1->restartStreamWithRate(newRateHz);
-        }, Qt::QueuedConnection);
-    } else {
-        QMetaObject::invokeMethod(m_connection,
-                                  [conn = m_connection, newRateHz]() {
-            conn->setSampleRate(newRateHz);
-        }, Qt::QueuedConnection);
-    }
-
-    // ── Step 5: Wait for inflight I/Q packets to clear ─────────────────────
-    // Thetis setup.cs:7025 / 7095 [v2.10.3.13]:
-    //   Thread.Sleep(20);   // P2 (ETH)
-    //   Thread.Sleep(25);   // P1 (USB)
-    QThread::msleep(25);  // P1 conservative bound covers both protocols
-
-    // ── Step 6: Update the live WDSP channel rate ─────────────────────────
-    // Thetis cmaster.c:473-474 [v2.10.3.13] via WdspEngine::setRxChannelRate.
-    // No destroy-and-recreate — the RxChannel C++ wrapper stays alive,
-    // m_rxChannel raw pointer (and every other holder) remains valid.
-    //
-    // Phase 3F Sub-Epic I closeout, defect H1: every slice's channel, not
-    // just channel 0. This is a radio-wide rate, and step 7 below gives the
-    // whole worker one drain size, so a channel left at the old rate would be
-    // handed a chunk sized for the new one. Upstream loops the same way:
-    //   From Thetis cmaster.c:473-475 [v2.10.3.15]
-    //     for (i = 0; i < pcm->cmSubRCVR; i++) {
-    //         SetInputSamplerate (chid (in_id, i), rate);
-    //         SetInputBuffsize (chid (in_id, i), pcm->xcm_insize[in_id]);
-    //     }
-    // Every channel in the list was stopped in step 1.
-    for (int ch : rxChannelIds) {
-        m_wdspEngine->setRxChannelRate(ch, newRateHz);
-    }
-
-    // ── Step 7: Reconfigure AudioEngine and DSP worker for new rate ───────
-    // WDSP always outputs 64 samples @ 48 kHz; AudioEngine's speakers bus
-    // doesn't need reopening but the input geometry follows the wire rate.
-    m_audioEngine->reinitForSampleRate(newRateHz);
-    if (m_dspWorker) {
-        m_dspWorker->setBufferSizes(newInSize, 64);
-        // Phase 3F Sub-Epic I closeout, defect H1: this is the radio-wide
-        // control, so it resets every stream's width. Per-stream overrides
-        // were published against the rate that just went away; leaving them
-        // would keep a stream draining a chunk size no channel is configured
-        // for any more. Queued to land on the DSP thread, and posted while
-        // the feed is still disconnected (step 2) so it is consumed before
-        // the first batch that follows the reconnect in step 10.
-        QMetaObject::invokeMethod(m_dspWorker,
-                                  &RxDspWorker::clearStreamInputChunks,
-                                  Qt::QueuedConnection);
-    }
-
-    // Keep the allocator and the published-size record agreeing with what was
-    // just pushed. Without this the next retune's applyStreamDspGeometry would
-    // read the allocator's stale per-stream rates and drag every channel back
-    // to the rate this call just left.
+    // Step 7's bookkeeping, owned by the event loop: keep the allocator and
+    // the published-size record agreeing with the rate the lane is applying.
+    // Without this the next retune's applyStreamDspGeometry would read the
+    // allocator's stale per-stream rates and drag every channel back to the
+    // rate this call just left.
     for (int st = 0; st < m_streamAllocator.streamCount(); ++st) {
         if (m_streamAllocator.isStreamActive(st)) {
             m_streamAllocator.activateStream(
@@ -18354,42 +18685,202 @@ qint64 RadioModel::setSampleRateLive(int newRateHz,
         }
     }
 
-    // ── Step 8: Brief wait for samples at the new rate to arrive ─────────
-    // Thetis setup.cs:7046 / 7129 [v2.10.3.13]:
-    //   Thread.Sleep(1);  // P2
-    //   Thread.Sleep(5);  // P1
-    QThread::msleep(5);
+    RxDspWorker* const worker = m_dspWorker;
+    ReceiverManager* const receivers = m_receiverManager;
+    RadioConnection* const connection = m_connection;
+    WdspEngine* const engine = m_wdspEngine;
 
-    // ── Step 9: Restart the RX channels that were running ────────────────
-    // Upstream switches the main channel on first, then each other channel
-    // only if it had been running:
-    //   From Thetis setup.cs:7175-7179 [v2.10.3.15] (Protocol 1)
-    //     WDSP.SetChannelState(0, 1, 0);              // RX1_main
-    //     if (console.radio.GetDSPRX(0, 1).Active)
-    //         WDSP.SetChannelState(1, 1, 0);          // RX1_sub
-    //     if (console.RX2Enabled)
-    //         WDSP.SetChannelState(2, 1, 0);          // RX2_main
-    // Protocol 2 gates its main channel on the state saved before the stop
-    // (setup.cs:7090-7091 [v2.10.3.15]), from setup.cs:7035 [v2.10.3.15]:
-    //     bool was_enabled = console.RX1Enabled;  //... was set to RX2 for some reason, it should be RX1 which always true. MW0LGE_21a
-    // Here: ascending, so channel 0 comes first, and only the channels step 1
-    // found running. A channel that was stopped before stays stopped.
-    // Re-look-up each one in case the engine state shifted.
-    std::sort(rxChannelsWereActive.begin(), rxChannelsWereActive.end());
-    for (int ch : rxChannelsWereActive) {
-        if (RxChannel* rx = m_wdspEngine->rxChannel(ch)) {
-            rx->setActive(true);
+    auto steps = [this, engine, worker, receivers, connection, newRateHz, newInSize,
+                  rxChannelsWereActive, rxChannelsToRate]() {
+        // ── Step 1: Stop every running RX channel, the lowest last, drained ──
+        // Upstream switches off every receiver channel, the sub-receivers with
+        // no drain and the main channel last with a drain, while data is still
+        // flowing so each one slews down and flushes:
+        //   From Thetis setup.cs:7112-7115 [v2.10.3.15] (Protocol 1)
+        //     // turn OFF the RX DSP channels so they get flushed out (must do while data is flowing to get slew-down and flush)
+        //     WDSP.SetChannelState(3, 0, 0); // RX2_sub
+        //     WDSP.SetChannelState(2, 0, 0); // RX2_main
+        //     WDSP.SetChannelState(1, 0, 0); // RX1_sub
+        //     WDSP.SetChannelState(0, 0, 1);  // RX1_main
+        // Protocol 2 does the same for its pair at setup.cs:7043-7044
+        // [v2.10.3.15]: WDSP.id(0, 1) with no drain, then WDSP.id(0, 0) drained.
+        // Here that is every running slice's channel from the highest id down,
+        // each without a drain, and the lowest running channel (channel 0 while
+        // Slice A runs) last, drained, as upstream orders it.
+        //
+        // Both forms rely on I/Q still reaching the stopping channels: WDSP
+        // finishes a stop inside the channel's own exchanges, and a channel that
+        // is not fed is left with its slew-down pending (a no-drain stop) or
+        // waits out WDSP's 100 ms timeout (a draining one). The I/Q feed stays
+        // connected until step 2, and RxChannel keeps exchanging on a stopping
+        // channel until WDSP reports the stop done (Task 8, RxChannel::
+        // applyActive and processIq). So the drain takes a few blocks of input,
+        // not 100 ms, and the no-drain stops complete alongside it. A channel no
+        // I/Q reached after its stop is finished by its rebuild in step 6, or,
+        // when it is already at the new rate, by its restart in step 9
+        // (RxChannel::finishPendingStop). Fix wave 1 (C1) drained every channel
+        // until this was in place.
+        for (std::size_t i = 0; i < rxChannelsWereActive.size(); ++i) {
+            RxChannel* rx = engine->rxChannel(rxChannelsWereActive[i]);
+            if (!rx) {
+                continue;
+            }
+            // On the lane these run at once, as they ran here before
+            // (RxChannel::applyActive), their drain included.
+            if (i + 1 < rxChannelsWereActive.size()) {
+                rx->deactivateWithoutDrain();   // dmode 0, as upstream's subs
+            } else {
+                rx->setActive(false);           // dmode 1: the last, drained
+            }
         }
-    }
+        QThread::msleep(10);  // From Thetis setup.cs:7116 [v2.10.3.15]: Thread.Sleep(10)
 
-    // ── Step 10: Reconnect I/Q feed ──────────────────────────────────────
-    if (m_dspWorker && m_receiverManager) {
-        connect(m_receiverManager, &ReceiverManager::iqDataForReceiverStamped,
-                m_dspWorker, &RxDspWorker::processStampedIqBatch,
-                Qt::QueuedConnection);
-    }
+        // ── Step 2: Quiesce DSP worker ────────────────────────────────────────
+        // Disconnect the I/Q feed so no new batches land while the WDSP channel
+        // is being reconfigured.  resetAccumulator() waited on the DSP thread
+        // (R-R3-39: from the lane now) ensures any in-flight batch completes
+        // before we proceed.
+        const bool workerRunning = dspWorkerThreadRunning(worker);
+        if (worker && receivers) {
+            QObject::disconnect(receivers, &ReceiverManager::iqDataForReceiverStamped,
+                                worker, &RxDspWorker::processStampedIqBatch);
+            if (workerRunning) {
+                runOnDspWorkerFromLane(worker, [worker]() { worker->resetAccumulator(); });
+            }
+        }
 
+        // ── Step 4: Stop radio data flow ──────────────────────────────────────
+        // Thetis setup.cs:7020-7022 (P2 EnableRx) / 7092 (P1 SendStopToMetis)
+        // [v2.10.3.13].  In NereusSDR the stop+set-rate+start cycle is wrapped
+        // by P1RadioConnection::restartStreamWithRate (P1) or atomic-rate-update
+        // inside RadioConnection::setSampleRate (P2).  Both paths are queued
+        // to the connection thread; we wait below for inflight packets to drain.
+        if (auto* p1 = qobject_cast<P1RadioConnection*>(connection)) {
+            QMetaObject::invokeMethod(p1, [p1, newRateHz]() {
+                p1->restartStreamWithRate(newRateHz);
+            }, Qt::QueuedConnection);
+        } else if (connection) {
+            QMetaObject::invokeMethod(connection,
+                                      [conn = connection, newRateHz]() {
+                conn->setSampleRate(newRateHz);
+            }, Qt::QueuedConnection);
+        }
+
+        // ── Step 5: Wait for inflight I/Q packets to clear ─────────────────────
+        // Thetis setup.cs:7025 / 7095 [v2.10.3.13]:
+        //   Thread.Sleep(20);   // P2 (ETH)
+        //   Thread.Sleep(25);   // P1 (USB)
+        QThread::msleep(25);  // P1 conservative bound covers both protocols
+
+        // ── Step 6: Update the live WDSP channel rate ─────────────────────────
+        // Thetis cmaster.c:473-474 [v2.10.3.13] via WdspEngine::setRxChannelRate.
+        // No destroy-and-recreate — the RxChannel C++ wrapper stays alive,
+        // m_rxChannel raw pointer (and every other holder) remains valid.
+        //
+        // Phase 3F Sub-Epic I closeout, defect H1: every slice's channel, not
+        // just channel 0. This is a radio-wide rate, and step 7 below gives the
+        // whole worker one drain size, so a channel left at the old rate would be
+        // handed a chunk sized for the new one. Upstream loops the same way:
+        //   From Thetis cmaster.c:473-475 [v2.10.3.15]
+        //     for (i = 0; i < pcm->cmSubRCVR; i++) {
+        //         SetInputSamplerate (chid (in_id, i), rate);
+        //         SetInputBuffsize (chid (in_id, i), pcm->xcm_insize[in_id]);
+        //     }
+        // Every channel in the list was stopped in step 1.
+        for (int ch : rxChannelsToRate) {
+            if (RxChannel* rx = engine->rxChannel(ch)) {
+                rx->setSampleRateCarry(newRateHz);
+                engine->applyRxChannelRateOnLane(ch, newRateHz, newInSize);
+            }
+        }
+
+        // ── Step 7: Reconfigure the DSP worker for new rate ───────────────────
+        // WDSP always outputs 64 samples @ 48 kHz; AudioEngine's speakers bus
+        // doesn't need reopening but the input geometry follows the wire rate.
+        if (worker) {
+            // R-R3-39: on the worker's own thread, ahead of the first batch
+            // after the reconnect (the feed is still disconnected).
+            if (workerRunning) {
+                QMetaObject::invokeMethod(worker, [worker, newInSize]() {
+                    worker->setBufferSizes(newInSize, 64);
+                }, Qt::QueuedConnection);
+            } else {
+                worker->setBufferSizes(newInSize, 64);
+            }
+            // Phase 3F Sub-Epic I closeout, defect H1: this is the radio-wide
+            // control, so it resets every stream's width. Per-stream overrides
+            // were published against the rate that just went away; leaving them
+            // would keep a stream draining a chunk size no channel is configured
+            // for any more. Queued to land on the DSP thread, and posted while
+            // the feed is still disconnected (step 2) so it is consumed before
+            // the first batch that follows the reconnect in step 10.
+            QMetaObject::invokeMethod(worker,
+                                      &RxDspWorker::clearStreamInputChunks,
+                                      Qt::QueuedConnection);
+        }
+
+        // ── Step 8: Brief wait for samples at the new rate to arrive ─────────
+        // Thetis setup.cs:7046 / 7129 [v2.10.3.13]:
+        //   Thread.Sleep(1);  // P2
+        //   Thread.Sleep(5);  // P1
+        QThread::msleep(5);
+
+        // ── Step 9: Restart the RX channels that were running ────────────────
+        // Upstream switches the main channel on first, then each other channel
+        // only if it had been running:
+        //   From Thetis setup.cs:7175-7179 [v2.10.3.15] (Protocol 1)
+        //     WDSP.SetChannelState(0, 1, 0);              // RX1_main
+        //     if (console.radio.GetDSPRX(0, 1).Active)
+        //         WDSP.SetChannelState(1, 1, 0);          // RX1_sub
+        //     if (console.RX2Enabled)
+        //         WDSP.SetChannelState(2, 1, 0);          // RX2_main
+        // Protocol 2 gates its main channel on the state saved before the stop
+        // (setup.cs:7090-7091 [v2.10.3.15]), from setup.cs:7035 [v2.10.3.15]:
+        //     bool was_enabled = console.RX1Enabled;  //... was set to RX2 for some reason, it should be RX1 which always true. MW0LGE_21a
+        // Here: ascending, so channel 0 comes first, and only the channels step 1
+        // found running. A channel that was stopped before stays stopped.
+        // Re-look-up each one in case the engine state shifted.
+        std::vector<int> restart = rxChannelsWereActive;
+        std::sort(restart.begin(), restart.end());
+        for (int ch : restart) {
+            if (RxChannel* rx = engine->rxChannel(ch)) {
+                rx->setActive(true);
+            }
+        }
+
+        // ── Step 10: Reconnect I/Q feed ──────────────────────────────────────
+        if (worker && receivers) {
+            connect(receivers, &ReceiverManager::iqDataForReceiverStamped,
+                    worker, &RxDspWorker::processStampedIqBatch,
+                    static_cast<Qt::ConnectionType>(Qt::QueuedConnection
+                                                    | Qt::UniqueConnection));
+        }
+    };
+
+    if (!m_rxLane) {
+        steps();
+        finishSampleRateChange(newRateHz, reconcileDiversity, restartExternalDiversity,
+                               timer->elapsed());
+        return;
+    }
+    m_rxLane->postBarrier(steps);
+    m_rxLane->request<int>([]() { return 0; }, this,
+                           [this, generation, newRateHz, reconcileDiversity,
+                            restartExternalDiversity, timer](int) {
+        if (generation != m_sampleRateChangeGeneration || !m_sampleRateChangeInFlight) {
+            return;   // abandoned at teardown
+        }
+        finishSampleRateChange(newRateHz, reconcileDiversity, restartExternalDiversity,
+                               timer->elapsed());
+    });
+}
+
+void RadioModel::finishSampleRateChange(int newRateHz, bool reconcileDiversity,
+                                        bool restartExternalDiversity, qint64 elapsedMs)
+{
     // ── Step 11: Resume audio ────────────────────────────────────────────
+    // (AudioEngine's step 7 hook first: the event loop owns AudioEngine.)
+    m_audioEngine->reinitForSampleRate(newRateHz);
     m_audioEngine->resumeInput();
 
     // ── Step 12: Update state and emit ───────────────────────────────────
@@ -18411,11 +18902,56 @@ qint64 RadioModel::setSampleRateLive(int newRateHz,
             newRateHz);
     }
 
-    const qint64 elapsedMs = t.elapsed();
     qCInfo(lcConnection) << "setSampleRateLive: done in" << elapsedMs << "ms";
 
     emit dspChangeMeasured(elapsedMs);
-    return elapsedMs;
+
+    m_sampleRateChangeInFlight = false;
+    if (m_streamGeometryPending) {
+        m_streamGeometryPending = false;
+        applyStreamDspGeometry();
+    }
+    std::vector<std::function<void(bool)>> callbacks;
+    callbacks.swap(m_sampleRateInFlightCallbacks);
+    emit sampleRateChangeFinished(newRateHz, true);
+    for (auto& callback : callbacks) {
+        if (callback) {
+            callback(true);
+        }
+    }
+
+    if (m_pendingSampleRateChange) {
+        SampleRateRequest next = std::move(*m_pendingSampleRateChange);
+        m_pendingSampleRateChange.reset();
+        requestSampleRateChange(std::move(next));
+    }
+}
+
+void RadioModel::abandonSampleRateChange()
+{
+    if (!m_sampleRateChangeInFlight) {
+        return;
+    }
+    const int rateHz = m_sampleRateTargetHz;
+    m_sampleRateChangeInFlight = false;
+    m_streamGeometryPending = false;
+    ++m_sampleRateChangeGeneration;
+    std::vector<std::function<void(bool)>> callbacks;
+    callbacks.swap(m_sampleRateInFlightCallbacks);
+    emit sampleRateChangeFinished(rateHz, false);
+    for (auto& callback : callbacks) {
+        if (callback) {
+            callback(false);
+        }
+    }
+    if (m_pendingSampleRateChange) {
+        SampleRateRequest pending = std::move(*m_pendingSampleRateChange);
+        m_pendingSampleRateChange.reset();
+        emit sampleRateChangeFinished(pending.rateHz, false);
+        if (pending.onFinished) {
+            pending.onFinished(false);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -18465,13 +19001,20 @@ qint64 RadioModel::setActiveRxCountLive(int newCount)
 
     // ── Step 1: Quiesce DSP worker ────────────────────────────────────────────
     // Same pattern as setSampleRateLive step 1: disconnect I/Q feed and flush.
+    //
+    // R-R3-39: the flush is queued, not waited for: it runs on the DSP thread
+    // after every batch already posted and before any batch the reconnect
+    // below lets in. The channel creates and destroys in step 3 are
+    // receive-lane barriers that park the worker themselves, so no batch is
+    // inside a channel while it opens or closes.
     if (m_dspWorker && m_receiverManager) {
         QObject::disconnect(m_receiverManager, &ReceiverManager::iqDataForReceiverStamped,
                             m_dspWorker, &RxDspWorker::processStampedIqBatch);
         if (m_dspThread && m_dspThread->isRunning()) {
             QMetaObject::invokeMethod(m_dspWorker,
                                       &RxDspWorker::resetAccumulator,
-                                      Qt::BlockingQueuedConnection);
+                                      m_rxLane ? Qt::QueuedConnection
+                                               : Qt::BlockingQueuedConnection);
         }
     }
 
@@ -19618,10 +20161,19 @@ void RadioModel::configureExternalDiversityRotation(
     const double gainLin =
         std::pow(10.0, target->diversityGainDb() / 20.0);
     const double rad = target->diversityPhaseDeg() * M_PI / 180.0;
-    double iRot[2] = {1.0, gainLin * std::cos(rad)};
-    double qRot[2] = {0.0, gainLin * std::sin(rad)};
+    const std::array<double, 2> iRot{1.0, gainLin * std::cos(rad)};
+    const std::array<double, 2> qRot{0.0, gainLin * std::sin(rad)};
+    if (m_rxLane) {
+        // R-R3-39: in order on the receive lane (after a create queued there).
+        WdspEngine* const engine = m_wdspEngine;
+        m_rxLane->post([engine, iRot, qRot]() {
+            engine->configureExternalDiversity(
+                kExternalDiversityId, 2, iRot.data(), qRot.data(), 2);
+        });
+        return;
+    }
     m_wdspEngine->configureExternalDiversity(
-        kExternalDiversityId, 2, iRot, qRot, 2);
+        kExternalDiversityId, 2, iRot.data(), qRot.data(), 2);
 }
 
 void RadioModel::reconcileExternalDiversityRoute(
@@ -19672,6 +20224,56 @@ void RadioModel::reconcileExternalDiversityRoute(
         stopExternalDiversityRoute();
     }
 
+    if (m_rxLane) {
+        // R-R3-39: the same order as one receive-lane barrier (create, then
+        // configure, then publish the route to the worker, which the lane
+        // waits for, then run). The route counts as active at once; should
+        // the create be refused there, it is marked inactive again.
+        m_externalDiversityRouteActive = true;
+        m_externalDiversityPrimaryDdc = primaryDdc;
+        m_externalDiversitySecondaryDdc = secondaryDdc;
+        m_externalDiversityChunkSize = chunkSize;
+        const quint64 generation = ++m_externalDiversityRouteGeneration;
+        WdspEngine* const engine = m_wdspEngine;
+        RxDspWorker* const worker = m_dspWorker;
+        const int targetSliceId = target->sliceIndex();
+        auto created = std::make_shared<std::atomic<bool>>(false);
+        m_rxLane->postBarrier([engine, chunkSize, created]() {
+            // Upstream ordering: CreateRadio creates stopped; the console
+            // configures it; InboundBlock may only enter after the paired
+            // source route exists.
+            if (!engine->createExternalDiversity(kExternalDiversityId, 2, chunkSize)) {
+                return;
+            }
+            created->store(true);
+        });
+        configureExternalDiversityRotation(target);
+        m_rxLane->postBarrier([this, engine, worker, targetSliceId, primaryDdc,
+                               secondaryDdc, created]() {
+            if (!created->load()) {
+                return;
+            }
+            if (worker) {
+                runOnDspWorkerFromLane(worker, [worker, targetSliceId, primaryDdc,
+                                                secondaryDdc]() {
+                    worker->setExternalDiversityRoute(
+                        kExternalDiversityId, targetSliceId, primaryDdc, secondaryDdc);
+                });
+            }
+            engine->setExternalDiversityRunning(kExternalDiversityId, true);
+        });
+        m_rxLane->request<bool>([created]() { return created->load(); }, this,
+                                [this, generation](bool ok) {
+            if (!ok && generation == m_externalDiversityRouteGeneration) {
+                m_externalDiversityRouteActive = false;
+                m_externalDiversityPrimaryDdc = -1;
+                m_externalDiversitySecondaryDdc = -1;
+                m_externalDiversityChunkSize = 0;
+            }
+        });
+        return;
+    }
+
     // Upstream ordering: CreateRadio creates stopped; the console configures
     // it; InboundBlock may only enter after the paired source route exists.
     if (!m_wdspEngine->createExternalDiversity(
@@ -19705,6 +20307,32 @@ void RadioModel::reconcileExternalDiversityRoute(
 
 void RadioModel::stopExternalDiversityRoute()
 {
+    if (m_rxLane) {
+        // R-R3-39: the same order as one receive-lane barrier. The lane,
+        // not the event loop, waits for the worker to clear the route
+        // before the slot stops, so no raw I/Q event already ahead of the
+        // clear reaches WDSP after slot 0 is stopped or destroyed.
+        ++m_externalDiversityRouteGeneration;
+        WdspEngine* const engine = m_wdspEngine;
+        RxDspWorker* const worker = m_dspWorker;
+        m_rxLane->postBarrier([this, engine, worker]() {
+            if (worker) {
+                runOnDspWorkerFromLane(worker, [worker]() {
+                    worker->clearExternalDiversityRoute();
+                });
+            }
+            if (engine) {
+                engine->setExternalDiversityRunning(kExternalDiversityId, false);
+                engine->destroyExternalDiversity(kExternalDiversityId);
+            }
+        });
+        m_externalDiversityRouteActive = false;
+        m_externalDiversityPrimaryDdc = -1;
+        m_externalDiversitySecondaryDdc = -1;
+        m_externalDiversityChunkSize = 0;
+        return;
+    }
+
     // Clear the worker first. A BlockingQueuedConnection is the barrier that
     // prevents any raw I/Q event already ahead of this control call from
     // reaching WDSP after slot 0 is stopped or destroyed.
