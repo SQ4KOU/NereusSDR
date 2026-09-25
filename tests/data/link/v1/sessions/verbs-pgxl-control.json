@@ -1,6 +1,6 @@
 {
     "runs": ["station", "app"],
-    "stationSetup": {"radio": "static", "slices": 1, "coreAccessories": true},
+    "stationSetup": {"radio": "static", "slices": 1, "coreAccessories": true, "lanScanWindowMs": 150},
     "steps": [
         {"from": "station", "message": {"features": {}, "major": 1, "majors": [1], "minor": 11, "peer": "nereusd", "settingsSchema": 0, "type": "hello"}},
         {"from": "client", "role": "behaviour", "message": {"type": "hello", "major": 1, "minor": 11, "settingsSchema": "$int", "peer": "$string", "majors": "$majors", "features": "$object"}},

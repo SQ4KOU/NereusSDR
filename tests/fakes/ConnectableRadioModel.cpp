@@ -10,10 +10,54 @@
 #include "core/AudioEngine.h"
 
 #include <QtTest/QtTest>
+#include <QSaveFile>
+
+#include <fftw3.h>
 
 namespace NereusSDR::Test {
 
 namespace {
+
+// Group B fix wave (I3): the synchronous test init never loads WDSP's
+// wisdom (WdspEngine::setSynchronousInitForTest), so every FFTW plan the
+// connect makes is planned from nothing with FFTW_PATIENT. Opening the
+// PureSignal feedback channel alone spent about 45 s of processor time
+// there on every run. The plans FFTW made are kept beside the test
+// binaries and handed back to FFTW on the next run; what is planned is
+// unchanged, only when. A missing or unreadable file costs the old time.
+QString wisdomCachePath()
+{
+    return QCoreApplication::applicationDirPath()
+        + QStringLiteral("/connectable-radio-fftw-wisdom");
+}
+
+void importCachedWisdom()
+{
+    QFile file(wisdomCachePath());
+    if (!file.open(QIODevice::ReadOnly)) {
+        return;
+    }
+    const QByteArray wisdom = file.readAll();
+    if (!wisdom.isEmpty()) {
+        fftw_import_wisdom_from_string(wisdom.constData());
+    }
+}
+
+// Written whole or not at all (QSaveFile), so tests that run side by side
+// never read half a file.
+void exportWisdom()
+{
+    char* wisdom = fftw_export_wisdom_to_string();
+    if (wisdom == nullptr) {
+        return;
+    }
+    QSaveFile file(wisdomCachePath());
+    if (file.open(QIODevice::WriteOnly)) {
+        file.write(wisdom);
+        file.commit();
+    }
+    fftw_free(wisdom);
+}
 
 void installOpenAudioBuses(AudioEngine& engine)
 {
@@ -37,7 +81,15 @@ void installOpenAudioBuses(AudioEngine& engine)
 
 } // namespace
 
-ConnectableRadioModel::~ConnectableRadioModel() = default;
+ConnectableRadioModel::~ConnectableRadioModel()
+{
+    // Member order as the header says: the model before the fake. Every
+    // WDSP channel is closed and its threads stopped before the planner's
+    // wisdom is read.
+    m_model.reset();
+    m_fake.reset();
+    exportWisdom();
+}
 
 std::unique_ptr<ConnectableRadioModel> ConnectableRadioModel::create(
     int timeoutMs, NereusSDR::RadioModel::Role role,
@@ -48,6 +100,9 @@ std::unique_ptr<ConnectableRadioModel> ConnectableRadioModel::create(
     // std::make_unique can't reach it from outside the class; new + wrap
     // is the standard workaround for a factory that IS a member function.
     std::unique_ptr<ConnectableRadioModel> harness(new ConnectableRadioModel());
+
+    // Before any model exists, so no thread is planning.
+    importCachedWisdom();
 
     harness->m_fake = std::make_unique<P1FakeRadio>();
     harness->m_fake->start();

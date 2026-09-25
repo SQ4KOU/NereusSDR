@@ -2359,6 +2359,7 @@ its client each station message with `"$string"` as `""`, `"$int"` as `0`,
 | `clientAnswersPings` | the client's transport answers the station's pings | true |
 | `preemptingClient` | `{"afterStep": i}`: a second client authenticates once step `i` is done | none |
 | `otherConnections` | other clients connected before this one, still connecting and sending nothing; 8 puts the station at its connection limit | 0 |
+| `lanScanWindowMs` | how long the Core's `scanTgxlLan` and `scanPgxlLan` listen, in milliseconds from 1; the scan fixtures set 150, since their answer is matched as any text | 3000 |
 
 The station runner starts every fixture from an empty settings profile,
 and the bundled NR3 model files count as absent, so a fixture reads the
@@ -2435,8 +2436,14 @@ than N 16-bit steps from `pcm16`); the vector states which.
 
 ```
 cmake --build build --target tst_link_conformance_control tst_link_conformance_session tst_link_conformance_media
-QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^tst_link_conformance_(control|session|media)$' --output-on-failure
+QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^tst_link_conformance_(control|session|session_connectable|media)$' --output-on-failure
 ```
+
+The session runner is registered twice: `tst_link_conformance_session`
+runs every fixture but those whose `radio` is `"connectable"`, and
+`tst_link_conformance_session_connectable` runs those alone
+(`NEREUS_LINK_CONNECTABLE` set to `skip` and `only`; unset, the binary
+runs every fixture).
 
 Each runner also alters one of its fixtures in memory and checks that the
 failure names the step or field that differs; the media runner also checks

@@ -31,14 +31,26 @@
 //                    peer's
 //   otherConnections other clients connected and still connecting, which
 //                    send nothing (0); with 8 the station is at its limit
+//   lanScanWindowMs  how long the Core's Tuner Genius and Power Genius
+//                    scans listen (the local dialog's 3000 ms); the scan
+//                    fixtures shorten it, since the answer is matched as
+//                    any text
 //   clientAnswersPings, preemptingClient   read by the player itself
 //
 // NEREUS_LINK_TRACE_DIR, when set, receives every message the station sent
 // in each fixture (<id>.jsonl), for writing a fixture to what the code does.
 //
+// NEREUS_LINK_CONNECTABLE picks the fixtures whose station is
+// "connectable" (a model connected to the fake radio, WDSP and all):
+// "only" runs just those fixtures and nothing else, "skip" runs everything
+// but them, and unset runs all. ctest registers the binary twice, once each
+// way (tst_link_conformance_session and
+// tst_link_conformance_session_connectable), so neither entry carries the
+// other's time against its limit.
+//
 //   cmake --build build --target tst_link_conformance_session
 //   QT_QPA_PLATFORM=offscreen ctest --test-dir build \
-//       -R '^tst_link_conformance_session$' --output-on-failure
+//       -R '^tst_link_conformance_session(_connectable)?$' --output-on-failure
 //
 // =================================================================
 // Modification history (NereusSDR):
@@ -82,6 +94,11 @@
 //   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (group B fix wave, I2): the
 //                                    planted PureSignal steps follow
 //                                    verbs-ps3 without its arming verbs.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (group B fix wave, I3):
+//                                    lanScanWindowMs, and
+//                                    NEREUS_LINK_CONNECTABLE for the
+//                                    connectable fixture's own ctest entry.
 //                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
@@ -133,8 +150,23 @@ const QStringList kSetupKeys{
     QStringLiteral("stationTci"),      QStringLiteral("stepAttenuator"),
     QStringLiteral("media"),           QStringLiteral("priorFailedAuthentications"),
     QStringLiteral("clientAnswersPings"), QStringLiteral("preemptingClient"),
-    QStringLiteral("otherConnections"),
+    QStringLiteral("otherConnections"), QStringLiteral("lanScanWindowMs"),
 };
+
+// NEREUS_LINK_CONNECTABLE (see the file comment).
+enum class ConnectableSelection { All, Only, Skip };
+
+ConnectableSelection connectableSelection()
+{
+    const QByteArray value = qgetenv("NEREUS_LINK_CONNECTABLE");
+    if (value == "only") {
+        return ConnectableSelection::Only;
+    }
+    if (value == "skip") {
+        return ConnectableSelection::Skip;
+    }
+    return ConnectableSelection::All;
+}
 
 // The station a fixture's stationSetup describes. Members are declared in
 // the order that makes destruction safe: the server goes first, then the
@@ -213,6 +245,15 @@ QString buildStation(const QJsonObject& setup, Station* station, quint16 major)
     }
     if (setup.value(QStringLiteral("stationTci")).toBool(false)) {
         model.enableStationTci(QStringLiteral("127.0.0.1"));
+    }
+    if (setup.contains(QStringLiteral("lanScanWindowMs"))) {
+        const int windowMs = setup.value(QStringLiteral("lanScanWindowMs")).toInt(-1);
+        if (windowMs < 1) {
+            return QStringLiteral("stationSetup.lanScanWindowMs must be a whole number of "
+                                  "milliseconds from 1");
+        }
+        model.setTgxlLanScanWindowMsForTest(windowMs);
+        model.setPgxlLanScanWindowMsForTest(windowMs);
     }
     if (setup.value(QStringLiteral("stepAttenuator")).toBool(false)) {
         station->stepAtt = std::make_unique<StepAttenuatorController>();
@@ -587,6 +628,7 @@ class TstLinkConformanceSession : public QObject {
 private slots:
     void initTestCase();
     void cleanupTestCase();
+    void init();
 
     void sessionFixtures_data();
     void sessionFixtures();
@@ -623,6 +665,17 @@ void TstLinkConformanceSession::initTestCase()
     m_manifest = LinkFixtures::readObject(
         QDir(LinkFixtures::dataDirectory()).filePath(QStringLiteral("manifest.json")), &error);
     QVERIFY2(error.isEmpty(), qPrintable(error));
+}
+
+// With NEREUS_LINK_CONNECTABLE=only the binary runs the connectable
+// fixtures and nothing else; the checks over every fixture run in the
+// other entry.
+void TstLinkConformanceSession::init()
+{
+    if (connectableSelection() == ConnectableSelection::Only
+        && qstrcmp(QTest::currentTestFunction(), "sessionFixtures") != 0) {
+        QSKIP("NEREUS_LINK_CONNECTABLE=only runs the connectable fixtures alone");
+    }
 }
 
 void TstLinkConformanceSession::cleanupTestCase()
@@ -675,9 +728,17 @@ void TstLinkConformanceSession::sessionFixtures_data()
     const QList<LinkFixtures::Entry> entries =
         LinkFixtures::entries(m_manifest, QStringLiteral("session"));
     QVERIFY(!entries.isEmpty());
+    const ConnectableSelection selection = connectableSelection();
     // Once per link major the suite covers (manifest linkMajors).
     for (const quint16 major : LinkFixtures::linkMajors(m_manifest)) {
         for (const LinkFixtures::Entry& entry : entries) {
+            const bool connectable = fixture(entry.id).value(QStringLiteral("stationSetup"))
+                                         .toObject().value(QStringLiteral("radio")).toString()
+                == QStringLiteral("connectable");
+            if ((selection == ConnectableSelection::Only && !connectable)
+                || (selection == ConnectableSelection::Skip && connectable)) {
+                continue;
+            }
             QTest::newRow(qPrintable(QStringLiteral("%1 link %2").arg(entry.id).arg(major)))
                 << entry.id << entry.file << int(major);
         }

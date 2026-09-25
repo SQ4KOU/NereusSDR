@@ -7390,6 +7390,44 @@ nereus_add_test(tst_link_conformance_session
     EXTRA_LABELS session)
 target_compile_definitions(tst_link_conformance_session PRIVATE
     NEREUS_LINK_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data/link/v1")
+# R-R3-49 (group B fix wave, I3): the connectable fixture (a model
+# connected to the fake radio, WDSP and all) runs as its own ctest entry,
+# the same binary with NEREUS_LINK_CONNECTABLE=only, and the first entry
+# skips it, so neither carries the other's time against the 120 s limit.
+# The second entry takes the first's labels, limit and environment, with
+# its own home.
+if(TEST tst_link_conformance_session)
+    get_test_property(tst_link_conformance_session LABELS _lcs_labels)
+    get_test_property(tst_link_conformance_session TIMEOUT _lcs_timeout)
+    get_test_property(tst_link_conformance_session ENVIRONMENT_MODIFICATION _lcs_env_mod)
+    add_test(NAME tst_link_conformance_session_connectable COMMAND tst_link_conformance_session)
+    set_tests_properties(tst_link_conformance_session_connectable PROPERTIES
+        LABELS "${_lcs_labels}"
+        TIMEOUT ${_lcs_timeout})
+    if(_lcs_env_mod)
+        set_property(TEST tst_link_conformance_session_connectable
+            PROPERTY ENVIRONMENT_MODIFICATION ${_lcs_env_mod})
+    endif()
+    # CMake 3.22 and later carry offscreen in ENVIRONMENT_MODIFICATION above.
+    if(NEREUS_TESTS_OFFSCREEN AND CMAKE_VERSION VERSION_LESS 3.22)
+        set_property(TEST tst_link_conformance_session_connectable APPEND PROPERTY ENVIRONMENT
+            "QT_QPA_PLATFORM=offscreen")
+    endif()
+    if(NOT WIN32)
+        set(_lcs_home "${CMAKE_CURRENT_BINARY_DIR}/test-home/tst_link_conformance_session_connectable")
+        file(MAKE_DIRECTORY "${_lcs_home}")
+        set_property(TEST tst_link_conformance_session_connectable APPEND PROPERTY ENVIRONMENT
+            "HOME=${_lcs_home}")
+        if(APPLE)
+            set_property(TEST tst_link_conformance_session_connectable APPEND PROPERTY ENVIRONMENT
+                "CFFIXED_USER_HOME=${_lcs_home}")
+        endif()
+    endif()
+    set_property(TEST tst_link_conformance_session APPEND PROPERTY ENVIRONMENT
+        "NEREUS_LINK_CONNECTABLE=skip")
+    set_property(TEST tst_link_conformance_session_connectable APPEND PROPERTY ENVIRONMENT
+        "NEREUS_LINK_CONNECTABLE=only")
+endif()
 nereus_add_test(tst_link_conformance_media
     LinkFixtures.cpp
     fakes/LoopbackTransport.cpp
