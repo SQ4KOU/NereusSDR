@@ -3691,7 +3691,7 @@ void TxChannel::setTxEqProfile(const std::vector<double>& freqs10,
     for (int i = 0; i < kNfreqs + 1; ++i) {
         G[i] = gains11[static_cast<std::size_t>(i)];
     }
-    SetTXAEQProfile(m_channelId, kNfreqs, F, G);
+    SetTXAEQProfile(m_channelId, kNfreqs, F, G, nullptr);
 #endif
 }
 

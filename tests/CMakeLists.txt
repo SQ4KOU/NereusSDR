@@ -377,6 +377,14 @@ if(TARGET wdsp_static)
     set_source_files_properties(WdspCfcProbe.c PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(tst_wdsp210_cfc_compat PRIVATE ${FFTW3_INCLUDE_DIRS})
     target_compile_definitions(tst_wdsp210_cfc_compat PRIVATE WDSP_STATIC_BUILD)
+    # R-R3-49 (group A fix wave): the TX EQ's Q path ported from Thetis's
+    # WDSP. A profile without Q builds the impulse the WDSP 2.10 eq.c built
+    # before (WdspEqReference.h); one with Q builds a finite, non-flat
+    # impulse for 5, 10 and 18 points and keeps its Q through a rebuild.
+    nereus_add_test(tst_wdsp_txa_eq_q WdspEqProbe.c EXTRA_LABELS core)
+    set_source_files_properties(WdspEqProbe.c PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    target_include_directories(tst_wdsp_txa_eq_q PRIVATE ${FFTW3_INCLUDE_DIRS})
+    target_compile_definitions(tst_wdsp_txa_eq_q PRIVATE WDSP_STATIC_BUILD)
 endif()
 
 # ── Issue #75: receiver leak across disconnect/reconnect ──────────────────
