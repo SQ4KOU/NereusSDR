@@ -85,6 +85,10 @@
 //                 their dialogs in a remote window; setTxProcessingPermitted
 //                 greys the CFC dialog with the reason. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-25 : R-R3-49 (group A fix wave, M3): setPowerByBandPermitted.
+//                 An RF Power move writes the band slot and the tune drive
+//                 source only where the Core takes them (version 5).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1060,6 +1064,10 @@ void TxApplet::wireControls()
         // band on CTUN pans without slice retune — writing through it would
         // silently corrupt other bands' stored values.  txBand() falls back
         // to m_currentBand when the active slice is unavailable.
+        // R-R3-49 (group A fix wave, M3): a remote window writes the band
+        // slot and the drive source only to a Core that takes them
+        // (transmitSettingsVersion 5); an older Core takes `power` alone.
+        if (!m_powerByBandPermitted) { return; }
         tx.setPowerForBand(txBand(), val);
         // Symmetric to the tune-slider auto-switch above: touching the RF
         // Power slider restores the tune source to DriveSlider so the

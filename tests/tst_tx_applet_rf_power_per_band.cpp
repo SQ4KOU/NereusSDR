@@ -375,6 +375,35 @@ private slots:
         QCOMPARE(slider->value(), 5);
         QCOMPARE(rm.transmitModel().power(), 5);
     }
+
+    // ── Group A fix wave, M3: an older Core takes `power` alone ─────────────
+    //
+    // A remote window on a Core below transmitSettingsVersion 5 must not
+    // write powerByBandJson or tuneDrivePowerSource, which that Core
+    // refuses; on version 5 or later, and locally, it writes both.
+    void slider_withoutPowerByBand_writesPowerOnly()
+    {
+        RadioModel rm;
+        TxApplet applet(&rm);
+        auto* slider = applet.findChild<QSlider*>(
+            QStringLiteral("TxRfPowerSlider"));
+        QVERIFY(slider != nullptr);
+        TransmitModel& tx = rm.transmitModel();
+        tx.setTuneDrivePowerSource(DrivePowerSource::TuneSlider);
+        const int band20Before = tx.powerForBand(Band::Band20m);
+
+        applet.setPowerByBandPermitted(false);
+        slider->setValue(band20Before == 60 ? 61 : 60);
+        QCOMPARE(tx.power(), slider->value());
+        QCOMPARE(tx.powerForBand(Band::Band20m), band20Before);
+        QCOMPARE(tx.tuneDrivePowerSource(), DrivePowerSource::TuneSlider);
+
+        applet.setPowerByBandPermitted(true);
+        slider->setValue(33);
+        QCOMPARE(tx.power(), 33);
+        QCOMPARE(tx.powerForBand(Band::Band20m), 33);
+        QCOMPARE(tx.tuneDrivePowerSource(), DrivePowerSource::DriveSlider);
+    }
 };
 
 QTEST_MAIN(TestTxAppletRfPowerPerBand)

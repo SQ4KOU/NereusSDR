@@ -11407,6 +11407,9 @@ void MainWindow::applyRemoteRoleGating()
         m_txApplet->setTransmitChainSettingsPermitted(chainPermitted, chainReason);
         m_txApplet->setTxProfilePermitted(profilePermitted, profileReason);
         m_txApplet->setTxProcessingPermitted(processingPermitted, processingReason);
+        // R-R3-49 (group A fix wave, M3): the RF Power slider's per-band
+        // and drive-source writes came with version 5.
+        m_txApplet->setPowerByBandPermitted(transmitSettingsPermitted(5));
     }
     if (m_phoneCwApplet) {
         m_phoneCwApplet->setTransmitPermitted(transmitPermitted, transmitReason);

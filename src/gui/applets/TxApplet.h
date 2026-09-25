@@ -323,6 +323,12 @@ public slots:
     // (transmitSettingsVersion 3), live while its radio is off the air.
     void setTxProfilePermitted(bool permitted,
                                const QString& unavailableReason = QString());
+    // R-R3-49 (group A fix wave, M3): whether an RF Power move also writes
+    // the per-band power and the tune drive source (powerByBandJson and
+    // tuneDrivePowerSource on the link), which a Core takes from
+    // transmitSettingsVersion 5. MainWindow supplies false for an older
+    // Core, which would refuse them on every move. Always true locally.
+    void setPowerByBandPermitted(bool permitted) { m_powerByBandPermitted = permitted; }
     // R-R3-49 (parity Task 4): the CFC dialog (transmitSettingsVersion 4).
     // The EQ and CFC right-clicks open their dialogs in any window; this
     // greys the CFC dialog with the reason while a remote window cannot
@@ -562,6 +568,7 @@ private:
     bool m_transmitChainSettingsPermitted{true};
     bool m_txProfilePermitted{true};
     bool m_txProcessingPermitted{true};   // R-R3-49 (parity Task 4)
+    bool m_powerByBandPermitted{true};    // R-R3-49 (group A fix wave, M3)
     QString m_txProcessingReason;
     // R-R3-49 (parity Task 2): a remote window's Tune Power slider asks the
     // Core (setTunePowerForTxBand) and shows the Core's tunePowerForTxBand.
