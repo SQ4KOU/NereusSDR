@@ -31,6 +31,7 @@
 #include "core/settings/SettingsProxy.h"
 #include "models/RadioModel.h"
 #include "fakes/LoopbackTransport.h"
+#include "fakes/UpgradedCoreToken.h"
 
 using namespace NereusSDR;
 using NereusSDR::Test::LoopbackTransport;
@@ -393,7 +394,7 @@ private slots:
     {
         RadioModel station;
         AppSettings settings(m_securityDir.filePath(QStringLiteral("server.settings")));
-        StationServer server(&station, settings, m_securityDir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
 
         server.setMediaEnabled(true);
         QVERIFY(!server.buildCapabilities().displayBudget.has_value());
@@ -420,7 +421,7 @@ private slots:
         RadioModel wrappingStation;
         AppSettings wrappingSettings(
             m_securityDir.filePath(QStringLiteral("wrapping-server.settings")));
-        StationServer wrapping(&wrappingStation, wrappingSettings, m_securityDir.path());
+        StationServer wrapping(&wrappingStation, wrappingSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
         QVERIFY(wrapping.setDisplayBudgetLimits(limits(
             std::numeric_limits<quint32>::max(), kBytes, kSamples)));
         QVERIFY(wrapping.setDisplayBudgetLimits(limits(1, kBytes + 1, kSamples + 1)));
@@ -431,7 +432,7 @@ private slots:
     {
         RadioModel station;
         AppSettings settings(m_securityDir.filePath(QStringLiteral("runtime.settings")));
-        StationServer server(&station, settings, m_securityDir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
         server.setMediaEnabled(true);
         QVERIFY(server.setDisplayBudgetLimits(limits(1)));
         server.setDisplayBudgetEnforcementEnabled(true);
@@ -696,7 +697,7 @@ private slots:
             RadioModel station;
             AppSettings settings(m_securityDir.filePath(
                 QStringLiteral("golden-%1.settings").arg(minor)));
-            StationServer server(&station, settings, m_securityDir.path());
+            StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
             server.setMediaEnabled(true);
             QVERIFY(server.setDisplayBudgetLimits(limits(1), DisplayBudgetReason::None));
             server.setDisplayBudgetEnforcementEnabled(true);
@@ -731,7 +732,18 @@ private slots:
                                    "accessoryDataVersion",
                                    // R-R3-47: the Tuner Genius's own
                                    // settings.
-                                   "remoteTgxlControlVersion"});
+                                   "remoteTgxlControlVersion",
+                                   // iPhone app Task 12: device sign-in.
+                                   "stationIdentityVersion",
+                                   // iPhone app Task 13: device
+                                   // administration.
+                                   "deviceAdminVersion",
+                                   // iPhone app Task 14: pairing.
+                                   "pairingVersion",
+                                   // iPhone app Task 19: the catalogue.
+                                   "stationCatalogVersion",
+                                   // iPhone app Task 20: display extras.
+                                   "displayExtrasVersion"});
                 QCOMPARE(names, withReason);
                 const int reason = updateIndex(last.updates,
                                                QByteArrayLiteral("displayBudgetReason"));
@@ -767,7 +779,12 @@ private slots:
                                            QByteArrayLiteral("remoteRfKitControlVersion"),
                                            QByteArrayLiteral("stationTciVersion"),
                                            QByteArrayLiteral("accessoryDataVersion"),
-                                           QByteArrayLiteral("remoteTgxlControlVersion")}) {
+                                           QByteArrayLiteral("remoteTgxlControlVersion"),
+                                           QByteArrayLiteral("stationIdentityVersion"),
+                                           QByteArrayLiteral("deviceAdminVersion"),
+                                           QByteArrayLiteral("pairingVersion"),
+                                           QByteArrayLiteral("stationCatalogVersion"),
+                                           QByteArrayLiteral("displayExtrasVersion")}) {
                 stripped.removeAt(updateIndex(stripped, name));
             }
             QCOMPARE(SessionMessages::encode(SessionMessages::capabilities(stripped)), older);
@@ -791,7 +808,7 @@ private slots:
             *settingsOut = std::make_unique<AppSettings>(m_securityDir.filePath(
                 QStringLiteral("legacy-%1.settings").arg(computed ? 1 : 0)));
             *serverOut = std::make_unique<StationServer>(stationOut->get(), **settingsOut,
-                                                         m_securityDir.path());
+                                                         NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
             StationServer& server = **serverOut;
             server.setMediaEnabled(true);
             if (computed) {
@@ -839,7 +856,7 @@ private slots:
     {
         RadioModel station;
         AppSettings settings(m_securityDir.filePath(QStringLiteral("reason.settings")));
-        StationServer server(&station, settings, m_securityDir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
         server.setMediaEnabled(true);
         QVERIFY(server.setDisplayBudgetLimits(limits(1)));
         server.setDisplayBudgetEnforcementEnabled(true);

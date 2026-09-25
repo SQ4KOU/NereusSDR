@@ -235,6 +235,10 @@
 //                [v2.10.3.15]); External TX Inhibit applies at once
 //                (setup.cs:16660-16667 [v2.10.3.15]). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - iPhone app Task 19 (R-IOS-06, D40): a remote window's
+//                 filter presets follow the Core's (FilterPresetStore::
+//                 followStationSetting on stationSettingChanged). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -553,6 +557,7 @@ warren@wpratt.com
 #include "core/StationPgxlController.h"
 #include "core/StationRfKitController.h"
 #include "core/StationTciController.h"
+#include "core/SliceOwnership.h"
 #include "core/RfKitBandFollow.h"
 #include "core/PgxlStatusGauges.h"
 #include "models/AmplifierModel.h"
@@ -828,6 +833,29 @@ RadioModel::RadioModel(Role role, QObject* parent)
         });
         connect(m_wdspEngine, &WdspEngine::rxChannelCreated, this,
                 [this](int channelId) { wireRxChannelLaneSignals(channelId); });
+    }
+    // iPhone app Task 73 (R-IOS-02): whose each slice is. A change of owner
+    // is saved with the restart manifest (ruling 5.3).
+    m_sliceOwnership = new SliceOwnership(this);
+    if (role == Role::Local) {
+        connect(m_sliceOwnership, &SliceOwnership::markChanged, this,
+                [this](int, const QByteArray&, const QByteArray&) { scheduleSettingsSave(); });
+        // Ruling 5.14: VAX on this computer carries only the station
+        // device's slices: every slice a device owns is left out. With no
+        // owners (a desktop on its own) every slice is carried.
+        const auto vaxFollowsOwners = [this]() {
+            quint32 mask = 0xFFFFFFFFu;
+            for (int id : m_sliceOwnership->liveSlices()) {
+                const QByteArray owner = m_sliceOwnership->mark(id).owner;
+                if (id >= 0 && id < 32 && !owner.isEmpty()
+                    && owner != SliceOwnership::stationDevice()) {
+                    mask &= ~(1u << id);
+                }
+            }
+            m_audioEngine->setVaxSliceMask(mask);
+        };
+        connect(m_sliceOwnership, &SliceOwnership::markChanged, this, vaxFollowsOwners);
+        connect(m_sliceOwnership, &SliceOwnership::activeChanged, this, vaxFollowsOwners);
     }
     // R-R3-36: the PC microphone session demand follows the mic source.
     connect(&m_transmitModel, &TransmitModel::micSourceChanged, this,
@@ -1602,6 +1630,11 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // Wraps Thetis-verbatim defaults from SliceModel::presetsForMode with a
     // user-override layer persisted in AppSettings (keys: "filters/<mode>/<slot>/…").
     m_filterPresetStore = new FilterPresetStore(this);
+    // iPhone app Task 19 (D40): the presets are the Core's in a remote
+    // window. stationSettingChanged fires only there, so a window running
+    // its radio locally is unchanged.
+    connect(this, &RadioModel::stationSettingChanged, m_filterPresetStore,
+            &FilterPresetStore::followStationSetting);
 
     // ── Phase 3P-II Task 19: PGXL / TGXL / Tuner ownership ───────────────────
     // Constructed once here; accessors return non-null from this point on.
@@ -5936,7 +5969,7 @@ void RadioModel::installReceiveFallbackSlice()
     // cloning an active RADE mode through its decoder-starting setter.
     const SliceModel defaults;
     const ReceiveSliceState seed{0, QStringLiteral("pan-0"),
-                                 defaults.frequency(), defaults.dspMode()};
+                                 defaults.frequency(), defaults.dspMode(), {}, {}};
     if (addSliceImpl(0, seed.panKey, &seed) >= 0) {
         SliceModel* fallback = sliceById(0);
         bindSliceToStream(fallback, fallback->frequency(), true);
@@ -7709,8 +7742,13 @@ QString RadioModel::sliceCapReason(int cap) const
 }
 
 int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
-                             const ReceiveSliceState* restoreSeed)
+                             const ReceiveSliceState* restoreSeed, bool bindRestored)
 {
+    // iPhone app Task 73: `bindRestored` makes a device's saved slice again
+    // while the radio runs (restoreSliceFor). It restores `restoreSeed`'s
+    // frequency and mode like the startup hydration does, then binds at
+    // once, as an ordinary new slice does, instead of waiting for
+    // bindReceiveLayoutSlices.
     auto* slice = new SliceModel(this);
 
     // Phase 3F Sub-Epic I closeout, defect C3: lowest id not currently in
@@ -7746,8 +7784,9 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
     }
     slice->setSliceIndex(index);
     if (role() == Role::Local) {
-        slice->setSettingsRadioIdentity(restoreSeed || m_lastRadioInfo.macAddress.isEmpty()
-                                           ? m_receiveLayoutMac : m_lastRadioInfo.macAddress);
+        slice->setSettingsRadioIdentity((restoreSeed && !bindRestored)
+                                                || m_lastRadioInfo.macAddress.isEmpty()
+                                            ? m_receiveLayoutMac : m_lastRadioInfo.macAddress);
         // Restore before binding can activate a pooled receiver. Each stable
         // slice ID owns its NR selection even when another slice has focus.
         // loadFromSettings() restores the NR selection, the VAX channel
@@ -7785,8 +7824,18 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
         slice->setPanKey(initialPanId);
         slice->setProperty("initialPanId", initialPanId);
     }
-    if (restoreSeed && !slice->restoreReceiveState(restoreSeed->frequencyHz,
-                                                  restoreSeed->dspMode)) {
+    if (restoreSeed && bindRestored) {
+        // iPhone app Task 73: a device's slice made again while the radio
+        // runs. restoreReceiveState is the offline startup seam (it refuses
+        // once DSP exists), so this restores the way loadSliceState does at
+        // connect: the band's stored state from the slice's own keys (its
+        // settings copy was written there), then the saved frequency and
+        // mode through the ordinary setters, as a new slice's seed is.
+        slice->restoreFromSettings(bandFromFrequency(restoreSeed->frequencyHz));
+        slice->setFrequency(restoreSeed->frequencyHz);
+        slice->setDspMode(restoreSeed->dspMode);
+    } else if (restoreSeed && !slice->restoreReceiveState(restoreSeed->frequencyHz,
+                                                         restoreSeed->dspMode)) {
         delete slice;
         return -1;
     }
@@ -7823,9 +7872,19 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
     // publish a set that already contains this slice. The frequencyChanged
     // lambda is wired AFTER the bind, so the seed's setFrequency does not
     // trigger a second, redundant placement.
-    if (!restoreSeed && m_activeSlice && m_activeSlice != slice) {
-        slice->setFrequency(m_activeSlice->frequency());
-        slice->setDspMode(m_activeSlice->dspMode());
+    // iPhone app Task 73 (ruling 5.2 step 4): a device's new slice opens on
+    // its own active slice; a device with none opens on the station-level
+    // active slice, whose receiver it then joins (D48) at no cost.
+    SliceModel* seedFrom = m_activeSlice;
+    if (role() == Role::Local && !m_sliceOwnership->creator().isEmpty()) {
+        const int own = m_sliceOwnership->activeFor(m_sliceOwnership->creator());
+        if (SliceModel* mine = own >= 0 ? sliceById(own) : nullptr) {
+            seedFrom = mine;
+        }
+    }
+    if (!restoreSeed && seedFrom && seedFrom != slice) {
+        slice->setFrequency(seedFrom->frequency());
+        slice->setDspMode(seedFrom->dspMode());
     }
 
     // ── Roll back a slice the allocator refused ─────────────────────────
@@ -7866,8 +7925,10 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
     //
     // `slice` is excluded because m_slices.append above already added it, so
     // "are there slices on this pan" would otherwise always answer yes.
-    const bool openingANewPan =
-        !initialPanId.isEmpty() && slicesOnPan(initialPanId, slice).isEmpty();
+    // iPhone app Task 73 (ruling 5.2 step 2): a restored slice joins a
+    // window that covers it or claims a free receiver, whatever its pan.
+    const bool openingANewPan = !bindRestored
+        && !initialPanId.isEmpty() && slicesOnPan(initialPanId, slice).isEmpty();
 
     const bool poolReady = m_streamAllocator.streamCount() > 0;
     // Review fix round 1, finding 1(c): `&& role() == Role::Local` is a
@@ -7882,7 +7943,8 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
     // role guard returns ahead of that emit). A Role::Remote model must
     // behave the same way here regardless of how its pool got sized: the
     // slice survives unbound, exactly as it does before any pool exists.
-    if (!restoreSeed && !bindSliceToStream(slice, slice->frequency(), openingANewPan)
+    if ((!restoreSeed || bindRestored)
+        && !bindSliceToStream(slice, slice->frequency(), openingANewPan)
         && poolReady && role() == Role::Local) {
         // bindSliceToStream already emitted sliceAddRejected with the
         // allocator's reason for this first-bind case, so the operator has
@@ -8096,6 +8158,29 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
     connect(slice, &SliceModel::frequencyChanged, this, [this, slice]() {
         if (slice == txBoundSlice()) { pushTxFrequencyFromTxSlice(); }
     });
+    connect(slice, &SliceModel::frequencyChanged, this, [this, slice](double freq) {
+        // Phase 3R K-bench: push the new freq to the FreeDV Reporter so
+        // our station's listed freq tracks the VFO. Without this, the
+        // reporter server has only the connect-time freq (or zero) and
+        // we never appear on-band to other operators. Mirrors freedv-
+        // gui's freqChangeImpl_ trigger pattern.
+        //
+        // 2026-05-12 bench: route through the dwell throttle so a VFO
+        // spin doesn't DoS qso.freedv.org with one packet per wheel
+        // tick.  7 s trailing dwell + 100 kHz band-jump fast-path; see
+        // publishFreedvFrequencyDwelled() body for the full policy.
+        //
+        // iPhone app Task 73 (ruling 5.11): only the station-level active
+        // slice's frequency is listed, so another device tuning its own
+        // slice never moves this station on the dashboard. Moved here
+        // from wireSliceSignals, which runs only once a radio connects.
+        if (m_role != Role::Local || slice == m_activeSlice) {
+            m_freedvWantedHz = static_cast<quint64>(freq);
+            if (m_freeDvReporter && m_freeDvReporter->isConnected()) {
+                publishFreedvFrequencyDwelled(static_cast<quint64>(freq));
+            }
+        }
+    });
     connect(slice, &SliceModel::xitEnabledChanged, this, [this, slice]() {
         if (slice == txBoundSlice()) { pushTxFrequencyFromTxSlice(); }
     });
@@ -8138,7 +8223,16 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
         reconcileWidebandDemand();
     });
 
-    if (!m_activeSlice) {
+    if (role() == Role::Local) {
+        // iPhone app Task 73: the slice is its creator's (or nobody's). It
+        // is its owner's active slice when the owner had none, and the
+        // station-level one when there was none (the first slice).
+        m_sliceOwnership->noteSliceAdded(index);
+        if (!m_activeSlice) {
+            m_sliceOwnership->setActive(m_sliceOwnership->mark(index).owner, index);
+        }
+        applyActiveSlices();
+    } else if (!m_activeSlice) {
         m_activeSlice = slice;
         // Mark the first slice as active so isActiveSlice() returns true for it.
         // AudioEngine::rxBlockReady (3M-1b E.4) reads this flag to gate the
@@ -8263,6 +8357,12 @@ void RadioModel::removeSliceImpl(int sliceId, bool persist)
         }
     }
 
+    // iPhone app Task 73: from here the slice is nobody's and no owner's
+    // active slice; its mark stays until sliceRemoved has been announced,
+    // so what the Core sends about its removal still knows whose it was.
+    if (role() == Role::Local) {
+        m_sliceOwnership->beginRemove(sliceId);
+    }
     SliceModel* slice = m_slices.takeAt(position);
     // R-R3-40: a slice created later with this ID must not inherit this
     // one's load snapshot or measure from its baseline.
@@ -8308,7 +8408,12 @@ void RadioModel::removeSliceImpl(int sliceId, bool persist)
     }
     requestDdcAssignment();
 
-    if (m_activeSlice == slice) {
+    if (role() == Role::Local) {
+        // iPhone app Task 73: the owner's next slice becomes its active one,
+        // and the station-level slice moves with it when this was it.
+        slice->setActive(false);
+        applyActiveSlices();
+    } else if (m_activeSlice == slice) {
         // Clear the active flag before reassigning. The deleted slice's flag
         // is moot, but the new active slice needs to be marked.
         slice->setActive(false);
@@ -8323,6 +8428,9 @@ void RadioModel::removeSliceImpl(int sliceId, bool persist)
     // any in-flight queued signals targeting this slice safe.
     slice->deleteLater();
     emit sliceRemoved(sliceId);
+    if (role() == Role::Local) {
+        m_sliceOwnership->endRemove(sliceId);
+    }
     if (m_receiveLayoutManaged && persist) {
         scheduleSettingsSave();
     }
@@ -9314,6 +9422,17 @@ void RadioModel::updateFreedvReporterVisibility()
 
 void RadioModel::setActiveSlice(int index)
 {
+    // iPhone app Task 73 (rulings 5.10, 5.11): the slice becomes its owner's
+    // active slice and the most recent choice, which the station-level
+    // active slice follows. Every slice's `active` is its owner's.
+    if (role() == Role::Local) {
+        if (index >= 0 && index < m_slices.size()) {
+            const int id = m_slices.at(index)->sliceIndex();
+            m_sliceOwnership->setActive(m_sliceOwnership->mark(id).owner, id);
+            applyActiveSlices();
+        }
+        return;
+    }
     if (index >= 0 && index < m_slices.size()) {
         SliceModel* newActive = m_slices.at(index);
         if (m_activeSlice == newActive) {
@@ -9329,6 +9448,102 @@ void RadioModel::setActiveSlice(int index)
         m_activeSlice->setActive(true);
         emitActiveSliceChanged(index);
     }
+}
+
+void RadioModel::applyActiveSlices()
+{
+    if (role() != Role::Local) {
+        return;
+    }
+    for (SliceModel* slice : std::as_const(m_slices)) {
+        slice->setActive(m_sliceOwnership->isActive(slice->sliceIndex()));
+    }
+    const int stationId = m_sliceOwnership->stationActiveSlice();
+    SliceModel* next = stationId >= 0 ? sliceById(stationId) : nullptr;
+    if (next == nullptr) {
+        next = (m_activeSlice && m_slices.contains(m_activeSlice))
+            ? m_activeSlice
+            : (m_slices.isEmpty() ? nullptr : m_slices.first());
+    }
+    if (next == m_activeSlice) {
+        return;
+    }
+    m_activeSlice = next;
+    emitActiveSliceChanged(next ? static_cast<int>(m_slices.indexOf(next)) : -1);
+    // Ruling 5.11: the FreeDV Reporter lists the station-level slice.
+    if (m_activeSlice) {
+        m_freedvWantedHz = static_cast<quint64>(m_activeSlice->frequency());
+        publishFreedvFrequencyDwelled(m_freedvWantedHz);
+    }
+}
+
+bool RadioModel::setActiveSliceByIdFor(const QByteArray& owner, int sliceId)
+{
+    if (role() != Role::Local || sliceById(sliceId) == nullptr
+        || m_sliceOwnership->mark(sliceId).owner != owner) {
+        return false;
+    }
+    m_sliceOwnership->setActive(owner, sliceId);
+    applyActiveSlices();
+    return true;
+}
+
+void RadioModel::setTransmitHolder(const QByteArray& holder)
+{
+    if (role() != Role::Local) {
+        return;
+    }
+    m_sliceOwnership->setTransmitHolder(holder);
+    applyActiveSlices();
+}
+
+int RadioModel::lowestFreeSliceId() const
+{
+    for (int id = 0; id < sliceChannelLimit(); ++id) {
+        if (sliceById(id) == nullptr) {
+            return id;
+        }
+    }
+    return -1;
+}
+
+int RadioModel::restoreSliceFor(const QByteArray& owner, int sliceId,
+                                const ReceiveSliceState& state, QString* reason)
+{
+    const auto refuse = [reason](const QString& text) {
+        if (reason) {
+            *reason = text;
+        }
+        return -1;
+    };
+    if (role() != Role::Local) {
+        return refuse(QString());
+    }
+    const int cap = sliceChannelLimit();
+    if (m_slices.size() >= cap) {
+        return refuse(sliceCapReason(cap));
+    }
+    if (sliceId < 0 || sliceId >= cap || sliceById(sliceId) != nullptr) {
+        return refuse(tr("That slice's letter is in use."));
+    }
+    QString rejection;
+    const QMetaObject::Connection capture = connect(
+        this, &RadioModel::sliceAddRejected, this,
+        [&rejection](const QString& text) { rejection = text; });
+    int id = -1;
+    {
+        SliceOwnership::CreatorScope scope(m_sliceOwnership, owner);
+        id = addSliceImpl(sliceId, state.panKey, &state, /*bindRestored=*/true);
+    }
+    QObject::disconnect(capture);
+    if (id < 0) {
+        return refuse(rejection.isEmpty() ? tr("All the radio's receivers are in use.")
+                                          : rejection);
+    }
+    if (reason) {
+        reason->clear();
+    }
+    return id;
 }
 
 // Remote-daemon R2 Task 11. Resolves `index` to the slice actually sitting
@@ -13765,23 +13980,15 @@ void RadioModel::wireSliceSignals(SliceModel* slice)
     // m_activeSlice and only from connect time, which is why tuning Slice B
     // or later never reached the radio.
     //
-    // What stays here is genuinely active-slice-only: the operator's
-    // listening frequency (FreeDV Reporter), the simplex TX-follows-RX
-    // push, band tracking, and the settings save.
+    // What stays here: band tracking and the settings save. (The FreeDV
+    // Reporter frequency now follows the station-level active slice from
+    // addSliceImpl, iPhone app Task 73; the simplex TX-follows-RX push has
+    // lived there longer.)
     connect(slice, &SliceModel::frequencyChanged, this, [this, slice](double freq) {
-        // Phase 3R K-bench: push the new freq to the FreeDV Reporter so
-        // our station's listed freq tracks the VFO. Without this, the
-        // reporter server has only the connect-time freq (or zero) and
-        // we never appear on-band to other operators. Mirrors freedv-
-        // gui's freqChangeImpl_ trigger pattern.
+        // The FreeDV Reporter push moved to addSliceImpl (iPhone app Task
+        // 73), wired once for every slice whatever the connection does, so
+        // it follows the station-level active slice alone.
         //
-        // 2026-05-12 bench: route through the dwell throttle so a VFO
-        // spin doesn't DoS qso.freedv.org with one packet per wheel
-        // tick.  7 s trailing dwell + 100 kHz band-jump fast-path; see
-        // publishFreedvFrequencyDwelled() body for the full policy.
-        if (m_freeDvReporter && m_freeDvReporter->isConnected()) {
-            publishFreedvFrequencyDwelled(static_cast<quint64>(freq));
-        }
         // The TX frequency fan-out lives in addSlice(), where it is wired
         // once for every slice regardless of connection lifecycle. Keeping
         // a second copy here used to publish each bound-slice retune twice.
@@ -16151,7 +16358,11 @@ bool RadioModel::captureReceiveLayout(QString* error)
     QList<ReceiveSliceState> slices;
     bool hasRadeMode = false;
     for (const SliceModel* slice : std::as_const(m_slices)) {
-        slices.append({slice->sliceIndex(), slice->panKey(), slice->frequency(), slice->dspMode()});
+        // iPhone app Task 73 (ruling 5.3): each live slice with its owner,
+        // or the device the station device holds it for.
+        const SliceOwnership::Mark mark = m_sliceOwnership->mark(slice->sliceIndex());
+        slices.append({slice->sliceIndex(), slice->panKey(), slice->frequency(), slice->dspMode(),
+                       mark.owner, mark.heldFor});
         hasRadeMode = hasRadeMode || slice->dspMode() == DSPMode::RADE_U
             || slice->dspMode() == DSPMode::RADE_L;
     }
@@ -16277,6 +16488,26 @@ bool RadioModel::hydrateReceiveLayout(const QString& radioMac,
     for (const ReceiveSliceState& state : layout.slices) {
         m_receiveLayoutHydratedIds.insert(state.id);
     }
+    // iPhone app Task 73 (rulings 5.2, 5.3): owners come back with the
+    // layout. No device is connected yet after a restart, so a device's
+    // slice comes back held for it by the station device, and returns to
+    // it when it signs in (ruling 5.2 step 1); an entry with no owner (a
+    // manifest from before owners) restores with none, for the first
+    // device admitted alone to adopt.
+    QList<int> order;
+    for (const ReceiveSliceState& state : layout.slices) {
+        order.append(state.id);
+        if (state.owner == SliceOwnership::stationDevice() && !state.heldFor.isEmpty()) {
+            m_sliceOwnership->hold(state.id, state.heldFor);
+        } else if (state.owner == SliceOwnership::stationDevice()) {
+            m_sliceOwnership->setOwner(state.id, state.owner);
+        } else if (!state.owner.isEmpty()) {
+            m_sliceOwnership->hold(state.id, state.owner);
+        } else {
+            m_sliceOwnership->setOwner(state.id, QByteArray());
+        }
+    }
+    m_sliceOwnership->setOrder(order);
     // Descriptor order is authoritative, so an unchanged active identity can
     // still have a different list position. Publish the final pair together.
     if (!m_activeSlice || !m_slices.contains(m_activeSlice)) {

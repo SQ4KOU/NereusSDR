@@ -82,6 +82,23 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 / R-R3-47: the Tuner Genius's
 //                                    antenna, operate and bypass reasons.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 14 (R-IOS-08):
+//                                    pair.fail's reason (pairFail,
+//                                    sendPairFail) is scanned like every
+//                                    other; the console's pairing code
+//                                    notice is not a reason.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave: the pairing code is never printed
+//               to standard output (the journal on a packaged Core). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic Claude
+//               Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app Task 71 (R-IOS-02): the
+//                                    several-devices sentences are plain.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app Task 73 (R-IOS-02): the
+//                                    refusal for another device's slice,
+//                                    and a saved slice that did not fit.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -95,6 +112,7 @@
 #include <QRegularExpression>
 #include <QSet>
 
+#include "core/security/DeviceStore.h"
 #include "OperatorWording.h"
 
 using namespace NereusSDR;
@@ -257,6 +275,8 @@ const QList<ReasonSender>& reasonSenders()
         {"authResult", 1},   {"settingsReject", 3},       {"dropPeer", 1},
         {"sendRejected", 3}, {"sendAllocationResult", 4}, {"rejectAllocation", 3},
         {"reject", 0},       {"rejectDetail", 1},         {"fail", 0},
+        // iPhone app Task 14: pair.fail and StationServer's sender for it.
+        {"pairFail", 0},     {"sendPairFail", 1},
         // Text the station sends as a property value (propertyTextSources).
         {"connectionFailed", 0}, {"failIdentityAdmission", 1}, {"setLastLoadError", 0},
         {"setNnrLastError", 0}, {"publish", 1}, {"setReceiveLayoutRestoreStatus", 1},
@@ -600,8 +620,10 @@ const QList<ReasonSource>& reasonSources()
           "Qt reports no working TLS backend", "No authentication token available",
           "NereusSDR station", "\\n  ====="},
          30,
-         // The other app's network address (WebSocketTransport::peerDescription).
-         {QStringLiteral("description")},
+         // The other app's network address (WebSocketTransport::peerDescription),
+         // and (iPhone app Task 73) the name of the device a slice belongs
+         // to, the operator's own word (ruling 4.3).
+         {QStringLiteral("description"), QStringLiteral("owner")},
          {// listen(): the Core's own setup error (m_lastError), for its
           // console and log; never sent to an app.
           QStringLiteral("CertificateStore::tlsBackendDiagnostic()"),
@@ -627,6 +649,16 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("m_radioModel->alexAntennaFacade()->settleReason(update.name)"),
           // A constant of this file, its literal scanned here.
           QStringLiteral("QString::fromLatin1(kReceiveOnlyTransmitReason)"),
+          // iPhone app Task 71: constants of this file, their literals
+          // scanned here.
+          QStringLiteral("QString::fromLatin1(kCoreFullReason)"),
+          QStringLiteral("QString::fromLatin1(kSameDeviceReason)"),
+          QStringLiteral("QString::fromLatin1(kLeftReason)"),
+          // iPhone app Task 73: functions of this file, their literals
+          // scanned here (the owner's name is the operator's own word,
+          // ruling 4.3).
+          QStringLiteral("sliceRefusal(requester, sliceId)"),
+          QStringLiteral("ownedElsewhereReason(sliceId)"),
           // StateMirror's and SettingsProxyServer's results, scanned below.
           QStringLiteral("result.reason"),
           QStringLiteral("m_settingsServer->otherRadioRefusal(key)"),
@@ -651,8 +683,18 @@ const QList<ReasonSource>& reasonSources()
                          "alex->setRxAntForBand(Band(band), antenna)"),
           // A function of this file, its literal scanned here.
           QStringLiteral("notRepresentableReason()"),
+          // iPhone app Task 73: StationServer::sliceRefusal, scanned there.
+          QStringLiteral("m_sliceAccess(m_requester, sliceId)"),
           // AlexAntennaFacade's filter policy refusal, scanned below.
           QStringLiteral("alex->setBpfModeForChain(chain, mode)")}},
+        // iPhone app Task 13 (R-IOS-08): the device administration verbs'
+        // command.result, forwarded by the dispatcher as result.reason; the
+        // log lines never reach an app.
+        {"src/core/session/StationDevicesFacade.cpp", {},
+         {"Could not save", "A paired device was removed", "The pairing token was retired"},
+         8},
+        // The label rule a refused station.rename gives.
+        {"src/core/security/StationLabel.cpp", {QStringLiteral("ruleText")}, {}, 1},
         // property.result for a write the mirror refuses.
         {"src/core/session/StateMirror.cpp", {}, {}, 5, {},
          {// A function of this file, and a model's applyMirroredValue
@@ -802,7 +844,10 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("dfnrCannotRunReason"),
           // The slice cap reason, relayed by the addSlice and addSliceOnPan
           // verbs' results.
-          QStringLiteral("sliceCapReason")},
+          QStringLiteral("sliceCapReason"),
+          // iPhone app Task 73: why a device's saved slice did not fit (the
+          // Core's log today; Task 74's slicesNotRestored notice).
+          QStringLiteral("restoreSliceFor")},
          {// This app's own branch in a remote window (role Remote), shown
           // through OperatorReasonText; never sent by the Core.
           "There is no station session."},
@@ -834,6 +879,13 @@ const QList<AppSideReason>& appSideReasons()
         {"src/core/session/StationClient.cpp", "",
          "the app's end of the link: its own reasons are shown through OperatorReasonText"},
         {"src/core/session/StationClient.h", "", "the app's end of the link"},
+        // iPhone app Task 18: the desktop's side of pairing. Its own reasons
+        // are shown through OperatorReasonText; the one pair.fail it sends
+        // only tells the Core the code did not match, and the operator reads
+        // the Core's answer.
+        {"src/core/session/StationPairingClient.cpp", "",
+         "the app's end of pairing: its own reasons are shown through OperatorReasonText"},
+        {"src/core/session/StationPairingClient.h", "", "the app's end of pairing"},
         {"src/core/session/SessionMessages.cpp", "", "encodes a reason it is given"},
         {"src/core/session/SessionMessages.h", "", "declares the messages"},
         {"src/core/session/SessionCommandDispatcher.h", "", "declares emitResult"},
@@ -1040,7 +1092,8 @@ QStringList unplacedReasonSites(const QString& file, const QString& code, int* f
         QStringLiteral("\\bQString\\s*\\*\\s*\\w*(?:[Rr]eason|[Rr]efusal)\\w*\\b"));
     static const QRegularExpression sender(QStringLiteral(
         "\\b(commandResult|sessionEnd|authResult|settingsReject|propertyResult|emitResult"
-        "|dropPeer|sendRejected|sendAllocationResult|rejectAllocation)\\s*\\("));
+        "|dropPeer|sendRejected|sendAllocationResult|rejectAllocation|pairFail|sendPairFail)"
+        "\\s*\\("));
     QStringList unplaced;
     for (const FunctionBody& function : functionsIn(code, anyName)) {
         const bool named = reasonFunction.match(function.name).hasMatch();
@@ -1310,6 +1363,81 @@ private slots:
         }
         QVERIFY2(functions >= 30, qPrintable(QString::number(functions)));
         QVERIFY2(unplaced.isEmpty(), qPrintable(unplaced.join(QLatin1Char('\n'))));
+    }
+
+    void pairFailReasonsSpeakOfTheCore()
+    {
+        // iPhone app Task 14 (R-IOS-08): every reason pair.fail carries
+        // (StationServer's sendPairFail, and handlePairConfirm's refusal
+        // helper, which passes its reason there) is plain and names the
+        // Core, the word the operator knows it by.
+        static const QRegularExpression anyName(QStringLiteral("."));
+        static const QRegularExpression literal(
+            QStringLiteral("^\\s*QStringLiteral\\(\\s*\"((?:[^\"\\\\]|\\\\.)*)\"\\s*\\)\\s*$"));
+        const QString code = codeOf(sourcePath(QStringLiteral("src/core/session/StationServer.cpp")));
+        QVERIFY(!code.isEmpty());
+        QStringList reasons;
+        for (const FunctionBody& function : functionsIn(code, anyName)) {
+            QList<QPair<QString, int>> callees{{QStringLiteral("sendPairFail("), 1}};
+            if (function.name == QLatin1String("handlePairConfirm")) {
+                callees.append({QStringLiteral("refuse("), 0});
+            }
+            for (const auto& [callee, index] : callees) {
+                qsizetype at = function.body.indexOf(callee);
+                while (at >= 0) {
+                    const qsizetype open = at + callee.size() - 1;
+                    const qsizetype close =
+                        closingOf(function.body, open, QLatin1Char('('), QLatin1Char(')'));
+                    const QStringList arguments =
+                        splitTopLevel(function.body.mid(open + 1, close - open - 2));
+                    if (index < arguments.size()) {
+                        const QRegularExpressionMatch match = literal.match(arguments.at(index));
+                        if (match.hasMatch()) {
+                            reasons.append(match.captured(1));
+                        }
+                    }
+                    at = function.body.indexOf(callee, close);
+                }
+            }
+        }
+        QVERIFY2(reasons.size() >= 12, qPrintable(QString::number(reasons.size())));
+        for (const QString& reason : std::as_const(reasons)) {
+            QVERIFY2(wordingProblemIn(reason).isEmpty(), qPrintable(reason));
+            QVERIFY2(reason.contains(QStringLiteral("Core")), qPrintable(reason));
+        }
+    }
+
+    void severalDevicesSentencesArePlain()
+    {
+        // iPhone app Task 71 (R-IOS-02): the sentences the Core sends when
+        // several devices share it are plain and speak of the Core; names
+        // are the operator's own words and are validated as names, never
+        // held to the wording rules ("Grant's iPhone" is a name).
+        const QString code = codeOf(sourcePath(QStringLiteral("src/core/session/StationServer.cpp")));
+        QVERIFY(!code.isEmpty());
+        for (const QString& sentence :
+             {QStringLiteral("The Core already has four devices connected."),
+              QStringLiteral("This device connected again."),
+              QStringLiteral("This device left the Core.")}) {
+            QVERIFY2(code.contains(QLatin1Char('"') + sentence + QLatin1Char('"')),
+                     qPrintable(sentence));
+            QVERIFY2(wordingProblemIn(sentence).isEmpty(), qPrintable(sentence));
+            QVERIFY2(OperatorWording::coreCalledStationIn(sentence).isEmpty(),
+                     qPrintable(sentence));
+        }
+        const QString leave = QStringLiteral("The request to leave the Core was not understood.");
+        QVERIFY(codeOf(sourcePath(QStringLiteral("src/core/session/SessionCommandDispatcher.cpp")))
+                    .contains(QLatin1Char('"') + leave + QLatin1Char('"')));
+        QVERIFY2(wordingProblemIn(leave).isEmpty(), qPrintable(leave));
+        // A device's name is the operator's own words: the term list would
+        // refuse "Grant's iPhone", so a sentence that carries a name is
+        // checked with the name set aside, and the name as a name.
+        const QString name = QStringLiteral("Grant's iPhone");
+        QVERIFY(!OperatorWording::isPlain(name));
+        QVERIFY(DeviceStore::isValidName(name));
+        QString named = QStringLiteral("%1 connected to the Core.").arg(name);
+        named.remove(name);
+        QVERIFY2(wordingProblemIn(named).isEmpty(), qPrintable(named));
     }
 
     void everyReasonTheFixturesRecordIsPlain()

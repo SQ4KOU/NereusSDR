@@ -9,6 +9,16 @@
 // both version refusals (review finding I1: the reasons come from the
 // Core's own code, never a copied string), and a scripted Core that speaks
 // the link's own messages for any other refusal and for a dropped link.
+//
+// iPhone app Task 71: a Core no longer ends one window's session when
+// another signs in, so the takeover's end (its words from
+// SessionEndReasons, as before) comes from the relay in front of the real
+// Core, as an older Core or a later version's fifth-device takeover sends
+// it. J.J. Boyd (KG4VCF), 2026-09-25, AI-assisted via Anthropic Claude Code.
+//
+// iPhone app Task 12: a new Core has no pairing token, so each real Core
+// here is the upgraded one that still has it (fakes/UpgradedCoreToken.h),
+// and the window signs in with that token as before.
 #include <QTest>
 #include <QCoreApplication>
 #include <QDockWidget>
@@ -17,6 +27,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
+#include <QPointer>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QSignalSpy>
@@ -41,6 +52,7 @@
 #include "gui/RemoteConnectionController.h"
 #include "models/RadioModel.h"
 #include "fakes/MainWindowTestSettings.h"
+#include "fakes/UpgradedCoreToken.h"
 
 using namespace NereusSDR;
 
@@ -59,8 +71,10 @@ public:
 // end after the app's hello: the order StationServer refuses in.
 class ScriptedCore final : public QObject {
 public:
-    explicit ScriptedCore(quint16 helloMajor, QString endReason = {}, bool retryable = false)
+    explicit ScriptedCore(quint16 helloMajor, QString endReason = {}, bool retryable = false,
+                          QString endCode = {})
         : m_helloMajor(helloMajor), m_endReason(std::move(endReason)), m_retryable(retryable)
+        , m_endCode(std::move(endCode))
     {
         connect(&m_server, &QWebSocketServer::newConnection, this, [this] {
             QWebSocket* socket = m_server.nextPendingConnection();
@@ -80,7 +94,7 @@ public:
                 if (m_endReason.isEmpty() || socket->property("ended").toBool()) { return; }
                 socket->setProperty("ended", true);
                 socket->sendTextMessage(QString::fromUtf8(SessionMessages::encode(
-                    SessionMessages::sessionEnd(m_endReason, m_retryable))));
+                    SessionMessages::sessionEnd(m_endReason, m_retryable, m_endCode))));
                 socket->close();
             });
         });
@@ -99,6 +113,7 @@ private:
     quint16 m_helloMajor;
     QString m_endReason;
     bool m_retryable;
+    QString m_endCode;
 };
 
 // The real Core on a loopback WebSocket listener, as the session tests run
@@ -107,7 +122,7 @@ class RealCore final {
 public:
     explicit RealCore(const QList<quint16>& majors = LinkVersion::supportedMajors())
         : m_settings(m_dir.filePath(QStringLiteral("station.settings")))
-        , m_server(&m_station, m_settings, m_dir.path(), nullptr, majors)
+        , m_server(&m_station, m_settings, NereusSDR::Test::seedUpgradedCoreToken(m_dir.path()), nullptr, majors)
     {
         QObject::connect(&m_listener, &QWebSocketServer::newConnection, &m_server, [this] {
             m_server.acceptTransport(new WebSocketTransport(
@@ -144,6 +159,7 @@ public:
             QWebSocket* app = m_server.nextPendingConnection();
             app->setParent(this);
             ++connections;
+            m_apps.append(QPointer<QWebSocket>(app));
             auto* core = new QWebSocket(QString(), QWebSocketProtocol::VersionLatest, this);
             auto pending = std::make_shared<QStringList>();
             connect(core, &QWebSocket::connected, this, [core, pending] {
@@ -173,11 +189,28 @@ public:
     }
     int connections = 0;
 
+    /// iPhone app Task 71: a Core no longer ends one app's session when
+    /// another signs in, so the relay stands in for an end with code
+    /// takenOver (which a later version's fifth-device takeover sends, and
+    /// an older Core still does): it sends `end` to every app connected
+    /// through it and closes them.
+    void endEveryApp(const SessionMessage& end)
+    {
+        const QString text = QString::fromUtf8(SessionMessages::encode(end));
+        for (const QPointer<QWebSocket>& app : std::as_const(m_apps)) {
+            if (app && app->state() == QAbstractSocket::ConnectedState) {
+                app->sendTextMessage(text);
+                app->close();
+            }
+        }
+    }
+
 private:
     QString rewriteHello(const QString& text) const
     {
         QJsonObject message = QJsonDocument::fromJson(text.toUtf8()).object();
-        if (message.value(QStringLiteral("type")).toString() != QLatin1String("hello")) {
+        if (m_major == 0
+            || message.value(QStringLiteral("type")).toString() != QLatin1String("hello")) {
             return text;
         }
         message.insert(QStringLiteral("major"), int(m_major));
@@ -189,8 +222,9 @@ private:
 
     QWebSocketServer m_server{QStringLiteral("hello relay"), QWebSocketServer::NonSecureMode};
     QString m_coreUrl;
-    quint16 m_major;
+    quint16 m_major;  // 0: the hello passes unchanged
     QList<quint16> m_majors;
+    QList<QPointer<QWebSocket>> m_apps;
 };
 
 struct StopBannerView {
@@ -261,15 +295,18 @@ private slots:
         RadioDiscovery::clearHoldOffForTest();
     }
 
-    // Another app takes the Core over: the window stays, names the other
-    // app by the address the Core gives, offers Take it back and Choose
-    // another Core, and does not retry. Take it back connects again.
+    // A takeover ends the window's session (iPhone app Task 71: no longer
+    // another app signing in, which a Core now admits beside it; the end
+    // arrives from a relay, as an older Core or a fifth device's takeover
+    // sends it): the window stays, names the other app by the address the
+    // end gives, offers Take it back and Choose another Core, and does not
+    // retry. Take it back connects again.
     void takeoverStaysPutAndTakeItBackReconnects()
     {
         QTemporaryDir dir;
         AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
         RadioModel station;
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         QWebSocketServer listener(QStringLiteral("stop notice test"),
                                   QWebSocketServer::NonSecureMode);
         QVERIFY(listener.listen(QHostAddress::LocalHost, 0));
@@ -277,7 +314,10 @@ private slots:
             server.acceptTransport(new WebSocketTransport(listener.nextPendingConnection(),
                                                            StationServer::kMaxIncomingMessageBytes));
         });
-        const QString url = QStringLiteral("ws://127.0.0.1:%1").arg(listener.serverPort());
+        HelloRewritingRelay relay(QStringLiteral("ws://127.0.0.1:%1").arg(listener.serverPort()),
+                                  0, {});
+        QVERIFY(relay.listen());
+        const QString url = relay.url();
 
         SettingsProxy proxy;
         ScopedRemoteBackend remoteBackend(&proxy);
@@ -293,14 +333,9 @@ private slots:
                 && view.chooseCore && view.checkUpdates);
         QVERIFY(!view.banner->isVisibleTo(&window));
 
-        // The other app: its own client, same token.
-        RadioModel otherModel(RadioModel::Role::Remote);
-        SettingsProxy otherProxy;
-        StationClient other(&otherModel, &otherProxy);
-        RemoteConnectionController otherControls(&other, &otherModel,
-                                                 {url, server.token(), {}, true});
-        otherControls.connectToStation();
-        QTRY_VERIFY(other.isHandshakeComplete());
+        relay.endEveryApp(SessionMessages::sessionEnd(
+            SessionEndReasons::takenOver(QStringLiteral("127.0.0.1:50123")), /*retryable=*/false,
+            QString::fromLatin1(SessionEndCode::kTakenOver)));
         QTRY_VERIFY(!client->isConnectionActive());
 
         QCOMPARE(client->lastEndReport().kind, StationEndReport::Kind::TakenOver);
@@ -322,7 +357,6 @@ private slots:
         QTest::qWait(200);
         QVERIFY(!client->isReconnectPending());
         QCOMPARE(client->sessionEpoch(), epoch);
-        QVERIFY(other.isHandshakeComplete());
 
         // A window the connection picker manages: Choose another Core
         // opens Connections.
@@ -333,12 +367,10 @@ private slots:
         QCOMPARE(connections.size(), 1);
         QVERIFY(!client->isConnectionActive());
 
-        // Take it back connects again, which takes the Core back.
+        // Take it back connects again.
         view.takeBack->click();
         QTRY_VERIFY(client->isHandshakeComplete());
         QVERIFY(!view.banner->isVisibleTo(&window));
-        QTRY_VERIFY(!other.isHandshakeComplete());
-        QCOMPARE(otherControls.stopNotice(), CoreStopNotice::TakenOver);
     }
 
     // The Core refuses an app on link versions it does not run: here an app
@@ -469,6 +501,69 @@ private slots:
         QVERIFY(!view.takeBack->isVisibleTo(&window));
         QVERIFY(!view.checkUpdates->isVisibleTo(&window));
         verifyPlain(view);
+        QTest::qWait(200);
+        QCOMPARE(core.connections, 1);
+    }
+
+    // iPhone app Task 18 (R-IOS-08, R-IOS-17): the Core's end code chooses
+    // the stop message, whatever its words; an older Core that sends no
+    // code is still read by its words.
+    void endCodesChooseTheStopMessage_data()
+    {
+        QTest::addColumn<QString>("reason");
+        QTest::addColumn<QString>("code");
+        QTest::addColumn<int>("notice");
+        QTest::addColumn<QString>("title");
+        QTest::newRow("deviceRemoved")
+            << QStringLiteral("This device was removed from the Core.")
+            << QStringLiteral("deviceRemoved") << int(CoreStopNotice::DeviceRemoved)
+            << QStringLiteral("Removed from the Core");
+        QTest::newRow("deviceNotPaired")
+            << QStringLiteral("This device is not paired with this Core. Pair it first.")
+            << QStringLiteral("deviceNotPaired") << int(CoreStopNotice::DeviceRemoved)
+            << QStringLiteral("Removed from the Core");
+        QTest::newRow("pairingRequired")
+            << QStringLiteral("This Core uses paired devices. Pair this device first.")
+            << QStringLiteral("pairingRequired") << int(CoreStopNotice::PairingRequired)
+            << QStringLiteral("Pair with the Core");
+        QTest::newRow("no code: an older Core's takeover words")
+            << QStringLiteral("Displaced by a newer authenticated connection from "
+                              "192.0.2.9:5000")
+            << QString() << int(CoreStopNotice::TakenOver) << QStringLiteral("Core taken over");
+        QTest::newRow("no code: removal words alone choose nothing")
+            << QStringLiteral("This device was removed from the Core.") << QString()
+            << int(CoreStopNotice::Refused) << QStringLiteral("Core refused this window");
+    }
+
+    void endCodesChooseTheStopMessage()
+    {
+        QFETCH(QString, reason);
+        QFETCH(QString, code);
+        QFETCH(int, notice);
+        QFETCH(QString, title);
+        ScriptedCore core(kSessionProtocolMajor, reason, /*retryable=*/false, code);
+        QVERIFY(core.listen());
+        SettingsProxy proxy;
+        ScopedRemoteBackend remoteBackend(&proxy);
+        MainWindow window({core.url(), QStringLiteral("token"), {}, true}, nullptr,
+                          MainWindow::ConnectionStartup::Deferred);
+        window.setConnectionPickerManaged(true);
+        StationClient* const client = window.findChild<StationClient*>();
+        auto* const controls = window.findChild<RemoteConnectionController*>();
+        QVERIFY(client && controls);
+        client->setReconnectBackoffUnitMs(20);
+        window.startInitialConnection();
+        QTRY_VERIFY(!client->isConnectionActive());
+        QCOMPARE(int(controls->stopNotice()), notice);
+        const StopBannerView view = bannerOf(window);
+        QVERIFY(view.banner->isVisibleTo(&window));
+        QCOMPARE(view.title->text(), title);
+        QVERIFY(view.text->text().contains(
+            QStringLiteral("This window does not reconnect by itself.")));
+        QVERIFY(view.chooseCore->isVisibleTo(&window));
+        verifyPlain(view);
+        QVERIFY2(OperatorWording::coreCalledStationIn(view.text->text()).isEmpty(),
+                 qPrintable(view.text->text()));
         QTest::qWait(200);
         QCOMPARE(core.connections, 1);
     }

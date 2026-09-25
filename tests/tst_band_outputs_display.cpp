@@ -46,6 +46,7 @@
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
 #include "fakes/LoopbackTransport.h"
+#include "fakes/UpgradedCoreToken.h"
 #include "gui/setup/hardware/Hl2IoBoardTab.h"
 #include "gui/setup/hardware/Hl2OptionsTab.h"
 #include "gui/setup/hardware/OcOutputsHfTab.h"
@@ -294,7 +295,7 @@ private slots:
         core.model.setConnectionStateForTest(ConnectionState::Connected);
         AppSettings settings(settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
         settings.setValue(QStringLiteral("SettingsSchemaVersion"), QStringLiteral("6"));
-        StationServer server(&core.model, settings, securityDir.path());
+        StationServer server(&core.model, settings, NereusSDR::Test::seedUpgradedCoreToken(securityDir.path()));
 
         RadioModel remote(RadioModel::Role::Remote);
         SettingsProxy proxy;

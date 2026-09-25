@@ -17,6 +17,10 @@ For one library it:
      byte for byte. Comments NereusSDR wrote (modification histories, port
      notes, NereusSDR-original file headers: any comment naming NereusSDR
      or KG4VCF) are left out, so the file holds upstream notices only;
+     For a library whose preset asks for it (libsodium), a comment that
+     dedicates its code to the public domain or waives copyright (a
+     "Public domain." line, a CC0 dedication or waiver) is a notice block
+     too, the whole comment, though it holds no copyright line;
   3. drops blocks the library's licence text already carries: every
      copyright line in the block appears in the text, and the rest of the
      block is either in the text or holds no licence terms;
@@ -32,7 +36,7 @@ Usage:
 
 LIBRARY is one of the presets: fftw3, rade, opus, r8brain, rnnoise,
 libspecbleach, wdsp, and the fetched libraries portaudio, libdatachannel,
-libjuice, usrsctp, libsrtp, plog and nlohmann-json. rnnoise and
+libjuice, usrsctp, libsrtp, plog, nlohmann-json, libsodium and spake2-ee. rnnoise and
 libspecbleach read the FetchContent sources under --build-dir/_deps. The
 fetched libraries need --build-dir to be a configured tree for their
 sources only: the files surveyed are the ones any supported platform
@@ -54,7 +58,9 @@ Exit 0 on success, 1 on a --check mismatch, 2 on a usage error.
 from __future__ import annotations
 
 import argparse
+import json
 import re
+import shlex
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -72,6 +78,11 @@ _COPYRIGHT_RE = re.compile(
 _LICENCE_MARKERS = ("redistribut", "permission", "warrant", "public license",
                     "licensed under", "spdx-license-identifier",
                     "free software")
+
+# A dedication instead of a copyright line: "Public domain.", a CC0 waiver or
+# dedication, "has waived all copyright". Read only for presets that ask for
+# it (SourceSet.dedications).
+_DEDICATION_RE = re.compile(r"(?i)\bpublic\s+domain\b|\bCC0\b|\bwaived\s+all\s+copyright\b")
 
 # A holder line continuing a copyright statement: "   2012-2017 Jean-Marc
 # Valin */" under a "Copyright (c) ..." line.
@@ -136,11 +147,14 @@ def is_nereussdr_comment(comment: str) -> bool:
     return "NereusSDR" in comment or "KG4VCF" in comment
 
 
-def extract_blocks(text: str) -> list[str]:
+def extract_blocks(text: str, dedications: bool = False) -> list[str]:
     """Every upstream notice block in a source file, byte for byte.
 
     Comments NereusSDR wrote are left out: a run of comments is cut at
-    each of them, and the pieces either side are read separately.
+    each of them, and the pieces either side are read separately. With
+    dedications, a block whose comment dedicates the code to the public
+    domain before its copyright line starts at the comment's start, so the
+    dedication is kept with it.
     """
     blocks: list[str] = []
     for group in _comment_groups(text):
@@ -158,7 +172,24 @@ def extract_blocks(text: str) -> list[str]:
             if not match:
                 continue
             line_start = comment.rfind("\n", 0, match.start()) + 1
+            if dedications and _DEDICATION_RE.search(comment[:line_start]):
+                line_start = 0
             blocks.append(comment[line_start:])
+    return blocks
+
+
+def extract_dedications(text: str) -> list[str]:
+    """Every upstream comment that dedicates its code to the public domain
+    or waives copyright but holds no copyright line (those are notice
+    blocks already), whole and byte for byte."""
+    blocks: list[str] = []
+    for group in _comment_groups(text):
+        for start, end in group:
+            comment = text[start:end]
+            if (is_nereussdr_comment(comment) or _COPYRIGHT_RE.search(comment)
+                    or not _DEDICATION_RE.search(comment)):
+                continue
+            blocks.append(comment)
     return blocks
 
 
@@ -269,6 +300,7 @@ class SourceSet:
     licence_files: list[str]   # names in packaging/third-party-licenses/
     extra: list[tuple[Path, str]] = field(default_factory=list)  # (file, label)
     regen: str = ""            # extra arguments the regeneration command needs
+    dedications: bool = False  # public-domain and CC0 comments are notices too
 
 
 def _rade(root: Path, _args: argparse.Namespace) -> SourceSet:
@@ -503,6 +535,64 @@ def _in_tree(sources: list[Path], include_dirs: list[Path], keep: Path) -> list[
 # converters), DirectSound, MME, WASAPI and WDM-KS; the Unix platform
 # sources; CoreAudio; JACK and ALSA. PA_ASIO_SOURCES and PA_ASIOSDK_SOURCES
 # are not read.
+# The libraries whose files come from a built tree (libsodium, SPAKE2+EE):
+# what that tree compiled, from its compile_commands.json.
+def _compile_entries(build: Path) -> list[tuple[Path, list[Path]]]:
+    """(source file, include directories) for every compile command."""
+    path = build / "compile_commands.json"
+    if not path.is_file():
+        raise SystemExit(f"{path} is missing; configure and build the tree first")
+    entries: list[tuple[Path, list[Path]]] = []
+    for entry in json.loads(path.read_text(encoding="utf-8")):
+        args = entry.get("arguments") or shlex.split(entry["command"])
+        directory = Path(entry["directory"])
+        dirs: list[Path] = []
+        i = 0
+        while i < len(args):
+            arg = args[i]
+            value = None
+            for flag in ("-I", "-isystem", "-iquote"):
+                if arg == flag and i + 1 < len(args):
+                    value = args[i + 1]
+                    i += 1
+                elif arg.startswith(flag) and len(arg) > len(flag) and flag == "-I":
+                    value = arg[2:]
+            if value is not None:
+                dirs.append((directory / value).resolve())
+            i += 1
+        entries.append(((directory / entry["file"]).resolve(), dirs))
+    return entries
+
+
+def _from_build(build: Path, keep: Path, seeds: Path,
+                extra: list[str] | None = None,
+                extra_dirs: list[str] | None = None) -> list[Path]:
+    """Files under keep that the build compiled, or that the compiled files
+    under seeds include, resolved with each command's own include path.
+    extra adds sources (relative to keep) other platforms compile."""
+    keep = keep.resolve()
+    seeds = seeds.resolve()
+    found: set[Path] = set()
+    for source, dirs in _compile_entries(build):
+        if not _within(source, seeds):
+            continue
+        for path in resolve_includes([source], dirs):
+            if _within(path, keep):
+                found.add(path)
+    if extra:
+        dirs = [keep / d for d in (extra_dirs or [])]
+        for path in resolve_includes([keep / name for name in extra], dirs):
+            if _within(path, keep):
+                found.add(path)
+    return sorted(found)
+
+
+def _need_build(args: argparse.Namespace) -> Path:
+    if args.build_dir is None:
+        raise SystemExit("this library needs --build-dir (a built tree)")
+    return args.build_dir.resolve()
+
+
 _PORTAUDIO_LISTS = [
     "PA_COMMON_SOURCES", "PA_SKELETON_SOURCES", "PA_PLATFORM_SOURCES",
     "PA_DS_SOURCES", "PA_WMME_SOURCES", "PA_WASAPI_SOURCES", "PA_WDMKS_SOURCES",
@@ -595,6 +685,38 @@ def _fftw3(root: Path, _args: argparse.Namespace) -> SourceSet:
                      [base / "include/fftw3.h"], ["fftw3.txt", "GPLv2.txt"])
 
 
+def _libsodium(_root: Path, args: argparse.Namespace) -> SourceSet:
+    # cmake/NereusPairing.cmake compiles every src/libsodium/**/*.c of the
+    # fetched archive (on MSVC the SIMD files hold their code too; with GCC
+    # and Clang they compile empty, and are listed all the same). Its
+    # headers are compiled from a copy of the include tree under
+    # _deps/nereus_libsodium-include; each is read at its place in the
+    # archive, where the copy came from.
+    build = _need_build(args)
+    base = build / "_deps/nereus_libsodium-src"
+    source = (base / "src/libsodium").resolve()
+    copy = (build / "_deps/nereus_libsodium-include").resolve()
+    files: set[Path] = set()
+    for path in _from_build(build, build / "_deps", source):
+        if _within(path, source):
+            files.add(path)
+        elif _within(path, copy):
+            original = source / "include" / path.relative_to(copy)
+            if original.is_file():
+                files.add(original.resolve())
+    return SourceSet("libsodium", base, "libsodium", "1.0.22 (1.0.22-RELEASE)",
+                     sorted(files), ["libsodium.txt"],
+                     regen=" --build-dir <a built tree>", dedications=True)
+
+
+def _spake2ee(_root: Path, args: argparse.Namespace) -> SourceSet:
+    build = _need_build(args)
+    base = build / "_deps/nereus_spake2ee-src"
+    return SourceSet("SPAKE2+EE", base, "spake2-ee", "fd3ea61f",
+                     _from_build(build, base, base), ["spake2-ee.txt"],
+                     regen=" --build-dir <a built tree>", dedications=True)
+
+
 PRESETS = {
     "fftw3": _fftw3,
     "portaudio": _portaudio,
@@ -612,6 +734,8 @@ PRESETS = {
     "rnnoise": _rnnoise,
     "libspecbleach": _libspecbleach,
     "wdsp": _wdsp,
+    "libsodium": _libsodium,
+    "spake2-ee": _spake2ee,
 }
 
 
@@ -624,9 +748,11 @@ class Notice:
     files: list[str]
 
 
-def collect(files: list[tuple[Path, str]], licence_texts: list[str]
-            ) -> tuple[list[Notice], dict[str, int]]:
-    """Distinct uncarried notices over (path, display name) pairs."""
+def collect(files: list[tuple[Path, str]], licence_texts: list[str],
+            dedications: bool = False) -> tuple[list[Notice], dict[str, int]]:
+    """Distinct uncarried notices over (path, display name) pairs. With
+    dedications, public-domain and CC0 comments count as notices, carried
+    only when the licence text holds them word for word."""
     by_key: dict[str, Notice] = {}
     counts = {"files": 0, "files_with_notice": 0, "blocks": 0,
               "distinct": 0, "carried": 0}
@@ -634,17 +760,23 @@ def collect(files: list[tuple[Path, str]], licence_texts: list[str]
     for path, display in files:
         counts["files"] += 1
         text = read_source(path)
-        blocks = extract_blocks(text)
+        blocks = extract_blocks(text, dedications)
+        dedicated = extract_dedications(text) if dedications else []
+        blocks += dedicated
         if blocks:
             counts["files_with_notice"] += 1
         for block in blocks:
             counts["blocks"] += 1
             key = normalise(block)
+            if block in dedicated:
+                carried = any(key in normalise(t) for t in licence_texts)
+            else:
+                carried = is_carried(block, licence_texts)
             if key not in distinct:
                 distinct.add(key)
-                if is_carried(block, licence_texts):
+                if carried:
                     counts["carried"] += 1
-            if is_carried(block, licence_texts):
+            if carried:
                 continue
             notice = by_key.setdefault(key, Notice(block, []))
             if display not in notice.files:
@@ -688,7 +820,7 @@ def build(library: str, root: Path, args: argparse.Namespace
     pairs += source_set.extra
     licence_texts = [(root / LICENSE_DIR / name).read_text(encoding="utf-8")
                      for name in source_set.licence_files]
-    notices, counts = collect(pairs, licence_texts)
+    notices, counts = collect(pairs, licence_texts, source_set.dedications)
     return source_set, notices, counts
 
 

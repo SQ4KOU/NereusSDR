@@ -394,9 +394,9 @@ public:
 
     // Read back AGC threshold from WDSP after top/RF gain change.
     // From Thetis console.cs:50350 pattern — GetRXAAGCThresh after SetRXAAGCTop
-    // Upstream inline attribution preserved verbatim (console.cs:50345):
+    // Upstream inline attribution preserved verbatim (console.cs:50424 [v2.10.3.15]):
     //   if (agc_thresh_point < -160.0) agc_thresh_point = -160.0; //[2.10.3.6]MW0LGE changed from -143
-    // Returns clamped value in -160..0 dB range.
+    // Returns clamped value in -160..+2 dB range (Thetis console.cs:50423-50424 [v2.10.3.15]).
     double readBackAgcThresh() const;
 
     // R-R3-39: both readbacks above, read on the lane after every AGC

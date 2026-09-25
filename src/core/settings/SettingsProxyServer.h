@@ -192,6 +192,11 @@
 //                                    Core's own. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app Task 72 (R-IOS-02): the
+//                                    signals below reach every device's
+//                                    session; a refusal goes to the writer
+//                                    alone (StationServer). AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include <QMap>
@@ -302,6 +307,12 @@ signals:
     /// applyInboundWrite() call (originTag is exactly what that call was
     /// given). Never fired twice for the same underlying setValue() call
     /// -- see the class comment.
+    ///
+    /// iPhone app Task 72 (ruling 5.8): StationServer sends it as
+    /// settings.value to every device's session, each of which holds every
+    /// Station key, keeping the writer's originTag so the writer alone
+    /// recognises its own echo. A refused write (applyInboundWrite's
+    /// SettingsApplyResult) becomes settings.reject to the writer only.
     void outboundValueChanged(const QString& key, const QVariant& value, const QString& originTag);
 
     /// One Station key that is now GONE from the station's store, rather

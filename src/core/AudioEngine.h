@@ -150,6 +150,11 @@
 //                 speaker rate and channel count the Devices page offers:
 //                 remotePlaybackFormat() names the format begin accepted,
 //                 and writeRemotePlayback() takes blocks in it.
+//   2026-09-25: iPhone app plan Task 73 (R-IOS-02, ruling 5.14) by J.J.
+//                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code. The
+//                 local VAX tee carries only the slices setVaxSliceMask()
+//                 allows (the station device's own on a Core with several
+//                 devices). NereusSDR-original.
 // =================================================================
 
 #include "AudioDeviceConfig.h"
@@ -492,6 +497,17 @@ public:
     // open none. Set before start(). Owner thread.
     void setVaxOutputsAllowed(bool allowed);
     bool vaxOutputsAllowed() const { return m_vaxOutputsAllowed; }
+
+    // iPhone app Task 73 (the several-devices design, ruling 5.14): which
+    // slice ids the local VAX tee carries, one bit per id (bit N = slice
+    // N). VAX on the Core's computer carries only the station device's
+    // slices, so RadioModel clears the bit of every slice a device owns;
+    // a slice left out queues nothing for any VAX channel and leaves the
+    // channel it was on. All bits set by default: a desktop on its own
+    // carries every slice, as before. Any thread; the audio thread reads it
+    // without a lock.
+    void setVaxSliceMask(quint32 mask) { m_vaxSliceMask.store(mask, std::memory_order_release); }
+    quint32 vaxSliceMask() const { return m_vaxSliceMask.load(std::memory_order_acquire); }
 
     // A remote window opens the four VAX receive outputs start() opens (the
     // engine itself never starts there), skipping a slot that already has
@@ -1090,6 +1106,8 @@ private:
     // write. The local VAX tee on the DSP thread never takes it.
     std::array<std::mutex, 4> m_vaxBusMutex;
     // R-R3-44: see setVaxOutputsAllowed().
+    // iPhone app Task 73: see setVaxSliceMask().
+    std::atomic<quint32> m_vaxSliceMask{0xFFFFFFFFu};
     bool m_vaxOutputsAllowed{true};
 #ifdef NEREUS_BUILD_TESTS
     std::function<std::unique_ptr<IAudioBus>(int)> m_vaxBusFactoryForTest;

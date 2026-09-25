@@ -63,7 +63,7 @@
 // Tests run WDSP-free (no QApplication needed for pure data logic).
 
 #include <QtTest/QtTest>
-#include "gui/spectrum/ActivePeakHoldTrace.h"
+#include "core/spectrum/ActivePeakHoldTrace.h"
 
 #include <cmath>
 

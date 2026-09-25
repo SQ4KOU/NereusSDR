@@ -117,6 +117,10 @@
 //                 window through the Core; the TCI Server page shows the
 //                 Core's station TCI server. J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24: iPhone app Task 19 (R-IOS-06, D40): DSP > Filter Presets is
+//                 a Core page; the presets live on the Core. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include "SetupDialog.h"
@@ -1241,7 +1245,10 @@ void SetupDialog::buildTree()
 
     registerPage(dsp, "TNF", SetupScope::Core, [this] { return new MnfSetupPage(m_model); });
     // Stage C2: user-customisable filter preset editor (10 slots × 12 modes).
-    registerPage(dsp, "Filter Presets", SetupScope::ThisComputer, [this]() -> QWidget* {
+    // iPhone app Task 19 (D40): the presets live on the Core ("filters/" is
+    // Station scope), so in a remote window this page shows and edits the
+    // Core's; a window running its radio locally is unchanged.
+    registerPage(dsp, "Filter Presets", SetupScope::Core, [this]() -> QWidget* {
         return new FilterPresetsSetupPage(
             m_model ? m_model->filterPresetStore() : nullptr,
             m_model);

@@ -59,6 +59,7 @@
 #include <mutex>
 #include <optional>
 #include <utility>
+#include "UpgradedCoreToken.h"
 
 namespace NereusSDR {
 
@@ -232,7 +233,7 @@ struct RemoteAudioSessionHarness {
 
     RemoteAudioSessionHarness()
         : settings(directory.filePath(QStringLiteral("station.settings")))
-        , server(&station, settings, directory.path())
+        , server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(directory.path()))
     {
         Q_ASSERT(directory.isValid());
         station.setBoardForTest(HPSDRHW::Saturn);

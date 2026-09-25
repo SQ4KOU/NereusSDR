@@ -38,6 +38,7 @@
 #include "fakes/LoopbackTransport.h"
 #include "fakes/RemoteAudioSessionHarness.h"
 #include "fakes/MainWindowTestSettings.h"
+#include "fakes/UpgradedCoreToken.h"
 
 using namespace NereusSDR;
 
@@ -271,7 +272,7 @@ private slots:
         QTemporaryDir dir;
         AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
         RadioModel station;
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         QWebSocketServer listener(QStringLiteral("control test"), QWebSocketServer::NonSecureMode);
         QVERIFY(listener.listen(QHostAddress::LocalHost, 0));
         connect(&listener, &QWebSocketServer::newConnection, &server, [&] {
@@ -464,7 +465,7 @@ private slots:
         station.setConnectionStateForTest(ConnectionState::Connected);
         const int sliceId = station.addSlice(QStringLiteral("pan-0"));
         QVERIFY(sliceId >= 0);
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         server.setMediaEnabled(true);
         QVERIFY2(server.listen(QHostAddress::LocalHost, 0), qPrintable(server.lastError()));
 
@@ -559,7 +560,7 @@ private slots:
         station.configureStreamPool(5, 5, 192000);
         station.setConnectionStateForTest(ConnectionState::Connected);
         QVERIFY(station.addSlice(QStringLiteral("pan-0")) >= 0);
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         server.setMediaEnabled(true);
         QVERIFY2(server.listen(QHostAddress::LocalHost, 0), qPrintable(server.lastError()));
 
@@ -656,7 +657,7 @@ private slots:
         station.configureStreamPool(5, 5, 192000);
         station.setConnectionStateForTest(ConnectionState::Connected);
         QVERIFY(station.addSlice(QStringLiteral("pan-0")) >= 0);
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         server.setMediaEnabled(true);
         bool coreRefuses = false;
         int coreStarts = 0;
@@ -766,7 +767,7 @@ private slots:
         station.configureStreamPool(5, 5, 192000);
         station.setConnectionStateForTest(ConnectionState::Connected);
         QVERIFY(station.addSlice(QStringLiteral("pan-0")) >= 0);
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         server.setMediaEnabled(true);
         QVERIFY2(server.listen(QHostAddress::LocalHost, 0), qPrintable(server.lastError()));
 

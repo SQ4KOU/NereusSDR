@@ -5033,6 +5033,21 @@ nereus_add_test(tst_active_peak_hold)
 # Uses QTEST_APPLESS_MAIN (no QApplication, WDSP-free, pure data logic).
 nereus_add_test(tst_peak_blob_detector)
 
+# iPhone app Task 20 (R-IOS-27): the noise floor, waterfall levels,
+# normalise, averaging constant, calibration range and blob passband moved
+# from SpectrumWidget into core/spectrum/DisplayFollowers. Links the Core
+# alone, as nereusd does, to prove they stand without the GUI.
+nereus_add_test(tst_display_followers CORE_ONLY)
+
+# iPhone app Task 20 (R-IOS-27): display extras. The Core's extras against
+# the desktop's SpectrumWidget for one recorded sequence, the NSDX datagram,
+# the subscription fields, and an endpoint through a real session.
+nereus_add_test(tst_display_extras
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_display_extras PRIVATE
+    NEREUS_TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data")
+
 # ── Task 2.3: Spectrum Defaults overlay group + decimation wire-up ──────────
 # Tests for SpectrumWidget overlay setters (ShowMHzOnCursor / ShowBinWidth /
 # ShowNoiseFloor / DispNormalize / ShowPeakValueOverlay) and FFTEngine
@@ -7052,6 +7067,14 @@ nereus_add_test(tst_mirror_lifecycle)
 # wire input.
 nereus_add_test(tst_mirror_snapshot)
 
+# iPhone app Task 72 (R-IOS-02; the several-devices design, rulings 5.6 and
+# 5.7): a MirrorView per device over one StateMirror. Echo per writer (a
+# shared blanker changed by A reaches B's view and not A's; WriterScope; a
+# write with no view; the single-session API unchanged), and each view's own
+# coalescer and burst (another view's pending deltas survive an attach; the
+# burst goes to its own view; nothing before attach or after close).
+nereus_add_test(tst_mirror_view)
+
 # Remote Daemon R2, Task 11: command verbs and results. Exercises the
 # SessionMessages CommandInvoke/CommandResult codec plus a real
 # SessionCommandDispatcher round trip over the in-process
@@ -7245,7 +7268,17 @@ nereus_add_test(tst_connection_selector)
 nereus_add_test(tst_station_lan_cache)
 nereus_add_test(tst_station_lan_transport)
 nereus_add_test(tst_station_lan_selection)
+# iPhone app Task 16 (D36, R-IOS-16): the Core's Bonjour record and
+# advertiser. On macOS the real backend registers on this computer only and
+# the test browses for it; nothing reaches a network.
+nereus_add_test(tst_dns_sd_advertiser)
 nereus_add_test(tst_gui_connection_controller)
+# iPhone app Task 18 (R-IOS-08): the desktop pairs with a Core. Its own
+# device key, one tap and the code against a real StationServer over the
+# loopback (IPv4 and IPv6), every refusal, then a sign-in by key.
+nereus_add_test(tst_station_pairing_client fakes/LoopbackTransport.cpp)
+target_compile_definitions(tst_station_pairing_client PRIVATE
+    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 # R3 remote window harness plan, Task 2 (R-R3-16/17/21/24): one real remote
 # MainWindow dialling an in-process StationServer over a loopback ws://
@@ -7401,6 +7434,93 @@ nereus_add_test(tst_notch_visual_does_not_perturb_noise_floor_or_maxbin)
 # runner that happened to lack OpenSSL.
 nereus_add_test(tst_certificate_store)
 
+# iPhone app Task 12 (R-IOS-08, R-IOS-02): the Core's identity key (created
+# once, mode 0600, reused), its label rules, and the paired-device store
+# (well-formed records only, 0600, failing closed on a damaged file).
+nereus_add_test(tst_station_identity)
+nereus_add_test(tst_station_label)
+nereus_add_test(tst_device_store)
+# The device sign-in itself: the authenticator's refusals and rate limits
+# (injected clock), and the link's refusals, token enrolment and admission
+# over the in-process loopback.
+nereus_add_test(tst_device_auth
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+# iPhone app Task 13 (R-IOS-08): the `devices` object, rename, the key
+# backup acknowledgement, revoke and token retirement, and the connection a
+# removed device or a retired token loses, over the in-process loopback.
+nereus_add_test(tst_station_devices
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+# iPhone app Task 71 (R-IOS-02): who holds a place on the Core (the four,
+# the same device, away and its 180 s, leaving, names and short names, the
+# redial arithmetic) over an injected clock, and several devices signed in
+# at once over the in-process loopback.
+nereus_add_test(tst_device_session_registry EXTRA_LABELS session)
+nereus_add_test(tst_station_multi_session
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+# iPhone app Task 73 (R-IOS-02): whose each slice is (owners, held for,
+# adoption, each owner's active slice and the station-level one), and each
+# device's closed slices kept for its return.
+nereus_add_test(tst_slice_ownership EXTRA_LABELS session)
+nereus_add_test(tst_device_layout_store EXTRA_LABELS session)
+# iPhone app Task 19 (R-IOS-06): the Core's catalogue; the G2 and HL2
+# catalogue fixtures against the desktop's own values, the revision, a
+# preset change reaching a client over the in-process loopback, the size.
+nereus_add_test(tst_station_catalog
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_station_catalog PRIVATE
+    NEREUS_LINK_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data/link/v1")
+# iPhone app Task 14 (R-IOS-08, D37): the pairing code and its word list,
+# the pairing window (injected clock), and the SPAKE2+EE exchange with its
+# confirmation boxes.
+nereus_add_test(tst_pairing_code EXTRA_LABELS core)
+target_compile_definitions(tst_pairing_code PRIVATE
+    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+nereus_add_test(tst_pairing_window EXTRA_LABELS core)
+nereus_add_test(tst_spake_exchange EXTRA_LABELS core)
+
+# iPhone app Task 14 (R-IOS-08): the Core's side of one pairing over
+# standard input and output, for the cross-implementation tests (the iPhone
+# app's pairing interop test, Task 15, and tst_station_pairing below). The
+# phone session's Task 10 adds tests/tools/ on its own branch: keep both
+# sets of tools here when the two meet.
+add_executable(nereus_pairing_peer EXCLUDE_FROM_ALL
+    tools/nereus_pairing_peer.cpp
+    $<TARGET_OBJECTS:nereus_test_sandbox>)
+target_link_libraries(nereus_pairing_peer PRIVATE NereusCore)
+set_target_properties(nereus_pairing_peer PROPERTIES AUTOMOC ON)
+set_property(GLOBAL APPEND PROPERTY NEREUS_ALL_TESTS nereus_pairing_peer)
+
+# The pairing on the link: LAN mode's refusals and success, code mode's
+# burn, backoff and success, the code kept from token sign-ins and from the
+# logging categories, pairing.open and pairing.close, and the peer tool
+# above paired with the C++ device side in code and LAN mode.
+nereus_add_test(tst_station_pairing
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+add_dependencies(tst_station_pairing nereus_pairing_peer)
+target_compile_definitions(tst_station_pairing PRIVATE
+    NEREUS_PAIRING_PEER="$<TARGET_FILE:nereus_pairing_peer>")
+
+# iPhone app Task 17 (R-IOS-08): the Core's read-only status page on
+# loopback (the code only while unclaimed, nothing for a peer elsewhere, 404
+# for anything but GET /), and the owner-only console socket with every
+# console command against a Core started in the test, including the real
+# entry point (server_main.cpp, as tst_daemon_signals runs it) and the real
+# nereusd binary finding the socket through --config.
+nereus_add_test(tst_station_status_page EXTRA_LABELS session)
+nereus_add_test(tst_station_control_socket
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+if(TARGET nereusd)
+    add_dependencies(tst_station_control_socket nereusd)
+endif()
+target_compile_definitions(tst_station_control_socket PRIVATE
+    NEREUSD_BINARY="$<TARGET_FILE:nereusd>")
+
 # Remote Daemon R2, Task 18: the wss session. Everything tasks 7 through 17
 # built converges here -- StateMirror, ObjectRegistry,
 # SessionCommandDispatcher and SettingsProxyServer on a socket, behind Task
@@ -7550,6 +7670,16 @@ nereus_add_test(tst_media_transport REALTIME)
 # Remote Daemon R3, Task 1: strict connection-scoped signalling bridge and
 # live queued-control exchange over the encrypted media transport.
 nereus_add_test(tst_media_peer)
+
+# iPhone app plan Task 10: the station side of the app's media interop tests.
+# Not a test itself: ios/scripts/interop-test.sh builds it and the app's
+# MediaPeerInteropTests drive it, the Core's own media transport as the
+# offerer. It reads its commands from a pipe, so it is not built on Windows.
+if(NOT WIN32)
+    add_executable(nereus_media_offerer EXCLUDE_FROM_ALL
+        tools/nereus_media_offerer.cpp $<TARGET_OBJECTS:nereus_test_sandbox>)
+    target_link_libraries(nereus_media_offerer PRIVATE NereusCore)
+endif()
 
 # Remote Daemon R3, Task 5: the existing RADE-pinned Opus encodes and decodes
 # the bounded mixed-stereo RTP profile without a second codec build.

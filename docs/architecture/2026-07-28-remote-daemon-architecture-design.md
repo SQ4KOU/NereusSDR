@@ -904,23 +904,38 @@ Every §15 phase states which capability bits it adds.
 
 ### 7.1 Session model
 
-**Single operator, one session at a time.** Authentication is a generated
+**Up to four devices, one control operator.** *Amended 2026-09-25 by the
+several-devices design
+([2026-09-24-several-devices-on-one-core-design.md](2026-09-24-several-devices-on-one-core-design.md),
+sections 4 and 11; iPhone app plan Task 71):* up to four devices (desktop
+windows, iPhones, iPads) hold sessions on one Core at the same time, each
+device one session. The control operator is the operator of the device that
+holds transmit (the several-devices design, section 8), not whoever holds the
+one session. This section first said "single operator, one session at a
+time". Authentication is a generated
 pre-shared token, never user-chosen, rate-limited on failure. **The token
 distribution mechanism must be specified before R2**: daemon console output on
 first run, plus the desktop Setup toggle, alongside the TLS fingerprint
 (§10.5).
 
 Every connection carries a session identity and a role from day one, even
-though the role is always owner.
+though the role is always owner: every paired device keeps the role of owner
+when several are connected.
 
-**A second authenticated connection preempts the existing session.** The token
-is the authority, and the realistic sequence is the same operator reconnecting
-after a link drop: hotel Wi-Fi fails, §12.1 fires, §13 has the daemon retain
-radio state, and the operator reconnects from a phone. If the stale session
-survives until its heartbeat deadline, or a second connection is refused, the
-operator is locked out of their own transmitter for an undefined interval,
-which is the opposite of the control-operator requirement §12.1 invokes. The
-displaced session is told why, and MOX drops across the transition.
+**Admission and the same-device rule replace preemption** *(amended
+2026-09-25, as above)*. No sign-in ever ends another device's session. After
+an accepted sign-in the Core lets a device in while a place is free; a device
+that already holds a place, live or away within the 3 minutes a dropped
+device keeps it, is let in at once and its own older connection ends ("This
+device connected again."); a full Core turns a newcomer away (and, in a later
+version, asks it which device's place to take). The need this section first
+answered with preemption still holds and is met by the same-device rule: the
+realistic sequence is the same operator reconnecting after a link drop (hotel
+Wi-Fi fails, §12.1 fires, §13 has the daemon retain radio state, and the
+operator reconnects), and the device's own new connection replaces its stale
+one at once, so the operator is never locked out waiting on a heartbeat
+deadline. This section first said that a second authenticated connection
+preempts the existing session.
 
 **TX arbitration already exists and must not be reinvented, but not as
 previously described.** `TxSliceArbiter` owns the single-TX invariant across
@@ -2046,7 +2061,7 @@ it.
 | Spectrum delivery | Latest-value-wins at the producer; **separate wrap-aware wire sequence** with keyframe-on-loss |
 | Pixel count | Bandwidth control, decoupled from widget width, clamped to available bins with the clamp reported |
 | TX arbitration | Route through `RadioModel::requestTxHandoffToSlice` (id-based), plus a new unkey-confirmed gate for remote |
-| Session model | Single operator; a second authenticated connection preempts |
+| Session model | Up to four devices, one session each; the control operator is the transmit holder; admission and the same-device rule in place of preemption; every paired device keeps the role of owner (amended 2026-09-25) |
 | State sync | Three mechanisms: property mirror, settings proxy, record streams |
 | Object identity | Persistent ids, never list positions; ids are reused |
 | Architectural cut | Models mirrored on both sides (option D rejects relocating them, not mirroring them) |

@@ -55,6 +55,7 @@
 #include <numeric>
 #include <thread>
 #include <utility>
+#include "fakes/UpgradedCoreToken.h"
 
 using namespace NereusSDR;
 
@@ -431,7 +432,7 @@ struct Harness {
 
     explicit Harness(std::optional<DisplayBudgetLimits> limits = std::nullopt)
         : settings(directory.filePath(QStringLiteral("station.settings")))
-        , server(&radio, settings, directory.path())
+        , server(&radio, settings, NereusSDR::Test::seedUpgradedCoreToken(directory.path()))
         , controller(&server, &radio, nullptr,
                      [this](QObject* parent) -> IMediaTransport* {
                          if (realTransport) { return realTransport(parent); }

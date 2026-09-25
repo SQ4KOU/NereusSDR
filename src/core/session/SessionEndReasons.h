@@ -13,10 +13,10 @@
 // and the desktop client parses the reason back (stationEndReport) to
 // offer Take it back or Check for updates.
 //
-// The link carries only a reason and the retryable flag for a session end
-// (station link section 12.4), so the parse reads the Core's own words.
-// Part C of the iPhone plan puts an end code in `session.end` that
-// replaces it.
+// The Core also sends an end code (`code` on `session.end` and
+// `auth.result`, station link section 12.4; iPhone app Task 12). read()
+// takes the code first (iPhone app Task 18) and falls back to the words
+// for an older Core, which sends none.
 //
 // =================================================================
 // Modification history (NereusSDR):
@@ -30,6 +30,11 @@
 //                                    parse also reads an older Core's
 //                                    wordings. AI-assisted transformation
 //                                    via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 18 (R-IOS-08,
+//                                    R-IOS-17): read() chooses by the end
+//                                    code, the words stay the fallback.
+//                                    AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QList>
@@ -50,9 +55,13 @@ QString versionRefused(const QList<quint16>& coreMajors, const QList<quint16>& a
 
 struct Parsed {
     enum class Kind {
-        Other,          ///< neither of the two
-        TakenOver,      ///< takenOver()
-        VersionRefused, ///< versionRefused()
+        Other,          ///< none of the below
+        TakenOver,      ///< takenOver(), or the code takenOver
+        VersionRefused, ///< versionRefused(), or the code linkVersion
+        // iPhone app Task 18, by code only (no older Core sends these):
+        DeviceRemoved,   ///< deviceRemoved or deviceNotPaired
+        PairingRequired, ///< pairingRequired
+        IdentityChanged, ///< identityChanged (the app's own end)
     };
     Kind kind = Kind::Other;
     /// TakenOver only: the other app's network address without its port,
@@ -70,5 +79,12 @@ struct Parsed {
 /// mismatch: station speaks M.m, client speaks M.m. A differing major means
 /// an incompatible wire contract."
 Parsed parse(const QString& reason);
+
+/// iPhone app Task 18: the end as the Core coded it (SessionEndCode).
+/// An empty code is an older Core's end, read by parse(). For takenOver
+/// and linkVersion the reason's words still give the other app's address
+/// and the two versions, when they are there. A code this app does not
+/// know is Other.
+Parsed read(const QString& code, const QString& reason);
 
 } // namespace NereusSDR::SessionEndReasons

@@ -14,7 +14,9 @@
 #include "models/RadioModel.h"
 #include "core/session/PureSignalSessionFacade.h"
 #include "core/session/Ps3DisplayCodec.h"
+#include "models/Band.h"
 #include "models/SliceModel.h"
+#include "models/TransmitModel.h"
 
 #include <QJsonArray>
 #include <QJsonValue>
@@ -25,6 +27,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <tuple>
 #include <utility>
 #include <vector>
 
@@ -236,6 +239,28 @@ bool needsWideband(const SpectrumEndpointRequest& request, double centreHz, doub
 
 // A replacement endpoint can temporarily coexist with the old one for
 // rollback. Unique ownership releases exactly once when either entry retires.
+// iPhone app Task 20 (R-IOS-27): a subscription that asks for display
+// extras is charged for them too: one more message per frame, at most
+// displayExtrasWorstCaseBytes, and the peak hold row's samples.
+std::optional<SpectrumDisplayCost> endpointDisplayCost(int pixels, int fps,
+                                                       bool includeWidePlane,
+                                                       quint8 extrasSections)
+{
+    std::optional<SpectrumDisplayCost> cost =
+        spectrumDisplayCost(pixels, fps, includeWidePlane);
+    if (!cost || extrasSections == 0) {
+        return cost;
+    }
+    const quint64 frames = static_cast<quint64>(fps);
+    cost->charge.applicationBytesPerSecond +=
+        static_cast<quint64>(displayExtrasWorstCaseBytes(extrasSections, pixels)) * frames;
+    cost->charge.messagesPerSecond += static_cast<quint32>(fps);
+    if ((extrasSections & kDisplayExtrasPeakHold) != 0) {
+        cost->charge.spectrumSampleUnitsPerSecond += static_cast<quint64>(pixels) * frames;
+    }
+    return cost;
+}
+
 struct WidebandDemandLease {
     QPointer<RadioModel> model;
     RadioModel::WidebandDemandToken token{0};
@@ -270,6 +295,13 @@ struct DaemonMediaController::EndpointEntry {
     int keyframesInWindow{0};
     QElapsedTimer keyframeWindow;
     qint64 lastNoiseFloorTimestampNs{-1};
+    // iPhone app Task 20 (R-IOS-27): what the subscription asked the Core
+    // to compute, the computation, and the NSDX datagram waiting to go
+    // right after the frame it describes.
+    DisplayExtrasRequest extrasRequest;
+    std::unique_ptr<DisplayExtrasProcessor> extras;
+    QByteArray pendingExtras;
+    quint64 pendingExtrasSamples{0};
 };
 
 struct DaemonMediaController::SourceRuntime {
@@ -563,6 +595,17 @@ std::optional<bool> DaemonMediaController::spectrumSourceTransformsFollowFrameRa
         return std::nullopt;
     }
     return source->config.transformsFollowFrameRate;
+}
+
+std::optional<DaemonMediaController::SpectrumAveraging>
+DaemonMediaController::spectrumAveraging(quint32 endpointId) const
+{
+    const auto it = m_endpoints.find(endpointId);
+    if (it == m_endpoints.end()) {
+        return std::nullopt;
+    }
+    return SpectrumAveraging{it->second.request.trace.averageAlpha,
+                             it->second.request.waterfall.averageAlpha};
 }
 
 std::optional<int> DaemonMediaController::spectrumSourceFps(quint32 endpointId) const
@@ -1077,8 +1120,20 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
     const bool widebandNegotiated = control.contains(QStringLiteral("extendedView"));
     QJsonObject legacyShape = control;
     if (widebandNegotiated) { legacyShape.remove(QStringLiteral("extendedView")); }
+    // iPhone app Task 20 (R-IOS-27): the display extras fields, only from a
+    // peer the Core told displayExtrasVersion 1 (display extras v1).
+    bool extrasPresent = false;
+    for (const QString& key : displayExtrasSubscribeKeys()) {
+        if (legacyShape.contains(key)) {
+            extrasPresent = true;
+            legacyShape.remove(key);
+        }
+    }
+    DisplayExtrasRequest extrasRequest;
     if ((widebandNegotiated && (!m_server || !m_server->remoteWidebandAvailable()
                                || !control.value(QStringLiteral("extendedView")).isBool()))
+        || (extrasPresent && (!m_server || !m_server->displayExtrasAvailable()
+                              || !parseDisplayExtrasRequest(control, extrasRequest)))
         || !exactKeys(legacyShape, {"op", "connectionId", "endpointId", "revision", "sliceId",
                              "tier", "fftSize", "windowType", "centreHz", "spanHz", "pixels",
                              "fps", "framesPerLine", "trace", "waterfall", "minDbm", "maxDbm",
@@ -1208,6 +1263,19 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
 
     request.extendedView = widebandNegotiated
         && control.value(QStringLiteral("extendedView")).toBool();
+    // The Core computes the averaging constants from the times the app
+    // asked for, at this endpoint's frame rate, as the desktop does from its
+    // own (DisplayFollowers: Thetis AvTau / AvTauWF). averageTimeMs is the
+    // spectrum's, and the waterfall's too unless waterfallAverageTimeMs is
+    // present.
+    if (extrasRequest.averageTimeMs) {
+        request.trace.averageAlpha = averageAlphaForTimeMs(*extrasRequest.averageTimeMs, fps);
+    }
+    const std::optional<int> waterfallTimeMs = extrasRequest.waterfallAverageTimeMs
+        ? extrasRequest.waterfallAverageTimeMs : extrasRequest.averageTimeMs;
+    if (waterfallTimeMs) {
+        request.waterfall.averageAlpha = averageAlphaForTimeMs(*waterfallTimeMs, fps);
+    }
     request.endpointId = endpointId;
     request.source = source;
     request.pixels = pixels;
@@ -1256,8 +1324,8 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
     // still covers every sample the endpoint emits.
     const int chargedPixels = m_server && m_server->spectrumGrantAvailable()
         ? grant.grantedPixels : pixels;
-    const auto displayCost = spectrumDisplayCost(
-        chargedPixels, fps, request.requestedWideSpanFactor > 1.0);
+    const auto displayCost = endpointDisplayCost(
+        chargedPixels, fps, request.requestedWideSpanFactor > 1.0, extrasRequest.sections());
     if (!displayCost || !spectrumAdmissionFits(endpointId, displayCost->charge)) {
         return rejectAllocation(control, endpointId, revision,
                                 QStringLiteral("The Core's display limit has no room left."));
@@ -1276,6 +1344,10 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
     entry.chargeCoversRequest = chargedPixels >= pixels || !displayBudgetWireAvailable();
     entry.grant = grant;
     entry.allocation = {control, revision, true, false, {}};
+    entry.extrasRequest = extrasRequest;
+    if (!extrasRequest.empty()) {
+        entry.extras = std::make_unique<DisplayExtrasProcessor>(extrasRequest);
+    }
     if (!reconcileWidebandDemand(entry)) {
         return rejectAllocation(control, endpointId, revision,
                                 QStringLiteral("The extended view is not available right now."));
@@ -2107,6 +2179,11 @@ void DaemonMediaController::onSourceFrame(MediaSourceKey key)
                 };
                 const quint32 revision = entry.revision;
                 const quint32 generation = entry.endpoint.context().codec.contextGeneration;
+                if (entry.extras) {
+                    // iPhone app Task 20: Clarity at the Core takes the same
+                    // full-source floor a desktop window's Clarity is sent.
+                    entry.extras->feedNoiseFloor(*floorDbm, displayNowNs() / 1'000'000);
+                }
                 const QPointer<DaemonMediaController> self(this);
                 const bool sent = sendControl(message);
                 if (!self || m_peer.get() != peer || m_epoch != epoch) { return; }
@@ -2165,6 +2242,11 @@ void DaemonMediaController::configureEndpointFromFrame(EndpointEntry& entry,
     entry.forceKeyframe = true;
     entry.contextSent = false;
     entry.lastNoiseFloorTimestampNs = -1;
+    entry.pendingExtras.clear();
+    entry.pendingExtrasSamples = 0;
+    if (entry.extras) {
+        entry.extras->newContext();
+    }
     sendContext(entry);
 }
 
@@ -2328,6 +2410,11 @@ bool DaemonMediaController::trySendSpectrum(MediaPeer* peer, quint64 epoch, qint
     if (m_endpoints.empty() || peer->displayBusy()) {
         return false;
     }
+    // iPhone app Task 20: a frame's display extras go on the next send,
+    // before any other frame, so they arrive beside the frame they describe.
+    if (trySendDisplayExtras(peer, epoch, nowNs)) {
+        return true;
+    }
     const QList<quint32> ids = endpointIds();
     // R-R3-08, R-R3-37: in a budget session, earliest deadline first.
     // Admission keeps the planned load within the sender's 200 messages a
@@ -2435,11 +2522,31 @@ bool DaemonMediaController::trySendSpectrum(MediaPeer* peer, quint64 epoch, qint
         const auto adcFrame = currentWideband->active && m_radioModel
             ? m_radioModel->latestWidebandSpectrum(currentWideband->physicalAdcIndex)
             : std::nullopt;
-        const std::optional<DisplayCodecFrame> reduced =
+        std::optional<DisplayCodecFrame> reduced =
             current.endpoint.consume(frame, current.stationOffsetDb, adcFrame);
         m_roundRobinCursor = (index + 1) % ids.size();
         if (!reduced.has_value()) {
             continue;
+        }
+        // iPhone app Task 20 (R-IOS-27): the display extras run on the frame
+        // as reduced, as the desktop's SpectrumWidget runs them on its own;
+        // then calibration and normalise move every plane, so the app draws
+        // what it receives.
+        std::optional<DisplayExtrasFrame> extrasFrame;
+        if (current.extras) {
+            const double binWidthHz = frame.binsLinear.isEmpty()
+                ? 0.0 : frame.sampleRateHz / static_cast<double>(frame.binsLinear.size());
+            if (current.extrasRequest.sections() != 0) {
+                extrasFrame = current.extras->process(
+                    *reduced, displayExtrasInputs(current, binWidthHz, nowNs));
+            }
+            const float shift = current.extras->displayShiftDb(binWidthHz);
+            if (shift != 0.0f) {
+                for (QVector<float>* plane : {&reduced->traceDbm, &reduced->waterfallDbm,
+                                              &reduced->wideDbm}) {
+                    for (float& value : *plane) { value += shift; }
+                }
+            }
         }
         const QByteArray bytes = current.encoder.encode(*reduced, current.forceKeyframe);
         const bool keyframe = current.encoder.lastEncodedKeyframe();
@@ -2473,6 +2580,16 @@ bool DaemonMediaController::trySendSpectrum(MediaPeer* peer, quint64 epoch, qint
             if (result == IMediaTransport::DisplaySendResult::Queued) {
                 ++m_displayDiagnostics.displayQueuedLate;
             }
+            it = m_endpoints.find(endpointId);
+            if (extrasFrame && it != m_endpoints.end() && it->second.revision == revision
+                && it->second.endpoint.configured()
+                && it->second.endpoint.context().codec.contextGeneration == generation) {
+                // The newest frame's extras replace any not yet sent.
+                it->second.pendingExtras =
+                    encodeDisplayExtras(*extrasFrame, it->second.endpoint.context().codec);
+                it->second.pendingExtrasSamples = extrasFrame->peakHoldDbm
+                    ? static_cast<quint64>(extrasFrame->peakHoldDbm->size()) : 0;
+            }
         } else {
             // Not taken (busy or failed): this frame is gone, never queued
             // behind the link.
@@ -2485,6 +2602,63 @@ bool DaemonMediaController::trySendSpectrum(MediaPeer* peer, quint64 epoch, qint
             // The receiver never gets this frame: do not resend it, and
             // restart the delta chain from a keyframe.
             it->second.forceKeyframe = true;
+        }
+        return true;
+    }
+    return false;
+}
+
+DisplayExtrasInputs DaemonMediaController::displayExtrasInputs(const EndpointEntry& entry,
+                                                                double binWidthHz,
+                                                                qint64 nowNs) const
+{
+    DisplayExtrasInputs inputs;
+    const SpectrumEndpointContext& context = entry.endpoint.context();
+    inputs.fps = context.targetFps;
+    inputs.nowMs = nowNs / 1'000'000;
+    inputs.centreHz = context.exactCentreHz;
+    inputs.spanHz = context.exactSpanHz;
+    inputs.binWidthHz = binWidthHz;
+    if (m_radioModel) {
+        if (const SliceModel* slice = m_radioModel->sliceById(entry.sliceId)) {
+            inputs.sliceHz = slice->frequency();
+            inputs.filterLowHz = slice->filterLow();
+            inputs.filterHighHz = slice->filterHigh();
+            inputs.band = static_cast<int>(bandFromFrequency(slice->frequency()));
+        }
+        inputs.mox = m_radioModel->transmitModel().isMox();
+    }
+    return inputs;
+}
+
+bool DaemonMediaController::trySendDisplayExtras(MediaPeer* peer, quint64 epoch, qint64 nowNs)
+{
+    const QList<quint32> ids = endpointIds();
+    for (int offset = 0; offset < ids.size(); ++offset) {
+        const quint32 endpointId = ids.at((m_roundRobinCursor + offset) % ids.size());
+        auto it = m_endpoints.find(endpointId);
+        if (it == m_endpoints.end() || it->second.pendingExtras.isEmpty()) {
+            continue;
+        }
+        const QByteArray bytes = std::exchange(it->second.pendingExtras, {});
+        const quint64 samples = std::exchange(it->second.pendingExtrasSamples, 0);
+        if (displayPacingRequired()
+            && (!m_displayPacerInitialized
+                || !m_displayPacer.spendSpectrum(static_cast<quint64>(bytes.size()),
+                                                 samples, nowNs))) {
+            // No credit now: the extras of a frame already on its way are
+            // worth nothing later, and the next frame brings its own.
+            continue;
+        }
+        m_lastDisplayAttemptWasPs3 = false;
+        const QPointer<DaemonMediaController> self(this);
+        const IMediaTransport::DisplaySendResult result = peer->submitDisplay(bytes);
+        if (!self || m_peer.get() != peer || m_epoch != epoch) { return true; }
+        if (result == IMediaTransport::DisplaySendResult::Queued) {
+            ++m_displayDiagnostics.displayQueuedLate;
+        } else if (result != IMediaTransport::DisplaySendResult::Sent) {
+            // Never resent: the next frame carries its own extras.
+            ++m_displayDiagnostics.displaySendRefusals;
         }
         return true;
     }
@@ -2644,8 +2818,9 @@ void DaemonMediaController::rebalanceSourceAfterDeparture(const MediaSourceKey& 
                                      FFTEngine::maximumFftSize());
         const int pixels = entry.chargeCoversRequest
             ? entry.grant.requestedPixels : entry.request.pixels;
-        const auto displayCost = spectrumDisplayCost(
-            pixels, entry.request.targetFps, entry.request.requestedWideSpanFactor > 1.0);
+        const auto displayCost = endpointDisplayCost(
+            pixels, entry.request.targetFps, entry.request.requestedWideSpanFactor > 1.0,
+            entry.extrasRequest.sections());
         if (fftSize <= entry.sourceFftSize || !displayCost) {
             continue;
         }

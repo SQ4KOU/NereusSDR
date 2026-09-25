@@ -97,9 +97,9 @@ private slots:
         QCOMPARE(int(items.size()), 4);
     }
 
-    // HL2 is not in Thetis SetComboPreampForHPSDR (postdates the switch).
-    // Per spec §8 and mi0bot HL2 LNA design [@c26a8a4]: anan100d 4-step set.
-    // Phase 3P-C Step 2: corrected from 1-item "On only" to 4-item anan100d.
+    // HL2 shares HERMES's branch in mi0bot SetComboPreampForHPSDR
+    // (mi0bot console.cs:41709-41718 [v2.10.3.13-beta2], "MI0BOT: HL2"):
+    // without Alex, the anan100d 4-step set.
     void hl2_four_items()
     {
         auto items = BoardCapsTable::preampItemsForBoard(HPSDRHW::HermesLite, /*alexPresent=*/false);
@@ -108,6 +108,19 @@ private slots:
         QCOMPARE(QLatin1String(items[1].label), QLatin1String("-10dB"));
         QCOMPARE(QLatin1String(items[2].label), QLatin1String("-20dB"));
         QCOMPARE(QLatin1String(items[3].label), QLatin1String("-30dB"));
+    }
+
+    // HL2 with Alex: on/off plus the five Alex items, as HERMES.
+    void hl2_with_alex_seven_items()
+    {
+        auto hl2 = BoardCapsTable::preampItemsForBoard(HPSDRHW::HermesLite, /*alexPresent=*/true);
+        auto hermes = BoardCapsTable::preampItemsForBoard(HPSDRHW::Hermes, /*alexPresent=*/true);
+        QCOMPARE(int(hl2.size()), 7);
+        QCOMPARE(int(hl2.size()), int(hermes.size()));
+        for (std::size_t i = 0; i < hl2.size(); ++i) {
+            QCOMPARE(QLatin1String(hl2[i].label), QLatin1String(hermes[i].label));
+            QCOMPARE(hl2[i].modeInt, hermes[i].modeInt);
+        }
     }
 
     // Angelia (ANAN-100D) no ALEX → 4 items; with ALEX → 7 items.

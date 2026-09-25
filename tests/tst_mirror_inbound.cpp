@@ -45,6 +45,16 @@
 //      would make every test below pass whether or not the guard here
 //      works; every value applied in this file is checked to differ from
 //      what was there before.
+//
+//   4. iPhone app Task 72 (R-IOS-02, ruling 5.7): that suppression is per
+//      WRITER. With device views attached, the write and its side effect
+//      on the co-hosted slice are withheld from the writer's view only and
+//      reach every other device's view.
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-09-25: iPhone app plan Task 72 (R-IOS-02): echo per writer. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -53,6 +63,7 @@
 
 #include "core/session/MirrorPolicy.h"
 #include "core/session/MirrorSchema.h"
+#include "core/session/MirrorView.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StateMirror.h"
 #include "core/StepAttenuatorController.h"
@@ -643,6 +654,54 @@ private slots:
         sliceA->setNbMode(NbMode::NB); // local operator action, no mirror anywhere
 
         QCOMPARE(sliceB->nbMode(), NbMode::NB);
+    }
+
+    // iPhone app Task 72 (ruling 5.7): the co-hosted NB tuning mirror, with
+    // two devices' views. A's write reaches B's view on both slices and
+    // A's view on neither; propertiesChanged() stays silent as before.
+    void peerNbTuningMirrorReachesEveryViewButTheWriters()
+    {
+        RadioModel model;
+        model.configureStreamPool(5, 5, 192000);
+        const int a = model.addSlice();
+        const int b = model.addSlice();
+        model.sliceById(a)->setFrequency(14200000.0);
+        model.sliceById(b)->setFrequency(14210000.0);
+        QCOMPARE(model.sliceById(b)->streamIndex(), model.sliceById(a)->streamIndex());
+        SliceModel* sliceA = model.sliceById(a);
+        const int genuinelyDifferent = sliceA->nb1Threshold() + 5;
+
+        StateMirror mirror;
+        QVERIFY(mirror.watch("slice:0", sliceA));
+        QVERIFY(mirror.watch("slice:1", model.sliceById(b)));
+        Collector c(&mirror);
+        QList<SessionMessage> toA;
+        QList<SessionMessage> toB;
+        MirrorView viewA(&mirror, [&toA](const SessionMessage& m) { toA.append(m); });
+        MirrorView viewB(&mirror, [&toB](const SessionMessage& m) { toB.append(m); });
+        viewA.attach();
+        viewB.attach();
+        toA.clear();
+        toB.clear();
+
+        const MirrorApplyResult result = mirror.applyInbound(
+            "slice:0", "nb1Threshold", QVariant(genuinelyDifferent), &viewA);
+        QVERIFY2(result.accepted, qPrintable(result.reason));
+        QCOMPARE(model.sliceById(b)->nb1Threshold(), genuinelyDifferent);
+        viewA.flush();
+        viewB.flush();
+
+        QVERIFY(c.flat.isEmpty());
+        QVERIFY(toA.isEmpty());
+        QSet<QByteArray> reachedB;
+        for (const SessionMessage& m : toB) {
+            for (const MirrorUpdate& u : m.updates) {
+                if (u.name == "nb1Threshold" && u.value.toInt() == genuinelyDifferent) {
+                    reachedB.insert(m.objectKey);
+                }
+            }
+        }
+        QCOMPARE(reachedB, (QSet<QByteArray>{"slice:0", "slice:1"}));
     }
 };
 

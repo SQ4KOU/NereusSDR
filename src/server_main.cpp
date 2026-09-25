@@ -109,6 +109,14 @@
 //   2026-09-24: --test-link-majors, debug builds only (iPhone app Task 4,
 //               R-IOS-01). J.J. Boyd (KG4VCF), with AI assistance via
 //               Anthropic Claude Code.
+//   2026-09-24: console subcommands (status, pairing, devices, token,
+//               reset) sent to the running Core over its control socket
+//               (iPhone app Task 17, R-IOS-08). J.J. Boyd (KG4VCF), with AI
+//               assistance via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave (R2-M6): console commands report
+//               an unreadable or invalid configuration file. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include "core/AppSettings.h"
@@ -118,15 +126,19 @@
 #include "core/RadioConnection.h"
 #include "core/daemon/DaemonApp.h"
 #include "core/daemon/DaemonConfig.h"
+#include "core/daemon/StationControlCommands.h"
+#include "core/daemon/StationControlSocket.h"
 #include "core/platform/ThreadPlacement.h"
 #include "core/session/LinkVersion.h"
 
 #include <QCommandLineOption>
 #include <QCommandLineParser>
 #include <QCoreApplication>
+#include <QFileInfo>
 #include <QMetaObject>
 #include <QTimer>
 #include <csignal>
+#include <cstdio>
 
 namespace {
 
@@ -190,7 +202,77 @@ int main(int argc, char* argv[])
                        "for example 1,2."),
         QStringLiteral("list"));
     parser.addOption(testLinkMajorsOpt);
+    // iPhone app Task 17 (R-IOS-08): a command word makes this process a
+    // console command for the Core already running with the same --config
+    // and --profile, instead of a second Core. No command runs the Core.
+    parser.addPositionalArgument(QStringLiteral("command"),
+        QStringLiteral("Optional. A command for the running Core: status, pairing show|open|close, "
+                       "devices, devices revoke <id>, token retire, reset --unclaimed --yes."),
+        QStringLiteral("[command...]"));
+    QCommandLineOption unclaimedOpt(QStringLiteral("unclaimed"),
+        QStringLiteral("With reset: return the Core to having no paired device."));
+    parser.addOption(unclaimedOpt);
+    QCommandLineOption yesOpt(QStringLiteral("yes"),
+        QStringLiteral("With reset: go ahead without asking."));
+    parser.addOption(yesOpt);
     parser.process(app);
+
+    const QStringList commandWords = parser.positionalArguments();
+    if (!commandWords.isEmpty()) {
+        // Nothing here touches AppSettings, the log or the Core's files: the
+        // socket's place comes from the config file and the profile name
+        // alone (StationControlSocket::socketPathFor), never from $HOME.
+        const auto print = [](FILE* stream, const QString& text) {
+            const QByteArray bytes = (text + QLatin1Char('\n')).toUtf8();
+            std::fwrite(bytes.constData(), 1, static_cast<size_t>(bytes.size()), stream);
+            std::fflush(stream);
+        };
+        if (!NereusSDR::StationControlCommands::isCommand(commandWords.first())) {
+            print(stderr, QStringLiteral("Unknown command.\n")
+                              + NereusSDR::StationControlCommands::usage());
+            return 2;
+        }
+        QString commandProfileErr;
+        const QString commandProfile = NereusSDR::resolveDaemonProfileArgument(
+            parser.value(profileOpt), parser.isSet(profileOpt), &commandProfileErr);
+        if (!commandProfileErr.isEmpty()) {
+            print(stderr, commandProfileErr);
+            return 2;
+        }
+        QString commandCfgErr;
+        const NereusSDR::DaemonConfig commandCfg =
+            NereusSDR::DaemonConfig::fromFile(parser.value(cfgOpt), &commandCfgErr);
+        // Part C fix wave (R2-M6): a configuration file that is there but
+        // cannot be read (sudo left off, say), or one the Core itself would
+        // refuse to start with, is reported, not left to look like "No Core
+        // answered" from the wrong socket. An absent file is what a bare
+        // nereusd runs with too: defaults, on both sides.
+        if (!commandCfgErr.isEmpty() && QFileInfo::exists(parser.value(cfgOpt))) {
+            print(stderr, QStringLiteral("Could not read the configuration file %1, so the Core "
+                                         "cannot be found. Run the command with sudo, or name "
+                                         "another file with --config.")
+                              .arg(parser.value(cfgOpt)));
+            return 2;
+        }
+        QString commandCfgInvalid;
+        if (!commandCfg.validate(&commandCfgInvalid)) {
+            print(stderr, QStringLiteral("The configuration file %1 is not valid, so the Core "
+                                         "does not start with it: %2")
+                              .arg(parser.value(cfgOpt), commandCfgInvalid));
+            return 2;
+        }
+        QStringList args = commandWords;
+        if (parser.isSet(unclaimedOpt)) {
+            args << QStringLiteral("--unclaimed");
+        }
+        if (parser.isSet(yesOpt)) {
+            args << QStringLiteral("--yes");
+        }
+        const NereusSDR::StationControlReply reply = NereusSDR::StationControlSocket::request(
+            NereusSDR::StationControlSocket::socketPathFor(commandCfg, commandProfile), args);
+        print(reply.ok ? stdout : stderr, reply.text);
+        return reply.ok ? 0 : 1;
+    }
 
     QString linkMajorsErr;
     const QList<quint16> linkMajors = NereusSDR::LinkVersion::resolveTestLinkMajors(
@@ -322,13 +404,16 @@ int main(int argc, char* argv[])
     // alive for the rest of main(), well past the point this queued call
     // runs (the queued event is serviced from the very first turn of
     // app.exec()'s loop, still inside this stack frame).
-    QMetaObject::invokeMethod(s_app, [&daemon, &cfg]() {
+    QMetaObject::invokeMethod(s_app, [&daemon, &cfg, &profile]() {
         if (!daemon.start(cfg)) {
             qCCritical(NereusSDR::lcApp) << "daemon failed to start";
             QCoreApplication::exit(4);
             return;
         }
         qCInfo(NereusSDR::lcApp) << "nereusd started, slices" << daemon.sliceCount();
+        // iPhone app Task 17: the console commands reach this Core through
+        // state_directory, or the profile's directory.
+        daemon.startControlSocket(NereusSDR::StationControlSocket::socketPathFor(cfg, profile));
     }, Qt::QueuedConnection);
 
     const int rc = app.exec();

@@ -38,9 +38,13 @@ section 11, which already classifies the session layer, state mirror and
 transport as NereusSDR-original. Third-party libraries named in section 10.1 are
 dependencies to be licence-reviewed, not ports.
 
-**Non-goal:** guest sessions and multi-operator access. The parent document
-defers these (section 16) while requiring that every connection carry an
-identity and a role from day one. Nothing here blocks that later work; adding a
+**Non-goal:** guest sessions. The parent document defers them (section 16)
+while requiring that every connection carry an identity and a role from day
+one. (Amended 2026-09-25: this line first also ruled out multi-operator
+access; up to four devices now share a Core, each keeping the role of owner,
+per the several-devices design,
+[2026-09-24-several-devices-on-one-core-design.md](2026-09-24-several-devices-on-one-core-design.md),
+section 11.) Nothing here blocks that later work; adding a
 guest role becomes new permission checks, not a redesign.
 
 ---
@@ -62,7 +66,7 @@ guest role becomes new permission checks, not a redesign.
 | Paired devices | A list, each with its own key, name and last-seen time |
 | Revocation | Immediate, from any paired device or the console. Drops a live session |
 | Lockout recovery | A console command resets the station to unclaimed. Physical access always wins |
-| Concurrent sessions | One, unchanged from parent section 7.1. A new connection preempts |
+| Concurrent sessions | Up to four; a fifth asks to take one's place (amended 2026-09-25 by the several-devices design, section 11) |
 | Rendezvous roles | Introduction, reflexive address, relay. One binary, one host |
 | Rendezvous implementation | Off-the-shelf `coturn` for STUN and TURN. We write only the small signalling service |
 | Self-hosting | Supported and documented, for **both** introduction and relay |
@@ -178,6 +182,16 @@ A daemon accepts pairing only while its pairing window is open.
   expiring while the operator fetches a laptop.
 - **Closes permanently on the first successful pair.**
 - **Reopens** from the daemon console, or from an already-paired device.
+
+**Note (2026-09-24, the iPhone plan's Part C fix wave).** "No timer" still
+holds for the unclaimed window, but it now has an attempt ceiling: five
+burned codes in a row close any open window, and only the console (or, on a
+claimed Core, a paired device) reopens it. On an unclaimed Core that means
+the console, so physical access decides. A reopened window also closes by
+itself 10 minutes after it opened. Reopening starts afresh, with no failures
+counted and no wait. A paired device cannot revoke the last device while no
+token is active, so the window never reopens by itself after the first pair.
+The link document's section 3.6 carries the numbers.
 
 That last route is what makes adding a second device pleasant: the operator adds
 a phone from an already-paired laptop and never approaches the radio.
@@ -356,9 +370,11 @@ Each paired device holds its own key. The daemon keeps a list.
 
 - **Revocation is immediate**, from any paired device or the console. A revoked
   device that is connected at that moment is dropped mid-session.
-- **Multiple devices may be paired; one may be connected.** Parent section 7.1's
-  preemption rule is unchanged, and it is what lets an operator reconnect from a
-  phone after a link drop.
+- **Multiple devices may be paired; up to four may be connected.** *(Amended
+  2026-09-25 by the several-devices design, section 11; this line first said
+  one may be connected, under parent section 7.1's preemption rule.)* A
+  device's own new connection replaces its stale one at once, which is what
+  lets an operator reconnect from a phone after a link drop.
 - **Recovery from total loss:** a console command returns the station to
   unclaimed. There is no account, so physical access is the recovery path.
 

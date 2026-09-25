@@ -47,6 +47,18 @@
 
 using namespace NereusSDR;
 
+namespace {
+// iPhone app Task 12 put the Core's listener on by default (TCP 47910 on
+// every interface). A test Core opens no listener unless the test asks for
+// one on a port of its own.
+NereusSDR::DaemonConfig testCoreConfig()
+{
+    NereusSDR::DaemonConfig config = NereusSDR::DaemonConfig::defaults();
+    config.remotePort = 0;
+    return config;
+}
+} // namespace
+
 class TstWidebandThread : public QObject {
     Q_OBJECT
 private slots:
@@ -61,7 +73,7 @@ private slots:
         DaemonApp app;
         app.primeBoardForTest(HPSDRHW::HermesLite);
 
-        QVERIFY(app.start(DaemonConfig::defaults()));
+        QVERIFY(app.start(testCoreConfig()));
 
         QThread* wb = app.widebandThread();
         QVERIFY(wb != nullptr);
@@ -91,7 +103,7 @@ private slots:
     // a restart (see widebandThread()'s doc comment).
     void restartGivesARunningThreadAgain()
     {
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
 
         DaemonApp app;
         app.primeBoardForTest(HPSDRHW::HermesLite);

@@ -1,9 +1,13 @@
 // no-port-check: NereusSDR-original persistence adapter regression tests.
+// 2026-09-25: iPhone app plan Task 73 (R-IOS-02, ruling 5.3): owners and
+// held-for marks in the manifest. J.J. Boyd (KG4VCF), AI-assisted via
+// Anthropic Claude Code.
 
 #include <QtTest/QtTest>
 
 #include "core/AppSettings.h"
 #include "core/ReceiveLayoutStore.h"
+#include "core/SliceOwnership.h"
 #include "core/WdspEngine.h"
 
 #include <QFile>
@@ -404,6 +408,90 @@ private slots:
         QVERIFY(!ReceiveLayoutStore::stage(settings, kMacA, twoRade, &error, 4));
         QCOMPARE(settings.hardwareValue(AppSettings::normalizedRadioMac(kMacA),
                                         QLatin1String(kLayoutKey)).toString(), original);
+    }
+
+    // iPhone app Task 73 (ruling 5.3): each entry keeps its owner, or the
+    // device it is held for, across a restart.
+    void ownersAndHeldForMarksRoundTripThroughTheFile()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("NereusSDR.settings"));
+        const QByteArray phone(32, '\x11');
+        const QByteArray tablet(32, '\x22');
+        QList<ReceiveSliceState> slices = twoSlices();
+        slices[0].owner = phone;
+        slices[1].owner = SliceOwnership::stationDevice();
+        slices[1].heldFor = tablet;
+        slices.append({3, QStringLiteral("pan-0"), 3573000.0, DSPMode::LSB});
+        {
+            AppSettings settings(path);
+            QVERIFY(ReceiveLayoutStore::stage(settings, kMacA, slices));
+            QVERIFY(settings.save());
+        }
+        AppSettings reloaded(path);
+        reloaded.load();
+        const auto loaded = ReceiveLayoutStore::load(reloaded, kMacA);
+        QCOMPARE(static_cast<int>(loaded.state),
+                 static_cast<int>(ReceiveLayoutStore::LoadState::Loaded));
+        QCOMPARE(loaded.slices.size(), 3);
+        QCOMPARE(loaded.slices.at(0).owner, phone);
+        QVERIFY(loaded.slices.at(0).heldFor.isEmpty());
+        QCOMPARE(loaded.slices.at(1).owner, SliceOwnership::stationDevice());
+        QCOMPARE(loaded.slices.at(1).heldFor, tablet);
+        // No owner is written as none.
+        QVERIFY(loaded.slices.at(2).owner.isEmpty());
+        QVERIFY(loaded.slices.at(2).heldFor.isEmpty());
+    }
+
+    // A manifest from before owners restores every slice with no owner, and
+    // an unowned manifest is written exactly as before.
+    void aManifestFromBeforeOwnersRestoresUnownedSlices()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("NereusSDR.settings"));
+        const QString oldFormat = QStringLiteral(
+            R"({"version":1,"slices":[{"id":0,"panKey":"pan-0","frequencyHz":14293200,"dspMode":1}],"radeRxOwnerId":null})");
+        const auto old = persistRawAndLoad(path, kMacA, oldFormat);
+        QCOMPARE(static_cast<int>(old.state),
+                 static_cast<int>(ReceiveLayoutStore::LoadState::Loaded));
+        QVERIFY(old.slices.at(0).owner.isEmpty());
+        QVERIFY(old.slices.at(0).heldFor.isEmpty());
+
+        AppSettings settings(directory.filePath(QStringLiteral("Other.settings")));
+        QVERIFY(ReceiveLayoutStore::stage(settings, kMacA,
+                                          {{0, QStringLiteral("pan-0"), 14293200.0, DSPMode::USB}}));
+        const QString raw = settings.hardwareValue(AppSettings::normalizedRadioMac(kMacA),
+                                                   QLatin1String(kLayoutKey)).toString();
+        QVERIFY(!raw.contains(QStringLiteral("owner")));
+        QVERIFY(!raw.contains(QStringLiteral("heldFor")));
+    }
+
+    // A window signed in with the older token cannot be recognised when it
+    // comes back, so its slices are written with no owner.
+    void aTokenWindowsSlicesAreWrittenWithNoOwner()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        AppSettings settings(directory.filePath(QStringLiteral("NereusSDR.settings")));
+        QList<ReceiveSliceState> slices = twoSlices();
+        slices[0].owner = QByteArrayLiteral("token:3");
+        QVERIFY(ReceiveLayoutStore::stage(settings, kMacA, slices));
+        const auto loaded = ReceiveLayoutStore::load(settings, kMacA);
+        QVERIFY(loaded.slices.at(0).owner.isEmpty());
+    }
+
+    void aHeldMarkWithoutTheStationDeviceIsRefused()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("NereusSDR.settings"));
+        const QString heldByAPhone = QStringLiteral(
+            R"({"version":1,"slices":[{"id":0,"panKey":"pan-0","frequencyHz":14293200,"dspMode":1,"owner":"ERERERERERERERERERERERERERERERERERERERERERE","heldFor":"IiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiIiI"}]})");
+        const auto loaded = persistRawAndLoad(path, kMacA, heldByAPhone);
+        QCOMPARE(static_cast<int>(loaded.state),
+                 static_cast<int>(ReceiveLayoutStore::LoadState::InvalidData));
     }
 };
 

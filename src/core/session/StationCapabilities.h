@@ -80,6 +80,25 @@
 //                remoteTgxlControlVersion 1 (the amp's and tuner's own
 //                settings), the latter last in the minor-11 block. J.J.
 //                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - iPhone app Task 12 (R-IOS-08): stationIdentityVersion,
+//                last in the minor-11 block. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - iPhone app Task 13 (R-IOS-08): deviceAdminVersion, last
+//                in the minor-11 block. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-24 - iPhone app Task 14 (R-IOS-08): pairingVersion, last in
+//                the minor-11 block. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-24 - iPhone app Task 19 (R-IOS-06): stationCatalogVersion,
+//                last in the minor-11 block. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
+//   2026-09-24 - iPhone app Task 20 (R-IOS-27): displayExtrasVersion,
+//                last in the minor-11 block. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
+//   2026-09-25: iPhone app Task 71 (R-IOS-02): sessionHolderVersion,
+//               sent only to a peer that declared sessionHolder. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include <QByteArray>
@@ -164,6 +183,48 @@ struct StationCapabilities {
     /// commands. Sent last in the same minor-11 block. 0: a window cannot
     /// change the tuner's own settings on this Core and says so.
     int remoteTgxlControlVersion = 0;
+    /// iPhone app Task 12 (R-IOS-08): 1 means the Core has its own identity
+    /// key and signs in paired devices by key (the hello's `identity` and
+    /// `challenge`, auth.request's `device`). Sent last in the same
+    /// minor-11 block. A client learns the same from the hello's
+    /// `features.deviceAuth`, which it needs before capabilities arrive;
+    /// this entry is what a signed-in window reads afterwards.
+    int stationIdentityVersion = 0;
+    /// iPhone app Task 13 (R-IOS-08): 1 means the Core sends the `devices`
+    /// object (its paired devices, label, claim, token and key backup) to a
+    /// device whose hello declares `deviceAuth` 1, and takes devices.revoke,
+    /// station.rename, station.acknowledgeKeyBackup and station.retireToken.
+    /// Sent in the same minor-11 block, after stationIdentityVersion.
+    int deviceAdminVersion = 0;
+    /// iPhone app Task 14 (R-IOS-08): 1 means the Core pairs devices (the
+    /// `pair.*` messages, which a client learns before capabilities from the
+    /// hello's `features.pairing`), keeps `pairingWindowOpen` and
+    /// `pairingCode` on the `devices` object, and takes `pairing.open` and
+    /// `pairing.close`. Sent in the same minor-11 block, after
+    /// deviceAdminVersion.
+    int pairingVersion = 0;
+    /// iPhone app Task 19 (R-IOS-06): 1 means the Core sends the read-only
+    /// `catalog` object (the modes, filter presets, tune steps, AGC and
+    /// gauge ranges, board, band plans, palettes, slice colours and tools
+    /// an app draws its controls from). Sent last in the same minor-11
+    /// block.
+    int stationCatalogVersion = 0;
+    /// iPhone app Task 20 (R-IOS-27): 1 means a spectrum subscription may
+    /// ask the Core for display extras (peak blobs, the active peak hold
+    /// row, the noise floor, the waterfall's levels) and for normalise,
+    /// calibration and averaging applied at the Core; the Core then sends
+    /// an NSDX datagram beside each NSDC frame (display extras v1). Sent
+    /// last in the same minor-11 block, after stationCatalogVersion.
+    int displayExtrasVersion = 0;
+    /// iPhone app Task 71 (R-IOS-02; the several-devices design, ruling
+    /// 10.1): 1 means the Core admits up to four devices at once, sends the
+    /// `connectedDevices` object and takes session.leave. Sent last in the
+    /// same minor-11 block, and only to a peer whose hello declared the
+    /// feature `sessionHolder` 1 with `deviceAuth` 1 (sessionHolderEntry);
+    /// any other peer is sent no entry and reads 0, so its capabilities
+    /// are exactly today's.
+    bool sessionHolderEntry = false;
+    int sessionHolderVersion = 0;
 
     /// Whether the DAEMON currently holds a live radio connection. A
     /// client that authenticated against a daemon whose radio is powered

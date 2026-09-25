@@ -131,6 +131,13 @@
 //                passes every TCI release on; teardown unkeys; the MOX
 //                button completes a pending TUN-off before keying.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 73 (R-IOS-02): SliceOwnership (whose
+//                each slice is, each owner's active slice and the
+//                station-level one), owners in the restart manifest, a
+//                device's slice restored at its old frequency and letter,
+//                and the FreeDV Reporter frequency following the
+//                station-level active slice. NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -362,6 +369,7 @@ class StationPgxlController;
 class StationRfKitController;
 class StationTciController;
 class StationTciModel;
+class SliceOwnership;
 class RfKitBandFollow;
 class AmplifierModel;
 class RfKitModel;
@@ -1492,6 +1500,40 @@ public:
     /// to ask.
     bool setActiveSliceById(int sliceId);
 
+    // ── iPhone app Task 73 (R-IOS-02): several devices on one Core ───────
+    //
+    // Whose each slice is (the several-devices design, sections 5.1 to 5.7).
+    // On a Local model every slice has an owner mark here; a slice's
+    // `active` means its owner's active slice, and activeSlice() is the
+    // station-level active slice (ruling 5.11): the transmit holder's while
+    // transmit is held, otherwise the most recent choice by any owner. With
+    // no owners (a desktop window on its own) every slice has the same
+    // owner, none, and this is exactly the one active slice of before.
+    SliceOwnership* sliceOwnership() const { return m_sliceOwnership; }
+
+    /// `owner` makes one of its own slices its active slice (ruling 5.10).
+    /// False, changing nothing, when the slice is not `owner`'s. Local only.
+    bool setActiveSliceByIdFor(const QByteArray& owner, int sliceId);
+
+    /// The device holding transmit, empty for none (Task 34 calls this).
+    /// While one holds it, its active slice is the station-level one
+    /// (ruling 5.11). Local only.
+    void setTransmitHolder(const QByteArray& holder);
+
+    /// The lowest slice id not in use (the next letter a new slice takes),
+    /// or -1 when every id with a channel is in use.
+    int lowestFreeSliceId() const;
+
+    /// Ruling 5.2 step 2: a device's saved slice made again for `owner`, on
+    /// `sliceId` (which must be free), at `state`'s frequency and mode, its
+    /// pan key `state.panKey`, after loading whatever settings that id's
+    /// keys hold. It joins a receiver window that covers it or claims a
+    /// free receiver, as any new slice does. Returns the id, or -1 with
+    /// `reason` (the slice cap, or no receiver) when it does not fit.
+    /// Local only.
+    int restoreSliceFor(const QByteArray& owner, int sliceId, const ReceiveSliceState& state,
+                        QString* reason = nullptr);
+
     /// Phase 3F Sub-Epic C Task 7: AetherSDR-faithful slice creation entry
     /// point.  Creates a new SliceModel (delegates to addSlice) and tags it
     /// with the supplied pan id as a dynamic property for Sub-Epic D wiring.
@@ -2614,6 +2656,9 @@ public:
     // injecting a mock connection, mirroring what wireConnectionSignals() does
     // when a real radio connects.
     void wireSliceSignalsForTest() { wireSliceSignals(m_activeSlice); }
+    // iPhone app Task 73: the frequency the FreeDV Reporter lists (the
+    // station-level active slice's), whether or not it is connected.
+    quint64 freedvWantedFrequencyHzForTest() const { return m_freedvWantedHz; }
     // The transmit-frequency derivation the push and both TUNE arms share.
     // setTune() itself is unreachable from a unit test (it requires a live
     // connection AND an audio engine, console.cs:30035-30043 [v2.10.3.15]'s
@@ -4207,6 +4252,9 @@ public:
     // tweak when they immediately close the app. No-op when nothing's
     // pending. Idempotent — calling repeatedly is safe.
     void flushPendingSettingsSave();
+    /// iPhone app Task 73: the coalesced settings save, for a store the
+    /// Core's session server changed (a device's saved slices).
+    void requestSettingsSave() { scheduleSettingsSave(); }
     QString settingsSaveError() const { return m_settingsSaveError; }
     void applyStationSettingsSaveError(const QString& reason);
     // R-R3-34: seed a validated local layout before any radio/DSP resources
@@ -4547,7 +4595,13 @@ private:
     /// used verbatim, and checking it for collision first is the caller's
     /// job (addSliceWithStationId does).
     int addSliceImpl(int requestedId, const QString& initialPanId,
-                     const ReceiveSliceState* restoreSeed = nullptr);
+                     const ReceiveSliceState* restoreSeed = nullptr,
+                     bool bindRestored = false);
+
+    /// iPhone app Task 73: every slice's `active` from its owner's active
+    /// slice, and activeSlice() moved to the station-level one (emitting
+    /// the active-slice signals when it moves). Local only.
+    void applyActiveSlices();
 
     /// The operator's reason for a refused add at the slice cap:
     /// "<radio> supports a maximum of <cap> slices" ("1 slice" for one), or,
@@ -4846,6 +4900,11 @@ private:
     QList<SliceModel*> m_slices;
     QList<PanadapterModel*> m_panadapters;
     SliceModel* m_activeSlice{nullptr};
+    // iPhone app Task 73: whose each slice is. Qt-parented to this model.
+    SliceOwnership* m_sliceOwnership{nullptr};
+    // iPhone app Task 73 (ruling 5.11): the frequency the FreeDV Reporter
+    // lists, the station-level active slice's; published when connected.
+    quint64 m_freedvWantedHz{0};
 
     // View hooks (non-owning, set by MainWindow). Phase 3G-8 + 3G-9c +
     // 3M-5d (m_txAnalyzer).

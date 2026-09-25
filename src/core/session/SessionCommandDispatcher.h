@@ -112,7 +112,23 @@
 //                                    Anthropic Claude Code.
 //   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 / R-R3-47: the Tuner Genius's antenna,
 //                                    operate and bypass verbs.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 13 (R-IOS-08):
+//                                    devices.revoke, station.rename,
+//                                    station.acknowledgeKeyBackup and
+//                                    station.retireToken, routed to the
+//                                    Core's StationDevicesFacade.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 14 (R-IOS-08):
+//                                    pairing.open and pairing.close, routed
+//                                    to the same facade.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25: iPhone app Task 71 (R-IOS-02): session.leave and
+//               sessionLeaveRequested. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app Task 72 (R-IOS-02, ruling 5.8): the owner is
+//               per session (setSessionOwner before each dispatch,
+//               endSessionOwner, resetSessionState). J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -124,6 +140,7 @@
 #include <utility>
 
 #include "core/session/SessionMessages.h"
+#include "core/session/StationDevicesFacade.h"
 
 namespace NereusSDR {
 
@@ -177,7 +194,38 @@ public:
     /// class comment). Callers must not assume commandResultReady() has
     /// fired by the time dispatch() itself returns.
     void dispatch(const NereusSDR::SessionMessage& invoke);
+
+    /// iPhone app Task 72 (ruling 5.8): the session the dispatches that
+    /// follow act for, as `station:<sessionId>`. The Core sets it before
+    /// each dispatch, so a DSP-asset job belongs to the device that started
+    /// it and one device leaving cancels only its own. Nothing else
+    /// changes.
     void setSessionOwner(const QString& owner);
+
+    /// Cancels every DSP-asset job `owner` started (its session ended).
+    void endSessionOwner(const QString& owner);
+
+    /// Forgets pending PureSignal actions and returns every slice to normal
+    /// NNR audio. The Core calls it when the session media goes to starts
+    /// or ends: a new session never replays a prior test signal.
+    void resetSessionState();
+
+    /// iPhone app Task 13: the Core's device administration, which the
+    /// devices.* and station.* verbs act on. Not owned. Without one those
+    /// verbs are refused in plain words. They need no radio.
+    void setDeviceAdmin(StationDevicesFacade* devices) { m_deviceAdmin = devices; }
+
+    /// iPhone app Task 73 (rulings 5.9, 5.10): the device the dispatches
+    /// that follow act for, by the id its slices are owned under (the Core
+    /// sets it with the session owner and clears it after). Empty acts for
+    /// nobody in particular, as before several devices: no slice is refused,
+    /// a new slice has no owner and setActiveSliceById moves the one active
+    /// slice.
+    void setRequester(const QByteArray& device) { m_requester = device; }
+    /// The plain refusal for `requester` naming `sliceId`, or empty when it
+    /// may: "That slice belongs to <owner>. It can be changed only there."
+    using SliceAccess = std::function<QString(const QByteArray& requester, int sliceId)>;
+    void setSliceAccess(SliceAccess access) { m_sliceAccess = std::move(access); }
 
     /// R-IOS-01: every verb dispatch() routes, declared beside the routing
     /// rather than derived from it. A family routed by prefix ("ps3.",
@@ -192,6 +240,11 @@ signals:
     /// out over the wire, the same relationship StateMirror::
     /// sessionMessageReady() already has to its own outbound stream.
     void commandResultReady(const NereusSDR::SessionMessage& result);
+    /// iPhone app Task 71 (ruling 4.12, sessionHolderVersion 1): the
+    /// session being dispatched asked to leave; its accepted result has just
+    /// been emitted. StationServer frees the device's place at once, with no
+    /// away state, and ends the connection.
+    void sessionLeaveRequested();
 
 private:
     Ps3DisplayAdmissionHandler m_ps3DisplayAdmission;
@@ -246,12 +299,27 @@ private:
     // notch.delete against the Core's NotchModel.
     void handleNotchAction(const NereusSDR::SessionMessage& invoke);
     void handlePureSignalAction(const NereusSDR::SessionMessage& invoke);
+    // iPhone app Task 13 (R-IOS-08, deviceAdminVersion 1): devices.revoke,
+    // station.rename, station.acknowledgeKeyBackup, station.retireToken.
+    void handleDeviceAdmin(const NereusSDR::SessionMessage& invoke);
+    // iPhone app Task 14 (R-IOS-08, pairingVersion 1): pairing.open and
+    // pairing.close.
+    void handlePairingWindow(const NereusSDR::SessionMessage& invoke);
+    // iPhone app Task 71 (R-IOS-02, sessionHolderVersion 1): session.leave.
+    void handleSessionLeave(const NereusSDR::SessionMessage& invoke);
 
     void emitResult(const QByteArray& verb, quint32 commandId, bool accepted,
                     const QString& reason, const QList<QByteArray>& affectedKeys);
 
     QPointer<RadioModel> m_radioModel;
+    QPointer<StationDevicesFacade> m_deviceAdmin;
     QString m_sessionOwner{QStringLiteral("local")};
+    // iPhone app Task 73.
+    QByteArray m_requester;
+    SliceAccess m_sliceAccess;
+    /// Refuses (and answers) a verb whose sliceId names another device's
+    /// slice. True when it did.
+    bool refusedForAnotherDevice(const NereusSDR::SessionMessage& invoke);
     struct PendingPureSignalCommand {
         quint32 commandId;
         QByteArray verb;

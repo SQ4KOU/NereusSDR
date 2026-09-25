@@ -99,16 +99,38 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 / R-R3-47: setTgxlAntenna,
 //                                    setTgxlOperate and setTgxlBypass
 //                                    (remoteTgxlControlVersion 2).
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 13 (R-IOS-08):
+//                                    devices.revoke, station.rename,
+//                                    station.acknowledgeKeyBackup and
+//                                    station.retireToken.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 14 (R-IOS-08):
+//                                    pairing.open and pairing.close.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25: iPhone app Task 71 (R-IOS-02): session.leave
+//               (sessionHolderVersion 1). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app Task 72 (R-IOS-02, ruling 5.8): the owner per
+//               session; ending one owner cancels only its DSP-asset jobs.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
+//   2026-09-25: iPhone app Task 73 (R-IOS-02, rulings 5.9, 5.10): the
+//               requesting device; removeSlice, setActiveSliceById, nnr.*
+//               and notch.add refused for another device's slice; a new
+//               slice is its requester's; setActiveSliceById sets the
+//               requester's own active slice. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
 
+#include "core/SliceOwnership.h"
 #include "core/session/ObjectRegistry.h"
 #include "core/dsp/DspAssetService.h"
 #include "DspCommandValues.h"
 #include "PureSignalSessionFacade.h"
 #include "core/accessories/AlexAntennaFacade.h"
+#include "core/session/StationDevicesFacade.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -298,6 +320,11 @@ QString notRepresentableReason()
 //   ps3.subscribeDisplay   psDisplayVersion 1 with media
 //   ps3.<action>           psAlgorithmVersion 3
 //   notch.*                remoteNotchControlAvailable()
+//   devices.revoke, station.rename, station.acknowledgeKeyBackup,
+//   station.retireToken    deviceAdminVersion 1, to a device whose hello
+//                          declares deviceAuth (the `devices` object)
+//   pairing.open,
+//   pairing.close          pairingVersion 1, to the same peers
 //
 // tst_link_surface_manifest keeps this table and the routing in step: a
 // source scan of dispatch() and of each prefix family's handler, and a
@@ -453,6 +480,21 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
          kDspControlSessionProtocolMinor},
         {"notch.delete", {arg("id", kInt)}, "notchControlVersion", 1,
          kDspControlSessionProtocolMinor},
+        // The Core's paired devices, its name, its key backup and its old
+        // pairing token (iPhone app Task 13, R-IOS-08).
+        {"devices.revoke", {arg("id", kUtf8)}, "deviceAdminVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        {"station.rename", {arg("label", kUtf8)}, "deviceAdminVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        {"station.acknowledgeKeyBackup", {}, "deviceAdminVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        {"station.retireToken", {}, "deviceAdminVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        // The Core's pairing window (iPhone app Task 14, R-IOS-08).
+        {"pairing.open", {}, "pairingVersion", 1, kRadioIdentitySessionProtocolMinor},
+        {"pairing.close", {}, "pairingVersion", 1, kRadioIdentitySessionProtocolMinor},
+        // Leaving the Core on purpose (iPhone app Task 71, R-IOS-02).
+        {"session.leave", {}, "sessionHolderVersion", 1, kRadioIdentitySessionProtocolMinor},
     };
     return specs;
 }
@@ -490,16 +532,29 @@ SessionCommandDispatcher::SessionCommandDispatcher(RadioModel* radioModel, QObje
 
 void SessionCommandDispatcher::setSessionOwner(const QString& owner)
 {
+    // iPhone app Task 72: before, this also cancelled the previous owner's
+    // jobs and reset the session state, because there was one session. The
+    // owner now changes with every dispatch; those two are their own calls.
+    m_sessionOwner = owner;
+}
+
+void SessionCommandDispatcher::endSessionOwner(const QString& owner)
+{
+    if (m_radioModel && !owner.isEmpty()) {
+        m_radioModel->dspAssets()->cancelOwner(owner);
+    }
+}
+
+void SessionCommandDispatcher::resetSessionState()
+{
     m_pureSignalCommands.clear();
-    if (m_radioModel && !m_sessionOwner.isEmpty()) {
-        m_radioModel->dspAssets()->cancelOwner(m_sessionOwner);
+    if (m_radioModel) {
         for (SliceModel* slice : m_radioModel->slices()) {
             // Diagnostic modes are operator actions. A new session always
             // starts on normal audio and never replays a prior test signal.
             m_radioModel->setNnrDiagnosticMode(slice->sliceIndex(), 0, 1);
         }
     }
-    m_sessionOwner = owner;
 }
 
 void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
@@ -507,6 +562,23 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
     if (invoke.kind != SessionMessageKind::CommandInvoke) {
         // Not this class's concern -- a caller routing error, not a
         // command failure worth reporting back.
+        return;
+    }
+    // iPhone app Task 13: the Core's device administration needs no radio.
+    if (invoke.commandVerb == "devices.revoke" || invoke.commandVerb == "station.rename"
+        || invoke.commandVerb == "station.acknowledgeKeyBackup"
+        || invoke.commandVerb == "station.retireToken") {
+        handleDeviceAdmin(invoke);
+        return;
+    }
+    // iPhone app Task 14: the pairing window needs no radio either.
+    if (invoke.commandVerb == "pairing.open" || invoke.commandVerb == "pairing.close") {
+        handlePairingWindow(invoke);
+        return;
+    }
+    // iPhone app Task 71: nor does leaving the Core.
+    if (invoke.commandVerb == "session.leave") {
+        handleSessionLeave(invoke);
         return;
     }
     if (m_radioModel.isNull()) {
@@ -550,6 +622,12 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
             reason = QStringLiteral("The model choice changed on the Core before this request arrived. Try again.");
         }
         emitResult(invoke.commandVerb, invoke.commandId, accepted, reason, {"dspAssets"});
+        return;
+    }
+
+    // iPhone app Task 73 (ruling 5.9): a device addresses only its own
+    // slices. Refused before anything is looked at or changed.
+    if (refusedForAnotherDevice(invoke)) {
         return;
     }
 
@@ -624,6 +702,31 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         emitResult(invoke.commandVerb, invoke.commandId, false,
                    QStringLiteral("The Core does not know this request. Updating the Core may help."), {});
     }
+}
+
+bool SessionCommandDispatcher::refusedForAnotherDevice(const SessionMessage& invoke)
+{
+    // The verbs that name a slice of the requester's by `sliceId` (ruling
+    // 5.9). requestSliceSampleRate, requestStreamCtunPinned and
+    // requestStreamCentre are routes on a shared receiver, not refusals
+    // (Tasks 74 and 75).
+    static const QSet<QByteArray> kSliceVerbs{
+        QByteArrayLiteral("removeSlice"), QByteArrayLiteral("setActiveSliceById"),
+        QByteArrayLiteral("nnr.setDiagnostics"), QByteArrayLiteral("nnr.resetTuning"),
+        QByteArrayLiteral("nnr.tryAgain"), QByteArrayLiteral("notch.add")};
+    if (m_requester.isEmpty() || !m_sliceAccess || !kSliceVerbs.contains(invoke.commandVerb)) {
+        return false;
+    }
+    int sliceId = -1;
+    if (findIntArgument(invoke.arguments, "sliceId", &sliceId) != ArgumentStatus::Ok) {
+        return false;
+    }
+    const QString reason = m_sliceAccess(m_requester, sliceId);
+    if (reason.isEmpty()) {
+        return false;
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, false, reason, {});
+    return true;
 }
 
 void SessionCommandDispatcher::handlePureSignalAction(const SessionMessage& invoke)
@@ -865,7 +968,12 @@ void SessionCommandDispatcher::handleAddSlice(const SessionMessage& invoke)
     const QMetaObject::Connection conn = connect(
         m_radioModel, &RadioModel::sliceAddRejected, this,
         [&rejectionReason](const QString& reason) { rejectionReason = reason; });
-    const int id = m_radioModel->addSlice(panIdArg.toString());
+    int id = -1;
+    {
+        // iPhone app Task 73: the new slice is the requesting device's.
+        const SliceOwnership::CreatorScope creator(m_radioModel->sliceOwnership(), m_requester);
+        id = m_radioModel->addSlice(panIdArg.toString());
+    }
     QObject::disconnect(conn);
 
     if (id < 0) {
@@ -948,7 +1056,11 @@ void SessionCommandDispatcher::handleAddSliceOnPan(const SessionMessage& invoke)
         m_radioModel, &RadioModel::sliceAddRejected, this,
         [&rejectionReason](const QString& reason) { rejectionReason = reason; });
 
-    m_radioModel->addSliceOnPan(panIdArg.toString());
+    {
+        // iPhone app Task 73: the new slice is the requesting device's.
+        const SliceOwnership::CreatorScope creator(m_radioModel->sliceOwnership(), m_requester);
+        m_radioModel->addSliceOnPan(panIdArg.toString());
+    }
 
     QObject::disconnect(addedConn);
     QObject::disconnect(rejectedConn);
@@ -1114,11 +1226,18 @@ void SessionCommandDispatcher::handleSetActiveSliceById(const SessionMessage& in
     // being active, and setActiveSliceById() (RadioModel.cpp) reassigns
     // m_activeSlice as its very first side effect on success, so reading
     // this afterward would already show the NEW slice.
+    //
+    // iPhone app Task 73 (ruling 5.10): with a requesting device, its own
+    // active slice among its own, which is the one that stops being active.
     SliceModel* const previouslyActive = m_radioModel->activeSlice();
-    const int previouslyActiveId =
-        (previouslyActive != nullptr) ? previouslyActive->sliceIndex() : -1;
+    const int previouslyActiveId = !m_requester.isEmpty()
+        ? m_radioModel->sliceOwnership()->activeFor(m_requester)
+        : ((previouslyActive != nullptr) ? previouslyActive->sliceIndex() : -1);
 
-    if (!m_radioModel->setActiveSliceById(sliceId)) {
+    const bool activated = !m_requester.isEmpty()
+        ? m_radioModel->setActiveSliceByIdFor(m_requester, sliceId)
+        : m_radioModel->setActiveSliceById(sliceId);
+    if (!activated) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
                    QStringLiteral("That receiver is no longer on the Core."), {});
         return;
@@ -1344,7 +1463,111 @@ void SessionCommandDispatcher::handleSetRfKitEnabled(const SessionMessage& invok
     emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
 }
 
+// iPhone app Task 71 (R-IOS-02, ruling 4.12, sessionHolderVersion 1): the
+// device leaves the Core on purpose. StationServer answers a peer without
+// sessionHolderVersion 1 before this runs; here the request is checked, the
+// result goes out, and StationServer frees the place and ends the
+// connection.
+void SessionCommandDispatcher::handleSessionLeave(const SessionMessage& invoke)
+{
+    if (!invoke.arguments.isEmpty()) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The request to leave the Core was not understood."), {});
+        return;
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
+    emit sessionLeaveRequested();
+}
+
 // R-R3-48: the one TCI switch and port, kept by the Core.
+// iPhone app Task 13 (R-IOS-08, deviceAdminVersion 1). The facade answers in
+// plain words; the connection a revoke or a token retirement ends is
+// StationServer's to end, after this result has gone out.
+void SessionCommandDispatcher::handleDeviceAdmin(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    if (m_deviceAdmin.isNull()) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("This Core cannot manage its paired devices."), {});
+        return;
+    }
+    DeviceAdminResult result;
+    if (verb == "devices.revoke" || verb == "station.rename") {
+        const QByteArray name = verb == "devices.revoke" ? QByteArrayLiteral("id")
+                                                          : QByteArrayLiteral("label");
+        QVariant value;
+        if (!hasExactlyArguments(invoke.arguments, {name})
+            || !hasWireKind(invoke.arguments, name, MirrorWireKind::Utf8)
+            || !findArgument(invoke.arguments, name, &value)
+            || value.typeId() != QMetaType::QString) {
+            if (verb == "devices.revoke") {
+                emitResult(verb, invoke.commandId, false,
+                           QStringLiteral("The request to remove a device was not understood."),
+                           {});
+            } else {
+                emitResult(verb, invoke.commandId, false,
+                           QStringLiteral("The request to rename the Core was not understood."),
+                           {});
+            }
+            return;
+        }
+        result = verb == "devices.revoke" ? m_deviceAdmin->revoke(value.toString())
+                                          : m_deviceAdmin->rename(value.toString());
+    } else {
+        if (!invoke.arguments.isEmpty()) {
+            if (verb == "station.retireToken") {
+                emitResult(verb, invoke.commandId, false,
+                           QStringLiteral("The request to stop accepting the pairing token "
+                                          "was not understood."),
+                           {});
+            } else {
+                emitResult(verb, invoke.commandId, false,
+                           QStringLiteral("The request to confirm the key backup was not "
+                                          "understood."),
+                           {});
+            }
+            return;
+        }
+        result = verb == "station.retireToken" ? m_deviceAdmin->retireToken()
+                                               : m_deviceAdmin->acknowledgeKeyBackup();
+    }
+    emitResult(verb, invoke.commandId, result.accepted, result.reason,
+               result.accepted ? QList<QByteArray>{"devices"} : QList<QByteArray>{});
+}
+
+// iPhone app Task 14 (R-IOS-08, pairingVersion 1). pairing.open answers
+// with the window's code in `code` ("" while no code is shown);
+// StationServer blanks it for any connection not signed in with a paired
+// device's key before the result leaves the Core.
+void SessionCommandDispatcher::handlePairingWindow(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    const bool open = verb == "pairing.open";
+    if (m_deviceAdmin.isNull()) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("This Core cannot pair new devices."), {});
+        return;
+    }
+    if (!invoke.arguments.isEmpty()) {
+        emitResult(verb, invoke.commandId, false,
+                   open ? QStringLiteral("The request to open pairing was not understood.")
+                        : QStringLiteral("The request to close pairing was not understood."),
+                   {});
+        return;
+    }
+    const DeviceAdminResult result =
+        open ? m_deviceAdmin->openPairing() : m_deviceAdmin->closePairing();
+    if (!result.accepted || !open) {
+        emitResult(verb, invoke.commandId, result.accepted, result.reason,
+                   result.accepted ? QList<QByteArray>{"devices"} : QList<QByteArray>{});
+        return;
+    }
+    emit commandResultReady(SessionMessages::commandResult(
+        verb, invoke.commandId, true, QString(), {"devices"},
+        {MirrorUpdate{0, QByteArrayLiteral("code"), MirrorWireKind::Utf8,
+                      QVariant(m_deviceAdmin->pairingCode())}}));
+}
+
 void SessionCommandDispatcher::handleSetStationTci(const SessionMessage& invoke)
 {
     QVariant enabled;

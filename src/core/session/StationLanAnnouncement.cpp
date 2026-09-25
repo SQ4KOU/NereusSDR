@@ -1,6 +1,18 @@
 // NereusSDR-original strict Core LAN discovery codec.
 #include "StationLanAnnouncement.h"
 
+static_assert(4 + 1 + 1 + 2 + 95 + 1 + NereusSDR::kStationLanMaxCoreNameBytes + 1 + 1
+                      + NereusSDR::kStationLanMaxRadioNameBytes + 17 + 1
+                      + NereusSDR::kStationLanIdentityBytes + 1
+                      + NereusSDR::kStationLanMaxLabelBytes + 1
+                      // iPhone app Task 71: the device count.
+                      + 1
+                  == NereusSDR::kStationLanMaxSchema2DatagramBytes,
+              "the largest schema-2 announcement is 480 bytes");
+static_assert(NereusSDR::kStationLanMaxSchema2DatagramBytes
+                  <= NereusSDR::kStationLanMaxDatagramBytes,
+              "a schema-2 announcement always fits a listener's datagram bound");
+
 namespace NereusSDR {
 namespace {
 
@@ -62,6 +74,30 @@ bool validText(const QString& value, int minimumBytes, int maximumBytes)
         && encoded.isValidUtf8() && QString::fromUtf8(encoded) == value;
 }
 
+// Section 14 of the link document: a label is ASCII letters, digits, '/',
+// '_' and '-' (StationLabel's alphabet), at most kStationLanMaxLabelBytes.
+bool validLabel(const QString& value)
+{
+    if (value.size() > kStationLanMaxLabelBytes) {
+        return false;
+    }
+    for (const QChar character : value) {
+        const ushort unicode = character.unicode();
+        const bool allowed = (unicode >= 'A' && unicode <= 'Z') || (unicode >= 'a' && unicode <= 'z')
+            || (unicode >= '0' && unicode <= '9') || unicode == '/' || unicode == '_'
+            || unicode == '-';
+        if (!allowed) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool validPairing(quint8 value)
+{
+    return value <= static_cast<quint8>(StationLanPairing::Code);
+}
+
 bool validate(const StationLanAnnouncement& value, QString* error)
 {
     if (value.controlPort == 0) {
@@ -84,6 +120,38 @@ bool validate(const StationLanAnnouncement& value, QString* error)
     if (!canonicalHexPairs(value.radioMac, kMacBytes)
         || (value.radioConnected && value.radioMac == QLatin1String(kUnknownMac))) {
         setError(error, "Station LAN announcement has an invalid radio MAC.");
+        return false;
+    }
+    if (value.schema == kStationLanAnnouncementSchema1) {
+        // Schema 1 has nowhere to put these, so a value holding them would
+        // not come back from its own bytes.
+        if (value.claimed || !value.identity.isEmpty() || !value.label.isEmpty()
+            || value.pairing != StationLanPairing::Closed || value.devicesConnected) {
+            setError(error, "Station LAN announcement schema 1 cannot carry the Core's identity.");
+            return false;
+        }
+        return true;
+    }
+    if (value.schema != kStationLanAnnouncementSchema2) {
+        setError(error, "Station LAN announcement has an unsupported schema.");
+        return false;
+    }
+    if (value.identity.size() != kStationLanIdentityBytes) {
+        setError(error, "Station LAN announcement has an invalid identity.");
+        return false;
+    }
+    if (!validLabel(value.label)) {
+        setError(error, "Station LAN announcement has an invalid label.");
+        return false;
+    }
+    if (!validPairing(static_cast<quint8>(value.pairing))) {
+        setError(error, "Station LAN announcement has an invalid pairing state.");
+        return false;
+    }
+    if (value.devicesConnected
+        && (*value.devicesConnected < 0
+            || *value.devicesConnected > kStationLanMaxDevicesConnected)) {
+        setError(error, "Station LAN announcement has an invalid device count.");
         return false;
     }
     return true;
@@ -110,6 +178,30 @@ bool takeByte(const QByteArray& bytes, int* offset, quint8* result)
 
 } // namespace
 
+QString stationLanPairingName(StationLanPairing pairing)
+{
+    switch (pairing) {
+    case StationLanPairing::Click:
+        return QStringLiteral("click");
+    case StationLanPairing::Code:
+        return QStringLiteral("code");
+    case StationLanPairing::Closed:
+        break;
+    }
+    return QStringLiteral("closed");
+}
+
+std::optional<StationLanPairing> stationLanPairingFromName(const QString& name)
+{
+    for (const StationLanPairing pairing :
+         {StationLanPairing::Closed, StationLanPairing::Click, StationLanPairing::Code}) {
+        if (name == stationLanPairingName(pairing)) {
+            return pairing;
+        }
+    }
+    return std::nullopt;
+}
+
 QByteArray encodeStationLanAnnouncement(const StationLanAnnouncement& value, QString* error)
 {
     if (!validate(value, error)) {
@@ -118,10 +210,9 @@ QByteArray encodeStationLanAnnouncement(const StationLanAnnouncement& value, QSt
     const QByteArray coreName = value.coreName.toUtf8();
     const QByteArray radioName = value.radioName.toUtf8();
     QByteArray out;
-    out.reserve(4 + 1 + 1 + 2 + kFingerprintBytes + 1 + coreName.size() + 1 + 1
-                + radioName.size() + kMacBytes);
+    out.reserve(kStationLanMaxSchema2DatagramBytes);
     out.append("NRSC", 4);
-    out.append(static_cast<char>(kStationLanAnnouncementSchema));
+    out.append(static_cast<char>(value.schema));
     out.append(static_cast<char>(kStationLanWssControlService));
     out.append(static_cast<char>(value.controlPort >> 8));
     out.append(static_cast<char>(value.controlPort & 0xff));
@@ -132,6 +223,18 @@ QByteArray encodeStationLanAnnouncement(const StationLanAnnouncement& value, QSt
     out.append(static_cast<char>(radioName.size()));
     out.append(radioName);
     out.append(value.radioMac.toLatin1());
+    if (value.schema == kStationLanAnnouncementSchema2) {
+        const QByteArray label = value.label.toLatin1();
+        out.append(value.claimed ? '\x01' : '\x00');
+        out.append(value.identity);
+        out.append(static_cast<char>(label.size()));
+        out.append(label);
+        out.append(static_cast<char>(value.pairing));
+        // iPhone app Task 71 (ruling 10.4): appended after Pairing.
+        if (value.devicesConnected) {
+            out.append(static_cast<char>(*value.devicesConnected));
+        }
+    }
     if (out.size() > kStationLanMaxDatagramBytes) {
         setError(error, "Station LAN announcement is too large.");
         return {};
@@ -160,7 +263,7 @@ std::optional<StationLanAnnouncement> decodeStationLanAnnouncement(const QByteAr
         setError(error, "Station LAN announcement is malformed.");
         return std::nullopt;
     }
-    if (schema != kStationLanAnnouncementSchema) {
+    if (schema != kStationLanAnnouncementSchema1 && schema != kStationLanAnnouncementSchema2) {
         setError(error, "Station LAN announcement has an unsupported schema.");
         return std::nullopt;
     }
@@ -182,8 +285,41 @@ std::optional<StationLanAnnouncement> decodeStationLanAnnouncement(const QByteAr
         || !takeByte(bytes, &offset, &connected)
         || !takeByte(bytes, &offset, &radioLength)
         || !take(bytes, &offset, radioLength, &radioName)
-        || !take(bytes, &offset, kMacBytes, &radioMac) || offset != bytes.size()) {
+        || !take(bytes, &offset, kMacBytes, &radioMac)) {
         setError(error, "Station LAN announcement is malformed.");
+        return std::nullopt;
+    }
+    quint8 claimed = 0, labelLength = 0, pairing = 0;
+    QByteArray identity, label;
+    if (schema == kStationLanAnnouncementSchema2
+        && (!takeByte(bytes, &offset, &claimed)
+            || !take(bytes, &offset, kStationLanIdentityBytes, &identity)
+            || !takeByte(bytes, &offset, &labelLength)
+            || !take(bytes, &offset, labelLength, &label)
+            || !takeByte(bytes, &offset, &pairing))) {
+        setError(error, "Station LAN announcement is malformed.");
+        return std::nullopt;
+    }
+    // iPhone app Task 71 (ruling 10.4): the device count, when the Core
+    // sent it; a datagram without it (an older Core) leaves it unknown.
+    std::optional<int> devicesConnected;
+    if (schema == kStationLanAnnouncementSchema2 && offset < bytes.size()) {
+        quint8 count = 0;
+        takeByte(bytes, &offset, &count);
+        devicesConnected = count;
+    }
+    // Schema 2 extends by appending (link document section 14.1): a reader
+    // ignores bytes after the fields it knows. Schema 1 stays exact.
+    if (schema == kStationLanAnnouncementSchema1 && offset != bytes.size()) {
+        setError(error, "Station LAN announcement is malformed.");
+        return std::nullopt;
+    }
+    if (claimed > 1) {
+        setError(error, "Station LAN announcement has an invalid claimed state.");
+        return std::nullopt;
+    }
+    if (!validPairing(pairing)) {
+        setError(error, "Station LAN announcement has an invalid pairing state.");
         return std::nullopt;
     }
     if (connected > 1) {
@@ -205,6 +341,16 @@ std::optional<StationLanAnnouncement> decodeStationLanAnnouncement(const QByteAr
     value.radioName = QString::fromUtf8(radioName);
     value.radioMac = QString::fromLatin1(radioMac);
     value.radioConnected = connected == 1;
+    value.schema = schema;
+    if (schema == kStationLanAnnouncementSchema2) {
+        value.claimed = claimed == 1;
+        value.identity = identity;
+        // Latin-1 keeps every byte as one character, so validate() refuses
+        // anything outside the label alphabet rather than it vanishing here.
+        value.label = QString::fromLatin1(label);
+        value.pairing = static_cast<StationLanPairing>(pairing);
+        value.devicesConnected = devicesConnected;
+    }
     if (!validate(value, error)) {
         return std::nullopt;
     }

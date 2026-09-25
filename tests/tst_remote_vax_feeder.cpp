@@ -37,6 +37,11 @@
 //   2026-09-23  J.J. Boyd / KG4VCF  R3 receiver audio fix wave: slices
 //                                    sharing a channel are mixed. AI-assisted
 //                                    transformation via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app Task 73 (ruling 5.14): the
+//                                    Core's own VAX tee, the level
+//                                    reference here, is told to carry the
+//                                    window's slices again. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -1128,6 +1133,12 @@ private slots:
         devices.start();
 
         h.connectSession();
+        // iPhone app Task 73 (ruling 5.14): once the window owns the Core's
+        // slices, the Core computer's VAX carries none of them. Here the
+        // Core's tee is only the local level the window's VAX is held to
+        // (a real Core publishes no VAX device, R-R3-44), so it is told to
+        // carry every slice again.
+        h.stationAudio->setVaxSliceMask(0xFFFFFFFFu);
         QVERIFY(remoteMedia.receiverAudioNegotiated());
         h.remote.audioEngine()->setMasterMuted(true);
         QTRY_VERIFY(h.remote.sliceById(h.sliceB) != nullptr);
@@ -1237,6 +1248,12 @@ private slots:
         devices.start();
 
         h.connectSession();
+        // iPhone app Task 73 (ruling 5.14): once the window owns the Core's
+        // slices, the Core computer's VAX carries none of them. Here the
+        // Core's tee is only the local level the window's VAX is held to
+        // (a real Core publishes no VAX device, R-R3-44), so it is told to
+        // carry every slice again.
+        h.stationAudio->setVaxSliceMask(0xFFFFFFFFu);
         QVERIFY(remoteMedia.receiverAudioNegotiated());
         h.remote.audioEngine()->setMasterMuted(true);
         QTRY_VERIFY(h.remote.sliceById(h.sliceA) != nullptr);

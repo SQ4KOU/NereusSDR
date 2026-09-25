@@ -15,6 +15,7 @@
 #include "models/PureSignalSettings.h"
 #include "models/SliceModel.h"
 #include "fakes/LoopbackTransport.h"
+#include "fakes/UpgradedCoreToken.h"
 
 using namespace NereusSDR;
 using Test::LoopbackTransport;
@@ -109,7 +110,7 @@ private slots:
         station.setLastRadioInfoForTest(info);
         const int id = station.addSlice();
         auto* coreSlice = station.sliceById(id);
-        StationServer server(&station, AppSettings::instance(), security.path());
+        StationServer server(&station, AppSettings::instance(), NereusSDR::Test::seedUpgradedCoreToken(security.path()));
         RadioModel gui(RadioModel::Role::Remote);
         SettingsProxy proxy;
         StationClient client(&gui, &proxy);
@@ -155,7 +156,7 @@ private slots:
         RadioModel station;
         station.setBoardForTest(HPSDRHW::HermesLite);
         const int id = station.addSlice();
-        StationServer server(&station, AppSettings::instance(), security.path());
+        StationServer server(&station, AppSettings::instance(), NereusSDR::Test::seedUpgradedCoreToken(security.path()));
         RadioModel gui(RadioModel::Role::Remote);
         SettingsProxy proxy;
         StationClient client(&gui, &proxy);
@@ -201,7 +202,7 @@ private slots:
             QVERIFY(aId >= 0 && bId >= 0 && aId != bId);
             auto* coreA = station.sliceById(aId);
             auto* coreB = station.sliceById(bId);
-            StationServer server(&station, settings, security.path());
+            StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(security.path()));
             RadioModel gui(RadioModel::Role::Remote);
             // Stale client preferences must lose to the startup snapshot.
             gui.pureSignalSettings()->setMoxDelaySeconds(9.0);

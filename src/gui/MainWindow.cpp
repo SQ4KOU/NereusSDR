@@ -135,6 +135,9 @@
 //                come from TxAnalyzer::applyStationRates, shared with
 //                nereusd. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-24: Part C fix wave: the optional device shortName in
+//               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -487,6 +490,7 @@ warren@wpratt.com
 #include "UnbuiltFeatures.h"
 // Remote-daemon R2 Task 20: the wss client and the settings backend it
 // writes through. Both are used only on the m_station.isRemote() path.
+#include "core/security/ClientDeviceIdentity.h"
 #include "core/session/StationClient.h"
 #include "models/RfKitModel.h"
 #include "RemoteConnectionController.h"
@@ -1277,6 +1281,14 @@ void MainWindow::ensureRemoteSession()
         }
 
         m_stationClient = new StationClient(m_radioModel, proxy, this);
+        // iPhone app Task 18 (R-IOS-08): this computer's own device key.
+        // A Core it paired with is signed in to by key, and a token
+        // sign-in to a Core with an identity enrols the key (the link
+        // document, section 3.5). The Core lists it by the machine's name,
+        // and its short name is the short host name (Part C fix wave).
+        m_stationClient->setDeviceIdentity(ClientDeviceIdentity::forThisProfile(),
+                                           ClientDeviceIdentity::machineName(),
+                                           ClientDeviceIdentity::machineShortName());
         m_remoteConnection = new RemoteConnectionController(
             m_stationClient, m_radioModel, m_station, this);
         connect(m_remoteConnection, &RemoteConnectionController::changed,

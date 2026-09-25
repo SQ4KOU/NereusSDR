@@ -399,3 +399,83 @@ def test_fetched_notices_cover_every_platform_and_only_the_build_options(tmp_pat
     libdatachannel = _generate("libdatachannel", tmp_path)
     assert "Datachannel Holder" in libdatachannel and "Impl Holder" in libdatachannel
     assert "Sctp Holder" not in libdatachannel  # deps/ has its own files
+
+
+# --------------------------------------------------------------------------
+# Dedications (libsodium): public-domain and CC0 comments are notices too
+
+DEDICATED = """\
+/*
+version 20080912
+D. J. Bernstein
+Public domain.
+*/
+
+/* a plain comment */
+int x;
+"""
+
+WAIVED = """\
+/*
+ * Written by Someone. To the extent possible under law, the
+ * author has waived all copyright and related or neighboring rights.
+ *
+ * Copyright (c) 2015 Someone
+ */
+"""
+
+
+def test_dedications_are_read_only_when_asked(tmp_path):
+    assert sn.extract_blocks(DEDICATED) == []
+    assert sn.extract_dedications(DEDICATED) == [DEDICATED.split("\n\n")[0]]
+    src = tmp_path / "salsa.c"
+    src.write_text(DEDICATED)
+    plain, _ = sn.collect([(src, "salsa.c")], [LICENCE_TEXT])
+    assert plain == []
+    notices, _ = sn.collect([(src, "salsa.c")], [LICENCE_TEXT], dedications=True)
+    assert [n.text for n in notices] == [DEDICATED.split("\n\n")[0]]
+
+
+def test_a_waiver_above_the_copyright_line_is_kept_with_it():
+    # Without dedications the block starts at the copyright line; with
+    # them, at the comment's start, so the waiver travels with it.
+    assert sn.extract_blocks(WAIVED)[0].startswith(" * Copyright (c) 2015 Someone")
+    assert sn.extract_blocks(WAIVED, dedications=True) == [WAIVED.rstrip("\n")]
+    # And it is not listed a second time as a bare dedication.
+    assert sn.extract_dedications(WAIVED) == []
+
+
+def test_libsodium_headers_are_read_where_the_archive_has_them(tmp_path):
+    build = tmp_path / "build"
+    src = build / "_deps" / "nereus_libsodium-src" / "src" / "libsodium"
+    copy = build / "_deps" / "nereus_libsodium-include"
+    (src / "crypto_x").mkdir(parents=True)
+    (src / "include" / "sodium").mkdir(parents=True)
+    (copy / "sodium").mkdir(parents=True)
+    (src / "crypto_x" / "x.c").write_text('#include "sodium/x.h"\n')
+    (src / "include" / "sodium" / "x.h").write_text("/* Public domain. */\n")
+    (copy / "sodium" / "x.h").write_text("/* Public domain. */\n")
+    commands = [{"directory": str(build), "file": str(src / "crypto_x" / "x.c"),
+                 "command": f"cc -I{copy} -c x.c"}]
+    (build / "compile_commands.json").write_text(json.dumps(commands))
+    args = type("Args", (), {"build_dir": build})()
+    source_set = sn.PRESETS["libsodium"](REPO, args)
+    names = sorted(f.relative_to(source_set.base.resolve()).as_posix()
+                   for f in source_set.files)
+    assert names == ["src/libsodium/crypto_x/x.c", "src/libsodium/include/sodium/x.h"]
+    assert source_set.dedications
+
+
+def test_libsodium_notices_are_current_when_fetched():
+    for name in ("build-lane-b", "build-integration", "build", "build-licences"):
+        build = REPO / name
+        if (build / "_deps" / "nereus_libsodium-src").is_dir() \
+                and (build / "compile_commands.json").is_file():
+            break
+    else:
+        pytest.skip("no configured build with libsodium fetched")
+    target = REPO / "packaging" / "third-party-licenses" / "libsodium-notices.txt"
+    result = subprocess.run(
+        [sys.executable, str(SOURCE_SCRIPT), "libsodium", "--build-dir", str(build),
+         "--check", str(target)], capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr

@@ -1,0 +1,195 @@
+#pragma once
+// no-port-check: NereusSDR-original.
+// =================================================================
+// src/core/SliceOwnership.h  (NereusSDR)
+// =================================================================
+//
+// Whose each slice is (iPhone app plan Task 73, R-IOS-02; the several-
+// devices design, docs/architecture/2026-09-24-several-devices-on-one-core-
+// design.md, sections 5.1, 5.2 and 5.7, rulings 5.1, 5.2, 5.10 and 5.11).
+//
+// Up to four devices use one Core at once, and each owns its slices (D45).
+// This class is the Core's record of that: every live slice's owner, a
+// second mark, **held for**, on a slice the station device runs for a
+// device that is not there, and each owner's active slice. It owns no slice
+// and sends nothing: RadioModel tells it when slices come and go, and the
+// Core's session server reads it to decide which device sees which object
+// and who may change what. Task 74 adds each receiver's anchor.
+//
+// ---- Owners (ruling 5.1) ----
+//
+// A slice's owner is one of:
+//   - a device, by the id the Core's session registry knows it by (a paired
+//     device's raw key id, or "token:<n>" for a window signed in with the
+//     older token);
+//   - the station device, stationDevice(): the operating position at the
+//     radio itself. On a Core with no desktop it owns only slices it runs
+//     for absent devices, each held for one (heldFor);
+//   - none (an empty id): the slices a Core made at its first start, or
+//     restored from a manifest written before owners existed, until the
+//     first device admitted while no other is connected adopts them.
+//
+// Owner marks live at the Core. On the wire they show only as which slice:
+// objects a device receives and as the owner fields of markers.
+//
+// ---- The active slice (rulings 5.10, 5.11) ----
+//
+// Each owner has one active slice among its own (activeFor): the one it
+// last chose while it still owns it, else its first slice in creation
+// order. A slice's `active` property means "its owner's active slice"
+// (isActive), so each device sees exactly one active slice among its own.
+// The station-level active slice, which drives the duties that exist once
+// per radio, is the transmit holder's active slice while transmit is held,
+// otherwise the most recent active-slice choice by any owner
+// (stationActiveSlice). Until remote transmit exists nobody holds it.
+//
+// ---- New slices ----
+//
+// A slice made while a CreatorScope is open belongs to that scope's owner
+// (a device's addSlice, its first slice at admission, a restored slice);
+// any other new slice has no owner.
+//
+// Single thread: RadioModel's.
+//
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-09-25: original implementation for NereusSDR by J.J. Boyd
+//               (KG4VCF), iPhone app plan Task 73 (R-IOS-02), with
+//               AI-assisted implementation via Anthropic Claude Code.
+// =================================================================
+
+#include <QByteArray>
+#include <QHash>
+#include <QList>
+#include <QObject>
+#include <QSet>
+
+#include <functional>
+
+namespace NereusSDR {
+
+class SliceOwnership : public QObject {
+    Q_OBJECT
+
+public:
+    struct Mark {
+        /// The owner's id, stationDevice(), or empty for no owner.
+        QByteArray owner;
+        /// The device the station device runs this slice for; set only
+        /// when owner is stationDevice().
+        QByteArray heldFor;
+
+        bool operator==(const Mark& other) const
+        {
+            return owner == other.owner && heldFor == other.heldFor;
+        }
+        bool operator!=(const Mark& other) const { return !(*this == other); }
+        bool isHeld() const { return !heldFor.isEmpty(); }
+        /// Whose slice it is on the wire: the device it is held for, else
+        /// its owner. Its marker goes to every view but this one's.
+        QByteArray subject() const { return heldFor.isEmpty() ? owner : heldFor; }
+    };
+
+    /// The station device's id. Never a paired device's id (those are 32
+    /// raw bytes) or a token window's ("token:<n>").
+    static const QByteArray& stationDevice();
+
+    explicit SliceOwnership(QObject* parent = nullptr);
+
+    // ---- Lifecycle (RadioModel) ----
+
+    /// A slice was made: appended to the creation order, owned by the open
+    /// CreatorScope's owner, or by none.
+    void noteSliceAdded(int sliceId);
+    /// A slice is being removed: from now on it is nobody's slice and no
+    /// owner's active slice, but its mark is kept until endRemove(), so what
+    /// is sent about its removal still knows whose it was. The most recent
+    /// choice moves to its owner's next slice.
+    void beginRemove(int sliceId);
+    /// The slice's removal has been announced; its mark is forgotten.
+    void endRemove(int sliceId);
+    /// The creation order, as the restart manifest listed it.
+    void setOrder(const QList<int>& sliceIds);
+
+    bool isLive(int sliceId) const;
+    /// Every live slice, in creation order.
+    QList<int> liveSlices() const;
+
+    // ---- Marks ----
+
+    /// A live slice's mark, or a slice's being removed; empty otherwise.
+    Mark mark(int sliceId) const;
+    /// Sets a live slice's mark; markChanged when it differs. A held mark
+    /// always has the station device as owner.
+    void setMark(int sliceId, const Mark& mark);
+    void setOwner(int sliceId, const QByteArray& owner);
+    /// The station device runs the slice for `device`, which is absent.
+    void hold(int sliceId, const QByteArray& device);
+
+    /// Live slices whose owner is `owner` (for stationDevice(), held ones
+    /// included), in creation order.
+    QList<int> ownedBy(const QByteArray& owner) const;
+    /// Live slices held for `device`, in creation order.
+    QList<int> heldFor(const QByteArray& device) const;
+    /// Live slices with no owner, in creation order.
+    QList<int> unowned() const;
+
+    /// Ruling 5.2 step 1: slices held for `device` become its own again.
+    /// Returns them.
+    QList<int> returnHeld(const QByteArray& device);
+    /// Ruling 5.2 step 3: `device` adopts every slice with no owner (never a
+    /// slice held for another device). The slice that was active among the
+    /// unowned ones becomes its active slice when it has none. Returns them.
+    QList<int> adoptUnowned(const QByteArray& device);
+
+    // ---- The active slice ----
+
+    /// `owner`'s active slice: the one it last chose while it still owns it,
+    /// else its first in creation order; -1 when it owns none.
+    int activeFor(const QByteArray& owner) const;
+    /// Whether `sliceId` is its owner's active slice (the slice's `active`).
+    bool isActive(int sliceId) const;
+    /// `owner` chose `sliceId`; it is also now the most recent choice.
+    void setActive(const QByteArray& owner, int sliceId);
+    /// The station-level active slice (ruling 5.11); -1 when none is known.
+    int stationActiveSlice() const;
+    /// Task 34 names the transmit holder; empty while nobody holds it.
+    void setTransmitHolder(const QByteArray& holder);
+    QByteArray transmitHolder() const { return m_transmitHolder; }
+
+    // ---- New slices ----
+
+    /// While one is open, a new slice belongs to its owner. Scopes nest.
+    class CreatorScope {
+    public:
+        CreatorScope(SliceOwnership* ownership, const QByteArray& owner);
+        ~CreatorScope();
+        CreatorScope(const CreatorScope&) = delete;
+        CreatorScope& operator=(const CreatorScope&) = delete;
+
+    private:
+        SliceOwnership* m_ownership;
+        QByteArray m_previous;
+    };
+    QByteArray creator() const { return m_creator; }
+
+signals:
+    /// A live slice's mark changed from (oldOwner, oldHeldFor) to what
+    /// mark() now reads.
+    void markChanged(int sliceId, const QByteArray& oldOwner, const QByteArray& oldHeldFor);
+    /// Some owner's active slice, or the station-level one, may have moved.
+    void activeChanged();
+
+private:
+    QList<int> matching(const std::function<bool(const Mark&)>& test) const;
+
+    QList<int> m_order;
+    QHash<int, Mark> m_marks;
+    QSet<int> m_removing;
+    QHash<QByteArray, int> m_chosen;
+    int m_mostRecent = -1;
+    QByteArray m_transmitHolder;
+    QByteArray m_creator;
+};
+
+} // namespace NereusSDR

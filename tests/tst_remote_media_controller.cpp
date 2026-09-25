@@ -54,6 +54,7 @@
 #include "OperatorWording.h"
 #include "gui/OperatorReasonText.h"
 #include "fakes/RemoteAudioSessionHarness.h"
+#include "fakes/UpgradedCoreToken.h"
 
 using namespace NereusSDR;
 
@@ -494,7 +495,7 @@ private slots:
         QTemporaryDir dir;
         AppSettings settings(dir.filePath("station.settings"));
         RadioModel station;
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         server.setMediaEnabled(true);
         QPointer<DisplayTransport> coreMedia;
         DaemonMediaController core(&server, &station, nullptr,
@@ -575,7 +576,7 @@ private slots:
         QTemporaryDir dir;
         AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
         RadioModel station;
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         server.setMediaEnabled(true);
         RadioModel remote(RadioModel::Role::Remote);
         remote.audioEngine()->setMasterMuted(true);
@@ -608,7 +609,7 @@ private slots:
         QTemporaryDir dir;
         AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
         RadioModel station;
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         server.setMediaEnabled(true);
         RadioModel remote(RadioModel::Role::Remote);
         remote.audioEngine()->setMasterMuted(true);
@@ -645,7 +646,7 @@ private slots:
         QTemporaryDir dir;
         AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
         RadioModel station;
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         server.setMediaEnabled(true);
 
         RadioModel remote(RadioModel::Role::Remote);
@@ -691,7 +692,7 @@ private slots:
         QTemporaryDir dir;
         AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
         RadioModel station;
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         server.setMediaEnabled(true);
         RadioModel remote(RadioModel::Role::Remote);
         remote.audioEngine()->setMasterMuted(true);
@@ -764,7 +765,7 @@ private slots:
         QTemporaryDir dir;
         AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
         RadioModel station;
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         server.setMediaEnabled(true);
         RadioModel remote(RadioModel::Role::Remote);
         remote.audioEngine()->setMasterMuted(true);
@@ -824,7 +825,7 @@ private slots:
         QTemporaryDir dir;
         AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
         RadioModel station;
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         server.setMediaEnabled(true);
         // Core answers media only when a test case wants its description.
         bool coreOffers = false;
@@ -913,7 +914,7 @@ private slots:
         QTemporaryDir dir;
         AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
         RadioModel station;
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         server.setMediaEnabled(true);
         RadioModel remote(RadioModel::Role::Remote);
         remote.audioEngine()->setMasterMuted(true);
@@ -992,7 +993,7 @@ private slots:
         QTemporaryDir dir;
         AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
         RadioModel station;
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         server.setMediaEnabled(true);
         RadioModel remote(RadioModel::Role::Remote);
         remote.audioEngine()->setMasterMuted(true);
@@ -1196,7 +1197,7 @@ private slots:
         const int stream = sourceSlice->streamIndex();
         QVERIFY(stream >= 0);
         const double centre = station.streamCentreHz(stream);
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         server.setMediaEnabled(true);
         QPointer<DisplayTransport> sourceMedia;
         DaemonMediaController daemon(&server, &station, nullptr,
@@ -1371,7 +1372,7 @@ private slots:
         const int stream = sourceSlice->streamIndex();
         QVERIFY(stream >= 0);
         const double centre = station.streamCentreHz(stream);
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         server.setMediaEnabled(true);
         QPointer<DisplayTransport> sourceMedia;
         DaemonMediaController daemon(&server, &station, nullptr,
@@ -1559,7 +1560,7 @@ private slots:
         QVERIFY(sourceSlice);
         const int stream = sourceSlice->streamIndex();
         const double centre = station.streamCentreHz(stream);
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         server.setMediaEnabled(true);
         QPointer<DisplayTransport> sourceMedia;
         DaemonMediaController daemon(&server, &station, nullptr,
@@ -1660,7 +1661,7 @@ private slots:
         const int stream = slice->streamIndex();
         QVERIFY(stream >= 0);
         const double centre = station.streamCentreHz(stream);
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         server.setMediaEnabled(true);
         QPointer<DisplayTransport> sourceMedia;
         DaemonMediaController daemon(&server, &station, nullptr,
@@ -1812,7 +1813,7 @@ private slots:
         station.setConnectionStateForTest(ConnectionState::Connected);
         const int sliceId = station.addSlice();
         QVERIFY(station.sliceById(sliceId));
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         server.setMediaEnabled(true);
         QPointer<DisplayTransport> sourceMedia;
         DaemonMediaController daemon(&server, &station, nullptr,
@@ -1885,7 +1886,7 @@ private slots:
         const int stream = stationSlice->streamIndex();
         QVERIFY(stream >= 0);
         const double centre = station.streamCentreHz(stream);
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         server.setMediaEnabled(true);
         QPointer<DisplayTransport> sourceMedia;
         DaemonMediaController daemon(&server, &station, nullptr,
@@ -2083,7 +2084,7 @@ private slots:
         station.setConnectionStateForTest(ConnectionState::Connected);
         const int sliceId = station.addSlice();
         QVERIFY(station.sliceById(sliceId));
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         server.setMediaEnabled(true);
         QVERIFY(server.setDisplayBudgetLimits({10'000'000, 10'000'000, 1}));
         // Refused row: Core's state moves ahead of the GUI's view. When the
@@ -2187,7 +2188,7 @@ private slots:
         station.setConnectionStateForTest(ConnectionState::Connected);
         const int sliceId = station.addSlice();
         QVERIFY(station.sliceById(sliceId));
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         server.setMediaEnabled(true);
         QVERIFY(server.setDisplayBudgetLimits({10'000'000, 10'000'000, 1}));
         // Refused row: Core's state moves ahead of the GUI's view. When the
@@ -2288,7 +2289,7 @@ private slots:
         station.setConnectionStateForTest(ConnectionState::Connected);
         const int sliceId = station.addSlice();
         QVERIFY(station.sliceById(sliceId));
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         server.setMediaEnabled(true);
         QVERIFY(server.setDisplayBudgetLimits({10'000'000, 10'000'000, 1}));
         QPointer<DisplayTransport> sourceMedia;
@@ -2406,7 +2407,7 @@ private slots:
         const auto constrained = sumDisplayCharges(constrainedCharges);
         QVERIFY(constrained.has_value());
 
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         server.setMediaEnabled(true);
         QVERIFY(server.setDisplayBudgetLimits({constrained->applicationBytesPerSecond,
                                                constrained->spectrumSampleUnitsPerSecond, 1}));
@@ -2568,7 +2569,7 @@ private slots:
         const auto cut = sumDisplayCharges(cutCharges);
         QVERIFY(cut.has_value());
 
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         server.setMediaEnabled(true);
         QVERIFY(server.setDisplayBudgetLimits({10'000'000, 10'000'000, 1}));
         QPointer<DisplayTransport> sourceMedia;
@@ -2775,7 +2776,7 @@ private slots:
         station.setConnectionStateForTest(ConnectionState::Connected);
         const int sliceId = station.addSlice();
         QVERIFY(station.sliceById(sliceId));
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         server.setMediaEnabled(true);
         QVERIFY(server.setDisplayBudgetLimits({10'000'000, 10'000'000, 1}));
         // Refused row: Core's state moves ahead of the GUI's view. When the
@@ -2855,7 +2856,7 @@ private slots:
         station.setConnectionStateForTest(ConnectionState::Connected);
         const int sliceId = station.addSlice();
         QVERIFY(station.sliceById(sliceId));
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         server.setMediaEnabled(true);
         QVERIFY(server.setDisplayBudgetLimits({10'000'000, 10'000'000, 1}));
         // Refused row: Core's state moves ahead of the GUI's view. When the
@@ -2970,7 +2971,7 @@ private slots:
         QVERIFY(floor.has_value());
         const auto ps3AndFloor = sumDisplayCharges({ps3DisplayCharge(), floor->charge});
         QVERIFY(ps3AndFloor.has_value());
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         server.setMediaEnabled(true);
         QVERIFY(server.setDisplayBudgetLimits({ps3AndFloor->applicationBytesPerSecond,
                                                10'000'000, 1}));
@@ -3091,7 +3092,7 @@ private slots:
         SliceModel* stationSlice = station.slices().first();
         stationSlice->setStreamIndex(0);
         stationSlice->setFrequency(14225000);
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         server.setMediaEnabled(true);
         RadioModel remote(RadioModel::Role::Remote);
         remote.audioEngine()->setMasterMuted(true); // Display fixture opens no speaker.
@@ -3410,7 +3411,7 @@ private slots:
         SliceModel* stationSlice = station.slices().first();
         stationSlice->setStreamIndex(0);
         stationSlice->setFrequency(14225000);
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         server.setMediaEnabled(true);
         RadioModel remote(RadioModel::Role::Remote);
         remote.audioEngine()->setMasterMuted(true); // Display fixture opens no speaker.
@@ -3526,7 +3527,7 @@ private slots:
         SliceModel* stationSlice = station.slices().first();
         stationSlice->setStreamIndex(0);
         stationSlice->setFrequency(14225000);
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         server.setMediaEnabled(true);
         RadioModel remote(RadioModel::Role::Remote);
         remote.audioEngine()->setMasterMuted(true); // Display fixture opens no speaker.
@@ -3640,7 +3641,7 @@ private slots:
         const int stream = slice->streamIndex();
         QVERIFY(stream >= 0);
         const double centre = station.streamCentreHz(stream);
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         server.setMediaEnabled(true);
         QPointer<DisplayTransport> sourceMedia;
         DaemonMediaController daemon(&server, &station, nullptr,
@@ -3744,7 +3745,7 @@ private slots:
         const int stream = slice->streamIndex();
         QVERIFY(stream >= 0);
         const double centre = station.streamCentreHz(stream);
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         server.setMediaEnabled(true);
         // What DaemonApp does with display_adaptive on and no limits set.
         server.setDisplayBudgetForReasonPeersOnly(true);
@@ -3855,7 +3856,7 @@ private slots:
         const int stream = slice->streamIndex();
         QVERIFY(stream >= 0);
         const double centre = station.streamCentreHz(stream);
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         server.setMediaEnabled(true);
         QVERIFY(server.setDisplayBudgetLimits({10'000'000, 10'000'000, 1}));
         // Refused row: Core's state moves ahead of the GUI's view. When the
@@ -4978,11 +4979,22 @@ private slots:
         h.remoteHeadphonesBus->setOutputPacingAvailableForTesting(false);
         QTRY_VERIFY_WITH_TIMEOUT(!remoteMedia.headphonesProblem().isEmpty(), 5000);
         const QString problem = remoteMedia.headphonesProblem();
-        QCOMPARE(problem, RemoteMediaController::headphonesFaultText(
-                              RemoteAudioReceiver::Fault::SpeakerTimingUnavailable));
-        QCOMPARE(problem, QStringLiteral("The headphones stopped reporting their timing. Turn the "
-                                         "headphones off and on in Setup, Audio, Devices to try "
-                                         "again."));
+        // Which fault the receiver reports depends on where its worker is
+        // when the timing goes: at its pacing read it reports the timing,
+        // inside its write loop the write fails first (the headphones bus
+        // refuses a write without timing). Either stops the headphones, and
+        // the worker returns after the first, so exactly one is reported.
+        const QString timingText = QStringLiteral(
+            "The headphones stopped reporting their timing. Turn the headphones off and on in "
+            "Setup, Audio, Devices to try again.");
+        const QString writeText = QStringLiteral(
+            "Audio could not be sent to the headphones. Turn the headphones off and on in "
+            "Setup, Audio, Devices to try again.");
+        QCOMPARE(RemoteMediaController::headphonesFaultText(
+                     RemoteAudioReceiver::Fault::SpeakerTimingUnavailable), timingText);
+        QCOMPARE(RemoteMediaController::headphonesFaultText(
+                     RemoteAudioReceiver::Fault::SpeakerWriteFailed), writeText);
+        QVERIFY2(problem == timingText || problem == writeText, qPrintable(problem));
         QVERIFY(OperatorWording::isPlain(problem));
         QCOMPARE(errors.count(), 1);
         QCOMPARE(errors.constFirst().at(0).toString(), problem);

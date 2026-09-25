@@ -54,6 +54,11 @@
 //   2026-09-23: cover remote_bind "::" taking IPv4 and IPv6, by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-25: a Core restart keeps each slice's owner or held-for mark,
+//               and a manifest from before owners restores slices with no
+//               owner (iPhone app plan Task 73, R-IOS-02), by J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 
 #include <QtTest/QtTest>
 
@@ -78,11 +83,35 @@
 #include "core/daemon/DisplayLoadInputs.h"
 #include "core/session/media/DisplayLoadGovernor.h"
 #include "core/session/StationServer.h"
+#include "core/security/StationIdentity.h"
 #include "core/session/StationLanAnnouncer.h"
+#include "core/session/DnsSdAdvertiser.h"
+#include "core/session/StationDevicesFacade.h"
+#include "core/security/PairingWindow.h"
+#include "core/security/StationLabel.h"
+#include "core/AppSettings.h"
+#include "core/ReceiveLayoutStore.h"
+#include "core/SliceOwnership.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
 using namespace NereusSDR;
+
+namespace {
+// iPhone app Task 12 put the Core's listener on by default (TCP 47910 on
+// every interface). A test Core opens no listener unless the test asks for
+// one on a port of its own.
+NereusSDR::DaemonConfig testCoreConfig()
+{
+    NereusSDR::DaemonConfig config = NereusSDR::DaemonConfig::defaults();
+    config.remotePort = 0;
+    // iPhone app Task 17: nor its status page (on by default beside the
+    // listener, TCP 47911), which listenerConfig() below would otherwise
+    // open on a shared port.
+    config.statusPage = false;
+    return config;
+}
+} // namespace
 
 namespace {
 
@@ -90,7 +119,7 @@ namespace {
 // ctest shard cannot collide with it.
 DaemonConfig listenerConfig()
 {
-    DaemonConfig cfg = DaemonConfig::defaults();
+    DaemonConfig cfg = testCoreConfig();
     QTcpServer probe;
     if (probe.listen(QHostAddress::LocalHost, 0)) {
         cfg.remotePort = static_cast<int>(probe.serverPort());
@@ -113,7 +142,7 @@ private slots:
     {
         DaemonApp app;
         app.primeBoardForTest(HPSDRHW::HermesLite);
-        QVERIFY(app.start(DaemonConfig::defaults()));
+        QVERIFY(app.start(testCoreConfig()));
         AudioEngine* const engine = app.m_radioModel->audioEngine();
         QVERIFY(!engine->vaxOutputsAllowed());
         // Even with devices on offer, none is made.
@@ -136,10 +165,10 @@ private slots:
     {
         DaemonApp app;
         app.primeBoardForTest(HPSDRHW::HermesLite);
-        QVERIFY(app.start(DaemonConfig::defaults()));
+        QVERIFY(app.start(testCoreConfig()));
         RadioModel* const running = app.m_radioModel.get();
         QVERIFY(running);
-        DaemonConfig invalid = DaemonConfig::defaults();
+        DaemonConfig invalid = testCoreConfig();
         invalid.displayApplicationBytesPerSecond = 1000;
         QVERIFY(!app.start(invalid));
         QCOMPARE(app.m_radioModel.get(), running);
@@ -148,7 +177,7 @@ private slots:
 
     void installsReceiveOnlyPolicyBeforeStationStartup()
     {
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.sliceCount = 1;
 
         DaemonApp app;
@@ -166,9 +195,76 @@ private slots:
     // BoardCapabilities row (BoardCapabilities.cpp kHermesLite) sets
     // maxSlices = 5, so 3 is well within the SKU's real capacity and
     // must come back exactly, not clamped.
+    // iPhone app Task 73 (ruling 5.3): a Core restart keeps each slice's
+    // owner, or the device it is held for. Nobody is on a Core that has just
+    // started, so a device's slice comes back held for it by the station
+    // device (ruling 5.2 step 1); the next save writes the marks back as
+    // they are. (The HL2 here holds two slices; the next test restores a
+    // slice with no owner.)
+    void aRestartKeepsOwnersAndHeldForMarks()
+    {
+        const QString mac = QStringLiteral("AA:BB:CC:DD:EE:73");
+        const QByteArray phone(32, '\x31');
+        const QByteArray tablet(32, '\x32');
+        const QList<ReceiveSliceState> layout{
+            {0, QStringLiteral("pan-0"), 7074000.0, DSPMode::USB, phone, {}},
+            {1, QStringLiteral("pan-0"), 7075000.0, DSPMode::USB, SliceOwnership::stationDevice(),
+             tablet},
+        };
+        QVERIFY(ReceiveLayoutStore::stage(AppSettings::instance(), mac, layout));
+        // Saved and removed on disk too: this test's settings file is kept
+        // between runs.
+        const auto forget = qScopeGuard([&mac] {
+            AppSettings::instance().remove(QStringLiteral("hardware/%1/receiveLayout")
+                                               .arg(AppSettings::normalizedRadioMac(mac)));
+            AppSettings::instance().save();
+        });
+        {
+            DaemonApp app;
+            app.primeBoardForTest(HPSDRHW::HermesLite, mac);
+            QVERIFY(app.start(testCoreConfig()));
+            QCOMPARE(app.sliceCount(), 2);
+            const SliceOwnership* ownership = app.m_radioModel->sliceOwnership();
+            QCOMPARE(ownership->mark(0).owner, SliceOwnership::stationDevice());
+            QCOMPARE(ownership->mark(0).heldFor, phone);
+            QCOMPARE(ownership->mark(1).owner, SliceOwnership::stationDevice());
+            QCOMPARE(ownership->mark(1).heldFor, tablet);
+            app.stop();
+        }
+        const ReceiveLayoutStore::LoadResult saved =
+            ReceiveLayoutStore::load(AppSettings::instance(), mac);
+        QCOMPARE(static_cast<int>(saved.state),
+                 static_cast<int>(ReceiveLayoutStore::LoadState::Loaded));
+        QCOMPARE(saved.slices.size(), 2);
+        QCOMPARE(saved.slices.at(0).owner, SliceOwnership::stationDevice());
+        QCOMPARE(saved.slices.at(0).heldFor, phone);
+        QCOMPARE(saved.slices.at(1).heldFor, tablet);
+    }
+
+    // A manifest from before owners: every slice restored with no owner.
+    void aManifestFromBeforeOwnersRestoresSlicesWithNoOwner()
+    {
+        const QString mac = QStringLiteral("AA:BB:CC:DD:EE:74");
+        const QString normalized = AppSettings::normalizedRadioMac(mac);
+        AppSettings::instance().setHardwareValue(
+            normalized, QStringLiteral("receiveLayout"),
+            QStringLiteral(R"({"version":1,"slices":[{"id":0,"panKey":"pan-0","frequencyHz":7074000,"dspMode":1},{"id":1,"panKey":"pan-0","frequencyHz":7075000,"dspMode":1}]})"));
+        const auto forget = qScopeGuard([&normalized] {
+            AppSettings::instance().remove(QStringLiteral("hardware/%1/receiveLayout").arg(normalized));
+            AppSettings::instance().save();
+        });
+        DaemonApp app;
+        app.primeBoardForTest(HPSDRHW::HermesLite, mac);
+        QVERIFY(app.start(testCoreConfig()));
+        QCOMPARE(app.sliceCount(), 2);
+        const SliceOwnership* ownership = app.m_radioModel->sliceOwnership();
+        QCOMPARE(ownership->unowned(), (QList<int>{0, 1}));
+        app.stop();
+    }
+
     void createsConfiguredSliceCount()
     {
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.sliceCount = 3;
 
         DaemonApp app;
@@ -194,7 +290,7 @@ private slots:
     // with no existing occupant to share with).
     void fftRouterReflectsSubscriptions()
     {
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.sliceCount = 1;
 
         DaemonApp app;
@@ -237,7 +333,7 @@ private slots:
     // board's real capability, not silently create 99 slices.
     void clampsSliceCountToBoardCapability()
     {
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.sliceCount = 99;
 
         DaemonApp app;
@@ -265,7 +361,7 @@ private slots:
     // the state argument, which is already the authoritative value.
     void connectionStateRelayDoesNotDereferenceReleasedModel()
     {
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
 
         DaemonApp app;
         app.primeBoardForTest(HPSDRHW::HermesLite);
@@ -285,7 +381,7 @@ private slots:
 
     void restartIsClean()
     {
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.sliceCount = 2;
 
         DaemonApp app;
@@ -307,7 +403,7 @@ private slots:
 
     void headlessControllerUsesSaturnDefaultsAndCalibration()
     {
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.sliceCount = 1;
 
         DaemonApp app;
@@ -344,7 +440,7 @@ private slots:
 
     void headlessControllerTracksTxBandModeAndMox()
     {
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.sliceCount = 1;
 
         DaemonApp app;
@@ -395,7 +491,7 @@ private slots:
     // follows the Core's controller, and the Core saves an edit soon after.
     void anan100dReachesSixtyOneDbAndTheObjectFollowsTheController()
     {
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.sliceCount = 1;
 
         DaemonApp app;
@@ -436,7 +532,7 @@ private slots:
     // citation) and has no Adaptive auto-attenuate.
     void hermesLite2KeepsItsSignedRangeAndClassicAutoAttenuate()
     {
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.sliceCount = 1;
 
         DaemonApp app;
@@ -468,7 +564,7 @@ private slots:
     // and the mirrored object follows it.
     void coreBandChangeRestoresTheBandsAttenuation()
     {
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.sliceCount = 1;
 
         DaemonApp app;
@@ -497,7 +593,7 @@ private slots:
     // listening on slice A at 40 m keeps 40 m's attenuator.
     void coreAttenuatorFollowsSliceAInACrossBandSplit()
     {
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.sliceCount = 2;
 
         DaemonApp app;
@@ -533,7 +629,7 @@ private slots:
 
     void replacementSliceUsesStableIdForControllerWiring()
     {
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.sliceCount = 2;
 
         DaemonApp app;
@@ -580,16 +676,26 @@ private slots:
 
     void remoteListenerIsNotStartedByDefault()
     {
-        // remote_port defaults to 0, which means "do not listen". A
-        // default nereusd must therefore open no port at all.
-        DaemonConfig cfg = DaemonConfig::defaults();
+        // iPhone app Task 12: a Core with no remote_port line listens on
+        // 47910 on every interface, IPv4 and IPv6 (tst_daemon_config holds
+        // the parsing); that is the one listener a test does not open for
+        // real, so the address mapping is checked here instead.
+        QCOMPARE(DaemonConfig::defaults().remotePort, 47910);
+        QVERIFY(DaemonConfig::defaults().remoteBind.isEmpty());
+        QCOMPARE(DaemonApp::listenerAddressFor(QString()), QHostAddress(QHostAddress::Any));
+        QCOMPARE(DaemonApp::listenerAddressFor(QStringLiteral("127.0.0.1")),
+                 QHostAddress(QHostAddress::LocalHost));
+        QVERIFY(DaemonApp::listenerAddressFor(QStringLiteral("not-an-address")).isNull());
+
+        // remote_port = 0 still opens no port at all.
+        DaemonConfig cfg = testCoreConfig();
         QCOMPARE(cfg.remotePort, 0);
 
         DaemonApp app;
         app.primeBoardForTest(HPSDRHW::HermesLite);
         QVERIFY(app.start(cfg));
         QVERIFY2(app.stationServer() == nullptr,
-                 "a default config must not bring up a network listener");
+                 "remote_port = 0 must not bring up a network listener");
         app.stop();
     }
 
@@ -600,7 +706,7 @@ private slots:
                   "The listener is wss-only by design (parent design section 10.5).");
         }
 
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.remotePort = 0;
         // Port 0 means "disabled" in the config, so an ephemeral port has
         // to be requested explicitly. Bind loopback and let the OS pick by
@@ -644,15 +750,95 @@ private slots:
         QCOMPARE(server->displayBudgetLimits()->spectrumSampleUnitsPerSecond, quint64{1000000});
         QVERIFY(server->buildCapabilities().displayBudget);
 
-        // Step 4's other half: the pairing material an operator has to
-        // carry to the client by hand exists and is non-empty.
-        QVERIFY(!server->token().isEmpty());
+        // Step 4's other half, as of iPhone app Task 12: the Core has its
+        // identity key and its certificate pin. (That a new Core creates no
+        // pairing token is tst_station_session's: this sandbox profile is
+        // kept between runs, so it may hold one from an earlier run.)
+        QVERIFY(server->stationIdentity().isValid());
         QVERIFY(!server->certificateFingerprint().isEmpty());
 
         // And it is torn down with the daemon rather than outliving the
         // RadioModel its mirror holds QPointers into.
         app.stop();
         QVERIFY(app.stationServer() == nullptr);
+    }
+
+    // iPhone app Task 16 (D36, R-IOS-16): the Core builds a schema-2
+    // announcement and a Bonjour record from its identity, label, claimed
+    // state and pairing window, and rebuilds both on a rename. A listener on
+    // loopback only sends neither: nothing here reaches a network.
+    void discoveryFollowsRenameAndNeverLeavesLoopback()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt reports no working TLS backend, so a wss listener cannot bind.");
+        }
+        AppSettings& settings = AppSettings::instance();
+        const QString labelKey = QString::fromLatin1(StationLabel::kSettingsKey);
+        const QVariant storedLabel = settings.value(labelKey);
+        const auto restore = qScopeGuard([&settings, labelKey, storedLabel] {
+            if (storedLabel.isValid()) {
+                settings.setValue(labelKey, storedLabel);
+            } else {
+                settings.remove(labelKey);
+            }
+            settings.save();
+        });
+
+        DaemonApp app;
+        app.primeBoardForTest(HPSDRHW::HermesLite);
+        QVERIFY(app.start(listenerConfig()));
+        StationServer* const server = app.stationServer();
+        QVERIFY(server && server->isListening());
+        StationDevicesFacade* const devices = server->devicesFacade();
+        QVERIFY(devices);
+
+        const StationLanAnnouncement built = app.stationAnnouncementForTest();
+        QCOMPARE(built.schema, kStationLanAnnouncementSchema);
+        QCOMPARE(built.controlPort, server->serverPort());
+        QCOMPARE(built.identity, server->stationIdentity().fingerprint());
+        QCOMPARE(built.claimed, devices->claimed());
+        QCOMPARE(built.label, devices->stationLabel());
+        QCOMPARE(built.pairing, DaemonApp::stationLanPairingFor(*server));
+        QString error;
+        QVERIFY2(!encodeStationLanAnnouncement(built, &error).isEmpty(), qPrintable(error));
+        // Loopback: neither the announcement nor Bonjour goes out.
+        QVERIFY(!app.stationAnnouncedForTest());
+        QVERIFY(!app.dnsSdAdvertisedForTest());
+        QCOMPARE(app.dnsSdRecordForTest(), DnsSdRecord{});
+
+        // station.rename: the next announcement carries the new label.
+        const QString renamed = QStringLiteral("KG4VCF/task16-%1").arg(
+            QCoreApplication::applicationPid() % 10000);
+        QVERIFY(devices->rename(renamed).accepted);
+        QCOMPARE(devices->stationLabel(), renamed);
+        QCOMPARE(app.stationAnnouncementForTest().label, renamed);
+        QCOMPARE(app.stationAnnouncementForTest().displayName(), renamed);
+        QVERIFY(!app.stationAnnouncedForTest());
+        QVERIFY(!app.dnsSdAdvertisedForTest());
+
+        // The pairing window reads as the pairing field.
+        const PairingWindow* window = server->pairingWindow();
+        QVERIFY(window);
+        const StationLanPairing pairing = DaemonApp::stationLanPairingFor(*server);
+        switch (window->state()) {
+        case PairingWindow::State::OpenUnclaimed:
+            QCOMPARE(pairing, server->pairingLanClickAllowed() ? StationLanPairing::Click
+                                                               : StationLanPairing::Code);
+            break;
+        case PairingWindow::State::OpenReopened:
+            QCOMPARE(pairing, StationLanPairing::Code);
+            break;
+        case PairingWindow::State::ClosedClaimed:
+        case PairingWindow::State::ClosedUnclaimed:
+            QCOMPARE(pairing, StationLanPairing::Closed);
+            break;
+        }
+        server->setPairingLanClickAllowed(false);
+        QVERIFY(DaemonApp::stationLanPairingFor(*server) != StationLanPairing::Click);
+        server->setPairingLanClickAllowed(true);
+
+        app.stop();
+        QCOMPARE(app.stationAnnouncementForTest(), StationLanAnnouncement{});
     }
 
     // R-R3-08/37/40 (final review M1): the display load governor's wiring.
@@ -834,6 +1020,9 @@ private slots:
         DaemonConfig cfg = DaemonConfig::defaults();
         cfg.remotePort = static_cast<int>(freePort);
         cfg.remoteBind = QStringLiteral("::");
+        // Lane B (iPhone app Task 17): no status page here, which would
+        // otherwise share TCP 47911 with every other test.
+        cfg.statusPage = false;
 
         DaemonApp app;
         app.primeBoardForTest(HPSDRHW::HermesLite);
@@ -873,7 +1062,7 @@ private slots:
         QVERIFY(blocker.listen(QHostAddress::LocalHost, 0));
         const quint16 port = blocker.serverPort();
 
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.remoteBind = QStringLiteral("127.0.0.1");
         cfg.remotePort = static_cast<int>(port);
         cfg.sliceCount = 2;
@@ -893,7 +1082,8 @@ private slots:
         QVERIFY(app.stationListenerRetryPending());
         QCOMPARE(app.stationListenAttemptCountForTest(), 1);
 
-        const auto token = server->token();
+        const QByteArray identity = server->stationIdentity().fingerprint();
+        QVERIFY(!identity.isEmpty());
         const QList<SliceModel*> slices = model->slices();
 
         // Keep the port occupied through several retries. The compressed
@@ -908,7 +1098,7 @@ private slots:
         QCOMPARE(app.stationServer(), server);
         QCOMPARE(app.m_radioModel.get(), model);
         QCOMPARE(app.m_mediaController.get(), media);
-        QCOMPARE(server->token(), token);
+        QCOMPARE(server->stationIdentity().fingerprint(), identity);
         QVERIFY(model->slices() == slices);
         QCOMPARE(server->serverPort(), port);
         QVERIFY(!app.stationListenerRetryPending());
@@ -927,7 +1117,7 @@ private slots:
         QVERIFY(blocker.listen(QHostAddress::LocalHost, 0));
         const quint16 port = blocker.serverPort();
 
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.remoteBind = QStringLiteral("127.0.0.1");
         cfg.remotePort = static_cast<int>(port);
 
@@ -965,7 +1155,7 @@ private slots:
         const quint16 newPort = newBlocker.serverPort();
         QVERIFY(oldPort != newPort);
 
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.remoteBind = QStringLiteral("127.0.0.1");
         cfg.remotePort = static_cast<int>(oldPort);
 
@@ -996,7 +1186,7 @@ private slots:
         app.setStationListenRetryIntervalsForTest(10, 30);
         app.primeBoardForTest(HPSDRHW::HermesLite);
 
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.remotePort = 0;
         QVERIFY(app.start(cfg));
         QVERIFY(app.stationServer() == nullptr);
@@ -1032,7 +1222,7 @@ private slots:
 
     void invalidRemoteBindIsLoggedRatherThanFatal()
     {
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.remotePort = 4711;
         cfg.remoteBind = QStringLiteral("not-an-address");
 
@@ -1048,4 +1238,8 @@ private slots:
 };
 
 QTEST_MAIN(TstDaemonApp)
-#include "tst_daemon_app.moc"
+#include "tst_daemon_app.moc"//   2026-09-24: Part C fix wave (R1-I2): a reopened pairing window
+//               lasts 10 minutes, five burned codes in a row close any window,
+//               and reopening starts afresh. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
+

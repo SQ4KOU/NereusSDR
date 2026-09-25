@@ -173,6 +173,20 @@ else()
     message(STATUS "Qt6::SerialPort not found — serial PTT/CW support disabled")
 endif()
 
+# iPhone app Task 16 (D36): on Linux the Core advertises itself over Bonjour
+# through the Avahi daemon's D-Bus interface, with Qt's own D-Bus module.
+# It is part of qt6-base (the Rock and Pi 4 builder image has it, and
+# libQt6Network already depends on libQt6DBus), so no package is added.
+# Without it the Core still builds and announces over the LAN datagram.
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    find_package(Qt6 QUIET COMPONENTS DBus)
+    if(Qt6DBus_FOUND)
+        message(STATUS "Qt6::DBus found: Bonjour through Avahi enabled")
+    else()
+        message(STATUS "Qt6::DBus not found: the Core will not advertise itself over Bonjour")
+    endif()
+endif()
+
 # --------------------------------------------------------------------------
 # zlib (Phase 3M-3a-ii follow-up — gzip+base64url envelope helper for
 # the parametric-EQ blob round-trip with Thetis profile storage)
@@ -398,6 +412,12 @@ message(STATUS "OpenSSL ${OPENSSL_VERSION} found at ${OPENSSL_INCLUDE_DIR}")
 # WebSocket implementation, and keeps dependency targets out of installation.
 include(cmake/NereusRemoteMedia.cmake)
 nereus_add_remote_media_dependency()
+
+# iPhone app Task 14 (R-IOS-08, D37): libsodium 1.0.22 and SPAKE2+EE for the
+# pairing code's key exchange, both fetched by SHA-256-pinned archive and
+# built as static libraries (cmake/NereusPairing.cmake).
+include(cmake/NereusPairing.cmake)
+nereus_add_pairing_dependency()
 
 # Fix round 3: broadened from WIN32-only to any platform, since the same
 # "assert what was explicitly requested is what was actually found"
@@ -855,6 +875,9 @@ set(CORE_SOURCES
     src/core/BuildIdentity.cpp
     src/core/FFTRouter.cpp
     src/core/SliceStreamAllocator.cpp
+    # iPhone app Task 73 (R-IOS-02): whose each slice is, the held-for mark
+    # and each owner's active slice.
+    src/core/SliceOwnership.cpp
     src/core/WidebandFrameAccumulator.cpp
     src/core/WidebandFftEngine.cpp
     src/core/spectrum/WidebandDisplayReference.cpp
@@ -1042,6 +1065,16 @@ set(CORE_SOURCES
     # than reading widget geometry and widget member state, so the daemon
     # can run the same reduction with no widget in the process.
     src/core/spectrum/SpectrumReducer.cpp
+    # iPhone app Task 19 (R-IOS-06): the waterfall palettes, moved from
+    # SpectrumWidget so the Core's catalogue can send them to an app.
+    src/core/spectrum/WaterfallPalettes.cpp
+    # iPhone app Task 20 (R-IOS-27): the display computations the desktop's
+    # SpectrumWidget runs, moved here so the Core runs the same code for an
+    # app's display: peak blobs, active peak hold, and DisplayFollowers
+    # (noise floor, waterfall levels, normalise, averaging constant).
+    src/core/spectrum/ActivePeakHoldTrace.cpp
+    src/core/spectrum/PeakBlobDetector.cpp
+    src/core/spectrum/DisplayFollowers.cpp
     # R1 Task 6: per-stream FFTEngine pool extracted from
     # MainWindow::createFftEngineForStream / m_fftEngines / m_fftThread.
     # Owns engine lifecycle, the four global display AppSettings-sourced
@@ -1103,9 +1136,17 @@ set(CORE_SOURCES
     # on the same NereusCore target either way (see the add_library
     # call further down).
     src/core/daemon/DaemonApp.cpp
+    # iPhone app Task 17 (R-IOS-08): the Core's read-only status page, its
+    # owner-only console socket and the console commands it answers.
+    src/core/daemon/StationStatusPage.cpp
+    src/core/daemon/StationControlSocket.cpp
+    src/core/daemon/StationControlCommands.cpp
     # R-R3-34: bounded per-radio receive-layout persistence. Runtime
     # restoration is wired separately at the RadioModel/daemon boundary.
     src/core/ReceiveLayoutStore.cpp
+    # iPhone app Task 73 (R-IOS-02): each device's closed slices, with a copy
+    # of their own settings, kept per device and per radio for its return.
+    src/core/DeviceLayoutStore.cpp
     # R2 Task 7: the state-mirroring core. MirrorSchema walks Qt's
     # meta-object system over the five mirrored model classes and gives
     # each Q_PROPERTY a dense session-scoped ordinal plus a wire kind;
@@ -1120,6 +1161,12 @@ set(CORE_SOURCES
     src/core/session/MirrorEnumDomain.cpp
     src/core/session/MirrorPolicy.cpp
     src/core/session/StateMirror.cpp
+    # iPhone app Task 72 (R-IOS-02): one device's view of the mirror, with
+    # its own coalescer, burst and sink; echo withheld from the writer only.
+    src/core/session/MirrorView.cpp
+    # iPhone app Task 73 (R-IOS-02): the read-only marker another device sees
+    # for a slice that is not its own, one per slice.
+    src/core/session/SliceMarker.cpp
     # R2 Task 9: the slice-lifecycle half of the mirror. StateMirror forwards
     # property deltas for objects it already knows about; ObjectRegistry is
     # what tells a remote peer a slice appeared or vanished at all, by
@@ -1199,6 +1246,9 @@ set(CORE_SOURCES
     src/core/session/StationLanCache.cpp
     src/core/session/StationLanDiscovery.cpp
     src/core/session/StationLanAnnouncer.cpp
+    # iPhone app Task 16 (D36): Bonjour. The platform backend is added by
+    # nereus_apply_core_deps().
+    src/core/session/DnsSdAdvertiser.cpp
     src/core/session/StationClient.cpp
     # R3 media transport, signalling, display, spectrum, and Opus building
     # blocks. IMediaTransport carries Q_OBJECT and is listed so AUTOMOC emits
@@ -1209,6 +1259,8 @@ set(CORE_SOURCES
     src/core/session/media/OpusAudioCodec.cpp
     src/core/session/media/PcmAudioCodec.cpp
     src/core/session/media/DisplayCodec.cpp
+    # iPhone app Task 20 (R-IOS-27): display extras and the NSDX datagram.
+    src/core/session/media/DisplayExtras.cpp
     src/core/session/media/DisplayBudget.cpp
     src/core/session/media/DisplayLoadGovernor.cpp
     src/core/session/media/DssWideRow.cpp
@@ -1231,6 +1283,34 @@ list(APPEND CORE_SOURCES src/core/security/TokenStore.cpp)
 # find_package(OpenSSL) above is REQUIRED, so this file is always
 # available to compile.
 list(APPEND CORE_SOURCES src/core/security/CertificateStore.cpp)
+
+# iPhone app Task 12 (R-IOS-08): the Core's own P-256 identity key, its
+# label, its paired devices and device sign-in. OpenSSL libcrypto, as
+# CertificateStore above.
+list(APPEND CORE_SOURCES
+    src/core/security/StationIdentity.cpp
+    src/core/security/StationLabel.cpp
+    src/core/security/DeviceStore.cpp
+    src/core/security/DeviceAuthenticator.cpp
+    # iPhone app Task 13 (R-IOS-08): the mirrored `devices` object and the
+    # device administration verbs behind it.
+    src/core/session/StationDevicesFacade.cpp
+    # iPhone app Task 19 (R-IOS-06): the mirrored `catalog` object.
+    src/core/session/StationCatalog.cpp
+    # iPhone app Task 71 (R-IOS-02): who holds a place on the Core, and the
+    # mirrored `connectedDevices` object.
+    src/core/session/DeviceSessionRegistry.cpp
+    src/core/session/ConnectedDevicesFacade.cpp
+    # iPhone app Task 14 (R-IOS-08, D37): the pairing window, its code and
+    # the SPAKE2+EE exchange (libsodium, cmake/NereusPairing.cmake).
+    src/core/security/PairingCode.cpp
+    src/core/security/PairingWindow.cpp
+    src/core/security/SpakeExchange.cpp
+    # iPhone app Task 18 (R-IOS-08): the desktop's own device key and the
+    # client side of pairing.
+    src/core/security/ClientDeviceIdentity.cpp
+    src/core/session/StationPairingClient.cpp
+)
 
 # CoreAudioHalBus — macOS-only IAudioBus implementation bridging to the
 # NereusSDRVAX HAL plugin via POSIX shared memory. The header is
@@ -1324,8 +1404,6 @@ set(GUI_SOURCES
     src/gui/SupportDialog.cpp
     src/gui/AboutDialog.cpp
     src/gui/VaxFirstRunDialog.cpp
-    src/gui/spectrum/ActivePeakHoldTrace.cpp
-    src/gui/spectrum/PeakBlobDetector.cpp
     src/gui/SpectrumWidget.cpp
     src/gui/PanadapterApplet.cpp
     src/gui/PanadapterStack.cpp
@@ -1588,7 +1666,10 @@ qt_add_resources(RESOURCES resources.qrc)
 # the same five files: it loads NereusCore too. BandPlanManager.cpp also
 # calls Q_INIT_RESOURCE(bandplans) so the resource stays reachable from a
 # Core-only link of any kind.
-qt_add_resources(CORE_RESOURCES resources/bandplans.qrc)
+# iPhone app Task 14 (R-IOS-08): the pairing code's word list belongs to the
+# Core too (PairingCode, which calls Q_INIT_RESOURCE(pairing) likewise). The
+# iPhone app carries a byte-for-byte copy of the same file.
+qt_add_resources(CORE_RESOURCES resources/bandplans.qrc resources/pairing.qrc)
 
 # --------------------------------------------------------------------------
 # App icon (per-platform) — from main (PR #11)
@@ -1952,6 +2033,29 @@ function(nereus_apply_core_deps target)
     # build Opus, so RADE's existing Opus remains the sole codec copy.
     target_link_libraries(${target} PRIVATE
         LibDataChannel::LibDataChannelStatic)
+
+    # iPhone app Task 14: SPAKE2+EE on libsodium, reached only through
+    # src/core/security/SpakeExchange.cpp, so no consumer needs its headers.
+    target_link_libraries(${target} PRIVATE nereus_spake2ee)
+
+    # iPhone app Task 16 (D36): one Bonjour backend per platform. Each defines
+    # createPlatformDnsSdBackend(); without one, DnsSdAdvertiser.cpp supplies
+    # a backend that is never available.
+    if(APPLE)
+        # dns_sd.h and its functions are part of libSystem.
+        target_sources(${target} PRIVATE src/core/session/DnsSdAdvertiserApple.cpp)
+        target_compile_definitions(${target} PRIVATE NEREUS_HAVE_DNSSD_BACKEND)
+    elseif(WIN32)
+        # dnsapi.dll is loaded at run time; nothing to link.
+        target_sources(${target} PRIVATE src/core/session/DnsSdAdvertiserWindows.cpp)
+        target_compile_definitions(${target} PRIVATE NEREUS_HAVE_DNSSD_BACKEND)
+        set_source_files_properties(src/core/session/DnsSdAdvertiserWindows.cpp
+            PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
+    elseif(CMAKE_SYSTEM_NAME STREQUAL "Linux" AND Qt6DBus_FOUND)
+        target_sources(${target} PRIVATE src/core/session/DnsSdAdvertiserAvahi.cpp)
+        target_link_libraries(${target} PRIVATE Qt6::DBus)
+        target_compile_definitions(${target} PRIVATE NEREUS_HAVE_DNSSD_BACKEND)
+    endif()
 
     # libpipewire-0.3, gated by the pkg_check_modules block above. Only links on
     # Linux when the dev package is present; NEREUS_HAVE_PIPEWIRE lets follow-up

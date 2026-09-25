@@ -347,7 +347,7 @@ private slots:
 
         harness.invokeAddSliceOnPan(6);
         QCOMPARE(harness.results.size(), 6);
-        const SessionMessage& refused = harness.results.last();
+        const SessionMessage refused = harness.results.last();
         QVERIFY(!refused.accepted);
         QCOMPARE(refused.reason, QStringLiteral("The Core supports a maximum of 5 slices"));
         QVERIFY2(OperatorWording::isPlain(refused.reason), qPrintable(refused.reason));

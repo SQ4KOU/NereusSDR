@@ -8,6 +8,17 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-24 J.J. Boyd / KG4VCF : processNoiseFloor, the fast-attack
+//                 setter, the waterfall level composition, the normalise
+//                 shift, the averaging constant, the calibration range and
+//                 the peak-blob passband moved unchanged to
+//                 core/spectrum/DisplayFollowers, and PeakBlobDetector and
+//                 ActivePeakHoldTrace to core/spectrum (iPhone app Task 20,
+//                 R-IOS-27). AI-assisted via Anthropic Claude Code.
+//   2026-09-24 J.J. Boyd / KG4VCF : the waterfall palettes' gradient stops
+//                 and wfSchemeStops() moved unchanged to
+//                 core/spectrum/WaterfallPalettes.cpp (iPhone app Task 19,
+//                 R-IOS-06). AI-assisted via Anthropic Claude Code.
 //   2026-09-24 J.J. Boyd / KG4VCF : setPeakHoldEnabled emits
 //                 peakHoldEnabledChanged (R-R3-49, R-R3-21). AI-assisted via
 //                 Anthropic Claude Code.
@@ -120,6 +131,8 @@
 // Migrated to VS2026 - 18/12/25 MW0LGE v2.10.3.12
 
 #include "SpectrumWidget.h"
+
+#include <tuple>
 #include "core/session/media/SpectrumEndpoint.h"
 #include "SpectrumOverlayMenu.h"
 #include "core/WidebandFftEngine.h"
@@ -225,139 +238,9 @@ static bool spotMarkersVisuallyEqual(const QVector<SpectrumWidget::SpotMarker>& 
     return true;
 }
 
-// ---- Default waterfall gradient stops (AetherSDR style) ----
-// From AetherSDR SpectrumWidget.cpp:43-51
-static const WfGradientStop kDefaultStops[] = {
-    {0.00f,   0,   0,   0},    // black
-    {0.15f,   0,   0, 128},    // dark blue
-    {0.30f,   0,  64, 255},    // blue
-    {0.45f,   0, 200, 255},    // cyan
-    {0.60f,   0, 220,   0},    // green
-    {0.80f, 255, 255,   0},    // yellow
-    {1.00f, 255,   0,   0},    // red
-};
-
-// Enhanced scheme — from Thetis display.cs:6864-6954 (9-band progression)
-static const WfGradientStop kEnhancedStops[] = {
-    {0.000f,   0,   0,   0},   // black
-    {0.111f,   0,   0, 255},   // blue
-    {0.222f,   0, 255, 255},   // cyan
-    {0.333f,   0, 255,   0},   // green
-    {0.444f, 128, 255,   0},   // yellow-green
-    {0.556f, 255, 255,   0},   // yellow
-    {0.667f, 255, 128,   0},   // orange
-    {0.778f, 255,   0,   0},   // red
-    {0.889f, 255,   0, 128},   // red-magenta
-    {1.000f, 192,   0, 255},   // purple
-};
-
-// Spectran scheme — from Thetis display.cs:6956-7036
-static const WfGradientStop kSpectranStops[] = {
-    {0.00f,   0,   0,   0},    // black
-    {0.10f,  32,   0,  64},    // dark purple
-    {0.25f,   0,   0, 255},    // blue
-    {0.40f,   0, 192,   0},    // green
-    {0.55f, 255, 255,   0},    // yellow
-    {0.70f, 255, 128,   0},    // orange
-    {0.85f, 255,   0,   0},    // red
-    {1.00f, 255, 255, 255},    // white
-};
-
-// Black-white scheme — from Thetis display.cs:7038-7075
-static const WfGradientStop kBlackWhiteStops[] = {
-    {0.00f,   0,   0,   0},    // black
-    {1.00f, 255, 255, 255},    // white
-};
-
-// LinLog scheme — linear ramp in low region, log-shaped in high region.
-// Approximation of Thetis "LinLog" combo entry (setup.cs:11904-11939).
-// Phase 3G-8 commit 5 addition.
-static const WfGradientStop kLinLogStops[] = {
-    {0.00f,   0,   0,   0},
-    {0.10f,   0,   0,  96},
-    {0.25f,   0,  64, 192},
-    {0.50f,   0, 192, 192},
-    {0.65f,   0, 224,  64},
-    {0.80f, 255, 192,   0},
-    {1.00f, 255,   0,   0},
-};
-
-// LinRad scheme — LinRadiance-style cool → hot gradient. Phase 3G-8.
-static const WfGradientStop kLinRadStops[] = {
-    {0.00f,   0,   0,   0},
-    {0.15f,  16,  16, 120},
-    {0.30f,  32,  80, 200},
-    {0.50f,   0, 200, 255},
-    {0.70f, 200, 255, 120},
-    {0.85f, 255, 200,   0},
-    {1.00f, 255,  32,   0},
-};
-
-// Custom scheme — loaded from AppSettings "DisplayWfCustomStops" if set,
-// otherwise falls back to Default. Phase 3G-8 commit 5. Runtime state
-// is parsed lazily from the settings key when the scheme is selected.
-// For now the static fallback keeps the same stops as Default.
-static const WfGradientStop kCustomFallbackStops[] = {
-    {0.00f,   0,   0,   0},
-    {0.15f,   0,   0, 128},
-    {0.30f,   0,  64, 255},
-    {0.45f,   0, 200, 255},
-    {0.60f,   0, 220,   0},
-    {0.80f, 255, 255,   0},
-    {1.00f, 255,   0,   0},
-};
-
-// Phase 3G-9b: Clarity Blue palette — full-spectrum rainbow with a
-// deep-black noise floor. The "blue look" a user sees most of the time
-// comes from the combination of AGC + tight thresholds compressing most
-// signals into the blue/cyan range of the palette; strong signals still
-// cleanly progress through green → yellow → red so peak energy remains
-// distinguishable. Compare to Default/Enhanced which start at dark blue
-// and spread the bright colours across the full range (producing a noisy
-// noise floor). Visual target: 2026-04-14/2026-04-15 AetherSDR reference.
-static const WfGradientStop kClarityBlueStops[] = {
-    {0.00f,  0x00, 0x00, 0x00},  // pure black — noise floor bottom
-    {0.18f,  0x02, 0x08, 0x20},  // very dark blue — noise floor top
-    {0.32f,  0x08, 0x20, 0x58},  // dark blue — weak signal edge
-    {0.46f,  0x10, 0x50, 0xb0},  // medium blue — weak signals
-    {0.58f,  0x10, 0xa0, 0xe0},  // cyan — medium signals
-    {0.70f,  0x10, 0xd0, 0x60},  // green — strong signals
-    {0.80f,  0xf0, 0xe0, 0x10},  // yellow — very strong
-    {0.90f,  0xff, 0x80, 0x00},  // orange — extreme
-    {0.96f,  0xff, 0x20, 0x20},  // red — peak
-    {1.00f,  0xff, 0x40, 0xc0},  // magenta — absolute peak
-};
-
-const WfGradientStop* wfSchemeStops(WfColorScheme scheme, int& count)
-{
-    switch (scheme) {
-    case WfColorScheme::Enhanced:
-        count = 10;
-        return kEnhancedStops;
-    case WfColorScheme::Spectran:
-        count = 8;
-        return kSpectranStops;
-    case WfColorScheme::BlackWhite:
-        count = 2;
-        return kBlackWhiteStops;
-    case WfColorScheme::LinLog:
-        count = 7;
-        return kLinLogStops;
-    case WfColorScheme::LinRad:
-        count = 7;
-        return kLinRadStops;
-    case WfColorScheme::Custom:
-        count = 7;
-        return kCustomFallbackStops;
-    case WfColorScheme::ClarityBlue:
-        count = 10;
-        return kClarityBlueStops;
-    case WfColorScheme::Default:
-    default:
-        count = 7;
-        return kDefaultStops;
-    }
-}
+// The waterfall palettes' gradient stops and wfSchemeStops() moved to
+// core/spectrum/WaterfallPalettes.cpp (iPhone app Task 19), which the Core's
+// catalogue reads too.
 
 // Interpolate a 0..1 position across a scheme's gradient stops. Extracted
 // from dbmToRgb()'s inline loop so the 3DSS palette can share the stops
@@ -1919,19 +1802,15 @@ void SpectrumWidget::recomputeAverageAlphas()
     const int intervalMs = m_displayTimer.interval();
     const int fps = (intervalMs > 0) ? qMax(1, 1000 / intervalMs) : 30;
 
-    auto computeAlpha = [fps](int timeMs) -> float {
-        const double tauSec = qMax(timeMs, 1) / 1000.0;
-        // α = exp(-1 / (fps × τ)). Matches Thetis specHPSDR.cs:358 / :374.
-        const double a = std::exp(-1.0 / (static_cast<double>(fps) * tauSec));
-        return static_cast<float>(qBound(0.0, a, 1.0));
-    };
-    m_spectrumAverageAlpha  = computeAlpha(m_spectrumAverageTimeMs);
-    m_waterfallAverageAlpha = computeAlpha(m_waterfallAverageTimeMs);
+    // The formula moved to core/spectrum/DisplayFollowers (iPhone app
+    // Task 20) so the Core computes an app's constant the same way.
+    m_spectrumAverageAlpha  = averageAlphaForTimeMs(m_spectrumAverageTimeMs, fps);
+    m_waterfallAverageAlpha = averageAlphaForTimeMs(m_waterfallAverageTimeMs, fps);
 }
 
 void SpectrumWidget::setSpectrumAverageTimeMs(int ms)
 {
-    ms = qBound(10, ms, 9999);
+    ms = clampAverageTimeMs(ms);
     if (m_spectrumAverageTimeMs == ms) {
         return;
     }
@@ -1942,7 +1821,7 @@ void SpectrumWidget::setSpectrumAverageTimeMs(int ms)
 
 void SpectrumWidget::setWaterfallAverageTimeMs(int ms)
 {
-    ms = qBound(10, ms, 9999);
+    ms = clampAverageTimeMs(ms);
     if (m_waterfallAverageTimeMs == ms) {
         return;
     }
@@ -2177,7 +2056,7 @@ void SpectrumWidget::setGradientEnabled(bool on)
 
 void SpectrumWidget::setDbmCalOffset(float db)
 {
-    db = qBound(-30.0f, db, 30.0f);
+    db = clampCalibrationOffsetDb(db);
     if (qFuzzyCompare(m_dbmCalOffset, db)) {
         return;
     }
@@ -2266,7 +2145,7 @@ void SpectrumWidget::setShowNoiseFloorPosition(OverlayPosition pos)
 //   _fNFshiftDBM = t;
 void SpectrumWidget::setNFShiftDbm(float db)
 {
-    const float clamped = qBound(-12.0f, db, 12.0f);
+    const float clamped = NoiseFloorFollower::clampShiftDb(db);
     if (m_nfShiftDbm == clamped) { return; }
     m_nfShiftDbm = clamped;
     if (m_showNoiseFloor) { markOverlayDirty(); }
@@ -2290,7 +2169,7 @@ void SpectrumWidget::setNoiseFloorFastColor(const QColor& c)
 {
     if (!c.isValid() || m_noiseFloorFastColor == c) { return; }
     m_noiseFloorFastColor = c;
-    if (m_showNoiseFloor && m_noiseFloorFastAttack) { markOverlayDirty(); }
+    if (m_showNoiseFloor && m_noiseFloor.fastAttack()) { markOverlayDirty(); }
 }
 
 void SpectrumWidget::setNoiseFloorLineWidth(float w)
@@ -2301,30 +2180,18 @@ void SpectrumWidget::setNoiseFloorLineWidth(float w)
     if (m_showNoiseFloor) { markOverlayDirty(); }
 }
 
-// From Thetis display.cs:917-927 [v2.10.3.13] FastAttackNoiseFloorRX1 setter.
-// Also records m_nfLastFastAttackMs — Thetis _fLastFastAttackEnabledTimeRX1
-// (display.cs:4641) — so processNoiseFloor's convergence-gated auto-clear
-// (display.cs:5904-5908) can measure elapsed time since the last trigger.
+// From Thetis display.cs:917-927 [v2.10.3.13] FastAttackNoiseFloorRX1 setter,
+// now in core/spectrum/DisplayFollowers (NoiseFloorFollower::setFastAttack),
+// which stamps the trigger time on every call.
 void SpectrumWidget::setNoiseFloorFastAttack(bool on)
 {
-    if (on) {
-        // Stamp every trigger; consecutive band/freq/MOX events all reset
-        // the elapsed clock so the gray window covers the full settling
-        // period regardless of how many triggers fired.
-        m_nfLastFastAttackMs = QDateTime::currentMSecsSinceEpoch();
-    }
-    if (m_noiseFloorFastAttack == on) { return; }
-    m_noiseFloorFastAttack = on;
+    if (!m_noiseFloor.setFastAttack(on, QDateTime::currentMSecsSinceEpoch())) { return; }
     if (m_showNoiseFloor) { markOverlayDirty(); }
 }
 
-// Source-first port of Thetis processNoiseFloor — display.cs:5866-5912 [v2.10.3.13].
-// Iterates m_renderedPixels to count + linear-sum bins below the previous
-// frame's estimate, then updates m_nfFftBinAverage (per-frame avg) and
-// m_nfLerpAverage (smoothed).  Mirrors the per-pixel accumulator that lives
-// in Thetis's render loop at display.cs:5253-5258 (averageSum += 10^(dB/10),
-// averageCount++ when max_copy < currentAverage), folded into one helper here
-// because NereusSDR's renderer doesn't share the averaging loop.
+// Source-first port of Thetis processNoiseFloor — display.cs:5866-5912 [v2.10.3.13],
+// now in core/spectrum/DisplayFollowers (NoiseFloorFollower::process) so the
+// Core runs the same estimate for an app's display.
 void SpectrumWidget::processNoiseFloor()
 {
     // The noise floor is a MEASUREMENT, so it reads the undented pixels
@@ -2332,72 +2199,10 @@ void SpectrumWidget::processNoiseFloor()
     // max_copy from the pristine array while everything else in that loop
     // takes the dented max - display.cs:5256-5259 [v2.10.3.15].
     const QVector<float>& src = measurementPixels();
-    const int width = src.size();
-    if (width <= 0) { return; }
-
-    // Per-pixel accumulator — Thetis display.cs:5253-5258 [v2.10.3.13]:
-    //   if (!mox && max_copy < currentAverage) {
-    //       averageSum += fastPow10Raw(max_copy);
-    //       averageCount++;
-    //   }
-    // currentAverage = previous-frame fftBinAverage (the running estimate);
-    // bins below it are the "quiet" ones we want to characterise.
-    const float currentAverage = m_nfFftBinAverage;
-    double averageSum = 0.0;
-    int    averageCount = 0;
-    for (int i = 0; i < width; ++i) {
-        const float dB = src[i];
-        if (dB < currentAverage) {
-            averageSum += std::pow(10.0, static_cast<double>(dB) / 10.0);
-            averageCount++;
-        }
-    }
-
+    if (src.isEmpty()) { return; }
     const int fps = qMax(1, 1000 / qMax(1, m_displayTimer.interval()));
-    // Thetis default _NFsensitivity=3, clamp [0,19] (display.cs:5775+5783).
-    // Match the formula exactly: int truncation of (width * sens / 20).
-    const int requireSamples = qMax(1,
-        (width * m_nfSensitivity) / 20);
-
-    // Per-frame fftBinAverage update — display.cs:5883-5896.
-    if (averageCount >= requireSamples) {
-        const float linearAverage =
-            static_cast<float>(averageSum / static_cast<double>(averageCount));
-        const float oldLinear = std::pow(10.0f, m_nfFftBinAverage / 10.0f);
-        const float newLinear = (linearAverage + oldLinear) * 0.5f;
-        m_nfFftBinAverage = 10.0f *
-            std::log10(static_cast<double>(newLinear) + 1e-60);
-    } else {
-        // Not enough quiet bins (signal-dense band, or estimate stuck below
-        // the true floor).  Drift up by 1 dB/frame (3 dB in fast-attack to
-        // re-acquire faster).  display.cs:5893.
-        m_nfFftBinAverage += m_noiseFloorFastAttack ? 3.0f : 1.0f;
-    }
-    m_nfFftBinAverage = qBound(-200.0f, m_nfFftBinAverage, 200.0f);
-
-    // Lerp smoothing — display.cs:5898-5902.
-    int framesInAttack = m_noiseFloorFastAttack ? 0 :
-        static_cast<int>((static_cast<float>(fps) / 1000.0f) * m_nfAttackTimeMs);
-    framesInAttack += 1;
-    const float difference = m_nfLerpAverage - m_nfFftBinAverage;
-    m_nfLerpAverage -= difference / static_cast<float>(framesInAttack);
-
-    // Fast-attack convergence-gated auto-clear — display.cs:5904-5908:
-    //   if (fastAttack && abs(fft - lerp) < 1.0) {
-    //       float tmpDelay = Math.Max(1000, fftFillTime + ...);
-    //       if (elapsed > tmpDelay) fastAttack = false;
-    //   }
-    // Clears the gray flag once the smoothed estimate has caught up to the
-    // per-frame estimate AND at least 1 second has passed since the trigger.
-    if (m_noiseFloorFastAttack &&
-        std::abs(m_nfFftBinAverage - m_nfLerpAverage) < 1.0f)
-    {
-        const qint64 elapsed =
-            QDateTime::currentMSecsSinceEpoch() - m_nfLastFastAttackMs;
-        if (elapsed > kFastAttackMinMs) {
-            m_noiseFloorFastAttack = false;
-            if (m_showNoiseFloor) { markOverlayDirty(); }
-        }
+    if (m_noiseFloor.process(src, fps, QDateTime::currentMSecsSinceEpoch())) {
+        if (m_showNoiseFloor) { markOverlayDirty(); }
     }
 }
 
@@ -2708,7 +2513,7 @@ void SpectrumWidget::setWfAgcEnabled(bool on)
 {
     if (m_wfAgcEnabled == on) { return; }
     m_wfAgcEnabled = on;
-    m_wfAgcPrimed = false;
+    m_wfLevels.resetAgc();
     scheduleSettingsSave();
     update();
 }
@@ -2728,7 +2533,7 @@ void SpectrumWidget::setWaterfallNFAGCEnabled(bool on)
 
 void SpectrumWidget::setWaterfallAGCOffsetDb(int db)
 {
-    db = qBound(-60, db, 60);
+    db = WaterfallLevelFollower::clampNoiseFloorAgcOffsetDb(db);
     if (m_wfNfAgcOffsetDb == db) { return; }
     m_wfNfAgcOffsetDb = db;
     scheduleSettingsSave();
@@ -3392,16 +3197,9 @@ void SpectrumWidget::updateReducedSpectrumOverlays()
         int filterLowPx  = 0;
         int filterHighPx = n - 1;
         if (m_peakBlobs.insideOnly() && m_bandwidthHz > 0.0) {
-            const double leftHz  = m_centerHz - m_bandwidthHz / 2.0;
-            const double pxWidth = m_bandwidthHz / static_cast<double>(n);
-            const double loHz = m_vfoHz + m_filterLowHz;
-            const double hiHz = m_vfoHz + m_filterHighHz;
-            filterLowPx  = qBound(0,
-                static_cast<int>(std::floor((loHz - leftHz) / pxWidth)),
-                n - 1);
-            filterHighPx = qBound(0,
-                static_cast<int>(std::ceil((hiHz - leftHz) / pxWidth)),
-                n - 1);
+            std::tie(filterLowPx, filterHighPx) = passbandPixels(
+                n, m_centerHz, m_bandwidthHz,
+                m_vfoHz + m_filterLowHz, m_vfoHz + m_filterHighHz);
         }
         m_peakBlobs.update(m_renderedPixels, filterLowPx, filterHighPx);
         m_peakBlobs.tickFrame(fps, intervalMs > 0 ? intervalMs : 33);
@@ -4632,8 +4430,8 @@ void SpectrumWidget::paintNoiseFloorOverlay(QPainter& p, const QRect& specRect)
     //   yPixelActual= dBToPixel(m_fFFTBinAverageRX1 + _fNFshiftDBM, H);
     // m_nfFftBinAverage / m_nfLerpAverage are the byte-for-byte ports of
     // those Thetis statics maintained per-frame in processNoiseFloor().
-    const float lerp   = m_nfLerpAverage  + m_nfShiftDbm;
-    const float actual = m_nfFftBinAverage + m_nfShiftDbm;
+    const float lerp   = m_noiseFloor.lerpAverage()   + m_nfShiftDbm;
+    const float actual = m_noiseFloor.fftBinAverage() + m_nfShiftDbm;
 
     const int yPLerp   = dbmToY(lerp,   specRect);
     const int yPActual = dbmToY(actual, specRect);
@@ -4641,9 +4439,9 @@ void SpectrumWidget::paintNoiseFloorOverlay(QPainter& p, const QRect& specRect)
     // Fast-attack colour swap — Thetis display.cs:5431-5432 [v2.10.3.13]:
     //   nf_colour      = bFast ? m_bDX2_Gray : m_bDX2_noisefloor;
     //   nf_colour_text = bFast ? m_bDX2_Gray : m_bDX2_noisefloor_text;
-    const QColor lineCol = m_noiseFloorFastAttack
+    const QColor lineCol = m_noiseFloor.fastAttack()
         ? m_noiseFloorFastColor : m_noiseFloorColor;
-    const QColor textCol = m_noiseFloorFastAttack
+    const QColor textCol = m_noiseFloor.fastAttack()
         ? m_noiseFloorFastColor : m_noiseFloorTextColor;
 
     // 8×8 NF box at lerp Y — Thetis display.cs:5219 + 5436-5437 [v2.10.3.13].
@@ -5305,10 +5103,7 @@ int SpectrumWidget::bandPlanStripHeight() const
 // channel rebuild.
 float SpectrumWidget::normalizeShiftDb() const
 {
-    if (!m_dispNormalize) { return 0.0f; }
-    const double bw = binWidthHz();
-    if (bw <= 0.0) { return 0.0f; }
-    return -10.0f * std::log10(static_cast<float>(bw));
+    return NereusSDR::normalizeShiftDb(m_dispNormalize, binWidthHz());
 }
 
 int SpectrumWidget::dbmToY(float dbm, const QRect& r) const
@@ -6012,7 +5807,7 @@ void SpectrumWidget::reprojectWaterfall(double oldCenterHz, double oldBandwidthH
 // In NereusSDR, "locals" become member fields (m_wfActiveLow/High) so
 // external runtime layers (Clarity, between-row signal updates) can
 // stick a value that survives until the next row push.  AGC's
-// running-envelope state (m_wfAgcRunMin/Max) is the equivalent of
+// running-envelope state (WaterfallLevelFollower's) is the equivalent of
 // Thetis's _RX1waterfallPreviousMinValue field.
 void SpectrumWidget::composeWaterfallActiveThresholds(const QVector<float>& wfPixelsDbm)
 {
@@ -6026,7 +5821,7 @@ void SpectrumWidget::composeWaterfallActiveThresholds(const QVector<float>& wfPi
     // the composition was inline in pushWaterfallRow. Issue #230 moved the
     // composition here, so the gate becomes one early return -- and gains
     // something the inline version did not have. Returning before the AGC
-    // follower runs leaves m_wfAgcRunMin/Max holding their last RX values,
+    // follower runs leaves its running envelope holding the last RX values,
     // so unkeying resumes the RX waterfall where it left off. The inline
     // gates skipped the THRESHOLD writes but the follower state lived in
     // the same block, so this is strictly the safer shape.
@@ -6035,44 +5830,11 @@ void SpectrumWidget::composeWaterfallActiveThresholds(const QVector<float>& wfPi
     // so nothing downstream needs the values this would have written.
     if (m_moxOverlay) { return; }
 
-    const int n = wfPixelsDbm.size();
-
-    // Seed from persistent user values unless Clarity is the live
-    // driver — Clarity writes m_wfActive* directly via
-    // setClarityWaterfallThresholds() and must survive between rows.
-    // Matches the Thetis "high_threshold = waterfall_high_threshold"
-    // seed at display.cs:6575 [v2.10.3.13].
-    if (!m_clarityActive) {
-        m_wfActiveLowThreshold  = m_wfLowThreshold;
-        m_wfActiveHighThreshold = m_wfHighThreshold;
-    }
-
-    // AGC: one-pole follower on display-pixel min/max biases the
-    // effective thresholds.  Skipped while Clarity is the driver.
-    // Phase 3G-9c.
-    if (m_wfAgcEnabled && !m_clarityActive) {
-        float mn = wfPixelsDbm[0];
-        float mx = mn;
-        for (int i = 1; i < n; ++i) {
-            const float v = wfPixelsDbm[i];
-            if (v < mn) { mn = v; }
-            if (v > mx) { mx = v; }
-        }
-        if (!m_wfAgcPrimed) {
-            m_wfAgcRunMin = mn;
-            m_wfAgcRunMax = mx;
-            m_wfAgcPrimed = true;
-        } else {
-            constexpr float kAgcAlpha = 0.05f;
-            m_wfAgcRunMin = kAgcAlpha * mn + (1.0f - kAgcAlpha) * m_wfAgcRunMin;
-            m_wfAgcRunMax = kAgcAlpha * mx + (1.0f - kAgcAlpha) * m_wfAgcRunMax;
-        }
-        // Phase 3G-9b: 12 dB margin for palette breathing room.
-        const float margin = 12.0f;
-        m_wfActiveLowThreshold  = m_wfAgcRunMin - margin;
-        m_wfActiveHighThreshold = m_wfAgcRunMax + margin;
-    }
-
+    // The composition itself (the Thetis display.cs:6575 [v2.10.3.13] seed,
+    // the Phase 3G-9c AGC follower and the Task 2.8 NF-AGC) moved to
+    // core/spectrum/DisplayFollowers (WaterfallLevelFollower) so the Core
+    // composes an app's waterfall levels the same way.
+    //
     // Note: "Use spectrum min/max" no longer mutates here.  Thetis
     // wires that flag via setWaterfallGainsIfLinkedToSpectrum
     // (console.cs:9094-9108 [v2.10.3.13]) — the grid-change handler
@@ -6080,18 +5842,15 @@ void SpectrumWidget::composeWaterfallActiveThresholds(const QVector<float>& wfPi
     // per render frame.  NereusSDR's port lives in setDbmRange() +
     // setWfUseSpectrumMinMax().  Per-frame mutation here was the
     // issue #230 source.
-
-    // Task 2.8: NF-AGC -- override thresholds from 10th-percentile
-    // noise floor + configured offset.  Runs after AGC so it wins on
-    // tie; defers to Clarity.
-    if (m_wfNfAgcEnabled && !m_clarityActive) {
-        QVector<float> sorted = wfPixelsDbm;
-        std::sort(sorted.begin(), sorted.end());
-        const float nf = sorted[qBound(0, sorted.size() / 10, sorted.size() - 1)];
-        const float offsetF = static_cast<float>(m_wfNfAgcOffsetDb);
-        m_wfActiveLowThreshold  = nf + offsetF;
-        m_wfActiveHighThreshold = m_wfActiveLowThreshold + 60.0f;
-    }
+    WaterfallLevelSettings settings;
+    settings.lowDbm = m_wfLowThreshold;
+    settings.highDbm = m_wfHighThreshold;
+    settings.agc = m_wfAgcEnabled;
+    settings.noiseFloorAgc = m_wfNfAgcEnabled;
+    settings.noiseFloorAgcOffsetDb = m_wfNfAgcOffsetDb;
+    settings.clarityActive = m_clarityActive;
+    m_wfLevels.compose(wfPixelsDbm, settings,
+                       m_wfActiveLowThreshold, m_wfActiveHighThreshold);
 }
 
 // ---- Waterfall row push ----
@@ -6185,7 +5944,7 @@ float SpectrumWidget::dssFloorDbm() const
     // same quantity NoiseFloorTracker::noiseFloor() exposes (both are the
     // Thetis display.cs:4628 lerp average). m_nfFftBinAverage is the
     // per-frame value and would make the surface jitter every frame.
-    return m_nfLerpAverage - static_cast<float>(m_dssFloorDepth);
+    return m_noiseFloor.lerpAverage() - static_cast<float>(m_dssFloorDepth);
 }
 
 float SpectrumWidget::dssSpanDb() const

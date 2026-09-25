@@ -220,6 +220,7 @@
 #include "models/TransmitModel.h"
 #include "fakes/FakeAudioBus.h"
 #include "fakes/MainWindowTestSettings.h"
+#include "fakes/UpgradedCoreToken.h"
 
 using namespace NereusSDR;
 
@@ -3869,7 +3870,7 @@ private slots:
         stationSettings.ensureSettingsAtVersion(kMigratedSchema);
 
         RadioModel station;
-        StationServer server(&station, stationSettings, stationDir.path());
+        StationServer server(&station, stationSettings, NereusSDR::Test::seedUpgradedCoreToken(stationDir.path()));
         QWebSocketServer listener(QStringLiteral("core"), QWebSocketServer::NonSecureMode);
         QVERIFY(listener.listen(QHostAddress::LocalHost, 0));
         connect(&listener, &QWebSocketServer::newConnection, &server, [&listener, &server] {
@@ -4291,7 +4292,7 @@ private slots:
         station.sliceById(0)->setFrequency(14100000.0);
         station.sliceById(1)->setFrequency(7100000.0);
         station.setActiveSliceById(1);
-        StationServer server(&station, stationSettings, stationDir.path());
+        StationServer server(&station, stationSettings, NereusSDR::Test::seedUpgradedCoreToken(stationDir.path()));
         QWebSocketServer listener(QStringLiteral("core"), QWebSocketServer::NonSecureMode);
         QVERIFY(listener.listen(QHostAddress::LocalHost, 0));
         connect(&listener, &QWebSocketServer::newConnection, &server, [&listener, &server] {

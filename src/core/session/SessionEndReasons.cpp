@@ -19,9 +19,15 @@
 //                                    takeover and version wordings.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 18 (R-IOS-08,
+//                                    R-IOS-17): read() chooses by the end
+//                                    code. AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionEndReasons.h"
+
+#include "core/session/SessionMessages.h"
 
 #include <QHostAddress>
 #include <QRegularExpression>
@@ -78,7 +84,7 @@ QString versionRefused(const QList<quint16>& coreMajors, const QList<quint16>& a
 
 Parsed parse(const QString& reason)
 {
-    // Interim: Part C's end code in session.end replaces reading the words.
+    // The fallback for an older Core, which sends no end code (read()).
     Parsed parsed;
 
     static const QRegularExpression takenOverPattern(
@@ -123,6 +129,30 @@ Parsed parse(const QString& reason)
         parsed.kind = Parsed::Kind::VersionRefused;
         parsed.coreMajor = match.captured(1).toInt();
         parsed.appMajor = match.captured(2).toInt();
+    }
+    return parsed;
+}
+
+Parsed read(const QString& code, const QString& reason)
+{
+    if (code.isEmpty()) {
+        return parse(reason);
+    }
+    const Parsed words = parse(reason);
+    Parsed parsed;
+    if (code == QLatin1String(SessionEndCode::kTakenOver)) {
+        parsed = words.kind == Parsed::Kind::TakenOver ? words : Parsed{};
+        parsed.kind = Parsed::Kind::TakenOver;
+    } else if (code == QLatin1String(SessionEndCode::kLinkVersion)) {
+        parsed = words.kind == Parsed::Kind::VersionRefused ? words : Parsed{};
+        parsed.kind = Parsed::Kind::VersionRefused;
+    } else if (code == QLatin1String(SessionEndCode::kDeviceRemoved)
+               || code == QLatin1String(SessionEndCode::kDeviceNotPaired)) {
+        parsed.kind = Parsed::Kind::DeviceRemoved;
+    } else if (code == QLatin1String(SessionEndCode::kPairingRequired)) {
+        parsed.kind = Parsed::Kind::PairingRequired;
+    } else if (code == QLatin1String(SessionEndCode::kIdentityChanged)) {
+        parsed.kind = Parsed::Kind::IdentityChanged;
     }
     return parsed;
 }

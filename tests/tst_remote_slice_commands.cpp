@@ -76,6 +76,7 @@
 #include "models/SliceModel.h"
 
 #include "fakes/LoopbackTransport.h"
+#include "fakes/UpgradedCoreToken.h"
 
 using namespace NereusSDR;
 using NereusSDR::Test::LoopbackTransport;
@@ -137,7 +138,7 @@ std::unique_ptr<SessionFixture> establishSession(int extraSlices)
     fixture->stationModel = makeStationRadioModel(extraSlices);
     fixture->server = std::make_unique<StationServer>(
         fixture->stationModel.get(), *fixture->stationSettings,
-        fixture->securityDir.path());
+        NereusSDR::Test::seedUpgradedCoreToken(fixture->securityDir.path()));
 
     fixture->clientModel = std::make_unique<RadioModel>(RadioModel::Role::Remote);
     fixture->proxy = std::make_unique<SettingsProxy>();

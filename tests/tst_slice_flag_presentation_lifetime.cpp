@@ -20,6 +20,7 @@
 #include <QSlider>
 #include <QTest>
 
+#include "core/ControlRanges.h"
 #include "gui/SliceFlagPresentationBinding.h"
 #include "gui/SpectrumWidget.h"
 #include "gui/widgets/VfoWidget.h"
@@ -44,7 +45,8 @@ QSlider* agcThresholdSlider(VfoWidget* flag)
 {
     const QList<QSlider*> sliders = flag->findChildren<QSlider*>();
     for (QSlider* slider : sliders) {
-        if (slider->minimum() == -160 && slider->maximum() == 0) {
+        if (slider->minimum() == NereusSDR::ControlRanges::kAgcThresholdMinDb
+            && slider->maximum() == NereusSDR::ControlRanges::kAgcThresholdMaxDb) {
             return slider;
         }
     }

@@ -44,30 +44,63 @@ slice_count = 1
 # Default: (unset -- platform default)
 audio_device =
 
-# TCP port for the remote-control (wss) listener a NereusSDR GUI connects
-# to with --station wss://<host>:<port>. 0 disables the listener entirely,
-# which is the default: nothing needs it until you ask for it, and a daemon
-# that binds a port on first install with a pairing token buried in a log
-# is a worse default than one line of config here.
+# TCP port for the remote-control (wss) listener that NereusSDR windows and
+# the iPhone app connect to. With neither this key nor remote_bind in this
+# file, the Core listens on 47910 on every interface, IPv4 and IPv6, and
+# announces itself on the local network: only devices paired with this Core
+# can sign in, so it is safe to reach. Set it to 0 to turn the listener (and
+# the announcement) off.
 #
-# The FIRST time the listener starts, nereusd generates a pairing token and
-# a self-signed TLS certificate and prints both, once, to its log. Copy them
-# to the client: the token authenticates you, and the certificate SHA-256
-# fingerprint is what the client pins. They are stored under the daemon's
-# own profile directory alongside the settings file.
-# Default: 0 (disabled)
-remote_port = 0
+# The first time the Core starts, it creates its identity key and prints the
+# key file's location and the TLS certificate fingerprint, once, to its
+# standard output (not to its log). Back that file up: it is this Core's
+# identity, and if it is lost every paired device has to pair again. It is
+# kept under the Core's own profile directory with the settings file.
+#
+# A file that sets remote_port or remote_bind keeps the meaning it had
+# before the listener was on by default: whichever of the two it leaves out
+# is 0 (off) or 127.0.0.1 (this machine only).
+# Default: 47910
+# remote_port = <port>
 
-# Address the remote-control listener binds. Defaults to loopback, so out
-# of the box the listener is reachable only from this machine even once
-# remote_port is set. To accept connections from other machines use ::
-# (every IPv4 and IPv6 address), 0.0.0.0 (every IPv4 address only) or one
-# specific interface address, and note that doing so is the moment to
-# think about who can reach this port. On a host with a global IPv6
-# address, :: also makes it reachable from the internet unless a firewall
-# says otherwise.
-# Default: 127.0.0.1
-remote_bind = 127.0.0.1
+# Address the remote-control listener binds. Empty (the default) is every
+# interface, IPv4 and IPv6. :: is also every IPv4 and IPv6 address, 0.0.0.0
+# every IPv4 address only, and 127.0.0.1 only this machine; one address of
+# this machine accepts only that network. On a host with a global IPv6
+# address, every interface also makes the listener reachable from the
+# internet unless a firewall says otherwise; only paired devices can sign
+# in.
+# Default: empty (every interface)
+# remote_bind = <address>
+
+# Whether a device on this Core's own network may pair with one tap while
+# the Core has no paired device yet: allow (default) or deny. With deny,
+# every device pairs with the code the Core shows instead. Any other value
+# is ignored with a warning.
+# "This Core's own network" means every network this computer is on: its
+# LAN, and also any VPN or overlay it has joined (ZeroTier, Tailscale,
+# WireGuard, a Docker bridge), and this computer itself, so a local proxy
+# or SSH tunnel counts too. Anyone on any of those can claim an unclaimed
+# Core with one tap. If this computer shares such a network with people you
+# do not trust, set deny.
+pairing_lan_click = allow
+
+# The Core's status page: a small read-only web page on this port showing
+# the Core's name, its radio, whether a device has paired with it, and,
+# only until the first device pairs, the pairing code. It answers only
+# browsers on this computer's own networks and binds where the remote
+# listener binds; it runs only while the remote listener is on. on (the
+# default) or off; any other value is ignored with a warning.
+status_page = on
+status_port = 47911
+
+# Where the console commands (nereusd status, nereusd pairing show, ...)
+# reach the running Core. Empty uses the profile's own directory. The
+# packaged service keeps its state in /var/lib/nereusd; with this line, run
+# the commands with sudo and the same --config, for example
+# `sudo nereusd status`. The Core's key and paired devices stay where they
+# are; only the command socket lives here.
+state_directory = /var/lib/nereusd
 
 # The station network: where this Core accepts connections from the
 # devices at the station. It covers the amplifier and tuner connection
@@ -87,9 +120,10 @@ station_bind =
 
 # Name shown under LAN Cores in the GUI Connections window. Empty uses this
 # machine's hostname. At most 128 UTF-8 bytes, without control characters.
-# An available non-loopback remote listener announces its certificate identity,
-# name and radio availability on local-link multicast UDP 47910 every 5 seconds.
-# It never announces a token; the GUI still requires saved/verified credentials.
+# An available non-loopback remote listener announces its certificate
+# fingerprint, name and radio availability on local-link multicast UDP 47910
+# every 5 seconds. It never announces a secret; a device still has to be
+# paired with this Core to sign in.
 core_name =
 
 # Opus audio target for the speakers in remote windows, bit/s: 24000 (default) or 48000; any other value is ignored with a warning.

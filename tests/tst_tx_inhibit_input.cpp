@@ -72,6 +72,7 @@
 #include "models/RadioModel.h"
 
 #include "fakes/LoopbackTransport.h"
+#include "fakes/UpgradedCoreToken.h"
 
 using namespace NereusSDR;
 using NereusSDR::safety::TxInhibitMonitor;
@@ -467,7 +468,7 @@ private slots:
         AppSettings coreSettings(dir.filePath(QStringLiteral("station.settings")));
         RadioModel core;
         {
-            StationServer server(&core, coreSettings, m_securityDir.path());
+            StationServer server(&core, coreSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
             RadioModel window(RadioModel::Role::Remote);
             SettingsProxy proxy;
             StationClient client(&window, &proxy);

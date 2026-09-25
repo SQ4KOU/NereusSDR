@@ -36,6 +36,18 @@
 //   2026-09-24 - R-R3-47 / R-R3-22: AccessorySettingsModel mirrored
 //                 (`accessorySettings`). J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-24 - iPhone app Task 13 (R-IOS-08): StationDevicesFacade
+//                 mirrored (`devices`). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-09-25 - iPhone app Task 71 (R-IOS-02): ConnectedDevicesFacade
+//                 mirrored (`connectedDevices`). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - iPhone app Task 19 (R-IOS-06): StationCatalog mirrored
+//                 (`catalog`). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
+//   2026-09-25 - iPhone app Task 73 (R-IOS-02): SliceMarker mirrored
+//                 (`marker:<sliceId>`). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorSchema.h"
@@ -101,6 +113,18 @@ const char* const kMirroredClasses[] = {
     // remoteTgxlControlVersion 1): the amp's and tuner's own settings as the
     // Core last heard them, read-only.
     "NereusSDR::AccessorySettingsModel",
+    // iPhone app Task 13 (R-IOS-08, deviceAdminVersion 1): the Core's paired
+    // devices and its label, read-only, for a device that signs in by key.
+    "NereusSDR::StationDevicesFacade",
+    // iPhone app Task 19 (R-IOS-06, stationCatalogVersion 1): the values the
+    // Core owns and an app draws its controls from, read-only.
+    "NereusSDR::StationCatalog",
+    // iPhone app Task 71 (R-IOS-02, sessionHolderVersion 1): who is on the
+    // Core, read-only, for a view that shares it with other devices.
+    "NereusSDR::ConnectedDevicesFacade",
+    // iPhone app Task 73 (R-IOS-02, sessionHolderVersion 1): what another
+    // device sees of a slice that is not its own, read-only.
+    "NereusSDR::SliceMarker",
 };
 
 // Per-property exclusions, as (class, property).

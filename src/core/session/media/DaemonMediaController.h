@@ -11,6 +11,7 @@
 #include "core/session/media/DaemonSpectrumSource.h"
 #include "core/session/media/DisplayBudget.h"
 #include "core/session/media/DisplayCodec.h"
+#include "core/session/media/DisplayExtras.h"
 #include "core/session/media/MediaPeer.h"
 #include "core/session/media/RemoteAudioContext.h"
 #include "core/session/media/SpectrumEndpoint.h"
@@ -148,6 +149,15 @@ public:
     /// The frame rate Core configured on the engine that feeds a live
     /// spectrum endpoint (R-R3-01, R-R3-08). Empty for an unknown endpoint.
     std::optional<int> spectrumSourceFps(quint32 endpointId) const;
+    /// iPhone app follow-up (R-IOS-27): the averaging constants a live
+    /// spectrum endpoint's trace and waterfall planes run with, after
+    /// display extras' averageTimeMs and waterfallAverageTimeMs. Empty for
+    /// an unknown endpoint.
+    struct SpectrumAveraging {
+        double traceAlpha{0.0};
+        double waterfallAlpha{0.0};
+    };
+    std::optional<SpectrumAveraging> spectrumAveraging(quint32 endpointId) const;
     /// Whether that engine's transforms follow its frame rate: true only
     /// while the display budget is lowered because the Core is busy
     /// (R-R3-08, R-R3-40). Empty for an unknown endpoint.
@@ -281,6 +291,11 @@ private:
     void promoteLatestPs3Frame();
     bool trySendPs3(MediaPeer* peer, quint64 epoch, qint64 nowNs);
     bool trySendSpectrum(MediaPeer* peer, quint64 epoch, qint64 nowNs);
+    /// iPhone app Task 20 (R-IOS-27): sends one endpoint's waiting NSDX
+    /// datagram, the extras of the frame it last sent. True when it tried.
+    bool trySendDisplayExtras(MediaPeer* peer, quint64 epoch, qint64 nowNs);
+    DisplayExtrasInputs displayExtrasInputs(const EndpointEntry& entry, double binWidthHz,
+                                            qint64 nowNs) const;
     void reconcileAudio();
     void stopAudioCapture();
     /// `reason` travels only in a disabled context, and only to a peer that

@@ -14,9 +14,10 @@
 //   control/*.json  {"from":"station"|"client","wire":{...},"decodes":bool}
 //   sessions/*.json {"runs":["station","app"],"stationSetup":{...},
 //                   "steps":[...]}, a step being {"from":"station",
-//                   "message"}, {"from":"client","role":"behaviour"|
-//                   "scripted","message"}, {"advanceMs":N} or
-//                   {"expectClosed":{"retryable":bool}}
+//                   "message","to"?}, {"from":"client","role":"behaviour"|
+//                   "scripted","message","client"?}, {"advanceMs":N},
+//                   {"expectClosed":{"retryable":bool,"client"?}},
+//                   {"connect":name} or {"close":name}
 //   media/*.bin     one packet as it travels, with *.expect.json
 //                   {"codec":...,"expect":{...}}; "after" in expect names
 //                   the vectors a fresh decoder takes first
@@ -48,6 +49,9 @@
 //                                    each client step's role; placeholders
 //                                    in client messages.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app Task 71 (R-IOS-02): several
+//                                    clients in one fixture.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -62,12 +66,14 @@
 #include <QVector>
 
 #include "core/session/media/DisplayCodec.h"
+#include "core/session/media/DisplayExtras.h"
 #include "core/session/media/OpusAudioCodec.h"
 
 namespace NereusSDR {
 class StationServer;
 struct Ps3Snapshot;
 struct StationLanAnnouncement;
+struct DnsSdRecord;
 }
 
 namespace NereusSDR::Test {
@@ -147,10 +153,18 @@ public:
     /// only through {"advanceMs":N}: the player keeps a virtual clock over
     /// the server's own timers (the handshake deadline, the heartbeat, the
     /// delta flush) and fires each when its virtual time comes. It reads
-    /// two stationSetup keys itself: "clientAnswersPings" (default true)
-    /// and "preemptingClient": {"afterStep": i}, a second client that
-    /// authenticates once step i is done. "$ref:token" in a client message
-    /// is the station's token, read at run time; no fixture holds one.
+    /// these stationSetup keys itself: "clientAnswersPings" (default true),
+    /// "pairedDevice", "otherPairedDevices" and (iPhone app Task 71)
+    /// "otherClients": [{"name", "device": n | "self", "features",
+    /// "shortName"?}], other clients the player also plays, each signing in
+    /// as paired device n (or the runner's own). A client step may carry
+    /// "client" and a station step "to", naming one of them (absent: the
+    /// fixture's own client); {"connect": name} runs that client's whole
+    /// connect sequence, its messages up to snapshot.complete taken
+    /// unmatched; {"close": name} closes it; expectClosed may name one.
+    /// The station's messages are matched per client, in that client's own
+    /// arrival order. "$ref:token" in a client message is the station's
+    /// token, read at run time; no fixture holds one.
     /// Returns an empty string on pass, else the failing step and why.
     static QString runSession(const QJsonObject& fixture, NereusSDR::StationServer& server,
                               LoopbackTransport& transport);
@@ -162,11 +176,32 @@ public:
 /// encodes the expectation again to compare with the committed bytes.
 class LinkMediaVectors {
 public:
+    /// Schema 1, as a Core from before iPhone app Task 16 sends it.
     static NereusSDR::StationLanAnnouncement lanAnnouncement();
+    /// Task 16: schema 2, what a Core sends now: a claimed Core whose
+    /// window was reopened, so it pairs by code.
+    static NereusSDR::StationLanAnnouncement lanAnnouncement2();
+    /// iPhone app Task 71: the same Core with two devices on it, the
+    /// "Devices connected" byte appended (lan-announcement-2-devices).
+    static NereusSDR::StationLanAnnouncement lanAnnouncement2Devices();
+    /// Bytes a later writer might append to schema 2 (a field today's
+    /// reader does not know), for the lan-announcement-2-trailing vector,
+    /// which appends them after lanAnnouncement2Devices()'s count.
+    static QByteArray lanAnnouncementTrailingBytes();
+    /// `schema`, schema 1's fields, and for schema 2 `claimed`, `identity`
+    /// (base64url of the 32 bytes, no padding), `label` and `pairing`
+    /// ("click", "code" or "closed"), and `devicesConnected` when the
+    /// datagram carries it (iPhone app Task 71).
     static QJsonObject toJson(const NereusSDR::StationLanAnnouncement& value);
     /// False, with `error` set, when `json` is not one announcement.
     static bool fromJson(const QJsonObject& json, NereusSDR::StationLanAnnouncement* value,
                          QString* error);
+
+    /// Task 16: the Bonjour record of the Core lanAnnouncement2Devices()
+    /// describes (Task 71: with its `devices` entry).
+    static NereusSDR::DnsSdRecord dnsSdRecord();
+    /// `serviceType` and `txt`, the TXT record's entries as strings.
+    static QJsonObject toJson(const NereusSDR::DnsSdRecord& record);
 
     static NereusSDR::Ps3Snapshot ps3Snapshot();
     /// Every decoded field of a PS3D frame; the eight value lists as arrays.
@@ -178,11 +213,39 @@ public:
     /// a keyframe, two deltas, and a keyframe the sender was asked for
     /// after the third was lost (encode it with requestKeyframe = true).
     static QList<NereusSDR::DisplayCodecFrame> nsdcFrames();
+    /// The malformed-and-refused vectors, each made from the station
+    /// encoder's own packet of nsdcFrames(): frame 2's delta with its trace
+    /// plane's block size code set to 4 (no such size); frame 2's delta with
+    /// sequence 0 (older than frame 1) and its last byte cut off; frame 4's
+    /// keyframe with its trace plane claiming one block more than its length
+    /// needs.
+    static QByteArray nsdcBadPlaneDelta(const QByteArray& delta);
+    static QByteArray nsdcStaleTruncatedDelta(const QByteArray& delta);
+    static QByteArray nsdcBadBlockCountKeyframe(const QByteArray& keyframe);
     /// A decode result as the vector's expectation holds it: disposition
     /// and reason by name, and the frame's fields when it was accepted.
     static QJsonObject toJson(const NereusSDR::DisplayCodecDecodeResult& result);
     static QString nsdcDispositionName(NereusSDR::DisplayCodecDisposition disposition);
     static QString nsdcReasonName(NereusSDR::DisplayCodecReason reason);
+
+    /// iPhone app Task 20: the display extras vectors (codec "nsdx1"). The
+    /// endpoint context they decode against (endpoint 1, generation 1,
+    /// -140..-40 dBm, 32 trace samples), a datagram with every section and
+    /// one with the noise floor alone.
+    static NereusSDR::DisplayCodecContext nsdxContext();
+    static NereusSDR::DisplayExtrasFrame nsdxFrame();
+    static NereusSDR::DisplayExtrasFrame nsdxNoiseFloorFrame();
+    /// The full datagram with an unknown section bit (0x10) set.
+    static QByteArray nsdxUnknownSection(const QByteArray& full);
+    /// A context as a vector names it: endpointId, contextGeneration,
+    /// minDbm, maxDbm, traceSamples.
+    static QJsonObject toJson(const NereusSDR::DisplayCodecContext& context);
+    static bool fromJson(const QJsonObject& json, NereusSDR::DisplayCodecContext* context,
+                         QString* error);
+    /// A decode result as the vector's expectation holds it: accepted and
+    /// reason by name, then the datagram's fields when it was accepted.
+    static QJsonObject toJson(const NereusSDR::DisplayExtrasDecodeResult& result);
+    static QString nsdxReasonName(NereusSDR::DisplayExtrasReason reason);
 
     /// The Opus vectors: RTP synchronisation source, first sequence and
     /// first timestamp, and packet `index`'s stereo input, interleaved

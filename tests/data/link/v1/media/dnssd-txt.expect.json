@@ -1,0 +1,14 @@
+{
+    "codec": "dnssd-txt",
+    "expect": {
+        "serviceType": "_nereus-station._tcp",
+        "txt": {
+            "claimed": "1",
+            "devices": "2",
+            "id": "EBceJSwzOkFIT1ZdZGtyeY",
+            "name": "KG4VCF/shack",
+            "pair": "code",
+            "v": "1"
+        }
+    }
+}
