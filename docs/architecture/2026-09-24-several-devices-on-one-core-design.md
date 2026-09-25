@@ -1626,19 +1626,40 @@ answered by the `capabilities` share the Core publishes with the new request, se
 refusal; the planner then plans inside that share as before (lower background frame rates first,
 then detail, then the active pan, down to one pan at 256 pixels and 10 frames a second) and
 subscribes again, and what it subscribes then is its request. The demand the Core records is
-therefore what each device asked for, and the split is fair. A planner asks again only when what
-the operator wants grows (a pan added, a pan made wider or faster); asking again on every new
-generation would let two constrained devices trade their planning leftovers back and forth
-without end. A share that grows because another device asks for less is grown into by planning
-inside it. For a present holder the same asking gives it its whole request (rule 1).
+therefore what each device asked for, and the split is fair. A planner asks again when what the
+operator wants grows (a pan added, a pan made wider or faster), and when the transmit holder
+changes (fix wave 3, the re-review's Important 2):
+
+- this device becomes the present holder (it takes transmit, or comes back from away holding it):
+  rule 1 gives a holder its whole request, and its request is the plan it made inside its old
+  share until it asks again;
+- the holder changes to another device, or to the station device or the radio's PTT;
+- a holder lets go or goes away (transmit released, or its device away): rule 3's equal shares
+  come back only for devices that ask again, since a device held down beside the holder asks for
+  what it planned there.
+
+The client reads these from the holder notification (`txState`'s `holderEpoch`, which moves with
+every change of holder, a release included, and `holderAway`; ruling 8.1): a change of either is
+an ask. Asking again on every new generation would let two constrained devices trade their
+planning leftovers back and forth without end; a change of holder is an operator event, not a
+generation, and rule 1 is not symmetric (only the holder is kept whole), so asking on it cannot
+loop. A share that grows because another device asks for less is grown into by planning inside
+it.
 
 - The desktop's planner (`RemoteMediaController::refreshBudgetSubscriptions`, with
   `RemoteDisplayAllocator`) does this: it plans without the share while asking, sends every pan's
   wanted request whatever the share, ends the ask at the first budget refusal or once every pan
-  has been answered, and then plans inside the share.
+  has been answered, and then plans inside the share. Its holder trigger is
+  `RemoteMediaController::setTransmitHolder(holderEpoch, holderAway)`. This branch receives no
+  holder notification (the Core's holder is always unheld until Task 34), so nothing calls it
+  yet: **the merge with Task 34 connects the client's `txState` (`holderEpoch`, `holderAway`) to
+  it**, and replaces the Core's test seam `StationServer::setDisplayBudgetHolderForTest` with
+  `TransmitHolder`'s holder in `splitDisplayBudget`.
 - The phone's planner, `DisplayQualityAllocator` (phone Task 52), must do the same: at the start
-  of its media session and whenever the displays the operator wants grow, subscribe every visible
-  pane at its wanted pixels and frame rate; on an `allocation-result` refused with the reason
+  of its media session, whenever the displays the operator wants grow, and whenever `txState`'s
+  `holderEpoch` or `holderAway` changes (it takes transmit, the holder changes, a holder lets go or
+  goes away), subscribe every visible pane at its wanted pixels and frame rate; on an
+  `allocation-result` refused with the reason
   above, plan inside the share in the `capabilities` it already holds and subscribe the planned
   qualities; otherwise plan inside the share as the budget design says; never ask again only
   because a new generation arrived; and unsubscribe any endpoint the Core refused that it then

@@ -2501,6 +2501,142 @@ private slots:
         stationLink->releaseHeld();
     }
 
+    void thePlannerAsksAgainWhenTheTransmitHolderChanges()
+    {
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        auto& appSettings = AppSettings::instance();
+        const bool hadFps = appSettings.contains(QStringLiteral("DisplaySpectrumFps"));
+        const QVariant savedFps = appSettings.value(QStringLiteral("DisplaySpectrumFps"));
+        appSettings.setValue(QStringLiteral("DisplaySpectrumFps"), QStringLiteral("30"));
+        const auto restoreFps = qScopeGuard([&] {
+            if (hadFps) { appSettings.setValue(QStringLiteral("DisplaySpectrumFps"), savedFps); }
+            else { appSettings.remove(QStringLiteral("DisplaySpectrumFps")); }
+        });
+        RadioModel station;
+        station.setBoardForTest(HPSDRHW::Saturn);
+        station.configureStreamPool(5, 5, 192000);
+        station.setConnectionStateForTest(ConnectionState::Connected);
+        const int sliceId = station.addSlice();
+        QVERIFY(station.sliceById(sliceId));
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        PanadapterStack stack;
+        stack.applyLayout(QStringLiteral("2v"), {QStringLiteral("pan-0"), QStringLiteral("pan-1")});
+        const double centre = station.streamCentreHz(station.sliceById(sliceId)->streamIndex());
+        for (PanadapterApplet* applet : stack.allApplets()) {
+            applet->setActiveSliceIndex(sliceId);
+            applet->spectrumWidget()->setDisplayWindowPreservingHistory(centre, 48000);
+            applet->spectrumWidget()->setWfUpdatePeriodMs(20);
+        }
+        stack.resize(1200, 800);
+        stack.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&stack));
+        stack.setActivePan(QStringLiteral("pan-0"));
+        // Room for the active pan as wanted and the other at the useful
+        // floor: less than both as wanted.
+        const int pixels = qBound(1, stack.allApplets().first()->spectrumWidget()->width()
+                                         - stack.allApplets().first()->spectrumWidget()
+                                               ->reservedRightEdgeWidth(),
+                                  SpectrumEndpoint::kMaxPixels);
+        const auto active = spectrumDisplayCost(pixels, 30, false);
+        const auto floorPan = spectrumDisplayCost(std::min(pixels, 256), 10, false);
+        QVERIFY(active && floorPan);
+        const auto budget = sumDisplayCharges({active->charge, floorPan->charge});
+        QVERIFY(budget.has_value());
+
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
+        server.setMediaEnabled(true);
+        QVERIFY(server.setDisplayBudgetLimits({budget->applicationBytesPerSecond,
+                                               budget->spectrumSampleUnitsPerSecond, 1}));
+        QPointer<DisplayTransport> sourceMedia;
+        DaemonMediaController daemon(&server, &station, nullptr,
+            [&sourceMedia](QObject* owner) -> IMediaTransport* {
+                sourceMedia = new DisplayTransport(owner);
+                return sourceMedia;
+            });
+        QPointer<DisplayTransport> sinkMedia;
+        RemoteMediaController controller(&client, &remote, &stack, nullptr,
+            [&sinkMedia](QObject* owner) -> IMediaTransport* {
+                sinkMedia = new DisplayTransport(owner);
+                return sinkMedia;
+            });
+        QSignalSpy outbound(&server, &StationServer::mediaControlReceived);
+        auto* stationLink = new HoldingAllocationResultTransport;
+        auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
+        stationLink->linkTo(clientLink);
+        client.startSession(clientLink, server.token());
+        server.acceptTransport(stationLink);
+        QTRY_VERIFY(client.remoteDisplayBudgetLimits().has_value());
+        QTRY_VERIFY(sourceMedia && sinkMedia);
+        sourceMedia->activate();
+        sinkMedia->activate();
+
+        // First, both pans as wanted: 30 frames a second, full width.
+        QTRY_COMPARE(countControl(outbound, QStringLiteral("subscribe")), 2);
+        for (const QJsonObject& asked : controlsFor(outbound, QStringLiteral("subscribe"))) {
+            QCOMPARE(asked.value(QStringLiteral("fps")).toInt(), 30);
+        }
+        QTRY_COMPARE(stationLink->held.size(), 2);
+        int budgetRefusals = 0;
+        for (const QByteArray& wire : stationLink->held) {
+            budgetRefusals += wire.contains("no room left") ? 1 : 0;
+        }
+        QCOMPARE(budgetRefusals, 1);
+        // The refusal is the answer: the planner plans inside the share.
+        QTRY_VERIFY([&] {
+            stationLink->releaseHeld();
+            return showsDisplay(controller, stack.allApplets().first())
+                && stationLink->held.isEmpty()
+                && controller.panDisplayState(QStringLiteral("pan-1")).phase
+                       != PanDisplayState::Phase::Refused;
+        }());
+        QTest::qWait(300);
+        stationLink->releaseHeld();
+        QTest::qWait(300);
+        QVERIFY(stationLink->held.isEmpty());
+        const int settled = countControl(outbound, QStringLiteral("subscribe"));
+        QVERIFY(settled > 2);
+
+        // Fix wave 3 (ruling 9.3): a change of transmit holder asks again for
+        // what the operator wants: here this device becomes the holder.
+        const auto askedAgainAsWanted = [&](int from) {
+            const QList<QJsonObject> all = controlsFor(outbound, QStringLiteral("subscribe"));
+            for (int i = from; i < all.size(); ++i) {
+                if (all.at(i).value(QStringLiteral("fps")).toInt() == 30) { return true; }
+            }
+            return false;
+        };
+        controller.setTransmitHolder(1, false);
+        QTRY_VERIFY(countControl(outbound, QStringLiteral("subscribe")) > settled);
+        QVERIFY(askedAgainAsWanted(settled));
+        // Answered (refused for the budget again): planned inside the share.
+        QTRY_VERIFY([&] {
+            stationLink->releaseHeld();
+            return stationLink->held.isEmpty()
+                && controller.panDisplayState(QStringLiteral("pan-1")).phase
+                       != PanDisplayState::Phase::Refused;
+        }());
+        QTest::qWait(300);
+        stationLink->releaseHeld();
+        QTest::qWait(300);
+        QVERIFY(stationLink->held.isEmpty());
+        const int afterHolder = countControl(outbound, QStringLiteral("subscribe"));
+
+        // The same holder again asks nothing.
+        controller.setTransmitHolder(1, false);
+        QTest::qWait(400);
+        QCOMPARE(countControl(outbound, QStringLiteral("subscribe")), afterHolder);
+
+        // The holder goes away: asked again.
+        controller.setTransmitHolder(1, true);
+        QTRY_VERIFY(countControl(outbound, QStringLiteral("subscribe")) > afterHolder);
+        QVERIFY(askedAgainAsWanted(afterHolder));
+        stationLink->releaseHeld();
+    }
+
     // Fix wave 2 (Important 2): a pan the Core refused, which the planner
     // then pauses (no room even for one more useful pan), is closed on the
     // Core with an unsubscribe, so its request stops counting against the

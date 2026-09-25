@@ -4565,6 +4565,15 @@ std::optional<DisplayBudgetLimits> StationServer::displayBudgetTotalFor(
     return m_displayBudget;
 }
 
+void StationServer::setDisplayBudgetHolderForTest(DisplayBudgetHolderKind kind,
+                                                  quint64 holderEpoch, bool away)
+{
+    m_testBudgetHolderKind = kind;
+    m_testBudgetHolderEpoch = holderEpoch;
+    m_testBudgetHolderAway = away;
+    publishDisplayBudgetCapabilities();
+}
+
 int StationServer::displayBudgetSharingCount() const
 {
     if (!m_displayBudget || !m_mediaEnabled) {
@@ -4597,8 +4606,10 @@ QList<QPair<SessionTransport*, DisplayBudgetShare>> StationServer::splitDisplayB
     // Fix wave 2 (Critical 1): every admitted network device counts as
     // asking for at least one useful pan, the governor's own floor pan, so
     // a device that has not subscribed yet (or an older client planning
-    // inside its share) is never left with a share of 1 beside a device
-    // asking for the whole total. The link carries nothing that says a
+    // inside its share) keeps at least the smaller of one useful pan and
+    // an equal part beside a device asking for the whole total, unless
+    // that device is a present holder (rule 1; fix wave 3, design 9.3
+    // "What the floor guarantees"). The link carries nothing that says a
     // device is sound only, so every device is floored.
     input.minimumRequest = DisplayLoadGovernor::floorPanCharge();
     QList<SessionTransport*> sharing;
@@ -4633,8 +4644,14 @@ QList<QPair<SessionTransport*, DisplayBudgetShare>> StationServer::splitDisplayB
     // Transmit joins here (Task 34): TransmitHolder's holder, as
     // DisplayBudgetHolderKind::Station for the station device, or ::Device
     // with the holder's media epoch as holderId and holderAway while it is
-    // away. Until then transmit is unheld (rule 3).
-    input.holderKind = DisplayBudgetHolderKind::Unheld;
+    // away. Until then transmit is unheld (rule 3), except for a holder a
+    // test sets (setDisplayBudgetHolderForTest, fix wave 3), which the
+    // merge with Task 34 replaces with TransmitHolder's.
+    input.holderKind = m_testBudgetHolderKind;
+    if (m_testBudgetHolderKind == DisplayBudgetHolderKind::Device) {
+        input.holderId = QByteArray::number(m_testBudgetHolderEpoch);
+        input.holderAway = m_testBudgetHolderAway;
+    }
     if (ps3Subscriber) {
         input.ps3Subscriber = QByteArray::number(*ps3Subscriber);
     }

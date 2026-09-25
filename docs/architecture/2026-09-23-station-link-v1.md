@@ -911,7 +911,9 @@ is what gives it its share. A subscription refused because it does not fit
 (reason "The Core's display limit has no room left.") is the answer: the
 `capabilities` with the device's new share arrive before the refusal, and
 the client plans inside that share and subscribes again. It asks for what it
-wants again only when that grows (a pane added, widened or sped up), never
+wants again when that grows (a pane added, widened or sped up) and when the
+transmit holder changes (`txState`'s `holderEpoch` or `holderAway` moves: it
+takes transmit, the holder changes, or a holder lets go or goes away), never
 merely because a new generation arrived. Audio is never split and never cut
 when the Core runs short.
 

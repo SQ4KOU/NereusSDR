@@ -617,6 +617,10 @@ struct RemoteMediaController::Private {
     /// charge of the displays wanted at the last plan.
     bool askingWanted = false;
     DisplayBudgetCharge wantedCharge;
+    /// Fix wave 3: the transmit holder last notified (setTransmitHolder);
+    /// a change asks again. Kept across media sessions: it is the station's.
+    quint64 holderEpoch = 0;
+    bool holderAway = false;
 };
 
 RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* model,
@@ -1112,6 +1116,22 @@ void RemoteMediaController::receiveClockEcho(const QJsonObject& payload, qint64 
     } else {
         d->captureAnchor.reset();
     }
+}
+
+void RemoteMediaController::setTransmitHolder(quint64 holderEpoch, bool holderAway)
+{
+    if (d->holderEpoch == holderEpoch && d->holderAway == holderAway) {
+        return;
+    }
+    d->holderEpoch = holderEpoch;
+    d->holderAway = holderAway;
+    // Fix wave 3 (ruling 9.3): the split changed its rule for this device
+    // or the others, and the demand the Core holds is the plan made inside
+    // the old share. Asking for what the operator wants again is what lets
+    // a new present holder keep its whole request, and the others their
+    // equal shares once a holder lets go.
+    d->askingWanted = true;
+    QTimer::singleShot(0, this, &RemoteMediaController::refreshSubscriptions);
 }
 
 void RemoteMediaController::setAudioProfileChoice(RemoteAudioProfile profile)

@@ -682,6 +682,13 @@ public:
     /// splitDisplayBudget shares it with), 0 with no budget in force. The
     /// load governor keeps one floor pan for each.
     int displayBudgetSharingCount() const;
+    /// Fix wave 3 (ruling 9.3, asking again around the holder): who holds
+    /// transmit, as the display budget split sees it, for tests until Task
+    /// 34's TransmitHolder feeds splitDisplayBudget (the merge replaces this
+    /// seam with the holder: kind, the holder's media epoch, away). Splits
+    /// again and publishes each changed share.
+    void setDisplayBudgetHolderForTest(DisplayBudgetHolderKind kind, quint64 holderEpoch = 0,
+                                       bool away = false);
     void setDisplayBudgetEnforcementEnabled(bool enabled);
     bool displayBudgetAvailable() const;
     bool displayBudgetAvailable(quint64 epoch) const;
@@ -1346,6 +1353,11 @@ private:
     std::optional<DisplayBudgetLimits> m_displayBudget;
     bool m_displayBudgetForReasonPeersOnly = false;
     DisplayBudgetReason m_displayBudgetReason = DisplayBudgetReason::None;
+    // Fix wave 3: setDisplayBudgetHolderForTest's holder (Unheld until Task
+    // 34's TransmitHolder replaces it).
+    DisplayBudgetHolderKind m_testBudgetHolderKind = DisplayBudgetHolderKind::Unheld;
+    quint64 m_testBudgetHolderEpoch = 0;
+    bool m_testBudgetHolderAway = false;
     bool m_telemetryEnabled = false;
     quint64 m_mediaSessionEpoch = 0;
 

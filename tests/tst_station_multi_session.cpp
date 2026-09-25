@@ -2325,6 +2325,91 @@ private slots:
                      .toString(), QStringLiteral("sharedConnection"));
     }
 
+    // Fix wave 3 (the re-review's Important 2, ruling 9.3), with a holder
+    // injected into the split input (Task 34's holder at the merge). A and
+    // B settle at half the total. A becomes the present holder: its share
+    // stays its request (half) until it asks for more, and then it has its
+    // whole request. B, cut back beside the holder, is left short when the
+    // holder lets go until it asks again, and then the two are equal.
+    void aHolderChangeGivesTheRulesOnlyToDevicesThatAskAgain()
+    {
+        const DisplayBudgetCharge p = spectrumDisplayCost(256, 30, false)->charge;
+        // Samples are the limit that binds (bytes have ample room: a pan's
+        // endpoint charge carries more bytes than the bare spectrum cost),
+        // at 30 frames a second so four pans stay inside the sender's
+        // message rate.
+        const DisplayBudgetLimits total{40 * p.applicationBytesPerSecond,
+                                        4 * p.spectrumSampleUnitsPerSecond, 1};
+        MediaCore m(total);
+        m.signInBoth();
+        QTRY_COMPARE(m.hub->controllerCount(), 2);
+        const quint64 epochA = m.epochOf(0);
+        const int sliceA = m.sliceOf(epochA);
+        const int sliceB = m.sliceOf(m.epochOf(1));
+        const double centre =
+            m.core.model->streamCentreHz(m.core.model->sliceById(sliceA)->streamIndex());
+        QVERIFY(m.startMedia(m.appA));
+        QVERIFY(m.startMedia(m.appB));
+        // One pan: 256 pixels (all its window's bins) at 30 frames a second,
+        // above the one-useful-pan floor.
+        QVERIFY(p.spectrumSampleUnitsPerSecond
+                > DisplayLoadGovernor::floorPanCharge().spectrumSampleUnitsPerSecond);
+        const auto pan = [&centre](quint32 endpoint, int slice, quint32 revision = 1) {
+            QJsonObject request = displayRequestAt(endpoint, slice, centre, 30, revision);
+            request.insert(QStringLiteral("pixels"), 256);
+            return request;
+        };
+        const auto samples = [](const LoopbackTransport* app) {
+            return static_cast<quint64>(
+                latestCapability(app->received(), QStringLiteral("spectrumSampleUnitsPerSecond"))
+                    .toInteger());
+        };
+        const auto accepted = [](const LoopbackTransport* app, quint32 endpoint) {
+            for (const QJsonObject& r : mediaOps(app, QStringLiteral("allocation-result"))) {
+                if (r.value(QStringLiteral("endpointId")).toInteger() == endpoint
+                    && r.value(QStringLiteral("accepted")).toBool()) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        for (quint32 endpoint = 1; endpoint <= 2; ++endpoint) {
+            sendMedia(m.appA, pan(endpoint, sliceA));
+            sendMedia(m.appB, pan(endpoint, sliceB));
+        }
+        QTRY_VERIFY(accepted(m.appA, 2) && accepted(m.appB, 2));
+        QTRY_COMPARE(samples(m.appA), 2 * p.spectrumSampleUnitsPerSecond);
+        QTRY_COMPARE(samples(m.appB), 2 * p.spectrumSampleUnitsPerSecond);
+
+        // A becomes the present holder: rule 1 gives it its request, which
+        // is still half.
+        m.core.server->setDisplayBudgetHolderForTest(DisplayBudgetHolderKind::Device, epochA);
+        QTest::qWait(50);
+        QCOMPARE(samples(m.appA), 2 * p.spectrumSampleUnitsPerSecond);
+        // A asks again for what its operator wants (four pans): all of it.
+        for (quint32 endpoint = 3; endpoint <= 4; ++endpoint) {
+            sendMedia(m.appA, pan(endpoint, sliceA));
+        }
+        QTRY_VERIFY(accepted(m.appA, 3) && accepted(m.appA, 4));
+        QTRY_COMPARE(samples(m.appA), 4 * p.spectrumSampleUnitsPerSecond);
+
+        // B, cut back beside the holder, drops a pan.
+        QJsonObject drop{{QStringLiteral("op"), QStringLiteral("unsubscribe")},
+                         {QStringLiteral("connectionId"), QLatin1String(kMediaConnection)},
+                         {QStringLiteral("endpointId"), 2},
+                         {QStringLiteral("revision"), 2}};
+        sendMedia(m.appB, drop);
+        // The holder lets go: B is left with the one pan it still asks for.
+        m.core.server->setDisplayBudgetHolderForTest(DisplayBudgetHolderKind::Unheld);
+        QTRY_COMPARE(samples(m.appB), p.spectrumSampleUnitsPerSecond);
+        QCOMPARE(samples(m.appA), 3 * p.spectrumSampleUnitsPerSecond);
+        // B asks again for its two pans (a closed display's id is not used
+        // again): equal halves (rule 3).
+        sendMedia(m.appB, pan(3, sliceB));
+        QTRY_COMPARE(samples(m.appB), 2 * p.spectrumSampleUnitsPerSecond);
+        QTRY_COMPARE(samples(m.appA), 2 * p.spectrumSampleUnitsPerSecond);
+    }
+
     void eachDevicesRequestIsWhatItsDisplaysAskFor()
     {
         const auto pan = spectrumDisplayCost(128, 60, false);

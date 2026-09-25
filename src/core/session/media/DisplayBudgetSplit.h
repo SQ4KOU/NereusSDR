@@ -74,8 +74,10 @@ struct DisplayBudgetSplitInput {
     /// The least each device is counted as asking for, per dimension (fix
     /// wave 2, Critical 1): one useful pan (DisplayLoadGovernor::
     /// floorPanCharge()), so a device that has not subscribed yet, or an
-    /// older client that plans inside its share, is never left with a
-    /// share of 1 beside a device asking for the whole total. The wire
+    /// older client that plans inside its share, keeps at least the
+    /// smaller of that and an equal part beside a device asking for the
+    /// whole total, unless that device is a present holder (rule 1 leaves
+    /// the others only what its request leaves; fix wave 3). The wire
     /// cannot tell a sound-only device from one that has not subscribed
     /// yet, so the Core floors every device. Zero floors nothing.
     DisplayBudgetCharge minimumRequest;
