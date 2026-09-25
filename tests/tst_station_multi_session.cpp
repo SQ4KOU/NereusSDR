@@ -1365,6 +1365,42 @@ private slots:
         }
     }
 
+    // Fix wave 2 (re-review Minor 1): C1's refusal with no receivers in
+    // use: the rate, the C-Tune centre and the pin on another device's
+    // slice are refused with the foreign-slice reason, and nothing moves.
+    void rateCentreAndPinOnAnotherDevicesSliceAreRefusedWithNoReceiversInUse()
+    {
+        Core core;
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a);
+        LoopbackTransport* appB = core.signIn(b);
+        QVERIFY(admitted(appA));
+        QVERIFY(admitted(appB));
+        QVERIFY(core.model->streamAllocator().streamCount() <= 0);
+        QCOMPARE(core.model->sliceOwnership()->mark(0).owner, a.key.fingerprint());
+        SliceModel* slice = core.model->sliceById(0);
+        QVERIFY(slice != nullptr);
+        const int rate = slice->sampleRateHz();
+        const QList<QPair<QByteArray, QList<MirrorUpdate>>> verbs{
+            {"requestSliceSampleRate", {int64("sliceId", 0), int64("rateHz", 96000)}},
+            {"requestStreamCentre", {int64("sliceId", 0), f64("centreHz", slice->frequency() + 1000.0)}},
+            {"requestStreamCtunPinned",
+             {int64("sliceId", 0), MirrorUpdate{0, "pinned", MirrorWireKind::Bool, true}}},
+        };
+        for (const auto& verb : verbs) {
+            const QJsonObject refused = core.invoke(appB, verb.first, verb.second);
+            QVERIFY2(!refused.value(QStringLiteral("accepted")).toBool(true), verb.first.constData());
+            QCOMPARE(refused.value(QStringLiteral("reason")).toString(),
+                     ownedElsewhere(QStringLiteral("iPhone")));
+        }
+        QTest::qWait(50);
+        QCOMPARE(slice->sampleRateHz(), rate);
+        QVERIFY(!slice->streamCtunPinned());
+    }
+
     // Each device receives its own slices and a marker for every other.
 
     void eachDeviceReceivesItsOwnSlicesAndTheOthersMarkers()

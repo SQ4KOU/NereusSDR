@@ -47,7 +47,9 @@
 
 #include "MultiDeviceHarness.h"
 
+#include "core/P1RadioConnection.h"
 #include "core/StepAttenuatorController.h"
+#include "core/WdspEngine.h"
 #include "core/StepAttenuatorFacade.h"
 #include "core/session/ConfirmStep.h"
 
@@ -1610,6 +1612,46 @@ private slots:
         QCOMPARE(s.core.model->sliceById(1)->frequency(), 7150000.0);
         QCOMPARE(s.core.model->streamAllocator().streamSampleRateHz(s.receiver()), 192000);
         QCOMPARE(countOf(s.appB, QStringLiteral("notice")), 0);
+    }
+
+    // Fix wave 2 (re-review Minor 2): on Protocol 1 the rate is the radio's
+    // own, and a confirmed change closes the other device's slice between
+    // setSampleRateLive taking the rate and the commit. B's slice closes,
+    // B is told, the radio's wire carries the new rate and the receiver
+    // runs at it.
+    void aProtocol1RateProceedClosesTheOtherDevicesSlice()
+    {
+        Shared s(1);
+        WdspEngine* wdsp = s.core.model->wdspEngine();
+        // Initialized, with no receive channel opened: setSampleRateLive
+        // needs the engine up, and opening channels would plan their FFTs.
+        wdsp->m_initialized = true;  // friend access (NEREUS_BUILD_TESTS)
+        P1RadioConnection conn;
+        conn.restartStreamWithRate(192000);
+        s.core.model->injectConnectionForTest(&conn);
+        const auto detach = qScopeGuard([&s] { s.core.model->injectConnectionForTest(nullptr); });
+        QVERIFY(s.core.model->sampleRateIsRadioWide());
+        QCOMPARE(static_cast<quint8>(conn.captureBank0ForTest().at(1)), quint8(2));
+
+        const QJsonObject held = s.core.invoke(
+            s.appA, "requestSliceSampleRate", {int64("sliceId", 0), int64("rateHz", 96000)});
+        QCOMPARE(held.value(QStringLiteral("reason")).toString(), kWaiting);
+        const QJsonObject ask = waitForLast(s.appA, QStringLiteral("confirm.request"), 0);
+        const QJsonObject slice = ask.value(QStringLiteral("affected")).toArray().first().toObject()
+                                      .value(QStringLiteral("slices")).toArray().first().toObject();
+        QCOMPARE(slice.value(QStringLiteral("sliceId")).toInt(), 1);
+        QCOMPARE(slice.value(QStringLiteral("effect")).toString(), QStringLiteral("closes"));
+        QCOMPARE(s.proceed(s.appA, ask.value(QStringLiteral("id")).toInteger())
+                     .value(QStringLiteral("accepted")).toBool(false),
+                 true);
+        QVERIFY(s.core.model->sliceById(1) == nullptr);
+        QVERIFY(s.core.model->sliceOwnership()->ownedBy(s.b.key.fingerprint()).isEmpty());
+        QCOMPARE(s.core.model->streamAllocator().streamSampleRateHz(s.receiver()), 96000);
+        QCoreApplication::processEvents();
+        QCOMPARE(static_cast<quint8>(conn.captureBank0ForTest().at(1)), quint8(1));
+        QVERIFY(waitForLast(s.appB, QStringLiteral("notice"), 0)
+                    .value(QStringLiteral("reason")).toString()
+                    .endsWith(QStringLiteral("Your slice B closed: no receiver was free.")));
     }
 
     // Fix wave 2 (Important 4): the proceed confirms closing B's slice 1.
