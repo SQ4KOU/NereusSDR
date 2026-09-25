@@ -222,6 +222,9 @@
 //                 (R-R3-39). NereusSDR-original export from
 //                 third_party/wdsp/src/dsplock.c; no Thetis counterpart.
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25  kWdspCallerResampleFv: the float resampler calls report to
+//                 the same check (R-R3-39), by J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 /*  wdsp.cs
@@ -357,6 +360,7 @@ constexpr int kWdspCallerEnterCs = 1;         // any WDSP lock entry (WdspEnterC
 constexpr int kWdspCallerWaitWorkerExit = 2;  // channel teardown waits for its worker
 constexpr int kWdspCallerOpenChannel = 3;     // OpenChannel
 constexpr int kWdspCallerSetChannelState = 4; // SetChannelState
+constexpr int kWdspCallerResampleFv = 5;      // create_resampleFV / xresampleFV / destroy_resampleFV
 
 #ifdef HAVE_WDSP
 

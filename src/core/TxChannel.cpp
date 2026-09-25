@@ -339,6 +339,12 @@ warren@wpratt.com
 //                 every call runs on the caller's thread, as before.  No
 //                 Thetis logic changes.  AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-25 : R-R3-39 by J.J. Boyd (KG4VCF): TCI transmit audio at a
+//                 rate other than 48 kHz is resampled on the transmit lane
+//                 (the float resampler's create, run and destroy); 48 kHz
+//                 blocks are pushed at once while nothing is queued there, so
+//                 the ring keeps the order blocks arrive in.  AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "TxChannel.h"  // brings in WdspTypes.h (DSPMode)
@@ -2608,6 +2614,34 @@ void TxChannel::feedTxAudioFromTci(const QByteArray& interleavedStereoBytes,
             || channels < 1 || channels > 2) {
         return;
     }
+    if (readsWdspDirectly()) {
+        feedTciAudioBlock(interleavedStereoBytes, frames, channels, srcRate);
+        return;
+    }
+    // R-R3-39: WDSP's float resampler (create_resampleFV, xresampleFV,
+    // destroy_resampleFV) runs on the transmit lane, not here. A 48 kHz
+    // block needs none and is pushed at once, as before, unless an earlier
+    // block or a cycle-stop drain is still queued on the lane: it then
+    // queues behind them so the ring keeps the order blocks arrive in.
+    constexpr int kWdspTxaInputRate = 48000;
+    const bool resamples = srcRate > 0 && srcRate != kWdspTxaInputRate;
+    if (!resamples && m_tciLaneJobs->load(std::memory_order_acquire) == 0) {
+        feedTciAudioBlock(interleavedStereoBytes, frames, channels, srcRate);
+        return;
+    }
+    m_tciLaneJobs->fetch_add(1, std::memory_order_acq_rel);
+    m_lane->post([this, alive = m_alive, pending = m_tciLaneJobs,
+                  bytes = interleavedStereoBytes, frames, channels, srcRate]() {
+        if (alive->load(std::memory_order_acquire)) {
+            feedTciAudioBlock(bytes, frames, channels, srcRate);
+        }
+        pending->fetch_sub(1, std::memory_order_release);
+    });
+}
+
+void TxChannel::feedTciAudioBlock(const QByteArray& interleavedStereoBytes,
+                                  int frames, int channels, int srcRate)
+{
     const float* interleavedStereo =
         reinterpret_cast<const float*>(interleavedStereoBytes.constData());
 
@@ -2766,13 +2800,46 @@ int TxChannel::pullTciAudio(float* dst, int frames)
 
 void TxChannel::clearTciAudio()
 {
+    if (readsWdspDirectly()) {
+        drainTciInputRing();
+        destroyTciResampler();
+        return;
+    }
+    // R-R3-39: blocks still queued on the transmit lane belong to the cycle
+    // that just stopped, so the drain waits behind them there; with none
+    // queued it drains here at once, as before. The resampler is the lane's
+    // and is destroyed there, after every block queued before this stop.
+    if (m_tciLaneJobs->load(std::memory_order_acquire) == 0) {
+        drainTciInputRing();
+        m_lane->post([this, alive = m_alive]() {
+            if (alive->load(std::memory_order_acquire)) {
+                destroyTciResampler();
+            }
+        });
+        return;
+    }
+    m_tciLaneJobs->fetch_add(1, std::memory_order_acq_rel);
+    m_lane->post([this, alive = m_alive, pending = m_tciLaneJobs]() {
+        if (alive->load(std::memory_order_acquire)) {
+            drainTciInputRing();
+            destroyTciResampler();
+        }
+        pending->fetch_sub(1, std::memory_order_release);
+    });
+}
+
+void TxChannel::drainTciInputRing()
+{
     constexpr int kDrainScratchBytes = 4096;
     uint8_t scratch[kDrainScratchBytes];
     while (m_tciInputRing.popInto(scratch, kDrainScratchBytes) > 0) {
         // keep draining
     }
     m_tciTxAccumSize = 0;
+}
 
+void TxChannel::destroyTciResampler()
+{
     // Phase 3J-1 closeout Item 8 (2026-05-12): tear down the TCI TX-path
     // resampler so the next cycle starts with a fresh instance.  A client
     // that disconnects and reconnects (or a FreeDV mode change between

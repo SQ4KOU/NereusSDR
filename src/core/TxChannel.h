@@ -320,6 +320,12 @@ warren@wpratt.com
 //                 every call runs on the caller's thread, as before.  No
 //                 Thetis logic changes.  AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-25 : R-R3-39 by J.J. Boyd (KG4VCF): TCI transmit audio at a
+//                 rate other than 48 kHz is resampled on the transmit lane
+//                 (the float resampler's create, run and destroy); 48 kHz
+//                 blocks are pushed at once while nothing is queued there, so
+//                 the ring keeps the order blocks arrive in.  AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -3359,6 +3365,25 @@ private:
     void* m_tciTxResampler{nullptr};
     int   m_tciTxResamplerInputRate{0};  // last create_resampleFV in_rate
     std::vector<float> m_tciTxResampleOut;  // scratch output buffer
+
+    // R-R3-39: with a transmit lane the resampler above is made, run and
+    // destroyed only there. A block that needs it (srcRate other than
+    // 48 kHz) is resampled and pushed to the ring by a lane job; a 48 kHz
+    // block is pushed at once by the caller while no TCI job is queued on
+    // the lane, and queued behind them otherwise, so the ring keeps the
+    // order blocks arrive in. This counts TCI jobs queued or running on the
+    // lane that touch the ring or the scratch buffers; each job lowers it
+    // (release) after its push, which the caller reads (acquire) before
+    // pushing itself. Shared so a job outliving the wrapper can still
+    // lower it.
+    std::shared_ptr<std::atomic<int>> m_tciLaneJobs{
+        std::make_shared<std::atomic<int>>(0)};
+    // The body of feedTxAudioFromTci once the block is known valid: gain,
+    // peak, resample when needed, ring push.
+    void feedTciAudioBlock(const QByteArray& interleavedStereoBytes,
+                           int frames, int channels, int srcRate);
+    void drainTciInputRing();
+    void destroyTciResampler();
 };
 
 } // namespace NereusSDR

@@ -610,6 +610,79 @@ private slots:
         ps->setTxChannel(nullptr);
     }
 
+    // R-R3-39: TCI transmit audio at a rate other than 48 kHz goes through
+    // WDSP's float resampler (create_resampleFV, xresampleFV,
+    // destroy_resampleFV). With TCI transmit audio flowing (24 kHz stereo,
+    // 8 kHz mono, a rate change, then 48 kHz) and a cycle stop, none of it
+    // runs on the event loop, and the ring holds the blocks in the order they
+    // came: the 48 kHz block, which needs no resampler, is last.
+    void tciTransmitAudioLeavesTheEventLoopAlone()
+    {
+        TimedLog log;
+        Rig rig;
+        QVERIFY2(buildRig(rig, &log), "the rig did not come up");
+        RadioModel& model = *rig.model;
+
+        auto tone = [](int frames, int channels, double hz, int rate) {
+            QByteArray bytes(frames * channels * static_cast<int>(sizeof(float)), '\0');
+            auto* out = reinterpret_cast<float*>(bytes.data());
+            for (int f = 0; f < frames; ++f) {
+                const auto v = static_cast<float>(
+                    0.1 * std::sin(2.0 * std::numbers::pi * hz * f / rate));
+                for (int c = 0; c < channels; ++c) {
+                    out[f * channels + c] = v;
+                }
+            }
+            return bytes;
+        };
+        constexpr int kMarkerFrames = 256;
+        QByteArray marker(kMarkerFrames * static_cast<int>(sizeof(float)), '\0');
+        auto* markerValues = reinterpret_cast<float*>(marker.data());
+        for (int f = 0; f < kMarkerFrames; ++f) {
+            markerValues[f] = 0.25f + 0.0005f * static_cast<float>(f);
+        }
+
+        WdspThreadCheck::install(QThread::currentThread());
+        rig.tx->feedTxAudioFromTci(tone(1024, 2, 1000.0, 24000), 1024, 2, 24000);
+        rig.tx->feedTxAudioFromTci(tone(512, 1, 700.0, 8000), 512, 1, 8000);
+        rig.tx->feedTxAudioFromTci(tone(512, 1, 700.0, 8000), 512, 1, 8000);
+        rig.tx->feedTxAudioFromTci(marker, kMarkerFrames, 1, 48000);
+        QVERIFY(model.waitForTransmitLaneForTest(kLaneIdleTimeoutMs));
+
+        std::vector<float> ring;
+        std::array<float, 512> chunk{};
+        for (int got = rig.tx->pullTciAudio(chunk.data(), static_cast<int>(chunk.size()));
+             got > 0;
+             got = rig.tx->pullTciAudio(chunk.data(), static_cast<int>(chunk.size()))) {
+            ring.insert(ring.end(), chunk.begin(), chunk.begin() + got);
+        }
+        // The resampled blocks produced samples, and the 48 kHz block came
+        // after them.
+        QVERIFY2(ring.size() > static_cast<std::size_t>(kMarkerFrames),
+                 qPrintable(QString::number(ring.size())));
+        for (int f = 0; f < kMarkerFrames; ++f) {
+            QCOMPARE(ring[ring.size() - kMarkerFrames + static_cast<std::size_t>(f)],
+                     markerValues[f]);
+        }
+
+        // A cycle stop with a resampler live: the ring is cleared and the
+        // resampler destroyed, still off the event loop.
+        rig.tx->feedTxAudioFromTci(tone(1024, 2, 1000.0, 24000), 1024, 2, 24000);
+        rig.tx->clearTciAudio();
+        QVERIFY(model.waitForTransmitLaneForTest(kLaneIdleTimeoutMs));
+        QCOMPARE(rig.tx->pullTciAudio(chunk.data(), static_cast<int>(chunk.size())), 0);
+        // A new cycle at 48 kHz reaches the ring.
+        rig.tx->feedTxAudioFromTci(marker, kMarkerFrames, 1, 48000);
+        QVERIFY(model.waitForTransmitLaneForTest(kLaneIdleTimeoutMs));
+        QCOMPARE(rig.tx->pullTciAudio(chunk.data(), static_cast<int>(chunk.size())),
+                 kMarkerFrames);
+        QCOMPARE(chunk[0], markerValues[0]);
+
+        const quint64 eventLoopCalls = WdspThreadCheck::eventLoopEntries();
+        WdspThreadCheck::uninstall();
+        QCOMPARE(eventLoopCalls, quint64{0});
+    }
+
     // The rebuild's generation check: a setter still queued for the old
     // wrapper when the rebuild starts never runs, nor does one posted
     // through the old pointer afterwards; the new wrapper's setters do.

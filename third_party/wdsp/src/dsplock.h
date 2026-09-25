@@ -87,6 +87,11 @@ boydsoftprez@gmail.com
 //                 the WDSP_CALLER_* kinds) added by J.J. Boyd (KG4VCF),
 //                 with AI-assisted implementation via Anthropic Claude Code
 //                 (R-R3-39).
+//   2026-09-25 - WDSP_CALLER_RESAMPLE_FV: resample.c's float resampler calls
+//                 (create_resampleFV, xresampleFV, destroy_resampleFV) report
+//                 to the caller check, by J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code
+//                 (R-R3-39).
 // =================================================================
 
 #ifndef _dsplock_h
@@ -110,7 +115,8 @@ enum
 	WDSP_CALLER_ENTER_CS = 1,           // WdspEnterCS: any WDSP lock entry
 	WDSP_CALLER_WAIT_WORKER_EXIT = 2,   // WdspWaitWorkerExit: channel teardown
 	WDSP_CALLER_OPEN_CHANNEL = 3,       // OpenChannel (channel.c)
-	WDSP_CALLER_SET_CHANNEL_STATE = 4   // SetChannelState (channel.c)
+	WDSP_CALLER_SET_CHANNEL_STATE = 4,  // SetChannelState (channel.c)
+	WDSP_CALLER_RESAMPLE_FV = 5         // create/x/destroy_resampleFV (resample.c)
 };
 
 typedef void (*WdspCallerCheckHook) (int channel, int kind);
