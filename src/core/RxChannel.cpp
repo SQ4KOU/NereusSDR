@@ -34,6 +34,12 @@
 //                 section 3), after Thetis ChannelMaster cmaster.c:365-366
 //                 [v2.10.3.15], by J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-25 - R-R3-39, Sub-epic C-1: the DeepFilterNet3 instance is built
+//                 at a channel's first DFNR selection, on the receive lane,
+//                 not in the constructor; availability comes from HAVE_DFNR
+//                 and ModelPaths without a load. NereusSDR-original, by
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -278,6 +284,7 @@ warren@wpratt.com
 
 #ifdef HAVE_DFNR
 #include "DeepFilterFilter.h"
+#include "ModelPaths.h"
 #endif
 
 #ifdef HAVE_MNR
@@ -360,17 +367,10 @@ RxChannel::RxChannel(int channelId, int bufferSize, int sampleRate,
     }
 #endif
 
-#ifdef HAVE_DFNR
     // Sub-epic C-1 Task 9 — DeepFilterNet3 post-WDSP noise reduction.
-    // Instantiate unconditionally; the filter self-disables if the model
-    // tarball is not found (isValid() returns false).
-    m_dfnr = std::make_unique<NereusSDR::DeepFilterFilter>();
-    if (!m_dfnr->isValid()) {
-        qCWarning(lcDsp) << "DFNR not available on channel" << m_channelId
-                         << "(model not found or df_create failed)";
-        m_dfnr.reset();
-    }
-#endif
+    // R-R3-39: no instance here. The model load is about 250 ms and a
+    // connect opens five channels; the instance is built at this channel's
+    // first DFNR selection, on the receive lane (ensureDfnrOnLane).
 
 #ifdef HAVE_MNR
     // Sub-epic C-1 Task 11 — Apple Accelerate MMSE-Wiener post-WDSP NR.
@@ -1574,7 +1574,16 @@ void RxChannel::storeActiveNrFlags(NrSlot slot)
     // Post-WDSP filter flags.  Filter instances added in Tasks 9-11; for now
     // these atomics just record intent so flag-flipping can be tested before
     // the filter objects exist.
+#ifdef HAVE_DFNR
+    // R-R3-39: DFNR runs only once its instance is published (release,
+    // before this store), so the audio thread never sees the flag set with
+    // a half-built instance. ensureDfnrOnLane sets it after publishing.
+    m_dfnrActive.store(slot == NrSlot::DFNR
+                           && m_dfnrInstance.load(std::memory_order_acquire) != nullptr,
+                       std::memory_order_release);
+#else
     m_dfnrActive.store(slot == NrSlot::DFNR, std::memory_order_release);
+#endif
     m_bnrActive .store(slot == NrSlot::BNR,  std::memory_order_release);
     m_mnrActive .store(slot == NrSlot::MNR,  std::memory_order_release);
 
@@ -1586,8 +1595,69 @@ void RxChannel::storeActiveNrFlags(NrSlot slot)
     m_emnrEnabled.store(slot == NrSlot::NR2);
 }
 
+bool RxChannel::dfnrAvailable()
+{
+#ifdef HAVE_DFNR
+    return !NereusSDR::ModelPaths::dfnrModelTarball().isEmpty();
+#else
+    return false;
+#endif
+}
+
+bool RxChannel::dfnrLoaded() const
+{
+#ifdef HAVE_DFNR
+    return m_dfnrInstance.load(std::memory_order_acquire) != nullptr;
+#else
+    return false;
+#endif
+}
+
+void RxChannel::ensureDfnrOnLane(NrSlot slot)
+{
+#ifdef HAVE_DFNR
+    if (slot == NrSlot::DFNR && m_dfnr == nullptr
+        && !m_dfnrUnavailable.load(std::memory_order_acquire)) {
+        if (!dfnrAvailable()) {
+            qCWarning(lcDsp) << "DFNR not available on channel" << m_channelId
+                             << "(model not found)";
+            m_dfnrUnavailable.store(true, std::memory_order_release);
+        } else {
+            auto instance = std::make_unique<NereusSDR::DeepFilterFilter>();
+            if (!instance->isValid()) {
+                qCWarning(lcDsp) << "DFNR not available on channel" << m_channelId
+                                 << "(model failed to load)";
+                m_dfnrUnavailable.store(true, std::memory_order_release);
+            } else {
+                m_dfnr = std::move(instance);
+                // Publish before any flag can be set (release pairs with the
+                // audio thread's acquire load after it reads the flag).
+                m_dfnrInstance.store(m_dfnr.get(), std::memory_order_seq_cst);
+                // After publishing, so a tuning setter that missed the
+                // instance has already stored the value read here.
+                m_dfnr->setAttenLimit(m_dfnrAttenLimit.load(std::memory_order_seq_cst));
+                m_dfnr->setPostFilterBeta(m_dfnrPostFilterBeta.load(std::memory_order_seq_cst));
+            }
+        }
+    }
+    // The selection may have changed while the model loaded; the flag
+    // follows the current one. Every later selection posts its own lane
+    // job, which sets the flag again from the selection it made.
+    m_dfnrActive.store(m_activeNr.load(std::memory_order_acquire) == NrSlot::DFNR
+                           && m_dfnrInstance.load(std::memory_order_acquire) != nullptr,
+                       std::memory_order_release);
+#else
+    Q_UNUSED(slot);
+#endif
+}
+
 bool RxChannel::applyActiveNrOnLane(NrSlot slot)
 {
+    // R-R3-39: DFNR's instance is built at its first selection, here, on
+    // the receive lane; any other selection re-reads the DFNR flag so a
+    // build that raced a newer selection cannot leave DFNR running.
+    ensureDfnrOnLane(slot);
+
     // Disable NNR before changing any retained NR run flag. Readiness and
     // full tuning are accepted before enabling it below.
     NnrAdapter::setRunning(m_channelId, false);
@@ -2857,8 +2927,14 @@ void RxChannel::processIq(float* inI, float* inQ,
     // Sub-epic C-1 Task 9 — post-fexchange2 DeepFilterNet3 noise reduction.
     // Runs only when m_dfnrActive is set via setActiveNr(NrSlot::DFNR).
     // outI/outQ are 48 kHz stereo float at this point — DFNR's native rate.
-    if (m_dfnr && m_dfnrActive.load(std::memory_order_acquire)) {
-        m_dfnr->process(outI, outQ, postCount);
+    // R-R3-39: the flag first (acquire), then the instance (acquire); the
+    // instance is published before the flag is ever set, so a set flag
+    // means a fully built instance. No lock on this thread.
+    if (m_dfnrActive.load(std::memory_order_acquire)) {
+        if (NereusSDR::DeepFilterFilter* dfnr =
+                m_dfnrInstance.load(std::memory_order_acquire)) {
+            dfnr->process(outI, outQ, postCount);
+        }
     }
 #endif
 
@@ -3014,15 +3090,19 @@ qint64 RxChannel::takeDspIntervalMaxBlockUs() const
 #ifdef HAVE_DFNR
 void RxChannel::setDfnrAttenLimit(float dB)
 {
-    if (m_dfnr) {
-        m_dfnr->setAttenLimit(dB);
+    // R-R3-39: kept for an instance built later; DeepFilterFilter's setters
+    // are atomic, so any thread may forward to a published instance.
+    m_dfnrAttenLimit.store(dB, std::memory_order_seq_cst);
+    if (NereusSDR::DeepFilterFilter* dfnr = m_dfnrInstance.load(std::memory_order_seq_cst)) {
+        dfnr->setAttenLimit(dB);
     }
 }
 
 void RxChannel::setDfnrPostFilterBeta(float beta)
 {
-    if (m_dfnr) {
-        m_dfnr->setPostFilterBeta(beta);
+    m_dfnrPostFilterBeta.store(beta, std::memory_order_seq_cst);
+    if (NereusSDR::DeepFilterFilter* dfnr = m_dfnrInstance.load(std::memory_order_seq_cst)) {
+        dfnr->setPostFilterBeta(beta);
     }
 }
 #endif

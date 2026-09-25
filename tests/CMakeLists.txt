@@ -2068,6 +2068,11 @@ nereus_add_test(tst_stream_pool_binding)
 # delivers I/Q paced in real time.
 nereus_add_test(tst_rx_channel_stop_feed REALTIME)
 
+# R-R3-39, Sub-epic C-1: an RxChannel loads the DeepFilterNet3 model only at
+# its first DFNR selection, on its receive lane, never in the constructor, so
+# a connect's five channels load nothing.
+nereus_add_test(tst_rx_channel_dfnr_lazy)
+
 # ── Tunable Notch Filter Task 1: the notch DB's tune frequency ─────────────
 # WDSP maps absolute-Hz notch centres into a channel's passband with
 # offset = tunefreq + shift (third_party/wdsp/src/nbp.c:192). tunefreq had

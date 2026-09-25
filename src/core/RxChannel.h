@@ -38,6 +38,12 @@
 //                 processIq outputs silence until the lane has opened the
 //                 channel. NereusSDR-original, by J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25 - R-R3-39, Sub-epic C-1: the DeepFilterNet3 instance is built
+//                 at a channel's first DFNR selection, on the receive lane,
+//                 not in the constructor; availability comes from HAVE_DFNR
+//                 and ModelPaths without a load. NereusSDR-original, by
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -640,12 +646,21 @@ public:
     bool mnrActive () const { return m_mnrActive .load(std::memory_order_acquire); }
 
     // DFNR — DeepFilterNet3 neural noise reduction (Sub-epic C-1, Task 9)
-    // Tuning setters forward to the DeepFilterFilter instance if present.
+    // Tuning setters keep the value and forward it to the DeepFilterFilter
+    // instance once one exists; an instance built later starts with them.
     // Safe to call unconditionally — no-ops when HAVE_DFNR is not defined.
 #ifdef HAVE_DFNR
     void setDfnrAttenLimit(float dB);
     void setDfnrPostFilterBeta(float beta);
 #endif
+
+    // R-R3-39: whether DFNR can run in this build: HAVE_DFNR and a
+    // DeepFilterNet3 model ModelPaths can find. Loads nothing.
+    static bool dfnrAvailable();
+    // True once this channel's DeepFilterNet3 instance is built. It is built
+    // at the channel's first DFNR selection, on the receive lane, and kept
+    // until the channel is destroyed.
+    bool dfnrLoaded() const;
 
     // MNR — Apple Accelerate MMSE-Wiener spectral NR (Sub-epic C-1, Task 11).
     // macOS only (HAVE_MNR is defined only on Apple platforms). On other
@@ -1194,6 +1209,10 @@ private:
     bool applyActiveNrOnLane(NrSlot slot);
     // Sets the NR selection flags (m_activeNr and the ones kept with it).
     void storeActiveNrFlags(NrSlot slot);
+    // R-R3-39: builds this channel's DeepFilterNet3 instance when `slot` is
+    // DFNR and none is built yet (on the receive lane when there is one), publishes the
+    // pointer, then sets m_dfnrActive from the current selection.
+    void ensureDfnrOnLane(NrSlot slot);
     // NNR readiness as the lane last read it: nullopt before its first read.
     std::optional<NnrDiagnostics> knownNnrDiagnostics() const;
     void refreshMinNotchWidthOnLane();
@@ -1328,10 +1347,22 @@ private:
 
 #ifdef HAVE_DFNR
     // DeepFilterNet3 filter instance (Sub-epic C-1, Task 9).
-    // Created in constructor; null if model not found or df_create failed.
-    // Accessed only from the audio thread during processIq(); main thread
-    // writes tuning parameters via atomic setters in DeepFilterFilter.
+    // R-R3-39: built at the channel's first DFNR selection, on the receive
+    // lane (ensureDfnrOnLane), never in the constructor: the model load is
+    // about 250 ms and a connect opens five channels. m_dfnr owns it and is
+    // written only there; it is freed with the channel. The audio thread
+    // reads m_dfnrActive (acquire) and then m_dfnrInstance (acquire), and
+    // uses the instance only when both are set. The instance is published
+    // (release) before m_dfnrActive can be set, so a set flag never shows a
+    // half-built instance.
     std::unique_ptr<NereusSDR::DeepFilterFilter> m_dfnr;
+    std::atomic<NereusSDR::DeepFilterFilter*> m_dfnrInstance{nullptr};
+    // Set when the model could not be found or loaded; DFNR then stays off
+    // on this channel and the load is not tried again.
+    std::atomic<bool> m_dfnrUnavailable{false};
+    // Tuning kept for an instance built later (DeepFilterFilter's defaults).
+    std::atomic<float> m_dfnrAttenLimit{100.0f};
+    std::atomic<float> m_dfnrPostFilterBeta{0.0f};
 #endif
 
 #ifdef HAVE_MNR
