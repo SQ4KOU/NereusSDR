@@ -2296,33 +2296,68 @@ Network question, "Found it", the station list), pairing design §6.
   56a's), `ios/NereusApp/Tests/ConnectionFlowTests.swift`
 
 **Interfaces:**
-- Consumes: the Bonjour service type and TXT keys (Task 16; the link document's
-  Discovery section is the authority), the TXT record's optional `devices` count (0 to 4,
-  Task 71), `StationEndpoint` (Task 8), `PairingClient.pairOnThisNetwork` (Task 15b).
+- Consumes: the Bonjour service and TXT record (Task 16; link section 14.2 is the
+  authority), `StationEndpoint` and `ManualAddress` (Task 8), `PairedStation` (Task 15),
+  `PairingClient.pairOnThisNetwork` and `PairingError` (Task 15b).
+- The record, exactly (link section 14.2): service type `_nereus-station._tcp`, domain
+  `local.`, on the listener's own port (not always 47910: the Pi 4's is 50055), so the
+  browser resolves the service for its host and port; a TXT record of five entries in
+  this order: `v` (`1`), `id` (the first 22 characters of the identity fingerprint,
+  SHA-256 of the identity key's SubjectPublicKeyInfo DER, in base64url without
+  padding), `claimed` (`0` or `1`), `pair` (`click`, `code` or `closed`) and `name` (the
+  Core's label, possibly empty). A key the phone doesn't know is ignored, so a newer
+  Core still lists (the several-devices station work adds a device count, which Task 56c
+  shows); a record whose `v` isn't `1` is one the phone can't read. The instance name
+  is the label or the Core's name, at most 63 bytes, and Bonjour may rename it on a
+  clash, so the label comes from `name`.
 - Produces:
   - `actor StationBrowser` using `NWBrowser(for: .bonjourWithTXTRecord(type: "_nereus-station._tcp", domain: nil), using: .tcp)`,
-    publishing `[FoundStation]` with `claimed`, `pairing`, `label`, `identityPrefix`, and
-    a resolvable endpoint.
+    publishing `[FoundStation]` with `claimed`, `pairing` (from `pair`), `label` (from
+    `name`), `instanceName`, `identityPrefix` (from `id`) and a resolved endpoint. A row
+    shows `label`, or the instance name when the label is empty.
+  - A found Core matches a paired one when `identityPrefix` equals the first 22
+    characters of base64url(SHA-256(`PairedStation.identityKey`)); the match names the
+    Core in the list and proves nothing, since sign-in still checks the whole key in
+    `hello`. A paired Core that now announces `claimed=0` has forgotten this phone: its
+    row offers Pair, not Connect, as the desktop's does since the Part C fix round.
   - In `ConnectionFlow`: the Local Network question (asked once, by starting the
-    browser), Found it (the one-tap claim of an unclaimed Core on this network, then
-    straight on to the band as Task 56a's pairing does), and your Cores listing the
-    unclaimed Cores on this network after the paired ones (Cores only, never radios), a
-    Core with devices on it saying how many ("4 devices on it") when its record carries
-    the count.
+    browser; when the operator declines, a typed address and a code still work, spec
+    §5.3 item 3), and your Cores listing the Cores found on this network after the
+    paired ones (Cores only, never radios). Found it offers one tap only when
+    `claimed=0` and `pair=click`, then goes straight on to the band as Task 56a's
+    pairing does; with `pair=code` it opens code entry with the found address filled in;
+    with `claimed=0` and `pair=closed` it says pairing is closed on the Core and opens
+    again only from the Core's own computer. A one-tap refusal shows the Core's words as
+    sent and offers the code instead: "One tap pairs only a Core with no paired devices.
+    Use the pairing code the Core shows.", "This Core pairs only with its code. Use the
+    pairing code the Core shows." or "One tap works only on the Core's own network. Use
+    the pairing code the Core shows." (link section 3.6; one tap succeeds only from an
+    address on one of the Core's own networks, link-local included).
+  - The Info.plist keys are already there from Task 51 (`NSBonjourServices`
+    `_nereus-station._tcp` and `NSLocalNetworkUsageDescription`); this task adds none.
 
 **Acceptance:**
-- `StationBrowserTests` parses TXT records into `FoundStation` values, including
-  missing and malformed keys, and (on macOS) finds a record registered by the test with
-  `dns-sd -R`.
-- A TXT key the browser does not know is ignored, so a newer station still lists.
+- `StationBrowserTests` runs the `media-dnssd-txt` vector through
+  `LinkFixtureLoader.mediaVectors()` (codec `dnssd-txt`: the entries in the fixed order
+  `v`, `id`, `claimed`, `pair`, `name`, each after a one-byte length; the vector stays in
+  `tests/data/link/`, never bundled), parses TXT records into `FoundStation` values
+  including missing and malformed keys and a `v` other than `1`, and (on macOS) finds a
+  record registered by the test with `dns-sd -R`.
+- A TXT key the browser does not know is ignored, so a newer Core still lists.
+- A found Core whose `id` matches a paired Core's key lists as that Core; with
+  `claimed=0` it offers Pair.
 - Against `FakeStation` announced by the test, Found it claims the Core in one tap and
-  the flow reaches the band with no other tap; screenshots against `06-first-launch.jpg`
-  and `07-connecting.jpg`.
+  the flow reaches the band with no other tap; with `pair=code` it opens code entry with
+  the address filled in; each one-tap refusal shows its words and offers the code;
+  screenshots against `06-first-launch.jpg` and `07-connecting.jpg`.
 
 **Verification:** discovery on a network: unit tests plus the macOS browse in the test.
 `ios/scripts/swift-test.sh --filter StationBrowserTests` and the simulator test run.
 Device (controller, pending until observed): a phone on the Pi 4's network lists its
-Core and claims it in one tap.
+Core and claims it in one tap. On Linux the Core advertises over Avahi only when its
+build found Qt6::DBus and avahi-daemon is running (otherwise it logs why once), and this
+is the Avahi backend's first run on real hardware, so a missing listing is checked at
+the Core first.
 
 **Execution note (advisory):** opus. Networking (local browse only). Requires Tasks 8,
 15b, 16 and 56a. On the listening path, joining it when Task 16's station half is in.
@@ -7075,16 +7110,49 @@ IPv6 address (2026-09-24).
 - Create: `ios/NereusApp/Tests/ConnectionFlowTests.swift`
 
 **Interfaces:**
-- Consumes: `PairingClient` with `PairingCarrier.direct` (Task 15b), `DeviceKeyAuthenticator`
-  and `PairedStationStore` (Task 15), `StationSession`, its refusals and `ReconnectPolicy`
-  (Task 8), `AppModel` (Task 51), `MainScreen` (Task 54a).
+- Consumes: `PairingClient` with `PairingCarrier.direct` and `PairingError` (Task 15b),
+  `DeviceKeyAuthenticator`, `PairedStationStore` and `Refusal`'s end codes (Task 15),
+  `StationSession`, its refusals, `ReconnectPolicy` and `ManualAddress` (Task 8),
+  `AppModel` (Task 51), `MainScreen` (Task 54a).
 - Produces: `ConnectionFlow`, the state machine behind the screens: welcome, a typed
   address, code entry (validated against the word list), the microphone question right
   after the first pairing, your Cores (the paired ones), connecting, connected (the
   band), link lost while listening (retrying, with Cancel), back on the air, and the five
   trouble screens. The address field takes an IPv6 literal with or without brackets and
   a port, an IPv4 address, or a host name; with no port typed it uses the Core's default
-  remote port (Task 12).
+  remote port (Task 12). Addresses are read by `ManualAddress.parse` (Task 8), never by a
+  second parser.
+  - Code entry shows the Core's `pair.fail` reason as sent (link section 3.6's table),
+    with its wait: a wrong code ("The pairing code was not right. A new code will appear
+    on the Core.", then 5, 10, 20 or 40 s), another device pairing (5 s), no code shown
+    yet, the code changed, a closed window ("This Core is not taking new devices. Open
+    pairing on the Core or on a paired device first."). The fifth wrong code in a row
+    comes back as `wrongCode` with no wait, because it closed the window: the screen says
+    so plainly and that pairing has to be opened again at the Core. It says where the
+    code is, in the desktop's words: "The code is on the Core's status page, or run
+    nereusd pairing show on the computer the Core runs on." (the status page shows it
+    only while the Core is unclaimed, and only to browsers on the Core's own networks).
+  - The name field (D65) is filled in with "iPhone" or "iPad" until Apple grants the
+    user-assigned device name entitlement (the entitlements file doesn't carry it yet),
+    and refuses before sending a name that is blank, longer than 64 bytes of UTF-8, or
+    carries Cc, Cf, Zl or Zp characters (the Core's rule; it would answer "The Core could
+    not read this device's details. Update this app.").
+  - Sign-in ends, read by `code` and falling back to the reason text for an older Core:
+    `deviceRemoved` ("This device was removed from the Core.") and `deviceNotPaired` (a
+    Core that forgot this phone) both return to the list, say the Core must be paired
+    again, and drop that Core's stored identity; `identityChanged` shows Task 15's words;
+    `takenOver` ("Another app at … connected to the Core and took over. Connect again to
+    take it back.", not retryable: until the several-devices station tasks land, one
+    session at a time holds the Core, so the desktop and the phone displace each other,
+    and the phone never redials on its own); `deviceProofFailed`; and the rate limit (10
+    failures in 60 s lock the address out for 60 s; retryable, so the flow waits and
+    tries once more).
+  - Attempts never overlap: the redial after a lost link and the connection straight
+    after pairing each wait for the one before to end (the Core lets one address have at
+    most 2 connections still connecting, link section 12.3).
+  - The Local Network question can first appear here, when the typed address is on the
+    phone's own network; after a refusal, the Core-not-answering screen says the phone
+    was not allowed to reach its own network and where to allow it.
 
 **Acceptance:**
 - `2001:db8::10`, `[2001:db8::10]:50055`, `192.0.2.10:47910` and `core.example` become
@@ -7095,15 +7163,22 @@ IPv6 address (2026-09-24).
 - A typed code with a word not in the list is caught before sending, with suggestions.
 - Each trouble screen appears for its cause against `FakeStation` configured to produce
   it: the radio off (the desktop's DISCONNECTED over the band, the last frame, the
-  five-second retry); the Core not answering (what was tried: the typed address, and
-  what to check); the Core needs updating (two majors apart, naming both versions); an
-  older Core (one major behind: connects and greys each feature whose capability is
-  missing with "Needs a newer Core"); this phone offline (waits for a network).
+  five-second retry; from `capabilities.radioConnected` at sign-in and at each resend,
+  and mid-session once station Task 25's radio state arrives); the Core not answering
+  (what was tried: the typed address, and what to check); the Core needs updating (two
+  majors apart, naming both versions, with the Core's `linkVersion` reason as sent; a
+  debug `nereusd --test-link-majors <list>` gives a real Core for it beside
+  `FakeStation`); an older Core (one major behind: connects and greys each feature
+  whose capability is missing with "Needs a newer Core"); this phone offline (waits for
+  a network).
 - Link lost while listening shows the retry with Cancel, and back on the air the band
-  resumes.
-- When the Core removes this phone (`session.end` with the removal reason) the phone
-  returns to the list of Cores, says the Core must be paired again, and drops that Core's
-  stored identity (spec §7).
+  resumes; no second attempt starts while one is still connecting.
+- When the Core removes this phone (`session.end` with `code` `deviceRemoved`) or no
+  longer knows it (`deviceNotPaired`), the phone returns to the list of Cores, says the
+  Core must be paired again, and drops that Core's stored identity (spec §7); `takenOver`
+  never redials.
+- Each pairing refusal shows its words and wait; the fifth wrong code says pairing has to
+  be opened again at the Core.
 - Screenshots of every screen against `06-first-launch.jpg`, `07-connecting.jpg` and
   `10-trouble.jpg`.
 
@@ -7147,7 +7222,12 @@ never sent anywhere), spec §4.7 (sound while locked).
    project keeps the entitlement.
 3. The Core/GUI session has put the build on the Pi 4 with JJ's go-ahead and given the
    address and port; JJ reads the pairing code on the Pi himself (over SSH, with the
-   command that session gives him).
+   command that session gives him). A Core that still holds the R2 access token counts
+   as claimed, so its window starts closed: `sudo nereusd pairing open` opens it for one
+   more device for 10 minutes, then `sudo nereusd pairing show` prints the code; both
+   take the running Core's `--config` and `--profile` when it has them, and `sudo
+   nereusd status` shows the pairing state ("Pairing: …") and how many devices are
+   paired.
 4. JJ types the Pi's IPv6 address and the code: the phone pairs, signs in and shows the
    band from the HL2.
 5. Sound on the speaker, the earpiece and AirPods; locking the phone keeps it playing.
@@ -7183,6 +7263,9 @@ that's away, transmit on its way, a slice held by the radio's mic) is Task 54's.
   `ios/NereusKit/Sources/NereusMirror/SeveralDevices.swift` (the reports: `session.held`,
   `confirm.request`, `notice`, `marker:` and `connectedDevices`)
 - Modify: `ios/NereusApp/Connect/ConnectionFlow.swift` (Task 56a's),
+  `YourStationsScreen.swift` (the device count),
+  `ios/NereusKit/Sources/NereusLink/StationBrowser.swift` (Task 16a's; `FoundStation`
+  gains the optional device count),
   `ios/NereusKit/Sources/NereusLink/LinkMessage.swift`, `LinkCodec.swift` (the new kinds),
   `LinkFeatures.swift` (`sessionHolder: 1`)
 - Test: `ios/NereusKit/Tests/NereusMirrorTests/SeveralDevicesTests.swift`,
@@ -7235,6 +7318,10 @@ that's away, transmit on its way, a slice held by the radio's mic) is Task 54's.
   - Once a confirmation is open, a drag sends only its final value; the fifth device's
     sheet closes when the Core admits the phone while it is showing; each device has one
     name everywhere (the Core numbers duplicates).
+  - Your Cores (Task 16a's list): a Core whose Bonjour record carries Task 71's device
+    count (`devices`, 0 to 4) says how many ("4 devices on it"); without the key it says
+    nothing (the several-devices design's ruling on the TXT record; the regenerated
+    `media-dnssd-txt` vector covers it).
 
 **Acceptance:**
 - Against `FakeStation` playing a Core with other devices (the design's section 14.2
@@ -7256,7 +7343,7 @@ that's away, transmit on its way, a slice held by the radio's mic) is Task 54's.
 pending until observed): the phone and the desktop on one Core (Task 70).
 
 **Execution note (advisory):** opus. Requires Tasks 41 and 71 to 75 (station), and 15,
-53, 54a and 56a. It runs once those station tasks are in the integration branch, before
+16a, 53, 54a and 56a. It runs once those station tasks are in the integration branch, before
 transmit and remote access.
 
 - [ ] **Step 1:** The reports, the declaration and the markers, with tests.

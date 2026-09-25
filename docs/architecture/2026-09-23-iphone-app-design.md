@@ -555,7 +555,8 @@ the pass (D34). Pictures are in `2026-09-23-iphone-app-design/`.
    first transmission. Listening works without it.
 5. **Set up a Core** explains the two ways to run one (on a computer, or on
    a small box from a flashed card). It finds the radio and waits for its first
-   device, showing a code with no time limit.
+   device, showing a code with no time limit until five wrong codes in a row
+   close pairing, which only the Core's own computer then reopens.
 6. **Your Cores** lists paired Cores first, then unclaimed ones on this
    network. The phone lists Cores only, never radios directly.
 7. A pairing code is a number and two words (for example `7-anvil-harbor`),
@@ -568,9 +569,11 @@ the pass (D34). Pictures are in `2026-09-23-iphone-app-design/`.
     it running when NereusSDR is closed; Start it with the computer; the
     Core's name with Rename; the pairing code, shown until a device claims
     it; then the paired devices with Revoke, and Add a device.
-11. **A small box** shows its code on a status page any browser on the network
-    can open, which changes nothing, and in its console log for claiming over
-    SSH. Only the console or an already-paired device can reopen pairing.
+11. **A small box** shows its code, while it is unclaimed, on a status page
+    any browser on its own network can open, which changes nothing, and to
+    `nereusd pairing show` on its computer for claiming over SSH; the code never
+    goes to its log. Only the console or an already-paired device can reopen
+    pairing.
 12. **Another device on the Core** no longer brings a question: up to four
     connect side by side (§5.8). The question comes for a fifth device, which
     names the four, how long each has been connected, when each was last used,
