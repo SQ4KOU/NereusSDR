@@ -2123,6 +2123,11 @@ nereus_add_test(tst_rx_channel_dfnr_lazy)
 # a remote window follows the Core's mirrored dfnrRunnable.
 nereus_add_test(tst_dfnr_availability EXTRA_LABELS gui)
 
+# R-R3-49, Sub-epic C-1: MNR and BNR stay on the VFO flag, disabled with the
+# plain reason when they cannot run (MNR only on a Mac Core, mirrored to a
+# window; BNR in no build), and choosing them is refused.
+nereus_add_test(tst_mnr_bnr_availability EXTRA_LABELS gui)
+
 # D14, R-R3-49: every NereusSDR TX meter maps to the WDSP txaMeterType index
 # Thetis reads for it (wdspTxaMeterIndex); the expected indices are written
 # by hand from the compiled third_party/wdsp/src/TXA.h.

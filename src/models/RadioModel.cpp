@@ -217,6 +217,11 @@
 //                refused, and turned off on a slice, while it cannot run.
 //                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-25 - R-R3-49, Sub-epic C-1: the Core's MNR availability
+//                (DspAssetService mnrRunnable / mnrStatus) and BNR's
+//                build-wide reason; both are refused, and turned off on a
+//                slice, while they cannot run. NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-24 - Receiver and transmit gaps plan, Task 7: TCI trx keys
 //                through MoxController::onTciPtt (PttMode::Tci); the MOX
 //                button is setMoxFromButton (chkMOX_Click); TUN-off clears
@@ -914,6 +919,19 @@ RadioModel::RadioModel(Role role, QObject* parent)
         connect(m_dspAssets, &DspAssetService::dfnrAvailabilityChanged, this, [this]() {
             for (SliceModel* slice : std::as_const(m_slices)) {
                 turnOffDfnrWithoutModel(slice);
+            }
+        });
+        // R-R3-49, Sub-epic C-1: and whether it can run MNR, which runs only
+        // on a Mac (a remote window reads it, mirrored, whatever computer
+        // the window runs on).
+#ifdef HAVE_MNR
+        m_dspAssets->setMnrAvailability(true, {});
+#else
+        m_dspAssets->setMnrAvailability(false, mnrCannotRunReason());
+#endif
+        connect(m_dspAssets, &DspAssetService::mnrAvailabilityChanged, this, [this]() {
+            for (SliceModel* slice : std::as_const(m_slices)) {
+                turnOffNrThatCannotRun(slice);
             }
         });
     }
@@ -5334,6 +5352,17 @@ void RadioModel::wireNnrSettings(SliceModel* slice)
             }
             return false;
         }
+        // R-R3-49, Sub-epic C-1: nor MNR on a Core that is not a Mac, nor
+        // BNR, which is in no build.
+        if (requested == NrSlot::MNR || requested == NrSlot::BNR) {
+            const QString cannot = nrCannotRunReason(requested);
+            if (!cannot.isEmpty()) {
+                if (reason) {
+                    *reason = cannot;
+                }
+                return false;
+            }
+        }
         RxChannel* channel = m_wdspEngine ? m_wdspEngine->rxChannel(slice->sliceIndex()) : nullptr;
         // R-R3-40: turning NNR on or off clears a runtime limit. Cleared
         // before NNR goes on, and after it goes off, so an "off" limit never
@@ -5407,6 +5436,8 @@ void RadioModel::wireNnrSettings(SliceModel* slice)
     turnOffNr3WithoutModel(slice);
     // R-R3-49: and a saved DFNR the Core cannot run.
     turnOffDfnrWithoutModel(slice);
+    // And a saved MNR or BNR it cannot run.
+    turnOffNrThatCannotRun(slice);
 }
 
 QString RadioModel::nr3CannotRunReason() const
@@ -5426,6 +5457,86 @@ QString RadioModel::dfnrCannotRunReason(bool modelMissing)
     Q_UNUSED(modelMissing);
     return tr("This Core was built without DFNR, so DFNR cannot run.");
 #endif
+}
+
+QString RadioModel::mnrCannotRunReason()
+{
+    return tr("MNR runs only on a Mac, and this Core is not a Mac, so MNR cannot run.");
+}
+
+QString RadioModel::bnrCannotRunReason()
+{
+    return tr("NVIDIA noise removal is not in this version of NereusSDR.");
+}
+
+QString RadioModel::nrCannotRunReason(NrSlot slot) const
+{
+    // R-R3-49, Sub-epic C-1: the Core's word, mirrored in a remote window.
+    if (!m_dspAssets) {
+        return nrCannotRunInThisBuildReason(slot);
+    }
+    switch (slot) {
+    case NrSlot::DFNR:
+        if (m_dspAssets->dfnrRunnable()) {
+            return {};
+        }
+        return m_dspAssets->dfnrModelStatus().isEmpty()
+            ? tr("DFNR cannot run on this Core.")
+            : m_dspAssets->dfnrModelStatus();
+    case NrSlot::MNR:
+        if (m_dspAssets->mnrRunnable()) {
+            return {};
+        }
+        return m_dspAssets->mnrStatus().isEmpty() ? mnrCannotRunReason()
+                                                  : m_dspAssets->mnrStatus();
+    case NrSlot::BNR:
+        return bnrBuilt() ? QString() : bnrCannotRunReason();
+    default:
+        return {};
+    }
+}
+
+QString RadioModel::nrCannotRunInThisBuildReason(NrSlot slot)
+{
+    switch (slot) {
+    case NrSlot::DFNR:
+#ifdef HAVE_DFNR
+        return {};
+#else
+        return dfnrCannotRunReason(true);
+#endif
+    case NrSlot::MNR:
+#ifdef HAVE_MNR
+        return {};
+#else
+        return mnrCannotRunReason();
+#endif
+    case NrSlot::BNR:
+        return bnrBuilt() ? QString() : bnrCannotRunReason();
+    default:
+        return {};
+    }
+}
+
+void RadioModel::turnOffNrThatCannotRun(SliceModel* slice)
+{
+    // R-R3-49, Sub-epic C-1: MNR on a Core without it, and BNR anywhere,
+    // as turnOffDfnrWithoutModel does for DFNR.
+    if (!slice || role() != Role::Local) {
+        return;
+    }
+    const NrSlot active = slice->activeNr();
+    if (active != NrSlot::MNR && active != NrSlot::BNR) {
+        return;
+    }
+    const QString reason = nrCannotRunReason(active);
+    if (reason.isEmpty()) {
+        return;
+    }
+    // Off always passes the selection applier; the reason is set after,
+    // since setActiveNr clears it.
+    slice->setActiveNr(NrSlot::Off);
+    slice->reportNnrEditResult(reason);
 }
 
 void RadioModel::onRxChannelDfnrUnavailable(bool modelMissing)
@@ -5537,6 +5648,7 @@ void RadioModel::applyNnrStateToChannel(SliceModel* slice, RxChannel* channel)
     // usable NR3 model; the slice shows NR off with the reason instead.
     turnOffNr3WithoutModel(slice);
     turnOffDfnrWithoutModel(slice);   // R-R3-49: likewise DFNR
+    turnOffNrThatCannotRun(slice);    // R-R3-49: and MNR or BNR
 
     if (channel->controlLane() != nullptr) {
         // R-R3-39: the same steps as one receive-lane job

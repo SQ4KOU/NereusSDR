@@ -188,6 +188,9 @@
 //   2026-09-25 - R-R3-49, Sub-epic C-1: dspAssetVersion 3 (DspAssetService
 //                sends dfnrRunnable and dfnrModelStatus). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49, Sub-epic C-1: dspAssetVersion 4 (DspAssetService
+//                sends mnrRunnable and mnrStatus). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 //   2026-09-25  J.J. Boyd / KG4VCF  Receiver and transmit gaps plan,
 //                                    Task 13: a window's External TX
 //                                    Inhibit change reaches the Core's gate.
@@ -4883,7 +4886,9 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
     // 2 (R-R3-21): NR3 models are Core assets (kind 2, selectNr3Model).
     // 3 (R-R3-49, Sub-epic C-1): DspAssetService also sends dfnrRunnable
     // and dfnrModelStatus, whether this Core can run DFNR.
-    caps.dspAssetVersion = 3;
+    // 4 (R-R3-49, Sub-epic C-1): and mnrRunnable and mnrStatus, whether
+    // this Core can run MNR (a Mac only).
+    caps.dspAssetVersion = 4;
     caps.psDisplayVersion = media ? 1 : 0;
 #endif
 

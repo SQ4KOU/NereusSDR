@@ -124,6 +124,9 @@
 //   2026-09-25 - R-R3-49, Sub-epic C-1: a slice refuses DFNR while the
 //                Core's mirrored dfnrRunnable is false. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49, Sub-epic C-1: and MNR while the Core's mirrored
+//                mnrRunnable is false, and BNR (in no build). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-24: Part C fix wave: the optional device shortName in
 //               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
@@ -2891,6 +2894,18 @@ void StationClient::watchForOutbound(const QByteArray& objectKey, QObject* objec
                         : assets->dfnrModelStatus();
                 }
                 return false;
+            }
+            // And MNR (the Core's mirrored mnrRunnable: it runs only on a
+            // Mac Core) and BNR (in no build), in the model's words.
+            if ((requested == NrSlot::MNR || requested == NrSlot::BNR) && owner
+                && owner->m_radioModel) {
+                const QString cannot = owner->m_radioModel->nrCannotRunReason(requested);
+                if (!cannot.isEmpty()) {
+                    if (reason) {
+                        *reason = cannot;
+                    }
+                    return false;
+                }
             }
             return true;
         });

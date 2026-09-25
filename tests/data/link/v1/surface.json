@@ -128,7 +128,7 @@
         {
             "kind": "i64",
             "name": "dspAssetVersion",
-            "value": 3
+            "value": 4
         },
         {
             "kind": "i64",
@@ -2931,6 +2931,18 @@
                     "kind": "bool",
                     "name": "dfnrRunnable",
                     "ordinal": 9
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "mnrStatus",
+                    "ordinal": 10
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "mnrRunnable",
+                    "ordinal": 11
                 }
             ]
         },

@@ -2,15 +2,18 @@
 // =================================================================
 // tests/tst_dfnr_availability.cpp  (NereusSDR)
 // =================================================================
-// R-R3-49, Sub-epic C-1: DFNR is offered only while it can run.
+// R-R3-49, Sub-epic C-1: DFNR runs only while it can, and the VFO flag
+// always shows it: disabled, with the plain reason, when it cannot run
+// (operator, 2026-09-25: "Not a fan of disappearing buttons but rather
+// disabled.").
 //
 //   - No model (or a build without DFNR): the Core's dfnrRunnable is false
 //     with its plain reason, choosing DFNR is refused, and the VFO flag
-//     hides the DFNR button (as it hides MNR and BNR) and offers no quick
+//     shows the DFNR button disabled with the reason and offers no quick
 //     controls.
 //   - A model that fails at a channel's first selection: dfnrRunnable goes
 //     false, a slice holding DFNR turns it off with the reason, and the
-//     button hides.
+//     button disables.
 //   - A remote window follows its Core's mirrored dfnrRunnable.
 // No radio is connected and nothing keys.
 // =================================================================
@@ -18,6 +21,9 @@
 //   2026-09-25: original test for NereusSDR by J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code
 //               (R-R3-49, Sub-epic C-1).
+//   2026-09-25: the button is disabled with the reason, never hidden
+//               (tx-followup-3). J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -32,8 +38,32 @@
 #include "gui/widgets/VfoWidget.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
+#include "gui/widgets/DspParamPopup.h"
+#include "OperatorWording.h"
 
 using namespace NereusSDR;
+
+namespace {
+
+// Shown, enabled, and not carrying a reason.
+bool offered(const QPushButton* button)
+{
+    return button && !button->isHidden() && button->isEnabled();
+}
+
+// Shown but disabled, its tooltip the plain reason.
+bool shownDisabledWith(const QPushButton* button, const QString& reason)
+{
+    return button && !button->isHidden() && !button->isEnabled()
+        && button->toolTip() == reason && OperatorWording::isPlain(reason);
+}
+
+int popupsOf(const QWidget& widget)
+{
+    return int(widget.findChildren<DspParamPopup*>().size());
+}
+
+} // namespace
 
 class TestDfnrAvailability : public QObject {
     Q_OBJECT
@@ -71,7 +101,10 @@ private slots:
         vfo.setRadioModel(&model);
         vfo.setSlice(slice);
         QVERIFY(vfo.dfnrButtonForTest());
-        QVERIFY(vfo.dfnrButtonForTest()->isHidden());
+        QVERIFY(shownDisabledWith(vfo.dfnrButtonForTest(), assets->dfnrModelStatus()));
+        // Its quick controls do not open.
+        emit vfo.dfnrButtonForTest()->customContextMenuRequested(QPoint(1, 1));
+        QCOMPARE(popupsOf(vfo), 0);
     }
 
 #ifdef HAVE_DFNR
@@ -93,7 +126,7 @@ private slots:
         VfoWidget vfo;
         vfo.setRadioModel(&model);
         vfo.setSlice(slice);
-        QVERIFY(!vfo.dfnrButtonForTest()->isHidden());
+        QVERIFY(offered(vfo.dfnrButtonForTest()));
         QVERIFY(vfo.dfnrButtonForTest()->isChecked());
 
         // A channel's first DFNR selection could not load the model.
@@ -106,7 +139,7 @@ private slots:
         QCOMPARE(assets->dfnrModelStatus(), reason);
         QCOMPARE(slice->activeNr(), NrSlot::Off);
         QCOMPARE(slice->nnrLastError(), reason);
-        QVERIFY(vfo.dfnrButtonForTest()->isHidden());
+        QVERIFY(shownDisabledWith(vfo.dfnrButtonForTest(), reason));
         QVERIFY(!vfo.dfnrButtonForTest()->isChecked());
         // And it is refused from now on.
         slice->setActiveNr(NrSlot::DFNR);
@@ -121,22 +154,22 @@ private slots:
         QVERIFY(assets->dfnrRunnable());   // an older Core never says
         VfoWidget vfo;
         vfo.setRadioModel(&remote);
-        QVERIFY(!vfo.dfnrButtonForTest()->isHidden());
+        QVERIFY(offered(vfo.dfnrButtonForTest()));
 
-        QVERIFY(assets->applyRemoteProperty(
-            "dfnrModelStatus",
-            QStringLiteral("No DFNR model file was found on this Core, so DFNR cannot run.")));
+        const QString coreReason =
+            QStringLiteral("No DFNR model file was found on this Core, so DFNR cannot run.");
+        QVERIFY(assets->applyRemoteProperty("dfnrModelStatus", coreReason));
         QVERIFY(assets->applyRemoteProperty("dfnrRunnable", false));
-        QVERIFY(vfo.dfnrButtonForTest()->isHidden());
+        QVERIFY(shownDisabledWith(vfo.dfnrButtonForTest(), coreReason));
 
         QVERIFY(assets->applyRemoteProperty("dfnrRunnable", true));
-        QVERIFY(!vfo.dfnrButtonForTest()->isHidden());
+        QVERIFY(offered(vfo.dfnrButtonForTest()));
         // A new session starts from the defaults again.
         QVERIFY(assets->applyRemoteProperty("dfnrRunnable", false));
         assets->resetSession();
         QVERIFY(assets->dfnrRunnable());
         QVERIFY(assets->dfnrModelStatus().isEmpty());
-        QVERIFY(!vfo.dfnrButtonForTest()->isHidden());
+        QVERIFY(offered(vfo.dfnrButtonForTest()));
     }
 };
 

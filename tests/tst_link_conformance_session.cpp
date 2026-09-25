@@ -90,6 +90,11 @@
 //                                    too, so dfnrRunnable is false on
 //                                    every machine. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (tx-followup-3): the Core
+//                                    plays one that cannot run MNR, so
+//                                    mnrRunnable is false on every
+//                                    machine. AI-assisted via Anthropic
+//                                    Claude Code.
 //   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 12 (R-IOS-08):
 //                                    stationSetup "token" and
 //                                    "pairedDevice" for the device sign-in
@@ -256,6 +261,12 @@ QString buildStation(const QJsonObject& setup, Station* station, quint16 major)
         }
     } else {
         return QStringLiteral("stationSetup.radio must be \"static\" or \"connectable\"");
+    }
+    // R-R3-49 (tx-followup-3): MNR runs only on a Mac Core. Every fixture
+    // plays a Core that cannot run it, so mnrRunnable and mnrStatus are the
+    // same on every machine the runner runs on.
+    if (DspAssetService* assets = station->model->dspAssets()) {
+        assets->setMnrAvailability(false, RadioModel::mnrCannotRunReason());
     }
     if (radio != QStringLiteral("static") && setup.contains(QStringLiteral("board"))) {
         return QStringLiteral("stationSetup.board applies only to the static radio");

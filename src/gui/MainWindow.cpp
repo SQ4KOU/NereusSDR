@@ -138,6 +138,10 @@
 //   2026-09-24: Part C fix wave: the optional device shortName in
 //               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25 - J.J. Boyd (KG4VCF). R-R3-49, Sub-epic C-1 (tx-followup-3):
+//                 the DSP menu's NR list shows DFNR, MNR and BNR always,
+//                 disabled with the plain reason while they cannot run.
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -7532,40 +7536,28 @@ void MainWindow::buildMenuBar()
     QMenu* dspMenu = menuBar()->addMenu(QStringLiteral("&DSP"));
 
     // ── NR submenu — full slot bank, mutual exclusion via QActionGroup ─────
-    // Mirrors VfoWidget's 7-button NR bank. Off/NR1/NR2/NR3/NR4/DFNR are
-    // always present; MNR is gated by HAVE_MNR (macOS only) and BNR by
-    // HAVE_BNR (NVIDIA build, currently never defined). Hidden actions
-    // remain in the group so the activeNrChanged sync handler can find
-    // them by index.
+    // Mirrors VfoWidget's NR bank. Every filter is always listed (R-R3-49,
+    // Sub-epic C-1: never hidden); DFNR, MNR and BNR are disabled, with the
+    // plain reason as the tooltip, while they cannot run (RadioModel::
+    // nrCannotRunReason: the Core's word, mirrored, in a remote window).
     {
         QMenu* nrMenu = dspMenu->addMenu(QStringLiteral("&NR"));
+        nrMenu->setToolTipsVisible(true);
         m_nrGroup = new QActionGroup(this);
         m_nrGroup->setExclusive(true);
 
         using Slot = NereusSDR::NrSlot;
-        struct Entry { const char* label; Slot slot; bool hidden; };
+        struct Entry { const char* label; Slot slot; };
         const Entry nrSlots[] = {
-            { "&Off",   Slot::Off,  false },
-            { "NR&1",   Slot::NR1,  false },
-            { "NR&2",   Slot::NR2,  false },
-            { "NR&3",   Slot::NR3,  false },
-            { "NR&4",   Slot::NR4,  false },
-            { "&DFNR",  Slot::DFNR, false },
-            { "&NNR",   Slot::NNR, false },
-            { "&MNR",   Slot::MNR,
-#ifdef HAVE_MNR
-                false
-#else
-                true
-#endif
-            },
-            { "&BNR",   Slot::BNR,
-#ifdef HAVE_BNR
-                false
-#else
-                true
-#endif
-            },
+            { "&Off",   Slot::Off  },
+            { "NR&1",   Slot::NR1  },
+            { "NR&2",   Slot::NR2  },
+            { "NR&3",   Slot::NR3  },
+            { "NR&4",   Slot::NR4  },
+            { "&DFNR",  Slot::DFNR },
+            { "&NNR",   Slot::NNR  },
+            { "&MNR",   Slot::MNR  },
+            { "&BNR",   Slot::BNR  },
         };
         for (const auto& nr : nrSlots) {
             Slot slot = nr.slot;
@@ -7589,7 +7581,6 @@ void MainWindow::buildMenuBar()
                 });
             a->setData(static_cast<int>(slot));
             a->setCheckable(true);
-            if (nr.hidden) { a->setVisible(false); }
             m_nrGroup->addAction(a);
         }
         connect(nrMenu, &QMenu::aboutToShow, this, [this]() {
@@ -7598,7 +7589,11 @@ void MainWindow::buildMenuBar()
                 const NrSlot slot = static_cast<NrSlot>(action->data().toInt());
                 QSignalBlocker blocker(action);
                 action->setChecked(slice && slice->activeNr() == slot);
-                action->setEnabled(slice && (slot != NrSlot::NNR || slice->nnrAvailable()));
+                const QString cannot = m_radioModel->nrCannotRunReason(slot);
+                action->setEnabled(slice && cannot.isEmpty()
+                                   && (slot != NrSlot::NNR || slice->nnrAvailable()));
+                action->setToolTip(cannot.isEmpty() ? action->text().remove(QLatin1Char('&'))
+                                                    : cannot);
             }
         });
     }

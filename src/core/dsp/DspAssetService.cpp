@@ -562,6 +562,12 @@ void DspAssetService::resetSession()
             m_dfnrStatus.clear();
             emit dfnrAvailabilityChanged();
         }
+        // And MNR's.
+        if (!m_mnrRunnable || !m_mnrStatus.isEmpty()) {
+            m_mnrRunnable = true;
+            m_mnrStatus.clear();
+            emit mnrAvailabilityChanged();
+        }
     }
 }
 
@@ -731,6 +737,16 @@ void DspAssetService::setDfnrAvailability(bool runnable, const QString& status)
     emit dfnrAvailabilityChanged();
 }
 
+void DspAssetService::setMnrAvailability(bool runnable, const QString& status)
+{
+    if (!m_local) return;
+    const QString text = runnable ? QString() : status;
+    if (m_mnrRunnable == runnable && m_mnrStatus == text) return;
+    m_mnrRunnable = runnable;
+    m_mnrStatus = text;
+    emit mnrAvailabilityChanged();
+}
+
 void DspAssetService::setNr3Status(const QString& status)
 {
     if (m_nr3Status == status) return;
@@ -895,6 +911,24 @@ bool DspAssetService::applyRemoteProperty(const QByteArray& name, const QVariant
         if (m_dfnrRunnable != runnable) {
             m_dfnrRunnable = runnable;
             emit dfnrAvailabilityChanged();
+        }
+        return true;
+    }
+    if (name == "mnrRunnable") {
+        bool runnable = true;
+        if (!exactBool(value, &runnable)) return false;
+        if (m_mnrRunnable != runnable) {
+            m_mnrRunnable = runnable;
+            emit mnrAvailabilityChanged();
+        }
+        return true;
+    }
+    if (name == "mnrStatus") {
+        QString text;
+        if (!exactString(value, &text)) return false;
+        if (m_mnrStatus != text) {
+            m_mnrStatus = text;
+            emit mnrAvailabilityChanged();
         }
         return true;
     }

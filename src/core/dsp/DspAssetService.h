@@ -50,6 +50,13 @@ class DspAssetService final : public QObject {
     // an older Core changes nothing.
     Q_PROPERTY(QString dfnrModelStatus READ dfnrModelStatus NOTIFY dfnrAvailabilityChanged)
     Q_PROPERTY(bool dfnrRunnable READ dfnrRunnable NOTIFY dfnrAvailabilityChanged)
+    // R-R3-49, Sub-epic C-1 (dspAssetVersion 4): the same pair for MNR,
+    // which runs only on a Mac. mnrStatus is the plain reason MNR cannot
+    // run (empty when it can); mnrRunnable is false on a Core built without
+    // MNR. A window reads true until a Core says otherwise, so an older
+    // Core changes nothing.
+    Q_PROPERTY(QString mnrStatus READ mnrStatus NOTIFY mnrAvailabilityChanged)
+    Q_PROPERTY(bool mnrRunnable READ mnrRunnable NOTIFY mnrAvailabilityChanged)
 
 public:
     using RemoteRequestHandler =
@@ -94,6 +101,12 @@ public:
     // Local only (a remote window takes the Core's): what the Core found,
     // at start or when the model failed to load at the first selection.
     void setDfnrAvailability(bool runnable, const QString& status);
+    // Local: whether this Core can run MNR, and why not. Remote: mirrored.
+    bool mnrRunnable() const { return m_mnrRunnable; }
+    QString mnrStatus() const { return m_mnrStatus; }
+    // Local only (a remote window takes the Core's): set at start from
+    // whether this build has MNR.
+    void setMnrAvailability(bool runnable, const QString& status);
     // The id of the model last handed to the loader (local only).
     QString activeNr3ModelAsset() const { return m_nr3Active; }
     // Local: this build can load NR3 models. Remote: the Core advertised
@@ -129,6 +142,7 @@ signals:
     void selectionChanged();
     void nr3SelectionChanged();
     void dfnrAvailabilityChanged();
+    void mnrAvailabilityChanged();
     void configurationChanged();
 
 private:
@@ -170,6 +184,8 @@ private:
     bool m_nr3Runnable{true};
     bool m_dfnrRunnable{true};
     QString m_dfnrStatus;
+    bool m_mnrRunnable{true};
+    QString m_mnrStatus;
     bool m_remoteNr3Supported{false};
     Nr3ModelLoader m_nr3Loader;
 };

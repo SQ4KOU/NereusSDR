@@ -119,6 +119,11 @@
 //                refused, and turned off on a slice, while it cannot run.
 //                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-25 - R-R3-49, Sub-epic C-1: the Core's MNR availability
+//                (DspAssetService mnrRunnable / mnrStatus) and BNR's
+//                build-wide reason; both are refused, and turned off on a
+//                slice, while they cannot run. NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-24 - Receiver and transmit gaps plan, Task 7: setMoxFromButton
 //                (Thetis chkMOX_Click, console.cs:29730-29747 [v2.10.3.15])
 //                for the MOX buttons, and setMox, the TCI trx shim, now keys
@@ -4256,6 +4261,33 @@ public:
     }
 private:
 #endif
+public:
+    // R-R3-49, Sub-epic C-1: the plain reasons MNR and BNR cannot run, for
+    // the Core's refusals and the VFO flag's disabled buttons. MNR runs
+    // only on a Mac (a Core built without it sends this as mnrStatus); BNR
+    // is in no build, so its reason holds everywhere.
+    static QString mnrCannotRunReason();
+    static QString bnrCannotRunReason();
+    // Why the noise filter in `slot` cannot run for this model's receivers,
+    // in plain words, or empty when it can. DFNR and MNR follow this
+    // model's DspAssetService (the Core's, mirrored, in a remote window);
+    // BNR is in no build. Every other filter returns empty.
+    QString nrCannotRunReason(NrSlot slot) const;
+    // The same for a flag with no model: this build alone decides.
+    static QString nrCannotRunInThisBuildReason(NrSlot slot);
+    // Whether this build can run BNR (never, today: HAVE_BNR is not set).
+    static constexpr bool bnrBuilt()
+    {
+#ifdef HAVE_BNR
+        return true;
+#else
+        return false;
+#endif
+    }
+private:
+    // A slice holding MNR or BNR the Core cannot run turns it off, with the
+    // reason, as turnOffDfnrWithoutModel does. Local role only.
+    void turnOffNrThatCannotRun(SliceModel* slice);
 
 public:
     // Force-run any pending coalesced slice save synchronously. Call this

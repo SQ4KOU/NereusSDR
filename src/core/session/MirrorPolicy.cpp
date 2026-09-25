@@ -45,6 +45,9 @@
 //   2026-09-25 - R-R3-49, Sub-epic C-1: DspAssetService's dfnrModelStatus
 //                and dfnrRunnable, Outbound. J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49, Sub-epic C-1: DspAssetService's mnrStatus and
+//                mnrRunnable, Outbound. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 //   2026-09-24 - iPhone app Task 13 (R-IOS-08): StationDevicesFacade, all
 //                 Outbound. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
@@ -372,6 +375,11 @@ const MirrorPolicy::Entry kEntries[] = {
     // sends them and the window keeps its defaults (true, no reason).
     { "DspAssetService", "dfnrModelStatus", MirrorDirection::Outbound },
     { "DspAssetService", "dfnrRunnable", MirrorDirection::Outbound },
+    // R-R3-49, Sub-epic C-1 (dspAssetVersion 4): the same pair for MNR,
+    // which runs only on a Mac. A window shows MNR disabled with mnrStatus
+    // while mnrRunnable is false; an older Core never sends them.
+    { "DspAssetService", "mnrStatus", MirrorDirection::Outbound },
+    { "DspAssetService", "mnrRunnable", MirrorDirection::Outbound },
 
     // R-R3-21 / R-R3-09 (notchControlVersion 1): the Core's notch list. The
     // list and its revision are Outbound; a window changes the list only

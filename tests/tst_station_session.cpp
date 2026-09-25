@@ -371,6 +371,8 @@ private slots:
     void nr3ModelChoiceLoadsOnceOnTheCoreAndMirrors();
     void nr3CannotRunIsRefusedOnTheCoreAndInTheWindow();
     void dfnrCannotRunIsRefusedOnTheCoreAndInTheWindow();
+    void mnrCannotRunIsRefusedOnTheCoreAndInTheWindow();
+    void bnrIsRefusedOnTheCoreAndInTheWindow();
 #ifdef HAVE_DFNR
     void dfnrFailingAtFirstSelectionTurnsTheWindowOff();
 #endif
@@ -3511,8 +3513,8 @@ void TstStationSession::dfnrCannotRunIsRefusedOnTheCoreAndInTheWindow()
     QCOMPARE(coreSlice->activeNr(), NrSlot::Off);
     QCOMPARE(coreSlice->nnrLastError(), reason);
 
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
-    QCOMPARE(server.buildCapabilities().dspAssetVersion, 3);
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
+    QCOMPARE(server.buildCapabilities().dspAssetVersion, 4);
     RadioModel clientModel(RadioModel::Role::Remote);
     SettingsProxy proxy;
     StationClient client(&clientModel, &proxy);
@@ -3543,6 +3545,106 @@ void TstStationSession::dfnrCannotRunIsRefusedOnTheCoreAndInTheWindow()
     client.disconnectFromStation(QStringLiteral("test complete"));
 }
 
+void TstStationSession::mnrCannotRunIsRefusedOnTheCoreAndInTheWindow()
+{
+    // R-R3-49, Sub-epic C-1 (dspAssetVersion 4). MNR runs only on a Mac. A
+    // Core that cannot run it says so through the mirrored mnrRunnable and
+    // mnrStatus: turning MNR on is refused on the Core and in a remote
+    // window with the Core's sentence, whatever computer the window runs
+    // on. On a Mac Core the test sets the Core's availability as a Linux
+    // Core's start does.
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+    auto stationModel = makeStationRadioModel(0);
+    DspAssetService* core = stationModel->dspAssets();
+    const QString reason = RadioModel::mnrCannotRunReason();
+#ifdef HAVE_MNR
+    QVERIFY(core->mnrRunnable());
+    core->setMnrAvailability(false, reason);
+#endif
+    QVERIFY(!core->mnrRunnable());
+    QCOMPARE(core->mnrStatus(), reason);
+
+    SliceModel* coreSlice = stationModel->slices().constFirst();
+    coreSlice->setActiveNr(NrSlot::Off);
+    coreSlice->setActiveNr(NrSlot::MNR);
+    QCOMPARE(coreSlice->activeNr(), NrSlot::Off);
+    QCOMPARE(coreSlice->nnrLastError(), reason);
+
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
+    QCOMPARE(server.buildCapabilities().dspAssetVersion, 4);
+    RadioModel clientModel(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&clientModel, &proxy);
+    auto* stationEnd = new LoopbackTransport(QStringLiteral("station-end"), this);
+    auto* clientEnd = new LoopbackTransport(QStringLiteral("client-end"), this);
+    stationEnd->linkTo(clientEnd);
+    QSignalSpy completed(&client, &StationClient::handshakeComplete);
+    client.startSession(clientEnd, server.token());
+    server.acceptTransport(stationEnd);
+    QTRY_COMPARE(completed.count(), 1);
+
+    DspAssetService* window = clientModel.dspAssets();
+    QTRY_VERIFY(!window->mnrRunnable());
+    QTRY_COMPARE(window->mnrStatus(), reason);
+    QCOMPARE(clientModel.nrCannotRunReason(NrSlot::MNR), reason);
+    QTRY_VERIFY(!clientModel.slices().isEmpty());
+    SliceModel* windowSlice = clientModel.slices().constFirst();
+    QSignalSpy windowRefused(windowSlice, &SliceModel::nrSelectionRefused);
+    windowSlice->setActiveNr(NrSlot::MNR);
+    QCOMPARE(windowSlice->activeNr(), NrSlot::Off);
+    QCOMPARE(windowRefused.count(), 1);
+    QCOMPARE(windowRefused.constFirst().at(0).toString(), reason);
+    QTest::qWait(100);
+    QCOMPARE(coreSlice->activeNr(), NrSlot::Off);
+    windowSlice->setActiveNr(NrSlot::NR2);
+    QTRY_COMPARE(coreSlice->activeNr(), NrSlot::NR2);
+    windowSlice->setActiveNr(NrSlot::Off);
+    QTRY_COMPARE(coreSlice->activeNr(), NrSlot::Off);
+    client.disconnectFromStation(QStringLiteral("test complete"));
+}
+
+void TstStationSession::bnrIsRefusedOnTheCoreAndInTheWindow()
+{
+    // R-R3-49, Sub-epic C-1: BNR is in no build, so it is refused on the
+    // Core and in a window with the same plain sentence, and no mirrored
+    // value is needed for it.
+    QVERIFY(!RadioModel::bnrBuilt());
+    const QString reason = RadioModel::bnrCannotRunReason();
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+    auto stationModel = makeStationRadioModel(0);
+    SliceModel* coreSlice = stationModel->slices().constFirst();
+    coreSlice->setActiveNr(NrSlot::Off);
+    coreSlice->setActiveNr(NrSlot::BNR);
+    QCOMPARE(coreSlice->activeNr(), NrSlot::Off);
+    QCOMPARE(coreSlice->nnrLastError(), reason);
+
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
+    RadioModel clientModel(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&clientModel, &proxy);
+    auto* stationEnd = new LoopbackTransport(QStringLiteral("station-end"), this);
+    auto* clientEnd = new LoopbackTransport(QStringLiteral("client-end"), this);
+    stationEnd->linkTo(clientEnd);
+    QSignalSpy completed(&client, &StationClient::handshakeComplete);
+    client.startSession(clientEnd, server.token());
+    server.acceptTransport(stationEnd);
+    QTRY_COMPARE(completed.count(), 1);
+    QTRY_VERIFY(!clientModel.slices().isEmpty());
+    SliceModel* windowSlice = clientModel.slices().constFirst();
+    QSignalSpy windowRefused(windowSlice, &SliceModel::nrSelectionRefused);
+    windowSlice->setActiveNr(NrSlot::BNR);
+    QCOMPARE(windowSlice->activeNr(), NrSlot::Off);
+    QCOMPARE(windowRefused.count(), 1);
+    QCOMPARE(windowRefused.constFirst().at(0).toString(), reason);
+    QTest::qWait(100);
+    QCOMPARE(coreSlice->activeNr(), NrSlot::Off);
+    client.disconnectFromStation(QStringLiteral("test complete"));
+}
+
 #ifdef HAVE_DFNR
 void TstStationSession::dfnrFailingAtFirstSelectionTurnsTheWindowOff()
 {
@@ -3562,7 +3664,7 @@ void TstStationSession::dfnrFailingAtFirstSelectionTurnsTheWindowOff()
     QVERIFY(core->dfnrRunnable());
     SliceModel* coreSlice = stationModel->slices().constFirst();
 
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     RadioModel clientModel(RadioModel::Role::Remote);
     SettingsProxy proxy;
     StationClient client(&clientModel, &proxy);
@@ -3701,7 +3803,7 @@ void TstStationSession::nr3ModelChoiceLoadsOnceOnTheCoreAndMirrors()
     stationModel->dspAssets()->setNr3ModelLoader(
         [&loaded](const QString& path) { loaded.append(path); });
     StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
-    QCOMPARE(server.buildCapabilities().dspAssetVersion, 3);
+    QCOMPARE(server.buildCapabilities().dspAssetVersion, 4);
 
     RadioModel clientModel(RadioModel::Role::Remote);
     SettingsProxy proxy;

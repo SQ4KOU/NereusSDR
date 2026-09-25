@@ -871,6 +871,11 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("nr3CannotRunReason"),
           // R-R3-49: DFNR's, sent as dspAssets' dfnrModelStatus.
           QStringLiteral("dfnrCannotRunReason"),
+          // R-R3-49 (tx-followup-3): MNR's, sent as dspAssets' mnrStatus,
+          // BNR's, and the one reason the flag, the menu and the refusals
+          // read.
+          QStringLiteral("mnrCannotRunReason"), QStringLiteral("bnrCannotRunReason"),
+          QStringLiteral("nrCannotRunReason"), QStringLiteral("nrCannotRunInThisBuildReason"),
           // The slice cap reason, relayed by the addSlice and addSliceOnPan
           // verbs' results.
           QStringLiteral("sliceCapReason"),

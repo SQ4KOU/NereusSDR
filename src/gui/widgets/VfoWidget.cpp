@@ -60,6 +60,12 @@
 //                 without it, or the Core's dfnrRunnable false), as MNR and
 //                 BNR are hidden. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-25 - R-R3-49, Sub-epic C-1 (tx-followup-3): DFNR, MNR and BNR
+//                 are never hidden. One that cannot run is shown disabled
+//                 with the plain reason (the Core's, in a remote window) and
+//                 opens no quick controls; BNR takes the row-2 cell beside
+//                 SNB. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
 //   2026-09-24 - iPhone app Task 19 (R-IOS-06): the AGC labels, the AGC-T
 //                 range and the slice colours come from ControlRanges.h,
 //                 which the Core's catalogue reads too. J.J. Boyd (KG4VCF),
@@ -1546,7 +1552,7 @@ void VfoWidget::buildDspTab()
     // Row 1: NR4 | DFNR | MNR | (col 3 empty)
     m_nr4Btn  = makeToggle(QStringLiteral("NR4"));
     m_dfnrBtn = makeToggle(QStringLiteral("DFNR"));  // Full label — was "DFN" (truncated at 28px); now fits at uniform width
-    m_bnrBtn  = makeToggle(QStringLiteral("BNR"));   // Hidden permanently (NVIDIA deferred)
+    m_bnrBtn  = makeToggle(QStringLiteral("BNR"));   // Shown disabled while no build has it (NVIDIA)
     m_mnrBtn  = makeToggle(QStringLiteral("MNR"));
     m_nnrBtn  = makeToggle(QStringLiteral("NNR"));
     m_nr4Btn->setContextMenuPolicy(Qt::CustomContextMenu);
@@ -1560,6 +1566,11 @@ void VfoWidget::buildDspTab()
     m_mnrBtn->setToolTip(QStringLiteral("MNR: macOS noise reduction. Left-click activates, right-click adjusts knobs"));
     m_nnrBtn->setToolTip(QStringLiteral("NNR: neural noise reduction. Left-click activates, right-click adjusts settings"));
     m_nnrToolTip = m_nnrBtn->toolTip();
+    // R-R3-49, Sub-epic C-1: each filter's own tooltip, put back when it can
+    // run again (updateNrAvailability shows the reason while it cannot).
+    m_dfnrToolTip = m_dfnrBtn->toolTip();
+    m_bnrToolTip = m_bnrBtn->toolTip();
+    m_mnrToolTip = m_mnrBtn->toolTip();
     dspGrid->addWidget(m_nr4Btn,  1, 0);
     dspGrid->addWidget(m_dfnrBtn, 1, 1);
     dspGrid->addWidget(m_mnrBtn,  1, 2);
@@ -1577,19 +1588,23 @@ void VfoWidget::buildDspTab()
     m_nnrLimitIndicator->setVisible(false);
     dspGrid->addWidget(m_nnrLimitIndicator, 1, 3, Qt::AlignTop | Qt::AlignRight);
 
-#ifndef HAVE_BNR
-    m_bnrBtn->hide();  // Hidden permanently: NVIDIA BNR integration deferred.
-    // BNR not added to grid — hidden and parented to dspWidget for lifecycle.
-#endif
-#ifndef HAVE_MNR
-    m_mnrBtn->hide();  // Hidden on non-macOS platforms.
-#endif
-#ifndef HAVE_DFNR
-    // R-R3-49, Sub-epic C-1: hidden in a build without DFNR, as MNR and
-    // BNR are. With a model, the model's dfnrRunnable decides instead
-    // (updateDfnrAvailability): a remote window follows its Core's.
-    m_dfnrBtn->hide();
-#endif
+    // R-R3-49, Sub-epic C-1: DFNR, MNR and BNR are never hidden (operator,
+    // 2026-09-25: "Not a fan of disappearing buttons but rather disabled.").
+    // One that cannot run is shown disabled with the plain reason
+    // (updateNrAvailability): the model's, which in a remote window is the
+    // Core's, or this build's with no model. BNR, in no build today, takes
+    // the row-2 cell beside SNB.
+    dspGrid->addWidget(m_bnrBtn, 2, 2);
+    // The shared toggle style has no disabled look, so these three add the
+    // style guide's disabled colours (StyleConstants kDisabled*) to show it.
+    for (QPushButton* btn : {m_dfnrBtn, m_mnrBtn, m_bnrBtn}) {
+        btn->setStyleSheet(vfoDspToggleStyle() + QStringLiteral(
+            "QPushButton:disabled {"
+            "  background: %1; color: %2; border: 1px solid %3;"
+            "}").arg(NereusSDR::Style::kDisabledBg, NereusSDR::Style::kDisabledText,
+                     NereusSDR::Style::kDisabledBorder));
+    }
+    updateNrAvailability();
 
     // Row 2: ANF | SNB | (cols 2-3 empty)
     m_anfToggle = makeToggle(QStringLiteral("ANF"));
@@ -1617,7 +1632,7 @@ void VfoWidget::buildDspTab()
     // size so the sub-grid hugs its content instead of stretching to the
     // flag width.
     for (auto* btn : {m_nbButton, m_nr1Btn, m_nr2Btn, m_nr3Btn,
-                      m_nr4Btn, m_dfnrBtn, m_mnrBtn, m_nnrBtn,
+                      m_nr4Btn, m_dfnrBtn, m_mnrBtn, m_nnrBtn, m_bnrBtn,
                       m_anfToggle, m_snbToggle}) {
         if (btn) {
             btn->setFixedHeight(26);
@@ -3490,18 +3505,24 @@ void VfoWidget::setRxBypassActive(bool on)
 // is non-owning; lifetime is RadioModel-owned and MainWindow-scoped.
 void VfoWidget::setRadioModel(RadioModel* model)
 {
-    if (m_dfnrAvailabilityConn) {
-        disconnect(m_dfnrAvailabilityConn);
-        m_dfnrAvailabilityConn = {};
+    for (QMetaObject::Connection& conn : m_nrAvailabilityConns) {
+        if (conn) {
+            disconnect(conn);
+            conn = {};
+        }
     }
     m_radioModel = model;
-    // R-R3-49, Sub-epic C-1: DFNR is offered only while the Core can run it.
+    // R-R3-49, Sub-epic C-1: DFNR and MNR are enabled only while the Core
+    // can run them.
     if (model && model->dspAssets()) {
-        m_dfnrAvailabilityConn = connect(model->dspAssets(),
-                                         &DspAssetService::dfnrAvailabilityChanged,
-                                         this, &VfoWidget::updateDfnrAvailability);
+        m_nrAvailabilityConns[0] = connect(model->dspAssets(),
+                                           &DspAssetService::dfnrAvailabilityChanged,
+                                           this, &VfoWidget::updateNrAvailability);
+        m_nrAvailabilityConns[1] = connect(model->dspAssets(),
+                                           &DspAssetService::mnrAvailabilityChanged,
+                                           this, &VfoWidget::updateNrAvailability);
     }
-    updateDfnrAvailability();
+    updateNrAvailability();
     if (model && model->role() == RadioModel::Role::Remote) {
         setTransmitPermitted(false);
         // R-R3-44: the VAX selector stays live. In a remote window it picks
@@ -3512,26 +3533,36 @@ void VfoWidget::setRadioModel(RadioModel* model)
     }
 }
 
-bool VfoWidget::dfnrOffered() const
+QString VfoWidget::nrCannotRunReason(NereusSDR::NrSlot slot) const
 {
-    // With a model its DspAssetService says (the Core's, mirrored, in a
-    // remote window); without one, whether this build has DFNR.
-    if (m_radioModel && m_radioModel->dspAssets()) {
-        return m_radioModel->dspAssets()->dfnrRunnable();
-    }
-#ifdef HAVE_DFNR
-    return true;
-#else
-    return false;
-#endif
+    // With a model it says (the Core's word, mirrored, in a remote window);
+    // without one, this build decides.
+    return m_radioModel ? m_radioModel->nrCannotRunReason(slot)
+                        : RadioModel::nrCannotRunInThisBuildReason(slot);
 }
 
-void VfoWidget::updateDfnrAvailability()
+void VfoWidget::updateNrAvailability()
 {
-    if (m_dfnrBtn) {
-        // Hidden, as MNR and BNR are when they cannot run. A slice holding
-        // DFNR is turned off by the Core (RadioModel::turnOffDfnrWithoutModel).
-        m_dfnrBtn->setVisible(dfnrOffered());
+    // Shown always; disabled with the plain reason while it cannot run. A
+    // slice holding one is turned off by the Core (RadioModel::
+    // turnOffDfnrWithoutModel, turnOffNrThatCannotRun).
+    const struct {
+        QPushButton* button;
+        NereusSDR::NrSlot slot;
+        const QString* ownTip;
+    } filters[] = {
+        {m_dfnrBtn, NereusSDR::NrSlot::DFNR, &m_dfnrToolTip},
+        {m_mnrBtn, NereusSDR::NrSlot::MNR, &m_mnrToolTip},
+        {m_bnrBtn, NereusSDR::NrSlot::BNR, &m_bnrToolTip},
+    };
+    for (const auto& f : filters) {
+        if (!f.button) {
+            continue;
+        }
+        const QString reason = nrCannotRunReason(f.slot);
+        f.button->setEnabled(reason.isEmpty());
+        f.button->setToolTip(reason.isEmpty() ? *f.ownTip : reason);
+        f.button->setAccessibleDescription(reason);
     }
 }
 
@@ -3749,7 +3780,7 @@ void VfoWidget::showNr4Popup(const QPoint& globalPos)
 void VfoWidget::showDfnrPopup(const QPoint& globalPos)
 {
     // R-R3-49: no quick controls for a DFNR that cannot run.
-    if (!m_slice || !dfnrOffered()) { return; }
+    if (!m_slice || !nrCannotRunReason(NereusSDR::NrSlot::DFNR).isEmpty()) { return; }
     auto* p = new DspParamPopup(this);
 
     // DFNR (DeepFilterNet3) — AetherSDR post-WDSP filter, not in Thetis.
@@ -3780,10 +3811,11 @@ void VfoWidget::showDfnrPopup(const QPoint& globalPos)
 
 void VfoWidget::showBnrPopup(const QPoint& globalPos)
 {
-    if (!m_slice) { return; }
+    // R-R3-49: no quick controls for a BNR that cannot run (no build has it).
+    if (!m_slice || !nrCannotRunReason(NereusSDR::NrSlot::BNR).isEmpty()) { return; }
     auto* p = new DspParamPopup(this);
 
-    // BNR (NVIDIA Noise Removal) — button hidden unless HAVE_BNR; popup
+    // BNR (NVIDIA Noise Removal): button disabled unless HAVE_BNR; popup
     // included for completeness in case BNR is enabled in a future build.
     // AetherSDR MainWindow.cpp:8080-8100 [@0cd4559].
     const int strength = static_cast<int>(m_slice->bnrStrength() * 100.0);
@@ -3796,7 +3828,8 @@ void VfoWidget::showBnrPopup(const QPoint& globalPos)
 
 void VfoWidget::showMnrPopup(const QPoint& globalPos)
 {
-    if (!m_slice) { return; }
+    // R-R3-49: no quick controls for an MNR the Core cannot run.
+    if (!m_slice || !nrCannotRunReason(NereusSDR::NrSlot::MNR).isEmpty()) { return; }
     auto* p = new DspParamPopup(this);
 
     // MNR (macOS Accelerate MMSE-Wiener NR). 6 runtime-tunable knobs with

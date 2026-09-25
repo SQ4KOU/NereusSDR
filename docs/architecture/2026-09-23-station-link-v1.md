@@ -744,7 +744,7 @@ change shows as surface drift and as a change to this table.
 | `nnrVersion` | 1 |
 | `psAlgorithmVersion` | 3 |
 | `propertyResultVersion` | 1 |
-| `dspAssetVersion` | 3 |
+| `dspAssetVersion` | 4 |
 | `psDisplayVersion` | 1 |
 | `notchControlVersion` | 1 |
 | `audioProfileVersion` | 1 |
@@ -791,7 +791,12 @@ When a feature is off, its version is 0:
   (the build has it and its DeepFilterNet model file is there and loaded)
   and, when it cannot, the plain reason. A window reads `dfnrRunnable` as
   true until a Core sends it, so an older Core changes nothing; while it is
-  false a window hides DFNR and refuses turning it on with the reason.
+  false a window shows DFNR disabled and refuses turning it on with the
+  reason. 4 adds `mnrRunnable` and `mnrStatus` on `DspAssetService`, the
+  same pair for MNR, which runs only on a Mac Core: a window on any
+  computer shows MNR disabled with `mnrStatus` while `mnrRunnable` is
+  false. BNR carries no pair: no build has it, so every window shows it
+  disabled with its own plain reason.
 - `radioHardwareVersion`: sent only at agreed minor 11. 0 without the step
   attenuator bound; 1 with it; 2 with the Alex antennas too; 4 with the HL2
   I/O board too: the `ioBoard` object, `setAlexRxAntenna` (which needs 3)
@@ -1085,7 +1090,7 @@ An enum property lists the values its domain allows.
 | 1 | `revision` | `i64` | outbound |  |
 | 2 | `deviceLimit` | `i64` | outbound |  |
 
-**DspAssetService** (10 properties)
+**DspAssetService** (12 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -1099,6 +1104,8 @@ An enum property lists the values its domain allows.
 | 7 | `nr3Runnable` | `bool` | outbound |  |
 | 8 | `dfnrModelStatus` | `utf8` | outbound |  |
 | 9 | `dfnrRunnable` | `bool` | outbound |  |
+| 10 | `mnrStatus` | `utf8` | outbound |  |
+| 11 | `mnrRunnable` | `bool` | outbound |  |
 
 **IoBoardHl2Facade** (3 properties)
 
