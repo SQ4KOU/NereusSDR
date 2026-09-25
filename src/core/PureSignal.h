@@ -49,6 +49,12 @@
 //   2026-05-06 — Created by J.J. Boyd (KG4VCF) for Phase 3M-4 Task 7
 //                 PureSignal coordinator, with AI-assisted source-first
 //                 protocol via Anthropic Claude Code.
+//   2026-09-25 : R-R3-39 (station Task 32) by J.J. Boyd (KG4VCF): with a
+//                 transmit lane the TX delay is applied there and reported
+//                 back (psTxDelayApplied), the correction stop is chosen
+//                 there from the RF gate, and the poll reads the status the
+//                 lane caches. AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #pragma once
@@ -552,6 +558,11 @@ private:
     void startAutomaticCalibration();
     void requestOperationalStop();
     void requestNativeCorrectionStop();
+    // R-R3-39: the TX channel's lane reports; the TX delay on the lane (or
+    // at once without one); the applied delay as either path reports it.
+    void connectTxChannelSignals();
+    void applyTxDelaySeconds(double seconds);
+    void noteAppliedTxDelayNs(double actual);
     void clearTransientOperationsForOff();
     void pollFileOperation();
     void retirePendingFileOperation();

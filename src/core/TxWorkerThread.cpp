@@ -91,6 +91,13 @@
 //                 the `sliceId != 0` single-RX gate along with it.
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation
 //                 via Anthropic Claude Code.
+//   2026-09-25 : R-R3-39 (station Task 32) by J.J. Boyd (KG4VCF): the
+//                 per-block sendPostedEvents pump and the move back at exit
+//                 run only for a TxChannel that lives on this thread. With
+//                 the transmit lane RadioModel keeps the channel on its own
+//                 thread, and its setters post their WDSP calls to the lane
+//                 instead of waiting for the next mic block. AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file.  The Thetis cmbuffs.c /
@@ -437,7 +444,15 @@ void TxWorkerThread::run()
         // surface, and locks in the invariant "only TxChannel is
         // addressable on this thread" against future refactors that
         // might affine additional QObjects to the worker.
-        QCoreApplication::sendPostedEvents(m_txChannel, 0);
+        //
+        // R-R3-39: with the transmit lane, RadioModel no longer moves the
+        // TxChannel here: its setters run on the owner's thread and post
+        // their WDSP calls to the lane, so settings apply even while no mic
+        // block arrives. The pump stays for a channel that does live on this
+        // thread (a caller that still moves it here).
+        if (m_txChannel->thread() == QThread::currentThread()) {
+            QCoreApplication::sendPostedEvents(m_txChannel, 0);
+        }
 
         dispatchOneBlock();
     }
@@ -466,7 +481,9 @@ void TxWorkerThread::run()
     // *object* (not the OS thread executing run()), which by construction
     // is the thread that constructed this TxWorkerThread — RadioModel's
     // thread = main.
-    if (m_txChannel) {
+    // R-R3-39: only a channel that lives on this thread moves back; with the
+    // transmit lane it never left its owner's thread.
+    if (m_txChannel && m_txChannel->thread() == QThread::currentThread()) {
         m_txChannel->moveToThread(this->thread());
     }
 

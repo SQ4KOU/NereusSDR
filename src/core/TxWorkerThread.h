@@ -22,6 +22,9 @@
 //                 cadence sourced from radio mic frames via
 //                 TxMicSource).  Plan:
 //                 docs/architecture/phase3m-1c-tx-pump-architecture-plan.md
+//   2026-09-25 : R-R3-39 (station Task 32) by J.J. Boyd (KG4VCF): lifecycle
+//                 note for the transmit lane (the TX channel stays on its
+//                 owner's thread). AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file.  The Thetis cmbuffs.c /
@@ -85,7 +88,10 @@ class TxMicSource;
 //   1. Construct (parent = RadioModel).
 //   2. setMicSource / setTxChannel / setAudioEngine — all required
 //      before startPump().  TxChannel must already be moveToThread()'d
-//      to this worker.
+//      to this worker.  (R-R3-39: with the transmit lane RadioModel no
+//      longer moves it; its setters post their WDSP calls to the lane,
+//      and the worker only runs the per-block DEXP and fexchange0. The
+//      per-block event pump runs only for a channel that does live here.)
 //   3. startPump() — calls QThread::start().  The new thread enters
 //      run(), which loops on the semaphore until isRunning() goes false.
 //   4. stopPump() — calls m_micSource->stop() (which posts the poison

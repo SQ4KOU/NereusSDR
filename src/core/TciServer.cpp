@@ -50,6 +50,10 @@
 //                own update gap (Thetis udTCIRateLimit), read at start and
 //                changed live. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-25 - R-R3-39 (station Task 32): the TX sensors' mic level is
+//                TxChannel::txMeter, the transmit lane's last reading,
+//                not a GetTXAMeter call on the event loop. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #ifdef HAVE_WEBSOCKETS
 
@@ -437,11 +441,14 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         // WDSP.id(1,0) per Thetis dsp.cs:926-944.  Only call when the TX
         // channel exists to avoid a WDSP nullptr deref against an
         // unallocated stage.
+        //
+        // R-R3-39: through the TX channel, which reads the meter on the
+        // transmit lane and hands back the lane's last reading, so this
+        // timer never waits on WDSP.
         double micDbm = -140.0;
         if (auto* wdsp = m_remoteWindow ? nullptr : m_model->wdspEngine()) {
-            if (wdsp->txChannel(WdspEngine::kTxChannelId) != nullptr) {
-                micDbm = GetTXAMeter(WdspEngine::kTxChannelId,
-                                     static_cast<int>(TxMeterType::MicAvg));
+            if (auto* tx = wdsp->txChannel(WdspEngine::kTxChannelId)) {
+                micDbm = tx->txMeter(static_cast<int>(TxMeterType::MicAvg));
             }
         }
         const double fwdWatts  = m_model->radioStatus().forwardPowerWatts();

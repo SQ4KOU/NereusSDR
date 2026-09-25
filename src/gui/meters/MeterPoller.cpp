@@ -47,6 +47,9 @@
 //                 receive lane refreshes, so this GUI-thread poll makes no
 //                 RX WDSP call. J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-25: R-R3-39 (station Task 32): the TX readings too
+//               (TxChannel::txMeter, the transmit lane's last reading).
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -607,7 +610,11 @@ void MeterPoller::pollTxMeters()
 #ifdef HAVE_WDSP
         // GetTXAMeter(channel, mt) — lock-free, matches GetRXAMeter pattern.
         // From Thetis dsp.cs:390-391 [v2.10.3.13].
-        value = GetTXAMeter(chanId, entry.wdspMt);
+        // R-R3-39: TxChannel::txMeter makes that call on the transmit lane
+        // and returns the lane's last reading, so this poll never waits on
+        // WDSP.
+        value = m_txChannel->txMeter(entry.wdspMt);
+        Q_UNUSED(chanId)
 #else
         Q_UNUSED(chanId)
         Q_UNUSED(entry)

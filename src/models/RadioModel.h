@@ -103,6 +103,12 @@
 //                that blocked the event loop became lane jobs. NereusSDR-
 //                original. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-25 - R-R3-39: transmit DSP off the event loop. A local model
+//                owns the transmit lane too; the TX channel stays on this
+//                thread and posts its WDSP calls there; MoxController's
+//                keying steps reach it through wireTxChannelKeying
+//                (setRunningAsync). NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -2272,6 +2278,9 @@ public:
     // R-R3-39: the receive lane every RX WDSP call runs on (null on a
     // remote model).
     DspControlThread* receiveLane() const { return m_rxLane.get(); }
+    // R-R3-39: the transmit lane every TX WDSP call runs on (null on a
+    // remote model). The desktop's TxAnalyzer runs its calls here too.
+    DspControlThread* transmitLane() const { return m_txLane.get(); }
 
     // Task 1.7 — Active-RX-count live-apply coordinator.
     //
@@ -2474,6 +2483,11 @@ public:
     // R-R3-39: waits until every job on the receive lane has run and then
     // delivers the answers they queued for this thread. False on timeout.
     bool waitForReceiveLaneForTest(int timeoutMs = 600000);
+    // R-R3-39: the same for the transmit lane.
+    bool waitForTransmitLaneForTest(int timeoutMs = 600000);
+    // R-R3-39: wires MoxController's txReady and txaFlushed to an injected TX
+    // channel (injectTxChannelForTest) exactly as the connect path does.
+    void wireTxChannelKeyingForTest() { wireTxChannelKeying(); }
     // Phase 3F Sub-Epic I closeout, defect F3: force the radio-state inputs
     // the codec branches on, so the PureSignal and diversity branches are
     // reachable without standing up a connection, a WDSP engine and a
@@ -4408,6 +4422,10 @@ private:
     // park: the DSP worker and its thread, set while the worker runs and
     // cleared (after the lane is drained) before either is deleted.
     std::unique_ptr<DspControlThread> m_rxLane;
+    // R-R3-39: the transmit lane (local role only).
+    std::unique_ptr<DspControlThread> m_txLane;
+    // MoxController's txReady / txaFlushed to m_txChannel (connect path).
+    void wireTxChannelKeying();
     struct RxWorkerTarget {
         std::mutex mutex;
         RxDspWorker* worker{nullptr};

@@ -34,11 +34,17 @@
 //                 Hamming (combo index 4) per controller decision
 //                 2026-05-10.  AI-assisted source-first via Anthropic
 //                 Claude Code.
+//   2026-09-25 : R-R3-39 (station Task 32) by J.J. Boyd (KG4VCF): with a
+//                 transmit lane every WDSP analyzer call runs there
+//                 (runWdsp) and the poll's pixels come back through
+//                 DspControlThread::request. AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #include "TxAnalyzer.h"
 
 #include "AppSettings.h"
+#include "DspControlThread.h"
 #include "LogCategories.h"
 #include "wdsp_api.h"
 
@@ -49,10 +55,11 @@
 
 namespace NereusSDR {
 
-TxAnalyzer::TxAnalyzer(int dispId, QObject* parent)
+TxAnalyzer::TxAnalyzer(int dispId, QObject* parent, DspControlThread* lane)
     : QObject(parent)
     , m_dispId(dispId)
 {
+    m_lane = lane;
     // Phase 3M-5d: persisted settings get hydrated BEFORE XCreateAnalyzer +
     // the first applySetAnalyzer call so the WDSP analyzer comes up with
     // user choices already in effect (no flash of pre-default config on
@@ -82,13 +89,29 @@ TxAnalyzer::TxAnalyzer(int dispId, QObject* parent)
     // app_data_path is empty: FFTW wisdom is managed centrally by
     // WdspEngine, not per-analyzer.
     int success = 0;
-    char emptyPath[1] = {0};
-    XCreateAnalyzer(m_dispId,
-                    &success,
-                    /*m_size=*/262144,
-                    /*m_LO=*/1,
-                    /*m_stitch=*/1,
-                    emptyPath);
+    if (!m_lane.isNull()) {
+        // R-R3-39: created on the transmit lane, ahead of every call below,
+        // and taken as created here (the answer is not waited for); a
+        // failure is logged on the lane.
+        runWdsp([dispId = m_dispId]() {
+            int created = 0;
+            char path[1] = {0};
+            XCreateAnalyzer(dispId, &created, /*m_size=*/262144, /*m_LO=*/1,
+                            /*m_stitch=*/1, path);
+            if (created != 0) {
+                qCWarning(lcDsp) << "TxAnalyzer: XCreateAnalyzer failed for disp"
+                                 << dispId << "success=" << created;
+            }
+        });
+    } else {
+        char emptyPath[1] = {0};
+        XCreateAnalyzer(m_dispId,
+                        &success,
+                        /*m_size=*/262144,
+                        /*m_LO=*/1,
+                        /*m_stitch=*/1,
+                        emptyPath);
+    }
     if (success == 0) {
         m_analyzerCreated = true;
         // Deliberately NOT applySetAnalyzer() here.
@@ -131,10 +154,20 @@ TxAnalyzer::~TxAnalyzer()
     stop();
 #ifdef HAVE_WDSP
     if (m_analyzerCreated) {
-        DestroyAnalyzer(m_dispId);
+        runWdsp([dispId = m_dispId]() { DestroyAnalyzer(dispId); });
         m_analyzerCreated = false;
     }
 #endif
+}
+
+void TxAnalyzer::runWdsp(std::function<void()> job) const
+{
+    DspControlThread* lane = m_lane.data();
+    if (lane == nullptr || lane->isCurrentThread()) {
+        job();
+        return;
+    }
+    lane->post(std::move(job));
 }
 
 void TxAnalyzer::setNumPixels(int n)
@@ -160,7 +193,9 @@ void TxAnalyzer::setSampleRate(double rateHz)
     m_sampleRate = rateHz;
 #ifdef HAVE_WDSP
     if (m_analyzerCreated) {
-        SetDisplaySampleRate(m_dispId, static_cast<int>(rateHz));
+        runWdsp([dispId = m_dispId, rateHz]() {
+            SetDisplaySampleRate(dispId, static_cast<int>(rateHz));
+        });
         // Re-derive overlap (depends on rate * fps).  Cite specHPSDR.cs:784
         // [v2.10.3.13]: ovrlp = max(0, ceil(fft_size - sampleRate / fps))
         applySetAnalyzer();
@@ -232,6 +267,45 @@ void TxAnalyzer::poll()
     // without re-applying detector + averaging on top.
     //
     // sentinel receiverId = -1 to signal "TX panadapter" to consumers.
+    if (DspControlThread* lane = m_lane.data()) {
+        // R-R3-39: GetPixels runs on the transmit lane; the planes come back
+        // here. One poll at a time: a tick while one is still queued skips.
+        if (m_pollInFlight->exchange(true)) {
+            return;
+        }
+        struct Planes {
+            QVector<float> pan;
+            QVector<float> wf;
+            bool panReady{false};
+            bool wfReady{false};
+        };
+        lane->request<Planes>(
+            [dispId = m_dispId, numPixels = m_numPixels, inFlight = m_pollInFlight]() {
+                Planes planes;
+                planes.pan.resize(numPixels);
+                planes.wf.resize(numPixels);
+                int flagPanOnLane = 0;
+                GetPixels(dispId, /*pixout=*/0, planes.pan.data(), &flagPanOnLane);
+                int flagWfOnLane = 0;
+                GetPixels(dispId, /*pixout=*/1, planes.wf.data(), &flagWfOnLane);
+                planes.panReady = (flagPanOnLane != 0);
+                planes.wfReady = (flagWfOnLane != 0);
+                inFlight->store(false);
+                return planes;
+            },
+            this,
+            [this](Planes planes) {
+                if (planes.panReady) {
+                    m_pixBuf = planes.pan;
+                    emit txFftReady(/*receiverId=*/-1, m_pixBuf);
+                }
+                if (planes.wfReady) {
+                    m_pixBufWf = planes.wf;
+                    emit txWaterfallReady(/*receiverId=*/-1, m_pixBufWf);
+                }
+            });
+        return;
+    }
     int flagPan = 0;
     GetPixels(m_dispId, /*pixout=*/0, m_pixBuf.data(), &flagPan);
     if (flagPan != 0) {
@@ -342,7 +416,6 @@ void TxAnalyzer::applySetAnalyzer()
         kKeepTime * m_sampleRate,
         kKeepTime * static_cast<double>(m_fftSize) *
                     static_cast<double>(m_outputFps)));
-    int flp[1] = {0};
 
     // Span clip. Both zero leaves the analyzer emitting the full +/-48 kHz
     // baseband, which is what it did before the 2026-08-04 bench and is
@@ -389,38 +462,46 @@ void TxAnalyzer::applySetAnalyzer()
     // 3M-5b BH4 divergence was reverted by 3M-5d per controller decision
     // 2026-05-10; user can still pick BH4 via Setup → Display → TX → FFT
     // → Window combo if splatter returns.
-    SetAnalyzer(
-        m_dispId,
-        /*n_pixout=*/m_nPixout,
-        /*n_fft=*/1,
-        /*typ=*/1,
-        flp,
-        /*sz=*/m_fftSize,
-        // bf_sz is the SIPHON's push size, not the FFT size. See
-        // setBlockSize. Falls back to m_fftSize only when nothing has told
-        // us the real block size yet.
-        /*bf_sz=*/(m_blockSize > 0 ? m_blockSize : m_fftSize),
-        /*win_type=*/m_windowType,
-        /*pi=*/14.0,               // Thetis default (unused for non-Kaiser)
-        /*ovrlp=*/ovrlp,
-        /*clp=*/effectiveClip,     // 0 while span-clipped; see above
-        // fscLin / fscHin are BIN COUNTS to clip from the low and high ends,
-        // not frequencies. Thetis computes them in CalcSpectrum
-        // (specHPSDR.cs:772-774 [v2.10.3.15]) and passes them in these two
-        // slots. Leaving them at zero, as this did before, is what made the
-        // transmit trace land at the wrong dial frequency: the analyzer
-        // emitted the whole baseband while the pan kept its RX window, and
-        // SpectrumWidget stretched one across the other.
-        /*fscLin=*/static_cast<double>(fsclipL),
-        /*fscHin=*/static_cast<double>(fsclipH),
-        /*n_pix=*/m_numPixels,
-        /*n_stch=*/1,
-        /*calset=*/0,
-        /*fmin=*/0.0,
-        /*fmax=*/0.0,
-        /*max_w=*/max_w);
+    // R-R3-39: on the transmit lane with the values as they stand now.
+    runWdsp([dispId = m_dispId, nPixout = m_nPixout, fftSize = m_fftSize,
+             bfSz = (m_blockSize > 0 ? m_blockSize : m_fftSize),
+             windowType = m_windowType, overlap = ovrlp, clipBins = effectiveClip,
+             clipLow = fsclipL, clipHigh = fsclipH, numPixels = m_numPixels,
+             maxW = max_w, sampleRate = m_sampleRate]() {
+        int flpOnLane[1] = {0};
+        SetAnalyzer(
+            dispId,
+            /*n_pixout=*/nPixout,
+            /*n_fft=*/1,
+            /*typ=*/1,
+            flpOnLane,
+            /*sz=*/fftSize,
+            // bf_sz is the SIPHON's push size, not the FFT size. See
+            // setBlockSize. Falls back to m_fftSize only when nothing has told
+            // us the real block size yet.
+            /*bf_sz=*/bfSz,
+            /*win_type=*/windowType,
+            /*pi=*/14.0,               // Thetis default (unused for non-Kaiser)
+            /*ovrlp=*/overlap,
+            /*clp=*/clipBins,     // 0 while span-clipped; see above
+            // fscLin / fscHin are BIN COUNTS to clip from the low and high ends,
+            // not frequencies. Thetis computes them in CalcSpectrum
+            // (specHPSDR.cs:772-774 [v2.10.3.15]) and passes them in these two
+            // slots. Leaving them at zero, as this did before, is what made the
+            // transmit trace land at the wrong dial frequency: the analyzer
+            // emitted the whole baseband while the pan kept its RX window, and
+            // SpectrumWidget stretched one across the other.
+            /*fscLin=*/static_cast<double>(clipLow),
+            /*fscHin=*/static_cast<double>(clipHigh),
+            /*n_pix=*/numPixels,
+            /*n_stch=*/1,
+            /*calset=*/0,
+            /*fmin=*/0.0,
+            /*fmax=*/0.0,
+            /*max_w=*/maxW);
 
-    SetDisplaySampleRate(m_dispId, static_cast<int>(m_sampleRate));
+        SetDisplaySampleRate(dispId, static_cast<int>(sampleRate));
+    });
     ++m_analyzerConfigCount;
 
     // Every parameter WDSP is actually given, on each reconfiguration.
@@ -444,7 +525,9 @@ void TxAnalyzer::applySetAnalyzer()
 
 void TxAnalyzer::applyDetectorMode(int pixout, int mode)
 {
-    SetDisplayDetectorMode(m_dispId, pixout, mode);
+    runWdsp([dispId = m_dispId, pixout, mode]() {
+        SetDisplayDetectorMode(dispId, pixout, mode);
+    });
     ++m_analyzerConfigCount;
 }
 
@@ -456,7 +539,9 @@ void TxAnalyzer::applyAverageMode(int pixout, int mode)
     // wrapping (those are top-of-pan UI buttons not present in
     // NereusSDR's TX Display tab).  The combo selection writes through
     // directly.
-    SetDisplayAverageMode(m_dispId, pixout, mode);
+    runWdsp([dispId = m_dispId, pixout, mode]() {
+        SetDisplayAverageMode(dispId, pixout, mode);
+    });
     ++m_analyzerConfigCount;
 }
 
@@ -474,8 +559,10 @@ void TxAnalyzer::applyAvTau(int pixout, int avTimeMs)
     const double avb = std::exp(-1.0 / std::max(1e-9, frameTau));
     const int displayAverage = std::max(2,
         std::min(kMaxAvFrames, static_cast<int>(frameTau)));
-    SetDisplayAvBackmult(m_dispId, pixout, avb);
-    SetDisplayNumAverage(m_dispId, pixout, displayAverage);
+    runWdsp([dispId = m_dispId, pixout, avb, displayAverage]() {
+        SetDisplayAvBackmult(dispId, pixout, avb);
+        SetDisplayNumAverage(dispId, pixout, displayAverage);
+    });
     ++m_analyzerConfigCount;
 }
 
@@ -489,7 +576,9 @@ void TxAnalyzer::applyNormalizePan()
     // Mirrors Thetis updateNormalizePan() exactly.
     const bool gated = m_panNormalize
         && (m_panDetector == 2 || m_panDetector == 3 || m_panDetector == 4);
-    SetDisplayNormOneHz(m_dispId, /*pixout=*/0, gated ? 1 : 0);
+    runWdsp([dispId = m_dispId, gated]() {
+        SetDisplayNormOneHz(dispId, /*pixout=*/0, gated ? 1 : 0);
+    });
     ++m_analyzerConfigCount;
 }
 #endif // HAVE_WDSP

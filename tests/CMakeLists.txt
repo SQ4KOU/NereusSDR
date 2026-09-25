@@ -374,6 +374,15 @@ if(TARGET wdsp_static)
     # Its first OpenChannel plans FFTs with no wisdom (about 30 s alone, over
     # 100 s under a loaded build), so the default 120 s is too close.
     set_tests_properties(tst_dsp_control_receive PROPERTIES TIMEOUT 900)
+    # R-R3-39 (Task 32): transmit DSP off the event loop. A real TX channel
+    # on the transmit lane keeps the rf_delay keying order; twenty MOX, TUNE
+    # and two-tone cycles with the PureSignal poll make no WDSP call on the
+    # event loop while both lanes' channels run 200 ms blocks; setters queued
+    # before a rebuild never run; the unkey drain is measured. REALTIME: it
+    # holds the event loop's 10 ms timer to a wall-clock bound. Its first
+    # OpenChannel plans FFTs with no wisdom, hence the 900 s timeout.
+    nereus_add_test(tst_dsp_control_transmit EXTRA_LABELS core REALTIME)
+    set_tests_properties(tst_dsp_control_transmit PROPERTIES TIMEOUT 900)
     if(NOT WIN32)
         # R-R3-41: linux_port.c's thread-start hook fires once per channel
         # worker and flush thread, on that thread, with its kind and channel.

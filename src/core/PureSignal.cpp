@@ -15,6 +15,12 @@
 //   2026-05-06 — Created by J.J. Boyd (KG4VCF) for Phase 3M-4 Task 7
 //                 PureSignal coordinator, with AI-assisted source-first
 //                 protocol via Anthropic Claude Code.
+//   2026-09-25 : R-R3-39 (station Task 32) by J.J. Boyd (KG4VCF): with a
+//                 transmit lane the TX delay is applied there and reported
+//                 back (psTxDelayApplied), the correction stop is chosen
+//                 there from the RF gate, and the poll reads the status the
+//                 lane caches. AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include "PureSignal.h"
@@ -110,6 +116,8 @@ PureSignal::PureSignal(WdspEngine* engine,
     m_enabled = true;
     m_pollTimer.start();
     m_autoAttTimer.start();
+
+    connectTxChannelSignals();
 }
 
 PureSignal::~PureSignal()
@@ -132,8 +140,46 @@ void PureSignal::setTxChannel(TxChannel* tx)
     if (tx != m_tx) {
         retireSessionOperations();
         m_operationalSettingsApplied = false;
+        if (m_tx) {
+            disconnect(m_tx, &TxChannel::psTxDelayApplied, this, nullptr);
+        }
     }
     m_tx = tx;
+    connectTxChannelSignals();
+}
+
+void PureSignal::connectTxChannelSignals()
+{
+    if (!m_tx) {
+        return;
+    }
+    // R-R3-39: with a transmit lane the applied TX delay arrives from there.
+    // One connection per channel: any earlier one is dropped first.
+    disconnect(m_tx, &TxChannel::psTxDelayApplied, this, nullptr);
+    connect(m_tx, &TxChannel::psTxDelayApplied, this,
+            [this](double actualSeconds) { noteAppliedTxDelayNs(actualSeconds * 1.0e9); });
+}
+
+void PureSignal::applyTxDelaySeconds(double seconds)
+{
+    if (!m_tx) {
+        return;
+    }
+    if (m_tx->controlLane() != nullptr) {
+        // R-R3-39: SetPSTXDelay runs on the transmit lane, which reports the
+        // delay it applied through psTxDelayApplied.
+        m_tx->requestPSTXDelay(seconds);
+        return;
+    }
+    noteAppliedTxDelayNs(m_tx->setPSTXDelay(seconds) * 1.0e9);
+}
+
+void PureSignal::noteAppliedTxDelayNs(double actual)
+{
+    if (actual != m_appliedTxDelayNs) {
+        m_appliedTxDelayNs = actual;
+        emit appliedTxDelayNsChanged(actual);
+    }
 }
 
 void PureSignal::setPsFeedbackChannel(PsFeedbackChannel* fb)
@@ -251,11 +297,7 @@ void PureSignal::bindSettingsSignals()
             this, [this](double value) {
         if (m_operationalSettingsApplied && m_tx
             && m_settingsHydrationDepth == 0) {
-            const double actual = m_tx->setPSTXDelay(value * 1.0e-9) * 1.0e9;
-            if (actual != m_appliedTxDelayNs) {
-                m_appliedTxDelayNs = actual;
-                emit appliedTxDelayNsChanged(actual);
-            }
+            applyTxDelaySeconds(value * 1.0e-9);
         }
         emit ampDelayChanged(static_cast<int>(std::lround(value)));
     });
@@ -329,6 +371,12 @@ void PureSignal::requestNativeCorrectionStop()
     if (!m_tx) {
         return;
     }
+    if (m_tx->controlLane() != nullptr) {
+        // R-R3-39: the transmit lane makes the same choice below, from the
+        // RF gate as the keying calls queued before this one leave it.
+        m_tx->stopPsCorrection();
+        return;
+    }
     if (!m_tx->isRunning()) {
         // With TXA quiescent no audio or PSCC block can finish the normal
         // END/reset transitions. The native helper fences stale workers and
@@ -371,12 +419,7 @@ bool PureSignal::applyAcceptedSettingsToEngine()
     }
     m_tx->setPSMoxDelay(m_settings->moxDelaySeconds());
     m_tx->setPSLoopDelay(m_settings->loopDelaySeconds());
-    const double actual = m_tx->setPSTXDelay(
-        m_settings->requestedTxDelayNs() * 1.0e-9) * 1.0e9;
-    if (actual != m_appliedTxDelayNs) {
-        m_appliedTxDelayNs = actual;
-        emit appliedTxDelayNsChanged(actual);
-    }
+    applyTxDelaySeconds(m_settings->requestedTxDelayNs() * 1.0e-9);
     m_tx->setPSHWPeak(hwPeak());
     m_tx->setPSRunCal(m_settings->runCalibrationProcessing() ? 1 : 0);
     m_operationalSettingsApplied = true;
@@ -950,12 +993,7 @@ void PureSignal::applyBoardCapabilities(const BoardCapabilities& caps)
         // From Thetis PSForm.cs:505 udPSPhnum_ValueChanged [v2.10.3.13]:
         //   double actual_delay = puresignal.SetPSTXDelay(_txachannel,
         //       (double)udPSPhnum.Value * 1.0e-09);
-        const double actual = m_tx->setPSTXDelay(
-            static_cast<double>(ampDelay()) * 1.0e-9) * 1.0e9;
-        if (actual != m_appliedTxDelayNs) {
-            m_appliedTxDelayNs = actual;
-            emit appliedTxDelayNsChanged(actual);
-        }
+        applyTxDelaySeconds(static_cast<double>(ampDelay()) * 1.0e-9);
         // From Thetis PSForm.cs:495 udPSMoxDelay_ValueChanged [v2.10.3.13]:
         //   puresignal.SetPSMoxDelay(_txachannel, (double)udPSMoxDelay.Value);
         m_tx->setPSMoxDelay(moxDelay());

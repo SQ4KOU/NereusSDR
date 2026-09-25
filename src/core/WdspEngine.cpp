@@ -456,6 +456,10 @@ void WdspEngine::shutdown()
             destroyTxChannel(id);
         }
     }
+    // R-R3-39: the TX closes above are transmit-lane barriers; they finish
+    // (with every transmit job queued before them) before the receive side
+    // is torn down, keeping WDSP's TX → RX teardown order.
+    drainTransmitLane();
 
     // Phase 3M-4 Task 4: close the PS feedback RX channel BEFORE the
     // primary RX channels.  Although calcc reads autonomously, the
@@ -1246,6 +1250,45 @@ void WdspEngine::reapRetiredRxChannels()
     // Deleted here, on this object's thread, where they were made.
 }
 
+void WdspEngine::setTransmitLane(DspControlThread* lane)
+{
+    m_txLane = lane;
+    for (auto& [id, ch] : m_txChannels) {
+        Q_UNUSED(id);
+        ch->setControlLane(lane);
+    }
+}
+
+void WdspEngine::retireTxChannel(std::shared_ptr<TxChannel> channel)
+{
+    {
+        std::lock_guard<std::mutex> lock(m_retiredTxMutex);
+        m_retiredTxChannels.push_back(std::move(channel));
+    }
+    QMetaObject::invokeMethod(this, [this]() { reapRetiredTxChannels(); },
+                              Qt::QueuedConnection);
+}
+
+void WdspEngine::reapRetiredTxChannels()
+{
+    std::vector<std::shared_ptr<TxChannel>> retired;
+    {
+        std::lock_guard<std::mutex> lock(m_retiredTxMutex);
+        retired.swap(m_retiredTxChannels);
+    }
+    // Deleted here, on this object's thread, where they were made.
+}
+
+void WdspEngine::drainTransmitLane()
+{
+    if (m_txLane == nullptr || m_txLane->isCurrentThread()) {
+        return;
+    }
+    m_txLane->stop();
+    m_txLane->start();
+    reapRetiredTxChannels();
+}
+
 void WdspEngine::drainReceiveLane()
 {
     if (m_rxLane == nullptr || m_rxLane->isCurrentThread()) {
@@ -1327,23 +1370,13 @@ void WdspEngine::setLRAudioSwap(int swap)
 // TX Channel management
 // ---------------------------------------------------------------------------
 
-TxChannel* WdspEngine::createTxChannel(int channelId,
-                                       int inputBufferSize,
-                                       int dspBufferSize,
-                                       int inputSampleRate,
-                                       int dspSampleRate,
-                                       int outputSampleRate)
+// R-R3-39: the WDSP half of createTxChannel that runs before its wrapper
+// exists (OpenChannel, the default seeds, create_dexp on the channel's DEXP
+// buffer), at once without a transmit lane or in the create barrier with one.
+void WdspEngine::openTxChannelWdsp(int channelId, int inputBufferSize, int dspBufferSize,
+                                   int inputSampleRate, int dspSampleRate,
+                                   int outputSampleRate, double* dexpBuf)
 {
-    if (!m_initialized) {
-        qCWarning(lcDsp) << "Cannot create TX channel: WDSP not initialized";
-        return nullptr;
-    }
-
-    if (m_txChannels.count(channelId)) {
-        qCWarning(lcDsp) << "TX channel" << channelId << "already exists";
-        return m_txChannels.at(channelId).get();   // already exists — return existing wrapper
-    }
-
 #ifdef HAVE_WDSP
     // From Thetis cmaster.c:177-190 (create_xmtr OpenChannel call) [v2.10.3.13]
     // Differences vs. RX: type=1 (TX), bfo=1 (block-on-output), dsp_rate=96000,
@@ -1474,10 +1507,6 @@ TxChannel* WdspEngine::createTxChannel(int channelId,
     // never invalidated by other map modifications, and std::vector's
     // data pointer is stable across reads (we never resize this buffer
     // after create_dexp captures the pointer).
-    auto [dexpIt, inserted] = m_dexpBuffers.emplace(
-        channelId,
-        std::vector<double>(static_cast<size_t>(inputBufferSize) * 2, 0.0));
-    double* dexpBuf = dexpIt->second.data();
 
     // From Thetis ChannelMaster cmaster.c:130-157 [v2.10.3.13] — verbatim
     // create_dexp call site.  Every argument matches the upstream value;
@@ -1544,19 +1573,67 @@ TxChannel* WdspEngine::createTxChannel(int channelId,
                   << "size=" << inputBufferSize
                   << "rate=" << inputSampleRate
                   << "buf=" << static_cast<const void*>(dexpBuf);
-    Q_UNUSED(inserted);   // emplace always inserts here (early-return guards above ensure new key)
 #else
+    Q_UNUSED(channelId);
+    Q_UNUSED(inputBufferSize);
+    Q_UNUSED(dspBufferSize);
+    Q_UNUSED(inputSampleRate);
+    Q_UNUSED(dspSampleRate);
+    Q_UNUSED(outputSampleRate);
+    Q_UNUSED(dexpBuf);
+#endif
+}
+
+TxChannel* WdspEngine::createTxChannel(int channelId,
+                                       int inputBufferSize,
+                                       int dspBufferSize,
+                                       int inputSampleRate,
+                                       int dspSampleRate,
+                                       int outputSampleRate)
+{
+    if (!m_initialized) {
+        qCWarning(lcDsp) << "Cannot create TX channel: WDSP not initialized";
+        return nullptr;
+    }
+
+    if (m_txChannels.count(channelId)) {
+        qCWarning(lcDsp) << "TX channel" << channelId << "already exists";
+        return m_txChannels.at(channelId).get();   // already exists — return existing wrapper
+    }
+
+    // R-R3-39: the channel's DEXP buffer exists before its WDSP channel, on
+    // either path, so the wrapper and create_dexp share one stable pointer.
+    //
+    // Order of operations: allocate buffer FIRST so the pointer passed
+    // to create_dexp is stable for the entire DEXP lifetime (the WDSP
+    // module retains the raw pointer set here until destroy_dexp clears
+    // it).  emplace returns an iterator to the newly-inserted element;
+    // we use that to extract a stable double* — std::map iterators are
+    // never invalidated by other map modifications, and std::vector's
+    // data pointer is stable across reads (we never resize this buffer
+    // after create_dexp captures the pointer).
+    //
     // Non-HAVE_WDSP build (e.g. test runner that links WdspEngine but not
-    // the WDSP DSP module): still allocate the buffer slot so map state
+    // the WDSP DSP module): the buffer slot is still allocated so map state
     // stays consistent across builds.  Without this, destroyTxChannel's
     // erase would silently no-op on the missing key and any future
     // diagnostic that introspects m_dexpBuffers would see a phantom
     // missing entry.  The buffer is unused in non-HAVE_WDSP builds (no
     // DEXP module to feed) but the storage is harmless.
-    m_dexpBuffers.emplace(
+    auto [dexpIt, inserted] = m_dexpBuffers.emplace(
         channelId,
         std::vector<double>(static_cast<size_t>(inputBufferSize) * 2, 0.0));
-#endif
+    double* dexpBuf = dexpIt->second.data();
+    Q_UNUSED(inserted);   // emplace always inserts here (early-return guards above ensure new key)
+
+    // R-R3-39: with a transmit lane, OpenChannel and everything after it run
+    // there as one barrier (below); the wrapper exists at once and keeps the
+    // TX worker out until the barrier has opened the channel.
+    const bool onLane = (m_txLane != nullptr && !m_txLane->isCurrentThread());
+    if (!onLane) {
+        openTxChannelWdsp(channelId, inputBufferSize, dspBufferSize,
+                          inputSampleRate, dspSampleRate, outputSampleRate, dexpBuf);
+    }
 
     // C.2 [3M-1a]: Construct the TxChannel C++ wrapper around the WDSP TXA
     // pipeline that OpenChannel(type=1) already built in WDSP-managed memory.
@@ -1586,7 +1663,10 @@ TxChannel* WdspEngine::createTxChannel(int channelId,
     // From Thetis wdsp/cmaster.c:179-183 [v2.10.3.13] — in_size / ch_outrate.
     // From Thetis wdsp/cmsetup.c:106-110 [v2.10.3.13] — getbuffsize(48000)==64.
     const int outputBufferSize = inputBufferSize * outputSampleRate / inputSampleRate;
-    auto wrapper = std::make_unique<TxChannel>(channelId, inputBufferSize, outputBufferSize, nullptr);
+    auto wrapper = onLane
+        ? std::make_unique<TxChannel>(channelId, inputBufferSize, outputBufferSize,
+                                      m_txLane, nullptr)
+        : std::make_unique<TxChannel>(channelId, inputBufferSize, outputBufferSize, nullptr);
     TxChannel* raw = wrapper.get();
 
     // Phase 3M-3a-iii Task 20: hand the wrapper a non-owning pointer to the
@@ -1627,6 +1707,27 @@ TxChannel* WdspEngine::createTxChannel(int channelId,
     // already populated pdisp[5] by the time this code runs and
     // xsiphon's first push fires.  See TxAnalyzer.h header for the
     // ordering invariant.
+    if (onLane) {
+        // R-R3-39: the create barrier, in the order the path above keeps:
+        // OpenChannel and its seeds, create_dexp, the VOX callback, the
+        // siphon, then the worker may run blocks through the channel.
+        m_txLane->postBarrier([this, raw, channelId, inputBufferSize, dspBufferSize,
+                               inputSampleRate, dspSampleRate, outputSampleRate, dexpBuf]() {
+            // Runs even for a wrapper retired meanwhile: the destroy or
+            // rebuild barrier queued after this one closes what it opens.
+            openTxChannelWdsp(channelId, inputBufferSize, dspBufferSize,
+                              inputSampleRate, dspSampleRate, outputSampleRate, dexpBuf);
+            raw->onWdspOpenedOnLane();
+#ifdef HAVE_WDSP
+            TXASetSipMode(channelId, 1);
+            TXASetSipDisplay(channelId, /*txinid=*/5);  // = TxAnalyzer::kTxDispId
+#endif
+            raw->admitWorkerOnLane();
+            qCInfo(lcDsp) << "Created TX channel" << channelId << "(transmit lane)";
+        });
+        return raw;
+    }
+
 #ifdef HAVE_WDSP
     TXASetSipMode(channelId, 1);
     TXASetSipDisplay(channelId, /*txinid=*/5);  // = TxAnalyzer::kTxDispId
@@ -1641,6 +1742,43 @@ void WdspEngine::destroyTxChannel(int channelId)
     auto it = m_txChannels.find(channelId);
     if (it == m_txChannels.end()) {
         return;   // idempotent — not found, nothing to do
+    }
+
+    if (m_txLane != nullptr && !m_txLane->isCurrentThread()) {
+        // R-R3-39: gone from the map at once. The lane closes it after every
+        // job already queued for it, once the TX worker is out of its block,
+        // in the order below; the wrapper is deleted back on this thread and
+        // the DEXP buffer lives until destroy_dexp has run.
+        std::shared_ptr<TxChannel> channel(std::move(it->second));
+        m_txChannels.erase(it);
+        auto buffer = std::make_shared<std::vector<double>>();
+        if (auto bufIt = m_dexpBuffers.find(channelId); bufIt != m_dexpBuffers.end()) {
+            *buffer = std::move(bufIt->second);
+            m_dexpBuffers.erase(bufIt);
+        }
+        m_txLane->postBarrier([this, channel, buffer, channelId]() mutable {
+            channel->quiesceWorkerOnLane();
+            channel->markRetired();
+#ifdef HAVE_WDSP
+            // Deactivate with drain before closing.
+            // dmode=1: drain-mode close (mirrors destroyRxChannel pattern).
+            SetChannelState(channelId, 0, 1);
+            // The wrapper's VOX unregister, through the live DEXP object.
+            channel->unregisterVoxCallbackOnLane();
+            // From Thetis cmaster.c:265-267 [v2.10.3.15]: destroy_xmtr closes
+            // the channel BEFORE destroying its DEXP module.
+            CloseChannel(channelId);
+            ThreadPlacement::instance().forgetChannel(channelId);
+            destroy_dexp(channelId);
+            // destroy_dexp frees the object but does not clear WDSP's lookup slot.
+            // Native wrapper guards use a null slot to recognize absent DEXP.
+            pdexp[channelId] = nullptr;
+#endif
+            buffer.reset();
+            retireTxChannel(std::move(channel));
+            qCInfo(lcDsp) << "Destroyed TX channel" << channelId;
+        });
+        return;
     }
 
 #ifdef HAVE_WDSP
@@ -1794,61 +1932,11 @@ void WdspEngine::openPsFeedbackChannelForTesting()
 }
 #endif
 
-qint64 WdspEngine::rebuildTxChannel(int channelId, const ChannelConfig& cfg)
+// R-R3-39: the TX defaults rebuildTxChannel seeds after OpenChannel (the
+// same block createTxChannel issues; see its comments for the sources).
+void WdspEngine::seedTxChannelWdsp(int channelId)
 {
-    if (!m_initialized) {
-        qCWarning(lcDsp) << "rebuildTxChannel: WDSP not initialized";
-        return -1;
-    }
-
-    auto it = m_txChannels.find(channelId);
-    if (it == m_txChannels.end()) {
-        qCWarning(lcDsp) << "rebuildTxChannel: channel" << channelId << "not found";
-        return -1;
-    }
-
-    QElapsedTimer timer;
-    timer.start();
-
-    // Capture DSP state before tearing down the channel.
-    const TxChannelState state = it->second->captureState();
-
 #ifdef HAVE_WDSP
-    // Deactivate with drain before closing (mirrors destroyTxChannel).
-    // dmode=1: drain-mode close per Thetis console.cs:29607 [v2.10.3.13].
-    SetChannelState(channelId, 0, 1);
-
-    // Close the old WDSP TX channel.
-    CloseChannel(channelId);
-    ThreadPlacement::instance().forgetChannel(channelId);
-#endif
-
-    // Destroy the old TxChannel C++ wrapper.
-    m_txChannels.erase(it);
-    qCInfo(lcDsp) << "Rebuild: closed TX channel" << channelId;
-
-#ifdef HAVE_WDSP
-    // Recreate the WDSP TX channel with the new config.
-    // Use the same OpenChannel arguments as createTxChannel() — kTxChannelType=1,
-    // kTxBlockOnOutput=1, and the TX-specific slew constants.
-    // cfg.bufferSize = new in_size; cfg.filterSize = new dsp_size.
-    // For TX dsp_rate we reuse kTxDspSampleRate (96000) — the ChannelConfig
-    // struct carries a single sampleRate field intended for the I/O rates.
-    OpenChannel(
-        channelId,
-        cfg.bufferSize,             // in_size (new input block size)
-        cfg.filterSize,             // dsp_size
-        cfg.sampleRate,             // input sample rate
-        kTxDspSampleRate,           // dsp sample rate — always 96 kHz for TX
-        cfg.sampleRate,             // output sample rate
-        kTxChannelType,             // type=1 (TX)
-        0,                          // initial state: off
-        0.000,                      // tdelayup  — from cmaster.c:186
-        kTxTSlewUpSecs,             // tslewup 0.010 s — from cmaster.c:187
-        0.000,                      // tdelaydown — from cmaster.c:188
-        kTxTSlewDownSecs,           // tslewdown 0.010 s — from cmaster.c:189
-        kTxBlockOnOutput);          // bfo=1 — from cmaster.c:190
-
     // Re-seed TX defaults — same block as createTxChannel() so that
     // applyState() setter guards fire correctly for unchanged values.
     SetTXABandpassWindow(channelId, 1);
@@ -1869,16 +1957,130 @@ qint64 WdspEngine::rebuildTxChannel(int channelId, const ChannelConfig& cfg)
     SetTXAPanelRun(channelId, 1);
     SetTXAPanelSelect(channelId, 2);
     SetTXAPostGenRun(channelId, 0);
-
-    qCInfo(lcDsp) << "Rebuild: opened TX channel" << channelId
-                  << "bufSize=" << cfg.bufferSize
-                  << "rate=" << cfg.sampleRate;
+#else
+    Q_UNUSED(channelId);
 #endif
+}
 
-    // Construct a new TxChannel C++ wrapper.
+qint64 WdspEngine::rebuildTxChannel(int channelId, const ChannelConfig& cfg)
+{
+    if (!m_initialized) {
+        qCWarning(lcDsp) << "rebuildTxChannel: WDSP not initialized";
+        return -1;
+    }
+
+    auto it = m_txChannels.find(channelId);
+    if (it == m_txChannels.end()) {
+        qCWarning(lcDsp) << "rebuildTxChannel: channel" << channelId << "not found";
+        return -1;
+    }
+
+    QElapsedTimer timer;
+    timer.start();
+
+    // Capture DSP state before tearing down the channel.
+    const TxChannelState state = it->second->captureState();
+
+    // The OpenChannel call rebuildTxChannel makes, on either path.
+    // Use the same OpenChannel arguments as createTxChannel() — kTxChannelType=1,
+    // kTxBlockOnOutput=1, and the TX-specific slew constants.
+    // cfg.bufferSize = new in_size; cfg.filterSize = new dsp_size.
+    // For TX dsp_rate we reuse kTxDspSampleRate (96000) — the ChannelConfig
+    // struct carries a single sampleRate field intended for the I/O rates.
+    const auto reopen = [this, channelId, cfg]() {
+#ifdef HAVE_WDSP
+        OpenChannel(
+            channelId,
+            cfg.bufferSize,             // in_size (new input block size)
+            cfg.filterSize,             // dsp_size
+            cfg.sampleRate,             // input sample rate
+            kTxDspSampleRate,           // dsp sample rate — always 96 kHz for TX
+            cfg.sampleRate,             // output sample rate
+            kTxChannelType,             // type=1 (TX)
+            0,                          // initial state: off
+            0.000,                      // tdelayup  — from cmaster.c:186
+            kTxTSlewUpSecs,             // tslewup 0.010 s — from cmaster.c:187
+            0.000,                      // tdelaydown — from cmaster.c:188
+            kTxTSlewDownSecs,           // tslewdown 0.010 s — from cmaster.c:189
+            kTxBlockOnOutput);          // bfo=1 — from cmaster.c:190
+
+        seedTxChannelWdsp(channelId);
+
+        qCInfo(lcDsp) << "Rebuild: opened TX channel" << channelId
+                      << "bufSize=" << cfg.bufferSize
+                      << "rate=" << cfg.sampleRate;
+#else
+        Q_UNUSED(this);
+#endif
+    };
+
     // outputBufferSize = inputBufferSize × outputSampleRate / inputSampleRate
     // (same ratio math as createTxChannel — integer multiply-then-divide is safe).
     const int outputBufferSize = cfg.bufferSize * cfg.sampleRate / cfg.sampleRate;
+
+    if (m_txLane != nullptr && !m_txLane->isCurrentThread()) {
+        // R-R3-39: the generation check. The old wrapper is retired at once:
+        // every setter still queued for it, and any posted through a stale
+        // pointer from now on, is skipped. The new wrapper takes the
+        // captured state; its setters queue behind the barrier that closes
+        // the old channel and opens the new one.
+        std::shared_ptr<TxChannel> old(std::move(it->second));
+        m_txChannels.erase(it);
+        old->markRetired();
+
+        auto channel = std::make_unique<TxChannel>(channelId, cfg.bufferSize,
+                                                   outputBufferSize, m_txLane, this);
+        TxChannel* ptr = channel.get();
+        m_txChannels.emplace(channelId, std::move(channel));
+
+        m_txLane->postBarrier([this, old, ptr, channelId, reopen]() mutable {
+            old->quiesceWorkerOnLane();
+#ifdef HAVE_WDSP
+            // Deactivate with drain before closing (mirrors destroyTxChannel).
+            // dmode=1: drain-mode close per Thetis console.cs:29607 [v2.10.3.13].
+            SetChannelState(channelId, 0, 1);
+
+            // Close the old WDSP TX channel.
+            CloseChannel(channelId);
+            ThreadPlacement::instance().forgetChannel(channelId);
+#endif
+            // The old wrapper's destructor unregistered here.
+            old->unregisterVoxCallbackOnLane();
+            qCInfo(lcDsp) << "Rebuild: closed TX channel" << channelId;
+
+            reopen();
+            ptr->onWdspOpenedOnLane();
+            ptr->admitWorkerOnLane();
+            retireTxChannel(std::move(old));
+        });
+
+        // Reapply captured DSP state to the new channel.
+        ptr->applyState(state);
+
+        const qint64 elapsedMs = timer.elapsed();
+        qCInfo(lcDsp) << "Rebuild: TX channel" << channelId << "queued in"
+                      << elapsedMs << "ms (transmit lane)";
+        return elapsedMs;
+    }
+
+#ifdef HAVE_WDSP
+    // Deactivate with drain before closing (mirrors destroyTxChannel).
+    // dmode=1: drain-mode close per Thetis console.cs:29607 [v2.10.3.13].
+    SetChannelState(channelId, 0, 1);
+
+    // Close the old WDSP TX channel.
+    CloseChannel(channelId);
+    ThreadPlacement::instance().forgetChannel(channelId);
+#endif
+
+    // Destroy the old TxChannel C++ wrapper.
+    m_txChannels.erase(it);
+    qCInfo(lcDsp) << "Rebuild: closed TX channel" << channelId;
+
+    // Recreate the WDSP TX channel with the new config.
+    reopen();
+
+    // Construct a new TxChannel C++ wrapper.
     auto channel = std::make_unique<TxChannel>(channelId, cfg.bufferSize,
                                                outputBufferSize, this);
     TxChannel* ptr = channel.get();

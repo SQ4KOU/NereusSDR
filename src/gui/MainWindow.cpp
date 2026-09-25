@@ -128,6 +128,9 @@
 //                blocking Linux audio first-run dialog
 //                (firstRunPromptsBarredForTestRun). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-39 (station Task 32): the TX analyzer runs its WDSP
+//                calls on the model's transmit lane. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -4577,7 +4580,9 @@ void MainWindow::buildUI()
     // analyzer on the local role so a mirrored station MOX state cannot start
     // a local WDSP analyzer or suppress a receive pan on the client.
     if (m_radioModel->ownsLocalDsp()) {
-        m_txAnalyzer = new TxAnalyzer(TxAnalyzer::kTxDispId, this);
+        // R-R3-39: its WDSP calls run on the transmit lane, not here.
+        m_txAnalyzer = new TxAnalyzer(TxAnalyzer::kTxDispId, this,
+                                      m_radioModel->transmitLane());
         // TX dsp_rate = 96 kHz per WdspEngine::kTxDspSampleRate (= cmaster.c:182
         // [v2.10.3.13] hardcoded 96000). The siphon at TXA.c:586 delivers
         // dsp_size = 4096 complex samples per fexchange0 cycle at this rate.

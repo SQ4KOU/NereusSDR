@@ -31,6 +31,14 @@
 //                 feedback channel's WDSP calls run there too; the RX
 //                 channel map is lock-guarded. NereusSDR-original.
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-25 : R-R3-39 (station Task 32) by J.J. Boyd (KG4VCF): the
+//                 transmit lane. TX channel create, destroy and rebuild
+//                 change the map at once and run their WDSP work as one
+//                 transmit-lane barrier each; the channel's wrapper keeps
+//                 the worker out of a channel that is closing; shutdown
+//                 drains the transmit lane before the receive teardown.
+//                 NereusSDR-original. AI-assisted via Anthropic Claude
+//                 Code.
 // =================================================================
 
 /*  cmaster.cs
@@ -163,6 +171,8 @@ class TestNnrRadioPersistence;
 class TestRxChannelStopFeed;
 // R-R3-39: the receive-lane test opens real RX channels on a lane.
 class TestDspControlReceive;
+// R-R3-39: the transmit-lane test opens real TX and RX channels on lanes.
+class TestDspControlTransmit;
 #endif
 
 namespace NereusSDR {
@@ -371,6 +381,26 @@ public:
     // owner's thread; blocks for as long as those jobs take. No-op without
     // a lane.
     void drainReceiveLane();
+
+    // --- R-R3-39: the transmit lane ------------------------------------
+    //
+    // With a lane set, every TX channel's WDSP calls run on it (see
+    // TxChannel::setControlLane): createTxChannel, destroyTxChannel and
+    // rebuildTxChannel change the map at once and run their WDSP work
+    // (OpenChannel, the seeds, DEXP, CloseChannel) as one barrier each. A
+    // new channel's wrapper keeps the TX worker out until its barrier has
+    // opened it, and a closing barrier waits for the worker to leave its
+    // block. Null (the default) runs everything at once on the caller's
+    // thread, as before. Set it before any TX channel exists; the owner
+    // stops the lane before it is destroyed.
+    void setTransmitLane(DspControlThread* lane);
+    DspControlThread* transmitLane() const { return m_txLane; }
+
+    // Waits until every job already queued on the transmit lane has run
+    // (the lane is stopped and started again), then deletes the retired TX
+    // wrappers. For teardown, on the lane owner's thread. No-op without a
+    // lane.
+    void drainTransmitLane();
 
     // --- External Diversity management ---------------------------------
     //
@@ -643,6 +673,12 @@ public:
     //
     // Thread safety: call on main thread only. The TX worker thread must not
     // be running (setRunning(false) + thread stop before calling this).
+    //
+    // R-R3-39: with a transmit lane the old wrapper is retired at once, so
+    // every setter still queued for it (or posted through a stale pointer
+    // afterwards) is skipped, the new wrapper takes the captured state, and
+    // the close and reopen run as one barrier; the return value is then the
+    // time taken to queue it.
     qint64 rebuildTxChannel(int channelId, const ChannelConfig& cfg);
 
     // --- Metering ---
@@ -826,6 +862,21 @@ private:
     void openRxChannelWdsp(int channelId, int inputBufferSize, int dspBufferSize,
                            int inputSampleRate, int dspSampleRate, int outputSampleRate);
 
+    // R-R3-39: the transmit lane and the TX wrappers it has retired (deleted
+    // on this object's thread by reapRetiredTxChannels).
+    DspControlThread* m_txLane{nullptr};
+    std::mutex m_retiredTxMutex;
+    std::vector<std::shared_ptr<TxChannel>> m_retiredTxChannels;
+    void retireTxChannel(std::shared_ptr<TxChannel> channel);
+    void reapRetiredTxChannels();
+    // The WDSP half of createTxChannel before its wrapper exists: OpenChannel,
+    // the default seeds and create_dexp on `dexpBuf`.
+    void openTxChannelWdsp(int channelId, int inputBufferSize, int dspBufferSize,
+                           int inputSampleRate, int dspSampleRate, int outputSampleRate,
+                           double* dexpBuf);
+    // The seeds createTxChannel and rebuildTxChannel make after OpenChannel.
+    void seedTxChannelWdsp(int channelId);
+
     struct ExternalDiversitySlot {
         std::atomic_bool created{false};
         std::atomic_bool running{false};
@@ -979,6 +1030,8 @@ private:
     friend class ::TestRxChannelStopFeed;
     // R-R3-39: same friendship for the receive-lane test.
     friend class ::TestDspControlReceive;
+    // R-R3-39: same friendship for the transmit-lane test.
+    friend class ::TestDspControlTransmit;
 #endif
 };
 

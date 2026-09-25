@@ -196,6 +196,14 @@
 //                into RxDspWorker that blocked the event loop moved to the
 //                lane. NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-25 - R-R3-39: transmit DSP off the event loop. The transmit
+//                lane; the TX channel is no longer moved to TxWorkerThread
+//                (its setters post to the lane); the keying connects moved
+//                into wireTxChannelKeying and call setRunningAsync; the TX
+//                channel's timed DSP-options apply reports through
+//                dspOptionsApplied; PsccPump pumps through the TX channel.
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -743,6 +751,12 @@ RadioModel::RadioModel(Role role, QObject* parent)
         m_rxLane = std::make_unique<DspControlThread>(DspLane::Receive);
         m_rxLane->start();
         m_wdspEngine->setReceiveLane(m_rxLane.get());
+        // R-R3-39: every transmit-side WDSP call runs on its own lane, so a
+        // TX OpenChannel or filter change never waits on the receive lane's
+        // work, and the event loop never waits on either.
+        m_txLane = std::make_unique<DspControlThread>(DspLane::Transmit);
+        m_txLane->start();
+        m_wdspEngine->setTransmitLane(m_txLane.get());
         // A lane barrier parks the DSP worker on its own thread for as long
         // as it holds the release it returns. Called on the lane, so this
         // never blocks the event loop.
@@ -2045,7 +2059,8 @@ RadioModel::RadioModel(Role role, QObject* parent)
                                " (source=" << source
                             << ") AND txReady was already received -- starting"
                                " TxChannel now (carrier hits amp path)";
-                        m_txChannel->setRunning(true);
+                        // R-R3-39: channel on (transmit lane), then the RF gate.
+                        m_txChannel->setRunningAsync(true);
                     }
                 } else {
                     // Grant arrived first (common: fast amp ACK lands
@@ -2747,6 +2762,13 @@ RadioModel::~RadioModel()
     m_rfKitBandFollow.reset();
     m_stationTci.reset();
     teardownConnection();
+    if (m_txLane) {
+        // R-R3-39: the transmit lane's jobs run before it goes (TX before RX,
+        // as WDSP's teardown order has it).
+        m_wdspEngine->drainTransmitLane();
+        m_txLane->stop();
+        m_wdspEngine->setTransmitLane(nullptr);
+    }
     if (m_rxLane) {
         // R-R3-39: every lane job runs before the lane goes; afterwards the
         // engine (deleted after this body) runs its WDSP calls at once.
@@ -8377,6 +8399,25 @@ bool RadioModel::waitForReceiveLaneForTest(int timeoutMs)
     }
     return m_rxLane->waitIdleForTest(std::max(0, timeoutMs - static_cast<int>(timer.elapsed())));
 }
+
+bool RadioModel::waitForTransmitLaneForTest(int timeoutMs)
+{
+    if (!m_txLane) {
+        return true;
+    }
+    QElapsedTimer timer;
+    timer.start();
+    // Twice: an answer delivered by the first pass may post more lane work.
+    for (int pass = 0; pass < 2; ++pass) {
+        const int left = std::max(0, timeoutMs - static_cast<int>(timer.elapsed()));
+        if (!m_txLane->waitIdleForTest(left)) {
+            return false;
+        }
+        QCoreApplication::sendPostedEvents();
+        QCoreApplication::processEvents();
+    }
+    return m_txLane->waitIdleForTest(std::max(0, timeoutMs - static_cast<int>(timer.elapsed())));
+}
 #endif
 
 // ── R-R3-39: the receive lane ───────────────────────────────────────────────
@@ -10131,6 +10172,15 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
             // Task 4.2: give TxChannel a handle to WdspEngine so onModeChanged()
             // can call rebuild() when the active mode's DSP-Options settings change.
             m_txChannel->setWdspEngine(m_wdspEngine);
+            // R-R3-39: with the transmit lane, onModeChanged returns at once
+            // and the lane reports how long its WDSP work took. Same gate as
+            // the RX path's.
+            connect(m_txChannel, &TxChannel::dspOptionsApplied,
+                    this, [this](qint64 elapsedMs) {
+                if (elapsedMs > 0) {
+                    emit dspChangeMeasured(elapsedMs);
+                }
+            });
 
             // ── L.1: construct Pc + Radio mic sources + composite router ──────────
             // Construct after m_connection is live so RadioMicSource has a valid
@@ -10441,6 +10491,9 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
                 // RX channel and took the app down on key-down with
                 // PureSignal active.
                 m_psccPump->setTxChannelId(WdspEngine::kTxChannelId);
+                // R-R3-39: pscc() runs on the transmit lane through the TX
+                // channel, every block in arrival order.
+                m_psccPump->setTxChannel(m_txChannel);
 
                 // Chunk D — iqDataReceived is forked to PsccPump from the
                 // existing wireConnectionSignals lambda (the one wired in
@@ -10595,6 +10648,12 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
             // on the worker thread, where m_txChannel->setX() is a same-
             // thread direct call — no cross-thread setter race.
             //
+            // R-R3-39: m_txChannel is no longer moved to the worker. These
+            // connects are direct calls on this thread now; each setter
+            // changes the wrapper's state at once and posts its WDSP call to
+            // the transmit lane, so it applies even while no mic block
+            // arrives.
+            //
             // Why these are wired here (not in the RadioModel ctor):
             //   m_txChannel doesn't exist at construction time (createTxChannel
             //   runs inside this WDSP-init lambda).  Receiver thread affinity
@@ -10611,68 +10670,11 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
             // Source-of-truth: docs/architecture/phase3m-1c-tx-pump-architecture-plan.md
             // §5.2 last bullet (TxChannel cross-thread setter audit).
 
-            // F.1 — txReady → setRunning(true), GATED on interlockGranted.
-            // From Thetis console.cs:29595 [v2.10.3.13] — TX-on callsite after
-            // Thread.Sleep(rf_delay) in chkMOX_CheckedChanged2.
-            //
-            // 2026-05-20 bench fix (deck item #3 -- MOX RF-gate, then
-            // 21:19 ordering refactor): if an external amp is in the
-            // chain, we defer setRunning(true) until BOTH txReady AND
-            // interlockGranted have fired. Whichever fires SECOND
-            // triggers setRunning. We can't rely on a single arming
-            // point because the two signals can race in either order
-            // depending on amp ACK speed (fast TGXL ACK -> grant before
-            // txReady).
-            //
-            // The gate is ARMED at txAboutToBegin above (before PTT_-
-            // REQUESTED can fire any synchronous interlockGranted) and
-            // CLEARED by the interlockGranted handler in the listener
-            // wire above. Here we only flip m_txReadyReceived and call
-            // setRunning if interlockGranted has already cleared the
-            // gate. The grant handler does the symmetric check.
-            //
-            // 1500 ms failsafe armed if the grant never fires
-            // (e.g. amp disconnected mid-cycle).
-            connect(m_moxController, &MoxController::txReady,
-                    this, [this]() {
-                if (!m_txChannel) { return; }
-                m_txReadyReceived = true;
-                if (!m_awaitingInterlockForTx) {
-                    // Either no amp in chain (gate never armed) OR the
-                    // grant already cleared the gate (fast-ACK race).
-                    // Either way, start TxChannel now.
-                    qCInfo(lcConnection)
-                        << "RF-flow gate: txReady arrived; gate already"
-                           " released (or no amp). Starting TxChannel.";
-                    m_txChannel->setRunning(true);
-                    return;
-                }
-                qCInfo(lcConnection)
-                    << "RF-flow gate: txReady arrived; waiting interlock"
-                       "Granted before starting TxChannel";
-                QTimer::singleShot(1500, this, [this]() {
-                    if (m_awaitingInterlockForTx && m_txChannel) {
-                        qCWarning(lcConnection)
-                            << "RF-flow gate: interlockGranted didn't fire"
-                               " within 1.5 s, starting TxChannel anyway"
-                               " (failsafe)";
-                        m_awaitingInterlockForTx = false;
-                        m_txChannel->setRunning(true);
-                    }
-                });
-            });
-
-            // F.1 — txaFlushed → setRunning(false).
-            // From Thetis console.cs:29607 [v2.10.3.13] — TX-off callsite with
-            // dmode=1 (drain) in the TX→RX branch.
-            // Thread.Sleep(space_mox_delay); // default 0 // from PSDR MW0LGE  [console.cs:29603]
-            connect(m_moxController, &MoxController::txaFlushed,
-                    m_txChannel, [this]() {
-                if (m_pureSignal) {
-                    m_pureSignal->onMoxChanged(false);
-                }
-                m_txChannel->setRunning(false);
-            });
+            // F.1 — txReady → setRunningAsync(true) and txaFlushed →
+            // setRunningAsync(false): see wireTxChannelKeying (R-R3-39 moved
+            // them into one method so the transmit-lane test can wire the
+            // same connections to an injected channel).
+            wireTxChannelKeying();
 
             // H.1 — voxRunRequested → setVoxRun.
             // From Thetis cmaster.cs:1039-1052 [v2.10.3.13] — CMSetTXAVoxRun.
@@ -11444,7 +11446,10 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
                 m_txWorker->setTxChannel(m_txChannel);
                 m_txWorker->setAudioEngine(m_audioEngine);
                 m_txWorker->setMicSource(m_txMicSource.get());
-                m_txChannel->moveToThread(m_txWorker.get());
+                // R-R3-39: the TX channel stays on this thread. Its setters
+                // post their WDSP calls to the transmit lane (applied even
+                // while no mic block arrives); the worker only runs the
+                // per-block DEXP and fexchange0.
                 m_txWorker->startPump();
 
                 qCInfo(lcDsp) << "TX pump: TxWorkerThread started"
@@ -16961,6 +16966,87 @@ void RadioModel::setGanymedePresent(bool present)
         m_paTripped = false;
         emit paTrippedChanged(false);
     }
+}
+
+// ---------------------------------------------------------------------------
+// wireTxChannelKeying: MoxController's keying steps to the TX channel.
+//
+// NereusSDR-original wiring (moved out of the connect-time TX setup, R-R3-39,
+// unchanged in behaviour). With the transmit lane, setRunningAsync(true)
+// switches the WDSP channel on on the lane and then opens the RF gate, and
+// setRunningAsync(false) closes the gate at once and drains on the lane, so
+// the rf_delay ordering (MOX and relay first, the channel after txReady)
+// holds without the event loop waiting on WDSP.
+// ---------------------------------------------------------------------------
+void RadioModel::wireTxChannelKeying()
+{
+    if (!m_txChannel || !m_moxController) {
+        return;
+    }
+    // F.1 — txReady → setRunning(true), GATED on interlockGranted.
+    // From Thetis console.cs:29595 [v2.10.3.13] — TX-on callsite after
+    // Thread.Sleep(rf_delay) in chkMOX_CheckedChanged2.
+    //
+    // 2026-05-20 bench fix (deck item #3 -- MOX RF-gate, then
+    // 21:19 ordering refactor): if an external amp is in the
+    // chain, we defer setRunning(true) until BOTH txReady AND
+    // interlockGranted have fired. Whichever fires SECOND
+    // triggers setRunning. We can't rely on a single arming
+    // point because the two signals can race in either order
+    // depending on amp ACK speed (fast TGXL ACK -> grant before
+    // txReady).
+    //
+    // The gate is ARMED at txAboutToBegin above (before PTT_-
+    // REQUESTED can fire any synchronous interlockGranted) and
+    // CLEARED by the interlockGranted handler in the listener
+    // wire above. Here we only flip m_txReadyReceived and call
+    // setRunning if interlockGranted has already cleared the
+    // gate. The grant handler does the symmetric check.
+    //
+    // 1500 ms failsafe armed if the grant never fires
+    // (e.g. amp disconnected mid-cycle).
+    connect(m_moxController, &MoxController::txReady,
+            this, [this]() {
+        if (!m_txChannel) { return; }
+        m_txReadyReceived = true;
+        if (!m_awaitingInterlockForTx) {
+            // Either no amp in chain (gate never armed) OR the
+            // grant already cleared the gate (fast-ACK race).
+            // Either way, start TxChannel now.
+            qCInfo(lcConnection)
+                << "RF-flow gate: txReady arrived; gate already"
+                   " released (or no amp). Starting TxChannel.";
+            m_txChannel->setRunningAsync(true);
+            return;
+        }
+        qCInfo(lcConnection)
+            << "RF-flow gate: txReady arrived; waiting interlock"
+               "Granted before starting TxChannel";
+        QTimer::singleShot(1500, this, [this]() {
+            if (m_awaitingInterlockForTx && m_txChannel) {
+                qCWarning(lcConnection)
+                    << "RF-flow gate: interlockGranted didn't fire"
+                       " within 1.5 s, starting TxChannel anyway"
+                       " (failsafe)";
+                m_awaitingInterlockForTx = false;
+                m_txChannel->setRunningAsync(true);
+            }
+        });
+    });
+
+    // F.1 — txaFlushed → setRunning(false).
+    // From Thetis console.cs:29607 [v2.10.3.13] — TX-off callsite with
+    // dmode=1 (drain) in the TX→RX branch.
+    // Thread.Sleep(space_mox_delay); // default 0 // from PSDR MW0LGE  [console.cs:29603]
+    connect(m_moxController, &MoxController::txaFlushed,
+            m_txChannel, [this]() {
+        if (m_pureSignal) {
+            m_pureSignal->onMoxChanged(false);
+        }
+        // R-R3-39: the RF gate closes here at once; the drain follows on
+        // the transmit lane.
+        m_txChannel->setRunningAsync(false);
+    });
 }
 
 // ── Phase 3M-1a Task F.1: MoxController::hardwareFlipped fan-out ────────────
