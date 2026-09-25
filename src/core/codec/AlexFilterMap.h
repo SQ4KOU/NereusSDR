@@ -15,6 +15,12 @@
 //                Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                (KG4VCF), with AI-assisted transformation via
 //                Anthropic Claude Code.
+//   2026-09-25: applyAlex1HpfSwitches: the Alex tab's high-pass
+//                switches (HPF Bypass on TX, HPF Bypass on PureSignal
+//                feedback) applied to the RX1 high-pass word as Thetis's
+//                setAlexHPF / setBPF1ForOrionIISaturn apply them. Plan
+//                Task 14 fix wave (R-R3-49). J.J. Boyd (KG4VCF), with
+//                AI-assisted transformation via Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim Thetis console.cs header (lines 1-50) ===
@@ -178,5 +184,31 @@ quint8 computeLpf(double freqMhz);
 // receiver decides alone.
 double receiveLpfFrequencyMhz(double rx1Mhz, double rx2Mhz,
                               bool rx2Live, bool rx2PreampPresent) noexcept;
+
+// The Alex tab's high-pass switches, as Thetis holds them on the console.
+// Defaults are Thetis's console fields (console.cs:18753 and 18764
+// [v2.10.3.15]); what the Setup tab saves is handed in by RadioModel.
+struct Alex1HpfSwitches {
+    bool hpfBypassOnTx {false};   // chkDisableHPFonTX  -> disable_hpf_on_tx
+    bool hpfBypassOnPs {false};   // chkDisableHPFonPSb -> disable_hpf_on_ps
+};
+
+// The RX1 high-pass word (Alex0, SetAlexHPFBits) after those switches.
+// `selected` is the band's selection (computeRxPreselector, or the per-chain
+// decision); `keyed` is _mox; `pureSignalRunning` is PureSignalEnabled.
+// The caller gates on an Alex filter board being present (alexpresent).
+//
+// From Thetis console.cs:6839-6848 setAlexHPF [v2.10.3.15]
+//   if (_mox && disable_hpf_on_tx)
+//   { NetworkIO.SetAlexHPFBits(0x20); ... return; }
+// From Thetis console.cs:6953-6962 setBPF1ForOrionIISaturn [v2.10.3.15]
+//   if (_mox && (disable_hpf_on_tx || (disable_hpf_on_ps && PureSignalEnabled)))
+//   { NetworkIO.SetAlexHPFBits(0x20); ... return; }
+// The PureSignal arm exists only in the band-pass function, which Thetis
+// runs for Orion MkII, Saturn and HermesC10 alone (usesBpf1Preselector,
+// console.cs:6827-6837 setAlex1HPF [v2.10.3.15]).
+quint8 applyAlex1HpfSwitches(quint8 selected, NereusSDR::HPSDRHW board,
+                             bool keyed, bool pureSignalRunning,
+                             const Alex1HpfSwitches& switches) noexcept;
 
 } // namespace NereusSDR::codec::alex

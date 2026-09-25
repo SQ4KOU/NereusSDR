@@ -1887,6 +1887,11 @@ nereus_add_test(tst_p1_rx_filter_follows_live_receiver)
 nereus_add_test(tst_p1_band_outputs_follow_tx_slice)
 nereus_add_test(tst_p2_band_outputs_and_rx_lpf)
 nereus_add_test(tst_hpf_bypass_on_tx)
+# Plan Task 14 fix wave (R-R3-49): the Alex tab's other high-pass switches
+# (HPF Bypass on PureSignal feedback, HPF Bypass, Disable 6m LNA on TX / RX)
+# reach the wire as Thetis's setAlexHPF / setBPF1ForOrionIISaturn apply them
+# (console.cs:6839-6962). NereusSDR-original tests: no Thetis port.
+nereus_add_test(tst_alex_hpf_switches)
 
 # ── A band change must retune the DDC even while CTUN holds it ───────────────
 # CTUN pins the DDC via ReceiverManager::m_ddcFreqLocked so a VFO nudge inside

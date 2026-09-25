@@ -1460,6 +1460,22 @@ void P2RadioConnection::setHpfBypassOnTx(bool on)
 }
 
 // ---------------------------------------------------------------------------
+// setHpfBypassOnPs: "HPF Bypass on PureSignal feedback" (plan Task 14 fix
+// wave). Sent at once, as for HPF Bypass on TX: Thetis's setter re-applies
+// the high-pass (console.cs:18764-18773 DisableHPFonPS [v2.10.3.15]).
+// ---------------------------------------------------------------------------
+void P2RadioConnection::setHpfBypassOnPs(bool on)
+{
+    if (on == m_hpfBypassOnPs) {
+        return;
+    }
+    RadioConnection::setHpfBypassOnPs(on);
+    if (m_running) {
+        sendCmdHighPriority();
+    }
+}
+
+// ---------------------------------------------------------------------------
 // setReceiverVfoFrequencies: each DDC's slice VFO, for the OC band.
 // ---------------------------------------------------------------------------
 void P2RadioConnection::setReceiverVfoFrequencies(const QVector<quint64>& vfoHzBySlot)
@@ -3013,40 +3029,49 @@ CodecContext P2RadioConnection::buildCodecContext() const
     ctx.alexLpfBits     = effectiveLpfBitsAlex0();
     ctx.alexLpfBitsTx   = static_cast<quint8>(m_alex.lpfBitsTx);
 
+    // The Alex tab's high-pass switches (plan Task 14 and its fix wave).
+    //
     // ANAN-G2E bench-fix 2026-05-23 (JJ Boyd): HPF Bypass during MOX+PS.
     // From Thetis console.cs:6957 setBPF1ForOrionIISaturn [v2.10.3.13]:
     //   if (_mox && (disable_hpf_on_tx || (disable_hpf_on_ps && PureSignalEnabled)))
     //       NetworkIO.SetAlexHPFBits(0x20);   // Bypass — bit 12 of Alex0
     // HermesC10 dispatches into this branch (console.cs:6830 //N1GP G2E
-    // added).  When MOX is on AND PureSignal is running AND the user has
-    // "HPF Bypass on PureSignal" enabled, OR 0x20 into alexHpfBits so the
-    // codec emits bit 12 (_Bypass) in Alex0.  Without this on a 1-ADC G2E
-    // the FB DDC sees HPF-attenuated coupler signal which calcc can't fit,
-    // and PureSignal oscillates instead of locking.
+    // added).  Without this on a 1-ADC G2E the FB DDC sees HPF-attenuated
+    // coupler signal which calcc can't fit, and PureSignal oscillates
+    // instead of locking.
     // Wire-confirmed by diffing Thetis-locked pcap (Alex0=0x09441C00, bit 12
     // set) against our pre-fix pcap (Alex0=0x09240C20, bit 12 clear) on
     // 2026-05-23 at /tmp/nereus-g2e-ps.pcap{.first, current}.
-    if (m_mox && m_puresignalRun && m_hpfBypassOnPs) {
-        ctx.alexHpfBits = static_cast<quint8>(ctx.alexHpfBits | 0x20);
-    }
-
+    //
+    // Fix wave: the word is now 0x20 in place of the band's selection, not
+    // the selection with 0x20 added. That is what SetAlexHPFBits(0x20)
+    // leaves (netInterface.c:604-621 [v2.10.3.15]), and what the pcap above
+    // shows: Thetis's 0x...1C00 has the 6.5 MHz relay (bit 5) clear, where
+    // the OR-in kept it. The PureSignal arm now also runs only on the boards
+    // setAlex1HPF sends to setBPF1ForOrionIISaturn (Orion MkII, Saturn,
+    // HermesC10), and follows the Alex tab's check box, which it did not.
+    //
     // "HPF Bypass on TX" (plan Task 14): keyed, Alex0's high-pass word is
-    // 0x20, the bypass, whatever the receive selection was.
+    // 0x20, whatever the receive selection was.
     //   From Thetis console.cs:6843-6848 [v2.10.3.15] (setAlexHPF)
     //     if (_mox && disable_hpf_on_tx)
     //     { NetworkIO.SetAlexHPFBits(0x20); ... return; }
-    //   From Thetis console.cs:6957 [v2.10.3.15] (setBPF1ForOrionIISaturn)
-    //     if (_mox && (disable_hpf_on_tx || (disable_hpf_on_ps && PureSignalEnabled)))
+    //
     // SetAlexHPFBits writes prbpfilter (Alex0) only (netInterface.c:604-621
     // [v2.10.3.15]); Alex1's high-pass is not touched. Alex1 mirrors Alex0's
     // filter bits when ADC1 has no decision of its own
     // (P2CodecOrionMkII::buildAlex1), so that mirror is pinned to the
-    // selection Alex0 had before the bypass.
-    if (m_mox && m_hpfBypassOnTx && m_caps && m_caps->hasAlexFilters) {
-        if (ctx.alexHpfBitsAdc1 < 0) {
-            ctx.alexHpfBitsAdc1 = static_cast<int>(ctx.alexHpfBits & ~0x20u);
+    // selection Alex0 had before a switch replaced it.
+    if (m_caps && m_caps->hasAlexFilters) {
+        const quint8 selected = ctx.alexHpfBits;
+        const quint8 applied = NereusSDR::codec::alex::applyAlex1HpfSwitches(
+            selected, m_caps->board, m_mox, m_puresignalRun, alexHpfSwitches());
+        if (applied != selected) {
+            if (ctx.alexHpfBitsAdc1 < 0) {
+                ctx.alexHpfBitsAdc1 = static_cast<int>(selected & ~0x20u);
+            }
+            ctx.alexHpfBits = applied;
         }
-        ctx.alexHpfBits = 0x20;
     }
 
     // Port / wideband config

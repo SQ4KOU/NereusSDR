@@ -9,6 +9,7 @@
 #include "ConnectionState.h"
 #include "RadioDiscovery.h"
 #include "HardwareProfile.h"
+#include "codec/AlexFilterMap.h"
 
 #include <QDateTime>
 #include <QElapsedTimer>
@@ -424,14 +425,13 @@ public slots:
     virtual void setPuresignalRun(bool run) = 0;
 
     /// HPF Bypass on PureSignal feedback flag (G2E / OrionMKII / Saturn).
-    /// When set + MOX active + PureSignal active, the host emits Alex0 bit 12
-    /// (_Bypass) so the radio bypasses the HPF chain and feeds the post-PA
-    /// coupler tap directly to the ADC.  Default true — matches Thetis
-    /// chkDisableHPFonPSb.Checked=true [v2.10.3.13].  Storage-only on the
-    /// base class; the override actually surfaces the flag in buildCodec-
-    /// Context's alexHpfBits OR-in.  P1 path also stores for symmetric API
-    /// (P1 boards may not need it but the flag persists across protocol
-    /// switches).
+    /// When set + MOX active + PureSignal active, the host sends the Alex0
+    /// high-pass word as 0x20 (bit 12, _Bypass) so the radio bypasses the
+    /// HPF chain and feeds the post-PA coupler tap directly to the ADC.
+    /// Default true, as Thetis chkDisableHPFonPSb.Checked=true
+    /// [v2.10.3.13]. Applied on the band-pass boards only, on either
+    /// protocol (codec::alex::applyAlex1HpfSwitches); RadioModel hands it
+    /// the Alex tab's saved value (plan Task 14 fix wave).
     /// ANAN-G2E bench-fix 2026-05-23 (JJ Boyd).
     virtual void setHpfBypassOnPs(bool on) {
         m_hpfBypassOnPs = on;
@@ -447,6 +447,15 @@ public slots:
     /// P1 and P2 read it when they compose the high-pass word.
     virtual void setHpfBypassOnTx(bool on) { m_hpfBypassOnTx = on; }
     bool hpfBypassOnTx() const noexcept { return m_hpfBypassOnTx; }
+
+    /// The Alex tab's high-pass switches as the high-pass word applies them
+    /// (codec::alex::applyAlex1HpfSwitches). Plan Task 14 fix wave.
+    codec::alex::Alex1HpfSwitches alexHpfSwitches() const noexcept {
+        codec::alex::Alex1HpfSwitches sw;
+        sw.hpfBypassOnTx = m_hpfBypassOnTx;
+        sw.hpfBypassOnPs = m_hpfBypassOnPs;
+        return sw;
+    }
 
     /// Hardware mic-jack PTT disable flag (Orion/ANAN front-panel PTT).
     ///

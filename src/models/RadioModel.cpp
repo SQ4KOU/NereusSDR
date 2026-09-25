@@ -16416,8 +16416,9 @@ void RadioModel::onConnectionStateChanged(ConnectionState state)
         // Plan Task 14: and which VFO each receiver slot serves, for the OC
         // band.
         republishReceiverVfoFrequencies();
-        // Plan Task 14: and the saved "HPF Bypass on TX".
-        applyHpfBypassOnTxSetting();
+        // Plan Task 14 and its fix wave: and the Alex tab's saved high-pass
+        // switches.
+        applyAlexHpfSwitchSettings();
         // RF-SAFETY: and the transmit low-pass, for the same reason. A fresh
         // P2RadioConnection starts with m_alex.lpfBitsTx at its 6 m default
         // and only setTxFrequency ever moves it, so without a push here the
@@ -19041,8 +19042,11 @@ void RadioModel::scheduleRemoteHardwareApply(const QString& key)
     } else if (rest.startsWith(QLatin1String("hl2/"))) {
         reload = QStringLiteral("hl2");
     } else if (rest.compare(QLatin1String("alex/master/hpfBypassOnTx"),
-                            Qt::CaseInsensitive) == 0) {
-        // Plan Task 14: HPF Bypass on TX, applied to the connection.
+                            Qt::CaseInsensitive) == 0
+               || rest.compare(QLatin1String("alex/master/hpfBypassOnPs"),
+                               Qt::CaseInsensitive) == 0) {
+        // Plan Task 14 and its fix wave: the Alex tab's high-pass switches,
+        // applied to the connection.
         reload = QStringLiteral("alex");
     } else {
         return;
@@ -19129,17 +19133,17 @@ void RadioModel::flushRemoteHardwareApply()
         observe(QStringLiteral("hl2"));
     }
     if (reloads.contains(QStringLiteral("alex"))) {
-        applyHpfBypassOnTxSetting();
+        applyAlexHpfSwitchSettings();
         observe(QStringLiteral("alex"));
     }
 }
 
 // ---------------------------------------------------------------------------
-// applyHpfBypassOnTxSetting (plan Task 14, R-R3-49)
+// applyAlexHpfSwitchSettings (plan Task 14 and its fix wave, R-R3-49)
 //
-// "HPF Bypass on TX" was saved by the Alex tab and read by nothing. Thetis's
-// setter hands the value to the console and re-applies the high-pass at
-// once:
+// The Alex tab's high-pass switches were saved by the tab and read by
+// nothing. Thetis's check boxes hand each value to the console, whose
+// setter re-applies the high-pass at once:
 //   From Thetis setup.cs:15352-15355 [v2.10.3.15]
 //     private void chkDisableHPFonTX_CheckedChanged(object sender, EventArgs e)
 //     { ... console.DisableHPFonTX = chkDisableHPFonTX.Checked;
@@ -19147,10 +19151,19 @@ void RadioModel::flushRemoteHardwareApply()
 //     private bool disable_hpf_on_tx = false;
 //     public bool DisableHPFonTX
 //     { ... set { disable_hpf_on_tx = value; double freq = VFOAFreq; setAlex1HPF(freq); } }
-// The connection composes the high-pass word per packet, so handing it the
-// flag is the re-apply. The key is per radio, like the rest of the Alex tab.
+//   From Thetis setup.cs:29440-29458 [v2.10.3.15]
+//     private void chkDisableHPFonPS_CheckedChanged(object sender, EventArgs e)
+//     { ... console.DisableHPFonPS = chkDisableHPFonPSb.Checked;
+//   From Thetis console.cs:18764-18773 [v2.10.3.15]
+//     public bool DisableHPFonPS
+//     { ... set { disable_hpf_on_ps = value; double freq = VFOAFreq; setAlex1HPF(freq); } }
+// Thetis also runs the PureSignal handler once at start-up
+// (setup.cs:1079), so the saved value applies from the first packet; here
+// the connect path calls this. The connection composes the high-pass word
+// per packet, so handing it the flags is the re-apply. The keys are per
+// radio, like the rest of the Alex tab; each default is the tab's own.
 // ---------------------------------------------------------------------------
-void RadioModel::applyHpfBypassOnTxSetting()
+void RadioModel::applyAlexHpfSwitchSettings()
 {
     if (!ownsLocalDsp() || m_connection == nullptr) {
         return;
@@ -19159,13 +19172,18 @@ void RadioModel::applyHpfBypassOnTxSetting()
     if (mac.isEmpty()) {
         return;
     }
-    const bool on = AppSettings::instance()
-                        .hardwareValue(mac, QStringLiteral("alex/master/hpfBypassOnTx"),
-                                       QStringLiteral("False"))
-                        .toString() == QStringLiteral("True");
+    auto flag = [&mac](const char* key, const char* fallback) {
+        return AppSettings::instance()
+                   .hardwareValue(mac, QString::fromLatin1(key), QString::fromLatin1(fallback))
+                   .toString() == QStringLiteral("True");
+    };
+    const bool onTx = flag("alex/master/hpfBypassOnTx", "False");
+    // Default True: chkDisableHPFonPSb.Checked = true (setup.designer.cs).
+    const bool onPs = flag("alex/master/hpfBypassOnPs", "True");
     RadioConnection* conn = m_connection;
-    QMetaObject::invokeMethod(conn, [conn, on]() {
-        conn->setHpfBypassOnTx(on);
+    QMetaObject::invokeMethod(conn, [conn, onTx, onPs]() {
+        conn->setHpfBypassOnTx(onTx);
+        conn->setHpfBypassOnPs(onPs);
     });
 }
 

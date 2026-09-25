@@ -955,13 +955,15 @@ void AntennaAlexAlex1Tab::onMasterCheckChanged(bool checked, const QString& sett
             m_currentMac, settingsKey, checked ? QStringLiteral("True") : QStringLiteral("False"));
         AppSettings::instance().save();
     }
-    // Plan Task 14 (R-R3-49): HPF Bypass on TX reaches the radio at once, as
-    // Thetis's setter re-applies the high-pass (console.cs:18754-18762
-    // DisableHPFonTX [v2.10.3.15]). In a remote window the save above goes
-    // to the Core, which applies it there (scheduleRemoteHardwareApply);
-    // the window's own model has no radio and does nothing.
-    if (m_model && settingsKey == QLatin1String("alex/master/hpfBypassOnTx")) {
-        m_model->applyHpfBypassOnTxSetting();
+    // Plan Task 14 and its fix wave (R-R3-49): the high-pass switches reach
+    // the radio at once, as Thetis's setters re-apply the high-pass
+    // (console.cs:18754-18773 DisableHPFonTX / DisableHPFonPS [v2.10.3.15]).
+    // In a remote window the save above goes to the Core, which applies it
+    // there (scheduleRemoteHardwareApply); the window's own model has no
+    // radio and does nothing.
+    if (m_model && (settingsKey == QLatin1String("alex/master/hpfBypassOnTx")
+                    || settingsKey == QLatin1String("alex/master/hpfBypassOnPs"))) {
+        m_model->applyAlexHpfSwitchSettings();
     }
     emit settingChanged(settingsKey, checked);
 }

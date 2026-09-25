@@ -15,6 +15,12 @@
 //                Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                (KG4VCF), with AI-assisted transformation via
 //                Anthropic Claude Code.
+//   2026-09-25: applyAlex1HpfSwitches: the Alex tab's high-pass
+//                switches (HPF Bypass on TX, HPF Bypass on PureSignal
+//                feedback) applied to the RX1 high-pass word as Thetis's
+//                setAlexHPF / setBPF1ForOrionIISaturn apply them. Plan
+//                Task 14 fix wave (R-R3-49). J.J. Boyd (KG4VCF), with
+//                AI-assisted transformation via Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim Thetis console.cs header (lines 1-50) ===
@@ -228,6 +234,26 @@ double receiveLpfFrequencyMhz(double rx1Mhz, double rx2Mhz,
         return (rx1Mhz > rx2Mhz) ? rx1Mhz : rx2Mhz;
     }
     return rx1Mhz;
+}
+
+// ---------------------------------------------------------------------------
+// applyAlex1HpfSwitches: see the declaration for the Thetis lines.
+//
+// Thetis writes 0x20 in place of the band's selection (SetAlexHPFBits(0x20),
+// which clears every other high-pass relay, netInterface.c:604-621
+// [v2.10.3.15]); it does not add the bypass to the selection.
+// ---------------------------------------------------------------------------
+quint8 applyAlex1HpfSwitches(quint8 selected, NereusSDR::HPSDRHW board,
+                             bool keyed, bool pureSignalRunning,
+                             const Alex1HpfSwitches& switches) noexcept
+{
+    static constexpr quint8 kBypass = 0x20;
+    const bool bandPassBoard = usesBpf1Preselector(board);
+    if (keyed && (switches.hpfBypassOnTx
+                  || (bandPassBoard && switches.hpfBypassOnPs && pureSignalRunning))) {
+        return kBypass;
+    }
+    return selected;
 }
 
 } // namespace NereusSDR::codec::alex

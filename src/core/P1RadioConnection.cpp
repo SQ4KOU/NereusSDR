@@ -1514,8 +1514,13 @@ void P1RadioConnection::setAlexRxBpf(AlexRxBpf b)
 // when there is one, otherwise the RX0-frequency-derived value.
 quint8 P1RadioConnection::effectiveAlexHpfBits() const
 {
-    // "HPF Bypass on TX" (plan Task 14): keyed, an Alex board bypasses its
-    // high-pass. Thetis, for both the high-pass and the band-pass boards:
+    const quint8 selected = m_alexRxHpfOverride >= 0
+                                ? static_cast<quint8>(m_alexRxHpfOverride)
+                                : m_alexHpfBits;
+    // The Alex tab's high-pass switches (plan Task 14 and its fix wave):
+    // HPF Bypass on TX, and on the band-pass boards HPF Bypass on
+    // PureSignal feedback. Thetis, for both the high-pass and the band-pass
+    // boards:
     //   From Thetis console.cs:6841-6848 [v2.10.3.15] (setAlexHPF)
     //     if (alexpresent && !initializing)
     //     {
@@ -1524,16 +1529,15 @@ quint8 P1RadioConnection::effectiveAlexHpfBits() const
     //             NetworkIO.SetAlexHPFBits(0x20);
     //   From Thetis console.cs:6957 [v2.10.3.15] (setBPF1ForOrionIISaturn)
     //     if (_mox && (disable_hpf_on_tx || (disable_hpf_on_ps && PureSignalEnabled)))
+    // codec::alex::applyAlex1HpfSwitches holds the rule and the board list.
     // `alexpresent` is hasAlexFilters here. The HL2 has no Alex board, and
     // its bank 10 C3 bits are left as they were.
-    if (m_mox && m_hpfBypassOnTx) {
-        const BoardCapabilities* const fcaps = filterCaps();
-        if (fcaps && fcaps->hasAlexFilters) {
-            return 0x20;
-        }
+    const BoardCapabilities* const fcaps = filterCaps();
+    if (!fcaps || !fcaps->hasAlexFilters) {
+        return selected;
     }
-    return m_alexRxHpfOverride >= 0 ? static_cast<quint8>(m_alexRxHpfOverride)
-                                    : m_alexHpfBits;
+    return codec::alex::applyAlex1HpfSwitches(selected, fcaps->board, m_mox,
+                                              m_puresignalRun, alexHpfSwitches());
 }
 
 // ---------------------------------------------------------------------------

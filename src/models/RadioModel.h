@@ -2341,14 +2341,17 @@ public:
     // called on the main thread.
     void scheduleRemoteHardwareApply(const QString& key);
 
-    // Plan Task 14 (R-R3-49): "HPF Bypass on TX" (Setup > Hardware > Alex,
-    // hardware/<mac>/alex/master/hpfBypassOnTx) reaches the Core's own radio.
-    // Reads the saved value for the connected radio and hands it to the
-    // connection. Called on connect, by the Alex tab after it saves, and by
-    // scheduleRemoteHardwareApply when a remote window's change arrives. A
-    // model with no radio of its own (a remote window) does nothing: its
-    // save goes to the Core, which applies it there.
-    void applyHpfBypassOnTxSetting();
+    // Plan Task 14 and its fix wave (R-R3-49): the Alex tab's high-pass
+    // switches (Setup > Hardware > Alex, hardware/<mac>/alex/master/...)
+    // reach the Core's own radio. Reads the saved values for the connected
+    // radio and hands them to the connection. Called on connect, by the Alex
+    // tab after it saves one, and by scheduleRemoteHardwareApply when a
+    // remote window's change arrives. A model with no radio of its own (a
+    // remote window) does nothing: its save goes to the Core, which applies
+    // it there.
+    void applyAlexHpfSwitchSettings();
+    // Task 14's name for the same apply, kept for its callers.
+    void applyHpfBypassOnTxSetting() { applyAlexHpfSwitchSettings(); }
 
     // Test-only: observe each reload the coalesced hardware apply makes,
     // by name ("oc", "n2adr", "cal", "hl2").
