@@ -437,7 +437,7 @@ OcOutputsHfTab::OcOutputsHfTab(RadioModel* model, OcMatrix* ocMatrix,
     // OcMatrix::maskFor(pan 1's band, MOX), which in a cross-band split is
     // the other slice's pins, and ignores the HL2's receive bypass. Thetis
     // shows the bits UpdateExtCtrl returned:
-    //   UpdateOCLedStrip(_mox, bits) (console.cs:29105-29106 [v2.10.3.15]).
+    //   UpdateOCLedStrip(_mox, bits) (console.cs:29106-29107 [v2.10.3.15]).
     // In a remote window the model carries the Core's byte, so the row
     // shows what the radio gets there too.
     if (m_model) {

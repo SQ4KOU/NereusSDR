@@ -4037,7 +4037,7 @@ void P1RadioConnection::composeCcForBank(int bankIdx, quint8 out[5]) const
 // composed bank is the one the radio gets, on the codec and the rollback
 // compose alike. Every window shows it (RadioModel::bandOutputsByte), as
 // Thetis's LED strip shows the bits UpdateExtCtrl returned
-// (console.cs:29105-29106 [v2.10.3.15]).
+// (console.cs:29106-29107 [v2.10.3.15]).
 // ---------------------------------------------------------------------------
 void P1RadioConnection::publishBank0BandOutputs(const quint8 bank0[5]) const
 {

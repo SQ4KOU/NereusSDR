@@ -9039,7 +9039,7 @@ void RadioModel::connectTxInhibitInput()
 // Plan Task 14 fix wave (R-R3-49): the band outputs on the wire.
 //
 // Thetis's Setup LED strip shows the bits UpdateExtCtrl returned, not a
-// byte of its own (console.cs:29103-29106 [v2.10.3.15], quoted at
+// byte of its own (console.cs:29104-29107 [v2.10.3.15], quoted at
 // bandOutputsByte). The HL2 I/O tab's strip here updated only from the
 // Core's connection, so a remote window never moved, and the OC Outputs
 // tab computed its own byte from pan 1's band, the opposite of the wire in

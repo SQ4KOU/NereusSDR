@@ -910,7 +910,7 @@ public:
     // ── Plan Task 14 fix wave (R-R3-49): the band outputs on the wire ──────
     //
     // Thetis's Setup shows the bits UpdateExtCtrl returned:
-    //   From Thetis console.cs:29103-29106 [v2.10.3.15]
+    //   From Thetis console.cs:29104-29107 [v2.10.3.15]
     //     if (penny_ext_ctrl_enabled) //MW0LGE_21k
     //     {
     //         int bits = Penny.getPenny().UpdateExtCtrl(lo_band, lo_bandb, _mox, _tuning, SetupForm.TestIMD, chkExternalPA.Checked); //MW0LGE_21j

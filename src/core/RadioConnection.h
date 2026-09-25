@@ -765,7 +765,7 @@ signals:
     // connection composed into the packet that carries it, with the band it
     // was chosen for and whether the transmitter was keyed. Emitted when any
     // of the three changes, on the connection thread. Thetis shows exactly
-    // these bits (UpdateOCLedStrip(_mox, bits), console.cs:29105-29106
+    // these bits (UpdateOCLedStrip(_mox, bits), console.cs:29106-29107
     // [v2.10.3.15]); RadioModel publishes them to every window.
     void bandOutputsComposed(quint8 ocByte, int band, bool keyed);
 

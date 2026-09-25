@@ -3246,7 +3246,7 @@ void P2RadioConnection::composeCmdHighPriority(char buf[kBufLen]) const
     // Plan Task 14 fix wave (R-R3-49): byte 1401 of this packet is the band
     // outputs, so the byte composed here is the one the radio gets. Every
     // window shows it (RadioModel::bandOutputsByte), as Thetis's LED strip
-    // shows the bits UpdateExtCtrl returned (console.cs:29105-29106
+    // shows the bits UpdateExtCtrl returned (console.cs:29106-29107
     // [v2.10.3.15]).
     const int band = int(bandFromFrequency(static_cast<double>(ocBandFrequencyHz())));
     if (m_useLegacyP2Codec || !m_codec) {

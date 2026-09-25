@@ -1896,7 +1896,7 @@ nereus_add_test(tst_alex_hpf_switches)
 # HL2 options and OC Outputs tabs show the band-output byte the connection
 # composed (RadioModel::bandOutputsByte), locally and in a remote window
 # through the station link, as Thetis's UpdateOCLedStrip shows the bits
-# UpdateExtCtrl returned (console.cs:29103-29106). NereusSDR-original.
+# UpdateExtCtrl returned (console.cs:29104-29107). NereusSDR-original.
 nereus_add_test(tst_band_outputs_display
     fakes/LoopbackTransport.cpp)
 target_compile_definitions(tst_band_outputs_display PRIVATE NEREUS_BUILD_TESTS)
