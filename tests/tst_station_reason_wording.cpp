@@ -777,6 +777,11 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("notRepresentableReason()"),
           // iPhone app Task 73: StationServer::sliceRefusal, scanned there.
           QStringLiteral("m_sliceAccess(m_requester, sliceId)"),
+          // Fix wave 2: the same, re-run when a rate change is applied, and
+          // StationSharedSettings' kTargetChangedReason, handed over with
+          // the rate change's closes (scanned there).
+          QStringLiteral("access(requester, sliceId)"),
+          QStringLiteral("std::exchange(m_rateChangedReason, {})"),
           // AlexAntennaFacade's filter policy refusal, scanned below.
           QStringLiteral("alex->setBpfModeForChain(chain, mode)")}},
         // iPhone app Task 13 (R-IOS-08): the device administration verbs'
@@ -875,8 +880,13 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("RemoteAudioOffReason::EncoderUnavailable"),
           QStringLiteral("QString::fromLatin1(kRetireReasonSourceRetune)"),
           QStringLiteral("QString::fromLatin1(kRetireReasonStreamBindingChanged)"),
-          QStringLiteral("QString::fromLatin1(kRetireReasonSliceRemoved)")}},
+          QStringLiteral("QString::fromLatin1(kRetireReasonSliceRemoved)"),
+          // Fix wave 2: the budget refusal, shared with the client,
+          // DisplayBudget.h (scanned below).
+          QStringLiteral("QString::fromLatin1(kDisplayBudgetRefusalReason)")}},
         {"src/core/session/media/SpectrumEndpoint.h", {}, {}, 3},
+        // Fix wave 2: kDisplayBudgetRefusalReason.
+        {"src/core/session/media/DisplayBudget.h", {}, {}, 1},
         {"src/models/AccessoryDataModel.cpp", {QStringLiteral("readOnlyReason")}, {}, 1},
         {"src/models/AccessorySettingsModel.cpp", {QStringLiteral("readOnlyReason")}, {}, 1},
         // A Power Genius or Tuner Genius on another network: its
