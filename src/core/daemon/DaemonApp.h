@@ -225,6 +225,10 @@ public:
     QString statusPageAddress() const;
     /// The status page, while it runs; null otherwise.
     StationStatusPage* statusPage() const { return m_statusPage.get(); }
+    // How the Core's pairing window reads on the announcement and in
+    // Bonjour's `pair` key. The announcement builds from it, so it is
+    // compiled whether or not the tests are.
+    static StationLanPairing stationLanPairingFor(const StationServer& server);
 
 #ifdef NEREUS_BUILD_TESTS
     // Test-only observer, only compiled when NEREUS_BUILD_TESTS is
@@ -276,9 +280,6 @@ public:
     // Before start(): the Bonjour advertiser to use, so a test sees what
     // would be advertised without reaching a real network.
     void setDnsSdAdvertiserForTest(std::unique_ptr<DnsSdAdvertiser> advertiser);
-    // How the Core's pairing window reads on the announcement and in
-    // Bonjour's `pair` key.
-    static StationLanPairing stationLanPairingFor(const StationServer& server);
 
     // Test-only seam, only compiled when NEREUS_BUILD_TESTS is defined.
     // Forces the NEXT start() (and every start() after a stop(), since

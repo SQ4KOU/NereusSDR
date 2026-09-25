@@ -806,6 +806,7 @@ bool DaemonApp::publishDisplayBudget(const std::optional<DisplayLoadDecision>& d
     return true;
 }
 
+#ifdef NEREUS_BUILD_TESTS
 bool DaemonApp::stationAnnouncedForTest() const
 {
     return m_stationAnnouncer && m_stationAnnouncer->isActive();
@@ -820,6 +821,7 @@ void DaemonApp::setDnsSdAdvertiserForTest(std::unique_ptr<DnsSdAdvertiser> adver
 {
     m_dnsSdAdvertiser = std::move(advertiser);
 }
+#endif
 
 StationLanPairing DaemonApp::stationLanPairingFor(const StationServer& server)
 {
