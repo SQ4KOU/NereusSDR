@@ -102,6 +102,17 @@ void AlexController::setWidebandActive(int adc, bool on)
     recomputeBpf(adc);
 }
 
+// Plan Task 14 re-review N4 (Phase 3F design section 16.4.1): WIDE means
+// the chain is bypassed on the wire. An Alex tab switch can put the bypass
+// there over a filtered band, so the chain's state has to know about it.
+void AlexController::setSwitchBypass(int adc, SwitchBypass cause)
+{
+    if (adc < 0 || adc >= 2) { return; }
+    if (m_switchBypass[adc] == cause) { return; }
+    m_switchBypass[adc] = cause;
+    recomputeBpf(adc);
+}
+
 // Phase 3F: slice-aware recompute trigger.
 // Band::Count is the sentinel for "no slice in this position".
 void AlexController::notifySlicesOnAdc(int adc, const std::array<Band, 5>& slicesOnAdc)
@@ -152,6 +163,18 @@ void AlexController::recomputeBpf(int adc)
             for (Band b : uniqueBands) { bandList << bandLabel(b); }
             s.reasonText = QStringLiteral("BYPASS (multi-band: %1)").arg(bandList.join(QStringLiteral(" + ")));
         }
+    }
+
+    // An Alex tab switch bypasses a chain the policy left filtered (plan
+    // Task 14 re-review N4). A chain already bypassed or wide is on the
+    // bypass anyway, and keeps its own reason.
+    s.bypassSwitch = SwitchBypass::None;
+    if (s.effective == BpfEffective::Filtered && m_switchBypass[adc] != SwitchBypass::None) {
+        s.effective = BpfEffective::Bypass;
+        s.bypassSwitch = m_switchBypass[adc];
+        s.reasonText = (m_switchBypass[adc] == SwitchBypass::HpfBypass)
+            ? QStringLiteral("BYPASS (HPF Bypass setting)")
+            : QStringLiteral("BYPASS (6m LNA off on RX)");
     }
 
     if (s.effective != prev.effective || s.reasonText != prev.reasonText) {

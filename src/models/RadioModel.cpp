@@ -14650,6 +14650,41 @@ void RadioModel::republishAlexAdcSlices()
         }
     }
 
+    // Plan Task 14 re-review N4 (Phase 3F design section 16.4.1: WIDE is
+    // the bypass on the wire). The Alex tab's HPF Bypass (master) and
+    // Disable 6m LNA on RX put 0x20 in Alex0 on an Alex board, in place of
+    // the band's selection, whatever the policy chose. The connection
+    // applies them (codec::alex::applyAlex1HpfSwitches, gated on
+    // hasAlexFilters, Alex0 only); the same rule decides here what the
+    // chain reports:
+    //   From Thetis console.cs:6850-6855 [v2.10.3.15] (setAlexHPF)
+    //     if (alex_hpf_bypass)
+    //     {
+    //         NetworkIO.SetAlexHPFBits(0x20); // Bypass HPF
+    //   From Thetis console.cs:6935 [v2.10.3.15] (the 6 m BPF/LNA branch)
+    //     if (alex6bphpf_bypass || disable_6m_lna_on_rx || (_mox && disable_6m_lna_on_tx))
+    // The 6 m arm applies where the selection sent for the chain is the
+    // 6 m BPF/LNA (0x40), which is the lowest slice's selection below. The
+    // keyed arms (on TX, on PureSignal feedback, the 6 m LNA on TX) are not
+    // reported here: they apply only while transmitting.
+    {
+        AlexController::SwitchBypass chain0Switch = AlexController::SwitchBypass::None;
+        if (boardCapabilities().hasAlexFilters) {
+            static constexpr quint8 k6mBpfLna = 0x40;
+            if (m_alexHpfBypassSwitch) {
+                chain0Switch = AlexController::SwitchBypass::HpfBypass;
+            } else if (m_alexDisable6mLnaOnRxSwitch && counts[0] > 0
+                       && codec::alex::computeRxPreselector(lowestHz[0] / 1.0e6, alexBoard)
+                              == k6mBpfLna) {
+                chain0Switch = AlexController::SwitchBypass::Disable6mLnaOnRx;
+            }
+        }
+        m_alexController.setSwitchBypass(0, chain0Switch);
+        // SetAlexHPFBits writes Alex0 only (netInterface.c:604-621
+        // [v2.10.3.15]): chain 1 is never bypassed by these switches.
+        m_alexController.setSwitchBypass(1, AlexController::SwitchBypass::None);
+    }
+
     // Every chain AlexController models is notified, including one the board
     // does not have: the array for it is empty, which is the correct input for
     // a chain with nothing on it and which clears any state left over from a
@@ -14677,8 +14712,12 @@ void RadioModel::republishAlexAdcSlices()
         if (counts[adc] == 0) { return -1; }
 
         const AlexController::AlexAdcState& st = m_alexController.adcState(adc);
-        if (st.effective == AlexController::BpfEffective::Bypass
-            || st.effective == AlexController::BpfEffective::WidebandLocked) {
+        // A chain bypassed only by an Alex tab switch keeps its band's
+        // selection here: the connection applies the switch, which leaves
+        // Alex0 and Alex1's mirror exactly as before (re-review N4).
+        if ((st.effective == AlexController::BpfEffective::Bypass
+             || st.effective == AlexController::BpfEffective::WidebandLocked)
+            && st.bypassSwitch == AlexController::SwitchBypass::None) {
             // 0x20 is the bypass encoding on both chains.
             // From Thetis ChannelMaster/netInterface.c:604-651 [v2.10.3.15]:
             //   prbpfilter->_Bypass  = (bits & 0x20) != 0;
@@ -15180,6 +15219,20 @@ QString RadioModel::bypassReasonForAdc(
         }
         return tr("Core reports preselector bypass for this receiver chain: %1. "
                   "Click to inspect the reported state.").arg(st.reasonText);
+    }
+
+    // Plan Task 14 re-review N4: an Alex tab switch put the bypass there.
+    // Design section 16.4.4 has no row for it; these name the setting and
+    // where to turn it off, in the same shape as its rows.
+    if (st.bypassSwitch == AlexController::SwitchBypass::HpfBypass) {
+        return tr("Preselector bypassed by the HPF Bypass (master) setting on the "
+                  "Antenna / ALEX page of the hardware setup. Turn it off there to "
+                  "restore filtering.");
+    }
+    if (st.bypassSwitch == AlexController::SwitchBypass::Disable6mLnaOnRx) {
+        return tr("Preselector bypassed on 6 m by the Disable 6m LNA on RX setting "
+                  "on the Antenna / ALEX page of the hardware setup. Turn it off "
+                  "there to restore filtering.");
     }
 
     if (st.mode == AlexController::BpfMode::ForceBypass) {
@@ -19333,6 +19386,15 @@ void RadioModel::applyAlexHpfSwitchSettings()
         conn->setAlexHpfBypass(bypass);
         conn->setDisable6mLna(lnaOffRx, lnaOffTx);
     });
+    // Re-review N4: the two receive-side switches also decide what the
+    // chain reports (republishAlexAdcSlices), so the WIDE badge and
+    // rxFilter*Effective show the bypass they put on the wire. The words
+    // sent for the chains are the same as before.
+    if (bypass != m_alexHpfBypassSwitch || lnaOffRx != m_alexDisable6mLnaOnRxSwitch) {
+        m_alexHpfBypassSwitch = bypass;
+        m_alexDisable6mLnaOnRxSwitch = lnaOffRx;
+        republishAlexAdcSlices();
+    }
 }
 
 // R-R3-46: a remote window keeps a copy of the Core's OC pin matrix

@@ -4908,6 +4908,11 @@ private:
     // nested call; the outer one finishes the loop and pushes once, from
     // fully-updated state.
     bool m_republishingAlexBpf{false};
+    // Plan Task 14 re-review N4: the Alex tab's two receive-side bypass
+    // switches as last applied (applyAlexHpfSwitchSettings), so
+    // republishAlexAdcSlices can report the bypass they put on Alex0.
+    bool m_alexHpfBypassSwitch{false};
+    bool m_alexDisable6mLnaOnRxSwitch{false};
 
 #ifdef NEREUS_BUILD_TESTS
     std::optional<BoardCapabilities> m_testWidebandCaps;
