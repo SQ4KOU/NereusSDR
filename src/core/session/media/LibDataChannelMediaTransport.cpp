@@ -904,8 +904,10 @@ bool LibDataChannelMediaTransport::sendMicRtp(const QByteArray& packet)
 {
     // Task 36: only an answerer sends on the microphone line, and only the
     // SSRC it declared there.
-    if (!d->ready || !d->micAudio || d->role != Role::Answerer || d->micAudioSsrc == 0
-        || packet.size() < kMinRawRtpBytes || packet.size() > kMaxRawRtpBytes
+    // Not before the line's track is open: the transport reports ready
+    // without waiting for it.
+    if (!d->ready || !d->micAudio || !d->micAudio->isOpen() || d->role != Role::Answerer
+        || d->micAudioSsrc == 0 || packet.size() < kMinRawRtpBytes || packet.size() > kMaxRawRtpBytes
         || rtpSsrc(packet) != d->micAudioSsrc || d->micAudio->bufferedAmount() != 0
         || d->micAudio->maxMessageSize() < static_cast<std::size_t>(packet.size())) {
         return false;
