@@ -11,6 +11,11 @@
 //   2026-09-24  R-R3-22: a remote window's Disconnect and Reconnect ask
 //   the Core, with a line for its connection and any refusal. J.J. Boyd
 //   (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25  R-R3-49 (parity Task 10): a remote window's OPERATE and ANT
+//   1 to 4 ask the Core (setRfKitOperate, setRfKitAntenna,
+//   remoteRfKitControlVersion 4), wait while the radio is on the air, and
+//   follow the amp's report; coreDiagnosticsText. J.J. Boyd (KG4VCF),
+//   AI-assisted via Anthropic Claude Code.
 // =================================================================
 #pragma once
 #include "AppletWidget.h"
@@ -88,6 +93,16 @@ public:
     QString bandFollowTextForTesting()                 const;
     // R-R3-22: a remote window's connection line ("" when hidden).
     QString connectionLineTextForTesting()             const;
+    // R-R3-49 (parity Task 10).
+    bool    operateButtonEnabledForTesting()           const { return m_operateBtn->isEnabled(); }
+    QString operateButtonToolTipForTesting()           const { return m_operateBtn->toolTip(); }
+    QString antennaButtonToolTipForTesting(int number) const;
+
+    // R-R3-49 (parity Task 10): the Core's RF-Kit diagnostics for a remote
+    // window's Copy diagnostics: the mirrored `rfkit` object and
+    // accessoryData's rfkit* counters, never this computer's idle
+    // connection.
+    static QString coreDiagnosticsText(RadioModel* model);
 
 signals:
     // Emitted when the user clicks the OPERATE/STANDBY toggle button.
@@ -132,12 +147,22 @@ private slots:
     // R-R3-22 fix wave: the Core's answer to a command, by id; only the
     // applet's own Disconnect or Connect (m_pendingCommandId) is shown.
     void onStationCommandFinished(quint32 commandId, bool accepted, const QString& reason);
+    // R-R3-49 (parity Task 10): a remote window's OPERATE and antenna
+    // buttons: enabled on a Core at remoteRfKitControlVersion 4 that is
+    // connected to the amp while the radio is off the air (an antenna also
+    // only if the amp lists it as usable); otherwise disabled with the
+    // reason.
+    void updateRemoteControls();
 
 private:
     QMenu* buildContextMenu(QObject* menuParent);
     bool   isRemoteModel() const;
     // R-R3-22: a remote window's Disconnect or Connect, sent to the Core.
     void   requestRemoteConnectionToggle();
+    // R-R3-49 (parity Task 10): the Core switches its amp for this window.
+    bool   remoteFullControl() const;
+    // Why a remote window's OPERATE and antennas wait ("" when they do not).
+    QString remoteControlReason() const;
 
     // Section A widgets.
     QLabel*      m_deviceLabel{nullptr};

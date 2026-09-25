@@ -57,7 +57,7 @@
         {"id": "session-verbs-tgxl", "file": "sessions/verbs-tgxl.json", "kind": "session", "requires": {"remoteTgxlConfigVersion": 1}},
         {"id": "session-verbs-four-o3a", "file": "sessions/verbs-four-o3a.json", "kind": "session", "requires": {"remoteFourO3AControlVersion": 1}},
         {"id": "session-verbs-pgxl", "file": "sessions/verbs-pgxl.json", "kind": "session", "requires": {"remotePgxlControlVersion": 2}},
-        {"id": "session-verbs-rfkit", "file": "sessions/verbs-rfkit.json", "kind": "session", "requires": {"remoteRfKitControlVersion": 2}},
+        {"id": "session-verbs-rfkit", "file": "sessions/verbs-rfkit.json", "kind": "session", "requires": {"remoteRfKitControlVersion": 4}},
         {"id": "session-verbs-rfkit-reset", "file": "sessions/verbs-rfkit-reset.json", "kind": "session", "requires": {"remoteRfKitControlVersion": 3}},
         {"id": "session-verbs-station-tci", "file": "sessions/verbs-station-tci.json", "kind": "session", "requires": {"stationTciVersion": 1}},
         {"id": "session-verbs-accessory-data", "file": "sessions/verbs-accessory-data.json", "kind": "session", "requires": {"accessoryDataVersion": 1}},

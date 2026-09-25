@@ -131,6 +131,11 @@
 //                (remotePgxlControlVersion 4), and the window's LAN scan
 //                answer (reportStationPgxlLanScan). NereusSDR-original.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 10): setRfKitOperateForStation,
+//                setRfKitAntennaForStation, setRfKitTciModeForStation and
+//                setRfKitAddressForStation (remoteRfKitControlVersion 4).
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -2057,6 +2062,25 @@ public:
     bool resetRfKitErrorForStation(QString* reason);
     /// The station's RF-Kit switch, from a window's command.
     bool setRfKitEnabledForStation(bool enabled, QString* reason);
+    // R-R3-49 (parity Task 10, remoteRfKitControlVersion 4): a window's
+    // RF-Kit OPERATE or STANDBY, ANT 1 to 4 and "Set amp to TCI mode". The
+    // Core's admitted amp gets the request the local applet or page sends
+    // (StationRfKitController). None keys anything. Refused on a Core that
+    // does not own its accessories, while the radio is on the air, and
+    // while the Core is not connected to the amp; nothing is sent then. An
+    // antenna outside 1 to 4, or one the amp lists as disabled or does not
+    // list, is refused too.
+    bool setRfKitOperateForStation(bool on, QString* reason);
+    bool setRfKitAntennaForStation(int port, QString* reason);
+    bool setRfKitTciModeForStation(QString* reason);
+    // A Host and Port saved from a window's RF-Kit page: saves
+    // RfKit_ManualIp and RfKit_ManualPort for the Core's radio without
+    // dialling, with configureRfKit's address checks and reasons (the
+    // RF-Kit switch is not an address check: saving dials nothing).
+    // Refused while the radio is on the air. The `rfkit` object's
+    // configured address follows while the Core is not connecting or
+    // connected.
+    bool setRfKitAddressForStation(const QString& host, int port, QString* reason);
 
     // R-R3-48: the Core runs the app's TCI server on the station network
     // (DaemonApp, before radio startup). `bindOverride` is nereusd.conf's
@@ -3919,6 +3943,9 @@ private:
     // R-R3-49 (parity Task 9): the Power Genius's OPERATE gate: a Core that
     // owns its accessories, off the air, connected to the amp.
     bool stationPgxlControlAllowed(QString* reason) const;
+    // R-R3-49 (parity Task 10): the RF-Kit's gate before its controller's
+    // own: a Core that owns its accessories, off the air.
+    bool stationRfKitControlAllowed(QString* reason) const;
     // R-R3-49 (parity Tasks 8 and 9): the Core's own Scan LAN, one
     // LanDiscovery child named `objectName` that keeps the announcements of
     // `products` for `windowMs` and calls `done` once with the JSON array.

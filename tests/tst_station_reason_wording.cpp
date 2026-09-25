@@ -778,8 +778,12 @@ const QList<ReasonSource>& reasonSources()
         // device's name and its address.
         {"src/core/StationNetwork.cpp", {QStringLiteral("offNetworkReason")}, {}, 1,
          {QStringLiteral("deviceName, address")}},
-        // Reset amp error's refusal (resetRfKitError).
-        {"src/core/StationRfKitController.cpp", {QStringLiteral("resetError")}, {}, 1},
+        // Reset amp error's refusal (resetRfKitError). R-R3-49 (parity Task
+        // 10): OPERATE, antenna and TCI mode, through ampAdmitted.
+        {"src/core/StationRfKitController.cpp",
+         {QStringLiteral("ampAdmitted"), QStringLiteral("resetError"),
+          QStringLiteral("setOperate"), QStringLiteral("setAntenna"),
+          QStringLiteral("setTciMode")}, {}, 2},
         // The amp's and tuner's own settings: the refusals of their
         // commands and the answers the `accessorySettings` object carries.
         // The device's name ("Power Genius", "Tuner Genius").
@@ -826,6 +830,13 @@ const QList<ReasonSource>& reasonSources()
           // the Core's LAN scan for it and the saved address.
           QStringLiteral("stationPgxlControlAllowed"), QStringLiteral("setPgxlOperateForStation"),
           QStringLiteral("scanPgxlLanForStation"), QStringLiteral("setPgxlAddressForStation"),
+          // R-R3-49 (parity Task 10): the RF-Kit's OPERATE and STANDBY,
+          // antenna, TCI mode and saved address.
+          QStringLiteral("stationRfKitControlAllowed"),
+          QStringLiteral("setRfKitOperateForStation"),
+          QStringLiteral("setRfKitAntennaForStation"),
+          QStringLiteral("setRfKitTciModeForStation"),
+          QStringLiteral("setRfKitAddressForStation"),
           // R-R3-49 (parity Task 2): the Tune Power slider's command.
           QStringLiteral("setTunePowerForTxBandForStation"),
           // R-R3-49 (parity Task 3): the TX profile commands and the RADE
@@ -947,6 +958,10 @@ const QList<AppSideReason>& appSideReasons()
          "a remote window's own reason when its Core cannot take the request"},
         // R-R3-49 (parity Task 9): the Power Genius's operate, scan and address.
         {"src/core/session/IStationLink.h", "pgxlFullControlUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        // R-R3-49 (parity Task 10): the RF-Kit's operate, antenna, TCI mode
+        // and address.
+        {"src/core/session/IStationLink.h", "rfKitFullControlUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
         {"src/core/session/IStationLink.h", "transmitSettingsUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},

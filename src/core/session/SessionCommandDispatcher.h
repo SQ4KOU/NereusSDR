@@ -125,6 +125,10 @@
 //   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 9): setPgxlOperate,
 //                                    scanPgxlLan and setPgxlAddress.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 10):
+//                                    setRfKitOperate, setRfKitAntenna,
+//                                    setRfKitTciMode and setRfKitAddress.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -263,6 +267,13 @@ private:
     void handleSetPgxlOperate(const NereusSDR::SessionMessage& invoke);
     void handleScanPgxlLan(const NereusSDR::SessionMessage& invoke);
     void handleSetPgxlAddress(const NereusSDR::SessionMessage& invoke);
+    // R-R3-49 (parity Task 10, remoteRfKitControlVersion 4): the RF-Kit's
+    // OPERATE or STANDBY, antenna and TCI mode, as the local applet and page
+    // send them, and the RF-Kit page's address saved without dialling.
+    void handleSetRfKitOperate(const NereusSDR::SessionMessage& invoke);
+    void handleSetRfKitAntenna(const NereusSDR::SessionMessage& invoke);
+    void handleSetRfKitTciMode(const NereusSDR::SessionMessage& invoke);
+    void handleSetRfKitAddress(const NereusSDR::SessionMessage& invoke);
     // R-R3-49 (parity Task 2, transmitSettingsVersion 2): the TX applet's
     // Tune Power slider, through the Core's own TransmitModel.
     void handleTunePowerForTxBand(const NereusSDR::SessionMessage& invoke);

@@ -154,6 +154,10 @@
 //                setPgxlAddress (remotePgxlControlVersion 4); the scan's
 //                answer goes to RadioModel::reportStationPgxlLanScan.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 10): setRfKitOperate,
+//                setRfKitAntenna, setRfKitTciMode and setRfKitAddress
+//                (remoteRfKitControlVersion 4). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -2835,7 +2839,8 @@ QString accessoryRefusalDevice(const QByteArray& verb, const QString& faultsDevi
         return QStringLiteral("tgxl");
     }
     if (verb == "configureRfKit" || verb == "disconnectRfKit" || verb == "setRfKitEnabled"
-        || verb == "resetRfKitError") {
+        || verb == "resetRfKitError" || verb == "setRfKitOperate" || verb == "setRfKitAntenna"
+        || verb == "setRfKitTciMode" || verb == "setRfKitAddress") {
         return QStringLiteral("rfkit");
     }
     if (verb == "setTxInterlockPolicy") {
@@ -3181,6 +3186,45 @@ StationClient::CommandOutcome StationClient::requestRfKitEnabled(bool enabled)
     }
     return sendCommand("setRfKitEnabled", -1, { boolArgument("enabled", enabled) },
                        QStringLiteral("the RF-Kit amplifier switch"));
+}
+
+// R-R3-49 (parity Task 10): a Core below remoteRfKitControlVersion 4 is not
+// asked; the window says why in its own words.
+StationClient::CommandOutcome StationClient::requestRfKitOperate(bool on)
+{
+    if (!rfKitFullControlAvailable()) {
+        return IStationLink::requestRfKitOperate(on);
+    }
+    return sendCommand("setRfKitOperate", -1, { boolArgument("on", on) },
+                       QStringLiteral("the RF-Kit amplifier operate"));
+}
+
+StationClient::CommandOutcome StationClient::requestRfKitAntenna(int port)
+{
+    if (!rfKitFullControlAvailable()) {
+        return IStationLink::requestRfKitAntenna(port);
+    }
+    return sendCommand("setRfKitAntenna", -1, { intArgument("port", port) },
+                       QStringLiteral("the RF-Kit amplifier antenna"));
+}
+
+StationClient::CommandOutcome StationClient::requestRfKitTciMode()
+{
+    if (!rfKitFullControlAvailable()) {
+        return IStationLink::requestRfKitTciMode();
+    }
+    return sendCommand("setRfKitTciMode", -1, {},
+                       QStringLiteral("the RF-Kit amplifier TCI mode"));
+}
+
+StationClient::CommandOutcome StationClient::requestRfKitAddress(const QString& host, int port)
+{
+    if (!rfKitFullControlAvailable()) {
+        return IStationLink::requestRfKitAddress(host, port);
+    }
+    return sendCommand("setRfKitAddress", -1,
+                       { stringArgument("host", host), intArgument("port", port) },
+                       QStringLiteral("the RF-Kit amplifier address"));
 }
 
 // R-R3-48 (stationTciVersion 1): the one TCI switch and port.
@@ -3768,6 +3812,19 @@ bool StationClient::tgxlOperateAppliesWhole() const
 {
     // R-R3-49 fix wave: a Core at 3 applies setTgxlOperate on whole.
     return tgxlControlAvailable() && m_capabilities.remoteTgxlControlVersion >= 3;
+}
+
+bool StationClient::rfKitFullControlAvailable() const
+{
+    // R-R3-49 (parity Task 10): setRfKitOperate, setRfKitAntenna,
+    // setRfKitTciMode, setRfKitAddress.
+    return remoteRfKitControlAvailable() && m_capabilities.remoteRfKitControlVersion >= 4;
+}
+
+bool StationClient::rfKitCountersAvailable() const
+{
+    // R-R3-49 (parity Task 10): accessoryData's rfkit* counters.
+    return accessoryDataAvailable() && m_capabilities.accessoryDataVersion >= 2;
 }
 
 bool StationClient::pgxlFullControlAvailable() const

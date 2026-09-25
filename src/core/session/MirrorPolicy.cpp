@@ -61,6 +61,9 @@
 //   2026-09-25 - R-R3-49 (parity Task 6): RadioModel txInhibited
 //                 Outbound. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 10): AccessoryDataModel's five
+//                 rfkit* connection counts Outbound. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -626,6 +629,13 @@ const MirrorPolicy::Entry kEntries[] = {
     { "AccessoryDataModel", "rfkitAntenna2Label", MirrorDirection::Outbound },
     { "AccessoryDataModel", "rfkitAntenna3Label", MirrorDirection::Outbound },
     { "AccessoryDataModel", "rfkitAntenna4Label", MirrorDirection::Outbound },
+    // R-R3-49 (parity Task 10, accessoryDataVersion 2): the RF-Kit's
+    // connection counts, read-only.
+    { "AccessoryDataModel", "rfkitConnectedSinceMs", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "rfkitPollsOk", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "rfkitPollsFailed", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "rfkitReconnectCount", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "rfkitLastPollMs", MirrorDirection::Outbound },
 
     // R-R3-47 / R-R3-22 (remotePgxlControlVersion 3, remoteTgxlControlVersion
     // 1): the amp's and tuner's own settings as the Core last heard them,

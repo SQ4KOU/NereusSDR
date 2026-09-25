@@ -200,6 +200,10 @@
 //   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 9):
 //                                    remotePgxlControlVersion 4.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 10):
+//                                    remoteRfKitControlVersion 4 and
+//                                    accessoryDataVersion 2.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QHash>
@@ -519,19 +523,21 @@ public:
     // DSP > Options TX keys, DspOptions<Setting><Mode>Tx). Every other
     // transmit-side key a receive-only Core refuses stays refused.
     static bool isTransmitSettingKeyAcceptedOffAir(const QString& key);
-    // R-R3-47: remoteRfKitControlVersion. 3 on a Core that owns its
+    // R-R3-47: remoteRfKitControlVersion. 4 on a Core that owns its
     // accessories (the `rfkit` object with its interface, antenna, tuner
     // and band-follow rows, the configureRfKit, disconnectRfKit and
-    // setRfKitEnabled verbs, and from 3 the resetRfKitError verb and a
-    // window's auto-reconnect and poll interval applied at once); 0
-    // otherwise.
+    // setRfKitEnabled verbs, from 3 the resetRfKitError verb and a
+    // window's auto-reconnect and poll interval applied at once, and from
+    // 4 setRfKitOperate, setRfKitAntenna, setRfKitTciMode and
+    // setRfKitAddress, parity Task 10); 0 otherwise.
     int rfKitControlVersion() const;
     // R-R3-48: stationTciVersion. 1 on a Core that runs its own station
     // TCI server (the `stationTci` object and the setStationTci verb).
     int stationTciVersion() const;
-    // R-R3-47 / R-R3-22: accessoryDataVersion. 1 on a Core that owns its
+    // R-R3-47 / R-R3-22: accessoryDataVersion. 2 on a Core that owns its
     // accessories (the `accessoryData` object and the setTxInterlockPolicy,
-    // setPgxlPowerCap and clearAccessoryFaults verbs); 0 otherwise.
+    // setPgxlPowerCap and clearAccessoryFaults verbs; from 2 the RF-Kit's
+    // rfkit* connection counts, parity Task 10); 0 otherwise.
     int accessoryDataVersion() const;
 
     // ---- Subsystem accessors, non-owning, for tests and diagnostics ----

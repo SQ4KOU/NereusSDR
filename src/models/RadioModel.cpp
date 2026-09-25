@@ -245,6 +245,12 @@
 //                (the scan shared with the Tuner Genius's through
 //                startStationLanScan); reportStationPgxlLanScan.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 10): setRfKitOperateForStation,
+//                setRfKitAntennaForStation, setRfKitTciModeForStation (the
+//                local applet's and page's REST requests, through the
+//                Core's StationRfKitController) and
+//                setRfKitAddressForStation for a window's RF-Kit page.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1664,6 +1670,8 @@ RadioModel::RadioModel(Role role, QObject* parent)
         sources.tgxlDiagnostics = m_tgxlDiagnostics;
         sources.interlock = m_txInterlockPolicy;
         sources.tuneMemory = m_tuneMemoryStore;
+        // R-R3-49 (parity Task 10): the RF-Kit's connection counts.
+        sources.rfkitConnection = m_rfKitConnection.get();
         m_stationAccessoryData = new StationAccessoryData(m_accessoryDataModel, sources, this);
         // The power-cap alert, computed where the amp is (was
         // MainWindow::onAmpMetersForPowerCap).
@@ -5440,6 +5448,72 @@ bool RadioModel::resetRfKitErrorForStation(QString* reason)
         return false;
     }
     return m_stationRfKit->resetError(reason);
+}
+
+// ---------------------------------------------------------------------------
+// R-R3-49 (parity Task 10, remoteRfKitControlVersion 4): a window's RF-Kit
+// OPERATE, antenna, TCI mode and saved address. NereusSDR-original; no
+// Thetis logic (the RF2K-S is a NereusSDR-native accessory).
+// ---------------------------------------------------------------------------
+
+bool RadioModel::stationRfKitControlAllowed(QString* reason) const
+{
+    if (m_role != Role::Local || !m_stationRfKit) {
+        if (reason) { *reason = QStringLiteral("This Core cannot change its amplifier and tuner settings."); }
+        return false;
+    }
+    return !stationOnAirRefusal(reason);
+}
+
+// Operating the amp keys nothing: it amplifies only when the radio
+// transmits.
+bool RadioModel::setRfKitOperateForStation(bool on, QString* reason)
+{
+    if (!stationRfKitControlAllowed(reason)) { return false; }
+    return m_stationRfKit->setOperate(on, reason);
+}
+
+bool RadioModel::setRfKitAntennaForStation(int port, QString* reason)
+{
+    // The applet's four internal antenna buttons, ANT 1 to ANT 4.
+    if (port < 1 || port > AccessoryDataModel::kRfKitAntennas) {
+        if (reason) { *reason = QStringLiteral("Choose RF-Kit amplifier antenna 1, 2, 3 or 4."); }
+        return false;
+    }
+    if (!stationRfKitControlAllowed(reason)) { return false; }
+    return m_stationRfKit->setAntenna(port, reason);
+}
+
+bool RadioModel::setRfKitTciModeForStation(QString* reason)
+{
+    if (!stationRfKitControlAllowed(reason)) { return false; }
+    return m_stationRfKit->setTciMode(reason);
+}
+
+// configureRfKit's checks and reasons, less the dial and the switch check
+// (saving dials nothing).
+bool RadioModel::setRfKitAddressForStation(const QString& inputHost, int port, QString* reason)
+{
+    const auto refuse = [reason](const QString& text) {
+        if (reason) { *reason = text; }
+        return false;
+    };
+    if (!stationRfKitControlAllowed(reason)) { return false; }
+    if (currentRadioMac().isEmpty()) {
+        return refuse(QStringLiteral("Connect the Core to a radio before setting up its RF-Kit "
+                                     "amplifier."));
+    }
+    const QString host = inputHost.trimmed();
+    if (!validStationAccessoryHost(host) || port < 1 || port > 65535) {
+        return refuse(QStringLiteral("Enter the RF-Kit amplifier's IP address or host name, "
+                                     "and a port from 1 to 65535."));
+    }
+    setPeripheralValue(QStringLiteral("RfKit_ManualIp"), host);
+    setPeripheralValue(QStringLiteral("RfKit_ManualPort"), QString::number(port));
+    AppSettings::instance().save();
+    m_stationRfKit->showSavedEndpoint(host, static_cast<quint16>(port));
+    if (reason) { reason->clear(); }
+    return true;
 }
 
 // ── Per-radio peripherals helpers ──────────────────────────────────────────

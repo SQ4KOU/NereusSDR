@@ -63,10 +63,18 @@
 // waits on the air; the Peripherals row scans for the amp and keeps its
 // address on the Core; Copy diagnostics copies the Core's amp connection.
 // J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-25: R-R3-49 (parity Task 10): a remote window's RF-Kit OPERATE and
+// ANT 1 to 4 (applet) and "Set amp to TCI mode" (page) ask the Core, follow
+// the amp's report and wait on the air; Save keeps a changed Host and Port
+// on the Core without dialling; Copy diagnostics and Live diagnostics show
+// the Core's counts; a local window's Live diagnostics shows the same
+// readings. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #include <QtTest>
 
 #include <QDateTime>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QTemporaryDir>
 #include <cmath>
 #include <memory>
@@ -326,7 +334,8 @@ RfKitPowerSnapshot rfKitPower(int forwardW, float swr, float tempC, float volts,
 }
 
 // R-R3-47: the RF-Kit's REST interface on the loopback (the /info body is
-// tst_rf2ks_connection_parse's).
+// tst_rf2ks_connection_parse's). R-R3-49 (parity Task 10): a PUT changes
+// what the next GET reports, as the amp does, and is recorded with its body.
 class FakeRfKit : public QTcpServer {
 public:
     FakeRfKit()
@@ -334,28 +343,74 @@ public:
         listen(QHostAddress::LocalHost, 0);
         connect(this, &QTcpServer::newConnection, this, [this] {
             while (QTcpSocket* sock = nextPendingConnection()) {
-                connect(sock, &QTcpSocket::readyRead, this, [this, sock] {
-                    const QByteArray req = sock->readAll();
-                    const int sp = req.indexOf(' ') + 1;
-                    const QByteArray path = req.mid(sp, req.indexOf(' ', sp) - sp);
-                    ++requests;
-                    lines.append(QString::fromLatin1(req.left(sp) + path));
-                    QByteArray body = "{}";
-                    if (path == "/info") {
-                        body = R"({"device":"RF2K-S","software_version":{"GUI":200,"controller":267},"custom_device_name":"KG4VCF"})";
-                    } else if (path == "/operate-mode") {
-                        body = R"({"operate_mode":"STANDBY"})";
-                    }
-                    sock->write("HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
-                                + QByteArray::number(body.size()) + "\r\n\r\n" + body);
-                    sock->flush();
-                    sock->disconnectFromHost();
-                });
+                connect(sock, &QTcpSocket::readyRead, this, [this, sock] { serve(sock); });
             }
         });
     }
     int requests{0};
-    QStringList lines;   // "GET /info", "POST /error/reset": what reached the amp
+    QStringList lines;    // "GET /info", "POST /error/reset": what reached the amp
+    QStringList writes;   // "PUT /operate-mode {...}": the changes, with their bodies
+    QString operateMode{QStringLiteral("STANDBY")};
+    int activeAntenna{1};
+    QString operationalInterface{QStringLiteral("UDP")};
+
+private:
+    void serve(QTcpSocket* sock)
+    {
+        QByteArray& buffer = m_buffers[sock];
+        buffer += sock->readAll();
+        const int headerEnd = buffer.indexOf("\r\n\r\n");
+        if (headerEnd < 0) { return; }
+        int length = 0;
+        for (const QByteArray& line : buffer.left(headerEnd).split('\n')) {
+            if (line.toLower().startsWith("content-length:")) {
+                length = line.mid(15).trimmed().toInt();
+            }
+        }
+        if (buffer.size() < headerEnd + 4 + length) { return; }
+        const QByteArray req = buffer;
+        m_buffers.remove(sock);
+        const int sp = req.indexOf(' ') + 1;
+        const QByteArray verb = req.left(sp - 1);
+        const QByteArray path = req.mid(sp, req.indexOf(' ', sp) - sp);
+        const QByteArray payload = req.mid(headerEnd + 4, length);
+        ++requests;
+        lines.append(QString::fromLatin1(req.left(sp) + path));
+        if (verb == "PUT") {
+            writes.append(QString::fromLatin1(verb + ' ' + path + ' ') + QString::fromUtf8(payload));
+            const QJsonObject o = QJsonDocument::fromJson(payload).object();
+            if (path == "/operate-mode") {
+                operateMode = o.value(QStringLiteral("operate_mode")).toString();
+            } else if (path == "/antennas/active") {
+                activeAntenna = o.value(QStringLiteral("number")).toInt();
+            } else if (path == "/operational-interface") {
+                operationalInterface = o.value(QStringLiteral("operational_interface")).toString();
+            }
+        }
+        QByteArray body = "{}";
+        if (verb != "GET") {
+            body.clear();
+        } else if (path == "/info") {
+            body = R"({"device":"RF2K-S","software_version":{"GUI":200,"controller":267},"custom_device_name":"KG4VCF"})";
+        } else if (path == "/operate-mode") {
+            body = QJsonDocument(QJsonObject{{QStringLiteral("operate_mode"), operateMode}})
+                       .toJson(QJsonDocument::Compact);
+        } else if (path == "/antennas/active") {
+            body = QJsonDocument(QJsonObject{{QStringLiteral("type"), QStringLiteral("INTERNAL")},
+                                             {QStringLiteral("number"), activeAntenna}})
+                       .toJson(QJsonDocument::Compact);
+        } else if (path == "/operational-interface") {
+            body = QJsonDocument(QJsonObject{
+                       {QStringLiteral("operational_interface"), operationalInterface},
+                       {QStringLiteral("error"), QString()}})
+                       .toJson(QJsonDocument::Compact);
+        }
+        sock->write("HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nContent-Length: "
+                    + QByteArray::number(body.size()) + "\r\n\r\n" + body);
+        sock->flush();
+        sock->disconnectFromHost();
+    }
+    QHash<QTcpSocket*, QByteArray> m_buffers;
 };
 
 // A loopback stand-in for the Power Genius or Tuner Genius: records every
@@ -534,6 +589,9 @@ private slots:
     void remoteWindowOperatesTheAmpThroughTheCore();
     void remoteWindowScansAndKeepsTheAmpAddressOnTheCore();
     void localPowerGeniusTabOperatesThisComputersAmp();
+    void remoteWindowOperatesTheRfKitThroughTheCore();
+    void olderCoreLeavesTheRfKitSwitchesGreyed();
+    void localRfKitPageShowsTheRemoteReadings();
 };
 
 void RemotePeripheralsTest::remoteParentPageExposesOnlyStationBackedControls()
@@ -1595,7 +1653,9 @@ void RemotePeripheralsTest::remoteWindowSetsUpTheRfKitThroughTheCore()
     QTRY_COMPARE(applet.tunerStatusTextForTesting(), QStringLiteral("TUNED 3.891 MHz (LC)"));
     QTRY_VERIFY(applet.antennaButtonIsActiveForTesting(2));
     QVERIFY(!applet.antennaButtonIsActiveForTesting(1));
-    QVERIFY(!applet.antennaButtonIsEnabledForTesting(2));   // antennas wait for remote transmit
+    // R-R3-49 (parity Task 10): off the air the Core switches its amp's
+    // antenna for this window (they waited for remote transmit before).
+    QVERIFY(applet.antennaButtonIsEnabledForTesting(2));
 
     // Band follow: the Core runs no station TCI server here, so it is off.
     QCOMPARE(applet.bandFollowTextForTesting(), window.rfKitModel()->bandFollowText());
@@ -2205,7 +2265,8 @@ void RemotePeripheralsTest::remoteWindowShowsTheCoresRecords()
 
     LoopbackTransport* stationEnd = cw.connect(this);
     QTRY_VERIFY(cw.client.accessoryDataAvailable());
-    QCOMPARE(cw.server.accessoryDataVersion(), 1);
+    // 2 from parity Task 10 (the RF-Kit's connection counts).
+    QCOMPARE(cw.server.accessoryDataVersion(), 2);
     window.reportStationLinkStateChanged();
     QTRY_VERIFY(pgxlPage.powerCapCheckForTesting()->isEnabled());
     QVERIFY(OperatorWording::isPlain(pgxlPage.remoteNoteForTesting()));
@@ -4219,6 +4280,250 @@ void RemotePeripheralsTest::localPowerGeniusTabOperatesThisComputersAmp()
     QTRY_VERIFY(!operate->isEnabled());
     QCOMPARE(operate->toolTip(), notConnected);
     local.pgxlConnection()->disconnect();
+}
+
+// R-R3-49 (parity Task 10): a remote window's RF-Kit applet OPERATE and
+// ANT 1 to 4, and its RF-Kit page's "Set amp to TCI mode", switch the
+// Core's amp (the local applet's and page's own REST requests) off the air
+// and follow the amp's report; Save keeps a changed Host and Port on the
+// Core without dialling; Copy diagnostics and Live diagnostics show the
+// Core's counts. On the air they wait with the reason and nothing reaches
+// the amp. The window never uses this computer's own connection.
+void RemotePeripheralsTest::remoteWindowOperatesTheRfKitThroughTheCore()
+{
+    AppSettings::instance().clear();
+    AppSettings::instance().setValue(QStringLiteral("RfKit_PollIntervalMs"),
+                                     QStringLiteral("250"));
+    CoreAndWindow cw;
+    RadioModel& station = cw.station;
+    RadioModel& window = cw.window;
+    FakeRfKit amp;
+    Rf2ksApplet applet(&window);
+    QSignalSpy localOperate(&applet, &Rf2ksApplet::operateToggled);
+    QSignalSpy localAntenna(&applet, &Rf2ksApplet::antennaRequested);
+    RfKitPage page(&window);
+    page.show();
+    QSignalSpy refused(&window, &RadioModel::accessoryRequestRefused);
+
+    LoopbackTransport* stationEnd = cw.connect(this);
+    QTRY_VERIFY(cw.client.rfKitFullControlAvailable());
+    QVERIFY(cw.client.rfKitCountersAvailable());
+    window.reportStationLinkStateChanged();
+    QString reason;
+    QVERIFY(station.setRfKitEnabledForStation(true, &reason));
+    QTRY_VERIFY(page.detailTabIsEnabledForTesting());
+    // Before the Core admits an amp: they wait, saying why.
+    const QString notConnected =
+        QStringLiteral("The Core is not connected to the RF-Kit amplifier.");
+    QVERIFY(OperatorWording::isPlain(notConnected));
+    QVERIFY(!applet.operateButtonEnabledForTesting());
+    QCOMPARE(applet.operateButtonToolTipForTesting(), notConnected);
+    QVERIFY(!applet.antennaButtonIsEnabledForTesting(1));
+    QCOMPARE(applet.antennaButtonToolTipForTesting(1), notConnected);
+    QVERIFY(!page.setTciButtonForTesting()->isEnabled());
+    QCOMPARE(page.setTciButtonForTesting()->toolTip(), notConnected);
+
+    QVERIFY(station.configureRfKitForStation(QStringLiteral("127.0.0.1"), amp.serverPort(),
+                                             &reason));
+    QTRY_COMPARE_WITH_TIMEOUT(window.rfKitModel()->connectionPhase(),
+                              RfKitModel::ConnectionPhase::Connected, 5000);
+    QVERIFY(station.receiveOnlyStationPolicy());
+    // The amp lists its antennas: 1 and 2 usable, 3 disabled, 4 not fitted.
+    station.rfKitConnection()->injectJsonForTesting(QStringLiteral("/antennas"), QByteArray(
+        R"({"antennas":[{"type":"INTERNAL","number":1,"state":"ACTIVE"},)"
+        R"({"type":"INTERNAL","number":2,"state":"AVAILABLE"},)"
+        R"({"type":"INTERNAL","number":3,"state":"DISABLED"}]})"));
+    QTRY_COMPARE(window.rfKitModel()->antennaPresentMask(), 0x7);
+    QTRY_VERIFY(applet.operateButtonEnabledForTesting());
+    QVERIFY(applet.operateButtonToolTipForTesting().isEmpty());
+    QTRY_VERIFY(applet.antennaButtonIsEnabledForTesting(2));
+    QVERIFY(applet.antennaButtonIsEnabledForTesting(1));
+    const QString unavailable =
+        QStringLiteral("This antenna is not available on the RF-Kit amplifier.");
+    QVERIFY(!applet.antennaButtonIsEnabledForTesting(3));
+    QCOMPARE(applet.antennaButtonToolTipForTesting(3), unavailable);
+    QVERIFY(!applet.antennaButtonIsEnabledForTesting(4));
+    QVERIFY(OperatorWording::isPlain(unavailable));
+    QTRY_VERIFY(page.setTciButtonForTesting()->isEnabled());
+    QVERIFY(OperatorWording::isPlain(page.setTciButtonForTesting()->toolTip()));
+
+    // B1.7: OPERATE switches the Core's amp; the button follows the amp's
+    // report, not the click.
+    QTRY_COMPARE(applet.operateButtonTextForTesting(), QStringLiteral("STANDBY"));
+    applet.clickOperateButtonForTesting();
+    QTRY_COMPARE(amp.writes, QStringList{
+        QStringLiteral(R"(PUT /operate-mode {"operate_mode":"OPERATE"})")});
+    QTRY_COMPARE(applet.operateButtonTextForTesting(), QStringLiteral("OPERATE"));
+    QVERIFY(window.rfKitModel()->operate());
+    applet.clickOperateButtonForTesting();
+    QTRY_COMPARE(amp.writes.size(), 2);
+    QCOMPARE(amp.writes.at(1), QStringLiteral(R"(PUT /operate-mode {"operate_mode":"STANDBY"})"));
+    QTRY_COMPARE(applet.operateButtonTextForTesting(), QStringLiteral("STANDBY"));
+
+    // B1.8: ANT 2 switches the Core's amp and lights when the amp says so.
+    applet.clickAntennaButtonForTesting(2);
+    QTRY_COMPARE(amp.writes.size(), 3);
+    QCOMPARE(amp.writes.at(2),
+             QStringLiteral(R"(PUT /antennas/active {"number":2,"type":"INTERNAL"})"));
+    QTRY_COMPARE(window.rfKitModel()->activeAntennaNumber(), 2);
+    QTRY_VERIFY(applet.antennaButtonIsActiveForTesting(2));
+    QVERIFY(!applet.antennaButtonIsActiveForTesting(1));
+
+    // B1.9: Set amp to TCI mode from the page; the amp reports TCI after.
+    QTRY_COMPARE(window.rfKitModel()->operationalInterface(), QStringLiteral("UDP"));
+    page.setTciButtonForTesting()->click();
+    QTRY_COMPARE(amp.writes.size(), 4);
+    QCOMPARE(amp.writes.at(3), QStringLiteral(
+        R"(PUT /operational-interface {"operational_interface":"TCI"})"));
+    QTRY_COMPARE(window.rfKitModel()->operationalInterface(), QStringLiteral("TCI"));
+    QVERIFY(refused.isEmpty());
+    QCOMPARE(localOperate.count(), 0);   // never this computer's connection
+    QCOMPARE(localAntenna.count(), 0);
+
+    // B1.11: Host and Port with Save are kept on the Core, nothing dialled.
+    page.hostEditForTesting()->setText(QStringLiteral("192.0.2.77"));
+    page.portSpinForTesting()->setValue(8099);
+    page.saveButtonForTesting()->click();
+    QTRY_COMPARE(station.peripheralValue(QStringLiteral("RfKit_ManualIp")),
+                 QStringLiteral("192.0.2.77"));
+    QCOMPARE(station.peripheralValue(QStringLiteral("RfKit_ManualPort")), QStringLiteral("8099"));
+    QVERIFY(station.rfKitConnection()->isConnected());
+    QCOMPARE(station.rfKitConnection()->peerAddress(), QStringLiteral("127.0.0.1"));
+    QVERIFY(refused.isEmpty());
+
+    // B1.12: the Core's connection counts in Live diagnostics and Copy
+    // diagnostics.
+    QTRY_VERIFY_WITH_TIMEOUT(window.accessoryDataModel()->rfkitPollsOk() > 0, 3000);
+    QTRY_VERIFY(window.accessoryDataModel()->rfkitConnectedSinceMs() > 0);
+    QTRY_VERIFY(page.diagnosticsTextForTesting().contains(
+        QStringLiteral("Polls: %1 OK").arg(window.accessoryDataModel()->rfkitPollsOk())));
+    QVERIFY(page.diagnosticsTextForTesting().contains(QStringLiteral("Connected since")));
+    QVERIFY(!page.diagnosticsTextForTesting().contains(QStringLiteral("Connected since --")));
+    const QString text = Rf2ksApplet::coreDiagnosticsText(&window);
+    QVERIFY2(text.contains(QStringLiteral("Connected: Yes")), qPrintable(text));
+    QVERIFY2(text.contains(QStringLiteral("Host: 127.0.0.1:%1").arg(amp.serverPort())),
+             qPrintable(text));
+    QVERIFY2(text.contains(QStringLiteral("Interface: TCI")), qPrintable(text));
+    QVERIFY2(text.contains(QStringLiteral("Polls OK/failed: %1/%2")
+                               .arg(window.accessoryDataModel()->rfkitPollsOk())
+                               .arg(window.accessoryDataModel()->rfkitPollsFailed())),
+             qPrintable(text));
+
+    // On the air (a MOX click, through the Core's MoxController with its
+    // receive-only pre-check lifted): they wait with the reason; a request
+    // sent anyway reaches nothing.
+    MoxController* const mox = station.moxController();
+    QVERIFY(mox);
+    mox->setMoxCheck({});
+    mox->setMox(true);
+    QTRY_VERIFY(window.isCoreOnAir());
+    QTRY_VERIFY(!applet.operateButtonEnabledForTesting());
+    QCOMPARE(applet.operateButtonToolTipForTesting(), RadioModel::onAirReason());
+    QVERIFY(!applet.antennaButtonIsEnabledForTesting(1));
+    QCOMPARE(applet.antennaButtonToolTipForTesting(1), RadioModel::onAirReason());
+    QTRY_VERIFY(!page.setTciButtonForTesting()->isEnabled());
+    QCOMPARE(page.setTciButtonForTesting()->toolTip(), RadioModel::onAirReason());
+    QVERIFY(!page.hostEditForTesting()->isEnabled());
+    QCOMPARE(page.hostEditForTesting()->toolTip(), RadioModel::onAirReason());
+    applet.clickOperateButtonForTesting();
+    applet.clickAntennaButtonForTesting(1);
+    const int refusedBefore = refused.count();
+    QVERIFY(cw.client.requestRfKitOperate(true).sent);
+    QTRY_COMPARE(refused.count(), refusedBefore + 1);
+    QCOMPARE(refused.last().at(0).toString(), QStringLiteral("rfkit"));
+    QCOMPARE(refused.last().at(1).toString(), RadioModel::onAirReason());
+    QVERIFY(cw.client.requestRfKitAddress(QStringLiteral("192.0.2.78"), 8080).sent);
+    QTRY_COMPARE(refused.count(), refusedBefore + 2);
+    QTest::qWait(100);
+    QCOMPARE(amp.writes.size(), 4);
+    QCOMPARE(station.peripheralValue(QStringLiteral("RfKit_ManualIp")),
+             QStringLiteral("192.0.2.77"));
+    mox->setMox(false);
+    QTRY_VERIFY(!window.isCoreOnAir());
+    QTRY_VERIFY(applet.operateButtonEnabledForTesting());
+    QTRY_VERIFY(page.setTciButtonForTesting()->isEnabled());
+    QVERIFY(page.hostEditForTesting()->isEnabled());
+
+    // Nothing keyed; the window opened no connection of its own.
+    QVERIFY(!station.transmitModel().isTune());
+    QVERIFY(!window.rfKitConnection()->isConnected());
+    QVERIFY(window.rfKitConnection()->peerAddress().isEmpty());
+    stationEnd->closeLink(QStringLiteral("test done"));
+    AppSettings::instance().clear();
+}
+
+// R-R3-49 (parity Task 10): a Core below remoteRfKitControlVersion 4 leaves
+// OPERATE, the antennas and TCI mode greyed with the older reasons, and the
+// window asks nothing.
+void RemotePeripheralsTest::olderCoreLeavesTheRfKitSwitchesGreyed()
+{
+    AppSettings::instance().clear();
+    struct OlderCore final : IStationLink {
+        CommandOutcome requestAddSlice(const QString&) override { return {}; }
+        CommandOutcome requestAddSliceOnPan(const QString&) override { return {}; }
+        CommandOutcome requestRemoveSlice(int) override { return {}; }
+        CommandOutcome requestActiveSlice(int) override { return {}; }
+        CommandOutcome requestSliceSampleRate(int, int) override { return {}; }
+        bool stationLinkReady() const override { return true; }
+        bool remoteRfKitStatusAvailable() const override { return true; }
+        bool remoteRfKitControlAvailable() const override { return true; }
+        bool rfKitSettingsAvailable() const override { return true; }
+    } link;
+    RadioModel model(RadioModel::Role::Remote);
+    model.attachStation(&link);
+    Rf2ksApplet applet(&model);
+    RfKitPage page(&model);
+    model.reportStationLinkStateChanged();
+    QVERIFY(!applet.operateButtonEnabledForTesting());
+    QCOMPARE(applet.operateButtonToolTipForTesting(), AmpApplet::remoteUnavailableReason());
+    for (int n = 1; n <= 4; ++n) {
+        QVERIFY(!applet.antennaButtonIsEnabledForTesting(n));
+        QCOMPARE(applet.antennaButtonToolTipForTesting(n), AmpApplet::remoteUnavailableReason());
+    }
+    QVERIFY(!page.setTciButtonForTesting()->isEnabled());
+    QVERIFY(OperatorWording::isPlain(page.setTciButtonForTesting()->toolTip()));
+    QVERIFY(page.diagnosticsTextForTesting().contains(QStringLiteral("The Core keeps")));
+    for (const IStationLink::CommandOutcome& outcome :
+         {link.requestRfKitOperate(true), link.requestRfKitAntenna(2),
+          link.requestRfKitTciMode(), link.requestRfKitAddress(QStringLiteral("192.0.2.9"), 80)}) {
+        QVERIFY(!outcome.sent);
+        QCOMPARE(outcome.reason, IStationLink::rfKitFullControlUnavailableReason());
+    }
+    QVERIFY(OperatorWording::isPlain(IStationLink::rfKitFullControlUnavailableReason()));
+    model.detachStation();
+    AppSettings::instance().clear();
+}
+
+// R-R3-49 (parity Task 10, both ways): a local window's RF-Kit page shows the
+// connected-since and last-poll readings a remote window shows from the
+// Core, and its "Set amp to TCI mode" still sends this computer's own
+// request.
+void RemotePeripheralsTest::localRfKitPageShowsTheRemoteReadings()
+{
+    AppSettings::instance().clear();
+    AppSettings::instance().setValue(QStringLiteral("PeripheralsMigrationDone"),
+                                     QStringLiteral("True"));
+    FakeRfKit amp;
+    RadioModel local;
+    RadioInfo radio;
+    radio.macAddress = QStringLiteral("aa:bb:cc:dd:ee:4a");
+    local.setLastRadioInfoForTest(radio);
+    local.setConnectionStateForTest(ConnectionState::Connected);
+    local.setRfKitEnabled(true);
+    RfKitPage page(&local);
+    QVERIFY(page.setTciButtonForTesting()->isEnabled());
+    local.rfKitConnection()->connectToAmp(QStringLiteral("127.0.0.1"), amp.serverPort());
+    QTRY_VERIFY_WITH_TIMEOUT(local.rfKitConnection()->isConnected(), 5000);
+    QTRY_VERIFY_WITH_TIMEOUT(page.diagnosticsTextForTesting().contains(QStringLiteral("Connected since")),
+                             3000);
+    QVERIFY(page.diagnosticsTextForTesting().contains(QStringLiteral("Last poll")));
+    QVERIFY(page.diagnosticsTextForTesting().contains(QStringLiteral("RTT")));
+    QVERIFY(!page.diagnosticsTextForTesting().contains(QStringLiteral("Connected since --")));
+    page.setTciButtonForTesting()->click();
+    QTRY_VERIFY(amp.writes.contains(QStringLiteral(
+        R"(PUT /operational-interface {"operational_interface":"TCI"})")));
+    local.rfKitConnection()->disconnect();
+    AppSettings::instance().clear();
 }
 
 QTEST_MAIN(RemotePeripheralsTest)

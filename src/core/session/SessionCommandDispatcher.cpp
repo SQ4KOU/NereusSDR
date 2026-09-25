@@ -124,6 +124,11 @@
 //                                    scanPgxlLan and setPgxlAddress
 //                                    (remotePgxlControlVersion 4).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 10):
+//                                    setRfKitOperate, setRfKitAntenna,
+//                                    setRfKitTciMode and setRfKitAddress
+//                                    (remoteRfKitControlVersion 4).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -315,6 +320,8 @@ QString notRepresentableReason()
 //   setPgxlOperate, scanPgxlLan, setPgxlAddress
 //                          pgxlFullControlAvailable() (version 4)
 //   *RfKit*                remoteRfKitControlAvailable() (version 2)
+//   setRfKitOperate, setRfKitAntenna, setRfKitTciMode, setRfKitAddress
+//                          rfKitFullControlAvailable() (version 4)
 //   setStationTci          stationTciAvailable() (version 1)
 //   setTxInterlockPolicy, setPgxlPowerCap, clearAccessoryFaults
 //                          accessoryDataAvailable() (version 1)
@@ -439,6 +446,16 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
          kRadioIdentitySessionProtocolMinor},
         {"resetRfKitError", {}, "remoteRfKitControlVersion", 3,
          kRadioIdentitySessionProtocolMinor},
+        // The RF-Kit's OPERATE and STANDBY, antenna, TCI mode and saved
+        // address (R-R3-49, parity Task 10).
+        {"setRfKitOperate", {arg("on", kBool)}, "remoteRfKitControlVersion", 4,
+         kRadioIdentitySessionProtocolMinor},
+        {"setRfKitAntenna", {arg("port", kInt)}, "remoteRfKitControlVersion", 4,
+         kRadioIdentitySessionProtocolMinor},
+        {"setRfKitTciMode", {}, "remoteRfKitControlVersion", 4,
+         kRadioIdentitySessionProtocolMinor},
+        {"setRfKitAddress", {arg("host", kUtf8), arg("port", kInt)},
+         "remoteRfKitControlVersion", 4, kRadioIdentitySessionProtocolMinor},
         {"setStationTci", {arg("enabled", kBool), arg("port", kInt)}, "stationTciVersion", 1,
          kRadioIdentitySessionProtocolMinor},
         // The Core's accessory records and settings (R-R3-47, R-R3-22).
@@ -650,6 +667,14 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleSetRfKitEnabled(invoke);
     } else if (invoke.commandVerb == "resetRfKitError") {
         handleResetRfKitError(invoke);
+    } else if (invoke.commandVerb == "setRfKitOperate") {
+        handleSetRfKitOperate(invoke);
+    } else if (invoke.commandVerb == "setRfKitAntenna") {
+        handleSetRfKitAntenna(invoke);
+    } else if (invoke.commandVerb == "setRfKitTciMode") {
+        handleSetRfKitTciMode(invoke);
+    } else if (invoke.commandVerb == "setRfKitAddress") {
+        handleSetRfKitAddress(invoke);
     } else if (invoke.commandVerb == "setStationTci") {
         handleSetStationTci(invoke);
     } else if (invoke.commandVerb == "setTxInterlockPolicy") {
@@ -1412,6 +1437,104 @@ void SessionCommandDispatcher::handleResetRfKitError(const SessionMessage& invok
         return;
     }
     emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-49 (parity Task 10, remoteRfKitControlVersion 4): the RF-Kit's
+// OPERATE or STANDBY, sent to the Core's admitted amp as the local applet's
+// request. Refused while the radio is on the air or the Core is not
+// connected to the amp; nothing is sent then.
+void SessionCommandDispatcher::handleSetRfKitOperate(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    QVariant on;
+    if (!hasExactlyArguments(invoke.arguments, { "on" })
+        || !findArgument(invoke.arguments, "on", &on) || on.typeId() != QMetaType::Bool) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("The request to put the RF-Kit amplifier in operate or "
+                                  "standby was not understood."), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->setRfKitOperateForStation(on.toBool(), &reason)) {
+        emitResult(verb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not switch the RF-Kit "
+                                                     "amplifier.")
+                                    : reason, {});
+        return;
+    }
+    emitResult(verb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-49 (parity Task 10): the applet's ANT 1 to 4, an internal antenna.
+void SessionCommandDispatcher::handleSetRfKitAntenna(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    int port = 0;
+    if (!hasExactlyArguments(invoke.arguments, { "port" })
+        || !hasWireKind(invoke.arguments, "port", MirrorWireKind::Int64)
+        || findIntArgument(invoke.arguments, "port", &port) != ArgumentStatus::Ok) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("The request to switch the RF-Kit amplifier's antenna was "
+                                  "not understood."), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->setRfKitAntennaForStation(port, &reason)) {
+        emitResult(verb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not switch the RF-Kit "
+                                                     "amplifier's antenna.")
+                                    : reason, {});
+        return;
+    }
+    emitResult(verb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-49 (parity Task 10): the RF-Kit page's "Set amp to TCI mode".
+void SessionCommandDispatcher::handleSetRfKitTciMode(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    if (!hasExactlyArguments(invoke.arguments, {})) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("The request to put the RF-Kit amplifier in TCI mode was not "
+                                  "understood."), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->setRfKitTciModeForStation(&reason)) {
+        emitResult(verb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not put the RF-Kit amplifier "
+                                                     "in TCI mode.")
+                                    : reason, {});
+        return;
+    }
+    emitResult(verb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-49 (parity Task 10): the RF-Kit page's Host and Port, saved on the
+// Core for its radio without dialling.
+void SessionCommandDispatcher::handleSetRfKitAddress(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    QString host;
+    int port = 0;
+    if (!hasExactlyArguments(invoke.arguments, { "host", "port" })
+        || !findUtf8Argument(invoke.arguments, "host", &host)
+        || !hasWireKind(invoke.arguments, "port", MirrorWireKind::Int64)
+        || findIntArgument(invoke.arguments, "port", &port) != ArgumentStatus::Ok) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("The request to save the RF-Kit amplifier address was not "
+                                  "understood."), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->setRfKitAddressForStation(host, port, &reason)) {
+        emitResult(verb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not save the RF-Kit "
+                                                     "amplifier address.")
+                                    : reason, {});
+        return;
+    }
+    emitResult(verb, invoke.commandId, true, QString(), {});
 }
 
 void SessionCommandDispatcher::handleSetRfKitEnabled(const SessionMessage& invoke)

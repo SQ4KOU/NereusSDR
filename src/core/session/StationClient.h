@@ -256,6 +256,10 @@
 //                                    Genius operate, LAN scan and address
 //                                    requests (remotePgxlControlVersion 4).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 10): the RF-Kit
+//                                    operate, antenna, TCI mode and address
+//                                    requests (remoteRfKitControlVersion 4).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -533,6 +537,8 @@ public:
     bool tgxlOperateAppliesWhole() const override;
     bool tgxlFullControlAvailable() const override;
     bool pgxlFullControlAvailable() const override;
+    bool rfKitFullControlAvailable() const override;
+    bool rfKitCountersAvailable() const override;
     /// R-R3-49 (parity Task 1): the link is ready at minor 11 and the Core
     /// offers transmitSettingsVersion at least `minVersion` (1 or more): it
     /// takes this window's transmit settings while its radio is off the
@@ -682,6 +688,10 @@ public:
     CommandOutcome requestPgxlOperate(bool on) override;
     CommandOutcome requestPgxlLanScan() override;
     CommandOutcome requestPgxlAddress(const QString& host, int port) override;
+    CommandOutcome requestRfKitOperate(bool on) override;
+    CommandOutcome requestRfKitAntenna(int port) override;
+    CommandOutcome requestRfKitTciMode() override;
+    CommandOutcome requestRfKitAddress(const QString& host, int port) override;
     // R-R3-49 (parity Task 2): see IStationLink.
     CommandOutcome requestTunePowerForTxBand(int watts) override;
     // R-R3-49 (parity Task 3): see IStationLink. Sent only to a Core at

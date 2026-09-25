@@ -176,6 +176,13 @@
 //                idle connection), and its Copy diagnostics copies the
 //                Core's connection. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 10): the RF-Kit applet's OPERATE and
+//                ANT ask the Core in a remote window (never this
+//                computer's idle connection); its Copy diagnostics copies
+//                the Core's connection there, and a local window's copy
+//                gains the operate, interface, reconnect, connected-since
+//                and last-poll lines a remote one shows. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -6865,10 +6872,23 @@ void MainWindow::populateDefaultMeter()
             // (the Core's `rfkit` object in a remote window).
 
             // Applet -> connection (antenna click, operate toggle).
+            // R-R3-49 (parity Task 10): a remote window's applet asks the
+            // Core itself (setRfKitAntenna, setRfKitOperate); this
+            // computer's RF-Kit connection is local only.
             connect(m_rfKitApplet, &Rf2ksApplet::antennaRequested,
-                    rfKitConn, &Rf2ksConnection::setActiveAntenna);
+                    this, [this](RfKitAntenna::Type type, int number) {
+                if (m_radioModel->role() == RadioModel::Role::Remote) {
+                    return;
+                }
+                if (Rf2ksConnection* conn = m_radioModel->rfKitConnection()) {
+                    conn->setActiveAntenna(type, number);
+                }
+            });
             connect(m_rfKitApplet, &Rf2ksApplet::operateToggled,
                     this, [this](bool wantOperate) {
+                if (m_radioModel->role() == RadioModel::Role::Remote) {
+                    return;
+                }
                 Rf2ksConnection* conn = m_radioModel->rfKitConnection();
                 if (!conn) { return; }
                 conn->setOperateMode(wantOperate
@@ -6913,6 +6933,14 @@ void MainWindow::populateDefaultMeter()
 
         connect(m_rfKitApplet, &Rf2ksApplet::diagnosticsCopyRequested,
                 this, [this]() {
+            // R-R3-49 (parity Task 10): a remote window copies the Core's
+            // connection (the mirrored `rfkit` object and accessoryData's
+            // rfkit counters), not this computer's idle one.
+            if (m_radioModel->role() == RadioModel::Role::Remote) {
+                QGuiApplication::clipboard()->setText(
+                    Rf2ksApplet::coreDiagnosticsText(m_radioModel));
+                return;
+            }
             Rf2ksConnection* conn = m_radioModel->rfKitConnection();
             QString diag;
             diag += QStringLiteral("RF-Kit RF2K-S diagnostics\n");
@@ -6926,6 +6954,21 @@ void MainWindow::populateDefaultMeter()
                             .arg(conn->pollsFailed());
                 diag += QStringLiteral("RTT avg: %1 ms\n")
                             .arg(conn->rttAvgLast10Ms());
+                // R-R3-49 (parity Task 10): the lines a remote window's copy
+                // shows from the Core's counters.
+                const auto time = [](qint64 ms) {
+                    return ms > 0 ? QDateTime::fromMSecsSinceEpoch(ms).toString(Qt::ISODate)
+                                  : QStringLiteral("--");
+                };
+                diag += QStringLiteral("Operate: %1\nInterface: %2\n")
+                            .arg(conn->operateMode() == QStringLiteral("OPERATE")
+                                     ? QStringLiteral("Yes") : QStringLiteral("No"),
+                                 conn->operationalInterface().isEmpty()
+                                     ? QStringLiteral("--") : conn->operationalInterface());
+                diag += QStringLiteral("Reconnects: %1\n").arg(conn->reconnectAttempts());
+                diag += QStringLiteral("Connected since: %1\n")
+                            .arg(time(conn->connectedSinceMs()));
+                diag += QStringLiteral("Last poll: %1\n").arg(time(conn->lastPollMs()));
             } else {
                 diag += QStringLiteral("(connection unavailable)\n");
             }

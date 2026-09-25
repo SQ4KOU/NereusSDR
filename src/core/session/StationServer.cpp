@@ -238,6 +238,15 @@
 //                                    (setPgxlOperate, scanPgxlLan,
 //                                    setPgxlAddress).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 10):
+//                                    remoteRfKitControlVersion 4: the
+//                                    RF-Kit's OPERATE and STANDBY, antenna,
+//                                    TCI mode and saved address
+//                                    (setRfKitOperate, setRfKitAntenna,
+//                                    setRfKitTciMode, setRfKitAddress);
+//                                    accessoryDataVersion 2 (the rfkit*
+//                                    connection counts).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -503,6 +512,14 @@ bool isTgxlControlVerb(const QByteArray& verb)
 bool isPgxlFullControlVerb(const QByteArray& verb)
 {
     return verb == "setPgxlOperate" || verb == "scanPgxlLan" || verb == "setPgxlAddress";
+}
+
+// R-R3-49 (parity Task 10): the RF-Kit's OPERATE and STANDBY, antenna, TCI
+// mode and saved address (remoteRfKitControlVersion 4).
+bool isRfKitFullControlVerb(const QByteArray& verb)
+{
+    return verb == "setRfKitOperate" || verb == "setRfKitAntenna" || verb == "setRfKitTciMode"
+        || verb == "setRfKitAddress";
 }
 
 // R-R3-49 (parity Task 8): the relay nudge, the Core's LAN scan and the
@@ -1446,6 +1463,20 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                 it->agreedMinor < kRadioIdentitySessionProtocolMinor
                     ? QStringLiteral("Update this app to change the filter policy on this Core.")
                     : QStringLiteral("The Core has no filter settings ready."), {}));
+            break;
+        }
+        // R-R3-49 (parity Task 10): the RF-Kit's OPERATE and STANDBY,
+        // antenna, TCI mode and saved address came with
+        // remoteRfKitControlVersion 4.
+        if (isRfKitFullControlVerb(message.commandVerb)
+            && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                || rfKitControlVersion() < 4)) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                    ? QStringLiteral("Update this app to switch the RF-Kit amplifier on this "
+                                     "Core.")
+                    : QStringLiteral("This Core cannot change its amplifier and tuner settings."), {}));
             break;
         }
         // I4 (R-R3-47): Reset amp error came with remoteRfKitControlVersion 3.
@@ -2664,7 +2695,9 @@ int StationServer::rfKitControlVersion() const
 {
     // 3: Reset amp error (resetRfKitError), and the Core applies a window's
     // RF-Kit auto-reconnect and poll interval at once (R-R3-47 fix wave).
-    return accessoryStatusVersion() >= 1 ? 3 : 0;
+    // 4: setRfKitOperate, setRfKitAntenna, setRfKitTciMode and
+    // setRfKitAddress, R-R3-49 (parity Task 10).
+    return accessoryStatusVersion() >= 1 ? 4 : 0;
 }
 
 int StationServer::stationTciVersion() const
@@ -2676,7 +2709,9 @@ int StationServer::accessoryDataVersion() const
 {
     return accessoryStatusVersion() >= 1 && !m_radioModel.isNull()
             && m_radioModel->stationAccessoryData() != nullptr
-        ? 1 : 0;
+        // 2: the RF-Kit's connection counts (rfkit*), R-R3-49 (parity
+        // Task 10).
+        ? 2 : 0;
 }
 
 int StationServer::radioHardwareVersion() const

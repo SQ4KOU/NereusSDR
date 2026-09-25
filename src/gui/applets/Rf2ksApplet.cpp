@@ -26,6 +26,13 @@
 //   the Core's connection as it changes and the plain reason for a
 //   refusal. OPERATE and the antennas stay with remote transmit. J.J. Boyd
 //   (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25  R-R3-49 (parity Task 10): a remote window's OPERATE and
+//   ANT 1 to 4 ask the Core (setRfKitOperate, setRfKitAntenna,
+//   remoteRfKitControlVersion 4) while the Core is connected to the amp and
+//   the radio is off the air, disabled with the reason otherwise; they
+//   follow the amp's report, never the click, and never reach this
+//   computer's own connection. coreDiagnosticsText for Copy diagnostics.
+//   J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "Rf2ksApplet.h"
@@ -35,10 +42,12 @@
 #include "gui/OperatorReasonText.h"
 #include "gui/StyleConstants.h"
 #include "gui/UnbuiltFeatures.h"
+#include "models/AccessoryDataModel.h"
 #include "models/RadioModel.h"
 #include "models/RfKitModel.h"
 
 #include <QContextMenuEvent>
+#include <QDateTime>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMenu>
@@ -79,7 +88,16 @@ Rf2ksApplet::Rf2ksApplet(RadioModel* model, QWidget* parent)
     m_operateBtn = new QPushButton(QStringLiteral("STANDBY"), headerWrap);
     m_operateMode = QStringLiteral("STANDBY");
     connect(m_operateBtn, &QPushButton::clicked, this, [this]() {
-        emit operateToggled(m_operateMode != QStringLiteral("OPERATE"));
+        const bool wantOperate = m_operateMode != QStringLiteral("OPERATE");
+        // R-R3-49 (parity Task 10): a remote window asks the Core, whose amp
+        // switches; the button follows the amp's report, not the click.
+        if (isRemoteModel()) {
+            if (remoteControlReason().isEmpty()) {
+                m_model->stationLink()->requestRfKitOperate(wantOperate);
+            }
+            return;
+        }
+        emit operateToggled(wantOperate);
     });
     header->addWidget(m_operateBtn);
 
@@ -177,6 +195,13 @@ Rf2ksApplet::Rf2ksApplet(RadioModel* model, QWidget* parent)
         // green) until setActiveAntenna() flips one on.
         btn->setProperty("active", false);
         connect(btn, &QPushButton::clicked, this, [this, i]() {
+            // R-R3-49 (parity Task 10): a remote window's ANT asks the Core.
+            if (isRemoteModel()) {
+                if (remoteControlReason().isEmpty()) {
+                    m_model->stationLink()->requestRfKitAntenna(i);
+                }
+                return;
+            }
             emit antennaRequested(RfKitAntenna::Type::Internal, i);
         });
         m_antennaButtons[i] = btn;
@@ -259,26 +284,113 @@ Rf2ksApplet::Rf2ksApplet(RadioModel* model, QWidget* parent)
                 this, &Rf2ksApplet::updateStationState);
         connect(m_model, &RadioModel::stationCommandFinished,
                 this, &Rf2ksApplet::onStationCommandFinished);
+        if (m_model->role() == RadioModel::Role::Remote) {
+            connect(m_model, &RadioModel::stationLinkStateChanged,
+                    this, &Rf2ksApplet::updateRemoteControls);
+            connect(m_model, &RadioModel::coreOnAirChanged,
+                    this, &Rf2ksApplet::updateRemoteControls);
+        }
         syncFromRfKit();
         updateStationState();
     }
 
     // R-R3-21: rfKitEnabled is mirrored from the Core, so a Core with RF-Kit
     // enabled shows this applet in a remote window. OPERATE and the antenna
-    // buttons drive this computer's own Rf2ksConnection (MainWindow's
-    // handlers), which a remote window never opens: the amplifier sits at
-    // the station. Same reason the Power Genius applet gives.
-    if (isRemoteModel()) {
-        const QString reason = AmpApplet::remoteUnavailableReason();
-        m_operateBtn->setEnabled(false);
-        m_operateBtn->setToolTip(reason);
-        m_operateBtn->setAccessibleDescription(reason);
-        for (QPushButton* btn : std::as_const(m_antennaButtons)) {
-            btn->setEnabled(false);
-            btn->setToolTip(reason);
-            btn->setAccessibleDescription(reason);
-        }
+    // buttons drive this computer's own Rf2ksConnection in a local window
+    // (MainWindow's handlers), which a remote window never opens: the
+    // amplifier sits at the station. R-R3-49 (parity Task 10): a Core at
+    // remoteRfKitControlVersion 4 switches its own amp instead.
+    updateRemoteControls();
+}
+
+bool Rf2ksApplet::remoteFullControl() const
+{
+    if (!isRemoteModel()) { return false; }
+    const IStationLink* link = m_model->stationLink();
+    return link && link->rfKitFullControlAvailable();
+}
+
+QString Rf2ksApplet::remoteControlReason() const
+{
+    if (!remoteFullControl()) {
+        return AmpApplet::remoteUnavailableReason();
     }
+    // They key nothing, so a receive-only Core takes them; they wait while
+    // the radio is on the air and need the Core connected to the amp.
+    if (m_model->isCoreOnAir()) {
+        return RadioModel::onAirReason();
+    }
+    if (!m_rfKit || m_rfKit->connectionPhase() != TunerModel::ConnectionPhase::Connected) {
+        return tr("The Core is not connected to the RF-Kit amplifier.");
+    }
+    return QString();
+}
+
+void Rf2ksApplet::updateRemoteControls()
+{
+    if (!isRemoteModel() || !m_operateBtn) {
+        return;
+    }
+    const QString reason = remoteControlReason();
+    m_operateBtn->setEnabled(reason.isEmpty());
+    m_operateBtn->setToolTip(reason);
+    m_operateBtn->setAccessibleDescription(reason);
+    // An antenna the amp lists as disabled, or does not list once it has
+    // listed its antennas, stays off as in a local window.
+    const int present = m_rfKit ? m_rfKit->antennaPresentMask() : 0;
+    const int disabled = m_rfKit ? m_rfKit->antennaDisabledMask() : 0;
+    for (auto it = m_antennaButtons.cbegin(); it != m_antennaButtons.cend(); ++it) {
+        const int bit = 1 << (it.key() - 1);
+        const bool listed = present == 0 || ((present & bit) != 0 && (disabled & bit) == 0);
+        const QString why = !reason.isEmpty() ? reason
+            : listed ? QString()
+                     : tr("This antenna is not available on the RF-Kit amplifier.");
+        it.value()->setEnabled(why.isEmpty());
+        it.value()->setToolTip(why);
+        it.value()->setAccessibleDescription(why);
+    }
+}
+
+QString Rf2ksApplet::antennaButtonToolTipForTesting(int number) const
+{
+    const auto* btn = m_antennaButtons.value(number, nullptr);
+    return btn ? btn->toolTip() : QString();
+}
+
+QString Rf2ksApplet::coreDiagnosticsText(RadioModel* model)
+{
+    const RfKitModel* rfKit = model ? model->rfKitModel() : nullptr;
+    const AccessoryDataModel* data = model ? model->accessoryDataModel() : nullptr;
+    if (!rfKit) { return QString(); }
+    const auto time = [](qint64 ms) {
+        return ms > 0 ? QDateTime::fromMSecsSinceEpoch(ms).toString(Qt::ISODate)
+                      : QStringLiteral("--");
+    };
+    const bool connected = rfKit->connectionPhase() == TunerModel::ConnectionPhase::Connected;
+    // The local Copy diagnostics' lines (MainWindow), from the Core.
+    QString text = QStringLiteral("RF-Kit RF2K-S diagnostics (the Core's connection)\n");
+    text += QStringLiteral("Connected: %1\n").arg(connected ? QStringLiteral("Yes")
+                                                              : QStringLiteral("No"));
+    text += QStringLiteral("Host: %1:%2\n")
+                .arg(rfKit->configuredHost().isEmpty() ? QStringLiteral("--")
+                                                       : rfKit->configuredHost())
+                .arg(rfKit->configuredPort());
+    text += QStringLiteral("Version: %1\n").arg(rfKit->deviceVersion());
+    text += QStringLiteral("Operate: %1\nInterface: %2\n")
+                .arg(rfKit->operate() ? QStringLiteral("Yes") : QStringLiteral("No"),
+                     rfKit->operationalInterface().isEmpty() ? QStringLiteral("--")
+                                                             : rfKit->operationalInterface());
+    if (!rfKit->connectionError().isEmpty()) {
+        text += QStringLiteral("Last error: %1\n").arg(rfKit->connectionError());
+    }
+    if (data) {
+        text += QStringLiteral("Polls OK/failed: %1/%2\n")
+                    .arg(data->rfkitPollsOk()).arg(data->rfkitPollsFailed());
+        text += QStringLiteral("Reconnects: %1\n").arg(data->rfkitReconnectCount());
+        text += QStringLiteral("Connected since: %1\n").arg(time(data->rfkitConnectedSinceMs()));
+        text += QStringLiteral("Last poll: %1\n").arg(time(data->rfkitLastPollMs()));
+    }
+    return text;
 }
 
 bool Rf2ksApplet::isRemoteModel() const
@@ -296,6 +408,9 @@ void Rf2ksApplet::syncFromRfKit()
         return;
     }
     setConnectedState(m_rfKit->connectionPhase() == TunerModel::ConnectionPhase::Connected);
+    // R-R3-49 (parity Task 10): the Core's phase and the amp's antenna list
+    // decide a remote window's OPERATE and ANT.
+    updateRemoteControls();
     if (!m_rfKit->deviceNickname().isEmpty() || !m_rfKit->deviceVersion().isEmpty()) {
         setNicknameAndVersion(m_rfKit->deviceNickname(), m_rfKit->deviceVersion());
     }
@@ -555,10 +670,13 @@ void Rf2ksApplet::setAntennas(const QList<RfKitAntenna>& list)
         }
         btn->setText(label);
         // R-R3-21: an amplifier report never re-enables a remote window's
-        // antenna buttons.
-        btn->setEnabled(!isRemoteModel() && a.state != RfKitAntenna::State::Disabled);
+        // antenna buttons by itself: updateRemoteControls decides there.
+        if (!isRemoteModel()) {
+            btn->setEnabled(a.state != RfKitAntenna::State::Disabled);
+        }
         setButtonActive(btn, a.state == RfKitAntenna::State::Active);
     }
+    updateRemoteControls();
 }
 
 void Rf2ksApplet::setActiveAntenna(const RfKitAntenna& a)

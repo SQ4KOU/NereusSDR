@@ -6092,6 +6092,13 @@ nereus_add_test(tst_station_pgxl_controller)
 # PgxlConnection), the Core's LAN scan for it and its saved address; each
 # refused on the air with nothing sent to the (loopback) amp.
 nereus_add_test(tst_pgxl_station_control)
+# R-R3-49 (parity Task 10): a window's RF-Kit RF2K-S OPERATE and STANDBY,
+# antenna, TCI mode (the local applet's and page's REST requests through the
+# Core's Rf2ksConnection) and saved address, each refused on the air with
+# nothing sent to the (in-process HTTP) amp; the Core's connection counts on
+# accessoryData.
+nereus_add_test(tst_rfkit_station_control)
+target_link_libraries(tst_rfkit_station_control PRIVATE Qt6::Network)
 # R-R3-47 / R-R3-48 / R-R3-22 / R-R3-25: the Core's RF-Kit RF2K-S: identity
 # from /info before admission, the Core's configure/disconnect/switch rules,
 # cancellation, faults, and TCI mode through the amp's web interface while

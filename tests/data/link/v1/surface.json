@@ -218,7 +218,7 @@
         {
             "kind": "i64",
             "name": "remoteRfKitControlVersion",
-            "value": 3
+            "value": 4
         },
         {
             "kind": "i64",
@@ -228,7 +228,7 @@
         {
             "kind": "i64",
             "name": "accessoryDataVersion",
-            "value": 1
+            "value": 2
         },
         {
             "kind": "i64",
@@ -801,6 +801,58 @@
             "capabilityVersion": 3,
             "minMinor": 11,
             "verb": "resetRfKitError"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "bool",
+                    "name": "on",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteRfKitControlVersion",
+            "capabilityVersion": 4,
+            "minMinor": 11,
+            "verb": "setRfKitOperate"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "port",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteRfKitControlVersion",
+            "capabilityVersion": 4,
+            "minMinor": 11,
+            "verb": "setRfKitAntenna"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "remoteRfKitControlVersion",
+            "capabilityVersion": 4,
+            "minMinor": 11,
+            "verb": "setRfKitTciMode"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "host",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "port",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteRfKitControlVersion",
+            "capabilityVersion": 4,
+            "minMinor": 11,
+            "verb": "setRfKitAddress"
         },
         {
             "arguments": [
@@ -2379,6 +2431,36 @@
                     "kind": "utf8",
                     "name": "rfkitAntenna4Label",
                     "ordinal": 41
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "rfkitConnectedSinceMs",
+                    "ordinal": 42
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "rfkitPollsOk",
+                    "ordinal": 43
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "rfkitPollsFailed",
+                    "ordinal": 44
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "rfkitReconnectCount",
+                    "ordinal": 45
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "rfkitLastPollMs",
+                    "ordinal": 46
                 }
             ]
         },
