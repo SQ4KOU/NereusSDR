@@ -228,10 +228,13 @@ void GeneralOptionsPage::setStationSettingsAvailable(bool available, const QStri
 // ---------------------------------------------------------------------------
 // Task 16: Receive Only.
 //
-// Thetis hides chkGeneralRXOnly in the designer (setup.designer.cs:8535-8544
-// [v2.10.3.13], Visible=false) and shows it on no radio; NereusSDR shows it
-// on every radio (the operator, 2026-09-25: a control that cannot run is
-// shown disabled with its reason, never hidden). On a radio with no
+// Thetis's designer hides chkGeneralRXOnly (setup.designer.cs:8535-8544
+// [v2.10.3.13], Visible=false), and comboRadioModel_SelectedIndexChanged
+// shows it for every model (setup.cs:19878, 19911 and on [v2.10.3.15]);
+// mi0bot-Thetis shows it for the HL2 (setup.cs:20199 [v2.10.3.13-beta2]).
+// NereusSDR shows it on every radio too, and with no radio (the operator,
+// 2026-09-25: a control that cannot run is shown disabled with its reason,
+// never hidden). On a radio with no
 // transmitter (BoardCapabilities::isRxOnlySku, the HL2 receive-only kit) it
 // is checked and disabled with that reason: NereusSDR's own rule, since
 // mi0bot-Thetis has no kit model, only the operator's toggle.
@@ -336,7 +339,8 @@ void GeneralOptionsPage::onCurrentRadioChanged(const NereusSDR::RadioInfo& /*inf
 // Hardware Configuration group
 // From Thetis setup.designer.cs:8045-8396 [v2.10.3.13] (tpGeneralHardware)
 // Controls: comboFRSRegion, chkExtended, lblWarningRegionExtended,
-//           chkGeneralRXOnly (hidden), chkNetworkWDT (default ON).
+//           chkGeneralRXOnly (shown on every radio), chkNetworkWDT
+//           (default ON).
 // ---------------------------------------------------------------------------
 
 void GeneralOptionsPage::buildHardwareConfigGroup()
@@ -422,8 +426,9 @@ void GeneralOptionsPage::buildHardwareConfigGroup()
 
     // --- Receive Only checkbox ---
     // From Thetis setup.designer.cs:8535-8544 [v2.10.3.13] (text and
-    // tooltip). Thetis hides it (Visible=false); NereusSDR shows it on every
-    // radio (Task 16, syncReceiveOnly).
+    // tooltip). The designer hides it (Visible=false) and Thetis shows it
+    // for every model (setup.cs:19878 and on [v2.10.3.15]); NereusSDR shows
+    // it on every radio (Task 16, syncReceiveOnly).
     m_chkGeneralRXOnly = new QCheckBox(tr("Receive Only"), group);
     m_chkGeneralRXOnly->setObjectName(QStringLiteral("chkGeneralRXOnly"));
     m_chkGeneralRXOnly->setToolTip(QStringLiteral("Check to disable transmit functionality."));

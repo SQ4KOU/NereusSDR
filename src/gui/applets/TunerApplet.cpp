@@ -27,10 +27,16 @@
 //                 cycle button; TunerModel signal connections added;
 //                 antenna container added (hidden by default).
 //                 From AetherSDR src/gui/TunerApplet.cpp [@0cd4559].
+//   2026-09-25  TUNE disabled with the reason while receive only, TX
+//                 inhibit or a PA trip blocks transmit (receiver and
+//                 transmit gaps plan, Task 16 fix wave M2), by J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code. NereusSDR-native; no AetherSDR equivalent.
 // =================================================================
 
 #include "TunerApplet.h"
 #include "core/AppSettings.h"
+#include "core/MoxController.h"
 #include "gui/HGauge.h"
 #include "gui/RelayBar.h"
 #include "models/RadioModel.h"
@@ -83,6 +89,13 @@ TunerApplet::TunerApplet(RadioModel* model, TunerModel* tunerModel, QWidget* par
 
     if (tunerModel) {
         setTunerModel(tunerModel);
+    }
+    // Task 16 fix wave (M2): TUNE starts a transmission (the tune carrier
+    // under the TGXL sweep), so it follows the transmit block the way the
+    // TX applet's TUNE does, with the reason. Local and remote alike.
+    if (model && model->moxController()) {
+        connect(model->moxController(), &MoxController::transmitBlockChanged,
+                this, [this](const QString&) { updateActuatingControls(); });
     }
     updateActuatingControls();
     updateStationAvailability();
@@ -201,7 +214,7 @@ void TunerApplet::buildUI()
     // NereusSDR-native; no AetherSDR equivalent (AetherSDR routes through
     // a real FlexRadio that handles the carrier internally).
     connect(m_tuneBtn, &QPushButton::clicked, this, [this]() {
-        if (!m_transmitPermitted || !m_tunerModel) { return; }
+        if (!m_transmitPermitted || !m_tunerModel || transmitBlocked()) { return; }
         // Engage local CW tune carrier via the G.4 orchestrator
         // RadioModel::setTune(true). That call configures the gen1 PostGen
         // tone (TxChannel::setTuneTone), swaps CW->LSB/USB if needed,
@@ -436,6 +449,12 @@ void TunerApplet::updateStationAvailability()
     m_staleLabel->setVisible(remote && !m_stationConnected);
 }
 
+bool TunerApplet::transmitBlocked() const
+{
+    return m_model && m_model->moxController()
+        && !m_model->moxController()->transmitBlockReason().isEmpty();
+}
+
 void TunerApplet::updateActuatingControls()
 {
     const QString tooltip = m_transmitPermitted ? QString() : m_transmitPermissionReason;
@@ -445,6 +464,16 @@ void TunerApplet::updateActuatingControls()
         button->setToolTip(tooltip);
     };
     updateButton(m_tuneBtn);
+    // Task 16 fix wave (M2): TUNE also waits on the transmit block, with its
+    // reason, and with both reasons when a remote window's missing transmit
+    // applies too (M6).
+    if (m_tuneBtn && m_model && transmitBlocked()) {
+        m_tuneBtn->setEnabled(false);
+        m_tuneBtn->setToolTip(m_model->transmitBlockReasonAlongside(tooltip));
+    }
+    if (m_tuneBtn) {
+        m_tuneBtn->setAccessibleDescription(m_tuneBtn->toolTip());
+    }
     updateButton(m_operateBtn);
     updateButton(m_ant1Btn);
     updateButton(m_ant2Btn);
@@ -538,7 +567,8 @@ void TunerApplet::setTunerModel(TunerModel* model)
             // pushing tuning=1; that re-entry is detected and ignored.
             const bool localOrchestrationAllowed = m_transmitPermitted && m_model
                 && m_model->role() == RadioModel::Role::Local
-                && !m_model->receiveOnlyStationPolicy();
+                && !m_model->receiveOnlyStationPolicy()
+                && !transmitBlocked();   // Task 16 fix wave (M2)
             if (localOrchestrationAllowed && !m_carrierEngagedForTgxlTune) {
                 m_carrierEngagedForTgxlTune = true;
                 m_model->startTgxlAutotune(/*fromHardware=*/true);

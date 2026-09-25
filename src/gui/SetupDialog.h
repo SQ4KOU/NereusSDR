@@ -203,6 +203,10 @@ private:
         // A Core page opened before the Core's settings ever arrived: an
         // empty stand-in, replaced by the real page once they are available.
         bool                      placeholder = false;
+        // Task 16 fix wave (I1): a transmit page receive only disables
+        // (Thetis setup.cs:6499-6501: tpTransmit, tpPowerAmplifier,
+        // grpTestTXIMD). Only pages with requiresTransmit are marked.
+        bool                      receiveOnlyGated = false;
         // The page root was disabled because the Core's settings are
         // unavailable (not for any other reason), so it is enabled again,
         // and its tooltip cleared, when they return.
@@ -223,6 +227,10 @@ private:
     // session the page is disabled with `reason` above it; local direct
     // mode is untouched.
     void markRemoteUnavailable(QTreeWidgetItem* leaf, const QString& reason);
+
+    // Task 16 fix wave (I1): marks a leaf, or every leaf under a category,
+    // as disabled with the receive-only reason while receive only is on.
+    void markReceiveOnlyGated(QTreeWidgetItem* item);
 
     // Realization phase: build the page if it has not been built yet, add it
     // to the stack, and return it. Returns nullptr for an out-of-range index
@@ -294,6 +302,11 @@ private:
     bool            m_stationAvailable = true;
     QString         m_stationReason;
     QLabel*         m_stationNotice = nullptr;
+    // Task 16 fix wave (I1): the receive-only reason above a page it
+    // disables (objectName "setupReceiveOnly"), and the categories whose
+    // tree rows carry it as their tooltip (Transmit, PA).
+    QLabel*         m_receiveOnlyNotice = nullptr;
+    std::vector<QTreeWidgetItem*> m_receiveOnlyCategories;
     QPointer<SettingsProxy> m_settingsProxy;
     int             m_snapshotGeneration = 0;
     bool            m_rebuildingPages = false;

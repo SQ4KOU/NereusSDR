@@ -25,7 +25,15 @@
 //   - the Setup box is never hidden, asks before turning transmit on, and
 //     follows the model;
 //   - the TX applet's MOX, TUNE, 2-Tone and VOX and the container buttons
-//     show disabled with the reason (MOX follows the SPEC / DRM exception);
+//     show disabled with the reason, MOX in every mode (fix wave I3: SPEC
+//     and DRM too, where Thetis leaves it alone), following the active
+//     slice (M3), with both reasons in a remote window (M6);
+//   - Setup's Transmit and PA categories and Test > Two-Tone IMD are
+//     disabled with the reason, never hidden (setup.cs:6499-6501, I1);
+//   - two-tone started the way the applet starts it is refused and its
+//     tone stopped (M4);
+//   - the TGXL autotune is refused before it reaches the amplifier or the
+//     tuner, and the Tuner applet's TUNE shows why (M2);
 //   - a remote window's box reaches the Core's gate over a session, follows
 //     the Core's value, and an older Core's refusal puts it back.
 //
@@ -34,6 +42,9 @@
 // Modification history (NereusSDR):
 //   2026-09-25: created (Task 16), by J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25: Task 16 fix wave (I1, I2, I3, M2, M3, M4, M6), by J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -41,6 +52,7 @@
 #include <QCheckBox>
 #include <QLabel>
 #include <QPushButton>
+#include <QTreeWidget>
 #include <QScopeGuard>
 #include <QSignalSpy>
 #include <QStandardPaths>
@@ -53,10 +65,13 @@
 #include "core/MoxController.h"
 #include "core/RadioConnection.h"
 #include "core/TwoToneController.h"
+#include "core/TxChannel.h"
 #include "core/session/StationCapabilities.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
 #include "core/settings/SettingsProxy.h"
+#include "gui/SetupDialog.h"
+#include "gui/applets/TunerApplet.h"
 #include "gui/applets/TxApplet.h"
 #include "gui/containers/ContainerButtonDispatcher.h"
 #include "gui/setup/GeneralOptionsPage.h"
@@ -188,6 +203,53 @@ QCheckBox* rxOnlyBox(GeneralOptionsPage& page)
     return page.findChild<QCheckBox*>(QStringLiteral("chkGeneralRXOnly"));
 }
 
+// A TX channel that records the two-tone generator's run state and touches
+// no WDSP channel (the TwoToneController test's pattern).
+class ToneRecordingTxChannel : public TxChannel {
+public:
+    ToneRecordingTxChannel() : TxChannel(1) {}
+    void setTxPostGenMode(int) override {}
+    void setTxPostGenTTFreq1(double) override {}
+    void setTxPostGenTTFreq2(double) override {}
+    void setTxPostGenTTMag1(double) override {}
+    void setTxPostGenTTMag2(double) override {}
+    void setTxPostGenTTPulseToneFreq1(double) override {}
+    void setTxPostGenTTPulseToneFreq2(double) override {}
+    void setTxPostGenTTPulseMag1(double) override {}
+    void setTxPostGenTTPulseMag2(double) override {}
+    void setTxPostGenTTPulseFreq(int) override {}
+    void setTxPostGenTTPulseDutyCycle(double) override {}
+    void setTxPostGenTTPulseTransition(double) override {}
+    void setTxPostGenTTPulseIQOut(bool) override {}
+    void setTxPostGenRun(bool on) override { runs.append(on); }
+    QList<bool> runs;
+};
+
+// The Setup tree row labelled `label` (a category when `category`).
+QTreeWidgetItem* setupRow(SetupDialog& dialog, const QString& label, bool category)
+{
+    auto* tree = dialog.findChild<QTreeWidget*>();
+    if (tree == nullptr) {
+        return nullptr;
+    }
+    for (QTreeWidgetItemIterator it(tree); *it; ++it) {
+        if (((*it)->parent() == nullptr) == category && (*it)->text(0) == label) {
+            return *it;
+        }
+    }
+    return nullptr;
+}
+
+QPushButton* tunerTuneButton(TunerApplet& applet)
+{
+    for (QPushButton* b : applet.findChildren<QPushButton*>()) {
+        if (b->text() == QLatin1String("TUNE")) {
+            return b;
+        }
+    }
+    return nullptr;
+}
+
 } // namespace
 
 class TestReceiveOnly : public QObject {
@@ -267,8 +329,17 @@ private slots:
         rig.model->setRxOnly(false);
         pump();
         QVERIFY(!rig.mox()->isRxOnly());
+        // Task 16 fix wave (I2): PollPTT runs on events, so a held CAT or
+        // TCI level would key on the next pass, which in production is the
+        // next mic frame. Drive passes, as Task 7's test does
+        // (tst_mox_controller_ptt_sources, catTciUnderBlock_areDroppedNotHeld).
+        for (int i = 0; i < 3; ++i) {
+            rig.mox()->onMicPttFromRadio(false);
+            pump();
+        }
         QVERIFY2(!rig.mox()->isMox(),
                  qPrintable(source + QStringLiteral(" keyed when receive only went off")));
+        QCOMPARE(rig.mox()->pttMode(), PttMode::None);
     }
 
     // From Thetis console.cs:15325-15326 [v2.10.3.15]:
@@ -477,38 +548,87 @@ private slots:
         QCOMPARE(tune->toolTip(), tuneTip);
     }
 
-    // From Thetis console.cs:15318-15321 [v2.10.3.15]: in SPEC and DRM the
-    // RXOnly setter leaves chkMOX.Enabled alone. The gate still refuses.
-    void moxButtonFollowsTheSpecAndDrmException_data()
+    // Thetis console.cs:15318-15321 [v2.10.3.15] leaves chkMOX.Enabled alone
+    // in SPEC and DRM. NereusSDR disables MOX with the reason in every mode
+    // (fix wave I3: the gate refuses the key in every mode, and a control
+    // that cannot run is shown disabled with its reason).
+    void moxButtonIsDisabledInEveryMode_data()
     {
         QTest::addColumn<int>("mode");
         QTest::newRow("SPEC") << int(DSPMode::SPEC);
         QTest::newRow("DRM") << int(DSPMode::DRM);
+        QTest::newRow("USB") << int(DSPMode::USB);
     }
 
-    void moxButtonFollowsTheSpecAndDrmException()
+    void moxButtonIsDisabledInEveryMode()
     {
         QFETCH(int, mode);
         Rig rig;
         TxApplet applet(rig.model.get());
+        ContainerButtonDispatcher::Hooks hooks;
+        hooks.transmitPermitted = [] { return true; };
+        ContainerButtonDispatcher dispatcher(rig.model.get(), std::move(hooks));
         rig.model->activeSlice()->setDspMode(static_cast<DSPMode>(mode));
         rig.model->setRxOnly(true);
-        QVERIFY(!rig.model->receiveOnlyDisablesMoxButton());
-        QVERIFY(applet.moxButton()->isEnabled());
-        QVERIFY(!applet.tuneButton()->isEnabled());
-        QVERIFY(!applet.twoToneButton()->isEnabled());
-        QVERIFY(!applet.voxButton()->isEnabled());
-
-        // Back to USB: MOX is disabled too.
-        rig.model->activeSlice()->setDspMode(DSPMode::USB);
         QVERIFY(rig.model->receiveOnlyDisablesMoxButton());
         QVERIFY(!applet.moxButton()->isEnabled());
+        QCOMPARE(applet.moxButton()->toolTip(), rig.model->rxOnlyReason());
+        const auto st = dispatcher.stateOf(ContainerButtonDispatcher::Id::Mox, 0);
+        QVERIFY(!st.available);
+        QCOMPARE(st.reason, rig.model->rxOnlyReason());
 
+        // A mode change keeps it disabled with the reason.
+        rig.model->activeSlice()->setDspMode(DSPMode::LSB);
+        QVERIFY(!applet.moxButton()->isEnabled());
         rig.model->activeSlice()->setDspMode(static_cast<DSPMode>(mode));
-        QSignalSpy rejected(rig.mox(), &MoxController::moxRejected);
+        QVERIFY(!applet.moxButton()->isEnabled());
+        QCOMPARE(applet.moxButton()->toolTip(), rig.model->rxOnlyReason());
+
+        // The gate still refuses.
         rig.model->setMoxFromButton(true);
         pump();
         QVERIFY(!rig.mox()->isMox());
+
+        // Off: MOX is back, with its mode's tooltip.
+        rig.model->setRxOnly(false);
+        QVERIFY(applet.moxButton()->isEnabled());
+        QCOMPARE(applet.moxButton()->toolTip(),
+                 TxApplet::tooltipForMode(static_cast<DSPMode>(mode)));
+    }
+
+    // Fix wave M3: the MOX tooltip, and the lock over it, follow the active
+    // slice when it changes, not the slice that was active at construction.
+    void txAppletMoxFollowsTheActiveSlice()
+    {
+        Rig rig;
+        rig.model->addSlice();
+        QCOMPARE(rig.model->slices().size(), 2);
+        SliceModel* first = rig.model->slices().at(0);
+        SliceModel* second = rig.model->slices().at(1);
+        rig.model->setActiveSlice(0);
+        first->setDspMode(DSPMode::USB);
+        second->setDspMode(DSPMode::CWU);
+        TxApplet applet(rig.model.get());
+        QPushButton* mox = applet.moxButton();
+        QCOMPARE(mox->toolTip(), TxApplet::tooltipForMode(DSPMode::USB));
+
+        rig.model->setActiveSlice(1);
+        QCOMPARE(mox->toolTip(), TxApplet::tooltipForMode(DSPMode::CWU));
+        // The new slice's mode changes reach the tooltip; the old one's do not.
+        second->setDspMode(DSPMode::FM);
+        QCOMPARE(mox->toolTip(), TxApplet::tooltipForMode(DSPMode::FM));
+        first->setDspMode(DSPMode::LSB);
+        QCOMPARE(mox->toolTip(), TxApplet::tooltipForMode(DSPMode::FM));
+
+        // Under receive only the lock stays on across a slice change, and
+        // comes off to the new slice's tooltip.
+        rig.model->setRxOnly(true);
+        rig.model->setActiveSlice(0);
+        QVERIFY(!mox->isEnabled());
+        QCOMPARE(mox->toolTip(), rig.model->rxOnlyReason());
+        rig.model->setRxOnly(false);
+        QVERIFY(mox->isEnabled());
+        QCOMPARE(mox->toolTip(), TxApplet::tooltipForMode(DSPMode::LSB));
     }
 
     // The lock sits on top of a remote window's transmit-permission gate.
@@ -521,7 +641,10 @@ private slots:
         rig.model->setRxOnly(true);
         applet.setTransmitPermitted(false, QStringLiteral("Waiting for the Core."));
         QVERIFY(!tune->isEnabled());
-        QCOMPARE(tune->toolTip(), rig.model->rxOnlyReason());
+        // Fix wave M6: both reasons, so turning receive only off does not
+        // leave TUNE blocked for a reason never shown.
+        QCOMPARE(tune->toolTip(),
+                 rig.model->rxOnlyReason() + QStringLiteral(" Waiting for the Core."));
         rig.model->setRxOnly(false);
         QVERIFY(!tune->isEnabled());
         QCOMPARE(tune->toolTip(), QStringLiteral("Waiting for the Core."));
@@ -552,10 +675,263 @@ private slots:
         pump();
         QVERIFY(!rig.mox()->isMox());
 
-        // SPEC: MOX keeps its state (the gate still refuses).
+        // SPEC: MOX stays unavailable (fix wave I3).
         rig.model->activeSlice()->setDspMode(DSPMode::SPEC);
-        QVERIFY(dispatcher.stateOf(Id::Mox, 0).available);
+        QVERIFY(!dispatcher.stateOf(Id::Mox, 0).available);
         QVERIFY(!dispatcher.stateOf(Id::Tun, 0).available);
+    }
+
+    // Fix wave M6: in a remote window where receive only and the missing
+    // remote transmit both apply, the container names both.
+    void containerNamesBothReasonsInARemoteWindow()
+    {
+        RadioModel window(RadioModel::Role::Remote);
+        ContainerButtonDispatcher::Hooks hooks;
+        hooks.transmitPermitted = [] { return false; };
+        hooks.remoteTransmitReason = QStringLiteral("Remote transmit is not available yet.");
+        ContainerButtonDispatcher dispatcher(&window, std::move(hooks));
+        using Id = ContainerButtonDispatcher::Id;
+        window.applyRxOnlySetting(true);
+        for (Id id : {Id::Tun, Id::Mox, Id::TwoTon}) {
+            const auto st = dispatcher.stateOf(id, 0);
+            QVERIFY(!st.available);
+            QVERIFY2(st.reason.contains(window.rxOnlyReason()), qPrintable(st.reason));
+            QVERIFY2(st.reason.contains(QStringLiteral("Remote transmit is not available yet.")),
+                     qPrintable(st.reason));
+            QVERIFY(OperatorWording::isPlain(st.reason));
+        }
+        window.applyRxOnlySetting(false);
+        QCOMPARE(dispatcher.stateOf(Id::Mox, 0).reason,
+                 QStringLiteral("Remote transmit is not available yet."));
+    }
+
+    // ---- Two-tone through the production path (fix wave M4) ----------------
+
+    // TxApplet and the container start two-tone with
+    // TwoToneController::setActive(true) (TxApplet.cpp, the 2-Tone button;
+    // ContainerButtonDispatcher, 2TONE). Receive only refuses its key, and
+    // the tone it started for that key stops.
+    void twoToneStartedTheProductionWayIsRefusedAndItsToneStops()
+    {
+        Rig rig;
+        ToneRecordingTxChannel tone;
+        TwoToneController* twoTone = rig.model->twoToneController();
+        QVERIFY(twoTone != nullptr);
+        twoTone->setTxChannel(&tone);
+        twoTone->setSliceModel(rig.model->activeSlice());
+        twoTone->setSettleDelaysMs(0, 0);
+        twoTone->setPowerOn(true);
+        rig.model->setRxOnly(true);
+
+        QSignalSpy rejected(rig.mox(), &MoxController::moxRejected);
+        twoTone->setActive(true);
+        for (int i = 0; i < 10; ++i) {
+            pump();
+        }
+        QVERIFY(!rig.mox()->isMox());
+        QVERIFY(!twoTone->isActive());
+        QVERIFY(!twoTone->isActivationInFlight());
+        QVERIFY2(!tone.runs.isEmpty() && !tone.runs.last(), "the two-tone generator was left running");
+        QVERIFY(!rejected.isEmpty());
+        QCOMPARE(rejected.last().at(0).toString(), rig.model->rxOnlyReason());
+        twoTone->setTxChannel(nullptr);
+    }
+
+    // ---- Setup's transmit pages (fix wave I1) ------------------------------
+
+    // From Thetis setup.cs:6499-6501 [v2.10.3.15]:
+    //   tpTransmit.Enabled = !chkGeneralRXOnly.Checked;
+    //   tpPowerAmplifier.Enabled = !chkGeneralRXOnly.Checked;
+    //   grpTestTXIMD.Enabled = !chkGeneralRXOnly.Checked;
+    // Disabled with the reason, never hidden, following rxOnlyChanged.
+    void setupTransmitPagesAreDisabledWithTheReason_data()
+    {
+        QTest::addColumn<QString>("label");
+        QTest::addColumn<QString>("category");
+        for (const char* page : {"Power", "Speech Processor", "DEXP/VOX"}) {
+            QTest::newRow(page) << QString::fromLatin1(page) << QStringLiteral("Transmit");
+        }
+        for (const char* page : {"PA Gain", "Watt Meter", "PA Values"}) {
+            QTest::newRow(page) << QString::fromLatin1(page) << QStringLiteral("PA");
+        }
+        QTest::newRow("Two-Tone IMD") << QStringLiteral("Two-Tone IMD") << QStringLiteral("Test");
+        // Thetis's grpTXProfile is on tpTransmit (setup.designer.cs:46448).
+        QTest::newRow("TX Profile") << QStringLiteral("TX Profile") << QStringLiteral("Audio");
+    }
+
+    void setupTransmitPagesAreDisabledWithTheReason()
+    {
+        QFETCH(QString, label);
+        QFETCH(QString, category);
+        Rig rig;
+        SetupDialog dialog(rig.model.get());
+        dialog.selectPage(label);
+        QWidget* page = dialog.realizePageForTest(label);
+        QVERIFY(page != nullptr);
+        QVERIFY(page->isEnabled());
+        QTreeWidgetItem* leaf = setupRow(dialog, label, /*category=*/false);
+        QVERIFY(leaf != nullptr);
+        auto* notice = dialog.findChild<QLabel*>(QStringLiteral("setupReceiveOnly"));
+        QVERIFY(notice != nullptr);
+
+        rig.model->setRxOnly(true);
+        const QString reason = rig.model->rxOnlyReason();
+        QVERIFY2(!page->isEnabled(), qPrintable(label + QStringLiteral(" left enabled")));
+        QCOMPARE(page->toolTip(), reason);
+        QCOMPARE(leaf->toolTip(0), reason);
+        if (category != QLatin1String("PA")) {
+            // PA is hidden on a radio with no PA profile (this rig), for
+            // that reason alone; the transmit leaves never hide.
+            QVERIFY(!leaf->isHidden());
+        }
+        // The notice above the page shown (selectPage cannot show a hidden
+        // PA leaf, so it is checked on the others).
+        if (category != QLatin1String("PA")) {
+            QVERIFY(page->isVisibleTo(&dialog));
+            QVERIFY(!notice->isHidden());
+            QCOMPARE(notice->text(), reason);
+        }
+        if (category == QLatin1String("Transmit")) {
+            QTreeWidgetItem* root = setupRow(dialog, category, /*category=*/true);
+            QVERIFY(root != nullptr);
+            QVERIFY(!root->isHidden());
+            QCOMPARE(root->toolTip(0), reason);
+        }
+        QVERIFY(OperatorWording::isPlain(reason));
+
+        rig.model->setRxOnly(false);
+        QVERIFY(page->isEnabled());
+        QVERIFY(page->toolTip().isEmpty());
+        QVERIFY(leaf->toolTip(0).isEmpty());
+        QVERIFY(notice->isHidden());
+    }
+
+    // A receive page stays live; only the transmit pages follow.
+    void setupReceivePagesStayEnabled()
+    {
+        Rig rig;
+        SetupDialog dialog(rig.model.get());
+        QWidget* page = dialog.realizePageForTest(QStringLiteral("NB/SNB"));
+        QVERIFY(page != nullptr);
+        rig.model->setRxOnly(true);
+        QVERIFY(page->isEnabled());
+    }
+
+    void setupShowsTheKitsReason()
+    {
+        RadioModel model;
+        model.setBoardForTest(HPSDRHW::HermesLiteRxOnly);
+        SetupDialog dialog(&model);
+        QWidget* page = dialog.realizePageForTest(QStringLiteral("Two-Tone IMD"));
+        QVERIFY(page != nullptr);
+        QVERIFY(!page->isEnabled());
+        QCOMPARE(page->toolTip(), RadioModel::rxOnlyForcedReason());
+        QTreeWidgetItem* transmit = setupRow(dialog, QStringLiteral("Transmit"), /*category=*/true);
+        QVERIFY(transmit != nullptr);
+        QVERIFY(!transmit->isHidden());
+        QCOMPARE(transmit->toolTip(0), RadioModel::rxOnlyForcedReason());
+    }
+
+    // A remote window: the Core's receive only, with the missing remote
+    // transmit named beside it (M6).
+    void setupInARemoteWindowNamesBothReasons()
+    {
+        const QString transmitReason = QStringLiteral("Remote transmit is unavailable.");
+        RadioModel window(RadioModel::Role::Remote);
+        SetupDialog dialog(&window);
+        dialog.setTransmitPermitted(false, transmitReason);
+        const QString label = QStringLiteral("Two-Tone IMD");
+        dialog.selectPage(label);
+        QWidget* page = dialog.realizedPageForTest(label);
+        QVERIFY(page != nullptr);
+        QVERIFY(!page->isEnabled());
+        QCOMPARE(page->toolTip(), transmitReason);
+
+        window.applyRxOnlySetting(true);
+        const QString both = window.rxOnlyReason() + QLatin1Char(' ') + transmitReason;
+        QVERIFY(!page->isEnabled());
+        QCOMPARE(page->toolTip(), both);
+        auto* notice = dialog.findChild<QLabel*>(QStringLiteral("setupReceiveOnly"));
+        QVERIFY(notice != nullptr);
+        QVERIFY(!notice->isHidden());
+        QCOMPARE(notice->text(), both);
+        QVERIFY(dialog.findChild<QLabel*>(QStringLiteral("setupTransmitUnavailable"))->isHidden());
+
+        window.applyRxOnlySetting(false);
+        QCOMPARE(page->toolTip(), transmitReason);
+        QVERIFY(notice->isHidden());
+    }
+
+    // ---- The TGXL autotune (fix wave M2) -----------------------------------
+
+    void tgxlAutotuneIsRefusedWhileTransmitIsBlocked_data()
+    {
+        QTest::addColumn<bool>("inhibit");
+        QTest::newRow("receive only") << false;
+        QTest::newRow("tx inhibit") << true;
+    }
+
+    // Refused with the reason before the TGXL connection is even looked at,
+    // so nothing reaches the amplifier or the tuner (the PGXL operate=0 and
+    // the TGXL autotune come after that check).
+    void tgxlAutotuneIsRefusedWhileTransmitIsBlocked()
+    {
+        QFETCH(bool, inhibit);
+        Rig rig;
+        if (inhibit) {
+            rig.mox()->setTxInhibited(true);
+        } else {
+            rig.model->setRxOnly(true);
+        }
+        const QString reason = rig.mox()->transmitBlockReason();
+        QVERIFY(!reason.isEmpty());
+        QSignalSpy refused(rig.model.get(), &RadioModel::tuneRefused);
+        rig.model->startTgxlAutotune(/*fromHardware=*/false);
+        rig.model->startTgxlAutotune(/*fromHardware=*/true);
+        QCOMPARE(refused.count(), 2);
+        QCOMPARE(refused.at(0).at(0).toString(), reason);
+        QVERIFY(OperatorWording::isPlain(reason));
+        pump();
+        QVERIFY(!rig.mox()->isMox());
+        QVERIFY(!rig.model->isTune());
+    }
+
+    void tunerAppletTuneFollowsTheTransmitBlock()
+    {
+        Rig rig;
+        TunerApplet applet(rig.model.get());
+        QPushButton* tune = tunerTuneButton(applet);
+        QVERIFY(tune != nullptr);
+        QVERIFY(tune->isEnabled());
+
+        rig.model->setRxOnly(true);
+        QVERIFY(!tune->isEnabled());
+        QCOMPARE(tune->toolTip(), rig.model->rxOnlyReason());
+        rig.model->setRxOnly(false);
+        QVERIFY(tune->isEnabled());
+        QVERIFY(tune->toolTip().isEmpty());
+
+        rig.mox()->setTxInhibited(true);
+        QVERIFY(!tune->isEnabled());
+        QCOMPARE(tune->toolTip(), QStringLiteral("Transmit is inhibited."));
+        rig.mox()->setTxInhibited(false);
+        QVERIFY(tune->isEnabled());
+    }
+
+    void tunerAppletTuneNamesBothReasonsInARemoteWindow()
+    {
+        const QString remote = QStringLiteral("Remote tuner control is not available yet.");
+        RadioModel window(RadioModel::Role::Remote);
+        TunerApplet applet(&window);
+        applet.setTransmitPermitted(false, remote);
+        QPushButton* tune = tunerTuneButton(applet);
+        QVERIFY(tune != nullptr);
+        QCOMPARE(tune->toolTip(), remote);
+        window.applyRxOnlySetting(true);
+        QVERIFY(!tune->isEnabled());
+        QCOMPARE(tune->toolTip(), window.rxOnlyReason() + QLatin1Char(' ') + remote);
+        window.applyRxOnlySetting(false);
+        QCOMPARE(tune->toolTip(), remote);
     }
 
     // ---- A remote window ---------------------------------------------------

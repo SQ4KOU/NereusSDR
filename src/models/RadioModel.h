@@ -105,6 +105,10 @@
 //                / isRxOnly / rxOnlyChanged, a Core setting, and the HL2
 //                receive-only kit always receive only. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - Task 16 fix wave: MOX disabled by receive only in every
+//                mode (I3), rxOnlyReasonAlongside and
+//                transmitBlockReasonAlongside (M6, M2). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -677,10 +681,21 @@ public:
     // The plain words a refused key and a disabled button show.
     QString rxOnlyReason() const;
     static QString rxOnlyForcedReason();
+    // True when receive only disables the MOX button: in every mode.
     // Thetis leaves chkMOX.Enabled alone in SPEC and DRM
-    // (console.cs:15318-15321): true when receive only disables the MOX
-    // button for the active slice's mode.
+    // (console.cs:15318-15321); NereusSDR does not (see the definition).
     bool receiveOnlyDisablesMoxButton() const;
+    // Task 16 fix wave (M6): the words for a transmit control that receive
+    // only blocks, together with `otherReason` (a remote window's missing
+    // transmit, say) when that blocks it too, so turning off the one named
+    // never leaves the control blocked for a reason not shown. The kit's
+    // reason stands alone: nothing else lets that radio transmit. Without
+    // receive only, `otherReason` as it is.
+    QString rxOnlyReasonAlongside(const QString& otherReason) const;
+    // Task 16 fix wave (M2): the same for a transmit block MoxController
+    // holds (receive only, TX inhibit, a PA trip): its reason, joined with
+    // `otherReason` the same way; empty when neither applies.
+    QString transmitBlockReasonAlongside(const QString& otherReason) const;
 
     // Sub-components
     RadioConnection*  connection()       { return m_connection; }

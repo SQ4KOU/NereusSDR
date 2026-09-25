@@ -177,6 +177,10 @@
 //                 25470 and 29378 [v2.10.3.15]), the third gate that
 //                 refuses every key and unkeys. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - Task 16 fix wave (M2): transmitBlockReason and
+//                 transmitBlockChanged, so the TGXL autotune and the Tuner
+//                 applet follow the gate. J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -451,6 +455,12 @@ public slots:
     void setRxOnly(bool on, const QString& reason = QString());
     QString rxOnlyReason() const { return m_rxOnlyReason; }
     static QString defaultRxOnlyReason();
+
+    // transmitBlockReason: the words setMox(true) refuses with while TX
+    // inhibit, a PA trip or receive only holds (the trip first, then
+    // receive only, then TX inhibit); empty when none does. Task 16 fix
+    // wave (M2). transmitBlockChanged reports a change.
+    QString transmitBlockReason() const;
 
     // setVoxEnabled: engage/disengage VOX with voice-family mode-gate.
     //
@@ -884,6 +894,10 @@ public slots:
     void setMox(bool on);
 
 signals:
+    // Task 16 fix wave (M2): transmitBlockReason() changed; `reason` is the
+    // new value, empty when nothing blocks transmit any more.
+    void transmitBlockChanged(const QString& reason);
+
     // ── K.2: rejection signal ────────────────────────────────────────────────
     //
     // moxRejected: emitted when setMox(true) is called but the MoxCheckFn
@@ -1290,6 +1304,9 @@ private:
     {
         return m_txInhibited || m_paTripped || m_rxOnly;
     }
+    // Emits transmitBlockChanged when transmitBlockReason() differs from
+    // `before` (a gate setter's value on entry).
+    void     emitTransmitBlockIfChanged(const QString& before);
 
     // ── PollPTT source levels (console.cs:25467-25477 [v2.10.3.15]) ──────────
     // The last level each PollPTT source reported. setMox(false) and a

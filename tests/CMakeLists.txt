@@ -2507,8 +2507,11 @@ target_compile_definitions(tst_tx_inhibit_input PRIVATE NEREUS_BUILD_TESTS)
 # chkGeneralRXOnly_CheckedChanged (setup.cs:6479): every source refused
 # through MoxController, a keyed MOX dropped, the HL2 receive-only kit always
 # receive only, the Setup box never hidden, the transmit buttons disabled with
-# the reason (MOX's SPEC / DRM exception), and a remote window's box reaching
-# the Core's gate over a session.
+# the reason (MOX in every mode; NereusSDR drops Thetis's SPEC / DRM exception),
+# Setup's Transmit, PA and Two-Tone IMD pages disabled (setup.cs:6499-6501),
+# two-tone through TwoToneController::setActive, the TGXL autotune and the
+# Tuner applet's TUNE, and a remote window's box reaching the Core's gate over
+# a session.
 nereus_add_test(tst_receive_only fakes/LoopbackTransport.cpp)
 target_compile_definitions(tst_receive_only PRIVATE NEREUS_BUILD_TESTS)
 
@@ -2930,7 +2933,8 @@ nereus_add_test(tst_dexp_vox_setup_page)
 # Verifies grpHardwareConfig has 4 controls + 1 warning label per
 # Thetis tpGeneralHardware (setup.designer.cs:8045-8396 [v2.10.3.13]):
 # 24-entry Region combo (default United States), Extended checkbox, red warning
-# label, chkGeneralRXOnly shown (Task 16; Thetis hides it), chkNetworkWDT default ON.
+# label, chkGeneralRXOnly shown (Task 16; Thetis shows it for every model),
+# chkNetworkWDT default ON.
 nereus_add_test(tst_general_setup_hardware_config)
 
 # ── Phase 3M-1a G.2: Receive Only checkbox wired from caps.isRxOnlySku ─────────

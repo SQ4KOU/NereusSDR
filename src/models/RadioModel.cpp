@@ -198,6 +198,11 @@
 //                Core applies; the HL2 receive-only kit always receive
 //                only. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                Code.
+//   2026-09-25 - Task 16 fix wave: MOX disabled by receive only in every
+//                mode (I3); the TGXL autotune refused while transmit is
+//                blocked, before it reaches the amplifier or the tuner
+//                (M2); both reasons where two apply (M6). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -18469,23 +18474,48 @@ QString RadioModel::rxOnlyReason() const
 
 bool RadioModel::receiveOnlyDisablesMoxButton() const
 {
-    if (!m_rxOnlyEffective) {
-        return false;
-    }
     // From Thetis console.cs:15318-15321 [v2.10.3.15]:
     //   if (_rx1_dsp_mode != DSPMode.SPEC &&
     //       _rx1_dsp_mode != DSPMode.DRM &&
     //       chkPower.Checked)
     //       chkMOX.Enabled = !_rx_only;
-    // In SPEC and DRM receive only leaves the MOX button as it is; the gate
-    // still refuses the key. The active slice stands for RX1.
-    if (m_activeSlice != nullptr) {
-        const DSPMode mode = m_activeSlice->dspMode();
-        if (mode == DSPMode::SPEC || mode == DSPMode::DRM) {
-            return false;
-        }
+    // In SPEC and DRM Thetis's setter leaves the MOX button as it is.
+    // NereusSDR differs on purpose (Task 16 fix wave, I3): MOX is disabled
+    // with the reason in every mode, SPEC and DRM included, because the gate
+    // refuses the key in every mode (chkMOX_CheckedChanged2,
+    // console.cs:29378-29382), and a control that cannot run is shown
+    // disabled with its reason. The buttons are NereusSDR's own widgets;
+    // the radio behaviour, the refusal, is Thetis's and does not change.
+    return m_rxOnlyEffective;
+}
+
+namespace {
+// Task 16 fix wave (M6): one reason, or both when two block the control.
+QString joinTransmitReasons(const QString& local, const QString& other, bool localStandsAlone)
+{
+    if (local.isEmpty()) {
+        return other;
     }
-    return true;
+    if (other.isEmpty() || localStandsAlone) {
+        return local;
+    }
+    return local + QLatin1Char(' ') + other;
+}
+} // namespace
+
+QString RadioModel::rxOnlyReasonAlongside(const QString& otherReason) const
+{
+    if (!m_rxOnlyEffective) {
+        return otherReason;
+    }
+    return joinTransmitReasons(rxOnlyReason(), otherReason, m_rxOnlyForced);
+}
+
+QString RadioModel::transmitBlockReasonAlongside(const QString& otherReason) const
+{
+    const QString local = m_moxController ? m_moxController->transmitBlockReason() : QString();
+    return joinTransmitReasons(local, otherReason,
+                               m_rxOnlyForced && local == rxOnlyForcedReason());
 }
 
 void RadioModel::applyRxOnly()
@@ -19879,9 +19909,19 @@ void RadioModel::onPgxlConnected()
 // restore PGXL to OPERATE (if it was operating before the tune cycle).
 void RadioModel::startTgxlAutotune(bool fromHardware)
 {
-    if (receiveOnlyTxOperationsBlocked()) {
-        emit tuneRefused(
-            QStringLiteral("Automatic tuning is not available from this Core yet."));
+    // Task 16 fix wave (M2): receive only, TX inhibit and a PA trip refuse
+    // the cycle before anything reaches the amplifier or the tuner; the
+    // TUN it would key is refused at MoxController's gate anyway, and
+    // without this the amplifier went to standby and the tuner swept with
+    // no carrier. With both this and a remote window's missing transmit,
+    // the operator is told both (M6).
+    const QString remoteReason = receiveOnlyTxOperationsBlocked()
+        ? QStringLiteral("Automatic tuning is not available from this Core yet.")
+        : QString();
+    const QString refusal = transmitBlockReasonAlongside(remoteReason);
+    if (!refusal.isEmpty()) {
+        qCInfo(lcConnection) << "TGXL autotune refused:" << refusal;
+        emit tuneRefused(refusal);
         return;
     }
 

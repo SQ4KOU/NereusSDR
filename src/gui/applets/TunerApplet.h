@@ -26,6 +26,9 @@
 //                 with RelayBar; 3-button mode group replaced with single
 //                 cycle button; constructor wired to TunerModel*.
 //                 From AetherSDR src/gui/TunerApplet.h [@0cd4559].
+//   2026-09-25  transmitBlocked(): TUNE follows the transmit block (Task
+//                 16 fix wave M2), by J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -189,6 +192,9 @@ private:
     // Build a TuneMemory from the applet's current state.
     TuneMemory currentMem() const;
     void updateActuatingControls();
+    // Task 16 fix wave (M2): receive only, TX inhibit or a PA trip holds
+    // (MoxController::transmitBlockReason).
+    bool transmitBlocked() const;
     void updateStationAvailability();
 
     TunerModel* m_tunerModel = nullptr;

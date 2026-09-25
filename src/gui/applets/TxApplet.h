@@ -85,6 +85,10 @@
 //                 row, with a plain notice when the headphones are chosen
 //                 and not open. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-25 : Task 16 fix wave: followActiveSliceMode (M3) and the
+//                 transmit permission's reason kept for the receive-only
+//                 lock (M6). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 //=================================================================
@@ -377,13 +381,17 @@ private:
     // Updates m_moxBtn->setToolTip(tooltipForMode(mode)).
     void onMoxModeChanged(DSPMode mode);
 
-    // Task 16: receive only disables MOX (outside SPEC and DRM), TUNE,
+    // Task 16: receive only disables MOX (in every mode, fix wave I3), TUNE,
     // 2-Tone and VOX with its reason, as Thetis console.RXOnly does
     // (console.cs:15318-15324 [v2.10.3.15]). It sits on top of the remote
     // transmit-permission gate: remove it, change the layer below, put it
     // back.
     void removeReceiveOnlyLock();
     void applyReceiveOnlyLock();
+    // Task 16 fix wave (M3): follow the active slice's mode for the MOX
+    // tooltip; m_moxModeConnection is the current slice's connection.
+    void followActiveSliceMode();
+    QMetaObject::Connection m_moxModeConnection;
 
     // Canonical TX band derived from the active slice's frequency.  This
     // is the band the radio actually transmits on (RadioModel.cpp:903-905
@@ -525,6 +533,9 @@ private:
     // Defaults to local-direct behaviour. Remote MainWindow wiring replaces it
     // after handshake/capability evaluation.
     bool m_transmitPermitted{true};
+    // The words the transmit-permission gate shows while it holds; the
+    // receive-only lock names them beside its own (Task 16 fix wave, M6).
+    QString m_transmitPermissionReason;
 };
 
 } // namespace NereusSDR

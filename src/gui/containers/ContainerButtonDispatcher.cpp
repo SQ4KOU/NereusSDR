@@ -23,6 +23,10 @@
 //                                    and 2-Tone are unavailable with the
 //                                    receive-only reason. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  Task 16 fix wave: MOX in every mode
+//                                    (I3); both reasons in a remote window
+//                                    (M6). AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include "gui/containers/ContainerButtonDispatcher.h"
@@ -153,14 +157,18 @@ ContainerButtonDispatcher::stateOf(Id id, int rxSource) const
         } else {
             st.on = m_model->twoToneController() && m_model->twoToneController()->isActive();
         }
-        // Task 16: receive only disables TUN and 2TONE, and MOX outside
-        // SPEC and DRM, as Thetis console.RXOnly does
-        // (console.cs:15318-15323 [v2.10.3.15]; the 2TONE line carries
-        // // MW0LGE_21a); first, since it holds however this window reaches
-        // the radio.
+        // Task 16: receive only disables TUN, 2TONE and MOX, as Thetis
+        // console.RXOnly does (console.cs:15318-15323 [v2.10.3.15]; the
+        // 2TONE line carries // MW0LGE_21a). MOX too in SPEC and DRM, where
+        // Thetis leaves it alone (RadioModel::receiveOnlyDisablesMoxButton,
+        // fix wave I3). First, since it holds however this window reaches
+        // the radio; with a remote window's missing transmit as well, both
+        // reasons show, so turning receive only off does not leave the
+        // button blocked for a reason never named (fix wave M6).
         if (m_model->isRxOnly()
             && (id != Id::Mox || m_model->receiveOnlyDisablesMoxButton())) {
-            unavailable(m_model->rxOnlyReason());
+            unavailable(m_model->rxOnlyReasonAlongside(
+                transmitBlockedRemotely() ? remoteReason : QString()));
         } else if (transmitBlockedRemotely()) {
             unavailable(remoteReason);
         } else if (!m_model->isConnected()) {

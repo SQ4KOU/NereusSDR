@@ -73,6 +73,11 @@
 //                 with its reason (console.RXOnly, console.cs:15312-15334
 //                 [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-25 : Task 16 fix wave: MOX disabled in every mode (I3), the
+//                 MOX tooltip and lock follow the active slice (M3), and
+//                 the lock names the remote transmit reason too (M6).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
 // =================================================================
 
 //=================================================================
@@ -1165,13 +1170,12 @@ void TxApplet::wireControls()
     // Wired here (wireControls) rather than syncFromModel because the active
     // slice can change after construction.
     if (m_model) {
-        if (SliceModel* slice = m_model->activeSlice()) {
-            // Wire the active slice's dspModeChanged to onMoxModeChanged.
-            connect(slice, &SliceModel::dspModeChanged,
-                    this, &TxApplet::onMoxModeChanged);
-            // Set initial tooltip from current mode.
-            onMoxModeChanged(slice->dspMode());
-        }
+        // Task 16 fix wave (M3): the MOX tooltip, and the receive-only lock
+        // over it, follow the active slice when it changes, not only the
+        // slice that was active here.
+        followActiveSliceMode();
+        connect(m_model, &RadioModel::activeSliceChanged,
+                this, [this](int) { followActiveSliceMode(); });
         // Task 16: receive only turning on or off, or its reason changing
         // (a radio with no transmitter).
         connect(m_model, &RadioModel::rxOnlyChanged, this, [this](bool) {
@@ -1994,11 +1998,25 @@ QString TxApplet::tooltipForMode(DSPMode mode)
 // tooltip text and installs it on m_moxBtn. If the mode is an allowed SSB
 // mode the tooltip reverts to the normal "Manual transmit (MOX)".
 // ---------------------------------------------------------------------------
+// Wires the active slice's dspModeChanged to onMoxModeChanged, dropping the
+// previous slice's connection, and sets the tooltip from its mode.
+void TxApplet::followActiveSliceMode()
+{
+    disconnect(m_moxModeConnection);
+    m_moxModeConnection = {};
+    SliceModel* slice = m_model ? m_model->activeSlice() : nullptr;
+    if (!slice) {
+        return;
+    }
+    m_moxModeConnection = connect(slice, &SliceModel::dspModeChanged,
+                                  this, &TxApplet::onMoxModeChanged);
+    onMoxModeChanged(slice->dspMode());
+}
+
 void TxApplet::onMoxModeChanged(DSPMode mode)
 {
     // Task 16: the receive-only lock sits on top of the tooltip; take it
-    // off, change the tooltip under it, and put it back for the new mode
-    // (Thetis leaves MOX alone in SPEC and DRM).
+    // off, change the tooltip under it, and put it back.
     removeReceiveOnlyLock();
     if (m_moxBtn) {
         m_moxBtn->setToolTip(tooltipForMode(mode));
@@ -2020,6 +2038,9 @@ void TxApplet::onMoxModeChanged(DSPMode mode)
 // Disabled, with the reason as the tooltip (the operator, 2026-09-25: a
 // control that cannot run is shown disabled with its reason). The keying
 // gate refuses every key whatever the buttons show (MoxController::setRxOnly).
+// MOX is disabled in every mode, SPEC and DRM included, where Thetis leaves
+// it alone (RadioModel::receiveOnlyDisablesMoxButton says why; fix wave I3).
+// Under a remote window's transmit gate both reasons show (M6).
 // ---------------------------------------------------------------------------
 namespace {
 constexpr auto kRxOnlySavedTooltip = "TxAppletRxOnlySavedTooltip";
@@ -2051,7 +2072,8 @@ void TxApplet::applyReceiveOnlyLock()
     if (!m_model || !m_model->isRxOnly()) {
         return;
     }
-    const QString reason = m_model->rxOnlyReason();
+    const QString reason = m_model->rxOnlyReasonAlongside(
+        m_transmitPermitted ? QString() : m_transmitPermissionReason);
     const auto lock = [&reason](QWidget* control) {
         if (!control || control->property(kRxOnlySavedTooltip).isValid()) {
             return;
@@ -2262,6 +2284,7 @@ void TxApplet::setTransmitPermitted(bool permitted, const QString& unavailableRe
         ? tr("Transmit controls are unavailable until the Core confirms "
              "transmit permission.")
         : unavailableReason;
+    m_transmitPermissionReason = reason;   // Task 16 fix wave (M6)
 
     const auto apply = [permitted, &reason](QWidget* control) {
         if (!control) { return; }

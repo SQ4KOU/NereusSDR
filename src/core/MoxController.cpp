@@ -123,6 +123,9 @@
 //                 25470, 29378-29382 [v2.10.3.15]) refuses every key with
 //                 its reason and unkeys. J.J. Boyd (KG4VCF), AI-assisted
 //                 via Anthropic Claude Code.
+//   2026-09-25 - Task 16 fix wave (M2): transmitBlockReason (the words
+//                 setMox refuses with) and transmitBlockChanged. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -557,10 +560,7 @@ void MoxController::setMox(bool on)
     //       return;
     //   }
     if (on && transmitBlocked()) {
-        emit moxRejected(m_paTripped
-            ? QStringLiteral("The amplifier has tripped. Reset it before transmitting.")
-            : m_rxOnly ? m_rxOnlyReason
-                       : QStringLiteral("Transmit is inhibited."));
+        emit moxRejected(transmitBlockReason());
         if (!m_mox) {
             dropPttOnUnkey();
         }
@@ -1062,9 +1062,40 @@ void MoxController::clearPttSources()
 // left alone, as chkMOX.Checked = false (not chkMOX_Click) leaves
 // _manual_mox in Thetis.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// transmitBlockReason: the words setMox(true) refuses with while one of the
+// three gates holds, the PA trip first, then receive only, then TX inhibit;
+// empty when none does. Task 16 fix wave (M2): RadioModel's TGXL autotune
+// checks it before it sends anything to the amplifier or the tuner, and the
+// Tuner applet's TUNE shows it (transmitBlockChanged).
+// ---------------------------------------------------------------------------
+QString MoxController::transmitBlockReason() const
+{
+    if (m_paTripped) {
+        return QStringLiteral("The amplifier has tripped. Reset it before transmitting.");
+    }
+    if (m_rxOnly) {
+        return m_rxOnlyReason;
+    }
+    if (m_txInhibited) {
+        return QStringLiteral("Transmit is inhibited.");
+    }
+    return QString();
+}
+
+void MoxController::emitTransmitBlockIfChanged(const QString& before)
+{
+    const QString after = transmitBlockReason();
+    if (after != before) {
+        emit transmitBlockChanged(after);
+    }
+}
+
 void MoxController::setTxInhibited(bool on)
 {
+    const QString before = transmitBlockReason();
     m_txInhibited = on;
+    emitTransmitBlockIfChanged(before);
     if (on) {
         dropAppLevelsUnderBlock();
     }
@@ -1103,7 +1134,9 @@ void MoxController::dropAppLevelsUnderBlock()
 // ---------------------------------------------------------------------------
 void MoxController::setPaTripped(bool on)
 {
+    const QString before = transmitBlockReason();
     m_paTripped = on;
+    emitTransmitBlockIfChanged(before);
     if (on) {
         dropAppLevelsUnderBlock();   // Task 7 follow-up, N3
     }
@@ -1154,8 +1187,10 @@ QString MoxController::defaultRxOnlyReason()
 
 void MoxController::setRxOnly(bool on, const QString& reason)
 {
+    const QString before = transmitBlockReason();
     m_rxOnly = on;
     m_rxOnlyReason = reason.isEmpty() ? defaultRxOnlyReason() : reason;
+    emitTransmitBlockIfChanged(before);
     if (on) {
         dropAppLevelsUnderBlock();
     }

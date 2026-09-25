@@ -117,6 +117,14 @@
 //                 window through the Core; the TCI Server page shows the
 //                 Core's station TCI server. J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25: Receiver and transmit gaps plan, Task 16 fix wave (I1).
+//                 While receive only is on, the Transmit and PA categories
+//                 and Test > Two-Tone IMD are disabled with its reason,
+//                 never hidden, following RadioModel::rxOnlyChanged, as
+//                 Thetis's chkGeneralRXOnly_CheckedChanged disables
+//                 tpTransmit, tpPowerAmplifier and grpTestTXIMD
+//                 (setup.cs:6499-6501 [v2.10.3.15]). J.J. Boyd (KG4VCF),
+//                 with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "SetupDialog.h"
@@ -304,6 +312,16 @@ SetupDialog::SetupDialog(RadioModel* model, QWidget* parent)
         QStringLiteral("QLabel { color: #c8d8e8; background: #1a2a3a; }"));
     m_stationNotice->hide();
     pageLayout->addWidget(m_stationNotice);
+    // Task 16 fix wave (I1): the receive-only reason above a page it
+    // disables.
+    m_receiveOnlyNotice = new QLabel(pageContainer);
+    m_receiveOnlyNotice->setObjectName(QStringLiteral("setupReceiveOnly"));
+    m_receiveOnlyNotice->setWordWrap(true);
+    m_receiveOnlyNotice->setMargin(12);
+    m_receiveOnlyNotice->setStyleSheet(
+        QStringLiteral("QLabel { color: #c8d8e8; background: #1a2a3a; }"));
+    m_receiveOnlyNotice->hide();
+    pageLayout->addWidget(m_receiveOnlyNotice);
     pageLayout->addWidget(m_stack, 1);
     splitter->addWidget(m_tree);
     splitter->addWidget(pageContainer);
@@ -359,6 +377,10 @@ SetupDialog::SetupDialog(RadioModel* model, QWidget* parent)
     if (m_model) {
         connect(m_model, &RadioModel::currentRadioChanged,
                 this, &SetupDialog::onCurrentRadioChanged);
+        // Task 16 fix wave (I1): receive only turning on or off, or its
+        // reason changing (the kit), in a local and a remote window alike.
+        connect(m_model, &RadioModel::rxOnlyChanged,
+                this, [this](bool) { refreshTransmitPresentation(); });
     }
 
     // Apply initial visibility at construction time so the dialog opens
@@ -833,9 +855,24 @@ void SetupDialog::refreshTransmitPresentation()
     const auto coreBlocked = [stationBlocked](const PageEntry& entry) {
         return stationBlocked && entry.scope == SetupScope::Core;
     };
-    const auto unavailableReason = [this, &coreBlocked](const PageEntry& entry) -> QString {
+    // Task 16 fix wave (I1). From Thetis setup.cs:6499-6501 [v2.10.3.15]
+    // (chkGeneralRXOnly_CheckedChanged):
+    //   tpTransmit.Enabled = !chkGeneralRXOnly.Checked;
+    //   tpPowerAmplifier.Enabled = !chkGeneralRXOnly.Checked;
+    //   grpTestTXIMD.Enabled = !chkGeneralRXOnly.Checked;
+    // Disabled with the reason (the kit's for the kit), never hidden. With a
+    // remote window's missing transmit as well, both reasons (M6).
+    const bool rxOnly = m_model && m_model->isRxOnly();
+    const auto rxOnlyBlocked = [rxOnly](const PageEntry& entry) {
+        return rxOnly && entry.receiveOnlyGated;
+    };
+    const auto unavailableReason = [this, &coreBlocked, &rxOnlyBlocked](const PageEntry& entry) -> QString {
         if (coreBlocked(entry)) {
             return m_stationReason;
+        }
+        if (rxOnlyBlocked(entry)) {
+            return m_model->rxOnlyReasonAlongside(
+                entry.requiresTransmit && !m_transmitPermitted ? m_transmitReason : QString());
         }
         if (entry.requiresTransmit && !m_transmitPermitted) {
             return m_transmitReason;
@@ -850,6 +887,8 @@ void SetupDialog::refreshTransmitPresentation()
     bool showNotice = false;
     bool showLocalNotice = false;
     bool showStationNotice = false;
+    bool showReceiveOnlyNotice = false;
+    QString receiveOnlyNoticeText;
     QString localNoticeText = m_localUnavailableReason;
     for (PageEntry& entry : m_pages) {
         if (!entry.widget) { continue; }
@@ -867,11 +906,14 @@ void SetupDialog::refreshTransmitPresentation()
             setupPage->setStationSettingsAvailable(!stationBlocked, m_stationReason);
         }
         const bool blocked = coreBlocked(entry);
+        const bool rxOnlyOff = rxOnlyBlocked(entry);
         if (entry.requiresTransmit) {
             // A negotiated TX permission cannot make this client's absent DSP
             // available. Preserve the independent resource gate and child rules.
+            // Task 16 fix wave (I1): receive only disables it as well (every
+            // receive-only gated page is a transmit page).
             entry.widget->setEnabled(m_transmitPermitted && !entry.localDspUnavailable
-                                     && !blocked);
+                                     && !blocked && !rxOnlyOff);
         } else if (blocked && !entry.stationDisabled) {
             entry.widget->setEnabled(false);
         } else if (!blocked && entry.stationDisabled) {
@@ -886,6 +928,9 @@ void SetupDialog::refreshTransmitPresentation()
         if (m_stack->currentWidget() == entry.widget) {
             if (blocked) {
                 showStationNotice = true;
+            } else if (rxOnlyOff) {
+                showReceiveOnlyNotice = true;
+                receiveOnlyNoticeText = unavailableReason(entry);
             } else if (entry.requiresTransmit && !m_transmitPermitted) {
                 showNotice = true;
             } else if (entry.localDspUnavailable) {
@@ -919,6 +964,27 @@ void SetupDialog::refreshTransmitPresentation()
     m_localUnavailableNotice->setVisible(showLocalNotice);
     m_stationNotice->setText(m_stationReason);
     m_stationNotice->setVisible(showStationNotice);
+    m_receiveOnlyNotice->setText(receiveOnlyNoticeText);
+    m_receiveOnlyNotice->setVisible(showReceiveOnlyNotice);
+    // The Transmit and PA categories themselves say why, as Thetis's tab
+    // pages do by being disabled as a whole.
+    for (QTreeWidgetItem* category : m_receiveOnlyCategories) {
+        category->setToolTip(0, rxOnly ? m_model->rxOnlyReason() : QString());
+    }
+}
+
+void SetupDialog::markReceiveOnlyGated(QTreeWidgetItem* item)
+{
+    if (!item) {
+        return;
+    }
+    const int index = item->data(0, Qt::UserRole).toInt();
+    if (index >= 0 && index < static_cast<int>(m_pages.size())) {
+        m_pages[static_cast<std::size_t>(index)].receiveOnlyGated = true;
+    }
+    for (int i = 0; i < item->childCount(); ++i) {
+        markReceiveOnlyGated(item->child(i));
+    }
 }
 
 void SetupDialog::markRemoteUnavailable(QTreeWidgetItem* leaf, const QString& reason)
@@ -1095,6 +1161,7 @@ void SetupDialog::buildTree()
     tick("Hardware");
 
     m_paCategoryItem  = addCategory("PA");
+    m_receiveOnlyCategories.push_back(m_paCategoryItem);
 
     // #272 / #301: each PA factory re-applies the live BoardCapabilities to
     // its own page, because applyPaVisibility() ran in the ctor (or on an
@@ -1149,6 +1216,9 @@ void SetupDialog::buildTree()
     // Cache the registry index so the Watt Meter cross-wire above can realize
     // the PA Values page without a label lookup on every button press.
     m_paValuesEntry = m_paValuesItem->data(0, Qt::UserRole).toInt();
+    // Task 16 fix wave (I1): tpPowerAmplifier.Enabled = !RXOnly
+    // (setup.cs:6500 [v2.10.3.15]).
+    markReceiveOnlyGated(m_paCategoryItem);
 
     tick("PA");
 
@@ -1200,12 +1270,19 @@ void SetupDialog::buildTree()
     // RadioModel::connectToRadio().  Before any radio has connected the
     // manager is unscoped and every mutator silently no-ops; the page still
     // renders correctly (combo is empty) and Setup → TX Profile is harmless.
-    registerPage(audio, "TX Profile", SetupScope::Core, [this]() -> QWidget* {
+    // Task 16 fix wave (I1): Thetis's TX profile group (grpTXProfile) sits on
+    // tpTransmit (setup.designer.cs:46448 [v2.10.3.15]), so receive only
+    // disables it with the Transmit category (setup.cs:6499). Thetis's
+    // "TX Profile has changed" label is hidden while receive only is on
+    // (setup.cs:27362 [v2.10.3.15]:
+    //   lblTXProfileWarning.Visible = !console.RXOnly && bChanged;);
+    // NereusSDR shows no such label, so there is nothing to hide.
+    markReceiveOnlyGated(registerPage(audio, "TX Profile", SetupScope::Core, [this]() -> QWidget* {
         return new TxProfileSetupPage(
             m_model,
             m_model ? m_model->micProfileManager() : nullptr,
             m_model ? &m_model->transmitModel() : nullptr);
-    }, true);
+    }, true));
 
     tick("Audio");
 
@@ -1347,6 +1424,11 @@ void SetupDialog::buildTree()
     // Setup -> CAT & Network -> 4O3A -> General as an embedded section
     // (FourO3APage owns the PgxlInterlockPage instance).
 
+    // Task 16 fix wave (I1): tpTransmit.Enabled = !RXOnly
+    // (setup.cs:6499 [v2.10.3.15]).
+    markReceiveOnlyGated(transmit);
+    m_receiveOnlyCategories.push_back(transmit);
+
     tick("Transmit");
 
     // ── Appearance ────────────────────────────────────────────────────────────
@@ -1465,8 +1547,10 @@ void SetupDialog::buildTree()
     QTreeWidgetItem* test = addCategory("Test");
     // R-R3-21: a transmit page. Every control writes the TransmitModel's
     // two-tone test settings, which drive a keyed two-tone transmission.
-    registerPage(test, "Two-Tone IMD", SetupScope::Core, [this] { return new TestTwoTonePage(m_model); },
-                 true);
+    // Task 16 fix wave (I1): grpTestTXIMD.Enabled = !RXOnly
+    // (setup.cs:6501 [v2.10.3.15]).
+    markReceiveOnlyGated(registerPage(test, "Two-Tone IMD", SetupScope::Core,
+                                      [this] { return new TestTwoTonePage(m_model); }, true));
 
     tick("Test");
 

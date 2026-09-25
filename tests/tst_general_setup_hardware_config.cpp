@@ -71,8 +71,9 @@ void TestGeneralSetupHardwareConfig::chkExtended_present_withWarningLabel()
 void TestGeneralSetupHardwareConfig::chkGeneralRXOnly_shownOnEveryRadio()
 {
     // From Thetis setup.designer.cs:8535-8544 [v2.10.3.13] (text and
-    // tooltip). Thetis hides it (Visible=false); NereusSDR shows it on every
-    // radio (Task 16, receiver and transmit gaps plan).
+    // tooltip). The designer hides it (Visible=false) and Thetis shows it
+    // for every model (setup.cs:19878 and on [v2.10.3.15]); NereusSDR shows
+    // it on every radio (Task 16, receiver and transmit gaps plan).
     GeneralOptionsPage page(/*model=*/nullptr);
     auto* group = page.findChild<QGroupBox*>("grpHardwareConfig");
     QVERIFY2(group, "grpHardwareConfig not found");
