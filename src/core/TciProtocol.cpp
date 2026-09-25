@@ -24,6 +24,11 @@
 //                and XIT changes while receive-only
 //                (isTransmitSettingChange). J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 / R-R3-42 (parity Task 3): in a remote window
+//                tx_profile_ex selects the Core's profile and is not echoed
+//                at once; TciServer broadcasts the Core's profile when it
+//                arrives, as Thetis's TXProfileChangedHandlers do. J.J.
+//                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #include "TciProtocol.h"
 #include "AppSettings.h"
@@ -3136,6 +3141,16 @@ QString TciProtocol::handleTxProfileExSetCommand(const QStringList& args)
     }
     QMetaObject::invokeMethod(m_radio, "setTxProfile", Qt::DirectConnection,
                               Q_ARG(QString, name));
+    if (m_remoteWindow) {
+        // R-R3-49 / R-R3-42 (parity Task 3): the window asked the Core
+        // (txProfile.select). The app hears tx_profile_ex once the Core has
+        // applied it, from TciServer's profile broadcast, which follows the
+        // Core's active profile (Thetis handleTXProfile echoes nothing
+        // itself: SafeTXProfileSet, then OnTXProfileChanged sends it,
+        // TCIServer.cs:5070-5085, 7746-7756 [v2.10.3.15]). A refused pick
+        // broadcasts the Core's profile again.
+        return {};
+    }
     m_pendingNotifications << buildTxProfileExLine(name);
     return {};
 }

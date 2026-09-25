@@ -186,6 +186,13 @@
 //                                    setting's range refused in plain
 //                                    words, and setTunePowerForTxBand.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 3):
+//                                    transmitSettingsVersion 3: the radio
+//                                    microphone settings and the Core's TX
+//                                    profiles on `transmit`, the Line In
+//                                    gain range, the txProfile verbs and
+//                                    rade.resetVocoder.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1403,6 +1410,19 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                     : QStringLiteral("This Core cannot change its transmit settings."), {}));
             break;
         }
+        // R-R3-49 (parity Task 3): the TX profile verbs and the RADE vocoder
+        // reset came with transmitSettingsVersion 3, in the minor-11 block.
+        if ((message.commandVerb.startsWith("txProfile.")
+             || message.commandVerb == "rade.resetVocoder")
+            && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                || transmitSettingsVersion() < 3)) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                    ? QStringLiteral("Update this app to change transmit profiles on this Core.")
+                    : QStringLiteral("This Core cannot change its transmit settings."), {}));
+            break;
+        }
         if ((message.commandVerb == "configureTgxl" || message.commandVerb == "disconnectTgxl")
             && it->agreedMinor < kRemoteTgxlConfigSessionProtocolMinor) {
             send(transport, SessionMessages::commandResult(
@@ -2386,7 +2406,11 @@ int StationServer::transmitSettingsVersion() const
     // the VOX level and delay, MON and its level, LEV, EQ, CFC, PROC and
     // its level, AM carrier, DEXP, mic level), tunePowerForTxBand and
     // tuneDrivePowerSource, and setTunePowerForTxBand (parity Task 2).
-    return m_radioModel.isNull() ? 0 : 2;
+    // 3: the radio microphone settings (micBoost, micXlr, micTipRing,
+    // micBias, micPttDisabled, lineIn, lineInBoost), the Core's TX profiles
+    // (activeTxProfile, txProfilesJson), txProfile.select / save / delete
+    // and rade.resetVocoder (parity Task 3).
+    return m_radioModel.isNull() ? 0 : 3;
 }
 
 int StationServer::tgxlControlVersion() const

@@ -139,6 +139,12 @@
 //                applet's mic level, PROC, AM carrier and DEXP, and the
 //                container MON button follow transmitSettingsPermitted(2).
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 3): the TX, Phone/CW and RADE
+//                applets' profile combos, RADE's Reset vocoder and Setup's
+//                versioned transmit settings gates (Audio > TX Input's
+//                microphone, Audio > TX Profile) follow
+//                transmitSettingsPermitted(3) and (2). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -11279,6 +11285,14 @@ SetupDialog* MainWindow::createSetupDialog()
     // R-R3-49 (parity Task 1): the transmit settings that key nothing.
     dialog->setTransmitSettingsPermitted(transmitSettingsPermitted(),
                                          transmitSettingsReason());
+    if (!m_radioModel || !m_radioModel->ownsLocalDsp()) {
+        // R-R3-49 (parity Tasks 2 and 3): the settings later versions
+        // brought (Audio > TX Input's microphone, Audio > TX Profile).
+        for (const int version : {2, 3}) {
+            dialog->setTransmitSettingsPermitted(transmitSettingsPermitted(version),
+                                                 transmitSettingsReason(version), version);
+        }
+    }
     dialog->setStationSettingsAvailable(stationSettingsAvailable(), stationSettingsReason());
     seedReceiverAudioNote(dialog, [this] { return receiverAudioNoteFor(m_remoteMedia); });
     dialog->setAttribute(Qt::WA_DeleteOnClose);
@@ -11397,14 +11411,20 @@ void MainWindow::applyRemoteRoleGating()
     // with transmitSettingsVersion 2.
     const bool chainPermitted = transmitSettingsPermitted(2);
     const QString chainReason = transmitSettingsReason(2);
+    // R-R3-49 (parity Task 3): the TX profiles, the radio microphone
+    // settings and RADE's Reset vocoder came with transmitSettingsVersion 3.
+    const bool profilePermitted = transmitSettingsPermitted(3);
+    const QString profileReason = transmitSettingsReason(3);
     if (m_txApplet) {
         m_txApplet->setTransmitPermitted(transmitPermitted, transmitReason);
         m_txApplet->setTransmitSettingsPermitted(settingsPermitted, settingsReason);
         m_txApplet->setTransmitChainSettingsPermitted(chainPermitted, chainReason);
+        m_txApplet->setTxProfilePermitted(profilePermitted, profileReason);
     }
     if (m_phoneCwApplet) {
         m_phoneCwApplet->setTransmitPermitted(transmitPermitted, transmitReason);
         m_phoneCwApplet->setTransmitSettingsPermitted(chainPermitted, chainReason);
+        m_phoneCwApplet->setTxProfilePermitted(profilePermitted, profileReason);
     }
     // R-R3-44: the VAX applet's TX row (VAX as the microphone).
     if (m_vaxApplet) {
@@ -11418,6 +11438,7 @@ void MainWindow::applyRemoteRoleGating()
     // R-R3-21: the RADE applet's profile combo writes the TX mic profile.
     if (m_radeApplet) {
         m_radeApplet->setTransmitPermitted(transmitPermitted, transmitReason);
+        m_radeApplet->setTxProfilePermitted(profilePermitted, profileReason);
     }
     for (VfoWidget* flag : m_vfoWidgetsBySlice) {
         if (flag) { flag->setTransmitPermitted(transmitPermitted, transmitReason); }
@@ -11433,6 +11454,8 @@ void MainWindow::applyRemoteRoleGating()
     for (SetupDialog* dialog : findChildren<SetupDialog*>()) {
         dialog->setTransmitPermitted(transmitPermitted, transmitReason);
         dialog->setTransmitSettingsPermitted(settingsPermitted, settingsReason);
+        dialog->setTransmitSettingsPermitted(chainPermitted, chainReason, 2);
+        dialog->setTransmitSettingsPermitted(profilePermitted, profileReason, 3);
         dialog->setStationSettingsAvailable(stationAvailable, stationSettingsReason());
     }
     if (m_actTxEqualizer) {

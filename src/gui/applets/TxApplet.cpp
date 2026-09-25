@@ -77,6 +77,10 @@
 //                 MON output pair routes this computer's monitor audio in a
 //                 remote window too. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-25 : R-R3-49 (parity Task 3): the profile combo follows
+//                 setTxProfilePermitted; in a remote window its manager
+//                 mirrors the Core's profiles. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -271,6 +275,7 @@ TxApplet::TxApplet(RadioModel* model, QWidget* parent)
         setTransmitPermitted(false);
         setTransmitSettingsPermitted(false);
         setTransmitChainSettingsPermitted(false);
+        setTxProfilePermitted(false);
     }
 }
 
@@ -2253,11 +2258,11 @@ void TxApplet::setTransmitPermitted(bool permitted, const QString& unavailableRe
     // R-R3-49 (parity Task 1): RF Power and the TX filter low and high
     // follow setTransmitSettingsPermitted; parity Task 2: Tune Power, the
     // VOX level and delay, MON, LEV, EQ and CFC follow
-    // setTransmitChainSettingsPermitted. This gate keeps the rest.
+    // setTransmitChainSettingsPermitted; parity Task 3: the profile combo
+    // follows setTxProfilePermitted. This gate keeps the rest.
     apply(m_tuneBtn);
     apply(m_moxBtn);
     apply(m_voxBtn);
-    apply(m_profileCombo);
     apply(m_twoToneBtn);
     apply(m_psaBtn);
     syncPsaFromFacade();
@@ -2301,6 +2306,17 @@ void TxApplet::setTransmitChainSettingsPermitted(bool permitted,
                              static_cast<QWidget*>(m_cfcBtn)}) {
         gateTransmitControl(control, permitted, reason);
     }
+}
+
+// R-R3-49 (parity Task 3): the profile combo. The Core applies a pick and
+// reports its active profile back; a refused pick shows the Core's again.
+void TxApplet::setTxProfilePermitted(bool permitted, const QString& unavailableReason)
+{
+    m_txProfilePermitted = permitted;
+    gateTransmitControl(m_profileCombo, permitted,
+                        unavailableReason.isEmpty()
+                            ? IStationLink::transmitSettingsUnavailableReason()
+                            : unavailableReason);
 }
 
 bool TxApplet::remoteTunePower() const

@@ -94,6 +94,10 @@
 //                 for Tune Power, the VOX level and delay, MON, its level
 //                 and output, LEV, EQ and CFC. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-25 : R-R3-49 (parity Task 3): setTxProfilePermitted for the
+//                 profile combo, which picks the Core's profiles in a
+//                 remote window. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -310,6 +314,11 @@ public slots:
     // setTransmitPermitted.
     void setTransmitChainSettingsPermitted(bool permitted,
                                            const QString& unavailableReason = QString());
+    // R-R3-49 (parity Task 3): the profile combo. In a remote window it
+    // lists the Core's profiles and selects through the Core
+    // (transmitSettingsVersion 3), live while its radio is off the air.
+    void setTxProfilePermitted(bool permitted,
+                               const QString& unavailableReason = QString());
 public:
 
     // ── Test accessors ──────────────────────────────────────────────────────
@@ -539,6 +548,7 @@ private:
     bool m_transmitPermitted{true};
     bool m_transmitSettingsPermitted{true};
     bool m_transmitChainSettingsPermitted{true};
+    bool m_txProfilePermitted{true};
     // R-R3-49 (parity Task 2): a remote window's Tune Power slider asks the
     // Core (setTunePowerForTxBand) and shows the Core's tunePowerForTxBand.
     bool remoteTunePower() const;

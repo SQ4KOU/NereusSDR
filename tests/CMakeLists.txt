@@ -7284,6 +7284,22 @@ nereus_add_test(tst_transmit_model_properties
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
 
+# R-R3-49 (parity Task 3; iPhone plan Task 40): the Core's TX profiles on the
+# `transmit` object, a window's profile manager as a mirror that never saves,
+# and txProfile.select / save / delete with their refusals. Loopback only, no
+# RF, no audio device.
+nereus_add_test(tst_tx_profile_select
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+
+# R-R3-49 (parity Task 3): a remote window's profile combos (TX, Phone/CW,
+# RADE), Setup > Audio > TX Profile and TX Input's radio microphone, and
+# RADE's Reset vocoder, against an in-process Core. Loopback only, no RF, no
+# audio device.
+nereus_add_test(tst_remote_tx_profiles
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+
 # iPhone app plan, Task 1 (R-IOS-01): the link's surface, captured from the
 # code (LinkSurface.cpp) and guarded against tests/data/link/v1/surface.json.
 # The manifest test also scans the routing and media sources, and dispatches

@@ -244,6 +244,11 @@
 //                 drive source on the link, and settingRangeRefusal().
 //                 NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 3): the radio microphone settings as
+//                 mirrored Q_PROPERTYs (transmitSettingsVersion 3) and the
+//                 Core's TX profiles (activeTxProfile, txProfilesJson).
+//                 NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -256,6 +261,7 @@
 #include <QMetaType>
 #include <QObject>
 #include <QString>
+#include <QStringList>
 #include <QVariant>
 #include <array>
 #include <atomic>
@@ -630,6 +636,19 @@ public:
     /// has no range here). `propertyName` is the property's name on the
     /// link; the range is the setter's own.
     QString settingRangeRefusal(const QByteArray& propertyName, const QVariant& value) const;
+
+    // ── R-R3-49 (parity Task 3): the Core's TX profiles on the link ───────
+    //
+    // The active profile's name and the profile list as a JSON array of
+    // names. The Core sets both from its MicProfileManager; a window has
+    // them from the Core (applyStationValue). NereusSDR-original.
+    QString activeTxProfile() const { return m_activeTxProfile; }
+    QString txProfilesJson() const { return m_txProfilesJson; }
+    /// The Core: its MicProfileManager's active profile and list.
+    void setStationTxProfiles(const QString& active, const QStringList& names);
+    /// The names in txProfilesJson(), in order (empty when it is not a
+    /// JSON array of strings).
+    static QStringList txProfileNamesFromJson(const QString& json);
 
     // ── Fixed tune power (#167 Phase 3C) ──────────────────────────────────
     //
@@ -1096,6 +1115,37 @@ public:
                                       NOTIFY tunePowerForTxBandChanged)
     Q_PROPERTY(NereusSDR::DrivePowerSource tuneDrivePowerSource
                READ tuneDrivePowerSource NOTIFY tuneDrivePowerSourceChanged)
+
+    // ── R-R3-49 (parity Task 3): the radio's microphone input, TX profiles ─
+    //
+    // Mirrored on `transmit` (transmitSettingsVersion 3), after
+    // tuneDrivePowerSource so the earlier ordinals stay put. The seven
+    // microphone settings are Setup > Audio > TX Input's radio microphone
+    // groups, under their setters' names and types (lineInBoost is the
+    // setter's double, in dB). None keys the radio.
+    Q_PROPERTY(bool   micBoost       READ micBoost       WRITE setMicBoost
+                                     NOTIFY micBoostChanged)
+    Q_PROPERTY(bool   micXlr         READ micXlr         WRITE setMicXlr
+                                     NOTIFY micXlrChanged)
+    Q_PROPERTY(bool   micTipRing     READ micTipRing     WRITE setMicTipRing
+                                     NOTIFY micTipRingChanged)
+    Q_PROPERTY(bool   micBias        READ micBias        WRITE setMicBias
+                                     NOTIFY micBiasChanged)
+    Q_PROPERTY(bool   micPttDisabled READ micPttDisabled WRITE setMicPttDisabled
+                                     NOTIFY micPttDisabledChanged)
+    Q_PROPERTY(bool   lineIn         READ lineIn         WRITE setLineIn
+                                     NOTIFY lineInChanged)
+    Q_PROPERTY(double lineInBoost    READ lineInBoost    WRITE setLineInBoost
+                                     NOTIFY lineInBoostChanged)
+    // The Core's active TX profile and its profile list (a JSON array of
+    // names, in the Core's order). No WRITE: they change through the
+    // txProfile.select / save / delete commands. On the Core, RadioModel
+    // keeps them from its MicProfileManager (setStationTxProfiles); in a
+    // window they are the Core's report (applyStationValue).
+    Q_PROPERTY(QString activeTxProfile READ activeTxProfile
+                                       NOTIFY activeTxProfileChanged)
+    Q_PROPERTY(QString txProfilesJson  READ txProfilesJson
+                                       NOTIFY txProfilesJsonChanged)
 
     /// Bypass PA settings flag. false (default) = use board-specific table.
     bool paSettingsBypass() const noexcept { return m_paSettingsBypass; }
@@ -2089,6 +2139,10 @@ signals:
     /// R-R3-49 (parity Task 2): tunePowerForTxBand() changed (a new
     /// transmit band, that band's tune power, or the Core's report).
     void tunePowerForTxBandChanged(int watts);
+    /// R-R3-49 (parity Task 3): the Core's active TX profile or its profile
+    /// list changed.
+    void activeTxProfileChanged(const QString& name);
+    void txProfilesJsonChanged(const QString& json);
     /// Emitted when tunePower() (fixed) changes.  Mirrors Thetis
     /// tune_power setter at console.cs:17229-17242 [v2.10.3.13].
     void tunePowerChanged(int watts);
@@ -2236,6 +2290,9 @@ private:
     Band m_tuneTxBand{Band::Band20m};
     bool m_tuneTxBandKnown{false};
     int  m_tunePowerForTxBand{50};
+    // R-R3-49 (parity Task 3): the Core's TX profiles (see activeTxProfile).
+    QString m_activeTxProfile;
+    QString m_txProfilesJson{QStringLiteral("[]")};
     void refreshTunePowerForTxBand();
 
     // Per-band normal-mode power storage.

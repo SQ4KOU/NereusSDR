@@ -387,7 +387,7 @@ change shows as surface drift and as a change to this table.
 | `stationTciVersion` | 1 |
 | `accessoryDataVersion` | 1 |
 | `remoteTgxlControlVersion` | 3 |
-| `transmitSettingsVersion` | 2 |
+| `transmitSettingsVersion` | 3 |
 
 <!-- /surface -->
 
@@ -444,7 +444,13 @@ When a feature is off, its version is 0:
   `dexpEnabled` and `micGainDb`, each refused outside its range with the
   range in plain words (section 7.3); the read-only `tunePowerForTxBand`
   and `tuneDrivePowerSource`; and the command `setTunePowerForTxBand`
-  (section 9.1). Each is refused while the radio is
+  (section 9.1). At 3 it also covers the radio's microphone input on
+  `transmit` (Setup > Audio > TX Input): `micBoost`, `micXlr`,
+  `micTipRing`, `micBias`, `micPttDisabled`, `lineIn` and `lineInBoost`,
+  `lineInBoost` refused outside its range (section 7.3); the Core's TX
+  profiles, the read-only `activeTxProfile` and `txProfilesJson`; and the
+  commands `txProfile.select`, `txProfile.save`, `txProfile.delete` and
+  `rade.resetVocoder` (section 9.1). Each is refused while the radio is
   on the air (section 7.3). The keying set stays refused on a receive-only
   Core, on and off the air, and so do raw settings writes of
   `hardware/<mac>/tx/...`, `powerByBand` and `tunePowerByBand` (the
@@ -961,7 +967,7 @@ An enum property lists the values its domain allows.
 | 13 | `overloadAdc1` | `i64` | outbound |  |
 | 14 | `adcLinked` | `bool` | outbound |  |
 
-**TransmitModel** (30 properties)
+**TransmitModel** (39 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -995,6 +1001,15 @@ An enum property lists the values its domain allows.
 | 27 | `micGainDb` | `i64` | bidirectional |  |
 | 28 | `tunePowerForTxBand` | `i64` | outbound |  |
 | 29 | `tuneDrivePowerSource` | `enum` | outbound | 0, 1, 2 |
+| 30 | `micBoost` | `bool` | bidirectional |  |
+| 31 | `micXlr` | `bool` | bidirectional |  |
+| 32 | `micTipRing` | `bool` | bidirectional |  |
+| 33 | `micBias` | `bool` | bidirectional |  |
+| 34 | `micPttDisabled` | `bool` | bidirectional |  |
+| 35 | `lineIn` | `bool` | bidirectional |  |
+| 36 | `lineInBoost` | `f64` | bidirectional |  |
+| 37 | `activeTxProfile` | `utf8` | outbound |  |
+| 38 | `txProfilesJson` | `utf8` | outbound |  |
 
 **TunerModel** (21 properties)
 
@@ -1093,6 +1108,21 @@ Notes on the keys:
   from. Both change only through `setTunePowerForTxBand`. None of these
   keys the radio. The MON output choice (speakers or phones) is not on the
   link: it is each window's own audio routing.
+- **`transmit` at `transmitSettingsVersion` 3.** The radio's microphone
+  input, each under its setter's name and type: `micBoost` (bool, the
+  +20 dB mic boost), `micXlr` (bool, XLR rather than the 3.5 mm jack on a
+  radio with both), `micTipRing` (bool, true when the tip is the mic),
+  `micBias` (bool), `micPttDisabled` (bool, true when the mic's PTT is
+  ignored), `lineIn` (bool, Line In rather than Mic In) and `lineInBoost`
+  (f64, the Line In gain, -34.5 to 12.0 dB). The mic source is not among
+  them. `activeTxProfile` (utf8, outbound) is the Core's active TX
+  profile, and `txProfilesJson` (utf8, outbound) its TX profiles as a JSON
+  array of names in the Core's order (for example
+  `["AM","Default","Default DX"]`); a station with no radio sends `""` and
+  `[]`. Both change only through the `txProfile.*` commands (or at the
+  Core). TX and mic profiles are one set. A window never keeps its own
+  copy of the Core's profiles: its profile combos and Setup > Audio > TX
+  Profile show these two and ask the Core. None of these keys the radio.
 - **Unknown classes.** A client that receives a schema for a class it does
   not know records the difference and drops that class's objects and
   deltas.
@@ -1129,8 +1159,9 @@ hand-back to receive ends; TUNE on; or the two-tone test running), a
 tune power from 0 to 100 W.", "Choose a VOX level from -80 to 0 dB.",
 "Choose a VOX delay from 1 to 2000 ms.", "Choose a monitor level from 0.0
 to 1.0.", "Choose a PROC level from 0 to 20 dB.", "Choose an AM carrier
-level from 0 to 100 percent.", "Choose a mic level from -50 to 70 dB."; a
-Hermes Lite 2 says "Choose a tune power from 0 to 99."), and
+level from 0 to 100 percent.", "Choose a mic level from -50 to 70 dB.",
+"Choose a Line In gain from -34.5 to 12.0 dB."; a Hermes Lite 2 says
+"Choose a tune power from 0 to 99."), and
 DSP settings from a peer that did not negotiate them
 (`StationServer::handlePropertyWrite`). The on-air check is read once for
 the whole write, before anything in it is applied.
@@ -1359,6 +1390,10 @@ refused.
 | `setTgxlOperate` | `on` bool | `remoteTgxlControlVersion` | 2 | 11 |
 | `setTgxlBypass` | `on` bool | `remoteTgxlControlVersion` | 2 | 11 |
 | `setTunePowerForTxBand` | `watts` i64 | `transmitSettingsVersion` | 2 | 11 |
+| `txProfile.select` | `name` utf8 | `transmitSettingsVersion` | 3 | 11 |
+| `txProfile.save` | `name` utf8 | `transmitSettingsVersion` | 3 | 11 |
+| `txProfile.delete` | `name` utf8 | `transmitSettingsVersion` | 3 | 11 |
+| `rade.resetVocoder` | none | `transmitSettingsVersion` | 3 | 11 |
 | `configureRfKit` | `host` utf8, `port` i64 | `remoteRfKitControlVersion` | 2 | 11 |
 | `disconnectRfKit` | none | `remoteRfKitControlVersion` | 2 | 11 |
 | `setRfKitEnabled` | `enabled` bool | `remoteRfKitControlVersion` | 2 | 11 |
@@ -1400,7 +1435,7 @@ refused.
 The table's capability columns are the gate the desktop client applies
 before sending (section 6.2).
 
-Four command groups need a sentence beyond the table:
+Six command groups need a sentence beyond the table:
 
 - **The filter policy.** `setAlexBpfMode` sets one receive filter chain's
   filter policy (`chain` 0 or 1; `mode` 0 Auto, 1 Force filter, 2 Force
@@ -1444,6 +1479,30 @@ Four command groups need a sentence beyond the table:
   ("The request to change the tune power was not understood."). A peer
   below agreed minor 11 gets "Update this app to change the tune power on
   this Core."
+- **TX profiles and the RADE vocoder.** `txProfile.select` (`name`)
+  applies the named TX profile on the Core as the TX applet's profile
+  combo does in a local window: its settings become the Core's transmit
+  settings and it becomes the active profile. `txProfile.save` (`name`)
+  saves the Core's current transmit settings under the name, as Setup >
+  Audio > TX Profile's Save... does: a new name adds a profile, the name
+  of an existing one overwrites that profile only, and a comma in the name
+  becomes `_`. `txProfile.delete` (`name`) deletes the profile; deleting
+  the active one makes another active, as locally. The Core reports its
+  active profile and list on `transmit` (`activeTxProfile`,
+  `txProfilesJson`). `rade.resetVocoder` (no arguments) clears the RADE
+  transmit vocoder of the Core's active slice, as the RADE applet's Reset
+  vocoder does. None keys the radio, so a receive-only Core takes them,
+  but each is refused while the radio is on the air ("The radio is on the
+  air. Try again when it stops."). The other refusals: "There is no
+  transmit profile called <name>." (select and delete), "Give the transmit
+  profile a name." (save with a blank name), "The Core has no radio to
+  keep transmit profiles for." (save before the Core has a radio), "It is
+  not possible to delete the last remaining TX profile." (the local page's
+  own words), "RADE is not running on the Core's active slice." (reset
+  with no RADE channel), "The request for the transmit profile was not
+  understood." and "The request to reset the RADE vocoder was not
+  understood." A peer below agreed minor 11 gets "Update this app to
+  change transmit profiles on this Core."
 - **One TCI switch.** The Core keeps one TCI switch and port for its own
   TCI server (`setStationTci`, the `stationTci` object). A desktop window
   connected to a Core with `stationTciVersion` 1 shows that switch and
@@ -1993,7 +2052,7 @@ same on every machine.
 | `preempted` | A second authenticated client ends this session: `session.end`, `retryable` false |
 | `heartbeat-answered`, `heartbeat-missed` | The heartbeat, above |
 | `connect-deadline` | No `auth.request` within 30000 ms: `session.end` "This app did not finish connecting to the Core in time.", `retryable` true |
-| `property-write` | A write and its `property.result` and side-effect `delta`; a refused outbound property and an unknown one; a write without a `writeId` answered by `delta`; a write to a slice's signal strength refused as outbound; on the receive-only Core, a `transmit` write of `power` taken off the air and a write of `mox` and `voxEnabled` refused with the receive-only reason; at `transmitSettingsVersion` 2, a write of `cpdrLevelDb` taken, and `micGainDb` and `monitorVolume` out of range refused with their ranges beside a write of the outbound `tunePowerForTxBand` |
+| `property-write` | A write and its `property.result` and side-effect `delta`; a refused outbound property and an unknown one; a write without a `writeId` answered by `delta`; a write to a slice's signal strength refused as outbound; on the receive-only Core, a `transmit` write of `power` taken off the air and a write of `mox` and `voxEnabled` refused with the receive-only reason; at `transmitSettingsVersion` 2, a write of `cpdrLevelDb` taken, and `micGainDb` and `monitorVolume` out of range refused with their ranges beside a write of the outbound `tunePowerForTxBand`; at `transmitSettingsVersion` 3, a write of `micBoost` and `lineInBoost` taken, and `lineInBoost` out of range refused with its range beside a write of the outbound `activeTxProfile` |
 | `settings-write` | A station-scoped write echoed with its origin; an operator-local write rejected; a removal sent as `settings.value` with no entry; on the receive-only Core, a DSP > Options TX key taken off the air and a transmit hardware key refused |
 | `unknown-verb` | `command.result` refused, "The Core does not know this request. Updating the Core may help."; the connection stays up |
 | `unknown-kind` | `session.end` "The Core could not read a message from this app.", `retryable` false |

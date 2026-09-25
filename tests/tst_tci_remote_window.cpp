@@ -38,6 +38,13 @@
 //                                    "cannot send" answer stops the app.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 / R-R3-42 (parity Task 3):
+//                                    tx_profile_ex selects the Core's
+//                                    profile and is echoed only once the
+//                                    Core has it, tx_profiles_ex answers
+//                                    the Core's list, and mon_volume
+//                                    changes the Core's monitor level.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #ifdef HAVE_WEBSOCKETS
@@ -46,7 +53,9 @@
 
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
+#include "core/MicProfileManager.h"
 #include "core/TciServer.h"
+#include "core/TciVolume.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
 #include "core/session/media/DaemonMediaController.h"
@@ -58,6 +67,7 @@
 #include "gui/applets/TciApplet.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
+#include "models/TransmitModel.h"
 #include "OperatorWording.h"
 
 #include <QFile>
@@ -884,6 +894,74 @@ private slots:
         QVERIFY(!texts(text).contains(QStringLiteral("vfo:0,0,7074000;")));
         QCOMPARE(qint64(stationSlice->frequency()), qint64(14074000));
         QCOMPARE(qint64(remoteSlice->frequency()), qint64(14074000));
+        app.close();
+        tci.stop();
+    }
+
+    // R-R3-49 / R-R3-42 (parity Task 3): an app's TX profile and MON volume
+    // commands act on the Core. tx_profile_ex is heard once the Core has
+    // applied it (a refused pick is answered with the Core's profile), and
+    // tx_profiles_ex is the Core's list.
+    void txProfilesAndMonVolumeActOnTheCore()
+    {
+        Harness h;
+        h.station.scopeTxProfiles(QStringLiteral("AA:BB:CC:DD:EE:02"));
+        MicProfileManager* const coreProfiles = h.station.micProfileManager();
+        const QStringList coreNames = coreProfiles->profileNames();
+        QVERIFY(coreNames.size() > 1);
+        h.connectSession();
+        QTRY_VERIFY_WITH_TIMEOUT(h.client.isHandshakeComplete(), 10000);
+        QTRY_COMPARE_WITH_TIMEOUT(h.remote.micProfileManager()->profileNames(), coreNames, 5000);
+
+        TciServer tci(&h.remote);
+        QVERIFY(tci.start(0));
+        QWebSocket app;
+        QSignalSpy text(&app, &QWebSocket::textMessageReceived);
+        QVERIFY(connectClient(app, tci.port()));
+        QTRY_VERIFY_WITH_TIMEOUT(texts(text).contains(QStringLiteral("ready;")), 3000);
+        const QString listLine =
+            QStringLiteral("tx_profiles_ex:%1;").arg(coreNames.join(QLatin1Char(',')));
+        // The init burst names the Core's profiles and its active one.
+        QVERIFY(texts(text).contains(listLine));
+        QVERIFY(texts(text).contains(QStringLiteral("tx_profile_ex:Default;")));
+
+        // tx_profiles_ex answers the Core's list, never a stand-in.
+        const int listsBefore = int(texts(text).count(listLine));
+        app.sendTextMessage(QStringLiteral("tx_profiles_ex;"));
+        QTRY_VERIFY_WITH_TIMEOUT(texts(text).count(listLine) > listsBefore, 3000);
+
+        // A pick the Core takes: applied there, then heard.
+        app.sendTextMessage(QStringLiteral("tx_profile_ex:AM;"));
+        QTRY_COMPARE_WITH_TIMEOUT(coreProfiles->activeProfileName(), QStringLiteral("AM"), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(texts(text).contains(QStringLiteral("tx_profile_ex:AM;")), 3000);
+
+        // A pick the Core refuses is never echoed; the app hears the Core's.
+        const int amBefore = int(texts(text).count(QStringLiteral("tx_profile_ex:AM;")));
+        app.sendTextMessage(QStringLiteral("tx_profile_ex:Nope;"));
+        QTRY_VERIFY_WITH_TIMEOUT(texts(text).count(QStringLiteral("tx_profile_ex:AM;")) > amBefore,
+                                 3000);
+        QTest::qWait(200);
+        QVERIFY(!texts(text).contains(QStringLiteral("tx_profile_ex:Nope;")));
+        QCOMPARE(coreProfiles->activeProfileName(), QStringLiteral("AM"));
+
+        // A profile added at the Core reaches the app's list.
+        QVERIFY(coreProfiles->saveProfile(QStringLiteral("Late"), &h.station.transmitModel()));
+        QTRY_VERIFY_WITH_TIMEOUT(
+            texts(text).contains(QStringLiteral("tx_profiles_ex:%1;")
+                                     .arg(coreProfiles->profileNames().join(QLatin1Char(',')))),
+            3000);
+
+        // mon_volume changes the Core's monitor level.
+        const float before = h.station.transmitModel().monitorVolume();
+        const auto levelFor = [](double dB) {
+            return static_cast<float>(qBound(0, tciDbToLinearVolume(dB), 100)) / 100.0f;
+        };
+        const double db = qFuzzyCompare(levelFor(-3.0), before) ? -12.0 : -3.0;
+        const float want = levelFor(db);
+        QVERIFY(!qFuzzyCompare(want, before));
+        app.sendTextMessage(QStringLiteral("mon_volume:%1;").arg(db, 0, 'f', 1));
+        QTRY_VERIFY_WITH_TIMEOUT(qFuzzyCompare(h.station.transmitModel().monitorVolume(), want),
+                                 5000);
         app.close();
         tci.stop();
     }

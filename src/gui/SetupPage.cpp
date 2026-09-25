@@ -32,6 +32,10 @@
 //   2026-09-24 - R-R3-49 (parity Task 1): setTransmitSettingsPermitted
 //                 hook. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 3): setTransmitSettingsPermittedAt,
+//                 the gate for settings a later transmitSettingsVersion
+//                 brought. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include "SetupPage.h"
@@ -121,6 +125,11 @@ void SetupPage::setTransmitPermitted(bool /*permitted*/, const QString& /*reason
 }
 
 void SetupPage::setTransmitSettingsPermitted(bool /*permitted*/, const QString& /*reason*/)
+{
+}
+
+void SetupPage::setTransmitSettingsPermittedAt(int /*version*/, bool /*permitted*/,
+                                               const QString& /*reason*/)
 {
 }
 

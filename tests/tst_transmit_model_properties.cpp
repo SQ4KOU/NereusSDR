@@ -17,6 +17,9 @@
 //                                    applets and the container MON button
 //                                    work in a remote window.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 3): the Core offers at
+//                                    least transmitSettingsVersion 2.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -292,10 +295,11 @@ void TstTransmitModelProperties::coreOffersTransmitSettingsVersion2()
 {
     Session s(m_securityDir.path(), this);
     QVERIFY(s.connect());
-    QCOMPARE(s.server->buildCapabilities().transmitSettingsVersion, 2);
-    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 2);
+    // At least 2 (3 since parity Task 3, tst_tx_profile_select).
+    QVERIFY(s.server->buildCapabilities().transmitSettingsVersion >= 2);
+    QCOMPARE(s.client->capabilities().transmitSettingsVersion,
+             s.server->buildCapabilities().transmitSettingsVersion);
     QVERIFY(s.client->transmitSettingsAvailable(2));
-    QVERIFY(!s.client->transmitSettingsAvailable(3));
 }
 
 void TstTransmitModelProperties::eachSettingRoundTripsToTheCoreTxChain()

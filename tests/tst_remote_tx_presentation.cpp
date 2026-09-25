@@ -2,6 +2,9 @@
 // 2026-09-24: R-R3-49 (parity Task 2): the TX applet's EQ toggle is a
 // transmit setting, live in a remote window off the air. J.J. Boyd (KG4VCF),
 // AI-assisted via Anthropic Claude Code.
+// 2026-09-25: R-R3-49 (parity Task 3): Audio > TX Profile follows the
+// transmit settings gate, not remote transmit. J.J. Boyd (KG4VCF),
+// AI-assisted via Anthropic Claude Code.
 #include <QtTest>
 #include <QAction>
 #include <QDir>
@@ -69,9 +72,10 @@ private slots:
         // only its controls held for the radio follow the permission
         // (tst_remote_gui_gating, remoteTxInputKeepsThisComputersMicrophoneUsable).
         // Transmit > TX Profiles (a page that only says it moved) is not
-        // registered while it is on the unbuilt list (R-R3-49).
-        for (const char* label : {"TX Profile", "Power",
-                                  "Speech Processor", "DEXP/VOX"}) {
+        // registered while it is on the unbuilt list (R-R3-49). Audio > TX
+        // Profile follows the transmit settings gate since parity Task 3
+        // (tst_remote_tx_profiles, setupOpensTxProfileWithoutRemoteTransmit).
+        for (const char* label : {"Power", "Speech Processor", "DEXP/VOX"}) {
             QTest::newRow(label) << QString::fromLatin1(label);
         }
     }

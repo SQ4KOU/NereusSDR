@@ -198,6 +198,13 @@
 //                wireMicAndMonitorToTransmit / wireTransmitProcessingChain,
 //                with wireTransmitChainForTest. NereusSDR-original. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 3): the TX profile commands and the
+//                RADE vocoder reset for a window, the Core's profiles
+//                published on `transmit` (scopeTxProfiles,
+//                publishTxProfiles), and a window's profile manager as a
+//                mirror of the Core's (mirrorTxProfilesFromStation).
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1413,6 +1420,16 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // AppSettings.  The activeProfileChanged signal is consumed by the UI
     // (TxApplet J.1 + TxProfileSetupPage J.3) for combo-selection mirror.
     m_micProfileMgr = new MicProfileManager(this);
+    // R-R3-49 (parity Task 3): the Core publishes its profiles on
+    // `transmit`; a window's manager mirrors the Core's and never saves.
+    if (m_role == Role::Local) {
+        connect(m_micProfileMgr, &MicProfileManager::profileListChanged,
+                this, [this]() { publishTxProfiles(); });
+        connect(m_micProfileMgr, &MicProfileManager::activeProfileChanged,
+                this, [this](const QString&) { publishTxProfiles(); });
+    } else {
+        mirrorTxProfilesFromStation();
+    }
 
     // ── Phase 4 Agent 4A of #167: PaProfileManager ───────────────────────────
     //
@@ -3818,6 +3835,173 @@ bool RadioModel::setTunePowerForTxBandForStation(int watts, QString* reason)
         if (reason) { *reason = QStringLiteral("The Core has no transmit band yet."); }
         return false;
     }
+    return true;
+}
+
+// ── R-R3-49 (parity Task 3): TX profiles and the RADE vocoder for a window ─
+//
+// NereusSDR-original. The Core runs a window's request through its own
+// MicProfileManager exactly as the local controls do (TxApplet's combo,
+// TxProfileSetupPage's Save and Delete), and RadeApplet's Reset vocoder on
+// its own RADE channel. Every one is refused while the radio is on the air;
+// none keys the radio.
+
+void RadioModel::scopeTxProfiles(const QString& mac)
+{
+    if (m_role != Role::Local || m_micProfileMgr == nullptr) {
+        return;
+    }
+    // 3M-1c L.1: the per-MAC scope, then load() seeds the factory profiles
+    // on first launch (per F.5). An empty MAC drops the scope.
+    m_micProfileMgr->setMacAddress(mac);
+    m_micProfileMgr->load();
+    publishTxProfiles();
+}
+
+void RadioModel::publishTxProfiles()
+{
+    if (m_role != Role::Local || m_micProfileMgr == nullptr) {
+        return;
+    }
+    const QStringList names = m_micProfileMgr->profileNames();
+    // With no profiles (no radio yet) there is no active one to report.
+    m_transmitModel.setStationTxProfiles(
+        names.isEmpty() ? QString() : m_micProfileMgr->activeProfileName(), names);
+}
+
+void RadioModel::mirrorTxProfilesFromStation()
+{
+    if (m_micProfileMgr == nullptr) {
+        return;
+    }
+    m_micProfileMgr->setStationMirror(
+        [this](MicProfileManager::StationRequest request, const QString& name) {
+            if (m_station == nullptr) {
+                reportStationSliceCommandRejected(
+                    IStationLink::transmitSettingsUnavailableReason());
+                return false;
+            }
+            IStationLink::CommandOutcome outcome;
+            switch (request) {
+            case MicProfileManager::StationRequest::Select:
+                outcome = m_station->requestTxProfileSelect(name);
+                break;
+            case MicProfileManager::StationRequest::Save:
+                outcome = m_station->requestTxProfileSave(name);
+                break;
+            case MicProfileManager::StationRequest::Delete:
+                outcome = m_station->requestTxProfileDelete(name);
+                break;
+            }
+            if (!outcome.sent) {
+                reportStationSliceCommandRejected(outcome.reason);
+            }
+            return outcome.sent;
+        });
+    connect(&m_transmitModel, &TransmitModel::txProfilesJsonChanged,
+            this, [this](const QString& json) {
+        m_micProfileMgr->applyStationProfiles(TransmitModel::txProfileNamesFromJson(json));
+    });
+    connect(&m_transmitModel, &TransmitModel::activeTxProfileChanged,
+            this, [this](const QString& name) {
+        m_micProfileMgr->applyStationActiveProfile(name);
+    });
+}
+
+bool RadioModel::selectTxProfileForStation(const QString& name, QString* reason)
+{
+    if (m_role != Role::Local || m_micProfileMgr == nullptr) {
+        if (reason) { *reason = QStringLiteral("The Core cannot change its transmit settings."); }
+        return false;
+    }
+    if (stationOnAirRefusal(reason)) {
+        return false;
+    }
+    if (!m_micProfileMgr->profileNames().contains(name)) {
+        if (reason) { *reason = QStringLiteral("There is no transmit profile called %1.").arg(name); }
+        return false;
+    }
+    // TxApplet's profile combo: setActiveProfile(name, &transmitModel).
+    if (!m_micProfileMgr->setActiveProfile(name, &m_transmitModel)) {
+        if (reason) { *reason = QStringLiteral("The Core did not change the transmit profile."); }
+        return false;
+    }
+    return true;
+}
+
+bool RadioModel::saveTxProfileForStation(const QString& name, QString* reason)
+{
+    if (m_role != Role::Local || m_micProfileMgr == nullptr) {
+        if (reason) { *reason = QStringLiteral("The Core cannot change its transmit settings."); }
+        return false;
+    }
+    if (stationOnAirRefusal(reason)) {
+        return false;
+    }
+    // TxProfileSetupPage::onSaveClicked: a blank name saves nothing.
+    const QString trimmed = name.trimmed();
+    if (trimmed.isEmpty()) {
+        if (reason) { *reason = QStringLiteral("Give the transmit profile a name."); }
+        return false;
+    }
+    if (m_micProfileMgr->profileNames().isEmpty()) {
+        if (reason) { *reason = QStringLiteral("The Core has no radio to keep transmit profiles for."); }
+        return false;
+    }
+    if (!m_micProfileMgr->saveProfile(trimmed, &m_transmitModel)) {
+        if (reason) { *reason = QStringLiteral("The Core did not save the transmit profile."); }
+        return false;
+    }
+    return true;
+}
+
+bool RadioModel::deleteTxProfileForStation(const QString& name, QString* reason)
+{
+    if (m_role != Role::Local || m_micProfileMgr == nullptr) {
+        if (reason) { *reason = QStringLiteral("The Core cannot change its transmit settings."); }
+        return false;
+    }
+    if (stationOnAirRefusal(reason)) {
+        return false;
+    }
+    const QStringList names = m_micProfileMgr->profileNames();
+    if (!names.contains(name)) {
+        if (reason) { *reason = QStringLiteral("There is no transmit profile called %1.").arg(name); }
+        return false;
+    }
+    // TxProfileSetupPage::onDeleteClicked's own words for the last-profile
+    // rule (MicProfileManager F.3; Thetis setup.cs:9656-9663 [v2.10.3.15]).
+    if (names.size() <= 1) {
+        if (reason) {
+            *reason = QStringLiteral("It is not possible to delete the last remaining TX profile.");
+        }
+        return false;
+    }
+    if (!m_micProfileMgr->deleteProfile(name)) {
+        if (reason) { *reason = QStringLiteral("The Core did not delete the transmit profile."); }
+        return false;
+    }
+    return true;
+}
+
+bool RadioModel::resetRadeVocoderForStation(QString* reason)
+{
+    if (m_role != Role::Local) {
+        if (reason) { *reason = QStringLiteral("The Core cannot change its transmit settings."); }
+        return false;
+    }
+    if (stationOnAirRefusal(reason)) {
+        return false;
+    }
+    // RadeApplet::onResetVocoderClicked: the active slice's RADE channel.
+    SliceModel* const slice = activeSlice();
+    RadeChannel* const channel = (slice != nullptr && m_wdspEngine != nullptr)
+        ? m_wdspEngine->radeChannel(slice->sliceIndex()) : nullptr;
+    if (channel == nullptr) {
+        if (reason) { *reason = QStringLiteral("RADE is not running on the Core's active slice."); }
+        return false;
+    }
+    channel->resetTx();
     return true;
 }
 
@@ -9998,10 +10182,9 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
         // first launch (per F.5).  Idempotent on subsequent loads under the
         // same MAC.  Constructed once at RadioModel ctor time (above);
         // setMacAddress("")  is called in teardownConnection.
-        if (m_micProfileMgr) {
-            m_micProfileMgr->setMacAddress(info.macAddress);
-            m_micProfileMgr->load();
-        }
+        // R-R3-49 (parity Task 3): scopeTxProfiles also publishes the
+        // bank on `transmit` for a window.
+        scopeTxProfiles(info.macAddress);
 
         // ── Phase 4 Agent 4A of #167: per-MAC PaProfileManager scope ─────────
         //
@@ -16119,9 +16302,8 @@ void RadioModel::teardownConnection()
 
     // 3M-1c L.1: drop the per-MAC scope on the profile manager so subsequent
     // mutators silently no-op until the next connectToRadio() sets a new MAC.
-    if (m_micProfileMgr) {
-        m_micProfileMgr->setMacAddress(QString());
-    }
+    // R-R3-49 (parity Task 3): and a window sees the Core has no profiles.
+    scopeTxProfiles(QString());
 
     // Phase 4 Agent 4A of #167: drop PaProfileManager MAC scope (mirrors
     // MicProfileManager teardown above).  Subsequent activeProfile() reads

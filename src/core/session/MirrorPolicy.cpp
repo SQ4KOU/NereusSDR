@@ -46,6 +46,10 @@
 //                 thirteen TransmitModel settings Bidirectional;
 //                 tunePowerForTxBand and tuneDrivePowerSource Outbound.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 3): the seven radio microphone
+//                 settings Bidirectional; activeTxProfile and txProfilesJson
+//                 Outbound. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -294,7 +298,7 @@ const MirrorPolicy::Entry kEntries[] = {
     { "SliceModel", "snrDb", MirrorDirection::Outbound },
     { "SliceModel", "lastRadeRxCallsign", MirrorDirection::Outbound },
 
-    // ---- TransmitModel (30 entries) ----
+    // ---- TransmitModel (39 entries) ----
     { "TransmitModel", "mox", MirrorDirection::Bidirectional },
     { "TransmitModel", "tune", MirrorDirection::Bidirectional },
     { "TransmitModel", "power", MirrorDirection::Bidirectional },
@@ -329,6 +333,18 @@ const MirrorPolicy::Entry kEntries[] = {
     // The Core's reports; both change only through setTunePowerForTxBand.
     { "TransmitModel", "tunePowerForTxBand", MirrorDirection::Outbound },
     { "TransmitModel", "tuneDrivePowerSource", MirrorDirection::Outbound },
+    // R-R3-49 (parity Task 3, transmitSettingsVersion 3): Setup > Audio >
+    // TX Input's radio microphone groups. None keys the radio.
+    { "TransmitModel", "micBoost", MirrorDirection::Bidirectional },
+    { "TransmitModel", "micXlr", MirrorDirection::Bidirectional },
+    { "TransmitModel", "micTipRing", MirrorDirection::Bidirectional },
+    { "TransmitModel", "micBias", MirrorDirection::Bidirectional },
+    { "TransmitModel", "micPttDisabled", MirrorDirection::Bidirectional },
+    { "TransmitModel", "lineIn", MirrorDirection::Bidirectional },
+    { "TransmitModel", "lineInBoost", MirrorDirection::Bidirectional },
+    // The Core's TX profiles; they change only through the txProfile verbs.
+    { "TransmitModel", "activeTxProfile", MirrorDirection::Outbound },
+    { "TransmitModel", "txProfilesJson", MirrorDirection::Outbound },
 
     // ---- TunerModel (21 entries) ----
     { "TunerModel", "relayC1", MirrorDirection::Outbound },

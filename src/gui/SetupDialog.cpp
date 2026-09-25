@@ -121,6 +121,12 @@
 //                 pushed to every realized page beside the transmit
 //                 permission. J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-25: R-R3-49 (parity Task 3): the transmit settings gate per
+//                 transmitSettingsVersion (setTransmitSettingsPermitted's
+//                 minVersion); Audio > TX Profile no longer waits for
+//                 remote transmit, and gates its own controls. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include "SetupDialog.h"
@@ -824,10 +830,17 @@ void SetupDialog::setTransmitPermitted(bool permitted, const QString& reason)
     refreshTransmitPresentation();
 }
 
-void SetupDialog::setTransmitSettingsPermitted(bool permitted, const QString& reason)
+void SetupDialog::setTransmitSettingsPermitted(bool permitted, const QString& reason,
+                                               int minVersion)
 {
-    m_transmitSettingsPermitted = permitted;
-    m_transmitSettingsReason = reason;
+    if (minVersion <= 1) {
+        m_transmitSettingsPermitted = permitted;
+        m_transmitSettingsReason = reason;
+    } else {
+        // R-R3-49 (parity Task 3): a later version's settings, pushed to the
+        // pages through SetupPage::setTransmitSettingsPermittedAt.
+        m_transmitSettingsGates.insert(minVersion, TransmitSettingsGate{permitted, reason});
+    }
     refreshTransmitPresentation();
 }
 
@@ -878,6 +891,12 @@ void SetupDialog::refreshTransmitPresentation()
             // R-R3-49 (parity Task 1): the transmit settings that key nothing.
             setupPage->setTransmitSettingsPermitted(m_transmitSettingsPermitted,
                                                     m_transmitSettingsReason);
+            // R-R3-49 (parity Task 3): each later version's settings.
+            for (auto gate = m_transmitSettingsGates.cbegin();
+                 gate != m_transmitSettingsGates.cend(); ++gate) {
+                setupPage->setTransmitSettingsPermittedAt(gate.key(), gate->permitted,
+                                                          gate->reason);
+            }
             // R-R3-21: a Mixed page gates its own Core controls.
             setupPage->setStationSettingsAvailable(!stationBlocked, m_stationReason);
         }
@@ -1208,6 +1227,11 @@ void SetupDialog::buildTree()
                  [this] { return wrapWithAudioBackendStrip(new AudioAdvancedPage(m_model)); });
     // Phase 3M-1c J.3: TX Profile editor.
     //
+    // R-R3-49 (parity Task 3): no longer held for remote transmit. In a
+    // remote window the manager mirrors the Core's profiles and the page
+    // gates its own controls on transmitSettingsVersion 3
+    // (TxProfileSetupPage::setTransmitSettingsPermittedAt).
+    //
     // 3M-1c L.1 update: RadioModel now constructs MicProfileManager in its
     // ctor (per RadioModel::m_micProfileMgr in RadioModel.cpp), so this page
     // gets the live manager pointer at SetupDialog construction time.  The
@@ -1220,7 +1244,7 @@ void SetupDialog::buildTree()
             m_model,
             m_model ? m_model->micProfileManager() : nullptr,
             m_model ? &m_model->transmitModel() : nullptr);
-    }, true);
+    });
 
     tick("Audio");
 

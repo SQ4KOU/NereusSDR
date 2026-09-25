@@ -41,6 +41,10 @@
 //                 level, AM carrier and DEXP follow the transmit settings
 //                 gate (setTransmitSettingsPermitted), not the keying gate.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 3): the mic profile combo follows
+//                 setTxProfilePermitted; in a remote window it picks the
+//                 Core's profiles. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -177,6 +181,7 @@ PhoneCwApplet::PhoneCwApplet(RadioModel* model, QWidget* parent)
     if (model && model->role() == RadioModel::Role::Remote) {
         setTransmitPermitted(false);
         setTransmitSettingsPermitted(false);
+        setTxProfilePermitted(false);
     }
 }
 
@@ -1149,7 +1154,7 @@ void PhoneCwApplet::wireControls()
         });
         connect(m_micProfileCombo, &QComboBox::currentTextChanged,
                 this, [this, &tx](const QString& name) {
-            if (m_updatingFromModel || !m_transmitPermitted || name.isEmpty()) { return; }
+            if (m_updatingFromModel || !m_txProfilePermitted || name.isEmpty()) { return; }
             if (MicProfileManager* m = m_model->micProfileManager()) {
                 m->setActiveProfile(name, &tx);
             }
@@ -1330,6 +1335,16 @@ void PhoneCwApplet::setTransmitSettingsPermitted(bool permitted, const QString& 
     updateTransmitControlAvailability();
 }
 
+// R-R3-49 (parity Task 3): the mic profile combo's own gate.
+void PhoneCwApplet::setTxProfilePermitted(bool permitted, const QString& reason)
+{
+    m_txProfilePermitted = permitted;
+    m_txProfileReason = reason.isEmpty()
+        ? IStationLink::transmitSettingsUnavailableReason()
+        : reason;
+    updateTransmitControlAvailability();
+}
+
 void PhoneCwApplet::updateTransmitControlAvailability()
 {
     const auto gate = [](QWidget* control, bool permitted, const QString& reason) {
@@ -1358,12 +1373,13 @@ void PhoneCwApplet::updateTransmitControlAvailability()
         }
     };
 
-    // The keying gate: the mic profile (Task 3), the mic source and VAX.
-    for (QWidget* control : {static_cast<QWidget*>(m_micProfileCombo),
-                             static_cast<QWidget*>(m_micSourceCombo),
+    // The keying gate: the mic source and VAX.
+    for (QWidget* control : {static_cast<QWidget*>(m_micSourceCombo),
                              static_cast<QWidget*>(m_vaxBtn)}) {
         gate(control, m_transmitPermitted, m_transmitPermissionReason);
     }
+    // R-R3-49 (parity Task 3): the mic profile.
+    gate(m_micProfileCombo, m_txProfilePermitted, m_txProfileReason);
     // R-R3-49 (parity Task 2): the transmit settings gate.
     for (QWidget* control : {static_cast<QWidget*>(m_micLevelSlider),
                              static_cast<QWidget*>(m_amCarSlider),

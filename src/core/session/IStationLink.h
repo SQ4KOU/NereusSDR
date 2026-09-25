@@ -91,6 +91,10 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 2):
 //                                    requestTunePowerForTxBand.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 3):
+//                                    requestTxProfileSelect, Save, Delete
+//                                    and requestRadeResetVocoder.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QString>
@@ -294,6 +298,21 @@ public:
     /// local slider does; both come back on the mirrored `transmit` object
     /// (tunePowerForTxBand, tuneDrivePowerSource). Refused on the air.
     virtual CommandOutcome requestTunePowerForTxBand(int)
+    { return { false, transmitSettingsUnavailableReason() }; }
+    /// R-R3-49 (parity Task 3, transmitSettingsVersion 3): the TX profile
+    /// combos and Setup > Audio > TX Profile. The Core selects, saves (its
+    /// current transmit settings) or deletes the named profile, as the
+    /// local controls do; its active profile and list come back on the
+    /// mirrored `transmit` object. Refused on the air.
+    virtual CommandOutcome requestTxProfileSelect(const QString&)
+    { return { false, transmitSettingsUnavailableReason() }; }
+    virtual CommandOutcome requestTxProfileSave(const QString&)
+    { return { false, transmitSettingsUnavailableReason() }; }
+    virtual CommandOutcome requestTxProfileDelete(const QString&)
+    { return { false, transmitSettingsUnavailableReason() }; }
+    /// R-R3-49 (parity Task 3): the RADE applet's Reset vocoder; the Core
+    /// clears its RADE transmit vocoder. Keys nothing. Refused on the air.
+    virtual CommandOutcome requestRadeResetVocoder()
     { return { false, transmitSettingsUnavailableReason() }; }
 
     virtual CommandOutcome requestApplyNnrModels(quint32)

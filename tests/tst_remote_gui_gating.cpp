@@ -118,6 +118,12 @@
 //                 settings gate in a real remote window; the container MON
 //                 button toggles the Core's MON off the air and greys on it.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 3): TX Input's
+//                                    Mic Gain and radio microphone groups,
+//                                    the RADE applet and the TX profile
+//                                    combos follow the transmit settings
+//                                    gate. AI-assisted via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -1881,8 +1887,13 @@ private slots:
         QVERIFY(page->bufferSlider()->isEnabled());
         QVERIFY(page->testMicButton()->isEnabled());
 
-        // The controls held for the radio: disabled, with the reason.
-        QList<QWidget*> held{page->micSourceGroup(), page->micGainSlider()};
+        // The controls held for the radio: disabled, with the reason. The mic
+        // source follows remote transmit; since parity Task 3 (R-R3-49) Mic
+        // Gain and the radio microphone groups follow the transmit settings
+        // gate (transmitSettingsVersion 3), closed until the Core offers it.
+        QVERIFY(!page->micSourceGroup()->isEnabled());
+        QCOMPARE(page->micSourceGroup()->toolTip(), txReason);
+        QList<QWidget*> held{page->micGainSlider()};
         for (QGroupBox* group : {page->hermesRadioMicGroup(), page->orionRadioMicGroup(),
                                  page->saturnRadioMicGroup()}) {
             if (group != nullptr) { held << group; }
@@ -1890,7 +1901,7 @@ private slots:
         for (QWidget* control : held) {
             QVERIFY(control != nullptr);
             QVERIFY2(!control->isEnabled(), qPrintable(control->objectName()));
-            QCOMPARE(control->toolTip(), txReason);
+            QCOMPARE(control->toolTip(), IStationLink::transmitSettingsUnavailableReason());
         }
 
         // Activation moves nothing held for the radio.
@@ -1914,13 +1925,18 @@ private slots:
                  QString::number(samples));
         QCOMPARE(remote.localAudioDevices()->txInputConfig().bufferSamples, samples);
 
-        // A Core that permits transmit lifts the held controls' gate.
+        // A Core that permits transmit lifts the mic source's gate; one that
+        // takes transmit settings (version 3) lifts Mic Gain's and the radio
+        // microphone groups'.
         dialog.setTransmitPermitted(true);
         QVERIFY(page->micSourceGroup()->isEnabled());
+        QVERIFY(!page->micGainSlider()->isEnabled());
+        dialog.setTransmitSettingsPermitted(true, QString(), 3);
         QVERIFY(page->micGainSlider()->isEnabled());
         QVERIFY(page->micGainSlider()->toolTip() != txReason);
         dialog.setTransmitPermitted(false, txReason);
         QVERIFY(!page->micSourceGroup()->isEnabled());
+        QVERIFY(page->micGainSlider()->isEnabled());
         QVERIFY(page->bufferSlider()->isEnabled());
 
         // Local direct mode: every control live.
@@ -3631,8 +3647,11 @@ private slots:
         QVERIFY(remote.activeSlice() != nullptr);
         MicProfileManager* const mgr = remote.micProfileManager();
         QVERIFY(mgr != nullptr);
-        mgr->setMacAddress(QStringLiteral("00:11:22:33:44:55"));
-        mgr->load();
+        // R-R3-49 (parity Task 3): a remote window's profiles are the Core's.
+        QVERIFY(mgr->isStationMirror());
+        mgr->applyStationProfiles({QStringLiteral("AM"), QStringLiteral("Default"),
+                                   QStringLiteral("RADE")});
+        mgr->applyStationActiveProfile(QStringLiteral("Default"));
         QVERIFY(mgr->profileNames().size() > 1);
 
         remote.resetLocalDspHandOutAudit();
@@ -3646,10 +3665,13 @@ private slots:
         QVERIFY2(OperatorWording::isPlain(combo->toolTip()), qPrintable(combo->toolTip()));
         QVERIFY2(OperatorWording::isPlain(reset->toolTip()), qPrintable(reset->toolTip()));
 
-        applet.setTransmitPermitted(false, reason);
+        // R-R3-49 (parity Task 3): both follow the transmit settings gate
+        // (setTxProfilePermitted), not remote transmit.
+        applet.setTxProfilePermitted(false, reason);
         QCOMPARE(combo->toolTip(), reason);
         QCOMPARE(reset->toolTip(), reason);
 
+        // While it is closed, nothing is asked of the Core.
         const QString activeBefore = mgr->activeProfileName();
         QTest::keyClick(combo, Qt::Key_Down);
         emit combo->textActivated(combo->itemText(combo->count() - 1));
@@ -3660,21 +3682,21 @@ private slots:
         // Nothing here looked up this window's own DSP.
         QCOMPARE(remote.localDspHandOutCount(), 0);
 
-        // Permission restores the profile combo. Reset vocoder stays
-        // unavailable: the vocoder runs on the Core.
+        // Remote transmit does not open them; the transmit settings gate
+        // does, both of them (Reset vocoder resets the Core's vocoder).
         applet.setTransmitPermitted(true);
+        QVERIFY(!combo->isEnabled());
+        applet.setTxProfilePermitted(true);
         QVERIFY(combo->isEnabled());
         QVERIFY(combo->toolTip() != reason);
-        QVERIFY(!reset->isEnabled());
-        const QString coreVocoder = QStringLiteral(
-            "The RADE vocoder runs on the Core's computer and cannot be reset "
-            "from a remote window.");
-        QCOMPARE(reset->toolTip(), coreVocoder);
-        QCOMPARE(reset->accessibleDescription(), coreVocoder);
+        QVERIFY(reset->isEnabled());
         applet.setTransmitPermitted(false, reason);
+        QVERIFY(combo->isEnabled());
+        applet.setTxProfilePermitted(false, reason);
         QVERIFY(!combo->isEnabled());
         QCOMPARE(reset->toolTip(), reason);
         QCOMPARE(reset->accessibleDescription(), reason);
+        QCOMPARE(remote.localDspHandOutCount(), 0);
 
         RadioModel local;
         local.addSlice();
@@ -4131,6 +4153,17 @@ private slots:
                 QCOMPARE(w->toolTip(),
                          QStringLiteral("The radio is on the air. Try again when it stops."));
             }
+            // R-R3-49 (parity Task 3): the TX profile combos and RADE's Reset
+            // vocoder follow the transmit settings gate too.
+            auto* const rade = window->findChild<RadeApplet*>();
+            QVERIFY(rade != nullptr);
+            for (QWidget* w : std::initializer_list<QWidget*>{
+                     rade->profileComboForTest(), rade->resetVocoderButtonForTest(),
+                     txApplet->profileCombo()}) {
+                QTRY_VERIFY(!w->isEnabled());
+                QCOMPARE(w->toolTip(),
+                         QStringLiteral("The radio is on the air. Try again when it stops."));
+            }
             coreMox->setMox(false);
             QTRY_VERIFY(!window->radioModel()->isCoreOnAir());
             QTRY_VERIFY(txApplet->rfPowerSlider()->isEnabled());
@@ -4138,13 +4171,11 @@ private slots:
             QTRY_VERIFY(lev->isEnabled());
             QTRY_VERIFY(proc->isEnabled());
 
-            // The RADE applet's profile combo and Reset vocoder get it too.
-            auto* const rade = window->findChild<RadeApplet*>();
-            QVERIFY(rade != nullptr);
-            QVERIFY(!rade->profileComboForTest()->isEnabled());
-            QCOMPARE(rade->profileComboForTest()->toolTip(), remoteReason);
-            QVERIFY(!rade->resetVocoderButtonForTest()->isEnabled());
-            QCOMPARE(rade->resetVocoderButtonForTest()->toolTip(), remoteReason);
+            // Off the air they are live again, whatever remote transmit says.
+            QTRY_VERIFY(rade->profileComboForTest()->isEnabled());
+            QVERIFY(rade->resetVocoderButtonForTest()->isEnabled());
+            QVERIFY(txApplet->profileCombo()->isEnabled());
+            QVERIFY(rade->profileComboForTest()->toolTip() != remoteReason);
 
             QVERIFY(detachTestSurfaceConsumers(window));
             QSignalSpy switched(window->radioModel(), &RadioModel::antennaAutoSwitched);

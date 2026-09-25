@@ -16,6 +16,9 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 2): the Core
 //                                    offers transmitSettingsVersion 2.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 3): the Core offers
+//                                    transmitSettingsVersion 3.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -186,13 +189,15 @@ void TstTransmitSettingsGate::coreOffersTransmitSettingsVersion()
     Session s(m_securityDir.path(), this);
     QVERIFY(s.connect());
     QVERIFY(s.core->receiveOnlyStationPolicy());
-    // 2 since parity Task 2 (the TX and Phone/CW applets' settings).
-    QCOMPARE(s.server->buildCapabilities().transmitSettingsVersion, 2);
-    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 2);
+    // 2 since parity Task 2 (the TX and Phone/CW applets' settings), 3
+    // since parity Task 3 (the microphone input and the TX profiles).
+    QCOMPARE(s.server->buildCapabilities().transmitSettingsVersion, 3);
+    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 3);
     QVERIFY(s.client->transmitSettingsAvailable());
     QVERIFY(s.client->transmitSettingsAvailable(1));
     QVERIFY(s.client->transmitSettingsAvailable(2));
-    QVERIFY(!s.client->transmitSettingsAvailable(3));
+    QVERIFY(s.client->transmitSettingsAvailable(3));
+    QVERIFY(!s.client->transmitSettingsAvailable(4));
     QVERIFY(StationServer::isTransmitSettingKeyAcceptedOffAir(
         QStringLiteral("DspOptionsBufferSizePhoneTx")));
     QVERIFY(StationServer::isTransmitSettingKeyAcceptedOffAir(

@@ -101,6 +101,13 @@
 //                refreshTransmitTuneBand and wireTransmitChainForTest.
 //                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 3): the TX profile commands
+//                (selectTxProfileForStation, saveTxProfileForStation,
+//                deleteTxProfileForStation), resetRadeVocoderForStation,
+//                scopeTxProfiles and the Core's profiles published on
+//                `transmit`; a window's profile manager mirrors them.
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -2128,6 +2135,27 @@ public:
     // does. Refused, changing nothing, while the radio is on the air and
     // outside the tune power range.
     bool setTunePowerForTxBandForStation(int watts, QString* reason);
+    // R-R3-49 (parity Task 3, transmitSettingsVersion 3): a window's TX
+    // profile combos and Setup > Audio > TX Profile. Select applies the
+    // profile as the local combo does; save stores the Core's current
+    // transmit settings under the name, overwriting only that name, as the
+    // local Save does; delete removes it, never the last one. Each is
+    // refused, changing nothing, while the radio is on the air, and select
+    // and delete for a name the Core does not have. The Core's active
+    // profile and list come back on `transmit` (activeTxProfile,
+    // txProfilesJson). None keys the radio.
+    bool selectTxProfileForStation(const QString& name, QString* reason);
+    bool saveTxProfileForStation(const QString& name, QString* reason);
+    bool deleteTxProfileForStation(const QString& name, QString* reason);
+    // R-R3-49 (parity Task 3): the RADE applet's Reset vocoder. Clears the
+    // RADE transmit vocoder of the active slice's RADE channel
+    // (RadeChannel::resetTx), as the local button does. Keys nothing.
+    // Refused while the radio is on the air and with no RADE channel.
+    bool resetRadeVocoderForStation(QString* reason);
+    // R-R3-49 (parity Task 3): scope the TX profile bank to a radio's MAC and
+    // load it, as a connect does (empty: no radio), then publish the
+    // profiles on `transmit`. The Core only; a window mirrors the Core's.
+    void scopeTxProfiles(const QString& mac);
 
     // Phase 3G-9b: one-shot profile that sets the 7 smooth-default recipe
     // values on SpectrumWidget. Called from the constructor exactly once
@@ -3743,6 +3771,12 @@ private:
     // R-R3-49 (parity Task 2): the transmit band for tunePowerForTxBand,
     // and the Core's transmit chain wiring (moved from connectToRadio()).
     void refreshTransmitTuneBand();
+    // R-R3-49 (parity Task 3): the Core's MicProfileManager's active profile
+    // and list onto `transmit` (activeTxProfile, txProfilesJson).
+    void publishTxProfiles();
+    // R-R3-49 (parity Task 3): a window's profile manager mirrors the Core's
+    // profiles and asks the Core through the station link.
+    void mirrorTxProfilesFromStation();
     void wireMicAndMonitorToTransmit();
     void wireTransmitProcessingChain();
 

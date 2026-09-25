@@ -11,6 +11,7 @@
 // =================================================================
 
 #include <QDialog>
+#include <QMap>
 #include <QString>
 #include <QStringList>
 #include <QTreeWidget>
@@ -80,7 +81,11 @@ public:
     // R-R3-49 (parity Task 1): the transmit settings gate, pushed to every
     // realized page (SetupPage::setTransmitSettingsPermitted). True in a
     // local window; MainWindow pushes it in a remote one.
-    void setTransmitSettingsPermitted(bool permitted, const QString& reason = QString());
+    // R-R3-49 (parity Task 3): minVersion above 1 is the gate for the
+    // settings that transmitSettingsVersion brought, pushed through
+    // SetupPage::setTransmitSettingsPermittedAt.
+    void setTransmitSettingsPermitted(bool permitted, const QString& reason = QString(),
+                                      int minVersion = 1);
 
     // R-R3-21 / R-R3-10 / R-R3-17: whether the Core's settings can be
     // changed from this window. MainWindow pushes it (applyRemoteRoleGating):
@@ -288,6 +293,12 @@ private:
     QString         m_transmitReason;
     bool            m_transmitSettingsPermitted = false;  // R-R3-49
     QString         m_transmitSettingsReason;              // R-R3-49
+    // R-R3-49 (parity Task 3): the gate for each later transmitSettingsVersion.
+    struct TransmitSettingsGate {
+        bool permitted = false;
+        QString reason;
+    };
+    QMap<int, TransmitSettingsGate> m_transmitSettingsGates;
     // R-R3-21: the visible reason for a page the local-DSP gate disabled.
     // Shown above the page (objectName "setupLocalUnavailable") and as the
     // page's and its tree leaf's tooltip. Never shown in local direct mode,

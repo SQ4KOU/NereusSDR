@@ -90,6 +90,10 @@
 //                                    settings' range refusals and the Tune
 //                                    Power command's reasons.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 3): the TX
+//                                    profile commands' and the RADE vocoder
+//                                    reset's reasons.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -803,6 +807,12 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("setTgxlBypassForStation"),
           // R-R3-49 (parity Task 2): the Tune Power slider's command.
           QStringLiteral("setTunePowerForTxBandForStation"),
+          // R-R3-49 (parity Task 3): the TX profile commands and the RADE
+          // vocoder reset.
+          QStringLiteral("selectTxProfileForStation"),
+          QStringLiteral("saveTxProfileForStation"),
+          QStringLiteral("deleteTxProfileForStation"),
+          QStringLiteral("resetRadeVocoderForStation"),
           QStringLiteral("setNnrDiagnosticMode"),
           QStringLiteral("applyNnrModelSelection"), QStringLiteral("addNotchFromStation"),
           QStringLiteral("moveNotchFromStation"), QStringLiteral("setNotchActiveFromStation"),
@@ -816,8 +826,10 @@ const QList<ReasonSource>& reasonSources()
           "There is no station session."},
          20,
          // sliceCapReason: the radio's product label and the slice count,
-         // worded "1 slice" or "N slices" from its own literals.
-         {QStringLiteral("radioLabel, slices"), QStringLiteral("slices"), QStringLiteral("cap")},
+         // worded "1 slice" or "N slices" from its own literals. R-R3-49
+         // (parity Task 3): name, the transmit profile's own name.
+         {QStringLiteral("radioLabel, slices"), QStringLiteral("slices"), QStringLiteral("cap"),
+          QStringLiteral("name")},
          {// The refuse lambdas' parameter (literals of these functions),
           // the facades' and allocators' results (scanned), and the notch
           // refusals, constants of this file checked in
@@ -873,6 +885,9 @@ const QList<AppSideReason>& appSideReasons()
         {"src/core/accessories/AlexAntennaFacade.h", "windowUnavailableReason",
          "a remote window's own reason the antenna rows show"},
         {"src/core/TciServer.h", "operatorNoticeReason", "a remote window's own TCI notice"},
+        {"src/models/RadioModel.cpp", "mirrorTxProfilesFromStation",
+         "a window's TX profile requests: it shows the link's own reason for a request it "
+         "could not send"},
         {"src/models/RadioModel.cpp", "noStationReason",
          "a remote window's own notice when it has no link to the Core"},
         {"src/models/RadioModel.cpp", "reportStationAccessoryRefusal",

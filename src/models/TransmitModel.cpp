@@ -84,6 +84,11 @@
 //                 settingRangeRefusal() for the mirrored transmit settings.
 //                 NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 3): the Core's TX profiles
+//                 (setStationTxProfiles, txProfileNamesFromJson, a
+//                 window's applyStationValue) and the Line In gain range
+//                 in settingRangeRefusal(). NereusSDR-original. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // --- From console.cs (Thetis v2.10.3.13) ---
@@ -256,6 +261,10 @@
 #include "core/PaProfile.h"
 #include "core/PureSignal.h"
 #include "core/StepAttenuatorController.h"
+
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonValue>
 
 #include <algorithm>
 #include <cmath>
@@ -655,6 +664,23 @@ bool TransmitModel::applyStationValue(const QByteArray& propertyName, const QVar
         }
         return true;
     }
+    // R-R3-49 (parity Task 3): the Core's TX profiles, plain state.
+    if (propertyName == "activeTxProfile") {
+        const QString name = value.toString();
+        if (name != m_activeTxProfile) {
+            m_activeTxProfile = name;
+            emit activeTxProfileChanged(name);
+        }
+        return true;
+    }
+    if (propertyName == "txProfilesJson") {
+        const QString json = value.toString();
+        if (json != m_txProfilesJson) {
+            m_txProfilesJson = json;
+            emit txProfilesJsonChanged(json);
+        }
+        return true;
+    }
     if (propertyName == "tuneDrivePowerSource") {
         if (!value.canConvert<DrivePowerSource>()) { return false; }
         const DrivePowerSource source = value.value<DrivePowerSource>();
@@ -671,6 +697,42 @@ bool TransmitModel::applyStationValue(const QByteArray& propertyName, const QVar
 void TransmitModel::reportTunePowerForTxBandRefused()
 {
     emit tunePowerForTxBandChanged(m_tunePowerForTxBand);
+}
+
+// ── R-R3-49 (parity Task 3): the Core's TX profiles on the link ──────────
+//
+// NereusSDR-original. The list goes out as a JSON array of the names, in
+// the Core's MicProfileManager order, so a name holding a comma (an older
+// profile saved before the comma rule) stays one name.
+
+void TransmitModel::setStationTxProfiles(const QString& active, const QStringList& names)
+{
+    const QString json = QString::fromUtf8(
+        QJsonDocument(QJsonArray::fromStringList(names)).toJson(QJsonDocument::Compact));
+    if (json != m_txProfilesJson) {
+        m_txProfilesJson = json;
+        emit txProfilesJsonChanged(json);
+    }
+    if (active != m_activeTxProfile) {
+        m_activeTxProfile = active;
+        emit activeTxProfileChanged(active);
+    }
+}
+
+QStringList TransmitModel::txProfileNamesFromJson(const QString& json)
+{
+    const QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8());
+    if (!doc.isArray()) {
+        return {};
+    }
+    QStringList names;
+    for (const QJsonValue& value : doc.array()) {
+        if (!value.isString()) {
+            return {};
+        }
+        names.append(value.toString());
+    }
+    return names;
 }
 
 QString TransmitModel::settingRangeRefusal(const QByteArray& propertyName,
@@ -717,6 +779,16 @@ QString TransmitModel::settingRangeRefusal(const QByteArray& propertyName,
             ? QStringLiteral("Choose a mic level from %1 to %2 dB.")
                   .arg(kMicGainDbMin).arg(kMicGainDbMax)
             : QString();
+    }
+    // R-R3-49 (parity Task 3): Setup > Audio > TX Input's Line In gain.
+    if (propertyName == "lineInBoost") {
+        bool ok = false;
+        const double v = value.toDouble(&ok);
+        const bool inRange = ok && std::isfinite(v)
+            && v >= kLineInBoostMin && v <= kLineInBoostMax;
+        // The words carry kLineInBoostMin and kLineInBoostMax (-34.5, 12.0).
+        return inRange ? QString()
+                       : QStringLiteral("Choose a Line In gain from -34.5 to 12.0 dB.");
     }
     if (propertyName == "monitorVolume") {
         bool ok = false;

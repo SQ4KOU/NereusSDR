@@ -238,7 +238,7 @@
         {
             "kind": "i64",
             "name": "transmitSettingsVersion",
-            "value": 2
+            "value": 3
         }
     ],
     "commands": [
@@ -624,6 +624,53 @@
             "capabilityVersion": 2,
             "minMinor": 11,
             "verb": "setTunePowerForTxBand"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "name",
+                    "optional": false
+                }
+            ],
+            "capability": "transmitSettingsVersion",
+            "capabilityVersion": 3,
+            "minMinor": 11,
+            "verb": "txProfile.select"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "name",
+                    "optional": false
+                }
+            ],
+            "capability": "transmitSettingsVersion",
+            "capabilityVersion": 3,
+            "minMinor": 11,
+            "verb": "txProfile.save"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "name",
+                    "optional": false
+                }
+            ],
+            "capability": "transmitSettingsVersion",
+            "capabilityVersion": 3,
+            "minMinor": 11,
+            "verb": "txProfile.delete"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "transmitSettingsVersion",
+            "capabilityVersion": 3,
+            "minMinor": 11,
+            "verb": "rade.resetVocoder"
         },
         {
             "arguments": [
@@ -4453,6 +4500,60 @@
                     "kind": "enum",
                     "name": "tuneDrivePowerSource",
                     "ordinal": 29
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "micBoost",
+                    "ordinal": 30
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "micXlr",
+                    "ordinal": 31
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "micTipRing",
+                    "ordinal": 32
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "micBias",
+                    "ordinal": 33
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "micPttDisabled",
+                    "ordinal": 34
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "lineIn",
+                    "ordinal": 35
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "lineInBoost",
+                    "ordinal": 36
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "activeTxProfile",
+                    "ordinal": 37
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "txProfilesJson",
+                    "ordinal": 38
                 }
             ]
         },

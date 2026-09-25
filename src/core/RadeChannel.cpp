@@ -151,6 +151,9 @@
 //                 rade_n_features_in_out() threshold and verify
 //                 resetTx() actually flushes the feature accumulator.
 //                 AI tooling: Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 3): resetTx()
+//                 counts its runs for the resetTxCountForTest() seam.
+//                 NereusSDR-original. AI tooling: Anthropic Claude Code.
 // =================================================================
 
 #include "core/RadeChannel.h"
@@ -801,6 +804,7 @@ void RadeChannel::resetTx()
     m_txAccum.clear();
     m_txFeatAccum.clear();
     m_radeTxCallCount = 0;
+    ++m_resetTxCountForTest;  // R-R3-49 (parity Task 3): test seam only
 }
 
 }  // namespace NereusSDR

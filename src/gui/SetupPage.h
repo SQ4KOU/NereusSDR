@@ -47,6 +47,14 @@ public:
     // overrides this and gates just them. The default does nothing.
     virtual void setTransmitSettingsPermitted(bool permitted, const QString& reason);
 
+    // R-R3-49 (parity Task 3): the same gate for settings a later
+    // transmitSettingsVersion brought (3: the radio microphone settings and
+    // the TX profiles). SetupDialog pushes each version MainWindow gives it;
+    // a page overrides this and gates the settings of the versions it
+    // holds. Never called in a local window. The default does nothing.
+    virtual void setTransmitSettingsPermittedAt(int version, bool permitted,
+                                                const QString& reason);
+
     // R-R3-21 / R-R3-10: whether the Core's settings can be changed from
     // this window right now. False in a remote window while it is not
     // connected to its Core (or has not received the Core's settings yet).

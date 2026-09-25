@@ -243,6 +243,10 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 2):
 //                                    requestTunePowerForTxBand.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 3): the TX
+//                                    profile requests and
+//                                    requestRadeResetVocoder.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -660,6 +664,12 @@ public:
     CommandOutcome requestTgxlBypass(bool on) override;
     // R-R3-49 (parity Task 2): see IStationLink.
     CommandOutcome requestTunePowerForTxBand(int watts) override;
+    // R-R3-49 (parity Task 3): see IStationLink. Sent only to a Core at
+    // transmitSettingsVersion 3.
+    CommandOutcome requestTxProfileSelect(const QString& name) override;
+    CommandOutcome requestTxProfileSave(const QString& name) override;
+    CommandOutcome requestTxProfileDelete(const QString& name) override;
+    CommandOutcome requestRadeResetVocoder() override;
     CommandOutcome requestApplyNnrModels(quint32 revision) override;
     bool nnrControlAvailable() const override;
     // R-R3-21: the Core advertised dspAssetVersion 2 on a session that

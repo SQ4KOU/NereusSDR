@@ -130,12 +130,17 @@
 //                and tuneDrivePowerSource applied as plain state, and a
 //                refused Tune Power change shows the Core's value again.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 3): the TX profile requests and
+//                requestRadeResetVocoder (transmitSettingsVersion 3); a
+//                refused profile request shows the Core's profile again.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
 
 #include "core/AppSettings.h"
 #include "core/FaultLog.h"
+#include "core/MicProfileManager.h"
 #include "core/session/MirrorPolicy.h"
 #include "core/session/ObjectRegistry.h"
 #include "core/session/SessionEndReasons.h"
@@ -3325,6 +3330,44 @@ StationClient::CommandOutcome StationClient::requestTunePowerForTxBand(int watts
                        QStringLiteral("the tune power"));
 }
 
+// R-R3-49 (parity Task 3): the TX profile combos, Setup > Audio > TX
+// Profile and the RADE applet's Reset vocoder. A Core below
+// transmitSettingsVersion 3 is not asked.
+StationClient::CommandOutcome StationClient::requestTxProfileSelect(const QString& name)
+{
+    if (!transmitSettingsAvailable(3)) {
+        return IStationLink::requestTxProfileSelect(name);
+    }
+    return sendCommand("txProfile.select", -1, { stringArgument("name", name) },
+                       QStringLiteral("the transmit profile"));
+}
+
+StationClient::CommandOutcome StationClient::requestTxProfileSave(const QString& name)
+{
+    if (!transmitSettingsAvailable(3)) {
+        return IStationLink::requestTxProfileSave(name);
+    }
+    return sendCommand("txProfile.save", -1, { stringArgument("name", name) },
+                       QStringLiteral("the transmit profile"));
+}
+
+StationClient::CommandOutcome StationClient::requestTxProfileDelete(const QString& name)
+{
+    if (!transmitSettingsAvailable(3)) {
+        return IStationLink::requestTxProfileDelete(name);
+    }
+    return sendCommand("txProfile.delete", -1, { stringArgument("name", name) },
+                       QStringLiteral("the transmit profile"));
+}
+
+StationClient::CommandOutcome StationClient::requestRadeResetVocoder()
+{
+    if (!transmitSettingsAvailable(3)) {
+        return IStationLink::requestRadeResetVocoder();
+    }
+    return sendCommand("rade.resetVocoder", -1, {}, QStringLiteral("the RADE vocoder reset"));
+}
+
 StationClient::CommandOutcome StationClient::requestDisconnectTgxl()
 {
     if (!remoteTgxlConfigAvailable()) {
@@ -3423,6 +3466,13 @@ void StationClient::handleCommandResult(const SessionMessage& message)
         // Core's value; the slider shows it again.
         if (pending.verb == "setTunePowerForTxBand") {
             m_radioModel->transmitModel().reportTunePowerForTxBandRefused();
+        }
+        // R-R3-49 (parity Task 3): a refused profile request leaves the
+        // Core's profile; every profile combo shows it again.
+        if (pending.verb.startsWith("txProfile.")) {
+            if (MicProfileManager* profiles = m_radioModel->micProfileManager()) {
+                profiles->reportStationRequestRefused();
+            }
         }
         // R-R3-46 fix wave: a refused band antenna leaves the window's
         // values as the Core's; the Setup tab that showed the click re-reads.
