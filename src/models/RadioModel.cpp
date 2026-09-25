@@ -4347,11 +4347,38 @@ void RadioModel::wireTransmitProcessingChain()
             ParaEqCurve::txEqPointsFromParaEqData(m_transmitModel.txEqParaEqData()));
     };
 
-    auto pushEqProfile = [this, buildEqProfile, postToTx]() {
+    auto postEqProfileNow = [this, buildEqProfile, postToTx]() {
         if (!m_txChannel) { return; }
         postToTx([a = buildEqProfile()](TxChannel* ch) {
             ch->setTxEqProfile(a.f, a.g, a.q);
         });
+    };
+    // Group A follow-up (group B fix wave): the parametric curve reaches
+    // WDSP at most once per 100 ms, as Thetis's does (the Q branch rebuilds
+    // on the TX thread): setupWDSPdataFromParaEQ only marks it pending
+    //   From Thetis eqform.cs:2973 [v2.10.3.15]  _pendingTX_Update = true;
+    // and the tick sends it,
+    //   From Thetis eqform.cs:3613-3614 [v2.10.3.15]  100,    // init delay
+    //                                                 100);   // interval
+    // with the curve as it is then. The legacy EQ still pushes at once, as
+    // Thetis's setTXEQProfile does.
+    if (m_txEqPushTimer == nullptr) {
+        m_txEqPushTimer = new QTimer(this);
+        m_txEqPushTimer->setSingleShot(true);
+        connect(m_txEqPushTimer, &QTimer::timeout, this, postEqProfileNow);
+    }
+    auto pushEqProfile = [this, postEqProfileNow]() {
+        if (!m_txChannel) { return; }
+        if (m_transmitModel.txEqUseLegacy()) {
+            m_txEqPushTimer->stop();
+            postEqProfileNow();
+            return;
+        }
+        // Trailing edge from the first change, not restarted by later ones,
+        // so a steady drag still reaches WDSP every tick.
+        if (!m_txEqPushTimer->isActive()) {
+            m_txEqPushTimer->start(kTxEqPushCoalesceMs);
+        }
     };
 
     // CFC profile rebuild — mirrors pushEqProfile above.  CFC operates

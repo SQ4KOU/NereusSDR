@@ -282,6 +282,7 @@ private slots:
     void newReasonsArePlain();
     void curveIsReadOnTheMainThreadAndHandedByValue();
     void txaFlushedTellsPureSignalOnTheMainThread();
+    void parametricEqPushesAreCoalescedToTheTick();
     void unreadableCurveIsRefusedWithAReason();
 
 private:
@@ -909,6 +910,7 @@ void TstRemoteTxEqCfc::localWindowPushesTheSameCurvesAsBefore()
     // 4000 Hz with Q 4, until the panel saves a curve.
     dlg.legacyToggle()->setChecked(false);
     QVERIFY(!tx.txEqUseLegacy());
+    QTest::qWait(150);   // the parametric curve's 100 ms tick (group B fix wave)
     std::vector<double> f;
     std::vector<double> g;
     std::vector<double> q;
@@ -922,6 +924,7 @@ void TstRemoteTxEqCfc::localWindowPushesTheSameCurvesAsBefore()
     // A parametric edit: every point of the widget's curve, with Q.
     dlg.findChild<QSpinBox*>(QStringLiteral("TxEqParaSelectedBandSpin"))->setValue(6);
     dlg.findChild<QDoubleSpinBox*>(QStringLiteral("TxEqParaGainSpin"))->setValue(-3.5);
+    QTest::qWait(150);   // the parametric curve's 100 ms tick (group B fix wave)
     widgetProfile(*dlg.parametricWidget(), f, g, q);
     QCOMPARE(g[6], -3.5);
     QVERIFY(sameCurve(channel.lastTxEqProfileFForTest(), f));
@@ -931,6 +934,7 @@ void TstRemoteTxEqCfc::localWindowPushesTheSameCurvesAsBefore()
     // Five bands: five points, no sampling.
     dlg.findChild<QRadioButton*>(QStringLiteral("TxEqParaBands5Radio"))->setChecked(true);
     QCOMPARE(dlg.parametricWidget()->bandCount(), 5);
+    QTest::qWait(150);   // the parametric curve's 100 ms tick (group B fix wave)
     widgetProfile(*dlg.parametricWidget(), f, g, q);
     QCOMPARE(f.size(), std::size_t{6});
     QVERIFY(sameCurve(channel.lastTxEqProfileFForTest(), f));
@@ -941,6 +945,7 @@ void TstRemoteTxEqCfc::localWindowPushesTheSameCurvesAsBefore()
     QVERIFY(useQ);
     useQ->setChecked(false);
     QVERIFY(!dlg.parametricWidget()->parametricEq());
+    QTest::qWait(150);   // the parametric curve's 100 ms tick (group B fix wave)
     QVERIFY(channel.lastTxEqProfileQForTest().empty());
     QCOMPARE(channel.lastTxEqProfileFForTest().size(), std::size_t{6});
 
@@ -1053,6 +1058,10 @@ void TstRemoteTxEqCfc::curveIsReadOnTheMainThreadAndHandedByValue()
 
     std::vector<double> firstGains;
     tx.setTxEqParaEqData(flatParametricBlob(6.0));
+    // Group B fix wave: parametric pushes are coalesced to Thetis's 100 ms
+    // tick, so the +6 dB push is posted when the tick fires, while the
+    // channel's thread is still held.
+    QTest::qWait(150);
     QMetaObject::invokeMethod(&channel, [&]() {
         firstGains = channel.lastTxEqProfileGForTest();
     });
@@ -1064,6 +1073,7 @@ void TstRemoteTxEqCfc::curveIsReadOnTheMainThreadAndHandedByValue()
         tx.setTxEqParaEqData(flatParametricBlob((i % 2) ? 3.0 : -3.0));
     }
     tx.setTxEqParaEqData(flatParametricBlob(-6.0));
+    QTest::qWait(150);   // the tick that posts the last curve
 
     std::vector<double> lastGains;
     QMetaObject::invokeMethod(&channel, [&]() {
@@ -1153,6 +1163,42 @@ void TstRemoteTxEqCfc::txaFlushedTellsPureSignalOnTheMainThread()
     QCOMPARE(stopThread, &worker);
     worker.quit();
     worker.wait();
+    core->injectTxChannelForTest(nullptr);
+}
+
+// Group A follow-up (group B fix wave): Thetis sends the parametric TX EQ
+// to WDSP at most once per 100 ms (eqform.cs setupWDSPdataFromParaEQ
+// marks it pending; dspUpdateTimerTick sends it, setupTimer runs every
+// 100 ms). A burst of curve edits makes one rebuild on the TX thread, with
+// the last curve; the legacy EQ still pushes at once, as Thetis's
+// setTXEQProfile does.
+void TstRemoteTxEqCfc::parametricEqPushesAreCoalescedToTheTick()
+{
+    auto core = makeStationRadioModel();
+    TxChannel channel(1);
+    core->wireTransmitChainForTest(&channel);
+    TransmitModel& tx = core->transmitModel();
+    tx.setTxEqUseLegacy(false);
+    tx.setTxEqParaEqData(flatParametricBlob(0.0));
+    QTest::qWait(150);
+    const int before = channel.txEqProfilePushCountForTest();
+
+    for (int i = 0; i < 20; ++i) {
+        tx.setTxEqParaEqData(flatParametricBlob((i % 2) ? 4.0 : -4.0));
+    }
+    tx.setTxEqParaEqData(flatParametricBlob(5.0));
+    QCOMPARE(channel.txEqProfilePushCountForTest(), before);
+    QTRY_COMPARE(channel.txEqProfilePushCountForTest(), before + 1);
+    QVERIFY(channel.lastTxEqProfileGForTest().size() > 1);
+    QCOMPARE(channel.lastTxEqProfileGForTest().at(1), 5.0);
+    QTest::qWait(150);
+    QCOMPARE(channel.txEqProfilePushCountForTest(), before + 1);
+
+    // The legacy EQ: at once, one push per change.
+    tx.setTxEqUseLegacy(true);
+    QCOMPARE(channel.txEqProfilePushCountForTest(), before + 2);
+    tx.setTxEqBand(3, 7);
+    QCOMPARE(channel.txEqProfilePushCountForTest(), before + 3);
     core->injectTxChannelForTest(nullptr);
 }
 

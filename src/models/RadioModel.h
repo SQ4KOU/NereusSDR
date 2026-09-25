@@ -4136,6 +4136,10 @@ private:
     // channel's stop on its thread, PureSignal on the main thread), and
     // the test observer of the second.
     void wireTxaFlushed();
+    // Group A follow-up (group B fix wave): the parametric TX EQ's pushes,
+    // coalesced to Thetis's 100 ms tick (eqform.cs:3613-3614 [v2.10.3.15]).
+    static constexpr int kTxEqPushCoalesceMs = 100;
+    QTimer* m_txEqPushTimer{nullptr};
     // Group B fix wave: applies a held DSP > Options TX change and a held
     // PA profile or calibration reload once the on-air rule clears.
     void releaseHeldOnAirWork();
