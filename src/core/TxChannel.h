@@ -1615,6 +1615,23 @@ public:
     void setTxEqProfile(const std::vector<double>& freqs10,
                         const std::vector<double>& gains11);
 
+    /// TX EQ: the profile exactly as Thetis hands it to WDSP.
+    ///
+    /// R-R3-49 (group A fix wave). Wraps SetTXAEQProfile(channel, nfreqs,
+    /// F, G, Q) with nfreqs = F.size() - 1: F[0] = 0, G[0] = the preamp,
+    /// F[1..nfreqs] / G[1..nfreqs] every point, Q[1..nfreqs] the points' Q
+    /// factors (Q[0] = 0), or Q empty for none (WDSP gets null). F and G
+    /// are the same size, Q empty or that size, and nfreqs 1 to 256
+    /// (WDSP's EQ_MAXIMUM_CONTROL_POINTS); anything else logs a warning and
+    /// changes nothing. The ten-band overload above builds F with its
+    /// pad slot and calls this with no Q.
+    ///
+    /// From Thetis eqform.cs:3041-3072 [v2.10.3.15] (sendTXDspUpdate),
+    /// eqform.cs:2777-2816 (setTXEQProfile), dsp.cs:787-788 and
+    /// wdsp/eq.c:780-806 (SetTXAEQProfile).
+    void setTxEqProfile(const std::vector<double>& F, const std::vector<double>& G,
+                        const std::vector<double>& Q);
+
     /// TX EQ — filter coefficient count.
     ///
     /// Wraps SetTXAEQNC(channel, nc).  Default 2048 per WDSP create_eqp
@@ -2362,8 +2379,10 @@ public:
     int    lastTxAmCarrierLevelForTest()      const noexcept { return m_amCarrierPct; }
     // R-R3-49 (parity Task 4): the TX EQ, CFC, phase rotator, CESSB,
     // leveler and ALC settings, from the carries and the last values below.
-    const std::vector<double>& lastTxEqProfileFreqsForTest() const noexcept { return m_txEqProfileFreqsLast; }
-    const std::vector<double>& lastTxEqProfileGainsForTest() const noexcept { return m_txEqProfileGainsLast; }
+    // The F, G and Q of the last SetTXAEQProfile (Q empty for null).
+    const std::vector<double>& lastTxEqProfileFForTest() const noexcept { return m_txEqProfileFLast; }
+    const std::vector<double>& lastTxEqProfileGForTest() const noexcept { return m_txEqProfileGLast; }
+    const std::vector<double>& lastTxEqProfileQForTest() const noexcept { return m_txEqProfileQLast; }
     int    txEqProfilePushCountForTest()      const noexcept { return m_txEqProfilePushCount; }
     int    lastTxEqNcForTest()                const noexcept { return m_txEqNcLast; }
     bool   lastTxEqMpForTest()                const noexcept { return m_txEqMpLast; }
@@ -3107,8 +3126,9 @@ private:
     bool    m_txEqRunningLast {false};
     // R-R3-49 (parity Task 4): the last values of the setters that keep no
     // carry of their own, for the test seam only.
-    std::vector<double> m_txEqProfileFreqsLast;
-    std::vector<double> m_txEqProfileGainsLast;
+    std::vector<double> m_txEqProfileFLast;
+    std::vector<double> m_txEqProfileGLast;
+    std::vector<double> m_txEqProfileQLast;
     int     m_txEqProfilePushCount {0};
     int     m_txEqNcLast      {2048};
     bool    m_txEqMpLast      {false};

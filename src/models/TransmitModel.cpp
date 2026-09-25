@@ -862,8 +862,8 @@ QString TransmitModel::settingRangeRefusal(const QByteArray& propertyName,
     // envelope and the curve JSON, so one loader checks both.
     if (propertyName == "txEqParaEqData" || propertyName == "cfcParaEqData") {
         const QString data = value.toString();
-        ParaEqCurve::Curve curve;
-        if (data.isEmpty() || ParaEqCurve::txEqCurveFromParaEqData(data, curve)) {
+        ParaEqCurve::TxEqPoints points;
+        if (data.isEmpty() || ParaEqCurve::loadTxEqPoints(data, points)) {
             return {};
         }
         return QStringLiteral("The Core could not read that equalizer curve. Save the curve again and retry.");

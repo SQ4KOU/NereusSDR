@@ -1141,7 +1141,7 @@ void SetTXAEQRun(int channel, int run);
 void SetTXAEQNC(int channel, int nc);
 // From Thetis wdsp/eq.c:767-776 [v2.10.3.13] — SetTXAEQMP (minimum-phase flag).
 void SetTXAEQMP(int channel, int mp);
-// From Thetis wdsp/eq.c:780-806 [v2.10.3.15] and dsp.cs:787-788 — SetTXAEQProfile.
+// From Thetis wdsp/eq.c:780-806 [v2.10.3.15] and dsp.cs:787-788: SetTXAEQProfile.
 //   F[0..nfreqs] freqs Hz (F[0] unused / preamp pad)
 //   G[0..nfreqs] gains dB (G[0] = preamp)
 //   Q[0..nfreqs] Q factors (Q[0] unused), or nullptr: the legacy EQ and the

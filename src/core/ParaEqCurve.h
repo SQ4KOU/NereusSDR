@@ -4,9 +4,10 @@
 //
 // Ported from Thetis source:
 //   Project Files/Source/Console/ucParametricEq.cs (the response curve,
-//   JSON load, point ordering and default points) and
+//   PointsFromJson and GetDefaults) and
 //   Project Files/Source/Console/eqform.cs (the TX EQ panel's widget
-//   limits), original licences from Thetis source are included below.
+//   limits, ParaEQTXData's setter, sendTXDspUpdate and setTXEQProfile),
+//   original licences from Thetis source are included below.
 //   Sole author of ucParametricEq.cs: Richard Samphire (MW0LGE).
 //
 // Declarations; the implementation is in ParaEqCurve.cpp.
@@ -21,6 +22,15 @@
 //                 numbers as the dialog (tst_para_eq_curve).
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                 Code.
+//   2026-09-25 - R-R3-49 (group A fix wave): the TX EQ reaches WDSP as
+//                 Thetis sends it. The Core decodes a saved curve as
+//                 Thetis's transmit path does (PointsFromJson, GetDefaults
+//                 for a blank or broken value) and builds the arrays of
+//                 sendTXDspUpdate (every point's F and G, Q when the panel
+//                 uses Q factors) and of setTXEQProfile for the legacy EQ.
+//                 The ten-point sampling, the widget-load port and the
+//                 point ordering it needed are gone. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // --- From ucParametricEq.cs ---
@@ -109,8 +119,8 @@ mw0lge@grange-lane.co.uk
 #pragma once
 
 #include <QString>
-#include <QVector>
 
+#include <array>
 #include <cmath>
 #include <vector>
 
@@ -118,36 +128,21 @@ namespace NereusSDR {
 
 namespace ParaEqCurve {
 
-// One band of a parametric curve (ucParametricEq EqPoint without its
-// display colour).
-struct Point {
-    int    bandId      = 0;
-    double frequencyHz = 0.0;
-    double gainDb      = 0.0;
-    double q           = 4.0;
-};
+// The TX EQ panel's widget limits a saved curve is clamped to. From Thetis
+// eqform.cs:946-970 [v2.10.3.15] (ucParametricEq1's property block);
+// TxEqDialog applies the same values to its widget.
+inline constexpr double kTxEqDbMin = -24.0;   // cs:960
+inline constexpr double kTxEqDbMax =  24.0;   // cs:959
+inline constexpr double kTxEqQMin  =   0.2;   // cs:970
+inline constexpr double kTxEqQMax  =  20.0;   // cs:969
 
-// A parametric curve as the TX EQ panel holds it.
-struct Curve {
-    QVector<Point> points;
-    bool   parametricEq   = true;
-    double globalGainDb   = 0.0;
-    double frequencyMinHz = 0.0;
-    double frequencyMaxHz = 2700.0;
-};
-
-// The TX EQ panel's widget limits. From Thetis eqform.cs:946-970
-// [v2.10.3.15] (ucParametricEq1's property block); TxEqDialog applies
-// the same values to its widget.
-inline constexpr double kTxEqDbMin               = -24.0;   // cs:960
-inline constexpr double kTxEqDbMax               =  24.0;   // cs:959
-inline constexpr double kTxEqMinHz               =   0.0;   // cs:963
-inline constexpr double kTxEqMaxHz               = 2700.0;  // cs:962
-inline constexpr double kTxEqQMin                =   0.2;   // cs:970
-inline constexpr double kTxEqQMax                =  20.0;   // cs:969
-inline constexpr double kTxEqGlobalGainDb        =   0.0;   // cs:964
-inline constexpr double kTxEqMinPointSpacingHz   =   5.0;   // cs:966
-inline constexpr int    kTxEqBandCount           = 10;      // TxEqDialog default
+// ucParametricEq.GetDefaults' default arguments, as eqform's
+// ParaEQTXData setter calls it for a value it cannot load. From Thetis
+// ucParametricEq.cs:1107-1131 [v2.10.3.15].
+inline constexpr int    kTxEqDefaultBandCount = 10;
+inline constexpr double kTxEqDefaultMinHz     = 0.0;
+inline constexpr double kTxEqDefaultMaxHz     = 4000.0;
+inline constexpr double kTxEqDefaultQ         = 4.0;
 
 // From Thetis ucParametricEq.cs:2983-2988 [v2.10.3.15].
 inline double clamp(double v, double lo, double hi)
@@ -163,8 +158,8 @@ inline double clamp(double v, double lo, double hi)
 //     clamped to the first and last gain at the edges;
 //   - parametric: a Gaussian per point, FWHM = span / (q*3) (at least
 //     span/6000), sigma = FWHM / 2.3548200450309493, summed unweighted.
-// A template so ParametricEqWidget's own points (EqPoint) and Point both
-// use it without a copy per call.
+// A template over the point type: ParametricEqWidget's EqPoint (the
+// panel's display) uses it.
 template <typename PointList>
 double responseDb(const PointList& points, bool parametricEq,
                   double frequencyMinHz, double frequencyMaxHz,
@@ -208,30 +203,56 @@ double responseDb(const PointList& points, bool parametricEq,
     return sum;
 }
 
-/// The TX EQ panel's curve before anything is loaded: ten flat bands
-/// from 0 to 2700 Hz, parametric (what TxEqDialog's widget starts with).
-Curve defaultTxEqCurve();
+/// The TX EQ's parametric points as Thetis's EQ form holds them for WDSP
+/// (eqform.cs ParaEQState's TX_F, TX_G, TX_Q, TX_Preamp, TX_minHz,
+/// TX_maxHz, TX_ParametricEQ and TX_BandCount).
+struct TxEqPoints {
+    std::vector<double> f;
+    std::vector<double> g;
+    std::vector<double> q;
+    double preampDb     = 0.0;
+    double minHz        = kTxEqDefaultMinHz;
+    double maxHz        = kTxEqDefaultMaxHz;
+    bool   parametricEq = true;
+    int    bandCount    = kTxEqDefaultBandCount;
+};
 
-/// A curve's response with the TX EQ panel's Q limits.
-double txEqResponseDb(const Curve& curve, double frequencyHz);
+/// ucParametricEq.PointsFromJson with the TX panel's limits: the points of
+/// a saved curve's JSON, each clamped and rounded as Thetis does, in the
+/// saved order, the first and last locked to the range's ends. False,
+/// leaving `out` alone, when Thetis would not load it.
+bool pointsFromJson(const QString& json, TxEqPoints& out);
 
-/// The TX EQ panel's curve after loading `json` (ucParametricEq
-/// LoadFromJson into the panel's widget as TxEqDialog builds it: ten
-/// flat bands from 0 to 2700 Hz). False, leaving `out` alone, when the
-/// JSON is not a curve the widget would load.
-bool loadTxEqCurve(const QString& json, Curve& out);
+/// ucParametricEq.GetDefaults with its default arguments: ten flat points
+/// from 0 to 4000 Hz, Q 4, parametric, no preamp.
+TxEqPoints defaultTxEqPoints();
 
-/// The TX EQ panel's curve from a saved txEqParaEqData value (the
-/// ParaEqEnvelope blob, or raw JSON from an early build). False when the
-/// value holds no curve.
-bool txEqCurveFromParaEqData(const QString& paraEqData, Curve& out);
+/// The points a saved txEqParaEqData value holds (the gzip and base64url
+/// envelope Thetis saves, or raw JSON from an early NereusSDR build).
+/// False when it holds none Thetis would load.
+bool loadTxEqPoints(const QString& paraEqData, TxEqPoints& out);
 
-/// The curve on the TX channel's ten EQ bands, as SetTXAEQProfile takes
-/// it: `freqs` ten centres in Hz, `gains` the preamp then ten band gains
-/// in dB. Ten bands go one to one; any other count is sampled at ten
-/// evenly spaced frequencies across the curve's range.
-void sampleTxEqProfile(const Curve& curve, std::vector<double>& freqs,
-                       std::vector<double>& gains);
+/// eqform.cs ParaEQTXData's setter: the saved value's points, or
+/// GetDefaults' when it holds none (a blank or broken value).
+TxEqPoints txEqPointsFromParaEqData(const QString& paraEqData);
+
+/// The arrays Thetis hands WDSP's SetTXAEQProfile(channel, nfreqs, F, G, Q):
+/// nfreqs = F.size() - 1; F[0] = 0 and G[0] = the preamp; Q[0] = 0, and
+/// `q` empty when Thetis passes no Q.
+struct TxEqProfile {
+    std::vector<double> f;
+    std::vector<double> g;
+    std::vector<double> q;
+};
+
+/// eqform.cs sendTXDspUpdate: every point's F and G, and Q when the panel
+/// uses Q factors.
+TxEqProfile txEqProfileFromPoints(const TxEqPoints& points);
+
+/// eqform.cs setTXEQProfile, the legacy ten-band EQ: the band centres and
+/// gains and the preamp, no Q.
+TxEqProfile legacyTxEqProfile(int preampDb, const std::array<int, 10>& bandGainsDb,
+                              const std::array<int, 10>& bandFreqsHz);
 
 } // namespace ParaEqCurve
 

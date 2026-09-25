@@ -179,9 +179,11 @@ struct Session {
     quint32 nextId = 94000;
 };
 
+// The legacy EQ's F as Thetis's setTXEQProfile hands it to WDSP
+// (eqform.cs:2777-2816 [v2.10.3.15]): F[0] = 0, then the ten centres.
 std::vector<double> legacyFreqs(const TransmitModel& tx)
 {
-    std::vector<double> f;
+    std::vector<double> f{0.0};
     for (int i = 0; i < 10; ++i) { f.push_back(tx.txEqFreq(i)); }
     return f;
 }
@@ -193,29 +195,23 @@ std::vector<double> legacyGains(const TransmitModel& tx)
     return g;
 }
 
-// What TxEqDialog::pushParametricCurveToWdsp pushed before parity Task 4,
-// from the dialog's own widget (the characterisation in tst_para_eq_curve).
-void dialogSample(const ParametricEqWidget& w, std::vector<double>& f, std::vector<double>& g)
+// What Thetis's sendTXDspUpdate hands WDSP for the curve a dialog's widget
+// holds (eqform.cs:3041-3072 [v2.10.3.15]): F[0] = 0, G[0] = the preamp,
+// Q[0] = 0, then every point, and Q only with Q factors on.
+void widgetProfile(const ParametricEqWidget& w, std::vector<double>& f,
+                   std::vector<double>& g, std::vector<double>& q)
 {
-    f.assign(10, 0.0);
-    g.assign(11, 0.0);
-    g[0] = w.globalGainDb();
-    if (w.bandCount() == 10) {
-        for (int i = 0; i < 10; ++i) {
-            double pf = 0.0, pg = 0.0, pq = 0.0;
-            w.getPointData(i, pf, pg, pq);
-            f[i] = pf;
-            g[i + 1] = pg;
-        }
-        return;
+    f.assign(1, 0.0);
+    g.assign(1, w.globalGainDb());
+    q.assign(1, 0.0);
+    for (int i = 0; i < w.bandCount(); ++i) {
+        double pf = 0.0, pg = 0.0, pq = 0.0;
+        w.getPointData(i, pf, pg, pq);
+        f.push_back(pf);
+        g.push_back(pg);
+        q.push_back(pq);
     }
-    const double minHz = w.frequencyMinHz();
-    const double maxHz = w.frequencyMaxHz();
-    const double step = (maxHz > minHz) ? (maxHz - minHz) / 9.0 : 0.0;
-    for (int i = 0; i < 10; ++i) {
-        f[i] = minHz + step * i;
-        g[i + 1] = w.responseDbAtFrequency(f[i]);
-    }
+    if (!w.parametricEq()) { q.clear(); }
 }
 
 bool sameCurve(const std::vector<double>& a, const std::vector<double>& b)
@@ -225,19 +221,6 @@ bool sameCurve(const std::vector<double>& a, const std::vector<double>& b)
         if (!qFuzzyCompare(1.0 + a[i], 1.0 + b[i])) { return false; }
     }
     return true;
-}
-
-std::vector<double> coreCurveFreqs(const TransmitModel& tx, std::vector<double>* gains)
-{
-    ParaEqCurve::Curve curve;
-    if (!ParaEqCurve::txEqCurveFromParaEqData(tx.txEqParaEqData(), curve)) {
-        curve = ParaEqCurve::defaultTxEqCurve();
-    }
-    std::vector<double> f;
-    std::vector<double> g;
-    ParaEqCurve::sampleTxEqProfile(curve, f, g);
-    if (gains) { *gains = g; }
-    return f;
 }
 
 // A five-point parametric curve whose gains are all `gainDb`.
@@ -449,8 +432,8 @@ void TstRemoteTxEqCfc::eqRoundTripsToTheCoresTxChannel()
         QCOMPARE(coreTx.txEqFreq(i), 100 + 200 * i);
     }
     // The Core's TX channel has the ten-band curve and the EQ globals.
-    QVERIFY(sameCurve(s.txChannel.lastTxEqProfileFreqsForTest(), legacyFreqs(coreTx)));
-    QVERIFY(sameCurve(s.txChannel.lastTxEqProfileGainsForTest(), legacyGains(coreTx)));
+    QVERIFY(sameCurve(s.txChannel.lastTxEqProfileFForTest(), legacyFreqs(coreTx)));
+    QVERIFY(sameCurve(s.txChannel.lastTxEqProfileGForTest(), legacyGains(coreTx)));
     QCOMPARE(s.txChannel.lastTxEqNcForTest(), 4096);
     QVERIFY(s.txChannel.lastTxEqMpForTest());
     QCOMPARE(s.txChannel.lastTxEqCtfmodeForTest(), 1);
@@ -493,25 +476,31 @@ void TstRemoteTxEqCfc::parametricCurveReachesTheCoresTxChannel()
     windowTx.setTxEqParaEqData(blob);
     QTRY_COMPARE(coreTx.txEqParaEqData(), blob);
     // Still legacy: the ten-band curve stays on the channel.
-    QVERIFY(sameCurve(s.txChannel.lastTxEqProfileGainsForTest(), legacyGains(coreTx)));
+    QVERIFY(sameCurve(s.txChannel.lastTxEqProfileGForTest(), legacyGains(coreTx)));
 
     windowTx.setTxEqUseLegacy(false);
     QTRY_VERIFY(!coreTx.txEqUseLegacy());
-    std::vector<double> gains;
-    const std::vector<double> freqs = coreCurveFreqs(coreTx, &gains);
-    QTRY_VERIFY(sameCurve(s.txChannel.lastTxEqProfileFreqsForTest(), freqs));
-    QVERIFY(sameCurve(s.txChannel.lastTxEqProfileGainsForTest(), gains));
-    QCOMPARE(gains.front(), 1.5);
+    // Every point as Thetis's sendTXDspUpdate hands it to WDSP (worked by
+    // hand from eqform.cs:3041-3072 and ucParametricEq.cs PointsFromJson
+    // [v2.10.3.15]): F[0] = 0, G[0] = the preamp, Q[0] = 0, Q factors on.
+    const std::vector<double> freqs{0, 100, 800, 1500, 2200, 2900};
+    const std::vector<double> gains{1.5, -4, 6.5, -4, 6.5, -4};
+    const std::vector<double> qs{0, 2, 2, 2, 2, 2};
+    QTRY_VERIFY(sameCurve(s.txChannel.lastTxEqProfileFForTest(), freqs));
+    QVERIFY(sameCurve(s.txChannel.lastTxEqProfileGForTest(), gains));
+    QVERIFY(sameCurve(s.txChannel.lastTxEqProfileQForTest(), qs));
 
     // A legacy band change in parametric mode keeps the parametric curve.
     windowTx.setTxEqBand(0, 3);
     QTRY_COMPARE(coreTx.txEqBand(0), 3);
-    QVERIFY(sameCurve(s.txChannel.lastTxEqProfileGainsForTest(), gains));
+    QVERIFY(sameCurve(s.txChannel.lastTxEqProfileGForTest(), gains));
 
     // Back to legacy: the ten-band curve returns.
     windowTx.setTxEqUseLegacy(true);
     QTRY_VERIFY(coreTx.txEqUseLegacy());
-    QTRY_VERIFY(sameCurve(s.txChannel.lastTxEqProfileGainsForTest(), legacyGains(coreTx)));
+    QTRY_VERIFY(sameCurve(s.txChannel.lastTxEqProfileGForTest(), legacyGains(coreTx)));
+    QVERIFY(sameCurve(s.txChannel.lastTxEqProfileFForTest(), legacyFreqs(coreTx)));
+    QVERIFY(s.txChannel.lastTxEqProfileQForTest().empty());
 
     // The Core's own change shows in the window.
     coreTx.setTxEqUseLegacy(false);
@@ -693,7 +682,7 @@ void TstRemoteTxEqCfc::remoteEqDialogShowsAndChangesTheCoresValues()
     QCOMPARE(coreTx.txEqFreq(6), 2300);
     QCOMPARE(coreTx.txEqPreamp(), 9);
     QCOMPARE(coreTx.txEqNc(), 512);
-    QVERIFY(sameCurve(s.txChannel.lastTxEqProfileGainsForTest(), legacyGains(coreTx)));
+    QVERIFY(sameCurve(s.txChannel.lastTxEqProfileGForTest(), legacyGains(coreTx)));
 
     // A Core change shows in the open dialog.
     coreTx.setTxEqBand(6, 2);
@@ -713,13 +702,15 @@ void TstRemoteTxEqCfc::remoteEqDialogShowsAndChangesTheCoresValues()
     const QString blob = windowTx.txEqParaEqData();
     QVERIFY(!blob.isEmpty());
     QTRY_COMPARE(coreTx.txEqParaEqData(), blob);
-    // The Core's TX channel has the curve the window drew, as a local
-    // window's dialog would have pushed it.
+    // The Core's TX channel has every point of the curve the window drew,
+    // as Thetis hands it to WDSP.
     std::vector<double> f;
     std::vector<double> g;
-    dialogSample(*dlg.parametricWidget(), f, g);
-    QTRY_VERIFY(sameCurve(s.txChannel.lastTxEqProfileGainsForTest(), g));
-    QVERIFY(sameCurve(s.txChannel.lastTxEqProfileFreqsForTest(), f));
+    std::vector<double> q;
+    widgetProfile(*dlg.parametricWidget(), f, g, q);
+    QTRY_VERIFY(sameCurve(s.txChannel.lastTxEqProfileGForTest(), g));
+    QVERIFY(sameCurve(s.txChannel.lastTxEqProfileFForTest(), f));
+    QVERIFY(sameCurve(s.txChannel.lastTxEqProfileQForTest(), q));
     QCOMPARE(g[4], 6.5);
 
     // The Core's Legacy box moves the window's.
@@ -907,37 +898,55 @@ void TstRemoteTxEqCfc::localWindowPushesTheSameCurvesAsBefore()
     // The legacy panel: a band edit gives the ten-band curve.
     dlg.findChild<QSpinBox*>(QStringLiteral("TxEqBandSpin3"))->setValue(5);
     QCOMPARE(tx.txEqBand(3), 5);
-    QVERIFY(sameCurve(channel.lastTxEqProfileGainsForTest(), legacyGains(tx)));
-    QVERIFY(sameCurve(channel.lastTxEqProfileFreqsForTest(), legacyFreqs(tx)));
+    QVERIFY(sameCurve(channel.lastTxEqProfileGForTest(), legacyGains(tx)));
+    QVERIFY(sameCurve(channel.lastTxEqProfileFForTest(), legacyFreqs(tx)));
 
-    // Into the parametric panel: the widget's curve, as the dialog pushed
-    // it before (it now goes through the model and RadioModel).
+    QVERIFY(channel.lastTxEqProfileQForTest().empty());
+
+    // Into the parametric panel with nothing saved: Thetis's GetDefaults
+    // (ParaEQTXData's setter for a blank value), ten flat points from 0 to
+    // 4000 Hz with Q 4, until the panel saves a curve.
     dlg.legacyToggle()->setChecked(false);
     QVERIFY(!tx.txEqUseLegacy());
     std::vector<double> f;
     std::vector<double> g;
-    dialogSample(*dlg.parametricWidget(), f, g);
-    QVERIFY(sameCurve(channel.lastTxEqProfileFreqsForTest(), f));
-    QVERIFY(sameCurve(channel.lastTxEqProfileGainsForTest(), g));
+    std::vector<double> q;
+    QVERIFY(tx.txEqParaEqData().isEmpty());
+    QVERIFY(sameCurve(channel.lastTxEqProfileFForTest(),
+                      {0, 0, 4000.0 / 9, 8000.0 / 9, 12000.0 / 9, 16000.0 / 9,
+                       20000.0 / 9, 24000.0 / 9, 28000.0 / 9, 32000.0 / 9, 4000}));
+    QVERIFY(sameCurve(channel.lastTxEqProfileGForTest(), std::vector<double>(11, 0.0)));
+    QVERIFY(sameCurve(channel.lastTxEqProfileQForTest(), {0, 4, 4, 4, 4, 4, 4, 4, 4, 4, 4}));
 
-    // A parametric edit.
+    // A parametric edit: every point of the widget's curve, with Q.
     dlg.findChild<QSpinBox*>(QStringLiteral("TxEqParaSelectedBandSpin"))->setValue(6);
     dlg.findChild<QDoubleSpinBox*>(QStringLiteral("TxEqParaGainSpin"))->setValue(-3.5);
-    dialogSample(*dlg.parametricWidget(), f, g);
+    widgetProfile(*dlg.parametricWidget(), f, g, q);
     QCOMPARE(g[6], -3.5);
-    QVERIFY(sameCurve(channel.lastTxEqProfileFreqsForTest(), f));
-    QVERIFY(sameCurve(channel.lastTxEqProfileGainsForTest(), g));
-    // Five bands: the curve sampled at ten frequencies, as before.
+    QVERIFY(sameCurve(channel.lastTxEqProfileFForTest(), f));
+    QVERIFY(sameCurve(channel.lastTxEqProfileGForTest(), g));
+    QVERIFY(sameCurve(channel.lastTxEqProfileQForTest(), q));
+    QCOMPARE(q.size(), std::size_t{11});
+    // Five bands: five points, no sampling.
     dlg.findChild<QRadioButton*>(QStringLiteral("TxEqParaBands5Radio"))->setChecked(true);
     QCOMPARE(dlg.parametricWidget()->bandCount(), 5);
-    dialogSample(*dlg.parametricWidget(), f, g);
-    QVERIFY(sameCurve(channel.lastTxEqProfileFreqsForTest(), f));
-    QVERIFY(sameCurve(channel.lastTxEqProfileGainsForTest(), g));
+    widgetProfile(*dlg.parametricWidget(), f, g, q);
+    QCOMPARE(f.size(), std::size_t{6});
+    QVERIFY(sameCurve(channel.lastTxEqProfileFForTest(), f));
+    QVERIFY(sameCurve(channel.lastTxEqProfileGForTest(), g));
+    QVERIFY(sameCurve(channel.lastTxEqProfileQForTest(), q));
+    // Q factors off: the same points, no Q.
+    auto* useQ = dlg.findChild<QCheckBox*>(QStringLiteral("TxEqParaUseQFactorsChk"));
+    QVERIFY(useQ);
+    useQ->setChecked(false);
+    QVERIFY(!dlg.parametricWidget()->parametricEq());
+    QVERIFY(channel.lastTxEqProfileQForTest().empty());
+    QCOMPARE(channel.lastTxEqProfileFForTest().size(), std::size_t{6});
 
     // Back to the legacy panel: the ten-band curve again.
     dlg.legacyToggle()->setChecked(true);
     QVERIFY(tx.txEqUseLegacy());
-    QVERIFY(sameCurve(channel.lastTxEqProfileGainsForTest(), legacyGains(tx)));
+    QVERIFY(sameCurve(channel.lastTxEqProfileGForTest(), legacyGains(tx)));
 
     // The dialog itself no longer holds the Legacy box as this computer's
     // setting.
@@ -1044,7 +1053,7 @@ void TstRemoteTxEqCfc::curveIsReadOnTheMainThreadAndHandedByValue()
     std::vector<double> firstGains;
     tx.setTxEqParaEqData(flatParametricBlob(6.0));
     QMetaObject::invokeMethod(&channel, [&]() {
-        firstGains = channel.lastTxEqProfileGainsForTest();
+        firstGains = channel.lastTxEqProfileGForTest();
     });
     tx.setTxEqParaEqData(flatParametricBlob(-6.0));
     release.release();
@@ -1057,7 +1066,7 @@ void TstRemoteTxEqCfc::curveIsReadOnTheMainThreadAndHandedByValue()
 
     std::vector<double> lastGains;
     QMetaObject::invokeMethod(&channel, [&]() {
-        lastGains = channel.lastTxEqProfileGainsForTest();
+        lastGains = channel.lastTxEqProfileGForTest();
         channel.moveToThread(QCoreApplication::instance()->thread());
     }, Qt::BlockingQueuedConnection);
     worker.quit();

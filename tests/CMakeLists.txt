@@ -2752,9 +2752,9 @@ nereus_add_test(tst_phone_applet_vax_toggle)
 # instance() singleton pattern.
 nereus_add_test(tst_tx_eq_dialog)
 
-# R-R3-49 (parity Task 4): the TX EQ parametric curve the TX channel gets,
-# pinned from the dialog's own sampling before it moved to ParaEqCurve
-# (src/core), where the Core runs it from txEqParaEqData.
+# R-R3-49 (parity Task 4, group A fix wave): the TX EQ arrays the TX
+# channel gets, as Thetis's sendTXDspUpdate and setTXEQProfile hand them to
+# WDSP, worked by hand from Thetis's code.
 nereus_add_test(tst_para_eq_curve)
 
 # ── Phase 3M-3a-ii Batch 6 Task A: TxCfcDialog (10-band CFC editor) ──────

@@ -557,6 +557,7 @@ warren@wpratt.com
 #include "core/ConnectionDiagnostics.h"
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 #include <functional>
 #include <limits>
@@ -4237,50 +4238,40 @@ void RadioModel::wireTransmitProcessingChain()
         QMetaObject::invokeMethod(ch, [ch, apply = std::move(apply)]() { apply(ch); });
     };
 
-    struct TxEqArrays {
-        std::vector<double> freqs;
-        std::vector<double> gains;
-    };
-
+    // R-R3-49 (group A fix wave): the arrays Thetis hands WDSP. The legacy
+    // EQ is eqform.cs setTXEQProfile (ten band centres and gains and the
+    // preamp, no Q); the parametric panel is sendTXDspUpdate (every
+    // point's F and G, and Q when the panel uses Q factors), from the
+    // points ParaEQTXData's setter decodes (PointsFromJson, or
+    // GetDefaults for a blank or broken value).
     auto buildLegacyEqProfile = [this]() {
-        TxEqArrays a;
-        a.freqs.assign(10, 0.0);
-        a.gains.assign(11, 0.0);
-        a.gains[0] = static_cast<double>(m_transmitModel.txEqPreamp());
+        std::array<int, 10> gains{};
+        std::array<int, 10> freqs{};
         for (int i = 0; i < 10; ++i) {
-            a.freqs[static_cast<std::size_t>(i)] =
-                static_cast<double>(m_transmitModel.txEqFreq(i));
-            a.gains[static_cast<std::size_t>(i + 1)] =
-                static_cast<double>(m_transmitModel.txEqBand(i));
+            gains[static_cast<std::size_t>(i)] = m_transmitModel.txEqBand(i);
+            freqs[static_cast<std::size_t>(i)] = m_transmitModel.txEqFreq(i);
         }
-        return a;
+        return ParaEqCurve::legacyTxEqProfile(m_transmitModel.txEqPreamp(), gains, freqs);
     };
 
     // R-R3-49 (parity Task 4): the curve the Legacy EQ box picks. Thetis
     // eqform.cs chkLegacyEQ_CheckedChanged [v2.10.3.15] calls
     // setTXEQProfile for the legacy EQ and the parametric path otherwise;
     // Thetis keeps the box with the TX profile (EQUseLegacy). The Core
-    // applies the parametric curve saved in txEqParaEqData itself
-    // (ParaEqCurve, moved out of the dialog), so a window, local or
-    // remote, only changes the model. A saved value with no curve gives
-    // the panel's flat default curve, as the dialog did.
+    // applies the parametric curve saved in txEqParaEqData itself, so a
+    // window, local or remote, only changes the model.
     auto buildEqProfile = [this, buildLegacyEqProfile]() {
         if (m_transmitModel.txEqUseLegacy()) {
             return buildLegacyEqProfile();
         }
-        ParaEqCurve::Curve curve;
-        if (!ParaEqCurve::txEqCurveFromParaEqData(m_transmitModel.txEqParaEqData(), curve)) {
-            curve = ParaEqCurve::defaultTxEqCurve();
-        }
-        TxEqArrays a;
-        ParaEqCurve::sampleTxEqProfile(curve, a.freqs, a.gains);
-        return a;
+        return ParaEqCurve::txEqProfileFromPoints(
+            ParaEqCurve::txEqPointsFromParaEqData(m_transmitModel.txEqParaEqData()));
     };
 
     auto pushEqProfile = [this, buildEqProfile, postToTx]() {
         if (!m_txChannel) { return; }
         postToTx([a = buildEqProfile()](TxChannel* ch) {
-            ch->setTxEqProfile(a.freqs, a.gains);
+            ch->setTxEqProfile(a.f, a.g, a.q);
         });
     };
 
@@ -4371,7 +4362,7 @@ void RadioModel::wireTransmitProcessingChain()
                   dexpHighCut = tm.dexpHighCutHz(),
                   dexpScfOn = tm.dexpSideChannelFilterEnabled()](TxChannel* ch) {
             ch->setTxEqRunning(eqOn);
-            ch->setTxEqProfile(eq.freqs, eq.gains);
+            ch->setTxEqProfile(eq.f, eq.g, eq.q);
             ch->setTxEqNc(eqNc);
             ch->setTxEqMp(eqMp);
             ch->setTxEqCtfmode(eqCtfmode);

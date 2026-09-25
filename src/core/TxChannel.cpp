@@ -335,6 +335,11 @@ warren@wpratt.com
 //                 profile and phase rotator run record their last values
 //                 for the test read-back. J.J. Boyd (KG4VCF), AI-assisted
 //                 via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (group A fix wave): setTxEqProfile(F, G, Q) hands
+//                 SetTXAEQProfile the arrays Thetis's sendTXDspUpdate and
+//                 setTXEQProfile do, Q included (eqform.cs:3041-3072
+//                 [v2.10.3.15]); the ten-band overload calls it with no Q.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "TxChannel.h"  // brings in WdspTypes.h (DSPMode)
@@ -3664,34 +3669,47 @@ void TxChannel::setTxEqProfile(const std::vector<double>& freqs10,
                          << gains11.size() << "— ignoring call";
         return;
     }
-    m_txEqProfileFreqsLast = freqs10;  // R-R3-49 (parity Task 4): test read-back only
-    m_txEqProfileGainsLast = gains11;
-    ++m_txEqProfilePushCount;
-
-#ifdef HAVE_WDSP
-    if (txa[m_channelId].rsmpin.p == nullptr) return;
-    // From Thetis wdsp/eq.c:779-804 [v2.10.3.13] — SetTXAEQProfile(channel, nfreqs, F[], G[]).
-    // F is 1-indexed inside WDSP (F[0] is the unused pad slot), G is 0-indexed
-    // (G[0] = preamp).  Both buffers must be at least nfreqs+1 entries; we
-    // build them fresh on the stack.  (Q vector is exclusive to the parametric
-    // SetTXAGrphEQProfile variant — graphic EQ doesn't take a Q.)
-    //
-    // Mirrors the create_eqp call at wdsp/TXA.c:111-127 [v2.10.3.13]:
+    // From Thetis wdsp/TXA.c:111-127 [v2.10.3.13], the create_eqp call shape:
     //   double default_F[11] = {0.0,  32.0, ...};  // F[0] = 0.0 pad
     //   double default_G[11] = {0.0, -12.0, ...};  // G[0] = preamp (0 by default)
     //   //double default_G[11] =   {0.0,   0.0,   0.0,   0.0,   0.0,   0.0,    0.0,    0.0,    0.0,    0.0,     0.0};
     //   create_eqp(..., 10, default_F, default_G, ...);
-    constexpr int kNfreqs = 10;
-    double F[kNfreqs + 1];
-    double G[kNfreqs + 1];
-    F[0] = 0.0;  // WDSP F[0] pad slot
-    for (int i = 0; i < kNfreqs; ++i) {
-        F[i + 1] = freqs10[static_cast<std::size_t>(i)];
+    std::vector<double> F(11, 0.0);  // F[0] is WDSP's pad slot
+    for (std::size_t i = 0; i < 10; ++i) {
+        F[i + 1] = freqs10[i];
     }
-    for (int i = 0; i < kNfreqs + 1; ++i) {
-        G[i] = gains11[static_cast<std::size_t>(i)];
+    setTxEqProfile(F, gains11, {});
+}
+
+void TxChannel::setTxEqProfile(const std::vector<double>& F, const std::vector<double>& G,
+                               const std::vector<double>& Q)
+{
+    // R-R3-49 (group A fix wave): the arrays Thetis hands WDSP. nfreqs is
+    // at most WDSP's EQ_MAXIMUM_CONTROL_POINTS (256), which the TX EQ's
+    // F/G/Q buffers hold (third_party/wdsp/src/eq.c create_eqp).
+    constexpr std::size_t kMaxEqPoints = 256;
+    if (F.size() < 2 || F.size() > kMaxEqPoints + 1 || G.size() != F.size()
+        || (!Q.empty() && Q.size() != F.size())) {
+        qCWarning(lcDsp) << "TxChannel::setTxEqProfile: F, G and Q sizes" << F.size()
+                         << G.size() << Q.size() << "are not a profile; ignoring call";
+        return;
     }
-    SetTXAEQProfile(m_channelId, kNfreqs, F, G, nullptr);
+    m_txEqProfileFLast = F;  // R-R3-49: test read-back only
+    m_txEqProfileGLast = G;
+    m_txEqProfileQLast = Q;
+    ++m_txEqProfilePushCount;
+
+#ifdef HAVE_WDSP
+    if (txa[m_channelId].rsmpin.p == nullptr) return;
+    // From Thetis eqform.cs:3067-3071 [v2.10.3.15]:
+    //   WDSP.SetTXAEQProfile(WDSP.id(1, 0), nfreqs, Fptr, Gptr,
+    //                        _state.TX_ParametricEQ ? Qptr : null);
+    // SetTXAEQProfile copies the arrays; it takes non-const pointers.
+    std::vector<double> f = F;
+    std::vector<double> g = G;
+    std::vector<double> q = Q;
+    const int nfreqs = static_cast<int>(F.size()) - 1;
+    SetTXAEQProfile(m_channelId, nfreqs, f.data(), g.data(), q.empty() ? nullptr : q.data());
 #endif
 }
 

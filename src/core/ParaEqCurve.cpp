@@ -4,9 +4,10 @@
 //
 // Ported from Thetis source:
 //   Project Files/Source/Console/ucParametricEq.cs (the response curve,
-//   JSON load, point ordering and default points) and
+//   PointsFromJson and GetDefaults) and
 //   Project Files/Source/Console/eqform.cs (the TX EQ panel's widget
-//   limits), original licences from Thetis source are included below.
+//   limits, ParaEQTXData's setter, sendTXDspUpdate and setTXEQProfile),
+//   original licences from Thetis source are included below.
 //   Sole author of ucParametricEq.cs: Richard Samphire (MW0LGE).
 //
 // Implementation; declarations in ParaEqCurve.h.
@@ -21,6 +22,15 @@
 //                 numbers as the dialog (tst_para_eq_curve).
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                 Code.
+//   2026-09-25 - R-R3-49 (group A fix wave): the TX EQ reaches WDSP as
+//                 Thetis sends it. The Core decodes a saved curve as
+//                 Thetis's transmit path does (PointsFromJson, GetDefaults
+//                 for a blank or broken value) and builds the arrays of
+//                 sendTXDspUpdate (every point's F and G, Q when the panel
+//                 uses Q factors) and of setTXEQProfile for the legacy EQ.
+//                 The ten-point sampling, the widget-load port and the
+//                 point ordering it needed are gone. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // --- From ucParametricEq.cs ---
@@ -116,8 +126,7 @@ mw0lge@grange-lane.co.uk
 #include <QJsonParseError>
 #include <QJsonValue>
 
-#include <algorithm>
-#include <limits>
+#include <cmath>
 #include <optional>
 
 namespace NereusSDR {
@@ -126,219 +135,197 @@ namespace ParaEqCurve {
 
 namespace {
 
-// The widget's ordering pass without its selection bookkeeping (a curve
-// here has no selected or dragged point). From Thetis
-// ucParametricEq.cs:3223-3312 [v2.10.3.15], allowPointReorder true (as
-// eqform.cs:946 [v2.10.3.15] sets it for the TX EQ panel).
-void enforceOrdering(Curve& c, double minPointSpacingHz, bool enforceSpacingAll)
+// .NET Math.Round(value, digits): scale, round half to even, scale back.
+double roundDigits(double value, int digits)
 {
-    QVector<Point>& pts = c.points;
-    if (pts.isEmpty()) { return; }
-
-    if (pts.size() > 1) {
-        std::stable_sort(pts.begin(), pts.end(), [](const Point& a, const Point& b) {
-            if (a.frequencyHz != b.frequencyHz) { return a.frequencyHz < b.frequencyHz; }
-            return a.bandId < b.bandId;
-        });
-    }
-
-    for (Point& p : pts) {
-        p.frequencyHz = clamp(p.frequencyHz, c.frequencyMinHz, c.frequencyMaxHz);
-    }
-    if (pts.size() > 0) { pts.front().frequencyHz = c.frequencyMinHz; }
-    if (pts.size() > 1) { pts.back().frequencyHz  = c.frequencyMaxHz; }
-
-    if (!enforceSpacingAll) { return; }
-    if (pts.size() < 3) { return; }
-
-    double spacing = minPointSpacingHz;
-    const double maxSpacing = (c.frequencyMaxHz - c.frequencyMinHz) / double(pts.size() - 1);
-    if (spacing > maxSpacing) { spacing = maxSpacing; }
-    if (spacing < 0.0)        { spacing = 0.0; }
-
-    for (int i = 1; i < pts.size() - 1; ++i) {
-        const double minF = c.frequencyMinHz + (spacing * i);
-        double maxF = c.frequencyMaxHz - (spacing * (pts.size() - 1 - i));
-        if (maxF < minF) { maxF = minF; }
-        pts[i].frequencyHz = clamp(pts[i].frequencyHz, minF, maxF);
-    }
-    for (int i = 1; i < pts.size() - 1; ++i) {
-        const double wantMin = pts[i - 1].frequencyHz + spacing;
-        if (pts[i].frequencyHz < wantMin) { pts[i].frequencyHz = wantMin; }
-    }
-    for (int i = pts.size() - 2; i >= 1; --i) {
-        const double wantMax = pts[i + 1].frequencyHz - spacing;
-        if (pts[i].frequencyHz > wantMax) { pts[i].frequencyHz = wantMax; }
-    }
-    pts.front().frequencyHz = c.frequencyMinHz;
-    pts.back().frequencyHz  = c.frequencyMaxHz;
+    const double power10 = std::pow(10.0, digits);
+    return std::nearbyint(value * power10) / power10;
 }
 
-// Flat default points across the curve's range. From Thetis
-// ucParametricEq.cs:3163-3197 [v2.10.3.15] (ResetPointsDefault), with the
-// TX EQ panel's gain and Q limits.
-void resetPointsDefault(Curve& c, int bandCount)
+// A JSON number, or 0 where Json.NET would leave the field at its default.
+double jsonDouble(const QJsonObject& o, const char* key)
 {
-    c.points.clear();
-    int count = bandCount;
-    if (count < 2) { count = 2; }
-
-    double span = c.frequencyMaxHz - c.frequencyMinHz;
-    if (span <= 0.0) { span = 1.0; }
-
-    for (int i = 0; i < count; ++i) {
-        const double t = double(i) / double(count - 1);
-        c.points.append(Point{i + 1, c.frequencyMinHz + t * span, 0.0, 4.0});
-    }
-
-    enforceOrdering(c, kTxEqMinPointSpacingHz, true);
-    for (Point& p : c.points) {
-        p.gainDb = clamp(p.gainDb, kTxEqDbMin, kTxEqDbMax);
-        p.q      = clamp(p.q, kTxEqQMin, kTxEqQMax);
-    }
-    c.globalGainDb = clamp(c.globalGainDb, kTxEqDbMin, kTxEqDbMax);
+    return o.value(QLatin1String(key)).toDouble(0.0);
 }
 
 } // namespace
 
-Curve defaultTxEqCurve()
+// From Thetis ucParametricEq.cs:1392-1452 [v2.10.3.15] (PointsFromJson),
+// with the TX panel's _db_min/_db_max/_q_min/_q_max (eqform.cs:959-970).
+// Json.NET leaves a missing field at its default (0, false); a document or
+// point that is not a JSON object fails, as its deserialiser does.
+bool pointsFromJson(const QString& json, TxEqPoints& out)
 {
-    Curve c;
-    c.parametricEq   = true;
-    c.globalGainDb   = kTxEqGlobalGainDb;
-    c.frequencyMinHz = kTxEqMinHz;
-    c.frequencyMaxHz = kTxEqMaxHz;
-    resetPointsDefault(c, kTxEqBandCount);
-    return c;
-}
-
-double txEqResponseDb(const Curve& curve, double frequencyHz)
-{
-    return responseDb(curve.points, curve.parametricEq, curve.frequencyMinHz,
-                      curve.frequencyMaxHz, kTxEqQMin, kTxEqQMax, frequencyHz);
-}
-
-// From Thetis ucParametricEq.cs:1488-1573 [v2.10.3.15] (LoadFromJson),
-// loading into the TX EQ panel's widget as TxEqDialog builds it: ten flat
-// bands from 0 to 2700 Hz (eqform.cs:946-970 [v2.10.3.15]), parametric on.
-bool loadTxEqCurve(const QString& json, Curve& out)
-{
+    //   if (string.IsNullOrWhiteSpace(json)) return false;
     if (json.trimmed().isEmpty()) { return false; }
 
     QJsonParseError perr;
     const QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8(), &perr);
-    if (perr.error != QJsonParseError::NoError) { return false; }
-    if (!doc.isObject()) { return false; }
+    if (perr.error != QJsonParseError::NoError || !doc.isObject()) { return false; }
+    const QJsonObject state = doc.object();
 
-    const QJsonObject root = doc.object();
-    if (!root.contains(QStringLiteral("points"))) { return false; }
-    const QJsonValue ptsVal = root.value(QStringLiteral("points"));
-    if (!ptsVal.isArray()) { return false; }
-    const QJsonArray pts = ptsVal.toArray();
-    if (pts.size() < 2) { return false; }
+    //   if (state.Points == null) return false;
+    //   if (state.Points.Count < 2) return false;
+    const QJsonValue pointsValue = state.value(QStringLiteral("points"));
+    if (!pointsValue.isArray()) { return false; }
+    const QJsonArray points = pointsValue.toArray();
+    if (points.size() < 2) { return false; }
 
-    int bandCount = root.value(QStringLiteral("band_count")).toInt(0);
-    if (bandCount < 2) { bandCount = pts.size(); }
+    //   if (state.BandCount < 2) state.BandCount = state.Points.Count;
+    int bandCount = state.value(QStringLiteral("band_count")).toInt(0);
+    if (bandCount < 2) { bandCount = points.size(); }
 
-    if (bandCount < 2)            { return false; }
-    if (bandCount > 256)          { return false; }
-    if (bandCount != pts.size())  { return false; }
+    if (bandCount < 2) { return false; }
+    if (bandCount > 256) { return false; }
+    if (bandCount != points.size()) { return false; }
+    const double stateMinHz = jsonDouble(state, "frequency_min_hz");
+    const double stateMaxHz = jsonDouble(state, "frequency_max_hz");
+    if (std::isnan(stateMinHz) || std::isinf(stateMinHz)) { return false; }
+    if (std::isnan(stateMaxHz) || std::isinf(stateMaxHz)) { return false; }
+    if (stateMaxHz <= stateMinHz) { return false; }
 
-    const double newFreqMin = root.value(QStringLiteral("frequency_min_hz")).toDouble(
-        std::numeric_limits<double>::quiet_NaN());
-    const double newFreqMax = root.value(QStringLiteral("frequency_max_hz")).toDouble(
-        std::numeric_limits<double>::quiet_NaN());
-    if (std::isnan(newFreqMin) || std::isinf(newFreqMin)) { return false; }
-    if (std::isnan(newFreqMax) || std::isinf(newFreqMax)) { return false; }
-    if (newFreqMax <= newFreqMin) { return false; }
+    const int pointCount = points.size();
+    TxEqPoints r;
+    r.f.resize(static_cast<std::size_t>(pointCount));
+    r.g.resize(static_cast<std::size_t>(pointCount));
+    r.q.resize(static_cast<std::size_t>(pointCount));
 
-    // The panel's widget before the load.
-    Curve c = defaultTxEqCurve();
+    r.parametricEq = state.value(QStringLiteral("parametric_eq")).toBool(false);
+    r.preampDb     = roundDigits(clamp(jsonDouble(state, "global_gain_db"), kTxEqDbMin, kTxEqDbMax), 1);
+    r.minHz        = roundDigits(stateMinHz, 3);
+    r.maxHz        = roundDigits(stateMaxHz, 3);
+    r.bandCount    = bandCount;
 
-    if (bandCount != c.points.size()) {
-        // As the widget: the defaults for a new band count are laid out
-        // over the OLD range, then each point below is overwritten.
-        resetPointsDefault(c, bandCount);
+    for (int i = 0; i < pointCount; ++i) {
+        if (!points.at(i).isObject()) { return false; }
+        const QJsonObject jp = points.at(i).toObject();
+
+        double pointFrequencyHz = clamp(jsonDouble(jp, "frequency_hz"), stateMinHz, stateMaxHz);
+        const double gainDb = clamp(jsonDouble(jp, "gain_db"), kTxEqDbMin, kTxEqDbMax);
+        const double q = clamp(jsonDouble(jp, "q"), kTxEqQMin, kTxEqQMax);
+
+        if (i == 0) { pointFrequencyHz = stateMinHz; }
+        if (i == pointCount - 1) { pointFrequencyHz = stateMaxHz; }
+
+        const auto k = static_cast<std::size_t>(i);
+        r.f[k] = roundDigits(pointFrequencyHz, 3);
+        r.g[k] = roundDigits(gainDb, 1);
+        r.q[k] = roundDigits(q, 2);
     }
 
-    c.parametricEq   = root.value(QStringLiteral("parametric_eq")).toBool(false);
-    c.globalGainDb   = clamp(root.value(QStringLiteral("global_gain_db")).toDouble(0.0),
-                             kTxEqDbMin, kTxEqDbMax);
-    c.frequencyMinHz = newFreqMin;
-    c.frequencyMaxHz = newFreqMax;
-
-    for (int i = 0; i < c.points.size(); ++i) {
-        Point& p = c.points[i];
-        if (i >= pts.size()) { break; }
-        if (!pts.at(i).isObject()) { continue; }
-        const QJsonObject jp = pts.at(i).toObject();
-
-        const double jpFreq = jp.value(QStringLiteral("frequency_hz")).toDouble(p.frequencyHz);
-        const double jpGain = jp.value(QStringLiteral("gain_db")).toDouble(p.gainDb);
-        const double jpQ    = jp.value(QStringLiteral("q")).toDouble(p.q);
-
-        // The first and last points are locked to the range's ends
-        // (ucParametricEq.cs:3384-3394 [v2.10.3.15]).
-        if (i == 0) {
-            p.frequencyHz = c.frequencyMinHz;
-        } else if (i == c.points.size() - 1) {
-            p.frequencyHz = c.frequencyMaxHz;
-        } else {
-            p.frequencyHz = clamp(jpFreq, c.frequencyMinHz, c.frequencyMaxHz);
-        }
-        p.gainDb = clamp(jpGain, kTxEqDbMin, kTxEqDbMax);
-        p.q      = clamp(jpQ, kTxEqQMin, kTxEqQMax);
-    }
-
-    enforceOrdering(c, kTxEqMinPointSpacingHz, true);
-    out = c;
+    out = std::move(r);
     return true;
 }
 
-bool txEqCurveFromParaEqData(const QString& paraEqData, Curve& out)
+// From Thetis ucParametricEq.cs:1107-1131 [v2.10.3.15] (GetDefaults), with
+// its default arguments (10 bands, 0 to 4000 Hz).
+TxEqPoints defaultTxEqPoints()
+{
+    TxEqPoints r;
+    r.bandCount    = kTxEqDefaultBandCount;
+    r.preampDb     = 0.0;
+    r.minHz        = kTxEqDefaultMinHz;
+    r.maxHz        = kTxEqDefaultMaxHz;
+    r.parametricEq = true;
+
+    int count = r.bandCount;
+    if (count < 2) { count = 2; }
+
+    r.f.resize(static_cast<std::size_t>(count));
+    r.g.resize(static_cast<std::size_t>(count));
+    r.q.resize(static_cast<std::size_t>(count));
+
+    double span = r.maxHz - r.minHz;
+    if (span <= 0.0) { span = 1.0; }
+
+    for (int i = 0; i < count; ++i) {
+        const double t = static_cast<double>(i) / static_cast<double>(count - 1);
+        const auto k = static_cast<std::size_t>(i);
+        r.f[k] = r.minHz + (t * span);
+        r.g[k] = 0.0;
+        r.q[k] = kTxEqDefaultQ;
+    }
+    return r;
+}
+
+bool loadTxEqPoints(const QString& paraEqData, TxEqPoints& out)
 {
     if (paraEqData.isEmpty()) { return false; }
-    // As TxEqDialog::syncParametricFromModel: the Thetis envelope
-    // (eqform.cs:3272-3274, Common.cs:1764-1790 [v2.10.3.15]), or raw JSON
-    // saved by an early build before the envelope.
+    // eqform.cs:3287 [v2.10.3.15]: string json = Common.Decompress_gzip(value);
+    // (Common.cs:1764-1790). NereusSDR also reads raw JSON saved by an early
+    // build before the envelope.
     const std::optional<QString> decoded = ParaEqEnvelope::decode(paraEqData);
     if (decoded.has_value()) {
-        return loadTxEqCurve(*decoded, out);
+        return pointsFromJson(*decoded, out);
     }
     if (paraEqData.trimmed().startsWith(QLatin1Char('{'))) {
-        return loadTxEqCurve(paraEqData, out);
+        return pointsFromJson(paraEqData, out);
     }
     return false;
 }
 
-// Moved from TxEqDialog::pushParametricCurveToWdsp (NereusSDR, 3M-3a-ii
-// follow-up). WDSP's TX EQ takes ten bands; the panel has 5, 10 or 18.
-// Ten go one to one; any other count samples the curve at ten evenly
-// spaced frequencies (the Q effect survives at that resolution). Thetis
-// likewise feeds SetTXAEQProfile sampled F and G arrays.
-void sampleTxEqProfile(const Curve& curve, std::vector<double>& freqs,
-                       std::vector<double>& gains)
+// From Thetis eqform.cs:3276-3320 [v2.10.3.15] (ParaEQTXData's setter):
+// PointsFromJson, or GetDefaults when it fails.
+TxEqPoints txEqPointsFromParaEqData(const QString& paraEqData)
 {
-    freqs.assign(10, 0.0);
-    gains.assign(11, 0.0);
-    gains[0] = curve.globalGainDb;  // preamp slot
+    TxEqPoints points;
+    if (!loadTxEqPoints(paraEqData, points)) {
+        points = defaultTxEqPoints();
+    }
+    return points;
+}
 
-    const int n = curve.points.size();
-    if (n == 10) {
-        for (int i = 0; i < 10; ++i) {
-            freqs[static_cast<std::size_t>(i)]     = curve.points.at(i).frequencyHz;
-            gains[static_cast<std::size_t>(i + 1)] = curve.points.at(i).gainDb;
-        }
-        return;
+// From Thetis eqform.cs:3041-3072 [v2.10.3.15] (sendTXDspUpdate):
+//   int nfreqs = _tempTX_BandCount;
+//   F[0] = 0.0; G[0] = _state.TX_Preamp; Q[0] = 0.0;
+//   for (int n = 0; n < nfreqs; n++) { F[n + 1] = _tempTX_F[n]; ... }
+//   WDSP.SetTXAEQProfile(WDSP.id(1, 0), nfreqs, Fptr, Gptr,
+//                        _state.TX_ParametricEQ ? Qptr : null);
+TxEqProfile txEqProfileFromPoints(const TxEqPoints& points)
+{
+    const int nfreqs = points.bandCount;
+    TxEqProfile p;
+    p.f.assign(static_cast<std::size_t>(nfreqs + 1), 0.0);
+    p.g.assign(static_cast<std::size_t>(nfreqs + 1), 0.0);
+    std::vector<double> q(static_cast<std::size_t>(nfreqs + 1), 0.0);
+
+    p.f[0] = 0.0;
+    p.g[0] = points.preampDb;
+    q[0]   = 0.0;
+
+    for (int n = 0; n < nfreqs; ++n) {
+        const auto k = static_cast<std::size_t>(n);
+        p.f[k + 1] = k < points.f.size() ? points.f[k] : 0.0;
+        p.g[k + 1] = k < points.g.size() ? points.g[k] : 0.0;
+        q[k + 1]   = k < points.q.size() ? points.q[k] : 0.0;
     }
-    const double minHz = curve.frequencyMinHz;
-    const double maxHz = curve.frequencyMaxHz;
-    const double step  = (maxHz > minHz) ? (maxHz - minHz) / 9.0 : 0.0;
-    for (int i = 0; i < 10; ++i) {
-        const double f = minHz + step * i;
-        freqs[static_cast<std::size_t>(i)]     = f;
-        gains[static_cast<std::size_t>(i + 1)] = txEqResponseDb(curve, f);
+
+    if (points.parametricEq) {
+        p.q = std::move(q);
     }
+    return p;
+}
+
+// From Thetis eqform.cs:2777-2816 [v2.10.3.15] (setTXEQProfile):
+//   const int nfreqs = 10;
+//   F[0] = 0.0; F[1] = (double)udTXEQ0.Value; ... F[10] = udTXEQ9
+//   G[0] = (double)tbTXEQPre.Value; G[1] = tbTXEQ0 ... G[10] = tbTXEQ9
+//   WDSP.SetTXAEQProfile(WDSP.id(1, 0), nfreqs, Fptr, Gptr, null);
+TxEqProfile legacyTxEqProfile(int preampDb, const std::array<int, 10>& bandGainsDb,
+                              const std::array<int, 10>& bandFreqsHz)
+{
+    constexpr int nfreqs = 10;
+    TxEqProfile p;
+    p.f.assign(nfreqs + 1, 0.0);
+    p.g.assign(nfreqs + 1, 0.0);
+    p.f[0] = 0.0;
+    p.g[0] = static_cast<double>(preampDb);
+    for (int i = 0; i < nfreqs; ++i) {
+        const auto k = static_cast<std::size_t>(i);
+        p.f[k + 1] = static_cast<double>(bandFreqsHz[k]);
+        p.g[k + 1] = static_cast<double>(bandGainsDb[k]);
+    }
+    return p;
 }
 
 } // namespace ParaEqCurve
