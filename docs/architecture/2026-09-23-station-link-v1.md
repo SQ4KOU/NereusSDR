@@ -915,6 +915,12 @@ when the Core runs short.
 | `sharedConnection` | another device is admitted and this device's share is below its request; the governor has cut nothing (the devices share what the Core sends) |
 | `sharedProcessing` | another device is admitted and this device's share is below its request; the governor's cut is in force (the Core computer is short of processing time) |
 
+A device's request is its demand as above (what its displays ask for, at
+least one useful pan). Because every client first asks for what the
+operator wants, a device that wants more than its share while another
+device is admitted hears `sharedConnection` or `sharedProcessing`; one
+whose share covers all it asks for hears `none` or `coreBusy`.
+
 `sharedConnection` and `sharedProcessing` go only to a device that declared
 `sessionHolder` (section 6.1). Any other device is told `none` in place of
 `sharedConnection` and `coreBusy` in place of `sharedProcessing`, so an

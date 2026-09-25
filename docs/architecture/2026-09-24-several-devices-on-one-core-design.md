@@ -1635,9 +1635,16 @@ What a slowed device is told:
   - `sharedProcessing`: the governor has cut the total because the Core computer is short of
     processing time (the reason `coreBusy` would be in force alone). It has no drawn words
     yet; the phone session writes them.
-  They take the place of `coreBusy` while another device is admitted; alone on the Core a
-  device still sees `coreBusy` or `none`. Only devices with the new feature receive the new
-  values.
+  They take the place of `coreBusy` while another device is admitted and the device's share
+  is below its request; alone on the Core a device still sees `coreBusy` or `none`, and so
+  does a device beside others whose share covers all it asks for. Only devices with the new
+  feature receive the new values. Under demand-based requests (fix wave 2, Important 3) the
+  request is the device's demand, at least one useful pan; since every client asks for what the
+  operator wants (above), a device that wants more than its share beside another device hears
+  `sharedConnection` (or `sharedProcessing` under the governor's cut), as this ruling meant from
+  the start. The first fix wave's clients planned inside their share, so their demand never
+  exceeded it and they heard `none` or `coreBusy` beside another device; that is what this
+  round undoes.
 - A change of holder or of devices publishes new generations.
 
 **Design ruling 9.3a.** Finding 5 asks the reason to say whether "the uplink or the

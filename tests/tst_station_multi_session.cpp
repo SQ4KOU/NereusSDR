@@ -2105,6 +2105,13 @@ private slots:
     // while another device is admitted, sharedProcessing under the
     // governor's cut, and alone again the total's own reason. A device that
     // did not declare sessionHolder hears coreBusy or none instead.
+    // Task 76 (ruling 9.3, design ruling 9.3a) and fix wave 2 (Important
+    // 3): each device asks for what it wants (here a pan wider than the
+    // Core grants, so each is admitted while its request stays above half
+    // the samples). While a device's share is below its request and another
+    // device is admitted, its reason is sharedConnection, or
+    // sharedProcessing under the governor's cut; alone it hears none or
+    // coreBusy.
     void eachDeviceGetsItsOwnShareOfTheDisplayBudget()
     {
         MediaCore m(DisplayBudgetLimits{1'000'000, 100'000, 5});
@@ -2117,42 +2124,61 @@ private slots:
         QCOMPARE(latestCapability(aloneA, QStringLiteral("displayBudgetGeneration")).toInteger(), 5);
         QCOMPARE(latestCapability(aloneA, QStringLiteral("displayBudgetReason")).toString(),
                  QStringLiteral("none"));
+        // Each asks for 512 pixels at 60 frames a second: 61'440 samples a
+        // second, more than half the total's 100'000. The Core grants 256
+        // pixels (the bins in its window), so each is admitted.
+        const auto wants = [&m](LoopbackTransport* app, quint64 epoch) {
+            const int slice = m.sliceOf(epoch);
+            const double centre =
+                m.core.model->streamCentreHz(m.core.model->sliceById(slice)->streamIndex());
+            QJsonObject request = displayRequestAt(1, slice, centre, 60);
+            request.insert(QStringLiteral("pixels"), 512);
+            sendMedia(app, request);
+            QTRY_COMPARE(mediaOps(app, QStringLiteral("allocation-result")).size(), 1);
+            QVERIFY(mediaOps(app, QStringLiteral("allocation-result")).last()
+                        .value(QStringLiteral("accepted")).toBool());
+        };
+        QVERIFY(m.startMedia(m.appA));
+        wants(m.appA, m.epochOf(0));
+        // Alone it has the whole total and the total's own reason.
+        QCOMPARE(latestCapability(m.appA->received(), QStringLiteral("displayBudgetReason"))
+                     .toString(), QStringLiteral("none"));
+        QCOMPARE(latestCapability(m.appA->received(), QStringLiteral("displayBudgetGeneration"))
+                     .toInteger(), 5);
 
         m.appB = m.core.signIn(m.b);
         QVERIFY(admitted(m.appB));
         QTRY_COMPARE(m.hub->controllerCount(), 2);
-        // B's first capabilities: half. Neither device asks for a display
-        // yet (fix wave I5: a request is the device's demand), so the half
-        // covers what each asks for and the reason is the total's own.
-        QCOMPARE(latestCapability(m.appB->received(),
-                                  QStringLiteral("displayApplicationBytesPerSecond")).toInteger(),
-                 500'000);
         QCOMPARE(latestCapability(m.appB->received(), QStringLiteral("remoteMediaVersion"))
                      .toInteger(), 1);
-        QCOMPARE(latestCapability(m.appB->received(), QStringLiteral("displayBudgetReason"))
-                     .toString(), QStringLiteral("none"));
-        // A is told its new share with a new generation.
-        QTRY_COMPARE(latestCapability(m.appA->received(),
+        QVERIFY(m.startMedia(m.appB));
+        wants(m.appB, m.epochOf(1));
+        // Both ask for more than half: equal halves, each told the
+        // connection is shared.
+        for (LoopbackTransport* app : {m.appA, m.appB}) {
+            QTRY_COMPARE(latestCapability(app->received(),
+                                          QStringLiteral("spectrumSampleUnitsPerSecond"))
+                             .toInteger(), 50'000);
+            QCOMPARE(latestCapability(app->received(),
                                       QStringLiteral("displayApplicationBytesPerSecond"))
                          .toInteger(), 500'000);
-        QCOMPARE(latestCapability(m.appA->received(), QStringLiteral("spectrumSampleUnitsPerSecond"))
-                     .toInteger(), 50'000);
-        QCOMPARE(latestCapability(m.appA->received(), QStringLiteral("displayBudgetGeneration"))
-                     .toInteger(), 6);
-        QCOMPARE(latestCapability(m.appA->received(), QStringLiteral("displayBudgetReason"))
-                     .toString(), QStringLiteral("none"));
+            QCOMPARE(latestCapability(app->received(), QStringLiteral("displayBudgetReason"))
+                         .toString(), QStringLiteral("sharedConnection"));
+        }
+        // A is told its new share with a new generation.
+        QVERIFY(latestCapability(m.appA->received(), QStringLiteral("displayBudgetGeneration"))
+                    .toInteger() > 5);
 
-        // The governor cuts the total: each device's half of it, and with
-        // nothing asked for beyond it, the total's own reason.
+        // The governor cuts the total: sharedProcessing, each half of it.
         QVERIFY(m.core.server->setDisplayBudgetLimits(DisplayBudgetLimits{500'000, 50'000, 7},
                                                       DisplayBudgetReason::CoreBusy));
         QTRY_COMPARE(latestCapability(m.appA->received(), QStringLiteral("displayBudgetReason"))
-                         .toString(), QStringLiteral("coreBusy"));
+                         .toString(), QStringLiteral("sharedProcessing"));
         QCOMPARE(latestCapability(m.appB->received(), QStringLiteral("displayBudgetReason"))
-                     .toString(), QStringLiteral("coreBusy"));
-        QTRY_COMPARE(latestCapability(m.appB->received(),
-                                      QStringLiteral("displayApplicationBytesPerSecond")).toInteger(),
-                     250'000);
+                     .toString(), QStringLiteral("sharedProcessing"));
+        QCOMPARE(latestCapability(m.appB->received(),
+                                  QStringLiteral("displayApplicationBytesPerSecond")).toInteger(),
+                 250'000);
 
         // B leaves: A alone again, the whole cut total and the total's own
         // reason, with a newer generation.
@@ -2169,21 +2195,25 @@ private slots:
         QVERIFY(latestCapability(m.appA->received(), QStringLiteral("displayBudgetGeneration"))
                     .toInteger() > generationBefore);
 
-        // An older window beside A: its share is shared, and it hears the
-        // reason it knows (coreBusy under the cut). (A device short of its
-        // request hearing sharedProcessing while an older one hears coreBusy
-        // is eachDevicesRequestIsWhatItsDisplaysAskFor's and
-        // tst_display_budget_split's.)
+        // An older window beside A: A, short of its request, hears
+        // sharedProcessing; the older window, which asks for no display yet
+        // and has its one useful pan, hears the reason it knows (coreBusy
+        // under the cut).
         LoopbackTransport* older = m.core.tokenSignIn();
         QVERIFY(admitted(older));
+        QTRY_COMPARE(latestCapability(m.appA->received(), QStringLiteral("displayBudgetReason"))
+                         .toString(), QStringLiteral("sharedProcessing"));
         QCOMPARE(latestCapability(older->received(), QStringLiteral("displayBudgetReason"))
                      .toString(), QStringLiteral("coreBusy"));
-        QCOMPARE(latestCapability(older->received(),
-                                  QStringLiteral("displayApplicationBytesPerSecond")).toInteger(),
-                 250'000);
+        const DisplayBudgetCharge floorPan = DisplayLoadGovernor::floorPanCharge();
+        QVERIFY(static_cast<quint64>(latestCapability(older->received(),
+                                                      QStringLiteral("spectrumSampleUnitsPerSecond"))
+                                         .toInteger())
+                >= floorPan.spectrumSampleUnitsPerSecond);
         QTRY_COMPARE(latestCapability(m.appA->received(),
-                                      QStringLiteral("displayApplicationBytesPerSecond"))
-                         .toInteger(), 250'000);
+                                      QStringLiteral("spectrumSampleUnitsPerSecond"))
+                         .toInteger(),
+                     static_cast<qint64>(50'000 - floorPan.spectrumSampleUnitsPerSecond));
     }
 
     // Fix wave I5 (ruling 9.3): each device's request is its demand, the
