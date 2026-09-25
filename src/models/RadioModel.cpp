@@ -174,6 +174,12 @@
 //                names the Core only on a Core (NereusSDR in a window with
 //                no Core); stale slice-limit comments corrected.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - Receiver and transmit gaps plan, Task 7: TCI trx keys
+//                through MoxController::onTciPtt (PttMode::Tci); the MOX
+//                button is setMoxFromButton (chkMOX_Click); TUN-off clears
+//                the manual key at its end; disconnect drops the PTT
+//                levels. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 //=================================================================
@@ -15638,6 +15644,12 @@ void RadioModel::teardownConnection()
     // Two-tone is released further down (m_twoToneController). NereusSDR
     // glue: the TUN-off completion runs at once, because the MoxController
     // timers that would deliver rxReady cannot fire during this teardown.
+    // Task 7: no PTT source reports once the connection goes, so the levels
+    // MoxController recorded are dropped before anything below clears a
+    // manual key and runs a PollPTT pass on them.
+    if (m_moxController) {
+        m_moxController->clearPttSources();
+    }
     if (m_isTuning) {
         setTune(false);
         completeTuneOff();
@@ -15727,6 +15739,11 @@ void RadioModel::teardownConnection()
     // [v2.10.3.13]) at session end.
     m_pendingTuneOff = false;
     m_isTuning       = false;
+    // Task 7: the manual key TUN set is cleared with the session's TUN state
+    // (completeTuneOff will not run for it now).
+    if (m_moxController) {
+        m_moxController->setManualKey(false);
+    }
 
     // L.3: Release the HL2 mic-source lock on disconnect.
     // A subsequent connectToRadio() to a non-HL2 radio must be free to use
@@ -17087,16 +17104,63 @@ void RadioModel::setTune(bool on)
 
 void RadioModel::setMox(bool on)
 {
-    // Route through MoxController when installed — that path enforces the
-    // BandPlanGuard MoxCheck callback, fans out hardwareFlipped, and runs the
-    // Codex P2 safety-effects-before-idempotent-guard ordering.  Without a
-    // controller we fall back to the TransmitModel latch (matches the
-    // pre-controller path Thetis uses during early construction).
+    // TCI trx is a keying source of its own (receiver and transmit gaps
+    // plan, Task 7). MoxController::onTciPtt keys with PttMode::Tci through
+    // the PollPTT rules: not during a manual key, only from receive, and a
+    // release unkeys (or falls back to a held source) only in TCI mode.
+    //
+    // From Thetis TCIServer.cs:3671-3672 [v2.10.3.15] (handleTrxMessage):
+    //   if (consoleThreadSafe.MOX != bMox)
+    //       consoleThreadSafe.TCIPTT = bMox;
+    // Without a controller we fall back to the TransmitModel latch (matches
+    // the pre-controller path Thetis uses during early construction).
     if (m_moxController) {
-        m_moxController->setMox(on);
+        if (m_moxController->isMox() != on) {
+            m_moxController->onTciPtt(on);
+        }
     } else {
         m_transmitModel.setMox(on);
     }
+}
+
+void RadioModel::setMoxFromButton(bool on)
+{
+    // Receiver and transmit gaps plan, Task 7. From Thetis chkMOX_Click,
+    // console.cs:29730-29747 [v2.10.3.15], else branch:
+    //   _manual_mox = false;
+    //   if (chkTUN.Checked)
+    //       chkTUN.Checked = false;
+    //   if (chk2TONE.Checked) //MW0LGE_21a
+    //       chk2TONE.Checked = false;
+    // MoxController::onMoxButton does the key and the manual flag; turning
+    // TUN and two-tone off is here, where both live.
+    //
+    // Order (deliberate, safer than Thetis's): with TUN or two-tone on, the
+    // button's off turns them off FIRST and leaves the manual key to their
+    // own ends (completeTuneOff, console.cs:30193; two-tone's settle,
+    // setup.cs:11193 [v2.10.3.15]). Thetis clears _manual_mox before
+    // chkTUN.Checked = false, so its next poll can key a held mic while the
+    // tune tone runs for up to 100 ms. NereusSDR's TUN-off completion waits
+    // for the TX-to-RX walk to finish, and a mic key would hold that walk
+    // off, leaving the tone on air under the mic; keeping the manual key
+    // until the tone is down closes that.
+    if (m_moxController == nullptr) {
+        return;
+    }
+    const bool twoToneOn = m_twoToneController && m_twoToneController->isActive();
+    if (!on && (m_isTuning || twoToneOn)) {
+        if (m_isTuning) {
+            setTune(false);
+        }
+        if (twoToneOn) {
+            m_twoToneController->setActive(false);
+        }
+        // Both unkey on their own; this covers a MOX left keyed by anything
+        // else under them.
+        m_moxController->setMox(false);
+        return;
+    }
+    m_moxController->onMoxButton(on);
 }
 
 bool RadioModel::mox() const
@@ -17830,6 +17894,14 @@ void RadioModel::completeTuneOff()
     // [H.3 hook: restore meterModel().setTxDisplayMode(savedMode) here]
 
     m_isTuning = false;
+
+    // Receiver and transmit gaps plan, Task 7. From Thetis
+    // chkTUN_CheckedChanged, console.cs:30193 [v2.10.3.15]: _manual_mox =
+    // false comes last in TUN-off, after the tone and power are restored,
+    // so no mic PTT or VOX keys while the tune tone is still up.
+    if (m_moxController) {
+        m_moxController->setManualKey(false);
+    }
 }
 
 void RadioModel::onMoxHardwareFlipped(bool isTx)

@@ -278,6 +278,12 @@ private slots:
         ctrl.setActive(true);
         QCoreApplication::processEvents();
         QVERIFY(ctrl.isActive());
+        // Task 7: two-tone holds the manual key (console.ManualMox,
+        // setup.cs:11162 [v2.10.3.15]), so a mic release cannot unkey it.
+        QVERIFY(mox.isManualKey());
+        mox.onMicPttFromRadio(false);
+        QCoreApplication::processEvents();
+        QVERIFY(mox.isMox());
         tc.calls.clear();
 
         QSignalSpy activeSpy(&ctrl, &TwoToneController::twoToneActiveChanged);
@@ -290,6 +296,8 @@ private slots:
 
         QVERIFY(!ctrl.isActive());
         QVERIFY(!mox.isMox());
+        // console.ManualMox = false after the settle (setup.cs:11193).
+        QVERIFY(!mox.isManualKey());
         QCOMPARE(activeSpy.count(), 1);
         QCOMPARE(activeSpy[0][0].toBool(), false);
         // setTxPostGenRun(false) should have fired.
@@ -632,6 +640,8 @@ private slots:
 
         // TwoToneController cleaned up its state.
         QVERIFY(!ctrl.isActive());
+        // Task 7: the refused key leaves no manual key behind.
+        QVERIFY(!mox.isManualKey());
 
         // twoToneActiveChanged(false) was emitted (so UI can revert highlight).
         QVERIFY(activeSpy.count() >= 1);

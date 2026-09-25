@@ -3151,17 +3151,33 @@ nereus_add_test(tst_mox_controller_prime_wdsp_state)
 # Verifies:
 #   Accepted slots (5): onMicPttFromRadio, onCatPtt, onVoxActive, onSpacePtt,
 #     onX2Ptt — each press emits pttModeChanged(Xxx) then moxStateChanged(true);
-#     each release emits moxStateChanged(false); PttMode NOT cleared on release
-#     (F.1 contract: hardwareFlipped(false) subscriber in RadioModel clears it).
-#   Rejected slots (2): onCwPtt (deferred to 3M-2), onTciPtt (deferred to 3J) —
-#     both press and release emit no signals and leave m_pttMode unchanged.
-#   Cross-source switching (§G): last-setter-wins semantic.
+#     each release emits moxStateChanged(false); the unkey clears PttMode
+#     (Task 7: chkMOX_CheckedChanged2 console.cs:29547 [v2.10.3.15]).
+#   onTciPtt keys with PttMode::Tci (Task 7). Rejected slot: onCwPtt
+#     (deferred to 3M-2): press and release emit no signals.
+#   Cross-source rules (§G): PollPTT keys only from receive and releases only
+#     in the source's own mode (Task 7).
 #   Idempotency (§H): repeated press does not double-emit.
 #   PttMode integer values (§I): spot-check vs enums.cs:346-359 [v2.10.3.13].
 # Source: Thetis console.cs:25463-25507 [v2.10.3.13] (PollPTT dispatch);
 #   console.cs:26680 [v2.10.3.13] (SPACE); enums.cs:346-359 [v2.10.3.13].
 #   Pre-code review §0.3 + master design §5.2.1.
 nereus_add_test(tst_mox_controller_ptt_source_dispatch)
+
+# ── Receiver and transmit gaps plan, Task 7: keying sources follow Thetis ────
+# Verifies each keying source's PTT mode (mic, VOX, TCI, the MOX button as a
+# manual key, TUN, two-tone), the mode clearing on every unkey and on a
+# refused key, and the release guards per source: a mic or VOX release
+# during a manual key, a VOX release during a mic key, a mic release during a
+# VOX key, a second source during a key, the TCI release fallback to a held
+# mic, a held VOX keying after the MOX button goes off, and the RadioModel
+# TCI shim (PttMode::Tci) and MOX button. Bare MoxController or unconnected
+# RadioModel with 0 ms walk timers; nothing keys a radio.
+# Source: Thetis console.cs [v2.10.3.15] PollPTT (25463-25623),
+#   getFallbackPTTModeAfterTCIRelease (25429-25461), chkMOX_CheckedChanged2
+#   (29406-29411, 29547), chkMOX_Click (29730-29747), chkTUN (30144-30193);
+#   setup.cs:11162, 11193 [v2.10.3.15] (two-tone ManualMox).
+nereus_add_test(tst_mox_controller_ptt_sources)
 
 # ── Phase 3M-1c Tasks C.2 / C.3 / C.4: MoxController multicast Pre/Post signals ─
 # Verifies the new 3-arg Pre/Post MOX state-change signals that future
@@ -3203,10 +3219,10 @@ nereus_add_test(tst_mox_controller_multicast_signals)
 #
 # Prong B — End-to-end (status frame → MoxController):
 #   §C.1  P1 press → MoxController engaged, PttMode::Mic
-#   §C.2  P1 release → MoxController released, PttMode retained
+#   §C.2  P1 release → MoxController released, PttMode cleared
 #   §C.3  P1 repeated press → idempotent (no double-emit)
 #   §D.1  P2 press → MoxController engaged, PttMode::Mic
-#   §D.2  P2 release → MoxController released, PttMode retained
+#   §D.2  P2 release → MoxController released, PttMode cleared
 #   §D.3  P2 repeated press → idempotent (no double-emit)
 #   §E.1  P1: consecutive false frames both emit (unconditional emission)
 #   §E.2  P2: consecutive false packets both emit (unconditional emission)

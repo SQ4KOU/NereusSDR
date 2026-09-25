@@ -19,6 +19,10 @@
 //   2026-09-23 : R-R3-36 gate fix by J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code. onMoxRejected reacts only to a
 //                rejection of two-tone's own key. NereusSDR-original.
+//   2026-09-24 : Receiver and transmit gaps plan, Task 7, by J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code. Two-tone
+//                holds the manual key (console.ManualMox) around its key,
+//                so no mic PTT or VOX releases or takes it.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis-derived activation flow
@@ -392,6 +396,12 @@ void TwoToneController::continueActivation()
     // we catch that via onMoxRejected() and run the cleanup there.
     // R-R3-36: m_keyingMox marks this call (and only this call) as
     // two-tone keying for the PC-microphone admission check.
+    //
+    // Receiver and transmit gaps plan, Task 7: console.ManualMox = true is
+    // MoxController::setManualKey(true), set before the key as Thetis does
+    // (setup.cs:11162 [v2.10.3.15]). While it is set no mic PTT, VOX, CAT or
+    // TCI keys or releases (PollPTT, console.cs:25470 [v2.10.3.15]).
+    m_moxController->setManualKey(true);
     {
         const QScopedValueRollback<bool> keying(m_keyingMox, true);
         m_moxController->setMox(true);
@@ -566,6 +576,12 @@ void TwoToneController::continueDeactivation()
         m_txChannel->setTxPostGenRun(false);
     }
 
+    // Receiver and transmit gaps plan, Task 7: console.ManualMox = false
+    // after the release settle (setup.cs:11193 [v2.10.3.15]).
+    if (m_moxController) {
+        m_moxController->setManualKey(false);
+    }
+
     if (m_savedPwrValid && m_tx) {
         m_tx->setPower(m_savedPwr);
         m_savedPwrValid = false;
@@ -630,6 +646,13 @@ void TwoToneController::onMoxRejected(const QString& reason)
     // Tear down the gen if it was started in continueActivation.
     if (m_txChannel) {
         m_txChannel->setTxPostGenRun(false);
+    }
+
+    // Receiver and transmit gaps plan, Task 7: a refused key unchecks
+    // chkTestIMD in Thetis, whose off branch ends with console.ManualMox =
+    // false (setup.cs:11193 [v2.10.3.15]).
+    if (m_moxController) {
+        m_moxController->setManualKey(false);
     }
 
     // Restore PWR if we had snapshotted it.

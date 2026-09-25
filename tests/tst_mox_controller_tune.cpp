@@ -161,19 +161,21 @@ private slots:
         QVERIFY(!ctrl.isManualMox());
     }
 
-    void setTuneFalse_pttModeStaysManual()
+    void setTuneFalse_pttModeClearedByUnkey()
     {
-        // Per Thetis: _current_ptt_mode is NOT cleared in chkTUN's TUN-off
-        // path. It clears indirectly via chkMOX_CheckedChanged2 TX→RX branch
-        // (console.cs:29496 [v2.10.3.13]). In NereusSDR that belongs to F.1.
-        // So after setTune(false), m_pttMode must still be Manual.
+        // Per Thetis: chkTUN's TUN-off path does not touch _current_ptt_mode
+        // itself; its chkMOX.Checked = false runs chkMOX_CheckedChanged2's
+        // TX-to-RX branch, which sets PTTMode.NONE (console.cs:29547
+        // [v2.10.3.15]). NereusSDR's setMox(false) does the same (receiver
+        // and transmit gaps plan, Task 7), so after setTune(false) the mode
+        // is None.
         MoxController ctrl;
         ctrl.setTimerIntervals(0, 0, 0, 0, 0, 0);
         ctrl.setTune(true);
         QCoreApplication::processEvents();
         ctrl.setTune(false);
         drainTxToRxWalk();
-        QCOMPARE(ctrl.pttMode(), PttMode::Manual);
+        QCOMPARE(ctrl.pttMode(), PttMode::None);
     }
 
     void setTuneFalse_manualMoxChangedFires_once_withFalse()

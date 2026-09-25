@@ -139,6 +139,21 @@
 //                 the only valid anti-VOX cancellation reference.  See
 //                 commit message for full rationale.  J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - Receiver and transmit gaps plan, Task 7: keying sources
+//                 follow Thetis PollPTT, chkMOX_Click and
+//                 chkMOX_CheckedChanged2 (console.cs [v2.10.3.15]). The
+//                 PTT-source slots record each source's level and run one
+//                 PollPTT pass (pollPtt); a source keys only from receive
+//                 and outside a manual key, and releases only the mode it
+//                 set. setMox(false) clears the PTT mode and the CAT and
+//                 TCI levels itself, as chkMOX_CheckedChanged2 does (the
+//                 hardwareFlipped(false) subscriber the old F.1 note
+//                 described never existed). New: isManualKey /
+//                 setManualKey (Thetis _manual_mox / console.ManualMox),
+//                 onMoxButton (chkMOX_Click), onTciPtt keys with
+//                 PttMode::Tci and falls back as
+//                 getFallbackPTTModeAfterTCIRelease does. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -238,13 +253,29 @@ public:
     // Mirrors Thetis _manual_mox (console.cs:240 [v2.10.3.13]):
     //   "True if the MOX button was clicked on (not PTT)"
     // In NereusSDR, TUN goes through setTune() which sets this flag.
-    // setMox() does NOT touch this flag (Thetis sets it via chkMOX_
-    // CheckedChanged2 only; NereusSDR narrows that to the TUN path).
+    // setMox() does NOT touch this flag. Thetis sets _manual_mox from
+    // chkMOX_Click, TUN and two-tone; NereusSDR keeps this flag for the TUN
+    // path only and carries the Thetis flag as isManualKey() (Task 7).
     // F.1 subscribers wanting to distinguish a TUN-triggered MOX from a
     // raw setMox(true) call should read this getter inside their
     // hardwareFlipped(bool isTx) slot. External code must not set this
     // directly — call setTune() instead.
     bool     isManualMox() const noexcept { return m_manualMox; }
+
+    // isManualKey: Thetis _manual_mox as Thetis sets it.
+    //
+    // From Thetis console.cs:246 [v2.10.3.15]:
+    //   private bool _manual_mox; // True if the MOX button was clicked on (not PTT)
+    // Thetis sets it from three places: the MOX button (chkMOX_Click,
+    // console.cs:29730-29747), TUN (console.cs:30145, cleared at 30193) and
+    // two-tone (console.ManualMox, setup.cs:11162 and 11193). While it is
+    // set, PollPTT does nothing (console.cs:25470): no source keys, and no
+    // source's release unkeys.
+    //
+    // NereusSDR keeps isManualMox() for the TUN button alone (the TUNE
+    // button, PGXL/TGXL and the tuner applet read it that way), so the
+    // Thetis flag lives here under its own name. setTune(true) sets both.
+    bool     isManualKey() const noexcept { return m_manualKey; }
 
     // ── K.2: MOX pre-check callback ──────────────────────────────────────────
     //
@@ -318,13 +349,43 @@ public slots:
     // Those tasks call setTune() after doing their prep, or subscribe to
     // MoxController phase signals for ordered hardware-flip side-effects.
     //
-    // F.1 contract: m_pttMode is intentionally NOT cleared on TUN-off.
-    // The F.1 RadioModel subscriber is responsible for resetting it via
-    // the hardwareFlipped(false) signal path (matches Thetis behaviour
-    // where chkMOX_CheckedChanged2 sets _current_ptt_mode = NONE in its
-    // TX→RX branch at console.cs:29539 [v2.10.3.13]). The full rationale
-    // is in MoxController.cpp in the setTune(false) body comment.
+    // PTT mode on TUN-off: setTune(false) does not touch m_pttMode itself;
+    // its setMox(false) clears it, as chkMOX_CheckedChanged2 does in its
+    // TX-to-RX branch (console.cs:29547 [v2.10.3.15]).
+    //
+    // Manual key on TUN-off: setTune(false) leaves isManualKey() set.
+    // Thetis clears _manual_mox only at the end of TUN-off, after the tone
+    // and the power are restored (console.cs:30193 [v2.10.3.15]), so no
+    // mic PTT or VOX can key while the tune tone is still running. The
+    // owner of that completion (RadioModel::completeTuneOff) calls
+    // setManualKey(false).
     void setTune(bool on);
+
+    // onMoxButton: the MOX button (TxApplet, container buttons).
+    //
+    // Ports chkMOX_Click (console.cs:29730-29747 [v2.10.3.15]) with the
+    // CheckedChanged it follows:
+    //   on:  _manual_mox = true; chkMOX.Checked = true
+    //        (a refused key leaves the button off, so _manual_mox = false)
+    //   off: chkMOX.Checked = false; _manual_mox = false
+    // Thetis's MOX button does not set a PTT mode; the mode stays
+    // PTTMode.NONE (only TUN sets PTTMode.MANUAL, console.cs:30144).
+    // chkMOX_Click's off branch also turns TUN and two-tone off; those live
+    // on RadioModel, so RadioModel::setMoxFromButton does that part.
+    void onMoxButton(bool on);
+
+    // setManualKey: Thetis console.ManualMox (console.cs:10668-10672
+    // [v2.10.3.15]). Two-tone sets it before keying and clears it after
+    // its release settle (setup.cs:11162, 11193 [v2.10.3.15]); RadioModel
+    // clears it at the end of TUN-off. Clearing it runs one PollPTT pass,
+    // as Thetis's next poll would: a source still held may key.
+    void setManualKey(bool on);
+
+    // clearPttSources: drop every recorded PTT-source level without a pass.
+    // RadioModel calls it when the connection is torn down: Thetis polls PTT
+    // only while the radio is on (console.cs:25465 [v2.10.3.15]), and no
+    // source reports a release after the connection is gone.
+    void clearPttSources();
 
     // setVoxEnabled: engage/disengage VOX with voice-family mode-gate.
     //
@@ -543,36 +604,37 @@ public slots:
     // disconnect/reconnect (a fresh TxChannel needs to be re-primed).
     void primeWdspState();
 
-    // ── H.4: PTT-source dispatch slots ───────────────────────────────────────
+    // ── PTT-source slots (Thetis PollPTT) ────────────────────────────────────
     //
-    // Each slot routes an external PTT event through the MoxController state
-    // machine by setting the corresponding PttMode BEFORE driving setMox().
+    // Mic PTT, CAT, VOX and TCI record their source's level and run one
+    // PollPTT pass (console.cs:25463-25623 [v2.10.3.15]) over the recorded
+    // levels. Thetis polls every millisecond; NereusSDR runs the pass on
+    // every source event, and the radio's status frames (mic PTT, sent on
+    // every frame) keep it running like a poll while connected.
     //
-    // Dispatch pattern (all 5 accepted slots):
-    //   if (pressed) { setPttMode(PttMode::Xxx); }   ← PttMode set FIRST
-    //   setMox(pressed);
+    // The pass follows Thetis:
+    //   - Nothing happens while a manual key is on (isManualKey(), Thetis
+    //     _manual_mox): no source keys and no release unkeys.
+    //   - From receive (!MOX) each held source keys and sets its PTT mode,
+    //     in Thetis's order TCI, CAT, mic, VOX (the last held one names the
+    //     mode). PttMode is set before setMox(true), as Thetis assigns
+    //     _current_ptt_mode just before chkMOX.Checked = true.
+    //   - While keyed, a release unkeys only when it is the release of the
+    //     source named by the PTT mode: a mic release during a VOX, CAT,
+    //     TCI or manual key does nothing, and so does a VOX release during
+    //     a mic key. A TCI release falls back to a still-held source
+    //     (getFallbackPTTModeAfterTCIRelease) and unkeys only if none is.
     //
-    // ORDERING NOTE: PttMode is set before setMox(true) so that phase-signal
-    // subscribers (F.1 hardwareFlipped, txAboutToBegin) see a consistent
-    // m_pttMode == Xxx snapshot when their slots fire.  This mirrors the
-    // setTune() ordering precedent and matches the Thetis PollPTT dispatch
-    // in console.cs:25463-25507 [v2.10.3.13] where _current_ptt_mode is
-    // assigned immediately before chkMOX.Checked = true.
+    // UNKEY: setMox(false) itself sets the PTT mode to None and drops the
+    // CAT and TCI levels, as chkMOX_CheckedChanged2 does on every unkey
+    // (console.cs:29406-29411 and 29547 [v2.10.3.15]). A refused key does
+    // the same (Thetis refuses by unchecking chkMOX, which runs that branch).
     //
-    // F.1 CONTRACT: setMox(false) does NOT clear m_pttMode.  That is the
-    // responsibility of the RadioModel hardwareFlipped(false) subscriber per
-    // the F.1 contract (same as setTune(false) at MoxController.cpp:329).
-    // The 5 dispatch slots are fully symmetric with setTune() in this respect.
+    // Space and X2 are not part of PollPTT: onSpacePtt / onX2Ptt set their
+    // mode on press and drive setMox directly, as before.
     //
-    // CROSS-SOURCE SWITCHING: the dispatch slots do not refcount or arbitrate.
-    // The semantic is "last setter wins" — if onCatPtt(true) fires while Mic
-    // is active, PttMode transitions to Cat.  The upstream PollPTT handles
-    // arbitration before calling into these slots.
-    //
-    // Rejected slots (CW, TCI): log qCWarning(lcDsp) and return WITHOUT
-    // calling setMox() or updating m_pttMode.  Matches the qCWarning-and-
-    // return rejection pattern used elsewhere in the controller (e.g. the
-    // historical setAntiVoxSourceVax(true) deferral, removed in 3M-3a-iv).
+    // Rejected slot (CW): logs qCWarning(lcDsp) and returns without calling
+    // setMox() or updating m_pttMode. CW keying is 3M-2.
 
     // onMicPttFromRadio: MIC PTT button on the radio hardware.
     //
@@ -582,8 +644,9 @@ public slots:
     //   _current_ptt_mode = PTTMode.MIC;                   [v2.10.3.13]
     //   From Thetis console.cs:25492 [v2.10.3.13]
     //
-    // In NereusSDR, H.5 will extract mic_ptt from the P1/P2 status frame and
-    // call this slot.  Wiring deferred to H.5; this slot establishes the API.
+    // RadioConnection::micPttFromRadio calls this on every P1/P2 status
+    // frame (H.5), pressed or not, so the PollPTT pass runs like Thetis's
+    // poll while connected.
     //
     // Note: the slot name is "FromRadio" to distinguish hardware PTT from a
     // future software-only "mic mute" control.
@@ -610,9 +673,9 @@ public slots:
     //   _current_ptt_mode = PTTMode.VOX;                    [v2.10.3.13]
     //   From Thetis console.cs:25507 [v2.10.3.13]
     //
-    // In NereusSDR, the VOX active event will be driven by WDSP DEXP detection
-    // polling (TxChannel TX-meter readback, related to D.7).  Wiring deferred
-    // to 3M-3a or via TxChannel TX-meter polling.
+    // TxChannel::voxActiveChanged (the DEXP pushvox callback) calls this on
+    // each change. VOX keys only in the voice modes, as PollPTT's VOX branch
+    // requires (console.cs:25543-25555 [v2.10.3.15]).
     void onVoxActive(bool active);
 
     // onSpacePtt: spacebar PTT from the keyboard handler.
@@ -637,10 +700,10 @@ public slots:
     // deferred to 3M-3a or later when X2 status-frame parsing lands.
     void onX2Ptt(bool pressed);
 
-    // ── H.4: Rejected PTT-source dispatch slots (CW, TCI) ────────────────────
+    // ── H.4: Rejected PTT-source dispatch slot (CW) ──────────────────────────
     //
-    // These slots EXIST but REJECT all calls with qCWarning(lcDsp) + return.
-    // CW is deferred to 3M-2; TCI is deferred to 3J.
+    // This slot EXISTS but REJECTS all calls with qCWarning(lcDsp) + return.
+    // CW is deferred to 3M-2.
     //
     // The slots are declared (rather than omitted) so that:
     //   (a) tests can verify rejection behaviour via QSignalSpy;
@@ -651,7 +714,7 @@ public slots:
     // Rejection pattern (qCWarning + early return; no setMox / no setPttMode
     // update) — same shape as the historical setAntiVoxSourceVax(true) path
     // (removed in 3M-3a-iv post-bench refactor):
-    //   qCWarning(lcDsp) << "... rejected — deferred to 3M-2/3J";
+    //   qCWarning(lcDsp) << "... rejected, deferred to 3M-2";
     //   return;   // no setMox(), no setPttMode() update
 
     // onCwPtt: CW keyer PTT — REJECTED (deferred to 3M-2).
@@ -666,14 +729,15 @@ public slots:
     // machine.  This slot logs and returns without driving MOX.
     void onCwPtt(bool pressed);
 
-    // onTciPtt: TCI (transceiver control interface) PTT — REJECTED (deferred to 3J).
+    // onTciPtt: TCI trx (the console side of Thetis TCIPTT).
     //
-    // In Thetis this maps to:
-    //   PollPTT: if (_tci_ptt) _current_ptt_mode = PTTMode.TCI;
-    //   From Thetis console.cs:25463 [v2.10.3.13]
-    //
-    // 3J will implement the TCI server.  This slot logs and returns without
-    // driving MOX.
+    // RadioModel::setMox, the shim TciProtocol invokes for trx, calls this.
+    // In Thetis handleTrxMessage writes TCIPTT (console.cs:2456-2466
+    // [v2.10.3.15]) and PollPTT keys with PTTMode.TCI
+    // (console.cs:25507-25511). A release in TCI mode falls back to a
+    // still-held CAT, mic or VOX source, or unkeys if none is held
+    // (console.cs:25562-25581, getFallbackPTTModeAfterTCIRelease at
+    // console.cs:25429-25461).
     void onTciPtt(bool pressed);
 
     // ── C.4: rx2_enabled / vfobTx state for multicast Pre/Post rx argument ───
@@ -1146,6 +1210,24 @@ private:
     //   "private bool _manual_mox; // True if the MOX button was clicked on (not PTT)"
     // Set/cleared only by setTune() — never set by setMox() directly.
     bool     m_manualMox{false};
+    // m_manualKey: Thetis _manual_mox as Thetis sets it (MOX button, TUN,
+    // two-tone). Gates the whole PollPTT pass. See isManualKey().
+    bool     m_manualKey{false};
+
+    // ── PollPTT source levels (console.cs:25467-25477 [v2.10.3.15]) ──────────
+    // The last level each PollPTT source reported. setMox(false) and a
+    // refused key drop the CAT and TCI levels, as chkMOX_CheckedChanged2
+    // clears CATPTT and TCIPTT (console.cs:29406-29411 [v2.10.3.15]).
+    bool     m_micPtt{false};   // mic_ptt: PTT from radio
+    bool     m_catPtt{false};   // cat_ptt
+    bool     m_voxPtt{false};   // Audio.VOXActive
+    bool     m_tciPtt{false};   // _tci_ptt
+
+    // pollPtt: one pass of Thetis PollPTT over the recorded levels.
+    void pollPtt();
+    // dropPttOnUnkey: what chkMOX_CheckedChanged2 does to the PTT state on
+    // an unkey (and on a refused key).
+    void dropPttOnUnkey();
 
     // ── C.4: multicast Pre/Post rx-argument state ────────────────────────────
     // m_rx2Enabled mirrors RadioModel "RX2 enabled" flag.

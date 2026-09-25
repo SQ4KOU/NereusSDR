@@ -2917,10 +2917,20 @@ public slots:
     // thread) but the runtime TciServer pumps from the main thread (same
     // thread as RadioModel), so DirectConnection is fine for production too.
 
-    /// Set MOX (PTT).  Routes to MoxController if installed, else
-    /// TransmitModel.  Mirrors AppMod::PttSource:TCI in Thetis.
-    /// From Thetis TCIServer.cs:3454-3500 [v2.10.3.13] — handleTrx, set path.
+    /// Set MOX (PTT) for TCI trx: the TCI keying source.  With a
+    /// MoxController this is MoxController::onTciPtt (PttMode::Tci), written
+    /// only when it changes the MOX state, as handleTrxMessage writes TCIPTT
+    /// only when MOX != bMox (TCIServer.cs:3671-3672 [v2.10.3.15]); without
+    /// one it falls back to the TransmitModel latch.
+    /// From Thetis TCIServer.cs:3594-3689 [v2.10.3.15]: handleTrxMessage.
     Q_INVOKABLE void setMox(bool on);
+
+    /// The MOX button (TxApplet and the container MOX button).  Ports
+    /// Thetis chkMOX_Click (console.cs:29730-29747 [v2.10.3.15]):
+    /// MoxController::onMoxButton keys or unkeys with the manual key, and
+    /// on the way off TUN and two-tone are turned off as chkMOX_Click does
+    /// (first, keeping the manual key until their own ends; see the .cpp).
+    void setMoxFromButton(bool on);
 
     /// Query MOX (PTT).  Returns the current MOX latch state.
     /// From Thetis TCIServer.cs:3555-3558 [v2.10.3.13] — sendMOX.

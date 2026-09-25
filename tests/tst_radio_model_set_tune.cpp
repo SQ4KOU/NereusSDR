@@ -216,6 +216,8 @@ static void verifyRestored(RadioModel& model, MockConnection* conn,
     QVERIFY2(!model.isTune(), "a refused Tune must clear the Tune flag");
     QVERIFY2(!model.moxController()->isManualMox(),
              "the TUNE button reads manual MOX; it must drop back");
+    QVERIFY2(!model.moxController()->isManualKey(),
+             "a refused Tune must not leave PTT sources locked out");
     QVERIFY2(!model.transmitModel().isTune(),
              "TransmitModel::tune must not stay on the tune-power source");
     QVERIFY2(!model.tuneOffPendingForTest(),
@@ -1206,6 +1208,7 @@ private slots:
                  "the TUNE button reads manual MOX; it must drop back");
         QCOMPARE(manual.count(), 1);
         QCOMPARE(manual.last().at(0).toBool(), false);
+        QVERIFY(!model.moxController()->isManualKey());
         QVERIFY(!model.isTune());
         QVERIFY(!model.transmitModel().isTune());
         QVERIFY(!model.tuneOffPendingForTest());
@@ -1219,6 +1222,93 @@ private slots:
         QVERIFY(!model.moxController()->isManualMox());
         QCOMPARE(slice->dspMode(), DSPMode::CWU);
         QCOMPARE(model.transmitModel().power(), 80);
+    }
+
+    // ── 23. Task 7: TUN holds the manual key until TUN-off completes ────────
+    // From Thetis console.cs:30145 and 30193 [v2.10.3.15]: _manual_mox is
+    // set with TUN and cleared last in TUN-off, after the tone and power are
+    // restored, so no mic PTT or VOX keys while the tune tone is still up.
+    void tuneHoldsManualKeyUntilTuneOffCompletes()
+    {
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        setupModel(model, conn);
+        std::unique_ptr<MockConnection> connOwner(conn);
+        const auto detach = qScopeGuard([&model]() {
+            model.injectConnectionForTest(nullptr);
+        });
+        QVERIFY(model.activeSlice() != nullptr);
+        model.activeSlice()->setDspMode(DSPMode::USB);
+
+        model.setTune(true);
+        pump();
+        MoxController* mox = model.moxController();
+        QVERIFY(mox->isMox());
+        QVERIFY(mox->isManualKey());
+
+        model.setTune(false);
+        QVERIFY(model.tuneOffPendingForTest());
+        QVERIFY(mox->isManualKey());
+        // A mic press reported before TUN-off completes does not key.
+        mox->onMicPttFromRadio(true);
+        QVERIFY(!mox->isMox());
+
+        pump();
+        QVERIFY(!model.tuneOffPendingForTest());
+        QVERIFY(!mox->isManualKey());
+        // TUN-off is complete: the mic still held keys on the next pass, as
+        // Thetis's next poll does, with the tune tone already down.
+        QVERIFY(mox->isMox());
+        QCOMPARE(mox->pttMode(), PttMode::Mic);
+        mox->onMicPttFromRadio(false);
+        pump();
+        QVERIFY(!mox->isMox());
+        QCOMPARE(mox->pttMode(), PttMode::None);
+    }
+
+    // ── 24. Task 7: the MOX button's off turns TUN off (chkMOX_Click) ───────
+    void moxButtonOffDuringTuneTurnsTuneOff()
+    {
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        setupModel(model, conn);
+        std::unique_ptr<MockConnection> connOwner(conn);
+        const auto detach = qScopeGuard([&model]() {
+            model.injectConnectionForTest(nullptr);
+        });
+        QVERIFY(model.activeSlice() != nullptr);
+        model.activeSlice()->setDspMode(DSPMode::USB);
+
+        model.setTune(true);
+        pump();
+        QVERIFY(model.isTune());
+        MoxController* mox = model.moxController();
+        QVERIFY(mox->isMox());
+        // The operator holds the mic during TUN: ignored (manual key).
+        mox->onMicPttFromRadio(true);
+        QCOMPARE(mox->pttMode(), PttMode::Manual);
+
+        // The MOX button goes off: TUN turns off first, and the manual key
+        // holds until TUN-off completes, so the held mic does not key while
+        // the tune tone is still up.
+        model.setMoxFromButton(false);
+        QVERIFY(!mox->isMox());
+        QVERIFY(mox->isManualKey());
+        QVERIFY(model.tuneOffPendingForTest());
+        mox->onMicPttFromRadio(true);
+        QVERIFY(!mox->isMox());
+
+        pump();
+        QVERIFY(!model.isTune());
+        QVERIFY(!mox->isManualMox());
+        QVERIFY(!mox->isManualKey());
+        QVERIFY(!model.tuneOffPendingForTest());
+        // With the tone down the held mic keys, as Thetis's next poll does.
+        QVERIFY(mox->isMox());
+        QCOMPARE(mox->pttMode(), PttMode::Mic);
+        mox->onMicPttFromRadio(false);
+        pump();
+        QVERIFY(!mox->isMox());
     }
 };
 

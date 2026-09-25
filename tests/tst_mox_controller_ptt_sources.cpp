@@ -1,0 +1,424 @@
+// =================================================================
+// tests/tst_mox_controller_ptt_sources.cpp  (NereusSDR)
+// =================================================================
+//
+// NereusSDR-original test. No Thetis logic is ported in this file; it
+// checks that the keying sources follow Thetis (receiver and transmit
+// gaps plan, Task 7):
+//
+//   Thetis Project Files/Source/Console/console.cs [v2.10.3.15]:
+//     PollPTT                              25463-25623
+//       the whole pass is skipped while _manual_mox is set    25470
+//       keying from receive, in order TCI, CAT, CW, MIC, VOX  25507-25555
+//       release only in the mode the source set               25558-25608
+//     getFallbackPTTModeAfterTCIRelease    25429-25461
+//     chkMOX_CheckedChanged2, TX-to-RX branch:
+//       CATPTT / TCIPTT cleared            29406-29411
+//       _current_ptt_mode = PTTMode.NONE   29547
+//     chkMOX_Click (the MOX button)        29730-29747
+//     chkTUN_CheckedChanged: MANUAL + _manual_mox at 30144-30145,
+//       _manual_mox cleared at the end of TUN-off 30193
+//   setup.cs [v2.10.3.15]: two-tone sets console.ManualMox around its key
+//     (11162, 11193).
+//
+// Every case runs a bare MoxController (or an unconnected RadioModel)
+// with 0 ms walk timers. Nothing here opens an audio device or keys a
+// radio.
+// =================================================================
+
+// no-port-check: NereusSDR-original test file, no upstream Thetis port.
+
+#include <QtTest/QtTest>
+#include <QSignalSpy>
+
+#include "core/MoxController.h"
+#include "core/PttMode.h"
+#include "core/WdspTypes.h"
+#include "models/RadioModel.h"
+
+using namespace NereusSDR;
+
+namespace {
+
+void makeSync(MoxController& ctrl)
+{
+    ctrl.setTimerIntervals(0, 0, 0, 0, 0, 0);
+}
+
+void drain()
+{
+    for (int i = 0; i < 4; ++i) {
+        QCoreApplication::processEvents();
+    }
+}
+
+// The radio's status frames report the mic PTT level on every frame; a few
+// frames stand in for "the operator is not pressing the mic".
+void micFrames(MoxController& ctrl, bool pressed, int frames = 3)
+{
+    for (int i = 0; i < frames; ++i) {
+        ctrl.onMicPttFromRadio(pressed);
+        drain();
+    }
+}
+
+} // namespace
+
+class TestMoxControllerPttSources : public QObject {
+    Q_OBJECT
+
+private slots:
+
+    // ── Each source's PTT mode, and the mode clearing on unkey ──────────────
+
+    void mic_keysInMicMode_unkeyClearsMode()
+    {
+        MoxController ctrl;
+        makeSync(ctrl);
+        micFrames(ctrl, true);
+        QVERIFY(ctrl.isMox());
+        QCOMPARE(ctrl.pttMode(), PttMode::Mic);
+
+        micFrames(ctrl, false);
+        QVERIFY(!ctrl.isMox());
+        // chkMOX_CheckedChanged2 sets PTTMode.NONE on every unkey.
+        QCOMPARE(ctrl.pttMode(), PttMode::None);
+    }
+
+    void vox_keysInVoxMode_unkeyClearsMode()
+    {
+        MoxController ctrl;
+        makeSync(ctrl);
+        ctrl.onVoxActive(true);
+        drain();
+        QVERIFY(ctrl.isMox());
+        QCOMPARE(ctrl.pttMode(), PttMode::Vox);
+
+        ctrl.onVoxActive(false);
+        drain();
+        QVERIFY(!ctrl.isMox());
+        QCOMPARE(ctrl.pttMode(), PttMode::None);
+    }
+
+    void vox_doesNotKeyOutsideVoiceModes()
+    {
+        // PollPTT keys VOX only in LSB/USB/DSB/AM/SAM/DIGU/DIGL/FM.
+        MoxController ctrl;
+        makeSync(ctrl);
+        ctrl.onModeChanged(DSPMode::CWU);
+        ctrl.onVoxActive(true);
+        drain();
+        QVERIFY(!ctrl.isMox());
+        QCOMPARE(ctrl.pttMode(), PttMode::None);
+    }
+
+    void tci_keysInTciMode_releaseUnkeysAndClearsMode()
+    {
+        MoxController ctrl;
+        makeSync(ctrl);
+        ctrl.onTciPtt(true);
+        drain();
+        QVERIFY(ctrl.isMox());
+        QCOMPARE(ctrl.pttMode(), PttMode::Tci);
+
+        ctrl.onTciPtt(false);
+        drain();
+        QVERIFY(!ctrl.isMox());
+        QCOMPARE(ctrl.pttMode(), PttMode::None);
+    }
+
+    void moxButton_isAManualKey_withNoPttMode()
+    {
+        // chkMOX_Click sets _manual_mox; the MOX button sets no PTT mode
+        // (only TUN sets PTTMode.MANUAL).
+        MoxController ctrl;
+        makeSync(ctrl);
+        ctrl.onMoxButton(true);
+        drain();
+        QVERIFY(ctrl.isMox());
+        QVERIFY(ctrl.isManualKey());
+        QVERIFY(!ctrl.isManualMox());   // the TUN button's flag stays off
+        QCOMPARE(ctrl.pttMode(), PttMode::None);
+
+        ctrl.onMoxButton(false);
+        drain();
+        QVERIFY(!ctrl.isMox());
+        QVERIFY(!ctrl.isManualKey());
+        QCOMPARE(ctrl.pttMode(), PttMode::None);
+    }
+
+    void moxButton_refusedKey_leavesNoManualKey()
+    {
+        // A refused key unchecks chkMOX; chkMOX_Click then clears _manual_mox.
+        MoxController ctrl;
+        makeSync(ctrl);
+        ctrl.setMoxCheck([]() {
+            return safety::BandPlanGuard::MoxCheckResult{false,
+                QStringLiteral("test refusal")};
+        });
+        ctrl.onMoxButton(true);
+        drain();
+        QVERIFY(!ctrl.isMox());
+        QVERIFY(!ctrl.isManualKey());
+    }
+
+    void refusedKey_leavesModeNone()
+    {
+        // Thetis refuses a key by unchecking chkMOX, which runs the TX-to-RX
+        // branch: the mode is NONE afterwards.
+        MoxController ctrl;
+        makeSync(ctrl);
+        ctrl.setMoxCheck([]() {
+            return safety::BandPlanGuard::MoxCheckResult{false,
+                QStringLiteral("test refusal")};
+        });
+        ctrl.onMicPttFromRadio(true);
+        drain();
+        QVERIFY(!ctrl.isMox());
+        QCOMPARE(ctrl.pttMode(), PttMode::None);
+    }
+
+    void tune_isAManualKey_heldUntilTuneOffCompletes()
+    {
+        MoxController ctrl;
+        makeSync(ctrl);
+        ctrl.setTune(true);
+        drain();
+        QVERIFY(ctrl.isMox());
+        QVERIFY(ctrl.isManualKey());
+        QCOMPARE(ctrl.pttMode(), PttMode::Manual);
+
+        // A mic PTT pressed while the tune tone is still being taken down
+        // must not key (_manual_mox is cleared only at the end of TUN-off).
+        ctrl.setTune(false);
+        drain();
+        QVERIFY(!ctrl.isMox());
+        QCOMPARE(ctrl.pttMode(), PttMode::None);
+        QVERIFY(ctrl.isManualKey());
+        micFrames(ctrl, true);
+        QVERIFY(!ctrl.isMox());
+
+        // TUN-off completes: the held mic keys on the next pass.
+        ctrl.setManualKey(false);
+        drain();
+        QVERIFY(ctrl.isMox());
+        QCOMPARE(ctrl.pttMode(), PttMode::Mic);
+    }
+
+    // ── Release guards, one per pair ────────────────────────────────────────
+
+    void micRelease_duringManualKey_keepsTransmitting()
+    {
+        MoxController ctrl;
+        makeSync(ctrl);
+        // The operator used the mic earlier in the session.
+        micFrames(ctrl, true);
+        micFrames(ctrl, false);
+        QVERIFY(!ctrl.isMox());
+
+        ctrl.onMoxButton(true);
+        drain();
+        QVERIFY(ctrl.isMox());
+
+        // Every status frame reports the mic up; PollPTT does nothing while
+        // _manual_mox is set.
+        micFrames(ctrl, false, 5);
+        QVERIFY(ctrl.isMox());
+        QCOMPARE(ctrl.pttMode(), PttMode::None);
+
+        // Nor does a mic press take the mode.
+        micFrames(ctrl, true);
+        micFrames(ctrl, false);
+        QVERIFY(ctrl.isMox());
+        QCOMPARE(ctrl.pttMode(), PttMode::None);
+    }
+
+    void voxRelease_duringManualKey_keepsTransmitting()
+    {
+        MoxController ctrl;
+        makeSync(ctrl);
+        ctrl.onMoxButton(true);
+        drain();
+        QVERIFY(ctrl.isMox());
+
+        ctrl.onVoxActive(true);
+        drain();
+        QCOMPARE(ctrl.pttMode(), PttMode::None);
+        ctrl.onVoxActive(false);
+        drain();
+        QVERIFY(ctrl.isMox());
+        QVERIFY(ctrl.isManualKey());
+    }
+
+    void micRelease_duringTwoToneManualKey_keepsTransmitting()
+    {
+        // Two-tone: console.ManualMox = true; console.MOX = true.
+        MoxController ctrl;
+        makeSync(ctrl);
+        micFrames(ctrl, true);
+        micFrames(ctrl, false);
+
+        ctrl.setManualKey(true);
+        ctrl.setMox(true);
+        drain();
+        micFrames(ctrl, false);
+        QVERIFY(ctrl.isMox());
+    }
+
+    void voxRelease_duringMicKey_keepsTransmitting()
+    {
+        // PollPTT's VOX release applies only in PTTMode.VOX.
+        MoxController ctrl;
+        makeSync(ctrl);
+        ctrl.onMicPttFromRadio(true);
+        drain();
+        ctrl.onVoxActive(true);
+        drain();
+        QCOMPARE(ctrl.pttMode(), PttMode::Mic);
+        ctrl.onVoxActive(false);
+        ctrl.onMicPttFromRadio(true);
+        drain();
+        QVERIFY(ctrl.isMox());
+        QCOMPARE(ctrl.pttMode(), PttMode::Mic);
+    }
+
+    void micRelease_duringVoxKey_keepsTransmitting()
+    {
+        MoxController ctrl;
+        makeSync(ctrl);
+        ctrl.onVoxActive(true);
+        drain();
+        micFrames(ctrl, false);
+        QVERIFY(ctrl.isMox());
+        QCOMPARE(ctrl.pttMode(), PttMode::Vox);
+    }
+
+    void catPress_duringMicKey_leavesMicMode()
+    {
+        // Keying happens only from receive; a second source does not take
+        // the mode.
+        MoxController ctrl;
+        makeSync(ctrl);
+        ctrl.onMicPttFromRadio(true);
+        drain();
+        ctrl.onCatPtt(true);
+        drain();
+        QCOMPARE(ctrl.pttMode(), PttMode::Mic);
+        ctrl.onCatPtt(false);
+        ctrl.onMicPttFromRadio(true);
+        drain();
+        QVERIFY(ctrl.isMox());
+        QCOMPARE(ctrl.pttMode(), PttMode::Mic);
+    }
+
+    void tciPressAndRelease_duringManualKey_doNothing()
+    {
+        MoxController ctrl;
+        makeSync(ctrl);
+        ctrl.onMoxButton(true);
+        drain();
+        ctrl.onTciPtt(true);
+        drain();
+        QCOMPARE(ctrl.pttMode(), PttMode::None);
+        ctrl.onTciPtt(false);
+        drain();
+        QVERIFY(ctrl.isMox());
+        QVERIFY(ctrl.isManualKey());
+    }
+
+    void tciRelease_withMicHeld_fallsBackToMic()
+    {
+        // getFallbackPTTModeAfterTCIRelease: a held mic keeps the key.
+        MoxController ctrl;
+        makeSync(ctrl);
+        ctrl.onTciPtt(true);
+        drain();
+        QCOMPARE(ctrl.pttMode(), PttMode::Tci);
+        ctrl.onMicPttFromRadio(true);
+        drain();
+        QCOMPARE(ctrl.pttMode(), PttMode::Tci);
+
+        ctrl.onTciPtt(false);
+        drain();
+        QVERIFY(ctrl.isMox());
+        QCOMPARE(ctrl.pttMode(), PttMode::Mic);
+
+        micFrames(ctrl, false);
+        QVERIFY(!ctrl.isMox());
+        QCOMPARE(ctrl.pttMode(), PttMode::None);
+    }
+
+    void heldVox_keysAfterManualUnkey()
+    {
+        // After the MOX button goes off, Thetis's next poll keys a VOX that
+        // is still active.
+        MoxController ctrl;
+        makeSync(ctrl);
+        ctrl.onMoxButton(true);
+        drain();
+        ctrl.onVoxActive(true);
+        drain();
+        ctrl.onMoxButton(false);
+        drain();
+        QVERIFY(ctrl.isMox());
+        QCOMPARE(ctrl.pttMode(), PttMode::Vox);
+        QVERIFY(!ctrl.isManualKey());
+    }
+
+    // ── RadioModel shims (unconnected model, 0 ms walk, counting check) ─────
+
+    void radioModel_tciShim_keysWithTciMode()
+    {
+        RadioModel core;
+        MoxController* mox = core.moxController();
+        QVERIFY(mox != nullptr);
+        makeSync(*mox);
+        int keyRequests = 0;
+        mox->setMoxCheck([&keyRequests]() {
+            ++keyRequests;
+            return safety::BandPlanGuard::MoxCheckResult{true, QString()};
+        });
+
+        core.setMox(true);
+        drain();
+        QVERIFY(core.mox());
+        QCOMPARE(mox->pttMode(), PttMode::Tci);
+        QCOMPARE(keyRequests, 1);
+
+        // handleTrxMessage writes TCIPTT only when it changes MOX.
+        core.setMox(true);
+        drain();
+        QCOMPARE(keyRequests, 1);
+
+        core.setMox(false);
+        drain();
+        QVERIFY(!core.mox());
+        QCOMPARE(mox->pttMode(), PttMode::None);
+    }
+
+    void radioModel_tciUnkey_doesNotReleaseManualKey()
+    {
+        RadioModel core;
+        MoxController* mox = core.moxController();
+        QVERIFY(mox != nullptr);
+        makeSync(*mox);
+        mox->setMoxCheck([]() {
+            return safety::BandPlanGuard::MoxCheckResult{true, QString()};
+        });
+
+        core.setMoxFromButton(true);
+        drain();
+        QVERIFY(mox->isManualKey());
+        core.setMox(false);
+        drain();
+        QVERIFY(core.mox());
+
+        core.setMoxFromButton(false);
+        drain();
+        QVERIFY(!core.mox());
+        QVERIFY(!mox->isManualKey());
+    }
+};
+
+QTEST_GUILESS_MAIN(TestMoxControllerPttSources)
+#include "tst_mox_controller_ptt_sources.moc"
