@@ -68,6 +68,11 @@
 //                 keys through RadioModel::setMoxFromButton (a manual key,
 //                 Thetis chkMOX_Click). J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-25 : Receiver and transmit gaps plan, Task 16: receive only
+//                 disables MOX (outside SPEC and DRM), TUNE, 2-Tone and VOX
+//                 with its reason (console.RXOnly, console.cs:15312-15334
+//                 [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1167,6 +1172,13 @@ void TxApplet::wireControls()
             // Set initial tooltip from current mode.
             onMoxModeChanged(slice->dspMode());
         }
+        // Task 16: receive only turning on or off, or its reason changing
+        // (a radio with no transmitter).
+        connect(m_model, &RadioModel::rxOnlyChanged, this, [this](bool) {
+            removeReceiveOnlyLock();
+            applyReceiveOnlyLock();
+        });
+        applyReceiveOnlyLock();
     }
 
     // ── 4b. VOX row wiring (3M-3a-iii bench polish 2026-05-04) ────────────────
@@ -1984,9 +1996,79 @@ QString TxApplet::tooltipForMode(DSPMode mode)
 // ---------------------------------------------------------------------------
 void TxApplet::onMoxModeChanged(DSPMode mode)
 {
+    // Task 16: the receive-only lock sits on top of the tooltip; take it
+    // off, change the tooltip under it, and put it back for the new mode
+    // (Thetis leaves MOX alone in SPEC and DRM).
+    removeReceiveOnlyLock();
     if (m_moxBtn) {
         m_moxBtn->setToolTip(tooltipForMode(mode));
     }
+    applyReceiveOnlyLock();
+}
+
+// ---------------------------------------------------------------------------
+// Task 16: receive only.
+//
+// From Thetis console.cs:15318-15324 [v2.10.3.15] (RXOnly setter):
+//   if (_rx1_dsp_mode != DSPMode.SPEC &&
+//       _rx1_dsp_mode != DSPMode.DRM &&
+//       chkPower.Checked)
+//       chkMOX.Enabled = !_rx_only;
+//   chkTUN.Enabled = !_rx_only;
+//   chk2TONE.Enabled = !_rx_only; // MW0LGE_21a
+//   chkVOX.Enabled = !_rx_only;
+// Disabled, with the reason as the tooltip (the operator, 2026-09-25: a
+// control that cannot run is shown disabled with its reason). The keying
+// gate refuses every key whatever the buttons show (MoxController::setRxOnly).
+// ---------------------------------------------------------------------------
+namespace {
+constexpr auto kRxOnlySavedTooltip = "TxAppletRxOnlySavedTooltip";
+constexpr auto kRxOnlySavedDescription = "TxAppletRxOnlySavedDescription";
+constexpr auto kRxOnlySavedEnabled = "TxAppletRxOnlySavedEnabled";
+}
+
+void TxApplet::removeReceiveOnlyLock()
+{
+    for (QWidget* control : {static_cast<QWidget*>(m_moxBtn),
+                             static_cast<QWidget*>(m_tuneBtn),
+                             static_cast<QWidget*>(m_twoToneBtn),
+                             static_cast<QWidget*>(m_voxBtn)}) {
+        if (!control || !control->property(kRxOnlySavedTooltip).isValid()) {
+            continue;
+        }
+        control->setEnabled(control->property(kRxOnlySavedEnabled).toBool());
+        control->setToolTip(control->property(kRxOnlySavedTooltip).toString());
+        control->setAccessibleDescription(
+            control->property(kRxOnlySavedDescription).toString());
+        control->setProperty(kRxOnlySavedTooltip, QVariant());
+        control->setProperty(kRxOnlySavedDescription, QVariant());
+        control->setProperty(kRxOnlySavedEnabled, QVariant());
+    }
+}
+
+void TxApplet::applyReceiveOnlyLock()
+{
+    if (!m_model || !m_model->isRxOnly()) {
+        return;
+    }
+    const QString reason = m_model->rxOnlyReason();
+    const auto lock = [&reason](QWidget* control) {
+        if (!control || control->property(kRxOnlySavedTooltip).isValid()) {
+            return;
+        }
+        control->setProperty(kRxOnlySavedTooltip, control->toolTip());
+        control->setProperty(kRxOnlySavedDescription, control->accessibleDescription());
+        control->setProperty(kRxOnlySavedEnabled, control->isEnabled());
+        control->setEnabled(false);
+        control->setToolTip(reason);
+        control->setAccessibleDescription(reason);
+    };
+    if (m_model->receiveOnlyDisablesMoxButton()) {
+        lock(m_moxBtn);
+    }
+    lock(m_tuneBtn);
+    lock(m_twoToneBtn);   // MW0LGE_21a
+    lock(m_voxBtn);
 }
 
 // ── pollVoxMeter — Phase 3M-3a-iii bench polish 2026-05-04 ─────────────────
@@ -2173,6 +2255,8 @@ void TxApplet::updateMonitorOutputNotice()
 // ---------------------------------------------------------------------------
 void TxApplet::setTransmitPermitted(bool permitted, const QString& unavailableReason)
 {
+    // Task 16: the receive-only lock goes back on top afterwards.
+    removeReceiveOnlyLock();
     m_transmitPermitted = permitted;
     const QString reason = unavailableReason.isEmpty()
         ? tr("Transmit controls are unavailable until the Core confirms "
@@ -2228,6 +2312,7 @@ void TxApplet::setTransmitPermitted(bool permitted, const QString& unavailableRe
     apply(m_twoToneBtn);
     apply(m_psaBtn);
     syncPsaFromFacade();
+    applyReceiveOnlyLock();
 }
 
 // ---------------------------------------------------------------------------

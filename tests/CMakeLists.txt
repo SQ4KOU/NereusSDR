@@ -2485,8 +2485,9 @@ nereus_add_test(tst_band_plan_guard_mox_rejection)
 nereus_add_test(tst_swr_protection_controller)
 
 # ── Phase 3M-0 Task 4: TxInhibitMonitor GPIO poll + 4-source aggregation ─────
-# 8 tests cover: startup no-inhibit, UserIo01 active-low, reverse-logic inversion,
-# immediate Rx2OnlyRadio / OutOfBand / BlockTxAntenna notification paths,
+# 7 tests cover: startup no-inhibit, UserIo01 active-low, reverse-logic inversion,
+# immediate OutOfBand / BlockTxAntenna notification paths (Task 16 moved
+# receive only to MoxController::setRxOnly),
 # multi-source priority ordering + all-clear, and poll-cadence duplicate suppression.
 # Ports Thetis console.cs:25801-25839 [v2.10.3.13] (PollTXInhibit loop).
 nereus_add_test(tst_tx_inhibit_monitor)
@@ -2499,6 +2500,17 @@ nereus_add_test(tst_tx_inhibit_monitor)
 # locally and from a remote window on the Core.
 nereus_add_test(tst_tx_inhibit_input fakes/LoopbackTransport.cpp)
 target_compile_definitions(tst_tx_inhibit_input PRIVATE NEREUS_BUILD_TESTS)
+
+# ── Task 16 (receiver and transmit gaps plan): receive only stops every key ──
+# Thetis console.RXOnly (console.cs:15312-15334 [v2.10.3.15]), PollPTT's
+# _rx_only gate (25470), chkMOX_CheckedChanged2's refusal (29378) and Setup's
+# chkGeneralRXOnly_CheckedChanged (setup.cs:6479): every source refused
+# through MoxController, a keyed MOX dropped, the HL2 receive-only kit always
+# receive only, the Setup box never hidden, the transmit buttons disabled with
+# the reason (MOX's SPEC / DRM exception), and a remote window's box reaching
+# the Core's gate over a session.
+nereus_add_test(tst_receive_only fakes/LoopbackTransport.cpp)
+target_compile_definitions(tst_receive_only PRIVATE NEREUS_BUILD_TESTS)
 
 # ── Phase 3M-0 Task 5 (updated 3M-1a E.5): setWatchdogEnabled(bool) ──────────
 # 8 tests assert boolean state-tracking on RadioConnection (P1 + P2).
@@ -2918,14 +2930,14 @@ nereus_add_test(tst_dexp_vox_setup_page)
 # Verifies grpHardwareConfig has 4 controls + 1 warning label per
 # Thetis tpGeneralHardware (setup.designer.cs:8045-8396 [v2.10.3.13]):
 # 24-entry Region combo (default United States), Extended checkbox, red warning
-# label, chkGeneralRXOnly hidden by default, chkNetworkWDT default ON.
+# label, chkGeneralRXOnly shown (Task 16; Thetis hides it), chkNetworkWDT default ON.
 nereus_add_test(tst_general_setup_hardware_config)
 
-# ── Phase 3M-1a G.2: Receive Only checkbox visibility wired from caps.isRxOnlySku ──
-# Verifies setReceiveOnlyVisible(bool) works correctly and that the constructor
-# reads initial caps (hidden for standard boards, visible for RX-only SKUs like
-# HermesLiteRxOnly).  Cite: Thetis setup.designer.cs:8535-8544 [v2.10.3.13]
-# (Visible=false default); BoardCapabilities::isRxOnlySku (NereusSDR-original).
+# ── Phase 3M-1a G.2: Receive Only checkbox wired from caps.isRxOnlySku ─────────
+# Task 16 (receiver and transmit gaps plan) replaced the contract: the box is
+# shown on every radio, and on an RX-only SKU (HermesLiteRxOnly) it is checked
+# and disabled with the reason. The constructor reads the initial caps and a
+# reconnect updates it. BoardCapabilities::isRxOnlySku (NereusSDR-original).
 # NEREUS_BUILD_TESTS required for RadioModel::setBoardForTest.
 nereus_add_test(tst_general_options_page_rx_only)
 target_compile_definitions(tst_general_options_page_rx_only PRIVATE NEREUS_BUILD_TESTS)

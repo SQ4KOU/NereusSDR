@@ -698,7 +698,8 @@ public:
 
     // One-shot migration: legacy global "hl2IoBoard/n2adrFilter" (Bug 2 in
     // hermes-filter-debug) → per-MAC "hardware/<mac>/hl2IoBoard/n2adrFilter"
-    // for every saved radio whose boardType is HermesLite. Removes the global
+    // for every saved radio whose boardType is HermesLite or HermesLiteRxOnly
+    // (the receive-only kit, Task 16). Removes the global
     // key after migration. Idempotent (no-op if global key absent).
     //
     // Why per-MAC: NereusSDR scopes radio-specific settings under

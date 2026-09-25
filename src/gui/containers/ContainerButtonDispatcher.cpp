@@ -18,6 +18,11 @@
 //                                    RadioModel::setMoxFromButton (a manual
 //                                    key). AI-assisted via Anthropic Claude
 //                                    Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  Receiver and transmit gaps plan, Task
+//                                    16: TUNE, MOX (outside SPEC and DRM)
+//                                    and 2-Tone are unavailable with the
+//                                    receive-only reason. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "gui/containers/ContainerButtonDispatcher.h"
@@ -148,7 +153,15 @@ ContainerButtonDispatcher::stateOf(Id id, int rxSource) const
         } else {
             st.on = m_model->twoToneController() && m_model->twoToneController()->isActive();
         }
-        if (transmitBlockedRemotely()) {
+        // Task 16: receive only disables TUN and 2TONE, and MOX outside
+        // SPEC and DRM, as Thetis console.RXOnly does
+        // (console.cs:15318-15323 [v2.10.3.15]; the 2TONE line carries
+        // // MW0LGE_21a); first, since it holds however this window reaches
+        // the radio.
+        if (m_model->isRxOnly()
+            && (id != Id::Mox || m_model->receiveOnlyDisablesMoxButton())) {
+            unavailable(m_model->rxOnlyReason());
+        } else if (transmitBlockedRemotely()) {
             unavailable(remoteReason);
         } else if (!m_model->isConnected()) {
             unavailable(noRadioTransmitReason());

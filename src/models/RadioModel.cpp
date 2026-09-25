@@ -192,6 +192,12 @@
 //                [v2.10.3.15]); External TX Inhibit applies at once
 //                (setup.cs:16660-16667 [v2.10.3.15]). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - Receiver and transmit gaps plan, Task 16: receive only
+//                stops every key (Thetis console.RXOnly,
+//                console.cs:15312-15334 [v2.10.3.15]); a Core setting the
+//                Core applies; the HL2 receive-only kit always receive
+//                only. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                Code.
 // =================================================================
 
 //=================================================================
@@ -1028,6 +1034,9 @@ RadioModel::RadioModel(Role role, QObject* parent)
         m_txInhibit.setReverseLogic(
             s.value(QStringLiteral("TxInhibitMonitorReversed"), QStringLiteral("False"))
              .toString() == QStringLiteral("True"));
+        // Task 16: Setup's Receive Only, read at start as Thetis restores
+        // it (setup.cs:740 [v2.10.3.15], InitGeneralTab).
+        m_rxOnlySetting = rxOnlySetting();
     }
 
     // 2. PA telemetry → SwrProtectionController::ingest is wired from the
@@ -1232,6 +1241,18 @@ RadioModel::RadioModel(Role role, QObject* parent)
             });
     connect(this, &RadioModel::paTrippedChanged, this,
             [this](bool /*tripped*/) { applyTxKeyBlock(); });
+    // Task 16: receive only is the third gate. The board decides it too
+    // (the HL2 receive-only kit), so it is recomputed whenever the radio
+    // changes; a remote window follows the Core's copy of the setting.
+    applyRxOnly();
+    connect(this, &RadioModel::currentRadioChanged, this,
+            [this](const NereusSDR::RadioInfo&) { applyRxOnly(); });
+    connect(this, &RadioModel::stationSettingChanged, this,
+            [this](const QString& key) {
+                if (key.isEmpty() || key == QLatin1String("RxOnly")) {
+                    applyRxOnlySetting(rxOnlySetting());
+                }
+            });
 
     // MoxController::txReady → TxChannel::setRunning(true) and
     // MoxController::txaFlushed → TxChannel::setRunning(false) are wired in
@@ -4491,6 +4512,8 @@ void RadioModel::applyStationCapabilities(const NereusSDR::StationCapabilities& 
     // connect uses picks it; and a Core with no radio (Unknown board) gives
     // Unknown, never Hermes.
     m_hardwareProfile = ::NereusSDR::profileForStation(caps.board, caps.hpsdrModel);
+    // Task 16: a Core running the HL2 receive-only kit shows receive only.
+    applyRxOnly();
     // As a local connect does before its currentRadioChanged: display units
     // and clamps that depend on the model (HL2) read it from here.
     m_transmitModel.setHpsdrModel(m_hardwareProfile.model);
@@ -16494,6 +16517,8 @@ void RadioModel::applyHpsdrModel(HPSDRModel m, HPSDRHW board)
     // Task 13: PollTXInhibit reads HardwareSpecific.Model on every pass
     // (console.cs:25855-25873 [v2.10.3.15]).
     m_txInhibit.setRadioModel(m_hardwareProfile.model);
+    // Task 16: the HL2 receive-only kit runs receive only.
+    applyRxOnly();
     if (m_receiverManager) {
         m_receiverManager->setHpsdrModel(m_hardwareProfile.model);
 
@@ -18365,7 +18390,12 @@ void RadioModel::applyTxKeyBlock()
     const bool inhibited = m_txInhibit.inhibited();
     m_moxController->setTxInhibited(inhibited);
     m_moxController->setPaTripped(m_paTripped);
-    if (!inhibited && !m_paTripped) {
+    // Task 16: receive only, the third gate (console.RXOnly,
+    // console.cs:15312-15334 [v2.10.3.15]: if (_rx_only && chkMOX.Checked)
+    // chkMOX.Checked = false). TUN and two-tone go off below as for the
+    // other two.
+    m_moxController->setRxOnly(m_rxOnlyEffective, rxOnlyReason());
+    if (!inhibited && !m_paTripped && !m_rxOnlyEffective) {
         return;
     }
     if (m_isTuning && !m_pendingTuneOff) {
@@ -18375,6 +18405,103 @@ void RadioModel::applyTxKeyBlock()
         && (m_twoToneController->isActive()
             || m_twoToneController->isActivationInFlight())) {
         m_twoToneController->setActive(false);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Task 16: receive only.
+//
+// From Thetis setup.cs:6479-6502 [v2.10.3.15]
+// (chkGeneralRXOnly_CheckedChanged):
+//   if (initializing) return;
+//   if (chkGeneralRXOnly.Focused &&
+//       !chkGeneralRXOnly.Checked)
+//   {
+//       DialogResult dr = MessageBox.Show(
+//           "Unchecking Receive Only may \n" +
+//           "cause damage to your hardware.  Are you sure you want \n" +
+//           "to enable transmit?",
+//           "Warning: Enable Transmit?",
+//           MessageBoxButtons.YesNo,
+//           MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2, Common.MB_TOPMOST); //MW0LGE_[2.9.0.7]);
+//       if (dr == DialogResult.No)
+//       {
+//           chkGeneralRXOnly.Checked = true;
+//           return;
+//       }
+//   }
+//   console.RXOnly = chkGeneralRXOnly.Checked;
+// The question is GeneralOptionsPage's; the setting and the gate are here.
+// Thetis saves it with the Setup form (default off) and restores it at
+// start (setup.cs:740 [v2.10.3.15]); NereusSDR keeps it as the Core's
+// "RxOnly" setting.
+// ---------------------------------------------------------------------------
+bool RadioModel::rxOnlySetting()
+{
+    return AppSettings::instance()
+               .value(QStringLiteral("RxOnly"), QStringLiteral("False"))
+               .toString()
+           == QStringLiteral("True");
+}
+
+void RadioModel::setRxOnly(bool on)
+{
+    AppSettings::instance().setValue(QStringLiteral("RxOnly"),
+                                     on ? QStringLiteral("True") : QStringLiteral("False"));
+    applyRxOnlySetting(on);
+}
+
+void RadioModel::applyRxOnlySetting(bool on)
+{
+    m_rxOnlySetting = on;
+    applyRxOnly();
+}
+
+QString RadioModel::rxOnlyForcedReason()
+{
+    return QStringLiteral("This radio has no transmitter, so it only receives.");
+}
+
+QString RadioModel::rxOnlyReason() const
+{
+    return m_rxOnlyForced ? rxOnlyForcedReason() : MoxController::defaultRxOnlyReason();
+}
+
+bool RadioModel::receiveOnlyDisablesMoxButton() const
+{
+    if (!m_rxOnlyEffective) {
+        return false;
+    }
+    // From Thetis console.cs:15318-15321 [v2.10.3.15]:
+    //   if (_rx1_dsp_mode != DSPMode.SPEC &&
+    //       _rx1_dsp_mode != DSPMode.DRM &&
+    //       chkPower.Checked)
+    //       chkMOX.Enabled = !_rx_only;
+    // In SPEC and DRM receive only leaves the MOX button as it is; the gate
+    // still refuses the key. The active slice stands for RX1.
+    if (m_activeSlice != nullptr) {
+        const DSPMode mode = m_activeSlice->dspMode();
+        if (mode == DSPMode::SPEC || mode == DSPMode::DRM) {
+            return false;
+        }
+    }
+    return true;
+}
+
+void RadioModel::applyRxOnly()
+{
+    // NereusSDR's own rule (not in Thetis or mi0bot-Thetis, which has no
+    // receive-only kit model; its HL2 receive only is the operator's RXOnly
+    // toggle, console.cs:15374-15395 [v2.10.3.13-beta2]): a radio with no
+    // transmitter always runs receive only.
+    const bool forced = boardCapabilities().isRxOnlySku;
+    const bool on = forced || m_rxOnlySetting;
+    const bool changed = on != m_rxOnlyEffective || forced != m_rxOnlyForced;
+    m_rxOnlyEffective = on;
+    m_rxOnlyForced = forced;
+    applyTxKeyBlock();
+    if (changed) {
+        emit rxOnlyChanged(on);
     }
 }
 

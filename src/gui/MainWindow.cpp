@@ -128,6 +128,9 @@
 //                blocking Linux audio first-run dialog
 //                (firstRunPromptsBarredForTestRun). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - Receiver and transmit gaps plan, Task 16: the container
+//                buttons follow receive only (RadioModel::rxOnlyChanged).
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -4105,6 +4108,8 @@ void MainWindow::buildUI()
                 this, refresh);
         connect(m_radioModel, &RadioModel::tuneRefused, this, refresh);
         connect(m_radioModel, &RadioModel::connectionStateChanged, this, refresh);
+        // Task 16: receive only disables TUN, MOX and 2TONE.
+        connect(m_radioModel, &RadioModel::rxOnlyChanged, this, refresh);
         if (MoxController* mox = m_radioModel->moxController()) {
             connect(mox, &MoxController::moxStateChanged, this, refresh);
             connect(mox, &MoxController::moxRejected, this, refresh);

@@ -108,6 +108,10 @@
 //   2026-09-24 -- R-R3-49: the Options page gates the Network Watchdog with
 //                 the Region (both the Core's). J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25 -- Receiver and transmit gaps plan, Task 16: Receive Only is
+//                 the Core's too, so the Options page gates three controls.
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -1985,7 +1989,7 @@ private slots:
         // wave, final review I4); so is VAX (R-R3-44).
         const QMap<QString, int> coreControls{
             {QStringLiteral("Startup & Preferences"), 2}, // callsign, grid (R-R3-21)
-            {QStringLiteral("Options"), 2},             // General: Region, Network Watchdog (R-R3-49)
+            {QStringLiteral("Options"), 3},             // General: Region, Network Watchdog (R-R3-49), Receive Only (Task 16)
             {QStringLiteral("Spectrum Defaults"), 5},   // FFT size, window, Hz/bin, fps x2
             {QStringLiteral("Grid & Scales"), 3},       // dB max, dB min, copy
             {QStringLiteral("Multimeter"), 1},          // sample interval

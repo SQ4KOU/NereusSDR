@@ -99,6 +99,12 @@
 //                passes every TCI release on; teardown unkeys; the MOX
 //                button completes a pending TUN-off before keying.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - Receiver and transmit gaps plan, Task 16: receive only
+//                (Thetis console.RXOnly, console.cs:15312-15334 and
+//                setup.cs:6479 [v2.10.3.15]): setRxOnly / applyRxOnlySetting
+//                / isRxOnly / rxOnlyChanged, a Core setting, and the HL2
+//                receive-only kit always receive only. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -645,6 +651,36 @@ public:
     // (chkTXInhibit_CheckedChanged / chkTXInhibitReverse_CheckedChanged).
     void setUseTxInhibit(bool on);
     void setReverseTxInhibit(bool on);
+
+    // Task 16 (receiver and transmit gaps plan): receive only, Thetis
+    // console.RXOnly (console.cs:15312-15334 [v2.10.3.15]) and Setup's
+    // chkGeneralRXOnly (setup.cs:6479 [v2.10.3.15]).
+    //
+    // A Core setting ("RxOnly", SettingsScope::Station): the gate sits where
+    // the radio is. setRxOnly saves it (a remote window's save goes to the
+    // Core) and applies it to this model; applyRxOnlySetting applies a value
+    // without saving it (the Core, when a window's change arrives). A remote
+    // window re-reads it when the Core's copy changes
+    // (stationSettingChanged), so its controls show the Core's state.
+    //
+    // isRxOnly() is the effective state: the setting, or a radio with no
+    // transmitter (BoardCapabilities::isRxOnlySku, the HL2 receive-only
+    // kit). The kit always runs receive only; that is NereusSDR's own rule,
+    // since mi0bot-Thetis has no kit model, only the operator's toggle.
+    // MoxController holds the gate (setRxOnly); rxOnlyChanged tells Setup
+    // and the transmit buttons.
+    static bool rxOnlySetting();
+    void setRxOnly(bool on);
+    void applyRxOnlySetting(bool on);
+    bool isRxOnly() const noexcept { return m_rxOnlyEffective; }
+    bool isRxOnlyForced() const noexcept { return m_rxOnlyForced; }
+    // The plain words a refused key and a disabled button show.
+    QString rxOnlyReason() const;
+    static QString rxOnlyForcedReason();
+    // Thetis leaves chkMOX.Enabled alone in SPEC and DRM
+    // (console.cs:15318-15321): true when receive only disables the MOX
+    // button for the active slice's mode.
+    bool receiveOnlyDisablesMoxButton() const;
 
     // Sub-components
     RadioConnection*  connection()       { return m_connection; }
@@ -2474,6 +2510,7 @@ public:
         // Plan Task 15: profileForRadio, as connectToRadio builds it.
         m_hardwareProfile = ::NereusSDR::profileForRadio(
             board, defaultModelForBoard(board));
+        applyRxOnly();   // Task 16: the kit runs receive only
     }
 
     // Phase 3P-I-a T14 — test-only hooks. Allow tests to inject a mock
@@ -2583,6 +2620,7 @@ public:
         m_testCapsOverride  = true;
         m_testCapsHasAlex   = false;  // reset sibling so combined state is unambiguous
         m_testCapsIsRxOnly  = isRxOnly;
+        applyRxOnly();   // Task 16: as a connect to that board would
     }
     // 3M-1b I.1: inject hasMicJack without a live radio board.
     // HL2 sets hasMicJack=false; all other boards set true (default).
@@ -3605,6 +3643,10 @@ signals:
     // (CATHandleAmplifierTripMessage). G8NJJ: handlers for Ganymede 500W PA protection.
     void paTrippedChanged(bool tripped);
 
+    // Task 16: the effective receive-only state or its reason changed
+    // (isRxOnly, isRxOnlyForced, rxOnlyReason).
+    void rxOnlyChanged(bool on);
+
     // Task 1.8: DSP rebuild elapsed time signal.
     // Emitted whenever a live DSP change (sample rate, active RX count,
     // DSP-Options buffer/filter changes) completes. The argument is the
@@ -4029,6 +4071,11 @@ private:
     // (console.cs:15341-15363 [v2.10.3.15]) and _ganymede_pa_issue
     // (console.cs:25470, 29364-29371).
     void applyTxKeyBlock();
+
+    // Task 16: recompute isRxOnly from the setting and the board, push it
+    // to MoxController through applyTxKeyBlock, and emit rxOnlyChanged on
+    // a change.
+    void applyRxOnly();
 
     // P1 full-parity §3.4 — per-sample PA telemetry handler.
     // Applies per-board ADC→watts scaling (scaleFwdPowerWatts /
@@ -4950,6 +4997,10 @@ private:
     // From Thetis Andromeda/Andromeda.cs:914 [v2.10.3.13] (_ganymede_pa_issue volatile bool).
     // G8NJJ: handlers for Ganymede 500W PA protection
     bool m_paTripped{false};
+    // Task 16: receive only (see isRxOnly).
+    bool m_rxOnlySetting{false};
+    bool m_rxOnlyEffective{false};
+    bool m_rxOnlyForced{false};
     // From Thetis Andromeda/Andromeda.cs:854-866 [v2.10.3.13] (_ganymedePresent / GanymedePresent setter).
     bool m_ganymedePresent{false};
 

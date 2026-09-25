@@ -293,6 +293,10 @@ public:
     // TestTwoTonePage (matches AudioTxInputPage / RxApplet patterns).
     QComboBox*   profileCombo()      const { return m_profileCombo; }
     QPushButton* twoToneButton()     const { return m_twoToneBtn; }
+    // Task 16: the keying buttons receive only disables.
+    QPushButton* moxButton()         const { return m_moxBtn; }
+    QPushButton* tuneButton()        const { return m_tuneBtn; }
+    QPushButton* voxButton()         const { return m_voxBtn; }
     // Issue #175 Task 7: HL2 slider rescale + dB label test access.
     QSlider*     rfPowerSlider()    const noexcept { return m_rfPowerSlider; }
     QSlider*     tunePowerSlider()  const noexcept { return m_tunePwrSlider; }
@@ -372,6 +376,14 @@ private:
     // K.2: slot called when SliceModel::dspModeChanged fires (via RadioModel).
     // Updates m_moxBtn->setToolTip(tooltipForMode(mode)).
     void onMoxModeChanged(DSPMode mode);
+
+    // Task 16: receive only disables MOX (outside SPEC and DRM), TUNE,
+    // 2-Tone and VOX with its reason, as Thetis console.RXOnly does
+    // (console.cs:15318-15324 [v2.10.3.15]). It sits on top of the remote
+    // transmit-permission gate: remove it, change the layer below, put it
+    // back.
+    void removeReceiveOnlyLock();
+    void applyReceiveOnlyLock();
 
     // Canonical TX band derived from the active slice's frequency.  This
     // is the band the radio actually transmits on (RadioModel.cpp:903-905

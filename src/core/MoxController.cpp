@@ -118,6 +118,11 @@
 //                 release that falls back to another source runs the MOX
 //                 pre-check first (M6, R-R3-36). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - Receiver and transmit gaps plan, Task 16: receive only
+//                 (setRxOnly, Thetis _rx_only; console.cs:15312-15334,
+//                 25470, 29378-29382 [v2.10.3.15]) refuses every key with
+//                 its reason and unkeys. J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -543,10 +548,19 @@ void MoxController::setMox(bool on)
     // and two-tone cleans up, as for any refused key. The PollPTT sources
     // never reach this: the gate in pollPtt skips them silently, as
     // Thetis's PollPTT does.
-    if (on && (m_paTripped || m_txInhibited)) {
+    //
+    // Task 16: receive only refuses here too. From Thetis
+    // chkMOX_CheckedChanged2, console.cs:29378-29382 [v2.10.3.15]:
+    //   if (_rx_only && chkMOX.Checked)
+    //   {
+    //       chkMOX.Checked = false;
+    //       return;
+    //   }
+    if (on && transmitBlocked()) {
         emit moxRejected(m_paTripped
             ? QStringLiteral("The amplifier has tripped. Reset it before transmitting.")
-            : QStringLiteral("Transmit is inhibited."));
+            : m_rxOnly ? m_rxOnlyReason
+                       : QStringLiteral("Transmit is inhibited."));
         if (!m_mox) {
             dropPttOnUnkey();
         }
@@ -882,9 +896,8 @@ void MoxController::clearHeldBits(quint8 bits)
 // skipped, as in Thetis: no source keys and none is refused per frame.
 //
 // Not ported, each for its own reason:
-//   - _disable_ptt, _rx_only, QSKEnabled: no NereusSDR equivalent in this
-//     controller; RX-only refusal goes through the MoxCheck gate, and QSK
-//     is 3M-2.
+//   - _disable_ptt, QSKEnabled: no NereusSDR equivalent in this
+//     controller; QSK is 3M-2. (_rx_only is ported by Task 16, setRxOnly.)
 //   - _stop_all_tx (the time-out timer hold-off): NereusSDR has no
 //     StopAllTx.
 //   - The CW branch and PTTMode.CW: CW keying is 3M-2 (onCwPtt refuses).
@@ -899,8 +912,8 @@ void MoxController::pollPtt()
     //   if (!_manual_mox && !_disable_ptt && !_rx_only && !_tx_inhibit && !QSKEnabled && !_ganymede_pa_issue)
     // (cw_ptt, on the lines below it, carries: //[2.10.3.9]MW0LGE only want to do this on semi breakin  [original inline comment from console.cs:25473])
     // The manual key, TX inhibit and the PA trip are ported (Task 7 and
-    // its fix wave, I2).
-    if (m_manualKey || m_txInhibited || m_paTripped) {
+    // its fix wave, I2); _rx_only is ported by Task 16 (setRxOnly).
+    if (m_manualKey || transmitBlocked()) {
         return;
     }
 
@@ -1093,6 +1106,58 @@ void MoxController::setPaTripped(bool on)
     m_paTripped = on;
     if (on) {
         dropAppLevelsUnderBlock();   // Task 7 follow-up, N3
+    }
+    if (on && m_mox) {
+        setMox(false);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// setRxOnly: Thetis console.RXOnly (receiver and transmit gaps plan, Task 16).
+//
+// From Thetis console.cs:15312-15334 [v2.10.3.15]:
+//   public bool RXOnly
+//   {
+//       get { return _rx_only; }
+//       set
+//       {
+//           _rx_only = value;
+//           if (_rx1_dsp_mode != DSPMode.SPEC &&
+//               _rx1_dsp_mode != DSPMode.DRM &&
+//               chkPower.Checked)
+//               chkMOX.Enabled = !_rx_only;
+//           chkTUN.Enabled = !_rx_only;
+//           chk2TONE.Enabled = !_rx_only; // MW0LGE_21a
+//           chkVOX.Enabled = !_rx_only;
+//           if (_rx_only && chkMOX.Checked)
+//               chkMOX.Checked = false;
+//
+//           if (!IsSetupFormNull)
+//           {
+//               if (SetupForm.RXOnly != _rx_only)
+//                   SetupForm.RXOnly = _rx_only;
+//           }
+//       }
+//   }
+// The button enables are the window's (TxApplet, the container buttons,
+// RadioModel::receiveOnlyDisablesMoxButton); Setup follows
+// RadioModel::rxOnlyChanged. Here: the PollPTT gate (console.cs:25470),
+// the refusal of every other key (setMox, console.cs:29378), and the unkey.
+// CAT and TCI requests are dropped as under TX inhibit (Task 7 follow-up,
+// N3), so nothing keys later without a new request.
+// ---------------------------------------------------------------------------
+QString MoxController::defaultRxOnlyReason()
+{
+    return QStringLiteral("Receive Only is on, so this radio does not transmit. "
+                          "Turn it off under Setup > General > Options.");
+}
+
+void MoxController::setRxOnly(bool on, const QString& reason)
+{
+    m_rxOnly = on;
+    m_rxOnlyReason = reason.isEmpty() ? defaultRxOnlyReason() : reason;
+    if (on) {
+        dropAppLevelsUnderBlock();
     }
     if (on && m_mox) {
         setMox(false);
@@ -1754,7 +1819,7 @@ void MoxController::onCatPtt(bool pressed)
     // Task 7 follow-up, N3: refused, not kept, while TX inhibit or a PA
     // trip holds (see dropAppLevelsUnderBlock). Silent, as PollPTT's gate
     // is for every source.
-    if (pressed && (m_txInhibited || m_paTripped)) {
+    if (pressed && transmitBlocked()) {   // Task 16: and receive only
         qCInfo(lcDsp) << "MoxController: CAT PTT refused while transmit is blocked";
         return;
     }
@@ -1872,7 +1937,7 @@ void MoxController::onTciPtt(bool pressed)
     // Task 7 follow-up, N3: refused, not kept, while TX inhibit or a PA
     // trip holds (see dropAppLevelsUnderBlock); the app is answered
     // trx:N,false.
-    if (pressed && (m_txInhibited || m_paTripped)) {
+    if (pressed && transmitBlocked()) {   // Task 16: and receive only
         qCInfo(lcDsp) << "MoxController: TCI PTT refused while transmit is blocked";
         return;
     }
