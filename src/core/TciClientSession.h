@@ -37,6 +37,11 @@
 //                J.J. Boyd (KG4VCF): each client's own update gap for vfo,
 //                dds and tx_frequency lines (TciUpdateGap).
 //                AI-assisted transformation via Anthropic Claude Code.
+//   2026-09-25 - R-R3-39 by J.J. Boyd (KG4VCF): a receiver's resampler
+//                pair is a shared TciRxAudioResampler that the receive lane
+//                makes, runs and destroys; rxAudioBlocksOnLane keeps a
+//                client's blocks in order across the lane.
+//                AI-assisted transformation via Anthropic Claude Code.
 
 #pragma once
 #ifdef HAVE_WEBSOCKETS
@@ -49,9 +54,15 @@
 #include "TciSendQueue.h"
 #include "TciUpdateGap.h"
 
+#include <memory>
+
 class QWebSocket;
 
 namespace NereusSDR {
+
+// R-R3-39: one receiver's left and right WDSP resamplers for one client
+// (defined in TciServer.cpp, the only code that touches its members).
+struct TciRxAudioResampler;
 
 // ── Architectural divergence: Thetis 49 fields → NereusSDR 14 fields ────────
 //
@@ -119,11 +130,18 @@ struct TciClientSession {
     // every rate other than 48 kHz.
     // From Thetis TCIServer.cs:702-708 [v2.10.3.15]: TCIRxAudioResamplerState
     // holds a LeftResampler and a RightResampler per receiver.
-    struct RxAudioResamplers {
-        void* left = nullptr;
-        void* right = nullptr;
-    };
-    QHash<int, RxAudioResamplers> audioResamplers;
+    //
+    // R-R3-39: the pair is a TciRxAudioResampler shared with the receive
+    // lane's jobs. The lane makes, runs and destroys its resamplers (at once
+    // when the model has no lane); this map only says which receivers have
+    // one.
+    QHash<int, std::shared_ptr<TciRxAudioResampler>> audioResamplers;
+
+    // R-R3-39: receive audio blocks of this client still on the receive lane
+    // (posted, not yet sent). While any is, every block goes through the
+    // lane, so a block that needs no resampling never overtakes one that
+    // did. Main thread only.
+    int rxAudioBlocksOnLane{0};
 
     // R-R3-42: this client's read position in each subscribed receiver's
     // audio, counted in stereo frames since TciServer started collecting

@@ -47,6 +47,11 @@
 //                updates pass through its own update gap (Thetis
 //                udTCIRateLimit, TciUpdateGap). AI-assisted transformation
 //                via Anthropic Claude Code.
+//   2026-09-25 - R-R3-39 by J.J. Boyd (KG4VCF): receive audio's WDSP
+//                resamplers are made, run and destroyed on the model's
+//                receive lane, and a resampled block is sent back on this
+//                object's thread in the order it was taken. AI-assisted
+//                transformation via Anthropic Claude Code.
 
 #pragma once
 #ifdef HAVE_WEBSOCKETS
@@ -74,6 +79,7 @@ class QTimer;
 
 namespace NereusSDR {
 
+class DspControlThread;
 class RadioModel;
 class RxChannel;
 class SliceModel;
@@ -194,6 +200,11 @@ public:
     // Phase 16 Task 16.3 (sub-commit b): sum of audioResamplers.size() across
     // all connected sessions.  Exposed for lifecycle test assertions.
     int totalResamplerInstances() const;
+
+    // R-R3-39: WDSP resamplers (one per channel) that receive audio holds
+    // right now, across every TciServer. Counted where they are made and
+    // destroyed, on the receive lane or at once. For tests.
+    static int liveRxAudioResamplersForTest();
 
     // Phase 17: TX audio mutex status — 0 or 1 active TX clients.
     // Used by Phase 22 ClientChainApplet to render the TX badge.
@@ -373,8 +384,12 @@ private slots:
     void cleanupResamplers(std::shared_ptr<TciClientSession>& session);
     // R-R3-42 fix wave: a receiver's left and right resamplers, made and
     // destroyed together (both null when either could not be made).
-    static TciClientSession::RxAudioResamplers createRxAudioResamplers(int inRate, int outRate);
-    static void destroyRxAudioResamplers(TciClientSession::RxAudioResamplers& pair);
+    // R-R3-39: made (and destroyed) by a job on the model's receive lane,
+    // at once when the model has no lane (a remote window, or no model).
+    std::shared_ptr<TciRxAudioResampler> makeRxAudioResampler(int inRate, int outRate);
+    void releaseRxAudioResampler(std::shared_ptr<TciRxAudioResampler> resampler);
+    // R-R3-39: the receive lane WDSP resampling runs on, or null.
+    DspControlThread* rxAudioLane() const;
 
     // Phase 3J-1 review P2.3: connect RX audio tap (RxChannel::audioFrameReady
     // → onAudioFrameReady) and IQ tap (RadioModel::rawIqData →
@@ -522,7 +537,11 @@ private:
     void collectRxAudio();
     // One block of receiver `rx` for one client, or nothing when the
     // client has not got a whole block waiting yet.
-    void sendRxAudioBlock(QWebSocket* ws, TciClientSession& session, int rx);
+    // R-R3-39: a block that needs resampling (and any block while an
+    // earlier one of this client is still on the lane) is resampled and
+    // encoded on the receive lane and sent back here, in order.
+    void sendRxAudioBlock(QWebSocket* ws, const std::shared_ptr<TciClientSession>& session,
+                          int rx);
 
     // Phase 3J-1 closeout Item 12 (2026-05-12): per-slice RX gain applied
     // to the audio drained from m_audioRing BEFORE the resample + encode.
@@ -564,16 +583,10 @@ private:
     // We size for the largest legal audioStreamSamples (2048) * 2 channels.
     static constexpr int kMaxDrainSamples = 2048 * 2;
     std::array<float, kMaxDrainSamples> m_drainScratch{};
-    // R-R3-42 fix wave: per-channel resampling scratch. Input: one channel
-    // of a block (up to 2048 frames); output: up to 8x that (384 kHz).
+    // R-R3-42 fix wave: a block of up to 2048 frames per channel is
+    // resampled; the resampler's scratch (TciRxAudioResampler) holds up to
+    // 8x that (384 kHz).
     static constexpr int kMaxResampleFrames = 2048;
-    static constexpr int kMaxResampleOutFrames = kMaxResampleFrames * 8;
-    // Allocated once in the constructor.
-    std::vector<float> m_resampleInLeft;
-    std::vector<float> m_resampleInRight;
-    std::vector<float> m_resampleOutLeft;
-    std::vector<float> m_resampleOutRight;
-    std::vector<float> m_resampleOut;
 
     // Handle for the WdspEngine::initializedChanged connection so we can
     // disconnect it if TciServer is destroyed before WDSP initializes.

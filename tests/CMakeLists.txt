@@ -5318,6 +5318,15 @@ if(Qt6WebSockets_FOUND)
     target_link_libraries(tst_tci_audio_roundtrip PRIVATE Qt6::WebSockets)
 endif()
 
+# R-R3-39: TCI receive audio's WDSP resampler runs on the receive lane. With
+# apps subscribed at 12 kHz stereo, 24 kHz mono (changed to 8 kHz mid-stream)
+# and 48 kHz, through audio_stop, a disconnect and the server's stop, the
+# event loop makes no WDSP call, and every block matches a lane-less server's.
+if(Qt6WebSockets_FOUND)
+    nereus_add_test(tst_tci_rx_audio_lane EXTRA_LABELS core)
+    target_link_libraries(tst_tci_rx_audio_lane PRIVATE Qt6::WebSockets)
+endif()
+
 # ── Phase 3J-1 Task 18.1: IQ binary stream pipeline + IQSwap + AlwaysStreamIQ ──
 # Spins up a real TciServer + real QWebSocket client, subscribes to IQ for
 # slice 0, injects synthetic I/Q via the test-only injectRawIqForTest hook,
