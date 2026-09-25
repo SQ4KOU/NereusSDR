@@ -166,8 +166,9 @@
 //                 Anthropic Claude Code.
 //   2026-09-24 - Receiver and transmit gaps plan, Task 7 follow-up: a
 //                 held source refused because the microphone is not
-//                 ready is never queued (m_notQueuedHeld, R-R3-36). J.J.
-//                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//                 ready is never queued (m_notQueuedHeld, R-R3-36). A CAT
+//                 or TCI rising edge is a new press (N2). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine

@@ -626,6 +626,58 @@ private slots:
         policy.setMode(TxInterlockPolicy::Disabled);
     }
 
+    // ── Task 7 follow-up, N2: a CAT or TCI request after a refusal ──────────
+    // A refusal drops the CAT and TCI levels, so an app's next request is a
+    // new press even without a release in between: the operator is told
+    // again.
+    void repeatedRefusedTciOrCat_isReportedEachTime_data()
+    {
+        QTest::addColumn<bool>("cat");
+        QTest::newRow("tci") << false;
+        QTest::newRow("cat") << true;
+    }
+    void repeatedRefusedTciOrCat_isReportedEachTime()
+    {
+        QFETCH(bool, cat);
+        MoxController ctrl;
+        makeSync(ctrl);
+        ctrl.setMoxCheck([]() {
+            return safety::BandPlanGuard::MoxCheckResult{false, QStringLiteral("Out of band.")};
+        });
+        QSignalSpy rejected(&ctrl, &MoxController::moxRejected);
+        const auto press = [&ctrl, cat]() {
+            if (cat) { ctrl.onCatPtt(true); } else { ctrl.onTciPtt(true); }
+            drain();
+        };
+        press();
+        QVERIFY(!ctrl.isMox());
+        QCOMPARE(rejected.count(), 1);
+        press();
+        QVERIFY(!ctrl.isMox());
+        QCOMPARE(rejected.count(), 2);
+        // Held mic frames do not re-report it: its level was dropped.
+        micFrames(ctrl, false);
+        QCOMPARE(rejected.count(), 2);
+    }
+
+    void repeatedRefusedTrx_viaRadioModel_isReportedEachTime()
+    {
+        RadioModel core;
+        MoxController* mox = core.moxController();
+        QVERIFY(mox != nullptr);
+        makeSync(*mox);
+        mox->setMoxCheck([]() {
+            return safety::BandPlanGuard::MoxCheckResult{false, QStringLiteral("Out of band.")};
+        });
+        QSignalSpy rejected(mox, &MoxController::moxRejected);
+        core.setMox(true);
+        drain();
+        core.setMox(true);
+        drain();
+        QVERIFY(!core.mox());
+        QCOMPARE(rejected.count(), 2);
+    }
+
     // ── Task 7 fix wave, M5: a VOX level cannot outlive a mode change ───────
     // DEXP pushes no pushvox(0) once VOX stops running (dexp.c:328-339), so
     // a switch to a non-voice mode leaves Audio.VOXActive stale. A return to

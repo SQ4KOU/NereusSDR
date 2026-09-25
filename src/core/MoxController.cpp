@@ -1727,10 +1727,14 @@ void MoxController::onCatPtt(bool pressed)
     //                  (!_ptt_bit_bang_enabled && CWInput.CATPTT) | _cat_ptt;
     // Keys with PTTMode.CAT from receive (console.cs:25513-25517); a release
     // unkeys only in PTTMode.CAT (console.cs:25582-25588).
-    m_catPtt = pressed;
-    if (!pressed) {
+    // Task 7 follow-up, N2: a rising edge is a new press too. A refusal
+    // drops the CAT level (dropPttOnUnkey) and then marks it refused, so a
+    // second request with no release between would otherwise be refused
+    // without telling the operator.
+    if (!pressed || !m_catPtt) {
         clearHeldBits(kRefusedCat);   // M3 and R-R3-36: a new press
     }
+    m_catPtt = pressed;
     pollPtt();
 }
 
@@ -1834,10 +1838,12 @@ void MoxController::onCwPtt(bool /*pressed*/)
 // ---------------------------------------------------------------------------
 void MoxController::onTciPtt(bool pressed)
 {
-    m_tciPtt = pressed;
-    if (!pressed) {
+    // Task 7 follow-up, N2: a rising edge is a new press too (see
+    // onCatPtt): an app's second trx:N,true after a refusal is told again.
+    if (!pressed || !m_tciPtt) {
         clearHeldBits(kRefusedTci);   // M3 and R-R3-36: a new press
     }
+    m_tciPtt = pressed;
     pollPtt();
 }
 
