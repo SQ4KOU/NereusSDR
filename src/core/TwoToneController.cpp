@@ -29,6 +29,10 @@
 //                console.cs:44805-44813 [v2.10.3.15]); a refused start
 //                keeps the manual key through the 200 ms settle (M2,
 //                setup.cs:11190-11193).
+//   2026-09-24 : Receiver and transmit gaps plan, Task 7 follow-up, by
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//                A refused start's settle leaves a manual key another key
+//                took (N1).
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis-derived activation flow
@@ -135,6 +139,11 @@ void TwoToneController::setPowerOn(bool on)
 void TwoToneController::setTuneOffPendingFn(std::function<bool()> fn)
 {
     m_tuneOffPending = std::move(fn);
+}
+
+void TwoToneController::setTuneActiveFn(std::function<bool()> fn)
+{
+    m_tuneActive = std::move(fn);
 }
 
 void TwoToneController::setSettleDelaysMs(int moxReleaseMs, int tuneReleaseMs)
@@ -653,6 +662,16 @@ void TwoToneController::onRejectSettleElapsed()
 {
     if (m_active || m_activationInFlight || m_moxController == nullptr) {
         return;   // a new start owns the manual key now
+    }
+    // Task 7 follow-up, N1: inside the settle another manual key may have
+    // taken over (the MOX button or TUN keyed, or a TUN-off is still
+    // completing). That key is theirs and ends on its own path (chkMOX_Click,
+    // completeTuneOff). Clearing it here let a held mic key inside the
+    // TUN-off window and leave the tune tone on air under it.
+    if (m_moxController->isMox()
+        || (m_tuneActive && m_tuneActive())
+        || (m_tuneOffPending && m_tuneOffPending())) {
+        return;
     }
     m_moxController->setManualKey(false);
 }

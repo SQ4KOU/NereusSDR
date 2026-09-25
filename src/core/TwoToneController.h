@@ -54,6 +54,10 @@
 //                 still completing (console.cs:44805-44813 [v2.10.3.15]).
 //                 A refused start keeps the manual key through the 200 ms
 //                 settle (M2, setup.cs:11190-11193 [v2.10.3.15]).
+//   2026-09-24 : Receiver and transmit gaps plan, Task 7 follow-up, by
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code. setTuneActiveFn: the refused start's settle leaves
+//                 a manual key TUN or the MOX button holds (N1).
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis-derived activation
@@ -235,6 +239,12 @@ public:
     // Unset: no wait.
     void setTuneOffPendingFn(std::function<bool()> fn);
 
+    // setTuneActiveFn: Task 7 follow-up. RadioModel supplies "TUN is on"
+    // (from setTune(true) until its TUN-off completes). A refused start's
+    // settle does not clear a manual key while TUN holds it (N1). Unset:
+    // TUN is taken as off.
+    void setTuneActiveFn(std::function<bool()> fn);
+
     // ── Test seam ──────────────────────────────────────────────────────────
     // Override the default settle / Freq2-delay timer durations.  FOR
     // TESTING ONLY — production code must use the kXxx defaults.
@@ -366,6 +376,8 @@ private:
 
     // Task 7 fix wave, M9: see setTuneOffPendingFn.
     std::function<bool()> m_tuneOffPending;
+    // Task 7 follow-up: see setTuneActiveFn.
+    std::function<bool()> m_tuneActive;
 };
 
 } // namespace NereusSDR

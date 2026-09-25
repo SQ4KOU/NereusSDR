@@ -180,6 +180,10 @@
 //                the manual key at its end; disconnect drops the PTT
 //                levels. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-24 - Receiver and transmit gaps plan, Task 7 follow-up: the
+//                microphone-ready refusal is marked never queued; two-tone
+//                reads whether TUN is on. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1413,6 +1417,9 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // Task 7 fix wave, M9: two-tone waits out a TUN-off still completing,
     // so it never keys with the tune tone running.
     m_twoToneController->setTuneOffPendingFn([this]() { return m_pendingTuneOff; });
+    // Task 7 follow-up (N1): TUN is on from setTune(true) until
+    // completeTuneOff, which owns the manual key until then.
+    m_twoToneController->setTuneActiveFn([this]() { return m_isTuning; });
 
     // R-R3-36: keep the generated-key record in step with two-tone's own
     // state, not only with MOX transitions. Two-tone can go live on a key

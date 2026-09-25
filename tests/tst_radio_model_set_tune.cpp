@@ -48,6 +48,9 @@
 //      is refused as any CW key is.
 //  29. Task 7 fix wave M5: VOX gone active during TUN from CW does not key
 //      when the operator later returns to a voice mode.
+//  30. Task 7 follow-up, N1: a refused two-tone's 200 ms settle does not
+//      clear the manual key TUN took inside it, so a mic held at TUN-off
+//      does not key under the tune tone.
 
 #include <QtTest/QtTest>
 #include <QObject>
@@ -61,6 +64,7 @@
 #include "core/RadioConnection.h"
 #include "core/TxChannel.h"
 #include "core/TxInterlockPolicy.h"
+#include "core/TwoToneController.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -1591,6 +1595,70 @@ private slots:
         mox->onMicPttFromRadio(false);   // the next status frame
         pump();
         QVERIFY2(!mox->isMox(), "a stale VOX level keyed on the return to USB");
+    }
+
+    // ── 30. Task 7 follow-up, N1 ────────────────────────────────────────────
+    // Two-tone is refused; within its 200 ms settle the operator presses
+    // TUN, which keys and takes the manual key. The settle must not clear
+    // that key: at TUN-off a held mic would then key inside the TUN-off
+    // window, cancel the walk its completion waits for, and leave the tune
+    // tone on air under the mic.
+    void refusedTwoToneSettleKeepsTunesManualKey()
+    {
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        setupModel(model, conn);
+        std::unique_ptr<MockConnection> connOwner(conn);
+        TxChannel tx{/*channelId=*/1};
+        TwoToneController* twoTone = model.twoToneController();
+        QVERIFY(twoTone != nullptr);
+        const auto detach = qScopeGuard([&model, twoTone]() {
+            twoTone->setTxChannel(nullptr);
+            model.injectConnectionForTest(nullptr);
+        });
+        QVERIFY(model.activeSlice() != nullptr);
+        model.activeSlice()->setDspMode(DSPMode::USB);
+        MoxController* mox = model.moxController();
+        bool allow = false;
+        mox->setMoxCheck([&allow]() {
+            return safety::BandPlanGuard::MoxCheckResult{allow,
+                allow ? QString() : QStringLiteral("test refusal")};
+        });
+        twoTone->setTxChannel(&tx);
+        twoTone->setPowerOn(true);
+        twoTone->setSettleDelaysMs(/*moxReleaseMs=*/60, /*tuneReleaseMs=*/0);
+
+        twoTone->setActive(true);
+        QVERIFY(!mox->isMox());
+        QVERIFY(!twoTone->isActive());
+        QVERIFY(mox->isManualKey());   // held through the settle (M2)
+
+        allow = true;
+        model.setTune(true);
+        pump();
+        QVERIFY(mox->isMox());
+        QVERIFY(model.isTune());
+
+        QTest::qWait(120);   // the refused two-tone's settle runs out
+        QVERIFY2(mox->isManualKey(), "the settle cleared the manual key TUN holds");
+
+        model.setTune(false);
+        QVERIFY(model.tuneOffPendingForTest());
+        mox->onMicPttFromRadio(true);   // the mic is held at TUN-off
+        QVERIFY2(!mox->isMox(), "the mic keyed inside the TUN-off window");
+        pump();
+        QVERIFY2(!model.tuneOffPendingForTest(), "the tune tone was left on under a key");
+        QVERIFY(!model.isTune());
+        QVERIFY(!mox->isManualKey());
+
+        // The tone is down; the next status frame keys the held mic.
+        mox->onMicPttFromRadio(true);
+        pump();
+        QVERIFY(mox->isMox());
+        QCOMPARE(mox->pttMode(), PttMode::Mic);
+        mox->onMicPttFromRadio(false);
+        pump();
+        QVERIFY(!mox->isMox());
     }
 };
 
