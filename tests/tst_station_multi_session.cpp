@@ -2360,7 +2360,10 @@ private slots:
         }
         QTRY_VERIFY(transportA->rtpPackets.size() >= packetsA + 10
                     && transportB->rtpPackets.size() >= packetsB + 10);
-        QCOMPARE(l16Left(transportA->rtpPackets.last()).last(), 0.0f);
+        // Fix wave: the tone fed first is still queued ahead of the silence
+        // (three blocks fed, about one taken), so A falls silent once it has
+        // drained; a fixed packet count raced the drain under load.
+        QTRY_COMPARE(l16Left(transportA->rtpPackets.last()).last(), 0.0f);
         QVERIFY(std::abs(l16Left(transportB->rtpPackets.last()).last() - levelB) < 1.0f / 16384.0f);
 
         // A slice A makes joins A's mix at once, and not B's.
