@@ -20,11 +20,20 @@
 // Modification history (NereusSDR):
 //   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06: created.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-21, R-IOS-27: a remote window's
+//                                    +TNF sends notch.addAtSlice to a Core
+//                                    at notchControlVersion 2 and notch.add
+//                                    below it (a relay rewrites the Core's
+//                                    version to 1). AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
 #include <QCoreApplication>
 #include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QSignalSpy>
 #include <QTemporaryDir>
 
@@ -72,9 +81,33 @@ std::unique_ptr<RadioModel> makeStationRadioModel()
     return model;
 }
 
-// A receive-only Core and one window, handshake complete.
+// The Core's capabilities message with notchControlVersion set to
+// `version`; every other message unchanged.
+QByteArray withNotchControlVersion(const QByteArray& wire, int version)
+{
+    QJsonObject message = QJsonDocument::fromJson(wire).object();
+    if (message.value(QStringLiteral("type")).toString() != QStringLiteral("capabilities")) {
+        return wire;
+    }
+    QJsonArray properties = message.value(QStringLiteral("properties")).toArray();
+    for (int i = 0; i < properties.size(); ++i) {
+        QJsonObject entry = properties.at(i).toObject();
+        if (entry.value(QStringLiteral("name")).toString()
+            == QStringLiteral("notchControlVersion")) {
+            entry.insert(QStringLiteral("value"), version);
+            properties.replace(i, entry);
+        }
+    }
+    message.insert(QStringLiteral("properties"), properties);
+    return QJsonDocument(message).toJson(QJsonDocument::Compact);
+}
+
+// A receive-only Core and one window, handshake complete. With
+// `advertisedNotchVersion` above 0, a relay between them rewrites the
+// Core's notchControlVersion to it, so the window meets an older Core.
 struct Session {
-    explicit Session(const QString& securityDir, QObject* parent)
+    explicit Session(const QString& securityDir, QObject* parent,
+                     int advertisedNotchVersion = 0)
         : settings(settingsDir.filePath(QStringLiteral("NereusSDR.settings")))
     {
         core = makeStationRadioModel();
@@ -83,7 +116,20 @@ struct Session {
         client = std::make_unique<StationClient>(&window, &proxy);
         coreEnd = new LoopbackTransport(QStringLiteral("station-end"), parent);
         windowEnd = new LoopbackTransport(QStringLiteral("client-end"), parent);
-        coreEnd->linkTo(windowEnd);
+        if (advertisedNotchVersion <= 0) {
+            coreEnd->linkTo(windowEnd);
+            return;
+        }
+        auto* coreSide = new LoopbackTransport(QStringLiteral("relay-core-side"), parent);
+        auto* windowSide = new LoopbackTransport(QStringLiteral("relay-window-side"), parent);
+        coreEnd->linkTo(coreSide);
+        windowSide->linkTo(windowEnd);
+        QObject::connect(coreSide, &SessionTransport::textReceived, windowSide,
+                         [windowSide, advertisedNotchVersion](const QByteArray& wire) {
+            windowSide->sendText(withNotchControlVersion(wire, advertisedNotchVersion));
+        });
+        QObject::connect(windowSide, &SessionTransport::textReceived, coreSide,
+                         [coreSide](const QByteArray& wire) { coreSide->sendText(wire); });
     }
     bool connect()
     {
@@ -128,6 +174,24 @@ struct Session {
     }
     SliceModel* slice() const { return core->slices().first(); }
     NotchModel* notches() const { return core->notchModel(); }
+    // The window's mirror of the Core's slice (same slice id).
+    SliceModel* windowSlice() const
+    {
+        return window.slices().isEmpty() ? nullptr : window.slices().first();
+    }
+    // Every command the window sent the Core, in order.
+    QList<SessionMessage> windowCommands() const
+    {
+        QList<SessionMessage> commands;
+        for (const QByteArray& wire : coreEnd->received()) {
+            SessionMessage message;
+            if (SessionMessages::decode(wire, &message)
+                && message.kind == SessionMessageKind::CommandInvoke) {
+                commands.append(message);
+            }
+        }
+        return commands;
+    }
 
     QTemporaryDir settingsDir;
     AppSettings settings;
@@ -171,6 +235,11 @@ private slots:
     void wrongArgumentsAreNotUnderstood();
     void anOlderAppIsToldToUpdate();
     void refusalsArePlainWords();
+
+    void remoteTnfOnAVersion2CoreSendsAddAtSliceAndLandsTheLocalNotch();
+    void remoteTnfOnAVersion1CoreSendsNotchAdd();
+    void remoteTnfRefusalReachesTheWindowOnBothPaths_data();
+    void remoteTnfRefusalReachesTheWindowOnBothPaths();
 
 private:
     QTemporaryDir m_securityDir;
@@ -415,6 +484,143 @@ void TstNotchAddAtSlice::refusalsArePlainWords()
         QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
         QVERIFY2(OperatorWording::coreCalledStationIn(reason).isEmpty(), qPrintable(reason));
     }
+}
+
+// A remote window's +TNF (MainWindow::onAddTnfClicked calls addTnfForSlice
+// on the pan's mirrored slice). Against a Core at notchControlVersion 2 it
+// sends notch.addAtSlice for the Core's slice id, so the Core's own slice
+// decides the centre; the notch it lands is the one the Core's local +TNF
+// lands on the same slice.
+void TstNotchAddAtSlice::remoteTnfOnAVersion2CoreSendsAddAtSliceAndLandsTheLocalNotch()
+{
+    Session s(m_securityDir.path(), this);
+    QVERIFY(s.connect());
+    QCOMPARE(s.client->capabilities().notchControlVersion, 2);
+    SliceModel* const coreSlice = s.slice();
+    coreSlice->setFrequency(14100000.0);
+    coreSlice->setDspMode(DSPMode::DIGU);
+    coreSlice->setFilter(200, 2800);
+    coreSlice->setDiguOffsetHz(1500);
+    QTRY_VERIFY(s.windowSlice() != nullptr);
+    SliceModel* const windowSlice = s.windowSlice();
+    QCOMPARE(windowSlice->sliceIndex(), coreSlice->sliceIndex());
+    QVERIFY(s.window.notchModel()->mirrorMode());
+
+    QCOMPARE(s.window.addTnfForSlice(windowSlice), -1);  // the Core's id arrives with its list
+    QTRY_COMPARE(s.notches()->notches().size(), 1);
+    const Notch viaWindow = s.notches()->notches().first();
+
+    QList<QByteArray> verbs;
+    SessionMessage addAtSlice;
+    for (const SessionMessage& command : s.windowCommands()) {
+        if (command.commandVerb.startsWith("notch.")) {
+            verbs.append(command.commandVerb);
+            addAtSlice = command;
+        }
+    }
+    QCOMPARE(verbs, (QList<QByteArray>{QByteArrayLiteral("notch.addAtSlice")}));
+    QCOMPARE(addAtSlice.arguments.size(), 1);
+    QCOMPARE(addAtSlice.arguments.at(0).name, QByteArrayLiteral("sliceId"));
+    QCOMPARE(addAtSlice.arguments.at(0).value.toInt(), coreSlice->sliceIndex());
+
+    // The window shows the Core's notch under the Core's id.
+    QTRY_COMPARE(s.window.notchModel()->notches().size(), 1);
+    QCOMPARE(s.window.notchModel()->notches().first().id, viaWindow.id);
+
+    // The Core's own +TNF on the same slice lands the same notch.
+    s.notches()->clear();
+    const int localId = s.core->addTnfForSlice(coreSlice);
+    QVERIFY(localId >= 0);
+    const Notch local = *s.notches()->notchById(localId);
+    QCOMPARE(viaWindow.centerHz, local.centerHz);
+    QCOMPARE(viaWindow.widthHz, local.widthHz);
+    QCOMPARE(viaWindow.centerHz, 14100000.0 + 1500.0 + 200 + (2800 - 200) / 2);
+}
+
+// Below version 2 the window keeps notch.add, with the centre composed from
+// its mirrored slice.
+void TstNotchAddAtSlice::remoteTnfOnAVersion1CoreSendsNotchAdd()
+{
+    Session s(m_securityDir.path(), this, 1);
+    QVERIFY(s.connect());
+    QCOMPARE(s.client->capabilities().notchControlVersion, 1);
+    SliceModel* const coreSlice = s.slice();
+    coreSlice->setFrequency(14100000.0);
+    coreSlice->setDspMode(DSPMode::USB);
+    coreSlice->setFilter(100, 2900);
+    QTRY_VERIFY(s.windowSlice() != nullptr);
+    SliceModel* const windowSlice = s.windowSlice();
+    QTRY_COMPARE(windowSlice->frequency(), 14100000.0);
+    QTRY_COMPARE(windowSlice->filterHigh(), 2900);
+    QVERIFY(s.window.notchModel()->mirrorMode());
+
+    QCOMPARE(s.window.addTnfForSlice(windowSlice), -1);
+    QTRY_COMPARE(s.notches()->notches().size(), 1);
+
+    QList<QByteArray> verbs;
+    SessionMessage add;
+    for (const SessionMessage& command : s.windowCommands()) {
+        if (command.commandVerb.startsWith("notch.")) {
+            verbs.append(command.commandVerb);
+            add = command;
+        }
+    }
+    QCOMPARE(verbs, (QList<QByteArray>{QByteArrayLiteral("notch.add")}));
+    QVariantMap arguments;
+    for (const MirrorUpdate& argument : add.arguments) {
+        arguments.insert(QString::fromLatin1(argument.name), argument.value);
+    }
+    QCOMPARE(arguments.value(QStringLiteral("sliceId")).toInt(), coreSlice->sliceIndex());
+    QCOMPARE(arguments.value(QStringLiteral("centreHz")).toDouble(),
+             RadioModel::tnfCentreHzFor(*windowSlice));
+    QCOMPARE(arguments.value(QStringLiteral("widthHz")).toDouble(),
+             NotchModel::kDefaultNotchWidthHz);
+    QCOMPARE(s.notches()->notches().first().centerHz, 14100000.0 + 100 + (2900 - 100) / 2);
+}
+
+void TstNotchAddAtSlice::remoteTnfRefusalReachesTheWindowOnBothPaths_data()
+{
+    QTest::addColumn<int>("coreVersion");
+    QTest::addColumn<QByteArray>("verb");
+    QTest::newRow("notch.addAtSlice") << 2 << QByteArrayLiteral("notch.addAtSlice");
+    QTest::newRow("notch.add") << 1 << QByteArrayLiteral("notch.add");
+}
+
+// A second +TNF on the same signal: the Core refuses inside its 10 Hz
+// dedupe window, and the window's NotchModel hands the Core's reason to
+// notchAddRejected (MainWindow::onNotchAddRejected's toast) on either path.
+void TstNotchAddAtSlice::remoteTnfRefusalReachesTheWindowOnBothPaths()
+{
+    QFETCH(int, coreVersion);
+    QFETCH(QByteArray, verb);
+    Session s(m_securityDir.path(), this, coreVersion == 2 ? 0 : coreVersion);
+    QVERIFY(s.connect());
+    QCOMPARE(s.client->capabilities().notchControlVersion, coreVersion);
+    SliceModel* const coreSlice = s.slice();
+    coreSlice->setFrequency(14100000.0);
+    coreSlice->setDspMode(DSPMode::USB);
+    coreSlice->setFilter(100, 2900);
+    QTRY_VERIFY(s.windowSlice() != nullptr);
+    SliceModel* const windowSlice = s.windowSlice();
+    QTRY_COMPARE(windowSlice->frequency(), 14100000.0);
+    QTRY_COMPARE(windowSlice->filterHigh(), 2900);
+
+    QSignalSpy rejected(s.window.notchModel(), &NotchModel::notchAddRejected);
+    s.window.addTnfForSlice(windowSlice);
+    QTRY_COMPARE(s.notches()->notches().size(), 1);
+    s.window.addTnfForSlice(windowSlice);
+    QTRY_COMPARE(rejected.count(), 1);
+    QCOMPARE(rejected.at(0).at(0).toString(),
+             QStringLiteral("A notch already exists within 10 Hz"));
+    QCOMPARE(s.notches()->notches().size(), 1);
+    int sent = 0;
+    for (const SessionMessage& command : s.windowCommands()) {
+        if (command.commandVerb.startsWith("notch.")) {
+            QCOMPARE(command.commandVerb, verb);
+            ++sent;
+        }
+    }
+    QCOMPARE(sent, 2);
 }
 
 QTEST_MAIN(TstNotchAddAtSlice)

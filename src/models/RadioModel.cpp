@@ -237,6 +237,11 @@
 //                addTnfFromStation, the same add for a device's
 //                notch.addAtSlice. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-25 - R-R3-21, R-IOS-27: a remote window's addTnfForSlice sends
+//                notch.addAtSlice for its slice to a Core at
+//                notchControlVersion 2, so the Core's own slice decides;
+//                below 2 it keeps notch.add. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -13415,6 +13420,16 @@ double RadioModel::tnfCentreHzFor(const SliceModel& slice)
 int RadioModel::addTnfForSlice(SliceModel* slice)
 {
     if (!m_notchModel || !slice) {
+        return -1;
+    }
+    // R-R3-21, R-IOS-27: a remote window against a Core at
+    // notchControlVersion 2 names the Core's slice (a mirrored slice keeps
+    // the Core's id) and lets the Core compose the centre from its own
+    // slice, as a device's +TNF does. Below 2, notch.add with the centre
+    // composed here from the mirror (addNotchForSlice). The Core's id
+    // arrives with its list.
+    if (m_notchModel->mirrorMode() && m_notchModel->remoteControlVersion() >= 2) {
+        m_notchModel->requestAddAtSlice(slice->sliceIndex());
         return -1;
     }
     return addNotchForSlice(slice, tnfCentreHzFor(*slice), NotchModel::kDefaultNotchWidthHz);

@@ -33,6 +33,11 @@ whenever it runs; it does not depend on a radio or on WDSP.
 - Version 2 (R-IOS-27, R-IOS-06) adds `notch.addAtSlice`, below. The Core
   sends 2; the other four commands need 1, so a window that compares the
   version as a minimum reads 2 as it read 1.
+- A desktop window's +TNF (R-R3-21, R-IOS-27) sends `notch.addAtSlice` for
+  its pan's slice (the Core's slice id) when the Core offers version 2 or
+  more, so the Core's own slice decides the centre; against version 1 it
+  sends `notch.add` with the centre composed from its mirrored slice. A
+  refusal on either path reaches the window's "Notch not added" notice.
 
 ## The `notches` object
 
@@ -100,7 +105,9 @@ A dragging window sends at most one `notch.move` per 100 ms
 ## Evidence
 
 `tst_notch_add_at_slice` (`notch.addAtSlice` lands the desktop +TNF's
-notch in USB, LSB, DIGU and DIGL, and each refusal), `tst_station_session` (mirror mode, add, move, toggle, delete, refusals, an
+notch in USB, LSB, DIGU and DIGL, and each refusal; a remote window's
++TNF sends `notch.addAtSlice` to a version 2 Core and `notch.add` to a
+version 1 Core, with the Core's refusal on both), `tst_station_session` (mirror mode, add, move, toggle, delete, refusals, an
 older app's refused writes), `tst_tnf_ui_wiring`, `tst_notch_channel_sync`
 (every command reaches every bound WDSP channel once) and
 `tst_settings_scope` (the exact Core-owned key forms). Hardware acceptance is

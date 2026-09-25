@@ -121,6 +121,10 @@
 //                in one place, and addTnfFromStation, the same add for a
 //                device's notch.addAtSlice. NereusSDR-original. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-21, R-IOS-27: addTnfForSlice on a remote window sends
+//                notch.addAtSlice to a notchControlVersion 2 Core.
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -2964,6 +2968,9 @@ public slots:
     /// addNotchForSlice. The desktop's button and the Core's
     /// notch.addAtSlice both come here, so the centre is composed once.
     /// Returns what addNotchForSlice returns; -1 with no slice or no list.
+    /// R-R3-21, R-IOS-27: on a remote window whose Core offers
+    /// notchControlVersion 2 or more, it sends notch.addAtSlice for the
+    /// slice instead (the Core's slice decides the centre) and returns -1.
     int addTnfForSlice(SliceModel* slice);
     /// The +TNF centre for `slice`, in Hz.
     static double tnfCentreHzFor(const SliceModel& slice);
