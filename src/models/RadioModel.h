@@ -262,6 +262,7 @@
 #include <atomic>     // AM Mod Monitor flags
 #include <array>      // std::array (HL2 temp averaging ring)
 #include <functional> // R-R3-21 DSP > Options apply observer (test seam)
+#include <vector>
 #include <memory>  // std::unique_ptr
 #include <optional>
 
@@ -308,6 +309,7 @@ class DspAssetService;
 class PureSignalSessionFacade;
 class StepAttenuatorFacade;
 class AlexAntennaFacade;
+class LanDiscovery;  // group B fix wave (M2): the running scans
 class IoBoardHl2Facade;
 class PsccPump;
 // Phase 4 Agent 4A of issue #167: PaProfileManager forward declaration.
@@ -3952,6 +3954,8 @@ private:
     // R-R3-49 (parity Tasks 8 and 9): the Core's own Scan LAN, one
     // LanDiscovery child named `objectName` that keeps the announcements of
     // `products` for `windowMs` and calls `done` once with the JSON array.
+    // Group B fix wave (M2): one scan per `objectName` at a time; a
+    // request while it listens joins it and gets the same answer.
     void startStationLanScan(const QString& objectName, const QStringList& products,
                              int windowMs, std::function<void(const QString&)> done);
     // R-R3-49 (parity Task 2): the transmit band for tunePowerForTxBand,
@@ -5522,6 +5526,13 @@ private:
     // R-R3-49 (parity Task 9): scanPgxlLanForStation's listening window,
     // the local dialog's (kTgxlLanScanWindowMs, the same three seconds).
     int m_pgxlLanScanWindowMs{kTgxlLanScanWindowMs};
+    // Group B fix wave (M2): the scan listening for each device (keyed by
+    // the listener's object name) and the requests waiting for its answer.
+    struct StationLanScan {
+        QPointer<LanDiscovery> discovery;
+        std::vector<std::function<void(const QString&)>> waiting;
+    };
+    QHash<QString, StationLanScan> m_stationLanScans;
     StationPgxlController* m_stationPgxl{nullptr};
     TunerModel*     m_tunerModel{nullptr};
     AmplifierModel* m_amplifierModel{nullptr};

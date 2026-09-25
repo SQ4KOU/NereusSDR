@@ -904,6 +904,14 @@ private slots:
         bool answered = false;
         QVERIFY(model.scanTgxlLanForStation(
             [&](const QString& json) { devicesJson = json; answered = true; }, &reason));
+        // Group B fix wave (M2): one scan per device at a time. A second
+        // request while it listens joins it: no second listener, and both
+        // get the same answer when the window ends.
+        QString secondJson;
+        bool secondAnswered = false;
+        QVERIFY(model.scanTgxlLanForStation(
+            [&](const QString& json) { secondJson = json; secondAnswered = true; }, &reason));
+        QCOMPARE(model.findChildren<LanDiscovery*>(QStringLiteral("tgxlLanScan")).size(), 1);
         auto* scan = model.findChild<LanDiscovery*>(QStringLiteral("tgxlLanScan"));
         QVERIFY(scan);
         scan->injectDatagramForTesting(
@@ -912,6 +920,8 @@ private slots:
         scan->injectDatagramForTesting(
             QStringLiteral("PowerGeniusXL ip=192.0.2.45 v=3.8.9 serial=5501-7 nickname=Amp"), 9008);
         QTRY_VERIFY(answered);
+        QVERIFY(secondAnswered);
+        QCOMPARE(secondJson, devicesJson);
         const QJsonArray devices = QJsonDocument::fromJson(devicesJson.toUtf8()).array();
         bool heard = false;
         for (const QJsonValue& value : devices) {

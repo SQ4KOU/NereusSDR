@@ -255,6 +255,9 @@
 //                set*AddressForStation save a blank host, as a local
 //                window's blank Host stops auto-connect.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (group B fix wave, M2): startStationLanScan runs
+//                one scan per device; a request while it listens joins it.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -4927,7 +4930,19 @@ bool RadioModel::scanTgxlLanForStation(TgxlLanScanDone done, QString* reason)
 void RadioModel::startStationLanScan(const QString& objectName, const QStringList& products,
                                      int windowMs, std::function<void(const QString&)> done)
 {
+    // Group B fix wave (M2): one scan per device at a time. A request made
+    // while that device's scan listens joins it and gets the same answer
+    // when its window ends; no second pair of sockets is opened.
+    auto running = m_stationLanScans.find(objectName);
+    if (running != m_stationLanScans.end() && !running->discovery.isNull()) {
+        running->waiting.push_back(std::move(done));
+        return;
+    }
     auto* discovery = new LanDiscovery(this);
+    StationLanScan& scanEntry = m_stationLanScans[objectName];
+    scanEntry.discovery = discovery;
+    scanEntry.waiting.clear();
+    scanEntry.waiting.push_back(std::move(done));
     discovery->setObjectName(objectName);
     if (m_stationBind) { discovery->setStationBind(*m_stationBind); }
     auto devices = std::make_shared<QJsonArray>();
@@ -4947,11 +4962,19 @@ void RadioModel::startStationLanScan(const QString& objectName, const QStringLis
                 });
             });
     connect(discovery, &LanDiscovery::scanFinished, discovery,
-            [discovery, devices, done = std::move(done)]() {
+            [this, objectName, discovery, devices]() {
                 const QString json = QString::fromUtf8(
                     QJsonDocument(*devices).toJson(QJsonDocument::Compact));
                 discovery->deleteLater();
-                if (done) { done(json); }
+                std::vector<std::function<void(const QString&)>> waiting;
+                auto entry = m_stationLanScans.find(objectName);
+                if (entry != m_stationLanScans.end() && entry->discovery == discovery) {
+                    waiting = std::move(entry->waiting);
+                    m_stationLanScans.erase(entry);
+                }
+                for (const auto& done : waiting) {
+                    if (done) { done(json); }
+                }
             });
     discovery->start(windowMs);
 }

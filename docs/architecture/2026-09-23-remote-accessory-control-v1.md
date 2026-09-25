@@ -330,6 +330,8 @@ computer:
   (`port` a number, the others text), `[]` when none. Listening sends
   nothing to any device. The answer comes once, when the window ends; an
   answer due to an earlier app connection is not sent.
+  The Core runs one scan per device at a time: a scan asked for while one
+  is listening joins it and gets the same answer when it ends.
 - `setTgxlAddress` (`host` utf8, `port` i64): the Core saves
   `TGXL_ManualIp` and `TGXL_ManualPort` for its radio without dialling,
   with `configureTgxl`'s address checks and reasons. The `tuner` object's
@@ -419,6 +421,8 @@ does at its own computer, as for the Tuner Genius:
   others text), `[]` when none. Listening sends nothing to any device. The
   answer comes once, when the window ends; an answer due to an earlier app
   connection is not sent.
+  The Core runs one scan per device at a time: a scan asked for while one
+  is listening joins it and gets the same answer when it ends.
 - `setPgxlAddress` (`host` utf8, `port` i64): the Core saves
   `PGXL_ManualIp` and `PGXL_ManualPort` for its radio without dialling,
   with `configurePgxl`'s address checks and reasons (the 4O3A switch is
