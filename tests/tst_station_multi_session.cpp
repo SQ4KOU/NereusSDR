@@ -423,13 +423,19 @@ QJsonObject endOf(LoopbackTransport* app)
     return firstOfType(app->received(), QStringLiteral("session.end"));
 }
 
-void verifyCoreFull(LoopbackTransport* app)
+// Fix wave, the full-Core wording (the several-devices design, 15.2): an
+// older window cannot answer the fifth-device question, so it is told to
+// update or try later.
+const QString kOlderWindowCoreFull =
+    QStringLiteral("The Core is full. Update NereusSDR to take a device's place, or try again later.");
+
+void verifyCoreFull(LoopbackTransport* app, const QString& reason = kCoreFull)
 {
     const QJsonObject result = firstOfType(app->received(), QStringLiteral("auth.result"));
     QCOMPARE(result.value(QStringLiteral("accepted")).toBool(false), true);
     const QJsonObject end = endOf(app);
     QVERIFY(!app->isOpen());
-    QCOMPARE(end.value(QStringLiteral("reason")).toString(), kCoreFull);
+    QCOMPARE(end.value(QStringLiteral("reason")).toString(), reason);
     QCOMPARE(end.value(QStringLiteral("retryable")).toBool(false), true);
     QVERIFY(!end.contains(QStringLiteral("code")));
     // Nothing of a session reached it.
@@ -841,12 +847,14 @@ private slots:
             core.pair(devices[i]);
             QVERIFY(admitted(core.signIn(devices[i])));
         }
-        // Today's desktop: the token, no features.
-        verifyCoreFull(core.tokenSignIn());
+        // Today's desktop: the token, no features. Told to update or try
+        // later, since it cannot answer the fifth-device question.
+        QVERIFY(OperatorWording::isPlain(kOlderWindowCoreFull));
+        verifyCoreFull(core.tokenSignIn(), kOlderWindowCoreFull);
         // A window that signs in by key but predates the feature: the same.
         Device window(QStringLiteral("Shack Mac"), QStringLiteral("computer"));
         core.pair(window);
-        verifyCoreFull(core.signIn(window, {{"deviceAuth", 1}}));
+        verifyCoreFull(core.signIn(window, {{"deviceAuth", 1}}), kOlderWindowCoreFull);
     }
 
     void anAwayDeviceHoldsItsPlaceAgainstAFifth()

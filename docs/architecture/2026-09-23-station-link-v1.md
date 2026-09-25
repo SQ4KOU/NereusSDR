@@ -534,7 +534,9 @@ string in an `f64` entry is refused. The case is common: `SliceModel`'s
    connected again.", `retryable` false, `code` `sameDevice`; with a place
    free the device is let in; with every place taken the station sends
    `session.end` "The Core already has four devices connected.",
-   `retryable` true, no code, and closes. No sign-in ever ends another
+   `retryable` true, no code, and closes (a window that did not declare
+   `sessionHolder` with `deviceAuth`, which cannot answer the fifth-device
+   question, is told "The Core is full. Update NereusSDR to take a device's place, or try again later." instead, `retryable` true, no code). No sign-in ever ends another
    device's session. A device let in gets, in this order
    (`StationServer::promoteToSession`):
    - `capabilities` (section 6);
@@ -1940,7 +1942,9 @@ Take it back), `receiverTaken` and `sliceTaken` (Take it back),
 own state: no `by` keys, no Take it back). `graceEnded`, "You were away for more than 3
 minutes. Your slices are back.", goes right after `snapshot.complete` to a
 device let in after its 3 minutes ran out, its `slices` listing any saved
-slice that could not be restored; otherwise `slicesNotRestored`, "<n> of
+slice that could not be restored (then its words are "You were away for
+more than 3 minutes. <n> of your slices could not be restored: all the
+radio's receivers are in use."); otherwise `slicesNotRestored`, "<n> of
 your slices could not be restored: all the radio's receivers are in
 use.", reports those. An away device's notices wait and follow its
 `snapshot.complete`; after its 3 minutes they still arrive, after
@@ -2694,7 +2698,8 @@ non-empty string; an empty one is refused like any mistyped key.
 | Message the station cannot decode (section 13) | `session.end` "The Core could not read a message from this app." | false | `protocolError` |
 | Out-of-order handshake (section 5.1) | `session.end` | false | `protocolError` |
 | The same device connected again (section 5.1): its older connection | `session.end` "This device connected again." | false | `sameDevice` |
-| Every place on the Core is taken (section 5.1) | `session.end` "The Core already has four devices connected." | true | none |
+| Every place on the Core is taken (section 5.1), a device that declared `sessionHolder` | `session.end` "The Core already has four devices connected." | true | none |
+| Every place on the Core is taken (section 5.1), an older window | `session.end` "The Core is full. Update NereusSDR to take a device's place, or try again later." | true | none |
 | A window without the several-devices feature, with no slice for it at sign-in (section 7.5) | `session.end` "All the radio's slices are in use. Try again when another device closes one." or "All the radio's receivers are in use. Try again when another device frees one." | true | none |
 | Such a window's last slice taken by another device (section 7.5) | `session.end` "<taker's name> took the receiver this app was using. Update NereusSDR to share the Core." | false | `takenOver` |
 | Connection limit reached | `session.end` | true | none |
@@ -3414,7 +3419,7 @@ same on every machine.
 | `version-app-two-ahead` | An app supporting `[2, 3]` that sends major 3 gets `session.end` "This Core runs link version 1 and this app runs version 3. Update the Core.", `retryable` false, `code` `linkVersion` |
 | `lower-minor` | A `hello` with minor 4 agrees minor 4: the capabilities without the minor-11 entries, and a minor-11 verb refused with a plain reason |
 | `same-device-again` | The device signs in again on another connection (`otherClients` `"self"`): the older connection ends with `session.end` "This device connected again.", `retryable` false, `code` `sameDevice`, and the newer one is let in with no question. Runs on the station alone |
-| `older-window` | A window that signs in by key but predates several devices is let in first and owns the Core's slice; when a device with the feature is let in with a slice of its own, the older window is sent no marker for it, only the `devices` list moving. Four devices then fill the Core; a window from before paired devices (the token, no features) is let through `auth.result` and then turned away: `session.end` "The Core already has four devices connected.", `retryable` true, no code. Runs on the station alone |
+| `older-window` | A window that signs in by key but predates several devices is let in first and owns the Core's slice; when a device with the feature is let in with a slice of its own, the older window is sent no marker for it, only the `devices` list moving. Four devices then fill the Core; a window from before paired devices (the token, no features) is let through `auth.result` and then turned away: `session.end` "The Core is full. Update NereusSDR to take a device's place, or try again later.", `retryable` true, no code. Runs on the station alone |
 | `connected-devices` | A device that declares `sessionHolder` receives `connectedDevices` in its snapshot (`deviceLimit` 4, `revision` 1), and a `delta` of it (with one of `devices`) each time another device is let in, including a window that declares only `deviceAuth` and so never receives the object itself, and when one drops; each device let in gets a slice of its own, which reaches this device as a marker; `listJson` is a `{"$json": ...}` of the list's shape (section 16.1): each entry's keys with its literal name, short name, kind, flags, state and `listeningOn` (`{sliceId, letter, band, mode}`), its `deviceId` `"$string"` and its three durations `"$int"`, since ids are made at run time and a fixture for the app holds no capture |
 | `short-name` | Another device signs in with a short name, drops, and signs in again with a new one: each change moves `connectedDevices`' and `devices`' revisions, the new short name replacing the old in both lists and on its slice's marker |
 | `grace-return` | Another device drops and is away; a minute later nothing has been sent about it but its slice's marker turning `ownerAway`; it signs in again within its 3 minutes and is let in with no question, the list sent again and its marker back; it drops again, and when its 3 minutes end with this device still on the Core its slice closes (the marker's `object.destroy`) and is saved for its return |

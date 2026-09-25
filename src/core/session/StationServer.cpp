@@ -572,6 +572,11 @@ bool isCatalogSettingsKey(const QString& key)
 // iPhone app Task 71 (rulings 4.4 and 4.8): a full Core's refusal, and the
 // end of a device's older connection when it connects again.
 constexpr const char* kCoreFullReason = "The Core already has four devices connected.";
+// The several-devices design, 15.2 (the operator-confirmed wording): an
+// older window cannot answer the fifth-device question, so it is told to
+// update or try again.
+constexpr const char* kOlderWindowCoreFullReason =
+    "The Core is full. Update NereusSDR to take a device's place, or try again later.";
 constexpr const char* kSameDeviceReason = "This device connected again.";
 // iPhone app Task 71 (ruling 4.12): session.leave's close; no session.end
 // carries it (the accepted result already told the device).
@@ -2723,7 +2728,12 @@ void StationServer::admit(SessionTransport* transport, const QString& name,
         // Task 41 a device that declared sessionHolder is asked the
         // fifth-device question instead; an older window keeps this.
         qCInfo(lcStation) << "Turning away" << description << ": every place on the Core is taken";
-        dropPeer(transport, QString::fromLatin1(kCoreFullReason), true, /*retryable=*/true);
+        if (peerHoldsSessions(transport)) {
+            dropPeer(transport, QString::fromLatin1(kCoreFullReason), true, /*retryable=*/true);
+        } else {
+            dropPeer(transport, QString::fromLatin1(kOlderWindowCoreFullReason), true,
+                     /*retryable=*/true);
+        }
         return;
     case DeviceSessionRegistry::Admission::SameDevice: {
         // Ruling 4.8: the device's own older connection ends at once, with

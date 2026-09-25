@@ -664,6 +664,7 @@ const QList<ReasonSource>& reasonSources()
           // iPhone app Task 71: constants of this file, their literals
           // scanned here.
           QStringLiteral("QString::fromLatin1(kCoreFullReason)"),
+          QStringLiteral("QString::fromLatin1(kOlderWindowCoreFullReason)"),
           QStringLiteral("QString::fromLatin1(kSameDeviceReason)"),
           QStringLiteral("QString::fromLatin1(kLeftReason)"),
           // iPhone app Task 74: ruling 10.2's refusal at admission,
@@ -691,9 +692,13 @@ const QList<ReasonSource>& reasonSources()
         {"src/core/session/StationReceivers.cpp", {}, {}, 12,
          {QStringLiteral("anchorName"), QStringLiteral("names"), QStringLiteral("takerName"),
           QStringLiteral("name, letterWords"), QStringLiteral("number"),
-          QStringLiteral("notRestored.size()")},
+          QStringLiteral("notRestored.size()"),
+          // Fix wave: a count of slices, and notRestoredSentence's own
+          // sentence, scanned here.
+          QStringLiteral("count"), QStringLiteral("notRestoredSentence(notRestored.size())")},
          {// Constants of this file and its reason functions, their
           // literals scanned here.
+          QStringLiteral("notRestoredSentence(notRestored.size())"),
           QStringLiteral("QString::fromLatin1(kWaitingReason)"),
           QStringLiteral("QString::fromLatin1(kNoQuestionReason)"),
           QStringLiteral("QString::fromLatin1(kNoChoiceReason)"),
@@ -1496,6 +1501,7 @@ private slots:
         QVERIFY(!code.isEmpty());
         for (const QString& sentence :
              {QStringLiteral("The Core already has four devices connected."),
+              QStringLiteral("The Core is full. Update NereusSDR to take a device's place, or try again later."),
               QStringLiteral("This device connected again."),
               QStringLiteral("This device left the Core.")}) {
             QVERIFY2(code.contains(QLatin1Char('"') + sentence + QLatin1Char('"')),

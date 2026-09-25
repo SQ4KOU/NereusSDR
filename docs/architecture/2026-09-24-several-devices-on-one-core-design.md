@@ -486,7 +486,11 @@ opened (the link, section 12.2). And an absent device's receivers return to the 
 - **After the 180 s, the device**, coming back to a Core with a place free, is admitted and
   receives a `notice` of kind `graceEnded` after `snapshot.complete`: "You were away for more
   than 3 minutes. Your slices are back, and transmit was freed." (the last clause only when it
-  held transmit), with `slices` listing any saved slice that could not be restored (5.2). So
+  held transmit), with `slices` listing any saved slice that could not be restored (5.2). When
+  one did not fit, the notice does not say the slices are back; it names what was not restored
+  in the words of the `slicesNotRestored` notice: "You were away for more than 3 minutes. 2 of
+  your slices could not be restored: all the radio's receivers are in use." (fix wave,
+  2026-09-25). So
   the iPhone design's screen 15, "transmit was still yours", is shown only within the 180 s;
   after them the phone shows this notice and `txState` as it stands (review finding 6).
   Coming back to a full Core, it meets the fifth-device question with `placeFreed` (4.3).
@@ -1783,7 +1787,7 @@ the holder's (8.3, 8.7); Task 42's accessory verbs follow 7.5.
   | --- | --- | --- | --- |
   | Replaced by a fifth device | `session.end` naming the taker, with `takenOverBy`, `takenOverById` and `secondsAgo` | false | `takenOver` |
   | The fifth device cancelled or did not answer | `session.end` "The Core already has four devices connected." | false | `coreFull` (new) |
-  | An older window meets a full Core | `session.end` "The Core already has four devices connected." | true | none |
+  | An older window meets a full Core | `session.end` "The Core is full. Update NereusSDR to take a device's place, or try again later." (15.2, the operator's wording) | true | none |
   | The same device connected again | `session.end` "This device connected again." | false | `sameDevice` (new) |
   | An older window's last slice was taken | `session.end` naming the taker (ruling 6.10) | false | `takenOver` |
 
@@ -1847,8 +1851,9 @@ The operator let older windows in (D59: "Let it in").
 - While a place is free it is admitted with its own slices and the Core's objects; no markers,
   `connectedDevices`, confirmations or notices.
 - A refusal that involves another device names it and says to update NereusSDR.
-- A full Core refuses it with a retryable end ("The Core already has four devices
-  connected."), since it cannot answer the question; it tries again on its own backoff.
+- A full Core refuses it with a retryable end ("The Core is full. Update NereusSDR to take a device's place, or try again later.", the wording
+  the operator confirmed in 15.2), since it cannot answer the question; it tries again on its
+  own backoff. A device with the feature keeps the fifth-device flow (4.3).
 - When a take would close its last slice, its session ends (ruling 6.10).
 - **Ruling 10.2.** It gets a slice at admission (5.2) when the slice cap allows. When it does
   not, it is refused, retryable, in words that name the limit that is full: "All the radio's

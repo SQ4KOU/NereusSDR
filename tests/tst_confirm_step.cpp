@@ -879,6 +879,34 @@ private slots:
                 > indexOfType(back, QStringLiteral("snapshot.complete")));
     }
 
+    // Fix wave (Minor): back after its 180 s with a saved slice that no
+    // longer fits, graceEnded names what was not restored, as the
+    // slicesNotRestored notice does, and never says the slices are back.
+    void aGraceEndedWithASliceNotRestoredSaysSo()
+    {
+        Shared s(2, 2);
+        s.core.now = 1000;
+        s.appB->closeLink(QStringLiteral("lost"));
+        QTRY_COMPARE(s.core.sessions().entry(s.b.key.fingerprint())->state,
+                     DeviceSessionRegistry::State::Away);
+        s.core.now = 1000 + DeviceSessionRegistry::kGraceMs;
+        QCOMPARE(s.core.sessions().expireAway().size(), 1);
+        QVERIFY(s.core.model->sliceById(1) == nullptr);
+        // A takes the freed slice place: the cap is full again.
+        QVERIFY(s.core.invoke(s.appA, "addSlice", {utf8("initialPanId", QString())})
+                    .value(QStringLiteral("accepted")).toBool());
+        s.core.now = 1000 + DeviceSessionRegistry::kGraceMs + 10000;
+        LoopbackTransport* back = s.core.signIn(s.b);
+        QVERIFY(admitted(back));
+        const QJsonObject told = waitForLast(back, QStringLiteral("notice"), 0);
+        QCOMPARE(told.value(QStringLiteral("kind")).toString(), QStringLiteral("graceEnded"));
+        QCOMPARE(told.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("You were away for more than 3 minutes. 1 of your slices could "
+                                "not be restored: all the radio's receivers are in use."));
+        QVERIFY(OperatorWording::isPlain(told.value(QStringLiteral("reason")).toString()));
+        QCOMPARE(told.value(QStringLiteral("slices")).toArray().size(), 1);
+    }
+
     // ── An older window (10.7, rulings 6.10 and 10.2) ────────────────────
 
     void anOlderWindowIsRefusedNamingWhoItWouldAffectNeverAsked()

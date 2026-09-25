@@ -1055,6 +1055,10 @@ private:
     bool handleSliceRetune(SessionTransport* transport, const SessionMessage& message);
     /// confirm.proceed, confirm.cancel, notice.takeBack.
     SessionMessage answerConfirm(const SessionMessage& invoke, int id, int choice);
+    /// "<n> of your slices could not be restored: all the radio's receivers
+    /// are in use." (ruling 5.2 step 2), for slicesNotRestored and a
+    /// partial graceEnded.
+    static QString notRestoredSentence(qsizetype count);
     /// Fix wave I2: the slices `question` names (the written slice, a
     /// `sliceId` argument, the slices in `moving`).
     QList<int> slicesNamedBy(const ConfirmStep::Question& question) const;

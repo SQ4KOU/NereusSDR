@@ -1103,6 +1103,13 @@ void StationServer::sendNotice(SessionTransport* transport, const ConfirmStep::N
     send(transport, SessionMessages::notice(prompt, notice.reason));
 }
 
+QString StationServer::notRestoredSentence(qsizetype count)
+{
+    return QStringLiteral("%1 of your slices could not be restored: all the radio's "
+                          "receivers are in use.")
+        .arg(count);
+}
+
 void StationServer::deliverAdmissionNotices(SessionTransport* transport,
                                             std::optional<qint64> timeRanOutAtMs)
 {
@@ -1127,7 +1134,13 @@ void StationServer::deliverAdmissionNotices(SessionTransport* transport,
         notice.prompt.id = notice.id;
         notice.prompt.kind = QStringLiteral("graceEnded");
         notice.prompt.slices = savedSlicesJson(notRestored);
-        notice.reason = QStringLiteral("You were away for more than 3 minutes. Your slices are back.");
+        // Fix wave (Minor, 4.5): with a saved slice that did not fit, the
+        // notice names what was not restored, as slicesNotRestored does,
+        // and does not say the slices are back.
+        notice.reason = notRestored.isEmpty()
+            ? QStringLiteral("You were away for more than 3 minutes. Your slices are back.")
+            : QStringLiteral("You were away for more than 3 minutes. %1")
+                  .arg(notRestoredSentence(notRestored.size()));
         sendNotice(transport, notice);
     } else if (!notRestored.isEmpty()) {
         ConfirmStep::Notice notice;
@@ -1137,9 +1150,7 @@ void StationServer::deliverAdmissionNotices(SessionTransport* transport,
         notice.prompt.id = notice.id;
         notice.prompt.kind = QStringLiteral("slicesNotRestored");
         notice.prompt.slices = savedSlicesJson(notRestored);
-        notice.reason = QStringLiteral("%1 of your slices could not be restored: all the radio's "
-                                       "receivers are in use.")
-                            .arg(notRestored.size());
+        notice.reason = notRestoredSentence(notRestored.size());
         sendNotice(transport, notice);
     }
     for (ConfirmStep::Notice notice : waiting) {
