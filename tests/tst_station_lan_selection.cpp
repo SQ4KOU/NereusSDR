@@ -23,6 +23,7 @@
 #include "models/RadioModel.h"
 #include "fakes/MainWindowTestSettings.h"
 #include "fakes/UpgradedCoreToken.h"
+#include "OperatorWording.h"
 using namespace NereusSDR;
 
 namespace {
@@ -132,6 +133,41 @@ private slots:
         QVERIFY(!row.pairable);
         QVERIFY(row.connectable);
         QCOMPARE(row.state, QStringLiteral("Saved, ready to connect"));
+    }
+
+    void detailsForAnUnclaimedCoreWhosePairingClosedSayWhereItReopens()
+    {
+        // Part C follow-up (R-IOS-08): the details text takes the same
+        // branch the row does. An unclaimed Core whose pairing closed after
+        // too many wrong codes is not "paired with other devices".
+        StationLanAnnouncement advertised{4711, QStringLiteral("AB:").repeated(31)
+            + QStringLiteral("AB"), QStringLiteral("Core"), {},
+            QStringLiteral("00:00:00:00:00:00"), false};
+        advertised.schema = kStationLanAnnouncementSchema2;
+        advertised.identity = QByteArray(kStationLanIdentityBytes, '\x42');
+        advertised.claimed = false;
+        advertised.pairing = StationLanPairing::Closed;
+        const QString closed = GuiConnectionController::lanCoreNextStep(advertised);
+        QCOMPARE(closed, QStringLiteral("No device has paired with this Core yet. Its pairing "
+                                        "closed after too many wrong codes. Run nereusd pairing "
+                                        "open on the Core's computer to open it again."));
+        QVERIFY(!closed.contains(QStringLiteral("paired with other devices")));
+        QVERIFY2(OperatorWording::isPlain(closed), qPrintable(closed));
+
+        // The other branches are unchanged.
+        advertised.pairing = StationLanPairing::Click;
+        QCOMPARE(GuiConnectionController::lanCoreNextStep(advertised),
+                 QStringLiteral("No device has paired with this Core yet. Select Pair to pair "
+                                "this computer with it."));
+        advertised.pairing = StationLanPairing::Code;
+        QCOMPARE(GuiConnectionController::lanCoreNextStep(advertised),
+                 QStringLiteral("This Core pairs with its code. Select Pair and type the code "
+                                "the Core shows."));
+        advertised.claimed = true;
+        advertised.pairing = StationLanPairing::Closed;
+        QCOMPARE(GuiConnectionController::lanCoreNextStep(advertised),
+                 QStringLiteral("This Core is paired with other devices. Open pairing on the "
+                                "Core, or on a device paired with it, then add it by code."));
     }
 
     void discoveredAddressUsesSavedPinWithoutRewritingAddress()

@@ -344,6 +344,28 @@ ConnectionTargetRow GuiConnectionController::lanCoreRow(const StationLanEndpoint
     return row;
 }
 
+QString GuiConnectionController::lanCoreNextStep(const StationLanAnnouncement& advertised)
+{
+    // iPhone app Task 18: what to do next depends on whether the Core takes
+    // new devices.
+    if (oneClickPairs(advertised)) {
+        return tr("No device has paired with this Core yet. Select Pair to pair this computer with it.");
+    }
+    if (takesNewDevices(advertised)) {
+        return tr("This Core pairs with its code. Select Pair and type the code the Core shows.");
+    }
+    if (advertised.schema >= kStationLanAnnouncementSchema2 && !advertised.claimed) {
+        // Part C follow-up (R-IOS-08): the branch lanCoreRow() gives
+        // "Pairing is closed on the Core". Unclaimed, its pairing closed
+        // after too many wrong codes, and only the Core's console reopens it.
+        return tr("No device has paired with this Core yet. Its pairing closed after too many wrong codes. Run nereusd pairing open on the Core's computer to open it again.");
+    }
+    if (advertised.schema >= kStationLanAnnouncementSchema2) {
+        return tr("This Core is paired with other devices. Open pairing on the Core, or on a device paired with it, then add it by code.");
+    }
+    return tr("Use a saved entry for it, or get its pairing token and certificate fingerprint from Core setup.");
+}
+
 bool GuiConnectionController::isReadyToConnect(const RemoteStationOptions& connection)
 {
     if (!connection.identityFingerprint.isEmpty()) {
@@ -577,15 +599,7 @@ void GuiConnectionController::showDetails(const QString& key)
         for (const StationLanEndpoint& endpoint : m_lan.endpoints()) {
             if (key == QStringLiteral("lan:") + endpoint.key()) {
                 const auto& advertised = endpoint.announcement;
-                // iPhone app Task 18: what to do next depends on whether the
-                // Core takes new devices.
-                const QString next = oneClickPairs(advertised)
-                    ? tr("No device has paired with this Core yet. Select Pair to pair this computer with it.")
-                    : takesNewDevices(advertised)
-                    ? tr("This Core pairs with its code. Select Pair and type the code the Core shows.")
-                    : advertised.schema >= kStationLanAnnouncementSchema2
-                    ? tr("This Core is paired with other devices. Open pairing on the Core, or on a device paired with it, then add it by code.")
-                    : tr("Use a saved entry for it, or get its pairing token and certificate fingerprint from Core setup.");
+                const QString next = lanCoreNextStep(advertised);
                 m_selector->setNotice(tr("Core seen on this network, not yet verified: %1\nAddress: %2\nRadio MAC: %3\n%4")
                     .arg(advertised.displayName(), endpointText(endpoint.url()),
                          advertised.radioMac, next));

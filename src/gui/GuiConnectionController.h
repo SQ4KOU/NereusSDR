@@ -35,6 +35,10 @@ public:
     /// computer has saved. `saved` is every saved Core.
     static ConnectionTargetRow lanCoreRow(const StationLanEndpoint& endpoint,
                                           const QList<SavedCoreTarget>& saved);
+    /// iPhone app Task 18, Part C follow-up (R-IOS-08): the last line of a
+    /// Core's details in the Connections window, what to do next with it.
+    /// Takes the same branches lanCoreRow() takes for its state.
+    static QString lanCoreNextStep(const StationLanAnnouncement& advertised);
     /// A saved Core as listed under Your Cores when it is not the live one.
     static ConnectionTargetRow savedCoreRow(const SavedCoreTarget& target, bool storeLoaded);
     /// True when a saved Core has what a sign-in needs: its identity (a
