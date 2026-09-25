@@ -515,3 +515,95 @@ operator's go-ahead: a sequencer or a jumper on the radio's input.
 **Execution note (advisory):** opus. After Task 7's follow-up.
 
 - [ ] **Step 1:** Read the sources, then write the parsers, the reader and the tests.
+
+## Task 14: Band outputs and filters follow the right slice, as Thetis and mi0bot choose them
+
+**Requirements:** the 3M-1 transmit work, Phase 3F section 16.3.2, R-R3-49 (every control does
+what its label says). Found by the whole-branch re-review's audit
+(`.crew/2026-09-24-receiver-and-transmit-gaps-plan/rereview-whole-branch-report.md`, Part 2).
+All five gaps predate this branch.
+
+1. **Transmit band outputs on Protocol 1 ignore the transmitting slice.**
+   - While keyed, `buildCodecContext` builds the OC byte from the RX1 stand-in's band
+     (`P1RadioConnection.cpp:2582-2587`).
+   - In a cross-band split this sends a carrier through the wrong band's filter.
+   - On the HL2 the N2ADR board's transmit low-pass is chosen by these pins
+     (`N2adrPreset.cpp:92-121`). A 7 MHz carrier selects the 30/20 m low-pass, so the second
+     harmonic leaves unfiltered. A 14 MHz carrier into the 60/40 m low-pass reflects power into
+     the PA.
+2. **Protocol 2 sends no band outputs at all.**
+   - Thetis writes them to the high-priority packet's byte 1401 (`network.c:1031`).
+   - No NereusSDR Protocol 2 codec writes that byte, although Setup shows the OC Outputs tab
+     for the G2.
+3. **The Protocol 2 receive low-pass follows the last retuned receiver** instead of Thetis's
+   rule (`P2RadioConnection.cpp:980-982`).
+4. **"HPF Bypass on TX" is saved but never read** on either protocol
+   (`AntennaAlexAlex1Tab.cpp:381`).
+5. **The band comes from the receiver's DDC centre, not its VFO frequency.** Near a band edge
+   with CTUN, the two can name different bands.
+
+**Source first** (Thetis v2.10.3.15 at `3759d096`; mi0bot-Thetis at `c26a8a4` for the HL2):
+- `Penny.cs:170-178`: receive uses `RXABitMasks[band of VFOA]`; transmit uses
+  `TXABitMasks[band of VFOB]` when `VFOBTX` is set, otherwise VFOA's band.
+- The callers pass `lo_band` and `lo_bandb` (`console.cs:14935-14937`, `29101-29106`
+  `HdwMOXChanged`, `45950-45955`). `VFOBTX` is `chkVFOBTX` (`console.cs:39833`).
+- mi0bot `Penny.cs:176-190` is the HL2 branch. `console.cs:14986-14988` is the HL2's OC band.
+- `network.c:1031`: `packetbuf[1401] = (oc_output << 1) & 0xfe`.
+- `console.cs:15487-15498` is the receive low-pass. It is named `UpdateAlexTXFilter` but
+  runs unkeyed: the higher of RX1 and RX2 on a board with no separate RX2 front end, otherwise
+  RX1.
+- `console.cs:15467-15469` and `6843-6848`: `disable_hpf_on_tx` gives the HPF word 0x20
+  while keyed.
+- If a source cannot be found, stop with NEEDS_CONTEXT. Never guess a byte or a bit.
+
+**Files:**
+- `src/core/P1RadioConnection.{h,cpp}` (the keyed OC band from the transmit frequency; the
+  band from the VFO frequency);
+- `src/core/P2RadioConnection.{h,cpp}` and the Protocol 2 codecs that build the
+  high-priority packet (byte 1401; the receive low-pass rule; HPF bypass while keyed);
+- `src/models/RadioModel.cpp` (whatever the connections need: the transmitting slice's
+  frequency, the stand-in's VFO frequency, the bypass setting);
+- the Alex tab's setting reader;
+- tests, including the Protocol 2 regression freeze baseline, updated in its own commit with
+  the reason.
+
+**Acceptance:**
+- **Protocol 1, keyed.** The OC byte is the transmit mask for the band of the transmitting
+  slice's frequency (plus XIT, as the Alex transmit low-pass already uses), whichever slice
+  that is.
+  - HL2 test: A on 20 m, B transmitting on 40 m gives the 40 m transmit mask (0x04 per
+    `N2adrPreset.cpp`). The reverse case is also tested.
+  - A Hermes test does the same.
+  - Unkeyed bytes are unchanged, the HL2's two-range bypass included, which is the operator's
+    hardware ruling.
+- **Protocol 2.** Byte 1401 carries `(oc_output << 1) & 0xfe` on every board with OC outputs:
+  unkeyed, the receive mask for the RX1 stand-in's band; keyed, the transmit mask for the
+  transmitting slice's band. A test covers the G2 byte in both states.
+- **Protocol 2 receive low-pass.** RX1 (the stand-in) on a board with a separate RX2 front
+  end; otherwise the higher of the stand-in and the second receiver, as Thetis does. It no
+  longer depends on which receiver was retuned last. Tested on the G2.
+- **HPF Bypass on TX.** When set, the high-pass word is 0x20 while keyed, on both protocols.
+  It is applied live, and a remote window's change reaches the Core. Tested.
+- **Band from the VFO.** Every band decision above comes from the slice's VFO frequency, as
+  Thetis's `BandByFreq(VFOAFreq)` does. Tested with CTUN near a band edge.
+- Nothing in a test keys a real radio. The Protocol 1 freeze baseline is unchanged unless a
+  state it pins is one of these fixes; say which.
+
+**Verification:** transmit filter selection, so tests come first, red on the base commit.
+Freezes on both protocols. This task gets a scoped review of its own before the operator's HL2
+bench, as Task 7 did.
+
+Bench (pending, the operator's go-ahead, dummy load, low power):
+- On the HL2, key TUNE on B after A is closed, then in a cross-band split: the I/O tab shows
+  the transmitting slice's mask.
+- On the G2, an OC output follows the band in receive and in transmit.
+
+**Execution note (advisory):** opus. After the whole-branch fix wave. Shares
+`P1RadioConnection.cpp` and `P2RadioConnection.cpp` with nothing in flight.
+
+- [ ] **Step 1:** Read the sources. Write the tests for all five gaps and show them red.
+- [ ] **Step 2:** Protocol 1's keyed band, then the band from the VFO.
+- [ ] **Step 3:** Protocol 2's byte 1401 and the receive low-pass rule, with the freeze
+  baseline in its own commit.
+- [ ] **Step 4:** HPF Bypass on TX on both protocols. Update the HL2 bench script with the
+  transmit steps.
