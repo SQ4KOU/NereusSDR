@@ -4136,6 +4136,9 @@ private:
     // channel's stop on its thread, PureSignal on the main thread), and
     // the test observer of the second.
     void wireTxaFlushed();
+    // Group B fix wave: applies a held DSP > Options TX change and a held
+    // PA profile or calibration reload once the on-air rule clears.
+    void releaseHeldOnAirWork();
     std::function<void()> m_txaFlushedPureSignalObserverForTest;
 
     // The connect-time DDC seed, factored out of the wireSliceSignals

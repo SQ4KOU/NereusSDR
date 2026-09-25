@@ -1607,6 +1607,21 @@ RadioModel::RadioModel(Role role, QObject* parent)
     if (m_pureSignalFacade) {
         m_pureSignalFacade->followTwoToneController();
     }
+    // Group B fix wave: held work is released when the on-air rule clears
+    // (see releaseHeldOnAirWork): two-tone's end here, MOX's return to
+    // receive below, TUNE's completion in completeTuneOff.
+    connect(m_twoToneController, &TwoToneController::twoToneActiveChanged, this,
+            [this](bool active) {
+                if (!active) { releaseHeldOnAirWork(); }
+            });
+    connect(this, &RadioModel::transmittingChanged, this, [this](bool transmitting) {
+        if (!transmitting) { releaseHeldOnAirWork(); }
+    });
+    if (m_moxController) {
+        connect(m_moxController, &MoxController::stateChanged, this, [this](MoxState state) {
+            if (state == MoxState::Rx) { releaseHeldOnAirWork(); }
+        });
+    }
 
     // ── Stage C2: FilterPresetStore ───────────────────────────────────────────
     // Wraps Thetis-verbatim defaults from SliceModel::presetsForMode with a
@@ -18942,6 +18957,8 @@ void RadioModel::completeTuneOff()
     // [H.3 hook: restore meterModel().setTxDisplayMode(savedMode) here]
 
     m_isTuning = false;
+    // Group B fix wave: TUNE's end clears the on-air rule last.
+    releaseHeldOnAirWork();
 }
 
 void RadioModel::onMoxHardwareFlipped(bool isTx)
@@ -19690,12 +19707,8 @@ void RadioModel::scheduleRemoteDspOptionsApply(const QString& key)
         connect(m_dspOptionsApplyTimer, &QTimer::timeout,
                 this, &RadioModel::flushRemoteDspOptionsApply);
         // R-R3-49 (group A fix wave, I2): TX groups held while the radio
-        // was on the air apply once it is back on receive.
-        connect(this, &RadioModel::transmittingChanged, this, [this](bool transmitting) {
-            if (!transmitting && !m_pendingDspOptionsTxGroups.isEmpty()) {
-                flushRemoteDspOptionsApply();
-            }
-        });
+        // was on the air apply once it is back on receive
+        // (releaseHeldOnAirWork, group B fix wave).
     }
     // Trailing edge from the first key of a burst, not restarted by later
     // ones: the whole burst lands in one apply, and a steady stream of
@@ -19715,8 +19728,9 @@ void RadioModel::flushRemoteDspOptionsApply()
     // R-R3-49 (group A fix wave, I2): the write was accepted off the air,
     // but the radio can be keyed inside the coalescing window, and this
     // apply reaches SetDSPBuffsize and its channel flush. While the radio
-    // is on the air the TX groups stay pending; the transmittingChanged
-    // connect in scheduleRemoteDspOptionsApply applies them on the unkey.
+    // is on the air the TX groups stay pending; releaseHeldOnAirWork applies
+    // them once the on-air rule clears (group B fix wave: after MOX, TUNE
+    // or two-tone alike).
     if (!m_pendingDspOptionsTxGroups.isEmpty() && !stationOnAirRefusal(nullptr)) {
         const QSet<QString> txGroups = m_pendingDspOptionsTxGroups;
         m_pendingDspOptionsTxGroups.clear();
@@ -19841,8 +19855,23 @@ void RadioModel::flushRemoteHardwareApply()
     if (m_pendingHardwareReloads.isEmpty()) {
         return;
     }
-    const QSet<QString> reloads = m_pendingHardwareReloads;
+    QSet<QString> reloads = m_pendingHardwareReloads;
     m_pendingHardwareReloads.clear();
+    // Group A follow-up (group B fix wave): the PA profiles and the PA
+    // calibration were accepted off the air, but the radio can be keyed
+    // inside the coalescing window; as with DSP > Options TX (group A's
+    // I2), they wait while the on-air rule holds and reload once it clears
+    // (releaseHeldOnAirWork).
+    if (stationOnAirRefusal(nullptr)) {
+        for (const QString& held : {QStringLiteral("pa"), QStringLiteral("cal")}) {
+            if (reloads.remove(held)) {
+                m_pendingHardwareReloads.insert(held);
+            }
+        }
+    }
+    if (reloads.isEmpty()) {
+        return;
+    }
     const QString mac = currentRadioMac();
     if (mac.isEmpty()) {
         return;
@@ -19910,6 +19939,25 @@ void RadioModel::flushRemoteHardwareApply()
         m_paProfileManager->setMacAddress(mac);
         m_paProfileManager->reloadFromSettings();
         observe(QStringLiteral("pa"));
+    }
+}
+
+// Group B fix wave (group A's follow-ups): work a window's change left
+// waiting while the radio was on the air (a DSP > Options TX change, a PA
+// profile or calibration reload) applies once the on-air rule clears,
+// whichever way it clears: MOX back to receive, TUNE's completion or the
+// two-tone test's end.
+void RadioModel::releaseHeldOnAirWork()
+{
+    if (stationOnAirRefusal(nullptr)) {
+        return;
+    }
+    if (!m_pendingDspOptionsTxGroups.isEmpty()) {
+        flushRemoteDspOptionsApply();
+    }
+    if (!m_pendingHardwareReloads.isEmpty()
+        && !(m_hardwareApplyTimer && m_hardwareApplyTimer->isActive())) {
+        flushRemoteHardwareApply();
     }
 }
 
