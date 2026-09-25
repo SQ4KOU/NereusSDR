@@ -704,7 +704,12 @@ const QList<ReasonSource>& reasonSources()
         {"src/core/IoBoardHl2Facade.cpp", {}, {}, 1},
         // Task 16 (receiver and transmit gaps plan): receive only's reason,
         // what a refused key and a disabled transmit button show.
-        {"src/core/MoxController.cpp", {QStringLiteral("defaultRxOnlyReason")}, {}, 1},
+        // Task 16 fix wave (M2): the words setMox refuses with, which the
+        // TGXL autotune and the Tuner applet's TUNE show too.
+        {"src/core/MoxController.cpp",
+         {QStringLiteral("defaultRxOnlyReason"), QStringLiteral("transmitBlockReason")}, {}, 3, {},
+         // The reason setRxOnly was given (RadioModel::rxOnlyReason, scanned).
+         {QStringLiteral("m_rxOnlyReason")}},
         {"src/core/MoxController.h", {QStringLiteral("rxOnlyReason")}, {}, 0, {},
          // The reason setRxOnly was given (RadioModel::rxOnlyReason, scanned).
          {QStringLiteral("m_rxOnlyReason")}},
