@@ -558,6 +558,88 @@ private slots:
         policy.setMode(TxInterlockPolicy::Disabled);
     }
 
+    // ── Task 7 fix wave, M5: a VOX level cannot outlive a mode change ───────
+    // DEXP pushes no pushvox(0) once VOX stops running (dexp.c:328-339), so
+    // a switch to a non-voice mode leaves Audio.VOXActive stale. A return to
+    // a voice mode must not key from it before DEXP's next push.
+    void voxKey_releasedOnSwitchToNonVoiceMode_andNotRekeyed()
+    {
+        MoxController ctrl;
+        makeSync(ctrl);
+        ctrl.onModeChanged(DSPMode::USB);
+        ctrl.setVoxEnabled(true);
+        ctrl.onVoxActive(true);
+        drain();
+        QVERIFY(ctrl.isMox());
+        QCOMPARE(ctrl.pttMode(), PttMode::Vox);
+
+        ctrl.onModeChanged(DSPMode::CWU);
+        drain();
+        QVERIFY2(!ctrl.isMox(), "a VOX key outlived the switch to CW");
+
+        ctrl.onModeChanged(DSPMode::USB);
+        micFrames(ctrl, false);
+        QVERIFY2(!ctrl.isMox(), "a stale VOX level keyed on the return to USB");
+    }
+
+    void staleVoxLevel_doesNotKeyOnReturnToVoiceMode()
+    {
+        MoxController ctrl;
+        makeSync(ctrl);
+        ctrl.onModeChanged(DSPMode::USB);
+        ctrl.setVoxEnabled(true);
+        // VOX goes active under a manual key (TUN), so it keys nothing.
+        ctrl.setManualKey(true);
+        ctrl.onVoxActive(true);
+        drain();
+        // TUN-off restores CW, then clears the manual key.
+        ctrl.onModeChanged(DSPMode::CWU);
+        ctrl.setManualKey(false);
+        drain();
+        QVERIFY(!ctrl.isMox());
+
+        ctrl.onModeChanged(DSPMode::USB);
+        micFrames(ctrl, false);
+        QVERIFY2(!ctrl.isMox(), "a stale VOX level keyed on the return to USB");
+    }
+
+    // ── Task 7 fix wave, M6: a TCI release falling back to the mic ──────────
+    // The key moves to the mic, which reads the PC microphone; it is admitted
+    // like a new key (R-R3-36's ready check sits in the MOX pre-check), so a
+    // microphone that is not ready ends the key instead.
+    void tciReleaseFallback_runsTheAdmissionCheck()
+    {
+        MoxController ctrl;
+        makeSync(ctrl);
+        bool micReady = true;
+        int checks = 0;
+        ctrl.setMoxCheck([&micReady, &checks]() {
+            ++checks;
+            return safety::BandPlanGuard::MoxCheckResult{micReady,
+                micReady ? QString() : QStringLiteral("Microphone is not ready.")};
+        });
+        QSignalSpy rejected(&ctrl, &MoxController::moxRejected);
+        ctrl.onTciPtt(true);
+        drain();
+        QVERIFY(ctrl.isMox());
+        ctrl.onMicPttFromRadio(true);
+        drain();
+        QCOMPARE(ctrl.pttMode(), PttMode::Tci);
+        const int checksBefore = checks;
+
+        micReady = false;
+        ctrl.onTciPtt(false);
+        drain();
+        QVERIFY(checks > checksBefore);
+        QVERIFY2(!ctrl.isMox(), "the mic kept the key with the microphone not ready");
+        QCOMPARE(ctrl.pttMode(), PttMode::None);
+        QCOMPARE(rejected.count(), 1);
+        // The mic, still held, is refused again on each frame but told once.
+        micFrames(ctrl, true);
+        QVERIFY(!ctrl.isMox());
+        QCOMPARE(rejected.count(), 1);
+    }
+
     // ── RadioModel shims (unconnected model, 0 ms walk, counting check) ─────
 
     void radioModel_tciShim_keysWithTciMode()

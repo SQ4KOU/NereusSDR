@@ -113,8 +113,11 @@
 //                 unkey (setTxInhibited, setPaTripped; console.cs:25470,
 //                 15341-15363, 29364-29371 [v2.10.3.15]). A TX-interlock
 //                 refusal emits moxRejected (M2); a held source's repeat
-//                 refusal is quiet, one message per press (M3). J.J. Boyd
-//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//                 refusal is quiet, one message per press (M3). A VOX
+//                 level is dropped when VOX stops running (M5), and a TCI
+//                 release that falls back to another source runs the MOX
+//                 pre-check first (M6, R-R3-36). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -322,11 +325,24 @@ bool MoxController::isVoiceMode(DSPMode mode) const noexcept
 void MoxController::recomputeVoxRun()
 {
     const bool gated = m_voxEnabled && isVoiceMode(m_currentMode);
-    if (gated == m_lastVoxRunGated) {
-        return;  // idempotent on emitted state; no spurious emit
+    if (gated != m_lastVoxRunGated) {
+        m_lastVoxRunGated = gated;
+        emit voxRunRequested(gated);
     }
-    m_lastVoxRunGated = gated;
-    emit voxRunRequested(gated);
+
+    // Task 7 fix wave, M5: once VOX stops running, DEXP pushes nothing, not
+    // even pushvox(0) (Thetis wdsp dexp.c:328-339 [v2.10.3.15]: both pushes
+    // sit under a->run_vox). A level left set by a switch to a non-voice
+    // mode (or TUN-off restoring CW) would then key VOX on the first pass
+    // after a return to a voice mode, before DEXP's first push. Thetis has
+    // the same stale Audio.VOXActive (set only at cmaster.cs:1945), but its
+    // VOX could not key from it before PollPTT; NereusSDR's now can, so the
+    // level is dropped here and the pass releases a VOX key.
+    if (!gated && m_voxPtt) {
+        m_voxPtt = false;
+        m_refusedHeld &= static_cast<quint8>(~kRefusedVox);
+        pollPtt();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -893,9 +909,28 @@ void MoxController::pollPtt()
             }
             if (fallback == PttMode::None) {
                 setMox(false);
-            } else {
-                setPttMode(fallback);
+                break;
             }
+            // Task 7 fix wave, M6 (R-R3-36): the key moves off TCI audio to
+            // a source that reads the PC microphone, so it is admitted as a
+            // new key would be: the MOX pre-check, which holds the
+            // microphone-ready check, runs first, and a refusal ends the
+            // key. Not in Thetis (it has no microphone admission); applied
+            // to every fallback, since CAT and VOX transmit the microphone
+            // too.
+            if (m_moxCheck) {
+                const auto admit = m_moxCheck();
+                if (!admit.ok) {
+                    emit moxRejected(admit.reason);
+                    // M3: that source, still held, is not told again.
+                    m_refusedHeld |= (fallback == PttMode::Cat) ? kRefusedCat
+                                   : (fallback == PttMode::Mic) ? kRefusedMic
+                                                                : kRefusedVox;
+                    setMox(false);
+                    break;
+                }
+            }
+            setPttMode(fallback);
         }
         break;
     case PttMode::Cat:

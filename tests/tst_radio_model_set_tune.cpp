@@ -46,6 +46,8 @@
 //      window completes the TUN-off first (tone down, mode and power
 //      back), so no key rides on the tune tone; from CW the restored mode
 //      is refused as any CW key is.
+//  29. Task 7 fix wave M5: VOX gone active during TUN from CW does not key
+//      when the operator later returns to a voice mode.
 
 #include <QtTest/QtTest>
 #include <QObject>
@@ -1555,6 +1557,40 @@ private slots:
         QVERIFY(!model.tuneOffPendingForTest());
         QVERIFY(!model.isTune());
         QVERIFY(!mox->isManualKey());
+    }
+
+    // ── 29. Task 7 fix wave, M5 ─────────────────────────────────────────────
+    void voxActiveDuringTuneFromCwDoesNotKeyLater()
+    {
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        SliceModel* slice = nullptr;
+        setupRefusalRig(model, conn, slice);
+        std::unique_ptr<MockConnection> connOwner(conn);
+        const auto detach = qScopeGuard([&model]() {
+            model.injectConnectionForTest(nullptr);
+        });
+        QVERIFY(slice != nullptr);
+        MoxController* mox = model.moxController();
+        mox->setMoxCheck([]() {
+            return safety::BandPlanGuard::MoxCheckResult{true, QString()};
+        });
+        model.transmitModel().setVoxEnabled(true);
+        mox->setVoxEnabled(true);   // RadioModel wires this at connect
+
+        model.setTune(true);        // CWU -> USB for the tune: VOX runs
+        pump();
+        QCOMPARE(slice->dspMode(), DSPMode::USB);
+        mox->onVoxActive(true);     // the operator speaks during TUN
+        model.setTune(false);
+        pump();
+        QCOMPARE(slice->dspMode(), DSPMode::CWU);   // DEXP stops pushing
+        QVERIFY(!mox->isMox());
+
+        slice->setDspMode(DSPMode::USB);
+        mox->onMicPttFromRadio(false);   // the next status frame
+        pump();
+        QVERIFY2(!mox->isMox(), "a stale VOX level keyed on the return to USB");
     }
 };
 

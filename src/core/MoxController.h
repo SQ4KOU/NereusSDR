@@ -160,7 +160,9 @@
 //                 _ganymede_pa_issue, console.cs:25470 [v2.10.3.15]).
 //                 A TX-interlock refusal emits moxRejected; a held
 //                 source's repeat refusal is quiet (tryPollKey,
-//                 m_refusedHeld). J.J. Boyd (KG4VCF), AI-assisted via
+//                 m_refusedHeld). A VOX level is dropped when VOX stops
+//                 running; a TCI release that falls back runs the MOX
+//                 pre-check (R-R3-36). J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
 // =================================================================
 
