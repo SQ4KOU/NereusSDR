@@ -4786,12 +4786,15 @@ void RadioModel::wireTransmitProcessingChain()
     }
 }
 
+#ifdef NEREUS_BUILD_TESTS
+// Declared in RadioModel.h's NEREUS_BUILD_TESTS block.
 void RadioModel::wireTransmitChainForTest(TxChannel* channel)
 {
     m_txChannel = channel;
     wireMicAndMonitorToTransmit();
     wireTransmitProcessingChain();
 }
+#endif
 
 bool RadioModel::stationTgxlControlAllowed(QString* reason) const
 {
