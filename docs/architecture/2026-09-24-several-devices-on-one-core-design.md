@@ -552,6 +552,12 @@ no `slice:` property changes.
    and costs no receiver. When the slice cap is full it starts with none, and its app
    offers to take one (6.4).
 
+**Ruling 5.2a** (settled with iPhone app Task 73). A slice the Core makes itself while one
+device alone holds a place on it (its radio arriving after the device, the Core's own slice
+top-up, a layout restored late) is that device's, as the slices it found at admission were
+(step 3); with several devices on the Core such a slice has no owner and shows to each as a
+marker. After a restart a manifest entry naming a device comes back held for it (step 1).
+
 Slices held for an absent device keep running and keep their receivers. Another device may
 take such a receiver (D49); nobody is there to ask or tell, so the closed slice is saved
 in its owner's layout store (5.3), and the owner learns at its next admission, in the restore
@@ -683,12 +689,28 @@ slice's `active` property now means "its owner's active slice", so each device s
 one active slice among its own objects, with no change on the wire.
 
 **Ruling 5.11.** Some duties exist once per radio and follow `RadioModel::activeSlice()`
-today: the FreeDV Reporter frequency, the simplex transmit-follows-receive push, band
-tracking and the settings save (`RadioModel.cpp:12776-12826`), and TCI's per-slice broadcasts
-(`TciServer.cpp:1024-1041`). They follow a **station-level active slice**: the transmit
-holder's active slice while transmit is held, otherwise the most recent active-slice change by
-any device. That keeps today's behaviour for one device and gives the station's frequency to
-its control operator. A hosting desktop's window reads its own active slice, not this one.
+today. They follow a **station-level active slice**: the transmit holder's active slice while
+transmit is held, otherwise the most recent active-slice change by any device. That keeps
+today's behaviour for one device and gives the station's frequency to its control operator.
+Corrected against the code by iPhone app Task 73 (`@46b40373`); the first version of this ruling
+also named the simplex push, band tracking and the settings save, which do not follow the
+active slice:
+
+- **Follow the station-level active slice:** the FreeDV Reporter frequency (moved by Task 73
+  from the per-slice handler in `RadioModel::wireSliceSignals` to one wired in
+  `RadioModel::addSliceImpl`, gated on the station-level slice and re-published when it
+  moves), and TCI's two broadcasts that exist once per radio, `digl_offset` and
+  `digu_offset` (`TciServer.cpp:1030-1043` `@46b40373`, which read `RadioModel::activeSlice()`, now the
+  station-level slice). `RadioModel::activeSlice()` itself is the station-level slice on the
+  Core.
+- **Per slice, and they stay so:** the simplex transmit-follows-receive push follows the
+  transmit-bound slice, not the active one (`RadioModel.cpp:7787` `@46b40373` in `addSliceImpl`, gated on
+  `txBoundSlice()`, `RadioModel.cpp:12636-12642` `@46b40373`, the arbiter's binding with no active-slice
+  fallback); band tracking and the settings save run for every slice that changes band or
+  value (`RadioModel::wireSliceSignals`, the per-slice `frequencyChanged` handler). The
+  radio-wide antenna switch that band tracking makes is ruling 5.11a's (Task 75).
+
+A hosting desktop's window reads its own active slice, not this one.
 
 **Ruling 5.11a. The receive antenna stays put (D61).** The per-band antenna switch that band
 tracking makes (`RadioModel.cpp:12817-12826`) re-applies the new band's receive antenna only
