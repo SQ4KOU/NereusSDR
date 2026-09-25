@@ -605,9 +605,13 @@ load, TUNE at the lowest power, and the operator's go-ahead before any key-down.
 Where to read the band outputs:
 - **In the remote window (the pass/fail reading).** Setup > Hardware > HL2 I/O: the OC strip
   (`band=`, the byte, `RX`/`TX` and seven pin lights). Setup > Hardware > OC Outputs: the
-  live pin row. Both show the byte the Core's connection sent to the radio
-  (`RadioModel::bandOutputsByte`), not one worked out in the window. Before the Core has sent
-  one they show `--` and no pins.
+  live pin row, seven pin lights and nothing else. Both show the byte the Core's connection
+  sent to the radio (`RadioModel::bandOutputsByte`), not one worked out in the window. Before
+  the Core has sent one the strip shows `--` and no pins, and the row is dark.
+- **Read unkeyed 0x00 on the I/O strip only.** The OC row has no byte, no `--` and no
+  `RX`/`TX`, so a byte of 0x00 and a byte not yet known both leave it dark. Steps 1, 7 and 9
+  (unkeyed, 0x00) are therefore read on the I/O strip; the OC row is a second witness only for
+  a keyed byte with a pin lit (steps 3, 8, 9 keyed, 10 and 11).
 - **On the Pi (the second witness).** The Core logs `HL2 ocByte=0xNN band=B mox=M` whenever
   the byte changes (`P1RadioConnection.cpp`, beside the OC compose):
   `sudo -n journalctl -u nereusd -f | grep --line-buffered "HL2 ocByte="`
@@ -620,35 +624,37 @@ Where to read the band outputs:
 Receive:
 1. Connect. Slice A on 14.074 MHz (pan 1), slice B on 7.074 MHz (pan 2). A hears 20 m FT8, B
    hears 40 m FT8, each pan shows its own band. The I/O strip reads `0X00 RX` (two ranges
-   open: receive bypass).
+   open: receive bypass); the OC row is dark.
 2. Add C on 14.080 MHz and D on 7.080 MHz, then E on 14.030 MHz. Each joins the pan of its
    band and hears its own frequency; a sixth slice is refused with the slice-limit message.
 3. PureSignal off. Close B, C, D and E so only A (20 m) is open. Key TUNE on A for 5 s:
-   receive mutes; the I/O strip and the OC row read `0X08 TX` (pin 4), and the Pi logs
+   receive mutes; the I/O strip reads `0X08 TX`, the OC row lights pin 4 only, and the Pi logs
    `ocByte=0x08 band=5 mox=1`. After unkey, A's receive pins are back within a second.
 4. PureSignal on. Reopen B on 7.074 MHz. Key a two-tone on A for 10 s: pan 1 keeps drawing,
    B's pan shows PS HOLD, PureSignal calibrates; after unkey B hears 40 m again.
 5. Close A, keep B and D (40 m). B and D keep hearing 40 m FT8 at the same strength.
 6. Tune B to 14.074 MHz: B hears 20 m at full strength.
-7. Add a slice on 3.573 MHz: it hears 80 m and B 20 m; the strip reads `0X00 RX` again.
+7. Add a slice on 3.573 MHz: it hears 80 m and B 20 m; the I/O strip reads `0X00 RX` again.
 
 Transmit (the band outputs follow the transmitting slice):
 8. Close the 80 m slice and D, so only B (20 m) is open, with A closed. Hand the transmitter
-   to B (TX badge on B's flag). Key TUNE on B for 3 s: the strip and the OC row read
-   `0X08 TX`, band 20m; the Pi logs `ocByte=0x08 band=5 mox=1`. Normal forward power into the
+   to B (TX badge on B's flag). Key TUNE on B for 3 s: the I/O strip reads `0X08 TX`,
+   band 20m, the OC row lights pin 4 only; the Pi logs `ocByte=0x08 band=5 mox=1`. Normal forward power into the
    dummy load, low SWR.
 9. Cross-band split, B transmitting on the lower band. Open A on 14.074 MHz (pan 1), tune B to
-   7.074 MHz, the transmitter still on B. Unkeyed the strip reads `0X00 RX`. Key TUNE on B for
-   3 s: `0X04 TX`, band 40m (pin 3, not pin 4); the Pi logs `ocByte=0x04 band=3 mox=1`.
+   7.074 MHz, the transmitter still on B. Unkeyed the I/O strip reads `0X00 RX`. Key TUNE on
+   B for 3 s: the strip reads `0X04 TX`, band 40m, and the OC row lights pin 3, not pin 4; the
+   Pi logs `ocByte=0x04 band=3 mox=1`.
    Normal power and SWR. Before Task 14 the wire carried pin 4 here: the 40 m carrier's second
    harmonic left through the 30/20 m low-pass. Before this fix wave the OC Outputs row showed
-   pan 1's 20 m pins whatever the wire carried, so the row is now a valid reading.
+   pan 1's 20 m pins whatever the wire carried, so the row is now a valid keyed reading.
 10. The reverse. Tune A to 7.074 MHz and B to 14.074 MHz, the transmitter on B. Key TUNE on B
-    for 3 s: `0X08 TX`, band 20m (pin 4, not pin 3); the Pi logs `ocByte=0x08 band=5 mox=1`.
+    for 3 s: the strip reads `0X08 TX`, band 20m, and the OC row lights pin 4, not pin 3; the
+    Pi logs `ocByte=0x08 band=5 mox=1`.
     Normal power, low SWR. Before Task 14 the 20 m carrier went into the 60/40 m low-pass:
     high SWR, power reflected into the PA.
-11. Hand the transmitter back to A (7.074 MHz). Key TUNE for 3 s: `0X04 TX`, band 40m; the
-    Pi logs `ocByte=0x04 band=3 mox=1`.
+11. Hand the transmitter back to A (7.074 MHz). Key TUNE for 3 s: the strip reads `0X04 TX`,
+    band 40m, the OC row lights pin 3 only; the Pi logs `ocByte=0x04 band=3 mox=1`.
 
 Fail, and unkey at once, if a keyed step shows another slice's band pin in the window or in
 the Pi's log, if the window and the log disagree, if the SWR rises, or if the forward power
@@ -663,10 +669,14 @@ byte can therefore change from what an earlier build sent in two states:
 - **A slice that joined another slice's stream.** A slice opened inside an existing stream
   shares it (`JoinedExisting`) without moving its centre, so its VFO can sit up to half the
   stream bandwidth from the centre, in another band. When it is the lowest-lettered slice on
-  the RX1 slot, its VFO's band chooses the pins. To see it, with A closed: open B at
-  14.020 MHz, then C at 13.950 MHz (outside 20 m, inside B's stream, so both show on one
-  stream), then close B. The stream stays centred in 20 m, and the strip shows the pins for
-  C's band (GEN), not 20 m's.
+  the RX1 slot, its VFO's band chooses the pins. To see it, first set the receive sample rate
+  to 192 kHz or more (Setup > Hardware > Radio Info, "Sample rate (Hz)"; 192 or 384 kHz on the
+  HL2). A stream is then at least 192 kHz wide, 96 kHz either side of its centre, so C at
+  13.950 MHz, 70 kHz below B, falls inside B's stream (which is centred on B when B opens it);
+  at 48 or 96 kHz it does not, C does not join B's stream, and the case cannot be seen. Then, with A closed: open B at 14.020 MHz,
+  then C at 13.950 MHz (outside 20 m, inside B's stream, so both show on one stream), then
+  close B. The stream stays centred in 20 m, and the I/O strip shows the pins for C's band
+  (GEN), not 20 m's.
 
 **Execution note (advisory):** opus. After the whole-branch fix wave. Shares
 `P1RadioConnection.cpp` and `P2RadioConnection.cpp` with nothing in flight.
