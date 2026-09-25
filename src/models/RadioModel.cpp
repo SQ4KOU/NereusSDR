@@ -188,7 +188,8 @@
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-24 - R-R3-49 (parity Task 1): stationOnAirRefusal (the Tuner
 //                Genius check now calls it), isCoreOnAir / coreOnAirChanged
-//                in a window, and the TX half of the remote DSP > Options
+//                in a window, the window's `transmitting` cleared when the
+//                session ends, and the TX half of the remote DSP > Options
 //                apply. NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
 // =================================================================
@@ -3987,6 +3988,13 @@ void RadioModel::updateCoreOnAir()
         m_coreOnAir = now;
         emit coreOnAirChanged(now);
     }
+}
+
+void RadioModel::clearRemoteTransmittingState()
+{
+    if (m_role != Role::Remote || !m_remoteTransmitting) { return; }
+    m_remoteTransmitting = false;
+    emit transmittingChanged(false);
 }
 
 bool RadioModel::rfKitEnabled() const

@@ -153,6 +153,7 @@ private slots:
     void dspOptionsTxKeyRefusedWhileOnTheAir();
     void transmitHardwareKeysStayRefused();
     void windowOnAirFollowsTheCore();
+    void windowOnAirClearsWhenTheSessionEnds();
 
 private:
     QTemporaryDir m_securityDir;
@@ -572,6 +573,24 @@ void TstTransmitSettingsGate::windowOnAirFollowsTheCore()
         QTRY_VERIFY(!s.window.isCoreOnAir());
         twoTone->setTxChannel(nullptr);
     }
+    QTRY_VERIFY(mox->state() == MoxState::Rx);
+}
+
+void TstTransmitSettingsGate::windowOnAirClearsWhenTheSessionEnds()
+{
+    Session s(m_securityDir.path(), this);
+    QVERIFY(s.connect());
+    MoxController* const mox = s.core->moxController();
+    mox->setMoxCheck({});
+    mox->setMox(true);
+    QTRY_VERIFY(s.window.isTransmitting());
+    QTRY_VERIFY(s.window.isCoreOnAir());
+
+    // The Core goes away while the window last heard "on the air".
+    s.coreEnd->closeLink(QStringLiteral("test"));
+    QTRY_VERIFY(!s.window.isTransmitting());
+    QTRY_VERIFY(!s.window.isCoreOnAir());
+    mox->setMox(false);
     QTRY_VERIFY(mox->state() == MoxState::Rx);
 }
 

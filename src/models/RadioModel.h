@@ -1652,6 +1652,10 @@ public:
     // mirrored transmit model's TUNE, or PureSignal's two-tone. Nothing
     // here keys; a window greys what waits while this is true.
     bool isCoreOnAir() const;
+    // R-R3-49: the window's copy of the Core's `transmitting` goes back to
+    // false when the session ends, so a Core that does not send it never
+    // inherits an old "on the air".
+    void clearRemoteTransmittingState();
 
     // Phase 3F Sub-Epic C: TX-slice arbiter (single-TX invariant + RF-safe
     // handoff). Owned by RadioModel (Qt parent), wired to slice list +

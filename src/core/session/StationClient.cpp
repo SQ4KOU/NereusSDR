@@ -122,7 +122,8 @@
 //                (remoteTgxlControlVersion 3). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
 //   2026-09-24 - R-R3-49 (parity Task 1): transmitSettingsAvailable
-//                (transmitSettingsVersion). J.J. Boyd (KG4VCF),
+//                (transmitSettingsVersion), and the radio's `transmitting`
+//                cleared when the session ends. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
@@ -1118,6 +1119,9 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
             // can arrive, so a disconnected station is never presented as
             // still listening on this machine.
             m_radioModel->clearRemoteFourO3AState();
+            // R-R3-49: likewise the Core's transmit state, so a Core that
+            // does not send `transmitting` never inherits "on the air".
+            m_radioModel->clearRemoteTransmittingState();
             if (TunerModel* const tuner = m_radioModel->tunerModel()) {
                 TunerModel::StationConnectionState disconnected;
                 disconnected.configuredHost = tuner->configuredHost();

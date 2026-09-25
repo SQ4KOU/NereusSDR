@@ -691,7 +691,7 @@ private slots:
             twoTone->setActive(true);
             QTRY_VERIFY(twoTone->isActive());
             expectRefused();
-        if (QTest::currentTestFailed()) { return; }
+            if (QTest::currentTestFailed()) { return; }
             twoTone->setActive(false);
             QTRY_VERIFY(!twoTone->isActive());
             QTRY_VERIFY(mox->state() == MoxState::Rx);
