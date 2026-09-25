@@ -38,6 +38,9 @@
 //                 AGC-T range come from ControlRanges.h, which the Core's
 //                 catalogue reads too. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-24 - iPhone app follow-up (R-IOS-06): the SQL slider's range
+//                 comes from ControlRanges.h too. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -784,7 +787,8 @@ void RxApplet::buildUi()
         row->addWidget(m_sqlBtn);
 
         m_sqlSlider = new QSlider(Qt::Horizontal, this);
-        m_sqlSlider->setRange(0, 100);
+        m_sqlSlider->setRange(ControlRanges::kSsqlThreshMin, ControlRanges::kSsqlThreshMax);
+        m_sqlSlider->setSingleStep(ControlRanges::kSsqlThreshStep);
         m_sqlSlider->setValue(20);
         m_sqlSlider->setFixedHeight(18);
         m_sqlSlider->setStyleSheet(Style::sliderHStyle());

@@ -12,6 +12,9 @@
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-24: the `receive` key (AF gain, SSQL, AM and FM squelch
+//               ranges). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationCatalog.h"
@@ -154,6 +157,23 @@ QJsonObject agcObject()
         {QStringLiteral("thresholdDb"),
          rangeObject(ControlRanges::kAgcThresholdMinDb, ControlRanges::kAgcThresholdMaxDb,
                      ControlRanges::kAgcThresholdStepDb)},
+    };
+}
+
+// The receive controls' ranges, each as the desktop's own control holds it:
+// the AF slider and the SQL slider in slider units, the AM and FM squelch
+// thresholds in dB (ControlRanges.h).
+QJsonObject receiveObject()
+{
+    using namespace ControlRanges;
+    return QJsonObject{
+        {QStringLiteral("afGain"), rangeObject(kAfGainMin, kAfGainMax, kAfGainStep)},
+        {QStringLiteral("ssqlThresh"),
+         rangeObject(kSsqlThreshMin, kSsqlThreshMax, kSsqlThreshStep)},
+        {QStringLiteral("amsqThresh"),
+         rangeObject(kAmsqThreshMinDb, kAmsqThreshMaxDb, kAmsqThreshStepDb)},
+        {QStringLiteral("fmsqThresh"),
+         rangeObject(kFmsqThreshMinDb, kFmsqThreshMaxDb, kFmsqThreshStepDb)},
     };
 }
 
@@ -428,6 +448,7 @@ QJsonObject StationCatalog::build(const Inputs& inputs)
         {QStringLiteral("filterPresets"), filterPresetsObject(inputs)},
         {QStringLiteral("tuneSteps"), tuneStepsArray(inputs)},
         {QStringLiteral("agc"), agcObject()},
+        {QStringLiteral("receive"), receiveObject()},
         {QStringLiteral("meters"), metersObject(inputs)},
         {QStringLiteral("board"), boardObject(inputs)},
         {QStringLiteral("bandPlans"), bandPlansArray(inputs)},

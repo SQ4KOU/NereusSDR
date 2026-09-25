@@ -59,6 +59,9 @@
 //                 range and the slice colours come from ControlRanges.h,
 //                 which the Core's catalogue reads too. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - iPhone app follow-up (R-IOS-06): the AF and SQL slider
+//                 ranges come from ControlRanges.h too. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1141,7 +1144,8 @@ void VfoWidget::buildAudioTab()
         row->addWidget(label);
 
         m_afGainSlider = new QSlider(Qt::Horizontal, audioWidget);
-        m_afGainSlider->setRange(0, 100);
+        m_afGainSlider->setRange(ControlRanges::kAfGainMin, ControlRanges::kAfGainMax);
+        m_afGainSlider->setSingleStep(ControlRanges::kAfGainStep);
         m_afGainSlider->setValue(50);
         m_afGainSlider->setStyleSheet(
             QStringLiteral("QSlider::groove:horizontal { background: #1a2a3a; height: 6px; border-radius: 3px; }"
@@ -1357,8 +1361,8 @@ void VfoWidget::buildAudioTab()
         row->addWidget(m_sqlBtn);
 
         m_sqlSlider = new QSlider(Qt::Horizontal, audioWidget);
-        m_sqlSlider->setRange(0, 100);
-        m_sqlSlider->setSingleStep(1);
+        m_sqlSlider->setRange(ControlRanges::kSsqlThreshMin, ControlRanges::kSsqlThreshMax);
+        m_sqlSlider->setSingleStep(ControlRanges::kSsqlThreshStep);
         m_sqlSlider->setValue(0);
         m_sqlSlider->setStyleSheet(
             QStringLiteral("QSlider::groove:horizontal { background: #1a2a3a; height: 6px; border-radius: 3px; }"

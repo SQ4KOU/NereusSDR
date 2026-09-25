@@ -27,6 +27,11 @@
 //               raised from 0 to +2 dB to match Thetis's clamp. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-24: The receive ranges (AF gain, SSQL, AM and FM squelch)
+//               moved here from VfoWidget, RxApplet, SliceModel and the
+//               DSP setup pages for the catalogue's `receive` key. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <array>
@@ -61,6 +66,40 @@ inline constexpr std::array<AgcModeItem, 5> kAgcModes{{
 inline constexpr int kAgcThresholdMinDb = -160;
 inline constexpr int kAgcThresholdMaxDb = 2;
 inline constexpr int kAgcThresholdStepDb = 1;
+
+// ── Receive ───────────────────────────────────────────────────────────────
+
+// AF gain, the VFO flag's AF slider and SliceModel::setAfGain's clamp, in
+// the slider's own units (0 to 100). Thetis's AF slider spans the same:
+// From Thetis Project Files/Source/Console/console.Designer.cs:3729-3730 [v2.10.3.15]
+//   this.ptbAF.Maximum = 100;
+//   this.ptbAF.Minimum = 0;
+inline constexpr int kAfGainMin = 0;
+inline constexpr int kAfGainMax = 100;
+inline constexpr int kAfGainStep = 1;
+
+// SSB squelch (SSQL), the VFO flag's and the RX applet's SQL slider, in
+// slider units (0 to 100). SliceModel's ssqlThresh holds the slider value;
+// RadioModel divides it by 100 for WDSP's 0.0..1.0.
+inline constexpr int kSsqlThreshMin = 0;
+inline constexpr int kSsqlThreshMax = 100;
+inline constexpr int kSsqlThreshStep = 1;
+
+// AM squelch, Setup > DSP > AM/SAM's threshold slider, in dB (SliceModel
+// amsqThresh). Thetis's squelch slider spans the same:
+// From Thetis Project Files/Source/Console/console.Designer.cs:7572-7573 [v2.10.3.15]
+//   this.ptbSquelch.Maximum = 0;
+//   this.ptbSquelch.Minimum = -160;
+inline constexpr int kAmsqThreshMinDb = -160;
+inline constexpr int kAmsqThreshMaxDb = 0;
+inline constexpr int kAmsqThreshStepDb = 1;
+
+// FM squelch, Setup > DSP > FM's threshold slider, in dB (SliceModel
+// fmsqThresh; RxChannel::setFmsqThresh converts it for WDSP). The page
+// uses the AM slider's range.
+inline constexpr int kFmsqThreshMinDb = -160;
+inline constexpr int kFmsqThreshMaxDb = 0;
+inline constexpr int kFmsqThreshStepDb = 1;
 
 // ── S-meter ───────────────────────────────────────────────────────────────
 

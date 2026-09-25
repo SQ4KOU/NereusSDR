@@ -1439,7 +1439,7 @@ the transmit safety gates stay at the station (section 17).
 
 The `catalog` object's `json` is one JSON object (RFC 8259, UTF-8,
 compact) holding the values the Core owns and an app shows: the modes, the
-Core's filter presets, the tune steps, the AGC and gauge ranges, the
+Core's filter presets, the tune steps, the AGC, receive and gauge ranges, the
 radio's capabilities, the band plans, the waterfall palettes, the slice
 colours and the Core's tools (`StationCatalog`, spec section 4.10). An app
 draws its controls from it and carries no table of its own, so a Hermes
@@ -1466,7 +1466,7 @@ Colours are `#RRGGBB`, upper case. Labels are the desktop's own words,
 shown as sent. A key an app does not know is ignored; an app given an
 empty `json` (the stand-in of section 16.3) has no catalogue yet.
 
-The object has exactly these twelve keys:
+The object has exactly these thirteen keys:
 
 | Key | Holds |
 | --- | --- |
@@ -1474,6 +1474,7 @@ The object has exactly these twelve keys:
 | `filterPresets` | `{<mode label>: [{slot, label, lowHz, highHz}]}`: each mode's presets from the Core's store, slot 0 first (`F1`), edges signed as a slice's `filterLow` and `filterHigh`; a mode has 1 to 10 |
 | `tuneSteps` | `[{hz, label}]`: the step list, smallest first, as the slice's `stepHz` takes it; `label` like `500 Hz`, `1 kHz`, `2.5 kHz`, `1 MHz` |
 | `agc` | `{modes: [{id, label}], thresholdDb: {min, max, step}}`: the AGC modes an operator picks (`id` the slice's `agcMode`: `Off`, `Long`, `Slow`, `Med`, `Fast`), and AGC-T's range for `agcThreshold`. The Modes tab's AGC section shows no other range; a later one arrives as another `{min, max, step}` key named after the setting it bounds |
+| `receive` | `{afGain, ssqlThresh, amsqThresh, fmsqThresh}`, each `{min, max, step}` for the slice setting of that name, as the desktop's own control holds it: `afGain` 0 to 100 in the AF slider's units, `ssqlThresh` 0 to 100 in the SQL slider's units, `amsqThresh` and `fmsqThresh` -160 to 0 dB; every step 1 |
 | `meters` | The gauges an app draws (below) |
 | `board` | The radio (below) |
 | `bandPlans` | `[{id, name, default, segments: [{lowHz, highHz, label, licence, colour}]}]`: every bundled plan, `id` its file's name (`arrl-us`), `default` true on ARRL (US) alone; `licence` lists the licence classes (`E,G`), empty for a beacon or no transmit |

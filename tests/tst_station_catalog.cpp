@@ -64,7 +64,8 @@ namespace {
 
 const QSet<QString> kTopLevelKeys{
     QStringLiteral("modes"),       QStringLiteral("filterPresets"), QStringLiteral("tuneSteps"),
-    QStringLiteral("agc"),         QStringLiteral("meters"),        QStringLiteral("board"),
+    QStringLiteral("agc"),         QStringLiteral("receive"),       QStringLiteral("meters"),
+    QStringLiteral("board"),
     QStringLiteral("bandPlans"),   QStringLiteral("palettes"),      QStringLiteral("sliceColours"),
     QStringLiteral("tools"),       QStringLiteral("radioItems"),    QStringLiteral("audio"),
 };
@@ -203,6 +204,32 @@ void checkDesktopValues(const QJsonObject& catalog, HPSDRModel model, ProtocolVe
     QCOMPARE(kAgcThresholdMinDb, -160);
     QCOMPARE(kAgcThresholdMaxDb, 2);
     QCOMPARE(kAgcThresholdStepDb, 1);
+
+    // Receive: the AF and SQL sliders in slider units, the AM and FM squelch
+    // thresholds in dB, each as the desktop's control holds it.
+    const QJsonObject receive = catalog.value(QStringLiteral("receive")).toObject();
+    const QStringList receiveKeys = receive.keys();
+    QCOMPARE(QSet<QString>(receiveKeys.cbegin(), receiveKeys.cend()),
+             (QSet<QString>{QStringLiteral("afGain"), QStringLiteral("ssqlThresh"),
+                            QStringLiteral("amsqThresh"), QStringLiteral("fmsqThresh")}));
+    QCOMPARE(receive.value(QStringLiteral("afGain")).toObject(),
+             range(kAfGainMin, kAfGainMax, kAfGainStep));
+    QCOMPARE(receive.value(QStringLiteral("ssqlThresh")).toObject(),
+             range(kSsqlThreshMin, kSsqlThreshMax, kSsqlThreshStep));
+    QCOMPARE(receive.value(QStringLiteral("amsqThresh")).toObject(),
+             range(kAmsqThreshMinDb, kAmsqThreshMaxDb, kAmsqThreshStepDb));
+    QCOMPARE(receive.value(QStringLiteral("fmsqThresh")).toObject(),
+             range(kFmsqThreshMinDb, kFmsqThreshMaxDb, kFmsqThreshStepDb));
+    // Thetis's AF slider (console.Designer.cs:3729-3730) and squelch slider
+    // (console.Designer.cs:7572-7573) [v2.10.3.15]; the SQL slider's 0..100.
+    QCOMPARE(kAfGainMin, 0);
+    QCOMPARE(kAfGainMax, 100);
+    QCOMPARE(kSsqlThreshMin, 0);
+    QCOMPARE(kSsqlThreshMax, 100);
+    QCOMPARE(kAmsqThreshMinDb, -160);
+    QCOMPARE(kAmsqThreshMaxDb, 0);
+    QCOMPARE(kFmsqThreshMinDb, -160);
+    QCOMPARE(kFmsqThreshMaxDb, 0);
 
     // Meters: the S-meter's scale and the three transmit gauges.
     const QJsonObject meters = catalog.value(QStringLiteral("meters")).toObject();

@@ -9,15 +9,16 @@
 // draws its controls from, so a phone never carries a table of its own.
 //
 //   json      one JSON document with exactly these top-level keys:
-//             modes, filterPresets, tuneSteps, agc, meters, board,
-//             bandPlans, palettes, sliceColours, tools, radioItems, audio.
+//             modes, filterPresets, tuneSteps, agc, receive, meters,
+//             board, bandPlans, palettes, sliceColours, tools, radioItems,
+//             audio.
 //             The link document's Catalogue section gives its full shape.
 //   revision  moves by one each time `json` changes (serial-number
 //             arithmetic, as the devices object's).
 //
 // Everything in it is read where the desktop reads it: the modes and the
 // Core's filter presets (FilterPresetStore), the tune-step list
-// (SliceModel's), the AGC and gauge ranges (ControlRanges.h), the board
+// (SliceModel's), the AGC, receive and gauge ranges (ControlRanges.h), the board
 // (BoardCapabilities, SkuUiProfile, SampleRateCatalog, paMaxWattsFor), the
 // band plans (BandPlanManager), the waterfall palettes
 // (core/spectrum/WaterfallPalettes) and the slice colours. It is the same
@@ -34,6 +35,9 @@
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-24: the `receive` key (AF gain, SSQL, AM and FM squelch
+//               ranges). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/BoardCapabilities.h"
