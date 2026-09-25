@@ -533,6 +533,7 @@ private slots:
     void operateFromStandbyIsOneRequestOnACoreThatAppliesItWhole();
     void remoteWindowOperatesTheAmpThroughTheCore();
     void remoteWindowScansAndKeepsTheAmpAddressOnTheCore();
+    void localPowerGeniusTabOperatesThisComputersAmp();
 };
 
 void RemotePeripheralsTest::remoteParentPageExposesOnlyStationBackedControls()
@@ -4161,6 +4162,63 @@ void RemotePeripheralsTest::remoteWindowScansAndKeepsTheAmpAddressOnTheCore()
     QTRY_VERIFY(onAirScan->isEnabled());
     QVERIFY(onAirHost->isEnabled());
     QVERIFY(notDialled());
+}
+
+// R-R3-49 (parity Task 9, operator amendment 2026-09-25): a local window's
+// Setup > CAT & Network > 4O3A > PowerGenius XL tab has an Operate button
+// beside the state badge, as a remote window's tab does. It sends the
+// local applet's own line (operate=1 or operate=0) through this computer's
+// PgxlConnection, reads Operate or Standby from the amp's report, and is
+// disabled with a plain reason while the amp is not connected. The local
+// applet's OPERATE has no on-the-air rule, so neither has this button.
+void RemotePeripheralsTest::localPowerGeniusTabOperatesThisComputersAmp()
+{
+    AppSettings::instance().clear();
+    FakeGenius amp;
+    QVERIFY(amp.listen());
+    RadioModel local;
+    PgxlAdvancedPage page(&local);
+    QPushButton* operate = page.operateButtonForTesting();
+    QVERIFY(operate);
+    const QString notConnected = QStringLiteral("The Power Genius is not connected.");
+    QVERIFY(!operate->isEnabled());
+    QCOMPARE(operate->toolTip(), notConnected);
+    QVERIFY(OperatorWording::isPlain(notConnected));
+    const auto operateLines = [&amp] {
+        return amp.commands.filter(QRegularExpression(QStringLiteral("^operate")));
+    };
+
+    local.pgxlConnection()->connectToPgxl(QStringLiteral("127.0.0.1"), amp.port());
+    QVERIFY(amp.accept());
+    amp.send(QStringLiteral("V3.8.9"));
+    QTRY_VERIFY(local.pgxlConnection()->isConnected());
+    amp.send(QStringLiteral("S0|status state=STANDBY"));
+    QTRY_VERIFY(operate->isEnabled());
+    QCOMPARE(operate->text(), QStringLiteral("Operate"));
+    QVERIFY(OperatorWording::isPlain(operate->toolTip()));
+
+    // Operate: the applet's line; the button follows the amp's report.
+    operate->click();
+    QVERIFY(amp.waitFor(QStringLiteral("operate=1")) >= 0);
+    QCOMPARE(operate->text(), QStringLiteral("Operate"));
+    amp.send(QStringLiteral("S0|status state=OPERATE"));
+    QTRY_COMPARE(operate->text(), QStringLiteral("Standby"));
+    QVERIFY(OperatorWording::isPlain(operate->toolTip()));
+    // Standby.
+    operate->click();
+    QVERIFY(amp.waitFor(QStringLiteral("operate=0")) >= 0);
+    amp.send(QStringLiteral("S0|status state=STANDBY"));
+    QTRY_COMPARE(operate->text(), QStringLiteral("Operate"));
+    QCOMPARE(operateLines(), (QStringList{QStringLiteral("operate=1"),
+                                          QStringLiteral("operate=0")}));
+    QVERIFY(!local.isTransmitting());
+
+    // The amp goes away: disabled with the reason again.
+    amp.peer->disconnectFromHost();
+    QTRY_VERIFY(!local.pgxlConnection()->isConnected());
+    QTRY_VERIFY(!operate->isEnabled());
+    QCOMPARE(operate->toolTip(), notConnected);
+    local.pgxlConnection()->disconnect();
 }
 
 QTEST_MAIN(RemotePeripheralsTest)

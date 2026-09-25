@@ -1390,8 +1390,15 @@ A window reads `amplifier` and `rfkit` only while the Core offers them:
   Core reports the radio on the air both are disabled with "The radio is
   on the air. Try again when it stops."; while the Core is not connected
   to the amp, with "The Core is not connected to the Power Genius." A
-  refusal shows as a notice. A local window's PowerGenius XL tab has no
-  Operate button; its applet's OPERATE is the local control, unchanged.
+  refusal shows as a notice. A local window's PowerGenius XL tab has the
+  same Operate button beside its state badge (operator decision
+  2026-09-25: the same controls however the window is connected). It
+  sends the local applet's own line, `operate=1` or `operate=0`, through
+  that computer's own connection to the amp, reads Operate or Standby from
+  the amp's report, and is disabled with "The Power Genius is not
+  connected." while that computer is not connected to the amp. Like the
+  local applet's OPERATE it has no on-the-air rule; the link is not
+  involved.
   Copy diagnostics to clipboard in a remote window copies the Core's
   connection: the `amplifier` object's address, identity, state and error
   and `accessoryData`'s `pgxl*` counters, never this computer's idle
@@ -1663,7 +1670,10 @@ rewrite the fixtures, and update this document in the same commit.
   toggle; that Copy diagnostics carries the Core's counters; and that the
   Peripherals row's Scan LAN lists the Power Genius the Core heard and a
   pick, a finished edit and Setup closing keep the address on the Core,
-  with nothing dialled, all waiting on the air. `session-verbs-pgxl-control`
+  with nothing dialled, all waiting on the air; and that a local window's
+  PowerGenius XL tab Operate sends `operate=1` and `operate=0` to its own
+  loopback amp, follows the amp's report and is disabled with its reason
+  while not connected. `session-verbs-pgxl-control`
   invokes the three commands right and wrong (the scan's `devicesJson`
   matched as any text).
 

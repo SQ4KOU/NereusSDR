@@ -48,6 +48,16 @@
 //                                    before applying network settings
 //                                    (operator decision 2026-09-24).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 9, operator
+//                                    amendment 2026-09-25): a local
+//                                    window's tab gets an Operate button
+//                                    beside the state badge, as a remote
+//                                    window's tab has. It sends the local
+//                                    applet's own line through this
+//                                    computer's PgxlConnection and reads
+//                                    Operate or Standby from the amp's
+//                                    report. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include "PgxlAdvancedPage.h"
@@ -252,6 +262,16 @@ PgxlAdvancedPage::PgxlAdvancedPage(RadioModel* model, QWidget* parent)
                     this, &PgxlAdvancedPage::onIfconfResponse);
             // R-R3-47: RadioModel binds its counters to this connection
             // for its whole life (StationAccessoryData publishes them).
+            // R-R3-49 (parity Task 9): Operate follows the connection.
+            connect(pgxl, &PgxlConnection::connected,
+                    this, &PgxlAdvancedPage::updateOperateButton);
+            connect(pgxl, &PgxlConnection::disconnected,
+                    this, &PgxlAdvancedPage::updateOperateButton);
+        }
+        // R-R3-49 (parity Task 9): and the amp's reported state.
+        if (AmplifierModel* amp = m_model->amplifierModel()) {
+            connect(amp, &AmplifierModel::statusChanged,
+                    this, &PgxlAdvancedPage::updateOperateButton);
         }
     }
 
@@ -262,6 +282,46 @@ PgxlAdvancedPage::PgxlAdvancedPage(RadioModel* model, QWidget* parent)
     // Initial UI state
     updateConnectionUi(m_model && m_model->pgxlConnection()
                        && m_model->pgxlConnection()->isConnected());
+    updateOperateButton();
+}
+
+// R-R3-49 (parity Task 9, operator amendment 2026-09-25): the local tab's
+// Operate reads the action the amp's reported state allows (Standby while
+// it operates, Operate otherwise), as a remote window's tab does. It is
+// offered while this computer is connected to the amp. The local applet's
+// OPERATE has no on-the-air rule, so neither has this button.
+void PgxlAdvancedPage::updateOperateButton()
+{
+    if (!m_operateBtn) {
+        return;
+    }
+    const PgxlConnection* pgxl = m_model ? m_model->pgxlConnection() : nullptr;
+    const AmplifierModel* amp = m_model ? m_model->amplifierModel() : nullptr;
+    const bool connected = pgxl && pgxl->isConnected();
+    const bool operating = amp && amp->operate();
+    m_operateBtn->setText(operating ? tr("Standby") : tr("Operate"));
+    m_operateBtn->setEnabled(connected);
+    m_operateBtn->setToolTip(!connected ? tr("The Power Genius is not connected.")
+                             : operating ? tr("Put the Power Genius in standby.")
+                                         : tr("Put the Power Genius in operate."));
+}
+
+void PgxlAdvancedPage::onOperateClicked()
+{
+    PgxlConnection* pgxl = m_model ? m_model->pgxlConnection() : nullptr;
+    const AmplifierModel* amp = m_model ? m_model->amplifierModel() : nullptr;
+    if (!pgxl || !pgxl->isConnected() || !amp) {
+        updateOperateButton();
+        return;
+    }
+    // The local applet's own line (MainWindow's AmpApplet::operateToggled
+    // handler). Bench-fix 2026-05-19: pcap stream 11 (.19
+    // PowerGeniusDesktop -> .235 PGXL :9008) shows the actually-used wire
+    // command for OPERATE is `operate=1` (key=value), not bare `operate`.
+    // PGXL rejected `operate` / `standby` with error 50000016 every click.
+    // The button follows the amp's report, not the click.
+    pgxl->sendCommand(amp->operate() ? QStringLiteral("operate=0")
+                                     : QStringLiteral("operate=1"));
 }
 
 PgxlAdvancedPage::~PgxlAdvancedPage() = default;
@@ -291,7 +351,24 @@ void PgxlAdvancedPage::buildIdentitySection(QVBoxLayout* topLay)
     m_stateBadge->setAlignment(Qt::AlignCenter);
     m_stateBadge->setStyleSheet(
         QStringLiteral("background: #555; color: #ccc; border-radius: 3px; padding: 2px 6px;"));
-    form->addRow(QStringLiteral("State:"), m_stateBadge);
+    // R-R3-49 (parity Task 9, operator amendment 2026-09-25): Operate beside
+    // the badge, as a remote window's tab has it. updateOperateButton sets
+    // its words from the amp's report and whether it is offered. A remote
+    // window's tab has its own Operate (FourO3APage, setPgxlOperate) above
+    // this page, so the page adds none there.
+    auto* stateRow = new QHBoxLayout;
+    stateRow->setContentsMargins(0, 0, 0, 0);
+    stateRow->addWidget(m_stateBadge);
+    if (!isRemote()) {
+        m_operateBtn = new QPushButton(tr("Operate"));
+        m_operateBtn->setObjectName(QStringLiteral("pgxlOperateButton"));
+        m_operateBtn->setEnabled(false);
+        connect(m_operateBtn, &QPushButton::clicked,
+                this, &PgxlAdvancedPage::onOperateClicked);
+        stateRow->addWidget(m_operateBtn);
+    }
+    stateRow->addStretch();
+    form->addRow(QStringLiteral("State:"), stateRow);
 
     m_meffaLabel = new QLabel(QStringLiteral("--"));
     form->addRow(QStringLiteral("MeFFA:"), m_meffaLabel);
