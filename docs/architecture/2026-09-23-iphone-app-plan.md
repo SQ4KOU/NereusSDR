@@ -1845,14 +1845,16 @@ pairing design §4.
   client learns the station's identity key and label from the station's box; a wrong
   code fails at step 3 (the device, which then sends `pair.fail`) or at step 4 (the
   station), burns the code, and the next code appears
-  after 5 s, doubling after each consecutive failure up to 300 s, reset by a success;
-  `retryAfterMs` says when.
+  after 5 s, doubling after each consecutive failure (5, 10, 20 and 40 s, since the fifth
+  burn in a row closes the window), reset by a success; `retryAfterMs` says when.
 - The password hash parameters are fixed as above on both sides; the rendezvous (Part
   E) carries these messages without being able to learn the code, since the exchange
   is a PAKE.
-- The pairing code is printed on the station's console when it changes and is never
-  written through the logging categories; `tst_station_pairing` captures the log
-  categories and asserts the code never appears in them. A session signed in with the
+- The pairing code never goes to standard output, the journal or the logging
+  categories: it is read with `nereusd pairing show` on the Core's computer (Task 17),
+  on the status page while the Core is unclaimed, or by a paired device
+  (`pairingCode`); `tst_station_pairing` captures the log categories and asserts the
+  code never appears in them. A session signed in with the
   access token never receives the code, in `pairingCode` or from `pairing.open`.
 - After a successful pairing in either mode the pairing connection ends, and the device
   then signs in by key on a new connection.
@@ -2689,7 +2691,8 @@ them).
     `normalize`, `calibrationOffsetDb`, `averageTimeMs` (the station computes the
     averaging constant from it).
   - An extras datagram on the `display` channel beside each spectrum frame: magic
-    `NSDX`, version 1, the endpoint id and frame sequence, then optional sections (peak
+    `NSDX`, version 1, the endpoint id, the context generation and the encoder sequence of
+    the frame it goes beside, then optional sections (peak
     blob list; the active peak hold row encoded as NSDC v1 bins; the noise floor in dBm;
     the waterfall's low and high dBm), each present only when asked for.
   - Calibration and normalise are applied to the bins before encoding, so the phone draws
@@ -6563,8 +6566,9 @@ its code on a status page and in its console), D20's alternative to the desktop.
 **Acceptance:**
 - The image contains no station key, token or device list: the station creates its
   identity on first boot (the lint test checks the stage).
-- On first boot the station finds a radio on its LAN, prints its code on the console,
-  shows it on the status page and advertises itself.
+- On first boot the station finds a radio on its LAN, shows its code on the status page
+  and to `nereusd pairing show`, and advertises itself; the code never goes to the
+  console output or the journal.
 
 **Verification:** packaging: integration and device. `python3 -m pytest tests/scripts/test_station_image_stage.py -q`;
 the workflow run produces the image. Device (controller and JJ, pending until
