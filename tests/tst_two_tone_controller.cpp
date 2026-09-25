@@ -802,6 +802,50 @@ private slots:
         QCOMPARE(tc.calls.last().arg1, 0.0);
     }
 
+    // ── Task 7 fix wave, M9: two-tone waits out a TUN-off still running ──
+    // From Thetis chk2TONE_CheckedChanged, console.cs:44805-44813
+    // [v2.10.3.15]: with TUN on, TUN is turned off and two-tone waits
+    // 300 ms (await Task.Delay(300)) before starting, so the tune tone is
+    // down before two-tone keys. Pressed while a TUN-off is still
+    // completing, two-tone must not key until it has.
+    void setActive_duringTuneOff_waitsForItToComplete()
+    {
+        TransmitModel tx;
+        tx.setTwoTonePulsed(false);
+        tx.setTwoToneFreq2Delay(0);
+
+        RecordingTxChannel tc(kTxChannelId);
+        MoxController mox;
+        mox.setTimerIntervals(0, 0, 0, 0, 0, 0);
+        SliceModel slice;
+        bool tuneOffPending = true;
+        mox.setManualKey(true);   // TUN holds it until its TUN-off completes
+
+        TwoToneController ctrl;
+        ctrl.setTransmitModel(&tx);
+        ctrl.setTxChannel(&tc);
+        ctrl.setMoxController(&mox);
+        ctrl.setSliceModel(&slice);
+        ctrl.setSettleDelaysMs(0, 20);
+        ctrl.setTuneOffPendingFn([&tuneOffPending] { return tuneOffPending; });
+
+        ctrl.setActive(true);
+        for (int i = 0; i < 5; ++i) QCoreApplication::processEvents();
+        QVERIFY2(!mox.isMox(), "two-tone keyed while the TUN-off was still running");
+        QVERIFY(ctrl.isActivationInFlight());
+        QTest::qWait(60);
+        QVERIFY2(!mox.isMox(), "two-tone keyed while the TUN-off was still running");
+
+        // TUN-off completes (tone down, manual key cleared).
+        tuneOffPending = false;
+        mox.setManualKey(false);
+        QTRY_VERIFY_WITH_TIMEOUT(ctrl.isActive(), 2000);
+        QVERIFY(mox.isMox());
+
+        ctrl.setActive(false);
+        QTRY_VERIFY_WITH_TIMEOUT(!ctrl.isActive(), 2000);
+    }
+
     // ── Idempotent: setActive(true) twice is safe ────────────────────────
     void setActive_idempotent_doesNotRepeat()
     {

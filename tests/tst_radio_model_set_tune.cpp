@@ -39,6 +39,13 @@
 //      is on.
 //  26. Task 7 fix wave I3: a disconnect unkeys a MOX-button key, and after
 //      a reconnect the mic keys and releases normally.
+//  27. Task 7 fix wave M1: a refused TUN leaves the mode of a source that
+//      keyed at the end of its TUN-off path, so that source's release
+//      unkeys.
+//  28. Task 7 fix wave M9: the MOX button pressed inside the TUN-off
+//      window completes the TUN-off first (tone down, mode and power
+//      back), so no key rides on the tune tone; from CW the restored mode
+//      is refused as any CW key is.
 
 #include <QtTest/QtTest>
 #include <QObject>
@@ -1432,6 +1439,122 @@ private slots:
         mox->onMicPttFromRadio(false);
         pump();
         QVERIFY(!mox->isMox());
+    }
+
+    // ── 27. Task 7 fix wave, M1 ─────────────────────────────────────────────
+    void refusedTuneKeepsTheModeOfAKeyItsTunOffMade()
+    {
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        setupModel(model, conn);
+        std::unique_ptr<MockConnection> connOwner(conn);
+        const auto detach = qScopeGuard([&model]() {
+            model.injectConnectionForTest(nullptr);
+        });
+        QVERIFY(model.activeSlice() != nullptr);
+        model.activeSlice()->setDspMode(DSPMode::USB);
+        MoxController* mox = model.moxController();
+        // The first key (TUN's) is refused, every later one is accepted: the
+        // shape a refusal takes once CW transmit exists (TUN refused, the
+        // held source not).
+        int calls = 0;
+        mox->setMoxCheck([&calls]() {
+            ++calls;
+            return safety::BandPlanGuard::MoxCheckResult{calls > 1,
+                calls > 1 ? QString() : QStringLiteral("test refusal")};
+        });
+        // The mic is held while a manual key holds it off.
+        mox->setManualKey(true);
+        mox->onMicPttFromRadio(true);
+        QVERIFY(!mox->isMox());
+
+        model.setTune(true);
+        pump();
+        // TUN was refused; its TUN-off path cleared the manual key and the
+        // held mic keyed on that pass.
+        QVERIFY(!model.isTune());
+        QVERIFY(mox->isMox());
+        QCOMPARE(mox->pttMode(), PttMode::Mic);
+
+        mox->onMicPttFromRadio(false);
+        pump();
+        QVERIFY2(!mox->isMox(), "the mic's release could not unkey its own key");
+    }
+
+    // ── 28. Task 7 fix wave, M9 ─────────────────────────────────────────────
+    void moxButtonInsideTuneOffWindowCompletesTuneOffFirst()
+    {
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        setupModel(model, conn);
+        std::unique_ptr<MockConnection> connOwner(conn);
+        const auto detach = qScopeGuard([&model]() {
+            model.injectConnectionForTest(nullptr);
+        });
+        QVERIFY(model.activeSlice() != nullptr);
+        model.activeSlice()->setDspMode(DSPMode::USB);
+        MoxController* mox = model.moxController();
+
+        model.setTune(true);
+        pump();
+        QVERIFY(mox->isMox());
+        model.setTune(false);
+        QVERIFY(model.tuneOffPendingForTest());
+
+        // Pressed before the TX-to-RX walk and the settle have run.
+        model.setMoxFromButton(true);
+        QVERIFY2(!model.tuneOffPendingForTest(),
+                 "the MOX key cancelled the TUN-off completion (tone left running)");
+        QVERIFY(!model.isTune());
+        QVERIFY(mox->isMox());
+        QVERIFY(mox->isManualKey());
+        pump();
+        QVERIFY(mox->isMox());
+        QVERIFY(!model.tuneOffPendingForTest());
+        QVERIFY(!model.isTune());
+
+        model.setMoxFromButton(false);
+        pump();
+        QVERIFY(!mox->isMox());
+        QVERIFY(!mox->isManualKey());
+    }
+
+    void moxButtonInsideTuneOffWindowFromCwIsRefused()
+    {
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        SliceModel* slice = nullptr;
+        setupRefusalRig(model, conn, slice);
+        std::unique_ptr<MockConnection> connOwner(conn);
+        const auto detach = qScopeGuard([&model]() {
+            model.injectConnectionForTest(nullptr);
+        });
+        QVERIFY(slice != nullptr);
+        MoxController* mox = model.moxController();
+        // TUN from CW: keys in the switched SSB mode (band plan allows it).
+        mox->setMoxCheck([slice]() {
+            const bool cw = slice->dspMode() == DSPMode::CWU
+                         || slice->dspMode() == DSPMode::CWL;
+            return safety::BandPlanGuard::MoxCheckResult{!cw,
+                cw ? QStringLiteral("CW transmit is not available") : QString()};
+        });
+
+        model.setTune(true);
+        pump();
+        QVERIFY(mox->isMox());
+        QCOMPARE(slice->dspMode(), DSPMode::USB);
+        model.setTune(false);
+        QVERIFY(model.tuneOffPendingForTest());
+
+        // Inside the window the slice still reads USB; the key must not ride
+        // on it with the tone up.
+        model.setMoxFromButton(true);
+        pump();
+        QCOMPARE(slice->dspMode(), DSPMode::CWU);
+        QVERIFY2(!mox->isMox(), "the MOX button keyed in the TUN-off window from CW");
+        QVERIFY(!model.tuneOffPendingForTest());
+        QVERIFY(!model.isTune());
+        QVERIFY(!mox->isManualKey());
     }
 };
 

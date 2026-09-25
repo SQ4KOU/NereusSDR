@@ -1410,6 +1410,9 @@ RadioModel::RadioModel(Role role, QObject* parent)
     m_twoToneController = new TwoToneController(this);
     m_twoToneController->setTransmitModel(&m_transmitModel);
     m_twoToneController->setMoxController(m_moxController);
+    // Task 7 fix wave, M9: two-tone waits out a TUN-off still completing,
+    // so it never keys with the tune tone running.
+    m_twoToneController->setTuneOffPendingFn([this]() { return m_pendingTuneOff; });
 
     // R-R3-36: keep the generated-key record in step with two-tone's own
     // state, not only with MOX transitions. Two-tone can go live on a key
@@ -16973,10 +16976,16 @@ void RadioModel::setTune(bool on)
             // the TX-to-RX branch of chkMOX_CheckedChanged2). NereusSDR's
             // MoxController::setTune(true) sets Manual before keying (its
             // documented ordering deviation), so the refusal puts it back.
+            //
+            // Task 7 fix wave, M1: no setPttMode(PttMode::None) after
+            // completeTuneOff. MoxController::setMox already cleared the
+            // mode when it refused, and completeTuneOff's last step clears
+            // the manual key, whose PollPTT pass can key a held source with
+            // its own mode; clearing the mode after that would leave that
+            // key with no source able to release it.
             if (!keyed) {
                 setTune(false);
                 completeTuneOff();
-                m_moxController->setPttMode(PttMode::None);
             }
         }
 
@@ -17183,6 +17192,17 @@ void RadioModel::setMoxFromButton(bool on)
     // until the tone is down closes that.
     if (m_moxController == nullptr) {
         return;
+    }
+    // Task 7 fix wave, M9: pressed while a TUN-off is still completing (the
+    // TX-to-RX walk plus the settle, about 130 ms), the key would stop the
+    // walk's timers, so the rxReady that completeTuneOff waits for never
+    // comes and the tune tone keeps running under the new key (the "Bug
+    // window" note in setTune). Thetis keys at once and drops the tone
+    // within 100 ms (console.cs:30157-30160 [v2.10.3.15]); here the TUN-off
+    // completes first (tone off, mode, power and TX VFO back), then the
+    // key is tried, so it is checked against the restored mode.
+    if (on && m_pendingTuneOff) {
+        completeTuneOff();
     }
     const bool twoToneOn = m_twoToneController && m_twoToneController->isActive();
     if (!on && (m_isTuning || twoToneOn)) {

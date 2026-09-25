@@ -23,6 +23,10 @@
 //                (KG4VCF), AI-assisted via Anthropic Claude Code. Two-tone
 //                holds the manual key (console.ManualMox) around its key,
 //                so no mic PTT or VOX releases or takes it.
+//   2026-09-24 : Receiver and transmit gaps plan, Task 7 fix wave, by
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//                A start waits out a TUN-off still completing (M9,
+//                console.cs:44805-44813 [v2.10.3.15]).
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis-derived activation flow
@@ -121,6 +125,11 @@ void TwoToneController::setPowerOn(bool on)
     m_powerOn = on;
 }
 
+void TwoToneController::setTuneOffPendingFn(std::function<bool()> fn)
+{
+    m_tuneOffPending = std::move(fn);
+}
+
 void TwoToneController::setSettleDelaysMs(int moxReleaseMs, int tuneReleaseMs)
 {
     m_moxReleaseSettleTimer.setInterval(moxReleaseMs);
@@ -200,6 +209,19 @@ void TwoToneController::setActive(bool on)
         //       upward.  See I.3 note in the plan + DONE_WITH_CONCERNS.
         // TODO(3M-1c-polish): expose TxChannel TUN-active state so we can
         //                     trigger m_tuneReleaseSettleTimer here.
+        //
+        // Task 7 fix wave, M9: a TUN-off already under way is waited out.
+        // Keying now would cancel the TX-to-RX walk its completion waits for
+        // and leave the tune tone running under two-tone. Thetis waits
+        // 300 ms after turning TUN off (console.cs:44805-44813 [v2.10.3.15]):
+        //   chkTUN.Checked = false;
+        //   chkTUN_CheckedChanged(this, EventArgs.Empty); // it needs to happen here and now
+        //   ...
+        //   await Task.Delay(300);
+        if (m_tuneOffPending && m_tuneOffPending()) {
+            m_tuneReleaseSettleTimer.start();
+            return;
+        }
 
         continueActivation();
     } else {
@@ -241,6 +263,12 @@ void TwoToneController::onTuneReleaseSettleElapsed()
 {
     // From Thetis console.cs:44740 [v2.10.3.13]:
     //   await Task.Delay(300);
+    // Task 7 fix wave, M9: never key while the TUN-off is still completing
+    // (it holds the manual key and the tune tone until then).
+    if (m_tuneOffPending && m_tuneOffPending()) {
+        m_tuneReleaseSettleTimer.start();
+        return;
+    }
     continueActivation();
 }
 
