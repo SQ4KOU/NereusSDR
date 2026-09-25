@@ -18,6 +18,9 @@
 //   2026-09-24 - R-R3-49, R-R3-21: the one remaining rate is labelled
 //                 "Sample rate (Hz):" (no RX1/RX2 words). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - Receiver and transmit gaps plan, Task 5: the support info's
+//                 top sample rate is the protocol's, not the board row's.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -301,7 +304,11 @@ void RadioInfoTab::populate(const RadioInfo& info, const BoardCapabilities& caps
         .arg(m_firmwareLabel->text())
         .arg(m_macLabel->text())
         .arg(m_ipLabel->text())
-        .arg(caps.maxSampleRate);
+        // Plan Task 5: the top rate for the protocol the radio is running
+        // (the last entry of the list the combo was just built from), not
+        // the row's top, which spans both protocols on boards that run
+        // either.
+        .arg(allowed.empty() ? 0 : allowed.back());
 }
 
 // ── private slots ─────────────────────────────────────────────────────────────

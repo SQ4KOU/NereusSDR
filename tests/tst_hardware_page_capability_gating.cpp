@@ -10,6 +10,7 @@
 
 #include <QtTest/QtTest>
 #include "gui/setup/HardwarePage.h"
+#include "gui/setup/hardware/RadioInfoTab.h"
 #include "gui/UnbuiltFeatures.h"
 #include "core/HpsdrModel.h"
 #include "core/BoardCapabilities.h"
@@ -169,6 +170,33 @@ private slots:
         QVERIFY(!page.isTabVisibleForTest(HardwarePage::Tab::BandwidthMonitor));
         // Non-HL2 boards must NOT see the HL2 Options tab.
         QVERIFY(!page.isTabVisibleForTest(HardwarePage::Tab::Hl2Options));
+    }
+
+    // Plan Task 5: Radio Info shows the top rate for the protocol the radio
+    // is running. An ANAN-100D tops out at 192 kHz on Protocol 1 and at
+    // 1536 kHz on Protocol 2 (Thetis setup.cs:848-850 [v2.10.3.15]).
+    void angelia_radio_info_top_rate_follows_the_protocol()
+    {
+        for (const auto& [proto, expected] :
+             {std::pair{ProtocolVersion::Protocol1, 192000},
+              std::pair{ProtocolVersion::Protocol2, 1536000}}) {
+            RadioModel model;
+            model.setBoardForTest(HPSDRHW::Angelia);
+            HardwarePage page(&model);
+
+            RadioInfo info;
+            info.boardType  = HPSDRHW::Angelia;
+            info.protocol   = proto;
+            info.macAddress = QStringLiteral("aa:bb:cc:44:55:66");
+            page.onCurrentRadioChanged(info);
+
+            auto* tab = qobject_cast<RadioInfoTab*>(
+                page.tabWidgetForTest(HardwarePage::Tab::RadioInfo));
+            QVERIFY(tab);
+            QVERIFY2(tab->supportInfoForTest().contains(
+                         QStringLiteral("Max sample rate: %1 Hz").arg(expected)),
+                     qPrintable(tab->supportInfoForTest()));
+        }
     }
 
     void atlas_shows_only_radio_info()
