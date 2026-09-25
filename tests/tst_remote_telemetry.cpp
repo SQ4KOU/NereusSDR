@@ -605,7 +605,7 @@ private slots:
         QTemporaryDir dir;
         AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
         RadioModel station;
-        StationServer server(&station, settings, dir.path());
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
         server.setTelemetryEnabled(true);
         RadioModel remote(RadioModel::Role::Remote);
         SettingsProxy proxy;
