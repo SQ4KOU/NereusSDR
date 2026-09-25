@@ -719,6 +719,8 @@ private slots:
         QVERIFY(request.noiseFloor->enabled);
         QCOMPARE(request.waterfallLevels->mode, WaterfallLevelMode::Agc);
         QCOMPARE(*request.averageTimeMs, 30);
+        // Absent, the waterfall takes averageTimeMs (the Core's fallback).
+        QVERIFY(!request.waterfallAverageTimeMs.has_value());
         QCOMPARE(int(request.sections()), 0x0F);
         DisplayExtrasRequest none;
         QVERIFY(parseDisplayExtrasRequest(QJsonObject{}, none));
@@ -735,6 +737,26 @@ private slots:
                                {QStringLiteral("shiftDb"), 0.0}});
         QVERIFY(parseDisplayExtrasRequest(off, request));
         QCOMPARE(int(request.sections()), 0x09);
+    }
+
+    // waterfallAverageTimeMs is the waterfall's own time, in averageTimeMs's
+    // range, and a field on its own: no section, charged as today.
+    void theWaterfallAverageTimeParses()
+    {
+        DisplayExtrasRequest request;
+        QVERIFY(parseDisplayExtrasRequest(
+            withFields(everyExtra(), {{QStringLiteral("waterfallAverageTimeMs"), 700}}),
+            request));
+        QCOMPARE(*request.averageTimeMs, 30);
+        QCOMPARE(*request.waterfallAverageTimeMs, 700);
+        DisplayExtrasRequest alone;
+        QVERIFY(parseDisplayExtrasRequest(
+            QJsonObject{{QStringLiteral("waterfallAverageTimeMs"), 10}}, alone));
+        QVERIFY(!alone.empty());
+        QVERIFY(!alone.averageTimeMs.has_value());
+        QCOMPARE(*alone.waterfallAverageTimeMs, 10);
+        QCOMPARE(int(alone.sections()), 0);
+        QVERIFY(displayExtrasSubscribeKeys().contains(QStringLiteral("waterfallAverageTimeMs")));
     }
 
     void outOfRangeFieldsAreRefused_data()
@@ -783,6 +805,12 @@ private slots:
                                            << QJsonValue(31.0);
         QTest::newRow("average 9 ms") << QStringLiteral("averageTimeMs") << QJsonValue(9);
         QTest::newRow("average fraction") << QStringLiteral("averageTimeMs") << QJsonValue(30.5);
+        QTest::newRow("waterfall average 9 ms") << QStringLiteral("waterfallAverageTimeMs")
+                                                << QJsonValue(9);
+        QTest::newRow("waterfall average 10000 ms") << QStringLiteral("waterfallAverageTimeMs")
+                                                    << QJsonValue(10000);
+        QTest::newRow("waterfall average fraction") << QStringLiteral("waterfallAverageTimeMs")
+                                                    << QJsonValue(700.5);
     }
 
     void outOfRangeFieldsAreRefused()
@@ -928,6 +956,67 @@ private slots:
             QCOMPARE(decoded.disposition, DisplayCodecDisposition::Accepted);
             QCOMPARE(decoded.frame.context.endpointId, context8.endpointId);
         }
+        harness.finish();
+    }
+
+    // averageTimeMs sets the trace's constant, waterfallAverageTimeMs the
+    // waterfall's; without waterfallAverageTimeMs the waterfall takes
+    // averageTimeMs's, and without either both keep their plane's.
+    void theWaterfallTakesItsOwnAverageTimeOrTheSpectrums()
+    {
+#ifndef HAVE_FFTW3
+        QSKIP("FFTEngine has no FFTW3 backend in this build");
+#endif
+        Harness harness;
+        QVERIFY(harness.establishSession());
+        QVERIFY(harness.startReadyPeer());
+        const double centreHz = harness.radio.streamCentreHz(harness.streamIndex);
+        // The subscription asks for 60 fps; plane() asks for alpha 0.
+        QVERIFY(harness.client.sendMediaControl(
+            withFields(subscription(7, harness.sliceId, centreHz),
+                       {{QStringLiteral("averageTimeMs"), 120},
+                        {QStringLiteral("waterfallAverageTimeMs"), 700}}),
+            harness.client.sessionEpoch()));
+        QVERIFY(harness.client.sendMediaControl(
+            withFields(subscription(8, harness.sliceId, centreHz),
+                       {{QStringLiteral("averageTimeMs"), 120}}),
+            harness.client.sessionEpoch()));
+        QVERIFY(harness.client.sendMediaControl(
+            withFields(subscription(9, harness.sliceId, centreHz),
+                       {{QStringLiteral("waterfallAverageTimeMs"), 700}}),
+            harness.client.sessionEpoch()));
+        QVERIFY(harness.client.sendMediaControl(subscription(10, harness.sliceId, centreHz),
+                                                harness.client.sessionEpoch()));
+        QTRY_COMPARE(harness.controller.activeEndpointCount(), 4);
+        const double spectrum = averageAlphaForTimeMs(120, 60);
+        const double waterfall = averageAlphaForTimeMs(700, 60);
+        QVERIFY(spectrum != waterfall);
+
+        // Present: each plane its own.
+        const auto both = harness.controller.spectrumAveraging(7);
+        QVERIFY(both.has_value());
+        QCOMPARE(both->traceAlpha, spectrum);
+        QCOMPARE(both->waterfallAlpha, waterfall);
+        // Absent: the waterfall falls back to averageTimeMs.
+        const auto fallback = harness.controller.spectrumAveraging(8);
+        QVERIFY(fallback.has_value());
+        QCOMPARE(fallback->traceAlpha, spectrum);
+        QCOMPARE(fallback->waterfallAlpha, spectrum);
+        // The waterfall's alone leaves the trace its plane's constant.
+        const auto waterfallOnly = harness.controller.spectrumAveraging(9);
+        QVERIFY(waterfallOnly.has_value());
+        QCOMPARE(waterfallOnly->traceAlpha, 0.0);
+        QCOMPARE(waterfallOnly->waterfallAlpha, waterfall);
+        // Neither: both planes' own.
+        const auto neither = harness.controller.spectrumAveraging(10);
+        QVERIFY(neither.has_value());
+        QCOMPARE(neither->traceAlpha, 0.0);
+        QCOMPARE(neither->waterfallAlpha, 0.0);
+        // No field asks for a section, so every endpoint is charged as today.
+        const auto plainCost = spectrumDisplayCost(128, 60, false);
+        QVERIFY(plainCost.has_value());
+        QCOMPARE(harness.controller.acceptedDisplayCharge().applicationBytesPerSecond,
+                 4 * plainCost->charge.applicationBytesPerSecond);
         harness.finish();
     }
 

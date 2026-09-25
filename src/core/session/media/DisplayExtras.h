@@ -85,7 +85,11 @@ struct DisplayExtrasRequest {
     std::optional<WaterfallLevels> waterfallLevels;
     std::optional<bool> normalize;
     std::optional<double> calibrationOffsetDb;
+    /// The spectrum's averaging time; the waterfall's too unless
+    /// `waterfallAverageTimeMs` is present.
     std::optional<int> averageTimeMs;
+    /// The waterfall's own averaging time, in the same range.
+    std::optional<int> waterfallAverageTimeMs;
 
     /// No display extras field was present.
     bool empty() const;

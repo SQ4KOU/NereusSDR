@@ -1666,6 +1666,9 @@
                     "peakBlobs": [
                         "displayExtrasVersion"
                     ],
+                    "waterfallAverageTimeMs": [
+                        "displayExtrasVersion"
+                    ],
                     "waterfallLevels": [
                         "displayExtrasVersion"
                     ]

@@ -180,7 +180,7 @@ int planeWorstCaseBytes(int samples)
 bool DisplayExtrasRequest::empty() const
 {
     return !peakBlobs && !activePeakHold && !noiseFloor && !waterfallLevels
-        && !normalize && !calibrationOffsetDb && !averageTimeMs;
+        && !normalize && !calibrationOffsetDb && !averageTimeMs && !waterfallAverageTimeMs;
 }
 
 quint8 DisplayExtrasRequest::sections() const
@@ -199,7 +199,7 @@ const QStringList& displayExtrasSubscribeKeys()
         QStringLiteral("peakBlobs"), QStringLiteral("activePeakHold"),
         QStringLiteral("noiseFloor"), QStringLiteral("waterfallLevels"),
         QStringLiteral("normalize"), QStringLiteral("calibrationOffsetDb"),
-        QStringLiteral("averageTimeMs")};
+        QStringLiteral("averageTimeMs"), QStringLiteral("waterfallAverageTimeMs")};
     return keys;
 }
 
@@ -299,6 +299,14 @@ bool parseDisplayExtrasRequest(const QJsonObject& subscribe, DisplayExtrasReques
             return false;
         }
         parsed.averageTimeMs = timeMs;
+    }
+    if (subscribe.contains(QStringLiteral("waterfallAverageTimeMs"))) {
+        int timeMs = 0;
+        if (!intIn(subscribe.value(QStringLiteral("waterfallAverageTimeMs")),
+                   kAverageTimeMinMs, kAverageTimeMaxMs, timeMs)) {
+            return false;
+        }
+        parsed.waterfallAverageTimeMs = timeMs;
     }
     request = parsed;
     return true;

@@ -45,7 +45,8 @@ request one the Core cannot read.
 | `waterfallLevels` | `{mode, lowDbm, highDbm, offsetDb}` | The waterfall's low and high levels. `mode` `"manual"` (the operator's `lowDbm` and `highDbm`, -400 to 100 each), `"agc"` (the desktop's follower on each line's minimum and maximum, 12 dB outside them), `"noiseFloorAgc"` (the line's 10th-percentile floor plus `offsetDb`, -60 to 60, and 60 dB above that) or `"clarity"` (Clarity, fed the Core's full-source noise floor, the same the `noise-floor` operation carries; the manual levels until Clarity first speaks). Asks for the levels section. |
 | `normalize` | boolean | Normalise to a 1 Hz bandwidth: every dBm moves by -10 log10(bin width), the bin width being the source's sample rate over its FFT size. |
 | `calibrationOffsetDb` | number, -30 to 30 | The display calibration offset: every dBm moves by it. |
-| `averageTimeMs` | whole number, 10 to 9999 | The averaging time. The Core computes the constant exp(-1 / (fps × τ)) from it at the endpoint's `fps` and uses it for both planes in place of their `averageAlpha`; `averageMode` still comes from the plane objects. |
+| `averageTimeMs` | whole number, 10 to 9999 | The spectrum's averaging time (the desktop's spectrum Averaging Time). The Core computes the constant exp(-1 / (fps × τ)) from it at the endpoint's `fps` and uses it for the trace plane in place of its `averageAlpha`, and for the waterfall plane too when `waterfallAverageTimeMs` is absent; `averageMode` still comes from the plane objects. |
+| `waterfallAverageTimeMs` | whole number, 10 to 9999 | The waterfall's averaging time (the desktop's waterfall Averaging Time). The Core computes the waterfall plane's constant from it the same way. Absent, the waterfall takes `averageTimeMs`'s; with neither, the plane object's `averageAlpha`. |
 
 **Calibration and normalise are applied at the Core.** The Core adds
 `calibrationOffsetDb` plus the normalise shift to every sample of the
@@ -67,8 +68,8 @@ new FFT size) starts the peak hold and the blobs again.
 datagrams on top of its frames (station link section 12.3, display budget):
 one message a frame more, at most the datagram's largest size a frame
 (section 3.3), and the peak hold row's samples a frame. An endpoint that
-asks only for `normalize`, `calibrationOffsetDb` or `averageTimeMs` is
-charged as today.
+asks only for `normalize`, `calibrationOffsetDb`, `averageTimeMs` or
+`waterfallAverageTimeMs` is charged as today.
 
 ## 3. The NSDX datagram
 

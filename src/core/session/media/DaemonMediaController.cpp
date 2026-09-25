@@ -597,6 +597,17 @@ std::optional<bool> DaemonMediaController::spectrumSourceTransformsFollowFrameRa
     return source->config.transformsFollowFrameRate;
 }
 
+std::optional<DaemonMediaController::SpectrumAveraging>
+DaemonMediaController::spectrumAveraging(quint32 endpointId) const
+{
+    const auto it = m_endpoints.find(endpointId);
+    if (it == m_endpoints.end()) {
+        return std::nullopt;
+    }
+    return SpectrumAveraging{it->second.request.trace.averageAlpha,
+                             it->second.request.waterfall.averageAlpha};
+}
+
 std::optional<int> DaemonMediaController::spectrumSourceFps(quint32 endpointId) const
 {
     const auto it = m_endpoints.find(endpointId);
@@ -1252,13 +1263,18 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
 
     request.extendedView = widebandNegotiated
         && control.value(QStringLiteral("extendedView")).toBool();
+    // The Core computes the averaging constants from the times the app
+    // asked for, at this endpoint's frame rate, as the desktop does from its
+    // own (DisplayFollowers: Thetis AvTau / AvTauWF). averageTimeMs is the
+    // spectrum's, and the waterfall's too unless waterfallAverageTimeMs is
+    // present.
     if (extrasRequest.averageTimeMs) {
-        // The Core computes the averaging constant from the time the app
-        // asked for, at this endpoint's frame rate, as the desktop does from
-        // its own (DisplayFollowers: Thetis AvTau / AvTauWF).
-        const double alpha = averageAlphaForTimeMs(*extrasRequest.averageTimeMs, fps);
-        request.trace.averageAlpha = alpha;
-        request.waterfall.averageAlpha = alpha;
+        request.trace.averageAlpha = averageAlphaForTimeMs(*extrasRequest.averageTimeMs, fps);
+    }
+    const std::optional<int> waterfallTimeMs = extrasRequest.waterfallAverageTimeMs
+        ? extrasRequest.waterfallAverageTimeMs : extrasRequest.averageTimeMs;
+    if (waterfallTimeMs) {
+        request.waterfall.averageAlpha = averageAlphaForTimeMs(*waterfallTimeMs, fps);
     }
     request.endpointId = endpointId;
     request.source = source;
