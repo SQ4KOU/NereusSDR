@@ -22,6 +22,11 @@
 //                 public API + point-edit (B5).  Widget is feature-
 //                 complete; Tasks 8 + 9 wire it into TxCfcDialog and
 //                 TxEqDialog.
+//   2026-09-25 - R-R3-49 (parity Task 4): responseDbAtFrequency calls
+//                 ParaEqCurve::responseDb (src/core), where its lines
+//                 moved, so the Core applies the TX EQ curve itself.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
 // =================================================================
 
 /*  ucParametricEq.cs
@@ -65,6 +70,8 @@ mw0lge@grange-lane.co.uk
 //============================================================================================//
 
 #include "ParametricEqWidget.h"
+
+#include "core/ParaEqCurve.h"
 
 #include <QBrush>
 #include <QCursor>
@@ -774,42 +781,11 @@ QColor ParametricEqWidget::getPointDisplayColor(int index) const {
 //     p.gainDb * w; widget result is the unweighted sum.  This is the
 //     authoritative response curve for paint and CFC dispatch.
 double ParametricEqWidget::responseDbAtFrequency(double frequencyHz) const {
-    if (!m_parametricEq) {
-        if (m_points.isEmpty()) return 0.0;
-        double f = frequencyHz;
-        if (f <= m_points.first().frequencyHz) return m_points.first().gainDb;
-        if (f >= m_points.last ().frequencyHz) return m_points.last ().gainDb;
-
-        for (int i = 1; i < m_points.size(); ++i) {
-            const auto& left  = m_points.at(i - 1);
-            const auto& right = m_points.at(i);
-            if (f <= right.frequencyHz) {
-                double denom = right.frequencyHz - left.frequencyHz;
-                if (denom <= 0.0000001) return right.gainDb;
-                double t = (f - left.frequencyHz) / denom;
-                if (t < 0.0) t = 0.0;
-                if (t > 1.0) t = 1.0;
-                return left.gainDb + ((right.gainDb - left.gainDb) * t);
-            }
-        }
-        return m_points.last().gainDb;
-    }
-
-    double span = m_frequencyMaxHz - m_frequencyMinHz;
-    if (span <= 0.0) span = 1.0;
-
-    double sum = 0.0;
-    for (const auto& p : m_points) {
-        double q = clamp(p.q, m_qMin, m_qMax);
-        double fwhm = span / (q * 3.0);
-        double minFwhm = span / 6000.0;
-        if (fwhm < minFwhm) fwhm = minFwhm;
-        double sigma = fwhm / 2.3548200450309493;
-        double d = (frequencyHz - p.frequencyHz) / sigma;
-        double w = std::exp(-0.5 * d * d);
-        sum += p.gainDb * w;
-    }
-    return sum;
+    // R-R3-49 (parity Task 4): the curve maths moved to src/core
+    // (ParaEqCurve::responseDb, the same lines), so the Core computes the
+    // TX EQ curve it applies without this widget.
+    return ParaEqCurve::responseDb(m_points, m_parametricEq, m_frequencyMinHz,
+                                   m_frequencyMaxHz, m_qMin, m_qMax, frequencyHz);
 }
 
 // From Thetis ucParametricEq.cs:1575-1609 [v2.10.3.13].

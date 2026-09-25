@@ -886,6 +886,8 @@ set(CORE_SOURCES
     src/core/MoxController.cpp
     src/core/MicProfileManager.cpp
     src/core/ParaEqEnvelope.cpp
+    src/core/ParaEqCurve.cpp
+    src/core/ParaEqCurve.h
     src/core/TwoToneController.cpp
     src/core/TxSliceArbiter.cpp
     src/core/TxSliceArbiter.h
