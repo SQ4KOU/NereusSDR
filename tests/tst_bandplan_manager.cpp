@@ -22,6 +22,12 @@ private slots:
     void segment_defaultIsEmpty();
     void spot_defaultIsEmpty();
 
+    // R-IOS-27, R-IOS-11: the lowest licence class, one rule for the
+    // band-plan strip and the station catalogue
+    void lowestLicenceClass_data();
+    void lowestLicenceClass();
+    void lowestLicenceClass_stripLabelsUnchanged();
+
     // Loader: bundled resources
     void loadPlans_findsAllFiveRegions();
     void loadPlans_arrlUsHasSegmentsAndSpots();
@@ -62,6 +68,58 @@ void TestBandPlanManager::spot_defaultIsEmpty()
     BandSpot s;
     QCOMPARE(s.freqMhz, 0.0);
     QVERIFY(s.label.isEmpty());
+}
+
+void TestBandPlanManager::lowestLicenceClass_data()
+{
+    QTest::addColumn<QString>("licence");
+    QTest::addColumn<QString>("expected");
+    QTest::newRow("T,G,E") << QStringLiteral("T,G,E") << QStringLiteral("Tech");
+    QTest::newRow("E,G,T") << QStringLiteral("E,G,T") << QStringLiteral("Tech");
+    QTest::newRow("E,G")   << QStringLiteral("E,G")   << QStringLiteral("General");
+    QTest::newRow("E")     << QStringLiteral("E")     << QStringLiteral("Extra");
+    QTest::newRow("empty") << QString()               << QString();
+    QTest::newRow("unknown code") << QStringLiteral("A") << QString();
+}
+
+void TestBandPlanManager::lowestLicenceClass()
+{
+    QFETCH(QString, licence);
+    QFETCH(QString, expected);
+    QCOMPARE(NereusSDR::lowestLicenceClass(licence), expected);
+}
+
+// The strip's label for every segment of every bundled plan is what the
+// rule SpectrumWidget held inline before the move gave: "<label> <class>"
+// when there is room and a class, the bare label otherwise.
+void TestBandPlanManager::lowestLicenceClass_stripLabelsUnchanged()
+{
+    const auto inlineRule = [](const QString& lic) {
+        QString lowestClass;
+        if      (lic.contains(QLatin1Char('T'))) { lowestClass = QStringLiteral("Tech"); }
+        else if (lic.contains(QLatin1Char('G'))) { lowestClass = QStringLiteral("General"); }
+        else if (lic == QLatin1String("E"))      { lowestClass = QStringLiteral("Extra"); }
+        return lowestClass;
+    };
+    const auto stripLabel = [](const QString& label, const QString& lowestClass) {
+        return lowestClass.isEmpty() ? label : QStringLiteral("%1 %2").arg(label, lowestClass);
+    };
+
+    BandPlanManager mgr;
+    mgr.loadPlans();
+    int checked = 0;
+    for (const BandPlanManager::PlanData& plan : mgr.plans()) {
+        for (const BandSegment& seg : plan.segments) {
+            QCOMPARE(stripLabel(seg.label, NereusSDR::lowestLicenceClass(seg.license)),
+                     stripLabel(seg.label, inlineRule(seg.license)));
+            ++checked;
+        }
+    }
+    QVERIFY(checked > 0);
+
+    // The label the phone asked for, as the desktop draws it.
+    QCOMPARE(stripLabel(QStringLiteral("PHONE"), NereusSDR::lowestLicenceClass(QStringLiteral("E,G"))),
+             QStringLiteral("PHONE General"));
 }
 
 void TestBandPlanManager::loadPlans_findsAllFiveRegions()
