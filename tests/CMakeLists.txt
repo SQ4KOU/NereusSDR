@@ -7466,6 +7466,16 @@ nereus_add_test(tst_media_transport)
 # live queued-control exchange over the encrypted media transport.
 nereus_add_test(tst_media_peer)
 
+# iPhone app plan Task 10: the station side of the app's media interop tests.
+# Not a test itself: ios/scripts/interop-test.sh builds it and the app's
+# MediaPeerInteropTests drive it, the Core's own media transport as the
+# offerer. It reads its commands from a pipe, so it is not built on Windows.
+if(NOT WIN32)
+    add_executable(nereus_media_offerer EXCLUDE_FROM_ALL
+        tools/nereus_media_offerer.cpp $<TARGET_OBJECTS:nereus_test_sandbox>)
+    target_link_libraries(nereus_media_offerer PRIVATE NereusCore)
+endif()
+
 # Remote Daemon R3, Task 5: the existing RADE-pinned Opus encodes and decodes
 # the bounded mixed-stereo RTP profile without a second codec build.
 nereus_add_test(tst_opus_audio_codec)
