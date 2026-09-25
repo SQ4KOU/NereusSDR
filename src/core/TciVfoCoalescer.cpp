@@ -13,13 +13,16 @@
 //   2026-09-24 - Receiver and transmit gaps plan, Task 10 (R-R3-49) by
 //                J.J. Boyd (KG4VCF): layer note follows the TciUpdateGap
 //                port. AI-assisted transformation via Anthropic Claude Code.
+//   2026-09-25 - Receiver and transmit gaps plan, Task 12 (R-R3-49) by
+//                J.J. Boyd (KG4VCF): frames carry a tag to the drain.
+//                AI-assisted transformation via Anthropic Claude Code.
 
 #include "TciVfoCoalescer.h"
 #include <QtCore/QMutexLocker>
 
 namespace NereusSDR {
 
-void TciVfoCoalescer::update(const QString& key, const QString& frame)
+void TciVfoCoalescer::update(const QString& key, const QString& frame, int tag)
 {
     QMutexLocker locker(&m_mutex);
     if (!m_frames.contains(key)) {
@@ -28,6 +31,23 @@ void TciVfoCoalescer::update(const QString& key, const QString& frame)
     }
     // Latest-wins: replace (or insert) the frame for this key.
     m_frames.insert(key, frame);
+    m_tags.insert(key, tag);
+}
+
+QList<TciVfoCoalescer::Entry> TciVfoCoalescer::drainEntries()
+{
+    QMutexLocker locker(&m_mutex);
+    QList<Entry> out;
+    while (!m_order.isEmpty()) {
+        const QString key = m_order.dequeue();
+        const auto it = m_frames.find(key);
+        if (it != m_frames.end()) {
+            out.append(Entry{key, it.value(), m_tags.value(key, -1)});
+            m_frames.erase(it);
+        }
+    }
+    m_tags.clear();
+    return out;
 }
 
 void TciVfoCoalescer::drainAll(QStringList* out)
@@ -35,6 +55,7 @@ void TciVfoCoalescer::drainAll(QStringList* out)
     QMutexLocker locker(&m_mutex);
     if (!out) {
         m_frames.clear();
+        m_tags.clear();
         m_order.clear();
         return;
     }
@@ -46,6 +67,7 @@ void TciVfoCoalescer::drainAll(QStringList* out)
             m_frames.erase(it);
         }
     }
+    m_tags.clear();
 }
 
 void TciVfoCoalescer::clear()
@@ -53,6 +75,7 @@ void TciVfoCoalescer::clear()
     QMutexLocker locker(&m_mutex);
     m_order.clear();
     m_frames.clear();
+    m_tags.clear();
 }
 
 int TciVfoCoalescer::pending() const

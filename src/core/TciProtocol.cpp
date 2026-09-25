@@ -30,6 +30,11 @@
 //                and every app hears changes from moxStateChanged, as
 //                Thetis handleTrxMessage does. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - Receiver and transmit gaps plan, Task 12 (R-R3-49) by
+//                J.J. Boyd (KG4VCF): if with each VFO and centre change,
+//                dds carries the centre, one if builder, gate-tagged
+//                drained lines. AI-assisted transformation via Anthropic
+//                Claude Code.
 
 #include "TciProtocol.h"
 #include "AppSettings.h"
@@ -133,27 +138,77 @@ QString TciProtocol::handleCommand(const QString& command)
 
 bool TciProtocol::hasPendingNotification() const
 {
-    return !m_pendingNotifications.isEmpty();
+    return !m_pendingNotifications.isEmpty() || !m_pendingDrained.isEmpty();
 }
 
 QString TciProtocol::takePendingNotification()
 {
-    if (m_pendingNotifications.isEmpty()) {
-        return {};
+    return takePendingLine().frame;
+}
+
+// Task 12 (R-R3-49). Direct lines first, then drained ones: the order the
+// single queue had, since a drain always appended after what was queued.
+TciProtocol::PendingLine TciProtocol::takePendingLine()
+{
+    if (!m_pendingNotifications.isEmpty()) {
+        return PendingLine{m_pendingNotifications.takeFirst(), std::nullopt};
     }
-    return m_pendingNotifications.takeFirst();
+    if (!m_pendingDrained.isEmpty()) {
+        return m_pendingDrained.takeFirst();
+    }
+    return {};
 }
 
 // Phase 15: drain coalesced VFO updates into m_pendingNotifications.
 // Called by TciServer from the 5ms drain timer (and by tst_tci_matrix_runner
 // after each handleCommand for synchronous test-model compatibility).
 // From Thetis TCIServer.cs:1722-1727 [v2.10.3.13] — outbound-coalesced map.
+//
+// Task 12 (R-R3-49): if and dds lines are rendered here, from the state the
+// slice has settled on, and every drained line keeps the gate its event
+// bound to it. A centre event (dds:rx plus if:rx,0@centre) whose centre is
+// the one last sent is dropped whole.
 void TciProtocol::drainCoalescedNotifications()
 {
-    QStringList drained;
-    m_vfoCoalescer.drainAll(&drained);
-    for (const auto& frame : drained) {
-        m_pendingNotifications.append(frame);
+    const QList<TciVfoCoalescer::Entry> entries = m_vfoCoalescer.drainEntries();
+
+    // Receivers whose centre event moved nothing this tick.
+    QList<int> unmovedCentres;
+    for (const auto& e : entries) {
+        if (e.key.startsWith(QLatin1String("dds:"))) {
+            const int rx = e.key.mid(4).toInt();
+            const qint64 dds = readDdsHz(rx);
+            const auto last = m_lastBroadcastDdsHz.constFind(rx);
+            if (last != m_lastBroadcastDdsHz.cend() && last.value() == dds) {
+                unmovedCentres << rx;
+            }
+        }
+    }
+
+    for (const auto& e : entries) {
+        QString frame = e.frame;
+        if (e.key.startsWith(QLatin1String("dds:"))) {
+            const int rx = e.key.mid(4).toInt();
+            if (unmovedCentres.contains(rx)) {
+                continue;
+            }
+            frame = buildDdsLineForRx(rx);  // records it as the last sent
+        } else if (e.key.startsWith(QLatin1String("if:"))) {
+            // Key shape: if:<rx>,<chan>@<event>.
+            const qsizetype at = e.key.indexOf(QLatin1Char('@'));
+            const QStringList rc = e.key.mid(3, at - 3).split(QLatin1Char(','));
+            const int rx = rc.value(0).toInt();
+            const int chan = rc.value(1).toInt();
+            if (e.key.endsWith(QLatin1String("@centre")) && unmovedCentres.contains(rx)) {
+                continue;
+            }
+            frame = buildIfLineForRx(rx, chan);
+        }
+        PendingLine line{frame, std::nullopt};
+        if (e.tag >= 0 && e.tag < TciUpdateGap::kGateCount) {
+            line.gate = static_cast<TciUpdateGap::Gate>(e.tag);
+        }
+        m_pendingDrained.append(line);
     }
 }
 
@@ -178,23 +233,26 @@ void TciProtocol::enqueueLocalBroadcast(const QString& frame)
 // buildInitialRadioStateLines).
 void TciProtocol::enqueueLocalBroadcastVfo(int rxIndex, qint64 hz, bool isTxBound)
 {
-    // Per-rx (vfo:rx,chan,hz) covers both channels; Thetis sendVFO at
-    // TCIServer.cs:2061-2093 [v2.10.3.13] -- format string.  NereusSDR
-    // collapses VFO A/B onto the slice, so both channels read the same hz.
-    {
-        const QString vfoKey0   = QStringLiteral("vfo:%1,0").arg(rxIndex);
-        const QString vfoFrame0 = QStringLiteral("vfo:%1,0,%2;").arg(rxIndex).arg(hz);
-        m_vfoCoalescer.update(vfoKey0, vfoFrame0);
-        const QString vfoKey1   = QStringLiteral("vfo:%1,1").arg(rxIndex);
-        const QString vfoFrame1 = QStringLiteral("vfo:%1,1,%2;").arg(rxIndex).arg(hz);
-        m_vfoCoalescer.update(vfoKey1, vfoFrame1);
-    }
-    // dds:rx,hz (no chan).  Thetis sendDDS at TCIServer.cs:2334-2348
-    // [v2.10.3.13].  Same coalesce key shape so a rapid burst dedups.
-    {
-        const QString ddsKey   = QStringLiteral("dds:%1").arg(rxIndex);
-        const QString ddsFrame = QStringLiteral("dds:%1,%2;").arg(rxIndex).arg(hz);
-        m_vfoCoalescer.update(ddsKey, ddsFrame);
+    // Task 12 (R-R3-49): if then vfo for each channel, both on the VFO gate.
+    // From Thetis TCIServer.cs:1385-1398 [v2.10.3.15]:
+    //   if (vfoData.sendIF) sendIF(vfoData.rx, vfoData.chan, (int)vfoData.offsetHz);
+    //   sendVFO(vfoData.rx, vfoData.chan, (long)(vfoData.freqMHz * 1e6));
+    // (and the same pair for duplicate_tochan). NereusSDR collapses VFO A/B
+    // onto the slice, so both channels read the same hz and offset, as
+    // Thetis's VFO B duplicated to channel 0 does. Format strings from
+    // sendVFO / sendIF, TCIServer.cs:2099-2158 [v2.10.3.15].
+    //
+    // The if frame here is a placeholder: drainCoalescedNotifications
+    // renders it from the settled state. Its key names the event, so a
+    // centre event's if for the same channel in the same tick is a separate
+    // slot and never merges with this one (rereview of the fix wave, N2).
+    const int vfoGate = static_cast<int>(TciUpdateGap::Gate::Vfo);
+    for (int chan = 0; chan < 2; ++chan) {
+        const QString ifKey = QStringLiteral("if:%1,%2@vfo").arg(rxIndex).arg(chan);
+        m_vfoCoalescer.update(ifKey, buildIfLine(rxIndex, chan, 0), vfoGate);
+        const QString vfoKey   = QStringLiteral("vfo:%1,%2").arg(rxIndex).arg(chan);
+        const QString vfoFrame = buildVfoLine(rxIndex, chan, hz);
+        m_vfoCoalescer.update(vfoKey, vfoFrame, vfoGate);
     }
     // TX frequency: emit only from the receiver actually driving the
     // transmitter. Codex review round 6, PR #293.
@@ -214,6 +272,23 @@ void TciProtocol::enqueueLocalBroadcastVfo(int rxIndex, qint64 hz, bool isTxBoun
     }
 }
 
+// Task 12 (R-R3-49). From Thetis TCIServer.cs:1378-1382 [v2.10.3.15]:
+//   if (vfoData.cen)
+//   {
+//       sendDDS(vfoData.rx, (long)(vfoData.centreMHz * 1e6));
+//       if (vfoData.sendIF) sendIF(vfoData.rx, vfoData.chan, (int)vfoData.offsetHz);
+//   }
+// with chan = 0 (OnCentreFrequencyChanged, TCIServer.cs:7369-7378
+// [v2.10.3.15]). Both lines on the centre gate; both rendered at drain.
+void TciProtocol::enqueueLocalBroadcastCentre(int rxIndex)
+{
+    const int centreGate = static_cast<int>(TciUpdateGap::Gate::Centre);
+    m_vfoCoalescer.update(QStringLiteral("dds:%1").arg(rxIndex),
+                          buildDdsLine(rxIndex, 0), centreGate);
+    m_vfoCoalescer.update(QStringLiteral("if:%1,0@centre").arg(rxIndex),
+                          buildIfLine(rxIndex, 0, 0), centreGate);
+}
+
 // Split out of enqueueLocalBroadcastVfo, Codex review round 6, PR #293.
 //
 // tx_frequency and tx_frequency_thetis carry no receiver index, so they are
@@ -228,9 +303,10 @@ void TciProtocol::enqueueLocalBroadcastVfo(int rxIndex, qint64 hz, bool isTxBoun
 // From Thetis sendTXFrequencyChanged at TCIServer.cs:2246-2259 [v2.10.3.13].
 void TciProtocol::enqueueLocalBroadcastTxFrequency(qint64 hz)
 {
+    const int txGate = static_cast<int>(TciUpdateGap::Gate::TxFrequency);
     const QString txKey   = QStringLiteral("tx_frequency");
     const QString txFrame = QStringLiteral("tx_frequency:%1;").arg(hz);
-    m_vfoCoalescer.update(txKey, txFrame);
+    m_vfoCoalescer.update(txKey, txFrame, txGate);
     // bespoke tx_frequency_thetis -- read the SAME rx2Enabled state used
     // by buildInitialRadioStateLines so the live broadcast doesn't flip
     // RX2 from true to false between init and the first VFO move (review
@@ -250,7 +326,7 @@ void TciProtocol::enqueueLocalBroadcastTxFrequency(qint64 hz)
             .arg(hz)
             .arg(band)
             .arg(rx2en ? QStringLiteral("true") : QStringLiteral("false"));
-    m_vfoCoalescer.update(txThetisKey, txThetisFrame);
+    m_vfoCoalescer.update(txThetisKey, txThetisFrame, txGate);
 }
 
 // From Thetis TCIServer.cs:2512-2552 [v2.10.3.13] — sendInitialisationData
@@ -804,15 +880,19 @@ QStringList TciProtocol::buildInitialRadioStateLines() const
     // From Thetis TCIServer.cs:2368-2383 [v2.10.3.13] — bSend gate.
     if (bSend) {
         // From Thetis TCIServer.cs:2370-2379 [v2.10.3.13]
-        lines << buildDdsLine(0, rx1FreqHz);
-        lines << buildDdsLine(1, rx2FreqHz);
-        lines << buildIfLine(0, 0, 0);
-        lines << buildIfLine(0, 1, 0);
+        // Task 12 (R-R3-49): dds is the centre and if the offset from it,
+        // through the same builders the live path uses. Thetis sendDDS(rx)
+        // reads CentreFrequency / CentreRX2Frequency (TCIServer.cs:2402-2410
+        // [v2.10.3.15]); the if sign divergence is at ifOffsetHz.
+        lines << buildDdsLineForRx(0);
+        lines << buildDdsLineForRx(1);
+        lines << buildIfLineForRx(0, 0);
+        lines << buildIfLineForRx(0, 1);
         // NereusSDR divergence (design doc §7 row 1): Thetis TCIServer.cs:2374-2375
         // [v2.10.3.13] calls sendIF(1,1) TWICE (copy-paste bug). We emit the intended
         // (1,0)+(1,1) cross-product instead, matching the sendVFO enumeration below.
-        lines << buildIfLine(1, 0, 0);
-        lines << buildIfLine(1, 1, 0);
+        lines << buildIfLineForRx(1, 0);
+        lines << buildIfLineForRx(1, 1);
         lines << buildVfoLine(0, 0, rx1FreqHz);
         lines << buildVfoLine(0, 1, rx1FreqHz);
         lines << buildVfoLine(1, 0, rx2FreqHz);
@@ -980,6 +1060,73 @@ QString TciProtocol::buildDdsLine(int rx, qint64 hz)
 QString TciProtocol::buildIfLine(int rx, int chan, qint64 offsetHz)
 {
     return QStringLiteral("if:%1,%2,%3;").arg(rx).arg(chan).arg(offsetHz);
+}
+
+// Task 12 (R-R3-49). See the declaration for the Thetis cites, the sign
+// divergence, and why neither DIG nor the //MW0LGE [2.9.0.7] CW pitch term
+// is in it.
+qint64 TciProtocol::ifOffsetHz(qint64 vfoHz, qint64 centreHz, int ritHz)
+{
+    return (vfoHz - centreHz) + ritHz;
+}
+
+namespace {
+// Whether the radio object offers an invokable. Test doubles offer a subset,
+// and invoking a missing method logs a warning on every drain.
+bool radioHas(const QObject* radio, const char* normalizedSignature)
+{
+    return radio != nullptr
+        && radio->metaObject()->indexOfMethod(normalizedSignature) >= 0;
+}
+} // namespace
+
+qint64 TciProtocol::readVfoHzForRx(int rx, int chan) const
+{
+    qint64 hz = 0;
+    if (!radioHas(m_radio, "vfoHz(int,int)")) {
+        return 0;
+    }
+    QMetaObject::invokeMethod(m_radio, "vfoHz",
+                              Qt::DirectConnection,
+                              Q_RETURN_ARG(qint64, hz),
+                              Q_ARG(int, rx),
+                              Q_ARG(int, chan));
+    return hz;
+}
+
+// The centre of receiver rx's stream. A radio object without a centre
+// accessor (a test double) has no pan, so its centre is its VFO.
+qint64 TciProtocol::readDdsHz(int rx) const
+{
+    qint64 hz = 0;
+    if (radioHas(m_radio, "ddsHz(int)")
+        && QMetaObject::invokeMethod(m_radio, "ddsHz",
+                                     Qt::DirectConnection,
+                                     Q_RETURN_ARG(qint64, hz),
+                                     Q_ARG(int, rx))) {
+        return hz;
+    }
+    return readVfoHzForRx(rx, 0);
+}
+
+QString TciProtocol::buildIfLineForRx(int rx, int chan) const
+{
+    int ritHz = 0;
+    if (radioHas(m_radio, "ritHzForRx(int)")) {
+        QMetaObject::invokeMethod(m_radio, "ritHzForRx",
+                                  Qt::DirectConnection,
+                                  Q_RETURN_ARG(int, ritHz),
+                                  Q_ARG(int, rx));
+    }
+    return buildIfLine(rx, chan,
+                       ifOffsetHz(readVfoHzForRx(rx, chan), readDdsHz(rx), ritHz));
+}
+
+QString TciProtocol::buildDdsLineForRx(int rx) const
+{
+    const qint64 dds = readDdsHz(rx);
+    m_lastBroadcastDdsHz.insert(rx, dds);
+    return buildDdsLine(rx, dds);
 }
 
 // From Thetis TCIServer.cs:2061-2095 [v2.10.3.13] — sendVFO format string.

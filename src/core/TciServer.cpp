@@ -59,6 +59,11 @@
 //                TCI level held gives the TX audio lock back and stops
 //                TX_CHRONO. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-25 - Receiver and transmit gaps plan, Task 12 (R-R3-49): a
+//                slice's frequency and centre changes send dds and if, and
+//                each line reaches an app's update gap with the gate its
+//                event named. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 
 #ifdef HAVE_WEBSOCKETS
 
@@ -737,16 +742,35 @@ void TciServer::wireSliceForBroadcast(SliceModel* slice, int sliceId)
     // are the one thing about Slice C the wire may legitimately hear, and
     // dropping them would mean a client following tx_frequency froze the
     // moment the operator handed TX to an internal slice and tuned it.
+    //
+    // Task 12 (R-R3-49): a tune is a VFO event (if + vfo) and, when it moved
+    // the pan with it, a centre event (dds + if) too. The centre event is
+    // queued on every tune and dropped at drain when the centre did not move,
+    // because which of the two a tune was is only known once RadioModel and
+    // the pan have settled the slice's offset.
     connect(slice, &SliceModel::frequencyChanged, this,
             [this, sliceId, exposed](double freq) {
                 const auto hz = static_cast<qint64>(freq);
                 if (exposed) {
                     m_protocol->enqueueLocalBroadcastVfo(
                         sliceId, hz, sliceDrivesTx(sliceId));
+                    m_protocol->enqueueLocalBroadcastCentre(sliceId);
                 } else if (sliceDrivesTx(sliceId)) {
                     m_protocol->enqueueLocalBroadcastTxFrequency(hz);
                 }
             });
+
+    // Task 12 (R-R3-49): the slice's offset from its stream centre moved (a
+    // pan drag, a pan that follows the VFO, a restream): a centre event,
+    // as Thetis's CentreFrequency setter fires CentreFrequencyHandlers
+    // (console.cs:10781-10789 [v2.10.3.15]) and TCIServer answers with
+    // dds and if (TCIServer.cs:7364-7388 [v2.10.3.15]).
+    if (exposed) {
+        connect(slice, &SliceModel::shiftOffsetHzChanged, this,
+                [this, sliceId](double) {
+                    m_protocol->enqueueLocalBroadcastCentre(sliceId);
+                });
+    }
 
     // Everything below this point is tagged with a receiver index, so it
     // stops at the advertised count.
@@ -2894,16 +2918,21 @@ void TciServer::onTextMessageReceived(const QString& msg)
 // (TCIServer.cs:750-758 [v2.10.3.15]).
 void TciServer::broadcastPendingNotifications()
 {
+    // Task 12 (R-R3-49): each line keeps the gate its event bound to it
+    // when it was queued, so an if line is never sorted by its neighbours.
     QStringList pending;
+    std::vector<std::optional<TciUpdateGap::Gate>> gates;
     while (m_protocol->hasPendingNotification()) {
-        pending << m_protocol->takePendingNotification();
+        TciProtocol::PendingLine line = m_protocol->takePendingLine();
+        pending << line.frame;
+        gates.push_back(line.gate);
     }
     if (pending.isEmpty()) {
         return;
     }
     const qint64 nowMs = m_gapClock.elapsed();
     for (auto sit = m_clients.cbegin(); sit != m_clients.cend(); ++sit) {
-        for (const QString& line : sit.value()->updateGap.offer(pending, nowMs)) {
+        for (const QString& line : sit.value()->updateGap.offer(pending, gates, nowMs)) {
             sit.value()->sendQueue.push(TciSendQueue::Priority::Control, line);
         }
     }

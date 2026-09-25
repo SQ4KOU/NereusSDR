@@ -14,6 +14,11 @@
 //                from TCPIPtciSocketListener VFOChange / CentreChange /
 //                TXFrequencyChange. AI-assisted transformation via
 //                Anthropic Claude Code.
+//   2026-09-25 - Receiver and transmit gaps plan, Task 12 (R-R3-49) by
+//                J.J. Boyd (KG4VCF): offer takes each line's gate from the
+//                event that queued it, so an if line never has its gate
+//                inferred from its position. AI-assisted transformation via
+//                Anthropic Claude Code.
 // =================================================================
 
 /*  TCIServer.cs
@@ -137,10 +142,15 @@ public:
     // line's gate also depends on the line before it; see gatesOf.
     static std::optional<Gate> gateOf(const QString& frame);
 
-    // The gate of each line of one tick. As gateOf, except that an if line
-    // straight after a dds line for the same receiver belongs to that
-    // centre event and so to the centre gate, as Thetis sends a centre
-    // change's dds and if together (TCIServer.cs:1378-1382 [v2.10.3.15]).
+    // The gate of each line of one tick, for lines that arrive without one.
+    // As gateOf, except that an if line straight after a dds line for the
+    // same receiver belongs to that centre event and so to the centre gate,
+    // as Thetis sends a centre change's dds and if together
+    // (TCIServer.cs:1378-1382 [v2.10.3.15]). Only the string-only offer
+    // below infers gates this way; TciServer passes the gate each event
+    // bound to its lines when it queued them (Task 12), because a merged
+    // coalescer slot or a line queued outside the coalescer breaks the
+    // adjacency (rereview of the fix wave, N2).
     static std::vector<std::optional<Gate>> gatesOf(const QStringList& frames);
 
     // The wire key a waiting frame is kept under: the command plus the
@@ -160,6 +170,12 @@ public:
     // lines to send now, in order. Lines of a gate whose gap has not passed
     // wait; lines outside the three gates always go.
     QStringList offer(const QStringList& frames, qint64 nowMs);
+
+    // As offer, with each line's gate given (gates.size() == frames.size()).
+    // A line with no gate given (nullopt) takes gateOf's answer, so an if
+    // line reaches the centre gate only when the centre event said so.
+    QStringList offer(const QStringList& frames,
+                      const std::vector<std::optional<Gate>>& gates, qint64 nowMs);
 
     // Waiting lines whose time has come (the Thetis one-shot Timer firing).
     QStringList takeDue(qint64 nowMs);

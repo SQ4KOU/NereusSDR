@@ -14,6 +14,11 @@
 //                from TCPIPtciSocketListener VFOChange / CentreChange /
 //                TXFrequencyChange. AI-assisted transformation via
 //                Anthropic Claude Code.
+//   2026-09-25 - Receiver and transmit gaps plan, Task 12 (R-R3-49) by
+//                J.J. Boyd (KG4VCF): offer takes each line's gate from the
+//                event that queued it, so an if line never has its gate
+//                inferred from its position. AI-assisted transformation via
+//                Anthropic Claude Code.
 // =================================================================
 
 /*  TCIServer.cs
@@ -187,8 +192,27 @@ QStringList TciUpdateGap::releaseWaiting(GateState& gate, const QStringList& ski
 
 QStringList TciUpdateGap::offer(const QStringList& frames, qint64 nowMs)
 {
+    return offer(frames, gatesOf(frames), nowMs);
+}
+
+QStringList TciUpdateGap::offer(const QStringList& frames,
+                                const std::vector<std::optional<Gate>>& givenGates,
+                                qint64 nowMs)
+{
+    // Task 12 (R-R3-49): the event that queued a line named its gate; a
+    // line that came without one falls back to its command.
+    std::vector<std::optional<Gate>> gates;
+    gates.reserve(static_cast<std::size_t>(frames.size()));
+    for (qsizetype i = 0; i < frames.size(); ++i) {
+        const auto idx = static_cast<std::size_t>(i);
+        if (idx < givenGates.size() && givenGates[idx].has_value()) {
+            gates.push_back(givenGates[idx]);
+        } else {
+            gates.push_back(gateOf(frames.at(i)));
+        }
+    }
+
     // Which gates this tick carries, and the keys it carries for each.
-    const std::vector<std::optional<Gate>> gates = gatesOf(frames);
     std::array<bool, kGateCount> present{};
     std::array<QStringList, kGateCount> keys;
     for (qsizetype i = 0; i < frames.size(); ++i) {

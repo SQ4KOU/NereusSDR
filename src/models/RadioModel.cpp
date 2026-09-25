@@ -17367,6 +17367,24 @@ qint64 RadioModel::vfoHz(int rx, int chan) const
     return static_cast<qint64>(slice->frequency());
 }
 
+qint64 RadioModel::ddsHz(int rx) const
+{
+    const SliceModel* slice = sliceById(rx);
+    if (!slice) {
+        return 0;
+    }
+    return static_cast<qint64>(std::llround(slice->frequency() - slice->shiftOffsetHz()));
+}
+
+int RadioModel::ritHzForRx(int rx) const
+{
+    const SliceModel* slice = sliceById(rx);
+    if (!slice || !slice->ritEnabled()) {
+        return 0;
+    }
+    return slice->ritHz();
+}
+
 void RadioModel::setMode(int rx, QString modeStr)
 {
     SliceModel* slice = sliceById(rx);

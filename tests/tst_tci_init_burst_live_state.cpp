@@ -115,11 +115,15 @@ void TestTciInitBurstLiveState::vfo_hz_drives_dds_and_vfo_lines()
     TciProtocol p(&mock);
     const QStringList burst = p.buildInitBurst();
 
-    // dds: per-slice 0/1 carries the seeded VFO-A frequency.
+    // dds: per-slice 0/1 carries the receiver's centre (Task 12, R-R3-49,
+    // as Thetis sendDDS reads CentreFrequency). This mock offers no centre,
+    // so it has no pan and its centre is its VFO, and each if is 0.
     QVERIFY2(burst.contains(QStringLiteral("dds:0,7150000;")),
-             "dds:0 should carry seeded RX1 VFO (40m)");
+             "dds:0 should carry RX1's centre, its VFO with no pan (40m)");
     QVERIFY2(burst.contains(QStringLiteral("dds:1,21250000;")),
-             "dds:1 should carry seeded RX2 VFO (15m)");
+             "dds:1 should carry RX2's centre, its VFO with no pan (15m)");
+    QVERIFY(burst.contains(QStringLiteral("if:0,0,0;")));
+    QVERIFY(burst.contains(QStringLiteral("if:1,1,0;")));
 
     // vfo: per-slice per-channel mirrors VFO A on both channels (NereusSDR
     // collapses VFO B onto the same slice; vfoHz(rx, chan) returns the slice

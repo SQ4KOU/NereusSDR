@@ -2992,6 +2992,18 @@ public slots:
     /// From Thetis TCIServer.cs:3793-3833 [v2.10.3.13] — handleVfo, query path.
     Q_INVOKABLE qint64 vfoHz(int rx, int chan) const;
 
+    /// The centre of the stream receiver `rx` sits on: its frequency minus
+    /// its offset from that centre (SliceModel::shiftOffsetHz). What TCI's
+    /// dds line carries, as Thetis's sendDDS reads CentreFrequency /
+    /// CentreRX2Frequency (TCIServer.cs:2402-2410 [v2.10.3.15]). 0 when no
+    /// such slice exists. Task 12, R-R3-49.
+    Q_INVOKABLE qint64 ddsHz(int rx) const;
+
+    /// Receiver `rx`'s RIT offset in Hz, 0 while RIT is off. Thetis folds
+    /// udRIT into RXOsc (console.cs:31457-31458 [v2.10.3.15]), so TCI's if
+    /// line carries it. Task 12, R-R3-49.
+    Q_INVOKABLE int ritHzForRx(int rx) const;
+
     /// Set demodulation mode for receiver `rx`.  `modeStr` is uppercase
     /// (LSB, USB, CWL, CWU, AM, FM, DIGL, DIGU, etc.).
     /// CWbecomesCWUabove10mhz transform from [2.10.3.6]MW0LGE fixes #365
