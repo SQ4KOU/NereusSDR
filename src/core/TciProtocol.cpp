@@ -192,7 +192,13 @@ void TciProtocol::drainCoalescedNotifications()
             if (unmovedCentres.contains(rx)) {
                 continue;
             }
-            frame = buildDdsLineForRx(rx);  // records it as the last sent
+            const qint64 dds = readDdsHz(rx);
+            frame = buildDdsLine(rx, dds);
+            // The drain is the only writer of the record: it sends to every
+            // app, so it is the only sender whose dds every app has seen.
+            // An init burst goes to one new app and must not stand in for
+            // the others (whole-branch review M3, R-R3-49).
+            m_lastBroadcastDdsHz.insert(rx, dds);
         } else if (e.key.startsWith(QLatin1String("if:"))) {
             // Key shape: if:<rx>,<chan>@<event>.
             const qsizetype at = e.key.indexOf(QLatin1Char('@'));
@@ -1124,9 +1130,7 @@ QString TciProtocol::buildIfLineForRx(int rx, int chan) const
 
 QString TciProtocol::buildDdsLineForRx(int rx) const
 {
-    const qint64 dds = readDdsHz(rx);
-    m_lastBroadcastDdsHz.insert(rx, dds);
-    return buildDdsLine(rx, dds);
+    return buildDdsLine(rx, readDdsHz(rx));
 }
 
 // From Thetis TCIServer.cs:2061-2095 [v2.10.3.13] — sendVFO format string.

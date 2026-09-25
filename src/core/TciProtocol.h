@@ -610,7 +610,9 @@ private:
     // receiver rx's vfo, centre and RIT and formats the line.
     QString buildIfLineForRx(int rx, int chan) const;
 
-    // The one dds builder: receiver rx's centre, read from the radio.
+    // Receiver rx's dds line, its centre read from the radio. The init burst
+    // uses it; the drain reads the same readDdsHz so it can record what it
+    // sent (m_lastBroadcastDdsHz).
     QString buildDdsLineForRx(int rx) const;
     // From Thetis TCIServer.cs:2061-2095 [v2.10.3.13] — sendVFO format string.
     static QString buildVfoLine(int rx, int chan, qint64 hz);
@@ -782,10 +784,13 @@ private:
     // Lines drained from the coalescer, each with its event's gate (Task
     // 12). Taken after m_pendingNotifications, the order the one list had.
     QList<PendingLine> m_pendingDrained;
-    // The centre last sent as dds per receiver, by the init burst or the
-    // live path, so a centre event that moved nothing sends nothing.
-    // Mutable because buildInitialRadioStateLines is const and sends dds.
-    mutable QHash<int, qint64> m_lastBroadcastDdsHz;
+    // The centre the drain last sent as dds per receiver, so a centre event
+    // that moved nothing sends nothing. Written by the drain only: the drain
+    // reaches every app, while an init burst reaches one new app, and
+    // letting the burst write here hid a pending move from every app already
+    // connected (whole-branch review M3, R-R3-49). Thetis keeps the same
+    // state per socket, so one app's connect cannot touch another's.
+    QHash<int, qint64> m_lastBroadcastDdsHz;
     qint64 readDdsHz(int rx) const;
     qint64 readVfoHzForRx(int rx, int chan) const;
     // Phase 15: coalescer for rapid VFO updates (Layer 3 of Thetis 3-layer
