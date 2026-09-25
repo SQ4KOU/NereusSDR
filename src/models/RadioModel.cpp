@@ -6244,6 +6244,11 @@ void RadioModel::requestDdcAssignment()
     // retune, removal) and it lines up with design §10's trigger matrix rows
     // for slice created / destroyed / retuned-across-band.
     republishAlexAdcSlices();
+
+    // Plan Task 14: the VFO each hardware slot serves, for the OC band. The
+    // same events move it: a bind, a removal, and every VFO tick
+    // (frequencyChanged -> bindSliceToStream -> requestDdcAssignment).
+    republishReceiverVfoFrequencies();
 }
 
 bool RadioModel::sampleRateIsRadioWide() const
@@ -16408,6 +16413,9 @@ void RadioModel::onConnectionStateChanged(ConnectionState state)
         // reconnect, so the fresh connection has to be told which chain is
         // filtered and which is wide before the first tune moves anything.
         republishAlexAdcSlices();
+        // Plan Task 14: and which VFO each receiver slot serves, for the OC
+        // band.
+        republishReceiverVfoFrequencies();
         // RF-SAFETY: and the transmit low-pass, for the same reason. A fresh
         // P2RadioConnection starts with m_alex.lpfBitsTx at its 6 m default
         // and only setTxFrequency ever moves it, so without a push here the
@@ -18928,6 +18936,61 @@ void RadioModel::flushRemoteDspOptionsApply()
             emit dspChangeMeasured(elapsed);
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// republishReceiverVfoFrequencies (plan Task 14)
+//
+// Thetis selects the OC outputs from the band of a VFO frequency, never
+// from a DDC centre:
+//   From Thetis console.cs:45950-45951 [v2.10.3.15]
+//     Band lo_band = BandByFreq(XVTRForm.TranslateFreq(VFOAFreq), rx1_xvtr_index, current_region);
+//     Band lo_bandb = BandByFreq(XVTRForm.TranslateFreq(VFOBFreq), rx2_xvtr_index, current_region);
+//
+//     if (penny_ext_ctrl_enabled) //MW0LGE_21k
+// The connection knows each slot's DDC centre (hardwareFrequencyChanged)
+// but not which slice VFO that slot serves, and under CTUN the two can name
+// different bands near an edge. This hands it the VFO of the slice on each
+// live slot, indexed by the slot ReceiverManager routed the slice's stream
+// to (the same index hardwareSlotsChanged reports). Several slices can share
+// one stream; the lowest slice letter speaks for the slot, as VFO A does for
+// Thetis's RX1. A slot with no slice gets 0.
+// ---------------------------------------------------------------------------
+void RadioModel::republishReceiverVfoFrequencies()
+{
+    if (m_connection == nullptr || m_receiverManager == nullptr) {
+        return;
+    }
+
+    QVector<quint64> vfoHz;
+    QVector<int> speaker;   // slice index holding each slot's entry
+    for (SliceModel* s : std::as_const(m_slices)) {
+        if (s == nullptr || s->streamIndex() < 0) {
+            continue;
+        }
+        const ReceiverConfig cfg = m_receiverManager->receiverConfig(s->streamIndex());
+        const int slot = cfg.hardwareRx;
+        if (!cfg.active || slot < 0 || slot >= 32) {
+            continue;
+        }
+        const double hz = s->frequency();
+        if (!std::isfinite(hz) || hz <= 0.0) {
+            continue;
+        }
+        if (vfoHz.size() <= slot) {
+            vfoHz.resize(slot + 1, 0);
+            speaker.resize(slot + 1, -1);
+        }
+        if (speaker.at(slot) < 0 || s->sliceIndex() < speaker.at(slot)) {
+            speaker[slot] = s->sliceIndex();
+            vfoHz[slot] = static_cast<quint64>(std::llround(hz));
+        }
+    }
+
+    RadioConnection* conn = m_connection;
+    QMetaObject::invokeMethod(conn, [conn, vfoHz]() {
+        conn->setReceiverVfoFrequencies(vfoHz);
+    });
 }
 
 // ---------------------------------------------------------------------------

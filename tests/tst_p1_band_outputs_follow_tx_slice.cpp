@@ -209,6 +209,34 @@ private slots:
         s.conn.setMox(false);
         QCOMPARE(ocByte(s.conn), s.oc.maskFor(Band::Band40m, /*tx=*/false));
     }
+
+    // ── The band comes from the VFO, not the DDC centre ──────────────────
+    //
+    // With CTUN the DDC centre can sit outside the band the VFO is in. Here
+    // slice A's VFO is inside 20 m while its stream is centred below 14 MHz.
+    // Thetis's band is BandByFreq(VFOAFreq), the VFO.
+    void unkeyed_bandIsTheVfosNotTheCentres_data()
+    {
+        keyed_afterAIsClosed_followsB_data();
+    }
+    void unkeyed_bandIsTheVfosNotTheCentres()
+    {
+        QFETCH(int, board);
+        Session s{HPSDRHW(board)};
+
+        constexpr double kVfoHz    = 14010000.0;   // 20 m
+        constexpr double kCentreHz = 13950000.0;   // below the 20 m edge
+        QCOMPARE(bandFromFrequency(kVfoHz), Band::Band20m);
+        QVERIFY(bandFromFrequency(kCentreHz) != Band::Band20m);
+        QVERIFY(s.oc.maskFor(bandFromFrequency(kCentreHz), /*tx=*/false)
+                != s.oc.maskFor(Band::Band20m, /*tx=*/false));
+
+        const int a = s.add(kVfoHz);
+        QVERIFY(s.model.requestStreamCentre(a, kCentreHz));
+        QCOMPARE(s.model.sliceById(a)->frequency(), kVfoHz);
+
+        QCOMPARE(ocByte(s.conn), s.oc.maskFor(Band::Band20m, /*tx=*/false));
+    }
 };
 
 QTEST_MAIN(TestP1BandOutputsFollowTxSlice)

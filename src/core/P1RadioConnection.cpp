@@ -1583,13 +1583,36 @@ quint8 P1RadioConnection::effectiveAlexLpfBits() const
 // A transmit frequency of 0 has never been pushed; the radio cannot be
 // transmitting RF on it, and the receive band is kept rather than a band
 // the transmitter is not on.
+//
+// Unkeyed, the band is the RX1 stand-in's VFO frequency, not its DDC
+// centre. Thetis's band is the VFO's:
+//   From Thetis console.cs:29101-29106 [v2.10.3.15] (HdwMOXChanged)
+//     Band lo_band = BandByFreq(XVTRForm.TranslateFreq(VFOAFreq), rx1_xvtr_index, current_region);
+//     Band lo_bandb = BandByFreq(XVTRForm.TranslateFreq(VFOBFreq), rx2_xvtr_index, current_region);
+//     if (penny_ext_ctrl_enabled) //MW0LGE_21k
+//     {
+//         int bits = Penny.getPenny().UpdateExtCtrl(lo_band, lo_bandb, _mox, _tuning, SetupForm.TestIMD, chkExternalPA.Checked); //MW0LGE_21j
+// and under CTUN the centre can sit in another band than the VFO. A slot
+// whose VFO has not been told keeps its centre.
 // ---------------------------------------------------------------------------
 quint64 P1RadioConnection::ocBandFrequencyHz() const
 {
     if (m_mox && m_txFreqHz != 0) {
         return m_txFreqHz;
     }
-    return m_rxFreqHz[m_rx1Slot];
+    return (m_rxVfoHz[m_rx1Slot] != 0) ? m_rxVfoHz[m_rx1Slot] : m_rxFreqHz[m_rx1Slot];
+}
+
+// ---------------------------------------------------------------------------
+// setReceiverVfoFrequencies: each frame slot's slice VFO, for the OC band
+// (ocBandFrequencyHz). Slots past the vector, or past the seven this
+// connection carries, are 0.
+// ---------------------------------------------------------------------------
+void P1RadioConnection::setReceiverVfoFrequencies(const QVector<quint64>& vfoHzBySlot)
+{
+    for (int slot = 0; slot < 7; ++slot) {
+        m_rxVfoHz[slot] = (slot < vfoHzBySlot.size()) ? vfoHzBySlot.at(slot) : 0;
+    }
 }
 
 // ---------------------------------------------------------------------------

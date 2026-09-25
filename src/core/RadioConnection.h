@@ -228,6 +228,13 @@ public slots:
     // Non-pure so existing test mocks compile unchanged; P1 overrides.
     virtual void setLiveReceiverSlots(quint32 /*slotMask*/) {}
 
+    // The VFO frequency of the slice each hardware receiver slot serves,
+    // indexed by slot (0 = no slice, or not told). The OC outputs take their
+    // band from a VFO, not from a DDC centre, which differs under CTUN
+    // (Thetis: BandByFreq(VFOAFreq), plan Task 14). Non-pure so existing
+    // test mocks compile unchanged; P1 and P2 override.
+    virtual void setReceiverVfoFrequencies(const QVector<quint64>& /*vfoHzBySlot*/) {}
+
     // --- Hardware Control ---
     virtual void setAttenuator(int dB) = 0;
     virtual void setPreamp(bool enabled) = 0;

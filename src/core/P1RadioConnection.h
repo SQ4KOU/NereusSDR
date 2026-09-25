@@ -211,6 +211,7 @@ public slots:
     // while PureSignal transmits) leaves the stand-in where it was, so the
     // filters do not move for a state that lasts one transmission.
     void setLiveReceiverSlots(quint32 slotMask) override;
+    void setReceiverVfoFrequencies(const QVector<quint64>& vfoHzBySlot) override;
 
     void setSampleRate(int sampleRate) override;
 
@@ -697,6 +698,9 @@ private:
     int     m_micDecimationCount{0};
 
     quint64 m_rxFreqHz[7]{};
+    // Each slot's slice VFO frequency (setReceiverVfoFrequencies). 0 = not
+    // told, and the band falls back to the slot's DDC centre above.
+    quint64 m_rxVfoHz[7]{};
     quint64 m_txFreqHz{0};
     // THREAD SAFETY: written only from the connection thread; every compose
     // function and fillTxZone() read it there too.

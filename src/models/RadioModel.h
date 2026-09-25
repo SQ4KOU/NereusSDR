@@ -4206,6 +4206,14 @@ public:
     /// made the first one deaf.
     void republishAlexAdcSlices();
 
+    /// Plan Task 14: tell the connection the VFO frequency of the slice each
+    /// hardware receiver slot serves, so the OC outputs take their band from
+    /// a VFO (Thetis BandByFreq(VFOAFreq)) and not from a DDC centre, which
+    /// differs under CTUN. Where several slices share a slot, the lowest
+    /// slice letter speaks for it, as VFO A does in Thetis. Runs on the same
+    /// triggers as republishAlexAdcSlices.
+    void republishReceiverVfoFrequencies();
+
     /// Phase 3F Sub-Epic I closeout, defect H1: put the DSP side of the pool
     /// back in step with the allocator after anything moves a stream's rate
     /// or moves a slice between streams.
