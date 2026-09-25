@@ -129,7 +129,7 @@ namespace {
 // The widget's ordering pass without its selection bookkeeping (a curve
 // here has no selected or dragged point). From Thetis
 // ucParametricEq.cs:3223-3312 [v2.10.3.15], allowPointReorder true (as
-// eqform.cs:930 sets it for the TX EQ panel).
+// eqform.cs:946 [v2.10.3.15] sets it for the TX EQ panel).
 void enforceOrdering(Curve& c, double minPointSpacingHz, bool enforceSpacingAll)
 {
     QVector<Point>& pts = c.points;
@@ -220,7 +220,7 @@ double txEqResponseDb(const Curve& curve, double frequencyHz)
 
 // From Thetis ucParametricEq.cs:1488-1573 [v2.10.3.15] (LoadFromJson),
 // loading into the TX EQ panel's widget as TxEqDialog builds it: ten flat
-// bands from 0 to 2700 Hz (eqform.cs:928-967), parametric on.
+// bands from 0 to 2700 Hz (eqform.cs:946-970 [v2.10.3.15]), parametric on.
 bool loadTxEqCurve(const QString& json, Curve& out)
 {
     if (json.trimmed().isEmpty()) { return false; }
@@ -299,7 +299,7 @@ bool txEqCurveFromParaEqData(const QString& paraEqData, Curve& out)
 {
     if (paraEqData.isEmpty()) { return false; }
     // As TxEqDialog::syncParametricFromModel: the Thetis envelope
-    // (eqform.cs:3269-3271, Common.cs:1764-1790 [v2.10.3.15]), or raw JSON
+    // (eqform.cs:3272-3274, Common.cs:1764-1790 [v2.10.3.15]), or raw JSON
     // saved by an early build before the envelope.
     const std::optional<QString> decoded = ParaEqEnvelope::decode(paraEqData);
     if (decoded.has_value()) {

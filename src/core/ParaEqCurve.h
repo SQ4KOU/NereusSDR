@@ -136,17 +136,17 @@ struct Curve {
     double frequencyMaxHz = 2700.0;
 };
 
-// The TX EQ panel's widget limits. From Thetis eqform.cs:928-967
+// The TX EQ panel's widget limits. From Thetis eqform.cs:946-970
 // [v2.10.3.15] (ucParametricEq1's property block); TxEqDialog applies
 // the same values to its widget.
-inline constexpr double kTxEqDbMin               = -24.0;   // cs:944
-inline constexpr double kTxEqDbMax               =  24.0;   // cs:943
-inline constexpr double kTxEqMinHz               =   0.0;   // cs:947
-inline constexpr double kTxEqMaxHz               = 2700.0;  // cs:946
-inline constexpr double kTxEqQMin                =   0.2;   // cs:954
-inline constexpr double kTxEqQMax                =  20.0;   // cs:953
-inline constexpr double kTxEqGlobalGainDb        =   0.0;   // cs:948
-inline constexpr double kTxEqMinPointSpacingHz   =   5.0;   // cs:950
+inline constexpr double kTxEqDbMin               = -24.0;   // cs:960
+inline constexpr double kTxEqDbMax               =  24.0;   // cs:959
+inline constexpr double kTxEqMinHz               =   0.0;   // cs:963
+inline constexpr double kTxEqMaxHz               = 2700.0;  // cs:962
+inline constexpr double kTxEqQMin                =   0.2;   // cs:970
+inline constexpr double kTxEqQMax                =  20.0;   // cs:969
+inline constexpr double kTxEqGlobalGainDb        =   0.0;   // cs:964
+inline constexpr double kTxEqMinPointSpacingHz   =   5.0;   // cs:966
 inline constexpr int    kTxEqBandCount           = 10;      // TxEqDialog default
 
 // From Thetis ucParametricEq.cs:2983-2988 [v2.10.3.15].
