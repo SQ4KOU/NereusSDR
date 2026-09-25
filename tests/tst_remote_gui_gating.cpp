@@ -3744,8 +3744,10 @@ private slots:
     // ====================================================================
     // R-R3-21 fix wave: the RF-Kit RF2K-S applet. A Core with RF-Kit
     // enabled shows it in a remote window (rfKitEnabled is mirrored).
-    // OPERATE and the antenna buttons wait for remote transmit;
-    // Disconnect/Reconnect ask the Core, which owns the amp (R-R3-22).
+    // On a Core below remoteRfKitControlVersion 4, OPERATE and the antenna
+    // buttons stay greyed with the older reason; from version 4 they ask
+    // the Core (parity Task 10). Disconnect/Reconnect ask the Core, which
+    // owns the amp (R-R3-22).
     // ====================================================================
     void remoteRfKitAppletControlsAreUnavailable()
     {

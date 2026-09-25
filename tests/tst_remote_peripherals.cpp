@@ -213,6 +213,16 @@ public:
         tgxlRequests.append(QStringLiteral("bypass %1").arg(on ? 1 : 0));
         return {true, {}};
     }
+    // Group B fix wave (M1): the saved address (remoteTgxlControlVersion 4).
+    bool tgxlFull{false};
+    int tgxlAddressCalls{0};
+    bool tgxlFullControlAvailable() const override { return tgxlControl && tgxlFull; }
+    CommandOutcome requestTgxlAddress(const QString& host, int port) override
+    {
+        if (!tgxlFullControlAvailable()) { return IStationLink::requestTgxlAddress(host, port); }
+        ++tgxlAddressCalls;
+        return {true, {}};
+    }
 
     CommandOutcome requestFourO3AEnabled(bool enabled) override
     {
@@ -592,6 +602,7 @@ private slots:
     void remoteWindowOperatesTheRfKitThroughTheCore();
     void olderCoreLeavesTheRfKitSwitchesGreyed();
     void localRfKitPageShowsTheRemoteReadings();
+    void pageThatOutlivesItsModelSendsNothing();
 };
 
 void RemotePeripheralsTest::remoteParentPageExposesOnlyStationBackedControls()
@@ -4566,6 +4577,32 @@ void RemotePeripheralsTest::localRfKitPageShowsTheRemoteReadings()
         R"(PUT /operational-interface {"operational_interface":"TCI"})")));
     local.rfKitConnection()->disconnect();
     AppSettings::instance().clear();
+}
+
+// Group B fix wave (M1): RadioModel is MainWindow's first child, so at quit
+// it goes before a Setup dialog that is still open. A remote window's
+// Peripherals page with an unsent Tuner Genius address then sends
+// nothing from its destructor: the model it would ask is gone.
+void RemotePeripheralsTest::pageThatOutlivesItsModelSendsNothing()
+{
+    RecordingTgxlLink link;
+    link.linkReady = true;
+    link.available = true;
+    link.tgxlControl = true;
+    link.tgxlFull = true;
+    auto model = std::make_unique<RadioModel>(RadioModel::Role::Remote);
+    model->attachStation(&link);
+    auto page = std::make_unique<PeripheralsPage>(model.get());
+    model->reportStationLinkStateChanged();
+    auto* host = page->findChild<QLineEdit*>(QStringLiteral("tgxlHostEdit"));
+    QVERIFY(host);
+    QTest::keyClicks(host, QStringLiteral("192.0.2.5"));
+    QVERIFY(host->text().contains(QStringLiteral("192.0.2.5")));
+
+    model.reset();
+    QVERIFY(!page->hasModelForTest());
+    page.reset();
+    QCOMPARE(link.tgxlAddressCalls, 0);
 }
 
 QTEST_MAIN(RemotePeripheralsTest)

@@ -239,6 +239,10 @@ public:
     explicit PeripheralsPage(RadioModel* model, QWidget* parent = nullptr);
     ~PeripheralsPage() override;
 
+    // Group B fix wave (M1): whether the page still has its RadioModel.
+    // False once the model is gone, so nothing asks it again.
+    bool hasModelForTest() const { return !m_model.isNull(); }
+
 protected:
     // R-R3-49 (parity Task 8): Setup closing (or the tab changing) sends a
     // remote window's unsent Tuner Genius Host or Port to the Core
@@ -269,7 +273,10 @@ private:
     void refreshRemotePgxlRow();
     bool isRemoteMode() const;
 
-    RadioModel*   m_model{nullptr};
+    // Group B fix wave (M1): held weakly. RadioModel is MainWindow's first
+    // child, so it goes before a Setup dialog still open at quit, and the
+    // destructor's unsent-address flush must then find it gone.
+    QPointer<RadioModel> m_model;
     QGridLayout*  m_grid{nullptr};
 
     // Per-row status labels; indexed by row (0 = TGXL, 1 = PGXL).

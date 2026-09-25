@@ -28,6 +28,7 @@
 #include "core/AppSettings.h"
 #include "core/LanDiscovery.h"
 #include "core/MoxController.h"
+#include "core/StationTgxlController.h"
 #include "core/TwoToneController.h"
 #include "core/TxChannel.h"
 #include "models/AccessorySettingsModel.h"
@@ -47,6 +48,15 @@ class TgxlStationIdentityTest : public QObject {
         model.setLastRadioInfoForTest(radio);
         model.setConnectionStateForTest(ConnectionState::Connected);
         model.setPeripheralValue(QStringLiteral("FourO3A_Enabled"), QStringLiteral("True"));
+    }
+    // The Core's identity listener, a child of its StationTgxlController.
+    // Looked up through the controller, never the model, since a window's
+    // Scan LAN adds a LanDiscovery (tgxlLanScan) to the model itself
+    // (group B fix wave, M3).
+    static LanDiscovery* identityDiscovery(RadioModel& model)
+    {
+        auto* controller = model.findChild<StationTgxlController*>();
+        return controller ? controller->findChild<LanDiscovery*>() : nullptr;
     }
     static void announce(LanDiscovery* discovery, quint16 port,
                          const QString& product, const QString& serial)
@@ -205,7 +215,7 @@ private slots:
         auto* peer = server.nextPendingConnection();
         peer->write("V1.2.17\n"); peer->flush();
         QTRY_VERIFY_WITH_TIMEOUT(infoSequence(frames) != 0, 1500);
-        auto* discovery = model.findChild<LanDiscovery*>();
+        auto* discovery = identityDiscovery(model);
         QVERIFY(discovery);
         sendInfo(peer, infoSequence(frames), QStringLiteral("241288-1"));
         QTRY_COMPARE(model.tgxlConnection()->identityInfo().serial, QStringLiteral("241288-1"));
@@ -245,7 +255,7 @@ private slots:
         auto* peer = server.nextPendingConnection();
         peer->write("V1.2.17\n"); peer->flush();
         QTRY_VERIFY(infoSequence(frames) != 0);
-        auto* discovery = model.findChild<LanDiscovery*>(); QVERIFY(discovery);
+        auto* discovery = identityDiscovery(model); QVERIFY(discovery);
         sendInfo(peer, infoSequence(frames), QStringLiteral("241288-1"));
         QTRY_VERIFY(!model.tgxlConnection()->identityInfo().serial.isEmpty());
         announce(discovery, server.serverPort(), product, serial);
@@ -276,7 +286,7 @@ private slots:
         auto* peer = server.nextPendingConnection();
         peer->write("V1.2.17\n"); peer->flush();
         QTRY_VERIFY(infoSequence(frames) != 0);
-        auto* discovery = model.findChild<LanDiscovery*>(); QVERIFY(discovery);
+        auto* discovery = identityDiscovery(model); QVERIFY(discovery);
         sendInfo(peer, infoSequence(frames), QStringLiteral("241288-1"));
         QTRY_VERIFY(!model.tgxlConnection()->identityInfo().serial.isEmpty());
         announce(discovery, server.serverPort() == 9010 ? 9008 : 9010,
@@ -314,7 +324,7 @@ private slots:
         auto* peer = server.nextPendingConnection();
         peer->write("V1.2.17\n"); peer->flush();
         QTRY_VERIFY(infoSequence(frames) != 0);
-        auto* discovery = model.findChild<LanDiscovery*>();
+        auto* discovery = identityDiscovery(model);
         QVERIFY(discovery);
         sendInfo(peer, infoSequence(frames), QStringLiteral("241288-1"));
         QTRY_COMPARE(model.tgxlConnection()->identityInfo().serial,
@@ -398,7 +408,7 @@ private slots:
         auto* peer = server.nextPendingConnection();
         peer->write("V1.2.17\n"); peer->flush();
         QTRY_VERIFY_WITH_TIMEOUT(infoSequence(frames) != 0, 3000);
-        auto* discovery = model.findChild<LanDiscovery*>();
+        auto* discovery = identityDiscovery(model);
         QVERIFY(discovery);
         sendInfo(peer, infoSequence(frames), QStringLiteral("241288-1"));
         QTRY_VERIFY(!model.tgxlConnection()->identityInfo().serial.isEmpty());
@@ -429,7 +439,7 @@ private slots:
         auto* oldPeer = oldServer.nextPendingConnection();
         oldPeer->write("V1.2.17\n"); oldPeer->flush();
         QTRY_VERIFY(infoSequence(frames) != 0);
-        QPointer<LanDiscovery> oldDiscovery = model.findChild<LanDiscovery*>(); QVERIFY(oldDiscovery);
+        QPointer<LanDiscovery> oldDiscovery = identityDiscovery(model); QVERIFY(oldDiscovery);
         const auto oldToken = model.tgxlConnection()->socketAttemptToken();
         const auto oldSequence = infoSequence(frames);
         QVERIFY(model.configureTgxlForStation(QStringLiteral("127.0.0.1"), newServer.serverPort(), &reason));
@@ -447,7 +457,7 @@ private slots:
         peer->write("V1.2.17\n"); peer->flush();
         QTRY_VERIFY(infoSequence(frames) != 0);
         QTRY_VERIFY(oldDiscovery.isNull());
-        auto* discovery = model.findChild<LanDiscovery*>(); QVERIFY(discovery);
+        auto* discovery = identityDiscovery(model); QVERIFY(discovery);
         sendInfo(peer, infoSequence(frames), QStringLiteral("241288-1"));
         QTRY_VERIFY(!model.tgxlConnection()->identityInfo().serial.isEmpty());
         QVERIFY(!model.tunerModel()->hasDirectConnection());
@@ -478,7 +488,7 @@ private slots:
         auto* peer = server.nextPendingConnection();
         peer->write("V1.2.17\n"); peer->flush();
         QTRY_VERIFY_WITH_TIMEOUT(infoSequence(frames) != 0, 1500);
-        auto* discovery = model.findChild<LanDiscovery*>();
+        auto* discovery = identityDiscovery(model);
         QVERIFY(discovery);
         sendInfo(peer, infoSequence(frames), QStringLiteral("241288-1"));
         QTRY_COMPARE(model.tgxlConnection()->identityInfo().serial, QStringLiteral("241288-1"));
@@ -611,7 +621,7 @@ private slots:
         auto* peer = server.nextPendingConnection();
         peer->write("V1.2.17\n"); peer->flush();
         QTRY_VERIFY_WITH_TIMEOUT(infoSequence(frames) != 0, 1500);
-        auto* discovery = model.findChild<LanDiscovery*>();
+        auto* discovery = identityDiscovery(model);
         QVERIFY(discovery);
         sendInfo(peer, infoSequence(frames), QStringLiteral("241288-1"));
         QTRY_COMPARE(model.tgxlConnection()->identityInfo().serial, QStringLiteral("241288-1"));
@@ -821,7 +831,7 @@ private slots:
         auto* peer = server.nextPendingConnection();
         peer->write("V1.2.17\n"); peer->flush();
         QTRY_VERIFY_WITH_TIMEOUT(infoSequence(frames) != 0, 1500);
-        auto* discovery = model.findChild<LanDiscovery*>();
+        auto* discovery = identityDiscovery(model);
         QVERIFY(discovery);
         sendInfo(peer, infoSequence(frames), QStringLiteral("241288-1"));
         announce(discovery, server.serverPort(), QStringLiteral("TunerGeniusXL"),
@@ -976,7 +986,7 @@ private slots:
         QTRY_VERIFY(server.hasPendingConnections());
         auto* peer = server.nextPendingConnection();
         peer->write("V1.2.17\n"); peer->flush();
-        QTRY_VERIFY(model.findChild<LanDiscovery*>());
+        QTRY_VERIFY(identityDiscovery(model));
         const auto token = model.tgxlConnection()->socketAttemptToken();
         if (action == 0) { QVERIFY(model.disconnectTgxlForStation(&reason)); }
         if (action == 1) { model.setFourO3AEnabled(false); }
