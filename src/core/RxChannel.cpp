@@ -40,6 +40,10 @@
 //                 and ModelPaths without a load. NereusSDR-original, by
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-25 - R-R3-49, Sub-epic C-1: dfnrUnavailable reports a first
+//                 DFNR selection whose model is missing or failed to load.
+//                 NereusSDR-original, by J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1622,12 +1626,14 @@ void RxChannel::ensureDfnrOnLane(NrSlot slot)
             qCWarning(lcDsp) << "DFNR not available on channel" << m_channelId
                              << "(model not found)";
             m_dfnrUnavailable.store(true, std::memory_order_release);
+            emit dfnrUnavailable(true);
         } else {
             auto instance = std::make_unique<NereusSDR::DeepFilterFilter>();
             if (!instance->isValid()) {
                 qCWarning(lcDsp) << "DFNR not available on channel" << m_channelId
                                  << "(model failed to load)";
                 m_dfnrUnavailable.store(true, std::memory_order_release);
+                emit dfnrUnavailable(false);
             } else {
                 m_dfnr = std::move(instance);
                 // Publish before any flag can be set (release pairs with the

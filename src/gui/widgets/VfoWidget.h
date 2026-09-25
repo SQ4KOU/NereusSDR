@@ -27,6 +27,9 @@
 //                 block (VAX design 6.2), with a plain notice when the
 //                 headphones are chosen but none are set up. By J.J. Boyd
 //                 (KG4VCF), with Anthropic Claude Code assistance.
+//   2026-09-25 : R-R3-49, Sub-epic C-1 DFNR hidden while it cannot run
+//                 (dfnrOffered, updateDfnrAvailability), by J.J. Boyd
+//                 (KG4VCF), with Anthropic Claude Code assistance.
 // =================================================================
 
 //=================================================================
@@ -522,6 +525,8 @@ public:
     QPushButton* playButtonForTest() const { return m_playBtn; }
     // Fix wave I3: the last refused noise-reducer choice this flag showed.
     QString nrRefusalForTest() const { return m_nrRefusal; }
+    // R-R3-49: the DSP grid's DFNR button (hidden while DFNR cannot run).
+    QPushButton* dfnrButtonForTest() const { return m_dfnrBtn; }
 
     int sliceIndex() const { return m_sliceIndex; }
 
@@ -693,6 +698,11 @@ private:
     void onNnrLimitChanged(int limit);
     void requestNrSetup(NereusSDR::NrSlot slot);
     void showDfnrPopup(const QPoint& globalPos);
+    // R-R3-49, Sub-epic C-1: whether DFNR is offered (the model's
+    // dfnrRunnable, or this build's HAVE_DFNR with no model), and applying
+    // it to the DSP grid's button.
+    bool dfnrOffered() const;
+    void updateDfnrAvailability();
     void showBnrPopup(const QPoint& globalPos);
     void showMnrPopup(const QPoint& globalPos);
 
@@ -708,6 +718,7 @@ private:
     // setRadioModel(); the contextMenuEvent falls back to a stub antenna submenu
     // when null. See setRadioModel() above for the wiring contract.
     NereusSDR::RadioModel* m_radioModel{nullptr};
+    QMetaObject::Connection m_dfnrAvailabilityConn;   // R-R3-49
 
     // Internal helper — update m_locked + drive Close-strip lock button + emit lockChanged.
     // Called by the floating m_lockBtn toggled lambda.  X/RIT-tab Lock removed (B7).

@@ -68,6 +68,10 @@
 //                                    arguments may be left out of either
 //                                    leg's check (setPgxlHardware).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49: the DFNR model is hidden
+//                                    too, so dfnrRunnable is false on
+//                                    every machine. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -85,6 +89,7 @@
 #include <memory>
 #include <vector>
 
+#include "core/ModelPaths.h"
 #include "core/AppSettings.h"
 #include "core/ConnectionState.h"
 #include "core/StepAttenuatorController.h"
@@ -598,6 +603,10 @@ void TstLinkConformanceSession::initTestCase()
     // decides what the dspAssets object says about them. Fixtures are the
     // same on every machine, so none is found here.
     DspAssetService::setBundledNr3ModelPathsForTest([](const QString&) { return QString(); });
+    // R-R3-49: likewise the DFNR model, so dfnrRunnable is false on every
+    // machine. Its reason names what is missing (the model, or DFNR in this
+    // build), so the fixtures match it as any string.
+    ModelPaths::setDfnrModelTarballForTest(QString());
 
     QString error;
     m_manifest = LinkFixtures::readObject(
@@ -608,6 +617,7 @@ void TstLinkConformanceSession::initTestCase()
 void TstLinkConformanceSession::cleanupTestCase()
 {
     DspAssetService::setBundledNr3ModelPathsForTest({});
+    ModelPaths::clearDfnrModelTarballForTest();
     const QString path = AppSettings::instance().filePath();
     QFile::remove(path);
     QFile::remove(path + QStringLiteral(".bak"));

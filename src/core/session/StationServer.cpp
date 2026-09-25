@@ -171,6 +171,9 @@
 //                                    (setTgxlOperate on puts the tuner in
 //                                    OPERATE whole).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49, Sub-epic C-1: dspAssetVersion 3 (DspAssetService
+//                sends dfnrRunnable and dfnrModelStatus). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -2415,7 +2418,9 @@ StationCapabilities StationServer::buildCapabilities() const
     caps.nnrVersion = 1;
     caps.psAlgorithmVersion = 3;
     // 2 (R-R3-21): NR3 models are Core assets (kind 2, selectNr3Model).
-    caps.dspAssetVersion = 2;
+    // 3 (R-R3-49, Sub-epic C-1): DspAssetService also sends dfnrRunnable
+    // and dfnrModelStatus, whether this Core can run DFNR.
+    caps.dspAssetVersion = 3;
     caps.psDisplayVersion = m_mediaEnabled ? 1 : 0;
 #endif
 

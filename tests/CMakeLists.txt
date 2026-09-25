@@ -2081,6 +2081,12 @@ nereus_add_test(tst_rx_channel_stop_feed REALTIME)
 # a connect's five channels load nothing.
 nereus_add_test(tst_rx_channel_dfnr_lazy)
 
+# R-R3-49, Sub-epic C-1: DFNR is offered only while it can run. No model (or
+# no DFNR in the build) hides the VFO flag's DFNR button and refuses DFNR; a
+# model failing at a channel's first selection turns it off with the reason;
+# a remote window follows the Core's mirrored dfnrRunnable.
+nereus_add_test(tst_dfnr_availability EXTRA_LABELS gui)
+
 # D14, R-R3-49: every NereusSDR TX meter maps to the WDSP txaMeterType index
 # Thetis reads for it (wdspTxaMeterIndex); the expected indices are written
 # by hand from the compiled third_party/wdsp/src/TXA.h.

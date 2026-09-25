@@ -211,6 +211,12 @@
 //                unkey follows Thetis's order: the TX drain, then the
 //                hardware flip, then the receiver on rxReady.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49, Sub-epic C-1: the Core's DFNR availability
+//                (DspAssetService dfnrRunnable / dfnrModelStatus), set at
+//                start and when a channel's first DFNR load fails; DFNR is
+//                refused, and turned off on a slice, while it cannot run.
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -841,6 +847,18 @@ RadioModel::RadioModel(Role role, QObject* parent)
         connect(m_dspAssets, &DspAssetService::nr3SelectionChanged, this, [this]() {
             for (SliceModel* slice : std::as_const(m_slices)) {
                 turnOffNr3WithoutModel(slice);
+            }
+        });
+        // R-R3-49, Sub-epic C-1: the Core says whether it can run DFNR
+        // (this build has it and the DeepFilterNet model file is there);
+        // a model that fails at a channel's first selection turns it off
+        // later (wireRxChannelLaneSignals). Any slice holding DFNR then
+        // turns it off with the reason, as NR3 does.
+        m_dspAssets->setDfnrAvailability(RxChannel::dfnrAvailable(),
+                                         dfnrCannotRunReason(true));
+        connect(m_dspAssets, &DspAssetService::dfnrAvailabilityChanged, this, [this]() {
+            for (SliceModel* slice : std::as_const(m_slices)) {
+                turnOffDfnrWithoutModel(slice);
             }
         });
     }
@@ -5204,6 +5222,13 @@ void RadioModel::wireNnrSettings(SliceModel* slice)
             }
             return false;
         }
+        // R-R3-49, Sub-epic C-1: nor DFNR when this Core cannot run it.
+        if (requested == NrSlot::DFNR && m_dspAssets && !m_dspAssets->dfnrRunnable()) {
+            if (reason) {
+                *reason = m_dspAssets->dfnrModelStatus();
+            }
+            return false;
+        }
         RxChannel* channel = m_wdspEngine ? m_wdspEngine->rxChannel(slice->sliceIndex()) : nullptr;
         // R-R3-40: turning NNR on or off clears a runtime limit. Cleared
         // before NNR goes on, and after it goes off, so an "off" limit never
@@ -5275,6 +5300,8 @@ void RadioModel::wireNnrSettings(SliceModel* slice)
     // Follow-up item 1: the slice's saved choice was restored before this
     // refusal existed, so a saved NR3 is checked again now.
     turnOffNr3WithoutModel(slice);
+    // R-R3-49: and a saved DFNR the Core cannot run.
+    turnOffDfnrWithoutModel(slice);
 }
 
 QString RadioModel::nr3CannotRunReason() const
@@ -5282,6 +5309,37 @@ QString RadioModel::nr3CannotRunReason() const
     return m_dspAssets->nr3ModelStatus().isEmpty()
         ? tr("NR3 cannot run on this Core: no NR3 model file was found.")
         : m_dspAssets->nr3ModelStatus();
+}
+
+QString RadioModel::dfnrCannotRunReason(bool modelMissing)
+{
+#ifdef HAVE_DFNR
+    return modelMissing
+        ? tr("No DFNR model file was found on this Core, so DFNR cannot run.")
+        : tr("The DFNR model file on this Core could not be loaded, so DFNR cannot run.");
+#else
+    Q_UNUSED(modelMissing);
+    return tr("This Core was built without DFNR, so DFNR cannot run.");
+#endif
+}
+
+void RadioModel::onRxChannelDfnrUnavailable(bool modelMissing)
+{
+    if (m_dspAssets) {
+        m_dspAssets->setDfnrAvailability(false, dfnrCannotRunReason(modelMissing));
+    }
+}
+
+void RadioModel::turnOffDfnrWithoutModel(SliceModel* slice)
+{
+    if (!slice || role() != Role::Local || !m_dspAssets || m_dspAssets->dfnrRunnable()
+        || slice->activeNr() != NrSlot::DFNR) {
+        return;
+    }
+    // As turnOffNr3WithoutModel: Off always passes the selection applier,
+    // and the reason is set after, since setActiveNr clears it.
+    slice->setActiveNr(NrSlot::Off);
+    slice->reportNnrEditResult(m_dspAssets->dfnrModelStatus());
 }
 
 void RadioModel::turnOffNr3WithoutModel(SliceModel* slice)
@@ -5373,6 +5431,8 @@ void RadioModel::applyNnrStateToChannel(SliceModel* slice, RxChannel* channel)
     // Follow-up item 1 (R-R3-21): WDSP is never asked to run NR3 without a
     // usable NR3 model; the slice shows NR off with the reason instead.
     turnOffNr3WithoutModel(slice);
+    turnOffDfnrWithoutModel(slice);   // R-R3-49: likewise DFNR
+
     if (channel->controlLane() != nullptr) {
         // R-R3-39: the same steps as one receive-lane job
         // (RxChannel::applyNnrState); its diagnostics, with the tuning's
@@ -8507,7 +8567,14 @@ void RadioModel::syncRfGainFromAgcTop(SliceModel* slice, RxChannel* channel)
 void RadioModel::wireRxChannelLaneSignals(int channelId)
 {
     RxChannel* channel = m_wdspEngine ? m_wdspEngine->rxChannel(channelId) : nullptr;
-    if (channel == nullptr || channel->controlLane() == nullptr) {
+    if (channel == nullptr) {
+        return;
+    }
+    // R-R3-49, Sub-epic C-1: a channel's first DFNR selection found the
+    // model missing or unloadable: this Core cannot run DFNR (queued here
+    // from the receive lane).
+    connect(channel, &RxChannel::dfnrUnavailable, this, &RadioModel::onRxChannelDfnrUnavailable);
+    if (channel->controlLane() == nullptr) {
         return;
     }
     connect(channel, &RxChannel::nnrDiagnosticsRefreshed, this, [this, channel, channelId]() {

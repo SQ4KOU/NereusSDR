@@ -42,6 +42,9 @@
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-24 - R-R3-49 fix wave: RadioModel transmitting Outbound. J.J.
 //                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49, Sub-epic C-1: DspAssetService's dfnrModelStatus
+//                and dfnrRunnable, Outbound. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -350,6 +353,11 @@ const MirrorPolicy::Entry kEntries[] = {
     // refuses turning NR3 on with nr3ModelStatus. An older Core never sends
     // it and the window keeps its default, true.
     { "DspAssetService", "nr3Runnable", MirrorDirection::Outbound },
+    // R-R3-49, Sub-epic C-1 (dspAssetVersion 3): the same pair for DFNR. A
+    // window hides DFNR while dfnrRunnable is false; an older Core never
+    // sends them and the window keeps its defaults (true, no reason).
+    { "DspAssetService", "dfnrModelStatus", MirrorDirection::Outbound },
+    { "DspAssetService", "dfnrRunnable", MirrorDirection::Outbound },
 
     // R-R3-21 / R-R3-09 (notchControlVersion 1): the Core's notch list. The
     // list and its revision are Outbound; a window changes the list only

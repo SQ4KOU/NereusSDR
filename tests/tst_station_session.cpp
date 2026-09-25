@@ -66,6 +66,7 @@
 #include <memory>
 #include <optional>
 
+#include "core/ModelPaths.h"
 #include "core/AppSettings.h"
 #include "core/ConnectionState.h"
 #include "core/CoreInit.h"
@@ -363,6 +364,10 @@ private slots:
     void receiveOnlyPolicySurvivesRadioTeardown();
     void nr3ModelChoiceLoadsOnceOnTheCoreAndMirrors();
     void nr3CannotRunIsRefusedOnTheCoreAndInTheWindow();
+    void dfnrCannotRunIsRefusedOnTheCoreAndInTheWindow();
+#ifdef HAVE_DFNR
+    void dfnrFailingAtFirstSelectionTurnsTheWindowOff();
+#endif
     void savedNr3OnACoreWithNoModelShowsOffInTheWindow();
     void nr3CannotRunEndsWithTheSession();
     void olderCoreLeavesTheNr3ModelUnchangeable();
@@ -3452,6 +3457,113 @@ void TstStationSession::nr3CannotRunIsRefusedOnTheCoreAndInTheWindow()
     AppSettings::instance().remove(QStringLiteral("DspAssets/Nr3Model"));
 }
 
+void TstStationSession::dfnrCannotRunIsRefusedOnTheCoreAndInTheWindow()
+{
+    // R-R3-49, Sub-epic C-1 (dspAssetVersion 3). A Core that cannot run
+    // DFNR (no DeepFilterNet model file, or a build without DFNR) says so
+    // through the mirrored dfnrRunnable and dfnrModelStatus: turning DFNR
+    // on is refused on the Core and in a remote window with the Core's
+    // sentence. A Core that finds its model failing at a channel's first
+    // selection says so mid-session, and a window's DFNR turns off.
+    ModelPaths::setDfnrModelTarballForTest(QString());
+    const auto restorePath = qScopeGuard([] { ModelPaths::clearDfnrModelTarballForTest(); });
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+    auto stationModel = makeStationRadioModel(0);
+    DspAssetService* core = stationModel->dspAssets();
+    QVERIFY(!core->dfnrRunnable());
+    const QString reason = core->dfnrModelStatus();
+    QVERIFY(!reason.isEmpty());
+
+    SliceModel* coreSlice = stationModel->slices().constFirst();
+    coreSlice->setActiveNr(NrSlot::Off);
+    coreSlice->setActiveNr(NrSlot::DFNR);
+    QCOMPARE(coreSlice->activeNr(), NrSlot::Off);
+    QCOMPARE(coreSlice->nnrLastError(), reason);
+
+    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    QCOMPARE(server.buildCapabilities().dspAssetVersion, 3);
+    RadioModel clientModel(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&clientModel, &proxy);
+    auto* stationEnd = new LoopbackTransport(QStringLiteral("station-end"), this);
+    auto* clientEnd = new LoopbackTransport(QStringLiteral("client-end"), this);
+    stationEnd->linkTo(clientEnd);
+    QSignalSpy completed(&client, &StationClient::handshakeComplete);
+    client.startSession(clientEnd, server.token());
+    server.acceptTransport(stationEnd);
+    QTRY_COMPARE(completed.count(), 1);
+
+    DspAssetService* window = clientModel.dspAssets();
+    QTRY_VERIFY(!window->dfnrRunnable());
+    QTRY_COMPARE(window->dfnrModelStatus(), reason);
+    QTRY_VERIFY(!clientModel.slices().isEmpty());
+    SliceModel* windowSlice = clientModel.slices().constFirst();
+    QSignalSpy windowRefused(windowSlice, &SliceModel::nrSelectionRefused);
+    windowSlice->setActiveNr(NrSlot::DFNR);
+    QCOMPARE(windowSlice->activeNr(), NrSlot::Off);
+    QCOMPARE(windowRefused.count(), 1);
+    QCOMPARE(windowRefused.constFirst().at(0).toString(), reason);
+    QTest::qWait(100);
+    QCOMPARE(coreSlice->activeNr(), NrSlot::Off);
+    windowSlice->setActiveNr(NrSlot::NR2);
+    QTRY_COMPARE(coreSlice->activeNr(), NrSlot::NR2);
+    windowSlice->setActiveNr(NrSlot::Off);
+    QTRY_COMPARE(coreSlice->activeNr(), NrSlot::Off);
+    client.disconnectFromStation(QStringLiteral("test complete"));
+}
+
+#ifdef HAVE_DFNR
+void TstStationSession::dfnrFailingAtFirstSelectionTurnsTheWindowOff()
+{
+    // R-R3-49, Sub-epic C-1: the model is there at start, so a window turns
+    // DFNR on; the Core's channel then fails to load it at its first
+    // selection. The Core turns DFNR off with the reason, and the window
+    // follows: its slice shows off and it can no longer choose DFNR.
+    QTemporaryDir modelDir;
+    ModelPaths::setDfnrModelTarballForTest(
+        modelDir.filePath(QStringLiteral("DeepFilterNet3_onnx.tar.gz")));
+    const auto restorePath = qScopeGuard([] { ModelPaths::clearDfnrModelTarballForTest(); });
+    QTemporaryDir settingsDir;
+    QVERIFY(settingsDir.isValid());
+    AppSettings stationSettings(settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+    auto stationModel = makeStationRadioModel(0);
+    DspAssetService* core = stationModel->dspAssets();
+    QVERIFY(core->dfnrRunnable());
+    SliceModel* coreSlice = stationModel->slices().constFirst();
+
+    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    RadioModel clientModel(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&clientModel, &proxy);
+    auto* stationEnd = new LoopbackTransport(QStringLiteral("station-end"), this);
+    auto* clientEnd = new LoopbackTransport(QStringLiteral("client-end"), this);
+    stationEnd->linkTo(clientEnd);
+    QSignalSpy completed(&client, &StationClient::handshakeComplete);
+    client.startSession(clientEnd, server.token());
+    server.acceptTransport(stationEnd);
+    QTRY_COMPARE(completed.count(), 1);
+    QTRY_VERIFY(!clientModel.slices().isEmpty());
+    SliceModel* windowSlice = clientModel.slices().constFirst();
+    DspAssetService* window = clientModel.dspAssets();
+    QVERIFY(window->dfnrRunnable());
+    windowSlice->setActiveNr(NrSlot::DFNR);
+    QTRY_COMPARE(coreSlice->activeNr(), NrSlot::DFNR);
+
+    stationModel->reportDfnrUnavailableForTest(/*modelMissing=*/false);
+    const QString reason = QStringLiteral(
+        "The DFNR model file on this Core could not be loaded, so DFNR cannot run.");
+    QCOMPARE(coreSlice->activeNr(), NrSlot::Off);
+    QTRY_VERIFY(!window->dfnrRunnable());
+    QTRY_COMPARE(window->dfnrModelStatus(), reason);
+    QTRY_COMPARE(windowSlice->activeNr(), NrSlot::Off);
+    windowSlice->setActiveNr(NrSlot::DFNR);
+    QCOMPARE(windowSlice->activeNr(), NrSlot::Off);
+    client.disconnectFromStation(QStringLiteral("test complete"));
+}
+#endif
+
 void TstStationSession::savedNr3OnACoreWithNoModelShowsOffInTheWindow()
 {
     // Follow-up item 1 (R-R3-21). NR3 was saved on for the radio, then the
@@ -3560,7 +3672,7 @@ void TstStationSession::nr3ModelChoiceLoadsOnceOnTheCoreAndMirrors()
     stationModel->dspAssets()->setNr3ModelLoader(
         [&loaded](const QString& path) { loaded.append(path); });
     StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
-    QCOMPARE(server.buildCapabilities().dspAssetVersion, 2);
+    QCOMPARE(server.buildCapabilities().dspAssetVersion, 3);
 
     RadioModel clientModel(RadioModel::Role::Remote);
     SettingsProxy proxy;

@@ -798,6 +798,8 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("moveNotchFromStation"), QStringLiteral("setNotchActiveFromStation"),
           QStringLiteral("deleteNotchFromStation"), QStringLiteral("requestIoBoardProbe"),
           QStringLiteral("nr3CannotRunReason"),
+          // R-R3-49: DFNR's, sent as dspAssets' dfnrModelStatus.
+          QStringLiteral("dfnrCannotRunReason"),
           // The slice cap reason, relayed by the addSlice and addSliceOnPan
           // verbs' results.
           QStringLiteral("sliceCapReason")},

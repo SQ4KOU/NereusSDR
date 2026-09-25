@@ -113,6 +113,12 @@
 //                stop, NereusSDR-original), stopAllTx (ported from Thetis
 //                console.cs StopAllTx), transmitStopped, onMoxRxReady.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49, Sub-epic C-1: the Core's DFNR availability
+//                (DspAssetService dfnrRunnable / dfnrModelStatus), set at
+//                start and when a channel's first DFNR load fails; DFNR is
+//                refused, and turned off on a slice, while it cannot run.
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -4020,6 +4026,22 @@ private:
     // NR3 model (NR off, the reason set). Local role only.
     QString nr3CannotRunReason() const;
     void turnOffNr3WithoutModel(SliceModel* slice);
+    // R-R3-49, Sub-epic C-1: DFNR's counterparts. The reason this Core
+    // cannot run DFNR (no DFNR in the build, the model missing, or failed
+    // to load); a slice holding DFNR the Core cannot run turns it off.
+    static QString dfnrCannotRunReason(bool modelMissing);
+    void turnOffDfnrWithoutModel(SliceModel* slice);
+    // A channel's RxChannel::dfnrUnavailable (queued from the receive lane).
+    void onRxChannelDfnrUnavailable(bool modelMissing);
+#ifdef NEREUS_BUILD_TESTS
+public:
+    // R-R3-49: what a channel's failed first DFNR load does to the model.
+    void reportDfnrUnavailableForTest(bool modelMissing)
+    {
+        onRxChannelDfnrUnavailable(modelMissing);
+    }
+private:
+#endif
 
 public:
     // Force-run any pending coalesced slice save synchronously. Call this

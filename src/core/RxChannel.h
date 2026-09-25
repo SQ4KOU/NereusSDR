@@ -44,6 +44,10 @@
 //                 and ModelPaths without a load. NereusSDR-original, by
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-25 - R-R3-49, Sub-epic C-1: dfnrUnavailable reports a first
+//                 DFNR selection whose model is missing or failed to load.
+//                 NereusSDR-original, by J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1135,6 +1139,12 @@ signals:
     // lane. `previousSlot` is the NrSlot to go back to for a refused
     // selection, or -1 for a refused tuning or diagnostic mode.
     void nnrRequestRefused(const QString& reason, int previousSlot);
+
+    // R-R3-49, Sub-epic C-1: this channel's first DFNR selection found the
+    // DeepFilterNet model missing (modelMissing) or failing to load, so DFNR
+    // cannot run. Emitted once, on the receive lane (the caller's thread
+    // with no lane). RadioModel turns the Core's dfnrRunnable off.
+    void dfnrUnavailable(bool modelMissing);
 
     // R-R3-39: onModeChanged's filter and buffer sizes were applied on the
     // lane, taking `elapsedMs`.

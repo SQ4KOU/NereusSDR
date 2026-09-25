@@ -374,7 +374,7 @@ change shows as surface drift and as a change to this table.
 | `nnrVersion` | 1 |
 | `psAlgorithmVersion` | 3 |
 | `propertyResultVersion` | 1 |
-| `dspAssetVersion` | 2 |
+| `dspAssetVersion` | 3 |
 | `psDisplayVersion` | 1 |
 | `notchControlVersion` | 1 |
 | `audioProfileVersion` | 1 |
@@ -406,6 +406,15 @@ When a feature is off, its version is 0:
   WDSP. `psDisplayVersion` also needs media.
 - `remoteCtunVersion`, `propertyResultVersion` and `notchControlVersion`
   are never 0.
+- `dspAssetVersion`: 1 carries the NNR model assets (`dspAssets.*`,
+  `nnr.applyModelSelection`); 2 adds the Core's NR3 model
+  (`dspAssets.selectNr3Model`, with `nr3ModelAsset`, `nr3ModelStatus` and
+  `nr3Runnable` on `DspAssetService`); 3 adds `dfnrRunnable` and
+  `dfnrModelStatus` on `DspAssetService`: whether the Core can run DFNR
+  (the build has it and its DeepFilterNet model file is there and loaded)
+  and, when it cannot, the plain reason. A window reads `dfnrRunnable` as
+  true until a Core sends it, so an older Core changes nothing; while it is
+  false a window hides DFNR and refuses turning it on with the reason.
 - `radioHardwareVersion`: sent only at agreed minor 11. 0 without the step
   attenuator bound; 1 with it; 2 with the Alex antennas too; 4 with the HL2
   I/O board too: the `ioBoard` object, `setAlexRxAntenna` (which needs 3)
@@ -628,7 +637,7 @@ An enum property lists the values its domain allows.
 | 18 | `efficiencyText` | `utf8` | outbound |  |
 | 19 | `bandFollow` | `enum` | outbound | 0, 1, 2, 3 |
 
-**DspAssetService** (8 properties)
+**DspAssetService** (10 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -640,6 +649,8 @@ An enum property lists the values its domain allows.
 | 5 | `nr3ModelAsset` | `utf8` | outbound |  |
 | 6 | `nr3ModelStatus` | `utf8` | outbound |  |
 | 7 | `nr3Runnable` | `bool` | outbound |  |
+| 8 | `dfnrModelStatus` | `utf8` | outbound |  |
+| 9 | `dfnrRunnable` | `bool` | outbound |  |
 
 **IoBoardHl2Facade** (3 properties)
 

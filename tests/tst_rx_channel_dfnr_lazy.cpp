@@ -19,6 +19,7 @@
 #include <QtTest/QtTest>
 
 #include <QLoggingCategory>
+#include <QSignalSpy>
 #include <QMutex>
 #include <QMutexLocker>
 
@@ -215,6 +216,9 @@ private slots:
         QVERIFY(!RxChannel::dfnrAvailable());
         {
             RxChannel ch(0, kInSize, kRateHz, &lane, nullptr);
+            // R-R3-49: the first selection reports that DFNR cannot run
+            // (the model is missing), once.
+            QSignalSpy unavailable(&ch, &RxChannel::dfnrUnavailable);
             ch.setDfnrAttenLimit(40.0f);
             QVERIFY(ch.setActiveNr(NrSlot::DFNR));
             QVERIFY(lane.waitIdleForTest(kLaneIdleTimeoutMs));
@@ -226,6 +230,12 @@ private slots:
             QVERIFY(ch.setActiveNr(NrSlot::DFNR));
             QVERIFY(lane.waitIdleForTest(kLaneIdleTimeoutMs));
             QVERIFY(!ch.dfnrActive());
+#ifdef HAVE_DFNR
+            QCOMPARE(unavailable.count(), 1);
+            QCOMPARE(unavailable.at(0).at(0).toBool(), true);
+#else
+            QCOMPARE(unavailable.count(), 0);
+#endif
         }
         QCOMPARE(loads(), 0);
         ModelPaths::clearDfnrModelTarballForTest();

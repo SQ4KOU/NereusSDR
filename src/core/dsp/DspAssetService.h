@@ -42,6 +42,14 @@ class DspAssetService final : public QObject {
     // reads true until a Core says otherwise, so an older Core changes
     // nothing; nr3ModelStatus then carries the plain reason.
     Q_PROPERTY(bool nr3Runnable READ nr3Runnable NOTIFY nr3SelectionChanged)
+    // R-R3-49, Sub-epic C-1 (dspAssetVersion 3): the same pair for DFNR.
+    // dfnrModelStatus is the plain reason DFNR cannot run (empty when it
+    // can); dfnrRunnable is false when this build has no DFNR, the
+    // DeepFilterNet model file is missing, or it failed to load at the
+    // first selection. A window reads true until a Core says otherwise, so
+    // an older Core changes nothing.
+    Q_PROPERTY(QString dfnrModelStatus READ dfnrModelStatus NOTIFY dfnrAvailabilityChanged)
+    Q_PROPERTY(bool dfnrRunnable READ dfnrRunnable NOTIFY dfnrAvailabilityChanged)
 
 public:
     using RemoteRequestHandler =
@@ -80,6 +88,12 @@ public:
     QString nr3ModelStatus() const { return m_nr3Status; }
     // Local: the last resolve found a usable model file. Remote: mirrored.
     bool nr3Runnable() const { return m_nr3Runnable; }
+    // Local: whether this Core can run DFNR, and why not. Remote: mirrored.
+    bool dfnrRunnable() const { return m_dfnrRunnable; }
+    QString dfnrModelStatus() const { return m_dfnrStatus; }
+    // Local only (a remote window takes the Core's): what the Core found,
+    // at start or when the model failed to load at the first selection.
+    void setDfnrAvailability(bool runnable, const QString& status);
     // The id of the model last handed to the loader (local only).
     QString activeNr3ModelAsset() const { return m_nr3Active; }
     // Local: this build can load NR3 models. Remote: the Core advertised
@@ -114,6 +128,7 @@ signals:
     void requestCompleted(quint32 id, bool accepted, QString reason, QVariantMap values);
     void selectionChanged();
     void nr3SelectionChanged();
+    void dfnrAvailabilityChanged();
     void configurationChanged();
 
 private:
@@ -153,6 +168,8 @@ private:
     QString m_nr3Active;
     QString m_nr3Status;
     bool m_nr3Runnable{true};
+    bool m_dfnrRunnable{true};
+    QString m_dfnrStatus;
     bool m_remoteNr3Supported{false};
     Nr3ModelLoader m_nr3Loader;
 };

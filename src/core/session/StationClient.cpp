@@ -121,6 +121,9 @@
 //   2026-09-24 - R-R3-49 fix wave: tgxlOperateAppliesWhole
 //                (remoteTgxlControlVersion 3). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49, Sub-epic C-1: a slice refuses DFNR while the
+//                Core's mirrored dfnrRunnable is false. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -2623,6 +2626,15 @@ void StationClient::watchForOutbound(const QByteArray& objectKey, QObject* objec
                     *reason = assets->nr3ModelStatus().isEmpty()
                         ? QStringLiteral("NR3 cannot run on this Core: no NR3 model file was found.")
                         : assets->nr3ModelStatus();
+                }
+                return false;
+            }
+            // R-R3-49, Sub-epic C-1: likewise DFNR (mirrored dfnrRunnable).
+            if (requested == NrSlot::DFNR && assets && !assets->dfnrRunnable()) {
+                if (reason) {
+                    *reason = assets->dfnrModelStatus().isEmpty()
+                        ? QStringLiteral("DFNR cannot run on this Core.")
+                        : assets->dfnrModelStatus();
                 }
                 return false;
             }

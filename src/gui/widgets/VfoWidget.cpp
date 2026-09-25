@@ -55,6 +55,11 @@
 //                 capitals like the flag's other buttons (operator's
 //                 captions). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-25 - R-R3-49, Sub-epic C-1: the DFNR button is hidden, and its
+//                 quick controls not offered, while DFNR cannot run (a build
+//                 without it, or the Core's dfnrRunnable false), as MNR and
+//                 BNR are hidden. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -316,6 +321,7 @@ warren@wpratt.com
 #include "gui/widgets/AntennaPickerMenu.h"
 #include "models/FilterPresetStore.h"
 #include "models/RadioModel.h"
+#include "core/dsp/DspAssetService.h"
 #include "models/SliceModel.h"
 #include "gui/widgets/FilterPresetEditDialog.h"
 
@@ -1562,6 +1568,12 @@ void VfoWidget::buildDspTab()
 #endif
 #ifndef HAVE_MNR
     m_mnrBtn->hide();  // Hidden on non-macOS platforms.
+#endif
+#ifndef HAVE_DFNR
+    // R-R3-49, Sub-epic C-1: hidden in a build without DFNR, as MNR and
+    // BNR are. With a model, the model's dfnrRunnable decides instead
+    // (updateDfnrAvailability): a remote window follows its Core's.
+    m_dfnrBtn->hide();
 #endif
 
     // Row 2: ANF | SNB | (cols 2-3 empty)
@@ -3467,7 +3479,18 @@ void VfoWidget::setRxBypassActive(bool on)
 // is non-owning; lifetime is RadioModel-owned and MainWindow-scoped.
 void VfoWidget::setRadioModel(RadioModel* model)
 {
+    if (m_dfnrAvailabilityConn) {
+        disconnect(m_dfnrAvailabilityConn);
+        m_dfnrAvailabilityConn = {};
+    }
     m_radioModel = model;
+    // R-R3-49, Sub-epic C-1: DFNR is offered only while the Core can run it.
+    if (model && model->dspAssets()) {
+        m_dfnrAvailabilityConn = connect(model->dspAssets(),
+                                         &DspAssetService::dfnrAvailabilityChanged,
+                                         this, &VfoWidget::updateDfnrAvailability);
+    }
+    updateDfnrAvailability();
     if (model && model->role() == RadioModel::Role::Remote) {
         setTransmitPermitted(false);
         // R-R3-44: the VAX selector stays live. In a remote window it picks
@@ -3475,6 +3498,29 @@ void VfoWidget::setRadioModel(RadioModel* model)
         // keeps the choice on this computer (RadioModel::
         // setRemoteVaxChannelStore) and RemoteVaxRouter feeds the channel
         // from the Core's receiver stream.
+    }
+}
+
+bool VfoWidget::dfnrOffered() const
+{
+    // With a model its DspAssetService says (the Core's, mirrored, in a
+    // remote window); without one, whether this build has DFNR.
+    if (m_radioModel && m_radioModel->dspAssets()) {
+        return m_radioModel->dspAssets()->dfnrRunnable();
+    }
+#ifdef HAVE_DFNR
+    return true;
+#else
+    return false;
+#endif
+}
+
+void VfoWidget::updateDfnrAvailability()
+{
+    if (m_dfnrBtn) {
+        // Hidden, as MNR and BNR are when they cannot run. A slice holding
+        // DFNR is turned off by the Core (RadioModel::turnOffDfnrWithoutModel).
+        m_dfnrBtn->setVisible(dfnrOffered());
     }
 }
 
@@ -3691,7 +3737,8 @@ void VfoWidget::showNr4Popup(const QPoint& globalPos)
 
 void VfoWidget::showDfnrPopup(const QPoint& globalPos)
 {
-    if (!m_slice) { return; }
+    // R-R3-49: no quick controls for a DFNR that cannot run.
+    if (!m_slice || !dfnrOffered()) { return; }
     auto* p = new DspParamPopup(this);
 
     // DFNR (DeepFilterNet3) — AetherSDR post-WDSP filter, not in Thetis.
