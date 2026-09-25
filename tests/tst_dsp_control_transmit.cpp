@@ -731,11 +731,12 @@ private slots:
             Rig rig;
             QVERIFY2(buildRig(rig, &log), "the rig did not come up");
             RadioModel& model = *rig.model;
-            // The app holds the TX audio; the transmitter refuses to key,
-            // so nothing is keyed while its audio flows.
-            model.moxController()->setMoxCheck([]() {
-                return safety::BandPlanGuard::MoxCheckResult{false, QStringLiteral("test")};
-            });
+            // The app holds the TX audio while nothing is keyed. Since the
+            // gaps plan's Task 7 follow-up, a trx that keys nothing gives
+            // the TX audio back unless its TCI level is still held, so the
+            // trx is held off by a manual key (Thetis _manual_mox: PollPTT
+            // neither keys nor drops the level) rather than refused.
+            model.moxController()->setManualKey(true);
             TciServer server(&model);
             QVERIFY(server.start(0));
 
