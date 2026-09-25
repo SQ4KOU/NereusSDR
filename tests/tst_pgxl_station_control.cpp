@@ -161,7 +161,7 @@ private slots:
         const QString badAddress = QStringLiteral("Enter the Power Genius's IP address or host "
                                                   "name, and a port from 1 to 65535.");
         for (const auto& [host, port] : QList<QPair<QString, int>>{
-                 {QString(), 9008}, {QStringLiteral("bad host!"), 9008},
+                 {QString(), 0}, {QStringLiteral("bad host!"), 9008},
                  {QStringLiteral("192.0.2.9"), 0}, {QStringLiteral("192.0.2.9"), 65536}}) {
             QVERIFY(!model.setPgxlAddressForStation(host, port, &reason));
             QCOMPARE(reason, badAddress);
@@ -332,6 +332,24 @@ private slots:
         QVERIFY(!model.pgxlConnection()->isConnected());
         QCOMPARE(model.pgxlConnection()->socketAttemptToken(), token);
         QVERIFY(!server.hasPendingConnections());
+
+        // Group B fix wave (I1): a blank Host is kept, as a local window's
+        // blank Host is, and stops auto-connect: the Core shows the blank
+        // and its next start dials nothing.
+        QVERIFY(model.setPgxlAddressForStation(QStringLiteral("127.0.0.1"),
+                                               server.serverPort(), &reason));
+        QVERIFY(model.setPgxlAddressForStation(QStringLiteral("  "), 9013, &reason));
+        QVERIFY(reason.isEmpty());
+        QVERIFY(model.peripheralValue(QStringLiteral("PGXL_ManualIp")).isEmpty());
+        QCOMPARE(model.peripheralValue(QStringLiteral("PGXL_ManualPort")), QStringLiteral("9013"));
+        QVERIFY(model.amplifierModel()->configuredHost().isEmpty());
+        QCOMPARE(model.amplifierModel()->configuredPort(), 9013);
+        model.applyPeripheralsForTest();
+        QTest::qWait(150);
+        QVERIFY(!server.hasPendingConnections());
+        QCOMPARE(model.pgxlConnection()->socketAttemptToken(), token);
+        QVERIFY(model.amplifierModel()->configuredHost().isEmpty());
+        QCOMPARE(model.amplifierModel()->connectionPhase(), Phase::Disconnected);
     }
 };
 

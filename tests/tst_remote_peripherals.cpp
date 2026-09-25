@@ -3846,6 +3846,21 @@ void RemotePeripheralsTest::remoteWindowScansAndKeepsTheTunerAddressOnTheCore()
     QTRY_VERIFY(!window.isCoreOnAir());
     QTRY_VERIFY(onAirScan->isEnabled());
     QVERIFY(onAirHost->isEnabled());
+
+    // Group B fix wave (I1): a blank Host, as the tooltip says, is kept on
+    // the Core as a local window's blank Host is, and stops auto-connect.
+    onAirPage.show();
+    const int refusedBeforeBlank = refused.count();
+    onAirHost->selectAll();
+    QTest::keyClick(onAirHost, Qt::Key_Backspace);
+    QVERIFY(onAirHost->text().isEmpty());
+    emit onAirHost->editingFinished();
+    QTRY_VERIFY(station.peripheralValue(QStringLiteral("TGXL_ManualIp")).isEmpty());
+    QTRY_VERIFY(window.tunerModel()->configuredHost().isEmpty());
+    QCOMPARE(refused.count(), refusedBeforeBlank);
+    station.applyPeripheralsForTest();
+    QTest::qWait(100);
+    QVERIFY(notDialled());
 }
 
 // R-R3-49 (parity Task 8): in a remote window, right-click > Recall tune
@@ -4223,6 +4238,21 @@ void RemotePeripheralsTest::remoteWindowScansAndKeepsTheAmpAddressOnTheCore()
     QTRY_VERIFY(onAirScan->isEnabled());
     QVERIFY(onAirHost->isEnabled());
     QVERIFY(notDialled());
+
+    // Group B fix wave (I1): a blank Host, as the tooltip says, is kept on
+    // the Core as a local window's blank Host is, and stops auto-connect.
+    onAirPage.show();
+    const int refusedBeforeBlank = refused.count();
+    onAirHost->selectAll();
+    QTest::keyClick(onAirHost, Qt::Key_Backspace);
+    QVERIFY(onAirHost->text().isEmpty());
+    emit onAirHost->editingFinished();
+    QTRY_VERIFY(station.peripheralValue(QStringLiteral("PGXL_ManualIp")).isEmpty());
+    QTRY_VERIFY(window.amplifierModel()->configuredHost().isEmpty());
+    QCOMPARE(refused.count(), refusedBeforeBlank);
+    station.applyPeripheralsForTest();
+    QTest::qWait(100);
+    QVERIFY(notDialled());
 }
 
 // R-R3-49 (parity Task 9, operator amendment 2026-09-25): a local window's
@@ -4443,6 +4473,18 @@ void RemotePeripheralsTest::remoteWindowOperatesTheRfKitThroughTheCore()
     QTRY_VERIFY(applet.operateButtonEnabledForTesting());
     QTRY_VERIFY(page.setTciButtonForTesting()->isEnabled());
     QVERIFY(page.hostEditForTesting()->isEnabled());
+
+    // Group B fix wave (I1): a blank Host with Save is kept on the Core, as
+    // a local Save keeps it, and stops auto-connect; the running
+    // connection is left alone.
+    const int refusedBeforeBlank = refused.count();
+    page.hostEditForTesting()->clear();
+    page.saveButtonForTesting()->click();
+    QTRY_VERIFY(station.peripheralValue(QStringLiteral("RfKit_ManualIp")).isEmpty());
+    QCOMPARE(station.peripheralValue(QStringLiteral("RfKit_ManualPort")), QStringLiteral("8099"));
+    QTest::qWait(100);
+    QCOMPARE(refused.count(), refusedBeforeBlank);
+    QVERIFY(station.rfKitConnection()->isConnected());
 
     // Nothing keyed; the window opened no connection of its own.
     QVERIFY(!station.transmitModel().isTune());

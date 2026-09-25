@@ -336,6 +336,7 @@ computer:
   `configuredHost` and `configuredPort` take the saved address while the
   Core is not connecting to or connected to a tuner (a running connection
   keeps showing its own); `connectionPhase` does not change.
+  A blank `host` (empty after trimming, with a port from 1 to 65535) is saved as blank, as a local window's blank Host is: it stops auto-connect, because the Core dials a saved address only when it is not blank, and `configuredHost` shows the blank.
 
 ## The `amplifier` object (PGXL)
 
@@ -425,6 +426,7 @@ does at its own computer, as for the Tuner Genius:
   `configuredHost` and `configuredPort` take the saved address while the
   Core is not connecting to or connected to an amp (a running connection
   keeps showing its own); `connectionPhase` does not change.
+  A blank `host` (empty after trimming, with a port from 1 to 65535) is saved as blank, as a local window's blank Host is: it stops auto-connect, because the Core dials a saved address only when it is not blank, and `configuredHost` shows the blank.
 
 ### How the Core reads the PGXL
 
@@ -627,7 +629,7 @@ address check: saving dials nothing). The `rfkit` object's
 `configuredHost` and `configuredPort` take the saved address while the
 Core is not connecting to or connected to an amp (a running connection
 keeps showing its own); `connectionPhase` does not change. The next
-Connect, or the switch turned on, dials it.
+Connect, or the switch turned on, dials it. A blank `host` (empty after trimming, with a port from 1 to 65535) is saved as blank, as a local window's blank Host is: it stops auto-connect, because the Core dials a saved address only when it is not blank, and `configuredHost` shows the blank.
 
 ## The `stationTci` object and the station TCI server
 
@@ -1075,7 +1077,7 @@ Commands:
 | `moveTgxlRelay`, `scanTgxlLan`, `setTgxlAddress` while the radio is on the air (MOX, TUNE or two-tone, or the hand-back to receive after MOX) | "The radio is on the air. Try again when it stops." |
 | `moveTgxlRelay` while the Core has not admitted a tuner | "The Core is not connected to the Tuner Genius." |
 | `setTgxlAddress` with no radio | "Connect the Core to a radio before setting up its Tuner Genius XL." |
-| `setTgxlAddress` with a bad host or a port outside 1 to 65535 | "Enter the Tuner Genius XL's IP address or host name, and a port from 1 to 65535." |
+| `setTgxlAddress` with a host that is not blank and not an IP address or host name, or a port outside 1 to 65535 | "Enter the Tuner Genius XL's IP address or host name, and a port from 1 to 65535." |
 | `setPgxlOperate`, `scanPgxlLan`, `setPgxlAddress` below minor 11 | "Update this app to switch the Power Genius on this Core." |
 | `setPgxlOperate`, `scanPgxlLan`, `setPgxlAddress` on a Core that does not own its accessories | "This Core cannot change its amplifier and tuner settings." |
 | `setPgxlOperate` with other arguments (or `on` not a bool) | "The request to put the Power Genius in operate or standby was not understood." |
@@ -1084,7 +1086,7 @@ Commands:
 | `setPgxlOperate`, `scanPgxlLan`, `setPgxlAddress` while the radio is on the air (MOX, TUNE or two-tone, or the hand-back to receive after MOX) | "The radio is on the air. Try again when it stops." |
 | `setPgxlOperate` while the Core is not connected to the amp | "The Core is not connected to the Power Genius." |
 | `setPgxlAddress` with no radio | "Connect the Core to a radio before setting up its Power Genius." |
-| `setPgxlAddress` with a bad host or a port outside 1 to 65535 | "Enter the Power Genius's IP address or host name, and a port from 1 to 65535." |
+| `setPgxlAddress` with a host that is not blank and not an IP address or host name, or a port outside 1 to 65535 | "Enter the Power Genius's IP address or host name, and a port from 1 to 65535." |
 | `setRfKitOperate`, `setRfKitAntenna`, `setRfKitTciMode`, `setRfKitAddress` below minor 11 | "Update this app to switch the RF-Kit amplifier on this Core." |
 | `setRfKitOperate`, `setRfKitAntenna`, `setRfKitTciMode`, `setRfKitAddress` on a Core that does not own its accessories | "This Core cannot change its amplifier and tuner settings." |
 | `setRfKitOperate` with other arguments (or `on` not a bool) | "The request to put the RF-Kit amplifier in operate or standby was not understood." |
@@ -1096,7 +1098,7 @@ Commands:
 | `setRfKitOperate`, `setRfKitAntenna`, `setRfKitTciMode` while the Core has not admitted an amp | "The Core is not connected to the RF-Kit amplifier." |
 | `setRfKitAntenna` for an antenna the amp lists as disabled, or does not list once it has listed its antennas | "This antenna is not available on the RF-Kit amplifier." |
 | `setRfKitAddress` with no radio | "Connect the Core to a radio before setting up its RF-Kit amplifier." |
-| `setRfKitAddress` with a bad host or a port outside 1 to 65535 | "Enter the RF-Kit amplifier's IP address or host name, and a port from 1 to 65535." |
+| `setRfKitAddress` with a host that is not blank and not an IP address or host name, or a port outside 1 to 65535 | "Enter the RF-Kit amplifier's IP address or host name, and a port from 1 to 65535." |
 | `setRfKitOperate`, `setRfKitAntenna`, `setRfKitTciMode`, `setRfKitAddress` from an app whose Core lacks `remoteRfKitControlVersion` 4 (the app's own words, nothing sent) | "This Core does not let this app put the RF-Kit amplifier in operate or standby, switch its antenna or TCI mode, or save its address. Updating the Core may help." |
 | `setPgxlOperate`, `scanPgxlLan`, `setPgxlAddress` from an app whose Core lacks `remotePgxlControlVersion` 4 (the app's own words, nothing sent) | "This Core does not let this app put the Power Genius in operate or standby, scan for it or save its address. Updating the Core may help." |
 | `moveTgxlRelay`, `scanTgxlLan`, `setTgxlAddress` from an app whose Core lacks `remoteTgxlControlVersion` 4 (the app's own words, nothing sent) | "This Core does not let this app move the Tuner Genius relays, scan for it or save its address. Updating the Core may help." |

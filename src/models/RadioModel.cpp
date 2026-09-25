@@ -251,6 +251,10 @@
 //                Core's StationRfKitController) and
 //                setRfKitAddressForStation for a window's RF-Kit page.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (group B fix wave, I1): the three
+//                set*AddressForStation save a blank host, as a local
+//                window's blank Host stops auto-connect.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -5066,7 +5070,10 @@ bool RadioModel::setTgxlAddressForStation(const QString& inputHost, int port, QS
         return refuse(QStringLiteral("Connect the Core to a radio before setting up its Tuner Genius XL."));
     }
     const QString host = inputHost.trimmed();
-    if (!validStationAccessoryHost(host) || port < 1 || port > 65535) {
+    // Group B fix wave (I1): a blank Host is saved, as a local window's
+    // blank Host is, and stops auto-connect: applyPeripheralsForCurrentMac
+    // dials only a saved host that is not empty.
+    if ((!host.isEmpty() && !validStationAccessoryHost(host)) || port < 1 || port > 65535) {
         return refuse(QStringLiteral("Enter the Tuner Genius XL's IP address or host name, and a port from 1 to 65535."));
     }
     setPeripheralValue(QStringLiteral("TGXL_ManualIp"), host);
@@ -5139,7 +5146,10 @@ bool RadioModel::setPgxlAddressForStation(const QString& inputHost, int port, QS
         return refuse(QStringLiteral("Connect the Core to a radio before setting up its Power Genius."));
     }
     const QString host = inputHost.trimmed();
-    if (!validStationAccessoryHost(host) || port < 1 || port > 65535) {
+    // Group B fix wave (I1): a blank Host is saved, as a local window's
+    // blank Host is, and stops auto-connect: applyPeripheralsForCurrentMac
+    // dials only a saved host that is not empty.
+    if ((!host.isEmpty() && !validStationAccessoryHost(host)) || port < 1 || port > 65535) {
         return refuse(QStringLiteral("Enter the Power Genius's IP address or host name, and a port from 1 to 65535."));
     }
     setPeripheralValue(QStringLiteral("PGXL_ManualIp"), host);
@@ -5504,7 +5514,10 @@ bool RadioModel::setRfKitAddressForStation(const QString& inputHost, int port, Q
                                      "amplifier."));
     }
     const QString host = inputHost.trimmed();
-    if (!validStationAccessoryHost(host) || port < 1 || port > 65535) {
+    // Group B fix wave (I1): a blank Host is saved, as a local window's
+    // blank Host is, and stops auto-connect: applyPeripheralsForCurrentMac
+    // dials only a saved host that is not empty.
+    if ((!host.isEmpty() && !validStationAccessoryHost(host)) || port < 1 || port > 65535) {
         return refuse(QStringLiteral("Enter the RF-Kit amplifier's IP address or host name, "
                                      "and a port from 1 to 65535."));
     }

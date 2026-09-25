@@ -2048,8 +2048,9 @@ public:
                                QString* reason);
     // A Host or Port typed on a window's Peripherals row without Connect:
     // saves PGXL_ManualIp and PGXL_ManualPort for the Core's radio without
-    // dialling, with configurePgxl's address checks and reasons. Refused
-    // while the radio is on the air. The `amplifier` object's configured
+    // dialling, with configurePgxl's address checks and reasons. A blank
+    // host is saved (group B fix wave, I1), as a local window's blank Host
+    // stops auto-connect. Refused while the radio is on the air. The `amplifier` object's configured
     // address follows while the Core is not connecting or connected.
     bool setPgxlAddressForStation(const QString& host, int port, QString* reason);
     // R-R3-47 / R-R3-22: the Core's RF-Kit RF2K-S. configure saves the
@@ -2076,8 +2077,9 @@ public:
     // A Host and Port saved from a window's RF-Kit page: saves
     // RfKit_ManualIp and RfKit_ManualPort for the Core's radio without
     // dialling, with configureRfKit's address checks and reasons (the
-    // RF-Kit switch is not an address check: saving dials nothing).
-    // Refused while the radio is on the air. The `rfkit` object's
+    // RF-Kit switch is not an address check: saving dials nothing). A
+    // blank host is saved (group B fix wave, I1), as a local window's
+    // blank Host stops auto-connect. Refused while the radio is on the air. The `rfkit` object's
     // configured address follows while the Core is not connecting or
     // connected.
     bool setRfKitAddressForStation(const QString& host, int port, QString* reason);
@@ -2282,8 +2284,9 @@ public:
     static constexpr int kTgxlLanScanWindowMs = 3000;
     // A Host or Port typed on a window's Peripherals row without Connect:
     // saves TGXL_ManualIp and TGXL_ManualPort for the Core's radio without
-    // dialling, with configureTgxl's address checks and reasons. Refused
-    // while the radio is on the air. The `tuner` object's configured
+    // dialling, with configureTgxl's address checks and reasons. A blank
+    // host is saved (group B fix wave, I1), as a local window's blank Host
+    // stops auto-connect. Refused while the radio is on the air. The `tuner` object's configured
     // address follows while the Core is not connecting or connected.
     bool setTgxlAddressForStation(const QString& host, int port, QString* reason);
     // R-R3-49 (parity Task 2, transmitSettingsVersion 2): a window's Tune

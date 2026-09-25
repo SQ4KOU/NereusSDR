@@ -808,7 +808,7 @@ private slots:
         const QString badAddress = QStringLiteral("Enter the Tuner Genius XL's IP address or host "
                                                   "name, and a port from 1 to 65535.");
         for (const auto& [host, port] : QList<QPair<QString, int>>{
-                 {QString(), 9010}, {QStringLiteral("bad host!"), 9010},
+                 {QString(), 0}, {QStringLiteral("bad host!"), 9010},
                  {QStringLiteral("192.0.2.9"), 0}, {QStringLiteral("192.0.2.9"), 65536}}) {
             QVERIFY(!model.setTgxlAddressForStation(host, port, &reason));
             QCOMPARE(reason, badAddress);
@@ -940,6 +940,26 @@ private slots:
                  TunerModel::ConnectionPhase::Disconnected);
         QTest::qWait(100);
         QVERIFY(!model.tgxlConnection()->isConnected());
+        QCOMPARE(model.tunerModel()->connectionPhase(),
+                 TunerModel::ConnectionPhase::Disconnected);
+
+        // Group B fix wave (I1): a blank Host is kept, as a local window's
+        // blank Host is, and stops auto-connect. The Core shows the blank
+        // and its next start dials nothing, where a saved address dials.
+        QVERIFY(model.setTgxlAddressForStation(QStringLiteral("127.0.0.1"),
+                                               server.serverPort(), &reason));
+        QVERIFY(model.setTgxlAddressForStation(QStringLiteral("  "), 9013, &reason));
+        QVERIFY(reason.isEmpty());
+        QVERIFY(model.peripheralValue(QStringLiteral("TGXL_ManualIp")).isEmpty());
+        QCOMPARE(model.peripheralValue(QStringLiteral("TGXL_ManualPort")), QStringLiteral("9013"));
+        QVERIFY(model.tunerModel()->configuredHost().isEmpty());
+        QCOMPARE(model.tunerModel()->configuredPort(), 9013);
+        const quint64 blankToken = model.tgxlConnection()->socketAttemptToken();
+        model.applyPeripheralsForTest();
+        QTest::qWait(150);
+        QVERIFY(!server.hasPendingConnections());
+        QCOMPARE(model.tgxlConnection()->socketAttemptToken(), blankToken);
+        QVERIFY(model.tunerModel()->configuredHost().isEmpty());
         QCOMPARE(model.tunerModel()->connectionPhase(),
                  TunerModel::ConnectionPhase::Disconnected);
     }

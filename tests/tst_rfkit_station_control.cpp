@@ -218,7 +218,7 @@ private slots:
         const QString badAddress = QStringLiteral("Enter the RF-Kit amplifier's IP address or "
                                                   "host name, and a port from 1 to 65535.");
         for (const auto& [host, port] : QList<QPair<QString, int>>{
-                 {QString(), 8080}, {QStringLiteral("bad host!"), 8080},
+                 {QString(), 0}, {QStringLiteral("bad host!"), 8080},
                  {QStringLiteral("192.0.2.9"), 0}, {QStringLiteral("192.0.2.9"), 65536}}) {
             QVERIFY(!model.setRfKitAddressForStation(host, port, &reason));
             QCOMPARE(reason, badAddress);
@@ -373,6 +373,23 @@ private slots:
         QCOMPARE(model.peripheralValue(QStringLiteral("RfKit_ManualIp")), QStringLiteral("192.0.2.11"));
         QCOMPARE(rfKit->configuredHost(), QStringLiteral("192.0.2.11"));
         QCOMPARE(rfKit->connectionPhase(), Phase::Disabled);
+
+        // Group B fix wave (I1): a blank Host is kept, as a local window's
+        // blank Host is, and stops auto-connect: with the switch on again
+        // the Core shows the blank and dials nothing.
+        QVERIFY(model.setRfKitAddressForStation(QStringLiteral("  "), 8084, &reason));
+        QVERIFY(reason.isEmpty());
+        QVERIFY(model.peripheralValue(QStringLiteral("RfKit_ManualIp")).isEmpty());
+        QCOMPARE(model.peripheralValue(QStringLiteral("RfKit_ManualPort")), QStringLiteral("8084"));
+        QVERIFY(rfKit->configuredHost().isEmpty());
+        const int seenBlank = amp.requests.size();
+        QVERIFY(model.setRfKitEnabledForStation(true, &reason));
+        model.applyPeripheralsForTest();
+        QTest::qWait(300);
+        QVERIFY(!conn->isConnected());
+        QCOMPARE(amp.requests.size(), seenBlank);
+        QVERIFY(rfKit->configuredHost().isEmpty());
+        QCOMPARE(rfKit->connectionPhase(), Phase::Disconnected);
     }
 
     // B1.12: the Core's RF-Kit connection counts reach `accessoryData`, as
