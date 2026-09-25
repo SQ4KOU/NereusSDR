@@ -899,7 +899,17 @@ RadioModel::RadioModel(Role role, QObject* parent)
         // load-time's 14-per-band emit burst collapses to one write.
         m_alexControllerDirty = true;
         scheduleSettingsSave();
+        // iPhone app Task 75 (ruling 5.11a): while the receive antenna is
+        // kept on an earlier band's, a change to that band's antenna moves
+        // the relay (the kept band governs the receive side); a change to
+        // the current band's is the operator's own choice, and ends the
+        // keeping.
+        if (m_keptRxAntennaBand && b == *m_keptRxAntennaBand && b != m_lastBand) {
+            applyAlexAntennaForBand(m_lastBand);
+            return;
+        }
         if (b != m_lastBand) { return; }
+        m_keptRxAntennaBand.reset();
         applyAlexAntennaForBand(b);
         // T13 — keep the slice's cached ANT labels in sync so UI
         // surfaces reading slice->rxAntenna() see the current-band value.
@@ -6625,9 +6635,58 @@ void RadioModel::requestSliceSampleRate(int sliceId, int rateHz)
     }
 }
 
-std::optional<RadioModel::StreamRateChangePlan>
-RadioModel::planStreamSampleRateChange(int streamIndex, int rateHz) const
+RadioModel::SampleRateReach RadioModel::planSampleRateReach(
+    int sliceId, int rateHz, const std::function<bool(int)>& mayClose) const
 {
+    // iPhone app Task 75 (the several-devices design, ruling 7.3).
+    // NereusSDR-original: no Thetis logic; it runs today's plan.
+    SampleRateReach reach;
+    const SliceModel* slice = sliceById(sliceId);
+    if (m_role != Role::Local || slice == nullptr || slice->streamIndex() < 0) {
+        return reach;
+    }
+    reach.stream = slice->streamIndex();
+    reach.radioWide = sampleRateIsRadioWide();
+    reach.fromRateHz = m_streamAllocator.streamSampleRateHz(reach.stream);
+    QSet<int> closing;
+    for (;;) {
+        int rejected = -1;
+        const std::optional<StreamRateChangePlan> plan =
+            planStreamSampleRateChange(reach.stream, rateHz, closing, &rejected);
+        if (!plan) {
+            if (rejected >= 0 && !closing.contains(rejected) && mayClose && mayClose(rejected)) {
+                closing.insert(rejected);
+                continue;
+            }
+            reach.refusedSliceId = rejected;
+            return reach;
+        }
+        reach.refused = false;
+        for (const PlannedSlicePlacement& planned : plan->slices) {
+            const int to = planned.placement.streamIndex;
+            if (to != planned.previousStream) {
+                reach.moves.append(planned.sliceId);
+            } else if (reach.radioWide || to == reach.stream) {
+                reach.changes.append(planned.sliceId);
+            }
+        }
+        for (SliceModel* s : m_slices) {
+            if (s && closing.contains(s->sliceIndex())) {
+                reach.closes.append(s->sliceIndex());
+            }
+        }
+        return reach;
+    }
+}
+
+std::optional<RadioModel::StreamRateChangePlan>
+RadioModel::planStreamSampleRateChange(int streamIndex, int rateHz,
+                                       const QSet<int>& excluded,
+                                       int* rejectedSliceId) const
+{
+    if (rejectedSliceId != nullptr) {
+        *rejectedSliceId = -1;
+    }
     if (rateHz <= 0
         || streamIndex < 0
         || streamIndex >= m_streamAllocator.streamCount()
@@ -6637,6 +6696,30 @@ RadioModel::planStreamSampleRateChange(int streamIndex, int rateHz) const
 
     const bool isP1 = sampleRateIsRadioWide();
     StreamRateChangePlan plan{m_streamAllocator, {}};
+
+    // iPhone app Task 75: a stream only excluded slices held is free in the
+    // simulation, as it will be once they close.
+    if (!excluded.isEmpty()) {
+        for (int st = 0; st < plan.allocator.streamCount(); ++st) {
+            if (!plan.allocator.isStreamActive(st)) {
+                continue;
+            }
+            bool keep = false;
+            bool any = false;
+            for (SliceModel* slice : m_slices) {
+                if (slice && slice->streamIndex() == st) {
+                    any = true;
+                    keep = keep || !excluded.contains(slice->sliceIndex());
+                }
+            }
+            if (any && !keep) {
+                if (st == streamIndex) {
+                    return std::nullopt;
+                }
+                plan.allocator.deactivateStream(st);
+            }
+        }
+    }
 
     if (isP1) {
         for (int st = 0; st < plan.allocator.streamCount(); ++st) {
@@ -6658,7 +6741,7 @@ RadioModel::planStreamSampleRateChange(int streamIndex, int rateHz) const
     QVector<SimulatedSlice> simulated;
     simulated.reserve(m_slices.size());
     for (SliceModel* slice : m_slices) {
-        if (slice && slice->streamIndex() >= 0) {
+        if (slice && slice->streamIndex() >= 0 && !excluded.contains(slice->sliceIndex())) {
             simulated.append({
                 slice->sliceIndex(), slice->frequency(), slice->streamIndex()});
         }
@@ -6684,6 +6767,9 @@ RadioModel::planStreamSampleRateChange(int streamIndex, int rateHz) const
                 previousStream, occupantCount == 1, ddcPinned,
                 candidate.frequencyHz);
         if (placement.outcome == Outcome::Rejected) {
+            if (rejectedSliceId != nullptr) {
+                *rejectedSliceId = candidate.sliceId;
+            }
             return std::nullopt;
         }
 
@@ -7524,6 +7610,9 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
         connect(slice, &SliceModel::streamIndexChanged, this, [this, slice](int stream) {
             m_sliceOwnership->noteStream(slice->sliceIndex(), stream);
         });
+        if (m_bandTrackingForTest) {
+            wireBandTrackingForTest(slice);
+        }
         slice->setSettingsRadioIdentity((restoreSeed && !bindRestored)
                                                 || m_lastRadioInfo.macAddress.isEmpty()
                                             ? m_receiveLayoutMac : m_lastRadioInfo.macAddress);
@@ -13374,6 +13463,141 @@ void RadioModel::snapTransmitFilterForMode(DSPMode mode)
     }
 }
 
+// Band tracking's per-band antenna switch, for the slice that crossed a band
+// edge (wireSliceSignals' frequency handler).
+void RadioModel::crossBandForSlice(SliceModel* slice, Band newBand)
+{
+    const Band oldBand = m_lastBand;
+    m_lastBand = newBand;
+    // iPhone app Task 75 (the several-devices design, ruling 5.11a, D61):
+    // the receive antenna stays put while another device listens through
+    // it. Tuning goes ahead; the relay keeps the band whose receive antenna
+    // is on it now, and the person tuning is told (receiveAntennaKept). The
+    // new band's transmit antenna still applies at key-down: every MOX
+    // change re-routes the antennas (onMoxHardwareFlipped), and the kept
+    // band governs only the receive side. With nobody else listening, the
+    // crossing switches as it always has, and the kept band is forgotten.
+    const Band applied = m_keptRxAntennaBand.value_or(oldBand);
+    if (receiveAntennaDiffers(applied, newBand)) {
+        const QList<QByteArray> listeners = devicesListeningThroughRelay(slice);
+        if (!listeners.isEmpty()) {
+            m_keptRxAntennaBand = applied;
+            // The slice's labels are left as they are: they name the antenna
+            // on the relay, and writing them would store the kept antenna
+            // as the new band's own (rxAntennaChanged -> AlexController).
+            emit receiveAntennaKept(slice->sliceIndex(), receiveAntennaLabel(applied),
+                                    listeners);
+            return;
+        }
+    }
+    m_keptRxAntennaBand.reset();
+    // Phase 3P-I-a T10 — reapply per-band antenna on boundary
+    // crossing. Thetis UpdateAlexAntSelection equivalent
+    // (HPSDR/Alex.cs:310 [@501e3f5]).
+    applyAlexAntennaForBand(newBand);
+    // Phase 3P-I-a T10 follow-up — refresh the slice's cached
+    // rxAntenna/txAntenna labels from AlexController so the
+    // VFO Flag and RxApplet buttons show the new band's value.
+    // Without this call the wire switched but the UI stayed
+    // on the previous band's label (caught during PR #N
+    // bench testing — KG4VCF 2026-04-22). Mirrors the T9
+    // path at line 476-478.
+    //
+    // Issue #257: pass the SkuUiProfile so the new band's RX-only
+    // selection (if any) gets the right SKU-specific label.
+    // The slice that CHANGED band, not the active one. This handler
+    // is per slice now, so refreshing m_activeSlice here would move
+    // Slice A's antenna selection when Slice B crossed a band edge.
+    {
+        const SkuUiProfile sku = skuUiProfileFor(m_hardwareProfile.model);
+        slice->refreshAntennasFromAlex(m_alexController, newBand, &sku);
+    }
+}
+
+bool RadioModel::receiveAntennaDiffers(Band a, Band b) const
+{
+    // iPhone app Task 75: whether the relay's receive side would move from
+    // band a's antenna to band b's (the inputs applyAlexAntennaForBand's
+    // receive branch reads). No Alex, no relay to move.
+    if (a == b || !boardCapabilities().hasAlex) {
+        return false;
+    }
+    const AlexController& alex = m_alexController;
+    const bool rxAntDiffers = alex.useTxAntForRx() ? alex.txAnt(a) != alex.txAnt(b)
+                                                   : alex.rxAnt(a) != alex.rxAnt(b);
+    return rxAntDiffers || alex.rxOnlyAnt(a) != alex.rxOnlyAnt(b)
+        || (a == Band::XVTR) != (b == Band::XVTR);
+}
+
+QString RadioModel::receiveAntennaLabel(Band band) const
+{
+    // iPhone app Task 75: the receive antenna's name as a slice shows it
+    // (SliceModel::refreshAntennasFromAlex): the SKU's RX-only label when
+    // the bypass input is chosen, otherwise ANT1..ANT3.
+    const int rxOnly = m_alexController.rxOnlyAnt(band);
+    if (rxOnly >= 1 && rxOnly <= 3) {
+        const SkuUiProfile sku = skuUiProfileFor(m_hardwareProfile.model);
+        const QString& label = sku.rxOnlyLabels[static_cast<size_t>(rxOnly - 1)];
+        if (!label.isEmpty()) {
+            return label;
+        }
+    }
+    const int ant = m_alexController.useTxAntForRx() ? m_alexController.txAnt(band)
+                                                      : m_alexController.rxAnt(band);
+    return QStringLiteral("ANT%1").arg(ant >= 1 && ant <= 3 ? ant : 1);
+}
+
+QList<QByteArray> RadioModel::devicesListeningThroughRelay(const SliceModel* tuner) const
+{
+    // iPhone app Task 75 (ruling 5.11a): the other devices with a slice on
+    // a receiver fed by the ADC the relay feeds: every receiver on a 1-ADC
+    // board; on a 2-ADC board, ADC0's receivers (ANT1 to ANT3 feed ADC0,
+    // the several-devices design, 6.5). Slices nobody owns have nobody to
+    // tell, and the tuner's own device's slices do not count.
+    QList<QByteArray> devices;
+    if (m_role != Role::Local || m_sliceOwnership == nullptr || tuner == nullptr) {
+        return devices;
+    }
+    const QByteArray self = m_sliceOwnership->mark(tuner->sliceIndex()).subject();
+    const bool oneAdc = boardCapabilities().adcCount < 2;
+    for (const SliceModel* other : std::as_const(m_slices)) {
+        if (other == nullptr || other == tuner || other->streamIndex() < 0) {
+            continue;
+        }
+        const QByteArray who = m_sliceOwnership->mark(other->sliceIndex()).subject();
+        if (who.isEmpty() || who == self || devices.contains(who)) {
+            continue;
+        }
+        if (!oneAdc && adcForStream(other->streamIndex()) != 0) {
+            continue;
+        }
+        devices.append(who);
+    }
+    return devices;
+}
+
+#ifdef NEREUS_BUILD_TESTS
+void RadioModel::enableBandTrackingForTest()
+{
+    m_bandTrackingForTest = true;
+    for (SliceModel* slice : std::as_const(m_slices)) {
+        wireBandTrackingForTest(slice);
+    }
+}
+#endif
+
+void RadioModel::wireBandTrackingForTest(SliceModel* slice)
+{
+    // The frequency handler's band test, for a model with no connection
+    // (wireSliceSignals runs only once a radio connects).
+    connect(slice, &SliceModel::frequencyChanged, this, [this, slice](double freq) {
+        const Band newBand = bandFromFrequency(freq);
+        if (newBand != m_lastBand) {
+            crossBandForSlice(slice, newBand);
+        }
+    });
+}
+
 // Wire active slice signals to WDSP channel and radio hardware.
 // Called from wireConnectionSignals after connection is established.
 void RadioModel::wireSliceSignals(SliceModel* slice)
@@ -13428,28 +13652,7 @@ void RadioModel::wireSliceSignals(SliceModel* slice)
             qCDebug(lcConnection) << "T10: band crossing" << bandLabel(m_lastBand)
                                   << "→" << bandLabel(newBand)
                                   << "(freq=" << freq << "Hz)";
-            m_lastBand = newBand;
-            // Phase 3P-I-a T10 — reapply per-band antenna on boundary
-            // crossing. Thetis UpdateAlexAntSelection equivalent
-            // (HPSDR/Alex.cs:310 [@501e3f5]).
-            applyAlexAntennaForBand(newBand);
-            // Phase 3P-I-a T10 follow-up — refresh the slice's cached
-            // rxAntenna/txAntenna labels from AlexController so the
-            // VFO Flag and RxApplet buttons show the new band's value.
-            // Without this call the wire switched but the UI stayed
-            // on the previous band's label (caught during PR #N
-            // bench testing — KG4VCF 2026-04-22). Mirrors the T9
-            // path at line 476-478.
-            //
-            // Issue #257: pass the SkuUiProfile so the new band's RX-only
-            // selection (if any) gets the right SKU-specific label.
-            // The slice that CHANGED band, not the active one. This handler
-            // is per slice now, so refreshing m_activeSlice here would move
-            // Slice A's antenna selection when Slice B crossed a band edge.
-            {
-                const SkuUiProfile sku = skuUiProfileFor(m_hardwareProfile.model);
-                slice->refreshAntennasFromAlex(m_alexController, newBand, &sku);
-            }
+            crossBandForSlice(slice, newBand);
         }
         scheduleSettingsSave();
     });
@@ -14525,15 +14728,18 @@ void RadioModel::applyAlexAntennaForBand(Band band, bool isTx)
 
         trxAnt = txAnt;
     } else {
+        // iPhone app Task 75 (ruling 5.11a): the receive side follows the
+        // band whose antenna is kept on the relay, when one is.
+        const Band rxBand = m_keptRxAntennaBand.value_or(band);
         // From Thetis Alex.cs:349-366 [@501e3f5].
-        rxOnlyAnt = m_alexController.rxOnlyAnt(band);
+        rxOnlyAnt = m_alexController.rxOnlyAnt(rxBand);
 
         // Thetis derives `xvtr` from the current console band
         // (console.vfoa_band == Band.XVTR). Mirror that: the user is in
         // XVTR mode when the active band slot is Band::XVTR. The session
         // flag m_xvtrActive acts as a secondary override for future
         // scenarios where XVTR state isn't tied to the band enum.
-        const bool xvtr = (band == Band::XVTR) || m_alexController.xvtrActive();
+        const bool xvtr = (rxBand == Band::XVTR) || m_alexController.xvtrActive();
         if (xvtr) {
             rxOnlyAnt = (rxOnlyAnt >= 3) ? 3 : 0;
         } else if (rxOnlyAnt >= 3) {
@@ -14544,8 +14750,8 @@ void RadioModel::applyAlexAntennaForBand(Band band, bool isTx)
         rxOut = (rxOnlyAnt != 0);
 
         trxAnt = m_alexController.useTxAntForRx()
-                   ? txAnt
-                   : m_alexController.rxAnt(band);
+                   ? m_alexController.txAnt(rxBand)
+                   : m_alexController.rxAnt(rxBand);
     }
 
     // From Thetis Alex.cs:368-375 rx_out_override [@501e3f5].

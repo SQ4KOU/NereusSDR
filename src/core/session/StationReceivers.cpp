@@ -86,6 +86,8 @@ constexpr const char* kNoQuestionReason = "That question is no longer open. Make
 constexpr const char* kNoChoiceReason = "That choice is not in the list. Make the change again.";
 constexpr const char* kChangedReason = "What this change reaches has changed. Make the change again.";
 constexpr const char* kNoTakeBackReason = "That can no longer be taken back.";
+// Ruling 7.5 (iPhone app Task 75).
+constexpr const char* kExpiredReason = "That question has expired. Make the change again.";
 constexpr const char* kCentreRefusedReason =
     "C-Tune cannot centre there while other receivers share this spectrum.";
 constexpr const char* kPanNeedsReceiverReason =
@@ -239,6 +241,11 @@ QStringList lettersOf(const QList<SavedSlice>& saved)
 }
 
 } // namespace
+
+QString StationServer::olderWindowReason(const QString& names)
+{
+    return olderWindowAskReason(names);
+}
 
 // ── Who is who ───────────────────────────────────────────────────────────
 
@@ -693,6 +700,13 @@ void StationServer::refuseWhileAsking(SessionTransport* transport, const Session
         answerHere(transport, SessionMessages::commandResult(
             original.commandVerb, original.commandId, false,
             QString::fromLatin1(kWaitingReason), {}, {phaseNeedsConfirmation()}));
+    } else if (original.kind == SessionMessageKind::SettingsWrite) {
+        // iPhone app Task 75 (link section 8.1): the Core's own value goes
+        // back with the reason, so the device shows it until it proceeds.
+        const QString key = QString::fromUtf8(original.objectKey);
+        const QVariant kept = m_settings.value(key);
+        send(transport, SessionMessages::settingsReject(key, kept.isValid(), kept.toString(),
+                                                        QString::fromLatin1(kWaitingReason)));
     }
 }
 
@@ -710,6 +724,8 @@ void StationServer::sendQuestion(SessionTransport* transport, ConfirmStep::Quest
     } else if (question.original.kind == SessionMessageKind::PropertyWrite
                && question.original.writeId != 0) {
         prompt.forWriteId = question.original.writeId;
+    } else if (question.original.kind == SessionMessageKind::SettingsWrite) {
+        prompt.forSettingsKey = QString::fromUtf8(question.original.objectKey);
     }
     m_confirm->ask(question);
     const SessionMessage request =
@@ -1150,6 +1166,14 @@ SessionMessage StationServer::answerConfirm(const SessionMessage& invoke, int id
         // Cancel changes nothing.
         return SessionMessages::commandResult(invoke.commandVerb, invoke.commandId, true, QString(),
                                               {});
+    }
+    // Ruling 7.5 (iPhone app Task 75): a question expires 60 s after it
+    // was sent; a later proceed changes nothing.
+    if (ConfirmStep::expired(*question, m_deviceSessions->now())) {
+        return refuse(QString::fromLatin1(kExpiredReason));
+    }
+    if (question->kind == QLatin1String("sharedSetting")) {
+        return proceedSharedSetting(transport, *question, invoke);
     }
     if (question->kind == QLatin1String("panMove")) {
         return proceedPanMove(transport, *question, invoke);

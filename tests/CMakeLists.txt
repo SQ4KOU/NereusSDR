@@ -7311,6 +7311,10 @@ nereus_add_test(tst_receiver_anchor EXTRA_LABELS session)
 # iPhone app Task 75 (R-IOS-30): which other devices a radio-wide setting
 # disturbs, table-driven; the receive antenna kept on a band crossing.
 nereus_add_test(tst_disturbance_check EXTRA_LABELS session)
+nereus_add_test(tst_antenna_kept
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_antenna_kept PRIVATE NEREUS_BUILD_TESTS)
 nereus_add_test(tst_confirm_step
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)

@@ -1286,6 +1286,28 @@ public:
     /// iPhone app Task 74 (ruling 6.9): the slice cap every device shares.
     int sliceCapForDevices() const { return sliceChannelLimit(); }
 
+    /// iPhone app Task 75 (the several-devices design, ruling 7.3): what a
+    /// sample-rate change on `sliceId`'s receiver would do, simulated with
+    /// today's plan (planStreamSampleRateChange) and changing nothing. A
+    /// slice the plan would refuse and `mayClose` allows (another device's)
+    /// is set aside as closing and the plan run again without it; any other
+    /// refused slice refuses the whole change, as today (`refused`, with
+    /// `refusedSliceId`). Local only.
+    struct SampleRateReach {
+        bool refused = true;
+        int refusedSliceId = -1;
+        /// The receiver the change is on, and whether it is the radio's
+        /// (Protocol 1).
+        int stream = -1;
+        bool radioWide = false;
+        int fromRateHz = 0;
+        QList<int> changes;
+        QList<int> moves;
+        QList<int> closes;
+    };
+    SampleRateReach planSampleRateReach(int sliceId, int rateHz,
+                                        const std::function<bool(int)>& mayClose) const;
+
     /// End the session-scoped C-Tune state and project the cleared value to
     /// every cohost. StationServer calls this when the authenticated session
     /// goes away; it does not persist across a reconnect.
@@ -2519,6 +2541,13 @@ public:
     // tst_radio_model_mic_ptt_wire can verify the signal/slot bind + prime
     // path without spinning up the full wireConnectionSignals pipeline.
     void wireMicPttDisabledForTest() { connectMicPttDisabledSignal(); }
+    /// iPhone app Task 75: band tracking (the per-band antenna switch) for
+    /// every slice, on a model with no connection; see crossBandForSlice.
+    void enableBandTrackingForTest();
+    /// The band whose receive antenna is kept on the relay, if any.
+    std::optional<NereusSDR::Band> keptReceiveAntennaBandForTest() const {
+        return m_keptRxAntennaBand;
+    }
     void setLastBandForTest(NereusSDR::Band b) {
         const bool cross = (b != m_lastBand);
         m_lastBand = b;
@@ -3464,6 +3493,13 @@ signals:
     /// Codex, PR #318.
     void streamAdcRoutingChanged();
 
+    /// iPhone app Task 75 (the several-devices design, ruling 5.11a, D61):
+    /// slice `sliceId` crossed a band edge and the receive antenna stayed on
+    /// `antenna` because `listeners` (other devices, by id) listen through
+    /// it. Local only.
+    void receiveAntennaKept(int sliceId, const QString& antenna,
+                            const QList<QByteArray>& listeners);
+
     /// Phase 3F Sub-Epic I: emitted whenever the slice or stream set changes
     /// such that the per-board codec must recompute the DDC assignment.
     /// Observation hook; invokeCodecDdcAssignment does the work. Task 7b: it
@@ -3808,6 +3844,15 @@ private:
     /// Qt::UniqueConnection-safe member targets or are wired once at
     /// addSlice time.
     void wireSliceSignals(SliceModel* slice);
+    /// Band tracking's crossing for `slice` (m_lastBand, the per-band
+    /// antenna switch and the slice's antenna labels); iPhone app Task 75
+    /// keeps the receive antenna while another device listens (ruling
+    /// 5.11a).
+    void crossBandForSlice(SliceModel* slice, Band newBand);
+    bool receiveAntennaDiffers(Band a, Band b) const;
+    QString receiveAntennaLabel(Band band) const;
+    QList<QByteArray> devicesListeningThroughRelay(const SliceModel* tuner) const;
+    void wireBandTrackingForTest(SliceModel* slice);
 
     /// The transmitter's RADE passband snap: entering RADE_U/RADE_L sets the
     /// transmit filter to 650..2350 Hz; leaving RADE restores 100..3900 Hz
@@ -4321,8 +4366,14 @@ private:
         QVector<PlannedSlicePlacement> slices;
     };
 
+    // iPhone app Task 75 (ruling 7.3): `excluded` slices are left out of
+    // the simulation, as though already closed (a stream only they held is
+    // free); `rejectedSliceId`, when given, names the slice whose refusal
+    // made the plan fail (-1 for any other failure).
     std::optional<StreamRateChangePlan>
-    planStreamSampleRateChange(int streamIndex, int rateHz) const;
+    planStreamSampleRateChange(int streamIndex, int rateHz,
+                               const QSet<int>& excluded = {},
+                               int* rejectedSliceId = nullptr) const;
 
     void commitStreamSampleRateChange(const StreamRateChangePlan& plan);
 
@@ -4803,6 +4854,11 @@ private:
     // press, not via VFO tune, so this lambda only tracks; it does NOT
     // save or restore at the boundary.
     Band m_lastBand{Band::Band20m};
+    /// iPhone app Task 75 (ruling 5.11a): the band whose receive antenna the
+    /// relay keeps while another device listens through it; empty when the
+    /// relay follows m_lastBand as always.
+    std::optional<Band> m_keptRxAntennaBand;
+    bool m_bandTrackingForTest{false};
 
     // Settings save coalescing
     bool m_settingsSaveScheduled{false};

@@ -300,6 +300,25 @@ public:
     /// names another radio, or an empty string when it does not.
     QString otherRadioRefusal(const QString& key) const;
 
+    /// iPhone app Task 75 (the several-devices design, ruling 7.1): the
+    /// settings keys whose write reaches other devices' slices or the
+    /// transmitter, by what they touch. A write of one of these goes
+    /// through the Core's confirm step (StationServer) before it is
+    /// applied; every other key applies at once, as before.
+    enum class SharedFamily {
+        None,
+        /// DspOptions<Setting><Group>Rx: every receiver.
+        ReceiveOptions,
+        /// PGXL_...: the amplifier, its interlock and power limit (the
+        /// transmitter).
+        Amplifier,
+        /// TGXL_... and RfKit_...: the tuner and the RF-Kit amplifier's
+        /// antenna (ADC0's receivers, or every receiver on a 1-ADC board,
+        /// and the transmitter).
+        Tuner,
+    };
+    static SharedFamily sharedFamilyOf(const QString& key);
+
 signals:
     /// One Station-key change worth telling every connected client
     /// about: either a genuine local/daemon-side change (originTag

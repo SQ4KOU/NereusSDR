@@ -1201,16 +1201,34 @@ private slots:
                           QVariant(static_cast<int>(NbMode::NB))}},
             77)));
 
-        // A: its own answer, with the value the Core kept.
+        // A: the blanker is the shared receiver's, so B's slice there makes
+        // it a change that affects B (ruling 6.1, iPhone app Task 75): held
+        // and asked. Nothing changes until A goes ahead.
         QVERIFY(QTest::qWaitFor(
-            [appA]() { return !firstOfType(appA->received(), QStringLiteral("property.result")).isEmpty(); },
+            [appA]() { return !firstOfType(appA->received(), QStringLiteral("confirm.request")).isEmpty(); },
             5000));
-        const QJsonObject result = firstOfType(appA->received(), QStringLiteral("property.result"));
-        QCOMPARE(result.value(QStringLiteral("writeId")).toInteger(), 77);
-        const QJsonObject kept = result.value(QStringLiteral("results")).toArray().first().toObject();
-        QCOMPARE(kept.value(QStringLiteral("accepted")).toBool(false), true);
-        QCOMPARE(kept.value(QStringLiteral("value")).toObject().value(QStringLiteral("value")).toInt(),
-                 static_cast<int>(NbMode::NB));
+        const QJsonObject held = firstOfType(appA->received(), QStringLiteral("property.result"));
+        QCOMPARE(held.value(QStringLiteral("writeId")).toInteger(), 77);
+        QCOMPARE(held.value(QStringLiteral("results")).toArray().first().toObject()
+                     .value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("Waiting for you to confirm."));
+        QCOMPARE(core.model->sliceById(second)->nbMode(), NbMode::Off);
+        const QJsonObject question = firstOfType(appA->received(), QStringLiteral("confirm.request"));
+        QCOMPARE(question.value(QStringLiteral("kind")).toString(), QStringLiteral("sharedSetting"));
+        const QJsonObject proceeded = core.invoke(
+            appA, "confirm.proceed",
+            {int64("id", question.value(QStringLiteral("id")).toInteger()), int64("choice", -1)});
+        QCOMPARE(proceeded.value(QStringLiteral("accepted")).toBool(false), true);
+        // Its readback, with the value the Core kept (ruling 7.4a).
+        bool readBack = false;
+        for (const QJsonValue& v : proceeded.value(QStringLiteral("values")).toArray()) {
+            if (v.toObject().value(QStringLiteral("name")).toString() == QStringLiteral("nbMode")) {
+                QCOMPARE(v.toObject().value(QStringLiteral("value")).toInt(),
+                         static_cast<int>(NbMode::NB));
+                readBack = true;
+            }
+        }
+        QVERIFY(readBack);
         QCOMPARE(core.model->sliceById(second)->nbMode(), NbMode::NB);
 
         // B: A's two slices are A's (Task 73), so B never sees them; the
@@ -1229,6 +1247,8 @@ private slots:
         QVERIFY(!everSaw(appB, QStringLiteral("slice:0")));
         QVERIFY(!everSaw(appB, sharedKey));
         QCOMPARE(countOfType(appB->received(), fromB, QStringLiteral("property.result")), 0);
+        // B is told who changed what.
+        QTRY_COMPARE(countOfType(appB->received(), fromB, QStringLiteral("notice")), 1);
 
         // A: no echo of its own write, on either slice, over several flushes.
         QTest::qWait(3 * StationServer::kDefaultDeltaFlushMs);

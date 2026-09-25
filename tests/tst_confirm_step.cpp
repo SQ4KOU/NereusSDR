@@ -47,6 +47,10 @@
 
 #include "MultiDeviceHarness.h"
 
+#include "core/StepAttenuatorController.h"
+#include "core/StepAttenuatorFacade.h"
+#include "core/session/ConfirmStep.h"
+
 namespace {
 
 const QString kWaiting = QStringLiteral("Waiting for you to confirm.");
@@ -165,6 +169,59 @@ int indexOfType(const LoopbackTransport* app, const QString& type)
     }
     return -1;
 }
+
+// iPhone app Task 75: two devices each on a receiver of their own, both fed
+// from the HL2's one ADC. A (the iPhone) on 7.074 MHz, B (the iPad) on
+// 14.074 MHz; the Core's attenuator bound.
+struct SharedAdc {
+    Core core;
+    StepAttenuatorController stepAtt;
+    Device a;
+    Device b{QStringLiteral("iPad"), QStringLiteral("tablet"), QStringLiteral("iPad")};
+    LoopbackTransport* appA = nullptr;
+    LoopbackTransport* appB = nullptr;
+    quint32 nextWriteId = 900;
+
+    explicit SharedAdc(bool withB = true)
+    {
+        stepAtt.setTickTimerEnabled(false);
+        core.model->setStepAttController(&stepAtt);
+        core.model->configureStreamPool(3, 5, 192000);
+        core.model->sliceById(0)->setFrequency(7074000.0);
+        core.pair(a);
+        core.pair(b);
+        appA = core.signIn(a);
+        if (withB) {
+            appB = core.signIn(b);
+            core.model->sliceById(bSlice())->setFrequency(14074000.0);
+        }
+    }
+
+    int bSlice() const { return core.model->sliceOwnership()->ownedBy(b.key.fingerprint()).first(); }
+
+    // A property.write of stepAtt; waits for its property.result.
+    QJsonObject writeStepAtt(LoopbackTransport* app, const char* name, qint64 value,
+                             MirrorWireKind kind = MirrorWireKind::Int64)
+    {
+        const quint32 id = nextWriteId++;
+        app->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+            "stepAtt", {MirrorUpdate{0, QByteArray(name), kind, QVariant(value)}}, id)));
+        QJsonObject result;
+        const bool answered = QTest::qWaitFor([&]() {
+            result = propertyResult(app, id);
+            return !result.isEmpty();
+        }, 5000);
+        Q_UNUSED(answered);
+        return result;
+    }
+
+    QJsonObject proceed(LoopbackTransport* app, qint64 id)
+    {
+        return core.invoke(app, "confirm.proceed", {int64("id", id), int64("choice", -1)});
+    }
+
+    int attenuation() const { return core.model->stepAttFacade()->attenuationDb(); }
+};
 
 } // namespace
 
@@ -764,6 +821,331 @@ private slots:
         QVERIFY(!end.contains(QStringLiteral("code")));
         QVERIFY(!s.core.sessions().entry(older.key.fingerprint()));
         QCOMPARE(s.core.model->slices().size(), 2);
+    }
+
+    // ── iPhone app Task 75: settings that affect every device ────────────
+
+    void aloneAnAttenuatorChangeAppliesAtOnce()
+    {
+        SharedAdc s(false);
+        QVERIFY(admitted(s.appA));
+        const QJsonObject result = s.writeStepAtt(s.appA, "attenuationDb", 20);
+        QCOMPARE(firstResultEntry(result).value(QStringLiteral("accepted")).toBool(false), true);
+        QCOMPARE(s.attenuation(), 20);
+        QCOMPARE(countOf(s.appA, QStringLiteral("confirm.request")), 0);
+    }
+
+    void anAttenuatorChangeWithAnotherDeviceOnTheAdcAsksThenTellsIt()
+    {
+        SharedAdc s;
+        QVERIFY(admitted(s.appB));
+        const int bSlice = s.bSlice();
+        const int bReceiver = streamOf(s.core, bSlice);
+        QVERIFY(bReceiver >= 0);
+        QVERIFY(bReceiver != streamOf(s.core, 0));
+        const QJsonObject held = s.writeStepAtt(s.appA, "attenuationDb", 20);
+        QCOMPARE(firstResultEntry(held).value(QStringLiteral("accepted")).toBool(true), false);
+        QCOMPARE(firstResultEntry(held).value(QStringLiteral("reason")).toString(), kWaiting);
+        QCOMPARE(s.attenuation(), 0);
+
+        const QJsonObject ask = waitForLast(s.appA, QStringLiteral("confirm.request"), 0);
+        QCOMPARE(ask.value(QStringLiteral("kind")).toString(), QStringLiteral("sharedSetting"));
+        QCOMPARE(ask.value(QStringLiteral("reason")).toString(), kWaiting);
+        QCOMPARE(ask.value(QStringLiteral("expiresInMs")).toInteger(), 60000);
+        QVERIFY(ask.contains(QStringLiteral("forWriteId")));
+        const QJsonObject change = ask.value(QStringLiteral("change")).toObject();
+        QCOMPARE(change.value(QStringLiteral("label")).toString(), QStringLiteral("Attenuator, ADC 1"));
+        QCOMPARE(change.value(QStringLiteral("from")).toString(), QStringLiteral("0 dB"));
+        QCOMPARE(change.value(QStringLiteral("to")).toString(), QStringLiteral("20 dB"));
+        const QJsonArray affected = ask.value(QStringLiteral("affected")).toArray();
+        QCOMPARE(affected.size(), 1);
+        const QJsonObject who = affected.first().toObject();
+        QCOMPARE(who.value(QStringLiteral("deviceName")).toString(), QStringLiteral("iPad"));
+        QCOMPARE(who.value(QStringLiteral("deviceShortName")).toString(), QStringLiteral("iPad"));
+        QCOMPARE(who.value(QStringLiteral("state")).toString(), QStringLiteral("listening"));
+        QCOMPARE(who.value(QStringLiteral("holdsTransmit")).toBool(true), false);
+        const QJsonObject slice = who.value(QStringLiteral("slices")).toArray().first().toObject();
+        QCOMPARE(slice.value(QStringLiteral("sliceId")).toInt(), bSlice);
+        QCOMPARE(slice.value(QStringLiteral("mode")).toInt(),
+                 static_cast<int>(s.core.model->sliceById(bSlice)->dspMode()));
+        QCOMPARE(slice.value(QStringLiteral("adc")).toInt(), 0);
+        QCOMPARE(slice.value(QStringLiteral("streamIndex")).toInt(), bReceiver);
+        QCOMPARE(slice.value(QStringLiteral("effect")).toString(), QStringLiteral("changes"));
+        QCOMPARE(countOf(s.appB, QStringLiteral("notice")), 0);
+
+        s.core.now = 7000;
+        const QJsonObject done = s.proceed(s.appA, ask.value(QStringLiteral("id")).toInteger());
+        QCOMPARE(done.value(QStringLiteral("accepted")).toBool(false), true);
+        QCOMPARE(valueOf(done, QStringLiteral("objectKey")).toString(), QStringLiteral("stepAtt"));
+        QCOMPARE(valueOf(done, QStringLiteral("attenuationDb")).toInt(), 20);
+        QCOMPARE(s.attenuation(), 20);
+
+        const QJsonObject told = waitForLast(s.appB, QStringLiteral("notice"), 0);
+        QCOMPARE(told.value(QStringLiteral("kind")).toString(), QStringLiteral("settingChanged"));
+        QCOMPARE(told.value(QStringLiteral("byName")).toString(), QStringLiteral("iPhone"));
+        QCOMPARE(told.value(QStringLiteral("bySource")).toString(), QStringLiteral("device"));
+        QCOMPARE(told.value(QStringLiteral("secondsAgo")).toInteger(), 0);
+        QCOMPARE(told.value(QStringLiteral("takeBack")).toBool(true), false);
+        QCOMPARE(told.value(QStringLiteral("change")).toObject(), change);
+        QCOMPARE(told.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("iPhone changed Attenuator, ADC 1 from 0 dB to 20 dB."));
+        QCOMPARE(told.value(QStringLiteral("slices")).toArray().first().toObject()
+                     .value(QStringLiteral("sliceId")).toInt(),
+                 bSlice);
+        // The asker is not told.
+        QCOMPARE(countOf(s.appA, QStringLiteral("notice")), 0);
+    }
+
+    void aSharedQuestionExpiresSixtySecondsAfterItWasSent()
+    {
+        SharedAdc s;
+        s.core.now = 1000;
+        s.writeStepAtt(s.appA, "attenuationDb", 20);
+        const QJsonObject ask = waitForLast(s.appA, QStringLiteral("confirm.request"), 0);
+        s.core.now = 1000 + ConfirmStep::kExpiryMs;
+        const QJsonObject late = s.proceed(s.appA, ask.value(QStringLiteral("id")).toInteger());
+        QCOMPARE(late.value(QStringLiteral("accepted")).toBool(true), false);
+        QCOMPARE(late.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("That question has expired. Make the change again."));
+        QCOMPARE(s.attenuation(), 0);
+        QCOMPARE(countOf(s.appB, QStringLiteral("notice")), 0);
+
+        // One millisecond short of it, the question is still open.
+        s.writeStepAtt(s.appA, "attenuationDb", 20);
+        const QJsonObject again = waitForLast(s.appA, QStringLiteral("confirm.request"), 1);
+        s.core.now += ConfirmStep::kExpiryMs - 1;
+        QCOMPARE(s.proceed(s.appA, again.value(QStringLiteral("id")).toInteger())
+                     .value(QStringLiteral("accepted")).toBool(false),
+                 true);
+        QCOMPARE(s.attenuation(), 20);
+    }
+
+    void aPanMoveQuestionExpiresToo()
+    {
+        Shared s;
+        s.core.now = 1000;
+        s.core.invoke(s.appA, "requestStreamCentre", {int64("sliceId", 0), f64("centreHz", 7000000.0)});
+        const QJsonObject ask = waitForLast(s.appA, QStringLiteral("confirm.request"), 0);
+        QCOMPARE(ask.value(QStringLiteral("kind")).toString(), QStringLiteral("panMove"));
+        s.core.now = 1000 + ConfirmStep::kExpiryMs;
+        const QJsonObject late = s.proceed(s.appA, ask.value(QStringLiteral("id")).toInteger());
+        QCOMPARE(late.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("That question has expired. Make the change again."));
+        QCOMPARE(streamOf(s.core, 1), s.receiver());
+    }
+
+    void aSecondDisturbingChangeReplacesTheFirst()
+    {
+        SharedAdc s;
+        s.writeStepAtt(s.appA, "attenuationDb", 20);
+        const QJsonObject first = waitForLast(s.appA, QStringLiteral("confirm.request"), 0);
+        s.writeStepAtt(s.appA, "enabled", 0, MirrorWireKind::Bool);
+        const QJsonObject second = waitForLast(s.appA, QStringLiteral("confirm.request"), 1);
+        QVERIFY(second.value(QStringLiteral("id")).toInteger()
+                != first.value(QStringLiteral("id")).toInteger());
+        const QJsonObject stale = s.proceed(s.appA, first.value(QStringLiteral("id")).toInteger());
+        QCOMPARE(stale.value(QStringLiteral("accepted")).toBool(true), false);
+        QCOMPARE(stale.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("That question is no longer open. Make the change again."));
+        QCOMPARE(s.attenuation(), 0);
+    }
+
+    void aNewWriteToTheSameTargetCancelsTheQuestion()
+    {
+        SharedAdc s;
+        s.writeStepAtt(s.appA, "attenuationDb", 20);
+        const QJsonObject ask = waitForLast(s.appA, QStringLiteral("confirm.request"), 0);
+        // Back to the value it already has: no change, nobody asked, and
+        // the open question goes (ruling 7.6).
+        const QJsonObject same = s.writeStepAtt(s.appA, "attenuationDb", 0);
+        QCOMPARE(firstResultEntry(same).value(QStringLiteral("accepted")).toBool(false), true);
+        QCOMPARE(countOf(s.appA, QStringLiteral("confirm.request")), 1);
+        const QJsonObject stale = s.proceed(s.appA, ask.value(QStringLiteral("id")).toInteger());
+        QCOMPARE(stale.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("That question is no longer open. Make the change again."));
+        QCOMPARE(s.attenuation(), 0);
+    }
+
+    void aProceedAfterTheTargetChangedIsRefused()
+    {
+        SharedAdc s;
+        s.writeStepAtt(s.appA, "attenuationDb", 20);
+        const QJsonObject ask = waitForLast(s.appA, QStringLiteral("confirm.request"), 0);
+        // The Core's own change moves the target (ruling 7.6: whoever
+        // changed it).
+        s.core.model->stepAttFacade()->setAttenuationDb(10);
+        QCOMPARE(s.attenuation(), 10);
+        const QJsonObject refused = s.proceed(s.appA, ask.value(QStringLiteral("id")).toInteger());
+        QCOMPARE(refused.value(QStringLiteral("accepted")).toBool(true), false);
+        QCOMPARE(refused.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("That setting changed since you asked. Make the change again."));
+        QVERIFY(refused.value(QStringLiteral("values")).toArray().isEmpty());
+        QCOMPARE(s.attenuation(), 10);
+        QCOMPARE(countOf(s.appB, QStringLiteral("notice")), 0);
+    }
+
+    void aSharedProceedWhoseSetGrewAsksAgainAndAppliesNothing()
+    {
+        SharedAdc s;
+        s.writeStepAtt(s.appA, "attenuationDb", 20);
+        const QJsonObject ask = waitForLast(s.appA, QStringLiteral("confirm.request"), 0);
+        // B opens a second slice on the ADC before A answers.
+        QCOMPARE(s.core.invoke(s.appB, "addSliceOnPan", {utf8("panId", QStringLiteral("pan-b2"))})
+                     .value(QStringLiteral("accepted")).toBool(false),
+                 true);
+        const QJsonObject again = s.proceed(s.appA, ask.value(QStringLiteral("id")).toInteger());
+        QCOMPARE(again.value(QStringLiteral("accepted")).toBool(true), false);
+        QCOMPARE(again.value(QStringLiteral("reason")).toString(), kWaiting);
+        QCOMPARE(valueOf(again, QStringLiteral("phase")).toString(),
+                 QStringLiteral("needsConfirmation"));
+        const QJsonObject asked = waitForLast(s.appA, QStringLiteral("confirm.request"), 1);
+        QCOMPARE(asked.value(QStringLiteral("affected")).toArray().first().toObject()
+                     .value(QStringLiteral("slices")).toArray().size(),
+                 2);
+        QCOMPARE(s.attenuation(), 0);
+        // The original write is not answered twice.
+        QCOMPARE(countOf(s.appA, QStringLiteral("property.result")), 1);
+        QCOMPARE(s.proceed(s.appA, asked.value(QStringLiteral("id")).toInteger())
+                     .value(QStringLiteral("accepted")).toBool(false),
+                 true);
+        QCOMPARE(s.attenuation(), 20);
+    }
+
+    void aSharedQuestionIsDroppedWhenTheSessionEnds()
+    {
+        SharedAdc s;
+        s.writeStepAtt(s.appA, "attenuationDb", 20);
+        const QJsonObject ask = waitForLast(s.appA, QStringLiteral("confirm.request"), 0);
+        s.appA->closeLink(QStringLiteral("lost"));
+        QTRY_COMPARE(s.core.sessions().entry(s.a.key.fingerprint())->state,
+                     DeviceSessionRegistry::State::Away);
+        LoopbackTransport* back = s.core.signIn(s.a);
+        QVERIFY(admitted(back));
+        const QJsonObject stale = s.proceed(back, ask.value(QStringLiteral("id")).toInteger());
+        QCOMPARE(stale.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("That question is no longer open. Make the change again."));
+        QCOMPARE(s.attenuation(), 0);
+    }
+
+    void aSettingsWriteIsHeldAndItsProceedCarriesTheReadback()
+    {
+        SharedAdc s;
+        const QString key = QStringLiteral("DspOptionsBufferSizePhoneRx");
+        const QString before = s.core.settings->value(key).toString();
+        s.appA->sendText(SessionMessages::encode(
+            SessionMessages::settingsWrite(key, QStringLiteral("1024"), QStringLiteral("a-1"))));
+        const QJsonObject reject = waitForLast(s.appA, QStringLiteral("settings.reject"), 0);
+        QCOMPARE(reject.value(QStringLiteral("key")).toString(), key);
+        QCOMPARE(reject.value(QStringLiteral("reason")).toString(), kWaiting);
+        const QJsonObject ask = waitForLast(s.appA, QStringLiteral("confirm.request"), 0);
+        QCOMPARE(ask.value(QStringLiteral("forSettingsKey")).toString(), key);
+        QCOMPARE(ask.value(QStringLiteral("change")).toObject().value(QStringLiteral("label")).toString(),
+                 QStringLiteral("Receive buffer size, voice modes"));
+        QCOMPARE(s.core.settings->value(key).toString(), before);
+
+        const QJsonObject done = s.proceed(s.appA, ask.value(QStringLiteral("id")).toInteger());
+        QCOMPARE(done.value(QStringLiteral("accepted")).toBool(false), true);
+        QCOMPARE(valueOf(done, QStringLiteral("settingsKey")).toString(), key);
+        QCOMPARE(valueOf(done, QStringLiteral("value")).toString(), QStringLiteral("1024"));
+        QCOMPARE(s.core.settings->value(key).toString(), QStringLiteral("1024"));
+        QCOMPARE(waitForLast(s.appB, QStringLiteral("notice"), 0).value(QStringLiteral("kind")).toString(),
+                 QStringLiteral("settingChanged"));
+    }
+
+    void aNotchInsideAnotherDevicesPassbandAsksOneOutsideDoesNot()
+    {
+        SharedAdc s;
+        const int notches = static_cast<int>(s.core.model->notchModel()->notches().size());
+        // Outside B's passband (14.0741 to 14.077 MHz in USB): at once.
+        QCOMPARE(s.core.invoke(s.appA, "notch.add",
+                               {int64("sliceId", 0), f64("centreHz", 7075000.0), f64("widthHz", 100.0)})
+                     .value(QStringLiteral("accepted")).toBool(false),
+                 true);
+        QCOMPARE(countOf(s.appA, QStringLiteral("confirm.request")), 0);
+        QTRY_COMPARE(static_cast<int>(s.core.model->notchModel()->notches().size()), notches + 1);
+        // Inside it: asked, naming B.
+        const QJsonObject held = s.core.invoke(
+            s.appA, "notch.add", {int64("sliceId", 0), f64("centreHz", 14075000.0), f64("widthHz", 100.0)});
+        QCOMPARE(held.value(QStringLiteral("reason")).toString(), kWaiting);
+        const QJsonObject ask = waitForLast(s.appA, QStringLiteral("confirm.request"), 0);
+        QCOMPARE(ask.value(QStringLiteral("affected")).toArray().first().toObject()
+                     .value(QStringLiteral("deviceName")).toString(),
+                 QStringLiteral("iPad"));
+        QCOMPARE(static_cast<int>(s.core.model->notchModel()->notches().size()), notches + 1);
+    }
+
+    void anOlderWindowsSharedChangeIsRefusedNamingWhoItWouldAffect()
+    {
+        SharedAdc s(false);
+        Device older(QStringLiteral("Shack PC"), QStringLiteral("computer"));
+        s.core.pair(older);
+        LoopbackTransport* appOld = s.core.signIn(older, {{"deviceAuth", 1}});
+        QVERIFY(admitted(appOld));
+        const QJsonObject refused = s.writeStepAtt(appOld, "attenuationDb", 20);
+        const QString reason = firstResultEntry(refused).value(QStringLiteral("reason")).toString();
+        QCOMPARE(reason, QStringLiteral("This change would affect iPhone. Update NereusSDR to "
+                                        "confirm changes that affect other devices."));
+        QCOMPARE(firstResultEntry(refused).value(QStringLiteral("accepted")).toBool(true), false);
+        QCOMPARE(s.attenuation(), 0);
+        QCOMPARE(countOf(appOld, QStringLiteral("confirm.request")), 0);
+    }
+
+    void aNarrowerRateOnASharedReceiverMovesTheOtherDevicesSlice()
+    {
+        // No connection: the rate is per receiver (Protocol 2's rule). B's
+        // slice, 76 kHz from A's, no longer fits a 96 kHz window: the plan
+        // moves it to the free receiver (ruling 7.3).
+        Shared s;
+        const int receiver = s.receiver();
+        const QJsonObject held = s.core.invoke(
+            s.appA, "requestSliceSampleRate", {int64("sliceId", 0), int64("rateHz", 96000)});
+        QCOMPARE(held.value(QStringLiteral("reason")).toString(), kWaiting);
+        const QJsonObject ask = waitForLast(s.appA, QStringLiteral("confirm.request"), 0);
+        const QJsonObject change = ask.value(QStringLiteral("change")).toObject();
+        QCOMPARE(change.value(QStringLiteral("label")).toString(),
+                 QStringLiteral("Sample rate, Receiver %1").arg(receiver + 1));
+        QCOMPARE(change.value(QStringLiteral("from")).toString(), QStringLiteral("192 kHz"));
+        QCOMPARE(change.value(QStringLiteral("to")).toString(), QStringLiteral("96 kHz"));
+        const QJsonObject slice = ask.value(QStringLiteral("affected")).toArray().first().toObject()
+                                      .value(QStringLiteral("slices")).toArray().first().toObject();
+        QCOMPARE(slice.value(QStringLiteral("sliceId")).toInt(), 1);
+        QCOMPARE(slice.value(QStringLiteral("effect")).toString(), QStringLiteral("moves"));
+        QCOMPARE(ask.value(QStringLiteral("forCommandId")).toInteger(),
+                 held.value(QStringLiteral("id")).toInteger());
+        QCOMPARE(streamOf(s.core, 1), receiver);
+
+        const QJsonObject done = s.proceed(s.appA, ask.value(QStringLiteral("id")).toInteger());
+        QCOMPARE(done.value(QStringLiteral("accepted")).toBool(false), true);
+        QCOMPARE(s.core.model->streamAllocator().streamSampleRateHz(receiver), 96000);
+        QVERIFY(streamOf(s.core, 1) != receiver);
+        QVERIFY(streamOf(s.core, 1) >= 0);
+        const QJsonObject told = waitForLast(s.appB, QStringLiteral("notice"), 0);
+        QCOMPARE(told.value(QStringLiteral("kind")).toString(), QStringLiteral("settingChanged"));
+        QCOMPARE(told.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("iPhone changed Sample rate, Receiver %1 from 192 kHz to 96 kHz. "
+                                "Your slice B moved to another receiver.")
+                     .arg(receiver + 1));
+    }
+
+    void aNarrowerRateWithNoReceiverFreeClosesTheOtherDevicesSlice()
+    {
+        Shared s(1);
+        const QJsonObject held = s.core.invoke(
+            s.appA, "requestSliceSampleRate", {int64("sliceId", 0), int64("rateHz", 96000)});
+        QCOMPARE(held.value(QStringLiteral("reason")).toString(), kWaiting);
+        const QJsonObject ask = waitForLast(s.appA, QStringLiteral("confirm.request"), 0);
+        QCOMPARE(ask.value(QStringLiteral("affected")).toArray().first().toObject()
+                     .value(QStringLiteral("slices")).toArray().first().toObject()
+                     .value(QStringLiteral("effect")).toString(),
+                 QStringLiteral("closes"));
+        QCOMPARE(s.proceed(s.appA, ask.value(QStringLiteral("id")).toInteger())
+                     .value(QStringLiteral("accepted")).toBool(false),
+                 true);
+        QVERIFY(s.core.model->sliceById(1) == nullptr);
+        QCOMPARE(s.core.model->streamAllocator().streamSampleRateHz(s.receiver()), 96000);
+        QVERIFY(waitForLast(s.appB, QStringLiteral("notice"), 0)
+                    .value(QStringLiteral("reason")).toString()
+                    .endsWith(QStringLiteral("Your slice B closed: no receiver was free.")));
     }
 };
 

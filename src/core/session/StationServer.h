@@ -270,6 +270,8 @@
 #include <QHash>
 #include <QHostAddress>
 #include <QJsonArray>
+#include <QJsonObject>
+#include <QSet>
 #include <QPair>
 #include <QObject>
 #include <QPointer>
@@ -285,6 +287,7 @@
 #include "core/session/ConfirmStep.h"
 #include "core/session/LinkVersion.h"
 #include "core/session/ReceiverPlanner.h"
+#include "core/DisturbanceCheck.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StationCapabilities.h"
 
@@ -819,6 +822,11 @@ private:
     void handleAuthRequest(SessionTransport* transport, const SessionMessage& message);
     void handlePropertyWrite(SessionTransport* transport, const SessionMessage& message);
     void handleSettingsWrite(SessionTransport* transport, const SessionMessage& message);
+    /// The body of handleSettingsWrite after its checks: applies the write
+    /// through the settings proxy. A refusal goes to `refusal` when given,
+    /// otherwise to the writer as settings.reject. True when applied.
+    bool applySettingsWrite(SessionTransport* transport, const SessionMessage& message,
+                            QString* refusal);
     void handleSettingsRemove(SessionTransport* transport, const SessionMessage& message);
     // iPhone app Task 14 (R-IOS-08): pairing, before any sign-in.
     void handlePairStart(SessionTransport* transport, const SessionMessage& message);
@@ -1027,6 +1035,74 @@ private:
                                    const ConfirmStep::Question& question, int choice,
                                    const SessionMessage& invoke);
     void sendHeldQuestions();
+    /// Section 7.3's refusal for an older window, naming who a change
+    /// would affect.
+    static QString olderWindowReason(const QString& names);
+
+    // ── iPhone app Task 75 (R-IOS-30): settings that affect every device
+    //    (StationSharedSettings.cpp) ────────────────────────────────────
+    /// A change on the several-devices design's list (7.1): what it
+    /// touches, its words, and what it acts on (ruling 7.6).
+    struct SharedChange {
+        /// On the list and a real change (not the value already there).
+        bool shared = false;
+        DisturbanceCheck::Scope scope;
+        /// {label, from, to} in plain words.
+        QJsonObject change;
+        /// What it acts on and that target's value now; set whenever the
+        /// message names a listed target, shared or not.
+        QString target;
+        QString targetValue;
+        /// A sample rate the Core's own plan refuses for the requester's
+        /// own slice: left to today's path, which refuses it.
+        bool refusedToday = false;
+        /// A sample rate: other devices' slices it closes before applying.
+        QList<int> closes;
+    };
+    SharedChange classifyShared(const SessionMessage& message, const QByteArray& requester) const;
+    DisturbanceCheck::Topology sharedTopology() const;
+    /// Who holds transmit, for the check. Empty until Task 34's
+    /// TransmitHolder joins here.
+    DisturbanceCheck::Transmit transmitForCheck() const;
+    /// A command, property write or settings write on the list: asked
+    /// (a device with the feature), refused (an older window), or left to
+    /// today's path. True when it answered.
+    bool handleSharedSetting(SessionTransport* transport, const SessionMessage& message);
+    QJsonArray sharedAffectedJson(const QList<DisturbanceCheck::Affected>& affected) const;
+    static QSet<QString> sharedShown(const QList<DisturbanceCheck::Affected>& affected);
+    void askSharedSetting(SessionTransport* transport, const SessionMessage& original,
+                          const SharedChange& change,
+                          const QList<DisturbanceCheck::Affected>& affected,
+                          bool answerOriginal);
+    SessionMessage proceedSharedSetting(SessionTransport* transport,
+                                        const ConfirmStep::Question& question,
+                                        const SessionMessage& invoke);
+    void tellSettingChanged(const QList<DisturbanceCheck::Affected>& affected,
+                            const QHash<int, QJsonObject>& sliceWords,
+                            const QJsonObject& change, const QByteArray& by);
+    /// A proceed whose held command answers on a later turn
+    /// (requestSliceSampleRate, the dispatcher's one asynchronous verb):
+    /// its answer, the readback and the notices wait for that result.
+    struct DeferredProceed {
+        QPointer<SessionTransport> transport;
+        QByteArray proceedVerb;
+        quint32 proceedId = 0;
+        QList<DisturbanceCheck::Affected> affected;
+        QHash<int, QJsonObject> sliceWords;
+        QJsonObject change;
+        QByteArray requester;
+        QList<QByteArray> closedDevices;
+    };
+    QHash<QPair<QByteArray, quint32>, DeferredProceed> m_deferredProceeds;
+    /// The proceed answered later, whose immediate answer is not sent.
+    std::optional<QPair<QByteArray, quint32>> m_proceedAnsweredLater;
+    /// True when `result` finished a deferred proceed (and was consumed).
+    bool finishDeferredProceed(const SessionMessage& result);
+    /// Ruling 5.11a: RadioModel kept the receive antenna; the person tuning
+    /// is told.
+    void onReceiveAntennaKept(int sliceId, const QString& antenna,
+                              const QList<QByteArray>& listeners);
+
     std::unique_ptr<ConfirmStep> m_confirm;
     bool m_holdQuestions = false;
     QList<QPair<SessionTransport*, SessionMessage>> m_heldQuestions;

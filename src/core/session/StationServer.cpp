@@ -1046,6 +1046,17 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     // keeps any other (as the one session did before).
     connect(m_dispatcher, &SessionCommandDispatcher::commandResultReady, this,
             [this](const SessionMessage& original) {
+                // iPhone app Task 75: a proceed whose held command answers
+                // later is answered with that command's result.
+                if (m_proceedAnsweredLater
+                    && original.commandVerb == m_proceedAnsweredLater->first
+                    && original.commandId == m_proceedAnsweredLater->second) {
+                    m_proceedAnsweredLater.reset();
+                    return;
+                }
+                if (finishDeferredProceed(original)) {
+                    return;
+                }
                 // iPhone app Task 74: the confirm step reads (and may keep,
                 // or reword) a result of a change it is running.
                 SessionMessage result = original;
@@ -1166,6 +1177,12 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                             }
                         }
                     });
+                });
+        // iPhone app Task 75 (ruling 5.11a): the receive antenna stayed put
+        // on a band crossing; the person tuning is told.
+        connect(m_radioModel, &RadioModel::receiveAntennaKept, this,
+                [this](int sliceId, const QString& antenna, const QList<QByteArray>& listeners) {
+                    onReceiveAntennaKept(sliceId, antenna, listeners);
                 });
     }
 
@@ -2291,7 +2308,10 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
             m_dispatcher->setRequester(m_peers.value(transport).sessionDeviceId);
             // iPhone app Task 74: a receiver change may be the anchor's
             // (rulings 6.3, 6.4, 6.6) or a take (section 6.4).
-            if (!handleReceiverCommand(transport, message)) {
+            // iPhone app Task 75: a setting that affects every device
+            // (the several-devices design, 7.1) is asked first.
+            if (!handleSharedSetting(transport, message)
+                && !handleReceiverCommand(transport, message)) {
                 m_dispatcher->dispatch(message);
             }
             sendHeldQuestions();
@@ -3352,6 +3372,11 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
         }
     }
 
+    // iPhone app Task 75 (the several-devices design, 7.1; ruling 6.1): a
+    // change that reaches another device's slices is asked first.
+    if (handleSharedSetting(transport, message)) {
+        return;
+    }
     // iPhone app Task 74 (rulings 6.5 and 6.5a): a retune of a slice that
     // leaves its shared receiver's window may be a pan move, asked first,
     // or a take once refused.
@@ -3582,16 +3607,32 @@ void StationServer::handleSettingsWrite(SessionTransport* transport,
                                                         restored.toString(), reason));
         return;
     }
+    // iPhone app Task 75 (link section 8.1): a write that reaches another
+    // device is held and asked first.
+    if (handleSharedSetting(transport, message)) {
+        return;
+    }
+    applySettingsWrite(transport, message, nullptr);
+}
+
+bool StationServer::applySettingsWrite(SessionTransport* transport, const SessionMessage& message,
+                                       QString* refusal)
+{
+    const QString key = QString::fromUtf8(message.objectKey);
     const SettingsApplyResult result =
         m_settingsServer->applyInboundWrite(key, message.updates.first().value,
                                             message.originTag);
     if (!result.accepted) {
         qCWarning(lcStation) << "Refused remote settings write" << key << ":"
                              << result.reason;
-        send(transport,
-             SessionMessages::settingsReject(key, result.restoredValue.isValid(),
-                                             result.restoredValue.toString(), result.reason));
-        return;
+        if (refusal != nullptr) {
+            *refusal = result.reason;
+        } else {
+            send(transport,
+                 SessionMessages::settingsReject(key, result.restoredValue.isValid(),
+                                                 result.restoredValue.toString(), result.reason));
+        }
+        return false;
     }
     // R-R3-21: a DSP > Options RX setting takes effect now, not at the next
     // mode change. R-R3-46: a Hardware Config setting reaches the Core's
@@ -3605,6 +3646,7 @@ void StationServer::handleSettingsWrite(SessionTransport* transport,
         // live objects now, not at the next restart.
         m_radioModel->applyRemoteAccessorySetting(key);
     }
+    return true;
 }
 
 void StationServer::handleSettingsRemove(SessionTransport* transport, const SessionMessage& message)
