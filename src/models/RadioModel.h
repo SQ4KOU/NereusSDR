@@ -108,6 +108,10 @@
 //                `transmit`; a window's profile manager mirrors them.
 //                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 5): applySwrProtectionSetting, the
+//                SWR protection settings applied to the live controller
+//                when they change, not only at start. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -631,6 +635,18 @@ public:
     static bool networkWatchdogSetting();
     void setNetworkWatchdogEnabled(bool enabled);
     void applyNetworkWatchdog(bool enabled);
+
+    // R-R3-49 (parity Task 5): Setup > Transmit > Power's SWR Protection
+    // group (SwrProtectionEnabled, SwrProtectionLimit,
+    // SwrTuneProtectionEnabled, TunePowerSwrIgnore, WindBackPowerSwr),
+    // applied to this model's SwrProtectionController at once, as Thetis
+    // applies each box when it changes. `value` is the saved string; an
+    // invalid QVariant (the key removed) applies the default the
+    // constructor reads. The local page calls it after saving; the Core
+    // calls it for a window's accepted change (StationServer). False for
+    // any other key.
+    bool applySwrProtectionSetting(const QString& key, const QVariant& value);
+    static bool isSwrProtectionSettingKey(const QString& key);
 
     // Sub-components
     RadioConnection*  connection()       { return m_connection; }

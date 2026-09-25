@@ -647,7 +647,10 @@ const QList<ReasonSource>& reasonSources()
           // reason (RadioModel::onAirReason, scanned below).
           QStringLiteral("onAir"),
           // A code windows compare, not a reason (section 17).
-          QStringLiteral("m_displayBudgetReason")}},
+          QStringLiteral("m_displayBudgetReason"),
+          // R-R3-49 (parity Task 5): powerPageKeyValueRefusal's literals,
+          // this file's own, scanned here.
+          QStringLiteral("range")}},
         // command.result for every verb.
         // The device's name ("Power Genius", "Tuner Genius") and what the
         // request asked, both this file's own literals
@@ -714,7 +717,10 @@ const QList<ReasonSource>& reasonSources()
         {"src/core/accessories/AlexAntennaFacade.cpp", {}, {}, 6, {}, {QStringLiteral("kept")}},
         // The attenuator's range in dB.
         {"src/core/StepAttenuatorFacade.cpp", {}, {}, 6,
-         {QStringLiteral("lo"), QStringLiteral("hi")}, {QStringLiteral("kept")}},
+         {QStringLiteral("lo"), QStringLiteral("hi"),
+          // R-R3-49 (parity Task 5): the ATT on TX value's range in dB.
+          QStringLiteral("m_values.minDb"), QStringLiteral("kMaxAttOnTxDb")},
+         {QStringLiteral("kept")}},
         {"src/core/IoBoardHl2Facade.cpp", {}, {}, 1},
         // A receiver count, and a frequency in MHz.
         {"src/core/SliceStreamAllocator.cpp", {}, {}, 4,
@@ -869,7 +875,13 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("kTxEqFreqHzMin"), QStringLiteral("kTxEqFreqHzMax"),
           QStringLiteral("kCfcCompressionDbMin"), QStringLiteral("kCfcCompressionDbMax"),
           QStringLiteral("kCfcEqFreqHzMin"), QStringLiteral("kCfcEqFreqHzMax"),
-          QStringLiteral("kCfcPostEqBandGainDbMin"), QStringLiteral("kCfcPostEqBandGainDbMax")}},
+          QStringLiteral("kCfcPostEqBandGainDbMin"), QStringLiteral("kCfcPostEqBandGainDbMax"),
+          // R-R3-49 (parity Task 5): the anti-VOX gain and two-tone ranges.
+          QStringLiteral("kAntiVoxGainDbMin"), QStringLiteral("kAntiVoxGainDbMax"),
+          QStringLiteral("kTwoToneFreq1HzMin"), QStringLiteral("kTwoToneFreq1HzMax"),
+          QStringLiteral("kTwoToneFreq2HzMin"), QStringLiteral("kTwoToneFreq2HzMax"),
+          QStringLiteral("kTwoTonePowerMin"), QStringLiteral("kTwoTonePowerMax"),
+          QStringLiteral("kTwoToneFreq2DelayMsMin"), QStringLiteral("kTwoToneFreq2DelayMsMax")}},
     };
     return sources;
 }

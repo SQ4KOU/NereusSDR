@@ -95,6 +95,11 @@
 //                 arrays as JSON for the link, and the EQ, CFC, phase
 //                 rotator, leveler and ALC ranges in settingRangeRefusal().
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 5): the per-band power and tune
+//                 power as JSON objects for the link, and the DEXP,
+//                 anti-VOX, two-tone and per-band power ranges in
+//                 settingRangeRefusal(). NereusSDR-original. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // --- From console.cs (Thetis v2.10.3.13) ---
@@ -270,12 +275,15 @@
 
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QJsonObject>
 #include <QJsonValue>
 
 #include <algorithm>
 #include <array>
 #include <functional>
 #include <limits>
+#include <utility>
+#include <vector>
 #include <cmath>
 
 namespace NereusSDR {
@@ -620,6 +628,7 @@ void TransmitModel::setTunePowerForBand(Band band, int watts)
     }
     m_tunePowerByBand[static_cast<std::size_t>(idx)] = clamped;
     emit tunePowerByBandChanged(band, clamped);
+    emit tunePowerByBandJsonChanged(tunePowerByBandJson());  // R-R3-49 (parity Task 5)
     if (m_tuneTxBandKnown && band == m_tuneTxBand) {
         refreshTunePowerForTxBand();
     }
@@ -787,6 +796,50 @@ bool tenValuesInRange(const QString& json, int lo, int hi)
                        [lo, hi](int v) { return v >= lo && v <= hi; });
 }
 
+// R-R3-49 (parity Task 5): the link's per-band watts, a JSON object keyed by
+// bandKeyName for the 14 bands 160m .. XVTR. NereusSDR-original.
+constexpr int kLinkBandCount = static_cast<int>(Band::SwlFirst);  // 14
+
+QString bandWattsJson(const std::function<int(Band)>& value)
+{
+    QJsonObject object;
+    for (int i = 0; i < kLinkBandCount; ++i) {
+        const Band band = static_cast<Band>(i);
+        object.insert(bandKeyName(band), value(band));
+    }
+    return QString::fromUtf8(QJsonDocument(object).toJson(QJsonDocument::Compact));
+}
+
+// The 14 bands' watts in `json`, or false when it is not a JSON object
+// holding exactly the 14 band keys, each a whole number from lo to hi. The
+// whole map, like the ten-value arrays: a window always sends every band.
+bool bandWattsFromJson(const QString& json, int lo, int hi,
+                       std::vector<std::pair<Band, int>>& out)
+{
+    const QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8());
+    if (!doc.isObject()) { return false; }
+    const QJsonObject object = doc.object();
+    if (object.size() != kLinkBandCount) { return false; }
+    out.clear();
+    for (auto it = object.constBegin(); it != object.constEnd(); ++it) {
+        int found = -1;
+        for (int i = 0; i < kLinkBandCount; ++i) {
+            if (bandKeyName(static_cast<Band>(i)) == it.key()) {
+                found = i;
+                break;
+            }
+        }
+        if (found < 0 || !it.value().isDouble()) { return false; }
+        const double d = it.value().toDouble();
+        if (!std::isfinite(d) || d != std::floor(d)
+            || d < static_cast<double>(lo) || d > static_cast<double>(hi)) {
+            return false;
+        }
+        out.emplace_back(static_cast<Band>(found), static_cast<int>(d));
+    }
+    return true;
+}
+
 } // namespace
 
 QString TransmitModel::settingRangeRefusal(const QByteArray& propertyName,
@@ -945,6 +998,90 @@ QString TransmitModel::settingRangeRefusal(const QByteArray& propertyName,
             QStringLiteral("Choose ten CFC post-EQ band levels, each from %1 to %2 dB.")
                 .arg(kCfcPostEqBandGainDbMin).arg(kCfcPostEqBandGainDbMax));
     }
+    // R-R3-49 (parity Task 5): the per-band power and tune power, each band
+    // with its per-band setter's range (setPowerForBand 0 to 100 W;
+    // setTunePowerForBand 0 to 100 W, 0 to 99 on the HL2), refused whole.
+    if (propertyName == "powerByBandJson" || propertyName == "tunePowerByBandJson") {
+        const bool tune = propertyName == "tunePowerByBandJson";
+        const int hi = tune ? tunePowerMax() : 100;
+        std::vector<std::pair<Band, int>> named;
+        if (bandWattsFromJson(value.toString(), 0, hi, named)) {
+            return {};
+        }
+        if (!tune) {
+            return QStringLiteral("Choose a power from 0 to 100 W for each of the 14 bands.");
+        }
+        return m_hpsdrModel == HPSDRModel::HERMESLITE
+            ? QStringLiteral("Choose a tune power from 0 to %1 for each of the 14 bands.").arg(hi)
+            : QStringLiteral("Choose a tune power from 0 to %1 W for each of the 14 bands.").arg(hi);
+    }
+    // The DEXP / VOX page's timings and filter, each with its setter's own
+    // clamp range (setup.Designer.cs, cited at each constant).
+    const auto real = [&value](double lo, double hi) {
+        bool ok = false;
+        const double v = value.toDouble(&ok);
+        return ok && std::isfinite(v) && v >= lo && v <= hi;
+    };
+    if (propertyName == "dexpAttackTimeMs") {
+        // The words carry kDexpAttackTimeMsMin and kDexpAttackTimeMsMax.
+        return real(kDexpAttackTimeMsMin, kDexpAttackTimeMsMax) ? QString()
+            : QStringLiteral("Choose a DEXP attack time from 2 to 100 ms.");
+    }
+    if (propertyName == "dexpDetectorTauMs") {
+        return real(kDexpDetectorTauMsMin, kDexpDetectorTauMsMax) ? QString()
+            : QStringLiteral("Choose a DEXP detector time from 1 to 100 ms.");
+    }
+    if (propertyName == "dexpReleaseTimeMs") {
+        return real(kDexpReleaseTimeMsMin, kDexpReleaseTimeMsMax) ? QString()
+            : QStringLiteral("Choose a DEXP release time from 2 to 1000 ms.");
+    }
+    if (propertyName == "dexpExpansionRatioDb") {
+        return real(kDexpExpansionRatioDbMin, kDexpExpansionRatioDbMax) ? QString()
+            : QStringLiteral("Choose a DEXP expansion ratio from 0.0 to 30.0 dB.");
+    }
+    if (propertyName == "dexpHysteresisRatioDb") {
+        return real(kDexpHysteresisRatioDbMin, kDexpHysteresisRatioDbMax) ? QString()
+            : QStringLiteral("Choose a DEXP hysteresis ratio from 0.0 to 10.0 dB.");
+    }
+    if (propertyName == "dexpLookAheadMs") {
+        return real(kDexpLookAheadMsMin, kDexpLookAheadMsMax) ? QString()
+            : QStringLiteral("Choose a look-ahead time from 10 to 999 ms.");
+    }
+    if (propertyName == "dexpLowCutHz" || propertyName == "dexpHighCutHz") {
+        return real(kDexpFilterCutHzMin, kDexpFilterCutHzMax) ? QString()
+            : QStringLiteral("Choose a VOX trigger filter cut from 100 to 10000 Hz.");
+    }
+    if (propertyName == "antiVoxGainDb") {
+        return scalar(kAntiVoxGainDbMin, kAntiVoxGainDbMax,
+            QStringLiteral("Choose an anti-VOX gain from %1 to %2 dB.")
+                .arg(kAntiVoxGainDbMin).arg(kAntiVoxGainDbMax));
+    }
+    // The Two-Tone IMD page's settings (setup.Designer.cs ranges, cited at
+    // each constant).
+    if (propertyName == "twoToneFreq1") {
+        return scalar(kTwoToneFreq1HzMin, kTwoToneFreq1HzMax,
+            QStringLiteral("Choose a tone frequency from %1 to %2 Hz.")
+                .arg(kTwoToneFreq1HzMin).arg(kTwoToneFreq1HzMax));
+    }
+    if (propertyName == "twoToneFreq2") {
+        return scalar(kTwoToneFreq2HzMin, kTwoToneFreq2HzMax,
+            QStringLiteral("Choose a tone frequency from %1 to %2 Hz.")
+                .arg(kTwoToneFreq2HzMin).arg(kTwoToneFreq2HzMax));
+    }
+    if (propertyName == "twoToneLevel") {
+        return real(kTwoToneLevelDbMin, kTwoToneLevelDbMax) ? QString()
+            : QStringLiteral("Choose a two-tone level from -96 to 0 dB.");
+    }
+    if (propertyName == "twoTonePower") {
+        return scalar(kTwoTonePowerMin, kTwoTonePowerMax,
+            QStringLiteral("Choose a two-tone power from %1 to %2 percent.")
+                .arg(kTwoTonePowerMin).arg(kTwoTonePowerMax));
+    }
+    if (propertyName == "twoToneFreq2Delay") {
+        return scalar(kTwoToneFreq2DelayMsMin, kTwoToneFreq2DelayMsMax,
+            QStringLiteral("Choose a second tone delay from %1 to %2 ms.")
+                .arg(kTwoToneFreq2DelayMsMin).arg(kTwoToneFreq2DelayMsMax));
+    }
     return {};
 }
 
@@ -985,6 +1122,7 @@ void TransmitModel::setPowerForBand(Band band, int watts)
             QString::number(clamped));
     }
     emit powerByBandChanged(band, clamped);
+    emit powerByBandJsonChanged(powerByBandJson());  // R-R3-49 (parity Task 5)
 }
 
 // ── ATT-on-TX-on-power-change safety setters (#167 Phase 3A) ────────────────
@@ -1570,6 +1708,9 @@ void TransmitModel::load()
         m_tunePowerByBand[static_cast<std::size_t>(i)] = std::clamp(v, 0, hi);
     }
     refreshTunePowerForTxBand();
+    // R-R3-49 (parity Task 5): the restore bypasses the per-band setter, so
+    // the link's copy is told here.
+    emit tunePowerByBandJsonChanged(tunePowerByBandJson());
 }
 
 void TransmitModel::save()
@@ -2025,6 +2166,8 @@ void TransmitModel::loadFromSettings(const QString& mac)
             // safe.
             m_powerByBand[static_cast<std::size_t>(i)] = std::clamp(v, 0, 100);
         }
+        // R-R3-49 (parity Task 5): as for tunePowerByBand in load().
+        emit powerByBandJsonChanged(powerByBandJson());
     }
 
     // 3 ATT-on-TX-on-power-change safety properties.
@@ -3159,6 +3302,38 @@ void TransmitModel::setCfcPostEqBandGainJson(const QString& json)
     std::array<int, 10> values{};
     if (!tenValuesFromJson(json, values)) { return; }
     for (int i = 0; i < 10; ++i) { setCfcPostEqBandGain(i, values[static_cast<std::size_t>(i)]); }
+}
+
+// ── R-R3-49 (parity Task 5): the per-band power and tune power ────────────
+
+QString TransmitModel::powerByBandJson() const
+{
+    return bandWattsJson([this](Band band) { return powerForBand(band); });
+}
+
+QString TransmitModel::tunePowerByBandJson() const
+{
+    return bandWattsJson([this](Band band) { return tunePowerForBand(band); });
+}
+
+void TransmitModel::setPowerByBandJson(const QString& json)
+{
+    std::vector<std::pair<Band, int>> named;
+    if (!bandWattsFromJson(json, std::numeric_limits<int>::min(),
+                           std::numeric_limits<int>::max(), named)) {
+        return;
+    }
+    for (const auto& [band, watts] : named) { setPowerForBand(band, watts); }
+}
+
+void TransmitModel::setTunePowerByBandJson(const QString& json)
+{
+    std::vector<std::pair<Band, int>> named;
+    if (!bandWattsFromJson(json, std::numeric_limits<int>::min(),
+                           std::numeric_limits<int>::max(), named)) {
+        return;
+    }
+    for (const auto& [band, watts] : named) { setTunePowerForBand(band, watts); }
 }
 
 // ── CFC / CPDR / CESSB / Phase Rotator (3M-3a-ii Batch 2) ─────────────────

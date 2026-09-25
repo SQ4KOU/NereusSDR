@@ -1480,6 +1480,11 @@ private slots:
         // R-R3-49 (parity Task 4): DSP > CFC left this list. The Core now
         // mirrors every setting on it and the page gates its own controls
         // on transmitSettingsVersion 4 (tst_remote_tx_eq_cfc).
+        // R-R3-49 (parity Task 5): Test > Two-Tone IMD is no longer held for
+        // remote transmit either. The Core mirrors its settings and the page
+        // gates its own controls on transmitSettingsVersion 5; the case now
+        // proves that gate, closed until the dialog pushes it
+        // (tst_remote_transmit_setup_pages covers the open gate).
         QTest::newRow("Two-Tone IMD") << QStringLiteral("Two-Tone IMD");
     }
 
@@ -1501,15 +1506,16 @@ private slots:
         // the only thing disabling it; the case below proves the gate, not
         // the resource audit.
         QCOMPARE(remote.localDspHandOutCount(), handOutsBefore);
-        QVERIFY(!page->isEnabled());
-        QCOMPARE(page->toolTip(), reason);
+        // R-R3-49 (parity Task 5): the page opens without remote transmit;
+        // its controls wait for the version 5 settings gate, with its reason.
+        QVERIFY(page->isEnabled());
+        QVERIFY(page->toolTip().isEmpty());
         QTreeWidgetItem* const leaf = setupLeaf(dialog, label);
         QVERIFY(leaf != nullptr);
-        QCOMPARE(leaf->toolTip(0), reason);
+        QVERIFY(leaf->toolTip(0).isEmpty());
         auto* const notice = dialog.findChild<QLabel*>(QStringLiteral("setupTransmitUnavailable"));
         QVERIFY(notice != nullptr);
-        QVERIFY(!notice->isHidden());
-        QCOMPARE(notice->text(), reason);
+        QVERIFY(notice->isHidden());
 
         // Activation reaches nothing: every button, check box and spin box
         // on the page is driven, and no transmit setting moves.
@@ -1542,20 +1548,20 @@ private slots:
         QCOMPARE(tx.twoToneInvert(), invert);
         QCOMPARE(cfcEditor.count(), 0);
 
-        // A Core that permits transmit lifts the gate, and withdrawing it
-        // puts it back.
-        dialog.setTransmitPermitted(true);
+        // R-R3-49 (parity Task 5): the version 5 gate opens the controls
+        // whatever the transmit permission says, and closing it puts them
+        // back with its reason, which is plain English.
+        dialog.setTransmitSettingsPermitted(true, QString(), 5);
+        for (QSpinBox* spin : page->findChildren<QSpinBox*>()) {
+            QVERIFY(spin->isEnabled());
+        }
+        dialog.setTransmitSettingsPermitted(false, QString(), 5);
+        for (QSpinBox* spin : page->findChildren<QSpinBox*>()) {
+            QVERIFY(!spin->isEnabled());
+            QVERIFY2(OperatorWording::isPlain(spin->toolTip()), qPrintable(spin->toolTip()));
+        }
         QVERIFY(page->isEnabled());
-        QVERIFY(page->toolTip().isEmpty());
-        QVERIFY(leaf->toolTip(0).isEmpty());
         QVERIFY(notice->isHidden());
-        dialog.setTransmitPermitted(false, reason);
-        QVERIFY(!page->isEnabled());
-        QVERIFY(!notice->isHidden());
-
-        // The reason MainWindow actually passes is plain English.
-        dialog.setTransmitPermitted(false);
-        QVERIFY2(OperatorWording::isPlain(notice->text()), qPrintable(notice->text()));
 
         // Local direct mode: unchanged, live, no reason shown.
         RadioModel local;

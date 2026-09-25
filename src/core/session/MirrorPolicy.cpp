@@ -53,6 +53,11 @@
 //   2026-09-25 - R-R3-49 (parity Task 4): the TX EQ, CFC, phase rotator,
 //                 CESSB, leveler and ALC settings Bidirectional. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 5): tuneDrivePowerSource becomes
+//                 Bidirectional; the Power, DEXP/VOX and two-tone settings
+//                 and the step attenuator's ATT on TX, its value and Force
+//                 ATT Bidirectional. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -301,7 +306,7 @@ const MirrorPolicy::Entry kEntries[] = {
     { "SliceModel", "snrDb", MirrorDirection::Outbound },
     { "SliceModel", "lastRadeRxCallsign", MirrorDirection::Outbound },
 
-    // ---- TransmitModel (64 entries) ----
+    // ---- TransmitModel (85 entries) ----
     { "TransmitModel", "mox", MirrorDirection::Bidirectional },
     { "TransmitModel", "tune", MirrorDirection::Bidirectional },
     { "TransmitModel", "power", MirrorDirection::Bidirectional },
@@ -333,9 +338,11 @@ const MirrorPolicy::Entry kEntries[] = {
     { "TransmitModel", "amCarrierLevel", MirrorDirection::Bidirectional },
     { "TransmitModel", "dexpEnabled", MirrorDirection::Bidirectional },
     { "TransmitModel", "micGainDb", MirrorDirection::Bidirectional },
-    // The Core's reports; both change only through setTunePowerForTxBand.
+    // The Core's report; it changes only through setTunePowerForTxBand.
     { "TransmitModel", "tunePowerForTxBand", MirrorDirection::Outbound },
-    { "TransmitModel", "tuneDrivePowerSource", MirrorDirection::Outbound },
+    // R-R3-49 (parity Task 5, transmitSettingsVersion 5): Setup > Transmit >
+    // Power's Tune group writes the drive source too (Outbound before).
+    { "TransmitModel", "tuneDrivePowerSource", MirrorDirection::Bidirectional },
     // R-R3-49 (parity Task 3, transmitSettingsVersion 3): Setup > Audio >
     // TX Input's radio microphone groups. None keys the radio.
     { "TransmitModel", "micBoost", MirrorDirection::Bidirectional },
@@ -376,6 +383,30 @@ const MirrorPolicy::Entry kEntries[] = {
     { "TransmitModel", "txLevelerDecay", MirrorDirection::Bidirectional },
     { "TransmitModel", "txAlcMaxGain", MirrorDirection::Bidirectional },
     { "TransmitModel", "txAlcDecay", MirrorDirection::Bidirectional },
+    // R-R3-49 (parity Task 5, transmitSettingsVersion 5): Setup > Transmit >
+    // Power's per-band power, DEXP/VOX and Test > Two-Tone IMD. None keys
+    // the radio; the two-tone test itself stays in the keying set.
+    { "TransmitModel", "powerByBandJson", MirrorDirection::Bidirectional },
+    { "TransmitModel", "tunePowerByBandJson", MirrorDirection::Bidirectional },
+    { "TransmitModel", "dexpAttackTimeMs", MirrorDirection::Bidirectional },
+    { "TransmitModel", "dexpDetectorTauMs", MirrorDirection::Bidirectional },
+    { "TransmitModel", "dexpExpansionRatioDb", MirrorDirection::Bidirectional },
+    { "TransmitModel", "dexpHighCutHz", MirrorDirection::Bidirectional },
+    { "TransmitModel", "dexpHysteresisRatioDb", MirrorDirection::Bidirectional },
+    { "TransmitModel", "dexpLookAheadEnabled", MirrorDirection::Bidirectional },
+    { "TransmitModel", "dexpLookAheadMs", MirrorDirection::Bidirectional },
+    { "TransmitModel", "dexpLowCutHz", MirrorDirection::Bidirectional },
+    { "TransmitModel", "dexpReleaseTimeMs", MirrorDirection::Bidirectional },
+    { "TransmitModel", "dexpSideChannelFilterEnabled", MirrorDirection::Bidirectional },
+    { "TransmitModel", "antiVoxGainDb", MirrorDirection::Bidirectional },
+    { "TransmitModel", "twoToneFreq1", MirrorDirection::Bidirectional },
+    { "TransmitModel", "twoToneFreq2", MirrorDirection::Bidirectional },
+    { "TransmitModel", "twoToneLevel", MirrorDirection::Bidirectional },
+    { "TransmitModel", "twoTonePower", MirrorDirection::Bidirectional },
+    { "TransmitModel", "twoTonePulsed", MirrorDirection::Bidirectional },
+    { "TransmitModel", "twoToneInvert", MirrorDirection::Bidirectional },
+    { "TransmitModel", "twoToneFreq2Delay", MirrorDirection::Bidirectional },
+    { "TransmitModel", "twoToneDrivePowerSource", MirrorDirection::Bidirectional },
 
     // ---- TunerModel (21 entries) ----
     { "TunerModel", "relayC1", MirrorDirection::Outbound },
@@ -444,6 +475,12 @@ const MirrorPolicy::Entry kEntries[] = {
     { "StepAttenuatorFacade", "autoAttUndo", MirrorDirection::Bidirectional },
     { "StepAttenuatorFacade", "autoAttUndoDelayMs", MirrorDirection::Bidirectional },
     { "StepAttenuatorFacade", "autoAttHoldMs", MirrorDirection::Bidirectional },
+    // R-R3-49 (parity Task 5, transmitSettingsVersion 5): Setup > Transmit >
+    // Power's ATT on TX, its value and Force ATT. Transmit settings: a
+    // receive-only Core takes them off the air only (StationServer).
+    { "StepAttenuatorFacade", "attOnTxEnabled", MirrorDirection::Bidirectional },
+    { "StepAttenuatorFacade", "attOnTxValue", MirrorDirection::Bidirectional },
+    { "StepAttenuatorFacade", "forceAttWhenPsOff", MirrorDirection::Bidirectional },
     { "StepAttenuatorFacade", "minDb", MirrorDirection::Outbound },
     { "StepAttenuatorFacade", "maxDb", MirrorDirection::Outbound },
     { "StepAttenuatorFacade", "autoAttApplied", MirrorDirection::Outbound },

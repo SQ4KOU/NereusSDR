@@ -198,6 +198,16 @@
 //                                    CFC, phase rotator, CESSB, leveler and
 //                                    ALC settings on `transmit`.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 5):
+//                                    transmitSettingsVersion 5: Setup >
+//                                    Transmit > Power, DEXP/VOX and Test >
+//                                    Two-Tone IMD on `transmit`, ATT on TX
+//                                    and Force ATT on `stepAtt`; the SWR
+//                                    protection and External TX Inhibit keys
+//                                    taken off the air, the SWR protection
+//                                    applied to the Core's controller at
+//                                    once.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -237,6 +247,7 @@
 #include "models/AccessorySettingsModel.h"
 #include "models/TunerModel.h"
 
+#include <QJsonDocument>
 #include <QLoggingCategory>
 #include <QSet>
 #include <QSslConfiguration>
@@ -575,6 +586,50 @@ bool isTransmitHardwareKey(const QString& rawKey)
     }
     return area == QLatin1String("tx") || area == QLatin1String("pa")
         || area == QLatin1String("powerbyband") || area == QLatin1String("tunepowerbyband");
+}
+
+// R-R3-49 (parity Task 5): Setup > Transmit > Power's SWR Protection and
+// External TX Inhibit groups, Station keys (SettingsScope.cpp) that gate
+// the Core's own transmitting. Taken while the radio is off the air.
+bool isPowerPageTransmitKey(const QString& key)
+{
+    return RadioModel::isSwrProtectionSettingKey(key)
+        || key == QLatin1String("TxInhibitMonitorEnabled")
+        || key == QLatin1String("TxInhibitMonitorReversed");
+}
+
+// R-R3-49 (parity Task 5): the plain refusal for a Power page key's value
+// the page's own control cannot hold; empty when it can. The boxes write
+// "True" or "False"; the page's udTunePowerSwrIgnore spin box holds 5 to
+// 50 W (PowerPage::buildSwrProtectionGroup).
+// SwrProtectionLimit keeps SettingsProxyServer's own range check.
+QString powerPageKeyValueRefusal(const QString& key, const QVariant& value)
+{
+    if (!isPowerPageTransmitKey(key) || key == QLatin1String("SwrProtectionLimit")) {
+        return {};
+    }
+    const QString text = value.toString();
+    if (key == QLatin1String("TunePowerSwrIgnore")) {
+        bool ok = false;
+        const int watts = text.toInt(&ok);
+        return ok && watts >= 5 && watts <= 50
+            ? QString()
+            : QStringLiteral("Choose a tune power to ignore from 5 to 50 W.");
+    }
+    return text == QLatin1String("True") || text == QLatin1String("False")
+        ? QString()
+        : QStringLiteral("The Core expected this box to be on or off.");
+}
+
+// R-R3-49 (parity Task 5): true when both values are the same JSON object.
+// The Core writes a band map (powerByBandJson, tunePowerByBandJson) back with
+// its keys in its own order, so a map it took whole reads back as the same
+// object, not the same text.
+bool sameJsonObject(const QVariant& a, const QVariant& b)
+{
+    const QJsonDocument left = QJsonDocument::fromJson(a.toString().toUtf8());
+    const QJsonDocument right = QJsonDocument::fromJson(b.toString().toUtf8());
+    return left.isObject() && right.isObject() && left == right;
 }
 
 // Every settings key a receive-only Core refuses as transmit configuration.
@@ -1843,6 +1898,14 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
         && m_radioModel->receiveOnlyStationPolicy();
     const bool tunerWrite = message.objectKey == QByteArray(kTunerKey);
     const bool amplifierWrite = message.objectKey == QByteArray(kAmplifierKey);
+    // R-R3-49 (parity Task 5): `stepAtt`'s ATT on TX, its value and Force
+    // ATT are transmit settings (transmitSettingsVersion 5). A receive-only
+    // Core takes them from a peer offered the transmit settings, off the
+    // air only; the on-air check is read once for the batch.
+    QString stepAttOnAir;
+    if (stepAttWrite && receiveOnlyStation) {
+        m_radioModel->stationOnAirRefusal(&stepAttOnAir);
+    }
     // R-IOS-01: the class MirrorPolicy's direction table is keyed by.
     QByteArray outboundClass;
     if (const QObject* target = m_mirror->watchedObject(message.objectKey)) {
@@ -1881,6 +1944,22 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
         if (!stepAttRefusal.isEmpty()) {
             refusals.insert(update.name, stepAttRefusal);
             continue;
+        }
+        if (stepAttWrite && StepAttenuatorFacade::isTransmitSetting(update.name)) {
+            if (receiveOnlyStation && !transmitSettingsOffered(transport)) {
+                refusals.insert(update.name, QString::fromLatin1(kReceiveOnlyTransmitReason));
+                continue;
+            }
+            if (!stepAttOnAir.isEmpty()) {
+                refusals.insert(update.name, stepAttOnAir);
+                continue;
+            }
+            const QString range = m_radioModel->stepAttFacade()
+                ->transmitSettingRefusal(update.name, update.value);
+            if (!range.isEmpty()) {
+                refusals.insert(update.name, range);
+                continue;
+            }
         }
         if (radioWrite && update.name == "rfKitEnabled") {
             refusals.insert(update.name, QString::fromLatin1(kRfKitSwitchWriteReason));
@@ -1939,7 +2018,10 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
             result.value = actual.value(update.name);
         }
         result.reason = refusals.value(update.name);
-        if (result.reason.isEmpty() && (!result.hasValue || result.value.value != update.value)) {
+        const bool sameMap = message.objectKey == QByteArray(kTransmitKey) && result.hasValue
+            && sameJsonObject(result.value.value, update.value);
+        if (result.reason.isEmpty()
+            && (!result.hasValue || (result.value.value != update.value && !sameMap))) {
             // R-R3-46: the attenuator says in plain words why it kept
             // another value (its range, what this radio offers).
             if (stepAttWrite && !m_radioModel.isNull()) {
@@ -2013,6 +2095,16 @@ void StationServer::handleSettingsWrite(SessionTransport* transport,
                                                         restored.toString(), onAir));
         return;
     }
+    // R-R3-49 (parity Task 5): a Power page key the page's own control
+    // could not have written is refused, and the Core's value handed back.
+    if (const QString range = powerPageKeyValueRefusal(key, message.updates.first().value);
+        !range.isEmpty()) {
+        const QVariant restored = m_settings.value(key);
+        qCWarning(lcStation) << "Refused remote settings write" << key << ":" << range;
+        send(transport, SessionMessages::settingsReject(key, restored.isValid(),
+                                                        restored.toString(), range));
+        return;
+    }
     const SettingsApplyResult result =
         m_settingsServer->applyInboundWrite(key, message.updates.first().value,
                                             message.originTag);
@@ -2035,6 +2127,9 @@ void StationServer::handleSettingsWrite(SessionTransport* transport,
         // tune memory, antenna names, a fault history) reaches the Core's
         // live objects now, not at the next restart.
         m_radioModel->applyRemoteAccessorySetting(key);
+        // R-R3-49 (parity Task 5): so does an SWR protection setting, to the
+        // Core's SwrProtectionController, as the local page's change does.
+        m_radioModel->applySwrProtectionSetting(key, m_settings.value(key));
     }
 }
 
@@ -2104,6 +2199,8 @@ void StationServer::handleSettingsRemove(const SessionMessage& message)
         m_radioModel->scheduleRemoteDspOptionsApply(key);
         m_radioModel->scheduleRemoteHardwareApply(key);
         m_radioModel->applyRemoteAccessorySetting(key);
+        // R-R3-49 (parity Task 5): the SWR protection default, at once.
+        m_radioModel->applySwrProtectionSetting(key, QVariant());
     }
 }
 
@@ -2369,7 +2466,9 @@ int StationServer::pgxlControlVersion() const
 // their keys here.
 bool StationServer::isTransmitSettingKeyAcceptedOffAir(const QString& key)
 {
-    return isTransmitDspOptionsKey(key);
+    // R-R3-49 (parity Task 5): and Setup > Transmit > Power's SWR Protection
+    // and External TX Inhibit keys.
+    return isTransmitDspOptionsKey(key) || isPowerPageTransmitKey(key);
 }
 
 bool StationServer::transmitSettingsOffered(SessionTransport* transport) const
@@ -2421,7 +2520,13 @@ int StationServer::transmitSettingsVersion() const
     // cfcPostEqBandGainJson, cfcPostEqEnabled, cfcPostEqGainDb,
     // cfcPrecompDb, cfcParaEqData), phase rotator, CESSB, leveler and ALC
     // settings; a band array is refused whole (parity Task 4).
-    return m_radioModel.isNull() ? 0 : 4;
+    // 5: Setup > Transmit > Power (tuneDrivePowerSource writable,
+    // powerByBandJson, tunePowerByBandJson; ATT on TX, its value and Force
+    // ATT on `stepAtt`; the SWR Protection and External TX Inhibit keys
+    // taken off the air), DEXP/VOX (the DEXP timings, look-ahead,
+    // side-channel filter and antiVoxGainDb) and Test > Two-Tone IMD (the
+    // two-tone settings) (parity Task 5).
+    return m_radioModel.isNull() ? 0 : 5;
 }
 
 int StationServer::tgxlControlVersion() const

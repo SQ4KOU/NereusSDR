@@ -238,7 +238,7 @@
         {
             "kind": "i64",
             "name": "transmitSettingsVersion",
-            "value": 4
+            "value": 5
         }
     ],
     "commands": [
@@ -4311,6 +4311,24 @@
                     "kind": "bool",
                     "name": "adcLinked",
                     "ordinal": 14
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "attOnTxEnabled",
+                    "ordinal": 15
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "attOnTxValue",
+                    "ordinal": 16
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "forceAttWhenPsOff",
+                    "ordinal": 17
                 }
             ]
         },
@@ -4491,7 +4509,7 @@
                     "ordinal": 28
                 },
                 {
-                    "direction": "outbound",
+                    "direction": "bidirectional",
                     "enumValues": [
                         0,
                         1,
@@ -4704,6 +4722,137 @@
                     "kind": "i64",
                     "name": "txAlcDecay",
                     "ordinal": 63
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "utf8",
+                    "name": "powerByBandJson",
+                    "ordinal": 64
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "utf8",
+                    "name": "tunePowerByBandJson",
+                    "ordinal": 65
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "dexpAttackTimeMs",
+                    "ordinal": 66
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "dexpDetectorTauMs",
+                    "ordinal": 67
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "dexpExpansionRatioDb",
+                    "ordinal": 68
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "dexpHighCutHz",
+                    "ordinal": 69
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "dexpHysteresisRatioDb",
+                    "ordinal": 70
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "dexpLookAheadEnabled",
+                    "ordinal": 71
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "dexpLookAheadMs",
+                    "ordinal": 72
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "dexpLowCutHz",
+                    "ordinal": 73
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "dexpReleaseTimeMs",
+                    "ordinal": 74
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "dexpSideChannelFilterEnabled",
+                    "ordinal": 75
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "antiVoxGainDb",
+                    "ordinal": 76
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "twoToneFreq1",
+                    "ordinal": 77
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "twoToneFreq2",
+                    "ordinal": 78
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "twoToneLevel",
+                    "ordinal": 79
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "twoTonePower",
+                    "ordinal": 80
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "twoTonePulsed",
+                    "ordinal": 81
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "twoToneInvert",
+                    "ordinal": 82
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "twoToneFreq2Delay",
+                    "ordinal": 83
+                },
+                {
+                    "direction": "bidirectional",
+                    "enumValues": [
+                        0,
+                        1,
+                        2
+                    ],
+                    "kind": "enum",
+                    "name": "twoToneDrivePowerSource",
+                    "ordinal": 84
                 }
             ]
         },

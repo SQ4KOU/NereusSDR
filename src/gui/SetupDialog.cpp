@@ -132,6 +132,12 @@
 //                 its own controls at transmitSettingsVersion 4. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-09-25: R-R3-49 (parity Task 5): Transmit > Power, Transmit >
+//                 DEXP/VOX and Test > Two-Tone IMD no longer wait for remote
+//                 transmit; each gates its own controls at
+//                 transmitSettingsVersion 5 (Enable VOX keeps the transmit
+//                 permission). J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "SetupDialog.h"
@@ -1355,7 +1361,10 @@ void SetupDialog::buildTree()
 
     // ── Transmit ──────────────────────────────────────────────────────────────
     QTreeWidgetItem* transmit = addCategory("Transmit");
-    registerPage(transmit, "Power", SetupScope::Core,       [this] { return new PowerPage(m_model);      }, true);
+    // R-R3-49 (parity Task 5): no longer held for remote transmit. The Core
+    // mirrors every setting on it; the page gates its own controls on
+    // transmitSettingsVersion 5 (PowerPage::setTransmitSettingsPermittedAt).
+    registerPage(transmit, "Power", SetupScope::Core,       [this] { return new PowerPage(m_model);      });
     if (UnbuiltFeatures::isBuilt(UnbuiltFeature::TxProfilesLeaf)) {
         registerPage(transmit, "TX Profiles", SetupScope::Core,
                      [this] { return new TxProfilesPage(m_model); }, true);
@@ -1388,7 +1397,10 @@ void SetupDialog::buildTree()
     // from the legacy DSP > VOX/DEXP placeholder above (line 245), which
     // remains a lightweight 4-control disabled stub for back-compat with
     // the Thetis tpDSPVOX tab IA.
-    registerPage(transmit, "DEXP/VOX", SetupScope::Core, [this] { return new DexpVoxPage(m_model); }, true);
+    // R-R3-49 (parity Task 5): no longer held for remote transmit. Enable VOX
+    // follows the transmit permission; the rest follows
+    // transmitSettingsVersion 5 (DexpVoxPage).
+    registerPage(transmit, "DEXP/VOX", SetupScope::Core, [this] { return new DexpVoxPage(m_model); });
 
     // 2026-05-22 menu cleanup: the standalone "PGXL Interlock" entry that
     // previously lived here is removed. The same controls live under
@@ -1511,10 +1523,13 @@ void SetupDialog::buildTree()
     // ── Test ──────────────────────────────────────────────────────────────────
     // Phase 3M-1c H.1: top-level Test category for the Two-Tone IMD page.
     QTreeWidgetItem* test = addCategory("Test");
-    // R-R3-21: a transmit page. Every control writes the TransmitModel's
-    // two-tone test settings, which drive a keyed two-tone transmission.
-    registerPage(test, "Two-Tone IMD", SetupScope::Core, [this] { return new TestTwoTonePage(m_model); },
-                 true);
+    // R-R3-21: every control writes the TransmitModel's two-tone test
+    // settings, which a keyed two-tone transmission reads when it starts.
+    // R-R3-49 (parity Task 5): no longer held for remote transmit. The
+    // settings key nothing; the page gates them on transmitSettingsVersion
+    // 5, and the two-tone start (the TX applet's 2-Tone) keeps the transmit
+    // permission.
+    registerPage(test, "Two-Tone IMD", SetupScope::Core, [this] { return new TestTwoTonePage(m_model); });
 
     tick("Test");
 

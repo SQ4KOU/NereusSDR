@@ -10,12 +10,18 @@
 // is Phase I and does NOT live on this page.
 //
 // Written by J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//
+// 2026-09-25 - R-R3-49 (parity Task 5): in a remote window the page
+// changes the Core's two-tone settings while its radio is off the air,
+// behind the transmit settings gate at version 5. J.J. Boyd (KG4VCF),
+// AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; no Thetis logic ported here.
 
 #include "TestTwoTonePage.h"
 
+#include "core/session/IStationLink.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
 
@@ -38,6 +44,25 @@ TestTwoTonePage::TestTwoTonePage(RadioModel* model, QWidget* parent)
     buildUi();
     seedFromModel();
     wireModelSignals();
+    // R-R3-49 (parity Task 5): closed in a remote window until SetupDialog
+    // pushes the version 5 gate.
+    if (model && !model->ownsLocalDsp()) {
+        setTransmitSettingsPermittedAt(5, false, QString());
+    }
+}
+
+void TestTwoTonePage::setTransmitSettingsPermittedAt(int version, bool permitted,
+                                                     const QString& reason)
+{
+    if (version != 5) {
+        return;
+    }
+    gateTransmitControls({m_freq1Spin, m_freq2Spin, m_defaultsBtn, m_stealthBtn, m_levelSpin,
+                          m_powerSpin, m_pulsedCheck, m_invertCheck, m_freq2DelaySpin,
+                          m_driveSliderRadio, m_tuneSliderRadio, m_fixedDriveRadio},
+                         permitted,
+                         reason.isEmpty() ? IStationLink::transmitSettingsUnavailableReason()
+                                          : reason);
 }
 
 // ---------------------------------------------------------------------------

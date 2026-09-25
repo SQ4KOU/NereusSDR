@@ -7298,6 +7298,15 @@ nereus_add_test(tst_remote_tx_eq_cfc
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
 
+# R-R3-49 (parity Task 5): Setup > Transmit > Power, DEXP/VOX and Test >
+# Two-Tone IMD from a remote window: the SWR protection keys applied to the
+# Core's live controller, ATT on TX on `stepAtt`, the version 5 `transmit`
+# settings with their range and on-air refusals, the three pages, and
+# nothing on them keying the radio. Loopback only, no RF, no audio device.
+nereus_add_test(tst_remote_transmit_setup_pages
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+
 # R-R3-49 (parity Task 3; iPhone plan Task 40): the Core's TX profiles on the
 # `transmit` object, a window's profile manager as a mirror that never saves,
 # and txProfile.select / save / delete with their refusals. Loopback only, no

@@ -150,6 +150,10 @@
 //                version 4 pages (DSP > CFC, AGC/ALC's TX Leveler and ALC)
 //                follow transmitSettingsPermitted(4). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 5): Setup's version 5 pages
+//                (Transmit > Power, DEXP/VOX, Test > Two-Tone IMD) follow
+//                transmitSettingsPermitted(5). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -11295,7 +11299,7 @@ SetupDialog* MainWindow::createSetupDialog()
     if (!m_radioModel || !m_radioModel->ownsLocalDsp()) {
         // R-R3-49 (parity Tasks 2 and 3): the settings later versions
         // brought (Audio > TX Input's microphone, Audio > TX Profile).
-        for (const int version : {2, 3, 4}) {
+        for (const int version : {2, 3, 4, 5}) {
             dialog->setTransmitSettingsPermitted(transmitSettingsPermitted(version),
                                                  transmitSettingsReason(version), version);
         }
@@ -11470,6 +11474,10 @@ void MainWindow::applyRemoteRoleGating()
         dialog->setTransmitSettingsPermitted(chainPermitted, chainReason, 2);
         dialog->setTransmitSettingsPermitted(profilePermitted, profileReason, 3);
         dialog->setTransmitSettingsPermitted(processingPermitted, processingReason, 4);
+        // R-R3-49 (parity Task 5): Transmit > Power, DEXP/VOX and Test >
+        // Two-Tone IMD came with version 5.
+        dialog->setTransmitSettingsPermitted(transmitSettingsPermitted(5),
+                                             transmitSettingsReason(5), 5);
         dialog->setStationSettingsAvailable(stationAvailable, stationSettingsReason());
     }
     if (m_actTxEqualizer) {

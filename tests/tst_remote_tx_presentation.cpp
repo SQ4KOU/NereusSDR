@@ -5,6 +5,9 @@
 // 2026-09-25: R-R3-49 (parity Task 3): Audio > TX Profile follows the
 // transmit settings gate, not remote transmit. J.J. Boyd (KG4VCF),
 // AI-assisted via Anthropic Claude Code.
+// 2026-09-25: R-R3-49 (parity Task 5): Transmit > Power and DEXP/VOX open
+// without remote transmit and gate their settings on version 5. J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include <QtTest>
 #include <QAction>
 #include <QDir>
@@ -78,6 +81,11 @@ private slots:
         // Transmit > Speech Processor opens since parity Task 4: it shows the
         // Core's TX chain and opens the editors, each on the Core's gate
         // (tst_remote_tx_eq_cfc).
+        // R-R3-49 (parity Task 5): Transmit > Power and DEXP/VOX open too.
+        // The Core mirrors their settings and each page gates its own
+        // controls on transmitSettingsVersion 5 (Enable VOX keeps the
+        // transmit permission); the case now proves that gate
+        // (tst_remote_transmit_setup_pages covers the open gate).
         for (const char* label : {"Power", "DEXP/VOX"}) {
             QTest::newRow(label) << QString::fromLatin1(label);
         }
@@ -92,10 +100,10 @@ private slots:
         QWidget* page = dialog.realizedPageForTest(label);
         QVERIFY(page);
         const bool resourceUnavailable = remote.localDspHandOutCount() > before;
-        QVERIFY(!page->isEnabled());
+        QVERIFY(!resourceUnavailable);
+        QVERIFY(page->isEnabled());
         auto* notice = dialog.findChild<QLabel*>(QStringLiteral("setupTransmitUnavailable"));
-        QVERIFY(notice && !notice->isHidden());
-        QVERIFY(notice->text().contains(QStringLiteral("Core")));
+        QVERIFY(notice && notice->isHidden());
 
         const int power = remote.transmitModel().power();
         const int micGain = remote.transmitModel().micGainDb();
@@ -122,12 +130,19 @@ private slots:
                 QVERIFY(dialog.grab().save(captures + QStringLiteral("/remote-tx-setup.png")));
             }
         }
-        dialog.setTransmitPermitted(true);
-        QCOMPARE(page->isEnabled(), !resourceUnavailable);
+        // The version 5 gate opens the settings without remote transmit, and
+        // closing it puts them back with its reason.
+        dialog.setTransmitSettingsPermitted(true, QString(), 5);
+        for (QSlider* slider : page->findChildren<QSlider*>()) {
+            QVERIFY(slider->isEnabled());
+        }
+        dialog.setTransmitSettingsPermitted(false, QStringLiteral("Permission withdrawn"), 5);
+        for (QSlider* slider : page->findChildren<QSlider*>()) {
+            QVERIFY(!slider->isEnabled());
+            QCOMPARE(slider->toolTip(), QStringLiteral("Permission withdrawn"));
+        }
+        QVERIFY(page->isEnabled());
         QVERIFY(notice->isHidden());
-        dialog.setTransmitPermitted(false, QStringLiteral("Permission withdrawn"));
-        QVERIFY(!page->isEnabled());
-        QCOMPARE(notice->text(), QStringLiteral("Permission withdrawn"));
 
         RadioModel local;
         SetupDialog localDialog(&local);
@@ -253,7 +268,9 @@ private slots:
         QVERIFY(setup);
         setup->selectPage(QStringLiteral("Power"));
         QWidget* powerPage = setup->realizedPageForTest(QStringLiteral("Power"));
-        QVERIFY(powerPage && !powerPage->isEnabled());
+        // R-R3-49 (parity Task 5): Transmit > Power opens without remote
+        // transmit; its settings follow transmitSettingsVersion 5.
+        QVERIFY(powerPage && powerPage->isEnabled());
         auto* proc = window.findChild<QPushButton*>(QStringLiteral("PhoneCwProcButton"));
         // R-R3-49 (parity Task 2): PROC and EQ are transmit settings: live
         // off the air whatever txPermitted says.
@@ -277,7 +294,7 @@ private slots:
         // R-R3-49 (parity Task 4): TX Equalizer stays available.
         QVERIFY(action->isEnabled());
         QVERIFY(proc->isEnabled() && eq->isEnabled());
-        QVERIFY(!powerPage->isEnabled());
+        QVERIFY(powerPage->isEnabled());
         QCOMPARE(client->sessionEpoch(), epoch);
         QCOMPARE(window.radioModel()->connectionState(), radioState);
         client->disconnectFromStation(QStringLiteral("test complete"));

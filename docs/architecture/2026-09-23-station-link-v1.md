@@ -387,7 +387,7 @@ change shows as surface drift and as a change to this table.
 | `stationTciVersion` | 1 |
 | `accessoryDataVersion` | 1 |
 | `remoteTgxlControlVersion` | 3 |
-| `transmitSettingsVersion` | 4 |
+| `transmitSettingsVersion` | 5 |
 
 <!-- /surface -->
 
@@ -460,8 +460,25 @@ When a feature is off, its version is 0:
   `phaseRotatorEnabled`, `phaseRotatorFreqHz`, `phaseRotatorStages`,
   `phaseReverseEnabled`, `cessbOn`, `txLevelerMaxGain`, `txLevelerDecay`,
   `txAlcMaxGain` and `txAlcDecay`, each refused outside its range and a
-  band array refused whole (section 7.3). Each is refused while the radio
-  is on the air (section 7.3). The keying set stays refused on a receive-only
+  band array refused whole (section 7.3). At 5 it also covers Setup >
+  Transmit > Power, Transmit > DEXP/VOX and Test > Two-Tone IMD: on
+  `transmit`, `tuneDrivePowerSource` becomes two-way, and
+  `powerByBandJson`, `tunePowerByBandJson`, `dexpAttackTimeMs`,
+  `dexpDetectorTauMs`, `dexpExpansionRatioDb`, `dexpHighCutHz`,
+  `dexpHysteresisRatioDb`, `dexpLookAheadEnabled`, `dexpLookAheadMs`,
+  `dexpLowCutHz`, `dexpReleaseTimeMs`, `dexpSideChannelFilterEnabled`,
+  `antiVoxGainDb`, `twoToneFreq1`, `twoToneFreq2`, `twoToneLevel`,
+  `twoTonePower`, `twoTonePulsed`, `twoToneInvert`, `twoToneFreq2Delay`
+  and `twoToneDrivePowerSource`, each refused outside its range and a band
+  map refused whole (section 7.3); on `stepAtt`, `attOnTxEnabled`,
+  `attOnTxValue` and `forceAttWhenPsOff`; and the Power page's SWR
+  Protection and External TX Inhibit keys (`SwrProtectionEnabled`,
+  `SwrProtectionLimit`, `SwrTuneProtectionEnabled`, `TunePowerSwrIgnore`,
+  `WindBackPowerSwr`, `TxInhibitMonitorEnabled`,
+  `TxInhibitMonitorReversed`), taken while the radio is off the air
+  (section 8), the SWR Protection keys applied to the Core's SWR
+  protection at once. Each is refused while the radio is on the air
+  (section 7.3). The keying set stays refused on a receive-only
   Core, on and off the air, and so do raw settings writes of
   `hardware/<mac>/tx/...`, `powerByBand` and `tunePowerByBand` (the
   `transmit` object owns them). A window whose Core sends 0 keeps its
@@ -957,7 +974,7 @@ An enum property lists the values its domain allows.
 | 3 | `stationAddress` | `utf8` | outbound |  |
 | 4 | `error` | `utf8` | outbound |  |
 
-**StepAttenuatorFacade** (15 properties)
+**StepAttenuatorFacade** (18 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -976,8 +993,11 @@ An enum property lists the values its domain allows.
 | 12 | `overloadAdc0` | `i64` | outbound |  |
 | 13 | `overloadAdc1` | `i64` | outbound |  |
 | 14 | `adcLinked` | `bool` | outbound |  |
+| 15 | `attOnTxEnabled` | `bool` | bidirectional |  |
+| 16 | `attOnTxValue` | `i64` | bidirectional |  |
+| 17 | `forceAttWhenPsOff` | `bool` | bidirectional |  |
 
-**TransmitModel** (64 properties)
+**TransmitModel** (85 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -1010,7 +1030,7 @@ An enum property lists the values its domain allows.
 | 26 | `dexpEnabled` | `bool` | bidirectional |  |
 | 27 | `micGainDb` | `i64` | bidirectional |  |
 | 28 | `tunePowerForTxBand` | `i64` | outbound |  |
-| 29 | `tuneDrivePowerSource` | `enum` | outbound | 0, 1, 2 |
+| 29 | `tuneDrivePowerSource` | `enum` | bidirectional | 0, 1, 2 |
 | 30 | `micBoost` | `bool` | bidirectional |  |
 | 31 | `micXlr` | `bool` | bidirectional |  |
 | 32 | `micTipRing` | `bool` | bidirectional |  |
@@ -1045,6 +1065,27 @@ An enum property lists the values its domain allows.
 | 61 | `txLevelerDecay` | `i64` | bidirectional |  |
 | 62 | `txAlcMaxGain` | `i64` | bidirectional |  |
 | 63 | `txAlcDecay` | `i64` | bidirectional |  |
+| 64 | `powerByBandJson` | `utf8` | bidirectional |  |
+| 65 | `tunePowerByBandJson` | `utf8` | bidirectional |  |
+| 66 | `dexpAttackTimeMs` | `f64` | bidirectional |  |
+| 67 | `dexpDetectorTauMs` | `f64` | bidirectional |  |
+| 68 | `dexpExpansionRatioDb` | `f64` | bidirectional |  |
+| 69 | `dexpHighCutHz` | `f64` | bidirectional |  |
+| 70 | `dexpHysteresisRatioDb` | `f64` | bidirectional |  |
+| 71 | `dexpLookAheadEnabled` | `bool` | bidirectional |  |
+| 72 | `dexpLookAheadMs` | `f64` | bidirectional |  |
+| 73 | `dexpLowCutHz` | `f64` | bidirectional |  |
+| 74 | `dexpReleaseTimeMs` | `f64` | bidirectional |  |
+| 75 | `dexpSideChannelFilterEnabled` | `bool` | bidirectional |  |
+| 76 | `antiVoxGainDb` | `i64` | bidirectional |  |
+| 77 | `twoToneFreq1` | `i64` | bidirectional |  |
+| 78 | `twoToneFreq2` | `i64` | bidirectional |  |
+| 79 | `twoToneLevel` | `f64` | bidirectional |  |
+| 80 | `twoTonePower` | `i64` | bidirectional |  |
+| 81 | `twoTonePulsed` | `bool` | bidirectional |  |
+| 82 | `twoToneInvert` | `bool` | bidirectional |  |
+| 83 | `twoToneFreq2Delay` | `i64` | bidirectional |  |
+| 84 | `twoToneDrivePowerSource` | `enum` | bidirectional | 0, 1, 2 |
 
 **TunerModel** (21 properties)
 
@@ -1138,9 +1179,11 @@ Notes on the keys:
   `tunePowerForTxBand` (i64, outbound) is the tune power for the band the
   Core transmits on (its transmit slice's band, as TUNE reads it), which
   the TX applet's Tune Power slider shows; it follows the transmit slice
-  across bands. `tuneDrivePowerSource` (enum, outbound: 0 the drive slider,
-  1 the tune slider, 2 the fixed tune power) is where TUNE takes its power
-  from. Both change only through `setTunePowerForTxBand`. None of these
+  across bands. `tuneDrivePowerSource` (enum: 0 the drive slider, 1 the
+  tune slider, 2 the fixed tune power) is where TUNE takes its power from.
+  At version 2 both change only through `setTunePowerForTxBand`, and
+  `tuneDrivePowerSource` is outbound; at version 5 it is two-way (Setup >
+  Transmit > Power's Tune group), and `tunePowerForTxBand` stays outbound. None of these
   keys the radio. The MON output choice (speakers or phones) is not on the
   link: it is each window's own audio routing.
 - **`transmit` at `transmitSettingsVersion` 3.** The radio's microphone
@@ -1185,6 +1228,45 @@ Notes on the keys:
   `[-12,-12,-12,-1,1,4,9,12,-10,-10]`); an array of any other length, or
   with a value that is not a whole number or is out of range, is refused
   whole and changes nothing. None of these keys the radio.
+- **`transmit` at `transmitSettingsVersion` 5.** Setup > Transmit > Power,
+  Transmit > DEXP/VOX and Test > Two-Tone IMD, each under its setter's
+  name and its getter's type. `tuneDrivePowerSource` becomes two-way.
+  `powerByBandJson` and `tunePowerByBandJson` (utf8) are the per-band power
+  and tune power in whole watts, a compact JSON object keyed by the app's
+  band key for the 14 bands (`160m`, `80m`, `60m`, `40m`, `30m`, `20m`,
+  `17m`, `15m`, `12m`, `10m`, `6m`, `GEN`, `WWV`, `XVTR`); the Core writes
+  its keys in its own order, and a window reads it as an object. A write
+  carries all 14 bands, each a whole number from 0 to 100 W (tune power 0
+  to 99 on a Hermes Lite 2); a map with a band missing, a key that is not
+  a band, or a value that is not a whole number or is out of range is
+  refused whole and changes nothing. A map the Core takes reads back as
+  the same object in the Core's key order, and is accepted.
+  `dexpAttackTimeMs` (f64, 2 to 100 ms), `dexpDetectorTauMs` (f64, 1 to 100
+  ms), `dexpExpansionRatioDb` (f64, 0.0 to 30.0 dB), `dexpHighCutHz` and
+  `dexpLowCutHz` (f64, 100 to 10000 Hz, the VOX trigger filter),
+  `dexpHysteresisRatioDb` (f64, 0.0 to 10.0 dB), `dexpLookAheadEnabled`
+  (bool), `dexpLookAheadMs` (f64, 10 to 999 ms), `dexpReleaseTimeMs` (f64, 2
+  to 1000 ms), `dexpSideChannelFilterEnabled` (bool), `antiVoxGainDb` (i64,
+  -60 to 60 dB). `twoToneFreq1` and `twoToneFreq2` (i64, -20000 to 20000
+  Hz), `twoToneLevel` (f64, -96 to 0 dB), `twoTonePower` (i64, 0 to 100
+  percent), `twoTonePulsed` and `twoToneInvert` (bool), `twoToneFreq2Delay`
+  (i64, 0 to 1000 ms) and `twoToneDrivePowerSource` (enum, as
+  `tuneDrivePowerSource`). The two-tone settings are read when a two-tone
+  test starts; the test itself (`twoToneActive`) and Enable VOX
+  (`voxEnabled`) stay in the keying set. None of these keys the radio. The
+  Core's runtime SWR foldback (Thetis's `NetworkIO.SWRProtect`) is not a
+  setting and is not on the link.
+- **`stepAtt` at `transmitSettingsVersion` 5.** Setup > Transmit > Power's
+  `attOnTxEnabled` (bool, ATT on TX), `attOnTxValue` (i64, the ATT on TX
+  value in dB for the Core's transmit band, from the Core's attenuator
+  minimum to 31: 0 to 31, -28 to 31 on a Hermes Lite 2) and
+  `forceAttWhenPsOff` (bool, Force ATT on Tx to 31 when PS-A is off),
+  declared after `adcLinked`. The Core applies each through its step
+  attenuator, as the local page does; `attOnTxValue` also follows
+  PureSignal's AutoAtt. They are transmit settings: a receive-only Core
+  takes them from a peer offered `transmitSettingsVersion` while its radio
+  is off the air (section 7.3). Changing `attOnTxValue` with ATT on TX on
+  sets the radio's TX attenuator; it keys nothing.
 - **Unknown classes.** A client that receives a schema for a class it does
   not know records the difference and drops that class's objects and
   deltas.
@@ -1235,8 +1317,25 @@ the wrong length or with a value out of range is refused whole: "Choose
 ten TX EQ band levels, each from -12 to 15 dB.", "Choose ten TX EQ band
 centres, each from 10 to 22000 Hz.", "Choose ten CFC compression levels,
 each from 0 to 16 dB.", "Choose ten CFC band centres, each from 0 to 20000
-Hz.", "Choose ten CFC post-EQ band levels, each from -24 to 24 dB."; a
-Hermes Lite 2 says "Choose a tune power from 0 to 99."), and
+Hz.", "Choose ten CFC post-EQ band levels, each from -24 to 24 dB.";
+at `transmitSettingsVersion` 5, "Choose a DEXP attack time from 2 to 100
+ms.", "Choose a DEXP detector time from 1 to 100 ms.", "Choose a DEXP
+release time from 2 to 1000 ms.", "Choose a DEXP expansion ratio from 0.0
+to 30.0 dB.", "Choose a DEXP hysteresis ratio from 0.0 to 10.0 dB.",
+"Choose a look-ahead time from 10 to 999 ms.", "Choose a VOX trigger
+filter cut from 100 to 10000 Hz.", "Choose an anti-VOX gain from -60 to 60
+dB.", "Choose a tone frequency from -20000 to 20000 Hz.", "Choose a
+two-tone level from -96 to 0 dB.", "Choose a two-tone power from 0 to 100
+percent.", "Choose a second tone delay from 0 to 1000 ms.", and a band map
+refused whole: "Choose a power from 0 to 100 W for each of the 14 bands.",
+"Choose a tune power from 0 to 100 W for each of the 14 bands."; a Hermes
+Lite 2 says "Choose a tune power from 0 to 99." and "Choose a tune power
+from 0 to 99 for each of the 14 bands."), `stepAtt`'s `attOnTxEnabled`,
+`attOnTxValue` and `forceAttWhenPsOff` on a receive-only station from a
+peer not offered `transmitSettingsVersion` (the receive-only reason) or
+while its radio is on the air (the on-air reason), and `attOnTxValue`
+outside the Core's range ("Choose an ATT on TX value from 0 to 31 dB.", on
+a Hermes Lite 2 from -28), and
 DSP settings from a peer that did not negotiate them
 (`StationServer::handlePropertyWrite`). The on-air check is read once for
 the whole write, before anything in it is applied.
@@ -1386,7 +1485,19 @@ DSP > Options TX keys (`DspOptions<Setting><Mode>Tx`,
 `StationServer::isTransmitSettingKeyAcceptedOffAir`) while its radio is off
 the air, and refuses a write or remove of one while it is on the air ("The
 radio is on the air. Try again when it stops."), handing back its own
-value.
+value. At `transmitSettingsVersion` 5 the same holds for Setup >
+Transmit > Power's SWR Protection keys (`SwrProtectionEnabled`,
+`SwrProtectionLimit`, `SwrTuneProtectionEnabled`, `TunePowerSwrIgnore`,
+`WindBackPowerSwr`) and External TX Inhibit keys
+(`TxInhibitMonitorEnabled`, `TxInhibitMonitorReversed`), on any peer. A
+value the page's own control cannot hold is refused with the Core's value
+handed back: `TunePowerSwrIgnore` outside 5 to 50 ("Choose a tune power
+to ignore from 5 to 50 W."), a box that is not `True` or `False` ("The
+Core expected this box to be on or off."). A taken SWR Protection key, or
+its removal, applies to the Core's SWR protection at once (a removal
+returns the default: off, limit 2.0, tune power to ignore 35 W). A taken
+External TX Inhibit key is stored on the Core, whose TX inhibit gate
+follows it (the receiver and transmit gaps plan, Task 13).
 
 ### 8.2 Keys the Core owns by code
 

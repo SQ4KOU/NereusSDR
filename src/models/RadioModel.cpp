@@ -212,6 +212,13 @@
 //                and at connect (Thetis eqform.cs chkLegacyEQ_CheckedChanged
 //                [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 5): applySwrProtectionSetting, the
+//                five SWR protection settings applied to the live
+//                SwrProtectionController at once (setup.cs
+//                chkSWRProtection_CheckedChanged and siblings
+//                [v2.10.3.15]), for the local page and a window's change
+//                on the Core. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 //=================================================================
@@ -5672,6 +5679,58 @@ void RadioModel::reportStationLinkStateChanged()
         m_pageShownAccessoryRequests.clear();
     }
     emit stationLinkStateChanged();
+}
+
+// ── R-R3-49 (parity Task 5): SWR protection, applied when it changes ─────
+//
+// The defaults are the constructor's reads above (Phase 3M-0 Task 17).
+
+bool RadioModel::isSwrProtectionSettingKey(const QString& key)
+{
+    return key == QLatin1String("SwrProtectionEnabled")
+        || key == QLatin1String("SwrProtectionLimit")
+        || key == QLatin1String("SwrTuneProtectionEnabled")
+        || key == QLatin1String("TunePowerSwrIgnore")
+        || key == QLatin1String("WindBackPowerSwr");
+}
+
+bool RadioModel::applySwrProtectionSetting(const QString& key, const QVariant& value)
+{
+    const bool removed = !value.isValid();
+    const auto flag = [&value, removed]() {
+        return !removed && value.toString() == QLatin1String("True");
+    };
+    if (key == QLatin1String("SwrProtectionEnabled")) {
+        // From Thetis setup.cs:15472-15475 [v2.10.3.15]:
+        //   console.SWRProtection = chkSWRProtection.Checked;
+        m_swrProt.setEnabled(flag());
+        return true;
+    }
+    if (key == QLatin1String("SwrProtectionLimit")) {
+        // From Thetis setup.cs:29407-29410 [v2.10.3.15]:
+        //   console.SwrProtectionLimit = (float)udSwrProtectionLimit.Value;
+        m_swrProt.setLimit(removed ? 2.0f : value.toString().toFloat());
+        return true;
+    }
+    if (key == QLatin1String("SwrTuneProtectionEnabled")) {
+        // From Thetis setup.cs:16176-16179 [v2.10.3.15]:
+        //   console.DisableSWRonTune = chkSWRTuneProtection.Checked;
+        m_swrProt.setDisableOnTune(flag());
+        return true;
+    }
+    if (key == QLatin1String("TunePowerSwrIgnore")) {
+        // From Thetis setup.cs:29412-29415 [v2.10.3.15]:
+        //   console.TunePowerSwrIgnore = (float)udTunePowerSwrIgnore.Value;
+        m_swrProt.setTunePowerSwrIgnore(removed ? 35.0f : value.toString().toFloat());
+        return true;
+    }
+    if (key == QLatin1String("WindBackPowerSwr")) {
+        // From Thetis setup.cs:33362-33365 [v2.10.3.15]:
+        //   console.SWRWindBackPower = chkWindBackPowerSWR.Checked;
+        m_swrProt.setWindBackEnabled(flag());
+        return true;
+    }
+    return false;
 }
 
 void RadioModel::reportStationSettingChanged(const QString& key)

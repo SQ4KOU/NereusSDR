@@ -24,6 +24,11 @@
 //                                    phase rotator, CESSB, leveler and ALC
 //                                    properties on the link, and version 4.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 5): the version
+//                                    5 properties on `transmit` and
+//                                    `stepAtt`, tuneDrivePowerSource
+//                                    two-way, and version 5.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -44,6 +49,7 @@
 #include "core/ConnectionState.h"
 #include "core/HardwareProfile.h"
 #include "core/MoxController.h"
+#include "core/StepAttenuatorFacade.h"
 #include "core/TxChannel.h"
 #include "core/session/IStationLink.h"
 #include "core/session/MirrorPolicy.h"
@@ -225,6 +231,7 @@ private slots:
     void coreOffersTransmitSettingsVersion2();
     void task4PropertiesAreOnTheLinkUnderTheirGetters();
     void coreOffersTransmitSettingsVersion4();
+    void task5PropertiesAreOnTheLinkUnderTheirGetters();
     void eachSettingRoundTripsToTheCoreTxChain();
     void outOfRangeWritesAreRefusedWithTheRange();
     void eachSettingIsRefusedOnTheAir();
@@ -281,7 +288,9 @@ void TstTransmitModelProperties::propertiesAreOnTheLinkUnderTheirSetters()
         {"dexpEnabled", MirrorWireKind::Bool, true},
         {"micGainDb", MirrorWireKind::Int64, true},
         {"tunePowerForTxBand", MirrorWireKind::Int64, false},
-        {"tuneDrivePowerSource", MirrorWireKind::Enum, false},
+        // R-R3-49 (parity Task 5): writable since transmitSettingsVersion 5
+        // (Setup > Transmit > Power's Tune group).
+        {"tuneDrivePowerSource", MirrorWireKind::Enum, true},
     };
     // After paSettingsBypass, in this order: the earlier ordinals stay.
     const MirrorProperty* bypass = schema.byName("paSettingsBypass");
@@ -361,11 +370,84 @@ void TstTransmitModelProperties::task4PropertiesAreOnTheLinkUnderTheirGetters()
 
 void TstTransmitModelProperties::coreOffersTransmitSettingsVersion4()
 {
+    // 5 since parity Task 5 (Power, DEXP/VOX, Two-Tone IMD); 4 is within it.
     Session s(m_securityDir.path(), this);
     QVERIFY(s.connect());
-    QCOMPARE(s.server->buildCapabilities().transmitSettingsVersion, 4);
-    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 4);
+    QCOMPARE(s.server->buildCapabilities().transmitSettingsVersion, 5);
+    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 5);
     QVERIFY(s.client->transmitSettingsAvailable(4));
+    QVERIFY(s.client->transmitSettingsAvailable(5));
+    QVERIFY(!s.client->transmitSettingsAvailable(6));
+}
+
+// R-R3-49 (parity Task 5): the version 5 properties, after txAlcDecay in
+// this order, each under its setter's name and its getter's type.
+void TstTransmitModelProperties::task5PropertiesAreOnTheLinkUnderTheirGetters()
+{
+    TransmitModel tx;
+    const MirrorSchema& schema = MirrorSchema::forObject(&tx);
+    const struct {
+        const char* name;
+        MirrorWireKind kind;
+    } expected[] = {
+        {"powerByBandJson", MirrorWireKind::Utf8},
+        {"tunePowerByBandJson", MirrorWireKind::Utf8},
+        {"dexpAttackTimeMs", MirrorWireKind::Float64},
+        {"dexpDetectorTauMs", MirrorWireKind::Float64},
+        {"dexpExpansionRatioDb", MirrorWireKind::Float64},
+        {"dexpHighCutHz", MirrorWireKind::Float64},
+        {"dexpHysteresisRatioDb", MirrorWireKind::Float64},
+        {"dexpLookAheadEnabled", MirrorWireKind::Bool},
+        {"dexpLookAheadMs", MirrorWireKind::Float64},
+        {"dexpLowCutHz", MirrorWireKind::Float64},
+        {"dexpReleaseTimeMs", MirrorWireKind::Float64},
+        {"dexpSideChannelFilterEnabled", MirrorWireKind::Bool},
+        {"antiVoxGainDb", MirrorWireKind::Int64},
+        {"twoToneFreq1", MirrorWireKind::Int64},
+        {"twoToneFreq2", MirrorWireKind::Int64},
+        {"twoToneLevel", MirrorWireKind::Float64},
+        {"twoTonePower", MirrorWireKind::Int64},
+        {"twoTonePulsed", MirrorWireKind::Bool},
+        {"twoToneInvert", MirrorWireKind::Bool},
+        {"twoToneFreq2Delay", MirrorWireKind::Int64},
+        {"twoToneDrivePowerSource", MirrorWireKind::Enum},
+    };
+    const MirrorProperty* last = schema.byName("txAlcDecay");
+    QVERIFY(last);
+    quint16 ordinal = last->ordinal;
+    for (const auto& e : expected) {
+        const MirrorProperty* prop = schema.byName(e.name);
+        QVERIFY2(prop, e.name);
+        QCOMPARE(prop->kind, e.kind);
+        QCOMPARE(prop->ordinal, ++ordinal);
+        QVERIFY2(MirrorPolicy::inboundAllowed("TransmitModel", e.name), e.name);
+        QVERIFY(prop->isWritable);
+    }
+    // swrProtectFactor is the Core's runtime foldback (Thetis
+    // NetworkIO.SWRProtect), not a setting: not on the link.
+    QVERIFY(!schema.byName("swrProtectFactor"));
+    // ATT on TX, its value and Force ATT are on `stepAtt`, after adcLinked
+    // (the earlier ordinals stay put), two-way.
+    StepAttenuatorFacade facade(nullptr);
+    const MirrorSchema& att = MirrorSchema::forObject(&facade);
+    const MirrorProperty* hold = att.byName("adcLinked");
+    QVERIFY(hold);
+    quint16 attOrdinal = hold->ordinal;
+    const struct {
+        const char* name;
+        MirrorWireKind kind;
+    } attExpected[] = {
+        {"attOnTxEnabled", MirrorWireKind::Bool},
+        {"attOnTxValue", MirrorWireKind::Int64},
+        {"forceAttWhenPsOff", MirrorWireKind::Bool},
+    };
+    for (const auto& e : attExpected) {
+        const MirrorProperty* prop = att.byName(e.name);
+        QVERIFY2(prop, e.name);
+        QCOMPARE(prop->kind, e.kind);
+        QCOMPARE(prop->ordinal, ++attOrdinal);
+        QVERIFY2(MirrorPolicy::inboundAllowed("StepAttenuatorFacade", e.name), e.name);
+    }
 }
 
 void TstTransmitModelProperties::eachSettingRoundTripsToTheCoreTxChain()
@@ -631,7 +713,7 @@ void TstTransmitModelProperties::keyingSetStaysRefused()
     QVERIFY(!s.core->transmitModel().voxEnabled());
     QVERIFY(!s.core->transmitModel().isTune());
     QVERIFY(!s.core->moxController()->isMox());
-    // tunePowerForTxBand and tuneDrivePowerSource change only by command.
+    // tunePowerForTxBand changes only by command.
     const SessionPropertyResult raw =
         s.writeTransmit("tunePowerForTxBand", MirrorWireKind::Int64, QVariant(qlonglong(9)));
     QVERIFY(!raw.accepted);

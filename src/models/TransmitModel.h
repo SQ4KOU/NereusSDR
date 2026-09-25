@@ -256,6 +256,14 @@
 //                 EQ dialog's Legacy EQ box, eqform.cs:988 and setup.cs:
 //                 3615, 9318 [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted
 //                 via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 5): Setup > Transmit > Power,
+//                 DEXP/VOX and Test > Two-Tone IMD settings as mirrored
+//                 Q_PROPERTYs (transmitSettingsVersion 5): the per-band
+//                 power and tune power as JSON objects keyed by band,
+//                 the DEXP timing, look-ahead and side-channel filter, the
+//                 anti-VOX gain and the two-tone settings; the tune drive
+//                 source becomes writable. NereusSDR-original. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -1120,8 +1128,11 @@ public:
     // slider does.
     Q_PROPERTY(int tunePowerForTxBand READ tunePowerForTxBand
                                       NOTIFY tunePowerForTxBandChanged)
+    // R-R3-49 (parity Task 5, transmitSettingsVersion 5): the drive source
+    // is also Setup > Transmit > Power's Tune group, so it is writable.
     Q_PROPERTY(NereusSDR::DrivePowerSource tuneDrivePowerSource
-               READ tuneDrivePowerSource NOTIFY tuneDrivePowerSourceChanged)
+               READ tuneDrivePowerSource WRITE setTuneDrivePowerSource
+               NOTIFY tuneDrivePowerSourceChanged)
 
     // ── R-R3-49 (parity Task 3): the radio's microphone input, TX profiles ─
     //
@@ -1215,6 +1226,61 @@ public:
                                              NOTIFY txAlcMaxGainChanged)
     Q_PROPERTY(int     txAlcDecay            READ txAlcDecay            WRITE setTxAlcDecay
                                              NOTIFY txAlcDecayChanged)
+
+    // ── R-R3-49 (parity Task 5): Power, DEXP/VOX and two-tone settings ────
+    //
+    // Mirrored on `transmit` (transmitSettingsVersion 5), after txAlcDecay
+    // so the earlier ordinals stay put, each under its setter's name and
+    // its getter's type. The per-band power and tune power go on the link
+    // as a compact JSON object of whole watts keyed by band (bandKeyName:
+    // "160m" .. "6m", "GEN", "WWV", "XVTR"), all 14 bands in every write
+    // (refused whole otherwise). None keys the radio: the two-tone
+    // settings are read when a two-tone test starts, which stays with
+    // remote transmit (twoToneActive is in the keying set).
+    Q_PROPERTY(QString powerByBandJson       READ powerByBandJson       WRITE setPowerByBandJson
+                                             NOTIFY powerByBandJsonChanged)
+    Q_PROPERTY(QString tunePowerByBandJson   READ tunePowerByBandJson   WRITE setTunePowerByBandJson
+                                             NOTIFY tunePowerByBandJsonChanged)
+    Q_PROPERTY(double  dexpAttackTimeMs      READ dexpAttackTimeMs      WRITE setDexpAttackTimeMs
+                                             NOTIFY dexpAttackTimeMsChanged)
+    Q_PROPERTY(double  dexpDetectorTauMs     READ dexpDetectorTauMs     WRITE setDexpDetectorTauMs
+                                             NOTIFY dexpDetectorTauMsChanged)
+    Q_PROPERTY(double  dexpExpansionRatioDb  READ dexpExpansionRatioDb  WRITE setDexpExpansionRatioDb
+                                             NOTIFY dexpExpansionRatioDbChanged)
+    Q_PROPERTY(double  dexpHighCutHz         READ dexpHighCutHz         WRITE setDexpHighCutHz
+                                             NOTIFY dexpHighCutHzChanged)
+    Q_PROPERTY(double  dexpHysteresisRatioDb READ dexpHysteresisRatioDb WRITE setDexpHysteresisRatioDb
+                                             NOTIFY dexpHysteresisRatioDbChanged)
+    Q_PROPERTY(bool    dexpLookAheadEnabled  READ dexpLookAheadEnabled  WRITE setDexpLookAheadEnabled
+                                             NOTIFY dexpLookAheadEnabledChanged)
+    Q_PROPERTY(double  dexpLookAheadMs       READ dexpLookAheadMs       WRITE setDexpLookAheadMs
+                                             NOTIFY dexpLookAheadMsChanged)
+    Q_PROPERTY(double  dexpLowCutHz          READ dexpLowCutHz          WRITE setDexpLowCutHz
+                                             NOTIFY dexpLowCutHzChanged)
+    Q_PROPERTY(double  dexpReleaseTimeMs     READ dexpReleaseTimeMs     WRITE setDexpReleaseTimeMs
+                                             NOTIFY dexpReleaseTimeMsChanged)
+    Q_PROPERTY(bool    dexpSideChannelFilterEnabled READ dexpSideChannelFilterEnabled
+                                             WRITE setDexpSideChannelFilterEnabled
+                                             NOTIFY dexpSideChannelFilterEnabledChanged)
+    Q_PROPERTY(int     antiVoxGainDb         READ antiVoxGainDb         WRITE setAntiVoxGainDb
+                                             NOTIFY antiVoxGainDbChanged)
+    Q_PROPERTY(int     twoToneFreq1          READ twoToneFreq1          WRITE setTwoToneFreq1
+                                             NOTIFY twoToneFreq1Changed)
+    Q_PROPERTY(int     twoToneFreq2          READ twoToneFreq2          WRITE setTwoToneFreq2
+                                             NOTIFY twoToneFreq2Changed)
+    Q_PROPERTY(double  twoToneLevel          READ twoToneLevel          WRITE setTwoToneLevel
+                                             NOTIFY twoToneLevelChanged)
+    Q_PROPERTY(int     twoTonePower          READ twoTonePower          WRITE setTwoTonePower
+                                             NOTIFY twoTonePowerChanged)
+    Q_PROPERTY(bool    twoTonePulsed         READ twoTonePulsed         WRITE setTwoTonePulsed
+                                             NOTIFY twoTonePulsedChanged)
+    Q_PROPERTY(bool    twoToneInvert         READ twoToneInvert         WRITE setTwoToneInvert
+                                             NOTIFY twoToneInvertChanged)
+    Q_PROPERTY(int     twoToneFreq2Delay     READ twoToneFreq2Delay     WRITE setTwoToneFreq2Delay
+                                             NOTIFY twoToneFreq2DelayChanged)
+    Q_PROPERTY(NereusSDR::DrivePowerSource twoToneDrivePowerSource
+               READ twoToneDrivePowerSource WRITE setTwoToneDrivePowerSource
+               NOTIFY twoToneDrivePowerSourceChanged)
 
     /// Bypass PA settings flag. false (default) = use board-specific table.
     bool paSettingsBypass() const noexcept { return m_paSettingsBypass; }
@@ -1881,6 +1947,11 @@ public:
     QString cfcCompressionJson() const;
     QString cfcEqFreqJson() const;
     QString cfcPostEqBandGainJson() const;
+    /// R-R3-49 (parity Task 5): the per-band power and tune power as the
+    /// link's compact JSON object of whole watts keyed by bandKeyName, for
+    /// the 14 bands 160m .. XVTR. NereusSDR-original.
+    QString powerByBandJson() const;
+    QString tunePowerByBandJson() const;
 
     // ── Range constants (Thetis Designer setup.Designer.cs [v2.10.3.13]) ──
     //
@@ -1949,6 +2020,12 @@ public slots:
     void setCfcCompressionJson(const QString& json);
     void setCfcEqFreqJson(const QString& json);
     void setCfcPostEqBandGainJson(const QString& json);
+    /// R-R3-49 (parity Task 5): every band from the link's JSON object,
+    /// through setPowerForBand / setTunePowerForBand. A value that is not a
+    /// JSON object of the 14 band keys, each a whole number, changes
+    /// nothing (the Core refuses it first with settingRangeRefusal).
+    void setPowerByBandJson(const QString& json);
+    void setTunePowerByBandJson(const QString& json);
 
     // ── Phase Rotator setters (3M-3a-ii Batch 2) ─────────────────────────
     void setPhaseRotatorEnabled(bool on);
@@ -2040,6 +2117,10 @@ signals:
     void cfcCompressionJsonChanged(const QString& json);
     void cfcEqFreqJsonChanged(const QString& json);
     void cfcPostEqBandGainJsonChanged(const QString& json);
+    // R-R3-49 (parity Task 5): emitted beside powerByBandChanged /
+    // tunePowerByBandChanged, and after a load() restores the arrays.
+    void powerByBandJsonChanged(const QString& json);
+    void tunePowerByBandJsonChanged(const QString& json);
 
     // ── Phase Rotator signals (3M-3a-ii Batch 2) ─────────────────────────
     void phaseRotatorEnabledChanged(bool on);
@@ -2358,7 +2439,7 @@ signals:
     void twoTonePulsedChanged(bool on);
 
     // ── Two-tone drive-power source signal (3M-1c B.3) ─────────────────────
-    void twoToneDrivePowerSourceChanged(DrivePowerSource source);
+    void twoToneDrivePowerSourceChanged(NereusSDR::DrivePowerSource source);
 
 private:
     bool m_mox{false};
