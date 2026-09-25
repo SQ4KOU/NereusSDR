@@ -598,6 +598,76 @@ Bench (pending, the operator's go-ahead, dummy load, low power):
   the transmitting slice's mask.
 - On the G2, an OC output follows the band in receive and in transmit.
 
+**HL2 bench script (Task 14 fix wave).** The Pi 4 Core with the HL2 runs this branch; the
+operator drives it from a remote window. The N2ADR filter board is fitted and enabled. Dummy
+load, TUNE at the lowest power, and the operator's go-ahead before any key-down.
+
+Where to read the band outputs:
+- **In the remote window (the pass/fail reading).** Setup > Hardware > HL2 I/O: the OC strip
+  (`band=`, the byte, `RX`/`TX` and seven pin lights). Setup > Hardware > OC Outputs: the
+  live pin row. Both show the byte the Core's connection sent to the radio
+  (`RadioModel::bandOutputsByte`), not one worked out in the window. Before the Core has sent
+  one they show `--` and no pins.
+- **On the Pi (the second witness).** The Core logs `HL2 ocByte=0xNN band=B mox=M` whenever
+  the byte changes (`P1RadioConnection.cpp`, beside the OC compose):
+  `sudo -n journalctl -u nereusd -f | grep --line-buffered "HL2 ocByte="`
+  (the same line is in `~/.config/NereusSDR/nereussdr.log` under the service's home,
+  `/var/lib/nereusd`). `band` is the band index: 3 = 40 m, 5 = 20 m; `mox=1` is keyed.
+- Transmit pins on the N2ADR board (`N2adrPreset.cpp`): pin 3 (0x04) is the 60/40 m
+  low-pass, pin 4 (0x08) the 30/20 m low-pass. With two filter ranges open the board is
+  bypassed while receiving (0x00).
+
+Receive:
+1. Connect. Slice A on 14.074 MHz (pan 1), slice B on 7.074 MHz (pan 2). A hears 20 m FT8, B
+   hears 40 m FT8, each pan shows its own band. The I/O strip reads `0X00 RX` (two ranges
+   open: receive bypass).
+2. Add C on 14.080 MHz and D on 7.080 MHz, then E on 14.030 MHz. Each joins the pan of its
+   band and hears its own frequency; a sixth slice is refused with the slice-limit message.
+3. PureSignal off. Close B, C, D and E so only A (20 m) is open. Key TUNE on A for 5 s:
+   receive mutes; the I/O strip and the OC row read `0X08 TX` (pin 4), and the Pi logs
+   `ocByte=0x08 band=5 mox=1`. After unkey, A's receive pins are back within a second.
+4. PureSignal on. Reopen B on 7.074 MHz. Key a two-tone on A for 10 s: pan 1 keeps drawing,
+   B's pan shows PS HOLD, PureSignal calibrates; after unkey B hears 40 m again.
+5. Close A, keep B and D (40 m). B and D keep hearing 40 m FT8 at the same strength.
+6. Tune B to 14.074 MHz: B hears 20 m at full strength.
+7. Add a slice on 3.573 MHz: it hears 80 m and B 20 m; the strip reads `0X00 RX` again.
+
+Transmit (the band outputs follow the transmitting slice):
+8. Close the 80 m slice and D, so only B (20 m) is open, with A closed. Hand the transmitter
+   to B (TX badge on B's flag). Key TUNE on B for 3 s: the strip and the OC row read
+   `0X08 TX`, band 20m; the Pi logs `ocByte=0x08 band=5 mox=1`. Normal forward power into the
+   dummy load, low SWR.
+9. Cross-band split, B transmitting on the lower band. Open A on 14.074 MHz (pan 1), tune B to
+   7.074 MHz, the transmitter still on B. Unkeyed the strip reads `0X00 RX`. Key TUNE on B for
+   3 s: `0X04 TX`, band 40m (pin 3, not pin 4); the Pi logs `ocByte=0x04 band=3 mox=1`.
+   Normal power and SWR. Before Task 14 the wire carried pin 4 here: the 40 m carrier's second
+   harmonic left through the 30/20 m low-pass. Before this fix wave the OC Outputs row showed
+   pan 1's 20 m pins whatever the wire carried, so the row is now a valid reading.
+10. The reverse. Tune A to 7.074 MHz and B to 14.074 MHz, the transmitter on B. Key TUNE on B
+    for 3 s: `0X08 TX`, band 20m (pin 4, not pin 3); the Pi logs `ocByte=0x08 band=5 mox=1`.
+    Normal power, low SWR. Before Task 14 the 20 m carrier went into the 60/40 m low-pass:
+    high SWR, power reflected into the PA.
+11. Hand the transmitter back to A (7.074 MHz). Key TUNE for 3 s: `0X04 TX`, band 40m; the
+    Pi logs `ocByte=0x04 band=3 mox=1`.
+
+Fail, and unkey at once, if a keyed step shows another slice's band pin in the window or in
+the Pi's log, if the window and the log disagree, if the SWR rises, or if the forward power
+folds back.
+
+Receive notes (Task 14 review, M1): unkeyed, the band behind the receive pins is the RX1
+stand-in's VFO, not its stream centre, as Thetis takes `BandByFreq(VFOAFreq)`. The receive
+byte can therefore change from what an earlier build sent in two states:
+- **CTUN near a band edge.** The VFO sits in one band while the stream's centre sits in the
+  next (for example a VFO at 14.010 MHz with the centre below 14.000 MHz): the pins are the
+  VFO's band.
+- **A slice that joined another slice's stream.** A slice opened inside an existing stream
+  shares it (`JoinedExisting`) without moving its centre, so its VFO can sit up to half the
+  stream bandwidth from the centre, in another band. When it is the lowest-lettered slice on
+  the RX1 slot, its VFO's band chooses the pins. To see it, with A closed: open B at
+  14.020 MHz, then C at 13.950 MHz (outside 20 m, inside B's stream, so both show on one
+  stream), then close B. The stream stays centred in 20 m, and the strip shows the pins for
+  C's band (GEN), not 20 m's.
+
 **Execution note (advisory):** opus. After the whole-branch fix wave. Shares
 `P1RadioConnection.cpp` and `P2RadioConnection.cpp` with nothing in flight.
 
