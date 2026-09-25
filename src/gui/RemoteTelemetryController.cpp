@@ -510,7 +510,10 @@ QString RemoteTelemetryController::detailText() const
         return value ? QString::number(*value, 'f', decimals) + unit : unavailable;
     };
     text << tr("PA voltage from the Core: %1.").arg(measured(radio.paVolts, 1, tr("\u00A0V")));
-    text << tr("Supply voltage from the Core: %1.").arg(measured(radio.supplyVolts, 1, tr("\u00A0V")));
+    // Group A follow-up (group B fix wave): the AIN6 reading, named as
+    // Thetis names it (setup.designer.cs:51365 [v2.10.3.15], "DC Voltage");
+    // on MkII-class boards it is not the supply.
+    text << tr("DC voltage from the Core: %1.").arg(measured(radio.supplyVolts, 1, tr("\u00A0V")));
     text << tr("Packet loss between the Core and the radio, from the Core: %1 over the last 5 seconds.")
         .arg(measured(radio.packetLossPercent, 2, tr("\u00A0%")));
     text << tr("Radio jitter from the Core: %1.").arg(measured(radio.jitterMs, 2, tr("\u00A0ms")));
