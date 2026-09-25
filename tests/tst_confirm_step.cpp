@@ -1524,6 +1524,105 @@ private slots:
         QCOMPARE(s.core.model->streamAllocator().streamSampleRateHz(s.receiver()), 192000);
         QCOMPARE(countOf(s.appB, QStringLiteral("notice")), 0);
     }
+
+    // Fix wave 2 (Important 4): the proceed confirms closing B's slice 1.
+    // Before the change runs on its later turn, B closes slice 1 and A's
+    // new slice takes id 1. The change is refused as changed and closes
+    // nothing: A's new slice stays and the rate stays.
+    void aRateProceedWhoseClosingSliceIdWasReusedIsRefused()
+    {
+        Shared s(1);
+        const QJsonObject held = s.core.invoke(
+            s.appA, "requestSliceSampleRate", {int64("sliceId", 0), int64("rateHz", 96000)});
+        QCOMPARE(held.value(QStringLiteral("reason")).toString(), kWaiting);
+        const QJsonObject ask = waitForLast(s.appA, QStringLiteral("confirm.request"), 0);
+        const quint32 proceedId = 8811;
+        s.appA->sendText(SessionMessages::encode(SessionMessages::commandInvoke(
+            "confirm.proceed", proceedId,
+            {int64("id", ask.value(QStringLiteral("id")).toInteger()), int64("choice", -1)})));
+        // Queued behind the proceed's delivery: B removes its slice 1, and
+        // A's new slice takes the free id 1.
+        RadioModel* model = s.core.model.get();
+        const QByteArray aKey = s.a.key.fingerprint();
+        int reused = -1;
+        QMetaObject::invokeMethod(model, [model, aKey, &reused]() {
+            model->removeSlice(1);
+            const SliceOwnership::CreatorScope creator(model->sliceOwnership(), aKey);
+            reused = model->addSlice(QStringLiteral("pan-0"));
+        }, Qt::QueuedConnection);
+        QJsonObject done;
+        QTRY_VERIFY([&]() {
+            for (const QJsonObject& o : ofType(s.appA->received(), QStringLiteral("command.result"))) {
+                if (o.value(QStringLiteral("id")).toInteger() == proceedId) {
+                    done = o;
+                }
+            }
+            return !done.isEmpty();
+        }());
+        QCOMPARE(reused, 1);
+        QVERIFY2(!done.value(QStringLiteral("accepted")).toBool(true),
+                 QJsonDocument(done).toJson().constData());
+        QCOMPARE(done.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("That setting changed since you asked. Make the change again."));
+        QTest::qWait(2 * StationServer::kDefaultDeltaFlushMs);
+        QVERIFY(s.core.model->sliceById(1) != nullptr);
+        QCOMPARE(s.core.model->sliceOwnership()->mark(1).owner, aKey);
+        QCOMPARE(s.core.model->streamAllocator().streamSampleRateHz(s.receiver()), 192000);
+    }
+
+    // Fix wave 2 (Important 4, the re-review's first out-of-scope item): a
+    // rate change A asks for on its own slice runs on a later turn. Before
+    // it does, A's slice closes and B's new slice takes its id. The change
+    // is refused as B's slice, and B's receiver keeps its rate.
+    void aRateChangeWhoseSliceIdWasReusedBeforeItRanIsRefused()
+    {
+        Core core;
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.model->configureStreamPool(5, 5, 192000);
+        core.model->sliceById(0)->setFrequency(7074000.0);
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a);
+        LoopbackTransport* appB = core.signIn(b);
+        QVERIFY(admitted(appA) && admitted(appB));
+        const int bSlice = core.model->sliceOwnership()->ownedBy(b.key.fingerprint()).first();
+        core.model->sliceById(bSlice)->setFrequency(14074000.0);
+        QCOMPARE(core.model->sliceOwnership()->mark(0).owner, a.key.fingerprint());
+        QVERIFY(streamOf(core, 0) != streamOf(core, bSlice));
+
+        const quint32 rateId = 8821;
+        appA->sendText(SessionMessages::encode(SessionMessages::commandInvoke(
+            "requestSliceSampleRate", rateId, {int64("sliceId", 0), int64("rateHz", 96000)})));
+        RadioModel* model = core.model.get();
+        const QByteArray bKey = b.key.fingerprint();
+        int reused = -1;
+        // Queued behind A's request, ahead of the change it queues.
+        QMetaObject::invokeMethod(model, [model, bKey, &reused]() {
+            model->removeSlice(0);
+            const SliceOwnership::CreatorScope creator(model->sliceOwnership(), bKey);
+            reused = model->addSlice(QStringLiteral("pan-b2"));
+            model->sliceById(reused)->setFrequency(3573000.0);
+        }, Qt::QueuedConnection);
+        QJsonObject done;
+        QTRY_VERIFY([&]() {
+            for (const QJsonObject& o : ofType(appA->received(), QStringLiteral("command.result"))) {
+                if (o.value(QStringLiteral("id")).toInteger() == rateId) {
+                    done = o;
+                }
+            }
+            return !done.isEmpty();
+        }());
+        QCOMPARE(reused, 0);
+        QCOMPARE(core.model->sliceOwnership()->mark(0).owner, bKey);
+        QVERIFY2(!done.value(QStringLiteral("accepted")).toBool(true),
+                 QJsonDocument(done).toJson().constData());
+        QVERIFY2(done.value(QStringLiteral("reason")).toString()
+                     .startsWith(QStringLiteral("That slice belongs to iPad.")),
+                 qPrintable(done.value(QStringLiteral("reason")).toString()));
+        QTest::qWait(50);
+        QCOMPARE(core.model->sliceById(0)->sampleRateHz(), 192000);
+    }
 };
 
 QTEST_GUILESS_MAIN(TstConfirmStep)

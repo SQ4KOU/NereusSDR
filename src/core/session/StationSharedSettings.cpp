@@ -1191,8 +1191,15 @@ SessionMessage StationServer::proceedSharedSetting(SessionTransport* transport,
         const ResultKey deferred{session, question.original.commandVerb,
                                  question.original.commandId};
         const QPointer<StationServer> self(this);
+        // Fix wave 2 (Important 4): each closing slice with its owner now,
+        // so a slice closed and its id reused before the change runs is
+        // never closed in its place.
+        QHash<int, QByteArray> closingOwners;
+        for (int id : now.closes) {
+            closingOwners.insert(id, m_radioModel->sliceOwnership()->mark(id).subject());
+        }
         m_dispatcher->setRateClosing(
-            QSet<int>(now.closes.cbegin(), now.closes.cend()), [self, deferred](int id) {
+            closingOwners, [self, deferred](int id) {
                 if (self.isNull() || self->m_radioModel.isNull()) {
                     return;
                 }
@@ -1205,9 +1212,10 @@ SessionMessage StationServer::proceedSharedSetting(SessionTransport* transport,
                     && !entry->closedDevices.contains(who)) {
                     entry->closedDevices.append(who);
                 }
-            });
+            },
+            QString::fromLatin1(kTargetChangedReason));
         m_dispatcher->dispatch(question.original);
-        m_dispatcher->setRateClosing({}, {});
+        m_dispatcher->setRateClosing({}, {}, {});
         return SessionMessages::commandResult(invoke.commandVerb, invoke.commandId, true,
                                               QString(), {});
     }

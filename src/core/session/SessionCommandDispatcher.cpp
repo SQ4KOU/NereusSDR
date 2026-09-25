@@ -1115,8 +1115,9 @@ void SessionCommandDispatcher::handleAddSliceOnPan(const SessionMessage& invoke)
 void SessionCommandDispatcher::handleRequestSliceSampleRate(const SessionMessage& invoke)
 {
     // Fix wave: a confirmed rate change's closes, for this dispatch only.
-    const QSet<int> closing = std::exchange(m_rateClosing, {});
+    const QHash<int, QByteArray> closingOwners = std::exchange(m_rateClosing, {});
     const std::function<void(int)> close = std::exchange(m_rateClose, {});
+    const QString changedReason = std::exchange(m_rateChangedReason, {});
     int sliceId = 0;
     int rateHz = 0;
     const ArgumentStatus sliceIdStatus =
@@ -1160,14 +1161,47 @@ void SessionCommandDispatcher::handleRequestSliceSampleRate(const SessionMessage
     // Fix wave I1: the result is this session's, whichever dispatch is
     // running when it arrives.
     const QString owner = m_sessionOwner;
+    // Fix wave 2 (Important 4): the device this change acts for, and the
+    // check that refused another device's slice here, run again when the
+    // change is applied: the slice may have closed and its id gone to
+    // another device's new slice in between.
+    const QByteArray requester = m_requester;
+    const SliceAccess access = m_sliceAccess;
     const QPointer<SessionCommandDispatcher> self(this);
     const QPointer<RadioModel> radioModel(m_radioModel);
 
     QMetaObject::invokeMethod(
         m_radioModel,
-        [self, radioModel, verb, commandId, sliceId, rateHz, owner, closing, close]() {
+        [self, radioModel, verb, commandId, sliceId, rateHz, owner, closingOwners, close,
+         changedReason, requester, access]() {
             if (self.isNull() || radioModel.isNull()) {
                 return;
+            }
+            if (!requester.isEmpty() && access) {
+                const QString refusal = access(requester, sliceId);
+                if (!refusal.isEmpty()) {
+                    self->emitResultAs(owner, SessionMessages::commandResult(
+                        verb, commandId, false, refusal, {}));
+                    return;
+                }
+            }
+            // A confirmed change closes exactly the slices it was confirmed
+            // for: each must still be there with the owner it had at the
+            // proceed, or the whole change is refused and nothing closes.
+            QSet<int> closing;
+            for (auto it = closingOwners.cbegin(); it != closingOwners.cend(); ++it) {
+                if (radioModel->sliceById(it.key()) == nullptr
+                    || radioModel->sliceOwnership()->mark(it.key()).subject() != it.value()) {
+                    self->emitResultAs(owner, SessionMessages::commandResult(
+                        verb, commandId, false,
+                        changedReason.isEmpty()
+                            ? QStringLiteral("That setting changed since you asked. "
+                                             "Make the change again.")
+                            : changedReason,
+                        {}));
+                    return;
+                }
+                closing.insert(it.key());
             }
 
             // Actual scope, not requested scope (see the class comment):

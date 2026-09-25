@@ -245,10 +245,18 @@ public:
     /// `closing` through `close`, and only once the change is certain
     /// (RadioModel::setStreamSampleRateClosing). Used by that one dispatch
     /// and cleared, whether it runs or not.
-    void setRateClosing(QSet<int> closing, std::function<void(int)> close)
+    ///
+    /// Fix wave 2 (Important 4): `closing` maps each slice id to its owner
+    /// (SliceOwnership::Mark::subject()) at the proceed. The change runs on
+    /// a later turn; if any of those slices is gone or has another owner
+    /// then (closed, and its id reused), the whole change is refused with
+    /// `changedReason` and nothing closes.
+    void setRateClosing(QHash<int, QByteArray> closing, std::function<void(int)> close,
+                        QString changedReason = {})
     {
         m_rateClosing = std::move(closing);
         m_rateClose = std::move(close);
+        m_rateChangedReason = std::move(changedReason);
     }
     /// The plain refusal for `requester` naming `sliceId`, or empty when it
     /// may: "That slice belongs to <owner>. It can be changed only there."
@@ -355,8 +363,9 @@ private:
     QString m_sessionOwner{QStringLiteral("local")};
     // iPhone app Task 73.
     QByteArray m_requester;
-    QSet<int> m_rateClosing;
+    QHash<int, QByteArray> m_rateClosing;
     std::function<void(int)> m_rateClose;
+    QString m_rateChangedReason;
     SliceAccess m_sliceAccess;
     ConfirmAnswer m_confirmAnswer;
     /// Refuses (and answers) a verb whose sliceId names another device's
