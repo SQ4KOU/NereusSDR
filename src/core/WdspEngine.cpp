@@ -5,6 +5,10 @@
 // Ported from Thetis source:
 //   Project Files/Source/ChannelMaster/cmaster.c, original licence from Thetis source is included below
 //
+//   2026-09-24 - R-R3-39: FFTW's planner made thread-safe once per process
+//                (fftw_make_planner_thread_safe), because WDSP's planning
+//                calls run on more than one thread. NereusSDR-original.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
@@ -71,12 +75,18 @@ warren@wpratt.com
 #include "wdsp_api.h"
 #include "core/platform/ThreadPlacement.h"
 
+#ifdef HAVE_FFTW3
+#include <fftw3.h>       // fftw_make_planner_thread_safe (R-R3-39)
+#endif
+
 #include <QDir>
 #include <QElapsedTimer>
 #include <QFile>
 #include <QStandardPaths>
 #include <QTimer>
 #include <QThread>
+
+#include <mutex>
 
 #ifdef HAVE_WDSP
 // Opaque WDSP lookup slot, as in TxChannel.cpp. dexp.h requires internal
@@ -89,9 +99,31 @@ extern _dexp* pdexp[];
 
 namespace NereusSDR {
 
+namespace {
+// R-R3-39: WDSP plans its FFTs with double-precision FFTW, and FFTW's
+// planner is not thread-safe by default. The receive lane (every RX
+// channel's OpenChannel, SetInputSamplerate, RXASetNC, SetDSPBuffsize) and
+// the transmit side (TX OpenChannel, TXASetNC; the transmit lane from Task
+// 32) plan concurrently, and two threads in the planner at once corrupt
+// its hash table and spin (seen as a hung connect: createTxChannel and the
+// PS feedback OpenChannel both inside fftw's hinsert0). Made thread-safe
+// once per process, before any plan or wisdom import. The operator chose
+// FFTW's thread-safe planner (2026-09-24).
+void makeFftwPlannerThreadSafe()
+{
+#ifdef HAVE_FFTW3
+    static std::once_flag once;
+    std::call_once(once, []() { fftw_make_planner_thread_safe(); });
+#endif
+}
+} // namespace
+
 WdspEngine::WdspEngine(QObject* parent)
     : QObject(parent)
 {
+    // Before anything this engine does can plan (a test may open channels
+    // without initialize()).
+    makeFftwPlannerThreadSafe();
 #ifdef HAVE_WDSP
     m_extDivCreate = &create_divEXT;
     m_extDivDestroy = &destroy_divEXT;
@@ -199,6 +231,9 @@ bool WdspEngine::initialize(const QString& configDir)
         return false;
     }
     m_initializationInProgress = true;
+    // R-R3-39: before the wisdom import below and before any channel plans
+    // (see makeFftwPlannerThreadSafe).
+    makeFftwPlannerThreadSafe();
 #ifndef Q_OS_WIN
     // R-R3-41: nereusd places each channel's worker as it starts. Installed
     // before any channel opens; the GUI never turns placement on.

@@ -661,6 +661,37 @@ if(FFTW3_FOUND)
             list(APPEND FFTW3_LIBRARIES ${FFTW3F_LIB})
             message(STATUS "FFTW3F (float) found — FFTEngine enabled")
         endif()
+        # R-R3-39: WDSP's FFT planning runs on more than one thread (the
+        # receive DSP lane and the transmit side), so WdspEngine makes
+        # FFTW's planner thread-safe (fftw_make_planner_thread_safe), which
+        # lives in libfftw3_threads here. The operator chose FFTW's
+        # thread-safe planner (2026-09-24). Found beside libfftw3; Homebrew's
+        # fftw and Debian/Ubuntu's libfftw3-dev (runtime: libfftw3-double3)
+        # both ship it. Windows: the fftw.org 3.3.5 DLL has the threads
+        # functions built into libfftw3-3.dll itself.
+        set(_fftw3_threads_hints ${FFTW3_LIBRARY_DIRS})
+        if(HOMEBREW_PREFIX)
+            list(APPEND _fftw3_threads_hints "${HOMEBREW_PREFIX}/lib")
+        endif()
+        if(FFTW3_LINK_LIBRARY)
+            get_filename_component(_fftw3_dir "${FFTW3_LINK_LIBRARY}" DIRECTORY)
+            list(PREPEND _fftw3_threads_hints "${_fftw3_dir}")
+            unset(_fftw3_dir)
+        endif()
+        find_library(FFTW3_THREADS_LIB fftw3_threads HINTS ${_fftw3_threads_hints})
+        unset(_fftw3_threads_hints)
+        if(FFTW3_THREADS_LIB)
+            # Ahead of libfftw3, which it depends on (matters for static
+            # archives only).
+            list(PREPEND FFTW3_LIBRARIES ${FFTW3_THREADS_LIB})
+            message(STATUS "FFTW3 threads found — thread-safe FFT planner: ${FFTW3_THREADS_LIB}")
+        else()
+            message(FATAL_ERROR
+                "libfftw3_threads not found beside libfftw3. WDSP plans FFTs on "
+                "more than one thread and needs FFTW's thread-safe planner. "
+                "Install it with FFTW (Homebrew: fftw; Debian/Ubuntu: libfftw3-dev) "
+                "or build FFTW with --enable-threads.")
+        endif()
     endif()
 else()
     message(STATUS "FFTW3 not found — client-side FFT disabled")
