@@ -13,6 +13,11 @@
 // 2026-09-24: R-R3-49 (parity Task 2): the Phone/CW applet's mic level,
 // PROC, AM carrier and DEXP follow the transmit settings gate. J.J. Boyd
 // (KG4VCF), AI-assisted via Anthropic Claude Code.
+//
+// 2026-09-25: R-R3-49, R-R3-21 (parity Task 11): the flag's XIT button,
+// offset and zero write in a remote window whatever the transmit
+// permission says. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+// Code.
 
 #include <QtTest/QtTest>
 
@@ -243,11 +248,13 @@ private slots:
         auto* bypass = button(vfo, QStringLiteral("m_rxBypassBtn"));
         QVERIFY(xit && zero && badge && bypass);
         auto* xitOffset = vfo.findChild<ScrollableLabel*>(QStringLiteral("VfoXitOffset"));
-        QVERIFY(!xit->isEnabled());
-        QVERIFY(!zero->isEnabled());
+        // R-R3-49 (parity Task 11): XIT is a slice setting, live in a remote
+        // window whatever the transmit permission says.
+        QVERIFY(xit->isEnabled());
+        QVERIFY(zero->isEnabled());
         QVERIFY(!badge->isEnabled());
         QVERIFY(!bypass->isEnabled());
-        QVERIFY(xitOffset && !xitOffset->isEnabled());
+        QVERIFY(xitOffset && xitOffset->isEnabled());
 
         QSignalSpy xitEnabledSpy(&vfo, &VfoWidget::xitEnabledChanged);
         QSignalSpy xitHzSpy(&vfo, &VfoWidget::xitHzChanged);
@@ -259,8 +266,11 @@ private slots:
         badge->click();
         vfo.simulateTxBadgeClick();
         bypass->click();
-        QCOMPARE(xitEnabledSpy.count(), 0);
-        QCOMPARE(xitHzSpy.count(), 0);
+        QCOMPARE(xitEnabledSpy.count(), 1);
+        QVERIFY(xitEnabledSpy.first().first().toBool());
+        QCOMPARE(xitHzSpy.count(), 2);
+        QCOMPARE(xitHzSpy.at(0).first().toInt(), 0);
+        QCOMPARE(xitHzSpy.at(1).first().toInt(), 100);
         QCOMPARE(handoffSpy.count(), 0);
         QCOMPARE(bypassSpy.count(), 0);
 
@@ -269,9 +279,10 @@ private slots:
         QVERIFY(!remoteMenu.enabled);
         QCOMPARE(handoffSpy.count(), 0);
 
-        // Station snapshots remain visible while the writers are unavailable.
-        vfo.setXitEnabled(true);
-        QVERIFY(xit->isChecked());
+        // The Core's value repaints the button without writing it back.
+        vfo.setXitEnabled(false);
+        QVERIFY(!xit->isChecked());
+        QCOMPARE(xitEnabledSpy.count(), 1);
 
         vfo.setTransmitPermitted(true);
         QVERIFY(xit->isEnabled());
@@ -280,7 +291,7 @@ private slots:
         QVERIFY(xitOffset->isEnabled());
         xit->click();
         vfo.simulateTxBadgeClick();
-        QCOMPARE(xitEnabledSpy.count(), 1);
+        QCOMPARE(xitEnabledSpy.count(), 2);
         QCOMPARE(handoffSpy.count(), 1);
         QCOMPARE(handoffSpy.first().first().toInt(), 3);
 

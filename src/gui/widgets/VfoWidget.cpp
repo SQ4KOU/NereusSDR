@@ -55,6 +55,10 @@
 //                 capitals like the flag's other buttons (operator's
 //                 captions). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-25 - R-R3-49, R-R3-21 (parity Task 11): the XIT button, offset
+//                 and zero write the slice in a remote window as in a local
+//                 one; they no longer follow the transmit permission.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1941,20 +1945,22 @@ void VfoWidget::buildXRitTab()
         }
     });
 
+    // R-R3-49, R-R3-21 (parity Task 11): XIT is a slice setting, written
+    // in a remote window as in a local one (the Core's slice follows), and
+    // not tied to the transmit permission. RIT above has the same shape.
     connect(m_xitBtn, &QPushButton::toggled, this, [this](bool on) {
-        if (!m_updatingFromModel && m_transmitPermitted) {
+        if (!m_updatingFromModel) {
             emit xitEnabledChanged(on);
         }
     });
 
     connect(m_xitLabel, &ScrollableLabel::valueChanged, this, [this](int hz) {
-        if (!m_updatingFromModel && m_transmitPermitted) {
+        if (!m_updatingFromModel) {
             emit xitHzChanged(hz);
         }
     });
 
     connect(m_xitZeroBtn, &QPushButton::clicked, this, [this]() {
-        if (!m_transmitPermitted) { return; }
         m_xitLabel->setValue(0);
         if (!m_updatingFromModel) {
             emit xitHzChanged(0);
@@ -3515,9 +3521,7 @@ void VfoWidget::updateTransmitControlAvailability()
         }
     };
 
-    apply(m_xitBtn);
-    apply(m_xitLabel);
-    apply(m_xitZeroBtn);
+    // R-R3-49 (parity Task 11): XIT is not here; it writes the slice.
     apply(m_txBadge);
     apply(m_rxBypassBtn);
 }

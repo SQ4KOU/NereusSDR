@@ -183,6 +183,13 @@
 //                gains the operate, interface, reconnect, connected-since
 //                and last-poll lines a remote one shows. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-25 - R-R3-49, R-R3-21, R-R3-44 (parity Task 11): the RX
+//                applet's XIT row takes no transmit gate; the container
+//                Antenna box's TX buttons write the transmit slice's
+//                antenna in a remote window with no toast, as the VFO
+//                flag's do; the VAX first-run check for new virtual cables
+//                runs in a remote window as in a local one. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -10128,11 +10135,10 @@ void MainWindow::onContainerAntennaSelected(ContainerWidget* c, int index)
         const SkuUiProfile sku = skuUiProfileFor(m_radioModel->hardwareProfile().model);
         slice->setRxAntenna(sku.rxOnlyLabels[static_cast<size_t>(index - 3)]);
     } else if (index >= 6 && index <= 8) {
-        if (!transmitControlsPermitted()) {
-            showToast(tr("Remote transmit controls are not available from this Core yet."),
-                      ToastSeverity::Warning, 3000);
-            return;
-        }
+        // R-R3-49, R-R3-21 (parity Task 11): the transmit slice's txAntenna,
+        // as the VFO flag's TX antenna button writes it: a slice setting,
+        // written in a remote window too (the Core's slice follows), not
+        // tied to the transmit permission.
         SliceModel* tx = m_radioModel->txBoundSlice();
         (tx ? tx : slice)->setTxAntenna(QStringLiteral("ANT%1").arg(index - 5));
     }
@@ -11495,9 +11501,9 @@ void MainWindow::applyRemoteRoleGating()
     if (m_vaxApplet) {
         m_vaxApplet->setTransmitPermitted(transmitPermitted, transmitReason);
     }
-    // R-R3-21: the RX applet's XIT row and TX passband Shift-click.
+    // R-R3-49 (parity Task 1): the RX applet's TX passband Shift-click.
+    // Its XIT row is a slice setting and takes no gate (parity Task 11).
     if (m_rxApplet) {
-        m_rxApplet->setTransmitPermitted(transmitPermitted, transmitReason);
         m_rxApplet->setTransmitSettingsPermitted(settingsPermitted, settingsReason);
     }
     // R-R3-21: the RADE applet's profile combo writes the TX mic profile.
@@ -12966,15 +12972,12 @@ void MainWindow::tryAutoReconnect()
 // NereusSDR-original; no Thetis equivalent.
 void MainWindow::checkVaxFirstRun()
 {
-    // R-R3-23: skipped in a remote window, as the Linux audio first-run
-    // below already is. R-R3-44: a remote window does open this computer's
-    // VAX outputs, but only the ones start() would open (Setup > Audio >
-    // VAX changes them); the check would record audio/FirstRunComplete and
-    // the cable fingerprint for a later local session that never saw the
-    // dialog, so it still runs only in a local window.
-    if (!m_radioModel->ownsLocalDsp()) {
-        return;
-    }
+    // R-R3-44 (parity Task 11): runs in a remote window as in a local one.
+    // The VAX outputs are this computer's in both (a remote window feeds
+    // them from the Core's receiver streams), and audio/FirstRunComplete,
+    // the cable fingerprint and audio/Vax<ch>/DeviceName are this
+    // computer's settings, never the Core's, so a later local window reads
+    // what the operator answered here.
     auto& s = AppSettings::instance();
     const bool firstRunDone =
         (s.value(QStringLiteral("audio/FirstRunComplete"),
@@ -13025,7 +13028,9 @@ void MainWindow::checkVaxFirstRun()
     // first-run complete so the user isn't re-ambushed on next launch.
     connect(dlg, &VaxFirstRunDialog::applySuggested, this,
             [this](const QVector<QPair<int, QString>>& bindings) {
-        auto* engine = m_radioModel->audioEngine();
+        // This computer's VAX outputs, live in a remote window too
+        // (R-R3-44), so not the audited local-DSP accessor.
+        auto* engine = m_radioModel->localAudioDevices();
         if (!engine) {
             qCWarning(lcAudio)
                 << "VAX first-run: applySuggested with no AudioEngine; "

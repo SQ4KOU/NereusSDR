@@ -555,8 +555,9 @@ public slots:
     // Phase 3P-I-b T9 — reflect AlexController::rxOutOnTx state into the BYPS button.
     void setRxBypassActive(bool on);
 
-    // Remote-station presentation gate.  TX-only XIT, TX-slice handoff, and
-    // RX-bypass-on-TX remain displayed but cannot issue client or station work.
+    // Remote-station presentation gate.  TX-slice handoff and RX-bypass-on-TX
+    // remain displayed but cannot issue client or station work. XIT is a
+    // slice setting and does not follow it (R-R3-49, parity Task 11).
     void setTransmitPermitted(bool permitted, const QString& reason = QString());
 
     // Phase 3F closeout — non-owning RadioModel pointer used by contextMenuEvent

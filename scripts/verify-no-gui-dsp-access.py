@@ -128,8 +128,10 @@ LOCAL_AUDIO_ALLOWLIST = {
     # the TitleBar's engine and the speaker-change wiring beside it; and a
     # remote window's VAX outputs and their feeders (R-R3-44); and the
     # container VAX 1 / VAX 2 buttons, which open and close this computer's
-    # VAX outputs as Setup > Audio > VAX does (R-R3-49).
-    "src/gui/MainWindow.cpp": 4,
+    # VAX outputs as Setup > Audio > VAX does (R-R3-49); and the VAX
+    # first-run check's Apply, which binds this computer's VAX outputs to
+    # its new virtual cables in a remote window too (R-R3-44, parity Task 11).
+    "src/gui/MainWindow.cpp": 5,
     # The TX applet's MON output pair (Speakers / Phones): this computer's
     # monitor routing, a window-scope setting, live in a remote window as
     # in a local one (R-R3-49, parity Task 2).
