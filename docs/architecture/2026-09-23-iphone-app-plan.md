@@ -6660,6 +6660,69 @@ observed): the app installs and launches on JJ's iPhone through a development pr
 - [ ] **Step 1:** `project.yml`, configuration, entitlements, `Info.plist` and the icon.
 - [ ] **Step 2:** `AppModel`, the tab bar, `FakeStation`, the licences screen and CI.
 
+## Task 51a: The test build names itself, and installing on an iPhone
+
+**Runs in:** the phone session, on `claude/iphone-app` (a phone task).
+
+**Requirements:** R-IOS-28 (§4.13: the builds on the way to TestFlight), JJ's standing
+rule for test builds (every build he is given to test names itself, branch and short commit, so the one on screen is known by looking at it; release
+builds carry no name), the desktop's own form of it (`NEREUSSDR_BUILD_TAG`,
+`cmake/NereusBuildTag.cmake`), Task 56b's install step, spec §4.13.
+
+**Files:**
+- Create: `ios/scripts/build-tag.sh` (prints the tag for the working tree it runs in),
+  `ios/scripts/device-install.sh` (builds for a connected iPhone and installs and
+  launches the app)
+- Modify: `ios/NereusApp/Info.plist` (`NereusBuildTag` = `$(NEREUS_BUILD_TAG)`),
+  `ios/NereusApp/Setup/SetupView.swift` and `DiagnosticsView.swift` (show the tag),
+  `ios/project.yml` only if the Info.plist substitution needs a declared default
+- Create: `ios/NereusApp/Tests/BuildTagTests.swift`,
+  `tests/compliance/test_ios_build_tag.py` (runs `build-tag.sh` in temporary git
+  repositories)
+
+**Interfaces:**
+- Consumes: the Xcode project and its generator (Task 51), the team in
+  `ios/Config/Team.xcconfig`.
+- Produces:
+  - `build-tag.sh`, the desktop's rule exactly (`cmake/NereusBuildTag.cmake`): a set
+    `NEREUS_BUILD_TAG` wins outright (a single space turns the tag off); otherwise
+    nothing when `git describe --exact-match --tags HEAD` succeeds (a release build);
+    otherwise `<branch>@<short sha>`, `detached@<short sha>` on a detached head, and
+    `-dirty` appended when a tracked file is modified (untracked files don't count).
+  - `device-install.sh [device]`: regenerates the project, derives the tag at that
+    moment (so it is never older than the build), builds the Debug app for the named
+    iPhone, or the only connected one, with automatic signing
+    (`xcodebuild ... -allowProvisioningUpdates NEREUS_BUILD_TAG="<tag>"`), installs it
+    with `xcrun devicectl device install app` and launches it with
+    `xcrun devicectl device process launch`. It stops with the signing or provisioning
+    error as Xcode printed it; it never edits the team, the entitlements or the bundle
+    identifiers to get past one. Only the controller runs it: it touches a device.
+  - `BuildTag.current` reads `NereusBuildTag` from the app's Info.plist; empty or absent
+    means none. Setup shows it at the foot of its list ("Build claude/iphone-app@1a2b3c4d")
+    and Diagnostics shows it on a row of its own, both only when there is one.
+
+**Acceptance:**
+- In temporary repositories: a commit on a branch gives `<branch>@<sha>`; a modified
+  tracked file adds `-dirty` and an untracked file doesn't; a detached head gives
+  `detached@<sha>`; a tagged HEAD gives nothing; `NEREUS_BUILD_TAG=x` gives `x` and a
+  single space gives nothing.
+- A simulator build given `NEREUS_BUILD_TAG=test@1234567` shows "Build test@1234567" in
+  Setup and Diagnostics; one given none shows no build row (a UI test or a view test
+  over `BuildTag`).
+- `sh -n ios/scripts/device-install.sh` passes, and with no iPhone connected it exits
+  non-zero with a plain message naming what to connect.
+
+**Verification:** a script and a small view: `python3 -m pytest -q tests/compliance`,
+`ios/scripts/generate-project.sh && xcodebuild -project ios/NereusSDR.xcodeproj -scheme NereusSDR -destination 'platform=iOS Simulator,name=iPhone 17' test`,
+`ios/scripts/swift-test.sh` on both toolchains. Device (the controller with JJ): the
+first install on his iPhone, pending until observed.
+
+**Execution note (advisory):** opus. Requires Task 51. Touches no network code; the
+install script touches a device, so the implementer never runs it against one.
+
+- [ ] **Step 1:** `build-tag.sh` and its tests; the Info.plist key and the Setup rows.
+- [ ] **Step 2:** `device-install.sh`.
+
 ## Task 52: The band in Metal
 
 **Runs in:** the phone session, on `claude/iphone-app` (a phone task).
