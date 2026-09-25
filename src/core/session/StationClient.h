@@ -539,6 +539,7 @@ public:
     bool pgxlFullControlAvailable() const override;
     bool rfKitFullControlAvailable() const override;
     bool rfKitCountersAvailable() const override;
+    bool rfKitResponseTimeAvailable() const override;
     /// R-R3-49 (parity Task 1): the link is ready at minor 11 and the Core
     /// offers transmitSettingsVersion at least `minVersion` (1 or more): it
     /// takes this window's transmit settings while its radio is off the

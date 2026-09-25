@@ -3827,6 +3827,12 @@ bool StationClient::rfKitCountersAvailable() const
     return accessoryDataAvailable() && m_capabilities.accessoryDataVersion >= 2;
 }
 
+bool StationClient::rfKitResponseTimeAvailable() const
+{
+    // Group B fix wave (M7): accessoryData's rfkitRttAvgMs.
+    return accessoryDataAvailable() && m_capabilities.accessoryDataVersion >= 3;
+}
+
 bool StationClient::pgxlFullControlAvailable() const
 {
     // R-R3-49 (parity Task 9): setPgxlOperate, scanPgxlLan, setPgxlAddress.

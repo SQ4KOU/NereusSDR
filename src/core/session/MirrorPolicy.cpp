@@ -636,6 +636,9 @@ const MirrorPolicy::Entry kEntries[] = {
     { "AccessoryDataModel", "rfkitPollsFailed", MirrorDirection::Outbound },
     { "AccessoryDataModel", "rfkitReconnectCount", MirrorDirection::Outbound },
     { "AccessoryDataModel", "rfkitLastPollMs", MirrorDirection::Outbound },
+    // Group B fix wave (M7, accessoryDataVersion 3): the RF-Kit's average
+    // response time, read-only.
+    { "AccessoryDataModel", "rfkitRttAvgMs", MirrorDirection::Outbound },
 
     // R-R3-47 / R-R3-22 (remotePgxlControlVersion 3, remoteTgxlControlVersion
     // 1): the amp's and tuner's own settings as the Core last heard them,

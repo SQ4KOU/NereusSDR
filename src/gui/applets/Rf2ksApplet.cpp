@@ -386,6 +386,12 @@ QString Rf2ksApplet::coreDiagnosticsText(RadioModel* model)
     if (data) {
         text += QStringLiteral("Polls OK/failed: %1/%2\n")
                     .arg(data->rfkitPollsOk()).arg(data->rfkitPollsFailed());
+        // Group B fix wave (M7): the local copy's RTT line, from a Core at
+        // accessoryDataVersion 3.
+        const IStationLink* link = model->stationLink();
+        text += (link && link->rfKitResponseTimeAvailable())
+            ? QStringLiteral("RTT avg: %1 ms\n").arg(data->rfkitRttAvgMs())
+            : QStringLiteral("RTT avg: --\n");
         text += QStringLiteral("Reconnects: %1\n").arg(data->rfkitReconnectCount());
         text += QStringLiteral("Connected since: %1\n").arg(time(data->rfkitConnectedSinceMs()));
         text += QStringLiteral("Last poll: %1\n").arg(time(data->rfkitLastPollMs()));

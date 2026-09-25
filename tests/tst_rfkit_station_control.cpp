@@ -418,6 +418,12 @@ private slots:
         QCOMPARE(data->rfkitPollsFailed(), conn->pollsFailed());
         QCOMPARE(data->rfkitReconnectCount(), conn->reconnectAttempts());
         QCOMPARE(data->rfkitLastPollMs(), conn->lastPollMs());
+        // Group B fix wave (M7): the response time the local page shows
+        // (the average over the last ten polls).
+        for (int i = 0; i < 5; ++i) { conn->testMarkPollSuccess(120); }
+        QVERIFY(conn->rttAvgLast10Ms() > 0);
+        model.stationAccessoryData()->publishAll();
+        QCOMPARE(data->rfkitRttAvgMs(), conn->rttAvgLast10Ms());
         // A remote window's copy takes each one.
         AccessoryDataModel window;
         QVERIFY(window.applyStationValue("rfkitPollsOk", QVariant(qint64(41))));
@@ -425,7 +431,9 @@ private slots:
         QVERIFY(window.applyStationValue("rfkitReconnectCount", QVariant(qint64(2))));
         QVERIFY(window.applyStationValue("rfkitConnectedSinceMs", QVariant(qint64(1790000000000))));
         QVERIFY(window.applyStationValue("rfkitLastPollMs", QVariant(qint64(1790000001000))));
+        QVERIFY(window.applyStationValue("rfkitRttAvgMs", QVariant(qint64(37))));
         QVERIFY(!window.applyStationValue("rfkitNoSuchCounter", QVariant(qint64(1))));
+        QCOMPARE(window.rfkitRttAvgMs(), 37);
         QCOMPARE(window.rfkitPollsOk(), 41);
         QCOMPARE(window.rfkitPollsFailed(), 3);
         QCOMPARE(window.rfkitReconnectCount(), 2);

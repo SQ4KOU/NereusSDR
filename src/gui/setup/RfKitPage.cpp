@@ -832,12 +832,17 @@ void RfKitPage::refreshLiveStatus()
             const IStationLink* link = m_model->stationLink();
             const AccessoryDataModel* data = m_model->accessoryDataModel();
             if (link && link->rfKitCountersAvailable() && data) {
+                // Group B fix wave (M7): the response time as the local
+                // line shows it, from a Core at accessoryDataVersion 3.
+                const QString rtt = link->rfKitResponseTimeAvailable()
+                    ? QStringLiteral("%1 ms avg").arg(data->rfkitRttAvgMs())
+                    : QStringLiteral("--");
                 m_diagnosticsLabel->setTextFormat(Qt::RichText);
                 m_diagnosticsLabel->setText(QStringLiteral(
-                    "Polls: %1 OK / %2 failed &middot; Reconnects %3 &middot; "
-                    "Connected since %4 &middot; Last poll %5")
+                    "Polls: %1 OK / %2 failed &middot; RTT %3 &middot; Reconnects %4 &middot; "
+                    "Connected since %5 &middot; Last poll %6")
                     .arg(data->rfkitPollsOk()).arg(data->rfkitPollsFailed())
-                    .arg(data->rfkitReconnectCount())
+                    .arg(rtt).arg(data->rfkitReconnectCount())
                     .arg(clockTime(data->rfkitConnectedSinceMs()),
                          clockTime(data->rfkitLastPollMs())));
             } else {

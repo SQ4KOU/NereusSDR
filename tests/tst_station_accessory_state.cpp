@@ -714,7 +714,7 @@ private slots:
         QCOMPARE(caps.remoteRfKitControlVersion, 4);
         // R-R3-47: the accessory records and settings (Task 4); 2 with the
         // RF-Kit's connection counts (R-R3-49, parity Task 10).
-        QCOMPARE(caps.accessoryDataVersion, 2);
+        QCOMPARE(caps.accessoryDataVersion, 3);  // 3: rfkitRttAvgMs (group B fix wave, M7)
         QVERIFY(sawAmplifier);
         QVERIFY(sawRfKit);
         QVERIFY(sawAccessoryData);

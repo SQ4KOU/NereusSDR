@@ -98,6 +98,7 @@ contract; each feature has its own version.
 | `stationTciVersion` | 11 | 1 | The Core runs its own TCI server on the station network: the read-only `stationTci` object, and `setStationTci` works |
 | `accessoryDataVersion` | 11 | 1 | The Core mirrors its accessory records and settings as the read-only `accessoryData` object, and `setTxInterlockPolicy`, `setPgxlPowerCap` and `clearAccessoryFaults` work |
 | `accessoryDataVersion` | 11 | 2 | Also: the RF-Kit's connection counts on `accessoryData` (`rfkitConnectedSinceMs`, `rfkitPollsOk`, `rfkitPollsFailed`, `rfkitReconnectCount`, `rfkitLastPollMs`) |
+| `accessoryDataVersion` | 11 | 3 | Also: the RF-Kit's average response time over its last ten polls on `accessoryData` (`rfkitRttAvgMs`), as a local window's RF-Kit page and Copy diagnostics show it |
 | `remotePgxlControlVersion` | 11 | 3 | Also: the amp's own settings. The `pgxl*` properties of the read-only `accessorySettings` object, and `setPgxlName`, `setPgxlHardware`, `setPgxlNetwork`, `savePgxlSettings` and `readPgxlSettings` work |
 | `remotePgxlControlVersion` | 11 | 4 | Also: `setPgxlOperate` (OPERATE or STANDBY), `scanPgxlLan` (the Core listens for Power Genius announcements) and `setPgxlAddress` (the address saved without dialling) work whenever the radio is not on the air (see "Operating the Power Genius" and "Scanning for the Power Genius and its saved address") |
 | `remoteTgxlControlVersion` | 11 | 1 | The tuner's own settings: the `tgxl*` properties of `accessorySettings`, and `setTgxlName`, `setTgxlNetwork`, `saveTgxlSettings` and `readTgxlSettings` work |
@@ -776,6 +777,7 @@ fault list is not resent when a counter moves.
 | `rfkitPollsOk`, `rfkitPollsFailed` | i64 | REST requests to the amp that were answered, and that failed, since the Core started (version 2) |
 | `rfkitReconnectCount` | i64 | Automatic retries the Core has scheduled for the current address (version 2) |
 | `rfkitLastPollMs` | i64 | When the amp last answered, ms since 1970 UTC; 0 before any (version 2) |
+| `rfkitRttAvgMs` | i64 | The amp's average response time over its last ten polls, in ms; 0 before any (version 3) |
 
 The RF-Kit counts are the Core's `Rf2ksConnection` counters, which move
 with every REST request (several a second); the Core reads them once a

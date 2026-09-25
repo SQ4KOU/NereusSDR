@@ -2710,8 +2710,9 @@ int StationServer::accessoryDataVersion() const
     return accessoryStatusVersion() >= 1 && !m_radioModel.isNull()
             && m_radioModel->stationAccessoryData() != nullptr
         // 2: the RF-Kit's connection counts (rfkit*), R-R3-49 (parity
-        // Task 10).
-        ? 2 : 0;
+        // Task 10). 3: its average response time (rfkitRttAvgMs), group B
+        // fix wave (M7).
+        ? 3 : 0;
 }
 
 int StationServer::radioHardwareVersion() const

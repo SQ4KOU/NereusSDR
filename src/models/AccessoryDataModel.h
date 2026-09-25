@@ -121,6 +121,9 @@ private:
     Q_PROPERTY(int rfkitPollsFailed READ rfkitPollsFailed NOTIFY rfkitDiagnosticsChanged)
     Q_PROPERTY(int rfkitReconnectCount READ rfkitReconnectCount NOTIFY rfkitDiagnosticsChanged)
     Q_PROPERTY(qint64 rfkitLastPollMs READ rfkitLastPollMs NOTIFY rfkitDiagnosticsChanged)
+    // Group B fix wave (M7, accessoryDataVersion 3): the amp's average
+    // response time over its last ten polls, as the local page shows it.
+    Q_PROPERTY(int rfkitRttAvgMs READ rfkitRttAvgMs NOTIFY rfkitDiagnosticsChanged)
 
 public:
     static constexpr int kTgxlAntennas = 3;
@@ -133,6 +136,7 @@ public:
         int pollsFailed{0};
         int reconnectCount{0};
         qint64 lastPollMs{0};
+        int rttAvgMs{0};
         bool operator==(const RfKitCounters&) const = default;
     };
 
@@ -187,6 +191,7 @@ public:
     int rfkitPollsFailed() const { return m_rfkit.pollsFailed; }
     int rfkitReconnectCount() const { return m_rfkit.reconnectCount; }
     qint64 rfkitLastPollMs() const { return m_rfkit.lastPollMs; }
+    int rfkitRttAvgMs() const { return m_rfkit.rttAvgMs; }
 
     // ---- Interlock ----
     InterlockMode interlockMode() const { return m_interlockMode; }

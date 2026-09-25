@@ -241,6 +241,9 @@ public:
     /// R-R3-49 (parity Task 10, accessoryDataVersion 2): the Core's RF-Kit
     /// connection counts arrive on `accessoryData` (rfkit*).
     virtual bool rfKitCountersAvailable() const { return false; }
+    /// Group B fix wave (M7, accessoryDataVersion 3): the Core's RF-Kit
+    /// average response time arrives on `accessoryData` (rfkitRttAvgMs).
+    virtual bool rfKitResponseTimeAvailable() const { return false; }
     virtual CommandOutcome requestRfKitOperate(bool /*on*/)
     { return { false, rfKitFullControlUnavailableReason() }; }
     virtual CommandOutcome requestRfKitAntenna(int /*port*/)

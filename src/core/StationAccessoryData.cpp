@@ -161,6 +161,7 @@ void StationAccessoryData::publishRfKitCounters()
     counters.pollsFailed = conn->pollsFailed();
     counters.reconnectCount = conn->reconnectAttempts();
     counters.lastPollMs = conn->lastPollMs();
+    counters.rttAvgMs = conn->rttAvgLast10Ms();  // group B fix wave (M7)
     m_model->setRfKitDiagnostics(counters);
 }
 

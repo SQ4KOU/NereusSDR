@@ -228,6 +228,8 @@ bool AccessoryDataModel::applyStationValue(const QByteArray& propertyName, const
             next.reconnectCount = value.toInt();
         } else if (propertyName == "rfkitLastPollMs") {
             next.lastPollMs = value.toLongLong();
+        } else if (propertyName == "rfkitRttAvgMs") {
+            next.rttAvgMs = value.toInt();
         } else {
             return false;
         }

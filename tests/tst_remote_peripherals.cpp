@@ -2277,7 +2277,7 @@ void RemotePeripheralsTest::remoteWindowShowsTheCoresRecords()
     LoopbackTransport* stationEnd = cw.connect(this);
     QTRY_VERIFY(cw.client.accessoryDataAvailable());
     // 2 from parity Task 10 (the RF-Kit's connection counts).
-    QCOMPARE(cw.server.accessoryDataVersion(), 2);
+    QCOMPARE(cw.server.accessoryDataVersion(), 3);
     window.reportStationLinkStateChanged();
     QTRY_VERIFY(pgxlPage.powerCapCheckForTesting()->isEnabled());
     QVERIFY(OperatorWording::isPlain(pgxlPage.remoteNoteForTesting()));
@@ -4449,6 +4449,19 @@ void RemotePeripheralsTest::remoteWindowOperatesTheRfKitThroughTheCore()
                                .arg(window.accessoryDataModel()->rfkitPollsOk())
                                .arg(window.accessoryDataModel()->rfkitPollsFailed())),
              qPrintable(text));
+    // Group B fix wave (M7): the amp's response time, as a local window
+    // shows it (the Core's average over its last ten polls).
+    QVERIFY(cw.client.rfKitResponseTimeAvailable());
+    for (int i = 0; i < 10; ++i) { station.rfKitConnection()->testMarkPollSuccess(250); }
+    QTRY_VERIFY(window.accessoryDataModel()->rfkitRttAvgMs() > 0);
+    QTRY_VERIFY2(page.diagnosticsTextForTesting().contains(
+                     QStringLiteral("RTT %1 ms avg")
+                         .arg(window.accessoryDataModel()->rfkitRttAvgMs())),
+                 qPrintable(page.diagnosticsTextForTesting()));
+    const QString withRtt = Rf2ksApplet::coreDiagnosticsText(&window);
+    QVERIFY2(withRtt.contains(QStringLiteral("RTT avg: %1 ms")
+                                  .arg(window.accessoryDataModel()->rfkitRttAvgMs())),
+             qPrintable(withRtt));
 
     // On the air (a MOX click, through the Core's MoxController with its
     // receive-only pre-check lifted): they wait with the reason; a request

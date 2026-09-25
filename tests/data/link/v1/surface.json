@@ -228,7 +228,7 @@
         {
             "kind": "i64",
             "name": "accessoryDataVersion",
-            "value": 2
+            "value": 3
         },
         {
             "kind": "i64",
@@ -2461,6 +2461,12 @@
                     "kind": "i64",
                     "name": "rfkitLastPollMs",
                     "ordinal": 46
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "rfkitRttAvgMs",
+                    "ordinal": 47
                 }
             ]
         },
