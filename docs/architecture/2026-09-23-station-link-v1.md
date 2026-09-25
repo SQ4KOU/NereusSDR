@@ -3052,6 +3052,32 @@ A number the station's DSP measures is written `"$within:<t>:<v>"`, with
 the tolerance stated, never `"$any"`; a counter whose value depends on
 timing is `"$int"`, not pinned.
 
+**JSON inside a string.** Where the station sends a string that holds
+JSON (a `utf8` property such as `connectedDevices`' `listJson`), a
+fixture may write `{"$json": <expectation>}` in the string's place: an
+object whose one key is `"$json"`. It matches a string that parses as
+exactly one JSON value (RFC 8259: an object, an array, a string, a
+number, `true`, `false` or `null`, with whitespace around it allowed),
+and that value must match `<expectation>` by this section's rules: the
+placeholders above stand inside it, a `{"$json": ...}` may nest inside
+it, object keys match in any order and arrays in order and length. A
+name recorded inside it is recorded for the whole fixture run, so a
+`"$ref:<name>"` inside or outside a string refers to it. A value that is
+not a string fails as a wrong type; a string that does not parse, or
+holds nothing or more than one value, fails with the fixture, the step,
+the path and "not JSON" (the station's runner reports
+`<fixture>: step <n> (station <type>): <path>: not JSON (<why>), got
+<the string>`); an object holding `"$json"` beside another key is a
+malformed fixture. The path inside the string is the string's path
+followed by `($json)`, as `$.properties[0].value($json)[1].state`.
+`{"$json": ...}` stands only in a station message: in a client message
+it is a malformed fixture, and neither runner fills one there. In a
+fixture for the app, its expectation holds only what a station message
+there may hold (section 16.3), and an app's runner sends it to its
+client as the string of the expectation filled as that section fills a
+station message, written as compact JSON (no whitespace, keys in any
+order).
+
 Matching is by value: objects must have the same keys and arrays the same
 length; numbers compare by value, so `1` and `1.0` are equal. A name is
 recorded once per fixture run; a later placeholder with the same name
@@ -3236,7 +3262,9 @@ nothing an app's runner could not send its client:
 
 **Filling a station message (an app's runner).** An app's runner sends
 its client each station message with `"$string"` as `""`, `"$int"` as `0`,
-`"$ref:<name>"` as the recorded value and `"$within:<t>:<v>"` as `<v>`,
+`"$ref:<name>"` as the recorded value, `"$within:<t>:<v>"` as `<v>` and
+`{"$json": <expectation>}` as the compact JSON text of `<expectation>`
+filled by these same rules (section 16.1),
 except in the station `hello`:
 
 - `identity` is a test station identity the runner makes at run time (a
@@ -3351,7 +3379,7 @@ same on every machine.
 | `lower-minor` | A `hello` with minor 4 agrees minor 4: the capabilities without the minor-11 entries, and a minor-11 verb refused with a plain reason |
 | `same-device-again` | The device signs in again on another connection (`otherClients` `"self"`): the older connection ends with `session.end` "This device connected again.", `retryable` false, `code` `sameDevice`, and the newer one is let in with no question. Runs on the station alone |
 | `older-window` | A window that signs in by key but predates several devices is let in first and owns the Core's slice; when a device with the feature is let in with a slice of its own, the older window is sent no marker for it, only the `devices` list moving. Four devices then fill the Core; a window from before paired devices (the token, no features) is let through `auth.result` and then turned away: `session.end` "The Core already has four devices connected.", `retryable` true, no code. Runs on the station alone |
-| `connected-devices` | A device that declares `sessionHolder` receives `connectedDevices` in its snapshot (`deviceLimit` 4, `revision` 1), and a `delta` of it (with one of `devices`) each time another device is let in, including a window that declares only `deviceAuth` and so never receives the object itself, and when one drops; each device let in gets a slice of its own, which reaches this device as a marker; `listJson` is `"$string"`, since it carries run-time ids (its `listeningOn` is held to its content by the station's own tests, `tst_station_multi_session`) |
+| `connected-devices` | A device that declares `sessionHolder` receives `connectedDevices` in its snapshot (`deviceLimit` 4, `revision` 1), and a `delta` of it (with one of `devices`) each time another device is let in, including a window that declares only `deviceAuth` and so never receives the object itself, and when one drops; each device let in gets a slice of its own, which reaches this device as a marker; `listJson` is a `{"$json": ...}` of the list's shape (section 16.1): each entry's keys with its literal name, short name, kind, flags, state and `listeningOn` (`{sliceId, letter, band, mode}`), its `deviceId` `"$string"` and its three durations `"$int"`, since ids are made at run time and a fixture for the app holds no capture |
 | `short-name` | Another device signs in with a short name, drops, and signs in again with a new one: each change moves `connectedDevices`' and `devices`' revisions, the new short name replacing the old in both lists and on its slice's marker |
 | `grace-return` | Another device drops and is away; a minute later nothing has been sent about it but its slice's marker turning `ownerAway`; it signs in again within its 3 minutes and is let in with no question, the list sent again and its marker back; it drops again, and when its 3 minutes end with this device still on the Core its slice closes (the marker's `object.destroy`) and is saved for its return |
 | `two-devices` | Another device holds the Core's slice; this device is let in with a slice of its own (`slice:1`) and the other's as `marker:0`, naming its owner, with the `SliceMarker` schema; the other device is sent `marker:1` for this device's slice, and when this device tunes its slice the other sees the marker move, never the slice |

@@ -128,6 +128,11 @@
 //                                    stationSetup "alexRxAntennas".
 //                                    AI-assisted via Anthropic Claude
 //                                    Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app (R-IOS-01, R-IOS-02): the
+//                                    {"$json": ...} cases; a failure
+//                                    names its fixture first.
+//                                    AI-assisted via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -732,6 +737,7 @@ private slots:
     void theConformanceCheckCatchesWhatAnAppCannotSend();
     void refusalsOfOutboundWritesArePlain();
     void alteredFixturesFailReadably();
+    void jsonStringsMatchTheirShape();
 
 private:
     QString run(const QString& id, const QJsonObject& fixture,
@@ -799,7 +805,8 @@ QString TstLinkConformanceSession::run(const QString& id, const QJsonObject& fix
     station.server->acceptTransport(stationEnd);
     const QString failure = LinkFixtures::runSession(fixture, *station.server, client);
     writeTrace(id, client);
-    return failure;
+    // A failure names its fixture first, then the step and the path.
+    return failure.isEmpty() ? failure : QStringLiteral("%1: %2").arg(id, failure);
 }
 
 void TstLinkConformanceSession::sessionFixtures_data()
@@ -1381,6 +1388,116 @@ void TstLinkConformanceSession::alteredFixturesFailReadably()
     early.insert(QStringLiteral("steps"), steps);
     failure = run(QStringLiteral("altered-connect-deadline"), early);
     QVERIFY2(failure.contains(QStringLiteral("the station sent nothing more")),
+             qPrintable(failure));
+}
+
+void TstLinkConformanceSession::jsonStringsMatchTheirShape()
+{
+    // {"$json": <expectation>}: a string the station sends, parsed and
+    // matched against the expectation with the same placeholders.
+    const auto form = [](const QJsonValue& expectation) {
+        return QJsonObject{{QStringLiteral("$json"), expectation}};
+    };
+    const QJsonObject entry{{QStringLiteral("deviceId"), QStringLiteral("$string")},
+                            {QStringLiteral("state"), QStringLiteral("listening")},
+                            {QStringLiteral("listeningOn"),
+                             QJsonArray{QJsonObject{{QStringLiteral("sliceId"), 0},
+                                                    {QStringLiteral("letter"), QStringLiteral("A")}}}}};
+    LinkFixtures::Captures none;
+
+    // A match, and the same text with its keys in another order.
+    const QString text = QStringLiteral(
+        R"([{"deviceId":"abc","state":"listening","listeningOn":[{"sliceId":0,"letter":"A"}]}])");
+    const QString reordered = QStringLiteral(
+        R"( [ {"listeningOn":[{"letter":"A","sliceId":0}], "state":"listening", "deviceId":"x"} ] )");
+    QString result = LinkFixtures::match(form(QJsonArray{entry}), text, &none);
+    QVERIFY2(result.isEmpty(), qPrintable(result));
+    result = LinkFixtures::match(form(QJsonArray{entry}), reordered, &none);
+    QVERIFY2(result.isEmpty(), qPrintable(result));
+
+    // Array order matters: two entries the other way round fail, at the
+    // first element inside the string.
+    const QJsonObject other{{QStringLiteral("deviceId"), QStringLiteral("$string")},
+                            {QStringLiteral("state"), QStringLiteral("away")},
+                            {QStringLiteral("listeningOn"), QJsonArray{}}};
+    const QString two = QStringLiteral(
+        R"([{"deviceId":"b","state":"away","listeningOn":[]},)"
+        R"({"deviceId":"a","state":"listening","listeningOn":[{"sliceId":0,"letter":"A"}]}])");
+    result = LinkFixtures::match(form(QJsonArray{entry, other}), two, &none);
+    QVERIFY2(result.startsWith(QStringLiteral("$($json)[0].")), qPrintable(result));
+    result = LinkFixtures::match(form(QJsonArray{other, entry}), two, &none);
+    QVERIFY2(result.isEmpty(), qPrintable(result));
+
+    // Placeholders inside: a capture made inside one string is a $ref
+    // inside the next; a $json nests inside a $json; a scalar is JSON too.
+    LinkFixtures::Captures captures;
+    const QJsonObject captured{{QStringLiteral("id"), QStringLiteral("$capture:first")},
+                               {QStringLiteral("count"), QStringLiteral("$int")},
+                               {QStringLiteral("inner"), form(QJsonObject{
+                                    {QStringLiteral("ok"), true}})}};
+    result = LinkFixtures::match(
+        form(captured), QStringLiteral(R"({"id":"k1","count":3,"inner":"{\"ok\":true}"})"),
+        &captures);
+    QVERIFY2(result.isEmpty(), qPrintable(result));
+    QCOMPARE(captures.value(QStringLiteral("first")).toString(), QStringLiteral("k1"));
+    const QJsonObject referred{{QStringLiteral("id"), QStringLiteral("$ref:first")}};
+    QVERIFY(LinkFixtures::match(form(referred), QStringLiteral(R"({"id":"k1"})"), &captures)
+                .isEmpty());
+    result = LinkFixtures::match(form(referred), QStringLiteral(R"({"id":"k2"})"), &captures);
+    QVERIFY2(result.contains(QStringLiteral("$($json).id")), qPrintable(result));
+    result = LinkFixtures::match(form(QJsonObject{{QStringLiteral("inner"), form(true)}}),
+                                 QStringLiteral(R"({"inner":"false"})"), &none);
+    QVERIFY2(result.startsWith(QStringLiteral("$($json).inner($json)")), qPrintable(result));
+    QVERIFY(LinkFixtures::match(form(QStringLiteral("$int")), QStringLiteral("7"), &none).isEmpty());
+
+    // Not a string, not one JSON value, or a second key beside "$json".
+    QVERIFY(LinkFixtures::match(form(QJsonArray{}), QJsonArray{}, &none)
+                .contains(QStringLiteral("expected a string holding JSON")));
+    for (const QString& bad : {QStringLiteral("[1,"), QStringLiteral(""), QStringLiteral("1,2"),
+                               QStringLiteral("/tmp/key.pem")}) {
+        result = LinkFixtures::match(form(QStringLiteral("$any")), bad, &none);
+        QVERIFY2(result.startsWith(QStringLiteral("$: not JSON")), qPrintable(result));
+    }
+    QJsonObject twoKeys = form(QJsonArray{});
+    twoKeys.insert(QStringLiteral("other"), 1);
+    QVERIFY(LinkFixtures::match(twoKeys, QStringLiteral("[]"), &none)
+                .contains(QStringLiteral("stands alone")));
+
+    // Only the station sends one: a client message holding it is refused.
+    int counter = 0;
+    QString error;
+    LinkFixtures::substitute(QJsonObject{{QStringLiteral("value"), form(QJsonArray{})}}, &none,
+                             &counter, &error);
+    QVERIFY2(error.contains(QStringLiteral("cannot stand in a client message")), qPrintable(error));
+
+    // In a fixture: a string that does not parse fails with the fixture,
+    // the step, the path and "not JSON". keyPath is a file path, not JSON.
+    QJsonObject altered = fixture(QStringLiteral("session-connected-devices"));
+    QVERIFY(!altered.isEmpty());
+    QJsonArray steps = altered.value(QStringLiteral("steps")).toArray();
+    int index = -1;
+    for (int i = 0; i < steps.size() && index < 0; ++i) {
+        const QJsonObject message = steps.at(i).toObject().value(QStringLiteral("message")).toObject();
+        if (message.value(QStringLiteral("key")).toString() == QStringLiteral("devices")
+            && message.value(QStringLiteral("type")).toString() == QStringLiteral("delta")) {
+            index = i;
+        }
+    }
+    QVERIFY(index >= 0);
+    QJsonObject step = steps.at(index).toObject();
+    QJsonObject message = step.value(QStringLiteral("message")).toObject();
+    QJsonArray properties = message.value(QStringLiteral("properties")).toArray();
+    QJsonObject keyPath = properties.at(6).toObject();
+    QCOMPARE(keyPath.value(QStringLiteral("name")).toString(), QStringLiteral("keyPath"));
+    keyPath.insert(QStringLiteral("value"), form(QStringLiteral("$string")));
+    properties.replace(6, keyPath);
+    message.insert(QStringLiteral("properties"), properties);
+    step.insert(QStringLiteral("message"), message);
+    steps.replace(index, step);
+    altered.insert(QStringLiteral("steps"), steps);
+    const QString failure = run(QStringLiteral("altered-connected-devices"), altered);
+    QVERIFY2(failure.startsWith(QStringLiteral("altered-connected-devices: step %1").arg(index))
+                 && failure.contains(QStringLiteral("$.properties[6].value: not JSON")),
              qPrintable(failure));
 }
 
