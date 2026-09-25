@@ -377,8 +377,8 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
         // Most writes (a slice's tuning above all) name nothing on the
         // list: they leave before the object is read.
         const auto sliceListed = [](const QByteArray& n) {
-            return n == "rxAntenna" || n == "txAntenna" || n == "diversityEnabled" || n == "nbMode"
-                || n.startsWith("nb1") || n == "nb2Mode";
+            return n == "rxAntenna" || n == "txAntenna" || n.startsWith("diversity")
+                || n == "nbMode" || n.startsWith("nb1") || n == "nb2Mode";
         };
         bool relevant = key == kStepAtt || key == kAlexAntennas || key == kPureSignalSettings
             || key == kNotches || key == kAmplifier || key == kTransmit;
@@ -551,15 +551,24 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
                         words(QStringLiteral("Transmit antenna"), currentWords(u, {}),
                               valueWords(u.value, u.kind));
                     }
-                } else if (n == "diversityEnabled") {
+                } else if (n == "diversityEnabled" || n == "diversityPhaseDeg"
+                           || n == "diversityGainDb" || n == "diversityFineNullEnabled") {
+                    // Fix wave (the D53 list): the phase, gain and fine null
+                    // steer the same combined receiver as diversity itself.
                     if (oneAdc) {
                         everyReceiver();
                     } else {
                         c.scope.receivers.insert(0);
                     }
                     if (listed(u)) {
-                        words(QStringLiteral("Diversity"), currentWords(u, {}),
-                              valueWords(u.value, u.kind));
+                        const QString label = n == "diversityPhaseDeg" ? QStringLiteral("Diversity phase")
+                            : n == "diversityGainDb"          ? QStringLiteral("Diversity gain")
+                            : n == "diversityFineNullEnabled" ? QStringLiteral("Diversity fine null")
+                                                              : QStringLiteral("Diversity");
+                        const QString unit = n == "diversityPhaseDeg" ? QStringLiteral(" degrees")
+                            : n == "diversityGainDb"                  ? QStringLiteral(" dB")
+                                                                      : QString();
+                        words(label, currentWords(u, unit), valueWords(u.value, u.kind, unit));
                     }
                 } else if ((n == "nbMode" || n.startsWith("nb1") || n == "nb2Mode") && stream >= 0) {
                     // Ruling 6.1: a shared receiver's blanker.
@@ -890,6 +899,18 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
             c.shared = on != was;
             words(QStringLiteral("Tuner bypass"), onOff(was), onOff(on));
         }
+        return c;
+    }
+    // Fix wave (the D53 list): turning 4O3A on or off connects or drops the
+    // amplifier and the tuner together, so it reaches what the tuner does.
+    if (verb == "setFourO3AEnabled") {
+        const bool on = boolArgument(args, "enabled");
+        const bool was = model.fourO3AEnabled();
+        tuner();
+        c.target = QStringLiteral("fourO3A");
+        c.targetValue = onOff(was);
+        c.shared = on != was;
+        words(QStringLiteral("4O3A amplifier and tuner"), onOff(was), onOff(on));
         return c;
     }
     static const QSet<QByteArray> kTunerVerbs{"configureTgxl", "disconnectTgxl", "setTgxlName",

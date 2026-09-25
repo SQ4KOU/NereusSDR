@@ -1263,6 +1263,61 @@ private slots:
         QCOMPARE(countOf(s.appA, QStringLiteral("settings.reject")), 0);
     }
 
+    // Fix wave (the D53 list): diversity's phase, gain and fine null, and
+    // turning 4O3A on or off, reach every receiver on the HL2's one ADC, so
+    // each asks while another device listens.
+    void diversityKnobsAndFourO3AAreOnTheList()
+    {
+        SharedAdc s;
+        QVERIFY(admitted(s.appB));
+        const QByteArray own = ObjectRegistry::keyForSlice(0);
+        const auto askFor = [&](const QList<MirrorUpdate>& updates, quint32 writeId) {
+            const int before = countOf(s.appA, QStringLiteral("confirm.request"));
+            s.appA->sendText(SessionMessages::encode(
+                SessionMessages::propertyWrite(own, updates, writeId)));
+            return waitForLast(s.appA, QStringLiteral("confirm.request"), before);
+        };
+        const struct {
+            const char* name;
+            MirrorUpdate update;
+            const char* label;
+        } knobs[] = {
+            {"phase", f64("diversityPhaseDeg", 45.0), "Diversity phase"},
+            {"gain", f64("diversityGainDb", 6.0), "Diversity gain"},
+            {"fine null",
+             MirrorUpdate{0, QByteArrayLiteral("diversityFineNullEnabled"), MirrorWireKind::Bool,
+                          QVariant(true)},
+             "Diversity fine null"},
+        };
+        quint32 writeId = 700;
+        for (const auto& knob : knobs) {
+            const QJsonObject ask = askFor({knob.update}, writeId++);
+            QVERIFY2(!ask.isEmpty(), knob.name);
+            QCOMPARE(ask.value(QStringLiteral("kind")).toString(), QStringLiteral("sharedSetting"));
+            QCOMPARE(ask.value(QStringLiteral("change")).toObject()
+                         .value(QStringLiteral("label")).toString(),
+                     QString::fromLatin1(knob.label));
+            QCOMPARE(ask.value(QStringLiteral("affected")).toArray().first().toObject()
+                         .value(QStringLiteral("deviceName")).toString(),
+                     QStringLiteral("iPad"));
+        }
+        QCOMPARE(s.core.model->sliceById(0)->diversityPhaseDeg(), 0.0);
+
+        const int before = countOf(s.appA, QStringLiteral("confirm.request"));
+        const bool was = s.core.model->fourO3AEnabled();
+        s.appA->sendText(SessionMessages::encode(SessionMessages::commandInvoke(
+            "setFourO3AEnabled", 4242,
+            {MirrorUpdate{0, QByteArrayLiteral("enabled"), MirrorWireKind::Bool, QVariant(!was)}})));
+        const QJsonObject ask = waitForLast(s.appA, QStringLiteral("confirm.request"), before);
+        QCOMPARE(ask.value(QStringLiteral("kind")).toString(), QStringLiteral("sharedSetting"));
+        const QJsonObject change = ask.value(QStringLiteral("change")).toObject();
+        QCOMPARE(change.value(QStringLiteral("label")).toString(),
+                 QStringLiteral("4O3A amplifier and tuner"));
+        QCOMPARE(change.value(QStringLiteral("to")).toString(),
+                 was ? QStringLiteral("Off") : QStringLiteral("On"));
+        QCOMPARE(s.core.model->fourO3AEnabled(), was);
+    }
+
     void aNotchInsideAnotherDevicesPassbandAsksOneOutsideDoesNot()
     {
         SharedAdc s;
