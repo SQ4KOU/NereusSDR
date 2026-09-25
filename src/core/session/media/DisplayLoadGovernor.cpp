@@ -12,6 +12,11 @@
 //                 budget split (several-devices fix wave 2). J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code (R-IOS-31, R-MC-17).
+//   2026-09-25 - floorCharge(pans): one floor pan per device sharing the
+//                 budget; a cut in force is raised to it (several-devices
+//                 fix wave 3). J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code (R-IOS-31,
+//                 R-MC-17).
 //
 // =================================================================
 
@@ -37,10 +42,26 @@ DisplayBudgetCharge DisplayLoadGovernor::floorPanCharge()
     return pan ? pan->charge : DisplayBudgetCharge{};
 }
 
-DisplayBudgetCharge DisplayLoadGovernor::floorCharge()
+DisplayBudgetCharge DisplayLoadGovernor::floorCharge(int pans)
 {
-    return sumDisplayCharges({ps3DisplayCharge(), floorPanCharge()})
-        .value_or(DisplayBudgetCharge{});
+    QList<DisplayBudgetCharge> charges{ps3DisplayCharge()};
+    const DisplayBudgetCharge pan = floorPanCharge();
+    for (int i = 0; i < std::max(1, pans); ++i) {
+        charges.append(pan);
+    }
+    return sumDisplayCharges(charges).value_or(DisplayBudgetCharge{});
+}
+
+DisplayBudgetLimits DisplayLoadGovernor::floored(const DisplayBudgetLimits& limits) const
+{
+    const DisplayBudgetCharge minimum = floorCharge(m_floorPans);
+    return DisplayBudgetLimits{
+        std::max(limits.applicationBytesPerSecond,
+                 std::min(minimum.applicationBytesPerSecond, m_ceiling.applicationBytesPerSecond)),
+        std::max(limits.spectrumSampleUnitsPerSecond,
+                 std::min(minimum.spectrumSampleUnitsPerSecond,
+                          m_ceiling.spectrumSampleUnitsPerSecond)),
+        limits.generation};
 }
 
 DisplayBudgetLimits DisplayLoadGovernor::computedCeiling()
@@ -122,6 +143,7 @@ std::optional<DisplayLoadReading> DisplayLoadGovernor::judgeable(const Settle& s
 std::optional<DisplayLoadDecision> DisplayLoadGovernor::update(const DisplayLoadReading& reading)
 {
     m_proposal.reset();
+    m_floorPans = std::max(1, reading.floorPans);
     const qint64 nowMs = reading.nowMs;
     State next = m_state;
     // The Core has no direct acknowledgement of a step: the app has acted
@@ -129,6 +151,19 @@ std::optional<DisplayLoadDecision> DisplayLoadGovernor::update(const DisplayLoad
     if (next.settle && !next.settle->acknowledgedMs
         && displayChargeFits(next.limits, reading.acceptedCharge)) {
         next.settle->acknowledgedMs = nowMs;
+    }
+    // Fix wave 3 (ruling 9.3): a cut in force never leaves less than one
+    // useful pan for each device sharing the budget; when devices join,
+    // the limits rise to the new floor at once, the step kept.
+    if (!next.previous.isEmpty()) {
+        const DisplayBudgetLimits raised = floored(next.limits);
+        if (raised.applicationBytesPerSecond != next.limits.applicationBytesPerSecond
+            || raised.spectrumSampleUnitsPerSecond != next.limits.spectrumSampleUnitsPerSecond) {
+            next.limits = DisplayBudgetLimits{raised.applicationBytesPerSecond,
+                                              raised.spectrumSampleUnitsPerSecond,
+                                              nextGeneration(next.limits)};
+            return propose(std::move(next));
+        }
     }
     const std::optional<double> pressureNow = pressure(reading);
     if (!pressureNow) {
@@ -283,7 +318,7 @@ std::optional<DisplayLoadDecision> DisplayLoadGovernor::stepDown(
 {
     const DisplayBudgetCharge& accepted = reading.acceptedCharge;
     const DisplayBudgetLimits current = next.limits;
-    const DisplayBudgetCharge minimum = floorCharge();
+    const DisplayBudgetCharge minimum = floorCharge(m_floorPans);
     const quint64 floorBytes = std::min(minimum.applicationBytesPerSecond,
                                         m_ceiling.applicationBytesPerSecond);
     const quint64 floorSamples = std::min(minimum.spectrumSampleUnitsPerSecond,
@@ -320,7 +355,7 @@ std::optional<DisplayLoadDecision> DisplayLoadGovernor::restoreStep(State next)
         m_state = std::move(next);
         return std::nullopt;
     }
-    const DisplayBudgetLimits previous = next.previous.takeLast();
+    const DisplayBudgetLimits previous = floored(next.previous.takeLast());
     next.limits = DisplayBudgetLimits{previous.applicationBytesPerSecond,
                                       previous.spectrumSampleUnitsPerSecond,
                                       nextGeneration(next.limits)};

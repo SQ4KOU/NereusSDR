@@ -841,8 +841,11 @@ void DaemonApp::evaluateDisplayLoad()
                                                      : m_displayGovernorClock.elapsed();
     const DisplayBudgetCharge accepted = m_acceptedDisplayChargeForTest
         ? m_acceptedDisplayChargeForTest() : m_mediaHub->acceptedDisplayCharge();
-    const DisplayLoadReading reading
+    DisplayLoadReading reading
         = displayLoadReadingFrom(gatherDisplayLoadInputs(), nowMs, accepted);
+    // Fix wave 3 (ruling 9.3): one floor pan for each device sharing the
+    // budget, so a cut never pauses every device's display.
+    reading.floorPans = m_stationServer->displayBudgetSharingCount();
     const std::optional<DisplayLoadDecision> decision = m_displayGovernor->update(reading);
     if (!decision) {
         return;

@@ -677,6 +677,11 @@ public:
     void setDisplayBudgetForReasonPeersOnly(bool reasonPeersOnly);
     /// The reason of the Core's total (the governor's CoreBusy, or None).
     DisplayBudgetReason displayBudgetReason() const { return m_displayBudgetReason; }
+    /// Fix wave 3 (ruling 9.3, the governor's floor): how many admitted
+    /// network devices the display budget is split among now (those
+    /// splitDisplayBudget shares it with), 0 with no budget in force. The
+    /// load governor keeps one floor pan for each.
+    int displayBudgetSharingCount() const;
     void setDisplayBudgetEnforcementEnabled(bool enabled);
     bool displayBudgetAvailable() const;
     bool displayBudgetAvailable(quint64 epoch) const;

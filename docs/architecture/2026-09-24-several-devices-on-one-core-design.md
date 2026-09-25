@@ -1568,13 +1568,35 @@ at 10 frames a second with its wide plane, the governor's own floor pan
 (`DisplayLoadGovernor::floorPanCharge`, the same floor as `DisplayLoadGovernor.h:135-136` and
 `RemoteDisplayAllocator.cpp:20-21`). The floor is what keeps a device that joins second from
 being starved: before it has subscribed anything, or when it is an older client that plans
-inside its share and so never asks for more, it is still counted as wanting one pan, so a device
-already asking for the whole total can never leave it a share of 1. The link carries nothing that
+inside its share and so never asks for more, it is still counted as wanting one pan, so another
+device that is not a present holder, asking for the whole total, cannot leave it less than one
+useful pan while the total holds one for each device (below). The link carries nothing that
 tells a sound-only device from one that has not subscribed yet, so every admitted network device
 is floored, the sound-only one included; the floor it keeps is a budget it never spends. What no
 device asks for is shared equally among the devices as room to grow into, so a device alone
 keeps the whole total, as before shares. A subscription is admitted against the share the device
 has with its new request (for a present holder, what rule 1 gives it), not the share it had.
+
+**What the floor guarantees, exactly** (fix wave 3, the re-review's Minor 1 and its first
+out-of-scope item):
+
+- With no present network holder (rule 3, or rule 2's others when the holder is the station
+  device or away), each admitted network device's share is at least the smaller of one useful
+  pan and an equal part of the total, in each field.
+- The load governor never cuts the total below PureSignal's display plus one useful pan for
+  each network device sharing the budget (`DisplayLoadGovernor::floorCharge(pans)`, fed
+  `StationServer::displayBudgetSharingCount` on every reading), capped at its ceiling; when a
+  device joins while a cut is in force, the cut rises to that floor at once. So a cut never
+  pauses every device's display: without a present holder each device keeps one useful pan
+  under any cut.
+- A total smaller than that can come only from configuration: a display allowance configured
+  for the Core (`DaemonConfig::displayBudgetLimits`) below one useful pan per device. Then each
+  device gets an equal part of it, which can be less than one pan, and a device whose part is
+  too small pauses its display, sound kept.
+- Beside a present network holder (rule 1, with Task 34), the other devices share only what the
+  holder's request leaves. A holder asking for the whole total leaves them a share of 1 (the
+  least a share can be), so their displays pause, sound kept, for as long as it asks for that;
+  the floor does not reserve anything against a holder.
 
 **A refused request ends** (fix wave 2, Important 2). A display the client drops, closes or
 pauses leaves its device's request. The client unsubscribes a display the Core refused when it
@@ -1629,8 +1651,9 @@ at 256 pixels and 10 frames a second (the budget design, lines 93-102; the deskt
 plan; the `fps` of a display endpoint's `context` only echoes what the phone subscribed at, so
 it is not a separate answer from the Core. On the phone the planner is
 `DisplayQualityAllocator`, phone Task 52 (the plan at `590d2e36`, lines 4479-4489), whose
-settled frame rate is what the chip shows (re-review finding 11). A share too small even for that one pan, possible only when
-the holder's request takes nearly all of a total the governor has cut, suspends that device's
+settled frame rate is what the chip shows (re-review finding 11). A share too small even for that one pan (beside a
+present holder whose request leaves too little, or under a configured display allowance smaller
+than one useful pan per device; see "What the floor guarantees" above) suspends that device's
 display as the budget design already does, pane and slice kept and the band marked paused
 (the budget design, lines 107-112); its sound is never cut (ruling 9.4; D64).
 

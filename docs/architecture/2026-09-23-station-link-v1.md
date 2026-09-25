@@ -887,8 +887,15 @@ budget included, until the display is closed, asked for again, or 10 s
 pass after its refusal without either (the media control document's
 display budget section), and never
 less than one useful pan (256 pixels at 10 frames a second with its wide
-plane), so a device that has not subscribed yet is never left with a share
-of 1. What no device asks for is shared equally among them as room to grow,
+plane). What that guarantees: with no network device holding transmit
+while present, each device's share is at least the smaller of one useful
+pan and an equal part of the total; the Core's own cut for a busy computer
+never takes the total below PureSignal's display plus one useful pan per
+device, so under that cut each device keeps one pan. Only a display
+allowance configured below one pan per device can leave each device less.
+Beside a device holding transmit, the others share only what its request
+leaves, which can be nothing useful (a share of 1) while it asks for the
+whole total. What no device asks for is shared equally among them as room to grow,
 so a device alone has the whole total. A subscription is admitted against the share the
 device has once it asks for it (for the transmit holder, its whole
 request), not the share it had. **Transmit joins here:** until the transmit

@@ -4565,6 +4565,23 @@ std::optional<DisplayBudgetLimits> StationServer::displayBudgetTotalFor(
     return m_displayBudget;
 }
 
+int StationServer::displayBudgetSharingCount() const
+{
+    if (!m_displayBudget || !m_mediaEnabled) {
+        return 0;
+    }
+    int count = 0;
+    for (quint64 epoch : mediaSessionEpochs()) {
+        SessionTransport* transport = mediaSessionFor(epoch);
+        const auto peer = m_peers.constFind(transport);
+        if (peer != m_peers.cend() && peer->agreedMinor >= kMediaSessionProtocolMinor
+            && displayBudgetTotalFor(transport)) {
+            ++count;
+        }
+    }
+    return count;
+}
+
 QList<QPair<SessionTransport*, DisplayBudgetShare>> StationServer::splitDisplayBudget(
     std::optional<quint64> ps3Subscriber) const
 {

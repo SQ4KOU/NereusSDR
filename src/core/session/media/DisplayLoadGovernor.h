@@ -14,6 +14,11 @@
 //                 part of its work. By J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code (R-R3-37,
 //                 R-R3-40).
+//   2026-09-25 - The floor keeps one useful pan for each device sharing
+//                 the display budget, and a cut in force is raised to it
+//                 when devices join (several-devices fix wave 3). J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code (R-IOS-31, R-MC-17).
 //
 // =================================================================
 
@@ -55,6 +60,12 @@ struct DisplayLoadReading {
     /// Display traffic the Core has accepted now: every spectrum endpoint
     /// plus the PureSignal display when it is subscribed.
     DisplayBudgetCharge acceptedCharge;
+    /// Fix wave 3 after the several-devices re-review (ruling 9.3, the
+    /// governor's floor): how many admitted network devices share the
+    /// display budget (StationServer::displayBudgetSharingCount). The floor
+    /// keeps one useful pan for each, so a cut never pauses every device's
+    /// display. Fewer than one counts as one.
+    int floorPans = 1;
 };
 
 struct DisplayLoadDecision {
@@ -66,7 +77,10 @@ struct DisplayLoadDecision {
 ///
 /// Busy (highest receiver load >= kBusyReceiverLoad or system CPU >=
 /// kBusySystemCpuPercent) held for kBusyHoldMs steps the limits down to
-/// kStepDownScale of what is accepted now, never below floorCharge(). Calm
+/// kStepDownScale of what is accepted now, never below
+/// floorCharge(reading.floorPans): PureSignal plus one floor pan per device
+/// sharing the budget. While a step is in force and more devices join, the
+/// limits are raised to that floor at once (the step count kept). Calm
 /// (every measurement under the calm thresholds, input wait under
 /// kCalmInputDelayMs; late blocks do not count) held for kCalmHoldMs undoes
 /// one step. Readings
@@ -143,8 +157,9 @@ public:
     /// (Critical 1, ruling 9.3): the least any admitted network device is
     /// counted as asking for when the display budget is split.
     static DisplayBudgetCharge floorPanCharge();
-    /// PureSignal's display plus floorPanCharge().
-    static DisplayBudgetCharge floorCharge();
+    /// PureSignal's display plus `pans` floorPanCharge()s (at least one):
+    /// one useful pan for each device sharing the budget (fix wave 3).
+    static DisplayBudgetCharge floorCharge(int pans = 1);
     /// Eight pans at the codec's largest plane, highest frame rate and a
     /// wide plane, plus PureSignal's display, at generation 1. What the Core
     /// advertises when adaptation is on and no limits are configured, so
@@ -211,6 +226,9 @@ private:
     std::optional<DisplayLoadDecision> restoreStep(State next);
     std::optional<DisplayLoadDecision> calmReading(State next, qint64 nowMs, qint64 calmStartMs);
     static quint32 nextGeneration(const DisplayBudgetLimits& limits);
+    /// `limits` raised, field by field, to floorCharge(m_floorPans) capped
+    /// at the ceiling; the generation is left as it is.
+    DisplayBudgetLimits floored(const DisplayBudgetLimits& limits) const;
     /// The reading a settling step may be judged on now, or nullopt while
     /// it must wait. Leaves out a CPU value from a host sample that began
     /// before the point the judgement waits for.
@@ -224,6 +242,8 @@ private:
     std::optional<qint64> m_busySinceMs;
     std::optional<qint64> m_calmSinceMs;
     std::optional<qint64> m_gapSinceMs;
+    /// The latest reading's floorPans (at least 1).
+    int m_floorPans = 1;
 };
 
 } // namespace NereusSDR
