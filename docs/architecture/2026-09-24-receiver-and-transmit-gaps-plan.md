@@ -687,3 +687,50 @@ byte can therefore change from what an earlier build sent in two states:
   baseline in its own commit.
 - [ ] **Step 4:** HPF Bypass on TX on both protocols. Update the HL2 bench script with the
   transmit steps.
+
+## Task 15: The HL2 receive-only kit and the older radios' Protocol 2 rates
+
+**Requirements:** CLAUDE.md's hardware-fact rules; the Phase 3F design section 2 table; the
+operator's rulings: every board gets Thetis's values for the protocol it runs (2026-09-24,
+"follow thetis", Task 5) and Atlas, Hermes, HermesII and HL2 rows on Protocol 2 follow Thetis
+too (2026-09-25, "1 follow thetis"); mi0bot-Thetis is authoritative for the Hermes Lite 2.
+
+**Source first:** Thetis `setup.cs` `InitAudioTab`, the per-protocol rate lists
+(`setup.cs:847-853 [v2.10.3.15]`, with its `//DH1KLM` line); mi0bot-Thetis for the HL2's rates on
+each protocol and for how it identifies and models the HL2 receive-only kit (its discovery and
+model code, and wherever it sets `HPSDRModel` for that board). Task 5's reports
+(`task-5-report-2.md` in the controller's crew workspace) hold the first reading, including the
+four rows pinned below Thetis with a reason.
+
+**Files:** `src/core/BoardCapabilities.{h,cpp}` (the Protocol 2 lists for the Atlas, Hermes,
+HermesII and HL2 rows; the HermesLiteRxOnly row); wherever a connect resolves a board to a model
+(`HardwareProfile.cpp`, `RadioDiscovery.cpp`, and what reads the result); the Radio Info tab if
+its top rate reads the model; the Phase 3F design's section 2 table and any plan that states the
+old values; `tests/tst_board_capabilities_phase3f.cpp`, `tests/tst_radio_discovery_parse.cpp`,
+and the hardware-profile tests.
+
+**Acceptance:**
+- On Protocol 2, the Atlas, Hermes, HermesII and HL2 rows offer Thetis's Protocol 2 list (48 to
+  1536 kHz), unless mi0bot gives the HL2 a different Protocol 2 list, in which case the HL2
+  follows mi0bot and the report says so with the cite. Their Protocol 1 lists do not change.
+- The table test's pinned exception for these four rows is gone: it asserts that every row
+  offers Thetis's list for each protocol (mi0bot's for the HL2), with no row excepted.
+- An HL2 receive-only kit resolves on connect to the model mi0bot gives it, not HERMES, and on
+  Protocol 1 offers the HL2's rates including 384 kHz. Everything else mi0bot keys on that model
+  for the kit (receiver count, controls it hides or disables) follows from the same model, or
+  the report lists what differs.
+- A remote window offers the same rates as a local window on the same radio (the Core's list).
+- A rate saved per radio that the new list still offers is kept; nothing saved is silently
+  changed.
+- The design table and the code change in the same commit, with tests of every value per
+  protocol, cited.
+
+**Verification:** a capability table and a model resolution; tests of the values.
+`tst_p1_regression_freeze` and `tst_p2_regression_freeze` pass unchanged (no wire byte changes
+at an existing rate). Hardware pending: none of these boards is on the bench running Protocol 2,
+and there is no receive-only kit on the bench.
+
+**Execution note (advisory):** opus.
+
+- [ ] **Step 1:** Read Thetis and mi0bot, test red, fix the rows and the model resolution,
+  commit.
