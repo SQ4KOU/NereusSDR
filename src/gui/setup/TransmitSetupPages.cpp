@@ -171,6 +171,10 @@
 //                 window's SWR Protection change applies at once, as Thetis
 //                 does. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-25 - R-R3-49 (group A fix wave, M8): the TX inhibit tooltip in
+//                 plain words naming NereusSDR, and Manage... points to
+//                 Setup > Audio > TX Profile for saving profiles. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 #include "TransmitSetupPages.h"
 #include "gui/StyleConstants.h"
@@ -908,8 +912,10 @@ void PowerPage::buildExternalTxInhibitGroup()
     // chkTXInhibit — From Thetis setup.designer.cs:46637-46646 [v2.10.3.13]
     m_chkTXInhibit = new QCheckBox(tr("Update with TX Inhibit state"), group);
     m_chkTXInhibit->setObjectName(QStringLiteral("chkTXInhibit"));
-    // From Thetis setup.designer.cs:46645 [v2.10.3.13]
-    m_chkTXInhibit->setToolTip(tr("Thetis will update on TX inhibit state change"));
+    // From Thetis setup.designer.cs:46645 [v2.10.3.13] (reworded, R-R3-49
+    // group A fix wave M8: the original names Thetis, "Thetis will update
+    // on TX inhibit state change").
+    m_chkTXInhibit->setToolTip(tr("NereusSDR follows the radio's TX inhibit input when it changes."));
     m_chkTXInhibit->setChecked(
         s.value(QStringLiteral("TxInhibitMonitorEnabled"), QStringLiteral("False")).toString() == QStringLiteral("True"));
     connect(m_chkTXInhibit, &QCheckBox::toggled, this, [](bool on) {
@@ -1051,8 +1057,8 @@ void SpeechProcessorPage::buildUI()
 // SpeechProcessorPage::buildActiveProfileSection
 //
 // Single read-only label showing MicProfileManager::activeProfileName(), with
-// a "Manage…" button that opens TxEqDialog (which hosts the profile combo +
-// Save / Save As / Delete buttons added in 3M-3a-i Batch 4).  Without a
+// a "Manage…" button that opens TxEqDialog (profiles are saved and deleted
+// in Setup > Audio > TX Profile).  Without a
 // connected radio MicProfileManager is unscoped and returns "Default" — the
 // label still reads meaningfully.
 // ---------------------------------------------------------------------------
@@ -1077,9 +1083,11 @@ void SpeechProcessorPage::buildActiveProfileSection()
     m_manageProfileBtn = new QPushButton(QStringLiteral("Manage..."));
     m_manageProfileBtn->setObjectName(QStringLiteral("btnManageProfile"));
     m_manageProfileBtn->setAutoDefault(false);
+    // R-R3-49 (group A fix wave, M8): profiles are saved and deleted in
+    // Setup > Audio > TX Profile, not in the TX EQ editor.
     m_manageProfileBtn->setToolTip(QStringLiteral(
-        "Open the TX EQ editor (Tools → TX Equalizer). The profile combo "
-        "and Save / Save As / Delete buttons live there."));
+        "Open the TX equalizer. To save or delete a TX profile, use "
+        "Setup > Audio > TX Profile."));
     m_manageProfileBtn->setStyleSheet(QStringLiteral(
         "QPushButton { background: #1a2a3a; border: 1px solid #304050;"
         "  border-radius: 3px; color: #c8d8e8; font-size: 12px; padding: 3px 10px; }"

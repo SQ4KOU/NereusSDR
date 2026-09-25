@@ -261,6 +261,7 @@ private slots:
     void setupOpensThePagesWithoutRemoteTransmit();
     void localSwrProtectionAppliesAtOnce();
     void newReasonsArePlain();
+    void tooltipsSayWhatTheControlsDo();
 
 private:
     QTemporaryDir m_securityDir;
@@ -996,6 +997,32 @@ void TstRemoteTransmitSetupPages::newReasonsArePlain()
     for (const QString& reason : {QStringLiteral("Choose a tune power to ignore from 5 to 50 W."),
                                   QStringLiteral("The Core expected this box to be on or off.")}) {
         QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
+    }
+}
+
+// Group A fix wave, M8: two tooltips now enabled in remote windows said the
+// wrong thing: the TX inhibit box named Thetis, and Manage... sent the
+// operator to Save buttons the TX EQ editor no longer has.
+void TstRemoteTransmitSetupPages::tooltipsSayWhatTheControlsDo()
+{
+    RadioModel model;
+    PowerPage power(&model);
+    auto* inhibit = power.findChild<QCheckBox*>(QStringLiteral("chkTXInhibit"));
+    QVERIFY(inhibit);
+    const QString inhibitTip = inhibit->toolTip();
+    QVERIFY2(OperatorWording::isPlain(inhibitTip), qPrintable(inhibitTip));
+    QVERIFY(!inhibitTip.contains(QStringLiteral("Thetis")));
+    QVERIFY(inhibitTip.contains(QStringLiteral("NereusSDR")));
+
+    SpeechProcessorPage speech(&model);
+    auto* manage = speech.findChild<QPushButton*>(QStringLiteral("btnManageProfile"));
+    QVERIFY(manage);
+    const QString manageTip = manage->toolTip();
+    QVERIFY2(OperatorWording::isPlain(manageTip), qPrintable(manageTip));
+    QVERIFY(!manageTip.contains(QStringLiteral("Save As")));
+    QVERIFY(manageTip.contains(QStringLiteral("Setup > Audio > TX Profile")));
+    for (const QString& tip : {inhibitTip, manageTip}) {
+        QVERIFY(!tip.contains(QChar(0x2014)));
     }
 }
 
