@@ -270,6 +270,9 @@ public:
     // (empty when accepted). The menu is the one place a menu refusal is
     // shown; a VFO flag click shows its own.
     static QString applyNrMenuChoice(SliceModel* slice, NereusSDR::NrSlot slot);
+    // R-R3-49, Sub-epic C-1 (tx-followup-4): the DSP > NR menu's entries
+    // (label, slot) in order. BNR is not among them.
+    static QList<std::pair<QString, NereusSDR::NrSlot>> nrMenuEntries();
     // R-R3-43 / R-R3-44: the VAX page's note about the Core's receiver
     // streams. receiverAudioNoteFor reads it from the audio status and
     // whether the Core sends receiver streams (None without media).

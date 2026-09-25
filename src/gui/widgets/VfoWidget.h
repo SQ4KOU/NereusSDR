@@ -34,6 +34,9 @@
 //                 shown disabled with the plain reason, never hidden
 //                 (nrCannotRunReason, updateNrAvailability), by J.J. Boyd
 //                 (KG4VCF), with Anthropic Claude Code assistance.
+//   2026-09-25 : R-R3-49, Sub-epic C-1 (tx-followup-4) the BNR button and
+//                 its quick controls removed (not offered for now), by J.J.
+//                 Boyd (KG4VCF), with Anthropic Claude Code assistance.
 // =================================================================
 
 //=================================================================
@@ -533,7 +536,6 @@ public:
     // R-R3-49: the DSP grid's DFNR button (hidden while DFNR cannot run).
     QPushButton* dfnrButtonForTest() const { return m_dfnrBtn; }
     QPushButton* mnrButtonForTest() const { return m_mnrBtn; }
-    QPushButton* bnrButtonForTest() const { return m_bnrBtn; }
 
     int sliceIndex() const { return m_sliceIndex; }
 
@@ -707,11 +709,10 @@ private:
     void showDfnrPopup(const QPoint& globalPos);
     // R-R3-49, Sub-epic C-1: why a noise filter cannot run (the model's
     // word, the Core's in a remote window, or this build's with no model),
-    // empty when it can; and applying that to the DSP grid's DFNR, MNR and
-    // BNR buttons: shown always, disabled with the reason while it cannot.
+    // empty when it can; and applying that to the DSP grid's DFNR and MNR
+    // buttons: shown always, disabled with the reason while it cannot.
     QString nrCannotRunReason(NereusSDR::NrSlot slot) const;
     void updateNrAvailability();
-    void showBnrPopup(const QPoint& globalPos);
     void showMnrPopup(const QPoint& globalPos);
 
     // Guard to prevent signal re-emission during model updates
@@ -876,14 +877,12 @@ private:
     QPushButton* m_nr3Btn  = nullptr;
     QPushButton* m_nr4Btn  = nullptr;
     QPushButton* m_dfnrBtn = nullptr;
-    QPushButton* m_bnrBtn  = nullptr;
     QPushButton* m_mnrBtn  = nullptr;
     QPushButton* m_nnrBtn  = nullptr;
     QLabel*      m_nnrLimitIndicator = nullptr;   // R-R3-40
     QString      m_nnrToolTip;
     QString      m_dfnrToolTip;   // R-R3-49: each filter's own tooltip
     QString      m_mnrToolTip;
-    QString      m_bnrToolTip;
     QPushButton*        m_anfToggle{nullptr};
     QPushButton*        m_snbToggle{nullptr};
     QPushButton*        m_apfToggle{nullptr};

@@ -142,6 +142,10 @@
 //                 the DSP menu's NR list shows DFNR, MNR and BNR always,
 //                 disabled with the plain reason while they cannot run.
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - J.J. Boyd (KG4VCF). R-R3-49, Sub-epic C-1 (tx-followup-4):
+//                 the DSP menu's NR list no longer offers BNR (operator:
+//                 not offered for now); its entries come from
+//                 nrMenuEntries(). AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -2829,6 +2833,24 @@ void MainWindow::onNotchAddRejected(const QString& reason)
 void MainWindow::onNotchRequestRefused(const QString& reason)
 {
     showToast(OperatorReasonText::forDisplay(reason), ToastSeverity::Warning, 3000);
+}
+
+// R-R3-49, Sub-epic C-1 (tx-followup-4): the DSP > NR menu's entries, in
+// order. BNR (NVIDIA) is not offered (operator, 2026-09-25); NrSlot::BNR
+// keeps its value 6 so no saved or sent selection moves.
+QList<std::pair<QString, NereusSDR::NrSlot>> MainWindow::nrMenuEntries()
+{
+    using Slot = NereusSDR::NrSlot;
+    return {
+        { QStringLiteral("&Off"),  Slot::Off  },
+        { QStringLiteral("NR&1"),  Slot::NR1  },
+        { QStringLiteral("NR&2"),  Slot::NR2  },
+        { QStringLiteral("NR&3"),  Slot::NR3  },
+        { QStringLiteral("NR&4"),  Slot::NR4  },
+        { QStringLiteral("&DFNR"), Slot::DFNR },
+        { QStringLiteral("&NNR"),  Slot::NNR  },
+        { QStringLiteral("&MNR"),  Slot::MNR  },
+    };
 }
 
 // Fix wave I3 (R-R3-21): a noise reducer a receiver would not turn on, for
@@ -7537,9 +7559,10 @@ void MainWindow::buildMenuBar()
 
     // ── NR submenu — full slot bank, mutual exclusion via QActionGroup ─────
     // Mirrors VfoWidget's NR bank. Every filter is always listed (R-R3-49,
-    // Sub-epic C-1: never hidden); DFNR, MNR and BNR are disabled, with the
+    // Sub-epic C-1: never hidden); DFNR and MNR are disabled, with the
     // plain reason as the tooltip, while they cannot run (RadioModel::
     // nrCannotRunReason: the Core's word, mirrored, in a remote window).
+    // BNR (NVIDIA) is not offered (operator, 2026-09-25); see nrMenuEntries.
     {
         QMenu* nrMenu = dspMenu->addMenu(QStringLiteral("&NR"));
         nrMenu->setToolTipsVisible(true);
@@ -7547,21 +7570,9 @@ void MainWindow::buildMenuBar()
         m_nrGroup->setExclusive(true);
 
         using Slot = NereusSDR::NrSlot;
-        struct Entry { const char* label; Slot slot; };
-        const Entry nrSlots[] = {
-            { "&Off",   Slot::Off  },
-            { "NR&1",   Slot::NR1  },
-            { "NR&2",   Slot::NR2  },
-            { "NR&3",   Slot::NR3  },
-            { "NR&4",   Slot::NR4  },
-            { "&DFNR",  Slot::DFNR },
-            { "&NNR",   Slot::NNR  },
-            { "&MNR",   Slot::MNR  },
-            { "&BNR",   Slot::BNR  },
-        };
-        for (const auto& nr : nrSlots) {
-            Slot slot = nr.slot;
-            QAction* a = nrMenu->addAction(QString::fromUtf8(nr.label),
+        for (const auto& nr : nrMenuEntries()) {
+            Slot slot = nr.second;
+            QAction* a = nrMenu->addAction(nr.first,
                 this, [this, slot]() {
                     SliceModel* slice = m_radioModel->activeSlice();
                     if (!slice) { return; }

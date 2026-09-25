@@ -4344,9 +4344,10 @@ private:
 #endif
 public:
     // R-R3-49, Sub-epic C-1: the plain reasons MNR and BNR cannot run, for
-    // the Core's refusals and the VFO flag's disabled buttons. MNR runs
+    // the Core's refusals and the VFO flag's disabled MNR button. MNR runs
     // only on a Mac (a Core built without it sends this as mnrStatus); BNR
-    // is in no build, so its reason holds everywhere.
+    // is in no build and has no control (tx-followup-4), so its reason is
+    // only the refusal's, which holds everywhere.
     static QString mnrCannotRunReason();
     static QString bnrCannotRunReason();
     // Why the noise filter in `slot` cannot run for this model's receivers,

@@ -795,8 +795,10 @@ When a feature is off, its version is 0:
   reason. 4 adds `mnrRunnable` and `mnrStatus` on `DspAssetService`, the
   same pair for MNR, which runs only on a Mac Core: a window on any
   computer shows MNR disabled with `mnrStatus` while `mnrRunnable` is
-  false. BNR carries no pair: no build has it, so every window shows it
-  disabled with its own plain reason.
+  false. BNR carries no pair and is not offered: no build has it, so no
+  window shows a BNR control. A BNR selection (`activeNr` 6, which keeps
+  its value) is refused by the Core and by a window with a plain reason,
+  and a slice holding one turns off.
 - `radioHardwareVersion`: sent only at agreed minor 11. 0 without the step
   attenuator bound; 1 with it; 2 with the Alex antennas too; 4 with the HL2
   I/O board too: the `ioBoard` object, `setAlexRxAntenna` (which needs 3)

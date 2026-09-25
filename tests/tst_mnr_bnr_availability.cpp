@@ -2,32 +2,41 @@
 // =================================================================
 // tests/tst_mnr_bnr_availability.cpp  (NereusSDR)
 // =================================================================
-// R-R3-49, Sub-epic C-1: MNR and BNR are always on the VFO flag. When one
-// cannot run, its button is shown disabled with the plain reason, never
-// hidden (operator, 2026-09-25: "Not a fan of disappearing buttons but
-// rather disabled."), and choosing it is refused with that reason.
+// R-R3-49, Sub-epic C-1: MNR is always on the VFO flag. When it cannot
+// run, its button is shown disabled with the plain reason, never hidden
+// (operator, 2026-09-25: "Not a fan of disappearing buttons but rather
+// disabled."), and choosing it is refused with that reason.
 //
 //   - MNR runs only on a Mac. The Core says whether it can run it
 //     (DspAssetService mnrRunnable / mnrStatus); a remote window follows
 //     its Core, so a Mac window on a Linux Core shows MNR disabled.
-//   - BNR is in no build (NVIDIA only), so it is disabled everywhere with
-//     a reason that holds for every build.
+//   - BNR is in no build (NVIDIA only) and is not offered (operator,
+//     2026-09-25, tx-followup-4): no flag button, quick controls or DSP
+//     menu entry, in a local or a remote window. A BNR selection from any
+//     input (the TCI/CAT shim, TCI itself, a saved setting) is refused or
+//     ignored, never applied; NrSlot::BNR keeps its value 6.
 // No radio is connected and nothing keys.
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-09-25: original test for NereusSDR by J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code
 //               (R-R3-49, Sub-epic C-1).
+//   2026-09-25: BNR is not offered (tx-followup-4). J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
 #include <QApplication>
 #include <QPushButton>
+#include <QScopeGuard>
 #include <QSignalSpy>
 
+#include "core/AppSettings.h"
+#include "core/TciProtocol.h"
 #include "core/WdspTypes.h"
 #include "core/dsp/DspAssetService.h"
 #include "gui/widgets/DspParamPopup.h"
+#include "gui/MainWindow.h"
 #include "gui/widgets/VfoWidget.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -46,6 +55,20 @@ bool shownDisabledWith(const QPushButton* button, const QString& reason)
 {
     return button && !button->isHidden() && !button->isEnabled()
         && button->toolTip() == reason && OperatorWording::isPlain(reason);
+}
+
+// No control anywhere in the widget is labelled BNR.
+bool offersNoBnr(const QWidget& widget)
+{
+    for (const QPushButton* button : widget.findChildren<QPushButton*>()) {
+        if (button->text().remove(QLatin1Char('&')).contains(QStringLiteral("BNR"))) {
+            return false;
+        }
+        if (button->toolTip().contains(QStringLiteral("NVIDIA"))) {
+            return false;
+        }
+    }
+    return true;
 }
 
 int popupsOf(const QWidget& widget)
@@ -74,8 +97,9 @@ private slots:
         QVERIFY(OperatorWording::coreCalledStationIn(kBnrReason).isEmpty());
     }
 
-    void bnrIsShownDisabledAndRefused()
+    void bnrIsNotOfferedAndRefused()
     {
+        QCOMPARE(static_cast<int>(NrSlot::BNR), 6);   // the wire value stays
         QVERIFY(!RadioModel::bnrBuilt());
         RadioModel model;
         QCOMPARE(model.nrCannotRunReason(NrSlot::BNR), kBnrReason);
@@ -88,18 +112,86 @@ private slots:
         QCOMPARE(refused.count(), 1);
         QCOMPARE(refused.at(0).at(0).toString(), kBnrReason);
 
+        // The flag in a local window offers no BNR, and no quick controls
+        // open from anywhere for it.
         VfoWidget vfo;
         vfo.setRadioModel(&model);
         vfo.setSlice(slice);
-        QVERIFY(shownDisabledWith(vfo.bnrButtonForTest(), kBnrReason));
-        emit vfo.bnrButtonForTest()->customContextMenuRequested(QPoint(1, 1));
+        QVERIFY(offersNoBnr(vfo));
         QCOMPARE(popupsOf(vfo), 0);
 
-        // A remote window shows it the same way.
+        // Nor in a remote window.
         RadioModel remote(RadioModel::Role::Remote);
         VfoWidget window;
         window.setRadioModel(&remote);
-        QVERIFY(shownDisabledWith(window.bnrButtonForTest(), kBnrReason));
+        QVERIFY(offersNoBnr(window));
+
+        // Nor a flag with no model.
+        VfoWidget bare;
+        QVERIFY(offersNoBnr(bare));
+    }
+
+    void dspMenuOffersNoBnr()
+    {
+        // The DSP > NR menu is built from these entries in local and remote
+        // windows alike.
+        const auto entries = MainWindow::nrMenuEntries();
+        QCOMPARE(entries.size(), 8);
+        for (const auto& entry : entries) {
+            QVERIFY(entry.second != NrSlot::BNR);
+            QVERIFY(!QString(entry.first).remove(QLatin1Char('&')).contains(QStringLiteral("BNR")));
+        }
+        // DFNR and MNR stay listed (shown disabled with the reason while
+        // they cannot run).
+        bool dfnr = false;
+        bool mnr = false;
+        for (const auto& entry : entries) {
+            dfnr = dfnr || entry.second == NrSlot::DFNR;
+            mnr = mnr || entry.second == NrSlot::MNR;
+        }
+        QVERIFY(dfnr);
+        QVERIFY(mnr);
+    }
+
+    void bnrFromTheTciAndCatShimIsNotApplied()
+    {
+        RadioModel model;
+        const int id = model.addSlice();
+        SliceModel* slice = model.sliceById(id);
+        QVERIFY(slice);
+        // RadioModel::setRxNr's index 5 is BNR (the shim TCI and CAT share).
+        model.setRxNr(id, true, 5);
+        QCOMPARE(slice->activeNr(), NrSlot::Off);
+        QCOMPARE(slice->nnrLastError(), kBnrReason);
+        QVERIFY(!model.rxNr(id));
+        // TCI itself accepts NR indexes 1..4 only, so 5 is ignored.
+        TciProtocol tci(&model);
+        tci.handleCommand(QStringLiteral("rx_nr_enable_ex:0,true,5;"));
+        QCOMPARE(slice->activeNr(), NrSlot::Off);
+        // Other NR still works through the shim.
+        model.setRxNr(id, true, 1);
+        QCOMPARE(slice->activeNr(), NrSlot::NR2);
+    }
+
+    void savedBnrLoadsAsOff()
+    {
+        const QString mac = QStringLiteral("00:1C:2D:0B:4E:06");
+        const QString prefix = QStringLiteral("hardware/") + mac + QStringLiteral("/slices/0/nnr/");
+        auto& settings = AppSettings::instance();
+        const auto cleanup = qScopeGuard([&settings, mac] {
+            for (const QString& key : settings.allKeys()) {
+                if (key.startsWith(QStringLiteral("hardware/") + mac)) { settings.remove(key); }
+            }
+        });
+        settings.setValue(prefix + QStringLiteral("NrActive"), static_cast<int>(NrSlot::BNR));
+        RadioModel model;
+        const int id = model.addSlice();
+        SliceModel* slice = model.sliceById(id);
+        QVERIFY(slice);
+        slice->setSettingsRadioIdentity(mac);
+        model.loadSliceState(slice);
+        QCOMPARE(slice->activeNr(), NrSlot::Off);
+        QVERIFY(!model.rxNr(id));
     }
 
     void mnrFollowsWhatTheCoreCanRun()
@@ -178,9 +270,8 @@ private slots:
     {
         VfoWidget vfo;
         QVERIFY(!vfo.mnrButtonForTest()->isHidden());
-        QVERIFY(!vfo.bnrButtonForTest()->isHidden());
         QVERIFY(!vfo.dfnrButtonForTest()->isHidden());
-        QVERIFY(shownDisabledWith(vfo.bnrButtonForTest(), kBnrReason));
+        QVERIFY(offersNoBnr(vfo));
 #ifdef HAVE_MNR
         QVERIFY(offered(vfo.mnrButtonForTest()));
 #else
