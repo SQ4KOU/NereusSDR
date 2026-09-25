@@ -143,9 +143,13 @@ QList<DisplayBudgetShare> DisplayBudgetSplit::split(const DisplayBudgetSplitInpu
     Dimension bytes{input.total.applicationBytesPerSecond, ps3.applicationBytesPerSecond, {}};
     Dimension samples{input.total.spectrumSampleUnitsPerSecond,
                       ps3.spectrumSampleUnitsPerSecond, {}};
+    // Fix wave 2 (Critical 1): every device counts as asking for at least
+    // one useful pan.
     for (const DisplayBudgetSplitDevice& device : input.devices) {
-        bytes.requests.push_back(device.request.applicationBytesPerSecond);
-        samples.requests.push_back(device.request.spectrumSampleUnitsPerSecond);
+        bytes.requests.push_back(std::max(device.request.applicationBytesPerSecond,
+                                          input.minimumRequest.applicationBytesPerSecond));
+        samples.requests.push_back(std::max(device.request.spectrumSampleUnitsPerSecond,
+                                            input.minimumRequest.spectrumSampleUnitsPerSecond));
     }
     const std::vector<quint64> byteShares = splitDimension(bytes, holder, ps3Subscriber);
     const std::vector<quint64> sampleShares = splitDimension(samples, holder, ps3Subscriber);

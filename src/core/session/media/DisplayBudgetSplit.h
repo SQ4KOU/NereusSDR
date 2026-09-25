@@ -11,6 +11,9 @@
 //   2026-09-25 - Original implementation for NereusSDR by J.J. Boyd
 //                (KG4VCF), with AI-assisted implementation via Anthropic
 //                Claude Code (R-IOS-31, R-MC-17).
+//   2026-09-25 - Fix wave 2: every device asks for at least one useful
+//                pan (minimumRequest). J.J. Boyd (KG4VCF), with
+//                AI-assisted implementation via Anthropic Claude Code.
 //
 // =================================================================
 
@@ -67,6 +70,14 @@ struct DisplayBudgetSplitInput {
     bool holderAway = false;
     /// The device the PureSignal display goes to, if any (rule 4).
     std::optional<QByteArray> ps3Subscriber;
+    /// The least each device is counted as asking for, per dimension (fix
+    /// wave 2, Critical 1): one useful pan (DisplayLoadGovernor::
+    /// floorPanCharge()), so a device that has not subscribed yet, or an
+    /// older client that plans inside its share, is never left with a
+    /// share of 1 beside a device asking for the whole total. The wire
+    /// cannot tell a sound-only device from one that has not subscribed
+    /// yet, so the Core floors every device. Zero floors nothing.
+    DisplayBudgetCharge minimumRequest;
 };
 
 struct DisplayBudgetShare {
@@ -86,9 +97,10 @@ struct DisplayBudgetShare {
 ///     difference to the rest.
 ///  3. With transmit unheld, held by the station device or held by a device
 ///     that is away, every device shares the whole total that way.
-///  What no device asks for is then shared equally among all of them, as
-///  room to grow into (fix wave I5): a device alone has the whole total, and
-///  a device given its whole request keeps some headroom.
+///  Each device's request counts as at least minimumRequest (fix wave 2,
+///  Critical 1). What no device asks for is then shared equally among all
+///  of them, as room to grow into (fix wave I5): a device alone has the
+///  whole total, and a device given its whole request keeps some headroom.
 /// A share never reaches zero in either dimension (a budget of zero is not
 /// a budget): at least 1, which is too small for any display, so the
 /// device's client suspends its display with sound kept.

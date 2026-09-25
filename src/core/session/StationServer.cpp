@@ -285,6 +285,7 @@
 #include "core/session/SliceMarker.h"
 #include "core/SliceOwnership.h"
 #include "core/session/media/DisplayBudgetSplit.h"
+#include "core/session/media/DisplayLoadGovernor.h"
 #include "core/session/ConfirmStep.h"
 #include "core/session/ConnectedDevicesFacade.h"
 #include "core/session/DeviceSessionRegistry.h"
@@ -4538,6 +4539,13 @@ QList<QPair<SessionTransport*, DisplayBudgetShare>> StationServer::splitDisplayB
     DisplayBudgetSplitInput input;
     input.total = *m_displayBudget;
     input.governorCut = m_displayBudgetReason == DisplayBudgetReason::CoreBusy;
+    // Fix wave 2 (Critical 1): every admitted network device counts as
+    // asking for at least one useful pan, the governor's own floor pan, so
+    // a device that has not subscribed yet (or an older client planning
+    // inside its share) is never left with a share of 1 beside a device
+    // asking for the whole total. The link carries nothing that says a
+    // device is sound only, so every device is floored.
+    input.minimumRequest = DisplayLoadGovernor::floorPanCharge();
     QList<SessionTransport*> sharing;
     for (quint64 epoch : mediaSessionEpochs()) {
         SessionTransport* transport = mediaSessionFor(epoch);

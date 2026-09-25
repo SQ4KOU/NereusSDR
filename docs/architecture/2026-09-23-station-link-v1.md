@@ -883,19 +883,26 @@ equal share, and a device asking for less leaves the difference to the
 rest (max-min fair). A device's request is what its displays ask for: the
 sum of its display subscriptions' charges at the pixels and frame rate it
 subscribed at, before any grant clamps them, a subscription refused for the
-budget included, until the display is closed or asked for again. What no
-device asks for is shared equally among them as room to grow, so a device
-alone has the whole total. A subscription is admitted against the share the
+budget included, until the display is closed or asked for again, and never
+less than one useful pan (256 pixels at 10 frames a second with its wide
+plane), so a device that has not subscribed yet is never left with a share
+of 1. What no device asks for is shared equally among them as room to grow,
+so a device alone has the whole total. A subscription is admitted against the share the
 device has once it asks for it (for the transmit holder, its whole
 request), not the share it had. **Transmit joins here:** until the transmit
 holder exists (Task 34) transmit counts as unheld; Task 34 names the holder.
 The Core hands each device a share, never a frame rate: each client plans
 its own displays inside its share, and a share too small for one pan at 256
 pixels and 10 frames a second suspends that device's display, pane and
-slice kept. A client holding transmit subscribes its displays at the rate it
-wants, not at the rate its share allows today, since its request is what
-gives it room (rule 1); a client without transmit plans inside its share. Audio is never split and never cut when the Core runs
-short.
+slice kept. Every client, holding transmit or not, first subscribes its
+displays at the pixels and frame rate the operator wants, since its request
+is what gives it its share. A subscription refused because it does not fit
+(reason "The Core's display limit has no room left.") is the answer: the
+`capabilities` with the device's new share arrive before the refusal, and
+the client plans inside that share and subscribes again. It asks for what it
+wants again only when that grows (a pane added, widened or sped up), never
+merely because a new generation arrived. Audio is never split and never cut
+when the Core runs short.
 
 `displayBudgetReason` says which of the Core's limits is short:
 

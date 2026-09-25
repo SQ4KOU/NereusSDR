@@ -8,6 +8,10 @@
 //   2026-09-23 - The calm test no longer requires zero late blocks. By J.J.
 //                 Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code (R-R3-37, R-R3-40).
+//   2026-09-25 - floorPanCharge, the floor pan alone, for the display
+//                 budget split (several-devices fix wave 2). J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code (R-IOS-31, R-MC-17).
 //
 // =================================================================
 
@@ -27,10 +31,15 @@ quint64 scaled(quint64 value, double scale)
 
 } // namespace
 
-DisplayBudgetCharge DisplayLoadGovernor::floorCharge()
+DisplayBudgetCharge DisplayLoadGovernor::floorPanCharge()
 {
     const auto pan = spectrumDisplayCost(kFloorPixels, kFloorFps, true);
-    return sumDisplayCharges({ps3DisplayCharge(), pan ? pan->charge : DisplayBudgetCharge{}})
+    return pan ? pan->charge : DisplayBudgetCharge{};
+}
+
+DisplayBudgetCharge DisplayLoadGovernor::floorCharge()
+{
+    return sumDisplayCharges({ps3DisplayCharge(), floorPanCharge()})
         .value_or(DisplayBudgetCharge{});
 }
 

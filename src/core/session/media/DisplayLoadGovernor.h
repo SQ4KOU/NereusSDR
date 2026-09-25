@@ -138,8 +138,12 @@ public:
     /// kMaximumPans).
     static constexpr int kCeilingPans = 8;
 
-    /// PureSignal's display plus one pan at kFloorPixels and kFloorFps with
-    /// its wide plane.
+    /// One pan at kFloorPixels and kFloorFps with its wide plane: one
+    /// useful pan. Fix wave 2 after the several-devices re-review
+    /// (Critical 1, ruling 9.3): the least any admitted network device is
+    /// counted as asking for when the display budget is split.
+    static DisplayBudgetCharge floorPanCharge();
+    /// PureSignal's display plus floorPanCharge().
     static DisplayBudgetCharge floorCharge();
     /// Eight pans at the codec's largest plane, highest frame rate and a
     /// wide plane, plus PureSignal's display, at generation 1. What the Core

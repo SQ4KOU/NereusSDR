@@ -1541,18 +1541,47 @@ capabilities (the existing budget entries, the link, section 6.4):
    floor counts it (`DisplayLoadGovernor.h:141-143`); charging it per device would count it
    four times.
 
-**The requested charge is demand, not grant** (fix wave I5, 2026-09-25). A device's request is
-the sum of its display subscriptions' charges as subscribed, at the pixels and frame rate it
-asked for, before the grant clamps them, a subscription refused for the budget included, until
-that display is closed or asked for again. What no device asks for is shared equally among the
-devices as room to grow into, so a device alone keeps the whole total, as before shares. A
-subscription is admitted against the share the device has with its new request (for a present
-holder, what rule 1 gives it), not the share it had. So a sound-only device and a one-pan device
-beside a four-pan device each get what they ask for, and the rest goes max-min fair. What the
-phone's and the desktop's display planners do: without transmit, plan inside the share as
-today; while holding transmit, subscribe the displays at the rate the operator wants, since that
-request is what gives the holder room (a plan held inside the share would pin the holder at an
-equal share and D54 would never be met).
+**The requested charge is demand, not grant** (fix wave I5, 2026-09-25; fix wave 2,
+2026-09-25). A device's request is the sum of its display subscriptions' charges as subscribed,
+at the pixels and frame rate it asked for, before the grant clamps them, a subscription refused
+for the budget included (until the bound below), and never less than one useful pan: 256 pixels
+at 10 frames a second with its wide plane, the governor's own floor pan
+(`DisplayLoadGovernor::floorPanCharge`, the same floor as `DisplayLoadGovernor.h:135-136` and
+`RemoteDisplayAllocator.cpp:20-21`). The floor is what keeps a device that joins second from
+being starved: before it has subscribed anything, or when it is an older client that plans
+inside its share and so never asks for more, it is still counted as wanting one pan, so a device
+already asking for the whole total can never leave it a share of 1. The link carries nothing that
+tells a sound-only device from one that has not subscribed yet, so every admitted network device
+is floored, the sound-only one included; the floor it keeps is a budget it never spends. What no
+device asks for is shared equally among the devices as room to grow into, so a device alone
+keeps the whole total, as before shares. A subscription is admitted against the share the device
+has with its new request (for a present holder, what rule 1 gives it), not the share it had.
+
+**Every client asks for what the operator wants** (fix wave 2, Critical 1). A planner that only
+ever asks for what its share allows never shows its demand, so its share never grows past the
+equal part it started with, and rules 2 and 3 fail for a device that joins second. So every
+client, holder or not, subscribes each pane at the pixels and frame rate the operator wants. A
+subscription refused for the budget (reason "The Core's display limit has no room left.") is
+answered by the `capabilities` share the Core publishes with the new request, sent before the
+refusal; the planner then plans inside that share as before (lower background frame rates first,
+then detail, then the active pan, down to one pan at 256 pixels and 10 frames a second) and
+subscribes again, and what it subscribes then is its request. The demand the Core records is
+therefore what each device asked for, and the split is fair. A planner asks again only when what
+the operator wants grows (a pan added, a pan made wider or faster); asking again on every new
+generation would let two constrained devices trade their planning leftovers back and forth
+without end. A share that grows because another device asks for less is grown into by planning
+inside it. For a present holder the same asking gives it its whole request (rule 1).
+
+- The desktop's planner (`RemoteMediaController::refreshBudgetSubscriptions`, with
+  `RemoteDisplayAllocator`) does this: it plans without the share while asking, sends every pan's
+  wanted request whatever the share, ends the ask at the first budget refusal or once every pan
+  has been answered, and then plans inside the share.
+- The phone's planner, `DisplayQualityAllocator` (phone Task 52), must do the same: at the start
+  of its media session and whenever the displays the operator wants grow, subscribe every visible
+  pane at its wanted pixels and frame rate; on an `allocation-result` refused with the reason
+  above, plan inside the share in the `capabilities` it already holds and subscribe the planned
+  qualities; otherwise plan inside the share as the budget design says; and never ask again only
+  because a new generation arrived.
 
 **The phone computes its own frame rate** (review finding 5). The Core hands each device a
 share, never a frame rate. Inside its share each device's own client plans its displays: it

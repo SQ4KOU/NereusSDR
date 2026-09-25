@@ -38,6 +38,13 @@ inline constexpr quint32 kDisplaySenderMessagesPerSecond =
 /// before judging it.
 inline constexpr int kDisplayAllocationAckTimeoutMs = 10'000;
 
+/// The reason a display subscription is refused because it does not fit
+/// the device's display budget share (DaemonMediaController). Fix wave 2
+/// (Critical 1, ruling 9.3): the desktop's planner reads it as the answer to
+/// asking for what the operator wants, and plans inside the share the Core
+/// published with it. Clients compare it exactly, so it never changes.
+inline constexpr char kDisplayBudgetRefusalReason[] = "The Core's display limit has no room left.";
+
 /// Current NSDC schema-1 header and daemon subscribe validation maximum
 /// (DisplayCodec.cpp and DaemonMediaController.cpp respectively).
 inline constexpr quint32 kDisplayCodecHeaderBytes = DisplayCodecEncoder::kHeaderBytes;

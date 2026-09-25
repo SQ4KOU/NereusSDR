@@ -62,6 +62,7 @@ private slots:
     void aShareNeverReachesZero();
     void olderDevicesHearTheReasonsTheyKnow();
     void theNewReasonsCrossTheWire();
+    void everyDeviceAsksForAtLeastOneUsefulPan();
 };
 
 void TstDisplayBudgetSplit::shares_data()
@@ -350,6 +351,54 @@ void TstDisplayBudgetSplit::theNewReasonsCrossTheWire()
              QStringLiteral("sharedConnection"));
     QCOMPARE(displayBudgetReasonWireName(DisplayBudgetReason::SharedProcessing),
              QStringLiteral("sharedProcessing"));
+}
+
+void TstDisplayBudgetSplit::everyDeviceAsksForAtLeastOneUsefulPan()
+{
+    // Fix wave 2 (Critical 1): a newcomer that has not subscribed yet is
+    // counted as asking for one useful pan, beside a device asking for the
+    // whole total.
+    const DisplayBudgetCharge pan{20'000, 2'000, 0};
+    DisplayBudgetSplitInput in{kTotal, false,
+                               {device("a", 1'000'000, 100'000), device("b", 0, 0)}};
+    in.minimumRequest = pan;
+    QList<DisplayBudgetShare> shares = DisplayBudgetSplit::split(in);
+    QCOMPARE(shares.at(0).limits.applicationBytesPerSecond, quint64{980'000});
+    QCOMPARE(shares.at(0).limits.spectrumSampleUnitsPerSecond, quint64{98'000});
+    QCOMPARE(shares.at(0).reason, DisplayBudgetReason::SharedConnection);
+    QCOMPARE(shares.at(1).limits.applicationBytesPerSecond, quint64{20'000});
+    QCOMPARE(shares.at(1).limits.spectrumSampleUnitsPerSecond, quint64{2'000});
+    QCOMPARE(shares.at(1).reason, DisplayBudgetReason::None);
+
+    // Once it asks for the whole total too: equal halves.
+    in.devices[1].request = {1'000'000, 100'000, 0};
+    shares = DisplayBudgetSplit::split(in);
+    QCOMPARE(shares.at(1).limits.applicationBytesPerSecond, quint64{500'000});
+    QCOMPARE(shares.at(0).limits.applicationBytesPerSecond, quint64{500'000});
+
+    // Alone, asking for nothing: still the whole total.
+    DisplayBudgetSplitInput alone{kTotal, false, {device("a", 0, 0)}};
+    alone.minimumRequest = pan;
+    QCOMPARE(DisplayBudgetSplit::split(alone).first().limits, kTotal);
+
+    // Rule 1 still keeps a present holder whole: the newcomer's floor comes
+    // from what the holder leaves.
+    DisplayBudgetSplitInput held{kTotal, false,
+                                 {device("h", 1'000'000, 100'000), device("b", 0, 0)},
+                                 DisplayBudgetHolderKind::Device, QByteArray("h")};
+    held.minimumRequest = pan;
+    shares = DisplayBudgetSplit::split(held);
+    QCOMPARE(shares.at(0).limits.applicationBytesPerSecond, quint64{1'000'000});
+    QCOMPARE(shares.at(0).limits.spectrumSampleUnitsPerSecond, quint64{100'000});
+    QCOMPARE(shares.at(0).reason, DisplayBudgetReason::None);
+    QCOMPARE(shares.at(1).limits.applicationBytesPerSecond, quint64{1});
+    QCOMPARE(shares.at(1).reason, DisplayBudgetReason::SharedConnection);
+    // A holder asking for less leaves the newcomer at least its floor.
+    held.devices[0].request = {900'000, 90'000, 0};
+    shares = DisplayBudgetSplit::split(held);
+    QVERIFY(shares.at(0).limits.applicationBytesPerSecond >= 900'000);
+    QVERIFY(shares.at(1).limits.applicationBytesPerSecond >= pan.applicationBytesPerSecond);
+    QVERIFY(shares.at(1).limits.spectrumSampleUnitsPerSecond >= pan.spectrumSampleUnitsPerSecond);
 }
 
 QTEST_APPLESS_MAIN(TstDisplayBudgetSplit)

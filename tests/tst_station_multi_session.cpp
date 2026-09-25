@@ -102,6 +102,7 @@
 #include "core/session/PureSignalSessionFacade.h"
 #include "core/session/media/DaemonMediaController.h"
 #include "core/session/media/DisplayBudget.h"
+#include "core/session/media/DisplayLoadGovernor.h"
 #include "core/session/media/IMediaTransport.h"
 #include "core/session/media/SpectrumEndpoint.h"
 
@@ -197,6 +198,18 @@ QJsonObject spectrumPlane()
     return {{QStringLiteral("detector"), 0},
             {QStringLiteral("averageMode"), -1},
             {QStringLiteral("averageAlpha"), 0.0}};
+}
+
+QJsonObject displayRequest(quint32 endpointId, int sliceId, double centreHz);
+
+// displayRequest at `fps` frames a second (128 pixels, no wide plane).
+QJsonObject displayRequestAt(quint32 endpointId, int sliceId, double centreHz, int fps,
+                             quint32 revision = 1)
+{
+    QJsonObject request = displayRequest(endpointId, sliceId, centreHz);
+    request.insert(QStringLiteral("fps"), fps);
+    request.insert(QStringLiteral("revision"), static_cast<qint64>(revision));
+    return request;
 }
 
 QJsonObject displayRequest(quint32 endpointId, int sliceId, double centreHz)
@@ -2175,16 +2188,27 @@ private slots:
 
     // Fix wave I5 (ruling 9.3): each device's request is its demand, the
     // charges of its displays as subscribed (a display refused for the
-    // budget included), not what it was granted. A sound-only device and
-    // a one-pan device beside a four-pan device each get what they ask
-    // for, and the rest goes max-min fair to the four-pan device.
+    // budget included), not what it was granted, and (fix wave 2, Critical
+    // 1) at least one useful pan. A sound-only device and a one-pan device
+    // beside a four-pan device each get what they ask for, and the rest
+    // goes max-min fair to the four-pan device. The link cannot tell the
+    // sound-only device from one that has not subscribed yet, so it keeps
+    // the floor of one useful pan.
     void eachDevicesRequestIsWhatItsDisplaysAskFor()
     {
-        const auto pan = spectrumDisplayCost(128, 10, false);
+        const auto pan = spectrumDisplayCost(128, 60, false);
         QVERIFY(pan.has_value());
-        const DisplayBudgetCharge c = pan->charge;
-        MediaCore m(DisplayBudgetLimits{3 * c.applicationBytesPerSecond,
-                                        3 * c.spectrumSampleUnitsPerSecond, 1});
+        const DisplayBudgetCharge p = pan->charge;
+        const DisplayBudgetCharge f = DisplayLoadGovernor::floorPanCharge();
+        QVERIFY(p.applicationBytesPerSecond > f.applicationBytesPerSecond);
+        QVERIFY(p.spectrumSampleUnitsPerSecond > f.spectrumSampleUnitsPerSecond);
+        const auto total = [&](quint64 pans) {
+            return DisplayBudgetLimits{f.applicationBytesPerSecond + pans * p.applicationBytesPerSecond,
+                                       f.spectrumSampleUnitsPerSecond
+                                           + pans * p.spectrumSampleUnitsPerSecond,
+                                       1};
+        };
+        MediaCore m(total(3));
         Device soundOnly(QStringLiteral("Shack speaker"), QStringLiteral("phone"));
         m.core.pair(soundOnly);
         m.signInBoth();
@@ -2199,14 +2223,14 @@ private slots:
         QVERIFY(m.startMedia(m.appB));
 
         // B: one pan.
-        sendMedia(m.appB, displayRequest(1, sliceB, centre));
+        sendMedia(m.appB, displayRequestAt(1, sliceB, centre, 60));
         QTRY_COMPARE(mediaOps(m.appB, QStringLiteral("allocation-result")).size(), 1);
         QVERIFY(mediaOps(m.appB, QStringLiteral("allocation-result")).last()
                     .value(QStringLiteral("accepted")).toBool());
         // A: four pans; what does not fit its share is refused, and still
         // asked for.
         for (quint32 endpoint = 1; endpoint <= 4; ++endpoint) {
-            sendMedia(m.appA, displayRequest(endpoint, sliceA, centre));
+            sendMedia(m.appA, displayRequestAt(endpoint, sliceA, centre, 60));
         }
         QTRY_COMPARE(mediaOps(m.appA, QStringLiteral("allocation-result")).size(), 4);
 
@@ -2214,22 +2238,22 @@ private slots:
             return static_cast<quint64>(
                 latestCapability(app->received(), QString::fromLatin1(name)).toInteger());
         };
-        // The sound-only device asks for nothing: the floor of 1.
-        QTRY_COMPARE(share(appC, "displayApplicationBytesPerSecond"), quint64{1});
-        QCOMPARE(share(appC, "spectrumSampleUnitsPerSecond"), quint64{1});
+        // The sound-only device: one useful pan, its floor.
+        QTRY_COMPARE(share(appC, "displayApplicationBytesPerSecond"), f.applicationBytesPerSecond);
+        QCOMPARE(share(appC, "spectrumSampleUnitsPerSecond"), f.spectrumSampleUnitsPerSecond);
         QCOMPARE(latestCapability(appC->received(), QStringLiteral("displayBudgetReason"))
                      .toString(), QStringLiteral("none"));
         // The one-pan device gets its one pan.
         QTRY_COMPARE(share(m.appB, "displayApplicationBytesPerSecond"),
-                     c.applicationBytesPerSecond);
-        QCOMPARE(share(m.appB, "spectrumSampleUnitsPerSecond"), c.spectrumSampleUnitsPerSecond);
+                     p.applicationBytesPerSecond);
+        QCOMPARE(share(m.appB, "spectrumSampleUnitsPerSecond"), p.spectrumSampleUnitsPerSecond);
         QCOMPARE(latestCapability(m.appB->received(), QStringLiteral("displayBudgetReason"))
                      .toString(), QStringLiteral("none"));
-        // The four-pan device the rest (all but the floor of 1 the sound
-        // device keeps is below its request), told the connection is shared.
+        // The four-pan device the rest, below its request, told the
+        // connection is shared.
         QTRY_COMPARE(share(m.appA, "displayApplicationBytesPerSecond"),
-                     2 * c.applicationBytesPerSecond);
-        QCOMPARE(share(m.appA, "spectrumSampleUnitsPerSecond"), 2 * c.spectrumSampleUnitsPerSecond);
+                     2 * p.applicationBytesPerSecond);
+        QCOMPARE(share(m.appA, "spectrumSampleUnitsPerSecond"), 2 * p.spectrumSampleUnitsPerSecond);
         QCOMPARE(latestCapability(m.appA->received(), QStringLiteral("displayBudgetReason"))
                      .toString(), QStringLiteral("sharedConnection"));
         int acceptedA = 0;
@@ -2240,30 +2264,90 @@ private slots:
 
         // Under the governor's cut the device short of its request hears
         // sharedProcessing; the one given its request the total's reason.
-        QVERIFY(m.core.server->setDisplayBudgetLimits(
-            DisplayBudgetLimits{2 * c.applicationBytesPerSecond,
-                                2 * c.spectrumSampleUnitsPerSecond, 2},
-            DisplayBudgetReason::CoreBusy));
+        DisplayBudgetLimits cut = total(2);
+        cut.generation = 2;
+        QVERIFY(m.core.server->setDisplayBudgetLimits(cut, DisplayBudgetReason::CoreBusy));
         QTRY_COMPARE(latestCapability(m.appA->received(), QStringLiteral("displayBudgetReason"))
                          .toString(), QStringLiteral("sharedProcessing"));
         QCOMPARE(latestCapability(m.appB->received(), QStringLiteral("displayBudgetReason"))
                      .toString(), QStringLiteral("coreBusy"));
-        QCOMPARE(share(m.appB, "displayApplicationBytesPerSecond"), c.applicationBytesPerSecond);
-        QVERIFY(m.core.server->setDisplayBudgetLimits(
-            DisplayBudgetLimits{3 * c.applicationBytesPerSecond,
-                                3 * c.spectrumSampleUnitsPerSecond, 3},
-            DisplayBudgetReason::None));
+        QCOMPARE(share(m.appB, "displayApplicationBytesPerSecond"), p.applicationBytesPerSecond);
+        DisplayBudgetLimits restored = total(3);
+        restored.generation = 3;
+        QVERIFY(m.core.server->setDisplayBudgetLimits(restored, DisplayBudgetReason::None));
         QTRY_COMPARE(latestCapability(m.appA->received(), QStringLiteral("displayBudgetReason"))
                          .toString(), QStringLiteral("sharedConnection"));
 
-        // B closes its pan: its demand goes, and A may grow into it.
+        // B closes its pan: its demand goes (to the floor), and A grows into
+        // what B no longer asks for.
         QJsonObject stop{{QStringLiteral("op"), QStringLiteral("unsubscribe")},
                          {QStringLiteral("connectionId"), QLatin1String(kMediaConnection)},
                          {QStringLiteral("endpointId"), 1},
                          {QStringLiteral("revision"), 2}};
         sendMedia(m.appB, stop);
         QTRY_COMPARE(share(m.appA, "displayApplicationBytesPerSecond"),
-                     3 * c.applicationBytesPerSecond);
+                     restored.applicationBytesPerSecond - 2 * f.applicationBytesPerSecond);
+        QCOMPARE(share(m.appB, "displayApplicationBytesPerSecond"), f.applicationBytesPerSecond);
+    }
+
+    // Fix wave 2 (Critical 1, the re-review's case): A alone subscribes
+    // displays costing the whole total. B is admitted: before it asks for
+    // anything it has one useful pan, not a share of 1. Once B asks for
+    // the whole total too, it has at least half.
+    void aDeviceThatJoinsSecondIsNotStarved()
+    {
+        const auto pan = spectrumDisplayCost(128, 60, false);
+        QVERIFY(pan.has_value());
+        const DisplayBudgetCharge p = pan->charge;
+        const DisplayBudgetLimits total{2 * p.applicationBytesPerSecond,
+                                        2 * p.spectrumSampleUnitsPerSecond, 1};
+        MediaCore m(total);
+        m.appA = m.core.signIn(m.a);
+        QVERIFY(admitted(m.appA));
+        QTRY_COMPARE(m.hub->controllerCount(), 1);
+        const int sliceA = m.sliceOf(m.epochOf(0));
+        const double centre =
+            m.core.model->streamCentreHz(m.core.model->sliceById(sliceA)->streamIndex());
+        QVERIFY(m.startMedia(m.appA));
+        for (quint32 endpoint = 1; endpoint <= 2; ++endpoint) {
+            sendMedia(m.appA, displayRequestAt(endpoint, sliceA, centre, 60));
+        }
+        QTRY_COMPARE(mediaOps(m.appA, QStringLiteral("allocation-result")).size(), 2);
+        for (const QJsonObject& r : mediaOps(m.appA, QStringLiteral("allocation-result"))) {
+            QVERIFY(r.value(QStringLiteral("accepted")).toBool());
+        }
+
+        m.appB = m.core.signIn(m.b);
+        QVERIFY(admitted(m.appB));
+        QTRY_COMPARE(m.hub->controllerCount(), 2);
+        const auto share = [](const LoopbackTransport* app, const char* name) {
+            return static_cast<quint64>(
+                latestCapability(app->received(), QString::fromLatin1(name)).toInteger());
+        };
+        // The newcomer, before it asks: one useful pan.
+        const DisplayBudgetCharge f = DisplayLoadGovernor::floorPanCharge();
+        QTRY_VERIFY(share(m.appB, "displayApplicationBytesPerSecond")
+                    >= f.applicationBytesPerSecond);
+        QVERIFY(share(m.appB, "spectrumSampleUnitsPerSecond") >= f.spectrumSampleUnitsPerSecond);
+        // A, below what it asks for beside B: the connection is shared.
+        QTRY_COMPARE(latestCapability(m.appA->received(), QStringLiteral("displayBudgetReason"))
+                         .toString(), QStringLiteral("sharedConnection"));
+
+        // B asks for the whole total: at least half of it.
+        const int sliceB = m.sliceOf(m.epochOf(1));
+        const double centreB =
+            m.core.model->streamCentreHz(m.core.model->sliceById(sliceB)->streamIndex());
+        QVERIFY(m.startMedia(m.appB));
+        for (quint32 endpoint = 1; endpoint <= 2; ++endpoint) {
+            sendMedia(m.appB, displayRequestAt(endpoint, sliceB, centreB, 60));
+        }
+        QTRY_COMPARE(mediaOps(m.appB, QStringLiteral("allocation-result")).size(), 2);
+        QTRY_VERIFY(share(m.appB, "displayApplicationBytesPerSecond")
+                    >= total.applicationBytesPerSecond / 2);
+        QVERIFY(share(m.appB, "spectrumSampleUnitsPerSecond")
+                >= total.spectrumSampleUnitsPerSecond / 2);
+        QCOMPARE(share(m.appA, "displayApplicationBytesPerSecond"),
+                 total.applicationBytesPerSecond / 2);
     }
 
     // A's media control reaches A's controller only; B leaving ends only

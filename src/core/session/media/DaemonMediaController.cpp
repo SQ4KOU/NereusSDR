@@ -1624,7 +1624,7 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
     };
     if (!displayCost || !spectrumAdmissionFits(endpointId, displayCost->charge)) {
         return rejectAllocation(control, endpointId, revision,
-                                QStringLiteral("The Core's display limit has no room left."));
+                                QString::fromLatin1(kDisplayBudgetRefusalReason));
     }
     // The endpoint never emits more samples than its admitted charge.
     request.pixels = grant.grantedPixels;

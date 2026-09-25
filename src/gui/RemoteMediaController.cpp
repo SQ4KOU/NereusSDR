@@ -606,6 +606,17 @@ struct RemoteMediaController::Private {
     QString allocationCacheIdentity;
     std::optional<RemoteDisplayAllocation> cachedAllocation;
     QString cachedAllocationError;
+    /// Fix wave 2 (Critical 1, the several-devices design, ruling 9.3):
+    /// the Core splits the display budget by what each device asks for, so
+    /// the planner asks for the displays the operator wants, not only what
+    /// the share allows. While askingWanted, every pan is subscribed at its
+    /// wanted quality; a refusal for the budget (answered by the smaller
+    /// share the Core publishes with it) ends the ask, and the planner plans
+    /// inside the share again. It asks again whenever what the operator
+    /// wants grows (a new pan, a wider or faster one): wantedCharge is the
+    /// charge of the displays wanted at the last plan.
+    bool askingWanted = false;
+    DisplayBudgetCharge wantedCharge;
 };
 
 RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* model,
@@ -1532,6 +1543,8 @@ void RemoteMediaController::stop()
     d->allocationCacheIdentity.clear();
     d->cachedAllocation.reset();
     d->cachedAllocationError.clear();
+    d->askingWanted = false;
+    d->wantedCharge = {};
     if (d->peer) {
         MediaPeer* old = d->peer;
         d->peer = nullptr;
@@ -2276,8 +2289,36 @@ void RemoteMediaController::refreshBudgetSubscriptions()
         || (d->desiredPs3 && !d->ps3Refused);
     const bool retainedPs3ExceedsCap = d->accountedPs3
         && !displayChargeFits(*limits, ps3DisplayCharge());
+    // Fix wave 2 (Critical 1, ruling 9.3): ask for what the operator wants
+    // whenever that grows. The Core counts what a device asks for when it
+    // splits the budget, so a planner that only ever asked for what its
+    // share allows would never show its demand, and a device that joined
+    // second would stay at the share it was first given.
+    {
+        QList<DisplayBudgetCharge> wantedCharges;
+        for (const RemoteDisplayIntent& intent : intents) {
+            if (const auto cost = spectrumDisplayCost(intent.pixels, intent.fps,
+                                                      intent.includeWidePlane)) {
+                wantedCharges.append(cost->charge);
+            }
+        }
+        const DisplayBudgetCharge wanted =
+            sumDisplayCharges(wantedCharges).value_or(DisplayBudgetCharge{});
+        if (!nonIncreasing(wanted, d->wantedCharge)) {
+            d->askingWanted = true;
+        }
+        d->wantedCharge = wanted;
+    }
+    const bool askWanted = d->askingWanted && !retainedPs3ExceedsCap;
+    // While asking, plan without the share: every pan at its wanted quality.
+    // The Core admits or refuses each against the share it gives this
+    // device with the new request.
+    const DisplayBudgetLimits planLimits = askWanted
+        ? DisplayBudgetLimits{kDisplayBudgetJsonSafePositiveLimit,
+                              kDisplayBudgetJsonSafePositiveLimit, limits->generation}
+        : *limits;
     const QString cacheIdentity = allocationIdentity(
-        *limits, intents, targetPs3, retainedPs3ExceedsCap);
+        planLimits, intents, targetPs3, retainedPs3ExceedsCap);
     if (d->allocationCacheIdentity != cacheIdentity) {
         d->allocationCacheIdentity = cacheIdentity;
         d->cachedAllocation.reset();
@@ -2294,7 +2335,7 @@ void RemoteMediaController::refreshBudgetSubscriptions()
             d->cachedAllocation = paused;
         } else {
             d->cachedAllocation = allocateRemoteDisplay(
-                *limits, intents, targetPs3, &d->cachedAllocationError);
+                planLimits, intents, targetPs3, &d->cachedAllocationError);
             if (!d->cachedAllocation) {
                 qCInfo(lcRemoteMedia).noquote() << "Remote display allocation failed:"
                                                 << d->cachedAllocationError;
@@ -2496,6 +2537,16 @@ void RemoteMediaController::refreshBudgetSubscriptions()
 
     for (quint32 endpointId : eraseUnaccepted) { d->bindings.erase(endpointId); }
 
+    if (askWanted && reductions.isEmpty() && increases.isEmpty()
+        && std::none_of(d->bindings.cbegin(), d->bindings.cend(),
+                        [](const auto& entry) { return entry.second.pending.has_value(); })) {
+        // Every pan was answered at what the operator wants (or refused for
+        // a reason other than the budget, which asking again does not
+        // change): the ask is over, and the planner plans inside the share.
+        d->askingWanted = false;
+        d->budgetReplanRequested = true;
+    }
+
     const QPointer<MediaPeer> peer = d->peer;
     const quint32 epoch = d->epoch;
     const QString connectionId = d->connectionId;
@@ -2573,6 +2624,12 @@ void RemoteMediaController::refreshBudgetSubscriptions()
     if (d->pendingPs3) { return; }
 
     for (const Candidate& candidate : increases) {
+        if (askWanted) {
+            // Asking for what the operator wants: the Core decides.
+            sendCandidate(candidate);
+            if (!current()) { return; }
+            continue;
+        }
         QList<DisplayBudgetCharge> potential;
         if (d->accountedPs3) { potential.append(ps3DisplayCharge()); }
         for (const auto& [id, binding] : d->bindings) {
@@ -3177,6 +3234,12 @@ void RemoteMediaController::receiveAllocationResult(const QJsonObject& payload)
             binding.refusedIdentity = pending.identity;
             binding.refusalReason = reason.isEmpty()
                 ? QStringLiteral("Core refused the display allocation.") : reason;
+            if (reason == QLatin1String(kDisplayBudgetRefusalReason)) {
+                // Fix wave 2 (Critical 1): the ask for what the operator
+                // wants is answered. The share the Core published with it
+                // is what the planner now plans inside.
+                d->askingWanted = false;
+            }
             // The raw reason is kept for the log; the pan shows it translated.
             qCInfo(lcRemoteMedia).noquote() << "Remote display allocation refused:"
                                             << endpointId << binding.refusalReason;
