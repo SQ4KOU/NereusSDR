@@ -37,6 +37,8 @@
 //  25. Task 7 fix wave I2: TX inhibit (TxInhibitMonitor) and the PA trip
 //      (RadioModel::paTripped) refuse TUN, and either one ends a TUN that
 //      is on.
+//  26. Task 7 fix wave I3: a disconnect unkeys a MOX-button key, and after
+//      a reconnect the mic keys and releases normally.
 
 #include <QtTest/QtTest>
 #include <QObject>
@@ -1386,6 +1388,50 @@ private slots:
         QVERIFY2(!model.isTune(), "TUN stayed on under the block");
         QVERIFY(!model.tuneOffPendingForTest());
         QVERIFY(!model.moxController()->isManualMox());
+    }
+
+    // ── 26. Task 7 fix wave, I3: a disconnect unkeys a MOX-button key ───────
+    // From Thetis chkPower_CheckedChanged, power going off,
+    // console.cs:27487 [v2.10.3.15]: chkMOX.Checked = false. Nothing holds
+    // a key once the radio is gone.
+    void disconnectUnkeysMoxButtonKey()
+    {
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        setupModel(model, conn);
+        std::unique_ptr<MockConnection> connOwner(conn);
+        std::unique_ptr<MockConnection> conn2;
+        const auto detach = qScopeGuard([&model]() {
+            model.injectConnectionForTest(nullptr);
+        });
+        QVERIFY(model.activeSlice() != nullptr);
+        model.activeSlice()->setDspMode(DSPMode::USB);
+        MoxController* mox = model.moxController();
+
+        model.setMoxFromButton(true);
+        pump();
+        QVERIFY(mox->isMox());
+        QVERIFY(mox->isManualKey());
+
+        model.disconnectFromRadio();
+        QVERIFY(!model.isConnected());
+        QVERIFY2(!mox->isMox(), "a MOX-button key survived the disconnect");
+        QVERIFY(!mox->isManualKey());
+        pump();
+        QVERIFY(!mox->isMox());
+
+        // Reconnect: nothing is keyed, and the mic keys and releases.
+        conn2 = std::make_unique<MockConnection>();
+        model.injectConnectionForTest(conn2.get());
+        pump();
+        QVERIFY(!mox->isMox());
+        mox->onMicPttFromRadio(true);
+        pump();
+        QVERIFY2(mox->isMox(), "the mic could not key after the reconnect");
+        QCOMPARE(mox->pttMode(), PttMode::Mic);
+        mox->onMicPttFromRadio(false);
+        pump();
+        QVERIFY(!mox->isMox());
     }
 };
 

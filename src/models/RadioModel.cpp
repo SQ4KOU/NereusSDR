@@ -15661,6 +15661,15 @@ void RadioModel::teardownConnection()
     if (m_moxController) {
         m_moxController->clearPttSources();
     }
+    // Task 7 fix wave, I3: chkMOX.Checked = false, quoted above, done. It
+    // comes first, as in Thetis, and unkeys whatever holds MOX: a MOX-button
+    // key would otherwise survive the disconnect with nothing holding it
+    // (its manual key is cleared further down with the session's TUN
+    // state). The TX-to-RX walk's hardware flip runs now, while the
+    // connection is still live, so the radio gets the MOX bit off.
+    if (m_moxController) {
+        m_moxController->setMox(false);
+    }
     if (m_isTuning) {
         setTune(false);
         completeTuneOff();
