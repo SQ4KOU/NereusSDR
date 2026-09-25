@@ -109,6 +109,13 @@
 //                                    txProfile.delete and rade.resetVocoder
 //                                    (transmitSettingsVersion 3).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 7): ps3.single,
+//                                    ps3.automatic, ps3.applyCurrent and
+//                                    ps3.restoreCorrection taken off the air
+//                                    from a peer offered
+//                                    transmitSettingsVersion 7; ps3.twoTone
+//                                    stays with remote transmit.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -522,6 +529,7 @@ void SessionCommandDispatcher::setSessionOwner(const QString& owner)
         }
     }
     m_sessionOwner = owner;
+    m_pureSignalArmingOffered = false;
 }
 
 void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
@@ -710,10 +718,25 @@ void SessionCommandDispatcher::handlePureSignalAction(const SessionMessage& invo
     // The session currently advertises txPermitted=false. Keep the same hard
     // gate here even when a client bypasses its disabled controls. R4 owns
     // replacing this gate with negotiated, station-authorized transmit.
-    if (!stop && *action != Ps3Action::SaveCorrection) {
+    // R-R3-49 (parity Task 7): arming keys nothing (Single Cal, Automatic,
+    // Apply current correction, Restore a saved correction), so a peer
+    // offered transmitSettingsVersion 7 may ask for it while the radio is
+    // off the air. The two-tone test keys the radio and stays here.
+    const bool arming = *action == Ps3Action::Single || *action == Ps3Action::StartAutomatic
+        || *action == Ps3Action::ApplyCurrentCorrection
+        || *action == Ps3Action::RestoreCorrection;
+    if (!stop && *action != Ps3Action::SaveCorrection
+        && !(arming && m_pureSignalArmingOffered)) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
                    QStringLiteral("PureSignal cannot be run from a remote window yet."), {});
         return;
+    }
+    if (arming) {
+        QString onAir;
+        if (m_radioModel->stationOnAirRefusal(&onAir)) {
+            emitResult(invoke.commandVerb, invoke.commandId, false, onAir, {});
+            return;
+        }
     }
     for (const PendingPureSignalCommand& command : std::as_const(m_pureSignalCommands)) {
         if (command.commandId == invoke.commandId) {

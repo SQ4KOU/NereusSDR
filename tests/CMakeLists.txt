@@ -7839,3 +7839,13 @@ nereus_add_test(tst_remote_pa_pages
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
 target_compile_definitions(tst_remote_pa_pages PRIVATE NEREUS_BUILD_TESTS)
+# R-R3-49 (remote-window parity Task 7): PureSignal arming from a remote
+# window: a Core at transmitSettingsVersion 7 takes Single Cal, Automatic,
+# Apply current correction, Restore and the PureSignal settings off the air
+# and refuses them on the air; the two-tone test stays with remote transmit;
+# PsForm, the PureSignal applet, PS-A and the container follow. Loopback
+# only, a test TxChannel, no RF, no audio device; nothing keys.
+nereus_add_test(tst_remote_puresignal_arming
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_remote_puresignal_arming PRIVATE NEREUS_BUILD_TESTS)

@@ -194,9 +194,9 @@ void TstTransmitSettingsGate::coreOffersTransmitSettingsVersion()
     // since parity Task 3 (the microphone input and the TX profiles), 4
     // since parity Task 4 (TX EQ, CFC, phase rotator, CESSB, leveler, ALC),
     // 5 since parity Task 5 (Power, DEXP/VOX, Two-Tone IMD), 6 since
-    // parity Task 6 (Setup > PA).
-    QCOMPARE(s.server->buildCapabilities().transmitSettingsVersion, 6);
-    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 6);
+    // parity Task 6 (Setup > PA), 7 since parity Task 7 (PureSignal arming).
+    QCOMPARE(s.server->buildCapabilities().transmitSettingsVersion, 7);
+    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 7);
     QVERIFY(s.client->transmitSettingsAvailable());
     QVERIFY(s.client->transmitSettingsAvailable(1));
     QVERIFY(s.client->transmitSettingsAvailable(2));
@@ -204,7 +204,8 @@ void TstTransmitSettingsGate::coreOffersTransmitSettingsVersion()
     QVERIFY(s.client->transmitSettingsAvailable(4));
     QVERIFY(s.client->transmitSettingsAvailable(5));
     QVERIFY(s.client->transmitSettingsAvailable(6));
-    QVERIFY(!s.client->transmitSettingsAvailable(7));
+    QVERIFY(s.client->transmitSettingsAvailable(7));
+    QVERIFY(!s.client->transmitSettingsAvailable(8));
     QVERIFY(StationServer::isTransmitSettingKeyAcceptedOffAir(
         QStringLiteral("DspOptionsBufferSizePhoneTx")));
     QVERIFY(StationServer::isTransmitSettingKeyAcceptedOffAir(

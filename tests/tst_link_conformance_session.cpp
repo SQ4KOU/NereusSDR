@@ -74,6 +74,11 @@
 //                                    station's TX profile bank is its
 //                                    radio's, as a connect makes it.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 7): a receive-only
+//                                    Core permits PureSignal, so the
+//                                    connectable station waits for its
+//                                    readiness to come on.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -236,13 +241,15 @@ QString buildStation(const QJsonObject& setup, Station* station, quint16 major)
     }
     if (station->harness) {
         // A StationServer makes its radio receive-only
-        // (setReceiveOnlyStationPolicy), which turns PureSignal's readiness
-        // (canActuate) off; the pureSignal object follows on that call
-        // (RadioModel::receiveOnlyStationPolicyChanged), so it is settled
-        // here already.
+        // (setReceiveOnlyStationPolicy). Since parity Task 7 (R-R3-49) a
+        // receive-only Core permits PureSignal (a window arms it off the
+        // air), so PureSignal's readiness (canActuate) is on once the radio
+        // is connected; the pureSignal object follows on that call
+        // (RadioModel::receiveOnlyStationPolicyChanged).
         PureSignalSessionFacade* const facade = station->model->pureSignalFacade();
-        if (facade == nullptr || facade->canActuate()) {
-            return QStringLiteral("PureSignal's readiness did not follow the receive-only "
+        if (facade == nullptr
+            || !QTest::qWaitFor([facade]() { return facade->canActuate(); }, 5000)) {
+            return QStringLiteral("PureSignal's readiness did not settle on the receive-only "
                                   "station");
         }
         // Each slice's signal readings: the meter pump writes the
@@ -1042,7 +1049,7 @@ void TstLinkConformanceSession::theConformanceCheckCatchesWhatAnAppCannotSend()
     QVERIFY2(found.contains(QStringLiteral("$int:n")), qPrintable(found));
     // A verb with arguments it does not take, and one not advertised
     // (PureSignal's gate is psAlgorithmVersion equal to 3; 4 fails it).
-    found = planted(ps3, 36, [&setIn](QJsonObject& step) {
+    found = planted(ps3, 43, [&setIn](QJsonObject& step) {
         setIn(step, QStringLiteral("args"),
               QJsonArray{QJsonObject{{QStringLiteral("ordinal"), 0},
                                      {QStringLiteral("name"), QStringLiteral("enabled")},
@@ -1065,7 +1072,7 @@ void TstLinkConformanceSession::theConformanceCheckCatchesWhatAnAppCannotSend()
     });
     QVERIFY2(found.contains(QStringLiteral("ps3.off was not advertised")), qPrintable(found));
     // A placeholder among a behaviour step's arguments.
-    found = planted(ps3, 43, [&setIn](QJsonObject& step) {
+    found = planted(ps3, 51, [&setIn](QJsonObject& step) {
         setIn(step, QStringLiteral("args"),
               QJsonArray{QJsonObject{{QStringLiteral("ordinal"), 0},
                                      {QStringLiteral("name"), QStringLiteral("label")},
@@ -1083,11 +1090,11 @@ void TstLinkConformanceSession::theConformanceCheckCatchesWhatAnAppCannotSend()
     });
     QVERIFY2(found.contains(QStringLiteral(":1:4294967295")), qPrintable(found));
     // A scripted id below 1000, and a scripted message naming a value.
-    found = planted(ps3, 40, [&setIn](QJsonObject& step) {
+    found = planted(ps3, 48, [&setIn](QJsonObject& step) {
         setIn(step, QStringLiteral("id"), 167);
     });
     QVERIFY2(found.contains(QStringLiteral("from 1000 up")), qPrintable(found));
-    found = planted(ps3, 40, [&setIn](QJsonObject& step) {
+    found = planted(ps3, 48, [&setIn](QJsonObject& step) {
         setIn(step, QStringLiteral("id"), QStringLiteral("$int:scripted"));
     });
     QVERIFY2(found.contains(QStringLiteral("a scripted message holds $int:scripted")),

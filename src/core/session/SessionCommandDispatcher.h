@@ -184,6 +184,12 @@ public:
     /// fired by the time dispatch() itself returns.
     void dispatch(const NereusSDR::SessionMessage& invoke);
     void setSessionOwner(const QString& owner);
+    /// R-R3-49 (parity Task 7): the session's peer was offered
+    /// transmitSettingsVersion 7, so ps3.single, ps3.automatic,
+    /// ps3.applyCurrent and ps3.restoreCorrection are taken from it while
+    /// the radio is off the air. False for every other peer, and again
+    /// whenever the session owner changes.
+    void setPureSignalArmingOffered(bool offered) { m_pureSignalArmingOffered = offered; }
 
     /// R-IOS-01: every verb dispatch() routes, declared beside the routing
     /// rather than derived from it. A family routed by prefix ("ps3.",
@@ -201,6 +207,7 @@ signals:
 
 private:
     Ps3DisplayAdmissionHandler m_ps3DisplayAdmission;
+    bool m_pureSignalArmingOffered = false;
     void handleAddSlice(const NereusSDR::SessionMessage& invoke);
     void handleRemoveSlice(const NereusSDR::SessionMessage& invoke);
     void handleRequestSliceSampleRate(const NereusSDR::SessionMessage& invoke);

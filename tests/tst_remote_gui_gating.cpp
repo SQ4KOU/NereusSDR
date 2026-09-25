@@ -4574,10 +4574,16 @@ private slots:
             // The transmit buttons say the transmit reason and change nothing.
             const QString reason =
                 QStringLiteral("Remote transmit controls are not available from this Core yet.");
-            for (Id id : {Id::Tun, Id::Mox, Id::TwoTon, Id::PsA}) {
+            for (Id id : {Id::Tun, Id::Mox, Id::TwoTon}) {
                 QVERIFY(!box.buttons->isButtonAvailable(id));
                 QCOMPARE(box.buttons->buttonUnavailableReason(box.buttons->indexOf(id)), reason);
             }
+            // R-R3-49 (parity Task 7): PS-A arms PureSignal and keys
+            // nothing, so the Core takes it off the air; this Core has no
+            // PureSignal running, and the button says so.
+            QVERIFY(!box.buttons->isButtonAvailable(Id::PsA));
+            QCOMPARE(box.buttons->buttonUnavailableReason(box.buttons->indexOf(Id::PsA)),
+                     QStringLiteral("PureSignal needs a connected radio that supports it."));
             emit box.container->otherButtonClicked(int(Id::Mox));
             QVERIFY(toastSaying(window, reason));
             QVERIFY(!station.moxController()->isMox());
@@ -4598,6 +4604,9 @@ private slots:
             const QString onAir = QStringLiteral("The radio is on the air. Try again when it stops.");
             QTRY_VERIFY(!box.buttons->isButtonAvailable(Id::Mon));
             QCOMPARE(box.buttons->buttonUnavailableReason(box.buttons->indexOf(Id::Mon)), onAir);
+            // R-R3-49 (parity Task 7): and PS-A waits too.
+            QTRY_COMPARE(box.buttons->buttonUnavailableReason(box.buttons->indexOf(Id::PsA)),
+                         onAir);
             emit box.container->otherButtonClicked(int(Id::Mon));
             QCOMPARE(station.transmitModel().monEnabled(), mon);
             station.moxController()->setMox(false);

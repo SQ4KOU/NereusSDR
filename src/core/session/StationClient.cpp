@@ -141,6 +141,11 @@
 //                profiles and PA table reloaded in the window as their keys
 //                arrive. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 7): PureSignal arming offered to the
+//                window by a Core at transmitSettingsVersion 7 (the
+//                facade's canArm, which also follows the Core's on-air
+//                state). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -1444,9 +1449,11 @@ void StationClient::onTransportText(const QByteArray& wire)
         // R-R3-16/17: the connect sequence finished inside its deadline.
         m_handshakeDeadlineTimer->stop();
         if (m_radioModel) {
+            // R-R3-49 (parity Task 7): and arming off the air from a Core
+            // at transmitSettingsVersion 7.
             m_radioModel->pureSignalFacade()->setRemoteCapabilities(
                 m_agreedMinor >= kDspControlSessionProtocolMinor && m_capabilities.psAlgorithmVersion == 3,
-                m_capabilities.txPermitted);
+                m_capabilities.txPermitted, pureSignalArmingOffered());
             m_radioModel->dspAssets()->setRemoteNr3ModelsSupported(remoteNr3ModelsAvailable());
         }
         if (m_radioModel) {
@@ -1667,7 +1674,7 @@ void StationClient::handleCapabilities(const SessionMessage& message)
     if (m_handshakeComplete) {
         m_radioModel->pureSignalFacade()->setRemoteCapabilities(
             m_agreedMinor >= kDspControlSessionProtocolMinor && m_capabilities.psAlgorithmVersion == 3,
-            m_capabilities.txPermitted);
+            m_capabilities.txPermitted, pureSignalArmingOffered());
         if (!self || m_sessionEpoch != epoch || !m_sessionActive || !m_radioModel) { return; }
         m_radioModel->dspAssets()->setRemoteNr3ModelsSupported(remoteNr3ModelsAvailable());
         if (!self || m_sessionEpoch != epoch || !m_sessionActive || !m_radioModel) { return; }
@@ -3656,6 +3663,15 @@ bool StationClient::transmitSettingsAvailable(int minVersion) const
     // settings while its radio is off the air.
     return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
         && m_capabilities.transmitSettingsVersion >= std::max(minVersion, 1);
+}
+
+bool StationClient::pureSignalArmingOffered() const
+{
+    // R-R3-49 (parity Task 7): the Core takes this window's PureSignal
+    // arming while its radio is off the air. Read at the handshake's end
+    // and when capabilities change, so not through stationLinkReady().
+    return m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.transmitSettingsVersion >= 7;
 }
 
 bool StationClient::tgxlOperateAppliesWhole() const

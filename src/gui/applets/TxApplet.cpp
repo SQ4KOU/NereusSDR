@@ -89,6 +89,10 @@
 //                 An RF Power move writes the band slot and the tune drive
 //                 source only where the Core takes them (version 5).
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 : R-R3-49 (parity Task 7): PS-A follows
+//                 setPureSignalArmingPermitted and the facade's canArm, no
+//                 longer the keying gate. J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -2290,12 +2294,21 @@ void TxApplet::setTransmitPermitted(bool permitted, const QString& unavailableRe
     // follow setTransmitSettingsPermitted; parity Task 2: Tune Power, the
     // VOX level and delay, MON, LEV, EQ and CFC follow
     // setTransmitChainSettingsPermitted; parity Task 3: the profile combo
-    // follows setTxProfilePermitted. This gate keeps the rest.
+    // follows setTxProfilePermitted; parity Task 7: PS-A follows
+    // setPureSignalArmingPermitted. This gate keeps the rest.
     apply(m_tuneBtn);
     apply(m_moxBtn);
     apply(m_voxBtn);
     apply(m_twoToneBtn);
-    apply(m_psaBtn);
+}
+
+void TxApplet::setPureSignalArmingPermitted(bool permitted, const QString& unavailableReason)
+{
+    m_psArmingPermitted = permitted;
+    const QString reason = unavailableReason.isEmpty()
+        ? tr("Remote transmit controls are not available from this Core yet.")
+        : unavailableReason;
+    gateTransmitControl(m_psaBtn, permitted, reason);
     syncPsaFromFacade();
 }
 
@@ -2412,8 +2425,9 @@ void TxApplet::syncPsaFromFacade()
     const QSignalBlocker blocker(m_psaBtn);
     m_updatingFromModel = true;
     m_psaBtn->setChecked(automaticIntent);
-    m_psaBtn->setEnabled(m_transmitPermitted && m_psFacade
-                         && m_psFacade->available() && m_psFacade->canActuate());
+    // R-R3-49 (parity Task 7): arming keys nothing, so canArm.
+    m_psaBtn->setEnabled(m_psArmingPermitted && m_psFacade
+                         && m_psFacade->available() && m_psFacade->canArm());
     m_updatingFromModel = false;
 }
 

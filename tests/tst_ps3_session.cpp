@@ -10,6 +10,7 @@
 #include <algorithm>
 #include "core/AppSettings.h"
 #include "core/PureSignal.h"
+#include "core/TwoToneController.h"
 #include "core/TxChannel.h"
 #include "core/WdspEngine.h"
 #include "core/dsp/DspAssetService.h"
@@ -234,7 +235,7 @@ private slots:
 #endif
     }
 
-    void stationRejectsActuationEvenIfClientBypassesDisabledControls()
+    void stationRejectsTwoToneEvenIfClientBypassesDisabledControls()
     {
         QTemporaryDir security;
         QVERIFY(security.isValid());
@@ -253,22 +254,17 @@ private slots:
         QTRY_VERIFY(client.isHandshakeComplete());
         QVERIFY(!remote.pureSignalFacade()->canActuate());
         QSignalSpy replies(&client, &StationClient::commandResponse);
-        for (const QByteArray& verb : {QByteArray("ps3.single"), QByteArray("ps3.automatic"),
-                                      QByteArray("ps3.applyCurrent"), QByteArray("ps3.restoreCorrection")}) {
-            const int previous = replies.size();
-            // Each with the arguments it takes (restoreCorrection names a
-            // correction): the refusal is the transmit gate's, not an
-            // unreadable request's.
-            const QList<MirrorUpdate> arguments = verb == QByteArray("ps3.restoreCorrection")
-                ? QList<MirrorUpdate>{{0, "assetId", MirrorWireKind::Utf8,
-                                       QStringLiteral("correction")}}
-                : QList<MirrorUpdate>{};
-            QVERIFY(client.invokeCommand(verb, arguments) != 0);
-            QTRY_COMPARE(replies.size(), previous + 1);
-            const SessionMessage reply = qvariant_cast<SessionMessage>(replies.last()[0]);
-            QVERIFY(!reply.accepted);
-            QVERIFY2(reply.reason.contains("remote window"), qPrintable(reply.reason));
-        }
+        // R-R3-49 (parity Task 7): arming (Single Cal, Automatic, Apply
+        // current correction, Restore) is taken off the air from a window
+        // offered transmitSettingsVersion 7 (tst_remote_puresignal_arming).
+        // The two-tone test keys the radio: it stays refused.
+        QVERIFY(client.invokeCommand("ps3.twoTone",
+            {{0, "enabled", MirrorWireKind::Bool, true}}) != 0);
+        QTRY_COMPARE(replies.size(), 1);
+        const SessionMessage reply = qvariant_cast<SessionMessage>(replies.last()[0]);
+        QVERIFY(!reply.accepted);
+        QVERIFY2(reply.reason.contains("remote window"), qPrintable(reply.reason));
+        QVERIFY(!station.twoToneController()->isActive());
         QCOMPARE(started.size(), 0);
         QVERIFY(!coordinator->isPsEnabled());
         remote.pureSignalSettings()->setMoxDelaySeconds(0.4);
@@ -290,7 +286,7 @@ private slots:
         QCOMPARE(started.size(), 0);
     }
 
-    void remoteCorrectionManagerImportsAndExportsWhileRestoreIsR4Gated()
+    void remoteCorrectionManagerRestoresOnlyOnACoreThatOffersArming()
     {
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
@@ -347,9 +343,21 @@ private slots:
         QFile result(exported);
         QVERIFY(result.open(QIODevice::ReadOnly));
         QCOMPARE(result.readAll(), expected);
+        // R-R3-49 (parity Task 7): a Core at transmitSettingsVersion 7
+        // takes a restore from this window off the air.
         QSignalSpy restoreRequested(manager, &DspAssetDialog::restoreCorrectionRequested);
+        QTRY_VERIFY(restore->isEnabled());
         restore->click();
-        QCOMPARE(restoreRequested.size(), 0);
+        QCOMPARE(restoreRequested.size(), 1);
+        QCOMPARE(restoreRequested.last().at(0).toString(), id);
+        // A Core below version 7 keeps restore with remote transmit.
+        StationCapabilities capabilities = server.buildCapabilities();
+        capabilities.transmitSettingsVersion = 6;
+        coreEnd->sendText(SessionMessages::encode(
+            SessionMessages::capabilities(capabilities.toUpdates())));
+        QTRY_VERIFY(!restore->isEnabled());
+        restore->click();
+        QCOMPARE(restoreRequested.size(), 1);
         QCOMPARE(remote.pureSignalFacade()->requestAction(
             Ps3Action::RestoreCorrection, {{"assetId", id}}), 0u);
     }

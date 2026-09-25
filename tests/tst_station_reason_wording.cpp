@@ -670,7 +670,11 @@ const QList<ReasonSource>& reasonSources()
           // A function of this file, its literal scanned here.
           QStringLiteral("notRepresentableReason()"),
           // AlexAntennaFacade's filter policy refusal, scanned below.
-          QStringLiteral("alex->setBpfModeForChain(chain, mode)")}},
+          QStringLiteral("alex->setBpfModeForChain(chain, mode)"),
+          // R-R3-49 (parity Task 7): RadioModel::stationOnAirRefusal's
+          // reason for a PureSignal arming verb (RadioModel::onAirReason,
+          // scanned with StationServer).
+          QStringLiteral("onAir")}},
         // property.result for a write the mirror refuses.
         {"src/core/session/StateMirror.cpp", {}, {}, 5, {},
          {// A function of this file, and a model's applyMirroredValue
@@ -683,7 +687,10 @@ const QList<ReasonSource>& reasonSources()
          {// finishOperation's parameter and the store's import error, both
           // from this file; lastActionError as a remote window receives it.
           QStringLiteral("reason"), QStringLiteral("imported.error"),
-          QStringLiteral("value.toString()")}},
+          QStringLiteral("value.toString()"),
+          // R-R3-49 (parity Task 7): armingRefusal(), this file's own
+          // literal or RadioModel::onAirReason (scanned with StationServer).
+          QStringLiteral("isArmingAction(action) ? armingRefusal() : QString()")}},
         // Model and correction files; the store's and validator's own
         // messages are detail for the log unless isOperatorMessage says
         // otherwise (DspAssetService::rejectDetail).

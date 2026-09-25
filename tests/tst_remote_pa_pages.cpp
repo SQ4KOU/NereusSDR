@@ -276,7 +276,8 @@ void TstRemotePaPages::paKeysAreOnTheOffAirListAtVersion6()
 
     Session s(m_securityDir.path(), this, /*coreUsesProcessSettings=*/false);
     QVERIFY(s.connect());
-    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 6);
+    // 7 since parity Task 7 (PureSignal arming); 6 is within it.
+    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 7);
     QVERIFY(s.client->transmitSettingsAvailable(6));
 }
 

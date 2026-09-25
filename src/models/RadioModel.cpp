@@ -228,6 +228,12 @@
 //                and a remote window reloads its copies of both
 //                (scheduleRemotePaReload). J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 7): pureSignalOperationPermitted,
+//                PureSignal's operational permission: a receive-only Core
+//                lets a window arm PureSignal off the air (the session gate
+//                refuses it on the air); the correction still runs only in
+//                a transmission. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -4984,6 +4990,26 @@ bool RadioModel::isTransmitting() const
     // R-R3-49: a remote window holds the Core's value as it last heard it.
     if (m_role == Role::Remote) { return m_remoteTransmitting; }
     return m_transmitting;
+}
+
+bool RadioModel::pureSignalOperationPermitted() const
+{
+    // R-R3-49 (parity Task 7, transmitSettingsVersion 7). Arming PureSignal
+    // keys nothing: Single Cal, Automatic, Apply current correction and
+    // Restore set the calibration engine's flags, and the engine corrects
+    // only while the radio transmits. Thetis arms the same way, by flags,
+    // from receive: AutoCalEnabled sets _autoON and PSState
+    //   From Thetis PSForm.cs:272-289 [v2.10.3.15]
+    // and the command state machine only then turns calibration on
+    //   From Thetis PSForm.cs:644-648 [v2.10.3.15]
+    //     puresignal.SetPSControl(_txachannel, 1, 0, 1, 0);
+    //     if (!PSEnabled) PSEnabled = true;
+    // (mi0bot-Thetis arms the HL2 the same way). So a receive-only Core
+    // permits it: its session gate takes a window's arming only while the
+    // radio is off the air, and its receive-only MOX check still keeps the
+    // radio from transmitting, so the correction waits for a transmission.
+    // A remote window never runs PureSignal itself; it asks its Core.
+    return m_role != Role::Remote;
 }
 
 bool RadioModel::isCoreOnAir() const
@@ -11113,8 +11139,9 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
             }
 
             m_pureSignal->setSettings(m_pureSignalSettings);
+            // R-R3-49 (parity Task 7): see pureSignalOperationPermitted.
             m_pureSignal->setOperationalPermissionPredicate([this]() {
-                return !receiveOnlyStationPolicy();
+                return pureSignalOperationPermitted();
             });
             m_pureSignal->setOperationalReadinessPredicate([this]() {
                 return isConnected() && m_txChannel && boardCapabilities().hasPureSignal;
@@ -20233,6 +20260,12 @@ PureSignal* RadioModel::installPureSignalForTest(TxChannel* tx)
         /*engine=*/nullptr, tx, /*fb=*/nullptr, /*mox=*/nullptr,
         /*stepAtt=*/nullptr, /*twoTone=*/nullptr, /*parent=*/nullptr);
     m_pureSignal->setSettings(m_pureSignalSettings);
+    // R-R3-49 (parity Task 7): the same operational permission as a real
+    // connection (the readiness predicate needs a live radio and is left
+    // out, as before).
+    m_pureSignal->setOperationalPermissionPredicate([this]() {
+        return pureSignalOperationPermitted();
+    });
     connect(m_pureSignal.get(), &PureSignal::psEnabledChanged,
             this, &RadioModel::refreshDdcAssignmentForRadioState,
             Qt::UniqueConnection);

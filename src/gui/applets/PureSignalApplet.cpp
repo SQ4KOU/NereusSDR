@@ -20,6 +20,12 @@
 //                 Anthropic Claude Code.
 //   2026-09-22 — Migrated actions, status, and correction assets to the
 //                 shared PureSignalSessionFacade boundary.
+//   2026-09-25 - R-R3-49 (parity Task 7): Calibrate and Auto-Cal follow the
+//                 facade's canArm (a remote window arms PureSignal on a Core
+//                 at transmitSettingsVersion 7 off the air), greyed with the
+//                 reason while the Core's radio is on the air; 2-Tone stays
+//                 on canActuate. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 /*  PSForm.cs
@@ -102,6 +108,30 @@ constexpr const char* kLedInactiveStyle =
     "  color: #6080a0; font-size: 8px; font-weight: bold;"
     "  padding: 0px 2px;"
     "}";
+
+// R-R3-49 (parity Task 7): grey `control` with `reason` as its tooltip,
+// remembering its own tooltip, or put it back and apply `enabled`. An empty
+// reason means no gate.
+void gateWithReason(QWidget* control, bool enabled, const QString& reason)
+{
+    if (!control) {
+        return;
+    }
+    static constexpr auto kSavedTooltip = "PureSignalAppletSavedTooltip";
+    if (!reason.isEmpty()) {
+        if (!control->property(kSavedTooltip).isValid()) {
+            control->setProperty(kSavedTooltip, control->toolTip());
+        }
+        control->setEnabled(false);
+        control->setToolTip(reason);
+        return;
+    }
+    if (control->property(kSavedTooltip).isValid()) {
+        control->setToolTip(control->property(kSavedTooltip).toString());
+        control->setProperty(kSavedTooltip, QVariant());
+    }
+    control->setEnabled(enabled);
+}
 
 } // namespace
 
@@ -398,8 +428,12 @@ void PureSignalApplet::refreshFromFacade()
         m_twoToneBtn->setChecked(m_facade && m_facade->twoToneOn());
     }
 
-    m_calibrateBtn->setEnabled(canActuate);
-    m_autoCalBtn->setEnabled(canActuate);
+    // R-R3-49 (parity Task 7): arming keys nothing and follows canArm; the
+    // two-tone test keys the radio and stays on canActuate.
+    const bool canArm = available && m_facade->canArm();
+    const QString armingRefusal = m_facade ? m_facade->armingRefusal() : QString();
+    gateWithReason(m_calibrateBtn, canArm, armingRefusal);
+    gateWithReason(m_autoCalBtn, canArm, armingRefusal);
     m_twoToneBtn->setEnabled(canActuate);
     // Opening the station asset manager is read-only. The dialog and facade
     // gate the actual restore action on transmit permission.

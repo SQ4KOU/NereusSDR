@@ -190,6 +190,10 @@
 //   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 3):
 //                                    transmitSettingsVersion 3.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 7):
+//                                    transmitSettingsVersion 7 and
+//                                    pureSignalArmingOffered.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QHash>
@@ -496,8 +500,12 @@ public:
     // each refused outside its range, and setTunePowerForTxBand. 3 (parity
     // Task 3): also the radio microphone settings, the Core's TX profiles
     // (activeTxProfile, txProfilesJson), the txProfile verbs and
-    // rade.resetVocoder.
+    // rade.resetVocoder. 7 (parity Task 7): also PureSignal arming and its
+    // settings, off the air.
     int transmitSettingsVersion() const;
+    // R-R3-49 (parity Task 7): the peer was offered transmitSettingsVersion
+    // 7: it arms PureSignal and changes pureSignalSettings off the air.
+    bool pureSignalArmingOffered(SessionTransport* transport) const;
     // R-R3-49 (parity Task 1): the one list of transmit settings keys a
     // receive-only Core takes while its radio is off the air (today the
     // DSP > Options TX keys, DspOptions<Setting><Mode>Tx). Every other

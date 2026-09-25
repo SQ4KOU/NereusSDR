@@ -216,6 +216,14 @@
 //                                    PA readings and link quality for a
 //                                    peer at minor 11.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 7):
+//                                    transmitSettingsVersion 7: a peer
+//                                    offered it arms PureSignal off the air
+//                                    (ps3.single, ps3.automatic,
+//                                    ps3.applyCurrent, ps3.restoreCorrection)
+//                                    and changes pureSignalSettings live,
+//                                    refused while the radio is on the air.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1706,6 +1714,8 @@ void StationServer::promoteToSession(SessionTransport* transport)
     ++m_mediaSessionEpoch;
     m_radioModel->pureSignalFacade()->resetSession();
     m_dispatcher->setSessionOwner(QStringLiteral("station:%1").arg(m_mediaSessionEpoch));
+    // R-R3-49 (parity Task 7): this peer may arm PureSignal off the air.
+    m_dispatcher->setPureSignalArmingOffered(pureSignalArmingOffered(transport));
 
     if (!sendCapabilitiesAndSettingsSnapshot(transport, m_mediaSessionEpoch)) {
         return;
@@ -1851,7 +1861,18 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
 {
     // Persist accepted PS preferences without replaying transmit operations.
     // This session advertises txPermitted=false until the R4 transmit path.
-    const QPointer<PureSignal> hydrating = message.objectKey == "pureSignalSettings"
+    // R-R3-49 (parity Task 7): a peer offered transmitSettingsVersion 7
+    // changes them as a local window does, applied to the Core's PureSignal
+    // at once (arming keys nothing), and only while the radio is off the
+    // air; the on-air check is read once for the batch.
+    const bool pureSignalSettingsWrite = message.objectKey == "pureSignalSettings";
+    const bool pureSignalSettingsLive = pureSignalSettingsWrite
+        && pureSignalArmingOffered(transport);
+    QString pureSignalOnAir;
+    if (pureSignalSettingsLive) {
+        m_radioModel->stationOnAirRefusal(&pureSignalOnAir);
+    }
+    const QPointer<PureSignal> hydrating = pureSignalSettingsWrite && !pureSignalSettingsLive
         && m_radioModel ? m_radioModel->pureSignal() : nullptr;
     if (hydrating) {
         hydrating->beginSettingsHydration();
@@ -1997,6 +2018,10 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
             || update.name.startsWith("nnr")
             || (update.name == "activeNr" && update.value.toInt() == static_cast<int>(NrSlot::NNR)))) {
             refusals.insert(update.name, QStringLiteral("Update this app to change these settings on this Core."));
+            continue;
+        }
+        if (pureSignalSettingsLive && !pureSignalOnAir.isEmpty()) {
+            refusals.insert(update.name, pureSignalOnAir);
             continue;
         }
         if (!outboundClass.isEmpty()
@@ -2565,7 +2590,18 @@ int StationServer::transmitSettingsVersion() const
     // hardware/<mac>/pa/... and hardware/<mac>/paCalibration/... keys taken
     // off the air and applied to the Core's PA profiles and calibration at
     // once (parity Task 6).
-    return m_radioModel.isNull() ? 0 : 6;
+    // 7: PureSignal arming: ps3.single, ps3.automatic, ps3.applyCurrent and
+    // ps3.restoreCorrection taken while the radio is off the air, and a
+    // pureSignalSettings write applied to the Core's PureSignal at once
+    // instead of only kept, refused while the radio is on the air;
+    // ps3.twoTone stays with remote transmit (parity Task 7).
+    return m_radioModel.isNull() ? 0 : 7;
+}
+
+bool StationServer::pureSignalArmingOffered(SessionTransport* transport) const
+{
+    // R-R3-49 (parity Task 7): offered transmitSettingsVersion 7.
+    return transmitSettingsOffered(transport) && transmitSettingsVersion() >= 7;
 }
 
 int StationServer::tgxlControlVersion() const

@@ -27,6 +27,9 @@
 //   2026-09-24 - J.J. Boyd (KG4VCF). R-R3-49 (parity Task 1):
 //                 transmitSettingsPermitted() and transmitSettingsReason().
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25 - J.J. Boyd (KG4VCF). R-R3-49 (parity Task 7):
+//                 pureSignalArmingPermitted() and pureSignalArmingReason().
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -621,6 +624,14 @@ private slots:
     /// (IStationLink::transmitSettingsUnavailableReason). Empty when
     /// permitted.
     QString transmitSettingsReason(int minVersion = 1) const;
+    /// R-R3-49 (parity Task 7): whether this window may arm PureSignal
+    /// (PS-A): always in local direct mode; in a remote window with remote
+    /// transmit, or on a Core at transmitSettingsVersion 7 while its radio
+    /// is off the air.
+    bool pureSignalArmingPermitted() const;
+    /// Why not: the on-the-air reason on a Core that offers arming, else
+    /// the remote transmit reason as before. Empty when permitted.
+    QString pureSignalArmingReason() const;
     /// R-R3-21 / R-R3-10: whether the Core's settings can be changed from
     /// this window (always in local direct mode; in a remote window only
     /// while connected and holding the Core's settings snapshot), and the

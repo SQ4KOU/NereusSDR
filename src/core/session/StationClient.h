@@ -527,6 +527,9 @@ public:
     /// takes this window's transmit settings while its radio is off the
     /// air. False: IStationLink::transmitSettingsUnavailableReason().
     bool transmitSettingsAvailable(int minVersion = 1) const;
+    /// R-R3-49 (parity Task 7): minor 11 and transmitSettingsVersion 7: the
+    /// Core takes this window's PureSignal arming off the air.
+    bool pureSignalArmingOffered() const;
     bool stationTciAvailable() const override;
     bool coreServesTciOnThisComputer() const override;
     int coreStationTciStored() const override;

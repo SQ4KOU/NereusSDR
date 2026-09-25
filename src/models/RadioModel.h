@@ -117,6 +117,10 @@
 //                SWR protection settings applied to the live controller
 //                when they change, not only at start. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 7): pureSignalOperationPermitted, a
+//                receive-only Core lets a window arm PureSignal off the
+//                air. NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1721,6 +1725,13 @@ public:
     bool stationOnAirRefusal(QString* reason) const;
     // The sentence stationOnAirRefusal gives, for a window's own gate.
     static QString onAirReason();
+
+    // R-R3-49 (parity Task 7): PureSignal's operational permission. True
+    // on a station, a receive-only Core included (a window arms PureSignal
+    // there off the air; arming keys nothing, and the correction runs only
+    // while the radio transmits). False in a remote window, which asks its
+    // Core instead.
+    bool pureSignalOperationPermitted() const;
 
     // R-R3-49 (parity Task 1): in a remote window, the Core's radio is on
     // the air as the Core last reported it: its `transmitting`, the

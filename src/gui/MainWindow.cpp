@@ -160,6 +160,11 @@
 //                RadioModel::paReadings() (the Core's in a remote window);
 //                the TX badge follows RadioModel::txInhibitedChanged.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 7): PS-A on the TX applet and the
+//                container follows pureSignalArmingPermitted(), which a
+//                Core at transmitSettingsVersion 7 offers off the air; the
+//                PureSignal menu entries say so. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -4112,6 +4117,9 @@ void MainWindow::buildUI()
         // R-R3-49 (parity Task 2): MON is a transmit setting (version 2).
         hooks.transmitSettingsPermitted = [this] { return transmitSettingsPermitted(2); };
         hooks.transmitSettingsReason = [this] { return transmitSettingsReason(2); };
+        // R-R3-49 (parity Task 7): PS-A arms PureSignal (version 7).
+        hooks.pureSignalArmingPermitted = [this] { return pureSignalArmingPermitted(); };
+        hooks.pureSignalArmingReason = [this] { return pureSignalArmingReason(); };
         hooks.remoteTransmitReason =
             tr("Remote transmit controls are not available from this Core yet.");
         hooks.spectrumFor = [this](SliceModel* s) { return spectrumForSlice(s); };
@@ -11372,6 +11380,24 @@ QString MainWindow::transmitSettingsReason(int minVersion) const
     return IStationLink::transmitSettingsUnavailableReason();
 }
 
+bool MainWindow::pureSignalArmingPermitted() const
+{
+    // R-R3-49 (parity Task 7): arming keys nothing, so a Core at
+    // transmitSettingsVersion 7 takes it while its radio is off the air.
+    return transmitControlsPermitted() || transmitSettingsPermitted(7);
+}
+
+QString MainWindow::pureSignalArmingReason() const
+{
+    if (pureSignalArmingPermitted()) {
+        return QString();
+    }
+    if (m_stationClient && m_stationClient->pureSignalArmingOffered()) {
+        return transmitSettingsReason(7);
+    }
+    return tr("Remote transmit controls are not available from this Core yet.");
+}
+
 void MainWindow::applyRemoteRoleGating()
 {
     if (m_radioModel == nullptr || m_radioModel->ownsLocalDsp()) {
@@ -11410,6 +11436,9 @@ void MainWindow::applyRemoteRoleGating()
         // R-R3-49 (group A fix wave, M3): the RF Power slider's per-band
         // and drive-source writes came with version 5.
         m_txApplet->setPowerByBandPermitted(transmitSettingsPermitted(5));
+        // R-R3-49 (parity Task 7): PS-A arms PureSignal (version 7).
+        m_txApplet->setPureSignalArmingPermitted(pureSignalArmingPermitted(),
+                                                 pureSignalArmingReason());
     }
     if (m_phoneCwApplet) {
         m_phoneCwApplet->setTransmitPermitted(transmitPermitted, transmitReason);
@@ -11484,10 +11513,16 @@ void MainWindow::applyRemoteRoleGating()
         if (!action) { continue; }
         const bool ps3Supported = m_stationClient && m_stationClient->isHandshakeComplete()
             && m_stationClient->capabilities().psAlgorithmVersion == 3;
+        // R-R3-49 (parity Task 7): a Core at transmitSettingsVersion 7 takes
+        // calibration from here off the air; the two-tone test still waits
+        // for remote transmit.
+        const bool armingOffered = m_stationClient && m_stationClient->pureSignalArmingOffered();
         action->setEnabled(ps3Supported);
-        action->setToolTip(ps3Supported
-            ? tr("PureSignal 3 settings, saved corrections and diagnostics. Remote transmit controls are not available from this Core yet.")
-            : tr("The connected Core has not advertised PureSignal 3."));
+        action->setToolTip(!ps3Supported
+            ? tr("The connected Core has not advertised PureSignal 3.")
+            : armingOffered
+                ? tr("PureSignal 3 settings, calibration, saved corrections and diagnostics. The two-tone test is not available from this Core yet.")
+                : tr("PureSignal 3 settings, saved corrections and diagnostics. Remote transmit controls are not available from this Core yet."));
     }
     if (m_pureSignalApplet) {
         const bool ps3Supported = m_stationClient && m_stationClient->isHandshakeComplete()

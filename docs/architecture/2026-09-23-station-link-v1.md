@@ -387,7 +387,7 @@ change shows as surface drift and as a change to this table.
 | `stationTciVersion` | 1 |
 | `accessoryDataVersion` | 1 |
 | `remoteTgxlControlVersion` | 3 |
-| `transmitSettingsVersion` | 6 |
+| `transmitSettingsVersion` | 7 |
 
 <!-- /surface -->
 
@@ -485,8 +485,16 @@ When a feature is off, its version is 0:
   (`hardware/<mac>/paCalibration/...`: the Watt Meter page), taken while
   the radio is off the air (section 8) and applied to the Core's PA
   profiles and calibration at once. PA Gain's auto-calibrate sweep keys
-  the radio and waits for remote transmit. Each is refused while the radio
-  is on the air (section 7.3). The keying set stays refused on a receive-only
+  the radio and waits for remote transmit. At 7 it also covers PureSignal
+  arming: the commands `ps3.single`, `ps3.automatic`, `ps3.applyCurrent`
+  and `ps3.restoreCorrection` (section 9.1), and a `property.write` on
+  `pureSignalSettings`, which the Core then applies to its PureSignal at
+  once instead of only keeping it (section 7.3). Arming keys nothing, so a
+  receive-only Core permits PureSignal: its `pureSignal` object's
+  `canActuate` says whether PureSignal is ready on the Core's radio, not
+  whether this peer may transmit (`txPermitted`). `ps3.twoTone` with
+  `enabled` true keys the radio and waits for remote transmit. Each is
+  refused while the radio is on the air (section 7.3). The keying set stays refused on a receive-only
   Core, on and off the air, and so do raw settings writes of
   `hardware/<mac>/tx/...`, `powerByBand` and `tunePowerByBand` (the
   `transmit` object owns them). A window whose Core sends 0 keeps its
@@ -1350,7 +1358,11 @@ from 0 to 99 for each of the 14 bands."), `stepAtt`'s `attOnTxEnabled`,
 peer not offered `transmitSettingsVersion` (the receive-only reason) or
 while its radio is on the air (the on-air reason), and `attOnTxValue`
 outside the Core's range ("Choose an ATT on TX value from 0 to 31 dB.", on
-a Hermes Lite 2 from -28), and
+a Hermes Lite 2 from -28), a `pureSignalSettings` write from a peer
+offered `transmitSettingsVersion` 7 while the radio is on the air (the
+on-air reason; from such a peer an accepted write is applied to the Core's
+PureSignal at once, and from any other peer it is kept and applied when
+PureSignal next starts, as before), and
 DSP settings from a peer that did not negotiate them
 (`StationServer::handlePropertyWrite`). The on-air check is read once for
 the whole write, before anything in it is applied.
@@ -1645,7 +1657,7 @@ refused.
 The table's capability columns are the gate the desktop client applies
 before sending (section 6.2).
 
-Six command groups need a sentence beyond the table:
+Seven command groups need a sentence beyond the table:
 
 - **The filter policy.** `setAlexBpfMode` sets one receive filter chain's
   filter policy (`chain` 0 or 1; `mode` 0 Auto, 1 Force filter, 2 Force
@@ -1713,6 +1725,22 @@ Six command groups need a sentence beyond the table:
   understood." and "The request to reset the RADE vocoder was not
   understood." A peer below agreed minor 11 gets "Update this app to
   change transmit profiles on this Core."
+- **PureSignal arming.** `ps3.single` (Single Cal), `ps3.automatic`
+  (Automatic, and PS-A on), `ps3.applyCurrent` (Apply current correction)
+  and `ps3.restoreCorrection` (Restore a saved correction) arm PureSignal
+  on the Core as a local window's PureSignal controls do. Arming keys
+  nothing: it sets the calibration engine's state, and the correction runs
+  only while the radio transmits. A Core at `transmitSettingsVersion` 7
+  takes them from a peer at agreed minor 11 while its radio is off the air
+  and refuses them while it is on the air ("The radio is on the air. Try
+  again when it stops."). Any other peer gets "PureSignal cannot be run
+  from a remote window yet." as before, and so does `ps3.twoTone` with
+  `enabled` true from every peer: the two-tone test keys the radio and
+  waits for remote transmit. `ps3.off`, `ps3.twoTone` with `enabled` false
+  and `ps3.saveCorrection` are taken as before. A taken action answers
+  `accepted`, then `completed` or `failed` with the Core's reason (section
+  9.1, the `phase` value), and the Core's `pureSignal` and
+  `pureSignalSettings` objects follow in a `delta`.
 - **One TCI switch.** The Core keeps one TCI switch and port for its own
   TCI server (`setStationTci`, the `stationTci` object). A desktop window
   connected to a Core with `stationTciVersion` 1 shows that switch and
@@ -2250,7 +2278,7 @@ its client each station message with `"$string"` as `""`, `"$int"` as `0`,
 
 | Key | Meaning | Default |
 | --- | --- | --- |
-| `radio` | `"static"`: a model reporting a connected Hermes Lite 2 (MAC `AA:BB:CC:DD:EE:01`) with no radio behind it, so nothing changes on its own; `"connectable"`: a model connected to the fake Protocol 1 radio, receive processing and all; PureSignal's readiness (`canActuate`) is off on a receive-only station from the moment the station makes the radio receive-only, and the runner waits for each slice's signal readings to leave the no-reading value before the client attaches | `"static"` |
+| `radio` | `"static"`: a model reporting a connected Hermes Lite 2 (MAC `AA:BB:CC:DD:EE:01`) with no radio behind it, so nothing changes on its own; `"connectable"`: a model connected to the fake Protocol 1 radio, receive processing and all; a receive-only station permits PureSignal (`transmitSettingsVersion` 7), so the runner waits for PureSignal's readiness (`canActuate`) to come on, and it waits for each slice's signal readings to leave the no-reading value before the client attaches | `"static"` |
 | `slices` | slices before the client connects | 1 |
 | `panadapters` | panadapters before the client connects | 0 |
 | `coreAccessories` | the Core owns its accessories: the `tuner`, `amplifier`, `rfkit`, `accessoryData` and `accessorySettings` objects and the accessory commands | false |
@@ -2284,7 +2312,7 @@ same on every machine.
 | `settings-write` | A station-scoped write echoed with its origin; an operator-local write rejected; a removal sent as `settings.value` with no entry; on the receive-only Core, a DSP > Options TX key and a PA forward-power table key (`paCalibration/calPoint1`, version 6) taken off the air and a transmit hardware key refused |
 | `unknown-verb` | `command.result` refused, "The Core does not know this request. Updating the Core may help."; the connection stays up |
 | `unknown-kind` | `session.end` "The Core could not read a message from this app.", `retryable` false |
-| `verbs-*` | Each verb in `commands`, grouped by the capability that gates it, invoked with its own arguments (for `setPgxlHardware`, one of its three optional ones) and, where it takes any, with one argument renamed (and nothing else changed: the same values and kinds); the two get different answers, so each shows the station read the arguments (a PureSignal action with arguments it does not take is refused "The Core could not read this PureSignal request." before the transmit gate is asked); `nnr.applyModelSelection` names the revision `dspAssets` gave in the snapshot |
+| `verbs-*` | Each verb in `commands`, grouped by the capability that gates it, invoked with its own arguments (for `setPgxlHardware`, one of its three optional ones) and, where it takes any, with one argument renamed (and nothing else changed: the same values and kinds); the two get different answers, so each shows the station read the arguments (a PureSignal action with arguments it does not take is refused "The Core could not read this PureSignal request." before the transmit gate is asked); `verbs-ps3` also invokes `ps3.twoTone` with `enabled` true, refused "PureSignal cannot be run from a remote window yet.", and its arming verbs are taken (`transmitSettingsVersion` 7) and then fail on the static station, which has no PureSignal running ("PureSignal is unavailable until the radio is ready."); `nnr.applyModelSelection` names the revision `dspAssets` gave in the snapshot |
 
 `tst_link_conformance_session` also checks that every verb in the
 `commands` table is invoked both ways by some fixture, and that the two

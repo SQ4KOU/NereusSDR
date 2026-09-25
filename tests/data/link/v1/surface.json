@@ -238,7 +238,7 @@
         {
             "kind": "i64",
             "name": "transmitSettingsVersion",
-            "value": 6
+            "value": 7
         }
     ],
     "commands": [

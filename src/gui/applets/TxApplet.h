@@ -102,6 +102,10 @@
 //                 CFC dialog; the EQ and CFC right-clicks open their
 //                 dialogs in a remote window. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-25 : R-R3-49 (parity Task 7): setPureSignalArmingPermitted for
+//                 PS-A, which arms PureSignal on the Core from a remote
+//                 window off the air. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -337,6 +341,13 @@ public slots:
                                   const QString& unavailableReason = QString());
     // The CFC dialog, once a right-click or Setup has built it.
     TxCfcDialog* cfcDialog() const { return m_cfcDialog; }
+    // R-R3-49 (parity Task 7): PS-A arms PureSignal and keys nothing. It
+    // follows this gate (not setTransmitPermitted): a remote window whose
+    // Core offers arming (transmitSettingsVersion 7) uses it while the
+    // Core's radio is off the air; otherwise it is greyed with the reason.
+    // Always true locally.
+    void setPureSignalArmingPermitted(bool permitted,
+                                      const QString& unavailableReason = QString());
 public:
 
     // ── Test accessors ──────────────────────────────────────────────────────
@@ -569,6 +580,7 @@ private:
     bool m_txProfilePermitted{true};
     bool m_txProcessingPermitted{true};   // R-R3-49 (parity Task 4)
     bool m_powerByBandPermitted{true};    // R-R3-49 (group A fix wave, M3)
+    bool m_psArmingPermitted{true};       // R-R3-49 (parity Task 7)
     QString m_txProcessingReason;
     // R-R3-49 (parity Task 2): a remote window's Tune Power slider asks the
     // Core (setTunePowerForTxBand) and shows the Core's tunePowerForTxBand.
