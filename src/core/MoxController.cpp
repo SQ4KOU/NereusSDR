@@ -111,7 +111,9 @@
 //   2026-09-24 - Receiver and transmit gaps plan, Task 7 fix wave: TX
 //                 inhibit and the PA trip gate every keying source and
 //                 unkey (setTxInhibited, setPaTripped; console.cs:25470,
-//                 15341-15363, 29364-29371 [v2.10.3.15]). J.J. Boyd
+//                 15341-15363, 29364-29371 [v2.10.3.15]). A TX-interlock
+//                 refusal emits moxRejected (M2); a held source's repeat
+//                 refusal is quiet, one message per press (M3). J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
@@ -119,6 +121,8 @@
 // derived values are cited inline below.
 
 #include "core/MoxController.h"
+
+#include <QSignalBlocker>
 #include "core/LogCategories.h"
 
 #include <algorithm>
@@ -350,6 +354,7 @@ void MoxController::setVoxEnabled(bool on)
     // VOX key would never release. The next PollPTT pass releases it.
     if (!on && m_voxPtt) {
         m_voxPtt = false;
+        m_refusedHeld &= static_cast<quint8>(~kRefusedVox);
         pollPtt();
     }
 }
@@ -549,7 +554,10 @@ void MoxController::setMox(bool on)
     if (on && m_moxCheck) {
         const auto result = m_moxCheck();
         if (!result.ok) {
-            emit moxRejected(result.reason);
+            // Task 7 fix wave, M3: a held source's repeat refusal is quiet.
+            if (!m_quietRefusal) {
+                emit moxRejected(result.reason);
+            }
             // Thetis refuses a key by unchecking chkMOX, which runs the
             // TX-to-RX branch of chkMOX_CheckedChanged2 (PTT mode NONE, CAT
             // and TCI PTT dropped). Only from receive: a repeated
@@ -572,8 +580,41 @@ void MoxController::setMox(bool on)
     // object.  The warned/denied signals are plumbed to the operator UI toast
     // in Task 97.  For this task the signals exist but have no UI subscriber.
     if (on && m_interlockPolicy) {
-        if (!m_interlockPolicy->evaluateTxRequest(m_ampPresent, m_ampInOperate, m_lastSwr)) {
-            // denied() signal already emitted by the policy.
+        // Task 7 fix wave, M2: a refusal here is reported through
+        // moxRejected like the check above, so the MOX button drops back,
+        // TUN runs its TUN-off path and two-tone cleans up (it listens only
+        // to moxRejected). The text matches MainWindow's denied toast, which
+        // folds a repeat of the same message into one.
+        //
+        // M3: a held source's repeat refusal is quiet: the policy is asked
+        // with its signals blocked. evaluateTxRequest only reads state, so
+        // when it allows the key it is asked again unblocked, so a Warn-mode
+        // warning still reaches the operator.
+        QString deniedReason;
+        bool allowed = false;
+        if (m_quietRefusal) {
+            {
+                const QSignalBlocker quiet(m_interlockPolicy);
+                allowed = m_interlockPolicy->evaluateTxRequest(
+                    m_ampPresent, m_ampInOperate, m_lastSwr);
+            }
+            if (allowed) {
+                allowed = m_interlockPolicy->evaluateTxRequest(
+                    m_ampPresent, m_ampInOperate, m_lastSwr);
+            }
+        } else {
+            const QMetaObject::Connection capture =
+                connect(m_interlockPolicy, &TxInterlockPolicy::denied, this,
+                        [&deniedReason](const QString& reason) { deniedReason = reason; });
+            allowed = m_interlockPolicy->evaluateTxRequest(
+                m_ampPresent, m_ampInOperate, m_lastSwr);
+            disconnect(capture);
+        }
+        if (!allowed) {
+            // denied() signal already emitted by the policy (unless quiet).
+            if (!m_quietRefusal) {
+                emit moxRejected(QStringLiteral("TX interlock blocked: %1").arg(deniedReason));
+            }
             // A refused key ends like a Thetis refusal (see above).
             if (!m_mox) {
                 dropPttOnUnkey();
@@ -715,7 +756,33 @@ void MoxController::dropPttOnUnkey()
     //[2.10.1.0]MW0LGE changed  [original inline comment from console.cs:29406]
     m_catPtt = false;
     m_tciPtt = false;
+    m_refusedHeld &= static_cast<quint8>(~(kRefusedCat | kRefusedTci));
     setPttMode(PttMode::None);
+}
+
+// ---------------------------------------------------------------------------
+// tryPollKey: `_current_ptt_mode = X; chkMOX.Checked = true;` for one
+// PollPTT source (console.cs:25507-25555 [v2.10.3.15]). chkMOX.Checked =
+// true on a checked box fires nothing, so a key is tried only from receive.
+//
+// Task 7 fix wave, M3: the keying is PollPTT's, tried on every pass while
+// the source is held; only the refusal message is limited to the first
+// refusal of each press (see m_refusedHeld).
+// ---------------------------------------------------------------------------
+void MoxController::tryPollKey(PttMode mode, quint8 refusedBit)
+{
+    setPttMode(mode);
+    if (m_mox) {
+        return;
+    }
+    m_quietRefusal = (m_refusedHeld & refusedBit) != 0;
+    setMox(true);
+    m_quietRefusal = false;
+    if (m_mox) {
+        m_refusedHeld &= static_cast<quint8>(~refusedBit);
+    } else {
+        m_refusedHeld |= refusedBit;
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -790,24 +857,20 @@ void MoxController::pollPtt()
     if (!m_mox) {
         // From Thetis console.cs:25507-25511 [v2.10.3.15]
         if (m_tciPtt) {
-            setPttMode(PttMode::Tci);
-            if (!m_mox) { setMox(true); }
+            tryPollKey(PttMode::Tci, kRefusedTci);
         }
         // From Thetis console.cs:25513-25517 [v2.10.3.15]
         if (m_catPtt) {
-            setPttMode(PttMode::Cat);
-            if (!m_mox) { setMox(true); }
+            tryPollKey(PttMode::Cat, kRefusedCat);
         }
         // From Thetis console.cs:25526-25541 [v2.10.3.15] (mode gate not
         // ported, see above; PTTMode.CW is never set before 3M-2)
         if (m_micPtt && m_pttMode != PttMode::Cw) {
-            setPttMode(PttMode::Mic);
-            if (!m_mox) { setMox(true); }
+            tryPollKey(PttMode::Mic, kRefusedMic);
         }
         // From Thetis console.cs:25543-25555 [v2.10.3.15]
         if (m_voxPtt && isVoiceMode(m_currentMode)) {
-            setPttMode(PttMode::Vox);
-            if (!m_mox) { setMox(true); }
+            tryPollKey(PttMode::Vox, kRefusedVox);
         }
         return;
     }
@@ -874,6 +937,7 @@ void MoxController::clearPttSources()
     m_catPtt = false;
     m_voxPtt = false;
     m_tciPtt = false;
+    m_refusedHeld = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -1555,6 +1619,9 @@ void MoxController::onMicPttFromRadio(bool pressed)
     // only in PTTMode.MIC (console.cs:25589-25595), and neither does
     // anything during a manual key. Receiver and transmit gaps plan, Task 7.
     m_micPtt = pressed;
+    if (!pressed) {
+        m_refusedHeld &= static_cast<quint8>(~kRefusedMic);   // M3: a new press is told again
+    }
     pollPtt();
 }
 
@@ -1578,6 +1645,9 @@ void MoxController::onCatPtt(bool pressed)
     // Keys with PTTMode.CAT from receive (console.cs:25513-25517); a release
     // unkeys only in PTTMode.CAT (console.cs:25582-25588).
     m_catPtt = pressed;
+    if (!pressed) {
+        m_refusedHeld &= static_cast<quint8>(~kRefusedCat);   // M3: a new press is told again
+    }
     pollPtt();
 }
 
@@ -1601,6 +1671,9 @@ void MoxController::onVoxActive(bool active)
     // (console.cs:25603-25608). vox_ok (mic mute / VAC bypass) is not
     // ported: VAX is not VAC.
     m_voxPtt = active;
+    if (!active) {
+        m_refusedHeld &= static_cast<quint8>(~kRefusedVox);   // M3: a new press is told again
+    }
     pollPtt();
 }
 
@@ -1679,6 +1752,9 @@ void MoxController::onCwPtt(bool /*pressed*/)
 void MoxController::onTciPtt(bool pressed)
 {
     m_tciPtt = pressed;
+    if (!pressed) {
+        m_refusedHeld &= static_cast<quint8>(~kRefusedTci);   // M3: a new press is told again
+    }
     pollPtt();
 }
 

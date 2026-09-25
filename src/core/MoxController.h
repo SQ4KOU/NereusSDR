@@ -158,8 +158,10 @@
 //                 inhibit and the PA trip gate every source
 //                 (setTxInhibited / setPaTripped, PollPTT's _tx_inhibit and
 //                 _ganymede_pa_issue, console.cs:25470 [v2.10.3.15]).
-//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
-//                 Code.
+//                 A TX-interlock refusal emits moxRejected; a held
+//                 source's repeat refusal is quiet (tryPollKey,
+//                 m_refusedHeld). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -1251,6 +1253,23 @@ private:
     bool     m_catPtt{false};   // cat_ptt
     bool     m_voxPtt{false};   // Audio.VOXActive
     bool     m_tciPtt{false};   // _tci_ptt
+
+    // Task 7 fix wave, M3: one refusal message per press. A held source is
+    // tried on every pass, as PollPTT polls; after its first refusal the
+    // later ones in the same press are quiet (no moxRejected, no interlock
+    // denied). A bit per source, cleared when that source's level drops.
+    enum : quint8 {
+        kRefusedTci = 0x01,
+        kRefusedCat = 0x02,
+        kRefusedMic = 0x04,
+        kRefusedVox = 0x08,
+    };
+    quint8   m_refusedHeld{0};
+    // True only across a quiet setMox(true) from tryPollKey.
+    bool     m_quietRefusal{false};
+    // tryPollKey: PollPTT's `_current_ptt_mode = X; chkMOX.Checked = true;`
+    // for one source, with the per-press refusal message rule.
+    void tryPollKey(PttMode mode, quint8 refusedBit);
 
     // pollPtt: one pass of Thetis PollPTT over the recorded levels.
     void pollPtt();

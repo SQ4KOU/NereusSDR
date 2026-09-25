@@ -33,6 +33,7 @@
 
 #include "core/MoxController.h"
 #include "core/PttMode.h"
+#include "core/TxInterlockPolicy.h"
 #include "core/WdspTypes.h"
 #include "models/RadioModel.h"
 
@@ -471,6 +472,90 @@ private slots:
             QVERIFY(ctrl.isMox());
             QCOMPARE(ctrl.pttMode(), PttMode::Mic);
         }
+    }
+
+    // ── Task 7 fix wave, M2: a TX-interlock refusal is reported ────────────
+    // TwoToneController, TUN and the MOX button learn of a refused key
+    // through moxRejected; the interlock refused without it.
+    void interlockRefusal_emitsMoxRejected()
+    {
+        TxInterlockPolicy policy;
+        policy.setMode(TxInterlockPolicy::Block);
+        MoxController ctrl;
+        makeSync(ctrl);
+        ctrl.setInterlockPolicy(&policy);
+        ctrl.onAmpStateChanged(/*hasAmp=*/true, /*inOperate=*/false);
+        QSignalSpy rejected(&ctrl, &MoxController::moxRejected);
+        QSignalSpy denied(&policy, &TxInterlockPolicy::denied);
+
+        ctrl.onMoxButton(true);
+        drain();
+        QVERIFY(!ctrl.isMox());
+        QVERIFY(!ctrl.isManualKey());
+        QCOMPARE(denied.count(), 1);
+        QCOMPARE(rejected.count(), 1);
+        QVERIFY(rejected.first().at(0).toString().contains(
+            denied.first().at(0).toString()));
+        ctrl.setInterlockPolicy(nullptr);
+        policy.setMode(TxInterlockPolicy::Disabled);
+    }
+
+    // ── Task 7 fix wave, M3: one refusal message per press ──────────────────
+    // A held source is tried on every status frame, as PollPTT polls; the
+    // keying is unchanged, but the operator is told once per press.
+    void heldRefusedSource_isReportedOncePerPress()
+    {
+        MoxController ctrl;
+        makeSync(ctrl);
+        bool allow = false;
+        ctrl.setMoxCheck([&allow]() {
+            return safety::BandPlanGuard::MoxCheckResult{allow,
+                allow ? QString() : QStringLiteral("test refusal")};
+        });
+        QSignalSpy rejected(&ctrl, &MoxController::moxRejected);
+
+        micFrames(ctrl, true, 6);
+        QVERIFY(!ctrl.isMox());
+        QCOMPARE(rejected.count(), 1);
+        micFrames(ctrl, false, 2);
+        micFrames(ctrl, true, 4);
+        QCOMPARE(rejected.count(), 2);   // a new press is told again
+        micFrames(ctrl, false, 2);
+
+        // VOX: the pass runs on every mic frame while VOX stays active.
+        ctrl.onVoxActive(true);
+        micFrames(ctrl, false, 6);
+        QVERIFY(!ctrl.isMox());
+        QCOMPARE(rejected.count(), 3);
+        ctrl.onVoxActive(false);
+        drain();
+
+        // The keying is unchanged: a held source keys once it is allowed.
+        micFrames(ctrl, true, 3);
+        QCOMPARE(rejected.count(), 4);
+        allow = true;
+        micFrames(ctrl, true, 1);
+        QVERIFY(ctrl.isMox());
+        QCOMPARE(ctrl.pttMode(), PttMode::Mic);
+    }
+
+    void heldSourceUnderInterlock_isReportedOncePerPress()
+    {
+        TxInterlockPolicy policy;
+        policy.setMode(TxInterlockPolicy::Block);
+        MoxController ctrl;
+        makeSync(ctrl);
+        ctrl.setInterlockPolicy(&policy);
+        ctrl.onAmpStateChanged(/*hasAmp=*/true, /*inOperate=*/false);
+        QSignalSpy denied(&policy, &TxInterlockPolicy::denied);
+        QSignalSpy rejected(&ctrl, &MoxController::moxRejected);
+
+        micFrames(ctrl, true, 6);
+        QVERIFY(!ctrl.isMox());
+        QCOMPARE(denied.count(), 1);
+        QCOMPARE(rejected.count(), 1);
+        ctrl.setInterlockPolicy(nullptr);
+        policy.setMode(TxInterlockPolicy::Disabled);
     }
 
     // ── RadioModel shims (unconnected model, 0 ms walk, counting check) ─────

@@ -52,6 +52,8 @@
 //                 by J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                 Code. setTuneOffPendingFn: a start waits out a TUN-off
 //                 still completing (console.cs:44805-44813 [v2.10.3.15]).
+//                 A refused start keeps the manual key through the 200 ms
+//                 settle (M2, setup.cs:11190-11193 [v2.10.3.15]).
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis-derived activation
@@ -288,6 +290,12 @@ private slots:
     // when setActive(false) is called.  Stops the gen + restores PWR.
     void onDeactivationSettleElapsed();
 
+    // Task 7 fix wave, M2: the manual key after a refused start is cleared
+    // when kMoxReleaseSettleMs has passed, as Thetis's stop branch clears
+    // console.ManualMox after its await Task.Delay(200)
+    // (setup.cs:11190-11193 [v2.10.3.15]).
+    void onRejectSettleElapsed();
+
     // Hooked to MoxController::moxRejected so we can clean up our state
     // when the BandPlanGuard rejects the setMox(true) call we just made.
     // R-R3-36: ignores every rejection that is not of that call
@@ -354,6 +362,7 @@ private:
     QTimer m_tuneReleaseSettleTimer;
     QTimer m_freq2DelayTimer;
     QTimer m_deactivationSettleTimer;
+    QTimer m_rejectSettleTimer;   // Task 7 fix wave, M2
 
     // Task 7 fix wave, M9: see setTuneOffPendingFn.
     std::function<bool()> m_tuneOffPending;

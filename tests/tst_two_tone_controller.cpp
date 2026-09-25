@@ -43,6 +43,7 @@
 #include "core/TwoToneController.h"
 #include "core/MoxController.h"
 #include "core/TxChannel.h"
+#include "core/TxInterlockPolicy.h"
 #include "core/safety/BandPlanGuard.h"
 #include "core/WdspTypes.h"
 #include "models/SliceModel.h"
@@ -844,6 +845,88 @@ private slots:
 
         ctrl.setActive(false);
         QTRY_VERIFY_WITH_TIMEOUT(!ctrl.isActive(), 2000);
+    }
+
+    // ── Task 7 fix wave, M2: two-tone and the TX interlock ─────────────────
+    // A TX-interlock refusal must let two-tone clean up, as a band-plan
+    // refusal does: never active while unkeyed, generator off.
+    void setActive_interlockRefusal_cleansUpState()
+    {
+        TransmitModel tx;
+        tx.setTwoTonePulsed(false);
+        tx.setTwoToneFreq2Delay(0);
+        RecordingTxChannel tc(kTxChannelId);
+        TxInterlockPolicy policy;
+        policy.setMode(TxInterlockPolicy::Block);
+        MoxController mox;
+        mox.setTimerIntervals(0, 0, 0, 0, 0, 0);
+        mox.setInterlockPolicy(&policy);
+        mox.onAmpStateChanged(/*hasAmp=*/true, /*inOperate=*/false);
+        SliceModel slice;
+
+        TwoToneController ctrl;
+        ctrl.setTransmitModel(&tx);
+        ctrl.setTxChannel(&tc);
+        ctrl.setMoxController(&mox);
+        ctrl.setSliceModel(&slice);
+        ctrl.setSettleDelaysMs(0, 0);
+        QSignalSpy activeSpy(&ctrl, &TwoToneController::twoToneActiveChanged);
+
+        ctrl.setActive(true);
+        for (int i = 0; i < 10; ++i) QCoreApplication::processEvents();
+
+        QVERIFY(!mox.isMox());
+        QVERIFY2(!ctrl.isActive(), "two-tone committed as active while unkeyed");
+        QVERIFY(!ctrl.isActivationInFlight());
+        QVERIFY(!mox.isManualKey());
+        QVERIFY(!activeSpy.isEmpty());
+        QCOMPARE(activeSpy.last().at(0).toBool(), false);
+        QCOMPARE(tc.calls.last().method, QStringLiteral("setTxPostGenRun"));
+        QCOMPARE(tc.calls.last().arg1, 0.0);
+        mox.setInterlockPolicy(nullptr);
+        policy.setMode(TxInterlockPolicy::Disabled);
+    }
+
+    // A band-plan refusal keeps the manual key through the 200 ms settle,
+    // as Thetis's refused start runs the stop branch (setup.cs:11190-11193
+    // [v2.10.3.15]: console.MOX = false; await Task.Delay(200); ...
+    // console.ManualMox = false;). A held mic is not tried again inside
+    // two-tone's own refusal.
+    void setActive_bandPlanRefusal_keepsManualKeyThroughSettle()
+    {
+        TransmitModel tx;
+        tx.setTwoTonePulsed(false);
+        tx.setTwoToneFreq2Delay(0);
+        RecordingTxChannel tc(kTxChannelId);
+        MoxController mox;
+        mox.setTimerIntervals(0, 0, 0, 0, 0, 0);
+        mox.setMoxCheck(makeRejectingCheckFn(DSPMode::CWL));
+        SliceModel slice;
+
+        TwoToneController ctrl;
+        ctrl.setTransmitModel(&tx);
+        ctrl.setTxChannel(&tc);
+        ctrl.setMoxController(&mox);
+        ctrl.setSliceModel(&slice);
+        ctrl.setSettleDelaysMs(50, 0);
+        QSignalSpy rejected(&mox, &MoxController::moxRejected);
+
+        // The mic is pressed while a manual key holds it off, so it has not
+        // been tried (or refused) before two-tone starts.
+        mox.setManualKey(true);
+        mox.onMicPttFromRadio(true);
+        const int rejectedBefore = rejected.count();
+        QCOMPARE(rejectedBefore, 0);
+
+        ctrl.setActive(true);
+        QVERIFY(!mox.isMox());
+        QVERIFY(!ctrl.isActive());
+        QCOMPARE(rejected.count(), rejectedBefore + 1);   // two-tone's own only
+        QVERIFY2(mox.isManualKey(), "the refusal cleared the manual key at once");
+        mox.onMicPttFromRadio(true);
+        QCOMPARE(rejected.count(), rejectedBefore + 1);
+
+        QTRY_VERIFY_WITH_TIMEOUT(!mox.isManualKey(), 2000);
     }
 
     // ── Idempotent: setActive(true) twice is safe ────────────────────────

@@ -26,7 +26,9 @@
 //   2026-09-24 : Receiver and transmit gaps plan, Task 7 fix wave, by
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //                A start waits out a TUN-off still completing (M9,
-//                console.cs:44805-44813 [v2.10.3.15]).
+//                console.cs:44805-44813 [v2.10.3.15]); a refused start
+//                keeps the manual key through the 200 ms settle (M2,
+//                setup.cs:11190-11193).
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis-derived activation flow
@@ -73,6 +75,11 @@ TwoToneController::TwoToneController(QObject* parent)
     m_deactivationSettleTimer.setInterval(kMoxReleaseSettleMs);
     connect(&m_deactivationSettleTimer, &QTimer::timeout,
             this, &TwoToneController::onDeactivationSettleElapsed);
+
+    m_rejectSettleTimer.setSingleShot(true);
+    m_rejectSettleTimer.setInterval(kMoxReleaseSettleMs);
+    connect(&m_rejectSettleTimer, &QTimer::timeout,
+            this, &TwoToneController::onRejectSettleElapsed);
 }
 
 TwoToneController::~TwoToneController() = default;
@@ -135,6 +142,7 @@ void TwoToneController::setSettleDelaysMs(int moxReleaseMs, int tuneReleaseMs)
     m_moxReleaseSettleTimer.setInterval(moxReleaseMs);
     m_tuneReleaseSettleTimer.setInterval(tuneReleaseMs);
     m_deactivationSettleTimer.setInterval(moxReleaseMs);
+    m_rejectSettleTimer.setInterval(moxReleaseMs);
 }
 
 // ---------------------------------------------------------------------------
@@ -180,6 +188,8 @@ void TwoToneController::setActive(bool on)
         }
 
         m_activationInFlight = true;
+        // Task 7 fix wave, M2: a new start owns the manual key from here.
+        m_rejectSettleTimer.stop();
 
         // ── Stage 2: if MOX is currently engaged, release first.  From Thetis
         //     setup.cs:11072-11077 [v2.10.3.13]:
@@ -637,6 +647,17 @@ void TwoToneController::continueDeactivation()
 }
 
 // ---------------------------------------------------------------------------
+// onRejectSettleElapsed: Task 7 fix wave, M2 (see onMoxRejected).
+// ---------------------------------------------------------------------------
+void TwoToneController::onRejectSettleElapsed()
+{
+    if (m_active || m_activationInFlight || m_moxController == nullptr) {
+        return;   // a new start owns the manual key now
+    }
+    m_moxController->setManualKey(false);
+}
+
+// ---------------------------------------------------------------------------
 // onMoxRejected — BandPlanGuard rejected our setMox(true) call
 // ---------------------------------------------------------------------------
 //
@@ -679,9 +700,17 @@ void TwoToneController::onMoxRejected(const QString& reason)
     // Receiver and transmit gaps plan, Task 7: a refused key unchecks
     // chkTestIMD in Thetis, whose off branch ends with console.ManualMox =
     // false (setup.cs:11193 [v2.10.3.15]).
-    if (m_moxController) {
-        m_moxController->setManualKey(false);
-    }
+    //
+    // Task 7 fix wave, M2: after the 200 ms settle, not here. From Thetis
+    // setup.cs:11190-11193 [v2.10.3.15]:
+    //   console.MOX = false;
+    //   await Task.Delay(200); //MW0LGE_21a
+    //   Audio.MOX = false;//
+    //   console.ManualMox = false;
+    // Clearing it inside this refused call ran a PollPTT pass while
+    // m_keyingMox was still set: a held mic was tried at once, refused
+    // again, re-entered here and raised a second message.
+    m_rejectSettleTimer.start();
 
     // Restore PWR if we had snapshotted it.
     if (m_savedPwrValid && m_tx) {
