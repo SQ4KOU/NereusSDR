@@ -7301,6 +7301,11 @@ nereus_add_test(tst_device_session_registry EXTRA_LABELS session)
 nereus_add_test(tst_station_multi_session
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
+# iPhone app Task 73 (R-IOS-02): whose each slice is (owners, held for,
+# adoption, each owner's active slice and the station-level one), and each
+# device's closed slices kept for its return.
+nereus_add_test(tst_slice_ownership EXTRA_LABELS session)
+nereus_add_test(tst_device_layout_store EXTRA_LABELS session)
 # iPhone app Task 19 (R-IOS-06): the Core's catalogue; the G2 and HL2
 # catalogue fixtures against the desktop's own values, the revision, a
 # preset change reaching a client over the in-process loopback, the size.

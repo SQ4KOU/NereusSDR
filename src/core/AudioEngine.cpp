@@ -155,6 +155,10 @@
 //                 feeder, a per-channel lock around VAX output replacement,
 //                 and setVaxOutputsAllowed(false) so nereusd publishes no VAX
 //                 devices. The local VAX tee is unchanged.
+//   2026-09-25: iPhone app plan Task 73 (R-IOS-02, ruling 5.14) by J.J.
+//                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code. The
+//                 local VAX tee skips a slice setVaxSliceMask() leaves out.
+//                 NereusSDR-original.
 // =================================================================
 
 #include "AudioEngine.h"
@@ -2010,7 +2014,12 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
     // real period and its device ring overran.
     static_assert(VaxChannelMixer::kMaxSlices >= WdspEngine::kMaxSliceChannels,
                   "every slice id needs a VAX mix slot");
-    const int vaxCh = slice->vaxChannel();
+    // iPhone app Task 73 (ruling 5.14): VAX on this computer carries only
+    // the slices its mask allows (the station device's own on a Core with
+    // several devices); another device's slice is heard on that device.
+    const bool vaxCarried = sliceId < 0 || sliceId >= 32
+        || ((m_vaxSliceMask.load(std::memory_order_acquire) >> sliceId) & 1u) != 0;
+    const int vaxCh = vaxCarried ? slice->vaxChannel() : 0;
     const bool vaxValid = vaxCh >= 1 && vaxCh <= 4;
     float vaxGain = 1.0f;
     if (vaxValid) {

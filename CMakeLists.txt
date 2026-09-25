@@ -844,6 +844,9 @@ set(CORE_SOURCES
     src/core/BuildIdentity.cpp
     src/core/FFTRouter.cpp
     src/core/SliceStreamAllocator.cpp
+    # iPhone app Task 73 (R-IOS-02): whose each slice is, the held-for mark
+    # and each owner's active slice.
+    src/core/SliceOwnership.cpp
     src/core/WidebandFrameAccumulator.cpp
     src/core/WidebandFftEngine.cpp
     src/core/spectrum/WidebandDisplayReference.cpp
@@ -1107,6 +1110,9 @@ set(CORE_SOURCES
     # R-R3-34: bounded per-radio receive-layout persistence. Runtime
     # restoration is wired separately at the RadioModel/daemon boundary.
     src/core/ReceiveLayoutStore.cpp
+    # iPhone app Task 73 (R-IOS-02): each device's closed slices, with a copy
+    # of their own settings, kept per device and per radio for its return.
+    src/core/DeviceLayoutStore.cpp
     # R2 Task 7: the state-mirroring core. MirrorSchema walks Qt's
     # meta-object system over the five mirrored model classes and gives
     # each Q_PROPERTY a dense session-scoped ordinal plus a wire kind;

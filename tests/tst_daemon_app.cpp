@@ -54,6 +54,11 @@
 //   2026-09-23: cover remote_bind "::" taking IPv4 and IPv6, by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-25: a Core restart keeps each slice's owner or held-for mark,
+//               and a manifest from before owners restores slices with no
+//               owner (iPhone app plan Task 73, R-IOS-02), by J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 
 #include <QtTest/QtTest>
 
@@ -85,6 +90,8 @@
 #include "core/security/PairingWindow.h"
 #include "core/security/StationLabel.h"
 #include "core/AppSettings.h"
+#include "core/ReceiveLayoutStore.h"
+#include "core/SliceOwnership.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -188,6 +195,73 @@ private slots:
     // BoardCapabilities row (BoardCapabilities.cpp kHermesLite) sets
     // maxSlices = 5, so 3 is well within the SKU's real capacity and
     // must come back exactly, not clamped.
+    // iPhone app Task 73 (ruling 5.3): a Core restart keeps each slice's
+    // owner, or the device it is held for. Nobody is on a Core that has just
+    // started, so a device's slice comes back held for it by the station
+    // device (ruling 5.2 step 1); the next save writes the marks back as
+    // they are. (The HL2 here holds two slices; the next test restores a
+    // slice with no owner.)
+    void aRestartKeepsOwnersAndHeldForMarks()
+    {
+        const QString mac = QStringLiteral("AA:BB:CC:DD:EE:73");
+        const QByteArray phone(32, '\x31');
+        const QByteArray tablet(32, '\x32');
+        const QList<ReceiveSliceState> layout{
+            {0, QStringLiteral("pan-0"), 7074000.0, DSPMode::USB, phone, {}},
+            {1, QStringLiteral("pan-0"), 7075000.0, DSPMode::USB, SliceOwnership::stationDevice(),
+             tablet},
+        };
+        QVERIFY(ReceiveLayoutStore::stage(AppSettings::instance(), mac, layout));
+        // Saved and removed on disk too: this test's settings file is kept
+        // between runs.
+        const auto forget = qScopeGuard([&mac] {
+            AppSettings::instance().remove(QStringLiteral("hardware/%1/receiveLayout")
+                                               .arg(AppSettings::normalizedRadioMac(mac)));
+            AppSettings::instance().save();
+        });
+        {
+            DaemonApp app;
+            app.primeBoardForTest(HPSDRHW::HermesLite, mac);
+            QVERIFY(app.start(testCoreConfig()));
+            QCOMPARE(app.sliceCount(), 2);
+            const SliceOwnership* ownership = app.m_radioModel->sliceOwnership();
+            QCOMPARE(ownership->mark(0).owner, SliceOwnership::stationDevice());
+            QCOMPARE(ownership->mark(0).heldFor, phone);
+            QCOMPARE(ownership->mark(1).owner, SliceOwnership::stationDevice());
+            QCOMPARE(ownership->mark(1).heldFor, tablet);
+            app.stop();
+        }
+        const ReceiveLayoutStore::LoadResult saved =
+            ReceiveLayoutStore::load(AppSettings::instance(), mac);
+        QCOMPARE(static_cast<int>(saved.state),
+                 static_cast<int>(ReceiveLayoutStore::LoadState::Loaded));
+        QCOMPARE(saved.slices.size(), 2);
+        QCOMPARE(saved.slices.at(0).owner, SliceOwnership::stationDevice());
+        QCOMPARE(saved.slices.at(0).heldFor, phone);
+        QCOMPARE(saved.slices.at(1).heldFor, tablet);
+    }
+
+    // A manifest from before owners: every slice restored with no owner.
+    void aManifestFromBeforeOwnersRestoresSlicesWithNoOwner()
+    {
+        const QString mac = QStringLiteral("AA:BB:CC:DD:EE:74");
+        const QString normalized = AppSettings::normalizedRadioMac(mac);
+        AppSettings::instance().setHardwareValue(
+            normalized, QStringLiteral("receiveLayout"),
+            QStringLiteral(R"({"version":1,"slices":[{"id":0,"panKey":"pan-0","frequencyHz":7074000,"dspMode":1},{"id":1,"panKey":"pan-0","frequencyHz":7075000,"dspMode":1}]})"));
+        const auto forget = qScopeGuard([&normalized] {
+            AppSettings::instance().remove(QStringLiteral("hardware/%1/receiveLayout").arg(normalized));
+            AppSettings::instance().save();
+        });
+        DaemonApp app;
+        app.primeBoardForTest(HPSDRHW::HermesLite, mac);
+        QVERIFY(app.start(testCoreConfig()));
+        QCOMPARE(app.sliceCount(), 2);
+        const SliceOwnership* ownership = app.m_radioModel->sliceOwnership();
+        QCOMPARE(ownership->unowned(), (QList<int>{0, 1}));
+        app.stop();
+    }
+
     void createsConfiguredSliceCount()
     {
         DaemonConfig cfg = testCoreConfig();
