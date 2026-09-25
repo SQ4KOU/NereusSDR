@@ -13,6 +13,10 @@
 //   2026-04-20 — Original implementation for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 35 (R-IOS-13): Remote, a paired
+//                 device's key through the Core (RadioModel::keyedBy names
+//                 which device). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -30,6 +34,7 @@ enum class PttSource {
     Cw        = 5,   // Firmware keyer
     Tune      = 6,   // Tune button (reduced power carrier)
     TwoTone   = 7,   // Two-tone test generator
+    Remote    = 8,   // A paired device's key through the Core (Task 35)
     Count
 };
 
@@ -43,6 +48,7 @@ inline QString pttSourceLabel(PttSource s) {
         case PttSource::Cw:      return QStringLiteral("CW");
         case PttSource::Tune:    return QStringLiteral("Tune");
         case PttSource::TwoTone: return QStringLiteral("2-Tone");
+        case PttSource::Remote:  return QStringLiteral("Remote");
         default:                 return QStringLiteral("?");
     }
 }

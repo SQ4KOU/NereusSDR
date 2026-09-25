@@ -18,6 +18,10 @@
 //   2026-09-25: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 34 (R-IOS-13), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 35 (R-IOS-13): keyEnded (a copy of a
+//               key the Core has already stopped) and the holder's unkey
+//               refusal. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 #pragma once
 
@@ -63,6 +67,9 @@ inline constexpr char kHolderOnAir[] = "holderOnAir";
 /// The holder's own verb (tx.setTxSlice) from a device while transmit is
 /// unheld (Task 34's choice, for the controller's review).
 inline constexpr char kNotHolder[] = "notHolder";
+/// Task 35: a copy of a key (the same command) that arrives after the Core
+/// stopped the transmission it started. It never keys again.
+inline constexpr char kKeyEnded[] = "keyEnded";
 
 // ---- Fixes ----------------------------------------------------------------
 inline constexpr char kFixTakeTransmit[] = "takeTransmit";
@@ -109,6 +116,12 @@ TxRefusal stopNotConfirmed();
 TxRefusal holderOnAir(const QString& holderShortName, bool radioPtt);
 /// The holder's verb while transmit is unheld.
 TxRefusal notHolder();
+/// Task 35 (ruling 8.5): tx.unkey, or a TUNE or two-tone stop, from a device
+/// that does not hold transmit (code otherDeviceHolds): "<holder> has the
+/// transmitter. Take it to stop the transmission."
+TxRefusal otherDeviceHoldsStop(const QString& holderName);
+/// Task 35: a copy of a key that arrives after the Core stopped it.
+TxRefusal keyEnded();
 
 } // namespace TxRefusals
 

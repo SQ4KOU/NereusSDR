@@ -3358,7 +3358,8 @@ void TstStationSession::receiveOnlyStationBlocksRemoteBandRecall()
 void TstStationSession::receiveOnlyStationRefusesTransmitPropertyWrites()
 {
     // R-R3-25 applies at the authenticated StationServer boundary too.
-    // TransmitModel is mirrored bidirectionally for later phases, but an R3
+    // TransmitModel is mirrored bidirectionally (mox and tune from the Core
+    // only, iPhone app plan Task 35), but an R3
     // receive-only server must reject those writes and return authoritative
     // accepted-state results rather than adopting the client's optimistic state.
     QTemporaryDir settingsDir;
@@ -3407,9 +3408,16 @@ void TstStationSession::receiveOnlyStationRefusesTransmitPropertyWrites()
     QCOMPARE(stationTx.power(), settledPower);
 
     QTRY_VERIFY(clientEnd->receivedKinds().contains(QByteArrayLiteral("property.result")));
-    QTRY_VERIFY(!clientTx.isMox());
-    QTRY_VERIFY(!clientTx.isTune());
     QTRY_COMPARE(clientTx.power(), settledPower);
+    // iPhone app plan Task 35: mox and tune travel from the Core only
+    // (MirrorPolicy Outbound), so the window never sends them: a device
+    // keys with the transmit verbs. Only the power reached the Core.
+    for (const QByteArray& wire : stationEnd->received()) {
+        if (!wire.contains("\"property.write\"")) {
+            continue;
+        }
+        QVERIFY2(!wire.contains("\"mox\"") && !wire.contains("\"tune\""), wire.constData());
+    }
 }
 
 void TstStationSession::nr3CannotRunIsRefusedOnTheCoreAndInTheWindow()

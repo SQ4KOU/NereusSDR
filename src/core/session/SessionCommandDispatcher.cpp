@@ -125,6 +125,12 @@
 //                                    (setTransmitAccess), refusals with
 //                                    refusalCode and refusalFix values.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app plan Task 35 (R-IOS-13):
+//                                    tx.key, tx.unkey, tx.tune and
+//                                    tx.twoTone, routed to the Core's
+//                                    RemoteKeying; an accepted key's
+//                                    epoch in the result's values.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -437,6 +443,16 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
         // to one of the holder's slices, by its id (never a list position).
         {"tx.setTxSlice", {arg("sliceId", kInt)}, "remoteTxVersion", 1,
          kRadioIdentitySessionProtocolMinor},
+        // iPhone app plan Task 35 (R-IOS-13): keying from a device. Each is
+        // sent three times as the same command; the Core acts once.
+        {"tx.key", {arg("trigger", kUtf8)}, "remoteTxVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        {"tx.unkey", {arg("epoch", kInt)}, "remoteTxVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        {"tx.tune", {arg("on", kBool)}, "remoteTxVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        {"tx.twoTone", {arg("on", kBool)}, "remoteTxVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
         // Neural noise reduction.
         {"nnr.setDiagnostics",
          {arg("sliceId", kInt), arg("testMode", kInt), arg("outputMode", kInt)},
@@ -654,6 +670,11 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleSetTxSlice(invoke);
         return;
     }
+    if (invoke.commandVerb == "tx.key" || invoke.commandVerb == "tx.unkey"
+        || invoke.commandVerb == "tx.tune" || invoke.commandVerb == "tx.twoTone") {
+        handleTxKeying(invoke);
+        return;
+    }
 
     if (invoke.commandVerb.startsWith("notch.")) {
         handleNotchAction(invoke);
@@ -789,6 +810,70 @@ bool SessionCommandDispatcher::refusedWhileOnAir(const SessionMessage& invoke)
     }
     emitRefusal(invoke.commandVerb, invoke.commandId, refusal);
     return true;
+}
+
+void SessionCommandDispatcher::handleTxKeying(const SessionMessage& invoke)
+{
+    // iPhone app plan Task 35 (R-IOS-13): keying from a device. The rules
+    // are RemoteKeying's; this reads the arguments and answers.
+    RemoteKeying::Command command;
+    command.deviceId = m_requester;
+    command.session = m_sessionOwner;
+    command.commandId = invoke.commandId;
+    bool readable = false;
+    if (invoke.commandVerb == "tx.key") {
+        command.verb = RemoteKeying::Verb::Key;
+        QString trigger;
+        readable = hasExactlyArguments(invoke.arguments, {"trigger"})
+            && findUtf8Argument(invoke.arguments, "trigger", &trigger)
+            && RemoteKeying::isTrigger(trigger.toUtf8());
+        command.trigger = trigger.toUtf8();
+    } else if (invoke.commandVerb == "tx.unkey") {
+        command.verb = RemoteKeying::Verb::Unkey;
+        QVariant raw;
+        bool converted = false;
+        readable = hasExactlyArguments(invoke.arguments, {"epoch"})
+            && hasWireKind(invoke.arguments, "epoch", MirrorWireKind::Int64)
+            && findArgument(invoke.arguments, "epoch", &raw);
+        const qlonglong epoch = readable ? raw.toLongLong(&converted) : 0;
+        // An epoch the Core issued: 1 to 4294967295.
+        readable = readable && converted && epoch >= 1
+            && epoch <= static_cast<qlonglong>(std::numeric_limits<quint32>::max());
+        command.epoch = readable ? static_cast<quint32>(epoch) : 0;
+    } else {
+        command.verb = invoke.commandVerb == "tx.tune" ? RemoteKeying::Verb::Tune
+                                                       : RemoteKeying::Verb::TwoTone;
+        QVariant on;
+        readable = hasExactlyArguments(invoke.arguments, {"on"})
+            && findArgument(invoke.arguments, "on", &on) && on.typeId() == QMetaType::Bool;
+        command.on = readable && on.toBool();
+    }
+    if (!readable) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core could not read this request."), {});
+        return;
+    }
+    if (!m_transmitAccess.keying) {
+        // No Core transmit rules behind this dispatcher: nothing keys.
+        emitRefusal(invoke.commandVerb, invoke.commandId, TxRefusals::stationReceiveOnly());
+        return;
+    }
+    const RemoteKeying::Result result = m_transmitAccess.keying(command);
+    if (result.accepted) {
+        QList<MirrorUpdate> values;
+        if (result.epoch != 0) {
+            values.append({0, "epoch", MirrorWireKind::Int64,
+                           QVariant(static_cast<qlonglong>(result.epoch))});
+        }
+        emit commandResultReady(SessionMessages::commandResult(
+            invoke.commandVerb, invoke.commandId, true, QString(), {}, values));
+        return;
+    }
+    if (!result.refusal.isEmpty()) {
+        emitRefusal(invoke.commandVerb, invoke.commandId, result.refusal);
+        return;
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, false, result.reason, {});
 }
 
 void SessionCommandDispatcher::handleSetTxSlice(const SessionMessage& invoke)

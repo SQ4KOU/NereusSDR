@@ -62,6 +62,9 @@
 //                 Claude Code.
 //   2026-09-25 - iPhone app Task 73 (R-IOS-02): SliceMarker, all Outbound.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 35 (R-IOS-13): TransmitModel's mox
+//                 and tune Outbound (the transmit verbs key). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -311,8 +314,12 @@ const MirrorPolicy::Entry kEntries[] = {
     { "SliceModel", "lastRadeRxCallsign", MirrorDirection::Outbound },
 
     // ---- TransmitModel (15 entries) ----
-    { "TransmitModel", "mox", MirrorDirection::Bidirectional },
-    { "TransmitModel", "tune", MirrorDirection::Bidirectional },
+    // iPhone app plan Task 35 (R-IOS-13): MOX and TUNE travel from the
+    // Core only. A remote device keys with the transmit verbs (tx.key,
+    // tx.tune), which pass the Core's gates; a property write never keys
+    // (StationServer refuses it: "Use the transmit button.").
+    { "TransmitModel", "mox", MirrorDirection::Outbound },
+    { "TransmitModel", "tune", MirrorDirection::Outbound },
     { "TransmitModel", "power", MirrorDirection::Bidirectional },
     { "TransmitModel", "micGain", MirrorDirection::Bidirectional },
     { "TransmitModel", "pureSig", MirrorDirection::Bidirectional },

@@ -252,6 +252,11 @@
 //                micNotReady); stopAllTx's MOX = false goes to the
 //                controller. NereusSDR-original. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 35 (R-IOS-13): keyedBy and the
+//                keying epoch; setTune(bool, const KeyerIdentity&) asks and
+//                keys TUNE for a remote device; PttSource::Remote while a
+//                device is keyed. NereusSDR-original. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -9642,6 +9647,36 @@ void RadioModel::setTransmitHolder(const QByteArray& holder)
     applyActiveSlices();
 }
 
+// iPhone app plan Task 35 (R-IOS-13): who is keyed, and the keying epoch.
+void RadioModel::setKeyedBy(const KeyedBy& keyedBy)
+{
+    if (role() != Role::Local || m_keyedBy == keyedBy) {
+        return;
+    }
+    m_keyedBy = keyedBy;
+    // The Radio Status page's PTT source: a paired device's key is Remote.
+    // Only Remote is set and cleared here; the other sources are not this
+    // record's.
+    const bool remote = !keyedBy.isEmpty()
+        && keyedBy.deviceId != QByteArray(KeyerIdentity::kStationDeviceId);
+    if (remote) {
+        m_radioStatus.setActivePttSource(PttSource::Remote);
+    } else if (m_radioStatus.activePttSource() == PttSource::Remote) {
+        m_radioStatus.setActivePttSource(PttSource::None);
+    }
+    emit keyedByChanged();
+}
+
+quint32 RadioModel::advanceKeyingEpoch()
+{
+    ++m_keyingEpoch;
+    if (m_keyingEpoch == 0) {
+        // uint32 wraps after four billion keys; 0 stays "no key".
+        m_keyingEpoch = 1;
+    }
+    return m_keyingEpoch;
+}
+
 int RadioModel::lowestFreeSliceId() const
 {
     for (int id = 0; id < sliceChannelLimit(); ++id) {
@@ -18109,6 +18144,19 @@ static bool isLsbFamily(DSPMode mode) noexcept
     return mode == DSPMode::LSB || mode == DSPMode::CWL || mode == DSPMode::DIGL;
 }
 
+void RadioModel::setTune(bool on, const KeyerIdentity& keyer)
+{
+    // iPhone app plan Task 35 (R-IOS-13): the same TUNE, asked and keyed for
+    // `keyer`. Only the TUN-on path reads m_tuneKeyer; TUN-off ends a TUNE
+    // whoever started it.
+    if (!on) {
+        setTune(false);
+        return;
+    }
+    const QScopedValueRollback<const KeyerIdentity*> scope(m_tuneKeyer, &keyer);
+    setTune(true);
+}
+
 void RadioModel::setTune(bool on)
 {
     // Porting from Thetis console.cs:29978-30157 [v2.10.3.13] — chkTUN_CheckedChanged.
@@ -18167,7 +18215,10 @@ void RadioModel::setTune(bool on)
         // iPhone app plan Task 34 (ruling 8.5): TUNE is a station key. The
         // keying gate is asked before anything is saved or switched, so a
         // refused TUNE never touches another device's transmission.
-        if (m_moxController && !m_moxController->admitStationKey(PttMode::Manual)) {
+        // Task 35: a remote device's TUNE asks for that device.
+        if (m_moxController
+            && !(m_tuneKeyer != nullptr ? m_moxController->admitKey(*m_tuneKeyer)
+                                        : m_moxController->admitStationKey(PttMode::Manual))) {
             emit tuneRefused(m_moxController->lastRefusal().text);
             return;
         }
@@ -18459,7 +18510,12 @@ void RadioModel::setTune(bool on)
                 // R-R3-36: mark this call as Tune keying for the PC-microphone
                 // admission check (covers every caller, TGXL and TCI included).
                 const QScopedValueRollback<bool> tuneKey(m_tuneKeyInFlight, true);
-                m_moxController->setTune(true);
+                // Task 35: a remote device's TUNE keys as that device.
+                if (m_tuneKeyer != nullptr) {
+                    m_moxController->setTune(true, *m_tuneKeyer);
+                } else {
+                    m_moxController->setTune(true);
+                }
                 keyed = m_moxController->isMox();
                 // Tune pressed while already keyed commits no new key-up; the
                 // carrier now comes from the tune tone either way.

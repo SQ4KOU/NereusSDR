@@ -185,6 +185,11 @@
 //                 its keyer's key; every refusal also as a TxRefusal
 //                 (moxRefused). NereusSDR-original. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 35 (R-IOS-13): admitKey(keyer) and
+//                 setTune(bool, const KeyerIdentity&), so a remote device's
+//                 TUNE and two-tone ask and key as that device.
+//                 NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -425,6 +430,10 @@ public:
     // the refusal through moxRejected / moxRefused. Always true with no
     // gate installed.
     bool admitStationKey(PttMode source);
+    // iPhone app plan Task 35: the same question for any keyer (a remote
+    // device's TUNE or two-tone). admitStationKey(source) is
+    // admitKey(KeyerIdentity::station(source)).
+    bool admitKey(const KeyerIdentity& keyer);
 
     // ── Setter ───────────────────────────────────────────────────────────────
     // setPttMode: idempotent; emits pttModeChanged on actual transition.
@@ -514,6 +523,9 @@ public slots:
     // owner of that completion (RadioModel::completeTuneOff) calls
     // setManualKey(false).
     void setTune(bool on);
+    // iPhone app plan Task 35: TUNE keyed as `keyer` (setMox(true, keyer));
+    // off is setTune(false).
+    void setTune(bool on, const KeyerIdentity& keyer);
 
     // onMoxButton: the MOX button (TxApplet, container buttons).
     //
@@ -1510,6 +1522,9 @@ private:
     KeyingGateFn  m_keyingGate;
     KeyerIdentity m_currentKeyer{KeyerIdentity::station(PttMode::None)};
     KeyerIdentity m_admittedKeyer{KeyerIdentity::station(PttMode::None)};
+    // Task 35: setTune(true, keyer) in progress, and for whom.
+    KeyerIdentity m_tuneKeyer{KeyerIdentity::station(PttMode::Manual)};
+    bool m_tuneForKeyer{false};
     bool          m_keyAdmitted{false};
     TxRefusal     m_lastRefusal;
 };

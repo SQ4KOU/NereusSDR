@@ -43,6 +43,9 @@
 //   remoteTransmit   the Core's remote_transmit: "allow" or "deny"
 //                    ("deny", as every Core was before iPhone app plan
 //                    Task 34)
+//   transmitReady    iPhone app plan Task 35: the static radio's MOX walk
+//                    runs with no delays and the radio's own microphone
+//                    carries the audio, so a key can key it (false)
 //   otherPairedDevices
 //                    devices besides the runner's own paired before the
 //                    client connects (0); their keys are made at run time
@@ -120,6 +123,9 @@
 //   2026-09-25  J.J. Boyd / KG4VCF  iPhone app plan Task 34 (R-IOS-02):
 //                                    stationSetup "remoteTransmit".
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app plan Task 35 (R-IOS-13):
+//                                    stationSetup "transmitReady".
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-25  J.J. Boyd / KG4VCF  iPhone app Task 71 (R-IOS-02):
 //                                    stationSetup "otherClients" in place
 //                                    of "preemptingClient"; an app's
@@ -146,6 +152,7 @@
 #include "core/ModelPaths.h"
 #include "core/AppSettings.h"
 #include "core/ConnectionState.h"
+#include "core/MoxController.h"
 #include "core/StepAttenuatorController.h"
 #include "core/dsp/DspAssetService.h"
 #include "core/meters/SliceMeterPump.h"
@@ -180,6 +187,7 @@ const QStringList kSetupKeys{
     QStringLiteral("otherConnections"), QStringLiteral("token"),
     QStringLiteral("pairedDevice"),    QStringLiteral("otherPairedDevices"),
     QStringLiteral("board"),           QStringLiteral("remoteTransmit"),
+    QStringLiteral("transmitReady"),
 };
 
 // The station a fixture's stationSetup describes. Members are declared in
@@ -322,6 +330,23 @@ QString buildStation(const QJsonObject& setup, Station* station, quint16 major)
         return QStringLiteral("stationSetup.remoteTransmit must be \"allow\" or \"deny\"");
     }
     station->server->setRemoteTransmitAllowed(remoteTransmit == QStringLiteral("allow"));
+    // iPhone app plan Task 35: a key can key the static radio. Its MOX walk
+    // runs with no delays (so a key's messages arrive in a fixed order),
+    // and the radio's own microphone carries the audio (no PC microphone
+    // to wait for). No radio is behind it; nothing reaches a transmitter.
+    const QJsonValue transmitReady = setup.value(QStringLiteral("transmitReady"));
+    if (!transmitReady.isUndefined() && !transmitReady.isBool()) {
+        return QStringLiteral("stationSetup.transmitReady must be true or false");
+    }
+    if (transmitReady.toBool(false)) {
+        if (setup.value(QStringLiteral("radio")).toString() != QStringLiteral("static")
+            || station->model->moxController() == nullptr) {
+            return QStringLiteral("stationSetup.transmitReady applies only to the static radio");
+        }
+        station->model->moxController()->setTimerIntervals(0, 0, 0, 0, 0, 0);
+        station->model->transmitModel().setMicSourceLocked(false);
+        station->model->transmitModel().setMicSource(MicSource::Radio);
+    }
     if (station->harness) {
         // A StationServer makes its radio receive-only
         // (setReceiveOnlyStationPolicy), which turns PureSignal's readiness

@@ -659,9 +659,9 @@ client asks `StationClient::stationDeclares(feature, minVersion)`. The station
 declares `deviceAuth` 1 (section 3.5), `pairing` 1 (section 3.6) and
 `sessionHolder` 1 (below) when its identity key is usable.
 
-**`remoteTx` 1** (iPhone app plan Task 34): the client understands remote
-transmit: `txPermitted`, the transmit refusals and `tx.setTxSlice`
-(section 18). A peer that declares it at minor 11 is sent
+**`remoteTx` 1** (iPhone app plan Tasks 34 and 35): the client understands
+remote transmit: `txPermitted`, the transmit refusals, `tx.setTxSlice` and
+keying (`tx.key`, `tx.unkey`, `tx.tune`, `tx.twoTone`, section 18.6). A peer that declares it at minor 11 is sent
 `remoteTxVersion` (section 6.3); `txPermitted` is true only for a peer that
 declares it. The station does not declare it.
 
@@ -869,8 +869,9 @@ When a feature is off, its version is 0:
 - `remoteTxVersion`: sent only at agreed minor 11, last, and only to a
   peer whose hello declared `remoteTx` 1; any other peer is sent no entry
   (and reads 0). 1: `txPermitted` is the station transmit gate's answer
-  for that session, `tx.setTxSlice` (section 9.1) and the refusals of
-  section 18. The table above shows the value a declaring peer is sent.
+  for that session, `tx.setTxSlice` and the keying verbs `tx.key`,
+  `tx.unkey`, `tx.tune` and `tx.twoTone` (section 9.1), and the refusals
+  of section 18. The table above shows the value a declaring peer is sent.
 
 `txPermitted` (iPhone app plan Task 34) is true only for a session the
 station transmit gate permits (section 18.1): false until
@@ -1445,8 +1446,8 @@ An enum property lists the values its domain allows.
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
-| 0 | `mox` | `bool` | bidirectional |  |
-| 1 | `tune` | `bool` | bidirectional |  |
+| 0 | `mox` | `bool` | outbound |  |
+| 1 | `tune` | `bool` | outbound |  |
 | 2 | `power` | `i64` | bidirectional |  |
 | 3 | `micGain` | `f64` | bidirectional |  |
 | 4 | `pureSig` | `bool` | bidirectional |  |
@@ -1771,8 +1772,10 @@ model that is not loaded) comes back later as a `delta`: the slice's
 noise-reduction status carries the reason, and a refused noise-reduction
 selection returns to the one before it.
 
-A property write never keys the transmitter: a write of `transmit`'s
-`mox` or `tune` is refused ("Transmit only from the transmit controls."),
+A property write never keys the transmitter: `transmit`'s `mox` and
+`tune` travel from the Core only (outbound), and a write of either is
+refused ("Use the transmit button."); a device keys with the keying verbs
+(section 18.6),
 and the transmit safety gates stay at the station (section 18). With
 `remote_transmit` allow, the other `transmit` properties and the
 transmit-side settings keys are written only by a session `txPermitted`
@@ -2090,6 +2093,10 @@ refused.
 | `setAlexRxAntenna` | `band` i64, `antenna` i64, `rxOnly` bool | `radioHardwareVersion` | 3 | 11 |
 | `setAlexBpfMode` | `chain` i64, `mode` i64 | `radioHardwareVersion` | 4 | 11 |
 | `tx.setTxSlice` | `sliceId` i64 | `remoteTxVersion` | 1 | 11 |
+| `tx.key` | `trigger` utf8 | `remoteTxVersion` | 1 | 11 |
+| `tx.unkey` | `epoch` i64 | `remoteTxVersion` | 1 | 11 |
+| `tx.tune` | `on` bool | `remoteTxVersion` | 1 | 11 |
+| `tx.twoTone` | `on` bool | `remoteTxVersion` | 1 | 11 |
 | `nnr.setDiagnostics` | `sliceId` i64, `testMode` i64, `outputMode` i64 | `nnrVersion` | 1 | 5 |
 | `nnr.resetTuning` | `sliceId` i64 | `nnrVersion` | 1 | 5 |
 | `nnr.tryAgain` | `sliceId` i64 | `nnrVersion` | 1 | 11 |
@@ -3083,6 +3090,9 @@ same on every machine.
 | `foreign-write-refused` | This device holds slice 0 and another device slice 1: a `property.write` to `slice:1` and to `marker:1`, and `removeSlice` and `setActiveSliceById` naming slice 1, are refused "That slice belongs to Other device 1. It can be changed only there.", with no value sent back and nothing changed; its own slice it may make active |
 | `held-for-device` | Another device, alone on the Core, leaves with `session.leave`: its slice keeps running, held for it. This device, let in meanwhile, does not adopt it: it gets a slice of its own and the other's as a marker with `ownerAway` true; the other device signs in again and the marker's `ownerAway` turns false (the slice is its own again) |
 | `verbs-tx-set-tx-slice` | On a Core with `remote_transmit` allow (stationSetup `remoteTransmit`), a device that declares `remoteTx` is sent `txPermitted` false in its first `capabilities` and true in the `capabilities` sent again after `snapshot.complete`, each with `remoteTxVersion` 1; `tx.setTxSlice` with an argument it does not take is refused "The Core could not read this request."; with `sliceId` while nobody holds transmit it is refused "Take transmit on this device first." with the values `refusalCode` `notHolder` and `refusalFix` `takeTransmit`. Runs on the station alone |
+| `unheld-key` | On a Core with `remote_transmit` allow whose radio can key (stationSetup `transmitReady`), one device that declares `remoteTx`: each keying verb with an argument it does not take is refused "The Core could not read this request."; a program's `tx.key {trigger:"tci"}` on unheld transmit is refused `programNeedsTransmit` and nobody takes transmit; a person's `tx.key {trigger:"screen"}` takes it and keys (epoch 1; `transmitting` true, the device's entry transmitting); `tx.unkey {epoch:1}` unkeys; the same program's key then keys (epoch 2) and `tx.unkey {epoch:2}` unkeys; `tx.tune {on:true}` tunes (epoch 3, `transmit`'s `tune` true) and `{on:false}` ends it; `tx.twoTone {on:true}` on a radio with no transmit channel is refused "The two-tone test could not start on the Core." Runs on the station and the app |
+| `grace-transmit-held` | Two devices that declare `remoteTx`: the other device keys and this one's permission goes false (`capabilities` sent again) and its `tx.key` is refused "Other device 1 has the transmitter."; the holder's link drops: the Core stops transmitting at once (`transmitting` false) and the holder, away, still holds transmit (this device's `tx.key` is refused naming it); the holder signs in again a minute later, nothing keys until its own `tx.key` (epoch 2), and its `tx.unkey {epoch:2}` unkeys. Runs on the station and the app |
+| `on-air-refusals` | While another device (short name "Tablet B") is keyed, this device's Protocol 1 rate change, `ps3.off`, its slice's `rxAntenna` and `transmit`'s `pureSig` are each refused "Tablet B is on the air. Try again when they stop." (commands with `refusalCode` `holderOnAir` and `refusalFix` `takeTransmit`). Runs on the station alone |
 | `verbs-session-leave` | `session.leave` with an argument is refused, "The request to leave the Core was not understood."; without, it is accepted and the station closes the connection with no `session.end`. Runs on the station alone |
 | `heartbeat-answered`, `heartbeat-missed` | The heartbeat, above |
 | `connect-deadline` | No `auth.request` within 30000 ms: `session.end` "This app did not finish connecting to the Core in time.", `retryable` true |
@@ -3240,9 +3250,9 @@ how a fixture is written to what the code does.
 iPhone app plan Task 34 (R-IOS-02, R-IOS-03, R-IOS-13; the several-devices
 design, rulings 7.4, 8.1 to 8.5, 8.8, 8.13 and 8.15). This section is the
 Core's side of remote transmit that exists today. Keying from a device
-(`tx.key`, `tx.tune`, `tx.twoTone`) arrives with Task 35, `txState` with
-Task 39 and taking transmit (`tx.take`) with Task 77; until then no device
-can key the radio over the link.
+(`tx.key`, `tx.unkey`, `tx.tune`, `tx.twoTone`, section 18.6) came with
+Task 35; `txState` arrives with Task 39 and taking transmit (`tx.take`)
+with Task 77.
 
 ### 18.1 Who may transmit
 
@@ -3318,9 +3328,12 @@ sentence. A client shows the sentence as sent and may offer the fix.
 | `stopNotConfirmed` | The radio did not confirm it stopped transmitting. | |
 | `holderOnAir` | <short name> is on the air. Try again when they stop. ("The radio is on the air. Try again when it stops." while the radio's own PTT, or the Core's own keys, hold transmit) | `takeTransmit` |
 | `notHolder` | Take transmit on this device first. | `takeTransmit` |
+| `otherDeviceHolds` | <holder> has the transmitter. Take it to stop the transmission. (`tx.unkey`, or TUNE or two-tone off, from a device that does not hold transmit) | `takeTransmit` |
+| `keyEnded` | The Core already stopped this transmission. Key again to transmit. | |
 
 `changingHands` and `stopNotConfirmed` are the several-devices design's two
-sentences without codes; `holderOnAir` is ruling 7.4's; `notHolder` answers
+sentences without codes; `keyEnded` answers a copy of a key the Core has
+already stopped (section 18.6); `holderOnAir` is ruling 7.4's; `notHolder` answers
 `tx.setTxSlice` while nobody holds transmit, a case the design does not
 settle.
 
@@ -3356,3 +3369,65 @@ through the unkey-confirmed gate first and the flag moves once receive is
 reached; unkeyed it moves at once. The result is `accepted` when the move
 is asked; the slices' `txSlice` deltas carry the move.
 
+### 18.6 Keying
+
+iPhone app plan Task 35 (R-IOS-13; spec section 4.6 item 7; D51, D58,
+D63; the several-devices design, section 2.2 and rulings 8.3, 8.5 and
+8.14). Four verbs, under `remoteTxVersion` 1 at minor 11, for a peer that
+declared `remoteTx` 1 (any other peer is refused "Update this app to
+transmit through this Core."):
+
+- `tx.key {trigger}`: key the transmitter on the transmit slice.
+  `trigger` is `"screen"`, `"headset"`, `"bluetooth"`, `"actionButton"`
+  (a person's key) or `"tci"` (a program's key, sent by a remote window's
+  TCI server for an app); any other value is refused "The Core could not
+  read this request."
+- `tx.unkey {epoch}`: release the key with that epoch. The transmitter
+  stops now (the normal unkey; TUNE and two-tone end their own way).
+- `tx.tune {on}`: TUNE on or off; on keys at the tune power.
+- `tx.twoTone {on}`: the two-tone test on or off.
+
+Every key passes the Core's gates in the order of section 18.1 and then
+TX inhibit, the PA trip, the band plan and the interlock, as every key at
+the Core does; a refused one is refused with its code (section 18.3).
+
+**Who may key.** A person's key (`tx.key` with any trigger but `"tci"`,
+and `tx.tune` and `tx.twoTone` on) while transmit is unheld makes that
+device the holder, unkeyed, and then keys; nobody is asked. The holder
+keys. Another device's key while transmit is held, keyed or not, present
+or away, is refused `otherDeviceHolds`. A program's key
+(`tx.key {trigger:"tci"}`) never takes transmit: it keys only while its
+device already holds transmit, and is otherwise refused
+`programNeedsTransmit` (unheld) or `otherDeviceHolds` (held by another
+device), and nobody becomes the holder. While a device holds transmit, a
+VOX key at the Core is that device's.
+
+**Who may release.** `tx.unkey`, and `tx.tune` and `tx.twoTone` off, are
+the holder's: from a device that does not hold transmit they are refused
+`otherDeviceHolds` ("<holder> has the transmitter. Take it to stop the
+transmission.") and the transmission continues. A release ends only that
+device's own key. The Core's own safety stops end whoever is keyed.
+
+**The keying epoch.** An accepted `tx.key`, `tx.tune {on:true}` or
+`tx.twoTone {on:true}` answers with the key's epoch in its `values`:
+`epoch` (`i64`, 1 to 4294967295, advancing with every key; a refused key
+spends none). `tx.unkey` names it. A device sends each key and each unkey
+three times, as the same command (the same verb and `id`); the Core acts
+on the first and answers every copy:
+
+- a copy of an accepted key is answered with the same epoch while that
+  key is on, and refused `keyEnded` once it has ended (released, stopped
+  by the Core, or taken), so a delayed copy never keys again;
+- a copy of a refused key is answered with the same refusal;
+- a `tx.key` with a new `id` while the device's own key is on changes
+  nothing and is answered with that key's epoch;
+- a `tx.unkey` whose epoch is older than the device's key now on is
+  ignored (answered accepted; nothing changes), and one with nothing of
+  the device's on is answered accepted.
+
+A session's commands are forgotten when it ends. A device whose link
+drops is unkeyed at once (section 18.2) and, when it signs in again, nothing
+keys until it sends a new `tx.key`: no replay, no resume.
+
+An accepted `tx.unkey`, and an accepted TUNE or two-tone off, carry no
+values.

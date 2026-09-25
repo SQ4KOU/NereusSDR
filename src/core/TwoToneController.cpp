@@ -40,6 +40,10 @@
 //                A start asks the keying gate first (admitStationKey), so a
 //                refused two-tone never releases or rides another device's
 //                key. NereusSDR-original.
+//   2026-09-25 : iPhone app plan Task 35 (R-IOS-13), by J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code. A remote
+//                device's start asks and keys as that device
+//                (setActive(bool, const KeyerIdentity&)). NereusSDR-original.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis-derived activation flow
@@ -172,8 +176,23 @@ void TwoToneController::setSettleDelaysMs(int moxReleaseMs, int tuneReleaseMs)
 //
 // From Thetis setup.cs:11040-11191 [v2.10.3.13] — chkTestIMD_CheckedChanged.
 // ---------------------------------------------------------------------------
+void TwoToneController::setActive(bool on, const KeyerIdentity& keyer)
+{
+    if (on) {
+        m_keyer = keyer;
+        m_keyerFromCaller = true;
+    }
+    setActive(on);
+}
+
 void TwoToneController::setActive(bool on)
 {
+    // Task 35: a start from setActive(true) alone is the station device's.
+    const bool keyerFromCaller = m_keyerFromCaller;
+    m_keyerFromCaller = false;
+    if (on && !keyerFromCaller && !m_activationInFlight && !m_active) {
+        m_keyer = KeyerIdentity::station(PttMode::None);
+    }
     if (on == m_active && !m_activationInFlight) {
         // Idempotent: already in the requested state and not mid-walk.
         return;
@@ -211,7 +230,8 @@ void TwoToneController::setActive(bool on)
         // iPhone app plan Task 34 (ruling 8.5): two-tone is a station key.
         // Asked before anything releases MOX, so a refused start never
         // unkeys, or rides on, another device's key.
-        if (!m_moxController->admitStationKey(PttMode::None)) {
+        // Task 35: a remote device's start asks for that device.
+        if (!m_moxController->admitKey(m_keyer)) {
             return;
         }
 
@@ -506,7 +526,12 @@ void TwoToneController::continueActivation()
     m_moxController->setManualKey(true);
     {
         const QScopedValueRollback<bool> keying(m_keyingMox, true);
-        m_moxController->setMox(true);
+        // Task 35: a remote device's two-tone keys as that device.
+        if (m_keyer.isStation()) {
+            m_moxController->setMox(true);
+        } else {
+            m_moxController->setMox(true, m_keyer);
+        }
     }
 
     // If the setMox call above resulted in immediate rejection (synchronous

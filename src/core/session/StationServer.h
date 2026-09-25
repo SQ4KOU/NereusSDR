@@ -267,6 +267,14 @@
 //               remote_transmit in place of the blanket receive-only policy.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 35 (R-IOS-13, R-IOS-02): keying from a
+//               remote device (tx.key, tx.unkey, tx.tune, tx.twoTone through
+//               RemoteKeying, for a peer at minor 11 declaring remoteTx); a
+//               VOX key while a device holds transmit is that device's; a
+//               write of transmit's mox or tune is refused "Use the transmit
+//               button."; a session's keying commands are forgotten when it
+//               ends. J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QHash>
@@ -318,6 +326,7 @@ class StationCatalog;
 class StationDevicesFacade;
 class TokenStore;
 class TransmitHolder;
+class RemoteKeying;
 
 class StationServer : public QObject {
     Q_OBJECT
@@ -709,10 +718,12 @@ public:
     bool remoteTransmitAllowed() const { return m_txGate.remoteTransmitAllowed(); }
     /// Who holds transmit (never null).
     TransmitHolder* transmitHolder() const { return m_transmitHolder.get(); }
-    /// 1: txPermitted per session, the `tx.setTxSlice` verb, and the
-    /// on-air refusals, for a peer at minor 11 whose hello declared
-    /// remoteTx 1.
+    /// 1: txPermitted per session, the `tx.setTxSlice` verb, the on-air
+    /// refusals, and (Task 35) keying: `tx.key`, `tx.unkey`, `tx.tune` and
+    /// `tx.twoTone`, for a peer at minor 11 whose hello declared remoteTx 1.
     int remoteTxVersion() const { return 1; }
+    /// Task 35: keying from a remote device; null without a Local model.
+    RemoteKeying* remoteKeying() const { return m_remoteKeying.get(); }
     /// The gate's answer for `transport` (what its txPermitted says).
     TxDecision txDecisionFor(SessionTransport* transport) const;
     /// Releases transmit if `deviceId` holds it, through a transfer to
@@ -1055,6 +1066,9 @@ private:
     // iPhone app plan Task 34: who holds transmit, and who may transmit.
     std::unique_ptr<TransmitHolder> m_transmitHolder;
     StationTxGate m_txGate;
+    // iPhone app plan Task 35: keying from a remote device (a Local model
+    // with a MoxController only).
+    std::unique_ptr<RemoteKeying> m_remoteKeying;
     // iPhone app Task 73: one marker per slice (Qt-parented to this).
     SliceMarkerSet* m_markers = nullptr;
     // True while a restored layout's owners are settled just before every

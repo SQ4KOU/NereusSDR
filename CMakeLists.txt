@@ -1305,6 +1305,8 @@ list(APPEND CORE_SOURCES
     # mirrored `connectedDevices` object.
     src/core/session/DeviceSessionRegistry.cpp
     src/core/session/ConnectedDevicesFacade.cpp
+    # iPhone app plan Task 35 (R-IOS-13): keying from a remote device.
+    src/core/session/RemoteKeying.cpp
     # iPhone app Task 14 (R-IOS-08, D37): the pairing window, its code and
     # the SPAKE2+EE exchange (libsodium, cmake/NereusPairing.cmake).
     src/core/security/PairingCode.cpp

@@ -134,6 +134,11 @@
 //                                    (setTransmitAccess), refusals with
 //                                    refusalCode and refusalFix values.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app plan Task 35 (R-IOS-13):
+//                                    tx.key, tx.unkey, tx.tune and
+//                                    tx.twoTone (TransmitAccess::keying);
+//                                    an accepted key carries its epoch.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -144,6 +149,7 @@
 #include <functional>
 #include <utility>
 
+#include "core/session/RemoteKeying.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StationDevicesFacade.h"
 #include "core/safety/TxRefusal.h"
@@ -239,9 +245,13 @@ public:
     /// the air, or empty. txSlice: the refusal for tx.setTxSlice from
     /// `requester` (the holder's verb, ruling 8.10), or empty. Unset, no
     /// verb is refused by either rule.
+    /// Task 35 (R-IOS-13): keying: the Core's answer to tx.key, tx.unkey,
+    /// tx.tune and tx.twoTone (RemoteKeying::handle). Unset, those verbs
+    /// are refused stationReceiveOnly and nothing keys.
     struct TransmitAccess {
         std::function<TxRefusal(const QByteArray& requester)> onAir;
         std::function<TxRefusal(const QByteArray& requester)> txSlice;
+        std::function<RemoteKeying::Result(const RemoteKeying::Command& command)> keying;
     };
     void setTransmitAccess(TransmitAccess access) { m_transmitAccess = std::move(access); }
 
@@ -345,6 +355,8 @@ private:
     /// and fix as the values refusalCode and refusalFix.
     void emitRefusal(const QByteArray& verb, quint32 commandId, const TxRefusal& refusal);
     void handleSetTxSlice(const NereusSDR::SessionMessage& invoke);
+    // Task 35: tx.key, tx.unkey, tx.tune, tx.twoTone.
+    void handleTxKeying(const NereusSDR::SessionMessage& invoke);
     TransmitAccess m_transmitAccess;
     struct PendingPureSignalCommand {
         quint32 commandId;

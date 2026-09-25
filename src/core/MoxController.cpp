@@ -395,14 +395,18 @@ void MoxController::onTakeFinished(const KeyerIdentity& keyer, bool took)
 
 bool MoxController::admitStationKey(PttMode source)
 {
+    return admitKey(KeyerIdentity::station(source));
+}
+
+bool MoxController::admitKey(const KeyerIdentity& keyer)
+{
     if (!m_keyingGate) {
         return true;
     }
-    const KeyerIdentity keyer = KeyerIdentity::station(source);
-    if (m_mox && m_currentKeyer.isStation()) {
-        return true;   // the station's own key is on: nothing to ask
+    if (m_mox && m_currentKeyer.deviceId == keyer.deviceId) {
+        return true;   // the keyer's own key is on: nothing to ask
     }
-    const KeyingAnswer answer = m_keyingGate(source, keyer);
+    const KeyingAnswer answer = m_keyingGate(keyer.source, keyer);
     if (m_mox || answer.verdict != KeyingVerdict::Admit) {
         // Another device's key is on, or the gate refused or took.
         const TxRefusal refusal = answer.refusal.isEmpty() ? TxRefusals::changingHands()
@@ -664,6 +668,19 @@ void MoxController::onModeChanged(DSPMode mode)
 // path in chkMOX_CheckedChanged2 sets _current_ptt_mode = PTTMode.NONE
 // (console.cs:29547 [v2.10.3.15]).
 // ---------------------------------------------------------------------------
+void MoxController::setTune(bool on, const KeyerIdentity& keyer)
+{
+    // iPhone app plan Task 35: the TUN-on below, keyed as `keyer`.
+    if (!on) {
+        setTune(false);
+        return;
+    }
+    m_tuneKeyer = keyer;
+    m_tuneForKeyer = true;
+    setTune(true);
+    m_tuneForKeyer = false;
+}
+
 void MoxController::setTune(bool on)
 {
     if (on) {
@@ -690,7 +707,12 @@ void MoxController::setTune(bool on)
         // guard → state commit → emit txAboutToBegin → emit
         // hardwareFlipped(true) → start rfDelay → ... → txReady.
         // From Thetis console.cs:30081 [v2.10.3.13]: chkMOX.Checked = true;
-        setMox(true);
+        // Task 35: a remote device's TUNE keys as that device.
+        if (m_tuneForKeyer) {
+            setMox(true, m_tuneKeyer);
+        } else {
+            setMox(true);
+        }
 
     } else {
         // ── TUN-off: release MOX BEFORE clearing the flag ─────────────────

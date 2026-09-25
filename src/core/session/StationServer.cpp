@@ -272,6 +272,14 @@
 //               remote_transmit in place of the blanket receive-only policy.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 35 (R-IOS-13, R-IOS-02): keying from a
+//               remote device (tx.key, tx.unkey, tx.tune, tx.twoTone through
+//               RemoteKeying, for a peer at minor 11 declaring remoteTx); a
+//               VOX key while a device holds transmit is that device's; a
+//               write of transmit's mox or tune is refused "Use the transmit
+//               button."; a session's keying commands are forgotten when it
+//               ends. J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -298,6 +306,7 @@
 #include "core/SliceOwnership.h"
 #include "core/MoxController.h"
 #include "core/safety/TransmitHolder.h"
+#include "core/session/RemoteKeying.h"
 #include "core/safety/UnkeyGate.h"
 #include "core/session/ConnectedDevicesFacade.h"
 #include "core/session/DeviceSessionRegistry.h"
@@ -651,8 +660,8 @@ constexpr const char* kReceiveOnlyTransmitReason =
 // iPhone app plan Task 34: a property write never keys the transmitter. MOX
 // and TUNE come only from the transmit controls (the transmit verbs), which
 // pass the Core's gates.
-constexpr const char* kPropertyNeverKeysReason =
-    "Transmit only from the transmit controls.";
+// Task 35: the words the plan gives it.
+constexpr const char* kPropertyNeverKeysReason = "Use the transmit button.";
 
 // R-IOS-01: the one reason for a write to a property MirrorPolicy marks
 // outbound (the station's own readings and derived values, and properties
@@ -979,6 +988,16 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             request.deviceId = keyer.deviceId;
             request.program = keyer.program;
             request.vox = source == PttMode::Vox;
+            // Task 35 (ruling 8.4): VOX keys on audio, not on a person, and
+            // follows the holder: while a device holds transmit (VOX is
+            // disarmed at every change of holder, so it was armed for that
+            // device), a VOX key is that device's.
+            if (keyer.isStation() && source == PttMode::Vox
+                && m_transmitHolder->state() == TransmitHolder::State::Held) {
+                if (const auto holder = m_transmitHolder->holder()) {
+                    request.deviceId = holder->deviceId;
+                }
+            }
             // The radio's own PTT (its mic or a footswitch) is PttMode::Mic
             // from the station device (ruling 8.5).
             request.source = keyer.isStation() && source == PttMode::Mic
@@ -991,7 +1010,12 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             const bool on = mox->isMox() || state != MoxState::Rx;
             if (on) {
                 const auto holder = m_transmitHolder->holder();
-                if (holder && mox->isMox() && mox->currentKeyer().deviceId == holder->deviceId) {
+                // Task 35 (ruling 8.4): a VOX key is the holder's.
+                const KeyerIdentity& keyer = mox->currentKeyer();
+                const bool holdersKey = holder
+                    && (keyer.deviceId == holder->deviceId
+                        || (keyer.isStation() && keyer.source == PttMode::Vox));
+                if (holdersKey && mox->isMox()) {
                     m_transmitHolder->setKeyed(true);
                 }
             } else {
@@ -999,6 +1023,10 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             }
             m_transmitHolder->onMoxReading(on);
         });
+        // iPhone app plan Task 35 (R-IOS-13): keying from a remote device.
+        // Created after the holder's MOX follower above, so the holder
+        // knows it is keyed before keyedBy is published.
+        m_remoteKeying = std::make_unique<RemoteKeying>(m_radioModel, m_transmitHolder.get());
     }
     // Revoking a device frees its place at once, live or away, and forgets
     // that its time ran out (ruling 4.11). Its live connection ends in the
@@ -1400,6 +1428,15 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             }
             const TxRefusal refusal = m_transmitHolder->keyRefusalFor(requester);
             return refusal.isEmpty() ? TxRefusals::notHolder() : refusal;
+        };
+        // Task 35: tx.key, tx.unkey, tx.tune and tx.twoTone.
+        access.keying = [this](const RemoteKeying::Command& command) {
+            if (!m_remoteKeying) {
+                RemoteKeying::Result result;
+                result.reason = QStringLiteral("The Core has no radio ready.");
+                return result;
+            }
+            return m_remoteKeying->handle(command);
         };
         m_dispatcher->setTransmitAccess(std::move(access));
     }
@@ -2058,6 +2095,11 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
     }
     if (!owner.isEmpty()) {
         m_dispatcher->endSessionOwner(owner);
+        // Task 35: its keying commands (and their copies) are forgotten, so
+        // a reconnect never replays a key.
+        if (m_remoteKeying) {
+            m_remoteKeying->forgetSession(owner);
+        }
     }
     for (auto route = m_resultRoutes.begin(); route != m_resultRoutes.end();) {
         route = route->isNull() || route->data() == transport ? m_resultRoutes.erase(route)
@@ -2415,8 +2457,11 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
             break;
         }
         // iPhone app plan Task 34: tx.setTxSlice came with remoteTxVersion
-        // 1, for a peer at minor 11 whose hello declared remoteTx.
-        if (message.commandVerb == "tx.setTxSlice"
+        // 1, for a peer at minor 11 whose hello declared remoteTx; Task 35's
+        // keying verbs with it.
+        if ((message.commandVerb == "tx.setTxSlice" || message.commandVerb == "tx.key"
+             || message.commandVerb == "tx.unkey" || message.commandVerb == "tx.tune"
+             || message.commandVerb == "tx.twoTone")
             && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
                 || !peerDeclares(transport, QByteArrayLiteral("remoteTx"), 1))) {
             send(transport, SessionMessages::commandResult(

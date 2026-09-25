@@ -75,6 +75,9 @@
 //               a dropped holder, releases, tx.setTxSlice. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-25: iPhone app plan Task 35 (R-IOS-13): a device's tx.key over
+//               the link takes transmit for every device to see. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "StationMultiSessionHarness.h"
@@ -734,6 +737,51 @@ private slots:
             return entry.value(QStringLiteral("holdsTransmit")).toBool()
                 && entry.value(QStringLiteral("state")).toString() == QStringLiteral("listening");
         }));
+        QVERIFY(!txPermitted(appB));
+    }
+
+    // iPhone app plan Task 35 (R-IOS-13, R-IOS-02): the same over the link.
+    // A's tx.key takes transmit and keys; B's permission goes false and B's
+    // tx.key and tx.unkey are refused naming A; A's tx.unkey unkeys and A
+    // still holds transmit.
+    void aDevicesKeyOverTheLinkTakesTransmitForEveryDeviceToSee()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        LoopbackTransport* appB = core.signIn(b, kTransmitter);
+        QVERIFY(admitted(appA) && admitted(appB));
+        QTRY_VERIFY(txPermitted(appB));
+        MoxController* mox = core.model->moxController();
+
+        const QJsonObject key = core.invoke(appA, "tx.key", {utf8("trigger", QStringLiteral("screen"))});
+        QVERIFY(key.value(QStringLiteral("accepted")).toBool());
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+        QCOMPARE(mox->currentKeyer().deviceId, a.key.fingerprint());
+        QTRY_VERIFY(!txPermitted(appB));
+        QVERIFY(waitForList(appB, [&a](const QJsonArray& list) {
+            const QJsonObject entry = entryFor(list, a.id());
+            return entry.value(QStringLiteral("holdsTransmit")).toBool()
+                && entry.value(QStringLiteral("state")).toString() == QStringLiteral("transmitting");
+        }));
+
+        const QJsonObject bKey = core.invoke(appB, "tx.key", {utf8("trigger", QStringLiteral("screen"))});
+        QVERIFY(!bKey.value(QStringLiteral("accepted")).toBool(true));
+        QCOMPARE(bKey.value(QStringLiteral("reason")).toString(),
+                 TxRefusals::otherDeviceHolds(QStringLiteral("iPhone")).text);
+        const QJsonObject bUnkey = core.invoke(appB, "tx.unkey", {int64("epoch", 1)});
+        QCOMPARE(bUnkey.value(QStringLiteral("reason")).toString(),
+                 TxRefusals::otherDeviceHoldsStop(QStringLiteral("iPhone")).text);
+        QVERIFY(mox->isMox());
+
+        QVERIFY(core.invoke(appA, "tx.unkey", {int64("epoch", 1)})
+                    .value(QStringLiteral("accepted")).toBool());
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QVERIFY(core.server->transmitHolder()->isHeldBy(a.key.fingerprint()));
         QVERIFY(!txPermitted(appB));
     }
 

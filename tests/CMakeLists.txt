@@ -7477,6 +7477,12 @@ nereus_add_test(tst_on_air_refusals
 nereus_add_test(tst_station_multi_session
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
+# iPhone app plan Task 35 (R-IOS-13): keying from a remote device (tx.key,
+# tx.unkey, tx.tune, tx.twoTone): every refusal, holder and gate rule, the
+# keying epoch and its copies, the reconnect, and keyedBy.
+nereus_add_test(tst_remote_keying
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
 # iPhone app Task 73 (R-IOS-02): whose each slice is (owners, held for,
 # adoption, each owner's active slice and the station-level one), and each
 # device's closed slices kept for its return.

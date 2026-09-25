@@ -831,6 +831,58 @@
         {
             "arguments": [
                 {
+                    "kind": "utf8",
+                    "name": "trigger",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteTxVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "tx.key"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "epoch",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteTxVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "tx.unkey"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "bool",
+                    "name": "on",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteTxVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "tx.tune"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "bool",
+                    "name": "on",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteTxVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "tx.twoTone"
+        },
+        {
+            "arguments": [
+                {
                     "kind": "i64",
                     "name": "sliceId",
                     "optional": false
@@ -4793,13 +4845,13 @@
         "TransmitModel": {
             "properties": [
                 {
-                    "direction": "bidirectional",
+                    "direction": "outbound",
                     "kind": "bool",
                     "name": "mox",
                     "ordinal": 0
                 },
                 {
-                    "direction": "bidirectional",
+                    "direction": "outbound",
                     "kind": "bool",
                     "name": "tune",
                     "ordinal": 1

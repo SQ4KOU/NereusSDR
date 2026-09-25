@@ -10,6 +10,9 @@
 //   2026-09-25: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 34 (R-IOS-13), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 35 (R-IOS-13): otherDeviceHoldsStop
+//               and keyEnded. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/safety/TxRefusal.h"
@@ -148,6 +151,22 @@ TxRefusal notHolder()
 {
     return make(kNotHolder, QStringLiteral("Take transmit on this device first."),
                 kFixTakeTransmit);
+}
+
+TxRefusal otherDeviceHoldsStop(const QString& holderName)
+{
+    // The several-devices design, ruling 8.5: a device that does not hold
+    // transmit stops a transmission only by taking transmit.
+    return make(kOtherDeviceHolds,
+                QStringLiteral("%1 has the transmitter. Take it to stop the transmission.")
+                    .arg(holderName),
+                kFixTakeTransmit);
+}
+
+TxRefusal keyEnded()
+{
+    return make(kKeyEnded,
+                QStringLiteral("The Core already stopped this transmission. Key again to transmit."));
 }
 
 } // namespace NereusSDR::TxRefusals

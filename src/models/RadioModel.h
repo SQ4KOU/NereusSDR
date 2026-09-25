@@ -151,6 +151,11 @@
 //                micNotReady); stopAllTx's MOX = false goes to the
 //                controller. NereusSDR-original. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 35 (R-IOS-13): who is keyed
+//                (keyedBy, naming the transmit holder) and the keying
+//                epoch; setTune for a remote device's key; PttSource::Remote
+//                while a device is keyed. NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -301,6 +306,7 @@ class SliceMeterPump;
 class WidebandFftEngine;
 // 3M-1a G.1: forward declarations for TX-side components.
 class MoxController;
+struct KeyerIdentity;
 class TxChannel;
 class AmModulationAnalyzer;
 // Phase 3F Sub-Epic J Task 11: forward decl for rxChannelForSlice()'s
@@ -1533,6 +1539,37 @@ public:
     /// While one holds it, its active slice is the station-level one
     /// (ruling 5.11). Local only.
     void setTransmitHolder(const QByteArray& holder);
+
+    /// iPhone app plan Task 35 (R-IOS-13): who is keyed. While MOX is on it
+    /// names the transmit holder (a device's key, a program's key through
+    /// its window, and VOX all name the device that holds transmit; the
+    /// Core's own keys name the station device, kind "station"), how it
+    /// keyed and the key's epoch. Empty deviceId while unkeyed. The Core
+    /// sets it (StationServer, through RemoteKeying); a desktop on its own
+    /// leaves it empty.
+    struct KeyedBy {
+        QByteArray deviceId;
+        QString deviceName;
+        QString deviceKind;
+        /// A device's trigger ("screen", "headset", "bluetooth",
+        /// "actionButton", "tci"), "tune" or "twoTone" for those keys,
+        /// "vox", or for the station device's own keys "radioPtt", "cat"
+        /// or "station".
+        QByteArray trigger;
+        /// The keying epoch: advances with every key, so each key has its
+        /// own.
+        quint32 epoch{0};
+
+        bool isEmpty() const { return deviceId.isEmpty(); }
+        bool operator==(const KeyedBy& other) const = default;
+    };
+    KeyedBy keyedBy() const { return m_keyedBy; }
+    /// Local only. Also shows PttSource::Remote in RadioStatus while a
+    /// device other than the station is keyed.
+    void setKeyedBy(const KeyedBy& keyedBy);
+    /// The next keying epoch (each call advances it; never 0).
+    quint32 advanceKeyingEpoch();
+    quint32 keyingEpoch() const { return m_keyingEpoch; }
 
     /// The lowest slice id not in use (the next letter a new slice takes),
     /// or -1 when every id with a channel is in use.
@@ -3148,6 +3185,11 @@ public slots:
     //
     // Cite: Thetis console.cs:29978-30157 [v2.10.3.13] — chkTUN_CheckedChanged.
     void setTune(bool on);
+    // iPhone app plan Task 35 (R-IOS-13): TUNE for `keyer`, a remote
+    // device's key: the keying gate is asked for that device (a person's key
+    // on unheld transmit takes it) and the tune's MOX key is that device's.
+    // setTune(false) ends it as any TUNE ends.
+    void setTune(bool on, const KeyerIdentity& keyer);
 
     // TGXL autotune orchestration (NereusSDR-native, no Thetis source).
     //
@@ -3573,6 +3615,8 @@ signals:
     // the operator (MainWindow shows it for 10 s, as Thetis's
     // infoBar.Warning(msg, false, 10000)).
     void transmitStopped(QString message);
+    // iPhone app plan Task 35: keyedBy() changed.
+    void keyedByChanged();
     // Phase 3Q-1: parametrized — state passed so UI consumers can act without
     // a secondary RadioModel::connectionState() read under race conditions.
     // Existing no-arg slot connections (ConnectionPanel, MainWindow, SpectrumWidget)
@@ -4947,6 +4991,11 @@ private:
     SliceModel* m_activeSlice{nullptr};
     // iPhone app Task 73: whose each slice is. Qt-parented to this model.
     SliceOwnership* m_sliceOwnership{nullptr};
+    // iPhone app plan Task 35.
+    KeyedBy m_keyedBy;
+    quint32 m_keyingEpoch{0};
+    // Set while setTune(true, keyer) runs: the keyer TUNE asks and keys for.
+    const KeyerIdentity* m_tuneKeyer{nullptr};
     // iPhone app Task 73 (ruling 5.11): the frequency the FreeDV Reporter
     // lists, the station-level active slice's; published when connected.
     quint64 m_freedvWantedHz{0};
