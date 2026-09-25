@@ -9062,6 +9062,12 @@ void RadioModel::connectBandOutputsReport()
                 onBandOutputsComposed(ocByte, band, keyed);
             },
             Qt::QueuedConnection);
+    // Fix wave M2: a pin edit (this window's, or a remote window's through
+    // the "oc" reload, which reloads this same matrix) reaches the
+    // connection, which sends it at once on Protocol 2.
+    connect(&m_ocMatrix, &OcMatrix::changed, conn,
+            [conn]() { conn->onBandOutputPinsChanged(); },
+            Qt::QueuedConnection);
 }
 
 void RadioModel::onBandOutputsComposed(quint8 ocByte, int band, bool keyed)

@@ -472,6 +472,13 @@ public slots:
         m_disable6mLnaOnTx = onTx;
     }
 
+    /// A band-output (OC) pin was edited in the matrix this connection
+    /// composes from (plan Task 14 fix wave, M2). Protocol 2 sends a
+    /// high-priority packet when the byte changes, as Thetis pushes a pin
+    /// edit at once; Protocol 1 carries bank 0 in its frame rotation, so the
+    /// base does nothing.
+    virtual void onBandOutputPinsChanged() {}
+
     /// "HPF Bypass" (the Alex tab's master switch, Thetis chkAlexHPFBypass
     /// "ByPass/55 MHz HPF"). An Alex board's high-pass word is 0x20, keyed
     /// or not:
@@ -797,6 +804,9 @@ private:
     std::atomic<float> m_lastUserAdc0Volts{-1.0f};
 
 protected:
+    // The band-output byte last reported by publishBandOutputs, or -1.
+    int publishedOcByte() const noexcept { return m_publishedOcByte; }
+
     // Reports the band-output byte composed into the packet that carries it
     // (bandOutputsComposed), once per change. Called from the compose path,
     // which is const; the emit does not change the connection's state.

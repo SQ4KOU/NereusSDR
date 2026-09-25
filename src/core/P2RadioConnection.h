@@ -246,6 +246,7 @@ public slots:
     void setHpfBypassOnPs(bool on) override;
     void setAlexHpfBypass(bool on) override;
     void setDisable6mLna(bool onRx, bool onTx) override;
+    void onBandOutputPinsChanged() override;
     void setReceiverVfoFrequencies(const QVector<quint64>& vfoHzBySlot) override;
     void setActiveReceiverCount(int count) override;
     void setSampleRate(int sampleRate) override;
@@ -906,6 +907,11 @@ private:
     // The frequency whose band selects the OC outputs (byte 1401): the
     // transmitting slice's while keyed, the RX1 stand-in's VFO while not.
     quint64 ocBandFrequencyHz() const;
+    // The OC byte byte 1401 carries (buildCodecContext's ctx.ocByte).
+    quint8 composedOcByte() const;
+    // Plan Task 14 fix wave (M2, M3): a high-priority packet when that byte
+    // differs from the one last sent, as Thetis's SetOCBits.
+    void pushBandOutputsIfChanged();
 
     // --- DDC→ADC mapping register (from Thetis network.c rx_adc_ctrl1) ---
     quint32 m_rxAdcCtrl1{0};

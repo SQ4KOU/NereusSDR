@@ -1900,6 +1900,11 @@ nereus_add_test(tst_alex_hpf_switches)
 nereus_add_test(tst_band_outputs_display
     fakes/LoopbackTransport.cpp)
 target_compile_definitions(tst_band_outputs_display PRIVATE NEREUS_BUILD_TESTS)
+# Plan Task 14 fix wave, M2 and M3 (3M-1 transmit): Protocol 2 sends a
+# high-priority packet for the band outputs when, and only when, the OC byte
+# changes: a pin edit at once, a VFO step only across a byte change
+# (netInterface.c:399-407 SetOCBits, setup.cs:12718). NereusSDR-original.
+nereus_add_test(tst_p2_band_outputs_push fakes/P2FakeRadio.cpp)
 
 # ── A band change must retune the DDC even while CTUN holds it ───────────────
 # CTUN pins the DDC via ReceiverManager::m_ddcFreqLocked so a VFO nudge inside

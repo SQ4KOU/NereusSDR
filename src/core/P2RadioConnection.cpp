@@ -1529,8 +1529,10 @@ void P2RadioConnection::setReceiverVfoFrequencies(const QVector<quint64>& vfoHzB
             changed = true;
         }
     }
-    if (changed && m_running) {
-        sendCmdHighPriority();
+    // Fix wave M3: a VFO step sends a packet only when the OC byte it
+    // selects changes, as SetOCBits does. It used to send on every step.
+    if (changed) {
+        pushBandOutputsIfChanged();
     }
 }
 
@@ -1568,6 +1570,62 @@ quint64 P2RadioConnection::ocBandFrequencyHz() const
         return m_rxVfoHz[slot];
     }
     return m_rx[slot].frequency > 0 ? static_cast<quint64>(m_rx[slot].frequency) : 0;
+}
+
+// ---------------------------------------------------------------------------
+// composedOcByte: the OC byte buildCodecContext puts in byte 1401. Only a
+// board with OC outputs (ocOutputCount, every Protocol 2 row) drives them.
+// ---------------------------------------------------------------------------
+quint8 P2RadioConnection::composedOcByte() const
+{
+    if (m_ocMatrix && m_caps && m_caps->ocOutputCount > 0) {
+        const Band currentBand = bandFromFrequency(static_cast<double>(ocBandFrequencyHz()));
+        return m_ocMatrix->maskFor(currentBand, m_mox);  // 3M-1a E.7: was m_tx[0].pttOut != 0
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// pushBandOutputsIfChanged: send a high-priority packet when the OC byte it
+// would carry differs from the one last sent (plan Task 14 fix wave, M2 and
+// M3). Thetis sends one exactly then:
+//   From Thetis ChannelMaster/netInterface.c:399-407 [v2.10.3.15]
+//     void SetOCBits(int b)
+//     {
+//         if (prn->oc_output != b)
+//         {
+//             prn->oc_output = b;
+//             if (listenSock != INVALID_SOCKET && prn->sendHighPriority != 0)
+//                 CmdHighPriority();
+// A band change that leaves the byte alone sends nothing; the band shown
+// with the byte is still updated.
+// ---------------------------------------------------------------------------
+void P2RadioConnection::pushBandOutputsIfChanged()
+{
+    if (!m_running) {
+        return;
+    }
+    const quint8 byte = (m_useLegacyP2Codec || !m_codec) ? quint8(0) : composedOcByte();
+    if (int(byte) != publishedOcByte()) {
+        sendCmdHighPriority();
+        return;
+    }
+    publishBandOutputs(byte,
+                       int(bandFromFrequency(static_cast<double>(ocBandFrequencyHz()))),
+                       m_mox);
+}
+
+// ---------------------------------------------------------------------------
+// onBandOutputPinsChanged: a band-output pin was edited, on this window or
+// from a remote one (plan Task 14 fix wave, M2). Thetis pushes a pin edit to
+// the radio at once:
+//   From Thetis setup.cs:12718 [v2.10.3.15] (chkPenOCrcv160_CheckedChanged)
+//     console.PennyExtCtrlEnabled = chkPennyExtCtrl.Checked;  // need side effect of this to push change to native code
+// whose setter ends in NetworkIO.SetOCBits (Penny.cs:134-194 ExtCtrlEnable).
+// ---------------------------------------------------------------------------
+void P2RadioConnection::onBandOutputPinsChanged()
+{
+    pushBandOutputsIfChanged();
 }
 
 // ---------------------------------------------------------------------------
@@ -3153,12 +3211,7 @@ CodecContext P2RadioConnection::buildCodecContext() const
     // the transmitting slice's band while keyed and the RX1 stand-in's VFO
     // band while not (ocBandFrequencyHz). Only a board with OC outputs
     // (ocOutputCount, every Protocol 2 row) drives the pins.
-    if (m_ocMatrix && m_caps && m_caps->ocOutputCount > 0) {
-        const Band currentBand = bandFromFrequency(static_cast<double>(ocBandFrequencyHz()));
-        ctx.ocByte = m_ocMatrix->maskFor(currentBand, m_mox);  // 3M-1a E.7: was m_tx[0].pttOut != 0
-    } else {
-        ctx.ocByte = 0;
-    }
+    ctx.ocByte = composedOcByte();
 
     // From Thetis cmaster.SetADCSupply / NetworkIO.LRAudioSwap [v2.10.3.15]
     // Per clsHardwareSpecific.cs:85-191 — forwarded to WDSP, not a P2 wire byte.
