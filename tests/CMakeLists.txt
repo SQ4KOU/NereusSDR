@@ -364,12 +364,16 @@ if(TARGET wdsp_static)
         nereus_add_test(tst_wdsp_thread_hook EXTRA_LABELS core)
         # R-R3-40, R-R3-37: a real receive channel at the Core's settings,
         # fed in real time, reads its load as busy time over wall time: a
-        # frame-like load (one long block in 12) reads its CPU share and
-        # never trips the NNR step-back; a real overload still does. Needs
-        # the thread-start hook for the worker's CPU clock, so not on
-        # Windows. Real time, about 45 s. RUN_SERIAL (R-R3-40): it measures
-        # the worker's real processor time, so ctest never runs it beside
-        # another test that would take that processor away.
+        # frame-like load (one long block in 12) reads the worker's busy
+        # share and never trips the NNR step-back; a real overload still
+        # does. The reference is dsplock.c's test block hook (each block's
+        # start and end), so a busy machine that preempts the worker inside
+        # a block does not break the comparison; the worker's CPU clock is
+        # checked one way (the load never reads under it). Needs the
+        # thread-start hook for that clock, so not on Windows. Real time,
+        # about 45 s. RUN_SERIAL (R-R3-40): it measures the worker's real
+        # processor time, so ctest never runs it beside another test that
+        # would take that processor away.
         nereus_add_test(tst_receiver_dsp_load_frames EXTRA_LABELS core REALTIME)
         set_tests_properties(tst_receiver_dsp_load_frames PROPERTIES RUN_SERIAL TRUE)
     endif()
