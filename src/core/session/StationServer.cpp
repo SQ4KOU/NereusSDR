@@ -235,6 +235,14 @@
 //                                    displayExtrasVersion 1 last in the
 //                                    minor-11 block. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-25: iPhone app Task 71 (R-IOS-02): up to four device
+//               sessions (DeviceSessionRegistry), admission and the same-device
+//               rule in place of preemption, the away state and its grace timer,
+//               session.leave, sessionHolder 1, sessionHolderVersion and
+//               `connectedDevices`, per-peer capabilities and mirror sends,
+//               command results to the asking session, media and telemetry to
+//               one session until Task 76. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -255,6 +263,8 @@
 #include "core/session/MirrorSchema.h"
 #include "core/session/ObjectRegistry.h"
 #include "core/session/SessionCommandDispatcher.h"
+#include "core/session/ConnectedDevicesFacade.h"
+#include "core/session/DeviceSessionRegistry.h"
 #include "core/session/SessionEndReasons.h"
 #include "core/session/SessionTransport.h"
 #include "core/session/StateMirror.h"
@@ -533,6 +543,29 @@ bool isCatalogSettingsKey(const QString& key)
 {
     return key.startsWith(QLatin1String("filters/"))
         || key.compare(QLatin1String("CWPitch"), Qt::CaseInsensitive) == 0;
+}
+
+// iPhone app Task 71 (rulings 4.4 and 4.8): a full Core's refusal, and the
+// end of a device's older connection when it connects again.
+constexpr const char* kCoreFullReason = "The Core already has four devices connected.";
+constexpr const char* kSameDeviceReason = "This device connected again.";
+// iPhone app Task 71 (ruling 4.12): session.leave's close; no session.end
+// carries it (the accepted result already told the device).
+constexpr const char* kLeftReason = "This device left the Core.";
+
+// The link's maxDeviceSessions is the registry's.
+static_assert(StationServer::kMaxDeviceSessions == DeviceSessionRegistry::kMaxDeviceSessions);
+
+// iPhone app Task 71 (sessionHolderVersion 1): who is on the Core, for a
+// view at kRadioIdentitySessionProtocolMinor whose hello declared
+// sessionHolder 1 with deviceAuth 1. Any other peer never sees the object.
+constexpr const char* kConnectedDevicesKey = "connectedDevices";
+
+bool isConnectedDevicesMessage(const SessionMessage& message)
+{
+    return message.objectKey == kConnectedDevicesKey
+        || (message.kind == SessionMessageKind::Schema
+            && message.className == "ConnectedDevicesFacade");
 }
 
 // iPhone app Task 13: why a connection ends when its device is removed, and
@@ -815,6 +848,17 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
         StationIdentity::loadOrCreate(m_securityDirectory));
     m_devices = std::make_unique<DeviceStore>(m_securityDirectory, m_tokens.get());
     m_deviceAuth = std::make_unique<DeviceAuthenticator>(*m_devices, *m_identity);
+    // iPhone app Task 71 (R-IOS-02): who holds a place, and the mirrored
+    // `connectedDevices` object that shows it.
+    m_deviceSessions = std::make_unique<DeviceSessionRegistry>();
+    m_connectedDevices = std::make_unique<ConnectedDevicesFacade>(*m_deviceSessions, *m_devices);
+    // Revoking a device frees its place at once, live or away, and forgets
+    // that its time ran out (ruling 4.11). Its live connection ends in the
+    // next deviceRemoved handler, with no away state: the place is already
+    // free.
+    connect(m_devices.get(), &DeviceStore::deviceRemoved, this, [this](const QByteArray& id) {
+        m_deviceSessions->remove(id);
+    });
     // iPhone app Task 13 (R-IOS-08): the `devices` object. A device removed
     // by anything (devices.revoke, the console, a reset) loses its
     // connection at once; so does every connection signed in with the token
@@ -835,6 +879,7 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     // its filter presets and its band plans from here on.
     m_catalog = std::make_unique<StationCatalog>();
     m_catalog->bind(radioModel);
+
     connect(m_devicesFacade.get(), &StationDevicesFacade::tokenRetired, this, [this]() {
         endAuthenticatedPeers([](const Peer& peer) { return peer.signedInWithToken; },
                               QString::fromLatin1(kPairingRequiredReason),
@@ -850,6 +895,10 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     if (m_identity->isValid() && m_certSha256.size() == 32) {
         m_certBinding = m_identity->certBinding(m_certSha256);
         m_declaredFeatures.insert(QByteArrayLiteral("deviceAuth"), 1);
+        // iPhone app Task 71 (ruling 10.1): the Core admits up to four
+        // devices and may ask the fifth-device question (Task 41). A
+        // client uses it only with deviceAuth, so it is declared with it.
+        m_declaredFeatures.insert(QByteArrayLiteral("sessionHolder"), 1);
         // iPhone app Task 14: pairing needs the identity key too (the
         // device learns it from the Core's pair.accept or box). Declared by
         // the Core only, and never asked of a client.
@@ -906,20 +955,47 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
         });
     }
 
-    // Outbound: everything the daemon has to say goes to whichever
-    // transport currently holds the session, and to nothing at all when
+    // Outbound: everything the daemon has to say goes to every admitted
+    // session (sendToSession fits it to each), and to nothing at all when
     // there is none.
     connect(m_mirror, &StateMirror::sessionMessageReady, this,
             [this](const SessionMessage& message) { sendToSession(message); });
     connect(radioModel, &RadioModel::receiveLayoutHydrated, this, [this] {
-        if (m_session && m_mirrorBuilt) {
+        if (hasAuthenticatedSession() && m_mirrorBuilt) {
             // Shared slice QObjects were restored without individual notify
             // signals. Re-seed their entire settled state on the same session.
             m_mirror->attachSession();
         }
     });
+    // iPhone app Task 71: a command's result goes to the session that asked:
+    // the one being dispatched now, or, for a result that arrives on a later
+    // turn, the one its verb and id were recorded for. The media session
+    // keeps any other (as the one session did before).
     connect(m_dispatcher, &SessionCommandDispatcher::commandResultReady, this,
-            [this](const SessionMessage& result) { sendToSession(result); });
+            [this](const SessionMessage& result) {
+                SessionTransport* to = nullptr;
+                if (m_dispatchingTransport != nullptr) {
+                    to = m_dispatchingTransport;
+                    m_resultSentInDispatch = true;
+                } else {
+                    const auto route =
+                        m_resultRoutes.constFind(qMakePair(result.commandVerb, result.commandId));
+                    to = route != m_resultRoutes.cend() ? route->data() : m_mediaSession;
+                }
+                if (to != nullptr) {
+                    sendToPeer(to, result);
+                }
+            });
+    // iPhone app Task 71 (ruling 4.12): session.leave was accepted for the
+    // connection being dispatched; it ends once its result has gone out.
+    connect(m_dispatcher, &SessionCommandDispatcher::sessionLeaveRequested, this, [this]() {
+        if (m_dispatchingTransport != nullptr) {
+            const auto peer = m_peers.find(m_dispatchingTransport);
+            if (peer != m_peers.end()) {
+                peer->leaving = true;
+            }
+        }
+    });
     connect(m_settingsServer, &SettingsProxyServer::outboundValueChanged, this,
             [this](const QString& key, const QVariant& value, const QString& originTag) {
                 sendToSession(
@@ -987,18 +1063,26 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     // authenticated replacement already received its own initial snapshot,
     // and an old callback must never refresh it.
     if (m_radioModel) {
+        // iPhone app Task 71: every admitted session, each with its own
+        // capabilities. A session that ended (its transport gone) or a
+        // connection no longer admitted is skipped.
         connect(m_radioModel, &RadioModel::currentRadioChanged, this,
                 [this](const NereusSDR::RadioInfo&) {
-                    const QPointer<SessionTransport> session(m_session);
-                    const quint64 sessionEpoch = m_mediaSessionEpoch;
-                    if (session.isNull()) {
+                    QList<QPointer<SessionTransport>> sessions;
+                    for (const Peer& peer : std::as_const(m_peers)) {
+                        if (!peer.sessionDeviceId.isEmpty()) {
+                            sessions.append(QPointer<SessionTransport>(peer.transport));
+                        }
+                    }
+                    if (sessions.isEmpty()) {
                         return;
                     }
-                    QTimer::singleShot(0, this, [this, session, sessionEpoch]() {
-                        if (session.isNull()) {
-                            return;
+                    QTimer::singleShot(0, this, [this, sessions]() {
+                        for (const QPointer<SessionTransport>& session : sessions) {
+                            if (!session.isNull()) {
+                                sendCapabilitiesAndSettingsSnapshot(session.data());
+                            }
                         }
-                        sendCapabilitiesAndSettingsSnapshot(session.data(), sessionEpoch);
                     });
                 });
     }
@@ -1024,10 +1108,21 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     m_deltaFlushTimer = new QTimer(this);
     m_deltaFlushTimer->setInterval(kDefaultDeltaFlushMs);
     connect(m_deltaFlushTimer, &QTimer::timeout, this, [this]() {
-        if (m_session != nullptr && m_mirror != nullptr) {
+        if (hasAuthenticatedSession() && m_mirror != nullptr) {
             m_mirror->flushCoalescedDeltas();
         }
     });
+
+    // iPhone app Task 71 (ruling 4.11): an away device's place frees when
+    // its 180 s end. One timer for the next end, re-armed on every change.
+    m_graceTimer = new QTimer(this);
+    m_graceTimer->setSingleShot(true);
+    connect(m_graceTimer, &QTimer::timeout, this, [this]() {
+        m_deviceSessions->expireAway();
+        scheduleGraceCheck();
+    });
+    connect(m_deviceSessions.get(), &DeviceSessionRegistry::changed, this,
+            &StationServer::scheduleGraceCheck);
 }
 
 StationServer::~StationServer()
@@ -1312,9 +1407,11 @@ void StationServer::publishConnectedDevices()
     if (!m_devicesFacade) {
         return;
     }
+    // iPhone app Task 71: admitted sessions only; a sign-in turned away from
+    // a full Core never shows as connected.
     QSet<QByteArray> connected;
     for (const Peer& peer : std::as_const(m_peers)) {
-        if (peer.authenticated && !peer.deviceId.isEmpty()) {
+        if (!peer.sessionDeviceId.isEmpty() && !peer.deviceId.isEmpty()) {
             connected.insert(peer.deviceId);
         }
     }
@@ -1359,7 +1456,60 @@ QString StationServer::formatFirstRunBanner(const QString& fingerprint,
 
 bool StationServer::hasAuthenticatedSession() const
 {
-    return m_session != nullptr;
+    return authenticatedSessionCount() > 0;
+}
+
+int StationServer::authenticatedSessionCount() const
+{
+    int count = 0;
+    for (const Peer& peer : std::as_const(m_peers)) {
+        if (!peer.sessionDeviceId.isEmpty()) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+int StationServer::devicesConnectedForDiscovery() const
+{
+    // Ruling 10.4: a Core no device has claimed has no devices on it and
+    // sends 0; the count is a number only, never who.
+    return m_devices->isClaimed() ? m_deviceSessions->placesTaken() : 0;
+}
+
+bool StationServer::peerHoldsSessions(SessionTransport* transport) const
+{
+    return peerDeclares(transport, QByteArrayLiteral("sessionHolder"), 1)
+        && peerDeclares(transport, QByteArrayLiteral("deviceAuth"), 1);
+}
+
+bool StationServer::peerHasSessionHolderVersion(SessionTransport* transport) const
+{
+    const auto it = m_peers.constFind(transport);
+    return it != m_peers.cend() && it->agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && peerHoldsSessions(transport) && sessionHolderVersion() >= 1;
+}
+
+void StationServer::noteActivity(SessionTransport* transport)
+{
+    const auto it = m_peers.constFind(transport);
+    if (it != m_peers.cend() && !it->sessionDeviceId.isEmpty()) {
+        m_deviceSessions->noteActivity(it->sessionDeviceId);
+    }
+}
+
+void StationServer::scheduleGraceCheck()
+{
+    if (m_graceTimer == nullptr) {
+        return;
+    }
+    const std::optional<qint64> next = m_deviceSessions->nextExpiryMs();
+    if (!next) {
+        m_graceTimer->stop();
+        return;
+    }
+    const qint64 remaining = std::max<qint64>(0, *next - m_deviceSessions->now());
+    m_graceTimer->start(static_cast<int>(std::min<qint64>(remaining, 24LL * 3600 * 1000)));
 }
 
 // ── Peer lifecycle ───────────────────────────────────────────────────────
@@ -1389,18 +1539,18 @@ void StationServer::acceptTransport(SessionTransport* transport)
     }
     transport->setParent(this);
 
-    // Peer cap. Refused BEFORE any state is allocated for it, and with a
+    // Socket cap. Refused BEFORE any state is allocated for it, and with a
     // reason on the wire so a legitimate client that hits this knows why
-    // rather than seeing an unexplained close. Only ever one session is
-    // authenticated (see the topology decision in the header), so this
-    // bounds peers that are mid-handshake.
+    // rather than seeing an unexplained close. iPhone app Task 71: every
+    // socket counts, signed in or not (kMaxConcurrentPeers' comment has the
+    // arithmetic); who holds a device's place is the registry's.
     if (m_peers.size() >= kMaxConcurrentPeers) {
         qCWarning(lcStation) << "Refusing connection from" << transport->peerDescription()
                              << ": already at" << kMaxConcurrentPeers << "peers";
         // RETRYABLE, and this is the one that mattered most. The header
-        // sizes kMaxConcurrentPeers for "one client, and a couple of stale
-        // sockets from a reconnecting client", so this cap is expected to
-        // be hit BY a reconnecting client, transiently, while its own dead
+        // sizes kMaxConcurrentPeers for four devices each reconnecting with
+        // an old socket and racing attempts, so this cap is expected to be
+        // hit BY a reconnecting client, transiently, while its own dead
         // sockets are still draining. Sent as permanent, it told exactly
         // that client to stop trying forever.
         transport->sendText(SessionMessages::encode(SessionMessages::sessionEnd(
@@ -1542,15 +1692,34 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
     // with is burned, however the connection ends (a wrong code, a device
     // that gave up after its own step 3, a dropped link, the deadline).
     const std::shared_ptr<PairingAttempt> pairing = it->pairing;
+    // iPhone app Task 71: an admitted session's end reaches the registry. A
+    // paired device that did not leave on purpose is away for 180 s,
+    // keeping its place (ruling 4.10); a token window, and a device that
+    // left, frees its place at once. A connection replaced by its own
+    // device's newer one, or whose device was revoked, settled its place
+    // already.
+    const QByteArray sessionDevice = it->sessionDeviceId;
+    const bool placeSettled = it->placeSettled;
+    const bool leaving = it->leaving;
     m_peers.erase(it);
+    for (auto route = m_resultRoutes.begin(); route != m_resultRoutes.end();) {
+        route = route->isNull() || route->data() == transport ? m_resultRoutes.erase(route)
+                                                              : std::next(route);
+    }
     if (pairing && pairing->codeTaken && !pairing->finished) {
         pairing->finished = true;
         m_pairingWindow->pairingFailed();
     }
+    if (!sessionDevice.isEmpty() && !placeSettled) {
+        m_deviceSessions->sessionEnded(sessionDevice, transport,
+                                       leaving ? DeviceSessionRegistry::EndKind::Left
+                                               : DeviceSessionRegistry::EndKind::Dropped);
+    }
     publishConnectedDevices();
 
-    if (m_session == transport) {
-        m_session = nullptr;
+    if (m_mediaSession == transport) {
+        // The session media and telemetry went to (the topology note).
+        m_mediaSession = nullptr;
         m_dispatcher->setSessionOwner({});
         if (m_radioModel) {
             m_radioModel->pureSignalFacade()->resetSession();
@@ -1560,8 +1729,10 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
         }
         emit mediaSessionEnded(m_mediaSessionEpoch);
         emit telemetrySessionEnded(m_mediaSessionEpoch);
+    }
+    if (!hasAuthenticatedSession()) {
         // Stop draining deltas into nothing. StateMirror keeps watching --
-        // the daemon's own state is not the session's to tear down -- and
+        // the daemon's own state is not the sessions' to tear down -- and
         // the next attachSession() clears whatever the coalescer holds
         // anyway, because a fresh burst already carries every watched
         // object's current value.
@@ -1695,8 +1866,29 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
         return;
     }
 
+    // iPhone app Task 71: a command, property write or settings write is the
+    // device's activity (heartbeats and media control are not).
+    if (message.kind == SessionMessageKind::CommandInvoke
+        || message.kind == SessionMessageKind::PropertyWrite
+        || message.kind == SessionMessageKind::SettingsWrite
+        || message.kind == SessionMessageKind::SettingsRemove) {
+        noteActivity(transport);
+    }
+
     switch (message.kind) {
     case SessionMessageKind::CommandInvoke:
+        // iPhone app Task 71 (ruling 10.1): session.leave came with
+        // sessionHolderVersion 1; from any other peer it is a verb this
+        // Core does not route, answered in the same words.
+        if (message.commandVerb == "session.leave" && !peerHasSessionHolderVersion(transport)) {
+            // SessionCommandDispatcher's own words for a verb it does not
+            // route.
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                QStringLiteral("The Core does not know this request. Updating the Core may help."),
+                {}));
+            break;
+        }
         if (message.commandVerb == "setFourO3AEnabled"
             && it->agreedMinor < kRemoteFourO3AControlSessionProtocolMinor) {
             send(transport, SessionMessages::commandResult(
@@ -1894,18 +2086,37 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
             // result (sent synchronously by dispatch()) has gone out.
             m_dispatchingTransport = transport;
             m_pendingEnd.reset();
+            m_resultSentInDispatch = false;
             m_dispatcher->dispatch(message);
             m_dispatchingTransport = nullptr;
+            // iPhone app Task 71: a result still owed (it arrives on a later
+            // turn), or a PureSignal action's later phases, goes to this
+            // session, not to whichever session holds media.
+            if (!m_resultSentInDispatch || message.commandVerb.startsWith("ps3.")) {
+                m_resultRoutes.insert(qMakePair(message.commandVerb, message.commandId),
+                                      QPointer<SessionTransport>(transport));
+            }
             if (m_pendingEnd) {
                 const auto [reason, code] = *m_pendingEnd;
                 m_pendingEnd.reset();
                 dropPeer(transport, reason, true, /*retryable=*/false, code);
                 return;
             }
+            // Ruling 4.12: the device left on purpose. Its place is free at
+            // once, with no away state; the accepted result has gone out,
+            // and the Core closes the connection (no session.end: the
+            // result already said it).
+            const auto leaver = m_peers.constFind(transport);
+            if (leaver != m_peers.cend() && leaver->leaving) {
+                dropPeer(transport, QString::fromLatin1(kLeftReason), false,
+                         /*retryable=*/false);
+                return;
+            }
         }
         break;
     case SessionMessageKind::MediaControl:
-        if (transport == m_session && mediaAvailable()) {
+        // Media is one session's until Task 76 (the topology note).
+        if (transport == m_mediaSession && mediaAvailable()) {
             emit mediaControlReceived(message.mediaPayload, m_mediaSessionEpoch);
         }
         break;
@@ -1916,7 +2127,7 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
         handleSettingsWrite(transport, message);
         break;
     case SessionMessageKind::SettingsRemove:
-        handleSettingsRemove(message);
+        handleSettingsRemove(transport, message);
         break;
     default:
         // Every remaining kind is daemon-to-client. A client sending one
@@ -2153,18 +2364,103 @@ void StationServer::handleAuthRequest(SessionTransport* transport,
     // iPhone app Task 13: a token sign-in, enrolled or not, ends when the
     // token is retired.
     it->signedInWithToken = !(message.device && message.token.isEmpty());
-    // One change to the devices object for this sign-in, not two.
+    // One change to the devices object for this sign-in, not two; and one
+    // to connectedDevices (a new short name, then the admission).
     m_devicesFacade->holdRefresh();
+    m_connectedDevices->holdRefresh();
+    QString name;
+    QString shortName;
+    QString kind = QStringLiteral("computer");
     if (!deviceId.isEmpty()) {
         // lastSeen and lastAddress, on every authenticated connection, and
         // the short name the device sent this time (Part C fix wave: it
         // replaces the stored one when usable; outside the signed transcript).
         m_devices->touch(deviceId, address,
                          message.device ? message.device->shortName : QString());
+        if (const std::optional<PairedDevice> paired = m_devices->find(deviceId)) {
+            name = paired->name;
+            shortName = paired->shortName;
+            kind = paired->kind;
+        }
+    } else {
+        // Ruling 4.1: a window signed in with the older token and no key is
+        // a device for the life of its session, named by its address.
+        name = DeviceSessionRegistry::tokenWindowName(address);
     }
-    publishConnectedDevices();
-    m_devicesFacade->resumeRefresh();
     send(transport, SessionMessages::authResult(true, QString(), /*retryable=*/false));
+    // admit() ends the hold (resumeRefresh) once the device's connected
+    // flag is set too, before the snapshot goes out.
+    admit(transport, name, shortName, kind);
+}
+
+void StationServer::admit(SessionTransport* transport, const QString& name,
+                          const QString& shortName, const QString& kind)
+{
+    // The devices object's hold from handleAuthRequest ends here on every
+    // path: one change for a sign-in, as before Task 71.
+    auto resumeDevices = qScopeGuard([this]() {
+        m_devicesFacade->resumeRefresh();
+        m_connectedDevices->resumeRefresh();
+    });
+    auto it = m_peers.find(transport);
+    if (it == m_peers.end()) {
+        return;
+    }
+    // iPhone app Task 71 (rulings 4.4 and 4.8), after auth.result accepted.
+    DeviceSessionRegistry::Entry device;
+    if (!it->deviceId.isEmpty()) {
+        device.deviceId = it->deviceId;
+        device.kind = DeviceSessionRegistry::Kind::Paired;
+    } else {
+        device.deviceId = m_deviceSessions->nextTokenDeviceId();
+        device.kind = DeviceSessionRegistry::Kind::Token;
+    }
+    device.name = name;
+    device.shortName = shortName;
+    device.deviceKind = kind;
+    const QString description = it->description;
+    const DeviceSessionRegistry::AdmitResult result = m_deviceSessions->admit(device, transport);
+
+    switch (result.admission) {
+    case DeviceSessionRegistry::Admission::Full:
+        // Every place is taken. Retryable, with no code: the device tries
+        // again on its own backoff, and a place may free meanwhile. From
+        // Task 41 a device that declared sessionHolder is asked the
+        // fifth-device question instead; an older window keeps this.
+        qCInfo(lcStation) << "Turning away" << description << ": every place on the Core is taken";
+        dropPeer(transport, QString::fromLatin1(kCoreFullReason), true, /*retryable=*/true);
+        return;
+    case DeviceSessionRegistry::Admission::SameDevice: {
+        // Ruling 4.8: the device's own older connection ends at once, with
+        // no question; its place stays the device's. No other session is
+        // touched.
+        auto* older = const_cast<SessionTransport*>(
+            qobject_cast<const SessionTransport*>(result.replacedSession));
+        const auto olderPeer = older != nullptr ? m_peers.find(older) : m_peers.end();
+        if (olderPeer != m_peers.end()) {
+            olderPeer->placeSettled = true;
+            qCInfo(lcStation) << "The device of" << olderPeer->description
+                              << "connected again as" << description;
+            // NOT retryable: a client that redialled would replace the newer
+            // connection of its own device, and the two would trade places.
+            dropPeer(older, QString::fromLatin1(kSameDeviceReason), true, /*retryable=*/false,
+                     QString::fromLatin1(SessionEndCode::kSameDevice));
+        }
+        break;
+    }
+    case DeviceSessionRegistry::Admission::Admitted:
+        break;
+    }
+
+    it = m_peers.find(transport);
+    if (it == m_peers.end()) {
+        return;
+    }
+    it->sessionDeviceId = device.deviceId;
+    publishConnectedDevices();
+    resumeDevices.dismiss();
+    m_devicesFacade->resumeRefresh();
+    m_connectedDevices->resumeRefresh();
     promoteToSession(transport);
 }
 
@@ -2594,59 +2890,44 @@ void StationServer::promoteToSession(SessionTransport* transport)
 {
     const QString description = m_peers.value(transport).description;
 
-    // Parent design section 7.1: "A second authenticated connection
-    // preempts the existing session ... The displaced session is told
-    // why." The token is the authority, and the realistic sequence is the
-    // same operator reconnecting after a link drop from a different
-    // device. Leaving the stale session in place, or refusing the second
-    // connection, locks the operator out of their own transmitter for an
-    // undefined interval.
-    if (m_session != nullptr && m_session != transport) {
-        const QString displaced = m_peers.contains(m_session)
-                                      ? m_peers.value(m_session).description
-                                      : QStringLiteral("<unknown>");
-        const QString reason =
-            SessionEndReasons::takenOver(description);
-        qCInfo(lcStation) << "Preempting session" << displaced << "for" << description;
-        // NOT retryable, and deliberately so even though the CONDITION is
-        // transient. Another authenticated peer has deliberately taken the
-        // session; a displaced client that redialed on a backoff would
-        // preempt the newcomer straight back, and the two would trade the
-        // radio between them indefinitely. Section 7.1 makes the token the
-        // authority, so the most recent authenticated connection wins and
-        // the displaced operator reconnects by hand.
-        dropPeer(m_session, reason, true, /*retryable=*/false,
-                 QString::fromLatin1(SessionEndCode::kTakenOver));
-        emit sessionPreempted(displaced);
-    }
+    // iPhone app Task 71: no other session is ended here, ever. The remote
+    // design's section 7.1 preemption is gone (the several-devices design,
+    // section 4): admit() has already decided this device holds a place.
 
-    // BEFORE m_session is assigned, deliberately. buildMirror() ends in
-    // ObjectRegistry::backfillExistingSlices(), which emits objectCreated
-    // for every slice the daemon already holds -- and those are wired
-    // straight to sendToSession(). With m_session still null they are
-    // dropped, which is exactly right: attachSession() below sends an
-    // object.create for every watched object anyway, AFTER the schema
-    // messages that a client needs in order to make sense of one. Assign
-    // first and the backfill's creates go out ahead of any schema, and
-    // then get sent a second time by the burst.
+    // BEFORE any session is attached for the first time, deliberately.
+    // buildMirror() ends in ObjectRegistry::backfillExistingSlices(), which
+    // emits objectCreated for every slice the daemon already holds -- and
+    // those are wired straight to sendToSession(). With no session yet
+    // attached they go nowhere, which is exactly right: attachSession()
+    // below sends an object.create for every watched object anyway, AFTER
+    // the schema messages that a client needs in order to make sense of
+    // one.
     buildMirror();
 
-    m_session = transport;
-    ++m_mediaSessionEpoch;
-    m_radioModel->pureSignalFacade()->resetSession();
-    m_dispatcher->setSessionOwner(QStringLiteral("station:%1").arg(m_mediaSessionEpoch));
+    // Media and telemetry go to one session until Task 76: the first
+    // admitted while none holds them (the topology note).
+    if (m_mediaSession == nullptr) {
+        m_mediaSession = transport;
+        ++m_mediaSessionEpoch;
+        m_radioModel->pureSignalFacade()->resetSession();
+        m_dispatcher->setSessionOwner(QStringLiteral("station:%1").arg(m_mediaSessionEpoch));
+    }
 
-    if (!sendCapabilitiesAndSettingsSnapshot(transport, m_mediaSessionEpoch)) {
+    if (!sendCapabilitiesAndSettingsSnapshot(transport)) {
         return;
     }
 
     // State snapshot, model half, ending in the snapshot-complete marker.
-    // attachSession() emits the whole burst synchronously through
-    // sessionMessageReady before it returns, which reaches sendToSession()
-    // above -- and m_session is already set by now, which is what makes
-    // the burst go anywhere at all.
+    // The mirror is shared until Task 72: what the sessions already
+    // admitted still have pending goes to them first, because
+    // attachSession() clears the coalescer; then the burst's schemas,
+    // creates and marker go to this session alone (m_burstTarget). A delta
+    // the burst itself causes goes to every session.
+    m_mirror->flushCoalescedDeltas();
+    m_burstTarget = transport;
     m_mirror->attachSession();
-    if (m_session != transport || !m_peers.contains(transport)) {
+    m_burstTarget = nullptr;
+    if (!m_peers.contains(transport)) {
         return;
     }
     m_peers[transport].snapshotComplete = true;
@@ -2661,10 +2942,10 @@ void StationServer::promoteToSession(SessionTransport* transport)
 
     qCInfo(lcStation) << "Session established with" << description;
     emit clientAuthenticated(description);
-    if (m_session == transport && mediaAvailable()) {
+    if (m_mediaSession == transport && mediaAvailable()) {
         emit mediaSessionStarted(m_mediaSessionEpoch);
     }
-    if (m_session == transport && telemetryAvailable()) {
+    if (m_mediaSession == transport && telemetryAvailable()) {
         emit telemetrySessionStarted(m_mediaSessionEpoch);
     }
 }
@@ -2718,6 +2999,10 @@ void StationServer::buildMirror()
     // iPhone app Task 13 (deviceAdminVersion 1): the Core's paired devices.
     // Sent only to a device at minor 11 that declares deviceAuth.
     m_mirror->watch(QByteArray(kDevicesKey), m_devicesFacade.get());
+    // iPhone app Task 71 (sessionHolderVersion 1): who is on the Core. Sent
+    // only to a view at minor 11 that declared sessionHolder with
+    // deviceAuth.
+    m_mirror->watch(QByteArray(kConnectedDevicesKey), m_connectedDevices.get());
     // iPhone app Task 19 (stationCatalogVersion 1): the Core's catalogue,
     // read again now so the snapshot carries the radio as it is. Sent only
     // to a peer at minor 11 (sendToSession).
@@ -2738,30 +3023,29 @@ void StationServer::buildMirror()
     m_registry->backfillExistingSlices();
 }
 
-bool StationServer::sendCapabilitiesAndSettingsSnapshot(SessionTransport* transport,
-                                                         quint64 expectedEpoch)
+bool StationServer::sendCapabilitiesAndSettingsSnapshot(SessionTransport* transport)
 {
-    // Do not let a queued radio callback target a disconnected, preempted,
-    // or merely handshaking peer.  promoteToSession() intentionally calls
-    // this while snapshotComplete is still false, so authentication is the
-    // boundary here rather than readiness of the full mirror snapshot.
-    const auto stillOwnsSession = [this, transport, expectedEpoch]() {
-        if (transport == nullptr || transport != m_session
-            || expectedEpoch != m_mediaSessionEpoch) {
+    // Do not let a queued radio callback target a disconnected or merely
+    // handshaking peer, or one turned away. promoteToSession()
+    // intentionally calls this while snapshotComplete is still false, so
+    // admission is the boundary here rather than readiness of the full
+    // mirror snapshot.
+    const auto stillAdmitted = [this, transport]() {
+        if (transport == nullptr) {
             return false;
         }
         const auto peer = m_peers.constFind(transport);
-        return peer != m_peers.cend() && peer->authenticated;
+        return peer != m_peers.cend() && peer->authenticated && !peer->sessionDeviceId.isEmpty();
     };
-    if (!stillOwnsSession()) {
+    if (!stillAdmitted()) {
         return false;
     }
 
     // Capability exchange (section 7.0 step 4).  On the initial path this
     // remains before every model message; on the late-radio path it updates
     // only identity, board, effective limits, and connection state.
-    send(transport, SessionMessages::capabilities(buildCapabilities().toUpdates()));
-    if (!stillOwnsSession()) {
+    send(transport, SessionMessages::capabilities(buildCapabilitiesFor(transport).toUpdates()));
+    if (!stillAdmitted()) {
         return false;
     }
 
@@ -2778,7 +3062,7 @@ bool StationServer::sendCapabilitiesAndSettingsSnapshot(SessionTransport* transp
             MirrorUpdate{0, it.key().toUtf8(), MirrorWireKind::Utf8, QVariant(it.value())});
     }
     send(transport, SessionMessages::settingsSnapshot(entries));
-    return stillOwnsSession();
+    return stillAdmitted();
 }
 
 // ── Inbound state and settings ───────────────────────────────────────────
@@ -3021,7 +3305,7 @@ void StationServer::handleSettingsWrite(SessionTransport* transport,
     }
 }
 
-void StationServer::handleSettingsRemove(const SessionMessage& message)
+void StationServer::handleSettingsRemove(SessionTransport* transport, const SessionMessage& message)
 {
     const QString key = QString::fromUtf8(message.objectKey);
     if (isModelOwnedDspSettingsKey(key)) {
@@ -3035,7 +3319,9 @@ void StationServer::handleSettingsRemove(const SessionMessage& message)
             || isModelOwnedStepAttenuatorSettingsKey(key)
             || isModelOwnedAlexAntennaSettingsKey(key)
             || isCoreOwnedIdentitySettingsKey(key);
-        sendToSession(SessionMessages::settingsReject(key, value.isValid(), value.toString(),
+        // iPhone app Task 71: to the session that asked (the only one
+        // before).
+        send(transport, SessionMessages::settingsReject(key, value.isValid(), value.toString(),
             plainReason ? modelOwnedSettingsRefusal(key)
                     : QStringLiteral("Change these settings with their own controls on this Core.")));
         return;
@@ -3049,7 +3335,7 @@ void StationServer::handleSettingsRemove(const SessionMessage& message)
         const QString reason = QString::fromLatin1(kReceiveOnlyTransmitReason);
         const QVariant restored = m_settings.value(key);
         qCWarning(lcStation) << "Refused remote settings remove" << key << ":" << reason;
-        sendToSession(SessionMessages::settingsReject(key, restored.isValid(),
+        send(transport, SessionMessages::settingsReject(key, restored.isValid(),
                                                       restored.toString(), reason));
         return;
     }
@@ -3068,7 +3354,7 @@ void StationServer::handleSettingsRemove(const SessionMessage& message)
     if (const QString refusal = m_settingsServer->otherRadioRefusal(key); !refusal.isEmpty()) {
         const QVariant value = m_settings.value(key);
         qCWarning(lcStation) << "Refused remote settings remove" << key << ":" << refusal;
-        sendToSession(SessionMessages::settingsReject(key, value.isValid(), value.toString(),
+        send(transport, SessionMessages::settingsReject(key, value.isValid(), value.toString(),
                                                       refusal));
         return;
     }
@@ -3125,19 +3411,48 @@ SessionMessage StationServer::withPairingCodeFor(SessionTransport* transport,
     return blanked;
 }
 
-void StationServer::sendToSession(const SessionMessage& original)
+void StationServer::sendToSession(const SessionMessage& message)
 {
-    if (m_session == nullptr) {
+    // iPhone app Task 71: every admitted session whose snapshot is complete,
+    // each fitted to what it negotiated (sendToPeer). While an attach runs
+    // (m_burstTarget), its schemas, creates and marker are that session's
+    // alone; anything else (a delta the burst caused) reaches it and every
+    // other session too.
+    const bool burstOnly = m_burstTarget != nullptr
+        && (message.kind == SessionMessageKind::Schema
+            || message.kind == SessionMessageKind::ObjectCreate
+            || message.kind == SessionMessageKind::SnapshotComplete);
+    if (burstOnly) {
+        sendToPeer(m_burstTarget, message);
+        return;
+    }
+    // Copied: a send never erases a peer today, but the list is not this
+    // loop's to trust across calls.
+    const QList<SessionTransport*> transports = m_peers.keys();
+    for (SessionTransport* transport : transports) {
+        const auto peer = m_peers.constFind(transport);
+        if (peer == m_peers.cend() || peer->sessionDeviceId.isEmpty()) {
+            continue;
+        }
+        if (peer->snapshotComplete || transport == m_burstTarget) {
+            sendToPeer(transport, message);
+        }
+    }
+}
+
+void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage& original)
+{
+    if (transport == nullptr || !m_peers.contains(transport)) {
         return;
     }
     // iPhone app Task 14: the pairing code only to a connection signed in
     // with a paired device's key.
-    const SessionMessage message = withPairingCodeFor(m_session, original);
+    const SessionMessage message = withPairingCodeFor(transport, original);
     switch (message.kind) {
     case SessionMessageKind::Schema:
     case SessionMessageKind::ObjectCreate:
     case SessionMessageKind::Delta: {
-        const auto peer = m_peers.constFind(m_session);
+        const auto peer = m_peers.constFind(transport);
         const quint16 minor = peer != m_peers.cend() ? peer->agreedMinor
                                                      : kSessionProtocolMinor;
         // A Core without its controller behind the object does not offer
@@ -3182,8 +3497,14 @@ void StationServer::sendToSession(const SessionMessage& original)
         // that declares deviceAuth (today's desktop declares nothing).
         if (isDevicesMessage(message)
             && (minor < kRadioIdentitySessionProtocolMinor
-                || !peerDeclares(m_session, QByteArrayLiteral("deviceAuth"), 1)
+                || !peerDeclares(transport, QByteArrayLiteral("deviceAuth"), 1)
                 || deviceAdminVersion() < 1)) {
+            return;
+        }
+        // iPhone app Task 71: nor who is on the Core to anyone but a view at
+        // minor 11 that declared sessionHolder with deviceAuth
+        // (sessionHolderVersion 1).
+        if (isConnectedDevicesMessage(message) && !peerHasSessionHolderVersion(transport)) {
             return;
         }
         // iPhone app Task 19: nor the catalogue to an older app.
@@ -3194,18 +3515,18 @@ void StationServer::sendToSession(const SessionMessage& original)
         if (!needsNnrFit(message, minor)) {
             // Most messages carry no NNR field: send them as they are.
             if (worthSendingAfterNnrFit(message)) {
-                m_session->sendText(SessionMessages::encode(message));
+                transport->sendText(SessionMessages::encode(message));
             }
             return;
         }
         SessionMessage fitted = message;
         if (fitNnrLimitToPeer(fitted, minor)) {
-            m_session->sendText(SessionMessages::encode(fitted));
+            transport->sendText(SessionMessages::encode(fitted));
         }
         return;
     }
     default:
-        m_session->sendText(SessionMessages::encode(message));
+        transport->sendText(SessionMessages::encode(message));
         return;
     }
 }
@@ -3214,14 +3535,14 @@ void StationServer::setMediaEnabled(bool enabled)
 {
     // A live session negotiated its capability already. Do not advertise a
     // different contract midway through it.
-    if (!m_session) {
+    if (!hasAuthenticatedSession()) {
         m_mediaEnabled = enabled;
     }
 }
 
 void StationServer::setTelemetryEnabled(bool enabled)
 {
-    if (!m_session) { m_telemetryEnabled = enabled; }
+    if (!hasAuthenticatedSession()) { m_telemetryEnabled = enabled; }
 }
 
 bool StationServer::setDisplayBudgetLimits(const DisplayBudgetLimits& limits,
@@ -3258,14 +3579,16 @@ void StationServer::setPs3DisplayAdmissionHandler(Ps3DisplayAdmissionHandler han
 
 void StationServer::publishDisplayBudgetCapabilities()
 {
+    // Media's session only: the budget is part of media (the topology note).
     if (mediaAvailable()) {
-        sendToSession(SessionMessages::capabilities(buildCapabilities().toUpdates()));
+        send(m_mediaSession,
+             SessionMessages::capabilities(buildCapabilitiesFor(m_mediaSession).toUpdates()));
     }
 }
 
 bool StationServer::telemetryAvailable() const
 {
-    const auto it = m_peers.constFind(m_session);
+    const auto it = m_peers.constFind(m_mediaSession);
     return m_telemetryEnabled && it != m_peers.cend() && it->authenticated
         && it->snapshotComplete && it->agreedMinor >= kStationTelemetrySessionProtocolMinor;
 }
@@ -3279,7 +3602,7 @@ bool StationServer::sendTelemetry(const StationTelemetrySnapshot& snapshot,
     message.telemetry = snapshot;
     // A peer from before host telemetry receives exactly the radio and audio
     // sections it was built for.
-    const auto peer = m_peers.constFind(m_session);
+    const auto peer = m_peers.constFind(m_mediaSession);
     if (peer == m_peers.cend() || peer->agreedMinor < kCoreHostTelemetrySessionProtocolMinor) {
         message.telemetry.host = {};
     }
@@ -3290,34 +3613,34 @@ bool StationServer::sendTelemetry(const StationTelemetrySnapshot& snapshot,
     }
     const QByteArray wire = SessionMessages::encode(message);
     if (wire.isEmpty()) { return false; }
-    m_session->sendText(wire);
+    m_mediaSession->sendText(wire);
     return true;
 }
 
 bool StationServer::mediaAvailable() const
 {
-    const auto it = m_peers.constFind(m_session);
+    const auto it = m_peers.constFind(m_mediaSession);
     return m_mediaEnabled && it != m_peers.cend() && it->authenticated
         && it->snapshotComplete && it->agreedMinor >= kMediaSessionProtocolMinor;
 }
 
 bool StationServer::remoteWidebandAvailable() const
 {
-    const auto it = m_peers.constFind(m_session);
+    const auto it = m_peers.constFind(m_mediaSession);
     return mediaAvailable() && it != m_peers.cend()
         && it->agreedMinor >= kRemoteWidebandSessionProtocolMinor;
 }
 
 bool StationServer::remoteAudioStatusAvailable() const
 {
-    const auto it = m_peers.constFind(m_session);
+    const auto it = m_peers.constFind(m_mediaSession);
     return mediaAvailable() && it != m_peers.cend()
         && it->agreedMinor >= kRemoteAudioStatusSessionProtocolMinor;
 }
 
 bool StationServer::spectrumGrantAvailable() const
 {
-    const auto it = m_peers.constFind(m_session);
+    const auto it = m_peers.constFind(m_mediaSession);
     return mediaAvailable() && it != m_peers.cend()
         && it->agreedMinor >= kRemoteSpectrumGrantSessionProtocolMinor;
 }
@@ -3326,7 +3649,7 @@ bool StationServer::displayExtrasAvailable() const
 {
     // Advertised in the minor-11 capabilities block only, so only a peer
     // that agreed minor 11 was told it may ask.
-    const auto it = m_peers.constFind(m_session);
+    const auto it = m_peers.constFind(m_mediaSession);
     return mediaAvailable() && it != m_peers.cend()
         && it->agreedMinor >= kRadioIdentitySessionProtocolMinor
         && displayExtrasVersion() >= 1;
@@ -3343,7 +3666,7 @@ std::optional<DisplayBudgetLimits> StationServer::displayBudgetLimits() const
         // R-R3-08/37: a computed ceiling is only for an app that can be told
         // why it is lowered. An older app keeps legacy mode exactly: no
         // budget, no pacing, no allocation results.
-        const auto peer = m_peers.constFind(m_session);
+        const auto peer = m_peers.constFind(m_mediaSession);
         if (peer == m_peers.cend()
             || peer->agreedMinor < kDisplayBudgetReasonSessionProtocolMinor) {
             return std::nullopt;
@@ -3354,7 +3677,7 @@ std::optional<DisplayBudgetLimits> StationServer::displayBudgetLimits() const
 
 bool StationServer::displayBudgetAvailable() const
 {
-    const auto it = m_peers.constFind(m_session);
+    const auto it = m_peers.constFind(m_mediaSession);
     return mediaAvailable() && m_displayBudgetEnforcementEnabled && displayBudgetLimits()
         && it != m_peers.cend() && it->agreedMinor >= kRemoteDisplayBudgetSessionProtocolMinor;
 }
@@ -3371,7 +3694,7 @@ bool StationServer::sendMediaControl(const QJsonObject& payload, quint64 expecte
     if (wire.isEmpty()) {
         return false;
     }
-    m_session->sendText(wire);
+    m_mediaSession->sendText(wire);
     return true;
 }
 
@@ -3442,8 +3765,20 @@ int StationServer::radioHardwareVersion() const
 
 StationCapabilities StationServer::buildCapabilities() const
 {
+    // What the media session is told (with none, what a first session
+    // would be told), as the one session was before Task 71.
+    return buildCapabilitiesFor(m_mediaSession);
+}
+
+StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transport) const
+{
     StationCapabilities caps;
     caps.settingsSchemaVersion = settingsSchemaVersionOf(m_settings);
+    // iPhone app Task 71: media and telemetry are one session's until Task
+    // 76 (the topology note). Any other admitted session is told they are
+    // off, so it never asks for what the Core would not send it.
+    const bool media = m_mediaEnabled && transport == m_mediaSession;
+    const bool telemetry = m_telemetryEnabled && transport == m_mediaSession;
     if (m_radioModel.isNull()) {
         return caps;
     }
@@ -3463,7 +3798,7 @@ StationCapabilities StationServer::buildCapabilities() const
     // included). With no radio yet the profile has no row and the model is
     // not reported; with no radio ever selected neither is the rest.
     {
-        const auto peer = m_peers.constFind(m_session);
+        const auto peer = m_peers.constFind(transport);
         if (peer != m_peers.cend()
             && peer->agreedMinor >= kRadioIdentitySessionProtocolMinor) {
             caps.radioIdentityEntries = true;
@@ -3498,7 +3833,14 @@ StationCapabilities StationServer::buildCapabilities() const
             // iPhone app Task 19: the catalogue.
             caps.stationCatalogVersion = stationCatalogVersion();
             // iPhone app Task 20: display extras, last.
-            caps.displayExtrasVersion = displayExtrasVersion();
+            caps.displayExtrasVersion = media ? displayExtrasVersion() : 0;
+            // iPhone app Task 71 (ruling 10.1): several devices at once, for
+            // a peer that declared sessionHolder with deviceAuth; any other
+            // peer is sent no entry, so its capabilities are today's.
+            if (peerHoldsSessions(transport)) {
+                caps.sessionHolderEntry = true;
+                caps.sessionHolderVersion = sessionHolderVersion();
+            }
             const HardwareProfile& profile = m_radioModel->hardwareProfile();
             caps.hpsdrModel = profile.caps != nullptr ? profile.model : HPSDRModel::FIRST;
             const RadioInfo& radio = m_radioModel->currentRadioInfo();
@@ -3525,35 +3867,35 @@ StationCapabilities StationServer::buildCapabilities() const
 
     // Always false in R2: TX is R4 in its entirety.
     caps.txPermitted = false;
-    caps.remoteMediaVersion = m_mediaEnabled ? 1 : 0;
-    caps.remoteWidebandDisplayVersion = m_mediaEnabled ? 1 : 0;
-    caps.remoteAudioStatusVersion = m_mediaEnabled ? 1 : 0;
-    caps.spectrumGrantVersion = m_mediaEnabled ? 1 : 0;
+    caps.remoteMediaVersion = media ? 1 : 0;
+    caps.remoteWidebandDisplayVersion = media ? 1 : 0;
+    caps.remoteAudioStatusVersion = media ? 1 : 0;
+    caps.spectrumGrantVersion = media ? 1 : 0;
     // R-R3-23: lossless audio beside Opus. Advertised with media whatever
     // nereusd.conf audio_lossless says, so a GUI can be told plainly when
     // the Core's own setting refuses it.
-    caps.audioProfileVersion = m_mediaEnabled ? 1 : 0;
+    caps.audioProfileVersion = media ? 1 : 0;
     // R-R3-35: the Core answers audio clock probes whenever media is on.
-    caps.audioClockVersion = m_mediaEnabled ? 1 : 0;
+    caps.audioClockVersion = media ? 1 : 0;
     // R-R3-43: a receiver's own audio on its own stream, whenever media is on.
-    caps.receiverAudioVersion = m_mediaEnabled ? 1 : 0;
+    caps.receiverAudioVersion = media ? 1 : 0;
     // R-R3-45: the headphones mix on its own stream, whenever media is on.
-    caps.headphonesMixVersion = m_mediaEnabled ? 1 : 0;
+    caps.headphonesMixVersion = media ? 1 : 0;
     const std::optional<DisplayBudgetLimits> budget = displayBudgetLimits();
-    if (m_mediaEnabled && m_displayBudgetEnforcementEnabled && budget) {
+    if (media && m_displayBudgetEnforcementEnabled && budget) {
         caps.remoteDisplayBudgetVersion = 1;
         caps.displayBudget = budget;
         caps.remotePs3DisplaySubscribed = m_radioModel->pureSignalFacade()->remoteAmpViewSubscribed();
         // R-R3-08/37: only a peer that negotiated the reason receives it; an
         // older one gets exactly the five budget fields it was built for.
-        const auto peer = m_peers.constFind(m_session);
+        const auto peer = m_peers.constFind(transport);
         if (peer != m_peers.cend()
             && peer->agreedMinor >= kDisplayBudgetReasonSessionProtocolMinor) {
             caps.displayBudgetReason = m_displayBudgetReason;
         }
     }
     caps.remoteCtunVersion = 1;
-    caps.stationTelemetryVersion = m_telemetryEnabled ? 3 : 0;
+    caps.stationTelemetryVersion = telemetry ? 3 : 0;
     caps.remoteTgxlConfigVersion = m_radioModel->stationAccessoryIdentityEnabled() ? 1 : 0;
     caps.remoteFourO3AControlVersion = m_radioModel->stationAccessoryIdentityEnabled() ? 1 : 0;
     caps.propertyResultVersion = 1;
@@ -3568,7 +3910,7 @@ StationCapabilities StationServer::buildCapabilities() const
     caps.psAlgorithmVersion = 3;
     // 2 (R-R3-21): NR3 models are Core assets (kind 2, selectNr3Model).
     caps.dspAssetVersion = 2;
-    caps.psDisplayVersion = m_mediaEnabled ? 1 : 0;
+    caps.psDisplayVersion = media ? 1 : 0;
 #endif
 
     return caps;

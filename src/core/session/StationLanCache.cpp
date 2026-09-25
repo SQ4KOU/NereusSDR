@@ -67,12 +67,14 @@ bool StationLanCache::ingest(const QByteArray& bytes, const QHostAddress& source
             && merged.schema == kStationLanAnnouncementSchema1) {
             // iPhone app Task 16: a schema-1 datagram for an endpoint that
             // already sent schema 2 refreshes the fields it carries and never
-            // clears the identity, label, claimed state or pairing.
+            // clears the identity, label, claimed state or pairing (nor,
+            // iPhone app Task 71, the device count).
             merged.schema = existing.announcement.schema;
             merged.claimed = existing.announcement.claimed;
             merged.identity = existing.announcement.identity;
             merged.label = existing.announcement.label;
             merged.pairing = existing.announcement.pairing;
+            merged.devicesConnected = existing.announcement.devicesConnected;
         }
         const bool changed = existing.announcement != merged;
         existing.announcement = std::move(merged);

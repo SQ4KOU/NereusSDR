@@ -39,6 +39,9 @@
 //   2026-09-24 - iPhone app Task 13 (R-IOS-08): StationDevicesFacade
 //                 mirrored (`devices`). J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-25 - iPhone app Task 71 (R-IOS-02): ConnectedDevicesFacade
+//                 mirrored (`connectedDevices`). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 //   2026-09-24 - iPhone app Task 19 (R-IOS-06): StationCatalog mirrored
 //                 (`catalog`). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
@@ -113,6 +116,9 @@ const char* const kMirroredClasses[] = {
     // iPhone app Task 19 (R-IOS-06, stationCatalogVersion 1): the values the
     // Core owns and an app draws its controls from, read-only.
     "NereusSDR::StationCatalog",
+    // iPhone app Task 71 (R-IOS-02, sessionHolderVersion 1): who is on the
+    // Core, read-only, for a view that shares it with other devices.
+    "NereusSDR::ConnectedDevicesFacade",
 };
 
 // Per-property exclusions, as (class, property).

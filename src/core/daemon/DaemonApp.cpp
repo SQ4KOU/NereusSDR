@@ -64,6 +64,10 @@
 //               to standard output (the journal on a packaged Core). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic Claude
 //               Code.
+//   2026-09-25: iPhone app Task 71 (R-IOS-02): the announcement and the
+//               Bonjour record carry how many devices hold a place. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include "core/daemon/DaemonApp.h"
@@ -88,6 +92,7 @@
 #include "core/session/StationLanAnnouncer.h"
 #include "core/session/DnsSdAdvertiser.h"
 #include "core/session/StationDevicesFacade.h"
+#include "core/session/DeviceSessionRegistry.h"
 #include "core/security/DeviceStore.h"
 #include "core/security/PairingWindow.h"
 #include "core/security/StationIdentity.h"
@@ -633,6 +638,9 @@ void DaemonApp::startStationServer(const DaemonConfig& cfg)
             this, &DaemonApp::updateStationAnnouncement);
     connect(m_radioModel.get(), &RadioModel::infoChanged,
             this, &DaemonApp::updateStationAnnouncement);
+    // iPhone app Task 71: the device count follows the places taken.
+    connect(m_stationServer->deviceSessions(), &DeviceSessionRegistry::placesTakenChanged,
+            this, &DaemonApp::updateStationAnnouncement);
     m_stationListenBind = cfg.remoteBind;
     m_stationListenArmed = true;
     m_stationListenPort = static_cast<quint16>(cfg.remotePort);
@@ -878,6 +886,9 @@ void DaemonApp::updateStationAnnouncement()
         announcement.claimed = m_stationServer->deviceStore()->isClaimed();
     }
     announcement.pairing = stationLanPairingFor(*m_stationServer);
+    // iPhone app Task 71 (ruling 10.4): how many devices hold a place, 0 on
+    // a Core no device has claimed. A number only, never who.
+    announcement.devicesConnected = m_stationServer->devicesConnectedForDiscovery();
     m_stationAnnouncement = announcement;
     m_stationAnnouncer->update(m_stationServer->serverAddress(), announcement);
 
@@ -888,6 +899,7 @@ void DaemonApp::updateStationAnnouncement()
     record.identity = announcement.identity;
     record.claimed = announcement.claimed;
     record.pairing = announcement.pairing;
+    record.devicesConnected = announcement.devicesConnected.value_or(0);
     const std::optional<quint32> where = dnsSdInterfaceForListener(m_stationServer->serverAddress());
     if (!where || !m_dnsSdAdvertiser) {
         if (m_dnsSdAdvertiser) { m_dnsSdAdvertiser->stop(); }

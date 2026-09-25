@@ -5,8 +5,10 @@ static_assert(4 + 1 + 1 + 2 + 95 + 1 + NereusSDR::kStationLanMaxCoreNameBytes + 
                       + NereusSDR::kStationLanMaxRadioNameBytes + 17 + 1
                       + NereusSDR::kStationLanIdentityBytes + 1
                       + NereusSDR::kStationLanMaxLabelBytes + 1
+                      // iPhone app Task 71: the device count.
+                      + 1
                   == NereusSDR::kStationLanMaxSchema2DatagramBytes,
-              "the largest schema-2 announcement is 479 bytes");
+              "the largest schema-2 announcement is 480 bytes");
 static_assert(NereusSDR::kStationLanMaxSchema2DatagramBytes
                   <= NereusSDR::kStationLanMaxDatagramBytes,
               "a schema-2 announcement always fits a listener's datagram bound");
@@ -124,7 +126,7 @@ bool validate(const StationLanAnnouncement& value, QString* error)
         // Schema 1 has nowhere to put these, so a value holding them would
         // not come back from its own bytes.
         if (value.claimed || !value.identity.isEmpty() || !value.label.isEmpty()
-            || value.pairing != StationLanPairing::Closed) {
+            || value.pairing != StationLanPairing::Closed || value.devicesConnected) {
             setError(error, "Station LAN announcement schema 1 cannot carry the Core's identity.");
             return false;
         }
@@ -144,6 +146,12 @@ bool validate(const StationLanAnnouncement& value, QString* error)
     }
     if (!validPairing(static_cast<quint8>(value.pairing))) {
         setError(error, "Station LAN announcement has an invalid pairing state.");
+        return false;
+    }
+    if (value.devicesConnected
+        && (*value.devicesConnected < 0
+            || *value.devicesConnected > kStationLanMaxDevicesConnected)) {
+        setError(error, "Station LAN announcement has an invalid device count.");
         return false;
     }
     return true;
@@ -222,6 +230,10 @@ QByteArray encodeStationLanAnnouncement(const StationLanAnnouncement& value, QSt
         out.append(static_cast<char>(label.size()));
         out.append(label);
         out.append(static_cast<char>(value.pairing));
+        // iPhone app Task 71 (ruling 10.4): appended after Pairing.
+        if (value.devicesConnected) {
+            out.append(static_cast<char>(*value.devicesConnected));
+        }
     }
     if (out.size() > kStationLanMaxDatagramBytes) {
         setError(error, "Station LAN announcement is too large.");
@@ -288,6 +300,14 @@ std::optional<StationLanAnnouncement> decodeStationLanAnnouncement(const QByteAr
         setError(error, "Station LAN announcement is malformed.");
         return std::nullopt;
     }
+    // iPhone app Task 71 (ruling 10.4): the device count, when the Core
+    // sent it; a datagram without it (an older Core) leaves it unknown.
+    std::optional<int> devicesConnected;
+    if (schema == kStationLanAnnouncementSchema2 && offset < bytes.size()) {
+        quint8 count = 0;
+        takeByte(bytes, &offset, &count);
+        devicesConnected = count;
+    }
     // Schema 2 extends by appending (link document section 14.1): a reader
     // ignores bytes after the fields it knows. Schema 1 stays exact.
     if (schema == kStationLanAnnouncementSchema1 && offset != bytes.size()) {
@@ -329,6 +349,7 @@ std::optional<StationLanAnnouncement> decodeStationLanAnnouncement(const QByteAr
         // anything outside the label alphabet rather than it vanishing here.
         value.label = QString::fromLatin1(label);
         value.pairing = static_cast<StationLanPairing>(pairing);
+        value.devicesConnected = devicesConnected;
     }
     if (!validate(value, error)) {
         return std::nullopt;

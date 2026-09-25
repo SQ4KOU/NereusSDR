@@ -220,7 +220,10 @@ to the Core's wording rules: "Grant's iPhone" passes. It sits outside the
 signed transcript, as `name` does. The Core stores it with the device and
 replaces it at each sign-in that carries a usable one; an absent or
 unusable one changes nothing and refuses nothing. When present it must be a
-string, or the message is malformed. A token sign-in that enrols its key
+string, or the message is malformed. Where the Core sends a device's name
+and short name (the `devices` and `connectedDevices` objects, section 7.1)
+it numbers them on collisions and gives a device with no usable short name
+its kind's word ("Phone", "Tablet", "Computer"). A token sign-in that enrols its key
 (below) stores it too. The desktop sends the computer's short host name,
 trimmed to the cap (`ClientDeviceIdentity::machineShortName`). Pairing does
 not carry it: `pair.start`'s `device` block and the code-mode box keep
@@ -505,7 +508,7 @@ string in an `f64` entry is refused. The case is common: `SliceModel`'s
    before the client has sent anything (`StationServer::acceptTransport`).
    It names every link major the station supports (section 6.1), so a
    client can pick one, or leave without having sent its token. The one
-   exception: a station already holding its limit of connections (8,
+   exception: a station already holding its limit of connections (24,
    `kMaxConcurrentPeers`, section 15) sends no `hello`. The first and only
    message on the new connection is `session.end` "The Core already has
    as many connections as it allows. Try again shortly.", `retryable`
@@ -521,7 +524,16 @@ string in an `f64` entry is refused. The case is common: `SliceModel`'s
    identity and certificate binding). A device
    that is not paired sends `pair.start` instead, and the connection
    pairs and ends (section 3.6).
-4. The station sends `auth.result`. On success, in this order
+4. The station sends `auth.result`. On success it decides who is let in
+   (`StationServer::admit`, iPhone app plan Task 71): up to four devices
+   hold places on one Core at once (`kMaxDeviceSessions`, section 12.3). A
+   device that already holds a place, live or away (section 12.4), is let
+   in at once and its older connection ends with `session.end` "This device
+   connected again.", `retryable` false, `code` `sameDevice`; with a place
+   free the device is let in; with every place taken the station sends
+   `session.end` "The Core already has four devices connected.",
+   `retryable` true, no code, and closes. No sign-in ever ends another
+   device's session. A device let in gets, in this order
    (`StationServer::promoteToSession`):
    - `capabilities` (section 6);
    - `settings.snapshot`: every station-scoped setting (section 8);
@@ -630,8 +642,17 @@ sent (device authentication, pairing, the takeover question, Setup
 descriptions) is declared here, and asked with
 `StationServer::peerDeclares(peer, feature, minVersion)`; the desktop
 client asks `StationClient::stationDeclares(feature, minVersion)`. The station
-declares `deviceAuth` 1 (section 3.5) and `pairing` 1 (section 3.6) when
-its identity key is usable. The desktop client declares `deviceAuth` 1
+declares `deviceAuth` 1 (section 3.5), `pairing` 1 (section 3.6) and
+`sessionHolder` 1 (below) when its identity key is usable.
+
+**`sessionHolder` 1** (iPhone app plan Task 71; the several-devices
+design, ruling 10.1): the Core admits up to four devices at once (section
+5.1). A client declares it only together with `deviceAuth` 1 or later, and
+the station treats `sessionHolder` without `deviceAuth` as not declared.
+A client that declares it receives `sessionHolderVersion` in its
+capabilities (section 6.3) and the `connectedDevices` object (section
+7.1), and may send `session.leave` (section 9.1). A client that does not
+sees exactly the wire it was built for. The desktop client declares `deviceAuth` 1
 when it holds its own device key (`device-identity.pem` in its profile
 directory, `ClientDeviceIdentity`; it always does unless that file cannot
 be read) and sends `{}` otherwise (iPhone app plan Task 18). A client's
@@ -653,6 +674,12 @@ is `agreedMinor >= kRadioIdentitySessionProtocolMinor` (11) and
 `remoteRfKitControlVersion >= 2` (`StationClient.cpp`). The station applies
 the minor half again on its side and refuses a gated command from an older
 peer with a plain reason (section 9.3).
+
+What the several-devices design sends in place of `capabilities` (the
+fifth device's question, which a later version adds) is gated by the hello
+feature `sessionHolder` alone, in both ends' `hello`, since no capability
+has arrived by then; everything else it brings uses the two keys above,
+with `sessionHolderVersion`.
 
 Two gates in the table of section 9 need more than one row can say:
 
@@ -715,6 +742,7 @@ change shows as surface drift and as a change to this table.
 | `pairingVersion` | 1 |
 | `stationCatalogVersion` | 1 |
 | `displayExtrasVersion` | 1 |
+| `sessionHolderVersion` | 1 |
 
 <!-- /surface -->
 
@@ -788,6 +816,21 @@ When a feature is off, its version is 0:
   Core from before it sends no entry and refuses the fields as keys it
   cannot read.
 
+- `sessionHolderVersion`: sent only at agreed minor 11, last, and only to
+  a peer whose hello declared `sessionHolder` 1 with `deviceAuth` 1; any
+  other peer is sent no entry (and reads 0), so its capabilities are
+  today's. 1: up to four devices at once, the `connectedDevices` object
+  (section 7.1) and `session.leave` (section 9.1). The table above shows
+  the value a declaring peer is sent.
+- While several devices are on a Core, media and telemetry go to one of
+  them (section 11): any other is sent `remoteMediaVersion`,
+  `remoteWidebandDisplayVersion`, `remoteAudioStatusVersion`,
+  `spectrumGrantVersion`, `audioProfileVersion`, `audioClockVersion`,
+  `receiverAudioVersion`, `headphonesMixVersion`, `psDisplayVersion`,
+  `displayExtrasVersion` and `stationTelemetryVersion` as 0 and no display
+  budget. A Core with one device on it sends that device what the table
+  says.
+
 `txPermitted` is always false today: remote transmit is R4.
 
 ### 6.4 The capabilities message
@@ -798,7 +841,8 @@ The display budget entries (`displayApplicationBytesPerSecond`,
 `remotePs3DisplaySubscribed`, `displayBudgetReason`) are present only with a
 usable budget, and `displayBudgetReason` only at agreed minor 11. The radio
 identity entries from `hpsdrModel` onwards are present only at agreed minor
-11. A client ignores a capability it does not know
+11, and `sessionHolderVersion`, last, only for a peer that declared
+`sessionHolder` (section 6.1). A client ignores a capability it does not know
 (`StationCapabilities::fromUpdates`).
 
 <!-- surface:capabilities -->
@@ -858,6 +902,7 @@ identity entries from `hpsdrModel` onwards are present only at agreed minor
 | 50 | `pairingVersion` | `i64` |
 | 51 | `stationCatalogVersion` | `i64` |
 | 52 | `displayExtrasVersion` | `i64` |
+| 53 | `sessionHolderVersion` | `i64` |
 
 <!-- /surface -->
 
@@ -987,6 +1032,14 @@ An enum property lists the values its domain allows.
 | 17 | `drainCurrentA` | `f64` | outbound |  |
 | 18 | `efficiencyText` | `utf8` | outbound |  |
 | 19 | `bandFollow` | `enum` | outbound | 0, 1, 2, 3 |
+
+**ConnectedDevicesFacade** (3 properties)
+
+| Ordinal | Property | Wire kind | Direction | Enum values |
+| --- | --- | --- | --- | --- |
+| 0 | `listJson` | `utf8` | outbound |  |
+| 1 | `revision` | `i64` | outbound |  |
+| 2 | `deviceLimit` | `i64` | outbound |  |
 
 **DspAssetService** (8 properties)
 
@@ -1385,6 +1438,7 @@ destroyed during the session.
 | `accessoryData` | `AccessoryDataModel` |
 | `accessorySettings` | `AccessorySettingsModel` |
 | `devices` | `StationDevicesFacade` |
+| `connectedDevices` | `ConnectedDevicesFacade` |
 | `catalog` | `StationCatalog` |
 | `pan:<i>` | `PanadapterModel` |
 | `slice:<id>` | `SliceModel` |
@@ -1417,11 +1471,15 @@ Notes on the keys:
   9.1), and a write to it is refused as any `outbound` write is. Its
   properties (`StationDevicesFacade`):
   - `listJson` (`utf8`): a JSON array of the paired devices in pairing
-    order, each `{id, name, kind, pairedAt, lastSeen, connected}`: `id` is
-    the device's key fingerprint (SHA-256 of its public key's DER) in
-    base64url, `kind` is `phone`, `tablet` or `computer`, the two times
-    are ISO 8601 UTC (`""` when never seen), and `connected` says whether
-    that device holds an authenticated connection now.
+    order, each `{id, name, shortName, kind, pairedAt, lastSeen,
+    connected}`: `id` is the device's key fingerprint (SHA-256 of its
+    public key's DER) in base64url, `kind` is `phone`, `tablet` or
+    `computer`, the two times are ISO 8601 UTC (`""` when never seen), and
+    `connected` says whether that device holds a session now. `name` and
+    `shortName` are numbered as `connectedDevices` numbers them (below), so
+    one device reads the same on both lists; `shortName` is the one the
+    device last signed in with (section 3.5), or its kind's word ("Phone",
+    "Tablet", "Computer") when it sent none usable.
   - `revision` (`i64`): moves by one with every change to the object, from
     0 to 2^32 - 1 and then round to 0; compare by serial-number
     arithmetic.
@@ -1442,6 +1500,58 @@ Notes on the keys:
     `""` while the window is closed and while no code is shown. Sent only
     to a connection signed in with a paired device's own key; any other
     connection receives `""` (`StationServer::withPairingCodeFor`).
+- **`connectedDevices`** (iPhone app plan Task 71;
+  `ConnectedDevicesFacade`): who is on the Core, the list a device's
+  Devices page reads for "Connected now". Sent only at agreed minor 11 to
+  a peer whose hello declared `sessionHolder` 1 with `deviceAuth` 1
+  (`sessionHolderVersion` 1, section 6.3); any other peer never sees it or
+  its schema. Every property is `outbound`:
+  - `listJson` (`utf8`): a JSON array, one entry per device that holds a
+    place, live or away, in the order they were let in:
+    `{deviceId, name, shortName, kind, paired, hostsCore, revocable, state,
+    holdsTransmit, lastActivitySeconds, connectedForSeconds,
+    awayForSeconds, transmittingForSeconds, listeningOn}`. `deviceId` is
+    the `devices` object's `id` for a paired device, and `token:<n>` for a
+    window signed in with the older token and no key (`paired` false),
+    named "Computer at <its address>" with the short name "Computer".
+    `kind` is `phone`, `tablet` or `computer`, or `station` for a hosting
+    desktop's own window (`hostsCore` true). `revocable` is false for a
+    hosting desktop's window and for a token window. `state` is
+    `listening`, or `away` for a device whose link dropped without leaving
+    and that still holds its place (section 12.4). `holdsTransmit` is false
+    and `transmittingForSeconds` 0 until remote transmit; `listeningOn` is
+    `[]` until devices own their slices; `transmittingOn` is absent.
+    `lastActivitySeconds` counts from the device's last command, property
+    write or settings write, never a heartbeat, and moves at most once a
+    minute; `connectedForSeconds` from when the device took its place;
+    `awayForSeconds` from when it went away, 0 while it is not.
+  - `revision` (`i64`): moves by one with every change to the list, from 0
+    to 2^32 - 1 and then round to 0; compare by serial-number arithmetic.
+    The list changes, and is sent again, only when something in it other
+    than time passing changes.
+  - `deviceLimit` (`i64`): 4.
+
+  **Names.** A device's name is the one it paired with, or the one the
+  Core gives a token window; its short name is the one it signs in with
+  (section 3.5), or its kind's word. When two devices carry the same name,
+  the one paired later gets the next free number ("iPhone", "iPhone 2");
+  short names are numbered on their own collisions the same way ("Phone",
+  "Phone 2"). The order is the paired devices in pairing order, then a
+  hosting desktop the Core has not paired, then token windows in the order
+  they connected. Names and short names are the operator's own words: the
+  Core checks them as names (section 3.5), never against its own wording
+  rules.
+
+  **The one clock convention.** Every time the Core sends about a session,
+  a device, transmit, a notice or an end is a duration in whole seconds,
+  measured on the Core's own monotonic clock when the message is encoded,
+  named `...ForSeconds`, `...Seconds` or `secondsAgo`. No wall-clock time
+  from the Core reaches these screens, so a Core whose clock is wrong still
+  counts right. A duration inside an object is measured again whenever
+  that object or property is sent (its `object.create`, a `delta` on any
+  change), and not otherwise: an app counts on from its own receipt.
+  `devices`' `pairedAt` and `lastSeen` stay ISO 8601 dates, since they
+  outlive a session and a restart.
 - **`catalog`.** The values the Core owns and an app draws its controls
   from (section 7.4). Both properties are `outbound`
   (`StationCatalog`): `json` (`utf8`), the catalogue, and `revision`
@@ -1827,6 +1937,7 @@ refused.
 | `station.retireToken` | none | `deviceAdminVersion` | 1 | 11 |
 | `pairing.open` | none | `pairingVersion` | 1 | 11 |
 | `pairing.close` | none | `pairingVersion` | 1 | 11 |
+| `session.leave` | none | `sessionHolderVersion` | 1 | 11 |
 
 <!-- /surface -->
 
@@ -1907,6 +2018,14 @@ Four command groups need a sentence beyond the table:
   either kind of connection. Either one with arguments is refused ("The
   request to open pairing was not understood.", "The request to close
   pairing was not understood.").
+- **Leaving on purpose.** `session.leave` (`sessionHolderVersion` 1, iPhone
+  app plan Task 71) ends the device's session with no away time: its
+  place is free at once (section 12.4). After the accepted result the
+  station closes the connection, with no `session.end`; the client closes
+  its end too. With arguments it is refused, "The request to leave the
+  Core was not understood.". From a peer without `sessionHolderVersion` 1
+  it is refused as a verb the station does not route is (section 9.2),
+  and the connection stays up.
 
 ### 9.2 Unknown verbs
 
@@ -1955,8 +2074,12 @@ specified in
 [remote media control version 1](2026-09-20-remote-media-control-v1.md);
 the table lists the keys each operation carries as the code builds and
 checks them. A whole `media.control` message over 128 KiB is refused. The
-station accepts media control only from the current session, after
-`snapshot.complete`, when media is available. The `subscribe` fields that
+station accepts media control only from the session media goes to, after
+`snapshot.complete`, when media is available. While several devices are on
+a Core (section 5.1), media and telemetry go to one of them: the first let
+in while no other holds them. Another device is told they are off (section
+6.3) and its media control is ignored, so media never goes to two sessions
+at once; each device having its own is a later version's. The `subscribe` fields that
 come with `displayExtrasVersion` (`peakBlobs`, `activePeakHold`,
 `noiseFloor`, `waterfallLevels`, `normalize`, `calibrationOffsetDb`,
 `averageTimeMs`, `waterfallAverageTimeMs`), their ranges and what the Core sends for them are
@@ -2028,12 +2151,18 @@ runs the same deadline on its side.
   socket before any frame is read.
 - `media.control` messages are capped at 128 KiB and `station.metrics.v1`
   at 16 KiB, when encoded and when decoded.
-- The station accepts at most 8 connections at once
-  (`kMaxConcurrentPeers`), counting those still connecting. The next one
-  gets `session.end` "The Core already has as many connections as it
-  allows. Try again shortly.",
-  `retryable` true, because a reconnecting client meets it while its own
-  dead sockets drain.
+- The station accepts at most 24 connections at once
+  (`kMaxConcurrentPeers`), counting every socket, signed in, connecting or
+  pairing: four devices each reconnecting with an old socket not yet
+  noticed dead and four racing attempts, and a fifth device's four. The
+  next one gets `session.end` "The Core already has as many connections
+  as it allows. Try again shortly.", `retryable` true, before any `hello`,
+  because a reconnecting client meets it while its own dead sockets
+  drain.
+- At most 4 devices hold places at once (`kMaxDeviceSessions`, iPhone app
+  plan Task 71): sessions let in, devices away in their 3 minutes, and a
+  hosting desktop's own window. Connections still connecting and pairing
+  connections take no place.
 - Of those, one address may hold at most 2 that are still connecting
   (their snapshot not yet sent; `kMaxHandshakesPerAddress`), so one host
   cannot hold every slot by redialling within the connect deadline. An
@@ -2045,7 +2174,7 @@ runs the same deadline on its side.
   the same `session.end`, `retryable` true. A connection
   with no address of its own (the relay's) is not counted by address.
 
-### 12.4 Ending, preemption and retryable
+### 12.4 Ending, admission and retryable
 
 `session.end` carries a `reason` and `retryable`. `auth.result` carries
 `retryable` too. A client redials only after a retryable end; after one
@@ -2069,7 +2198,8 @@ non-empty string; an empty one is refused like any mistyped key.
 | No shared major (section 6.1) | `session.end` naming both sides' versions and the side to update | false | `linkVersion` |
 | Message the station cannot decode (section 13) | `session.end` "The Core could not read a message from this app." | false | `protocolError` |
 | Out-of-order handshake (section 5.1) | `session.end` | false | `protocolError` |
-| Preempted by a newer authenticated connection | `session.end` "Another app at ... connected to the Core and took over. Connect again to take it back." | false | `takenOver` |
+| The same device connected again (section 5.1): its older connection | `session.end` "This device connected again." | false | `sameDevice` |
+| Every place on the Core is taken (section 5.1) | `session.end` "The Core already has four devices connected." | true | none |
 | Connection limit reached | `session.end` | true | none |
 | Connect deadline expired | `session.end` | true | none |
 | Heartbeat timeout | `session.end` | true | none |
@@ -2094,7 +2224,9 @@ not verify for the certificate the connection presented, is refused and
 never trusted silently. A new certificate whose binding verifies is
 accepted without a question, whatever pin was saved.
 
-The takeover and version reasons are worded in one place,
+No end the station sends today carries `takenOver`: the fifth device's
+takeover, which will, is a later version's. The takeover and version
+reasons are worded in one place,
 `src/core/session/SessionEndReasons.{h,cpp}`: "Another app at
 *address:port* connected to the Core and took over. Connect again to take
 it back." and "This Core runs link version *N* and this app runs version
@@ -2111,10 +2243,20 @@ address and the two versions where they are present. It reads the words
 (`SessionEndReasons::parse`) only for an end that carries no code, from a
 Core older than the code.
 
-Only one session is authenticated at a time. A second connection that
-authenticates takes the session: the station ends the first with
-`retryable` false, so the two clients do not trade the radio back and
-forth, and the displaced operator reconnects by hand.
+**Several devices** (iPhone app plan Task 71). Up to four devices hold
+places at once, and no sign-in ever ends another device's session. A
+device's own newer connection replaces its older one, which ends with
+`sameDevice`, not retryable, so the two do not trade places. A paired
+device whose session ends without `session.leave` (a lost link, the
+heartbeat's end, a closed socket, an app its system stopped) is **away**
+for 3 minutes (`graceMs` 180000), keeping its place; signing in again
+within them is the same-device case, let in with no question. When the 3
+minutes end its place is freed and the Core keeps that its time ran out
+until the device next signs in, is removed, or the Core restarts. A window
+signed in with the token and no key, and a device that leaves with
+`session.leave` (section 9.1), frees its place at once; so does removing a
+device, away or not. The heartbeat timeout stays retryable: that end is
+what starts a device's 3 minutes.
 
 The desktop client redials on the schedule 1, 2, 5, 10, 30 and 60 s, then
 stays at 60 s (`kReconnectBackoffSteps` in `StationClient.cpp`), and starts
@@ -2153,7 +2295,7 @@ listener bound to loopback only is neither announced nor advertised
 `dnsSdInterfaceForListener` in `DnsSdAdvertiser.cpp`). Discovery is never
 trust: a client pins what it finds (section 3.2) or pairs (section 3.6).
 
-Both carry the same four facts about the Core, and both change when one
+Both carry the same five facts about the Core, and both change when one
 does (`DaemonApp::updateStationAnnouncement`):
 
 - **identity**: the identity fingerprint, SHA-256 of the identity key
@@ -2168,7 +2310,14 @@ does (`DaemonApp::updateStationAnnouncement`):
   `pairing_lan_click` allowed (one tap on this network pairs; the code does
   too), `code` while `OpenUnclaimed` with it denied or while
   `OpenReopened`, and `closed` while `ClosedClaimed` or when the Core does
-  not pair (`pairingVersion` 0).
+  not pair (`pairingVersion` 0);
+- **devices** (iPhone app plan Task 71): how many devices hold a place on
+  the Core, 0 to 4, counted as section 12.3 counts them
+  (`StationServer::devicesConnectedForDiscovery`); a Core no device has
+  claimed sends 0. A number only: who is on the Core reaches paired,
+  signed-in devices alone (`connectedDevices`, section 7.1). A Core
+  reached through the rendezvous or the relay has no announcement, so its
+  count shows only after sign-in.
 
 ### 14.1 The LAN announcement
 
@@ -2183,8 +2332,8 @@ does (`DaemonApp::updateStationAnnouncement`):
   (`kStationLanCacheTtlMs`);
 - a listener takes datagrams of at most 512 bytes
   (`kStationLanMaxDatagramBytes`); with the fields below a schema-2
-  datagram is at most 479 (`kStationLanMaxSchema2DatagramBytes`), so no
-  field is ever cut short.
+  datagram is at most 480 (`kStationLanMaxSchema2DatagramBytes`; 479 before
+  the device count), so no field is ever cut short.
 
 A station sends schema 2 only (`kStationLanAnnouncementSchema`). A listener
 reads schema 1 and schema 2, so a Core from before schema 2 is still found.
@@ -2208,6 +2357,7 @@ The datagram is binary, in this order; schema 1 ends after the radio MAC:
 | Label length | 1 byte | schema 2: 0 to 65 (`kStationLanMaxLabelBytes`) |
 | Label | that many bytes | schema 2: ASCII letters, digits, `/`, `_` and `-` (a callsign of up to 32, `/`, a suffix of up to 32) |
 | Pairing | 1 byte | schema 2: 0 `closed`, 1 `click`, 2 `code` |
+| Devices connected | 1 byte | schema 2, appended by iPhone app plan Task 71: 0 to 4 (`kStationLanMaxDevicesConnected`), the places taken; a station always sends it. A reader that never sees it (a datagram from an older Core) takes the count as not known and shows none |
 
 **Schema 2 extends by appending.** A reader ignores any bytes after the
 schema-2 fields it knows. It still refuses a datagram that is too short
@@ -2226,12 +2376,19 @@ schema-1 datagram for an endpoint that already sent schema 2 updates only
 the fields schema 1 carries; it never clears the identity, label, claimed
 state or pairing (`StationLanCache::ingest`).
 
-The conformance vectors `media/lan-announcement.bin` (schema 1) and
-`media/lan-announcement-2.bin` (schema 2) (section 16.4) are datagrams the
+A schema-1 datagram for an endpoint that already sent schema 2 does not
+clear its device count either.
+
+The conformance vectors `media/lan-announcement.bin` (schema 1),
+`media/lan-announcement-2.bin` (schema 2, from a Core before the device
+count) and `media/lan-announcement-2-devices.bin` (the same datagram with
+the count, 2) (section 16.4) are datagrams the
 station's own encoder wrote, with their decoded fields, `schema` among
-them, in the `.expect.json` beside each. `media/lan-announcement-2-trailing.bin`
-is the schema-2 datagram with five bytes appended, as a later field would
-be; its expectation holds the same fields and `ignoredTrailingBytes` 5. `tst_link_conformance_media`
+them, in the `.expect.json` beside each (`devicesConnected` only where the
+datagram carries it). `media/lan-announcement-2-trailing.bin` is the
+`lan-announcement-2-devices` datagram with five bytes appended after the
+count, as a later field would be; its expectation holds the same fields
+and `ignoredTrailingBytes` 5. `tst_link_conformance_media`
 decodes each and encodes the fields again, so a change to this layout
 fails there until the vectors, and this table, move with it.
 
@@ -2252,7 +2409,7 @@ The station registers one DNS-SD service:
   Bonjour renames it when another service holds the name, so a client reads
   the Core's label from the TXT record's `name`, not from the instance
   name;
-- a TXT record of five entries, in this order:
+- a TXT record of six entries, in this order:
 
 | Key | Value |
 | --- | --- |
@@ -2261,6 +2418,7 @@ The station registers one DNS-SD service:
 | `claimed` | `0` or `1` |
 | `pair` | `click`, `code` or `closed` |
 | `name` | the label, possibly empty; at most 65 characters |
+| `devices` | iPhone app plan Task 71: `0` to `4`, how many devices hold a place on the Core (section 14); `0` on a Core no device has claimed. `v` stays `1`: an older client ignores the key |
 
 A client ignores a key it does not know, so a newer station still lists,
 and treats a record whose `v` is not `1` as one it cannot read. `id` names
@@ -2279,7 +2437,7 @@ themselves (`DnsSdAdvertiser::unavailableText`).
 
 The conformance vector `media/dnssd-txt.bin` (section 16.4) is the TXT
 record the station's encoder writes for the Core of
-`media/lan-announcement-2.bin`, each entry preceded by its length in one
+`media/lan-announcement-2-devices.bin`, each entry preceded by its length in one
 byte (RFC 6763 section 6.1), with the service type and the entries as
 strings in `media/dnssd-txt.expect.json`.
 
@@ -2306,10 +2464,13 @@ maximum also equals `kMaximumSpectrumDisplayFramesPerSecond` in
 | `deltaFlushMs` | 50 | ms | StationServer::kDefaultDeltaFlushMs |
 | `endpointFps` | 1 to 60 | frames per second | DaemonMediaController.cpp handleSubscribe literal 1; kMaximumSpectrumDisplayFramesPerSecond |
 | `endpointPixels` | 1 to 4096 | pixels | DaemonMediaController.cpp handleSubscribe literal 1; SpectrumEndpoint::kMaxPixels |
+| `graceMs` | 180000 | ms | DeviceSessionRegistry::kGraceMs |
 | `heartbeatIntervalMs` | 20000 | ms | StationServer::kDefaultHeartbeatIntervalMs |
+| `lanAnnouncementMaxBytes` | 480 | bytes | kStationLanMaxSchema2DatagramBytes |
+| `maxDeviceSessions` | 4 | count | StationServer::kMaxDeviceSessions |
 | `maxDisplayEndpoints` | 8 | count | DaemonMediaController.cpp kMaxEndpoints |
 | `maxHandshakesPerAddress` | 2 | count | StationServer::kMaxHandshakesPerAddress |
-| `maxPeers` | 8 | count | StationServer::kMaxConcurrentPeers |
+| `maxPeers` | 24 | count | StationServer::kMaxConcurrentPeers |
 | `mediaControlBytes` | 131072 | bytes | kMaxMediaControlBytes |
 | `missedPongs` | 2 | count | StationServer::kDefaultMaxMissedPongs |
 | `shortNameMaxBytes` | 32 | bytes | DeviceStore::kMaxShortNameBytes |
@@ -2503,12 +2664,35 @@ client. Two runners play it, one from each end.
   client's own ids below 1000 while a fixture runs, so an answer to a
   scripted message never carries an id the client used.
 
+**Several clients** (iPhone app plan Task 71). A fixture may play other
+clients beside its own, each signing in as a paired device:
+`stationSetup.otherClients` is `[{"name": "b", "device": 1, "features":
+{...}, "shortName": "..."}]`, where `device` is `n` (the paired device
+`"$ref:device:<n>"` names, so `otherPairedDevices` pairs at least `n`) or
+`"self"` (the runner's own device), `features` is what that client's
+`hello` declares and `shortName`, when given, what its sign-in carries.
+A client step may carry `"client": "<name>"` and a station step
+`"to": "<name>"`; absent means the fixture's own client. Two more steps:
+`{"connect": "<name>"}` runs that client's whole connect sequence (its
+`hello`, its sign-in, and its messages up to `snapshot.complete`, taken
+without matching), and `{"close": "<name>"}` closes its connection;
+`expectClosed` may carry `"client"` too. The station's messages are
+matched per client, in that client's own arrival order. `otherConnections`
+stays for sockets that never sign in. **An app's runner** plays only its
+own client: it skips other clients' steps and the station messages sent
+to them, and a `connect` or `close` step names nothing it plays. A fixture
+where the own client shares the Core names the features its `hello`
+declares as a literal (`{"deviceAuth": 1, "sessionHolder": 1}`), not
+`"$object"`, since what the station sends it depends on them; an app's
+client declares them.
+
 **Which fixtures run on the app.** A fixture whose client behaviour no
 app can adopt runs on the station only (`"runs": ["station"]`): an older
 app's `hello` (`major-refused`, `lower-minor`), made-up majors or features
 (`version-*`), a client that answers no ping (`heartbeat-missed`) or never
-sends its token (`connect-deadline`), and the lockout and preemption,
-which need other clients (`lockout`, `preempted`), and the device proofs
+sends its token (`connect-deadline`), the lockout, which needs other
+clients (`lockout`), an older window meeting a full Core (`older-window`)
+and a device's own connection replaced (`same-device-again`), and the device proofs
 that fail (`device-other-challenge`, `device-other-certificate`), which
 hold the Core's verification to a block a conformant client never sends.
 Their client steps are all `scripted`. The device sign-in fixtures where
@@ -2635,8 +2819,8 @@ role.
 | `media` | media is enabled | false |
 | `priorFailedAuthentications` | other clients that each sent a wrong token before this one connects | 0 |
 | `clientAnswersPings` | the client's transport answers the station's pings | true |
-| `preemptingClient` | `{"afterStep": i}`: a second client authenticates once step `i` is done | none |
-| `otherConnections` | other clients connected before this one, still connecting and sending nothing; 8 puts the station at its connection limit | 0 |
+| `otherClients` | other clients the runner plays beside its own, each signing in as a paired device (above) | none |
+| `otherConnections` | other clients connected before this one, still connecting and sending nothing; 24 puts the station at its connection limit | 0 |
 | `token` | `"active"`: a Core upgraded from before paired devices, with a pairing token (made at run time) that `"$ref:token"` names; `"none"`: a new Core, without one (section 3.3) | `"active"` |
 | `otherPairedDevices` | that many devices besides the runner's own are paired before the client connects, their keys made at run time and never written in a fixture; their ids are `"$ref:device:1"` onwards; an app's runner ignores it | 0 |
 | `pairedDevice` | the station runner's own device (its key made at run time, the one `"$device:<case>"` signs with) is paired with the station before the client connects; an app's runner ignores it, as it ignores all of `stationSetup`, and accepts its app's key | false |
@@ -2658,14 +2842,19 @@ same on every machine.
 | `devices-pairing` | On the same Core as `devices`, `pairing.open` and `pairing.close` each with a renamed argument are refused; `pairing.open` is accepted with `values` `code` as `"$string"`, and the object's next `delta` has `pairingWindowOpen` true and `pairingCode` `"$string"`; `pairing.close` is accepted and the next `delta` has them false and `""`. Runs on the station alone |
 | `devices-retire-token-refused`, `devices-retire-token` | On an upgraded Core, a token connection that declares `deviceAuth` receives the object with `tokenActive` true; `station.retireToken` is refused with no device paired, and with one paired it is accepted and the connection ends: `session.end` `pairingRequired`, `retryable` false. Run on the station alone |
 | `catalog-anan-g2`, `catalog-hermes-lite-2` | The connect sequence to `snapshot.complete` on the static radio as an ANAN-G2 and as a Hermes Lite 2: the capabilities in full, and the `catalog` object with its `json` in full and `revision` 1 (section 7.4). The two differ exactly where the radios do: the board's model, name, attenuator (0 to 31 against -28 to 31), sample rates (six against four), antennas (three plus three receive-only against one plus none), PA rating and microphone input, and the RF power gauge its rating scales |
-| `connection-limit` | With eight other connections still connecting, the station sends no `hello`: `session.end` "The Core already has as many connections as it allows. Try again shortly.", `retryable` true, then the close |
+| `connection-limit` | With twenty-four other connections still connecting, the station sends no `hello`: `session.end` "The Core already has as many connections as it allows. Try again shortly.", `retryable` true, then the close |
 | `lockout` | After five wrong tokens from other clients, the right token is refused as rate limited, `retryable` true |
 | `major-refused` | An older app's `hello` (no `majors`) with major 2 gets `session.end` "This Core runs link version 1 and this app runs version 2. Update the Core.", `retryable` false, `code` `linkVersion` |
 | `version-declares` | A `hello` with `majors` `[1]` and a declared feature is accepted, and authentication follows |
 | `version-app-one-ahead` | An app supporting `[1, 2]` chooses 1, the highest it shares with the station, and is accepted |
 | `version-app-two-ahead` | An app supporting `[2, 3]` that sends major 3 gets `session.end` "This Core runs link version 1 and this app runs version 3. Update the Core.", `retryable` false, `code` `linkVersion` |
 | `lower-minor` | A `hello` with minor 4 agrees minor 4: the capabilities without the minor-11 entries, and a minor-11 verb refused with a plain reason |
-| `preempted` | A second authenticated client ends this session: `session.end`, `retryable` false, `code` `takenOver` |
+| `same-device-again` | The device signs in again on another connection (`otherClients` `"self"`): the older connection ends with `session.end` "This device connected again.", `retryable` false, `code` `sameDevice`, and the newer one is let in with no question. Runs on the station alone |
+| `older-window` | Four devices fill the Core; a window from before paired devices (the token, no features) is let through `auth.result` and then turned away: `session.end` "The Core already has four devices connected.", `retryable` true, no code. Runs on the station alone |
+| `connected-devices` | A device that declares `sessionHolder` receives `connectedDevices` in its snapshot (`deviceLimit` 4, `revision` 1), and a `delta` of it (with one of `devices`) each time another device is let in, including a window that declares only `deviceAuth` and so never receives the object itself, and when one drops; `listJson` is `"$string"`, since it carries run-time ids |
+| `short-name` | Another device signs in with a short name, drops, and signs in again with a new one: each change moves `connectedDevices`' and `devices`' revisions, the new short name replacing the old in both lists |
+| `grace-return` | Another device drops and is away; a minute later nothing has been sent about it; it signs in again within its 3 minutes and is let in with no question, the list sent again |
+| `verbs-session-leave` | `session.leave` with an argument is refused, "The request to leave the Core was not understood."; without, it is accepted and the station closes the connection with no `session.end`. Runs on the station alone |
 | `heartbeat-answered`, `heartbeat-missed` | The heartbeat, above |
 | `connect-deadline` | No `auth.request` within 30000 ms: `session.end` "This app did not finish connecting to the Core in time.", `retryable` true |
 | `property-write` | A write and its `property.result` and side-effect `delta`; a refused outbound property and an unknown one; a write without a `writeId` answered by `delta`; a write to a slice's signal strength refused as outbound |
@@ -2713,8 +2902,9 @@ processors; its vectors hold decoders to the reference PCM instead.
 | --- | --- | --- | --- |
 | `nrsc1` | `lan-announcement`: one schema-1 LAN announcement datagram, as a Core from before schema 2 sends it (section 14.1) | none | `schema` 1, `controlPort`, `fingerprint`, `coreName`, `radioName`, `radioMac`, `radioConnected`, exact |
 | `nrsc1` | `lan-announcement-2`: one schema-2 LAN announcement datagram, from a claimed Core whose pairing window was reopened (section 14.1) | none | `schema` 2, the fields above, `claimed` true, `identity` (base64url of the 32 bytes, no padding), `label` `KG4VCF/shack`, `pairing` `code`, exact |
-| `nrsc1` | `lan-announcement-2-trailing`: the `lan-announcement-2` datagram with five bytes appended after its known fields, which a reader ignores (section 14.1) | none | The same fields as `lan-announcement-2`, and `ignoredTrailingBytes` 5: the vector's last five bytes are not decoded, and the encoder writes the bytes before them, exact |
-| `dnssd-txt` | `dnssd-txt`: the Bonjour TXT record of the same Core (section 14.2) | none | `serviceType` `_nereus-station._tcp` and `txt`, the entries as strings (`v`, `id`, `claimed`, `pair`, `name`); the bytes are those entries in that order, exact |
+| `nrsc1` | `lan-announcement-2-devices`: the `lan-announcement-2` datagram with the device count byte, 2, appended after Pairing (section 14.1) | none | The fields of `lan-announcement-2` and `devicesConnected` 2, exact |
+| `nrsc1` | `lan-announcement-2-trailing`: the `lan-announcement-2-devices` datagram with five bytes appended after its known fields, which a reader ignores (section 14.1) | none | The same fields as `lan-announcement-2-devices`, and `ignoredTrailingBytes` 5: the vector's last five bytes are not decoded, and the encoder writes the bytes before them, exact |
+| `dnssd-txt` | `dnssd-txt`: the Bonjour TXT record of the Core of `lan-announcement-2-devices` (section 14.2) | none | `serviceType` `_nereus-station._tcp` and `txt`, the entries as strings (`v`, `id`, `claimed`, `pair`, `name`, `devices`); the bytes are those entries in that order, exact |
 | `ps3d` | `ps3d-frame`: one PureSignal display chunk, eight points and four correction points | none | Every header field and the eight value lists; `tolerance` `{"absolute": 0}`, because the values travel as IEEE-754 binary64 |
 | `nsdc1` | `nsdc1-full`: frame 1, a keyframe | none | `disposition` `accepted`, `reason` `none`, `keyframe` (the header's keyframe flag), the context (`endpointId`, `contextGeneration`, `minDbm`, `maxDbm`), `encoderSequence`, `producerTimestamp`, `waterfallAdvance` and the reconstructed `traceDbm`, `waterfallDbm` and `wideDbm` rows; `tolerance` `{"dbm": 0.01}` |
 | `nsdc1` | `nsdc1-delta`: frame 2, a delta | `nsdc1-full` | As above, `keyframe` false |
@@ -2809,4 +2999,9 @@ how a fixture is written to what the code does.
   spelling: an audio context's `reason` (`client-disabled`,
   `receiver-limit`, ...), `displayBudgetReason`, and the display retire
   reasons "slice removed" and "slice stream binding changed", which
-  windows in use compare as they are.
+  windows in use compare as they are. Device names and short names (the
+  `devices` and `connectedDevices` objects, section 7.1) are the
+  operator's own words, checked as names (section 3.5) and never held to
+  `isPlain`, whose terms would refuse an ordinary name such as "Grant's
+  iPhone"; a sentence of the station's that carries one is checked with
+  the name set aside.

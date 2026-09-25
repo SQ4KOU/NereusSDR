@@ -135,6 +135,9 @@
 //   2026-09-24: Part C fix wave: the optional device shortName in
 //               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app Task 71 (R-IOS-02):
+//               SessionEndCode::kSameDevice. J.J. Boyd (KG4VCF), with AI-
+//               assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -291,6 +294,9 @@ inline constexpr const char* kDeviceNotPaired = "deviceNotPaired";
 inline constexpr const char* kDeviceProofFailed = "deviceProofFailed";
 /// The device was removed from the Core (Task 13's revoke).
 inline constexpr const char* kDeviceRemoved = "deviceRemoved";
+/// iPhone app Task 71 (ruling 4.8): the same device signed in on a newer
+/// connection, which replaced this one: "This device connected again."
+inline constexpr const char* kSameDevice = "sameDevice";
 /// The client's own reason, never sent by a Core: the Core's certificate
 /// or identity key is not the one this device paired with.
 inline constexpr const char* kIdentityChanged = "identityChanged";

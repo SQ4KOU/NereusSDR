@@ -1251,6 +1251,10 @@ list(APPEND CORE_SOURCES
     src/core/session/StationDevicesFacade.cpp
     # iPhone app Task 19 (R-IOS-06): the mirrored `catalog` object.
     src/core/session/StationCatalog.cpp
+    # iPhone app Task 71 (R-IOS-02): who holds a place on the Core, and the
+    # mirrored `connectedDevices` object.
+    src/core/session/DeviceSessionRegistry.cpp
+    src/core/session/ConnectedDevicesFacade.cpp
     # iPhone app Task 14 (R-IOS-08, D37): the pairing window, its code and
     # the SPAKE2+EE exchange (libsodium, cmake/NereusPairing.cmake).
     src/core/security/PairingCode.cpp

@@ -36,6 +36,10 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 20 (R-IOS-27): the
 //                                    NSDX display extras vectors.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25: iPhone app Task 71 (R-IOS-02): lan-
+//               announcement-2-devices; the trailing vector follows the count.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -67,6 +71,7 @@ private slots:
     void initTestCase();
     void writeLanAnnouncement();
     void writeLanAnnouncement2();
+    void writeLanAnnouncement2Devices();
     void writeLanAnnouncement2Trailing();
     void writeDnsSdTxt();
     void writePs3dFrame();
@@ -129,11 +134,25 @@ void TstLinkConformanceRegen::writeLanAnnouncement2()
                               {QStringLiteral("expect"), LinkMediaVectors::toJson(value)}}));
 }
 
+// iPhone app Task 71 (ruling 10.4): the same Core with the device count
+// appended after Pairing.
+void TstLinkConformanceRegen::writeLanAnnouncement2Devices()
+{
+    const StationLanAnnouncement value = LinkMediaVectors::lanAnnouncement2Devices();
+    QString error;
+    const QByteArray bytes = encodeStationLanAnnouncement(value, &error);
+    QVERIFY2(!bytes.isEmpty(), qPrintable(error));
+    QVERIFY(write(QStringLiteral("lan-announcement-2-devices"), bytes,
+                  QJsonObject{{QStringLiteral("codec"), QStringLiteral("nrsc1")},
+                              {QStringLiteral("expect"), LinkMediaVectors::toJson(value)}}));
+}
+
 // Schema 2 extends by appending: the same Core with bytes after its known
-// fields, which a reader ignores (link document section 14.1).
+// fields (the device count the last of them), which a reader ignores (link
+// document section 14.1).
 void TstLinkConformanceRegen::writeLanAnnouncement2Trailing()
 {
-    const StationLanAnnouncement value = LinkMediaVectors::lanAnnouncement2();
+    const StationLanAnnouncement value = LinkMediaVectors::lanAnnouncement2Devices();
     QString error;
     const QByteArray known = encodeStationLanAnnouncement(value, &error);
     QVERIFY2(!known.isEmpty(), qPrintable(error));

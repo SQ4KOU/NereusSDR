@@ -259,6 +259,11 @@
             "kind": "i64",
             "name": "displayExtrasVersion",
             "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "sessionHolderVersion",
+            "value": 1
         }
     ],
     "commands": [
@@ -1224,6 +1229,14 @@
             "capabilityVersion": 1,
             "minMinor": 11,
             "verb": "pairing.close"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "sessionHolderVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "session.leave"
         }
     ],
     "limits": {
@@ -1270,10 +1283,25 @@
                 "min": 1
             }
         },
+        "graceMs": {
+            "source": "DeviceSessionRegistry::kGraceMs",
+            "unit": "ms",
+            "value": 180000
+        },
         "heartbeatIntervalMs": {
             "source": "StationServer::kDefaultHeartbeatIntervalMs",
             "unit": "ms",
             "value": 20000
+        },
+        "lanAnnouncementMaxBytes": {
+            "source": "kStationLanMaxSchema2DatagramBytes",
+            "unit": "bytes",
+            "value": 480
+        },
+        "maxDeviceSessions": {
+            "source": "StationServer::kMaxDeviceSessions",
+            "unit": "count",
+            "value": 4
         },
         "maxDisplayEndpoints": {
             "source": "DaemonMediaController.cpp kMaxEndpoints",
@@ -1288,7 +1316,7 @@
         "maxPeers": {
             "source": "StationServer::kMaxConcurrentPeers",
             "unit": "count",
-            "value": 8
+            "value": 24
         },
         "mediaControlBytes": {
             "source": "kMaxMediaControlBytes",
@@ -2799,6 +2827,28 @@
                     "kind": "enum",
                     "name": "bandFollow",
                     "ordinal": 19
+                }
+            ]
+        },
+        "ConnectedDevicesFacade": {
+            "properties": [
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "listJson",
+                    "ordinal": 0
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "revision",
+                    "ordinal": 1
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "deviceLimit",
+                    "ordinal": 2
                 }
             ]
         },
@@ -4846,6 +4896,10 @@
         {
             "class": "StationDevicesFacade",
             "key": "devices"
+        },
+        {
+            "class": "ConnectedDevicesFacade",
+            "key": "connectedDevices"
         },
         {
             "class": "StationCatalog",

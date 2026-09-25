@@ -17,7 +17,7 @@
 //                   decodeStationLanAnnouncement
 //   codec "dnssd-txt" the Bonjour TXT record (section 14.2), split by
 //                   decodeDnsSdTxtRecord; encoded again in the key order
-//                   v, id, claimed, pair, name
+//                   v, id, claimed, pair, name, devices
 //   codec "ps3d"    one PureSignal display chunk, assembled by a fresh
 //                   Ps3DisplayAssembler for the expectation's
 //                   sessionGeneration; values are exact (tolerance 0)
@@ -62,6 +62,10 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 20 (R-IOS-27): the
 //                                    NSDX display extras vectors.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25: iPhone app Task 71 (R-IOS-02): the lan-
+//               announcement-2-devices vector and the TXT record's sixth entry.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -281,15 +285,17 @@ QString checkDnsSdTxt(const QByteArray& bytes, const QJsonObject& expect)
     }
     QByteArray encoded;
     const QJsonObject txt = expect.value(QStringLiteral("txt")).toObject();
+    // iPhone app Task 71: `devices`, the sixth, after name.
     for (const QString& key : {QStringLiteral("v"), QStringLiteral("id"), QStringLiteral("claimed"),
-                               QStringLiteral("pair"), QStringLiteral("name")}) {
+                               QStringLiteral("pair"), QStringLiteral("name"),
+                               QStringLiteral("devices")}) {
         const QByteArray entry = key.toLatin1() + '=' + txt.value(key).toString().toLatin1();
         encoded.append(static_cast<char>(entry.size()));
         encoded.append(entry);
     }
     if (encoded != bytes) {
         return QStringLiteral("the TXT record's bytes are not its entries in the order v, id, "
-                              "claimed, pair, name");
+                              "claimed, pair, name, devices");
     }
     return QString();
 }
@@ -594,6 +600,7 @@ void TstLinkConformanceMedia::vectorsCoverThePlan()
           QStringLiteral("media-opus-2"), QStringLiteral("media-opus-3"),
           QStringLiteral("media-opus-4"), QStringLiteral("media-lan-announcement"),
           QStringLiteral("media-lan-announcement-2"),
+          QStringLiteral("media-lan-announcement-2-devices"),
           QStringLiteral("media-lan-announcement-2-trailing"), QStringLiteral("media-dnssd-txt"),
           QStringLiteral("media-ps3d-frame")}) {
         QVERIFY2(m_vectors.contains(id), qPrintable(id));
@@ -604,23 +611,41 @@ void TstLinkConformanceMedia::vectorsCoverThePlan()
                  .value(QStringLiteral("schema")).toInt(), 1);
     QCOMPARE(expectOf(m_vectors.value(QStringLiteral("media-lan-announcement-2")))
                  .value(QStringLiteral("schema")).toInt(), int(kStationLanAnnouncementSchema));
-    // Schema 2 extends by appending: the trailing vector is the schema-2
+    // iPhone app Task 71 (ruling 10.4): the device count is one byte
+    // appended after Pairing; the datagram without it (an older Core)
+    // decodes with the count unknown.
+    const QByteArray older = m_vectors.value(QStringLiteral("media-lan-announcement-2")).bytes;
+    const Vector counted = m_vectors.value(QStringLiteral("media-lan-announcement-2-devices"));
+    QCOMPARE(counted.bytes.size(), older.size() + 1);
+    QCOMPARE(counted.bytes.left(older.size()), older);
+    QVERIFY(!expectOf(m_vectors.value(QStringLiteral("media-lan-announcement-2")))
+                 .contains(QStringLiteral("devicesConnected")));
+    QCOMPARE(expectOf(counted).value(QStringLiteral("devicesConnected")).toInt(), 2);
+    QJsonObject withoutCount = expectOf(counted);
+    withoutCount.remove(QStringLiteral("devicesConnected"));
+    QCOMPARE(withoutCount, expectOf(m_vectors.value(QStringLiteral("media-lan-announcement-2"))));
+    QVERIFY(counted.bytes.size() <= kStationLanMaxSchema2DatagramBytes);
+    // Schema 2 extends by appending: the trailing vector is the counted
     // vector with bytes after it, and decodes to the same fields.
     const Vector extended = m_vectors.value(QStringLiteral("media-lan-announcement-2-trailing"));
-    const QByteArray known = m_vectors.value(QStringLiteral("media-lan-announcement-2")).bytes;
+    const QByteArray known = counted.bytes;
     QVERIFY(extended.bytes.size() > known.size());
     QCOMPARE(extended.bytes.left(known.size()), known);
     QCOMPARE(expectOf(extended).value(QStringLiteral("ignoredTrailingBytes")).toInt(),
              int(extended.bytes.size() - known.size()));
     QJsonObject withoutMark = expectOf(extended);
     withoutMark.remove(QStringLiteral("ignoredTrailingBytes"));
-    QCOMPARE(withoutMark, expectOf(m_vectors.value(QStringLiteral("media-lan-announcement-2"))));
+    QCOMPARE(withoutMark, expectOf(counted));
     // The TXT vector is the station's encoder's output for the Core the
-    // schema-2 announcement describes.
+    // counted announcement describes, its sixth entry the count.
     QCOMPARE(m_vectors.value(QStringLiteral("media-dnssd-txt")).bytes,
              encodeDnsSdTxtRecord(LinkMediaVectors::dnsSdRecord()));
     QCOMPARE(LinkMediaVectors::dnsSdRecord().identity,
              LinkMediaVectors::lanAnnouncement2().identity);
+    QCOMPARE(expectOf(m_vectors.value(QStringLiteral("media-dnssd-txt")))
+                 .value(QStringLiteral("txt")).toObject()
+                 .value(QStringLiteral("devices")).toString(),
+             QStringLiteral("2"));
     const QJsonObject delta = expectOf(m_vectors.value(QStringLiteral("media-nsdc1-delta")));
     QCOMPARE(delta.value(QStringLiteral("keyframe")).toBool(), false);
     const QJsonObject recovered =

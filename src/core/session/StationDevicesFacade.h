@@ -41,7 +41,7 @@
 //
 // The facade knows nothing about connections: StationServer tells it which
 // devices are connected (setConnectedDevices) and ends connections itself.
-// Several devices may be connected at once (a later session design); the
+// Up to four devices may be connected at once (iPhone app Task 71); the
 // facade keeps a set for that reason.
 //
 // iPhone app Task 14 (R-IOS-08, pairingVersion 1): the pairing window.
@@ -76,6 +76,9 @@
 //               through the token is not revoked while the token works. J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-25: iPhone app Task 71 (R-IOS-02): numbered names and
+//               shortName in listJson. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -123,9 +126,13 @@ public:
                          const StationIdentity& identity, AppSettings& settings,
                          QObject* parent = nullptr, PairingWindow* pairingWindow = nullptr);
 
-    /// A JSON array of {id, name, kind, pairedAt, lastSeen, connected}, in
-    /// pairing order. `id` is the device's key fingerprint in base64url;
-    /// the times are ISO 8601 UTC ("" when never seen).
+    /// A JSON array of {id, name, shortName, kind, pairedAt, lastSeen,
+    /// connected}, in pairing order. `id` is the device's key fingerprint
+    /// in base64url; the times are ISO 8601 UTC ("" when never seen).
+    /// iPhone app Task 71 (ruling 4.3): `name` and `shortName` are numbered
+    /// on collisions by pairing order ("iPhone", "iPhone 2"), as
+    /// `connectedDevices` numbers them, and `shortName` is the kind's word
+    /// ("Phone", "Tablet", "Computer") when the device sent none usable.
     QString listJson() const { return m_state.listJson; }
     quint32 revision() const { return m_revision; }
     /// The Core's label as displayed; "" when it has none yet (no rename

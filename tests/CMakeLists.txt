@@ -7285,6 +7285,14 @@ nereus_add_test(tst_device_auth
 nereus_add_test(tst_station_devices
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
+# iPhone app Task 71 (R-IOS-02): who holds a place on the Core (the four,
+# the same device, away and its 180 s, leaving, names and short names, the
+# redial arithmetic) over an injected clock, and several devices signed in
+# at once over the in-process loopback.
+nereus_add_test(tst_device_session_registry EXTRA_LABELS session)
+nereus_add_test(tst_station_multi_session
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
 # iPhone app Task 19 (R-IOS-06): the Core's catalogue; the G2 and HL2
 # catalogue fixtures against the desktop's own values, the revision, a
 # preset change reaching a client over the in-process loopback, the size.

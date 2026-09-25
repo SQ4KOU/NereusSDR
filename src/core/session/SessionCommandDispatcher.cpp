@@ -107,6 +107,9 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 14 (R-IOS-08):
 //                                    pairing.open and pairing.close.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25: iPhone app Task 71 (R-IOS-02): session.leave
+//               (sessionHolderVersion 1). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -479,6 +482,8 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
         // The Core's pairing window (iPhone app Task 14, R-IOS-08).
         {"pairing.open", {}, "pairingVersion", 1, kRadioIdentitySessionProtocolMinor},
         {"pairing.close", {}, "pairingVersion", 1, kRadioIdentitySessionProtocolMinor},
+        // Leaving the Core on purpose (iPhone app Task 71, R-IOS-02).
+        {"session.leave", {}, "sessionHolderVersion", 1, kRadioIdentitySessionProtocolMinor},
     };
     return specs;
 }
@@ -545,6 +550,11 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
     // iPhone app Task 14: the pairing window needs no radio either.
     if (invoke.commandVerb == "pairing.open" || invoke.commandVerb == "pairing.close") {
         handlePairingWindow(invoke);
+        return;
+    }
+    // iPhone app Task 71: nor does leaving the Core.
+    if (invoke.commandVerb == "session.leave") {
+        handleSessionLeave(invoke);
         return;
     }
     if (m_radioModel.isNull()) {
@@ -1380,6 +1390,22 @@ void SessionCommandDispatcher::handleSetRfKitEnabled(const SessionMessage& invok
         return;
     }
     emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
+}
+
+// iPhone app Task 71 (R-IOS-02, ruling 4.12, sessionHolderVersion 1): the
+// device leaves the Core on purpose. StationServer answers a peer without
+// sessionHolderVersion 1 before this runs; here the request is checked, the
+// result goes out, and StationServer frees the place and ends the
+// connection.
+void SessionCommandDispatcher::handleSessionLeave(const SessionMessage& invoke)
+{
+    if (!invoke.arguments.isEmpty()) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The request to leave the Core was not understood."), {});
+        return;
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
+    emit sessionLeaveRequested();
 }
 
 // R-R3-48: the one TCI switch and port, kept by the Core.

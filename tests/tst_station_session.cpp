@@ -9,7 +9,7 @@
 //
 // The protocol assertions (the section 7.0 connect sequence and its exact
 // message ORDER, the version policy in both directions, token rejection
-// and rate limiting, preemption, schema skew, the heartbeat's detection of
+// and rate limiting, admission, schema skew, the heartbeat's detection of
 // a silently dead peer) all run over an IN-PROCESS, NON-TLS link
 // (fakes/LoopbackTransport.h) and therefore run UNCONDITIONALLY, on every
 // build. Only the genuinely TLS-specific slots -- that a real wss listener
@@ -311,7 +311,7 @@ private slots:
     void capabilitiesAdvertiseEffectiveNotBoardLimits();
     void clientAppliesCapabilitiesAndDrivesConnected();
     void lateRadioRefreshUpdatesAuthenticatedClientWithoutReplayingMirror();
-    void queuedLateRadioRefreshDoesNotReachReplacementSession();
+    void queuedLateRadioRefreshReachesOnlyTheSessionsAdmittedBeforeIt();
     void mediaEnvelopeIsBoundedAndTyped();
     void mediaRejectsPreAuthenticationAndOldProtocol();
     void mediaRequiresReadySessionAndRejectsPriorEpoch();
@@ -348,7 +348,7 @@ private slots:
     void badTokenIsRefusedAndThenRateLimited();
 
     // ---- Session model (task 18 step 1) ----
-    void secondAuthenticatedConnectionPreemptsAndSaysWhy();
+    void secondAuthenticatedConnectionIsAdmittedBesideTheFirst();
 
     // ---- Heartbeat (task 18 step 2a) ----
     void heartbeatDetectsAPeerThatWentSilentWithoutClosing();
@@ -664,6 +664,11 @@ void TstStationSession::telemetryDoesNotRequireMediaAndRejectsOldProtocol()
     QVERIFY(!server.telemetryAvailable());
     QVERIFY(!server.sendTelemetry(snapshot, server.sessionEpoch()));
     QVERIFY(peer->isOpen());
+    // iPhone app Task 71: telemetry goes to one session until each device
+    // has its own (Task 76), the first admitted while none holds it; the
+    // older client leaves first so the newer one is that session.
+    peer->closeLink(QStringLiteral("older client done"));
+    QTRY_VERIFY(!server.hasAuthenticatedSession());
 
     RadioModel remote(RadioModel::Role::Remote);
     SettingsProxy proxy;
@@ -2095,7 +2100,7 @@ void TstStationSession::lateRadioRefreshUpdatesAuthenticatedClientWithoutReplayi
 
 // The replacement race uses the same real session boundary as the ordinary
 // loopback coverage above.
-void TstStationSession::queuedLateRadioRefreshDoesNotReachReplacementSession()
+void TstStationSession::queuedLateRadioRefreshReachesOnlyTheSessionsAdmittedBeforeIt()
 {
     QTemporaryDir settingsDir;
     QVERIFY(settingsDir.isValid());
@@ -2118,10 +2123,13 @@ void TstStationSession::queuedLateRadioRefreshDoesNotReachReplacementSession()
     QTRY_COMPARE(oldCompleted.count(), 1);
     oldClientEnd->clearReceived();
 
-    // The deferred callback captures the old session here. Before its timer
-    // may run, synchronously authenticate a replacement transport. This is
-    // the reentrant boundary that a normal queued socket cannot reach in one
-    // test turn, and it pins the epoch check against a replacement session.
+    // The deferred callback captures the sessions admitted now (the old
+    // one). Before its timer may run, synchronously authenticate a second
+    // device (iPhone app Task 71: admitted beside the first, not in its
+    // place). This is the reentrant boundary a normal queued socket cannot
+    // reach in one test turn: the second device already received its own
+    // capabilities and settings snapshot, and must not get the refresh a
+    // second time.
     stationModel->setConnectionStateForTest(ConnectionState::Connected);
     stationModel->emitCurrentRadioChangedForTest();
 
@@ -2139,14 +2147,16 @@ void TstStationSession::queuedLateRadioRefreshDoesNotReachReplacementSession()
 
     QTRY_VERIFY(replacementClient->receivedKinds().contains(
         QByteArrayLiteral("snapshot.complete")));
-    QTRY_VERIFY(oldClientEnd->receivedKinds().contains(QByteArrayLiteral("session.end")));
+    // The old session gets the refresh it was owed, and stays up.
+    QTRY_VERIFY(oldClientEnd->receivedKinds().contains(QByteArrayLiteral("settings.snapshot")));
 
     const QList<QByteArray> replacementKinds = replacementClient->receivedKinds();
     QCOMPARE(replacementKinds.count(QByteArrayLiteral("capabilities")), 1);
     QCOMPARE(replacementKinds.count(QByteArrayLiteral("settings.snapshot")), 1);
     const QList<QByteArray> oldKinds = oldClientEnd->receivedKinds();
-    QVERIFY(!oldKinds.contains(QByteArrayLiteral("capabilities")));
-    QVERIFY(!oldKinds.contains(QByteArrayLiteral("settings.snapshot")));
+    QCOMPARE(oldKinds.count(QByteArrayLiteral("capabilities")), 1);
+    QCOMPARE(oldKinds.count(QByteArrayLiteral("settings.snapshot")), 1);
+    QVERIFY(!oldKinds.contains(QByteArrayLiteral("session.end")));
     QCOMPARE(oldCompleted.count(), 1);
 }
 
@@ -2334,8 +2344,12 @@ void TstStationSession::badTokenIsRefusedAndThenRateLimited()
 
 // ── Session model ────────────────────────────────────────────────────────
 
-void TstStationSession::secondAuthenticatedConnectionPreemptsAndSaysWhy()
+void TstStationSession::secondAuthenticatedConnectionIsAdmittedBesideTheFirst()
 {
+    // iPhone app Task 71 (R-IOS-02): the remote design's section 7.1
+    // preemption is gone. A second window signing in with the token is a
+    // second device (a token window) and is admitted beside the first; no
+    // sign-in by another device ends a session.
     QTemporaryDir settingsDir;
     QVERIFY(settingsDir.isValid());
     AppSettings stationSettings(
@@ -2343,11 +2357,7 @@ void TstStationSession::secondAuthenticatedConnectionPreemptsAndSaysWhy()
 
     auto stationModel = makeStationRadioModel(0);
     StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
-    QSignalSpy preempted(&server, &StationServer::sessionPreempted);
 
-    // The description the station records for a peer is the STATION-side
-    // transport's, since that is the object it was handed, so that is what
-    // is named here.
     auto authenticate = [&](const QString& name, LoopbackTransport** clientEndOut) {
         auto* stationEnd = new LoopbackTransport(name, this);
         auto* clientEnd = new LoopbackTransport(name + QStringLiteral("-client"), this);
@@ -2371,27 +2381,15 @@ void TstStationSession::secondAuthenticatedConnectionPreemptsAndSaysWhy()
     LoopbackTransport* second = nullptr;
     authenticate(QStringLiteral("second"), &second);
 
-    // Parent section 7.1: "A second authenticated connection preempts the
-    // existing session ... The displaced session is told why."
-    QTRY_COMPARE(preempted.count(), 1);
-    QCOMPARE(preempted.first().first().toString(), QStringLiteral("first"));
-
-    QString displacedReason;
-    for (const QByteArray& wire : first->received()) {
-        const SessionMessage message = decodeOrFail(wire);
-        if (message.kind == SessionMessageKind::SessionEnd) {
-            displacedReason = message.reason;
-        }
-    }
-    QVERIFY2(!displacedReason.isEmpty(),
-             "the displaced session was closed without being told why");
-    QVERIFY2(displacedReason.contains(QStringLiteral("second")),
-             qPrintable(displacedReason));
-
-    // Exactly one session survives, and it is the newcomer.
-    QTRY_COMPARE(server.peerCount(), 1);
-    QVERIFY(server.hasAuthenticatedSession());
+    // Both admitted, neither told to go.
+    QCOMPARE(server.peerCount(), 2);
+    QCOMPARE(server.authenticatedSessionCount(), 2);
+    QVERIFY(first->isOpen());
     QVERIFY(second->isOpen());
+    for (const QByteArray& wire : first->received()) {
+        QVERIFY2(decodeOrFail(wire).kind != SessionMessageKind::SessionEnd,
+                 "a second device's sign-in ended the first session");
+    }
 }
 
 // ── Heartbeat ────────────────────────────────────────────────────────────
@@ -4577,7 +4575,7 @@ void TstStationSession::oneAddressHoldsAtMostTwoConnectingSlots()
 void TstStationSession::ipv6PeersAreCountedPerSlash64()
 {
     QCOMPARE(StationServer::kMaxHandshakesPerAddress, 2);
-    QCOMPARE(StationServer::kMaxConcurrentPeers, 8);
+    QCOMPARE(StationServer::kMaxConcurrentPeers, 24);
     const QString capReason = QStringLiteral(
         "The Core already has as many connections as it allows. Try again shortly.");
 

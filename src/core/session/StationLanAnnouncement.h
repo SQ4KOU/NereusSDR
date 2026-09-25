@@ -34,11 +34,15 @@ inline constexpr int kStationLanIdentityBytes = 32;
 /// StationLabel: a callsign of up to 32 characters, '/', and a suffix of up
 /// to 32, so a label is never cut short.
 inline constexpr int kStationLanMaxLabelBytes = 65;
+/// iPhone app Task 71 (ruling 10.4): the "Devices connected" byte appended
+/// after Pairing, 0 to this (the Core's four places).
+inline constexpr int kStationLanMaxDevicesConnected = 4;
 /// The largest schema-2 datagram with today's fields: both names and the
-/// label at their limits. Schema 2 extends by appending fields, which a
-/// reader that does not know them ignores (link document section 14.1);
-/// every datagram still fits kStationLanMaxDatagramBytes.
-inline constexpr int kStationLanMaxSchema2DatagramBytes = 479;
+/// label at their limits, and the device count. Schema 2 extends by
+/// appending fields, which a reader that does not know them ignores (link
+/// document section 14.1); every datagram still fits
+/// kStationLanMaxDatagramBytes. 479 before the device count.
+inline constexpr int kStationLanMaxSchema2DatagramBytes = 480;
 
 /// How the Core accepts a new device right now (the pairing window, link
 /// document section 3.6). On the wire: 0 closed, 1 click, 2 code.
@@ -70,6 +74,12 @@ struct StationLanAnnouncement {
     /// letters, digits, '/', '_' and '-'. Empty when the Core has none.
     QString label;
     StationLanPairing pairing = StationLanPairing::Closed;
+    /// iPhone app Task 71 (ruling 10.4), schema 2: the places taken on the
+    /// Core, 0 to kStationLanMaxDevicesConnected (0 on a Core no device has
+    /// claimed). nullopt when the datagram does not carry the byte (a Core
+    /// from before it): the count is not known and a list shows none. A
+    /// station always sends it.
+    std::optional<int> devicesConnected;
 
     /// What a list shows: the label, or the Core name when there is none.
     QString displayName() const { return label.isEmpty() ? coreName : label; }

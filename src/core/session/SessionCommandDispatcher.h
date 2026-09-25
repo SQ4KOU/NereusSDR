@@ -122,6 +122,9 @@
 //                                    pairing.open and pairing.close, routed
 //                                    to the same facade.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25: iPhone app Task 71 (R-IOS-02): session.leave and
+//               sessionLeaveRequested. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -207,6 +210,11 @@ signals:
     /// out over the wire, the same relationship StateMirror::
     /// sessionMessageReady() already has to its own outbound stream.
     void commandResultReady(const NereusSDR::SessionMessage& result);
+    /// iPhone app Task 71 (ruling 4.12, sessionHolderVersion 1): the
+    /// session being dispatched asked to leave; its accepted result has just
+    /// been emitted. StationServer frees the device's place at once, with no
+    /// away state, and ends the connection.
+    void sessionLeaveRequested();
 
 private:
     Ps3DisplayAdmissionHandler m_ps3DisplayAdmission;
@@ -267,6 +275,8 @@ private:
     // iPhone app Task 14 (R-IOS-08, pairingVersion 1): pairing.open and
     // pairing.close.
     void handlePairingWindow(const NereusSDR::SessionMessage& invoke);
+    // iPhone app Task 71 (R-IOS-02, sessionHolderVersion 1): session.leave.
+    void handleSessionLeave(const NereusSDR::SessionMessage& invoke);
 
     void emitResult(const QByteArray& verb, quint32 commandId, bool accepted,
                     const QString& reason, const QList<QByteArray>& affectedKeys);

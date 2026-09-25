@@ -92,6 +92,9 @@
 //               to standard output (the journal on a packaged Core). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic Claude
 //               Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app Task 71 (R-IOS-02): the
+//                                    several-devices sentences are plain.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -105,6 +108,7 @@
 #include <QRegularExpression>
 #include <QSet>
 
+#include "core/security/DeviceStore.h"
 #include "OperatorWording.h"
 
 using namespace NereusSDR;
@@ -639,6 +643,11 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("m_radioModel->alexAntennaFacade()->settleReason(update.name)"),
           // A constant of this file, its literal scanned here.
           QStringLiteral("QString::fromLatin1(kReceiveOnlyTransmitReason)"),
+          // iPhone app Task 71: constants of this file, their literals
+          // scanned here.
+          QStringLiteral("QString::fromLatin1(kCoreFullReason)"),
+          QStringLiteral("QString::fromLatin1(kSameDeviceReason)"),
+          QStringLiteral("QString::fromLatin1(kLeftReason)"),
           // StateMirror's and SettingsProxyServer's results, scanned below.
           QStringLiteral("result.reason"),
           QStringLiteral("m_settingsServer->otherRadioRefusal(key)"),
@@ -1372,6 +1381,39 @@ private slots:
             QVERIFY2(wordingProblemIn(reason).isEmpty(), qPrintable(reason));
             QVERIFY2(reason.contains(QStringLiteral("Core")), qPrintable(reason));
         }
+    }
+
+    void severalDevicesSentencesArePlain()
+    {
+        // iPhone app Task 71 (R-IOS-02): the sentences the Core sends when
+        // several devices share it are plain and speak of the Core; names
+        // are the operator's own words and are validated as names, never
+        // held to the wording rules ("Grant's iPhone" is a name).
+        const QString code = codeOf(sourcePath(QStringLiteral("src/core/session/StationServer.cpp")));
+        QVERIFY(!code.isEmpty());
+        for (const QString& sentence :
+             {QStringLiteral("The Core already has four devices connected."),
+              QStringLiteral("This device connected again."),
+              QStringLiteral("This device left the Core.")}) {
+            QVERIFY2(code.contains(QLatin1Char('"') + sentence + QLatin1Char('"')),
+                     qPrintable(sentence));
+            QVERIFY2(wordingProblemIn(sentence).isEmpty(), qPrintable(sentence));
+            QVERIFY2(OperatorWording::coreCalledStationIn(sentence).isEmpty(),
+                     qPrintable(sentence));
+        }
+        const QString leave = QStringLiteral("The request to leave the Core was not understood.");
+        QVERIFY(codeOf(sourcePath(QStringLiteral("src/core/session/SessionCommandDispatcher.cpp")))
+                    .contains(QLatin1Char('"') + leave + QLatin1Char('"')));
+        QVERIFY2(wordingProblemIn(leave).isEmpty(), qPrintable(leave));
+        // A device's name is the operator's own words: the term list would
+        // refuse "Grant's iPhone", so a sentence that carries a name is
+        // checked with the name set aside, and the name as a name.
+        const QString name = QStringLiteral("Grant's iPhone");
+        QVERIFY(!OperatorWording::isPlain(name));
+        QVERIFY(DeviceStore::isValidName(name));
+        QString named = QStringLiteral("%1 connected to the Core.").arg(name);
+        named.remove(name);
+        QVERIFY2(wordingProblemIn(named).isEmpty(), qPrintable(named));
     }
 
     void everyReasonTheFixturesRecordIsPlain()

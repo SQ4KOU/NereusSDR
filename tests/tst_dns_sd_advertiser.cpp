@@ -19,6 +19,9 @@
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-25: iPhone app Task 71 (R-IOS-02): the `devices` TXT
+//               entry. J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -237,9 +240,10 @@ private slots:
         const QByteArray id = record().identity.toBase64(QByteArray::Base64UrlEncoding
                                                          | QByteArray::OmitTrailingEquals);
         QCOMPARE(id.size(), 43);
+        // iPhone app Task 71: `devices`, the sixth, after name.
         const DnsSdTxtEntries expected{
             {"v", "1"}, {"id", id.left(22)}, {"claimed", "0"}, {"pair", "click"},
-            {"name", "KG4VCF/shack"}};
+            {"name", "KG4VCF/shack"}, {"devices", "0"}};
         QCOMPARE(entries, expected);
 
         const QByteArray bytes = encodeDnsSdTxtRecord(record(), &error);
@@ -263,6 +267,30 @@ private slots:
         DnsSdRecord longest = record();
         longest.label = QString(32, QLatin1Char('K')) + QLatin1Char('/') + QString(32, QLatin1Char('s'));
         QCOMPARE(asMap(dnsSdTxtEntries(longest)).value("name").size(), kStationLanMaxLabelBytes);
+    }
+
+    void theDevicesEntryFollowsTheCount()
+    {
+        DnsSdRecord two = record();
+        two.devicesConnected = 2;
+        QCOMPARE(asMap(dnsSdTxtEntries(two)).value("devices"), QByteArray("2"));
+        QCOMPARE(dnsSdTxtEntries(two).last().first, QByteArray("devices"));
+        QCOMPARE(asMap(dnsSdTxtEntries(two)).value("v"), QByteArray("1"));
+        // 0 to 4 only.
+        DnsSdRecord five = record();
+        five.devicesConnected = 5;
+        QString error;
+        QVERIFY(dnsSdTxtEntries(five, &error).isEmpty());
+        QVERIFY(!error.isEmpty());
+
+        // Updated in place when the count changes.
+        auto calls = std::make_shared<FakeBackend::Calls>();
+        DnsSdAdvertiser advertiser(std::make_unique<FakeBackend>(calls));
+        QVERIFY(advertiser.start(47910, record()));
+        advertiser.update(two);
+        QCOMPARE(calls->registers, 1);
+        QCOMPARE(calls->updates, 1);
+        QCOMPARE(asMap(calls->txt).value("devices"), QByteArray("2"));
     }
 
     void txtDecodingIsStrictAboutLengths()

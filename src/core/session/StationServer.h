@@ -37,36 +37,44 @@
 //      object.create per live object, and the snapshot-complete marker
 //      LAST (StateMirror::attachSession).
 //
-// ── ONE SESSION, ONE SHARED MIRROR (topology decision, task 18) ──────────
+// ── UP TO FOUR DEVICES, ONE SHARED MIRROR FOR NOW (topology) ────────────
 //
-// Nothing before this task stated whether a daemon hosts one StateMirror
-// per client or one shared across clients, and it matters:
+// Task 18 chose one shared StateMirror because the remote design's section
+// 7.1 then allowed one session at a time, with a newcomer preempting it.
+// iPhone app Task 71 replaces that: up to four devices (kMaxDeviceSessions)
+// hold sessions at once, each a device (a paired device, a window signed in
+// with the older token, or a hosting desktop's own window), and the
+// operator's control is the transmit holder, not the one session (the
+// several-devices design, docs/architecture/2026-09-24-several-devices-on-
+// one-core-design.md, sections 2 and 4). No sign-in ever ends another
+// device's session. DeviceSessionRegistry decides who is let in after every
+// accepted sign-in: a device that already holds a place (live, or away in
+// its 180 s) replaces its own older connection with sameDevice; with a
+// place free the device is admitted; a full Core refuses, retryable.
+//
+// The mirror is still one, shared, until Task 72 gives each device a view.
 // StateMirror::hasAttachedSession() is a single bool and attachSession()
-// unconditionally clears the outbound coalescer, so a second client
-// attaching to a SHARED mirror would silently discard deltas the first
-// still had pending.
-//
-// **Decision: one shared mirror, because there is never more than one
-// authenticated session.** Parent design section 7.1 is explicit --
-// "Single operator, one session at a time" and "A second authenticated
-// connection preempts the existing session" -- so the incumbent is closed
-// BEFORE the newcomer's attachSession() runs, and the deltas the clear
-// discards belong to a session that no longer exists. This is not a
-// simplification to revisit when multi-client arrives: multi-client is not
-// a planned feature, it is a thing section 7.1 rules out on purpose,
-// because two operators sharing one transmitter is a control-operator
-// problem before it is an engineering one. Anything that ever wants a
-// second concurrent VIEWER has to answer section 7.1 first, and would then
-// want a mirror per viewer.
+// clears the outbound coalescer, so a newcomer's attach would discard
+// deltas the others still had pending. promoteToSession() therefore flushes
+// the coalescer to every admitted session first, and the attach's schema,
+// object.create and snapshot.complete messages go to the newcomer alone
+// (m_burstTarget); only deltas go to everyone. Echo suppression is still
+// the shared mirror's: a device's write reaches the others only through
+// side effects the mirror forwards, which Task 72's per-writer echo fixes.
+// Media and telemetry stay with one session (m_mediaSession, the first
+// admitted while none holds it) until Task 76 gives each device a media
+// controller: another admitted session is told no media is available
+// (remoteMediaVersion 0 in its capabilities) and its media control is
+// ignored, so media never goes to two sessions at once.
 //
 // A connection that has NOT yet authenticated does not touch the mirror at
 // all -- it holds nothing but its own handshake state -- so a peer
-// mid-handshake cannot disturb the live session. That is what keeps a
-// failed or hostile connection attempt from being a denial of service
-// against the operator's own session. Two bounds keep the mid-handshake
-// population from becoming its own problem: kMaxConcurrentPeers caps how
-// many can exist at once, and kDefaultAuthDeadlineMs drops any that has
-// not authenticated in time (a peer that opens a socket and answers pings
+// mid-handshake cannot disturb a live session. That is what keeps a failed
+// or hostile connection attempt from being a denial of service against the
+// operator's own sessions. Two bounds keep the mid-handshake population
+// from becoming its own problem: kMaxConcurrentPeers caps how many sockets
+// can exist at once, and kDefaultAuthDeadlineMs drops any that has not
+// finished connecting in time (a peer that opens a socket and answers pings
 // but never authenticates would otherwise live forever).
 //
 // ── THREADING ────────────────────────────────────────────────────────────
@@ -218,10 +226,19 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 20 (R-IOS-27):
 //                                    displayExtrasVersion 1. AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app Task 71 (R-IOS-02): up to
+//                                    four device sessions, admission and
+//                                    the same-device rule in place of
+//                                    preemption, the away state,
+//                                    session.leave, sessionHolder 1 and
+//                                    the `connectedDevices` object; 24
+//                                    sockets. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include <QHash>
 #include <QHostAddress>
+#include <QPair>
 #include <QObject>
 #include <QPointer>
 #include <QSslConfiguration>
@@ -252,6 +269,8 @@ class PairingWindow;
 class SpakeExchange;
 class StationIdentity;
 class ObjectRegistry;
+class ConnectedDevicesFacade;
+class DeviceSessionRegistry;
 class RadioModel;
 class SessionCommandDispatcher;
 class SessionTransport;
@@ -292,13 +311,22 @@ public:
     /// snapshot has been sent rather than until it authenticates.
     static constexpr int kDefaultAuthDeadlineMs = kStationHandshakeDeadlineMs;
 
-    /// Concurrent connections, authenticated or not. There is only ever
-    /// ONE authenticated session (parent section 7.1), so this bounds
-    /// peers that are mid-handshake. Small on purpose: a legitimate
-    /// deployment needs one, and a couple of stale sockets from a
-    /// reconnecting client. Beyond this a new connection is refused
-    /// immediately rather than being allowed to displace a live session.
-    static constexpr int kMaxConcurrentPeers = 8;
+    /// iPhone app Task 71 (ruling 4.5): a cap on sockets of every kind,
+    /// signed in or not, pairing or connecting. Devices hold at most
+    /// kMaxDeviceSessions places; while a device reconnects it can hold its
+    /// old socket (not yet noticed dead) and four racing attempts (direct
+    /// over IPv6 and IPv4, the rendezvous path and the relay), so five
+    /// sockets for each of four devices is 20, and a fifth device's four
+    /// attempts make 24. At kMaxIncomingMessageBytes that is 24 MiB of
+    /// exposure before sign-in, which a Pi 4 does not notice. The next
+    /// socket is refused before any hello, retryable.
+    static constexpr int kMaxConcurrentPeers = 24;
+    /// iPhone app Task 71 (D44, ruling 4.4): devices that hold a place at
+    /// once (DeviceSessionRegistry::kMaxDeviceSessions): admitted sessions,
+    /// devices away in their grace period and a hosting desktop's own
+    /// window. Not connections still connecting, pairing connections, or
+    /// the station device of a Core with no desktop.
+    static constexpr int kMaxDeviceSessions = 4;
     /// Part C fix wave (R1-M4): connections from one address that are
     /// still connecting (their snapshot not yet sent), so one host cannot
     /// hold every kMaxConcurrentPeers slot by redialling within the
@@ -524,8 +552,11 @@ public:
     /// Every peer currently attached, authenticated or not.
     int peerCount() const { return static_cast<int>(m_peers.size()); }
 
-    /// At most one, by construction. See the topology decision above.
+    /// At least one device's session is admitted and live (up to
+    /// kMaxDeviceSessions may be; see the topology note above).
     bool hasAuthenticatedSession() const;
+    /// Live admitted sessions, 0 to kMaxDeviceSessions.
+    int authenticatedSessionCount() const;
 
     /// Configure before accepting sessions. Old peers remain control-only.
     void setMediaEnabled(bool enabled);
@@ -616,6 +647,22 @@ public:
     // setPgxlPowerCap and clearAccessoryFaults verbs); 0 otherwise.
     int accessoryDataVersion() const;
 
+    /// iPhone app Task 71 (R-IOS-02): who holds a place on the Core, and
+    /// the mirrored `connectedDevices` object. Never null. Task 48
+    /// registers a hosting desktop's own window on the registry; the LAN
+    /// announcement and the Bonjour record count its placesTaken().
+    DeviceSessionRegistry* deviceSessions() const { return m_deviceSessions.get(); }
+    ConnectedDevicesFacade* connectedDevices() const { return m_connectedDevices.get(); }
+    /// 1: the Core admits up to four devices and sends `connectedDevices`
+    /// to a peer that declared the hello feature `sessionHolder` 1 with
+    /// deviceAuth 1, at minor 11 (the design's ruling 10.1), and takes
+    /// session.leave.
+    int sessionHolderVersion() const { return 1; }
+    /// Places taken as the LAN announcement and the Bonjour record count
+    /// them: DeviceSessionRegistry::placesTaken(), or 0 on a Core no device
+    /// has claimed (ruling 10.4).
+    int devicesConnectedForDiscovery() const;
+
     // ---- Subsystem accessors, non-owning, for tests and diagnostics ----
     StateMirror* stateMirror() const { return m_mirror; }
     ObjectRegistry* objectRegistry() const { return m_registry; }
@@ -629,19 +676,17 @@ signals:
     void mediaSessionStarted(quint64 epoch);
     void mediaSessionEnded(quint64 epoch);
     void mediaControlReceived(const QJsonObject& payload, quint64 epoch);
-    /// A peer completed the full section 7.0 sequence and is now THE
-    /// session.
+    /// A peer completed the full section 7.0 sequence and is now one of the
+    /// admitted sessions.
     void clientAuthenticated(const QString& peer);
 
     /// A peer went away, for any reason, with the reason. Fires for
     /// unauthenticated peers too.
     void peerDisconnected(const QString& peer, const QString& reason);
 
-    /// A second authenticated connection displaced an existing session.
-    /// The displaced peer has already been sent a SessionEnd naming why
-    /// (parent section 7.1: "The displaced session is told why") by the
-    /// time this fires.
-    void sessionPreempted(const QString& displacedPeer);
+    // iPhone app Task 71: sessionPreempted is gone with preemption. No
+    // sign-in ever ends another device's session; a device's own newer
+    // connection ends its older one with sameDevice (ruling 4.8).
 
     /// The heartbeat declared a peer dead: it stopped answering pings
     /// without closing. Distinct from peerDisconnected's ordinary path
@@ -651,8 +696,9 @@ signals:
 private:
     /// Per-connection state. Deliberately small: everything that is not
     /// per-CONNECTION (the mirror, the registry, the dispatcher, the
-    /// settings server) is shared, because there is only ever one
-    /// authenticated session to own it.
+    /// settings server) is shared among the admitted sessions until Tasks
+    /// 72 and 76 give each device its own view and media (see the topology
+    /// note). Who holds a place is DeviceSessionRegistry's.
     /// iPhone app Task 14: one connection's pairing (StationServer.cpp).
     struct PairingAttempt;
 
@@ -679,6 +725,17 @@ private:
         /// iPhone app Task 14: this connection's pairing, from pair.start
         /// to its end. Shared, not owned alone, only because Peer is copied.
         std::shared_ptr<PairingAttempt> pairing;
+        /// iPhone app Task 71: the device this connection's session is for
+        /// (DeviceSessionRegistry's id: a paired device's raw id, or
+        /// "token:<n>"), set once it is admitted; empty before, and for a
+        /// connection turned away from a full Core.
+        QByteArray sessionDeviceId;
+        /// How this admitted session's end reaches the registry: a
+        /// connection replaced by its own device's newer one (sameDevice),
+        /// or one whose device left on purpose or was revoked, frees or
+        /// keeps its place by itself and must not be marked away.
+        bool placeSettled = false;
+        bool leaving = false;
 
         /// Pings sent since the last pong. Reset to 0 by every pong; the
         /// heartbeat tick declares death when it reaches maxMissedPongs().
@@ -709,7 +766,7 @@ private:
     void handleAuthRequest(SessionTransport* transport, const SessionMessage& message);
     void handlePropertyWrite(SessionTransport* transport, const SessionMessage& message);
     void handleSettingsWrite(SessionTransport* transport, const SessionMessage& message);
-    void handleSettingsRemove(const SessionMessage& message);
+    void handleSettingsRemove(SessionTransport* transport, const SessionMessage& message);
     // iPhone app Task 14 (R-IOS-08): pairing, before any sign-in.
     void handlePairStart(SessionTransport* transport, const SessionMessage& message);
     void handlePairSpake(SessionTransport* transport, const SessionMessage& message);
@@ -735,18 +792,23 @@ private:
     SessionMessage withPairingCodeFor(SessionTransport* transport,
                                       const SessionMessage& message) const;
 
+    /// iPhone app Task 71: after an accepted sign-in, asks the registry
+    /// who is let in (ruling 4.4) and ends the device's own older
+    /// connection (sameDevice), admits, or turns a full Core's newcomer
+    /// away.
+    void admit(SessionTransport* transport, const QString& name, const QString& shortName,
+               const QString& kind);
+
     /// Completes the session: capability exchange, settings snapshot,
-    /// mirror attach, snapshot-complete marker. Preempts any incumbent
-    /// first.
+    /// mirror attach, snapshot-complete marker. Never ends another session.
     void promoteToSession(SessionTransport* transport);
 
     /// Sends the identity-dependent portion of the session state. Returns
-    /// false if either send changed the owning session. The
-    /// initial handshake uses this before the mirror attach; a later radio
-    /// identity event uses it on the same authenticated transport without
+    /// false if `transport` is no longer an admitted session after either
+    /// send. The initial handshake uses this before the mirror attach; a
+    /// later radio identity event uses it on each admitted session without
     /// replaying the mirror snapshot or restarting media.
-    bool sendCapabilitiesAndSettingsSnapshot(SessionTransport* transport,
-                                             quint64 expectedEpoch);
+    bool sendCapabilitiesAndSettingsSnapshot(SessionTransport* transport);
 
     /// `retryable` rides out on the SessionEnd and tells the client's
     /// reconnect policy whether the condition that produced this drop
@@ -760,7 +822,25 @@ private:
                   bool sendSessionEnd, bool retryable,
                   const QString& endCode = QString());
     void send(SessionTransport* transport, const SessionMessage& message);
+    /// iPhone app Task 71: `message` to every admitted session (each fitted
+    /// to what that peer negotiated), or during an attach's burst the
+    /// burst's own messages to the attaching session alone.
     void sendToSession(const SessionMessage& message);
+    /// One mirror or control message to one admitted peer, fitted to it.
+    void sendToPeer(SessionTransport* transport, const SessionMessage& message);
+    /// The capability descriptor `transport` is told.
+    StationCapabilities buildCapabilitiesFor(SessionTransport* transport) const;
+    /// sessionHolder 1 in `transport`'s hello, with deviceAuth 1 (ruling
+    /// 10.1: the one without the other is not declared).
+    bool peerHoldsSessions(SessionTransport* transport) const;
+    /// iPhone app Task 71: sessionHolderVersion 1 reached `transport`
+    /// (minor 11 and the feature declared).
+    bool peerHasSessionHolderVersion(SessionTransport* transport) const;
+    /// A command, property write or settings write from `transport`'s
+    /// device (never a heartbeat).
+    void noteActivity(SessionTransport* transport);
+    /// Re-arms the grace timer for the next away device's end.
+    void scheduleGraceCheck();
 
     /// iPhone app Task 13 (R-IOS-08): ends every authenticated connection
     /// `matches` picks with session.end, not retryable, `reason` and
@@ -799,6 +879,8 @@ private:
     std::unique_ptr<StationDevicesFacade> m_devicesFacade;
     // iPhone app Task 19: the Core's catalogue.
     std::unique_ptr<StationCatalog> m_catalog;
+    // iPhone app Task 71: who holds a place on the Core.
+    std::unique_ptr<DeviceSessionRegistry> m_deviceSessions;
     // The connection whose command.invoke is being dispatched, and the end
     // it is owed once its result has been sent (a self-revoke, or a token
     // session retiring the token).
@@ -827,7 +909,18 @@ private:
     bool m_mirrorBuilt = false;
 
     QHash<SessionTransport*, Peer> m_peers;
-    SessionTransport* m_session = nullptr;
+    /// iPhone app Task 71: the one admitted session media and telemetry go
+    /// to until Task 76 (see the topology note); null when none holds them.
+    SessionTransport* m_mediaSession = nullptr;
+    /// During promoteToSession()'s attach: the session its burst is for.
+    SessionTransport* m_burstTarget = nullptr;
+    /// Command results owed to a session other than the one being
+    /// dispatched now (a result that arrives on a later turn), by verb and
+    /// id.
+    QHash<QPair<QByteArray, quint32>, QPointer<SessionTransport>> m_resultRoutes;
+    bool m_resultSentInDispatch = false;
+    std::unique_ptr<ConnectedDevicesFacade> m_connectedDevices;
+    QTimer* m_graceTimer = nullptr;
     bool m_mediaEnabled = false;
     bool m_displayBudgetEnforcementEnabled = false;
     std::optional<DisplayBudgetLimits> m_displayBudget;

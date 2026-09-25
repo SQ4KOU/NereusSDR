@@ -31,13 +31,15 @@
 //                    one connects (0); the lockout is the station's, not a
 //                    peer's
 //   otherConnections other clients connected and still connecting, which
-//                    send nothing (0); with 8 the station is at its limit
+//                    send nothing (0); with 24 the station is at its limit
 //   token            "active": a Core upgraded from before paired devices,
 //                    with its pairing token; "none": a new Core, without one
 //                    ("active")
-//   clientAnswersPings, preemptingClient, pairedDevice   read by the
-//                    player itself (pairedDevice: the runner's own device,
-//                    made at run time, is paired before the client connects)
+//   clientAnswersPings, pairedDevice, otherClients   read by the player
+//                    itself (pairedDevice: the runner's own device, made at
+//                    run time, is paired before the client connects;
+//                    otherClients: iPhone app Task 71, other clients the
+//                    player signs in as paired devices, LinkFixtures.h)
 //   otherPairedDevices
 //                    devices besides the runner's own paired before the
 //                    client connects (0); their keys are made at run time
@@ -103,6 +105,12 @@
 //                                    two (the catalogue's schema and
 //                                    object). AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app Task 71 (R-IOS-02):
+//                                    stationSetup "otherClients" in place
+//                                    of "preemptingClient"; an app's
+//                                    fixture check skips other clients'
+//                                    steps. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -152,7 +160,7 @@ const QStringList kSetupKeys{
     QStringLiteral("panadapters"),     QStringLiteral("coreAccessories"),
     QStringLiteral("stationTci"),      QStringLiteral("stepAttenuator"),
     QStringLiteral("media"),           QStringLiteral("priorFailedAuthentications"),
-    QStringLiteral("clientAnswersPings"), QStringLiteral("preemptingClient"),
+    QStringLiteral("clientAnswersPings"), QStringLiteral("otherClients"),
     QStringLiteral("otherConnections"), QStringLiteral("token"),
     QStringLiteral("pairedDevice"),    QStringLiteral("otherPairedDevices"),
     QStringLiteral("board"),
@@ -405,6 +413,11 @@ QStringList appConformanceProblems(const QString& id, const QJsonObject& fixture
     const QJsonArray steps = fixture.value(QStringLiteral("steps")).toArray();
     for (int index = 0; index < steps.size(); ++index) {
         const QJsonObject step = steps.at(index).toObject();
+        // iPhone app Task 71: an app's runner plays only its own client and
+        // skips other clients' steps and the messages sent to them.
+        if (step.contains(QStringLiteral("client")) || step.contains(QStringLiteral("to"))) {
+            continue;
+        }
         const QJsonObject message = step.value(QStringLiteral("message")).toObject();
         const QString type = message.value(QStringLiteral("type")).toString();
         const QString from = step.value(QStringLiteral("from")).toString();
