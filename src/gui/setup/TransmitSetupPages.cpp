@@ -175,6 +175,11 @@
 //                 plain words naming NereusSDR, and Manage... points to
 //                 Setup > Audio > TX Profile for saving profiles. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (group A fix wave): the ATT on TX box takes the
+//                 radio's own range (-28 to 31 dB on the HL2 per mi0bot-Thetis,
+//                 0 to 31 dB elsewhere), the Core's radio's in a remote
+//                 window. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 #include "TransmitSetupPages.h"
 #include "gui/StyleConstants.h"
@@ -372,21 +377,43 @@ void PowerPage::buildPowerGroup()
     // logarithmic formula instead of the constant fallback.
     m_spinAttOnTxValue = new QSpinBox(pwrGroup);
     m_spinAttOnTxValue->setObjectName(QStringLiteral("udATTOnTX"));
-    m_spinAttOnTxValue->setRange(0, 31);
     m_spinAttOnTxValue->setSingleStep(1);
     m_spinAttOnTxValue->setSuffix(QStringLiteral(" dB"));
-    m_spinAttOnTxValue->setToolTip(QStringLiteral(
-        "ATT on TX value in dB (0..31).  Active when the ATT on TX checkbox "
-        "is enabled.  AutoAtt (PS-A) will adjust this automatically during "
-        "PureSignal cycles; setting a sane starting value (e.g. 10 dB) before "
-        "arming PS-A avoids the 31.1 dB initial-overload slam on radios where "
-        "the coupler+PA delivers calcc FB level > 256 at ATT=0."));
+
+    // R-R3-49 (group A fix wave): the box takes the radio's own ATT on TX
+    // range, the Core's radio's in a remote window. mi0bot-Thetis widens
+    // the bottom to -28 on the HL2:
+    // From mi0bot-Thetis setup.cs:1080-1084 [v2.10.3.13-beta2]
+    //   if (HPSDRHW.HermesLite == Audio.LastRadioHardware ||
+    //       HPSDRModel.HERMESLITE == HardwareSpecific.Model)     // MI0BOT: Changes for HL2 only having a 16 step output attenuator 
+    //   {
+    //       udATTOnTX.Minimum = -28;
+    // and keeps the designer's 0 to 31 elsewhere (setup.designer.cs:5810-5819).
+    // The bottom is the step attenuator's minimum (-28 on the HL2, 0
+    // otherwise), which setAttOnTxValue clamps to as well; the top is
+    // StepAttenuatorFacade::kMaxAttOnTxDb (31). A range change never writes
+    // a value: the box shows the source's value again under a blocker.
+    const auto applyAttOnTxRange = [this](int minDb, int value) {
+        if (!m_spinAttOnTxValue) { return; }
+        QSignalBlocker b(m_spinAttOnTxValue);
+        m_spinAttOnTxValue->setRange(minDb, StepAttenuatorFacade::kMaxAttOnTxDb);
+        m_spinAttOnTxValue->setValue(value);
+        m_spinAttOnTxValue->setToolTip(QStringLiteral(
+            "ATT on TX value in dB (%1..%2).  Active when the ATT on TX checkbox "
+            "is enabled.  AutoAtt (PS-A) will adjust this automatically during "
+            "PureSignal cycles; setting a sane starting value (e.g. 10 dB) before "
+            "arming PS-A avoids the 31.1 dB initial-overload slam on radios where "
+            "the coupler+PA delivers calcc FB level > 256 at ATT=0.")
+            .arg(minDb).arg(StepAttenuatorFacade::kMaxAttOnTxDb));
+    };
+    applyAttOnTxRange(0, 0);
 
     if (remoteAtt) {
-        {
-            QSignalBlocker b(m_spinAttOnTxValue);
-            m_spinAttOnTxValue->setValue(remoteAtt->attOnTxValue());
-        }
+        applyAttOnTxRange(remoteAtt->minDb(), remoteAtt->attOnTxValue());
+        connect(remoteAtt, &StepAttenuatorFacade::minDbChanged, m_spinAttOnTxValue,
+                [remoteAtt, applyAttOnTxRange](int minDb) {
+            applyAttOnTxRange(minDb, remoteAtt->attOnTxValue());
+        });
         connect(m_spinAttOnTxValue, QOverload<int>::of(&QSpinBox::valueChanged),
                 remoteAtt, &StepAttenuatorFacade::setAttOnTxValue);
         connect(remoteAtt, &StepAttenuatorFacade::attOnTxValueChanged, m_spinAttOnTxValue,
@@ -397,10 +424,11 @@ void PowerPage::buildPowerGroup()
     } else if (model()) {
         if (StepAttenuatorController* att = model()->stepAttController()) {
             // Initialize from current value
-            {
-                QSignalBlocker b(m_spinAttOnTxValue);
-                m_spinAttOnTxValue->setValue(att->attOnTxValue());
-            }
+            applyAttOnTxRange(att->minAttenuation(), att->attOnTxValue());
+            connect(att, &StepAttenuatorController::attenuationRangeChanged,
+                    m_spinAttOnTxValue, [att, applyAttOnTxRange](int minDb, int /*maxDb*/) {
+                applyAttOnTxRange(minDb, att->attOnTxValue());
+            });
             // Spinbox → controller
             connect(m_spinAttOnTxValue,
                     QOverload<int>::of(&QSpinBox::valueChanged),

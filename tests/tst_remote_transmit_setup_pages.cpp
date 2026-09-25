@@ -262,6 +262,7 @@ private slots:
     void localSwrProtectionAppliesAtOnce();
     void newReasonsArePlain();
     void tooltipsSayWhatTheControlsDo();
+    void attOnTxBoxShowsTheRadiosRange();
 
 private:
     QTemporaryDir m_securityDir;
@@ -1024,6 +1025,57 @@ void TstRemoteTransmitSetupPages::tooltipsSayWhatTheControlsDo()
     for (const QString& tip : {inhibitTip, manageTip}) {
         QVERIFY(!tip.contains(QChar(0x2014)));
     }
+}
+
+// Group A fix wave: the ATT on TX box takes the radio's own range, the
+// Core's radio's in a remote window: -28 to 31 dB on the HL2 (mi0bot-Thetis
+// udATTOnTX.Minimum = -28), 0 to 31 dB elsewhere. A range change never
+// writes a value.
+void TstRemoteTransmitSetupPages::attOnTxBoxShowsTheRadiosRange()
+{
+    // A local window.
+    {
+        RadioModel model;
+        StepAttenuatorController att;
+        att.setTickTimerEnabled(false);
+        model.setStepAttController(&att);
+        PowerPage page(&model);
+        auto* box = page.findChild<QSpinBox*>(QStringLiteral("udATTOnTX"));
+        QVERIFY(box);
+        QCOMPARE(box->minimum(), 0);
+        QCOMPARE(box->maximum(), 31);
+        att.setMinAttenuation(-28);  // an HL2 connects
+        QCOMPARE(box->minimum(), -28);
+        QCOMPARE(box->maximum(), 31);
+        QVERIFY(box->toolTip().contains(QStringLiteral("-28..31")));
+        box->setValue(-25);
+        QCOMPARE(att.attOnTxValue(), -25);
+        model.setStepAttController(nullptr);
+    }
+
+    // A remote window on an HL2's Core.
+    Session s(m_securityDir.path(), this);
+    s.stepAtt.setMinAttenuation(-28);
+    AppSettings::instance().setRemoteBackend(&s.proxy);
+    QVERIFY(s.connect());
+    StepAttenuatorFacade* remote = s.window.stepAttFacade();
+    QVERIFY(remote);
+    QTRY_COMPARE(remote->minDb(), -28);
+    PowerPage page(&s.window);
+    auto* box = page.findChild<QSpinBox*>(QStringLiteral("udATTOnTX"));
+    QVERIFY(box);
+    QCOMPARE(box->minimum(), -28);
+    QCOMPARE(box->maximum(), 31);
+    box->setValue(-20);
+    QTRY_COMPARE(s.stepAtt.attOnTxValue(), -20);
+
+    // The Core's radio changes to one with a 0 dB bottom: the box follows
+    // and writes nothing back.
+    s.stepAtt.setMinAttenuation(0);
+    QTRY_COMPARE(box->minimum(), 0);
+    QTest::qWait(100);
+    QCOMPARE(s.stepAtt.attOnTxValue(), -20);
+    AppSettings::instance().setRemoteBackend(nullptr);
 }
 
 QTEST_MAIN(TstRemoteTransmitSetupPages)
