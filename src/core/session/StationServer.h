@@ -228,6 +228,12 @@
 //   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 3):
 //                                    transmitSettingsVersion 3.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  Core WebSocket opening (R-IOS-01,
+//                                    R-R3-26): StationOpeningGate listens in
+//                                    front of the QWebSocketServer, so every
+//                                    Host form opens and a request the Core
+//                                    cannot read gets 400.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QHash>
@@ -267,6 +273,7 @@ class SessionCommandDispatcher;
 class SessionTransport;
 class SettingsProxyServer;
 class StateMirror;
+class StationOpeningGate;
 class StationCatalog;
 class StationDevicesFacade;
 class TokenStore;
@@ -530,6 +537,19 @@ public:
     /// which is logged as a warning rather than silently accepted.
     void setAuthDeadlineMs(int ms);
     int authDeadlineMs() const { return m_authDeadlineMs; }
+
+    /// Core WebSocket opening (R-IOS-01, R-R3-26): TCP accept to the 101,
+    /// TLS included, is bounded by this; StationOpeningGate.h explains the
+    /// value (Qt's own handshake timeout default) and the .cpp asserts the
+    /// two agree. Values below 1 are ignored. Takes effect at the next
+    /// listen(); tests shorten it.
+    static constexpr int kDefaultOpeningDeadlineMs = 10000;
+    void setOpeningDeadlineMs(int ms);
+    int openingDeadlineMs() const { return m_openingDeadlineMs; }
+
+    /// Connections accepted whose opening (TLS and the WebSocket upgrade)
+    /// has not finished. They are not peers yet and are not in peerCount().
+    int openingCount() const;
 
     /// Every peer currently attached, authenticated or not.
     int peerCount() const { return static_cast<int>(m_peers.size()); }
@@ -857,6 +877,8 @@ private:
     std::function<QByteArray(const QString&)> m_pairingHasher;
 
     QWebSocketServer* m_wsServer = nullptr;
+    StationOpeningGate* m_openingGate = nullptr;
+    int m_openingDeadlineMs = kDefaultOpeningDeadlineMs;
 
     StateMirror* m_mirror = nullptr;
     ObjectRegistry* m_registry = nullptr;

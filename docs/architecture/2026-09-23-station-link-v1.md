@@ -75,6 +75,34 @@ and the [R3 plan](2026-09-20-remote-daemon-r3-plan.md).
   `127.0.0.1` (`kExplicitConfigRemotePort`, `kExplicitConfigRemoteBind`), and
   a `remote_port` that is not a number leaves the listener off.
   `remote_port = 0` turns the listener and the announcement off.
+- The opening request (the HTTP upgrade) is read by the station before
+  Qt sees it (`StationOpeningGate`, in front of the `QWebSocketServer`).
+  The station routes nothing by `Host`, so it accepts any `Host` in these
+  forms: an IPv6 address in brackets, with or without a port
+  (`[2001:db8::1]:47910`, `[::1]`); an IPv6 address without brackets, with
+  or without a port (`2001:db8::1:47910`, `::1`, what Apple's
+  `NWProtocolWebSocket` sends for an IPv6 URL); an IPv4 address with or
+  without a port; and a host name (letters, digits, `-`, `_` and `.`),
+  with or without a port. An IPv6 zone (`%en0`) is dropped. A value
+  without brackets that reads both as an address and as an address and a
+  port (`::1:8080`) is taken as an address; the station reads nothing from
+  it either way. Qt itself cannot read an unbracketed IPv6 `Host` and
+  answers such a request with nothing, so the station writes the `Host`
+  back in brackets before handing the request on.
+- A request the station cannot read gets `400 Bad Request` with
+  `Connection: close` and a one-line plain text body, and the connection
+  closes: no `Host`, more than one `Host`, a `Host` in none of the forms
+  above, a request line other than `GET <target> HTTP/1.1`, or a request
+  missing `Upgrade: websocket`, `Connection: Upgrade`, a
+  `Sec-WebSocket-Key` of 16 bytes or `Sec-WebSocket-Version`. A head
+  longer than 8192 bytes (`kMaxRequestHeadBytes`) gets the same. A
+  `Sec-WebSocket-Version` the station does not speak is Qt's to answer:
+  its own `400`, then the close.
+- The whole opening, from the TCP accept through TLS to the `101`, must
+  finish within 10 s (`StationServer::kDefaultOpeningDeadlineMs`, Qt's own
+  default handshake timeout); a connection that has not opened by then is
+  closed. `tst_station_ws_host` sends each form over TLS to the real
+  listener.
 - Messages travel as WebSocket text frames. Each text message is one JSON
   object, encoded compactly, with a string `type` key naming its kind
   (`SessionMessages::encode`). The station ignores binary frames: only
@@ -2436,6 +2464,16 @@ runs the same deadline on its side.
   socket before any frame is read.
 - `media.control` messages are capped at 128 KiB and `station.metrics.v1`
   at 16 KiB, when encoded and when decoded.
+- Openings (connections whose TLS or upgrade has not finished) are
+  counted apart from connections: at most 8 at once
+  (`kMaxConcurrentPeers`) and 2 from one address or IPv6 /64
+  (`kMaxHandshakesPerAddress`, counted as below), each until it opens, is
+  refused or reaches the 10 s opening deadline (section 2). A new
+  connection at either limit closes the oldest unfinished opening (from
+  its own address first, then the oldest of all) and takes its place, so
+  openings that never finish do not keep a device out, and a client that
+  redials while its own abandoned dials are still opening gets its newest
+  dial through.
 - The station accepts at most 8 connections at once
   (`kMaxConcurrentPeers`), counting those still connecting. The next one
   gets `session.end` "The Core already has as many connections as it

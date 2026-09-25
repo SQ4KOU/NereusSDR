@@ -284,6 +284,12 @@
 //                                    Task 13: a window's External TX
 //                                    Inhibit change reaches the Core's gate.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  Core WebSocket opening (R-IOS-01,
+//                                    R-R3-26): StationOpeningGate listens in
+//                                    front of the QWebSocketServer, so every
+//                                    Host form opens and a request the Core
+//                                    cannot read gets 400.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -306,6 +312,7 @@
 #include "core/session/SessionCommandDispatcher.h"
 #include "core/session/SessionEndReasons.h"
 #include "core/session/SessionTransport.h"
+#include "core/session/StationOpeningGate.h"
 #include "core/session/StateMirror.h"
 #include "core/session/StationCatalog.h"
 #include "core/session/StationDevicesFacade.h"
@@ -1202,7 +1209,7 @@ bool StationServer::listen(const QHostAddress& address, quint16 port)
     // somewhere else is close() then listen() again, deliberately explicit.
     if (isListening()) {
         qCDebug(lcStation) << "listen() ignored: already listening on port"
-                            << m_wsServer->serverPort();
+                            << m_openingGate->serverPort();
         return true;
     }
 
@@ -1236,6 +1243,17 @@ bool StationServer::listen(const QHostAddress& address, quint16 port)
         connect(m_wsServer, &QWebSocketServer::newConnection, this,
                 &StationServer::onNewWebSocketConnection);
     }
+    if (m_openingGate == nullptr) {
+        // The listening socket is the gate's, not Qt's: the gate runs TLS,
+        // reads the opening request, fixes a Host Qt cannot read or
+        // answers 400, and hands the connection to m_wsServer for the 101
+        // (StationOpeningGate.h has the cause). m_wsServer itself never
+        // listens.
+        m_openingGate = new StationOpeningGate(m_wsServer, kMaxConcurrentPeers,
+                                               kMaxHandshakesPerAddress,
+                                               &StationServer::addressKey, this);
+    }
+    m_openingGate->setOpeningDeadlineMs(m_openingDeadlineMs);
 
     QSslConfiguration tls = QSslConfiguration::defaultConfiguration();
     tls.setLocalCertificate(m_certificates->certificate());
@@ -1250,16 +1268,18 @@ bool StationServer::listen(const QHostAddress& address, quint16 port)
     // later today but may change with Qt). The link document's section 2
     // states it; tst_link_version reads it back from the listener.
     tls.setProtocol(QSsl::TlsV1_2OrLater);
+    // Kept on m_wsServer too: tlsConfiguration() reads it back from there.
     m_wsServer->setSslConfiguration(tls);
+    m_openingGate->setTlsConfiguration(tls);
 
-    if (!m_wsServer->listen(address, port)) {
-        m_lastError = m_wsServer->errorString();
+    if (!m_openingGate->listen(address, port)) {
+        m_lastError = m_openingGate->errorString();
         qCWarning(lcStation) << "Listen failed:" << m_lastError;
         return false;
     }
 
     qCInfo(lcStation) << "Station listening on wss://" << address.toString() << ":"
-                      << m_wsServer->serverPort();
+                      << m_openingGate->serverPort();
     emit listeningChanged(true);
     return true;
 }
@@ -1272,8 +1292,8 @@ void StationServer::close()
         dropPeer(transport, QStringLiteral("The Core is shutting down."), true,
                  /*retryable=*/true);
     }
-    if (m_wsServer != nullptr) {
-        m_wsServer->close();
+    if (m_openingGate != nullptr) {
+        m_openingGate->closeAll();
     }
     if (m_heartbeatTimer != nullptr) {
         m_heartbeatTimer->stop();
@@ -1286,7 +1306,7 @@ void StationServer::close()
 
 bool StationServer::isListening() const
 {
-    return m_wsServer != nullptr && m_wsServer->isListening();
+    return m_openingGate != nullptr && m_openingGate->isListening();
 }
 
 QSslConfiguration StationServer::tlsConfiguration() const
@@ -1312,12 +1332,12 @@ bool StationServer::peerDeclares(SessionTransport* peer, const QByteArray& featu
 
 quint16 StationServer::serverPort() const
 {
-    return m_wsServer != nullptr ? m_wsServer->serverPort() : 0;
+    return m_openingGate != nullptr ? m_openingGate->serverPort() : 0;
 }
 
 QHostAddress StationServer::serverAddress() const
 {
-    return isListening() ? m_wsServer->serverAddress() : QHostAddress{};
+    return isListening() ? m_openingGate->serverAddress() : QHostAddress{};
 }
 
 QString StationServer::token() const
@@ -1519,6 +1539,11 @@ void StationServer::onNewWebSocketConnection()
         QWebSocket* socket = m_wsServer->nextPendingConnection();
         if (socket == nullptr) {
             break;
+        }
+        // Opened: it stops counting among the openings still in progress,
+        // and from here the peer caps below govern it.
+        if (m_openingGate != nullptr) {
+            m_openingGate->markOpened(socket);
         }
         // The cap goes on inside WebSocketTransport's constructor, which
         // runs here, inside the newConnection slot, before control returns
@@ -1749,6 +1774,22 @@ void StationServer::setHeartbeatIntervalMs(int ms)
 void StationServer::setMaxMissedPongs(int misses)
 {
     m_maxMissedPongs = misses < 1 ? 1 : misses;
+}
+
+static_assert(StationServer::kDefaultOpeningDeadlineMs
+                  == StationOpeningGate::kDefaultOpeningDeadlineMs,
+              "the Core and its opening gate state one opening deadline");
+
+void StationServer::setOpeningDeadlineMs(int ms)
+{
+    if (ms > 0) {
+        m_openingDeadlineMs = ms;
+    }
+}
+
+int StationServer::openingCount() const
+{
+    return m_openingGate != nullptr ? m_openingGate->pendingCount() : 0;
 }
 
 void StationServer::setAuthDeadlineMs(int ms)

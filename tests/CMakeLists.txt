@@ -7549,6 +7549,12 @@ nereus_add_test(tst_link_surface_manifest_regen
 nereus_add_test(tst_link_version
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
+# Core WebSocket opening requests (R-IOS-01, R-R3-26): every Host form the
+# phone and desktop send opens a session over the Core's real listener; a
+# request the Core cannot read gets 400; an opening that never finishes
+# holds a place only until the opening deadline.
+nereus_add_test(tst_station_ws_host
+    EXTRA_LABELS session)
 # R3 completion carry, review I1 (R-R3-21, R-R3-38, R-IOS-01): the takeover
 # and version reasons, formatted and parsed back in one place.
 nereus_add_test(tst_session_end_reasons EXTRA_LABELS session)

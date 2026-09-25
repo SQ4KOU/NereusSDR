@@ -630,7 +630,7 @@ const QList<ReasonSource>& reasonSources()
           // console and log; never sent to an app.
           QStringLiteral("CertificateStore::tlsBackendDiagnostic()"),
           QStringLiteral("m_certificates->lastError()"),
-          QStringLiteral("m_wsServer->errorString()"),
+          QStringLiteral("m_openingGate->errorString()"),
           // dropPeer's and sendRejected's parameter, from this file's calls.
           QStringLiteral("reason"),
           // SessionEndReasons' version and takeover reasons, scanned below.

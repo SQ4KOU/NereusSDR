@@ -1200,6 +1200,7 @@ set(CORE_SOURCES
     src/core/session/SessionTransport.cpp
     src/core/session/StationCapabilities.cpp
     src/core/session/StationServer.cpp
+    src/core/session/StationOpeningGate.cpp
     src/core/session/StationLanAnnouncement.cpp
     src/core/session/StationLanCache.cpp
     src/core/session/StationLanDiscovery.cpp
