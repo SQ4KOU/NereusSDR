@@ -464,3 +464,54 @@ the TCI broadcast tests and `tests/tst_tci_update_gap.cpp`.
 **Execution note (advisory):** opus. Before Task 7, which runs last.
 
 - [ ] **Step 1:** Read the Thetis sends, test, fix, commit.
+
+## Task 13: The radio's TX inhibit input reaches the keying gate, as Thetis reads it
+
+**Requirements:** the 3M-1 transmit work; the source-first rule. Found by Task 7's re-review:
+Task 7's fix wave wired TX inhibit and the PA trip into every keying source, but nothing in
+production asserts them. `TxInhibitMonitor::setUserIoReader`, `notifyRxOnly`,
+`notifyOutOfBand` and `notifyBlockTxAntenna` have only test callers. The monitor has no poll
+of its own, and `handleGanymedeTrip` has no production caller.
+
+**Source first:** Thetis `console.cs` `PollTXInhibit` (`console.cs:25849-25887 [v2.10.3.15]`,
+polled every 100 ms from power-on at `27417-27425`):
+- the model gate `_useTxInhibit && Model != HPSDR`;
+- Protocol 1: `!getUserI02()` for ANAN_G2E, 7000D, 8000D and RedPitaya (`//DH1KLM`,
+  `//N1GP G2E added`), otherwise `!getUserI01()`;
+- Protocol 2: `!getUserI05_p2()` for 7000D, 8000D, G2, G2_1K, ANVELINAPRO3 and RedPitaya,
+  otherwise `!getUserI04_p2()`;
+- `_reverseTxInhibit`, then `TXInhibitChangedHandlers`, then `OnTXInhibitChanged`
+  (`45353-45356`), then the TXInhibit setter (`15342-15366`).
+
+On the wire:
+- Protocol 1: `networkproto1.c:336`, `user_dig_in = (C1 >> 1) & 0xf` when `C0 & 0xf8 == 0x00`;
+- Protocol 2: `network.c:756`, `user_dig_in = ReadBufp[55]` in the high-priority status
+  packet (the Thetis comment says byte 59; the code reads 55);
+- the accessors: `netInterface.c:245-289`.
+
+For the HL2, read mi0bot-Thetis for its own inputs. For the Ganymede PA trip, read Thetis's CAT
+handling of the Ganymede message.
+
+**Files:**
+- `src/core/P1RadioConnection.cpp` and `src/core/P2RadioConnection.cpp` (parse the user
+  digital inputs);
+- `src/core/TxInhibitMonitor.{h,cpp}` (a per-status-frame or 100 ms reader);
+- `src/models/RadioModel.cpp` (wiring, the setting's `useTxInhibit` and `reverseTxInhibit`);
+- the Setup control, if Thetis shows one (source first);
+- tests.
+
+**Acceptance:**
+- Each model reads the input bit Thetis reads, on each protocol, with the reverse option.
+- A change reaches `TxInhibitMonitor` within one status frame or 100 ms, and every keying
+  source is blocked while it holds (Task 7's gate). The P1 and P2 status parsers carry a test
+  with the exact byte positions.
+- The Ganymede trip reaches `handleGanymedeTrip` from its real source, or a NEEDS_CONTEXT if
+  NereusSDR has none.
+- A CAT or TCI request made while blocked is dropped, not held (Task 7's re-review, N3).
+
+**Verification:** the transmit boundary, so tests come first. Bench pending with the
+operator's go-ahead: a sequencer or a jumper on the radio's input.
+
+**Execution note (advisory):** opus. After Task 7's follow-up.
+
+- [ ] **Step 1:** Read the sources, then write the parsers, the reader and the tests.
