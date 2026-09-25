@@ -27,8 +27,8 @@
         {"from": "station", "message": {"type": "snapshot.complete"}},
         {"from": "client", "role": "behaviour", "message": {"type": "settings.write", "key": "DisplaySpectrumFps", "origin": "$string:origin23", "properties": [{"ordinal": 0, "name": "DisplaySpectrumFps", "kind": "utf8", "value": "30"}]}},
         {"from": "station", "message": {"key": "DisplaySpectrumFps", "origin": "$ref:origin23", "properties": [{"kind": "utf8", "name": "DisplaySpectrumFps", "ordinal": 0, "value": "30"}], "type": "settings.value"}},
-        {"from": "client", "role": "scripted", "message": {"type": "settings.write", "key": "RxOnly", "origin": "phone-session-1", "properties": [{"ordinal": 0, "name": "RxOnly", "kind": "utf8", "value": "True"}]}},
-        {"from": "station", "message": {"key": "RxOnly", "properties": [], "reason": "Each app keeps this setting itself; the Core does not store it.", "type": "settings.reject"}},
+        {"from": "client", "role": "scripted", "message": {"type": "settings.write", "key": "ExtendedTxAllowed", "origin": "phone-session-1", "properties": [{"ordinal": 0, "name": "ExtendedTxAllowed", "kind": "utf8", "value": "True"}]}},
+        {"from": "station", "message": {"key": "ExtendedTxAllowed", "properties": [], "reason": "Each app keeps this setting itself; the Core does not store it.", "type": "settings.reject"}},
         {"from": "client", "role": "behaviour", "message": {"type": "settings.remove", "key": "DisplaySpectrumFps", "properties": []}},
         {"from": "station", "message": {"key": "DisplaySpectrumFps", "origin": "", "properties": [], "type": "settings.value"}}
     ]
