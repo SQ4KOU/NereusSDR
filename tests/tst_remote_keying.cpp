@@ -486,6 +486,10 @@ private slots:
         QCOMPARE(p.core.model->keyedBy().deviceId, p.a.key.fingerprint());
         QCOMPARE(p.core.model->keyedBy().trigger, QByteArray("vox"));
         QVERIFY(p.holder->holder()->keyed);
+        // The holder's release stops its VOX key too.
+        QVERIFY(accepted(p.send(p.appA, "tx.unkey",
+                                {int64("epoch", p.core.model->keyedBy().epoch)})));
+        QVERIFY(!p.mox->isMox());
         p.mox->onVoxActive(false);
         QTRY_COMPARE(p.mox->state(), MoxState::Rx);
     }

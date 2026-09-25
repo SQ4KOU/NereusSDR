@@ -254,6 +254,18 @@ RemoteKeying::Result RemoteKeying::unkey(const Command& command)
         }
         return stopFrom(command.deviceId, true);
     }
+    // A VOX key while this device holds transmit is this device's (ruling
+    // 8.4), so its release stops it too.
+    const MoxController* mox = m_model->moxController();
+    if (m_holder->isHeldBy(command.deviceId) && mox->isMox() && mox->currentKeyer().isStation()
+        && mox->currentKeyer().source == PttMode::Vox) {
+        if (command.epoch < m_model->keyedBy().epoch) {
+            return accepted(0);
+        }
+        m_model->moxController()->setMox(false);
+        qCInfo(lcDsp) << "Unkeyed the VOX key of" << command.deviceId;
+        return accepted(0);
+    }
     return stopFrom(command.deviceId, false);
 }
 

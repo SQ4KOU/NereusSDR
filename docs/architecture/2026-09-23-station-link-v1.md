@@ -3406,7 +3406,8 @@ VOX key at the Core is that device's.
 the holder's: from a device that does not hold transmit they are refused
 `otherDeviceHolds` ("<holder> has the transmitter. Take it to stop the
 transmission.") and the transmission continues. A release ends only that
-device's own key. The Core's own safety stops end whoever is keyed.
+device's own key (a VOX key while it holds transmit is its own). The Core's
+own safety stops end whoever is keyed.
 
 **The keying epoch.** An accepted `tx.key`, `tx.tune {on:true}` or
 `tx.twoTone {on:true}` answers with the key's epoch in its `values`:
