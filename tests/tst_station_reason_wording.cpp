@@ -104,6 +104,10 @@
 //                                    profile commands' and the RADE vocoder
 //                                    reset's reasons.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06: slice.selectBand
+//                                    relays onBandButtonClicked's refusal,
+//                                    now scanned. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -677,6 +681,9 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("refusal"), QStringLiteral("facade->lastActionError()"),
           QStringLiteral("slice->nnrLastError()"), QStringLiteral("accepted ? QString() : reason"),
           QStringLiteral("rejectionReason"), QStringLiteral("outcome.reason"),
+          // slice.selectBand: RadioModel::onBandButtonClicked's refusal,
+          // scanned in RadioModel.cpp's entry.
+          QStringLiteral("ignoredReason"),
           QStringLiteral("receiveOnly ? alex->setRxOnlyAntForBand(Band(band), antenna) : "
                          "alex->setRxAntForBand(Band(band), antenna)"),
           // A function of this file, its literal scanned here.
@@ -846,7 +853,10 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("nr3CannotRunReason"),
           // The slice cap reason, relayed by the addSlice and addSliceOnPan
           // verbs' results.
-          QStringLiteral("sliceCapReason")},
+          QStringLiteral("sliceCapReason"),
+          // R-IOS-27, R-IOS-06: the desktop's band button, whose refusal
+          // (bandClickIgnored) slice.selectBand relays.
+          QStringLiteral("onBandButtonClicked")},
          {// This app's own branch in a remote window (role Remote), shown
           // through OperatorReasonText; never sent by the Core.
           "There is no station session."},
@@ -855,7 +865,9 @@ const QList<ReasonSource>& reasonSources()
          // worded "1 slice" or "N slices" from its own literals. R-R3-49
          // (parity Task 3): name, the transmit profile's own name.
          {QStringLiteral("radioLabel, slices"), QStringLiteral("slices"), QStringLiteral("cap"),
-          QStringLiteral("name")},
+          QStringLiteral("name"),
+          // onBandButtonClicked: the band's own label ("40m").
+          QStringLiteral("bandLabel(band)")},
          {// The refuse lambdas' parameter (literals of these functions),
           // the facades' and allocators' results (scanned), and the notch
           // refusals, constants of this file checked in

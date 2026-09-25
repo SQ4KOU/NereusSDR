@@ -235,6 +235,10 @@ void TstTransmitSettingsGate::olderCoreOffersNoTransmitSettings()
     caps.remoteTgxlControlVersion = 3;
     caps.transmitSettingsVersion = 1;
     QList<MirrorUpdate> updates = caps.toUpdates();
+    // R-IOS-27's bandSelectVersion now follows it; a Core from before
+    // either sends neither.
+    QCOMPARE(updates.last().name, QByteArrayLiteral("bandSelectVersion"));
+    updates.removeLast();
     QCOMPARE(updates.last().name, QByteArrayLiteral("transmitSettingsVersion"));
     QCOMPARE(StationCapabilities::fromUpdates(updates).transmitSettingsVersion, 1);
     updates.removeLast();

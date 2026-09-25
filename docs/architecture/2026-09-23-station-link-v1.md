@@ -716,6 +716,7 @@ change shows as surface drift and as a change to this table.
 | `stationCatalogVersion` | 1 |
 | `displayExtrasVersion` | 1 |
 | `transmitSettingsVersion` | 6 |
+| `bandSelectVersion` | 1 |
 
 <!-- /surface -->
 
@@ -855,8 +856,13 @@ When a feature is off, its version is 0:
   `transmit` object owns them). A window whose Core sends 0 keeps its
   transmit settings unavailable. A peer below agreed minor 11 is never
   offered it, and a receive-only Core refuses its transmit writes and DSP >
-  Options TX keys as before. `transmitSettingsVersion` is the last
-  capabilities entry.
+  Options TX keys as before. `transmitSettingsVersion` is followed by
+  `bandSelectVersion`.
+- `bandSelectVersion`: sent only at agreed minor 11, last, and 0 on a
+  station with no radio model. At 1 the Core takes `slice.selectBand`
+  (section 9.1), a device's band button for a slice, for the bands the
+  catalogue's `bands` lists (section 7.4). An app keeps its band buttons
+  greyed on a Core that sends 0 or no entry.
 
 `txPermitted` is always false today: remote transmit is R4.
 
@@ -929,6 +935,7 @@ identity entries from `hpsdrModel` onwards are present only at agreed minor
 | 51 | `stationCatalogVersion` | `i64` |
 | 52 | `displayExtrasVersion` | `i64` |
 | 53 | `transmitSettingsVersion` | `i64` |
+| 54 | `bandSelectVersion` | `i64` |
 
 <!-- /surface -->
 
@@ -1807,8 +1814,8 @@ the transmit safety gates stay at the station (section 17).
 The `catalog` object's `json` is one JSON object (RFC 8259, UTF-8,
 compact) holding the values the Core owns and an app shows: the modes, the
 Core's filter presets, the tune steps, the AGC, receive and gauge ranges, the
-radio's capabilities, the band plans, the waterfall palettes, the slice
-colours and the Core's tools (`StationCatalog`, spec section 4.10). An app
+radio's capabilities, the band buttons, the band plans, the waterfall
+palettes, the slice colours and the Core's tools (`StationCatalog`, spec section 4.10). An app
 draws its controls from it and carries no table of its own, so a Hermes
 Lite 2 and an ANAN-G2 each get their own. It is the same for every device
 connected to the Core; nothing in it is per device.
@@ -1833,7 +1840,7 @@ Colours are `#RRGGBB`, upper case. Labels are the desktop's own words,
 shown as sent. A key an app does not know is ignored; an app given an
 empty `json` (the stand-in of section 16.3) has no catalogue yet.
 
-The object has exactly these thirteen keys:
+The object has exactly these fourteen keys:
 
 | Key | Holds |
 | --- | --- |
@@ -1844,6 +1851,7 @@ The object has exactly these thirteen keys:
 | `receive` | `{afGain, ssqlThresh, amsqThresh, fmsqThresh}`, each `{min, max, step}` for the slice setting of that name, as the desktop's own control holds it: `afGain` 0 to 100 in the AF slider's units, `ssqlThresh` 0 to 100 in the SQL slider's units, `amsqThresh` and `fmsqThresh` -160 to 0 dB; every step 1 |
 | `meters` | The gauges an app draws (below) |
 | `board` | The radio (below) |
+| `bands` | `[{id, label}]`: the desktop's per-pan BAND grid, in its order (160, 80, 60, 40, 30, 20, 17, 15, 12, 10, 6, WWV); `id` is the band as `slice.selectBand` takes it (0 for 160 m to 10 for 6 m, 12 for WWV) and `label` is the button's text. The desktop draws its grid from the same table, so the two cannot differ |
 | `bandPlans` | `[{id, name, default, segments: [{lowHz, highHz, label, licence, lowestClass, colour}]}]`: every bundled plan, `id` its file's name (`arrl-us`), `default` true on ARRL (US) alone; `licence` lists the licence classes (`E,G`), empty for a beacon or no transmit; `lowestClass` is the lowest class the segment allows, as the desktop's band-plan strip names it after the label (`PHONE General`): `Tech` when `licence` holds T, else `General` when it holds G, `Extra` when it is exactly `E`, and empty otherwise |
 | `palettes` | `[{id, name, stops: [{at, colour}]}]`: the waterfall palettes, `id` the desktop's palette number, `at` from 0 to 1 to three places, lowest first. The Custom palette is each computer's own and is not listed |
 | `sliceColours` | `[colour]`: slice A's colour first, one for each slice the radio allows |
@@ -2098,6 +2106,7 @@ refused.
 | `requestSliceSampleRate` | `sliceId` i64, `rateHz` i64 | none | 0 | 0 |
 | `addSliceOnPan` | `panId` utf8 | none | 0 | 0 |
 | `setActiveSliceById` | `sliceId` i64 | none | 0 | 0 |
+| `slice.selectBand` | `sliceId` i64, `band` i64 | `bandSelectVersion` | 1 | 11 |
 | `requestStreamCtunPinned` | `sliceId` i64, `pinned` bool | `remoteCtunVersion` | 1 | 2 |
 | `requestStreamCentre` | `sliceId` i64, `centreHz` f64 | `remoteCtunVersion` | 1 | 2 |
 | `configureTgxl` | `host` utf8, `port` i64 | `remoteTgxlConfigVersion` | 1 | 4 |
@@ -2170,8 +2179,29 @@ refused.
 The table's capability columns are the gate the desktop client applies
 before sending (section 6.2).
 
-Six command groups need a sentence beyond the table:
+These command groups need a sentence beyond the table:
 
+- **A slice's band buttons.** `slice.selectBand` (`sliceId`, `band`,
+  both `i64`; `bandSelectVersion` 1, agreed minor 11) does what a band
+  button of the desktop's per-pan BAND grid does for that slice: the Core
+  runs its own band change (`RadioModel::onBandButtonClicked`), so the
+  slice gets back the frequency, mode, filter and the rest it last had on
+  that band, or the band's starting frequency and mode on a first visit,
+  and saves what it leaves for the band it left. `band` is an `id` from
+  the catalogue's `bands` (section 7.4). A band the slice is already on
+  is accepted and changes nothing, as on the desktop. `accepted` names
+  the slice (`slice:<id>`) in `affected`; the change reaches it in the
+  next `delta`. The refusals: "That receiver is no longer on the Core."
+  (an unknown `sliceId`), "The Core has no band button for that band."
+  (a `band` the catalogue does not list), the desktop's own reason for a
+  locked slice ("Band 40m ignored: the slice is locked. Unlock it to
+  change bands."), and "The request to change band was not understood."
+  (arguments it does not take). The desktop offers every grid band on
+  every radio and changes band while the radio is on the air, so the
+  Core refuses neither. A peer below agreed minor 11 gets "Update this
+  app to change bands on this Core.", and a Core that sends
+  `bandSelectVersion` 0 answers "This Core cannot change bands for an
+  app."
 - **The filter policy.** `setAlexBpfMode` sets one receive filter chain's
   filter policy (`chain` 0 or 1; `mode` 0 Auto, 1 Force filter, 2 Force
   bypass), the call the Core's own filter policy dialog makes on Apply.

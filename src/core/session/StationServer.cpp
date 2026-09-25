@@ -280,6 +280,10 @@
 //                                    PA readings and link quality for a
 //                                    peer at minor 11.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06: bandSelectVersion
+//                                    1, last in the minor-11 block, and
+//                                    slice.selectBand refused below it.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1965,6 +1969,18 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                 it->agreedMinor < kRadioIdentitySessionProtocolMinor
                     ? QStringLiteral("Update this app to change the tune power on this Core.")
                     : QStringLiteral("This Core cannot change its transmit settings."), {}));
+            break;
+        }
+        // R-IOS-27, R-IOS-06: a slice's band buttons came with
+        // bandSelectVersion 1, in the minor-11 block.
+        if (message.commandVerb == "slice.selectBand"
+            && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                || bandSelectVersion() < 1)) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                    ? QStringLiteral("Update this app to change bands on this Core.")
+                    : QStringLiteral("This Core cannot change bands for an app."), {}));
             break;
         }
         // R-R3-49 (parity Task 3): the TX profile verbs and the RADE vocoder
@@ -3679,6 +3695,13 @@ QString StationServer::transmitSettingOnAirRefusal(const QString& key) const
     return reason;
 }
 
+int StationServer::bandSelectVersion() const
+{
+    // The desktop's band button on a slice (RadioModel::onBandButtonClicked),
+    // for a band the catalogue's `bands` lists.
+    return m_radioModel ? 1 : 0;
+}
+
 int StationServer::transmitSettingsVersion() const
 {
     // 1: `transmit` writes outside the keying set and the DspOptions*Tx
@@ -3813,8 +3836,10 @@ StationCapabilities StationServer::buildCapabilities() const
             caps.stationCatalogVersion = stationCatalogVersion();
             // iPhone app Task 20: display extras.
             caps.displayExtrasVersion = displayExtrasVersion();
-            // R-R3-49 (parity Task 1): the transmit settings, last.
+            // R-R3-49 (parity Task 1): the transmit settings.
             caps.transmitSettingsVersion = transmitSettingsVersion();
+            // R-IOS-27, R-IOS-06: slice.selectBand, last.
+            caps.bandSelectVersion = bandSelectVersion();
             const HardwareProfile& profile = m_radioModel->hardwareProfile();
             caps.hpsdrModel = profile.caps != nullptr ? profile.model : HPSDRModel::FIRST;
             const RadioInfo& radio = m_radioModel->currentRadioInfo();

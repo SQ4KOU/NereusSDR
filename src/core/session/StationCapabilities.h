@@ -98,6 +98,9 @@
 //   2026-09-24 - R-R3-49 (parity Task 1): transmitSettingsVersion, last
 //                in the minor-11 block. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-25 - R-IOS-27, R-IOS-06: bandSelectVersion, last in the
+//                minor-11 block. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -223,6 +226,12 @@ struct StationCapabilities {
     /// the same minor-11 block. 0: a window's transmit settings stay greyed
     /// and say the Core cannot take them.
     int transmitSettingsVersion = 0;
+    /// R-IOS-27, R-IOS-06: 1 means the Core takes `slice.selectBand`, which
+    /// runs the desktop's band button on a slice (its saved frequency, mode
+    /// and filter for that band come back), for a band the catalogue's
+    /// `bands` lists. Sent last in the same minor-11 block, after
+    /// transmitSettingsVersion. 0: an app's band buttons stay greyed.
+    int bandSelectVersion = 0;
 
     /// Whether the DAEMON currently holds a live radio connection. A
     /// client that authenticated against a daemon whose radio is powered

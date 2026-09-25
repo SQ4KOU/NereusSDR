@@ -49,6 +49,9 @@
 //   2026-09-24 - R-R3-49 (parity Task 1): transmitSettingsVersion, last
 //                in the minor-11 block. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-25 - R-IOS-27, R-IOS-06: bandSelectVersion, last in the
+//                minor-11 block. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationCapabilities.h"
@@ -158,8 +161,10 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         // iPhone app Task 20: display extras.
         updates.append(intEntry("displayExtrasVersion", displayExtrasVersion));
         // R-R3-49 (parity Task 1): the transmit settings a receive-only
-        // Core takes while the radio is off the air, last.
+        // Core takes while the radio is off the air.
         updates.append(intEntry("transmitSettingsVersion", transmitSettingsVersion));
+        // R-IOS-27, R-IOS-06: slice.selectBand, last.
+        updates.append(intEntry("bandSelectVersion", bandSelectVersion));
     }
     return updates;
 }
@@ -347,7 +352,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "pairingVersion"
                    || u.name == "stationCatalogVersion"
                    || u.name == "displayExtrasVersion"
-                   || u.name == "transmitSettingsVersion") {
+                   || u.name == "transmitSettingsVersion"
+                   || u.name == "bandSelectVersion") {
             // R-R3-47 / R-R3-22 / R-R3-48: sent in the same block as the
             // four above.
             caps.radioIdentityEntries = true;
@@ -374,8 +380,10 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                     caps.displayExtrasVersion = version;
                 } else if (u.name == "remoteTgxlControlVersion") {
                     caps.remoteTgxlControlVersion = version;
-                } else {
+                } else if (u.name == "transmitSettingsVersion") {
                     caps.transmitSettingsVersion = version;
+                } else {
+                    caps.bandSelectVersion = version;
                 }
             }
         } else if (u.name == "settingsSchemaVersion") {
