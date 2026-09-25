@@ -1030,13 +1030,16 @@ requester's own refused slice still refuses the whole change, as today. After Co
 slices close only once the rate change is certain (the plan still holds and, on Protocol 1, the
 radio took the new rate), just before it commits; a rate change refused on its later turn closes
 nothing and tells nobody (fix wave after the group review of Tasks 71 to 76,
-`RadioModel::setStreamSampleRateClosing`). The proceed records each closing slice with its owner
-(its id and `SliceOwnership::Mark::subject()`); if, on that later turn, any of them is gone or has
-another owner (closed, and its id reused by another device's new slice or the requester's own),
-the whole change is refused with "That setting changed since you asked. Make the change again."
-and nothing closes (fix wave 2, Important 4). Any `requestSliceSampleRate`, confirmed or not, also
-re-checks on that turn that its slice is still the requester's, and is refused with the
-foreign-slice reason when it is not (`SessionCommandDispatcher::handleRequestSliceSampleRate`).
+`RadioModel::setStreamSampleRateClosing`). The proceed records each closing slice with its id,
+the slice itself and its owner (`SliceOwnership::Mark::subject()`); if, on that later turn, any id
+no longer names that same slice or has another owner (closed, and its id reused by any new slice,
+the same owner's or an unowned one included), the whole change is refused with "That setting
+changed since you asked. Make the change again." and nothing closes (fix wave 2, Important 4; fix
+wave 3, Important 1, identity rather than owner alone). Any `requestSliceSampleRate`, confirmed or
+not, also re-checks on that turn that its slice is still the requester's, and is refused with the
+foreign-slice reason when it is not, and with "That receiver is no longer on the Core." when its
+id now names a different slice of the requester's own (or nobody's)
+(`SessionCommandDispatcher::handleRequestSliceSampleRate`).
 
 **Ruling 7.4. Changes wait while the holder is on the air (D60).** While a holder is on the
 air, these changes from any other device are refused, not asked:

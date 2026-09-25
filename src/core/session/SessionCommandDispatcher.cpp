@@ -1039,7 +1039,11 @@ void SessionCommandDispatcher::handleRemoveSlice(const SessionMessage& invoke)
         break;
     }
 
-    if (m_radioModel->sliceById(sliceId) == nullptr) {
+    // Fix wave 3 (Important 1): the slice asked about, by identity, so a
+    // slice closed and its id reused before the change runs (by any
+    // device, the asker included) is never changed in its place.
+    const QPointer<SliceModel> askedSlice(m_radioModel->sliceById(sliceId));
+    if (askedSlice.isNull()) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
                    QStringLiteral("That receiver is no longer on the Core."), {});
         return;
@@ -1115,7 +1119,7 @@ void SessionCommandDispatcher::handleAddSliceOnPan(const SessionMessage& invoke)
 void SessionCommandDispatcher::handleRequestSliceSampleRate(const SessionMessage& invoke)
 {
     // Fix wave: a confirmed rate change's closes, for this dispatch only.
-    const QHash<int, QByteArray> closingOwners = std::exchange(m_rateClosing, {});
+    const QHash<int, ClosingSlice> closingOwners = std::exchange(m_rateClosing, {});
     const std::function<void(int)> close = std::exchange(m_rateClose, {});
     const QString changedReason = std::exchange(m_rateChangedReason, {});
     int sliceId = 0;
@@ -1143,7 +1147,11 @@ void SessionCommandDispatcher::handleRequestSliceSampleRate(const SessionMessage
         return;
     }
 
-    if (m_radioModel->sliceById(sliceId) == nullptr) {
+    // Fix wave 3 (Important 1): the slice asked about, by identity, so a
+    // slice closed and its id reused before the change runs (by any
+    // device, the asker included) is never changed in its place.
+    const QPointer<SliceModel> askedSlice(m_radioModel->sliceById(sliceId));
+    if (askedSlice.isNull()) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
                    QStringLiteral("That receiver is no longer on the Core."), {});
         return;
@@ -1173,7 +1181,7 @@ void SessionCommandDispatcher::handleRequestSliceSampleRate(const SessionMessage
     QMetaObject::invokeMethod(
         m_radioModel,
         [self, radioModel, verb, commandId, sliceId, rateHz, owner, closingOwners, close,
-         changedReason, requester, access]() {
+         changedReason, requester, access, askedSlice]() {
             if (self.isNull() || radioModel.isNull()) {
                 return;
             }
@@ -1185,13 +1193,26 @@ void SessionCommandDispatcher::handleRequestSliceSampleRate(const SessionMessage
                     return;
                 }
             }
+            // Fix wave 3 (Important 1): the id must still name the slice
+            // asked about; a reuse by another device is refused above as
+            // that device's, a reuse by the asker (or by nobody) here.
+            if (askedSlice.isNull() || radioModel->sliceById(sliceId) != askedSlice.data()) {
+                self->emitResultAs(owner, SessionMessages::commandResult(
+                    verb, commandId, false,
+                    QStringLiteral("That receiver is no longer on the Core."), {}));
+                return;
+            }
             // A confirmed change closes exactly the slices it was confirmed
-            // for: each must still be there with the owner it had at the
-            // proceed, or the whole change is refused and nothing closes.
+            // for: each id must still name the same slice, with the owner
+            // it had at the proceed, or the whole change is refused and
+            // nothing closes (fix wave 3: identity, so an id reused by the
+            // same owner, or by nobody, is caught too).
             QSet<int> closing;
             for (auto it = closingOwners.cbegin(); it != closingOwners.cend(); ++it) {
-                if (radioModel->sliceById(it.key()) == nullptr
-                    || radioModel->sliceOwnership()->mark(it.key()).subject() != it.value()) {
+                SliceModel* const now = radioModel->sliceById(it.key());
+                if (now == nullptr || it.value().slice.isNull() || now != it.value().slice.data()
+                    || radioModel->sliceOwnership()->mark(it.key()).subject()
+                           != it.value().owner) {
                     self->emitResultAs(owner, SessionMessages::commandResult(
                         verb, commandId, false,
                         changedReason.isEmpty()

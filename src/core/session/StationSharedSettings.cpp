@@ -1193,10 +1193,15 @@ SessionMessage StationServer::proceedSharedSetting(SessionTransport* transport,
         const QPointer<StationServer> self(this);
         // Fix wave 2 (Important 4): each closing slice with its owner now,
         // so a slice closed and its id reused before the change runs is
-        // never closed in its place.
-        QHash<int, QByteArray> closingOwners;
+        // never closed in its place. Fix wave 3 (Important 1): and the
+        // slice itself, so a reuse by the same owner (or by nobody) is
+        // caught too.
+        QHash<int, SessionCommandDispatcher::ClosingSlice> closingOwners;
         for (int id : now.closes) {
-            closingOwners.insert(id, m_radioModel->sliceOwnership()->mark(id).subject());
+            closingOwners.insert(
+                id, SessionCommandDispatcher::ClosingSlice{
+                        QPointer<SliceModel>(m_radioModel->sliceById(id)),
+                        m_radioModel->sliceOwnership()->mark(id).subject()});
         }
         m_dispatcher->setRateClosing(
             closingOwners, [self, deferred](int id) {

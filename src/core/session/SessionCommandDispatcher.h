@@ -152,6 +152,7 @@
 namespace NereusSDR {
 
 class RadioModel;
+class SliceModel;
 
 /// One named argument of a command verb, as dispatch() reads it: the name,
 /// the wire kind it must carry, and whether it may be left out.
@@ -251,7 +252,16 @@ public:
     /// a later turn; if any of those slices is gone or has another owner
     /// then (closed, and its id reused), the whole change is refused with
     /// `changedReason` and nothing closes.
-    void setRateClosing(QHash<int, QByteArray> closing, std::function<void(int)> close,
+    ///
+    /// Fix wave 3 (Important 1): the owner alone cannot tell a reused id
+    /// that stayed with the same device (or with nobody), so each entry
+    /// also carries the slice itself; the change runs only when the id
+    /// still names that same slice object.
+    struct ClosingSlice {
+        QPointer<SliceModel> slice;
+        QByteArray owner;
+    };
+    void setRateClosing(QHash<int, ClosingSlice> closing, std::function<void(int)> close,
                         QString changedReason = {})
     {
         m_rateClosing = std::move(closing);
@@ -363,7 +373,7 @@ private:
     QString m_sessionOwner{QStringLiteral("local")};
     // iPhone app Task 73.
     QByteArray m_requester;
-    QHash<int, QByteArray> m_rateClosing;
+    QHash<int, ClosingSlice> m_rateClosing;
     std::function<void(int)> m_rateClose;
     QString m_rateChangedReason;
     SliceAccess m_sliceAccess;
