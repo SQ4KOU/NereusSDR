@@ -504,7 +504,10 @@ const MirrorPolicy::Entry kEntries[] = {
     { "AlexAntennaFacade", "txAntennas", MirrorDirection::Outbound },
     { "AlexAntennaFacade", "blockTxAnt2", MirrorDirection::Outbound },
     { "AlexAntennaFacade", "blockTxAnt3", MirrorDirection::Outbound },
-    { "AlexAntennaFacade", "rxOutOnTx", MirrorDirection::Outbound },
+    // Group B fix wave (radioHardwareVersion 5): RX bypass on TX, the VFO
+    // flag's BYPS, is two-way; the Core applies it through its own
+    // AlexController.
+    { "AlexAntennaFacade", "rxOutOnTx", MirrorDirection::Bidirectional },
     { "AlexAntennaFacade", "ext1OutOnTx", MirrorDirection::Outbound },
     { "AlexAntennaFacade", "ext2OutOnTx", MirrorDirection::Outbound },
     { "AlexAntennaFacade", "rxOutOverride", MirrorDirection::Outbound },

@@ -31,6 +31,7 @@
 #include <QSlider>
 #include <QTimer>
 
+#include "OperatorWording.h"
 #include "core/AppSettings.h"
 #include "gui/applets/PhoneCwApplet.h"
 #include "gui/widgets/ScrollableLabel.h"
@@ -253,7 +254,10 @@ private slots:
         QVERIFY(xit->isEnabled());
         QVERIFY(zero->isEnabled());
         QVERIFY(!badge->isEnabled());
+        // Group B fix wave: BYPS waits for the Core to take RX bypass on TX
+        // (MainWindow's setRxBypassPermitted), with a plain reason.
         QVERIFY(!bypass->isEnabled());
+        QVERIFY(OperatorWording::isPlain(bypass->toolTip()));
         QVERIFY(xitOffset && xitOffset->isEnabled());
 
         QSignalSpy xitEnabledSpy(&vfo, &VfoWidget::xitEnabledChanged);
@@ -300,6 +304,27 @@ private slots:
         QVERIFY(localMenu.enabled);
         QCOMPARE(handoffSpy.count(), 2);
         QCOMPARE(handoffSpy.at(1).first().toInt(), 3);
+
+        // Group B fix wave: BYPS follows its own gate, not the transmit
+        // permission. With transmit withdrawn and the Core taking it, it
+        // writes; with it refused, it waits with the reason.
+        vfo.setTransmitPermitted(false);
+        QVERIFY(!bypass->isEnabled());
+        vfo.setRxBypassPermitted(true, QString());
+        QVERIFY(bypass->isEnabled());
+        bypass->click();
+        QCOMPARE(bypassSpy.count(), 1);
+        QVERIFY(bypassSpy.first().first().toBool());
+        const QString older = QStringLiteral("This Core cannot switch its receive bypass on "
+                                             "transmit for this app. Updating the Core may help.");
+        QVERIFY(OperatorWording::isPlain(older));
+        vfo.setRxBypassPermitted(false, older);
+        QVERIFY(!bypass->isEnabled());
+        QCOMPARE(bypass->toolTip(), older);
+        vfo.setTransmitPermitted(true);
+        QVERIFY(!bypass->isEnabled());
+        bypass->click();
+        QCOMPARE(bypassSpy.count(), 1);
     }
 
     // R-R3-49 (parity Task 1): the TX passband match is a transmit setting,

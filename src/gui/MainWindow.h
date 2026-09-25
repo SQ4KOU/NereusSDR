@@ -618,6 +618,10 @@ private slots:
     /// always in local direct mode; in a remote window while the handshake
     /// is complete, the Core offers transmitSettingsVersion at least
     /// `minVersion` and its radio is not on the air (RadioModel::isCoreOnAir).
+    // Group B fix wave: whether BYPS (RX bypass on TX) may change the
+    // radio's relay setting, and why not.
+    bool rxBypassPermitted() const;
+    QString rxBypassUnavailableReason() const;
     bool transmitSettingsPermitted(int minVersion = 1) const;
     /// Why not, in plain words: the on-the-air reason while the Core's
     /// radio is on the air, otherwise the Core reason

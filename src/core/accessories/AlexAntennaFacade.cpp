@@ -313,6 +313,21 @@ void AlexAntennaFacade::setUseTxAntennaForRx(bool on)
     publish(next);
 }
 
+void AlexAntennaFacade::setRxOutOnTx(bool on)
+{
+    if (!beginEdit("rxOutOnTx")) {
+        return;
+    }
+    if (AlexController* c = m_controller.data()) {
+        c->setRxOutOnTx(on);
+        refresh();
+        return;
+    }
+    Values next = m_values;
+    next.rxOutOnTx = on;
+    publish(next);
+}
+
 QString AlexAntennaFacade::setRxAntForBand(Band band, int antenna)
 {
     AlexController* c = m_controller.data();

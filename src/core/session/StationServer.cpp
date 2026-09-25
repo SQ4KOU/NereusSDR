@@ -2726,8 +2726,9 @@ int StationServer::radioHardwareVersion() const
     // 3: the `ioBoard` object and the per-band antenna verb
     // (setAlexRxAntenna), R-R3-46 fix wave. 4: the filter policy verb
     // (setAlexBpfMode), R-R3-46 / R-R3-21, applied through the same
-    // `alexAntennas` facade.
-    return m_radioModel->ioBoardFacade()->isBound() ? 4 : 2;
+    // `alexAntennas` facade. 5: `rxOutOnTx` (RX bypass on TX) two-way,
+    // group B fix wave.
+    return m_radioModel->ioBoardFacade()->isBound() ? 5 : 2;
 }
 
 StationCapabilities StationServer::buildCapabilities() const

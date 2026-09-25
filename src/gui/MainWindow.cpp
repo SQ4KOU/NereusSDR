@@ -1997,7 +1997,10 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
     newFlag->setStepHz(slice->stepHz());
     newFlag->setBoardCapabilities(m_radioModel->boardCapabilities());
     newFlag->setHpsdrSku(m_radioModel->hardwareProfile().model);
-    newFlag->setRxBypassActive(m_radioModel->alexController().rxOutOnTx());
+    // Group B fix wave: BYPS shows and writes the radio's RX bypass on TX
+    // through the Alex facade: this computer's AlexController locally, the
+    // Core's in a remote window (radioHardwareVersion 5).
+    newFlag->setRxBypassActive(m_radioModel->alexAntennaFacade()->rxOutOnTx());
     newFlag->setFilterPresetStore(m_radioModel->filterPresetStore());
     // Phase 3F closeout — give the per-slice VfoWidget the RadioModel pointer
     // so its right-click antenna submenu builds AntennaPickerMenu with live
@@ -2005,6 +2008,7 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
     newFlag->setRadioModel(m_radioModel);
     newFlag->setTransmitPermitted(transmitControlsPermitted(),
         tr("Remote transmit controls are not available from this Core yet."));
+    newFlag->setRxBypassPermitted(rxBypassPermitted(), rxBypassUnavailableReason());
     wireRadeFlagForTest(m_radioModel, newFlag, sliceIndex);
     if (TxSliceArbiter* arb = m_radioModel->txSliceArbiter()) {
         newFlag->setTxSlice(arb->txBoundSliceId() == sliceIndex);
@@ -2191,7 +2195,9 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
     // model, so the per-slice model->WDSP work could not help them.
     // createSliceFlag is now the single place a flag is wired.
     connect(newFlag, &VfoWidget::rxBypassToggled,
-            &m_radioModel->alexControllerMutable(), &AlexController::setRxOutOnTx);
+            m_radioModel->alexAntennaFacade(), &AlexAntennaFacade::setRxOutOnTx);
+    connect(m_radioModel->alexAntennaFacade(), &AlexAntennaFacade::rxOutOnTxChanged,
+            newFlag, &VfoWidget::setRxBypassActive);
     connect(slice, &SliceModel::lastRadeRxCallsignChanged,
             newFlag, &VfoWidget::setRadeCallsign);
     wireSliceFlagPresentation(slice, newFlag);
@@ -10564,12 +10570,13 @@ void MainWindow::wireSliceToSpectrum()
     // correctly (ANAN10/ANAN8000D/G2/G2_1K suppress it despite hasRxBypassRelay).
     vfo->setBoardCapabilities(m_radioModel->boardCapabilities());
     vfo->setHpsdrSku(m_radioModel->hardwareProfile().model);
-    vfo->setRxBypassActive(m_radioModel->alexController().rxOutOnTx());
+    vfo->setRxBypassActive(m_radioModel->alexAntennaFacade()->rxOutOnTx());
     // Phase 3F closeout — give Slice A's VfoWidget the RadioModel pointer so
     // contextMenuEvent builds AntennaPickerMenu instead of the stub fallback.
     vfo->setRadioModel(m_radioModel);
     vfo->setTransmitPermitted(transmitControlsPermitted(),
         tr("Remote transmit controls are not available from this Core yet."));
+    vfo->setRxBypassPermitted(rxBypassPermitted(), rxBypassUnavailableReason());
     connect(m_radioModel, &RadioModel::currentRadioChanged, vfo,
             [this, vfo]() {
         vfo->setBoardCapabilities(m_radioModel->boardCapabilities());
@@ -10593,8 +10600,10 @@ void MainWindow::wireSliceToSpectrum()
     // nothing downstream reads.
     // Phase 3F closeout — AntennaPickerMenu pick forwards to SliceModel::setRxAntenna.
 
-    // Phase 3P-I-b T9 — VFO BYPS button ↔ AlexController::rxOutOnTx
-    connect(&m_radioModel->alexController(), &AlexController::rxOutOnTxChanged,
+    // Phase 3P-I-b T9 — VFO BYPS button ↔ AlexController::rxOutOnTx.
+    // Group B fix wave: through the Alex facade, the Core's in a remote
+    // window (see createSliceFlag).
+    connect(m_radioModel->alexAntennaFacade(), &AlexAntennaFacade::rxOutOnTxChanged,
             vfo, &VfoWidget::setRxBypassActive);
 
     // Stage C2: wire FilterPresetStore so VFO flag filter buttons use user overrides.
@@ -11415,6 +11424,22 @@ bool MainWindow::transmitControlsPermitted() const
             && m_stationClient->capabilities().txPermitted));
 }
 
+bool MainWindow::rxBypassPermitted() const
+{
+    // Group B fix wave: a local window's BYPS writes this computer's
+    // AlexController; a remote window's the Core's, from radioHardwareVersion 5.
+    return m_radioModel && (m_radioModel->ownsLocalDsp()
+        || (m_stationClient && m_stationClient->remoteRxBypassOnTxAvailable()));
+}
+
+QString MainWindow::rxBypassUnavailableReason() const
+{
+    if (rxBypassPermitted() || !m_stationClient) {
+        return {};
+    }
+    return m_stationClient->rxBypassOnTxUnavailableReason();
+}
+
 bool MainWindow::transmitSettingsPermitted(int minVersion) const
 {
     // R-R3-49 (parity Task 1): the Core decides; this only says whether a
@@ -11515,8 +11540,15 @@ void MainWindow::applyRemoteRoleGating()
         m_radeApplet->setTransmitPermitted(transmitPermitted, transmitReason);
         m_radeApplet->setTxProfilePermitted(profilePermitted, profileReason);
     }
+    // Group B fix wave: BYPS follows whether the Core takes RX bypass on
+    // TX (radioHardwareVersion 5), not the transmit permission.
+    const bool rxBypass = rxBypassPermitted();
+    const QString rxBypassReason = rxBypassUnavailableReason();
     for (VfoWidget* flag : m_vfoWidgetsBySlice) {
-        if (flag) { flag->setTransmitPermitted(transmitPermitted, transmitReason); }
+        if (flag) {
+            flag->setTransmitPermitted(transmitPermitted, transmitReason);
+            flag->setRxBypassPermitted(rxBypass, rxBypassReason);
+        }
     }
     // R-R3-21: the container function buttons: the transmit ones are
     // unavailable with this reason, Power follows the Core session.

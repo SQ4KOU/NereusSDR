@@ -381,7 +381,7 @@ change shows as surface drift and as a change to this table.
 | `audioClockVersion` | 1 |
 | `receiverAudioVersion` | 1 |
 | `headphonesMixVersion` | 1 |
-| `radioHardwareVersion` | 4 |
+| `radioHardwareVersion` | 5 |
 | `remotePgxlControlVersion` | 4 |
 | `remoteRfKitControlVersion` | 4 |
 | `stationTciVersion` | 1 |
@@ -412,9 +412,12 @@ When a feature is off, its version is 0:
 - `radioHardwareVersion`: sent only at agreed minor 11. 0 without the step
   attenuator bound; 1 with it; 2 with the Alex antennas too; 4 with the HL2
   I/O board too: the `ioBoard` object, `setAlexRxAntenna` (which needs 3)
-  and the filter policy command `setAlexBpfMode` (which needs 4). A station
-  no longer sends 3; a client compares the version as a minimum
-  (section 6.2), so 4 serves `setAlexRxAntenna` too.
+  and the filter policy command `setAlexBpfMode` (which needs 4); 5 (group
+  B fix wave) with `rxOutOnTx` on `alexAntennas` two-way (RX bypass on TX,
+  the VFO flag's BYPS; the Core applies it through its AlexController,
+  which clears `ext1OutOnTx` and `ext2OutOnTx`). A station no longer sends
+  3 or 4; a client compares the version as a minimum (section 6.2), so 5
+  serves `setAlexRxAntenna` and `setAlexBpfMode` too.
 - `remotePgxlControlVersion`, `remoteRfKitControlVersion`,
   `remoteTgxlControlVersion`: sent only at agreed minor 11, and 0 unless
   the Core owns its accessories. `remotePgxlControlVersion` 3 adds the
@@ -694,7 +697,7 @@ An enum property lists the values its domain allows.
 | 3 | `txAntennas` | `utf8` | outbound |  |
 | 4 | `blockTxAnt2` | `bool` | outbound |  |
 | 5 | `blockTxAnt3` | `bool` | outbound |  |
-| 6 | `rxOutOnTx` | `bool` | outbound |  |
+| 6 | `rxOutOnTx` | `bool` | bidirectional |  |
 | 7 | `ext1OutOnTx` | `bool` | outbound |  |
 | 8 | `ext2OutOnTx` | `bool` | outbound |  |
 | 9 | `rxOutOverride` | `bool` | outbound |  |

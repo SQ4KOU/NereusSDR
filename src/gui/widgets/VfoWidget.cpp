@@ -344,6 +344,17 @@ warren@wpratt.com
 
 namespace NereusSDR {
 
+namespace {
+// BYPS's tooltip while it may be pressed (group B fix wave: kept in one
+// place, since setRxBypassPermitted puts it back).
+QString rxBypassToolTip()
+{
+    return QStringLiteral(
+        "RX Bypass on TX: routes the receive path through the bypass relay "
+        "while transmitting.");
+}
+} // namespace
+
 // 2026-05-13 bench fix (PR #238): QStackedWidget subclass that reports
 // the CURRENT page's sizeHint instead of the maximum across all pages.
 //
@@ -621,12 +632,13 @@ void VfoWidget::buildHeaderRow()
     m_rxBypassBtn->setFixedHeight(18);
     // Maps to Thetis chkRxOutOnTx (Alex.cs:61) [cite moved from the tooltip,
     // R-R3-17].
-    m_rxBypassBtn->setToolTip(QStringLiteral(
-        "RX Bypass on TX: routes the receive path through the bypass relay "
-        "while transmitting."));
+    m_rxBypassBtn->setToolTip(rxBypassToolTip());
     m_rxBypassBtn->setVisible(false);  // hidden until setBoardCapabilities + setHpsdrSku confirm gates
     connect(m_rxBypassBtn, &QPushButton::toggled, this, [this](bool on) {
-        if (m_updatingFromModel || !m_transmitPermitted) { return; }
+        // Group B fix wave: a receive relay setting, not a key. A remote
+        // window's BYPS follows whether its Core takes it
+        // (setRxBypassPermitted), not the transmit permission.
+        if (m_updatingFromModel || !m_rxBypassPermitted) { return; }
         emit rxBypassToggled(on);
     });
     hdr->addWidget(m_rxBypassBtn);
@@ -3476,12 +3488,30 @@ void VfoWidget::setRadioModel(RadioModel* model)
     m_radioModel = model;
     if (model && model->role() == RadioModel::Role::Remote) {
         setTransmitPermitted(false);
+        // Group B fix wave: until MainWindow hears the Core takes it.
+        setRxBypassPermitted(false, QString());
         // R-R3-44: the VAX selector stays live. In a remote window it picks
         // this computer's VAX channel for the Core's slice; the remote model
         // keeps the choice on this computer (RadioModel::
         // setRemoteVaxChannelStore) and RemoteVaxRouter feeds the channel
         // from the Core's receiver stream.
     }
+}
+
+void VfoWidget::setRxBypassPermitted(bool permitted, const QString& reason)
+{
+    // Group B fix wave: BYPS (RX bypass on TX) writes the Core's
+    // AlexController through `alexAntennas` in a remote window; disabled
+    // with the reason when the Core does not take it.
+    m_rxBypassPermitted = permitted;
+    if (!m_rxBypassBtn) { return; }
+    m_rxBypassBtn->setEnabled(permitted);
+    const QString tip = permitted ? rxBypassToolTip()
+        : (reason.isEmpty()
+               ? tr("Connect to the Core to change the radio's hardware settings.")
+               : reason);
+    m_rxBypassBtn->setToolTip(tip);
+    m_rxBypassBtn->setAccessibleDescription(permitted ? QString() : tip);
 }
 
 void VfoWidget::setTransmitPermitted(bool permitted, const QString& reason)
@@ -3522,8 +3552,8 @@ void VfoWidget::updateTransmitControlAvailability()
     };
 
     // R-R3-49 (parity Task 11): XIT is not here; it writes the slice.
+    // Group B fix wave: nor is BYPS (setRxBypassPermitted).
     apply(m_txBadge);
-    apply(m_rxBypassBtn);
 }
 
 SliceModel* VfoWidget::contextMenuSliceForTest() const

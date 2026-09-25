@@ -555,10 +555,14 @@ public slots:
     // Phase 3P-I-b T9 — reflect AlexController::rxOutOnTx state into the BYPS button.
     void setRxBypassActive(bool on);
 
-    // Remote-station presentation gate.  TX-slice handoff and RX-bypass-on-TX
-    // remain displayed but cannot issue client or station work. XIT is a
-    // slice setting and does not follow it (R-R3-49, parity Task 11).
+    // Remote-station presentation gate.  TX-slice handoff remains displayed
+    // but cannot issue client or station work. XIT is a slice setting and
+    // does not follow it (R-R3-49, parity Task 11); nor does BYPS, which
+    // follows setRxBypassPermitted (group B fix wave).
     void setTransmitPermitted(bool permitted, const QString& reason = QString());
+    // Group B fix wave: whether BYPS (RX bypass on TX) may change the
+    // radio's relay setting; disabled with `reason` when not.
+    void setRxBypassPermitted(bool permitted, const QString& reason = QString());
 
     // Phase 3F closeout — non-owning RadioModel pointer used by contextMenuEvent
     // to construct an AntennaPickerMenu with the live slice, AlexController, and
@@ -737,6 +741,8 @@ private:
     bool m_hasRxOutOnTxUi{false};      // Phase 3P-I-b T9 — BYPS button gate (SKU)
     bool m_smallFilterMode{false};     // Task 3.4 — small filter display
     bool m_transmitPermitted{true};
+    // Group B fix wave: BYPS follows whether the Core takes RX bypass on TX.
+    bool m_rxBypassPermitted{true};
     QString m_transmitPermissionReason;
     void updateTransmitControlAvailability();
 

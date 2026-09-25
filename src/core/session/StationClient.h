@@ -726,6 +726,11 @@ public:
     /// Why Hardware Config edits cannot reach the Core, in plain words.
     /// Empty while remoteHardwareConfigAvailable().
     QString hardwareConfigUnavailableReason() const;
+    /// Group B fix wave (radioHardwareVersion 5): the Core takes this
+    /// window's RX bypass on TX (`rxOutOnTx` on `alexAntennas`).
+    bool remoteRxBypassOnTxAvailable() const;
+    /// Empty while remoteRxBypassOnTxAvailable().
+    QString rxBypassOnTxUnavailableReason() const;
     /// Verb "requestIoBoardProbe": probe the Core's radio's HL2 I/O board.
     CommandOutcome requestIoBoardProbe() override;
     /// R-R3-46 fix wave (radioHardwareVersion 3). Verb "setAlexRxAntenna":

@@ -3035,6 +3035,23 @@ QString StationClient::hardwareConfigUnavailableReason() const
                           "app. Updating the Core may help.");
 }
 
+bool StationClient::remoteRxBypassOnTxAvailable() const
+{
+    return remoteHardwareConfigAvailable() && m_capabilities.radioHardwareVersion >= 5;
+}
+
+QString StationClient::rxBypassOnTxUnavailableReason() const
+{
+    if (remoteRxBypassOnTxAvailable()) {
+        return {};
+    }
+    if (!remoteHardwareConfigAvailable()) {
+        return hardwareConfigUnavailableReason();
+    }
+    return QStringLiteral("This Core cannot switch its receive bypass on transmit for this "
+                          "app. Updating the Core may help.");
+}
+
 StationClient::CommandOutcome StationClient::requestAlexRxAntenna(Band band, int antenna,
                                                                   bool rxOnly)
 {

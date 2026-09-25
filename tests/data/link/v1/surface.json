@@ -208,7 +208,7 @@
         {
             "kind": "i64",
             "name": "radioHardwareVersion",
-            "value": 4
+            "value": 5
         },
         {
             "kind": "i64",
@@ -2639,7 +2639,7 @@
                     "ordinal": 5
                 },
                 {
-                    "direction": "outbound",
+                    "direction": "bidirectional",
                     "kind": "bool",
                     "name": "rxOutOnTx",
                     "ordinal": 6

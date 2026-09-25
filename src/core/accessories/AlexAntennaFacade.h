@@ -76,7 +76,9 @@ class AlexAntennaFacade final : public QObject {
     Q_PROPERTY(QString txAntennas READ txAntennas NOTIFY txAntennasChanged)
     Q_PROPERTY(bool blockTxAnt2 READ blockTxAnt2 NOTIFY blockTxAnt2Changed)
     Q_PROPERTY(bool blockTxAnt3 READ blockTxAnt3 NOTIFY blockTxAnt3Changed)
-    Q_PROPERTY(bool rxOutOnTx READ rxOutOnTx NOTIFY rxOutOnTxChanged)
+    // Group B fix wave (radioHardwareVersion 5): RX bypass on TX (the VFO
+    // flag's BYPS) is two-way, as useTxAntennaForRx is.
+    Q_PROPERTY(bool rxOutOnTx READ rxOutOnTx WRITE setRxOutOnTx NOTIFY rxOutOnTxChanged)
     Q_PROPERTY(bool ext1OutOnTx READ ext1OutOnTx NOTIFY ext1OutOnTxChanged)
     Q_PROPERTY(bool ext2OutOnTx READ ext2OutOnTx NOTIFY ext2OutOnTxChanged)
     Q_PROPERTY(bool rxOutOverride READ rxOutOverride NOTIFY rxOutOverrideChanged)
@@ -166,6 +168,10 @@ public:
     void setRxAntennas(const QString& list);
     void setRxOnlyAntennas(const QString& list);
     void setUseTxAntennaForRx(bool on);
+    /// Group B fix wave: RX bypass on TX, through the controller's
+    /// setRxOutOnTx (which clears Ext1/Ext2 out on TX, as Thetis's
+    /// chkRxOutOnTx does).
+    void setRxOutOnTx(bool on);
 
     /// One band's edit, as the whole list with that band changed.
     void setRxAnt(Band band, int ant);
