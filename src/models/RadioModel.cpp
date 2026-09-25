@@ -9252,7 +9252,7 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
     if (selectedModel == HPSDRModel::FIRST) {
         selectedModel = defaultModelForBoard(info.boardType);
     }
-    applyHpsdrModel(selectedModel);
+    applyHpsdrModel(selectedModel, info.boardType);
 
     qCDebug(lcConnection) << "HardwareProfile: model=" << displayName(m_hardwareProfile.model)
                           << "effectiveBoard=" << static_cast<int>(m_hardwareProfile.effectiveBoard)
@@ -16487,9 +16487,9 @@ void RadioModel::applyClaritySmoothDefaults()
 // HL2 / G2 / Saturn / RedPitaya unaffected because their codecs ignore
 // the model parameter (P1CodecHl2.cpp:530, P2CodecOrionMkII.cpp:436,
 // P1CodecRedPitaya.cpp:77).
-void RadioModel::applyHpsdrModel(HPSDRModel m)
+void RadioModel::applyHpsdrModel(HPSDRModel m, HPSDRHW board)
 {
-    m_hardwareProfile = ::NereusSDR::profileForModel(m);
+    m_hardwareProfile = ::NereusSDR::profileForRadio(board, m);
     m_transmitModel.setHpsdrModel(m_hardwareProfile.model);
     // Task 13: PollTXInhibit reads HardwareSpecific.Model on every pass
     // (console.cs:25855-25873 [v2.10.3.15]).

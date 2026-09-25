@@ -238,6 +238,10 @@ private slots:
         QTest::newRow("HermesLite") << 6  << 384000;
         QTest::newRow("OrionMKII")  << 10 << 192000;
         QTest::newRow("HermesC10")  << 20 << 192000;
+        // Plan Task 15: the HL2 receive-only kit (NereusSDR's board 12)
+        // resolves to the HL2 model, so its reply carries the HL2's 384 kHz
+        // (mi0bot-Thetis setup.cs:849-851 [v2.10.3.13-beta2]).
+        QTest::newRow("HermesLiteRxOnly") << 12 << 384000;
     }
 
     void p1ReplyTopRateFollowsTheBoard()
@@ -257,6 +261,31 @@ private slots:
         QVERIFY(RadioDiscovery::parseP1Reply(
             bytes, QHostAddress(QStringLiteral("192.168.1.50")), info));
         QCOMPARE(info.maxSampleRate, expected);
+    }
+
+    // Plan Task 15: the kit's receiver count is the HL2's. mi0bot sets
+    // P1_rxcount = 4 for HERMESLITE (console.cs:8409-8488 [v2.10.3.13-beta2]).
+    void p1HermesLiteRxOnlyReceiverCountIsTheHl2s()
+    {
+        auto reply = [](int boardByte) {
+            QByteArray bytes(60, '\0');
+            bytes[0] = char(0xEF);
+            bytes[1] = char(0xFE);
+            bytes[2] = char(0x02);
+            for (int i = 3; i < 9; ++i) { bytes[i] = char(0x10 + i); }
+            bytes[9]  = char(72);
+            bytes[10] = char(boardByte);
+            RadioInfo info;
+            RadioDiscovery::parseP1Reply(
+                bytes, QHostAddress(QStringLiteral("192.168.1.51")), info);
+            return info;
+        };
+        const RadioInfo kit = reply(12);
+        const RadioInfo hl2 = reply(6);
+        QCOMPARE(kit.boardType, HPSDRHW::HermesLiteRxOnly);
+        QCOMPARE(kit.maxReceivers, 4);
+        QCOMPARE(kit.maxReceivers, hl2.maxReceivers);
+        QCOMPARE(kit.adcCount, hl2.adcCount);
     }
 
     // --- P1: ANAN-G2E (HermesC10) ---

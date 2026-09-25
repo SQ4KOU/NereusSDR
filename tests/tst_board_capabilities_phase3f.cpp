@@ -11,6 +11,7 @@
 #include <QtTest/QtTest>
 #include "core/BoardCapabilities.h"
 #include "core/DdcAssignment.h"
+#include "core/HardwareProfile.h"
 #include "core/HpsdrModel.h"
 #include "core/codec/CodecContext.h"
 #include "core/codec/P1CodecAnvelinaPro3.h"
@@ -411,21 +412,18 @@ private slots:
         }
     }
 
-    // ── Plan Task 5: offered sample rates per board and protocol ────────
+    // ── Plan Tasks 5 and 15: offered sample rates per board and protocol ─
     //
     // Every model, and every row no model reaches, on both protocols. The
-    // expected lists are Thetis's (setup.cs:847-851 [v2.10.3.15]): Protocol 1
+    // expected lists are Thetis's (setup.cs:847-850 [v2.10.3.15]): Protocol 1
     // 48/96/192 kHz, plus 384 kHz for the RedPitaya
     //   bool include_extra_p1_rate = HardwareSpecific.Model == HPSDRModel.REDPITAYA; //DH1KLM
-    // and for the HL2 (mi0bot-Thetis setup.cs:849-851 [v2.10.3.13-beta2]);
-    // Protocol 2 48 to 1536 kHz.
-    //
-    // Where a row caps Protocol 2 below Thetis's list the row is not this
-    // task's to change (the operator's ruling covers the ANAN-100D and
-    // ANAN-200D only), and the entry below says so. Those rows are
-    // Protocol 1 boards (Atlas, Hermes, HermesII, HL2) whose Protocol 2
-    // ladder the table has never carried. Pinned here as they stand, so
-    // this test fails if any board's offered rates move.
+    // and for the HL2 (mi0bot-Thetis setup.cs:849-851 [v2.10.3.13-beta2],
+    // "The HL supports 384K"); Protocol 2 48 to 1536 kHz for every model,
+    // the HL2 included (mi0bot's p2_rates, setup.cs:854 [v2.10.3.13-beta2],
+    // has no HL2 case). No row is excepted (Task 15, the operator's ruling
+    // of 2026-09-25: the Atlas, Hermes, HermesII and HL2 rows follow Thetis
+    // on Protocol 2 too).
     void offered_sample_rates_per_board_and_protocol_data()
     {
         const QList<int> p1 {48000, 96000, 192000};
@@ -441,14 +439,12 @@ private slots:
                       const QList<int>& b) {
             QTest::newRow(name) << int(boardForModel(m)) << int(m) << a << b;
         };
-        // Row caps Protocol 2 at 192 kHz (Thetis: 48-1536). Unchanged.
-        row("HPSDR",        HPSDRModel::HPSDR,        p1, p1);
-        row("HERMES",       HPSDRModel::HERMES,       p1, p1);
-        row("ANAN10",       HPSDRModel::ANAN10,       p1, p1);
-        row("ANAN100",      HPSDRModel::ANAN100,      p1, p1);
-        row("ANAN10E",      HPSDRModel::ANAN10E,      p1, p1);
-        row("ANAN100B",     HPSDRModel::ANAN100B,     p1, p1);
-        // The operator's ruling of 2026-09-24: Thetis's values per protocol.
+        row("HPSDR",        HPSDRModel::HPSDR,        p1, p2);
+        row("HERMES",       HPSDRModel::HERMES,       p1, p2);
+        row("ANAN10",       HPSDRModel::ANAN10,       p1, p2);
+        row("ANAN100",      HPSDRModel::ANAN100,      p1, p2);
+        row("ANAN10E",      HPSDRModel::ANAN10E,      p1, p2);
+        row("ANAN100B",     HPSDRModel::ANAN100B,     p1, p2);
         row("ANAN100D",     HPSDRModel::ANAN100D,     p1, p2);
         row("ANAN200D",     HPSDRModel::ANAN200D,     p1, p2);
         row("ORIONMKII",    HPSDRModel::ORIONMKII,    p1, p2);
@@ -459,19 +455,37 @@ private slots:
         row("ANVELINAPRO3", HPSDRModel::ANVELINAPRO3, p1, p2);
         row("REDPITAYA",    HPSDRModel::REDPITAYA,    p1Extra, p2);
         row("ANAN_G2E",     HPSDRModel::ANAN_G2E,     p1, p2);
-        // Row caps Protocol 2 at 384 kHz (Thetis: 48-1536). Unchanged.
-        row("HERMESLITE",   HPSDRModel::HERMESLITE,   p1Extra, p1Extra);
+        row("HERMESLITE",   HPSDRModel::HERMESLITE,   p1Extra, p2);
 
         // Rows no model resolves to, with the model defaultModelForBoard
-        // gives them on connect. The HL2 RX-only row gets HERMES, so it
-        // misses the HL2's 384 kHz on Protocol 1; unchanged, noted in the
-        // Task 5 report.
+        // gives them on connect. The HL2 receive-only kit is an HL2
+        // (mi0bot has one HL2 model, HERMESLITE), so it gets the HL2's
+        // 384 kHz on Protocol 1.
         QTest::newRow("HermesLiteRxOnly")
-            << int(HPSDRHW::HermesLiteRxOnly) << int(HPSDRModel::HERMES) << p1 << p1Extra;
+            << int(HPSDRHW::HermesLiteRxOnly) << int(HPSDRModel::HERMESLITE) << p1Extra << p2;
         QTest::newRow("SaturnMKII")
             << int(HPSDRHW::SaturnMKII) << int(HPSDRModel::ANAN_G2) << p1 << p2;
         QTest::newRow("Andromeda")
             << int(HPSDRHW::Andromeda) << int(HPSDRModel::HERMES) << p1 << p2;
+    }
+
+    // Every row, with the model a connect resolves it to, offers Thetis's
+    // list for each protocol (mi0bot's for the HL2): no row excepted.
+    void every_row_offers_the_protocol_list()
+    {
+        const std::vector<int> p1 {48000, 96000, 192000};
+        const std::vector<int> p1Extra {48000, 96000, 192000, 384000};
+        const std::vector<int> p2 {48000, 96000, 192000, 384000, 768000, 1536000};
+        for (const auto& caps : BoardCapsTable::all()) {
+            if (caps.board == HPSDRHW::Unknown) { continue; }
+            const HPSDRModel m = defaultModelForBoard(caps.board);
+            const bool extra = (m == HPSDRModel::HERMESLITE || m == HPSDRModel::REDPITAYA);
+            QVERIFY2(BoardCapsTable::sampleRatesFor(caps, ProtocolVersion::Protocol1, m)
+                         == (extra ? p1Extra : p1),
+                     caps.displayName);
+            QVERIFY2(BoardCapsTable::sampleRatesFor(caps, ProtocolVersion::Protocol2, m) == p2,
+                     caps.displayName);
+        }
     }
 
     void offered_sample_rates_per_board_and_protocol()

@@ -2471,8 +2471,9 @@ public:
     // Mirrors P1RadioConnection::setBoardForTest pattern.
     void runAutoAgcTickForTest() { updateAutoAgc(); }
     void setBoardForTest(HPSDRHW board) {
-        m_hardwareProfile = ::NereusSDR::profileForModel(
-            defaultModelForBoard(board));
+        // Plan Task 15: profileForRadio, as connectToRadio builds it.
+        m_hardwareProfile = ::NereusSDR::profileForRadio(
+            board, defaultModelForBoard(board));
     }
 
     // Phase 3P-I-a T14 — test-only hooks. Allow tests to inject a mock
@@ -3825,8 +3826,11 @@ private:
     // → PsccPump never activates → PureSignal correction never
     // lands).  Called from connectToRadio() and the test-only
     // setHpsdrModelForTest() seam so production and tests stay in
-    // sync.
-    void applyHpsdrModel(HPSDRModel m);
+    // sync. Plan Task 15: the board is the radio's own (RadioInfo::boardType)
+    // so the HL2 receive-only kit keeps its row under the HL2 model
+    // (profileForRadio); the test seam passes Unknown, which is
+    // profileForModel(m) exactly.
+    void applyHpsdrModel(HPSDRModel m, HPSDRHW board = HPSDRHW::Unknown);
 
     // Pushes AlexController's per-band antenna state to the connection.
     // Full port of Thetis HPSDR/Alex.cs:310-413 UpdateAlexAntSelection.
