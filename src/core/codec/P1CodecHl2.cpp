@@ -926,10 +926,20 @@ DdcAssignment P1CodecHl2::applyDdcAssignment(
             a.rate[1] = rx1Rate;
             a.adcCtrl1 = 4;
             a.adcCtrl2 = 0;
-            // PS DDC pair indices (same as applyPureSignalDdcConfig — psFbDdc=2, txMonDdc=3).
-            // From mi0bot networkproto1.c:549-553 [v2.10.3.13-beta2].
-            a.psFwdDdc = 0;
-            a.psRevDdc = 1;
+            // PS DDC pair indices, the same pair applyPureSignalDdcConfig
+            // emits as psFbDdc / txMonDdc. DDC0 stays slice A's receiver.
+            // From mi0bot console.cs:8733-8762 [@c26a8a4] GetDDC(), P1 branch:
+            //   case HPSDRHW.HermesLite: // MI0BOT: Hermes Lite 2
+            //   ...
+            //   case 5: // on off on
+            //       rx1 = 0; rx2 = 1; psrx = 2; pstx = 3;
+            // From mi0bot ChannelMaster/networkproto1.c:549-553 [@c26a8a4]
+            // (the read loop pairs the same two slots for nddc == 4):
+            //   case 4:
+            //       xrouter(0, 0, 0, spr, prn->RxBuff[0]);
+            //       twist(spr, 2, 3, 1);
+            a.psFwdDdc = 2;  // psrx = 2, PS feedback
+            a.psRevDdc = 3;  // pstx = 3, TX monitor
         }
     }
 

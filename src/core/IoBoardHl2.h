@@ -326,6 +326,9 @@ signals:
     // bank-0 OC byte changes (band switch or MOX flip).  Drives the live OC
     // pin grid + hex label on the HL2 I/O Board diagnostic page so the user
     // can see exactly which OC pins are active for the current band/MOX state.
+    // Plan Task 14 fix wave: the displays now read RadioModel::bandOutputsByte
+    // (every connection reports it, and a remote window gets the Core's);
+    // this signal is still emitted beside the Core's "HL2 ocByte=" log line.
     void currentOcByteChanged(quint8 ocByte, int bandIdx, bool mox);
 
 private:

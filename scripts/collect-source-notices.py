@@ -38,10 +38,12 @@ LIBRARY is one of the presets: fftw3, rade, opus, r8brain, rnnoise,
 libspecbleach, wdsp, and the fetched libraries portaudio, libdatachannel,
 libjuice, usrsctp, libsrtp, plog, nlohmann-json, libsodium and spake2-ee. rnnoise and
 libspecbleach read the FetchContent sources under --build-dir/_deps. The
-fetched libraries need --build-dir to be a built tree: they read its
-compile_commands.json for the files the build compiled and each file's
-include path (libjuice, usrsctp, libsrtp, plog and json are built from
-the copies under nereus_libdatachannel-src/deps/). opus needs
+fetched libraries need --build-dir to be a configured tree for their
+sources only: the files surveyed are the ones any supported platform
+compiles, read from each library's own CMake lists, so the output does not
+depend on which platform's tree is given (libjuice, usrsctp, libsrtp, plog
+and json are built from the copies under nereus_libdatachannel-src/deps/).
+opus needs
 --opus-source, an extracted Opus source tree at the pinned commit (a
 built tree has one at
 <build>/third_party/rade/build_opus-prefix/src/build_opus).
@@ -56,9 +58,7 @@ Exit 0 on success, 1 on a --check mismatch, 2 on a usage error.
 from __future__ import annotations
 
 import argparse
-import json
 import re
-import shlex
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -410,31 +410,101 @@ def _wdsp(root: Path, _args: argparse.Namespace) -> SourceSet:
                      files, ["wdsp.txt", "GPLv2.txt"])
 
 
-def _compile_entries(build: Path) -> list[tuple[Path, list[Path]]]:
-    """(source file, include directories) for every compile command."""
-    path = build / "compile_commands.json"
-    if not path.is_file():
-        raise SystemExit(f"{path} is missing; configure and build the tree first")
-    entries: list[tuple[Path, list[Path]]] = []
-    for entry in json.loads(path.read_text(encoding="utf-8")):
-        args = entry.get("arguments") or shlex.split(entry["command"])
-        directory = Path(entry["directory"])
-        dirs: list[Path] = []
-        i = 0
-        while i < len(args):
-            arg = args[i]
-            value = None
-            for flag in ("-I", "-isystem", "-iquote"):
-                if arg == flag and i + 1 < len(args):
-                    value = args[i + 1]
+# ---------------------------------------------------------------------------
+# Fetched libraries: every source any supported platform compiles, read from
+# the library's own CMake lists, so every machine writes the same file.
+
+_CMAKE_IF_RE = re.compile(r"^\s*(if|elseif|else|endif)\s*\((.*)\)\s*$", re.IGNORECASE)
+
+
+def _cmake_lines(cmake_text: str) -> list[str]:
+    return [line.split("#", 1)[0] for line in cmake_text.splitlines()]
+
+
+def cmake_keep_branch(cmake_text: str, condition: str) -> str:
+    """The CMake text with each if/elseif/else chain that tests `condition`
+    reduced to that branch's body. Every other chain keeps all its branches,
+    so a list set on any platform is read. Comments are dropped."""
+    lines = _cmake_lines(cmake_text)
+
+    def parse(i: int, top: bool) -> tuple[list, int]:
+        nodes: list = []
+        while i < len(lines):
+            match = _CMAKE_IF_RE.match(lines[i])
+            keyword = match.group(1).lower() if match else ""
+            if keyword == "if":
+                branches = [(match.group(2).strip(), [])]
+                i += 1
+                while True:
+                    body, i = parse(i, False)
+                    branches[-1][1].extend(body)
+                    if i >= len(lines):
+                        break
+                    inner = _CMAKE_IF_RE.match(lines[i])
+                    kw = inner.group(1).lower()
                     i += 1
-                elif arg.startswith(flag) and len(arg) > len(flag) and flag == "-I":
-                    value = arg[2:]
-            if value is not None:
-                dirs.append((directory / value).resolve())
-            i += 1
-        entries.append(((directory / entry["file"]).resolve(), dirs))
-    return entries
+                    if kw == "endif":
+                        break
+                    branches.append((inner.group(2).strip() if kw == "elseif" else None, []))
+                nodes.append(branches)
+            elif keyword in ("elseif", "else", "endif") and not top:
+                return nodes, i
+            else:
+                nodes.append(lines[i])
+                i += 1
+        return nodes, i
+
+    def render(nodes: list) -> list[str]:
+        out: list[str] = []
+        for node in nodes:
+            if isinstance(node, str):
+                out.append(node)
+                continue
+            chosen = [body for cond, body in node if cond == condition]
+            for body in (chosen or [body for _cond, body in node]):
+                out.extend(render(body))
+        return out
+
+    nodes, _ = parse(0, True)
+    return "\n".join(render(nodes))
+
+
+def cmake_values(cmake_text: str, variable: str) -> list[str]:
+    """Words given to `variable` by every set(VARIABLE ...) and
+    list(APPEND VARIABLE ...) in the text, in order, commands matched in
+    any case. References to other variables are left out."""
+    body = "\n".join(_cmake_lines(cmake_text))
+    pattern = re.compile(
+        rf"\b(?:set\s*\(\s*|list\s*\(\s*APPEND\s+){re.escape(variable)}\b([^)]*)\)",
+        re.IGNORECASE)
+    words: list[str] = []
+    for match in pattern.finditer(body):
+        words.extend(w for w in match.group(1).split() if not w.startswith("${") or
+                     w.startswith("${CMAKE_CURRENT_SOURCE_DIR}/"))
+    return words
+
+
+def cmake_sources(cmake_file: Path, variables: list[str], keep: str | None = None
+                  ) -> list[Path]:
+    """The C/C++ files the named lists of a CMake file compile, relative to
+    that file's directory. keep names the option branch this build takes
+    (cmake_keep_branch); without it every branch is read."""
+    text = read_source(cmake_file)
+    if keep is not None:
+        text = cmake_keep_branch(text, keep)
+    base = cmake_file.parent
+    files: list[Path] = []
+    for variable in variables:
+        values = cmake_values(text, variable)
+        if not values:
+            raise SystemExit(f"{variable} not found in {cmake_file}")
+        for word in values:
+            word = word.replace("${CMAKE_CURRENT_SOURCE_DIR}/", "")
+            if word.endswith((".c", ".cc", ".cpp")):
+                path = base / word
+                if path not in files:
+                    files.append(path)
+    return files
 
 
 def _within(path: Path, root: Path) -> bool:
@@ -445,85 +515,105 @@ def _within(path: Path, root: Path) -> bool:
     return True
 
 
-def _from_build(build: Path, keep: Path, seeds: Path,
-                extra: list[str] | None = None,
-                extra_dirs: list[str] | None = None) -> list[Path]:
-    """Files under keep that the build compiled, or that the compiled files
-    under seeds include, resolved with each command's own include path.
-    extra adds sources (relative to keep) other platforms compile."""
+def _in_tree(sources: list[Path], include_dirs: list[Path], keep: Path) -> list[Path]:
+    """The sources and the headers they include, kept to the files under keep."""
     keep = keep.resolve()
-    seeds = seeds.resolve()
-    found: set[Path] = set()
-    for source, dirs in _compile_entries(build):
-        if not _within(source, seeds):
-            continue
-        for path in resolve_includes([source], dirs):
-            if _within(path, keep):
-                found.add(path)
-    if extra:
-        dirs = [keep / d for d in (extra_dirs or [])]
-        for path in resolve_includes([keep / name for name in extra], dirs):
-            if _within(path, keep):
-                found.add(path)
-    return sorted(found)
+    return [p for p in resolve_includes(sources, include_dirs) if _within(p, keep)]
 
 
-def _need_build(args: argparse.Namespace) -> Path:
-    if args.build_dir is None:
-        raise SystemExit("this library needs --build-dir (a built tree)")
-    return args.build_dir.resolve()
+# The fetched libraries are read from their FetchContent sources under
+# --build-dir/_deps. Those sources are pinned by hash, so they are the same
+# on every platform; only the lists below decide what is surveyed, never
+# what the given tree happened to compile.
 
-
-# PortAudio host API and platform sources the Windows and Linux packages
-# compile (portaudio-src/CMakeLists.txt at v19.7.0 with NereusSDR's options:
-# ASIO off; MME, DirectSound, WASAPI and WDM-KS on Windows; ALSA and JACK
-# on Linux). A macOS build tree lists only the CoreAudio ones.
-_PORTAUDIO_OTHER_PLATFORMS = [
-    "src/os/win/pa_win_hostapis.c", "src/os/win/pa_win_util.c",
-    "src/os/win/pa_win_waveformat.c", "src/os/win/pa_win_wdmks_utils.c",
-    "src/os/win/pa_win_coinitialize.c", "src/os/win/pa_x86_plain_converters.c",
-    "src/hostapi/dsound/pa_win_ds.c", "src/hostapi/dsound/pa_win_ds_dynlink.c",
-    "src/hostapi/wmme/pa_win_wmme.c", "src/hostapi/wasapi/pa_win_wasapi.c",
-    "src/hostapi/wdmks/pa_win_wdmks.c",
-    "src/os/unix/pa_unix_hostapis.c", "src/os/unix/pa_unix_util.c",
-    "src/hostapi/alsa/pa_linux_alsa.c", "src/hostapi/jack/pa_jack.c",
+# PortAudio v19.7.0 (portaudio-src/CMakeLists.txt): the common and skeleton
+# sources and every host API a supported platform builds with NereusSDR's
+# options (CMakeLists.txt forces PA_USE_ASIO OFF and, on Linux, ALSA and
+# JACK ON): the Windows platform sources (with the MSVC-only x86 plain
+# converters), DirectSound, MME, WASAPI and WDM-KS; the Unix platform
+# sources; CoreAudio; JACK and ALSA. PA_ASIO_SOURCES and PA_ASIOSDK_SOURCES
+# are not read.
+_PORTAUDIO_LISTS = [
+    "PA_COMMON_SOURCES", "PA_SKELETON_SOURCES", "PA_PLATFORM_SOURCES",
+    "PA_DS_SOURCES", "PA_WMME_SOURCES", "PA_WASAPI_SOURCES", "PA_WDMKS_SOURCES",
+    "PA_COREAUDIO_SOURCES", "PA_JACK_SOURCES", "PA_ALSA_SOURCES",
 ]
+# PA_PRIVATE_INCLUDE_PATHS on every platform, plus the public headers.
+_PORTAUDIO_INCLUDES = ["include", "src/common", "src/os/win", "src/os/unix"]
 
 
 def _portaudio(_root: Path, args: argparse.Namespace) -> SourceSet:
-    build = _need_build(args)
-    base = build / "_deps/portaudio-src"
-    files = _from_build(build, base, base, _PORTAUDIO_OTHER_PLATFORMS,
-                        ["include", "src/common", "src/os/win", "src/os/unix"])
+    base = _deps(args, "portaudio")
+    sources = cmake_sources(base / "CMakeLists.txt", _PORTAUDIO_LISTS)
+    files = _in_tree(sources, [base / d for d in _PORTAUDIO_INCLUDES], base)
     return SourceSet("PortAudio", base, "portaudio", "v19.7.0", files,
-                     ["portaudio.txt"], regen=" --build-dir <a built tree>")
+                     ["portaudio.txt"], regen=" --build-dir <a configured build>")
+
+
+# libdatachannel v0.24.5 (CMakeLists.txt): add_library(datachannel) compiles
+# LIBDATACHANNEL_SOURCES and LIBDATACHANNEL_IMPL_SOURCES on every platform
+# (NO_WEBSOCKET and NO_MEDIA only set compile definitions). Its include path
+# is its own include, include/rtc and src, plus the headers of the
+# dependencies it links (target_include_directories and the deps' public
+# include directories).
+_DATACHANNEL_INCLUDES = [
+    "include", "include/rtc", "src", "deps/usrsctp/usrsctplib", "deps/plog/include",
+    "deps/libsrtp/crypto/include", "deps/libsrtp/include", "deps/libjuice/include",
+]
+
+
+def _datachannel(args: argparse.Namespace) -> tuple[Path, list[Path], list[Path]]:
+    """libdatachannel's tree, its compiled sources and its include path."""
+    dc = _deps(args, "nereus_libdatachannel")
+    sources = cmake_sources(dc / "CMakeLists.txt",
+                            ["LIBDATACHANNEL_SOURCES", "LIBDATACHANNEL_IMPL_SOURCES"])
+    return dc, sources, [dc / d for d in _DATACHANNEL_INCLUDES]
+
+
+# The libraries libdatachannel builds from its deps/<name> copies
+# (NereusRemoteMedia.cmake copies each fetched source there): the CMake
+# file and lists that compile each one, the option branch taken (libSRTP's
+# crypto engine: libdatachannel turns ENABLE_OPENSSL on because NereusSDR
+# sets USE_GNUTLS and USE_MBEDTLS OFF on every platform), and its include
+# path. Every one is also searched from libdatachannel's own sources, which
+# include their public headers; plog and json are header-only and reached
+# only that way.
+_DATACHANNEL_DEPS = {
+    "libjuice": ("CMakeLists.txt", ["LIBJUICE_SOURCES"], None,
+                 ["include", "include/juice", "src"]),
+    "usrsctp": ("usrsctplib/CMakeLists.txt", ["usrsctp_sources"], None, ["usrsctplib"]),
+    "libsrtp": ("CMakeLists.txt",
+                ["SOURCES_C", "CIPHERS_SOURCES_C", "HASHES_SOURCES_C", "KERNEL_SOURCES_C",
+                 "MATH_SOURCES_C", "REPLAY_SOURCES_C"],
+                "ENABLE_OPENSSL", ["crypto/include", "include"]),
+}
 
 
 def _datachannel_dep(name: str, library: str, pin: str, texts: list[str]):
-    """A library libdatachannel builds from its deps/<name> copy.
-
-    NereusRemoteMedia.cmake copies each fetched source into
-    nereus_libdatachannel-src/deps/<name> and builds it from there; the
-    header-only ones (plog, json) are reached through libdatachannel's
-    includes, so every compiled libdatachannel file seeds the search."""
+    """A library libdatachannel builds from its deps/<name> copy."""
     def preset(_root: Path, args: argparse.Namespace) -> SourceSet:
-        build = _need_build(args)
-        dc = build / "_deps/nereus_libdatachannel-src"
+        dc, dc_sources, dc_includes = _datachannel(args)
         base = dc / "deps" / name
-        files = _from_build(build, base, dc)
+        # Its headers libdatachannel's own sources include (usrsctp.h is
+        # reached only that way), plus its own compiled sources.
+        found = set(_in_tree(dc_sources, dc_includes, base))
+        if name in _DATACHANNEL_DEPS:
+            cmake, lists, keep, includes = _DATACHANNEL_DEPS[name]
+            sources = cmake_sources(base / cmake, lists, keep)
+            found.update(_in_tree(sources, [base / d for d in includes], base))
+        files = sorted(found)
         return SourceSet(library, base, name, pin, files, texts,
-                         regen=" --build-dir <a built tree>")
+                         regen=" --build-dir <a configured build>")
     return preset
 
 
 def _libdatachannel(_root: Path, args: argparse.Namespace) -> SourceSet:
-    build = _need_build(args)
-    base = build / "_deps/nereus_libdatachannel-src"
-    files = [f for f in _from_build(build, base, base)
-             if not _within(f, (base / "deps").resolve())]
-    return SourceSet("libdatachannel", base, "libdatachannel", "v0.24.5", files,
+    dc, sources, includes = _datachannel(args)
+    files = [f for f in _in_tree(sources, includes, dc)
+             if not _within(f, (dc / "deps").resolve())]
+    return SourceSet("libdatachannel", dc, "libdatachannel", "v0.24.5", files,
                      ["libdatachannel.txt", "MPLv2.txt"],
-                     regen=" --build-dir <a built tree>")
+                     regen=" --build-dir <a configured build>")
 
 
 def _fftw3(root: Path, _args: argparse.Namespace) -> SourceSet:

@@ -2122,18 +2122,18 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
             // Phase 3F Sub-Epic J Task 11: resolved through RadioModel's
             // accessor rather than wdspEngine()->rxChannel() directly --
             // src/gui/ no longer reaches into WdspEngine for a channel.
-            if (RxChannel* ch = m_radioModel->rxChannelForSlice(slice->sliceIndex())) {
-                ch->setShiftFrequency(0.0);
-            }
+            // The model and WDSP together (R-R3-49): the pan now sits on
+            // the slice, so its offset is zero in both halves.
+            m_radioModel->applySliceStreamCentre(slice, hz);
             if (wasCtun && m_radioModel->receiverManager()) {
                 m_radioModel->receiverManager()->setDdcFrequencyLocked(true);
             }
             m_handlingBandJump = false;
         } else {
             // CTUN, still on-screen: the DDC stays put and WDSP shifts.
-            if (RxChannel* ch = m_radioModel->rxChannelForSlice(slice->sliceIndex())) {
-                ch->setShiftFrequency(hz - center);
-            }
+            // Written to the model and WDSP together (R-R3-49), so the
+            // slice's shiftOffsetHz names the centre the demodulator uses.
+            m_radioModel->applySliceStreamCentre(slice, center);
         }
         host->setVfoFrequency(hz);
     };
@@ -5598,11 +5598,6 @@ void MainWindow::buildUI()
         });
     }
 
-    // Phase 3F Sub-Epic C Task 8: toast on slice-add rejection.
-    // RadioModel::addSliceOnPan() emits sliceAddRejected(reason) when the
-    // SKU cap blocks a +RX click (e.g. "Hermes Lite 2 supports a maximum
-    // of 1 slices"). Surface that for 4 seconds so the operator sees why
-    // the click did nothing.
     connect(m_radioModel, &RadioModel::settingsSaveErrorChanged, this,
             [this](const QString& reason) {
         if (!reason.isEmpty()) {
@@ -5612,6 +5607,11 @@ void MainWindow::buildUI()
             showToast(OperatorReasonText::forDisplay(reason), ToastSeverity::Error, 10000);
         }
     });
+    // Phase 3F Sub-Epic C Task 8: toast on slice-add rejection.
+    // RadioModel::addSliceOnPan() and addSlice() emit sliceAddRejected(reason)
+    // when the slice limit blocks a +RX click (e.g. "Hermes Lite 2 supports
+    // a maximum of 1 slice"). Surface that for 4 seconds so the operator
+    // sees why the click did nothing.
     connect(m_radioModel, &RadioModel::sliceAddRejected, this,
             [this](const QString& reason) {
         // A remote window's refusal is the Core's text; shown in user words.
@@ -12221,8 +12221,10 @@ void MainWindow::showPanLayoutDialog()
     // userDdcCount=2) can never fill more than 2 independent pans even
     // though it can host 5 slices total. Gating on maxSlices alone showed
     // tiles the board could paint but never fill (final-fix-wave finding 2).
+    // userStreamCount() is the one stream count (plan Task 11): it knows the
+    // protocol (four on Protocol 1) and, on a remote window, the Core's.
     const auto& caps = m_radioModel->boardCapabilities();
-    const int maxPanCount = qMin(caps.maxSlices, caps.userDdcCount);
+    const int maxPanCount = qMin(caps.maxSlices, m_radioModel->userStreamCount());
     const QString boardName = m_radioModel->name();
     PanLayoutDialog dlg(maxPanCount,
                         m_panStack ? m_panStack->currentLayoutId()

@@ -22,9 +22,11 @@ The check fails, printing one line per problem, when:
      names no notice file at all);
   4. a text file in the folder is named by no row;
   5. deepfilternet-crates.txt names a DeepFilterNet commit other than the
-     one in third_party/deepfilter/COMMIT (or names none). The release
-     path downloads a prebuilt library and never regenerates the file, so
-     the committed file must match the pinned commit.
+     one in third_party/deepfilter/COMMIT (or names none), or either setup
+     script (setup-deepfilter.sh's DFNR_COMMIT, setup-deepfilter.ps1's
+     $DfnrCommit) pins another commit, names none or is missing. The
+     release path downloads a prebuilt library and never regenerates the
+     file, so the committed file must match the commit both scripts build.
 
 Exceptions go only through EXCEPTED_SOURCES and EXCEPTED_TEXTS below, each
 with its reason.
@@ -66,6 +68,15 @@ _FETCH_RE = re.compile(
     r"\b(FetchContent_Declare|ExternalProject_Add)\s*\(\s*([A-Za-z0-9_.+-]+)")
 _TICK_RE = re.compile(r"`([^`]+)`")
 _CRATE_COMMIT_RE = re.compile(r"^DeepFilterNet commit: (\S+)$", re.MULTILINE)
+
+# The DeepFilterNet pin in each setup script: the file, and the assignment
+# that holds it (DFNR_COMMIT="<sha>" / $DfnrCommit = "<sha>").
+DEEPFILTER_SETUP_PINS: tuple[tuple[Path, re.Pattern[str]], ...] = (
+    (Path("setup-deepfilter.sh"),
+     re.compile(r'^\s*DFNR_COMMIT\s*=\s*"?([0-9A-Za-z]+)"?\s*$', re.MULTILINE)),
+    (Path("setup-deepfilter.ps1"),
+     re.compile(r'^\s*\$DfnrCommit\s*=\s*"([0-9A-Za-z]+)"\s*$', re.MULTILINE)),
+)
 
 
 def _split_row(line: str) -> list[str]:
@@ -229,6 +240,25 @@ def check(root: Path) -> tuple[list[str], str]:
                 f"{CRATE_NOTICES.as_posix()} was generated from DeepFilterNet "
                 f"{found.group(1)}, but {DEEPFILTER_COMMIT.as_posix()} pins "
                 f"{pinned}; regenerate it with setup-deepfilter.sh")
+        # The setup scripts build that commit: both must pin it.
+        for script, pin_re in DEEPFILTER_SETUP_PINS:
+            path = root / script
+            if not path.is_file():
+                problems.append(
+                    f"{script.as_posix()} is missing; it must pin DeepFilterNet "
+                    f"{pinned} as {DEEPFILTER_COMMIT.as_posix()} does")
+                continue
+            pins = pin_re.findall(path.read_text(encoding="utf-8", errors="replace"))
+            if not pins:
+                problems.append(
+                    f"{script.as_posix()} names no DeepFilterNet commit; it must "
+                    f"pin {pinned} as {DEEPFILTER_COMMIT.as_posix()} does")
+            for other in sorted(set(pins) - {pinned}):
+                problems.append(
+                    f"{script.as_posix()} pins DeepFilterNet {other}, but "
+                    f"{DEEPFILTER_COMMIT.as_posix()} pins {pinned}; the two "
+                    f"setup scripts, the COMMIT file and "
+                    f"{CRATE_NOTICES.as_posix()} must name one commit")
 
     summary = (f"third-party licences: {library_count} libraries, "
                f"{len(named)} named files, all present")

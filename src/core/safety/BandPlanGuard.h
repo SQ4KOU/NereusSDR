@@ -16,6 +16,10 @@
 //   2026-04-25 — Ported to C++20/Qt6 for NereusSDR by J.J. Boyd
 //                (KG4VCF), with AI-assisted transformation via
 //                Anthropic Claude Code.
+//   2026-09-24: Receiver and transmit gaps plan, Task 7 follow-up, by
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                Code: MoxCheckResult::notQueued (R-R3-36).
+//                NereusSDR-original.
 // =================================================================
 
 // --- From console.cs ---
@@ -196,6 +200,12 @@ public:
     struct MoxCheckResult {
         bool    ok;
         QString reason; ///< empty when ok==true
+        /// R-R3-36: a refusal that is never queued. A source still held
+        /// after it is not tried again until its level drops and it is
+        /// pressed again. Set only by the microphone-ready refusal; the
+        /// band-plan and interlock refusals keep Thetis's retry on every
+        /// PollPTT pass. NereusSDR-native.
+        bool    notQueued{false};
     };
 
     MoxCheckResult checkMoxAllowed(Region region, std::int64_t freqHz,

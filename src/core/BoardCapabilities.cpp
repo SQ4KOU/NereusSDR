@@ -16,6 +16,17 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-24 - Receiver and transmit gaps plan, Task 11: the Protocol 1
+//                 stream count per board row and protocol, by J.J. Boyd
+//                 (KG4VCF), with AI-assisted transformation via Anthropic
+//                 Claude Code.
+//   2026-09-25 - Receiver and transmit gaps plan, Task 5: sample rates and
+//                 wideband ADCs per board row and protocol (Thetis
+//                 setup.cs:847-851, networkproto1.c:181-201,
+//                 console.cs:43552-43558 [v2.10.3.15]; mi0bot HL2 384 kHz);
+//                 ANAN-100D / ANAN-200D rows cover both protocols, by
+//                 J.J. Boyd (KG4VCF), with AI-assisted transformation via
+//                 Anthropic Claude Code.
 //   2026-09-24 — HL2 preamp items take mi0bot's HERMES/HERMESLITE branch
 //                 (console.cs:41709-41718 [v2.10.3.13-beta2]): on/off plus
 //                 the Alex items when Alex is present. J.J. Boyd (KG4VCF),
@@ -272,6 +283,9 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 */
 
 #include "BoardCapabilities.h"
+#include "SampleRateCatalog.h"
+
+#include <algorithm>
 
 namespace NereusSDR {
 namespace {
@@ -463,7 +477,7 @@ const BoardCapabilities kHermesII = {
 // ─── Angelia (ANAN-100D) ────────────────────────────────────────────────────
 // Source: network.h:451 (Angelia=3), clsHardwareSpecific.cs:129-134
 // Upstream tags preserved: //N1GP (from cited network.h:446) [v2.10.3.15]
-// ADC: SetRxADC(2) — dual ADC. Protocol 1.
+// ADC: SetRxADC(2), dual ADC. Protocol 1 or Protocol 2 firmware (plan Task 5).
 // Diversity + PureSignal: yes (2 ADCs, console.cs GetDDC P1 Angelia branch:8680)
 // maxReceivers: 7 (P1 dual-ADC limit, console.cs GetDDC Angelia branch)
 // TODO(3I-T2): verify firmware versions
@@ -483,14 +497,33 @@ const BoardCapabilities kAngelia = {
     .maxReceivers     = 7,
     .maxSlices        = 5,   // Phase 3F: Angelia 5-slice cap (2-ADC, 7 DDCs; DDC0+1 reserved for PS+Div)
     .userDdcCount     = 5,   // Phase 3F Sub-Epic I: Angelia user DDCs = DDC2-6 (design doc §2)
-    .widebandAdcs     = 0,   // Phase 3F: P1 board — wideband mechanism differs; deferred to 3F-W
-                             // Was 2, which contradicted every other Protocol1 row and this
-                             // row's own .protocol field. NereusSDR has no P1 wideband receive
-                             // path, so advertising ADCs for it let extended view bypass the
-                             // Alex preselector for a stream that never arrives, losing receive
-                             // filtering for nothing. (Codex review round 5, PR #293.)
-    .sampleRates      = {48000, 96000, 192000, 384000, 0, 0},
-    .maxSampleRate    = 384000,
+    // The board runs Protocol 1 or Protocol 2 firmware, and this row serves
+    // both (P2 discovery maps board byte 3 here). Plan Task 5, the
+    // operator's ruling of 2026-09-24 ("follow thetis"): each protocol gets
+    // Thetis's values, and BoardCapsTable::widebandAdcsFor /
+    // sampleRatesFor trim the row to the protocol in use.
+    //
+    // Wideband: none on Protocol 1 (widebandAdcsFor gives 0; Thetis
+    // networkproto1.c:181-201 [v2.10.3.15] drops every endpoint but EP6).
+    // On Protocol 2, ADC0 only, which is all Thetis ever enables, on every
+    // model, with no menu gate:
+    //   From Thetis console.cs:43552-43558 [v2.10.3.15] wBToolStripMenuItem_Click
+    //     NetworkIO.SetWBEnable(0, 1);
+    //   private bool _wb_caused_alex_hpf_bypass = false; //[2.10.3.7]MW0LGE fixes #529
+    //   [original inline comment from console.cs:43545, the flag the handler sets]
+    // (The row read 0 from 2026-07-30, Codex review round 5, PR #293, when
+    // it described Protocol 1 only. The protocol gate is
+    // BoardCapsTable::widebandAdcsFor, and RadioModel's two wideband readers,
+    // widebandDemandRoute and widebandAdcRateHz, go through it, so a
+    // Protocol 1 connection still gets none.)
+    .widebandAdcs     = 1,
+    // Every rate the board reaches on either protocol. Protocol 1 trims to
+    // 48/96/192 kHz, Protocol 2 keeps all six:
+    //   From Thetis setup.cs:848-850 [v2.10.3.15] (p1_rates / p2_rates)
+    //   bool include_extra_p1_rate = HardwareSpecific.Model == HPSDRModel.REDPITAYA; //DH1KLM
+    //   (not this board: the extra Protocol 1 rate is the RedPitaya's)
+    .sampleRates      = {48000, 96000, 192000, 384000, 768000, 1536000},
+    .maxSampleRate    = 1536000,
     .attenuator       = {0, 31, 1, true, 0x1F, 0x20, false},
     .preamp           = {true, false},
     .ocOutputCount    = 7,
@@ -524,7 +557,7 @@ const BoardCapabilities kAngelia = {
 
 // ─── Orion (ANAN-200D) ──────────────────────────────────────────────────────
 // Source: network.h:452 (Orion=4), clsHardwareSpecific.cs:136-141
-// ADC: SetRxADC(2) — dual ADC. Protocol 1 (P1 board).
+// ADC: SetRxADC(2), dual ADC. Protocol 1 or Protocol 2 firmware (plan Task 5).
 // Diversity + PureSignal: yes (2 ADCs, console.cs GetDDC P1 Orion branch:8681)
 // Preamp: hasBypassAndPreamp=true (50V supply vs 33V for Hermes/Angelia,
 //   clsHardwareSpecific.cs:139 SetADCSupply(0,50))
@@ -544,14 +577,33 @@ const BoardCapabilities kOrion = {
     .maxReceivers     = 7,
     .maxSlices        = 5,   // Phase 3F: Orion 5-slice cap (2-ADC, 7 DDCs; DDC0+1 reserved for PS+Div)
     .userDdcCount     = 5,   // Phase 3F Sub-Epic I: Orion user DDCs = DDC2-6 (design doc §2)
-    .widebandAdcs     = 0,   // Phase 3F: P1 board — wideband mechanism differs; deferred to 3F-W
-                             // Was 2, which contradicted every other Protocol1 row and this
-                             // row's own .protocol field. NereusSDR has no P1 wideband receive
-                             // path, so advertising ADCs for it let extended view bypass the
-                             // Alex preselector for a stream that never arrives, losing receive
-                             // filtering for nothing. (Codex review round 5, PR #293.)
-    .sampleRates      = {48000, 96000, 192000, 384000, 0, 0},
-    .maxSampleRate    = 384000,
+    // The board runs Protocol 1 or Protocol 2 firmware, and this row serves
+    // both (P2 discovery maps board byte 4 here). Plan Task 5, the
+    // operator's ruling of 2026-09-24 ("follow thetis"): each protocol gets
+    // Thetis's values, and BoardCapsTable::widebandAdcsFor /
+    // sampleRatesFor trim the row to the protocol in use.
+    //
+    // Wideband: none on Protocol 1 (widebandAdcsFor gives 0; Thetis
+    // networkproto1.c:181-201 [v2.10.3.15] drops every endpoint but EP6).
+    // On Protocol 2, ADC0 only, which is all Thetis ever enables, on every
+    // model, with no menu gate:
+    //   From Thetis console.cs:43552-43558 [v2.10.3.15] wBToolStripMenuItem_Click
+    //     NetworkIO.SetWBEnable(0, 1);
+    //   private bool _wb_caused_alex_hpf_bypass = false; //[2.10.3.7]MW0LGE fixes #529
+    //   [original inline comment from console.cs:43545, the flag the handler sets]
+    // (The row read 0 from 2026-07-30, Codex review round 5, PR #293, when
+    // it described Protocol 1 only. The protocol gate is
+    // BoardCapsTable::widebandAdcsFor, and RadioModel's two wideband readers,
+    // widebandDemandRoute and widebandAdcRateHz, go through it, so a
+    // Protocol 1 connection still gets none.)
+    .widebandAdcs     = 1,
+    // Every rate the board reaches on either protocol. Protocol 1 trims to
+    // 48/96/192 kHz, Protocol 2 keeps all six:
+    //   From Thetis setup.cs:848-850 [v2.10.3.15] (p1_rates / p2_rates)
+    //   bool include_extra_p1_rate = HardwareSpecific.Model == HPSDRModel.REDPITAYA; //DH1KLM
+    //   (not this board: the extra Protocol 1 rate is the RedPitaya's)
+    .sampleRates      = {48000, 96000, 192000, 384000, 768000, 1536000},
+    .maxSampleRate    = 1536000,
     .attenuator       = {0, 31, 1, true, 0x1F, 0x20, false},
     .preamp           = {true, true},
     .ocOutputCount    = 7,
@@ -1270,6 +1322,65 @@ const BoardCapabilities& forBoard(HPSDRHW hw) noexcept {
 
 const BoardCapabilities& forModel(HPSDRModel m) noexcept {
     return forBoard(boardForModel(m));
+}
+
+int userDdcCountFor(const BoardCapabilities& caps, ProtocolVersion protocol) noexcept {
+    // Plan Task 11: the Protocol 1 slot plan has room for four user streams
+    // on every board (see the declaration).
+    constexpr int kProtocol1UserStreams = 4;
+    if (protocol == ProtocolVersion::Protocol1) {
+        return std::min(caps.userDdcCount, kProtocol1UserStreams);
+    }
+    return caps.userDdcCount;
+}
+
+std::vector<int> sampleRatesFor(const BoardCapabilities& caps,
+                                ProtocolVersion protocol,
+                                HPSDRModel model)
+{
+    // Plan Task 5: the protocol's list, then the row. See the declaration.
+    std::span<const int> master{kP2Rates, std::size(kP2Rates)};
+    if (protocol == ProtocolVersion::Protocol1) {
+        // From Thetis setup.cs:847-849 [v2.10.3.15]
+        //   bool include_extra_p1_rate = HardwareSpecific.Model == HPSDRModel.REDPITAYA; //DH1KLM
+        //   int[] p1_rates = include_extra_p1_rate ? { .., 384000 } : { 48000, 96000, 192000 };
+        // From mi0bot-Thetis setup.cs:849-851 [v2.10.3.13-beta2]
+        //   // The HL supports 384K
+        //   if (HardwareSpecific.Model == HPSDRModel.HERMESLITE)
+        //       include_extra_p1_rate = true;
+        const bool includeExtraP1Rate = model == HPSDRModel::REDPITAYA
+                                     || model == HPSDRModel::HERMESLITE;
+        master = includeExtraP1Rate
+            ? std::span<const int>{kP1RatesWithExtra384k, std::size(kP1RatesWithExtra384k)}
+            : std::span<const int>{kP1RatesBase, std::size(kP1RatesBase)};
+    }
+    std::vector<int> out;
+    out.reserve(master.size());
+    for (int rate : master) {
+        // The row's zero-padded slots never match a real rate.
+        if (std::find(caps.sampleRates.begin(), caps.sampleRates.end(), rate)
+                != caps.sampleRates.end()) {
+            out.push_back(rate);
+        }
+    }
+    return out;
+}
+
+int maxSampleRateFor(const BoardCapabilities& caps,
+                     ProtocolVersion protocol,
+                     HPSDRModel model)
+{
+    const std::vector<int> rates = sampleRatesFor(caps, protocol, model);
+    return rates.empty() ? 0 : rates.back();
+}
+
+int widebandAdcsFor(const BoardCapabilities& caps, ProtocolVersion protocol) noexcept {
+    // Plan Task 5: no board carries wideband over Protocol 1 (Thetis
+    // networkproto1.c:181-201 [v2.10.3.15], see the declaration).
+    if (protocol == ProtocolVersion::Protocol1) {
+        return 0;
+    }
+    return caps.widebandAdcs;
 }
 
 std::span<const BoardCapabilities> all() noexcept {

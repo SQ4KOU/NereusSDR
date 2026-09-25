@@ -15,6 +15,12 @@
 //                Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                (KG4VCF), with AI-assisted transformation via
 //                Anthropic Claude Code.
+//   2026-09-25: applyAlex1HpfSwitches: the Alex tab's high-pass
+//                switches (HPF Bypass on TX, HPF Bypass on PureSignal
+//                feedback, HPF Bypass, Disable 6m LNA on RX / TX) applied to the RX1 high-pass word as Thetis's
+//                setAlexHPF / setBPF1ForOrionIISaturn apply them. Plan
+//                Task 14 fix wave (R-R3-49). J.J. Boyd (KG4VCF), with
+//                AI-assisted transformation via Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim Thetis console.cs header (lines 1-50) ===
@@ -173,10 +179,51 @@ quint8 computeLpf(double freqMhz);
 //     else setAlex1HPF(rx2_dds_freq_mhz);
 //
 // `rx2Live` is Thetis's chkRX2.Checked, meaning a second receiver is actually
-// listening. `rx2PreampPresent` is BoardCapabilities::rx2PreampPresent: true
+// listening. With more than two live receivers on one front end the callers
+// pass the highest of the others as RX2 (plan Task 14 fix wave, M6), so the
+// low-pass passes every one of them. `rx2PreampPresent` is BoardCapabilities::rx2PreampPresent: true
 // means RX2 has its own front end and never shares this filter, so the first
 // receiver decides alone.
 double receiveLpfFrequencyMhz(double rx1Mhz, double rx2Mhz,
                               bool rx2Live, bool rx2PreampPresent) noexcept;
+
+// The Alex tab's high-pass switches, as Thetis holds them on the console.
+// Defaults are Thetis's console fields (console.cs:18719, 18741, 18753,
+// 18764 and 18793 [v2.10.3.15]); what the Setup tab saves is handed in by RadioModel.
+struct Alex1HpfSwitches {
+    bool hpfBypassOnTx {false};   // chkDisableHPFonTX  -> disable_hpf_on_tx
+    bool hpfBypassOnPs {false};   // chkDisableHPFonPSb -> disable_hpf_on_ps
+    bool hpfBypass     {false};   // chkAlexHPFBypass   -> alex_hpf_bypass
+    bool disable6mLnaOnRx {false};  // chkDisable6mLNAonRX -> disable_6m_lna_on_rx
+    bool disable6mLnaOnTx {true};   // chkDisable6mLNAonTX -> disable_6m_lna_on_tx
+};
+
+// The RX1 high-pass word (Alex0, SetAlexHPFBits) after those switches.
+// `selected` is the band's selection (computeRxPreselector, or the per-chain
+// decision); `keyed` is _mox; `pureSignalRunning` is PureSignalEnabled.
+// The caller gates on an Alex filter board being present (alexpresent).
+//
+// From Thetis console.cs:6839-6848 setAlexHPF [v2.10.3.15]
+//   if (_mox && disable_hpf_on_tx)
+//   { NetworkIO.SetAlexHPFBits(0x20); ... return; }
+// From Thetis console.cs:6953-6962 setBPF1ForOrionIISaturn [v2.10.3.15]
+//   if (_mox && (disable_hpf_on_tx || (disable_hpf_on_ps && PureSignalEnabled)))
+//   { NetworkIO.SetAlexHPFBits(0x20); ... return; }
+// From Thetis console.cs:6850-6855 setAlexHPF [v2.10.3.15]
+//   if (alex_hpf_bypass)
+//   { NetworkIO.SetAlexHPFBits(0x20); // Bypass HPF ... return; }
+// (setBPF1ForOrionIISaturn has the same at 6965-6970), keyed or not.
+// On 6 m, where the selection is the BPF/LNA (0x40):
+// From Thetis console.cs:6935 setAlexHPF [v2.10.3.15]
+//   if (alex6bphpf_bypass || disable_6m_lna_on_rx || (_mox && disable_6m_lna_on_tx))
+//   { NetworkIO.SetAlexHPFBits(0x20); // Bypass HPF
+// (setBPF1ForOrionIISaturn: console.cs:7050).
+
+// The PureSignal arm exists only in the band-pass function, which Thetis
+// runs for Orion MkII, Saturn and HermesC10 alone (usesBpf1Preselector,
+// console.cs:6827-6837 setAlex1HPF [v2.10.3.15]).
+quint8 applyAlex1HpfSwitches(quint8 selected, NereusSDR::HPSDRHW board,
+                             bool keyed, bool pureSignalRunning,
+                             const Alex1HpfSwitches& switches) noexcept;
 
 } // namespace NereusSDR::codec::alex

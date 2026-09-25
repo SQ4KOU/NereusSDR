@@ -42,6 +42,11 @@
 //                computer) and refuses transmit with a plain reason until
 //                remote transmit. AI-assisted transformation via Anthropic
 //                Claude Code.
+//   2026-09-24 - Receiver and transmit gaps plan, Task 10 (R-R3-49) by
+//                J.J. Boyd (KG4VCF): each app's vfo, dds and tx_frequency
+//                updates pass through its own update gap (Thetis
+//                udTCIRateLimit, TciUpdateGap). AI-assisted transformation
+//                via Anthropic Claude Code.
 
 #pragma once
 #ifdef HAVE_WEBSOCKETS
@@ -221,6 +226,14 @@ public:
     // Call before or after start(); if the timer is already running the new
     // interval takes effect immediately.
     void setPingIntervalMs(int ms);
+
+    // Receiver and transmit gaps plan, Task 10 (R-R3-49): the shortest gap
+    // in ms between outgoing vfo / if, dds and tx_frequency updates to each
+    // app (Thetis udTCIRateLimit, 0..1000, default 100; see TciUpdateGap.h).
+    // start() reads it from the TciRateLimitMs setting; this applies a new
+    // value to every connected app and to later ones. Clamped to 0..1000.
+    void setUpdateGapMs(int ms);
+    int updateGapMs() const { return m_updateGapMs; }
 
     // Test-only: bypass the RxChannel signal chain and inject audio directly
     // into the per-slice ring buffer.  Used by tst_tci_audio_roundtrip;
@@ -461,6 +474,16 @@ private:
     // at TCIServer.cs:1754-1795 [v2.10.3.13]; NereusSDR uses a single shared
     // timer on the event loop instead of per-client threads.
     QTimer* m_drainTimer{nullptr};
+
+    // Task 10 (R-R3-49): hand the protocol's pending notifications to every
+    // app, each through its own update gap (TciClientSession::updateGap).
+    // Called from the drain tick and after each handled command.
+    void broadcastPendingNotifications();
+
+    // Task 10 (R-R3-49): the update gap every app gets, and the clock its
+    // gates read (milliseconds since this server was built).
+    int m_updateGapMs{TciUpdateGap::kDefaultGapMs};
+    QElapsedTimer m_gapClock;
 
     // From design doc §1 — TciServer owns one TciProtocol; it is the shared
     // dispatch engine across all clients (single-instance, transport-blind).

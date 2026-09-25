@@ -215,36 +215,190 @@ def test_every_listed_notice_is_verbatim_in_its_files():
 
 
 # --------------------------------------------------------------------------
-# Fetched libraries: files from a built tree's compile_commands.json
+# Fetched libraries: every platform's sources from the CMake lists, so the
+# output does not depend on which platform's tree is given
 
-def test_build_tree_files_come_from_compile_commands(tmp_path):
-    build = tmp_path / "build"
+def test_cmake_values_reads_set_and_list_append():
+    text = """
+SET(PA_PLATFORM_SOURCES src/os/win/a.c src/os/win/b.c) # comment src/x.c
+set(PA_PLATFORM_SOURCES ${PA_PLATFORM_SOURCES} src/os/win/c.c)
+list(APPEND usrsctp_sources
+\tnetinet/d.c
+)
+set(LIBJUICE_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/src/e.c)
+unset(PA_PLATFORM_SOURCES)
+"""
+    assert sn.cmake_values(text, "PA_PLATFORM_SOURCES") == [
+        "src/os/win/a.c", "src/os/win/b.c", "src/os/win/c.c"]
+    assert sn.cmake_values(text, "usrsctp_sources") == ["netinet/d.c"]
+    assert sn.cmake_values(text, "LIBJUICE_SOURCES") == ["${CMAKE_CURRENT_SOURCE_DIR}/src/e.c"]
+
+
+def test_cmake_keep_branch_takes_the_option_and_keeps_platform_branches():
+    text = """
+if(WIN32)
+  list(APPEND S win.c)
+elseif(APPLE)
+  list(APPEND S mac.c)
+else()
+  list(APPEND S unix.c)
+endif()
+if(ENABLE_OPENSSL)
+  list(APPEND S ossl.c)
+elseif(ENABLE_MBEDTLS)
+  list(APPEND S mbedtls.c)
+else()
+  if(NESTED)
+    list(APPEND S nested.c)
+  endif()
+  list(APPEND S builtin.c)
+endif()
+"""
+    kept = sn.cmake_keep_branch(text, "ENABLE_OPENSSL")
+    assert sn.cmake_values(kept, "S") == ["win.c", "mac.c", "unix.c", "ossl.c"]
+    assert sn.cmake_values(sn.cmake_keep_branch(text, "NOTHING"), "S") == [
+        "win.c", "mac.c", "unix.c", "ossl.c", "mbedtls.c", "nested.c", "builtin.c"]
+
+
+def _notice(holder: str) -> str:
+    return f"/*\n * Copyright (c) 2001 {holder}\n */\n"
+
+
+PORTAUDIO_CMAKE = """\
+SET(PA_COMMON_SOURCES src/common/pa_front.c)
+SET(PA_SKELETON_SOURCES src/hostapi/skeleton/pa_hostapi_skeleton.c)
+IF(WIN32)
+  SET(PA_PLATFORM_SOURCES src/os/win/pa_win_hostapis.c)
+  IF(MSVC)
+    SET(PA_PLATFORM_SOURCES ${PA_PLATFORM_SOURCES} src/os/win/pa_x86_plain_converters.c)
+  ENDIF()
+  IF(PA_USE_ASIO)
+    SET(PA_ASIO_SOURCES src/hostapi/asio/pa_asio.cpp)
+  ENDIF()
+  SET(PA_DS_SOURCES src/hostapi/dsound/pa_win_ds.c)
+  SET(PA_WMME_SOURCES src/hostapi/wmme/pa_win_wmme.c)
+  SET(PA_WASAPI_SOURCES src/hostapi/wasapi/pa_win_wasapi.c)
+  SET(PA_WDMKS_SOURCES src/hostapi/wdmks/pa_win_wdmks.c)
+ELSE()
+  SET(PA_PLATFORM_SOURCES src/os/unix/pa_unix_util.c)
+  IF(APPLE)
+    SET(PA_COREAUDIO_SOURCES src/hostapi/coreaudio/pa_mac_core.c)
+  ELSEIF(UNIX)
+    SET(PA_JACK_SOURCES src/hostapi/jack/pa_jack.c)
+    SET(PA_ALSA_SOURCES src/hostapi/alsa/pa_linux_alsa.c)
+  ENDIF()
+ENDIF()
+"""
+
+PORTAUDIO_FILES = {
+    "src/common/pa_front.c": '#include "pa_util.h"\n' + _notice("Common Holder"),
+    "src/common/pa_util.h": _notice("Header Holder"),
+    "src/hostapi/skeleton/pa_hostapi_skeleton.c": _notice("Skeleton Holder"),
+    "src/os/win/pa_win_hostapis.c": _notice("Windows Holder"),
+    "src/os/win/pa_x86_plain_converters.c": _notice("Converter Holder"),
+    "src/hostapi/asio/pa_asio.cpp": _notice("Asio Holder"),
+    "src/hostapi/dsound/pa_win_ds.c": _notice("DirectSound Holder"),
+    "src/hostapi/wmme/pa_win_wmme.c": _notice("Mme Holder"),
+    "src/hostapi/wasapi/pa_win_wasapi.c": _notice("Wasapi Holder"),
+    "src/hostapi/wdmks/pa_win_wdmks.c": _notice("Wdmks Holder"),
+    "src/os/unix/pa_unix_util.c": _notice("Unix Holder"),
+    "src/hostapi/coreaudio/pa_mac_core.c": _notice("CoreAudio Holder"),
+    "src/hostapi/jack/pa_jack.c": _notice("Jack Holder"),
+    "src/hostapi/alsa/pa_linux_alsa.c": _notice("Alsa Holder"),
+}
+
+DATACHANNEL_FILES = {
+    "CMakeLists.txt": (
+        "set(LIBDATACHANNEL_SOURCES\n\t${CMAKE_CURRENT_SOURCE_DIR}/src/global.cpp\n)\n"
+        "set(LIBDATACHANNEL_IMPL_SOURCES\n\t${CMAKE_CURRENT_SOURCE_DIR}/src/impl/sctp.cpp\n)\n"),
+    "src/global.cpp": _notice("Datachannel Holder"),
+    "src/impl/sctp.cpp": '#include "usrsctp.h"\n' + _notice("Impl Holder"),
+    "deps/libjuice/CMakeLists.txt":
+        "set(LIBJUICE_SOURCES\n\t${CMAKE_CURRENT_SOURCE_DIR}/src/agent.c\n)\n",
+    "deps/libjuice/src/agent.c": _notice("Juice Holder"),
+    "deps/usrsctp/usrsctplib/CMakeLists.txt": "list(APPEND usrsctp_sources\n\tuser_socket.c\n)\n",
+    "deps/usrsctp/usrsctplib/user_socket.c": _notice("Sctp Holder"),
+    "deps/usrsctp/usrsctplib/usrsctp.h": _notice("Public Header Holder"),
+    "deps/libsrtp/CMakeLists.txt": (
+        "set(SOURCES_C srtp/srtp.c)\nset(CIPHERS_SOURCES_C crypto/cipher/cipher.c)\n"
+        "if(ENABLE_OPENSSL)\n  list(APPEND CIPHERS_SOURCES_C crypto/cipher/aes_icm_ossl.c)\n"
+        "elseif(ENABLE_MBEDTLS)\n  list(APPEND CIPHERS_SOURCES_C crypto/cipher/aes_icm_mbedtls.c)\n"
+        "else()\n  list(APPEND CIPHERS_SOURCES_C crypto/cipher/aes.c)\nendif()\n"
+        "set(HASHES_SOURCES_C crypto/hash/auth.c)\nset(KERNEL_SOURCES_C crypto/kernel/key.c)\n"
+        "set(MATH_SOURCES_C crypto/math/datatypes.c)\nset(REPLAY_SOURCES_C crypto/replay/rdb.c)\n"),
+    "deps/libsrtp/srtp/srtp.c": _notice("Srtp Holder"),
+    "deps/libsrtp/crypto/cipher/cipher.c": _notice("Cipher Holder"),
+    "deps/libsrtp/crypto/cipher/aes_icm_ossl.c": _notice("Openssl Holder"),
+    "deps/libsrtp/crypto/cipher/aes_icm_mbedtls.c": _notice("Mbedtls Holder"),
+    "deps/libsrtp/crypto/cipher/aes.c": _notice("Builtin Holder"),
+    "deps/libsrtp/crypto/hash/auth.c": _notice("Auth Holder"),
+    "deps/libsrtp/crypto/kernel/key.c": _notice("Key Holder"),
+    "deps/libsrtp/crypto/math/datatypes.c": _notice("Math Holder"),
+    "deps/libsrtp/crypto/replay/rdb.c": _notice("Replay Holder"),
+}
+
+
+def _write_tree(build: Path, compiled: list[str]) -> None:
+    """One platform's configured tree: the same fetched sources, and a
+    compile_commands.json naming only what that platform compiled."""
+    portaudio = build / "_deps" / "portaudio-src"
+    for name, text in {"CMakeLists.txt": PORTAUDIO_CMAKE, **PORTAUDIO_FILES}.items():
+        (portaudio / name).parent.mkdir(parents=True, exist_ok=True)
+        (portaudio / name).write_text(text)
     dc = build / "_deps" / "nereus_libdatachannel-src"
-    (dc / "src").mkdir(parents=True)
-    (dc / "deps" / "plog" / "include" / "plog").mkdir(parents=True)
-    (dc / "deps" / "libjuice" / "src").mkdir(parents=True)
-    (dc / "src" / "global.cpp").write_text('#include <plog/Log.h>\n#include "local.hpp"\n')
-    (dc / "src" / "local.hpp").write_text("/* Copyright (c) 2020 Someone */\n")
-    (dc / "src" / "unbuilt.cpp").write_text("/* Copyright (c) 1999 Nobody */\n")
-    (dc / "deps" / "plog" / "include" / "plog" / "Log.h").write_text("// plog\n")
-    (dc / "deps" / "libjuice" / "src" / "agent.c").write_text("int a;\n")
-    commands = [
-        {"directory": str(build), "file": str(dc / "src" / "global.cpp"),
-         "command": f"c++ -DX=1 -I{dc}/src -I {dc}/deps/plog/include -c global.cpp"},
-        {"directory": str(build), "file": str(dc / "deps" / "libjuice" / "src" / "agent.c"),
-         "arguments": ["cc", "-isystem", "/opt/homebrew/include", "-c", "agent.c"]},
-    ]
+    for name, text in DATACHANNEL_FILES.items():
+        (dc / name).parent.mkdir(parents=True, exist_ok=True)
+        (dc / name).write_text(text)
+    commands = [{"directory": str(build), "file": str(portaudio / name),
+                 "command": f"cc -I{portaudio}/src/common -c {name}"} for name in compiled]
     (build / "compile_commands.json").write_text(json.dumps(commands))
 
-    def names(files, base):
-        return sorted(f.relative_to(base.resolve()).as_posix() for f in files)
 
-    own = sn._from_build(build, dc, dc)
-    assert "src/unbuilt.cpp" not in names(own, dc)
-    assert names(own, dc) == ["deps/libjuice/src/agent.c", "deps/plog/include/plog/Log.h",
-                              "src/global.cpp", "src/local.hpp"]
-    plog = dc / "deps" / "plog"
-    assert names(sn._from_build(build, plog, dc), plog) == ["include/plog/Log.h"]
+def _generate(library: str, build: Path) -> str:
+    import argparse
+    args = argparse.Namespace(build_dir=build, opus_source=None)
+    source_set, notices, _ = sn.build(library, REPO, args)
+    return sn.render(source_set, notices, library)
+
+
+@pytest.mark.parametrize("library", ["portaudio", "libdatachannel", "libjuice", "usrsctp",
+                                     "libsrtp"])
+def test_fetched_notices_do_not_depend_on_the_platforms_tree(tmp_path, library):
+    macos = tmp_path / "macos"
+    linux = tmp_path / "linux"
+    windows = tmp_path / "windows"
+    _write_tree(macos, ["src/common/pa_front.c", "src/os/unix/pa_unix_util.c",
+                        "src/hostapi/coreaudio/pa_mac_core.c"])
+    _write_tree(linux, ["src/common/pa_front.c", "src/os/unix/pa_unix_util.c",
+                        "src/hostapi/jack/pa_jack.c", "src/hostapi/alsa/pa_linux_alsa.c"])
+    _write_tree(windows, ["src/common/pa_front.c", "src/os/win/pa_win_hostapis.c"])
+    (windows / "compile_commands.json").unlink()  # not even needed
+    outputs = {tree.name: _generate(library, tree) for tree in (macos, linux, windows)}
+    assert outputs["macos"] == outputs["linux"] == outputs["windows"]
+    assert outputs["macos"]
+
+
+def test_fetched_notices_cover_every_platform_and_only_the_build_options(tmp_path):
+    _write_tree(tmp_path, ["src/common/pa_front.c", "src/hostapi/coreaudio/pa_mac_core.c"])
+    portaudio = _generate("portaudio", tmp_path)
+    for holder in ("Common", "Header", "Skeleton", "Windows", "Converter", "DirectSound",
+                   "Mme", "Wasapi", "Wdmks", "Unix", "CoreAudio", "Jack", "Alsa"):
+        assert f"Copyright (c) 2001 {holder} Holder" in portaudio, holder
+    assert "Asio Holder" not in portaudio  # NereusSDR forces PA_USE_ASIO OFF
+
+    libsrtp = _generate("libsrtp", tmp_path)
+    assert "Openssl Holder" in libsrtp
+    assert "Mbedtls Holder" not in libsrtp and "Builtin Holder" not in libsrtp
+
+    assert "Juice Holder" in _generate("libjuice", tmp_path)
+
+    usrsctp = _generate("usrsctp", tmp_path)
+    assert "Sctp Holder" in usrsctp
+    assert "Public Header Holder" in usrsctp  # reached through libdatachannel
+
+    libdatachannel = _generate("libdatachannel", tmp_path)
+    assert "Datachannel Holder" in libdatachannel and "Impl Holder" in libdatachannel
+    assert "Sctp Holder" not in libdatachannel  # deps/ has its own files
 
 
 # --------------------------------------------------------------------------

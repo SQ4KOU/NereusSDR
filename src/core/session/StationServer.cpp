@@ -280,6 +280,10 @@
 //                                    PA readings and link quality for a
 //                                    peer at minor 11.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  Receiver and transmit gaps plan,
+//                                    Task 13: a window's External TX
+//                                    Inhibit change reaches the Core's gate.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -819,7 +823,7 @@ QString peerNameForThisProcess()
 // Each side's own AppSettings schema version, read by the key name
 // AppSettings::ensureSettingsAtVersion() writes it under. Read rather than
 // hardcoded: the literal lives at exactly one place today (CoreInit.cpp's
-// ensureSettingsAtVersion(7) call), and duplicating it here would create a
+// ensureSettingsAtVersion(8) call), and duplicating it here would create a
 // second copy free to drift from the migrations that actually ran.
 qint32 settingsSchemaVersionOf(const AppSettings& settings)
 {
@@ -1056,6 +1060,22 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                     m_radioModel->applyNetworkWatchdog(value.toString() == QLatin1String("True"));
                 }
             });
+    // Task 13: External TX Inhibit gates the Core's own keying, so a
+    // window's change reaches the Core's TxInhibitMonitor, whichever path
+    // stored it. Thetis setup.cs:16660-16667 [v2.10.3.15] applies each box
+    // at once.
+    connect(m_settingsServer, &SettingsProxyServer::outboundValueChanged, this,
+            [this](const QString& key, const QVariant& value, const QString&) {
+                if (!m_radioModel) {
+                    return;
+                }
+                const bool on = value.toString() == QLatin1String("True");
+                if (key == QLatin1String("TxInhibitMonitorEnabled")) {
+                    m_radioModel->txInhibit().setEnabled(on);
+                } else if (key == QLatin1String("TxInhibitMonitorReversed")) {
+                    m_radioModel->txInhibit().setReverseLogic(on);
+                }
+            });
     // Whole-branch review, Important 4. A removal has its own signal and
     // its own frame. It used to arrive here as an outboundValueChanged
     // carrying an INVALID QVariant, and the value.toString() above turned
@@ -1098,6 +1118,13 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             [this](const QString& key) {
                 if (key == QLatin1String("NetworkWatchdogEnabled") && m_radioModel) {
                     m_radioModel->applyNetworkWatchdog(RadioModel::kNetworkWatchdogDefault);
+                }
+                // Task 13: both External TX Inhibit boxes default off
+                // (console.cs:15336-15337 [v2.10.3.15]).
+                if (key == QLatin1String("TxInhibitMonitorEnabled") && m_radioModel) {
+                    m_radioModel->txInhibit().setEnabled(false);
+                } else if (key == QLatin1String("TxInhibitMonitorReversed") && m_radioModel) {
+                    m_radioModel->txInhibit().setReverseLogic(false);
                 }
             });
 
@@ -3827,7 +3854,9 @@ StationCapabilities StationServer::buildCapabilities() const
     }
 
     caps.boardMaxSlices = board.maxSlices > 0 ? board.maxSlices : 1;
-    caps.userDdcCount = board.userDdcCount;
+    // Plan Task 11: the stream count for the protocol the Core runs (four
+    // on Protocol 1), the same number its own stream pool uses.
+    caps.userDdcCount = m_radioModel->userStreamCount();
     caps.pureSignalPresent = board.hasPureSignal;
 
     // EFFECTIVE, not board (parent section 4.5). R2 has no PerfMonitor to

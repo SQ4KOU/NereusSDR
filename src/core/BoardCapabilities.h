@@ -14,6 +14,10 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-25 - Receiver and transmit gaps plan, Task 5: sampleRatesFor,
+//                 maxSampleRateFor and widebandAdcsFor, per board row and
+//                 protocol, by J.J. Boyd (KG4VCF), with AI-assisted
+//                 transformation via Anthropic Claude Code.
 // =================================================================
 
 /*  clsHardwareSpecific.cs
@@ -204,6 +208,7 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
 #include <QList>
 #include <array>
 #include <span>
+#include <vector>
 
 namespace NereusSDR {
 
@@ -366,10 +371,15 @@ struct BoardCapabilities {
     // legitimately exceed userDdcCount.
     int  userDdcCount {0};
 
-    // Phase 3F: number of ADCs that support the wideband (real-sample) stream.
-    // P2 boards: typically equals adcCount. P1 boards: 0 (different mechanism, deferred to 3F-W).
+    // Phase 3F: number of ADCs that support the wideband (real-sample) stream
+    // when the board runs Protocol 2. Read it through
+    // BoardCapsTable::widebandAdcsFor, which gives 0 on Protocol 1 for every
+    // row (plan Task 5). P1-only rows keep 0 here as well.
     int  widebandAdcs {0};
 
+    // Every rate the board reaches on any protocol it runs (zero-padded).
+    // What it offers on the protocol in use is BoardCapsTable::sampleRatesFor
+    // and maxSampleRateFor (plan Task 5); maxSampleRate is the row's top.
     std::array<int, 6> sampleRates;  // zero-pad unused slots; up to 6 for P2 boards
     int  maxSampleRate;
 
@@ -584,6 +594,62 @@ namespace BoardCapsTable {
     const BoardCapabilities& forBoard(HPSDRHW hw) noexcept;
     const BoardCapabilities& forModel(HPSDRModel m) noexcept;
     std::span<const BoardCapabilities> all() noexcept;
+
+    // How many receive streams (independent DDCs) the board gives slices
+    // over the protocol it is running. This is the one stream count: the
+    // stream pool (and so the slice cap in SliceStreamAllocator), the pan
+    // layout ceiling and the count a Core advertises all read it, through
+    // RadioModel::userStreamCount(). maxSlices is a separate axis and is not
+    // touched here.
+    //
+    // Protocol 2 gives the row's userDdcCount. Protocol 1 gives at most four
+    // (plan Task 11, the operator's ruling of 2026-09-24): the frame carries
+    // RX1 and RX2 on the slots Thetis's GetDDC names, plus slices C and D on
+    // the PureSignal pair's slots in plain receive (slots 2 + 3 on the Hermes
+    // class, 3 + 4 on the Orion class; slot 1 is tied to RX1's frequency on
+    // the Orion class). The rows that serve both protocols (Angelia, Orion,
+    // OrionMKII, Saturn) carry their Protocol 2 count of five.
+    int userDdcCountFor(const BoardCapabilities& caps, ProtocolVersion protocol) noexcept;
+
+    // The sample rates the board offers over the protocol it is running
+    // (plan Task 5, the operator's ruling of 2026-09-24, "follow thetis").
+    // Thetis picks the list by protocol, not by board, and adds 384 kHz on
+    // Protocol 1 for one model:
+    //   From Thetis setup.cs:847-851 [v2.10.3.15] InitAudioTab
+    //     bool include_extra_p1_rate = HardwareSpecific.Model == HPSDRModel.REDPITAYA; //DH1KLM
+    //     int[] p1_rates = include_extra_p1_rate ? { 48000, 96000, 192000, 384000 } : { 48000, 96000, 192000 };
+    //     int[] p2_rates = { 48000, 96000, 192000, 384000, 768000, 1536000 };
+    //     int[] rates = NetworkIO.CurrentRadioProtocol == RadioProtocol.ETH ? p2_rates : p1_rates;
+    // and mi0bot adds the HL2 (HL2-authoritative):
+    //   From mi0bot-Thetis setup.cs:849-851 [v2.10.3.13-beta2]
+    //     // The HL supports 384K
+    //     if (HardwareSpecific.Model == HPSDRModel.HERMESLITE)
+    //         include_extra_p1_rate = true;
+    // The result is that list intersected with the row's sampleRates, so a
+    // row carries every rate the board reaches on any protocol it runs and
+    // this function trims it to the one in use. The model is a parameter
+    // because the RedPitaya shares the OrionMKII row and only the model
+    // tells them apart.
+    std::vector<int> sampleRatesFor(const BoardCapabilities& caps,
+                                    ProtocolVersion protocol,
+                                    HPSDRModel model);
+
+    // The top of sampleRatesFor, or 0 if the board offers nothing on that
+    // protocol. What the Radio Info tab shows and what a discovery reply
+    // carries.
+    int maxSampleRateFor(const BoardCapabilities& caps,
+                         ProtocolVersion protocol,
+                         HPSDRModel model);
+
+    // How many ADCs can carry a wideband stream over the protocol the board
+    // is running. Protocol 1 gives none on every board: Thetis's Protocol 1
+    // receive loop takes only EP6 and drops every other endpoint, the EP4
+    // wideband stream included:
+    //   From Thetis ChannelMaster/networkproto1.c:181-201 [v2.10.3.15]
+    //     if (endpoint == 6) { ... return 1024; }
+    //     else { printf("MRD: ignoring data for ep %d\n", endpoint); }
+    // Protocol 2 gives the row's widebandAdcs.
+    int widebandAdcsFor(const BoardCapabilities& caps, ProtocolVersion protocol) noexcept;
 
     // --- Per-model preamp/attenuator helpers ---
     // Porting from Thetis console.cs:40755-40825 SetComboPreampForHPSDR().

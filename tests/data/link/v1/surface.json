@@ -3228,6 +3228,24 @@
                     "kind": "bool",
                     "name": "txInhibited",
                     "ordinal": 20
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "bandOutputsByte",
+                    "ordinal": 21
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "bandOutputsBand",
+                    "ordinal": 22
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "bandOutputsKeyed",
+                    "ordinal": 23
                 }
             ]
         },

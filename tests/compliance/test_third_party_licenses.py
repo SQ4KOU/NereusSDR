@@ -117,7 +117,26 @@ def test_multi_line_declarations_in_the_real_tree_are_found():
         assert multi_line in names
 
 
-def _add_crate_notices(root: Path, generated_from, pinned: str):
+def _write_setup_scripts(root: Path, sh_pin, ps1_pin):
+    """The two DeepFilterNet setup scripts, pinning sh_pin and ps1_pin (None
+    writes a script that names no pin)."""
+    sh = "#!/usr/bin/env bash\nset -euo pipefail\n"
+    if sh_pin is not None:
+        sh += f'DFNR_COMMIT="{sh_pin}"\n'
+    sh += 'echo "Cloning DeepFilterNet at $DFNR_COMMIT..."\n'
+    (root / "setup-deepfilter.sh").write_text(sh, encoding="utf-8")
+    ps1 = '$ErrorActionPreference = "Stop"\n'
+    if ps1_pin is not None:
+        ps1 += f'$DfnrCommit = "{ps1_pin}"\n'
+    ps1 += '$DfnrCommit | Out-File -Encoding ascii -NoNewline "$OutDir\\COMMIT"\n'
+    (root / "setup-deepfilter.ps1").write_text(ps1, encoding="utf-8")
+
+
+def _add_crate_notices(root: Path, generated_from, pinned: str,
+                       sh_pin="same", ps1_pin="same"):
+    _write_setup_scripts(root,
+                         pinned if sh_pin == "same" else sh_pin,
+                         pinned if ps1_pin == "same" else ps1_pin)
     lic = root / "packaging" / "third-party-licenses"
     readme = lic / "README.md"
     readme.write_text(readme.read_text(encoding="utf-8").replace(
@@ -157,6 +176,43 @@ def test_crate_notices_naming_no_commit_fail(tmp_path):
     code, out = _run(root)
     assert code == 1
     assert "names no DeepFilterNet commit" in out
+
+
+def test_setup_sh_pinning_another_commit_fails(tmp_path):
+    root = _make_tree(tmp_path)
+    _add_crate_notices(root, "d375b2d8aaaa", "d375b2d8aaaa", sh_pin="0123456789ab")
+    code, out = _run(root)
+    assert code == 1
+    assert "setup-deepfilter.sh pins DeepFilterNet 0123456789ab" in out
+    assert "pins d375b2d8aaaa" in out
+    assert "setup-deepfilter.ps1" not in out
+
+
+def test_setup_ps1_pinning_another_commit_fails(tmp_path):
+    root = _make_tree(tmp_path)
+    _add_crate_notices(root, "d375b2d8aaaa", "d375b2d8aaaa", ps1_pin="0123456789ab")
+    code, out = _run(root)
+    assert code == 1
+    assert "setup-deepfilter.ps1 pins DeepFilterNet 0123456789ab" in out
+    assert "setup-deepfilter.sh" not in out
+
+
+def test_setup_script_naming_no_pin_fails(tmp_path):
+    root = _make_tree(tmp_path)
+    _add_crate_notices(root, "d375b2d8aaaa", "d375b2d8aaaa", sh_pin=None, ps1_pin=None)
+    code, out = _run(root)
+    assert code == 1
+    assert "setup-deepfilter.sh names no DeepFilterNet commit" in out
+    assert "setup-deepfilter.ps1 names no DeepFilterNet commit" in out
+
+
+def test_setup_script_missing_fails(tmp_path):
+    root = _make_tree(tmp_path)
+    _add_crate_notices(root, "d375b2d8aaaa", "d375b2d8aaaa")
+    (root / "setup-deepfilter.ps1").unlink()
+    code, out = _run(root)
+    assert code == 1
+    assert "setup-deepfilter.ps1 is missing" in out
 
 
 def test_named_file_missing_fails(tmp_path):

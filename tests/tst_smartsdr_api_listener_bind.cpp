@@ -9,6 +9,8 @@
 // The machine's network configuration is never touched and no radio or
 // accessory is contacted.
 // J.J. Boyd (KG4VCF), September 2026; AI-assisted via Anthropic Claude Code.
+// 2026-09-24: R-R3-26: station_bind = "::" takes IPv4 and IPv6 clients, as
+// remote_bind does. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include <QtTest/QtTest>
 #include <QNetworkAddressEntry>
 #include <QTcpServer>
@@ -138,6 +140,35 @@ private slots:
         bind.bindOverride = QStringLiteral("10.9.9.9");
         QVERIFY(bind.acceptsPeer(QHostAddress(QStringLiteral("10.9.9.9"))));
         QVERIFY(!bind.acceptsPeer(QHostAddress(QStringLiteral("10.9.9.8"))));
+    }
+
+    // station_bind = "::" asks for every address of both families, the way
+    // remote_bind = "::" does. Qt binds a parsed "::" IPv6-only, which would
+    // refuse the station network's IPv4 amplifiers and tuners; the rule maps
+    // it to Qt's dual-stack any-address, and one listener takes both.
+    void everyAddressOverrideTakesIpv4AndIpv6()
+    {
+        StationBind bind;
+        bind.entriesForTest = twoNetworks();
+        bind.bindOverride = QStringLiteral("::");
+        QVERIFY(bind.everyAddress());
+        QCOMPARE(bind.listenAddresses(), QList<QHostAddress>{QHostAddress(QHostAddress::Any)});
+        QVERIFY(bind.acceptsPeer(QHostAddress(QStringLiteral("172.16.0.1"))));
+
+        SmartSdrApiListener listener;
+        listener.setListenEndpointForTesting(QHostAddress(QHostAddress::AnyIPv4), 0);
+        listener.setStationBind(bind);
+        QVERIFY(listener.start());
+        const quint16 port = listener.serverPort();
+        QVERIFY2(bannerFrom(kLoopback, port).startsWith('V'),
+                 "IPv4 client refused by the \"::\" station listener");
+        if (!ipv6LoopbackAvailable()) {
+            listener.stop();
+            QSKIP("This host has no IPv6 loopback; the IPv4 half passed.");
+        }
+        QVERIFY2(bannerFrom(kLoopback6, port).startsWith('V'),
+                 "IPv6 client refused by the \"::\" station listener");
+        listener.stop();
     }
 
     // A desktop window never sets the rule: the listener listens where it

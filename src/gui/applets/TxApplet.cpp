@@ -93,6 +93,10 @@
 //                 An RF Power move writes the band slot and the tune drive
 //                 source only where the Core takes them (version 5).
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 : Receiver and transmit gaps plan, Task 7: the MOX button
+//                 keys through RadioModel::setMoxFromButton (a manual key,
+//                 Thetis chkMOX_Click). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1181,16 +1185,20 @@ void TxApplet::wireControls()
         m_updatingFromModel = false;
     });
 
-    // ── MOX button → MoxController::setMox(bool) ────────────────────────────
+    // ── MOX button → RadioModel::setMoxFromButton(bool) ─────────────────────
     // B.5 setter: drives state machine through RX→TX or TX→RX transitions.
     // From Thetis console.cs:29311-29678 [v2.10.3.13] chkMOX_CheckedChanged2.
     // //[2.10.1.0]MW0LGE changed  [original inline comment from console.cs:29355]
     // //MW0LGE [2.9.0.7]  [original inline comment from console.cs:29400, 29561]
     // //[2.10.3.6]MW0LGE att_fixes  [original inline comment from console.cs:29567-29568, 29659]
     if (mox) {
-        connect(m_moxBtn, &QPushButton::toggled, this, [this, mox](bool on) {
+        // Receiver and transmit gaps plan, Task 7: the MOX button is a manual
+        // key (Thetis chkMOX_Click, console.cs:29730-29747 [v2.10.3.15]);
+        // RadioModel::setMoxFromButton also turns TUN and two-tone off on
+        // the way off, as chkMOX_Click does.
+        connect(m_moxBtn, &QPushButton::toggled, this, [this](bool on) {
             if (m_updatingFromModel) { return; }
-            mox->setMox(on);
+            m_model->setMoxFromButton(on);
         });
 
         // Reverse: MoxController::moxStateChanged → button checked state.

@@ -196,6 +196,25 @@ public slots:
     // they combine. Restarts the ep6 stream when the announced count moves.
     void setActiveReceiverCount(int count) override;
 
+    // Which frame slots carry a live receiver (bit n = slot n). Phase 3F
+    // section 16.3.2. Two uses.
+    //
+    // The announced count covers the highest live slot, so every slot in use
+    // is inside the frame (see announceRxCount).
+    //
+    // The receive filters: Thetis derives the Alex high-pass, the receive
+    // half of the low-pass and the OC outputs from RX1, and its RX1 always
+    // exists. Routing by frame slot means slice A can be closed while slice
+    // B keeps slot 1 (slot 2 on the Orion class). The live receiver in the
+    // LOWEST slot then stands in for RX1, and keeps that role until a
+    // receiver comes back on a lower slot.
+    //
+    // An empty mask (every stream suspended, as the HermesII class does
+    // while PureSignal transmits) leaves the stand-in where it was, so the
+    // filters do not move for a state that lasts one transmission.
+    void setLiveReceiverSlots(quint32 slotMask) override;
+    void setReceiverVfoFrequencies(const QVector<quint64>& vfoHzBySlot) override;
+
     void setSampleRate(int sampleRate) override;
 
     // Task 1.6: live-apply a sample-rate change to a running P1 connection.
@@ -337,8 +356,19 @@ private:
     //                   setActiveReceiverCount, which follows the operator
     //                   adding and removing panadapters.
     //
-    // The announced count is the max of the two, so neither axis can starve
-    // the other. Bench-caught 2026-08-01 (J.J. Boyd, KG4VCF) on a live HL2:
+    //   m_slotRxCount   the highest live frame slot + 1, from
+    //                   setLiveReceiverSlots (Phase 3F section 16.3.2). A
+    //                   count of receivers stops being enough once routing
+    //                   is by frame slot: with slice A closed, slices B and
+    //                   C sit on slots 1 and 2, the panadapter axis says 2,
+    //                   and slot 2 falls out of the frame. On the Atlas
+    //                   (HPSDR) nothing else raises the count, because
+    //                   Thetis gives that model no P1_rxcount
+    //                   (console.cs:8533-8534 [v2.10.3.15]); wherever Thetis
+    //                   does give one, m_codecRxCount still carries it.
+    //
+    // The announced count is the max of the three, so no axis can starve
+    // another. Bench-caught 2026-08-01 (J.J. Boyd, KG4VCF) on a live HL2:
     // these were a single field written by three call sites, last writer
     // wins. Removing the second panadapter with PureSignal on dropped the
     // announcement to one receiver, and DDC2 and DDC3 left the ep6 frame
@@ -416,6 +446,8 @@ private:
 
     // Snapshot all live state into a CodecContext for the codec call.
     CodecContext buildCodecContext() const;
+    // Plan Task 14 fix wave: report bank 0's band-output byte (bandOutputsComposed).
+    void publishBank0BandOutputs(const quint8 bank0[5]) const;
 
     // HL2-specific helpers (mi0bot Hermes-Lite branch, Task 12).
     // hl2SendIoBoardInit — issues I2C register reads at startup to detect the
@@ -643,6 +675,23 @@ private:
     int     m_activeRxCount{1};
     int     m_codecRxCount{1};   ///< DDC configuration axis (PureSignal, diversity)
     int     m_panRxCount{1};     ///< panadapter axis
+    int     m_slotRxCount{0};    ///< highest live frame slot + 1 (0 = none / not told yet)
+
+    // The live frame slots and the slot standing in for Thetis's RX1. See
+    // setLiveReceiverSlots. m_rx1Slot starts at 0, so until a mask arrives,
+    // and whenever slot 0 is live, every filter reads exactly what it read
+    // before routing by frame slot.
+    quint32 m_liveSlotMask{0};
+    int     m_rx1Slot{0};
+
+    // Recompute the receive-side Alex selections (m_alexHpfBits and
+    // m_alexLpfBitsRx) from the RX1 stand-in. `changedSlot` is the frame slot
+    // whose frequency just moved, or -1 when the stand-in itself moved.
+    void recomputeReceiveFilters(int changedSlot);
+
+    // The frequency whose band selects the OC outputs: the transmitting
+    // slice's while keyed, the RX1 stand-in's while not (plan Task 14).
+    quint64 ocBandFrequencyHz() const;
 
     // HL2 mic decimation state.  At sample rates above 48 kHz the radio
     // embeds one mic sample per I/Q sample group in EP6 frames (so mic
@@ -656,6 +705,9 @@ private:
     int     m_micDecimationCount{0};
 
     quint64 m_rxFreqHz[7]{};
+    // Each slot's slice VFO frequency (setReceiverVfoFrequencies). 0 = not
+    // told, and the band falls back to the slot's DDC centre above.
+    quint64 m_rxVfoHz[7]{};
     quint64 m_txFreqHz{0};
     // THREAD SAFETY: written only from the connection thread; every compose
     // function and fillTxZone() read it there too.
@@ -1036,6 +1088,7 @@ public:
     }
     bool forceBank4NextForTest() const { return m_forceBank4Next; }
     int  psNDdcForTest() const { return m_psNDdc; }
+    int  rx1SlotForTest() const { return m_rx1Slot; }
     int  activeRxCountForTest() const { return m_activeRxCount; }
     quint16 adcCtrlForTest() const { return m_adcCtrl; }
     quint16 p1AdcCntrlForTest() const { return m_p1AdcCntrl; }

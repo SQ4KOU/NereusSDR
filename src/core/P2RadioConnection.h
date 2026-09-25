@@ -241,6 +241,13 @@ public slots:
 
     void setReceiverFrequency(int receiverIndex, quint64 frequencyHz) override;
     void setTxFrequency(quint64 frequencyHz) override;
+    void setLiveReceiverSlots(quint32 slotMask) override;
+    void setHpfBypassOnTx(bool on) override;
+    void setHpfBypassOnPs(bool on) override;
+    void setAlexHpfBypass(bool on) override;
+    void setDisable6mLna(bool onRx, bool onTx) override;
+    void onBandOutputPinsChanged() override;
+    void setReceiverVfoFrequencies(const QVector<quint64>& vfoHzBySlot) override;
     void setActiveReceiverCount(int count) override;
     void setSampleRate(int sampleRate) override;
     void setAttenuator(int dB) override;
@@ -878,6 +885,33 @@ private:
     // both call UpdateTXDDSFreq, and UpdateAlexTXFilter is wrapped in
     // `if (!_mox)` at console.cs:15487-15498), so the wire bytes match.
     quint8 effectiveLpfBitsAlex0() const;
+
+    // The live DDCs and the one standing in for Thetis's RX1 (plan Task 14,
+    // Phase 3F section 16.3.2): the lowest live DDC, as on Protocol 1
+    // (P1RadioConnection::setLiveReceiverSlots). -1 until a mask arrives;
+    // until then RX1 is the DDC retuned last, the behaviour before the
+    // stand-in existed.
+    quint32 m_liveSlotMask{0};
+    int     m_rx1Slot{-1};
+    int     m_lastRetunedDdc{0};
+    int     rx1Ddc() const { return m_rx1Slot >= 0 ? m_rx1Slot : m_lastRetunedDdc; }
+
+    // Recompute m_alex.hpfBits and m_alex.lpfBitsRx from the RX1 stand-in
+    // (and, for the low-pass, the receiver beside it).
+    void recomputeReceiveFilters();
+
+    // Each DDC's slice VFO frequency (setReceiverVfoFrequencies); 0 = not
+    // told, and the band falls back to the DDC's centre.
+    std::array<quint64, kMaxRxStreams> m_rxVfoHz{};
+
+    // The frequency whose band selects the OC outputs (byte 1401): the
+    // transmitting slice's while keyed, the RX1 stand-in's VFO while not.
+    quint64 ocBandFrequencyHz() const;
+    // The OC byte byte 1401 carries (buildCodecContext's ctx.ocByte).
+    quint8 composedOcByte() const;
+    // Plan Task 14 fix wave (M2, M3): a high-priority packet when that byte
+    // differs from the one last sent, as Thetis's SetOCBits.
+    void pushBandOutputsIfChanged();
 
     // --- DDC→ADC mapping register (from Thetis network.c rx_adc_ctrl1) ---
     quint32 m_rxAdcCtrl1{0};

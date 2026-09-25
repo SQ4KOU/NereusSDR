@@ -146,13 +146,17 @@ Hl2OptionsTab::Hl2OptionsTab(RadioModel* model, QWidget* parent)
         syncFromModel();
     }
 
-    // ── Wire I/O Board live OC byte → output strip indicator ──────────────
+    // ── Live OC byte → output strip indicator ─────────────────────────────
     // The output strip on this tab mirrors the same OC bank-0 byte the
-    // status-bar strip on Hl2IoBoardTab shows.  No new signal — reuse
-    // IoBoardHl2::currentOcByteChanged (added during Phase 3L carry-forward).
-    if (m_ioBoard) {
-        connect(m_ioBoard, &IoBoardHl2::currentOcByteChanged,
-                this, &Hl2OptionsTab::onIoBoardOcByteChanged);
+    // status-bar strip on Hl2IoBoardTab shows. Plan Task 14 fix wave
+    // (R-R3-49): both show the byte the connection composed, from the model
+    // (RadioModel::bandOutputsByte, the Core's in a remote window).
+    if (m_model) {
+        connect(m_model, &RadioModel::bandOutputsChanged,
+                this, &Hl2OptionsTab::onBandOutputsChanged);
+        connect(m_model, &RadioModel::connectionStateChanged,
+                this, &Hl2OptionsTab::onBandOutputsChanged);
+        onBandOutputsChanged();
     }
 }
 
@@ -572,9 +576,12 @@ void Hl2OptionsTab::onOutputPinClicked(int idx)
     }
 }
 
-void Hl2OptionsTab::onIoBoardOcByteChanged(quint8 ocByte, int /*bandIdx*/, bool /*mox*/)
+void Hl2OptionsTab::onBandOutputsChanged()
 {
-    if (m_outputStrip) { m_outputStrip->setBits(ocByte); }
+    if (!m_outputStrip || !m_model) { return; }
+    m_outputStrip->setBits(m_model->bandOutputsKnown()
+                               ? static_cast<quint8>(m_model->bandOutputsByte())
+                               : quint8(0));
 }
 
 void Hl2OptionsTab::setTransmitPermitted(bool permitted, const QString& reason)

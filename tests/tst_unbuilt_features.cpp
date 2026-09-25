@@ -714,7 +714,6 @@ QMap<F, QList<Surface>> surfaces()
                                     [](Hosts& h) { return textShown(h.spotHub(), QStringLiteral("Rate Limit:")); }}};
     map[F::FreeDvToPsk] = {spot(QStringLiteral("freedvReportToPskChk"))};
     map[F::TciExtras] = {
-        onPage(QStringLiteral("TCI Server"), QStringLiteral("rate limit"), text(QStringLiteral("Rate limit:"))),
         onPage(QStringLiteral("TCI Server"), QStringLiteral("CW to CWU"),
                text(QStringLiteral("CW becomes CWU above 10 MHz"))),
         onPage(QStringLiteral("TCI Server"), QStringLiteral("TX channel"), text(QStringLiteral("TX channel:"))),
@@ -911,7 +910,6 @@ private slots:
     void savedValuesOfHiddenControlsSurviveAStartAndASave()
     {
         const QMap<QString, QString> seeded = {
-            {QStringLiteral("TciRateLimitMsgsPerSec"), QStringLiteral("25")},
             {QStringLiteral("TciCwBecomesCwuAbove10mhz"), QStringLiteral("True")},
             {QStringLiteral("TciTxChannel"), QStringLiteral("Left")},
             {QStringLiteral("TciRxSensorIntervalMs"), QStringLiteral("450")},

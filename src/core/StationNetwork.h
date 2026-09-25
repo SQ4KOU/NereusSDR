@@ -3,6 +3,8 @@
 // J.J. Boyd (KG4VCF), September 2026; AI-assisted via Anthropic Claude Code.
 // 2026-09-24: R-R3-47: offNetworkReason, how to allow a device on another
 // network. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-24: R-R3-26: "::" listens on IPv4 and IPv6. J.J. Boyd (KG4VCF),
+// AI-assisted via Anthropic Claude Code.
 #pragma once
 
 #include <QHostAddress>
@@ -58,7 +60,8 @@ struct StationBind {
     /// The override asks for every address.
     bool everyAddress() const;
     /// Where a TCP listener listens: the station address and 127.0.0.1;
-    /// the every-address override alone; 127.0.0.1 alone before the
+    /// the every-address override alone ("::" as Qt's dual-stack
+    /// any-address, as for remote_bind); 127.0.0.1 alone before the
     /// station network is known.
     QList<QHostAddress> listenAddresses() const;
     /// Whether a datagram from `peer` comes from this computer or the

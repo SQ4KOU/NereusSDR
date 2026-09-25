@@ -232,6 +232,28 @@
 //                and a remote window reloads its copies of both
 //                (scheduleRemotePaReload). J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-24 - R-R3-21: before a pool is sized, the slice-limit refusal
+//                names the Core only on a Core (NereusSDR in a window with
+//                no Core); stale slice-limit comments corrected.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - Receiver and transmit gaps plan, Task 7: TCI trx keys
+//                through MoxController::onTciPtt (PttMode::Tci); the MOX
+//                button is setMoxFromButton (chkMOX_Click); TUN-off clears
+//                the manual key at its end; disconnect drops the PTT
+//                levels. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
+//   2026-09-24 - Receiver and transmit gaps plan, Task 7 follow-up: the
+//                microphone-ready refusal is marked never queued; two-tone
+//                reads whether TUN is on and turns TUN off through
+//                setTune(false) before it keys (console.cs:44805-44813
+//                [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-25 - Receiver and transmit gaps plan, Task 13: the radio's
+//                TX inhibit input reaches TxInhibitMonitor from the status
+//                frames (PollTXInhibit, console.cs:25849-25887
+//                [v2.10.3.15]); External TX Inhibit applies at once
+//                (setup.cs:16660-16667 [v2.10.3.15]). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1330,6 +1352,17 @@ RadioModel::RadioModel(Role role, QObject* parent)
         });
     });
 
+    // Task 7 fix wave, I2: TX inhibit and the PA trip gate every keying
+    // source (MoxController::setTxInhibited / setPaTripped). Until now the
+    // inhibit only drove the status pill and the trip only dropped the
+    // TransmitModel latch; neither reached the controller that keys.
+    connect(&m_txInhibit, &safety::TxInhibitMonitor::txInhibitedChanged, this,
+            [this](bool /*inhibited*/, safety::TxInhibitMonitor::Source /*source*/) {
+                applyTxKeyBlock();
+            });
+    connect(this, &RadioModel::paTrippedChanged, this,
+            [this](bool /*tripped*/) { applyTxKeyBlock(); });
+
     // MoxController::txReady → TxChannel::setRunning(true) and
     // MoxController::txaFlushed → TxChannel::setRunning(false) are wired in
     // connectToRadio() once m_txChannel is live (see the "MoxController →
@@ -1529,6 +1562,16 @@ RadioModel::RadioModel(Role role, QObject* parent)
     m_twoToneController = new TwoToneController(this);
     m_twoToneController->setTransmitModel(&m_transmitModel);
     m_twoToneController->setMoxController(m_moxController);
+    // Task 7 fix wave, M9: two-tone waits out a TUN-off still completing,
+    // so it never keys with the tune tone running.
+    m_twoToneController->setTuneOffPendingFn([this]() { return m_pendingTuneOff; });
+    // Task 7 follow-up (N1): TUN is on from setTune(true) until
+    // completeTuneOff, which owns the manual key until then.
+    m_twoToneController->setTuneActiveFn([this]() { return m_isTuning; });
+    // Task 7 follow-up (item 6): two-tone started with TUN on turns TUN off
+    // through its own TUN-off path first (console.cs:44805-44813
+    // [v2.10.3.15]), so RadioModel stops counting TUN on at tune power.
+    m_twoToneController->setTuneOffFn([this]() { setTune(false); });
 
     // R-R3-36: keep the generated-key record in step with two-tone's own
     // state, not only with MOX transitions. Two-tone can go live on a key
@@ -5583,6 +5626,18 @@ bool RadioModel::isRfKitInOperate() const
         && m_rfKitConnection->operateMode() == QStringLiteral("OPERATE");
 }
 
+int RadioModel::userStreamCount() const
+{
+    if (m_role == Role::Remote) {
+        return m_stationUserDdcCount;
+    }
+    const BoardCapabilities& caps = boardCapabilities();
+    const ProtocolVersion protocol = m_lastRadioInfo.macAddress.isEmpty()
+                                         ? caps.protocol
+                                         : m_lastRadioInfo.protocol;
+    return BoardCapsTable::userDdcCountFor(caps, protocol);
+}
+
 const BoardCapabilities& RadioModel::boardCapabilities() const
 {
 #ifdef NEREUS_BUILD_TESTS
@@ -7241,6 +7296,22 @@ void RadioModel::reshiftSlicesOnStream(int streamIndex, double newCentreHz)
     }
 }
 
+void RadioModel::applySliceStreamCentre(SliceModel* slice, double streamCentreHz)
+{
+    if (!slice) {
+        return;
+    }
+    // Model first: composedShiftHz reads the committed stream term.
+    slice->setShiftOffsetHz(slice->frequency() - streamCentreHz);
+    // From Thetis radio.cs:1419 [v2.10.3.15]: SetRXAShiftFreq receives
+    // +(freq - center). Composed, so RIT and a DIG offset survive the push.
+    if (m_wdspEngine) {
+        if (RxChannel* ch = m_wdspEngine->rxChannel(slice->sliceIndex())) {
+            pushNotchOrigin(slice, ch, streamCentreHz);
+        }
+    }
+}
+
 int RadioModel::ddcForStream(int streamIndex) const
 {
     if (streamIndex < 0 || streamIndex >= static_cast<int>(m_streamDdc.size())) {
@@ -7495,6 +7566,11 @@ void RadioModel::requestDdcAssignment()
     // retune, removal) and it lines up with design §10's trigger matrix rows
     // for slice created / destroyed / retuned-across-band.
     republishAlexAdcSlices();
+
+    // Plan Task 14: the VFO each hardware slot serves, for the OC band. The
+    // same events move it: a bind, a removal, and every VFO tick
+    // (frequencyChanged -> bindSliceToStream -> requestDdcAssignment).
+    republishReceiverVfoFrequencies();
 }
 
 bool RadioModel::sampleRateIsRadioWide() const
@@ -8517,10 +8593,15 @@ QString RadioModel::sliceCapReason(int cap) const
 {
     // Fix wave 1, I1: plain and grammatical for any count.
     const QString slices = cap == 1 ? tr("1 slice") : tr("%1 slices").arg(cap);
-    // Before a radio has sized the stream pool the ceiling is the Core's
-    // own (sliceChannelLimit), so the Core is named, not a radio.
+    // Before a radio has sized the stream pool the ceiling is this
+    // computer's own (sliceChannelLimit), so no radio is named: the Core on
+    // a Core (and in a remote window, whose Core decides), NereusSDR in a
+    // window with no Core (R-R3-21). Only a Core has the station listener
+    // rule (DaemonApp sets it).
     if (m_streamAllocator.streamCount() <= 0) {
-        return tr("The Core supports a maximum of %1").arg(slices);
+        const bool core = m_role == Role::Remote || m_stationBind.has_value();
+        return core ? tr("The Core supports a maximum of %1").arg(slices)
+                    : tr("NereusSDR supports a maximum of %1").arg(slices);
     }
     // RadioInfo.name carries the friendly product label (e.g. "ANAN-G2");
     // fall back to a generic phrase when it has none.
@@ -10216,6 +10297,182 @@ void RadioModel::applyNetworkWatchdog(bool enabled)
     });
 }
 
+// ---------------------------------------------------------------------------
+// Task 13: External TX Inhibit, a Core setting.
+//
+// From Thetis setup.cs:16660-16667 [v2.10.3.15]:
+//   private void chkTXInhibit_CheckedChanged(object sender, EventArgs e)
+//   {
+//       console.UseTxInhibit = chkTXInhibit.Checked;
+//   }
+//   private void chkTXInhibitReverse_CheckedChanged(object sender, EventArgs e)
+//   {
+//       console.ReverseTxInhibit = chkTXInhibitReverse.Checked;
+//   }
+// The monitor applies them on its next pass, as PollTXInhibit reads
+// _useTxInhibit and _reverseTxInhibit on its next 100 ms pass.
+// ---------------------------------------------------------------------------
+void RadioModel::setUseTxInhibit(bool on)
+{
+    AppSettings::instance().setValue(QStringLiteral("TxInhibitMonitorEnabled"),
+                                     on ? QStringLiteral("True") : QStringLiteral("False"));
+    m_txInhibit.setEnabled(on);
+}
+
+void RadioModel::setReverseTxInhibit(bool on)
+{
+    AppSettings::instance().setValue(QStringLiteral("TxInhibitMonitorReversed"),
+                                     on ? QStringLiteral("True") : QStringLiteral("False"));
+    m_txInhibit.setReverseLogic(on);
+}
+
+// ---------------------------------------------------------------------------
+// Task 13: the radio's TX inhibit input reaches the keying gate.
+//
+// Thetis polls it every 100 ms from power-on (console.cs:27417-27425
+// [v2.10.3.15] starts PollTXInhibit; the loop reads prn->user_dig_in,
+// console.cs:25849-25887). Here the connection reports the inputs when they
+// change and the monitor evaluates them at once, so a change reaches the
+// gate within one status frame; the monitor's own 100 ms pass stays as the
+// poll. The per-model bit choice is TxInhibitMonitor::inhibitInputFromUserIo
+// (//DH1KLM should be in P1  //N1GP G2E added, console.cs:25862).
+// txInhibitedChanged then reaches MoxController through applyTxKeyBlock,
+// which gates every keying source (Task 7).
+// ---------------------------------------------------------------------------
+void RadioModel::connectTxInhibitInput()
+{
+    RadioConnection* const conn = m_connection;
+    if (conn == nullptr) {
+        return;
+    }
+    // From Thetis console.cs:25860 [v2.10.3.15]:
+    //   if (NetworkIO.CurrentRadioProtocol == RadioProtocol.USB) // protocol 1
+    m_txInhibit.attachRadioInput(m_hardwareProfile.model, conn->protocolVersion());
+    // The connection lives on its own thread; the monitor on this one.
+    // A report that arrives after this connection has gone is dropped.
+    connect(conn, &RadioConnection::userDigitalInputsChanged, this,
+            [this, conn](quint8 userDigIn) {
+                if (m_connection != conn) {
+                    return;
+                }
+                m_txInhibit.notifyUserDigitalInputs(userDigIn);
+            },
+            Qt::QueuedConnection);
+}
+
+
+// ---------------------------------------------------------------------------
+// Plan Task 14 fix wave (R-R3-49): the band outputs on the wire.
+//
+// Thetis's Setup LED strip shows the bits UpdateExtCtrl returned, not a
+// byte of its own (console.cs:29104-29107 [v2.10.3.15], quoted at
+// bandOutputsByte). The HL2 I/O tab's strip here updated only from the
+// Core's connection, so a remote window never moved, and the OC Outputs
+// tab computed its own byte from pan 1's band, the opposite of the wire in
+// a cross-band split. The connection now reports what it composed; this
+// model keeps it for the local displays and publishes it to every window.
+// ---------------------------------------------------------------------------
+void RadioModel::connectBandOutputsReport()
+{
+    RadioConnection* const conn = m_connection;
+    if (conn == nullptr) {
+        return;
+    }
+    // The connection lives on its own thread. A report that arrives after
+    // this connection has gone is dropped.
+    connect(conn, &RadioConnection::bandOutputsComposed, this,
+            [this, conn](quint8 ocByte, int band, bool keyed) {
+                if (m_connection != conn) {
+                    return;
+                }
+                onBandOutputsComposed(ocByte, band, keyed);
+            },
+            Qt::QueuedConnection);
+    // Fix wave M2: a pin edit (this window's, or a remote window's through
+    // the "oc" reload, which reloads this same matrix) reaches the
+    // connection, which sends it at once on Protocol 2.
+    connect(&m_ocMatrix, &OcMatrix::changed, conn,
+            [conn]() { conn->onBandOutputPinsChanged(); },
+            Qt::QueuedConnection);
+}
+
+void RadioModel::onBandOutputsComposed(quint8 ocByte, int band, bool keyed)
+{
+    if (!ownsLocalDsp()) {
+        return;
+    }
+    const int byte = int(ocByte);
+    if (m_bandOutputsFields == 7U && m_bandOutputsByte == byte
+        && m_bandOutputsBand == band && m_bandOutputsKeyed == keyed) {
+        return;
+    }
+    m_bandOutputsByte   = byte;
+    m_bandOutputsBand   = band;
+    m_bandOutputsKeyed  = keyed;
+    m_bandOutputsFields = 7U;
+    emit bandOutputsChanged();
+}
+
+void RadioModel::resetBandOutputs()
+{
+    if (m_bandOutputsFields == 0U && m_bandOutputsByte == 0
+        && m_bandOutputsBand == -1 && !m_bandOutputsKeyed) {
+        return;
+    }
+    m_bandOutputsByte   = 0;
+    m_bandOutputsBand   = -1;
+    m_bandOutputsKeyed  = false;
+    m_bandOutputsFields = 0U;
+    emit bandOutputsChanged();
+}
+
+bool RadioModel::bandOutputsKnown() const
+{
+    if (ownsLocalDsp()) {
+        return m_bandOutputsFields == 7U;
+    }
+    return isConnected() && m_bandOutputsFields == 7U && m_bandOutputsBand >= 0;
+}
+
+bool RadioModel::applyStationBandOutputsValue(const QByteArray& name, const QVariant& value)
+{
+    if (ownsLocalDsp()) {
+        return false;
+    }
+    if (name == "bandOutputsByte") {
+        bool ok = false;
+        const int byte = value.toInt(&ok);
+        if (!ok || byte < 0 || byte > 0xFF) {
+            return false;
+        }
+        m_bandOutputsByte = byte;
+        m_bandOutputsFields |= 1U;
+    } else if (name == "bandOutputsBand") {
+        bool ok = false;
+        const int band = value.toInt(&ok);
+        if (!ok || band < -1 || band >= int(Band::Count)) {
+            return false;
+        }
+        m_bandOutputsBand = band;
+        m_bandOutputsFields |= 2U;
+    } else if (name == "bandOutputsKeyed") {
+        m_bandOutputsKeyed = value.toBool();
+        m_bandOutputsFields |= 4U;
+    } else {
+        return false;
+    }
+    emit bandOutputsChanged();
+    return true;
+}
+
+void RadioModel::clearStationBandOutputs()
+{
+    if (ownsLocalDsp()) {
+        return;
+    }
+    resetBandOutputs();
+}
+
 
 // --- Connection ---
 
@@ -10591,12 +10848,15 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
     // returns 1 until isConnected() is true, and m_connection is not
     // assigned until further down this function.
     const int poolSlices = caps.maxSlices > 0 ? caps.maxSlices : 1;
-    configureStreamPool(caps.userDdcCount, poolSlices, wdspInputRate);
+    // Plan Task 11: the stream count depends on the protocol too (four on
+    // Protocol 1); the same function userStreamCount() reads.
+    const int poolStreams = BoardCapsTable::userDdcCountFor(caps, info.protocol);
+    configureStreamPool(poolStreams, poolSlices, wdspInputRate);
 
     // One ReceiverManager receiver per stream. Receiver 0 was created above
     // with the board's primary-DDC mapping; the rest are auto-assigned and
     // stay inactive until a slice binds to them.
-    for (int st = 1; st < caps.userDdcCount; ++st) {
+    for (int st = 1; st < poolStreams; ++st) {
         if (m_receiverManager->receiverConfig(st).receiverIndex < 0) {
             m_receiverManager->createReceiver();
         }
@@ -10608,7 +10868,7 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
     // is also where Slice B and friends come back.
     bindUnboundSlices();
 
-    qCInfo(lcConnection) << "Sub-Epic I: streams=" << caps.userDdcCount
+    qCInfo(lcConnection) << "Sub-Epic I: streams=" << poolStreams
                          << "channels=" << poolSlices;
 
     // 3M-1a G.1 fixup: explicit disconnect in teardownConnection() prevents
@@ -12314,6 +12574,39 @@ void RadioModel::disconnectFromRadio()
     teardownConnection();
 }
 
+void RadioModel::wireReceiverManagerHardwarePushes()
+{
+    // The live slots go first, in the order ReceiverManager emits them, so a
+    // Protocol 1 connection has the slot set before the count and the
+    // frequencies that follow a rebuild (Phase 3F section 16.3.2).
+    connect(m_receiverManager, &ReceiverManager::hardwareSlotsChanged,
+            this, [this](quint32 slotMask) {
+        if (m_connection) {
+            QMetaObject::invokeMethod(m_connection, [conn = m_connection, slotMask]() {
+                conn->setLiveReceiverSlots(slotMask);
+            });
+        }
+    });
+
+    connect(m_receiverManager, &ReceiverManager::hardwareReceiverCountChanged,
+            this, [this](int count) {
+        if (m_connection) {
+            QMetaObject::invokeMethod(m_connection, [conn = m_connection, count]() {
+                conn->setActiveReceiverCount(count);
+            });
+        }
+    });
+
+    connect(m_receiverManager, &ReceiverManager::hardwareFrequencyChanged,
+            this, [this](int hwIndex, quint64 freq) {
+        if (m_connection) {
+            QMetaObject::invokeMethod(m_connection, [conn = m_connection, hwIndex, freq]() {
+                conn->setReceiverFrequency(hwIndex, freq);
+            });
+        }
+    });
+}
+
 void RadioModel::wireConnectionSignals(int wdspInSize)
 {
     if (!m_connection) {
@@ -12627,23 +12920,7 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
     });
 
     // ReceiverManager → RadioConnection (hardware updates)
-    connect(m_receiverManager, &ReceiverManager::hardwareReceiverCountChanged,
-            this, [this](int count) {
-        if (m_connection) {
-            QMetaObject::invokeMethod(m_connection, [conn = m_connection, count]() {
-                conn->setActiveReceiverCount(count);
-            });
-        }
-    });
-
-    connect(m_receiverManager, &ReceiverManager::hardwareFrequencyChanged,
-            this, [this](int hwIndex, quint64 freq) {
-        if (m_connection) {
-            QMetaObject::invokeMethod(m_connection, [conn = m_connection, hwIndex, freq]() {
-                conn->setReceiverFrequency(hwIndex, freq);
-            });
-        }
-    });
+    wireReceiverManagerHardwarePushes();
 
     // H.5: P1/P2 status-frame mic_ptt → MoxController PTT-source dispatch.
     // Source: Thetis console.cs:25426 [v2.10.3.13] PollPTT:
@@ -12660,6 +12937,12 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
                 m_moxController, &MoxController::onMicPttFromRadio,
                 Qt::QueuedConnection);
     }
+
+    // Task 13: the radio's TX inhibit input (PollTXInhibit).
+    connectTxInhibitInput();
+
+    // Plan Task 14 fix wave: the band outputs the connection composes.
+    connectBandOutputsReport();
 
     // ── Task 2.4 of P1 full-parity epic: TransmitModel → RadioConnection ────
     // Wire lineInGain + userDigOut model-layer signals to the wire-bit setters
@@ -13120,10 +13403,14 @@ void RadioModel::installBandPlanMoxCheck()
         // and never queued: capture becoming Ready later does not key, the
         // operator presses again. Tune, two-tone and TCI audio do not read
         // the PC microphone and key normally.
+        // notQueued carries "never queued" to a source still held: the
+        // controller does not try it again until it is released and
+        // pressed again (MoxController::m_notQueuedHeld).
         if (pcCaptureGatesKeying() && !pcCaptureReady()) {
             return {false,
                     QStringLiteral("Microphone is not ready. Check Audio "
-                                   "settings and retry.")};
+                                   "settings and retry."),
+                    /*notQueued=*/true};
         }
         return bandPlanResult;
     });
@@ -15113,6 +15400,65 @@ void RadioModel::republishAlexAdcSlices()
         }
     }
 
+    // Plan Task 14 re-review N4 (Phase 3F design section 16.4.1: WIDE is
+    // the bypass on the wire). The Alex tab's HPF Bypass (master) and
+    // Disable 6m LNA on RX put 0x20 in Alex0 on an Alex board, in place of
+    // the band's selection, whatever the policy chose. The connection
+    // applies them (codec::alex::applyAlex1HpfSwitches, gated on
+    // hasAlexFilters, Alex0 only); the same rule decides here what the
+    // chain reports:
+    //   From Thetis console.cs:6850-6855 [v2.10.3.15] (setAlexHPF)
+    //     if (alex_hpf_bypass)
+    //     {
+    //         NetworkIO.SetAlexHPFBits(0x20); // Bypass HPF
+    //   From Thetis console.cs:6935 [v2.10.3.15] (the 6 m BPF/LNA branch)
+    //     if (alex6bphpf_bypass || disable_6m_lna_on_rx || (_mox && disable_6m_lna_on_tx))
+    // The 6 m arm applies where the selection sent for the chain is the
+    // 6 m BPF/LNA (0x40), which is the lowest slice's selection below.
+    //
+    // Task 14 follow-up 2: the keyed arms are reported too, while keyed.
+    //   From Thetis console.cs:6843-6848 [v2.10.3.15] (setAlexHPF)
+    //     if (_mox && disable_hpf_on_tx)
+    //     {
+    //         NetworkIO.SetAlexHPFBits(0x20);
+    //   From Thetis console.cs:6957 [v2.10.3.15] (setBPF1ForOrionIISaturn,
+    //   the band-pass boards only: usesBpf1Preselector)
+    //     if (_mox && (disable_hpf_on_tx || (disable_hpf_on_ps && PureSignalEnabled)))
+    //   and the 6 m branch's (_mox && disable_6m_lna_on_tx) at 6935 above.
+    // Keyed and PureSignal running are the codec context's inputs
+    // (currentCodecContext), the same the DDC assignment reads; a MOX edge
+    // and a PureSignal change each re-run this through
+    // refreshDdcAssignmentForRadioState. Where two causes are on at once
+    // the one reported is the one that outlasts transmit (the master
+    // switch, then the 6 m LNA on RX), so the tooltip's remedy holds.
+    {
+        AlexController::SwitchBypass chain0Switch = AlexController::SwitchBypass::None;
+        if (boardCapabilities().hasAlexFilters) {
+            static constexpr quint8 k6mBpfLna = 0x40;
+            const bool on6mLna = counts[0] > 0
+                && codec::alex::computeRxPreselector(lowestHz[0] / 1.0e6, alexBoard)
+                       == k6mBpfLna;
+            const NereusSDR::CodecContext radioState = currentCodecContext();
+            const bool keyed = radioState.mox;
+            if (m_alexHpfBypassSwitch) {
+                chain0Switch = AlexController::SwitchBypass::HpfBypass;
+            } else if (m_alexDisable6mLnaOnRxSwitch && on6mLna) {
+                chain0Switch = AlexController::SwitchBypass::Disable6mLnaOnRx;
+            } else if (keyed && m_alexHpfBypassOnTxSwitch) {
+                chain0Switch = AlexController::SwitchBypass::HpfBypassOnTx;
+            } else if (keyed && m_alexHpfBypassOnPsSwitch && radioState.puresignalRun
+                       && codec::alex::usesBpf1Preselector(alexBoard)) {
+                chain0Switch = AlexController::SwitchBypass::PureSignalTx;
+            } else if (keyed && m_alexDisable6mLnaOnTxSwitch && on6mLna) {
+                chain0Switch = AlexController::SwitchBypass::Disable6mLnaOnTx;
+            }
+        }
+        m_alexController.setSwitchBypass(0, chain0Switch);
+        // SetAlexHPFBits writes Alex0 only (netInterface.c:604-621
+        // [v2.10.3.15]): chain 1 is never bypassed by these switches.
+        m_alexController.setSwitchBypass(1, AlexController::SwitchBypass::None);
+    }
+
     // Every chain AlexController models is notified, including one the board
     // does not have: the array for it is empty, which is the correct input for
     // a chain with nothing on it and which clears any state left over from a
@@ -15140,8 +15486,12 @@ void RadioModel::republishAlexAdcSlices()
         if (counts[adc] == 0) { return -1; }
 
         const AlexController::AlexAdcState& st = m_alexController.adcState(adc);
-        if (st.effective == AlexController::BpfEffective::Bypass
-            || st.effective == AlexController::BpfEffective::WidebandLocked) {
+        // A chain bypassed only by an Alex tab switch keeps its band's
+        // selection here: the connection applies the switch, which leaves
+        // Alex0 and Alex1's mirror exactly as before (re-review N4).
+        if ((st.effective == AlexController::BpfEffective::Bypass
+             || st.effective == AlexController::BpfEffective::WidebandLocked)
+            && st.bypassSwitch == AlexController::SwitchBypass::None) {
             // 0x20 is the bypass encoding on both chains.
             // From Thetis ChannelMaster/netInterface.c:604-651 [v2.10.3.15]:
             //   prbpfilter->_Bypass  = (bits & 0x20) != 0;
@@ -15531,11 +15881,17 @@ void RadioModel::wireWidebandConnection()
 
 std::optional<double> RadioModel::widebandAdcRateHz(int adc) const
 {
+    // The protocol gate is BoardCapsTable::widebandAdcsFor's, not a second
+    // copy of it here: it gives 0 on Protocol 1 for every row, which is what
+    // tst_wideband_chain_state's every-row invariant drives through this
+    // model (plan Task 5). The P2RadioConnection cast is not a protocol rule;
+    // the wideband FFT engines exist only on that connection.
     if (role() != Role::Local || !isConnected()
-        || m_lastRadioInfo.protocol != ProtocolVersion::Protocol2
         || !qobject_cast<P2RadioConnection*>(m_connection)
         || adc < 0 || adc >= WidebandSpectrumCache::kMaxSources
-        || adc >= boardCapabilities().adcCount || adc >= boardCapabilities().widebandAdcs
+        || adc >= boardCapabilities().adcCount
+        || adc >= BoardCapsTable::widebandAdcsFor(boardCapabilities(),
+                                                  m_lastRadioInfo.protocol)
         || !m_widebandFftEngines[adc] || !m_widebandCaptureEpochs[adc]
         || m_widebandCaptureEpochs[adc]->load(std::memory_order_acquire) == 0) {
         return std::nullopt;
@@ -15637,6 +15993,37 @@ QString RadioModel::bypassReasonForAdc(
         }
         return tr("Core reports preselector bypass for this receiver chain: %1. "
                   "Click to inspect the reported state.").arg(st.reasonText);
+    }
+
+    // Plan Task 14 re-review N4: an Alex tab switch put the bypass there.
+    // Design section 16.4.4's setting rows, verbatim: these name the setting
+    // and where to turn it off.
+    if (st.bypassSwitch == AlexController::SwitchBypass::HpfBypass) {
+        return tr("Preselector bypassed by the HPF Bypass (master) setting on the "
+                  "Antenna / ALEX page of the hardware setup. Turn it off there to "
+                  "restore filtering.");
+    }
+    if (st.bypassSwitch == AlexController::SwitchBypass::Disable6mLnaOnRx) {
+        return tr("Preselector bypassed on 6 m by the Disable 6m LNA on RX setting "
+                  "on the Antenna / ALEX page of the hardware setup. Turn it off "
+                  "there to restore filtering.");
+    }
+    // Task 14 follow-up 2: the keyed causes, on the wire while keyed.
+    if (st.bypassSwitch == AlexController::SwitchBypass::PureSignalTx) {
+        // Design doc §16.4.4, "PureSignal TX" row, verbatim.
+        return tr("Preselector bypassed while PureSignal is transmitting, so the "
+                  "feedback path sees an unfiltered coupler signal. Filtering "
+                  "returns when transmit ends.");
+    }
+    if (st.bypassSwitch == AlexController::SwitchBypass::HpfBypassOnTx) {
+        return tr("Preselector bypassed while transmitting by the HPF Bypass on TX "
+                  "setting on the Antenna / ALEX page of the hardware setup. "
+                  "Filtering returns when transmit ends.");
+    }
+    if (st.bypassSwitch == AlexController::SwitchBypass::Disable6mLnaOnTx) {
+        return tr("Preselector bypassed on 6 m while transmitting by the Disable 6m "
+                  "LNA on TX setting on the Antenna / ALEX page of the hardware "
+                  "setup. Filtering returns when transmit ends.");
     }
 
     if (st.mode == AlexController::BpfMode::ForceBypass) {
@@ -16364,10 +16751,29 @@ void RadioModel::teardownConnection()
     // Two-tone is released further down (m_twoToneController). NereusSDR
     // glue: the TUN-off completion runs at once, because the MoxController
     // timers that would deliver rxReady cannot fire during this teardown.
+    // Task 7: no PTT source reports once the connection goes, so the levels
+    // MoxController recorded are dropped before anything below clears a
+    // manual key and runs a PollPTT pass on them.
+    if (m_moxController) {
+        m_moxController->clearPttSources();
+    }
+    // Task 7 fix wave, I3: chkMOX.Checked = false, quoted above, done. It
+    // comes first, as in Thetis, and unkeys whatever holds MOX: a MOX-button
+    // key would otherwise survive the disconnect with nothing holding it
+    // (its manual key is cleared further down with the session's TUN
+    // state). The TX-to-RX walk's hardware flip runs now, while the
+    // connection is still live, so the radio gets the MOX bit off.
+    if (m_moxController) {
+        m_moxController->setMox(false);
+    }
     if (m_isTuning) {
         setTune(false);
         completeTuneOff();
     }
+    // Task 13: the radio's TX inhibit input goes with the radio. Nothing is
+    // keyed by now (the PTT sources are cleared and MOX is off above), so
+    // lifting the gate here cannot key anything.
+    m_txInhibit.detachRadioInput();
 
     // Flush any pending coalesced slice save FIRST so the user's last
     // AF / step / freq / lock / RIT tweak isn't lost to the 500 ms
@@ -16453,6 +16859,11 @@ void RadioModel::teardownConnection()
     // [v2.10.3.13]) at session end.
     m_pendingTuneOff = false;
     m_isTuning       = false;
+    // Task 7: the manual key TUN set is cleared with the session's TUN state
+    // (completeTuneOff will not run for it now).
+    if (m_moxController) {
+        m_moxController->setManualKey(false);
+    }
 
     // L.3: Release the HL2 mic-source lock on disconnect.
     // A subsequent connectToRadio() to a non-HL2 radio must be free to use
@@ -16829,6 +17240,9 @@ void RadioModel::applyHpsdrModel(HPSDRModel m)
 {
     m_hardwareProfile = ::NereusSDR::profileForModel(m);
     m_transmitModel.setHpsdrModel(m_hardwareProfile.model);
+    // Task 13: PollTXInhibit reads HardwareSpecific.Model on every pass
+    // (console.cs:25855-25873 [v2.10.3.15]).
+    m_txInhibit.setRadioModel(m_hardwareProfile.model);
     if (m_receiverManager) {
         m_receiverManager->setHpsdrModel(m_hardwareProfile.model);
 
@@ -16874,6 +17288,10 @@ void RadioModel::setConnectionState(ConnectionState s)
     }
     if (wasConnected && s != ConnectionState::Connected) {
         retireWidebandDemand();
+        // Plan Task 14 fix wave: nothing is on the wire now.
+        if (ownsLocalDsp()) {
+            resetBandOutputs();
+        }
     }
     // Retirement can notify direct filter observers. A reentrant transition
     // has already published its own state and must not be followed by ours.
@@ -16958,6 +17376,12 @@ void RadioModel::onConnectionStateChanged(ConnectionState state)
         // reconnect, so the fresh connection has to be told which chain is
         // filtered and which is wide before the first tune moves anything.
         republishAlexAdcSlices();
+        // Plan Task 14: and which VFO each receiver slot serves, for the OC
+        // band.
+        republishReceiverVfoFrequencies();
+        // Plan Task 14 and its fix wave: and the Alex tab's saved high-pass
+        // switches.
+        applyAlexHpfSwitchSettings();
         // RF-SAFETY: and the transmit low-pass, for the same reason. A fresh
         // P2RadioConnection starts with m_alex.lpfBitsTx at its 6 m default
         // and only setTxFrequency ever moves it, so without a push here the
@@ -17188,8 +17612,17 @@ void RadioModel::handleGanymedeTrip(int tripState)
     if (newTripped && m_transmitModel.isMox()) {
         m_transmitModel.setMox(false);
     }
+    // Task 7 fix wave, I2: the controller that keys follows the trip on
+    // every trip message, so a key made mid-fault drops again too. The
+    // transition itself reaches applyTxKeyBlock through paTrippedChanged.
+    if (newTripped && m_moxController) {
+        m_moxController->setPaTripped(true);
+    }
 
     if (newTripped == m_paTripped) {
+        if (newTripped) {
+            applyTxKeyBlock();
+        }
         return; // already in this trip state — no transition signal
     }
 
@@ -17652,10 +18085,16 @@ void RadioModel::setTune(bool on)
             // the TX-to-RX branch of chkMOX_CheckedChanged2). NereusSDR's
             // MoxController::setTune(true) sets Manual before keying (its
             // documented ordering deviation), so the refusal puts it back.
+            //
+            // Task 7 fix wave, M1: no setPttMode(PttMode::None) after
+            // completeTuneOff. MoxController::setMox already cleared the
+            // mode when it refused, and completeTuneOff's last step clears
+            // the manual key, whose PollPTT pass can key a held source with
+            // its own mode; clearing the mode after that would leave that
+            // key with no source able to release it.
             if (!keyed) {
                 setTune(false);
                 completeTuneOff();
-                m_moxController->setPttMode(PttMode::None);
             }
         }
 
@@ -17812,16 +18251,82 @@ void RadioModel::setTune(bool on)
 
 void RadioModel::setMox(bool on)
 {
-    // Route through MoxController when installed — that path enforces the
-    // BandPlanGuard MoxCheck callback, fans out hardwareFlipped, and runs the
-    // Codex P2 safety-effects-before-idempotent-guard ordering.  Without a
-    // controller we fall back to the TransmitModel latch (matches the
-    // pre-controller path Thetis uses during early construction).
+    // TCI trx is a keying source of its own (receiver and transmit gaps
+    // plan, Task 7). MoxController::onTciPtt keys with PttMode::Tci through
+    // the PollPTT rules: not during a manual key, only from receive, and a
+    // release unkeys (or falls back to a held source) only in TCI mode.
+    //
+    // From Thetis TCIServer.cs:3671-3672 [v2.10.3.15] (handleTrxMessage):
+    //   if (consoleThreadSafe.MOX != bMox)
+    //       consoleThreadSafe.TCIPTT = bMox;
+    // Without a controller we fall back to the TransmitModel latch (matches
+    // the pre-controller path Thetis uses during early construction).
+    //
+    // Task 7 fix wave (R-R3-49): a release is always passed on, even when
+    // MOX is already off. Thetis writes TCIPTT = false only when MOX is on,
+    // so a trx:N,true that keyed nothing (held off by a manual key) leaves
+    // _tci_ptt set after the app's trx:N,false, and the next poll after the
+    // manual key clears keys the radio for an app that has let go. Passing
+    // the release on clears the level; it can only unkey a TCI key, never
+    // key anything.
     if (m_moxController) {
-        m_moxController->setMox(on);
+        if (!on || m_moxController->isMox() != on) {
+            m_moxController->onTciPtt(on);
+        }
     } else {
         m_transmitModel.setMox(on);
     }
+}
+
+void RadioModel::setMoxFromButton(bool on)
+{
+    // Receiver and transmit gaps plan, Task 7. From Thetis chkMOX_Click,
+    // console.cs:29730-29747 [v2.10.3.15], else branch:
+    //   _manual_mox = false;
+    //   if (chkTUN.Checked)
+    //       chkTUN.Checked = false;
+    //   if (chk2TONE.Checked) //MW0LGE_21a
+    //       chk2TONE.Checked = false;
+    // MoxController::onMoxButton does the key and the manual flag; turning
+    // TUN and two-tone off is here, where both live.
+    //
+    // Order (deliberate, safer than Thetis's): with TUN or two-tone on, the
+    // button's off turns them off FIRST and leaves the manual key to their
+    // own ends (completeTuneOff, console.cs:30193; two-tone's settle,
+    // setup.cs:11193 [v2.10.3.15]). Thetis clears _manual_mox before
+    // chkTUN.Checked = false, so its next poll can key a held mic while the
+    // tune tone runs for up to 100 ms. NereusSDR's TUN-off completion waits
+    // for the TX-to-RX walk to finish, and a mic key would hold that walk
+    // off, leaving the tone on air under the mic; keeping the manual key
+    // until the tone is down closes that.
+    if (m_moxController == nullptr) {
+        return;
+    }
+    // Task 7 fix wave, M9: pressed while a TUN-off is still completing (the
+    // TX-to-RX walk plus the settle, about 130 ms), the key would stop the
+    // walk's timers, so the rxReady that completeTuneOff waits for never
+    // comes and the tune tone keeps running under the new key (the "Bug
+    // window" note in setTune). Thetis keys at once and drops the tone
+    // within 100 ms (console.cs:30157-30160 [v2.10.3.15]); here the TUN-off
+    // completes first (tone off, mode, power and TX VFO back), then the
+    // key is tried, so it is checked against the restored mode.
+    if (on && m_pendingTuneOff) {
+        completeTuneOff();
+    }
+    const bool twoToneOn = m_twoToneController && m_twoToneController->isActive();
+    if (!on && (m_isTuning || twoToneOn)) {
+        if (m_isTuning) {
+            setTune(false);
+        }
+        if (twoToneOn) {
+            m_twoToneController->setActive(false);
+        }
+        // Both unkey on their own; this covers a MOX left keyed by anything
+        // else under them.
+        m_moxController->setMox(false);
+        return;
+    }
+    m_moxController->onMoxButton(on);
 }
 
 bool RadioModel::mox() const
@@ -17857,6 +18362,24 @@ qint64 RadioModel::vfoHz(int rx, int chan) const
         return 0;
     }
     return static_cast<qint64>(slice->frequency());
+}
+
+qint64 RadioModel::ddsHz(int rx) const
+{
+    const SliceModel* slice = sliceById(rx);
+    if (!slice) {
+        return 0;
+    }
+    return static_cast<qint64>(std::llround(slice->frequency() - slice->shiftOffsetHz()));
+}
+
+int RadioModel::ritHzForRx(int rx) const
+{
+    const SliceModel* slice = sliceById(rx);
+    if (!slice || !slice->ritEnabled()) {
+        return 0;
+    }
+    return slice->ritHz();
 }
 
 void RadioModel::setMode(int rx, QString modeStr)
@@ -18555,6 +19078,53 @@ void RadioModel::completeTuneOff()
     // [H.3 hook: restore meterModel().setTxDisplayMode(savedMode) here]
 
     m_isTuning = false;
+
+    // Receiver and transmit gaps plan, Task 7. From Thetis
+    // chkTUN_CheckedChanged, console.cs:30193 [v2.10.3.15]: _manual_mox =
+    // false comes last in TUN-off, after the tone and power are restored,
+    // so no mic PTT or VOX keys while the tune tone is still up.
+    if (m_moxController) {
+        m_moxController->setManualKey(false);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// applyTxKeyBlock: TX inhibit and the PA trip (Task 7 fix wave, I2).
+//
+// From Thetis console.cs:15341-15363 [v2.10.3.15] (TXInhibit setter):
+//   chkTUN.Enabled = !_tx_inhibit;
+//   chk2TONE.Enabled = !_tx_inhibit; //MW0LGE_21a
+//   chkVOX.Enabled = !_tx_inhibit;
+//   ...
+//   if (_tx_inhibit && chkMOX.Checked)
+//       chkMOX.Checked = false;
+// and PollPTT's gate, console.cs:25470 [v2.10.3.15]:
+//   if (!_manual_mox && !_disable_ptt && !_rx_only && !_tx_inhibit && !QSKEnabled && !_ganymede_pa_issue)
+// (cw_ptt, below it, carries: //[2.10.3.9]MW0LGE only want to do this on semi breakin  [original inline comment from console.cs:25473])
+// MoxController holds both gates and unkeys an active transmission. TUN and
+// two-tone are turned off here as well, through their own off paths, so the
+// tone, the mode and the power come back and no TUN or two-tone is left on
+// with MOX down.
+// ---------------------------------------------------------------------------
+void RadioModel::applyTxKeyBlock()
+{
+    if (m_moxController == nullptr) {
+        return;
+    }
+    const bool inhibited = m_txInhibit.inhibited();
+    m_moxController->setTxInhibited(inhibited);
+    m_moxController->setPaTripped(m_paTripped);
+    if (!inhibited && !m_paTripped) {
+        return;
+    }
+    if (m_isTuning && !m_pendingTuneOff) {
+        setTune(false);
+    }
+    if (m_twoToneController != nullptr
+        && (m_twoToneController->isActive()
+            || m_twoToneController->isActivationInFlight())) {
+        m_twoToneController->setActive(false);
+    }
 }
 
 void RadioModel::onMoxHardwareFlipped(bool isTx)
@@ -18808,7 +19378,7 @@ qint64 RadioModel::setSampleRateLive(int newRateHz,
     rxChannelIds.erase(std::unique(rxChannelIds.begin(), rxChannelIds.end()),
                        rxChannelIds.end());
 
-    // ── Step 1: Stop every RX channel, draining channel 0 last ────────────
+    // ── Step 1: Stop every running RX channel, the lowest last, drained ──
     // Upstream switches off every receiver channel, the sub-receivers with
     // no drain and the main channel last with a drain, while data is still
     // flowing so each one slews down and flushes:
@@ -18820,28 +19390,22 @@ qint64 RadioModel::setSampleRateLive(int newRateHz,
     //     WDSP.SetChannelState(0, 0, 1);  // RX1_main
     // Protocol 2 does the same for its pair at setup.cs:7043-7044
     // [v2.10.3.15]: WDSP.id(0, 1) with no drain, then WDSP.id(0, 0) drained.
-    // Here that is every slice's channel from the highest id down, channel 0
-    // last, as upstream orders it. Every one is stopped with the drain,
-    // including the sub-receiver channels upstream stops with dmode 0.
+    // Here that is every running slice's channel from the highest id down,
+    // each without a drain, and the lowest running channel (channel 0 while
+    // Slice A runs) last, drained, as upstream orders it.
     //
-    // NereusSDR divergence (fix wave 1, C1): upstream's no-drain stop relies
-    // on I/Q still flowing into the stopped channel, which is what clears
-    // the flags the stop sets. SetChannelState(ch, 0, 0) sets slew.downflag
-    // and flushflag and leaves exchange set (WDSP channel.c:288-290); the
-    // channel's next fexchange2 runs the slew-down, then clears exchange and
-    // releases the flush that clears flushflag (iobuffs.c:553-560,
-    // channel.c:152-162). NereusSDR never exchanges on a stopped channel
-    // (RxChannel::processIq returns early on !isActive()), so those flags
-    // stay set. SetInputSamplerate rebuilds a re-rated channel and clears
-    // them, but setRxChannelRate skips a channel already at the new rate
-    // (the per-slice rate menu on Protocol 2 leaves one there). Restarted,
-    // such a channel slews down on its first block and clears exchange: it
-    // is silent while isActive() reports true. The draining stop cannot
-    // leave that behind: with no exchange to finish the flush it times out
-    // and clears exchange, flushflag and downflag itself (channel.c:299-304),
-    // at a cost of about 100 ms per running channel. Restarting a channel
-    // without that wait needs its I/Q kept flowing through the stop, as
-    // upstream's does.
+    // Both forms rely on I/Q still reaching the stopping channels: WDSP
+    // finishes a stop inside the channel's own exchanges, and a channel that
+    // is not fed is left with its slew-down pending (a no-drain stop) or
+    // waits out WDSP's 100 ms timeout (a draining one). The I/Q feed stays
+    // connected until step 2, and RxChannel keeps exchanging on a stopping
+    // channel until WDSP reports the stop done (Task 8, RxChannel::
+    // applyActive and processIq). So the drain takes a few blocks of input,
+    // not 100 ms, and the no-drain stops complete alongside it. A channel no
+    // I/Q reached after its stop is finished by its rebuild in step 6, or,
+    // when it is already at the new rate, by its restart in step 9
+    // (RxChannel::finishPendingStop). Fix wave 1 (C1) drained every channel
+    // until this was in place.
     //
     // RxChannel is owned by WdspEngine; look each one up by channel ID rather
     // than caching a raw pointer. Record which were running, because step 9
@@ -18849,11 +19413,17 @@ qint64 RadioModel::setSampleRateLive(int newRateHz,
     std::vector<int> rxChannelsWereActive;
     for (auto it = rxChannelIds.rbegin(); it != rxChannelIds.rend(); ++it) {
         RxChannel* rx = m_wdspEngine->rxChannel(*it);
-        if (!rx || !rx->isActive()) {
-            continue;
+        if (rx && rx->isActive()) {
+            rxChannelsWereActive.push_back(*it);   // descending
         }
-        rxChannelsWereActive.push_back(*it);
-        rx->setActive(false);  // dmode 1: drain (see the divergence above)
+    }
+    for (std::size_t i = 0; i < rxChannelsWereActive.size(); ++i) {
+        RxChannel* rx = m_wdspEngine->rxChannel(rxChannelsWereActive[i]);
+        if (i + 1 < rxChannelsWereActive.size()) {
+            rx->deactivateWithoutDrain();   // dmode 0, as upstream's subs
+        } else {
+            rx->setActive(false);           // dmode 1: the last, drained
+        }
     }
     QThread::msleep(10);  // From Thetis setup.cs:7116 [v2.10.3.15]: Thread.Sleep(10)
 
@@ -19377,6 +19947,61 @@ void RadioModel::flushRemoteDspOptionsApply()
 }
 
 // ---------------------------------------------------------------------------
+// republishReceiverVfoFrequencies (plan Task 14)
+//
+// Thetis selects the OC outputs from the band of a VFO frequency, never
+// from a DDC centre:
+//   From Thetis console.cs:45950-45951 [v2.10.3.15]
+//     Band lo_band = BandByFreq(XVTRForm.TranslateFreq(VFOAFreq), rx1_xvtr_index, current_region);
+//     Band lo_bandb = BandByFreq(XVTRForm.TranslateFreq(VFOBFreq), rx2_xvtr_index, current_region);
+//
+//     if (penny_ext_ctrl_enabled) //MW0LGE_21k
+// The connection knows each slot's DDC centre (hardwareFrequencyChanged)
+// but not which slice VFO that slot serves, and under CTUN the two can name
+// different bands near an edge. This hands it the VFO of the slice on each
+// live slot, indexed by the slot ReceiverManager routed the slice's stream
+// to (the same index hardwareSlotsChanged reports). Several slices can share
+// one stream; the lowest slice letter speaks for the slot, as VFO A does for
+// Thetis's RX1. A slot with no slice gets 0.
+// ---------------------------------------------------------------------------
+void RadioModel::republishReceiverVfoFrequencies()
+{
+    if (m_connection == nullptr || m_receiverManager == nullptr) {
+        return;
+    }
+
+    QVector<quint64> vfoHz;
+    QVector<int> speaker;   // slice index holding each slot's entry
+    for (SliceModel* s : std::as_const(m_slices)) {
+        if (s == nullptr || s->streamIndex() < 0) {
+            continue;
+        }
+        const ReceiverConfig cfg = m_receiverManager->receiverConfig(s->streamIndex());
+        const int slot = cfg.hardwareRx;
+        if (!cfg.active || slot < 0 || slot >= 32) {
+            continue;
+        }
+        const double hz = s->frequency();
+        if (!std::isfinite(hz) || hz <= 0.0) {
+            continue;
+        }
+        if (vfoHz.size() <= slot) {
+            vfoHz.resize(slot + 1, 0);
+            speaker.resize(slot + 1, -1);
+        }
+        if (speaker.at(slot) < 0 || s->sliceIndex() < speaker.at(slot)) {
+            speaker[slot] = s->sliceIndex();
+            vfoHz[slot] = static_cast<quint64>(std::llround(hz));
+        }
+    }
+
+    RadioConnection* conn = m_connection;
+    QMetaObject::invokeMethod(conn, [conn, vfoHz]() {
+        conn->setReceiverVfoFrequencies(vfoHz);
+    });
+}
+
+// ---------------------------------------------------------------------------
 // R-R3-46: scheduleRemoteHardwareApply / flushRemoteHardwareApply
 //
 // A Hardware Config write from a remote window lands in the Core's
@@ -19427,6 +20052,19 @@ void RadioModel::scheduleRemoteHardwareApply(const QString& key)
         reload = QStringLiteral("pa");
     } else if (rest.startsWith(QLatin1String("hl2/"))) {
         reload = QStringLiteral("hl2");
+    } else if (rest.compare(QLatin1String("alex/master/hpfBypassOnTx"),
+                            Qt::CaseInsensitive) == 0
+               || rest.compare(QLatin1String("alex/master/hpfBypassOnPs"),
+                               Qt::CaseInsensitive) == 0
+               || rest.compare(QLatin1String("alex/master/hpfBypass"),
+                               Qt::CaseInsensitive) == 0
+               || rest.compare(QLatin1String("alex/master/disable6mLnaOnRx"),
+                               Qt::CaseInsensitive) == 0
+               || rest.compare(QLatin1String("alex/master/disable6mLnaOnTx"),
+                               Qt::CaseInsensitive) == 0) {
+        // Plan Task 14 and its fix wave: the Alex tab's high-pass switches,
+        // applied to the connection.
+        reload = QStringLiteral("alex");
     } else {
         return;
     }
@@ -19519,6 +20157,97 @@ void RadioModel::flushRemoteHardwareApply()
         m_paProfileManager->setMacAddress(mac);
         m_paProfileManager->reloadFromSettings();
         observe(QStringLiteral("pa"));
+    }
+    if (reloads.contains(QStringLiteral("alex"))) {
+        applyAlexHpfSwitchSettings();
+        observe(QStringLiteral("alex"));
+    }
+}
+
+// ---------------------------------------------------------------------------
+// applyAlexHpfSwitchSettings (plan Task 14 and its fix wave, R-R3-49)
+//
+// The Alex tab's high-pass switches were saved by the tab and read by
+// nothing. Thetis's check boxes hand each value to the console, whose
+// setter re-applies the high-pass at once:
+//   From Thetis setup.cs:15352-15355 [v2.10.3.15]
+//     private void chkDisableHPFonTX_CheckedChanged(object sender, EventArgs e)
+//     { ... console.DisableHPFonTX = chkDisableHPFonTX.Checked;
+//   From Thetis console.cs:18753-18762 [v2.10.3.15]
+//     private bool disable_hpf_on_tx = false;
+//     public bool DisableHPFonTX
+//     { ... set { disable_hpf_on_tx = value; double freq = VFOAFreq; setAlex1HPF(freq); } }
+//   From Thetis setup.cs:29440-29458 [v2.10.3.15]
+//     private void chkDisableHPFonPS_CheckedChanged(object sender, EventArgs e)
+//     { ... console.DisableHPFonPS = chkDisableHPFonPSb.Checked;
+//   From Thetis console.cs:18764-18773 [v2.10.3.15]
+//     public bool DisableHPFonPS
+//     { ... set { disable_hpf_on_ps = value; double freq = VFOAFreq; setAlex1HPF(freq); } }
+//   From Thetis setup.cs:15374-15379 [v2.10.3.15]
+//     private void chkAlexHPFBypass_CheckedChanged(object sender, EventArgs e)
+//     { console.AlexHPFBypass = chkAlexHPFBypass.Checked; ...
+//   From Thetis console.cs:18793-18803 [v2.10.3.15]
+//     public bool AlexHPFBypass
+//     { ... set { alex_hpf_bypass = value; double freq = VFOAFreq; setAlex1HPF(freq); ...
+//   From Thetis setup.cs:15340-15350 [v2.10.3.15]
+//     console.Disable6mLNAonTX = chkDisable6mLNAonTX.Checked;
+//     console.Disable6mLNAonRX = chkDisable6mLNAonRX.Checked;
+//   From Thetis console.cs:18719-18751 [v2.10.3.15]
+//     Disable6mLNAonRX / Disable6mLNAonTX { set { ...; setAlex1HPF(freq); ... } }
+//     (disable_6m_lna_on_rx = false, disable_6m_lna_on_tx = true)
+//   Disable6mLNAonRX also re-applies RX2's high-pass on the two-filter
+//   boards; setAlex2HPF has no 6 m LNA switch, so nothing changes there.
+//   Upstream inline attribution preserved verbatim (console.cs:18731):
+//     HardwareSpecific.Model == HPSDRModel.ANAN_G2_1K || HardwareSpecific.Model == HPSDRModel.REDPITAYA) //DH1KLM
+// Thetis also runs the PureSignal handler once at start-up
+// (setup.cs:1079), so the saved value applies from the first packet; here
+// the connect path calls this. The connection composes the high-pass word
+// per packet, so handing it the flags is the re-apply. The keys are per
+// radio, like the rest of the Alex tab; each default is the tab's own.
+// ---------------------------------------------------------------------------
+void RadioModel::applyAlexHpfSwitchSettings()
+{
+    if (!ownsLocalDsp() || m_connection == nullptr) {
+        return;
+    }
+    const QString mac = currentRadioMac();
+    if (mac.isEmpty()) {
+        return;
+    }
+    auto flag = [&mac](const char* key, const char* fallback) {
+        return AppSettings::instance()
+                   .hardwareValue(mac, QString::fromLatin1(key), QString::fromLatin1(fallback))
+                   .toString() == QStringLiteral("True");
+    };
+    const bool onTx = flag("alex/master/hpfBypassOnTx", "False");
+    // Default True: chkDisableHPFonPSb.Checked = true (setup.designer.cs).
+    const bool onPs = flag("alex/master/hpfBypassOnPs", "True");
+    const bool bypass = flag("alex/master/hpfBypass", "False");
+    const bool lnaOffRx = flag("alex/master/disable6mLnaOnRx", "False");
+    // Default True: chkDisable6mLNAonTX.Checked = true (setup.designer.cs).
+    const bool lnaOffTx = flag("alex/master/disable6mLnaOnTx", "True");
+    RadioConnection* conn = m_connection;
+    QMetaObject::invokeMethod(conn, [conn, onTx, onPs, bypass, lnaOffRx, lnaOffTx]() {
+        conn->setHpfBypassOnTx(onTx);
+        conn->setHpfBypassOnPs(onPs);
+        conn->setAlexHpfBypass(bypass);
+        conn->setDisable6mLna(lnaOffRx, lnaOffTx);
+    });
+    // Re-review N4: the two receive-side switches also decide what the
+    // chain reports (republishAlexAdcSlices), so the WIDE badge and
+    // rxFilter*Effective show the bypass they put on the wire. The words
+    // sent for the chains are the same as before.
+    // Task 14 follow-up 2: the three keyed switches as well, for the bypass
+    // they put on the wire while keyed.
+    if (bypass != m_alexHpfBypassSwitch || lnaOffRx != m_alexDisable6mLnaOnRxSwitch
+        || onTx != m_alexHpfBypassOnTxSwitch || onPs != m_alexHpfBypassOnPsSwitch
+        || lnaOffTx != m_alexDisable6mLnaOnTxSwitch) {
+        m_alexHpfBypassSwitch = bypass;
+        m_alexDisable6mLnaOnRxSwitch = lnaOffRx;
+        m_alexHpfBypassOnTxSwitch = onTx;
+        m_alexHpfBypassOnPsSwitch = onPs;
+        m_alexDisable6mLnaOnTxSwitch = lnaOffTx;
+        republishAlexAdcSlices();
     }
 }
 
@@ -20223,6 +20952,11 @@ NereusSDR::CodecContext RadioModel::currentCodecContext() const
     // 1-ADC SKU is never handed an ADC1 selector.
     ctx.adcCtrl = NereusSDR::defaultRxAdcCtrl(boardCapabilities().adcCount);
 
+    // The model decides which Protocol 1 models keep slice B's DDC while
+    // PureSignal transmits (P1CodecStandard::applyDdcAssignment). Seeded
+    // before the test seam for the same reason as adcCtrl.
+    ctx.model = m_hardwareProfile.model;
+
     if (m_ddcCtxForTest) {
         ctx.mox           = m_ddcCtxMoxForTest;
         ctx.puresignalRun = m_ddcCtxPsForTest;
@@ -20532,7 +21266,6 @@ std::optional<RadioModel::WidebandDemandRoute>
 RadioModel::widebandDemandRoute(const SliceModel* slice) const
 {
     if (role() != Role::Local || m_widebandDemandRetiring
-        || m_lastRadioInfo.protocol != ProtocolVersion::Protocol2
         || !slice || sliceById(slice->sliceIndex()) != slice) {
         return std::nullopt;
     }
@@ -20543,8 +21276,12 @@ RadioModel::widebandDemandRoute(const SliceModel* slice) const
     const auto& caps = boardCapabilities();
     const int adc = adcForStream(stream);
     const int chain = chainForStream(stream);
+    // widebandAdcsFor carries the protocol gate: 0 on Protocol 1 for every
+    // row, the row's widebandAdcs on Protocol 2 (plan Task 5). One copy of
+    // the rule, which tst_wideband_chain_state drives for every row.
     if (adc < 0 || adc >= WidebandSpectrumCache::kMaxSources
-        || adc >= caps.adcCount || adc >= caps.widebandAdcs
+        || adc >= caps.adcCount
+        || adc >= BoardCapsTable::widebandAdcsFor(caps, m_lastRadioInfo.protocol)
         || chain < 0 || chain >= 2 || chain >= caps.rxFilterChainCount) {
         return std::nullopt;
     }
@@ -20735,30 +21472,26 @@ void RadioModel::publishDdcAssignment(const NereusSDR::DdcAssignment& assignment
     // an already-active receiver; for an inactive one the activation
     // reconcile below re-runs it, so the mapping is live either way.
     //
-    // PROTOCOL 1 IS EXCLUDED, and this is not an optimisation. The codec's
-    // DDC number is the ReceiverManager routing key on Protocol 2 only:
-    // P2RadioConnection emits iqDataReceived keyed by the real DDC index
-    // (P2RadioConnection.cpp:2736 + :2809), but Protocol 1 packs the ACTIVE
-    // receivers sequentially into the EP6 frame and emits their frame-slot
-    // index (P1RadioConnection.cpp:2999-3007). Publishing DDC numbers onto a
-    // P1 receiver would route stream 0 to hw index 2 on Anvelina Pro 3 /
-    // RedPitaya and drop every EP6 packet: the exact regression recorded in
-    // connectToRadio's "P1 radios deliver samples on hardware receiver index
-    // 0" comment (issue #263). The sequential auto-assign that
-    // rebuildHardwareMapping already performs IS the correct P1 answer,
-    // because nth-active-receiver maps to nth frame slot by construction.
-    // The slice-level publish below still carries the codec's DDC number on
-    // P1: that is the wire-level truth, just not a routing key.
-    const bool protocol1 =
-        (qobject_cast<NereusSDR::P1RadioConnection*>(m_connection) != nullptr)
-        || (m_connection == nullptr && m_receiverManager
-            && m_receiverManager->p1Codec() != nullptr);
-
-    // Idle streams are skipped rather than cleared to -1: -1 restores the
-    // auto-assign fallback that caused the drop in the first place, and a
-    // deactivated receiver is excluded from m_hwToLogical anyway, so the
-    // last-known explicit DDC is the safer thing to leave behind.
-    if (m_receiverManager && !protocol1) {
+    // Both protocols route by the codec's number (plan Task 11). On
+    // Protocol 2 it is the DDC index P2RadioConnection emits with
+    // iqDataReceived. On Protocol 1 it is the FRAME SLOT: the index of the
+    // receiver inside the EP6 frame, which P1RadioConnection emits with
+    // iqDataReceived, and every Protocol 1 codec now publishes that
+    // (Thetis GetDDC's Protocol 1 numbering: Hermes A 0 / B 1, HermesII
+    // A 0 / B 1, Orion class and RedPitaya A 0 / B 2, slices C and D on the
+    // PureSignal pair's slots in plain receive).
+    //
+    // Protocol 1 used to be excluded here and left to rebuildHardwareMapping's
+    // sequential auto-assign (nth active receiver -> slot n). That was right
+    // only while the codecs published Protocol 2-style DDC numbers: AnvelinaPro3
+    // and RedPitaya put stream 0 on "DDC2", and routing by that dropped every
+    // EP6 packet (issue #263). It was wrong for the Orion class: slice B went
+    // to slot 1, which the radio tunes to slice A's frequency (bank 3, nddc 5),
+    // instead of slot 2; and slices D and E landed on the PureSignal pair's
+    // slots by position. Routing by frame slot fixes both, and keeps the HL2's
+    // routing except in one state: slice B alone after slice A is removed
+    // reads slot 1 (its own DDC, tuned to its own frequency), not slot 0.
+    if (m_receiverManager) {
         const int streams = std::min(m_streamAllocator.streamCount(), 5);
         for (int st = 0; st < streams; ++st) {
             const int ddc = assignment.streamDdc[st];
@@ -20887,11 +21620,13 @@ void RadioModel::publishDdcAssignment(const NereusSDR::DdcAssignment& assignment
     // DDC has been suspended: the radio has stopped streaming it. Announce
     // it, because until now it was completely silent.
     //
-    // The suspension itself is CORRECT and stays. It is what Thetis does.
-    // On the 1-ADC HERMES class -- the family P2CodecHermes and
-    // P1CodecStandard implement -- UpdateDDCs collapses to a single synced
-    // pair the moment PureSignal transmits or diversity engages, dropping
-    // every user receiver including RX1:
+    // The suspension itself is CORRECT and stays. It is what Thetis does,
+    // and how much it drops depends on the protocol and the model.
+    //
+    // On Protocol 2 the 1-ADC Hermes class (P2CodecHermes) collapses to a
+    // single synced pair the moment PureSignal transmits, dropping every
+    // user receiver including RX1. UpdateDDCs's PureSignal-transmit arm
+    // enables only the pair:
     //
     //   From Thetis console.cs:8448-8456 [v2.10.3.15]:
     //     else // transmitting and PS is ON
@@ -20906,6 +21641,19 @@ void RadioModel::publishDdcAssignment(const NereusSDR::DdcAssignment& assignment
     // agrees: for Hermes / HermesII / HermesC10 on P2 the MOX+PS cases are
     // literally empty, so rx1 and rx2 both come back -1
     // (console.cs:8635-8636 and 8641-8642 [v2.10.3.15]).
+    //
+    // Protocol 1 follows each model's own Thetis layout (plan Task 11;
+    // P1CodecStandard::applyDdcAssignment; the values are frame slots).
+    // Hermes class (HERMES, ANAN10, ANAN100, ANAN_G2E): slices A and B keep
+    // slots 0 and 1 in every state, the PureSignal pair rides slots 2 + 3
+    // (P1 GetDDC: rx1 = 0; rx2 = 1; psrx = 2; pstx = 3). Orion class and
+    // RedPitaya: A on slot 0, B on slot 2 in every state, the pair on slots
+    // 3 + 4. HermesII (ANAN10E, ANAN100B): the pair takes both slots while
+    // PureSignal transmits (psrx = 0; pstx = 1), so slices A and B are
+    // suspended here then, as on Protocol 2 Hermes. Diversity keeps B on
+    // its slot on every Protocol 1 model (GetDDC rx2 = 1, or 2 on Orion).
+    // Slices beyond B lose their slots while PureSignal transmits (the pair)
+    // and under diversity.
     //
     // What Thetis does NOT do is tell the operator. Nothing unchecks RX2,
     // nothing greys it, and the only trace is a label that quietly fails to
