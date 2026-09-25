@@ -262,25 +262,26 @@ private slots:
 
         // Expected order:
         //   setMox(false) is called synchronously from setTune(false) and emits
-        //   the two synchronous phase signals (txAboutToEnd, hardwareFlipped(false))
-        //   BEFORE returning. After setMox(false) returns, setTune(false) clears
-        //   m_manualMox and emits manualMoxChanged(false) synchronously.
-        //   The timer-driven signals (txaFlushed, rxReady) fire only on
-        //   drainTxToRxWalk(). So the actual order is:
-        //     txAboutToEnd → hardwareFlipped(false) → manualMoxChanged(false)
-        //     → txaFlushed → rxReady
+        //   txAboutToEnd (and txDrainRequested) BEFORE returning. After
+        //   setMox(false) returns, setTune(false) clears m_manualMox and emits
+        //   manualMoxChanged(false) synchronously. Task 33 (Thetis's unkey
+        //   order): the hardware is released after the TX drain and mox_delay,
+        //   so txaFlushed and hardwareFlipped(false) fire on drainTxToRxWalk(),
+        //   then rxReady. So the actual order is:
+        //     txAboutToEnd → manualMoxChanged(false) → txaFlushed
+        //     → hardwareFlipped(false) → rxReady
         //
         // This ordering confirms the §8 invariant: m_manualMox is still TRUE at
-        // txAboutToEnd / hardwareFlipped(false) time (synchronous, inside setMox),
-        // and is cleared to false immediately after setMox(false) returns (before
-        // any timer-driven signals). Phase-signal subscribers that need m_manualMox
-        // to distinguish a TUN-release from a raw MOX-release should check it in
-        // their txAboutToEnd or hardwareFlipped(false) slot — not in rxReady.
+        // txAboutToEnd time (synchronous, inside setMox), and is cleared to
+        // false immediately after setMox(false) returns. Phase-signal
+        // subscribers that need m_manualMox to distinguish a TUN-release from
+        // a raw MOX-release must check it in their txAboutToEnd slot; since
+        // Task 33 it already reads false in hardwareFlipped(false).
         QCOMPARE(log.size(), 5);
         QCOMPARE(log.at(0), QStringLiteral("txAboutToEnd"));
-        QCOMPARE(log.at(1), QStringLiteral("hardwareFlipped(false)"));
-        QCOMPARE(log.at(2), QStringLiteral("manualMoxChanged(false)"));
-        QCOMPARE(log.at(3), QStringLiteral("txaFlushed"));
+        QCOMPARE(log.at(1), QStringLiteral("manualMoxChanged(false)"));
+        QCOMPARE(log.at(2), QStringLiteral("txaFlushed"));
+        QCOMPARE(log.at(3), QStringLiteral("hardwareFlipped(false)"));
         QCOMPARE(log.at(4), QStringLiteral("rxReady"));
     }
 

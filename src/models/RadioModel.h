@@ -109,6 +109,10 @@
 //                keying steps reach it through wireTxChannelKeying
 //                (setRunningAsync). NereusSDR-original. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - Task 33 (R-IOS-03): stopTransmitNow (the emergency
+//                stop, NereusSDR-original), stopAllTx (ported from Thetis
+//                console.cs StopAllTx), transmitStopped, onMoxRxReady.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -2900,6 +2904,32 @@ public slots:
     // QMetaObject::invokeMethod (see implementation).
     void onMoxHardwareFlipped(bool isTx);
 
+    // Task 33: MoxController::rxReady (after ptt_out_delay) turns the
+    // receiver MOX stopped back on, as Thetis does after HdwMOXChanged and
+    // ptt_out_delay (console.cs:29678-29680 [v2.10.3.15]).
+    void onMoxRxReady();
+
+    // ── Task 33 (R-IOS-03, remote design §12.1): stopping transmission ─────
+    //
+    // stopTransmitNow: the emergency stop. Closes the TX channel's RF gate
+    // and hands MOX off and the T/R relay off to the connection's thread
+    // before it returns; it makes no WDSP call and waits for no lane. Until
+    // the next key begins (MoxController::txAboutToBegin), no keying step
+    // queued before it (a hardware flip, txReady, an interlock grant) can
+    // key the radio again. It does not change the MOX, TUNE or two-tone
+    // state: the caller clears those (stopAllTx does) and their normal
+    // unkey then finishes on the lanes. It never waits for a RADE
+    // end-of-over tail. `reason` goes to the log only.
+    void stopTransmitNow(const QString& reason);
+
+    // stopAllTx: ported from Thetis console.cs StopAllTx
+    // (console.cs:45324-45342 [v2.10.3.15]). When MOX, manual MOX, TUNE or
+    // two-tone is on: stopTransmitNow(message), then MOX, manual MOX, TUNE
+    // and two-tone off, and transmitStopped(message) once. Otherwise it does
+    // nothing. A held PTT then does not key again until it is released
+    // (MoxController::latchStopAllTx).
+    void stopAllTx(const QString& message = QString());
+
     // ── Phase 3M-1a Task G.4: TUN function orchestrator ─────────────────────
     // Activate / release the TUNE function.
     //
@@ -3336,6 +3366,10 @@ public slots:
 
 signals:
     void infoChanged();
+    // Task 33: stopAllTx stopped a transmission. A non-empty message is for
+    // the operator (MainWindow shows it for 10 s, as Thetis's
+    // infoBar.Warning(msg, false, 10000)).
+    void transmitStopped(QString message);
     // Phase 3Q-1: parametrized — state passed so UI consumers can act without
     // a secondary RadioModel::connectionState() read under race conditions.
     // Existing no-arg slot connections (ConnectionPanel, MainWindow, SpectrumWidget)
@@ -5449,6 +5483,14 @@ private:
     // armed before any interlockGranted can fire) and cleared by the
     // grant handler.
     bool m_txReadyReceived{false};
+
+    // Task 33: set by stopTransmitNow, cleared when the next key begins
+    // (MoxController::txAboutToBegin). While set, a keying step queued
+    // before the stop (hardwareFlipped(true), txReady, an interlock grant)
+    // does not key the radio.
+    bool m_transmitStopHold{false};
+    // Task 33: the TX channel drain the TX→RX walk is waiting for.
+    quint64 m_pendingTxDrainSequence{0};
 
     // Phase 3P-II Task 86: TxInterlockPolicy -- NereusSDR-native TX gate.
     // Qt parent-ownership (parent=this); non-null from construction time.

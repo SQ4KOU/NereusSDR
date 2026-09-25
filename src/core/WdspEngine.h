@@ -39,6 +39,9 @@
 //                 drains the transmit lane before the receive teardown.
 //                 NereusSDR-original. AI-assisted via Anthropic Claude
 //                 Code.
+//   2026-09-25 : Task 33 by J.J. Boyd (KG4VCF): test-only friendship for
+//                 the stop-transmit test. AI-assisted via Anthropic Claude
+//                 Code.
 // =================================================================
 
 /*  cmaster.cs
@@ -173,6 +176,8 @@ class TestRxChannelStopFeed;
 class TestDspControlReceive;
 // R-R3-39: the transmit-lane test opens real TX and RX channels on lanes.
 class TestDspControlTransmit;
+// Task 33: the stop-transmit test opens real TX and RX channels on lanes.
+class TestStopTransmitNow;
 #endif
 
 namespace NereusSDR {
@@ -1032,6 +1037,8 @@ private:
     friend class ::TestDspControlReceive;
     // R-R3-39: same friendship for the transmit-lane test.
     friend class ::TestDspControlTransmit;
+    // Task 33: same friendship for the stop-transmit test.
+    friend class ::TestStopTransmitNow;
 #endif
 };
 

@@ -92,18 +92,20 @@ private slots:
 
         QCOMPARE(mox.isMox(), true);
 
-        // hardwareFlipped(false) fires synchronously inside setMox(false), before
-        // the TX-to-RX timer chain (mox_delay + ptt_out_delay). moxChanged is the
-        // async Post signal at the end of the chain; we only need synchronous
-        // evidence that MOX was dropped before the flip.
+        // txAboutToEnd fires synchronously inside setMox(false): the TX-to-RX
+        // walk began before the flip. Task 33 (Thetis's unkey order): the
+        // hardware is released after the TX drain and mox_delay, so
+        // hardwareFlipped(false) follows on the walk's timer.
+        QSignalSpy endSpy(&mox, &MoxController::txAboutToEnd);
         QSignalSpy hwSpy(&mox, &MoxController::hardwareFlipped);
         const bool ok = arb.requestHandoff(1);
 
         QCOMPARE(ok, true);
-        QVERIFY(hwSpy.count() >= 1);
-        QCOMPARE(hwSpy.last().at(0).toBool(), false);  // last hardwareFlipped was RX direction
+        QCOMPARE(endSpy.count(), 1);
         QCOMPARE(mox.isMox(), false);  // MOX dropped synchronously (m_mox = on commit)
         QCOMPARE(slices[1]->isTxSlice(), true);  // handoff completed
+        QTRY_VERIFY_WITH_TIMEOUT(hwSpy.count() >= 1, 2000);
+        QCOMPARE(hwSpy.last().at(0).toBool(), false);  // last hardwareFlipped was RX direction
     }
 
     void tx_bound_id_persists_per_mac()

@@ -893,6 +893,20 @@ MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent,
         showToast(reason, ToastSeverity::Warning, 3000);
     });
 
+    // Task 33: RadioModel::stopAllTx stopped a transmission. A non-empty
+    // message is shown for 10 s, as Thetis's StopAllTx does:
+    // From Thetis console.cs:45338-45341 [v2.10.3.15]:
+    //   if (!string.IsNullOrEmpty(msg))
+    //   {
+    //       infoBar.Warning(msg, false, 10000);
+    //   }
+    connect(m_radioModel, &RadioModel::transmitStopped,
+            this, [this](const QString& message) {
+        if (!message.isEmpty()) {
+            showToast(message, ToastSeverity::Warning, 10000);
+        }
+    });
+
     // Phase 3Q Task 10: auto-connect failure / ambiguity surface.
     //
     // autoConnectFailed — the probe timed out or the radio rejected the

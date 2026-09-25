@@ -383,6 +383,14 @@ if(TARGET wdsp_static)
     # OpenChannel plans FFTs with no wisdom, hence the 900 s timeout.
     nereus_add_test(tst_dsp_control_transmit EXTRA_LABELS core REALTIME)
     set_tests_properties(tst_dsp_control_transmit PROPERTIES TIMEOUT 900)
+    # Task 33 (R-IOS-03): stopping transmission at once. With both lanes
+    # held for 200 ms, stopTransmitNow returns within 2 ms with the RF gate
+    # shut and MOX off at the connection before either lane is free, and no
+    # TX block follows it; the normal unkey drains before the hardware flip
+    # (Thetis's order). REALTIME: wall-clock bounds on real channels; the
+    # first OpenChannel plans FFTs with no wisdom, hence the 900 s timeout.
+    nereus_add_test(tst_stop_transmit_now EXTRA_LABELS core REALTIME)
+    set_tests_properties(tst_stop_transmit_now PROPERTIES TIMEOUT 900)
     if(NOT WIN32)
         # R-R3-41: linux_port.c's thread-start hook fires once per channel
         # worker and flush thread, on that thread, with its kind and channel.
@@ -3467,6 +3475,13 @@ nereus_add_test(tst_radio_model_dexp_routing)
 # all-steps-fire, slot connectable via QObject::connect.
 nereus_add_test(tst_radio_model_mox_hardware_flip)
 target_compile_definitions(tst_radio_model_mox_hardware_flip PRIVATE NEREUS_BUILD_TESTS)
+
+# Task 33 (R-IOS-03): RadioModel::stopAllTx, ported from Thetis console.cs
+# StopAllTx. MOX, TUNE and two-tone each end with all four keying states
+# off and one transmitStopped; nothing keyed does nothing; a held PTT does
+# not key again until released; a key queued before the stop does not key.
+nereus_add_test(tst_radio_model_stop_all_tx)
+target_compile_definitions(tst_radio_model_stop_all_tx PRIVATE NEREUS_BUILD_TESTS)
 
 # ── Phase 3M-1a Task F.2: StepAttenuatorController TX-path activation ─────────
 # Verifies onMoxHardwareFlipped(bool isTx) slot and its four helpers:

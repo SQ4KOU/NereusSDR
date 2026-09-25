@@ -345,6 +345,14 @@ warren@wpratt.com
 //                 blocks are pushed at once while nothing is queued there, so
 //                 the ring keeps the order blocks arrive in.  AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-25 : Task 33 (R-IOS-03) by J.J. Boyd (KG4VCF): the unkey
+//                 follows Thetis's order: the channel drains on the lane
+//                 with the RF gate open, then the lane closes the gate and
+//                 emits txDrained.  closeRfGate (the emergency stop) closes
+//                 it at once, supersedes a queued on, and waits for a block
+//                 already inside sendTxIq; each block is zeroed before
+//                 fexchange0.  AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include "TxChannel.h"  // brings in WdspTypes.h (DSPMode)
@@ -608,6 +616,35 @@ void TxChannel::setRfGate(bool open)
 #else
     Q_UNUSED(was);
 #endif
+}
+
+void TxChannel::closeRfGateAndWaitForSender() noexcept
+{
+    // Dekker pairing with driveOneTxBlockFromInterleaved (both sides
+    // sequentially consistent): either the worker's re-check sees the gate
+    // closed and sends nothing, or this sees the worker inside its send and
+    // waits for it. The send is a copy into the connection's ring, never a
+    // WDSP call, so the wait is a few microseconds at most.
+    setRfGate(false);
+    std::atomic_thread_fence(std::memory_order_seq_cst);
+    while (m_txIqSendersInFlight.load(std::memory_order_seq_cst) != 0) {
+        std::this_thread::yield();
+    }
+}
+
+// Task 33 (R-IOS-03): the emergency stop's half. NereusSDR-original. The
+// normal unkey drains the transmitter first, as Thetis does:
+// From Thetis console.cs:29651-29658 [v2.10.3.15]
+//   Thread.Sleep(space_mox_delay); // default 0 // from PSDR MW0LGE
+//   psform.Mox = tx;
+//   WDSP.SetChannelState(WDSP.id(1, 0), 0, 1);  // turn off the transmitter (no action if it's already off)
+// The emergency stop does not wait for that drain.
+void TxChannel::closeRfGate() noexcept
+{
+    // A setRunningAsync(true) still queued on the lane must not open the
+    // gate again: its sequence is now stale (applyRunningOnLane).
+    m_runSequence.fetch_add(1, std::memory_order_acq_rel);
+    closeRfGateAndWaitForSender();
 }
 
 void TxChannel::refreshStageCacheOnLane() const
@@ -1370,14 +1407,18 @@ void TxChannel::setTuneTone(bool on, double freqHz, double magnitude)
 //   gen1: activated by setTuneTone(true).
 //   uslew: always-on inside WDSP's xuslew state machine (no run flag).
 // ---------------------------------------------------------------------------
-void TxChannel::setRunningAsync(bool on)
+quint64 TxChannel::setRunningAsync(bool on)
 {
     // R-R3-39: the keying order on the transmit lane.
     //   on:  the lane switches the WDSP channel on, then opens the RF gate
     //        (m_running), so the worker's first fexchange0 / sendTxIq meets a
     //        running channel.
-    //   off: the RF gate closes here at once (no more TX I/Q to the radio),
-    //        then the lane drains and stops the channel.
+    //   off: Task 33, Thetis's order. The lane drains the channel with the
+    //        RF gate still open, so the worker keeps calling fexchange0 and
+    //        WDSP's down-slew (and the zeros after it) reach the radio while
+    //        its MOX bit is still set; the gate closes when the drain
+    //        returns. Only the emergency stop (closeRfGate) closes the gate
+    //        first.
     // Without a lane both halves run here, in the same order.
     //
     // m_running is the gate: TxWorkerThread::run drains a block from
@@ -1388,9 +1429,6 @@ void TxChannel::setRunningAsync(bool on)
     // release ordering pairs with driveOneTxBlockFromInterleaved's acquire
     // load.
     const quint64 sequence = m_runSequence.fetch_add(1, std::memory_order_acq_rel) + 1;
-    if (!on) {
-        setRfGate(false);
-    }
 
     qCDebug(lcDsp) << "TxChannel" << m_channelId
                    << (on ? "started (channel ON, worker-thread pump armed)"
@@ -1419,6 +1457,7 @@ void TxChannel::setRunningAsync(bool on)
     runOrdered([this, on, cfirRun, sequence]() {
         applyRunningOnLane(on, cfirRun, sequence);
     });
+    return sequence;
 }
 
 void TxChannel::applyRunningOnLane(bool on, int cfirRun, quint64 sequence)
@@ -1488,9 +1527,17 @@ void TxChannel::applyRunningOnLane(bool on, int cfirRun, quint64 sequence)
     Q_UNUSED(cfirRun);
 #endif // HAVE_WDSP
     // The RF gate opens only after the channel is on, and only for the
-    // newest request: an on superseded by a later call leaves it alone.
+    // newest request: an on superseded by a later call (or by closeRfGate)
+    // leaves it alone.
     if (on && m_runSequence.load(std::memory_order_acquire) == sequence) {
         setRfGate(true);
+    }
+    if (!on) {
+        // Task 33: the drain has returned (WDSP's last output block was its
+        // down-slew's zeros), so the gate closes now. A later on queued
+        // behind this job opens it again.
+        closeRfGateAndWaitForSender();
+        emit txDrained(sequence);
     }
 }
 
@@ -3655,6 +3702,11 @@ void TxChannel::driveOneTxBlockFromInterleaved(const double* interleavedIn)
     // From Thetis wdsp/iobuffs.c:464-516 [v2.10.3.13] — fexchange0 prototype:
     //   void fexchange0 (int channel, double* in, double* out, int* error)
     int error = 0;
+    // Task 33: fexchange0 writes nothing once WDSP's unkey drain has reset
+    // the channel's exchange bit, and the RF gate stays open until the
+    // lane's drain returns. Zero the block first so those last calls send
+    // silence, never a repeat of the previous block.
+    std::fill(m_out.begin(), m_out.end(), 0.0);
     fexchange0(m_channelId, m_in.data(), m_out.data(), &error);
     if (error != 0) {
         qCWarning(lcDsp) << "TxChannel" << m_channelId
@@ -3703,7 +3755,17 @@ void TxChannel::driveOneTxBlockFromInterleaved(const double* interleavedIn)
 
     // Push to connection's SPSC ring (producer side).
     // sendTxIq(iq, n): n = number of complex samples; buffer has 2*n floats.
+    //
+    // Task 33 (R-IOS-03): the RF gate is checked again inside the sender
+    // section closeRfGate waits for, so once closeRfGate returns no block
+    // reaches the connection, even one whose fexchange0 began before it.
+    m_txIqSendersInFlight.fetch_add(1, std::memory_order_seq_cst);
+    if (!m_running.load(std::memory_order_seq_cst)) {
+        m_txIqSendersInFlight.fetch_sub(1, std::memory_order_seq_cst);
+        return;
+    }
     m_connection->sendTxIq(m_outInterleavedFloat.data(), outN);
+    m_txIqSendersInFlight.fetch_sub(1, std::memory_order_seq_cst);
 
     // AM Mod Monitor tap (NereusSDR-original): same block the radio gets.
     if (auto* tap = m_amModTap.load(std::memory_order_acquire)) {

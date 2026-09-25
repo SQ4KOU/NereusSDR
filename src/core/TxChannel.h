@@ -330,6 +330,11 @@ warren@wpratt.com
 //                 maps a NereusSDR meter to its WDSP index
 //                 (wdspTxaMeterIndex).  AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-25 : Task 33 (R-IOS-03) by J.J. Boyd (KG4VCF): closeRfGate,
+//                 isRfGateOpen and txDrained; setRunningAsync(false) drains
+//                 with the RF gate open (Thetis's unkey order) and returns
+//                 its sequence.  AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #pragma once
@@ -617,10 +622,23 @@ public:
 
     // Keying (R-R3-39). on: the WDSP channel is switched on first (on the
     // lane) and the RF gate (isRunning, the worker's fexchange0 and
-    // sendTxIq) opens after it. off: the RF gate closes at once and the
-    // channel then drains on the lane. Supersedes setRunning, which now
+    // sendTxIq) opens after it. off (Task 33, Thetis order): the channel
+    // drains on the lane with the RF gate still open, so the worker keeps
+    // calling fexchange0 and WDSP's down-slew reaches the radio; the lane
+    // closes the gate when the drain returns and then emits txDrained with
+    // the sequence this call returns. Supersedes setRunning, which now
     // forwards here.
-    void setRunningAsync(bool on);
+    quint64 setRunningAsync(bool on);
+
+    // Task 33 (R-IOS-03): the emergency stop's half. Closes the RF gate at
+    // once, from any thread, so no further TX I/Q block reaches the
+    // connection once it returns (it waits only for a block already inside
+    // sendTxIq, never for WDSP or the lane). A queued setRunningAsync(true)
+    // no longer opens the gate; a later setRunningAsync(true) does. Makes
+    // no WDSP call.
+    void closeRfGate() noexcept;
+    // The RF gate: TX I/Q reaches the connection only while it is open.
+    bool isRfGateOpen() const noexcept { return m_running.load(std::memory_order_acquire); }
 
     // The last TXA meter reading for `meterType` (a WDSP txaMeterType index,
     // 0..16). With a lane, the value the lane last read (-400, WDSP's idle
@@ -780,8 +798,9 @@ public:
     /// from any thread.
     ///
     /// R-R3-39: this is the RF gate. With a lane it opens once the lane has
-    /// switched the WDSP channel on, and closes at once on setRunningAsync
-    /// (false); without a lane it follows setRunning at once.
+    /// switched the WDSP channel on, and closes once the lane's unkey drain
+    /// returns (Task 33) or at once on closeRfGate; without a lane it
+    /// follows setRunning at once.
     bool isRunning() const noexcept { return m_running.load(std::memory_order_acquire); }
 
     // ── VOX-listening pump gate (3M-3a-iii Task 18 — bench fix) ──────────────
@@ -2699,6 +2718,11 @@ signals:
     // last requestPSTXDelay (emitted on the lane, or at once without one).
     void psTxDelayApplied(double actualSeconds);
 
+    // Task 33: the unkey drain setRunningAsync(false) returned `sequence`
+    // for has finished (or timed out in WDSP) and the RF gate is closed.
+    // Emitted on the lane, or at once without one.
+    void txDrained(quint64 sequence);
+
 private slots:
     // ── Per-profile TX filter (Plan 4 D8) — debounce fire slot ───────────────
 
@@ -2750,6 +2774,9 @@ private:
     void applyRunningOnLane(bool on, int cfirRun, quint64 sequence);
     void applyVoxListeningOnLane(bool on, int cfirRun);
     void setRfGate(bool open);
+    // Closes the RF gate and waits for a worker already inside sendTxIq
+    // (see m_txIqSendersInFlight) to leave it.
+    void closeRfGateAndWaitForSender() noexcept;
     // Worker admission: a block enters only while the channel is ready.
     bool enterWorkerBlock() const noexcept;
     void leaveWorkerBlock() const noexcept;
@@ -2784,6 +2811,11 @@ private:
     bool m_laneVoxListening{false};
     // The newest setRunningAsync; an older on-job leaves the gate alone.
     std::atomic<quint64> m_runSequence{0};
+    // Task 33: worker calls between the RF gate's re-check and the end of
+    // sendTxIq. closeRfGate waits for this to reach zero (Dekker pairing,
+    // both sides sequentially consistent), so no block reaches the
+    // connection after it returns.
+    mutable std::atomic<int> m_txIqSendersInFlight{0};
 
     // Caches the lane refreshes. Without a lane they are unused.
     mutable std::array<std::atomic<bool>, static_cast<std::size_t>(Stage::kStageCount)> m_stageRunCache{};

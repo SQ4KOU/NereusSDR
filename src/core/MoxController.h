@@ -139,6 +139,11 @@
 //                 the only valid anti-VOX cancellation reference.  See
 //                 commit message for full rationale.  J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-25 : Task 33 (R-IOS-03): txDrainRequested, onTxDrained,
+//                 setAwaitsTxDrain and kTxDrainTimeoutMs (the TX→RX walk
+//                 drains before the hardware flip, as Thetis does);
+//                 latchStopAllTx and clearManualMox for StopAllTx.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -194,8 +199,8 @@ enum class MoxState {
 //
 // Timer behaviour:
 //   RX→TX path: Rx → RxToTxRfDelay (30ms) → Tx
-//   TX→RX path: Tx → TxToRxInFlight (10ms, mox_delay) → TxToRxFlush
-//               (20ms, ptt_out_delay) → Rx
+//   TX→RX path: Tx → TxToRxInFlight (the TX drain when awaitsTxDrain,
+//               then 10ms mox_delay) → TxToRxFlush (20ms, ptt_out_delay) → Rx
 //   spaceDelay (0ms default): m_spaceDelayTimer declared but skipped
 //     when kSpaceDelayMs == 0, matching Thetis
 //     `if (space_mox_delay > 0) Thread.Sleep(...)` pattern.
@@ -228,6 +233,13 @@ public:
     // From Thetis console.cs:18494 — private double break_in_delay = 300 [v2.10.3.13]
     // 3M-2 CW QSK; not used in any 3M-1a path.
     static constexpr int kBreakInDelayMs = 300;
+    // Task 33: the longest the TX→RX walk waits for the TX channel's drain
+    // before it goes on to mox_delay. Thetis's drain blocks at most this
+    // long: WDSP SetChannelState's `const int timeout = 100;` loop of
+    // Sleep(1) (wdsp/channel.c SetChannelState [v2.10.3.15]). NereusSDR runs
+    // the drain on the transmit lane, so the walk must not wait on a lane
+    // that is busy for longer.
+    static constexpr int kTxDrainTimeoutMs = 100;
 
     // ── Getters ──────────────────────────────────────────────────────────────
     bool     isMox()      const noexcept { return m_mox; }
@@ -286,6 +298,36 @@ public:
     // without waiting for wall-clock time.
     void setTimerIntervals(int rfMs, int moxMs, int spaceMs,
                            int keyUpMs, int pttOutMs, int breakInMs);
+    // FOR TESTING ONLY: the drain wait's bound (kTxDrainTimeoutMs).
+    void setTxDrainTimeoutMsForTest(int ms);
+
+    // ── Task 33: the TX drain in the TX→RX walk ──────────────────────────────
+    //
+    // setAwaitsTxDrain(true): after txDrainRequested the walk waits for
+    // onTxDrained() (or kTxDrainTimeoutMs) before mox_delay starts, as
+    // Thetis's SetChannelState(tx, 0, 1) blocks before its Sleep(mox_delay).
+    // RadioModel sets it while a TX channel is wired; with it false (no TX
+    // channel) mox_delay starts at once.
+    void setAwaitsTxDrain(bool on);
+    bool awaitsTxDrain() const noexcept { return m_awaitTxDrain; }
+
+    // ── Task 33: StopAllTx's _stop_all_tx latch ──────────────────────────────
+    //
+    // From Thetis console.cs:45324-45342 [v2.10.3.15] (StopAllTx sets
+    // _stop_all_tx = true) and console.cs:25479-25492 [v2.10.3.15] (the PTT
+    // poll consumes it):
+    //   // we can come in here from a ToT ( StopAllTX() ) //[2.10.3.6]MWLGE fixes #518
+    //   // however we dont want switch anything back on, unless all of the above have been released
+    // latchStopAllTx: while a PTT source (mic, CAT, VOX) is still held, its
+    // press does not key again; the latch clears once every one of them
+    // has been released (at once when none is held).
+    void latchStopAllTx();
+    bool isStopAllTxLatched() const noexcept { return m_stopAllTxLatched; }
+
+    // Task 33: StopAllTx's `_manual_mox = false;` (console.cs:45332
+    // [v2.10.3.15]). Clears the flag and emits manualMoxChanged(false) if
+    // it was set; setTune(false) remains the TUN path's release.
+    void clearManualMox();
 
 public slots:
     // setTune: engage / release the TUN function.
@@ -754,6 +796,11 @@ public slots:
     // call — that would regress Codex P2.
     void setMox(bool on);
 
+    // Task 33: the TX channel's unkey drain has finished (RadioModel relays
+    // TxChannel::txDrained for the drain it requested). Ignored unless the
+    // walk is waiting for it.
+    void onTxDrained();
+
 signals:
     // ── K.2: rejection signal ────────────────────────────────────────────────
     //
@@ -791,14 +838,19 @@ signals:
     //                     BEFORE Thread.Sleep(rf_delay)).
     //   txReady         — TX walk complete; TX I/Q stream + audio MOX on.
     //
-    // TX→RX phase signals (in order):
-    //   txAboutToEnd    — entry to TX→RX walk; teardown begins.
-    //   hardwareFlipped — hardware routing released (isTx=false); fired right
-    //                     after txAboutToEnd so routing clears before in-flight
-    //                     sample flush (symmetric with RX→TX position).
-    //   txaFlushed      — after mox_delay / key_up_delay (in-flight samples
-    //                     cleared); TX channel may now be torn down.
-    //   rxReady         — TX→RX walk complete; RX channels active.
+    // TX→RX phase signals (in order; Task 33 follows Thetis's unkey,
+    // console.cs:29651-29685 [v2.10.3.15]):
+    //   txAboutToEnd      : entry to TX→RX walk; teardown begins.
+    //   txDrainRequested  : the TX channel drains now, with the hardware
+    //                       still keyed (Thetis SetChannelState(tx, 0, 1)).
+    //                       The walk waits for onTxDrained() when
+    //                       awaitsTxDrain(), bounded by kTxDrainTimeoutMs.
+    //   txaFlushed        : after the drain and mox_delay / key_up_delay
+    //                       (in-flight samples cleared); the RF gate closes.
+    //   hardwareFlipped   : hardware routing released (isTx=false), right
+    //                       after txaFlushed (Thetis HdwMOXChanged follows
+    //                       Sleep(mox_delay)).
+    //   rxReady           : after ptt_out_delay; RX channels active.
     //
     // hardwareFlipped(bool isTx):
     //   true  — RX→TX: assert Alex routing, ATT-on-TX, MOX wire bit.
@@ -808,9 +860,11 @@ signals:
     void txAboutToBegin();          // RX→TX phase 1 of 3 — synchronous; safety-relevant prep
     void hardwareFlipped(bool isTx);// Both directions; synchronous; subscribers wire Alex/ATT/MOX-bit
     void txReady();                 // RX→TX phase 3 of 3 — fires after rfDelay timer
-    void txAboutToEnd();            // TX→RX phase 1 of 4 — synchronous; teardown entry
-    void txaFlushed();              // TX→RX phase 3 of 4 — fires after keyUpDelay; in-flight samples cleared
-    void rxReady();                 // TX→RX phase 4 of 4 — fires after pttOutDelay
+    void txAboutToEnd();            // TX→RX phase 1 of 5: synchronous; teardown entry
+    void txDrainRequested();        // TX→RX phase 2 of 5: synchronous; TX channel drains (hardware still keyed)
+    void txaFlushed();              // TX→RX phase 3 of 5: after the drain and keyUpDelay; in-flight samples cleared
+                                    // (phase 4 of 5 is hardwareFlipped(false), right after txaFlushed)
+    void rxReady();                 // TX→RX phase 5 of 5: fires after pttOutDelay
 
     // voxRunRequested: emitted when the gated VOX-run state changes.
     //
@@ -976,8 +1030,14 @@ private slots:
     void onKeyUpDelayElapsed();
     void onPttOutElapsed();
     void onBreakInDelayElapsed(); // declared for 3M-2 CW QSK; not started in 3M-1a
+    void onTxDrainTimedOut();     // Task 33: the drain wait's bound
 
 private:
+    // Task 33: the drain is done (or its wait timed out): start mox_delay.
+    void finishTxDrainWait();
+    // Task 33: a PTT source's held state, for the StopAllTx latch. Returns
+    // true when a press must be ignored because the latch is set.
+    bool notePttSourceHeld(bool& heldFlag, bool pressed);
     // isVoiceMode: true for the 8 voice-family DSP modes.
     //
     // Voice family (per Thetis CMSetTXAVoxRun, cmaster.cs:1043-1050
@@ -1176,6 +1236,18 @@ private:
     QTimer m_keyUpDelayTimer;   // 10 ms — TX→RX: mox_delay (SSB) or key_up_delay (CW); drives TxToRxInFlight
     QTimer m_pttOutDelayTimer;  // 20 ms — TX→RX: HW settle before WDSP RX on; drives TxToRxFlush
     QTimer m_breakInDelayTimer; // 300 ms — 3M-2 CW QSK; NOT started from any B.3 logic
+    QTimer m_txDrainTimeoutTimer; // 100 ms: Task 33, bound on the TX→RX drain wait
+
+    // Task 33: the TX→RX walk waits for the TX channel's drain.
+    bool m_awaitTxDrain{false};
+    bool m_waitingForTxDrain{false};
+
+    // Task 33: StopAllTx's latch (Thetis _stop_all_tx) and the held state of
+    // the PTT sources it waits on (mic, CAT, VOX).
+    bool m_stopAllTxLatched{false};
+    bool m_micPttHeld{false};
+    bool m_catPttHeld{false};
+    bool m_voxPttHeld{false};
 };
 
 } // namespace NereusSDR

@@ -108,6 +108,13 @@
 //                 (RX vs VAC at cmaster.cs:912-943 [v2.10.3.13]); see commit
 //                 message for rationale.  J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-25 : Task 33 (R-IOS-03): the TX→RX walk follows Thetis's
+//                 unkey (console.cs:29651-29685 [v2.10.3.15]): txDrainRequested
+//                 first, a bounded wait for the drain, mox_delay, then
+//                 txaFlushed and hardwareFlipped(false). StopAllTx's
+//                 _stop_all_tx latch (latchStopAllTx) and _manual_mox clear
+//                 (clearManualMox). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -134,6 +141,7 @@ MoxController::MoxController(QObject* parent)
     , m_keyUpDelayTimer(this)
     , m_pttOutDelayTimer(this)
     , m_breakInDelayTimer(this)
+    , m_txDrainTimeoutTimer(this)
 {
     // All timers are single-shot — each fires once then stops.
     m_rfDelayTimer.setSingleShot(true);
@@ -142,6 +150,7 @@ MoxController::MoxController(QObject* parent)
     m_keyUpDelayTimer.setSingleShot(true);
     m_pttOutDelayTimer.setSingleShot(true);
     m_breakInDelayTimer.setSingleShot(true);
+    m_txDrainTimeoutTimer.setSingleShot(true);
 
     // Set default intervals from Thetis constants.
     // From Thetis console.cs:19687 — private int rf_delay = 30 [v2.10.3.13]
@@ -156,6 +165,9 @@ MoxController::MoxController(QObject* parent)
     m_pttOutDelayTimer.setInterval(kPttOutDelayMs);
     // From Thetis console.cs:18494 — private double break_in_delay = 300 [v2.10.3.13]
     m_breakInDelayTimer.setInterval(kBreakInDelayMs);
+    // Task 33: WDSP SetChannelState's 100 x Sleep(1) drain bound.
+    m_txDrainTimeoutTimer.setInterval(kTxDrainTimeoutMs);
+    m_txDrainTimeoutTimer.setTimerType(Qt::PreciseTimer);
 
     // Wire timer timeouts to their advancement slots.
     connect(&m_rfDelayTimer,      &QTimer::timeout, this, &MoxController::onRfDelayElapsed);
@@ -164,6 +176,7 @@ MoxController::MoxController(QObject* parent)
     connect(&m_keyUpDelayTimer,   &QTimer::timeout, this, &MoxController::onKeyUpDelayElapsed);
     connect(&m_pttOutDelayTimer,  &QTimer::timeout, this, &MoxController::onPttOutElapsed);
     connect(&m_breakInDelayTimer, &QTimer::timeout, this, &MoxController::onBreakInDelayElapsed);
+    connect(&m_txDrainTimeoutTimer, &QTimer::timeout, this, &MoxController::onTxDrainTimedOut);
 }
 
 MoxController::~MoxController() = default;
@@ -185,6 +198,105 @@ void MoxController::setTimerIntervals(int rfMs, int moxMs, int spaceMs,
     m_keyUpDelayTimer.setInterval(keyUpMs);
     m_pttOutDelayTimer.setInterval(pttOutMs);
     m_breakInDelayTimer.setInterval(breakInMs);
+}
+
+void MoxController::setTxDrainTimeoutMsForTest(int ms)
+{
+    m_txDrainTimeoutTimer.setInterval(ms);
+}
+
+// ---------------------------------------------------------------------------
+// Task 33: the TX drain wait and the StopAllTx latch.
+// ---------------------------------------------------------------------------
+void MoxController::setAwaitsTxDrain(bool on)
+{
+    m_awaitTxDrain = on;
+    if (!on && m_waitingForTxDrain) {
+        // Nothing will report the drain any more: go on with the walk.
+        finishTxDrainWait();
+    }
+}
+
+void MoxController::latchStopAllTx()
+{
+    // From Thetis console.cs:45329 [v2.10.3.15]: _stop_all_tx = true;
+    // The PTT poll then clears it once nothing is pressed
+    // (console.cs:25483-25491 [v2.10.3.15]), so with no source held it is
+    // clear at once.
+    // //[2.10.3.6]MWLGE fixes #518  [original inline comment from console.cs:25481]
+    m_stopAllTxLatched = m_micPttHeld || m_catPttHeld || m_voxPttHeld;
+    if (m_stopAllTxLatched) {
+        qCInfo(lcDsp) << "MoxController: transmit stopped; a held PTT will not"
+                         " key again until it is released";
+    }
+}
+
+void MoxController::clearManualMox()
+{
+    // From Thetis console.cs:45332 [v2.10.3.15]: _manual_mox = false;
+    const bool wasManual = m_manualMox;
+    m_manualMox = false;
+    if (wasManual) {
+        emit manualMoxChanged(false);
+    }
+}
+
+bool MoxController::notePttSourceHeld(bool& heldFlag, bool pressed)
+{
+    heldFlag = pressed;
+    if (!m_stopAllTxLatched) {
+        return false;
+    }
+    // From Thetis console.cs:25479-25492 [v2.10.3.15]:
+    //   if (!_mox)
+    //   {
+    //       // we can come in here from a ToT ( StopAllTX() ) //[2.10.3.6]MWLGE fixes #518
+    //       // however we dont want switch anything back on, unless all of the above have been released
+    //       if (_stop_all_tx)
+    //       {
+    //           if (mic_ptt || cw_ptt || cat_ptt || vox_ptt || _tci_ptt)
+    //           { await Task.Delay(1); continue; // skip all, and restart the loop }
+    //           else
+    //               _stop_all_tx = false;
+    //       }
+    // NereusSDR's CW and TCI PTT slots refuse every press, so the held set
+    // is mic, CAT and VOX.
+    if (!m_micPttHeld && !m_catPttHeld && !m_voxPttHeld) {
+        m_stopAllTxLatched = false;
+        return false;
+    }
+    return pressed && !m_mox;
+}
+
+void MoxController::onTxDrained()
+{
+    if (!m_waitingForTxDrain) {
+        return;   // a drain this walk is not waiting for
+    }
+    finishTxDrainWait();
+}
+
+void MoxController::onTxDrainTimedOut()
+{
+    if (!m_waitingForTxDrain) {
+        return;
+    }
+    // Info, not a warning: WDSP's own drain timeout is silent, and the
+    // emergency stop (gate closed first) always ends here.
+    qCInfo(lcDsp) << "MoxController: the TX channel's drain did not report within"
+                  << m_txDrainTimeoutTimer.interval()
+                  << "ms; releasing the hardware without it";
+    finishTxDrainWait();
+}
+
+void MoxController::finishTxDrainWait()
+{
+    m_waitingForTxDrain = false;
+    m_txDrainTimeoutTimer.stop();
+    // From Thetis console.cs:29667-29669 [v2.10.3.15]:
+    //   if (mox_delay > 0)
+    //       Thread.Sleep(mox_delay); // default 10, allows in-flight samples to clear
+    m_keyUpDelayTimer.start();
 }
 
 // ---------------------------------------------------------------------------
@@ -573,31 +685,53 @@ void MoxController::setMox(bool on)
         advanceState(MoxState::RxToTxRfDelay);
         m_rfDelayTimer.start();
     } else {
-        // TX→RX path:
-        // From Thetis console.cs:29602-29628 [v2.10.3.13]:
-        //   if (space_mox_delay > 0) Thread.Sleep(space_mox_delay);  // default 0 // from PSDR MW0LGE
-        //   ... WDSP TX off ...
-        //   if (mox_delay > 0) Thread.Sleep(mox_delay);              // 10ms, non-CW
-        //   ... AudioMOXChanged + HdwMOXChanged ...
-        //   if (ptt_out_delay > 0) Thread.Sleep(ptt_out_delay);      // 20ms
-        //   ... WDSP RX on ...
+        // TX→RX path (Task 33: Thetis's order, the drain first and the
+        // hardware after it).
+        // From Thetis console.cs:29651-29685 [v2.10.3.15]:
+        //   if (space_mox_delay > 0)
+        //       Thread.Sleep(space_mox_delay); // default 0 // from PSDR MW0LGE
+        //   _mox = tx;
+        //   psform.Mox = tx;
+        //   WDSP.SetChannelState(WDSP.id(1, 0), 0, 1);  // turn off the transmitter (no action if it's already off)
+        //   ... if (mox_delay > 0) Thread.Sleep(mox_delay); // default 10, allows in-flight samples to clear
+        //   UpdateDDCs(rx2_enabled);
+        //   UpdateAAudioMixerStates();
+        //   AudioMOXChanged(tx);    // set audio.cs to RX
+        //   HdwMOXChanged(tx, freq);// flip the hardware
+        //   ...
+        //   if (ptt_out_delay > 0)
+        //       Thread.Sleep(ptt_out_delay);  //wcp:  added 2018-12-24, time for HW to switch
+        //   WDSP.SetChannelState(WDSP.id(0, 0), 1, 0);  // turn on appropriate receivers
         //
-        // Phase signal ordering (Codex P1):
-        //   Phase 1 of 4 — emit txAboutToEnd()
-        //   Phase 2 of 4 — emit hardwareFlipped(false) — symmetric with RX→TX:
-        //                  routing clears before in-flight sample flush.
-        //   Walk: Tx → TxToRxInFlight (keyUpDelayTimer, 10ms) →
-        //              TxToRxFlush   (pttOutDelayTimer, 20ms) → Rx
-        //   Phase 3 of 4 — emit txaFlushed() in onKeyUpDelayElapsed()
-        //   Phase 4 of 4 — emit rxReady() in onPttOutElapsed()
+        // Phase signal ordering:
+        //   Phase 1 of 5: emit txAboutToEnd()
+        //   Phase 2 of 5: emit txDrainRequested(); the TX channel drains
+        //                  while the hardware is still keyed, so WDSP's
+        //                  down-slew goes out on the air.
+        //   Walk: Tx → TxToRxInFlight (the drain, then keyUpDelayTimer,
+        //              10 ms) → TxToRxFlush (pttOutDelayTimer, 20 ms) → Rx
+        //   Phase 3 of 5: emit txaFlushed() in onKeyUpDelayElapsed()
+        //   Phase 4 of 5: emit hardwareFlipped(false) right after it
+        //   Phase 5 of 5: emit rxReady() in onPttOutElapsed()
         //   moxStateChanged(false) emitted after rxReady() (diagnostic signal)
         //
         // spaceDelay is skipped when kSpaceDelayMs == 0 (matches the
         // Thetis `if (space_mox_delay > 0)` guard).
-        emit txAboutToEnd();                            // TX→RX phase 1 of 4
-        emit hardwareFlipped(false);                    // TX→RX phase 2 of 4 — before flush
+        emit txAboutToEnd();                            // TX→RX phase 1 of 5
         advanceState(MoxState::TxToRxInFlight);
-        m_keyUpDelayTimer.start();
+        const bool awaitDrain = m_awaitTxDrain;
+        if (awaitDrain) {
+            // Thetis's SetChannelState(tx, 0, 1) returns before mox_delay
+            // starts; the drain runs on the transmit lane here, so wait for
+            // it, bounded as WDSP bounds it. Armed before the request so a
+            // drain that reports at once (no lane) is not missed.
+            m_waitingForTxDrain = true;
+            m_txDrainTimeoutTimer.start();
+        }
+        emit txDrainRequested();                        // TX→RX phase 2 of 5
+        if (!awaitDrain) {
+            m_keyUpDelayTimer.start();
+        }
     }
     // NOTE: moxStateChanged is NOT emitted here.  It is emitted at the END
     // of the timer walk (in onRfDelayElapsed for TX, onPttOutElapsed for RX)
@@ -645,6 +779,8 @@ void MoxController::stopAllTimers()
     m_spaceDelayTimer.stop();
     m_keyUpDelayTimer.stop();
     m_pttOutDelayTimer.stop();
+    m_txDrainTimeoutTimer.stop();
+    m_waitingForTxDrain = false;
     // m_breakInDelayTimer is never started in 3M-1a so stop() is a no-op,
     // but include it for completeness so future 3M-2 CW code gets the guard
     // for free.
@@ -737,13 +873,16 @@ void MoxController::onSpaceDelayElapsed()
 //   Advance to TxToRxFlush state, then start ptt_out_delay timer
 void MoxController::onKeyUpDelayElapsed()
 {
-    // TODO [3M-1a F.1]: UpdateDDCs + UpdateAAudioMixerStates + AudioMOXChanged(false)
-    //                   + HdwMOXChanged(false) here.
     // DONE_WITH_CONCERNS [anan-g2e F2/F3]: When UpdateAAudioMixerStates is ported,
     // ANAN_G2E must join the HERMES 4-DDC (USB) group at console.cs:27653-27664
     // [v2.10.3.15] (F2) AND the HERMES 2-DDC (ETH) group at console.cs:27669-27679
     // [v2.10.3.15] (F3). //N1GP G2E added tags are on both cite lines in Thetis.
-    emit txaFlushed();                                  // TX→RX phase 3 of 4
+    emit txaFlushed();                                  // TX→RX phase 3 of 5
+    // Task 33: UpdateDDCs + AudioMOXChanged(false) + HdwMOXChanged(false)
+    // follow mox_delay in Thetis (console.cs:29670-29675 [v2.10.3.15]);
+    // hardwareFlipped(false) carries them (ReceiverManager::setMox,
+    // RadioModel::onMoxHardwareFlipped).
+    emit hardwareFlipped(false);                        // TX→RX phase 4 of 5
     advanceState(MoxState::TxToRxFlush);
     m_pttOutDelayTimer.start();
 }
@@ -1188,6 +1327,10 @@ void MoxController::primeWdspState()
 // ---------------------------------------------------------------------------
 void MoxController::onMicPttFromRadio(bool pressed)
 {
+    // Task 33: a mic PTT still held after StopAllTx does not key again.
+    if (notePttSourceHeld(m_micPttHeld, pressed)) {
+        return;
+    }
     if (pressed) {
         // Mic PTT pressed: claim MOX, set PttMode::Mic.
         // From Thetis console.cs:25492-25494 [v2.10.3.13]:
@@ -1222,6 +1365,10 @@ void MoxController::onMicPttFromRadio(bool pressed)
 // ---------------------------------------------------------------------------
 void MoxController::onCatPtt(bool pressed)
 {
+    // Task 33: a CAT PTT still held after StopAllTx does not key again.
+    if (notePttSourceHeld(m_catPttHeld, pressed)) {
+        return;
+    }
     // From Thetis console.cs:25469 [v2.10.3.13]: _current_ptt_mode = PTTMode.CAT;
     // Upstream tags preserved: //MW0LGE (from cited console.cs:25473) [v2.10.3.15]
     if (pressed) {
@@ -1245,6 +1392,10 @@ void MoxController::onCatPtt(bool pressed)
 // ---------------------------------------------------------------------------
 void MoxController::onVoxActive(bool active)
 {
+    // Task 33: VOX still active after StopAllTx does not key again.
+    if (notePttSourceHeld(m_voxPttHeld, active)) {
+        return;
+    }
     // From Thetis console.cs:25507 [v2.10.3.13]: _current_ptt_mode = PTTMode.VOX;
     if (active) {
         setPttMode(PttMode::Vox);

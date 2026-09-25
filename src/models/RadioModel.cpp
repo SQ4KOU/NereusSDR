@@ -204,6 +204,13 @@
 //                dspOptionsApplied; PsccPump pumps through the TX channel.
 //                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-25 - Task 33 (R-IOS-03): stopTransmitNow (the emergency
+//                stop: RF gate, then MOX and relay off on the connection's
+//                thread; NereusSDR-original) and stopAllTx, ported from
+//                Thetis console.cs StopAllTx 45324-45342 [v2.10.3.15]. The
+//                unkey follows Thetis's order: the TX drain, then the
+//                hardware flip, then the receiver on rxReady.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1272,6 +1279,16 @@ RadioModel::RadioModel(Role role, QObject* parent)
             this, &RadioModel::onMoxHardwareFlipped,
             Qt::QueuedConnection);
 
+    // Task 33: a new key lifts stopTransmitNow's hold. Direct, so the hold
+    // is gone before this key's own hardwareFlipped(true) is queued.
+    connect(m_moxController, &MoxController::txAboutToBegin,
+            this, [this]() { m_transmitStopHold = false; });
+
+    // Task 33: the receiver comes back after ptt_out_delay, not with the
+    // hardware flip (Thetis console.cs:29678-29680 [v2.10.3.15]).
+    connect(m_moxController, &MoxController::rxReady,
+            this, &RadioModel::onMoxRxReady);
+
     // Phase 3M-4 Task 17 chunk A — wire MOX state into ReceiverManager so
     // the per-board codec re-emits PsDdcConfig on TX/RX transitions.  The
     // codec output flow is:
@@ -2060,7 +2077,10 @@ RadioModel::RadioModel(Role role, QObject* parent)
                             << ") AND txReady was already received -- starting"
                                " TxChannel now (carrier hits amp path)";
                         // R-R3-39: channel on (transmit lane), then the RF gate.
-                        m_txChannel->setRunningAsync(true);
+                        // Task 33: not for a key the emergency stop cut short.
+                        if (!m_transmitStopHold) {
+                            m_txChannel->setRunningAsync(true);
+                        }
                     }
                 } else {
                     // Grant arrived first (common: fast amp ACK lands
@@ -16427,6 +16447,10 @@ void RadioModel::teardownConnection()
     // slot calls are queued and will see m_txChannel == nullptr after this clear.
     // WdspEngine::shutdown() → destroyTxChannel(kTxChannelId) handles the actual WDSP teardown.
     m_txChannel = nullptr;
+    // Task 33: nothing reports a TX drain any more.
+    if (m_moxController) {
+        m_moxController->setAwaitsTxDrain(false);
+    }
 
     // Shutdown WDSP (destroys all channels, saves cache)
     m_wdspEngine->shutdown();
@@ -17008,6 +17032,8 @@ void RadioModel::wireTxChannelKeying()
     connect(m_moxController, &MoxController::txReady,
             this, [this]() {
         if (!m_txChannel) { return; }
+        // Task 33: a txReady from a key the emergency stop cut short.
+        if (m_transmitStopHold) { return; }
         m_txReadyReceived = true;
         if (!m_awaitingInterlockForTx) {
             // Either no amp in chain (gate never armed) OR the
@@ -17023,7 +17049,7 @@ void RadioModel::wireTxChannelKeying()
             << "RF-flow gate: txReady arrived; waiting interlock"
                "Granted before starting TxChannel";
         QTimer::singleShot(1500, this, [this]() {
-            if (m_awaitingInterlockForTx && m_txChannel) {
+            if (m_awaitingInterlockForTx && m_txChannel && !m_transmitStopHold) {
                 qCWarning(lcConnection)
                     << "RF-flow gate: interlockGranted didn't fire"
                        " within 1.5 s, starting TxChannel anyway"
@@ -17034,19 +17060,146 @@ void RadioModel::wireTxChannelKeying()
         });
     });
 
-    // F.1 — txaFlushed → setRunning(false).
-    // From Thetis console.cs:29607 [v2.10.3.13] — TX-off callsite with
-    // dmode=1 (drain) in the TX→RX branch.
-    // Thread.Sleep(space_mox_delay); // default 0 // from PSDR MW0LGE  [console.cs:29603]
-    connect(m_moxController, &MoxController::txaFlushed,
+    // Task 33: txDrainRequested → setRunning(false): the TX channel
+    // drains first, with the RF gate open and the hardware still keyed,
+    // and the walk waits for it before mox_delay and the hardware flip.
+    // From Thetis console.cs:29651-29658 [v2.10.3.15]:
+    //   if (space_mox_delay > 0)
+    //       Thread.Sleep(space_mox_delay); // default 0 // from PSDR MW0LGE
+    //   _mox = tx;
+    //   psform.Mox = tx;
+    //   WDSP.SetChannelState(WDSP.id(1, 0), 0, 1);  // turn off the transmitter (no action if it's already off)
+    connect(m_moxController, &MoxController::txDrainRequested,
             m_txChannel, [this]() {
+        if (!m_txChannel) { return; }
         if (m_pureSignal) {
             m_pureSignal->onMoxChanged(false);
         }
-        // R-R3-39: the RF gate closes here at once; the drain follows on
-        // the transmit lane.
-        m_txChannel->setRunningAsync(false);
+        m_pendingTxDrainSequence = m_txChannel->setRunningAsync(false);
     });
+    connect(m_txChannel, &TxChannel::txDrained,
+            this, [this](quint64 sequence) {
+        // >= because without a lane the drain reports inside
+        // setRunningAsync, before its sequence is stored; an older drain
+        // arriving late is still ignored.
+        if (sequence >= m_pendingTxDrainSequence && m_moxController) {
+            m_moxController->onTxDrained();
+        }
+    });
+    // Task 33: txaFlushed: after the drain and mox_delay the RF gate is
+    // shut (it already is unless the drain wait timed out), just before
+    // hardwareFlipped(false) drops the MOX bit.
+    connect(m_moxController, &MoxController::txaFlushed,
+            m_txChannel, [this]() {
+        if (m_txChannel) {
+            m_txChannel->closeRfGate();
+        }
+    });
+    m_moxController->setAwaitsTxDrain(true);
+}
+
+// ---------------------------------------------------------------------------
+// Task 33 (R-IOS-03, remote design §12.1): stopTransmitNow, the emergency
+// stop. NereusSDR-original: the RF gate closes at once (no WDSP call) and
+// MOX and the T/R relay go off on the connection's thread, without waiting
+// for the TX channel's drain that Thetis's unkey runs first
+// (console.cs:29651-29658 [v2.10.3.15]; the drain's timeout is acceptable
+// here). A RADE end-of-over tail is never waited for.
+// ---------------------------------------------------------------------------
+void RadioModel::stopTransmitNow(const QString& reason)
+{
+    // Hold first: a key step already queued (hardwareFlipped(true), txReady,
+    // an interlock grant) must not key again once this returns.
+    m_transmitStopHold = true;
+
+    // No further TX I/Q block reaches the connection after this returns,
+    // and a queued channel-on no longer opens the gate.
+    if (m_txChannel) {
+        m_txChannel->closeRfGate();
+    }
+
+    // MOX and the relay off, on the connection's thread (at once when this
+    // is that thread). P1 puts bank 0 on its next frame and P2 sends its
+    // high-priority packet at once (their setMox / setTrxRelay).
+    if (m_connection) {
+        RadioConnection* const conn = m_connection;
+        QMetaObject::invokeMethod(conn, [conn]() {
+            conn->setMox(false);
+            conn->setTrxRelay(false);
+        });
+    }
+
+    qCInfo(lcConnection).noquote() << "Transmit stopped at once:" << reason;
+}
+
+// ---------------------------------------------------------------------------
+// Task 33: stopAllTx.
+// Porting from Thetis console.cs:45324-45342 [v2.10.3.15], StopAllTx.
+// Original C# logic:
+//
+//   private bool _stop_all_tx = false;
+//   public void StopAllTx(string msg = "")
+//   {
+//       if (MOX || _manual_mox || chkTUN.Checked || chk2TONE.Checked)
+//       {
+//           _stop_all_tx = true;
+//
+//           MOX = false;
+//           _manual_mox = false;
+//           if (chkTUN.Checked)
+//               chkTUN.Checked = false;
+//           if (chk2TONE.Checked)
+//               chk2TONE.Checked = false;
+//
+//           if (!string.IsNullOrEmpty(msg))
+//           {
+//               infoBar.Warning(msg, false, 10000);
+//           }
+//       }
+//   }
+//
+// NereusSDR: stopTransmitNow comes first, so RF stops before the normal
+// unkey (which Thetis runs synchronously) finishes on the lanes. The
+// warning is the transmitStopped signal; MainWindow shows a non-empty
+// message for 10 s.
+// ---------------------------------------------------------------------------
+void RadioModel::stopAllTx(const QString& message)
+{
+    // From Thetis console.cs:45324 [v2.10.3.15]: StopAllTx
+    const bool moxOn = mox();
+    const bool manualMoxOn = m_moxController && m_moxController->isManualMox();
+    const bool tuneOn = m_isTuning;
+    const bool twoToneOn = m_twoToneController
+        && (m_twoToneController->isActive()
+            || m_twoToneController->isActivationInFlight());
+    if (!moxOn && !manualMoxOn && !tuneOn && !twoToneOn) {
+        return;
+    }
+
+    // _stop_all_tx = true;
+    if (m_moxController) {
+        m_moxController->latchStopAllTx();
+    }
+
+    stopTransmitNow(message);
+
+    // MOX = false;
+    setMox(false);
+    // _manual_mox = false;
+    if (m_moxController) {
+        m_moxController->clearManualMox();
+    }
+    // if (chkTUN.Checked) chkTUN.Checked = false;
+    if (tuneOn) {
+        setTune(false);
+    }
+    // if (chk2TONE.Checked) chk2TONE.Checked = false;
+    if (twoToneOn) {
+        m_twoToneController->setActive(false);
+    }
+
+    // if (!string.IsNullOrEmpty(msg)) infoBar.Warning(msg, false, 10000);
+    emit transmitStopped(message);
 }
 
 // ── Phase 3M-1a Task F.1: MoxController::hardwareFlipped fan-out ────────────
@@ -17554,9 +17707,10 @@ void RadioModel::setTune(bool on)
         // ── RELEASE MOX via MoxController ────────────────────────────────────
         // Cite: console.cs:30106 [v2.10.3.13]: chkMOX.Checked = false;
         // MoxController::setTune(false) drives the full TX→RX walk (B.5)
-        // when MOX is on: it fires hardwareFlipped(false) synchronously and
-        // then chains keyUpDelayTimer (mox_delay) → txaFlushed →
-        // pttOutDelayTimer (ptt_out_delay) → rxReady.  Always called (even
+        // when MOX is on: txDrainRequested (the TX channel drains), then,
+        // after the drain and keyUpDelayTimer (mox_delay), txaFlushed and
+        // hardwareFlipped(false), then pttOutDelayTimer (ptt_out_delay) →
+        // rxReady (Task 33, Thetis's order).  Always called (even
         // when MOX is already off) because it also clears m_manualMox and
         // emits manualMoxChanged(false) — Cite: console.cs:30142 [v2.10.3.13].
         // TUNE-release ordering, HL2, UNRESOLVED as of 2026-08-01.
@@ -18381,6 +18535,13 @@ void RadioModel::completeTuneOff()
 
 void RadioModel::onMoxHardwareFlipped(bool isTx)
 {
+    // Task 33: a flip to TX queued before stopTransmitNow must not key the
+    // radio again after it.
+    if (isTx && m_transmitStopHold) {
+        qCInfo(lcConnection) << "Transmit stopped: ignoring a key queued before the stop";
+        return;
+    }
+
     // Step 1 — Alex antenna routing.  Resolves which TX/RX antenna ports
     // engage for the current band and tx/rx state.  AlexController state
     // is read inside applyAlexAntennaForBand; result is pushed to
@@ -18441,33 +18602,38 @@ void RadioModel::onMoxHardwareFlipped(bool isTx)
     //     moment as Alex routing / setMox wire bit — before the rfDelay.
     //     Thetis stops RX at this same point (line 29527-29543 is before
     //     HdwMOXChanged on line 29582 and the rf_delay on 29592).
-    //   - RX restore fires here on hardwareFlipped(false) rather than the
-    //     later rxReady phase signal.  Thetis restores at line 29629 which
-    //     is after HdwMOXChanged(false) and ptt_out_delay.  The early
-    //     restore is acceptable for TUN-only scope; if bench shows a click
-    //     on TX→RX, wire a separate rxReady slot in a follow-up.
-    if (m_wdspEngine) {
-        if (isTx) {
-            if (m_moxStoppedRxChannel < 0 && txSlice != nullptr) {
-                const int channelId = txSlice->sliceIndex();
-                if (auto* const rxCh = m_wdspEngine->rxChannel(channelId)) {
-                    // RX off + flush. SetChannelState(id, 0, 1), matching
-                    // Thetis console.cs:29534 [v2.10.3.13].
-                    rxCh->setActive(false);
-                    m_moxStoppedRxChannel = channelId;
-                }
-            }
-        } else {
-            const int channelId = m_moxStoppedRxChannel;
-            m_moxStoppedRxChannel = -1;
-            if (channelId >= 0) {
-                if (auto* const rxCh = m_wdspEngine->rxChannel(channelId)) {
-                    // RX on, no flush. SetChannelState(id, 1, 0), matching
-                    // Thetis console.cs:29629 [v2.10.3.13].
-                    rxCh->setActive(true);
-                }
+    //   - Task 33: RX restore fires on rxReady (onMoxRxReady), after
+    //     hardwareFlipped(false) and ptt_out_delay, as Thetis restores at
+    //     console.cs:29680 [v2.10.3.15].
+    if (m_wdspEngine && isTx) {
+        if (m_moxStoppedRxChannel < 0 && txSlice != nullptr) {
+            const int channelId = txSlice->sliceIndex();
+            if (auto* const rxCh = m_wdspEngine->rxChannel(channelId)) {
+                // RX off + flush. SetChannelState(id, 0, 1), matching
+                // Thetis console.cs:29534 [v2.10.3.13].
+                rxCh->setActive(false);
+                m_moxStoppedRxChannel = channelId;
             }
         }
+    }
+}
+
+// Task 33: the receiver MOX stopped comes back after the hardware flip and
+// ptt_out_delay.
+// From Thetis console.cs:29678-29680 [v2.10.3.15]:
+//   if (ptt_out_delay > 0)
+//       Thread.Sleep(ptt_out_delay);                 //wcp:  added 2018-12-24, time for HW to switch
+//   WDSP.SetChannelState(WDSP.id(0, 0), 1, 0);  // turn on appropriate receivers
+void RadioModel::onMoxRxReady()
+{
+    const int channelId = m_moxStoppedRxChannel;
+    m_moxStoppedRxChannel = -1;
+    if (channelId < 0 || !m_wdspEngine) {
+        return;
+    }
+    if (auto* const rxCh = m_wdspEngine->rxChannel(channelId)) {
+        // RX on, no flush. SetChannelState(id, 1, 0).
+        rxCh->setActive(true);
     }
 }
 

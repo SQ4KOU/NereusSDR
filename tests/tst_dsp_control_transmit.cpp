@@ -316,6 +316,11 @@ class TestDspControlTransmit : public QObject {
             || !model.waitForTransmitLaneForTest(kLaneIdleTimeoutMs)) {
             return false;
         }
+        // The siphon hands display 5 one DSP block per call and Spectrum0
+        // reads bf_sz samples from it, so the analyzer takes the channel's
+        // block size before any block, as the desktop's MOX edge sets it
+        // (without it bf_sz is the FFT size and reads past the siphon).
+        rig.analyzer->setBlockSize(rig.tx->dspBlockFrames());
         rig.rx->setActive(true);
         rig.tx->setConnection(rig.conn.get());
         model.injectTxChannelForTest(rig.tx);
@@ -403,8 +408,8 @@ private slots:
                  "the channel came on inside rf_delay");
         QVERIFY2(*channelOn <= *gateOpen, "the RF gate opened before the channel");
 
-        // Unkey: MoxController's walk reaches txaFlushed after key_up_delay;
-        // the RF gate closes then, at once.
+        // Unkey (Task 33): the TX channel drains with the gate open, then
+        // the lane closes the gate.
         rig.model->moxController()->setMox(false);
         QTRY_VERIFY_WITH_TIMEOUT(!rig.tx->isRunning(), 5000);
         QVERIFY(rig.model->waitForTransmitLaneForTest(kLaneIdleTimeoutMs));
@@ -486,6 +491,9 @@ private slots:
 
         model->moxController()->setMox(false);
         QTRY_VERIFY_WITH_TIMEOUT(!tx->isRunning(), 5000);
+        // Task 33: the analyzer stops on hardwareFlipped(false), which now
+        // follows the drain and mox_delay (Thetis's unkey order).
+        QTRY_COMPARE_WITH_TIMEOUT(model->moxController()->state(), MoxState::Rx, 5000);
         QVERIFY(model->waitForTransmitLaneForTest(kLaneIdleTimeoutMs));
         feeder.stop();
         QVERIFY(!model->txAnalyzer()->isRunning());
@@ -791,9 +799,11 @@ private slots:
     }
 
     // How long the unkey drain (SetChannelState with dmode=1) takes on the
-    // lane, with microphone blocks arriving and without. The RF gate
-    // closes first, so the worker stops calling fexchange0 either way; the
-    // numbers go to the task's ledger.
+    // lane. Task 33: the normal unkey keeps the RF gate open through the
+    // drain (Thetis's order), so with microphone blocks arriving the worker
+    // keeps calling fexchange0 and the drain finishes; the emergency stop
+    // closes the gate first and the drain waits out WDSP's timeout, as it
+    // does with no blocks. The numbers go to the task's ledger.
     void unkeyDrainIsMeasured()
     {
         DspControlThread lane(DspLane::Transmit);
@@ -812,6 +822,8 @@ private slots:
         analyzer->setSampleRate(96000.0);
         analyzer->start();
         QVERIFY(lane.waitIdleForTest(kLaneIdleTimeoutMs));
+        analyzer->setBlockSize(tx->dspBlockFrames());   // as buildRig does
+        QVERIFY(lane.waitIdleForTest(kLaneIdleTimeoutMs));
 
         std::mutex drainMutex;
         std::vector<double> drains;
@@ -824,17 +836,28 @@ private slots:
             return drains.empty() ? -1.0 : drains.back();
         };
 
-        // With mic blocks arriving.
+        // With mic blocks arriving: the normal unkey, then the emergency
+        // stop's order (gate first).
         double withBlocks = -1.0;
+        double gateFirst = -1.0;
         {
             Feeder txFeeder(txBlockTick(tx));
             tx->setRunningAsync(true);
             QTRY_VERIFY_WITH_TIMEOUT(tx->isRunning(), kLaneIdleTimeoutMs);
             QTRY_VERIFY_WITH_TIMEOUT(conn.txBlocks() > 50, 10000);
             tx->setRunningAsync(false);
-            QVERIFY(!tx->isRunning());
             QVERIFY(lane.waitIdleForTest(kLaneIdleTimeoutMs));
+            QVERIFY(!tx->isRunning());
             withBlocks = lastDrain();
+
+            tx->setRunningAsync(true);
+            QTRY_VERIFY_WITH_TIMEOUT(tx->isRunning(), kLaneIdleTimeoutMs);
+            const int before = conn.txBlocks();
+            QTRY_VERIFY_WITH_TIMEOUT(conn.txBlocks() > before + 50, 10000);
+            tx->closeRfGate();
+            tx->setRunningAsync(false);
+            QVERIFY(lane.waitIdleForTest(kLaneIdleTimeoutMs));
+            gateFirst = lastDrain();
             txFeeder.stop();
         }
 
@@ -846,13 +869,17 @@ private slots:
         QVERIFY(lane.waitIdleForTest(kLaneIdleTimeoutMs));
         const double withoutBlocks = lastDrain();
 
-        qInfo("unkey drain on the transmit lane: %.1f ms with mic blocks arriving, "
-              "%.1f ms without (SetChannelState's timeout is 100 ms)",
-              withBlocks, withoutBlocks);
+        qInfo("unkey drain on the transmit lane: %.1f ms with mic blocks arriving "
+              "(gate open, Thetis's order), %.1f ms with the gate closed first "
+              "(emergency stop), %.1f ms without blocks (SetChannelState's timeout "
+              "is 100 ms)",
+              withBlocks, gateFirst, withoutBlocks);
         {
             std::lock_guard<std::mutex> lock(drainMutex);
-            QCOMPARE(drains.size(), std::size_t(2));
+            QCOMPARE(drains.size(), std::size_t(3));
         }
+        QVERIFY2(withBlocks >= 0.0 && withBlocks < 100.0,
+                 "the normal unkey's drain timed out instead of finishing");
 
         tx->setDrainObserverForTest({});
         tx->setConnection(nullptr);
