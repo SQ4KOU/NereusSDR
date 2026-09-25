@@ -27,6 +27,12 @@
 // follows Thetis handleTrxMessage and OnMoxPreChangeHandler, checked with
 // two apps against a radio model that is not connected (its MoxController
 // is the fake MOX: nothing reaches a radio).
+//
+// Receiver and transmit gaps plan, Task 7 fix wave (R-R3-49), 2026-09-24,
+// J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code: an app's trx is
+// answered with the transmitter's real state, never the value it asked for
+// (the MOX button keyed under trx:0,false; a manual key under trx:0,true),
+// and WSJT-X's own sequence still sees trx:0,true; with no suffix.
 
 #ifdef HAVE_WEBSOCKETS
 
@@ -75,6 +81,9 @@ private slots:
     void station_server_refuses_transmit_until_remote_transmit();
     void station_server_refuses_transmit_settings();
     void second_app_trx_follows_thetis_rule();
+    void trx_false_during_operator_key_is_not_echoed();
+    void trx_true_that_keys_nothing_is_not_echoed();
+    void wsjtx_sequence_still_sees_trx_true_without_suffix();
 };
 
 // ── tx_mutex_single_client_claim_and_release() ───────────────────────────────
@@ -531,6 +540,161 @@ void TestTciTxMutex::second_app_trx_follows_thetis_rule()
     QTRY_COMPARE_WITH_TIMEOUT(server.activeTxClientCount(), 0, 3000);
     appA.close();
     appB.close();
+    server.stop();
+}
+
+// ── Task 7 fix wave, I1 (R-R3-49): the trx reply tells the truth ────────────
+//
+// From Thetis TCIServer.cs:3623-3672 [v2.10.3.15] (handleTrxMessage): the
+// trx handler writes TCIPTT and broadcasts nothing itself; apps hear the
+// transmitter's real state from the MoxChange handlers (sendMOX). An app
+// that asks is answered with the transmitter's state after the call,
+// never with the value it asked for.
+namespace {
+struct TrxApp {
+    QWebSocket socket;
+    QSignalSpy text{&socket, &QWebSocket::textMessageReceived};
+    QSignalSpy binary{&socket, &QWebSocket::binaryMessageReceived};
+    QStringList lines(int from = 0) const
+    {
+        QStringList out;
+        for (int i = from; i < text.count(); ++i) {
+            for (const QString& part : text.at(i).at(0).toString().split(
+                     QLatin1Char(';'), Qt::SkipEmptyParts)) {
+                out << part.trimmed() + QLatin1Char(';');
+            }
+        }
+        return out;
+    }
+    bool open(quint16 port)
+    {
+        QSignalSpy connected(&socket, &QWebSocket::connected);
+        socket.open(QUrl(QStringLiteral("ws://127.0.0.1:%1").arg(port)));
+        if (!connected.wait(2000)) {
+            return false;
+        }
+        return QTest::qWaitFor([this] { return lines().contains(QStringLiteral("ready;")); },
+                               3000);
+    }
+};
+
+void allowEveryKey(MoxController* mox)
+{
+    mox->setMoxCheck([]() {
+        return safety::BandPlanGuard::MoxCheckResult{true, QString()};
+    });
+}
+} // namespace
+
+// Scenario A: the operator keys with the MOX button; an app's trx:0,false
+// does not unkey it (PollPTT releases only a TCI key), so no app may be
+// told the transmitter is receiving.
+void TestTciTxMutex::trx_false_during_operator_key_is_not_echoed()
+{
+    RadioModel core;
+    MoxController* mox = core.moxController();
+    QVERIFY(mox != nullptr);
+    allowEveryKey(mox);
+    TciServer server(&core);
+    QVERIFY(server.start(0));
+    TrxApp asker;
+    TrxApp watcher;
+    QVERIFY(asker.open(server.port()));
+    QVERIFY(watcher.open(server.port()));
+
+    core.setMoxFromButton(true);
+    QVERIFY(core.mox());
+    QTRY_VERIFY_WITH_TIMEOUT(watcher.lines().contains(QStringLiteral("trx:0,true;")), 3000);
+    const int markAsker = int(asker.text.count());
+    const int markWatcher = int(watcher.text.count());
+
+    asker.socket.sendTextMessage(QStringLiteral("trx:0,false;"));
+    QTest::qWait(200);
+    QVERIFY(core.mox());
+    QVERIFY2(!asker.lines(markAsker).contains(QStringLiteral("trx:0,false;")),
+             "the asking app was told receive while the MOX button transmits");
+    QVERIFY2(!watcher.lines(markWatcher).contains(QStringLiteral("trx:0,false;")),
+             "another app was told receive while the MOX button transmits");
+    // The asker hears the truth.
+    QVERIFY(asker.lines(markAsker).contains(QStringLiteral("trx:0,true;")));
+
+    core.setMoxFromButton(false);
+    QTRY_VERIFY_WITH_TIMEOUT(watcher.lines(markWatcher).contains(QStringLiteral("trx:0,false;")),
+                             3000);
+    asker.socket.close();
+    watcher.socket.close();
+    server.stop();
+}
+
+// Scenario B: with a manual key on and the transmitter unkeyed (TUN-off
+// window, two-tone settle), an app's trx:0,true keys nothing, so no app may
+// be told the transmitter is keyed.
+void TestTciTxMutex::trx_true_that_keys_nothing_is_not_echoed()
+{
+    RadioModel core;
+    MoxController* mox = core.moxController();
+    QVERIFY(mox != nullptr);
+    allowEveryKey(mox);
+    mox->setManualKey(true);
+    TciServer server(&core);
+    QVERIFY(server.start(0));
+    TrxApp asker;
+    TrxApp watcher;
+    QVERIFY(asker.open(server.port()));
+    QVERIFY(watcher.open(server.port()));
+    const int markAsker = int(asker.text.count());
+    const int markWatcher = int(watcher.text.count());
+
+    asker.socket.sendTextMessage(QStringLiteral("trx:0,true,tci;"));
+    QTest::qWait(200);
+    QVERIFY(!core.mox());
+    QVERIFY2(!asker.lines(markAsker).contains(QStringLiteral("trx:0,true;")),
+             "the asking app was told it transmits while nothing keyed");
+    QVERIFY2(!watcher.lines(markWatcher).contains(QStringLiteral("trx:0,true;")),
+             "another app was told the transmitter keyed while nothing keyed");
+    QVERIFY(asker.lines(markAsker).contains(QStringLiteral("trx:0,false;")));
+
+    asker.socket.sendTextMessage(QStringLiteral("trx:0,false;"));
+    QTest::qWait(50);
+    mox->setManualKey(false);
+    QTest::qWait(50);
+    QVERIFY(!core.mox());
+    asker.socket.close();
+    watcher.socket.close();
+    server.stop();
+}
+
+// The WSJT-X fix of 2026-05-10 still holds with WSJT-X's own sequence:
+// trx:0,true,tci; then, before it streams, trx:0,true; with no ",tci"
+// suffix; TX_CHRONO runs while keyed; trx:0,false; then trx:0,false;.
+void TestTciTxMutex::wsjtx_sequence_still_sees_trx_true_without_suffix()
+{
+    RadioModel core;
+    MoxController* mox = core.moxController();
+    QVERIFY(mox != nullptr);
+    allowEveryKey(mox);
+    TciServer server(&core);
+    QVERIFY(server.start(0));
+    TrxApp wsjtx;
+    QVERIFY(wsjtx.open(server.port()));
+    const int mark = int(wsjtx.text.count());
+
+    wsjtx.socket.sendTextMessage(QStringLiteral("trx:0,true,tci;"));
+    QTRY_VERIFY_WITH_TIMEOUT(wsjtx.lines(mark).contains(QStringLiteral("trx:0,true;")), 3000);
+    QVERIFY(core.mox());
+    QCOMPARE(server.activeTxClientCount(), 1);
+    QTRY_VERIFY_WITH_TIMEOUT(wsjtx.binary.count() > 0, 3000);   // TX_CHRONO
+    for (const QString& line : wsjtx.lines(mark)) {
+        QVERIFY2(!line.startsWith(QStringLiteral("trx:")) || !line.contains(QStringLiteral("tci")),
+                 qPrintable(line));
+    }
+
+    const int markOff = int(wsjtx.text.count());
+    wsjtx.socket.sendTextMessage(QStringLiteral("trx:0,false;"));
+    QTRY_VERIFY_WITH_TIMEOUT(wsjtx.lines(markOff).contains(QStringLiteral("trx:0,false;")), 3000);
+    QTRY_VERIFY_WITH_TIMEOUT(!core.mox(), 3000);
+    QCOMPARE(server.activeTxClientCount(), 0);
+    wsjtx.socket.close();
     server.stop();
 }
 

@@ -50,6 +50,10 @@
 //                own update gap (Thetis udTCIRateLimit), read at start and
 //                changed live. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-24 - Receiver and transmit gaps plan, Task 7 fix wave
+//                (R-R3-49): the trx note says what an app's trx:N,false
+//                does since Task 7 (it releases a TCI key only). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #ifdef HAVE_WEBSOCKETS
 
@@ -2754,9 +2758,14 @@ void TciServer::onTextMessageReceived(const QString& msg)
                         // keyed does nothing and is not answered; with it
                         // unkeyed, the trx keys it even when another app
                         // holds the TX audio (only the asker's audio is
-                        // refused); and any app's trx:N,false unkeys (the
-                        // protocol's setMox). Unkeying also releases the TX
-                        // audio (hookGlobalBroadcasts, OnMoxPreChangeHandler).
+                        // refused); and any app's trx:N,false releases a TCI
+                        // key (the protocol's setMox). Since Task 7 a key
+                        // another source holds (the MOX button, the mic, VOX)
+                        // stays: PollPTT releases only in PTTMode.TCI. The
+                        // asking app is answered with the real state and no
+                        // app is told the requested one (Task 7 fix wave).
+                        // Unkeying also releases the TX audio
+                        // (hookGlobalBroadcasts, OnMoxPreChangeHandler).
                         // Still not ported: the CW break-in guard
                         // (shouldIgnoreTrxForCurrentCwBreakIn, CW transmit is
                         // not built) and the VFOATX/VFOBTX choice by

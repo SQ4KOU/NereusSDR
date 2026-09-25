@@ -17114,8 +17114,16 @@ void RadioModel::setMox(bool on)
     //       consoleThreadSafe.TCIPTT = bMox;
     // Without a controller we fall back to the TransmitModel latch (matches
     // the pre-controller path Thetis uses during early construction).
+    //
+    // Task 7 fix wave (R-R3-49): a release is always passed on, even when
+    // MOX is already off. Thetis writes TCIPTT = false only when MOX is on,
+    // so a trx:N,true that keyed nothing (held off by a manual key) leaves
+    // _tci_ptt set after the app's trx:N,false, and the next poll after the
+    // manual key clears keys the radio for an app that has let go. Passing
+    // the release on clears the level; it can only unkey a TCI key, never
+    // key anything.
     if (m_moxController) {
-        if (m_moxController->isMox() != on) {
+        if (!on || m_moxController->isMox() != on) {
             m_moxController->onTciPtt(on);
         }
     } else {
