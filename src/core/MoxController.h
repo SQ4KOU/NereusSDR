@@ -167,8 +167,10 @@
 //   2026-09-24 - Receiver and transmit gaps plan, Task 7 follow-up: a
 //                 held source refused because the microphone is not
 //                 ready is never queued (m_notQueuedHeld, R-R3-36). A CAT
-//                 or TCI rising edge is a new press (N2). J.J. Boyd
-//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//                 or TCI rising edge is a new press (N2). CAT and TCI
+//                 requests are dropped, not held, under TX inhibit or a
+//                 PA trip (N3). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -1284,6 +1286,9 @@ private:
     bool     isHeldOff(quint8 bit) const noexcept { return (m_notQueuedHeld & bit) != 0; }
     bool     isLevelHeld(quint8 bit) const noexcept;
     void     clearHeldBits(quint8 bits);
+    // Task 7 follow-up, N3: TX inhibit or a PA trip drops the CAT and TCI
+    // levels (an app's request is not held across the block).
+    void     dropAppLevelsUnderBlock();
     // True only across a quiet setMox(true) from tryPollKey.
     bool     m_quietRefusal{false};
     // tryPollKey: PollPTT's `_current_ptt_mode = X; chkMOX.Checked = true;`

@@ -1052,9 +1052,30 @@ void MoxController::clearPttSources()
 void MoxController::setTxInhibited(bool on)
 {
     m_txInhibited = on;
+    if (on) {
+        dropAppLevelsUnderBlock();
+    }
     if (on && m_mox) {
         setMox(false);
     }
+}
+
+// ---------------------------------------------------------------------------
+// dropAppLevelsUnderBlock: Task 7 follow-up, N3.
+//
+// Thetis keeps _cat_ptt and _tci_ptt through an inhibit or a PA trip, and
+// PollPTT keys from them on its first pass after the block lifts (for
+// example right after an amplifier reset), with the app's audio. NereusSDR
+// drops them when the block is asserted, and onCatPtt / onTciPtt refuse a
+// new request while it holds, so the app is answered trx:0,false and
+// nothing keys later without a new request. The mic and VOX keep Thetis's
+// behaviour: a person is holding them, and they key after the block lifts.
+// ---------------------------------------------------------------------------
+void MoxController::dropAppLevelsUnderBlock()
+{
+    m_catPtt = false;
+    m_tciPtt = false;
+    clearHeldBits(kRefusedCat | kRefusedTci);
 }
 
 // ---------------------------------------------------------------------------
@@ -1070,6 +1091,9 @@ void MoxController::setTxInhibited(bool on)
 void MoxController::setPaTripped(bool on)
 {
     m_paTripped = on;
+    if (on) {
+        dropAppLevelsUnderBlock();   // Task 7 follow-up, N3
+    }
     if (on && m_mox) {
         setMox(false);
     }
@@ -1727,6 +1751,13 @@ void MoxController::onCatPtt(bool pressed)
     //                  (!_ptt_bit_bang_enabled && CWInput.CATPTT) | _cat_ptt;
     // Keys with PTTMode.CAT from receive (console.cs:25513-25517); a release
     // unkeys only in PTTMode.CAT (console.cs:25582-25588).
+    // Task 7 follow-up, N3: refused, not kept, while TX inhibit or a PA
+    // trip holds (see dropAppLevelsUnderBlock). Silent, as PollPTT's gate
+    // is for every source.
+    if (pressed && (m_txInhibited || m_paTripped)) {
+        qCInfo(lcDsp) << "MoxController: CAT PTT refused while transmit is blocked";
+        return;
+    }
     // Task 7 follow-up, N2: a rising edge is a new press too. A refusal
     // drops the CAT level (dropPttOnUnkey) and then marks it refused, so a
     // second request with no release between would otherwise be refused
@@ -1838,6 +1869,13 @@ void MoxController::onCwPtt(bool /*pressed*/)
 // ---------------------------------------------------------------------------
 void MoxController::onTciPtt(bool pressed)
 {
+    // Task 7 follow-up, N3: refused, not kept, while TX inhibit or a PA
+    // trip holds (see dropAppLevelsUnderBlock); the app is answered
+    // trx:N,false.
+    if (pressed && (m_txInhibited || m_paTripped)) {
+        qCInfo(lcDsp) << "MoxController: TCI PTT refused while transmit is blocked";
+        return;
+    }
     // Task 7 follow-up, N2: a rising edge is a new press too (see
     // onCatPtt): an app's second trx:N,true after a refusal is told again.
     if (!pressed || !m_tciPtt) {

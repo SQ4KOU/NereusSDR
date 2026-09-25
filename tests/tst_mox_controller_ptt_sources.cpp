@@ -474,6 +474,84 @@ private slots:
         }
     }
 
+    // ── Task 7 follow-up, N3: CAT and TCI under a block are dropped ─────────
+    // A CAT or TCI request is an app's, not a held switch: made while TX
+    // inhibit or a PA trip holds, it is refused (the app is answered
+    // trx:0,false) and not kept, so it does not key when the block lifts.
+    // A level recorded before the block is dropped when the block is
+    // asserted. The mic and VOX keep Thetis's behaviour (a person is
+    // holding them; blockUnkeysActiveTransmission).
+    void catTciUnderBlock_areDroppedNotHeld_data()
+    {
+        QTest::addColumn<bool>("paTrip");
+        QTest::addColumn<bool>("cat");
+        QTest::newRow("tx inhibit, tci") << false << false;
+        QTest::newRow("tx inhibit, cat") << false << true;
+        QTest::newRow("pa trip, tci")    << true  << false;
+        QTest::newRow("pa trip, cat")    << true  << true;
+    }
+    void catTciUnderBlock_areDroppedNotHeld()
+    {
+        QFETCH(bool, paTrip);
+        QFETCH(bool, cat);
+        const auto block = [paTrip](MoxController& c, bool on) {
+            if (paTrip) { c.setPaTripped(on); } else { c.setTxInhibited(on); }
+        };
+        const auto press = [cat](MoxController& c) {
+            if (cat) { c.onCatPtt(true); } else { c.onTciPtt(true); }
+            drain();
+        };
+
+        {   // requested while the block holds
+            MoxController ctrl; makeSync(ctrl);
+            block(ctrl, true);
+            press(ctrl);
+            QVERIFY(!ctrl.isMox());
+            block(ctrl, false);
+            micFrames(ctrl, false);   // the next PollPTT passes
+            QVERIFY2(!ctrl.isMox(), "a request made under the block keyed when it lifted");
+            QCOMPARE(ctrl.pttMode(), PttMode::None);
+        }
+        {   // requested before the block, held off by a manual key
+            MoxController ctrl; makeSync(ctrl);
+            ctrl.setManualKey(true);
+            press(ctrl);
+            QVERIFY(!ctrl.isMox());
+            block(ctrl, true);
+            block(ctrl, false);
+            ctrl.setManualKey(false);
+            drain();
+            QVERIFY2(!ctrl.isMox(), "a request held across the block keyed when it lifted");
+        }
+        {   // a new request after the block lifts keys normally
+            MoxController ctrl; makeSync(ctrl);
+            block(ctrl, true);
+            press(ctrl);
+            block(ctrl, false);
+            press(ctrl);
+            QVERIFY(ctrl.isMox());
+            QCOMPARE(ctrl.pttMode(), cat ? PttMode::Cat : PttMode::Tci);
+        }
+    }
+
+    void trxUnderInhibit_viaRadioModel_isAnsweredFalseAndDropped()
+    {
+        RadioModel core;
+        MoxController* mox = core.moxController();
+        QVERIFY(mox != nullptr);
+        makeSync(*mox);
+        mox->setMoxCheck([]() {
+            return safety::BandPlanGuard::MoxCheckResult{true, QString()};
+        });
+        mox->setTxInhibited(true);
+        core.setMox(true);
+        drain();
+        QVERIFY(!core.mox());   // what TciProtocol answers: trx:0,false
+        mox->setTxInhibited(false);
+        micFrames(*mox, false);
+        QVERIFY2(!core.mox(), "the trx made under the inhibit keyed when it lifted");
+    }
+
     // ── Task 7 fix wave, M2: a TX-interlock refusal is reported ────────────
     // TwoToneController, TUN and the MOX button learn of a refused key
     // through moxRejected; the interlock refused without it.
