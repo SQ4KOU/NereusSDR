@@ -30,6 +30,9 @@
 //                 attenuator follows every change of either, PureSignal's
 //                 own included.  NereusSDR-original; no new Thetis logic.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25: R-R3-49 (group A fix wave, M6): ATT on TX, its value and
+//                 Force ATT schedule the Core's debounced save.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -280,6 +283,7 @@ public:
         if (m_attOnTxEnabled == on) { return; }
         m_attOnTxEnabled = on;
         emit attOnTxEnabledChanged(on);
+        scheduleSave();  // R-R3-49 (group A fix wave, M6): saved at once on the Core
     }
     bool attOnTxEnabled() const noexcept { return m_attOnTxEnabled; }
 
@@ -291,6 +295,7 @@ public:
         if (m_forceAttWhenPsOff == on) { return; }
         m_forceAttWhenPsOff = on;
         emit forceAttWhenPsOffChanged(on);
+        scheduleSave();  // R-R3-49 (group A fix wave, M6): saved at once on the Core
     }
     bool forceAttWhenPsOff() const noexcept { return m_forceAttWhenPsOff; }
 
