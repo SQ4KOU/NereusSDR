@@ -255,6 +255,14 @@ public:
     /// xmeter), which reads -30; a non-finite value also reads -30.
     static double compressionReading(double rawTxaCompAv);
 
+    /// D14, R-R3-49: the value a transmit meter binding (MeterBinding Tx*,
+    /// WDSP-read ones) shows, worked from WDSP readings exactly as Thetis
+    /// works it (thetisTxReading in WdspTypes.h: CalculateTXMeter, then the
+    /// MOX reading step). `readRaw` returns one GetTXAMeter reading
+    /// (TxChannel::txMeter). -400 for a binding no WDSP meter feeds.
+    static double txReadingForBinding(int bindingId,
+                                      const std::function<double(TxMeterType)>& readRaw);
+
 public slots:
     // Switch between RX and TX meter polling.
     // Connected to MoxController::moxStateChanged(bool) by MainWindow (H.2).
@@ -274,16 +282,18 @@ private:
     // registered MeterWidget targets.
     // Porting from Thetis dsp.cs:999-1050 [v2.10.3.13] CalculateTXMeter.
     void pollTxMeters();
-    // pollTxMeters()'s hand-out of one raw reading (the Compression floor
-    // applies here).
-    void handOutTxReading(int bindingId, double rawValue);
+    // pollTxMeters()'s hand-out of one reading, already worked
+    // (txReadingForBinding), to the meters and txMeterReading.
+    void handOutTxReading(int bindingId, double value);
 
 #ifdef NEREUS_BUILD_TESTS
 public:
-    // Test seam: what pollTxMeters() does with one raw WDSP reading.
+    // Test seam: what pollTxMeters() does when every WDSP meter reads
+    // `rawValue`.
     void handOutTxReadingForTest(int bindingId, double rawValue)
     {
-        handOutTxReading(bindingId, rawValue);
+        handOutTxReading(bindingId, txReadingForBinding(
+            bindingId, [rawValue](TxMeterType) { return rawValue; }));
     }
 private:
 #endif

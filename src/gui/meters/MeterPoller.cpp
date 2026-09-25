@@ -54,6 +54,12 @@
 //               TxChannel::txMeter maps to its WDSP index; ALC, ALC gain
 //               and COMP had read TXA_COMP_PK, TXA_COMP_AV and TXA_CFC_AV.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25: D14 / R-R3-49: every WDSP-read TX binding (MIC, EQ,
+//               Leveler, Leveler gain, CFC, CFC gain, COMP, ALC, ALC gain,
+//               ALC group) is polled and shows Thetis's reading
+//               (thetisTxReading: CalculateTXMeter's alcgain and sign, then
+//               the console.cs floors). J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -566,79 +572,78 @@ void MeterPoller::pollSMeter()
     sm->setLevel(dbm);
 }
 
-// Poll the four WDSP TX meters active in 3M-1a and push to meter widget targets.
+// Poll the WDSP TX meters and push Thetis's reading of each to the meter
+// widget targets.
 //
-// Porting from Thetis dsp.cs:999-1029 [v2.10.3.13] CalculateTXMeter:
-//   case MeterType.TXA_OUT_PK:   val = GetTXAMeter(channel, TXA_OUT_PK);   // output peak
-//   case MeterType.TXA_ALC_AV:   val = GetTXAMeter(channel, TXA_ALC_AV);   // ALC average
-//   case MeterType.TXA_ALC_PK:   val = GetTXAMeter(channel, TXA_ALC_PK);   // ALC peak
-//   case MeterType.TXA_ALC_GAIN: val = GetTXAMeter(channel, TXA_ALC_GAIN) + alcgain; // ALC gain
+// D14, R-R3-49: every TX binding a WDSP meter feeds, each worked as Thetis
+// works it (thetisTxReading, WdspTypes.h): CalculateTXMeter (dsp.cs:992-1053
+// [v2.10.3.15]) and the MOX reading step (console.cs:46969-46986
+// [v2.10.3.15]). Before this, ALC showed the raw TXA_ALC_AV without the -30
+// floor, ALC gain the raw TXA_ALC_GAIN without alcgain's +3, and MIC, EQ,
+// Leveler, Leveler gain, CFC, CFC gain and ALC group were not polled.
 //
-// 3M-1a scope: hardware PA meters (forward/reflected/SWR) are driven by the
-// existing RadioStatus::powerChanged connection (setRadioStatus()), which
-// is active regardless of TX/RX state. No duplication needed.
+// Hardware PA meters (forward/reflected/SWR) are driven by the existing
+// RadioStatus::powerChanged connection (setRadioStatus()), which is active
+// regardless of TX/RX state, as Thetis's PWR reading comes from the
+// hardware, not CalculateTXMeter.
 //
-// Without HAVE_WDSP the reads return -140.0 (silent fallback — no WDSP channel).
+// Without HAVE_WDSP every WDSP reading is -140.0 (no WDSP channel).
+namespace {
+struct TxReadingEntry { int bindingId; ThetisTxReading reading; };
+// Which of Thetis's readings each NereusSDR binding shows (MeterPoller.h
+// names each binding's WDSP meter; MeterItem.cpp its label).
+constexpr TxReadingEntry kTxReadings[] = {
+    { MeterBinding::TxMic,         ThetisTxReading::Mic      },   // TXA_MIC_AV
+    { MeterBinding::TxEq,          ThetisTxReading::Eq       },   // TXA_EQ_AV
+    { MeterBinding::TxLeveler,     ThetisTxReading::Leveler  },   // TXA_LVLR_AV
+    { MeterBinding::TxLevelerGain, ThetisTxReading::LvlG     },   // TXA_LVLR_GAIN
+    { MeterBinding::TxCfc,         ThetisTxReading::CfcAv    },   // TXA_CFC_AV
+    { MeterBinding::TxCfcGain,     ThetisTxReading::CfcG     },   // TXA_CFC_GAIN
+    { MeterBinding::TxComp,        ThetisTxReading::Comp     },   // TXA_COMP_AV
+    { MeterBinding::TxAlc,         ThetisTxReading::Alc      },   // TXA_ALC_AV
+    { MeterBinding::TxAlcGain,     ThetisTxReading::AlcG     },   // TXA_ALC_GAIN + 3
+    { MeterBinding::TxAlcGroup,    ThetisTxReading::AlcGroup },   // ALC_PK + ALC_G
+};
+} // namespace
+
+double MeterPoller::txReadingForBinding(int bindingId,
+                                        const std::function<double(TxMeterType)>& readRaw)
+{
+    for (const TxReadingEntry& entry : kTxReadings) {
+        if (entry.bindingId == bindingId) {
+            return thetisTxReading(entry.reading, readRaw);
+        }
+    }
+    return -400.0;
+}
+
 void MeterPoller::pollTxMeters()
 {
     if (!m_txChannel) {
         return;  // no TX channel yet (WDSP not initialized or disconnected)
     }
 
-    const int chanId = m_txChannel->channelId();
-
-    // Meter binding IDs → TxMeterType. TxChannel::txMeter maps each to the
-    // WDSP index it names (wdspTxaMeterIndex, D14 / R-R3-49); passing the
-    // enum's raw value read another meter (ALC read TXA_COMP_PK, ALC gain
-    // TXA_COMP_AV, COMP TXA_CFC_AV).
-    // From Thetis dsp.cs:999-1029 [v2.10.3.13]:
-    //   TXA_OUT_PK  → TxMeterType::OutPeak
-    //   TXA_ALC_PK  → TxMeterType::AlcPeak
-    //   TXA_ALC_AV  → TxMeterType::AlcAvg
-    //   TXA_ALC_GAIN→ TxMeterType::AlcGain
-    struct TxPollEntry { int bindingId; TxMeterType meter; };
-    static constexpr TxPollEntry kTxPollSet[] = {
-        { MeterBinding::TxAlc,     TxMeterType::AlcAvg  },   // TXA_ALC_AV  [v2.10.3.13]
-        { MeterBinding::TxAlcGain, TxMeterType::AlcGain },   // TXA_ALC_GAIN [v2.10.3.13]
-        // TxPower uses the TXA_OUT_PK reading for the power bar in 3M-1a.
-        // Hardware PA forward power is pushed via RadioStatus::powerChanged
-        // (the existing setRadioStatus() path); this reading is the WDSP
-        // TXA output peak (post-ALC, pre-PA), a different quantity.
-        // Both are useful; 3M-1a populates both for completeness.
-        // R-R3-21: the compression reading. It read TXA_OUT_PK, the output
-        // peak, although TxComp is TXA_COMP_AV (MeterPoller.h) as in
-        // Thetis: From Thetis dsp.cs:1013-1014 [v2.10.3.15]
-        //   case MeterType.COMP: val = GetTXAMeter(channel, txaMeterType.TXA_COMP_AV);
-        { MeterBinding::TxComp,    TxMeterType::CompAvg },   // TXA_COMP_AV [v2.10.3.15]
-    };
-
-    for (const auto& entry : kTxPollSet) {
-        double value = -140.0;
+    // R-R3-39: TxChannel::txMeter reads GetTXAMeter on the transmit lane and
+    // returns the lane's last reading, so this poll never waits on WDSP. It
+    // maps each TxMeterType to its WDSP index (wdspTxaMeterIndex).
+    TxChannel* channel = m_txChannel;
+    const auto readRaw = [channel](TxMeterType meter) -> double {
 #ifdef HAVE_WDSP
-        // GetTXAMeter(channel, mt) — lock-free, matches GetRXAMeter pattern.
-        // From Thetis dsp.cs:390-391 [v2.10.3.13].
-        // R-R3-39: TxChannel::txMeter makes that call on the transmit lane
-        // and returns the lane's last reading, so this poll never waits on
-        // WDSP.
-        value = m_txChannel->txMeter(entry.meter);
-        Q_UNUSED(chanId)
+        return channel->txMeter(meter);
 #else
-        Q_UNUSED(chanId)
-        Q_UNUSED(entry)
+        Q_UNUSED(channel)
+        Q_UNUSED(meter)
+        return -140.0;
 #endif
-        handOutTxReading(entry.bindingId, value);
+    };
+    for (const TxReadingEntry& entry : kTxReadings) {
+        handOutTxReading(entry.bindingId, thetisTxReading(entry.reading, readRaw));
     }
 }
 
-// Hands one WDSP transmit reading to the meters and to txMeterReading.
+// Hands one transmit reading to the meters and to txMeterReading.
 void MeterPoller::handOutTxReading(int bindingId, double value)
 {
-    // R-R3-21: Thetis floors the Compression reading at -30 before any
-    // meter sees it (console.cs:46979 [v2.10.3.15]); PROC off (-400)
-    // reads -30.
-    if (bindingId == MeterBinding::TxComp) {
-        value = compressionReading(value);
-    }
     for (auto& guarded : m_targets) {
         MeterWidget* target = guarded.data();
         if (!target) { continue; }
@@ -651,10 +656,11 @@ void MeterPoller::handOutTxReading(int bindingId, double value)
 //   updateMetersReading(Reading.COMP, (float)Math.Max(-30.0f, -WDSP.CalculateTXMeter(1, WDSP.MeterType.COMP)), 0);
 // with dsp.cs:1013-1014 + :1056 [v2.10.3.15]: CalculateTXMeter reads
 // TXA_COMP_AV and returns -(float)val, so the reading is max(-30, raw).
+// D14, R-R3-49: now thetisTxReading's COMP reading.
 double MeterPoller::compressionReading(double rawTxaCompAv)
 {
-    if (!std::isfinite(rawTxaCompAv)) { return MeterBinding::kTxCompFloorDb; }
-    return std::max(MeterBinding::kTxCompFloorDb, rawTxaCompAv);
+    return thetisTxReading(ThetisTxReading::Comp,
+                           [rawTxaCompAv](TxMeterType) { return rawTxaCompAv; });
 }
 
 void MeterPoller::setRadioStatus(RadioStatus* status)

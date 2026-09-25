@@ -2086,6 +2086,11 @@ nereus_add_test(tst_rx_channel_dfnr_lazy)
 # by hand from the compiled third_party/wdsp/src/TXA.h.
 nereus_add_test(tst_tx_meter_index)
 
+# D14, R-R3-49: every WDSP-read TX meter binding shows Thetis's reading
+# (CalculateTXMeter's alcgain and sign, then console.cs's MOX-branch floors);
+# the expected values are worked by hand from Thetis v2.10.3.15.
+nereus_add_test(tst_tx_meter_reading)
+
 # ── Tunable Notch Filter Task 1: the notch DB's tune frequency ─────────────
 # WDSP maps absolute-Hz notch centres into a channel's passband with
 # offset = tunefreq + shift (third_party/wdsp/src/nbp.c:192). tunefreq had

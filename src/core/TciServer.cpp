@@ -61,6 +61,9 @@
 //                destroy) move to the model's receive lane; a resampled
 //                block is encoded there and sent back here in order. J.J.
 //                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - D14 / R-R3-49: the TX sensors' mic level is Thetis's MIC
+//                reading, max(-195, TXA_MIC_AV) (thetisTxReading). J.J.
+//                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #ifdef HAVE_WEBSOCKETS
 
@@ -451,7 +454,11 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         double micDbm = -140.0;
         if (auto* wdsp = m_remoteWindow ? nullptr : m_model->wdspEngine()) {
             if (auto* tx = wdsp->txChannel(WdspEngine::kTxChannelId)) {
-                micDbm = tx->txMeter(TxMeterType::MicAvg);
+                // D14, R-R3-49: Thetis sends its MIC reading
+                // (TCIServer.cs MeterReadingsChanged reads Reading.MIC),
+                // max(-195, TXA_MIC_AV) (thetisTxReading, WdspTypes.h).
+                micDbm = thetisTxReading(ThetisTxReading::Mic,
+                                         [tx](TxMeterType meter) { return tx->txMeter(meter); });
             }
         }
         const double fwdWatts  = m_model->radioStatus().forwardPowerWatts();
