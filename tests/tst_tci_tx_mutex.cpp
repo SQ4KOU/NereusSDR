@@ -21,6 +21,12 @@
 // Boyd (KG4VCF), AI-assisted via Anthropic Claude Code: the Core's station
 // TCI server refuses transmit the same way until remote transmit, with its
 // own plain reason, while the Core's receive path is unchanged.
+//
+// Receiver and transmit gaps plan, Task 4 (R-R3-49), 2026-09-24, J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code: a second app's trx
+// follows Thetis handleTrxMessage and OnMoxPreChangeHandler, checked with
+// two apps against a radio model that is not connected (its MoxController
+// is the fake MOX: nothing reaches a radio).
 
 #ifdef HAVE_WEBSOCKETS
 
@@ -34,6 +40,8 @@
 
 #include "core/TciServer.h"
 #include "core/TciBinaryFrame.h"
+#include "core/MoxController.h"
+#include "core/safety/BandPlanGuard.h"
 #include "models/RadioModel.h"
 
 using namespace NereusSDR;
@@ -66,6 +74,7 @@ private slots:
     void remote_window_refuses_transmit_off_the_wire();
     void station_server_refuses_transmit_until_remote_transmit();
     void station_server_refuses_transmit_settings();
+    void second_app_trx_follows_thetis_rule();
 };
 
 // ── tx_mutex_single_client_claim_and_release() ───────────────────────────────
@@ -404,6 +413,124 @@ void TestTciTxMutex::station_server_refuses_transmit_settings()
     QCOMPARE(notices.count(), 3);
     client.close();
     other.close();
+    server.stop();
+}
+
+// Thetis handleTrxMessage (TCIServer.cs:3594-3689 [v2.10.3.15]) and
+// OnMoxPreChangeHandler (TCIServer.cs:7325-7338 [v2.10.3.15]), two apps on
+// one server:
+//   - trx:N,true while the transmitter is already keyed does nothing: no MOX
+//     write, no TX audio for the asker, no answer.
+//   - any app's trx:N,false unkeys, and unkeying releases the TX audio.
+//   - trx:N,true with the transmitter unkeyed keys it, even when the TX
+//     audio is held by another app (the asker's audio is refused).
+// The radio model is not connected; the counting MOX check stands in for the
+// transmitter, so nothing keys a radio.
+void TestTciTxMutex::second_app_trx_follows_thetis_rule()
+{
+    RadioModel core;
+    MoxController* mox = core.moxController();
+    QVERIFY(mox != nullptr);
+    int keyRequests = 0;
+    bool refuseKey = false;
+    mox->setMoxCheck([&keyRequests, &refuseKey]() {
+        ++keyRequests;
+        return safety::BandPlanGuard::MoxCheckResult{!refuseKey,
+            refuseKey ? QStringLiteral("test refusal") : QString()};
+    });
+    QSignalSpy moxSettled(mox, &MoxController::moxStateChanged);
+
+    TciServer server(&core);
+    QVERIFY(server.start(0));
+    const QString url = QStringLiteral("ws://127.0.0.1:%1").arg(server.port());
+    QWebSocket appA;
+    QWebSocket appB;
+    QSignalSpy connA(&appA, &QWebSocket::connected);
+    QSignalSpy connB(&appB, &QWebSocket::connected);
+    QSignalSpy textB(&appB, &QWebSocket::textMessageReceived);
+    appA.open(QUrl(url));
+    QVERIFY(connA.wait(2000));
+    appB.open(QUrl(url));
+    QVERIFY(connB.wait(2000));
+    const QString peerA = QString::number(appA.localPort());
+    const QString peerB = QString::number(appB.localPort());
+    const auto holderIs = [&server](const QString& port) {
+        return server.activeTxClientCount() == 1
+            && server.activeTxClientPeer().endsWith(QLatin1Char(':') + port);
+    };
+    const auto linesB = [&textB](int from) {
+        QStringList out;
+        for (int i = from; i < textB.count(); ++i) {
+            for (const QString& part : textB.at(i).at(0).toString().split(
+                     QLatin1Char(';'), Qt::SkipEmptyParts)) {
+                out << part.trimmed() + QLatin1Char(';');
+            }
+        }
+        return out;
+    };
+
+    // App A keys with TCI audio: it holds the TX audio and MOX is on.
+    appA.sendTextMessage(QStringLiteral("trx:0,true,tci;"));
+    QTRY_VERIFY_WITH_TIMEOUT(holderIs(peerA), 3000);
+    QVERIFY(core.mox());
+    QCOMPARE(keyRequests, 1);
+    QTRY_COMPARE_WITH_TIMEOUT(moxSettled.count(), 1, 3000);   // walk done
+    QTest::qWait(50);
+
+    // App B asks to key while A transmits: nothing happens, B hears nothing.
+    const int markB = int(textB.count());
+    appB.sendTextMessage(QStringLiteral("trx:0,true,tci;"));
+    QTest::qWait(150);
+    QCOMPARE(keyRequests, 1);
+    QVERIFY(core.mox());
+    QVERIFY(holderIs(peerA));
+    for (const QString& line : linesB(markB)) {
+        QVERIFY2(!line.startsWith(QStringLiteral("trx:")), qPrintable(line));
+    }
+    const int ringBefore = server.peekTxRingSize();
+    appB.sendBinaryMessage(makeTxFrame(64));
+    QTest::qWait(50);
+    QCOMPARE(server.peekTxRingSize(), ringBefore);
+
+    // App B unkeys: any app may, and unkeying releases A's TX audio.
+    appB.sendTextMessage(QStringLiteral("trx:0,false;"));
+    QTRY_VERIFY_WITH_TIMEOUT(!core.mox(), 3000);
+    QTRY_COMPARE_WITH_TIMEOUT(server.activeTxClientCount(), 0, 3000);
+
+    // With the transmitter unkeyed, B keys and takes the TX audio.
+    appB.sendTextMessage(QStringLiteral("trx:0,true,tci;"));
+    QTRY_VERIFY_WITH_TIMEOUT(holderIs(peerB), 3000);
+    QVERIFY(core.mox());
+    QCOMPARE(keyRequests, 2);
+
+    // A asks while B transmits: ignored the same way.
+    appA.sendTextMessage(QStringLiteral("trx:0,true,tci;"));
+    QTest::qWait(150);
+    QCOMPARE(keyRequests, 2);
+    QVERIFY(holderIs(peerB));
+    appB.sendTextMessage(QStringLiteral("trx:0,false;"));
+    QTRY_VERIFY_WITH_TIMEOUT(!core.mox(), 3000);
+    QTRY_COMPARE_WITH_TIMEOUT(server.activeTxClientCount(), 0, 3000);
+
+    // A takes the TX audio but the transmitter refuses to key, so A holds
+    // the audio with MOX off. B's trx then keys the transmitter, as Thetis
+    // does, while B's TX audio is refused: A still holds it.
+    refuseKey = true;
+    appA.sendTextMessage(QStringLiteral("trx:0,true,tci;"));
+    QTRY_VERIFY_WITH_TIMEOUT(holderIs(peerA), 3000);
+    QTRY_COMPARE_WITH_TIMEOUT(keyRequests, 3, 3000);
+    QVERIFY(!core.mox());
+    refuseKey = false;
+    appB.sendTextMessage(QStringLiteral("trx:0,true,tci;"));
+    QTRY_VERIFY_WITH_TIMEOUT(core.mox(), 3000);
+    QCOMPARE(keyRequests, 4);
+    QVERIFY(holderIs(peerA));
+
+    appB.sendTextMessage(QStringLiteral("trx:0,false;"));
+    QTRY_VERIFY_WITH_TIMEOUT(!core.mox(), 3000);
+    QTRY_COMPARE_WITH_TIMEOUT(server.activeTxClientCount(), 0, 3000);
+    appA.close();
+    appB.close();
     server.stop();
 }
 

@@ -692,6 +692,7 @@ public:
     //   - Removes DisplayPeakHold + DisplayPeakHoldDelayMs (→ ActivePeakHold keys, Task 2.5)
     //   - Removes DisplayReverseWaterfallScroll (W5 removed in Task 2.8)
     //   - v7 (R-R3-49): resets NetworkWatchdogEnabled once
+    //   - v8 (R-R3-49): drops TciRateLimitMsgsPerSec (old msg/s unit) once
     //   - Sets SettingsSchemaVersion=currentVersion
     void ensureSettingsAtVersion(int currentVersion);
 

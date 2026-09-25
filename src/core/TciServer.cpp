@@ -38,6 +38,18 @@
 //                through deleteLater, not raw delete; addListener adds an
 //                address to a running server (rework). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - Receiver and transmit gaps plan, Task 4 (R-R3-49): an
+//                app's trx follows Thetis handleTrxMessage (ignored while
+//                the transmitter is keyed; keys it otherwise, TX audio or
+//                not) and unkeying releases the TX audio
+//                (OnMoxPreChangeHandler); the Core's receive-only station
+//                server named in the seed note. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - Receiver and transmit gaps plan, Task 10 (R-R3-49): each
+//                app's vfo, dds and tx_frequency updates pass through its
+//                own update gap (Thetis udTCIRateLimit), read at start and
+//                changed live. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 
 #ifdef HAVE_WEBSOCKETS
 
@@ -153,10 +165,12 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
     // setting (toggled off in UI) is respected.
     //
     // R3 receiver audio plan, Task 4 (R-R3-42): the Tci keys belong to this
-    // computer (SettingsScope), in a remote window as in a local one: only
-    // MainWindow builds a TciServer, the Core runs none, and every reader
-    // of these two flags defaults to True. So a remote window seeds them in
-    // its own store exactly as a local one does. The guard below stays for
+    // computer (SettingsScope), in a remote window as in a local one:
+    // MainWindow builds a TciServer, the Core runs a receive-only station
+    // server (StationTciController) whose TciServer seeds the Core's own
+    // store here, and every reader of these two flags defaults to True. So
+    // a remote window seeds them in its own store exactly as a local one
+    // does. The guard below stays for
     // a key the installed remote backend does handle: before the Core's
     // settings arrive contains() is false for every one of its keys, and a
     // seed there would count as an edit made while the link was down (R3
@@ -180,6 +194,9 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
                              "WSJT-X TCI-audio mode";
         }
     }
+
+    // Task 10 (R-R3-49): the clock every app's update gap reads.
+    m_gapClock.start();
 
     m_pingTimer = new QTimer(this);  // parented — destroyed with server
 
@@ -218,10 +235,17 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         // Broadcast any drained notifications to all clients.
         // Without this, drainCoalescedNotifications() populates
         // m_pendingNotifications but nothing pumps it to the send queues.
-        while (m_protocol->hasPendingNotification()) {
-            const QString notif = m_protocol->takePendingNotification();
+        broadcastPendingNotifications();
+
+        // Task 10 (R-R3-49): the waiting vfo / dds / tx_frequency lines whose
+        // gap has passed (the Thetis one-shot timers, TCIServer.cs:6436-6439
+        // [v2.10.3.15]), checked on this tick.
+        {
+            const qint64 nowMs = m_gapClock.elapsed();
             for (auto sit = m_clients.cbegin(); sit != m_clients.cend(); ++sit) {
-                sit.value()->sendQueue.push(TciSendQueue::Priority::Control, notif);
+                for (const QString& line : sit.value()->updateGap.takeDue(nowMs)) {
+                    sit.value()->sendQueue.push(TciSendQueue::Priority::Control, line);
+                }
             }
         }
 
@@ -1065,6 +1089,25 @@ void TciServer::hookGlobalBroadcasts()
     // the TX/RX walk (Codex P1: TXEnable boundary).  Format from
     // sendMOX at TCIServer.cs:2207-2211 [v2.10.3.13].
     if (auto* mox = m_model->moxController()) {
+        // Receiver and transmit gaps plan, Task 4 (R-R3-49): unkeying, by any
+        // app or by the operator, releases the TX audio, so the next app's
+        // trx takes it.
+        // From Thetis TCIServer.cs:7325-7338 [v2.10.3.15] --
+        // OnMoxPreChangeHandler calls SyncTciPttToMox(expectedMox) on every
+        // listener; SyncTciPttToMox (TCIServer.cs:5965-5981 [v2.10.3.15])
+        // clears m_tciPttActive and calls ReleaseActiveTxAudioListener when
+        // expectedMox is false.
+        connect(mox, &MoxController::moxChanging, this,
+                [this](int /*rx*/, bool /*oldMox*/, bool newMox) {
+                    if (newMox || m_txAudioActiveClient.isNull()) {
+                        return;
+                    }
+                    m_txAudioActiveClient = nullptr;
+                    qCInfo(lcTci) << "TciServer: TX audio mutex released: the transmitter"
+                                     " is unkeying";
+                    emit txAudioActiveClientChanged(nullptr);
+                    stopTxChrono();
+                });
         connect(mox, &MoxController::moxStateChanged, this,
                 [this](bool on) {
                     const QString boolStr =
@@ -1421,6 +1464,19 @@ bool TciServer::start(const QHostAddress& bindAddress, quint16 port)
     // Detects dead clients via Qt's automatic close-on-write-error path.
     m_pingTimer->start(m_pingIntervalMs);
 
+    // Task 10 (R-R3-49): the update gap the operator set (Setup > Network >
+    // TCI Server > Rate limit), applied when the server starts as Thetis
+    // does (setup.cs:22517 [v2.10.3.15]). Default and range from Thetis
+    // udTCIRateLimit (setup.designer.cs:58645-58664 [v2.10.3.15]).
+    {
+        bool ok = false;
+        const int gapMs = AppSettings::instance()
+                              .value(QString::fromLatin1(TciUpdateGap::kSettingKey),
+                                     TciUpdateGap::kDefaultGapMs)
+                              .toInt(&ok);
+        setUpdateGapMs(ok ? gapMs : TciUpdateGap::kDefaultGapMs);
+    }
+
     // Phase 14: start the outbound drain timer (stops again in stop()).
     m_drainTimer->start();
 
@@ -1606,6 +1662,10 @@ void TciServer::onNewConnection()
         // (ws->request() is available after the WebSocket handshake; the
         // User-Agent HTTP header maps to session->userAgent).
         session->connectedAt.start();
+        // Task 10 (R-R3-49): the app's update gap, from Thetis
+        // TCPIPtciSocketListener(..., rateLimit) at TCIServer.cs:792-795
+        // [v2.10.3.15].
+        session->updateGap.setGapMs(m_updateGapMs);
 
         // Phase 26 review finding #3: apply AudioTciPage AppSettings defaults
         // at connect time so that a client that never sends explicit audio
@@ -2673,42 +2733,76 @@ void TciServer::onTextMessageReceived(const QString& msg)
                                                     ? kRemoteTransmitRefusedReason
                                                     : kStationTransmitRefusedReason));
                         }
-                    } else if (hasTciArg && wantsMox) {
-                        // Client wants TX audio ownership.
-                        // From Thetis TCIServer.cs:7625-7643 [v2.10.3.13] —
-                        // TryAcquireActiveTxAudioListener: grant if no current
-                        // owner or the owner IS this client; else deny.
-                        if (m_txAudioActiveClient.isNull() ||
-                            m_txAudioActiveClient.data() == ws) {
-                            m_txAudioActiveClient = ws;
-                            qCInfo(lcTci) << "TciServer: TX audio mutex acquired by"
-                                          << session->peer;
-                            // Phase 23: notify indicator / MainWindow.
-                            emit txAudioActiveClientChanged(ws);
-                            // Phase 3J-1 bench fix (2026-05-10): start
-                            // TX_CHRONO timing frames so WSJT-X begins
-                            // streaming TX_AUDIO_STREAM binary frames.
-                            // Parse rx from "trx:N,..." first arg.
-                            const int trxIdx = parts.at(0).trimmed().toInt();
-                            startTxChrono(ws, trxIdx);
-                        } else {
-                            // Phase 26 review finding #10: m_clients.value(key, make_shared<>())
-                            // allocates a default TciClientSession just to read its peer field.
-                            // Use explicit find + fallback string instead — zero allocation path.
-                            auto heldIt = m_clients.find(m_txAudioActiveClient.data());
-                            const QString heldBy = (heldIt != m_clients.end())
-                                ? heldIt.value()->peer
-                                : QStringLiteral("(unknown)");
-                            qCInfo(lcTci) << "TciServer: TX audio mutex denied for"
-                                          << session->peer
-                                          << "(held by" << heldBy << ")";
-                        }
-                    } else if (!wantsMox) {
-                        // trx:N,false — release mutex if this client held it.
-                        // From Thetis TCIServer.cs:7646-7652 [v2.10.3.13] —
-                        // ReleaseActiveTxAudioListener: clear if owner matches.
-                        if (!m_txAudioActiveClient.isNull() &&
-                            m_txAudioActiveClient.data() == ws) {
+                    } else {
+                        // Receiver and transmit gaps plan, Task 4 (R-R3-49):
+                        // what an app's trx does while another app holds the
+                        // TX audio, as Thetis does it.
+                        //
+                        // From Thetis TCIServer.cs:3623-3661 [v2.10.3.15] --
+                        // handleTrxMessage:
+                        //   bool useTciAudio = args.Length > 2 && args[2].ToLower() == "tci";
+                        //   bool alreadyMox = consoleThreadSafe.MOX;
+                        //   bool wantsActiveTciPtt = useTciAudio && bOK && bMox && (!alreadyMox || alreadyActiveTciPtt);
+                        //   if (wantsActiveTciPtt) ownsActiveTciPtt = m_server.TryAcquireActiveTxAudioListener(this);
+                        //   else m_server.ReleaseActiveTxAudioListener(this);
+                        //   ...
+                        //   if (bOK) {
+                        //       if (bMox && alreadyMox) { ...; return; }
+                        //       ... if (consoleThreadSafe.MOX != bMox) consoleThreadSafe.TCIPTT = bMox;
+                        //
+                        // So an app's trx:N,true while the transmitter is
+                        // keyed does nothing and is not answered; with it
+                        // unkeyed, the trx keys it even when another app
+                        // holds the TX audio (only the asker's audio is
+                        // refused); and any app's trx:N,false unkeys (the
+                        // protocol's setMox). Unkeying also releases the TX
+                        // audio (hookGlobalBroadcasts, OnMoxPreChangeHandler).
+                        // Still not ported: the CW break-in guard
+                        // (shouldIgnoreTrxForCurrentCwBreakIn, CW transmit is
+                        // not built) and the VFOATX/VFOBTX choice by
+                        // receiver (TciProtocol::handleTrxCommand).
+                        bool rxOk = false;
+                        const int trxIdx = parts.at(0).trimmed().toInt(&rxOk);
+                        const bool alreadyMox = m_model && m_model->mox();
+                        const bool alreadyActiveTciPtt =
+                            !m_txAudioActiveClient.isNull()
+                            && m_txAudioActiveClient.data() == ws;
+                        const bool wantsActiveTciPtt = hasTciArg && rxOk && wantsMox
+                            && (!alreadyMox || alreadyActiveTciPtt);
+
+                        if (wantsActiveTciPtt) {
+                            // From Thetis TCIServer.cs:8146-8163 [v2.10.3.15] --
+                            // TryAcquireActiveTxAudioListener: grant if no
+                            // current owner or the owner IS this client; else
+                            // deny.
+                            if (m_txAudioActiveClient.isNull() ||
+                                m_txAudioActiveClient.data() == ws) {
+                                m_txAudioActiveClient = ws;
+                                qCInfo(lcTci) << "TciServer: TX audio mutex acquired by"
+                                              << session->peer;
+                                // Phase 23: notify indicator / MainWindow.
+                                emit txAudioActiveClientChanged(ws);
+                                // Phase 3J-1 bench fix (2026-05-10): start
+                                // TX_CHRONO timing frames so WSJT-X begins
+                                // streaming TX_AUDIO_STREAM binary frames.
+                                startTxChrono(ws, trxIdx);
+                            } else {
+                                // Phase 26 review finding #10: explicit find +
+                                // fallback string, zero allocation path.
+                                auto heldIt = m_clients.find(m_txAudioActiveClient.data());
+                                const QString heldBy = (heldIt != m_clients.end())
+                                    ? heldIt.value()->peer
+                                    : QStringLiteral("(unknown)");
+                                qCInfo(lcTci) << "TciServer: TX audio mutex denied for"
+                                              << session->peer
+                                              << "(held by" << heldBy << ");"
+                                              << "its trx still keys the transmitter, as"
+                                                 " Thetis does";
+                            }
+                        } else if (alreadyActiveTciPtt) {
+                            // From Thetis TCIServer.cs:8166-8173 [v2.10.3.15] --
+                            // ReleaseActiveTxAudioListener: clear if owner
+                            // matches.
                             m_txAudioActiveClient = nullptr;
                             qCInfo(lcTci) << "TciServer: TX audio mutex released by"
                                           << session->peer;
@@ -2716,6 +2810,13 @@ void TciServer::onTextMessageReceived(const QString& msg)
                             emit txAudioActiveClientChanged(nullptr);
                             // Phase 3J-1 bench fix: stop TX_CHRONO frames.
                             stopTxChrono();
+                        }
+
+                        if (rxOk && wantsMox && alreadyMox) {
+                            qCInfo(lcTci) << "TciServer: trx from" << session->peer
+                                          << "ignored: the transmitter is already keyed,"
+                                             " as Thetis does";
+                            return;
                         }
                     }
                 }
@@ -2741,11 +2842,40 @@ void TciServer::onTextMessageReceived(const QString& msg)
     // broadcast to ALL clients (including the originator), mirroring Thetis's
     // outbound-frame fan-out at TCIServer.cs:1662-1791 [v2.10.3.13].
     // Phase 14: push into each client's queue instead of direct sendTextMessage.
+    broadcastPendingNotifications();
+}
+
+// Task 10 (R-R3-49): every pending notification goes to every app, through
+// that app's own update gap. The protocol queue holds one list for all apps,
+// as before; the gap is per app, as Thetis keeps it per listener
+// (TCIServer.cs:750-758 [v2.10.3.15]).
+void TciServer::broadcastPendingNotifications()
+{
+    QStringList pending;
     while (m_protocol->hasPendingNotification()) {
-        const QString notif = m_protocol->takePendingNotification();
-        for (auto sit = m_clients.cbegin(); sit != m_clients.cend(); ++sit) {
-            sit.value()->sendQueue.push(TciSendQueue::Priority::Control, notif);
+        pending << m_protocol->takePendingNotification();
+    }
+    if (pending.isEmpty()) {
+        return;
+    }
+    const qint64 nowMs = m_gapClock.elapsed();
+    for (auto sit = m_clients.cbegin(); sit != m_clients.cend(); ++sit) {
+        for (const QString& line : sit.value()->updateGap.offer(pending, nowMs)) {
+            sit.value()->sendQueue.push(TciSendQueue::Priority::Control, line);
         }
+    }
+}
+
+// Task 10 (R-R3-49). Thetis applies udTCIRateLimit when the server starts
+// (setup.cs:22517 [v2.10.3.15] -> console.SetupTCI -> StartServer) and each
+// listener keeps the value it was built with (TCIServer.cs:792-795
+// [v2.10.3.15]). Here a change reaches every connected app at once, so the
+// control does what it says without restarting the server.
+void TciServer::setUpdateGapMs(int ms)
+{
+    m_updateGapMs = std::clamp(ms, TciUpdateGap::kMinGapMs, TciUpdateGap::kMaxGapMs);
+    for (auto sit = m_clients.cbegin(); sit != m_clients.cend(); ++sit) {
+        sit.value()->updateGap.setGapMs(m_updateGapMs);
     }
 }
 

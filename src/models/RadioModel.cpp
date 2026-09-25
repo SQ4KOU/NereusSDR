@@ -186,6 +186,10 @@
 //   2026-09-24 - R-R3-49 fix wave: setTgxlOperateForStation(true) sends
 //                bypass=0 then operate=1 (remoteTgxlControlVersion 3).
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-21: before a pool is sized, the slice-limit refusal
+//                names the Core only on a Core (NereusSDR in a window with
+//                no Core); stale slice-limit comments corrected.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -4443,6 +4447,18 @@ bool RadioModel::isRfKitInOperate() const
         && m_rfKitConnection->operateMode() == QStringLiteral("OPERATE");
 }
 
+int RadioModel::userStreamCount() const
+{
+    if (m_role == Role::Remote) {
+        return m_stationUserDdcCount;
+    }
+    const BoardCapabilities& caps = boardCapabilities();
+    const ProtocolVersion protocol = m_lastRadioInfo.macAddress.isEmpty()
+                                         ? caps.protocol
+                                         : m_lastRadioInfo.protocol;
+    return BoardCapsTable::userDdcCountFor(caps, protocol);
+}
+
 const BoardCapabilities& RadioModel::boardCapabilities() const
 {
 #ifdef NEREUS_BUILD_TESTS
@@ -7323,10 +7339,15 @@ QString RadioModel::sliceCapReason(int cap) const
 {
     // Fix wave 1, I1: plain and grammatical for any count.
     const QString slices = cap == 1 ? tr("1 slice") : tr("%1 slices").arg(cap);
-    // Before a radio has sized the stream pool the ceiling is the Core's
-    // own (sliceChannelLimit), so the Core is named, not a radio.
+    // Before a radio has sized the stream pool the ceiling is this
+    // computer's own (sliceChannelLimit), so no radio is named: the Core on
+    // a Core (and in a remote window, whose Core decides), NereusSDR in a
+    // window with no Core (R-R3-21). Only a Core has the station listener
+    // rule (DaemonApp sets it).
     if (m_streamAllocator.streamCount() <= 0) {
-        return tr("The Core supports a maximum of %1").arg(slices);
+        const bool core = m_role == Role::Remote || m_stationBind.has_value();
+        return core ? tr("The Core supports a maximum of %1").arg(slices)
+                    : tr("NereusSDR supports a maximum of %1").arg(slices);
     }
     // RadioInfo.name carries the friendly product label (e.g. "ANAN-G2");
     // fall back to a generic phrase when it has none.
@@ -9392,12 +9413,15 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
     // returns 1 until isConnected() is true, and m_connection is not
     // assigned until further down this function.
     const int poolSlices = caps.maxSlices > 0 ? caps.maxSlices : 1;
-    configureStreamPool(caps.userDdcCount, poolSlices, wdspInputRate);
+    // Plan Task 11: the stream count depends on the protocol too (four on
+    // Protocol 1); the same function userStreamCount() reads.
+    const int poolStreams = BoardCapsTable::userDdcCountFor(caps, info.protocol);
+    configureStreamPool(poolStreams, poolSlices, wdspInputRate);
 
     // One ReceiverManager receiver per stream. Receiver 0 was created above
     // with the board's primary-DDC mapping; the rest are auto-assigned and
     // stay inactive until a slice binds to them.
-    for (int st = 1; st < caps.userDdcCount; ++st) {
+    for (int st = 1; st < poolStreams; ++st) {
         if (m_receiverManager->receiverConfig(st).receiverIndex < 0) {
             m_receiverManager->createReceiver();
         }
@@ -9409,7 +9433,7 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
     // is also where Slice B and friends come back.
     bindUnboundSlices();
 
-    qCInfo(lcConnection) << "Sub-Epic I: streams=" << caps.userDdcCount
+    qCInfo(lcConnection) << "Sub-Epic I: streams=" << poolStreams
                          << "channels=" << poolSlices;
 
     // 3M-1a G.1 fixup: explicit disconnect in teardownConnection() prevents
@@ -18187,7 +18211,7 @@ qint64 RadioModel::setSampleRateLive(int newRateHz,
     rxChannelIds.erase(std::unique(rxChannelIds.begin(), rxChannelIds.end()),
                        rxChannelIds.end());
 
-    // ── Step 1: Stop every RX channel, draining channel 0 last ────────────
+    // ── Step 1: Stop every running RX channel, the lowest last, drained ──
     // Upstream switches off every receiver channel, the sub-receivers with
     // no drain and the main channel last with a drain, while data is still
     // flowing so each one slews down and flushes:
@@ -18199,28 +18223,22 @@ qint64 RadioModel::setSampleRateLive(int newRateHz,
     //     WDSP.SetChannelState(0, 0, 1);  // RX1_main
     // Protocol 2 does the same for its pair at setup.cs:7043-7044
     // [v2.10.3.15]: WDSP.id(0, 1) with no drain, then WDSP.id(0, 0) drained.
-    // Here that is every slice's channel from the highest id down, channel 0
-    // last, as upstream orders it. Every one is stopped with the drain,
-    // including the sub-receiver channels upstream stops with dmode 0.
+    // Here that is every running slice's channel from the highest id down,
+    // each without a drain, and the lowest running channel (channel 0 while
+    // Slice A runs) last, drained, as upstream orders it.
     //
-    // NereusSDR divergence (fix wave 1, C1): upstream's no-drain stop relies
-    // on I/Q still flowing into the stopped channel, which is what clears
-    // the flags the stop sets. SetChannelState(ch, 0, 0) sets slew.downflag
-    // and flushflag and leaves exchange set (WDSP channel.c:288-290); the
-    // channel's next fexchange2 runs the slew-down, then clears exchange and
-    // releases the flush that clears flushflag (iobuffs.c:553-560,
-    // channel.c:152-162). NereusSDR never exchanges on a stopped channel
-    // (RxChannel::processIq returns early on !isActive()), so those flags
-    // stay set. SetInputSamplerate rebuilds a re-rated channel and clears
-    // them, but setRxChannelRate skips a channel already at the new rate
-    // (the per-slice rate menu on Protocol 2 leaves one there). Restarted,
-    // such a channel slews down on its first block and clears exchange: it
-    // is silent while isActive() reports true. The draining stop cannot
-    // leave that behind: with no exchange to finish the flush it times out
-    // and clears exchange, flushflag and downflag itself (channel.c:299-304),
-    // at a cost of about 100 ms per running channel. Restarting a channel
-    // without that wait needs its I/Q kept flowing through the stop, as
-    // upstream's does.
+    // Both forms rely on I/Q still reaching the stopping channels: WDSP
+    // finishes a stop inside the channel's own exchanges, and a channel that
+    // is not fed is left with its slew-down pending (a no-drain stop) or
+    // waits out WDSP's 100 ms timeout (a draining one). The I/Q feed stays
+    // connected until step 2, and RxChannel keeps exchanging on a stopping
+    // channel until WDSP reports the stop done (Task 8, RxChannel::
+    // applyActive and processIq). So the drain takes a few blocks of input,
+    // not 100 ms, and the no-drain stops complete alongside it. A channel no
+    // I/Q reached after its stop is finished by its rebuild in step 6, or,
+    // when it is already at the new rate, by its restart in step 9
+    // (RxChannel::finishPendingStop). Fix wave 1 (C1) drained every channel
+    // until this was in place.
     //
     // RxChannel is owned by WdspEngine; look each one up by channel ID rather
     // than caching a raw pointer. Record which were running, because step 9
@@ -18228,11 +18246,17 @@ qint64 RadioModel::setSampleRateLive(int newRateHz,
     std::vector<int> rxChannelsWereActive;
     for (auto it = rxChannelIds.rbegin(); it != rxChannelIds.rend(); ++it) {
         RxChannel* rx = m_wdspEngine->rxChannel(*it);
-        if (!rx || !rx->isActive()) {
-            continue;
+        if (rx && rx->isActive()) {
+            rxChannelsWereActive.push_back(*it);   // descending
         }
-        rxChannelsWereActive.push_back(*it);
-        rx->setActive(false);  // dmode 1: drain (see the divergence above)
+    }
+    for (std::size_t i = 0; i < rxChannelsWereActive.size(); ++i) {
+        RxChannel* rx = m_wdspEngine->rxChannel(rxChannelsWereActive[i]);
+        if (i + 1 < rxChannelsWereActive.size()) {
+            rx->deactivateWithoutDrain();   // dmode 0, as upstream's subs
+        } else {
+            rx->setActive(false);           // dmode 1: the last, drained
+        }
     }
     QThread::msleep(10);  // From Thetis setup.cs:7116 [v2.10.3.15]: Thread.Sleep(10)
 
@@ -19486,6 +19510,11 @@ NereusSDR::CodecContext RadioModel::currentCodecContext() const
     // 1-ADC SKU is never handed an ADC1 selector.
     ctx.adcCtrl = NereusSDR::defaultRxAdcCtrl(boardCapabilities().adcCount);
 
+    // The model decides which Protocol 1 models keep slice B's DDC while
+    // PureSignal transmits (P1CodecStandard::applyDdcAssignment). Seeded
+    // before the test seam for the same reason as adcCtrl.
+    ctx.model = m_hardwareProfile.model;
+
     if (m_ddcCtxForTest) {
         ctx.mox           = m_ddcCtxMoxForTest;
         ctx.puresignalRun = m_ddcCtxPsForTest;
@@ -19998,30 +20027,26 @@ void RadioModel::publishDdcAssignment(const NereusSDR::DdcAssignment& assignment
     // an already-active receiver; for an inactive one the activation
     // reconcile below re-runs it, so the mapping is live either way.
     //
-    // PROTOCOL 1 IS EXCLUDED, and this is not an optimisation. The codec's
-    // DDC number is the ReceiverManager routing key on Protocol 2 only:
-    // P2RadioConnection emits iqDataReceived keyed by the real DDC index
-    // (P2RadioConnection.cpp:2736 + :2809), but Protocol 1 packs the ACTIVE
-    // receivers sequentially into the EP6 frame and emits their frame-slot
-    // index (P1RadioConnection.cpp:2999-3007). Publishing DDC numbers onto a
-    // P1 receiver would route stream 0 to hw index 2 on Anvelina Pro 3 /
-    // RedPitaya and drop every EP6 packet: the exact regression recorded in
-    // connectToRadio's "P1 radios deliver samples on hardware receiver index
-    // 0" comment (issue #263). The sequential auto-assign that
-    // rebuildHardwareMapping already performs IS the correct P1 answer,
-    // because nth-active-receiver maps to nth frame slot by construction.
-    // The slice-level publish below still carries the codec's DDC number on
-    // P1: that is the wire-level truth, just not a routing key.
-    const bool protocol1 =
-        (qobject_cast<NereusSDR::P1RadioConnection*>(m_connection) != nullptr)
-        || (m_connection == nullptr && m_receiverManager
-            && m_receiverManager->p1Codec() != nullptr);
-
-    // Idle streams are skipped rather than cleared to -1: -1 restores the
-    // auto-assign fallback that caused the drop in the first place, and a
-    // deactivated receiver is excluded from m_hwToLogical anyway, so the
-    // last-known explicit DDC is the safer thing to leave behind.
-    if (m_receiverManager && !protocol1) {
+    // Both protocols route by the codec's number (plan Task 11). On
+    // Protocol 2 it is the DDC index P2RadioConnection emits with
+    // iqDataReceived. On Protocol 1 it is the FRAME SLOT: the index of the
+    // receiver inside the EP6 frame, which P1RadioConnection emits with
+    // iqDataReceived, and every Protocol 1 codec now publishes that
+    // (Thetis GetDDC's Protocol 1 numbering: Hermes A 0 / B 1, HermesII
+    // A 0 / B 1, Orion class and RedPitaya A 0 / B 2, slices C and D on the
+    // PureSignal pair's slots in plain receive).
+    //
+    // Protocol 1 used to be excluded here and left to rebuildHardwareMapping's
+    // sequential auto-assign (nth active receiver -> slot n). That was right
+    // only while the codecs published Protocol 2-style DDC numbers: AnvelinaPro3
+    // and RedPitaya put stream 0 on "DDC2", and routing by that dropped every
+    // EP6 packet (issue #263). It was wrong for the Orion class: slice B went
+    // to slot 1, which the radio tunes to slice A's frequency (bank 3, nddc 5),
+    // instead of slot 2; and slices D and E landed on the PureSignal pair's
+    // slots by position. Routing by frame slot fixes both, and keeps the HL2's
+    // routing except in one state: slice B alone after slice A is removed
+    // reads slot 1 (its own DDC, tuned to its own frequency), not slot 0.
+    if (m_receiverManager) {
         const int streams = std::min(m_streamAllocator.streamCount(), 5);
         for (int st = 0; st < streams; ++st) {
             const int ddc = assignment.streamDdc[st];
@@ -20150,11 +20175,13 @@ void RadioModel::publishDdcAssignment(const NereusSDR::DdcAssignment& assignment
     // DDC has been suspended: the radio has stopped streaming it. Announce
     // it, because until now it was completely silent.
     //
-    // The suspension itself is CORRECT and stays. It is what Thetis does.
-    // On the 1-ADC HERMES class -- the family P2CodecHermes and
-    // P1CodecStandard implement -- UpdateDDCs collapses to a single synced
-    // pair the moment PureSignal transmits or diversity engages, dropping
-    // every user receiver including RX1:
+    // The suspension itself is CORRECT and stays. It is what Thetis does,
+    // and how much it drops depends on the protocol and the model.
+    //
+    // On Protocol 2 the 1-ADC Hermes class (P2CodecHermes) collapses to a
+    // single synced pair the moment PureSignal transmits, dropping every
+    // user receiver including RX1. UpdateDDCs's PureSignal-transmit arm
+    // enables only the pair:
     //
     //   From Thetis console.cs:8448-8456 [v2.10.3.15]:
     //     else // transmitting and PS is ON
@@ -20169,6 +20196,19 @@ void RadioModel::publishDdcAssignment(const NereusSDR::DdcAssignment& assignment
     // agrees: for Hermes / HermesII / HermesC10 on P2 the MOX+PS cases are
     // literally empty, so rx1 and rx2 both come back -1
     // (console.cs:8635-8636 and 8641-8642 [v2.10.3.15]).
+    //
+    // Protocol 1 follows each model's own Thetis layout (plan Task 11;
+    // P1CodecStandard::applyDdcAssignment; the values are frame slots).
+    // Hermes class (HERMES, ANAN10, ANAN100, ANAN_G2E): slices A and B keep
+    // slots 0 and 1 in every state, the PureSignal pair rides slots 2 + 3
+    // (P1 GetDDC: rx1 = 0; rx2 = 1; psrx = 2; pstx = 3). Orion class and
+    // RedPitaya: A on slot 0, B on slot 2 in every state, the pair on slots
+    // 3 + 4. HermesII (ANAN10E, ANAN100B): the pair takes both slots while
+    // PureSignal transmits (psrx = 0; pstx = 1), so slices A and B are
+    // suspended here then, as on Protocol 2 Hermes. Diversity keeps B on
+    // its slot on every Protocol 1 model (GetDDC rx2 = 1, or 2 on Orion).
+    // Slices beyond B lose their slots while PureSignal transmits (the pair)
+    // and under diversity.
     //
     // What Thetis does NOT do is tell the operator. Nothing unchecks RX2,
     // nothing greys it, and the only trace is a label that quietly fails to

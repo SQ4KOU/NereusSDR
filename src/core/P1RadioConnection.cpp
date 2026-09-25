@@ -2478,6 +2478,7 @@ CodecContext P1RadioConnection::buildCodecContext() const
     ctx.p1UserDigOut   = m_userDigOut;  // Task 2.2 of P1 full-parity epic
     ctx.p1PuresignalRun = m_puresignalRun;  // Task 2.3 of P1 full-parity epic
     ctx.p1PsNDdc       = m_psNDdc;          // Task 17 P1 follow-up: bank 2/3 PS gate
+    ctx.model          = m_hardwareProfile.model;
     ctx.p1MicPTTDisabled = m_micPTTDisabled;  // 3M-1b G.5; renamed for issue #182
     ctx.duplex         = m_duplex;
     ctx.diversity      = m_diversity;

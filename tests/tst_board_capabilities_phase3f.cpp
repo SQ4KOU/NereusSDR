@@ -39,9 +39,10 @@ namespace {
 // ever goes. The PS/diversity branches on the 1-ADC families collapse harder
 // still (Thetis console.cs:8448-8457 [v2.10.3.15]).
 template <typename Codec>
-int assignableStreams(const Codec& codec)
+int assignableStreams(const Codec& codec, HPSDRModel model = HPSDRModel::FIRST)
 {
     CodecContext ctx{};
+    ctx.model = model;
     std::array<SliceConfig, 5> streams{};
     for (int i = 0; i < 5; ++i) {
         streams[i].live         = true;
@@ -345,38 +346,65 @@ private slots:
                    assignableStreams(P1CodecStandard{}));
     }
 
-    // Angelia (ANAN-100D) and Orion (ANAN-200D) are P1-native 2-ADC boards
-    // that Thetis drives through its ORION-class branch: nddc = 5,
-    // P1_rxcount = 5, RX1 on DDC2 and RX2 on DDC3
-    // (console.cs:8220-8304 [v2.10.3.15]). userDdcCount = 5 is right for the
-    // hardware.
-    //
-    // P1CodecStandard, however, implements ONLY Thetis's HERMES-class branch
-    // (console.cs:8387-8459 [v2.10.3.15]): it hard-codes p1RxCount = 4,
-    // nDdc = 4 and streams 0-3 onto DDC0-3. The ORION-class P1 branch has
-    // never been ported, so on P1 these two boards are served by a codec
-    // that describes different hardware.
-    //
-    // Deliberately NOT closed by trimming userDdcCount to 4: that would
-    // record a codec scope gap in the hardware capability table, which is
-    // the wrong place for it, and would be wrong the moment the ORION-class
-    // P1 branch lands. Expected-fail instead, so the day it is ported this
-    // XPASSes and forces the row to be revisited.
-    void orion_class_p1_capacity_gap_is_known()
+    // Plan Task 11: the Protocol 1 stream count is one function of the row
+    // and the protocol (BoardCapsTable::userDdcCountFor), and it matches what
+    // each Protocol 1 codec assigns for its model: HermesII 2 (slots 0, 1),
+    // Hermes class 4 (slots 0-3), Orion class 4 (slots 0, 2, 3, 4; slot 1 is
+    // tied to RX1's frequency), HL2 2. This closes the gap the old
+    // orion_class_p1_capacity_gap_is_known recorded as an expected failure:
+    // the Orion-class rows keep their Protocol 2 count of five, and Protocol
+    // 1 reads four. The Atlas stays a documented under-exposure (3 against
+    // the Hermes layout's 4).
+    void protocol1_stream_count_matches_the_codec_for_the_model_data()
     {
-        const int p1 = assignableStreams(P1CodecStandard{});
+        QTest::addColumn<int>("model");
+        QTest::addColumn<int>("expected");
+        QTest::newRow("ANAN10E")      << int(HPSDRModel::ANAN10E)      << 2;
+        QTest::newRow("ANAN100B")     << int(HPSDRModel::ANAN100B)     << 2;
+        QTest::newRow("HERMES")       << int(HPSDRModel::HERMES)       << 4;
+        QTest::newRow("ANAN10")       << int(HPSDRModel::ANAN10)       << 4;
+        QTest::newRow("ANAN100")      << int(HPSDRModel::ANAN100)      << 4;
+        QTest::newRow("ANAN_G2E")     << int(HPSDRModel::ANAN_G2E)     << 4;
+        QTest::newRow("ANAN100D")     << int(HPSDRModel::ANAN100D)     << 4;
+        QTest::newRow("ANAN200D")     << int(HPSDRModel::ANAN200D)     << 4;
+        QTest::newRow("ORIONMKII")    << int(HPSDRModel::ORIONMKII)    << 4;
+        QTest::newRow("ANAN7000D")    << int(HPSDRModel::ANAN7000D)    << 4;
+        QTest::newRow("ANAN8000D")    << int(HPSDRModel::ANAN8000D)    << 4;
+        QTest::newRow("ANAN_G2")      << int(HPSDRModel::ANAN_G2)      << 4;
+        QTest::newRow("ANAN_G2_1K")   << int(HPSDRModel::ANAN_G2_1K)   << 4;
+        QTest::newRow("ANVELINAPRO3") << int(HPSDRModel::ANVELINAPRO3) << 4;
+        QTest::newRow("REDPITAYA")    << int(HPSDRModel::REDPITAYA)    << 4;
+        QTest::newRow("HERMESLITE")   << int(HPSDRModel::HERMESLITE)   << 2;
+    }
 
-        QEXPECT_FAIL("", "P1CodecStandard implements only Thetis's HERMES-class "
-                         "branch (nddc=4); the ORION-class P1 branch "
-                         "(console.cs:8220-8304, nddc=5) is not ported",
-                     Continue);
-        QVERIFY(BoardCapsTable::forBoard(HPSDRHW::Angelia).userDdcCount <= p1);
+    void protocol1_stream_count_matches_the_codec_for_the_model()
+    {
+        QFETCH(int, model);
+        QFETCH(int, expected);
+        const HPSDRModel m = static_cast<HPSDRModel>(model);
+        const BoardCapabilities& caps = BoardCapsTable::forModel(m);
 
-        QEXPECT_FAIL("", "P1CodecStandard implements only Thetis's HERMES-class "
-                         "branch (nddc=4); the ORION-class P1 branch "
-                         "(console.cs:8220-8304, nddc=5) is not ported",
-                     Continue);
-        QVERIFY(BoardCapsTable::forBoard(HPSDRHW::Orion).userDdcCount <= p1);
+        QCOMPARE(BoardCapsTable::userDdcCountFor(caps, ProtocolVersion::Protocol1), expected);
+
+        int assigned = 0;
+        switch (m) {
+            case HPSDRModel::HERMESLITE:   assigned = assignableStreams(P1CodecHl2{}, m); break;
+            case HPSDRModel::ANVELINAPRO3: assigned = assignableStreams(P1CodecAnvelinaPro3{}, m); break;
+            case HPSDRModel::REDPITAYA:    assigned = assignableStreams(P1CodecRedPitaya{}, m); break;
+            default:                       assigned = assignableStreams(P1CodecStandard{}, m); break;
+        }
+        QCOMPARE(assigned, expected);
+    }
+
+    // Protocol 2 reads the row unchanged, on every row.
+    void protocol2_stream_count_is_the_row()
+    {
+        for (const auto& caps : BoardCapsTable::all()) {
+            QCOMPARE(BoardCapsTable::userDdcCountFor(caps, ProtocolVersion::Protocol2),
+                     caps.userDdcCount);
+            QVERIFY(BoardCapsTable::userDdcCountFor(caps, ProtocolVersion::Protocol1)
+                    <= caps.userDdcCount);
+        }
     }
 
     void user_ddc_count_never_exceeds_max_slices()

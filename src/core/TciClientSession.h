@@ -33,6 +33,10 @@
 //   2026-09-23 - R3 receiver audio fix wave (R-R3-42) by J.J. Boyd
 //                (KG4VCF): a left and a right resampler per receiver.
 //                AI-assisted transformation via Anthropic Claude Code.
+//   2026-09-24 - Receiver and transmit gaps plan, Task 10 (R-R3-49) by
+//                J.J. Boyd (KG4VCF): each client's own update gap for vfo,
+//                dds and tx_frequency lines (TciUpdateGap).
+//                AI-assisted transformation via Anthropic Claude Code.
 
 #pragma once
 #ifdef HAVE_WEBSOCKETS
@@ -43,6 +47,7 @@
 #include <QtCore/QString>
 
 #include "TciSendQueue.h"
+#include "TciUpdateGap.h"
 
 class QWebSocket;
 
@@ -64,8 +69,12 @@ namespace NereusSDR {
 //   - Phase 14 TciSendQueue — a lock-free per-client output queue whose
 //     drain runs on the TCI event loop, replacing the sender thread +
 //     AutoResetEvent + three outbound queues
-//   - Phase 15 VFO coalescer — a QTimer-based coalescer on the TCI thread,
-//     replacing the m_swVFO Stopwatch + m_tmVFOtimer Timer pair
+//   - Phase 15 VFO coalescer (TciVfoCoalescer): Layer 3 dedup of the
+//     outgoing vfo / dds / tx_frequency lines, shared by every client
+//   - Task 10 (R-R3-49) updateGap below: the per-client m_swVFO /
+//     m_tmVFOtimer, m_swCentre / m_tmCentretimer and m_swTXFrequency /
+//     m_tmTXFrequency Stopwatch + Timer pairs (Thetis TCIServer.cs:753-758
+//     [v2.10.3.15]), ported in TciUpdateGap
 //   - Phase 16 per-client Resampler* QHash — a QHash<int, Resampler*> added
 //     to this struct at that phase, replacing m_rxAudioResamplers
 //
@@ -152,6 +161,12 @@ struct TciClientSession {
     // thread + AutoResetEvent at TCIServer.cs:1754-1795 [v2.10.3.13].
     // Coalesced-key map (Thetis m_outboundCoalescedFrames) is Phase 15.
     TciSendQueue sendQueue{1024};   // 1024 frames per priority bucket
+
+    // Task 10 (R-R3-49): this client's shortest gap between outgoing vfo /
+    // if, dds and tx_frequency updates, from Thetis TCIServer.cs:750-758
+    // [v2.10.3.15] (m_nRateLimit plus the three Stopwatch + Timer pairs).
+    // TciServer sets the gap at connect and when the operator changes it.
+    TciUpdateGap updateGap;
 
     // ── ClientChainApplet display state (NereusSDR-original) ────────────────
     // No Thetis equivalent — drives the per-client row in the future

@@ -98,9 +98,11 @@ files carry only the notice `libspecbleach.txt` and `LGPLv2.1.txt` already
 hold. The DeepFilterNet header NereusSDR compiles carries no notice. The
 plog headers libdatachannel compiles carry no copyright notice, and
 libdatachannel's compiled files include no nlohmann json header. The
-fetched libraries' files are read from a built tree's
-`compile_commands.json`; zlib (Windows builds) and libASPL (the macOS
-audio driver) have not been surveyed yet.
+fetched libraries' files are the ones any supported platform compiles,
+read from each library's own CMake lists with NereusSDR's build options,
+so every machine writes the same file whichever platform built its tree;
+zlib (Windows builds) and libASPL (the macOS audio driver) have not been
+surveyed yet.
 
 DeepFilterNet's library is compiled from Rust crates, each under its own
 licence. When `setup-deepfilter.sh` or `setup-deepfilter.ps1` builds the
@@ -109,10 +111,14 @@ library from source, it also writes `deepfilternet-crates.txt` here with
 on any platform, its version, its licence expression and its licence and
 notice files, copied byte for byte. The file names the DeepFilterNet
 commit it was generated from, and `scripts/check-third-party-licenses.py`
-fails when that differs from `third_party/deepfilter/COMMIT`, because a
-prebuilt download never rewrites it. Two crates, crunchy 0.2.2 and
-realfft 3.3.0, declare MIT in their manifests but carry no licence file
-in their sources, so their entries have only the licence expression.
+fails when that differs from `third_party/deepfilter/COMMIT`, or from the
+commit either setup script pins, because a prebuilt download never
+rewrites it. Two crates, crunchy 0.2.2 and realfft 3.3.0, declare MIT in
+their manifests but carry no licence file in their sources. The generator
+adds an upstream text for each, marked as such, from a pinned source:
+crunchy's LICENSE as its repository added it after 0.2.2 (commit
+dbc2ec80, covering 2017-2019), and for realfft, which has no licence text
+upstream, the SPDX list's MIT text with the authors its manifest names.
 
 ## Opus model data
 

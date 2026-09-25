@@ -651,7 +651,7 @@ private slots:
     /// Task B4 (bottom-banner + pan-menu epic): +PAN icon click handler.
     /// Also the View > Pan Layout… (Ctrl+L) menu action's target. Gated on
     /// m_radioModel->isConnected(); opens PanLayoutDialog sized to
-    /// qMin(BoardCapabilities::maxSlices, BoardCapabilities::userDdcCount)
+    /// qMin(BoardCapabilities::maxSlices, RadioModel::userStreamCount())
     /// -- opening a new pan always claims its own DDC, so that ceiling
     /// (not the raw slice count) is what bounds how many pans a board can
     /// actually fill -- and, on accept, applies the selected layout via

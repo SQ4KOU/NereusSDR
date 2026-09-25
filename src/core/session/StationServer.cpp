@@ -559,7 +559,7 @@ QString peerNameForThisProcess()
 // Each side's own AppSettings schema version, read by the key name
 // AppSettings::ensureSettingsAtVersion() writes it under. Read rather than
 // hardcoded: the literal lives at exactly one place today (CoreInit.cpp's
-// ensureSettingsAtVersion(7) call), and duplicating it here would create a
+// ensureSettingsAtVersion(8) call), and duplicating it here would create a
 // second copy free to drift from the migrations that actually ran.
 qint32 settingsSchemaVersionOf(const AppSettings& settings)
 {
@@ -2357,7 +2357,9 @@ StationCapabilities StationServer::buildCapabilities() const
     }
 
     caps.boardMaxSlices = board.maxSlices > 0 ? board.maxSlices : 1;
-    caps.userDdcCount = board.userDdcCount;
+    // Plan Task 11: the stream count for the protocol the Core runs (four
+    // on Protocol 1), the same number its own stream pool uses.
+    caps.userDdcCount = m_radioModel->userStreamCount();
     caps.pureSignalPresent = board.hasPureSignal;
 
     // EFFECTIVE, not board (parent section 4.5). R2 has no PerfMonitor to

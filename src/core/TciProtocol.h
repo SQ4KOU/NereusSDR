@@ -44,7 +44,7 @@ namespace NereusSDR {
 // | TciServerEnabled                     | bool   | False   | Server on/off
 // | TciServerPort                        | int    | 50001   | Bind port (addr always 127.0.0.1)
 // | TciSendInitialFrequencyStateOnConnect| bool   | True    | VFO/IF/DDS in init burst
-// | TciRateLimitMsgsPerSec               | int    | 60      | Per-client message rate cap
+// | TciRateLimitMs                       | int    | 100     | Update gap per app [0..1000] (TciUpdateGap)
 // | TciAudioStreamSamples                | int    | 2048    | Audio block size [100..2048]
 // | TciTxChannel                         | string | "Both"  | TX audio channel: Left/Right/Both
 // | TciRxSensorIntervalMs                | int    | 200     | RX sensor push [30..1000]
@@ -701,8 +701,9 @@ private:
     // wired from worker threads in Phase 24+.
     QStringList m_pendingNotifications;
     // Phase 15: coalescer for rapid VFO updates (Layer 3 of Thetis 3-layer
-    // throttle at TCIServer.cs:1722-1727 [v2.10.3.13]). Layers 1+2 subsumed
-    // by Qt event loop + 5ms TciServer drain timer.
+    // throttle at TCIServer.cs:1722-1727 [v2.10.3.13]). Layer 1, the per-app
+    // update gap, runs after it in TciServer (TciUpdateGap, Task 10);
+    // Layer 2 is subsumed by it. See TciVfoCoalescer.h.
     TciVfoCoalescer m_vfoCoalescer;
     int m_setDispatchCount{0};
     int m_queryDispatchCount{0};

@@ -4,11 +4,15 @@
 // NereusSDR-original — TCI VFO coalescer implementation.
 //
 // Layer 3 outbound-coalesced map, per Thetis TCIServer.cs:1722-1727 [v2.10.3.13].
-// Layers 1+2 subsumed by Qt event loop + 5ms TciServer drain timer (Phase 14).
+// Layer 1 (the per-app update gap) is ported in TciUpdateGap; Layer 2 is
+// subsumed by this coalescer. See TciVfoCoalescer.h.
 //
 // Modification history (NereusSDR):
 //   2026-05-10 — Phase 3J-1 Task 15.1 by J.J. Boyd (KG4VCF);
 //                AI-assisted transformation via Anthropic Claude Code.
+//   2026-09-24 - Receiver and transmit gaps plan, Task 10 (R-R3-49) by
+//                J.J. Boyd (KG4VCF): layer note follows the TciUpdateGap
+//                port. AI-assisted transformation via Anthropic Claude Code.
 
 #include "TciVfoCoalescer.h"
 #include <QtCore/QMutexLocker>

@@ -585,6 +585,22 @@ namespace BoardCapsTable {
     const BoardCapabilities& forModel(HPSDRModel m) noexcept;
     std::span<const BoardCapabilities> all() noexcept;
 
+    // How many receive streams (independent DDCs) the board gives slices
+    // over the protocol it is running. This is the one stream count: the
+    // stream pool (and so the slice cap in SliceStreamAllocator), the pan
+    // layout ceiling and the count a Core advertises all read it, through
+    // RadioModel::userStreamCount(). maxSlices is a separate axis and is not
+    // touched here.
+    //
+    // Protocol 2 gives the row's userDdcCount. Protocol 1 gives at most four
+    // (plan Task 11, the operator's ruling of 2026-09-24): the frame carries
+    // RX1 and RX2 on the slots Thetis's GetDDC names, plus slices C and D on
+    // the PureSignal pair's slots in plain receive (slots 2 + 3 on the Hermes
+    // class, 3 + 4 on the Orion class; slot 1 is tied to RX1's frequency on
+    // the Orion class). The rows that serve both protocols (Angelia, Orion,
+    // OrionMKII, Saturn) carry their Protocol 2 count of five.
+    int userDdcCountFor(const BoardCapabilities& caps, ProtocolVersion protocol) noexcept;
+
     // --- Per-model preamp/attenuator helpers ---
     // Porting from Thetis console.cs:40755-40825 SetComboPreampForHPSDR().
 

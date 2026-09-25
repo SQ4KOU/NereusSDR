@@ -824,6 +824,12 @@ nereus_add_test(tst_p1_codec_anvelina_pro3)
 # ── Phase 3P-A P1CodecRedPitaya bank 12 ADC1 MOX carve-out (Task 8) ──
 nereus_add_test(tst_p1_codec_redpitaya)
 
+# ── Task 11: every Protocol 1 radio gets Thetis's receiver layout for its
+# own model (Phase 3F section 16.3.2). Table per model and per PS / diversity /
+# MOX / RX2 state, expected values from Thetis UpdateDDCs, GetDDC and the
+# CMLoadRouterAll router.
+nereus_add_test(tst_p1_ddc_layout_per_model)
+
 # ── Phase 3P-A P1CodecHl2 mi0bot WriteMainLoop_HL2 port (Tasks 9+10) ──
 nereus_add_test(tst_p1_codec_hl2)
 
@@ -2034,6 +2040,14 @@ nereus_add_test(tst_slice_stream_allocator)
 # cross-band promotion to a second DDC, four slices on one DDC, and the
 # hardware-exhaustion rejection path.
 nereus_add_test(tst_stream_pool_binding)
+
+# Task 8 (receiver and transmit gaps plan): a stopping WDSP receive channel is
+# fed until WDSP finishes its stop, so a draining stop takes a few blocks of
+# input instead of WDSP's 100 ms timeout, a no-drain stop can restart without
+# a rebuild, and a five-slice live rate change stops within one DSP block per
+# channel. REALTIME: the bounds are wall-clock times while a feeder thread
+# delivers I/Q paced in real time.
+nereus_add_test(tst_rx_channel_stop_feed REALTIME)
 
 # ── Tunable Notch Filter Task 1: the notch DB's tune frequency ─────────────
 # WDSP maps absolute-Hz notch centres into a channel's passband with
@@ -5316,6 +5330,16 @@ nereus_add_test(tst_tci_priority_queues)
 # Transport-blind: no Qt6WebSockets dependency.
 nereus_add_test(tst_tci_vfo_coalescer)
 
+# Receiver and transmit gaps plan, Task 10 (R-R3-49): the per-app update gap
+# between outgoing vfo / dds / tx_frequency lines, ported from Thetis
+# TCIServer.cs:6421-6480 [v2.10.3.15] (VFOChange / CentreChange /
+# TXFrequencyChange) into TciUpdateGap. Pure logic with the clock passed in;
+# the TciServer case (live apps through a real server) needs Qt6WebSockets.
+nereus_add_test(tst_tci_update_gap)
+if(Qt6WebSockets_FOUND)
+    target_link_libraries(tst_tci_update_gap PRIVATE Qt6::WebSockets)
+endif()
+
 # ── Phase 3J-1 Task 10: TCI volume dB math (pure logic, no WebSockets) ───────
 # Tests tciLinearToDbVolume / tciDbToLinearVolume from TciVolume.h.
 # Port of Thetis TCIServer.cs:4110-4132 [v2.10.3.13] linearToDbVolume /
@@ -6316,6 +6340,11 @@ nereus_add_test(tst_settings_schema_v6_migration)
 # once, so a value saved while the checkbox did nothing does not come alive.
 # Source: NereusSDR-original (no Thetis upstream).
 nereus_add_test(tst_settings_schema_v7_migration)
+
+# Receiver and transmit gaps plan, Task 10 (R-R3-49): SettingsSchemaVersion
+# v7 -> v8 drops TciRateLimitMsgsPerSec once (the old msg/s unit; the gap is
+# now TciRateLimitMs). Source: NereusSDR-original (no Thetis upstream).
+nereus_add_test(tst_settings_schema_v8_migration)
 
 # Phase 3F Sub-Epic B Task 1: SliceConfig + DdcAssignment shared structs.
 # 2 tests: slice_config_struct_has_required_fields,
@@ -7390,7 +7419,9 @@ nereus_add_test(tst_session_link_loss
 
 # Remote Daemon R3, Task 1: two live direct peers prove DTLS/SCTP display,
 # SRTP RTP, bounded signalling/media inputs, stop cancellation, and restart.
-nereus_add_test(tst_media_transport)
+# REALTIME (2026-09-24 checkpoint follow-up): each case does a real encrypted
+# loopback handshake inside a fixed 10 s wait, which misses at load 20-30.
+nereus_add_test(tst_media_transport REALTIME)
 
 # Remote Daemon R3, Task 1: strict connection-scoped signalling bridge and
 # live queued-control exchange over the encrypted media transport.

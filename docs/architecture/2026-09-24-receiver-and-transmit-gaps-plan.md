@@ -188,28 +188,46 @@ from a client while another client holds transmit audio.
 
 ## Task 5: Angelia and Orion sample rates and wideband ADCs
 
-**Requirements:** CLAUDE.md's hardware-fact rules (gateware for receiver counts and rates);
-the Phase 3F design section 2 table.
+**Requirements:** CLAUDE.md's hardware-fact rules; the Phase 3F design section 2 table; the
+operator's ruling (2026-09-24, "follow thetis"): these boards get Thetis's values for the
+protocol they run.
 
-**Source first:** Thetis (the per-model sample-rate lists and wideband settings in `setup.cs`
-and `console.cs`) and the gateware.
+**Source first:** Thetis `setup.cs` `InitAudioTab` (the per-protocol rate lists,
+`setup.cs:847-853 [v2.10.3.15]`, with its `//DH1KLM` RedPitaya line);
+`ChannelMaster/networkproto1.c:181-201` (no Protocol 1 wideband); `console.cs`
+`wBToolStripMenuItem_Click` (`console.cs:43553-43559`, Protocol 2 wideband on ADC0) and wherever
+Thetis shows or hides that menu item; mi0bot-Thetis for the HL2's 384 kHz on Protocol 1. The
+pinned gateware is an OrionMKII-class build (board byte 5) and does not describe these boards;
+cite it only for what it says. The first attempt's source reading is in `task-5-report.md` in
+the controller's crew workspace.
 
-**Files:** `src/core/BoardCapabilities.cpp`, the Phase 3F design's section 2 table, any plan
-that states the old value, `tests/tst_board_capabilities_phase3f.cpp`.
+**Files:** `src/core/BoardCapabilities.{h,cpp}` (per-protocol rates and wideband for a board
+that runs both protocols); `src/core/SampleRateCatalog.cpp` if the rate filter changes;
+`src/core/RadioDiscovery.cpp` (the 384 kHz given to every Protocol 1 reply, line 329) and what
+reads it; the Radio Info tab (`RadioInfoTab.cpp`, the top rate shown); the Phase 3F design's
+section 2 table and any plan that states the old values; `tests/tst_board_capabilities_phase3f.cpp`,
+`tests/tst_wideband_chain_state.cpp`.
 
 **Acceptance:**
-- Today the code gives Angelia and Orion a 384 kHz top rate and `widebandAdcs = 0`, while the
-  design table says 192 kHz and 2. Each of the four values is settled from a cited source.
-- Whichever side is wrong is fixed in the same commit as the table it came from (the code row
-  or the design table), with the invariant asserted by a test.
-- No other board row changes.
+- An ANAN-100D (Angelia) or ANAN-200D (Orion) running Protocol 1 offers 48, 96 and 192 kHz and
+  no wideband. Running Protocol 2 it offers 48 to 1536 kHz and wideband as Thetis gives it
+  (ADC0, unless Thetis gates the menu by model).
+- Radio Info shows the top rate for the protocol the radio is running.
+- The top rate taken from a Protocol 1 discovery reply follows Thetis (384 kHz for the
+  RedPitaya) and mi0bot (384 kHz for the HL2), and 192 kHz for every other board.
+- The invariant test becomes "no board offers wideband while running Protocol 1", over every
+  row.
+- The design table and the code change in the same commit, with tests of every value per
+  protocol, cited.
+- No other board's offered rates change: a test lists every board's offered rates per
+  protocol and matches Thetis.
 
 **Verification:** a capability table; tests of the values. Hardware pending (no Angelia or
 Orion on the bench).
 
 **Execution note (advisory):** opus.
 
-- [ ] **Step 1:** Read the sources, fix, test, commit.
+- [ ] **Step 1:** Read the sources, test, fix, commit.
 
 ## Task 6: The Phase 3F design document says what shipped
 
@@ -235,8 +253,8 @@ Orion on the bench).
 **Requirements:** the 3M-1 transmit work (`docs/architecture/phase3m-1a-*`,
 `phase3m-1b-mic-ssb-voice-plan.md`).
 
-**Flag:** this task changes how transmit keys and unkeys. It is a candidate for an earlier
-independent review; the operator decides before it runs. It runs last.
+**Flag:** this task changes how transmit keys and unkeys. The operator chose (2026-09-24) an
+independent review of this task on its own before it merges. It runs last.
 
 **Source first:** Thetis `console.cs`:
 - `chkMOX_CheckedChanged` (the MOX button's PTT mode);
@@ -262,3 +280,187 @@ with the operator's go-ahead.
 **Execution note (advisory):** opus.
 
 - [ ] **Step 1:** Read the Thetis PTT code, test, fix, commit.
+
+## Task 8: A stopped DSP channel is fed until its stop completes
+
+**Requirements:** the live-apply rule in CLAUDE.md; Phase 3F section 3. Found by Task 2's review
+(C1) and its fix wave.
+
+**Source first:** WDSP `channel.c` `SetChannelState` (about 280-310) and `iobuffs.c` (about
+540-565) in `third_party/wdsp/src`; Thetis's own I/Q flow while a channel stops.
+
+**Files:** `src/core/RxChannel.{h,cpp}` (`applyActive`, `processIq`,
+`deactivateWithoutDrain`), `src/models/RadioModel.cpp` (`setSampleRateLive`), tests.
+
+**Acceptance:**
+- Today `RxChannel` marks itself inactive before `SetChannelState(ch, 0, 1)`, and `processIq`
+  stops feeding the channel. So the drain never completes; each stop waits out WDSP's
+  timeout (about 100 ms). With five slices a live rate change blocks the GUI thread about
+  half a second.
+- After this task, a stopping channel keeps being fed (as Thetis's I/Q keeps flowing) until
+  WDSP reports the slew complete. Then it counts as inactive.
+- The no-drain stop becomes safe to use, as Thetis uses it for the other channels.
+- A live rate change with five slices finishes within one DSP block per channel, not
+  100 ms each. The test measures and asserts the bound.
+- Task 2's audio test (a channel already at the new rate stays audible) still passes.
+
+**Verification:** a consequential state transition; tests first. Bench pending: a live rate
+change with five slices on the G2.
+
+**Execution note (advisory):** opus.
+
+- [ ] **Step 1:** Read the WDSP source, test, fix, commit.
+
+## Task 9: Follow-ups from the checkpoint
+
+**Requirements:** R-R3-21 (wording), R-R3-26 (reachable listeners), R-R3-50 (licences), the
+fast-test-loop rules.
+
+**Items:**
+1. **A CI build with tests off.** Add a CI step that configures and builds the app and
+   `nereusd` with `NEREUS_BUILD_TESTS=OFF` (one platform is enough; Linux, reusing the
+   job's ccache). A function defined only in a test-only block then fails CI, not a release
+   build. The 2026-09-24 checkpoint found two: `AudioEngine::configureSpeakersConverter` and
+   `HardwarePage::showAntennaTab`.
+2. **`station_bind`** (the accessory listeners) reads its address the plain way, so
+   `station_bind = ::` is IPv6-only. Use the same `listenAddressFor` as the remote listener,
+   with a test binding `::` and connecting over 127.0.0.1 and ::1.
+3. **`tst_media_transport`** does a real encrypted loopback handshake with a fixed 10 s wait,
+   which misses at load 20-30. Give it the `REALTIME` option.
+4. **The parked Minors from the review of Tasks 1-2:**
+   - a window with no Core says "The Core supports a maximum of 5 slices" before its pool is
+     sized: choose the subject by role;
+   - stale comments at `MainWindow.cpp` (about 5544-5546, "1 slices"), `RadioModel.h`
+     (about 3313-3314, `maxSlices()`) and `RadioModel.cpp` (about 18062's heading);
+   - `tst_status_toast_preserves_bottom_bar.cpp:122`'s "1 slices" sample text.
+5. **The licence check's rule 5** compares the crate notices only with
+   `third_party/deepfilter/COMMIT`. Also require the pins in `setup-deepfilter.sh`
+   (`DFNR_COMMIT`) and `setup-deepfilter.ps1` to agree.
+6. **crunchy 0.2.2 and realfft 3.3.0** declare MIT but ship no licence file. Fetch each one's
+   upstream licence text at the matching version, byte for byte, and add it to
+   `deepfilternet-crates.txt`, marked as from upstream. Downloading these crates' own texts
+   falls within the operator's DeepFilterNet approval of 2026-09-24.
+
+**Verification:** each item's own test or check; the CI step read, and run once by hand in the
+Linux container if possible.
+
+**Execution note (advisory):** opus; items can be separate commits.
+
+- [ ] **Step 1:** Each item, test, commit.
+
+## Task 10: The TCI update gap as Thetis has it, and notices that do not depend on the build machine
+
+**Requirements:** R-R3-49 (every control does what its label says); R-R3-50 (licences).
+
+**Items:**
+1. **The TCI update gap.** Thetis's `udTCIRateLimit` is not an incoming-message limit. It is
+   the shortest gap between outgoing `vfo`, `dds` and `tx_frequency` updates to TCI apps: 0 to
+   1000 ms, default 100 (TCIServer.cs:6420-6480 [v2.10.3.15]; found by Task 4).
+   - NereusSDR's hidden `TciRateLimitMsgsPerSec` control was modelled as a messages-per-second
+     limit and never wired.
+   - Port Thetis's gap (source first, with cites and author tags), and show the control in
+     Thetis's unit and default.
+   - Reconcile `TciVfoCoalescer.h`'s note (which subsumed Thetis's throttle layers into the
+     event loop) with the port. Its Layer 3 dedup stays.
+   - A saved value in the old unit is dropped once, through the settings schema step, with a
+     CHANGELOG line.
+   - Test: updates to one app come no closer together than the gap; 0 sends every change.
+2. **Notices that do not depend on the build machine.** The notices presets for the fetched
+   libraries (portaudio, libdatachannel, libjuice, usrsctp, libsrtp) read the files one build
+   tree compiled. So the committed files report out of date against a macOS arm64 tree, and
+   would against a Linux or Windows tree. Collect from each library's full list of sources
+   that any supported platform compiles (from its CMake lists, all platforms), so every
+   machine regenerates the same file. Regenerate the committed files, and add a pytest case
+   that the same inputs give the same output whichever platform's tree is given.
+
+**Verification:** the TCI family and `tst_unbuilt_features`; the compliance pytest and the
+licence check.
+
+**Execution note (advisory):** opus.
+
+- [ ] **Step 1:** Each item, test, commit.
+
+## Task 11: Every Protocol 1 radio gets Thetis's receiver layout for its own model
+
+**Requirements:** Phase 3F design section 16.3.2 (the PS4 defect); the 3M-4 PureSignal work; the
+source-first rule. Found by the post-checkpoint review (its C1): `P1CodecStandard::applyDdcAssignment`
+ports only Thetis's Hermes-class branch, yet the codec selector hands it every Protocol 1 model
+except the HL2, the Anvelina Pro 3 and the RedPitaya (`P1RadioConnection.cpp:2310-2316`). The
+same codec's `psDdcConfig` already splits by model (Hermes class, HermesII class, G2 class), so
+the two halves of one codec disagree for the ANAN-10E, the ANAN-100B and the Orion/G2-class
+radios on Protocol 1.
+
+**Consumes:** the fix wave after the post-checkpoint review, which gives slice B a receiver
+under PureSignal transmit on the four Hermes-class models only (HERMES, ANAN10, ANAN100,
+ANAN_G2E) and leaves it unassigned on every other model. This task replaces that stopgap
+with the full per-model port.
+
+**Source first:** Thetis `console.cs` `UpdateDDCs` (every Protocol 1 branch: Hermes class,
+ANAN10E/ANAN100B, and the Orion case shared by ANAN100D, ANAN200D, ORIONMKII, ANAN7000D,
+ANAN8000D, ANAN_G2, ANAN_G2_1K, ANVELINAPRO3 and REDPITAYA) and `GetDDC` (their Protocol 1
+cases); `ChannelMaster/networkproto1.c` `MetisReadThreadMainLoop` (the slot pairing for nddc
+2, 4 and 5). Where mi0bot-Thetis differs for a non-HL2 model, cite both and say which one the
+port follows and why.
+
+**Files:** Modify `src/core/codec/P1CodecStandard.cpp` and `.h`; `P1CodecAnvelinaPro3.cpp` and
+`P1CodecRedPitaya.cpp` if they must reach the Orion-class assignment; `CodecContext.h` if the
+model has to travel there. Tests: a table-driven assignment test (new, or inside
+`tst_p1_codec_standard`); the P1 wire baseline if bytes change. The Phase 3F design doc's
+section 16.3.2 gains the per-model table.
+
+**Acceptance:**
+- An audit table first, in the report: for each model the codec serves and each combination of
+  PureSignal armed, diversity, MOX and RX2 enabled, Thetis's values beside NereusSDR's: the
+  P1 DDC config, enabled and synced DDCs, rates, ADC controls, the DDC under each user
+  stream, the PureSignal pair and nDdc. Mismatches marked.
+- `applyDdcAssignment` then gives Thetis's values for every row, cited with author tags.
+  `psDdcConfig` and `applyDdcAssignment` agree on the PureSignal pair for every model.
+- The table test covers every model and combination, with its expected values taken from
+  Thetis (cited), and fails on today's code for every mismatch the audit found.
+- The read loop's slot pairing agrees with the stream mapping for nddc 2, 4 and 5, so no user
+  stream ever carries the PureSignal pair.
+- A wire byte change updates the P1 baseline in its own commit, with the reason.
+- HermesII (ANAN10E, ANAN100B) under PureSignal with MOX: Thetis gives `psrx = 0; pstx = 1`
+  and no `rx1` or `rx2` (`console.cs:8766-8779`), so neither user stream gets a DDC. Today
+  stream 0 still maps to DDC0 there, so slice A demodulates the PureSignal feedback (found by
+  the fix wave after the post-checkpoint review; the same defect class as its C1). A test per
+  model pins it.
+- If a mismatch cannot be settled from the sources (a model whose Protocol 1 firmware Thetis
+  treats differently from its enum), stop and report NEEDS_CONTEXT with both readings.
+
+**Verification:** transmit-coupled; tests first. Bench pending for any Protocol 1 radio of
+these families; the operator's HL2 has its own codec and is not affected.
+
+**Execution note (advisory):** opus. Before Task 7, which runs last.
+
+- [ ] **Step 1:** The audit table, the table test, the port, commit.
+
+## Task 12: TCI apps get `if` with each VFO and centre change, as Thetis sends it
+
+**Requirements:** R-R3-49 (every control does what its label says); the TCI design
+(`docs/architecture/2026-05-09-phase3j-1-tci-port-design.md`). Found by the fix wave after the
+post-checkpoint review: the live path (`TciProtocol::enqueueLocalBroadcastVfo`) sends `vfo` and
+`dds` only, and `buildIfLine` is used only by the init burst, so an app's `if` goes stale after
+the first tune.
+
+**Source first:** Thetis `TCIServer.cs` `VFOChange` and `CentreChange` and the lines they send
+(`TCIServer.cs:1365-1400 [v2.10.3.15]`), and whatever computes the IF offset they carry.
+
+**Files:** `src/core/TciProtocol.{h,cpp}`; `src/core/TciServer.cpp` if the broadcast lives there;
+the TCI broadcast tests and `tests/tst_tci_update_gap.cpp`.
+
+**Acceptance:**
+- A VFO change sends its `vfo` and then its `if`; a centre change sends its `dds` and then its
+  `if`. Each names the receiver and channel Thetis names and carries the offset Thetis computes
+  (cited, with author tags).
+- Both go through the update gap on the gates the fix wave set: a centre change's `if` on the
+  centre gate, a VFO change's on the VFO gate.
+- The init burst and the live path build `if` with one builder.
+- Tests: an app sees the new `if` after a tune inside the pan and after a pan move; the gap
+  tests still pass.
+
+**Verification:** the TCI family. Bench pending: a TCI app that reads `if`, following a tune.
+
+**Execution note (advisory):** opus. Before Task 7, which runs last.
+
+- [ ] **Step 1:** Read the Thetis sends, test, fix, commit.

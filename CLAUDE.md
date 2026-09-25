@@ -385,7 +385,7 @@ Key source directories: `src/core/` (protocol, audio, DSP), `src/models/`
 * `TciClientSession` — per-client state struct (subscriptions, RX/TX audio ring lifecycle, IQ stream state, drop counters, last-command log); condenses Thetis's 49-field `TCPIPtciSocketListener` to 14 fields
 * `TciBinaryFrame` — 64-byte LE header binary frame encode/decode; `TCISampleType` + `TCIStreamType` enum mirrors; `encodeSamples` handles FLOAT32/INT16/INT24/INT32 paths
 * `TciSensorManager` — 4 wire format helpers (`formatRxSensors`, `formatRxChannelSensors`, `formatRxChannelSensorsEx`, `formatTxSensors`) + `minimumRequiredInterval` clamp (30..1000 ms, default 200 ms)
-* `TciVfoCoalescer` — outbound-coalesced-map dedup (Layer 3 of Thetis 3-layer VFO throttle); Layers 1+2 subsumed by Qt event loop
+* `TciVfoCoalescer` — outbound-coalesced-map dedup (Layer 3 of Thetis 3-layer VFO throttle); Layer 1 is `TciUpdateGap`, the Thetis-paced per-app update gap (per-receiver waiting lines, 0-1000 ms, default 100); Layer 2 subsumed by the coalescer
 * `TciSendQueue` — 3-priority FIFO per client (Urgent / Binary / Control) with bounded-depth oldest-drop; drain order mirrors Thetis `tryDequeueNextOutboundFrameLocked`
 * `TciApplet` — operator-facing TCI status applet (Container #0): status dot + port + client count + Setup button; Slice A + TX level meters with gain sliders
 * `ClientChainApplet` — per-client TCI connection detail applet (Container #0): TX badge, peer/name, subscription badges, last command, drop counter, disconnect button; 1 Hz auto-refresh

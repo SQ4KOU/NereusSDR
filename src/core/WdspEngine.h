@@ -22,6 +22,9 @@
 //   2026-09-23 : R-R3-40 by J.J. Boyd (KG4VCF): test-only friendship for
 //                 the NNR slice-state test. AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-24 : Task 8 by J.J. Boyd (KG4VCF): test-only friendship for
+//                 the stopping-channel feed test. AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 /*  cmaster.cs
@@ -146,6 +149,9 @@ class TestMnfSetupPage;
 // R-R3-40: the NNR slice-state test opens real RX channels under a
 // RadioModel so the model the receiver runs can be read back from WDSP.
 class TestNnrRadioPersistence;
+// Task 8 (receiver and transmit gaps plan): the stopping-channel feed test
+// opens real RX channels and times their stops while I/Q keeps flowing.
+class TestRxChannelStopFeed;
 #endif
 
 namespace NereusSDR {
@@ -883,6 +889,8 @@ private:
     // R-R3-40: same friendship for the NNR slice-state test, which opens
     // real RX channels so the running model can be read back from WDSP.
     friend class ::TestNnrRadioPersistence;
+    // Task 8: same friendship for the stopping-channel feed test.
+    friend class ::TestRxChannelStopFeed;
 #endif
 };
 
