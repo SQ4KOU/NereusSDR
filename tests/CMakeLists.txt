@@ -6258,8 +6258,10 @@ target_link_libraries(tst_station_rfkit_controller PRIVATE Qt6::Network)
 # R-R3-48 / R-R3-25: the Core's station TCI server (where it listens, the
 # switch it keeps, what an app at the station hears, transmit refused), the
 # RF-Kit's band follow over it, and the app's one TCI switch. Loopback only.
+# iPhone app plan Task 35 (ruling 8.14): the Core's own server never keys,
+# with transmit unheld or held by a device (a Core over the loopback).
 if(Qt6WebSockets_FOUND)
-    nereus_add_test(tst_station_tci_server)
+    nereus_add_test(tst_station_tci_server fakes/LoopbackTransport.cpp)
     target_link_libraries(tst_station_tci_server PRIVATE Qt6::WebSockets Qt6::Network)
 endif()
 

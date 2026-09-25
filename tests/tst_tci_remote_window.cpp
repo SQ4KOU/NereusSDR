@@ -38,6 +38,15 @@
 //                                    "cannot send" answer stops the app.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app plan Task 35 (R-IOS-13;
+//                                    ruling 8.14): an app's transmit is
+//                                    forwarded to the Core as a program's
+//                                    key; the TX audio lock only after the
+//                                    Core admits it; a refused key takes
+//                                    nothing and is answered trx:N,false;
+//                                    trx:N,false releases only this
+//                                    window's key. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #ifdef HAVE_WEBSOCKETS
@@ -255,6 +264,48 @@ int alignedStart(const QVector<float>& earlier, const QVector<float>& later)
     return -1;
 }
 
+// iPhone app plan Task 35: the Core's side of a remote window's transmit,
+// faked: it records every tx.key and tx.unkey the window sends and answers
+// a key when the test says.
+struct FakeCoreTransmit {
+    int keys = 0;
+    QList<quint32> unkeys;
+    std::function<void(const TciServer::RemoteKeyAnswer&)> pending;
+
+    TciServer::RemoteTransmit forwarder()
+    {
+        TciServer::RemoteTransmit forward;
+        forward.key = [this](std::function<void(const TciServer::RemoteKeyAnswer&)> answer) {
+            ++keys;
+            pending = std::move(answer);
+        };
+        forward.unkey = [this](quint32 epoch) { unkeys << epoch; };
+        return forward;
+    }
+
+    void accept(quint32 epoch)
+    {
+        TciServer::RemoteKeyAnswer answer;
+        answer.accepted = true;
+        answer.epoch = epoch;
+        auto reply = std::move(pending);
+        pending = {};
+        reply(answer);
+    }
+
+    void refuse(const QString& reason)
+    {
+        TciServer::RemoteKeyAnswer answer;
+        answer.reason = reason;
+        auto reply = std::move(pending);
+        pending = {};
+        reply(answer);
+    }
+};
+
+const QString kProgramNeedsTransmit = QStringLiteral(
+    "A program can transmit only while this device has transmit. Take transmit here first.");
+
 } // namespace
 
 class TestTciRemoteWindow : public QObject {
@@ -328,6 +379,198 @@ private slots:
         QVERIFY(lines.contains(QStringLiteral("tx_enable:0,false;")));
         QVERIFY(lines.contains(QStringLiteral("tx_enable:1,false;")));
         client.close();
+        tci.stop();
+    }
+
+    // ---- iPhone app plan Task 35: transmit forwarded to the Core ---------
+
+    // A refused key (the holder rule: this window's device does not hold
+    // transmit) takes no TX audio lock and is answered as a refused trx;
+    // the Core's reason reaches the operator, never the wire.
+    void aRefusedProgramKeyTakesNoAudioLockAndIsAnsweredFalse()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        TciServer tci(&remote);
+        FakeCoreTransmit core;
+        tci.setRemoteTransmit(core.forwarder());
+        QVERIFY(tci.forwardsRemoteTransmit());
+        QVERIFY(tci.start(0));
+        QWebSocket app;
+        QSignalSpy text(&app, &QWebSocket::textMessageReceived);
+        QVERIFY(connectClient(app, tci.port()));
+        QTRY_VERIFY_WITH_TIMEOUT(texts(text).contains(QStringLiteral("ready;")), 3000);
+        // The Core decides each key, so the window is not receive-only.
+        QVERIFY(texts(text).contains(QStringLiteral("receive_only:false;")));
+        text.clear();
+
+        app.sendTextMessage(QStringLiteral("trx:0,true,tci;"));
+        QTRY_COMPARE_WITH_TIMEOUT(core.keys, 1, 3000);
+        // Nothing is taken while the Core has not answered.
+        QCOMPARE(tci.activeTxClientCount(), 0);
+        core.refuse(kProgramNeedsTransmit);
+        QTRY_VERIFY_WITH_TIMEOUT(texts(text).contains(QStringLiteral("trx:0,false;")), 3000);
+        QCOMPARE(tci.activeTxClientCount(), 0);
+        QCOMPARE(tci.remoteKeyEpoch(), 0u);
+        QCOMPARE(tci.operatorNoticeReason(), kProgramNeedsTransmit);
+        QVERIFY(!texts(text).contains(QStringLiteral("trx:0,true;")));
+        for (const QString& line : texts(text)) {
+            QVERIFY2(!line.contains(QStringLiteral("program")), qPrintable(line));
+        }
+        QVERIFY(!remote.mox());
+        app.close();
+        tci.stop();
+    }
+
+    // An admitted key takes the TX audio lock only then; a second app's
+    // trx while this window's key is on does nothing (the Thetis rule
+    // among one server's apps); an app's trx:N,false releases this
+    // window's key alone, by its epoch.
+    void anAdmittedKeyTakesTheLockAndAReleaseUnkeysOnlyThisWindowsKey()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        TciServer tci(&remote);
+        FakeCoreTransmit core;
+        tci.setRemoteTransmit(core.forwarder());
+        QVERIFY(tci.start(0));
+        QWebSocket wsjtx;
+        QWebSocket logger;
+        QSignalSpy wsjtxText(&wsjtx, &QWebSocket::textMessageReceived);
+        QSignalSpy loggerText(&logger, &QWebSocket::textMessageReceived);
+        QVERIFY(connectClient(wsjtx, tci.port()));
+        QVERIFY(connectClient(logger, tci.port()));
+        QTRY_VERIFY_WITH_TIMEOUT(texts(loggerText).contains(QStringLiteral("ready;")), 3000);
+        wsjtxText.clear();
+        loggerText.clear();
+
+        wsjtx.sendTextMessage(QStringLiteral("trx:0,true,tci;"));
+        QTRY_COMPARE_WITH_TIMEOUT(core.keys, 1, 3000);
+        QCOMPARE(tci.activeTxClientCount(), 0);
+        core.accept(42);
+        QCOMPARE(tci.remoteKeyEpoch(), 42u);
+        QCOMPARE(tci.activeTxClientCount(), 1);
+        QTRY_VERIFY_WITH_TIMEOUT(texts(wsjtxText).contains(QStringLiteral("trx:0,true;")), 3000);
+        QTRY_VERIFY_WITH_TIMEOUT(texts(loggerText).contains(QStringLiteral("trx:0,true;")), 3000);
+
+        // A second app's trx while the key is on: nothing is sent to the
+        // Core and nothing changes.
+        logger.sendTextMessage(QStringLiteral("trx:0,true,tci;"));
+        QTest::qWait(150);
+        QCOMPARE(core.keys, 1);
+        QCOMPARE(tci.activeTxClientPeer().isEmpty(), false);
+
+        // Its trx:0,false releases this window's key, by epoch.
+        loggerText.clear();
+        logger.sendTextMessage(QStringLiteral("trx:0,false;"));
+        QTRY_COMPARE_WITH_TIMEOUT(core.unkeys, QList<quint32>{42u}, 3000);
+        QCOMPARE(tci.activeTxClientCount(), 0);
+        QCOMPARE(tci.remoteKeyEpoch(), 0u);
+        QTRY_VERIFY_WITH_TIMEOUT(texts(loggerText).contains(QStringLiteral("trx:0,false;")), 3000);
+        // A second release has nothing of this window's to end.
+        wsjtx.sendTextMessage(QStringLiteral("trx:0,false;"));
+        QTest::qWait(150);
+        QCOMPARE(core.unkeys.size(), 1);
+        wsjtx.close();
+        logger.close();
+        tci.stop();
+    }
+
+    // The Core ending this window's key on its own (a safety stop or a
+    // take) releases the lock here, and sends no unkey of its own.
+    void theCoreEndingTheKeyReleasesTheLock()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        TciServer tci(&remote);
+        FakeCoreTransmit core;
+        tci.setRemoteTransmit(core.forwarder());
+        QVERIFY(tci.start(0));
+        QWebSocket app;
+        QSignalSpy text(&app, &QWebSocket::textMessageReceived);
+        QVERIFY(connectClient(app, tci.port()));
+        QTRY_VERIFY_WITH_TIMEOUT(texts(text).contains(QStringLiteral("ready;")), 3000);
+        app.sendTextMessage(QStringLiteral("trx:0,true,tci;"));
+        QTRY_COMPARE_WITH_TIMEOUT(core.keys, 1, 3000);
+        core.accept(7);
+        QCOMPARE(tci.activeTxClientCount(), 1);
+        QVERIFY(remote.applyMirroredValue("transmitting", true).isEmpty());
+        text.clear();
+        QVERIFY(remote.applyMirroredValue("transmitting", false).isEmpty());
+        QCOMPARE(tci.activeTxClientCount(), 0);
+        QCOMPARE(tci.remoteKeyEpoch(), 0u);
+        QVERIFY(core.unkeys.isEmpty());
+        QTRY_VERIFY_WITH_TIMEOUT(texts(text).contains(QStringLiteral("trx:0,false;")), 3000);
+        app.close();
+        tci.stop();
+    }
+
+    // An app that lets go before the Core answers: the admitted key is
+    // released at once and nothing is taken.
+    void aReleaseBeforeTheAnswerUnkeysTheAdmittedKeyAtOnce()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        TciServer tci(&remote);
+        FakeCoreTransmit core;
+        tci.setRemoteTransmit(core.forwarder());
+        QVERIFY(tci.start(0));
+        QWebSocket app;
+        QSignalSpy text(&app, &QWebSocket::textMessageReceived);
+        QVERIFY(connectClient(app, tci.port()));
+        QTRY_VERIFY_WITH_TIMEOUT(texts(text).contains(QStringLiteral("ready;")), 3000);
+        app.sendTextMessage(QStringLiteral("trx:0,true,tci;"));
+        QTRY_COMPARE_WITH_TIMEOUT(core.keys, 1, 3000);
+        app.sendTextMessage(QStringLiteral("trx:0,false;"));
+        QTest::qWait(150);
+        core.accept(9);
+        QCOMPARE(core.unkeys, QList<quint32>{9u});
+        QCOMPARE(tci.activeTxClientCount(), 0);
+        QCOMPARE(tci.remoteKeyEpoch(), 0u);
+        app.close();
+        tci.stop();
+    }
+
+    // The app whose audio the key carried disconnects: nothing would send
+    // its trx:0,false, so the window's key is released on the Core.
+    void theKeyingAppLeavingReleasesTheKey()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        TciServer tci(&remote);
+        FakeCoreTransmit core;
+        tci.setRemoteTransmit(core.forwarder());
+        QVERIFY(tci.start(0));
+        {
+            QWebSocket app;
+            QSignalSpy text(&app, &QWebSocket::textMessageReceived);
+            QVERIFY(connectClient(app, tci.port()));
+            QTRY_VERIFY_WITH_TIMEOUT(texts(text).contains(QStringLiteral("ready;")), 3000);
+            app.sendTextMessage(QStringLiteral("trx:0,true,tci;"));
+            QTRY_COMPARE_WITH_TIMEOUT(core.keys, 1, 3000);
+            core.accept(11);
+            QCOMPARE(tci.activeTxClientCount(), 1);
+            app.close();
+        }
+        QTRY_COMPARE_WITH_TIMEOUT(core.unkeys, QList<quint32>{11u}, 3000);
+        QCOMPARE(tci.activeTxClientCount(), 0);
+        tci.stop();
+    }
+
+    // Without a forwarder (an older Core) transmit stays refused as before.
+    void withoutAForwarderTransmitStaysRefused()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        TciServer tci(&remote);
+        QVERIFY(!tci.forwardsRemoteTransmit());
+        QVERIFY(tci.start(0));
+        QWebSocket app;
+        QSignalSpy text(&app, &QWebSocket::textMessageReceived);
+        QVERIFY(connectClient(app, tci.port()));
+        QTRY_VERIFY_WITH_TIMEOUT(texts(text).contains(QStringLiteral("ready;")), 3000);
+        QVERIFY(texts(text).contains(QStringLiteral("receive_only:true;")));
+        text.clear();
+        app.sendTextMessage(QStringLiteral("trx:0,true,tci;"));
+        QTRY_VERIFY_WITH_TIMEOUT(texts(text).contains(QStringLiteral("trx:0,false;")), 3000);
+        QCOMPARE(tci.operatorNoticeReason(),
+                 QString::fromLatin1(TciServer::kRemoteTransmitRefusedReason));
+        QCOMPARE(tci.activeTxClientCount(), 0);
+        app.close();
         tci.stop();
     }
 

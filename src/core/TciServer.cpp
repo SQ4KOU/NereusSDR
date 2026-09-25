@@ -85,6 +85,14 @@
 //   2026-09-25 - iPhone app Task 73 (R-IOS-02, ruling 5.13):
 //                setSliceWriteGate. NereusSDR-original. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 35 (R-IOS-13; the several-devices
+//                design, ruling 8.14): a remote window forwards an app's
+//                transmit to its Core as tx.key {trigger:"tci"}
+//                (setRemoteTransmit, handleRemoteTrx); the TX audio lock
+//                only after the Core admits the key; trx:N,false and the
+//                lock holder's disconnect release only this window's key.
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 
 #ifdef HAVE_WEBSOCKETS
 
@@ -1139,6 +1147,18 @@ void TciServer::hookGlobalBroadcasts()
         return;
     }
 
+    // Task 35: in a remote window, the Core ending this window's key on its
+    // own (a safety stop, a take) ends it here too.
+    if (m_remoteWindow) {
+        connect(m_model, &RadioModel::transmittingChanged, this, [this](bool on) {
+            if (!on && m_remoteKeyEpoch != 0) {
+                qCInfo(lcTci) << "TciServer: the Core ended this window's key";
+                m_remoteKeyEpoch = 0;
+                endRemoteKey();
+            }
+        });
+    }
+
     // ── MOX (trx: line) ────────────────────────────────────────────────────
     // Source: Thetis MoxChangeHandlers at TCIServer.cs:6727 [v2.10.3.15]
     // routed to OnMoxChangeHandler -> sendMOX.  MoxController is the
@@ -1626,6 +1646,14 @@ void TciServer::stop()
     // input ring drains and the transmit lane frees the TCI resampler
     // (TxChannel::clearTciAudio). Without it a server stopped mid-cycle left
     // the resampler to leak.
+    // Task 35: a remote window's key on the Core ends with the server.
+    if (m_remoteKeyEpoch != 0 && m_remoteTransmit.unkey) {
+        m_remoteTransmit.unkey(m_remoteKeyEpoch);
+    }
+    m_remoteKeyEpoch = 0;
+    m_remoteKeyPending = false;
+    m_remoteReleaseWhilePending = false;
+    ++m_remoteKeyGeneration;
     const bool heldTxAudio = !m_txAudioActiveClient.isNull();
     m_txAudioActiveClient = nullptr;
     if (heldTxAudio) {
@@ -1854,6 +1882,14 @@ void TciServer::onClientDisconnected()
     // but we clear explicitly here so activeTxClientCount() returns 0 in the
     // same event-loop pass as the disconnect.
     if (!m_txAudioActiveClient.isNull() && m_txAudioActiveClient.data() == ws) {
+        // Task 35: the app whose audio a remote window's key carried is
+        // gone; nothing would ever send its trx:N,false, so the key is
+        // released on the Core.
+        if (m_remoteWindow && m_remoteKeyEpoch != 0 && m_remoteTransmit.unkey) {
+            m_remoteTransmit.unkey(m_remoteKeyEpoch);
+            m_remoteKeyEpoch = 0;
+            broadcastRemoteKeyState(false);
+        }
         m_txAudioActiveClient = nullptr;
         qCInfo(lcTci) << "TciServer: TX audio mutex released on disconnect";
         // Phase 23: notify indicator / MainWindow.
@@ -2518,6 +2554,148 @@ double TciServer::remoteReceiverLevelDbm() const
     return dbm;
 }
 
+// ── iPhone app plan Task 35: a remote window's TCI transmit ────────────────
+
+void TciServer::setRemoteTransmit(RemoteTransmit forward)
+{
+    if (!m_remoteWindow) {
+        return;
+    }
+    // A key this window holds through the old forwarder is released there.
+    if (m_remoteKeyEpoch != 0 && m_remoteTransmit.unkey) {
+        m_remoteTransmit.unkey(m_remoteKeyEpoch);
+        m_remoteKeyEpoch = 0;
+        endRemoteKey();
+    }
+    m_remoteKeyPending = false;
+    m_remoteReleaseWhilePending = false;
+    ++m_remoteKeyGeneration;
+    m_remoteTransmit = std::move(forward);
+    m_protocol->setRemoteTransmitForwarded(forwardsRemoteTransmit());
+}
+
+bool TciServer::forwardsRemoteTransmit() const
+{
+    return m_remoteWindow && static_cast<bool>(m_remoteTransmit.key)
+        && static_cast<bool>(m_remoteTransmit.unkey);
+}
+
+void TciServer::handleRemoteTrx(QWebSocket* ws, const QString& peer, int rx, bool wantsMox,
+                                bool hasTciArg)
+{
+    const QPointer<QWebSocket> asker(ws);
+    const auto answerAsker = [this, asker](int trx, bool keyed) {
+        if (asker.isNull()) {
+            return;
+        }
+        const auto it = m_clients.find(asker.data());
+        if (it != m_clients.end()) {
+            it.value()->sendQueue.push(TciSendQueue::Priority::Control,
+                                       QStringLiteral("trx:%1,%2;")
+                                           .arg(trx)
+                                           .arg(keyed ? QStringLiteral("true")
+                                                      : QStringLiteral("false")));
+        }
+    };
+
+    if (!wantsMox) {
+        // trx:N,false: this window's key only (ruling 8.14); any app of this
+        // server may release it, as any app's trx:N,false releases a TCI key
+        // in Thetis's handleTrxMessage (TCIServer.cs:3623-3672
+        // [v2.10.3.15]).
+        if (m_remoteKeyPending) {
+            m_remoteReleaseWhilePending = true;
+        }
+        if (m_remoteKeyEpoch != 0) {
+            qCInfo(lcTci) << "TciServer: trx release from" << peer
+                          << "unkeys this window's key, epoch" << m_remoteKeyEpoch;
+            m_remoteTransmit.unkey(m_remoteKeyEpoch);
+            m_remoteKeyEpoch = 0;
+            endRemoteKey();
+        }
+        answerAsker(rx, false);
+        return;
+    }
+
+    // Thetis's handleTrxMessage, TCIServer.cs:3623-3661 [v2.10.3.15]:
+    //   if (bMox && alreadyMox) { ...; return; }
+    // Among this server's apps: while this window's key is on (or being
+    // asked for), another trx:N,true does nothing and is not answered.
+    if (m_remoteKeyEpoch != 0 || m_remoteKeyPending) {
+        qCInfo(lcTci) << "TciServer: trx from" << peer
+                      << "ignored: this window's key is already on, as Thetis does";
+        return;
+    }
+
+    m_remoteKeyPending = true;
+    m_remoteReleaseWhilePending = false;
+    const quint64 generation = ++m_remoteKeyGeneration;
+    qCInfo(lcTci) << "TciServer: trx from" << peer << "forwarded to the Core as a program's key";
+    m_remoteTransmit.key([this, asker, peer, rx, hasTciArg, generation, answerAsker](
+                             const RemoteKeyAnswer& answer) {
+        if (generation != m_remoteKeyGeneration || !m_remoteKeyPending) {
+            // A stale answer (the server stopped or the forwarder changed):
+            // an accepted key it brings is released at once.
+            if (answer.accepted && answer.epoch != 0 && m_remoteTransmit.unkey) {
+                m_remoteTransmit.unkey(answer.epoch);
+            }
+            return;
+        }
+        m_remoteKeyPending = false;
+        if (!answer.accepted) {
+            // The holder rule refused it: no TX audio lock; the app is
+            // answered with the real state, and the operator hears why.
+            qCInfo(lcTci) << "TciServer: the Core refused the key for" << peer << ":"
+                          << answer.reason;
+            answerAsker(rx, false);
+            raiseOperatorNotice(peer, answer.reason);
+            return;
+        }
+        if (m_remoteReleaseWhilePending) {
+            // The app let go before the Core answered.
+            m_remoteReleaseWhilePending = false;
+            m_remoteTransmit.unkey(answer.epoch);
+            answerAsker(rx, false);
+            return;
+        }
+        m_remoteKeyEpoch = answer.epoch;
+        // Admitted: now the TX audio lock (Thetis's
+        // TryAcquireActiveTxAudioListener, TCIServer.cs:8146-8163
+        // [v2.10.3.15]: granted when nobody holds it or the asker does).
+        if (hasTciArg && !asker.isNull()
+            && (m_txAudioActiveClient.isNull() || m_txAudioActiveClient.data() == asker.data())) {
+            m_txAudioActiveClient = asker.data();
+            qCInfo(lcTci) << "TciServer: TX audio mutex acquired by" << peer;
+            emit txAudioActiveClientChanged(asker.data());
+            startTxChrono(asker.data(), rx);
+        }
+        answerAsker(rx, true);
+        broadcastRemoteKeyState(true);
+    });
+}
+
+void TciServer::endRemoteKey()
+{
+    if (!m_txAudioActiveClient.isNull()) {
+        m_txAudioActiveClient = nullptr;
+        qCInfo(lcTci) << "TciServer: TX audio mutex released: this window's key ended";
+        emit txAudioActiveClientChanged(nullptr);
+        stopTxChrono();
+    }
+    broadcastRemoteKeyState(false);
+}
+
+void TciServer::broadcastRemoteKeyState(bool on)
+{
+    // As the MOX change broadcast (hookGlobalBroadcasts, Thetis sendMOX at
+    // TCIServer.cs:2207-2211 [v2.10.3.13]) tells every app, for this
+    // window's key.
+    const QString boolStr = on ? QStringLiteral("true") : QStringLiteral("false");
+    m_protocol->enqueueLocalBroadcast(QStringLiteral("trx:0,%1;").arg(boolStr));
+    m_protocol->enqueueLocalBroadcast(QStringLiteral("trx:1,false;"));
+    broadcastPendingNotifications();
+}
+
 bool TciServer::raiseOperatorNotice(const QString& peer, const QString& reason,
                                     bool receiverStop, bool quiet, int rx)
 {
@@ -2918,7 +3096,15 @@ void TciServer::onTextMessageReceived(const QString& msg)
                     const bool wantsMox = (parts.at(1).trimmed().compare(
                         QLatin1String("true"), Qt::CaseInsensitive) == 0);
 
-                    if (m_remoteWindow || m_stationReceiveOnly) {
+                    if (m_remoteWindow && forwardsRemoteTransmit()) {
+                        // Task 35: forwarded to the Core under the holder
+                        // rule; the answer comes back later.
+                        bool rxOk = false;
+                        const int trxIdx = parts.at(0).trimmed().toInt(&rxOk);
+                        if (rxOk) {
+                            handleRemoteTrx(ws, session->peer, trxIdx, wantsMox, hasTciArg);
+                        }
+                    } else if (m_remoteWindow || m_stationReceiveOnly) {
                         // R-R3-42 / R-R3-25: no TX audio lock and no
                         // TX_CHRONO in a remote window, nor on the Core's
                         // station server until remote transmit (R-R3-48).

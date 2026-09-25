@@ -17,6 +17,12 @@
 // 2026-09-25: iPhone app plan Task 73 (R-IOS-02, ruling 5.13): the Core's
 // server reads every slice and changes only the station device's own. J.J.
 // Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-25: iPhone app plan Task 35 (R-IOS-13, ruling 8.14): on a Core that
+// allows remote transmit, the Core's own server still never keys, with
+// transmit unheld or held by a device, and never releases a device's key.
+// J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+#include "StationMultiSessionHarness.h"
+
 #include <QtTest/QtTest>
 #include <QNetworkInterface>
 #include <QTcpServer>
@@ -250,6 +256,59 @@ private slots:
         }
         QCOMPARE(server->activeTxClientCount(), 0);
         amp.socket.close();
+    }
+
+    // iPhone app plan Task 35 (the several-devices design, ruling 8.14; the
+    // design's bench row 16): the Core's own TCI server stays receive-only
+    // on a Core that allows remote transmit. A program through it never
+    // keys, with transmit unheld or held by a device (keyed or not), makes
+    // nobody the holder, and its trx:N,false never releases a device's key.
+    void coresOwnServerNeverKeysHeldOrUnheld()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        QVERIFY(admitted(appA));
+        const quint16 port = freePort();
+        core.model->enableStationTci(QStringLiteral("127.0.0.1"));
+        QString reason;
+        QVERIFY(core.model->setStationTciForStation(true, port, &reason));
+        TciApp app(port);
+        QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("ready;")), 3000);
+        QVERIFY(app.has(QStringLiteral("receive_only:true;")));
+        MoxController* mox = core.model->moxController();
+        TransmitHolder* holder = core.server->transmitHolder();
+
+        // Unheld: no key, and nobody becomes the holder.
+        app.frames.clear();
+        app.socket.sendTextMessage(QStringLiteral("trx:0,true;"));
+        QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("trx:0,false;")), 3000);
+        QVERIFY(!mox->isMox());
+        QCOMPARE(holder->state(), TransmitHolder::State::Unheld);
+
+        // Held by a device, unkeyed: still no key.
+        mox->setMox(true, keyerFor(a));
+        mox->setMox(false, keyerFor(a));
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QVERIFY(holder->isHeldBy(a.key.fingerprint()));
+        app.frames.clear();
+        app.socket.sendTextMessage(QStringLiteral("trx:0,true,tci;"));
+        QTRY_VERIFY_WITH_TIMEOUT(app.has(QStringLiteral("trx:0,false;")), 3000);
+        QVERIFY(!mox->isMox());
+
+        // Held and keyed by the device: the app's release ends nothing.
+        mox->setMox(true, keyerFor(a));
+        QVERIFY(mox->isMox());
+        app.socket.sendTextMessage(QStringLiteral("trx:0,false;"));
+        QTest::qWait(150);
+        QVERIFY(mox->isMox());
+        QCOMPARE(mox->currentKeyer().deviceId, a.key.fingerprint());
+        QCOMPARE(core.model->stationTciController()->server()->activeTxClientCount(), 0);
+        mox->setMox(false, keyerFor(a));
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        app.socket.close();
     }
 
     // iPhone app Task 73 (the several-devices design, ruling 5.13): the

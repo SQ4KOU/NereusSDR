@@ -35,6 +35,12 @@
 //                refuses changes nothing and is answered as its query.
 //                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 35 (R-IOS-13, ruling 8.14): a remote
+//                window that forwards transmit to its Core
+//                (setRemoteTransmitForwarded): its init burst no longer says
+//                receive-only, and TciServer answers a trx set command with
+//                the Core's verdict. NereusSDR-original. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 
 #pragma once
 
@@ -233,8 +239,19 @@ public:
     // remote window, vfo and modulation act on the Core's own slices.
     void setStationReceiveOnly(bool receiveOnly) { m_stationReceiveOnly = receiveOnly; }
     bool stationReceiveOnly() const { return m_stationReceiveOnly; }
-    // Transmit is refused (a remote window or the station server).
-    bool transmitRefused() const { return m_remoteWindow || m_stationReceiveOnly; }
+    // iPhone app plan Task 35 (ruling 8.14): a remote window whose
+    // TciServer forwards an app's transmit to the Core
+    // (TciServer::setRemoteTransmit). A trx set command is then answered by
+    // the server with the Core's verdict, never here, and the window is not
+    // receive-only (the Core decides each key). Off by default.
+    void setRemoteTransmitForwarded(bool forwarded) { m_remoteTransmitForwarded = forwarded; }
+    bool remoteTransmitForwarded() const { return m_remoteWindow && m_remoteTransmitForwarded; }
+    // Transmit is refused (a remote window that does not forward it, or the
+    // station server).
+    bool transmitRefused() const
+    {
+        return (m_remoteWindow && !m_remoteTransmitForwarded) || m_stationReceiveOnly;
+    }
 
     // iPhone app Task 73 (the several-devices design, ruling 5.13): the
     // Core's own server reads every slice (trx:N is slice N) and changes
@@ -818,6 +835,7 @@ private:
     int m_setDispatchCount{0};
     int m_queryDispatchCount{0};
     bool m_remoteWindow{false};
+    bool m_remoteTransmitForwarded{false};   // Task 35
     bool m_stationReceiveOnly{false};
     SliceWriteGate m_sliceWriteGate;
 };

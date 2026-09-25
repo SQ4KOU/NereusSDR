@@ -3431,3 +3431,12 @@ keys until it sends a new `tx.key`: no replay, no resume.
 
 An accepted `tx.unkey`, and an accepted TUNE or two-tone off, carry no
 values.
+
+**Programs through a remote window.** A remote window's TCI server
+forwards an app's `trx:N,true` as `tx.key {trigger:"tci"}` and its
+`trx:N,false` as `tx.unkey` for the window's own key. It takes the TCI
+transmit audio for the app only after the Core accepts the key; a refused
+key takes nothing, and the app hears `trx:N,false` while the window shows
+the Core's sentence. The Core's own TCI server stays receive-only: a
+program through it never keys, held or unheld.
+
