@@ -154,6 +154,12 @@
 //                 PttMode::Tci and falls back as
 //                 getFallbackPTTModeAfterTCIRelease does. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - Receiver and transmit gaps plan, Task 7 fix wave: TX
+//                 inhibit and the PA trip gate every source
+//                 (setTxInhibited / setPaTripped, PollPTT's _tx_inhibit and
+//                 _ganymede_pa_issue, console.cs:25470 [v2.10.3.15]).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -277,6 +283,11 @@ public:
     // Thetis flag lives here under its own name. setTune(true) sets both.
     bool     isManualKey() const noexcept { return m_manualKey; }
 
+    // isTxInhibited / isPaTripped: the two PollPTT gates that block every
+    // keying source (Task 7 fix wave, I2). See setTxInhibited / setPaTripped.
+    bool     isTxInhibited() const noexcept { return m_txInhibited; }
+    bool     isPaTripped()   const noexcept { return m_paTripped; }
+
     // ── K.2: MOX pre-check callback ──────────────────────────────────────────
     //
     // setMoxCheck: install a BandPlanGuard check callback for setMox(true).
@@ -386,6 +397,20 @@ public slots:
     // only while the radio is on (console.cs:25465 [v2.10.3.15]), and no
     // source reports a release after the connection is gone.
     void clearPttSources();
+
+    // setTxInhibited: Thetis console.TXInhibit (console.cs:15341-15363
+    // [v2.10.3.15]). RadioModel feeds it from TxInhibitMonitor. While set,
+    // PollPTT skips every source (console.cs:25470) and setMox(true)
+    // refuses every other key with moxRejected; setting it unkeys an active
+    // transmission (if (_tx_inhibit && chkMOX.Checked) chkMOX.Checked =
+    // false). The manual key is left as it is.
+    void setTxInhibited(bool on);
+
+    // setPaTripped: Thetis _ganymede_pa_issue. RadioModel feeds it from
+    // RadioModel::paTripped() and on every trip message. Same gates as
+    // setTxInhibited (console.cs:25470, and chkMOX_CheckedChanged2's abort
+    // at console.cs:29364-29371 [v2.10.3.15]); setting it unkeys.
+    void setPaTripped(bool on);
 
     // setVoxEnabled: engage/disengage VOX with voice-family mode-gate.
     //
@@ -1213,6 +1238,10 @@ private:
     // m_manualKey: Thetis _manual_mox as Thetis sets it (MOX button, TUN,
     // two-tone). Gates the whole PollPTT pass. See isManualKey().
     bool     m_manualKey{false};
+    // m_txInhibited / m_paTripped: Thetis _tx_inhibit and
+    // _ganymede_pa_issue (console.cs:25470 [v2.10.3.15]).
+    bool     m_txInhibited{false};
+    bool     m_paTripped{false};
 
     // ── PollPTT source levels (console.cs:25467-25477 [v2.10.3.15]) ──────────
     // The last level each PollPTT source reported. setMox(false) and a

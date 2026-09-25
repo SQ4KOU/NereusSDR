@@ -1210,6 +1210,17 @@ RadioModel::RadioModel(Role role, QObject* parent)
         });
     });
 
+    // Task 7 fix wave, I2: TX inhibit and the PA trip gate every keying
+    // source (MoxController::setTxInhibited / setPaTripped). Until now the
+    // inhibit only drove the status pill and the trip only dropped the
+    // TransmitModel latch; neither reached the controller that keys.
+    connect(&m_txInhibit, &safety::TxInhibitMonitor::txInhibitedChanged, this,
+            [this](bool /*inhibited*/, safety::TxInhibitMonitor::Source /*source*/) {
+                applyTxKeyBlock();
+            });
+    connect(this, &RadioModel::paTrippedChanged, this,
+            [this](bool /*tripped*/) { applyTxKeyBlock(); });
+
     // MoxController::txReady → TxChannel::setRunning(true) and
     // MoxController::txaFlushed → TxChannel::setRunning(false) are wired in
     // connectToRadio() once m_txChannel is live (see the "MoxController →
@@ -16480,8 +16491,17 @@ void RadioModel::handleGanymedeTrip(int tripState)
     if (newTripped && m_transmitModel.isMox()) {
         m_transmitModel.setMox(false);
     }
+    // Task 7 fix wave, I2: the controller that keys follows the trip on
+    // every trip message, so a key made mid-fault drops again too. The
+    // transition itself reaches applyTxKeyBlock through paTrippedChanged.
+    if (newTripped && m_moxController) {
+        m_moxController->setPaTripped(true);
+    }
 
     if (newTripped == m_paTripped) {
+        if (newTripped) {
+            applyTxKeyBlock();
+        }
         return; // already in this trip state — no transition signal
     }
 
@@ -17909,6 +17929,45 @@ void RadioModel::completeTuneOff()
     // so no mic PTT or VOX keys while the tune tone is still up.
     if (m_moxController) {
         m_moxController->setManualKey(false);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// applyTxKeyBlock: TX inhibit and the PA trip (Task 7 fix wave, I2).
+//
+// From Thetis console.cs:15341-15363 [v2.10.3.15] (TXInhibit setter):
+//   chkTUN.Enabled = !_tx_inhibit;
+//   chk2TONE.Enabled = !_tx_inhibit; //MW0LGE_21a
+//   chkVOX.Enabled = !_tx_inhibit;
+//   ...
+//   if (_tx_inhibit && chkMOX.Checked)
+//       chkMOX.Checked = false;
+// and PollPTT's gate, console.cs:25470 [v2.10.3.15]:
+//   if (!_manual_mox && !_disable_ptt && !_rx_only && !_tx_inhibit && !QSKEnabled && !_ganymede_pa_issue)
+// (cw_ptt, below it, carries: //[2.10.3.9]MW0LGE only want to do this on semi breakin  [original inline comment from console.cs:25473])
+// MoxController holds both gates and unkeys an active transmission. TUN and
+// two-tone are turned off here as well, through their own off paths, so the
+// tone, the mode and the power come back and no TUN or two-tone is left on
+// with MOX down.
+// ---------------------------------------------------------------------------
+void RadioModel::applyTxKeyBlock()
+{
+    if (m_moxController == nullptr) {
+        return;
+    }
+    const bool inhibited = m_txInhibit.inhibited();
+    m_moxController->setTxInhibited(inhibited);
+    m_moxController->setPaTripped(m_paTripped);
+    if (!inhibited && !m_paTripped) {
+        return;
+    }
+    if (m_isTuning && !m_pendingTuneOff) {
+        setTune(false);
+    }
+    if (m_twoToneController != nullptr
+        && (m_twoToneController->isActive()
+            || m_twoToneController->isActivationInFlight())) {
+        m_twoToneController->setActive(false);
     }
 }
 

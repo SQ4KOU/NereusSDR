@@ -756,6 +756,52 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(!ctrl.isActive(), 2000);
     }
 
+    // ── Task 7 fix wave, I2: TX inhibit and the PA trip refuse two-tone ──
+    // Thetis disables chk2TONE while inhibited (console.cs:15354
+    // [v2.10.3.15]) and aborts any key while the PA is tripped
+    // (console.cs:29364-29371). Two-tone must not key, and must clean up
+    // (generator off, not active) as a refused key does.
+    void setActive_blockedByInhibitOrPaTrip_doesNotKey_data()
+    {
+        QTest::addColumn<bool>("paTrip");
+        QTest::newRow("tx inhibit") << false;
+        QTest::newRow("pa trip") << true;
+    }
+
+    void setActive_blockedByInhibitOrPaTrip_doesNotKey()
+    {
+        QFETCH(bool, paTrip);
+        TransmitModel tx;
+        tx.setTwoTonePulsed(false);
+        tx.setTwoToneFreq2Delay(0);
+
+        RecordingTxChannel tc(kTxChannelId);
+        MoxController mox;
+        mox.setTimerIntervals(0, 0, 0, 0, 0, 0);
+        if (paTrip) { mox.setPaTripped(true); } else { mox.setTxInhibited(true); }
+        SliceModel slice;
+
+        TwoToneController ctrl;
+        ctrl.setTransmitModel(&tx);
+        ctrl.setTxChannel(&tc);
+        ctrl.setMoxController(&mox);
+        ctrl.setSliceModel(&slice);
+        ctrl.setSettleDelaysMs(0, 0);
+        QSignalSpy activeSpy(&ctrl, &TwoToneController::twoToneActiveChanged);
+
+        ctrl.setActive(true);
+        for (int i = 0; i < 10; ++i) QCoreApplication::processEvents();
+
+        QVERIFY2(!mox.isMox(), "two-tone keyed while blocked");
+        QVERIFY(!ctrl.isActive());
+        QVERIFY(!ctrl.isActivationInFlight());
+        QVERIFY(!activeSpy.isEmpty());
+        QCOMPARE(activeSpy.last().at(0).toBool(), false);
+        QVERIFY(!tc.calls.isEmpty());
+        QCOMPARE(tc.calls.last().method, QStringLiteral("setTxPostGenRun"));
+        QCOMPARE(tc.calls.last().arg1, 0.0);
+    }
+
     // ── Idempotent: setActive(true) twice is safe ────────────────────────
     void setActive_idempotent_doesNotRepeat()
     {

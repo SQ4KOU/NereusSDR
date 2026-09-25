@@ -365,6 +365,114 @@ private slots:
         QVERIFY(!ctrl.isManualKey());
     }
 
+    // ── Task 7 fix wave, I2: TX inhibit and the PA trip ─────────────────────
+    //
+    // PollPTT's gate (console.cs:25470 [v2.10.3.15]) skips every source
+    // while _tx_inhibit or _ganymede_pa_issue is set; chkMOX_CheckedChanged2
+    // aborts any key while the PA is tripped (console.cs:29364-29371), the
+    // TXInhibit setter disables MOX, TUN, two-tone and VOX and unkeys
+    // (console.cs:15341-15363), and a trip unkeys (Andromeda.cs:944-945).
+    // One case per source, for each gate.
+
+    void blockedSources_data()
+    {
+        QTest::addColumn<bool>("paTrip");
+        QTest::addColumn<QString>("source");
+        const QStringList sources{QStringLiteral("mic"), QStringLiteral("vox"),
+                                  QStringLiteral("cat"), QStringLiteral("tci"),
+                                  QStringLiteral("mox button"), QStringLiteral("tun"),
+                                  QStringLiteral("two-tone")};
+        for (const bool paTrip : {false, true}) {
+            for (const QString& source : sources) {
+                const QString row = (paTrip ? QStringLiteral("pa trip, ")
+                                            : QStringLiteral("tx inhibit, ")) + source;
+                QTest::newRow(qPrintable(row)) << paTrip << source;
+            }
+        }
+    }
+
+    void blockedSources()
+    {
+        QFETCH(bool, paTrip);
+        QFETCH(QString, source);
+        MoxController ctrl;
+        makeSync(ctrl);
+        if (paTrip) { ctrl.setPaTripped(true); } else { ctrl.setTxInhibited(true); }
+        QSignalSpy rejected(&ctrl, &MoxController::moxRejected);
+
+        if (source == QLatin1String("mic")) {
+            micFrames(ctrl, true);
+        } else if (source == QLatin1String("vox")) {
+            ctrl.onVoxActive(true);
+        } else if (source == QLatin1String("cat")) {
+            ctrl.onCatPtt(true);
+        } else if (source == QLatin1String("tci")) {
+            ctrl.onTciPtt(true);
+        } else if (source == QLatin1String("mox button")) {
+            ctrl.onMoxButton(true);
+        } else if (source == QLatin1String("tun")) {
+            ctrl.setTune(true);
+        } else {
+            // Two-tone keys with the manual key and setMox(true).
+            ctrl.setManualKey(true);
+            ctrl.setMox(true);
+        }
+        drain();
+        QVERIFY2(!ctrl.isMox(), qPrintable(source + QStringLiteral(" keyed while blocked")));
+
+        if (source == QLatin1String("mox button")) {
+            // A refused press leaves the button off (chkMOX_Click's else
+            // branch) and tells the operator why.
+            QVERIFY(!ctrl.isManualKey());
+            QCOMPARE(rejected.count(), 1);
+            QVERIFY(!rejected.first().at(0).toString().isEmpty());
+        }
+        if (source == QLatin1String("mic") || source == QLatin1String("vox")
+            || source == QLatin1String("cat") || source == QLatin1String("tci")) {
+            // PollPTT's gate skips the pass: no refusal toast per status frame.
+            QCOMPARE(rejected.count(), 0);
+            QCOMPARE(ctrl.pttMode(), PttMode::None);
+        }
+    }
+
+    void blockUnkeysActiveTransmission_data()
+    {
+        QTest::addColumn<bool>("paTrip");
+        QTest::newRow("tx inhibit") << false;
+        QTest::newRow("pa trip") << true;
+    }
+
+    void blockUnkeysActiveTransmission()
+    {
+        QFETCH(bool, paTrip);
+        const auto block = [paTrip](MoxController& c, bool on) {
+            if (paTrip) { c.setPaTripped(on); } else { c.setTxInhibited(on); }
+        };
+
+        {   // a MOX-button key
+            MoxController ctrl; makeSync(ctrl);
+            ctrl.onMoxButton(true); drain();
+            QVERIFY(ctrl.isMox());
+            block(ctrl, true); drain();
+            QVERIFY2(!ctrl.isMox(), "a MOX-button key survived the block");
+        }
+        {   // a mic key: the held mic does not key again while blocked
+            MoxController ctrl; makeSync(ctrl);
+            micFrames(ctrl, true);
+            QVERIFY(ctrl.isMox());
+            block(ctrl, true); drain();
+            QVERIFY2(!ctrl.isMox(), "a mic key survived the block");
+            micFrames(ctrl, true);
+            QVERIFY(!ctrl.isMox());
+            // Cleared: the next pass keys the mic still held, as Thetis's
+            // next poll does.
+            block(ctrl, false);
+            micFrames(ctrl, true);
+            QVERIFY(ctrl.isMox());
+            QCOMPARE(ctrl.pttMode(), PttMode::Mic);
+        }
+    }
+
     // ── RadioModel shims (unconnected model, 0 ms walk, counting check) ─────
 
     void radioModel_tciShim_keysWithTciMode()

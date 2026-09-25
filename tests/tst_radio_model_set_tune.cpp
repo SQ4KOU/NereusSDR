@@ -34,6 +34,9 @@
 //      Refusals 19-21 also leave the PTT mode at None, not Manual.
 //  22. R-R3-21: a disconnect mid-Tune runs the TUN-off path (manual MOX
 //      released, CW mode, power and TX VFO restored).
+//  25. Task 7 fix wave I2: TX inhibit (TxInhibitMonitor) and the PA trip
+//      (RadioModel::paTripped) refuse TUN, and either one ends a TUN that
+//      is on.
 
 #include <QtTest/QtTest>
 #include <QObject>
@@ -1309,6 +1312,80 @@ private slots:
         mox->onMicPttFromRadio(false);
         pump();
         QVERIFY(!mox->isMox());
+    }
+
+    // ── 25. Task 7 fix wave, I2: TX inhibit and the PA trip refuse TUN ──────
+    // Thetis's TXInhibit setter disables chkTUN and unkeys
+    // (console.cs:15341-15363 [v2.10.3.15]); a PA trip aborts any key
+    // (console.cs:29364-29371) and unkeys (Andromeda.cs:944-945).
+    void tuneBlockedByInhibitOrPaTrip_data()
+    {
+        QTest::addColumn<bool>("paTrip");
+        QTest::newRow("tx inhibit") << false;
+        QTest::newRow("pa trip") << true;
+    }
+
+    void tuneBlockedByInhibitOrPaTrip()
+    {
+        QFETCH(bool, paTrip);
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        setupModel(model, conn);
+        std::unique_ptr<MockConnection> connOwner(conn);
+        const auto detach = qScopeGuard([&model]() {
+            model.injectConnectionForTest(nullptr);
+        });
+        QVERIFY(model.activeSlice() != nullptr);
+        model.activeSlice()->setDspMode(DSPMode::USB);
+
+        if (paTrip) {
+            model.handleGanymedeTrip(0x01);
+        } else {
+            model.txInhibit().setEnabled(true);
+            model.txInhibit().setUserIoReader([] { return true; });
+            QVERIFY(model.txInhibit().inhibited());
+        }
+
+        model.setTune(true);
+        pump();
+        QVERIFY2(!model.moxController()->isMox(), "TUN keyed while blocked");
+        QVERIFY(!model.isTune());
+        QVERIFY(!model.moxController()->isManualKey());
+        QVERIFY(!model.tuneOffPendingForTest());
+    }
+
+    void blockEndsActiveTune_data() { tuneBlockedByInhibitOrPaTrip_data(); }
+
+    void blockEndsActiveTune()
+    {
+        QFETCH(bool, paTrip);
+        RadioModel model;
+        MockConnection* conn = nullptr;
+        setupModel(model, conn);
+        std::unique_ptr<MockConnection> connOwner(conn);
+        const auto detach = qScopeGuard([&model]() {
+            model.injectConnectionForTest(nullptr);
+        });
+        QVERIFY(model.activeSlice() != nullptr);
+        model.activeSlice()->setDspMode(DSPMode::USB);
+
+        model.setTune(true);
+        pump();
+        QVERIFY(model.moxController()->isMox());
+        QVERIFY(model.isTune());
+
+        if (paTrip) {
+            model.handleGanymedeTrip(0x01);
+        } else {
+            model.txInhibit().setEnabled(true);
+            model.txInhibit().setUserIoReader([] { return true; });
+        }
+        QVERIFY2(!model.moxController()->isMox(), "the block did not unkey TUN");
+        pump();
+        QVERIFY(!model.moxController()->isMox());
+        QVERIFY2(!model.isTune(), "TUN stayed on under the block");
+        QVERIFY(!model.tuneOffPendingForTest());
+        QVERIFY(!model.moxController()->isManualMox());
     }
 };
 

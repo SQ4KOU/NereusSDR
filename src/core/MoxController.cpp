@@ -108,6 +108,11 @@
 //                 (RX vs VAC at cmaster.cs:912-943 [v2.10.3.13]); see commit
 //                 message for rationale.  J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-24 - Receiver and transmit gaps plan, Task 7 fix wave: TX
+//                 inhibit and the PA trip gate every keying source and
+//                 unkey (setTxInhibited, setPaTripped; console.cs:25470,
+//                 15341-15363, 29364-29371 [v2.10.3.15]). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -492,6 +497,41 @@ void MoxController::setTune(bool on)
 // ---------------------------------------------------------------------------
 void MoxController::setMox(bool on)
 {
+    // ── Task 7 fix wave, I2: TX inhibit and the PA trip refuse every key ─────
+    //
+    // From Thetis chkMOX_CheckedChanged2, console.cs:29364-29371 [v2.10.3.15]:
+    //   if(chkMOX.Checked && _ganymede_pa_issue)
+    //   {
+    //       // abort the change if there is a ganymede pa issue
+    //       chkMOX.CheckedChanged -= chkMOX_CheckedChanged2;
+    //       chkMOX.Checked = false;
+    //       chkMOX.CheckedChanged += chkMOX_CheckedChanged2;
+    //       return;
+    //   }
+    // and the TXInhibit setter, console.cs:15341-15363 [v2.10.3.15], which
+    // disables the MOX, TUN, two-tone and VOX buttons while inhibited:
+    //   chkTUN.Enabled = !_tx_inhibit;
+    //   chk2TONE.Enabled = !_tx_inhibit; //MW0LGE_21a
+    //   chkVOX.Enabled = !_tx_inhibit;
+    // NereusSDR refuses here, where every key passes (MOX button, container
+    // button, TUN, two-tone, and the PollPTT sources if one got past the
+    // gate in pollPtt), rather than greying the buttons. This is stricter
+    // than Thetis for TX inhibit: Thetis disables the buttons but a CAT or
+    // programmatic MOX write is not refused. A refusal is reported through
+    // moxRejected, so the MOX button drops back, TUN runs its TUN-off path
+    // and two-tone cleans up, as for any refused key. The PollPTT sources
+    // never reach this: the gate in pollPtt skips them silently, as
+    // Thetis's PollPTT does.
+    if (on && (m_paTripped || m_txInhibited)) {
+        emit moxRejected(m_paTripped
+            ? QStringLiteral("The amplifier has tripped. Reset it before transmitting.")
+            : QStringLiteral("Transmit is inhibited."));
+        if (!m_mox) {
+            dropPttOnUnkey();
+        }
+        return;
+    }
+
     // ── K.2: BandPlanGuard pre-check (BEFORE Codex P2 safety effects) ────────
     //
     // When a MoxCheckFn is installed and the caller is requesting TX-on,
@@ -719,10 +759,15 @@ void MoxController::dropPttOnUnkey()
 // checked fires nothing in Thetis, so a later held source only renames the
 // mode (setMox(true) is not called again while m_mox is set).
 //
+// _tx_inhibit and _ganymede_pa_issue are ported (Task 7 fix wave, I2):
+// RadioModel feeds them from TxInhibitMonitor and RadioModel::paTripped()
+// (setTxInhibited, setPaTripped). While either is set the whole pass is
+// skipped, as in Thetis: no source keys and none is refused per frame.
+//
 // Not ported, each for its own reason:
-//   - _disable_ptt, _rx_only, _tx_inhibit, QSKEnabled, _ganymede_pa_issue:
-//     no NereusSDR equivalent in this controller; keying refusals go
-//     through the MoxCheck and TX interlock gates in setMox.
+//   - _disable_ptt, _rx_only, QSKEnabled: no NereusSDR equivalent in this
+//     controller; RX-only refusal goes through the MoxCheck gate, and QSK
+//     is 3M-2.
 //   - _stop_all_tx (the time-out timer hold-off): NereusSDR has no
 //     StopAllTx.
 //   - The CW branch and PTTMode.CW: CW keying is 3M-2 (onCwPtt refuses).
@@ -733,9 +778,12 @@ void MoxController::dropPttOnUnkey()
 // ---------------------------------------------------------------------------
 void MoxController::pollPtt()
 {
-    // From Thetis console.cs:25470 [v2.10.3.15]: the _manual_mox gate.
+    // From Thetis console.cs:25470 [v2.10.3.15]:
+    //   if (!_manual_mox && !_disable_ptt && !_rx_only && !_tx_inhibit && !QSKEnabled && !_ganymede_pa_issue)
     // (cw_ptt, on the lines below it, carries: //[2.10.3.9]MW0LGE only want to do this on semi breakin  [original inline comment from console.cs:25473])
-    if (m_manualKey) {
+    // The manual key, TX inhibit and the PA trip are ported (Task 7 and
+    // its fix wave, I2).
+    if (m_manualKey || m_txInhibited || m_paTripped) {
         return;
     }
 
@@ -826,6 +874,58 @@ void MoxController::clearPttSources()
     m_catPtt = false;
     m_voxPtt = false;
     m_tciPtt = false;
+}
+
+// ---------------------------------------------------------------------------
+// setTxInhibited: Thetis console.TXInhibit.
+//
+// Task 7 fix wave, I2. From Thetis console.cs:15341-15363 [v2.10.3.15]:
+//   public bool TXInhibit
+//   {
+//       get { return _tx_inhibit; }
+//       set
+//       {
+//           _tx_inhibit = value;
+//           ... chkMOX.Enabled = !_tx_inhibit;
+//           chkTUN.Enabled = !_tx_inhibit;
+//           chk2TONE.Enabled = !_tx_inhibit; //MW0LGE_21a
+//           chkVOX.Enabled = !_tx_inhibit;
+//           ...
+//           if (_tx_inhibit && chkMOX.Checked)
+//               chkMOX.Checked = false;
+//           toolStripStatusLabel_TXInhibit.Visible = _tx_inhibit;
+//       }
+//   }
+// PollPTT skips every source while it is set (console.cs:25470) and
+// setMox(true) refuses every other key. An active transmission unkeys
+// here; RadioModel turns TUN and two-tone off with it. The manual key is
+// left alone, as chkMOX.Checked = false (not chkMOX_Click) leaves
+// _manual_mox in Thetis.
+// ---------------------------------------------------------------------------
+void MoxController::setTxInhibited(bool on)
+{
+    m_txInhibited = on;
+    if (on && m_mox) {
+        setMox(false);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// setPaTripped: Thetis _ganymede_pa_issue.
+//
+// Task 7 fix wave, I2. PollPTT skips every source while it is set
+// (console.cs:25470 [v2.10.3.15]) and chkMOX_CheckedChanged2 aborts any key
+// (console.cs:29364-29371). RadioModel::handleGanymedeTrip carries the
+// trip handler that sets it and unkeys (Andromeda.cs, G8NJJ); an active
+// transmission unkeys here too, so the controller's own MOX follows it.
+// Called on every trip message, so a repeated trip unkeys again.
+// ---------------------------------------------------------------------------
+void MoxController::setPaTripped(bool on)
+{
+    m_paTripped = on;
+    if (on && m_mox) {
+        setMox(false);
+    }
 }
 
 // ---------------------------------------------------------------------------

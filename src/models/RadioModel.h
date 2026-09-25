@@ -3880,6 +3880,14 @@ private:
     // separates the user's click from gen1 going off.
     void completeTuneOff();
 
+    // Task 7 fix wave, I2: pushes TX inhibit (TxInhibitMonitor) and the PA
+    // trip (paTripped()) into MoxController, whose gates refuse every key
+    // while either is set and unkey an active transmission; with either set
+    // it also turns TUN and two-tone off. Thetis TXInhibit setter
+    // (console.cs:15341-15363 [v2.10.3.15]) and _ganymede_pa_issue
+    // (console.cs:25470, 29364-29371).
+    void applyTxKeyBlock();
+
     // P1 full-parity §3.4 — per-sample PA telemetry handler.
     // Applies per-board ADC→watts scaling (scaleFwdPowerWatts /
     // scaleRevPowerWatts / scalePaVolts / scalePaAmps), routes the FWD
