@@ -25,6 +25,11 @@
 //                                    logs how many it found. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 19 (R-IOS-06): each
+//                                    plan records its file id; the
+//                                    first-launch default is
+//                                    kDefaultPlanName. AI-assisted via
+//                                    Anthropic Claude Code.
 
 #include "BandPlanManager.h"
 
@@ -33,6 +38,7 @@
 #include <QColor>
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -70,6 +76,7 @@ void BandPlanManager::loadPlans()
     const auto entries = resDir.entryList({"*.json"}, QDir::Files, QDir::Name);
     for (const auto& filename : entries) {
         PlanData plan;
+        plan.id = QFileInfo(filename).completeBaseName();
         if (loadPlanFromJson(":/bandplans/" + filename, plan)) {
             m_plans.append(std::move(plan));
         }
@@ -82,7 +89,7 @@ void BandPlanManager::loadPlans()
 
     // Activate the persisted plan, defaulting to "ARRL (US)" on first launch.
     QString saved = AppSettings::instance()
-                        .value("BandPlanName", QStringLiteral("ARRL (US)"))
+                        .value("BandPlanName", QString::fromLatin1(kDefaultPlanName))
                         .toString();
     bool found = false;
     for (const auto& p : m_plans) {
@@ -110,7 +117,8 @@ void BandPlanManager::setActivePlan(const QString& name)
             // edit made while the link was down and, on the first
             // connect, as one that "did not stick".
             auto& settings = AppSettings::instance();
-            if (settings.value("BandPlanName", QStringLiteral("ARRL (US)")).toString() != name) {
+            if (settings.value("BandPlanName", QString::fromLatin1(kDefaultPlanName)).toString()
+                != name) {
                 settings.setValue("BandPlanName", name);
             }
             emit planChanged();

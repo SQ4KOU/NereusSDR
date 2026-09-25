@@ -1674,6 +1674,151 @@ QJsonObject LinkMediaVectors::toJson(const DisplayCodecDecodeResult& result)
     return out;
 }
 
+DisplayCodecContext LinkMediaVectors::nsdxContext()
+{
+    DisplayCodecContext context;
+    context.endpointId = 1;
+    context.contextGeneration = 1;
+    context.minDbm = -140.0f;
+    context.maxDbm = -40.0f;
+    context.traceSamples = 32;
+    context.waterfallSamples = 32;
+    context.wideSamples = 0;
+    return context;
+}
+
+DisplayExtrasFrame LinkMediaVectors::nsdxFrame()
+{
+    // Beside nsdcFrames()'s frame 1: three blobs, the hold row a little
+    // above that frame's trace, the noise floor and the waterfall's levels.
+    DisplayExtrasFrame frame;
+    frame.endpointId = 1;
+    frame.contextGeneration = 1;
+    frame.encoderSequence = 1;
+    frame.peakBlobs = QVector<DisplayExtrasBlob>{{5, -100.5f}, {26, -101.25f}, {15, -118.0f}};
+    QVector<float> hold;
+    for (int i = 0; i < 32; ++i) {
+        hold.append(-117.0f + 20.0f * static_cast<float>(std::sin(0.3 * i)));
+    }
+    frame.peakHoldDbm = hold;
+    frame.noiseFloorDbm = -127.5f;
+    frame.waterfallLevelsDbm = std::make_pair(-131.0f, -71.0f);
+    return frame;
+}
+
+DisplayExtrasFrame LinkMediaVectors::nsdxNoiseFloorFrame()
+{
+    DisplayExtrasFrame frame;
+    frame.endpointId = 1;
+    frame.contextGeneration = 1;
+    frame.encoderSequence = 2;
+    frame.noiseFloorDbm = -126.75f;
+    return frame;
+}
+
+QByteArray LinkMediaVectors::nsdxUnknownSection(const QByteArray& full)
+{
+    QByteArray bytes = full;
+    bytes[5] = static_cast<char>(static_cast<quint8>(bytes.at(5)) | 0x10);
+    return bytes;
+}
+
+QJsonObject LinkMediaVectors::toJson(const DisplayCodecContext& context)
+{
+    return {{QStringLiteral("endpointId"), static_cast<qint64>(context.endpointId)},
+            {QStringLiteral("contextGeneration"), static_cast<qint64>(context.contextGeneration)},
+            {QStringLiteral("minDbm"), static_cast<double>(context.minDbm)},
+            {QStringLiteral("maxDbm"), static_cast<double>(context.maxDbm)},
+            {QStringLiteral("traceSamples"), static_cast<int>(context.traceSamples)}};
+}
+
+bool LinkMediaVectors::fromJson(const QJsonObject& json, DisplayCodecContext* context,
+                                QString* error)
+{
+    const QStringList keys{QStringLiteral("contextGeneration"), QStringLiteral("endpointId"),
+                           QStringLiteral("maxDbm"), QStringLiteral("minDbm"),
+                           QStringLiteral("traceSamples")};
+    QStringList present = json.keys();
+    present.sort();
+    if (present != keys) {
+        *error = QStringLiteral("an NSDX context is {endpointId, contextGeneration, minDbm, "
+                                "maxDbm, traceSamples}");
+        return false;
+    }
+    for (const QString& key : keys) {
+        if (!json.value(key).isDouble()) {
+            *error = QStringLiteral("NSDX context %1 is not a number").arg(key);
+            return false;
+        }
+    }
+    DisplayCodecContext out;
+    out.endpointId = static_cast<quint32>(json.value(QStringLiteral("endpointId")).toDouble());
+    out.contextGeneration =
+        static_cast<quint32>(json.value(QStringLiteral("contextGeneration")).toDouble());
+    out.minDbm = static_cast<float>(json.value(QStringLiteral("minDbm")).toDouble());
+    out.maxDbm = static_cast<float>(json.value(QStringLiteral("maxDbm")).toDouble());
+    out.traceSamples = static_cast<quint16>(json.value(QStringLiteral("traceSamples")).toInt());
+    out.waterfallSamples = out.traceSamples;
+    *context = out;
+    return true;
+}
+
+QString LinkMediaVectors::nsdxReasonName(DisplayExtrasReason reason)
+{
+    switch (reason) {
+    case DisplayExtrasReason::None: return QStringLiteral("none");
+    case DisplayExtrasReason::BadMagic: return QStringLiteral("badMagic");
+    case DisplayExtrasReason::UnsupportedVersion: return QStringLiteral("unsupportedVersion");
+    case DisplayExtrasReason::UnknownSections: return QStringLiteral("unknownSections");
+    case DisplayExtrasReason::Truncated: return QStringLiteral("truncated");
+    case DisplayExtrasReason::Oversized: return QStringLiteral("oversized");
+    case DisplayExtrasReason::Malformed: return QStringLiteral("malformed");
+    case DisplayExtrasReason::ContextMismatch: return QStringLiteral("contextMismatch");
+    }
+    return QString();
+}
+
+QJsonObject LinkMediaVectors::toJson(const DisplayExtrasDecodeResult& result)
+{
+    QJsonObject out{
+        {QStringLiteral("accepted"), result.accepted},
+        {QStringLiteral("reason"), nsdxReasonName(result.reason)},
+    };
+    if (!result.accepted) {
+        return out;
+    }
+    const DisplayExtrasFrame& frame = result.frame;
+    out.insert(QStringLiteral("endpointId"), static_cast<qint64>(frame.endpointId));
+    out.insert(QStringLiteral("contextGeneration"), static_cast<qint64>(frame.contextGeneration));
+    out.insert(QStringLiteral("encoderSequence"), static_cast<qint64>(frame.encoderSequence));
+    if (frame.peakBlobs) {
+        QJsonArray blobs;
+        for (const DisplayExtrasBlob& blob : *frame.peakBlobs) {
+            blobs.append(QJsonObject{{QStringLiteral("pixel"), static_cast<int>(blob.pixel)},
+                                     {QStringLiteral("dbm"), static_cast<double>(blob.dbm)}});
+        }
+        out.insert(QStringLiteral("peakBlobs"), blobs);
+    }
+    if (frame.peakHoldDbm) {
+        QJsonArray row;
+        for (const float value : *frame.peakHoldDbm) {
+            row.append(static_cast<double>(value));
+        }
+        out.insert(QStringLiteral("peakHoldDbm"), row);
+    }
+    if (frame.noiseFloorDbm) {
+        out.insert(QStringLiteral("noiseFloorDbm"), static_cast<double>(*frame.noiseFloorDbm));
+    }
+    if (frame.waterfallLevelsDbm) {
+        out.insert(QStringLiteral("waterfallLevelsDbm"),
+                   QJsonObject{{QStringLiteral("lowDbm"),
+                                static_cast<double>(frame.waterfallLevelsDbm->first)},
+                               {QStringLiteral("highDbm"),
+                                static_cast<double>(frame.waterfallLevelsDbm->second)}});
+    }
+    return out;
+}
+
 QVector<float> LinkMediaVectors::opusInput(int index)
 {
     constexpr double kPi = 3.14159265358979323846;

@@ -34,6 +34,13 @@
 //                 built when the Core's dual-ADC board arrives, and hidden
 //                 on a single-ADC board. J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24 - iPhone app Task 19 (R-IOS-06): the AGC items and the
+//                 AGC-T range come from ControlRanges.h, which the Core's
+//                 catalogue reads too. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-09-24 - iPhone app follow-up (R-IOS-06): the SQL slider's range
+//                 comes from ControlRanges.h too. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -141,6 +148,7 @@
 #include <QGuiApplication>
 
 #include "core/BoardCapabilities.h"
+#include "core/ControlRanges.h"
 #include "core/HpsdrModel.h"
 #include "core/SkuUiProfile.h"
 #include "core/P2RadioConnection.h"
@@ -779,7 +787,8 @@ void RxApplet::buildUi()
         row->addWidget(m_sqlBtn);
 
         m_sqlSlider = new QSlider(Qt::Horizontal, this);
-        m_sqlSlider->setRange(0, 100);
+        m_sqlSlider->setRange(ControlRanges::kSsqlThreshMin, ControlRanges::kSsqlThreshMax);
+        m_sqlSlider->setSingleStep(ControlRanges::kSsqlThreshStep);
         m_sqlSlider->setValue(20);
         m_sqlSlider->setFixedHeight(18);
         m_sqlSlider->setStyleSheet(Style::sliderHStyle());
@@ -886,11 +895,11 @@ void RxApplet::buildUi()
         // Control 9: AGC combo (fixedWidth 52), items: Off/Long/Slow/Med/Fast
         // Tier 1 wired → SliceModel::setAgcMode()
         m_agcCombo = new QComboBox(m_agcTContainer);
-        m_agcCombo->addItem(QStringLiteral("Off"),  static_cast<int>(AGCMode::Off));
-        m_agcCombo->addItem(QStringLiteral("Long"), static_cast<int>(AGCMode::Long));
-        m_agcCombo->addItem(QStringLiteral("Slow"), static_cast<int>(AGCMode::Slow));
-        m_agcCombo->addItem(QStringLiteral("Med"),  static_cast<int>(AGCMode::Med));
-        m_agcCombo->addItem(QStringLiteral("Fast"), static_cast<int>(AGCMode::Fast));
+        // The items come from ControlRanges.h, which the Core's catalogue
+        // reads too (iPhone app Task 19).
+        for (const ControlRanges::AgcModeItem& item : ControlRanges::kAgcModes) {
+            m_agcCombo->addItem(QString::fromLatin1(item.label), item.id);
+        }
         m_agcCombo->setFixedWidth(52);
         m_agcCombo->setFixedHeight(20);
         applyComboStyle(m_agcCombo);
@@ -942,9 +951,12 @@ void RxApplet::buildUi()
         containerLayout->addLayout(headerRow);
 
         // Slider row: full container width — no sibling widgets.
-        // From Thetis Project Files/Source/Console/console.cs:45977 — agc_thresh_point
+        // From Thetis Project Files/Source/Console/console.cs:46048-46049 [v2.10.3.15] — agc_thresh_point, -160..+2
+        // (MW0LGE_21k9d: values are already offset as part of Display)
         m_agcTSlider = new QSlider(Qt::Horizontal, m_agcTContainer);
-        m_agcTSlider->setRange(-160, 0);
+        m_agcTSlider->setRange(ControlRanges::kAgcThresholdMinDb,
+                               ControlRanges::kAgcThresholdMaxDb);
+        m_agcTSlider->setSingleStep(ControlRanges::kAgcThresholdStepDb);
         m_agcTSlider->setValue(-20);
         m_agcTSlider->setFixedHeight(18);
         m_agcTSlider->setStyleSheet(

@@ -50,6 +50,9 @@
 //               per-address handshake cap and 0600 on load. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic Claude
 //               Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 19 (R-IOS-06): the
+//                                    `catalog` class. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "LinkSurface.h"
@@ -90,6 +93,7 @@
 #include "core/session/SessionMessages.h"
 #include "core/session/StationCapabilities.h"
 #include "core/session/StationClient.h"
+#include "core/session/StationCatalog.h"
 #include "core/session/StationDevicesFacade.h"
 #include "core/session/StationServer.h"
 #include "core/session/StationTelemetry.h"
@@ -800,8 +804,10 @@ QJsonObject guiToCoreOps()
                declaredOp(kMedia, peer + QStringList{QStringLiteral("sdp"), QStringLiteral("type")}));
     ops.insert(QStringLiteral("candidate"),
                declaredOp(kMedia, peer + QStringList{QStringLiteral("candidate"), QStringLiteral("mid")}));
-    // DaemonMediaController.cpp handleSubscribe (extendedView removed before
-    // exactKeys) and parsePlane.
+    // DaemonMediaController.cpp handleSubscribe (extendedView and the
+    // display extras fields removed before exactKeys), parsePlane, and
+    // DisplayExtras.cpp parseDisplayExtrasRequest (iPhone app Task 20).
+    const QString extras = QStringLiteral("displayExtrasVersion");
     ops.insert(QStringLiteral("subscribe"), declaredOp(kMedia,
         peer + QStringList{QStringLiteral("endpointId"), QStringLiteral("revision"),
                            QStringLiteral("sliceId"), QStringLiteral("tier"),
@@ -811,8 +817,27 @@ QJsonObject guiToCoreOps()
                            QStringLiteral("framesPerLine"), QStringLiteral("trace"),
                            QStringLiteral("waterfall"), QStringLiteral("minDbm"),
                            QStringLiteral("maxDbm"), QStringLiteral("wideSpanFactor")},
-        {{QStringLiteral("extendedView"), {QStringLiteral("remoteWidebandDisplayVersion")}}},
-        {{QStringLiteral("trace"), plane}, {QStringLiteral("waterfall"), plane}}));
+        {{QStringLiteral("extendedView"), {QStringLiteral("remoteWidebandDisplayVersion")}},
+         {QStringLiteral("peakBlobs"), {extras}},
+         {QStringLiteral("activePeakHold"), {extras}},
+         {QStringLiteral("noiseFloor"), {extras}},
+         {QStringLiteral("waterfallLevels"), {extras}},
+         {QStringLiteral("normalize"), {extras}},
+         {QStringLiteral("calibrationOffsetDb"), {extras}},
+         {QStringLiteral("averageTimeMs"), {extras}},
+         {QStringLiteral("waterfallAverageTimeMs"), {extras}}},
+        {{QStringLiteral("trace"), plane}, {QStringLiteral("waterfall"), plane},
+         {QStringLiteral("peakBlobs"),
+          {QStringLiteral("count"), QStringLiteral("holdMs"),
+           QStringLiteral("fallDbPerSec"), QStringLiteral("insideOnly")}},
+         {QStringLiteral("activePeakHold"),
+          {QStringLiteral("enabled"), QStringLiteral("holdMs"),
+           QStringLiteral("fallDbPerSec")}},
+         {QStringLiteral("noiseFloor"),
+          {QStringLiteral("enabled"), QStringLiteral("shiftDb")}},
+         {QStringLiteral("waterfallLevels"),
+          {QStringLiteral("mode"), QStringLiteral("lowDbm"), QStringLiteral("highDbm"),
+           QStringLiteral("offsetDb")}}}));
     // DaemonMediaController.cpp handleUnsubscribe: revision only with the
     // display budget.
     ops.insert(QStringLiteral("unsubscribe"),
@@ -1264,7 +1289,8 @@ QList<const QMetaObject*> LinkSurface::mirroredMetaObjects()
             &StationTciModel::staticMetaObject,
             &AccessoryDataModel::staticMetaObject,
             &AccessorySettingsModel::staticMetaObject,
-            &StationDevicesFacade::staticMetaObject};
+            &StationDevicesFacade::staticMetaObject,
+            &StationCatalog::staticMetaObject};
 }
 
 QJsonObject LinkSurface::capture()

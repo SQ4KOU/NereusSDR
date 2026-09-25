@@ -4898,6 +4898,21 @@ nereus_add_test(tst_active_peak_hold)
 # Uses QTEST_APPLESS_MAIN (no QApplication, WDSP-free, pure data logic).
 nereus_add_test(tst_peak_blob_detector)
 
+# iPhone app Task 20 (R-IOS-27): the noise floor, waterfall levels,
+# normalise, averaging constant, calibration range and blob passband moved
+# from SpectrumWidget into core/spectrum/DisplayFollowers. Links the Core
+# alone, as nereusd does, to prove they stand without the GUI.
+nereus_add_test(tst_display_followers CORE_ONLY)
+
+# iPhone app Task 20 (R-IOS-27): display extras. The Core's extras against
+# the desktop's SpectrumWidget for one recorded sequence, the NSDX datagram,
+# the subscription fields, and an endpoint through a real session.
+nereus_add_test(tst_display_extras
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_display_extras PRIVATE
+    NEREUS_TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data")
+
 # ── Task 2.3: Spectrum Defaults overlay group + decimation wire-up ──────────
 # Tests for SpectrumWidget overlay setters (ShowMHzOnCursor / ShowBinWidth /
 # ShowNoiseFloor / DispNormalize / ShowPeakValueOverlay) and FFTEngine
@@ -7270,6 +7285,14 @@ nereus_add_test(tst_device_auth
 nereus_add_test(tst_station_devices
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
+# iPhone app Task 19 (R-IOS-06): the Core's catalogue; the G2 and HL2
+# catalogue fixtures against the desktop's own values, the revision, a
+# preset change reaching a client over the in-process loopback, the size.
+nereus_add_test(tst_station_catalog
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_station_catalog PRIVATE
+    NEREUS_LINK_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data/link/v1")
 # iPhone app Task 14 (R-IOS-08, D37): the pairing code and its word list,
 # the pairing window (injected clock), and the SPAKE2+EE exchange with its
 # confirmation boxes.

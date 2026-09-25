@@ -1,7 +1,7 @@
 #pragma once
 
 // =================================================================
-// src/gui/spectrum/ActivePeakHoldTrace.h  (NereusSDR)
+// src/core/spectrum/ActivePeakHoldTrace.h  (NereusSDR)
 // =================================================================
 //
 // Ported from Thetis source:
@@ -23,6 +23,10 @@
 //   2026-05-01 — Created in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via
 //                 Anthropic Claude Code.
+//   2026-09-24 — Moved unchanged from src/gui/spectrum/ to src/core/spectrum/
+//                 so the Core can run it for an app's display (iPhone app
+//                 Task 20, R-IOS-27). J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================

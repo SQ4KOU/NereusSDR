@@ -72,7 +72,7 @@
 //============================================================================================//
 
 #include <QtTest/QtTest>
-#include "gui/spectrum/PeakBlobDetector.h"
+#include "core/spectrum/PeakBlobDetector.h"
 
 using namespace NereusSDR;
 

@@ -23,6 +23,9 @@
 //                   sessionGeneration; values are exact (tolerance 0)
 //   codec "nsdc1"   one display codec frame, decoded by DisplayCodecDecoder;
 //                   rows within the expectation's dBm tolerance
+//   codec "nsdx1"   one display extras datagram, decoded by
+//                   decodeDisplayExtras against the endpoint context the
+//                   expectation names; values within its dBm tolerance
 //   codec "opus"    one RTP packet of Opus audio, decoded by
 //                   OpusAudioDecoder; PCM by SNR or by 16-bit steps, as the
 //                   expectation states
@@ -56,6 +59,9 @@
 //                                    the malformed-and-refused NSDC
 //                                    vectors. AI-assisted transformation
 //                                    via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 20 (R-IOS-27): the
+//                                    NSDX display extras vectors.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -76,6 +82,7 @@
 #include "core/session/StationLanAnnouncement.h"
 #include "core/session/DnsSdAdvertiser.h"
 #include "core/session/media/DisplayCodec.h"
+#include "core/session/media/DisplayExtras.h"
 #include "core/session/media/OpusAudioCodec.h"
 
 #include "LinkFixtures.h"
@@ -355,6 +362,50 @@ QString checkNsdc(const QList<QByteArray>& before, const QByteArray& bytes, QJso
                : QStringLiteral("the decoded display frame differs at %1").arg(difference);
 }
 
+QString checkNsdx(const QList<QByteArray>& before, const QByteArray& bytes, QJsonObject expect)
+{
+    if (!before.isEmpty()) {
+        return QStringLiteral("an NSDX datagram stands alone: it has no \"after\"");
+    }
+    double tolerance = 0.0;
+    if (expect.contains(QStringLiteral("tolerance"))) {
+        const QJsonObject t = expect.take(QStringLiteral("tolerance")).toObject();
+        if (t.keys() != QStringList{QStringLiteral("dbm")} || !t.value(QStringLiteral("dbm")).isDouble()) {
+            return QStringLiteral("an NSDX tolerance is {\"dbm\": <number>}");
+        }
+        tolerance = t.value(QStringLiteral("dbm")).toDouble();
+    }
+    QString error;
+    DisplayCodecContext context;
+    if (!LinkMediaVectors::fromJson(expect.take(QStringLiteral("context")).toObject(), &context,
+                                    &error)) {
+        return error;
+    }
+    const QJsonObject decoded = LinkMediaVectors::toJson(decodeDisplayExtras(bytes, context));
+    // Whether the decoder took it and why first, then exactly the sections
+    // the expectation lists, within the tolerance.
+    for (const QString& key : {QStringLiteral("accepted"), QStringLiteral("reason")}) {
+        LinkFixtures::Captures none;
+        const QString first = LinkFixtures::match(expect.value(key), decoded.value(key), &none,
+                                                  QStringLiteral("$.") + key);
+        if (!first.isEmpty()) {
+            return QStringLiteral("the decoded display extras differ at %1").arg(first);
+        }
+    }
+    QStringList expectedKeys = expect.keys();
+    QStringList decodedKeys = decoded.keys();
+    expectedKeys.sort();
+    decodedKeys.sort();
+    if (expectedKeys != decodedKeys) {
+        return QStringLiteral("the decoded display extras carry %1, the vector %2")
+            .arg(decodedKeys.join(QLatin1Char(',')), expectedKeys.join(QLatin1Char(',')));
+    }
+    const QString difference = matchWithin(expect, decoded, tolerance, QStringLiteral("$"));
+    return difference.isEmpty()
+               ? QString()
+               : QStringLiteral("the decoded display extras differ at %1").arg(difference);
+}
+
 QString checkOpus(const QList<QByteArray>& before, const QByteArray& bytes, QJsonObject expect)
 {
     const QJsonObject tolerance = expect.take(QStringLiteral("tolerance")).toObject();
@@ -456,6 +507,9 @@ QString checkVector(const Vectors& all, const QString& id)
     if (codec == QStringLiteral("nsdc1")) {
         return checkNsdc(before, vector.bytes, expect);
     }
+    if (codec == QStringLiteral("nsdx1")) {
+        return checkNsdx(before, vector.bytes, expect);
+    }
     if (codec == QStringLiteral("opus")) {
         return checkOpus(before, vector.bytes, expect);
     }
@@ -473,6 +527,7 @@ private slots:
     void mediaVectors();
     void vectorsCoverThePlan();
     void nsdcVectorsAreTheStationsEncoderOutput();
+    void nsdxVectorsAreTheStationsEncoderOutput();
     void malformedAfterIsReported();
     void alteredVectorsFailReadably();
 
@@ -607,6 +662,31 @@ void TstLinkConformanceMedia::nsdcVectorsAreTheStationsEncoderOutput()
              LinkMediaVectors::nsdcStaleTruncatedDelta(delta));
     QCOMPARE(m_vectors.value(QStringLiteral("media-nsdc1-malformed-keyframe")).bytes,
              LinkMediaVectors::nsdcBadBlockCountKeyframe(keyframe));
+}
+
+void TstLinkConformanceMedia::nsdxVectorsAreTheStationsEncoderOutput()
+{
+    // iPhone app Task 20: the extras datagram is integer and IEEE-754 bit
+    // copies, so the station's encoder writes the same bytes everywhere.
+    const DisplayCodecContext context = LinkMediaVectors::nsdxContext();
+    const QByteArray full = encodeDisplayExtras(LinkMediaVectors::nsdxFrame(), context);
+    QCOMPARE(m_vectors.value(QStringLiteral("media-nsdx1-full")).bytes, full);
+    QCOMPARE(m_vectors.value(QStringLiteral("media-nsdx1-noise-floor")).bytes,
+             encodeDisplayExtras(LinkMediaVectors::nsdxNoiseFloorFrame(), context));
+    QCOMPARE(m_vectors.value(QStringLiteral("media-nsdx1-other-generation")).bytes, full);
+    QCOMPARE(m_vectors.value(QStringLiteral("media-nsdx1-unknown-section")).bytes,
+             LinkMediaVectors::nsdxUnknownSection(full));
+    QCOMPARE(m_vectors.value(QStringLiteral("media-nsdx1-truncated")).bytes, full.chopped(1));
+    const QJsonObject expect = expectOf(m_vectors.value(QStringLiteral("media-nsdx1-full")));
+    QCOMPARE(expect.value(QStringLiteral("accepted")).toBool(), true);
+    for (const QString& key : {QStringLiteral("peakBlobs"), QStringLiteral("peakHoldDbm"),
+                               QStringLiteral("noiseFloorDbm"),
+                               QStringLiteral("waterfallLevelsDbm")}) {
+        QVERIFY2(expect.contains(key), qPrintable(key));
+    }
+    QCOMPARE(expectOf(m_vectors.value(QStringLiteral("media-nsdx1-other-generation")))
+                 .value(QStringLiteral("reason")).toString(),
+             QStringLiteral("contextMismatch"));
 }
 
 void TstLinkConformanceMedia::malformedAfterIsReported()

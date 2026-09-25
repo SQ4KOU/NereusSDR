@@ -64,6 +64,10 @@
 //                 row, with a plain notice when the headphones are chosen
 //                 and not open. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-24 - iPhone app Task 19 (R-IOS-06): the SWR gauge's range and
+//                 the RF power gauge's headroom come from ControlRanges.h,
+//                 which the Core's catalogue reads too. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -174,6 +178,7 @@
 #include "gui/widgets/DexpPeakMeter.h"
 #include "gui/widgets/VfoWidget.h"
 #include "core/AudioEngine.h"
+#include "core/ControlRanges.h"
 #include "core/audio/CompositeTxMicRouter.h"
 #include "core/MicProfileManager.h"
 #include "core/MoxController.h"
@@ -286,9 +291,11 @@ void TxApplet::buildUI()
     // ── 2. SWR gauge ── 1.0–3.0, redStart 2.5 ───────────────────────────────
     // Ticks: 1 / 1.5 / 2.5 / 3  (AetherSDR TxApplet.cpp:77)
     auto* swrGauge = new HGauge(this);
-    swrGauge->setRange(1.0, 3.0);
-    swrGauge->setRedStart(2.5);
-    swrGauge->setYellowStart(2.5);
+    // Range and red zone from ControlRanges.h, which the Core's catalogue
+    // reads too (iPhone app Task 19).
+    swrGauge->setRange(ControlRanges::kSwrGaugeMin, ControlRanges::kSwrGaugeMax);
+    swrGauge->setRedStart(ControlRanges::kSwrGaugeRedFrom);
+    swrGauge->setYellowStart(ControlRanges::kSwrGaugeRedFrom);
     swrGauge->setTitle(QStringLiteral("SWR"));
     swrGauge->setTickLabels({QStringLiteral("1"), QStringLiteral("1.5"),
                               QStringLiteral("2.5"), QStringLiteral("3")});
@@ -1726,7 +1733,9 @@ void TxApplet::rescaleFwdGaugeForModel(HPSDRModel model)
     // ANAN-G2-1K (1000 W max) both show meaningless bar widths.
     const int maxW   = paMaxWattsFor(model);
     const double red = static_cast<double>(maxW);
-    const double top = red * 1.2;   // 20% headroom past the red zone
+    // 20% headroom past the red zone (ControlRanges.h, which the Core's
+    // catalogue reads too).
+    const double top = red * ControlRanges::kRfPowerGaugeHeadroom;
 
     m_fwdPowerGauge->setRange(0.0, top);
     m_fwdPowerGauge->setRedStart(red);

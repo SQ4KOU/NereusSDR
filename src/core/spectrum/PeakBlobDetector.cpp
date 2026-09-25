@@ -1,5 +1,5 @@
 // =================================================================
-// src/gui/spectrum/PeakBlobDetector.cpp  (NereusSDR)
+// src/core/spectrum/PeakBlobDetector.cpp  (NereusSDR)
 // =================================================================
 //
 // Ported from Thetis source:
@@ -19,6 +19,10 @@
 //                 Anthropic Claude Code.
 //                 Ported from Thetis display.cs v2.10.3.13
 //                 (commit 501e3f5).
+//   2026-09-24 — Moved unchanged from src/gui/spectrum/ to src/core/spectrum/
+//                 so the Core can run it for an app's display (iPhone app
+//                 Task 20, R-IOS-27). J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================

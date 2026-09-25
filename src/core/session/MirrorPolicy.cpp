@@ -48,6 +48,9 @@
 //   2026-09-24 - iPhone app Task 14 (R-IOS-08): StationDevicesFacade's
 //                 pairingWindowOpen and pairingCode, Outbound. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - iPhone app Task 19 (R-IOS-06): StationCatalog, all
+//                 Outbound. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -566,6 +569,12 @@ const MirrorPolicy::Entry kEntries[] = {
     // (StationServer::sendToSession).
     { "StationDevicesFacade", "pairingWindowOpen", MirrorDirection::Outbound },
     { "StationDevicesFacade", "pairingCode", MirrorDirection::Outbound },
+
+    // iPhone app Task 19 (R-IOS-06, stationCatalogVersion 1): the values the
+    // Core owns and an app draws its controls from, read-only. They change
+    // only with the Core's presets, band plans and radio.
+    { "StationCatalog", "json", MirrorDirection::Outbound },
+    { "StationCatalog", "revision", MirrorDirection::Outbound },
 
     // Normal PS3 configuration is distinct from operational arming/actions.
     { "PureSignalSettings", "autoCalEnabled", MirrorDirection::Bidirectional },

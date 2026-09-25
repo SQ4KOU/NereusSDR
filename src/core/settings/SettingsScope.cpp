@@ -150,6 +150,9 @@
 //   2026-09-24 - iPhone app Task 13 (R-IOS-08): StationLabel and
 //                StationKeyBackupAcknowledged are Core-owned. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - iPhone app Task 19 (R-IOS-06, D40): the "filters/" prefix,
+//                the filter presets, is Station scope. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/settings/SettingsScope.h"
@@ -423,6 +426,14 @@ const Rule kPrefixes[] = {
     // RADE peer-mode DSP: neural vocoder model path and the EOO
     // idle-clear timer, both configuring the daemon-side RadeChannel.
     { "Rade", SettingsScope::Station }, // Rade/ModelPath, RadeIdleClearMs
+
+    // iPhone app Task 19 (D40): the filter presets
+    // (FilterPresetStore's filters/<mode>/<slot>/{name,low,high}) live on
+    // the Core, like the rest of a slice's filter state, so every window
+    // and device connected to it shows and edits the same presets, and the
+    // Core's catalogue sends them to an app. A window running its radio
+    // locally has no remote backend, so nothing changes for it.
+    { "filters/", SettingsScope::Station },
 };
 
 // ---- 3. Whole-key rules ---------------------------------------------------

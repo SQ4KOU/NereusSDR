@@ -15,6 +15,10 @@
 //                 remote window does not have the Core's settings.
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-24 - The waterfall colour scheme names come from
+//                 core/spectrum/WaterfallPalettes (iPhone app Task 19,
+//                 R-IOS-06). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 //=================================================================
@@ -68,6 +72,7 @@
 #include "gui/SpectrumWidget.h"
 #include "gui/StyleConstants.h"
 #include "core/FFTEngine.h"
+#include "core/spectrum/WaterfallPalettes.h"
 #include "core/ClarityController.h"
 #include "core/AppSettings.h"
 #include "core/TxAnalyzer.h"
@@ -1625,13 +1630,14 @@ void WaterfallDefaultsPage::buildUI()
     }
 
     m_colorSchemeCombo = new QComboBox(dispGroup);
-    m_colorSchemeCombo->addItems({
-        QStringLiteral("Default"),   QStringLiteral("Enhanced"),
-        QStringLiteral("Spectran"),  QStringLiteral("BlackWhite"),
-        QStringLiteral("LinLog"),    QStringLiteral("LinRad"),
-        QStringLiteral("Custom"),
-        QStringLiteral("Clarity Blue")   // Phase 3G-9b
-    });
+    // Default, Enhanced, Spectran, BlackWhite, LinLog, LinRad, Custom and
+    // Clarity Blue (Phase 3G-9b), in WfColorScheme order; the names live in
+    // core/spectrum/WaterfallPalettes.cpp, which the Core's catalogue reads
+    // too (iPhone app Task 19).
+    for (int i = 0; i < static_cast<int>(WfColorScheme::Count); ++i) {
+        m_colorSchemeCombo->addItem(
+            QString::fromLatin1(wfSchemeName(static_cast<WfColorScheme>(i))));
+    }
     // Thetis: setup.designer.cs:34110 (comboColorPalette) — rewritten
     // Thetis original: "Sets the color scheme"
     m_colorSchemeCombo->setToolTip(QStringLiteral("Waterfall color palette. Each scheme maps signal level to a different color gradient from low (dark) to high (bright)."));

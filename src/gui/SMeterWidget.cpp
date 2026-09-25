@@ -64,6 +64,9 @@
 //                 unchanged out of paintClassic() / paintVintage() into
 //                 shared helpers.  sUnitsText() returns "--" with no reading.
 //                 NereusSDR-native; no upstream equivalent.
+//   2026-09-24  The vintage faces' steps above S9 read ControlRanges.h
+//                 (iPhone app Task 19, R-IOS-06) by J.J. Boyd (KG4VCF), with
+//                 AI-assisted transformation via Anthropic Claude Code.
 // =================================================================
 #include "SMeterWidget.h"
 
@@ -982,7 +985,9 @@ void SMeterWidget::paintVintage(QPainter& p)
                 tick(dbmToFraction(S0_DBM + su * DB_PER_S), odd,
                      odd ? QString::number(su) : QString());
             }
-            for (int over = 10; over <= 60; over += 10) {
+            for (int over = ControlRanges::kSMeterOverS9StepDb;
+                 over <= static_cast<int>(MAX_DBM - S9_DBM);
+                 over += ControlRanges::kSMeterOverS9StepDb) {
                 const bool major = (over % 20) == 0;
                 tick(dbmToFraction(S9_DBM + over), major,
                      major ? QString("+%1").arg(over) : QString());

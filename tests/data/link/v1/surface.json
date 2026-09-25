@@ -249,6 +249,16 @@
             "kind": "i64",
             "name": "pairingVersion",
             "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "stationCatalogVersion",
+            "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "displayExtrasVersion",
+            "value": 1
         }
     ],
     "commands": [
@@ -1684,8 +1694,32 @@
             "subscribe": {
                 "capability": "remoteMediaVersion",
                 "conditional": {
+                    "activePeakHold": [
+                        "displayExtrasVersion"
+                    ],
+                    "averageTimeMs": [
+                        "displayExtrasVersion"
+                    ],
+                    "calibrationOffsetDb": [
+                        "displayExtrasVersion"
+                    ],
                     "extendedView": [
                         "remoteWidebandDisplayVersion"
+                    ],
+                    "noiseFloor": [
+                        "displayExtrasVersion"
+                    ],
+                    "normalize": [
+                        "displayExtrasVersion"
+                    ],
+                    "peakBlobs": [
+                        "displayExtrasVersion"
+                    ],
+                    "waterfallAverageTimeMs": [
+                        "displayExtrasVersion"
+                    ],
+                    "waterfallLevels": [
+                        "displayExtrasVersion"
                     ]
                 },
                 "fields": [
@@ -1709,6 +1743,27 @@
                     "windowType"
                 ],
                 "nested": {
+                    "activePeakHold": [
+                        [
+                            "enabled",
+                            "fallDbPerSec",
+                            "holdMs"
+                        ]
+                    ],
+                    "noiseFloor": [
+                        [
+                            "enabled",
+                            "shiftDb"
+                        ]
+                    ],
+                    "peakBlobs": [
+                        [
+                            "count",
+                            "fallDbPerSec",
+                            "holdMs",
+                            "insideOnly"
+                        ]
+                    ],
                     "trace": [
                         [
                             "averageAlpha",
@@ -1721,6 +1776,14 @@
                             "averageAlpha",
                             "averageMode",
                             "detector"
+                        ]
+                    ],
+                    "waterfallLevels": [
+                        [
+                            "highDbm",
+                            "lowDbm",
+                            "mode",
+                            "offsetDb"
                         ]
                     ]
                 }
@@ -4282,6 +4345,22 @@
                 }
             ]
         },
+        "StationCatalog": {
+            "properties": [
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "json",
+                    "ordinal": 0
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "revision",
+                    "ordinal": 1
+                }
+            ]
+        },
         "StationDevicesFacade": {
             "properties": [
                 {
@@ -4769,6 +4848,10 @@
             "key": "devices"
         },
         {
+            "class": "StationCatalog",
+            "key": "catalog"
+        },
+        {
             "class": "PanadapterModel",
             "key": "pan:<i>"
         },
@@ -4894,7 +4977,8 @@
             "DspOptions",
             "Nb",
             "Snb",
-            "Rade"
+            "Rade",
+            "filters/"
         ]
     },
     "telemetry": {

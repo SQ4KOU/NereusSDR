@@ -211,6 +211,13 @@
 //               per-address handshake cap and 0600 on load. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic Claude
 //               Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 19 (R-IOS-06): the
+//                                    `catalog` object and
+//                                    stationCatalogVersion 1. AI-assisted
+//                                    via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 20 (R-IOS-27):
+//                                    displayExtrasVersion 1. AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include <QHash>
@@ -250,6 +257,7 @@ class SessionCommandDispatcher;
 class SessionTransport;
 class SettingsProxyServer;
 class StateMirror;
+class StationCatalog;
 class StationDevicesFacade;
 class TokenStore;
 
@@ -412,6 +420,14 @@ public:
     /// 1 when the Core sends `devices` and takes its verbs (its identity
     /// key is usable), else 0.
     int deviceAdminVersion() const;
+    /// iPhone app Task 19 (R-IOS-06): the mirrored `catalog` object, the
+    /// values the Core owns and an app draws its controls from. Never null.
+    StationCatalog* catalog() const;
+    /// 1: the Core sends `catalog` to a peer at minor 11.
+    int stationCatalogVersion() const;
+    /// iPhone app Task 20 (R-IOS-27): 1 while media is enabled; a peer at
+    /// minor 11 may then ask a spectrum subscription for display extras.
+    int displayExtrasVersion() const;
 
     /// The first-run block, exactly as the operator is shown it: the TLS
     /// pin and the identity key's path with the prompt to back it up.
@@ -521,6 +537,10 @@ public:
     /// The session agreed minor 9 or later: spectrum contexts report the
     /// grant Core made. Minor-8 peers keep the 19-key (20 with wideband) context.
     bool spectrumGrantAvailable() const;
+    /// The session agreed minor 11 and the Core advertised
+    /// displayExtrasVersion 1: a subscription may carry the display extras
+    /// fields (iPhone app Task 20, display extras v1).
+    bool displayExtrasAvailable() const;
     /// Installs newer limits (a later generation) and why they are below the
     /// Core's ceiling (R-R3-08, R-R3-37). A new reason needs a new
     /// generation; the same limits with the same reason are accepted as-is.
@@ -777,6 +797,8 @@ private:
     std::unique_ptr<DeviceAuthenticator> m_deviceAuth;
     // iPhone app Task 13: after the three it reads, so it goes first.
     std::unique_ptr<StationDevicesFacade> m_devicesFacade;
+    // iPhone app Task 19: the Core's catalogue.
+    std::unique_ptr<StationCatalog> m_catalog;
     // The connection whose command.invoke is being dispatched, and the end
     // it is owed once its result has been sent (a self-revoke, or a token
     // session retiring the token).
