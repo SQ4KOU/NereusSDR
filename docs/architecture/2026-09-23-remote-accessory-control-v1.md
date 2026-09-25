@@ -1781,9 +1781,10 @@ rewrite the fixtures, and update this document in the same commit.
   that Recall tune memory and Open TGXL Advanced work in a remote window
   and Copy diagnostics carries the Core's counters; and that the Advanced
   and interlock entries open their 4O3A tab in local and remote windows.
-  `session-verbs-tgxl-control` invokes the three commands right and wrong
+  `session-verbs-tgxl-relays` invokes the three commands right and wrong
   (the scan's `devicesJson` matched as any text, since a real tuner on the
-  test computer's network may answer).
+  test computer's network may answer); it requires version 4, so an app at
+  version 2 or 3 still runs `session-verbs-tgxl-control`.
 - Parity Task 9 (R-R3-49, `remotePgxlControlVersion` 4):
   `tst_pgxl_station_control` checks on a loopback amp that
   `setPgxlOperate` sends exactly `operate=1` and `operate=0` on a
@@ -1833,8 +1834,17 @@ rewrite the fixtures, and update this document in the same commit.
   nothing reaching the amp); that an older Core leaves them greyed and the
   window asks nothing; and that a local window's page shows the
   connected-since and last-poll readings and its TCI button still sends
-  this computer's own request. `session-verbs-rfkit` invokes the four
-  commands right and wrong on the static station.
+  this computer's own request. `session-verbs-rfkit-control` invokes the
+  four commands right and wrong on the static station; it requires version
+  4, so an app at version 2 or 3 still runs `session-verbs-rfkit`.
+- Group B fix wave (I1): the three address commands save a blank host.
+  `tst_tgxl_station_identity`, `tst_pgxl_station_control` and
+  `tst_rfkit_station_control` check the blank is saved and shown, and
+  that the Core's next start then dials nothing; `tst_remote_peripherals`
+  checks a remote window's blank Host reaches the Core with no refusal;
+  `session-verbs-tgxl-relays`, `session-verbs-pgxl-control` and
+  `session-verbs-rfkit-control` each save a blank host (its delta shows
+  the blank) and then the address again.
 
 Hardware evidence is pending for the operator checkpoint: ANT 1, 2 and 3,
 OPERATE and BYPASS switched on the real Tuner Genius from the Rock's
