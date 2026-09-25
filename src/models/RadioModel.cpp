@@ -5974,6 +5974,22 @@ void RadioModel::reshiftSlicesOnStream(int streamIndex, double newCentreHz)
     }
 }
 
+void RadioModel::applySliceStreamCentre(SliceModel* slice, double streamCentreHz)
+{
+    if (!slice) {
+        return;
+    }
+    // Model first: composedShiftHz reads the committed stream term.
+    slice->setShiftOffsetHz(slice->frequency() - streamCentreHz);
+    // From Thetis radio.cs:1419 [v2.10.3.15]: SetRXAShiftFreq receives
+    // +(freq - center). Composed, so RIT and a DIG offset survive the push.
+    if (m_wdspEngine) {
+        if (RxChannel* ch = m_wdspEngine->rxChannel(slice->sliceIndex())) {
+            pushNotchOrigin(slice, ch, streamCentreHz);
+        }
+    }
+}
+
 int RadioModel::ddcForStream(int streamIndex) const
 {
     if (streamIndex < 0 || streamIndex >= static_cast<int>(m_streamDdc.size())) {

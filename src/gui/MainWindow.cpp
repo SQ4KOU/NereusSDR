@@ -2071,18 +2071,18 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
             // Phase 3F Sub-Epic J Task 11: resolved through RadioModel's
             // accessor rather than wdspEngine()->rxChannel() directly --
             // src/gui/ no longer reaches into WdspEngine for a channel.
-            if (RxChannel* ch = m_radioModel->rxChannelForSlice(slice->sliceIndex())) {
-                ch->setShiftFrequency(0.0);
-            }
+            // The model and WDSP together (R-R3-49): the pan now sits on
+            // the slice, so its offset is zero in both halves.
+            m_radioModel->applySliceStreamCentre(slice, hz);
             if (wasCtun && m_radioModel->receiverManager()) {
                 m_radioModel->receiverManager()->setDdcFrequencyLocked(true);
             }
             m_handlingBandJump = false;
         } else {
             // CTUN, still on-screen: the DDC stays put and WDSP shifts.
-            if (RxChannel* ch = m_radioModel->rxChannelForSlice(slice->sliceIndex())) {
-                ch->setShiftFrequency(hz - center);
-            }
+            // Written to the model and WDSP together (R-R3-49), so the
+            // slice's shiftOffsetHz names the centre the demodulator uses.
+            m_radioModel->applySliceStreamCentre(slice, center);
         }
         host->setVfoFrequency(hz);
     };

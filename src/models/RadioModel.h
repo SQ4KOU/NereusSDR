@@ -1227,6 +1227,23 @@ public:
     /// placement (bindSliceToStream) already write the shift themselves.
     void reshiftSlicesOnStream(int streamIndex, double newCentreHz);
 
+    /// Commit one slice's offset from the centre the local pan says its
+    /// stream sits on, to the model and to WDSP together.
+    ///
+    /// The local tune path in MainWindow (the pan following a band jump, and
+    /// a CTUN tune inside the pan) used to write RxChannel::setShiftFrequency
+    /// straight from the widget's centre, leaving SliceModel::shiftOffsetHz
+    /// on whatever the allocator had last placed. The demodulator and the
+    /// model then described different centres, and anything reading the
+    /// model (TCI's dds and if, the notch origin) reported the wrong one.
+    /// This writes shiftOffsetHz = frequency - streamCentreHz, then pushes the
+    /// composed shift and the notch origin from the same centre through
+    /// pushNotchOrigin, so the two halves cannot disagree.
+    ///
+    /// From Thetis radio.cs:1419 [v2.10.3.15]: SetRXAShiftFreq receives
+    /// +(freq - center).
+    void applySliceStreamCentre(SliceModel* slice, double streamCentreHz);
+
     /// Phase 3F Sub-Epic I Task 7b: hardware DDC currently routed to
     /// `streamIndex`, or -1 when that stream is idle (or no codec has run).
     /// This is the codec's choice, republished; every slice on the stream

@@ -92,9 +92,11 @@ FOR_SLICE_PATTERN = re.compile(r"rxChannelForSlice\s*\(")
 # lines mentioning the name are not calls and are not counted (see
 # _is_comment_line). Verified against the tree on 2026-08-08.
 FOR_SLICE_INVENTORY = {
-    # Applet and flag wiring: three DSP-parameter pushes plus the two
-    # filter-characteristics bindings.
-    "src/gui/MainWindow.cpp": 5,
+    # Applet and flag wiring: the notch-width binding and the two
+    # meter-poller hookups. The two demodulator-shift writes in the flag's
+    # frequency hook now go through RadioModel::applySliceStreamCentre
+    # (R-R3-49), so the model's slice offset moves with them.
+    "src/gui/MainWindow.cpp": 3,
     # Setup > DSP > Options. Runs at page-construction time, which is why
     # the audit cannot count this wrapper -- see the module docstring.
     "src/gui/setup/DspOptionsPage.cpp": 1,
