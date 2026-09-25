@@ -67,8 +67,31 @@ bool spendablePs3Cost(quint64 bytes)
 
 QString displayBudgetReasonWireName(DisplayBudgetReason reason)
 {
-    return reason == DisplayBudgetReason::CoreBusy ? QStringLiteral("coreBusy")
-                                                   : QStringLiteral("none");
+    switch (reason) {
+    case DisplayBudgetReason::CoreBusy:
+        return QStringLiteral("coreBusy");
+    case DisplayBudgetReason::SharedConnection:
+        return QStringLiteral("sharedConnection");
+    case DisplayBudgetReason::SharedProcessing:
+        return QStringLiteral("sharedProcessing");
+    case DisplayBudgetReason::None:
+        break;
+    }
+    return QStringLiteral("none");
+}
+
+DisplayBudgetReason displayBudgetReasonForOlderDevice(DisplayBudgetReason reason)
+{
+    switch (reason) {
+    case DisplayBudgetReason::SharedProcessing:
+        return DisplayBudgetReason::CoreBusy;
+    case DisplayBudgetReason::SharedConnection:
+        return DisplayBudgetReason::None;
+    case DisplayBudgetReason::None:
+    case DisplayBudgetReason::CoreBusy:
+        break;
+    }
+    return reason;
 }
 
 std::optional<DisplayBudgetReason> displayBudgetReasonFromWireName(const QString& name)
@@ -78,6 +101,12 @@ std::optional<DisplayBudgetReason> displayBudgetReasonFromWireName(const QString
     }
     if (name == QLatin1String("coreBusy")) {
         return DisplayBudgetReason::CoreBusy;
+    }
+    if (name == QLatin1String("sharedConnection")) {
+        return DisplayBudgetReason::SharedConnection;
+    }
+    if (name == QLatin1String("sharedProcessing")) {
+        return DisplayBudgetReason::SharedProcessing;
     }
     return std::nullopt;
 }

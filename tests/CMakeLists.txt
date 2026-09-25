@@ -7609,6 +7609,9 @@ nereus_add_test(tst_remote_audio_status)
 # Remote Daemon R3, Task 3: bounded native trace, waterfall, and DSS codec.
 nereus_add_test(tst_display_codec)
 nereus_add_test(tst_display_budget)
+# iPhone app Task 76 (R-IOS-31): the Core's display budget shared among
+# the devices signed in to it, holder first.
+nereus_add_test(tst_display_budget_split)
 nereus_add_test(tst_display_budget_contract fakes/LoopbackTransport.cpp)
 nereus_add_test(tst_remote_display_allocator)
 # R-R3-08/37/40: the Core lowers spectrum first when its computer is busy.
