@@ -1708,7 +1708,7 @@ target_compile_definitions(tst_n2adr_preset PRIVATE NEREUS_BUILD_TESTS)
 # range-clamping per mi0bot setup.designer.cs, idempotent setters, per-MAC
 # AppSettings round-trip.
 # Hl2OptionsTab: construction smoke, model→UI sync, output LED strip
-# reflects IoBoardHl2::currentOcByteChanged, I2C Write button gating.
+# reflects the composed OC byte (RadioModel::bandOutputsByte), I2C Write button gating.
 nereus_add_test(tst_hl2_options_tab)
 target_compile_definitions(tst_hl2_options_tab PRIVATE NEREUS_BUILD_TESTS)
 
@@ -1892,6 +1892,14 @@ nereus_add_test(tst_hpf_bypass_on_tx)
 # reach the wire as Thetis's setAlexHPF / setBPF1ForOrionIISaturn apply them
 # (console.cs:6839-6962). NereusSDR-original tests: no Thetis port.
 nereus_add_test(tst_alex_hpf_switches)
+# Plan Task 14 fix wave, I1 and I2 (R-R3-49, remote parity): the HL2 I/O,
+# HL2 options and OC Outputs tabs show the band-output byte the connection
+# composed (RadioModel::bandOutputsByte), locally and in a remote window
+# through the station link, as Thetis's UpdateOCLedStrip shows the bits
+# UpdateExtCtrl returned (console.cs:29103-29106). NereusSDR-original.
+nereus_add_test(tst_band_outputs_display
+    fakes/LoopbackTransport.cpp)
+target_compile_definitions(tst_band_outputs_display PRIVATE NEREUS_BUILD_TESTS)
 
 # ── A band change must retune the DDC even while CTUN holds it ───────────────
 # CTUN pins the DDC via ReceiverManager::m_ddcFreqLocked so a VFO nudge inside
@@ -2332,11 +2340,10 @@ nereus_add_test(tst_alex1_live_leds)
 target_compile_definitions(tst_alex1_live_leds PRIVATE NEREUS_BUILD_TESTS)
 
 # ── Phase 3P-H Task 5b: OC Outputs live pin-state LED row ─────────────────────
-# Verifies OcOutputsHfTab::onLiveStateChanged() computes the displayed OC
-# byte = OcMatrix::maskFor(currentBand, isTx) via RadioModel's first
-# panadapter + TransmitModel MOX state. Covers empty matrix, RX pin set
-# for 20m, band-change recompute, MOX-driven RX↔TX matrix flip, and
-# direct setCurrentOcByte path.
+# Plan Task 14 fix wave (R-R3-49): the row shows the OC byte the connection
+# composed (RadioModel::bandOutputsByte), never one computed from the
+# matrix, a band and MOX. Covers nothing composed, a reported byte, no
+# recompute on band / MOX / matrix changes, and direct setCurrentOcByte.
 nereus_add_test(tst_oc_outputs_live_pins)
 target_compile_definitions(tst_oc_outputs_live_pins PRIVATE NEREUS_BUILD_TESTS)
 

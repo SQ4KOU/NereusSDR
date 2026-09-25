@@ -373,6 +373,13 @@ class RadioModel : public QObject {
     Q_PROPERTY(int rxFilter1Effective READ rxFilter1Effective NOTIFY filterStateChanged)
     Q_PROPERTY(int rxFilter1Band READ rxFilter1Band NOTIFY filterStateChanged)
     Q_PROPERTY(QString rxFilter1Reason READ rxFilter1Reason NOTIFY filterStateChanged)
+    // Plan Task 14 fix wave (R-R3-49): the band-output (OC) byte the Core's
+    // connection composed, the band it was chosen for and whether the
+    // transmitter was keyed. Station-owned, never remotely writable. Every
+    // window's band-output displays show these, never a byte of their own.
+    Q_PROPERTY(int bandOutputsByte READ bandOutputsByte NOTIFY bandOutputsChanged)
+    Q_PROPERTY(int bandOutputsBand READ bandOutputsBand NOTIFY bandOutputsChanged)
+    Q_PROPERTY(bool bandOutputsKeyed READ bandOutputsKeyed NOTIFY bandOutputsChanged)
 
 
 public:
@@ -899,6 +906,42 @@ public:
     int rxFilter1Effective() const { return static_cast<int>(filterChainState(1).effective); }
     int rxFilter1Band() const { return static_cast<int>(filterChainState(1).currentBpfBand); }
     QString rxFilter1Reason() const { return filterChainState(1).reasonText; }
+
+    // ── Plan Task 14 fix wave (R-R3-49): the band outputs on the wire ──────
+    //
+    // Thetis's Setup shows the bits UpdateExtCtrl returned:
+    //   From Thetis console.cs:29103-29106 [v2.10.3.15]
+    //     if (penny_ext_ctrl_enabled) //MW0LGE_21k
+    //     {
+    //         int bits = Penny.getPenny().UpdateExtCtrl(lo_band, lo_bandb, _mox, _tuning, SetupForm.TestIMD, chkExternalPA.Checked); //MW0LGE_21j
+    //         if (!IsSetupFormNull) SetupForm.UpdateOCLedStrip(_mox, bits);
+    // Here the connection reports the byte it composed into the packet that
+    // carries it (RadioConnection::bandOutputsComposed), and a remote window
+    // receives the Core's through the station link (link section 7.1). The
+    // HL2 I/O tab, the HL2 options tab and the OC Outputs tab show these.
+    //
+    // bandOutputsByte: the 7 OC bits. bandOutputsBand: a Band index, or -1
+    // before anything has been composed. bandOutputsKnown: false until a
+    // byte has been reported (locally) or all three values have arrived
+    // from the Core (remotely); a display shows no pins until then, since a
+    // Core that predates these properties never sends them.
+    int  bandOutputsByte()  const { return m_bandOutputsByte; }
+    int  bandOutputsBand()  const { return m_bandOutputsBand; }
+    bool bandOutputsKeyed() const { return m_bandOutputsKeyed; }
+    bool bandOutputsKnown() const;
+    // Remote role: one of the three values from the Core. False for any
+    // other name or an out-of-range value.
+    bool applyStationBandOutputsValue(const QByteArray& name, const QVariant& value);
+    // Remote role: the session ended; nothing is known until the next one.
+    void clearStationBandOutputs();
+    // Test seam: stands in for the connection's report (local role).
+    void reportBandOutputsForTest(quint8 ocByte, int band, bool keyed)
+    {
+        onBandOutputsComposed(ocByte, band, keyed);
+    }
+    // Test seam: the production connection -> model report, for a test that
+    // injects a connection (injectConnectionForTest does no wiring).
+    void wireBandOutputsReportForTest() { connectBandOutputsReport(); }
 
     // ── Phase 3F: per-panadapter RX preselector bypass state (WIDE badge) ────
     // NereusSDR-original; no upstream port. Design doc
@@ -2196,6 +2239,9 @@ public:
 signals:
     void stationLinkStateChanged();
     void filterStateChanged();
+    // bandOutputsByte / bandOutputsBand / bandOutputsKeyed / bandOutputsKnown
+    // changed.
+    void bandOutputsChanged();
     // Emitted when rxMeterOffsetDb() changes (model swap, preamp change,
     // step-att enable/disable, attenuator dB change, or AppSettings
     // RX1_MeterCalOffsetDb override).  MeterPoller connects this to
@@ -3948,6 +3994,12 @@ private:
     // (PollTXInhibit, console.cs:25849-25887 [v2.10.3.15]). Called from
     // wireConnectionSignals.
     void connectTxInhibitInput();
+    // Plan Task 14 fix wave: the connection's composed band outputs reach
+    // bandOutputsByte (onBandOutputsComposed). Called from
+    // wireConnectionSignals.
+    void connectBandOutputsReport();
+    void onBandOutputsComposed(quint8 ocByte, int band, bool keyed);
+    void resetBandOutputs();
 
     // Issue #177 — deferred completion of the TUN-off path.
     //
@@ -4531,6 +4583,13 @@ private:
     std::array<AlexController::AlexAdcState, 2> m_stationFilterStates{};
     std::array<unsigned, 2> m_stationFilterFields{};
     bool m_stationFilterSnapshotReady{false};
+    // Plan Task 14 fix wave: the band outputs on the wire (bandOutputsByte).
+    // m_bandOutputsFields: bits 0-2 = byte, band, keyed received (remote);
+    // all three set by a local report.
+    int      m_bandOutputsByte{0};
+    int      m_bandOutputsBand{-1};
+    bool     m_bandOutputsKeyed{false};
+    unsigned m_bandOutputsFields{0};
 
     // Phase 3F Sub-Epic F Task 5: per-ADC WidebandFftEngine instances.
     // Indexed by adcIndex (0 or 1). Constructed in the RadioModel ctor with

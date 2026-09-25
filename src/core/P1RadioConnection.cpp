@@ -4002,6 +4002,9 @@ void P1RadioConnection::composeCcForBank(int bankIdx, quint8 out[5]) const
 {
     if (m_useLegacyCodec || !m_codec) {
         composeCcForBankLegacy(bankIdx, out);
+        if (bankIdx == 0) {
+            publishBank0BandOutputs(out);
+        }
         return;
     }
 
@@ -4023,6 +4026,24 @@ void P1RadioConnection::composeCcForBank(int bankIdx, quint8 out[5]) const
 
     const CodecContext ctx = buildCodecContext();
     m_codec->composeCcForBank(bankIdx, ctx, out);
+    if (bankIdx == 0) {
+        publishBank0BandOutputs(out);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// publishBank0BandOutputs: plan Task 14 fix wave (R-R3-49). Bank 0 C2 carries
+// the band outputs, (ocByte << 1) & 0xFE, so the byte read back from the
+// composed bank is the one the radio gets, on the codec and the rollback
+// compose alike. Every window shows it (RadioModel::bandOutputsByte), as
+// Thetis's LED strip shows the bits UpdateExtCtrl returned
+// (console.cs:29105-29106 [v2.10.3.15]).
+// ---------------------------------------------------------------------------
+void P1RadioConnection::publishBank0BandOutputs(const quint8 bank0[5]) const
+{
+    publishBandOutputs(static_cast<quint8>(bank0[2] >> 1),
+                       int(bandFromFrequency(static_cast<double>(ocBandFrequencyHz()))),
+                       m_mox);
 }
 
 // ---------------------------------------------------------------------------

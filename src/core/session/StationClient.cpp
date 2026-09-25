@@ -1122,6 +1122,7 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
         m_radioModel->reportStationLinkStateChanged();
         m_radioModel->setStationConnectionState(ConnectionState::Disconnected);
         m_radioModel->clearStationFilterState();
+        m_radioModel->clearStationBandOutputs();
         for (SliceModel* slice : m_radioModel->slices()) {
             slice->setStationAutoAgcNoiseFloor(slice->stationAutoAgcNoiseFloorDbm(), false,
                                               slice->stationAutoAgcNoiseFloorGeneration());
@@ -2453,6 +2454,9 @@ bool StationClient::applyClientOnlyProperty(QObject* target, const QByteArray& c
             return true;
         }
         if (m_radioModel->applyStationReceiveLayoutStatus(propertyName, native.toString())) {
+            return true;
+        }
+        if (m_radioModel->applyStationBandOutputsValue(propertyName, native)) {
             return true;
         }
         return m_radioModel->applyStationFilterValue(propertyName, native);

@@ -688,7 +688,7 @@ An enum property lists the values its domain allows.
 | 8 | `hardwarePeakOverride` | `f64` | bidirectional |  |
 | 9 | `lastLoadError` | `utf8` | outbound |  |
 
-**RadioModel** (19 properties)
+**RadioModel** (22 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -711,6 +711,9 @@ An enum property lists the values its domain allows.
 | 16 | `rxFilter1Effective` | `i64` | outbound |  |
 | 17 | `rxFilter1Band` | `i64` | outbound |  |
 | 18 | `rxFilter1Reason` | `utf8` | outbound |  |
+| 19 | `bandOutputsByte` | `i64` | outbound |  |
+| 20 | `bandOutputsBand` | `i64` | outbound |  |
+| 21 | `bandOutputsKeyed` | `bool` | outbound |  |
 
 **RfKitModel** (30 properties)
 
@@ -1022,6 +1025,19 @@ Notes on the keys:
 - **Unknown classes.** A client that receives a schema for a class it does
   not know records the difference and drops that class's objects and
   deltas.
+- **Band outputs (`radio`).** `bandOutputsByte`, `bandOutputsBand` and
+  `bandOutputsKeyed` are the band-output (open collector) byte the Core's
+  radio connection composed into the packet that carries it (Protocol 1
+  bank 0, Protocol 2 high-priority byte 1401), the band index it was chosen
+  for, and whether the transmitter was keyed. They are outbound only and
+  change together (`RadioModel::bandOutputsChanged`). `bandOutputsBand` is
+  -1 until the Core has composed a byte (no radio, or not yet connected),
+  and the byte is then 0. A window shows these pins, never a byte of its
+  own; a Core built before them never sends them, so a client shows no
+  pins until all three have arrived with a band of 0 or more. No
+  capability value gates them: an older client ignores the unknown
+  properties (section 7.1's schema carries them), and a newer client
+  reads the absence itself.
 
 ### 7.2 Deltas
 

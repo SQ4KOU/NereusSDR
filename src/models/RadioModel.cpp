@@ -9035,6 +9035,113 @@ void RadioModel::connectTxInhibitInput()
 }
 
 
+// ---------------------------------------------------------------------------
+// Plan Task 14 fix wave (R-R3-49): the band outputs on the wire.
+//
+// Thetis's Setup LED strip shows the bits UpdateExtCtrl returned, not a
+// byte of its own (console.cs:29103-29106 [v2.10.3.15], quoted at
+// bandOutputsByte). The HL2 I/O tab's strip here updated only from the
+// Core's connection, so a remote window never moved, and the OC Outputs
+// tab computed its own byte from pan 1's band, the opposite of the wire in
+// a cross-band split. The connection now reports what it composed; this
+// model keeps it for the local displays and publishes it to every window.
+// ---------------------------------------------------------------------------
+void RadioModel::connectBandOutputsReport()
+{
+    RadioConnection* const conn = m_connection;
+    if (conn == nullptr) {
+        return;
+    }
+    // The connection lives on its own thread. A report that arrives after
+    // this connection has gone is dropped.
+    connect(conn, &RadioConnection::bandOutputsComposed, this,
+            [this, conn](quint8 ocByte, int band, bool keyed) {
+                if (m_connection != conn) {
+                    return;
+                }
+                onBandOutputsComposed(ocByte, band, keyed);
+            },
+            Qt::QueuedConnection);
+}
+
+void RadioModel::onBandOutputsComposed(quint8 ocByte, int band, bool keyed)
+{
+    if (!ownsLocalDsp()) {
+        return;
+    }
+    const int byte = int(ocByte);
+    if (m_bandOutputsFields == 7U && m_bandOutputsByte == byte
+        && m_bandOutputsBand == band && m_bandOutputsKeyed == keyed) {
+        return;
+    }
+    m_bandOutputsByte   = byte;
+    m_bandOutputsBand   = band;
+    m_bandOutputsKeyed  = keyed;
+    m_bandOutputsFields = 7U;
+    emit bandOutputsChanged();
+}
+
+void RadioModel::resetBandOutputs()
+{
+    if (m_bandOutputsFields == 0U && m_bandOutputsByte == 0
+        && m_bandOutputsBand == -1 && !m_bandOutputsKeyed) {
+        return;
+    }
+    m_bandOutputsByte   = 0;
+    m_bandOutputsBand   = -1;
+    m_bandOutputsKeyed  = false;
+    m_bandOutputsFields = 0U;
+    emit bandOutputsChanged();
+}
+
+bool RadioModel::bandOutputsKnown() const
+{
+    if (ownsLocalDsp()) {
+        return m_bandOutputsFields == 7U;
+    }
+    return isConnected() && m_bandOutputsFields == 7U && m_bandOutputsBand >= 0;
+}
+
+bool RadioModel::applyStationBandOutputsValue(const QByteArray& name, const QVariant& value)
+{
+    if (ownsLocalDsp()) {
+        return false;
+    }
+    if (name == "bandOutputsByte") {
+        bool ok = false;
+        const int byte = value.toInt(&ok);
+        if (!ok || byte < 0 || byte > 0xFF) {
+            return false;
+        }
+        m_bandOutputsByte = byte;
+        m_bandOutputsFields |= 1U;
+    } else if (name == "bandOutputsBand") {
+        bool ok = false;
+        const int band = value.toInt(&ok);
+        if (!ok || band < -1 || band >= int(Band::Count)) {
+            return false;
+        }
+        m_bandOutputsBand = band;
+        m_bandOutputsFields |= 2U;
+    } else if (name == "bandOutputsKeyed") {
+        m_bandOutputsKeyed = value.toBool();
+        m_bandOutputsFields |= 4U;
+    } else {
+        return false;
+    }
+    emit bandOutputsChanged();
+    return true;
+}
+
+void RadioModel::clearStationBandOutputs()
+{
+    if (ownsLocalDsp()) {
+        return;
+    }
+    resetBandOutputs();
+}
+
+
 // --- Connection ---
 
 void RadioModel::connectToRadioPreservingSlices(const RadioInfo& info)
@@ -12086,6 +12193,9 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
 
     // Task 13: the radio's TX inhibit input (PollTXInhibit).
     connectTxInhibitInput();
+
+    // Plan Task 14 fix wave: the band outputs the connection composes.
+    connectBandOutputsReport();
 
     // ── Task 2.4 of P1 full-parity epic: TransmitModel → RadioConnection ────
     // Wire lineInGain + userDigOut model-layer signals to the wire-bit setters
@@ -16329,6 +16439,10 @@ void RadioModel::setConnectionState(ConnectionState s)
     }
     if (wasConnected && s != ConnectionState::Connected) {
         retireWidebandDemand();
+        // Plan Task 14 fix wave: nothing is on the wire now.
+        if (ownsLocalDsp()) {
+            resetBandOutputs();
+        }
     }
     // Retirement can notify direct filter observers. A reentrant transition
     // has already published its own state and must not be followed by ours.

@@ -754,6 +754,14 @@ signals:
     // Radio firmware info received during handshake.
     void firmwareInfoReceived(int version, const QString& details);
 
+    // Plan Task 14 fix wave (R-R3-49): the band-output (OC) byte this
+    // connection composed into the packet that carries it, with the band it
+    // was chosen for and whether the transmitter was keyed. Emitted when any
+    // of the three changes, on the connection thread. Thetis shows exactly
+    // these bits (UpdateOCLedStrip(_mox, bits), console.cs:29105-29106
+    // [v2.10.3.15]); RadioModel publishes them to every window.
+    void bandOutputsComposed(quint8 ocByte, int band, bool keyed);
+
 private:
     struct ByteSample { qint64 ms; qint64 bytes; };
     mutable QList<ByteSample> m_txSamples;
@@ -761,6 +769,11 @@ private:
 
     static double rateFromSamples(const QList<ByteSample>& samples, int windowMs);
     static void   pruneSamples(QList<ByteSample>& samples, qint64 nowMs, int windowMs);
+
+    // publishBandOutputs: what was last reported. -1 = nothing yet.
+    mutable int m_publishedOcByte{-1};
+    mutable int m_publishedOcBand{-1};
+    mutable int m_publishedOcKeyed{-1};
 
     // Ping RTT state. Zero means no outstanding ping.
     qint64 m_pingSentMs{0};
@@ -784,6 +797,22 @@ private:
     std::atomic<float> m_lastUserAdc0Volts{-1.0f};
 
 protected:
+    // Reports the band-output byte composed into the packet that carries it
+    // (bandOutputsComposed), once per change. Called from the compose path,
+    // which is const; the emit does not change the connection's state.
+    void publishBandOutputs(quint8 ocByte, int band, bool keyed) const
+    {
+        const int keyedInt = keyed ? 1 : 0;
+        if (m_publishedOcByte == int(ocByte) && m_publishedOcBand == band
+            && m_publishedOcKeyed == keyedInt) {
+            return;
+        }
+        m_publishedOcByte  = int(ocByte);
+        m_publishedOcBand  = band;
+        m_publishedOcKeyed = keyedInt;
+        emit const_cast<RadioConnection*>(this)->bandOutputsComposed(ocByte, band, keyed);
+    }
+
     void setState(ConnectionState newState);
 
     // Task 13: called by the P1/P2 status parsers with the user digital

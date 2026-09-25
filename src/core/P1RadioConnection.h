@@ -444,6 +444,8 @@ private:
 
     // Snapshot all live state into a CodecContext for the codec call.
     CodecContext buildCodecContext() const;
+    // Plan Task 14 fix wave: report bank 0's band-output byte (bandOutputsComposed).
+    void publishBank0BandOutputs(const quint8 bank0[5]) const;
 
     // HL2-specific helpers (mi0bot Hermes-Lite branch, Task 12).
     // hl2SendIoBoardInit — issues I2C register reads at startup to detect the

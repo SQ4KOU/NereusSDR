@@ -553,7 +553,7 @@ const MirrorPolicy::Entry kEntries[] = {
     { "PureSignalSettings", "hardwarePeakOverride", MirrorDirection::Bidirectional },
     { "PureSignalSettings", "lastLoadError", MirrorDirection::Outbound },
 
-    // ---- RadioModel (19 entries) ----
+    // ---- RadioModel (22 entries) ----
     { "RadioModel", "settingsSaveError", MirrorDirection::Outbound },
     { "RadioModel", "receiveLayoutRestoreState", MirrorDirection::Outbound },
     { "RadioModel", "receiveLayoutRestoreMessage", MirrorDirection::Outbound },
@@ -569,6 +569,12 @@ const MirrorPolicy::Entry kEntries[] = {
     { "RadioModel", "rxFilter1Effective", MirrorDirection::Outbound },
     { "RadioModel", "rxFilter1Band", MirrorDirection::Outbound },
     { "RadioModel", "rxFilter1Reason", MirrorDirection::Outbound },
+    // Plan Task 14 fix wave (R-R3-49): the band-output byte the Core's
+    // connection composed, its band and the keyed state. Read-only: the
+    // windows' OC and HL2 I/O displays show these.
+    { "RadioModel", "bandOutputsByte", MirrorDirection::Outbound },
+    { "RadioModel", "bandOutputsBand", MirrorDirection::Outbound },
+    { "RadioModel", "bandOutputsKeyed", MirrorDirection::Outbound },
     // R-R3-47: the Core's RF-Kit switch. A window changes it with the
     // setRfKitEnabled command; a raw write is refused.
     { "RadioModel", "rfKitEnabled", MirrorDirection::Outbound },

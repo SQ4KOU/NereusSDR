@@ -2888,6 +2888,24 @@
                     "kind": "utf8",
                     "name": "rxFilter1Reason",
                     "ordinal": 18
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "bandOutputsByte",
+                    "ordinal": 19
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "bandOutputsBand",
+                    "ordinal": 20
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "bandOutputsKeyed",
+                    "ordinal": 21
                 }
             ]
         },
