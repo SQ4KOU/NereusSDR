@@ -344,6 +344,7 @@ void TransmitHolder::setKeyed(bool keyed)
         return;
     }
     m_holder->keyed = keyed;
+    m_holder->keyedSinceMs = keyed ? now() : 0;
     emit changed();
 }
 
@@ -355,6 +356,7 @@ void TransmitHolder::onMoxReading(bool on)
     bool changedNow = false;
     if (m_holder.has_value() && m_holder->keyed) {
         m_holder->keyed = false;
+        m_holder->keyedSinceMs = 0;
         changedNow = true;
     }
     if (m_waitingMoxOff && m_state == State::Transferring) {

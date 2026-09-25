@@ -5,11 +5,16 @@
 // NereusSDR-original; no upstream port. See TxSliceArbiter.h for header
 // notes and design reference.
 //
+// Modification history (NereusSDR):
+//   2026-09-25 iPhone app plan Task 34 (R-IOS-03): the handoff while keyed
+//              waits for the unkey gate. J.J. Boyd (KG4VCF), AI-assisted via
+//              Anthropic Claude Code.
 // =================================================================
 #include "core/TxSliceArbiter.h"
 #include "models/SliceModel.h"
 #include "core/MoxController.h"
 #include "core/AppSettings.h"
+#include "core/safety/UnkeyGate.h"
 
 namespace NereusSDR {
 
@@ -177,16 +182,59 @@ bool TxSliceArbiter::requestHandoff(int sliceId)
 
     if (target->isTxSlice()) {
         m_txBoundSliceId = sliceId;
+        m_pendingHandoffId = -1;   // a waiting move to elsewhere is dropped
         return true;  // already TX-bound, no-op
     }
 
     // RF-safe handoff: drop MOX before changing TX-bound slice.
+    //
+    // iPhone app plan Task 34 (R-IOS-03; remote design section 12.2): with
+    // the unkey gate the flag moves only once MOX reached receive (or the
+    // gate timed out and stopped transmit at once), for a local handoff as
+    // for a remote one. Moving it on the next statement put the new slice's
+    // transmit frequency on the wire before MOX off, so the down-slew tail
+    // could go out on the new frequency (Task 33's report, concern 2).
+    const bool keyed = m_mox && (m_mox->isMox() || m_mox->state() != MoxState::Rx);
+    if (keyed && m_unkeyGate) {
+        const bool alreadyWaiting = m_pendingHandoffId >= 0;
+        m_pendingHandoffId = sliceId;
+        if (!alreadyWaiting) {
+            m_unkeyGate->unkey(QStringLiteral("The transmit slice moved."), this,
+                               [this](UnkeyOutcome) {
+                const int pending = m_pendingHandoffId;
+                m_pendingHandoffId = -1;
+                if (SliceModel* next = sliceWithId(pending); next && !next->isTxSlice()) {
+                    flipTo(next);
+                }
+            });
+        }
+        return true;
+    }
     if (m_mox && m_mox->isMox()) {
         m_mox->setMox(false);
-        // MoxController::setMox is synchronous on the moxChanged side; if it ever
-        // becomes async, switch to a QEventLoop wait on moxChanged here.
+        // Without a gate the flag moves now; MOX is already off in the
+        // controller, the hardware at the end of the TX-to-RX walk.
     }
+    flipTo(target);
+    return true;
+}
 
+SliceModel* TxSliceArbiter::sliceWithId(int sliceId) const
+{
+    if (!m_slices) {
+        return nullptr;
+    }
+    for (SliceModel* slice : *m_slices) {
+        if (slice && slice->sliceIndex() == sliceId) {
+            return slice;
+        }
+    }
+    return nullptr;
+}
+
+void TxSliceArbiter::flipTo(SliceModel* target)
+{
+    const int sliceId = target->sliceIndex();
     int oldId = m_txBoundSliceId;
     if (!txBoundSlice()) {
         for (SliceModel* slice : *m_slices) {
@@ -209,7 +257,6 @@ bool TxSliceArbiter::requestHandoff(int sliceId)
 
     m_txBoundSliceId = sliceId;
     emit txBoundSliceChanged(oldId, sliceId);
-    return true;
 }
 
 void TxSliceArbiter::save()

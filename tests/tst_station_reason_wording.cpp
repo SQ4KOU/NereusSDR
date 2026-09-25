@@ -99,6 +99,10 @@
 //                                    refusal for another device's slice,
 //                                    and a saved slice that did not fit.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 34 (R-IOS-02): the transmit refusals
+//               (TxRefusal.cpp) and their forwards. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -664,7 +668,12 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("m_settingsServer->otherRadioRefusal(key)"),
           QStringLiteral("refusal"),
           // A code windows compare, not a reason (section 17).
-          QStringLiteral("m_displayBudgetReason")}},
+          QStringLiteral("m_displayBudgetReason"),
+          // iPhone app plan Task 34: the transmit refusals' sentences,
+          // written in src/core/safety/TxRefusal.cpp (scanned below).
+          QStringLiteral("m_transmitHolder->keyRefusalFor(requester)"),
+          QStringLiteral("TxRefusals::appCannotTransmit().text"),
+          QStringLiteral("decision.refusal.text")}},
         // command.result for every verb.
         // The device's name ("Power Genius", "Tuner Genius") and what the
         // request asked, both this file's own literals
@@ -686,7 +695,27 @@ const QList<ReasonSource>& reasonSources()
           // iPhone app Task 73: StationServer::sliceRefusal, scanned there.
           QStringLiteral("m_sliceAccess(m_requester, sliceId)"),
           // AlexAntennaFacade's filter policy refusal, scanned below.
-          QStringLiteral("alex->setBpfModeForChain(chain, mode)")}},
+          QStringLiteral("alex->setBpfModeForChain(chain, mode)"),
+          // iPhone app plan Task 34: the transmit refusals, worded in
+          // src/core/safety/TxRefusal.cpp (scanned below) and handed in by
+          // StationServer's transmit access.
+          QStringLiteral("refusal.text"),
+          QStringLiteral("m_transmitAccess.onAir(m_requester)"),
+          QStringLiteral("m_transmitAccess.txSlice(m_requester)")}},
+        // iPhone app plan Task 34 (R-IOS-13): every transmit refusal's
+        // sentence. The device name put into two of them is the operator's
+        // own word (ruling 4.3); a band plan reason is the band plan's
+        // sentence, passed on only when it is plain.
+        {"src/core/safety/TxRefusal.cpp", {}, {}, 15,
+         {QStringLiteral("holderName"), QStringLiteral("holderShortName")},
+         {QStringLiteral("reason"), QStringLiteral("std::move(text)"),
+          QStringLiteral("bandPlanReasonIsPlain(reason) ? reason : QStringLiteral(\"The band plan does not allow transmitting here.\")")}},
+        // iPhone app plan Task 34: MoxController records and reports a
+        // refusal it is given (the band plan's, the interlock's, the
+        // keying gate's), whose words are scanned where they are written.
+        {"src/core/MoxController.cpp", {QStringLiteral("reportRefusal")}, {}, 0, {},
+         {QStringLiteral("reason"), QStringLiteral("refusal")}},
+        {"src/core/MoxController.h", {QStringLiteral("lastRefusal")}, {}, 0, {}, {}},
         // iPhone app Task 13 (R-IOS-08): the device administration verbs'
         // command.result, forwarded by the dispatcher as result.reason; the
         // log lines never reach an app.

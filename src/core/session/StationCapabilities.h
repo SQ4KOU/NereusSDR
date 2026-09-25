@@ -99,6 +99,10 @@
 //               sent only to a peer that declared sessionHolder. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic Claude
 //               Code.
+//   2026-09-25: iPhone app plan Task 34 (R-IOS-02): remoteTxVersion, last,
+//               sent only to a peer whose hello declared remoteTx; txPermitted
+//               now the station transmit gate's answer. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -225,6 +229,11 @@ struct StationCapabilities {
     /// are exactly today's.
     bool sessionHolderEntry = false;
     int sessionHolderVersion = 0;
+    /// iPhone app plan Task 34: remote transmit (txPermitted per session,
+    /// tx.setTxSlice, the on-air refusals). Sent last, only to a peer whose
+    /// hello declared remoteTx 1 (remoteTxEntry); 0 otherwise.
+    bool remoteTxEntry = false;
+    int remoteTxVersion = 0;
 
     /// Whether the DAEMON currently holds a live radio connection. A
     /// client that authenticated against a daemon whose radio is powered

@@ -45,6 +45,8 @@
 //   2026-09-24: iPhone app Task 12 (R-IOS-08): the listener is on by
 //               default (TCP 47910, every interface, IPv4 and IPv6) unless
 //               the file sets remote_port or remote_bind; pairing_lan_click.
+//   2026-09-25: iPhone app plan Task 34 (R-IOS-02): remote_transmit. J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-24: iPhone app Task 17 (R-IOS-08): status_page, status_port
 //               and state_directory. J.J. Boyd (KG4VCF), AI-assisted via
@@ -130,6 +132,17 @@ struct DaemonConfig {
     // StationServer::setPairingLanClickAllowed() from
     // DaemonApp::startStationServer(); the pairing window (Task 14) reads it.
     bool    pairingLanClickAllowed {true};
+
+    // iPhone app plan Task 34 (R-IOS-02): whether devices may transmit
+    // through this Core. nereusd.conf `remote_transmit = allow|deny`,
+    // default allow: each session is then permitted by the station transmit
+    // gate (a paired device whose app declares remote transmit, once
+    // connected, while no other device holds transmit). deny keeps the Core
+    // receive-only, as before. Any other value logs one warning and denies:
+    // a transmit setting fails closed. Feeds StationServer::
+    // setRemoteTransmitAllowed() and RadioModel::setReceiveOnlyStationPolicy()
+    // from DaemonApp.
+    bool    remoteTransmitAllowed {true};
 
     // iPhone app Task 17 (R-IOS-08; pairing design section 4.3): the Core's
     // small read-only status page. nereusd.conf `status_page = on|off`

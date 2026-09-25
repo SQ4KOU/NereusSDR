@@ -7466,6 +7466,9 @@ nereus_add_test(tst_station_tx_gate)
 nereus_add_test(tst_unkey_gate)
 nereus_add_test(tst_transmit_holder)
 nereus_add_test(tst_keying_gate)
+nereus_add_test(tst_on_air_refusals
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
 nereus_add_test(tst_station_multi_session
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)

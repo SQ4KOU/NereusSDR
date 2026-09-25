@@ -120,6 +120,11 @@
 //               slice is its requester's; setActiveSliceById sets the
 //               requester's own active slice. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app plan Task 34 (R-IOS-02):
+//                                    tx.setTxSlice and the on-air refusals
+//                                    (setTransmitAccess), refusals with
+//                                    refusalCode and refusalFix values.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -428,6 +433,10 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
          "radioHardwareVersion", 3, kRadioIdentitySessionProtocolMinor},
         {"setAlexBpfMode", {arg("chain", kInt), arg("mode", kInt)}, "radioHardwareVersion", 4,
          kRadioIdentitySessionProtocolMinor},
+        // iPhone app plan Task 34 (R-IOS-02, ruling 8.10): move the TX flag
+        // to one of the holder's slices, by its id (never a list position).
+        {"tx.setTxSlice", {arg("sliceId", kInt)}, "remoteTxVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
         // Neural noise reduction.
         {"nnr.setDiagnostics",
          {arg("sliceId", kInt), arg("testMode", kInt), arg("outputMode", kInt)},
@@ -588,6 +597,11 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
     }
 
     if (invoke.commandVerb.startsWith("ps3.")) {
+        // Task 34 (ruling 7.4): PureSignal waits while the holder is on the
+        // air, two-tone and the display subscription aside.
+        if (refusedWhileOnAir(invoke)) {
+            return;
+        }
         handlePureSignalAction(invoke);
         return;
     }
@@ -628,6 +642,16 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
     // iPhone app Task 73 (ruling 5.9): a device addresses only its own
     // slices. Refused before anything is looked at or changed.
     if (refusedForAnotherDevice(invoke)) {
+        return;
+    }
+    // iPhone app plan Task 34 (ruling 7.4, D60): a change to the transmit
+    // path, a Protocol 1 rate change or a move of the holder's transmit
+    // slice waits while another device's holder is on the air.
+    if (refusedWhileOnAir(invoke)) {
+        return;
+    }
+    if (invoke.commandVerb == "tx.setTxSlice") {
+        handleSetTxSlice(invoke);
         return;
     }
 
@@ -702,6 +726,111 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         emitResult(invoke.commandVerb, invoke.commandId, false,
                    QStringLiteral("The Core does not know this request. Updating the Core may help."), {});
     }
+}
+
+void SessionCommandDispatcher::emitRefusal(const QByteArray& verb, quint32 commandId,
+                                           const TxRefusal& refusal)
+{
+    emit commandResultReady(SessionMessages::commandResult(
+        verb, commandId, false, refusal.text, {},
+        {{0, "refusalCode", MirrorWireKind::Utf8, QString::fromUtf8(refusal.code)},
+         {0, "refusalFix", MirrorWireKind::Utf8, QString::fromUtf8(refusal.fix)}}));
+}
+
+bool SessionCommandDispatcher::refusedWhileOnAir(const SessionMessage& invoke)
+{
+    if (m_requester.isEmpty() || !m_transmitAccess.onAir || m_radioModel.isNull()) {
+        return false;
+    }
+    // Ruling 7.4's list, as it exists when Task 34 lands. The transmit
+    // path: the amplifier and its settings verbs, the tuner, a receive or
+    // transmit antenna (setAlexRxAntenna; the slices' and alexAntennas'
+    // antennas are property writes, refused in StationServer), PureSignal
+    // (ps3.* but two-tone), the interlock and the power cap. Task 42 adds
+    // its own verbs.
+    static const QSet<QByteArray> kTransmitPath{
+        QByteArrayLiteral("configurePgxl"), QByteArrayLiteral("disconnectPgxl"),
+        QByteArrayLiteral("setPgxlConnectionSettings"), QByteArrayLiteral("setPgxlName"),
+        QByteArrayLiteral("setPgxlHardware"), QByteArrayLiteral("setPgxlNetwork"),
+        QByteArrayLiteral("savePgxlSettings"), QByteArrayLiteral("configureTgxl"),
+        QByteArrayLiteral("disconnectTgxl"), QByteArrayLiteral("setTgxlName"),
+        QByteArrayLiteral("setTgxlNetwork"), QByteArrayLiteral("saveTgxlSettings"),
+        QByteArrayLiteral("setTgxlAntenna"), QByteArrayLiteral("setTgxlOperate"),
+        QByteArrayLiteral("setTgxlBypass"), QByteArrayLiteral("setAlexRxAntenna"),
+        QByteArrayLiteral("setTxInterlockPolicy"), QByteArrayLiteral("setPgxlPowerCap")};
+    bool waits = kTransmitPath.contains(invoke.commandVerb);
+    if (invoke.commandVerb.startsWith("ps3.")) {
+        waits = invoke.commandVerb != "ps3.twoTone" && invoke.commandVerb != "ps3.subscribeDisplay";
+    }
+    if (invoke.commandVerb == "requestSliceSampleRate") {
+        // A Protocol 1 rate change stops the radio's data flow. The
+        // Protocol 2 rate changes are Task 75's to route.
+        waits = m_radioModel->currentRadioInfo().protocol == ProtocolVersion::Protocol1;
+    }
+    if (invoke.commandVerb == "requestStreamCentre") {
+        // A C-Tune centre change on the receiver of the holder's transmit
+        // slice moves that slice's receiver.
+        int sliceId = -1;
+        const SliceModel* txSlice = m_radioModel->txBoundSlice();
+        if (findIntArgument(invoke.arguments, "sliceId", &sliceId) == ArgumentStatus::Ok
+            && txSlice != nullptr) {
+            const SliceModel* slice = m_radioModel->sliceById(sliceId);
+            waits = slice != nullptr
+                && (slice == txSlice
+                    || (slice->streamIndex() >= 0 && slice->streamIndex() == txSlice->streamIndex()));
+        }
+    }
+    if (!waits) {
+        return false;
+    }
+    const TxRefusal refusal = m_transmitAccess.onAir(m_requester);
+    if (refusal.isEmpty()) {
+        return false;
+    }
+    emitRefusal(invoke.commandVerb, invoke.commandId, refusal);
+    return true;
+}
+
+void SessionCommandDispatcher::handleSetTxSlice(const SessionMessage& invoke)
+{
+    // iPhone app plan Task 34 (R-IOS-02, ruling 8.10): the holder's verb.
+    // The argument is a slice's id (SliceModel::sliceIndex), never a list
+    // position (remote design section 7.1).
+    int sliceId = -1;
+    if (!hasExactlyArguments(invoke.arguments, {"sliceId"})
+        || !hasWireKind(invoke.arguments, "sliceId", MirrorWireKind::Int64)
+        || findIntArgument(invoke.arguments, "sliceId", &sliceId) != ArgumentStatus::Ok) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core could not read this request."), {});
+        return;
+    }
+    if (m_transmitAccess.txSlice) {
+        const TxRefusal refusal = m_transmitAccess.txSlice(m_requester);
+        if (!refusal.isEmpty()) {
+            emitRefusal(invoke.commandVerb, invoke.commandId, refusal);
+            return;
+        }
+    }
+    if (m_radioModel->sliceById(sliceId) == nullptr) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("That slice is no longer on the Core."), {});
+        return;
+    }
+    // While keyed the transmitter unkeys through the unkey gate first and
+    // the flag moves once it is confirmed (TxSliceArbiter); unkeyed it
+    // moves at once. Either way the slices' txSlice deltas carry it.
+    if (!m_radioModel->requestTxHandoffToSlice(sliceId)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("That slice is no longer on the Core."), {});
+        return;
+    }
+    QList<QByteArray> affected;
+    for (const SliceModel* slice : m_radioModel->slices()) {
+        if (slice != nullptr) {
+            affected.append(ObjectRegistry::keyForSlice(slice->sliceIndex()));
+        }
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), affected);
 }
 
 bool SessionCommandDispatcher::refusedForAnotherDevice(const SessionMessage& invoke)

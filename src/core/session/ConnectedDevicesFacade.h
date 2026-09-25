@@ -18,8 +18,10 @@
 //                 revocable, state, holdsTransmit, lastActivitySeconds,
 //                 connectedForSeconds, awayForSeconds,
 //                 transmittingForSeconds, listeningOn}
-//                (transmittingOn is absent until Task 77; holdsTransmit
-//                false and transmittingForSeconds 0 until Task 34).
+//                (transmittingOn is absent until Task 77.) Task 34:
+//                holdsTransmit is true for the device holding transmit,
+//                keyed or not; state is "transmitting" while it is on the
+//                air; transmittingForSeconds is how long it has been.
 //                listeningOn (Task 73) is every slice the device owns, an
 //                away device's included: [{sliceId, letter, band, mode}],
 //                from the listening provider the Core sets.
@@ -48,6 +50,9 @@
 //   2026-09-25: iPhone app plan Task 73 (R-IOS-02): listeningOn, and one
 //               device described the same way wherever the Core names it
 //               (describe(), for markers and refusals). J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 34 (R-IOS-02): holdsTransmit and state
+//               "transmitting" (setTransmitProvider). J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
@@ -90,6 +95,18 @@ public:
     using ListeningProvider = std::function<QJsonArray(const QByteArray& deviceId)>;
     void setListeningProvider(ListeningProvider provider);
 
+    /// iPhone app plan Task 34 (R-IOS-02): who holds transmit and whether it
+    /// is on the air, for each entry's holdsTransmit and state
+    /// "transmitting". The Core sets it.
+    struct TransmitState {
+        QByteArray holderDeviceId;
+        bool keyed{false};
+        /// On the Core's monotonic clock (the registry's), while keyed.
+        qint64 keyedSinceMs{0};
+    };
+    using TransmitProvider = std::function<TransmitState()>;
+    void setTransmitProvider(TransmitProvider provider);
+
     /// Task 73: one device as the Core names it everywhere (ruling 4.3):
     /// its id on the wire (a paired device's key fingerprint in base64url,
     /// "token:<n>" for a token window), its numbered name and short name,
@@ -125,6 +142,7 @@ private:
     QString m_stable;
     quint32 m_revision = 0;
     ListeningProvider m_listening;
+    TransmitProvider m_transmit;
     int m_hold = 0;
     bool m_refreshWanted = false;
 };

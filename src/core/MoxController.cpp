@@ -339,10 +339,23 @@ void MoxController::setMox(bool on, const KeyerIdentity& keyer)
     }
     if (m_mox) {
         // Already keyed: this keyer's repeat runs the safety effects again
-        // (Codex P2); another keyer's key is not replaced.
+        // (Codex P2). Another keyer's key is never replaced; it is refused
+        // with the gate's words (another device holds transmit).
         if (m_currentKeyer.deviceId == keyer.deviceId) {
+            m_keyAdmitted = true;
+            m_admittedKeyer = keyer;
             setMox(true);
+            m_keyAdmitted = false;
+            return;
         }
+        KeyingAnswer answer;
+        if (m_keyingGate) {
+            answer = m_keyingGate(keyer.source, keyer);
+        }
+        const TxRefusal refusal = answer.verdict == KeyingVerdict::Refuse && !answer.refusal.isEmpty()
+            ? answer.refusal
+            : TxRefusals::changingHands();
+        reportRefusal(refusal.text, refusal, /*quiet=*/false);
         return;
     }
     if (m_keyingGate) {

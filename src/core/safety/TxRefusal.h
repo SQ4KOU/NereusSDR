@@ -60,6 +60,9 @@ inline constexpr char kChangingHands[] = "changingHands";
 inline constexpr char kStopNotConfirmed[] = "stopNotConfirmed";
 /// Ruling 7.4 (D60): a change refused while the holder is on the air.
 inline constexpr char kHolderOnAir[] = "holderOnAir";
+/// The holder's own verb (tx.setTxSlice) from a device while transmit is
+/// unheld (Task 34's choice, for the controller's review).
+inline constexpr char kNotHolder[] = "notHolder";
 
 // ---- Fixes ----------------------------------------------------------------
 inline constexpr char kFixTakeTransmit[] = "takeTransmit";
@@ -100,8 +103,12 @@ TxRefusal changingHands();
 /// reads off.
 TxRefusal stopNotConfirmed();
 /// A change from another device while the holder is on the air.
-/// `radioPtt` true when the radio's own PTT holds transmit.
+/// `radioPtt` true when the station device holds transmit (the radio's own
+/// PTT, or the Core's own keys): "The radio is on the air. Try again when
+/// it stops."
 TxRefusal holderOnAir(const QString& holderShortName, bool radioPtt);
+/// The holder's verb while transmit is unheld.
+TxRefusal notHolder();
 
 } // namespace TxRefusals
 

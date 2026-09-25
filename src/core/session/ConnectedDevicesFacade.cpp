@@ -11,6 +11,10 @@
 //   2026-09-25: iPhone app plan Task 73 (R-IOS-02): listeningOn and
 //               describe(). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 34 (R-IOS-02): holdsTransmit for the
+//               holder and state "transmitting" while it is on the air
+//               (setTransmitProvider). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/ConnectedDevicesFacade.h"
@@ -99,6 +103,12 @@ void ConnectedDevicesFacade::refresh()
     emit connectedDevicesChanged();
 }
 
+void ConnectedDevicesFacade::setTransmitProvider(TransmitProvider provider)
+{
+    m_transmit = std::move(provider);
+    refresh();
+}
+
 void ConnectedDevicesFacade::setListeningProvider(ListeningProvider provider)
 {
     m_listening = std::move(provider);
@@ -178,12 +188,16 @@ QString ConnectedDevicesFacade::render(bool withDurations) const
     const QHash<QByteArray, Registry::NumberedName> names = numbered();
 
     const qint64 now = m_registry.now();
+    const TransmitState transmit = m_transmit ? m_transmit() : TransmitState{};
     QJsonArray list;
     for (const Registry::Entry& entry : entries) {
         const Registry::NumberedName name = names.value(entry.deviceId);
         const bool away = entry.state == Registry::State::Away;
         const bool isPaired = inStore.contains(entry.deviceId);
         const bool hostsCore = entry.kind == Registry::Kind::Hosting;
+        const bool holds = !transmit.holderDeviceId.isEmpty()
+            && transmit.holderDeviceId == entry.deviceId;
+        const bool keyed = transmit.keyed;
         QString kind = entry.deviceKind;
         if (isPaired && !hostsCore) {
             for (const PairedDevice& device : paired) {
@@ -203,10 +217,14 @@ QString ConnectedDevicesFacade::render(bool withDurations) const
             // Task 13's revoke refuses a token window's id, and a hosting
             // desktop runs the Core.
             {QStringLiteral("revocable"), isPaired && !hostsCore},
-            {QStringLiteral("state"), away ? QStringLiteral("away") : QStringLiteral("listening")},
-            // Task 34 adds the holder; Task 73 the slices; Task 77
+            // Task 34: "transmitting" while the device holding transmit is on
+            // the air (an away holder is never keyed).
+            {QStringLiteral("state"), away              ? QStringLiteral("away")
+                                      : holds && keyed ? QStringLiteral("transmitting")
+                                                       : QStringLiteral("listening")},
+            // Task 34: the holder, keyed or not. Task 73 the slices; Task 77
             // transmittingOn.
-            {QStringLiteral("holdsTransmit"), false},
+            {QStringLiteral("holdsTransmit"), holds},
             {QStringLiteral("listeningOn"),
              m_listening ? m_listening(entry.deviceId) : QJsonArray{}},
         };
@@ -217,13 +235,15 @@ QString ConnectedDevicesFacade::render(bool withDurations) const
                      wholeSeconds(now - entry.connectedSinceMs));
             o.insert(QStringLiteral("awayForSeconds"),
                      away ? wholeSeconds(now - entry.awaySinceMs) : 0);
-            o.insert(QStringLiteral("transmittingForSeconds"), 0);
+            o.insert(QStringLiteral("transmittingForSeconds"),
+                     holds && keyed ? wholeSeconds(now - transmit.keyedSinceMs) : 0);
         } else {
             // What the durations are measured from: a change here is a
             // change to the list.
             o.insert(QStringLiteral("reportedActivityMs"), entry.reportedActivityMs);
             o.insert(QStringLiteral("connectedSinceMs"), entry.connectedSinceMs);
             o.insert(QStringLiteral("awaySinceMs"), away ? entry.awaySinceMs : 0);
+            o.insert(QStringLiteral("keyedSinceMs"), holds && keyed ? transmit.keyedSinceMs : 0);
         }
         list.append(o);
     }

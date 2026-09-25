@@ -70,6 +70,10 @@
 //               to standard output (the journal on a packaged Core). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic Claude
 //               Code.
+//   2026-09-25: iPhone app plan Task 34 (R-IOS-02): remote_transmit sets the
+//               station transmit gate and the receive-only policy. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic Claude
+//               Code.
 //   2026-09-25: iPhone app Task 71 (R-IOS-02): the announcement and the
 //               Bonjour record carry how many devices hold a place. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic Claude
@@ -202,11 +206,13 @@ bool DaemonApp::start(const DaemonConfig& cfg)
             cancelRadioDiscovery();
         }
     });
-    // R3 remote operation is receive-only. Install the station-side policy
-    // before controllers, peripherals, slices, or the radio can produce a
+    // iPhone app plan Task 34: the station-side receive-only policy is the
+    // config's remote_transmit = deny (allow by default: the station
+    // transmit gate then decides per session). Installed before
+    // controllers, peripherals, slices, or the radio can produce a
     // callback: the daemon owns real hardware even though its model has the
     // normal local role.
-    m_radioModel->setReceiveOnlyStationPolicy(true);
+    m_radioModel->setReceiveOnlyStationPolicy(!cfg.remoteTransmitAllowed);
     createTxAnalyzer();
     // R-R3-22 / R-R3-47: every station listener (4992, the Power Genius and
     // Tuner Genius discovery, the station TCI server) accepts connections on
@@ -596,6 +602,10 @@ void DaemonApp::startStationServer(const DaemonConfig& cfg)
     // iPhone app Task 12: nereusd.conf's pairing_lan_click, read by the
     // pairing window (Task 14) for the one-click pairing on this network.
     m_stationServer->setPairingLanClickAllowed(cfg.pairingLanClickAllowed);
+    // iPhone app plan Task 34: nereusd.conf's remote_transmit (allow by
+    // default): the station transmit gate, and the model's receive-only
+    // policy when it is deny.
+    m_stationServer->setRemoteTransmitAllowed(cfg.remoteTransmitAllowed);
     // iPhone app Task 17 (R-IOS-08): the status page, bound exactly where the
     // listener binds: `bind` above, listenerAddressFor(remote_bind), which is
     // DaemonConfig::listenAddressFor's rule (R-R3-26). A Core bound to one

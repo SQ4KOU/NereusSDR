@@ -81,6 +81,7 @@
         {"id": "session-short-name", "file": "sessions/short-name.json", "kind": "session", "requires": {"sessionHolderVersion": 1}},
         {"id": "session-grace-return", "file": "sessions/grace-return.json", "kind": "session", "requires": {"sessionHolderVersion": 1}},
         {"id": "session-verbs-session-leave", "file": "sessions/verbs-session-leave.json", "kind": "session", "requires": {"sessionHolderVersion": 1}},
+        {"id": "session-verbs-tx-set-tx-slice", "file": "sessions/verbs-tx-set-tx-slice.json", "kind": "session", "requires": {"remoteTxVersion": 1}},
         {"id": "session-two-devices", "file": "sessions/two-devices.json", "kind": "session", "requires": {"sessionHolderVersion": 1}},
         {"id": "session-foreign-write-refused", "file": "sessions/foreign-write-refused.json", "kind": "session", "requires": {"sessionHolderVersion": 1}},
         {"id": "session-held-for-device", "file": "sessions/held-for-device.json", "kind": "session", "requires": {"sessionHolderVersion": 1}},

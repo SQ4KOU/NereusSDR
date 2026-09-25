@@ -82,7 +82,9 @@ QList<Row> table()
         {holderOnAir(QStringLiteral("iPhone"), false), "holderOnAir",
          QStringLiteral("iPhone is on the air. Try again when they stop."), "takeTransmit"},
         {holderOnAir(QStringLiteral("Radio"), true), "holderOnAir",
-         QStringLiteral("The radio is on the air."), "takeTransmit"},
+         QStringLiteral("The radio is on the air. Try again when it stops."), "takeTransmit"},
+        {notHolder(), "notHolder", QStringLiteral("Take transmit on this device first."),
+         "takeTransmit"},
     };
 }
 

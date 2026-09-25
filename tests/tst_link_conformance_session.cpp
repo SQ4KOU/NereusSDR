@@ -40,6 +40,9 @@
 //                    run time, is paired before the client connects;
 //                    otherClients: iPhone app Task 71, other clients the
 //                    player signs in as paired devices, LinkFixtures.h)
+//   remoteTransmit   the Core's remote_transmit: "allow" or "deny"
+//                    ("deny", as every Core was before iPhone app plan
+//                    Task 34)
 //   otherPairedDevices
 //                    devices besides the runner's own paired before the
 //                    client connects (0); their keys are made at run time
@@ -109,6 +112,9 @@
 //                                    two (the catalogue's schema and
 //                                    object). AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app plan Task 34 (R-IOS-02):
+//                                    stationSetup "remoteTransmit".
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-25  J.J. Boyd / KG4VCF  iPhone app Task 71 (R-IOS-02):
 //                                    stationSetup "otherClients" in place
 //                                    of "preemptingClient"; an app's
@@ -168,7 +174,7 @@ const QStringList kSetupKeys{
     QStringLiteral("clientAnswersPings"), QStringLiteral("otherClients"),
     QStringLiteral("otherConnections"), QStringLiteral("token"),
     QStringLiteral("pairedDevice"),    QStringLiteral("otherPairedDevices"),
-    QStringLiteral("board"),
+    QStringLiteral("board"),           QStringLiteral("remoteTransmit"),
 };
 
 // The station a fixture's stationSetup describes. Members are declared in
@@ -298,6 +304,13 @@ QString buildStation(const QJsonObject& setup, Station* station, quint16 major)
     if (setup.value(QStringLiteral("media")).toBool(false)) {
         station->server->setMediaEnabled(true);
     }
+    // iPhone app plan Task 34: the station transmit gate's setting.
+    const QString remoteTransmit =
+        setup.value(QStringLiteral("remoteTransmit")).toString(QStringLiteral("deny"));
+    if (remoteTransmit != QStringLiteral("allow") && remoteTransmit != QStringLiteral("deny")) {
+        return QStringLiteral("stationSetup.remoteTransmit must be \"allow\" or \"deny\"");
+    }
+    station->server->setRemoteTransmitAllowed(remoteTransmit == QStringLiteral("allow"));
     if (station->harness) {
         // A StationServer makes its radio receive-only
         // (setReceiveOnlyStationPolicy), which turns PureSignal's readiness

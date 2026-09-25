@@ -129,6 +129,11 @@
 //               per session (setSessionOwner before each dispatch,
 //               endSessionOwner, resetSessionState). J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app plan Task 34 (R-IOS-02):
+//                                    tx.setTxSlice and the on-air refusals
+//                                    (setTransmitAccess), refusals with
+//                                    refusalCode and refusalFix values.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -141,6 +146,7 @@
 
 #include "core/session/SessionMessages.h"
 #include "core/session/StationDevicesFacade.h"
+#include "core/safety/TxRefusal.h"
 
 namespace NereusSDR {
 
@@ -226,6 +232,18 @@ public:
     /// may: "That slice belongs to <owner>. It can be changed only there."
     using SliceAccess = std::function<QString(const QByteArray& requester, int sliceId)>;
     void setSliceAccess(SliceAccess access) { m_sliceAccess = std::move(access); }
+
+    /// iPhone app plan Task 34 (R-IOS-02, R-IOS-13; ruling 7.4, D60): the
+    /// Core's transmit rules for the requester. onAir: the on-air refusal
+    /// for a change from `requester` while another device's holder is on
+    /// the air, or empty. txSlice: the refusal for tx.setTxSlice from
+    /// `requester` (the holder's verb, ruling 8.10), or empty. Unset, no
+    /// verb is refused by either rule.
+    struct TransmitAccess {
+        std::function<TxRefusal(const QByteArray& requester)> onAir;
+        std::function<TxRefusal(const QByteArray& requester)> txSlice;
+    };
+    void setTransmitAccess(TransmitAccess access) { m_transmitAccess = std::move(access); }
 
     /// R-IOS-01: every verb dispatch() routes, declared beside the routing
     /// rather than derived from it. A family routed by prefix ("ps3.",
@@ -320,6 +338,14 @@ private:
     /// Refuses (and answers) a verb whose sliceId names another device's
     /// slice. True when it did.
     bool refusedForAnotherDevice(const NereusSDR::SessionMessage& invoke);
+    /// Task 34: refuses (and answers) a change ruling 7.4 makes wait while
+    /// another device's holder is on the air. True when it did.
+    bool refusedWhileOnAir(const NereusSDR::SessionMessage& invoke);
+    /// A refusal's command.result: its sentence as the reason, and its code
+    /// and fix as the values refusalCode and refusalFix.
+    void emitRefusal(const QByteArray& verb, quint32 commandId, const TxRefusal& refusal);
+    void handleSetTxSlice(const NereusSDR::SessionMessage& invoke);
+    TransmitAccess m_transmitAccess;
     struct PendingPureSignalCommand {
         quint32 commandId;
         QByteArray verb;

@@ -134,11 +134,19 @@ TxRefusal holderOnAir(const QString& holderShortName, bool radioPtt)
 {
     // D60's words, the holder's short name in place of "The iPhone";
     // "The radio is on the air." while the radio's own PTT holds transmit
-    // (the several-devices design, ruling 7.4).
+    // (the several-devices design, ruling 7.4), with the Core's own words
+    // for the rest (RadioModel's refusal of a tuner switch while it
+    // transmits, and TunerApplet::onAirReason).
     return make(kHolderOnAir,
-                radioPtt ? QStringLiteral("The radio is on the air.")
+                radioPtt ? QStringLiteral("The radio is on the air. Try again when it stops.")
                          : QStringLiteral("%1 is on the air. Try again when they stop.")
                                .arg(holderShortName),
+                kFixTakeTransmit);
+}
+
+TxRefusal notHolder()
+{
+    return make(kNotHolder, QStringLiteral("Take transmit on this device first."),
                 kFixTakeTransmit);
 }
 

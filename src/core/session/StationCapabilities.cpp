@@ -50,6 +50,10 @@
 //               last in the minor-11 block, for a peer that declared
 //               sessionHolder. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 34 (R-IOS-02): remoteTxVersion, last,
+//               sent only to a peer whose hello declared remoteTx; txPermitted
+//               now the station transmit gate's answer. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationCapabilities.h"
@@ -162,6 +166,11 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         // a peer that declared the feature.
         if (sessionHolderEntry) {
             updates.append(intEntry("sessionHolderVersion", sessionHolderVersion));
+        }
+        // iPhone app plan Task 34: remote transmit, last, and only for a
+        // peer that declared the feature.
+        if (remoteTxEntry) {
+            updates.append(intEntry("remoteTxVersion", remoteTxVersion));
         }
     }
     return updates;
@@ -350,7 +359,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "pairingVersion"
                    || u.name == "stationCatalogVersion"
                    || u.name == "displayExtrasVersion"
-                   || u.name == "sessionHolderVersion") {
+                   || u.name == "sessionHolderVersion"
+                   || u.name == "remoteTxVersion") {
             // R-R3-47 / R-R3-22 / R-R3-48: sent in the same block as the
             // four above.
             caps.radioIdentityEntries = true;
@@ -378,6 +388,9 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                 } else if (u.name == "sessionHolderVersion") {
                     caps.sessionHolderEntry = true;
                     caps.sessionHolderVersion = version;
+                } else if (u.name == "remoteTxVersion") {
+                    caps.remoteTxEntry = true;
+                    caps.remoteTxVersion = version;
                 } else {
                     caps.remoteTgxlControlVersion = version;
                 }

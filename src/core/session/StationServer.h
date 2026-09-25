@@ -258,6 +258,15 @@
 //                                    leaves, is away past its 180 s or is
 //                                    revoked, and listeningOn. AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 34 (R-IOS-02, R-IOS-03, R-IOS-13): the
+//               station transmit gate (txPermitted per session, sent again when
+//               it changes; remoteTxVersion 1 for a peer declaring remoteTx),
+//               TransmitHolder and the keying gate on the model's
+//               MoxController, a dropped holder, releases on leave, revoke and
+//               the end of its 180 s, the on-air refusals, tx.setTxSlice, and
+//               remote_transmit in place of the blanket receive-only policy.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QHash>
@@ -278,6 +287,7 @@
 #include "core/session/LinkVersion.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StationCapabilities.h"
+#include "core/safety/StationTxGate.h"
 
 QT_BEGIN_NAMESPACE
 class QThread;
@@ -307,6 +317,7 @@ class StateMirror;
 class StationCatalog;
 class StationDevicesFacade;
 class TokenStore;
+class TransmitHolder;
 
 class StationServer : public QObject {
     Q_OBJECT
@@ -686,6 +697,27 @@ public:
     /// deviceAuth 1, at minor 11 (the design's ruling 10.1), and takes
     /// session.leave.
     int sessionHolderVersion() const { return 1; }
+
+    // ── iPhone app plan Task 34: transmit (R-IOS-02, R-IOS-03, R-IOS-13) ──
+
+    /// The config key remote_transmit (DaemonConfig): allow lets a session
+    /// the gate permits transmit (StationTxGate), and lifts the Core's
+    /// blanket receive-only policy; deny keeps it, and every session's
+    /// txPermitted is false. Deny by default, as every Core was before;
+    /// nereusd applies its config (default allow).
+    void setRemoteTransmitAllowed(bool allowed);
+    bool remoteTransmitAllowed() const { return m_txGate.remoteTransmitAllowed(); }
+    /// Who holds transmit (never null).
+    TransmitHolder* transmitHolder() const { return m_transmitHolder.get(); }
+    /// 1: txPermitted per session, the `tx.setTxSlice` verb, and the
+    /// on-air refusals, for a peer at minor 11 whose hello declared
+    /// remoteTx 1.
+    int remoteTxVersion() const { return 1; }
+    /// The gate's answer for `transport` (what its txPermitted says).
+    TxDecision txDecisionFor(SessionTransport* transport) const;
+    /// Releases transmit if `deviceId` holds it, through a transfer to
+    /// nobody (a fifth device replacing it, Task 41).
+    void releaseTransmitFor(const QByteArray& deviceId, const QString& reason);
     /// iPhone app Task 73 (ruling 5.2 step 2): the saved slices of
     /// `deviceId` that did not fit at its last admission (no free letter or
     /// no receiver), kept in its layout store and reported by Task 74's
@@ -780,6 +812,9 @@ private:
         /// id, for the dispatcher's owner string station:<sessionId>.
         QPointer<MirrorView> view;
         quint64 sessionId = 0;
+        /// iPhone app plan Task 34: the txPermitted this session was last
+        /// sent, so a change is sent again and nothing else is.
+        bool txPermittedSent = false;
 
         /// Pings sent since the last pong. Reset to 0 by every pong; the
         /// heartbeat tick declares death when it reaches maxMissedPongs().
@@ -924,6 +959,23 @@ private:
     /// Ruling 5.9: the plain refusal when `requester` names another
     /// device's slice, else empty.
     QString sliceRefusal(const QByteArray& requester, int sliceId) const;
+
+    // ── iPhone app plan Task 34: transmit ───────────────────────────────
+    SessionPeerInfo peerInfoFor(SessionTransport* transport) const;
+    /// Sends `capabilities` again to every session whose txPermitted
+    /// changed.
+    void publishTxPermitted();
+    /// The holder changed (who, keyed, away, a transfer): every session's
+    /// txPermitted, connectedDevices, and the model's transmit holder.
+    void onTransmitHolderChanged();
+    /// Ruling 7.4 (D60): the on-air refusal for a change from `requester`,
+    /// or empty (nobody on the air, or the holder's own change).
+    TxRefusal onAirRefusal(const QByteArray& requester) const;
+    /// The same for a property write to `objectKey`.`property`: a change to
+    /// the transmit path (an antenna, PureSignal) while the holder is on
+    /// the air.
+    TxRefusal onAirPropertyRefusal(const QByteArray& requester, const QByteArray& objectKey,
+                                   const QByteArray& property) const;
     QString ownedElsewhereReason(int sliceId) const;
     /// What `deviceId` owns, for connectedDevices.listeningOn.
     QJsonArray listeningOn(const QByteArray& deviceId) const;
@@ -1000,6 +1052,9 @@ private:
     QHash<QPair<QByteArray, quint32>, QPointer<SessionTransport>> m_resultRoutes;
     bool m_resultSentInDispatch = false;
     std::unique_ptr<ConnectedDevicesFacade> m_connectedDevices;
+    // iPhone app plan Task 34: who holds transmit, and who may transmit.
+    std::unique_ptr<TransmitHolder> m_transmitHolder;
+    StationTxGate m_txGate;
     // iPhone app Task 73: one marker per slice (Qt-parented to this).
     SliceMarkerSet* m_markers = nullptr;
     // True while a restored layout's owners are settled just before every

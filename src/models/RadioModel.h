@@ -138,6 +138,14 @@
 //                and the FreeDV Reporter frequency following the
 //                station-level active slice. NereusSDR-original. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 34 (R-IOS-02, R-IOS-03): the
+//                unkey-confirmed gate (UnkeyGate, unkeyGate()), which the TX
+//                slice arbiter's handoff while keyed waits for; TUNE asks the
+//                keying gate before it starts (admitStationKey); the MOX
+//                check names its refusal codes (stationReceiveOnly,
+//                micNotReady); stopAllTx's MOX = false goes to the
+//                controller. NereusSDR-original. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -295,6 +303,7 @@ class AmModulationAnalyzer;
 class RxChannel;
 // Phase 3F Sub-Epic C: TX-slice arbiter (single-TX invariant + RF-safe handoff).
 class TxSliceArbiter;
+class UnkeyGate;
 // 3M-1b L.1: forward declarations for mic-source strategy objects.
 class PcMicSource;
 class RadioMicSource;
@@ -1802,6 +1811,10 @@ public:
     // Used by the upcoming VfoWidget TX-badge click handoff path and any
     // future code that needs the authoritative TX-bound slice index.
     TxSliceArbiter* txSliceArbiter() const { return m_txSliceArbiter; }
+    /// iPhone app plan Task 34 (R-IOS-03): the unkey-confirmed gate (never
+    /// null). The arbiter's handoff while keyed and a transfer of transmit
+    /// (TransmitHolder) unkey through it.
+    UnkeyGate* unkeyGate() const { return m_unkeyGate; }
 
     // The slice bound to the transmitter — the source of every transmit
     // frequency. NOT activeSlice(), which is only the slice the operator is
@@ -5323,6 +5336,7 @@ private:
     // accessor and docs/architecture/2026-05-26-phase3f-sub-epic-c-tx-arbiter-lifecycle-plan.md
     // Task 6.
     TxSliceArbiter* m_txSliceArbiter{nullptr};
+    UnkeyGate* m_unkeyGate{nullptr};   // Task 34, Qt-parented to this
 
     // Phase 3F Sub-Epic D Task 13: receiver -> pan FFT fan-out router.
     // QObject child of RadioModel. Constructed in the ctor body after

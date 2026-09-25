@@ -239,6 +239,14 @@
 //                 filter presets follow the Core's (FilterPresetStore::
 //                 followStationSetting on stationSettingChanged). J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 34 (R-IOS-02, R-IOS-03): the
+//                unkey-confirmed gate (UnkeyGate, unkeyGate()), which the TX
+//                slice arbiter's handoff while keyed waits for; TUNE asks the
+//                keying gate before it starts (admitStationKey); the MOX
+//                check names its refusal codes (stationReceiveOnly,
+//                micNotReady); stopAllTx's MOX = false goes to the
+//                controller. NereusSDR-original. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -474,6 +482,7 @@ warren@wpratt.com
 #include "core/TwoToneController.h"
 // Phase 3F Sub-Epic C Task 6: TxSliceArbiter integration.
 #include "core/TxSliceArbiter.h"
+#include "core/safety/UnkeyGate.h"
 #include "core/FFTRouter.h"  // Phase 3F Sub-Epic D Task 13
 #include "models/FilterPresetStore.h"
 #include "core/accessories/N2adrPreset.h"
@@ -1303,6 +1312,30 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // (already copied into m_role above) shadows the role() accessor
     // inside this function body.
     m_txSliceArbiter->setRemote(m_role == Role::Remote);
+
+    // iPhone app plan Task 34 (R-IOS-03; remote design section 12.2): the
+    // unkey-confirmed gate. The normal unkey ends TUNE and two-tone their
+    // own way and any other key through MoxController; TimedOut (2000 ms
+    // without receive) has applied the emergency stop. The arbiter's
+    // handoff while keyed waits for it, local handoffs included.
+    m_unkeyGate = new UnkeyGate(
+        m_moxController,
+        [this]() {
+            if (m_isTuning) {
+                setTune(false);
+            } else if (m_twoToneController
+                       && (m_twoToneController->isActive()
+                           || m_twoToneController->isActivationInFlight())) {
+                m_twoToneController->setActive(false);
+            } else if (m_moxController) {
+                m_moxController->setMox(false);
+            }
+        },
+        [this](const QString& reason) { stopTransmitNow(reason); },
+        this);
+    if (m_role == Role::Local) {
+        m_txSliceArbiter->setUnkeyGate(m_unkeyGate);
+    }
 
     // RF-SAFETY: handing the transmitter to another slice moves the transmit
     // frequency, and with it the Alex TX low-pass. Push immediately rather
@@ -13371,9 +13404,15 @@ void RadioModel::installBandPlanMoxCheck()
         // remote refusals silent in exactly the path an operator watches.
         // Same reasoning recorded in the design addendum section 4.
         if (receiveOnlyTxOperationsBlocked()) {
-            return {false,
-                    QStringLiteral("Remote transmit controls are not available "
-                                   "from this Core yet.")};
+            // iPhone app plan Task 34: on a Core the policy is its
+            // remote_transmit = deny, named as the link names it.
+            safety::BandPlanGuard::MoxCheckResult refused{
+                false, m_role == Role::Remote
+                           ? QStringLiteral("Remote transmit controls are not available "
+                                            "from this Core yet.")
+                           : TxRefusals::stationReceiveOnly().text};
+            refused.refusalCode = TxRefusals::kStationReceiveOnly;
+            return refused;
         }
 
         const int regionInt = AppSettings::instance()
@@ -13410,10 +13449,13 @@ void RadioModel::installBandPlanMoxCheck()
         // controller does not try it again until it is released and
         // pressed again (MoxController::m_notQueuedHeld).
         if (pcCaptureGatesKeying() && !pcCaptureReady()) {
-            return {false,
-                    QStringLiteral("Microphone is not ready. Check Audio "
-                                   "settings and retry."),
-                    /*notQueued=*/true};
+            safety::BandPlanGuard::MoxCheckResult refused{
+                false,
+                QStringLiteral("Microphone is not ready. Check Audio "
+                               "settings and retry."),
+                /*notQueued=*/true};
+            refused.refusalCode = TxRefusals::kMicNotReady;   // Task 34
+            return refused;
         }
         return bandPlanResult;
     });
@@ -18007,6 +18049,14 @@ void RadioModel::setTune(bool on)
             emit tuneRefused(
                 QStringLiteral("Remote transmit controls are not available "
                                "from this Core yet."));
+            return;
+        }
+
+        // iPhone app plan Task 34 (ruling 8.5): TUNE is a station key. The
+        // keying gate is asked before anything is saved or switched, so a
+        // refused TUNE never touches another device's transmission.
+        if (m_moxController && !m_moxController->admitStationKey(PttMode::Manual)) {
+            emit tuneRefused(m_moxController->lastRefusal().text);
             return;
         }
 

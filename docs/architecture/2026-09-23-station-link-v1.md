@@ -570,6 +570,12 @@ accepted its pairing token.").
 
 ### 5.2 Resends during a session
 
+- **A changed transmit permission** (iPhone app plan Task 34). When a
+  session's `txPermitted` changes (its `snapshot.complete` went out, the
+  holder of transmit changed, the Core's `remote_transmit` changed), the
+  station sends it `capabilities` again. It does not resend
+  `settings.snapshot`.
+
 - **A late radio.** A station can accept a client before its radio is
   found. When the radio connects, the station sends `capabilities` and
   `settings.snapshot` again, one event-loop turn later, to every session
@@ -652,6 +658,12 @@ descriptions) is declared here, and asked with
 client asks `StationClient::stationDeclares(feature, minVersion)`. The station
 declares `deviceAuth` 1 (section 3.5), `pairing` 1 (section 3.6) and
 `sessionHolder` 1 (below) when its identity key is usable.
+
+**`remoteTx` 1** (iPhone app plan Task 34): the client understands remote
+transmit: `txPermitted`, the transmit refusals and `tx.setTxSlice`
+(section 18). A peer that declares it at minor 11 is sent
+`remoteTxVersion` (section 6.3); `txPermitted` is true only for a peer that
+declares it. The station does not declare it.
 
 **`sessionHolder` 1** (iPhone app plan Task 71; the several-devices
 design, ruling 10.1): the Core admits up to four devices at once (section
@@ -751,6 +763,7 @@ change shows as surface drift and as a change to this table.
 | `stationCatalogVersion` | 1 |
 | `displayExtrasVersion` | 1 |
 | `sessionHolderVersion` | 1 |
+| `remoteTxVersion` | 1 |
 
 <!-- /surface -->
 
@@ -848,7 +861,20 @@ When a feature is off, its version is 0:
   budget. A Core with one device on it sends that device what the table
   says.
 
-`txPermitted` is always false today: remote transmit is R4.
+- `remoteTxVersion`: sent only at agreed minor 11, last, and only to a
+  peer whose hello declared `remoteTx` 1; any other peer is sent no entry
+  (and reads 0). 1: `txPermitted` is the station transmit gate's answer
+  for that session, `tx.setTxSlice` (section 9.1) and the refusals of
+  section 18. The table above shows the value a declaring peer is sent.
+
+`txPermitted` (iPhone app plan Task 34) is true only for a session the
+station transmit gate permits (section 18.1): false until
+`snapshot.complete` has been sent to it, false for a peer whose hello did
+not declare `remoteTx`, false for every peer while the Core's
+`remote_transmit` is deny, and false while another device holds transmit.
+A session learns a change from a new `capabilities` message (section 5.2);
+nothing else is sent again. An older window that reads the flag without
+declaring `remoteTx` therefore never sees it true.
 
 ### 6.4 The capabilities message
 
@@ -920,6 +946,7 @@ identity entries from `hpsdrModel` onwards are present only at agreed minor
 | 51 | `stationCatalogVersion` | `i64` |
 | 52 | `displayExtrasVersion` | `i64` |
 | 53 | `sessionHolderVersion` | `i64` |
+| 54 | `remoteTxVersion` | `i64` |
 
 <!-- /surface -->
 
@@ -1737,8 +1764,14 @@ model that is not loaded) comes back later as a `delta`: the slice's
 noise-reduction status carries the reason, and a refused noise-reduction
 selection returns to the one before it.
 
-A property write never keys the transmitter: `txPermitted` is false and
-the transmit safety gates stay at the station (section 17).
+A property write never keys the transmitter: a write of `transmit`'s
+`mox` or `tune` is refused ("Transmit only from the transmit controls."),
+and the transmit safety gates stay at the station (section 18). With
+`remote_transmit` allow, the other `transmit` properties and the
+transmit-side settings keys are written only by a session `txPermitted`
+allows (refused otherwise with the gate's sentence); while another
+device's holder is on the air, a change to the transmit path is refused
+with the on-air sentence (section 18.4).
 
 ### 7.4 The catalogue
 
@@ -2049,6 +2082,7 @@ refused.
 | `requestIoBoardProbe` | none | `radioHardwareVersion` | 2 | 11 |
 | `setAlexRxAntenna` | `band` i64, `antenna` i64, `rxOnly` bool | `radioHardwareVersion` | 3 | 11 |
 | `setAlexBpfMode` | `chain` i64, `mode` i64 | `radioHardwareVersion` | 4 | 11 |
+| `tx.setTxSlice` | `sliceId` i64 | `remoteTxVersion` | 1 | 11 |
 | `nnr.setDiagnostics` | `sliceId` i64, `testMode` i64, `outputMode` i64 | `nnrVersion` | 1 | 5 |
 | `nnr.resetTuning` | `sliceId` i64 | `nnrVersion` | 1 | 5 |
 | `nnr.tryAgain` | `sliceId` i64 | `nnrVersion` | 1 | 11 |
@@ -3041,6 +3075,7 @@ same on every machine.
 | `two-devices` | Another device holds the Core's slice; this device is let in with a slice of its own (`slice:1`) and the other's as `marker:0`, naming its owner, with the `SliceMarker` schema; the other device is sent `marker:1` for this device's slice, and when this device tunes its slice the other sees the marker move, never the slice |
 | `foreign-write-refused` | This device holds slice 0 and another device slice 1: a `property.write` to `slice:1` and to `marker:1`, and `removeSlice` and `setActiveSliceById` naming slice 1, are refused "That slice belongs to Other device 1. It can be changed only there.", with no value sent back and nothing changed; its own slice it may make active |
 | `held-for-device` | Another device, alone on the Core, leaves with `session.leave`: its slice keeps running, held for it. This device, let in meanwhile, does not adopt it: it gets a slice of its own and the other's as a marker with `ownerAway` true; the other device signs in again and the marker's `ownerAway` turns false (the slice is its own again) |
+| `verbs-tx-set-tx-slice` | On a Core with `remote_transmit` allow (stationSetup `remoteTransmit`), a device that declares `remoteTx` is sent `txPermitted` false in its first `capabilities` and true in the `capabilities` sent again after `snapshot.complete`, each with `remoteTxVersion` 1; `tx.setTxSlice` with an argument it does not take is refused "The Core could not read this request."; with `sliceId` while nobody holds transmit it is refused "Take transmit on this device first." with the values `refusalCode` `notHolder` and `refusalFix` `takeTransmit`. Runs on the station alone |
 | `verbs-session-leave` | `session.leave` with an argument is refused, "The request to leave the Core was not understood."; without, it is accepted and the station closes the connection with no `session.end`. Runs on the station alone |
 | `heartbeat-answered`, `heartbeat-missed` | The heartbeat, above |
 | `connect-deadline` | No `auth.request` within 30000 ms: `session.end` "This app did not finish connecting to the Core in time.", `retryable` true |
@@ -3192,3 +3227,125 @@ how a fixture is written to what the code does.
   `isPlain`, whose terms would refuse an ordinary name such as "Grant's
   iPhone"; a sentence of the station's that carries one is checked with
   the name set aside.
+
+## 18. Transmit
+
+iPhone app plan Task 34 (R-IOS-02, R-IOS-03, R-IOS-13; the several-devices
+design, rulings 7.4, 8.1 to 8.5, 8.8, 8.13 and 8.15). This section is the
+Core's side of remote transmit that exists today. Keying from a device
+(`tx.key`, `tx.tune`, `tx.twoTone`) arrives with Task 35, `txState` with
+Task 39 and taking transmit (`tx.take`) with Task 77; until then no device
+can key the radio over the link.
+
+### 18.1 Who may transmit
+
+A session may transmit (`txPermitted`, section 6.3) when all of these hold,
+in this order; the first that fails is its refusal (18.3):
+
+1. the Core's `remote_transmit` is allow (`nereusd.conf`, default allow; a
+   desktop that hosts a Core is deny) (`stationReceiveOnly`);
+2. its hello declared `remoteTx` 1 at minor 11 (`notReady`, "Update this
+   app");
+3. it signed in with a paired device's key, not the older token
+   (`notReady`, "Pair this device");
+4. `snapshot.complete` has been sent to it (`notReady`);
+5. transmit is unheld, or its device holds it (`otherDeviceHolds`,
+   `changingHands`, `stopNotConfirmed`).
+
+With `remote_transmit` deny the Core is receive-only, as every Core was
+before: it refuses every key, its own radio's PTT included.
+
+### 18.2 The holder of transmit
+
+One device at a time holds transmit, keyed or not; it starts unheld. The
+radio's own PTT (its microphone or a footswitch) on unheld transmit makes
+the Core's own position the holder, named "Radio". A person's key on
+unheld transmit makes its device the holder; a program's key never does.
+While another device holds transmit, every other device's key is refused.
+
+Every change of holder, and every release, is a transfer: every key from
+every source is refused ("Transmit is changing hands."); a keyed holder is
+unkeyed through the unkey-confirmed gate (receive reached, or 2000 ms and
+the transmitter stopped at once); if the radio still reads keyed the Core
+stops it again and waits up to 2000 ms more, and if it still reads keyed
+transmit ends unheld and every key is refused ("The radio did not confirm
+it stopped transmitting.") until it reads off. A new holder always starts
+unkeyed, and VOX is turned off at every change of holder.
+
+A holder whose link drops is unkeyed at once, keys refused until the radio
+reads off, and keeps transmit, away and unkeyed, for its 3 minutes; the
+same device signing in again within them still holds it, unkeyed, and keys
+with its next press. At the end of its 3 minutes, on `session.leave` and
+on its revocation, transmit becomes unheld through a transfer.
+
+`connectedDevices` (section 7.1) shows it: `holdsTransmit` is true for the
+holder, keyed or not; `state` is `transmitting` while it is on the air, and
+`transmittingForSeconds` how long.
+
+### 18.3 Refusals
+
+A refused key, `tx.setTxSlice` or on-air change carries one of these. A
+`command.result` refused this way has the sentence as its `reason` and, in
+its `values`, `refusalCode` (the code) and `refusalFix` (the fix, or empty)
+as `utf8` entries; a `property.result` and `settings.reject` carry the
+sentence. A client shows the sentence as sent and may offer the fix.
+"<holder>" is the holder's name as `connectedDevices` numbers it, or
+"Radio"; "<short name>" is its short name.
+
+| Code | Sentence | Fix |
+| --- | --- | --- |
+| `notReady` | This device is still connecting to the Core. Try again in a moment. | |
+| `notReady` | Update this app to transmit through this Core. | |
+| `notReady` | Pair this device with the Core to transmit through it. | |
+| `stationReceiveOnly` | This Core is set to receive only. | |
+| `bandPlan` | The band plan's own sentence (for example "Frequency outside TX-allowed range"), or "The band plan does not allow transmitting here." | |
+| `interlock` | The radio's transmit inhibit input is holding transmit off. | |
+| `interlock` | The transmit interlock is holding transmit off. Check it in Setup. | |
+| `ampStandby` | The amplifier is in standby. Operate it, or change the interlock in Setup. | `operateAmp` |
+| `paProtection` | The amplifier has tripped. Reset it before transmitting. | |
+| `swr` | The SWR is over the interlock's limit. Check the antenna, or change the interlock in Setup. | |
+| `otherDeviceHolds` | <holder> has the transmitter. | `takeTransmit` |
+| `programNeedsTransmit` | A program can transmit only while this device has transmit. Take transmit here first. | `takeTransmit` |
+| `micNotReady` | Microphone is not ready. Check Audio settings and retry. | |
+| `changingHands` | Transmit is changing hands. Try again in a moment. | |
+| `stopNotConfirmed` | The radio did not confirm it stopped transmitting. | |
+| `holderOnAir` | <short name> is on the air. Try again when they stop. ("The radio is on the air. Try again when it stops." while the radio's own PTT, or the Core's own keys, hold transmit) | `takeTransmit` |
+| `notHolder` | Take transmit on this device first. | `takeTransmit` |
+
+`changingHands` and `stopNotConfirmed` are the several-devices design's two
+sentences without codes; `holderOnAir` is ruling 7.4's; `notHolder` answers
+`tx.setTxSlice` while nobody holds transmit, a case the design does not
+settle.
+
+### 18.4 While the holder is on the air
+
+While the holder is keyed, these changes from any other device are refused
+with `holderOnAir`, never asked; the holder's own change is not refused by
+this rule, and with the holder unkeyed none is:
+
+- the transmit path: the amplifier (`configurePgxl`, `disconnectPgxl`,
+  `setPgxlConnectionSettings`, `setPgxlName`, `setPgxlHardware`,
+  `setPgxlNetwork`, `savePgxlSettings`), the tuner (`configureTgxl`,
+  `disconnectTgxl`, `setTgxlName`, `setTgxlNetwork`, `saveTgxlSettings`,
+  `setTgxlAntenna`, `setTgxlOperate`, `setTgxlBypass`, and the `tuner`
+  object's operate, bypass and antenna and the `amplifier` object's
+  operate), an antenna (`setAlexRxAntenna`, a slice's `rxAntenna` or
+  `txAntenna`, the `alexAntennas` object), PureSignal (the
+  `pureSignalSettings` object, `transmit`'s `pureSig`, and every `ps3.*`
+  verb but `ps3.twoTone` and `ps3.subscribeDisplay`), the interlock
+  (`setTxInterlockPolicy`) and the power cap (`setPgxlPowerCap`);
+- a sample-rate change on a Protocol 1 radio (`requestSliceSampleRate`),
+  which stops the radio's data flow;
+- a C-Tune centre change on the receiver of the holder's transmit slice
+  (`requestStreamCentre`).
+
+### 18.5 `tx.setTxSlice`
+
+`tx.setTxSlice {sliceId}` moves the transmit flag to the slice with that
+id (never a list position). It is the holder's: from another device while
+transmit is held it is refused `otherDeviceHolds`, and while nobody holds
+transmit `notHolder`. While the holder is keyed the transmitter is unkeyed
+through the unkey-confirmed gate first and the flag moves once receive is
+reached; unkeyed it moves at once. The result is `accepted` when the move
+is asked; the slices' `txSlice` deltas carry the move.
+

@@ -88,6 +88,8 @@ public:
         Source source{Source::Device};
         qint64 sinceMs{0};
         bool keyed{false};
+        /// When the current key started (while keyed).
+        qint64 keyedSinceMs{0};
         bool away{false};
     };
 

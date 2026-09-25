@@ -10,6 +10,8 @@
 // 2026-09-24: iPhone app Task 17 (R-IOS-08): status_page, status_port and
 // state_directory, J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 // Code.
+// 2026-09-25: iPhone app plan Task 34 (R-IOS-02): remote_transmit, J.J.
+// Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "DaemonConfig.h"
@@ -176,6 +178,18 @@ DaemonConfig DaemonConfig::fromFile(const QString& path, QString* errorOut)
                 cfg.pairingLanClickAllowed = true;
                 qCWarning(lcApp) << "nereusd.conf" << path << "line" << lineNo
                                   << "pairing_lan_click must be allow or deny, keeping allow:"
+                                  << value;
+            }
+        } else if (key == QLatin1String("remote_transmit")) {
+            // iPhone app plan Task 34: allow or deny; anything else denies.
+            if (value.compare(QLatin1String("allow"), Qt::CaseInsensitive) == 0) {
+                cfg.remoteTransmitAllowed = true;
+            } else if (value.compare(QLatin1String("deny"), Qt::CaseInsensitive) == 0) {
+                cfg.remoteTransmitAllowed = false;
+            } else {
+                cfg.remoteTransmitAllowed = false;
+                qCWarning(lcApp) << "nereusd.conf" << path << "line" << lineNo
+                                  << "remote_transmit must be allow or deny, denying:"
                                   << value;
             }
         } else if (key == QLatin1String("status_page")) {
