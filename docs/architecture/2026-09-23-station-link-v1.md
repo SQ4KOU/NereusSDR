@@ -714,7 +714,7 @@ change shows as surface drift and as a change to this table.
 | `deviceAdminVersion` | 1 |
 | `pairingVersion` | 1 |
 | `stationCatalogVersion` | 1 |
-| `displayExtrasVersion` | 1 |
+| `displayExtrasVersion` | 2 |
 | `transmitSettingsVersion` | 6 |
 | `bandSelectVersion` | 1 |
 
@@ -790,13 +790,17 @@ When a feature is off, its version is 0:
   Core that has it: the read-only `catalog` object (section 7.4) goes to
   every peer at minor 11. A Core from before it sends neither the entry
   nor the object.
-- `displayExtrasVersion`: sent only at agreed minor 11. 1 while the
-  Core's media is enabled: a `subscribe` operation (section 11) may then
+- `displayExtrasVersion`: sent only at agreed minor 11. 2 while the
+  Core's media is enabled. At 1 a `subscribe` operation (section 11) may
   carry the display extras fields, and the Core sends an NSDX datagram
   beside each NSDC frame of an endpoint that asks for a section
-  ([display extras v1](2026-09-23-display-extras-v1.md)). 0 otherwise; a
-  Core from before it sends no entry and refuses the fields as keys it
-  cannot read.
+  ([display extras v1](2026-09-23-display-extras-v1.md)); 2 adds the
+  media control operation `clarity-retune`, Clarity's Re-tune for one
+  endpoint ([remote media control
+  v1](2026-09-20-remote-media-control-v1.md), "Clarity re-tune"). The
+  extras need 1, so a client that compares the version as a minimum reads
+  2 as it read 1. 0 otherwise; a Core from before it sends no entry and
+  refuses the fields as keys it cannot read.
 - `transmitSettingsVersion`: sent only at agreed minor 11, and 0 on a
   station with no radio model. At 1 a receive-only Core takes a
   `property.write` on `transmit` of any property except the keying set
@@ -2418,6 +2422,7 @@ Client to station:
 | --- | --- | --- | --- | --- |
 | `audio` | `remoteMediaVersion` | `connectionId`, `enabled`, `op`, `revision` | `profile` with audioProfileVersion, remoteAudioStatusVersion | none |
 | `candidate` | `remoteMediaVersion` | `candidate`, `connectionId`, `mid`, `op` | none | none |
+| `clarity-retune` | `displayExtrasVersion` | `connectionId`, `endpointId`, `op` | none | none |
 | `clock-probe` | `audioClockVersion` | `connectionId`, `id`, `op`, `t0` | none | none |
 | `description` | `remoteMediaVersion` | `connectionId`, `op`, `sdp`, `type` | none | none |
 | `headphones-audio` | `headphonesMixVersion` | `connectionId`, `enabled`, `op`, `profile`, `revision` | none | none |

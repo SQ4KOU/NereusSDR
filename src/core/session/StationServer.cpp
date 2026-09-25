@@ -287,6 +287,9 @@
 //   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06: notchControlVersion
 //                                    2 (notch.addAtSlice).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06:
+//                                    displayExtrasVersion 2 (clarity-retune).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1338,7 +1341,8 @@ int StationServer::stationCatalogVersion() const
 int StationServer::displayExtrasVersion() const
 {
     // The extras travel on the media display channel, so they come with it.
-    return m_mediaEnabled ? 1 : 0;
+    // 2 (R-IOS-27, R-IOS-06): also the clarity-retune operation.
+    return m_mediaEnabled ? 2 : 0;
 }
 
 int StationServer::deviceAdminVersion() const

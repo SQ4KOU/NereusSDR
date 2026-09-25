@@ -254,6 +254,45 @@ history before post-gap samples are processed. Endpoint cadence follows an
 advancing schedule with bounded early-jitter tolerance; it does not restart
 its entire interval after each arrival or catch up with a burst after a stall.
 
+### Clarity re-tune (clarity-retune)
+
+Capability `displayExtrasVersion=2` (R-IOS-27, R-IOS-06; display extras
+v1 is its version 1) at agreed minor 11 adds GUI-to-Core `clarity-retune`,
+with exactly `op`, `connectionId` and `endpointId` (a nonzero uint32).
+It is Clarity's Re-tune for that endpoint: the Core calls
+`ClarityController::retuneNow` on the endpoint's own Clarity controller,
+the one a subscription whose `waterfallLevels` mode is `"clarity"` owns
+([display extras v1](2026-09-23-display-extras-v1.md)), which is what the
+desktop's Re-tune button does for its pan. The next noise floor re-anchors
+the smoothing and the waterfall levels at once, inside the poll window,
+and the new levels reach the app in the endpoint's next NSDX datagram.
+Other endpoints are untouched. `DaemonMediaController::handleClarityRetune`
+is the code.
+
+A re-tune that runs is not answered. The Core refuses one it cannot run
+with Core-to-GUI `rejected` (its five fields, above) naming the endpoint,
+with `revision` 0 and one of these reasons:
+
+| Reason | When |
+| --- | --- |
+| "That display is not one this app opened." | `connectionId` is not the active media peer's |
+| "That display is no longer open on the Core." | no live endpoint has that `endpointId` |
+| "Clarity is not setting this display's waterfall levels." | the endpoint's `waterfallLevels` mode is not `"clarity"`, or it asked for no display extras |
+
+No other `rejected` names an endpoint with `revision` 0 (a subscription's
+revision is never 0, and the whole-peer refusal has `endpointId` 0 too), so
+this refusal retires nothing: the endpoint stays open and its frames keep
+coming. The budget wire does not change this: the refusal is still
+`rejected`, never `allocation-result`, because it answers no subscribe or
+unsubscribe. A request of any other shape (another key, an `endpointId` of
+0 or not a whole number, a `connectionId` that is not a canonical UUID) is
+ignored and not answered.
+
+A peer the Core did not tell `displayExtrasVersion` 2 (an older Core, or a
+session below minor 11, which is never told the capability) gets exactly
+today's behaviour: the operation goes where an unknown operation always
+has, and nothing is answered. `tst_display_extras` holds all of this.
+
 ## Receiver audio (receiver-audio and receiver-audio-context)
 
 Capability `receiverAudioVersion=1` (R-R3-43) negotiates it; the session

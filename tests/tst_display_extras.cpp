@@ -12,7 +12,16 @@
 //     NSDX datagram beside each NSDC frame, calibration and normalise move
 //     the bins, and one that does not ask gets exactly the bytes the Core
 //     sent before display extras (a golden recorded from 535dd412).
+//   - displayExtrasVersion 2 (R-IOS-27, R-IOS-06): the clarity-retune
+//     operation re-tunes that endpoint's Clarity as the desktop's Re-tune
+//     button does, leaves the others alone, refuses what it cannot do, and
+//     is not there for an older peer.
 //
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06: clarity-retune
+//                                    and displayExtrasVersion 2.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -23,6 +32,7 @@
 #include "core/HpsdrModel.h"
 #include "core/session/StationCapabilities.h"
 #include "core/session/StationClient.h"
+#include "core/session/SessionMessages.h"
 #include "core/session/StationServer.h"
 #include "core/session/media/DaemonMediaController.h"
 #include "core/session/media/DisplayBudget.h"
@@ -35,6 +45,7 @@
 #include "fakes/LoopbackTransport.h"
 #include "fakes/UpgradedCoreToken.h"
 #include "OlderPeerDisplayRun.h"
+#include "OperatorWording.h"
 #include "gui/SpectrumWidget.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -55,6 +66,41 @@ using namespace NereusSDR;
 namespace {
 
 constexpr char kConnectionId[] = "11111111-2222-4333-8444-555555555555";
+constexpr char kOtherConnectionId[] = "11111111-2222-4333-8444-666666666666";
+const QString kNotThisAppsDisplay = QStringLiteral("That display is not one this app opened.");
+const QString kDisplayClosed = QStringLiteral("That display is no longer open on the Core.");
+const QString kNotClarity =
+    QStringLiteral("Clarity is not setting this display's waterfall levels.");
+
+QJsonObject clarityRetune(quint32 endpointId, const char* connectionId = kConnectionId)
+{
+    return {{QStringLiteral("op"), QStringLiteral("clarity-retune")},
+            {QStringLiteral("connectionId"), QLatin1String(connectionId)},
+            {QStringLiteral("endpointId"), static_cast<qint64>(endpointId)}};
+}
+
+QJsonObject levels(const QString& mode)
+{
+    return {{QStringLiteral("waterfallLevels"),
+             QJsonObject{{QStringLiteral("mode"), mode},
+                         {QStringLiteral("lowDbm"), -122.0},
+                         {QStringLiteral("highDbm"), -62.0},
+                         {QStringLiteral("offsetDb"), 0}}}};
+}
+
+int countOf(const QSignalSpy& messages, const QString& op, quint32 endpointId)
+{
+    int count = 0;
+    for (const QList<QVariant>& args : messages) {
+        const QJsonObject message = args.at(0).toJsonObject();
+        if (message.value(QStringLiteral("op")) == op
+            && static_cast<quint32>(message.value(QStringLiteral("endpointId")).toInteger())
+                == endpointId) {
+            ++count;
+        }
+    }
+    return count;
+}
 constexpr float kToleranceDb = 0.01f;
 
 // ── A recorded spectrum sequence ────────────────────────────────────────
@@ -836,14 +882,14 @@ private slots:
         StationCapabilities caps;
         caps.radioIdentityEntries = true;
         caps.stationCatalogVersion = 1;
-        caps.displayExtrasVersion = 1;
+        caps.displayExtrasVersion = 2;
         const QList<MirrorUpdate> updates = caps.toUpdates();
         // R-R3-49's transmitSettingsVersion follows it, then R-IOS-27's
         // bandSelectVersion.
         QCOMPARE(updates.at(updates.size() - 3).name, QByteArray("displayExtrasVersion"));
         QCOMPARE(updates.at(updates.size() - 2).name, QByteArray("transmitSettingsVersion"));
         QCOMPARE(updates.last().name, QByteArray("bandSelectVersion"));
-        QCOMPARE(StationCapabilities::fromUpdates(updates).displayExtrasVersion, 1);
+        QCOMPARE(StationCapabilities::fromUpdates(updates).displayExtrasVersion, 2);
         // An older peer's block (no minor-11 entries) carries none.
         StationCapabilities older;
         older.displayExtrasVersion = 1;
@@ -851,11 +897,12 @@ private slots:
             QVERIFY(update.name != QByteArray("displayExtrasVersion"));
         }
         Harness harness;
-        QCOMPARE(harness.server.displayExtrasVersion(), 1);
+        // 2 (R-IOS-27, R-IOS-06): the extras and clarity-retune.
+        QCOMPARE(harness.server.displayExtrasVersion(), 2);
         QVERIFY(!harness.server.displayExtrasAvailable()); // no session yet
         QVERIFY(harness.establishSession());
         QVERIFY(harness.server.displayExtrasAvailable());
-        QCOMPARE(harness.client.capabilities().displayExtrasVersion, 1);
+        QCOMPARE(harness.client.capabilities().displayExtrasVersion, 2);
         harness.finish();
     }
 
@@ -1129,6 +1176,186 @@ private slots:
         QVERIFY(harness.controller.spectrumGrant(9).has_value());
         Q_UNUSED(controls);
         harness.finish();
+    }
+
+    // R-IOS-27, R-IOS-06: clarity-retune does for one endpoint what the
+    // desktop's Re-tune button does for its pan (ClarityController::
+    // retuneNow): the next floor re-anchors the smoothing and the levels at
+    // once instead of easing toward it, inside the poll window. Observed the
+    // way tst_clarity_controller observes retuneNow: a desktop controller fed
+    // the same floors and re-tuned at the same point ends where the
+    // endpoint's does. Another Clarity endpoint keeps easing.
+    void clarityRetuneReTunesThatEndpointOnly()
+    {
+        Harness harness;
+        QVERIFY(harness.establishSession());
+        QSignalSpy controls(&harness.client, &StationClient::mediaControlReceived);
+        QVERIFY(harness.startReadyPeer());
+        const double centreHz = harness.radio.streamCentreHz(harness.streamIndex);
+        const quint32 epoch = harness.client.sessionEpoch();
+        QVERIFY(harness.client.sendMediaControl(
+            withFields(subscription(7, harness.sliceId, centreHz), levels(QStringLiteral("clarity"))),
+            epoch));
+        QVERIFY(harness.client.sendMediaControl(
+            withFields(subscription(8, harness.sliceId, centreHz), levels(QStringLiteral("clarity"))),
+            epoch));
+        QVERIFY(harness.client.sendMediaControl(
+            withFields(subscription(9, harness.sliceId, centreHz), levels(QStringLiteral("agc"))),
+            epoch));
+        QTRY_COMPARE(harness.controller.activeEndpointCount(), 3);
+        DisplayExtrasProcessor* const seven = harness.controller.displayExtrasForTest(7);
+        DisplayExtrasProcessor* const eight = harness.controller.displayExtrasForTest(8);
+        QVERIFY(seven && seven->clarity() && eight && eight->clarity());
+
+        ClarityController desktop;
+        desktop.setEnabled(true);
+        const auto feed = [&](float floor, qint64 nowMs) {
+            seven->feedNoiseFloor(floor, nowMs);
+            eight->feedNoiseFloor(floor, nowMs);
+            desktop.feedNoiseFloor(floor, nowMs);
+        };
+        feed(-130.0f, 0);
+        feed(-100.0f, 1000);   // eases toward -100
+        const float eased = eight->clarity()->smoothedFloor();
+        const auto easedLevels = eight->waterfallLevels();
+        QVERIFY(eased > -130.0f && eased < -100.0f);
+        QCOMPARE(seven->clarity()->smoothedFloor(), eased);
+
+        // The device's Re-tune for endpoint 7, then a refused one for
+        // endpoint 9 (not Clarity) so its answer marks that 7's has run.
+        QVERIFY(harness.client.sendMediaControl(clarityRetune(7), epoch));
+        QVERIFY(harness.client.sendMediaControl(clarityRetune(9), epoch));
+        QTRY_COMPARE(countOf(controls, QStringLiteral("rejected"), 9), 1);
+        desktop.retuneNow();   // the desktop's Re-tune button
+
+        feed(-110.0f, 1100);   // inside the 500 ms poll window
+        QCOMPARE(seven->clarity()->smoothedFloor(), -110.0f);
+        QCOMPARE(seven->clarity()->smoothedFloor(), desktop.smoothedFloor());
+        QCOMPARE(seven->waterfallLevels().first, desktop.lastLow());
+        QCOMPARE(seven->waterfallLevels().second, desktop.lastHigh());
+        // Endpoint 8 was not re-tuned: the floor inside its poll window is
+        // not taken, and its levels stand.
+        QCOMPARE(eight->clarity()->smoothedFloor(), eased);
+        QVERIFY(eight->waterfallLevels() == easedLevels);
+
+        // A Re-tune that runs is not answered, and retires nothing.
+        QCOMPARE(countOf(controls, QStringLiteral("rejected"), 7), 0);
+        QCOMPARE(countOf(controls, QStringLiteral("allocation-result"), 7),
+                 countOf(controls, QStringLiteral("allocation-result"), 8));
+        QCOMPARE(harness.controller.activeEndpointCount(), 3);
+        harness.finish();
+    }
+
+    // Each refusal is a `rejected` naming the endpoint with revision 0, in
+    // plain words, and closes nothing. A request of another shape is
+    // ignored.
+    void clarityRetuneRefusesWhatItCannotDo()
+    {
+        Harness harness;
+        QVERIFY(harness.establishSession());
+        QSignalSpy controls(&harness.client, &StationClient::mediaControlReceived);
+        QVERIFY(harness.startReadyPeer());
+        const double centreHz = harness.radio.streamCentreHz(harness.streamIndex);
+        const quint32 epoch = harness.client.sessionEpoch();
+        QVERIFY(harness.client.sendMediaControl(
+            withFields(subscription(7, harness.sliceId, centreHz), levels(QStringLiteral("clarity"))),
+            epoch));
+        QVERIFY(harness.client.sendMediaControl(
+            withFields(subscription(9, harness.sliceId, centreHz), levels(QStringLiteral("manual"))),
+            epoch));
+        QVERIFY(harness.client.sendMediaControl(subscription(10, harness.sliceId, centreHz), epoch));
+        QTRY_COMPARE(harness.controller.activeEndpointCount(), 3);
+
+        const auto refusal = [&](const QJsonObject& request, quint32 endpointId) {
+            const int before = countOf(controls, QStringLiteral("rejected"), endpointId);
+            if (!harness.client.sendMediaControl(request, epoch)) { return QJsonObject(); }
+            if (!QTest::qWaitFor([&] {
+                    return countOf(controls, QStringLiteral("rejected"), endpointId) > before;
+                }, 5000)) {
+                return QJsonObject();
+            }
+            return messageFor(controls, QStringLiteral("rejected"), endpointId);
+        };
+        const auto expectRefused = [&](const QJsonObject& message, const char* connectionId,
+                                       quint32 endpointId, const QString& reason) {
+            QCOMPARE(message.size(), 5);
+            QCOMPARE(message.value(QStringLiteral("connectionId")).toString(),
+                     QLatin1String(connectionId));
+            QCOMPARE(message.value(QStringLiteral("endpointId")).toInteger(), qint64(endpointId));
+            QCOMPARE(message.value(QStringLiteral("revision")).toInteger(), qint64(0));
+            QCOMPARE(message.value(QStringLiteral("reason")).toString(), reason);
+        };
+        expectRefused(refusal(clarityRetune(42), 42), kConnectionId, 42, kDisplayClosed);
+        expectRefused(refusal(clarityRetune(9), 9), kConnectionId, 9, kNotClarity);
+        expectRefused(refusal(clarityRetune(10), 10), kConnectionId, 10, kNotClarity);
+        expectRefused(refusal(clarityRetune(7, kOtherConnectionId), 7), kOtherConnectionId, 7,
+                      kNotThisAppsDisplay);
+
+        // Not one this Core reads: nothing comes back.
+        QJsonObject extraKey = clarityRetune(7);
+        extraKey.insert(QStringLiteral("revision"), 1);
+        QJsonObject zero = clarityRetune(0);
+        QJsonObject text = clarityRetune(7);
+        text.insert(QStringLiteral("endpointId"), QStringLiteral("7"));
+        for (const QJsonObject& request : {extraKey, zero, text}) {
+            QVERIFY(harness.client.sendMediaControl(request, epoch));
+        }
+        // A request after them is answered, so they have been read.
+        expectRefused(refusal(clarityRetune(43), 43), kConnectionId, 43, kDisplayClosed);
+        QCOMPARE(countOf(controls, QStringLiteral("rejected"), 7), 1);   // the other connection's
+        QCOMPARE(countOf(controls, QStringLiteral("rejected"), 0), 0);
+
+        // No refusal closed a display.
+        QCOMPARE(harness.controller.activeEndpointCount(), 3);
+        for (const QString& reason : {kNotThisAppsDisplay, kDisplayClosed, kNotClarity}) {
+            QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
+            QVERIFY2(OperatorWording::coreCalledStationIn(reason).isEmpty(), qPrintable(reason));
+        }
+        harness.finish();
+    }
+
+    // A peer the Core did not tell displayExtrasVersion 2 (one below minor
+    // 11 is never told the capability) gets today's behaviour: the operation
+    // goes where an unknown one always has, and nothing comes back.
+    void clarityRetuneIsNotThereForAnOlderPeer()
+    {
+        Harness harness;
+        auto* app = new Test::LoopbackTransport(QStringLiteral("app"), this);
+        auto* station = new Test::LoopbackTransport(QStringLiteral("station"), &harness.server);
+        station->linkTo(app);
+        harness.server.acceptTransport(station);
+        QVERIFY(QTest::qWaitFor([app] { return !app->received().isEmpty(); }, 5000));
+        app->sendText(SessionMessages::encode(SessionMessages::hello(
+            kSessionProtocolMajor, quint16(kRadioIdentitySessionProtocolMinor - 1), 0,
+            QStringLiteral("NereusSDR"))));
+        app->sendText(SessionMessages::encode(SessionMessages::authRequest(harness.server.token())));
+        QVERIFY(QTest::qWaitFor(
+            [app] { return app->receivedKinds().contains(QByteArrayLiteral("snapshot.complete")); },
+            5000));
+        QVERIFY(harness.server.mediaAvailable());
+        QVERIFY(!harness.server.displayExtrasAvailable());
+        const auto sendMedia = [app](const QJsonObject& payload) {
+            SessionMessage message;
+            message.kind = SessionMessageKind::MediaControl;
+            message.mediaPayload = payload;
+            app->sendText(SessionMessages::encode(message));
+        };
+        sendMedia({{QStringLiteral("op"), QStringLiteral("start")},
+                   {QStringLiteral("connectionId"), QLatin1String(kConnectionId)}});
+        QVERIFY(QTest::qWaitFor([&harness] { return !harness.mediaTransport.isNull(); }, 10'000));
+        harness.mediaTransport->becomeReady();
+        const qsizetype before = app->received().size();
+        sendMedia(clarityRetune(42));
+        QTest::qWait(300);
+        for (qsizetype i = before; i < app->received().size(); ++i) {
+            SessionMessage message;
+            if (SessionMessages::decode(app->received().at(i), &message)
+                && message.kind == SessionMessageKind::MediaControl) {
+                QVERIFY2(message.mediaPayload.value(QStringLiteral("op"))
+                             != QJsonValue(QStringLiteral("rejected")),
+                         "an older peer was answered");
+            }
+        }
     }
 };
 

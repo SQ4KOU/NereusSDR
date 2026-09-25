@@ -104,6 +104,9 @@
 //   2026-09-25 - R-IOS-27, R-IOS-06: notchControlVersion 2 documented
 //                (notch.addAtSlice). J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-25 - R-IOS-27, R-IOS-06: displayExtrasVersion 2 documented
+//                (clarity-retune). J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -220,6 +223,8 @@ struct StationCapabilities {
     /// calibration and averaging applied at the Core; the Core then sends
     /// an NSDX datagram beside each NSDC frame (display extras v1). Sent
     /// last in the same minor-11 block, after stationCatalogVersion.
+    /// 2 (R-IOS-27, R-IOS-06) adds the media control operation
+    /// clarity-retune, Clarity's Re-tune for one endpoint.
     int displayExtrasVersion = 0;
     /// R-R3-49 (parity Task 1): 1 means a receive-only Core takes a
     /// `transmit` write of any property but the keying set (mox, tune,
