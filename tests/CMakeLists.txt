@@ -6908,6 +6908,14 @@ nereus_add_test(tst_mirror_lifecycle)
 # wire input.
 nereus_add_test(tst_mirror_snapshot)
 
+# iPhone app Task 72 (R-IOS-02; the several-devices design, rulings 5.6 and
+# 5.7): a MirrorView per device over one StateMirror. Echo per writer (a
+# shared blanker changed by A reaches B's view and not A's; WriterScope; a
+# write with no view; the single-session API unchanged), and each view's own
+# coalescer and burst (another view's pending deltas survive an attach; the
+# burst goes to its own view; nothing before attach or after close).
+nereus_add_test(tst_mirror_view)
+
 # Remote Daemon R2, Task 11: command verbs and results. Exercises the
 # SessionMessages CommandInvoke/CommandResult codec plus a real
 # SessionCommandDispatcher round trip over the in-process

@@ -1121,6 +1121,9 @@ set(CORE_SOURCES
     src/core/session/MirrorEnumDomain.cpp
     src/core/session/MirrorPolicy.cpp
     src/core/session/StateMirror.cpp
+    # iPhone app Task 72 (R-IOS-02): one device's view of the mirror, with
+    # its own coalescer, burst and sink; echo withheld from the writer only.
+    src/core/session/MirrorView.cpp
     # R2 Task 9: the slice-lifecycle half of the mirror. StateMirror forwards
     # property deltas for objects it already knows about; ObjectRegistry is
     # what tells a remote peer a slice appeared or vanished at all, by

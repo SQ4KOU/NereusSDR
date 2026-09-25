@@ -21,6 +21,14 @@
 //
 // The inbound half (applying a remote write back into the model under the
 // m_applying guard) is Task 8. Nothing here writes to a model from the wire.
+//
+// iPhone app Task 72 (R-IOS-02): a local change, which is nobody's write,
+// reaches every device's MirrorView as well as propertiesChanged().
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-09-25: iPhone app plan Task 72 (R-IOS-02): a local change reaches
+//               every view. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -29,6 +37,7 @@
 
 #include "core/session/MirrorPolicy.h"
 #include "core/session/MirrorSchema.h"
+#include "core/session/MirrorView.h"
 #include "core/session/StateMirror.h"
 #include "models/Band.h"
 #include "models/MeterModel.h"
@@ -502,6 +511,46 @@ private slots:
 
         QCOMPARE(c.countOf("psPaused"), 1);
         QCOMPARE(c.valueOf("psPaused").toBool(), true);
+    }
+
+    // ── Every device's view (iPhone app Task 72) ─────────────────────────
+    //
+    // A change nobody wrote (the Core's own, or the operator's at the Core)
+    // is every device's to hear: each attached view gets it, re-read at
+    // flush, and propertiesChanged() still fires for local direct mode.
+    void aLocalChangeReachesEveryAttachedView()
+    {
+        SliceModel slice(0);
+        StateMirror mirror;
+        QVERIFY(mirror.watch("slice:0", &slice));
+        Collector c(&mirror);
+        QList<SessionMessage> toA;
+        QList<SessionMessage> toB;
+        MirrorView viewA(&mirror, [&toA](const SessionMessage& m) { toA.append(m); });
+        MirrorView viewB(&mirror, [&toB](const SessionMessage& m) { toB.append(m); });
+        viewA.attach();
+        viewB.attach();
+        toA.clear();
+        toB.clear();
+
+        slice.setFrequency(7123000.0);
+
+        QCOMPARE(c.countOf("frequency"), 1);
+        QCOMPARE(viewA.flush(), 1);
+        QCOMPARE(viewB.flush(), 1);
+        for (const QList<SessionMessage>* got : {&toA, &toB}) {
+            QCOMPARE(got->size(), 1);
+            QCOMPARE(got->first().kind, SessionMessageKind::Delta);
+            QCOMPARE(got->first().objectKey, QByteArray("slice:0"));
+            bool found = false;
+            for (const MirrorUpdate& u : got->first().updates) {
+                if (u.name == "frequency") {
+                    found = true;
+                    QCOMPARE(u.value.toDouble(), 7123000.0);
+                }
+            }
+            QVERIFY(found);
+        }
     }
 };
 
