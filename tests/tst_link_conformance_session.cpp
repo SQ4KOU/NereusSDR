@@ -44,6 +44,11 @@
 //                    192 kHz each, sized before its slices are made, so
 //                    slices bind to them (absent: none, as before)
 //   maxSlices        with receivers, the slice cap (5)
+//   alexRxAntennas   iPhone app Task 75: the static radio's receive antenna
+//                    per band, 14 numbers 1 to 3 in Band order (160 m ..
+//                    XVTR), and band tracking on (the per-band antenna
+//                    switch, ruling 5.11a) as though a radio were connected
+//                    (absent: no band tracking, as before)
 //   otherPairedDevices
 //                    devices besides the runner's own paired before the
 //                    client connects (0); their keys are made at run time
@@ -119,6 +124,10 @@
 //                                    stationSetup "receivers" and
 //                                    "maxSlices". AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app Task 75 (R-IOS-30):
+//                                    stationSetup "alexRxAntennas".
+//                                    AI-assisted via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -139,6 +148,7 @@
 #include "core/AppSettings.h"
 #include "core/ConnectionState.h"
 #include "core/StepAttenuatorController.h"
+#include "core/accessories/AlexController.h"
 #include "core/dsp/DspAssetService.h"
 #include "core/meters/SliceMeterPump.h"
 #include "core/session/LinkVersion.h"
@@ -147,6 +157,7 @@
 #include "core/session/SessionMessages.h"
 #include "core/session/StationServer.h"
 #include "core/settings/SettingsScope.h"
+#include "models/Band.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -172,7 +183,7 @@ const QStringList kSetupKeys{
     QStringLiteral("otherConnections"), QStringLiteral("token"),
     QStringLiteral("pairedDevice"),    QStringLiteral("otherPairedDevices"),
     QStringLiteral("board"),           QStringLiteral("receivers"),
-    QStringLiteral("maxSlices"),
+    QStringLiteral("maxSlices"),       QStringLiteral("alexRxAntennas"),
 };
 
 // The station a fixture's stationSetup describes. Members are declared in
@@ -286,6 +297,25 @@ QString buildStation(const QJsonObject& setup, Station* station, quint16 major)
         model.configureStreamPool(receivers, maxSlices, 192000);
     } else if (setup.contains(QStringLiteral("maxSlices"))) {
         return QStringLiteral("stationSetup.maxSlices needs receivers");
+    }
+    // iPhone app Task 75: the receive antennas per band, and band tracking.
+    if (setup.contains(QStringLiteral("alexRxAntennas"))) {
+        if (radio != QStringLiteral("static")) {
+            return QStringLiteral("stationSetup.alexRxAntennas applies only to the static radio");
+        }
+        const QStringList antennas =
+            setup.value(QStringLiteral("alexRxAntennas")).toString().split(QLatin1Char(','));
+        if (antennas.size() != 14) {
+            return QStringLiteral("stationSetup.alexRxAntennas must list 14 antennas");
+        }
+        for (int band = 0; band < antennas.size(); ++band) {
+            const int antenna = antennas.at(band).trimmed().toInt();
+            if (antenna < 1 || antenna > 3) {
+                return QStringLiteral("stationSetup.alexRxAntennas: each antenna is 1 to 3");
+            }
+            model.alexControllerMutable().setRxAnt(static_cast<Band>(band), antenna);
+        }
+        model.enableBandTrackingForTest();
     }
     const int slices = setup.value(QStringLiteral("slices")).toInt(1);
     while (model.slices().size() < slices) {
