@@ -686,6 +686,24 @@ private:
     int m_info[16] = {};
     int m_oldInfo[16] = {};
 
+    // The bench status line in processNewInfo: the sample tick and the
+    // values last written, so the line appears only when one of them
+    // changes. NereusSDR-original, not part of the Thetis port.
+    struct DiagLine {
+        int    state{0};
+        int    corrApplied{0};
+        int    calCount{0};
+        int    feedbackLevel{0};
+        int    dogCount{0};
+        double hwPeak{0.0};
+        double maxTx{0.0};
+        bool   mox{false};
+        bool   autoCal{false};
+        bool operator==(const DiagLine&) const = default;
+    };
+    int m_diagTick{0};
+    std::optional<DiagLine> m_lastDiagLine;
+
     // ── Phase 3M-4 Task 13: applet-driven signal change-detection ─────────
     // Per-tick caches so emit calStateChanged / correctionPeakChanged /
     // feedbackActiveChanged only fire on actual state transitions.  Tied to
