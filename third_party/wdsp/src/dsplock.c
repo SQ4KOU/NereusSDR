@@ -129,6 +129,11 @@ boydsoftprez@gmail.com
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code (R-R3-40). 2026-09-24: the hold is a flag the
 //                 reader checks, steady whatever the worker does.
+//   2026-09-24 - Caller check: WDSPSetCallerCheckHook, and WdspEnterCS and
+//                 WdspWaitWorkerExit report each call to the installed hook
+//                 before doing anything else (one pointer test when none
+//                 is installed), by J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code (R-R3-39).
 // =================================================================
 
 #include "comm.h"
@@ -151,6 +156,9 @@ static const int64_t kWorkerExitLogIntervalMs = 2000;
 // Teardown polls finely for this long (a worker that is idle or between
 // blocks exits well within it), then once per millisecond.
 static const int64_t kWorkerExitFastPollUs = 5000;
+
+// The caller check (see dsplock.h); 0 = none.
+WdspCallerCheckHook volatile wdsp_caller_check_hook = 0;
 
 // Threads currently blocked entering each channel's csDSP.
 static volatile long dsp_waiters[MAX_CHANNELS];
@@ -468,6 +476,7 @@ void WdspWorkerTestProcessDelay (int channel)
 void WdspEnterCS (LPCRITICAL_SECTION cs)
 {
 	const int channel = dsp_channel_of (cs);
+	WdspCallerCheck (channel, WDSP_CALLER_ENTER_CS);
 	if (channel < 0)
 	{
 		EnterCriticalSection (cs);
@@ -555,6 +564,7 @@ void WdspWaitWorkerExit (int channel)
 {
 	long expected;
 	int64_t start, next_log;
+	WdspCallerCheck (channel, WDSP_CALLER_WAIT_WORKER_EXIT);
 	if (!valid_channel (channel))
 	{
 		return;
@@ -591,6 +601,16 @@ void WdspWaitWorkerExit (int channel)
 		}
 	}
 	load_store64 (&last_exit_wait_us[channel], (long long)(dsplock_now_us () - start));
+}
+
+PORT
+void WDSPSetCallerCheckHook (WdspCallerCheckHook hook)
+{
+#ifdef _WIN32
+	InterlockedExchangePointer ((PVOID volatile*)&wdsp_caller_check_hook, (PVOID)hook);
+#else
+	__atomic_store_n (&wdsp_caller_check_hook, hook, __ATOMIC_RELEASE);
+#endif
 }
 
 PORT

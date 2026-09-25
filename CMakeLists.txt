@@ -855,6 +855,8 @@ set(CORE_SOURCES
     src/core/ReceiverManager.cpp
     src/core/AudioEngine.cpp
     src/core/WdspEngine.cpp
+    src/core/WdspThreadCheck.cpp
+    src/core/DspControlThread.cpp
     src/core/RxChannel.cpp
     src/core/TxChannel.cpp
     src/core/RadeChannel.cpp

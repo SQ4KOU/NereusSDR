@@ -358,6 +358,12 @@ if(TARGET wdsp_static)
     # leave its loop before freeing its memory (dsplock.c). REALTIME: it
     # holds an idle teardown's wait to the worker's measured wake-up time.
     nereus_add_test(tst_wdsp_channel_shutdown EXTRA_LABELS core REALTIME)
+    # R-R3-39: the DSP control lanes (ordering, keyed jobs, barriers,
+    # request completion) and the WDSP caller check that counts WDSP calls
+    # made from the event loop. wdsp_static arrives through the core
+    # library. REALTIME: it holds the event loop's 10 ms timer and every
+    # post() to wall-clock bounds while a lane waits on a 200 ms DSP block.
+    nereus_add_test(tst_dsp_control_thread EXTRA_LABELS core REALTIME)
     if(NOT WIN32)
         # R-R3-41: linux_port.c's thread-start hook fires once per channel
         # worker and flush thread, on that thread, with its kind and channel.

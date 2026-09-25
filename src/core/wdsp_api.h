@@ -216,6 +216,12 @@
 //                 (KG4VCF) (R-R3-40). NereusSDR-original, exported from
 //                 third_party/wdsp/src/dsplock.c; no Thetis counterpart.
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24  WDSPSetCallerCheckHook declaration and the kWdspCaller*
+//                 kinds it reports added by J.J. Boyd (KG4VCF) for the
+//                 check that counts WDSP calls made from the event loop
+//                 (R-R3-39). NereusSDR-original export from
+//                 third_party/wdsp/src/dsplock.c; no Thetis counterpart.
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 /*  wdsp.cs
@@ -345,6 +351,13 @@ constexpr int kWdspThreadTxMain = 2;  // a transmit channel's DSP worker
 constexpr int kWdspThreadFlush  = 3;  // a channel's flush thread
 constexpr int kWdspThreadWorkerExit = 4;  // a channel's worker, about to end
 
+// Kinds WDSPSetCallerCheckHook reports; the same values as the
+// WDSP_CALLER_* enum in third_party/wdsp/src/dsplock.h.
+constexpr int kWdspCallerEnterCs = 1;         // any WDSP lock entry (WdspEnterCS)
+constexpr int kWdspCallerWaitWorkerExit = 2;  // channel teardown waits for its worker
+constexpr int kWdspCallerOpenChannel = 3;     // OpenChannel
+constexpr int kWdspCallerSetChannelState = 4; // SetChannelState
+
 #ifdef HAVE_WDSP
 
 extern "C" {
@@ -440,6 +453,14 @@ int GetChannelDspLoad(int channel, WdspChannelLoad* out);
 // none completed; -1 for an invalid channel). One periodic reader owns it:
 // RadioModel's load sampler. Never waits for the worker.
 long long TakeChannelDspIntervalMaxBlockUs(int channel);
+
+// NereusSDR dsplock.c: install (or, with nullptr, remove) a function every
+// WDSP lock entry, channel teardown wait, OpenChannel and SetChannelState
+// call first, on the calling thread, with the channel (-1 for a lock that is
+// not a channel's DSP lock) and a kWdspCaller* kind. The hook must not
+// block or call into WDSP. With none installed each call pays one pointer
+// test. Used by WdspThreadCheck (R-R3-39) in debug and test builds only.
+void WDSPSetCallerCheckHook(void (*hook)(int channel, int kind));
 
 #if !defined(_WIN32) && !defined(Q_OS_WIN)
 // NereusSDR linux_port.c: install (or, with nullptr, remove) a function each
