@@ -32,6 +32,12 @@
 //                 audio straight to a 44.1 or 96 kHz speaker's clock.
 //                 filterDelayFrames() is the varsamp FIR's delay at that
 //                 output rate (varsamp.c:41-60).
+//   2026-09-25: J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code. iPhone app plan Task 36 (R-IOS-13): push() and
+//                 takeInto() on caller-owned buffers, so the transmit
+//                 pump matches a remote microphone to the radio's clock
+//                 without allocating per block. The WDSP calls are the
+//                 same xrmatchIN / xrmatchOUT boundary.
 // =================================================================
 //
 // === Verbatim Thetis Project Files/Source/ChannelMaster/ivac.c header ===
@@ -185,7 +191,14 @@ public:
     bool configure(int inputFrames, int outputFrames, int ringFrames,
                    int outputRateHz = kSampleRateHz);
     bool push(const QVector<float>& pcmInterleaved);
+    /// Task 36: push() from `frames` interleaved stereo frames in a
+    /// caller-owned buffer; `frames` must be the configured input frames.
+    bool push(const float* pcmInterleaved, int frames);
     QVector<float> take();
+    /// Task 36: take() into a caller-owned buffer of `frames` interleaved
+    /// stereo frames; `frames` must be the configured output frames. False,
+    /// with the buffer untouched, when unconfigured or for another size.
+    bool takeInto(float* pcmInterleaved, int frames);
     /// True when one public output block can be returned without asking WDSP
     /// for more input than its ring currently contains. Accounts for the
     /// partially consumed native 64-frame output block.

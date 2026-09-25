@@ -10,6 +10,11 @@
 // =================================================================
 //
 // Modification history (NereusSDR):
+//   2026-09-25 - iPhone app plan Task 36 (R-IOS-13) by J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code. The remote
+//                 microphone ring: pulled on every block, its own branch
+//                 ahead of VAX and the PC microphone in the normal and the
+//                 RADE paths while a remote device transmits.
 //   2026-09-22 — R-R3-36 prerequisite by J.J. Boyd (KG4VCF), AI-assisted
 //                 via OpenAI Codex. Normal and RADE source routing now uses
 //                 PC-mic selection intent and fails silent if capture is not
@@ -113,6 +118,7 @@
 #include "audio/RealtimeAudioPriority.h"
 #include "audio/TxMicSource.h"
 #include "platform/ThreadPlacement.h"
+#include "session/media/RemoteMicReceiver.h"
 
 #include <QCoreApplication>
 #include <QLoggingCategory>
@@ -134,6 +140,9 @@ TxWorkerThread::TxWorkerThread(QObject* parent)
     //   m_pcMicBuf == kBlockFrames floats        (mono, AudioEngine API)
     m_in.assign(static_cast<size_t>(kBlockFrames) * 2, 0.0);
     m_pcMicBuf.assign(static_cast<size_t>(kBlockFrames), 0.0f);
+    m_remoteMicBuf.assign(static_cast<size_t>(kBlockFrames), 0.0f);
+    static_assert(kBlockFrames == RemoteMicConfig::kPumpBlockFrames,
+                  "the remote microphone ring is pulled a pump block at a time");
 
     // Phase 3R K-bench: RADE TX scratch.  Sized for one pump tick at
     // 48 kHz in / 16 kHz out.  m_radeMic16k has headroom (kBlockFrames
@@ -197,6 +206,11 @@ void TxWorkerThread::setMicSource(TxMicSource* src)
 void TxWorkerThread::setRadeChannel(RadeChannel* channel)
 {
     m_radeChannel.store(channel, std::memory_order_release);
+}
+
+void TxWorkerThread::setRemoteMicFeed(RemoteMicFeed* feed)
+{
+    m_remoteMicFeed.store(feed, std::memory_order_release);
 }
 
 // ---------------------------------------------------------------------------
@@ -505,6 +519,19 @@ void TxWorkerThread::dispatchOneBlock()
         return;
     }
 
+    // ── iPhone app plan Task 36 (R-IOS-13): the remote microphone ring ──
+    //
+    // Pulled on every block, whatever the path: while a remote device
+    // transmits (holds transmit and is keyed, has VOX armed, or its key is
+    // waiting for the buffer to fill) the feed is in use and fills
+    // m_remoteMicBuf with its rate-matched audio (silence until its buffer
+    // first reaches the 60 ms target). Out of use it drops whatever
+    // arrived and returns false, and the operator's configured source
+    // applies below. The feed does no codec work and never waits here.
+    RemoteMicFeed* const remoteFeed = m_remoteMicFeed.load(std::memory_order_acquire);
+    const bool remoteMicInUse =
+        remoteFeed != nullptr && remoteFeed->pull(m_remoteMicBuf.data(), kBlockFrames);
+
     // ── Phase 3J-1 bench fix (2026-05-10): TCI audio source override ───────
     //
     // When a TCI client holds the TX audio mutex (trx:N,true,tci;) the
@@ -605,7 +632,14 @@ void TxWorkerThread::dispatchOneBlock()
         //
         // Empty pulls and short-pulls are zero-filled so silent ticks
         // produce silent RADE output (no leaked radio mic).
-        if (m_audioEngine != nullptr
+        if (remoteMicInUse) {
+            // Task 36: a remote device's microphone, ahead of every local
+            // source, as in the normal path below.
+            for (int i = 0; i < kBlockFrames; ++i) {
+                m_radeMicFloat[static_cast<size_t>(i)] =
+                    m_remoteMicBuf[static_cast<size_t>(i)];
+            }
+        } else if (m_audioEngine != nullptr
             && m_audioEngine->isVaxMicOverrideActive()) {
             const int got = m_audioEngine->pullVaxTxMic(
                 m_pcMicBuf.data(), kBlockFrames);
@@ -722,8 +756,8 @@ void TxWorkerThread::dispatchOneBlock()
                     m_radeMicFloat[static_cast<size_t>(i)]);
                 if (a > peak) { peak = a; }
             }
-            const char* src =
-                (m_audioEngine && m_audioEngine->isVaxMicOverrideActive())
+            const char* src = remoteMicInUse ? "Remote"
+                : (m_audioEngine && m_audioEngine->isVaxMicOverrideActive())
                     ? "VAX"
                     : (m_audioEngine
                        && m_audioEngine->isPcMicSelected())
@@ -839,7 +873,17 @@ void TxWorkerThread::dispatchOneBlock()
     // RADE pump on the input side already drained the mic block to
     // feed RadeChannel::txEncode (Step 1 above); the WDSP TXA chain
     // below must see ONLY the RADE audio.
-    if (path != TxPath::Rade
+    if (path != TxPath::Rade && remoteMicInUse) {
+        // Task 36: the remote device's microphone replaces the operator's
+        // source while it transmits (RadioModel decides when). The whole
+        // block is written, so nothing of the radio's microphone or the
+        // PC's leaks in; Q stays zero (real-only TX input).
+        for (int i = 0; i < kBlockFrames; ++i) {
+            m_in[static_cast<size_t>(2 * i + 0)] =
+                static_cast<double>(m_remoteMicBuf[static_cast<size_t>(i)]);
+            m_in[static_cast<size_t>(2 * i + 1)] = 0.0;
+        }
+    } else if (path != TxPath::Rade
         && m_audioEngine != nullptr && m_audioEngine->isVaxMicOverrideActive()) {
         // VAX TX override (eager-borg-d64bed, 2026-05-06).  Mirrors the
         // PC mic override path below, but pulls from the VAX TX shared-
@@ -924,6 +968,16 @@ void TxWorkerThread::tickForTest()
         return;
     }
     m_micSource->drainBlock(m_in.data());
+    dispatchOneBlock();
+}
+
+void TxWorkerThread::dispatchBlockForTest(const float* radioMic)
+{
+    for (int i = 0; i < kBlockFrames; ++i) {
+        m_in[static_cast<size_t>(2 * i + 0)] =
+            radioMic != nullptr ? static_cast<double>(radioMic[i]) : 0.0;
+        m_in[static_cast<size_t>(2 * i + 1)] = 0.0;
+    }
     dispatchOneBlock();
 }
 #endif

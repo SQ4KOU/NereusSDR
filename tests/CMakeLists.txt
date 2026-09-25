@@ -7692,6 +7692,18 @@ nereus_add_test(tst_session_link_loss
 # loopback handshake inside a fixed 10 s wait, which misses at load 20-30.
 nereus_add_test(tst_media_transport REALTIME)
 
+# iPhone app plan Task 36 (R-IOS-13): the microphone uplink at the Core: the
+# feed's 60 ms target and 120 ms maximum, a tone through 1 % loss, a sender
+# 200 ppm fast and slow for 10 simulated minutes, the key's wait and
+# starvation. Injected clocks throughout.
+nereus_add_test(tst_remote_mic_receiver)
+# Two 10-minute runs of simulated time through WDSP rmatch take tens of
+# seconds of processor time; the default 120 s would trip on a loaded
+# machine, as it would for any heavy computation.
+if(TEST tst_remote_mic_receiver)
+    set_tests_properties(tst_remote_mic_receiver PROPERTIES TIMEOUT 600)
+endif()
+
 # Remote Daemon R3, Task 1: strict connection-scoped signalling bridge and
 # live queued-control exchange over the encrypted media transport.
 nereus_add_test(tst_media_peer)

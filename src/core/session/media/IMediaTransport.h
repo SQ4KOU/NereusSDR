@@ -84,6 +84,18 @@ public:
         // kReceivedRtpPacketsPerStream more packets. The main SSRC or a
         // receiver SSRC here is a precondition refusal.
         quint32 headphonesAudioSsrc = 0;
+        // iPhone app plan Task 36 (R-IOS-13): the microphone line. 0 (the
+        // default) declares none and keeps today's offer, answer and queue.
+        // Otherwise an offerer adds a second audio m-line, mid "mic",
+        // receive-only, after the main one: Opus (payload type 111,
+        // micLineOpusFormatParameters()) and, with offerLosslessAudio, the
+        // L16 rtpmap. An answerer takes that line send-only and declares
+        // this SSRC on it (a=ssrc:<ssrc> cname:nereus-microphone), so the
+        // offerer's library routes the line's packets to it. The receive
+        // queue holds kReceivedRtpPacketsPerStream more packets. The main
+        // SSRC, a receiver SSRC or the headphones SSRC here is a
+        // precondition refusal.
+        quint32 micAudioSsrc = 0;
     };
 
     /// R-R3-43: the most receiver audio streams one media connection
@@ -185,6 +197,15 @@ public:
     /// new one would be Busy. displayWritable() follows when it clears.
     virtual bool displayBusy() const { return false; }
     virtual bool sendRtp(const QByteArray& packet) = 0;
+    /// Task 36: one RTP packet on the microphone line, which only an
+    /// answerer started with micAudioSsrc sends on. False without that
+    /// line, before ready, for a packet whose SSRC is not micAudioSsrc, and
+    /// for the reasons sendRtp() gives.
+    virtual bool sendMicRtp(const QByteArray& packet)
+    {
+        Q_UNUSED(packet);
+        return false;
+    }
 
     virtual bool isReady() const = 0;
 
@@ -193,6 +214,9 @@ public:
     /// packets may be sent. False before negotiation and for a transport
     /// without the lossless profile.
     virtual bool losslessAudioNegotiated() const { return false; }
+    /// Task 36: likewise for the microphone line: both descriptions carry
+    /// the L16 rtpmap on it. False without a microphone line.
+    virtual bool micLosslessNegotiated() const { return false; }
 
     /// Cumulative application payload bytes for the current transport start.
     /// Submitted values count preflight-valid calls into the transport
@@ -209,6 +233,9 @@ signals:
     void localCandidate(const QString& candidate, const QString& mid);
     void displayReceived(const QByteArray& message);
     void rtpReceived(const QByteArray& packet);
+    /// Task 36: an RTP packet that arrived on the microphone line. Never
+    /// also reported by rtpReceived().
+    void micRtpReceived(const QByteArray& packet);
     void ready();
     void closed();
     /// The underlying peer connection entered a terminal transport-failure

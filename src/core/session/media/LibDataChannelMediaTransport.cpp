@@ -5,6 +5,12 @@
 // no-port-check: NereusSDR-original. Remote-daemon R3 Task 1.
 // See LibDataChannelMediaTransport.h for the boundary contract.
 //
+// Modification history (NereusSDR):
+//   2026-09-25: iPhone app plan Task 36 (R-IOS-13): the microphone line, a
+//               second audio m-line (mid "mic") receive-only at the Core,
+//               offered only when asked. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
+//
 // =================================================================
 
 #include "core/session/media/LibDataChannelMediaTransport.h"
@@ -34,6 +40,9 @@ namespace {
 
 constexpr char kDisplayLabel[] = "display";
 constexpr char kAudioMid[] = "audio";
+// Task 36: the microphone line and its a=ssrc cname.
+constexpr char kMicMid[] = "mic";
+constexpr char kMicStreamName[] = "nereus-microphone";
 constexpr int kOpusPayloadType = 111;
 constexpr std::size_t kMaxPendingEvents = 128;
 constexpr std::size_t kMaxPendingDisplayMessages = 8;
@@ -70,6 +79,8 @@ struct CallbackEvent {
 struct PendingRtpPacket {
     rtc::binary data;
     std::chrono::steady_clock::time_point receivedAt;
+    // Task 36: arrived on the microphone line.
+    bool mic = false;
 };
 
 std::once_flag g_sctpSettingsOnce;
@@ -95,8 +106,13 @@ struct CallbackBridge {
     std::size_t droppedRtpPackets = 0;
     std::shared_ptr<rtc::DataChannel> dataChannel;
     std::shared_ptr<rtc::Track> track;
+    // Task 36: the answerer's microphone line, and the SSRC it declares on
+    // it (0: no microphone line).
+    std::shared_ptr<rtc::Track> micTrack;
+    quint32 micSsrc = 0;
     bool dataChannelAssigned = false;
     bool trackAssigned = false;
+    bool micTrackAssigned = false;
     std::atomic<quint64> receivedDisplayPayloadBytes{0};
     std::atomic<quint64> submittedDisplayPayloadBytes{0};
     std::atomic<quint64> receivedRtpBytes{0};
@@ -161,7 +177,7 @@ void queueDisplay(const std::weak_ptr<CallbackBridge>& weak, rtc::binary data)
     bridge->displayMessages.push_back(std::move(data));
 }
 
-void queueRtp(const std::weak_ptr<CallbackBridge>& weak, rtc::binary data)
+void queueRtp(const std::weak_ptr<CallbackBridge>& weak, rtc::binary data, bool mic)
 {
     const auto bridge = weak.lock();
     if (!bridge) {
@@ -191,7 +207,7 @@ void queueRtp(const std::weak_ptr<CallbackBridge>& weak, rtc::binary data)
         bridge->rtpPackets.pop_front();
         ++bridge->droppedRtpPackets;
     }
-    bridge->rtpPackets.push_back({std::move(data), receivedAt});
+    bridge->rtpPackets.push_back({std::move(data), receivedAt, mic});
 }
 
 void bindDataChannel(const std::shared_ptr<rtc::DataChannel>& channel,
@@ -220,7 +236,7 @@ void bindDataChannel(const std::shared_ptr<rtc::DataChannel>& channel,
 }
 
 void bindTrack(const std::shared_ptr<rtc::Track>& track,
-               const std::weak_ptr<CallbackBridge>& weak)
+               const std::weak_ptr<CallbackBridge>& weak, bool mic = false)
 {
     track->onError([weak](std::string error) {
         queueEvent(weak, CallbackEvent::Kind::Error, std::move(error));
@@ -229,7 +245,7 @@ void bindTrack(const std::shared_ptr<rtc::Track>& track,
         queueEvent(weak, CallbackEvent::Kind::PeerClosed, "RTP track closed");
     });
     track->onMessage(
-        [weak](rtc::binary data) { queueRtp(weak, std::move(data)); },
+        [weak, mic](rtc::binary data) { queueRtp(weak, std::move(data), mic); },
         [weak](std::string) {
             queueEvent(weak, CallbackEvent::Kind::Error,
                        "text RTP message rejected");
@@ -246,14 +262,16 @@ QByteArray toByteArray(const rtc::binary& data)
 }
 
 // R-R3-23: whether a description's audio m-line maps the lossless payload
-// type to L16/48000/2 (RFC 3551 L16, 48 kHz, stereo).
-bool describesLosslessAudio(const rtc::Description& description)
+// type to L16/48000/2 (RFC 3551 L16, 48 kHz, stereo). Task 36: or the
+// m-line of another mid (the microphone line).
+bool describesLosslessAudio(const rtc::Description& description,
+                            const char* mid = kAudioMid)
 {
     for (int index = 0; index < description.mediaCount(); ++index) {
         const auto entry = description.media(index);
         const rtc::Description::Media* const* media =
             std::get_if<const rtc::Description::Media*>(&entry);
-        if (media == nullptr || *media == nullptr || (*media)->mid() != kAudioMid
+        if (media == nullptr || *media == nullptr || (*media)->mid() != mid
             || !(*media)->hasPayloadType(PcmAudioCodecConfig::kPayloadType)) {
             continue;
         }
@@ -307,6 +325,15 @@ bool validHeadphonesAudioSsrc(quint32 mainSsrc, const QList<quint32>& receiverSs
 {
     return headphonesSsrc == 0
         || (headphonesSsrc != mainSsrc && !receiverSsrcs.contains(headphonesSsrc));
+}
+
+// Task 36: 0 (none), or an id that is none of the Core's own streams'.
+bool validMicAudioSsrc(quint32 mainSsrc, const QList<quint32>& receiverSsrcs,
+                       quint32 headphonesSsrc, quint32 micSsrc)
+{
+    return micSsrc == 0
+        || (micSsrc != mainSsrc && !receiverSsrcs.contains(micSsrc)
+            && micSsrc != headphonesSsrc);
 }
 
 } // namespace
@@ -364,12 +391,25 @@ QString opusOfferFormatParameters(int targetBitrate)
         .arg(targetBitrate);
 }
 
+QString micLineOpusFormatParameters()
+{
+    // RFC 7587 section 6.1: these describe what the author of the offer
+    // (the Core) prefers to receive on this line: mono (stereo=0), in-band
+    // FEC, a 24 kbit/s average and 10 ms minimum packet time, which is what
+    // the app's microphone encoder sends (20 ms frames, mono 48 kHz).
+    return QStringLiteral("minptime=10;useinbandfec=1;stereo=0;maxaveragebitrate=24000");
+}
+
 struct LibDataChannelMediaTransport::Private {
     QTimer* drainTimer = nullptr;
     std::shared_ptr<CallbackBridge> bridge;
     std::shared_ptr<rtc::PeerConnection> peer;
     std::shared_ptr<rtc::DataChannel> display;
     std::shared_ptr<rtc::Track> audio;
+    // Task 36: the microphone line (the offerer's receive-only track or the
+    // answerer's send-only one), null without one.
+    std::shared_ptr<rtc::Track> micAudio;
+    quint32 micAudioSsrc = 0;
     Role role = Role::Answerer;
     quint32 localAudioSsrc = 0;
     // R-R3-43: the declared receiver audio streams' SSRCs, empty for today.
@@ -381,6 +421,7 @@ struct LibDataChannelMediaTransport::Private {
     bool ready = false;
     bool remoteDescriptionAccepted = false;
     bool remoteDescribesLossless = false;
+    bool remoteDescribesMicLossless = false;
     int acceptedCandidates = 0;
     std::chrono::steady_clock::time_point lastRtpTimingWarning;
 };
@@ -408,7 +449,9 @@ bool LibDataChannelMediaTransport::start(const StartOptions& options)
     if (d->started || options.localAudioSsrc == 0
         || !validReceiverAudioSsrcs(options.localAudioSsrc, options.receiverAudioSsrcs)
         || !validHeadphonesAudioSsrc(options.localAudioSsrc, options.receiverAudioSsrcs,
-                                     options.headphonesAudioSsrc)) {
+                                     options.headphonesAudioSsrc)
+        || !validMicAudioSsrc(options.localAudioSsrc, options.receiverAudioSsrcs,
+                              options.headphonesAudioSsrc, options.micAudioSsrc)) {
         return false;
     }
 
@@ -416,11 +459,16 @@ bool LibDataChannelMediaTransport::start(const StartOptions& options)
     d->localAudioSsrc = options.localAudioSsrc;
     d->receiverAudioSsrcs = options.receiverAudioSsrcs;
     d->headphonesAudioSsrc = options.headphonesAudioSsrc;
+    d->micAudioSsrc = options.micAudioSsrc;
     d->bridge = std::make_shared<CallbackBridge>();
+    d->bridge->micSsrc = options.micAudioSsrc;
+    // Task 36: the microphone line's packets share the queue with one more
+    // stream's worth of room.
     d->bridge->rtpPacketCapacity =
         static_cast<std::size_t>(kReceivedRtpPacketsPerStream)
         * static_cast<std::size_t>(1 + options.receiverAudioSsrcs.size()
-                                   + (options.headphonesAudioSsrc != 0 ? 1 : 0));
+                                   + (options.headphonesAudioSsrc != 0 ? 1 : 0)
+                                   + (options.micAudioSsrc != 0 ? 1 : 0));
     const std::weak_ptr<CallbackBridge> weak = d->bridge;
 
     try {
@@ -498,15 +546,34 @@ bool LibDataChannelMediaTransport::start(const StartOptions& options)
             }
         });
         d->peer->onTrack([weak](std::shared_ptr<rtc::Track> track) {
-            const rtc::Description::Media description = track->description();
-            if (track->mid() != kAudioMid
+            rtc::Description::Media description = track->description();
+            // Task 36: the microphone line, taken only by an answerer that
+            // was started with one. libdatachannel calls this from inside
+            // setRemoteDescription(), before the answer is written, so the
+            // SSRC declared here goes out in the answer and the Core's
+            // library routes the line's packets by it.
+            const auto owner = weak.lock();
+            const quint32 micSsrc = owner ? owner->micSsrc : 0;
+            const bool mic = track->mid() == kMicMid && micSsrc != 0;
+            if ((track->mid() != kAudioMid && !mic)
                 || !description.hasPayloadType(kOpusPayloadType)) {
                 track->close();
                 queueEvent(weak, CallbackEvent::Kind::Error,
                            "unexpected media track rejected");
                 return;
             }
-            bindTrack(track, weak);
+            if (mic) {
+                try {
+                    description.addSSRC(micSsrc, kMicStreamName);
+                    track->setDescription(std::move(description));
+                } catch (const std::exception&) {
+                    track->close();
+                    queueEvent(weak, CallbackEvent::Kind::Error,
+                               "microphone line rejected");
+                    return;
+                }
+            }
+            bindTrack(track, weak, mic);
             const auto bridge = weak.lock();
             if (!bridge) {
                 track->resetCallbacks();
@@ -516,10 +583,18 @@ bool LibDataChannelMediaTransport::start(const StartOptions& options)
             bool reject = false;
             {
                 std::lock_guard lock(bridge->mutex);
-                reject = bridge->cancelled || bridge->trackAssigned;
-                if (!reject) {
-                    bridge->trackAssigned = true;
-                    bridge->track = track;
+                if (mic) {
+                    reject = bridge->cancelled || bridge->micTrackAssigned;
+                    if (!reject) {
+                        bridge->micTrackAssigned = true;
+                        bridge->micTrack = track;
+                    }
+                } else {
+                    reject = bridge->cancelled || bridge->trackAssigned;
+                    if (!reject) {
+                        bridge->trackAssigned = true;
+                        bridge->track = track;
+                    }
                 }
             }
             if (reject) {
@@ -562,12 +637,29 @@ bool LibDataChannelMediaTransport::start(const StartOptions& options)
             }
             d->audio = d->peer->addTrack(opus);
             bindTrack(d->audio, weak);
+
+            // Task 36: the microphone line, after the main one and only
+            // when asked. The Core receives on it and declares no SSRC of
+            // its own; the answer declares the microphone's.
+            if (options.micAudioSsrc != 0) {
+                rtc::Description::Audio mic(kMicMid,
+                                            rtc::Description::Direction::RecvOnly);
+                mic.addOpusCodec(kOpusPayloadType,
+                                 micLineOpusFormatParameters().toStdString());
+                if (options.offerLosslessAudio) {
+                    mic.addAudioCodec(PcmAudioCodecConfig::kPayloadType,
+                                      l16RtpMapEncoding());
+                }
+                d->micAudio = d->peer->addTrack(mic);
+                bindTrack(d->micAudio, weak, /*mic=*/true);
+            }
         }
 
         d->started = true;
         d->ready = false;
         d->remoteDescriptionAccepted = false;
         d->remoteDescribesLossless = false;
+        d->remoteDescribesMicLossless = false;
         d->acceptedCandidates = 0;
         d->drainTimer->start();
 
@@ -600,13 +692,16 @@ void LibDataChannelMediaTransport::stopInternal(bool notify)
     d->localAudioSsrc = 0;
     d->receiverAudioSsrcs.clear();
     d->headphonesAudioSsrc = 0;
+    d->micAudioSsrc = 0;
     d->remoteDescriptionAccepted = false;
     d->remoteDescribesLossless = false;
+    d->remoteDescribesMicLossless = false;
     d->acceptedCandidates = 0;
     d->drainTimer->stop();
 
     std::shared_ptr<rtc::DataChannel> pendingDisplay;
     std::shared_ptr<rtc::Track> pendingAudio;
+    std::shared_ptr<rtc::Track> pendingMic;
     if (d->bridge) {
         std::lock_guard lock(d->bridge->mutex);
         d->bridge->cancelled = true;
@@ -617,6 +712,7 @@ void LibDataChannelMediaTransport::stopInternal(bool notify)
         d->bridge->rtpPackets.clear();
         pendingDisplay = std::move(d->bridge->dataChannel);
         pendingAudio = std::move(d->bridge->track);
+        pendingMic = std::move(d->bridge->micTrack);
     }
 
     if (pendingDisplay && pendingDisplay != d->display) {
@@ -627,6 +723,10 @@ void LibDataChannelMediaTransport::stopInternal(bool notify)
         pendingAudio->resetCallbacks();
         pendingAudio->close();
     }
+    if (pendingMic && pendingMic != d->micAudio) {
+        pendingMic->resetCallbacks();
+        pendingMic->close();
+    }
 
     if (d->display) {
         d->display->resetCallbacks();
@@ -636,6 +736,10 @@ void LibDataChannelMediaTransport::stopInternal(bool notify)
         d->audio->resetCallbacks();
         d->audio->close();
     }
+    if (d->micAudio) {
+        d->micAudio->resetCallbacks();
+        d->micAudio->close();
+    }
     if (d->peer) {
         d->peer->resetCallbacks();
         d->peer->close();
@@ -643,6 +747,7 @@ void LibDataChannelMediaTransport::stopInternal(bool notify)
 
     d->display.reset();
     d->audio.reset();
+    d->micAudio.reset();
     d->peer.reset();
     d->bridge.reset();
 
@@ -679,9 +784,11 @@ bool LibDataChannelMediaTransport::acceptDescription(const QString& sdp,
             return false;
         }
         const bool describesLossless = describesLosslessAudio(description);
+        const bool describesMicLossless = describesLosslessAudio(description, kMicMid);
         d->peer->setRemoteDescription(std::move(description));
         d->remoteDescriptionAccepted = true;
         d->remoteDescribesLossless = describesLossless;
+        d->remoteDescribesMicLossless = describesMicLossless;
         if (d->role == Role::Answerer) {
             d->peer->setLocalDescription(rtc::Description::Type::Answer);
         }
@@ -793,6 +900,41 @@ bool LibDataChannelMediaTransport::sendRtp(const QByteArray& packet)
     }
 }
 
+bool LibDataChannelMediaTransport::sendMicRtp(const QByteArray& packet)
+{
+    // Task 36: only an answerer sends on the microphone line, and only the
+    // SSRC it declared there.
+    if (!d->ready || !d->micAudio || d->role != Role::Answerer || d->micAudioSsrc == 0
+        || packet.size() < kMinRawRtpBytes || packet.size() > kMaxRawRtpBytes
+        || rtpSsrc(packet) != d->micAudioSsrc || d->micAudio->bufferedAmount() != 0
+        || d->micAudio->maxMessageSize() < static_cast<std::size_t>(packet.size())) {
+        return false;
+    }
+    const std::shared_ptr<CallbackBridge> bridge = d->bridge;
+    if (!bridge) {
+        return false;
+    }
+    bridge->submittedRtpBytes.fetch_add(
+        static_cast<quint64>(packet.size()), std::memory_order_relaxed);
+    try {
+        return d->micAudio->send(
+            reinterpret_cast<const rtc::byte*>(packet.constData()),
+            static_cast<std::size_t>(packet.size()));
+    } catch (const std::exception& error) {
+        emit errorOccurred(QString::fromUtf8(error.what()));
+        return false;
+    }
+}
+
+bool LibDataChannelMediaTransport::micLosslessNegotiated() const
+{
+    if (!d->started || !d->peer || d->micAudioSsrc == 0 || !d->remoteDescribesMicLossless) {
+        return false;
+    }
+    const std::optional<rtc::Description> local = d->peer->localDescription();
+    return local && describesLosslessAudio(*local, kMicMid);
+}
+
 bool LibDataChannelMediaTransport::isReady() const
 {
     return d->ready;
@@ -855,6 +997,7 @@ void LibDataChannelMediaTransport::drainCallbacks()
     std::size_t droppedRtpPackets = 0;
     std::shared_ptr<rtc::DataChannel> incomingDisplay;
     std::shared_ptr<rtc::Track> incomingAudio;
+    std::shared_ptr<rtc::Track> incomingMic;
     {
         std::lock_guard lock(bridge->mutex);
         if (bridge->cancelled) {
@@ -870,6 +1013,7 @@ void LibDataChannelMediaTransport::drainCallbacks()
         bridge->droppedRtpPackets = 0;
         incomingDisplay = std::move(bridge->dataChannel);
         incomingAudio = std::move(bridge->track);
+        incomingMic = std::move(bridge->micTrack);
     }
 
     if (!isCurrentGeneration()) {
@@ -881,6 +1025,9 @@ void LibDataChannelMediaTransport::drainCallbacks()
     }
     if (!d->audio && incomingAudio) {
         d->audio = std::move(incomingAudio);
+    }
+    if (!d->micAudio && incomingMic) {
+        d->micAudio = std::move(incomingMic);
     }
 
     bool mustStop = false;
@@ -957,7 +1104,12 @@ void LibDataChannelMediaTransport::drainCallbacks()
         }
     }
     for (const PendingRtpPacket& packet : rtpPackets) {
-        emit rtpReceived(toByteArray(packet.data));
+        // Task 36: the microphone line's packets are reported apart.
+        if (packet.mic) {
+            emit micRtpReceived(toByteArray(packet.data));
+        } else {
+            emit rtpReceived(toByteArray(packet.data));
+        }
         if (!isCurrentGeneration()) {
             return;
         }

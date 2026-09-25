@@ -1106,6 +1106,9 @@ set(CORE_SOURCES
     src/core/session/media/RemoteSpectrumContext.cpp
     src/core/session/media/AudioJitterBuffer.cpp
     src/core/session/media/RemoteAudioRateMatcher.cpp
+    # iPhone app plan Task 36 (R-IOS-13): the microphone uplink at the Core
+    # (receiver, transmit jitter buffer, rate matching to the radio's clock).
+    src/core/session/media/RemoteMicReceiver.cpp
     # R-R3-23 Task 2: RFC 3550 jitter/sequence measurement for one receiver context.
     src/core/session/media/RtpReceptionStats.cpp
     src/core/session/media/RemoteAudioReceiver.cpp

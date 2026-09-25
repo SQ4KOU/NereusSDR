@@ -53,11 +53,16 @@ public:
     // declared it can play the Core's headphones mix. The offerer declares
     // headphonesAudioSsrcForConnection() after any receiver streams, and
     // both sides send and accept it too. Off, nothing changes.
+    // micLine (iPhone app plan Task 36, R-IOS-13): both sides set it for a
+    // client whose media start carried remoteTxVersion. The offerer adds the
+    // receive-only microphone line and the answerer takes it, sending
+    // micAudioSsrcForConnection() on it. Off, nothing changes.
     bool start(IMediaTransport::Role role, const QString& connectionId,
                int audioTargetBitrate = IMediaTransport::kDefaultAudioTargetBitrate,
                bool offerLosslessAudio = false,
                bool receiverAudioStreams = false,
-               bool headphonesMixStream = false);
+               bool headphonesMixStream = false,
+               bool micLine = false);
     void stop();
 
     bool acceptControl(const QJsonObject& control);
@@ -65,6 +70,9 @@ public:
     IMediaTransport::DisplaySendResult submitDisplay(const QByteArray& message);
     bool displayBusy() const;
     bool sendRtp(const QByteArray& packet);
+    /// Task 36: one packet on the microphone line (the answerer's), whose
+    /// SSRC must be micAudioSsrc().
+    bool sendMicRtp(const QByteArray& packet);
 
     /// Why the last start() returned false (R-R3-28, amended 2026-09-23).
     /// Only TransportConstructionFailed is transient and worth a retry;
@@ -89,6 +97,9 @@ public:
     bool isReady() const;
     /// Both descriptions carry the L16 rtpmap (R-R3-23).
     bool losslessAudioNegotiated() const;
+    /// Task 36: both descriptions carry the L16 rtpmap on the microphone
+    /// line.
+    bool micLosslessNegotiated() const;
     QString connectionId() const;
     quint32 audioSsrc() const;
     /// R-R3-43: the declared receiver audio SSRCs, receiver 0 first; empty
@@ -112,12 +123,23 @@ public:
     /// SSRC or any of the four receiver SSRCs is replaced by the next
     /// integer (wrapping) until it is none of these.
     static quint32 headphonesAudioSsrcForConnection(const QString& connectionId);
+    /// Task 36: the microphone line's SSRC, or 0 without the line or while
+    /// stopped.
+    quint32 micAudioSsrc() const;
+    /// Task 36: the microphone line's SSRC for a connection: SHA-256 over the
+    /// ASCII "NereusSDR/media-mic-ssrc/v1:" followed by the connection id,
+    /// first four digest bytes big-endian. Zero, the main SSRC, any of the
+    /// four receiver SSRCs or the headphones SSRC is replaced by the next
+    /// integer (wrapping) until it is none of these.
+    static quint32 micAudioSsrcForConnection(const QString& connectionId);
     std::optional<MediaPeerTelemetry> telemetry() const;
 
 signals:
     void controlReady(const QJsonObject& control);
     void displayReceived(const QByteArray& message);
     void rtpReceived(const QByteArray& packet);
+    /// Task 36: a packet on the microphone line carrying micAudioSsrc().
+    void micRtpReceived(const QByteArray& packet);
     void ready();
     void closed();
     void connectionFailed(const QString& message);

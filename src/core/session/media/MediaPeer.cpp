@@ -5,6 +5,11 @@
 // no-port-check: NereusSDR-original. Remote-daemon R3 Task 1.
 // See MediaPeer.h for the ownership boundary.
 //
+// Modification history (NereusSDR):
+//   2026-09-25: iPhone app plan Task 36 (R-IOS-13): the microphone line
+//               and its SSRC. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
+//
 // =================================================================
 
 #include "core/session/media/MediaPeer.h"
@@ -121,6 +126,8 @@ struct MediaPeer::Private {
     QList<quint32> receiverAudioSsrcs;
     // R-R3-45: 0 unless the headphones mix was asked for.
     quint32 headphonesAudioSsrc = 0;
+    // Task 36: 0 unless the microphone line was asked for.
+    quint32 micAudioSsrc = 0;
     quint64 generation = 0;
     int remoteCandidateControls = 0;
     int localCandidateControls = 0;
@@ -153,7 +160,7 @@ MediaPeer::~MediaPeer()
 
 bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId,
                       int audioTargetBitrate, bool offerLosslessAudio,
-                      bool receiverAudioStreams, bool headphonesMixStream)
+                      bool receiverAudioStreams, bool headphonesMixStream, bool micLine)
 {
     d->startRefusal = StartRefusal::None;
     if (d->started || !isCanonicalConnectionId(connectionId)) {
@@ -191,6 +198,7 @@ bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId,
         ? receiverAudioSsrcsForConnection(connectionId) : QList<quint32>{};
     d->headphonesAudioSsrc = headphonesMixStream
         ? headphonesAudioSsrcForConnection(connectionId) : 0;
+    d->micAudioSsrc = micLine ? micAudioSsrcForConnection(connectionId) : 0;
     d->remoteCandidateControls = 0;
     d->localCandidateControls = 0;
     d->remoteDescriptionAccepted = false;
@@ -288,6 +296,23 @@ bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId,
                 }
                 emit self->rtpReceived(packet);
             });
+    // Task 36: the microphone line carries its one SSRC; anything else on it
+    // is refused and reported, as on the main line.
+    connect(transport, &IMediaTransport::micRtpReceived, this,
+            [self, isCurrentGeneration](const QByteArray& packet) {
+                if (!isCurrentGeneration()) {
+                    return;
+                }
+                if (packet.size() < IMediaTransport::kMinRawRtpBytes
+                    || packet.size() > IMediaTransport::kMaxRawRtpBytes
+                    || self->d->micAudioSsrc == 0
+                    || rtpSsrc(packet) != self->d->micAudioSsrc) {
+                    emit self->errorOccurred(
+                        QStringLiteral("invalid microphone RTP packet rejected"));
+                    return;
+                }
+                emit self->micRtpReceived(packet);
+            });
     connect(transport, &IMediaTransport::ready, this,
             [self, isCurrentGeneration] {
                 if (!isCurrentGeneration() || self->d->ready) {
@@ -336,6 +361,7 @@ bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId,
     options.offerLosslessAudio = offerLosslessAudio;
     options.receiverAudioSsrcs = d->receiverAudioSsrcs;
     options.headphonesAudioSsrc = d->headphonesAudioSsrc;
+    options.micAudioSsrc = d->micAudioSsrc;
     const bool backendStarted = transport->start(options);
     if (!self) {
         return false;
@@ -384,6 +410,7 @@ void MediaPeer::stopInternal(bool notify)
     d->audioSsrc = 0;
     d->receiverAudioSsrcs.clear();
     d->headphonesAudioSsrc = 0;
+    d->micAudioSsrc = 0;
 
     QPointer<IMediaTransport> transport = d->transport;
     d->transport.clear();
@@ -516,6 +543,15 @@ bool MediaPeer::sendRtp(const QByteArray& packet)
         && d->transport->sendRtp(packet);
 }
 
+bool MediaPeer::sendMicRtp(const QByteArray& packet)
+{
+    return d->started && d->transport && d->micAudioSsrc != 0
+        && packet.size() >= IMediaTransport::kMinRawRtpBytes
+        && packet.size() <= IMediaTransport::kMaxRawRtpBytes
+        && rtpSsrc(packet) == d->micAudioSsrc
+        && d->transport->sendMicRtp(packet);
+}
+
 bool MediaPeer::isReady() const
 {
     return d->started && d->ready && d->transport
@@ -525,6 +561,12 @@ bool MediaPeer::isReady() const
 bool MediaPeer::losslessAudioNegotiated() const
 {
     return d->started && d->transport && d->transport->losslessAudioNegotiated();
+}
+
+bool MediaPeer::micLosslessNegotiated() const
+{
+    return d->started && d->transport && d->micAudioSsrc != 0
+        && d->transport->micLosslessNegotiated();
 }
 
 QString MediaPeer::connectionId() const
@@ -577,6 +619,27 @@ quint32 MediaPeer::headphonesAudioSsrcForConnection(const QString& connectionId)
     identity.append(connectionId.toUtf8());
     quint32 ssrc = digestSsrc(identity);
     while (ssrc == 0 || ssrc == mainSsrc || receivers.contains(ssrc)) {
+        ++ssrc;
+    }
+    return ssrc;
+}
+
+quint32 MediaPeer::micAudioSsrc() const
+{
+    return d->micAudioSsrc;
+}
+
+quint32 MediaPeer::micAudioSsrcForConnection(const QString& connectionId)
+{
+    // Distinct from every stream id the Core sends on, declared or not, so
+    // the set is the same whichever streams a connection declares.
+    const quint32 mainSsrc = audioSsrcForConnection(connectionId);
+    const QList<quint32> receivers = receiverAudioSsrcsForConnection(connectionId);
+    const quint32 headphones = headphonesAudioSsrcForConnection(connectionId);
+    QByteArray identity("NereusSDR/media-mic-ssrc/v1:");
+    identity.append(connectionId.toUtf8());
+    quint32 ssrc = digestSsrc(identity);
+    while (ssrc == 0 || ssrc == mainSsrc || receivers.contains(ssrc) || ssrc == headphones) {
         ++ssrc;
     }
     return ssrc;

@@ -46,6 +46,12 @@ MediaSctpSettingsRecord mediaSctpSettingsRecord();
 /// (TX audio, R4).
 QString opusOfferFormatParameters(int targetBitrate);
 
+/// iPhone app plan Task 36 (R-IOS-13): the Opus a=fmtp parameters of the
+/// microphone line, which the Core receives: mono 48 kHz, in-band FEC, a
+/// 24 kbit/s average, 10 ms minimum packet time (RFC 7587 section 6.1: the
+/// Core's receive preferences, matching the app's microphone encoder).
+QString micLineOpusFormatParameters();
+
 class LibDataChannelMediaTransport final : public IMediaTransport {
     Q_OBJECT
 
@@ -70,9 +76,11 @@ public:
     DisplaySendResult submitDisplay(const QByteArray& message) override;
     bool displayBusy() const override;
     bool sendRtp(const QByteArray& packet) override;
+    bool sendMicRtp(const QByteArray& packet) override;
 
     bool isReady() const override;
     bool losslessAudioNegotiated() const override;
+    bool micLosslessNegotiated() const override;
     std::optional<MediaTransportTelemetry> telemetry() const override;
 
     /// Test seam: while stalled, the library thread that delivers received
