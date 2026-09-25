@@ -538,13 +538,19 @@ string in an `f64` entry is refused. The case is common: `SliceModel`'s
    - `capabilities` (section 6);
    - `settings.snapshot`: every station-scoped setting (section 8);
    - one `schema` per mirrored class, in the order the classes are first
-     watched (`StateMirror::attachSession`);
+     watched (`MirrorView::attach`);
    - one `object.create` per object, each with its full property set: the
      fixed objects first, then one per slice;
    - `snapshot.complete`.
+
+   These go to the device let in alone, from its own view of the station's
+   state (iPhone app plan Task 72): another device's session receives none
+   of them, and what the station had still to send another device is sent
+   to it as before.
 5. From then on the station sends `delta`, `object.create` and
    `object.destroy` as its state changes, and the client may send property
-   writes, settings writes and commands.
+   writes, settings writes and commands. With several devices on one Core,
+   each message goes where section 12.4's routing says.
 
 A `hello` carries `major`, `minor`, `settingsSchema` (the sender's settings
 schema version) and `peer` (a name for the sending program). A difference
@@ -564,9 +570,9 @@ accepted its pairing token.").
 
 - **A late radio.** A station can accept a client before its radio is
   found. When the radio connects, the station sends `capabilities` and
-  `settings.snapshot` again, one event-loop turn later, to the session
-  that was current when the radio arrived (`currentRadioChanged` in the
-  `StationServer` constructor). Settings are scoped to the connected radio,
+  `settings.snapshot` again, one event-loop turn later, to every session
+  let in when the radio arrived, each with its own capabilities
+  (`currentRadioChanged` in the `StationServer` constructor). Settings are scoped to the connected radio,
   so the snapshot is merged into the client's settings, not a replacement.
 - **A changed display allowance.** When the station's display budget
   changes, it sends `capabilities` again with the new allowance
@@ -1568,7 +1574,9 @@ Notes on the keys:
 
 The station collects property changes and sends them at most every 50 ms
 (`kDefaultDeltaFlushMs`), one `delta` per object carrying the latest value
-of each changed property. The desktop client collects its own writes on
+of each changed property. It collects them for each device's session
+separately (`MirrorView`, iPhone app plan Task 72), so a device that
+signs in never takes another device's pending changes with it. The desktop client collects its own writes on
 the same 50 ms period (`kDefaultWriteFlushMs`).
 
 ### 7.3 Property writes and property.result
@@ -1602,7 +1610,18 @@ is at least 1 (`propertyResultsAvailable()`).
 
 Side effects of a write on other properties go back as a `delta`. A peer
 that did not negotiate results, or wrote without a `writeId`, also gets its
-requested properties back in that `delta`.
+requested properties back in that `delta`. Both go to the writer alone.
+
+**Echo per writer** (iPhone app plan Task 72; the several-devices design,
+ruling 5.7). What a write changes, the property written and any side effect
+on another object (two slices on one receiver share its noise blanker, so
+a change to one's blanker changes the other's), never comes back to the
+writer as a `delta`: the writer has its `property.result` and the readback
+above. Every other device's session receives each change as an ordinary
+`delta`. With one device on the Core nothing on its wire changes. The
+station's tests `tst_station_multi_session` and `tst_mirror_view` hold it
+to this; the several-client fixtures of later tasks (`two-devices` and
+after) carry it on the wire.
 
 A property write never keys the transmitter: `txPermitted` is false and
 the transmit safety gates stay at the station (section 17).
@@ -1793,14 +1812,17 @@ computer, never sent). `classifySettingsKey` (`SettingsScope.cpp`) decides:
   origin tag is the writing client's session identifier, not a sequence
   number. The station writes the value to its own store and sends
   `settings.value` for the key with the same `origin`, so the writer can
-  recognise its own echo. A change the Core makes itself goes out as
+  recognise its own echo. It sends that `settings.value` to every device's
+  session, each of which holds every station-scoped key; only the writer
+  finds its own `origin` in it (iPhone app plan Task 72). A change the Core makes itself goes out as
   `settings.value` with an empty origin. A removal goes out as
   `settings.value` with no property entry.
 - `settings.remove` removes a station-scoped key; the station ignores (and
   logs) a remove of an operator-local key.
 - A refused write or remove gets `settings.reject`: the key, the station's
   own value as the property entry when it has one, and a `reason`. The
-  client puts that value back.
+  client puts that value back. It goes to the session that wrote, and to
+  no other.
 
 The station refuses a write to a key outside the station scope ("Each app
 keeps this setting itself; the Core does not store it."), to another radio's `hardware/<mac>/` keys ("These settings
@@ -1845,7 +1867,13 @@ A client asks the station to act with `command.invoke`: a `verb`, an `id`
 and `args`, a list of property entries. The station answers each with
 `command.result`: the same `verb` and `id`, `accepted`, `reason` (empty on
 success), `affected` (the object keys the command changed) and, for
-commands that return data, `values`, a list of property entries. For the
+commands that return data, `values`, a list of property entries. Every
+`command.result`, including a later one (a PureSignal action's later
+phases, a sample-rate change answered on a later turn), goes to the session
+that sent the `command.invoke`, and to no other. A file a device is
+sending with `dspAssets.beginImport` belongs to that device's session: it is
+cancelled when that session ends, and another device leaving never touches
+it. For the
 `nnr.*`, `ps3.*` and `dspAssets.*` families the `id` must be a whole number
 from 1 to 4294967295 or the message is refused.
 
@@ -2257,6 +2285,21 @@ signed in with the token and no key, and a device that leaves with
 `session.leave` (section 9.1), frees its place at once; so does removing a
 device, away or not. The heartbeat timeout stays retryable: that end is
 what starts a device's 3 minutes.
+
+**Routing with several devices** (iPhone app plan Task 72; the
+several-devices design, ruling 5.8). Each session has its own view of the
+station's state, with its own pending changes and its own connect-time
+burst (section 5.1), each message fitted to what that session negotiated:
+its minor and its capabilities, as before.
+
+| Message | Goes to |
+| --- | --- |
+| `command.result`, `property.result`, `settings.reject` | the session that asked, only |
+| `confirm.request`, `notice` (when the station sends them) | the one device they are for |
+| `delta`, `object.create`, `object.destroy` | every session holding the object; a device's own write is not echoed to it (section 7.3) |
+| `settings.value` | every session, with the writer's `origin` (section 8.1) |
+| a write's readback of its side effects on the written object | the writer, only (section 7.3) |
+| `capabilities` | each session its own |
 
 The desktop client redials on the schedule 1, 2, 5, 10, 30 and 60 s, then
 stays at 60 s (`kReconnectBackoffSteps` in `StationClient.cpp`), and starts

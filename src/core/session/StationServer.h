@@ -37,7 +37,7 @@
 //      object.create per live object, and the snapshot-complete marker
 //      LAST (StateMirror::attachSession).
 //
-// ── UP TO FOUR DEVICES, ONE SHARED MIRROR FOR NOW (topology) ────────────
+// ── UP TO FOUR DEVICES, A MIRROR VIEW EACH (topology) ───────────────────
 //
 // Task 18 chose one shared StateMirror because the remote design's section
 // 7.1 then allowed one session at a time, with a newcomer preempting it.
@@ -52,15 +52,23 @@
 // its 180 s) replaces its own older connection with sameDevice; with a
 // place free the device is admitted; a full Core refuses, retryable.
 //
-// The mirror is still one, shared, until Task 72 gives each device a view.
-// StateMirror::hasAttachedSession() is a single bool and attachSession()
-// clears the outbound coalescer, so a newcomer's attach would discard
-// deltas the others still had pending. promoteToSession() therefore flushes
-// the coalescer to every admitted session first, and the attach's schema,
-// object.create and snapshot.complete messages go to the newcomer alone
-// (m_burstTarget); only deltas go to everyone. Echo suppression is still
-// the shared mirror's: a device's write reaches the others only through
-// side effects the mirror forwards, which Task 72's per-writer echo fixes.
+// iPhone app Task 72 (the several-devices design, rulings 5.6 to 5.8): the
+// StateMirror keeps its one set of watches, and each admitted session gets
+// a MirrorView (Peer::view) with its own outbound coalescer, its own attach
+// burst and its own sink, sendToPeer(), which fits every message to what
+// that session negotiated (today's filter by minor and capabilities; Task
+// 73 adds ownership). A newcomer's attach therefore never touches what
+// another session has pending. Echo is per writer: a property write is
+// applied as its session's write, and what it changes, on the written
+// object or as a side effect on another (a shared receiver's blanker), is
+// withheld from that session's view only and reaches every other. Routing:
+// command.result, property.result and settings.reject go to the session
+// that asked (confirm.request and notice, when they exist, to the device
+// they are for); delta, object.create, object.destroy and settings.value go
+// to every view (settings.value keeps its writer's origin); a write's
+// readback of its side effects on the written object goes to the writer
+// alone. The dispatcher's owner is station:<sessionId>, so a device's
+// DSP-asset jobs end with its own session and nobody else's.
 // Media and telemetry stay with one session (m_mediaSession, the first
 // admitted while none holds it) until Task 76 gives each device a media
 // controller: another admitted session is told no media is available
@@ -234,6 +242,11 @@
 //                                    the `connectedDevices` object; 24
 //                                    sockets. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app Task 72 (R-IOS-02): a
+//                                    MirrorView per session, echo per
+//                                    writer, routing per session and the
+//                                    dispatcher's owner per session. AI-
+//                                    assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QHash>
@@ -269,6 +282,7 @@ class PairingWindow;
 class SpakeExchange;
 class StationIdentity;
 class ObjectRegistry;
+class MirrorView;
 class ConnectedDevicesFacade;
 class DeviceSessionRegistry;
 class RadioModel;
@@ -736,6 +750,11 @@ private:
         /// keeps its place by itself and must not be marked away.
         bool placeSettled = false;
         bool leaving = false;
+        /// iPhone app Task 72: this session's view of the mirror (ruling
+        /// 5.6), made when it is let in and closed when it ends; and its
+        /// id, for the dispatcher's owner string station:<sessionId>.
+        QPointer<MirrorView> view;
+        quint64 sessionId = 0;
 
         /// Pings sent since the last pong. Reset to 0 by every pong; the
         /// heartbeat tick declares death when it reaches maxMissedPongs().
@@ -825,7 +844,12 @@ private:
     /// iPhone app Task 71: `message` to every admitted session (each fitted
     /// to what that peer negotiated), or during an attach's burst the
     /// burst's own messages to the attaching session alone.
-    void sendToSession(const SessionMessage& message);
+    // iPhone app Task 72 (ruling 5.8): to every view that holds the object
+    // or key. Every other message goes to one session, through send() or
+    // sendToPeer().
+    void sendToEveryView(const SessionMessage& message);
+    QList<QPointer<MirrorView>> attachedViews() const;
+    static QString sessionOwner(quint64 sessionId);
     /// One mirror or control message to one admitted peer, fitted to it.
     void sendToPeer(SessionTransport* transport, const SessionMessage& message);
     /// The capability descriptor `transport` is told.
@@ -913,7 +937,7 @@ private:
     /// to until Task 76 (see the topology note); null when none holds them.
     SessionTransport* m_mediaSession = nullptr;
     /// During promoteToSession()'s attach: the session its burst is for.
-    SessionTransport* m_burstTarget = nullptr;
+    quint64 m_nextSessionId = 0;
     /// Command results owed to a session other than the one being
     /// dispatched now (a result that arrives on a later turn), by verb and
     /// id.

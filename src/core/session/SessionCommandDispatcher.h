@@ -125,6 +125,10 @@
 //   2026-09-25: iPhone app Task 71 (R-IOS-02): session.leave and
 //               sessionLeaveRequested. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app Task 72 (R-IOS-02, ruling 5.8): the owner is
+//               per session (setSessionOwner before each dispatch,
+//               endSessionOwner, resetSessionState). J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -190,7 +194,21 @@ public:
     /// class comment). Callers must not assume commandResultReady() has
     /// fired by the time dispatch() itself returns.
     void dispatch(const NereusSDR::SessionMessage& invoke);
+
+    /// iPhone app Task 72 (ruling 5.8): the session the dispatches that
+    /// follow act for, as `station:<sessionId>`. The Core sets it before
+    /// each dispatch, so a DSP-asset job belongs to the device that started
+    /// it and one device leaving cancels only its own. Nothing else
+    /// changes.
     void setSessionOwner(const QString& owner);
+
+    /// Cancels every DSP-asset job `owner` started (its session ended).
+    void endSessionOwner(const QString& owner);
+
+    /// Forgets pending PureSignal actions and returns every slice to normal
+    /// NNR audio. The Core calls it when the session media goes to starts
+    /// or ends: a new session never replays a prior test signal.
+    void resetSessionState();
 
     /// iPhone app Task 13: the Core's device administration, which the
     /// devices.* and station.* verbs act on. Not owned. Without one those

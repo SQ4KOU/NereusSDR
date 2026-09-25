@@ -261,6 +261,7 @@
 #include "core/security/TokenStore.h"
 #include "core/session/MirrorPolicy.h"
 #include "core/session/MirrorSchema.h"
+#include "core/session/MirrorView.h"
 #include "core/session/ObjectRegistry.h"
 #include "core/session/SessionCommandDispatcher.h"
 #include "core/session/ConnectedDevicesFacade.h"
@@ -955,16 +956,20 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
         });
     }
 
-    // Outbound: everything the daemon has to say goes to every admitted
-    // session (sendToSession fits it to each), and to nothing at all when
-    // there is none.
-    connect(m_mirror, &StateMirror::sessionMessageReady, this,
-            [this](const SessionMessage& message) { sendToSession(message); });
+    // Outbound: iPhone app Task 72 (ruling 5.6). Each admitted session has
+    // its own MirrorView (promoteToSession), which sends the mirror's
+    // messages to that session alone, fitted by sendToPeer; nothing goes
+    // to a connection that holds no view.
     connect(radioModel, &RadioModel::receiveLayoutHydrated, this, [this] {
         if (hasAuthenticatedSession() && m_mirrorBuilt) {
             // Shared slice QObjects were restored without individual notify
-            // signals. Re-seed their entire settled state on the same session.
-            m_mirror->attachSession();
+            // signals. Re-seed their entire settled state on every session,
+            // each view its own burst.
+            for (const QPointer<MirrorView>& view : attachedViews()) {
+                if (!view.isNull()) {
+                    view->attach();
+                }
+            }
         }
     });
     // iPhone app Task 71: a command's result goes to the session that asked:
@@ -998,7 +1003,10 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     });
     connect(m_settingsServer, &SettingsProxyServer::outboundValueChanged, this,
             [this](const QString& key, const QVariant& value, const QString& originTag) {
-                sendToSession(
+                // Ruling 5.8: to every view holding the key (every session
+                // holds every Station key it was sent in its snapshot), the
+                // writer's origin kept so the writer knows its own echo.
+                sendToEveryView(
                     SessionMessages::settingsValue(key, value.toString(), originTag));
             });
     // R-R3-49: the Network Watchdog is a radio setting, applied where the
@@ -1018,7 +1026,7 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     // removed the key itself had it resurrected by the echo.
     connect(m_settingsServer, &SettingsProxyServer::outboundValueRemoved, this,
             [this](const QString& key) {
-                sendToSession(SessionMessages::settingsValueAbsent(key, QString()));
+                sendToEveryView(SessionMessages::settingsValueAbsent(key, QString()));
             });
     // R-R3-49: a removal (a settings reset on the Core while it runs)
     // leaves the settings reading the default, so the radio takes the
@@ -1093,12 +1101,12 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     connect(m_registry, &ObjectRegistry::objectCreated, this,
             [this](const QByteArray& objectKey, const QByteArray& className, int,
                    const QList<MirrorUpdate>& snapshot) {
-                sendToSession(
+                sendToEveryView(
                     SessionMessages::objectCreate(objectKey, className, snapshot));
             });
     connect(m_registry, &ObjectRegistry::objectDestroyed, this,
             [this](const QByteArray& objectKey, const QByteArray& className, int) {
-                sendToSession(SessionMessages::objectDestroy(objectKey, className));
+                sendToEveryView(SessionMessages::objectDestroy(objectKey, className));
             });
 
     m_heartbeatTimer = new QTimer(this);
@@ -1108,8 +1116,11 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     m_deltaFlushTimer = new QTimer(this);
     m_deltaFlushTimer->setInterval(kDefaultDeltaFlushMs);
     connect(m_deltaFlushTimer, &QTimer::timeout, this, [this]() {
-        if (hasAuthenticatedSession() && m_mirror != nullptr) {
-            m_mirror->flushCoalescedDeltas();
+        // iPhone app Task 72: each session's own view, its own pending.
+        for (const QPointer<MirrorView>& view : attachedViews()) {
+            if (!view.isNull()) {
+                view->flush();
+            }
         }
     });
 
@@ -1701,7 +1712,20 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
     const QByteArray sessionDevice = it->sessionDeviceId;
     const bool placeSettled = it->placeSettled;
     const bool leaving = it->leaving;
+    // iPhone app Task 72: the session's view stops at once (a burst in
+    // progress sends nothing more) and goes with the event loop; the
+    // DSP-asset jobs this session started are cancelled, and only those
+    // (ruling 5.8).
+    const QPointer<MirrorView> view = it->view;
+    const QString owner = sessionOwner(it->sessionId);
     m_peers.erase(it);
+    if (!view.isNull()) {
+        view->close();
+        view->deleteLater();
+    }
+    if (!owner.isEmpty()) {
+        m_dispatcher->endSessionOwner(owner);
+    }
     for (auto route = m_resultRoutes.begin(); route != m_resultRoutes.end();) {
         route = route->isNull() || route->data() == transport ? m_resultRoutes.erase(route)
                                                               : std::next(route);
@@ -1720,7 +1744,7 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
     if (m_mediaSession == transport) {
         // The session media and telemetry went to (the topology note).
         m_mediaSession = nullptr;
-        m_dispatcher->setSessionOwner({});
+        m_dispatcher->resetSessionState();
         if (m_radioModel) {
             m_radioModel->pureSignalFacade()->resetSession();
         }
@@ -1735,7 +1759,7 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
         // the daemon's own state is not the sessions' to tear down -- and
         // the next attachSession() clears whatever the coalescer holds
         // anyway, because a fresh burst already carries every watched
-        // object's current value.
+        // object's current value (each view clears its own at attach).
         m_deltaFlushTimer->stop();
     }
 
@@ -2087,7 +2111,11 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
             m_dispatchingTransport = transport;
             m_pendingEnd.reset();
             m_resultSentInDispatch = false;
+            // iPhone app Task 72 (ruling 5.8): the command acts for this
+            // session, so a DSP-asset job it starts is this device's.
+            m_dispatcher->setSessionOwner(sessionOwner(m_peers.value(transport).sessionId));
             m_dispatcher->dispatch(message);
+            m_dispatcher->setSessionOwner({});
             m_dispatchingTransport = nullptr;
             // iPhone app Task 71: a result still owed (it arrives on a later
             // turn), or a PureSignal action's later phases, goes to this
@@ -2897,7 +2925,7 @@ void StationServer::promoteToSession(SessionTransport* transport)
     // BEFORE any session is attached for the first time, deliberately.
     // buildMirror() ends in ObjectRegistry::backfillExistingSlices(), which
     // emits objectCreated for every slice the daemon already holds -- and
-    // those are wired straight to sendToSession(). With no session yet
+    // those are wired straight to sendToEveryView(). With no view yet
     // attached they go nowhere, which is exactly right: attachSession()
     // below sends an object.create for every watched object anyway, AFTER
     // the schema messages that a client needs in order to make sense of
@@ -2910,23 +2938,26 @@ void StationServer::promoteToSession(SessionTransport* transport)
         m_mediaSession = transport;
         ++m_mediaSessionEpoch;
         m_radioModel->pureSignalFacade()->resetSession();
-        m_dispatcher->setSessionOwner(QStringLiteral("station:%1").arg(m_mediaSessionEpoch));
+        m_dispatcher->resetSessionState();
     }
+    // iPhone app Task 72: the session's own id, for the dispatcher's owner
+    // string (station:<sessionId>).
+    m_peers[transport].sessionId = ++m_nextSessionId;
 
     if (!sendCapabilitiesAndSettingsSnapshot(transport)) {
         return;
     }
 
     // State snapshot, model half, ending in the snapshot-complete marker.
-    // The mirror is shared until Task 72: what the sessions already
-    // admitted still have pending goes to them first, because
-    // attachSession() clears the coalescer; then the burst's schemas,
-    // creates and marker go to this session alone (m_burstTarget). A delta
-    // the burst itself causes goes to every session.
-    m_mirror->flushCoalescedDeltas();
-    m_burstTarget = transport;
-    m_mirror->attachSession();
-    m_burstTarget = nullptr;
+    // iPhone app Task 72 (ruling 5.6): this session's own view, with its
+    // own coalescer, so the sessions already admitted keep what they have
+    // pending; the burst goes to this session alone, and a change the
+    // burst itself causes reaches every view.
+    const QPointer<MirrorView> view(new MirrorView(
+        m_mirror, [this, transport](const SessionMessage& message) { sendToPeer(transport, message); },
+        this));
+    m_peers[transport].view = view;
+    view->attach();
     if (!m_peers.contains(transport)) {
         return;
     }
@@ -2967,13 +2998,13 @@ void StationServer::buildMirror()
     // and drops the object and its deltas, as with any newer object.
     m_mirror->watch("notches", m_radioModel->notchModel());
     // R-R3-46 (radioHardwareVersion 1): the Core's step attenuator and
-    // preamp. Sent only to a peer at minor 11 (sendToSession).
+    // preamp. Sent only to a peer at minor 11 (sendToPeer).
     m_mirror->watch(QByteArray(kStepAttKey), m_radioModel->stepAttFacade());
     // R-R3-46 (radioHardwareVersion 2): the Core's Alex antenna settings.
-    // Sent only to a peer at minor 11 (sendToSession).
+    // Sent only to a peer at minor 11 (sendToPeer).
     m_mirror->watch(QByteArray(kAlexAntennasKey), m_radioModel->alexAntennaFacade());
     // R-R3-46 (radioHardwareVersion 3): the Core's HL2 I/O board, read-only.
-    // Sent only to a peer at minor 11 (sendToSession).
+    // Sent only to a peer at minor 11 (sendToPeer).
     m_mirror->watch(QByteArray(kIoBoardKey), m_radioModel->ioBoardFacade());
     m_mirror->watch("pureSignal", m_radioModel->pureSignalFacade());
     m_mirror->watch(QByteArray(kTransmitKey), &m_radioModel->transmitModel());
@@ -2982,7 +3013,7 @@ void StationServer::buildMirror()
     }
     // R-R3-47 / R-R3-22 (remotePgxlControlVersion 1,
     // remoteRfKitControlVersion 1): the Core's amplifier and RF-Kit status.
-    // Sent only to a peer at minor 11 (sendToSession).
+    // Sent only to a peer at minor 11 (sendToPeer).
     m_mirror->watch(QByteArray(kAmplifierKey), m_radioModel->amplifierModel());
     m_mirror->watch(QByteArray(kRfKitKey), m_radioModel->rfKitModel());
     // R-R3-48 (stationTciVersion 1): the Core's station TCI server.
@@ -3005,7 +3036,7 @@ void StationServer::buildMirror()
     m_mirror->watch(QByteArray(kConnectedDevicesKey), m_connectedDevices.get());
     // iPhone app Task 19 (stationCatalogVersion 1): the Core's catalogue,
     // read again now so the snapshot carries the radio as it is. Sent only
-    // to a peer at minor 11 (sendToSession).
+    // to a peer at minor 11 (sendToPeer).
     m_catalog->refresh();
     m_mirror->watch(QByteArray(kCatalogKey), m_catalog.get());
     const QList<PanadapterModel*> pans = m_radioModel->panadapters();
@@ -3187,7 +3218,10 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
                                 : QString::fromLatin1(kOutboundWriteReason));
             continue;
         }
-        const MirrorApplyResult result = m_mirror->applyInbound(message.objectKey, update.name, update.value);
+        // Ruling 5.7: this session's write. Its changes, here and on other
+        // objects, are withheld from its own view and reach every other.
+        const MirrorApplyResult result = m_mirror->applyInbound(
+            message.objectKey, update.name, update.value, m_peers.value(transport).view.data());
         if (!result.accepted) {
             refusals.insert(update.name, result.reason);
         }
@@ -3411,33 +3445,35 @@ SessionMessage StationServer::withPairingCodeFor(SessionTransport* transport,
     return blanked;
 }
 
-void StationServer::sendToSession(const SessionMessage& message)
+void StationServer::sendToEveryView(const SessionMessage& message)
 {
-    // iPhone app Task 71: every admitted session whose snapshot is complete,
-    // each fitted to what it negotiated (sendToPeer). While an attach runs
-    // (m_burstTarget), its schemas, creates and marker are that session's
-    // alone; anything else (a delta the burst caused) reaches it and every
-    // other session too.
-    const bool burstOnly = m_burstTarget != nullptr
-        && (message.kind == SessionMessageKind::Schema
-            || message.kind == SessionMessageKind::ObjectCreate
-            || message.kind == SessionMessageKind::SnapshotComplete);
-    if (burstOnly) {
-        sendToPeer(m_burstTarget, message);
-        return;
-    }
-    // Copied: a send never erases a peer today, but the list is not this
-    // loop's to trust across calls.
-    const QList<SessionTransport*> transports = m_peers.keys();
-    for (SessionTransport* transport : transports) {
-        const auto peer = m_peers.constFind(transport);
-        if (peer == m_peers.cend() || peer->sessionDeviceId.isEmpty()) {
-            continue;
-        }
-        if (peer->snapshotComplete || transport == m_burstTarget) {
-            sendToPeer(transport, message);
+    // iPhone app Task 72 (ruling 5.8): an object.create, object.destroy or
+    // settings.value goes to every view that holds the object or key: each
+    // admitted session whose view has attached, fitted to what it
+    // negotiated (sendToPeer). A view still in its burst is attached and so
+    // receives it too; a connection with no view receives nothing.
+    for (const QPointer<MirrorView>& view : attachedViews()) {
+        if (!view.isNull()) {
+            view->deliver(message);
         }
     }
+}
+
+QList<QPointer<MirrorView>> StationServer::attachedViews() const
+{
+    // Copied: a send can end a session, which erases its peer.
+    QList<QPointer<MirrorView>> views;
+    for (const Peer& peer : std::as_const(m_peers)) {
+        if (!peer.sessionDeviceId.isEmpty() && !peer.view.isNull() && peer.view->isAttached()) {
+            views.append(peer.view);
+        }
+    }
+    return views;
+}
+
+QString StationServer::sessionOwner(quint64 sessionId)
+{
+    return sessionId == 0 ? QString() : QStringLiteral("station:%1").arg(sessionId);
 }
 
 void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage& original)

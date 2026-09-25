@@ -110,6 +110,10 @@
 //   2026-09-25: iPhone app Task 71 (R-IOS-02): session.leave
 //               (sessionHolderVersion 1). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app Task 72 (R-IOS-02, ruling 5.8): the owner per
+//               session; ending one owner cancels only its DSP-asset jobs.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -521,16 +525,29 @@ SessionCommandDispatcher::SessionCommandDispatcher(RadioModel* radioModel, QObje
 
 void SessionCommandDispatcher::setSessionOwner(const QString& owner)
 {
+    // iPhone app Task 72: before, this also cancelled the previous owner's
+    // jobs and reset the session state, because there was one session. The
+    // owner now changes with every dispatch; those two are their own calls.
+    m_sessionOwner = owner;
+}
+
+void SessionCommandDispatcher::endSessionOwner(const QString& owner)
+{
+    if (m_radioModel && !owner.isEmpty()) {
+        m_radioModel->dspAssets()->cancelOwner(owner);
+    }
+}
+
+void SessionCommandDispatcher::resetSessionState()
+{
     m_pureSignalCommands.clear();
-    if (m_radioModel && !m_sessionOwner.isEmpty()) {
-        m_radioModel->dspAssets()->cancelOwner(m_sessionOwner);
+    if (m_radioModel) {
         for (SliceModel* slice : m_radioModel->slices()) {
             // Diagnostic modes are operator actions. A new session always
             // starts on normal audio and never replays a prior test signal.
             m_radioModel->setNnrDiagnosticMode(slice->sliceIndex(), 0, 1);
         }
     }
-    m_sessionOwner = owner;
 }
 
 void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)

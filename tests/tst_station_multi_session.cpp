@@ -27,17 +27,31 @@
 // device; names and short names; durations measured at send, never from the
 // wall clock; the Core's hello declaring sessionHolder 1.
 //
-// Keys are made at run time in scratch directories. Mirror traffic and
-// media on a second device are not asserted: Tasks 72 and 76 own them.
+// Then, from Task 72 (sections 5.5, rulings 5.6 to 5.8), what each device
+// receives: A's change to a blanker two slices share reaches B and not A,
+// whose property.result carries the readback; a newcomer's attach leaves
+// another device's pending deltas in place and carries current values;
+// command.result, property.result and settings.reject go only to the device
+// that asked, settings.value to every device with its writer's origin; a
+// DSP-asset job ends with its own device's session and no other.
+//
+// Keys are made at run time in scratch directories. Media on a second
+// device is not asserted: Task 76 owns it.
 //
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-09-25: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 71 (R-IOS-02), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 72 (R-IOS-02): a mirror view per
+//               device, echo per writer and routing per session. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QtTest>
+
+#include <QCryptographicHash>
 
 #include <QDir>
 #include <QFile>
@@ -59,7 +73,10 @@
 #include "core/session/SessionMessages.h"
 #include "core/session/StationCapabilities.h"
 #include "core/session/StationServer.h"
+#include "core/WdspTypes.h"
+#include "core/dsp/DspAssetService.h"
 #include "models/RadioModel.h"
+#include "models/SliceModel.h"
 
 #include "OperatorWording.h"
 #include "fakes/LoopbackTransport.h"
@@ -385,6 +402,54 @@ QStringList idsOf(const QJsonArray& list)
 MirrorUpdate utf8(const char* name, const QString& value)
 {
     return MirrorUpdate{0, QByteArray(name), MirrorWireKind::Utf8, QVariant(value)};
+}
+
+MirrorUpdate int64(const char* name, qint64 value)
+{
+    return MirrorUpdate{0, QByteArray(name), MirrorWireKind::Int64, QVariant(value)};
+}
+
+// Every value `property` of `key` carried in a delta from message `from` on.
+QList<QJsonValue> deltaValues(const QList<QByteArray>& received, int from, const QString& key,
+                              const QString& property)
+{
+    QList<QJsonValue> values;
+    for (int i = std::max(0, from); i < received.size(); ++i) {
+        const QJsonObject o = QJsonDocument::fromJson(received.at(i)).object();
+        if (o.value(QStringLiteral("type")).toString() != QStringLiteral("delta")
+            || o.value(QStringLiteral("key")).toString() != key) {
+            continue;
+        }
+        for (const QJsonValue& p : o.value(QStringLiteral("properties")).toArray()) {
+            if (p.toObject().value(QStringLiteral("name")).toString() == property) {
+                values.append(p.toObject().value(QStringLiteral("value")));
+            }
+        }
+    }
+    return values;
+}
+
+int countOfType(const QList<QByteArray>& received, int from, const QString& type)
+{
+    int count = 0;
+    for (int i = std::max(0, from); i < received.size(); ++i) {
+        if (QJsonDocument::fromJson(received.at(i)).object().value(QStringLiteral("type")).toString()
+            == type) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+// A second slice 10 kHz from slice 0, so the two share one receiver and
+// its one noise blanker (tst_mirror_inbound's co-hosting).
+int addCoHostedSlice(RadioModel& model)
+{
+    model.configureStreamPool(5, 5, 192000);
+    const int second = model.addSlice(QStringLiteral("pan-0"));
+    model.sliceById(0)->setFrequency(14200000.0);
+    model.sliceById(second)->setFrequency(14210000.0);
+    return second;
 }
 
 } // namespace
@@ -988,6 +1053,223 @@ private slots:
                                             QStringLiteral("revision"))})
                 .toJson();
         QCOMPARE(revisionAfter, revisionBefore);
+    }
+
+    // ── A mirror view per device (Task 72) ───────────────────────────────
+
+    void aSharedBlankerChangeReachesTheOtherDeviceNotTheWriter()
+    {
+        Core core;
+        const int second = addCoHostedSlice(*core.model);
+        QVERIFY(core.model->sliceById(0)->streamIndex() >= 0);
+        QCOMPARE(core.model->sliceById(second)->streamIndex(),
+                 core.model->sliceById(0)->streamIndex());
+        QCOMPARE(core.model->sliceById(second)->nbMode(), NbMode::Off);
+        const QString sharedKey = QStringLiteral("slice:%1").arg(second);
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a);
+        LoopbackTransport* appB = core.signIn(b);
+        QVERIFY(admitted(appA));
+        QVERIFY(admitted(appB));
+        const int fromA = appA->received().size();
+        const int fromB = appB->received().size();
+
+        appA->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+            "slice:0",
+            {MirrorUpdate{0, "nbMode", MirrorWireKind::Enum,
+                          QVariant(static_cast<int>(NbMode::NB))}},
+            77)));
+
+        // A: its own answer, with the value the Core kept.
+        QVERIFY(QTest::qWaitFor(
+            [appA]() { return !firstOfType(appA->received(), QStringLiteral("property.result")).isEmpty(); },
+            5000));
+        const QJsonObject result = firstOfType(appA->received(), QStringLiteral("property.result"));
+        QCOMPARE(result.value(QStringLiteral("writeId")).toInteger(), 77);
+        const QJsonObject kept = result.value(QStringLiteral("results")).toArray().first().toObject();
+        QCOMPARE(kept.value(QStringLiteral("accepted")).toBool(false), true);
+        QCOMPARE(kept.value(QStringLiteral("value")).toObject().value(QStringLiteral("value")).toInt(),
+                 static_cast<int>(NbMode::NB));
+        QCOMPARE(core.model->sliceById(second)->nbMode(), NbMode::NB);
+
+        // B: the change, and the side effect on the slice sharing its
+        // receiver.
+        QVERIFY(QTest::qWaitFor(
+            [&]() {
+                return !deltaValues(appB->received(), fromB, QStringLiteral("slice:0"),
+                                    QStringLiteral("nbMode")).isEmpty()
+                    && !deltaValues(appB->received(), fromB, sharedKey,
+                                    QStringLiteral("nbMode")).isEmpty();
+            },
+            5000));
+        QCOMPARE(deltaValues(appB->received(), fromB, sharedKey, QStringLiteral("nbMode")).last().toInt(),
+                 static_cast<int>(NbMode::NB));
+        QCOMPARE(countOfType(appB->received(), fromB, QStringLiteral("property.result")), 0);
+
+        // A: no echo of its own write, on either slice, over several flushes.
+        QTest::qWait(3 * StationServer::kDefaultDeltaFlushMs);
+        QVERIFY(deltaValues(appA->received(), fromA, QStringLiteral("slice:0"),
+                            QStringLiteral("nbMode")).isEmpty());
+        QVERIFY(deltaValues(appA->received(), fromA, sharedKey, QStringLiteral("nbMode")).isEmpty());
+    }
+
+    void aNewcomerLeavesAnotherDevicesDeltasInPlace()
+    {
+        Core core;
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appB = core.signIn(b);
+        QVERIFY(admitted(appB));
+        const int fromB = appB->received().size();
+
+        // Pending for B when A attaches (the flush tick has not run).
+        core.model->sliceById(0)->setFrequency(7151000.0);
+        core.model->sliceById(0)->setAfGain(31);
+        LoopbackTransport* appA = core.signIn(a);
+        QVERIFY(admitted(appA));
+
+        // A's burst holds the current values.
+        QCOMPARE(latest(appA->received(), QStringLiteral("slice:0"), QStringLiteral("frequency"))
+                     .toDouble(),
+                 7151000.0);
+        QCOMPARE(latest(appA->received(), QStringLiteral("slice:0"), QStringLiteral("afGain"))
+                     .toInt(),
+                 31);
+        // Every one of B's arrives, and none of A's burst.
+        QVERIFY(QTest::qWaitFor(
+            [&]() {
+                return !deltaValues(appB->received(), fromB, QStringLiteral("slice:0"),
+                                    QStringLiteral("frequency")).isEmpty()
+                    && !deltaValues(appB->received(), fromB, QStringLiteral("slice:0"),
+                                    QStringLiteral("afGain")).isEmpty();
+            },
+            5000));
+        QCOMPARE(deltaValues(appB->received(), fromB, QStringLiteral("slice:0"),
+                             QStringLiteral("frequency")).last().toDouble(),
+                 7151000.0);
+        QCOMPARE(deltaValues(appB->received(), fromB, QStringLiteral("slice:0"),
+                             QStringLiteral("afGain")).last().toInt(),
+                 31);
+        QCOMPARE(countOfType(appB->received(), fromB, QStringLiteral("schema")), 0);
+        QCOMPARE(countOfType(appB->received(), fromB, QStringLiteral("snapshot.complete")), 0);
+    }
+
+    void resultsGoOnlyToTheDeviceThatAsked()
+    {
+        Core core;
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a);
+        LoopbackTransport* appB = core.signIn(b);
+        QVERIFY(admitted(appA));
+        QVERIFY(admitted(appB));
+        const int fromB = appB->received().size();
+
+        // command.result
+        const QJsonObject listed = core.invoke(appA, "dspAssets.list");
+        QCOMPARE(listed.value(QStringLiteral("accepted")).toBool(false), true);
+        // property.result
+        appA->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+            "slice:0", {MirrorUpdate{0, "afGain", MirrorWireKind::Int64, QVariant(qint64(42))}},
+            91)));
+        QVERIFY(QTest::qWaitFor(
+            [appA]() { return !firstOfType(appA->received(), QStringLiteral("property.result")).isEmpty(); },
+            5000));
+        // settings.value: to both, with A's origin.
+        appA->sendText(SessionMessages::encode(SessionMessages::settingsWrite(
+            QStringLiteral("DisplaySpectrumFps"), QStringLiteral("30"), QStringLiteral("origin-a"))));
+        const auto sawValue = [](LoopbackTransport* app) {
+            for (const QJsonObject& o : ofType(app->received(), QStringLiteral("settings.value"))) {
+                if (o.value(QStringLiteral("key")).toString() == QStringLiteral("DisplaySpectrumFps")) {
+                    return o;
+                }
+            }
+            return QJsonObject{};
+        };
+        QVERIFY(QTest::qWaitFor([&]() { return !sawValue(appA).isEmpty() && !sawValue(appB).isEmpty(); },
+                                5000));
+        QCOMPARE(sawValue(appA).value(QStringLiteral("origin")).toString(), QStringLiteral("origin-a"));
+        QCOMPARE(sawValue(appB).value(QStringLiteral("origin")).toString(), QStringLiteral("origin-a"));
+        // settings.reject: an operator-local key, refused to A only.
+        appA->sendText(SessionMessages::encode(SessionMessages::settingsWrite(
+            QStringLiteral("RxOnly"), QStringLiteral("True"), QStringLiteral("origin-a"))));
+        QVERIFY(QTest::qWaitFor(
+            [appA]() { return !firstOfType(appA->received(), QStringLiteral("settings.reject")).isEmpty(); },
+            5000));
+        // B also receives A's afGain as a delta (A's write, B's change).
+        QVERIFY(QTest::qWaitFor(
+            [&]() {
+                return !deltaValues(appB->received(), fromB, QStringLiteral("slice:0"),
+                                    QStringLiteral("afGain")).isEmpty();
+            },
+            5000));
+        QTest::qWait(2 * StationServer::kDefaultDeltaFlushMs);
+        QCOMPARE(countOfType(appB->received(), fromB, QStringLiteral("command.result")), 0);
+        QCOMPARE(countOfType(appB->received(), fromB, QStringLiteral("property.result")), 0);
+        QCOMPARE(countOfType(appB->received(), fromB, QStringLiteral("settings.reject")), 0);
+    }
+
+    void aDspAssetJobEndsWithItsOwnDeviceOnly()
+    {
+        Core core;
+        DspAssetStore* store = core.model->dspAssets()->store();
+        QVERIFY(store != nullptr);
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a);
+        LoopbackTransport* appB = core.signIn(b);
+        QVERIFY(admitted(appA));
+        QVERIFY(admitted(appB));
+
+        const QByteArray payload(64, 'n');
+        const QString hash =
+            QString::fromLatin1(QCryptographicHash::hash(payload, QCryptographicHash::Sha256).toHex());
+        const auto begin = [&](LoopbackTransport* app, const QString& label) {
+            const QJsonObject r = core.invoke(app, "dspAssets.beginImport",
+                                              {int64("kind", 0), utf8("label", label),
+                                               int64("size", payload.size()), utf8("hash", hash),
+                                               utf8("radioIdentity", QString())});
+            [&]() { QCOMPARE(r.value(QStringLiteral("accepted")).toBool(false), true); }();
+            for (const QJsonValue& v : r.value(QStringLiteral("values")).toArray()) {
+                if (v.toObject().value(QStringLiteral("name")).toString()
+                    == QStringLiteral("transferId")) {
+                    return v.toObject().value(QStringLiteral("value")).toString();
+                }
+            }
+            return QString();
+        };
+        const QString jobA = begin(appA, QStringLiteral("from A"));
+        const QString jobB = begin(appB, QStringLiteral("from B"));
+        QVERIFY(!jobA.isEmpty());
+        QVERIFY(!jobB.isEmpty());
+        QVERIFY(jobA != jobB);
+
+        // B leaves: its own job is cancelled, and A's goes on.
+        appB->closeLink(QStringLiteral("test"));
+        QVERIFY(QTest::qWaitFor([&core]() { return core.server->authenticatedSessionCount() == 1; },
+                                5000));
+        QVERIFY(!store->appendImport(jobB, QByteArray("x")));
+        const QJsonObject chunk = core.invoke(
+            appA, "dspAssets.chunk",
+            {utf8("transferId", jobA), int64("offset", 0),
+             utf8("data", QString::fromLatin1(payload.left(16).toBase64()))});
+        QVERIFY2(chunk.value(QStringLiteral("accepted")).toBool(false),
+                 qPrintable(chunk.value(QStringLiteral("reason")).toString()));
+
+        // A leaves: now its job is cancelled too.
+        appA->closeLink(QStringLiteral("test"));
+        QVERIFY(QTest::qWaitFor([&core]() { return core.server->authenticatedSessionCount() == 0; },
+                                5000));
+        QVERIFY(!store->appendImport(jobA, QByteArray("x")));
     }
 };
 
