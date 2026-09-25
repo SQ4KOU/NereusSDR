@@ -23,6 +23,9 @@
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-25: each band-plan segment's lowestClass (R-IOS-27,
+//               R-IOS-11). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -310,6 +313,36 @@ void checkDesktopValues(const QJsonObject& catalog, HPSDRModel model, ProtocolVe
             QCOMPARE(first.value(QStringLiteral("label")).toString(), QStringLiteral("CW"));
             QCOMPARE(first.value(QStringLiteral("licence")).toString(), QStringLiteral("E,G"));
             QCOMPARE(first.value(QStringLiteral("colour")).toString(), QStringLiteral("#3060FF"));
+            QCOMPARE(first.value(QStringLiteral("lowestClass")).toString(),
+                     QStringLiteral("General"));
+            // The lowest licence class, by the band-plan strip's rule: the
+            // 80 m phone segments, one General and up, one Extra only.
+            int phoneGeneral = 0;
+            int phoneExtra = 0;
+            for (const QJsonValue& s : plan.value(QStringLiteral("segments")).toArray()) {
+                const QJsonObject seg = s.toObject();
+                QVERIFY2(seg.contains(QStringLiteral("lowestClass")),
+                         "a band-plan segment has no lowestClass");
+                QCOMPARE(seg.value(QStringLiteral("lowestClass")).toString(),
+                         lowestLicenceClass(seg.value(QStringLiteral("licence")).toString()));
+                if (seg.value(QStringLiteral("label")).toString() != QStringLiteral("PHONE")) {
+                    continue;
+                }
+                if (seg.value(QStringLiteral("lowHz")).toInteger() == 3800000) {
+                    QCOMPARE(seg.value(QStringLiteral("licence")).toString(), QStringLiteral("E,G"));
+                    QCOMPARE(seg.value(QStringLiteral("lowestClass")).toString(),
+                             QStringLiteral("General"));
+                    ++phoneGeneral;
+                }
+                if (seg.value(QStringLiteral("lowHz")).toInteger() == 3600000) {
+                    QCOMPARE(seg.value(QStringLiteral("licence")).toString(), QStringLiteral("E"));
+                    QCOMPARE(seg.value(QStringLiteral("lowestClass")).toString(),
+                             QStringLiteral("Extra"));
+                    ++phoneExtra;
+                }
+            }
+            QCOMPARE(phoneGeneral, 1);
+            QCOMPARE(phoneExtra, 1);
         }
     }
     QCOMPARE(defaults, 1);

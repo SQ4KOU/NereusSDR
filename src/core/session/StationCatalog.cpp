@@ -15,6 +15,10 @@
 //   2026-09-24: the `receive` key (AF gain, SSQL, AM and FM squelch
 //               ranges). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-25: each band-plan segment's `lowestClass`, from the band-plan
+//               strip's own rule (lowestLicenceClass, models/BandPlan.h).
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationCatalog.h"
@@ -303,6 +307,7 @@ QJsonArray bandPlansArray(const StationCatalog::Inputs& inputs)
                 {QStringLiteral("highHz"), static_cast<qint64>(std::llround(segment.highMhz * 1.0e6))},
                 {QStringLiteral("label"), segment.label},
                 {QStringLiteral("licence"), segment.license},
+                {QStringLiteral("lowestClass"), lowestLicenceClass(segment.license)},
                 {QStringLiteral("colour"), colourText(segment.color)},
             });
         }
