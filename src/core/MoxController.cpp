@@ -340,7 +340,7 @@ void MoxController::recomputeVoxRun()
     // level is dropped here and the pass releases a VOX key.
     if (!gated && m_voxPtt) {
         m_voxPtt = false;
-        m_refusedHeld &= static_cast<quint8>(~kRefusedVox);
+        clearHeldBits(kRefusedVox);
         pollPtt();
     }
 }
@@ -370,7 +370,7 @@ void MoxController::setVoxEnabled(bool on)
     // VOX key would never release. The next PollPTT pass releases it.
     if (!on && m_voxPtt) {
         m_voxPtt = false;
-        m_refusedHeld &= static_cast<quint8>(~kRefusedVox);
+        clearHeldBits(kRefusedVox);
         pollPtt();
     }
 }
@@ -570,6 +570,9 @@ void MoxController::setMox(bool on)
     if (on && m_moxCheck) {
         const auto result = m_moxCheck();
         if (!result.ok) {
+            // R-R3-36: tryPollKey reads this to hold a refused source off
+            // until it is pressed again (m_notQueuedHeld).
+            m_lastRefusalNotQueued = result.notQueued;
             // Task 7 fix wave, M3: a held source's repeat refusal is quiet.
             if (!m_quietRefusal) {
                 emit moxRejected(result.reason);
@@ -772,7 +775,7 @@ void MoxController::dropPttOnUnkey()
     //[2.10.1.0]MW0LGE changed  [original inline comment from console.cs:29406]
     m_catPtt = false;
     m_tciPtt = false;
-    m_refusedHeld &= static_cast<quint8>(~(kRefusedCat | kRefusedTci));
+    clearHeldBits(kRefusedCat | kRefusedTci);
     setPttMode(PttMode::None);
 }
 
@@ -792,13 +795,44 @@ void MoxController::tryPollKey(PttMode mode, quint8 refusedBit)
         return;
     }
     m_quietRefusal = (m_refusedHeld & refusedBit) != 0;
+    m_lastRefusalNotQueued = false;
     setMox(true);
     m_quietRefusal = false;
     if (m_mox) {
         m_refusedHeld &= static_cast<quint8>(~refusedBit);
     } else {
         m_refusedHeld |= refusedBit;
+        // R-R3-36: refused because the microphone is not ready, and never
+        // queued. pollPtt skips this source until its level drops. A CAT or
+        // TCI level is already dropped by the refusal (dropPttOnUnkey), so
+        // only a source still held is latched.
+        if (m_lastRefusalNotQueued && isLevelHeld(refusedBit)) {
+            m_notQueuedHeld |= refusedBit;
+        }
     }
+    m_lastRefusalNotQueued = false;
+}
+
+// ---------------------------------------------------------------------------
+// clearHeldBits: a source's level dropped (or was dropped), so its next
+// level is a new press: it is told of a refusal again (M3) and is tried
+// again after a never-queued refusal (R-R3-36).
+// ---------------------------------------------------------------------------
+bool MoxController::isLevelHeld(quint8 bit) const noexcept
+{
+    switch (bit) {
+    case kRefusedTci: return m_tciPtt;
+    case kRefusedCat: return m_catPtt;
+    case kRefusedMic: return m_micPtt;
+    case kRefusedVox: return m_voxPtt;
+    default:          return false;
+    }
+}
+
+void MoxController::clearHeldBits(quint8 bits)
+{
+    m_refusedHeld &= static_cast<quint8>(~bits);
+    m_notQueuedHeld &= static_cast<quint8>(~bits);
 }
 
 // ---------------------------------------------------------------------------
@@ -872,20 +906,24 @@ void MoxController::pollPtt()
 
     if (!m_mox) {
         // From Thetis console.cs:25507-25511 [v2.10.3.15]
-        if (m_tciPtt) {
+        // R-R3-36: a source refused because the microphone was not ready
+        // is skipped until it is released (isHeldOff). Not in Thetis,
+        // which has no microphone admission; its band-plan and interlock
+        // refusals are still retried on every pass, as PollPTT does.
+        if (m_tciPtt && !isHeldOff(kRefusedTci)) {
             tryPollKey(PttMode::Tci, kRefusedTci);
         }
         // From Thetis console.cs:25513-25517 [v2.10.3.15]
-        if (m_catPtt) {
+        if (m_catPtt && !isHeldOff(kRefusedCat)) {
             tryPollKey(PttMode::Cat, kRefusedCat);
         }
         // From Thetis console.cs:25526-25541 [v2.10.3.15] (mode gate not
         // ported, see above; PTTMode.CW is never set before 3M-2)
-        if (m_micPtt && m_pttMode != PttMode::Cw) {
+        if (m_micPtt && m_pttMode != PttMode::Cw && !isHeldOff(kRefusedMic)) {
             tryPollKey(PttMode::Mic, kRefusedMic);
         }
         // From Thetis console.cs:25543-25555 [v2.10.3.15]
-        if (m_voxPtt && isVoiceMode(m_currentMode)) {
+        if (m_voxPtt && isVoiceMode(m_currentMode) && !isHeldOff(kRefusedVox)) {
             tryPollKey(PttMode::Vox, kRefusedVox);
         }
         return;
@@ -899,12 +937,15 @@ void MoxController::pollPtt()
             // console.cs:25429-25461 [v2.10.3.15]: CAT, then CW (3M-2),
             // then MIC, then VOX (voice modes), else NONE. The mic's
             // tx_mode gate is left out as on the keying side.
+            // R-R3-36: a source held off after a never-queued refusal is
+            // not a fallback either; taking the key would key it without a
+            // new press.
             PttMode fallback = PttMode::None;
-            if (m_catPtt) {
+            if (m_catPtt && !isHeldOff(kRefusedCat)) {
                 fallback = PttMode::Cat;
-            } else if (m_micPtt) {
+            } else if (m_micPtt && !isHeldOff(kRefusedMic)) {
                 fallback = PttMode::Mic;
-            } else if (m_voxPtt && isVoiceMode(m_currentMode)) {
+            } else if (m_voxPtt && isVoiceMode(m_currentMode) && !isHeldOff(kRefusedVox)) {
                 fallback = PttMode::Vox;
             }
             if (fallback == PttMode::None) {
@@ -923,9 +964,15 @@ void MoxController::pollPtt()
                 if (!admit.ok) {
                     emit moxRejected(admit.reason);
                     // M3: that source, still held, is not told again.
-                    m_refusedHeld |= (fallback == PttMode::Cat) ? kRefusedCat
-                                   : (fallback == PttMode::Mic) ? kRefusedMic
-                                                                : kRefusedVox;
+                    const quint8 bit = (fallback == PttMode::Cat) ? kRefusedCat
+                                     : (fallback == PttMode::Mic) ? kRefusedMic
+                                                                  : kRefusedVox;
+                    m_refusedHeld |= bit;
+                    // R-R3-36: and, refused for the microphone, it is not
+                    // keyed later without a new press.
+                    if (admit.notQueued) {
+                        m_notQueuedHeld |= bit;
+                    }
                     setMox(false);
                     break;
                 }
@@ -973,6 +1020,7 @@ void MoxController::clearPttSources()
     m_voxPtt = false;
     m_tciPtt = false;
     m_refusedHeld = 0;
+    m_notQueuedHeld = 0;
 }
 
 // ---------------------------------------------------------------------------
@@ -1655,7 +1703,7 @@ void MoxController::onMicPttFromRadio(bool pressed)
     // anything during a manual key. Receiver and transmit gaps plan, Task 7.
     m_micPtt = pressed;
     if (!pressed) {
-        m_refusedHeld &= static_cast<quint8>(~kRefusedMic);   // M3: a new press is told again
+        clearHeldBits(kRefusedMic);   // M3 and R-R3-36: a new press
     }
     pollPtt();
 }
@@ -1681,7 +1729,7 @@ void MoxController::onCatPtt(bool pressed)
     // unkeys only in PTTMode.CAT (console.cs:25582-25588).
     m_catPtt = pressed;
     if (!pressed) {
-        m_refusedHeld &= static_cast<quint8>(~kRefusedCat);   // M3: a new press is told again
+        clearHeldBits(kRefusedCat);   // M3 and R-R3-36: a new press
     }
     pollPtt();
 }
@@ -1707,7 +1755,7 @@ void MoxController::onVoxActive(bool active)
     // ported: VAX is not VAC.
     m_voxPtt = active;
     if (!active) {
-        m_refusedHeld &= static_cast<quint8>(~kRefusedVox);   // M3: a new press is told again
+        clearHeldBits(kRefusedVox);   // M3 and R-R3-36: a new press
     }
     pollPtt();
 }
@@ -1788,7 +1836,7 @@ void MoxController::onTciPtt(bool pressed)
 {
     m_tciPtt = pressed;
     if (!pressed) {
-        m_refusedHeld &= static_cast<quint8>(~kRefusedTci);   // M3: a new press is told again
+        clearHeldBits(kRefusedTci);   // M3 and R-R3-36: a new press
     }
     pollPtt();
 }

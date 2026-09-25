@@ -501,8 +501,10 @@ private slots:
     }
 
     // ── Task 7 fix wave, M3: one refusal message per press ──────────────────
-    // A held source is tried on every status frame, as PollPTT polls; the
-    // keying is unchanged, but the operator is told once per press.
+    // A held source is refused on every status frame, but the operator is
+    // told once per press. R-R3-36 (Task 7 follow-up): a refusal because
+    // the microphone is not ready is never queued, so the held source does
+    // not key when the microphone becomes ready; the operator presses again.
     void heldRefusedSource_isReportedOncePerPress()
     {
         MoxController ctrl;
@@ -510,7 +512,8 @@ private slots:
         bool allow = false;
         ctrl.setMoxCheck([&allow]() {
             return safety::BandPlanGuard::MoxCheckResult{allow,
-                allow ? QString() : QStringLiteral("test refusal")};
+                allow ? QString() : QStringLiteral("Microphone is not ready."),
+                /*notQueued=*/!allow};
         });
         QSignalSpy rejected(&ctrl, &MoxController::moxRejected);
 
@@ -530,13 +533,78 @@ private slots:
         ctrl.onVoxActive(false);
         drain();
 
-        // The keying is unchanged: a held source keys once it is allowed.
+        // Never queued: the microphone becoming ready does not key the mic
+        // still held; a new press does.
         micFrames(ctrl, true, 3);
         QCOMPARE(rejected.count(), 4);
+        allow = true;
+        micFrames(ctrl, true, 3);
+        QVERIFY2(!ctrl.isMox(), "a held mic keyed without a new press");
+        micFrames(ctrl, false, 1);
+        micFrames(ctrl, true, 1);
+        QVERIFY(ctrl.isMox());
+        QCOMPARE(ctrl.pttMode(), PttMode::Mic);
+        QCOMPARE(rejected.count(), 4);
+        micFrames(ctrl, false, 1);
+        QVERIFY(!ctrl.isMox());
+
+        // VOX the same way.
+        allow = false;
+        ctrl.onVoxActive(true);
+        drain();
+        QCOMPARE(rejected.count(), 5);
+        allow = true;
+        micFrames(ctrl, false, 3);
+        QVERIFY2(!ctrl.isMox(), "a held VOX keyed without a new press");
+        ctrl.onVoxActive(false);
+        ctrl.onVoxActive(true);
+        drain();
+        QVERIFY(ctrl.isMox());
+        QCOMPARE(ctrl.pttMode(), PttMode::Vox);
+    }
+
+    // Thetis's retry stays for the other refusals: PollPTT tries a held
+    // source on every pass, so a band-plan (or interlock) refusal keys the
+    // held source once it is allowed.
+    void heldBandPlanRefusal_keysOnceAllowed()
+    {
+        MoxController ctrl;
+        makeSync(ctrl);
+        bool allow = false;
+        ctrl.setMoxCheck([&allow]() {
+            return safety::BandPlanGuard::MoxCheckResult{allow,
+                allow ? QString() : QStringLiteral("Out of band.")};
+        });
+        QSignalSpy rejected(&ctrl, &MoxController::moxRejected);
+        micFrames(ctrl, true, 3);
+        QVERIFY(!ctrl.isMox());
+        QCOMPARE(rejected.count(), 1);
         allow = true;
         micFrames(ctrl, true, 1);
         QVERIFY(ctrl.isMox());
         QCOMPARE(ctrl.pttMode(), PttMode::Mic);
+    }
+
+    // A TCI or CAT refusal drops its level, so the app's next request is a
+    // new press; a microphone refusal does not hold it off.
+    void refusedTciForMicrophone_nextTrxIsANewPress()
+    {
+        MoxController ctrl;
+        makeSync(ctrl);
+        bool allow = false;
+        ctrl.setMoxCheck([&allow]() {
+            return safety::BandPlanGuard::MoxCheckResult{allow,
+                allow ? QString() : QStringLiteral("Microphone is not ready."),
+                /*notQueued=*/!allow};
+        });
+        ctrl.onTciPtt(true);
+        drain();
+        QVERIFY(!ctrl.isMox());
+        allow = true;
+        ctrl.onTciPtt(true);
+        drain();
+        QVERIFY(ctrl.isMox());
+        QCOMPARE(ctrl.pttMode(), PttMode::Tci);
     }
 
     void heldSourceUnderInterlock_isReportedOncePerPress()

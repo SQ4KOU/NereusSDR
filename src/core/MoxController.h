@@ -164,6 +164,10 @@
 //                 running; a TCI release that falls back runs the MOX
 //                 pre-check (R-R3-36). J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-24 - Receiver and transmit gaps plan, Task 7 follow-up: a
+//                 held source refused because the microphone is not
+//                 ready is never queued (m_notQueuedHeld, R-R3-36). J.J.
+//                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -1267,6 +1271,18 @@ private:
         kRefusedVox = 0x08,
     };
     quint8   m_refusedHeld{0};
+    // R-R3-36 (Task 7 follow-up): the sources refused because the
+    // microphone was not ready (MoxCheckResult::notQueued), same bits.
+    // pollPtt does not try them, nor fall back to them, until the level
+    // drops: the refusal is never queued, the operator presses again.
+    // Cleared with m_refusedHeld (clearHeldBits).
+    quint8   m_notQueuedHeld{0};
+    // The last MOX pre-check refusal was a never-queued one. Read by
+    // tryPollKey right after its setMox(true).
+    bool     m_lastRefusalNotQueued{false};
+    bool     isHeldOff(quint8 bit) const noexcept { return (m_notQueuedHeld & bit) != 0; }
+    bool     isLevelHeld(quint8 bit) const noexcept;
+    void     clearHeldBits(quint8 bits);
     // True only across a quiet setMox(true) from tryPollKey.
     bool     m_quietRefusal{false};
     // tryPollKey: PollPTT's `_current_ptt_mode = X; chkMOX.Checked = true;`

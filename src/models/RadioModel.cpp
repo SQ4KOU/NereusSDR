@@ -12414,10 +12414,14 @@ void RadioModel::installBandPlanMoxCheck()
         // and never queued: capture becoming Ready later does not key, the
         // operator presses again. Tune, two-tone and TCI audio do not read
         // the PC microphone and key normally.
+        // notQueued carries "never queued" to a source still held: the
+        // controller does not try it again until it is released and
+        // pressed again (MoxController::m_notQueuedHeld).
         if (pcCaptureGatesKeying() && !pcCaptureReady()) {
             return {false,
                     QStringLiteral("Microphone is not ready. Check Audio "
-                                   "settings and retry.")};
+                                   "settings and retry."),
+                    /*notQueued=*/true};
         }
         return bandPlanResult;
     });
