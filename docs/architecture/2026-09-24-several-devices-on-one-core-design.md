@@ -715,7 +715,12 @@ active slice:
   moves), and TCI's two broadcasts that exist once per radio, `digl_offset` and
   `digu_offset` (`TciServer.cpp:1030-1043` `@46b40373`, which read `RadioModel::activeSlice()`, now the
   station-level slice). `RadioModel::activeSlice()` itself is the station-level slice on the
-  Core.
+  Core. The FreeDV Reporter narrows this (settled by the fix wave after the group review of
+  Tasks 71 to 76): it lists the frequency of a slice in RADE mode when one exists (the first in
+  creation order, whoever owns it), and the station-level slice's otherwise, because the
+  reporter lists FreeDV activity. A slice entering or leaving RADE mode, or closing, re-checks
+  which slice is listed (`RadioModel::freedvReportedSlice`,
+  `RadioModel::refreshFreedvReportedFrequency`).
 - **Per slice, and they stay so:** the simplex transmit-follows-receive push follows the
   transmit-bound slice, not the active one (`RadioModel.cpp:7787` `@46b40373` in `addSliceImpl`, gated on
   `txBoundSlice()`, `RadioModel.cpp:12636-12642` `@46b40373`, the arbiter's binding with no active-slice

@@ -3355,6 +3355,12 @@ public slots:
     // publishes immediately (initial baseline / band-jump fast-path /
     // MOX force) or restarts the dwell timer for a deferred publish.
     void publishFreedvFrequencyDwelled(quint64 hz);
+    /// Fix wave (several-devices ruling 5.11): the slice whose frequency
+    /// the FreeDV Reporter lists: the first slice in RADE mode, else the
+    /// station-level active slice.
+    SliceModel* freedvReportedSlice() const;
+    /// Lists freedvReportedSlice()'s frequency when it changed.
+    void refreshFreedvReportedFrequency();
     // Force-publish the current pending freq right now and reset the
     // dwell.  Called from MoxController::txAboutToBegin so a TX engage
     // never leaves the reporter showing a stale freq.

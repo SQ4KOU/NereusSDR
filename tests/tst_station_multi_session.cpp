@@ -2005,6 +2005,19 @@ private slots:
         QCOMPARE(core.model->freedvWantedFrequencyHzForTest(), quint64(7076000));
         QCOMPARE(activeOwn(appA), 1);
         QCOMPARE(activeOwn(appB), 1);
+
+        // Fix wave (ruling 5.11): a slice in RADE mode is the one the FreeDV
+        // Reporter lists, whoever's active slice leads; retuning it moves
+        // the listing even though it is not the active one, and the
+        // station-level slice leads again once no slice is in RADE.
+        core.model->sliceById(2)->setDspMode(DSPMode::RADE_U);
+        QCOMPARE(core.model->freedvWantedFrequencyHzForTest(), quint64(21074000));
+        core.model->sliceById(2)->setFrequency(14236000.0);
+        QCOMPARE(core.model->freedvWantedFrequencyHzForTest(), quint64(14236000));
+        core.model->sliceById(1)->setFrequency(7078000.0);
+        QCOMPARE(core.model->freedvWantedFrequencyHzForTest(), quint64(14236000));
+        core.model->sliceById(2)->setDspMode(DSPMode::USB);
+        QCOMPARE(core.model->freedvWantedFrequencyHzForTest(), quint64(7078000));
     }
 
     // Where a device's slices come from, and where they go (ruling 5.2,

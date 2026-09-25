@@ -2299,6 +2299,13 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // (kFreedvFreqDwellMs = 7 s) calls flushFreedvFrequencyDwell which
     // emits the cached pending freq.  See member declaration in
     // RadioModel.h for the full throttle policy.
+    // Fix wave (ruling 5.11): a RADE slice closing may hand the listing
+    // back to the station-level slice.
+    connect(this, &RadioModel::sliceRemoved, this, [this]() {
+        if (m_role == Role::Local) {
+            refreshFreedvReportedFrequency();
+        }
+    });
     m_freedvFreqDwellTimer = new QTimer(this);
     m_freedvFreqDwellTimer->setSingleShot(true);
     m_freedvFreqDwellTimer->setInterval(kFreedvFreqDwellMs);
@@ -8016,11 +8023,22 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
         // slice's frequency is listed, so another device tuning its own
         // slice never moves this station on the dashboard. Moved here
         // from wireSliceSignals, which runs only once a radio connects.
-        if (m_role != Role::Local || slice == m_activeSlice) {
+        //
+        // Fix wave (ruling 5.11): a slice in RADE mode is listed when one
+        // exists (the reporter lists FreeDV activity), else the
+        // station-level slice.
+        if (m_role != Role::Local || slice == freedvReportedSlice()) {
             m_freedvWantedHz = static_cast<quint64>(freq);
             if (m_freeDvReporter && m_freeDvReporter->isConnected()) {
                 publishFreedvFrequencyDwelled(static_cast<quint64>(freq));
             }
+        }
+    });
+    // Fix wave (ruling 5.11): a slice entering or leaving RADE mode may
+    // change which slice the FreeDV Reporter lists.
+    connect(slice, &SliceModel::dspModeChanged, this, [this]() {
+        if (m_role == Role::Local) {
+            refreshFreedvReportedFrequency();
         }
     });
     connect(slice, &SliceModel::xitEnabledChanged, this, [this, slice]() {
@@ -9159,11 +9177,35 @@ void RadioModel::applyActiveSlices()
     }
     m_activeSlice = next;
     emitActiveSliceChanged(next ? static_cast<int>(m_slices.indexOf(next)) : -1);
-    // Ruling 5.11: the FreeDV Reporter lists the station-level slice.
-    if (m_activeSlice) {
-        m_freedvWantedHz = static_cast<quint64>(m_activeSlice->frequency());
-        publishFreedvFrequencyDwelled(m_freedvWantedHz);
+    // Ruling 5.11: the FreeDV Reporter lists a RADE slice when there is
+    // one, else the station-level slice.
+    refreshFreedvReportedFrequency();
+}
+
+SliceModel* RadioModel::freedvReportedSlice() const
+{
+    // Fix wave (ruling 5.11): the first slice in RADE mode, in creation
+    // order; with none, the station-level active slice.
+    for (SliceModel* s : m_slices) {
+        if (s && (s->dspMode() == DSPMode::RADE_U || s->dspMode() == DSPMode::RADE_L)) {
+            return s;
+        }
     }
+    return m_activeSlice;
+}
+
+void RadioModel::refreshFreedvReportedFrequency()
+{
+    const SliceModel* listed = freedvReportedSlice();
+    if (listed == nullptr) {
+        return;
+    }
+    const quint64 hz = static_cast<quint64>(listed->frequency());
+    if (hz == m_freedvWantedHz) {
+        return;
+    }
+    m_freedvWantedHz = hz;
+    publishFreedvFrequencyDwelled(m_freedvWantedHz);
 }
 
 bool RadioModel::setActiveSliceByIdFor(const QByteArray& owner, int sliceId)
