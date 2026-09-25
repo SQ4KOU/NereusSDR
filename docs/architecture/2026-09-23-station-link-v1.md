@@ -1799,6 +1799,10 @@ shift, as several slices on one receiver always have).
 `requestStreamCtunPinned` from another device is refused with "This
 panadapter shows <anchor's name>'s receiver. Its C-Tune setting is
 <anchor's name>'s.".
+A pin lasts through its anchor's link dropping and its coming back as the
+same device (its `streamCtunPinned` is as it left it); it ends when the
+anchor leaves for good (`session.leave`, a token window's end, the end of
+its 180 s, revocation).
 
 **The anchor moves its panadapter.** A `requestStreamCentre` from the
 anchor that would leave another device's slice outside the new window is
@@ -1970,24 +1974,27 @@ requester's own slices never count, nor do slices nobody owns.
 
 | Change | Arrives as | What it reaches |
 | --- | --- | --- |
-| Sample rate | `requestSliceSampleRate` | Protocol 1: every receiver (the radio's data flow stops); Protocol 2: that receiver. Each other device's slice the narrower window leaves out moves to another receiver or, with none free, closes (the Core's own plan, run first) |
+| Sample rate | `requestSliceSampleRate` | Protocol 1: every receiver (the radio's data flow stops); Protocol 2: that receiver. Each other device's slice the narrower window leaves out moves to another receiver or, with none free, closes (the Core's own plan); it closes only once the change is certain, so a change refused after Confirm closes nothing and tells nobody |
 | Attenuator, preamp, automatic attenuator | `stepAtt` writes (`attenuationDb`, `enabled`, `preampMode`, `autoAtt...`) | ADC0's receivers |
 | ADC1 preamp | `stepAtt` `rx1Preamp` | ADC1's receivers |
 | Receive antenna | a slice's `rxAntenna`; `alexAntennas` `rxAntennas`, `rxOnlyAntennas`, `useTxAntennaForRx`; `setAlexRxAntenna` | every receiver on a 1-ADC board; on a 2-ADC board ADC0's (ANT1 to ANT3) and, for a receive-only input, ADC1's; a slice's own write also its receiver's other slices |
 | Receive filter policy | `setAlexBpfMode` | the receivers on that filter chain |
 | PureSignal | `pureSignalSettings` writes, `transmit` `pureSig`, `ps3.off`, `ps3.single`, `ps3.automatic`, `ps3.applyCurrent`, `ps3.restoreCorrection` | on a 1-ADC board every receiver, `pausesWhileTransmitting`; the transmitter |
-| Diversity | a slice's `diversityEnabled` | receiver 0 on a 2-ADC board, every receiver on a 1-ADC board |
+| Diversity | a slice's `diversityEnabled`, `diversityPhaseDeg`, `diversityGainDb`, `diversityFineNullEnabled` | receiver 0 on a 2-ADC board, every receiver on a 1-ADC board |
 | A shared receiver's noise blanker | a slice's `nbMode`, `nb1Threshold`, `nb1TransitionMs`, `nb1LeadMs`, `nb1LagMs`, `nb2Mode` | that receiver's slices |
 | Notches | `notch.add`, `notch.move`, `notch.setActive`, `notch.delete`; `notches` `globalEnabled`, `autoIncrease` | every slice whose passband overlaps the notch (the notches, for the two switches) |
 | Receive options | `settings.write` of the receive `DspOptions...Rx` keys (buffer size, filter size, filter type, per mode group) | every receiver |
 | Transmit antenna | a slice's `txAntenna` | the transmitter |
 | The amplifier, interlock, power limit | `amplifier` `operate`; `configurePgxl`, `disconnectPgxl`, `setPgxlConnectionSettings`, `setPgxlName`, `setPgxlHardware`, `setPgxlNetwork`, `savePgxlSettings`, `setTxInterlockPolicy`, `setPgxlPowerCap`, `configureRfKit`, `disconnectRfKit`, `setRfKitEnabled`; `settings.write` of `PGXL_...` | the transmitter |
+| 4O3A on or off | `setFourO3AEnabled` | as the tuner: ADC0's receivers on a 2-ADC board, every receiver on a 1-ADC board; the transmitter |
 | The tuner, the RF-Kit amplifier's antenna | `setTgxlAntenna`, `setTgxlOperate`, `setTgxlBypass`, `configureTgxl`, `disconnectTgxl`, `setTgxlName`, `setTgxlNetwork`, `saveTgxlSettings`; `settings.write` of `TGXL_...` and `RfKit_...` | ADC0's receivers on a 2-ADC board, every receiver on a 1-ADC board; the transmitter |
 
 A verb naming another device's slice is refused first, as section 7.3
 says. The words of `change` are the Core's: "Attenuator, ADC 1", "0 dB",
 "20 dB"; "Sample rate, Receiver 1", "192 kHz", "96 kHz"; "Noise blanker,
-Receiver 1", "Off", "NB". A `settings.write` held this way is answered by
+Receiver 1", "Off", "NB"; "Diversity phase", "0 degrees", "45 degrees";
+"Diversity gain", "0 dB", "6 dB"; "Diversity fine null", "Off", "On"; "4O3A
+amplifier and tuner", "Off", "On". A `settings.write` held this way is answered by
 `settings.reject` with "Waiting for you to confirm." and the Core's value
 (section 8.1), and its `confirm.request` carries `forSettingsKey`.
 
@@ -2566,7 +2573,12 @@ receiver streams (at most 4) and headphones mix, and one device's
 asks for receiver streams, only for its own slices: a `subscribe` naming
 another device's slice gets an `allocation-result` (or `rejected`) "That
 slice belongs to another device.", and a `receiver-audio` naming one is
-answered as a slice that is not there (`slice-removed`). A receiver's
+answered as a slice that is not there (`slice-removed`). When a slice
+passes to another device, the old owner's displays on it retire as a
+removed slice's do (reason "slice removed", on the `allocation-result`
+for a budget-aware app, else `rejected`), and its receiver stream on it
+stops as `slice-removed`: that device's view has destroyed the slice. A
+receiver's
 spectrum is computed once for everyone watching it: two devices' pans on
 one receiver share its engine, which runs at the largest size and highest
 rate any of them was granted, and a grant limited by that engine says
