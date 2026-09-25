@@ -614,9 +614,11 @@ private slots:
         caps.radioIdentityEntries = true;
         caps.stationCatalogVersion = 1;
         const QList<MirrorUpdate> updates = caps.toUpdates();
-        // iPhone app Task 20's displayExtrasVersion follows it.
-        QCOMPARE(updates.at(updates.size() - 2).name, QByteArray("stationCatalogVersion"));
-        QCOMPARE(updates.last().name, QByteArray("displayExtrasVersion"));
+        // iPhone app Task 20's displayExtrasVersion follows it, then
+        // R-R3-49's transmitSettingsVersion.
+        QCOMPARE(updates.at(updates.size() - 3).name, QByteArray("stationCatalogVersion"));
+        QCOMPARE(updates.at(updates.size() - 2).name, QByteArray("displayExtrasVersion"));
+        QCOMPARE(updates.last().name, QByteArray("transmitSettingsVersion"));
         QCOMPARE(StationCapabilities::fromUpdates(updates).stationCatalogVersion, 1);
         StationCapabilities older;
         older.stationCatalogVersion = 1;

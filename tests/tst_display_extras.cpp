@@ -838,7 +838,9 @@ private slots:
         caps.stationCatalogVersion = 1;
         caps.displayExtrasVersion = 1;
         const QList<MirrorUpdate> updates = caps.toUpdates();
-        QCOMPARE(updates.last().name, QByteArray("displayExtrasVersion"));
+        // R-R3-49's transmitSettingsVersion follows it.
+        QCOMPARE(updates.at(updates.size() - 2).name, QByteArray("displayExtrasVersion"));
+        QCOMPARE(updates.last().name, QByteArray("transmitSettingsVersion"));
         QCOMPARE(StationCapabilities::fromUpdates(updates).displayExtrasVersion, 1);
         // An older peer's block (no minor-11 entries) carries none.
         StationCapabilities older;

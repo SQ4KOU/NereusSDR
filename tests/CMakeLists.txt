@@ -7893,6 +7893,21 @@ nereus_add_test(tst_dbm_range_drag)
 # is no upstream source to cite.
 nereus_add_test(tst_display_settings_model)
 
+# R-R3-32 / R-R3-49 (remote-window parity Task 6): the radio link's datagram
+# counters (UDP packets seen, packet loss, RFC 3550 jitter, packet gap), as a
+# unit and from fake radios on both protocols.
+nereus_add_test(tst_radio_link_stats fakes/P1FakeRadio.cpp fakes/P2FakeRadio.cpp)
+target_compile_definitions(tst_radio_link_stats PRIVATE NEREUS_BUILD_TESTS)
+
+# R-R3-46 / R-R3-49 / R-R3-32 (remote-window parity Task 6): Setup > PA,
+# Radio Status's PA card and the HW meters in a remote window; the PA keys
+# taken by the Core off the air and applied at once; the Core's TX inhibit
+# mirrored. Loopback only, no RF, no audio device.
+nereus_add_test(tst_remote_pa_pages
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_remote_pa_pages PRIVATE NEREUS_BUILD_TESTS)
+
 # --------------------------------------------------------------------------
 # Aggregate "all_tests" target  (2026-05-26 KG4VCF dev-loop fix, from PR #291)
 # --------------------------------------------------------------------------
@@ -7933,18 +7948,3 @@ if(_label_names)
     endforeach()
     message(STATUS "NereusSDR: per-label test targets: ${_label_names}")
 endif()
-
-# R-R3-32 / R-R3-49 (remote-window parity Task 6): the radio link's datagram
-# counters (UDP packets seen, packet loss, RFC 3550 jitter, packet gap), as a
-# unit and from fake radios on both protocols.
-nereus_add_test(tst_radio_link_stats fakes/P1FakeRadio.cpp fakes/P2FakeRadio.cpp)
-target_compile_definitions(tst_radio_link_stats PRIVATE NEREUS_BUILD_TESTS)
-
-# R-R3-46 / R-R3-49 / R-R3-32 (remote-window parity Task 6): Setup > PA,
-# Radio Status's PA card and the HW meters in a remote window; the PA keys
-# taken by the Core off the air and applied at once; the Core's TX inhibit
-# mirrored. Loopback only, no RF, no audio device.
-nereus_add_test(tst_remote_pa_pages
-    fakes/LoopbackTransport.cpp
-    EXTRA_LABELS session)
-target_compile_definitions(tst_remote_pa_pages PRIVATE NEREUS_BUILD_TESTS)
