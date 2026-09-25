@@ -218,6 +218,10 @@ private:
     void refreshSubscriptions();
     void refreshBudgetSubscriptions();
     bool retireSubscriptions(const QList<quint32>& endpointIds);
+    /// Fix wave 2 (Important 2): unsubscribes an endpoint the Core refused
+    /// (never accepted) after its binding is dropped, the next revision
+    /// after `lastRevision`. False when the session ended while sending.
+    bool sendRefusedRelease(quint32 endpointId, quint32 lastRevision);
     void receiveAllocationResult(const QJsonObject& payload);
     void setPanStatus(const QString& panId, const PanDisplayState& status);
     PanDisplayState statusWithGrant(const QString& panId, PanDisplayState status) const;

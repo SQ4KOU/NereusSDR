@@ -2350,6 +2350,84 @@ private slots:
                  total.applicationBytesPerSecond / 2);
     }
 
+    // Fix wave 2 (Important 2): a display refused for the budget counts in
+    // its device's request only until the client asks for it again or
+    // closes it, or the hold after its refusal runs out. B's refused pan,
+    // dropped without an unsubscribe, stops cutting A once the hold ends;
+    // refused again and then closed, it stops at once.
+    void aRefusedDisplaysRequestEndsWhenItIsNotAskedForAgain()
+    {
+        const auto pan = spectrumDisplayCost(128, 60, false);
+        const auto wide = spectrumDisplayCost(256, 60, false);
+        QVERIFY(pan.has_value() && wide.has_value());
+        const DisplayBudgetCharge p = pan->charge;
+        MediaCore m(DisplayBudgetLimits{4 * p.applicationBytesPerSecond,
+                                        4 * p.spectrumSampleUnitsPerSecond, 1});
+        m.signInBoth();
+        const int sliceA = m.sliceOf(m.epochOf(0));
+        const int sliceB = m.sliceOf(m.epochOf(1));
+        const double centreA =
+            m.core.model->streamCentreHz(m.core.model->sliceById(sliceA)->streamIndex());
+        const double centreB =
+            m.core.model->streamCentreHz(m.core.model->sliceById(sliceB)->streamIndex());
+        QVERIFY(m.startMedia(m.appA));
+        QVERIFY(m.startMedia(m.appB));
+        const auto share = [](const LoopbackTransport* app) {
+            return static_cast<quint64>(
+                latestCapability(app->received(), QStringLiteral("displayApplicationBytesPerSecond"))
+                    .toInteger());
+        };
+        const auto results = [](const LoopbackTransport* app) {
+            return mediaOps(app, QStringLiteral("allocation-result"));
+        };
+
+        // A: three pans, all admitted.
+        for (quint32 endpoint = 1; endpoint <= 3; ++endpoint) {
+            sendMedia(m.appA, displayRequestAt(endpoint, sliceA, centreA, 60));
+        }
+        QTRY_COMPARE(results(m.appA).size(), 3);
+        for (const QJsonObject& r : results(m.appA)) {
+            QVERIFY(r.value(QStringLiteral("accepted")).toBool());
+        }
+        // B: one pan, admitted; A keeps its three.
+        sendMedia(m.appB, displayRequestAt(1, sliceB, centreB, 60));
+        QTRY_COMPARE(results(m.appB).size(), 1);
+        QVERIFY(results(m.appB).last().value(QStringLiteral("accepted")).toBool());
+        QTRY_COMPARE(share(m.appA), 3 * p.applicationBytesPerSecond);
+
+        // B asks for a wider pan that does not fit: refused, and while its
+        // request stands A is cut to half.
+        DaemonMediaController* controllerB = m.hub->controllerFor(m.epochOf(1));
+        QVERIFY(controllerB);
+        controllerB->setRefusedDisplayDemandHoldMsForTest(300);
+        QJsonObject wider = displayRequestAt(2, sliceB, centreB, 60);
+        wider.insert(QStringLiteral("pixels"), 256);
+        sendMedia(m.appB, wider);
+        QTRY_COMPARE(results(m.appB).size(), 2);
+        QVERIFY(!results(m.appB).last().value(QStringLiteral("accepted")).toBool(true));
+        QCOMPARE(results(m.appB).last().value(QStringLiteral("reason")).toString(),
+                 QLatin1String(kDisplayBudgetRefusalReason));
+        QTRY_COMPARE(share(m.appA), 2 * p.applicationBytesPerSecond);
+        // B drops it without a word: once the hold runs out, A has its
+        // three pans' room back.
+        QTRY_COMPARE(share(m.appA), 3 * p.applicationBytesPerSecond);
+
+        // Refused again, then closed: A has its room back at once, long
+        // before any hold would end.
+        controllerB->setRefusedDisplayDemandHoldMsForTest(60'000);
+        wider.insert(QStringLiteral("revision"), 2);
+        sendMedia(m.appB, wider);
+        QTRY_COMPARE(results(m.appB).size(), 3);
+        QVERIFY(!results(m.appB).last().value(QStringLiteral("accepted")).toBool(true));
+        QTRY_COMPARE(share(m.appA), 2 * p.applicationBytesPerSecond);
+        sendMedia(m.appB, QJsonObject{{QStringLiteral("op"), QStringLiteral("unsubscribe")},
+                                      {QStringLiteral("connectionId"),
+                                       QLatin1String(kMediaConnection)},
+                                      {QStringLiteral("endpointId"), 2},
+                                      {QStringLiteral("revision"), 3}});
+        QTRY_COMPARE(share(m.appA), 3 * p.applicationBytesPerSecond);
+    }
+
     // A's media control reaches A's controller only; B leaving ends only
     // B's media.
     void eachDevicesMediaControlReachesItsOwnControllerOnly()

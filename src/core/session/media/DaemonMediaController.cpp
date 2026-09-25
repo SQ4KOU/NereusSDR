@@ -795,6 +795,49 @@ void DaemonMediaController::setDisplayDemand(quint32 endpointId,
     }
 }
 
+void DaemonMediaController::holdRefusedDemand(quint32 endpointId,
+                                              std::optional<DisplayBudgetCharge> before)
+{
+    m_refusedDemand[endpointId] =
+        RefusedDemand{before, displayNowNs() + qint64{m_refusedDemandHoldMs} * 1'000'000};
+    endRefusedDemands();
+}
+
+void DaemonMediaController::endRefusedDemands()
+{
+    const qint64 now = displayNowNs();
+    std::optional<qint64> next;
+    QList<QPair<quint32, std::optional<DisplayBudgetCharge>>> ended;
+    for (auto it = m_refusedDemand.begin(); it != m_refusedDemand.end();) {
+        if (it->second.endsAtNs <= now) {
+            ended.append({it->first, it->second.before});
+            it = m_refusedDemand.erase(it);
+            continue;
+        }
+        next = next ? std::min(*next, it->second.endsAtNs) : it->second.endsAtNs;
+        ++it;
+    }
+    // Fix wave 2 (Important 2): the client did not ask for it again, so
+    // the refused display asks for nothing more than it did before.
+    for (const auto& [endpointId, before] : ended) {
+        setDisplayDemand(endpointId, before);
+    }
+    if (!next) {
+        if (m_refusedDemandTimer) {
+            m_refusedDemandTimer->stop();
+        }
+        return;
+    }
+    if (!m_refusedDemandTimer) {
+        m_refusedDemandTimer = new QTimer(this);
+        m_refusedDemandTimer->setSingleShot(true);
+        connect(m_refusedDemandTimer, &QTimer::timeout, this,
+                &DaemonMediaController::endRefusedDemands);
+    }
+    const qint64 waitMs = std::max<qint64>(1, (*next - now + 999'999) / 1'000'000);
+    m_refusedDemandTimer->start(static_cast<int>(std::min<qint64>(waitMs, 60'000)));
+}
+
 DisplayBudgetCharge DaemonMediaController::acceptedDisplayCharge() const
 {
     const bool ps3Enabled = ps3DisplayHere();
@@ -1609,9 +1652,16 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
     // against the share the device has with its new demand (for a holder,
     // what rule 1 gives it), not the share it had. A display refused for
     // the budget stays in the demand until it is closed or asked again.
-    const std::optional<DisplayBudgetCharge> previousDemand =
+    // Fix wave 2 (Important 2): asking for this endpoint again ends a
+    // refused request's hold; what it asked for before that refusal is
+    // what this ask replaces.
+    std::optional<DisplayBudgetCharge> previousDemand =
         m_displayDemand.count(endpointId) != 0 ? std::optional(m_displayDemand.at(endpointId))
                                                : std::nullopt;
+    if (const auto refused = m_refusedDemand.find(endpointId); refused != m_refusedDemand.end()) {
+        previousDemand = refused->second.before;
+        m_refusedDemand.erase(refused);
+    }
     const auto asked = endpointDisplayCost(pixels, fps, request.requestedWideSpanFactor > 1.0,
                                            extrasRequest.sections());
     if (asked) {
@@ -1623,6 +1673,9 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
         setDisplayDemand(endpointId, previousDemand);
     };
     if (!displayCost || !spectrumAdmissionFits(endpointId, displayCost->charge)) {
+        // Refused for the budget: the request stays in this device's
+        // demand, held until the client asks again or the hold runs out.
+        holdRefusedDemand(endpointId, previousDemand);
         return rejectAllocation(control, endpointId, revision,
                                 QString::fromLatin1(kDisplayBudgetRefusalReason));
     }
@@ -3075,6 +3128,7 @@ void DaemonMediaController::removeEndpoint(quint32 endpointId, bool retainOperat
 {
     // Fix wave I5: a closed display (or one refused and then closed) asks
     // for nothing more.
+    m_refusedDemand.erase(endpointId);
     setDisplayDemand(endpointId, std::nullopt);
     auto it = m_endpoints.find(endpointId);
     if (it == m_endpoints.end()) {
@@ -3692,6 +3746,10 @@ void DaemonMediaController::clearProduction()
     // again by the caller that keeps its session (the session's own end
     // splits again on the Core's side).
     m_displayDemand.clear();
+    m_refusedDemand.clear();
+    if (m_refusedDemandTimer) {
+        m_refusedDemandTimer->stop();
+    }
     m_sendTimer.stop();
     m_ps3CurrentChunks.clear();
     m_ps3LatestChunks.clear();

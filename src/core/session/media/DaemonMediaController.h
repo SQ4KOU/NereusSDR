@@ -177,6 +177,23 @@ public:
     /// refused for the budget included, until it is closed. The PureSignal
     /// display is not in it (the split charges it to its subscriber).
     DisplayBudgetCharge displayDemand() const;
+    /// Fix wave 2 after the several-devices re-review (Important 2): how
+    /// long a subscription refused for the budget still counts in this
+    /// device's request once the refusal is sent, unless the client asks
+    /// for that endpoint again (subscribe or unsubscribe) first. The
+    /// refusal follows the capabilities carrying the share its request
+    /// produced (the budget generation it was sent); a client that still
+    /// wants the display re-plans at once (the desktop's planner runs on
+    /// every capabilities change and every 100 ms) and subscribes again
+    /// inside its share, replacing the refused request. The hold is the
+    /// app's own allocation acknowledgement timeout
+    /// (kDisplayAllocationAckTimeoutMs, 10 s): the longest the app waits
+    /// for the Core's answer on a slow link, so a client's re-ask within
+    /// the same round trip is never missed, while a display the client
+    /// dropped without saying so stops cutting the other devices then.
+    static constexpr int kRefusedDisplayDemandHoldMs = kDisplayAllocationAckTimeoutMs;
+    /// Tests only: a shorter hold. Applies to refusals from now on.
+    void setRefusedDisplayDemandHoldMsForTest(int ms) { m_refusedDemandHoldMs = ms; }
     /// Task 76 (ruling 9.3 item 4): the PureSignal display goes to this
     /// controller's session.
     bool ps3DisplayHere() const;
@@ -522,6 +539,23 @@ private:
     quint32 m_endpointHighWater{0};
     /// Fix wave I5: each display's requested charge, by endpoint id.
     std::map<quint32, DisplayBudgetCharge> m_displayDemand;
+    /// Fix wave 2 (Important 2): a subscription refused for the budget
+    /// keeps its request in m_displayDemand only until the client asks for
+    /// that endpoint again (subscribe or unsubscribe) or the hold runs
+    /// out; then the endpoint asks for what it asked before the refusal
+    /// (`before`: its live display's request, or nothing).
+    struct RefusedDemand {
+        std::optional<DisplayBudgetCharge> before;
+        qint64 endsAtNs{0};
+    };
+    std::map<quint32, RefusedDemand> m_refusedDemand;
+    QTimer* m_refusedDemandTimer{nullptr};
+    int m_refusedDemandHoldMs{kRefusedDisplayDemandHoldMs};
+    /// Records `endpointId`'s refused request, held until kept, replaced
+    /// or run out.
+    void holdRefusedDemand(quint32 endpointId, std::optional<DisplayBudgetCharge> before);
+    /// Ends every refused request whose hold ran out, and re-arms the timer.
+    void endRefusedDemands();
     /// Sets (or, with nullopt, forgets) one display's demand and has the
     /// Core split its budget again when the demand changed.
     void setDisplayDemand(quint32 endpointId, std::optional<DisplayBudgetCharge> demand);

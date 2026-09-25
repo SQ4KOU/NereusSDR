@@ -1557,6 +1557,21 @@ device asks for is shared equally among the devices as room to grow into, so a d
 keeps the whole total, as before shares. A subscription is admitted against the share the device
 has with its new request (for a present holder, what rule 1 gives it), not the share it had.
 
+**A refused request ends** (fix wave 2, Important 2). A display the client drops, closes or
+pauses leaves its device's request. The client unsubscribes a display the Core refused when it
+drops it (the desktop does, `RemoteMediaController::sendRefusedRelease`), and the Core does not
+rely on that alone: a subscription refused for the budget counts in the request until the client
+asks for that endpoint again (a new subscribe replaces it), unsubscribes it, or does not ask
+again within `DaemonMediaController::kRefusedDisplayDemandHoldMs` of the refusal. The refusal is
+sent after the `capabilities` carrying the share the request produced (the next budget
+generation it was sent), and a planner that still wants the display re-plans at once: the
+desktop's runs on every capabilities change and every 100 ms. The hold is the app's own
+allocation acknowledgement timeout (`kDisplayAllocationAckTimeoutMs`, 10 s), the longest the
+app waits for the Core's answer on a slow link, so a re-ask within the same round trip is never
+missed, while a display dropped without a word stops cutting the other devices then. When the
+hold ends the endpoint asks for what it asked before the refusal (its live display's request,
+or nothing).
+
 **Every client asks for what the operator wants** (fix wave 2, Critical 1). A planner that only
 ever asks for what its share allows never shows its demand, so its share never grows past the
 equal part it started with, and rules 2 and 3 fail for a device that joins second. So every
@@ -1580,8 +1595,9 @@ inside it. For a present holder the same asking gives it its whole request (rule
   of its media session and whenever the displays the operator wants grow, subscribe every visible
   pane at its wanted pixels and frame rate; on an `allocation-result` refused with the reason
   above, plan inside the share in the `capabilities` it already holds and subscribe the planned
-  qualities; otherwise plan inside the share as the budget design says; and never ask again only
-  because a new generation arrived.
+  qualities; otherwise plan inside the share as the budget design says; never ask again only
+  because a new generation arrived; and unsubscribe any endpoint the Core refused that it then
+  drops (a pane paused, closed or hidden).
 
 **The phone computes its own frame rate** (review finding 5). The Core hands each device a
 share, never a frame rate. Inside its share each device's own client plans its displays: it

@@ -1825,6 +1825,22 @@ bool RemoteMediaController::send(QJsonObject payload)
     return d->client->sendMediaControl(payload, d->epoch);
 }
 
+bool RemoteMediaController::sendRefusedRelease(quint32 endpointId, quint32 lastRevision)
+{
+    // The binding is already gone here: its answer finds no binding and is
+    // ignored. False when the session ended while sending.
+    const QPointer<RemoteMediaController> self(this);
+    const QPointer<MediaPeer> peer = d->peer;
+    const quint32 epoch = d->epoch;
+    const QString connectionId = d->connectionId;
+    quint32 revision = lastRevision + 1;
+    if (revision == 0) { ++revision; }
+    send({{QStringLiteral("op"), QStringLiteral("unsubscribe")},
+          {QStringLiteral("endpointId"), static_cast<qint64>(endpointId)},
+          {QStringLiteral("revision"), static_cast<qint64>(revision)}});
+    return self && d->peer == peer && d->epoch == epoch && d->connectionId == connectionId;
+}
+
 bool RemoteMediaController::retireSubscriptions(const QList<quint32>& endpointIds)
 {
     const bool budgetMode = d->client && d->client->remoteDisplayBudgetLimits().has_value();
@@ -1860,7 +1876,12 @@ bool RemoteMediaController::retireSubscriptions(const QList<quint32>& endpointId
                 continue;
             }
             if (found->second.acceptedRevision == 0) {
+                // Fix wave 2 (Important 2): a display the Core refused
+                // still counts in this device's request there until it is
+                // asked for again or closed, so close it.
+                const quint32 sent = found->second.revision;
                 d->bindings.erase(found);
+                if (sent != 0 && !sendRefusedRelease(id, sent)) { return false; }
                 continue;
             }
             ++found->second.revision;
@@ -2535,7 +2556,15 @@ void RemoteMediaController::refreshBudgetSubscriptions()
         (candidate.reduction ? reductions : increases).append(std::move(candidate));
     }
 
-    for (quint32 endpointId : eraseUnaccepted) { d->bindings.erase(endpointId); }
+    for (quint32 endpointId : eraseUnaccepted) {
+        // Fix wave 2 (Important 2): a pan paused before the Core accepted
+        // it; a display the Core refused is closed there too, so its
+        // request stops counting against the other devices.
+        const auto found = d->bindings.find(endpointId);
+        const quint32 sent = found == d->bindings.end() ? 0 : found->second.revision;
+        d->bindings.erase(endpointId);
+        if (sent != 0 && !sendRefusedRelease(endpointId, sent)) { return; }
+    }
 
     if (askWanted && reductions.isEmpty() && increases.isEmpty()
         && std::none_of(d->bindings.cbegin(), d->bindings.cend(),

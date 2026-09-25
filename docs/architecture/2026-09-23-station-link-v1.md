@@ -883,7 +883,9 @@ equal share, and a device asking for less leaves the difference to the
 rest (max-min fair). A device's request is what its displays ask for: the
 sum of its display subscriptions' charges at the pixels and frame rate it
 subscribed at, before any grant clamps them, a subscription refused for the
-budget included, until the display is closed or asked for again, and never
+budget included, until the display is closed, asked for again, or 10 s
+pass after its refusal without either (the media control document's
+display budget section), and never
 less than one useful pan (256 pixels at 10 frames a second with its wide
 plane), so a device that has not subscribed yet is never left with a share
 of 1. What no device asks for is shared equally among them as room to grow,
