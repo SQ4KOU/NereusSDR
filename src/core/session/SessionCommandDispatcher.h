@@ -122,6 +122,9 @@
 //   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 8): moveTgxlRelay,
 //                                    scanTgxlLan and setTgxlAddress.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 9): setPgxlOperate,
+//                                    scanPgxlLan and setPgxlAddress.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -254,6 +257,12 @@ private:
     void handleMoveTgxlRelay(const NereusSDR::SessionMessage& invoke);
     void handleScanTgxlLan(const NereusSDR::SessionMessage& invoke);
     void handleSetTgxlAddress(const NereusSDR::SessionMessage& invoke);
+    // R-R3-49 (parity Task 9, remotePgxlControlVersion 4): the Power
+    // Genius's OPERATE or STANDBY, the Core's own Scan LAN for it and the
+    // Peripherals row's address saved without dialling.
+    void handleSetPgxlOperate(const NereusSDR::SessionMessage& invoke);
+    void handleScanPgxlLan(const NereusSDR::SessionMessage& invoke);
+    void handleSetPgxlAddress(const NereusSDR::SessionMessage& invoke);
     // R-R3-49 (parity Task 2, transmitSettingsVersion 2): the TX applet's
     // Tune Power slider, through the Core's own TransmitModel.
     void handleTunePowerForTxBand(const NereusSDR::SessionMessage& invoke);

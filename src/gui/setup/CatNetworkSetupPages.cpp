@@ -1143,12 +1143,46 @@ PeripheralsPage::~PeripheralsPage()
 {
     // R-R3-49 (parity Task 8): an edit still unsent when the page goes.
     sendRemoteTgxlAddress();
+    // R-R3-49 (parity Task 9): and the Power Genius's.
+    sendRemotePgxlAddress();
 }
 
 void PeripheralsPage::hideEvent(QHideEvent* event)
 {
     sendRemoteTgxlAddress();
+    sendRemotePgxlAddress();
     QWidget::hideEvent(event);
+}
+
+// R-R3-49 (parity Task 9): the Power Genius row's Host and Port typed in a
+// remote window reach the Core's saved address without dialling
+// (setPgxlAddress). A Core below remotePgxlControlVersion 4 keeps only what
+// Connect sends, as before.
+void PeripheralsPage::sendRemotePgxlAddress()
+{
+    if (!m_pgxlAddressEdited || !isRemoteMode() || !m_grid || !m_model) {
+        return;
+    }
+    IStationLink* link = m_model->stationLink();
+    auto* amp = m_model->amplifierModel();
+    QLayoutItem* hostItem = m_grid->itemAtPosition(2, 1);
+    QLayoutItem* portItem = m_grid->itemAtPosition(2, 2);
+    auto* ipEdit = hostItem ? qobject_cast<QLineEdit*>(hostItem->widget()) : nullptr;
+    auto* portSpin = portItem ? qobject_cast<QSpinBox*>(portItem->widget()) : nullptr;
+    if (!link || !link->pgxlFullControlAvailable() || !amp || !ipEdit || !portSpin) {
+        return;
+    }
+    m_pgxlAddressEdited = false;
+    const QString host = ipEdit->text().trimmed();
+    const int port = portSpin->value();
+    if (host == amp->configuredHost() && port == amp->configuredPort()) {
+        return;
+    }
+    // A refusal arrives as the Core's notice (MainWindow's accessory route).
+    const IStationLink::CommandOutcome outcome = link->requestPgxlAddress(host, port);
+    if (!outcome.sent && m_statusLabels.size() > 1 && m_statusLabels[1]) {
+        m_statusLabels[1]->setText(OperatorReasonText::forDisplay(outcome.reason));
+    }
 }
 
 // R-R3-49 (parity Task 8): the Host and Port typed in a remote window reach
@@ -1200,6 +1234,12 @@ void PeripheralsPage::wireStatusSignals()
         auto* amp = m_model ? m_model->amplifierModel() : nullptr;
         if (amp) {
             connect(amp, &AmplifierModel::stationConnectionChanged,
+                    this, &PeripheralsPage::refreshRemotePgxlRow);
+        }
+        // R-R3-49 (parity Task 9): the Power Genius row's Scan LAN and
+        // address wait while the Core reports the radio on the air too.
+        if (m_model) {
+            connect(m_model, &RadioModel::coreOnAirChanged,
                     this, &PeripheralsPage::refreshRemotePgxlRow);
         }
         if (m_model) {
@@ -1355,6 +1395,14 @@ void PeripheralsPage::buildRow(int row, const QString& name,
         connect(ipEdit, &QLineEdit::editingFinished, this,
                 &PeripheralsPage::sendRemoteTgxlAddress);
     }
+    // R-R3-49 (parity Task 9): the same for the Power Genius row.
+    if (remotePgxl) {
+        connect(ipEdit, &QLineEdit::textEdited, this, [this]() {
+            m_pgxlAddressEdited = true;
+        });
+        connect(ipEdit, &QLineEdit::editingFinished, this,
+                &PeripheralsPage::sendRemotePgxlAddress);
+    }
     m_grid->addWidget(ipEdit, row, 1);
 
     // Column 2: port spinbox.
@@ -1395,6 +1443,15 @@ void PeripheralsPage::buildRow(int row, const QString& name,
         });
         connect(portSpin, &QSpinBox::editingFinished, this,
                 &PeripheralsPage::sendRemoteTgxlAddress);
+    }
+    if (remotePgxl) {
+        connect(portSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, [this]() {
+            if (!m_fillingPgxlFromCore) {
+                m_pgxlAddressEdited = true;
+            }
+        });
+        connect(portSpin, &QSpinBox::editingFinished, this,
+                &PeripheralsPage::sendRemotePgxlAddress);
     }
     m_grid->addWidget(portSpin, row, 2);
 
@@ -1541,17 +1598,28 @@ void PeripheralsPage::refreshRemotePgxlRow()
         return;
     }
     const bool available = link && link->remotePgxlControlAvailable();
-    scanButton->setEnabled(false);
-    scanButton->setToolTip(tr("LAN scanning runs at the Core and is unavailable from this remote GUI."));
+    // R-R3-49 (parity Task 9): on a Core at remotePgxlControlVersion 4 the
+    // Core scans its own network for this window, and keeps a typed
+    // address; both wait while the radio is on the air.
+    const bool full = link && link->pgxlFullControlAvailable();
+    const bool onAir = full && m_model->isCoreOnAir();
+    scanButton->setEnabled(full && !onAir);
+    scanButton->setToolTip(!full
+        ? tr("This Core does not scan for a Power Genius for this app. Updating the Core may help.")
+        : onAir ? RadioModel::onAirReason()
+                : tr("The Core listens for Power Genius announcements on its network for 3 seconds."));
     // The Core's address fills the fields only when it changes, so an
     // unsent draft survives a phase or error update.
     const QString coreHost = amp->configuredHost();
     const quint16 corePort = static_cast<quint16>(amp->configuredPort());
     if (coreHost != m_lastDisplayedCorePgxlHost || corePort != m_lastDisplayedCorePgxlPort) {
+        m_fillingPgxlFromCore = true;
         ipEdit->setText(coreHost);
         if (corePort > 0) {
             portSpin->setValue(corePort);
         }
+        m_fillingPgxlFromCore = false;
+        m_pgxlAddressEdited = false;
         m_lastDisplayedCorePgxlHost = coreHost;
         m_lastDisplayedCorePgxlPort = corePort;
     }
@@ -1562,8 +1630,13 @@ void PeripheralsPage::refreshRemotePgxlRow()
     const bool connected = phase == Phase::Connected;
     connectButton->setText(connected ? tr("Disconnect") : active ? tr("Cancel") : tr("Connect"));
     connectButton->setEnabled(available);
-    ipEdit->setEnabled(available && !connected && !active);
-    portSpin->setEnabled(available && !connected && !active);
+    ipEdit->setEnabled(available && !connected && !active && !onAir);
+    portSpin->setEnabled(available && !connected && !active && !onAir);
+    ipEdit->setToolTip(onAir ? RadioModel::onAirReason()
+                             : tr("IP address or hostname of the Power Genius XL on your LAN. "
+                                  "Leave blank to disable auto-connect."));
+    portSpin->setToolTip(onAir ? RadioModel::onAirReason()
+                               : tr("TCP port the Power Genius XL listens on (default 9008)."));
     if (!available) {
         const QString reason = tr("This Core does not offer Power Genius XL control to this app.");
         status->setText(reason);
@@ -1599,9 +1672,32 @@ void PeripheralsPage::onScanLan(int rowIdx)
     if (isRemoteMode()) {
         // R-R3-49 (parity Task 8): the Tuner Genius row asks the Core to
         // listen on its own network; a pick fills Host and Port and is kept
-        // on the Core as a typed address is. The Power Genius row does not
-        // scan remotely.
+        // on the Core as a typed address is. R-R3-49 (parity Task 9): the
+        // Power Genius row does the same (scanPgxlLan, setPgxlAddress).
         IStationLink* link = m_model ? m_model->stationLink() : nullptr;
+        if (rowIdx == 1) {
+            if (!link || !link->pgxlFullControlAvailable() || m_model->isCoreOnAir()) {
+                return;
+            }
+            auto* pgxlIp = qobject_cast<QLineEdit*>(m_grid->itemAtPosition(2, 1)->widget());
+            auto* pgxlPort = qobject_cast<QSpinBox*>(m_grid->itemAtPosition(2, 2)->widget());
+            if (!pgxlIp || !pgxlPort) {
+                return;
+            }
+            auto* pgxlDialog = new LanScanDialog(m_model, this,
+                                                 LanScanDialog::CoreDevice::PowerGenius);
+            pgxlDialog->setAttribute(Qt::WA_DeleteOnClose);
+            pgxlDialog->setObjectName(QStringLiteral("pgxlCoreScanDialog"));
+            connect(pgxlDialog, &LanScanDialog::deviceSelected,
+                    this, [this, pgxlIp, pgxlPort](const QString& ip, quint16 port) {
+                        pgxlIp->setText(ip);
+                        pgxlPort->setValue(static_cast<int>(port));
+                        m_pgxlAddressEdited = true;
+                        sendRemotePgxlAddress();
+                    });
+            pgxlDialog->show();
+            return;
+        }
         if (rowIdx != 0 || !link || !link->tgxlFullControlAvailable()
             || m_model->isCoreOnAir()) {
             return;

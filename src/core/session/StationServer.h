@@ -197,6 +197,9 @@
 //   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 8):
 //                                    remoteTgxlControlVersion 4.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 9):
+//                                    remotePgxlControlVersion 4.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QHash>
@@ -483,10 +486,11 @@ public:
     // the `amplifier` and `rfkit` objects (remotePgxlControlVersion and
     // remoteRfKitControlVersion); 0 otherwise.
     int accessoryStatusVersion() const;
-    // R-R3-47: remotePgxlControlVersion. 3 on a Core that owns its
+    // R-R3-47: remotePgxlControlVersion. 4 on a Core that owns its
     // accessories (the `amplifier` object, the configurePgxl,
     // disconnectPgxl and setPgxlConnectionSettings verbs, and the amp's own
-    // settings on `accessorySettings` with their verbs); 0 otherwise.
+    // settings on `accessorySettings` with their verbs); 4 from parity
+    // Task 9 (setPgxlOperate, scanPgxlLan, setPgxlAddress); 0 otherwise.
     int pgxlControlVersion() const;
     // R-R3-47 / R-R3-22: remoteTgxlControlVersion. 2 on a Core that owns its
     // accessories (the tuner's own settings on `accessorySettings` and the

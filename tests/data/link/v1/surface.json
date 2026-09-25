@@ -213,7 +213,7 @@
         {
             "kind": "i64",
             "name": "remotePgxlControlVersion",
-            "value": 3
+            "value": 4
         },
         {
             "kind": "i64",
@@ -515,6 +515,45 @@
             "capabilityVersion": 3,
             "minMinor": 11,
             "verb": "readPgxlSettings"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "bool",
+                    "name": "on",
+                    "optional": false
+                }
+            ],
+            "capability": "remotePgxlControlVersion",
+            "capabilityVersion": 4,
+            "minMinor": 11,
+            "verb": "setPgxlOperate"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "remotePgxlControlVersion",
+            "capabilityVersion": 4,
+            "minMinor": 11,
+            "verb": "scanPgxlLan"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "host",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "port",
+                    "optional": false
+                }
+            ],
+            "capability": "remotePgxlControlVersion",
+            "capabilityVersion": 4,
+            "minMinor": 11,
+            "verb": "setPgxlAddress"
         },
         {
             "arguments": [

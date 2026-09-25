@@ -6087,6 +6087,11 @@ target_link_libraries(tst_remote_peripherals PRIVATE Qt6::WebSockets)
 # admission (captured discovery and info replies), pairing only after it,
 # band follow, and cancellation in every phase. Loopback peers only.
 nereus_add_test(tst_station_pgxl_controller)
+# R-R3-49 (parity Task 9): a window's Power Genius OPERATE and STANDBY (the
+# local applet's operate=1 / operate=0 line through the Core's
+# PgxlConnection), the Core's LAN scan for it and its saved address; each
+# refused on the air with nothing sent to the (loopback) amp.
+nereus_add_test(tst_pgxl_station_control)
 # R-R3-47 / R-R3-48 / R-R3-22 / R-R3-25: the Core's RF-Kit RF2K-S: identity
 # from /info before admission, the Core's configure/disconnect/switch rules,
 # cancellation, faults, and TCI mode through the amp's web interface while

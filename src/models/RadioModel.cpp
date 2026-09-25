@@ -239,6 +239,12 @@
 //                scanTgxlLanForStation and setTgxlAddressForStation for a
 //                window's Peripherals row; reportStationTgxlLanScan.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 9): setPgxlOperateForStation (the
+//                local applet's OPERATE line), scanPgxlLanForStation and
+//                setPgxlAddressForStation for a window's Peripherals row
+//                (the scan shared with the Tuner Genius's through
+//                startStationLanScan); reportStationPgxlLanScan.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -4895,17 +4901,29 @@ bool RadioModel::scanTgxlLanForStation(TgxlLanScanDone done, QString* reason)
     if (stationOnAirRefusal(reason)) {
         return false;
     }
+    // StationTgxlController admits the same two products.
+    startStationLanScan(QStringLiteral("tgxlLanScan"),
+                        {QStringLiteral("TunerGenius"), QStringLiteral("TunerGeniusXL")},
+                        m_tgxlLanScanWindowMs, std::move(done));
+    if (reason) { reason->clear(); }
+    return true;
+}
+
+// R-R3-49 (parity Tasks 8 and 9): one listening window for a window's Scan
+// LAN. Listening sends nothing; the answer is what the Core heard from the
+// station network, the named products only.
+void RadioModel::startStationLanScan(const QString& objectName, const QStringList& products,
+                                     int windowMs, std::function<void(const QString&)> done)
+{
     auto* discovery = new LanDiscovery(this);
-    discovery->setObjectName(QStringLiteral("tgxlLanScan"));
+    discovery->setObjectName(objectName);
     if (m_stationBind) { discovery->setStationBind(*m_stationBind); }
     auto devices = std::make_shared<QJsonArray>();
     connect(discovery, &LanDiscovery::deviceDiscovered, discovery,
-            [devices](const QString& model, const QString& ip, quint16 port,
-                      const QString& /*version*/, const QString& serial,
-                      const QString& nickname) {
-                // StationTgxlController admits the same two products.
-                if (model != QStringLiteral("TunerGenius")
-                    && model != QStringLiteral("TunerGeniusXL")) {
+            [devices, products](const QString& model, const QString& ip, quint16 port,
+                                const QString& /*version*/, const QString& serial,
+                                const QString& nickname) {
+                if (!products.contains(model)) {
                     return;
                 }
                 devices->append(QJsonObject{
@@ -4923,7 +4941,52 @@ bool RadioModel::scanTgxlLanForStation(TgxlLanScanDone done, QString* reason)
                 discovery->deleteLater();
                 if (done) { done(json); }
             });
-    discovery->start(m_tgxlLanScanWindowMs);
+    discovery->start(windowMs);
+}
+
+bool RadioModel::stationPgxlControlAllowed(QString* reason) const
+{
+    if (m_role != Role::Local || !m_stationPgxl) { return refuseNoStationDevice(reason); }
+    if (stationOnAirRefusal(reason)) {
+        return false;
+    }
+    if (!m_pgxlConnection || !m_pgxlConnection->isConnected()) {
+        if (reason) { *reason = QStringLiteral("The Core is not connected to the Power Genius."); }
+        return false;
+    }
+    return true;
+}
+
+// R-R3-49 (parity Task 9, remotePgxlControlVersion 4): a window's OPERATE
+// or STANDBY. The Core sends the local applet's own line (MainWindow's
+// AmpApplet::operateToggled handler) through its own PgxlConnection. It
+// keys nothing: the amp amplifies only when the radio transmits.
+bool RadioModel::setPgxlOperateForStation(bool on, QString* reason)
+{
+    if (!stationPgxlControlAllowed(reason)) { return false; }
+    // Bench-fix 2026-05-19 (MainWindow's operateToggled handler): pcap
+    // stream 11 (.19 PowerGeniusDesktop -> .235 PGXL :9008) shows the
+    // actually-used wire command for OPERATE is `operate=1` (key=value),
+    // not bare `operate`. PGXL rejected `operate` / `standby` with error
+    // 50000016 every click.
+    m_pgxlConnection->sendCommand(on ? QStringLiteral("operate=1")
+                                     : QStringLiteral("operate=0"));
+    if (reason) { reason->clear(); }
+    return true;
+}
+
+// R-R3-49 (parity Task 9): the Core's own Scan LAN for a window's Power
+// Genius row: Power Genius announcements only.
+bool RadioModel::scanPgxlLanForStation(std::function<void(const QString&)> done,
+                                       QString* reason)
+{
+    if (m_role != Role::Local || !m_stationPgxl) { return refuseNoStationDevice(reason); }
+    if (stationOnAirRefusal(reason)) {
+        return false;
+    }
+    startStationLanScan(QStringLiteral("pgxlLanScan"),
+                        {StationPgxlController::expectedProduct()},
+                        m_pgxlLanScanWindowMs, std::move(done));
     if (reason) { reason->clear(); }
     return true;
 }
@@ -5045,6 +5108,36 @@ bool RadioModel::configurePgxlForStation(const QString& inputHost, quint16 port,
     setPeripheralValue(QStringLiteral("PGXL_ManualPort"), QString::number(port));
     AppSettings::instance().save();
     m_stationPgxl->start(host, port);
+    if (reason) { reason->clear(); }
+    return true;
+}
+
+// R-R3-49 (parity Task 9): the Peripherals row's Host and Port, saved
+// without Connect. configurePgxl's checks and reasons, less the dial (the
+// 4O3A switch is not an address check: saving dials nothing).
+bool RadioModel::setPgxlAddressForStation(const QString& inputHost, int port, QString* reason)
+{
+    const auto refuse = [reason](const QString& text) {
+        if (reason) { *reason = text; }
+        return false;
+    };
+    if (m_role != Role::Local || !m_stationPgxl) {
+        return refuse(QStringLiteral("This Core cannot change its amplifier and tuner settings."));
+    }
+    if (stationOnAirRefusal(reason)) {
+        return false;
+    }
+    if (currentRadioMac().isEmpty()) {
+        return refuse(QStringLiteral("Connect the Core to a radio before setting up its Power Genius."));
+    }
+    const QString host = inputHost.trimmed();
+    if (!validStationAccessoryHost(host) || port < 1 || port > 65535) {
+        return refuse(QStringLiteral("Enter the Power Genius's IP address or host name, and a port from 1 to 65535."));
+    }
+    setPeripheralValue(QStringLiteral("PGXL_ManualIp"), host);
+    setPeripheralValue(QStringLiteral("PGXL_ManualPort"), QString::number(port));
+    AppSettings::instance().save();
+    m_stationPgxl->showSavedEndpoint(host, static_cast<quint16>(port));
     if (reason) { reason->clear(); }
     return true;
 }
@@ -6043,6 +6136,15 @@ void RadioModel::reportStationCommandFinished(quint32 commandId, bool accepted,
     // (a refusal's claim was already taken by reportStationAccessoryRefusal).
     m_pageShownAccessoryRequests.remove(commandId);
     emit stationCommandFinished(commandId, accepted, reason);
+}
+
+void RadioModel::reportStationPgxlLanScan(quint32 commandId, bool accepted,
+                                          const QString& reason, const QString& devicesJson)
+{
+    if (m_role != Role::Remote) {
+        return;
+    }
+    emit stationPgxlLanScanFinished(commandId, accepted, reason, devicesJson);
 }
 
 void RadioModel::reportStationTgxlLanScan(quint32 commandId, bool accepted,

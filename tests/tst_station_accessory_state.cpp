@@ -29,6 +29,9 @@
 // 2026-09-25: R-R3-49 (parity Task 8): remoteTgxlControlVersion 4 and the
 // refusals of moveTgxlRelay, scanTgxlLan and setTgxlAddress on the wire.
 // J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-25: R-R3-49 (parity Task 9): remotePgxlControlVersion 4 and the
+// refusals of setPgxlOperate, scanPgxlLan and setPgxlAddress on the wire.
+// J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include <QtTest/QtTest>
 #include <QFile>
 #include <QJsonArray>
@@ -691,7 +694,9 @@ private slots:
         }
         // R-R3-47: 2 once the Core's PGXL commands are offered (Task 2), 3
         // with the amp's own settings (Task 6).
-        QCOMPARE(caps.remotePgxlControlVersion, 3);
+        // R-R3-49 (parity Task 9): 4 with the amp's OPERATE and STANDBY,
+        // the Core's LAN scan and the saved address.
+        QCOMPARE(caps.remotePgxlControlVersion, 4);
         // R-R3-47: the Tuner Genius's own settings (Task 6); 2 with its
         // antenna, operate and bypass (R-R3-49); 3 when setTgxlOperate on
         // puts the tuner in OPERATE whole (R-R3-49 fix wave); 4 with the
@@ -1004,6 +1009,94 @@ private slots:
             noTuner, noRadio, relayNotUnderstood, relayNotUnderstood, relayNotUnderstood,
             QStringLiteral("The request to scan for a Tuner Genius was not understood."),
             QStringLiteral("The request to save the Tuner Genius address was not understood.")}));
+        for (const QString& reason : wrong + QStringList{update, notOwning, onAir}) {
+            QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
+        }
+    }
+
+    // R-R3-49 (parity Task 9, remotePgxlControlVersion 4): the Power
+    // Genius's OPERATE and STANDBY, the Core's LAN scan and the saved
+    // address on the wire, refused as the Tuner Genius's are.
+    void ampOperateScanAndAddressVerbsNeedVersionFourAndAQuietRadio()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const auto results = [&](bool owns, quint16 minor, bool onAir,
+                                 const QList<SessionMessage>& invokes) {
+            RadioModel station;
+            if (owns) {
+                station.enableStationAccessoryIdentity();
+            }
+            AppSettings settings(dir.filePath(QStringLiteral("p-%1-%2-%3.settings")
+                                                  .arg(owns).arg(minor).arg(onAir)));
+            StationServer server(&station, settings, dir.path());
+            if (onAir) {
+                station.transmitModel().setMox(true);
+            }
+            LoopbackTransport* peer = nullptr;
+            connectRawPeer(this, server, minor, &peer);
+            [&] { QTRY_VERIFY(snapshotDone(peer)); }();
+            for (const SessionMessage& invoke : invokes) {
+                peer->sendText(SessionMessages::encode(invoke));
+            }
+            QStringList reasons;
+            (void)QTest::qWaitFor([&] {
+                reasons.clear();
+                for (const SessionMessage& m : receivedMessages(peer)) {
+                    if (m.kind == SessionMessageKind::CommandResult) {
+                        reasons.append(m.accepted ? QStringLiteral("accepted") : m.reason);
+                    }
+                }
+                return reasons.size() == invokes.size();
+            }, 3000);
+            return reasons;
+        };
+        const auto intArg = [](const char* name, qlonglong v) {
+            return MirrorUpdate{0, name, MirrorWireKind::Int64, QVariant(v)};
+        };
+        const auto textArg = [](const char* name, const QString& v) {
+            return MirrorUpdate{0, name, MirrorWireKind::Utf8, QVariant(v)};
+        };
+        const auto boolArg = [](const char* name, bool v) {
+            return MirrorUpdate{0, name, MirrorWireKind::Bool, QVariant(v)};
+        };
+        const QList<SessionMessage> right{
+            SessionMessages::commandInvoke("setPgxlOperate", 71, {boolArg("on", true)}),
+            SessionMessages::commandInvoke("scanPgxlLan", 72, {}),
+            SessionMessages::commandInvoke("setPgxlAddress", 73,
+                                           {textArg("host", QStringLiteral("192.0.2.9")),
+                                            intArg("port", 9008)}),
+        };
+        const QString update = QStringLiteral("Update this app to switch the Power Genius on "
+                                              "this Core.");
+        QCOMPARE(results(true, quint16(kRadioIdentitySessionProtocolMinor - 1), false, right),
+                 (QStringList{update, update, update}));
+        const QString notOwning = QStringLiteral("This Core cannot change its amplifier and "
+                                                 "tuner settings.");
+        QCOMPARE(results(false, kRadioIdentitySessionProtocolMinor, false, right),
+                 (QStringList{notOwning, notOwning, notOwning}));
+        const QString onAir = QStringLiteral("The radio is on the air. Try again when it stops.");
+        QCOMPARE(results(true, kRadioIdentitySessionProtocolMinor, true, right),
+                 (QStringList{onAir, onAir, onAir}));
+        const QString noAmp = QStringLiteral("The Core is not connected to the Power Genius.");
+        const QString noRadio = QStringLiteral("Connect the Core to a radio before setting up its "
+                                               "Power Genius.");
+        const QStringList wrong = results(true, kRadioIdentitySessionProtocolMinor, false, {
+            right.at(0),
+            right.at(2),
+            SessionMessages::commandInvoke("setPgxlOperate", 81, {intArg("on", 1)}),
+            SessionMessages::commandInvoke("setPgxlOperate", 82, {}),
+            SessionMessages::commandInvoke("scanPgxlLan", 83, {intArg("seconds", 3)}),
+            SessionMessages::commandInvoke("setPgxlAddress", 84,
+                                           {textArg("host", QStringLiteral("192.0.2.9")),
+                                            textArg("port", QStringLiteral("9008"))}),
+        });
+        const QString operateNotUnderstood = QStringLiteral(
+            "The request to put the Power Genius in operate or standby was not understood.");
+        QCOMPARE(wrong, (QStringList{
+            noAmp, noRadio, operateNotUnderstood, operateNotUnderstood,
+            QStringLiteral("The request to scan for a Power Genius was not understood."),
+            QStringLiteral("The request to save the Power Genius address was not understood.")}));
         for (const QString& reason : wrong + QStringList{update, notOwning, onAir}) {
             QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
         }

@@ -231,6 +231,13 @@
 //                                    (moveTgxlRelay, scanTgxlLan,
 //                                    setTgxlAddress).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 9):
+//                                    remotePgxlControlVersion 4: the Power
+//                                    Genius's OPERATE and STANDBY, the
+//                                    Core's LAN scan and the saved address
+//                                    (setPgxlOperate, scanPgxlLan,
+//                                    setPgxlAddress).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -489,6 +496,13 @@ bool isTgxlDeviceSettingsVerb(const QByteArray& verb)
 bool isTgxlControlVerb(const QByteArray& verb)
 {
     return verb == "setTgxlAntenna" || verb == "setTgxlOperate" || verb == "setTgxlBypass";
+}
+
+// R-R3-49 (parity Task 9): the Power Genius's OPERATE and STANDBY, the
+// Core's LAN scan and the saved address (remotePgxlControlVersion 4).
+bool isPgxlFullControlVerb(const QByteArray& verb)
+{
+    return verb == "setPgxlOperate" || verb == "scanPgxlLan" || verb == "setPgxlAddress";
 }
 
 // R-R3-49 (parity Task 8): the relay nudge, the Core's LAN scan and the
@@ -1482,6 +1496,18 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                 it->agreedMinor < kRadioIdentitySessionProtocolMinor
                     ? QStringLiteral("Update this app to change the Power Genius's own settings "
                                      "on this Core.")
+                    : QStringLiteral("This Core cannot change its amplifier and tuner settings."), {}));
+            break;
+        }
+        // R-R3-49 (parity Task 9): the Power Genius's OPERATE and STANDBY,
+        // LAN scan and saved address came with remotePgxlControlVersion 4.
+        if (isPgxlFullControlVerb(message.commandVerb)
+            && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                || pgxlControlVersion() < 4)) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                    ? QStringLiteral("Update this app to switch the Power Genius on this Core.")
                     : QStringLiteral("This Core cannot change its amplifier and tuner settings."), {}));
             break;
         }
@@ -2530,7 +2556,9 @@ int StationServer::pgxlControlVersion() const
 {
     // 3: the amp's own settings (`accessorySettings` and its verbs), sent
     // by the Core's station controller (R-R3-47 / R-R3-22).
-    return accessoryStatusVersion() >= 1 ? 3 : 0;
+    // 4: setPgxlOperate, scanPgxlLan and setPgxlAddress, R-R3-49 (parity
+    // Task 9).
+    return accessoryStatusVersion() >= 1 ? 4 : 0;
 }
 
 // R-R3-49 (parity Task 1): the one list of transmit settings keys a

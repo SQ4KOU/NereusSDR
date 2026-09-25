@@ -38,6 +38,12 @@
 //                 Claude Code.
 //   2026-09-25 -- R-R3-49 (parity Task 8): selectTab. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-25 -- R-R3-49 (parity Task 9): the remote Power Genius tab's
+//                 Operate button asks the Core (setPgxlOperate,
+//                 remotePgxlControlVersion 4), reads Operate or Standby
+//                 from the amp's reported state and waits while the radio
+//                 is on the air. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #include "FourO3APage.h"
@@ -150,6 +156,10 @@ FourO3APage::FourO3APage(RadioModel* model, QWidget* parent)
             connect(m_model->amplifierModel(), &AmplifierModel::stationConnectionChanged,
                     this, &FourO3APage::refreshRemotePgxlTab);
             connect(m_model->amplifierModel(), &AmplifierModel::statusChanged,
+                    this, &FourO3APage::refreshRemotePgxlTab);
+            // R-R3-49 (parity Task 9): Operate waits while the radio is on
+            // the air.
+            connect(m_model, &RadioModel::coreOnAirChanged,
                     this, &FourO3APage::refreshRemotePgxlTab);
             connect(m_model, &RadioModel::stationLinkStateChanged, this, [this] {
                 loadRemotePgxlSettings();
@@ -464,12 +474,17 @@ QWidget* FourO3APage::buildRemotePgxlTab()
     connect(m_remotePgxlConnect, &QPushButton::clicked,
             this, &FourO3APage::onRemotePgxlConnectClicked);
     buttons->addWidget(m_remotePgxlConnect);
-    // R-R3-25: operating the amp waits for remote transmit.
+    // R-R3-49 (parity Task 9): the Core puts its amp in operate or standby
+    // (setPgxlOperate, remotePgxlControlVersion 4); refreshRemotePgxlTab
+    // sets the words and whether it is offered. An older Core keeps it
+    // disabled with the receive-only reason (R-R3-25).
     m_remotePgxlOperate = new QPushButton(tr("Operate"), statusBox);
     m_remotePgxlOperate->setObjectName(QStringLiteral("remotePgxlOperateButton"));
     m_remotePgxlOperate->setEnabled(false);
     m_remotePgxlOperate->setToolTip(
         OperatorReasonText::forDisplay(AmplifierModel::receiveOnlyOperateReason()));
+    connect(m_remotePgxlOperate, &QPushButton::clicked,
+            this, &FourO3APage::onRemotePgxlOperateClicked);
     buttons->addWidget(m_remotePgxlOperate);
     buttons->addStretch();
     statusForm->addRow(buttons);
@@ -586,6 +601,34 @@ void FourO3APage::refreshRemotePgxlTab()
     m_remotePgxlConnect->setToolTip(available && !haveAddress && !connected && !active
         ? tr("Enter the Power Genius address on the General tab first.") : QString());
     m_remotePgxlApply->setEnabled(available);
+
+    // R-R3-49 (parity Task 9): Operate reads the action the amp's reported
+    // state allows (Standby while it operates, Operate otherwise), and is
+    // offered by a Core at version 4 connected to the amp, off the air.
+    const bool operateOffered = link && link->pgxlFullControlAvailable();
+    const bool onAir = m_model->isCoreOnAir();
+    m_remotePgxlOperate->setText(amp->operate() ? tr("Standby") : tr("Operate"));
+    m_remotePgxlOperate->setEnabled(operateOffered && connected && !onAir);
+    m_remotePgxlOperate->setToolTip(!operateOffered
+        ? OperatorReasonText::forDisplay(AmplifierModel::receiveOnlyOperateReason())
+        : onAir ? RadioModel::onAirReason()
+        : !connected ? tr("The Core is not connected to the Power Genius.")
+        : amp->operate() ? tr("Put the Power Genius in standby.")
+                         : tr("Put the Power Genius in operate."));
+}
+
+void FourO3APage::onRemotePgxlOperateClicked()
+{
+    if (!m_model || !m_remotePgxlTab) { return; }
+    auto* link = m_model->stationLink();
+    if (!link || !link->pgxlFullControlAvailable() || m_model->isCoreOnAir()) {
+        refreshRemotePgxlTab();
+        return;
+    }
+    // The button follows the amp's report, not the click.
+    const auto outcome = link->requestPgxlOperate(!m_model->amplifierModel()->operate());
+    m_remotePgxlResult->setText(outcome.sent ? QString()
+                                             : OperatorReasonText::forDisplay(outcome.reason));
 }
 
 void FourO3APage::onRemotePgxlConnectClicked()

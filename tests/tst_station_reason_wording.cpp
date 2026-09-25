@@ -822,6 +822,10 @@ const QList<ReasonSource>& reasonSources()
           // the saved address.
           QStringLiteral("moveTgxlRelayForStation"), QStringLiteral("scanTgxlLanForStation"),
           QStringLiteral("setTgxlAddressForStation"),
+          // R-R3-49 (parity Task 9): the Power Genius's OPERATE and STANDBY,
+          // the Core's LAN scan for it and the saved address.
+          QStringLiteral("stationPgxlControlAllowed"), QStringLiteral("setPgxlOperateForStation"),
+          QStringLiteral("scanPgxlLanForStation"), QStringLiteral("setPgxlAddressForStation"),
           // R-R3-49 (parity Task 2): the Tune Power slider's command.
           QStringLiteral("setTunePowerForTxBandForStation"),
           // R-R3-49 (parity Task 3): the TX profile commands and the RADE
@@ -940,6 +944,9 @@ const QList<AppSideReason>& appSideReasons()
          "a remote window's own reason when its Core cannot take the request"},
         // R-R3-49 (parity Task 8): the relay nudge, LAN scan and address.
         {"src/core/session/IStationLink.h", "tgxlFullControlUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        // R-R3-49 (parity Task 9): the Power Genius's operate, scan and address.
+        {"src/core/session/IStationLink.h", "pgxlFullControlUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
         {"src/core/session/IStationLink.h", "transmitSettingsUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},

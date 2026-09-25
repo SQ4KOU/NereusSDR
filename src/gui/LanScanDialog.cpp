@@ -12,6 +12,10 @@
 // 2026-09-25: R-R3-49 (parity Task 8): the Core's scan for a remote
 // window (LanScanDialog(RadioModel*, QWidget*)). J.J. Boyd (KG4VCF),
 // AI-assisted via Anthropic Claude Code.
+//
+// 2026-09-25: R-R3-49 (parity Task 9): the Core's Power Genius scan
+// (scanPgxlLan) through the same dialog. J.J. Boyd (KG4VCF), AI-assisted
+// via Anthropic Claude Code.
 
 #include "gui/LanScanDialog.h"
 
@@ -51,23 +55,31 @@ LanScanDialog::LanScanDialog(QWidget* parent)
     m_discovery->start(3000);
 }
 
-LanScanDialog::LanScanDialog(RadioModel* coreModel, QWidget* parent)
+LanScanDialog::LanScanDialog(RadioModel* coreModel, QWidget* parent, CoreDevice device)
     : QDialog(parent)
     , m_coreModel(coreModel)
 {
-    buildUi(tr("The Core is listening for a Tuner Genius on its network (3 seconds)..."));
+    const bool amp = device == CoreDevice::PowerGenius;
+    buildUi(amp ? tr("The Core is listening for a Power Genius on its network (3 seconds)...")
+                : tr("The Core is listening for a Tuner Genius on its network (3 seconds)..."));
     IStationLink* link = m_coreModel ? m_coreModel->stationLink() : nullptr;
     if (!link) {
-        finishCoreScan(false, IStationLink::tgxlFullControlUnavailableReason(), QString());
+        finishCoreScan(false, amp ? IStationLink::pgxlFullControlUnavailableReason()
+                                  : IStationLink::tgxlFullControlUnavailableReason(),
+                       QString());
         return;
     }
-    connect(m_coreModel, &RadioModel::stationTgxlLanScanFinished, this,
-            [this](quint32 commandId, bool accepted, const QString& reason,
-                   const QString& devicesJson) {
-                if (m_coreScanPending && commandId == m_coreCommandId) {
-                    finishCoreScan(accepted, reason, devicesJson);
-                }
-            });
+    const auto onAnswer = [this](quint32 commandId, bool accepted, const QString& reason,
+                                 const QString& devicesJson) {
+        if (m_coreScanPending && commandId == m_coreCommandId) {
+            finishCoreScan(accepted, reason, devicesJson);
+        }
+    };
+    if (amp) {
+        connect(m_coreModel, &RadioModel::stationPgxlLanScanFinished, this, onAnswer);
+    } else {
+        connect(m_coreModel, &RadioModel::stationTgxlLanScanFinished, this, onAnswer);
+    }
     connect(m_coreModel, &RadioModel::stationLinkStateChanged, this, [this]() {
         const IStationLink* current = m_coreModel->stationLink();
         if (m_coreScanPending && (!current || !current->stationLinkReady())) {
@@ -75,7 +87,8 @@ LanScanDialog::LanScanDialog(RadioModel* coreModel, QWidget* parent)
                            QString());
         }
     });
-    const IStationLink::CommandOutcome outcome = link->requestTgxlLanScan();
+    const IStationLink::CommandOutcome outcome = amp ? link->requestPgxlLanScan()
+                                                     : link->requestTgxlLanScan();
     if (!outcome.sent) {
         finishCoreScan(false, outcome.reason, QString());
         return;

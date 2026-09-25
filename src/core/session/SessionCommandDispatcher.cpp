@@ -120,6 +120,10 @@
 //                                    scanTgxlLan and setTgxlAddress
 //                                    (remoteTgxlControlVersion 4).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 9): setPgxlOperate,
+//                                    scanPgxlLan and setPgxlAddress
+//                                    (remotePgxlControlVersion 4).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -308,6 +312,8 @@ QString notRepresentableReason()
 //                          tgxlFullControlAvailable() (version 4)
 //   setFourO3AEnabled      remoteFourO3AControlAvailable()
 //   *Pgxl*                 remotePgxlControlAvailable() (version 2)
+//   setPgxlOperate, scanPgxlLan, setPgxlAddress
+//                          pgxlFullControlAvailable() (version 4)
 //   *RfKit*                remoteRfKitControlAvailable() (version 2)
 //   setStationTci          stationTciAvailable() (version 1)
 //   setTxInterlockPolicy, setPgxlPowerCap, clearAccessoryFaults
@@ -379,6 +385,13 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
          kRadioIdentitySessionProtocolMinor},
         {"readPgxlSettings", {}, "remotePgxlControlVersion", 3,
          kRadioIdentitySessionProtocolMinor},
+        // The Power Genius's OPERATE and STANDBY, LAN scan and saved address
+        // (R-R3-49, parity Task 9).
+        {"setPgxlOperate", {arg("on", kBool)}, "remotePgxlControlVersion", 4,
+         kRadioIdentitySessionProtocolMinor},
+        {"scanPgxlLan", {}, "remotePgxlControlVersion", 4, kRadioIdentitySessionProtocolMinor},
+        {"setPgxlAddress", {arg("host", kUtf8), arg("port", kInt)},
+         "remotePgxlControlVersion", 4, kRadioIdentitySessionProtocolMinor},
         {"setTgxlName", {arg("name", kUtf8)}, "remoteTgxlControlVersion", 1,
          kRadioIdentitySessionProtocolMinor},
         {"setTgxlNetwork",
@@ -662,6 +675,12 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleScanTgxlLan(invoke);
     } else if (invoke.commandVerb == "setTgxlAddress") {
         handleSetTgxlAddress(invoke);
+    } else if (invoke.commandVerb == "setPgxlOperate") {
+        handleSetPgxlOperate(invoke);
+    } else if (invoke.commandVerb == "scanPgxlLan") {
+        handleScanPgxlLan(invoke);
+    } else if (invoke.commandVerb == "setPgxlAddress") {
+        handleSetPgxlAddress(invoke);
     } else if (invoke.commandVerb == "setTunePowerForTxBand") {
         handleTunePowerForTxBand(invoke);
     } else if (invoke.commandVerb == "txProfile.select" || invoke.commandVerb == "txProfile.save"
@@ -1743,6 +1762,88 @@ void SessionCommandDispatcher::handleSetTgxlAddress(const SessionMessage& invoke
         emitResult(verb, invoke.commandId, false,
                    reason.isEmpty()
                        ? QStringLiteral("The Core did not save the Tuner Genius address.")
+                       : reason, {});
+        return;
+    }
+    emitResult(verb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-49 (parity Task 9, remotePgxlControlVersion 4): the Power Genius's
+// OPERATE or STANDBY, sent through the Core's own PgxlConnection as the
+// local applet's line. Refused while the radio is on the air or the Core is
+// not connected to the amp; nothing is sent then.
+void SessionCommandDispatcher::handleSetPgxlOperate(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    QVariant on;
+    if (!hasExactlyArguments(invoke.arguments, { "on" })
+        || !findArgument(invoke.arguments, "on", &on) || on.typeId() != QMetaType::Bool) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("The request to put the Power Genius in operate or standby "
+                                  "was not understood."), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->setPgxlOperateForStation(on.toBool(), &reason)) {
+        emitResult(verb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not switch the Power Genius.")
+                                    : reason, {});
+        return;
+    }
+    emitResult(verb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-49 (parity Task 9): the Core listens for Power Genius announcements
+// and answers once its window ends, as scanTgxlLan does.
+void SessionCommandDispatcher::handleScanPgxlLan(const SessionMessage& invoke)
+{
+    const QByteArray verb = invoke.commandVerb;
+    const quint32 commandId = invoke.commandId;
+    if (!hasExactlyArguments(invoke.arguments, {})) {
+        emitResult(verb, commandId, false,
+                   QStringLiteral("The request to scan for a Power Genius was not understood."),
+                   {});
+        return;
+    }
+    QString reason;
+    const QPointer<SessionCommandDispatcher> self(this);
+    const quint64 generation = m_sessionGeneration;
+    const bool started = m_radioModel->scanPgxlLanForStation(
+        [self, generation, verb, commandId](const QString& devicesJson) {
+            if (!self || self->m_sessionGeneration != generation) { return; }
+            emit self->commandResultReady(SessionMessages::commandResult(
+                verb, commandId, true, QString(), {},
+                {{0, "devicesJson", MirrorWireKind::Utf8, devicesJson}}));
+        },
+        &reason);
+    if (!started) {
+        emitResult(verb, commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not scan for a Power Genius.")
+                                    : reason, {});
+    }
+}
+
+// R-R3-49 (parity Task 9): the Peripherals row's Power Genius Host and
+// Port, saved on the Core for its radio without dialling.
+void SessionCommandDispatcher::handleSetPgxlAddress(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    QString host;
+    int port = 0;
+    if (!hasExactlyArguments(invoke.arguments, { "host", "port" })
+        || !findUtf8Argument(invoke.arguments, "host", &host)
+        || !hasWireKind(invoke.arguments, "port", MirrorWireKind::Int64)
+        || findIntArgument(invoke.arguments, "port", &port) != ArgumentStatus::Ok) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("The request to save the Power Genius address was not "
+                                  "understood."), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->setPgxlAddressForStation(host, port, &reason)) {
+        emitResult(verb, invoke.commandId, false,
+                   reason.isEmpty()
+                       ? QStringLiteral("The Core did not save the Power Genius address.")
                        : reason, {});
         return;
     }

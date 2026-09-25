@@ -126,6 +126,11 @@
 //                (remoteTgxlControlVersion 4), and the window's LAN scan
 //                answer (reportStationTgxlLanScan). NereusSDR-original.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 9): setPgxlOperateForStation,
+//                scanPgxlLanForStation and setPgxlAddressForStation
+//                (remotePgxlControlVersion 4), and the window's LAN scan
+//                answer (reportStationPgxlLanScan). NereusSDR-original.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -629,6 +634,10 @@ public:
     /// (`devicesJson` the answer's JSON array, empty on a refusal).
     /// Role::Remote only. Routed to stationTgxlLanScanFinished.
     void reportStationTgxlLanScan(quint32 commandId, bool accepted, const QString& reason,
+                                  const QString& devicesJson);
+    /// R-R3-49 (parity Task 9): the same for a window's scanPgxlLan.
+    /// Routed to stationPgxlLanScanFinished.
+    void reportStationPgxlLanScan(quint32 commandId, bool accepted, const QString& reason,
                                   const QString& devicesJson);
 
     /// The station refused a sample-rate change, with its own reason.
@@ -2020,6 +2029,24 @@ public:
     /// (0 turns it off, up to 3600).
     bool setPgxlConnectionSettingsForStation(bool autoReconnect, int keepaliveSec,
                                              int pingSec, QString* reason);
+    // R-R3-49 (parity Task 9, remotePgxlControlVersion 4): a window's
+    // OPERATE or STANDBY. The Core sends the local applet's own line,
+    // `operate=1` or `operate=0`, through its PgxlConnection; the amp's
+    // report returns on AmplifierModel. It keys nothing. Refused on a Core
+    // that does not own its accessories, while the radio is on the air, and
+    // while the Core is not connected to the amp; nothing is sent then.
+    bool setPgxlOperateForStation(bool on, QString* reason);
+    // A window's Scan LAN: as scanTgxlLanForStation, for Power Genius
+    // announcements (StationPgxlController::expectedProduct()). Nothing is
+    // sent to any device.
+    bool scanPgxlLanForStation(std::function<void(const QString& devicesJson)> done,
+                               QString* reason);
+    // A Host or Port typed on a window's Peripherals row without Connect:
+    // saves PGXL_ManualIp and PGXL_ManualPort for the Core's radio without
+    // dialling, with configurePgxl's address checks and reasons. Refused
+    // while the radio is on the air. The `amplifier` object's configured
+    // address follows while the Core is not connecting or connected.
+    bool setPgxlAddressForStation(const QString& host, int port, QString* reason);
     // R-R3-47 / R-R3-22: the Core's RF-Kit RF2K-S. configure saves the
     // address for the Core's radio and starts identifying what answers
     // there; the amp is admitted once its /info names an RF2K-S.
@@ -2933,6 +2960,8 @@ public:
     // R-R3-49 (parity Task 8): a shorter Tuner Genius LAN scan window, so
     // a test does not wait the dialog's three seconds.
     void setTgxlLanScanWindowMsForTest(int ms) { m_tgxlLanScanWindowMs = ms; }
+    // R-R3-49 (parity Task 9): the same for the Power Genius scan.
+    void setPgxlLanScanWindowMsForTest(int ms) { m_pgxlLanScanWindowMs = ms; }
 #endif
 
     // Phase 3Q Task 10: arm / disarm the auto-connect-in-progress flag.
@@ -3555,6 +3584,9 @@ signals:
     /// accessory refusal also arrives on accessoryRequestRefused).
     void stationCommandFinished(quint32 commandId, bool accepted, const QString& reason);
     /// R-R3-49 (parity Task 8): see reportStationTgxlLanScan.
+    /// R-R3-49 (parity Task 9): see reportStationPgxlLanScan.
+    void stationPgxlLanScanFinished(quint32 commandId, bool accepted, const QString& reason,
+                                    const QString& devicesJson);
     void stationTgxlLanScanFinished(quint32 commandId, bool accepted, const QString& reason,
                                     const QString& devicesJson);
 
@@ -3884,6 +3916,14 @@ private:
     // switch the Core's Tuner Genius now (not the Core's tuner, the radio
     // on the air, or no tuner admitted).
     bool stationTgxlControlAllowed(QString* reason) const;
+    // R-R3-49 (parity Task 9): the Power Genius's OPERATE gate: a Core that
+    // owns its accessories, off the air, connected to the amp.
+    bool stationPgxlControlAllowed(QString* reason) const;
+    // R-R3-49 (parity Tasks 8 and 9): the Core's own Scan LAN, one
+    // LanDiscovery child named `objectName` that keeps the announcements of
+    // `products` for `windowMs` and calls `done` once with the JSON array.
+    void startStationLanScan(const QString& objectName, const QStringList& products,
+                             int windowMs, std::function<void(const QString&)> done);
     // R-R3-49 (parity Task 2): the transmit band for tunePowerForTxBand,
     // and the Core's transmit chain wiring (moved from connectToRadio()).
     void refreshTransmitTuneBand();
@@ -5449,6 +5489,9 @@ private:
     StationTgxlController* m_stationTgxl{nullptr};
     // R-R3-49 (parity Task 8): scanTgxlLanForStation's listening window.
     int m_tgxlLanScanWindowMs{kTgxlLanScanWindowMs};
+    // R-R3-49 (parity Task 9): scanPgxlLanForStation's listening window,
+    // the local dialog's (kTgxlLanScanWindowMs, the same three seconds).
+    int m_pgxlLanScanWindowMs{kTgxlLanScanWindowMs};
     StationPgxlController* m_stationPgxl{nullptr};
     TunerModel*     m_tunerModel{nullptr};
     AmplifierModel* m_amplifierModel{nullptr};

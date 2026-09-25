@@ -42,7 +42,10 @@ parity plan's Task 8 (R-R3-49) adds the rest of a local window's Tuner
 Genius at `remoteTgxlControlVersion` 4: the relay nudges (`moveTgxlRelay`),
 the Core's own Scan LAN (`scanTgxlLan`) and the Peripherals row's address
 saved without Connect (`setTgxlAddress`), each refused while the radio is
-on the air.
+on the air. Its Task 9 (R-R3-49) does the same for the Power Genius at
+`remotePgxlControlVersion` 4: OPERATE and STANDBY (`setPgxlOperate`), the
+Core's own Scan LAN (`scanPgxlLan`) and the address saved without Connect
+(`setPgxlAddress`), each refused while the radio is on the air.
 
 ## Wire conventions
 
@@ -88,12 +91,13 @@ contract; each feature has its own version.
 | `stationTciVersion` | 11 | 1 | The Core runs its own TCI server on the station network: the read-only `stationTci` object, and `setStationTci` works |
 | `accessoryDataVersion` | 11 | 1 | The Core mirrors its accessory records and settings as the read-only `accessoryData` object, and `setTxInterlockPolicy`, `setPgxlPowerCap` and `clearAccessoryFaults` work |
 | `remotePgxlControlVersion` | 11 | 3 | Also: the amp's own settings. The `pgxl*` properties of the read-only `accessorySettings` object, and `setPgxlName`, `setPgxlHardware`, `setPgxlNetwork`, `savePgxlSettings` and `readPgxlSettings` work |
+| `remotePgxlControlVersion` | 11 | 4 | Also: `setPgxlOperate` (OPERATE or STANDBY), `scanPgxlLan` (the Core listens for Power Genius announcements) and `setPgxlAddress` (the address saved without dialling) work whenever the radio is not on the air (see "Operating the Power Genius" and "Scanning for the Power Genius and its saved address") |
 | `remoteTgxlControlVersion` | 11 | 1 | The tuner's own settings: the `tgxl*` properties of `accessorySettings`, and `setTgxlName`, `setTgxlNetwork`, `saveTgxlSettings` and `readTgxlSettings` work |
 | `remoteTgxlControlVersion` | 11 | 2 | Also: the tuner's antenna, operate and bypass. `setTgxlAntenna`, `setTgxlOperate` and `setTgxlBypass` work whenever the radio is not on the air (see "Switching the Tuner Genius") |
 | `remoteTgxlControlVersion` | 11 | 3 | Also: `setTgxlOperate` with `on` true puts the tuner in OPERATE whole, bypass off and operate on from the one command, so STANDBY to OPERATE is one request |
 | `remoteTgxlControlVersion` | 11 | 4 | Also: `moveTgxlRelay` (a relay nudge), `scanTgxlLan` (the Core listens for Tuner Genius announcements) and `setTgxlAddress` (the address saved without dialling) work whenever the radio is not on the air (see "Switching the Tuner Genius" and "Scanning for the Tuner Genius and its saved address") |
 
-- The Core advertises `remotePgxlControlVersion` as 3,
+- The Core advertises `remotePgxlControlVersion` as 4,
   `remoteRfKitControlVersion` as 3, `remoteTgxlControlVersion` as 4 and
   the other TGXL and 4O3A versions (`remoteTgxlConfigVersion`,
   `remoteFourO3AControlVersion`) as 1 when it owns its accessories (the
@@ -107,6 +111,10 @@ contract; each feature has its own version.
   before the parity plan's Task 8 says 3: no relay nudges, no Scan LAN at
   the Core and no saved address, so a window keeps the relay bars with its
   transmit reason, Scan LAN off and a typed address kept for Connect. A
+  Core built before the parity plan's Task 9 says 3 for the PGXL: no
+  OPERATE or STANDBY, no Scan LAN at the Core and no saved address, so a
+  window keeps OPERATE greyed with its older reason, Scan LAN off and a
+  typed address kept for Connect. A
   Core built between Tasks 2 and 5 says 2 for the PGXL and sends no
   `remoteTgxlControlVersion`: the amp's and tuner's own settings are not
   offered there. A Core built before the fix wave says 2 for the RF2K-S:
@@ -146,6 +154,15 @@ contract; each feature has its own version.
   scan for it or save its address. Updating the Core may help." if asked
   anyway (Scan LAN's tooltip: "This Core does not scan for a Tuner Genius
   for this app. Updating the Core may help.").
+- An app that sees `remotePgxlControlVersion` below 4 does not offer the
+  amp's OPERATE and STANDBY, Scan LAN at the Core or the saved address on
+  this Core, and says "This Core does not let this app put the Power
+  Genius in operate or standby, scan for it or save its address. Updating
+  the Core may help." if asked anyway (the applet's OPERATE keeps
+  "Amplifier control is not available from a remote window yet.", the
+  Power Genius tab's Operate the receive-only reason, and Scan LAN's
+  tooltip says "This Core does not scan for a Power Genius for this app.
+  Updating the Core may help.").
 - An app that sees `remotePgxlControlVersion` below 3 (or
   `remoteTgxlControlVersion` 0, or no entry) does not offer to change the
   amp's (or tuner's) own settings on this Core and says why: "This Core does
@@ -336,6 +353,54 @@ Read-only: every property is the Core's to report.
 | 5 | `transmitA` | `TRANSMIT_A` |
 | 6 | `transmitB` | `TRANSMIT_B` |
 | 7 | `fault` | Any word beginning `FAULT` |
+
+### Operating the Power Genius
+
+With `remotePgxlControlVersion` 4, `setPgxlOperate` (`on` bool) puts the
+Core's amp in operate (true) or standby (false). The Core sends its amp the
+local applet's own line through its `PgxlConnection`, framed
+`C<seq>|<command>`:
+
+| Command | Line the amp receives | Local control |
+| --- | --- | --- |
+| `setPgxlOperate` `on` | `operate=1` (true) or `operate=0` (false) | The Power Genius applet's OPERATE button; a remote window's Setup > CAT & Network > 4O3A > PowerGenius XL > Operate |
+
+(The line is the one the amp takes, from the bench capture of 2026-05-19:
+a bare `operate` or `standby` is refused by the amp.) `accepted: true`
+means the line left for the amp. The window's buttons follow the amp's
+report on this object (`state`, `deviceState`, `operate`), never the
+click. Operating the amp keys nothing (it amplifies only when the radio
+transmits), so a receive-only Core takes it (operator decision D53,
+ruling 7.8). It waits while the radio is on the air (operator decision
+D60): the Core refuses it while its MOX (from any source, a hardware PTT
+included), TUNE or the two-tone test is on, and through the hand-back to
+receive, and a window disables its buttons with the reason while the Core
+reports the radio on the air. It is also refused while the Core is not
+connected to the amp. Nothing reaches the amp on a refusal. PGXL standby
+around a TGXL tune still waits for remote transmit.
+
+### Scanning for the Power Genius and its saved address
+
+With `remotePgxlControlVersion` 4 a window's Setup > CAT & Network > 4O3A >
+Peripherals Power Genius row does at the Core what a local window's row
+does at its own computer, as for the Tuner Genius:
+
+- `scanPgxlLan` (no arguments): the Core listens for Power Genius
+  announcements (`PowerGeniusXL`, the one product the Core admits) on its
+  station network for three seconds, and then answers. Its
+  `command.result` carries `values` with one entry, `devicesJson` (utf8):
+  a JSON array, one object per device heard,
+  `{"address","port","model","serial","nickname"}` (`port` a number, the
+  others text), `[]` when none. Listening sends nothing to any device. The
+  answer comes once, when the window ends; an answer due to an earlier app
+  connection is not sent.
+- `setPgxlAddress` (`host` utf8, `port` i64): the Core saves
+  `PGXL_ManualIp` and `PGXL_ManualPort` for its radio without dialling,
+  with `configurePgxl`'s address checks and reasons (the 4O3A switch is
+  not an address check: saving dials nothing). The `amplifier` object's
+  `configuredHost` and `configuredPort` take the saved address while the
+  Core is not connecting to or connected to an amp (a running connection
+  keeps showing its own); `connectionPhase` does not change.
 
 ### How the Core reads the PGXL
 
@@ -800,6 +865,9 @@ the Core took the request (see "Accepted is not connected").
 | `setPgxlNetwork`, `setTgxlNetwork` | `dhcp` (bool), `address`, `netmask`, `gateway` (utf8: empty, or four numbers from 0 to 255 separated by dots; with `dhcp` false, `address` and `netmask` are required and `gateway` is empty or on the address's network) | minor 11, `remotePgxlControlVersion` 3 / `remoteTgxlControlVersion` 1 | Sends the device its network settings |
 | `savePgxlSettings`, `saveTgxlSettings` | none | minor 11, `remotePgxlControlVersion` 3 / `remoteTgxlControlVersion` 1 | Sends `save`: the device keeps its settings and restarts (about 20 seconds offline; the Core reconnects as for any drop) |
 | `readPgxlSettings`, `readTgxlSettings` | none | minor 11, `remotePgxlControlVersion` 3 / `remoteTgxlControlVersion` 1 | Revert: asks the device for its settings and network settings |
+| `setPgxlOperate` | `on` (bool) | minor 11, `remotePgxlControlVersion` 4 | Puts the amp in operate (true) or standby (false) (see "Operating the Power Genius"). Keys nothing |
+| `scanPgxlLan` | none | minor 11, `remotePgxlControlVersion` 4 | The Core listens for Power Genius announcements for three seconds and answers with `values` `devicesJson` (see "Scanning for the Power Genius and its saved address") |
+| `setPgxlAddress` | `host` (utf8), `port` (i64, 1 to 65535) | minor 11, `remotePgxlControlVersion` 4 | Saves the PGXL address for the Core's radio without dialling |
 | `setTgxlName` | `name` (as `setPgxlName`) | minor 11, `remoteTgxlControlVersion` 1 | Sends the tuner its new name and saves it on the Core |
 | `setTgxlAntenna` | `port` (i64, 1 to 3) | minor 11, `remoteTgxlControlVersion` 2 | Switches the tuner to that antenna (see "Switching the Tuner Genius") |
 | `setTgxlOperate` | `on` (bool) | minor 11, `remoteTgxlControlVersion` 2 | Puts the tuner in operate (true) or standby (false). At version 3, true also takes it out of bypass, in the same command |
@@ -810,8 +878,9 @@ the Core took the request (see "Accepted is not connected").
 
 For these, `accepted: true` means the request left for the device; the
 device's answer arrives on `accessorySettings` (for `setTgxlAntenna`,
-`setTgxlOperate`, `setTgxlBypass` and `moveTgxlRelay`, on `tuner`).
-`scanTgxlLan` is accepted with its answer; `setTgxlAddress` means the
+`setTgxlOperate`, `setTgxlBypass` and `moveTgxlRelay`, on `tuner`; for
+`setPgxlOperate`, on `amplifier`). `scanTgxlLan` and `scanPgxlLan` are
+accepted with their answer; `setTgxlAddress` and `setPgxlAddress` mean the
 address was saved. The desktop app shows a
 refusal of one of them on the Advanced page that sent it (never the slice
 notice).
@@ -929,6 +998,16 @@ Commands:
 | `moveTgxlRelay` while the Core has not admitted a tuner | "The Core is not connected to the Tuner Genius." |
 | `setTgxlAddress` with no radio | "Connect the Core to a radio before setting up its Tuner Genius XL." |
 | `setTgxlAddress` with a bad host or a port outside 1 to 65535 | "Enter the Tuner Genius XL's IP address or host name, and a port from 1 to 65535." |
+| `setPgxlOperate`, `scanPgxlLan`, `setPgxlAddress` below minor 11 | "Update this app to switch the Power Genius on this Core." |
+| `setPgxlOperate`, `scanPgxlLan`, `setPgxlAddress` on a Core that does not own its accessories | "This Core cannot change its amplifier and tuner settings." |
+| `setPgxlOperate` with other arguments (or `on` not a bool) | "The request to put the Power Genius in operate or standby was not understood." |
+| `scanPgxlLan` with arguments | "The request to scan for a Power Genius was not understood." |
+| `setPgxlAddress` with other arguments | "The request to save the Power Genius address was not understood." |
+| `setPgxlOperate`, `scanPgxlLan`, `setPgxlAddress` while the radio is on the air (MOX, TUNE or two-tone, or the hand-back to receive after MOX) | "The radio is on the air. Try again when it stops." |
+| `setPgxlOperate` while the Core is not connected to the amp | "The Core is not connected to the Power Genius." |
+| `setPgxlAddress` with no radio | "Connect the Core to a radio before setting up its Power Genius." |
+| `setPgxlAddress` with a bad host or a port outside 1 to 65535 | "Enter the Power Genius's IP address or host name, and a port from 1 to 65535." |
+| `setPgxlOperate`, `scanPgxlLan`, `setPgxlAddress` from an app whose Core lacks `remotePgxlControlVersion` 4 (the app's own words, nothing sent) | "This Core does not let this app put the Power Genius in operate or standby, scan for it or save its address. Updating the Core may help." |
 | `moveTgxlRelay`, `scanTgxlLan`, `setTgxlAddress` from an app whose Core lacks `remoteTgxlControlVersion` 4 (the app's own words, nothing sent) | "This Core does not let this app move the Tuner Genius relays, scan for it or save its address. Updating the Core may help." |
 | `setFourO3AEnabled` below minor 4 | "Remote 4O3A control requires a newer station protocol." |
 | `configureTgxl` with other arguments | "invalid host or port argument" |
@@ -980,7 +1059,7 @@ Per radio, under `hardware/<mac>/peripherals/`:
 | --- | --- | --- |
 | `FourO3A_Enabled` | `True` / `False` | `setFourO3AEnabled` |
 | `TGXL_ManualIp`, `TGXL_ManualPort` | text, whole number | `configureTgxl`, and `setTgxlAddress` (saved without dialling) |
-| `PGXL_ManualIp`, `PGXL_ManualPort` | text, whole number | `configurePgxl` |
+| `PGXL_ManualIp`, `PGXL_ManualPort` | text, whole number | `configurePgxl`, and `setPgxlAddress` (saved without dialling) |
 | `RfKit_Enabled` | `True` / `False` | `setRfKitEnabled` |
 | `RfKit_ManualIp`, `RfKit_ManualPort` | text, whole number | `configureRfKit` |
 
@@ -1094,11 +1173,16 @@ the one exception to "wait for remote transmit": they key nothing, so from
 `remoteTgxlControlVersion` 2 a window switches them whenever the radio is
 not on the air (operator ruling of 2026-09-24; see "Switching the Tuner
 Genius"). From version 4 the relay nudges join them: a nudge keys nothing
-and waits only while the radio is on the air. Until remote transmit, the
-Core refuses or does not offer:
+and waits only while the radio is on the air. From
+`remotePgxlControlVersion` 4 the Power Genius's OPERATE and STANDBY join
+them too (`setPgxlOperate`, see "Operating the Power Genius"): operating
+the amp keys nothing. Until remote transmit, the Core refuses or does not
+offer:
 
-- PGXL OPERATE and STANDBY, and PGXL standby around a TGXL tune. A write of
-  `amplifier` `operate` is refused with the receive-only reason above.
+- PGXL standby around a TGXL tune. A write of `amplifier` `operate` is
+  refused with the receive-only reason above (a current app sends
+  `setPgxlOperate`, which carries the on-the-air check); below
+  `remotePgxlControlVersion` 4, PGXL OPERATE and STANDBY as well.
 - TGXL TUNE (autotune) and tune-memory recall on a band change (each
   starts a tune, a tune carrier on the air).
 - RF2K-S OPERATE and STANDBY, antenna choice. (The Core does put an
@@ -1126,10 +1210,11 @@ Pairing is not operating: the Core pairs an admitted PGXL
 (`flexradio ... ptt=LAN`) automatically, by operator decision of
 2026-09-23. It keys nothing; the Core's own transmit refusals still apply.
 
-A remote window shows these controls disabled: the Power Genius tab's
-Operate button with the receive-only reason, the applets' OPERATE and
-antenna buttons with "Amplifier control is not available from a remote
-window yet." (Power Genius and RF-Kit), the Tuner Genius applet's TUNE
+A remote window shows these controls disabled: on a Core below
+`remotePgxlControlVersion` 4, the Power Genius tab's Operate button with
+the receive-only reason and the Power Genius applet's OPERATE with
+"Amplifier control is not available from a remote window yet."; the
+RF-Kit applet's OPERATE and antenna buttons with that reason; the Tuner Genius applet's TUNE
 button with its transmit-permission reason (and its relay bars on a Core
 below `remoteTgxlControlVersion` 4, its OPERATE and ANT buttons too below
 2), and the
@@ -1160,7 +1245,7 @@ A window reads `amplifier` and `rfkit` only while the Core offers them:
   Core (`configurePgxl`, `disconnectPgxl`, `setPgxlConnectionSettings`) and
   show the Core's `amplifier` phase, identity and reason. The button says
   Connect, Cancel (while `connecting`, `identifying` or `retrying`) or
-  Disconnect. LAN scanning is not offered remotely. Below 2 the row and tab
+  Disconnect. LAN scanning is offered remotely from version 4 (below). Below 2 the row and tab
   say "This Core does not offer Power Genius XL control to this app." A
   local window keeps its own connection and its existing row.
 - With `remoteRfKitControlVersion` 2, the desktop remote window's RF-Kit
@@ -1293,8 +1378,30 @@ A window reads `amplifier` and `rfkit` only while the Core offers them:
   on the air Scan LAN, Host and Port are disabled with the on-air reason.
   Below version 4 Scan LAN stays off with "This Core does not scan for a
   Tuner Genius for this app. Updating the Core may help." and a typed
-  address is only sent by Connect. The Power Genius row does not scan
-  remotely.
+  address is only sent by Connect.
+- With `remotePgxlControlVersion` 4 the desktop remote window's Power
+  Genius applet OPERATE button sends `setPgxlOperate` (on from standby,
+  off from operate) while the Core is connected to the amp and the radio
+  is off the air; it shows the amp's reported state (OPERATE or STANDBY)
+  from the `amplifier` object, not the click, and never uses this
+  computer's own connection. The Operate button on Setup > CAT & Network >
+  4O3A > PowerGenius XL (the remote window's tab) does the same: it reads Operate
+  while the amp is in standby and Standby while it operates. While the
+  Core reports the radio on the air both are disabled with "The radio is
+  on the air. Try again when it stops."; while the Core is not connected
+  to the amp, with "The Core is not connected to the Power Genius." A
+  refusal shows as a notice. A local window's PowerGenius XL tab has no
+  Operate button; its applet's OPERATE is the local control, unchanged.
+  Copy diagnostics to clipboard in a remote window copies the Core's
+  connection: the `amplifier` object's address, identity, state and error
+  and `accessoryData`'s `pgxl*` counters, never this computer's idle
+  connection.
+- With `remotePgxlControlVersion` 4 the desktop remote window's Peripherals
+  row for the Power Genius offers Scan LAN (`scanPgxlLan`; the table lists
+  the Power Genius devices the Core heard) and keeps a typed Host or Port
+  on the Core (`setPgxlAddress`) exactly as the Tuner Genius row does
+  above, with its own words: "This Core does not scan for a Power Genius
+  for this app. Updating the Core may help." below version 4.
 - Every window (local or remote) shows the power-cap alert as a five-second
   notice when `powerCapAlertCount` moves while `powerCapExceeded` is true;
   a remote window's applet antenna names follow the Core's.
@@ -1446,7 +1553,7 @@ rewrite the fixtures, and update this document in the same commit.
   device the Core has not admitted; a request waiting when the device goes
   says so; a new scope forgets the values; nothing operates, bypasses or
   switches an antenna.
-- `tst_station_accessory_state`: `remotePgxlControlVersion` 3 and
+- `tst_station_accessory_state`: `remotePgxlControlVersion` 3 (4 from parity Task 9) and
   `remoteTgxlControlVersion` 1 last in the block, neither to an older app
   or from a Core that does not own its accessories; `accessorySettings`
   read-only and its fixture; the nine commands refused below minor 11, on
@@ -1538,12 +1645,35 @@ rewrite the fixtures, and update this document in the same commit.
   `session-verbs-tgxl-control` invokes the three commands right and wrong
   (the scan's `devicesJson` matched as any text, since a real tuner on the
   test computer's network may answer).
+- Parity Task 9 (R-R3-49, `remotePgxlControlVersion` 4):
+  `tst_pgxl_station_control` checks on a loopback amp that
+  `setPgxlOperate` sends exactly `operate=1` and `operate=0` on a
+  receive-only Core and keys nothing, and that the model follows the amp's
+  report; the three commands refused with nothing sent on a non-owning
+  Core, on the air (the MOX and TUNE latches, a hardware PTT, the
+  two-tone test and the hand-back to receive, through the Core's MOX
+  controller), OPERATE with no amp; the scan answering with the Power
+  Genius announcements it heard and not a Tuner Genius's; the address
+  checked, saved, shown on `amplifier` once the Core is disconnected, and
+  not dialled. `tst_station_accessory_state` checks version 4 and the
+  three commands' wire refusals. `tst_remote_peripherals` checks over the
+  loopback that the applet's OPERATE and the 4O3A tab's Operate reach the
+  amp and follow its report, wait on the air with the reason (a request
+  sent anyway refused, nothing reaching the amp) and never emit the local
+  toggle; that Copy diagnostics carries the Core's counters; and that the
+  Peripherals row's Scan LAN lists the Power Genius the Core heard and a
+  pick, a finished edit and Setup closing keep the address on the Core,
+  with nothing dialled, all waiting on the air. `session-verbs-pgxl-control`
+  invokes the three commands right and wrong (the scan's `devicesJson`
+  matched as any text).
 
 Hardware evidence is pending for the operator checkpoint: ANT 1, 2 and 3,
 OPERATE and BYPASS switched on the real Tuner Genius from the Rock's
 remote window (R-R3-49), C1 nudged and the LAN scanned from a remote
 window with the local applet on the Core's computer showing the same relay
-(parity Task 8), and readings from the
+(parity Task 8), the real PGXL put in operate and back in standby from the
+Rock's remote window with the radio idle and the LAN scanned for it
+(parity Task 9), and readings from the
 real PGXL and RF2K-S reaching a remote window and the iPhone app; identity
 and pairing with the real PGXL on the Core (the discovery announcement and
 `info` reply used here are the real amp's, captured on 2026-05-19 and

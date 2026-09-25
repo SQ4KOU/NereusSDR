@@ -102,6 +102,13 @@
 //                                    requestTgxlAddress
 //                                    (remoteTgxlControlVersion 4).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 9):
+//                                    pgxlFullControlAvailable,
+//                                    requestPgxlOperate,
+//                                    requestPgxlLanScan and
+//                                    requestPgxlAddress
+//                                    (remotePgxlControlVersion 4).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QString>
@@ -304,6 +311,22 @@ public:
     { return { false, tgxlFullControlUnavailableReason() }; }
     virtual CommandOutcome requestTgxlAddress(const QString& /*host*/, int /*port*/)
     { return { false, tgxlFullControlUnavailableReason() }; }
+    /// R-R3-49 (parity Task 9, remotePgxlControlVersion 4): the Core puts
+    /// its Power Genius in operate or standby (the local applet's line;
+    /// the amp's report returns on the mirrored `amplifier` object);
+    /// listens for Power Genius announcements for this window's Scan LAN
+    /// (the answer arrives as RadioModel::stationPgxlLanScanFinished); and
+    /// saves a Host and Port typed without Connect, without dialling. The
+    /// Core refuses each while the radio is on the air.
+    virtual bool pgxlFullControlAvailable() const { return false; }
+    virtual CommandOutcome requestPgxlOperate(bool /*on*/)
+    { return { false, pgxlFullControlUnavailableReason() }; }
+    virtual CommandOutcome requestPgxlLanScan()
+    { return { false, pgxlFullControlUnavailableReason() }; }
+    virtual CommandOutcome requestPgxlAddress(const QString& /*host*/, int /*port*/)
+    { return { false, pgxlFullControlUnavailableReason() }; }
+    static QString pgxlFullControlUnavailableReason()
+    { return QStringLiteral("This Core does not let this app put the Power Genius in operate or standby, scan for it or save its address. Updating the Core may help."); }
     static QString tgxlFullControlUnavailableReason()
     { return QStringLiteral("This Core does not let this app move the Tuner Genius relays, scan for it or save its address. Updating the Core may help."); }
     static QString tgxlControlUnavailableReason()

@@ -16,6 +16,8 @@
 // 2026-09-25: R-R3-49 (parity Task 8): a remote window's Scan LAN asks
 // the Core to listen (scanTgxlLan) and shows the Tuner Genius devices the
 // Core heard. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-25: R-R3-49 (parity Task 9): the same for the Power Genius
+// (scanPgxlLan). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #pragma once
 
@@ -57,7 +59,11 @@ public:
     // requestTgxlLanScan) and the table shows what it heard; this computer
     // opens no socket. A refusal, or the link to the Core dropping, is
     // shown in the dialog.
-    LanScanDialog(RadioModel* coreModel, QWidget* parent);
+    // R-R3-49 (parity Task 9): `device` says which accessory the Core
+    // listens for (scanTgxlLan or scanPgxlLan).
+    enum class CoreDevice { TunerGenius, PowerGenius };
+    LanScanDialog(RadioModel* coreModel, QWidget* parent,
+                  CoreDevice device = CoreDevice::TunerGenius);
 
     int rowCountForTesting() const;
     QString statusTextForTesting() const;

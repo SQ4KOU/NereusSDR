@@ -171,6 +171,11 @@
 //                the Tuner Genius applet's Copy diagnostics copies the
 //                Core's connection in a remote window. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 9): the Power Genius applet's OPERATE
+//                asks the Core in a remote window (never this computer's
+//                idle connection), and its Copy diagnostics copies the
+//                Core's connection. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -12476,6 +12481,12 @@ void MainWindow::onConnectionStateChanged()
 
             connect(m_ampApplet, &AmpApplet::operateToggled,
                     this, [this](bool wantOperate) {
+                // R-R3-49 (parity Task 9): a remote window's applet asks the
+                // Core itself (setPgxlOperate); this computer's Power Genius
+                // connection is local only.
+                if (m_radioModel->role() == RadioModel::Role::Remote) {
+                    return;
+                }
                 // Bench-fix 2026-05-19: pcap stream 11 (.19 PowerGeniusDesktop
                 // -> .235 PGXL :9008) shows the actually-used wire command
                 // for OPERATE is `operate=1` (key=value), not bare `operate`.
@@ -12548,6 +12559,15 @@ void MainWindow::onConnectionStateChanged()
             // diagnosticsCopyRequested: build a brief diagnostic string and copy to clipboard.
             connect(m_ampApplet, &AmpApplet::diagnosticsCopyRequested,
                     this, [this]() {
+                // R-R3-49 (parity Task 9): a remote window copies the Core's
+                // connection (the mirrored `amplifier` object and
+                // accessoryData's pgxl counters), not this computer's idle
+                // socket.
+                if (m_radioModel->role() == RadioModel::Role::Remote) {
+                    QGuiApplication::clipboard()->setText(
+                        AmpApplet::coreDiagnosticsText(m_radioModel));
+                    return;
+                }
                 PgxlConnection* pgxl = m_radioModel->pgxlConnection();
                 const QString text = QStringLiteral(
                     "PGXL Diagnostics\n"

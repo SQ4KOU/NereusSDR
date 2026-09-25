@@ -241,7 +241,8 @@ public:
 
 protected:
     // R-R3-49 (parity Task 8): Setup closing (or the tab changing) sends a
-    // remote window's unsent Tuner Genius Host or Port to the Core.
+    // remote window's unsent Tuner Genius Host or Port to the Core
+    // (parity Task 9: and the Power Genius's).
     void hideEvent(QHideEvent* event) override;
 
 private slots:
@@ -290,6 +291,11 @@ private:
     void sendRemoteTgxlAddress();
     bool m_tgxlAddressEdited{false};
     bool m_fillingTgxlFromCore{false};
+    // R-R3-49 (parity Task 9, remotePgxlControlVersion 4): the same for the
+    // Power Genius row (setPgxlAddress).
+    void sendRemotePgxlAddress();
+    bool m_pgxlAddressEdited{false};
+    bool m_fillingPgxlFromCore{false};
 };
 
 } // namespace NereusSDR

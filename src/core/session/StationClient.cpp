@@ -150,6 +150,10 @@
 //                setTgxlAddress (remoteTgxlControlVersion 4); the scan's
 //                answer goes to RadioModel::reportStationTgxlLanScan.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 9): setPgxlOperate, scanPgxlLan and
+//                setPgxlAddress (remotePgxlControlVersion 4); the scan's
+//                answer goes to RadioModel::reportStationPgxlLanScan.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -2820,7 +2824,8 @@ QString accessoryRefusalDevice(const QByteArray& verb, const QString& faultsDevi
     if (verb == "setPgxlName" || verb == "setPgxlHardware" || verb == "setPgxlNetwork"
         || verb == "savePgxlSettings" || verb == "readPgxlSettings"
         || verb == "setPgxlPowerCap" || verb == "configurePgxl" || verb == "disconnectPgxl"
-        || verb == "setPgxlConnectionSettings") {
+        || verb == "setPgxlConnectionSettings" || verb == "setPgxlOperate"
+        || verb == "scanPgxlLan" || verb == "setPgxlAddress") {
         return QStringLiteral("pgxl");
     }
     if (verb == "setTgxlName" || verb == "setTgxlNetwork" || verb == "saveTgxlSettings"
@@ -3382,6 +3387,35 @@ StationClient::CommandOutcome StationClient::requestTgxlAddress(const QString& h
                        QStringLiteral("the Tuner Genius address"));
 }
 
+// R-R3-49 (parity Task 9): a Core below remotePgxlControlVersion 4 is not
+// asked; the window says why in its own words.
+StationClient::CommandOutcome StationClient::requestPgxlOperate(bool on)
+{
+    if (!pgxlFullControlAvailable()) {
+        return IStationLink::requestPgxlOperate(on);
+    }
+    return sendCommand("setPgxlOperate", -1, { boolArgument("on", on) },
+                       QStringLiteral("the Power Genius operate"));
+}
+
+StationClient::CommandOutcome StationClient::requestPgxlLanScan()
+{
+    if (!pgxlFullControlAvailable()) {
+        return IStationLink::requestPgxlLanScan();
+    }
+    return sendCommand("scanPgxlLan", -1, {}, QStringLiteral("the Power Genius scan"));
+}
+
+StationClient::CommandOutcome StationClient::requestPgxlAddress(const QString& host, int port)
+{
+    if (!pgxlFullControlAvailable()) {
+        return IStationLink::requestPgxlAddress(host, port);
+    }
+    return sendCommand("setPgxlAddress", -1,
+                       { stringArgument("host", host), intArgument("port", port) },
+                       QStringLiteral("the Power Genius address"));
+}
+
 // R-R3-49 (parity Task 2): the TX applet's Tune Power slider. A Core
 // below transmitSettingsVersion 2 is not asked.
 StationClient::CommandOutcome StationClient::requestTunePowerForTxBand(int watts)
@@ -3597,7 +3631,9 @@ void StationClient::handleCommandResult(const SessionMessage& message)
     }
     // R-R3-49 (parity Task 8): the Core's Scan LAN answer, to the window's
     // scan dialog (a refusal is also routed as an accessory refusal above).
-    if (pending.verb == "scanTgxlLan" && !m_radioModel.isNull()) {
+    // R-R3-49 (parity Task 9): the same for the Power Genius's scan.
+    if ((pending.verb == "scanTgxlLan" || pending.verb == "scanPgxlLan")
+        && !m_radioModel.isNull()) {
         QString devicesJson;
         for (const MirrorUpdate& value : message.updates) {
             if (value.name == "devicesJson" && value.kind == MirrorWireKind::Utf8) {
@@ -3605,8 +3641,13 @@ void StationClient::handleCommandResult(const SessionMessage& message)
             }
         }
         const QPointer<StationClient> self(this);
-        m_radioModel->reportStationTgxlLanScan(message.commandId, message.accepted,
-                                               message.reason, devicesJson);
+        if (pending.verb == "scanTgxlLan") {
+            m_radioModel->reportStationTgxlLanScan(message.commandId, message.accepted,
+                                                   message.reason, devicesJson);
+        } else {
+            m_radioModel->reportStationPgxlLanScan(message.commandId, message.accepted,
+                                                   message.reason, devicesJson);
+        }
         if (!self) { return; }
     }
     // R-R3-22 fix wave: every result by its id, so a sender (the amp
@@ -3727,6 +3768,12 @@ bool StationClient::tgxlOperateAppliesWhole() const
 {
     // R-R3-49 fix wave: a Core at 3 applies setTgxlOperate on whole.
     return tgxlControlAvailable() && m_capabilities.remoteTgxlControlVersion >= 3;
+}
+
+bool StationClient::pgxlFullControlAvailable() const
+{
+    // R-R3-49 (parity Task 9): setPgxlOperate, scanPgxlLan, setPgxlAddress.
+    return remotePgxlControlAvailable() && m_capabilities.remotePgxlControlVersion >= 4;
 }
 
 bool StationClient::tgxlFullControlAvailable() const
