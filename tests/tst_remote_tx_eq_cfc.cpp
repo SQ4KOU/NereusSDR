@@ -298,6 +298,7 @@ private slots:
     void txProfileCarriesTheLegacyBox();
     void newReasonsArePlain();
     void curveIsReadOnTheMainThreadAndHandedByValue();
+    void unreadableCurveIsRefusedWithAReason();
 
 private:
     QTemporaryDir m_securityDir;
@@ -566,8 +567,10 @@ void TstRemoteTxEqCfc::cfcPhaseRotatorAndCessbRoundTrip()
     QVERIFY(s.txChannel.lastTxCessbOnForTest());
 
     // The parametric CFC blob travels too.
-    windowTx.setCfcParaEqData(QStringLiteral("opaque-curve"));
-    QTRY_COMPARE(coreTx.cfcParaEqData(), QStringLiteral("opaque-curve"));
+    // (A curve the Core can load: group A fix wave, M4.)
+    const QString cfcCurve = flatParametricBlob(-2.0);
+    windowTx.setCfcParaEqData(cfcCurve);
+    QTRY_COMPARE(coreTx.cfcParaEqData(), cfcCurve);
 
     coreTx.setCfcCompression(3, 16);
     QTRY_COMPARE(windowTx.cfcCompression(3), 16);
@@ -1067,6 +1070,44 @@ void TstRemoteTxEqCfc::curveIsReadOnTheMainThreadAndHandedByValue()
     QVERIFY(lastGains.size() > 1);
     QVERIFY(lastGains.at(1) < 0.0);
     core->injectTxChannelForTest(nullptr);
+}
+
+// Group A fix wave, M4: a txEqParaEqData or cfcParaEqData value the Core's
+// loader cannot load is refused with a plain reason and changes nothing;
+// a loadable curve and the empty "no curve" value are taken.
+void TstRemoteTxEqCfc::unreadableCurveIsRefusedWithAReason()
+{
+    Session s(m_securityDir.path(), this);
+    QVERIFY(s.connect());
+    TransmitModel& coreTx = s.core->transmitModel();
+    const QString good = flatParametricBlob(2.0);
+    const QString reason =
+        QStringLiteral("The Core could not read that equalizer curve. Save the curve again and retry.");
+    QVERIFY(OperatorWording::isPlain(reason));
+
+    for (const QByteArray name : {QByteArrayLiteral("txEqParaEqData"),
+                                  QByteArrayLiteral("cfcParaEqData")}) {
+        const SessionPropertyResult ok = s.writeTransmit(name, MirrorWireKind::Utf8, good);
+        QVERIFY2(ok.accepted, qPrintable(name + ' ' + ok.reason));
+        QCOMPARE(coreTx.property(name.constData()).toString(), good);
+
+        const QString bad[] = {
+            QStringLiteral("not a curve"),
+            QStringLiteral("{\"points\":[]}"),
+            ParaEqEnvelope::encode(QStringLiteral("{\"band_count\":3,\"points\":[{},{}]}")),
+        };
+        for (const QString& value : bad) {
+            const SessionPropertyResult r = s.writeTransmit(name, MirrorWireKind::Utf8, value);
+            QVERIFY2(!r.accepted, qPrintable(name + ' ' + value));
+            QCOMPARE(r.reason, reason);
+            QCOMPARE(coreTx.property(name.constData()).toString(), good);
+        }
+
+        const SessionPropertyResult empty =
+            s.writeTransmit(name, MirrorWireKind::Utf8, QString());
+        QVERIFY2(empty.accepted, qPrintable(name + ' ' + empty.reason));
+        QCOMPARE(coreTx.property(name.constData()).toString(), QString());
+    }
 }
 
 QTEST_MAIN(TstRemoteTxEqCfc)

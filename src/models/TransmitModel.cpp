@@ -100,6 +100,10 @@
 //                 anti-VOX, two-tone and per-band power ranges in
 //                 settingRangeRefusal(). NereusSDR-original. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (group A fix wave, M4): settingRangeRefusal()
+//                 refuses a txEqParaEqData or cfcParaEqData value the curve
+//                 loader cannot read. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 // --- From console.cs (Thetis v2.10.3.13) ---
@@ -269,6 +273,7 @@
 
 #include "TransmitModel.h"
 #include "core/AppSettings.h"
+#include "core/ParaEqCurve.h"
 #include "core/PaProfile.h"
 #include "core/PureSignal.h"
 #include "core/StepAttenuatorController.h"
@@ -850,6 +855,19 @@ QString TransmitModel::settingRangeRefusal(const QByteArray& propertyName,
         const qlonglong v = value.toLongLong(&ok);
         return !ok || v < lo || v > hi;
     };
+    // R-R3-49 (group A fix wave, M4): a parametric EQ curve the Core could
+    // not load would leave its TX channel on the flat default curve. An
+    // empty value is the saved "no curve" and loads the default, as the
+    // TX profile's blank value does. The TX EQ and CFC curves share the
+    // envelope and the curve JSON, so one loader checks both.
+    if (propertyName == "txEqParaEqData" || propertyName == "cfcParaEqData") {
+        const QString data = value.toString();
+        ParaEqCurve::Curve curve;
+        if (data.isEmpty() || ParaEqCurve::txEqCurveFromParaEqData(data, curve)) {
+            return {};
+        }
+        return QStringLiteral("The Core could not read that equalizer curve. Save the curve again and retry.");
+    }
     if (propertyName == "tunePower" || propertyName == "tunePowerForTxBand") {
         const int hi = tunePowerMax();
         if (!outside(0, hi)) { return {}; }

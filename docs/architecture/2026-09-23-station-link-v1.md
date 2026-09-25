@@ -1232,7 +1232,9 @@ Notes on the keys:
   `cfcPostEqBandGainJson` (utf8, the ten post-EQ gains, each -24 to 24 dB),
   `cfcPostEqEnabled` (bool), `cfcPostEqGainDb` (i64, -24 to 24 dB),
   `cfcPrecompDb` (i64, 0 to 16 dB), `cfcParaEqData` (utf8, as
-  `txEqParaEqData`). `phaseRotatorEnabled` (bool), `phaseRotatorFreqHz`
+  `txEqParaEqData`). A non-empty `txEqParaEqData` or `cfcParaEqData` the
+  Core cannot read as a curve is refused ("The Core could not read that
+  equalizer curve. Save the curve again and retry.") and changes nothing. `phaseRotatorEnabled` (bool), `phaseRotatorFreqHz`
   (i64, 10 to 2000 Hz), `phaseRotatorStages` (i64, 2 to 16),
   `phaseReverseEnabled` (bool), `cessbOn` (bool), `txLevelerMaxGain` (i64,
   0 to 20 dB), `txLevelerDecay` (i64, 1 to 5000 ms), `txAlcMaxGain` (i64, 0
