@@ -35,9 +35,10 @@ struct DisplayBudgetSplitDevice {
     /// epoch as a string). Order in the input list is the tie-break order.
     QByteArray id;
     /// What the device asks for: its demand, the charges of its displays
-    /// as subscribed (before any grant clamps them, a display refused for
-    /// the budget included), not what it was granted (fix wave I5, ruling
-    /// 9.3). The Core reads it from the device's media controller.
+    /// as subscribed (before the budget clamps them, a display refused for
+    /// the budget included; fix wave 3: at the pixels each window can
+    /// carry), not what it was granted (fix wave I5, ruling 9.3). The Core
+    /// reads it from the device's media controller.
     /// messagesPerSecond is not part of a budget and is ignored.
     DisplayBudgetCharge request;
     /// Limits and reason last published to this device, if any, so an

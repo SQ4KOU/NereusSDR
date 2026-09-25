@@ -1561,8 +1561,12 @@ capabilities (the existing budget entries, the link, section 6.4):
    four times.
 
 **The requested charge is demand, not grant** (fix wave I5, 2026-09-25; fix wave 2,
-2026-09-25). A device's request is the sum of its display subscriptions' charges as subscribed,
-at the pixels and frame rate it asked for, before the grant clamps them, a subscription refused
+2026-09-25; fix wave 3, 2026-09-25). A device's request is the sum of its display subscriptions'
+charges as subscribed, at the frame rate it asked for and the pixels it asked for clamped to what
+its window can carry (the source bins in the window at the engine's FFT size,
+`SpectrumEndpoint::grantedPixels`; a device asking for more pixels than its window has bins
+would otherwise keep a demand it cannot use, taking share from the others and hearing
+`sharedConnection` while fully served), before the budget clamps them, a subscription refused
 for the budget included (until the bound below), and never less than one useful pan: 256 pixels
 at 10 frames a second with its wide plane, the governor's own floor pan
 (`DisplayLoadGovernor::floorPanCharge`, the same floor as `DisplayLoadGovernor.h:135-136` and

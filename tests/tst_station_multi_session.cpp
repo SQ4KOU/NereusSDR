@@ -2160,19 +2160,29 @@ private slots:
         QCOMPARE(latestCapability(aloneA, QStringLiteral("displayBudgetGeneration")).toInteger(), 5);
         QCOMPARE(latestCapability(aloneA, QStringLiteral("displayBudgetReason")).toString(),
                  QStringLiteral("none"));
-        // Each asks for 512 pixels at 60 frames a second: 61'440 samples a
-        // second, more than half the total's 100'000. The Core grants 256
-        // pixels (the bins in its window), so each is admitted.
-        const auto wants = [&m](LoopbackTransport* app, quint64 epoch) {
+        // Each asks for 512 pixels at 60 frames a second over a window its
+        // 4096-bin engine gives 1024 bins, so all 512 are carried (fix wave
+        // 3: a request counts only the pixels its window can carry; at the
+        // 1024-bin engine's 256 bins it would ask for half): 61'440 samples
+        // a second, more
+        // than half the total's 100'000. The first is admitted whole; the
+        // second, over its half, is refused for the budget and still asked
+        // for (its request is held while it may ask again).
+        const auto wants = [&m](LoopbackTransport* app, quint64 epoch, bool fits = true) {
             const int slice = m.sliceOf(epoch);
             const double centre =
                 m.core.model->streamCentreHz(m.core.model->sliceById(slice)->streamIndex());
             QJsonObject request = displayRequestAt(1, slice, centre, 60);
+            request.insert(QStringLiteral("fftSize"), 4096);
             request.insert(QStringLiteral("pixels"), 512);
             sendMedia(app, request);
             QTRY_COMPARE(mediaOps(app, QStringLiteral("allocation-result")).size(), 1);
-            QVERIFY(mediaOps(app, QStringLiteral("allocation-result")).last()
-                        .value(QStringLiteral("accepted")).toBool());
+            const QJsonObject result = mediaOps(app, QStringLiteral("allocation-result")).last();
+            QCOMPARE(result.value(QStringLiteral("accepted")).toBool(!fits), fits);
+            if (!fits) {
+                QCOMPARE(result.value(QStringLiteral("reason")).toString(),
+                         QString::fromLatin1(kDisplayBudgetRefusalReason));
+            }
         };
         QVERIFY(m.startMedia(m.appA));
         wants(m.appA, m.epochOf(0));
@@ -2188,7 +2198,7 @@ private slots:
         QCOMPARE(latestCapability(m.appB->received(), QStringLiteral("remoteMediaVersion"))
                      .toInteger(), 1);
         QVERIFY(m.startMedia(m.appB));
-        wants(m.appB, m.epochOf(1));
+        wants(m.appB, m.epochOf(1), false);
         // Both ask for more than half: equal halves, each told the
         // connection is shared.
         for (LoopbackTransport* app : {m.appA, m.appB}) {
@@ -2260,6 +2270,61 @@ private slots:
     // goes max-min fair to the four-pan device. The link cannot tell the
     // sound-only device from one that has not subscribed yet, so it keeps
     // the floor of one useful pan.
+    // Fix wave 3 (the re-review's third out-of-scope item): a device's
+    // request counts the pixels its window can carry (the source bins the
+    // grant clamps to), not more. B asks for 1024 pixels over a window
+    // whose bins are far fewer; it is fully served, hears none, and A has
+    // the rest.
+    void aDevicesRequestCountsOnlyThePixelsItsWindowCanCarry()
+    {
+        const DisplayBudgetCharge p = spectrumDisplayCost(128, 60, false)->charge;
+        const DisplayBudgetCharge f = DisplayLoadGovernor::floorPanCharge();
+        const DisplayBudgetCharge wide = spectrumDisplayCost(1024, 60, false)->charge;
+        const DisplayBudgetLimits total{f.applicationBytesPerSecond + 5 * p.applicationBytesPerSecond,
+                                        f.spectrumSampleUnitsPerSecond
+                                            + 5 * p.spectrumSampleUnitsPerSecond,
+                                        1};
+        // Asked for as 1024 pixels, B's pan would want more than half.
+        QVERIFY(2 * wide.spectrumSampleUnitsPerSecond > total.spectrumSampleUnitsPerSecond);
+        MediaCore m(total);
+        m.signInBoth();
+        QTRY_COMPARE(m.hub->controllerCount(), 2);
+        const int sliceA = m.sliceOf(m.epochOf(0));
+        const int sliceB = m.sliceOf(m.epochOf(1));
+        const double centre =
+            m.core.model->streamCentreHz(m.core.model->sliceById(sliceA)->streamIndex());
+        QVERIFY(m.startMedia(m.appA));
+        QVERIFY(m.startMedia(m.appB));
+
+        QJsonObject many = displayRequestAt(1, sliceB, centre, 60);
+        many.insert(QStringLiteral("pixels"), 1024);
+        sendMedia(m.appB, many);
+        QTRY_COMPARE(mediaOps(m.appB, QStringLiteral("allocation-result")).size(), 1);
+        QVERIFY(mediaOps(m.appB, QStringLiteral("allocation-result")).last()
+                    .value(QStringLiteral("accepted")).toBool());
+        for (quint32 endpoint = 1; endpoint <= 4; ++endpoint) {
+            sendMedia(m.appA, displayRequestAt(endpoint, sliceA, centre, 60));
+        }
+        QTRY_COMPARE(mediaOps(m.appA, QStringLiteral("allocation-result")).size(), 4);
+
+        const auto share = [](const LoopbackTransport* app, const char* name) {
+            return static_cast<quint64>(
+                latestCapability(app->received(), QString::fromLatin1(name)).toInteger());
+        };
+        // B is given what its window can carry, below half the total, and
+        // is told nothing is short.
+        QTRY_COMPARE(latestCapability(m.appB->received(), QStringLiteral("displayBudgetReason"))
+                         .toString(), QStringLiteral("none"));
+        const quint64 bSamples = share(m.appB, "spectrumSampleUnitsPerSecond");
+        QVERIFY2(bSamples < wide.spectrumSampleUnitsPerSecond, qPrintable(QString::number(bSamples)));
+        QVERIFY(2 * bSamples < total.spectrumSampleUnitsPerSecond);
+        // A, short of its four pans, has everything B leaves.
+        QTRY_COMPARE(share(m.appA, "spectrumSampleUnitsPerSecond"),
+                     total.spectrumSampleUnitsPerSecond - bSamples);
+        QCOMPARE(latestCapability(m.appA->received(), QStringLiteral("displayBudgetReason"))
+                     .toString(), QStringLiteral("sharedConnection"));
+    }
+
     void eachDevicesRequestIsWhatItsDisplaysAskFor()
     {
         const auto pan = spectrumDisplayCost(128, 60, false);

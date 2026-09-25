@@ -881,8 +881,10 @@ request, the rest is shared among the others; with transmit unheld, held by
 the station device or held by a device that is away, every device gets an
 equal share, and a device asking for less leaves the difference to the
 rest (max-min fair). A device's request is what its displays ask for: the
-sum of its display subscriptions' charges at the pixels and frame rate it
-subscribed at, before any grant clamps them, a subscription refused for the
+sum of its display subscriptions' charges at the frame rate it subscribed
+at and the pixels it subscribed at, clamped to what its window can carry
+(the receiver's bins in that window), before the budget clamps them, a
+subscription refused for the
 budget included, until the display is closed, asked for again, or 10 s
 pass after its refusal without either (the media control document's
 display budget section), and never

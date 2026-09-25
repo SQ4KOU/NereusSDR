@@ -1647,7 +1647,8 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
     const auto displayCost = endpointDisplayCost(
         chargedPixels, fps, request.requestedWideSpanFactor > 1.0, extrasRequest.sections());
     // Fix wave I5 (ruling 9.3): the device's request is what it asks for,
-    // at the pixels it asked for, before the grant. It is recorded first,
+    // before the budget (fix wave 3: at the pixels its window can carry,
+    // below). It is recorded first,
     // so the shares are split again with it and this display is admitted
     // against the share the device has with its new demand (for a holder,
     // what rule 1 gives it), not the share it had. A display refused for
@@ -1662,7 +1663,13 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
         previousDemand = refused->second.before;
         m_refusedDemand.erase(refused);
     }
-    const auto asked = endpointDisplayCost(pixels, fps, request.requestedWideSpanFactor > 1.0,
+    // Fix wave 3 (the re-review's third out-of-scope item): the pixels its
+    // window can carry, not more. The grant's clamp here is geometry only
+    // (the source bins in the window at the engine's size, never the
+    // budget), so a device asking for more pixels than its window has bins
+    // does not keep a demand it cannot use.
+    const auto asked = endpointDisplayCost(grant.grantedPixels, fps,
+                                           request.requestedWideSpanFactor > 1.0,
                                            extrasRequest.sections());
     if (asked) {
         setDisplayDemand(endpointId, asked->charge);

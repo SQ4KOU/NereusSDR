@@ -173,9 +173,11 @@ public:
     DisplayBudgetCharge ownDisplayCharge() const;
     /// Fix wave I5 (ruling 9.3): this controller's display demand, the
     /// charges its displays asked for as subscribed (at the requested
-    /// pixels and frame rate, before any grant clamps them), a display
-    /// refused for the budget included, until it is closed. The PureSignal
-    /// display is not in it (the split charges it to its subscriber).
+    /// frame rate and the requested pixels clamped to the source bins its
+    /// window can carry, fix wave 3; before the budget clamps them), a
+    /// display refused for the budget included, until it is closed. The
+    /// PureSignal display is not in it (the split charges it to its
+    /// subscriber).
     DisplayBudgetCharge displayDemand() const;
     /// Fix wave 2 after the several-devices re-review (Important 2): how
     /// long a subscription refused for the budget still counts in this
