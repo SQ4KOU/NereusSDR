@@ -1541,6 +1541,58 @@ quint8 P1RadioConnection::effectiveAlexLpfBits() const
 }
 
 // ---------------------------------------------------------------------------
+// ocBandFrequencyHz: the frequency whose band selects the OC outputs.
+//
+// Plan Task 14 (3M-1 transmit). Thetis picks the transmit mask from the
+// band of the VFO that transmits, and the receive mask from VFO A's band:
+//   From Thetis HPSDR/Penny.cs:174-177 [v2.10.3.15]
+//     if (tx && VFOBTX)
+//         bits = TXABitMasks[idxb];
+//     else if (tx)
+//         bits = TXABitMasks[idx];
+//     else bits = RXABitMasks[idx];
+// mi0bot's HL2 branch has the same transmit rule:
+//   From mi0bot-Thetis HPSDR/Penny.cs:176-181 [@c26a8a4]
+//     if (HardwareSpecific.Model == HPSDRModel.HERMESLITE)    // MI0BOT: Select correct LPF for 2 receivers
+//     {
+//         if (tx)
+//         {
+//             if (VFOBTX)
+//                 bits = TXABitMasks[idxb];
+//             else
+//                 bits = TXABitMasks[idx];
+//         }
+//         else
+//         {
+//             if (Console.getConsole().RX2Enabled && (idxb > idx))     // MI0BOT: Select the filter for the high band
+// (that receive arm is not taken here: see the HL2 two-range note in
+// buildCodecContext). VFOBTX is chkVFOBTX:
+//   From Thetis console.cs:39833-39834 [v2.10.3.15]
+//     Audio.VFOBTX = chkVFOBTX.Checked;
+//     Penny.getPenny().VFOBTX = chkVFOBTX.Checked; // MW0LGE_21j
+// so both arms name the transmitting VFO. NereusSDR's transmitting slice is whichever holds
+// the transmitter, and m_txFreqHz is its frequency plus XIT, the same
+// frequency the Alex transmit low-pass uses
+// (RadioModel::pushTxFrequencyFromTxSlice).
+//
+// Before this, the keyed byte read the RX1 stand-in's band. On the HL2 the
+// N2ADR board's transmit low-pass is chosen by these pins, so a 40 m
+// carrier on slice B with slice A on 20 m went out through the 30/20 m
+// low-pass, its second harmonic unfiltered.
+//
+// A transmit frequency of 0 has never been pushed; the radio cannot be
+// transmitting RF on it, and the receive band is kept rather than a band
+// the transmitter is not on.
+// ---------------------------------------------------------------------------
+quint64 P1RadioConnection::ocBandFrequencyHz() const
+{
+    if (m_mox && m_txFreqHz != 0) {
+        return m_txFreqHz;
+    }
+    return m_rxFreqHz[m_rx1Slot];
+}
+
+// ---------------------------------------------------------------------------
 // setWatchdogEnabled
 //
 // R-R3-49: the Network Watchdog setting (Setup > General > Options). On
@@ -2570,7 +2622,8 @@ CodecContext P1RadioConnection::buildCodecContext() const
     // Phase 3P-D Task 3 — From Thetis HPSDR/Penny.cs:117-132 [@501e3f5]
     // setBandABitMask — OC mask derived per-band at transmit time.
     //
-    // The band is RX1's, as in Thetis (lo_band = the band of VFOAFreq):
+    // Unkeyed the band is RX1's, as in Thetis (lo_band = the band of
+    // VFOAFreq):
     //   From mi0bot-Thetis console.cs:14986-14988 [@c26a8a4]
     //     Band lo_band = BandByFreq(XVTRForm.TranslateFreq(VFOAFreq), rx1_xvtr_index, current_region);
     //     Band lo_bandb = BandByFreq(XVTRForm.TranslateFreq(VFOBFreq), rx2_xvtr_index, current_region);
@@ -2579,8 +2632,11 @@ CodecContext P1RadioConnection::buildCodecContext() const
     // setLiveReceiverSlots). On the HL2 this byte drives the N2ADR filter
     // board, so reading slot 0 after slice A was closed left the board on
     // A's band.
+    //
+    // Keyed it is the TRANSMITTING slice's band (plan Task 14). See
+    // ocBandFrequencyHz for the Penny.cs rule.
     if (m_ocMatrix) {
-        const Band currentBand = bandFromFrequency(static_cast<double>(m_rxFreqHz[m_rx1Slot]));
+        const Band currentBand = bandFromFrequency(static_cast<double>(ocBandFrequencyHz()));
         ctx.ocByte = m_ocMatrix->maskFor(currentBand, m_mox);
     } else {
         ctx.ocByte = m_ocOutput;
@@ -2649,7 +2705,7 @@ CodecContext P1RadioConnection::buildCodecContext() const
     }
 
     if (ctx.ocByte != m_lastOcByteLogged) {
-        const int bandIdx = int(bandFromFrequency(static_cast<double>(m_rxFreqHz[m_rx1Slot])));
+        const int bandIdx = int(bandFromFrequency(static_cast<double>(ocBandFrequencyHz())));
         qDebug("HL2 ocByte=0x%02X band=%d mox=%d (matrix=%p)",
                ctx.ocByte, bandIdx, int(m_mox),
                static_cast<const void*>(m_ocMatrix));

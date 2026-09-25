@@ -681,6 +681,10 @@ private:
     // whose frequency just moved, or -1 when the stand-in itself moved.
     void recomputeReceiveFilters(int changedSlot);
 
+    // The frequency whose band selects the OC outputs: the transmitting
+    // slice's while keyed, the RX1 stand-in's while not (plan Task 14).
+    quint64 ocBandFrequencyHz() const;
+
     // HL2 mic decimation state.  At sample rates above 48 kHz the radio
     // embeds one mic sample per I/Q sample group in EP6 frames (so mic
     // arrives at 192 kHz when sampleRate=192000); we decimate to 48 kHz

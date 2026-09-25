@@ -1877,6 +1877,15 @@ nereus_add_test(tst_p1_alex_lpf_word_source)
 # frequency. NereusSDR-original: no Thetis port.
 nereus_add_test(tst_p1_rx_filter_follows_live_receiver)
 
+# Plan Task 14 (3M-1 transmit, Phase 3F section 16.3.2, R-R3-49): the band
+# outputs follow the transmitting slice while keyed and the VFO of the RX1
+# stand-in while not (Thetis Penny.cs:170-178, mi0bot Penny.cs:176-190);
+# Protocol 2 writes them to high-priority byte 1401 (network.c:1031) and takes
+# its receive low-pass from RX1 (console.cs:15487-15498); "HPF Bypass on TX"
+# reaches the wire on both protocols (console.cs:6843-6848).
+# NereusSDR-original tests: no Thetis port.
+nereus_add_test(tst_p1_band_outputs_follow_tx_slice)
+
 # ── A band change must retune the DDC even while CTUN holds it ───────────────
 # CTUN pins the DDC via ReceiverManager::m_ddcFreqLocked so a VFO nudge inside
 # the pinned window moves the slice shift instead of retuning hardware. A band
