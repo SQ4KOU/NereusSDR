@@ -1521,6 +1521,14 @@ public:
     QVector<SliceModel*> slicesOnPan(const QString& panId,
                                      const SliceModel* except = nullptr) const;
 
+    /// Fix wave I4 (several-devices ruling 5.12): a pan is a device plus a
+    /// pan key. Whether `panId` already holds a slice of `owner`'s (the
+    /// SliceOwnership owner), skipping `except`. An empty `owner` counts
+    /// every slice on the key, as before several devices. Decides whether a
+    /// new slice there opens a new pan, on the Core as in addSliceImpl.
+    bool panHasSlicesFor(const QString& panId, const QByteArray& owner,
+                         const SliceModel* except = nullptr) const;
+
     /// Move surplus co-hosted slices onto pans in `panIds` that have none.
     /// Returns how many moved.
     ///

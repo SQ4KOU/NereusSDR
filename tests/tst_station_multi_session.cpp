@@ -2043,6 +2043,76 @@ private slots:
         QCOMPARE(heldKeys(appC, QStringLiteral("marker:")).size(), full);
     }
 
+    // Fix wave I4 (ruling 5.12): a pan is a device plus a pan key. B's
+    // first slice on a pan key A also uses ("pan-x") opens B's own pan and
+    // claims a receiver of its own; B's second slice there is on B's pan,
+    // and costs nothing more.
+    void aPanIsADeviceAndAPanKey()
+    {
+        Core core;
+        core.model->configureStreamPool(4, 5, 192000);
+        core.model->sliceById(0)->setFrequency(14200000.0);
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a);
+        QVERIFY(admitted(appA));
+        QVERIFY(core.invoke(appA, "addSliceOnPan", {utf8("panId", QStringLiteral("pan-x"))})
+                    .value(QStringLiteral("accepted")).toBool());
+        LoopbackTransport* appB = core.signIn(b);
+        QVERIFY(admitted(appB));
+        const int before = receiversInUse(*core.model);
+        QVERIFY(!core.model->slicesOnPan(QStringLiteral("pan-x")).isEmpty());
+
+        const QJsonObject opened =
+            core.invoke(appB, "addSliceOnPan", {utf8("panId", QStringLiteral("pan-x"))});
+        QVERIFY2(opened.value(QStringLiteral("accepted")).toBool(false),
+                 qPrintable(opened.value(QStringLiteral("reason")).toString()));
+        const int bPan = opened.value(QStringLiteral("affected")).toArray().first().toString()
+                             .mid(6).toInt();
+        QCOMPARE(core.model->sliceOwnership()->mark(bPan).owner, b.key.fingerprint());
+        const int bStream = core.model->sliceById(bPan)->streamIndex();
+        QVERIFY(bStream >= 0);
+        // A receiver of its own: no other slice is on it.
+        QCOMPARE(core.model->slicesOnStream(bStream), QVector<int>{bPan});
+        QCOMPARE(receiversInUse(*core.model), before + 1);
+
+        // B's second slice on its own pan-x joins B's pan, no new receiver.
+        const QJsonObject joined =
+            core.invoke(appB, "addSliceOnPan", {utf8("panId", QStringLiteral("pan-x"))});
+        QVERIFY(joined.value(QStringLiteral("accepted")).toBool(false));
+        QCOMPARE(receiversInUse(*core.model), before + 1);
+    }
+
+    // Fix wave I4 (ruling 5.12): the Core mirrors no pans. Its model holds
+    // no PanadapterModel (only RadioModel::addPanadapter makes one, and no
+    // Core or window path calls it), so no device is sent a `pan:<i>` and a
+    // write to one changes nothing.
+    void theCoreMirrorsNoPansAndAPanWriteChangesNothing()
+    {
+        Core core;
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a);
+        LoopbackTransport* appB = core.signIn(b);
+        QVERIFY(admitted(appA));
+        QVERIFY(admitted(appB));
+        QVERIFY(core.model->panadapters().isEmpty());
+        appB->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+            "pan:0", {f64("centerFrequency", 7074000.0)}, 611)));
+        QTRY_VERIFY(!propertyResult(appB, 611).isEmpty());
+        const QJsonObject refused =
+            propertyResult(appB, 611).value(QStringLiteral("results")).toArray().first().toObject();
+        QCOMPARE(refused.value(QStringLiteral("accepted")).toBool(true), false);
+        QVERIFY(core.model->panadapters().isEmpty());
+        QTest::qWait(2 * StationServer::kDefaultDeltaFlushMs);
+        QVERIFY(heldKeys(appA, QStringLiteral("pan:")).isEmpty());
+        QVERIFY(heldKeys(appB, QStringLiteral("pan:")).isEmpty());
+    }
+
     void theLastDeviceLeavingPassesItsSlicesToTheStationHeldForIt()
     {
         Core core;

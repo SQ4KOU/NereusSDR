@@ -561,8 +561,18 @@ bool StationServer::handleAddWithTake(SessionTransport* transport, const Session
     if (live.activeStreamCount() >= live.streamCount()
         && planner.anotherDeviceHoldsAReceiver(requester)) {
         ReceiverPlanner::TakeRequest request;
-        request.need = message.commandVerb == "addSliceOnPan" ? ReceiverPlanner::Need::AddPan
-                                                              : ReceiverPlanner::Need::AddSlice;
+        // Fix wave I4 (ruling 5.12): a new pan is a pan key the requester
+        // has no slice on, whoever else uses the same key string; the
+        // same rule addSliceImpl places by.
+        QString panId;
+        for (const MirrorUpdate& u : message.arguments) {
+            if (u.name == "panId" || u.name == "initialPanId") {
+                panId = u.value.toString();
+            }
+        }
+        const bool newPan =
+            !panId.isEmpty() && !m_radioModel->panHasSlicesFor(panId, requester);
+        request.need = newPan ? ReceiverPlanner::Need::AddPan : ReceiverPlanner::Need::AddSlice;
         request.requester = requester;
         askTake(transport, message, request);
     }

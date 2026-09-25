@@ -741,6 +741,16 @@ own strings today (`RadioModel.cpp:7120-7132`). The Core keeps, for each receive
 that anchors it (6.2). It does not mirror pans: markers do not need them, and the `pan:<i>`
 key stays unused (the link, lines 1130-1134).
 
+Built by fix wave I4 (2026-09-25), with no wire change: whether a new slice opens a new pan
+(`addSliceImpl`'s `openingANewPan`, and the take chooser's `AddPan` need) counts only the
+requesting device's own slices on that pan key (`RadioModel::panHasSlicesFor`), so a second
+device's first slice on "pan-0" claims a receiver of its own even though the first device's
+"pan-0" holds slices. `pan:<i>` is unused in fact: only `RadioModel::addPanadapter` makes a
+`PanadapterModel`, and neither the Core nor a window calls it (a window's panadapters are its
+`PanadapterStack` applets, whose centre, span and dBm range are the window's own), so no Core
+sends `pan:<i>` and a write to it changes nothing. A window moves its receiver's centre with
+`requestStreamCentre` (6.3), never through a pan object.
+
 ### 5.9 TCI and VAX
 
 **Ruling 5.13.** A TCI server acts as the device whose window serves it (section 2.2). A

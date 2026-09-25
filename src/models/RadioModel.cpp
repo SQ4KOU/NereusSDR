@@ -7763,8 +7763,14 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
     // "are there slices on this pan" would otherwise always answer yes.
     // iPhone app Task 73 (ruling 5.2 step 2): a restored slice joins a
     // window that covers it or claims a free receiver, whatever its pan.
-    const bool openingANewPan = !bindRestored
-        && !initialPanId.isEmpty() && slicesOnPan(initialPanId, slice).isEmpty();
+    // Fix wave I4 (ruling 5.12): a pan is a device plus a pan key, so on
+    // the Core only the creator's own slices on the key make it a pan that
+    // already exists; another device using the same key string ("pan-0")
+    // does not.
+    const QByteArray panOwner =
+        role() == Role::Local ? m_sliceOwnership->creator() : QByteArray();
+    const bool openingANewPan = !bindRestored && !initialPanId.isEmpty()
+        && !panHasSlicesFor(initialPanId, panOwner, slice);
 
     const bool poolReady = m_streamAllocator.streamCount() > 0;
     // Review fix round 1, finding 1(c): `&& role() == Role::Local` is a
@@ -20295,6 +20301,18 @@ QVector<SliceModel*> RadioModel::slicesOnPan(const QString& panId,
         if (s->panKey() == panId) { found.append(s); }
     }
     return found;
+}
+
+// See RadioModel.h.
+bool RadioModel::panHasSlicesFor(const QString& panId, const QByteArray& owner,
+                                 const SliceModel* except) const
+{
+    for (const SliceModel* s : slicesOnPan(panId, except)) {
+        if (owner.isEmpty() || m_sliceOwnership->mark(s->sliceIndex()).owner == owner) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // Codex review round 5, PR #293. See RadioModel.h.

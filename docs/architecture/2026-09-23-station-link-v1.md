@@ -1526,7 +1526,10 @@ Notes on the keys:
 - **`pan:<i>`.** The station watches every panadapter its model holds, but
   no code path in `nereusd` adds one: panadapters live in the window, and
   the Core's spectrum travels on display endpoints (media control). A real
-  Core therefore sends no `pan:<i>` objects today. The surface records one
+  Core therefore sends no `pan:<i>` objects, and a write to one changes
+  nothing; the key stays unused (the several-devices design, ruling 5.12).
+  A device's pans are its own: `addSliceOnPan`'s `panId` is the device's
+  own key, so two devices' "pan-0" are two pans. The surface records one
   so the key pattern is known.
 - **Minor 11 objects.** `stepAtt`, `alexAntennas` and `ioBoard` are sent
   only to a peer at agreed minor 11 and only while `radioHardwareVersion` is
