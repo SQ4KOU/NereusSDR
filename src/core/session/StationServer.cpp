@@ -1064,17 +1064,21 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     // the one being dispatched now, or, for a result that arrives on a later
     // turn, the one its verb and id were recorded for. The media session
     // keeps any other (as the one session did before).
+    //
+    // Fix wave I1: every client counts its command ids from 1, so a result
+    // is named by the session it answers (the dispatcher's resultOwner())
+    // with its verb and id, never by verb and id alone. A result nobody's
+    // route names is dropped, not handed to another session.
     connect(m_dispatcher, &SessionCommandDispatcher::commandResultReady, this,
             [this](const SessionMessage& original) {
+                const ResultKey key = resultKeyOf(original);
                 // iPhone app Task 75: a proceed whose held command answers
                 // later is answered with that command's result.
-                if (m_proceedAnsweredLater
-                    && original.commandVerb == m_proceedAnsweredLater->first
-                    && original.commandId == m_proceedAnsweredLater->second) {
+                if (m_proceedAnsweredLater && *m_proceedAnsweredLater == key) {
                     m_proceedAnsweredLater.reset();
                     return;
                 }
-                if (finishDeferredProceed(original)) {
+                if (finishDeferredProceed(key, original)) {
                     return;
                 }
                 // iPhone app Task 74: the confirm step reads (and may keep,
@@ -1084,17 +1088,24 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                     return;
                 }
                 SessionTransport* to = nullptr;
-                if (m_dispatchingTransport != nullptr) {
+                const auto dispatching = m_peers.constFind(m_dispatchingTransport);
+                if (dispatching != m_peers.cend() && dispatching->sessionId == key.sessionId) {
                     to = m_dispatchingTransport;
                     m_resultSentInDispatch = true;
                 } else {
-                    const auto route =
-                        m_resultRoutes.constFind(qMakePair(result.commandVerb, result.commandId));
-                    to = route != m_resultRoutes.cend() ? route->data()
-                                                        : primaryMediaSession();
+                    const auto route = m_resultRoutes.find(key);
+                    if (route != m_resultRoutes.end()) {
+                        to = route->data();
+                        if (isLastResult(result)) {
+                            m_resultRoutes.erase(route);
+                        }
+                    }
                 }
                 if (to != nullptr) {
                     sendToPeer(to, result);
+                } else {
+                    qCDebug(lcStation) << "No session asked for" << result.commandVerb
+                                       << result.commandId << "; dropped";
                 }
             });
     // iPhone app Task 71 (ruling 4.12): session.leave was accepted for the
@@ -2367,8 +2378,10 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
             // turn), or a PureSignal action's later phases, goes to this
             // session, not to whichever session holds media.
             if (!m_resultSentInDispatch || message.commandVerb.startsWith("ps3.")) {
-                m_resultRoutes.insert(qMakePair(message.commandVerb, message.commandId),
-                                      QPointer<SessionTransport>(transport));
+                m_resultRoutes.insert(
+                    ResultKey{m_peers.value(transport).sessionId, message.commandVerb,
+                              message.commandId},
+                    QPointer<SessionTransport>(transport));
             }
             if (m_pendingEnd) {
                 const auto [reason, code] = *m_pendingEnd;
@@ -3851,6 +3864,39 @@ QList<QPointer<MirrorView>> StationServer::attachedViews() const
 QString StationServer::sessionOwner(quint64 sessionId)
 {
     return sessionId == 0 ? QString() : QStringLiteral("station:%1").arg(sessionId);
+}
+
+quint64 StationServer::sessionIdOfOwner(const QString& owner)
+{
+    static const QString kPrefix = QStringLiteral("station:");
+    if (!owner.startsWith(kPrefix)) {
+        return 0;
+    }
+    bool ok = false;
+    const quint64 id = QStringView(owner).mid(kPrefix.size()).toULongLong(&ok);
+    return ok ? id : 0;
+}
+
+StationServer::ResultKey StationServer::resultKeyOf(const SessionMessage& result) const
+{
+    return ResultKey{sessionIdOfOwner(m_dispatcher->resultOwner()), result.commandVerb,
+                     result.commandId};
+}
+
+bool StationServer::isLastResult(const SessionMessage& result)
+{
+    // A PureSignal action answers in phases; its route stays until the
+    // completed or failed one. Any other command answers once.
+    if (!result.commandVerb.startsWith("ps3.") || !result.accepted) {
+        return true;
+    }
+    for (const MirrorUpdate& update : result.updates) {
+        if (update.name == "phase") {
+            const QString phase = update.value.toString();
+            return phase == QLatin1String("completed") || phase == QLatin1String("failed");
+        }
+    }
+    return true;
 }
 
 void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage& original)

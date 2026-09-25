@@ -880,8 +880,13 @@ SessionMessage StationServer::runHeldCommand(const SessionMessage& original)
     SessionMessage captured;
     bool got = false;
     const auto previous = m_resultHook;
+    // Fix wave I1: the held command's own result, by the session running
+    // it now (the proceeder's) with its verb and id.
+    const quint64 session = sessionIdOfOwner(m_dispatcher->resultOwner());
     m_resultHook = [&](SessionMessage& result) {
-        if (result.commandVerb == original.commandVerb && result.commandId == original.commandId) {
+        const ResultKey key = resultKeyOf(result);
+        if (key.sessionId == session && key.verb == original.commandVerb
+            && key.commandId == original.commandId) {
             captured = result;
             got = true;
             return false;
@@ -941,6 +946,13 @@ SessionMessage StationServer::applyHeld(SessionTransport* transport,
             moved ? affected : QList<QByteArray>{});
     }
     const SessionMessage result = runHeldCommand(original);
+    if (original.commandVerb.startsWith("ps3.") && result.accepted && !isLastResult(result)) {
+        // Fix wave I1: a PureSignal action re-run on proceed answers in
+        // later phases; they are the requester's.
+        m_resultRoutes.insert(ResultKey{m_peers.value(transport).sessionId, original.commandVerb,
+                                        original.commandId},
+                              QPointer<SessionTransport>(transport));
+    }
     return SessionMessages::commandResult(invoke.commandVerb, invoke.commandId, result.accepted,
                                           result.reason, result.affectedKeys, result.updates);
 }

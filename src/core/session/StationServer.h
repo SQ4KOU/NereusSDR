@@ -1154,6 +1154,28 @@ private:
     /// A proceed whose held command answers on a later turn
     /// (requestSliceSampleRate, the dispatcher's one asynchronous verb):
     /// its answer, the readback and the notices wait for that result.
+    /// Fix wave I1: a command result is named by the session that asked
+    /// with its verb and id, since every client counts its ids from 1.
+    struct ResultKey {
+        quint64 sessionId = 0;
+        QByteArray verb;
+        quint32 commandId = 0;
+        friend bool operator==(const ResultKey& a, const ResultKey& b)
+        {
+            return a.sessionId == b.sessionId && a.commandId == b.commandId && a.verb == b.verb;
+        }
+        friend size_t qHash(const ResultKey& key, size_t seed = 0) noexcept
+        {
+            return qHashMulti(seed, key.sessionId, key.verb, key.commandId);
+        }
+    };
+    /// The session id an owner string `station:<sessionId>` names; 0 for
+    /// any other.
+    static quint64 sessionIdOfOwner(const QString& owner);
+    /// The key of `result` for the session the dispatcher says it answers.
+    ResultKey resultKeyOf(const SessionMessage& result) const;
+    /// Whether `result` is the last its command sends (its route goes).
+    static bool isLastResult(const SessionMessage& result);
     struct DeferredProceed {
         QPointer<SessionTransport> transport;
         QByteArray proceedVerb;
@@ -1164,11 +1186,12 @@ private:
         QByteArray requester;
         QList<QByteArray> closedDevices;
     };
-    QHash<QPair<QByteArray, quint32>, DeferredProceed> m_deferredProceeds;
+    QHash<ResultKey, DeferredProceed> m_deferredProceeds;
     /// The proceed answered later, whose immediate answer is not sent.
-    std::optional<QPair<QByteArray, quint32>> m_proceedAnsweredLater;
-    /// True when `result` finished a deferred proceed (and was consumed).
-    bool finishDeferredProceed(const SessionMessage& result);
+    std::optional<ResultKey> m_proceedAnsweredLater;
+    /// True when `result`, keyed `key`, finished a deferred proceed (and
+    /// was consumed).
+    bool finishDeferredProceed(const ResultKey& key, const SessionMessage& result);
     /// Ruling 5.11a: RadioModel kept the receive antenna; the person tuning
     /// is told.
     void onReceiveAntennaKept(int sliceId, const QString& antenna,
@@ -1262,9 +1285,11 @@ private:
     /// During promoteToSession()'s attach: the session its burst is for.
     quint64 m_nextSessionId = 0;
     /// Command results owed to a session other than the one being
-    /// dispatched now (a result that arrives on a later turn), by verb and
-    /// id.
-    QHash<QPair<QByteArray, quint32>, QPointer<SessionTransport>> m_resultRoutes;
+    /// dispatched now (a result that arrives on a later turn), by the
+    /// session, verb and id (fix wave I1). A route is erased once its last
+    /// result is delivered (a PureSignal action's completed or failed
+    /// phase; any other command's one result), or when its session ends.
+    QHash<ResultKey, QPointer<SessionTransport>> m_resultRoutes;
     bool m_resultSentInDispatch = false;
     std::unique_ptr<ConnectedDevicesFacade> m_connectedDevices;
     // iPhone app Task 73: one marker per slice (Qt-parented to this).

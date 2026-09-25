@@ -141,6 +141,7 @@
 #include <QPointer>
 #include <QHash>
 #include <functional>
+#include <optional>
 #include <utility>
 
 #include "core/session/SessionMessages.h"
@@ -208,6 +209,17 @@ public:
 
     /// Cancels every DSP-asset job `owner` started (its session ended).
     void endSessionOwner(const QString& owner);
+
+    /// Fix wave I1: the session owner the result being emitted by
+    /// commandResultReady() answers. A result emitted inside dispatch()
+    /// belongs to that dispatch's owner; one that arrives on a later turn
+    /// (requestSliceSampleRate, a PureSignal action's later phases) belongs
+    /// to the owner of the dispatch that started it, even when another
+    /// session's dispatch is running. Read it inside a commandResultReady()
+    /// handler only. Command ids are counted per client, so the owner, not
+    /// the verb and id, names who asked.
+    QString resultOwner() const
+    { return m_resultOwner ? *m_resultOwner : m_sessionOwner; }
 
     /// Forgets pending PureSignal actions and returns every slice to normal
     /// NNR audio. The Core calls it when the session media goes to starts
@@ -323,6 +335,8 @@ private:
 
     void emitResult(const QByteArray& verb, quint32 commandId, bool accepted,
                     const QString& reason, const QList<QByteArray>& affectedKeys);
+    /// Emits `result` as `owner`'s (a result that arrives on a later turn).
+    void emitResultAs(const QString& owner, const NereusSDR::SessionMessage& result);
 
     QPointer<RadioModel> m_radioModel;
     QPointer<StationDevicesFacade> m_deviceAdmin;
@@ -337,7 +351,11 @@ private:
     struct PendingPureSignalCommand {
         quint32 commandId;
         QByteArray verb;
+        /// The session that asked (fix wave I1): its later phases are its.
+        QString owner;
     };
+    /// Set while a later result is emitted (emitResultAs).
+    std::optional<QString> m_resultOwner;
     QHash<quint32, PendingPureSignalCommand> m_pureSignalCommands;
 };
 

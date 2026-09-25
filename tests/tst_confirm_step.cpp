@@ -1204,6 +1204,71 @@ private slots:
                      .arg(receiver + 1));
     }
 
+    // Fix wave I1: a proceed answered when its held rate change's result
+    // arrives is keyed by its session. B's own rate change, sent with the
+    // same command id as A's held one, is B's result, never A's proceed
+    // answer, and A's result never reaches B.
+    void aDeferredProceedIsNotFinishedByAnotherDevicesResultWithTheSameId()
+    {
+        Shared s(3);
+        QVERIFY(s.core.invoke(s.appB, "addSliceOnPan", {utf8("panId", QStringLiteral("pan-b2"))})
+                    .value(QStringLiteral("accepted")).toBool());
+        const int bOwn = s.core.model->sliceOwnership()->ownedBy(s.b.key.fingerprint()).last();
+        s.core.model->sliceById(bOwn)->setFrequency(14074000.0);
+        QVERIFY(streamOf(s.core, bOwn) != s.receiver());
+        const quint32 sameId = 7777;
+        const auto resultsFor = [](const LoopbackTransport* app, quint32 id) {
+            QList<QJsonObject> out;
+            for (const QJsonObject& o : ofType(app->received(), QStringLiteral("command.result"))) {
+                if (o.value(QStringLiteral("id")).toInteger() == id) {
+                    out.append(o);
+                }
+            }
+            return out;
+        };
+        s.appA->sendText(SessionMessages::encode(SessionMessages::commandInvoke(
+            "requestSliceSampleRate", sameId, {int64("sliceId", 0), int64("rateHz", 96000)})));
+        QTRY_VERIFY(!resultsFor(s.appA, sameId).isEmpty());
+        QCOMPARE(resultsFor(s.appA, sameId).first().value(QStringLiteral("reason")).toString(),
+                 kWaiting);
+        const QJsonObject ask = waitForLast(s.appA, QStringLiteral("confirm.request"), 0);
+        QCOMPARE(ask.value(QStringLiteral("kind")).toString(), QStringLiteral("sharedSetting"));
+        // B's own rate change first, then A's proceed, before the Core's
+        // event loop runs either change.
+        const quint32 proceedId = 7778;
+        s.appB->sendText(SessionMessages::encode(SessionMessages::commandInvoke(
+            "requestSliceSampleRate", sameId, {int64("sliceId", bOwn), int64("rateHz", 96000)})));
+        s.appA->sendText(SessionMessages::encode(SessionMessages::commandInvoke(
+            "confirm.proceed", proceedId,
+            {int64("id", ask.value(QStringLiteral("id")).toInteger()), int64("choice", -1)})));
+        QTRY_VERIFY(!resultsFor(s.appA, proceedId).isEmpty() && !resultsFor(s.appB, sameId).isEmpty());
+        QTest::qWait(2 * StationServer::kDefaultDeltaFlushMs);
+        const QList<QJsonObject> proceeds = resultsFor(s.appA, proceedId);
+        QCOMPARE(proceeds.size(), 1);
+        QVERIFY2(proceeds.first().value(QStringLiteral("accepted")).toBool(false),
+                 QJsonDocument(proceeds.first()).toJson().constData());
+        const QStringList proceedAffected = [&]() {
+            QStringList keys;
+            for (const QJsonValue& v : proceeds.first().value(QStringLiteral("affected")).toArray()) {
+                keys.append(v.toString());
+            }
+            return keys;
+        }();
+        QVERIFY2(proceedAffected.contains(QStringLiteral("slice:0")),
+                 qPrintable(proceedAffected.join(QLatin1Char(','))));
+        QVERIFY(!proceedAffected.contains(QStringLiteral("slice:%1").arg(bOwn)));
+        // B hears its own result, once, and A's rate change is not it.
+        const QList<QJsonObject> bResults = resultsFor(s.appB, sameId);
+        QCOMPARE(bResults.size(), 1);
+        QVERIFY(bResults.first().value(QStringLiteral("accepted")).toBool(false));
+        for (const QJsonValue& v : bResults.first().value(QStringLiteral("affected")).toArray()) {
+            QVERIFY2(v.toString() != QStringLiteral("slice:0"), "A's result reached B");
+        }
+        // A heard no second answer to its held rate change.
+        QCOMPARE(resultsFor(s.appA, sameId).size(), 1);
+        QCOMPARE(s.core.model->streamAllocator().streamSampleRateHz(s.receiver()), 96000);
+    }
+
     void aNarrowerRateWithNoReceiverFreeClosesTheOtherDevicesSlice()
     {
         Shared s(1);

@@ -1140,9 +1140,13 @@ SessionMessage StationServer::proceedSharedSetting(SessionTransport* transport,
         later.change = question.change;
         later.requester = requester;
         later.closedDevices = closedDevices;
+        // Fix wave I1: keyed by the asking session, so another device's
+        // rate change with the same command id never finishes this one.
+        const quint64 session = m_peers.value(transport).sessionId;
         m_deferredProceeds.insert(
-            qMakePair(question.original.commandVerb, question.original.commandId), later);
-        m_proceedAnsweredLater = qMakePair(invoke.commandVerb, invoke.commandId);
+            ResultKey{session, question.original.commandVerb, question.original.commandId},
+            later);
+        m_proceedAnsweredLater = ResultKey{session, invoke.commandVerb, invoke.commandId};
         m_dispatcher->dispatch(question.original);
         return SessionMessages::commandResult(invoke.commandVerb, invoke.commandId, true,
                                               QString(), {});
@@ -1169,14 +1173,17 @@ SessionMessage StationServer::proceedSharedSetting(SessionTransport* transport,
     return result;
 }
 
-bool StationServer::finishDeferredProceed(const SessionMessage& result)
+bool StationServer::finishDeferredProceed(const ResultKey& key, const SessionMessage& result)
 {
-    const auto it = m_deferredProceeds.find(qMakePair(result.commandVerb, result.commandId));
+    const auto it = m_deferredProceeds.find(key);
     if (it == m_deferredProceeds.end()) {
         return false;
     }
     const DeferredProceed later = *it;
     m_deferredProceeds.erase(it);
+    // The proceed's own route (recorded because its answer came later) is
+    // used here, and goes.
+    m_resultRoutes.remove(ResultKey{key.sessionId, later.proceedVerb, later.proceedId});
     if (!later.transport.isNull() && m_peers.contains(later.transport.data())) {
         sendToPeer(later.transport.data(),
                    SessionMessages::commandResult(later.proceedVerb, later.proceedId,

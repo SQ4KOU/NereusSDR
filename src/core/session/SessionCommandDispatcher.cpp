@@ -532,7 +532,7 @@ SessionCommandDispatcher::SessionCommandDispatcher(RadioModel* radioModel, QObje
                 m_pureSignalCommands.remove(id);
             }
             values.insert("phase", state);
-            emit commandResultReady(SessionMessages::commandResult(command.verb, command.commandId,
+            emitResultAs(command.owner, SessionMessages::commandResult(command.verb, command.commandId,
                 phase != Ps3ActionPhase::Failed, reason, {"pureSignal"},
                 dspCommandValues(values).value_or(QList<MirrorUpdate>{})));
         });
@@ -811,7 +811,9 @@ void SessionCommandDispatcher::handlePureSignalAction(const SessionMessage& invo
         return;
     }
     for (const PendingPureSignalCommand& command : std::as_const(m_pureSignalCommands)) {
-        if (command.commandId == invoke.commandId) {
+        // Fix wave I1: ids are counted per client, so another session's
+        // action with the same id is not this one.
+        if (command.commandId == invoke.commandId && command.owner == m_sessionOwner) {
             emitResult(invoke.commandVerb, invoke.commandId, false,
                        QStringLiteral("This PureSignal request is already in progress."), {});
             return;
@@ -822,7 +824,7 @@ void SessionCommandDispatcher::handlePureSignalAction(const SessionMessage& invo
         emitResult(invoke.commandVerb, invoke.commandId, false, facade->lastActionError(), {});
         return;
     }
-    m_pureSignalCommands.insert(id, {invoke.commandId, invoke.commandVerb});
+    m_pureSignalCommands.insert(id, {invoke.commandId, invoke.commandVerb, m_sessionOwner});
     emit commandResultReady(SessionMessages::commandResult(invoke.commandVerb, invoke.commandId,
         true, {}, {}, {{0, "phase", MirrorWireKind::Utf8, QStringLiteral("accepted")}}));
 }
@@ -960,6 +962,16 @@ void SessionCommandDispatcher::emitResult(const QByteArray& verb, quint32 comman
 {
     emit commandResultReady(
         SessionMessages::commandResult(verb, commandId, accepted, reason, affectedKeys));
+}
+
+void SessionCommandDispatcher::emitResultAs(const QString& owner, const SessionMessage& result)
+{
+    // Fix wave I1: saved and restored, so a later result emitted inside
+    // another session's dispatch leaves that dispatch's owner in place.
+    const std::optional<QString> previous = m_resultOwner;
+    m_resultOwner = owner;
+    emit commandResultReady(result);
+    m_resultOwner = previous;
 }
 
 // ── addSlice ─────────────────────────────────────────────────────────────
@@ -1142,12 +1154,15 @@ void SessionCommandDispatcher::handleRequestSliceSampleRate(const SessionMessage
     // a caller-owned temporary) has returned.
     const QByteArray verb = invoke.commandVerb;
     const quint32 commandId = invoke.commandId;
+    // Fix wave I1: the result is this session's, whichever dispatch is
+    // running when it arrives.
+    const QString owner = m_sessionOwner;
     const QPointer<SessionCommandDispatcher> self(this);
     const QPointer<RadioModel> radioModel(m_radioModel);
 
     QMetaObject::invokeMethod(
         m_radioModel,
-        [self, radioModel, verb, commandId, sliceId, rateHz]() {
+        [self, radioModel, verb, commandId, sliceId, rateHz, owner]() {
             if (self.isNull() || radioModel.isNull()) {
                 return;
             }
@@ -1185,7 +1200,8 @@ void SessionCommandDispatcher::handleRequestSliceSampleRate(const SessionMessage
             QObject::disconnect(conn);
 
             if (!rejectionReason.isEmpty()) {
-                self->emitResult(verb, commandId, false, rejectionReason, {});
+                self->emitResultAs(owner, SessionMessages::commandResult(
+                                              verb, commandId, false, rejectionReason, {}));
                 return;
             }
 
@@ -1204,7 +1220,8 @@ void SessionCommandDispatcher::handleRequestSliceSampleRate(const SessionMessage
             // requestSliceSampleRate()'s own idempotent-check paths,
             // RadioModel.cpp), not a failure: RadioModel raised no
             // rejection, so nothing here second-guesses that.
-            self->emitResult(verb, commandId, true, QString(), affected);
+            self->emitResultAs(owner, SessionMessages::commandResult(verb, commandId, true,
+                                                                     QString(), affected));
         },
         Qt::QueuedConnection);
 }

@@ -2253,7 +2253,10 @@ success), `affected` (the object keys the command changed) and, for
 commands that return data, `values`, a list of property entries. Every
 `command.result`, including a later one (a PureSignal action's later
 phases, a sample-rate change answered on a later turn), goes to the session
-that sent the `command.invoke`, and to no other. A file a device is
+that sent the `command.invoke`, and to no other. Each client counts its
+own ids, so two devices may use the same `id` at once: the station tells
+their commands apart by the session that sent each, never by `verb` and
+`id` alone. A file a device is
 sending with `dspAssets.beginImport` belongs to that device's session: it is
 cancelled when that session ends, and another device leaving never touches
 it. For the

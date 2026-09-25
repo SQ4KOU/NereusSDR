@@ -1579,6 +1579,47 @@ private slots:
         QCOMPARE(countOfType(appB->received(), fromB, QStringLiteral("settings.reject")), 0);
     }
 
+    // Fix wave I1: every client counts its command ids from 1, so two
+    // devices use the same id at once. A result that arrives on a later
+    // turn (the sample rate is the dispatcher's asynchronous verb) goes to
+    // the session that asked, once, never to the other.
+    void aLaterResultGoesToItsOwnDeviceWhenTwoUseTheSameCommandId()
+    {
+        Core core;
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a);
+        LoopbackTransport* appB = core.signIn(b);
+        QVERIFY(admitted(appA));
+        QVERIFY(admitted(appB));
+        const int aSlice = core.model->sliceOwnership()->ownedBy(a.key.fingerprint()).first();
+        const int bSlice = core.model->sliceOwnership()->ownedBy(b.key.fingerprint()).first();
+        const quint32 sameId = 4242;
+        // Both sent before the Core's event loop runs either rate change.
+        appA->sendText(SessionMessages::encode(SessionMessages::commandInvoke(
+            "requestSliceSampleRate", sameId, {int64("sliceId", aSlice), int64("rateHz", 96000)})));
+        appB->sendText(SessionMessages::encode(SessionMessages::commandInvoke(
+            "requestSliceSampleRate", sameId, {int64("sliceId", bSlice), int64("rateHz", 96000)})));
+        const auto resultsFor = [sameId](const LoopbackTransport* app) {
+            QList<QJsonObject> out;
+            for (const QJsonObject& o : ofType(app->received(), QStringLiteral("command.result"))) {
+                if (o.value(QStringLiteral("id")).toInteger() == sameId) {
+                    out.append(o);
+                }
+            }
+            return out;
+        };
+        QTRY_VERIFY(!resultsFor(appA).isEmpty() && !resultsFor(appB).isEmpty());
+        QTest::qWait(2 * StationServer::kDefaultDeltaFlushMs);
+        QCOMPARE(resultsFor(appA).size(), 1);
+        QCOMPARE(resultsFor(appB).size(), 1);
+        QVERIFY2(resultsFor(appA).first().value(QStringLiteral("accepted")).toBool(false),
+                 QJsonDocument(resultsFor(appA).first()).toJson().constData());
+        QVERIFY(resultsFor(appB).first().value(QStringLiteral("accepted")).toBool(false));
+    }
+
     // ── Slice ownership (Task 73) ────────────────────────────────────────
     //
     // Refusals first: who may change which slice.
