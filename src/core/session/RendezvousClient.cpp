@@ -125,6 +125,11 @@ void RendezvousClient::setReconnectDelaysMs(const QList<int>& delays)
     m_reconnectDelaysMs = delays.isEmpty() ? kDefaultReconnectDelaysMs : delays;
 }
 
+void RendezvousClient::setHelloTimeoutMs(int ms)
+{
+    m_helloTimeoutMs = std::max(1, ms);
+}
+
 QUrl RendezvousClient::currentServer() const
 {
     if (!m_helloReceived || m_serverIndex < 0 || m_serverIndex >= m_servers.size()) {
@@ -154,6 +159,7 @@ void RendezvousClient::registerStation(const QByteArray& stationKey, Signer sign
     m_devices = std::move(devices);
     m_stopped = false;
     m_reconnectAttempt = 0;
+    m_replaced = false;
     if (m_servers.isEmpty()) {
         qCInfo(lcRendezvous) << "No remote access service is configured";
         return;
@@ -439,7 +445,7 @@ void RendezvousClient::connectTo(int serverIndex)
             m_missedPongs = 0;
         }
     });
-    m_helloTimer->start(kHelloTimeoutMs);
+    m_helloTimer->start(m_helloTimeoutMs);
     qCInfo(lcRendezvous) << "Connecting to the remote access service"
                          << m_servers.at(serverIndex).host();
     socket->open(m_servers.at(serverIndex));
@@ -453,6 +459,15 @@ void RendezvousClient::onConnected()
 void RendezvousClient::onHelloTimeout()
 {
     if (m_helloReceived) {
+        // Fix wave I3: a service that sent its hello and then did not
+        // register the Core in time (a hung backend behind its proxy keeps
+        // the socket open; a lost challenge or proof) would otherwise leave
+        // the Core connected, unregistered and unpinged for good. Leave the
+        // connection and let the reconnect run.
+        if (m_role == Role::Station && !m_registered) {
+            qCInfo(lcRendezvous) << "The remote access service did not register the Core in time";
+            onDisconnected();
+        }
         return;
     }
     qCInfo(lcRendezvous) << "The remote access service did not answer in time";
@@ -602,8 +617,9 @@ void RendezvousClient::handle(const RendezvousWire::Message& message)
             registration.publicKey = m_stationKey;
             send(registration);
             // Section 3: registering must finish within the service's own
-            // handshake time; the hello timer covers it on this side.
-            m_helloTimer->start(kHelloTimeoutMs);
+            // handshake time; the hello timer covers it on this side
+            // (onHelloTimeout(), fix wave I3).
+            m_helloTimer->start(m_helloTimeoutMs);
         } else {
             sendPending();
         }
@@ -632,7 +648,13 @@ void RendezvousClient::handle(const RendezvousWire::Message& message)
         }
         m_helloTimer->stop();
         m_registered = true;
-        m_reconnectAttempt = 0;
+        // Fix wave: after `replaced`, keep backing off, so two Cores with
+        // one key do not take the registration from each other at the
+        // first rung for ever.
+        if (!m_replaced) {
+            m_reconnectAttempt = 0;
+        }
+        m_replaced = false;
         m_missedPongs = 0;
         m_pingTimer->start();
         qCInfo(lcRendezvous) << "Registered with the remote access service as"
@@ -686,12 +708,23 @@ void RendezvousClient::handle(const RendezvousWire::Message& message)
         }
         return;
     case Kind::Nameplate:
+        // Only an answer to this Core's own claim (fix wave).
+        if (m_role != Role::Station || !m_wantNameplate) {
+            return;
+        }
         emit nameplateClaimed(message.nameplate);
         return;
     case Kind::NameplateReleased:
         emit nameplateReleased();
         return;
     case Kind::MailboxOpened:
+        // One mailbox at a time: a second `mailbox.opened` while one is open
+        // (only a misbehaving service sends it) would start a second
+        // exchange over the same bodies (fix wave).
+        if (m_mailboxOpen) {
+            qCInfo(lcRendezvous) << "Ignored a second mailbox while one is open";
+            return;
+        }
         m_mailboxOpen = true;
         if (m_role == Role::Client) {
             m_pending = Pending::None;
@@ -757,6 +790,9 @@ void RendezvousClient::handleIntroduction(const RendezvousWire::Message& message
 void RendezvousClient::handleError(const RendezvousWire::Message& message)
 {
     qCInfo(lcRendezvous) << "The remote access service said" << message.code;
+    if (m_role == Role::Station && message.code == QLatin1String("replaced")) {
+        m_replaced = true;
+    }
     emit serviceError(message.code, message.reason, message.retryAfterMs);
     if (m_role != Role::Client) {
         return;

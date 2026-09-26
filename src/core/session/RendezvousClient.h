@@ -102,7 +102,9 @@ public:
     /// The service this build uses when nereusd.conf names none.
     static constexpr const char* kDefaultServer = "rv.nereussdr.com";
     /// How long one server may take to open and send its hello before the
-    /// next is tried: the service's own handshake timer (section 9.1).
+    /// next is tried: the service's own handshake timer (section 9.1). A
+    /// Core that has the hello gets as long again to be registered, or it
+    /// leaves that connection and reconnects (fix wave I3).
     static constexpr int kHelloTimeoutMs = 10000;
     /// A registered Core pings the service this often, and reconnects when
     /// two pings in a row go unanswered: the service's own ping interval
@@ -138,6 +140,11 @@ public:
 
     /// Reconnect waits of the station role, in order, the last repeated.
     void setReconnectDelaysMs(const QList<int>& delays);
+    /// The hello (and, for a Core, the registration) time in use:
+    /// kHelloTimeoutMs unless a test shortened it. Applies from the next
+    /// connection.
+    void setHelloTimeoutMs(int ms);
+    int helloTimeoutMs() const { return m_helloTimeoutMs; }
 
     // ── Station role ──────────────────────────────────────────────────
 
@@ -166,8 +173,15 @@ public:
     bool isRegistered() const { return m_registered; }
     QString stationId() const { return m_stationId; }
     /// Introductions dropped without a reply: an unknown or revoked device,
-    /// or a signature that did not verify.
+    /// a signature that did not verify, or one past kMaxLiveIntroductions
+    /// while that many are open.
     quint64 droppedIntroductions() const { return m_droppedIntroductions; }
+    /// Reconnect waits scheduled in a row: back to 0 when the Core is
+    /// registered, except after the service said `replaced` (another
+    /// connection registered the same key), so two Cores that share a key
+    /// back off instead of taking the registration from each other every
+    /// second (fix wave).
+    int reconnectAttempts() const { return m_reconnectAttempt; }
 
     // ── Client role ───────────────────────────────────────────────────
 
@@ -271,6 +285,10 @@ private:
     QTimer* m_pingTimer = nullptr;
     QList<int> m_reconnectDelaysMs;
     int m_reconnectAttempt = 0;
+    int m_helloTimeoutMs = kHelloTimeoutMs;
+    /// The last connection ended with `replaced`: the next registration
+    /// keeps the backoff where it is.
+    bool m_replaced = false;
     int m_missedPongs = 0;
     bool m_stopped = false;
     bool m_helloReceived = false;

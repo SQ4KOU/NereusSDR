@@ -1338,6 +1338,143 @@ private slots:
         core.stop();
     }
 
+    // Fix wave I3: a service that sends its hello and then never registers
+    // the Core is left after the hello time, and the reconnect runs; the
+    // time is shortened through the injectable value.
+    void aServiceThatNeverRegistersTheCoreIsLeft()
+    {
+        ServicePlayer player;
+        auto coreKey = makeKey();
+        RendezvousClient core;
+        core.setServers({player.url()});
+        QCOMPARE(core.helloTimeoutMs(), RendezvousClient::kHelloTimeoutMs);
+        core.setHelloTimeoutMs(200);
+        core.setReconnectDelaysMs({50});
+        QSignalSpy lost(&core, &RendezvousClient::connectionLost);
+        core.registerStation(coreKey->spki(),
+                             [coreKey](const QByteArray& m) { return coreKey->sign(m); },
+                             [](const QByteArray&) { return QByteArray(); });
+        QWebSocket* first = player.waitForConnection();
+        QVERIFY(first != nullptr);
+        first->sendTextMessage(compact(QJsonObject{{"type", "hello"}, {"version", 1},
+                                        {"nonce", b64(randomBytes(32))}, {"stun", QJsonArray()}}));
+        const std::optional<QString> registration = player.waitForMessage(first);
+        QVERIFY(registration.has_value());
+        QVERIFY(registration->contains(QLatin1String("\"register\"")));
+        // Then nothing: no challenge, no registered.
+        QTRY_COMPARE_WITH_TIMEOUT(lost.size(), 1, 5000);
+        QVERIFY(!core.isRegistered());
+        QWebSocket* second = player.waitForConnection();
+        QVERIFY(second != nullptr);
+        core.stop();
+    }
+
+    // Fix wave: `replaced` keeps the backoff climbing across the next
+    // registration, so two Cores that share a key do not flap at the first
+    // rung; an ordinary loss still starts again from the first rung once
+    // the Core is registered.
+    void aReplacedCoreKeepsBackingOff()
+    {
+        ServicePlayer player;
+        auto coreKey = makeKey();
+        RendezvousClient core;
+        core.setServers({player.url()});
+        core.setReconnectDelaysMs({20, 40, 60, 80});
+        QSignalSpy registered(&core, &RendezvousClient::registered);
+        core.registerStation(coreKey->spki(),
+                             [coreKey](const QByteArray& m) { return coreKey->sign(m); },
+                             [](const QByteArray&) { return QByteArray(); });
+        const QString id = Wire::rendezvousId(coreKey->spki());
+        const auto registerOn = [&](QWebSocket* socket) {
+            socket->sendTextMessage(compact(QJsonObject{{"type", "hello"}, {"version", 1},
+                                             {"nonce", b64(randomBytes(32))},
+                                             {"stun", QJsonArray()}}));
+            QVERIFY(player.waitForMessage(socket).has_value());
+            socket->sendTextMessage(compact(QJsonObject{{"type", "challenge"}, {"nonce", b64(randomBytes(32))}}));
+            QVERIFY(player.waitForMessage(socket).has_value());
+            socket->sendTextMessage(compact(QJsonObject{{"type", "registered"}, {"id", id}}));
+        };
+        const auto replace = [](QWebSocket* socket) {
+            socket->sendTextMessage(compact(QJsonObject{{"type", "error"}, {"code", "replaced"},
+                                             {"reason", "The Core registered again on another "
+                                                        "connection, so this one was closed."},
+                                             {"retryAfterMs", 0}}));
+            socket->close();
+        };
+
+        QWebSocket* socket = player.waitForConnection();
+        QVERIFY(socket != nullptr);
+        registerOn(socket);
+        QTRY_COMPARE(registered.size(), 1);
+        QCOMPARE(core.reconnectAttempts(), 0);
+        for (int round = 1; round <= 2; ++round) {
+            replace(socket);
+            socket = player.waitForConnection();
+            QVERIFY(socket != nullptr);
+            registerOn(socket);
+            QTRY_COMPARE(registered.size(), 1 + round);
+            QCOMPARE(core.reconnectAttempts(), round);
+        }
+        // An ordinary loss: registered again, back to the first rung.
+        socket->close();
+        socket = player.waitForConnection();
+        QVERIFY(socket != nullptr);
+        registerOn(socket);
+        QTRY_COMPARE(registered.size(), 4);
+        QCOMPARE(core.reconnectAttempts(), 0);
+        core.stop();
+    }
+
+    // Fix wave: a `nameplate` the Core did not claim, and a second
+    // `mailbox.opened` while one is open, are ignored.
+    void unaskedNameplatesAndSecondMailboxesAreIgnored()
+    {
+        ServicePlayer player;
+        auto coreKey = makeKey();
+        RendezvousClient core;
+        core.setServers({player.url()});
+        QSignalSpy registered(&core, &RendezvousClient::registered);
+        QSignalSpy claimed(&core, &RendezvousClient::nameplateClaimed);
+        QSignalSpy opened(&core, &RendezvousClient::mailboxOpened);
+        QSignalSpy received(&core, &RendezvousClient::mailboxReceived);
+        core.registerStation(coreKey->spki(),
+                             [coreKey](const QByteArray& m) { return coreKey->sign(m); },
+                             [](const QByteArray&) { return QByteArray(); });
+        QWebSocket* socket = player.waitForConnection();
+        QVERIFY(socket != nullptr);
+        const auto send = [socket](const QJsonObject& message) {
+            socket->sendTextMessage(compact(message));
+        };
+        send({{"type", "hello"}, {"version", 1}, {"nonce", b64(randomBytes(32))},
+              {"stun", QJsonArray()}});
+        QVERIFY(player.waitForMessage(socket).has_value());
+        send({{"type", "challenge"}, {"nonce", b64(randomBytes(32))}});
+        QVERIFY(player.waitForMessage(socket).has_value());
+        send({{"type", "registered"}, {"id", Wire::rendezvousId(coreKey->spki())}});
+        QTRY_COMPARE(registered.size(), 1);
+
+        // Messages are handled in order, so once the mailbox opens the
+        // nameplate before it has been dealt with.
+        send({{"type", "nameplate"}, {"nameplate", 7}});
+        send({{"type", "mailbox.opened"}, {"nameplate", 7}});
+        QTRY_COMPARE(opened.size(), 1);
+        QCOMPARE(claimed.size(), 0);
+        send({{"type", "mailbox.opened"}, {"nameplate", 8}});
+        send({{"type", "mailbox"}, {"body", "one"}});
+        QTRY_COMPARE(received.size(), 1);
+        QCOMPARE(opened.size(), 1);
+
+        // A claim this Core made is answered as before.
+        core.claimNameplate();
+        const std::optional<QString> claim = player.waitForMessage(socket);
+        QVERIFY(claim.has_value());
+        QVERIFY(claim->contains(QLatin1String("nameplate.claim")));
+        send({{"type", "nameplate"}, {"nameplate", 9}});
+        QTRY_COMPARE(claimed.size(), 1);
+        QCOMPARE(claimed.first().first().toInt(), 9);
+        core.stop();
+    }
+
     void theSenderKeepsToTheWire()
     {
         // Section 2: a message over the cap is not sent, whatever its kind.
