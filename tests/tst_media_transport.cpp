@@ -219,7 +219,7 @@ QStringList todaysOfferGolden(quint32 mainSsrc)
         QStringLiteral("a=ssrc:%1 cname:nereus-mixed-stereo").arg(mainSsrc),
         QStringLiteral("a=rtcp-mux"),
         QStringLiteral("a=rtpmap:111 opus/48000/2"),
-        QStringLiteral("a=fmtp:111 minptime=10;maxaveragebitrate=24000;stereo=1;sprop-stereo=1"),
+        QStringLiteral("a=fmtp:111 minptime=10;maxaveragebitrate=48000;stereo=1;sprop-stereo=1"),
         QStringLiteral("a=setup:actpass"),
         QStringLiteral("a=ice-ufrag:<per-run>"),
         QStringLiteral("a=ice-pwd:<per-run>"),
@@ -853,7 +853,7 @@ void TestMediaTransport::offerDescribesTheRealEncoder_data()
 {
     QTest::addColumn<int>("bitrate");
     QTest::addColumn<bool>("defaulted");
-    QTest::newRow("default") << 24000 << true;
+    QTest::newRow("default") << 48000 << true; // R-R3-21
     QTest::newRow("24000") << 24000 << false;
     QTest::newRow("48000") << 48000 << false;
 }
@@ -1002,7 +1002,7 @@ void TestMediaTransport::losslessRtpMapIsOfferedOnlyWhenAsked()
     const QStringList todaysAudio{
         QStringLiteral("m=audio 9 UDP/TLS/RTP/SAVPF 111"),
         QStringLiteral("a=rtpmap:111 opus/48000/2"),
-        QStringLiteral("a=fmtp:111 minptime=10;maxaveragebitrate=24000;stereo=1;sprop-stereo=1"),
+        QStringLiteral("a=fmtp:111 minptime=10;maxaveragebitrate=48000;stereo=1;sprop-stereo=1"),
     };
     for (const bool lossless : {false, true}) {
         LibDataChannelMediaTransport offerer;
@@ -1241,7 +1241,7 @@ void TestMediaTransport::receiverStreamsAreDeclaredOnlyWhenAsked()
     const QStringList todaysAudio{
         QStringLiteral("m=audio 9 UDP/TLS/RTP/SAVPF 111"),
         QStringLiteral("a=rtpmap:111 opus/48000/2"),
-        QStringLiteral("a=fmtp:111 minptime=10;maxaveragebitrate=24000;stereo=1;sprop-stereo=1"),
+        QStringLiteral("a=fmtp:111 minptime=10;maxaveragebitrate=48000;stereo=1;sprop-stereo=1"),
     };
     const QString todaysSsrcLine =
         QStringLiteral("a=ssrc:%1 cname:nereus-mixed-stereo").arg(kTestAudioSsrc);
