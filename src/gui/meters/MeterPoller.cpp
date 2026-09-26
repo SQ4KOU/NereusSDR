@@ -60,6 +60,11 @@
 //               (thetisTxReading: CalculateTXMeter's alcgain and sign, then
 //               the console.cs floors). J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 39 (D14, R-IOS-13): a remote window's
+//               ALC and MIC bindings from the Core's `txState` while it
+//               transmits; the transmit meters the Core does not send are
+//               disabled with the reason. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -116,6 +121,7 @@ mw0lge@grange-lane.co.uk
 // Task 41 (Phase 3P-II): SMeterWidget + WdspEngine for the pollSMeter() path.
 #include "gui/SMeterWidget.h"
 #include "core/WdspEngine.h"
+#include "core/session/TransmitStateFacade.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -185,6 +191,102 @@ void MeterPoller::setRemoteRadioModel(RadioModel* model,
     m_remoteModel = m_remoteRole ? model : nullptr;
     m_remoteSnapshotReady = std::move(snapshotReady);
     m_remoteMaxBinSource = std::move(maxBinSource);
+    // Task 39: whichever of the two setters runs last marks the meters.
+    refreshRemoteTxAvailability(/*force=*/true);
+}
+
+void MeterPoller::setRemoteTransmitState(TransmitState* state,
+                                         std::function<QString()> unavailableText)
+{
+    if (m_remoteTransmitState) {
+        disconnect(m_remoteTransmitState, nullptr, this, nullptr);
+    }
+    m_remoteTransmitState = state;
+    m_remoteTransmitUnavailable = std::move(unavailableText);
+    if (state != nullptr) {
+        // Power, reflected power and SWR go into this window's RadioStatus,
+        // which the S-meter's TX needle, the TX applet's power gauge and the
+        // container meters already follow (setRadioStatus). The local
+        // window's RadioModel fills it from the radio; a remote window's
+        // model has no radio, so the Core's readings fill it here.
+        connect(state, &TransmitState::metersChanged, this, [this]() {
+            TransmitState* s = m_remoteTransmitState.data();
+            RadioModel* model = m_remoteModel.data();
+            if (s == nullptr || model == nullptr) {
+                return;
+            }
+            model->radioStatus().setForwardPower(s->forwardPowerWatts());
+            model->radioStatus().setReflectedPower(s->reflectedPowerWatts());
+        });
+        // The local window switches on MoxController's walk; a remote
+        // window's controller never keys, so the Core's keyed state does.
+        connect(state, &TransmitState::stateChanged, this, [this]() {
+            if (TransmitState* s = m_remoteTransmitState.data()) {
+                setInTx(s->keyed());
+            }
+        });
+    }
+    refreshRemoteTxAvailability(/*force=*/true);
+}
+
+const QList<int>& MeterPoller::remoteTxBindingsNotSent()
+{
+    // Task 39: txState v1 carries forward and reflected power, SWR, ALC and
+    // MIC. These eight readings stay on the Core.
+    static const QList<int> bindings{
+        MeterBinding::TxEq,       MeterBinding::TxLeveler, MeterBinding::TxLevelerGain,
+        MeterBinding::TxCfc,      MeterBinding::TxCfcGain, MeterBinding::TxComp,
+        MeterBinding::TxAlcGain,  MeterBinding::TxAlcGroup,
+    };
+    return bindings;
+}
+
+QString MeterPoller::remoteTxMeterNotSentText()
+{
+    return tr("The Core does not send this meter to a remote window yet.");
+}
+
+QString MeterPoller::remoteTransmitUnavailableText() const
+{
+    return m_remoteTransmitUnavailable ? m_remoteTransmitUnavailable() : QString();
+}
+
+void MeterPoller::refreshRemoteTxAvailability(bool force)
+{
+    if (!m_remoteRole || !m_remoteTransmitState) {
+        return;
+    }
+    const QString unavailable = remoteTransmitUnavailableText();
+    if (!force && m_remoteTxAvailabilityShown && unavailable == m_remoteTxUnavailableShown) {
+        return;
+    }
+    m_remoteTxAvailabilityShown = true;
+    m_remoteTxUnavailableShown = unavailable;
+    const QList<int>& notSent = remoteTxBindingsNotSent();
+    for (const auto& guarded : m_targets) {
+        MeterWidget* target = guarded.data();
+        if (!target) { continue; }
+        for (int bindingId = MeterBinding::TxPower; bindingId <= MeterBinding::TxCfcGain;
+             ++bindingId) {
+            QString reason = unavailable;
+            if (reason.isEmpty() && notSent.contains(bindingId)) {
+                reason = remoteTxMeterNotSentText();
+            }
+            target->setBindingUnavailable(bindingId, reason);
+        }
+    }
+}
+
+void MeterPoller::pollRemoteTxMeters()
+{
+    TransmitState* state = m_remoteTransmitState.data();
+    if (!state || !m_inTx || !remoteTransmitUnavailableText().isEmpty()) {
+        return;
+    }
+    // The Core's readings, already worked as Thetis shows them
+    // (TxMeterPump: thetisTxReading ALC and MIC).
+    handOutTxReading(MeterBinding::TxAlc, state->alcDb());
+    handOutTxReading(MeterBinding::TxMic, state->micLevelDb());
 }
 
 // RX meter cal offset source (Thetis-faithful port).
@@ -259,6 +361,9 @@ void MeterPoller::addTarget(MeterWidget* widget)
         if (p.data() == widget) { return; }
     }
     m_targets.append(QPointer<MeterWidget>(widget));
+    // Task 39: a new container on a remote window learns at once which
+    // transmit meters the Core cannot feed.
+    refreshRemoteTxAvailability(/*force=*/true);
 }
 
 void MeterPoller::removeTarget(MeterWidget* widget)
@@ -349,6 +454,9 @@ void MeterPoller::poll()
     // R3: a remote window must never fall through to the inactive local
     // DSP, including after its model has been destroyed or disconnected.
     if (m_remoteRole) {
+        // Task 39: the Core's transmit meters, and which it cannot send.
+        refreshRemoteTxAvailability();
+        pollRemoteTxMeters();
         pollRemoteRxMeters();
         return;
     }

@@ -1,4 +1,10 @@
 // no-port-check: NereusSDR-original remote meter wiring regressions.
+// Modification history (NereusSDR):
+//   2026-09-25: iPhone app plan Task 39 (D14, R-IOS-13): a remote window's
+//               transmit meters from the Core's `txState`, and the ones it
+//               does not send shown disabled with the reason. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic Claude
+//               Code.
 #include <QTest>
 #include <QSignalSpy>
 
@@ -9,6 +15,8 @@
 #include "gui/meters/MeterWidget.h"
 #include "gui/meters/MeterItem.h"
 #include "core/StepAttenuatorController.h"
+#include "core/session/TransmitStateFacade.h"
+#include "gui/HGauge.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -263,6 +271,103 @@ private slots:
         tick();
         QCOMPARE(peakText->displayText(), QStringLiteral("-140.0 dBm"));
         QVERIFY(meter.levelDbm() > -400.0f);
+    }
+
+    // iPhone app plan Task 39: the remote window shows forward and reflected
+    // power, SWR, ALC and MIC from the Core's `txState` by the same meter
+    // items the local window uses, and the meters the Core does not send
+    // are disabled with the reason, never hidden.
+    void remoteTxMetersComeFromTheCoresTransmitState()
+    {
+        RadioModel model(RadioModel::Role::Remote);
+        model.setStationConnectionState(ConnectionState::Connected);
+        QVERIFY(model.addSliceWithStationId(0) >= 0);
+        model.setActiveSlice(0);
+        model.sliceById(0)->setSignalPeakDbm(-70);
+
+        MeterWidget bars;
+        bars.resize(200, 200);
+        QHash<int, TextItem*> items;
+        const QList<int> bindings{MeterBinding::TxPower, MeterBinding::TxReversePower,
+                                  MeterBinding::TxSwr,   MeterBinding::TxAlc,
+                                  MeterBinding::TxMic,   MeterBinding::TxComp,
+                                  MeterBinding::TxEq,    MeterBinding::SignalPeak};
+        for (int i = 0; i < bindings.size(); ++i) {
+            auto* item = new TextItem(&bars);
+            item->setBindingId(bindings.at(i));
+            item->setRect(0.0f, 0.1f * i, 1.0f, 0.1f);
+            bars.addItem(item);
+            items.insert(bindings.at(i), item);
+        }
+        MeterPoller poller;
+        poller.addTarget(&bars);
+        poller.setRadioStatus(&model.radioStatus());
+        poller.setRemoteRadioModel(&model, []() { return true; });
+        TransmitState state;
+        QString unavailable;
+        poller.setRemoteTransmitState(&state, [&unavailable]() { return unavailable; });
+        auto tick = [&]() {
+            QVERIFY(QMetaObject::invokeMethod(&poller, "poll", Qt::DirectConnection));
+        };
+
+        // The meters txState carries are available; the others are shown
+        // disabled with the reason.
+        for (int binding : {MeterBinding::TxPower, MeterBinding::TxReversePower,
+                            MeterBinding::TxSwr, MeterBinding::TxAlc, MeterBinding::TxMic}) {
+            QVERIFY2(bars.bindingUnavailableReason(binding).isEmpty(), qPrintable(QString::number(binding)));
+        }
+        for (int binding : MeterPoller::remoteTxBindingsNotSent()) {
+            QCOMPARE(bars.bindingUnavailableReason(binding), MeterPoller::remoteTxMeterNotSentText());
+        }
+        QCOMPARE(bars.items().size(), bindings.size());   // none hidden
+        QCOMPARE(bars.unavailableReasonAt(QPointF(10, 0.1 * 200 * 5 + 5)),
+                 MeterPoller::remoteTxMeterNotSentText());  // the TxComp row
+        QVERIFY(bars.unavailableReasonAt(QPointF(10, 5)).isEmpty());  // TxPower
+
+        // The Core keys and reads its meters.
+        QVERIFY(state.applyStationValue("keyed", true));
+        QVERIFY(state.applyStationValue("forwardPowerWatts", 50.0));
+        QVERIFY(state.applyStationValue("reflectedPowerWatts", 2.0));
+        QVERIFY(state.applyStationValue("alcDb", -3.0));
+        QVERIFY(state.applyStationValue("micLevelDb", -12.0));
+        tick();
+        QCOMPARE(items.value(MeterBinding::TxPower)->value(), 50.0);
+        QCOMPARE(items.value(MeterBinding::TxReversePower)->value(), 2.0);
+        // SWR from 50 W forward and 2 W reflected: rho 0.2, (1.2 / 0.8).
+        QVERIFY(qAbs(items.value(MeterBinding::TxSwr)->value() - 1.5) < 1e-9);
+        QCOMPARE(items.value(MeterBinding::TxAlc)->value(), -3.0);
+        QCOMPARE(items.value(MeterBinding::TxMic)->value(), -12.0);
+        QCOMPARE(model.radioStatus().forwardPowerWatts(), 50.0);
+
+        // Unkeyed: the power falls to 0 with the Core's reading; the receive
+        // meters come back.
+        QVERIFY(state.applyStationValue("keyed", false));
+        QVERIFY(state.applyStationValue("forwardPowerWatts", 0.0));
+        QVERIFY(state.applyStationValue("reflectedPowerWatts", 0.0));
+        tick();
+        QCOMPARE(items.value(MeterBinding::TxPower)->value(), 0.0);
+        QCOMPARE(items.value(MeterBinding::TxSwr)->value(), 1.0);
+        QCOMPARE(items.value(MeterBinding::SignalPeak)->value(), -70.0);
+
+        // A Core that does not send transmit meters: every transmit meter is
+        // disabled with that reason, and nothing is fed.
+        unavailable = QStringLiteral("This Core does not send transmit meters.");
+        tick();
+        QCOMPARE(bars.bindingUnavailableReason(MeterBinding::TxPower), unavailable);
+        QCOMPARE(bars.bindingUnavailableReason(MeterBinding::TxComp), unavailable);
+        unavailable.clear();
+        tick();
+        QVERIFY(bars.bindingUnavailableReason(MeterBinding::TxPower).isEmpty());
+    }
+
+    void aGaugeCanBeShownUnavailable()
+    {
+        HGauge gauge;
+        QVERIFY(!gauge.isUnavailable());
+        gauge.setUnavailable(true);
+        QVERIFY(gauge.isUnavailable());
+        gauge.setUnavailable(false);
+        QVERIFY(!gauge.isUnavailable());
     }
 };
 QTEST_MAIN(TestRemoteMeterPoller)

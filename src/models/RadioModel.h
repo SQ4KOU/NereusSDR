@@ -171,6 +171,11 @@
 //                so the Core turns off VOX a device armed when its
 //                microphone line closes. NereusSDR-original. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 38 (R-IOS-04, D29): the transmit
+//                time-out (TxTimeOutTimer, Thetis TimeOutTimerManager)
+//                with its limit for whoever is keyed, timeOutRemainingSeconds
+//                and the timeOut stop reason; timeOutTimer from console.cs.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -271,6 +276,7 @@
 #include "core/safety/SwrProtectionController.h"
 #include "core/safety/TxInhibitMonitor.h"
 #include "core/safety/BandPlanGuard.h"
+#include "core/safety/TxTimeOutTimer.h"
 
 #include <QByteArray>
 #include <QDateTime>
@@ -3172,6 +3178,10 @@ public slots:
     // ptt_out_delay (console.cs:29678-29680 [v2.10.3.15]).
     void onMoxRxReady();
 
+    // iPhone app plan Task 38: Thetis's console.cs timeOutTimer, the
+    // time-out's callback ("MOX" or "PING", with the limit that fired).
+    void onTxTimeOut(const QString& which, int limitSeconds);
+
     // ── Task 33 (R-IOS-03, remote design §12.1): stopping transmission ─────
     //
     // stopTransmitNow: the emergency stop. Closes the TX channel's RF gate
@@ -3192,6 +3202,46 @@ public slots:
     // nothing. A held PTT then does not key again until it is released
     // (MoxController::latchStopAllTx).
     void stopAllTx(const QString& message = QString());
+
+public:
+    // ── iPhone app plan Task 38 (R-IOS-04, D29): the transmit time-out ──
+    //
+    // TxTimeOutTimer (Thetis TimeOutTimerManager) on a model with its own
+    // radio (Local). The limit is the one for whoever is keyed now
+    // (keyedBy().deviceKind):
+    //   - the station and computers: Thetis's own MOX time-out (default
+    //     off, 180 s) and ping time-out (default off, 180 s, 8.8.8.8);
+    //   - phones and tablets: RemoteMoxTimeOutEnabled (default on) and
+    //     RemoteMoxTimeOutSeconds (default 180), no ping time-out.
+    // All seven keys are the Core's (Station scope) and are read at every
+    // tick, so a change applies at once, counted from key-down. When it
+    // fires, stopAllTx("MOX Time Out Timer") (or "PING ...") and the stop
+    // reason timeOut with the limit.
+    static constexpr bool kRemoteMoxTimeOutDefault = true;
+    /// The limits for a key by a device of `deviceKind` ("phone",
+    /// "tablet", "computer", "station" or empty), read from the settings.
+    static TxTimeOutTimer::Settings txTimeOutSettingsFor(const QString& deviceKind);
+    /// Whole seconds before the MOX time-out stops the transmission, or -1
+    /// when no time-out applies (unkeyed, the limit off for this key, or a
+    /// model without its own radio).
+    int timeOutRemainingSeconds() const;
+    /// The time-out itself (null on a remote window's model). Tests drive
+    /// its clock and tick.
+    TxTimeOutTimer* txTimeOutTimer() const { return m_txTimeOut; }
+
+    /// Why the Core last stopped a transmission on its own. Task 38 sets
+    /// code "timeOut" with `which` ("mox" or "ping") and the limit in
+    /// seconds; the transmit state (Task 39) reads it.
+    struct TransmitStopReason {
+        QByteArray code;
+        QByteArray which;
+        int limitSeconds{-1};
+
+        bool operator==(const TransmitStopReason& other) const = default;
+    };
+    TransmitStopReason lastTransmitStopReason() const { return m_lastTransmitStopReason; }
+
+public slots:
 
     // ── Phase 3M-1a Task G.4: TUN function orchestrator ─────────────────────
     // Activate / release the TUNE function.
@@ -3673,6 +3723,10 @@ signals:
     // the operator (MainWindow shows it for 10 s, as Thetis's
     // infoBar.Warning(msg, false, 10000)).
     void transmitStopped(QString message);
+    // iPhone app plan Task 38: the Core stopped a transmission for a
+    // reason of its own (lastTransmitStopReason()); emitted after
+    // transmitStopped.
+    void transmitStopReasonRaised(const QByteArray& code, int limitSeconds);
     // iPhone app plan Task 35: keyedBy() changed.
     void keyedByChanged();
     // iPhone app plan Task 36: remoteMicInUse() changed.
@@ -5063,6 +5117,10 @@ private:
     SliceOwnership* m_sliceOwnership{nullptr};
     // iPhone app plan Task 35.
     KeyedBy m_keyedBy;
+    // iPhone app plan Task 38: the transmit time-out (Local only; Qt
+    // parent this) and the last reason the Core stopped a transmission.
+    TxTimeOutTimer* m_txTimeOut{nullptr};
+    TransmitStopReason m_lastTransmitStopReason;
     quint32 m_keyingEpoch{0};
     // iPhone app plan Task 36: the remote microphone ring (Local only; it
     // outlives the transmit pump, which holds a plain pointer to it) and

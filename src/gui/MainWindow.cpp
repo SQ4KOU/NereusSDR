@@ -152,6 +152,15 @@
 //                 reason; a refused press is a toast; the TCI server
 //                 forwards a program's transmit to the Core. AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-25 - J.J. Boyd (KG4VCF). iPhone app plan Task 39 (D14,
+//                 R-IOS-13): a remote window's transmit meters follow the
+//                 Core's `txState`: forward and reflected power and SWR
+//                 through the window's RadioStatus (the S-meter's TX needle,
+//                 the TX applet's power gauge, the container meters), ALC
+//                 and MIC through MeterPoller, the keyed state to the S-meter
+//                 and the poller; the meters the Core does not send are
+//                 shown disabled with the reason. AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -507,6 +516,7 @@ warren@wpratt.com
 // writes through. Both are used only on the m_station.isRemote() path.
 #include "core/security/ClientDeviceIdentity.h"
 #include "core/session/StationClient.h"
+#include "core/session/TransmitStateFacade.h"
 #include "models/RfKitModel.h"
 #include "RemoteConnectionController.h"
 #include "gui/RemoteMediaController.h"
@@ -1269,6 +1279,44 @@ void MainWindow::connectToStation()
     if (m_remoteConnection) { m_remoteConnection->connectToStation(); }
 }
 
+void MainWindow::wireRemoteTransmitMeters()
+{
+    // iPhone app plan Task 39 (D14, R-IOS-13): the remote window shows the
+    // transmit meters the local window shows, by the same meter items, from
+    // the Core's `txState` (MeterPoller::setRemoteTransmitState: power,
+    // reflected power and SWR through this window's RadioStatus, which the
+    // S-meter's TX needle, the TX applet's power gauge and the container
+    // meters already follow; ALC and MIC through the poller). A meter the
+    // Core does not send is shown disabled with the reason, never hidden.
+    TransmitState* state = m_stationClient ? m_stationClient->transmitState() : nullptr;
+    if (state == nullptr || m_radioModel == nullptr) {
+        return;
+    }
+    if (m_meterPoller) {
+        m_meterPoller->setRemoteTransmitState(state, [this]() -> QString {
+            if (m_stationClient == nullptr || !m_stationClient->isHandshakeComplete()) {
+                return tr("Connect to the Core to see transmit meters here.");
+            }
+            if (m_stationClient->capabilities().txStateVersion < 1) {
+                return tr("This Core does not send transmit meters. Update the Core to see "
+                          "them here.");
+            }
+            return {};
+        });
+    }
+    // The S-meter's TX needle follows the Core's keyed state (the local
+    // window's follows MoxController's walk).
+    connect(state, &TransmitState::stateChanged, this, [this, state]() {
+        if (SMeterWidget* sm = m_appletPanel ? m_appletPanel->smeterWidget() : nullptr) {
+            sm->setTransmitting(state->keyed());
+        }
+    });
+    // The compression reading is not in the Core's transmit state yet.
+    if (m_phoneCwApplet) {
+        m_phoneCwApplet->setCompressionUnavailable(MeterPoller::remoteTxMeterNotSentText());
+    }
+}
+
 void MainWindow::ensureRemoteSession()
 {
     if (!m_station.isRemote() || !m_radioModel || m_shuttingDown) { return; }
@@ -1304,6 +1352,8 @@ void MainWindow::ensureRemoteSession()
         m_stationClient->setDeviceIdentity(ClientDeviceIdentity::forThisProfile(),
                                            ClientDeviceIdentity::machineName(),
                                            ClientDeviceIdentity::machineShortName());
+        // iPhone app plan Task 39: the Core's transmit meters.
+        wireRemoteTransmitMeters();
         m_remoteConnection = new RemoteConnectionController(
             m_stationClient, m_radioModel, m_station, this);
         connect(m_remoteConnection, &RemoteConnectionController::changed,

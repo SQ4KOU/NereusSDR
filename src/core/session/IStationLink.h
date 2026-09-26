@@ -88,6 +88,9 @@
 //   2026-09-25  J.J. Boyd / KG4VCF  iPhone app plan, desktop remote
 //                                    transmit (R-IOS-13): remoteTransmit().
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Merge of Tasks 38 and 39:
+//                                    transmitTimeOutAvailable().
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QString>
@@ -169,6 +172,11 @@ public:
     /// arrived. False while connecting and after the Core is lost, when a
     /// window's copy of the Core's readings is stale.
     virtual bool stationLinkReady() const { return false; }
+    /// Merge of Tasks 38 and 39 (R-IOS-04): the Core has the transmit
+    /// time-out (iPhone app plan Task 38) and uses its seven settings. A Core
+    /// that sends `txStateVersion` 1 has it (txState carries the time left);
+    /// an older Core stores the settings and ignores them.
+    virtual bool transmitTimeOutAvailable() const { return false; }
     /// R-R3-47 / R-R3-22: the Core reports its Power Genius XL (the
     /// `amplifier` object) and its RF-Kit RF2K-S (the `rfkit` object) to
     /// this app. Both false on an older Core or link.

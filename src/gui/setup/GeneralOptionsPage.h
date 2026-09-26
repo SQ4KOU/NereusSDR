@@ -22,6 +22,14 @@
 //                 Core's in a remote window (gated, older-Core note).
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 38 (R-IOS-04, D29): the Time Out
+//                 Timers group (Thetis groupBoxTS32) plus the time-out for
+//                 phones and tablets. J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
+//   2026-09-26 - Merge of Tasks 38 and 39: timeOutNeedsNewerCoreText (the
+//                 older-Core gate) and disabled controls that look
+//                 disabled. J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -75,6 +83,9 @@
 
 class QCheckBox;
 class QComboBox;
+class QGroupBox;
+class QLineEdit;
+class QPushButton;
 class QSpinBox;
 class QLabel;
 
@@ -104,6 +115,9 @@ public:
     // so is the Network Watchdog checkbox (R-R3-49). The rest of the page is
     // this computer's.
     void setStationSettingsAvailable(bool available, const QString& reason) override;
+    /// Merge of Tasks 38 and 39: the reason the Time Out Timers group is
+    /// disabled on a Core older than the transmit time-out.
+    static QString timeOutNeedsNewerCoreText();
 
 signals:
     // Phase 3M-4 Task 11: PureSignal Info Bar checkboxes.
@@ -136,6 +150,10 @@ private slots:
 private:
     void buildHardwareConfigGroup();
     void buildOptionsGroup();
+    // iPhone app plan Task 38: Thetis's Time Out Timers group
+    // (setup.designer.cs:10154-10299 [v2.10.3.15]) plus the time-out for
+    // phones and tablets.
+    void buildTimeOutGroup();
     void buildStepAttGroup();
     void buildAutoAttGroup();
     void connectController();
@@ -178,6 +196,22 @@ private:
     // existing General Options group to keep the Setup tree shallow.
     QCheckBox* m_chkHideFeedback{nullptr};
     QCheckBox* m_chkSwapRedBlue{nullptr};
+
+    // Time Out Timers group (iPhone app plan Task 38). From Thetis
+    // groupBoxTS32 on tpOptions2 (setup.designer.cs:10154-10299
+    // [v2.10.3.15]); the phone and iPad row is NereusSDR's (D29).
+    QGroupBox* m_grpTimeOut{nullptr};
+    QCheckBox* m_chkToTMox{nullptr};
+    QSpinBox*  m_udMoxToTSeconds{nullptr};
+    QLabel*    m_lblMoxTotSec{nullptr};
+    QCheckBox* m_chkToTPing{nullptr};
+    QSpinBox*  m_udPingToTSeconds{nullptr};
+    QLabel*    m_lblPingTotSec{nullptr};
+    QLineEdit* m_txtToTPingIP{nullptr};
+    QPushButton* m_btnPingDef{nullptr};
+    QCheckBox* m_chkRemoteMoxTimeOut{nullptr};
+    QSpinBox*  m_udRemoteMoxTimeOutSeconds{nullptr};
+    QLabel*    m_lblRemoteMoxTotSec{nullptr};
 
     // Step Attenuator group
     QCheckBox* m_chkRx1StepAttEnable{nullptr};

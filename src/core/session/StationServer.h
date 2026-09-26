@@ -279,6 +279,12 @@
 //                R-R3-42): txRefusalOf() and the refusal last sent to each
 //                peer. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                Code.
+//   2026-09-25: iPhone app plan Task 39 (D14, R-IOS-13, R-IOS-21): the
+//               `txState` object (TransmitState, txStateVersion 1) to a peer
+//               at minor 11 declaring remoteTx; a link lost and a device
+//               removed while keyed record their stop reasons. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QHash>
@@ -331,6 +337,7 @@ class StationCatalog;
 class StationDevicesFacade;
 class TokenStore;
 class TransmitHolder;
+class TransmitState;
 class RemoteKeying;
 class RemoteTxWatchdog;
 
@@ -758,6 +765,12 @@ public:
     /// Task 37: the device whose accepted write turned VOX on, while VOX is
     /// on; empty when VOX is off or was turned on at the Core itself.
     QByteArray voxArmedBy() const { return m_voxArmedBy; }
+    /// iPhone app plan Task 39 (D14, R-IOS-13): the mirrored `txState`
+    /// object (never null; follows a Local model).
+    TransmitState* transmitState() const { return m_transmitState; }
+    /// 1: the Core sends `txState` to a peer at minor 11 whose hello
+    /// declared remoteTx 1 (after remoteTxVersion in its capabilities).
+    int txStateVersion() const { return 1; }
     /// The gate's answer for `transport` (what its txPermitted says).
     TxDecision txDecisionFor(SessionTransport* transport) const;
     /// The refusal a capabilities message carries (empty without one).
@@ -1025,6 +1038,14 @@ private:
     void disarmVoxArmedBy(const QByteArray& deviceId, const char* why);
     // Task 37: the device's name for a stop sentence.
     QString deviceNameForStop(const QByteArray& deviceId) const;
+    /// iPhone app plan Task 39: records on `txState` that the Core is
+    /// stopping `deviceId`'s key for `stopReason` (TransmitState::kStop*),
+    /// when that device holds transmit and is on the air.
+    void noteHolderStopped(const QByteArray& deviceId, const char* stopReason);
+    /// Merge of Tasks 37 and 39: records on `txState` why the Core is about
+    /// to stop transmitting (the watchdog's linkLost, the starvation's
+    /// micStarved), in the words it stops with. Called before StopAllTx.
+    void recordTransmitStop(const char* stopReason, const QString& text);
     /// Ruling 7.4 (D60): the on-air refusal for a change from `requester`,
     /// or empty (nobody on the air, or the holder's own change).
     TxRefusal onAirRefusal(const QByteArray& requester) const;
@@ -1124,6 +1145,10 @@ private:
     StarvationPolicy m_starvation;
     QByteArray m_watchedKeyedDevice;
     QByteArray m_voxArmedBy;
+    // iPhone app plan Task 39: the `txState` object. Qt-parented to this, so
+    // its meter timer is one of the server's timers (the conformance
+    // runner's virtual clock drives them all).
+    TransmitState* m_transmitState = nullptr;
     // iPhone app Task 73: one marker per slice (Qt-parented to this).
     SliceMarkerSet* m_markers = nullptr;
     // True while a restored layout's owners are settled just before every

@@ -273,6 +273,14 @@
 //                so the Core turns off VOX a device armed when its
 //                microphone line closes. NereusSDR-original. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 38 (R-IOS-04, D29): the transmit
+//                time-out. Ported timeOutTimer from console.cs:45343-45350
+//                [v2.10.3.15] (StopAllTx(msg + " Time Out Timer")); the
+//                TxTimeOutTimer wiring, its limit for whoever is keyed
+//                (Thetis's MOX and ping time-outs for the station and
+//                computers, the remote one for phones and tablets),
+//                timeOutRemainingSeconds and the timeOut stop reason.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -545,6 +553,7 @@ warren@wpratt.com
 // for Role::Local.
 #include "core/meters/SliceMeterPump.h"
 #include "core/AppSettings.h"
+#include <QHostAddress>
 #include "core/SampleRateCatalog.h"
 #include "core/LogCategories.h"
 #include "core/NoiseFloorTracker.h"
@@ -1277,6 +1286,22 @@ RadioModel::RadioModel(Role role, QObject* parent)
         connect(this, &RadioModel::keyedByChanged, this, &RadioModel::updateRemoteMicSource);
         connect(m_moxController, &MoxController::stateChanged, this,
                 [this](MoxState) { updateRemoteMicSource(); });
+    }
+
+    // iPhone app plan Task 38 (R-IOS-04, D29): the transmit time-out, where
+    // the radio is. From Thetis console.cs:883 [v2.10.3.15]
+    // (TimeOutTimerManager.Initialise(this)) and console.cs:45276
+    // (TimeOutTimerManager.SetCallback(timeOutTimer)). The limit is read at
+    // every tick for whoever is keyed then.
+    if (m_role == Role::Local) {
+        m_txTimeOut = new TxTimeOutTimer(this);
+        m_txTimeOut->setSettingsSource([this]() {
+            return txTimeOutSettingsFor(m_keyedBy.deviceKind);
+        });
+        connect(m_moxController, &MoxController::moxChanged,
+                m_txTimeOut, &TxTimeOutTimer::onMox);
+        connect(m_txTimeOut, &TxTimeOutTimer::timedOut,
+                this, &RadioModel::onTxTimeOut);
     }
 
     // R-R3-36: record whether the key-up now committing is Tune or
@@ -18219,6 +18244,111 @@ void RadioModel::stopAllTx(const QString& message)
 
     // if (!string.IsNullOrEmpty(msg)) infoBar.Warning(msg, false, 10000);
     emit transmitStopped(message);
+}
+
+// ---------------------------------------------------------------------------
+// iPhone app plan Task 38 (R-IOS-04, D29): the transmit time-out.
+//
+// Porting from Thetis console.cs:45343-45350 [v2.10.3.15], timeOutTimer.
+// Original C# logic:
+//
+//   private void timeOutTimer(string msg)
+//   {
+//       if (MOX || _manual_mox || chkTUN.Checked || chk2TONE.Checked)
+//       {
+//           //everything off !!
+//           StopAllTx(msg + " Time Out Timer");
+//       }
+//   }
+//
+// NereusSDR: the stop reason (timeOut, with the limit) is recorded before
+// StopAllTx runs, so a transmitStopped listener reads it, and raised once
+// the stop is under way. The callback repeats every tick while the
+// condition holds, as Thetis's does; only a keyed tick stops anything.
+// ---------------------------------------------------------------------------
+void RadioModel::onTxTimeOut(const QString& which, int limitSeconds)
+{
+    // From Thetis console.cs:45345 [v2.10.3.15]:
+    //   if (MOX || _manual_mox || chkTUN.Checked || chk2TONE.Checked)
+    const bool moxOn = mox();
+    const bool manualMoxOn = m_moxController && m_moxController->isManualMox();
+    const bool tuneOn = m_isTuning;
+    const bool twoToneOn = m_twoToneController
+        && (m_twoToneController->isActive()
+            || m_twoToneController->isActivationInFlight());
+    if (!moxOn && !manualMoxOn && !tuneOn && !twoToneOn) {
+        return;
+    }
+
+    m_lastTransmitStopReason = TransmitStopReason{
+        QByteArrayLiteral("timeOut"), which.toLower().toLatin1(), limitSeconds};
+    qCInfo(lcConnection).noquote()
+        << "Transmit time-out:" << which << "after" << limitSeconds << "s";
+
+    //everything off !!
+    stopAllTx(which + QStringLiteral(" Time Out Timer"));
+
+    emit transmitStopReasonRaised(m_lastTransmitStopReason.code, limitSeconds);
+}
+
+// The limits for a key by a device of `deviceKind`.
+// The station and computers: Thetis's own time-outs, read as its setup page
+// applies them. From Thetis setup.cs:28539-28545 [v2.10.3.15]:
+//   private void chkToTMox_CheckedChanged(object sender, EventArgs e)
+//   {
+//       if (initializing) return;
+//       udMoxToTSeconds.Enabled = chkToTMox.Checked;
+//       lblMoxTotSec.Enabled = chkToTMox.Checked;
+//       TimeOutTimerManager.MoxTimeOut((int)udMoxToTSeconds.Value, chkToTMox.Checked);
+//   }
+// and setup.cs:28552-28568 (chkToTPing_CheckedChanged: PingTimeOut only for
+// a host that parses; the page saves only such a host). Defaults: both off
+// (TimeOutTimerManager.cs:87-88), 180 s (setup.designer.cs:10241, 10294),
+// 8.8.8.8 (setup.designer.cs:10190).
+// Phones and tablets (D29, R-IOS-04): on by default at 180 s, the same
+// range, and no ping time-out.
+TxTimeOutTimer::Settings RadioModel::txTimeOutSettingsFor(const QString& deviceKind)
+{
+    const AppSettings& settings = AppSettings::instance();
+    const auto readBool = [&settings](const QString& key, bool fallback) {
+        return settings.value(key, fallback ? QStringLiteral("True") : QStringLiteral("False"))
+                   .toString()
+               == QStringLiteral("True");
+    };
+    const auto readSeconds = [&settings](const QString& key) {
+        bool ok = false;
+        const int seconds = settings.value(key, TxTimeOutTimer::kDefaultSeconds).toInt(&ok);
+        if (!ok) {
+            return TxTimeOutTimer::kDefaultSeconds;
+        }
+        return std::clamp(seconds, TxTimeOutTimer::kMinimumSeconds,
+                          TxTimeOutTimer::kMaximumSeconds);
+    };
+
+    TxTimeOutTimer::Settings limits;
+    if (deviceKind == QLatin1String("phone") || deviceKind == QLatin1String("tablet")) {
+        limits.moxEnabled = readBool(QStringLiteral("RemoteMoxTimeOutEnabled"),
+                                     kRemoteMoxTimeOutDefault);
+        limits.moxSeconds = readSeconds(QStringLiteral("RemoteMoxTimeOutSeconds"));
+        limits.pingEnabled = false;
+        return limits;
+    }
+
+    limits.moxEnabled = readBool(QStringLiteral("MoxTimeOutEnabled"), false);
+    limits.moxSeconds = readSeconds(QStringLiteral("MoxTimeOutSeconds"));
+    limits.pingEnabled = readBool(QStringLiteral("PingTimeOutEnabled"), false);
+    limits.pingSeconds = readSeconds(QStringLiteral("PingTimeOutSeconds"));
+    const QString host = settings.value(QStringLiteral("PingTimeOutHost"),
+                                        QStringLiteral("8.8.8.8")).toString();
+    if (!QHostAddress(host).isNull()) {
+        limits.pingHost = host;
+    }
+    return limits;
+}
+
+int RadioModel::timeOutRemainingSeconds() const
+{
+    return m_txTimeOut ? m_txTimeOut->remainingSeconds() : -1;
 }
 
 // ── Phase 3M-1a Task F.1: MoxController::hardwareFlipped fan-out ────────────

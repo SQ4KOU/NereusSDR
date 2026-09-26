@@ -22,6 +22,11 @@
 //                 core-side src/core/meters/SliceMeterPump.{h,cpp}; smeterUpdated
 //                 removed with its only listener. J.J. Boyd (KG4VCF), with
 //                 AI-assisted transformation via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 39 (D14, R-IOS-13): a remote window's
+//               transmit meters: ALC and MIC from the Core's `txState`
+//               (setRemoteTransmitState), the meters the Core does not send
+//               shown disabled with the reason. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -83,6 +88,7 @@ class SMeterWidget;
 class WdspEngine;
 class RadioModel;
 class SliceModel;
+class TransmitState;
 
 // Binding IDs map to WDSP meter types (RxMeterType enum values)
 namespace MeterBinding {
@@ -170,6 +176,24 @@ public:
     void setRemoteRadioModel(RadioModel* model,
                              std::function<bool()> snapshotReady,
                              std::function<double(const SliceModel*)> maxBinSource = {});
+
+    // iPhone app plan Task 39 (D14, R-IOS-13): a remote window's transmit
+    // meters come from the Core's `txState` (StationClient::transmitState).
+    // While transmitting, the ALC and MIC bindings get its alcDb and
+    // micLevelDb; power, reflected power and SWR reach the meters through
+    // this window's RadioStatus, which MainWindow feeds from the same
+    // object. `unavailableText` returns why the window has no transmit
+    // meters from its Core right now (not connected, or a Core that does
+    // not send them), or empty when it has: then every transmit binding
+    // the object does not carry (remoteTxBindingsNotSent) is shown disabled
+    // with remoteTxMeterNotSentText; otherwise every transmit binding is,
+    // with that text. Remote role only.
+    void setRemoteTransmitState(TransmitState* state,
+                                std::function<QString()> unavailableText);
+    /// The transmit bindings the Core's `txState` does not carry.
+    static const QList<int>& remoteTxBindingsNotSent();
+    /// Why: the Core sends transmit state but not this meter.
+    static QString remoteTxMeterNotSentText();
 
     // ── TX meter bindings (H.2, Phase 3M-1a) ─────────────────────────────
     //
@@ -307,6 +331,11 @@ private:
     //   MaxBin               -> GetDetectMaxBin(disp=0)
     void pollSMeter();
     void pollRemoteRxMeters();
+    // Task 39: the ALC and MIC readings from the Core's transmit state.
+    void pollRemoteTxMeters();
+    // Task 39: marks each target's transmit bindings the Core cannot feed.
+    void refreshRemoteTxAvailability(bool force = false);
+    QString remoteTransmitUnavailableText() const;
 
     // m_avgWindow: averaging window size set by MultimeterPage (Task 3.1).
     // Task 3.2 will use this value in dispatch; stored here for round-trip.
@@ -356,6 +385,12 @@ private:
     QPointer<RadioModel> m_remoteModel;
     std::function<bool()> m_remoteSnapshotReady;
     std::function<double(const SliceModel*)> m_remoteMaxBinSource;
+    // Task 39: the Core's transmit state and whether it sends it.
+    QPointer<TransmitState> m_remoteTransmitState;
+    std::function<QString()> m_remoteTransmitUnavailable;
+    // What the targets were last told (refreshRemoteTxAvailability).
+    bool m_remoteTxAvailabilityShown{false};
+    QString m_remoteTxUnavailableShown;
 };
 
 } // namespace NereusSDR

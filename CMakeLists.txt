@@ -1000,6 +1000,7 @@ set(CORE_SOURCES
     src/core/safety/TxRefusal.cpp
     src/core/safety/StationTxGate.cpp
     src/core/safety/UnkeyGate.cpp
+    src/core/safety/TxTimeOutTimer.cpp
     src/core/safety/TransmitHolder.cpp
     src/core/safety/RemoteTxWatchdog.cpp
     src/core/safety/StarvationPolicy.cpp
@@ -1216,6 +1217,9 @@ set(CORE_SOURCES
     # TxSliceArbiter.cpp above for the existing precedent of src/core/
     # depending on src/models/ directly.
     src/core/meters/SliceMeterPump.cpp
+    # iPhone app plan Task 39 (D14, R-IOS-13): the Core's transmit meters,
+    # ten times a second while keyed, for the `txState` object.
+    src/core/meters/TxMeterPump.cpp
     # R2 Task 14: classifySettingsKey, the pure function deciding whether
     # an AppSettings key belongs to the station (must round-trip over the
     # wire) or to the operator's own machine (must never leave the local
@@ -1310,6 +1314,9 @@ list(APPEND CORE_SOURCES
     # mirrored `connectedDevices` object.
     src/core/session/DeviceSessionRegistry.cpp
     src/core/session/ConnectedDevicesFacade.cpp
+    # iPhone app plan Task 39 (D14, R-IOS-13, R-IOS-21): the mirrored
+    # `txState` object (TransmitState).
+    src/core/session/TransmitStateFacade.cpp
     # iPhone app plan Task 35 (R-IOS-13): keying from a remote device.
     src/core/session/RemoteKeying.cpp
     # iPhone app plan, desktop remote transmit (R-IOS-13, R-R3-42): the

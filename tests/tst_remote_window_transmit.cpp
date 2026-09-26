@@ -18,6 +18,10 @@
 //   2026-09-25 - Created for the desktop remote window's transmit
 //                (R-IOS-13, R-R3-42). J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-26 - Merge of Tasks 37 to 39: a keyed window reads the Core's
+//                forward power, SWR, ALC and MIC through txState, and is
+//                told the Core's time-out stopped its key. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -40,14 +44,20 @@
 #include "core/TciBinaryFrame.h"
 #include "core/TciServer.h"
 #include "core/safety/TransmitHolder.h"
+#include "core/meters/TxMeterPump.h"
+#include "core/safety/TxTimeOutTimer.h"
 #include "core/session/RemoteTransmitClient.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
+#include "core/session/TransmitStateFacade.h"
 #include "core/session/media/DaemonMediaController.h"
 #include "core/session/media/RemoteMicReceiver.h"
 #include "gui/RemoteMediaController.h"
 #include "gui/RemoteTransmitForwarder.h"
 #include "gui/applets/TxApplet.h"
+#include "gui/meters/MeterItem.h"
+#include "gui/meters/MeterPoller.h"
+#include "gui/meters/MeterWidget.h"
 #include "gui/containers/ContainerButtonDispatcher.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -475,6 +485,10 @@ private slots:
         QVERIFY(!h.client.capabilities().txPermitted);
         QVERIFY(!h.client.remoteTransmitAvailable());
         QVERIFY(!h.remote.remoteTransmitRouted());
+        // Merge of Tasks 38 and 39: no txState, so the Options page's
+        // time-out settings wait for a newer Core.
+        QCOMPARE(h.client.capabilities().txStateVersion, 0);
+        QVERIFY(!h.client.transmitTimeOutAvailable());
         WindowControls window(h);
         window.follow(h.client);
         QVERIFY(!window.mox->isEnabled());
@@ -705,6 +719,130 @@ private slots:
         app.close();
         tci.stop();
         h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+    // ---- The Core's transmit state (merge of Tasks 37 to 39) --------------
+
+    // Now that the window declares remoteTx, the Core sends it txState: a
+    // keyed window's transmit meters read the Core's forward power, SWR,
+    // ALC and MIC through the same meter items a local window uses.
+    void aKeyedWindowReadsTheCoresTransmitMeters()
+    {
+        Test::RemoteAudioSessionHarness h;
+        h.pairWindow = true;
+        h.makeTransmitReady();
+        // The Core's meters, as its transmit lane would read them keyed.
+        h.server.transmitState()->meterPump()->setSource([]() {
+            TxMeterReadings r;
+            r.forwardPowerWatts = 50.0;
+            r.reflectedPowerWatts = 2.0;
+            r.swr = 1.5;
+            r.alcDb = -3.0;
+            r.micLevelDb = -12.0;
+            return r;
+        });
+        h.connectSession();
+        QTRY_VERIFY(h.client.capabilities().txPermitted);
+        QCOMPARE(h.client.capabilities().txStateVersion, 1);
+        QVERIFY(h.client.transmitTimeOutAvailable());
+        TransmitState* state = h.client.transmitState();
+        QVERIFY(state != nullptr);
+
+        MeterWidget bars;
+        bars.resize(200, 200);
+        QHash<int, TextItem*> items;
+        const QList<int> bindings{MeterBinding::TxPower, MeterBinding::TxReversePower,
+                                  MeterBinding::TxSwr, MeterBinding::TxAlc, MeterBinding::TxMic};
+        for (int i = 0; i < bindings.size(); ++i) {
+            auto* item = new TextItem(&bars);
+            item->setBindingId(bindings.at(i));
+            item->setRect(0.0f, 0.2f * i, 1.0f, 0.2f);
+            bars.addItem(item);
+            items.insert(bindings.at(i), item);
+        }
+        MeterPoller poller;
+        poller.addTarget(&bars);
+        poller.setRadioStatus(&h.remote.radioStatus());
+        poller.setRemoteRadioModel(&h.remote, []() { return true; });
+        // As MainWindow::wireRemoteTransmitMeters words it.
+        StationClient* client = &h.client;
+        poller.setRemoteTransmitState(state, [client]() -> QString {
+            if (!client->isHandshakeComplete()) {
+                return QStringLiteral("Connect to the Core to see transmit meters here.");
+            }
+            if (client->capabilities().txStateVersion < 1) {
+                return QStringLiteral("This Core does not send transmit meters. Update the "
+                                      "Core to see them here.");
+            }
+            return {};
+        });
+        const auto tick = [&poller]() {
+            QVERIFY(QMetaObject::invokeMethod(&poller, "poll", Qt::DirectConnection));
+        };
+        tick();
+        for (int binding : bindings) {
+            QVERIFY2(bars.bindingUnavailableReason(binding).isEmpty(),
+                     qPrintable(QString::number(binding)));
+        }
+
+        h.remote.setMoxFromButton(true);
+        QTRY_VERIFY_WITH_TIMEOUT(h.station.moxController()->isMox(), 5000);
+        QTRY_VERIFY(state->keyed());
+        QTRY_COMPARE(state->forwardPowerWatts(), 50.0);
+        QTRY_COMPARE(state->alcDb(), -3.0);
+        tick();
+        QCOMPARE(items.value(MeterBinding::TxPower)->value(), 50.0);
+        QCOMPARE(items.value(MeterBinding::TxReversePower)->value(), 2.0);
+        // SWR from 50 W forward and 2 W reflected: rho 0.2, (1.2 / 0.8).
+        QVERIFY2(qAbs(items.value(MeterBinding::TxSwr)->value() - 1.5) < 1e-9,
+                 qPrintable(QString::number(items.value(MeterBinding::TxSwr)->value())));
+        QCOMPARE(items.value(MeterBinding::TxAlc)->value(), -3.0);
+        QCOMPARE(items.value(MeterBinding::TxMic)->value(), -12.0);
+        QCOMPARE(h.remote.radioStatus().forwardPowerWatts(), 50.0);
+        // The window's own MoxController never keyed: the readings are the
+        // Core's.
+        QVERIFY(!h.remote.moxController()->isMox());
+
+        h.remote.setMoxFromButton(false);
+        QTRY_VERIFY(!h.station.moxController()->isMox());
+        QTRY_VERIFY(!state->keyed());
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // The Core's transmit time-out stops the window's key (a computer: the
+    // Core's own MOX time-out, switched on here at 30 s) and the window is
+    // told why in the Core's words.
+    void theCoresTimeOutStopsTheWindowsKeyAndSaysWhy()
+    {
+        AppSettings::instance().setValue(QStringLiteral("MoxTimeOutEnabled"), QStringLiteral("True"));
+        AppSettings::instance().setValue(QStringLiteral("MoxTimeOutSeconds"), 30);
+        Test::RemoteAudioSessionHarness h;
+        h.pairWindow = true;
+        h.makeTransmitReady();
+        qint64 timeOutNow = 0;
+        h.station.txTimeOutTimer()->setClock([&timeOutNow]() { return timeOutNow; });
+        h.connectSession();
+        QTRY_VERIFY(h.client.capabilities().txPermitted);
+        TransmitState* state = h.client.transmitState();
+
+        h.remote.setMoxFromButton(true);
+        QTRY_VERIFY_WITH_TIMEOUT(h.station.moxController()->isMox(), 5000);
+        QTRY_COMPARE(state->timeOutRemainingSeconds(), 30);
+        timeOutNow = 30'000;
+        h.station.txTimeOutTimer()->tick();
+        QTRY_VERIFY(!h.station.moxController()->isMox());
+        const QString text =
+            QStringLiteral("Transmit stopped after 0:30, the Core's transmit time-out.");
+        QTRY_COMPARE(state->stopSerial(), quint32(1));
+        QCOMPARE(state->stopReason(), QStringLiteral("timeOut"));
+        QCOMPARE(state->stopText(), text);
+        // The stop and the unkey are separate notify groups; they may come
+        // in different flushes.
+        QTRY_VERIFY(!state->keyed());
+        // The window forgot its key: the next press is a new command.
+        QTRY_VERIFY(!h.remote.isTransmitting());
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+        AppSettings::instance().remove(QStringLiteral("MoxTimeOutEnabled"));
+        AppSettings::instance().remove(QStringLiteral("MoxTimeOutSeconds"));
     }
 };
 

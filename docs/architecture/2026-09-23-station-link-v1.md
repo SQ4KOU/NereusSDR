@@ -663,9 +663,11 @@ declares `deviceAuth` 1 (section 3.5), `pairing` 1 (section 3.6) and
 remote transmit: `txPermitted`, the transmit refusals, `tx.setTxSlice` and
 keying (`tx.key`, `tx.unkey`, `tx.tune`, `tx.twoTone`, section 18.6). A peer that declares it at minor 11 is sent
 `remoteTxVersion` (section 6.3); `txPermitted` is true only for a peer that
-declares it. The station does not declare it. The desktop's remote window
-declares it (desktop remote transmit): its MOX, TUNE, two-tone, microphone,
-VOX and TCI programs transmit through the Core.
+declares it. It is also sent `txStateVersion` and the `txState` object
+(iPhone app plan Task 39, section 18.8). The station does not declare it.
+The desktop's remote window declares it (desktop remote transmit): its
+MOX, TUNE, two-tone, microphone, VOX and TCI programs transmit through the
+Core, and its transmit meters read `txState`.
 
 **`sessionHolder` 1** (iPhone app plan Task 71; the several-devices
 design, ruling 10.1): the Core admits up to four devices at once (section
@@ -766,6 +768,7 @@ change shows as surface drift and as a change to this table.
 | `displayExtrasVersion` | 1 |
 | `sessionHolderVersion` | 1 |
 | `remoteTxVersion` | 1 |
+| `txStateVersion` | 1 |
 
 <!-- /surface -->
 
@@ -882,6 +885,10 @@ When a feature is off, its version is 0:
   (section 18.3: its code, its sentence as the operator reads it, and its
   fix or empty); while it is true all three are empty. A client shows the
   sentence on its disabled transmit controls as sent.
+- `txStateVersion` (iPhone app plan Task 39): sent after `remoteTxVersion`
+  and its three `txRefusal` entries, and only with them. 1: the Core sends
+  the read-only `txState` object (section 18.8) to that peer; any other
+  peer never sees it or its schema.
 
 `txPermitted` (iPhone app plan Task 34) is true only for a session the
 station transmit gate permits (section 18.1): false until
@@ -969,6 +976,7 @@ identity entries from `hpsdrModel` onwards are present only at agreed minor
 | 55 | `txRefusalCode` | `utf8` |
 | 56 | `txRefusalReason` | `utf8` |
 | 57 | `txRefusalFix` | `utf8` |
+| 58 | `txStateVersion` | `i64` |
 
 <!-- /surface -->
 
@@ -1479,6 +1487,29 @@ An enum property lists the values its domain allows.
 | 14 | `paSettingsBypass` | `bool` | bidirectional |  |
 | 15 | `voxEnabled` | `bool` | bidirectional |  |
 
+**TransmitState** (18 properties)
+
+| Ordinal | Property | Wire kind | Direction | Enum values |
+| --- | --- | --- | --- | --- |
+| 0 | `keyed` | `bool` | outbound |  |
+| 1 | `tuning` | `bool` | outbound |  |
+| 2 | `twoTone` | `bool` | outbound |  |
+| 3 | `txSliceId` | `i64` | outbound |  |
+| 4 | `keyedByName` | `utf8` | outbound |  |
+| 5 | `keyedByKind` | `utf8` | outbound |  |
+| 6 | `keyedTrigger` | `utf8` | outbound |  |
+| 7 | `keyedSinceMs` | `i64` | outbound |  |
+| 8 | `timeOutRemainingSeconds` | `i64` | outbound |  |
+| 9 | `forwardPowerWatts` | `f64` | outbound |  |
+| 10 | `reflectedPowerWatts` | `f64` | outbound |  |
+| 11 | `swr` | `f64` | outbound |  |
+| 12 | `alcDb` | `f64` | outbound |  |
+| 13 | `micLevelDb` | `f64` | outbound |  |
+| 14 | `txEnding` | `bool` | outbound |  |
+| 15 | `stopReason` | `utf8` | outbound |  |
+| 16 | `stopText` | `utf8` | outbound |  |
+| 17 | `stopSerial` | `i64` | outbound |  |
+
 **TunerModel** (21 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
@@ -1532,6 +1563,7 @@ destroyed during the session.
 | `accessorySettings` | `AccessorySettingsModel` |
 | `devices` | `StationDevicesFacade` |
 | `connectedDevices` | `ConnectedDevicesFacade` |
+| `txState` | `TransmitState` |
 | `catalog` | `StationCatalog` |
 | `pan:<i>` | `PanadapterModel` |
 | `slice:<id>` | `SliceModel` |
@@ -1651,6 +1683,10 @@ Notes on the keys:
   change), and not otherwise: an app counts on from its own receipt.
   `devices`' `pairedAt` and `lastSeen` stay ISO 8601 dates, since they
   outlive a session and a restart.
+- **`txState`** (iPhone app plan Task 39; `TransmitState`,
+  `txStateVersion` 1): the Core's transmitter, its meters and why it last
+  stopped a transmission, section 18.8. Sent only at agreed minor 11 to a
+  peer whose hello declared `remoteTx` 1; every property is `outbound`.
 - **`catalog`.** The values the Core owns and an app draws its controls
   from (section 7.4). Both properties are `outbound`
   (`StationCatalog`): `json` (`utf8`), the catalogue, and `revision`
@@ -1968,6 +2004,13 @@ computer, never sent). `classifySettingsKey` (`SettingsScope.cpp`) decides:
 | 3. whole key | `WindBackPowerSwr` | station |
 | 3. whole key | `MultimeterDelayMs` | station |
 | 3. whole key | `NetworkWatchdogEnabled` | station |
+| 3. whole key | `MoxTimeOutEnabled` | station |
+| 3. whole key | `MoxTimeOutSeconds` | station |
+| 3. whole key | `PingTimeOutEnabled` | station |
+| 3. whole key | `PingTimeOutSeconds` | station |
+| 3. whole key | `PingTimeOutHost` | station |
+| 3. whole key | `RemoteMoxTimeOutEnabled` | station |
+| 3. whole key | `RemoteMoxTimeOutSeconds` | station |
 | 3. whole key | `DisableHfPa` | operatorLocal |
 | 3. whole key | `ExtendedTxAllowed` | operatorLocal |
 | 3. whole key | `PreventTxOnDifferentBandToRx` | operatorLocal |
@@ -3108,9 +3151,9 @@ same on every machine.
 | `foreign-write-refused` | This device holds slice 0 and another device slice 1: a `property.write` to `slice:1` and to `marker:1`, and `removeSlice` and `setActiveSliceById` naming slice 1, are refused "That slice belongs to Other device 1. It can be changed only there.", with no value sent back and nothing changed; its own slice it may make active |
 | `held-for-device` | Another device, alone on the Core, leaves with `session.leave`: its slice keeps running, held for it. This device, let in meanwhile, does not adopt it: it gets a slice of its own and the other's as a marker with `ownerAway` true; the other device signs in again and the marker's `ownerAway` turns false (the slice is its own again) |
 | `verbs-tx-set-tx-slice` | On a Core with `remote_transmit` allow (stationSetup `remoteTransmit`), a device that declares `remoteTx` is sent `txPermitted` false in its first `capabilities` and true in the `capabilities` sent again after `snapshot.complete`, each with `remoteTxVersion` 1 and the `txRefusal` entries (`notReady` first, empty once permitted); `tx.setTxSlice` with an argument it does not take is refused "The Core could not read this request."; with `sliceId` while nobody holds transmit it is refused "Take transmit on this device first." with the values `refusalCode` `notHolder` and `refusalFix` `takeTransmit`. Runs on the station alone |
-| `unheld-key` | On a Core with `remote_transmit` allow whose radio can key (stationSetup `transmitReady`), one device that declares `remoteTx`: each keying verb with an argument it does not take is refused "The Core could not read this request."; a program's `tx.key {trigger:"tci"}` on unheld transmit is refused `programNeedsTransmit` and nobody takes transmit; a person's `tx.key {trigger:"screen"}` takes it and keys (epoch 1; `transmitting` true, the device's entry transmitting); `tx.unkey {epoch:1}` unkeys; the same program's key then keys (epoch 2) and `tx.unkey {epoch:2}` unkeys; `tx.tune {on:true}` tunes (epoch 3, `transmit`'s `tune` true) and `{on:false}` ends it; `tx.twoTone {on:true}` on a radio with no transmit channel is refused "The two-tone test could not start on the Core." Runs on the station and the app |
-| `tx-keepalive` | On the same Core as `unheld-key`: `tx.keepalive` with an argument it does not take is refused "The Core could not read this request."; a keepalive while nothing of the device's is watched is accepted and changes nothing; the device keys (epoch 1) and sends keepalives 50 ms after the key and then 300 ms apart (sequences 2 to 4, epoch 1), each accepted, and the key stays on; then none for 450 ms: the watchdog stops transmitting (`transmitting` false, the device's entry no longer transmitting). Runs on the station and the app |
-| `grace-transmit-held` | Two devices that declare `remoteTx`: the other device keys and this one's permission goes false (`capabilities` sent again) and its `tx.key` is refused "Other device 1 has the transmitter."; the holder's link drops: this device is sent `capabilities` again with the refusal "Transmit is changing hands. Try again in a moment." and then "Other device 1 has the transmitter.", the Core stops transmitting at once (`transmitting` false) and the holder, away, still holds transmit (this device's `tx.key` is refused naming it); the holder signs in again a minute later, nothing keys until its own `tx.key` (epoch 2), and its `tx.unkey {epoch:2}` unkeys. Runs on the station and the app |
+| `unheld-key` | On a Core with `remote_transmit` allow whose radio can key (stationSetup `transmitReady`), one device that declares `remoteTx`: each keying verb with an argument it does not take is refused "The Core could not read this request."; a program's `tx.key {trigger:"tci"}` on unheld transmit is refused `programNeedsTransmit` and nobody takes transmit; a person's `tx.key {trigger:"screen"}` takes it and keys (epoch 1; `transmitting` true, the device's entry transmitting); `tx.unkey {epoch:1}` unkeys; the same program's key then keys (epoch 2) and `tx.unkey {epoch:2}` unkeys; `tx.tune {on:true}` tunes (epoch 3, `transmit`'s `tune` true) and `{on:false}` ends it; `tx.twoTone {on:true}` on a radio with no transmit channel is refused "The two-tone test could not start on the Core." Each key and unkey also moves `txState` (section 18.8): `keyed`, who keyed and how (`keyedTrigger` `screen`, `tci`, `tune`), `keyedSinceMs` on the runner's virtual clock and 180 s left for the phone. Runs on the station and the app |
+| `tx-keepalive` | On the same Core as `unheld-key`: `tx.keepalive` with an argument it does not take is refused "The Core could not read this request."; a keepalive while nothing of the device's is watched is accepted and changes nothing; the device keys (epoch 1) and sends keepalives 50 ms after the key and then 300 ms apart (sequences 2 to 4, epoch 1), each accepted, and the key stays on; then none for 450 ms: the watchdog stops transmitting (`transmitting` false, the device's entry no longer transmitting). `txState` follows the key (180 s left, 179 a second later), and the watchdog's stop is its stop: `stopReason` `linkLost`, `stopSerial` 1, "The link to Conformance device went quiet, so the Core stopped transmitting." Runs on the station and the app |
+| `grace-transmit-held` | Two devices that declare `remoteTx`: the other device keys and this one's permission goes false (`capabilities` sent again) and its `tx.key` is refused "Other device 1 has the transmitter."; the holder's link drops: this device is sent `capabilities` again with the refusal "Transmit is changing hands. Try again in a moment." and then "Other device 1 has the transmitter.", the Core stops transmitting at once (`transmitting` false) and the holder, away, still holds transmit (this device's `tx.key` is refused naming it); the holder signs in again a minute later, nothing keys until its own `tx.key` (epoch 2), and its `tx.unkey {epoch:2}` unkeys. `txState` follows each key, and the holder's dropped link is its stop: `stopReason` `linkLost`, `stopSerial` 1, "The link to Other device 1 was lost, so the Core stopped transmitting." Runs on the station and the app |
 | `on-air-refusals` | While another device (short name "Tablet B") is keyed, this device's Protocol 1 rate change, `ps3.off`, its slice's `rxAntenna` and `transmit`'s `pureSig` are each refused "Tablet B is on the air. Try again when they stop." (commands with `refusalCode` `holderOnAir` and `refusalFix` `takeTransmit`). Runs on the station alone |
 | `verbs-session-leave` | `session.leave` with an argument is refused, "The request to leave the Core was not understood."; without, it is accepted and the station closes the connection with no `session.end`. Runs on the station alone |
 | `heartbeat-answered`, `heartbeat-missed` | The heartbeat, above |
@@ -3245,7 +3288,8 @@ how a fixture is written to what the code does.
   objects, a slice's `nnrStatus` and `nnrLastError`, the radio's
   `rxFilter0Reason`, `rxFilter1Reason`, `settingsSaveError`,
   `receiveLayoutRestoreMessage` and `fourO3AListenerError`, the
-  `stationTci` object's `error`, the `amplifier` object's
+  `stationTci` object's `error`, the `txState` object's `stopText`
+  (section 18.8), the `amplifier` object's
   `efficiencyText` (the Power Genius's own reading, passed on as it
   reports it), the `accessorySettings` object's `pgxlAnswer` and
   `tgxlAnswer`, and `pureSignalSettings`' `lastLoadError` (the same test
@@ -3272,8 +3316,9 @@ Core's side of remote transmit that exists today. Keying from a device
 (`tx.key`, `tx.unkey`, `tx.tune`, `tx.twoTone`, section 18.6) came with
 Task 35, and the microphone line with keying on a filled buffer (section
 18.6) with Task 36; the watchdog, its keepalive and the microphone
-starvation action (section 18.7) with Task 37; `txState` arrives with
-Task 39 and taking transmit (`tx.take`) with Task 77.
+starvation action (section 18.7) with Task 37; the transmit state
+(`txState`, section 18.8) with Task 39; taking transmit (`tx.take`) with
+Task 77.
 
 ### 18.1 Who may transmit
 
@@ -3569,3 +3614,67 @@ air; WDSP's DSB adds none), until the time-out or the operator ends it;
 AM, SAM, FM, DRM, RADE_U and RADE_L stop at once with "No microphone audio
 arrived from <device>, so the Core stopped transmitting." TUNE and
 two-tone use no microphone and are never stopped by it.
+
+### 18.8 The transmit state (`txState`)
+
+iPhone app plan Task 39 (D14, R-IOS-13, R-IOS-21; spec section 5.5 items 5
+and 8). The `txState` object (`TransmitState`, `txStateVersion` 1) goes to
+a peer at minor 11 whose hello declared `remoteTx` 1, in its snapshot after
+`connectedDevices`, and as deltas. Every property is `outbound`; a write
+is refused as any outbound property's is.
+
+| Property | Meaning |
+| --- | --- |
+| `keyed` | The radio is on the air (MOX, TUNE or two-tone): the radio object's `transmitting` |
+| `tuning`, `twoTone` | TUNE is on; the two-tone test is on |
+| `txSliceId` | The slice transmit is bound to, -1 for none |
+| `keyedByName`, `keyedByKind`, `keyedTrigger` | Who keyed (the device's name as `connectedDevices` numbers it, its kind) and how (the `tx.key` trigger, `tune`, `twoTone`, `vox`, or the Core's own `radioPtt`, `cat` or `station`); `""` while unkeyed |
+| `keyedSinceMs` | When the key began, in milliseconds on the Core's own monotonic clock (the one `connectedDevices`' durations use); 0 while unkeyed. Compare it only with another `keyedSinceMs` |
+| `timeOutRemainingSeconds` | Whole seconds before the transmit time-out stops this key, -1 when no time-out applies (unkeyed, or the limit for this device's kind is off). Phones and tablets have their own limit, 180 s by default |
+| `forwardPowerWatts`, `reflectedPowerWatts`, `swr` | The radio's power readings, as the Core's own power and SWR meters show them; `swr` is 1.0 with no forward power |
+| `alcDb`, `micLevelDb` | The ALC and MIC readings as the Core's meters show them (Thetis's readings: ALC floored at -30 dB, MIC at -195 dB); -400, no reading, while the Core has no transmit channel |
+| `txEnding` | True only during a RADE end-of-over tail; no tail is built yet, so always false |
+| `stopReason` | Why the Core last stopped a transmission on its own: `""` (none since the Core started), `linkLost`, `micStarved`, `timeOut`, `takenOver`, `revoked` or `station` |
+| `stopText` | That stop in plain words, for an app to show as sent |
+| `stopSerial` | Advances by one with each such stop (serial-number arithmetic, as `devices`' `revision`); 0 before the first |
+
+**When it is sent.** While keyed the Core reads the meters ten times a
+second, from the transmit lane's last readings (never a DSP call on its
+event loop), and sends a reading that changed, with the time left when it
+changed. While unkeyed only changes are sent: the power readings as the
+radio reports them (they fall to 0 at the unkey), nothing else. Changes
+travel in the 50 ms delta flush like any other.
+
+**Stops.** Each key (each rise of `keyed`) is stopped at most once: the
+first reason the Core records for it advances `stopSerial` and sets
+`stopReason` and `stopText` together, and a later one for the same key
+changes nothing. A device's own `tx.unkey`, and TUNE or two-tone off, are
+no stop. The reasons:
+
+- `timeOut`: the transmit time-out (iPhone app plan Task 38): "Transmit
+  stopped after 3:00, the Core's time-out for phones and tablets." for a
+  phone or tablet, "Transmit stopped after 3:00, the Core's transmit
+  time-out." for any other, and "Transmit stopped: the Core's network
+  check went unanswered for 3:00." for the ping time-out, each with its
+  limit;
+- `linkLost`: the device on the air went quiet (the watchdog, section
+  18.7): "The link to <device> went quiet, so the Core stopped
+  transmitting."; or its session ended, or the holder connected again on
+  another link, while it was on the air: "The link to <device> was lost,
+  so the Core stopped transmitting." (the Core's own log and toast say
+  "went quiet" for both);
+- `revoked`: the holder was removed from the Core while on the air:
+  "<device> was removed from the Core, so the Core stopped transmitting.";
+- `micStarved`: no microphone audio arrived from the device on the air
+  in a mode that stops on it (the starvation action, section 18.7): "No
+  microphone audio arrived from <device>, so the Core stopped
+  transmitting.";
+- `takenOver`: another device or the radio took transmit while the holder
+  was on the air (iPhone app plan Task 77; recorded once taking transmit is
+  built): "<device> took transmit, so the Core stopped transmitting.";
+- `station`: any other stop the Core made itself: "The Core stopped
+  transmitting."
+
+The Core sends the object to the holder and to every other declaring peer,
+so a device that lost its link learns why from the snapshot when it signs
+in again. A device that was removed is not connected to learn it.

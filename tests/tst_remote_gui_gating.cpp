@@ -41,6 +41,9 @@
 // scanned until asked, and the Tools menu test entries case at the bottom
 // of this file drives real windows through it.
 //
+//   2026-09-25: iPhone app plan Task 39 run: General > Options gates three
+//               controls now, Task 38's Time Out Timers group the third.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-08-08 -- New test file for remote-daemon R2 Task 20. J.J. Boyd
@@ -1990,7 +1993,9 @@ private slots:
         // wave, final review I4); so is VAX (R-R3-44).
         const QMap<QString, int> coreControls{
             {QStringLiteral("Startup & Preferences"), 2}, // callsign, grid (R-R3-21)
-            {QStringLiteral("Options"), 2},             // General: Region, Network Watchdog (R-R3-49)
+            // General: Region, Network Watchdog (R-R3-49), and the Time Out
+            // Timers group (iPhone app plan Task 38, gated as one).
+            {QStringLiteral("Options"), 3},
             {QStringLiteral("Spectrum Defaults"), 5},   // FFT size, window, Hz/bin, fps x2
             {QStringLiteral("Grid & Scales"), 3},       // dB max, dB min, copy
             {QStringLiteral("Multimeter"), 1},          // sample interval

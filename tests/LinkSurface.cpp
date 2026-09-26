@@ -110,6 +110,7 @@
 #include "core/session/StationDevicesFacade.h"
 #include "core/session/ConnectedDevicesFacade.h"
 #include "core/session/SliceMarker.h"
+#include "core/session/TransmitStateFacade.h"
 #include "core/SliceOwnership.h"
 #include "core/session/DeviceSessionRegistry.h"
 #include "core/session/StationLanAnnouncement.h"
@@ -1339,7 +1340,8 @@ QList<const QMetaObject*> LinkSurface::mirroredMetaObjects()
             &StationDevicesFacade::staticMetaObject,
             &StationCatalog::staticMetaObject,
             &ConnectedDevicesFacade::staticMetaObject,
-            &SliceMarker::staticMetaObject};
+            &SliceMarker::staticMetaObject,
+            &TransmitState::staticMetaObject};
 }
 
 QJsonObject LinkSurface::capture()

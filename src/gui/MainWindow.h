@@ -785,6 +785,9 @@ private slots:
 
 private:
     void ensureRemoteSession();
+    // iPhone app plan Task 39 (D14, R-IOS-13): a remote window's transmit
+    // meters from the Core's `txState`.
+    void wireRemoteTransmitMeters();
     void buildUI();
     void buildMenuBar();
     void buildStatusBar();

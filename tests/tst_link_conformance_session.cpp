@@ -156,6 +156,7 @@
 #include "core/StepAttenuatorController.h"
 #include "core/dsp/DspAssetService.h"
 #include "core/meters/SliceMeterPump.h"
+#include "core/session/DeviceSessionRegistry.h"
 #include "core/session/LinkVersion.h"
 #include "core/session/PureSignalSessionFacade.h"
 #include "core/session/SessionCommandDispatcher.h"
@@ -346,6 +347,12 @@ QString buildStation(const QJsonObject& setup, Station* station, quint16 major)
         station->model->moxController()->setTimerIntervals(0, 0, 0, 0, 0, 0);
         station->model->transmitModel().setMicSourceLocked(false);
         station->model->transmitModel().setMicSource(MicSource::Radio);
+        // iPhone app plan Task 39: the time-out's clock is the Core's device
+        // clock, which the runner moves virtually, so `txState`'s time left
+        // reads the same on every machine.
+        StationServer* server = station->server.get();
+        station->model->txTimeOutTimer()->setClock(
+            [server]() { return server->deviceSessions()->now(); });
     }
     if (station->harness) {
         // A StationServer makes its radio receive-only

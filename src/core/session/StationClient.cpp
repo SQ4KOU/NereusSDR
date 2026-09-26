@@ -139,6 +139,14 @@
 //                each on the session (RemoteTransmitClient's keepalive when
 //                no "tx" data channel is open); its answers are dropped.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 39 (D14, R-IOS-13): the Core's
+//               `txState` object (TransmitState, txStateVersion 1), read-only,
+//               for the window's transmit meters. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: merge of Tasks 38 and 39: transmitTimeOutAvailable() (a
+//               Core sending txStateVersion 1 has the transmit time-out).
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -152,6 +160,7 @@
 #include "core/session/ObjectRegistry.h"
 #include "core/session/SessionEndReasons.h"
 #include "core/session/SessionTransport.h"
+#include "core/session/TransmitStateFacade.h"
 #include "core/settings/SettingsProxy.h"
 #include "models/AmplifierModel.h"
 #include "models/NotchModel.h"
@@ -431,6 +440,8 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     std::sort(m_supportedMajors.begin(), m_supportedMajors.end());
     m_supportedMajors.erase(std::unique(m_supportedMajors.begin(), m_supportedMajors.end()),
                             m_supportedMajors.end());
+    // iPhone app plan Task 39: the Core's transmit state, unbound (a mirror).
+    m_transmitState = new TransmitState(this);
     m_localSettingsSchema = readLocalSettingsSchemaVersion();
     if (m_localSettingsSchema == 0) {
         // The observable trace of CoreInit::initialize() not having run
@@ -1266,6 +1277,10 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
     m_objects.clear();
     m_outboundMirror->unwatchAll();
     m_outboundCoalescer.clear();
+    // iPhone app plan Task 39: nothing is on the air as far as this window
+    // can tell once its Core is gone; the last stop stays until the next
+    // snapshot replaces it.
+    m_transmitState->clearStationValues();
 
     if (!m_settingsProxy.isNull()) {
         m_settingsProxy->setReady(false);
@@ -2176,6 +2191,17 @@ void StationClient::handleCapabilities(const SessionMessage& message)
         }
     }
 
+    // iPhone app plan Task 39 (txStateVersion 1): the Core's transmit state
+    // and meters, read only; never written back. Against a Core that does
+    // not send it the key is not held and the window's copy reads idle.
+    if (m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.txStateVersion >= 1) {
+        m_objects.insert(QByteArrayLiteral("txState"), m_transmitState);
+    } else {
+        m_objects.remove(QByteArrayLiteral("txState"));
+        m_transmitState->clearStationValues();
+    }
+
     const QList<PanadapterModel*> pans = m_radioModel->panadapters();
     for (int i = 0; i < pans.size(); ++i) {
         const QByteArray key = QByteArray(kPanKeyPrefix) + QByteArray::number(i);
@@ -2832,6 +2858,12 @@ bool StationClient::applyClientOnlyProperty(QObject* target, const QByteArray& c
         return tuner != nullptr && tuner->applyStationValue(propertyName, native);
     }
     // R-R3-47 / R-R3-22: plain state applies; never a command to an amp.
+    // iPhone app plan Task 39: a plain state apply; the Core's transmitter
+    // is never changed from here.
+    if (className == "TransmitState") {
+        auto* state = qobject_cast<TransmitState*>(target);
+        return state != nullptr && state->applyStationValue(propertyName, native);
+    }
     if (className == "AmplifierModel") {
         auto* amp = qobject_cast<AmplifierModel*>(target);
         return amp != nullptr && amp->applyStationValue(propertyName, native);
@@ -3880,6 +3912,13 @@ bool StationClient::stationLinkReady() const
 {
     return m_sessionActive && m_authenticated && m_handshakeComplete
         && m_transport && m_transport->isOpen();
+}
+
+bool StationClient::transmitTimeOutAvailable() const
+{
+    // The time-out (Task 38) and txState (Task 39) ship together; a Core
+    // that sends txStateVersion 1 counts the time-out's time left.
+    return stationLinkReady() && m_capabilities.txStateVersion >= 1;
 }
 
 bool StationClient::remoteAmplifierStatusAvailable() const

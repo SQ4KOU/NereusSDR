@@ -153,6 +153,9 @@
 //   2026-09-24 - iPhone app Task 19 (R-IOS-06, D40): the "filters/" prefix,
 //                the filter presets, is Station scope. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 38 (R-IOS-04): the seven transmit
+//                time-out keys are Station scope. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/settings/SettingsScope.h"
@@ -528,6 +531,18 @@ const Rule kWholeKeys[] = {
     // RadioModel applies it at connect and on change. Until R-R3-49 it was
     // pinned OperatorLocal below as a write-only setting with no consumer.
     { "NetworkWatchdogEnabled", SettingsScope::Station },
+
+    // iPhone app plan Task 38 (R-IOS-04, D29): the transmit time-out stops
+    // the radio where it is, so every limit is the Core's: Thetis's MOX and
+    // ping time-outs (the station and computers) and the one for phones
+    // and tablets. RadioModel reads them at every tick of the time-out.
+    { "MoxTimeOutEnabled", SettingsScope::Station },
+    { "MoxTimeOutSeconds", SettingsScope::Station },
+    { "PingTimeOutEnabled", SettingsScope::Station },
+    { "PingTimeOutSeconds", SettingsScope::Station },
+    { "PingTimeOutHost", SettingsScope::Station },
+    { "RemoteMoxTimeOutEnabled", SettingsScope::Station },
+    { "RemoteMoxTimeOutSeconds", SettingsScope::Station },
 
     // ---- Reviewed and deliberately pinned OperatorLocal --------------
     // Each of these has a name that reads as a TX-safety or station-

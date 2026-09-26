@@ -58,6 +58,10 @@
 //               R-R3-42): txRefusalCode, txRefusalReason and txRefusalFix
 //               after remoteTxVersion. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 39 (D14, R-IOS-13): txStateVersion,
+//               after remoteTxVersion and only with it (the `txState`
+//               object). J.J. Boyd (KG4VCF), with AI-assisted implementation
+//               via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationCapabilities.h"
@@ -179,6 +183,8 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
             updates.append(stringEntry("txRefusalCode", txRefusalCode));
             updates.append(stringEntry("txRefusalReason", txRefusalReason));
             updates.append(stringEntry("txRefusalFix", txRefusalFix));
+            // iPhone app plan Task 39: the `txState` object, with it.
+            updates.append(intEntry("txStateVersion", txStateVersion));
         }
     }
     return updates;
@@ -368,7 +374,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "stationCatalogVersion"
                    || u.name == "displayExtrasVersion"
                    || u.name == "sessionHolderVersion"
-                   || u.name == "remoteTxVersion") {
+                   || u.name == "remoteTxVersion"
+                   || u.name == "txStateVersion") {
             // R-R3-47 / R-R3-22 / R-R3-48: sent in the same block as the
             // four above.
             caps.radioIdentityEntries = true;
@@ -399,6 +406,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                 } else if (u.name == "remoteTxVersion") {
                     caps.remoteTxEntry = true;
                     caps.remoteTxVersion = version;
+                } else if (u.name == "txStateVersion") {
+                    caps.txStateVersion = version;
                 } else {
                     caps.remoteTgxlControlVersion = version;
                 }

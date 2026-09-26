@@ -294,6 +294,18 @@
 //               key is refused while that VOX has no line to listen to).
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 39 (D14, R-IOS-13, R-IOS-21): the
+//               `txState` object (TransmitState, txStateVersion 1) to a peer
+//               at minor 11 declaring remoteTx; a link lost and a device
+//               removed while keyed record their stop reasons. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
+//   2026-09-26: merge of Tasks 37 to 39: the watchdog's stop records
+//               linkLost (its "went quiet" sentence, or "was lost" when the
+//               session ended) and the starvation's records micStarved on
+//               `txState` before StopAllTx (recordTransmitStop). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -312,6 +324,7 @@
 #include "core/security/StationIdentity.h"
 #include "core/security/TokenStore.h"
 #include "core/session/MirrorPolicy.h"
+#include "core/session/TransmitStateFacade.h"
 #include "core/session/MirrorSchema.h"
 #include "core/session/MirrorView.h"
 #include "core/session/ObjectRegistry.h"
@@ -627,6 +640,17 @@ bool isConnectedDevicesMessage(const SessionMessage& message)
     return message.objectKey == kConnectedDevicesKey
         || (message.kind == SessionMessageKind::Schema
             && message.className == "ConnectedDevicesFacade");
+}
+
+// iPhone app plan Task 39 (txStateVersion 1): the Core's transmit state and
+// meters, for a peer at kRadioIdentitySessionProtocolMinor whose hello
+// declared remoteTx 1. Any other peer never sees the object.
+constexpr const char* kTxStateKey = "txState";
+
+bool isTxStateMessage(const SessionMessage& message)
+{
+    return message.objectKey == kTxStateKey
+        || (message.kind == SessionMessageKind::Schema && message.className == "TransmitState");
 }
 
 // iPhone app Task 13: why a connection ends when its device is removed, and
@@ -1082,6 +1106,9 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             hooks.stop = [this](const QByteArray& deviceId, const QString& message) {
                 disarmVoxArmedBy(deviceId, "its link went quiet");
                 if (m_radioModel && m_radioModel->keyedBy().deviceId == deviceId) {
+                    // Task 39: the window and the phone are told why, in the
+                    // words the Core stopped with, before the stop runs.
+                    recordTransmitStop(TransmitState::kStopLinkLost, message);
                     m_radioModel->stopAllTx(message);
                 }
             };
@@ -1113,6 +1140,8 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             };
             hooks.stopAllTx = [this](const QString& message) {
                 if (m_radioModel) {
+                    // Task 39: the reason, before the stop runs.
+                    recordTransmitStop(TransmitState::kStopMicStarved, message);
                     m_radioModel->stopAllTx(message);
                 }
             };
@@ -1144,12 +1173,22 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                     }
                 });
     }
+    // iPhone app plan Task 39 (D14, R-IOS-13): the `txState` object, on the
+    // devices' clock (keyedSinceMs).
+    m_transmitState = new TransmitState(this);
+    m_transmitState->setClock([this]() { return m_deviceSessions->now(); });
+    if (m_radioModel && m_radioModel->role() == RadioModel::Role::Local) {
+        m_transmitState->bind(m_radioModel);
+    }
     // Revoking a device frees its place at once, live or away, and forgets
     // that its time ran out (ruling 4.11). Its live connection ends in the
     // next deviceRemoved handler, with no away state: the place is already
     // free.
     connect(m_devices.get(), &DeviceStore::deviceRemoved, this, [this](const QByteArray& id) {
         m_deviceSessions->remove(id);
+        // iPhone app plan Task 39: a revoked device that was on the air is
+        // stopped by the Core; recorded before the release unkeys it.
+        noteHolderStopped(id, TransmitState::kStopRevoked);
         // iPhone app plan Task 34 (ruling 8.15): a revoked device's hold
         // on transmit is released through a transfer to nobody.
         if (m_transmitHolder) {
@@ -1632,6 +1671,12 @@ StationServer::~StationServer()
     if (m_radioModel && m_radioModel->moxController() != nullptr
         && m_radioModel->role() == RadioModel::Role::Local) {
         m_radioModel->moxController()->setKeyingGate({});
+    }
+    // iPhone app plan Task 39: the transmit state follows the model, which
+    // may outlive this object; it lets go first, before the devices' clock
+    // it reads is gone.
+    if (m_transmitState != nullptr) {
+        m_transmitState->unbind();
     }
     // iPhone app Task 14: a pairing code being hashed finishes first; its
     // result is dropped with this object.
@@ -2226,6 +2271,14 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
     // rules below run.
     if (!sessionDevice.isEmpty() && m_txWatchdog) {
         disarmVoxArmedBy(sessionDevice, "its connection ended");
+        // Merge of Tasks 37 and 39: a session that ended (rather than went
+        // quiet) is told to the window and the phone as a lost link, in
+        // txState's own words; recorded before the stop, so the watchdog's
+        // "went quiet" reason below does not replace it.
+        if (m_radioModel && m_radioModel->keyedBy().deviceId == sessionDevice) {
+            recordTransmitStop(TransmitState::kStopLinkLost,
+                               TransmitState::linkLostText(deviceNameForStop(sessionDevice)));
+        }
         if (m_txWatchdog->isWatching(sessionDevice)) {
             m_txWatchdog->linkClosed(sessionDevice);
         } else if (m_radioModel && m_radioModel->keyedBy().deviceId == sessionDevice) {
@@ -2266,6 +2319,9 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
         if (leaving || sessionDevice.startsWith("token:")) {
             m_transmitHolder->release(sessionDevice, QStringLiteral("The device left the Core."));
         } else {
+            // iPhone app plan Task 39: a holder whose link dropped while it
+            // was on the air is stopped by the Core.
+            noteHolderStopped(sessionDevice, TransmitState::kStopLinkLost);
             m_transmitHolder->holderDropped(sessionDevice,
                                             QStringLiteral("The device's link was lost."));
         }
@@ -3022,6 +3078,9 @@ void StationServer::admit(SessionTransport* transport, const QString& name,
             // iPhone app plan Task 34 (ruling 8.15): a key on the older
             // connection is stopped through the fence; the hold carries
             // over to the new connection, unkeyed.
+            // iPhone app plan Task 39: its older link is gone; a key on it
+            // is stopped by the Core.
+            noteHolderStopped(device.deviceId, TransmitState::kStopLinkLost);
             m_transmitHolder->holderDropped(device.deviceId,
                                             QStringLiteral("This device connected again."));
             dropPeer(older, QString::fromLatin1(kSameDeviceReason), true, /*retryable=*/false,
@@ -3609,6 +3668,9 @@ void StationServer::buildMirror()
     // only to a view at minor 11 that declared sessionHolder with
     // deviceAuth.
     m_mirror->watch(QByteArray(kConnectedDevicesKey), m_connectedDevices.get());
+    // iPhone app plan Task 39 (txStateVersion 1): the transmitter's state
+    // and meters. Sent only to a peer at minor 11 that declared remoteTx.
+    m_mirror->watch(QByteArray(kTxStateKey), m_transmitState);
     // iPhone app Task 19 (stationCatalogVersion 1): the Core's catalogue,
     // read again now so the snapshot carries the radio as it is. Sent only
     // to a peer at minor 11 (sendToPeer).
@@ -4249,6 +4311,14 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
         if (isConnectedDevicesMessage(message) && !peerHasSessionHolderVersion(transport)) {
             return;
         }
+        // iPhone app plan Task 39: nor the transmit state to anyone but a
+        // peer at minor 11 whose hello declared remoteTx (txStateVersion 1).
+        if (isTxStateMessage(message)
+            && (minor < kRadioIdentitySessionProtocolMinor
+                || !peerDeclares(transport, QByteArrayLiteral("remoteTx"), 1)
+                || txStateVersion() < 1)) {
+            return;
+        }
         // iPhone app Task 19: nor the catalogue to an older app.
         if (isCatalogMessage(message)
             && (minor < kRadioIdentitySessionProtocolMinor || stationCatalogVersion() < 1)) {
@@ -4495,6 +4565,39 @@ void StationServer::onTransmitHolderChanged()
 void StationServer::releaseTransmitFor(const QByteArray& deviceId, const QString& reason)
 {
     m_transmitHolder->release(deviceId, reason);
+}
+
+void StationServer::recordTransmitStop(const char* stopReason, const QString& text)
+{
+    // The first reason for a key wins (TransmitState::recordStop), so a
+    // reason recorded here, before its StopAllTx, is not overwritten by the
+    // generic `station` one that the stop itself raises.
+    if (m_transmitState != nullptr) {
+        m_transmitState->recordStop(QByteArray(stopReason), text);
+    }
+}
+
+void StationServer::noteHolderStopped(const QByteArray& deviceId, const char* stopReason)
+{
+    // Only a holder on the air is stopped; the first reason for its key
+    // wins (TransmitState::recordStop).
+    const std::optional<TransmitHolder::Holder> holder = m_transmitHolder->holder();
+    if (m_transmitState == nullptr || !holder || holder->deviceId != deviceId) {
+        return;
+    }
+    const bool onAir = holder->keyed || (m_radioModel && m_radioModel->isTransmitting());
+    if (!onAir) {
+        return;
+    }
+    const QByteArray code(stopReason);
+    // A removed device is no longer in the store the holder's words are
+    // read from; the key it is on the air with still names it.
+    const QString name =
+        holder->name.isEmpty() ? m_transmitState->lastKeyedByName() : holder->name;
+    const QString text = code == TransmitState::kStopRevoked
+        ? TransmitState::revokedText(name)
+        : TransmitState::linkLostText(name);
+    m_transmitState->recordStop(code, text);
 }
 
 TxRefusal StationServer::onAirRefusal(const QByteArray& requester) const
@@ -5117,6 +5220,8 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             if (peerDeclares(transport, QByteArrayLiteral("remoteTx"), 1)) {
                 caps.remoteTxEntry = true;
                 caps.remoteTxVersion = remoteTxVersion();
+                // iPhone app plan Task 39: the `txState` object, with it.
+                caps.txStateVersion = txStateVersion();
             }
             const HardwareProfile& profile = m_radioModel->hardwareProfile();
             caps.hpsdrModel = profile.caps != nullptr ? profile.model : HPSDRModel::FIRST;

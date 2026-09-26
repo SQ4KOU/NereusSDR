@@ -38,6 +38,9 @@
 //   2026-09-25: original test for NereusSDR by J.J. Boyd (KG4VCF), iPhone
 //               app plan Task 37 (R-IOS-13), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-26: merge of Tasks 37 to 39: the window is told the watchdog's
+//               and the starvation's stops on txState. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/AppSettings.h"
@@ -49,6 +52,7 @@
 #include "core/session/RemoteTransmitClient.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
+#include "core/session/TransmitStateFacade.h"
 #include "core/session/media/DaemonMediaController.h"
 #include "core/session/media/LibDataChannelMediaTransport.h"
 #include "gui/RemoteMediaController.h"
@@ -323,6 +327,12 @@ private slots:
         QCOMPARE(stopped.count(), 1);
         QCOMPARE(stopped.first().at(0).toString(), kStopSentence);
         QVERIFY(h.client.isHandshakeComplete());
+        // Merge of Tasks 37 to 39: the window, its session still up, is told
+        // why on txState, in the words the Core stopped with.
+        QTRY_COMPARE(h.client.transmitState()->stopSerial(), quint32(1));
+        QCOMPARE(h.client.transmitState()->stopReason(), QStringLiteral("linkLost"));
+        QCOMPARE(h.client.transmitState()->stopText(), kStopSentence);
+        QTRY_VERIFY(!h.client.transmitState()->keyed());
         h.client.disconnectFromStation(QStringLiteral("test complete"));
     }
 
@@ -463,9 +473,14 @@ private slots:
             QTRY_VERIFY_WITH_TIMEOUT(!h.station.moxController()->isMox(), 2000);
             qInfo("microphone silent: stopped after %lld ms", static_cast<long long>(quiet.elapsed()));
             QCOMPARE(stopped.count(), 1);
-            QCOMPARE(stopped.first().at(0).toString(),
-                     QStringLiteral("No microphone audio arrived from Shack MacBook, so the Core "
-                                    "stopped transmitting."));
+            const QString sentence =
+                QStringLiteral("No microphone audio arrived from Shack MacBook, so the Core "
+                               "stopped transmitting.");
+            QCOMPARE(stopped.first().at(0).toString(), sentence);
+            // Merge of Tasks 37 to 39: the window is told why on txState.
+            QTRY_COMPARE(h.client.transmitState()->stopSerial(), quint32(1));
+            QCOMPARE(h.client.transmitState()->stopReason(), QStringLiteral("micStarved"));
+            QCOMPARE(h.client.transmitState()->stopText(), sentence);
         } else {
             QTest::qWait(1500);
             QVERIFY(h.station.moxController()->isMox());
