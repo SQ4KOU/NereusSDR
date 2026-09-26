@@ -141,6 +141,16 @@
 //                                    the freeze and on-air refusals' new
 //                                    forwards. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 19 (R-IOS-25):
+//                                    SpotSourceHost's refusals scanned and
+//                                    its readOnlyReason forwarded. AI-assisted
+//                                    via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 21 (R-IOS-18):
+//                                    StationRadios' refusals scanned.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  D79 (R-IOS-11, R-R3-49): the Core's
+//                                    unknown band plan refusal forwards.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -689,6 +699,11 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("AmplifierModel::readOnlyReason()"),
           QStringLiteral("RfKitModel::readOnlyReason()"),
           QStringLiteral("StationTciModel::readOnlyReason()"),
+          // Parity Task 19: the `spotSources` object's, scanned below.
+          QStringLiteral("SpotSourceHost::readOnlyReason()"),
+          // Fix wave after parity Tasks 19 and 21 (I5): the radio verbs'
+          // refusal to a token sign-in, scanned in StationRadios.cpp.
+          QStringLiteral("StationRadios::pairedDeviceReason()"),
           QStringLiteral("AccessoryDataModel::readOnlyReason()"),
           QStringLiteral("AccessorySettingsModel::readOnlyReason()"),
           // Literals inserted into `refusals` in this file.
@@ -740,7 +755,10 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("freezeRefusalFor(message).text"),
           // R-R3-49 (parity Task 5): powerPageKeyValueRefusal's literals,
           // this file's own, scanned here.
-          QStringLiteral("range")}},
+          QStringLiteral("range"),
+          // D79 (R-IOS-11): bandPlanRefusal's literal, this file's own,
+          // scanned here.
+          QStringLiteral("plan")}},
         // iPhone app Task 74 (R-IOS-30): the confirm step's answers and
         // refusals, confirm.request and notice reasons, and the chooser's
         // `why`. Device names inserted are the operator's own words (ruling
@@ -939,6 +957,11 @@ const QList<ReasonSource>& reasonSources()
         // The link version refusal and the takeover, sent in session.end.
         // Version numbers, "Update the Core." or "Update this app.", and
         // the other app's network address (WebSocketTransport::peerDescription).
+        // The operator's ruling of 2026-09-26: the session.end every app
+        // gets when the Core restarts its run on another radio; the radio's
+        // name as it reports itself.
+        {"src/core/daemon/DaemonApp.cpp", {QStringLiteral("radioChangeReason")}, {}, 1,
+         {QStringLiteral("radioName")}},
         {"src/core/session/SessionEndReasons.cpp",
          {QStringLiteral("takenOver"), QStringLiteral("versionRefused")}, {}, 4,
          {QStringLiteral("coreNewest"), QStringLiteral("appNewest"), QStringLiteral("update"),
@@ -1056,6 +1079,25 @@ const QList<ReasonSource>& reasonSources()
          {QStringLiteral("readOnlyReason"), QStringLiteral("receiveOnlyOperateReason")}, {}, 2},
         {"src/models/RfKitModel.cpp", {QStringLiteral("readOnlyReason")}, {}, 1},
         {"src/models/StationTciModel.cpp", {QStringLiteral("readOnlyReason")}, {}, 1},
+        // Parity Task 19 (R-IOS-25): the spots.* refusals and the
+        // `spotSources` object's read-only reason.
+        // Parity Task 21 (R-IOS-18): the station radio verbs' refusals and
+        // the Core's waiting lines.
+        {"src/core/station/StationRadios.cpp",
+         {QStringLiteral("choose"), QStringLiteral("unknownRadioReason"),
+          QStringLiteral("switchingReason"), QStringLiteral("inUseReason"),
+          QStringLiteral("pairedDeviceReason"),
+          QStringLiteral("select"), QStringLiteral("setModel"), QStringLiteral("forget")},
+         {}, 6, {},
+         {// The refuse helper's parameter and the three reasons above.
+          QStringLiteral("why"), QStringLiteral("inUseReason()"),
+          QStringLiteral("switchingReason()"), QStringLiteral("unknownRadioReason()")}},
+        {"src/core/SpotSourceHost.cpp",
+         {QStringLiteral("readOnlyReason"), QStringLiteral("connectSource"),
+          QStringLiteral("disconnectSource"), QStringLiteral("sendCommand")},
+         {}, 10, {},
+         {// The refuse helper's parameter: this entry's own literals.
+          QStringLiteral("why")}},
         {"src/models/SliceModel.cpp",
          {QStringLiteral("activeWriteReason"), QStringLiteral("applyMirroredValue")}, {}, 5},
         {"src/models/TunerModel.cpp", {QStringLiteral("applyMirroredValue")}, {}, 2},
@@ -1135,7 +1177,9 @@ const QList<ReasonSource>& reasonSources()
           // relay.
           QStringLiteral("requestIoBoardI2c"), QStringLiteral("setIoBoardOutput"),
           QStringLiteral("ioBoardNoAnswerReason"),
-          QStringLiteral("ioBoardI2cUnreachableReason")},
+          QStringLiteral("ioBoardI2cUnreachableReason"),
+          // R-R3-49 (parity Task 16): dsp.filterResponse's refusals.
+          QStringLiteral("filterResponseForStation")},
          {// This app's own branch in a remote window (role Remote), shown
           // through OperatorReasonText; never sent by the Core.
           "There is no station session."},
@@ -1255,6 +1299,12 @@ const QList<AppSideReason>& appSideReasons()
          "could not send"},
         {"src/models/RadioModel.cpp", "noStationReason",
          "a remote window's own notice when it has no link to the Core"},
+        // R-R3-49 (parity Task 16, trunk merge): why DFNR or MNR is
+        // disabled on a Core too old to say, the window's own words.
+        {"src/models/RadioModel.cpp", "noiseReductionNotSaidReason",
+         "a remote window's own reason DFNR and MNR are disabled"},
+        {"src/models/RadioModel.cpp", "coreFilterResponseUnavailableReason",
+         "a remote window's own reason the high-resolution filter graph is disabled"},
         {"src/models/RadioModel.cpp", "reportStationAccessoryRefusal",
          "a remote window passes the Core's refusal on to its own pages"},
         {"src/core/session/IStationLink.h", "pgxlDeviceSettingsUnavailableReason",
@@ -1283,6 +1333,19 @@ const QList<AppSideReason>& appSideReasons()
          "a remote window's own reason when its Core cannot take the request"},
         {"src/core/session/IStationLink.h", "alexHpfSwitchesUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
+        // R-R3-49 (parity Task 16): the filter graph's curve.
+        {"src/core/session/IStationLink.h", "filterResponseUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        // R-IOS-18 (parity Task 21): the Core's radio.
+        {"src/core/session/IStationLink.h", "stationRadiosUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        {"src/core/station/StationRadios.h", "waitingReason",
+         "the Core's own line while it waits for a radio, kept with its list; no app is sent it"},
+        // R-IOS-25 (parity Task 19): the Core's spot sources.
+        {"src/core/session/IStationLink.h", "spotSourcesUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        {"src/core/SpotSourceHost.cpp", "reportStationRefusal",
+         "a remote window shows the Core's refusal it was given"},
         {"src/models/RadioModel.h", "rxFilter0Reason",
          "the filter badge's status label (AlexController), not a refusal"},
         {"src/models/RadioModel.h", "rxFilter1Reason",

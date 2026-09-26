@@ -31,6 +31,7 @@
 #include "gui/RemoteAudioStatus.h"
 #include <QHash>
 #include <QObject>
+#include <QSet>
 #include <functional>
 #include <memory>
 #include <optional>
@@ -40,6 +41,7 @@ namespace NereusSDR {
 class StationClient;
 class RadioModel;
 class PanadapterStack;
+class SpectrumWidget;
 
 /// Owns the GUI's media session and one bounded subscription per logical pan.
 /// Layout reparenting does not retire a pan; removing it from the stack does.
@@ -309,7 +311,12 @@ private:
     void settleWithoutRetry(quint32 expectedEpoch, const QString& reason);
     void refreshSubscriptions();
     void refreshBudgetSubscriptions();
-    bool retireSubscriptions(const QList<quint32>& endpointIds);
+    /// Parity Task 18 (B3.5): a widget in `keepHistory` is taking the
+    /// display of another slice on the same receiver, so its drawn
+    /// waterfall, rewind history and 3D stack stay; only the live frame
+    /// is dropped until the new display arrives.
+    bool retireSubscriptions(const QList<quint32>& endpointIds,
+                             const QSet<SpectrumWidget*>& keepHistory = {});
     /// Fix wave 2 (Important 2): unsubscribes an endpoint the Core refused
     /// (never accepted) after its binding is dropped, the next revision
     /// after `lastRevision`. False when the session ended while sending.

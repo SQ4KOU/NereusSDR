@@ -402,8 +402,16 @@ const QSet<QString> kCoreExemptExact = {
 // exact shape assertion (b) exists to reject for a Station key; for this
 // family it is the intended shape, because both ends are this computer.
 // Exempt from (a) and (b) both, by prefix, and only this prefix.
+//
+// Parity Task 19 (R-IOS-25; remote design section 6.4): the WSJT-X and
+// SpotCollector listeners are the same shape. RadioModel (src/models) owns
+// their clients and reads their settings, yet each computer runs its own
+// (SpotSourceHost: the Core never starts them), since they listen for
+// programs on the computer they run on.
 const QStringList kThisComputerServerPrefixes = {
     QStringLiteral("Tci"),
+    QStringLiteral("Wsjtx"),
+    QStringLiteral("SpotCollector"),
 };
 
 bool isThisComputerServerKey(const QString& key)

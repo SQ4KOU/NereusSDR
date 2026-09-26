@@ -222,12 +222,33 @@
 //               and TUNE wait while another device holds. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26 - R-R3-49 / R-R3-21 / R-R3-40 (parity Task 16): the Core's
+//                noise reduction, DSP Options apply time and minimum notch
+//                widths applied as plain state; dsp.filterResponse sent and
+//                its answer handed to the model. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-R3-01 (parity Task 17): spectrumDecimationAvailable
+//                (spectrumGrantVersion 2). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
+//   2026-09-26 - Parity Task 18 (B3.1): the window's band buttons send
+//                slice.selectBand for a named slice to a Core at
+//                bandSelectVersion 1. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 //   2026-09-26: iPhone app plan Task 27 (R-IOS-16): the Core's last good
 //               addresses are tried first (setCachedAddresses()), and each
 //               connection attempt is recorded path by path
 //               (StationConnectionAttempt) for the connection messages. J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26 - Parity Task 21 (R-IOS-18): the Core's `stationRadios`
+//                stream subscribed and applied; the station radio verbs,
+//                their refusals shown on This Core. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - Parity Task 19 (R-IOS-25): the Core's `spots` and
+//                spotConsole:<source> streams subscribed after the snapshot
+//                and applied to the window's model, the `spotSources`
+//                object, and the spots.* verbs. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -261,6 +282,7 @@
 #include "core/StepAttenuatorFacade.h"
 #include "core/accessories/AlexAntennaFacade.h"
 #include "core/IoBoardHl2Facade.h"
+#include "core/SpotSourceHost.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -1327,6 +1349,11 @@ void StationClient::attachTransport(SessionTransport* transport, const QString& 
 
 void StationClient::disconnectFromStation(const QString& reason, bool attemptReconnect)
 {
+    // Not reconnecting (the operator's Disconnect, a permanent end): no
+    // radio change is being waited out any more.
+    if (!attemptReconnect) {
+        m_radioChangeReason.clear();
+    }
     // Task 19: cancel a PENDING retry even when no session is active at
     // all -- the backoff-wait state has m_sessionActive already false
     // (the session it was about already ended), so endSession()'s own
@@ -1417,8 +1444,20 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
     recordOutcome(m_transportOpened ? StationConnectionAttempt::Outcome::Failed
                                     : StationConnectionAttempt::Outcome::NoAnswer);
 
+    // Follow-up N2: a radio change the Core never comes back from. The
+    // reading holds through the backoff's steps; the failed redial after
+    // the longest wait drops it, so this failure is what the window shows
+    // (status, detail and toast). The radio-change end itself carries the
+    // reason just recorded and keeps it.
+    if (!m_radioChangeReason.isEmpty() && attemptReconnect && reconnectBackoffExhausted()
+        && reason != m_radioChangeReason) {
+        m_radioChangeReason.clear();
+    }
+
     m_handshakeComplete = false;
     m_authenticated = false;
+    m_signedInWithDeviceKey = false;
+    m_enrolledDeviceKey = false;
     m_forwardLocalChanges = false;
     m_propertyWriteIds.clear();
     // Desktop remote transmit: the Core unkeys this device when the link
@@ -1509,6 +1548,14 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
     // can tell once its Core is gone; the last stop stays until the next
     // snapshot replaces it.
     m_transmitState->clearStationValues();
+    // Parity Task 19: the Core's spot sources read off, and its spots leave
+    // this window, until the next snapshot sends them again.
+    if (!m_radioModel.isNull()) {
+        if (SpotSourceHost* spotSources = m_radioModel->spotSourceHost()) {
+            spotSources->clearStationValues();
+        }
+        m_radioModel->clearStationRecords();
+    }
 
     if (!m_settingsProxy.isNull()) {
         m_settingsProxy->setReady(false);
@@ -1533,6 +1580,8 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
             // waiting on the Core gets no answer now.
             m_radioModel->failStationIoBoardRequests(
                 QStringLiteral("The link to the Core closed before the radio answered."));
+            // Parity Task 16: likewise a filter curve request.
+            m_radioModel->failStationFilterResponse();
             if (TunerModel* const tuner = m_radioModel->tunerModel()) {
                 TunerModel::StationConnectionState disconnected;
                 disconnected.configuredHost = tuner->configuredHost();
@@ -1891,6 +1940,30 @@ void StationClient::onTransportText(const QByteArray& wire)
         m_forwardLocalChanges = true;
         m_writeFlushTimer->start();
         refreshRemoteTransmit();
+        // Parity Task 19 (R-IOS-25): the Core's spots and its spot sources'
+        // console lines, each backlog first. Each (re)connect starts from
+        // the Core's newest records.
+        if (spotSourcesAvailable()) {
+            if (!m_radioModel.isNull()) {
+                // Fix wave, I3: the spots only; the radio list's own
+                // subscription replaces it.
+                m_radioModel->clearStationSpots();
+            }
+            const auto subscribe = [this](const QString& stream, int backlog) {
+                invokeCommand("records.subscribe",
+                              {MirrorUpdate{0, "stream", MirrorWireKind::Utf8, QVariant(stream)},
+                               MirrorUpdate{0, "backlog", MirrorWireKind::Int64,
+                                            QVariant(static_cast<qlonglong>(backlog))}});
+            };
+            subscribe(QStringLiteral("spots"), 500);
+            for (const QString& source : SpotSourceHost::stationSources()) {
+                subscribe(SpotSourceHost::consoleStream(source), 200);
+            }
+            // Parity Task 21 (R-IOS-18): the Core's radios, for This Core.
+            if (stationRadiosAvailable()) {
+                subscribe(QStringLiteral("stationRadios"), 64);
+            }
+        }
         if (firstSnapshot) {
             qCInfo(lcStationClient) << "Session established with" << m_capabilities.stationName;
             // iPhone app plan Task 27: where the Core was reached, tried
@@ -1902,6 +1975,7 @@ void StationClient::onTransportText(const QByteArray& wire)
                 m_cachedAddresses.prepend(m_lastUrl);
             }
             recordOutcome(StationConnectionAttempt::Outcome::Connected);
+            m_radioChangeReason.clear();
             emit handshakeComplete();
         }
         emit stateSnapshotApplied();
@@ -1909,6 +1983,12 @@ void StationClient::onTransportText(const QByteArray& wire)
     }
     case SessionMessageKind::CommandResult:
         handleCommandResult(message);
+        break;
+    // Parity Task 19 (R-IOS-25): a stream this window subscribed to.
+    case SessionMessageKind::RecordBatch:
+        if ((spotSourcesAvailable() || stationRadiosAvailable()) && !m_radioModel.isNull()) {
+            m_radioModel->applyStationRecordBatch(message.recordBatch);
+        }
         break;
     case SessionMessageKind::SettingsValue:
         handleSettingsValue(message);
@@ -1924,6 +2004,16 @@ void StationClient::onTransportText(const QByteArray& wire)
         // and offers buttons for; a retryable one retries as before.
         if (!message.retryable) {
             m_lastEndReport = stationEndReport(message.reason, message.endCode);
+        }
+        // The operator's ruling of 2026-09-26: the Core changes its radio by
+        // restarting its run. This end is a reconnect, not a failure; the
+        // window says so until it is back (radioChangeReason).
+        if (message.retryable
+            && message.endCode == QLatin1String(SessionEndCode::kRadioChanging)) {
+            m_radioChangeReason = message.reason;
+        } else {
+            // Follow-up N2: any other end from the Core is shown as itself.
+            m_radioChangeReason.clear();
         }
         // The station's own classification, not this end's guess at one
         // and not a match against its English prose. Every station-sent
@@ -2114,6 +2204,8 @@ bool StationClient::signIn(const SessionMessage& hello)
         send(SessionMessages::authRequest(
             QString(), deviceBlockFor(*m_deviceIdentity, m_deviceName, m_deviceShortName,
                                       challenge, certificate, stationSpki)));
+        m_signedInWithDeviceKey = true;
+        m_enrolledDeviceKey = false;
         return true;
     }
 
@@ -2145,6 +2237,10 @@ bool StationClient::signIn(const SessionMessage& hello)
                                 m_declaredFeatures));
     send(m_enrollingIdentity.isEmpty() ? SessionMessages::authRequest(m_token)
                                        : SessionMessages::authRequest(m_token, block));
+    // The pairing token, even when this sign-in enrols the key: the Core
+    // counts this session as a token sign-in (fix wave, I5).
+    m_signedInWithDeviceKey = false;
+    m_enrolledDeviceKey = false;
     return true;
 }
 
@@ -2161,6 +2257,9 @@ void StationClient::handleAuthResult(const SessionMessage& message)
     if (!message.accepted) {
         m_lastError = message.reason;
         m_enrollingIdentity.clear();
+        // Follow-up N2: the Core answered the redial with a refusal; that is
+        // the reading now, not the radio change.
+        m_radioChangeReason.clear();
         qCWarning(lcStationClient) << "Station refused authentication:" << message.reason
                                    << message.endCode;
         // iPhone app Task 18: a refusal that will not fix itself (a removed
@@ -2188,6 +2287,9 @@ void StationClient::handleAuthResult(const SessionMessage& message)
         const QByteArray learned = m_enrollingIdentity;
         m_enrollingIdentity.clear();
         m_stationIdentity = learned;
+        // Follow-up N1: still a token session, but this computer is paired;
+        // the window says to reconnect rather than to find a paired device.
+        m_enrolledDeviceKey = true;
         qCInfo(lcStationClient) << "This computer's key is paired with the Core; it signs in"
                                 << "by key from now on.";
         emit stationIdentityLearned(learned);
@@ -2487,6 +2589,19 @@ void StationClient::handleCapabilities(const SessionMessage& message)
         } else {
             m_objects.remove(key);
             m_outboundMirror->unwatch(key);
+        }
+    }
+
+    // Parity Task 19 (recordStreamVersion 1): the Core's spot sources, read
+    // only; never written back. Against a Core that does not send them the
+    // key is not held and the station's sources read off.
+    if (SpotSourceHost* spotSources = m_radioModel->spotSourceHost()) {
+        if (m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+            && m_capabilities.recordStreamVersion >= 1) {
+            m_objects.insert(QByteArrayLiteral("spotSources"), spotSources);
+        } else {
+            m_objects.remove(QByteArrayLiteral("spotSources"));
+            spotSources->clearStationValues();
         }
     }
 
@@ -3090,6 +3205,11 @@ bool StationClient::applyOne(QObject* target, const MirrorProperty& prop,
         QByteArrayLiteral("RadioModel.transmitting"),
         // R-R3-49 (parity Task 6): likewise the Core's TX inhibit.
         QByteArrayLiteral("RadioModel.txInhibited"),
+        // Parity Task 16: likewise the Core's DSP facts.
+        QByteArrayLiteral("RadioModel.dspOptionsLastApplyMs"),
+        // Fix wave (M2): likewise the Core's waiting reason.
+        QByteArrayLiteral("RadioModel.stationRadioWaiting"),
+        QByteArrayLiteral("SliceModel.minNotchWidthHz"),
         QByteArrayLiteral("SliceModel.signalStrengthDbm"),
         QByteArrayLiteral("SliceModel.signalPeakDbm"),
         QByteArrayLiteral("SliceModel.signalAverageDbm"),
@@ -3190,6 +3310,12 @@ bool StationClient::applyClientOnlyProperty(QObject* target, const QByteArray& c
     if (className == "RfKitModel") {
         auto* rfKit = qobject_cast<RfKitModel*>(target);
         return rfKit != nullptr && rfKit->applyStationValue(propertyName, native);
+    }
+    // Parity Task 19: a plain state apply; the sources change only by
+    // command.
+    if (className == "SpotSourceHost") {
+        auto* spotSources = qobject_cast<SpotSourceHost*>(target);
+        return spotSources != nullptr && spotSources->applyStationValue(propertyName, native);
     }
     // R-R3-48: a plain state apply; the switch changes only by command.
     if (className == "StationTciModel") {
@@ -3318,8 +3444,11 @@ void StationClient::watchForOutbound(const QByteArray& objectKey, QObject* objec
                 return false;
             }
             // And MNR (the Core's mirrored mnrRunnable: it runs only on a
-            // Mac Core) and BNR (in no build), in the model's words.
-            if ((requested == NrSlot::MNR || requested == NrSlot::BNR) && owner
+            // Mac Core) and BNR (in no build), in the model's words; and
+            // DFNR or MNR on a Core too old to say (trunk merge, parity
+            // Task 16's rule).
+            if ((requested == NrSlot::DFNR || requested == NrSlot::MNR
+                 || requested == NrSlot::BNR) && owner
                 && owner->m_radioModel) {
                 const QString cannot = owner->m_radioModel->nrCannotRunReason(requested);
                 if (!cannot.isEmpty()) {
@@ -3532,6 +3661,13 @@ StationClient::CommandOutcome StationClient::sendCommand(const QByteArray& verb,
             }
         }
     }
+    if (verb.startsWith("spots.")) {
+        for (const MirrorUpdate& argument : arguments) {
+            if (argument.name == "source") {
+                pending.spotSource = argument.value.toString();
+            }
+        }
+    }
     if ((verb == "requestStreamCtunPinned" || verb == "requestStreamCentre")
         && !m_radioModel.isNull()) {
         if (SliceModel* slice = m_radioModel->sliceById(sliceId)) {
@@ -3572,6 +3708,22 @@ StationClient::CommandOutcome StationClient::requestActiveSlice(int sliceId)
 {
     return sendCommand("setActiveSliceById", sliceId, { intArgument("sliceId", sliceId) },
                        QStringLiteral("the request to make slice %1 active").arg(sliceId));
+}
+
+bool StationClient::bandSelectAvailable() const
+{
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.bandSelectVersion >= 1;
+}
+
+StationClient::CommandOutcome StationClient::requestSelectBand(int sliceId, int band)
+{
+    if (!bandSelectAvailable()) {
+        return IStationLink::requestSelectBand(sliceId, band);
+    }
+    return sendCommand("slice.selectBand", sliceId,
+                       { intArgument("sliceId", sliceId), intArgument("band", band) },
+                       QStringLiteral("the band change"));
 }
 
 StationClient::CommandOutcome StationClient::requestSliceSampleRate(int sliceId, int rateHz)
@@ -3777,6 +3929,73 @@ StationClient::CommandOutcome StationClient::requestIoBoardI2c(int bus, int addr
                          intArgument("register", reg), boolArgument("write", write),
                          intArgument("value", value) },
                        QStringLiteral("the I2C request"));
+}
+
+bool StationClient::dspInfoAvailable() const
+{
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.dspInfoVersion >= 1;
+}
+
+bool StationClient::spotSourcesAvailable() const
+{
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.recordStreamVersion >= 1;
+}
+
+StationClient::CommandOutcome StationClient::requestSpotSource(const QByteArray& verb,
+                                                               const QString& source,
+                                                               const QString& text)
+{
+    if (!spotSourcesAvailable()) {
+        return {false, stationLinkReady() ? spotSourcesUnavailableReason()
+                                          : QStringLiteral("Not connected to the Core, so the "
+                                                           "spot source request was not sent.")};
+    }
+    QList<MirrorUpdate> arguments;
+    if (verb != "spots.clearAll") {
+        arguments.append(stringArgument("source", source));
+    }
+    if (verb == "spots.sendCommand") {
+        arguments.append(stringArgument("text", text));
+    }
+    return sendCommand(verb, -1, arguments, QStringLiteral("the spot source request"));
+}
+
+bool StationClient::stationRadiosAvailable() const
+{
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.stationRadiosVersion >= 1;
+}
+
+StationClient::CommandOutcome StationClient::requestStationRadio(const QByteArray& verb,
+                                                                 const QString& mac, int model)
+{
+    if (!stationRadiosAvailable()) {
+        return {false, stationLinkReady() ? stationRadiosUnavailableReason()
+                                          : QStringLiteral("Not connected to the Core, so the "
+                                                           "radio request was not sent.")};
+    }
+    QList<MirrorUpdate> arguments;
+    if (verb != "station.rescanRadios") {
+        arguments.append(stringArgument("mac", mac));
+    }
+    if (verb == "station.setRadioModel") {
+        arguments.append(intArgument("model", model));
+    }
+    return sendCommand(verb, -1, arguments, QStringLiteral("the radio request"));
+}
+
+StationClient::CommandOutcome StationClient::requestFilterResponse(int sliceId,
+                                                                  bool highResolution)
+{
+    if (!dspInfoAvailable()) {
+        return {false, filterResponseUnavailableReason()};
+    }
+    return sendCommand("dsp.filterResponse", sliceId,
+                       { intArgument("sliceId", sliceId),
+                         boolArgument("highResolution", highResolution) },
+                       QStringLiteral("the filter curve request"));
 }
 
 StationClient::CommandOutcome StationClient::requestIoBoardOutput(int pin, bool on)
@@ -4272,6 +4491,14 @@ void StationClient::handleCommandResult(const SessionMessage& message)
     if (message.commandVerb == "tx.keepalive") {
         return;
     }
+    // Parity Task 19: the window's own record subscriptions (sent after
+    // each snapshot); their answer is only logged above, and a batch
+    // follows an accepted one.
+    if (message.commandVerb == "records.subscribe"
+        || message.commandVerb == "records.unsubscribe") {
+        m_pendingCommands.remove(message.commandId);
+        return;
+    }
     if (message.commandVerb == "tx.key" || message.commandVerb == "tx.unkey"
         || message.commandVerb == "tx.tune" || message.commandVerb == "tx.twoTone") {
         const QPointer<StationClient> self(this);
@@ -4325,7 +4552,33 @@ void StationClient::handleCommandResult(const SessionMessage& message)
     // routing them here as well showed the same refusal twice.
     const bool ioBoardRequest = pending.verb == "requestIoBoardI2c"
         || pending.verb == "setIoBoardOutput";
+    // Parity Task 16: the filter graph asks for its curve by itself; a
+    // refusal (no receiver yet) leaves it on the passband, with no notice.
+    const bool filterResponseRequest = pending.verb == "dsp.filterResponse";
+    // Parity Task 19: a spot source's refusal is shown on its Spot Hub tab;
+    // a record subscription's is only logged (the window asks by itself).
+    const bool spotRequest = pending.verb.startsWith("spots.");
+    // Parity Task 21: a radio request's refusal is shown on This Core.
+    const bool radioRequest = pending.verb == "station.selectRadio"
+        || pending.verb == "station.rescanRadios" || pending.verb == "station.setRadioModel"
+        || pending.verb == "station.forgetRadio";
+    if (radioRequest && !message.accepted && !m_radioModel.isNull()) {
+        m_radioModel->reportStationRadioRefused(
+            message.reason.isEmpty()
+                ? QStringLiteral("The Core refused the request without giving a reason.")
+                : message.reason);
+    }
+    const bool recordRequest = pending.verb.startsWith("records.");
+    if (spotRequest && !message.accepted && !m_radioModel.isNull()) {
+        if (SpotSourceHost* spotSources = m_radioModel->spotSourceHost()) {
+            spotSources->reportStationRefusal(pending.spotSource,
+                message.reason.isEmpty()
+                    ? QStringLiteral("The Core refused the request without giving a reason.")
+                    : message.reason);
+        }
+    }
     if (!message.accepted && !m_radioModel.isNull() && !ioBoardRequest
+        && !filterResponseRequest && !spotRequest && !recordRequest && !radioRequest
         && !message.commandVerb.startsWith("ps3.") && !message.commandVerb.startsWith("dspAssets.")
         && !message.commandVerb.startsWith("notch.")) {
         // The station's OWN reason, relayed verbatim. Wording a refusal
@@ -4441,6 +4694,25 @@ void StationClient::handleCommandResult(const SessionMessage& message)
         const QPointer<StationClient> self(this);
         m_radioModel->reportStationIoBoardResult(message.commandId, message.accepted,
                                                  message.reason, value);
+        if (!self) { return; }
+    }
+    // R-R3-49 (parity Task 16): the Core's filter curve, to the model.
+    if (filterResponseRequest && !m_radioModel.isNull()) {
+        double startHz = 0.0;
+        double stepHz = 0.0;
+        QString json;
+        for (const MirrorUpdate& update : message.updates) {
+            if (update.name == "startHz" && update.kind == MirrorWireKind::Float64) {
+                startHz = update.value.toDouble();
+            } else if (update.name == "stepHz" && update.kind == MirrorWireKind::Float64) {
+                stepHz = update.value.toDouble();
+            } else if (update.name == "magnitudesDbJson" && update.kind == MirrorWireKind::Utf8) {
+                json = update.value.toString();
+            }
+        }
+        const QPointer<StationClient> self(this);
+        m_radioModel->reportStationFilterResponse(message.commandId, message.accepted,
+                                                  message.reason, startHz, stepHz, json);
         if (!self) { return; }
     }
     // R-R3-49 (parity Task 8): the Core's Scan LAN answer, to the window's
@@ -4721,6 +4993,11 @@ bool StationClient::spectrumGrantAvailable() const
 {
     return mediaAvailable() && m_agreedMinor >= kRemoteSpectrumGrantSessionProtocolMinor
         && m_capabilities.spectrumGrantVersion >= 1;
+}
+
+bool StationClient::spectrumDecimationAvailable() const
+{
+    return spectrumGrantAvailable() && m_capabilities.spectrumGrantVersion >= 2;
 }
 
 std::optional<DisplayBudgetLimits> StationClient::remoteDisplayBudgetLimits() const

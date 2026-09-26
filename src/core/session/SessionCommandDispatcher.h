@@ -174,6 +174,9 @@
 //               two-tone stop from another device refused. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 16):
+//                                    handleFilterResponse.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -196,6 +199,7 @@ namespace NereusSDR {
 
 class RadioModel;
 class SliceModel;
+class StationRadios;
 
 /// One named argument of a command verb, as dispatch() reads it: the name,
 /// the wire kind it must carry, and whether it may be left out.
@@ -363,6 +367,16 @@ public:
     /// "dspAssets.", "notch.") lists each concrete verb it accepts.
     /// tst_link_surface_manifest scans this file's routing and each
     /// family's handler and fails when the two disagree.
+    /// Parity Task 19 (R-IOS-25): records.subscribe and records.unsubscribe
+    /// belong to the connection that sent them. The Core's station server
+    /// answers them (and sends the backlog) through this; true when it did.
+    using RecordAccess = std::function<bool(const NereusSDR::SessionMessage& invoke)>;
+    void setRecordAccess(RecordAccess access) { m_recordAccess = std::move(access); }
+    /// Parity Task 21 (R-IOS-18): the Core's radios (nereusd), for the
+    /// station.selectRadio, station.rescanRadios, station.setRadioModel and
+    /// station.forgetRadio verbs.
+    void setStationRadios(StationRadios* radios);
+
     static const QList<CommandVerbSpec>& verbSpecs();
 
 signals:
@@ -458,6 +472,9 @@ private:
     // Pin Control, run by the Core's RadioModel.
     void handleRequestIoBoardI2c(const NereusSDR::SessionMessage& invoke);
     void handleSetIoBoardOutput(const NereusSDR::SessionMessage& invoke);
+    // Parity Task 16 (dspInfoVersion 1): the filter graph's curve for a
+    // slice's receiver (RadioModel::filterResponseForStation).
+    void handleFilterResponse(const NereusSDR::SessionMessage& invoke);
     // R-R3-46 / R-R3-21 (radioHardwareVersion 4): one receive filter
     // chain's filter policy, applied through the Core's AlexAntennaFacade.
     void handleSetAlexBpfMode(const NereusSDR::SessionMessage& invoke);
@@ -494,6 +511,11 @@ private:
     QString m_rateChangedReason;
     SliceAccess m_sliceAccess;
     ConfirmAnswer m_confirmAnswer;
+    RecordAccess m_recordAccess;
+    QPointer<StationRadios> m_stationRadios;
+    void handleStationRadios(const NereusSDR::SessionMessage& invoke);
+    void handleRecords(const NereusSDR::SessionMessage& invoke);
+    void handleSpotSources(const NereusSDR::SessionMessage& invoke);
     /// Refuses (and answers) a verb whose sliceId names another device's
     /// slice. True when it did.
     bool refusedForAnotherDevice(const NereusSDR::SessionMessage& invoke);

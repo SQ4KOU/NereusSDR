@@ -71,6 +71,11 @@
 //                    and their ids recorded for "$ref:device:<n>" (the
 //                    runner's own is "$ref:device:self")
 //
+//   stationRadios    parity Task 21: the Core chooses its own radio (as
+//                    nereusd does): the static radio is its radio and "Bench
+//                    G2" (AA:BB:CC:DD:EE:02, Protocol 2) is in sight; a
+//                    choice or a scan reaches nothing (false)
+//
 // NEREUS_LINK_TRACE_DIR, when set, receives every message the station sent
 // in each fixture (<id>.jsonl), for writing a fixture to what the code does.
 //
@@ -193,6 +198,13 @@
 //   2026-09-26: Transmit group fix wave C1: stationSetup microphoneLine.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 19 (R-IOS-25):
+//                                    recordStreamVersion and the record
+//                                    streams. AI-assisted via Anthropic
+//                                    Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 21 (R-IOS-18): stationSetup
+//                                    stationRadios. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -225,6 +237,7 @@
 #include "core/session/SessionMessages.h"
 #include "core/session/RemoteKeying.h"
 #include "core/session/StationServer.h"
+#include "core/station/StationRadios.h"
 #include "core/settings/SettingsScope.h"
 #include "models/Band.h"
 #include "models/RadioModel.h"
@@ -255,6 +268,7 @@ const QStringList kSetupKeys{
     QStringLiteral("maxSlices"),       QStringLiteral("alexRxAntennas"),
     QStringLiteral("lanScanWindowMs"), QStringLiteral("remoteTransmit"),
     QStringLiteral("transmitReady"),   QStringLiteral("microphoneLine"),
+    QStringLiteral("stationRadios"),
 };
 
 // NEREUS_LINK_CONNECTABLE (see the file comment).
@@ -285,11 +299,14 @@ struct Station {
     // otherConnections: the far ends of connections still connecting,
     // kept open until the fixture ends (the server goes first).
     std::vector<std::unique_ptr<LoopbackTransport>> others;
+    // Parity Task 21: the Core's radios, as nereusd attaches them.
+    std::unique_ptr<StationRadios> radios;
     std::unique_ptr<StationServer> server;
 
     ~Station()
     {
         server.reset();
+        radios.reset();
         if (model != nullptr && stepAtt) {
             model->setStepAttController(nullptr);
         }
@@ -451,6 +468,25 @@ QString buildStation(const QJsonObject& setup, Station* station, quint16 major)
                                                       QList<quint16>{major});
     if (setup.value(QStringLiteral("media")).toBool(false)) {
         station->server->setMediaEnabled(true);
+    }
+    // Parity Task 21 (R-IOS-18): "stationRadios": the Core chooses its own
+    // radio, as nereusd does. The static radio is its radio, and a second
+    // radio, "Bench G2" at AA:BB:CC:DD:EE:02, is in sight. Choosing it or
+    // scanning reaches nothing (no DaemonApp is behind it).
+    if (setup.value(QStringLiteral("stationRadios")).toBool(false)) {
+        if (radio != QStringLiteral("static")) {
+            return QStringLiteral("stationSetup.stationRadios applies only to the static radio");
+        }
+        station->radios = std::make_unique<StationRadios>(*station->settings);
+        RadioInfo other;
+        other.macAddress = QStringLiteral("AA:BB:CC:DD:EE:02");
+        other.name = QStringLiteral("Bench G2");
+        other.boardType = HPSDRHW::Saturn;
+        other.protocol = ProtocolVersion::Protocol2;
+        other.address = QHostAddress(QStringLiteral("192.168.1.22"));
+        station->radios->setVisible({other});
+        station->radios->setCurrent(station->model->currentRadioInfo());
+        station->server->setStationRadios(station->radios.get());
     }
     // iPhone app plan Task 34: the station transmit gate's setting.
     const QString remoteTransmit =
@@ -1386,7 +1422,7 @@ void TstLinkConformanceSession::theConformanceCheckCatchesWhatAnAppCannotSend()
     QVERIFY2(found.contains(QStringLiteral("a device sign-in is")), qPrintable(found));
     // A verb with arguments it does not take, and one not advertised
     // (PureSignal's gate is psAlgorithmVersion equal to 3; 4 fails it).
-    found = planted(ps3, 29, [&setIn](QJsonObject& step) {
+    found = planted(ps3, 31, [&setIn](QJsonObject& step) {
         setIn(step, QStringLiteral("args"),
               QJsonArray{QJsonObject{{QStringLiteral("ordinal"), 0},
                                      {QStringLiteral("name"), QStringLiteral("enabled")},
@@ -1409,7 +1445,7 @@ void TstLinkConformanceSession::theConformanceCheckCatchesWhatAnAppCannotSend()
     });
     QVERIFY2(found.contains(QStringLiteral("ps3.off was not advertised")), qPrintable(found));
     // A placeholder among a behaviour step's arguments.
-    found = planted(ps3, 36, [&setIn](QJsonObject& step) {
+    found = planted(ps3, 38, [&setIn](QJsonObject& step) {
         setIn(step, QStringLiteral("args"),
               QJsonArray{QJsonObject{{QStringLiteral("ordinal"), 0},
                                      {QStringLiteral("name"), QStringLiteral("label")},
@@ -1418,20 +1454,20 @@ void TstLinkConformanceSession::theConformanceCheckCatchesWhatAnAppCannotSend()
     });
     QVERIFY2(found.contains(QStringLiteral("never placeholders")), qPrintable(found));
     // An id without the link's range, or from 0 where 1 is the least.
-    found = planted(ps3, 25, [&setIn](QJsonObject& step) {
+    found = planted(ps3, 27, [&setIn](QJsonObject& step) {
         setIn(step, QStringLiteral("id"), QStringLiteral("$int:invoke23"));
     });
     QVERIFY2(found.contains(QStringLiteral(":1:4294967295")), qPrintable(found));
-    found = planted(ps3, 25, [&setIn](QJsonObject& step) {
+    found = planted(ps3, 27, [&setIn](QJsonObject& step) {
         setIn(step, QStringLiteral("id"), QStringLiteral("$int:invoke23:0:4294967295"));
     });
     QVERIFY2(found.contains(QStringLiteral(":1:4294967295")), qPrintable(found));
     // A scripted id below 1000, and a scripted message naming a value.
-    found = planted(ps3, 33, [&setIn](QJsonObject& step) {
+    found = planted(ps3, 35, [&setIn](QJsonObject& step) {
         setIn(step, QStringLiteral("id"), 167);
     });
     QVERIFY2(found.contains(QStringLiteral("from 1000 up")), qPrintable(found));
-    found = planted(ps3, 33, [&setIn](QJsonObject& step) {
+    found = planted(ps3, 35, [&setIn](QJsonObject& step) {
         setIn(step, QStringLiteral("id"), QStringLiteral("$int:scripted"));
     });
     QVERIFY2(found.contains(QStringLiteral("a scripted message holds $int:scripted")),

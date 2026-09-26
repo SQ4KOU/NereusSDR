@@ -75,9 +75,14 @@
 //   2026-09-26  J.J. Boyd / KG4VCF  Remote-window parity Task 14 (R-R3-32):
 //                                    stationTelemetryVersion 5, the HL2 link.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Remote-window parity Task 19 (R-IOS-25):
+//                                    the record.batch sample.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "LinkSurface.h"
+
+#include "core/SpotSourceHost.h"
 
 #include <QCoreApplication>
 #include <QDeadlineTimer>
@@ -308,6 +313,16 @@ std::optional<SessionMessage> sampleMessage(SessionMessageKind kind)
         prompt.slices = QJsonArray{QJsonObject{}};
         prompt.change = QJsonObject{{QStringLiteral("label"), QStringLiteral("Receiver 1")}};
         return SessionMessages::notice(prompt, QStringLiteral("told"));
+    }
+    // Parity Task 19: a record stream's changes.
+    case SessionMessageKind::RecordBatch: {
+        RecordBatch batch;
+        batch.stream = QStringLiteral("spots");
+        batch.generation = 1;
+        batch.upserts = {{QStringLiteral("1"), QJsonObject{{QStringLiteral("call"),
+                                                            QStringLiteral("K1ABC")}}}};
+        batch.removes = {QStringLiteral("2")};
+        return SessionMessages::recordBatch(batch);
     }
     }
     return std::nullopt;
@@ -902,7 +917,7 @@ QJsonObject guiToCoreOps()
                declaredOp(kMedia, peer + QStringList{QStringLiteral("sdp"), QStringLiteral("type")}));
     ops.insert(QStringLiteral("candidate"),
                declaredOp(kMedia, peer + QStringList{QStringLiteral("candidate"), QStringLiteral("mid")}));
-    // DaemonMediaController.cpp handleSubscribe (extendedView and the
+    // DaemonMediaController.cpp handleSubscribe (extendedView, decimation and the
     // display extras fields removed before exactKeys), parsePlane, and
     // DisplayExtras.cpp parseDisplayExtrasRequest (iPhone app Task 20).
     const QString extras = QStringLiteral("displayExtrasVersion");
@@ -916,6 +931,8 @@ QJsonObject guiToCoreOps()
                            QStringLiteral("waterfall"), QStringLiteral("minDbm"),
                            QStringLiteral("maxDbm"), QStringLiteral("wideSpanFactor")},
         {{QStringLiteral("extendedView"), {QStringLiteral("remoteWidebandDisplayVersion")}},
+         // Parity Task 17: spectrumGrantVersion 2.
+         {QStringLiteral("decimation"), {QStringLiteral("spectrumGrantVersion")}},
          {QStringLiteral("peakBlobs"), {extras}},
          {QStringLiteral("activePeakHold"), {extras}},
          {QStringLiteral("noiseFloor"), {extras}},
@@ -1410,6 +1427,7 @@ QList<const QMetaObject*> LinkSurface::mirroredMetaObjects()
             &AccessorySettingsModel::staticMetaObject,
             &StationDevicesFacade::staticMetaObject,
             &StationCatalog::staticMetaObject,
+            &SpotSourceHost::staticMetaObject,
             &ConnectedDevicesFacade::staticMetaObject,
             &SliceMarker::staticMetaObject,
             &TransmitState::staticMetaObject};

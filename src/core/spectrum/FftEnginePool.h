@@ -24,6 +24,10 @@
 //   2026-08-02  J.J. Boyd / KG4VCF  Remote daemon R1, extraction 4 of 9.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 17 follow-up: setDecimation
+//                                    applies Rendering > Decimation to every
+//                                    engine. AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/FFTEngine.h"
@@ -32,6 +36,8 @@
 #include <QObject>
 #include <QSet>
 #include <QVector>
+
+#include <optional>
 
 class QThread;
 
@@ -174,6 +180,16 @@ public:
 
     const FftPoolConfig& config() const { return m_config; }
 
+    /// Parity Task 17 follow-up (R-R3-01): Setup > Display > Rendering >
+    /// Decimation applies to every pan, so to every engine in the pool now
+    /// and to every engine created after this call (FFTEngine::setDecimation;
+    /// 1 to 32, other values ignored). Until it is called the pool leaves
+    /// each engine's decimation alone, so the Core's spectrum source, which
+    /// sets decimation per engine, never meets a pool-wide value.
+    void setDecimation(int factor);
+    /// The value setDecimation() last took; 1 before any call.
+    int decimation() const { return m_decimation.value_or(1); }
+
     /// Returns the engine for streamIndex, creating and configuring one
     /// from the current config on first use. A negative streamIndex
     /// returns nullptr and creates nothing (mirrors the old
@@ -227,6 +243,7 @@ private:
 
     FftPoolConfig          m_config;
     bool                   m_forwardFrameReady{true};
+    std::optional<int>     m_decimation;
     QMap<FftSourceKey, FFTEngine*> m_engines;
     QMap<int, QThread*>    m_threadsByBucket;  // keyed by streamIndex % threadCount
 };

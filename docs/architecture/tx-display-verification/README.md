@@ -3,6 +3,9 @@
 **Branch:** `claude/tx-display-revive`
 **Status:** rows 1-8 verified on an ANAN-7000DLE (OrionMkII) 2026-08-05.
 Rows 9-14 pending. Rows 15 and 16 are known open items, not tests.
+Rows 19-27 (the remote window, display duplex, the transmit monitor, the keyed readings)
+added 2026-09-26 by the remote-window parity plan
+(`docs/architecture/2026-09-24-remote-window-parity-plan.md`, Tasks 27 to 34); pending.
 
 Verified by J.J. Boyd (KG4VCF). AI-assisted implementation via Anthropic
 Claude Code.
@@ -56,6 +59,16 @@ is not evidence.** Rows below check numbers, not vibes.
 | 17 | dBm labels survive repeated transmissions | Key TUNE, un-key, key again, watch the right-hand scale | Numbers stay. Regression 2026-08-05: on an ORION-class radio the receive noise-floor tracker kept dragging the grid DURING transmit, the fall edge captured that instead of the operator's choice, and the second key-up came up on a degenerate range with no labels | FIXED, re-check |
 | 15 | **Known open:** residual skirt | Key TUNE, read the raw pixel profile | ~35 dB down at 66 Hz from the peak, which is far worse than Blackman-Harris 4T should give (>90 dB). Present in WDSP's raw `GetPixels` output, so it is upstream of everything this branch fixes | OPEN |
 | 16 | XIT while keyed | Key up, nudge XIT mid-transmission | **Known limitation:** the display does NOT follow. Centre, window and grid are all computed once on the MOX rise edge, so the trace stays where it started until the next key-up. Raised by Codex on PR #317; fixing it properly means a live-update path for the whole rise-edge set, not a special case for XIT | OPEN |
+| 19 | Remote transmit trace appears | In a remote window on the Pi 4 Core (HL2) and the Rock Core (G2), key TUNE from any device | The pan hosting the transmit slice shows the transmit trace and waterfall. No receiver hump, no full-width band on the waterfall. Other pans keep receiving | PENDING |
+| 20 | Remote trace on frequency | As row 2, in a remote window | Peak `cw_pitch` below the dial in LSB, above in USB, the same as a local window on the same Core's radio | PENDING |
+| 21 | Remote overlay and restore | Key and un-key in a remote window; drag the dBm strip while keyed | Red border, transmit grid, transmit palette and transmit waterfall levels while keyed; the receive grid, levels and view exactly as before on un-key; rows 9 and 10 hold in the remote window | PENDING |
+| 22 | XIT while keyed, both windows | Key up, change XIT mid-transmission, in a local and a remote window | The trace, the TX filter and the view follow the new carrier within a frame (closes row 16) | PENDING |
+| 23 | TX Display settings from a remote window | Change the window type mid-transmission from a remote window's Setup > Display > TX Display | The skirts change as in row 6; a local window on the same Core shows the same setting | PENDING |
+| 24 | DUP | Turn DUP on, key TUNE, in a local and a remote window; then off | DUP on: the receiver stays on the pan with the red border and transmit grid. DUP off: the transmit display | PENDING |
+| 25 | Transmit monitor to the holder | MON on, transmit from a remote window with MON on speakers, then phones; a second device connected | The holder hears the monitor on the chosen output; the second device hears none | PENDING |
+| 26 | CFC bars and PA Values while keyed | Open the CFC dialog and Setup > PA > PA Values in a remote window, transmit with CFC on | The bars move as on the Core's own window; PA Values shows the Core's readings | PENDING |
+| 27 | Older Core | A current window on a Core without the transmit display, key TUNE | The pan shows the reason, keeps the red border and transmit grid, and its waterfall holds instead of painting the receiver | PENDING |
+| 28 | Remote transmit meters while keyed | In a remote window on the Rock Core (G2) and the Pi 4 Core (HL2), key TUNE; watch the TX applet's RF Pwr and SWR bars and a container's Power, SWR and ALC meters beside a local window on the same Core | The remote bars and meters read what the local window reads (about 4 W forward on the G2's TUNE, found at zero on 2026-09-26) and fall to rest on un-key as the local window's do | PENDING |
 
 ---
 

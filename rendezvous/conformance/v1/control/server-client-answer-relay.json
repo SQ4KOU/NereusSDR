@@ -9,8 +9,8 @@
       "password": "pHOMyrrfXfuTPcSEcKmE2JysP0I=",
       "expires": 1800086400,
       "urls": [
-        "turn:rv6.nereussdr.com:3478?transport=udp",
-        "turn:rv4.nereussdr.com:3478?transport=udp"
+        "turn:rv4.nereussdr.com:3478?transport=udp",
+        "turn:rv6.nereussdr.com:3478?transport=udp"
       ]
     }
   },

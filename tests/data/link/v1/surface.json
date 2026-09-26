@@ -73,7 +73,7 @@
         {
             "kind": "i64",
             "name": "spectrumGrantVersion",
-            "value": 1
+            "value": 2
         },
         {
             "kind": "i64",
@@ -274,6 +274,21 @@
             "kind": "i64",
             "name": "meterReadingsVersion",
             "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "dspInfoVersion",
+            "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "recordStreamVersion",
+            "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "stationRadiosVersion",
+            "value": 0
         },
         {
             "kind": "i64",
@@ -1214,6 +1229,159 @@
             "capabilityVersion": 7,
             "minMinor": 11,
             "verb": "setIoBoardOutput"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "sliceId",
+                    "optional": false
+                },
+                {
+                    "kind": "bool",
+                    "name": "highResolution",
+                    "optional": false
+                }
+            ],
+            "capability": "dspInfoVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "dsp.filterResponse"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "stream",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "backlog",
+                    "optional": false
+                }
+            ],
+            "capability": "recordStreamVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "records.subscribe"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "stream",
+                    "optional": false
+                }
+            ],
+            "capability": "recordStreamVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "records.unsubscribe"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "source",
+                    "optional": false
+                }
+            ],
+            "capability": "recordStreamVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "spots.connect"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "source",
+                    "optional": false
+                }
+            ],
+            "capability": "recordStreamVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "spots.disconnect"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "source",
+                    "optional": false
+                },
+                {
+                    "kind": "utf8",
+                    "name": "text",
+                    "optional": false
+                }
+            ],
+            "capability": "recordStreamVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "spots.sendCommand"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "recordStreamVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "spots.clearAll"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "mac",
+                    "optional": false
+                }
+            ],
+            "capability": "stationRadiosVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "station.selectRadio"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "stationRadiosVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "station.rescanRadios"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "mac",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "model",
+                    "optional": false
+                }
+            ],
+            "capability": "stationRadiosVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "station.setRadioModel"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "mac",
+                    "optional": false
+                }
+            ],
+            "capability": "stationRadiosVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "station.forgetRadio"
         },
         {
             "arguments": [
@@ -2209,6 +2377,9 @@
                     "calibrationOffsetDb": [
                         "displayExtrasVersion"
                     ],
+                    "decimation": [
+                        "spectrumGrantVersion"
+                    ],
                     "extendedView": [
                         "remoteWidebandDisplayVersion"
                     ],
@@ -2637,6 +2808,26 @@
                 "properties": "array",
                 "type": "string",
                 "writeId": "number"
+            }
+        },
+        "record.batch": {
+            "optional": [
+            ],
+            "required": [
+                "generation",
+                "removes",
+                "reset",
+                "stream",
+                "type",
+                "upserts"
+            ],
+            "types": {
+                "generation": "number",
+                "removes": "array",
+                "reset": "boolean",
+                "stream": "string",
+                "type": "string",
+                "upserts": "array"
             }
         },
         "schema": {
@@ -3839,6 +4030,18 @@
                     "kind": "bool",
                     "name": "bandOutputsKeyed",
                     "ordinal": 23
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "dspOptionsLastApplyMs",
+                    "ordinal": 24
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "stationRadioWaiting",
+                    "ordinal": 25
                 }
             ]
         },
@@ -5187,6 +5390,64 @@
                     "kind": "f64",
                     "name": "agcAverageDb",
                     "ordinal": 148
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "minNotchWidthHz",
+                    "ordinal": 149
+                }
+            ]
+        },
+        "SpotSourceHost": {
+            "properties": [
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "dxClusterState",
+                    "ordinal": 0
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "dxClusterText",
+                    "ordinal": 1
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "rbnState",
+                    "ordinal": 2
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "rbnText",
+                    "ordinal": 3
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "potaState",
+                    "ordinal": 4
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "potaText",
+                    "ordinal": 5
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "pskReporterState",
+                    "ordinal": 6
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "pskReporterText",
+                    "ordinal": 7
                 }
             ]
         },
@@ -6337,6 +6598,10 @@
             "key": "catalog"
         },
         {
+            "class": "SpotSourceHost",
+            "key": "spotSources"
+        },
+        {
             "class": "PanadapterModel",
             "key": "pan:<i>"
         },
@@ -6409,7 +6674,9 @@
             "Tci",
             "radios/",
             "ConnectionTargets/",
-            "RemoteVax/"
+            "RemoteVax/",
+            "SpotCollector",
+            "Wsjtx"
         ],
         "stationKeys": [
             "DisplayFftSize",
@@ -6466,8 +6733,6 @@
             "Pota",
             "PskReporter",
             "FreeDv",
-            "SpotCollector",
-            "Wsjtx",
             "User/",
             "Notch",
             "DspOptions",

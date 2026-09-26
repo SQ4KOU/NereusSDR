@@ -17,10 +17,11 @@ writer task, so one slow peer never holds up another's handler.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import heapq
 import logging
 import os
-from typing import Any, Callable, Dict, List, Optional, Set
+from typing import Any, Callable, Dict, Iterator, List, Optional, Set
 
 from . import identity, protocol, turn
 from .clock import RealClock, TimerHandle
@@ -111,6 +112,10 @@ class Connection:
     def send(self, message: Dict[str, Any]) -> None:
         if self.closing:
             return
+        with self.service.holding_cleanup():
+            self._send(message)
+
+    def _send(self, message: Dict[str, Any]) -> None:
         text = protocol.encode(message)
         size = len(text.encode("utf-8"))
         config = self.service.config
@@ -170,7 +175,10 @@ class Connection:
         if self.writer is not None:
             self.writer.cancel()
         self.close_task = asyncio.ensure_future(self._close_quietly(CLOSE_NOT_READING))
-        self.service.detach(self)
+        # Its peers hear of its leaving only after the sends under way are
+        # done, so a message it sent reaches the other end before the
+        # cleanup its leaving causes (Service.detach_later).
+        self.service.detach_later(self)
 
     async def _close_quietly(self, code: int) -> None:
         try:
@@ -256,6 +264,10 @@ class Service:
         # caught up with what it sent; nothing else uses them.
         self.frames_handled = 0
         self.peer_closes = 0
+        # Connections dropped for not reading while a handler or a send is
+        # under way, whose cleanup waits until it is done (detach_later).
+        self._cleanup_depth = 0
+        self._deferred: List[Connection] = []
         check_config(config)
 
     # ----------------------------------------------------------- lifecycle
@@ -300,6 +312,38 @@ class Service:
             if best is None or conn.queued_bytes > best.queued_bytes:
                 best = conn
         return best
+
+    @contextlib.contextmanager
+    def holding_cleanup(self) -> Iterator[None]:
+        """While this is held (a message handler, or one send), a connection
+        dropped for not reading is detached only when it is released, so
+        the service's sends keep the order it read: the message being
+        forwarded goes out before the peerLeft or clientLeft its sender's
+        leaving causes."""
+        self._cleanup_depth += 1
+        try:
+            yield
+        finally:
+            self._cleanup_depth -= 1
+            if self._cleanup_depth == 0:
+                self._run_deferred()
+
+    def detach_later(self, conn: Connection) -> None:
+        if self._cleanup_depth == 0:
+            self.detach(conn)
+        elif conn not in self._deferred:
+            self._deferred.append(conn)
+
+    def _run_deferred(self) -> None:
+        # A cleanup's own sends may drop further connections; they join
+        # the list and are detached in turn.
+        while self._deferred:
+            conn = self._deferred.pop(0)
+            self._cleanup_depth += 1
+            try:
+                self.detach(conn)
+            finally:
+                self._cleanup_depth -= 1
 
     def accept(self, conn: Connection) -> None:
         # A new connection has no role yet; it is counted with the clients
@@ -389,7 +433,8 @@ class Service:
             if role == "client":
                 conn.cancel_timer()
         handler = getattr(self, "_%s_%s" % (conn.role, msg["type"].replace(".", "_")))
-        handler(conn, msg)
+        with self.holding_cleanup():
+            handler(conn, msg)
 
     # ----------------------------------------------------------- station
 

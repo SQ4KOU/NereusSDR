@@ -93,6 +93,11 @@
 #include "core/session/StationCapabilities.h"
 #include "core/session/StationDevicesFacade.h"
 #include "core/session/StationServer.h"
+#include "core/station/StationRadios.h"
+#include "models/RadioModel.h"
+#include "models/TransmitModel.h"
+
+#include <QWebSocket>
 
 #include "OperatorWording.h"
 #include "fakes/LoopbackTransport.h"
@@ -172,6 +177,91 @@ StationControlReply ask(const QString& path, const QStringList& args)
     client.join();
     return reply;
 }
+
+// An app on the Core's real wss listener, speaking the link itself: the
+// token, and a hello that declares the several-devices feature (so the
+// confirm step's question and notices reach it).
+struct RawApp {
+    QWebSocket socket;
+    QList<QJsonObject> received;
+
+    RawApp(quint16 port, const QString& token)
+        : m_token(token)
+    {
+        QObject::connect(&socket, &QWebSocket::sslErrors, &socket,
+                         [this](const QList<QSslError>&) { socket.ignoreSslErrors(); });
+        QObject::connect(&socket, &QWebSocket::textMessageReceived, &socket,
+                         [this](const QString& text) {
+            received.append(QJsonDocument::fromJson(text.toUtf8()).object());
+        });
+        socket.open(QUrl(QStringLiteral("wss://127.0.0.1:%1").arg(port)));
+    }
+
+    bool signIn()
+    {
+        if (waitFor(QStringLiteral("hello")).isEmpty()) {
+            return false;
+        }
+        send(SessionMessages::hello(kSessionProtocolMajor, kSessionProtocolMinor, 0,
+                                    QStringLiteral("NereusSDR iPhone"), {kSessionProtocolMajor},
+                                    {{"deviceAuth", 1}, {"sessionHolder", 1}}));
+        send(SessionMessages::authRequest(m_token));
+        return !waitFor(QStringLiteral("snapshot.complete")).isEmpty();
+    }
+
+    void send(const SessionMessage& message)
+    {
+        socket.sendTextMessage(QString::fromUtf8(SessionMessages::encode(message)));
+    }
+
+    void invoke(const QByteArray& verb, quint32 id, const QList<MirrorUpdate>& args)
+    {
+        send(SessionMessages::commandInvoke(verb, id, args));
+    }
+
+    // The first message of `type` (for a command.result, with `id`).
+    QJsonObject waitFor(const QString& type, qint64 id = -1)
+    {
+        QJsonObject found;
+        [[maybe_unused]] const bool arrived = QTest::qWaitFor([&]() {
+            for (const QJsonObject& o : std::as_const(received)) {
+                if (o.value(QStringLiteral("type")).toString() == type
+                    && (id < 0 || o.value(QStringLiteral("id")).toInteger() == id)) {
+                    found = o;
+                    return true;
+                }
+            }
+            return false;
+        }, 10000);
+        return found;
+    }
+
+    // Where the first message of `type` (with `id`) arrived; -1 if none.
+    qsizetype indexOf(const QString& type, qint64 id = -1) const
+    {
+        for (qsizetype i = 0; i < received.size(); ++i) {
+            const QJsonObject& o = received.at(i);
+            if (o.value(QStringLiteral("type")).toString() == type
+                && (id < 0 || o.value(QStringLiteral("id")).toInteger() == id)) {
+                return i;
+            }
+        }
+        return -1;
+    }
+
+    bool saw(const QString& text) const
+    {
+        for (const QJsonObject& o : received) {
+            if (QJsonDocument(o).toJson().contains(text.toUtf8())) {
+                return true;
+            }
+        }
+        return false;
+    }
+
+private:
+    QString m_token;
+};
 
 // One Core started in the test: the listener on loopback, no status page,
 // its console socket in a scratch state directory.
@@ -613,6 +703,169 @@ private slots:
     }
 
     // ── Each command ──────────────────────────────────────────────────
+
+    // Follow-up N3 (ruling (a)): the radio goes on the air between the
+    // chooser's Confirm and the restart turn. The change is dropped: the
+    // chooser's proceed is answered refused with the Core's on-air reason,
+    // the other app is told nothing, nobody's session ends and the Core
+    // keeps its run.
+    void aRadioChangeDroppedOnTheAirIsRefusedAndNobodyIsTold()
+    {
+        Core core(/*remoteOn=*/true, /*upgradedWithToken=*/true);
+        QVERIFY(core.start());
+        StationRadios* const radios = core.app->stationRadios();
+        QVERIFY(radios);
+        const auto radio = [](const QString& mac, HPSDRHW board, const QString& name) {
+            RadioInfo info;
+            info.macAddress = mac;
+            info.boardType = board;
+            info.name = name;
+            info.address = QHostAddress(QStringLiteral("192.0.2.30"));
+            return info;
+        };
+        const RadioInfo hl2 = radio(QStringLiteral("AA:BB:CC:00:21:01"), HPSDRHW::HermesLite,
+                                    QStringLiteral("Bench HL2"));
+        const RadioInfo g2 = radio(QStringLiteral("AA:BB:CC:00:21:02"), HPSDRHW::Saturn,
+                                   QStringLiteral("Bench G2"));
+        radios->setVisible({hl2, g2});
+        radios->setCurrent(hl2);
+        StationServer* const before = core.server();
+        const QPointer<StationServer> server(before);
+        before->setTokenSessionsMayChangeRadioForTest(true);
+        RadioModel* const model = core.app->radioModelForTest();
+        QVERIFY(model);
+        // The radio keys (a hardware PTT) in the same turn the change is
+        // accepted, before the restart turn runs.
+        const auto accept = radios->onSelect;
+        radios->onSelect = [accept, model](const QString& mac) {
+            accept(mac);
+            model->transmitModel().setTune(true);
+        };
+
+        RawApp chooser(before->serverPort(), before->token());
+        RawApp other(before->serverPort(), before->token());
+        QVERIFY2(chooser.signIn(), "the chooser did not sign in");
+        QVERIFY2(other.signIn(), "the other app did not sign in");
+
+        chooser.invoke("station.selectRadio", 41,
+                       {MirrorUpdate{0, "mac", MirrorWireKind::Utf8, g2.macAddress}});
+        QVERIFY(!chooser.waitFor(QStringLiteral("command.result"), 41).isEmpty());
+        const QJsonObject asked = chooser.waitFor(QStringLiteral("confirm.request"));
+        QVERIFY2(!asked.isEmpty(), "the chooser was not asked");
+        chooser.invoke("confirm.proceed", 42,
+                       {MirrorUpdate{0, "id", MirrorWireKind::Int64,
+                                     asked.value(QStringLiteral("id")).toInteger()},
+                        MirrorUpdate{1, "choice", MirrorWireKind::Int64, qlonglong(-1)}});
+        const QJsonObject answer = chooser.waitFor(QStringLiteral("command.result"), 42);
+        QVERIFY2(!answer.isEmpty(), "the proceed was never answered");
+        QVERIFY2(!answer.value(QStringLiteral("accepted")).toBool(true),
+                 "a change dropped on the air was answered accepted");
+        QCOMPARE(answer.value(QStringLiteral("reason")).toString(), RadioModel::onAirReason());
+
+        // Nobody is told the radio changed, and nobody's session ends.
+        QTest::qWait(300);
+        QCOMPARE(other.indexOf(QStringLiteral("notice")), qsizetype(-1));
+        for (RawApp* app : {&chooser, &other}) {
+            QCOMPARE(app->indexOf(QStringLiteral("session.end")), qsizetype(-1));
+        }
+        QVERIFY(!server.isNull());
+        QCOMPARE(core.server(), before);
+        QVERIFY(radios->pendingChoice().isEmpty());
+        QVERIFY(!radios->switching());
+        model->transmitModel().setTune(false);
+    }
+
+    // The operator's ruling of 2026-09-26 (fix wave after parity Tasks 19
+    // and 21, I1 and I2): a radio change restarts the Core's run. Over the
+    // Core's real listener, the chooser's answer, the confirm step's
+    // notice to the other device and each app's end ("The Core is switching
+    // to Bench G2. This app reconnects by itself.", retryable, code
+    // radioChanging) all arrive, and the console commands answer after it.
+    void aRadioChangeTellsEveryAppAndKeepsTheConsole()
+    {
+        Core core(/*remoteOn=*/true, /*upgradedWithToken=*/true);
+        QVERIFY(core.start());
+        StationRadios* const radios = core.app->stationRadios();
+        QVERIFY(radios);
+        const auto radio = [](const QString& mac, HPSDRHW board, const QString& name) {
+            RadioInfo info;
+            info.macAddress = mac;
+            info.boardType = board;
+            info.name = name;
+            info.address = QHostAddress(QStringLiteral("192.0.2.30"));
+            return info;
+        };
+        const RadioInfo hl2 = radio(QStringLiteral("AA:BB:CC:00:21:01"), HPSDRHW::HermesLite,
+                                    QStringLiteral("Bench HL2"));
+        const RadioInfo g2 = radio(QStringLiteral("AA:BB:CC:00:21:02"), HPSDRHW::Saturn,
+                                   QStringLiteral("Bench G2"));
+        radios->setVisible({hl2, g2});
+        radios->setCurrent(hl2);
+        // Both apps sign in with the token (no key here); this lets them
+        // change the radio (StationServer's I5 seam).
+        StationServer* const before = core.server();
+        const QPointer<StationServer> oldServer(before);
+        before->setTokenSessionsMayChangeRadioForTest(true);
+
+        RawApp chooser(before->serverPort(), before->token());
+        RawApp other(before->serverPort(), before->token());
+        QVERIFY2(chooser.signIn(), "the chooser did not sign in");
+        QVERIFY2(other.signIn(), "the other app did not sign in");
+
+        chooser.invoke("station.selectRadio", 41,
+                       {MirrorUpdate{0, "mac", MirrorWireKind::Utf8, g2.macAddress}});
+        QJsonObject answer = chooser.waitFor(QStringLiteral("command.result"), 41);
+        // With another app listening, the chooser is asked first.
+        QVERIFY2(!answer.value(QStringLiteral("accepted")).toBool(true),
+                 "the chooser was not asked first");
+        {
+            const QJsonObject asked = chooser.waitFor(QStringLiteral("confirm.request"));
+            QVERIFY2(!asked.isEmpty(), "no answer and no question for the radio change");
+            chooser.invoke("confirm.proceed", 42,
+                           {MirrorUpdate{0, "id", MirrorWireKind::Int64,
+                                         asked.value(QStringLiteral("id")).toInteger()},
+                            MirrorUpdate{1, "choice", MirrorWireKind::Int64, qlonglong(-1)}});
+            answer = chooser.waitFor(QStringLiteral("command.result"), 42);
+            const QJsonObject notice = other.waitFor(QStringLiteral("notice"));
+            QVERIFY2(!notice.isEmpty(), "the other app was not told");
+            QCOMPARE(notice.value(QStringLiteral("change")).toObject()
+                         .value(QStringLiteral("to")).toString(),
+                     QStringLiteral("Bench G2"));
+        }
+        QVERIFY2(answer.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(answer.value(QStringLiteral("reason")).toString()));
+
+        const QString reason = DaemonApp::radioChangeReason(QStringLiteral("Bench G2"));
+        QCOMPARE(reason, QStringLiteral("The Core is switching to Bench G2. This app "
+                                        "reconnects by itself."));
+        QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
+        for (RawApp* app : {&chooser, &other}) {
+            const QJsonObject end = app->waitFor(QStringLiteral("session.end"));
+            QCOMPARE(end.value(QStringLiteral("reason")).toString(), reason);
+            QVERIFY(end.value(QStringLiteral("retryable")).toBool());
+            QCOMPARE(end.value(QStringLiteral("code")).toString(),
+                     QStringLiteral("radioChanging"));
+            QVERIFY(!app->saw(QStringLiteral("The Core is shutting down.")));
+        }
+        // Follow-up N3: the answer and the notice are held for the restart
+        // turn, and still reach the wire before each end.
+        QVERIFY(chooser.indexOf(QStringLiteral("command.result"), 42)
+                < chooser.indexOf(QStringLiteral("session.end")));
+        QVERIFY(other.indexOf(QStringLiteral("notice"))
+                < other.indexOf(QStringLiteral("session.end")));
+        QVERIFY(other.indexOf(QStringLiteral("notice")) >= 0);
+
+        // The run restarted on the new choice: a new station server, and the
+        // console still answers.
+        QTRY_VERIFY(oldServer.isNull());
+        QTRY_VERIFY(core.server() != nullptr && core.server()->isListening());
+        QCOMPARE(radios->pendingChoice(), g2.macAddress);
+        const StationControlReply status = core.run({QStringLiteral("status")});
+        QVERIFY2(status.ok, qPrintable(status.text));
+        const StationControlReply show =
+            core.run({QStringLiteral("pairing"), QStringLiteral("show")});
+        QVERIFY2(show.ok, qPrintable(show.text));
+    }
 
     void statusSaysWhatTheCoreIs()
     {

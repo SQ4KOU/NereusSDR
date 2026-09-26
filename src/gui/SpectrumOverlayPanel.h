@@ -43,6 +43,11 @@
 //                 with no antenna choices, where its flyout would be empty.
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-26 - Parity Task 18: the Display flyout's Grid Lines toggle
+//                 reports gridVisibleChanged (it changed only its own label)
+//                 and takes the pan's state through setGridVisible. J.J.
+//                 Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -109,6 +114,7 @@ signals:
     void wfBlackLevelChanged(int level);
     void colorSchemeChanged(int scheme);
     void cursorFreqVisibleChanged(bool on);  // B8 Task 21
+    void gridVisibleChanged(bool on);        // Parity Task 18
     void fillColorChanged(const QColor& color); // B8 Task 22
     void fillAlphaChanged(float alpha);  // 0.0..1.0  B8 fix-up
     void openSetupRequested(const QString& page); // B8 Task 24
@@ -151,6 +157,10 @@ public:
     // Phase 3G-9c: update the Clarity status badge.
     // active=true → green "C", paused=true → amber "C", both false → hidden.
     void setClarityStatus(bool active, bool paused);
+
+    // Parity Task 18: show the pan's grid state on the Grid Lines toggle
+    // without reporting it back.
+    void setGridVisible(bool on);
 
 private:
     /// Which panadapter this strip is drawn on; see setPanId.

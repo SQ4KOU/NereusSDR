@@ -251,6 +251,42 @@
 //               the Core; the Core's refusal stays the backstop. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26 - R-R3-49 / R-R3-21 (remote-window parity Task 16): DSP > NR
+//                offers DFNR and MNR by the station's noise reduction (the
+//                Core's in a remote window); a remote pan's minimum notch
+//                width is its slice's (the Core's); the filter graphs draw
+//                the Core's curve. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-26 - R-R3-01 (parity Task 17 follow-up): RadioModel is given
+//                the FFT engine pool, so Rendering > Decimation reaches
+//                every pan. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
+//   2026-09-26 - Remote-window parity Task 18: a pan's BAND flyout changes
+//                that pan's slice (B3.1); an empty connected pan says so
+//                (C8); every strip's Display flyout (Grid Lines included)
+//                and Clarity Re-tune act on their own pan, Clarity tuning
+//                the active pan from its own stream; a spot's left-click
+//                sets the pan's slice mode as AetherSDR's does
+//                (MainWindow_Wiring.cpp:4382-4437 [@1e0718ad]); Pan Layout
+//                and +PAN follow RadioModel::maxSlices(). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - Remote-window parity Task 19 (R-IOS-25): the Spot Hub's
+//                starts and stops go through SpotSourceHost; a remote
+//                window's cluster, RBN, POTA and PSK Reporter are the
+//                Core's; the Spot Hub's Core settings are disabled with
+//                Setup's words while there is no Core session. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - Remote-window parity Task 21 (R-IOS-18, B6.2, B6.3): the
+//                Radio menu, the station block and the title bar offer
+//                Change radio, Edit radio and Forget radio for the Core's
+//                radio (Setup > This Core); the title bar copies the Core's
+//                radio's IP and MAC; an unmanaged remote window's Manage
+//                Radios opens This Core. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-26 : D79 (R-IOS-11, R-R3-49): View > Band Plan's check
+//                follows planChanged, so a remote window's check follows
+//                the Core's plan. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -559,10 +595,14 @@ warren@wpratt.com
 #include "applets/TxEqDialog.h"
 // Phase 3J-2 H1: Tools menu modeless singletons (Spot Hub + FreeDV Reporter).
 #include "SpotHubDialog.h"
+#include "core/SpotSourceHost.h"
+#include "core/station/StationRadios.h"
+#include "gui/setup/ThisCorePage.h"
 #include "FreeDVReporterDialog.h"
 // Phase 3F Sub-Epic G T4: bench-minimum Diversity dialog (Tools menu).
 #include "DiversityDialog.h"
 #include "models/SpotModel.h"
+#include "models/SpotModeResolver.h"
 #include "models/NotchModel.h"
 #include "models/FreeDVStationModel.h"
 #include "core/DxccColorProvider.h"
@@ -1636,6 +1676,14 @@ void MainWindow::ensureRemoteSession()
             });
         }
 
+        // Parity Task 18 (C8): an empty pan says so once the Core's slices
+        // are known, and stops when the session ends.
+        connect(m_stationClient, &StationClient::handshakeComplete,
+                this, &MainWindow::refreshNoSliceHints);
+        connect(m_stationClient, &StationClient::stateSnapshotApplied,
+                this, &MainWindow::refreshNoSliceHints);
+        connect(m_stationClient, &StationClient::sessionEnded,
+                this, &MainWindow::refreshNoSliceHints);
         connect(m_stationClient, &StationClient::handshakeComplete, this, [this]() {
             qCInfo(lcConnection) << "Station handshake complete:" << m_remoteConnection->endpointText();
             clearStationLinkToastMemory();
@@ -1682,6 +1730,15 @@ void MainWindow::ensureRemoteSession()
             }
             m_stationLinkLostSeen = true;
             m_lastStationLinkLostReason = reason;
+            // The operator's ruling of 2026-09-26: a radio change restarts
+            // the Core; this window reconnects by itself, so it is not a
+            // lost link. The Core's words name the radio.
+            if (!m_stationClient->radioChangeReason().isEmpty()) {
+                showToast(tr("The Core is changing its radio. This window reconnects by "
+                             "itself."),
+                          ToastSeverity::Info, 5000);
+                return;
+            }
             // The raw reason is logged above and compared as text here;
             // only the toast is in user words (R-R3-17, R-R3-21).
             showToast(tr("Link to the Core lost: %1")
@@ -1701,6 +1758,10 @@ void MainWindow::ensureRemoteSession()
             }
             m_reconnectToastSeen = true;
             m_lastReconnectToastReason = m_lastStationLinkLostReason;
+            // A radio change said it reconnects already (above).
+            if (!m_stationClient->radioChangeReason().isEmpty()) {
+                return;
+            }
             showToast(tr("Reconnecting to the Core (attempt %1) in %2 s")
                           .arg(attempt).arg((delayMs + 999) / 1000),
                       ToastSeverity::Info, 3000);
@@ -2653,6 +2714,14 @@ FFTEngine* MainWindow::ensureStreamWired(int streamIndex)
         nf->feed(binsDbm, kFrameIntervalMs);
     });
 
+    // Parity Task 18: Clarity reads the stream of the pan it tunes.
+    connect(engine, &FFTEngine::fftReady, this,
+            [this, streamIndex](int, const QVector<float>& binsDbm) {
+        if (m_clarityController && streamIndex == clarityStreamIndex()) {
+            m_clarityController->feedBins(binsDbm);
+        }
+    });
+
     return engine;
 }
 
@@ -2861,6 +2930,20 @@ void MainWindow::refreshPanNotchMinWidth()
         if (!applet) { continue; }
         SpectrumWidget* sw = applet->spectrumWidget();
         if (!sw) { continue; }
+        // R-R3-49 (parity Task 16): a remote window has no channel of its
+        // own; its slice carries the Core's channel's minimum (dspInfoVersion
+        // 1), 0 until the Core says, which keeps what the pan last had.
+        if (m_radioModel->role() == RadioModel::Role::Remote) {
+            SliceModel* slice = m_radioModel->sliceById(applet->activeSliceIndex());
+            if (!slice) { continue; }
+            connect(slice, &SliceModel::minNotchWidthHzChanged,
+                    this, &MainWindow::refreshPanNotchMinWidth,
+                    Qt::UniqueConnection);
+            if (slice->minNotchWidthHz() > 0.0) {
+                sw->setNotchMinWidthHz(slice->minNotchWidthHz());
+            }
+            continue;
+        }
         // Through RadioModel, not WdspEngine: scripts/verify-no-gui-dsp-
         // access.py fails the build on a bare rxChannel() from src/gui/.
         RxChannel* ch = m_radioModel->rxChannelForSlice(applet->activeSliceIndex());
@@ -3112,6 +3195,18 @@ void MainWindow::pushConnectionStateToPans()
             if (!live) { sw->clearWaterfallHistory(); }
         }
     }
+    refreshNoSliceHints();
+}
+
+void MainWindow::refreshNoSliceHints()
+{
+    if (!m_radioModel || !m_panStack) { return; }
+    const bool slicesKnown = m_radioModel->ownsLocalDsp()
+        || (m_stationClient && m_stationClient->isHandshakeComplete());
+    const bool allowed = m_radioModel->isConnected() && slicesKnown;
+    for (PanadapterApplet* applet : m_panStack->allApplets()) {
+        if (applet) { applet->setNoSliceHintAllowed(allowed); }
+    }
 }
 
 void MainWindow::wireSpectrumForPan(SpectrumWidget* sw, const QString& panId)
@@ -3210,6 +3305,18 @@ void MainWindow::wireSpectrumSliceControls(SpectrumWidget* sw,
     connect(sw, &SpectrumWidget::frequencyClicked, this,
             [this, panId](double hz) {
         if (SliceModel* s = sliceForPan(panId)) { s->setFrequency(hz); }
+    });
+
+    // Parity Task 18: a left-click on a spot. The widget has already tuned
+    // this pan's slice to it (frequencyClicked above); then the slice takes
+    // the spot's mode, as AetherSDR does.
+    // From AetherSDR src/gui/MainWindow_Wiring.cpp:4382-4437 [@1e0718ad].
+    // Its Memory branch (NereusSDR has no memory spots yet), its TCI spot
+    // notice (NereusSDR's TCI keeps no spots) and its FlexRadio
+    // "spot trigger" command have no counterpart here.
+    connect(sw, &SpectrumWidget::spotTriggered, this,
+            [this, panId](int spotIndex) {
+        applySpotModeToSlice(m_radioModel, sliceForPan(panId), spotIndex);
     });
 
     // Drag a filter edge on this pan.
@@ -3337,6 +3444,9 @@ void MainWindow::ensureOverlayPanels()
         panel->move(4, 4);
         panel->show();
         m_overlayPanels.insert(panId, panel);
+        // Parity Task 18: this strip's Display flyout and Clarity Re-tune act
+        // on this pan.
+        wirePanDisplayFlyout(panel, sw, panId);
 
         // Phase 3O Sub-Phase 9 Task 9.2c — bind the VAX Ch combo to the model.
         panel->setRadioModel(m_radioModel);
@@ -3386,20 +3496,96 @@ void MainWindow::ensureOverlayPanels()
         // otherwise a band click on a pan whose slice had a higher id than the
         // list is long (any mid-list removal) left the active slice where it
         // was and onBandButtonClicked retuned the wrong slice.
+        //
+        // Parity Task 18 (B3.1): the band change names this pan's slice. In a
+        // remote window setActiveSliceById only asks the Core, so the active
+        // slice has not moved when the band click runs; acting on "the
+        // active slice" retuned whichever slice was active, often on another
+        // pan. A pan with no slice has nothing to change.
         connect(panel, &SpectrumOverlayPanel::bandSelected, this,
                 [this, panId](const QString& name, double, const QString&) {
             if (!m_radioModel) { return; }
-            if (SliceModel* s = sliceForPan(panId)) {
-                m_radioModel->setActiveSliceById(s->sliceIndex());
-            }
-            m_radioModel->onBandButtonClicked(bandFromName(name));
+            SliceModel* s = sliceForPan(panId);
+            if (s == nullptr) { return; }
+            m_radioModel->setActiveSliceById(s->sliceIndex());
+            m_radioModel->onBandButtonClicked(s, bandFromName(name));
         });
-
-        // Pan-0's strip stays the one the display-settings wiring targets.
-        if (m_overlayPanel == nullptr || panId == QStringLiteral("pan-0")) {
-            m_overlayPanel = panel;
-        }
     }
+    // Parity Task 18 (C8): a pan created after connect says so when empty.
+    refreshNoSliceHints();
+    refreshClarityBadges();
+}
+
+// Parity Task 18: one pan's Display flyout and Clarity Re-tune, on that pan.
+// The connects are the ones B8 Tasks 20-24 made for pan-0's strip, moved here
+// so every strip gets them and each reaches its own SpectrumWidget (the
+// colour-scheme one used to look up the active pan at click time).
+void MainWindow::wirePanDisplayFlyout(SpectrumOverlayPanel* panel, SpectrumWidget* sw,
+                                      const QString& panId)
+{
+    if (!panel || !sw) { return; }
+
+    // B8 Task 20: WF Gain, WF Black Level and the colour scheme.
+    connect(panel, &SpectrumOverlayPanel::wfColorGainChanged,
+            sw, &SpectrumWidget::setWfColorGain);
+    connect(panel, &SpectrumOverlayPanel::wfBlackLevelChanged,
+            sw, &SpectrumWidget::setWfBlackLevel);
+    connect(panel, &SpectrumOverlayPanel::colorSchemeChanged, sw, [sw](int idx) {
+        // colorSchemeChanged carries a raw combo index (int); setWfColorScheme
+        // takes the WfColorScheme enum, so adapt with a bounds-checked cast.
+        const int schemeCount = static_cast<int>(WfColorScheme::Count);
+        sw->setWfColorScheme(static_cast<WfColorScheme>(qBound(0, idx, schemeCount - 1)));
+    });
+    // B8 Task 21: Cursor Freq.
+    connect(panel, &SpectrumOverlayPanel::cursorFreqVisibleChanged,
+            sw, &SpectrumWidget::setCursorFreqVisible);
+    // B8 Task 22: Fill Color. B8 fix-up: Fill Alpha.
+    connect(panel, &SpectrumOverlayPanel::fillColorChanged,
+            sw, &SpectrumWidget::setFillColor);
+    connect(panel, &SpectrumOverlayPanel::fillAlphaChanged,
+            sw, &SpectrumWidget::setFillAlpha);
+    // Parity Task 18: Grid Lines changed only its own label.
+    panel->setGridVisible(sw->gridEnabled());
+    connect(panel, &SpectrumOverlayPanel::gridVisibleChanged,
+            sw, &SpectrumWidget::setGridEnabled);
+    // B8 Task 24: "More Display Options" opens Setup > Display, whose pages
+    // act on the active pan (setSpectrumHooks), so this pan becomes it.
+    connect(panel, &SpectrumOverlayPanel::openSetupRequested, this,
+            [this, panId](const QString& page) {
+        if (m_panStack) { m_panStack->setActivePan(panId); }
+        auto* dialog = createSetupDialog();
+        if (dialog == nullptr) {
+            return;  // the gate refused and has already said why
+        }
+        dialog->selectPage(page);
+        dialog->show();
+    });
+    // Clarity tunes the active pan; Re-tune on this pan's strip makes this
+    // pan the one it tunes, then estimates afresh.
+    connect(panel, &SpectrumOverlayPanel::clarityRetuneRequested, this,
+            [this, panId]() {
+        if (m_panStack) { m_panStack->setActivePan(panId); }
+        if (m_clarityController) { m_clarityController->retuneNow(); }
+    });
+}
+
+void MainWindow::refreshClarityBadges()
+{
+    for (auto it = m_overlayPanels.constBegin(); it != m_overlayPanels.constEnd(); ++it) {
+        SpectrumOverlayPanel* panel = it.value();
+        if (!panel) { continue; }
+        const bool tuned = it.key() == m_clarityPanId;
+        panel->setClarityStatus(tuned && m_clarityBadgeActive,
+                                tuned && m_clarityBadgePaused);
+    }
+}
+
+int MainWindow::clarityStreamIndex() const
+{
+    if (!m_panStack) { return -1; }
+    SliceModel* slice = sliceForPan(m_clarityPanId.isEmpty() ? m_panStack->activePanId()
+                                                              : m_clarityPanId);
+    return slice ? slice->streamIndex() : -1;
 }
 
 // The slice this pan hosts: its own active slice if it has one, else the first
@@ -4068,8 +4254,8 @@ void MainWindow::buildUI()
     // creates pan-0, but be defensive).
     // One strip per pan, created here for the pans that exist at startup and
     // re-armed from the countChanged hook for every pan created later.
-    // m_overlayPanel stays pointing at pan-0's so the display-settings and
-    // band wiring further down keeps a stable target.
+    // Parity Task 18: each strip's display controls are wired to its own pan
+    // there (wirePanDisplayFlyout); nothing is wired to pan-0's strip alone.
     ensureOverlayPanels();
 
     // ── 2026-05-12 bench fix: SpotModel → SpectrumWidget bridge ───────────
@@ -4430,6 +4616,10 @@ void MainWindow::buildUI()
     // them until then. Apply the saved values to the restored meters now.
     MultimeterPage::applyPersistedSettings(m_radioModel);
     DspOptionsPage::applyPersistedHighResFilter(m_radioModel);
+    // R-R3-49 (parity Task 16): a remote window's filter graphs draw the
+    // Core's curve as it arrives.
+    connect(m_radioModel, &RadioModel::coreFilterResponseChanged, this,
+            [this]() { DspOptionsPage::applyCoreFilterResponse(m_radioModel); });
 
     // R-R3-21: the DXCC country table the spot colouring resolves against.
     // cty.dat is bundled as the ":/cty.dat" resource (resources.qrc), as
@@ -4850,6 +5040,7 @@ void MainWindow::buildUI()
     // for the matching re-wire when the active pan changes.
     setSpectrumHooks(activeSpectrumWidget());
     m_radioModel->setFftEngine(primaryFftEngine());
+    m_radioModel->setFftEnginePool(m_fftEnginePool);
 
     // Phase 3F Sub-Epic I Task 8: follow each stream's DDC centre + rate.
     //
@@ -5530,13 +5721,12 @@ void MainWindow::buildUI()
     }
 
     // Feed FFT bins to Clarity (auto-queued: spectrum thread → main).
-    // Primary engine only: ClarityController holds one adaptive-display
-    // state, so it tracks stream 0 rather than whichever stream last
-    // produced a frame. Per-stream Clarity is Phase 3F follow-up work.
-    connect(primaryFftEngine(), &FFTEngine::fftReady,
-            m_clarityController, [this](int /*rxId*/, const QVector<float>& binsDbm) {
-        m_clarityController->feedBins(binsDbm);
-    });
+    // ClarityController holds one adaptive-display state, so it tracks one
+    // stream rather than whichever stream last produced a frame. Parity
+    // Task 18: that stream is the one feeding the pan Clarity tunes (the
+    // active pan), connected per stream in ensureStreamWired(); it was stream
+    // 0 whichever pan Clarity was tuning. A remote window's feed is the
+    // Core's noise floor for that same pan (RemoteMediaController).
 
     // ── NoiseFloorTracker for Auto AGC-T ────────────────────────────────
     auto* nfTracker = new NoiseFloorTracker;
@@ -5977,62 +6167,43 @@ void MainWindow::buildUI()
         }
     });
 
-    // Clarity ↔ overlay panel: badge + Re-tune button (wired after
-    // m_overlayPanel creation in buildUI, which runs before this point).
-    if (m_overlayPanel) {
-        connect(m_clarityController, &ClarityController::waterfallThresholdsChanged,
-                m_overlayPanel, [this](float, float) {
-            m_overlayPanel->setClarityStatus(/*active=*/true, /*paused=*/false);
-        });
-        connect(m_clarityController, &ClarityController::pausedChanged,
-                m_overlayPanel, [this](bool paused) {
-            bool enabled = m_clarityController->isEnabled();
-            m_overlayPanel->setClarityStatus(enabled, paused);
-        });
-        connect(m_overlayPanel, &SpectrumOverlayPanel::clarityRetuneRequested,
-                m_clarityController, &ClarityController::retuneNow);
-
-        // B8 Task 20: wire Display-flyout orphaned signals to SpectrumWidget.
-        // These three signals were emitted but never connected — moving the
-        // WF Gain / WF Black Level sliders and the Scheme combo did nothing.
-        connect(m_overlayPanel, &SpectrumOverlayPanel::wfColorGainChanged,
-                activeSpectrumWidget(), &SpectrumWidget::setWfColorGain);
-        connect(m_overlayPanel, &SpectrumOverlayPanel::wfBlackLevelChanged,
-                activeSpectrumWidget(), &SpectrumWidget::setWfBlackLevel);
-        connect(m_overlayPanel, &SpectrumOverlayPanel::colorSchemeChanged,
-                activeSpectrumWidget(), [this](int idx) {
-            // colorSchemeChanged carries a raw combo index (int); setWfColorScheme
-            // takes the WfColorScheme enum — adapt with a bounds-checked cast.
-            const int schemeCount = static_cast<int>(WfColorScheme::Count);
-            activeSpectrumWidget()->setWfColorScheme(
-                static_cast<WfColorScheme>(qBound(0, idx, schemeCount - 1)));
-        });
-
-        // B8 Task 21: wire Cursor Freq toggle to SpectrumWidget visibility guard.
-        connect(m_overlayPanel, &SpectrumOverlayPanel::cursorFreqVisibleChanged,
-                activeSpectrumWidget(), &SpectrumWidget::setCursorFreqVisible);
-
-        // B8 Task 22: wire Fill Color button to SpectrumWidget::setFillColor.
-        connect(m_overlayPanel, &SpectrumOverlayPanel::fillColorChanged,
-                activeSpectrumWidget(), &SpectrumWidget::setFillColor);
-
-        // B8 fix-up: wire Fill Alpha slider to SpectrumWidget::setFillAlpha.
-        // The slider emitted fillAlphaChanged but had no connect — opacity
-        // never reached the renderer.
-        connect(m_overlayPanel, &SpectrumOverlayPanel::fillAlphaChanged,
-                activeSpectrumWidget(), &SpectrumWidget::setFillAlpha);
-
-        // B8 Task 24: wire "More Display Options →" link to Setup → Display.
-        connect(m_overlayPanel, &SpectrumOverlayPanel::openSetupRequested,
-                this, [this](const QString& page) {
-            auto* dialog = createSetupDialog();
-            if (dialog == nullptr) {
-                return;  // the gate refused and has already said why
+    // Clarity ↔ each pan's strip. Parity Task 18: every strip shows the
+    // badge for the pan Clarity tunes (the active pan) and nothing on the
+    // others, and each strip's Display flyout and Re-tune act on its own pan
+    // (wirePanDisplayFlyout, from ensureOverlayPanels). Before, only pan-0's
+    // strip was wired, and its display controls reached whichever pan was
+    // active.
+    connect(m_clarityController, &ClarityController::waterfallThresholdsChanged,
+            this, [this](float, float) {
+        m_clarityBadgeActive = true;
+        m_clarityBadgePaused = false;
+        refreshClarityBadges();
+    });
+    connect(m_clarityController, &ClarityController::pausedChanged,
+            this, [this](bool paused) {
+        m_clarityBadgeActive = m_clarityController->isEnabled();
+        m_clarityBadgePaused = paused;
+        refreshClarityBadges();
+    });
+    // Clarity follows the active pan: the pan it leaves goes back to its own
+    // waterfall levels, and the pan it arrives at is estimated afresh
+    // rather than given the last pan's floor.
+    m_clarityPanId = m_panStack ? m_panStack->activePanId() : QString();
+    connect(m_panStack, &PanadapterStack::activePanChanged, this,
+            [this](const QString& panId) {
+        if (panId == m_clarityPanId) { return; }
+        if (SpectrumWidget* left = m_panStack->spectrum(m_clarityPanId)) {
+            left->setClarityActive(false);
+        }
+        m_clarityPanId = panId;
+        if (m_clarityController->isEnabled()) {
+            if (SpectrumWidget* arrived = m_panStack->spectrum(panId)) {
+                arrived->setClarityActive(!m_clarityController->isPaused());
             }
-            dialog->selectPage(page);
-            dialog->show();
-        });
-    }
+            m_clarityController->retuneNow();
+        }
+        refreshClarityBadges();
+    });
 
     // Wire: zoom changes -> auto-replan FFT size to maintain constant
     // bins-per-pixel across zoom levels.  NereusSDR-original (Thetis
@@ -7544,10 +7715,38 @@ void MainWindow::buildMenuBar()
 
     // Manage Radios — always enabled; sole purpose is to open the panel
     // (which has its own ↻ Scan button for fresh broadcast discovery).
+    // Parity Task 21 (R-IOS-18): in a remote window that is not managed by
+    // the Connections picker, the Core's radios are on Setup > This Core
+    // (the Connection panel is this computer's radios, which a remote
+    // window does not run).
     m_actManageRadios = radioMenu->addAction(QStringLiteral("&Manage Radios…"),
-        this, &MainWindow::showConnectionPanel);
+        this, [this]() {
+            if (!m_connectionPickerManaged && m_radioModel != nullptr
+                && !m_radioModel->ownsLocalDsp()) {
+                openThisCore(ThisCoreFocus::ChangeRadio);
+                return;
+            }
+            showConnectionPanel();
+        });
     m_actManageRadios->setToolTip(QStringLiteral(
         "Open the Connection Panel (radio list + ↻ Scan)"));
+    // Parity Task 21 (R-IOS-18, B6.2; the operator's "Option A"): a remote
+    // window's Core's radio, beside Connections. A window running its own
+    // radio changes it in the Connection panel.
+    m_actChangeCoreRadio = radioMenu->addAction(tr("Change radio…"), this, [this]() {
+        openThisCore(ThisCoreFocus::ChangeRadio);
+    });
+    m_actEditCoreRadio = radioMenu->addAction(tr("Edit radio…"), this, [this]() {
+        openThisCore(ThisCoreFocus::EditRadio);
+    });
+    m_actForgetCoreRadio = radioMenu->addAction(tr("Forget radio"), this, [this]() {
+        openThisCore(ThisCoreFocus::ForgetRadio);
+    });
+    radioMenu->setToolTipsVisible(true);
+    for (QAction* a : {m_actChangeCoreRadio, m_actEditCoreRadio, m_actForgetCoreRadio}) {
+        a->setVisible(m_radioModel != nullptr && !m_radioModel->ownsLocalDsp());
+    }
+    connect(radioMenu, &QMenu::aboutToShow, this, &MainWindow::refreshCoreRadioActions);
 
     radioMenu->addSeparator();
 
@@ -7723,6 +7922,15 @@ void MainWindow::buildMenuBar()
                 m_radioModel->bandPlanManagerMutable().setActivePlan(name);
             });
         }
+        // D79 (R-IOS-11, R-R3-49): the check follows the plan however it
+        // changes (a remote window following the Core's plan included).
+        connect(&m_radioModel->bandPlanManagerMutable(), &BandPlanManager::planChanged,
+                planGroup, [this, planGroup]() {
+                    const QString active = m_radioModel->bandPlanManager().activePlanName();
+                    for (QAction* action : planGroup->actions()) {
+                        action->setChecked(action->text() == active);
+                    }
+                });
     }
 
     {
@@ -7858,6 +8066,7 @@ void MainWindow::buildMenuBar()
                                                     : cannot);
             }
         });
+        nrMenu->setToolTipsVisible(true);
     }
 
     // ── NB submenu — Off/NB/NB2 mutual exclusion ───────────────────────────
@@ -11538,6 +11747,103 @@ QString MainWindow::stationSettingsReason() const
     return tr("Connect to the Core to change these.");
 }
 
+// ── Parity Task 21 (R-IOS-18): the Core's radio from a remote window ──────
+
+QString MainWindow::coreRadioAddressText() const
+{
+    return m_stationClient != nullptr && m_stationClient->isConnectionActive()
+        ? m_stationClient->capabilities().radioAddress
+        : QString();
+}
+
+QString MainWindow::coreRadioMacText() const
+{
+    return m_stationClient != nullptr && m_stationClient->isConnectionActive()
+        ? m_stationClient->capabilities().macAddress
+        : QString();
+}
+
+QString MainWindow::forgetCoreRadioReason() const
+{
+    // The Core's own radio cannot be forgotten while it runs it (the
+    // Core's rule); This Core forgets the others.
+    for (const StationRadioEntry& radio : m_radioModel->stationRadios()) {
+        if (radio.inUse) {
+            return StationRadios::inUseReason();
+        }
+    }
+    return {};
+}
+
+void MainWindow::addCoreRadioActions(QMenu& menu)
+{
+    menu.addAction(tr("Change radio…"), this, [this]() {
+        openThisCore(ThisCoreFocus::ChangeRadio);
+    });
+    menu.addAction(tr("Edit radio…"), this, [this]() {
+        openThisCore(ThisCoreFocus::EditRadio);
+    });
+    QAction* forget = menu.addAction(tr("Forget radio"), this, [this]() {
+        openThisCore(ThisCoreFocus::ForgetRadio);
+    });
+    const QString why = forgetCoreRadioReason();
+    forget->setEnabled(why.isEmpty());
+    forget->setToolTip(why);
+}
+
+void MainWindow::refreshCoreRadioActions()
+{
+    if (m_actForgetCoreRadio == nullptr || m_radioModel == nullptr) {
+        return;
+    }
+    const QString why = forgetCoreRadioReason();
+    m_actForgetCoreRadio->setEnabled(why.isEmpty());
+    m_actForgetCoreRadio->setToolTip(why);
+}
+
+void MainWindow::openThisCore(ThisCoreFocus focus)
+{
+    auto* dialog = createSetupDialog();
+    if (dialog == nullptr) {
+        return;
+    }
+    // selectPage realizes the lazily built page before it returns.
+    dialog->selectPage(QStringLiteral("This Core"));
+    if (auto* page = dialog->findChild<ThisCorePage*>()) {
+        if (focus != ThisCoreFocus::ChangeRadio) {
+            page->selectCoreRadio();
+        }
+        if (focus == ThisCoreFocus::EditRadio) {
+            page->modelCombo()->setFocus();
+        } else if (focus == ThisCoreFocus::ForgetRadio) {
+            page->forgetButton()->setFocus();
+        }
+    }
+    dialog->show();
+    dialog->raise();
+}
+
+void MainWindow::refreshSpotHubAvailability()
+{
+    // Parity Task 19 (R-IOS-25, B7.2): a window running its own radio runs
+    // every source itself. A remote window's Spot Hub edits the Core's
+    // settings (Setup's words while there is no Core session) and asks the
+    // Core to run the station's sources.
+    if (!m_spotHubDialog || m_radioModel == nullptr) {
+        return;
+    }
+    if (m_radioModel->ownsLocalDsp()) {
+        m_spotHubDialog->setStationSettingsAvailable(true, QString());
+        m_spotHubDialog->setStationSourcesAvailable(true, QString());
+        return;
+    }
+    const bool settings = stationSettingsAvailable();
+    m_spotHubDialog->setStationSettingsAvailable(settings, stationSettingsReason());
+    const bool sources = m_stationClient != nullptr && m_stationClient->spotSourcesAvailable();
+    m_spotHubDialog->setStationSourcesAvailable(
+        sources, settings ? IStationLink::spotSourcesUnavailableReason() : stationSettingsReason());
+}
+
 RemoteReceiverAudioNote MainWindow::receiverAudioNoteFor(const RemoteMediaController* media)
 {
     // Only a remote window has remote media, and only a Core that sends
@@ -11782,6 +12088,8 @@ void MainWindow::applyRemoteRoleGating()
                                              transmitSettingsReason(8), 8);
         dialog->setStationSettingsAvailable(stationAvailable, stationSettingsReason());
     }
+    // Parity Task 19 (B7.2): and the Spot Hub's Core settings and sources.
+    refreshSpotHubAvailability();
     if (m_actTxEqualizer) {
         // R-R3-49 (parity Task 4): opens whatever the Core says; the dialog
         // shows why it is greyed.
@@ -11839,12 +12147,13 @@ void MainWindow::applyRemoteRoleGating()
             tr("Disconnect from Core and stop automatic connection attempts"));
     }
     if (m_actManageRadios != nullptr) {
-        m_actManageRadios->setEnabled(m_connectionPickerManaged);
+        // Parity Task 21 (R-IOS-18): a window started for one Core manages
+        // that Core's radios on Setup > This Core.
+        m_actManageRadios->setEnabled(true);
         m_actManageRadios->setToolTip(
             m_connectionPickerManaged
                 ? tr("Choose a Core/radio pair or a radio for this computer")
-                : tr("Unavailable: this window was started for one Core with "
-                     "--station, so the radio list cannot change it."));
+                : tr("See and change the Core's radio (Setup > This Core)"));
     }
     // R-R3-46 / R-R3-21: the attenuator, preamp and auto-attenuate
     // controls (RX applet, Setup > General > Options) follow the Core's
@@ -11932,10 +12241,29 @@ void MainWindow::showSegmentContextMenu(const QPoint& globalPos)
 {
     QMenu menu(this);
     if (!m_radioModel->ownsLocalDsp()) {
+        menu.setToolTipsVisible(true);
         menu.addAction(m_actConnect);
         menu.addAction(m_actDisconnect);
         menu.addAction(tr("Core connection details..."),
                        this, &MainWindow::showRemoteConnectionPanel);
+        // Parity Task 21 (R-IOS-18, B6.2): the Core's radio.
+        menu.addSeparator();
+        addCoreRadioActions(menu);
+        // B6.3: the Core's radio's address, as a local window copies its own.
+        menu.addSeparator();
+        const QString ip = coreRadioAddressText();
+        const QString mac = coreRadioMacText();
+        QAction* copyIp = menu.addAction(tr("Copy IP address"), this, [ip]() {
+            QGuiApplication::clipboard()->setText(ip);
+        });
+        QAction* copyMac = menu.addAction(tr("Copy MAC address"), this, [mac]() {
+            QGuiApplication::clipboard()->setText(mac);
+        });
+        const QString none = tr("The Core has not reported its radio.");
+        copyIp->setEnabled(!ip.isEmpty());
+        copyIp->setToolTip(ip.isEmpty() ? none : QString());
+        copyMac->setEnabled(!mac.isEmpty());
+        copyMac->setToolTip(mac.isEmpty() ? none : QString());
         menu.exec(globalPos);
         return;
     }
@@ -11984,10 +12312,14 @@ void MainWindow::showStationContextMenu(const QPoint& globalPos)
 
     QMenu menu(this);
     if (!m_radioModel->ownsLocalDsp()) {
+        menu.setToolTipsVisible(true);
         menu.addAction(m_actConnect);
         menu.addAction(m_actDisconnect);
         menu.addAction(tr("Core connection details..."),
                        this, &MainWindow::showRemoteConnectionPanel);
+        // Parity Task 21 (R-IOS-18, B6.2): the Core's radio.
+        menu.addSeparator();
+        addCoreRadioActions(menu);
         menu.exec(globalPos);
         return;
     }
@@ -12137,8 +12469,10 @@ void MainWindow::openSpotHub()
         // Bridge spotsClearedAll (Display tab's "Clear All Spots" button)
         // to SpotModel::clear so the global QShortcut and the dialog
         // button share one truth-source.
+        // Parity Task 19 (R-IOS-25): through the spot source host, which
+        // clears this window's spots and, in a remote window, the Core's.
         connect(m_spotHubDialog.data(), &SpotHubDialog::spotsClearedAll,
-                m_radioModel->spotModel(), &SpotModel::clear);
+                m_radioModel->spotSourceHost(), &SpotSourceHost::clearAllSpots);
         // Spot List double-click tuneRequested(double Mhz) drives the
         // active slice. SliceModel::setFrequency takes Hz (double), so
         // multiply by 1e6 to convert MHz to Hz.
@@ -12195,96 +12529,37 @@ void MainWindow::openSpotHub()
         // these connects the per-tab Connect / Start / Stop buttons in
         // SpotHubDialog emit signals into the void — the FreeDV pair
         // above was wired but DX Cluster, RBN, WSJT-X, SpotCollector,
-        // and POTA buttons all silently no-op'd.  The auto-start path
-        // (RadioModel::restoreSpotClientAutoStartState) calls the same
-        // client methods directly and worked; only the manual-button
-        // path was broken.  Clients themselves are correct — proven by
-        // the spotReceived → spotModel wires at RadioModel.cpp:973-981.
-        if (auto* dxc = m_radioModel->dxCluster()) {
-            connect(m_spotHubDialog.data(),
-                    &SpotHubDialog::connectRequested,
-                    dxc, &DxClusterClient::connectToCluster);
-            connect(m_spotHubDialog.data(),
-                    &SpotHubDialog::disconnectRequested,
-                    dxc, &DxClusterClient::disconnect);
-        }
-        if (auto* rbn = m_radioModel->rbn()) {
-            connect(m_spotHubDialog.data(),
-                    &SpotHubDialog::rbnConnectRequested,
-                    rbn, &DxClusterClient::connectToCluster);
-            connect(m_spotHubDialog.data(),
-                    &SpotHubDialog::rbnDisconnectRequested,
-                    rbn, &DxClusterClient::disconnect);
-        }
-        if (auto* wsjtx = m_radioModel->wsjtx()) {
-            connect(m_spotHubDialog.data(),
-                    &SpotHubDialog::wsjtxStartRequested,
-                    wsjtx, &WsjtxClient::startListening);
-            connect(m_spotHubDialog.data(),
-                    &SpotHubDialog::wsjtxStopRequested,
-                    wsjtx, &WsjtxClient::stopListening);
-        }
-        if (auto* sc = m_radioModel->spotCollector()) {
-            connect(m_spotHubDialog.data(),
-                    &SpotHubDialog::spotCollectorStartRequested,
-                    sc, &SpotCollectorClient::startListening);
-            connect(m_spotHubDialog.data(),
-                    &SpotHubDialog::spotCollectorStopRequested,
-                    sc, &SpotCollectorClient::stopListening);
-        }
-        if (auto* pota = m_radioModel->pota()) {
-            connect(m_spotHubDialog.data(),
-                    &SpotHubDialog::potaStartRequested,
-                    pota, &PotaClient::startPolling);
-            connect(m_spotHubDialog.data(),
-                    &SpotHubDialog::potaStopRequested,
-                    pota, &PotaClient::stopPolling);
-        }
-
-        // 2026-05-12 bench fix: PSK Reporter Start button source-first
-        // port from freedv-gui.  The dialog emitted pskStartRequested
-        // but nothing in MainWindow handled it.
+        // and POTA buttons all silently no-op'd.
         //
-        // From freedv-gui main.cpp:2597 [@77e793a]:
-        //   m_pskReporterTimer.Start(5 * 60 * 1000);
-        // and main.cpp:1609-1616 [@77e793a]:
-        //   if (timerId == ID_TIMER_PSKREPORTER) {
-        //       for (auto& obj : wxGetApp().m_reporters) obj->send();
-        //   }
-        // PSK Reporter is a send-only IPFIX client (pskreporter.h:65-68
-        // [@77e793a] — freqChange / transmit / inAnalogMode are no-ops).
-        // "Start" = arm the 5-minute auto-send timer.
-        //
-        // From freedv-gui main.cpp:2694 [@77e793a]:
-        //   m_pskReporterTimer.Stop();
-        // "Stop" = disarm the timer.  Any queued records flush on
-        // ~PskReporterClient when the client tears down (mirrors
-        // pskreporter.cpp:171-181 [@77e793a]).
-        if (auto* psk = m_radioModel->pskReporter()) {
-            connect(m_spotHubDialog.data(),
-                    &SpotHubDialog::pskStartRequested,
-                    psk, [psk](const QString& call,
-                               const QString& grid) {
-                        // 2026-05-12 bench fix (PR #238 review P2):
-                        // apply the freshly-validated identity to the
-                        // live client BEFORE arming the timer.  Without
-                        // this call, the client keeps the (often empty)
-                        // identity set at RadioModel construction time
-                        // and emits IPFIX datagrams with empty receiver
-                        // fields.  pskreporter.cpp:148-169 [@77e793a].
-                        psk->setIdentity(
-                            call, grid,
-                            QStringLiteral("NereusSDR ") +
-                                QStringLiteral(NEREUSSDR_VERSION));
-                        psk->setAutoSendIntervalSec(
-                            PskReporterClient::kReportingIntervalSec);
-                    });
-            connect(m_spotHubDialog.data(),
-                    &SpotHubDialog::pskStopRequested,
-                    psk, [psk]() {
-                        psk->setAutoSendIntervalSec(0);
-                    });
+        // Parity Task 19 (R-IOS-25): the starts and stops moved into the
+        // spot source host (the same client calls, and the PSK Reporter
+        // Start that arms the client's reporting interval after setting
+        // the freshly checked identity). In a remote window it sends the
+        // DX cluster, RBN, POTA and PSK Reporter buttons to the Core, which
+        // runs them; WSJT-X and SpotCollector listen on this computer.
+        if (SpotSourceHost* host = m_radioModel->spotSourceHost()) {
+            SpotHubDialog* hub = m_spotHubDialog.data();
+            connect(hub, &SpotHubDialog::connectRequested, host, &SpotSourceHost::connectCluster);
+            connect(hub, &SpotHubDialog::disconnectRequested, host,
+                    &SpotSourceHost::disconnectCluster);
+            connect(hub, &SpotHubDialog::rbnConnectRequested, host, &SpotSourceHost::connectRbn);
+            connect(hub, &SpotHubDialog::rbnDisconnectRequested, host,
+                    &SpotSourceHost::disconnectRbn);
+            connect(hub, &SpotHubDialog::wsjtxStartRequested, host, &SpotSourceHost::startWsjtx);
+            connect(hub, &SpotHubDialog::wsjtxStopRequested, host, &SpotSourceHost::stopWsjtx);
+            connect(hub, &SpotHubDialog::spotCollectorStartRequested, host,
+                    &SpotSourceHost::startSpotCollector);
+            connect(hub, &SpotHubDialog::spotCollectorStopRequested, host,
+                    &SpotSourceHost::stopSpotCollector);
+            connect(hub, &SpotHubDialog::potaStartRequested, host, &SpotSourceHost::startPota);
+            connect(hub, &SpotHubDialog::potaStopRequested, host, &SpotSourceHost::stopPota);
+            connect(hub, &SpotHubDialog::pskStartRequested, host,
+                    &SpotSourceHost::startPskReporter);
+            connect(hub, &SpotHubDialog::pskStopRequested, host,
+                    &SpotSourceHost::stopPskReporter);
+            hub->setSourceHost(host);
         }
+        refreshSpotHubAvailability();
 
         // 2026-05-12 bench fix: Save & Propagate writes User/GridSquare
         // to AppSettings but the FreeDVStationModel only reads its
@@ -12557,8 +12832,7 @@ void MainWindow::showPanLayoutDialog()
     // tiles the board could paint but never fill (final-fix-wave finding 2).
     // userStreamCount() is the one stream count (plan Task 11): it knows the
     // protocol (four on Protocol 1) and, on a remote window, the Core's.
-    const auto& caps = m_radioModel->boardCapabilities();
-    const int maxPanCount = qMin(caps.maxSlices, m_radioModel->userStreamCount());
+    const int maxPanCount = panLayoutLimitFor(m_radioModel);
     const QString boardName = m_radioModel->name();
     PanLayoutDialog dlg(maxPanCount,
                         m_panStack ? m_panStack->currentLayoutId()
@@ -12567,6 +12841,39 @@ void MainWindow::showPanLayoutDialog()
     if (dlg.exec() == QDialog::Accepted && !dlg.selectedLayout().isEmpty()) {
         applyPanLayout(dlg.selectedLayout());
     }
+}
+
+// Parity Task 18: the mode half of a spot's left-click, from AetherSDR
+// src/gui/MainWindow_Wiring.cpp:4382-4437 [@1e0718ad]: a spot that is gone
+// or a slice that is not there does nothing; "Auto mode" off (the Spot Hub's
+// Display tab, SpotAutoSwitchMode, on by default as in AetherSDR) leaves the
+// mode; otherwise the slice takes the spot's mode when it differs.
+void MainWindow::applySpotModeToSlice(RadioModel* model, SliceModel* slice, int spotIndex)
+{
+    if (!model || !model->spotModel()) { return; }
+    const auto& spots = model->spotModel()->spots();
+    const auto it = spots.find(spotIndex);
+    if (it == spots.end()) { return; }
+    if (AppSettings::instance().value(QStringLiteral("SpotAutoSwitchMode"),
+                                      QStringLiteral("True")).toString()
+        != QStringLiteral("True")) {
+        return;
+    }
+    if (!slice) { return; }
+    const std::optional<DSPMode> mode = SpotModeResolver::dspModeForSpot(*it);
+    if (mode && *mode != slice->dspMode()) {
+        slice->setDspMode(*mode);
+    }
+}
+
+// Parity Task 18: the slice limit is RadioModel::maxSlices(), the Core's
+// advertised (effective) limit in a remote window and the board's own
+// locally; the board's raw BoardCapabilities::maxSlices ignored what the Core
+// said it can sustain.
+int MainWindow::panLayoutLimitFor(const RadioModel* model)
+{
+    if (model == nullptr) { return 1; }
+    return qMin(model->maxSlices(), model->userStreamCount());
 }
 
 // Phase 3M-4 bench-fix: PSA bottom-banner indicator visibility
@@ -13416,6 +13723,7 @@ void MainWindow::closeEvent(QCloseEvent* event)
     // teardown run below.  primaryFftEngine() safely returns nullptr once
     // this pointer is cleared, and every remaining call site already
     // null-guards it.
+    m_radioModel->setFftEnginePool(nullptr);
     delete m_fftEnginePool;
     m_fftEnginePool = nullptr;
 

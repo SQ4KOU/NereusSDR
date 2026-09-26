@@ -189,11 +189,26 @@
 //               two-tone stop from another device refused. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 16,
+//                                    dspInfoVersion 1): dsp.filterResponse,
+//                                    the filter graph's curve.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  R-IOS-25 / R-R3-49 (parity Task 19,
+//                                    recordStreamVersion 1):
+//                                    records.subscribe, records.unsubscribe
+//                                    and the spots.* verbs.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  R-IOS-18 / R-R3-49 (parity Task 21,
+//                                    stationRadiosVersion 1): the station
+//                                    radio verbs.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
 
 #include "core/SliceOwnership.h"
+#include "core/SpotSourceHost.h"
+#include "core/station/StationRadios.h"
 #include "core/session/ObjectRegistry.h"
 #include "core/dsp/DspAssetService.h"
 #include "DspCommandValues.h"
@@ -394,6 +409,13 @@ QString notRepresentableReason()
 //   requestIoBoardI2c, setIoBoardOutput
 //                          radioHardwareVersion 7 (requestIoBoardI2c,
 //                          requestIoBoardOutput)
+//   dsp.filterResponse     dspInfoVersion 1 (requestFilterResponse)
+//   records.subscribe, records.unsubscribe, spots.connect, spots.disconnect,
+//   spots.sendCommand, spots.clearAll
+//                          recordStreamVersion 1 (the window subscribes after
+//                          its snapshot; requestSpotSource)
+//   station.selectRadio, station.rescanRadios, station.setRadioModel,
+//   station.forgetRadio    stationRadiosVersion 1 (requestStationRadio)
 //   nnr.*                  nnrControlAvailable(); nnr.tryAgain adds
 //                          kNnrLimitSessionProtocolMinor
 //   nnr.applyModelSelection dspAssetVersion 1 (requestApplyNnrModels)
@@ -577,6 +599,31 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
           arg("value", kInt)},
          "radioHardwareVersion", 7, kRadioIdentitySessionProtocolMinor},
         {"setIoBoardOutput", {arg("pin", kInt), arg("on", kBool)}, "radioHardwareVersion", 7,
+         kRadioIdentitySessionProtocolMinor},
+        // The filter graph's curve (R-R3-49, parity Task 16).
+        {"dsp.filterResponse", {arg("sliceId", kInt), arg("highResolution", kBool)},
+         "dspInfoVersion", 1, kRadioIdentitySessionProtocolMinor},
+        // Record streams and the Core's spot sources (R-IOS-25, R-R3-49,
+        // parity Task 19).
+        {"records.subscribe", {arg("stream", kUtf8), arg("backlog", kInt)},
+         "recordStreamVersion", 1, kRadioIdentitySessionProtocolMinor},
+        {"records.unsubscribe", {arg("stream", kUtf8)}, "recordStreamVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        {"spots.connect", {arg("source", kUtf8)}, "recordStreamVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        {"spots.disconnect", {arg("source", kUtf8)}, "recordStreamVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        {"spots.sendCommand", {arg("source", kUtf8), arg("text", kUtf8)},
+         "recordStreamVersion", 1, kRadioIdentitySessionProtocolMinor},
+        {"spots.clearAll", {}, "recordStreamVersion", 1, kRadioIdentitySessionProtocolMinor},
+        // The Core's radio (R-IOS-18, R-R3-49, parity Task 21).
+        {"station.selectRadio", {arg("mac", kUtf8)}, "stationRadiosVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        {"station.rescanRadios", {}, "stationRadiosVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        {"station.setRadioModel", {arg("mac", kUtf8), arg("model", kInt)},
+         "stationRadiosVersion", 1, kRadioIdentitySessionProtocolMinor},
+        {"station.forgetRadio", {arg("mac", kUtf8)}, "stationRadiosVersion", 1,
          kRadioIdentitySessionProtocolMinor},
         // Neural noise reduction.
         {"nnr.setDiagnostics",
@@ -928,6 +975,20 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleRequestIoBoardI2c(invoke);
     } else if (invoke.commandVerb == "setIoBoardOutput") {
         handleSetIoBoardOutput(invoke);
+    } else if (invoke.commandVerb == "dsp.filterResponse") {
+        handleFilterResponse(invoke);
+    } else if (invoke.commandVerb == "records.subscribe"
+               || invoke.commandVerb == "records.unsubscribe") {
+        handleRecords(invoke);
+    } else if (invoke.commandVerb == "station.selectRadio"
+               || invoke.commandVerb == "station.rescanRadios"
+               || invoke.commandVerb == "station.setRadioModel"
+               || invoke.commandVerb == "station.forgetRadio") {
+        handleStationRadios(invoke);
+    } else if (invoke.commandVerb == "spots.connect" || invoke.commandVerb == "spots.disconnect"
+               || invoke.commandVerb == "spots.sendCommand"
+               || invoke.commandVerb == "spots.clearAll") {
+        handleSpotSources(invoke);
     } else if (invoke.commandVerb == "nnr.setDiagnostics" || invoke.commandVerb == "nnr.resetTuning"
                || invoke.commandVerb == "nnr.tryAgain") {
         handleNnrAction(invoke);
@@ -2993,6 +3054,150 @@ void SessionCommandDispatcher::handleRequestIoBoardI2c(const SessionMessage& inv
             self->emitResultAs(owner, SessionMessages::commandResult(
                 verb, commandId, ok, ok ? QString() : reason, {}, values));
         });
+}
+
+// R-R3-49 (parity Task 16, dspInfoVersion 1): Setup > DSP > Options >
+// High-resolution filter characteristics in a remote window. The Core
+// computes its slice's receiver's curve as the local filter graph does
+// (RadioModel::filterResponseForStation) and answers with `values`
+// startHz and stepHz (f64) and magnitudesDbJson (utf8, a JSON array of dB,
+// 0 at the peak). With `highResolution` false no curve is wanted and the
+// array is empty. A read: it reaches no radio, so it is answered on and off
+// the air.
+void SessionCommandDispatcher::handleFilterResponse(const SessionMessage& invoke)
+{
+    int sliceId = -1;
+    QVariant highResolution;
+    if (!hasExactlyArguments(invoke.arguments, { "sliceId", "highResolution" })
+        || findIntArgument(invoke.arguments, "sliceId", &sliceId) != ArgumentStatus::Ok
+        || !findArgument(invoke.arguments, "highResolution", &highResolution)
+        || highResolution.typeId() != QMetaType::Bool) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core could not read this request."), {});
+        return;
+    }
+    RadioModel::FilterResponse response;
+    QString reason;
+    if (!m_radioModel->filterResponseForStation(sliceId, highResolution.toBool(), &response,
+                                                &reason)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false, reason, {});
+        return;
+    }
+    emit commandResultReady(SessionMessages::commandResult(
+        invoke.commandVerb, invoke.commandId, true, QString(), {},
+        {{0, "startHz", MirrorWireKind::Float64, response.startHz},
+         {0, "stepHz", MirrorWireKind::Float64, response.stepHz},
+         {0, "magnitudesDbJson", MirrorWireKind::Utf8,
+          RadioModel::filterResponseToJson(response.magnitudesDb)}}));
+}
+
+// R-IOS-25 / R-R3-49 (parity Task 19, recordStreamVersion 1): a record
+// stream subscription is the asking connection's, so the station server
+// answers it (RecordAccess). Without one (a dispatcher on its own) there is
+// no stream to follow.
+void SessionCommandDispatcher::handleRecords(const SessionMessage& invoke)
+{
+    if (m_recordAccess && m_recordAccess(invoke)) {
+        return;
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, false,
+               QStringLiteral("This Core does not send its spots or console lines."), {});
+}
+
+// R-IOS-18 / R-R3-49 (parity Task 21, stationRadiosVersion 1): This Core's
+// Change radio, Scan again, Edit radio and Forget radio. Each is refused
+// while the Core's radio is on the air (the parity plan's rule), and
+// nothing is saved or switched then.
+void SessionCommandDispatcher::setStationRadios(StationRadios* radios)
+{
+    m_stationRadios = radios;
+}
+
+void SessionCommandDispatcher::handleStationRadios(const SessionMessage& invoke)
+{
+    const bool rescan = invoke.commandVerb == "station.rescanRadios";
+    const bool setModel = invoke.commandVerb == "station.setRadioModel";
+    QVariant mac;
+    int model = 0;
+    const bool readable = rescan
+        ? invoke.arguments.isEmpty()
+        : (hasExactlyArguments(invoke.arguments,
+                               setModel ? std::initializer_list<QByteArray>{"mac", "model"}
+                                        : std::initializer_list<QByteArray>{"mac"})
+           && findArgument(invoke.arguments, "mac", &mac) && mac.typeId() == QMetaType::QString
+           && (!setModel
+               || findIntArgument(invoke.arguments, "model", &model) == ArgumentStatus::Ok));
+    if (!readable) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core could not read this request."), {});
+        return;
+    }
+    if (m_stationRadios.isNull()) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("This Core does not change its radio from this app."), {});
+        return;
+    }
+    QString reason;
+    if (m_radioModel->stationOnAirRefusal(&reason)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false, reason, {});
+        return;
+    }
+    bool accepted = false;
+    if (rescan) {
+        accepted = m_stationRadios->rescan(&reason);
+    } else if (setModel) {
+        accepted = m_stationRadios->setModel(mac.toString(), model, &reason);
+    } else if (invoke.commandVerb == "station.forgetRadio") {
+        accepted = m_stationRadios->forget(mac.toString(), &reason);
+    } else {
+        accepted = m_stationRadios->select(mac.toString(), &reason);
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, accepted, reason, {});
+}
+
+// R-IOS-25 / R-R3-49 (parity Task 19, recordStreamVersion 1): the Spot Hub's
+// Connect, Start, Stop, typed cluster commands and Clear All Spots for the
+// Core's own spot sources (SpotSourceHost). None touches the radio, so none
+// waits while it is on the air.
+void SessionCommandDispatcher::handleSpotSources(const SessionMessage& invoke)
+{
+    SpotSourceHost* host = m_radioModel->spotSourceHost();
+    const bool clearAll = invoke.commandVerb == "spots.clearAll";
+    const bool sendCommand = invoke.commandVerb == "spots.sendCommand";
+    QVariant source;
+    QVariant text;
+    const bool readable = clearAll
+        ? invoke.arguments.isEmpty()
+        : (hasExactlyArguments(invoke.arguments, sendCommand
+                                   ? std::initializer_list<QByteArray>{"source", "text"}
+                                   : std::initializer_list<QByteArray>{"source"})
+           && findArgument(invoke.arguments, "source", &source)
+           && source.typeId() == QMetaType::QString
+           && (!sendCommand
+               || (findArgument(invoke.arguments, "text", &text)
+                   && text.typeId() == QMetaType::QString)));
+    if (!readable) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core could not read this request."), {});
+        return;
+    }
+    if (host == nullptr) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("This Core does not run spot sources."), {});
+        return;
+    }
+    QString reason;
+    bool accepted = true;
+    if (clearAll) {
+        host->clearAll();
+    } else if (invoke.commandVerb == "spots.connect") {
+        accepted = host->connectSource(source.toString(), &reason);
+    } else if (invoke.commandVerb == "spots.disconnect") {
+        accepted = host->disconnectSource(source.toString(), &reason);
+    } else {
+        accepted = host->sendCommand(source.toString(), text.toString(), &reason);
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, accepted, reason, {});
 }
 
 // R-R3-46 (parity Task 14, radioHardwareVersion 7): Pin Control on HL2

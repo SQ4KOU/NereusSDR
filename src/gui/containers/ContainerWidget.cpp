@@ -17,6 +17,10 @@
 //   2026-09-24 - R-R3-49 / R-R3-21 fix wave: a saved receiver value is
 //                 clamped to slices A to D on load. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-R3-49: the title bar uses the native open / closed hand
+//                 cursors instead of Qt's drawn four-way move cursor, which
+//                 crashed Qt 6.11.0 on macOS. J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 /*  ucMeter.cs
@@ -134,7 +138,15 @@ void ContainerWidget::buildUI()
     m_titleLabel = new QLabel(QStringLiteral("RX1"), m_titleBar);
     m_titleLabel->setStyleSheet(QStringLiteral(
         "color: #c8d8e8; font-size: 11px; font-weight: bold; background: transparent;"));
-    m_titleLabel->setCursor(Qt::SizeAllCursor);
+    // Native hand cursors only. Qt 6.11.0 on macOS draws SizeAllCursor (and
+    // WaitCursor / BusyCursor) from its own ICC-tagged PNGs, and
+    // QImage::toCGImage() frees the colour space before CGImageCreate uses
+    // it: EXC_BREAKPOINT under QCocoaCursor::createCursorData, reached from
+    // this title bar on hover (operator's Mac, 2026-09-25 and 2026-09-26).
+    // Native NSCursor shapes never take that path. Open hand on hover,
+    // closed hand while dragging (beginDrag / endDrag).
+    // Guarded by scripts/verify-no-image-cursors.py and tst_native_cursors.
+    m_titleLabel->setCursor(Qt::OpenHandCursor);
     barLayout->addWidget(m_titleLabel, 1);
 
     const QString btnStyle = QStringLiteral(
@@ -611,6 +623,11 @@ void ContainerWidget::beginDrag(const QPoint& globalPos)
 {
     // From Thetis ucMeter.cs:281-294
     m_dragging = true;
+    // Closed hand while the drag runs (native shape; see the Qt 6.11 macOS
+    // cursor crash note at the title label). Set on the bar too, since the
+    // press can land on the bar beside the label.
+    m_titleBar->setCursor(Qt::ClosedHandCursor);
+    m_titleLabel->setCursor(Qt::ClosedHandCursor);
     if (isFloating()) {
         m_dragStartPos = globalPos - parentWidget()->pos();
     } else {
@@ -659,6 +676,8 @@ void ContainerWidget::endDrag()
 {
     m_dragging = false;
     m_dragStartPos = QPoint();
+    m_titleBar->unsetCursor();
+    m_titleLabel->setCursor(Qt::OpenHandCursor);
     if (isOverlayDocked()) {
         m_dockedLocation = pos();
         emit dockedMoved();

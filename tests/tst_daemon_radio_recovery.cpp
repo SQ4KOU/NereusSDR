@@ -6,6 +6,8 @@
 #include <QSemaphore>
 #include <QScopeGuard>
 #include <QTimer>
+#include <QUdpSocket>
+#include <QSignalSpy>
 #include <atomic>
 #include <chrono>
 #include <functional>
@@ -13,6 +15,7 @@
 #include <optional>
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
+#include "core/MoxController.h"
 #include "core/RadeChannel.h"
 #include "core/RadioConnection.h"
 #include "core/P2RadioConnection.h"
@@ -28,6 +31,7 @@
 #define private public
 #include "core/daemon/DaemonApp.h"
 #undef private
+#include "core/station/StationRadios.h"
 #include "fakes/FakeAudioBus.h"
 #include "fakes/P1FakeRadio.h"
 #include "fakes/P2FakeRadio.h"
@@ -435,6 +439,95 @@ private slots:
         QCOMPARE(app.sliceCount(), 0);
         QVERIFY(!app.m_radioDiscoveryThread);
         QVERIFY(!app.m_radioRetryTimer->isActive());
+    }
+
+    // Fix wave, C1 and I6 (parity Task 21): a chosen radio that answers
+    // discovery but never connects ends the change, so another window can
+    // choose again, and it is never saved; the radio chosen next connects
+    // and is saved.
+    void aRadioChangeThatNeverConnectsLetsAWindowChooseAgain()
+    {
+        P1FakeRadio fake;
+        fake.start();
+        const RadioInfo info = infoFor(fake);
+        // Answers discovery, never answers a connect (a loopback socket that
+        // reads nothing back).
+        QUdpSocket silent;
+        QVERIFY(silent.bind(QHostAddress::LocalHost, 0));
+        RadioInfo dead = info;
+        dead.macAddress = QStringLiteral("AA:BB:CC:44:55:66");
+        dead.address = QHostAddress::LocalHost;
+        dead.port = silent.localPort();
+        DaemonApp app;
+        prepare(app);
+        app.m_discoveryProviderForTest = [&]() { return QList<RadioInfo>{info, dead}; };
+        DaemonConfig cfg = testCoreConfig();
+        cfg.radioMac = info.macAddress.toUpper();
+        QVERIFY(app.start(cfg));
+        QTRY_VERIFY_WITH_TIMEOUT(app.m_radioModel->isConnected(), 10000);
+
+        QString reason;
+        QVERIFY(app.m_stationRadios->select(dead.macAddress, &reason));
+        QVERIFY(app.m_stationRadios->switching());
+        QTRY_VERIFY_WITH_TIMEOUT(!app.m_stationRadios->switching(), 15000);
+        QVERIFY(app.m_radioModel && !app.m_radioModel->isConnected());
+        QVERIFY(app.m_stationRadios->savedChoice().isEmpty());
+        QVERIFY(!app.m_radioModel->stationRadioChangeUnderway());
+
+        // Another window chooses the first radio again: taken, connects,
+        // and is saved.
+        QVERIFY2(app.m_stationRadios->select(info.macAddress, &reason), qPrintable(reason));
+        QTRY_VERIFY_WITH_TIMEOUT(app.m_radioModel && app.m_radioModel->isConnected(), 15000);
+        QTRY_VERIFY(!app.m_stationRadios->switching());
+        QCOMPARE(app.m_stationRadios->savedChoice(), info.macAddress.toUpper());
+        QVERIFY(app.m_stationRadios->pendingChoice().isEmpty());
+        app.stop();
+    }
+
+    // Fix wave, M3: a key that arrives while the Core changes its radio is
+    // refused (the old radio is still connected until the change runs), so
+    // nothing keyed is torn down.
+    void aKeyDuringARadioChangeIsRefused()
+    {
+        P1FakeRadio fake;
+        fake.start();
+        const RadioInfo info = infoFor(fake);
+        RadioInfo other = info;
+        other.macAddress = QStringLiteral("AA:BB:CC:77:88:99");
+        DaemonApp app;
+        prepare(app);
+        app.m_discoveryProviderForTest = [&]() { return QList<RadioInfo>{info, other}; };
+        DaemonConfig cfg = testCoreConfig();
+        cfg.radioMac = info.macAddress.toUpper();
+        cfg.remoteTransmitAllowed = true; // so the change is what refuses
+        QVERIFY(app.start(cfg));
+        QTRY_VERIFY_WITH_TIMEOUT(app.m_radioModel->isConnected(), 10000);
+        MoxController* const mox = app.m_radioModel->moxController();
+        QVERIFY(mox);
+        QSignalSpy rejected(mox, &MoxController::moxRejected);
+
+        QString reason;
+        QVERIFY(app.m_stationRadios->select(other.macAddress, &reason));
+        // The same turn as the accepted answer, before the change runs.
+        mox->setMox(true);
+        QVERIFY(!mox->isMox());
+        QVERIFY(rejected.count() >= 1);
+        QCOMPARE(rejected.last().at(0).toString(), StationRadios::switchingReason());
+        // Were the radio on the air all the same when the change runs (the
+        // gate lifted here to force it), the change is refused then: the
+        // radio stays connected and keyed, and the choice goes.
+        RadioModel* const model = app.m_radioModel.get();
+        model->setStationRadioChangeUnderway(false);
+        mox->setMox(true);
+        QVERIFY(mox->isMox());
+        QTRY_VERIFY(!app.m_stationRadios->switching());
+        QCOMPARE(app.m_radioModel.get(), model);
+        QVERIFY(model->isConnected());
+        QVERIFY(mox->isMox());
+        QVERIFY(app.m_stationRadios->pendingChoice().isEmpty());
+        QCOMPARE(app.m_selectedRadioMac, info.macAddress.toUpper());
+        mox->setMox(false);
+        app.stop();
     }
 
     void quietPeriodAndBusyRadioDoNotStartAConnection()

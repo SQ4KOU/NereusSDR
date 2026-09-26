@@ -41,6 +41,9 @@
 //                 AetherSDR src/gui/SpectrumWidget.cpp:2397-2420 [@0dea0dd7].
 //                 Keep a standalone widget's owning graphics window alive
 //                 until QRhiWidget teardown. AI-assisted via OpenAI Codex.
+//   2026-09-26 : bandPlanManager() accessor, so a test reads the plan the
+//                 strip draws (R-IOS-11, R-R3-49). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  enums.cs
@@ -383,9 +386,22 @@ public:
                                     const QVector<float>& binsDbm);
     /// R3: render Core's independent, already reduced dBm planes without
     /// running the local detector/averager over them again.
+    /// R-R3-01/R-R3-08 (parity Task 17): `grantedFftSize` is the FFT size
+    /// the Core runs for this pan (its grant, or what was asked of an older
+    /// Core), 0 when unknown. The bin width, the Hz/bin readout and the
+    /// normalise shift follow it, and the context's frame rate (the rate the
+    /// Core actually sends, after the display budget) times the peak hold,
+    /// blob and noise-floor decay.
     void setRemoteSpectrumContext(const SpectrumEndpointContext& context,
-                                  double sourceCentreHz, double sampleRateHz);
+                                  double sourceCentreHz, double sampleRateHz,
+                                  int grantedFftSize = 0);
     bool updateRemoteSpectrum(const DisplayCodecFrame& frame);
+    /// The Core's granted FFT size for this pan, 0 outside a remote window
+    /// or before its first context.
+    int remoteGrantedFftSize() const { return m_remoteSpectrum ? m_remoteFftSize : 0; }
+    /// The frame rate the Core sends this pan, 0 outside a remote window or
+    /// before its first context.
+    int remoteFrameRate() const { return m_remoteSpectrum ? m_remoteFps : 0; }
     /// Retire incoming/pending planes while preserving painted RF history.
     /// Used while renewing the same remote display binding; full retirement
     /// (disconnect, replacement or rejection) uses clearRemoteSpectrum().
@@ -784,6 +800,8 @@ public:
     }
     void setTxActiveForTest(bool on) { m_txActiveForTest = on; }
     int  dssRowsPushedForTest() const { return m_dssRowsPushed; }
+    // Parity Task 18 (B3.5): the waterfall's rewind history, in rows.
+    int  waterfallHistoryRowsForTest() const { return m_wfHistoryRowCount; }
     // NoiseFloorTracker runs from live FFT frames; this seam drives
     // dssFloorDbm() directly so the floor-anchoring math is testable
     // without standing up the noise-floor pipeline.
@@ -871,6 +889,8 @@ public:
 
     // Bandplan overlay (Phase 3G RX Epic sub-epic D)
     void setBandPlanManager(NereusSDR::BandPlanManager* mgr);
+    // The plan manager whose active plan the strip draws (non-owning).
+    NereusSDR::BandPlanManager* bandPlanManager() const { return m_bandPlanMgr; }
     void setBandPlanFontSize(int pt);             // 0 = off
     int  bandPlanFontSize() const { return m_bandPlanFontSize; }
     bool bandPlanVisible() const { return m_bandPlanFontSize > 0; }
@@ -1786,6 +1806,10 @@ signals:
     // ~12-17 dB lower due to window-spread power and missing detector
     // pipeline). See peakDbmInSlicePassband doc.
     void spectrumFrameRendered();
+    /// A remote pan's granted FFT size or sample rate changed, so its bin
+    /// width did (parity Task 17). Setup > Spectrum Defaults refreshes its
+    /// readouts from it.
+    void remoteSpectrumGrantChanged();
 
     /// The transmit view window moved or resized. Carries the window the
     /// analyzer must now cover.
@@ -2474,6 +2498,10 @@ private:
     DisplayCodecContext m_remoteCodec;
     double m_remoteExactCentreHz{0.0};
     double m_remoteExactSpanHz{0.0};
+    // Parity Task 17: the Core's granted FFT size and frame rate for this
+    // remote pan (0 until its first context).
+    int m_remoteFftSize{0};
+    int m_remoteFps{0};
     bool m_remoteWidebandAvailable{false};
     bool m_remoteWidebandActive{false};
     double m_remoteWidebandAdcRateHz{0.0};
@@ -2925,6 +2953,10 @@ private:
     //   α = exp(-1 / (fps × τ_seconds))
     // From Thetis specHPSDR.cs:351-380 [v2.10.3.13] AvTau / AvTauWF setters.
     void recomputeAverageAlphas();
+    // Frames per second the per-frame overlays (active peak hold, peak
+    // blobs, noise floor) advance at: a remote pan's frame rate from the
+    // Core, else this window's display timer (parity Task 17).
+    int overlayFrameRate() const;
 
     // ---- Mouse state ----
     bool   m_draggingDbm{false};

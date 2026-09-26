@@ -489,6 +489,16 @@
 //               and TUNE wait while another device holds. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  R-R3-49 / R-R3-21 / R-R3-40 (parity
+//                                    Task 16): dspInfoVersion 1 (the Core's
+//                                    noise reduction, DSP Options apply
+//                                    time, minimum notch widths and
+//                                    dsp.filterResponse).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  R-R3-01 / R-R3-49 (parity Task 17):
+//                                    spectrumGrantVersion 2 (a subscribe's
+//                                    decimation reaches the pan's engine).
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-26: iPhone app plan Task 27 (R-IOS-08): acceptPairingMailbox(),
 //               a pairing through the remote access service's mailbox (pair.*
 //               only, no hellos, no address). J.J. Boyd (KG4VCF), with
@@ -499,13 +509,33 @@
 //               mailbox pairing is refused before it takes a code. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  R-IOS-25 / R-R3-49 (parity Task 19):
+//                                    recordStreamVersion 1: the record
+//                                    streams (records.subscribe,
+//                                    records.unsubscribe, record.batch),
+//                                    the `spots` and spotConsole:<source>
+//                                    streams and the read-only
+//                                    `spotSources` object.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  R-IOS-18 / R-R3-49 (parity Task 21):
+//                                    stationRadiosVersion 1: the
+//                                    `stationRadios` stream and the four
+//                                    station radio verbs.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26: D79 (R-IOS-11, R-R3-49): a taken BandPlanName write or
+//               removal moves the Core's own band plan; a plan the Core
+//               does not have is refused. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
 
 #include "core/AppSettings.h"
 #include "core/BoardCapabilities.h"
+#include "core/DxccColorProvider.h"
 #include "core/HardwareProfile.h"
+#include "core/SpotSourceHost.h"
+#include "core/station/StationRadios.h"
 #include "core/WdspEngine.h"
 #include "core/dsp/NnrSettings.h"
 #include "core/security/CertificateStore.h"
@@ -553,11 +583,13 @@
 #include "core/accessories/AlexAntennaFacade.h"
 #include "core/IoBoardHl2Facade.h"
 #include <QScopeGuard>
+#include "models/BandPlanManager.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
 #include "models/AmplifierModel.h"
 #include "models/RfKitModel.h"
+#include "models/SpotModel.h"
 #include "models/StationTciModel.h"
 #include "models/AccessoryDataModel.h"
 #include "models/AccessorySettingsModel.h"
@@ -743,6 +775,25 @@ bool isStationTciMessage(const SessionMessage& message)
         || (message.kind == SessionMessageKind::Schema
             && message.className == "StationTciModel");
 }
+
+// R-IOS-25 / R-R3-49 (parity Task 19, recordStreamVersion 1): the Core's
+// spot sources, read-only, for a peer at kRadioIdentitySessionProtocolMinor
+// on a Core with a local radio model.
+constexpr const char* kSpotSourcesKey = "spotSources";
+
+bool isSpotSourcesMessage(const SessionMessage& message)
+{
+    return message.objectKey == kSpotSourcesKey
+        || (message.kind == SessionMessageKind::Schema
+            && message.className == "SpotSourceHost");
+}
+
+// Parity Task 19: the streams and their capacities (the link's "Record
+// streams" section): the newest 500 spots, the last 200 console lines.
+constexpr int kSpotsStreamCapacity = 500;
+constexpr int kSpotConsoleCapacity = 200;
+// Parity Task 21: the radios a Core can list.
+constexpr int kStationRadiosCapacity = 64;
 
 // R-R3-47 / R-R3-22 (accessoryDataVersion 1): the Core's accessory records
 // and settings, read-only, for a peer at kRadioIdentitySessionProtocolMinor
@@ -1683,6 +1734,9 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     // its filter presets and its band plans from here on.
     m_catalog = std::make_unique<StationCatalog>();
     m_catalog->bind(radioModel);
+    // Parity Task 19 (R-IOS-25): the record streams follow the Core's spots
+    // and its spot sources' consoles from here on.
+    setUpRecordStreams();
 
     connect(m_devicesFacade.get(), &StationDevicesFacade::tokenRetired, this, [this]() {
         endAuthenticatedPeers([](const Peer& peer) { return peer.signedInWithToken; },
@@ -1812,6 +1866,16 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             }
         }
     });
+    // Parity Task 19 (R-IOS-25): a subscription belongs to the connection
+    // that asked, so the Core answers it (and sends the backlog) itself.
+    m_dispatcher->setRecordAccess([this](const SessionMessage& invoke) {
+        if (m_dispatchingTransport == nullptr) {
+            return false;
+        }
+        handleRecordsCommand(m_dispatchingTransport, invoke);
+        m_resultSentInDispatch = true;
+        return true;
+    });
     // iPhone app Task 74 (R-IOS-30): confirm.proceed, confirm.cancel and
     // notice.takeBack are answered by the confirm step.
     m_dispatcher->setConfirmAnswer([this](const SessionMessage& invoke, int id, int choice) {
@@ -1842,6 +1906,13 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                 // or reword) a result of a change it is running.
                 SessionMessage result = original;
                 if (m_resultHook && !m_resultHook(result)) {
+                    return;
+                }
+                // Follow-up N3: an accepted radio change answers on the
+                // restart turn (finishRadioChange).
+                if (m_holdingRadioChange && !m_heldRadioChange && result.accepted
+                    && result.commandVerb == "station.selectRadio") {
+                    m_heldRadioChange = HeldRadioChange{key, result, false, {}};
                     return;
                 }
                 SessionTransport* to = nullptr;
@@ -2319,6 +2390,59 @@ void StationServer::close()
         m_deltaFlushTimer->stop();
     }
     if (wasListening) { emit listeningChanged(false); }
+}
+
+void StationServer::endSessionsForRadioChange(const QString& reason)
+{
+    const QList<SessionTransport*> transports = m_peers.keys();
+    m_closing = true;
+    m_lingerOnDrop = true;
+    for (SessionTransport* transport : transports) {
+        dropPeer(transport, reason, true, /*retryable=*/true,
+                 QString::fromLatin1(SessionEndCode::kRadioChanging));
+    }
+    m_lingerOnDrop = false;
+    m_closing = false;
+}
+
+void StationServer::holdRadioChangeAnswers()
+{
+    m_holdingRadioChange = true;
+}
+
+void StationServer::finishRadioChange(bool proceeded, const QString& refusal)
+{
+    m_holdingRadioChange = false;
+    if (!m_heldRadioChange) {
+        return;
+    }
+    const HeldRadioChange held = *m_heldRadioChange;
+    m_heldRadioChange.reset();
+    // The answer's route (recorded because it was not sent in dispatch).
+    SessionTransport* to = nullptr;
+    const auto route = m_resultRoutes.find(held.key);
+    if (route != m_resultRoutes.end()) {
+        to = route->data();
+        m_resultRoutes.erase(route);
+    }
+    if (held.proceed) {
+        to = held.later.transport.data();
+    }
+    // Dropped: the change did not happen, in the Core's own words.
+    const SessionMessage answer = proceeded
+        ? held.result
+        : SessionMessages::commandResult(held.result.commandVerb, held.result.commandId, false,
+                                         refusal, {});
+    if (to != nullptr && m_peers.contains(to)) {
+        sendToPeer(to, answer);
+    }
+    if (held.proceed) {
+        if (proceeded) {
+            tellSettingChanged(held.later.affected, held.later.sliceWords, held.later.change,
+                               held.later.requester);
+        }
+        endOlderWindowsWithoutSlices(held.later.closedDevices, held.later.requester);
+    }
 }
 
 bool StationServer::isListening() const
@@ -2828,6 +2952,11 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
     // iPhone app Task 76: this session's own media ends with it.
     const quint64 mediaEpoch = it->mediaEpoch;
     m_peers.erase(it);
+    // Parity Task 19: nothing more from any record stream.
+    for (auto& [name, stream] : m_recordStreams) {
+        Q_UNUSED(name);
+        stream->unsubscribe(transport);
+    }
     if (!view.isNull()) {
         view->close();
         view->deleteLater();
@@ -2944,7 +3073,16 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
     }
 
     transport->closeLink(reason);
-    transport->deleteLater();
+    if (m_lingerOnDrop) {
+        // A radio change: this server is destroyed next, and its children
+        // with it. The connection leaves it and goes once its close is
+        // written, so its last messages are not cut off.
+        transport->setParent(nullptr);
+        connect(transport, &SessionTransport::closed, transport, &QObject::deleteLater);
+        QTimer::singleShot(kRadioChangeLingerMs, transport, &QObject::deleteLater);
+    } else {
+        transport->deleteLater();
+    }
 
     if (m_peers.isEmpty() && m_heartbeatTimer != nullptr) {
         m_heartbeatTimer->stop();
@@ -3398,6 +3536,20 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                 message.commandVerb, message.commandId, false,
                 QStringLiteral("Open pairing from a paired device or from the Core's console."),
                 {}));
+            break;
+        }
+        // Fix wave, I5 (the iPhone plan's Task 25: selectRadio is for paired
+        // devices only): the four radio verbs are refused the same way to a
+        // window signed in with the pairing token and no device key. A
+        // desktop window signs in with its own key once enrolled.
+        if ((message.commandVerb == "station.selectRadio"
+             || message.commandVerb == "station.setRadioModel"
+             || message.commandVerb == "station.forgetRadio"
+             || message.commandVerb == "station.rescanRadios")
+            && !peerSeesPairingCode(transport) && !m_tokenSessionsMayChangeRadioForTest) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                StationRadios::pairedDeviceReason(), {}));
             break;
         }
         {
@@ -4448,6 +4600,11 @@ void StationServer::buildMirror()
     // to a peer at minor 11 (sendToPeer).
     m_catalog->refresh();
     m_mirror->watch(QByteArray(kCatalogKey), m_catalog.get());
+    // Parity Task 19 (recordStreamVersion 1): the Core's spot sources. Sent
+    // only to a peer at minor 11 (sendToPeer).
+    if (m_radioModel->spotSourceHost() != nullptr) {
+        m_mirror->watch(QByteArray(kSpotSourcesKey), m_radioModel->spotSourceHost());
+    }
     const QList<PanadapterModel*> pans = m_radioModel->panadapters();
     for (int i = 0; i < pans.size(); ++i) {
         m_mirror->watch(panKey(i), pans.at(i));
@@ -4657,6 +4814,9 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
     } else if (message.objectKey == kStationTciKey) {
         // R-R3-48: the switch changes only through setStationTci.
         stepAttRefusal = StationTciModel::readOnlyReason();
+    } else if (message.objectKey == kSpotSourcesKey) {
+        // Parity Task 19: the spot sources change only through spots.*.
+        stepAttRefusal = SpotSourceHost::readOnlyReason();
     } else if (message.objectKey == kAccessoryDataKey) {
         // R-R3-47: changed only through its commands.
         stepAttRefusal = AccessoryDataModel::readOnlyReason();
@@ -4980,6 +5140,16 @@ void StationServer::handleSettingsWrite(SessionTransport* transport,
                                                         restored.toString(), range));
         return;
     }
+    // D79 (R-IOS-11, R-R3-49): a band plan this Core does not have is
+    // refused, and the Core's value handed back.
+    if (const QString plan = bandPlanRefusal(key, message.updates.first().value);
+        !plan.isEmpty()) {
+        const QVariant restored = m_settings.value(key);
+        qCWarning(lcStation) << "Refused remote settings write" << key << ":" << plan;
+        send(transport, SessionMessages::settingsReject(key, restored.isValid(),
+                                                        restored.toString(), plan));
+        return;
+    }
     // Fix wave I3: a slice's own settings keys are its owner's alone.
     if (const QString refusal = sliceSettingsRefusal(transport, key); !refusal.isEmpty()) {
         const QVariant kept = m_settings.value(key);
@@ -4993,6 +5163,30 @@ void StationServer::handleSettingsWrite(SessionTransport* transport,
         return;
     }
     applySettingsWrite(transport, message, nullptr);
+}
+
+QString StationServer::bandPlanRefusal(const QString& key, const QVariant& value) const
+{
+    if (key != QLatin1String(kBandPlanNameKey) || m_radioModel.isNull()) {
+        return {};
+    }
+    return m_radioModel->bandPlanManager().availablePlans().contains(value.toString())
+        ? QString()
+        : QStringLiteral("This Core does not have that band plan.");
+}
+
+void StationServer::applyBandPlanSetting(const QString& key)
+{
+    // D79 (R-IOS-11, R-R3-49): the plan a device picks is the station's,
+    // as a remote window's View > Band Plan is. The Core's own strip
+    // redraws and the catalogue refreshes through planChanged. A removal
+    // reads the default, ARRL (US). The key already holds the value, so
+    // setActivePlan() writes nothing back.
+    if (key != QLatin1String(kBandPlanNameKey) || m_radioModel.isNull()) {
+        return;
+    }
+    m_radioModel->bandPlanManagerMutable().setActivePlan(
+        m_settings.value(key, QString::fromLatin1(BandPlanManager::kDefaultPlanName)).toString());
 }
 
 QString StationServer::sliceSettingsRefusal(SessionTransport* transport, const QString& key) const
@@ -5060,6 +5254,8 @@ bool StationServer::applySettingsWrite(SessionTransport* transport, const Sessio
         // sets the Core's meter pump rate at once, as the local page does.
         m_radioModel->applyMeterSetting(key, m_settings.value(key));
     }
+    // D79: the Core's own band plan follows BandPlanName.
+    applyBandPlanSetting(key);
     return true;
 }
 
@@ -5170,6 +5366,8 @@ void StationServer::applySettingsRemove(const SessionMessage& message)
         // R-R3-13 / R-R3-49 (parity Task 15): the default meter pump rate.
         m_radioModel->applyMeterSetting(key, QVariant());
     }
+    // D79: removing BandPlanName returns the Core to ARRL (US).
+    applyBandPlanSetting(key);
 }
 
 // ── Send helpers ─────────────────────────────────────────────────────────
@@ -5361,6 +5559,11 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
         // iPhone app Task 19: nor the catalogue to an older app.
         if (isCatalogMessage(message)
             && (minor < kRadioIdentitySessionProtocolMinor || stationCatalogVersion() < 1)) {
+            return;
+        }
+        // Parity Task 19: nor the spot sources to an older app.
+        if (isSpotSourcesMessage(message)
+            && (minor < kRadioIdentitySessionProtocolMinor || recordStreamVersion() < 1)) {
             return;
         }
         if (!needsNnrFit(message, minor)) {
@@ -6757,6 +6960,93 @@ int StationServer::bandSelectVersion() const
     return m_radioModel ? 1 : 0;
 }
 
+int StationServer::dspInfoVersion() const
+{
+    // R-R3-49 / R-R3-21 / R-R3-40 (parity Task 16): the DSP facts come from
+    // this Core's own build and channels, so a local radio model.
+    return m_radioModel && m_radioModel->role() != RadioModel::Role::Remote ? 1 : 0;
+}
+
+int StationServer::recordStreamVersion() const
+{
+    // R-IOS-25 / R-R3-49 (parity Task 19): the spots and the spot sources
+    // are the Core's own, so a local radio model.
+    return m_radioModel && m_radioModel->role() != RadioModel::Role::Remote
+            && m_radioModel->spotSourceHost() != nullptr
+        ? 1
+        : 0;
+}
+
+int StationServer::stationRadiosVersion() const
+{
+    // R-IOS-18 / R-R3-49 (parity Task 21): only a Core that chooses its own
+    // radio (nereusd) offers it.
+    return !m_stationRadios.isNull() && m_radioModel
+            && m_radioModel->role() != RadioModel::Role::Remote
+        ? 1
+        : 0;
+}
+
+void StationServer::setStationRadios(StationRadios* radios)
+{
+    if (!m_stationRadios.isNull()) {
+        disconnect(m_stationRadios, nullptr, this, nullptr);
+    }
+    m_stationRadios = radios;
+    m_dispatcher->setStationRadios(radios);
+    if (radios == nullptr) {
+        return;
+    }
+    if (m_recordFlushTimer == nullptr) {
+        m_recordFlushTimer = new QTimer(this);
+        m_recordFlushTimer->setSingleShot(true);
+        m_recordFlushTimer->setInterval(kDefaultDeltaFlushMs);
+        connect(m_recordFlushTimer, &QTimer::timeout, this, &StationServer::flushRecordStreams);
+    }
+    const QString name = QStringLiteral("stationRadios");
+    if (m_recordStreams.find(name) == m_recordStreams.end()) {
+        m_recordStreams.emplace(name, std::make_unique<RecordStream>(name, kStationRadiosCapacity));
+    }
+    connect(radios, &StationRadios::entriesChanged, this, &StationServer::publishStationRadios);
+    publishStationRadios();
+}
+
+void StationServer::publishStationRadios()
+{
+    const auto it = m_recordStreams.find(QStringLiteral("stationRadios"));
+    if (it == m_recordStreams.end() || m_stationRadios.isNull()) {
+        return;
+    }
+    RecordStream& stream = *it->second;
+    const QList<StationRadioEntry> entries = m_stationRadios->entries();
+    QSet<QString> now;
+    for (const StationRadioEntry& entry : entries) {
+        now.insert(entry.id);
+    }
+    // What went, then what is (each upsert only when it changed).
+    QHash<QString, QJsonObject> held;
+    for (const RecordUpsert& record : stream.newest(stream.capacity())) {
+        if (!now.contains(record.id)) {
+            stream.remove(record.id);
+        } else {
+            held.insert(record.id, record.fields);
+        }
+    }
+    for (const StationRadioEntry& entry : entries) {
+        const QJsonObject fields = entry.toFields();
+        if (!held.contains(entry.id) || held.value(entry.id) != fields) {
+            stream.upsert(entry.id, fields);
+        }
+    }
+    scheduleRecordFlush();
+}
+
+RecordStream* StationServer::recordStreamForTest(const QString& name) const
+{
+    const auto it = m_recordStreams.find(name);
+    return it == m_recordStreams.end() ? nullptr : it->second.get();
+}
+
 int StationServer::meterReadingsVersion() const
 {
     // R-R3-13 / R-R3-49 (parity Task 15): the pump that fills the slices'
@@ -6974,6 +7264,12 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             caps.bandSelectVersion = bandSelectVersion();
             // R-R3-13 / R-R3-49 (parity Task 15): the ADC and AGC readings.
             caps.meterReadingsVersion = meterReadingsVersion();
+            // R-R3-49 / R-R3-21 / R-R3-40 (parity Task 16): the DSP facts.
+            caps.dspInfoVersion = dspInfoVersion();
+            // R-IOS-25 / R-R3-49 (parity Task 19): the record streams.
+            caps.recordStreamVersion = recordStreamVersion();
+            // R-IOS-18 / R-R3-49 (parity Task 21): the Core's radio choice.
+            caps.stationRadiosVersion = stationRadiosVersion();
             // iPhone app Task 71 (ruling 10.1): several devices at once, for
             // a peer that declared sessionHolder with deviceAuth; any other
             // peer is sent no entry, so its capabilities are today's.
@@ -7032,7 +7328,9 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
     caps.remoteMediaVersion = media ? 1 : 0;
     caps.remoteWidebandDisplayVersion = media ? 1 : 0;
     caps.remoteAudioStatusVersion = media ? 1 : 0;
-    caps.spectrumGrantVersion = media ? 1 : 0;
+    // Parity Task 17 (R-R3-01): version 2 adds the subscribe's
+    // `decimation`, applied to the endpoint's engine.
+    caps.spectrumGrantVersion = media ? 2 : 0;
     // R-R3-23: lossless audio beside Opus. Advertised with media whatever
     // nereusd.conf audio_lossless says, so a GUI can be told plainly when
     // the Core's own setting refuses it.
@@ -7098,6 +7396,140 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
 #endif
 
     return caps;
+}
+
+
+// ── Parity Task 19 (R-IOS-25): record streams ────────────────────────────
+
+void StationServer::setUpRecordStreams()
+{
+    if (m_radioModel.isNull() || m_radioModel->role() == RadioModel::Role::Remote
+        || m_radioModel->spotSourceHost() == nullptr || m_radioModel->spotModel() == nullptr) {
+        return;
+    }
+    m_recordFlushTimer = new QTimer(this);
+    m_recordFlushTimer->setSingleShot(true);
+    m_recordFlushTimer->setInterval(kDefaultDeltaFlushMs);
+    connect(m_recordFlushTimer, &QTimer::timeout, this, &StationServer::flushRecordStreams);
+
+    auto spots = std::make_unique<RecordStream>(QStringLiteral("spots"), kSpotsStreamCapacity);
+    RecordStream* spotStream = spots.get();
+    m_recordStreams.emplace(spotStream->name(), std::move(spots));
+    for (const QString& source : SpotSourceHost::stationSources()) {
+        const QString name = SpotSourceHost::consoleStream(source);
+        m_recordStreams.emplace(name, std::make_unique<RecordStream>(name, kSpotConsoleCapacity));
+    }
+
+    SpotModel* model = m_radioModel->spotModel();
+    const QPointer<RadioModel> radio(m_radioModel);
+    const auto fields = [radio](const SpotData& spot) {
+        return SpotSourceHost::spotRecordFields(
+            spot, radio ? radio->dxccColorProvider() : nullptr);
+    };
+    // The spots the Core already holds are the first backlog.
+    for (const SpotData& spot : model->spots()) {
+        spotStream->upsert(QString::number(spot.index), fields(spot));
+    }
+    const auto upsert = [this, spotStream, fields](const SpotData& spot) {
+        spotStream->upsert(QString::number(spot.index), fields(spot));
+        scheduleRecordFlush();
+    };
+    connect(model, &SpotModel::spotAdded, this, upsert);
+    connect(model, &SpotModel::spotUpdated, this, upsert);
+    connect(model, &SpotModel::spotRemoved, this, [this, spotStream](int index) {
+        spotStream->remove(QString::number(index));
+        scheduleRecordFlush();
+    });
+    connect(model, &SpotModel::spotsCleared, this, [this, spotStream]() {
+        spotStream->reset();
+        scheduleRecordFlush();
+    });
+    connect(m_radioModel->spotSourceHost(), &SpotSourceHost::consoleLine, this,
+            [this](const QString& source, const QString& line) {
+        const auto it = m_recordStreams.find(SpotSourceHost::consoleStream(source));
+        if (it == m_recordStreams.end()) {
+            return; // a window's own listener, never the Core's
+        }
+        it->second->upsert(QString::number(++m_consoleLineId),
+                           QJsonObject{{QStringLiteral("line"), line}});
+        scheduleRecordFlush();
+    });
+}
+
+void StationServer::scheduleRecordFlush()
+{
+    if (m_recordFlushTimer != nullptr && !m_recordFlushTimer->isActive()) {
+        m_recordFlushTimer->start();
+    }
+}
+
+void StationServer::flushRecordStreams()
+{
+    for (auto& [name, stream] : m_recordStreams) {
+        Q_UNUSED(name);
+        for (const auto& [subscriber, batch] : stream->takePending()) {
+            // The subscriber is the peer's connection, still attached
+            // (dropPeer unsubscribes it before it goes).
+            auto* transport = static_cast<SessionTransport*>(const_cast<void*>(subscriber));
+            if (m_peers.contains(transport)) {
+                send(transport, SessionMessages::recordBatch(batch));
+            }
+        }
+    }
+}
+
+void StationServer::handleRecordsCommand(SessionTransport* transport, const SessionMessage& message)
+{
+    const auto answer = [this, transport, &message](bool accepted, const QString& reason) {
+        send(transport, SessionMessages::commandResult(message.commandVerb, message.commandId,
+                                                       accepted, reason, {}));
+    };
+    if (m_peers.value(transport).agreedMinor < kRadioIdentitySessionProtocolMinor) {
+        answer(false, QStringLiteral("Update this app to see the Core's spots."));
+        return;
+    }
+    if (recordStreamVersion() < 1) {
+        answer(false, QStringLiteral("This Core does not send its spots or console lines."));
+        return;
+    }
+    const bool subscribe = message.commandVerb == "records.subscribe";
+    const QSet<QByteArray> expected = subscribe ? QSet<QByteArray>{"stream", "backlog"}
+                                                : QSet<QByteArray>{"stream"};
+    QSet<QByteArray> names;
+    QString streamName;
+    qint64 backlog = 0;
+    bool readable = message.arguments.size() == expected.size();
+    for (const MirrorUpdate& a : message.arguments) {
+        names.insert(a.name);
+        if (a.name == "stream") {
+            readable = readable && a.kind == MirrorWireKind::Utf8
+                && a.value.typeId() == QMetaType::QString;
+            streamName = a.value.toString();
+        } else if (a.name == "backlog") {
+            readable = readable && a.kind == MirrorWireKind::Int64;
+            backlog = a.value.toLongLong();
+        }
+    }
+    if (!readable || names != expected || backlog < 0) {
+        answer(false, QStringLiteral("The Core could not read this request."));
+        return;
+    }
+    const auto it = m_recordStreams.find(streamName);
+    if (it == m_recordStreams.end()) {
+        answer(false, QStringLiteral("The Core does not keep that list."));
+        return;
+    }
+    if (!subscribe) {
+        it->second->unsubscribe(transport);
+        answer(true, QString());
+        return;
+    }
+    // The answer, then the backlog as a reset: the peer's copy starts from
+    // this batch.
+    const int wanted = static_cast<int>(std::min<qint64>(backlog, it->second->capacity()));
+    const RecordBatch first = it->second->subscribe(transport, wanted);
+    answer(true, QString());
+    send(transport, SessionMessages::recordBatch(first));
 }
 
 } // namespace NereusSDR

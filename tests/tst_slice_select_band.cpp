@@ -27,6 +27,10 @@
 //                                    the Core's own key freezes the
 //                                    transmit slice for another device.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 19 (R-IOS-25):
+//                                    recordStreamVersion and the record
+//                                    streams. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -270,10 +274,16 @@ void TstSliceSelectBand::theCapabilityIsLastInTheMinor11Block()
     caps.transmitSettingsVersion = 6;
     caps.bandSelectVersion = 1;
     const QList<MirrorUpdate> updates = caps.toUpdates();
-    // Parity Task 15's meterReadingsVersion follows it.
-    QCOMPARE(updates.at(updates.size() - 3).name, QByteArrayLiteral("transmitSettingsVersion"));
-    QCOMPARE(updates.at(updates.size() - 2).name, QByteArrayLiteral("bandSelectVersion"));
-    QCOMPARE(updates.last().name, QByteArrayLiteral("meterReadingsVersion"));
+    // Parity Task 15's meterReadingsVersion follows it, then parity Task
+    // 16's dspInfoVersion.
+    // Then parity Task 19's recordStreamVersion.
+    // Then parity Task 21's stationRadiosVersion.
+    QCOMPARE(updates.at(updates.size() - 6).name, QByteArrayLiteral("transmitSettingsVersion"));
+    QCOMPARE(updates.at(updates.size() - 5).name, QByteArrayLiteral("bandSelectVersion"));
+    QCOMPARE(updates.at(updates.size() - 4).name, QByteArrayLiteral("meterReadingsVersion"));
+    QCOMPARE(updates.at(updates.size() - 3).name, QByteArrayLiteral("dspInfoVersion"));
+    QCOMPARE(updates.at(updates.size() - 2).name, QByteArrayLiteral("recordStreamVersion"));
+    QCOMPARE(updates.last().name, QByteArrayLiteral("stationRadiosVersion"));
     QCOMPARE(StationCapabilities::fromUpdates(updates).bandSelectVersion, 1);
     QCOMPARE(StationCapabilities::fromUpdates(updates).transmitSettingsVersion, 6);
 

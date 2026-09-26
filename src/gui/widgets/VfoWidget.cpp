@@ -81,6 +81,20 @@
 //                 and zero write the slice in a remote window as in a local
 //                 one; they no longer follow the transmit permission.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-R3-49 / R-R3-21 (parity Task 16): DFNR and MNR follow
+//                 the station's noise reduction (the Core's in a remote
+//                 window, RadioModel::noiseReductionUnavailableReason): shown
+//                 always, disabled with the plain reason while they cannot
+//                 run, with no quick controls. MNR is no longer hidden off a
+//                 Mac. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
+//   2026-09-26 - R-R3-49 (trunk merge of parity Tasks 16 to 18): one
+//                 availability path. Task 16's noiseReductionMethods and
+//                 nrUnavailableReason are dropped for the trunk's
+//                 nrCannotRunReason (DspAssetService); the flag also follows
+//                 RadioModel::nrAvailabilityChanged, so an older Core that
+//                 does not say shows DFNR and MNR disabled with the reason.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -3533,6 +3547,9 @@ void VfoWidget::setRadioModel(RadioModel* model)
                                            this, &VfoWidget::updateNrAvailability);
         m_nrAvailabilityConns[1] = connect(model->dspAssets(),
                                            &DspAssetService::mnrAvailabilityChanged,
+                                           this, &VfoWidget::updateNrAvailability);
+        // And whether an older Core says at all (dspAssetVersion).
+        m_nrAvailabilityConns[2] = connect(model, &RadioModel::nrAvailabilityChanged,
                                            this, &VfoWidget::updateNrAvailability);
     }
     updateNrAvailability();

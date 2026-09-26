@@ -183,6 +183,7 @@ bool sameSourceConfig(const DaemonSpectrumSourceConfig& left,
         && left.fft.fftSize == right.fft.fftSize
         && left.fft.windowType == right.fft.windowType
         && left.fft.hzPerBinTarget == right.fft.hzPerBinTarget
+        && left.decimation == right.decimation
         && left.centreHz == right.centreHz
         && left.sampleRateHz == right.sampleRateHz
         && left.maxPendingIqFloats == right.maxPendingIqFloats;
@@ -206,7 +207,10 @@ SpectrumLimitReason grantReason(const SpectrumGrant& grant)
 {
     const int largest = FFTEngine::maximumFftSize();
     const int clamped = std::min(grant.requestedFftSize, largest);
-    if (grant.grantedFftSize < clamped) {
+    // Parity Task 17 follow-up (R-R3-01): a pan beside another runs at the
+    // engine's decimation; told as the shared engine it is.
+    if (grant.grantedFftSize < clamped
+        || grant.grantedDecimation != grant.requestedDecimation) {
         return SpectrumLimitReason::SharedEngine;
     }
     if (grant.requestedFftSize > largest && grant.grantedFftSize < grant.requestedFftSize) {
@@ -301,6 +305,11 @@ struct DaemonMediaController::EndpointEntry {
     int sliceId{-1};
     int sourceFftSize{0};
     int sourceWindowType{0};
+    /// Parity Task 17: what the subscribe asked (`decimation`, 1 without it)
+    /// and what the endpoint's engine runs at (its own ask while it is the
+    /// engine's only subscriber, the engine's decimation beside another).
+    int requestedDecimation{1};
+    int sourceDecimation{1};
     double sourceCentreHz{0.0};
     double sourceSampleRateHz{0.0};
     SpectrumEndpointRequest request;
@@ -764,6 +773,16 @@ std::optional<bool> DaemonMediaController::spectrumSourceTransformsFollowFrameRa
         return std::nullopt;
     }
     return source->config.transformsFollowFrameRate;
+}
+
+std::optional<int> DaemonMediaController::spectrumSourceDecimation(quint32 endpointId) const
+{
+    const auto it = m_endpoints.find(endpointId);
+    if (it == m_endpoints.end()) {
+        return std::nullopt;
+    }
+    const int decimation = m_source.engineDecimation(it->second.request.source);
+    return decimation > 0 ? std::optional<int>(decimation) : std::nullopt;
 }
 
 std::optional<DaemonMediaController::SpectrumAveraging>
@@ -1709,6 +1728,11 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
     const bool widebandNegotiated = control.contains(QStringLiteral("extendedView"));
     QJsonObject legacyShape = control;
     if (widebandNegotiated) { legacyShape.remove(QStringLiteral("extendedView")); }
+    // Parity Task 17 (R-R3-01): `decimation`, only from a peer the Core told
+    // spectrumGrantVersion 2 (it tells every peer at the grant minor).
+    const bool decimationPresent = control.contains(QStringLiteral("decimation"));
+    int decimation = 1;
+    if (decimationPresent) { legacyShape.remove(QStringLiteral("decimation")); }
     // iPhone app Task 20 (R-IOS-27): the display extras fields, only from a
     // peer the Core told displayExtrasVersion 1 (display extras v1).
     bool extrasPresent = false;
@@ -1723,6 +1747,7 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
                                || !control.value(QStringLiteral("extendedView")).isBool()))
         || (extrasPresent && (!m_server || !m_server->displayExtrasAvailable(m_epoch)
                               || !parseDisplayExtrasRequest(control, extrasRequest)))
+        || (decimationPresent && (!m_server || !m_server->spectrumGrantAvailable(m_epoch)))
         || !exactKeys(legacyShape, {"op", "connectionId", "endpointId", "revision", "sliceId",
                              "tier", "fftSize", "windowType", "centreHz", "spanHz", "pixels",
                              "fps", "framesPerLine", "trace", "waterfall", "minDbm", "maxDbm",
@@ -1808,6 +1833,8 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
         || !finiteNumber(control.value(QStringLiteral("minDbm")), minDbm)
         || !finiteNumber(control.value(QStringLiteral("maxDbm")), maxDbm)
         || !finiteNumber(control.value(QStringLiteral("wideSpanFactor")), request.requestedWideSpanFactor)
+        || (decimationPresent
+            && !exactInt(control.value(QStringLiteral("decimation")), 1, 32, decimation))
         || minDbm < kMinDbmLimit || minDbm > kMaxDbmLimit
         || maxDbm < kMinDbmLimit || maxDbm > kMaxDbmLimit
         || maxDbm <= minDbm
@@ -1901,16 +1928,23 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
     grant.grantedTier = tier;
     grant.requestedPixels = pixels;
     int sharedFftSize = 0;
+    // Parity Task 17: the engine's decimation follows the same rule as its
+    // size: a request sets it only while it is the engine's only
+    // subscriber; beside another pan it runs at the engine's decimation.
+    int sharedDecimation = 0;
     // Task 76 (ruling 9.1): another device's pan on this receiver shares
     // the engine too.
     forEachSharedEndpoint(source, [&](DaemonMediaController& owner, quint32 otherId,
                                       EndpointEntry& other) {
         if (&owner != this || otherId != endpointId) {
             sharedFftSize = std::max(sharedFftSize, other.sourceFftSize);
+            sharedDecimation = std::max(sharedDecimation, other.sourceDecimation);
         }
     });
     grant.grantedFftSize = sharedFftSize > 0
         ? sharedFftSize : std::min(fftSize, FFTEngine::maximumFftSize());
+    grant.requestedDecimation = decimation;
+    grant.grantedDecimation = sharedDecimation > 0 ? sharedDecimation : decimation;
     // The pixel grant is fixed here, where the source geometry and granted
     // FFT size are known, and the display budget charges what is granted.
     const bool extendedActive = widebandNegotiated && request.extendedView
@@ -1979,6 +2013,8 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
     entry.sliceId = sliceId;
     entry.sourceFftSize = grant.grantedFftSize;
     entry.sourceWindowType = windowType;
+    entry.requestedDecimation = decimation;
+    entry.sourceDecimation = grant.grantedDecimation;
     entry.request = request;
     entry.displayCost = *displayCost;
     entry.chargeCoversRequest = chargedPixels >= pixels || !displayBudgetWireAvailable();
@@ -2914,6 +2950,9 @@ void DaemonMediaController::configureEndpointFromFrame(EndpointEntry& entry,
     // own admitted display charge is not told the receiver lacks detail.
     SpectrumEndpointRequest asked = entry.request;
     asked.pixels = entry.grant.requestedPixels;
+    // The decimation the endpoint's engine runs at now (a lone pan's is
+    // its own again once a neighbour leaves).
+    entry.grant.grantedDecimation = entry.sourceDecimation;
     SpectrumGrant reasonGrant = entry.grant;
     reasonGrant.grantedPixels = SpectrumEndpoint::grantedPixels(
         asked, sourceContext.fftBins, sourceContext.centreHz, sourceContext.sampleRateHz,
@@ -3495,6 +3534,20 @@ void DaemonMediaController::rebalanceSourceAfterDeparture(const MediaSourceKey& 
     };
     std::vector<Regrant> regrants;
     int engineFftSize = 0;
+    // Parity Task 17: a pan left alone on the engine runs at the
+    // decimation it asked for, as it is granted its own size.
+    int remaining = 0;
+    EndpointEntry* lone = nullptr;
+    forEachSharedEndpoint(key, [&](DaemonMediaController&, quint32, EndpointEntry& entry) {
+        ++remaining;
+        lone = &entry;
+    });
+    const bool decimationRegrant = remaining == 1 && lone
+        && lone->sourceDecimation != lone->requestedDecimation;
+    const int previousDecimation = lone ? lone->sourceDecimation : 1;
+    if (decimationRegrant) {
+        lone->sourceDecimation = lone->requestedDecimation;
+    }
     forEachSharedEndpoint(key, [&](DaemonMediaController&, quint32, EndpointEntry& entry) {
         if (entry.grant.reason != SpectrumLimitReason::SharedEngine) {
             return;
@@ -3529,6 +3582,9 @@ void DaemonMediaController::rebalanceSourceAfterDeparture(const MediaSourceKey& 
                 regrant.entry->request.pixels = regrant.previousPixels;
                 regrant.entry->displayCost = regrant.previousCost;
             }
+            if (decimationRegrant) {
+                lone->sourceDecimation = previousDecimation;
+            }
         }
         // Another device's re-granted pans changed its charge too.
         for (DaemonMediaController* member : m_shared->members()) {
@@ -3538,9 +3594,12 @@ void DaemonMediaController::rebalanceSourceAfterDeparture(const MediaSourceKey& 
         }
         return;
     }
-    // Otherwise only the rate can fall; that renews nothing. A source that
-    // cannot be reconfigured keeps running as it was.
-    reconcileSource(key);
+    // Otherwise only the rate (or a lone pan's decimation) can change; a
+    // rate alone renews nothing. A source that cannot be reconfigured keeps
+    // running as it was.
+    if (!reconcileSource(key) && decimationRegrant) {
+        lone->sourceDecimation = previousDecimation;
+    }
 }
 
 void DaemonMediaController::releaseSourceIfUnused(const MediaSourceKey& key)
@@ -3560,9 +3619,13 @@ bool DaemonMediaController::reconcileSource(const MediaSourceKey& key)
     int maximumFft = 0;
     int maximumFps = 0;
     int windowType = -1;
+    // Parity Task 17: every endpoint on the engine holds its decimation
+    // (handleSubscribe), so they agree; the largest is taken for safety.
+    int decimation = 0;
     forEachSharedEndpoint(key, [&](DaemonMediaController&, quint32, EndpointEntry& entry) {
         maximumFft = std::max(maximumFft, entry.sourceFftSize);
         maximumFps = std::max(maximumFps, entry.request.targetFps);
+        decimation = std::max(decimation, entry.sourceDecimation);
         if (windowType == -1) {
             windowType = entry.sourceWindowType;
         }
@@ -3580,6 +3643,7 @@ bool DaemonMediaController::reconcileSource(const MediaSourceKey& key)
     config.fft.fftSize = maximumFft;
     config.fft.fps = maximumFps;
     config.fft.windowType = windowType;
+    config.decimation = std::clamp(decimation, 1, 32);
     config.maxPendingIqFloats = maximumFft * 4;
     // R-R3-08/40: while the budget is lowered because the Core is busy, a
     // lower frame rate must save FFT work too, so transforms follow the

@@ -35,6 +35,7 @@
 #include "core/ModelPaths.h"
 #include "core/WdspTypes.h"
 #include "core/dsp/DspAssetService.h"
+#include "core/session/StationCapabilities.h"
 #include "gui/widgets/VfoWidget.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -154,6 +155,19 @@ private slots:
         QVERIFY(assets->dfnrRunnable());   // an older Core never says
         VfoWidget vfo;
         vfo.setRadioModel(&remote);
+        // Trunk merge (parity Task 16's rule): a Core below dspAssetVersion
+        // 3 does not say, so DFNR is shown disabled with that reason, never
+        // offered for the Core to refuse.
+        QVERIFY(shownDisabledWith(vfo.dfnrButtonForTest(),
+                                  RadioModel::noiseReductionNotSaidReason()));
+        QVERIFY(OperatorWording::isPlain(RadioModel::noiseReductionNotSaidReason()));
+        StationCapabilities caps;
+        caps.dspAssetVersion = 2;
+        remote.applyStationCapabilities(caps);
+        QVERIFY(shownDisabledWith(vfo.dfnrButtonForTest(),
+                                  RadioModel::noiseReductionNotSaidReason()));
+        caps.dspAssetVersion = 3;
+        remote.applyStationCapabilities(caps);
         QVERIFY(offered(vfo.dfnrButtonForTest()));
 
         const QString coreReason =

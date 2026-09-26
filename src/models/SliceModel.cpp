@@ -59,6 +59,10 @@
 //                and AGC reading setters, applied from the mirror in a
 //                remote window. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code. NereusSDR-original.
+//   2026-09-26 - Remote-window parity Task 16 (R-R3-49): minNotchWidthHz,
+//                applied from the mirror in a remote window. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//                NereusSDR-original.
 // =================================================================
 
 //=================================================================
@@ -753,6 +757,16 @@ void SliceModel::setAgcAverageDb(double db)
     emit agcAverageDbChanged(db);
 }
 
+// Parity Task 16: the same change-only shape.
+void SliceModel::setMinNotchWidthHz(double hz)
+{
+    if (qFuzzyIsNull(m_minNotchWidthHz - hz)) {
+        return;
+    }
+    m_minNotchWidthHz = hz;
+    emit minNotchWidthHzChanged(hz);
+}
+
 void SliceModel::setStationAutoAgcNoiseFloor(double dbm, bool valid, quint64 generation)
 {
     if (!std::isfinite(dbm)) { return; }
@@ -816,6 +830,15 @@ QString SliceModel::applyMirroredValue(const QByteArray& propertyName, const QVa
     }
     if (propertyName == "agcPeakDb") {
         setAgcPeakDb(value.toDouble());
+        return QString();
+    }
+    // Parity Task 16: the Core's channel's minimum notch width.
+    if (propertyName == "minNotchWidthHz") {
+        const double hz = value.toDouble();
+        if (!std::isfinite(hz) || hz < 0.0) {
+            return QStringLiteral("The narrowest notch width must be a number of hertz.");
+        }
+        setMinNotchWidthHz(hz);
         return QString();
     }
     if (propertyName == "agcAverageDb") {

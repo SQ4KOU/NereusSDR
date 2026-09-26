@@ -53,9 +53,22 @@ addresses of both ends, that an id is online, and traffic timing.
 
 - One WebSocket per connection, over TLS on TCP 443: `wss://rv.nereussdr.com/`
   (a self-hosted server has its own host name). The path is `/`; the service
-  ignores it. On the NereusSDR server the website's Caddy terminates TLS and
+  ignores it. On the NereusSDR server the server's own Caddy terminates TLS and
   forwards the WebSocket to the service on loopback by host name; the service
   itself never listens on a public address.
+- **What a client sends to open it.** The opening handshake is RFC 6455's,
+  over HTTP/1.1: `GET /` with `Upgrade: websocket` (the value in any case;
+  Apple's Network.framework writes `WebSocket`), `Connection: Upgrade`,
+  `Sec-WebSocket-Key` and `Sec-WebSocket-Version: 13`, and a `Host` of the
+  service's name, with or without `:443`. Open it over HTTP/1.1, in TLS
+  with ALPN `http/1.1` or none: the NereusSDR server does not offer
+  WebSockets over HTTP/2 (RFC 8441; its Caddy advertises no
+  `SETTINGS_ENABLE_CONNECT_PROTOCOL`), so a client whose stack would use
+  HTTP/2 must be kept to HTTP/1.1 for this connection. Anything that is
+  not a WebSocket upgrade gets `426` with a short plain text (and, over
+  HTTP/1.1, `Upgrade: websocket`). `rendezvous/tests/caddy-check.sh`
+  shows both the usual request and Apple's exact one upgrading through
+  Caddy, and what an HTTP/2 client gets.
 - Messages travel as WebSocket text frames, each one JSON object, encoded
   compactly, with a string `type` naming its kind. A binary frame is a
   protocol error (section 7).
@@ -98,6 +111,11 @@ addresses of both ends, that an id is online, and traffic timing.
   every queue together when that budget runs out, or one message has taken
   longer than 30 s to send (section 9.1). It would not read an error
   message either.
+- The service sends in the order it reads. When a peer closed with 1008
+  was itself sending (its own message took the service past its budget),
+  the message it sent still reaches the other end first, and only then
+  what its leaving causes (`mailbox.closed` `peerLeft`,
+  `introduction.end` `clientLeft` or `stationLeft`).
 
 ## 3. Roles and the life of a connection
 
@@ -376,7 +394,7 @@ service -> any:  {"type":"hello","version":1,"nonce":<nonce>,"stun":[<url>, ...]
 32 random bytes, new for this connection, which an introduction on this
 connection signs (section 4.4). `stun` lists the STUN servers from the
 service's configuration, plain STUN needing no credentials; on
-`rv.nereussdr.com` one IPv6-only and one IPv4-only name (section 8). A
+`rv.nereussdr.com` one IPv4-only and one IPv6-only name, in that order (section 8). A
 client uses what it needs of the list (the pinned libjuice uses one STUN
 server).
 
@@ -610,35 +628,80 @@ password = base64(HMAC-SHA1(secret, username)) standard base64, with padding
   username. The username carries the station id so coturn's quotas and
   logs group by station, never by device.
 - `urls` in the object lists the configured TURN servers. On
-  `rv.nereussdr.com` that is an IPv6-only and an IPv4-only relay name, each
+  `rv.nereussdr.com` that is an IPv4-only and an IPv6-only relay name, each
   on UDP 3478 and UDP 443 (the pinned libjuice resolves one address per TURN
   host, preferring IPv4, so each family needs a name of its own; the
   pairing design section 9.5 item 3 requires both families). The defaults
-  are `rv6.nereussdr.com` and `rv4.nereussdr.com`:
-  `turn:rv6.nereussdr.com:3478?transport=udp`,
-  `turn:rv6.nereussdr.com:443?transport=udp`,
-  `turn:rv4.nereussdr.com:3478?transport=udp` and
-  `turn:rv4.nereussdr.com:443?transport=udp`, and the `stun` list of
-  `hello` names the same two hosts on 3478. The names are configuration.
-- Neither list's order means anything, and an end must not depend on it.
-  It chooses its STUN server, and the relay host it allocates on, by the
-  address families it has: the first entry whose name resolves, on that
-  end, to a family it has a usable address in, or the first entry when it
-  has both families or cannot tell. An IPv4-only end behind NAT so takes
-  the IPv4-only name whichever the service lists first (NereusSDR:
+  are `rv4.nereussdr.com` and `rv6.nereussdr.com`, in this order:
+  `turn:rv4.nereussdr.com:3478?transport=udp`,
+  `turn:rv4.nereussdr.com:443?transport=udp`,
+  `turn:rv6.nereussdr.com:3478?transport=udp` and
+  `turn:rv6.nereussdr.com:443?transport=udp`, and the `stun` list of
+  `hello` names the same two hosts on 3478, also IPv4 first:
+  `stun:rv4.nereussdr.com:3478`, then `stun:rv6.nereussdr.com:3478`. The
+  names are configuration.
+- **Why IPv4 first.** The pinned libjuice uses only the first STUN server
+  it is given. A peer on an IPv4-only network behind NAT needs a
+  server-reflexive candidate from an IPv4 STUN server, or it has nothing
+  but its private address to offer; a peer with IPv6 usually has a
+  global IPv6 host candidate already, which needs no STUN at all. So the
+  IPv4-only name goes first in `stun`, and the TURN list keeps the same
+  order so every list the service sends reads the same way. The service's
+  built-in defaults, `rendezvous/server/rendezvous.conf.sample` and what
+  `rendezvous/deploy/setup-server.sh` writes all list them in this order
+  (`test_limits_config_transport.py` and `coturn-check.sh` check it).
+- The order serves an end that takes the first entry; an end must still not
+  depend on it. It chooses its STUN server, and the relay host it allocates
+  on, by the address families it has: the first entry whose name resolves,
+  on that end, to a family it has a usable address in, or the first entry
+  when it has both families or cannot tell. An IPv4-only end behind NAT so
+  takes the IPv4-only name whichever the service lists first (NereusSDR:
   `IceConfiguration`).
 - **Quotas.** coturn's quotas per user (per username, so per station id)
   do not limit how much the relay is used in total: an id costs nothing
   (anyone can make a key, register it and answer its own introduction with
   `turn` true), so a user of the relay can have as many ids, and as many
-  per-id quotas, as it likes. What bounds the relay is coturn's total quota
-  and its bandwidth caps, which Task 26's second part sizes to the server's
-  transfer allowance. The per-station quota only keeps one Core's sessions
-  from taking all of that by themselves.
-- What coturn does when an allocation is refreshed after its credential has
-  expired is recorded by the coturn check in Docker (Task 26's second part,
-  `rendezvous/tests/coturn-check.sh`), and decides whether clients refresh
-  credentials sooner (Task 29).
+  per-id quotas, as it likes. What bounds the relay is coturn's total
+  quota, sized in slots (JJ's ruling, 2026-09-26): data use is watched,
+  not capped. On `rv.nereussdr.com`:
+  - `user-quota` 4 per station id: a session is up to 2 allocations at
+    each end (one per address family), and both ends share the station
+    id's quota (coturn counts per username, observed by
+    `coturn-check.sh`: a fourth allocation for one id is accepted, a fifth
+    refused with 486). It only keeps one Core's sessions from taking the
+    whole relay.
+  - `total-quota` 64 slots by default (`RV_RELAY_SLOTS` in
+    `setup-server.sh`, the one place it is set): about 16 sessions relayed
+    at both ends at once, or 32 at one end.
+  - `max-bps` 80000 bytes a second per allocation, each way, above the
+    largest session shape (about 520 kbit/s).
+  - `bps-capacity` = slots x `max-bps` = 64 x 80000 = 5120000 bytes a
+    second. coturn reserves `max-bps` of it for each live allocation and
+    refuses one when nothing is left, so it must never bind below the slot
+    count; at this value it cannot. The peak it allows is 5.12 MB a second
+    out (about 41 Mbit/s) with every slot full at full rate, about 13 TB
+    in 30 days; real use is far below that, since most sessions go direct
+    and a relayed one rarely runs at its cap.
+  - The monthly transfer figure (`RV_TRANSFER_GB_PER_MONTH`, default 1000)
+    caps nothing. It is the threshold of a daily data-use report
+    (`rendezvous/README.md`, "Data use"): a journal line a day with the
+    server's outbound bytes so far this calendar month, and a warning
+    once they pass it.
+- **A relay outlives its credential.** Observed with Ubuntu 24.04's coturn
+  4.6.1 (package `4.6.1-1build4`) and the configuration in
+  `rendezvous/deploy/turnserver.conf`, by `rendezvous/tests/coturn-check.sh`:
+  coturn checks a credential's expiry only when an allocation is made. An
+  allocation made while its credential was valid goes on being refreshed
+  (`Refresh`, answered with success), and goes on getting permissions
+  that relay (`CreatePermission`), after the credential has expired; this
+  holds through a stale-nonce challenge too (a `438` with a new nonce,
+  after which the same credential is accepted), which coturn issues every
+  600 s (`stale-nonce`). Only a new allocation with the expired credential
+  is refused (`401`). So a session relayed through coturn is never cut at
+  the credential's expiry; a client needs fresh credentials only to make a
+  new allocation (after losing the old one, or for a new session), which
+  is what decides Task 29's refresh timing. This is an observation of
+  coturn, not part of the wire.
 
 `crypto/turn-credentials.json` gives secrets, expiries, ids, usernames and
 passwords, the passwords computed with `openssl dgst -sha1 -hmac`, not with
@@ -650,7 +713,8 @@ the service's code.
 
 Every value is configurable (`rendezvous.conf`, `[limits]`); these are the
 defaults. Every value must be at least 1, except that 0 turns the pings
-off; the service refuses to start otherwise.
+off and leaves the kernel's socket buffer sizing (`socket_buffer_bytes`);
+the service refuses to start otherwise.
 
 **Address groups.** Every count and limit "per address" is kept per
 address group: an IPv4 address by itself (an IPv4-mapped IPv6 address
@@ -677,8 +741,8 @@ of the same id (section 6.2) does not count the older one.
 | Bodies per side per mailbox | 32 | a pairing exchange is under ten each way |
 | Connections per address group (the connection pool) | 16 | a household with several phones behind one address; `tooManyConnections` instead of `hello` beyond it |
 | Registered stations per address group (the station pool) | 4 | a household runs one or two Cores; `tooManyConnections` instead of `registered` beyond it |
-| Connections in total (the connection pool) | 512 | bounds memory (below); `overloaded` instead of `hello` beyond it |
-| Registered stations in total (the station pool) | 512 | bounds memory (below); `overloaded` instead of `registered` beyond it |
+| Connections in total (the connection pool) | 256 | clients are brief (an introduction lasts at most 120 s, a mailbox 300 s, an idle client 30 s), so even 2000 Cores each reached a few dozen times a day keep well under a hundred at once; kept small because every connection in this pool can be made to hold an unfinished message in the service and in Caddy (below); every Core passes through it while it registers, so after a restart the Cores come back in turns, each `overloaded` one after its retry time; `overloaded` instead of `hello` beyond it |
+| Registered stations in total (the station pool) | 2000 | JJ's ruling (2026-09-26): the service supports 2000 registered Cores at once; measured memory fits (below); `overloaded` instead of `registered` beyond it |
 | Handshake timeout | 10 s | a registration is one round trip plus a signature |
 | Idle timeout for clients | 30 s | a client with nothing pending has no reason to stay |
 | Introduction lifetime | 120 s | gathering (23.5 s) plus ICE's 39.5 s timer, with room |
@@ -687,27 +751,97 @@ of the same id (section 6.2) does not count the older one.
 | Outbound queue per connection | 256 messages or 1048576 bytes (1 MiB), whichever comes first | a peer that stops reading is closed (1008, section 2) rather than buffered without bound; 1 MiB holds 16 of the largest messages |
 | Outbound queues together | 33554432 bytes (32 MiB) | a budget for every connection's queue at once; a message that would pass it closes (1008) the connection holding the most queued bytes, and the next largest, until it fits, so the peer that stopped reading goes, not whoever happens to be sent to next (the recipient goes only when it is itself the largest) |
 | One message's send | 30 s | a connection whose writer has spent longer than this on one message is closed (1008): a peer that stops reading stops the WebSocket pings too (on websockets 10.4 a ping waits behind the same blocked write), so the ping timeout alone would never end it; 30 s is far longer than any real message takes |
+| Kernel buffers per connection | 16384 bytes each way (`socket_buffer_bytes`) | the receive and send buffers (SO_RCVBUF, SO_SNDBUF) of every connection, set by the service on its own sockets, so the kernel memory a connection can hold is bounded without changing any host setting; Linux doubles the value, so each connection holds at most 64 KiB in the kernel. Caddy is the only peer, on loopback, where such buffers cost no speed. 0 leaves the kernel's own sizing, which can grow each buffer to megabytes |
 
-**Sizing the totals.** The defaults fit a server of 1 GB of memory and one
-virtual CPU that also runs the website (Caddy) and the relay (coturn),
-leaving the service about 256 MiB. Measured in an `ubuntu:24.04` container
-with Ubuntu's `python3-websockets` 10.4 on Python 3.12: the process starts
-at about 28 MiB; each idle connection adds about 24 KiB (a client) to
-27 KiB (a registered station), 1000 of each coming to about 50 MiB; and
-each connection holding a message of nearly 128 KiB that its peer never
-finishes sending adds about 153 KiB, which is the most a peer can make the
-service hold on the way in (the cap of section 2, with at most one whole
-message waiting behind it, `max_queue` 1, and the service reads each
-message as it arrives). On the way out a connection can add its WebSocket
-write buffer (32 KiB, `write_limit`), and every queue together at most the
-32 MiB budget. So the worst case for 1024 connections (512 in each pool)
-is about 28 + 1024 x (153 + 32) KiB + 32 MiB, near 245 MiB, where real
-traffic uses a small fraction of it. Caddy holds each proxied WebSocket
-too, estimated (not measured) at under 100 KiB with its TLS buffers. A
-larger server raises both totals; a deployment can also set a memory
-ceiling (systemd `MemoryMax`) as a backstop. One vCPU is not the limit:
-the service's work is a JSON decode per message and one signature check
-per registration.
+**Sizing the totals.** The rendezvous runs on a server of its own: the
+service, coturn and a Caddy in front of the service, nothing else. Its
+memory is a setup input (`RV_MEMORY_MB`, by default what the kernel
+reports), and `rendezvous/deploy/setup-server.sh` works the limits out
+from it with one formula, in one place:
+
+```
+reserve        = 256 MiB                       the system and coturn
+Caddy          GOMEMLIMIT = (memory - 256) x 50%   a soft limit: Go collects
+                                               garbage harder near it
+the service    MemoryMax  = (memory - 256) x 35%   the kernel ends it past this
+headroom       = the other 15%
+```
+
+| Server | memory the kernel reports | Caddy GOMEMLIMIT | the service MemoryMax |
+| --- | --- | --- | --- |
+| 1 GB | about 961 MiB | 352 MiB | 246 MiB |
+| 2 GB | about 1967 MiB | 855 MiB | 598 MiB |
+
+The measurements come from `rendezvous/tests/memory-check.sh`: an
+`ubuntu:24.04` container with Ubuntu's `python3-websockets` 10.4 on Python
+3.12 and Caddy 2.11.4 from Caddy's repository running
+`rendezvous/deploy/Caddyfile` with the GOMEMLIMIT above, the service behind
+it, loaded through `wss://` with 2000 registered stations, then 256
+clients, then 500 connections each holding all but one byte of a
+131072-byte message (the most a peer can make the service hold on the way
+in: the cap of section 2, `max_queue` 1, and the service reads each
+message as it arrives), then 100 stations that stop reading (each sent
+three introductions carrying a 60000-byte offer). Resident memory:
+
+| | the service | Caddy, GOMEMLIMIT 384 MiB | Caddy, GOMEMLIMIT 896 MiB |
+| --- | --- | --- | --- |
+| at start | 27.9 MiB | 45.4 MiB | 45.2 MiB |
+| per idle registered station | 26.3 KiB | 106.5 KiB | 113.2 KiB |
+| per idle client | 25 to 26 KiB | 51.3 KiB | 34.0 KiB |
+| per connection holding an unfinished message | 170 to 175 KiB | 87.3 KiB | 190.6 KiB |
+| per stalled station, with its three clients | 310 to 331 KiB | 366.0 KiB | 483.6 KiB |
+| both pools full (2000 and 256), idle | 85.7 MiB | 266.2 MiB | 274.7 MiB |
+| then 500 unfinished messages | 168.8 MiB | 308.8 MiB | 367.8 MiB |
+
+With the lower GOMEMLIMIT Caddy's garbage collector returns memory
+sooner, which is most of the difference between the two Caddy columns.
+The kernel's TCP memory for the whole host stayed under 10 MiB. coturn
+holds 19 MiB at start (`coturn-check.sh`) and little per relay.
+
+**At 1 GB.** Both pools full of idle connections take about 256 (reserve)
++ 266 (Caddy) + 86 (the service) = 608 MiB of about 961. A peer that
+fills both pools with unfinished messages would need about 28 MiB + 2256 x
+(172 + 32 + 64) KiB + 32 MiB, about 650 MiB, in the service alone (its
+WebSocket write buffer, 32 KiB, `write_limit`; its kernel buffers, 64
+KiB, below; the 32 MiB send budget); the service passes its 246 MiB
+ceiling long before that, the kernel ends it, and systemd starts it again
+in 5 s (`Restart=on-failure`). Every Core connects and registers again.
+Caddy meanwhile was seen to hold 310 to 345 MiB, near its limit. So a 1 GB
+server carries 2000 Cores in normal use with room to spare, and under
+such an attack loses the service for seconds at a time, but not Caddy,
+coturn or the host.
+
+**At 2 GB, recommended for 2000 Cores.** The service's 598 MiB ceiling is
+close to its whole worst case (650 MiB), Caddy's 855 MiB limit is far
+above what it was seen to hold (under 430 MiB), and the total under that
+attack (about 256 + 598 + 430 = 1284 MiB) leaves about 680 MiB of the 1967.
+A 2 GB server rides out a peer filling both pools with at most a
+restart of the service near the very end.
+
+**What protects the rest.** The service's unit
+(`rendezvous/deploy/nereus-rendezvous.service`) has `OOMScoreAdjust=500`
+and Caddy's drop-in (`rendezvous/deploy/caddy-override.conf`) `-100`, so if
+the whole host runs short the kernel ends the service first, which also
+frees every connection Caddy holds for it; Caddy's drop-in adds
+`Restart=on-failure` with `RestartSec=2`, so a Caddy that is ended anyway
+comes back at once. The service's unit raises its open-file limit to 8192
+(`LimitNOFILE`): one descriptor per connection, and systemd's default of
+1024 would stop it accepting before its pools fill (observed in
+`memory-check.sh` before the limit was raised). The kernel holds each
+connection's socket buffers, which the service fixes at 16384 bytes each
+way (`socket_buffer_bytes`; Linux doubles it), at most 64 KiB a
+connection; under systemd they are charged to the service's own memory.
+
+**Caddy's memory is Caddy's.** Caddy's own memory, and the kernel's socket
+buffers on its client-facing connections (which Linux sizes by itself, up
+to megabytes for a peer that stops reading), sit in Caddy's cgroup. They
+are bounded neither by the service's settings nor by its `MemoryMax`;
+GOMEMLIMIT only makes Caddy collect garbage harder, and does not stop it
+growing. That is why the rendezvous has a server of its own: on a server
+shared with a website, a peer filling the pools would grow the Caddy that
+also serves the website (see `rendezvous/README.md`, "Beside a website").
+One vCPU is not the limit: the service's work is a JSON decode per
+message and one signature check per registration.
 
 The windows are sliding: a limit of N a minute refuses an attempt when N
 were counted in the last 60 s, with `retryAfterMs` until the oldest leaves
@@ -908,8 +1042,8 @@ absent keys have these defaults:
 
 | Key | Default |
 | --- | --- |
-| `stunUrls` | `["stun:rv6.conformance.invalid:3478","stun:rv4.conformance.invalid:3478"]` |
-| `turnUrls` | `["turn:rv6.conformance.invalid:3478?transport=udp","turn:rv4.conformance.invalid:3478?transport=udp"]` |
+| `stunUrls` | `["stun:rv4.conformance.invalid:3478","stun:rv6.conformance.invalid:3478"]` |
+| `turnUrls` | `["turn:rv4.conformance.invalid:3478?transport=udp","turn:rv6.conformance.invalid:3478?transport=udp"]` |
 | `turn` | `true`: a TURN secret is configured (the runner makes one at run time); `false`: none |
 | `turnTtlSeconds` | 86400 |
 | `wallClock` | 1800000000: the Unix time when the fixture starts; it moves only with `advanceMs` |

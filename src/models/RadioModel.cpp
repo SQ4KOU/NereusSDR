@@ -228,6 +228,20 @@
 //                SliceMeterPump at once (setup.cs
 //                udDisplayMeterDelay_ValueChanged [v2.10.3.15]). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-R3-49 / R-R3-21 / R-R3-40 (parity Task 16): the DSP
+//                facts a window reads from its Core: noiseReductionMethods
+//                (RxChannel's build and platform checks), the last DSP
+//                Options apply time, each slice's minNotchWidthHz following
+//                its channel, and dsp.filterResponse's curve (the local
+//                filter graph's computation). NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-R3-49 (trunk merge of parity Tasks 16 to 18): one noise
+//                reduction availability source. noiseReductionMethods and
+//                noiseReductionUnavailableReason dropped for
+//                nrCannotRunReason (DspAssetService), which in a remote
+//                window says the Core does not say below dspAssetVersion 3
+//                (DFNR) or 4 (MNR). J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 //   2026-09-25 - R-R3-32 / R-R3-46 / R-R3-49 (parity Task 6): paReadings
 //                and paRowVolts, the one PA reading source (the Core's in a
 //                remote window, applyCorePaReadings); `txInhibited` follows
@@ -423,6 +437,32 @@
 //               priming and VOX), one writer at a time (remoteMicWriter),
 //               VOX following the holder. J.J. Boyd (KG4VCF), with AI-
 //               assisted implementation via Anthropic Claude Code.
+//   2026-09-26 - Parity Task 18 (B3.1): a remote window's band button for a
+//                named slice sends slice.selectBand to a Core at
+//                bandSelectVersion 1, so the Core changes that slice with
+//                its own band memory. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-26 - Parity Task 19 (R-IOS-25): SpotSourceHost starts and
+//                stops the spot sources (the restore moved there; the Core
+//                runs the station's with restoreStationSpotSources, a remote
+//                window its own WSJT-X and SpotCollector); a remote window
+//                shows the Core's spots stream beside its own
+//                (applyStationRecordBatch). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
+//   2026-09-26 - Parity Task 21 (R-IOS-18): a remote window's copy of the
+//                Core's radios (stationRadios, stationRadiosChanged) and the
+//                Core's refusals of a radio request (stationRadioRefused).
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - Fix wave after parity Tasks 19 and 21: a spots reset no
+//                longer clears the Core's radio list (clearStationSpots,
+//                clearStationRadios), a console reset replaces the console,
+//                the Core's waiting reason (stationRadioWaiting), and a key
+//                refused while the Core changes its radio. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 : D79 (R-IOS-11, R-R3-49): a remote window follows the
+//                Core's BandPlanName (stationSettingChanged), as RxOnly
+//                does. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 //=================================================================
@@ -636,6 +676,7 @@ warren@wpratt.com
 #include "RadioModel.h"
 #include "core/AmModulationAnalyzer.h"
 #include "BandDefaults.h"
+#include "BandGrid.h"
 #include "RxDspWorker.h"
 #include "core/platform/ThreadPlacement.h"
 #include "core/FFTEngine.h"
@@ -712,6 +753,8 @@ warren@wpratt.com
 #include "core/FreeDVReporterClient.h"
 #include "core/FreeDVRadeReporterBridge.h"
 #include "core/PskReporterClient.h"
+#include "core/SpotSourceHost.h"
+#include "core/session/RecordStream.h"
 #include "core/DxccColorProvider.h"
 #include "core/DxSpot.h"
 #include "core/FreeDVStation.h"
@@ -1424,6 +1467,35 @@ RadioModel::RadioModel(Role role, QObject* parent)
         m_rxOnlySetting = rxOnlySetting();
     }
 
+    // R-R3-49 (parity Task 16): a local model's noise reduction is its own
+    // build's and computer's, and its DSP Options apply time its own
+    // rebuilds'; a remote window holds the Core's (applyMirroredValue).
+    if (m_role == Role::Remote) {
+        // The filter graph's curve follows the slice it draws as slices
+        // come and go (coreFilterResponseSlice).
+        const auto rewatch = [this]() {
+            if (!m_coreFilterResponseWanted) {
+                return;
+            }
+            watchCoreFilterResponseSlice();
+            requestCoreFilterResponse();
+        };
+        connect(this, &RadioModel::activeSliceChanged, this, rewatch);
+        connect(this, &RadioModel::sliceAdded, this, rewatch);
+        connect(this, &RadioModel::sliceRemoved, this, rewatch);
+    } else {
+        // Parity Task 16: a new slice carries its channel's minimum notch
+        // width at once (0 until its channel opens).
+        connect(this, &RadioModel::sliceAdded, this, &RadioModel::refreshSliceMinNotchWidths);
+        connect(this, &RadioModel::dspChangeMeasured, this, [this](qint64 elapsedMs) {
+            if (m_dspOptionsLastApplyMs == elapsedMs) {
+                return;
+            }
+            m_dspOptionsLastApplyMs = elapsedMs;
+            emit dspOptionsLastApplyMsChanged(elapsedMs);
+        });
+    }
+
     // R-R3-49 (parity Task 6): `txInhibited` follows this model's own
     // TxInhibitMonitor on a local model (the Core); a remote window holds
     // the Core's value instead (applyMirroredValue).
@@ -1760,6 +1832,28 @@ RadioModel::RadioModel(Role role, QObject* parent)
             [this](const QString& key) {
                 if (key.isEmpty() || key == QLatin1String("RxOnly")) {
                     applyRxOnlySetting(rxOnlySetting());
+                }
+            });
+    // D79 (R-IOS-11, R-R3-49): the band plan is the station's. A remote
+    // window read its plan at startup, before the Core's settings arrived
+    // (the proxy returns the default); it takes the Core's plan with the
+    // snapshot and follows every later change. The settings already hold
+    // the value, so setActivePlan() writes nothing back. A name this
+    // window does not have leaves its plan as it is. Local windows never
+    // see stationSettingChanged, so they are unchanged.
+    connect(this, &RadioModel::stationSettingChanged, this,
+            [this](const QString& key) {
+                if (!key.isEmpty() && key != QLatin1String("BandPlanName")) {
+                    return;
+                }
+                const QString name = AppSettings::instance()
+                                         .value(QStringLiteral("BandPlanName"),
+                                                QString::fromLatin1(
+                                                    BandPlanManager::kDefaultPlanName))
+                                         .toString();
+                if (name != m_bandPlanManager.activePlanName()
+                    && m_bandPlanManager.availablePlans().contains(name)) {
+                    m_bandPlanManager.setActivePlan(name);
                 }
             });
 
@@ -2881,6 +2975,34 @@ RadioModel::RadioModel(Role role, QObject* parent)
     wireSpotTable(m_freeDvReporter.get());
     wireSpotTable(m_pskReporter.get());
 
+    // Parity Task 19 (R-IOS-25): one place starts, stops and follows the
+    // spot sources, for a window running its own radio, the Core and a
+    // remote window alike (SpotSourceHost.h).
+    m_spotSourceHost = std::make_unique<SpotSourceHost>(
+        m_dxCluster.get(), m_rbn.get(), m_wsjtx.get(), m_spotCollector.get(), m_pota.get(),
+        m_pskReporter.get(), m_spotModel.get(), this);
+    // A remote window: the station's sources are the Core's, so their
+    // buttons ask the Core (spots.*, recordStreamVersion 1).
+    if (m_role == Role::Remote) {
+        m_spotSourceHost->setStationForwarder(
+            [this](const QByteArray& verb, const QString& source, const QString& text,
+                   QString* reason) {
+            if (m_station == nullptr) {
+                if (reason != nullptr) {
+                    *reason = QStringLiteral("Not connected to the Core, so the spot source "
+                                             "request was not sent.");
+                }
+                return false;
+            }
+            const IStationLink::CommandOutcome outcome =
+                m_station->requestSpotSource(verb, source, text);
+            if (!outcome.sent && reason != nullptr) {
+                *reason = outcome.reason;
+            }
+            return outcome.sent;
+        });
+    }
+
     // ── Phase 3R-bridge: RADE Path B (sync-only) rx_report upload ─────────
     // Ported from freedv-gui src/main.cpp:1971-1996 [@77e793a]
     // (MainFrame::OnTimer's FREEDV_MODE_RADE && syncState else-if).
@@ -3315,6 +3437,23 @@ QString RadioModel::applyMirroredValue(const QByteArray& propertyName, const QVa
             }
             return {};
         }
+        if (propertyName == "stationRadioWaiting") {
+            // Fix wave (M2): why the Core waits for a radio, observed.
+            if (value.typeId() != QMetaType::QString) { return QStringLiteral("Expected text."); }
+            setStationRadioWaiting(value.toString());
+            return {};
+        }
+        if (propertyName == "dspOptionsLastApplyMs") {
+            // R-R3-49 (parity Task 16): the Core's last DSP Options apply.
+            bool ok = false;
+            const qint64 ms = value.toLongLong(&ok);
+            if (!ok) { return QStringLiteral("Expected a whole number of milliseconds."); }
+            if (m_dspOptionsLastApplyMs != ms) {
+                m_dspOptionsLastApplyMs = ms;
+                emit dspOptionsLastApplyMsChanged(ms);
+            }
+            return {};
+        }
         if (propertyName == "txInhibited") {
             // R-R3-49 (parity Task 6): the Core's TX inhibit, observed.
             if (value.typeId() != QMetaType::Bool) { return QStringLiteral("Expected a boolean TX inhibit observation."); }
@@ -3581,6 +3720,205 @@ void RadioModel::onPskReporterSpotReceived(const DxSpot& spot)
     m_spotModel->applySpotStatus(idx, kvsFromSpot(spot, lifetime, color));
 }
 
+// ── Parity Task 19 (R-IOS-25): the Core's spots in a remote window ────────
+//
+// NereusSDR-original. The Core sends its spots as the `spots` record stream
+// (SpotSourceHost::spotRecordFields) and its cluster consoles as
+// spotConsole:<source>. A remote window shows the Core's spots in its own
+// SpotModel (the panadapter overlay) and Spot List, beside its own WSJT-X and
+// SpotCollector spots, under indices of its own. Colour and lifetime follow
+// each source's Spot Hub settings, which are the Core's (Station scope).
+
+namespace {
+
+struct StationSpotLook {
+    const char* colourKey;
+    const char* colourDefault;
+    const char* lifetimeKey;
+    int lifetimeDefault;
+};
+
+// The per-source keys and defaults the on*SpotReceived slots above read.
+StationSpotLook stationSpotLook(const QString& source)
+{
+    if (source == QLatin1String("RBN")) {
+        return {"RbnSpotColor", "#4488FF", "RbnSpotLifetimeSec", 1800};
+    }
+    if (source == QLatin1String("POTA")) {
+        return {"PotaSpotColor", "#FFFF00", "PotaSpotLifetimeSec", 1800};
+    }
+    if (source == QLatin1String("PSK")) {
+        return {"PskReporterSpotColor", "#FF00FF", "PskReporterSpotLifetimeSec", 1800};
+    }
+    if (source == QLatin1String("FreeDV")) {
+        return {"FreeDvSpotColor", "#FF8C00", "FreeDvSpotLifetimeSec", 1800};
+    }
+    if (source == QLatin1String("SpotCollector")) {
+        return {"SpotCollectorSpotColor", "#B0C4DE", "SpotCollectorSpotLifetimeSec", 1800};
+    }
+    return {"DxClusterSpotColor", "#D2B48C", "DxClusterSpotLifetimeSec", 1800};
+}
+
+} // namespace
+
+void RadioModel::applyStationRecordBatch(const RecordBatch& batch)
+{
+    // Parity Task 21 (R-IOS-18): the Core's radios, in the Core's order.
+    if (batch.stream == QLatin1String("stationRadios")) {
+        QList<StationRadioEntry> entries = batch.reset ? QList<StationRadioEntry>{}
+                                                       : m_stationRadioEntries;
+        for (const QString& id : batch.removes) {
+            entries.removeIf([&id](const StationRadioEntry& e) { return e.id == id; });
+        }
+        for (const RecordUpsert& u : batch.upserts) {
+            const std::optional<StationRadioEntry> entry =
+                StationRadioEntry::fromFields(u.id, u.fields);
+            if (!entry) {
+                continue;
+            }
+            const auto at = std::find_if(entries.begin(), entries.end(),
+                                         [&u](const StationRadioEntry& e) { return e.id == u.id; });
+            if (at != entries.end()) {
+                *at = *entry;
+            } else {
+                entries.append(*entry);
+            }
+        }
+        // The Core's radio first.
+        std::stable_sort(entries.begin(), entries.end(),
+                         [](const StationRadioEntry& a, const StationRadioEntry& b) {
+            return a.inUse && !b.inUse;
+        });
+        if (entries != m_stationRadioEntries) {
+            m_stationRadioEntries = entries;
+            emit stationRadiosChanged();
+        }
+        return;
+    }
+    if (batch.stream.startsWith(QLatin1String("spotConsole:"))) {
+        const QString source = batch.stream.mid(12);
+        if (!SpotSourceHost::isStationSource(source) || !m_spotSourceHost) {
+            return;
+        }
+        QStringList lines;
+        for (const RecordUpsert& u : batch.upserts) {
+            lines.append(u.fields.value(QStringLiteral("line")).toString());
+        }
+        // Fix wave, M5: a reset (each subscribe, a reconnect) carries the
+        // Core's backlog again, so it replaces the console rather than
+        // adding to it.
+        m_spotSourceHost->appendStationConsole(source, lines, batch.reset);
+        return;
+    }
+    if (batch.stream != QLatin1String("spots") || !m_spotModel) {
+        return;
+    }
+    if (batch.reset) {
+        // Fix wave, I3: the Core's spots only; its radio list is another
+        // stream.
+        clearStationSpots();
+    }
+    for (const QString& id : batch.removes) {
+        const auto it = m_stationSpotIndex.find(id);
+        if (it != m_stationSpotIndex.end()) {
+            m_spotModel->removeSpot(it.value());
+            m_stationSpotIndex.erase(it);
+        }
+    }
+    auto& s = AppSettings::instance();
+    for (const RecordUpsert& u : batch.upserts) {
+        const QJsonObject& f = u.fields;
+        const QString source = f.value(QStringLiteral("source")).toString();
+        const StationSpotLook look = stationSpotLook(source);
+        const double mhz = f.value(QStringLiteral("frequencyHz")).toDouble() / 1.0e6;
+        const QDateTime when = QDateTime::fromString(f.value(QStringLiteral("timeUtc")).toString(),
+                                                     Qt::ISODate);
+        QMap<QString, QString> kvs;
+        kvs[QStringLiteral("callsign")] = f.value(QStringLiteral("call")).toString();
+        kvs[QStringLiteral("rx_freq")] = QString::number(mhz, 'f', 4);
+        kvs[QStringLiteral("tx_freq")] = QString::number(mhz, 'f', 4);
+        const QString mode = f.value(QStringLiteral("mode")).toString();
+        if (!mode.isEmpty()) {
+            kvs[QStringLiteral("mode")] = mode;
+        }
+        kvs[QStringLiteral("source")] = source;
+        kvs[QStringLiteral("spotter_callsign")] = f.value(QStringLiteral("spotter")).toString();
+        kvs[QStringLiteral("comment")] = f.value(QStringLiteral("comment")).toString();
+        kvs[QStringLiteral("timestamp")] = QString::number(
+            when.isValid() ? when.toSecsSinceEpoch() : QDateTime::currentSecsSinceEpoch());
+        kvs[QStringLiteral("lifetime_seconds")] = QString::number(
+            s.value(QString::fromLatin1(look.lifetimeKey), look.lifetimeDefault).toInt());
+        kvs[QStringLiteral("color")] =
+            s.value(QString::fromLatin1(look.colourKey), QString::fromLatin1(look.colourDefault))
+                .toString();
+        kvs[QStringLiteral("priority")] =
+            QString::number(f.value(QStringLiteral("dxccPriority")).toInt());
+        const bool isNew = !m_stationSpotIndex.contains(u.id);
+        if (isNew) {
+            m_stationSpotIndex.insert(u.id, m_spotModel->mintIndex());
+        }
+        m_spotModel->applySpotStatus(m_stationSpotIndex.value(u.id), kvs);
+        // The Spot List lists each spot once, as a local source's arrival
+        // does.
+        if (isNew && m_spotTableModel) {
+            DxSpot row;
+            row.dxCall = kvs.value(QStringLiteral("callsign"));
+            row.freqMhz = mhz;
+            row.spotterCall = kvs.value(QStringLiteral("spotter_callsign"));
+            row.comment = kvs.value(QStringLiteral("comment"));
+            row.utcTime = when.isValid() ? when.toUTC().time() : QDateTime::currentDateTimeUtc().time();
+            row.source = source;
+            m_spotTableModel->addSpot(row);
+        }
+    }
+}
+
+QList<StationRadioEntry> RadioModel::stationRadios() const
+{
+    return m_stationRadioEntries;
+}
+
+void RadioModel::reportStationRadioRefused(const QString& reason)
+{
+    emit stationRadioRefused(reason);
+}
+
+void RadioModel::clearStationRecords()
+{
+    clearStationRadios();
+    clearStationSpots();
+}
+
+void RadioModel::clearStationRadios()
+{
+    if (!m_stationRadioEntries.isEmpty()) {
+        m_stationRadioEntries.clear();
+        emit stationRadiosChanged();
+    }
+    if (m_role == Role::Remote) {
+        setStationRadioWaiting(QString());
+    }
+}
+
+void RadioModel::setStationRadioWaiting(const QString& reason)
+{
+    if (m_stationRadioWaiting == reason) {
+        return;
+    }
+    m_stationRadioWaiting = reason;
+    emit stationRadioWaitingChanged(reason);
+}
+
+void RadioModel::clearStationSpots()
+{
+    if (m_spotModel) {
+        for (const int index : std::as_const(m_stationSpotIndex)) {
+            m_spotModel->removeSpot(index);
+        }
+    }
+    m_stationSpotIndex.clear();
+}
+
 // ── Phase 3J-2 + 3R M3: spot-client auto-start state restore ───────────────
 //
 // Reads each per-source AutoConnect / AutoStart key from AppSettings and,
@@ -3612,7 +3950,15 @@ void RadioModel::restoreSpotClientAutoStartState()
     // issues.md and this task's verification README paragraph for the
     // per-source breakdown. Do not read this gate as having decided
     // that question; it has not.
-    if (role() != Role::Local) { return; }
+    //
+    // Parity Task 19 (R-IOS-25) settles the question for the spot sources:
+    // the station's (DX cluster, RBN, POTA, PSK Reporter) run on the Core
+    // (restoreStationSpotSources), and each computer runs its own WSJT-X
+    // and SpotCollector listeners, so a remote window starts those alone.
+    if (role() != Role::Local) {
+        m_spotSourceHost->restoreAutoStart(SpotSourceHost::Placement::WindowSources);
+        return;
+    }
 
     auto& s = AppSettings::instance();
     auto isTrue = [&s](const QString& key) {
@@ -3635,48 +3981,9 @@ void RadioModel::restoreSpotClientAutoStartState()
         return v;
     };
 
-    // DxCluster
-    if (m_dxCluster && isTrue(QStringLiteral("DxClusterAutoConnect"))) {
-        m_dxCluster->connectToCluster(
-            s.value(QStringLiteral("DxClusterHost"),
-                    QStringLiteral("dxc.nc7j.com")).toString(),
-            static_cast<quint16>(
-                s.value(QStringLiteral("DxClusterPort"), 7300).toInt()),
-            resolveCall(QStringLiteral("DxClusterCallsign")));
-    }
-
-    // RBN (same DxClusterClient class, different keys / default host).
-    if (m_rbn && isTrue(QStringLiteral("RbnAutoConnect"))) {
-        m_rbn->connectToCluster(
-            s.value(QStringLiteral("RbnHost"),
-                    QStringLiteral("telnet.reversebeacon.net")).toString(),
-            static_cast<quint16>(
-                s.value(QStringLiteral("RbnPort"), 7000).toInt()),
-            resolveCall(QStringLiteral("RbnCallsign")));
-    }
-
-    // WSJT-X (UDP bind on the configured address / port).
-    if (m_wsjtx && isTrue(QStringLiteral("WsjtxAutoStart"))) {
-        m_wsjtx->startListening(
-            s.value(QStringLiteral("WsjtxAddress"),
-                    QStringLiteral("224.0.0.1")).toString(),
-            static_cast<quint16>(
-                s.value(QStringLiteral("WsjtxPort"), 2237).toInt()));
-    }
-
-    // SpotCollector (UDP bind).
-    if (m_spotCollector
-        && isTrue(QStringLiteral("SpotCollectorAutoStart"))) {
-        m_spotCollector->startListening(
-            static_cast<quint16>(
-                s.value(QStringLiteral("SpotCollectorPort"), 9999).toInt()));
-    }
-
-    // POTA (HTTPS poll loop).
-    if (m_pota && isTrue(QStringLiteral("PotaAutoStart"))) {
-        m_pota->startPolling(
-            s.value(QStringLiteral("PotaPollInterval"), 30).toInt());
-    }
+    // Parity Task 19: every source but FreeDV Reporter starts through the
+    // spot source host, with the same settings and calls as before.
+    m_spotSourceHost->restoreAutoStart(SpotSourceHost::Placement::Everything);
 
     // FreeDV Reporter (WebSocket connect; identity / URL already plumbed
     // in ctor at lines 936-953).
@@ -3716,33 +4023,12 @@ void RadioModel::restoreSpotClientAutoStartState()
             m_freeDvReporter->startConnection();
         }
     }
+}
 
-    // PSK Reporter: send-only.  Identity refreshed from User/* fall-
-    // back chain.  2026-05-12 bench fix: if PskReporterAutoStart is
-    // True, arm the 5-minute auto-send timer now — source-first port
-    // from freedv-gui main.cpp:2575-2597 [@77e793a] which adds
-    // PskReporter to m_reporters[] AND starts m_pskReporterTimer at
-    // audio start time.  Previously the AutoStart flag persisted but
-    // had no effect (it only set identity), so users with auto-start
-    // checked would never see any spots reach pskreporter.info.
-    if (m_pskReporter) {
-        const QString pskCall = resolveCall(
-            QStringLiteral("PskReporter/Callsign"));
-        QString pskGrid =
-            s.value(QStringLiteral("PskReporter/GridSquare")).toString();
-        if (pskGrid.isEmpty()) pskGrid = userGrid;
-        if (!pskCall.isEmpty()) {
-            m_pskReporter->setIdentity(pskCall, pskGrid,
-                                       QStringLiteral("NereusSDR ") + QStringLiteral(NEREUSSDR_VERSION));
-            if (isTrue(QStringLiteral("PskReporterAutoStart"))) {
-                m_pskReporter->setAutoSendIntervalSec(
-                    PskReporterClient::kReportingIntervalSec);
-                qCInfo(lcDsp)
-                    << "PskReporter: auto-start armed (5-min interval)"
-                    << "callsign=" << pskCall;
-            }
-        }
-    }
+void RadioModel::restoreStationSpotSources()
+{
+    // Parity Task 19 (R-IOS-25): the Core's own settings; no window needed.
+    m_spotSourceHost->restoreAutoStart(SpotSourceHost::Placement::StationSources);
 }
 
 bool RadioModel::isConnected() const
@@ -6548,6 +6834,10 @@ void RadioModel::applyStationCapabilities(const NereusSDR::StationCapabilities& 
 
     m_stationMaxSlices = caps.effectiveMaxSlices > 0 ? caps.effectiveMaxSlices : 1;
     m_stationUserDdcCount = caps.userDdcCount;
+    // R-R3-49 (parity Task 16): whether the Core sends its filter curve,
+    // and (trunk merge) whether it says which noise reduction it runs.
+    setStationDspInfoVersion(caps.dspInfoVersion);
+    setStationDspAssetVersion(caps.dspAssetVersion);
 
     if (infoMoved) {
         emit infoChanged();
@@ -6703,6 +6993,269 @@ bool RadioModel::isSwrProtectionSettingKey(const QString& key)
         || key == QLatin1String("SwrTuneProtectionEnabled")
         || key == QLatin1String("TunePowerSwrIgnore")
         || key == QLatin1String("WindBackPowerSwr");
+}
+
+// ── Remote-window parity Task 16 (R-R3-49, R-R3-21, R-R3-40) ────────────────
+//
+// NereusSDR-original. The facts a remote window needs about its Core's DSP
+// that it used to read from its own build or its own (idle) channels.
+
+QString RadioModel::noiseReductionNotSaidReason()
+{
+    return QStringLiteral("This Core does not say which noise reduction it can run. "
+                          "Updating the Core may help.");
+}
+
+void RadioModel::setStationDspInfoVersion(int version)
+{
+    if (m_role != Role::Remote) {
+        return;
+    }
+    const bool changed = m_stationDspInfoVersion != version;
+    m_stationDspInfoVersion = version;
+    if (changed) {
+        emit stationDspInfoVersionChanged();
+    }
+    if (m_coreFilterResponseWanted) {
+        watchCoreFilterResponseSlice();
+        requestCoreFilterResponse();
+    }
+}
+
+void RadioModel::setStationDspAssetVersion(int version)
+{
+    // Trunk merge of parity Tasks 16 to 18 (R-R3-49): a Core below
+    // dspAssetVersion 3 never sends dfnrRunnable, below 4 never mnrRunnable;
+    // nrCannotRunReason then says it does not say.
+    if (m_role != Role::Remote || m_stationDspAssetVersion == version) {
+        return;
+    }
+    m_stationDspAssetVersion = version;
+    emit nrAvailabilityChanged();
+}
+
+qint64 RadioModel::dspOptionsLastApplyMs() const
+{
+    return m_dspOptionsLastApplyMs;
+}
+
+bool RadioModel::filterResponseForStation(int sliceId, bool highResolution,
+                                          FilterResponse* out, QString* reason) const
+{
+    const auto refuse = [reason](const QString& text) {
+        if (reason) {
+            *reason = text;
+        }
+        return false;
+    };
+    SliceModel* slice = sliceById(sliceId);
+    if (slice == nullptr) {
+        return refuse(QStringLiteral("The Core has no such slice."));
+    }
+    FilterResponse response;
+    if (highResolution) {
+        // The filter graph's own computation (DspOptionsPage binds
+        // FilterDisplayItem to the channel and it paints
+        // filterResponseMagnitudes): the bins it resamples.
+        RxChannel* channel = rxChannelForSlice(slice->sliceIndex());
+        if (channel == nullptr) {
+            return refuse(QStringLiteral("The Core's receiver for this slice is not running."));
+        }
+        double stepHz = 0.0;
+        const QVector<double> bins = channel->filterResponseBins(&stepHz);
+        if (bins.isEmpty()) {
+            return refuse(QStringLiteral("The Core cannot work out this filter's curve."));
+        }
+        double peak = 0.0;
+        for (double m : bins) {
+            peak = std::max(peak, m);
+        }
+        peak = std::max(peak, 1e-30);
+        response.stepHz = stepHz;
+        response.magnitudesDb.reserve(bins.size());
+        for (double m : bins) {
+            // The graph's own floor (RxChannel::resampleFilterResponse).
+            response.magnitudesDb.append(
+                std::max(20.0 * std::log10(std::max(m, 1e-300) / peak), -120.0));
+        }
+    }
+    if (out) {
+        *out = response;
+    }
+    return true;
+}
+
+QString RadioModel::filterResponseToJson(const QVector<double>& magnitudesDb)
+{
+    QJsonArray array;
+    for (double db : magnitudesDb) {
+        array.append(std::round(db * 1000.0) / 1000.0);
+    }
+    return QString::fromUtf8(QJsonDocument(array).toJson(QJsonDocument::Compact));
+}
+
+std::optional<QVector<double>> RadioModel::filterResponseFromJson(const QString& json)
+{
+    QJsonParseError error{};
+    const QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8(), &error);
+    if (error.error != QJsonParseError::NoError || !doc.isArray()) {
+        return std::nullopt;
+    }
+    QVector<double> values;
+    const QJsonArray array = doc.array();
+    values.reserve(array.size());
+    for (const QJsonValue& v : array) {
+        if (!v.isDouble() || !std::isfinite(v.toDouble())) {
+            return std::nullopt;
+        }
+        values.append(v.toDouble());
+    }
+    return values;
+}
+
+QString RadioModel::coreFilterResponseUnavailableReason() const
+{
+    if (m_role != Role::Remote) {
+        return {};
+    }
+    if (m_stationDspInfoVersion < 1) {
+        return IStationLink::filterResponseUnavailableReason();
+    }
+    return {};
+}
+
+SliceModel* RadioModel::coreFilterResponseSlice() const
+{
+    // A local window's graph draws channel 0 (DspOptionsPage's
+    // filterGraphChannel); a remote window asks for the same receiver,
+    // slice 0, or the active slice when there is none.
+    if (SliceModel* first = sliceById(0)) {
+        return first;
+    }
+    return m_activeSlice;
+}
+
+void RadioModel::watchCoreFilterResponseSlice()
+{
+    for (QMetaObject::Connection& conn : m_coreFilterResponseSliceConns) {
+        disconnect(conn);
+    }
+    m_coreFilterResponseSliceConns.clear();
+    if (m_role != Role::Remote || !m_coreFilterResponseWanted) {
+        return;
+    }
+    SliceModel* slice = coreFilterResponseSlice();
+    if (slice == nullptr) {
+        return;
+    }
+    // The curve follows the channel's filter edges and rate; the minimum
+    // notch width moves with the rate (nbp.c min_notch_width), so it stands
+    // in for a rate change the window cannot see otherwise.
+    const auto again = [this]() { requestCoreFilterResponse(); };
+    m_coreFilterResponseSliceConns << connect(slice, &SliceModel::filterChanged, this, again)
+                                   << connect(slice, &SliceModel::dspModeChanged, this, again)
+                                   << connect(slice, &SliceModel::minNotchWidthHzChanged, this,
+                                              again);
+}
+
+void RadioModel::setCoreFilterResponseWanted(bool wanted)
+{
+    if (m_role != Role::Remote) {
+        return;
+    }
+    if (m_coreFilterResponseWanted == wanted) {
+        return;
+    }
+    m_coreFilterResponseWanted = wanted;
+    if (!wanted) {
+        watchCoreFilterResponseSlice();
+        return;
+    }
+    watchCoreFilterResponseSlice();
+    requestCoreFilterResponse();
+}
+
+void RadioModel::requestCoreFilterResponse()
+{
+    if (m_role != Role::Remote || !m_coreFilterResponseWanted || m_station == nullptr
+        || m_stationDspInfoVersion < 1) {
+        return;
+    }
+    // One request at a time: a change while one is out asks again when it
+    // is answered, so a filter drag sends no more than the Core answers.
+    if (m_coreFilterResponseCommand != 0) {
+        m_coreFilterResponseDirty = true;
+        return;
+    }
+    SliceModel* slice = coreFilterResponseSlice();
+    if (slice == nullptr) {
+        return;
+    }
+    const IStationLink::CommandOutcome outcome =
+        m_station->requestFilterResponse(slice->sliceIndex(), /*highResolution=*/true);
+    if (!outcome.sent) {
+        return;
+    }
+    m_coreFilterResponseDirty = false;
+    m_coreFilterResponseCommand = outcome.commandId != 0 ? outcome.commandId : 1;
+}
+
+void RadioModel::reportStationFilterResponse(quint32 commandId, bool accepted,
+                                             const QString& reason, double startHz,
+                                             double stepHz, const QString& json)
+{
+    Q_UNUSED(reason);
+    if (m_coreFilterResponseCommand == 0 || commandId != m_coreFilterResponseCommand) {
+        return;
+    }
+    m_coreFilterResponseCommand = 0;
+    if (accepted) {
+        const std::optional<QVector<double>> values = filterResponseFromJson(json);
+        FilterResponse response;
+        if (values && std::isfinite(startHz) && std::isfinite(stepHz) && stepHz >= 0.0) {
+            response.startHz = startHz;
+            response.stepHz = stepHz;
+            response.magnitudesDb = *values;
+        }
+        m_coreFilterResponse = response;
+    } else {
+        // No curve to draw (no receiver yet): the graph shows its passband.
+        m_coreFilterResponse = FilterResponse{};
+    }
+    emit coreFilterResponseChanged();
+    if (m_coreFilterResponseDirty) {
+        requestCoreFilterResponse();
+    }
+}
+
+void RadioModel::failStationFilterResponse()
+{
+    // The link closed: the curve request it held gets no answer, so the
+    // next session asks afresh (setStationDspInfoVersion).
+    m_coreFilterResponseCommand = 0;
+    m_coreFilterResponseDirty = false;
+}
+
+void RadioModel::refreshSliceMinNotchWidths()
+{
+    if (m_role == Role::Remote) {
+        return;
+    }
+    // Each slice carries its own receiver's minimum (as the local TNF page
+    // reads RxChannel::minNotchWidthHz), 0 while it has no channel. The
+    // channel's own signal re-runs this when a filter size or rate moves it
+    // (console.cs:48787-48818 UpdateMinimumNotchWidthRX [v2.10.3.15] is the
+    // same re-read in Thetis).
+    for (SliceModel* slice : m_slices) {
+        RxChannel* channel = rxChannelForSlice(slice->sliceIndex());
+        if (channel == nullptr) {
+            slice->setMinNotchWidthHz(0.0);
+            continue;
+        }
+        connect(channel, &RxChannel::minNotchWidthChanged, this,
+                &RadioModel::refreshSliceMinNotchWidths, Qt::UniqueConnection);
+        slice->setMinNotchWidthHz(channel->minNotchWidthHz());
+    }
 }
 
 bool RadioModel::applyMeterSetting(const QString& key, const QVariant& value)
@@ -7007,6 +7560,10 @@ void RadioModel::openRxChannelPool(int poolSize, int inputBufferSize,
     // is not (RXANBPSetTuneFrequency short-circuits at
     // third_party/wdsp/src/nbp.c:479).
     syncNotchesToAllChannels();
+
+    // R-R3-49 (parity Task 16): each slice's minNotchWidthHz follows the
+    // channel this pool just opened for it.
+    refreshSliceMinNotchWidths();
 }
 
 // ── Phase 3F Sub-Epic I: pooled-channel activation ──────────────────────────
@@ -7273,6 +7830,15 @@ QString RadioModel::nrCannotRunReason(NrSlot slot) const
     // R-R3-49, Sub-epic C-1: the Core's word, mirrored in a remote window.
     if (!m_dspAssets) {
         return nrCannotRunInThisBuildReason(slot);
+    }
+    // Trunk merge of parity Tasks 16 to 18 (R-R3-49, parity Task 16's B2.4):
+    // a Core below dspAssetVersion 3 does not say whether it runs DFNR, and
+    // below 4 whether it runs MNR. Shown disabled with the reason, never
+    // offered for the Core to refuse.
+    if (m_role == Role::Remote
+        && ((slot == NrSlot::DFNR && m_stationDspAssetVersion < 3)
+            || (slot == NrSlot::MNR && m_stationDspAssetVersion < 4))) {
+        return noiseReductionNotSaidReason();
     }
     switch (slot) {
     case NrSlot::DFNR:
@@ -12027,6 +12593,21 @@ void RadioModel::onBandButtonClicked(SliceModel* slice, Band band)
         return;
     }
 
+    // Parity Task 18 (B3.1, R-IOS-27): a remote window asks the Core to run
+    // this same band change on the named slice (slice.selectBand), so the
+    // band memory, seed and lock refusal are the Core's, as for a band
+    // button at the Core. The Core takes the band grid's bands; anything
+    // else, or a Core without the verb, keeps the path below.
+    if (m_role == Role::Remote && m_station != nullptr && m_station->bandSelectAvailable()
+        && bandGridEntry(band) != nullptr) {
+        const IStationLink::CommandOutcome outcome =
+            m_station->requestSelectBand(slice->sliceIndex(), static_cast<int>(band));
+        if (!outcome.sent) {
+            emit bandClickIgnored(band, outcome.reason);
+        }
+        return;
+    }
+
     // Use slice frequency (not PanadapterModel::band()) so that in CTUN
     // mode with an off-center panadapter, the "current band" follows the
     // VFO's actual band, not the DDC tuner's.
@@ -15214,6 +15795,16 @@ void RadioModel::installBandPlanMoxCheck()
                                             "from this Core yet.")
                            : TxRefusals::stationReceiveOnly().text};
             refused.refusalCode = TxRefusals::kStationReceiveOnly;
+            return refused;
+        }
+        // Fix wave (M3, parity Task 21): the Core is changing its radio; a
+        // key now would be torn down by the change.
+        // Never queued: the operator presses again once the change ends. The
+        // notReady code: the Core's radio is not ready to key.
+        if (m_stationRadioChangeUnderway) {
+            safety::BandPlanGuard::MoxCheckResult refused{
+                false, StationRadios::switchingReason(), /*notQueued=*/true};
+            refused.refusalCode = TxRefusals::kNotReady;
             return refused;
         }
 
@@ -19149,6 +19740,8 @@ void RadioModel::teardownConnection()
 
     // Shutdown WDSP (destroys all channels, saves cache)
     m_wdspEngine->shutdown();
+    // R-R3-49 (parity Task 16): no channel, no minimum notch width.
+    refreshSliceMinNotchWidths();
 
     // Disconnect remaining signals (prevents new work being queued)
     QObject::disconnect(m_connection, nullptr, this, nullptr);
@@ -22514,6 +23107,10 @@ qint64 RadioModel::setActiveRxCountLive(int newCount)
             }
         }
     }
+
+    // R-R3-49 (parity Task 16): the slices' minimum notch widths follow
+    // the channels just opened or closed.
+    refreshSliceMinNotchWidths();
 
     // ── Step 4: Reconfigure ReceiverManager DDC mapping ──────────────────────
     if (m_receiverManager) {

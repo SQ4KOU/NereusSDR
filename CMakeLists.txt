@@ -712,7 +712,69 @@ if(FFTW3_FOUND)
                 "Install it with FFTW (Homebrew: fftw; Debian/Ubuntu: libfftw3-dev) "
                 "or build FFTW with --enable-threads.")
         endif()
+        # R-R3-39: the thread-safe switch is per precision library. The
+        # display FFTs plan with single-precision FFTW on every spectrum
+        # thread (FFTEngine::replanFft, WidebandFftEngine), so
+        # fftwf_make_planner_thread_safe() is needed too, and it lives in
+        # libfftw3f_threads. Found beside libfftw3f; Homebrew's fftw and
+        # Debian/Ubuntu's libfftw3-dev (runtime: libfftw3-single3) ship it.
+        # Windows: the fftw.org 3.3.5 libfftw3f-3.dll has it built in.
+        if(FFTW3F_LIB)
+            get_filename_component(_fftw3f_dir "${FFTW3F_LIB}" DIRECTORY)
+            find_library(FFTW3F_THREADS_LIB fftw3f_threads
+                HINTS "${_fftw3f_dir}" ${FFTW3_LIBRARY_DIRS})
+            unset(_fftw3f_dir)
+            if(FFTW3F_THREADS_LIB)
+                # Ahead of libfftw3f, which it depends on (matters for
+                # static archives only).
+                list(FIND FFTW3_LIBRARIES "${FFTW3F_LIB}" _fftw3f_pos)
+                list(INSERT FFTW3_LIBRARIES ${_fftw3f_pos} ${FFTW3F_THREADS_LIB})
+                unset(_fftw3f_pos)
+                message(STATUS "FFTW3F threads found: thread-safe float FFT planner: ${FFTW3F_THREADS_LIB}")
+            else()
+                message(FATAL_ERROR
+                    "libfftw3f_threads not found beside libfftw3f. The display FFTs "
+                    "plan in single precision on more than one thread and need FFTW's "
+                    "thread-safe planner. Install it with FFTW (Homebrew: fftw; "
+                    "Debian/Ubuntu: libfftw3-dev) or build FFTW with --enable-float "
+                    "--enable-threads.")
+            endif()
+        endif()
     endif()
+    # R-R3-39: FftwPlanner.cpp calls fftw_make_planner_thread_safe() and
+    # fftwf_make_planner_thread_safe(), so it must see the fftw3.h that
+    # belongs to the FFTW library being linked.
+    # A plain <fftw3.h> is not enough: the WDSP include folder
+    # (third_party/wdsp/src, public on wdsp_static) carries WDSP's pinned
+    # copy of an older fftw3.h without that declaration, and on Linux the
+    # system header sits in /usr/include, an implicit folder CMake never
+    # passes as -I, so WDSP's copy is searched first and shadows it. Name
+    # the platform header by its full path instead: Debian/Ubuntu's
+    # /usr/include/fftw3.h, Homebrew's, or third_party/fftw3/include on
+    # Windows (the fftw.org 3.3.5 header, which declares it).
+    set(NEREUS_FFTW3_HEADER "")
+    foreach(_fftw3_inc_dir IN LISTS FFTW3_INCLUDE_DIRS FFTW3_INCLUDEDIR)
+        if(NOT NEREUS_FFTW3_HEADER AND EXISTS "${_fftw3_inc_dir}/fftw3.h")
+            set(NEREUS_FFTW3_HEADER "${_fftw3_inc_dir}/fftw3.h")
+        endif()
+    endforeach()
+    unset(_fftw3_inc_dir)
+    if(NOT NEREUS_FFTW3_HEADER)
+        find_path(NEREUS_FFTW3_INCLUDE_DIR fftw3.h)
+        if(NEREUS_FFTW3_INCLUDE_DIR)
+            set(NEREUS_FFTW3_HEADER "${NEREUS_FFTW3_INCLUDE_DIR}/fftw3.h")
+        endif()
+    endif()
+    if(NOT NEREUS_FFTW3_HEADER)
+        message(FATAL_ERROR
+            "FFTW3 was found but its fftw3.h was not. FftwPlanner.cpp needs the "
+            "header that matches the FFTW library for the thread-safe planner calls.")
+    endif()
+    message(STATUS "FFTW3 header for the thread-safe planner: ${NEREUS_FFTW3_HEADER}")
+    # Only FftwPlanner.cpp (NereusCore, NereusCore_LTO) includes it this way.
+    set_property(SOURCE ${CMAKE_SOURCE_DIR}/src/core/FftwPlanner.cpp
+        APPEND PROPERTY COMPILE_DEFINITIONS
+        "NEREUS_FFTW3_HEADER=\"${NEREUS_FFTW3_HEADER}\"")
 else()
     message(STATUS "FFTW3 not found — client-side FFT disabled")
 endif()
@@ -914,6 +976,8 @@ set(CORE_SOURCES
     src/core/ReceiverManager.cpp
     src/core/AudioEngine.cpp
     src/core/WdspEngine.cpp
+    # R-R3-39: FFTW's planners made thread-safe, double and single precision.
+    src/core/FftwPlanner.cpp
     src/core/WdspThreadCheck.cpp
     src/core/DspControlThread.cpp
     src/core/RxChannel.cpp
@@ -1018,6 +1082,9 @@ set(CORE_SOURCES
     src/core/FreeDVReporterClient.cpp
     src/core/FreeDVRadeReporterBridge.cpp
     src/core/PskReporterClient.cpp
+    # Parity Task 19 (R-IOS-25): starts and stops the spot sources, locally
+    # and on the Core, and is the mirrored `spotSources` object.
+    src/core/SpotSourceHost.cpp
     src/core/CtyDatParser.cpp
     src/core/AdifParser.cpp
     src/core/DxccWorkedStatus.cpp
@@ -1322,6 +1389,10 @@ list(APPEND CORE_SOURCES
     src/core/session/StationDevicesFacade.cpp
     # iPhone app Task 19 (R-IOS-06): the mirrored `catalog` object.
     src/core/session/StationCatalog.cpp
+    # Parity Task 19 (R-IOS-25): the link's record streams.
+    src/core/session/RecordStream.cpp
+    # Parity Task 21 (R-IOS-18): the Core's radios and its choice of one.
+    src/core/station/StationRadios.cpp
     # iPhone app Task 71 (R-IOS-02): who holds a place on the Core, and the
     # mirrored `connectedDevices` object.
     src/core/session/DeviceSessionRegistry.cpp
@@ -1401,6 +1472,7 @@ set(MODEL_SOURCES
     src/models/FilterPresetStore.cpp
     src/models/NotchModel.cpp
     src/models/SpotModel.cpp
+    src/models/SpotModeResolver.cpp
     src/models/SpotTableModel.cpp
     src/models/BandFilterProxy.cpp
     src/models/FreeDVStationModel.cpp
@@ -1662,6 +1734,8 @@ set(GUI_SOURCES
     src/gui/setup/TgxlAdvancedPage.cpp
     src/gui/setup/PgxlInterlockPage.cpp
     src/gui/setup/FourO3APage.cpp
+    # Parity Task 21 (R-IOS-18): Setup > This Core in a remote window.
+    src/gui/setup/ThisCorePage.cpp
     src/gui/setup/RfKitPage.cpp
     src/gui/setup/TciLogWindow.cpp
     src/gui/setup/KeyboardSetupPages.cpp

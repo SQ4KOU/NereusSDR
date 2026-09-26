@@ -128,6 +128,13 @@
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-26 - R-R3-13 / R-R3-49 (parity Task 15): meterReadingsVersion.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-R3-49 / R-R3-21 / R-R3-40 (parity Task 16):
+//                dspInfoVersion. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-26 - R-IOS-25 / R-R3-49 (parity Task 19): recordStreamVersion.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-IOS-18 / R-R3-49 (parity Task 21): stationRadiosVersion.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -276,6 +283,32 @@ struct StationCapabilities {
     /// model, or no meter pump): a window's ADC and AGC meters show no
     /// reading.
     int meterReadingsVersion = 0;
+    /// R-R3-49 / R-R3-21 / R-R3-40 (remote-window parity Task 16): 1 means
+    /// the Core says how long its last DSP Options apply took (`radio`
+    /// dspOptionsLastApplyMs), each slice's minimum notch width
+    /// (minNotchWidthHz), and takes dsp.filterResponse for the filter
+    /// graph's curve. Sent in the same minor-11 block, after
+    /// meterReadingsVersion. 0 (no local radio model): a window shows its
+    /// filter curve unavailable. Which noise reduction the Core runs is
+    /// DspAssetService's (dspAssetVersion 3 and 4).
+    int dspInfoVersion = 0;
+    /// R-IOS-25 / R-R3-49 (remote-window parity Task 19): 1 means the Core
+    /// takes records.subscribe and records.unsubscribe and sends
+    /// record.batch for its `spots` stream (the newest 500) and each station
+    /// source's spotConsole:<source> stream (the last 200 lines), sends the
+    /// read-only `spotSources` object, and takes spots.connect,
+    /// spots.disconnect, spots.sendCommand and spots.clearAll. Sent in the
+    /// same minor-11 block, after dspInfoVersion. 0 (no local radio model):
+    /// a window shows the station's spot sources disabled with a reason.
+    int recordStreamVersion = 0;
+    /// R-IOS-18 / R-R3-49 (remote-window parity Task 21): 1 means the Core
+    /// chooses its radio from an app: it sends the `stationRadios` record
+    /// stream ({id, name, model, mac, address, protocol, inUse}) and takes
+    /// station.selectRadio, station.rescanRadios, station.setRadioModel and
+    /// station.forgetRadio. Sent in the same minor-11 block, after
+    /// recordStreamVersion. 0 (a Core that is not nereusd, or older): a
+    /// window shows This Core's Change radio disabled with a reason.
+    int stationRadiosVersion = 0;
     /// iPhone app Task 71 (R-IOS-02; the several-devices design, ruling
     /// 10.1): 1 means the Core admits up to four devices at once, sends the
     /// `connectedDevices` object and takes session.leave. Sent last in the

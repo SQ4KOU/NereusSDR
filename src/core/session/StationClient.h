@@ -301,6 +301,23 @@
 //               and TUNE wait while another device holds. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 16):
+//                                    requestFilterResponse
+//                                    (dspInfoVersion 1).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 21 (R-IOS-18): the Core's
+//                                    `stationRadios` stream and the station
+//                                    radio verbs. AI-assisted via Anthropic
+//                                    Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 19 (R-IOS-25): the Core's
+//                                    record streams applied (spots and
+//                                    the spot consoles), the `spotSources`
+//                                    object and the spots.* verbs.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 18 (B3.1):
+//                                    requestSelectBand (slice.selectBand,
+//                                    bandSelectVersion 1).
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-26: iPhone app plan Task 27 (R-IOS-16): the Core's last good
 //               addresses are tried first (setCachedAddresses()), and each
 //               connection attempt is recorded path by path
@@ -645,6 +662,12 @@ public:
     /// reason's words. This client's own identityChanged end is recorded
     /// here too.
     StationEndReport lastEndReport() const { return m_lastEndReport; }
+    /// The Core ended this session to change its radio (session.end code
+    /// radioChanging) and this client is reconnecting: the Core's words,
+    /// until the next session is up, the Core answers with any other end,
+    /// or a redial fails after the backoff's longest wait (follow-up N2).
+    /// Empty otherwise.
+    QString radioChangeReason() const { return m_radioChangeReason; }
 
     /// Test seam: production default is kDefaultReconnectBackoffUnitMs
     /// (real seconds). See scheduleReconnect() in the .cpp for the
@@ -679,6 +702,9 @@ public:
     /// Agreed minor 9 or later and advertised by Core: spectrum contexts
     /// report the grant Core made for the endpoint.
     bool spectrumGrantAvailable() const;
+    /// Parity Task 17 (R-R3-01): the Core takes a subscribe's `decimation`
+    /// (spectrumGrantVersion 2); a window below it never sends one.
+    bool spectrumDecimationAvailable() const;
     std::optional<DisplayBudgetLimits> remoteDisplayBudgetLimits() const;
     /// Why the Core's display budget is below its ceiling (R-R3-08, R-R3-37):
     /// CoreBusy while the Core computer is short of processing time. None
@@ -842,6 +868,9 @@ public:
     CommandOutcome requestAddSliceOnPan(const QString& panId) override;
     CommandOutcome requestRemoveSlice(int sliceId) override;
     CommandOutcome requestActiveSlice(int sliceId) override;
+    // Parity Task 18 (B3.1): slice.selectBand for a named slice.
+    bool bandSelectAvailable() const override;
+    CommandOutcome requestSelectBand(int sliceId, int band) override;
     CommandOutcome requestSliceSampleRate(int sliceId, int rateHz) override;
     CommandOutcome requestStreamCtunPinned(int sliceId, bool pinned) override;
     CommandOutcome requestStreamCentre(int sliceId, double centreHz) override;
@@ -941,6 +970,40 @@ public:
                                      int value) override;
     /// Parity Task 14 (radioHardwareVersion 7). Verb "setIoBoardOutput".
     CommandOutcome requestIoBoardOutput(int pin, bool on) override;
+    /// Parity Task 16 (dspInfoVersion 1). Verb "dsp.filterResponse". The
+    /// answer goes to RadioModel::reportStationFilterResponse.
+    CommandOutcome requestFilterResponse(int sliceId, bool highResolution) override;
+    /// Parity Task 16: minor 11 and dspInfoVersion at least 1.
+    bool dspInfoAvailable() const;
+    /// Parity Task 19 (R-IOS-25): minor 11 and recordStreamVersion at least
+    /// 1 on a ready session.
+    bool spotSourcesAvailable() const override;
+    /// Parity Task 19. Verbs spots.connect, spots.disconnect,
+    /// spots.sendCommand and spots.clearAll; a refusal goes to the spot
+    /// source host (SpotSourceHost::reportStationRefusal).
+    CommandOutcome requestSpotSource(const QByteArray& verb, const QString& source,
+                                     const QString& text) override;
+    /// Parity Task 21 (R-IOS-18): minor 11 and stationRadiosVersion at
+    /// least 1 on a ready session.
+    bool stationRadiosAvailable() const override;
+    /// Fix wave (I5): this session signed in with this computer's own key.
+    bool signedInWithDeviceKey() const override
+    { return m_deviceKeySignInForTest >= 0 ? m_deviceKeySignInForTest == 1 : m_signedInWithDeviceKey; }
+    /// Follow-up N1: this token sign-in enrolled this computer's key.
+    bool enrolledDeviceKeyThisSession() const override
+    { return m_enrolledKeyForTest >= 0 ? m_enrolledKeyForTest == 1 : m_enrolledDeviceKey; }
+#ifdef NEREUS_BUILD_TESTS
+    /// Test seam: a bench link (no TLS pin) never signs in by key; a window
+    /// test says it did (see StationServer::setTokenSessionsMayChangeRadioForTest).
+    void setSignedInWithDeviceKeyForTest(bool byKey) { m_deviceKeySignInForTest = byKey ? 1 : 0; }
+    /// Test seam: a bench link cannot enrol its key either; a window test
+    /// says this token sign-in did (follow-up N1).
+    void setEnrolledDeviceKeyForTest(bool enrolled) { m_enrolledKeyForTest = enrolled ? 1 : 0; }
+#endif
+    /// Parity Task 21. Verbs station.selectRadio, station.rescanRadios,
+    /// station.setRadioModel and station.forgetRadio.
+    CommandOutcome requestStationRadio(const QByteArray& verb, const QString& mac,
+                                       int model) override;
     /// R-R3-46 fix wave (radioHardwareVersion 3). Verb "setAlexRxAntenna":
     /// one band's RX antenna (rxOnly false, 1..3) or RX-only antenna
     /// (rxOnly true, 0..3) on the Core.
@@ -1190,6 +1253,11 @@ private:
     StationEndReport m_lastEndReport;
     bool m_handshakeComplete = false;
     bool m_authenticated = false;
+    bool m_signedInWithDeviceKey = false;
+    QString m_radioChangeReason;
+    int m_deviceKeySignInForTest = -1;
+    bool m_enrolledDeviceKey = false;
+    int m_enrolledKeyForTest = -1;
     quint16 m_agreedMinor = 0;
 
     /// iPhone app Task 4: this client's link majors (oldest first) and
@@ -1295,6 +1363,8 @@ private:
         bool requestedPin = false;
         // clearAccessoryFaults: which device's history (L1 routing).
         QString faultsDevice;
+        // spots.*: which spot source (parity Task 19), for its refusal.
+        QString spotSource;
     };
     QHash<quint32, PendingCommand> m_pendingCommands;
     std::optional<QPair<quint32, bool>> m_pendingPs3Display;

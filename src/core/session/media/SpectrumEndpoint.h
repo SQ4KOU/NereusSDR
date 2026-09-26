@@ -47,6 +47,8 @@ enum class SpectrumLimitReason {
     /// The requested FFT size is above the largest size the engine supports.
     LargestSize,
     /// Another endpoint uses the (stream, tier) engine, so its size stands.
+    /// Parity Task 17 follow-up: also when the engine runs at another
+    /// decimation than this endpoint asked for, for the same reason.
     SharedEngine,
     /// The source has fewer visible bins than the requested pixels.
     SourceBins,
@@ -61,6 +63,11 @@ struct SpectrumGrant {
     FftTier grantedTier {FftTier::Wide};
     int requestedPixels {0};
     int grantedPixels {0};
+    /// Parity Task 17 follow-up (R-R3-01): the decimation asked for (1
+    /// without the subscribe's `decimation`) and the engine's. Kept by the
+    /// Core; the wire reports a held decimation as limit "shared".
+    int requestedDecimation {1};
+    int grantedDecimation {1};
     SpectrumLimitReason reason {SpectrumLimitReason::None};
 };
 

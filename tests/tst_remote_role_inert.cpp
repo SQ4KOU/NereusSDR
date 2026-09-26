@@ -41,6 +41,10 @@
 //                 auto-start restore -- design addendum section 4.1's
 //                 "four local authorities"). J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 19 (R-IOS-25):
+//                                    recordStreamVersion and the record
+//                                    streams. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -385,9 +389,9 @@ private slots:
         }
 
         {
-            // Remote arm: must produce silence -- no connect attempt (so
-            // no connectionError, ever, not even a refused one) and no
-            // UDP bind.
+            // Remote arm: no cluster login -- no connect attempt (so no
+            // connectionError, ever, not even a refused one). Its own
+            // WSJT-X listener binds (parity Task 19).
             RadioModel remote{RadioModel::Role::Remote};
             QSignalSpy dxErrorSpy(remote.dxCluster(),
                                   &DxClusterClient::connectionError);
@@ -405,7 +409,11 @@ private slots:
             QCOMPARE(rbnErrorSpy.count(), 0);
             QVERIFY(!remote.dxCluster()->isConnected());
             QVERIFY(!remote.rbn()->isConnected());
-            QVERIFY(!remote.wsjtx()->isListening());
+            // Parity Task 19 (R-IOS-25): WSJT-X listens for programs on the
+            // computer it runs on, so a remote window starts its own; the
+            // Core runs the cluster and RBN (tst_remote_spots).
+            QVERIFY(remote.wsjtx()->isListening());
+            remote.wsjtx()->stopListening();
         }
 
         settings.clear();

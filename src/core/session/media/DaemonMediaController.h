@@ -287,6 +287,10 @@ public:
     /// while the display budget is lowered because the Core is busy
     /// (R-R3-08, R-R3-40). Empty for an unknown endpoint.
     std::optional<bool> spectrumSourceTransformsFollowFrameRate(quint32 endpointId) const;
+    /// Parity Task 17 (R-R3-01): the decimation that endpoint's engine runs
+    /// at (FFTEngine::decimation). Empty for an unknown endpoint or one
+    /// whose engine has not started.
+    std::optional<int> spectrumSourceDecimation(quint32 endpointId) const;
     /// Display traffic accepted now: every live spectrum endpoint's charge
     /// plus PureSignal's display while it is subscribed (R-R3-08, R-R3-37).
     /// What the display load governor scales when the Core is busy.

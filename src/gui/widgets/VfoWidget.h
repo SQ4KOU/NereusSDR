@@ -37,6 +37,11 @@
 //   2026-09-25 : R-R3-49, Sub-epic C-1 (tx-followup-4) the BNR button and
 //                 its quick controls removed (not offered for now), by J.J.
 //                 Boyd (KG4VCF), with Anthropic Claude Code assistance.
+//   2026-09-26 : R-R3-49 / R-R3-21 (remote-window parity Task 16) DFNR and
+//                 MNR offered by the station's noise reduction (the Core's
+//                 in a remote window), disabled with the plain reason and
+//                 never hidden (updateNrAvailability), by J.J. Boyd
+//                 (KG4VCF), with Anthropic Claude Code assistance.
 // =================================================================
 
 //=================================================================
@@ -733,7 +738,7 @@ private:
     // when null. See setRadioModel() above for the wiring contract.
     NereusSDR::RadioModel* m_radioModel{nullptr};
     // R-R3-49: the model's DFNR and MNR availability signals.
-    std::array<QMetaObject::Connection, 2> m_nrAvailabilityConns;
+    std::array<QMetaObject::Connection, 3> m_nrAvailabilityConns;
 
     // Internal helper — update m_locked + drive Close-strip lock button + emit lockChanged.
     // Called by the floating m_lockBtn toggled lambda.  X/RIT-tab Lock removed (B7).

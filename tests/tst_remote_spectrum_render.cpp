@@ -1,9 +1,22 @@
 // no-port-check: NereusSDR-original. Remote display rendering contract.
 #include <QTest>
+#include <QComboBox>
+#include <QDoubleSpinBox>
+#include <QLabel>
 #include <QMouseEvent>
+#include <QScopeGuard>
 #include <QSignalSpy>
+#include <QSlider>
+#include <QSpinBox>
+#include <QTemporaryDir>
+#include <cmath>
+#include "core/AppSettings.h"
+#include "core/FFTEngine.h"
+#include "core/spectrum/FftEnginePool.h"
+#include "models/RadioModel.h"
 #define private public
 #include "gui/SpectrumWidget.h"
+#include "gui/setup/DisplaySetupPages.h"
 #undef private
 #include "core/session/media/SpectrumEndpoint.h"
 
@@ -231,6 +244,183 @@ private slots:
         QTest::qWait(80);
         QCOMPARE(widget.dssRowsPushedForTest(), 0);
         QCOMPARE(widget.m_wfHistoryRowCount, 0);
+    }
+
+    // Parity Task 17 (B3.2): a remote pan's bin width, Hz/bin readout and
+    // normalise shift follow the FFT size the Core granted, not this
+    // window's idle engine (4096), and follow a new grant after a zoom.
+    void remoteBinWidthFollowsTheCoresGrantedFftSize()
+    {
+        SpectrumWidget widget;
+        widget.setDispNormalize(true);
+        SpectrumEndpointContext context;
+        context.codec = {41, 1, -180, 0, 128, 128, 0};
+        context.exactCentreHz = 14225000;
+        context.exactSpanHz = 96000;
+        context.targetFps = 30;
+        QSignalSpy grants(&widget, &SpectrumWidget::remoteSpectrumGrantChanged);
+        widget.setRemoteSpectrumContext(context, context.exactCentreHz, 192000, 16384);
+        QCOMPARE(widget.remoteGrantedFftSize(), 16384);
+        QCOMPARE(widget.binWidthHz(), 192000.0 / 16384.0);
+        // No 6 dB error from a 4096-point guess: -10 log10(11.71875 Hz).
+        QVERIFY(std::abs(widget.normalizeShiftDb()
+                         - float(-10.0 * std::log10(192000.0 / 16384.0))) < 1.0e-4f);
+        QCOMPARE(grants.size(), 1);
+
+        // A zoom the Core answers with a finer engine.
+        context.codec.contextGeneration++;
+        context.exactSpanHz = 12000;
+        widget.setRemoteSpectrumContext(context, context.exactCentreHz, 192000, 65536);
+        QCOMPARE(widget.binWidthHz(), 192000.0 / 65536.0);
+        QCOMPARE(grants.size(), 2);
+        // The same grant again moves nothing.
+        context.codec.contextGeneration++;
+        widget.setRemoteSpectrumContext(context, context.exactCentreHz, 192000, 65536);
+        QCOMPARE(grants.size(), 2);
+
+        // Without a grant (0) the old guess stands until one arrives, and a
+        // retired binding forgets the grant.
+        widget.clearRemoteSpectrum();
+        QCOMPARE(widget.remoteGrantedFftSize(), 0);
+        QCOMPARE(widget.binWidthHz(), 192000.0 / 4096.0);
+    }
+
+    // Parity Task 17 (B3.10): the active peak hold falls at its rate per
+    // second at the frame rate the Core sends (the context's, after the
+    // display budget), not at this window's display timer.
+    void remotePeakHoldDecaysAtTheCoresFrameRate()
+    {
+        SpectrumWidget widget;
+        widget.setDisplayFps(30);
+        widget.setActivePeakHoldEnabled(true);
+        widget.setActivePeakHoldDropDbPerSec(60.0);
+        SpectrumEndpointContext context;
+        context.codec = {43, 1, -180, 0, 4, 4, 0};
+        context.exactCentreHz = 10000000;
+        context.exactSpanHz = 10000;
+        context.targetFps = 10; // the budget lowered this pan to 10 frames a second
+        widget.setRemoteSpectrumContext(context, context.exactCentreHz, 192000, 4096);
+        QCOMPARE(widget.remoteFrameRate(), 10);
+        DisplayCodecFrame frame;
+        frame.context = context.codec;
+        frame.traceDbm = QVector<float>(4, -50.0f);
+        frame.waterfallDbm = QVector<float>(4, -110.0f);
+        QVERIFY(widget.updateRemoteSpectrum(frame));
+        frame.traceDbm = QVector<float>(4, -100.0f);
+        QVERIFY(widget.updateRemoteSpectrum(frame));
+        // Two frames at 10 a second: 60 dB/s x 0.2 s = 12 dB below the peak.
+        // (At the window's 30 it would have fallen 4 dB.)
+        QCOMPARE(widget.activePeakHoldPeaksForTest().size(), 4);
+        QVERIFY(std::abs(widget.activePeakHoldPeaksForTest().first() - -62.0f) < 1.0e-3f);
+    }
+
+    // Parity Task 17 (B3.9, C10, C11): in a remote window Spectrum Defaults
+    // opens on the Core's stored FFT size, window, Hz/bin target and FPS
+    // (the station keys this window holds from the Core), its readouts show
+    // the Core's grant for the pan, and Cal Offset and Display Thread
+    // Priority are disabled with their reasons.
+    void spectrumDefaultsInARemoteWindowShowTheCoresSpectrum()
+    {
+        auto& settings = AppSettings::instance();
+        const QStringList keys{QStringLiteral("DisplayFftSize"), QStringLiteral("DisplayFftWindow"),
+                               QStringLiteral("DisplayHzPerBinTarget"),
+                               QStringLiteral("DisplaySpectrumFps")};
+        QHash<QString, QVariant> saved;
+        for (const QString& key : keys) {
+            if (settings.contains(key)) { saved.insert(key, settings.value(key)); }
+        }
+        const auto restore = qScopeGuard([&] {
+            for (const QString& key : keys) {
+                if (saved.contains(key)) { settings.setValue(key, saved.value(key)); }
+                else { settings.remove(key); }
+            }
+        });
+        settings.setValue(QStringLiteral("DisplayFftSize"), QStringLiteral("16384"));
+        settings.setValue(QStringLiteral("DisplayFftWindow"), QStringLiteral("2"));
+        settings.setValue(QStringLiteral("DisplayHzPerBinTarget"), QStringLiteral("3.5"));
+        settings.setValue(QStringLiteral("DisplaySpectrumFps"), QStringLiteral("25"));
+
+        RadioModel remote(RadioModel::Role::Remote);
+        SpectrumWidget widget;
+        NereusSDR::FFTEngine idle(-1); // A remote window's own engine does not run.
+        remote.setSpectrumWidget(&widget);
+        remote.setFftEngine(&idle);
+        SpectrumDefaultsPage page(&remote);
+        page.setStationSettingsAvailable(true, QString());
+
+        QCOMPARE(page.m_fftSizeSlider->value(), 2);        // 4096 << 2
+        QCOMPARE(page.m_windowCombo->currentIndex(), 2);   // Hann
+        QCOMPARE(page.m_hzPerBinTargetSpin->value(), 3.5);
+        QCOMPARE(page.m_fpSlider->value(), 25);
+        QCOMPARE(page.m_fpSpin->value(), 25);
+        // No grant yet: the stored size, no bin width.
+        QCOMPARE(page.m_fftSizeReadout->text(), QStringLiteral("16384"));
+        QCOMPARE(page.m_binWidthLabel->text(), QStringLiteral("0.000"));
+
+        // The Core grants this pan 65536 points on a 192 kHz receiver.
+        SpectrumEndpointContext context;
+        context.codec = {51, 1, -180, 0, 128, 128, 0};
+        context.exactCentreHz = 14225000;
+        context.exactSpanHz = 12000;
+        context.targetFps = 25;
+        widget.setRemoteSpectrumContext(context, context.exactCentreHz, 192000, 65536);
+        QCOMPARE(page.m_fftSizeReadout->text(), QStringLiteral("65536"));
+        QCOMPARE(page.m_binWidthLabel->text(), QString::number(192000.0 / 65536.0, 'f', 3));
+        QCOMPARE(page.m_binWidthReadout->text(),
+                 QStringLiteral("%1 Hz/bin").arg(192000.0 / 65536.0, 0, 'f', 3));
+
+        QVERIFY(!page.m_calOffsetSpin->isEnabled());
+        QCOMPARE(page.m_calOffsetSpin->toolTip(),
+                 QStringLiteral("The Core calibrates the display for its radio."));
+        QVERIFY(!page.m_threadPriorityCombo->isEnabled());
+        QCOMPARE(page.m_threadPriorityCombo->toolTip(),
+                 QStringLiteral("The Core sets its own display thread priority."));
+        // The Core's settings going away and coming back keeps them disabled.
+        page.setStationSettingsAvailable(false, QStringLiteral("Waiting for the Core."));
+        page.setStationSettingsAvailable(true, QString());
+        QVERIFY(!page.m_calOffsetSpin->isEnabled());
+        QVERIFY(!page.m_threadPriorityCombo->isEnabled());
+
+        // A local window keeps both.
+        RadioModel local;
+        SpectrumWidget localWidget;
+        NereusSDR::FFTEngine localEngine(-1);
+        local.setSpectrumWidget(&localWidget);
+        local.setFftEngine(&localEngine);
+        SpectrumDefaultsPage localPage(&local);
+        QVERIFY(localPage.m_calOffsetSpin->isEnabled());
+        QVERIFY(localPage.m_threadPriorityCombo->isEnabled());
+        remote.setSpectrumWidget(nullptr);
+        remote.setFftEngine(nullptr);
+        local.setSpectrumWidget(nullptr);
+        local.setFftEngine(nullptr);
+    }
+
+    // Parity Task 17 follow-up (R-R3-01): Rendering > Decimation applies to
+    // every pan in a local window, not only stream 0's engine: every engine
+    // the pool has, and every engine it makes afterwards, as a remote window
+    // sends it for every pan.
+    void localDecimationReachesEveryPansEngine()
+    {
+        RadioModel local;
+        SpectrumWidget widget;
+        NereusSDR::FftEnginePool pool;
+        NereusSDR::FFTEngine* stream0 = pool.engineForStream(0);
+        NereusSDR::FFTEngine* stream1 = pool.engineForStream(1);
+        QVERIFY(stream0 && stream1);
+        local.setSpectrumWidget(&widget);
+        local.setFftEngine(stream0);
+        local.setFftEnginePool(&pool);
+        SpectrumDefaultsPage page(&local);
+        page.m_decimationSpin->setValue(6);
+        QCOMPARE(stream0->decimation(), 6);
+        QCOMPARE(stream1->decimation(), 6);
+        NereusSDR::FFTEngine* stream2 = pool.engineForStream(2);
+        QVERIFY(stream2);
+        QCOMPARE(stream2->decimation(), 6);
+        local.setSpectrumWidget(nullptr);
+        local.setFftEngine(nullptr);
+        local.setFftEnginePool(nullptr);
     }
 };
 QTEST_MAIN(TestRemoteSpectrumRender)
