@@ -579,6 +579,9 @@ public:
     /// Agreed minor 9 or later and advertised by Core: spectrum contexts
     /// report the grant Core made for the endpoint.
     bool spectrumGrantAvailable() const;
+    /// Parity Task 17 (R-R3-01): the Core takes a subscribe's `decimation`
+    /// (spectrumGrantVersion 2); a window below it never sends one.
+    bool spectrumDecimationAvailable() const;
     std::optional<DisplayBudgetLimits> remoteDisplayBudgetLimits() const;
     /// Why the Core's display budget is below its ceiling (R-R3-08, R-R3-37):
     /// CoreBusy while the Core computer is short of processing time. None

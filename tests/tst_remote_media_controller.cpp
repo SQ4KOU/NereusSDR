@@ -37,6 +37,7 @@
 #include "core/session/media/RemoteSpectrumContext.h"
 #include "core/session/media/SpectrumEndpoint.h"
 #include "core/session/media/WidebandDisplayContext.h"
+#include "core/spectrum/DisplayFollowers.h"
 #include "core/session/PureSignalSessionFacade.h"
 #include "core/session/Ps3DisplayCodec.h"
 #include "core/FFTEngine.h"
@@ -1754,6 +1755,12 @@ private slots:
         for (auto* applet : {first, second}) {
             applet->setActiveSliceIndex(sliceId);
             applet->spectrumWidget()->setDisplayWindowPreservingHistory(centre, 48000);
+            // Parity Task 17: the Core quantises on the pan's own range, so
+            // the pans show -180 to 0 dBm, where the fixture's noise lies;
+            // and it averages at the pan's averaging time, so the shortest
+            // lets a level step show within a frame or two.
+            applet->spectrumWidget()->setDbmRange(-180.0f, 0.0f);
+            applet->spectrumWidget()->setSpectrumAverageTimeMs(10);
         }
         stack.resize(600, 700);
         stack.show();
@@ -2814,6 +2821,16 @@ private slots:
             else { reduced.insert(endpoint); }
         }
         QVERIFY(!reduced.isEmpty());
+        // Parity Task 17 (B3.10): each request's averaging constants are for
+        // the rate it asks, including the rates the budget cut pans back to.
+        const int traceTimeMs = stack.allApplets().first()->spectrumWidget()
+                                    ->spectrumAverageTimeMs();
+        for (const QJsonObject& each : controlsFor(outbound, QStringLiteral("subscribe"))) {
+            QCOMPARE(each.value(QStringLiteral("trace")).toObject()
+                         .value(QStringLiteral("averageAlpha")).toDouble(),
+                     double(averageAlphaForTimeMs(traceTimeMs,
+                                                  each.value(QStringLiteral("fps")).toInt())));
+        }
         const auto askedAsWanted = [&](int from) {
             const QList<QJsonObject> all = controlsFor(outbound, QStringLiteral("subscribe"));
             for (int i = from; i < all.size(); ++i) {
@@ -4105,6 +4122,143 @@ private slots:
         QTRY_VERIFY2(applet->remoteDisplayStatus().isEmpty(),
                      qPrintable(applet->remoteDisplayStatus()));
         QVERIFY(!media || !media->active);
+    }
+
+    // Parity Task 17 (B3.3, B3.7, B3.10): a pan asks the Core for a dBm
+    // window that is what it shows (its own range widened by the
+    // waterfall's levels), so a signal above 0 dBm is not flattened and a
+    // 20 dB pan steps by less than 0.1 dB; a range change asks again once
+    // it has held for a frame period, never at every step of a drag; the
+    // averaging constants are for the rate asked; Rendering > Decimation
+    // goes with the request to a Core at spectrumGrantVersion 2.
+    void subscribeCarriesThePansDbmWindowAveragingAndDecimation()
+    {
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        auto& appSettings = AppSettings::instance();
+        const bool hadFps = appSettings.contains(QStringLiteral("DisplaySpectrumFps"));
+        const QVariant savedFps = appSettings.value(QStringLiteral("DisplaySpectrumFps"));
+        appSettings.setValue(QStringLiteral("DisplaySpectrumFps"), QStringLiteral("20"));
+        const auto restoreFps = qScopeGuard([&] {
+            if (hadFps) { appSettings.setValue(QStringLiteral("DisplaySpectrumFps"), savedFps); }
+            else { appSettings.remove(QStringLiteral("DisplaySpectrumFps")); }
+        });
+        RadioModel station;
+        station.setBoardForTest(HPSDRHW::HermesLite);
+        station.setConnectionStateForTest(ConnectionState::Connected);
+        station.addSlice(QStringLiteral("pan-0"));
+        QVERIFY(!station.slices().isEmpty());
+        SliceModel* stationSlice = station.slices().first();
+        stationSlice->setStreamIndex(0);
+        stationSlice->setFrequency(14225000);
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
+        server.setMediaEnabled(true);
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true); // Display fixture opens no speaker.
+        NereusSDR::FFTEngine windowEngine(-1); // Rendering > Decimation keeps its value here.
+        windowEngine.setDecimation(4);
+        remote.setFftEngine(&windowEngine);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        PanadapterStack stack;
+        auto* applet = stack.addPanadapter(QStringLiteral("pan-0"));
+        applet->setActiveSliceIndex(stationSlice->sliceIndex());
+        auto* widget = applet->spectrumWidget();
+        widget->setDisplayWindowPreservingHistory(14225000, 24000);
+        widget->setDispNormalize(false);
+        widget->setWfUseSpectrumMinMax(false);
+        widget->setDbmRange(-100.0f, 20.0f); // Ref Level above 0 dBm.
+        widget->setWfLowThreshold(-130.0f);
+        widget->setWfHighThreshold(-70.0f);
+        widget->setSpectrumAverageTimeMs(200);
+        widget->setWaterfallAverageTimeMs(500);
+        stack.resize(600, 400);
+        stack.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&stack));
+        qint64 now = 1'000;
+        QPointer<DisplayTransport> media;
+        RemoteMediaController controller(&client, &remote, &stack, nullptr,
+            [&media](QObject* owner) -> IMediaTransport* {
+                media = new DisplayTransport(owner);
+                return media;
+            },
+            [&now] { return now; });
+        QSignalSpy controls(&server, &StationServer::mediaControlReceived);
+        auto* stationLink = new Test::LoopbackTransport(QStringLiteral("station"));
+        auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
+        stationLink->linkTo(clientLink);
+        client.startSession(clientLink, server.token());
+        server.acceptTransport(stationLink);
+        QTRY_VERIFY(client.mediaAvailable());
+        QVERIFY(client.spectrumDecimationAvailable());
+        QTRY_VERIFY(media);
+        media->activate();
+        QTRY_COMPARE(countControl(controls, QStringLiteral("subscribe")), 1);
+        QVERIFY(!client.remoteDisplayBudgetLimits().has_value());
+
+        QJsonObject asked = lastControl(controls, QStringLiteral("subscribe"));
+        // The pan shows -100 to +20 dBm and the waterfall -130 to -70: the
+        // window spans both, so +20 dBm is not clipped at 0.
+        QCOMPARE(asked.value(QStringLiteral("minDbm")).toDouble(), -130.0);
+        QCOMPARE(asked.value(QStringLiteral("maxDbm")).toDouble(), 20.0);
+        // The averaging times at the 20 frames a second asked.
+        QCOMPARE(asked.value(QStringLiteral("fps")).toInt(), 20);
+        QCOMPARE(asked.value(QStringLiteral("trace")).toObject()
+                     .value(QStringLiteral("averageAlpha")).toDouble(),
+                 double(averageAlphaForTimeMs(200, 20)));
+        QCOMPARE(asked.value(QStringLiteral("waterfall")).toObject()
+                     .value(QStringLiteral("averageAlpha")).toDouble(),
+                 double(averageAlphaForTimeMs(500, 20)));
+        QCOMPARE(asked.value(QStringLiteral("decimation")).toInt(), 4);
+
+        // Rendering > Decimation changed: asked again with it.
+        windowEngine.setDecimation(8);
+        QTRY_COMPARE(countControl(controls, QStringLiteral("subscribe")), 2);
+        QCOMPARE(lastControl(controls, QStringLiteral("subscribe"))
+                     .value(QStringLiteral("decimation")).toInt(), 8);
+
+        // A drag of the dBm strip: a new range at every planner tick, the
+        // clock never a frame period (50 ms at 20 frames a second) past the
+        // last step. Nothing is asked while it moves.
+        widget->setWfLowThreshold(-96.0f);
+        widget->setWfHighThreshold(-78.0f);
+        for (int step = 0; step < 5; ++step) {
+            widget->setDbmRange(-100.0f + float(step), -80.0f + float(step));
+            now += 10;
+            QTest::qWait(RemoteMediaController::kPlannerIntervalMs + 30);
+        }
+        QTest::qWait(RemoteMediaController::kPlannerIntervalMs + 30);
+        QCOMPARE(countControl(controls, QStringLiteral("subscribe")), 2);
+        // The last range holds for a frame period: asked once, for it.
+        now += 60;
+        QTRY_COMPARE(countControl(controls, QStringLiteral("subscribe")), 3);
+        asked = lastControl(controls, QStringLiteral("subscribe"));
+        const double low = asked.value(QStringLiteral("minDbm")).toDouble();
+        const double high = asked.value(QStringLiteral("maxDbm")).toDouble();
+        QCOMPARE(low, -96.0);
+        QCOMPARE(high, -76.0);
+        // A 20 dB range in 256 levels: steps under 0.1 dB.
+        QVERIFY((high - low) / 255.0 < 0.1);
+        QTest::qWait(RemoteMediaController::kPlannerIntervalMs * 2);
+        QCOMPARE(countControl(controls, QStringLiteral("subscribe")), 3);
+
+        // Normalise moves what the pan shows by -10 log10(bin width): the
+        // window follows, in the frame's own (un-normalised) values.
+        widget->setDispNormalize(true);
+        QTest::qWait(RemoteMediaController::kPlannerIntervalMs + 30);
+        now += 60;
+        QTRY_COMPARE(countControl(controls, QStringLiteral("subscribe")), 4);
+        asked = lastControl(controls, QStringLiteral("subscribe"));
+        SliceModel* mirrored = remote.sliceById(stationSlice->sliceIndex());
+        QVERIFY(mirrored);
+        const double binWidth = double(mirrored->sampleRateHz())
+            / asked.value(QStringLiteral("fftSize")).toDouble();
+        const double shift = -10.0 * std::log10(binWidth);
+        QVERIFY(std::abs(asked.value(QStringLiteral("maxDbm")).toDouble()
+                         - std::ceil((-76.0 - shift) * 10.0) / 10.0) < 1.0e-9);
+
+        client.disconnectFromStation(QStringLiteral("test complete"));
+        remote.setFftEngine(nullptr);
     }
 
     // R-R3-01/08/37: outside budget mode Core's five-key per-pan refusal

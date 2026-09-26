@@ -892,7 +892,7 @@ QJsonObject guiToCoreOps()
                declaredOp(kMedia, peer + QStringList{QStringLiteral("sdp"), QStringLiteral("type")}));
     ops.insert(QStringLiteral("candidate"),
                declaredOp(kMedia, peer + QStringList{QStringLiteral("candidate"), QStringLiteral("mid")}));
-    // DaemonMediaController.cpp handleSubscribe (extendedView and the
+    // DaemonMediaController.cpp handleSubscribe (extendedView, decimation and the
     // display extras fields removed before exactKeys), parsePlane, and
     // DisplayExtras.cpp parseDisplayExtrasRequest (iPhone app Task 20).
     const QString extras = QStringLiteral("displayExtrasVersion");
@@ -906,6 +906,8 @@ QJsonObject guiToCoreOps()
                            QStringLiteral("waterfall"), QStringLiteral("minDbm"),
                            QStringLiteral("maxDbm"), QStringLiteral("wideSpanFactor")},
         {{QStringLiteral("extendedView"), {QStringLiteral("remoteWidebandDisplayVersion")}},
+         // Parity Task 17: spectrumGrantVersion 2.
+         {QStringLiteral("decimation"), {QStringLiteral("spectrumGrantVersion")}},
          {QStringLiteral("peakBlobs"), {extras}},
          {QStringLiteral("activePeakHold"), {extras}},
          {QStringLiteral("noiseFloor"), {extras}},

@@ -394,6 +394,10 @@
 //                                    time, minimum notch widths and
 //                                    dsp.filterResponse).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  R-R3-01 / R-R3-49 (parity Task 17):
+//                                    spectrumGrantVersion 2 (a subscribe's
+//                                    decimation reaches the pan's engine).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -5879,7 +5883,9 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
     caps.remoteMediaVersion = media ? 1 : 0;
     caps.remoteWidebandDisplayVersion = media ? 1 : 0;
     caps.remoteAudioStatusVersion = media ? 1 : 0;
-    caps.spectrumGrantVersion = media ? 1 : 0;
+    // Parity Task 17 (R-R3-01): version 2 adds the subscribe's
+    // `decimation`, applied to the endpoint's engine.
+    caps.spectrumGrantVersion = media ? 2 : 0;
     // R-R3-23: lossless audio beside Opus. Advertised with media whatever
     // nereusd.conf audio_lossless says, so a GUI can be told plainly when
     // the Core's own setting refuses it.

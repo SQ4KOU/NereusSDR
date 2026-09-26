@@ -73,7 +73,7 @@
         {
             "kind": "i64",
             "name": "spectrumGrantVersion",
-            "value": 1
+            "value": 2
         },
         {
             "kind": "i64",
@@ -2120,6 +2120,9 @@
                     ],
                     "calibrationOffsetDb": [
                         "displayExtrasVersion"
+                    ],
+                    "decimation": [
+                        "spectrumGrantVersion"
                     ],
                     "extendedView": [
                         "remoteWidebandDisplayVersion"

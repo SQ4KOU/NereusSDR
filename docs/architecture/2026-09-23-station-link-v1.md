@@ -764,7 +764,7 @@ change shows as surface drift and as a change to this table.
 | `remoteMediaVersion` | 1 |
 | `remoteWidebandDisplayVersion` | 1 |
 | `remoteAudioStatusVersion` | 1 |
-| `spectrumGrantVersion` | 1 |
+| `spectrumGrantVersion` | 2 |
 | `remoteDisplayBudgetVersion` | 1 |
 | `remoteCtunVersion` | 1 |
 | `stationTelemetryVersion` | 5 |
@@ -826,6 +826,15 @@ When a feature is off, its version is 0:
   slice (section 9.1). The four earlier verbs need 1, so a client that
   compares the version as a minimum reads 2 exactly as it read 1. It is
   sent at every minor, as before; the notch verbs need agreed minor 5.
+- `spectrumGrantVersion`: 2 with media. At 1 a spectrum `context`
+  reports what the Core granted the endpoint (`grantedFftSize`,
+  `grantedTier`, `requestedPixels`, `grantedPixels`, `limit`); 2 (parity
+  Task 17, R-R3-01) adds the `subscribe` field `decimation`, a whole
+  number 1 to 32 applied to the endpoint's engine (the remote media
+  control document, "Display subscriptions"). A client that compares the
+  version as a minimum reads 2 as it read 1; a window told less than 2
+  does not send `decimation`, and a Core refuses it from a peer below the
+  grant minor as a request it cannot read.
 - `radioHardwareVersion`: sent only at agreed minor 11. 0 without the step
   attenuator bound; 1 with it; 2 with the Alex antennas too; 4 with the HL2
   I/O board too: the `ioBoard` object, `setAlexRxAntenna` (which needs 3)
@@ -3478,7 +3487,7 @@ Client to station:
 | `keyframe` | `remoteMediaVersion` | `connectionId`, `contextGeneration`, `endpointId`, `op` | none | none |
 | `receiver-audio` | `receiverAudioVersion` | `connectionId`, `enabled`, `op`, `profile`, `revision`, `sliceId` | none | none |
 | `start` | `remoteMediaVersion` | `connectionId`, `op` | `audioProfileVersion` with audioProfileVersion; `headphonesMixVersion` with headphonesMixVersion; `receiverAudioVersion` with receiverAudioVersion | none |
-| `subscribe` | `remoteMediaVersion` | `centreHz`, `connectionId`, `endpointId`, `fftSize`, `fps`, `framesPerLine`, `maxDbm`, `minDbm`, `op`, `pixels`, `revision`, `sliceId`, `spanHz`, `tier`, `trace`, `waterfall`, `wideSpanFactor`, `windowType` | `activePeakHold` with displayExtrasVersion; `averageTimeMs` with displayExtrasVersion; `calibrationOffsetDb` with displayExtrasVersion; `extendedView` with remoteWidebandDisplayVersion; `noiseFloor` with displayExtrasVersion; `normalize` with displayExtrasVersion; `peakBlobs` with displayExtrasVersion; `waterfallAverageTimeMs` with displayExtrasVersion; `waterfallLevels` with displayExtrasVersion | `activePeakHold`: {enabled, fallDbPerSec, holdMs}; `noiseFloor`: {enabled, shiftDb}; `peakBlobs`: {count, fallDbPerSec, holdMs, insideOnly}; `trace`: {averageAlpha, averageMode, detector}; `waterfall`: {averageAlpha, averageMode, detector}; `waterfallLevels`: {highDbm, lowDbm, mode, offsetDb} |
+| `subscribe` | `remoteMediaVersion` | `centreHz`, `connectionId`, `endpointId`, `fftSize`, `fps`, `framesPerLine`, `maxDbm`, `minDbm`, `op`, `pixels`, `revision`, `sliceId`, `spanHz`, `tier`, `trace`, `waterfall`, `wideSpanFactor`, `windowType` | `activePeakHold` with displayExtrasVersion; `averageTimeMs` with displayExtrasVersion; `calibrationOffsetDb` with displayExtrasVersion; `decimation` with spectrumGrantVersion; `extendedView` with remoteWidebandDisplayVersion; `noiseFloor` with displayExtrasVersion; `normalize` with displayExtrasVersion; `peakBlobs` with displayExtrasVersion; `waterfallAverageTimeMs` with displayExtrasVersion; `waterfallLevels` with displayExtrasVersion | `activePeakHold`: {enabled, fallDbPerSec, holdMs}; `noiseFloor`: {enabled, shiftDb}; `peakBlobs`: {count, fallDbPerSec, holdMs, insideOnly}; `trace`: {averageAlpha, averageMode, detector}; `waterfall`: {averageAlpha, averageMode, detector}; `waterfallLevels`: {highDbm, lowDbm, mode, offsetDb} |
 | `unsubscribe` | `remoteMediaVersion` | `connectionId`, `endpointId`, `op` | `revision` with remoteDisplayBudgetVersion | none |
 
 Station to client:

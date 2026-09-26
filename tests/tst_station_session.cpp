@@ -2069,8 +2069,8 @@ void TstStationSession::capabilitiesAdvertiseEffectiveNotBoardLimits()
     QCOMPARE(mediaCaps.remoteAudioStatusVersion, 1);
     QCOMPARE(StationCapabilities::fromUpdates(mediaCaps.toUpdates()).remoteAudioStatusVersion, 1);
     QCOMPARE(StationCapabilities::fromUpdates({}).remoteAudioStatusVersion, 0);
-    QCOMPARE(mediaCaps.spectrumGrantVersion, 1);
-    QCOMPARE(StationCapabilities::fromUpdates(mediaCaps.toUpdates()).spectrumGrantVersion, 1);
+    QCOMPARE(mediaCaps.spectrumGrantVersion, 2); // parity Task 17: decimation
+    QCOMPARE(StationCapabilities::fromUpdates(mediaCaps.toUpdates()).spectrumGrantVersion, 2);
     QCOMPARE(StationCapabilities::fromUpdates({}).spectrumGrantVersion, 0);
 }
 

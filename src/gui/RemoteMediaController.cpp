@@ -13,6 +13,7 @@
 #include "core/session/media/RemoteSpectrumContext.h"
 #include "core/session/media/SpectrumEndpoint.h"
 #include "core/session/media/WidebandDisplayContext.h"
+#include "core/spectrum/DisplayFollowers.h"
 #include "gui/DssGeometry.h"
 #include "gui/PanadapterApplet.h"
 #include "gui/PanadapterStack.h"
@@ -269,23 +270,68 @@ SliceModel* currentSliceForPan(RadioModel* model, PanadapterStack* stack,
     return nullptr;
 }
 
-QJsonObject requestFor(SpectrumWidget* widget, SliceModel* slice,
-                       bool remoteWidebandAvailable)
+// Parity Task 17 (R-R3-01, R-R3-04): the quantisation window a pan asks
+// the Core for. The codec carries 256 levels between minDbm and maxDbm, so
+// the window is what the pan shows: its own dBm range (refLevel down by
+// its dynamic range, less the normalise shift the pan adds when it draws)
+// widened by the waterfall's low and high levels, which the waterfall
+// colours against the frame's values as they come. A signal above 0 dBm is
+// then drawn at its level, and a 20 dB pan steps by 20/255 dB.
+struct DbmWindow {
+    double minDbm = -180.0;
+    double maxDbm = 0.0;
+    bool operator==(const DbmWindow& other) const
+    {
+        return minDbm == other.minDbm && maxDbm == other.maxDbm;
+    }
+    bool operator!=(const DbmWindow& other) const { return !(*this == other); }
+};
+
+// What requestFor adds from this window's state: the settled dBm window
+// (none: the pan's window as it is now) and, for a Core at
+// spectrumGrantVersion 2, Rendering > Decimation.
+struct RequestInputs {
+    std::optional<DbmWindow> dbmWindow;
+    std::optional<int> decimation;
+};
+
+DbmWindow liveDbmWindow(const SpectrumWidget* widget, double binWidthHz)
+{
+    const double shift = normalizeShiftDb(widget->dispNormalize(), binWidthHz);
+    const double panHigh = double(widget->refLevel()) - shift;
+    const double panLow = panHigh - double(widget->dynamicRange());
+    double low = std::min(panLow, double(widget->wfLowThreshold()));
+    double high = std::max(panHigh, double(widget->wfHighThreshold()));
+    if (!std::isfinite(low) || !std::isfinite(high)) {
+        return {};
+    }
+    low = std::clamp(low, kMinDbmLimit, kMaxDbmLimit - 1.0);
+    high = std::clamp(high, low + 1.0, kMaxDbmLimit);
+    // Whole tenths of a dB: a window that differs by less than that paints
+    // the same, and must not ask the Core again.
+    return {std::floor(low * 10.0) / 10.0, std::ceil(high * 10.0) / 10.0};
+}
+
+int requestedFps()
+{
+    return qBound(1, AppSettings::instance().value(QStringLiteral("DisplaySpectrumFps"),
+                         QStringLiteral("30")).toString().toInt(), 60);
+}
+
+// The FFT size a pan asks for: the stored size, raised by a deep zoom or
+// the Hz/bin target. 0 when the pan cannot ask yet.
+int plannedFftSize(SpectrumWidget* widget, SliceModel* slice, int* baseSizeOut = nullptr)
 {
     auto& settings = AppSettings::instance();
-    const int fps = qBound(1, settings.value(QStringLiteral("DisplaySpectrumFps"),
-                                QStringLiteral("30")).toString().toInt(), 60);
     const int baseSize = fftSizeFor(settings.value(QStringLiteral("DisplayFftSize"),
                                           QStringLiteral("4096")).toString().toInt());
-    const int window = qBound(0, settings.value(QStringLiteral("DisplayFftWindow"),
-                                    QString::number(int(WindowFunction::BlackmanHarris4)))
-                                    .toString().toInt(), int(WindowFunction::Count) - 1);
+    if (baseSizeOut) { *baseSizeOut = baseSize; }
     const int pixels = qBound(1, widget->width() - widget->reservedRightEdgeWidth(),
                              SpectrumEndpoint::kMaxPixels);
     const double span = widget->bandwidth();
     if (!std::isfinite(span) || span <= 0 || !std::isfinite(widget->centerFrequency())
         || slice->sampleRateHz() <= 0) {
-        return {};
+        return 0;
     }
     // R-R3-08: a deep zoom requests its own tier; it cannot lengthen the
     // shared Wide engine. Size is capped to the actual FFT engine limit.
@@ -295,11 +341,46 @@ QJsonObject requestFor(SpectrumWidget* widget, SliceModel* slice,
     if (std::isfinite(hzPerBin) && hzPerBin > 0) {
         target = std::max(target, slice->sampleRateHz() / hzPerBin);
     }
-    const int size = std::max(baseSize, fftSizeFor(target));
+    return std::max(baseSize, fftSizeFor(target));
+}
+
+// Parity Task 17 (R-R3-12): the averaging constants for the rate the Core
+// will send this pan at, from the pan's own averaging times, as the Core
+// computes an app's (averageAlphaForTimeMs, display extras v1).
+void setAveragingFor(QJsonObject& request, const SpectrumWidget* widget, int fps)
+{
+    for (const auto& [key, timeMs] :
+         {std::pair{QStringLiteral("trace"), widget->spectrumAverageTimeMs()},
+          std::pair{QStringLiteral("waterfall"), widget->waterfallAverageTimeMs()}}) {
+        QJsonObject plane = request.value(key).toObject();
+        plane.insert(QStringLiteral("averageAlpha"),
+                     double(averageAlphaForTimeMs(timeMs, std::max(1, fps))));
+        request.insert(key, plane);
+    }
+}
+
+QJsonObject requestFor(SpectrumWidget* widget, SliceModel* slice,
+                       bool remoteWidebandAvailable, const RequestInputs& inputs = {})
+{
+    auto& settings = AppSettings::instance();
+    const int fps = requestedFps();
+    const int window = qBound(0, settings.value(QStringLiteral("DisplayFftWindow"),
+                                    QString::number(int(WindowFunction::BlackmanHarris4)))
+                                    .toString().toInt(), int(WindowFunction::Count) - 1);
+    const int pixels = qBound(1, widget->width() - widget->reservedRightEdgeWidth(),
+                             SpectrumEndpoint::kMaxPixels);
+    const double span = widget->bandwidth();
+    int baseSize = 0;
+    const int size = plannedFftSize(widget, slice, &baseSize);
+    if (size <= 0) {
+        return {};
+    }
     const int framesPerLine = qBound(1, int(std::ceil(
         double(widget->wfUpdatePeriodMs()) * fps / 1000.0)), kMaxFramesPerLine);
     const double wideFactor = widget->spectrumRenderMode() == int(SpectrumRenderMode::Mode3D)
         ? dssMaxRowSpanFactor(dssShapeForAngle(0)) : 0.0;
+    const DbmWindow dbm = inputs.dbmWindow.value_or(
+        liveDbmWindow(widget, double(slice->sampleRateHz()) / size));
     QJsonObject request{{QStringLiteral("sliceId"), slice->sliceIndex()},
             {QStringLiteral("tier"), size > baseSize ? QStringLiteral("fine") : QStringLiteral("wide")},
             {QStringLiteral("fftSize"), size}, {QStringLiteral("windowType"), window},
@@ -310,21 +391,32 @@ QJsonObject requestFor(SpectrumWidget* widget, SliceModel* slice,
                 int(widget->spectrumAveraging()), widget->spectrumAverageAlpha())},
             {QStringLiteral("waterfall"), plane(int(widget->waterfallDetector()),
                 int(widget->waterfallAveraging()), widget->waterfallAverageAlpha())},
-            {QStringLiteral("minDbm"), -180.0}, {QStringLiteral("maxDbm"), 0.0},
+            {QStringLiteral("minDbm"), dbm.minDbm}, {QStringLiteral("maxDbm"), dbm.maxDbm},
             {QStringLiteral("wideSpanFactor"), wideFactor}};
+    setAveragingFor(request, widget, fps);
     if (remoteWidebandAvailable) {
         // This is permission, not current demand. Core derives demand from
         // the accepted span and reports the resulting active state.
         request.insert(QStringLiteral("extendedView"), widget->extendedViewAllowed());
     }
+    if (inputs.decimation) {
+        // Parity Task 17 (R-R3-01): spectrumGrantVersion 2.
+        request.insert(QStringLiteral("decimation"), *inputs.decimation);
+    }
     return request;
 }
 
-QJsonObject allocatedRequest(QJsonObject request, const RemoteDisplayQuality& quality)
+QJsonObject allocatedRequest(QJsonObject request, const RemoteDisplayQuality& quality,
+                             const SpectrumWidget* widget)
 {
     request.insert(QStringLiteral("pixels"), quality.pixels);
     request.insert(QStringLiteral("fps"), quality.fps);
     request.insert(QStringLiteral("framesPerLine"), quality.framesPerLine);
+    // Parity Task 17 (R-R3-12): the averaging times hold at the rate the
+    // display budget leaves this pan.
+    if (widget) {
+        setAveragingFor(request, widget, quality.fps);
+    }
     return request;
 }
 
@@ -334,6 +426,14 @@ bool sameOriginalIntent(QJsonObject left, QJsonObject right)
                                QStringLiteral("framesPerLine")}) {
         left.remove(key);
         right.remove(key);
+    }
+    // The averaging constants follow the allocated rate (parity Task 17).
+    for (const QString& key : {QStringLiteral("trace"), QStringLiteral("waterfall")}) {
+        for (QJsonObject* side : {&left, &right}) {
+            QJsonObject plane = side->value(key).toObject();
+            plane.remove(QStringLiteral("averageAlpha"));
+            side->insert(key, plane);
+        }
     }
     return left == right;
 }
@@ -461,6 +561,78 @@ struct RemoteMediaController::Private {
     // the Core said (CoreBusy); None for a pan at its requested quality.
     // The pan status builder maps it to words.
     QHash<QString, DisplayBudgetReason> panBudgetReason;
+    // Parity Task 17 (R-R3-01, R-R3-04): each pan's dBm window, settled
+    // once it has held for a frame period so a drag of the dBm strip asks
+    // the Core again when it stops, not at every step.
+    struct DbmWindowState {
+        DbmWindow settled;
+        DbmWindow live;
+        qint64 liveSinceMs = 0;
+    };
+    QHash<const SpectrumWidget*, DbmWindowState> dbmWindows;
+
+    /// The request this window would send for the pan now: requestFor with
+    /// the pan's settled dBm window and, for a Core at spectrumGrantVersion
+    /// 2, Rendering > Decimation (the value the Setup page keeps on this
+    /// window's FFT engine, as a local window's page does).
+    QJsonObject request(SpectrumWidget* widget, SliceModel* slice) const
+    {
+        RequestInputs inputs;
+        if (const auto found = dbmWindows.constFind(widget); found != dbmWindows.cend()) {
+            inputs.dbmWindow = found->settled;
+        }
+        if (client && client->spectrumDecimationAvailable()) {
+            inputs.decimation = model && model->fftEngine()
+                ? model->fftEngine()->decimation() : 1;
+        }
+        return requestFor(widget, slice, client && client->remoteWidebandAvailable(), inputs);
+    }
+
+    /// Parity Task 17: brings each pan's dBm window up to date. A pan seen
+    /// for the first time takes its window at once; a changed window is
+    /// taken once it has held for a frame period of the pan's rate (the
+    /// planner's tick, kPlannerIntervalMs, is longer, so a range change
+    /// asks the Core again at most once a tick and a drag once it stops).
+    void settleDbmWindows(qint64 now)
+    {
+        if (!stack || !model) { return; }
+        QSet<const SpectrumWidget*> seen;
+        for (PanadapterApplet* applet : stack->allApplets()) {
+            SpectrumWidget* widget = applet ? applet->spectrumWidget() : nullptr;
+            SliceModel* slice = widget ? model->sliceById(applet->activeSliceIndex()) : nullptr;
+            if (!slice) { continue; }
+            const int size = plannedFftSize(widget, slice);
+            if (size <= 0) { continue; }
+            seen.insert(widget);
+            const DbmWindow live = liveDbmWindow(widget, double(slice->sampleRateHz()) / size);
+            auto found = dbmWindows.find(widget);
+            if (found == dbmWindows.end()) {
+                dbmWindows.insert(widget, {live, live, now});
+                continue;
+            }
+            DbmWindowState& state = *found;
+            if (live != state.live) {
+                state.live = live;
+                state.liveSinceMs = now;
+                continue;
+            }
+            int fps = requestedFps();
+            for (const auto& [id, binding] : bindings) {
+                Q_UNUSED(id);
+                if (binding.widget == widget && binding.accepted
+                    && binding.context.targetFps > 0) {
+                    fps = binding.context.targetFps;
+                    break;
+                }
+            }
+            if (state.settled != live && now - state.liveSinceMs >= 1000 / std::max(1, fps)) {
+                state.settled = live;
+            }
+        }
+        for (auto it = dbmWindows.begin(); it != dbmWindows.end();) {
+            it = seen.contains(it.key()) ? std::next(it) : dbmWindows.erase(it);
+        }
+    }
     struct CtunState {
         quint64 epoch = 0;
         int requestSliceId = -1;
@@ -1958,6 +2130,7 @@ void RemoteMediaController::refreshSubscriptions()
         return;
     }
     if (!d->model->isConnected()) { return; }
+    d->settleDbmWindows(d->allocationClock());
     if (d->client->remoteDisplayBudgetLimits()) {
         refreshBudgetSubscriptions();
         return;
@@ -1996,8 +2169,7 @@ void RemoteMediaController::refreshSubscriptions()
         // The stack's membership is pane intent. Float/dock and layout
         // rebuilding temporarily hide the same renderer without disabling it.
         if (!widget || !slice || slice->streamIndex() < 0) { continue; }
-        QJsonObject request = requestFor(widget, slice,
-                                         d->client->remoteWidebandAvailable());
+        QJsonObject request = d->request(widget, slice);
         if (!request.isEmpty()) {
             desired.append({applet->panId(), widget, slice, std::move(request)});
         }
@@ -2162,8 +2334,7 @@ PanDisplayState RemoteMediaController::perPanRefusalStatus(const QString& panId)
             || currentSliceForPan(d->model, d->stack, binding.widget) != binding.slice
             || binding.observedStream != binding.slice->streamIndex()
             || binding.observedStreamEpoch != binding.slice->streamEpoch()
-            || requestFor(binding.widget, binding.slice,
-                          d->client->remoteWidebandAvailable()) != binding.observed) {
+            || d->request(binding.widget, binding.slice) != binding.observed) {
             continue;
         }
         return refusedState(binding.refusalReason.left(384));
@@ -2249,8 +2420,7 @@ void RemoteMediaController::refreshBudgetSubscriptions()
         SpectrumWidget* widget = applet->spectrumWidget();
         SliceModel* slice = d->model->sliceById(applet->activeSliceIndex());
         if (!widget || !slice || slice->streamIndex() < 0) { continue; }
-        QJsonObject original = requestFor(widget, slice,
-                                          d->client->remoteWidebandAvailable());
+        QJsonObject original = d->request(widget, slice);
         if (original.isEmpty()) { continue; }
         RemoteDisplayIntent intent;
         intent.panId = applet->panId();
@@ -2588,7 +2758,7 @@ void RemoteMediaController::refreshBudgetSubscriptions()
         Private::Binding& binding = found->second;
         binding.suspending = false;
         binding.desiredOriginal = item.original;
-        const QJsonObject target = allocatedRequest(item.original, quality);
+        const QJsonObject target = allocatedRequest(item.original, quality, item.widget);
         const QString identity = requestIdentity(target, limits->generation, targetPs3);
         if (!binding.refusedIdentity.isEmpty() && binding.refusedIdentity != identity) {
             binding.refusedIdentity.clear();
@@ -3542,11 +3712,9 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
             || binding.observedStreamEpoch != binding.slice->streamEpoch()
             || (budgetMode
                 ? !sameOriginalIntent(
-                    requestFor(binding.widget, binding.slice,
-                               d->client->remoteWidebandAvailable()),
+                    d->request(binding.widget, binding.slice),
                     binding.acceptedRequest)
-                : requestFor(binding.widget, binding.slice,
-                             d->client->remoteWidebandAvailable()) != binding.observed)) {
+                : d->request(binding.widget, binding.slice) != binding.observed)) {
             return;
         }
         // Clarity remains the GUI's existing active-pan controller. Core
@@ -3611,8 +3779,7 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
     // A gesture/rebind may arrive between the outgoing request and its ACK.
     // Issue the newer request before accepting an old view over that gesture.
     if (binding.slice) {
-        const QJsonObject currentRequest = requestFor(
-            binding.widget, binding.slice, d->client->remoteWidebandAvailable());
+        const QJsonObject currentRequest = d->request(binding.widget, binding.slice);
         const bool requestChanged = budgetMode
             ? !sameOriginalIntent(currentRequest, binding.acceptedRequest)
             : currentRequest != binding.observed;
@@ -3676,7 +3843,13 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
     const QString connectionId = d->connectionId;
     const quint32 acceptedContextRevision = revision;
     const QString panId = binding.panId;
-    binding.widget->setRemoteSpectrumContext(context, sourceCentre, rate);
+    // Parity Task 17 (R-R3-01, R-R3-08): the pan's bin width follows the
+    // FFT size the Core runs for it: its grant, or what an older Core that
+    // reports none was asked for.
+    const int grantedFftSize = decoded->grant ? decoded->grant->grantedFftSize
+        : (budgetMode ? binding.acceptedRequest : binding.observed)
+              .value(QStringLiteral("fftSize")).toInt();
+    binding.widget->setRemoteSpectrumContext(context, sourceCentre, rate, grantedFftSize);
     if (!self || d->connectionId != connectionId) { return; }
     // Show or clear this pan's grant line now rather than on the next refresh.
     refreshPanGrantStatus(panId);
@@ -3689,8 +3862,7 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
     // The source crop may be bin-aligned. Remember the displayed accepted
     // window so the polling observer does not feed an ACK back as a new zoom.
     if (installed.slice) {
-        const QJsonObject normalized = requestFor(installed.widget, installed.slice,
-                                                  d->client->remoteWidebandAvailable());
+        const QJsonObject normalized = d->request(installed.widget, installed.slice);
         if (budgetMode) {
             installed.desiredOriginal = normalized;
             installed.acceptedRequest.insert(QStringLiteral("centreHz"),

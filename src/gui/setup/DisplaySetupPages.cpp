@@ -19,6 +19,12 @@
 //                 core/spectrum/WaterfallPalettes (iPhone app Task 19,
 //                 R-IOS-06). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-26 - R-R3-01 / R-R3-11 / R-R3-41 (parity Task 17): in a remote
+//                 window Spectrum Defaults opens on the Core's stored FFT
+//                 size, window, Hz/bin target and FPS with readouts from
+//                 the Core's grant; Cal Offset and Display Thread Priority
+//                 are disabled with their reasons. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -170,6 +176,71 @@ void SpectrumDefaultsPage::setStationSettingsAvailable(bool available, const QSt
     gateStationControls({m_fftSizeSlider, m_windowCombo, m_hzPerBinTargetSpin,
                          m_fpSlider, m_fpSpin},
                         available, reason);
+    // Parity Task 17: the Core's stored values arrive with its settings.
+    if (available && remoteWindow()) {
+        loadStationSpectrumSettings();
+    }
+}
+
+bool SpectrumDefaultsPage::remoteWindow()
+{
+    return model() && !model()->ownsLocalDsp();
+}
+
+void SpectrumDefaultsPage::loadStationSpectrumSettings()
+{
+    // The station keys (SettingsScope: DisplayFftSize, DisplayFftWindow,
+    // DisplayHzPerBinTarget, DisplaySpectrumFps) hold the Core's values in a
+    // remote window; this window's own FFT engine is idle there.
+    auto& settings = AppSettings::instance();
+    const int fftSize = settings.value(QStringLiteral("DisplayFftSize"),
+                                       QStringLiteral("4096")).toString().toInt();
+    int sliderVal = 0;
+    for (int n = fftSize / 4096; n > 1 && sliderVal < 6; n >>= 1) { ++sliderVal; }
+    const int window = qBound(0, settings.value(QStringLiteral("DisplayFftWindow"),
+                                  QString::number(int(WindowFunction::BlackmanHarris4)))
+                                  .toString().toInt(), int(WindowFunction::Count) - 1);
+    const double hzPerBin = settings.value(QStringLiteral("DisplayHzPerBinTarget"),
+                                           QStringLiteral("0")).toString().toDouble();
+    const int fps = qBound(1, settings.value(QStringLiteral("DisplaySpectrumFps"),
+                                  QStringLiteral("30")).toString().toInt(), 60);
+    {
+        QSignalBlocker b1(m_fftSizeSlider);
+        QSignalBlocker b2(m_windowCombo);
+        QSignalBlocker b3(m_hzPerBinTargetSpin);
+        QSignalBlocker b4(m_fpSlider);
+        QSignalBlocker b5(m_fpSpin);
+        m_fftSizeSlider->setValue(qBound(0, sliderVal, 6));
+        m_windowCombo->setCurrentIndex(window);
+        m_hzPerBinTargetSpin->setValue(std::isfinite(hzPerBin) ? hzPerBin : 0.0);
+        m_fpSlider->setValue(fps);
+        m_fpSpin->setValue(fps);
+    }
+    refreshGrantedReadouts();
+}
+
+void SpectrumDefaultsPage::refreshGrantedReadouts()
+{
+    // What the Core runs for the active pan: its granted FFT size and the
+    // bin width that gives (SpectrumWidget::binWidthHz). Before the first
+    // grant, the stored size.
+    auto* sw = model() ? model()->spectrumWidget() : nullptr;
+    const int granted = sw ? sw->remoteGrantedFftSize() : 0;
+    const int size = granted > 0 ? granted
+        : AppSettings::instance().value(QStringLiteral("DisplayFftSize"),
+                                        QStringLiteral("4096")).toString().toInt();
+    if (m_fftSizeReadout) {
+        m_fftSizeReadout->setText(QString::number(size));
+    }
+    const double bw = (sw && granted > 0) ? sw->binWidthHz() : 0.0;
+    if (m_binWidthLabel) {
+        m_binWidthLabel->setText(bw > 0.0 ? QString::number(bw, 'f', 3)
+                                          : QStringLiteral("0.000"));
+    }
+    if (m_binWidthReadout) {
+        m_binWidthReadout->setText(bw > 0.0 ? QStringLiteral("%1 Hz/bin").arg(bw, 0, 'f', 3)
+                                            : QStringLiteral("- Hz/bin"));
+    }
 }
 
 void SpectrumDefaultsPage::loadFromRenderer()
@@ -325,6 +396,9 @@ void SpectrumDefaultsPage::loadFromRenderer()
     if (m_decimationSpin && fe) {
         QSignalBlocker b(m_decimationSpin);
         m_decimationSpin->setValue(fe->decimation());
+    }
+    if (remoteWindow()) {
+        loadStationSpectrumSettings();
     }
 }
 
@@ -622,6 +696,11 @@ void SpectrumDefaultsPage::buildUI()
                 bw > 0.0 ? QStringLiteral("%1 Hz/bin").arg(bw, 0, 'f', 3)
                          : QStringLiteral("- Hz/bin"));
         }
+        // Parity Task 17: a remote window's readouts show what the Core
+        // runs; they move when its new grant arrives.
+        if (remoteWindow()) {
+            refreshGrantedReadouts();
+        }
 
         // FFTSizeOffset = slider.Value * 2 dB.  Mirrors Thetis
         // setup.cs:16154 [v2.10.3.13]:
@@ -840,6 +919,15 @@ void SpectrumDefaultsPage::buildUI()
         }
     });
     calForm->addRow(QStringLiteral("Cal Offset:"), m_calOffsetSpin);
+    // Parity Task 17 (R-R3-11): a remote pan's levels already carry the
+    // Core's calibration for its radio; a second local offset would count
+    // it twice.
+    if (remoteWindow()) {
+        const QString reason = QStringLiteral("The Core calibrates the display for its radio.");
+        m_calOffsetSpin->setEnabled(false);
+        m_calOffsetSpin->setToolTip(reason);
+        m_calOffsetSpin->setAccessibleDescription(reason);
+    }
 
     m_peakHoldToggle = new QCheckBox(QStringLiteral("Peak hold"), calGroup);
     // NereusSDR extension — no Thetis equivalent
@@ -1226,6 +1314,22 @@ void SpectrumDefaultsPage::buildUI()
         }
     });
     threadForm->addRow(QStringLiteral("Display Thread Priority:"), m_threadPriorityCombo);
+    // Parity Task 17 (R-R3-41): a remote pan's spectrum is computed on the
+    // Core, which places its own threads.
+    if (remoteWindow()) {
+        const QString reason = QStringLiteral("The Core sets its own display thread priority.");
+        m_threadPriorityCombo->setEnabled(false);
+        m_threadPriorityCombo->setToolTip(reason);
+        m_threadPriorityCombo->setAccessibleDescription(reason);
+    }
+    // Parity Task 17 (R-R3-01, R-R3-08): the readouts follow the Core's
+    // grant for the active pan (a new FFT size from the slider or a zoom).
+    if (remoteWindow()) {
+        if (auto* grantSource = model()->spectrumWidget()) {
+            connect(grantSource, &SpectrumWidget::remoteSpectrumGrantChanged,
+                    this, &SpectrumDefaultsPage::refreshGrantedReadouts);
+        }
+    }
 
     contentLayout()->addWidget(threadGroup);
 

@@ -191,6 +191,9 @@
 //                widths applied as plain state; dsp.filterResponse sent and
 //                its answer handed to the model. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-R3-01 (parity Task 17): spectrumDecimationAvailable
+//                (spectrumGrantVersion 2). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -4409,6 +4412,11 @@ bool StationClient::spectrumGrantAvailable() const
 {
     return mediaAvailable() && m_agreedMinor >= kRemoteSpectrumGrantSessionProtocolMinor
         && m_capabilities.spectrumGrantVersion >= 1;
+}
+
+bool StationClient::spectrumDecimationAvailable() const
+{
+    return spectrumGrantAvailable() && m_capabilities.spectrumGrantVersion >= 2;
 }
 
 std::optional<DisplayBudgetLimits> StationClient::remoteDisplayBudgetLimits() const

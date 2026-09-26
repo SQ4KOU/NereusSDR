@@ -639,6 +639,7 @@ private slots:
     void budgetChargesGrantedPixels();
     void regrantAfterNeighbourLeavesStaysWithinAdmittedCharge();
     void sharedEngineRegrantsEverySurvivorWhenItsSizerLeaves();
+    void subscribeDecimationReachesTheEndpointsEngine();
     void destroyingControllerWithLiveBudgetSessionIsQuiet();
     void outOfRangeRequestsAreRejectedAndLeaveEndpointUntouched();
     void displayDiagnosticsMeasureSentFramesRefusalsAndErrors();
@@ -5008,6 +5009,77 @@ void TstDaemonMediaController::minorNinePeerReceivesTheGrant()
 // R-R3-01/08: from minor 9 on, each context carries the grant Core recorded,
 // including what limited it. The harness negotiates the current minor, which
 // only has to have reached the grant minor; later minors keep the grant.
+// Parity Task 17 (R-R3-01, B3.7): spectrumGrantVersion 2's `decimation`
+// reaches the endpoint's own engine. Beside another pan it runs at the
+// engine's decimation (no pan's spectrum changes to satisfy another's
+// request), and a pan left alone gets its own. A value outside 1 to 32 is
+// a request the Core cannot read.
+void TstDaemonMediaController::subscribeDecimationReachesTheEndpointsEngine()
+{
+    Harness h;
+    h.establishSession();
+    QCOMPARE(h.server.buildCapabilities().spectrumGrantVersion, 2);
+    QVERIFY(h.client.spectrumDecimationAvailable());
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    h.startReadyPeer();
+    const double centre = h.radio.streamCentreHz(h.streamIndex);
+    const auto withDecimation = [&](quint32 endpointId, quint32 revision, const QJsonValue& d) {
+        QJsonObject request = tieredSubscription(endpointId, revision, h.sliceId, centre,
+                                                 QStringLiteral("wide"), 1024);
+        request.insert(QStringLiteral("decimation"), d);
+        return request;
+    };
+    const auto contextRevision = [&](quint32 endpointId) {
+        return messageFor(controls, QStringLiteral("context"), endpointId)
+            .value(QStringLiteral("revision")).toInt();
+    };
+
+    // Wrong: outside 1 to 32, or not a whole number.
+    int refusals = 0;
+    for (const QJsonValue& bad : {QJsonValue(0), QJsonValue(33), QJsonValue(2.5),
+                                  QJsonValue(QStringLiteral("4"))}) {
+        QVERIFY(h.client.sendMediaControl(withDecimation(9, quint32(refusals + 1), bad),
+                                          h.client.sessionEpoch()));
+        ++refusals;
+        QTRY_COMPARE(messageCount(controls, QStringLiteral("rejected"), 9), refusals);
+        QCOMPARE(messageFor(controls, QStringLiteral("rejected"), 9)
+                     .value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("The Core could not read this display request."));
+    }
+    QCOMPARE(h.controller.activeEndpointCount(), 0);
+
+    // Right: alone on its engine, the engine takes it.
+    QVERIFY(h.client.sendMediaControl(withDecimation(1, 1, 4), h.client.sessionEpoch()));
+    QTRY_COMPARE(h.controller.activeEndpointCount(), 1);
+    QTRY_VERIFY(([&] { h.feedRadio(); return contextRevision(1) == 1; })());
+    QTRY_COMPARE(h.controller.spectrumSourceDecimation(1).value_or(0), 4);
+    // Asked again with another: the engine follows.
+    QVERIFY(h.client.sendMediaControl(withDecimation(1, 2, 2), h.client.sessionEpoch()));
+    QTRY_VERIFY(([&] { h.feedRadio(); return contextRevision(1) == 2; })());
+    QTRY_COMPARE(h.controller.spectrumSourceDecimation(1).value_or(0), 2);
+
+    // A second pan on the same engine asking for 8 runs at the engine's 2.
+    QVERIFY(h.client.sendMediaControl(withDecimation(2, 1, 8), h.client.sessionEpoch()));
+    QTRY_COMPARE(h.controller.activeEndpointCount(), 2);
+    QTRY_VERIFY(([&] { h.feedRadio(); return contextRevision(2) == 1; })());
+    QTest::qWait(50);
+    QCOMPARE(h.controller.spectrumSourceDecimation(2).value_or(0), 2);
+    QCOMPARE(h.controller.spectrumSourceDecimation(1).value_or(0), 2);
+
+    // The first pan leaves: the one left gets the 8 it asked for.
+    QVERIFY(h.client.sendMediaControl(unsubscription(1), h.client.sessionEpoch()));
+    QTRY_COMPARE(h.controller.activeEndpointCount(), 1);
+    QTRY_COMPARE(h.controller.spectrumSourceDecimation(2).value_or(0), 8);
+
+    // Without the field a request runs undecimated.
+    QVERIFY(h.client.sendMediaControl(
+        tieredSubscription(2, 2, h.sliceId, centre, QStringLiteral("wide"), 1024),
+        h.client.sessionEpoch()));
+    QTRY_VERIFY(([&] { h.feedRadio(); return contextRevision(2) == 2; })());
+    QTRY_COMPARE(h.controller.spectrumSourceDecimation(2).value_or(0), 1);
+    h.finish();
+}
+
 void TstDaemonMediaController::currentMinorSpectrumContextsReportTheGrant()
 {
     Harness h;

@@ -137,6 +137,42 @@ refused. A global
 window change unsubscribes all old-window endpoints before requesting any
 replacement, so shared sources can adopt the new window.
 
+Capability `spectrumGrantVersion=2` (parity Task 17, R-R3-01) adds one
+optional field, `decimation`: a whole number 1 to 32, the desktop's Setup >
+Display > Rendering > Decimation. The endpoint's engine passes only every
+Nth I/Q pair to its FFT (`FFTEngine::setDecimation`), as a local window's
+engine does. It follows the FFT size's sharing rule: a request sets its
+engine's decimation only while it is the engine's only subscriber (any
+device's); beside another endpoint it runs at the engine's decimation, and
+when it is left alone it gets its own. A change renews the context. Absent,
+the engine runs undecimated (1). Only a peer at the grant minor may send it
+(`StationServer::spectrumGrantAvailable`); a value outside 1 to 32, or one
+that is not a whole number, is refused as a request the Core cannot read.
+The desktop sends it to a Core that advertised version 2 on every
+subscribe, from the value its Setup page keeps; a window told less does not
+send it.
+
+The quantisation window (`minDbm`, `maxDbm`) is what the pan shows (parity
+Task 17, R-R3-01, R-R3-04). The codec carries 256 levels across it, so the
+desktop asks for the pan's own dBm range (its reference level down by its
+dynamic range, less the normalise shift the pan adds when it draws, in the
+frame's own un-normalised values) widened by the waterfall's low and high
+levels, which colour the frame's values as they come; each edge is rounded
+outward to a tenth of a dB and held inside -400 to 100. A signal above 0
+dBm on a pan whose reference level is above 0 is drawn at its level, and a
+20 dB pan with its waterfall levels inside it steps by 20/255 dB. A change
+of range asks the Core again once the new range has held for one frame
+period of the pan's rate; the desktop's planner looks every 100 ms, so it
+asks at most once a planner tick, and a drag of the dBm strip asks once it
+stops, not at every step. The Core accepts any finite window inside those
+limits, as before.
+
+The averaging constants in `trace` and `waterfall` are for the rate the
+request asks (`fps`): the desktop computes each from its spectrum and
+waterfall averaging times, exp(-1 / (fps x time)), as the Core computes an
+app's from `averageTimeMs` (display extras v1), and under the display
+budget at the rate the budget gives the pan.
+
 Both `trace` and `waterfall` contain exactly `detector`, `averageMode` and
 `averageAlpha`. Detector codes are the existing SpectrumDetectorMode values:
 0 peak, 1 Rosenfell, 2 average, 3 sample, 4 RMS. Averaging codes are the
@@ -173,7 +209,14 @@ grantedFftSize, grantedTier, requestedPixels, grantedPixels, limit
 ```
 
 `grantedFftSize` is the FFT size the endpoint's engine actually runs
-(1..262144). `grantedTier` is `wide` or `fine`. `requestedPixels` and
+(1..262144). The desktop draws with it: a remote pan's bin width (the
+receiver's sample rate over the granted size), its Hz/bin readout and its
+normalise shift follow the grant, not the window's own idle engine (parity
+Task 17, R-R3-01); a context without a grant (an older Core) uses the size
+the window asked for. The desktop also runs the pan's active peak hold,
+peak blob and noise floor decay per frame at the context's `fps`, the rate
+the Core sends after the display budget, so their times per second stay
+right when the budget lowers it. `grantedTier` is `wide` or `fine`. `requestedPixels` and
 `grantedPixels` are 1..4096 with granted not above requested. `limit` names
 what reduced the grant: `none`, `largest-size` (the request was above the
 largest supported FFT size), `shared` (another endpoint uses the same stream
