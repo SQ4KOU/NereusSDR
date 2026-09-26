@@ -616,6 +616,13 @@ password = base64(HMAC-SHA1(secret, username)) standard base64, with padding
   `turn:rv4.nereussdr.com:3478?transport=udp` and
   `turn:rv4.nereussdr.com:443?transport=udp`, and the `stun` list of
   `hello` names the same two hosts on 3478. The names are configuration.
+- Neither list's order means anything, and an end must not depend on it.
+  It chooses its STUN server, and the relay host it allocates on, by the
+  address families it has: the first entry whose name resolves, on that
+  end, to a family it has a usable address in, or the first entry when it
+  has both families or cannot tell. An IPv4-only end behind NAT so takes
+  the IPv4-only name whichever the service lists first (NereusSDR:
+  `IceConfiguration`).
 - **Quotas.** coturn's quotas per user (per username, so per station id)
   do not limit how much the relay is used in total: an id costs nothing
   (anyone can make a key, register it and answer its own introduction with

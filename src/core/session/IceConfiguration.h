@@ -15,10 +15,7 @@
 //
 //   - One STUN server. libdatachannel picks one STUN server from its
 //     configuration at random (src/impl/icetransport.cpp:101-113), so this
-//     carries exactly one: the first the service's hello lists. On
-//     rv.nereussdr.com that is the IPv4-only name (rv4), because a peer
-//     that has only IPv4, behind NAT, needs a server-reflexive candidate
-//     (the service's operators, 2026-09-26).
+//     carries exactly one.
 //   - Relay servers: libdatachannel takes at most two (icetransport.cpp:39,
 //     MAX_TURN_SERVERS_COUNT; libjuice agent.h:65, MAX_RELAY_ENTRIES_COUNT),
 //     and libjuice resolves one address per TURN host, preferring IPv4
@@ -26,9 +23,18 @@
 //     the service lists an IPv6-only and an IPv4-only relay name (section
 //     8). The relay is sized by allocations, four for each Core's id with
 //     both ends of a session sharing them, so one end relays on one family
-//     unless it asks for both: the first host of the service's list, the
-//     first URL for it (setRelay()'s `families`). Only UDP relays: libjuice
-//     speaks TURN over UDP alone (icetransport.cpp:159-162).
+//     unless it asks for both (setRelay()'s `families`). Only UDP relays:
+//     libjuice speaks TURN over UDP alone (icetransport.cpp:159-162).
+//   - Which one (fix wave I2): the STUN server, and the one relay host,
+//     are chosen by the address families this end has, never by the order
+//     the service lists them in. The first entry whose name resolves (on
+//     this end, so a DNS64 answer counts) to a family this end has a usable
+//     address in; the service's first entry when this end has both
+//     families, or when it cannot tell (no usable address seen, or no name
+//     resolved). An IPv4-only end behind NAT so gets the IPv4-only name
+//     whichever the service lists first, and an IPv6-only end the IPv6-only
+//     one. The names are resolved before the choice (resolveHostFamilies());
+//     an IP literal needs no lookup.
 //   - A full relay (TURN 486, Allocation Quota Reached) is an ordinary
 //     outcome, not an error: libjuice marks that relay failed and finishes
 //     gathering without it (agent.c:1941-1949), and the connection goes on
@@ -54,15 +60,25 @@
 //   2026-09-26: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: fix wave I2, the STUN server and relay host chosen by this
+//               end's address families. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/RendezvousWire.h"
 
+#include <QHash>
+#include <QHostAddress>
 #include <QList>
 #include <QString>
 #include <QStringList>
 
+#include <functional>
 #include <optional>
+
+QT_BEGIN_NAMESPACE
+class QObject;
+QT_END_NAMESPACE
 
 namespace NereusSDR {
 
@@ -73,6 +89,26 @@ struct IceServerAddress {
 
     bool operator==(const IceServerAddress&) const = default;
 };
+
+/// Which address families something has: this end's usable addresses, or
+/// what a server's name resolved to. Neither set: cannot tell.
+struct AddressFamilies {
+    bool ipv4 = false;
+    bool ipv6 = false;
+
+    bool known() const { return ipv4 || ipv6; }
+    bool both() const { return ipv4 && ipv6; }
+    bool shares(const AddressFamilies& other) const
+    {
+        return (ipv4 && other.ipv4) || (ipv6 && other.ipv6);
+    }
+    bool operator==(const AddressFamilies&) const = default;
+};
+
+/// The families of the server names a list uses, as this end resolved
+/// them, keyed by the name in lower case. A name missing here cannot be
+/// told.
+using HostFamilies = QHash<QString, AddressFamilies>;
 
 /// A TURN server with the credentials the rendezvous minted (UDP only).
 struct IceRelayServer {
@@ -101,20 +137,58 @@ public:
     /// The port a STUN or TURN URL means when it names none (RFC 7064, RFC
     /// 7065).
     static constexpr quint16 kDefaultPort = 3478;
+    /// How long resolveHostFamilies() waits for the names before it
+    /// reports what it has (a name not back by then cannot be told, and the
+    /// service's first entry is kept). NereusSDR's own bound: a fraction of
+    /// kGatheringDeadlineMs, so a slow resolver costs little of the connect.
+    static constexpr int kHostLookupTimeoutMs = 3000;
 
     /// A connection through the rendezvous: `stunUrls` as the service's
     /// hello listed them; `relayAllowed` the station's `relay` setting (a
-    /// client allows it). No relay servers until setRelay().
-    static IceConfiguration throughRendezvous(const QStringList& stunUrls, bool relayAllowed);
+    /// client allows it); `local` this end's usable address families
+    /// (localAddressFamilies()); `hosts` the families of the names in the
+    /// service's lists, resolved on this end. No relay servers until
+    /// setRelay().
+    static IceConfiguration throughRendezvous(const QStringList& stunUrls, bool relayAllowed,
+                                              const AddressFamilies& local = {},
+                                              const HostFamilies& hosts = {});
+
+    /// Adds resolved names (the relay's, which arrive after the hello) for
+    /// setRelay() to choose by.
+    void addHostFamilies(const HostFamilies& hosts);
 
     /// The relay credentials the introduction brought (the service's
     /// `turn`; nullopt when it sent null). Ignored when the relay is not
-    /// allowed. `families` is how many relay hosts to allocate on, 1 (the
-    /// first the service lists) or 2 (the first two, one for each address
-    /// family, only where an end needs both); each allocation takes one of
-    /// the relay's slots for this Core. Returns how many relay servers the
-    /// configuration now holds.
+    /// allowed. `families` is how many relay hosts to allocate on: 1, the
+    /// host chosen by this end's address families (above), or 2, the first
+    /// two the service lists (one for each address family, only where an
+    /// end needs both); each allocation takes one of the relay's slots for
+    /// this Core. Returns how many relay servers the configuration now
+    /// holds.
     int setRelay(const std::optional<RendezvousWire::Turn>& turn, int families = 1);
+
+    AddressFamilies localFamilies() const { return m_local; }
+
+    /// This computer's usable address families: an IPv4 address that is
+    /// not loopback or link-local (a private one behind NAT counts), an
+    /// IPv6 address that is global unicast (2000::/3), on an interface that
+    /// is up and not loopback.
+    static AddressFamilies localAddressFamilies();
+    static bool isUsableLocalAddress(const QHostAddress& address);
+    /// The family of an IP literal; nothing for a name.
+    static AddressFamilies literalFamilies(const QString& host);
+    static AddressFamilies familiesOf(const QList<QHostAddress>& addresses);
+    /// The names (not IP literals) the STUN and TURN URLs in `urls` use,
+    /// each once, in lower case.
+    static QStringList hostNames(const QStringList& urls);
+    /// Resolves `names` and calls `done` once, on `context`'s thread, with
+    /// the families each resolved to, within kHostLookupTimeoutMs (or
+    /// `timeoutMs`). A name that did not resolve in time is left out. A
+    /// test run (QStandardPaths test mode) resolves only this computer's
+    /// own names, as RendezvousClient reaches only a service on it.
+    static void resolveHostFamilies(const QStringList& names, QObject* context,
+                                    std::function<void(const HostFamilies&)> done,
+                                    int timeoutMs = kHostLookupTimeoutMs);
 
     std::optional<IceServerAddress> stunServer() const { return m_stun; }
     QList<IceRelayServer> relayServers() const { return m_relays; }
@@ -136,6 +210,13 @@ public:
     static QString candidateType(const QString& candidate);
 
 private:
+    /// The index in `hosts` (in the service's order) to use: see the file
+    /// comment.
+    int chooseByFamily(const QStringList& hosts) const;
+    AddressFamilies familiesOfHost(const QString& host) const;
+
+    AddressFamilies m_local;
+    HostFamilies m_hosts;
     std::optional<IceServerAddress> m_stun;
     QList<IceRelayServer> m_relays;
     bool m_relayAllowed = true;

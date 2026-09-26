@@ -132,11 +132,21 @@ int runStation(const QStringList& args)
         }
         printLine({{QStringLiteral("event"), QStringLiteral("registered")}});
     });
+    // The STUN names resolved once the hello lists them, so an
+    // introduction chooses its STUN server by this end's address families
+    // (IceConfiguration, fix wave I2).
+    auto stunFamilies = std::make_shared<HostFamilies>();
+    QObject::connect(client, &RendezvousClient::connected, client, [client, stunFamilies] {
+        IceConfiguration::resolveHostFamilies(
+            IceConfiguration::hostNames(client->stunUrls()), client,
+            [stunFamilies](const HostFamilies& families) { *stunFamilies = families; });
+    });
     QObject::connect(client, &RendezvousClient::introduced, client,
-                     [client, relayAllowed](const RendezvousIntroduction& introduction) {
+                     [client, relayAllowed, stunFamilies](const RendezvousIntroduction& introduction) {
         const QByteArray id = introduction.id;
-        auto ice = std::make_shared<IceConfiguration>(
-            IceConfiguration::throughRendezvous(client->stunUrls(), relayAllowed));
+        auto ice = std::make_shared<IceConfiguration>(IceConfiguration::throughRendezvous(
+            client->stunUrls(), relayAllowed, IceConfiguration::localAddressFamilies(),
+            *stunFamilies));
         auto* answerer = new LibDataChannelMediaTransport(client);
         QObject::connect(answerer, &IMediaTransport::localDescription, client,
                          [client, answerer, id, relayAllowed](const QString& sdp, const QString&) {
@@ -157,8 +167,15 @@ int runStation(const QStringList& args)
             if (from != id) {
                 return;
             }
-            ice->setRelay(offered ? std::optional<RendezvousWire::Turn>(turn) : std::nullopt);
-            answerer->gatherCandidates(ice->relayServers());
+            const std::optional<RendezvousWire::Turn> relay =
+                offered ? std::optional<RendezvousWire::Turn>(turn) : std::nullopt;
+            IceConfiguration::resolveHostFamilies(
+                relay ? IceConfiguration::hostNames(relay->urls) : QStringList(), answerer,
+                [answerer, ice, relay](const HostFamilies& families) {
+                    ice->addHostFamilies(families);
+                    ice->setRelay(relay);
+                    answerer->gatherCandidates(ice->relayServers());
+                });
         });
         QObject::connect(client, &RendezvousClient::candidateReceived, answerer,
                          [answerer, id](const QByteArray& from, const QString& candidate) {
@@ -232,21 +249,35 @@ int runClient(const QStringList& args)
     };
     QObject::connect(client, &RendezvousClient::connected, client, [client, offerer, ice, &key,
                                                                       stationId] {
-        *ice = IceConfiguration::throughRendezvous(client->stunUrls(), true);
-        QObject::connect(offerer, &IMediaTransport::localDescription, client,
-                         [client, &key, stationId](const QString& sdp, const QString&) {
-            client->introduce(stationId, key.publicKeySpki(),
-                              [&key](const QByteArray& m) { return key.sign(m); }, sdp);
-        });
-        IMediaTransport::StartOptions options{IMediaTransport::Role::Offerer, 0xa5a5};
-        options.ice = *ice;
-        offerer->start(options);
+        // The STUN server chosen by this end's address families, once the
+        // names are resolved (fix wave I2).
+        IceConfiguration::resolveHostFamilies(
+            IceConfiguration::hostNames(client->stunUrls()), client,
+            [client, offerer, ice, &key, stationId](const HostFamilies& families) {
+                *ice = IceConfiguration::throughRendezvous(
+                    client->stunUrls(), true, IceConfiguration::localAddressFamilies(), families);
+                QObject::connect(offerer, &IMediaTransport::localDescription, client,
+                                 [client, &key, stationId](const QString& sdp, const QString&) {
+                    client->introduce(stationId, key.publicKeySpki(),
+                                      [&key](const QByteArray& m) { return key.sign(m); }, sdp);
+                });
+                IMediaTransport::StartOptions options{IMediaTransport::Role::Offerer, 0xa5a5};
+                options.ice = *ice;
+                offerer->start(options);
+            });
     });
     QObject::connect(client, &RendezvousClient::answerReceived, offerer,
                      [offerer, ice](const QString& sdp, bool offered, const RendezvousWire::Turn& turn) {
         offerer->acceptDescription(sdp, QStringLiteral("answer"));
-        ice->setRelay(offered ? std::optional<RendezvousWire::Turn>(turn) : std::nullopt);
-        offerer->gatherCandidates(ice->relayServers());
+        const std::optional<RendezvousWire::Turn> relay =
+            offered ? std::optional<RendezvousWire::Turn>(turn) : std::nullopt;
+        IceConfiguration::resolveHostFamilies(
+            relay ? IceConfiguration::hostNames(relay->urls) : QStringList(), offerer,
+            [offerer, ice, relay](const HostFamilies& families) {
+                ice->addHostFamilies(families);
+                ice->setRelay(relay);
+                offerer->gatherCandidates(ice->relayServers());
+            });
     });
     QObject::connect(offerer, &IMediaTransport::localCandidate, client,
                      [client](const QString& candidate, const QString&) {
