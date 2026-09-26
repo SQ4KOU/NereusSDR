@@ -26,6 +26,10 @@
 //   2026-08-02  J.J. Boyd / KG4VCF  Remote daemon R1, extraction 4 of 9.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 17 follow-up: setDecimation
+//                                    applies Rendering > Decimation to every
+//                                    engine. AI-assisted transformation via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/spectrum/FftEnginePool.h"
@@ -107,6 +111,17 @@ void FftEnginePool::setConfigForNewStreams(const FftPoolConfig& cfg)
     m_config = cfg;
 }
 
+void FftEnginePool::setDecimation(int factor)
+{
+    if (factor < 1 || factor > 32) { return; }
+    m_decimation = factor;
+    for (FFTEngine* engine : std::as_const(m_engines)) {
+        if (engine) {
+            engine->setDecimation(factor);
+        }
+    }
+}
+
 FFTEngine* FftEnginePool::engineForStream(int streamIndex)
 {
     if (streamIndex < 0) { return nullptr; }
@@ -138,6 +153,9 @@ FFTEngine* FftEnginePool::createEngine(const FftSourceKey& key,
     // setters were (all of them ran before that function's own
     // moveToThread call).
     applyConfigTo(engine, cfg);
+    if (m_decimation) {
+        engine->setDecimation(*m_decimation);
+    }
 
     const int threadCount = qMax(1, m_config.threadCount);
     const int bucket = key.streamIndex % threadCount;

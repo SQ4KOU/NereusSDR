@@ -202,6 +202,9 @@
 //                tool and Pin Control, local and through the Core), and
 //                hl2LinkFigures / applyCoreHl2LinkFigures. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-R3-01 (parity Task 17 follow-up): fftEnginePool view
+//                hook, so Rendering > Decimation reaches every pan.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1976,6 +1979,12 @@ public:
     void setSpectrumSink(NereusSDR::ISpectrumSink* sink) { m_spectrumSink = sink; }
     class FFTEngine* fftEngine() const { return m_fftEngine; }
     void setFftEngine(class FFTEngine* e) { m_fftEngine = e; }
+    // Parity Task 17 follow-up (R-R3-01): every pan's engine, so Setup >
+    // Display > Rendering > Decimation applies to every pan, not only
+    // stream 0's. Non-owning; MainWindow sets it beside setFftEngine and
+    // clears it before the pool goes.
+    class FftEnginePool* fftEnginePool() const { return m_fftEnginePool; }
+    void setFftEnginePool(class FftEnginePool* pool) { m_fftEnginePool = pool; }
     // Phase 3M-5d: Setup → Display → TX page reaches the TX analyzer the
     // same way it reaches the FFT engine.  Non-owning pointer wired by
     // MainWindow at construction.
@@ -5537,6 +5546,7 @@ private:
     // spectrumSink() comment. Same object, different static type.
     NereusSDR::ISpectrumSink* m_spectrumSink{nullptr};
     class FFTEngine*          m_fftEngine{nullptr};
+    class FftEnginePool*      m_fftEnginePool{nullptr};
     class TxAnalyzer*         m_txAnalyzer{nullptr};
     class ClarityController*  m_clarityController{nullptr};
     class StepAttenuatorController* m_stepAttController{nullptr};

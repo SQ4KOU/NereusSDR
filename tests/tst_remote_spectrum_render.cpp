@@ -12,6 +12,7 @@
 #include <cmath>
 #include "core/AppSettings.h"
 #include "core/FFTEngine.h"
+#include "core/spectrum/FftEnginePool.h"
 #include "models/RadioModel.h"
 #define private public
 #include "gui/SpectrumWidget.h"
@@ -393,6 +394,33 @@ private slots:
         remote.setFftEngine(nullptr);
         local.setSpectrumWidget(nullptr);
         local.setFftEngine(nullptr);
+    }
+
+    // Parity Task 17 follow-up (R-R3-01): Rendering > Decimation applies to
+    // every pan in a local window, not only stream 0's engine: every engine
+    // the pool has, and every engine it makes afterwards, as a remote window
+    // sends it for every pan.
+    void localDecimationReachesEveryPansEngine()
+    {
+        RadioModel local;
+        SpectrumWidget widget;
+        NereusSDR::FftEnginePool pool;
+        NereusSDR::FFTEngine* stream0 = pool.engineForStream(0);
+        NereusSDR::FFTEngine* stream1 = pool.engineForStream(1);
+        QVERIFY(stream0 && stream1);
+        local.setSpectrumWidget(&widget);
+        local.setFftEngine(stream0);
+        local.setFftEnginePool(&pool);
+        SpectrumDefaultsPage page(&local);
+        page.m_decimationSpin->setValue(6);
+        QCOMPARE(stream0->decimation(), 6);
+        QCOMPARE(stream1->decimation(), 6);
+        NereusSDR::FFTEngine* stream2 = pool.engineForStream(2);
+        QVERIFY(stream2);
+        QCOMPARE(stream2->decimation(), 6);
+        local.setSpectrumWidget(nullptr);
+        local.setFftEngine(nullptr);
+        local.setFftEnginePool(nullptr);
     }
 };
 QTEST_MAIN(TestRemoteSpectrumRender)

@@ -218,6 +218,10 @@
 //                width is its slice's (the Core's); the filter graphs draw
 //                the Core's curve. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-26 - R-R3-01 (parity Task 17 follow-up): RadioModel is given
+//                the FFT engine pool, so Rendering > Decimation reaches
+//                every pan. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -4735,6 +4739,7 @@ void MainWindow::buildUI()
     // for the matching re-wire when the active pan changes.
     setSpectrumHooks(activeSpectrumWidget());
     m_radioModel->setFftEngine(primaryFftEngine());
+    m_radioModel->setFftEnginePool(m_fftEnginePool);
 
     // Phase 3F Sub-Epic I Task 8: follow each stream's DDC centre + rate.
     //
@@ -13270,6 +13275,7 @@ void MainWindow::closeEvent(QCloseEvent* event)
     // teardown run below.  primaryFftEngine() safely returns nullptr once
     // this pointer is cleared, and every remaining call site already
     // null-guards it.
+    m_radioModel->setFftEnginePool(nullptr);
     delete m_fftEnginePool;
     m_fftEnginePool = nullptr;
 

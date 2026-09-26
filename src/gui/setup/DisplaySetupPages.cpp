@@ -25,6 +25,9 @@
 //                 the Core's grant; Cal Offset and Display Thread Priority
 //                 are disabled with their reasons. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-R3-01 (parity Task 17 follow-up): Rendering >
+//                 Decimation applies to every pan's engine. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -78,6 +81,7 @@
 #include "gui/SpectrumWidget.h"
 #include "gui/StyleConstants.h"
 #include "core/FFTEngine.h"
+#include "core/spectrum/FftEnginePool.h"
 #include "core/spectrum/WaterfallPalettes.h"
 #include "core/ClarityController.h"
 #include "core/AppSettings.h"
@@ -838,9 +842,14 @@ void SpectrumDefaultsPage::buildUI()
     // Thetis original: "Display decimation. Higher the number, the lower the resolution."
     m_decimationSpin->setToolTip(QStringLiteral("Display decimation. Higher the number, the lower the resolution."));
     // Task 2.3: wire to FFTEngine::setDecimation().
+    // Parity Task 17 follow-up (R-R3-01): every pan's engine, through the
+    // pool, as a remote window sends it for every pan.
     connect(m_decimationSpin, qOverload<int>(&QSpinBox::valueChanged),
             this, [this](int v) {
-        if (model() && model()->fftEngine()) {
+        if (!model()) { return; }
+        if (FftEnginePool* pool = model()->fftEnginePool()) {
+            pool->setDecimation(v);
+        } else if (model()->fftEngine()) {
             model()->fftEngine()->setDecimation(v);
         }
     });
