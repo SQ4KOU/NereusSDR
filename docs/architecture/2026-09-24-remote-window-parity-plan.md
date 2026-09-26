@@ -1244,8 +1244,10 @@ choice order written there; R-R3-38; R-R3-49.
 
 **Interfaces:** stream `stationRadios` `{id, name, model, mac, address, protocol, inUse}` and
 verbs `station.selectRadio {mac}`, `station.rescanRadios {}` as Task 25 writes them (refused
-while on the air or mid-switch; saved before acting; the radio retired through the recovery
-path), gated on a new `stationRadiosVersion` 1; plus `station.setRadioModel {mac, model}` (the
+while on the air or mid-switch; saved once the chosen radio connects; the Core restarts its
+radio run; windows reconnect by themselves with the Core's reason, "The Core is switching to
+<radio name>. This app reconnects by itself.", `session.end` retryable with code
+`radioChanging`: the operator's ruling of 2026-09-26), gated on a new `stationRadiosVersion` 1; plus `station.setRadioModel {mac, model}` (the
 local Edit radio's model override, saved for that MAC on the Core and applied at the next
 connect) and `station.forgetRadio {mac}` (refused for the radio in use).
 

@@ -951,6 +951,11 @@ const QList<ReasonSource>& reasonSources()
         // The link version refusal and the takeover, sent in session.end.
         // Version numbers, "Update the Core." or "Update this app.", and
         // the other app's network address (WebSocketTransport::peerDescription).
+        // The operator's ruling of 2026-09-26: the session.end every app
+        // gets when the Core restarts its run on another radio; the radio's
+        // name as it reports itself.
+        {"src/core/daemon/DaemonApp.cpp", {QStringLiteral("radioChangeReason")}, {}, 1,
+         {QStringLiteral("radioName")}},
         {"src/core/session/SessionEndReasons.cpp",
          {QStringLiteral("takenOver"), QStringLiteral("versionRefused")}, {}, 4,
          {QStringLiteral("coreNewest"), QStringLiteral("appNewest"), QStringLiteral("update"),

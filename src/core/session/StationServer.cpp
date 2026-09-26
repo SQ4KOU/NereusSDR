@@ -2366,6 +2366,19 @@ void StationServer::close()
     if (wasListening) { emit listeningChanged(false); }
 }
 
+void StationServer::endSessionsForRadioChange(const QString& reason)
+{
+    const QList<SessionTransport*> transports = m_peers.keys();
+    m_closing = true;
+    m_lingerOnDrop = true;
+    for (SessionTransport* transport : transports) {
+        dropPeer(transport, reason, true, /*retryable=*/true,
+                 QString::fromLatin1(SessionEndCode::kRadioChanging));
+    }
+    m_lingerOnDrop = false;
+    m_closing = false;
+}
+
 bool StationServer::isListening() const
 {
     return m_openingGate != nullptr && m_openingGate->isListening();
@@ -2974,7 +2987,16 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
     }
 
     transport->closeLink(reason);
-    transport->deleteLater();
+    if (m_lingerOnDrop) {
+        // A radio change: this server is destroyed next, and its children
+        // with it. The connection leaves it and goes once its close is
+        // written, so its last messages are not cut off.
+        transport->setParent(nullptr);
+        connect(transport, &SessionTransport::closed, transport, &QObject::deleteLater);
+        QTimer::singleShot(kRadioChangeLingerMs, transport, &QObject::deleteLater);
+    } else {
+        transport->deleteLater();
+    }
 
     if (m_peers.isEmpty() && m_heartbeatTimer != nullptr) {
         m_heartbeatTimer->stop();

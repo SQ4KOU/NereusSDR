@@ -596,6 +596,16 @@ public:
     bool listen(const QHostAddress& address, quint16 port);
 
     void close();
+    /// Fix wave after parity Tasks 19 and 21: ends every session for a
+    /// radio change (the Core restarts its run) with `reason`, retryable,
+    /// code radioChanging. Each connection outlives this server until its
+    /// close is written (or kRadioChangeLingerMs), so what was sent before
+    /// it (a command's answer, the confirm step's notices) and the end
+    /// itself reach the wire.
+    void endSessionsForRadioChange(const QString& reason);
+    /// NereusSDR-original bound: how long an ended connection waits for its
+    /// close to be written before it is deleted.
+    static constexpr int kRadioChangeLingerMs = 5000;
     bool isListening() const;
     quint16 serverPort() const;
     QHostAddress serverAddress() const;
@@ -1707,6 +1717,7 @@ private:
     quint64 m_ps3SubscriberEpoch = 0;
     /// close() is ending every session.
     bool m_closing = false;
+    bool m_lingerOnDrop = false;
     SessionPs3DisplayAdmissionHandler m_ps3DisplayAdmission;
     DisplayDemandProvider m_displayDemand;
     /// During promoteToSession()'s attach: the session its burst is for.

@@ -1229,6 +1229,11 @@ void StationClient::attachTransport(SessionTransport* transport, const QString& 
 
 void StationClient::disconnectFromStation(const QString& reason, bool attemptReconnect)
 {
+    // Not reconnecting (the operator's Disconnect, a permanent end): no
+    // radio change is being waited out any more.
+    if (!attemptReconnect) {
+        m_radioChangeReason.clear();
+    }
     // Task 19: cancel a PENDING retry even when no session is active at
     // all -- the backoff-wait state has m_sessionActive already false
     // (the session it was about already ended), so endSession()'s own
@@ -1812,6 +1817,7 @@ void StationClient::onTransportText(const QByteArray& wire)
         }
         if (firstSnapshot) {
             qCInfo(lcStationClient) << "Session established with" << m_capabilities.stationName;
+            m_radioChangeReason.clear();
             emit handshakeComplete();
         }
         emit stateSnapshotApplied();
@@ -1840,6 +1846,13 @@ void StationClient::onTransportText(const QByteArray& wire)
         // and offers buttons for; a retryable one retries as before.
         if (!message.retryable) {
             m_lastEndReport = stationEndReport(message.reason, message.endCode);
+        }
+        // The operator's ruling of 2026-09-26: the Core changes its radio by
+        // restarting its run. This end is a reconnect, not a failure; the
+        // window says so until it is back (radioChangeReason).
+        if (message.retryable
+            && message.endCode == QLatin1String(SessionEndCode::kRadioChanging)) {
+            m_radioChangeReason = message.reason;
         }
         // The station's own classification, not this end's guess at one
         // and not a match against its English prose. Every station-sent

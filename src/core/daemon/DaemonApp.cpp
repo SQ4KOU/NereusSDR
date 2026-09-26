@@ -394,8 +394,11 @@ void DaemonApp::stop()
 {
     // iPhone app Task 17: nothing answers the console or a browser once
     // the Core is going away.
-    m_controlSocket.reset();
-    m_controlCommands.reset();
+    // Fix wave (I1): a radio change's restart keeps the console commands.
+    if (!m_keepConsoleOnStop) {
+        m_controlSocket.reset();
+        m_controlCommands.reset();
+    }
     m_statusPage.reset();
     m_radioRecoveryEnabled = false;
     cancelRadioDiscovery();
@@ -1551,18 +1554,28 @@ void DaemonApp::ensureStationRadios()
 
 void DaemonApp::switchRadio(const QString& mac)
 {
-    // The choice is saved (StationRadios::select) before this. The radio is
-    // retired by restarting the run: the receive layout and per-radio
+    // The choice is pending (StationRadios::select) until it connects. The
+    // operator's ruling of 2026-09-26: the radio is changed by restarting
+    // the run, and every app reconnects by itself: the receive layout and per-radio
     // settings of a Core run belong to one radio (RadioModel's receive
     // layout refuses another identity), so the new radio comes up exactly
     // as it would on the Core's next start, with its own layout, settings,
     // capabilities, catalogue and announcement. Every window reconnects.
     // After this turn: the command's answer goes out first.
     qCInfo(lcApp) << "DaemonApp: changing the Core's radio to" << mac;
+    const std::optional<RadioInfo> radio =
+        m_stationRadios ? m_stationRadios->radioFor(mac) : std::nullopt;
+    m_radioChangeReason = radioChangeReason(radio ? radio->displayName() : mac);
     if (m_radioModel) {
         m_radioModel->setStationRadioChangeUnderway(true);
     }
     QTimer::singleShot(0, this, &DaemonApp::restartForRadioChange);
+}
+
+QString DaemonApp::radioChangeReason(const QString& radioName)
+{
+    return QStringLiteral("The Core is switching to %1. This app reconnects by itself.")
+        .arg(radioName);
 }
 
 void DaemonApp::endRadioSwitch()
@@ -1602,8 +1615,19 @@ void DaemonApp::restartForRadioChange()
     if (refuseRadioChangeOnAir()) {
         return;
     }
+    // The operator's ruling of 2026-09-26 (I2): every app is told why and
+    // reconnects by itself. This runs a turn after the command's answer
+    // (and the confirm step's notices) were written, and each connection
+    // outlives the station server until its end is on the wire.
+    if (m_stationServer) {
+        m_stationServer->endSessionsForRadioChange(m_radioChangeReason);
+    }
     const DaemonConfig cfg = m_radioConfig;
-    if (!start(cfg)) {
+    // Fix wave (I1): the console commands answer across the restart.
+    m_keepConsoleOnStop = true;
+    const bool started = start(cfg);
+    m_keepConsoleOnStop = false;
+    if (!started) {
         qCWarning(lcApp) << "DaemonApp: the Core could not restart for its new radio";
         endRadioSwitch();
     }

@@ -3420,7 +3420,11 @@ These command groups need a sentence beyond the table:
   from the last radio that connected, or `radio_mac`); the Core restarts
   its run on that radio, which comes up with its own receive layout,
   per-radio settings, capabilities and catalogue, as on the Core's next
-  start; every connection ends and reconnects. The change ends (another
+  start. Every connection ends a turn after the answer (and the confirm
+  step's notices) have gone out, with `session.end` "The Core is switching
+  to <radio name>. This app reconnects by itself.", `retryable` true, code
+  `radioChanging` (section 12.4), and each app reconnects by itself; the
+  Core's console commands keep answering through the restart. The change ends (another
   choice is taken again) when the radio connects, when its connect fails
   or its link is lost, when a scan does not find it, or two seconds after
   its connect starts (the radio connections' own connect bound) with none
@@ -3967,6 +3971,7 @@ non-empty string; an empty one is refused like any mistyped key.
 | Connect deadline expired | `session.end` | true | none |
 | Heartbeat timeout | `session.end` | true | none |
 | Station shutting down | `session.end` "The Core is shutting down." | true | none |
+| The Core changes its radio (`station.selectRadio`, section 9.1): every connection, after what was sent to it | `session.end` "The Core is switching to <radio name>. This app reconnects by itself." | true | `radioChanging` |
 | The connection's device was removed (`devices.revoke`, the Core's console, a reset) | `session.end` "This device was removed from the Core." | false | `deviceRemoved` |
 | A connection signed in by token when the token is retired (`station.retireToken`) | `session.end` "This Core uses paired devices. Pair this device first." | false | `pairingRequired` |
 
@@ -4010,7 +4015,13 @@ Core older than the code.
 **Several devices** (iPhone app plan Task 71). Up to four devices hold
 places at once, and no sign-in ever ends another device's session. A
 device's own newer connection replaces its older one, which ends with
-`sameDevice`, not retryable, so the two do not trade places. A paired
+`sameDevice`, not retryable, so the two do not trade places.
+
+`radioChanging` is the one retryable end with a code: the Core restarts its
+run on another radio (the operator's ruling of 2026-09-26). An app takes it
+as a reconnect, not a failure; the desktop window says "Core changing
+radio, reconnecting" with the Core's words and "This window reconnects by
+itself when the Core is back." until the next session is up. A paired
 device whose session ends without `session.leave` (a lost link, the
 heartbeat's end, a closed socket, an app its system stopped) is **away**
 for 3 minutes (`graceMs` 180000), keeping its place; signing in again

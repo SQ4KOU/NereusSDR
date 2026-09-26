@@ -18,6 +18,7 @@
 
 #include <chrono>
 
+#include "OperatorWording.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/RadioDiscovery.h"
@@ -450,6 +451,56 @@ private slots:
         QVERIFY(!client.isConnectionActive());
         QVERIFY(controls.canConnect());
         QVERIFY(!controls.detailText().contains(QStringLiteral("Last failure:")));
+    }
+
+    // The operator's ruling of 2026-09-26: the Core changes its radio by
+    // restarting its run. The window takes that end as a reconnect, not a
+    // failure: it says so in its own words beside the Core's, and is back
+    // by itself.
+    void aRadioChangeEndIsAReconnectWithTheCoresWords()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt SSL support is unavailable");
+        }
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        station.setBoardForTest(HPSDRHW::Saturn);
+        station.configureStreamPool(5, 5, 192000);
+        station.setConnectionStateForTest(ConnectionState::Connected);
+        QVERIFY(station.addSlice(QStringLiteral("pan-0")) >= 0);
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
+        QVERIFY2(server.listen(QHostAddress::LocalHost, 0), qPrintable(server.lastError()));
+
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        client.setReconnectBackoffUnitMs(400);
+        RemoteConnectionController controls(&client, &remote,
+            {QStringLiteral("wss://127.0.0.1:%1").arg(server.serverPort()),
+             server.token(), server.certificateFingerprint(), false});
+        QSignalSpy handshakes(&client, &StationClient::handshakeComplete);
+        controls.connectToStation();
+        QTRY_COMPARE_WITH_TIMEOUT(handshakes.size(), 1, 15000);
+
+        const QString reason =
+            QStringLiteral("The Core is switching to Bench G2. This app reconnects by itself.");
+        server.endSessionsForRadioChange(reason);
+        QTRY_VERIFY(client.isReconnectPending());
+        QCOMPARE(client.radioChangeReason(), reason);
+        QCOMPARE(controls.stopNotice(), CoreStopNotice::None);
+        QCOMPARE(controls.statusText(), QStringLiteral("Core changing radio, reconnecting"));
+        QVERIFY2(controls.detailText().contains(reason), qPrintable(controls.detailText()));
+        QVERIFY(controls.detailText().contains(
+            QStringLiteral("This window reconnects by itself when the Core is back.")));
+        QVERIFY(!controls.detailText().contains(QStringLiteral("Last failure:")));
+        QVERIFY(OperatorWording::isPlain(controls.statusText()));
+
+        // Back by itself, with nothing left of the change.
+        QTRY_COMPARE_WITH_TIMEOUT(handshakes.size(), 2, 15000);
+        QVERIFY(client.radioChangeReason().isEmpty());
+        QCOMPARE(controls.statusText(), QStringLiteral("Core connected"));
+        controls.disconnectFromStation();
     }
 
     void mediaRecoveryUsesPinnedCoreReconnectAndRetainsSlice()

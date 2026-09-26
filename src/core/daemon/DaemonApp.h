@@ -268,6 +268,9 @@ public:
     // production code never asks, because start()/stop() own the lifetime
     // and start() already logs whether the listener came up.
     StationServer* stationServer() const { return m_stationServer.get(); }
+    /// Parity Task 21: the Core's radios and its choice of one (kept across
+    /// a radio change's restart).
+    StationRadios* stationRadios() const { return m_stationRadios.get(); }
 
     // R-R3-39 / R-IOS-03: the running RadioModel (nullptr before start() and
     // after stop()), so a test can key the model the daemon builds.
@@ -512,6 +515,16 @@ private:
     static constexpr int kRadioSwitchConnectBoundMs = 2000;
     int m_radioSwitchBoundMs {kRadioSwitchConnectBoundMs};
     QTimer* m_radioSwitchDeadline {nullptr};
+    // The operator's ruling of 2026-09-26: a radio change restarts the run,
+    // and every app reconnects by itself. The end reason its sessions get.
+    QString m_radioChangeReason;
+    // I1: the console commands survive that restart (stop() keeps them
+    // while this is set).
+    bool m_keepConsoleOnStop {false};
+public:
+    /// The session end every app gets when the Core switches to `radioName`.
+    static QString radioChangeReason(const QString& radioName);
+private:
     std::unique_ptr<QThread> m_radioDiscoveryThread;
     QTimer* m_radioRetryTimer {nullptr};
     quint64 m_radioRecoveryGeneration {0};

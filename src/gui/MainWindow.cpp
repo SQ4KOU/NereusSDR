@@ -1726,6 +1726,15 @@ void MainWindow::ensureRemoteSession()
             }
             m_stationLinkLostSeen = true;
             m_lastStationLinkLostReason = reason;
+            // The operator's ruling of 2026-09-26: a radio change restarts
+            // the Core; this window reconnects by itself, so it is not a
+            // lost link. The Core's words name the radio.
+            if (!m_stationClient->radioChangeReason().isEmpty()) {
+                showToast(tr("The Core is changing its radio. This window reconnects by "
+                             "itself."),
+                          ToastSeverity::Info, 5000);
+                return;
+            }
             // The raw reason is logged above and compared as text here;
             // only the toast is in user words (R-R3-17, R-R3-21).
             showToast(tr("Link to the Core lost: %1")
@@ -1745,6 +1754,10 @@ void MainWindow::ensureRemoteSession()
             }
             m_reconnectToastSeen = true;
             m_lastReconnectToastReason = m_lastStationLinkLostReason;
+            // A radio change said it reconnects already (above).
+            if (!m_stationClient->radioChangeReason().isEmpty()) {
+                return;
+            }
             showToast(tr("Reconnecting to the Core (attempt %1) in %2 s")
                           .arg(attempt).arg((delayMs + 999) / 1000),
                       ToastSeverity::Info, 3000);

@@ -582,6 +582,10 @@ public:
     /// reason's words. This client's own identityChanged end is recorded
     /// here too.
     StationEndReport lastEndReport() const { return m_lastEndReport; }
+    /// The Core ended this session to change its radio (session.end code
+    /// radioChanging) and this client is reconnecting: the Core's words,
+    /// until the next session is up. Empty otherwise.
+    QString radioChangeReason() const { return m_radioChangeReason; }
 
     /// Test seam: production default is kDefaultReconnectBackoffUnitMs
     /// (real seconds). See scheduleReconnect() in the .cpp for the
@@ -1158,6 +1162,7 @@ private:
     bool m_handshakeComplete = false;
     bool m_authenticated = false;
     bool m_signedInWithDeviceKey = false;
+    QString m_radioChangeReason;
     int m_deviceKeySignInForTest = -1;
     quint16 m_agreedMinor = 0;
 

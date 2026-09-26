@@ -321,6 +321,10 @@ inline constexpr const char* kIdentityChanged = "identityChanged";
 /// The app broke the connect sequence or sent a message the Core cannot
 /// read.
 inline constexpr const char* kProtocolError = "protocolError";
+/// Fix wave after parity Tasks 19 and 21 (the operator's ruling of
+/// 2026-09-26): the Core is restarting its run on another radio. Retryable:
+/// the app reconnects by itself.
+inline constexpr const char* kRadioChanging = "radioChanging";
 } // namespace SessionEndCode
 
 /// iPhone app Task 12: the Core hello's `identity`, base64url text as on
