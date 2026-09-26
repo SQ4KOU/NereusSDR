@@ -16,6 +16,12 @@
 //   2026-09-24 - R-R3-46: transmit permission for the TX low-pass table
 //                and TX master switches. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-26 - R-R3-46 / R-R3-49 (remote-window parity Task 14): HPF
+//                bypass on TX, HPF bypass on PureSignal and Disable 6 m LNA
+//                on TX follow whether the Core takes them (radioHardwareVersion
+//                7), with no on-air rule in either window, as Thetis sets them
+//                with no MOX check. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -120,10 +126,17 @@ public:
     // Call when a radio is connected.
     void restoreSettings(const QString& macAddress);
 
-    // R-R3-46: the TX low-pass table and the three TX master switches (HPF
-    // bypass on TX and on PureSignal feedback, 6 m LNA off on TX) follow the
-    // transmit permission with its reason. Always permitted locally.
+    // R-R3-46: the TX low-pass table follows the transmit permission with
+    // its reason. Always permitted locally.
     void setTransmitPermitted(bool permitted, const QString& reason);
+
+    // R-R3-46 / R-R3-49 (parity Task 14): the three TX master switches (HPF
+    // bypass on TX and on PureSignal feedback, 6 m LNA off on TX) follow
+    // whether the Core takes them (radioHardwareVersion 7), disabled with
+    // `reason` when it does not. Always available locally. No on-air rule:
+    // Thetis's setters apply them at once with no MOX check
+    // (console.cs:18719-18803 [v2.10.3.15]).
+    void setHpfSwitchesAvailable(bool available, const QString& reason);
 
     // Test seam — returns whether the Saturn BPF1 groupbox is visible.
     // Always compiled (NEREUS_BUILD_TESTS is set on NereusSDRLib globally). Used by

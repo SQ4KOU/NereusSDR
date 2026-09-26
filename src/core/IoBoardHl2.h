@@ -25,6 +25,9 @@
 //                model layer — Phase 3P-E Task 2 wires I2C intercept
 //                into P1CodecHl2; Task 4 builds the Setup → Hardware →
 //                HL2 I/O page UI.
+//   2026-09-26 - Remote-window parity Task 14 (R-R3-46): i2cReadAnswered,
+//                the answered read's device address and register. J.J.
+//                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // --- From Console/HPSDR/IoBoardHl2.cs ---
@@ -304,17 +307,28 @@ signals:
     void hardwareVersionChanged(quint8 version);
     void detectedChanged(bool detected);
     // Emitted when applyI2cReadResponse() stores a new EP6 response.
-    // Consumers: Phase 3P-E Task 3 state machine, HL2 I/O diagnostics page.
+    // Consumer: the HL2 I/O diagnostics page's raw IN log.
     //
-    // `returnedSubAddress` is the sub-address (register byte) of the
-    // matching outstanding read — popped from the pending-read FIFO at
-    // emit time.  Consumers that need to disambiguate two reads from the
-    // same device (e.g. REG_FIRMWARE_MAJOR / REG_FIRMWARE_MINOR both at
-    // I2C addr 0x1d) must gate on `(returnedAddress, returnedSubAddress)`,
-    // not just `returnedAddress`.  Phase 3L Codex P2 fix.
+    // `returnedAddress` is C0's low 7 bits as the radio sent them; mi0bot
+    // never reads them (networkproto1.c:478-493 [@c26a8a4]), so no
+    // consumer may use them to tell which read was answered: listen to
+    // i2cReadAnswered for that (the HL2 probe does, parity Task 14
+    // follow-up).  `returnedSubAddress` is the register of the outstanding
+    // read popped from the pending-read FIFO at emit time.
     void i2cReadResponseReceived(quint8 returnedAddress,
                                  quint8 returnedSubAddress,
                                  quint8 b0, quint8 b1, quint8 b2, quint8 b3);
+
+    // Remote-window parity Task 14 (R-R3-46): the same answer as
+    // i2cReadResponseReceived, named by the (device address, register) of
+    // the read it answers, both taken from the pending-read FIFO when the
+    // answer popped it. Emitted only when an outstanding read was popped.
+    // The firmware's returned C0 names the I2C controller, not the device,
+    // so a consumer that must tell one device's answer from another's
+    // (RadioModel's I2C tool request, P1RadioConnection's HL2 probe)
+    // listens here.
+    void i2cReadAnswered(quint8 deviceAddress, quint8 subAddress,
+                         quint8 c1, quint8 c2, quint8 c3, quint8 c4);
 
     // Diagnostic tap: emitted from the HL2 codec just after it composes the
     // outbound I2C wire bytes for the next ep2 frame.  The diagnostics page

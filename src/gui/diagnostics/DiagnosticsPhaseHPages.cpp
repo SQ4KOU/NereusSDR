@@ -26,6 +26,11 @@
 //   2026-09-24 - R-R3-49: Connection Quality's 60 s history group is
 //                 hidden until the history graph is built. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-R3-32 (remote-window parity Task 14): the Connection
+//                Quality figures from RadioModel::hl2LinkFigures(), the
+//                Core's HL2 link in a remote window and said so;
+//                unavailable, never 0, when absent. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "DiagnosticsPhaseHPages.h"
@@ -73,6 +78,7 @@ void ConnectionQualityPage::buildUI()
     // captured 7 of these in the W4ORS May 16 log, all from this file.
     // Reuse the layout addSection() already installed instead.
     auto* group = addSection(QStringLiteral("Live Counters"));
+    m_liveGroup = group;
     auto* form = qobject_cast<QVBoxLayout*>(group->layout());
 
     auto addRow = [&](const QString& label, QLabel*& out) {
@@ -105,16 +111,31 @@ void ConnectionQualityPage::buildUI()
 void ConnectionQualityPage::onTick()
 {
     if (m_model == nullptr) { return; }
-    const HermesLiteBandwidthMonitor& bw = m_model->bwMonitor();
-    m_ep6BytesLabel->setText(QString::number(bw.ep6IngressBytesPerSec(), 'f', 0)
-                             + QStringLiteral(" B/s"));
-    m_ep2BytesLabel->setText(QString::number(bw.ep2EgressBytesPerSec(), 'f', 0)
-                             + QStringLiteral(" B/s"));
-    m_throttleLabel->setText(bw.isThrottled() ? QStringLiteral("THROTTLED")
-                                              : QStringLiteral("ok"));
+    // R-R3-32 (parity Task 14): this window's HL2 link, or in a remote
+    // window the Core's; one the Core has not sent shows as unavailable.
+    const RadioModel::Hl2LinkFigures figures = m_model->hl2LinkFigures();
+    const bool fromCore = m_model->hl2LinkFiguresFromCore();
+    const QString unavailable = tr("Unavailable");
+    if (m_liveGroup) {
+        m_liveGroup->setTitle(fromCore ? tr("Live Counters, from the Core")
+                                       : tr("Live Counters"));
+    }
+    const auto bytes = [&unavailable](std::optional<double> bps) {
+        return bps ? QString::number(*bps, 'f', 0) + QStringLiteral(" B/s") : unavailable;
+    };
+    m_ep6BytesLabel->setText(bytes(figures.rxBytesPerSecond));
+    m_ep2BytesLabel->setText(bytes(figures.txBytesPerSecond));
+    m_throttleLabel->setText(!figures.throttled ? unavailable
+                             : *figures.throttled ? QStringLiteral("THROTTLED")
+                                                  : QStringLiteral("ok"));
     // R-R3-21: the row names EP6 sequence gaps; it showed the LAN throttle
     // event count (the row above already reports throttling).
-    m_seqGapLabel->setText(QString::number(bw.ep6SequenceErrorCount()));
+    m_seqGapLabel->setText(figures.sequenceGaps ? QString::number(*figures.sequenceGaps)
+                                                : unavailable);
+    const QString source = fromCore ? tr("From the Core") : QString();
+    for (QLabel* label : {m_ep6BytesLabel, m_ep2BytesLabel, m_throttleLabel, m_seqGapLabel}) {
+        label->setToolTip(source);
+    }
 }
 
 // ── SettingsValidationPage ───────────────────────────────────────────────────

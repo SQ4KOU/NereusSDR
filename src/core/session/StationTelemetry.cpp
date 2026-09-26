@@ -268,6 +268,43 @@ bool decodeRadioStatus(const QJsonObject& radio, StationRadioTelemetry* out)
                            &out->paTemperatureCelsius);
 }
 
+// R-R3-32 (stationTelemetryVersion 5, parity Task 14): the Core's HL2
+// link. The byte rates are finite and not negative, the throttle is a
+// boolean and the sequence gaps a whole number.
+bool decodeHl2Link(const QJsonObject& radio, StationRadioTelemetry* out)
+{
+    if (!optionalRate(radio, QStringLiteral("hl2RxBytesPerSecond"), &out->hl2RxBytesPerSecond)
+        || !optionalRate(radio, QStringLiteral("hl2TxBytesPerSecond"),
+                         &out->hl2TxBytesPerSecond)
+        || !optionalInteger(radio, QStringLiteral("hl2SequenceGaps"), &out->hl2SequenceGaps)) {
+        return false;
+    }
+    const QString throttled = QStringLiteral("hl2Throttled");
+    if (!radio.contains(throttled)) {
+        out->hl2Throttled.reset();
+        return true;
+    }
+    if (!radio.value(throttled).isBool()) { return false; }
+    out->hl2Throttled = radio.value(throttled).toBool();
+    return true;
+}
+
+bool encodeHl2Link(const StationRadioTelemetry& in, QJsonObject* radio)
+{
+    if (!putRate(*radio, QStringLiteral("hl2RxBytesPerSecond"), in.hl2RxBytesPerSecond)
+        || !putRate(*radio, QStringLiteral("hl2TxBytesPerSecond"), in.hl2TxBytesPerSecond)) {
+        return false;
+    }
+    if (in.hl2Throttled) {
+        radio->insert(QStringLiteral("hl2Throttled"), *in.hl2Throttled);
+    }
+    if (in.hl2SequenceGaps) {
+        if (*in.hl2SequenceGaps < 0) { return false; }
+        radio->insert(QStringLiteral("hl2SequenceGaps"), *in.hl2SequenceGaps);
+    }
+    return true;
+}
+
 bool encodeRadioStatus(const StationRadioTelemetry& in, QJsonObject* radio)
 {
     for (const auto& [name, member] : kRadioReals) {
@@ -333,12 +370,13 @@ bool StationTelemetryCodec::decode(const QJsonObject& object,
         || decoded.radio.rttMs.has_value() != decoded.radio.rttAgeMs.has_value()) {
         return false;
     }
-    if (!decodeRadioStatus(radio, &decoded.radio)) {
+    if (!decodeRadioStatus(radio, &decoded.radio) || !decodeHl2Link(radio, &decoded.radio)) {
         return false;
     }
     if (!decoded.radio.connected && (decoded.radio.rxMbps || decoded.radio.txMbps
                                      || decoded.radio.rttMs
-                                     || !decoded.radio.hasNoRadioStatus())) {
+                                     || !decoded.radio.hasNoRadioStatus()
+                                     || !decoded.radio.hasNoHl2Link())) {
         return false;
     }
     for (const auto& [name, member] : kAudioRates) {
@@ -369,7 +407,7 @@ std::optional<QJsonObject> StationTelemetryCodec::encode(
     if (snapshot.radio.rttAgeMs) {
         radio.insert(QStringLiteral("rttAgeMs"), *snapshot.radio.rttAgeMs);
     }
-    if (!encodeRadioStatus(snapshot.radio, &radio)) {
+    if (!encodeRadioStatus(snapshot.radio, &radio) || !encodeHl2Link(snapshot.radio, &radio)) {
         return std::nullopt;
     }
     QJsonObject audio{{QStringLiteral("active"), snapshot.audio.active},

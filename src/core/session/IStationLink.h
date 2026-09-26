@@ -120,6 +120,10 @@
 //   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 13):
 //                                    transmitSettingsAvailable on the link.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  R-R3-46 (parity Task 14):
+//                                    radioHardwareAvailable, the I/O board's
+//                                    I2C and output pin requests.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QString>
@@ -414,6 +418,26 @@ public:
     // the Core's hardware settings.
     virtual CommandOutcome requestIoBoardProbe()
     { return { false, QStringLiteral("This Core cannot probe its radio's I/O board for this app.") }; }
+
+    // R-R3-46 (parity Task 14): the link is ready and the Core offers
+    // radioHardwareVersion at least `minVersion`. At 7 a window uses HL2
+    // Options' I2C tool and Pin Control through the Core, and changes the
+    // Alex tab's three transmit high-pass switches. The default refuses.
+    virtual bool radioHardwareAvailable(int /*minVersion*/) const { return false; }
+    static QString ioBoardI2cUnavailableReason()
+    { return QStringLiteral("This Core cannot reach its radio's I2C bus for this app. Updating the Core may help."); }
+    static QString alexHpfSwitchesUnavailableReason()
+    { return QStringLiteral("This Core cannot change these high-pass switches for this app. Updating the Core may help."); }
+    // Verb "requestIoBoardI2c" (radioHardwareVersion 7): one I2C read or
+    // write on the Core's radio. The answer (a read's bytes in `value`)
+    // arrives as RadioModel::reportStationIoBoardResult.
+    virtual CommandOutcome requestIoBoardI2c(int /*bus*/, int /*address*/, int /*reg*/,
+                                             bool /*write*/, int /*value*/)
+    { return { false, ioBoardI2cUnavailableReason() }; }
+    // Verb "setIoBoardOutput" (radioHardwareVersion 7): one of the Core's
+    // I/O board outputs on or off.
+    virtual CommandOutcome requestIoBoardOutput(int /*pin*/, bool /*on*/)
+    { return { false, ioBoardI2cUnavailableReason() }; }
 
     // R-R3-46 / R-R3-21 (radioHardwareVersion 4): the filter policy dialog
     // in a remote window. Whether the Core takes a filter policy change from

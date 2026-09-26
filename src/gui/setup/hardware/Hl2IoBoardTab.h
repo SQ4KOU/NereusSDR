@@ -33,6 +33,10 @@
 //                 receive-only note when the window's Core applies the whole
 //                 preset (transmitSettingsVersion 8). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-R3-32 (remote-window parity Task 14): the bandwidth
+//                 monitor reads RadioModel::hl2LinkFigures(), so a remote
+//                 window shows the Core's HL2 link ("From the Core").
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim mi0bot Console/setup.cs header (lines 1-50) ===
@@ -85,6 +89,8 @@
 #include <QMap>
 #include <QVariant>
 #include <QWidget>
+
+#include <optional>
 #include <array>
 
 #include "core/IoBoardHl2.h"
@@ -173,6 +179,8 @@ public:
     // 250 ms m_bwTimer (HermesLiteBandwidthMonitor::ep6/ep2/throttle).
     int bandwidthPollIntervalMsForTest() const;
     QString ep6RateTextForTest() const;
+    int ep6BarPercentForTest() const;
+    int ep2BarPercentForTest() const;
     QString ep2RateTextForTest() const;
     QString throttleStatusTextForTest() const;
     QString throttleEventTextForTest() const;
@@ -221,6 +229,8 @@ private:
     void highlightStep(int step);
     void appendI2cLogEntry(const QString& text);
     void updateBwDisplay();
+    // The throttle label: throttled, not throttled, or unavailable.
+    void showThrottleState(std::optional<bool> throttled);
 
     // R-R3-46 / R-R3-49: the N2ADR switch's tooltip from the two flags.
     void refreshN2adrToolTip();
@@ -289,6 +299,7 @@ private:
     QLabel*       m_ep2RateLabel{nullptr};
     QLabel*       m_throttleStatusLabel{nullptr};
     QLabel*       m_throttleEventLabel{nullptr};
+    QGroupBox*    m_bwGroup{nullptr};
 
     // 250 ms timer for live bandwidth readout (Task E3/E4).
     QTimer* m_bwTimer{nullptr};

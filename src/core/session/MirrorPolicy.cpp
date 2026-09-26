@@ -80,6 +80,9 @@
 //                 txAntennas, blockTxAnt2, blockTxAnt3, ext1OutOnTx,
 //                 ext2OutOnTx and rxOutOverride Bidirectional. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-R3-46 (parity Task 14): IoBoardHl2Facade outputs,
+//                 Outbound. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -536,6 +539,9 @@ const MirrorPolicy::Entry kEntries[] = {
     { "IoBoardHl2Facade", "detected", MirrorDirection::Outbound },
     { "IoBoardHl2Facade", "hardwareVersion", MirrorDirection::Outbound },
     { "IoBoardHl2Facade", "registers", MirrorDirection::Outbound },
+    // Remote-window parity Task 14 (R-R3-46, radioHardwareVersion 7): the
+    // board's output pins as the Core last read them back.
+    { "IoBoardHl2Facade", "outputs", MirrorDirection::Outbound },
 
     // R-R3-47 / R-R3-22 (remotePgxlControlVersion 1): the Core's Power
     // Genius XL status. Every property is the Core's to report; a window

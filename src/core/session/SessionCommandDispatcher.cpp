@@ -166,6 +166,10 @@
 //                                    setAlexTxAntenna, one band's TX
 //                                    antenna. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  R-R3-46 (parity Task 14,
+//                                    radioHardwareVersion 7):
+//                                    requestIoBoardI2c and setIoBoardOutput.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -368,6 +372,9 @@ QString notRepresentableReason()
 //   requestIoBoardProbe    remoteHardwareConfigAvailable() (version 2)
 //   setAlexRxAntenna       radioHardwareVersion 3 (requestAlexRxAntenna)
 //   setAlexTxAntenna       radioHardwareVersion 6 (requestAlexTxAntenna)
+//   requestIoBoardI2c, setIoBoardOutput
+//                          radioHardwareVersion 7 (requestIoBoardI2c,
+//                          requestIoBoardOutput)
 //   nnr.*                  nnrControlAvailable(); nnr.tryAgain adds
 //                          kNnrLimitSessionProtocolMinor
 //   nnr.applyModelSelection dspAssetVersion 1 (requestApplyNnrModels)
@@ -526,6 +533,13 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
          kRadioIdentitySessionProtocolMinor},
         {"setAlexTxAntenna", {arg("band", kInt), arg("antenna", kInt)},
          "radioHardwareVersion", 6, kRadioIdentitySessionProtocolMinor},
+        // HL2 Options' I2C tool and Pin Control (R-R3-46, parity Task 14).
+        {"requestIoBoardI2c",
+         {arg("bus", kInt), arg("address", kInt), arg("register", kInt), arg("write", kBool),
+          arg("value", kInt)},
+         "radioHardwareVersion", 7, kRadioIdentitySessionProtocolMinor},
+        {"setIoBoardOutput", {arg("pin", kInt), arg("on", kBool)}, "radioHardwareVersion", 7,
+         kRadioIdentitySessionProtocolMinor},
         // Neural noise reduction.
         {"nnr.setDiagnostics",
          {arg("sliceId", kInt), arg("testMode", kInt), arg("outputMode", kInt)},
@@ -848,6 +862,10 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleSetAlexBpfMode(invoke);
     } else if (invoke.commandVerb == "setAlexTxAntenna") {
         handleSetAlexTxAntenna(invoke);
+    } else if (invoke.commandVerb == "requestIoBoardI2c") {
+        handleRequestIoBoardI2c(invoke);
+    } else if (invoke.commandVerb == "setIoBoardOutput") {
+        handleSetIoBoardOutput(invoke);
     } else if (invoke.commandVerb == "nnr.setDiagnostics" || invoke.commandVerb == "nnr.resetTuning"
                || invoke.commandVerb == "nnr.tryAgain") {
         handleNnrAction(invoke);
@@ -2639,6 +2657,76 @@ void SessionCommandDispatcher::handleSetAlexTxAntenna(const SessionMessage& invo
     }
     const QString reason = alex->setTxAntForBand(Band(band), antenna);
     emitResult(invoke.commandVerb, invoke.commandId, reason.isEmpty(), reason, {});
+}
+
+// R-R3-46 (parity Task 14, radioHardwareVersion 7): HL2 Options' I2C tool
+// from a remote window. The Core runs the read or write as its own tool
+// does (RadioModel::requestIoBoardI2c): a read is answered when the radio
+// answers, with `values` value (i64: C1 << 24 | C2 << 16 | C3 << 8 | C4),
+// or refused "The radio did not answer the I2C request." once the local
+// tool's 21 ms pass; a write is answered once queued and refused while the
+// radio is on the air. `value` is ignored on a read. An answer due to an
+// earlier session is dropped.
+void SessionCommandDispatcher::handleRequestIoBoardI2c(const SessionMessage& invoke)
+{
+    const QByteArray verb = invoke.commandVerb;
+    const quint32 commandId = invoke.commandId;
+    RadioModel::IoBoardI2cRequest request;
+    QVariant write;
+    if (!hasExactlyArguments(invoke.arguments, { "bus", "address", "register", "write", "value" })
+        || findIntArgument(invoke.arguments, "bus", &request.bus) != ArgumentStatus::Ok
+        || findIntArgument(invoke.arguments, "address", &request.address) != ArgumentStatus::Ok
+        || findIntArgument(invoke.arguments, "register", &request.reg) != ArgumentStatus::Ok
+        || findIntArgument(invoke.arguments, "value", &request.value) != ArgumentStatus::Ok
+        || !findArgument(invoke.arguments, "write", &write)
+        || write.typeId() != QMetaType::Bool) {
+        emitResult(verb, commandId, false,
+                   QStringLiteral("The Core could not read this request."), {});
+        return;
+    }
+    request.write = write.toBool();
+    const QPointer<SessionCommandDispatcher> self(this);
+    const quint64 generation = m_sessionGeneration;
+    // Checkpoint join (R-IOS-02): a read's answer comes on a later turn,
+    // named for the session that asked.
+    const QString owner = m_sessionOwner;
+    const bool isRead = !request.write;
+    m_radioModel->requestIoBoardI2c(
+        request, [self, generation, owner, verb, commandId, isRead](
+                     bool ok, qint64 value, const QString& reason) {
+            if (!self || self->m_sessionGeneration != generation) { return; }
+            QList<MirrorUpdate> values;
+            if (ok && isRead) {
+                values.append({0, "value", MirrorWireKind::Int64, value});
+            }
+            self->emitResultAs(owner, SessionMessages::commandResult(
+                verb, commandId, ok, ok ? QString() : reason, {}, values));
+        });
+}
+
+// R-R3-46 (parity Task 14, radioHardwareVersion 7): Pin Control on HL2
+// Options from a remote window: one of the Core's I/O board outputs on or
+// off (RadioModel::setIoBoardOutput), read back into `ioBoard` outputs.
+// Refused while the radio is on the air.
+void SessionCommandDispatcher::handleSetIoBoardOutput(const SessionMessage& invoke)
+{
+    int pin = 0;
+    QVariant on;
+    if (!hasExactlyArguments(invoke.arguments, { "pin", "on" })
+        || findIntArgument(invoke.arguments, "pin", &pin) != ArgumentStatus::Ok
+        || !findArgument(invoke.arguments, "on", &on) || on.typeId() != QMetaType::Bool) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core could not read this request."), {});
+        return;
+    }
+    bool accepted = false;
+    QString refusal;
+    m_radioModel->setIoBoardOutput(pin, on.toBool(),
+                                   [&accepted, &refusal](bool ok, qint64, const QString& reason) {
+                                       accepted = ok;
+                                       refusal = reason;
+                                   });
+    emitResult(invoke.commandVerb, invoke.commandId, accepted, refusal, {});
 }
 
 // R-R3-46 / R-R3-21 (radioHardwareVersion 4): one receive filter chain's

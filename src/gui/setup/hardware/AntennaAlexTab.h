@@ -21,6 +21,9 @@
 //   2026-09-23 - R-R3-46: forwards the transmit permission to Antenna
 //                 Control. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                 Code.
+//   2026-09-26 - R-R3-46 / R-R3-49 (parity Task 14): forwards the Alex-1
+//                high-pass switches' availability. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -102,6 +105,9 @@ public:
     // permission with its reason. Always permitted locally. (Antenna
     // Control's transmit half follows the Alex facade, parity Task 12.)
     void setTransmitPermitted(bool permitted, const QString& reason);
+    // R-R3-46 / R-R3-49 (parity Task 14): see
+    // AntennaAlexAlex1Tab::setHpfSwitchesAvailable.
+    void setHpfSwitchesAvailable(bool available, const QString& reason);
 
 signals:
     void settingChanged(const QString& key, const QVariant& value);

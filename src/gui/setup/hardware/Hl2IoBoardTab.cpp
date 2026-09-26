@@ -7,6 +7,8 @@
 //     N2ADR Filter toggle + surrounding HL2 I/O UI)
 //   Project Files/Source/Console/console.cs:25781-25945 (UpdateIOBoard
 //     state machine driving register state; subscribed via IoBoardHl2 model)
+//   Project Files/Source/Console/ucBandwidthView.cs (toDisplayUnits and
+//     formatOverlayLine: the bandwidth monitor's Mbit/s unit and one decimal)
 //
 // =================================================================
 // Modification history (NereusSDR):
@@ -28,6 +30,16 @@
 //   2026-09-26 - R-R3-46 / R-R3-49 (remote-window parity Task 13): no
 //                 receive-only note when the window's Core applies the whole
 //                 preset (transmitSettingsVersion 8). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-R3-32 (remote-window parity Task 14): the bandwidth
+//                 monitor reads RadioModel::hl2LinkFigures(), so a remote
+//                 window shows the Core's HL2 link ("From the Core").
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - Parity Task 14 follow-up (R-R3-32): the bandwidth monitor
+//                 shows mi0bot's unit, Mbit/s (bytes a second x 8 / 1e6,
+//                 rounded up to one decimal), from ucBandwidthView.cs
+//                 [@c26a8a4]; it showed bytes a second / 1e6 labelled as
+//                 megabits. The bars fill at 10 Mbit/s. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
@@ -128,6 +140,48 @@
 // Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
 //============================================================================================//
 // =================================================================
+//
+// --- From Console/ucBandwidthView.cs ---
+/*  frmBandwidth.cs
+
+This file is part of a program that implements a Software-Defined Radio.
+
+This code/file can be found on GitHub : https://github.com/ramdor/Thetis
+
+Copyright (C) 2020-2026 Richard Samphire MW0LGE
+
+This program is free software; you can redistribute it and/or
+modify it under the terms of the GNU General Public License
+as published by the Free Software Foundation; either version 2
+of the License, or (at your option) any later version.
+
+This program is distributed in the hope that it will be useful,
+but WITHOUT ANY WARRANTY; without even the implied warranty of
+MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License
+along with this program; if not, write to the Free Software
+Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301, USA.
+
+The author can be reached by email at
+
+mw0lge@grange-lane.co.uk
+*/
+//
+//============================================================================================//
+// Dual-Licensing Statement (Applies Only to Author's Contributions, Richard Samphire MW0LGE) //
+// ------------------------------------------------------------------------------------------ //
+// For any code originally written by Richard Samphire MW0LGE, or for any modifications       //
+// made by him, the copyright holder for those portions (Richard Samphire) reserves the       //
+// right to use, license, and distribute such code under different terms, including           //
+// closed-source and proprietary licences, in addition to the GNU General Public License      //
+// granted above. Nothing in this statement restricts any rights granted to recipients under  //
+// the GNU GPL. Code contributed by others (not Richard Samphire) remains licensed under      //
+// its original terms and is not affected by this dual-licensing statement in any way.        //
+// Richard Samphire can be reached by email at :  mw0lge@grange-lane.co.uk                    //
+//============================================================================================//
+// =================================================================
 
 #include "Hl2IoBoardTab.h"
 
@@ -155,6 +209,8 @@
 #include <QTableWidget>
 #include <QTimer>
 #include <QVBoxLayout>
+
+#include <cmath>
 
 namespace NereusSDR {
 
@@ -557,6 +613,7 @@ void Hl2IoBoardTab::buildI2cAndBandwidthRow(QVBoxLayout* outer)
 
     // ── Right: Bandwidth monitor mini ─────────────────────────────────────────
     auto* bwGroup = new QGroupBox(tr("Bandwidth monitor"), this);
+    m_bwGroup = bwGroup;
     auto* bwLayout = new QVBoxLayout(bwGroup);
     bwLayout->setSpacing(4);
 
@@ -570,7 +627,7 @@ void Hl2IoBoardTab::buildI2cAndBandwidthRow(QVBoxLayout* outer)
     m_ep6Bar->setValue(0);
     m_ep6Bar->setTextVisible(false);
     m_ep6Bar->setFixedHeight(14);
-    m_ep6RateLabel = new QLabel(QStringLiteral("0.0 Mbps"), bwGroup);
+    m_ep6RateLabel = new QLabel(QStringLiteral("0.0 Mbit/s"), bwGroup);
     m_ep6RateLabel->setStyleSheet(QStringLiteral("font-size: 10px; font-family: monospace;"));
     m_ep6RateLabel->setFixedWidth(70);
     ep6Row->addWidget(ep6Lbl);
@@ -588,7 +645,7 @@ void Hl2IoBoardTab::buildI2cAndBandwidthRow(QVBoxLayout* outer)
     m_ep2Bar->setValue(0);
     m_ep2Bar->setTextVisible(false);
     m_ep2Bar->setFixedHeight(14);
-    m_ep2RateLabel = new QLabel(QStringLiteral("0.0 Mbps"), bwGroup);
+    m_ep2RateLabel = new QLabel(QStringLiteral("0.0 Mbit/s"), bwGroup);
     m_ep2RateLabel->setStyleSheet(QStringLiteral("font-size: 10px; font-family: monospace;"));
     m_ep2RateLabel->setFixedWidth(70);
     ep2Row->addWidget(ep2Lbl);
@@ -795,28 +852,81 @@ void Hl2IoBoardTab::appendI2cLogEntry(const QString& text)
 
 // ── updateBwDisplay ───────────────────────────────────────────────────────────
 
+namespace {
+
+// From mi0bot ucBandwidthView.cs:464-470 [@c26a8a4] toDisplayUnits, the
+// Mbitps branch (the frmBandwidth designer's DisplayUnits):
+//   return bytes_per_second * 8.0 / 1_000_000.0;
+double megabitsPerSecond(double bytesPerSecond)
+{
+    return bytesPerSecond * 8.0 / 1000000.0;
+}
+
+// From mi0bot ucBandwidthView.cs:440-450 [@c26a8a4] formatOverlayLine:
+//   double v1 = Math.Ceiling(value_display * 10.0) / 10.0;
+//   ... v1.ToString("F1") + " " + unit;   with unit "Mbit/s" (line 421)
+QString formatMegabitsPerSecond(double megabits)
+{
+    const double rounded = std::ceil(megabits * 10.0) / 10.0;
+    return QStringLiteral("%1 Mbit/s").arg(rounded, 0, 'f', 1);
+}
+
+}  // namespace
+
 void Hl2IoBoardTab::updateBwDisplay()
 {
-    // EP6 ingress: scale to 100% at 10 Mbps
-    // 192k×24bit×2ch = ~9.2 Mbps; round to 10 Mbps as display ceiling.
-    static constexpr double kMaxBps = 10.0e6;
+    // EP6 ingress: scale to 100% at 10 Mbit/s
+    // 192k×24bit×2ch = ~9.2 Mbit/s; round to 10 Mbit/s as display ceiling.
+    // NereusSDR bar, no upstream equivalent (mi0bot's view autoscales).
+    static constexpr double kMaxMbps = 10.0;
 
-    const double ep6Bps = m_bwMonitor->ep6IngressBytesPerSec();
-    const double ep2Bps = m_bwMonitor->ep2EgressBytesPerSec();
+    // R-R3-32 (parity Task 14): this window's monitor, or in a remote
+    // window the Core's figures; one the Core has not sent shows as
+    // unavailable, never 0.
+    const RadioModel::Hl2LinkFigures figures = m_model->hl2LinkFigures();
+    const bool fromCore = m_model->hl2LinkFiguresFromCore();
+    const QString source = fromCore ? tr("From the Core") : QString();
+    const auto showRate = [&](std::optional<double> bps, QProgressBar* bar, QLabel* label) {
+        if (!bps) {
+            bar->setValue(0);
+            label->setText(tr("Unavailable"));
+        } else {
+            const double megabits = megabitsPerSecond(*bps);
+            bar->setValue(qBound(0, static_cast<int>(megabits / kMaxMbps * 100.0), 100));
+            label->setText(formatMegabitsPerSecond(megabits));
+        }
+        label->setToolTip(source);
+    };
+    showRate(figures.rxBytesPerSecond, m_ep6Bar, m_ep6RateLabel);
+    showRate(figures.txBytesPerSecond, m_ep2Bar, m_ep2RateLabel);
+    showThrottleState(figures.throttled);
+    m_throttleStatusLabel->setToolTip(source);
 
-    const int ep6Pct = qBound(0, static_cast<int>(ep6Bps / kMaxBps * 100.0), 100);
-    const int ep2Pct = qBound(0, static_cast<int>(ep2Bps / kMaxBps * 100.0), 100);
+    m_throttleEventLabel->setText(figures.throttleEvents
+                                      ? QString::number(*figures.throttleEvents)
+                                      : tr("Unavailable"));
+    m_throttleEventLabel->setToolTip(fromCore ? tr("The Core does not send this count.")
+                                              : QString());
+    if (m_bwGroup) {
+        m_bwGroup->setTitle(fromCore ? tr("Bandwidth monitor, from the Core")
+                                     : tr("Bandwidth monitor"));
+    }
+}
 
-    m_ep6Bar->setValue(ep6Pct);
-    m_ep2Bar->setValue(ep2Pct);
-
-    m_ep6RateLabel->setText(
-        QStringLiteral("%1 Mbps").arg(ep6Bps / 1.0e6, 0, 'f', 2));
-    m_ep2RateLabel->setText(
-        QStringLiteral("%1 Mbps").arg(ep2Bps / 1.0e6, 0, 'f', 2));
-
-    m_throttleEventLabel->setText(
-        QString::number(m_bwMonitor->throttleEventCount()));
+void Hl2IoBoardTab::showThrottleState(std::optional<bool> throttled)
+{
+    if (!throttled) {
+        m_throttleStatusLabel->setText(tr("Unavailable"));
+        m_throttleStatusLabel->setStyleSheet(QStringLiteral("font-size: 10px;"));
+    } else if (*throttled) {
+        m_throttleStatusLabel->setText(tr("● throttled"));
+        m_throttleStatusLabel->setStyleSheet(
+            QStringLiteral("font-size: 10px; color: #ff4444;"));
+    } else {
+        m_throttleStatusLabel->setText(tr("○ not throttled"));
+        m_throttleStatusLabel->setStyleSheet(
+            QStringLiteral("font-size: 10px; color: #22cc44;"));
+    }
 }
 
 // ── decodeRegister ────────────────────────────────────────────────────────────
@@ -940,15 +1050,12 @@ void Hl2IoBoardTab::onI2cQueueChanged()
 
 void Hl2IoBoardTab::onThrottledChanged(bool throttled)
 {
-    if (throttled) {
-        m_throttleStatusLabel->setText(tr("● throttled"));
-        m_throttleStatusLabel->setStyleSheet(
-            QStringLiteral("font-size: 10px; color: #ff4444;"));
-    } else {
-        m_throttleStatusLabel->setText(tr("○ not throttled"));
-        m_throttleStatusLabel->setStyleSheet(
-            QStringLiteral("font-size: 10px; color: #22cc44;"));
+    // This window's own monitor (a remote window's never changes; the
+    // Core's throttle reaches it through updateBwDisplay).
+    if (m_model->hl2LinkFiguresFromCore()) {
+        return;
     }
+    showThrottleState(throttled);
     m_throttleEventLabel->setText(
         QString::number(m_bwMonitor->throttleEventCount()));
 
@@ -1208,6 +1315,16 @@ QString Hl2IoBoardTab::ep6RateTextForTest() const
 QString Hl2IoBoardTab::ep2RateTextForTest() const
 {
     return m_ep2RateLabel ? m_ep2RateLabel->text() : QString();
+}
+
+int Hl2IoBoardTab::ep6BarPercentForTest() const
+{
+    return m_ep6Bar ? m_ep6Bar->value() : -1;
+}
+
+int Hl2IoBoardTab::ep2BarPercentForTest() const
+{
+    return m_ep2Bar ? m_ep2Bar->value() : -1;
 }
 
 QString Hl2IoBoardTab::throttleStatusTextForTest() const

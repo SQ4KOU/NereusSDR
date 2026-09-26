@@ -22,7 +22,12 @@
 // follows.
 //
 // Wire values: `registers` is the 256-byte register mirror as 512 upper-case
-// hex digits, register 0 first.
+// hex digits, register 0 first. `outputs` (remote-window parity Task 14,
+// radioHardwareVersion 7) is the board's output pins, one bit per output
+// (o0 in bit 0), as the Core last read them back from the board's output
+// register (IoBoardHl2::Register::REG_OUT_PINS, 169): the value HL2
+// Options' output strip shows, as mi0bot's ucOutPinsLedStripHF shows the
+// read-back of that register (setup.cs:30006-30036 [@c26a8a4]).
 //
 // =================================================================
 // Modification history (NereusSDR):
@@ -30,6 +35,9 @@
 //                                    via Anthropic Claude Code.
 //   2026-09-24  J.J. Boyd / KG4VCF  clearRemoteValues (follow-up). AI-
 //                                    assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  `outputs` (remote-window parity Task
+//                                    14, R-R3-46). AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -51,6 +59,7 @@ class IoBoardHl2Facade final : public QObject {
     Q_PROPERTY(bool detected READ detected NOTIFY detectedChanged)
     Q_PROPERTY(int hardwareVersion READ hardwareVersion NOTIFY hardwareVersionChanged)
     Q_PROPERTY(QString registers READ registers NOTIFY registersChanged)
+    Q_PROPERTY(int outputs READ outputs NOTIFY outputsChanged)
 
 public:
     /// The size of IoBoardHl2's register mirror.
@@ -81,11 +90,13 @@ public:
     bool detected() const { return m_detected; }
     int hardwareVersion() const { return m_hardwareVersion; }
     QString registers() const;
+    int outputs() const { return m_outputs; }
 
 signals:
     void detectedChanged(bool detected);
     void hardwareVersionChanged(int version);
     void registersChanged(const QString& registers);
+    void outputsChanged(int outputs);
 
 private:
     using Registers = std::array<quint8, kRegisterCount>;
@@ -102,6 +113,7 @@ private:
     bool m_detected{false};
     int m_hardwareVersion{0};
     Registers m_registers{};
+    int m_outputs{0};
 };
 
 } // namespace NereusSDR

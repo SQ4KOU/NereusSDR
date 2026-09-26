@@ -822,7 +822,10 @@ const QList<ReasonSource>& reasonSources()
           // R-R3-49 (parity Task 7): RadioModel::stationOnAirRefusal's
           // reason for a PureSignal arming verb (RadioModel::onAirReason,
           // scanned with StationServer).
-          QStringLiteral("onAir")}},
+          QStringLiteral("onAir"),
+          // R-R3-46 (parity Task 14): RadioModel::requestIoBoardI2c's
+          // refusal (scanned in RadioModel.cpp's entry), on a later turn.
+          QStringLiteral("ok ? QString() : reason")}},
         // iPhone app Task 13 (R-IOS-08): the device administration verbs'
         // command.result, forwarded by the dispatcher as result.reason; the
         // log lines never reach an app.
@@ -1048,7 +1051,13 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("restoreSliceFor"),
           // R-IOS-27, R-IOS-06: the desktop's band button, whose refusal
           // (bandClickIgnored) slice.selectBand relays.
-          QStringLiteral("onBandButtonClicked")},
+          QStringLiteral("onBandButtonClicked"),
+          // R-R3-46 (parity Task 14): HL2 Options' I2C tool and Pin
+          // Control, whose refusals requestIoBoardI2c and setIoBoardOutput
+          // relay.
+          QStringLiteral("requestIoBoardI2c"), QStringLiteral("setIoBoardOutput"),
+          QStringLiteral("ioBoardNoAnswerReason"),
+          QStringLiteral("ioBoardI2cUnreachableReason")},
          {// This app's own branch in a remote window (role Remote), shown
           // through OperatorReasonText; never sent by the Core.
           "There is no station session."},
@@ -1072,7 +1081,13 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("onAirReason()"),
           // R-R3-49 (parity Task 2): TransmitModel::settingRangeRefusal,
           // scanned below.
-          QStringLiteral("range")}},
+          QStringLiteral("range"),
+          // R-R3-46 (parity Task 14): ioBoardI2cUnreachableReason and
+          // ioBoardNoAnswerReason, functions of this file scanned here;
+          // the link's own reason for a request it could not send; and
+          // stationOnAirRefusal's reason (onAirReason, scanned here).
+          QStringLiteral("unreachable"), QStringLiteral("ioBoardNoAnswerReason()"),
+          QStringLiteral("onAir")}},
         // R-R3-49 (parity Task 2): a transmit setting's range, in
         // property.result and setTunePowerForTxBand's command.result. The
         // inserts are the setters' own range numbers.
@@ -1175,6 +1190,12 @@ const QList<AppSideReason>& appSideReasons()
         {"src/core/session/IStationLink.h", "transmitSettingsUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
         {"src/core/session/IStationLink.h", "filterPolicyUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        // R-R3-46 (parity Task 14): HL2 Options' I2C tool and Pin Control,
+        // and the Alex tab's three transmit high-pass switches.
+        {"src/core/session/IStationLink.h", "ioBoardI2cUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        {"src/core/session/IStationLink.h", "alexHpfSwitchesUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
         {"src/models/RadioModel.h", "rxFilter0Reason",
          "the filter badge's status label (AlexController), not a refusal"},

@@ -153,6 +153,10 @@
 //                                    setRfKitOperate, setRfKitAntenna,
 //                                    setRfKitTciMode and setRfKitAddress.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  R-R3-46 (parity Task 14):
+//                                    handleRequestIoBoardI2c and
+//                                    handleSetIoBoardOutput.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -402,6 +406,10 @@ private:
     // Parity mini-round (radioHardwareVersion 6): one band's TX antenna,
     // applied through the Core's AlexAntennaFacade.
     void handleSetAlexTxAntenna(const NereusSDR::SessionMessage& invoke);
+    // Parity Task 14 (radioHardwareVersion 7): HL2 Options' I2C tool and
+    // Pin Control, run by the Core's RadioModel.
+    void handleRequestIoBoardI2c(const NereusSDR::SessionMessage& invoke);
+    void handleSetIoBoardOutput(const NereusSDR::SessionMessage& invoke);
     // R-R3-46 / R-R3-21 (radioHardwareVersion 4): one receive filter
     // chain's filter policy, applied through the Core's AlexAntennaFacade.
     void handleSetAlexBpfMode(const NereusSDR::SessionMessage& invoke);

@@ -29,6 +29,10 @@
 //                 calibration follow transmitSettingsVersion 8, User Dig Out
 //                 the transmit settings gate. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-R3-46 / R-R3-49 (remote-window parity Task 14): HL2
+//                 Options' I2C tool and Pin Control and the Alex-1 tab's three
+//                 transmit high-pass switches follow radioHardwareVersion 7.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -403,6 +407,21 @@ void HardwarePage::applyTransmitHardwareGates()
     // The N2ADR switch: a Core at version 8 applies its whole preset, so
     // its tooltip no longer says it moves the receive filters only.
     m_hl2IoTab->setCoreAppliesWholeN2adrPreset(m_remote && offered);
+    // R-R3-46 / R-R3-49 (parity Task 14): a remote window reaches the
+    // Core's I2C bus and output pins, and changes the three transmit
+    // high-pass switches, only on a Core at radioHardwareVersion 7. The
+    // tab itself closes a write and Pin Control on the air; the three
+    // switches have no on-air rule (Thetis sets them with no MOX check).
+    const bool hardwareOffered =
+        !m_remote || (link != nullptr && link->radioHardwareAvailable(7));
+    if (m_hl2OptionsTab) {
+        m_hl2OptionsTab->setIoBoardControlAvailable(
+            hardwareOffered, IStationLink::ioBoardI2cUnavailableReason());
+    }
+    if (m_antennaAlexTab) {
+        m_antennaAlexTab->setHpfSwitchesAvailable(
+            hardwareOffered, IStationLink::alexHpfSwitchesUnavailableReason());
+    }
 }
 
 bool HardwarePage::showAntennaTab()

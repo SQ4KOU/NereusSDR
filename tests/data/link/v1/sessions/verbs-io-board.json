@@ -33,14 +33,17 @@
         {"from": "station", "message": {"class": "StationCatalog", "key": "catalog", "properties": "$any", "type": "object.create"}},
         {"from": "station", "message": {"class": "SliceModel", "key": "slice:0", "properties": "$any", "type": "object.create"}},
         {"from": "station", "message": {"type": "snapshot.complete"}},
-        {"from": "client", "role": "behaviour", "message": {"type": "command.invoke", "verb": "requestIoBoardProbe", "id": "$int:invoke29:0:4294967295", "args": []}},
-        {"from": "station", "message": {"accepted": false, "affected": [], "id": "$ref:invoke29", "reason": "The radio is not connected, so there is no I/O board to probe.", "type": "command.result", "verb": "requestIoBoardProbe"}},
+        {"from": "client", "role": "behaviour", "message": {"type": "command.invoke", "verb": "requestIoBoardI2c", "id": "$int:invoke41:0:4294967295", "args": [{"ordinal": 0, "name": "bus", "kind": "i64", "value": 1}, {"ordinal": 0, "name": "address", "kind": "i64", "value": 65}, {"ordinal": 0, "name": "register", "kind": "i64", "value": 0}, {"ordinal": 0, "name": "write", "kind": "bool", "value": false}, {"ordinal": 0, "name": "value", "kind": "i64", "value": 0}]}},
+        {"from": "station", "message": {"accepted": false, "affected": [], "id": "$ref:invoke41", "reason": "The radio is not connected, so its I2C bus cannot be reached.", "type": "command.result", "verb": "requestIoBoardI2c"}},
         {"advanceMs": 50},
-        {"from": "client", "role": "behaviour", "message": {"type": "command.invoke", "verb": "setAlexRxAntenna", "id": "$int:invoke32:0:4294967295", "args": [{"ordinal": 0, "name": "band", "kind": "i64", "value": 3}, {"ordinal": 0, "name": "antenna", "kind": "i64", "value": 1}, {"ordinal": 0, "name": "rxOnly", "kind": "bool", "value": false}]}},
-        {"from": "station", "message": {"accepted": true, "affected": [], "id": "$ref:invoke32", "reason": "", "type": "command.result", "verb": "setAlexRxAntenna"}},
+        {"from": "client", "role": "scripted", "message": {"type": "command.invoke", "verb": "requestIoBoardI2c", "id": 1141, "args": [{"ordinal": 0, "name": "bus", "kind": "i64", "value": 1}, {"ordinal": 0, "name": "conformanceWrongName", "kind": "i64", "value": 65}, {"ordinal": 0, "name": "register", "kind": "i64", "value": 0}, {"ordinal": 0, "name": "write", "kind": "bool", "value": false}, {"ordinal": 0, "name": "value", "kind": "i64", "value": 0}]}},
+        {"from": "station", "message": {"accepted": false, "affected": [], "id": 1141, "reason": "The Core could not read this request.", "type": "command.result", "verb": "requestIoBoardI2c"}},
         {"advanceMs": 50},
-        {"from": "client", "role": "scripted", "message": {"type": "command.invoke", "verb": "setAlexRxAntenna", "id": 1136, "args": [{"ordinal": 0, "name": "conformanceWrongName", "kind": "i64", "value": 3}, {"ordinal": 0, "name": "antenna", "kind": "i64", "value": 1}, {"ordinal": 0, "name": "rxOnly", "kind": "bool", "value": false}]}},
-        {"from": "station", "message": {"accepted": false, "affected": [], "id": 1136, "reason": "The Core could not read this request.", "type": "command.result", "verb": "setAlexRxAntenna"}},
+        {"from": "client", "role": "behaviour", "message": {"type": "command.invoke", "verb": "setIoBoardOutput", "id": "$int:invoke42:0:4294967295", "args": [{"ordinal": 0, "name": "pin", "kind": "i64", "value": 0}, {"ordinal": 0, "name": "on", "kind": "bool", "value": true}]}},
+        {"from": "station", "message": {"accepted": false, "affected": [], "id": "$ref:invoke42", "reason": "The radio is not connected, so its I2C bus cannot be reached.", "type": "command.result", "verb": "setIoBoardOutput"}},
+        {"advanceMs": 50},
+        {"from": "client", "role": "scripted", "message": {"type": "command.invoke", "verb": "setIoBoardOutput", "id": 1142, "args": [{"ordinal": 0, "name": "conformanceWrongName", "kind": "i64", "value": 0}, {"ordinal": 0, "name": "on", "kind": "bool", "value": true}]}},
+        {"from": "station", "message": {"accepted": false, "affected": [], "id": 1142, "reason": "The Core could not read this request.", "type": "command.result", "verb": "setIoBoardOutput"}},
         {"advanceMs": 50}
     ]
 }

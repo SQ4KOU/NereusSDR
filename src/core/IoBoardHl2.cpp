@@ -25,6 +25,8 @@
 //                model layer — Phase 3P-E Task 2 wires I2C intercept
 //                into P1CodecHl2; Task 4 builds the Setup → Hardware →
 //                HL2 I/O page UI.
+//   2026-09-26 - Remote-window parity Task 14 (R-R3-46): i2cReadAnswered.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // --- From Console/HPSDR/IoBoardHl2.cs ---
@@ -270,9 +272,10 @@ IoBoardHl2::I2cReadResponse IoBoardHl2::lastI2cRead() const
 void IoBoardHl2::applyI2cReadResponse(quint8 c0, quint8 c1, quint8 c2,
                                       quint8 c3, quint8 c4)
 {
-    // Low 7 bits of C0 carry the firmware's "returned address" — identifies
-    // which outstanding read this payload belongs to. Bit 7 is the response
-    // marker and has already been checked by the caller.
+    // Bit 7 of C0 is the response marker and has already been checked by
+    // the caller. The low 7 bits are kept for the diagnostics log only:
+    // mi0bot never reads them (networkproto1.c:478-493 [@c26a8a4]); the
+    // answer belongs to the oldest outstanding read, popped below.
     m_lastI2cRead.returnedAddress = static_cast<quint8>(c0 & 0x7F);
     m_lastI2cRead.data = {c1, c2, c3, c4};
     m_lastI2cRead.available = true;
@@ -334,6 +337,9 @@ void IoBoardHl2::applyI2cReadResponse(quint8 c0, quint8 c1, quint8 c2,
     emit i2cReadResponseReceived(m_lastI2cRead.returnedAddress,
                                  havePending ? pr.subAddress : quint8(0),
                                  c1, c2, c3, c4);
+    if (havePending) {
+        emit i2cReadAnswered(pr.deviceAddress, pr.subAddress, c1, c2, c3, c4);
+    }
 }
 
 void IoBoardHl2::clearI2cReadAvailable()

@@ -767,7 +767,7 @@ change shows as surface drift and as a change to this table.
 | `spectrumGrantVersion` | 1 |
 | `remoteDisplayBudgetVersion` | 1 |
 | `remoteCtunVersion` | 1 |
-| `stationTelemetryVersion` | 4 |
+| `stationTelemetryVersion` | 5 |
 | `remoteTgxlConfigVersion` | 1 |
 | `remoteFourO3AControlVersion` | 1 |
 | `wdspVersion` | 210 |
@@ -782,7 +782,7 @@ change shows as surface drift and as a change to this table.
 | `audioClockVersion` | 1 |
 | `receiverAudioVersion` | 1 |
 | `headphonesMixVersion` | 1 |
-| `radioHardwareVersion` | 6 |
+| `radioHardwareVersion` | 7 |
 | `remotePgxlControlVersion` | 4 |
 | `remoteRfKitControlVersion` | 4 |
 | `stationTciVersion` | 1 |
@@ -809,7 +809,8 @@ When a feature is off, its version is 0:
   on and a budget has been computed.
 - `stationTelemetryVersion`: 0 unless telemetry is enabled. At 4 the
   radio section also carries, for a peer at agreed minor 11, the Core's
-  PA readings and radio link quality (section 10).
+  PA readings and radio link quality (section 10); at 5 (parity Task 14)
+  also the Core's Hermes Lite 2 link (`hl2*`, section 10).
 - `remoteTgxlConfigVersion`, `remoteFourO3AControlVersion`: 0 unless the
   Core owns its accessories.
 - `wdspVersion`, `wdspCompatibilityVersion`, `nnrVersion`,
@@ -850,7 +851,13 @@ When a feature is off, its version is 0:
   a whole `txAntennas` list from a window that sends one. A port blocked for transmit is refused with "An
   antenna blocked for transmit cannot be a band's TX antenna.", an antenna
   outside 1 to 3 with "Antennas are numbered 1 to 3."; like the list, it
-  has no on-air rule.
+  has no on-air rule. 7 (parity Task 14) adds HL2 Options' I2C Control
+  tool and Pin Control through the Core: `requestIoBoardI2c` and
+  `setIoBoardOutput` (section 9.1), the board's output pins as `outputs`
+  on `ioBoard`, and the Alex tab's three transmit high-pass switches
+  (HPF Bypass on TX, HPF Bypass on PureSignal, Disable 6m LNA on TX)
+  taken from a window, on and off the air (section 8.1). A station no
+  longer sends 6; 7 serves every earlier version's command and property.
 - `remotePgxlControlVersion`, `remoteRfKitControlVersion`,
   `remoteTgxlControlVersion`: sent only at agreed minor 11, and 0 unless
   the Core owns its accessories. `remotePgxlControlVersion` 3 adds the
@@ -1334,13 +1341,14 @@ An enum property lists the values its domain allows.
 | 6 | `nr3ModelStatus` | `utf8` | outbound |  |
 | 7 | `nr3Runnable` | `bool` | outbound |  |
 
-**IoBoardHl2Facade** (3 properties)
+**IoBoardHl2Facade** (4 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
 | 0 | `detected` | `bool` | outbound |  |
 | 1 | `hardwareVersion` | `i64` | outbound |  |
 | 2 | `registers` | `utf8` | outbound |  |
+| 3 | `outputs` | `i64` | outbound |  |
 
 **NotchModel** (4 properties)
 
@@ -1843,6 +1851,14 @@ Notes on the keys:
   minor 11 while `stationCatalogVersion` is at least 1
   (`StationServer::sendToSession`). An older peer never sees their schema
   either.
+- **`ioBoard` `outputs`.** The HL2 I/O board's output pins, one bit per
+  output (o0 in bit 0), as the Core last read them back from the board's
+  output register (169 at 0x1d on I2C bus 1): after `setIoBoardOutput`,
+  after a `requestIoBoardI2c` write or read of that register, and when a
+  window opens HL2 Options (mi0bot reads it back on the tab's Enter and
+  after each pin click). 0 until the Core has read it. `outbound`, from
+  `radioHardwareVersion` 7 (parity Task 14); HL2 Options' output strip
+  shows it in both windows.
 - **`devices`.** Sent only to a peer at agreed minor 11 whose hello
   declares `deviceAuth` 1 or later, while `deviceAdminVersion` is 1
   (`StationServer::sendToSession`). A window that declares nothing (today's
@@ -2778,11 +2794,17 @@ once the radio is on receive. User Dig Out is the `transmit` object's
 `userDigOut` (version 1). The rest of the transmit-side hardware keys stay
 refused: the HL2's TX buffer latency and PTT hang
 (`hl2/{pttHangMs,txLatencyMs}`) and the Alex TX low-pass band edges
-(`alex/lpf/...`), which both windows hide until they are applied; the
-Alex high-pass switches for transmit
-(`alex/master/{hpfBypassOnTx,hpfBypassOnPs,disable6mLnaOnTx}`), which the
-Core applies to its radio and a window shows disabled with the reason; and
-the OC hot switching and external PA keys.
+(`alex/lpf/...`), which both windows hide until they are applied; and
+the OC hot switching and external PA keys. The Alex high-pass switches
+for transmit (`alex/master/{hpfBypassOnTx,hpfBypassOnPs,disable6mLnaOnTx}`)
+are taken from a peer at agreed minor 11 offered `radioHardwareVersion` 7
+(parity Task 14), on and off the air, and applied to the Core's radio at
+once, because Thetis's setters (console.cs `DisableHPFonTX`,
+`DisableHPFonPS`, `Disable6mLNAonTX`) apply them with no MOX check, as it
+does the TX antennas; neither window greys them on the air. From an older
+peer they stay refused with the transmit reason, and a window whose Core
+does not offer 7 shows them disabled with "This Core cannot change these
+high-pass switches for this app. Updating the Core may help."
 
 ### 8.2 Keys the Core owns by code
 
@@ -2909,6 +2931,8 @@ refused.
 | `setAlexRxAntenna` | `band` i64, `antenna` i64, `rxOnly` bool | `radioHardwareVersion` | 3 | 11 |
 | `setAlexBpfMode` | `chain` i64, `mode` i64 | `radioHardwareVersion` | 4 | 11 |
 | `setAlexTxAntenna` | `band` i64, `antenna` i64 | `radioHardwareVersion` | 6 | 11 |
+| `requestIoBoardI2c` | `bus` i64, `address` i64, `register` i64, `write` bool, `value` i64 | `radioHardwareVersion` | 7 | 11 |
+| `setIoBoardOutput` | `pin` i64, `on` bool | `radioHardwareVersion` | 7 | 11 |
 | `nnr.setDiagnostics` | `sliceId` i64, `testMode` i64, `outputMode` i64 | `nnrVersion` | 1 | 5 |
 | `nnr.resetTuning` | `sliceId` i64 | `nnrVersion` | 1 | 5 |
 | `nnr.tryAgain` | `sliceId` i64 | `nnrVersion` | 1 | 11 |
@@ -3009,6 +3033,32 @@ These command groups need a sentence beyond the table:
   `radio` object (`rxFilter0Mode` to `rxFilter1Reason`) in a `delta`. The
   policy picks the receive band-pass filter only, so a receive-only Core
   applies it too.
+- **The HL2 I/O board's I2C tool and output pins** (parity Task 14,
+  `radioHardwareVersion` 7). `requestIoBoardI2c` is HL2 Options' I2C
+  Control tool: one read (`write` false) or write (`write` true) on the
+  Core's radio's I2C bus (`bus` 1, the HL2's daughterboard bus; `address`
+  0 to 0x7F; `register` and `value` 0 to 255; `value` is ignored on a
+  read). The Core runs it as its own tool does
+  (`RadioModel::requestIoBoardI2c`). A read is answered when the radio
+  answers, with `values` `value` (i64: the four bytes the radio returned,
+  C1 << 24 | C2 << 16 | C3 << 8 | C4, so the register's own byte is
+  `value` & 0xFF), or refused "The radio did not answer the I2C request."
+  once 21 ms pass after the read went out unanswered (mi0bot's 20
+  one-millisecond polls after the first) or the radio goes away; the
+  answer comes on a later turn, named for the session that asked. A write
+  is answered once it is queued, and a write to the output register (169
+  at 0x1d) is read back into `ioBoard` `outputs`. `setIoBoardOutput` is
+  Pin Control: output `pin` (0 to 7) `on` or off, written to the output
+  register and read back into `outputs`, as mi0bot's strip click does; it
+  needs the board found ("The radio's I/O board was not found."). A write
+  and an output pin are refused while the radio is on the air, with "The
+  radio is on the air. Try again when it stops.", because they reach the
+  I/O board and the N2ADR filter board in the transmit path; a read is
+  not. Other refusals: "The radio is not connected, so its I2C bus cannot
+  be reached.", "Only a Hermes Lite 2 has this I2C bus.", "Only I2C bus 1
+  can be reached.", "Choose an I2C address from 0x00 to 0x7F.", "Choose a
+  register and a value from 0x00 to 0xFF.", "The I/O board's outputs are
+  numbered 0 to 7.". A local window's tool follows the same rules.
 - **The amp's and tuner's own settings.** `setPgxlName`,
   `setPgxlHardware`, `setPgxlNetwork`, `savePgxlSettings` and
   `readPgxlSettings`, and `setTgxlName`, `setTgxlNetwork`,
@@ -3226,7 +3276,8 @@ higher than the last, or whose `sampledElapsedMs` went backwards, and
 ignores host fields unless the agreed minor is at least 10 and the version
 at least 2, and receiver fields unless the minor is at least 11 and the
 version at least 3, and the radio section's PA readings and link quality
-unless the minor is at least 11 and the version at least 4. A message
+unless the minor is at least 11 and the version at least 4, and its HL2
+link unless the minor is at least 11 and the version at least 5. A message
 over 16 KiB is refused.
 
 At version 4 (remote-window parity Task 6) the radio section carries, each
@@ -3244,6 +3295,19 @@ temperature is not below absolute zero, and the counts are whole numbers.
 A window shows each as the Core's, and one that is absent or out of date
 as unavailable, never 0.
 
+At version 5 (remote-window parity Task 14) the radio section also carries
+the Core's Hermes Lite 2 link, from the bandwidth monitor its own HL2 I/O
+tab, Radio Status and Diagnostics > Connection Quality read, only while
+the radio is connected and only on a radio that has the monitor (the HL2):
+`hl2RxBytesPerSecond` and `hl2TxBytesPerSecond` (bytes per second received
+from the radio on EP6 and sent to it on EP2, finite and not negative),
+`hl2Throttled` (bool: the LAN link is throttled) and `hl2SequenceGaps` (EP6
+sequence gaps since the radio connected, a whole number). The throttle
+event count is not sent: a remote window shows whether the link is
+throttled now and says the count is not sent. Those three surfaces show
+the Core's figures "from the Core", and unavailable, never 0, when absent
+or out of date.
+
 <!-- surface:telemetry -->
 <!-- Generated by scripts/render-link-tables.py from tests/data/link/v1/surface.json. Do not edit by hand. -->
 
@@ -3255,6 +3319,7 @@ Message kind `station.metrics.v1`.
 | 2 | 10 | 22 | `host.hottestZoneCelsius`, `host.hottestZoneName`, `host.memoryAvailableKiB`, `host.memoryTotalKiB`, `host.processCpuPercent`, `host.processResidentKiB`, `host.systemCpuPercent` |
 | 3 | 11 | 26 | `receivers[].inputDelayMs`, `receivers[].loadPercent`, `receivers[].skippedInputMs`, `receivers[].sliceId` |
 | 4 | 11 | 35 | `radio.jitterMs`, `radio.paCurrentAmps`, `radio.paTemperatureCelsius`, `radio.paVolts`, `radio.packetGapMs`, `radio.packetLossPercent`, `radio.sampleRateHz`, `radio.supplyVolts`, `radio.udpPacketsSeen` |
+| 5 | 11 | 39 | `radio.hl2RxBytesPerSecond`, `radio.hl2SequenceGaps`, `radio.hl2Throttled`, `radio.hl2TxBytesPerSecond` |
 
 <!-- /surface -->
 
@@ -4178,7 +4243,7 @@ same on every machine.
 | `settings-write` | A station-scoped write echoed with its origin; an operator-local write rejected; a removal sent as `settings.value` with no entry; on the receive-only Core, a DSP > Options TX key and a PA forward-power table key (`paCalibration/calPoint1`, version 6) taken off the air, an OC transmit pin (`oc/tx/20m/pin3`), an OC pin action (`oc/actions/pin1/action`) and TX Display Cal (`cal/txDisplayOffset`) taken off the air (version 8), and a transmit hardware key refused |
 | `unknown-verb` | `command.result` refused, "The Core does not know this request. Updating the Core may help."; the connection stays up |
 | `unknown-kind` | `session.end` "The Core could not read a message from this app.", `retryable` false, `code` `protocolError` |
-| `verbs-*` | Each verb in `commands`, grouped by the capability that gates it, invoked with its own arguments (for `setPgxlHardware`, one of its three optional ones) and, where it takes any, with one argument renamed (and nothing else changed: the same values and kinds); the two get different answers, so each shows the station read the arguments (a PureSignal action with arguments it does not take is refused "The Core could not read this PureSignal request." before the transmit gate is asked); `verbs-ps3` (which requires `psAlgorithmVersion` 3) invokes the PureSignal verbs whose answers do not depend on arming (`ps3.off`, `ps3.twoTone` off and `ps3.saveCorrection`), and `verbs-ps3-arming` (which also requires `transmitSettingsVersion` 7) invokes `ps3.twoTone` with `enabled` true, refused "PureSignal cannot be run from a remote window yet.", and the arming verbs (`ps3.single`, `ps3.automatic`, `ps3.applyCurrent`, `ps3.restoreCorrection`), taken and then failing on the static station, which has no PureSignal running ("PureSignal is unavailable until the radio is ready."); `nnr.applyModelSelection` names the revision `dspAssets` gave in the snapshot; `verbs-tgxl-control` (which requires `remoteTgxlControlVersion` 2) invokes the antenna, operate and bypass switches, and `verbs-tgxl-relays` (which requires `remoteTgxlControlVersion` 4) matches `scanTgxlLan`'s `devicesJson` as any text, since a real Tuner Genius on the test computer's network may answer, and its accepted `setTgxlAddress` is followed by the `tuner` delta carrying the saved address, then a blank host, saved and shown as blank, and the address again; `verbs-pgxl-control` (which requires `remotePgxlControlVersion` 4) does the same for `scanPgxlLan` and `setPgxlAddress` (the `amplifier` delta, and the blank host), and its `setPgxlOperate` is refused on the static station, which has no amp connected ("The Core is not connected to the Power Genius."); `verbs-rfkit` (which requires `remoteRfKitControlVersion` 2) connects, disconnects and switches the RF-Kit, and `verbs-rfkit-control` (which requires `remoteRfKitControlVersion` 4) invokes `setRfKitOperate`, `setRfKitAntenna` and `setRfKitTciMode`, refused on the static station with no amp admitted ("The Core is not connected to the RF-Kit amplifier."), and its accepted `setRfKitAddress` is followed by the `rfkit` delta carrying the saved address, then the blank host and the address again; `verbs-tx-antenna` (which requires `radioHardwareVersion` 6) invokes `setAlexTxAntenna` with a band's current antenna (taken, no delta) and with `band` renamed. A version's new verbs go in a fixture of their own, so an app at the older version still runs the older file |
+| `verbs-*` | Each verb in `commands`, grouped by the capability that gates it, invoked with its own arguments (for `setPgxlHardware`, one of its three optional ones) and, where it takes any, with one argument renamed (and nothing else changed: the same values and kinds); the two get different answers, so each shows the station read the arguments (a PureSignal action with arguments it does not take is refused "The Core could not read this PureSignal request." before the transmit gate is asked); `verbs-ps3` (which requires `psAlgorithmVersion` 3) invokes the PureSignal verbs whose answers do not depend on arming (`ps3.off`, `ps3.twoTone` off and `ps3.saveCorrection`), and `verbs-ps3-arming` (which also requires `transmitSettingsVersion` 7) invokes `ps3.twoTone` with `enabled` true, refused "PureSignal cannot be run from a remote window yet.", and the arming verbs (`ps3.single`, `ps3.automatic`, `ps3.applyCurrent`, `ps3.restoreCorrection`), taken and then failing on the static station, which has no PureSignal running ("PureSignal is unavailable until the radio is ready."); `nnr.applyModelSelection` names the revision `dspAssets` gave in the snapshot; `verbs-tgxl-control` (which requires `remoteTgxlControlVersion` 2) invokes the antenna, operate and bypass switches, and `verbs-tgxl-relays` (which requires `remoteTgxlControlVersion` 4) matches `scanTgxlLan`'s `devicesJson` as any text, since a real Tuner Genius on the test computer's network may answer, and its accepted `setTgxlAddress` is followed by the `tuner` delta carrying the saved address, then a blank host, saved and shown as blank, and the address again; `verbs-pgxl-control` (which requires `remotePgxlControlVersion` 4) does the same for `scanPgxlLan` and `setPgxlAddress` (the `amplifier` delta, and the blank host), and its `setPgxlOperate` is refused on the static station, which has no amp connected ("The Core is not connected to the Power Genius."); `verbs-rfkit` (which requires `remoteRfKitControlVersion` 2) connects, disconnects and switches the RF-Kit, and `verbs-rfkit-control` (which requires `remoteRfKitControlVersion` 4) invokes `setRfKitOperate`, `setRfKitAntenna` and `setRfKitTciMode`, refused on the static station with no amp admitted ("The Core is not connected to the RF-Kit amplifier."), and its accepted `setRfKitAddress` is followed by the `rfkit` delta carrying the saved address, then the blank host and the address again; `verbs-tx-antenna` (which requires `radioHardwareVersion` 6) invokes `setAlexTxAntenna` with a band's current antenna (taken, no delta) and with `band` renamed; `verbs-io-board` (which requires `radioHardwareVersion` 7) invokes `requestIoBoardI2c` and `setIoBoardOutput`, each refused on the static station, which has no radio connection to reach the I2C bus through ("The radio is not connected, so its I2C bus cannot be reached."), and each with one argument renamed. A version's new verbs go in a fixture of their own, so an app at the older version still runs the older file |
 
 `tst_link_conformance_session` also checks that every verb in the
 `commands` table is invoked both ways by some fixture, and that the two

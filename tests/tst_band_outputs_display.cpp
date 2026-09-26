@@ -27,6 +27,11 @@
 // - unkeyed, two filter ranges open: 0x00 (the N2ADR receive bypass);
 // - keyed on B: 0x04 (the 60/40 m transmit low-pass).
 // A byte computed from pan 1 (20 m) would be 20 m's pins in both states.
+//
+// Remote-window parity Task 14 (R-R3-46): HL2 Options' output strip is not
+// one of these displays any more. It shows the I/O board's output register
+// read back, as mi0bot's ucOutPinsLedStripHF does (tst_hl2_options_tab,
+// tst_remote_hl2_io).
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -48,7 +53,6 @@
 #include "fakes/LoopbackTransport.h"
 #include "fakes/UpgradedCoreToken.h"
 #include "gui/setup/hardware/Hl2IoBoardTab.h"
-#include "gui/setup/hardware/Hl2OptionsTab.h"
 #include "gui/setup/hardware/OcOutputsHfTab.h"
 #include "models/Band.h"
 #include "models/RadioModel.h"
@@ -176,7 +180,6 @@ private slots:
 
         OcOutputsHfTab ocTab(&core.model, &core.oc);
         Hl2IoBoardTab ioTab(&core.model);
-        Hl2OptionsTab optionsTab(&core.model);
 
         // What a byte computed from pan 1 would show: 20 m's pins.
         QVERIFY(core.oc.maskFor(Band::Band20m, /*tx=*/false) != kReceiveBypass);
@@ -190,7 +193,6 @@ private slots:
         QCOMPARE(ocTab.currentOcByteForTest(), kReceiveBypass);
         QCOMPARE(ioTab.ocShownByteForTest(), int(kReceiveBypass));
         QCOMPARE(ioTab.ocKeyedTextForTest(), QStringLiteral("RX"));
-        QCOMPARE(optionsTab.outputBitsForTest(), kReceiveBypass);
 
         // Keyed on B: B's 40 m transmit pin.
         core.conn.setMox(true);
@@ -204,7 +206,6 @@ private slots:
         QCOMPARE(ioTab.ocByteTextForTest(), QStringLiteral("0X04"));
         QCOMPARE(ioTab.ocBandTextForTest(), QStringLiteral("band=40m"));
         QCOMPARE(ioTab.ocKeyedTextForTest(), QStringLiteral("TX"));
-        QCOMPARE(optionsTab.outputBitsForTest(), kN2adrTx40m);
 
         // Unkeyed again.
         core.conn.setMox(false);
@@ -261,7 +262,6 @@ private slots:
         model.ocMatrixMutable().setPin(Band::Band20m, 0, /*tx=*/false, true);
         OcOutputsHfTab ocTab(&model, &model.ocMatrixMutable());
         Hl2IoBoardTab ioTab(&model);
-        Hl2OptionsTab optionsTab(&model);
 
         // Nothing composed yet: nothing lit, whatever the matrix says.
         QVERIFY(!model.bandOutputsKnown());
@@ -273,7 +273,6 @@ private slots:
         QCOMPARE(ocTab.currentOcByteForTest(), quint8(0x52));
         QCOMPARE(ioTab.ocShownByteForTest(), 0x52);
         QCOMPARE(ioTab.ocBandTextForTest(), QStringLiteral("band=17m"));
-        QCOMPARE(optionsTab.outputBitsForTest(), quint8(0x52));
 
         // A matrix edit or a MOX change on its own changes nothing shown:
         // only the connection's next report does.
@@ -309,7 +308,6 @@ private slots:
         applyN2adrPreset(remote.ocMatrixMutable(), true);
         OcOutputsHfTab ocTab(&remote, &remote.ocMatrixMutable());
         Hl2IoBoardTab ioTab(&remote);
-        Hl2OptionsTab optionsTab(&remote);
         QCOMPARE(ioTab.ocShownByteForTest(), -1);
 
         core.send();   // unkeyed, before the window connects
@@ -328,7 +326,6 @@ private slots:
         QCOMPARE(ocTab.currentOcByteForTest(), kReceiveBypass);
         QCOMPARE(ioTab.ocShownByteForTest(), int(kReceiveBypass));
         QCOMPARE(ioTab.ocKeyedTextForTest(), QStringLiteral("RX"));
-        QCOMPARE(optionsTab.outputBitsForTest(), kReceiveBypass);
 
         // Keyed on B at the Core: the window shows B's 40 m transmit pin.
         core.conn.setMox(true);
@@ -340,7 +337,6 @@ private slots:
         QCOMPARE(ioTab.ocShownByteForTest(), int(kN2adrTx40m));
         QCOMPARE(ioTab.ocBandTextForTest(), QStringLiteral("band=40m"));
         QCOMPARE(ioTab.ocKeyedTextForTest(), QStringLiteral("TX"));
-        QCOMPARE(optionsTab.outputBitsForTest(), kN2adrTx40m);
 
         // Unkeyed again.
         core.conn.setMox(false);

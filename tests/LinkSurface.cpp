@@ -68,6 +68,9 @@
 //   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06: the clarity-retune
 //                                    media operation. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Remote-window parity Task 14 (R-R3-32):
+//                                    stationTelemetryVersion 5, the HL2 link.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "LinkSurface.h"
@@ -659,7 +662,8 @@ QJsonObject captureSettingsScope()
 // ── telemetry ────────────────────────────────────────────────────────────
 
 // Version 1: radio and audio. 2: adds host. 3: adds receivers. 4: adds the
-// radio's PA readings and link quality in the radio section
+// radio's PA readings and link quality in the radio section; 5 the Core's
+// HL2 link (hl2*, remote-window parity Task 14)
 // (StationCapabilities.h stationTelemetryVersion; StationServer::
 // sendTelemetry strips host below kCoreHostTelemetrySessionProtocolMinor and
 // receivers below kReceiverLoadSessionProtocolMinor). Every optional field
@@ -710,6 +714,12 @@ StationTelemetrySnapshot sampleTelemetry(int version)
         s.radio.sampleRateHz = 1;
         s.radio.udpPacketsSeen = 1;
     }
+    if (version >= 5) {
+        s.radio.hl2RxBytesPerSecond = 1.0;
+        s.radio.hl2TxBytesPerSecond = 1.0;
+        s.radio.hl2Throttled = false;
+        s.radio.hl2SequenceGaps = 1;
+    }
     return s;
 }
 
@@ -735,13 +745,15 @@ void flattenPaths(const QString& prefix, const QJsonValue& value, QStringList* o
 
 QJsonObject captureTelemetry()
 {
-    // Version 4 (remote-window parity Task 6) needs minor 11, as 3 does.
+    // Version 4 (remote-window parity Task 6) and 5 (Task 14) need minor
+    // 11, as 3 does.
     const quint16 minors[] = {kStationTelemetrySessionProtocolMinor,
                               kCoreHostTelemetrySessionProtocolMinor,
                               kReceiverLoadSessionProtocolMinor,
+                              kReceiverLoadSessionProtocolMinor,
                               kReceiverLoadSessionProtocolMinor};
     QJsonArray versions;
-    for (int version = 1; version <= 4; ++version) {
+    for (int version = 1; version <= 5; ++version) {
         const std::optional<QJsonObject> payload =
             StationTelemetryCodec::encode(sampleTelemetry(version));
         QStringList paths;

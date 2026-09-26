@@ -24,6 +24,10 @@
 //                 the Core; they are disabled while it does not have them.
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-26 - R-R3-32 (remote-window parity Task 14): Connection
+//                 Quality's Live Counters title says "from the Core" in a
+//                 remote window. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -55,6 +59,8 @@ private:
     QLabel*     m_throttleLabel{nullptr};
     QLabel*     m_seqGapLabel{nullptr};
     QLabel*     m_historyPlaceholder{nullptr};
+    // R-R3-32 (parity Task 14): says "from the Core" in a remote window.
+    QGroupBox*  m_liveGroup{nullptr};
 
     void buildUI();
 };

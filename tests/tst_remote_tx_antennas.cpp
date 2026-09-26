@@ -209,7 +209,7 @@ private slots:
         QVERIFY(connect && connect->isEnabled());
         connect->trigger();
         QTRY_VERIFY_WITH_TIMEOUT(h.client()->isHandshakeComplete(), 10000);
-        QCOMPARE(h.client()->capabilities().radioHardwareVersion, 6);
+        QCOMPARE(h.client()->capabilities().radioHardwareVersion, 7);
         QVERIFY(h.client()->remoteTransmitAntennasAvailable());
         // The Core does not offer remote transmit; these do not need it.
         QVERIFY(!h.client()->capabilities().txPermitted);

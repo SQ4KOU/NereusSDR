@@ -9,6 +9,7 @@
 
 #include "core/AppSettings.h"
 #include "core/Hl2OptionsModel.h"
+#include "core/IoBoardHl2.h"
 #include "gui/setup/hardware/Hl2OptionsTab.h"
 #include "models/RadioModel.h"
 
@@ -160,17 +161,21 @@ private slots:
         QCOMPARE(tab.txLatencyMsForTest(), 33);
     }
 
-    // I/O Pin State output strip starts blank; the byte the connection
-    // composed (RadioModel::bandOutputsByte, plan Task 14 fix wave) updates
-    // the visible bits, locally and in a remote window.
-    void output_strip_reflects_the_composed_oc_byte()
+    // I/O Pin State output strip starts blank and shows the I/O board's
+    // output register (169) as read back, as mi0bot's ucOutPinsLedStripHF
+    // shows it (remote-window parity Task 14); the band output byte the
+    // radio is sent is the HL2 I/O tab's OC strip, not this one.
+    void output_strip_reflects_the_output_register()
     {
         RadioModel model;
         Hl2OptionsTab tab(&model);
         QCOMPARE(tab.outputBitsForTest(), quint8(0));
 
         model.reportBandOutputsForTest(/*ocByte=*/0x42, /*band=*/3, /*keyed=*/false);
-        QCOMPARE(tab.outputBitsForTest(), quint8(0x42));
+        QCOMPARE(tab.outputBitsForTest(), quint8(0));
+
+        model.ioBoardMutable().setRegisterValue(IoBoardHl2::Register::REG_OUT_PINS, 0x21);
+        QCOMPARE(tab.outputBitsForTest(), quint8(0x21));
     }
 
     // Write button stays disabled until BOTH chkI2CEnable and write-enable

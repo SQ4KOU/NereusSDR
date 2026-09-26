@@ -187,6 +187,11 @@
 //                mode (I3), rxOnlyReasonAlongside and
 //                transmitBlockReasonAlongside (M6, M2). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-R3-46 / R-R3-32 (parity Task 14): requestIoBoardI2c,
+//                setIoBoardOutput, refreshIoBoardOutputs (HL2 Options' I2C
+//                tool and Pin Control, local and through the Core), and
+//                hl2LinkFigures / applyCoreHl2LinkFigures. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1952,6 +1957,75 @@ public:
         QString reason;
     };
     IoBoardProbeOutcome requestIoBoardProbe();
+
+    /// Remote-window parity Task 14 (R-R3-46, radioHardwareVersion 7): HL2
+    /// Options' I2C Control tool. One read or write on the radio's I2C bus
+    /// (bus 1, the HL2's daughterboard bus; address 0 to 0x7F; register and
+    /// write value 0 to 255). Locally the transaction joins the I/O board's
+    /// queue, which the HL2's P1 connection sends one per C&C frame; a
+    /// remote window asks the Core (requestIoBoardI2c), which does the
+    /// same. `done` is called exactly once, perhaps before this returns:
+    /// a read with `ok` true and the four bytes the radio returned in
+    /// `value` (C1 << 24 | C2 << 16 | C3 << 8 | C4, so the register's own
+    /// byte is value & 0xFF), or false with ioBoardNoAnswerReason() once
+    /// kIoBoardI2cAnswerMs pass after the read went out unanswered; a write
+    /// with `ok` true once it is queued. A write is refused while the radio
+    /// is on the air (onAirReason()), a read is not.
+    struct IoBoardI2cRequest {
+        int bus = 1;
+        int address = 0;
+        int reg = 0;
+        bool write = false;
+        int value = 0;
+    };
+    using IoBoardI2cDone =
+        std::function<void(bool ok, qint64 value, const QString& reason)>;
+    void requestIoBoardI2c(const IoBoardI2cRequest& request, IoBoardI2cDone done);
+    /// Parity Task 14: Pin Control on HL2 Options. Sets output `pin` (0 to
+    /// 7) of the I/O board on or off (the output register, 169), then reads
+    /// the register back into `outputs`, as mi0bot's strip click does.
+    /// Needs the board detected; refused on the air. A remote window asks
+    /// the Core (setIoBoardOutput). `done(ok, 0, reason)` is called once.
+    void setIoBoardOutput(int pin, bool on, IoBoardI2cDone done);
+    /// Parity Task 14: read the I/O board's output register back, as
+    /// mi0bot does when HL2 Options is entered. Needs the board detected;
+    /// nothing is reported (the answer lands in the register mirror and
+    /// `ioBoard`'s outputs).
+    void refreshIoBoardOutputs();
+    /// The words for an I2C read the radio did not answer in time.
+    static QString ioBoardNoAnswerReason();
+    /// mi0bot gives an I2C read 20 one-millisecond polls after its first
+    /// to be answered (setup.cs btnI2CRead_MouseDown [@c26a8a4]).
+    static constexpr int kIoBoardI2cAnswerMs = 21;
+    /// Remote window: the Core answered requestIoBoardI2c or
+    /// setIoBoardOutput `commandId` (`value` the read's bytes, when sent).
+    void reportStationIoBoardResult(quint32 commandId, bool accepted, const QString& reason,
+                                    std::optional<qint64> value);
+    /// Remote window: the link closed; every request still waiting on the
+    /// Core is answered with `reason`.
+    void failStationIoBoardRequests(const QString& reason);
+
+    /// R-R3-32 (parity Task 14): the Hermes Lite 2 link, the one source the
+    /// HL2 I/O tab's bandwidth monitor, Radio Status's Connection Quality
+    /// card and Diagnostics > Connection Quality read. A local window reads
+    /// its own bandwidth monitor (bwMonitor()); a remote window holds the
+    /// Core's (applyCoreHl2LinkFigures, from station telemetry version 5),
+    /// each absent when the Core's radio has no monitor or the Core's
+    /// telemetry is out of date. The throttle event count is this window's
+    /// own monitor's: the Core does not send it.
+    struct Hl2LinkFigures {
+        std::optional<double> rxBytesPerSecond;
+        std::optional<double> txBytesPerSecond;
+        std::optional<bool> throttled;
+        std::optional<qint64> sequenceGaps;
+        std::optional<int> throttleEvents;
+        bool operator==(const Hl2LinkFigures&) const = default;
+    };
+    Hl2LinkFigures hl2LinkFigures() const;
+    /// True in a remote window, whose HL2 link figures come from the Core.
+    bool hl2LinkFiguresFromCore() const { return m_role == Role::Remote; }
+    /// Remote window only: the Core's latest figures, or all absent.
+    void applyCoreHl2LinkFigures(const Hl2LinkFigures& figures);
     NoiseFloorTracker* noiseFloorTracker() const { return m_noiseFloorTracker; }
     void setNoiseFloorTracker(NoiseFloorTracker* t) { m_noiseFloorTracker = t; }
 
@@ -6199,6 +6273,27 @@ private:
     // and in a local one whether a telemetry sample has reported the PA
     // current and the PA temperature since connect.
     PaReadings m_corePaReadings;
+    // R-R3-32 (parity Task 14): the Core's HL2 link in a remote window.
+    Hl2LinkFigures m_coreHl2LinkFigures;
+    // R-R3-46 (parity Task 14): HL2 Options' I2C reads waiting on the
+    // radio (local: the Core's own and a local window's), and a remote
+    // window's I2C and output pin requests waiting on the Core.
+    struct PendingIoBoardRead {
+        quint64 id = 0;
+        quint8 address = 0;
+        quint8 reg = 0;
+        bool sent = false;
+        IoBoardI2cDone done;
+    };
+    QList<PendingIoBoardRead> m_pendingIoBoardReads;
+    quint64 m_nextIoBoardReadId{1};
+    bool m_ioBoardToolWired{false};
+    QHash<quint32, IoBoardI2cDone> m_stationIoBoardRequests;
+    // Why an I2C transaction cannot reach the radio now, or empty.
+    QString ioBoardI2cUnreachableReason() const;
+    void wireIoBoardTool();
+    void enqueueIoBoardTxn(quint8 address, quint8 reg, bool write, quint8 value);
+    void finishIoBoardRead(quint64 id, bool ok, qint64 value, const QString& reason);
     bool m_paCurrentReported{false};
     bool m_paTemperatureReported{false};
     // R-R3-46 (parity Task 6): the remote window's PA reload.

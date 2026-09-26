@@ -26,6 +26,18 @@
 //                 buffer latency and PTT hang rows are hidden until built
 //                 (UnbuiltFeatures). J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-26 - R-R3-46 (remote-window parity Task 14): Read, Write and
+//                 Pin Control go through RadioModel (requestIoBoardI2c,
+//                 setIoBoardOutput), so a remote window reaches the Core's
+//                 radio; the output strip shows the output register read
+//                 back; a write and Pin Control close while the radio is on
+//                 the air. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
+//   2026-09-26 - Parity Task 14 follow-up (R-R3-46): the four read-response
+//                 boxes follow mi0bot's txtI2CByte3..txtI2CByte0 (C1 at the
+//                 register + 3 on the left, C4 at the register on the right)
+//                 with its per-box tooltips. J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 //
 //=================================================================
@@ -83,7 +95,9 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QLoggingCategory>
+#include <QPointer>
 #include <QPushButton>
+#include <QShowEvent>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QVBoxLayout>
@@ -150,18 +164,29 @@ Hl2OptionsTab::Hl2OptionsTab(RadioModel* model, QWidget* parent)
         syncFromModel();
     }
 
-    // ── Live OC byte → output strip indicator ─────────────────────────────
-    // The output strip on this tab mirrors the same OC bank-0 byte the
-    // status-bar strip on Hl2IoBoardTab shows. Plan Task 14 fix wave
-    // (R-R3-49): both show the byte the connection composed, from the model
-    // (RadioModel::bandOutputsByte, the Core's in a remote window).
-    if (m_model) {
-        connect(m_model, &RadioModel::bandOutputsChanged,
-                this, &Hl2OptionsTab::onBandOutputsChanged);
-        connect(m_model, &RadioModel::connectionStateChanged,
-                this, &Hl2OptionsTab::onBandOutputsChanged);
-        onBandOutputsChanged();
+    // ── Output register → output strip ────────────────────────────────────
+    // R-R3-46 (remote-window parity Task 14): the strip shows the I/O
+    // board's output register (169) as last read back, as mi0bot's
+    // ucOutPinsLedStripHF shows read_data[3] of that read
+    // (setup.cs:30006-30036 [@c26a8a4]). In a remote window the Core's
+    // `ioBoard` outputs are written into this model's board
+    // (IoBoardHl2Facade). The HL2 I/O tab's OC strip still shows the band
+    // output byte the radio is sent.
+    if (m_ioBoard) {
+        connect(m_ioBoard, &IoBoardHl2::registerChanged, this,
+                [this](IoBoardHl2::Register reg, quint8) {
+                    if (reg == IoBoardHl2::Register::REG_OUT_PINS) {
+                        onOutputsChanged();
+                    }
+                });
+        onOutputsChanged();
     }
+    // A write and Pin Control close while the radio is on the air, in a
+    // local window and a remote one alike.
+    if (m_model) {
+        connect(m_model, &RadioModel::coreOnAirChanged, this, [this](bool) { applyIoGates(); });
+    }
+    applyIoGates();
 }
 
 Hl2OptionsTab::~Hl2OptionsTab() = default;
@@ -362,26 +387,35 @@ void Hl2OptionsTab::buildI2cControl(QWidget* parent)
     grid->addWidget(m_chkI2cWriteEnable, row, 2, 1, 2);
     ++row;
 
-    // Read response display — 4 hex bytes.
+    // Read response display: 4 hex bytes, laid out as mi0bot lays them out.
+    // From mi0bot setup.designer.cs [@c26a8a4] (txtI2CByte0..3 Location and
+    // toolTip1.SetToolTip): left to right txtI2CByte3 (x 153, "Data at
+    // address+3"), txtI2CByte2 (x 184, +2), txtI2CByte1 (x 215, +1) and
+    // txtI2CByte0 (x 246, "Data at address"). btnI2CRead_MouseDown
+    // (setup.cs:21486-21489) fills byte0 from read_data[3] (C4) through
+    // byte3 from read_data[0] (C1), so the boxes read C1..C4 left to right,
+    // the register itself on the right. "address" in mi0bot's tooltips is
+    // the register chosen in Reg/Ctrl, so the tooltips name that control.
     grid->addWidget(new QLabel(tr("Read response:"), parent), row, 0);
     auto* respRow = new QHBoxLayout();
-    auto makeByteLbl = [parent]() {
+    auto makeByteLbl = [parent](const QString& tip) {
         auto* lbl = new QLabel(QStringLiteral("--"), parent);
         lbl->setFixedWidth(28);
         lbl->setAlignment(Qt::AlignCenter);
         lbl->setStyleSheet(QStringLiteral(
             "QLabel { background: white; color: black; "
             "font-family: monospace; border: 1px solid #555; padding: 2px; }"));
+        lbl->setToolTip(tip);
         return lbl;
     };
-    m_byte0Label = makeByteLbl();
-    m_byte1Label = makeByteLbl();
-    m_byte2Label = makeByteLbl();
-    m_byte3Label = makeByteLbl();
-    respRow->addWidget(m_byte0Label);
-    respRow->addWidget(m_byte1Label);
-    respRow->addWidget(m_byte2Label);
+    m_byte3Label = makeByteLbl(tr("Data at Reg/Ctrl + 3"));
+    m_byte2Label = makeByteLbl(tr("Data at Reg/Ctrl + 2"));
+    m_byte1Label = makeByteLbl(tr("Data at Reg/Ctrl + 1"));
+    m_byte0Label = makeByteLbl(tr("Data at Reg/Ctrl"));
     respRow->addWidget(m_byte3Label);
+    respRow->addWidget(m_byte2Label);
+    respRow->addWidget(m_byte1Label);
+    respRow->addWidget(m_byte0Label);
     respRow->addStretch();
     auto* respWrap = new QWidget(parent);
     respWrap->setLayout(respRow);
@@ -393,6 +427,14 @@ void Hl2OptionsTab::buildI2cControl(QWidget* parent)
     m_btnWrite = new QPushButton(tr("Write"), parent);
     grid->addWidget(m_btnRead,  row, 1);
     grid->addWidget(m_btnWrite, row, 2);
+    ++row;
+
+    // R-R3-46 (parity Task 14): why the last request was not done.
+    m_i2cStatusLabel = new QLabel(parent);
+    m_i2cStatusLabel->setObjectName(QStringLiteral("hl2I2cStatus"));
+    m_i2cStatusLabel->setWordWrap(true);
+    m_i2cStatusLabel->hide();
+    grid->addWidget(m_i2cStatusLabel, row, 0, 1, 4);
     ++row;
 
     grid->setRowStretch(row, 1);
@@ -414,21 +456,8 @@ void Hl2OptionsTab::buildI2cControl(QWidget* parent)
     connect(m_chkI2cWriteEnable, &QCheckBox::toggled,
             this, &Hl2OptionsTab::syncI2cWriteButtonEnabled);
 
-    // Push read responses into the byte labels as they arrive.
-    if (m_ioBoard) {
-        connect(m_ioBoard, &IoBoardHl2::i2cReadResponseReceived, this,
-                [this](quint8 /*retAddr*/, quint8 /*retSubAddr*/,
-                       quint8 b0, quint8 b1, quint8 b2, quint8 b3) {
-                    auto fmt = [](quint8 v) {
-                        return QStringLiteral("%1").arg(v, 2, 16, QLatin1Char('0'))
-                                                   .toUpper();
-                    };
-                    if (m_byte0Label) { m_byte0Label->setText(fmt(b0)); }
-                    if (m_byte1Label) { m_byte1Label->setText(fmt(b1)); }
-                    if (m_byte2Label) { m_byte2Label->setText(fmt(b2)); }
-                    if (m_byte3Label) { m_byte3Label->setText(fmt(b3)); }
-                });
-    }
+    // The byte labels show this tool's own read's answer (onI2cReadClicked),
+    // from this window's radio or, in a remote window, the Core's.
 
     onI2cEnableToggled(false);  // start disabled
 }
@@ -472,9 +501,7 @@ void Hl2OptionsTab::buildIoPinState(QWidget* parent)
 
     col->addStretch();
 
-    connect(m_chkPinControl, &QCheckBox::toggled, this, [this](bool on) {
-        if (m_outputStrip) { m_outputStrip->setInteractive(on); }
-    });
+    connect(m_chkPinControl, &QCheckBox::toggled, this, [this](bool) { applyIoGates(); });
     connect(m_outputStrip, &OcLedStripWidget::pinClicked,
             this, &Hl2OptionsTab::onOutputPinClicked);
 }
@@ -510,91 +537,138 @@ void Hl2OptionsTab::syncFromModel()
 
 // ── I2C Control slots ──────────────────────────────────────────────────────
 
-void Hl2OptionsTab::onI2cEnableToggled(bool on)
+void Hl2OptionsTab::onI2cEnableToggled(bool /*on*/)
 {
-    if (m_udI2cAddress)    { m_udI2cAddress->setEnabled(on); }
-    if (m_udI2cRegister)   { m_udI2cRegister->setEnabled(on); }
-    if (m_udI2cWriteData)  { m_udI2cWriteData->setEnabled(on); }
-    if (m_chkI2cWriteEnable) { m_chkI2cWriteEnable->setEnabled(on); }
-    if (m_btnRead)         { m_btnRead->setEnabled(on); }
-    // Write button is gated by both checkboxes — route through the helper
-    // so the build-time chkI2cWriteEnable toggle wire and this enable
-    // toggle both end up at the same place.
-    syncI2cWriteButtonEnabled();
+    applyIoGates();
 }
 
 void Hl2OptionsTab::syncI2cWriteButtonEnabled()
 {
-    if (!m_btnWrite) { return; }
+    applyIoGates();
+}
+
+void Hl2OptionsTab::setIoBoardControlAvailable(bool available, const QString& reason)
+{
+    m_ioAvailable = available;
+    m_ioUnavailableReason = available ? QString() : reason;
+    applyIoGates();
+}
+
+void Hl2OptionsTab::applyIoGates()
+{
+    // The tool's own gates: I2C Enable opens the group, Write enable the
+    // Write button. On top: the Core's offer (a remote window), then the
+    // on-air rule for what writes to the board (parity Task 14).
     const bool i2cOn = m_chkI2cEnable && m_chkI2cEnable->isChecked();
     const bool writeOn = m_chkI2cWriteEnable && m_chkI2cWriteEnable->isChecked();
-    m_btnWrite->setEnabled(i2cOn && writeOn);
+    const bool onAir = m_model != nullptr && m_model->isCoreOnAir();
+    const QString writeReason = !m_ioAvailable ? m_ioUnavailableReason
+                                               : RadioModel::onAirReason();
+    const bool writesOpen = m_ioAvailable && !onAir;
+    for (QWidget* w : std::initializer_list<QWidget*>{
+             m_udI2cAddress, m_udI2cRegister, m_udI2cWriteData, m_chkI2cWriteEnable}) {
+        if (w) { w->setEnabled(i2cOn && m_ioAvailable); }
+    }
+    if (m_btnRead) {
+        HardwareTransmitGate::apply(m_btnRead, m_ioAvailable, m_ioUnavailableReason);
+        m_btnRead->setEnabled(i2cOn && m_ioAvailable);
+    }
+    if (m_btnWrite) {
+        HardwareTransmitGate::apply(m_btnWrite, writesOpen, writeReason);
+        m_btnWrite->setEnabled(i2cOn && writeOn && writesOpen);
+    }
+    HardwareTransmitGate::apply(m_chkPinControl, writesOpen, writeReason);
+    if (m_outputStrip) {
+        m_outputStrip->setInteractive(writesOpen && m_chkPinControl
+                                      && m_chkPinControl->isChecked());
+    }
+}
+
+void Hl2OptionsTab::showI2cStatus(const QString& text)
+{
+    if (!m_i2cStatusLabel) { return; }
+    m_i2cStatusLabel->setText(text);
+    m_i2cStatusLabel->setVisible(!text.isEmpty());
 }
 
 void Hl2OptionsTab::onI2cReadClicked()
 {
-    if (!m_ioBoard) { return; }
-    IoBoardHl2::I2cTxn txn{};
-    txn.bus           = 1;
-    txn.address       = static_cast<quint8>(m_udI2cAddress->value());
-    txn.control       = static_cast<quint8>(m_udI2cRegister->value());
-    txn.writeData     = 0;
-    txn.isRead        = true;
-    txn.needsResponse = true;
-    if (!m_ioBoard->enqueueI2c(txn)) {
-        qCWarning(lcHl2Options) << "I2C read enqueue failed (queue full)";
-    }
+    if (!m_model) { return; }
+    RadioModel::IoBoardI2cRequest request;
+    request.bus = IoBoardHl2::kI2cBusIndex;
+    request.address = m_udI2cAddress->value();
+    request.reg = m_udI2cRegister->value();
+    request.write = false;
+    showI2cStatus({});
+    const QPointer<Hl2OptionsTab> self(this);
+    m_model->requestIoBoardI2c(request, [self](bool ok, qint64 value, const QString& reason) {
+        if (!self) { return; }
+        if (!ok) {
+            self->showI2cStatus(reason);
+            return;
+        }
+        // From mi0bot setup.cs:21486-21489 [@c26a8a4]: byte0 = read_data[3]
+        // (C4, the register itself) .. byte3 = read_data[0] (C1). `value`
+        // packs C1 in its top byte and C4 in its low byte.
+        auto fmt = [value](int shift) {
+            return QStringLiteral("%1").arg((value >> shift) & 0xFF, 2, 16, QLatin1Char('0'))
+                                       .toUpper();
+        };
+        if (self->m_byte0Label) { self->m_byte0Label->setText(fmt(0)); }
+        if (self->m_byte1Label) { self->m_byte1Label->setText(fmt(8)); }
+        if (self->m_byte2Label) { self->m_byte2Label->setText(fmt(16)); }
+        if (self->m_byte3Label) { self->m_byte3Label->setText(fmt(24)); }
+    });
 }
 
 void Hl2OptionsTab::onI2cWriteClicked()
 {
-    if (!m_ioBoard) { return; }
+    if (!m_model) { return; }
     if (!m_chkI2cWriteEnable || !m_chkI2cWriteEnable->isChecked()) {
         qCWarning(lcHl2Options) << "Write blocked — write-enable not set";
         return;
     }
-    IoBoardHl2::I2cTxn txn{};
-    txn.bus           = 1;
-    txn.address       = static_cast<quint8>(m_udI2cAddress->value());
-    txn.control       = static_cast<quint8>(m_udI2cRegister->value());
-    txn.writeData     = static_cast<quint8>(m_udI2cWriteData->value());
-    txn.isRead        = false;
-    txn.needsResponse = false;
-    if (!m_ioBoard->enqueueI2c(txn)) {
-        qCWarning(lcHl2Options) << "I2C write enqueue failed (queue full)";
-    }
+    RadioModel::IoBoardI2cRequest request;
+    request.bus = IoBoardHl2::kI2cBusIndex;
+    request.address = m_udI2cAddress->value();
+    request.reg = m_udI2cRegister->value();
+    request.write = true;
+    request.value = m_udI2cWriteData->value();
+    showI2cStatus({});
+    const QPointer<Hl2OptionsTab> self(this);
+    m_model->requestIoBoardI2c(request, [self](bool ok, qint64, const QString& reason) {
+        if (self && !ok) { self->showI2cStatus(reason); }
+    });
 }
 
 void Hl2OptionsTab::onOutputPinClicked(int idx)
 {
-    if (!m_ioBoard || !m_outputStrip) { return; }
+    if (!m_model || !m_outputStrip) { return; }
     if (idx < 0 || idx > 7) { return; }
-    const quint8 newMask = m_outputStrip->bits() ^ static_cast<quint8>(1u << idx);
-    // Local visual feedback first; wire write follows.
-    m_outputStrip->setBits(newMask);
-
-    // Compose the I2C write that sets the OC output register.  Per the
-    // design doc §3.2 row 3 the target is bus 1, addr 0x1D, register 169
-    // (OC output).  No-op if no IoBoard or no HL2 connected — the txn
-    // queues but won't drain until probe/init completes.
-    IoBoardHl2::I2cTxn txn{};
-    txn.bus           = 1;
-    txn.address       = IoBoardHl2::kI2cAddrGeneral;  // 0x1D
-    txn.control       = 169;                          // OC output register
-    txn.writeData     = newMask;
-    txn.isRead        = false;
-    txn.needsResponse = false;
-    if (!m_ioBoard->enqueueI2c(txn)) {
-        qCWarning(lcHl2Options) << "Output pin toggle enqueue failed (queue full)";
-    }
+    // From mi0bot setup.cs:30039-30056 [@c26a8a4] ucOutPinsLedStripHF_MouseDown:
+    // the clicked pin toggled against the strip, then the register read
+    // back (RadioModel::setIoBoardOutput). The strip changes only when the
+    // read-back arrives.
+    const bool on = (m_outputStrip->bits() & (1u << idx)) == 0;
+    showI2cStatus({});
+    const QPointer<Hl2OptionsTab> self(this);
+    m_model->setIoBoardOutput(idx, on, [self](bool ok, qint64, const QString& reason) {
+        if (self && !ok) { self->showI2cStatus(reason); }
+    });
 }
 
-void Hl2OptionsTab::onBandOutputsChanged()
+void Hl2OptionsTab::onOutputsChanged()
 {
-    if (!m_outputStrip || !m_model) { return; }
-    m_outputStrip->setBits(m_model->bandOutputsKnown()
-                               ? static_cast<quint8>(m_model->bandOutputsByte())
-                               : quint8(0));
+    if (!m_outputStrip || !m_ioBoard) { return; }
+    m_outputStrip->setBits(m_ioBoard->registerValue(IoBoardHl2::Register::REG_OUT_PINS));
+}
+
+void Hl2OptionsTab::showEvent(QShowEvent* event)
+{
+    QWidget::showEvent(event);
+    if (m_model) {
+        m_model->refreshIoBoardOutputs();
+    }
 }
 
 void Hl2OptionsTab::setTransmitPermitted(bool permitted, const QString& reason)
@@ -633,6 +707,64 @@ quint8 Hl2OptionsTab::inputBitsForTest() const
 bool Hl2OptionsTab::isI2cWriteEnabledForTest() const
 {
     return m_btnWrite && m_btnWrite->isEnabled();
+}
+bool Hl2OptionsTab::isI2cReadEnabledForTest() const
+{
+    return m_btnRead && m_btnRead->isEnabled();
+}
+bool Hl2OptionsTab::isPinControlEnabledForTest() const
+{
+    return m_chkPinControl && m_chkPinControl->isEnabled();
+}
+QString Hl2OptionsTab::i2cWriteToolTipForTest() const
+{
+    return m_btnWrite ? m_btnWrite->toolTip() : QString();
+}
+QString Hl2OptionsTab::pinControlToolTipForTest() const
+{
+    return m_chkPinControl ? m_chkPinControl->toolTip() : QString();
+}
+QString Hl2OptionsTab::i2cResponseTextForTest() const
+{
+    QStringList bytes;
+    for (const QLabel* label : {m_byte3Label, m_byte2Label, m_byte1Label, m_byte0Label}) {
+        bytes << (label ? label->text() : QString());
+    }
+    return bytes.join(QLatin1Char(' '));
+}
+QStringList Hl2OptionsTab::i2cByteToolTipsForTest() const
+{
+    QStringList tips;
+    for (const QLabel* label : {m_byte3Label, m_byte2Label, m_byte1Label, m_byte0Label}) {
+        tips << (label ? label->toolTip() : QString());
+    }
+    return tips;
+}
+QString Hl2OptionsTab::i2cStatusTextForTest() const
+{
+    return m_i2cStatusLabel && !m_i2cStatusLabel->isHidden() ? m_i2cStatusLabel->text()
+                                                             : QString();
+}
+void Hl2OptionsTab::readI2cForTest(int address, int reg)
+{
+    m_chkI2cEnable->setChecked(true);
+    m_udI2cAddress->setValue(address);
+    m_udI2cRegister->setValue(reg);
+    if (m_btnRead->isEnabled()) { m_btnRead->click(); }
+}
+void Hl2OptionsTab::writeI2cForTest(int address, int reg, int data)
+{
+    m_chkI2cEnable->setChecked(true);
+    m_chkI2cWriteEnable->setChecked(true);
+    m_udI2cAddress->setValue(address);
+    m_udI2cRegister->setValue(reg);
+    m_udI2cWriteData->setValue(data);
+    if (m_btnWrite->isEnabled()) { m_btnWrite->click(); }
+}
+void Hl2OptionsTab::clickOutputPinForTest(int pin)
+{
+    m_chkPinControl->setChecked(true);
+    if (m_outputStrip->isInteractive()) { onOutputPinClicked(pin); }
 }
 #endif
 

@@ -373,6 +373,15 @@
 //                                    Task 16: a window's Receive Only change
 //                                    reaches the Core's gate. AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-32 / R-R3-49 (parity
+//                                    Task 14): radioHardwareVersion 7 (the
+//                                    I/O board's I2C tool and output pins,
+//                                    `ioBoard` outputs, and the Alex tab's
+//                                    three transmit high-pass switches from
+//                                    a window, on and off the air as in
+//                                    Thetis); stationTelemetryVersion 5 (the
+//                                    Core's HL2 link).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1003,6 +1012,34 @@ bool sameJsonObject(const QVariant& a, const QVariant& b)
     const QJsonDocument left = QJsonDocument::fromJson(a.toString().toUtf8());
     const QJsonDocument right = QJsonDocument::fromJson(b.toString().toUtf8());
     return left.isObject() && right.isObject() && left == right;
+}
+
+// R-R3-46 / R-R3-49 (parity Task 14, radioHardwareVersion 7): the Alex
+// tab's three transmit high-pass switches (HPF Bypass on TX, HPF Bypass on
+// PureSignal, Disable 6m LNA on TX), under any .../alex/master/. The Core
+// applies them to its connection at once (RadioModel::
+// applyAlexHpfSwitchSettings). A receive-only Core takes them from a peer
+// offered version 7, on the air too: Thetis's setters apply each at once
+// with no MOX check, as Task 12 found for the TX antennas.
+// From Thetis console.cs:18719-18803 [v2.10.3.15] Disable6mLNAonTX /
+//   DisableHPFonTX / DisableHPFonPS { set { ...; setAlex1HPF(freq); } }
+// Upstream inline attribution preserved verbatim (console.cs:18731):
+//   HardwareSpecific.Model == HPSDRModel.ANAN_G2_1K || HardwareSpecific.Model == HPSDRModel.REDPITAYA) //DH1KLM
+bool isAlexHpfTransmitSwitchKey(const QString& rawKey)
+{
+    const QStringList parts = rawKey.toLower().split(QLatin1Char('/'));
+    if (parts.isEmpty() || parts[0] != QLatin1String("hardware")) {
+        return false;
+    }
+    for (int i = 1; i + 2 < parts.size(); ++i) {
+        if (parts[i] == QLatin1String("alex") && parts[i + 1] == QLatin1String("master")) {
+            const QString& field = parts[i + 2];
+            return field == QLatin1String("hpfbypassontx")
+                || field == QLatin1String("hpfbypassonps")
+                || field == QLatin1String("disable6mlnaontx");
+        }
+    }
+    return false;
 }
 
 // Every settings key a receive-only Core refuses as transmit configuration.
@@ -5327,6 +5364,9 @@ bool StationServer::sendTelemetry(const StationTelemetrySnapshot& snapshot,
         // R-R3-32 (parity Task 6): and without the radio's PA readings and
         // link quality (stationTelemetryVersion 4, minor 11).
         message.telemetry.radio.clearRadioStatus();
+        // R-R3-32 (parity Task 14): and without the HL2 link
+        // (stationTelemetryVersion 5, minor 11).
+        message.telemetry.radio.clearHl2Link();
     }
     const QByteArray wire = SessionMessages::encode(message);
     if (wire.isEmpty()) { return false; }
@@ -5521,6 +5561,15 @@ bool StationServer::receiveOnlyRefusesKey(SessionTransport* transport,
         || !isReceiveOnlyRefusedKey(key)) {
         return false;
     }
+    // R-R3-46 / R-R3-49 (parity Task 14): the Alex tab's three transmit
+    // high-pass switches, from a peer offered radioHardwareVersion 7, are
+    // taken on and off the air (isAlexHpfTransmitSwitchKey).
+    if (isAlexHpfTransmitSwitchKey(key)) {
+        const auto peer = m_peers.constFind(transport);
+        return peer == m_peers.cend()
+            || peer->agreedMinor < kRadioIdentitySessionProtocolMinor
+            || radioHardwareVersion() < 7;
+    }
     // R-R3-49 (parity Task 1): a key on the off-air list, from a peer that
     // was offered it, is the on-air check's (transmitSettingOnAirRefusal).
     return !(isTransmitSettingKeyAcceptedOffAir(key) && transmitSettingsOffered(transport));
@@ -5667,7 +5716,16 @@ int StationServer::radioHardwareVersion() const
     //   console.RxOutOverride = chkDisableRXOut.Checked;
     // RadioModel sends the TX routing for an antenna change while keyed and
     // holds the relay flags for the next MOX edge (group B fix wave).
-    return m_radioModel->ioBoardFacade()->isBound() ? 6 : 2;
+    //
+    // 7 (parity Task 14): the HL2 I/O board's I2C tool
+    // (requestIoBoardI2c) and output pins (setIoBoardOutput), the board's
+    // output pins on `ioBoard` (outputs), and the Alex tab's three transmit
+    // high-pass switches taken from a window (isAlexHpfTransmitSwitchKey).
+    // An I2C write and an output pin are refused while the radio is on the
+    // air (they reach the N2ADR filter board in the transmit path); a read
+    // and the three switches are not (Thetis sets the switches with no MOX
+    // check).
+    return m_radioModel->ioBoardFacade()->isBound() ? 7 : 2;
 }
 
 StationCapabilities StationServer::buildCapabilities() const
@@ -5827,7 +5885,8 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
     caps.remoteCtunVersion = 1;
     // 4 (R-R3-32, parity Task 6): the radio section also carries the Core's
     // PA readings and radio link quality, for a peer at minor 11.
-    caps.stationTelemetryVersion = telemetry ? 4 : 0;
+    // 5 (R-R3-32, parity Task 14): and the Core's HL2 link (hl2*).
+    caps.stationTelemetryVersion = telemetry ? 5 : 0;
     caps.remoteTgxlConfigVersion = m_radioModel->stationAccessoryIdentityEnabled() ? 1 : 0;
     caps.remoteFourO3AControlVersion = m_radioModel->stationAccessoryIdentityEnabled() ? 1 : 0;
     caps.propertyResultVersion = 1;
