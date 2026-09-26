@@ -121,8 +121,6 @@ QString remoteAudioProblemText(RemoteAudioReceiver::Fault fault)
         return QStringLiteral("Audio could not be sent to the speaker device.");
     case Fault::DecoderUnavailable:
         return QStringLiteral("The audio decoder could not start on this computer.");
-    case Fault::ArrivalBurst:
-    case Fault::StreamGap:
     case Fault::NoPackets:
     case Fault::DecodeFailed:
     case Fault::ClockBuffer:
@@ -416,6 +414,7 @@ RemoteAudioLinkTrial::Verdict RemoteAudioLinkTrial::observe(
             [&](const StreamSample& sample) { return sample.stream == it->first; });
         it = sampled ? std::next(it) : m_streams.erase(it);
     }
+    bool interrupted = false;
     for (const StreamSample& sample : streams) {
         const RemoteAudioReceiverTelemetry& playback = sample.playback;
         if (!playback.running) {
@@ -430,7 +429,8 @@ RemoteAudioLinkTrial::Verdict RemoteAudioLinkTrial::observe(
         }
         const Counters now{playback.expectedPackets, playback.missingPackets,
                            playback.concealedPackets,
-                           playback.decodedPackets + playback.concealedPackets};
+                           playback.decodedPackets + playback.concealedPackets,
+                           playback.linkInterruptions};
         const auto grow = [](quint64 value, quint64 base) {
             return value > base ? value - base : 0;
         };
@@ -438,7 +438,13 @@ RemoteAudioLinkTrial::Verdict RemoteAudioLinkTrial::observe(
         m_window.missing += grow(now.missing, stream.base.missing);
         m_window.concealed += grow(now.concealed, stream.base.concealed);
         m_window.played += grow(now.played, stream.base.played);
+        // R-R3-21: a burst, gap or stall ridden through since the last
+        // sample counts as the restart it used to cause.
+        interrupted = interrupted || grow(now.interruptions, stream.base.interruptions) > 0;
         stream.base = now;
+    }
+    if (interrupted && noteInterruption(nowMs) == Verdict::Failed) {
+        return Verdict::Failed;
     }
     if (nowMs - m_windowStartMs < kWindowMs) {
         return Verdict::Continue;
@@ -469,17 +475,13 @@ RemoteAudioLinkTrial::Verdict RemoteAudioLinkTrial::noteInterruption(qint64 nowM
     if (!m_active) {
         return Verdict::Continue;
     }
-    if (m_closedWindows == 0) {
-        m_interruptions.push_back(nowMs);
-        return int(m_interruptions.size()) >= kTrialRestartLimit ? Verdict::Failed
-                                                                 : Verdict::Continue;
-    }
     while (!m_interruptions.empty() && nowMs - m_interruptions.front() >= kRestartSpanMs) {
         m_interruptions.pop_front();
     }
     m_interruptions.push_back(nowMs);
-    return int(m_interruptions.size()) >= kSustainedRestartLimit ? Verdict::Failed
-                                                                 : Verdict::Continue;
+    const int limit = m_closedWindows == 0 ? kTrialRestartLimit : kSustainedRestartLimit;
+    m_failedOnInterruptions = int(m_interruptions.size()) >= limit;
+    return m_failedOnInterruptions ? Verdict::Failed : Verdict::Continue;
 }
 
 } // namespace NereusSDR

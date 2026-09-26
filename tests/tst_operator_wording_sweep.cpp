@@ -458,7 +458,7 @@ private slots:
         for (Fault fault : {Fault::SpeakerOpenFailed, Fault::SpeakerTimingUnavailable,
                             Fault::SpeakerCallbackTooLarge, Fault::SpeakerStalled,
                             Fault::SpeakerWriteFailed, Fault::DecoderUnavailable,
-                            Fault::ArrivalBurst, Fault::StreamGap, Fault::NoPackets,
+                            Fault::NoPackets,
                             Fault::DecodeFailed, Fault::ClockBuffer}) {
             QVERIFY(OperatorWording::isPlain(remoteAudioProblemText(fault)));
         }

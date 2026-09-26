@@ -104,9 +104,9 @@ constexpr std::size_t kMaxPendingClockProbes = 8;
 // counts. Speaker, decoder and clock faults are this computer's own.
 bool linkInterruption(RemoteAudioReceiver::Fault fault)
 {
-    return fault == RemoteAudioReceiver::Fault::ArrivalBurst
-        || fault == RemoteAudioReceiver::Fault::StreamGap
-        || fault == RemoteAudioReceiver::Fault::NoPackets;
+    // R-R3-21: bursts, gaps and stalls no longer restart; the link trial
+    // reads them from the receiver's linkInterruptions instead.
+    return fault == RemoteAudioReceiver::Fault::NoPackets;
 }
 
 RemoteAudioProfile storedAudioProfileChoice()
@@ -1078,6 +1078,7 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
         // mix starts on the device as it is now.
         d->headphones->stop();
         d->headphonesFaulted = false;
+        d->headphonesRestartBackoff.reset(); // R-R3-21: a new device starts over
         if (d->headphonesProblem != QLatin1String(kHeadphonesMixUnavailableReason)
             && d->headphonesProblem != QLatin1String(kHeadphonesCoreCouldNotStart)) {
             setHeadphonesProblem(QString());
@@ -1558,9 +1559,11 @@ void RemoteMediaController::checkLosslessLink()
     }
     if (d->linkTrial.observe(d->clock.elapsed(), samples)
         == RemoteAudioLinkTrial::Verdict::Failed) {
-        fallBackToOpus(QStringLiteral("%1% of lossless packets lost or filled in over %2 s")
-            .arg(100.0 * d->linkTrial.lastWindowLoss().value_or(0.0), 0, 'f', 1)
-            .arg(RemoteAudioLinkTrial::kWindowMs / 1000));
+        fallBackToOpus(d->linkTrial.failedOnInterruptions()
+            ? QStringLiteral("the link stalled or burst while lossless audio played")
+            : QStringLiteral("%1% of lossless packets lost or filled in over %2 s")
+                  .arg(100.0 * d->linkTrial.lastWindowLoss().value_or(0.0), 0, 'f', 1)
+                  .arg(RemoteAudioLinkTrial::kWindowMs / 1000));
     }
 }
 
@@ -1612,8 +1615,6 @@ QString RemoteMediaController::headphonesFaultText(RemoteAudioReceiver::Fault fa
     case Fault::DecoderUnavailable:
         return QStringLiteral("The audio decoder for the headphones could not start on "
                               "this computer. Choosing the audio quality again tries once more.");
-    case Fault::ArrivalBurst:
-    case Fault::StreamGap:
     case Fault::NoPackets:
     case Fault::DecodeFailed:
     case Fault::ClockBuffer:
@@ -1960,6 +1961,8 @@ void RemoteMediaController::onHeadphonesError(const QString& reason,
 void RemoteMediaController::retryAudio()
 {
     if (!d->peer || !d->model || d->model->audioEngine()->masterMuted()) { return; }
+    // R-R3-21: the operator asked again: the backoff starts over.
+    d->audioRestartBackoff.reset();
     requestAudio();
 }
 

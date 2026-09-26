@@ -40,6 +40,39 @@ void AudioJitterBuffer::easeHold(qint64 nowNs)
     m_lastEaseNs = nowNs;
 }
 
+qint64 AudioJitterBuffer::queuedSpanNs() const
+{
+    if (m_packets.empty()) { return 0; }
+    return static_cast<qint64>(m_packets.rbegin()->first - m_nextIndex + 1) * m_packetDurationNs;
+}
+
+void AudioJitterBuffer::shedExcess(qint64 nowNs)
+{
+    // Only after a late packet, once the link has been quiet as long as it
+    // takes the hold to start easing: the delay a stall added (a rewind's
+    // replayed intervals, a backlog released into the rate matcher) is
+    // then no longer wanted. A context that never saw a late packet sheds
+    // nothing, so a scheduling stall's backlog still plays whole.
+    if (!m_lastLateNs || nowNs - *m_lastLateNs < kShrinkQuietNs) { return; }
+    // One whole interval at a time from the head, while the queue and the
+    // downstream excess hold more than the hold plus the reserve. The
+    // skipped intervals were never heard, so there is nothing for a late
+    // packet to find.
+    bool shed = false;
+    while (!m_packets.empty()
+           && queuedSpanNs() + m_downstreamExcessNs > m_holdNs + kShedReserveNs) {
+        const auto first = m_packets.begin();
+        if (first->first == m_nextIndex) {
+            m_packets.erase(first);
+            ++m_trimmed;
+        }
+        ++m_nextIndex;
+        m_nextTimestamp += quint32(m_packetFrames);
+        shed = true;
+    }
+    if (shed) { m_released.clear(); }
+}
+
 void AudioJitterBuffer::noteRelease(quint32 timestamp, qint64 releasedNs, bool concealed)
 {
     m_released.push_back({timestamp, releasedNs, m_holdNs, concealed});
@@ -58,25 +91,31 @@ AudioJitterBuffer::Admission AudioJitterBuffer::insert(
     const qint32 delta = std::bit_cast<qint32>(quint32(timestamp - m_nextTimestamp));
     if (delta < 0) {
         // R-R3-21: a packet whose interval was concealed arrived this much
-        // too late. Had the hold then been that much deeper (plus the
-        // margin) it would have played, so the hold grows to that. A late
-        // duplicate of a packet that did play changes nothing.
+        // too late. A late copy of a packet that did play changes nothing.
         for (auto it = m_released.rbegin(); it != m_released.rend(); ++it) {
             if (it->timestamp != timestamp) { continue; }
             if (!it->concealed || arrivalNs <= it->releasedNs) { break; }
+            if (!m_adaptive) { return Admission::LateConcealed; }
             m_lastLateNs = arrivalNs;
-            // The intervals from this one on play again, this packet first,
-            // so the stream runs `back` intervals later from here; the hold
-            // grows by at least that (and by the lateness, if more), plus
-            // the margin. When that would pass the deepest hold, the hold
-            // goes to the ceiling and the packet stays late.
+            const qint64 lateNs = arrivalNs - it->releasedNs;
+            // A rewind replays every interval released since this one, so
+            // it is in order only when all of them were concealed too.
+            const bool allConcealed = std::all_of(
+                m_released.rbegin(), std::next(it),
+                [](const Released& released) { return released.concealed; });
             const auto back = static_cast<quint64>(
                 quint32(m_nextTimestamp - timestamp) / quint32(m_packetFrames));
-            const qint64 delayNs = std::max(arrivalNs - it->releasedNs,
-                                            qint64(back) * m_packetDurationNs);
+            // Rewound, the stream runs `back` intervals later from here, so
+            // the hold grows by at least that (by the lateness, if more),
+            // plus the margin. Not rewound, only the lateness counts: had
+            // the hold been that much deeper, the packet would have played.
+            const qint64 delayNs = allConcealed
+                ? std::max(lateNs, qint64(back) * m_packetDurationNs) : lateNs;
             const qint64 needed = std::min(kMaxHoldNs, it->holdNs + delayNs + kGrowMarginNs);
             if (needed > m_holdNs) { setHold(needed); }
-            if (it->holdNs + delayNs > kMaxHoldNs || back > m_nextIndex) { break; }
+            if (!allConcealed || it->holdNs + delayNs > kMaxHoldNs || back > m_nextIndex) {
+                return Admission::LateConcealed;
+            }
             m_nextIndex -= back;
             m_nextTimestamp = timestamp;
             m_released.erase(std::prev(it.base()), m_released.end());
@@ -96,7 +135,10 @@ AudioJitterBuffer::Admission AudioJitterBuffer::insert(
 
 std::optional<AudioJitterBuffer::Playout> AudioJitterBuffer::takeReady(qint64 nowNs)
 {
-    easeHold(nowNs);
+    if (m_adaptive) {
+        easeHold(nowNs);
+        shedExcess(nowNs);
+    }
     auto first = m_packets.begin();
     std::optional<qint64> due;
     const bool present = first != m_packets.end() && first->first == m_nextIndex;
@@ -156,7 +198,9 @@ int AudioJitterBuffer::advanceToFit(quint32 timestamp)
     if (delta < 0 || delta % m_packetFrames != 0) { return 0; }
     const int ahead = delta / m_packetFrames;
     if (ahead < m_maxPackets) { return 0; }
-    const auto skip = static_cast<quint64>(ahead - (m_maxPackets - 1));
+    // Nothing queued: move to the packet itself (no run of concealment for
+    // intervals that were never coming).
+    const auto skip = static_cast<quint64>(m_packets.empty() ? ahead : ahead - (m_maxPackets - 1));
     m_nextIndex += skip;
     m_nextTimestamp += quint32(skip) * quint32(m_packetFrames);
     int dropped = 0;
@@ -164,12 +208,14 @@ int AudioJitterBuffer::advanceToFit(quint32 timestamp)
         m_packets.erase(m_packets.begin());
         ++dropped;
     }
+    m_trimmed += quint64(dropped);
     // The skipped intervals were never heard: nothing to find later.
     m_released.clear();
     return dropped;
 }
 
-std::optional<AudioJitterBuffer::Playout> AudioJitterBuffer::takeExpectedPresentEarly()
+std::optional<AudioJitterBuffer::Playout> AudioJitterBuffer::takeExpectedPresentEarly(
+    std::optional<qint64> nowNs)
 {
     auto first = m_packets.begin();
     if (first == m_packets.end() || first->first != m_nextIndex) {
@@ -187,8 +233,14 @@ std::optional<AudioJitterBuffer::Playout> AudioJitterBuffer::takeExpectedPresent
     // producer-derived due time as the empty-queue missing deadline; a queued
     // future packet retains the same anchor precedence as takeReady(). Using
     // the early wall-clock release here would silently create a local clock.
-    m_nextMissingDue = originalDue + m_packetDurationNs;
-    noteRelease(result.timestamp, originalDue, false);
+    // R-R3-21: never later than now plus the base hold. At the base hold
+    // that is the producer-derived deadline itself (a packet due at arrival
+    // plus kHoldNs cannot be taken before it arrived); only a deepened
+    // hold's far deadline is brought in, so a stall right after demand
+    // release is concealed before the rate matcher runs dry.
+    const qint64 anchor = nowNs ? std::min(originalDue, *nowNs + kHoldNs) : originalDue;
+    m_nextMissingDue = anchor + m_packetDurationNs;
+    noteRelease(result.timestamp, anchor, false);
     return result;
 }
 } // namespace NereusSDR

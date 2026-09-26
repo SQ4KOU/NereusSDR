@@ -27,7 +27,8 @@ public:
         m_streak = std::min(m_streak + 1, 3);
         return std::max<qint64>(0, stepMs - ranMs);
     }
-    /// A new media connection, or the operator asked again: start over.
+    /// Start over. The window calls it for a new media connection, for the
+    /// operator's Retry (speakers) and for a headphones device change.
     void reset() { m_streak = 0; }
     /// Restarts counted since the last reset (at most 3).
     int streak() const { return m_streak; }

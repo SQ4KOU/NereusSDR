@@ -131,10 +131,24 @@ struct RemoteAudioReceiverTelemetry {
     // their interval was concealed, and eases back while the link is
     // steady. A live gauge like reorderQueuedMs.
     std::optional<double> jitterHoldMs;
-    // R-R3-21: stream gaps and arrival bursts this context rode through by
-    // re-anchoring on this computer instead of asking the Core for a fresh
-    // context. Reset by a successful start(), kept after stop().
-    quint64 localReanchors = 0;
+    // R-R3-21: what this context rode through on this computer instead of
+    // asking the Core for a fresh context. Like the packet counters, reset
+    // by a successful start() and kept after stop().
+    // Packets dropped at the arrival bound during playback (a burst larger
+    // than the bound), one per packet; each interval is then concealed.
+    quint64 burstDroppedPackets = 0;
+    // Stream gaps: a packet beyond the jitter window moved the head to it.
+    quint64 streamGapReanchors = 0;
+    // Queued packets dropped unheard to bound the delay: those a stream
+    // gap moved past, and those shed once the link was quiet again after a
+    // stall, so the delay it added comes back down as the hold eases.
+    // This computer's latency policy, not the network's loss.
+    quint64 trimmedPackets = 0;
+    // Network interruptions, at most one a worker pass: an arrival burst,
+    // a stream gap, or packets that came after their intervals were
+    // concealed (a stall). The lossless link trial counts them as it
+    // counted the restarts they used to cause.
+    quint64 linkInterruptions = 0;
     // The continuous clock correction's current resample ratio (WDSP rmatch
     // `var`, read through RemoteAudioRateMatcherStats::currentRatio), the
     // same value restart fault text reports as `ratio=`. It is a ratio near
@@ -177,7 +191,10 @@ public:
     enum class Fault {
         SpeakerOpenFailed, SpeakerTimingUnavailable, SpeakerCallbackTooLarge,
         SpeakerStalled, SpeakerWriteFailed, DecoderUnavailable,
-        ArrivalBurst, StreamGap, NoPackets, DecodeFailed, ClockBuffer,
+        // R-R3-21: an arrival burst and a stream gap no longer end a
+        // context (they re-anchor locally and count in linkInterruptions),
+        // so they are no longer faults.
+        NoPackets, DecodeFailed, ClockBuffer,
     };
     Q_ENUM(Fault)
 
@@ -200,6 +217,9 @@ public:
     /// on its own timestamp. R-R3-21: a stream gap or an arrival burst
     /// re-anchors locally, as for the speaker; a decode failure still asks
     /// for a restart, and a decoder that cannot start is still an error.
+    /// Its hold stays fixed: a late packet is only late (no rewind and no
+    /// deeper hold), so an app hears concealment for a stall and then the
+    /// stream in place, never a pause and a burst.
     struct PcmSinkMode {
         PcmSink sink;
     };

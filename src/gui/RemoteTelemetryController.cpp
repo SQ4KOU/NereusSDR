@@ -408,7 +408,10 @@ void RemoteTelemetryController::logDiagnostics(qint64 now) const
            << QStringLiteral("speakerQueuedMs=%1").arg(logged(p.speakerQueuedMs))
            << QStringLiteral("reorderQueuedMs=%1").arg(logged(p.reorderQueuedMs))
            << QStringLiteral("jitterHoldMs=%1").arg(logged(p.jitterHoldMs))
-           << QStringLiteral("localReanchors=%1").arg(p.localReanchors)
+           << QStringLiteral("burstDroppedPackets=%1").arg(p.burstDroppedPackets)
+           << QStringLiteral("streamGapReanchors=%1").arg(p.streamGapReanchors)
+           << QStringLiteral("trimmedPackets=%1").arg(p.trimmedPackets)
+           << QStringLiteral("linkInterruptions=%1").arg(p.linkInterruptions)
            << QStringLiteral("driftRatio=%1").arg(logged(p.driftRatio, 9))
            << QStringLiteral("driftPpm=%1").arg(logged(driftPpm, 1))
            << QStringLiteral("audioDelayMs=%1").arg(logged(m_view.audioDelay.estimate
@@ -598,9 +601,9 @@ QString RemoteTelemetryController::detailText() const
         text << tr("Network buffer: %1\u00A0ms on this computer, how long arriving audio waits for late packets; it deepens after late packets and eases back when the link is steady.")
             .arg(qRound(*p.jitterHoldMs));
     }
-    if (p.localReanchors > 0) {
-        text << tr("Stream gaps and bursts ridden through without restarting the audio: %1.")
-            .arg(p.localReanchors);
+    if (p.linkInterruptions > 0 || p.trimmedPackets > 0) {
+        text << tr("Stalls, gaps and bursts ridden through without restarting the audio: %1; packets dropped at a burst: %2; audio skipped to bring the delay back down: %3 packets.")
+            .arg(p.linkInterruptions).arg(p.burstDroppedPackets).arg(p.trimmedPackets);
     }
     // R-R3-07: the receiver reports its clock correction as a ratio near
     // 1.0; shown here as (ratio - 1) x 1e6 parts per million.

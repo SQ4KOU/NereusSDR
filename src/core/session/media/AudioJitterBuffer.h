@@ -2,6 +2,7 @@
 // no-port-check: NereusSDR-original. Bounded ordering for validated audio RTP.
 #include <QByteArray>
 #include <QtGlobal>
+#include <algorithm>
 #include <deque>
 #include <map>
 #include <optional>
@@ -22,10 +23,21 @@ namespace NereusSDR {
 /// length is ridden through instead of concealed. After kShrinkQuietNs
 /// with no such packet the hold eases back by kShrinkStepNs a
 /// kShrinkIntervalNs, never below kHoldNs. The window grows and shrinks
-/// with the hold: it is always kWindowNs plus the hold's growth. The late
-/// packet itself is not thrown away: the queue rewinds to it (Rewound), so
-/// the concealment already heard becomes the added delay and the late
-/// audio plays after it, instead of a second run of concealment.
+/// with the hold: it is always kWindowNs plus the hold's growth.
+///
+/// When every interval released since the late packet's own was concealed
+/// too, the packet is not thrown away: the queue rewinds to it (Rewound),
+/// so the concealment already heard becomes the added delay and the late
+/// audio plays after it, in order. When any of them played real audio, a
+/// rewind would replay out of order, so the packet stays late
+/// (LateConcealed). Once the link has been quiet for kShrinkQuietNs after
+/// a late packet, queued audio beyond the hold plus kShedReserveNs is shed
+/// a whole interval at a time, so as the hold eases the delay the
+/// operator hears comes back down with it, to what the readout shows.
+///
+/// A fixed-hold queue (setAdaptive(false), the PCM sink's) never grows,
+/// rewinds or sheds: its consumer is paced by the hold alone, and a late
+/// packet there is only late.
 class AudioJitterBuffer {
 public:
     /// The Opus packet, the default shape.
@@ -44,14 +56,21 @@ public:
     /// A steady link: this long without a late packet before the hold
     /// eases back, by kShrinkStepNs every kShrinkIntervalNs.
     static constexpr qint64 kShrinkQuietNs = 2'000'000'000;
-    static constexpr qint64 kShrinkStepNs = 20'000'000;
+    static constexpr qint64 kShrinkStepNs = 40'000'000;
     static constexpr qint64 kShrinkIntervalNs = 1'000'000'000;
+    /// Queued audio past the hold that shedding leaves alone: a packet in
+    /// flight while arrival and release interleave.
+    static constexpr qint64 kShedReserveNs = 40'000'000;
     /// The window at the deepest hold.
     static constexpr qint64 kMaxWindowNs = kWindowNs + (kMaxHoldNs - kHoldNs);
-    /// Rewound (R-R3-21): the packet came late, after its interval was
-    /// concealed, and the queue rewound to play it next. The stream runs
-    /// that much later from here, and the hold grew to match.
-    enum class Admission { Accepted, Duplicate, Late, OutsideWindow, Invalid, Rewound };
+    /// R-R3-21. Late: behind the head (a copy of a packet that played, or
+    /// one whose interval is no longer remembered). LateConcealed: its
+    /// interval was concealed and it cannot be rewound to; an adaptive
+    /// queue grew its hold for it. Rewound: its interval was concealed, as
+    /// was every one since, and the queue rewound to play it next; the
+    /// stream runs that much later from here, and the hold grew to match.
+    enum class Admission { Accepted, Duplicate, Late, OutsideWindow, Invalid, Rewound,
+                           LateConcealed };
     struct Playout {
         QByteArray packet; // empty means one explicit missing-packet interval
         quint32 timestamp{0};
@@ -82,8 +101,11 @@ public:
     /// Releases only the exact expected packet when downstream PCM is about
     /// to underrun. Future packets never conceal a missing head through this
     /// path. Its original due time remains the empty-queue missing deadline;
-    /// the existing future-packet anchor rule is unchanged.
-    std::optional<Playout> takeExpectedPresentEarly();
+    /// the existing future-packet anchor rule is unchanged. R-R3-21: given
+    /// the time, that deadline is anchored no later than nowNs plus the
+    /// base hold, so a deepened hold cannot leave a following stall
+    /// unconcealed until the rate matcher has run dry.
+    std::optional<Playout> takeExpectedPresentEarly(std::optional<qint64> nowNs = std::nullopt);
     /// R-R3-21: conceals the expected interval now, when downstream PCM is
     /// about to underflow, the expected packet is not here and a later one
     /// is queued (a hole, whose deadline a deepened hold pushes out). An
@@ -93,9 +115,23 @@ public:
     std::optional<Playout> concealExpectedNow(qint64 nowNs);
     /// R-R3-21: a packet at `timestamp` fell outside the window. Moves the
     /// head forward just far enough for it to fit, dropping the oldest
-    /// queued packets and skipping missing intervals. Returns the packets
+    /// queued packets and skipping missing intervals; with nothing queued
+    /// the head moves to the packet itself, so no run of concealment is
+    /// made for audio that was never going to arrive. Returns the packets
     /// dropped. Nothing moves when it already fits or is behind the head.
     int advanceToFit(quint32 timestamp);
+    /// R-R3-21: false for a fixed hold (see the class comment). Default true.
+    void setAdaptive(bool adaptive) { m_adaptive = adaptive; }
+    /// Packets dropped unheard to bound the delay: by advanceToFit() and by
+    /// shedding as the hold eases. Cumulative for this queue.
+    quint64 trimmedPackets() const { return m_trimmed; }
+    /// The queued span in time: from the head to the newest queued packet.
+    qint64 queuedSpanNs() const;
+    /// R-R3-21: audio downstream (the rate matcher) holds beyond its own
+    /// working level, which shedding counts with the queued span: a
+    /// backlog released into the matcher is delay the same as one queued
+    /// here, and skipping an interval here lets the matcher drain it.
+    void setDownstreamExcessNs(qint64 excessNs) { m_downstreamExcessNs = std::max<qint64>(0, excessNs); }
     int queuedPackets() const { return static_cast<int>(m_packets.size()); }
     quint32 nextTimestamp() const { return m_nextTimestamp; }
     int packetFrames() const { return m_packetFrames; }
@@ -113,11 +149,15 @@ private:
     void noteRelease(quint32 timestamp, qint64 releasedNs, bool concealed);
     void setHold(qint64 holdNs);
     void easeHold(qint64 nowNs);
+    void shedExcess(qint64 nowNs);
     std::map<quint64, Entry> m_packets;
     std::deque<Released> m_released;
     qint64 m_holdNs{kHoldNs};
     std::optional<qint64> m_lastLateNs;
     qint64 m_lastEaseNs{0};
+    bool m_adaptive{true};
+    qint64 m_downstreamExcessNs{0};
+    quint64 m_trimmed{0};
     int m_packetFrames{kDefaultPacketFrames};
     qint64 m_packetDurationNs{kDefaultPacketDurationNs};
     int m_maxPackets{windowPackets(kDefaultPacketDurationNs)};

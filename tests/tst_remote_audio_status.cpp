@@ -110,7 +110,7 @@ std::optional<RemoteAudioContextMessage> contextOf(ContextKind kind)
 }
 
 // The receiver faults that only restart playback, never persist.
-const QList<Fault> kInterruptionFaults{Fault::ArrivalBurst, Fault::StreamGap, Fault::NoPackets,
+const QList<Fault> kInterruptionFaults{Fault::NoPackets,
                                        Fault::DecodeFailed, Fault::ClockBuffer};
 
 const QList<State> kAllStates{State::NotConnected, State::WaitingForAudio, State::MutedHere,
@@ -120,7 +120,7 @@ const QList<State> kAllStates{State::NotConnected, State::WaitingForAudio, State
 const QList<Fault> kAllFaults{Fault::SpeakerOpenFailed, Fault::SpeakerTimingUnavailable,
                               Fault::SpeakerCallbackTooLarge, Fault::SpeakerStalled,
                               Fault::SpeakerWriteFailed, Fault::DecoderUnavailable,
-                              Fault::ArrivalBurst, Fault::StreamGap, Fault::NoPackets,
+                              Fault::NoPackets,
                               Fault::DecodeFailed, Fault::ClockBuffer};
 
 // A failure recorded in session epoch 4, connection A, context 10, while
@@ -922,6 +922,51 @@ private slots:
         QCOMPARE(later.noteInterruption(100'000), Verdict::Failed);  // second within 60 s
         later.end();
         QVERIFY(!later.active());
+    }
+    // R-R3-21 (review I3): an arrival burst, a stream gap or a stall no
+    // longer restarts the receiver; it rides through and counts in
+    // linkInterruptions. The trial still counts each as an interruption
+    // (at most one a sample), so a stalling link falls back to Opus as the
+    // trial's contract says: any one in the first window, then the second
+    // within 60 s. A new receiver generation counts from zero.
+    void linkTrialCountsInterruptionsTheReceiverRodeThrough()
+    {
+        using Verdict = RemoteAudioLinkTrial::Verdict;
+        RemoteAudioReceiverTelemetry playback;
+        playback.running = true;
+        playback.generation = 1;
+        playback.expectedPackets = 250;
+        playback.decodedPackets = 250;
+
+        RemoteAudioLinkTrial first;
+        first.begin(0);
+        QCOMPARE(first.observe(1'000, playback), Verdict::Continue);
+        playback.linkInterruptions = 1;
+        QCOMPARE(first.observe(2'000, playback), Verdict::Failed);
+        QVERIFY(first.failedOnInterruptions());
+
+        RemoteAudioLinkTrial later;
+        later.begin(0);
+        playback.linkInterruptions = 0;
+        qint64 now = 0;
+        for (int second = 1; second <= 5; ++second) {
+            now = second * 1'000;
+            playback.expectedPackets = playback.decodedPackets = quint64(250 * second);
+            QCOMPARE(later.observe(now, playback), Verdict::Continue);
+        }
+        // One stall: a passing event. Several passes in one sample are one.
+        playback.linkInterruptions = 3;
+        QCOMPARE(later.observe(now += 1'000, playback), Verdict::Continue);
+        QCOMPARE(later.observe(now += 1'000, playback), Verdict::Continue); // no growth
+        // A new generation counts from zero: its lower counter is no
+        // interruption (nor a negative one).
+        playback.generation = 2;
+        playback.linkInterruptions = 0;
+        QCOMPARE(later.observe(now += 1'000, playback), Verdict::Continue);
+        // A second stall within 60 s of the first fails the link.
+        playback.linkInterruptions = 1;
+        QCOMPARE(later.observe(now += 1'000, playback), Verdict::Failed);
+        QVERIFY(later.failedOnInterruptions());
     }
     void linkTrialFollowsReceiverGenerations()
     {

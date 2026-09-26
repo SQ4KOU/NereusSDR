@@ -5458,6 +5458,60 @@ private slots:
         QVERIFY(!statusTimer->isActive());
     }
 
+    // R-R3-21 (review M5): the window's retry timer backs off. The Core's
+    // audio stops (a true outage), so each context the window asks for
+    // ends with no packets and asks again: 1 s after the first request
+    // (already past), then 2 s, then 4 s, then 4 s again, each counted from
+    // the request before. The operator's Retry starts the count over.
+    void repeatedAudioRestartsBackOff()
+    {
+        using State = RemoteAudioStatus::State;
+        Test::RemoteAudioSessionHarness h;
+        RemoteMediaController remoteMedia(&h.client, &h.remote, nullptr);
+        DaemonMediaController daemonMedia(&h.server, &h.station);
+        QElapsedTimer clock;
+        clock.start();
+        QList<qint64> requestMs;
+        connect(&h.server, &StationServer::mediaControlReceived, this,
+                [&](const QJsonObject& control) {
+            if (control.value(QStringLiteral("op")) == QLatin1String("audio")
+                && control.value(QStringLiteral("enabled")).toBool()) {
+                requestMs << clock.elapsed();
+            }
+        });
+        PacedRemoteAudio audio(h);
+        h.connectSession();
+        QTRY_COMPARE_WITH_TIMEOUT(remoteMedia.audioStatus().state, State::Playing, 15000);
+        const qsizetype before = requestMs.size();
+
+        // The Core has nothing to send from here on.
+        audio.source.stop();
+        QTRY_VERIFY_WITH_TIMEOUT(requestMs.size() >= before + 4, 15000);
+        QList<qint64> waits;
+        for (qsizetype i = before + 1; i < before + 4; ++i) {
+            waits << requestMs.at(i) - requestMs.at(i - 1);
+        }
+        const QString evidence = QStringLiteral("waits between requests: %1 ms").arg(
+            [&] { QStringList parts; for (qint64 w : waits) parts << QString::number(w);
+                  return parts.join(QStringLiteral(", ")); }());
+        qInfo().noquote() << evidence;
+        // 2 s, 4 s, 4 s, each from the request before (to within the
+        // event loop's slack).
+        QVERIFY2(std::abs(waits.at(0) - 2000) < 300, qPrintable(evidence));
+        QVERIFY2(std::abs(waits.at(1) - 4000) < 300, qPrintable(evidence));
+        QVERIFY2(std::abs(waits.at(2) - 4000) < 300, qPrintable(evidence));
+
+        // Retry starts over: the next automatic retry is 1 s out again.
+        const qsizetype beforeRetry = requestMs.size();
+        remoteMedia.retryAudio();
+        QTRY_VERIFY_WITH_TIMEOUT(requestMs.size() >= beforeRetry + 2, 5000);
+        const qint64 afterRetry = requestMs.at(beforeRetry + 1) - requestMs.at(beforeRetry);
+        QVERIFY2(std::abs(afterRetry - 1000) < 300, qPrintable(QString::number(afterRetry)));
+
+        audio.stop();
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
     // R-R3-23 (b): Retry sends a newer request, and the problem clears only
     // once the new context's receiver has made the speaker consume audio.
     void retryClearsTheProblemOnlyOnceTheNewContextPlays()
@@ -6451,7 +6505,7 @@ private slots:
         for (Fault fault : {Fault::SpeakerOpenFailed, Fault::SpeakerTimingUnavailable,
                             Fault::SpeakerCallbackTooLarge, Fault::SpeakerStalled,
                             Fault::SpeakerWriteFailed, Fault::DecoderUnavailable,
-                            Fault::ArrivalBurst, Fault::StreamGap, Fault::NoPackets,
+                            Fault::NoPackets,
                             Fault::DecodeFailed, Fault::ClockBuffer}) {
             const QString text = RemoteMediaController::headphonesFaultText(fault);
             QVERIFY(!text.isEmpty());
