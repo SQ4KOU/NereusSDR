@@ -283,6 +283,10 @@
 //                                    requestFilterResponse
 //                                    (dspInfoVersion 1).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 18 (B3.1):
+//                                    requestSelectBand (slice.selectBand,
+//                                    bandSelectVersion 1).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -722,6 +726,9 @@ public:
     CommandOutcome requestAddSliceOnPan(const QString& panId) override;
     CommandOutcome requestRemoveSlice(int sliceId) override;
     CommandOutcome requestActiveSlice(int sliceId) override;
+    // Parity Task 18 (B3.1): slice.selectBand for a named slice.
+    bool bandSelectAvailable() const override;
+    CommandOutcome requestSelectBand(int sliceId, int band) override;
     CommandOutcome requestSliceSampleRate(int sliceId, int rateHz) override;
     CommandOutcome requestStreamCtunPinned(int sliceId, bool pinned) override;
     CommandOutcome requestStreamCentre(int sliceId, double centreHz) override;

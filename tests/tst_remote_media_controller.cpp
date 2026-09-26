@@ -1621,6 +1621,117 @@ private slots:
         client.disconnectFromStation(QStringLiteral("test complete"));
     }
 
+    // Parity Task 18, B3.5 (R-R3-09): on a pan with two slices on one
+    // receiver, selecting the other slice's flag moves the pan's display to
+    // that slice without losing what the pan has drawn: the waterfall, its
+    // rewind history and the 3D stack stay, as they do in a local window.
+    void selectingTheOtherSliceOnOneReceiverKeepsThePansHistory_data()
+    {
+        QTest::addColumn<bool>("threeD");
+        QTest::addColumn<bool>("budget");
+        QTest::newRow("waterfall") << false << false;
+        QTest::newRow("3D stack") << true << false;
+        QTest::newRow("waterfall, display budget") << false << true;
+        QTest::newRow("3D stack, display budget") << true << true;
+    }
+    void selectingTheOtherSliceOnOneReceiverKeepsThePansHistory()
+    {
+        QFETCH(bool, threeD);
+        QFETCH(bool, budget);
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        station.setBoardForTest(HPSDRHW::Saturn);
+        station.configureStreamPool(5, 5, 192000);
+        station.setConnectionStateForTest(ConnectionState::Connected);
+        const int firstId = station.addSlice();
+        auto* firstSlice = station.sliceById(firstId);
+        QVERIFY(firstSlice);
+        const int stream = firstSlice->streamIndex();
+        QVERIFY(stream >= 0);
+        const double centre = station.streamCentreHz(stream);
+        const int secondId = station.addSlice();
+        auto* secondSlice = station.sliceById(secondId);
+        QVERIFY(secondSlice);
+        secondSlice->setFrequency(centre + 20000);
+        QCOMPARE(secondSlice->streamIndex(), stream);
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
+        server.setMediaEnabled(true);
+        if (budget) {
+            QVERIFY(server.setDisplayBudgetLimits({10'000'000, 10'000'000, 1}));
+        }
+        QPointer<DisplayTransport> sourceMedia;
+        DaemonMediaController daemon(&server, &station, nullptr,
+            [&sourceMedia](QObject* owner) -> IMediaTransport* {
+                sourceMedia = new DisplayTransport(owner);
+                return sourceMedia;
+            });
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        PanadapterStack stack;
+        auto* pan = stack.addPanadapter(QStringLiteral("pan"));
+        stack.setActivePan(QStringLiteral("pan"));
+        pan->addSlice(firstId);
+        pan->addSlice(secondId);
+        pan->setActiveSliceIndex(firstId);
+        auto* widget = pan->spectrumWidget();
+        widget->setDisplayWindowPreservingHistory(centre, 96000);
+        widget->setVfoFrequency(centre);
+        widget->setConnectionState(ConnectionState::Connected);
+        if (threeD) {
+            widget->setSpectrumRenderMode(static_cast<int>(SpectrumRenderMode::Mode3D));
+        }
+        stack.resize(600, 700);
+        stack.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&stack));
+        QPointer<DisplayTransport> sinkMedia;
+        RemoteMediaController gui(&client, &remote, &stack, nullptr,
+            [&sinkMedia](QObject* owner) -> IMediaTransport* {
+                sinkMedia = new DisplayTransport(owner);
+                return sinkMedia;
+            });
+        auto* stationLink = new Test::LoopbackTransport(QStringLiteral("station"));
+        auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
+        stationLink->linkTo(clientLink);
+        client.startSession(clientLink, server.token());
+        server.acceptTransport(stationLink);
+        QTRY_VERIFY(sourceMedia && sinkMedia);
+        sourceMedia->other = sinkMedia;
+        sourceMedia->activate();
+        sinkMedia->activate();
+        QTRY_VERIFY(remote.sliceById(secondId)
+            && remote.sliceById(secondId)->streamIndex() == stream);
+        QCOMPARE(client.remoteDisplayBudgetLimits().has_value(), budget);
+        QVector<float> iq(2048, 0.001f);
+        const auto feed = [&] {
+            QMetaObject::invokeMethod(&station, "rawIqDataForStream", Qt::DirectConnection,
+                Q_ARG(int, stream), Q_ARG(QVector<float>, iq));
+        };
+        const auto drawn = [&] {
+            return threeD ? widget->dssRowsPushedForTest()
+                          : widget->waterfallHistoryRowsForTest();
+        };
+        QTRY_VERIFY_WITH_TIMEOUT((feed(), drawn() >= 5), 10000);
+        const int before = drawn();
+
+        // The operator selects the other slice's flag on this pan.
+        pan->setActiveSliceIndex(secondId);
+        // The pan asks for the new slice's display; until it arrives, and
+        // once it does, nothing drawn so far is lost.
+        for (int i = 0; i < 20; ++i) {
+            QVERIFY2(drawn() >= before,
+                     qPrintable(QStringLiteral("history fell from %1 to %2")
+                                    .arg(before).arg(drawn())));
+            feed();
+            QTest::qWait(25);
+        }
+        QTRY_VERIFY_WITH_TIMEOUT((feed(), drawn() > before), 10000);
+        QVERIFY(!widget->renderedPixels().isEmpty());
+        client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
     // R-R3-19: a pan whose stream is its own still re-centres the Core on a
     // zoom, as before this hotfix; the Core always accepts that centre.
     void ctunZoomOnOwnStreamStillMovesCoreCentre()

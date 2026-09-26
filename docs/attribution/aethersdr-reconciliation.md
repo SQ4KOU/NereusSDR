@@ -1432,3 +1432,17 @@ Adaptation by J.J. Boyd / KG4VCF, with OpenAI Codex assistance.
 | `src/gui/PanadapterStack.{h,cpp}` | `src/gui/PanadapterStack.cpp:239-274,1167-1221` | Remove the floating-window registration with its pan; preserve geometry and disconnect docking. Adapt idempotent early shutdown to destroy registered and pending-retired applets before their graphics owners. Nereus retains deferred pan deletion, has no canvas/restore marker, and guards queued float/dock work by original object identity. Outgoing windows remain alive until destination rendering or widget destruction, covering Qt's retained outgoing QRhi pointer. |
 | `src/gui/SpectrumWidget.{h,cpp}` | `src/gui/SpectrumWidget.cpp:2370-2373,2397-2420` | Destructor calls idempotent shutdown; stop updates, hide and release resources. Use Nereus's GPU flag. Native destruction is restricted to child windows: destroying a standalone SpectrumWidget's own window early invalidates the QRhi still needed by its base destructor, reproduced by the remote-display test. |
 | `src/gui/MainWindow.cpp` | Integration of the stack shutdown contract above | Call `prepareShutdown()` before QMainWindow/QWidget base destruction releases the main graphics owner. |
+
+## September 26, 2026 spot left-click (remote-window parity Task 18)
+
+Source read at `1e0718ad`. AetherSDR's files have no per-file copyright
+header; the project GPLv3 attribution applies and each Nereus file records
+the project URL, the primary author, the licence, the pinned revision and
+its modification history. Adaptation by J.J. Boyd / KG4VCF, with Anthropic
+Claude Code assistance.
+
+| NereusSDR file | Upstream source | Adaptation |
+| --- | --- | --- |
+| `src/models/SpotModeResolver.{h,cpp}` | `src/core/SpotModeResolver.{h,cpp}` | A: the four resolver functions copied (namespace AetherSDR -> NereusSDR, braces added). `dspModeForSpot()` is NereusSDR's: AetherSDR's radio mode names become `DSPMode` values (CW on the sideband AetherSDR's SSB rule uses, NFM as FM) and a FreeDV spot becomes RADE on the band default's sideband, as AetherSDR picks DIGU or DIGL for RADE (`src/gui/MainWindow_DigitalModes.cpp:340-350`). |
+| `src/gui/MainWindow.cpp` | `src/gui/MainWindow_Wiring.cpp:4382-4437` | `applySpotModeToSlice()` and the per-pan `spotTriggered` connect: the auto-mode half of AetherSDR's spot click for the clicked pan's slice. The Memory branch, the TCI spot notice and the FlexRadio `spot trigger` command have no NereusSDR counterpart. |
+| `src/gui/SpotHubDialog.cpp` | `src/gui/DxClusterDialog.cpp:2375, 2452-2457` | The Display tab's Auto mode toggle (`SpotAutoSwitchMode`, on by default), in the tab's Enabled/Disabled style. |

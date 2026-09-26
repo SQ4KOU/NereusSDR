@@ -352,6 +352,11 @@
 //                blocked, before it reaches the amplifier or the tuner
 //                (M2); both reasons where two apply (M6). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - Parity Task 18 (B3.1): a remote window's band button for a
+//                named slice sends slice.selectBand to a Core at
+//                bandSelectVersion 1, so the Core changes that slice with
+//                its own band memory. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -565,6 +570,7 @@ warren@wpratt.com
 #include "RadioModel.h"
 #include "core/AmModulationAnalyzer.h"
 #include "BandDefaults.h"
+#include "BandGrid.h"
 #include "RxDspWorker.h"
 #include "core/platform/ThreadPlacement.h"
 #include "core/FFTEngine.h"
@@ -11589,6 +11595,21 @@ void RadioModel::onBandButtonClicked(SliceModel* slice, Band band)
     if (!slice) {
         // No slice (pre-connection, between-slice teardown, etc.).
         // Silent — avoids log spam from UI events firing during startup.
+        return;
+    }
+
+    // Parity Task 18 (B3.1, R-IOS-27): a remote window asks the Core to run
+    // this same band change on the named slice (slice.selectBand), so the
+    // band memory, seed and lock refusal are the Core's, as for a band
+    // button at the Core. The Core takes the band grid's bands; anything
+    // else, or a Core without the verb, keeps the path below.
+    if (m_role == Role::Remote && m_station != nullptr && m_station->bandSelectAvailable()
+        && bandGridEntry(band) != nullptr) {
+        const IStationLink::CommandOutcome outcome =
+            m_station->requestSelectBand(slice->sliceIndex(), static_cast<int>(band));
+        if (!outcome.sent) {
+            emit bandClickIgnored(band, outcome.reason);
+        }
         return;
     }
 

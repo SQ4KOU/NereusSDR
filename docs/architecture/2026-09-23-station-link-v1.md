@@ -3097,7 +3097,12 @@ These command groups need a sentence beyond the table:
   Core refuses neither. A peer below agreed minor 11 gets "Update this
   app to change bands on this Core.", and a Core that sends
   `bandSelectVersion` 0 answers "This Core cannot change bands for an
-  app."
+  app." A remote desktop window sends it too, for the slice its band
+  button belongs to (a pan's BAND flyout acts on that pan's slice, the RX
+  applet and a container on theirs), so its band changes use the Core's
+  band memory as a band button at the Core does; to a Core at
+  `bandSelectVersion` 0 it writes the slice's frequency and mode as
+  before.
 - **A notch at a slice.** `notch.addAtSlice` (`sliceId` `i64`;
   `notchControlVersion` 2, agreed minor 5) does what the desktop's +TNF
   button does for that slice: the Core puts a notch of 200 Hz

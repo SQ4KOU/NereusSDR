@@ -61,6 +61,10 @@
 //                 models/BandGrid.h, shared with the Core's catalogue; the
 //                 grid draws as before. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-26 - Parity Task 18: the Display flyout's Grid Lines toggle
+//                 reports gridVisibleChanged (it changed only its own label)
+//                 and takes the pan's state through setGridVisible. J.J.
+//                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "SpectrumOverlayPanel.h"
@@ -715,6 +719,9 @@ void SpectrumOverlayPanel::buildDisplayFlyout()
         grid->addWidget(m_showGridBtn, row, 2, 1, 2);
         connect(m_showGridBtn, &QPushButton::toggled, this, [this](bool on) {
             m_showGridBtn->setText(on ? "On" : "Off");
+            // Parity Task 18: the pan's grid follows (it changed only this
+            // label).
+            emit gridVisibleChanged(on);
         });
         ++row;
     }
@@ -1339,6 +1346,15 @@ void SpectrumOverlayPanel::repositionZoomButtons()
     y = std::max(kMargin, y);
     m_zoomStrip->move(x, y);
     m_zoomStrip->raise();
+}
+
+// Parity Task 18: show the pan's grid state without reporting it back.
+void SpectrumOverlayPanel::setGridVisible(bool on)
+{
+    if (!m_showGridBtn) { return; }
+    QSignalBlocker block(m_showGridBtn);
+    m_showGridBtn->setChecked(on);
+    m_showGridBtn->setText(on ? "On" : "Off");
 }
 
 // ── Clarity status badge (Phase 3G-9c) ───────────────────────────────────────

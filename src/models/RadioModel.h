@@ -1948,6 +1948,10 @@ public:
 
     // R-R3-21: the same, on `slice` (a container's own slice, which need
     // not be the active one). No-op if `slice` is null.
+    //
+    // Parity Task 18 (B3.1): in a remote window this sends slice.selectBand
+    // for `slice` to a Core at bandSelectVersion 1 (a grid band), and the
+    // Core runs this same function on its own slice.
     void onBandButtonClicked(SliceModel* slice, NereusSDR::Band band);
 
     // Panadapter management (client-side)

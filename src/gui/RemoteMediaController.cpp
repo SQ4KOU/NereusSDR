@@ -2128,7 +2128,8 @@ bool RemoteMediaController::sendRefusedRelease(quint32 endpointId, quint32 lastR
     return self && d->peer == peer && d->epoch == epoch && d->connectionId == connectionId;
 }
 
-bool RemoteMediaController::retireSubscriptions(const QList<quint32>& endpointIds)
+bool RemoteMediaController::retireSubscriptions(const QList<quint32>& endpointIds,
+                                                const QSet<SpectrumWidget*>& keepHistory)
 {
     const bool budgetMode = d->client && d->client->remoteDisplayBudgetLimits().has_value();
     const QPointer<RemoteMediaController> self(this);
@@ -2150,7 +2151,13 @@ bool RemoteMediaController::retireSubscriptions(const QList<quint32>& endpointId
             found->second.suspending = false;
             const QString panId = found->second.panId;
             if (widget) {
-                widget->clearRemoteSpectrum();
+                // Parity Task 18 (B3.5): another slice on the same receiver
+                // takes this pan's display; what it has drawn stays.
+                if (keepHistory.contains(widget.data())) {
+                    widget->invalidateRemoteSpectrumFrame();
+                } else {
+                    widget->clearRemoteSpectrum();
+                }
                 if (!self || !widget) { return false; }
                 widget->applyRemoteCtunState(false, false);
                 if (!self) { return false; }
@@ -2190,7 +2197,12 @@ bool RemoteMediaController::retireSubscriptions(const QList<quint32>& endpointId
         // failure can end the session and clear every binding inside send().
         d->bindings.erase(found);
         if (widget) {
-            widget->clearRemoteSpectrum();
+            // Parity Task 18 (B3.5): as above.
+            if (keepHistory.contains(widget.data())) {
+                widget->invalidateRemoteSpectrumFrame();
+            } else {
+                widget->clearRemoteSpectrum();
+            }
             if (!self || !widget) { return false; }
             widget->applyRemoteCtunState(false, false);
             if (!self) { return false; }
@@ -2261,6 +2273,9 @@ void RemoteMediaController::refreshSubscriptions()
     // first; updating them individually would reject each against its peers.
     // The reliable control stream preserves all unsubscriptions before adds.
     QHash<SpectrumWidget*, double> retainedSourceCentres;
+    // Parity Task 18 (B3.5): pans whose display moves to another slice on
+    // the same receiver keep what they have drawn.
+    QSet<SpectrumWidget*> keepHistory;
     QList<quint32> retiredEndpoints;
     for (auto it = d->bindings.begin(); it != d->bindings.end(); ++it) {
         const auto next = std::find_if(desired.cbegin(), desired.cend(),
@@ -2280,10 +2295,16 @@ void RemoteMediaController::refreshSubscriptions()
                 && item.slice->streamEpoch() == it->second.observedStreamEpoch) {
                 retainedSourceCentres.insert(item.widget, it->second.sourceCentreHz);
             }
+            if (!windowChanged && item.widget && item.widget == it->second.widget
+                && item.slice != it->second.slice
+                && item.slice->streamIndex() == it->second.observedStream
+                && item.slice->streamEpoch() == it->second.observedStreamEpoch) {
+                keepHistory.insert(item.widget.data());
+            }
         }
         retiredEndpoints.append(it->first);
     }
-    if (!retireSubscriptions(retiredEndpoints) || !current()) { return; }
+    if (!retireSubscriptions(retiredEndpoints, keepHistory) || !current()) { return; }
     for (const Desired& item : desired) {
         SpectrumWidget* widget = item.widget;
         SliceModel* slice = item.slice;
@@ -2337,7 +2358,13 @@ void RemoteMediaController::refreshSubscriptions()
                         || !d->client || !d->client->remoteCtunAvailable()) { return; }
                     requestCentreFromGesture(id, centreHz);
             });
-            widget->clearRemoteSpectrum();
+            // Parity Task 18 (B3.5): a pan taking another slice on the same
+            // receiver keeps what it has drawn.
+            if (keepHistory.contains(widget)) {
+                widget->invalidateRemoteSpectrumFrame();
+            } else {
+                widget->clearRemoteSpectrum();
+            }
             if (!current() || !widget) { return; }
             widget->applyRemoteCtunState(false, false);
             if (!current()) { return; }
@@ -2528,6 +2555,9 @@ void RemoteMediaController::refreshBudgetSubscriptions()
     }
 
     QList<quint32> obsolete;
+    // Parity Task 18 (B3.5): pans whose display moves to another slice on
+    // the same receiver keep what they have drawn.
+    QSet<SpectrumWidget*> keepHistory;
     for (const auto& [id, binding] : d->bindings) {
         if (binding.retiring || binding.suspending) { continue; }
         const auto item = std::find_if(desired.cbegin(), desired.cend(),
@@ -2536,10 +2566,20 @@ void RemoteMediaController::refreshBudgetSubscriptions()
                     && candidate.widget == binding.widget
                     && candidate.slice == binding.slice;
             });
-        if (item == desired.cend()) { obsolete.append(id); }
+        if (item == desired.cend()) {
+            obsolete.append(id);
+            for (const Desired& candidate : desired) {
+                if (candidate.widget && candidate.widget == binding.widget
+                    && candidate.slice != binding.slice
+                    && candidate.slice->streamIndex() == binding.observedStream
+                    && candidate.slice->streamEpoch() == binding.observedStreamEpoch) {
+                    keepHistory.insert(candidate.widget.data());
+                }
+            }
+        }
     }
     if (!obsolete.isEmpty()) {
-        retireSubscriptions(obsolete);
+        retireSubscriptions(obsolete, keepHistory);
         return;
     }
 

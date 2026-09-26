@@ -797,6 +797,8 @@ public:
     }
     void setTxActiveForTest(bool on) { m_txActiveForTest = on; }
     int  dssRowsPushedForTest() const { return m_dssRowsPushed; }
+    // Parity Task 18 (B3.5): the waterfall's rewind history, in rows.
+    int  waterfallHistoryRowsForTest() const { return m_wfHistoryRowCount; }
     // NoiseFloorTracker runs from live FFT frames; this seam drives
     // dssFloorDbm() directly so the floor-anchoring math is testable
     // without standing up the noise-floor pipeline.

@@ -128,6 +128,11 @@
 //                                    requestFilterResponse (dspInfoVersion
 //                                    1).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 18 (B3.1): a window's band
+//                                    buttons send slice.selectBand
+//                                    (bandSelectVersion 1) for a named
+//                                    slice. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include <QString>
@@ -177,6 +182,15 @@ public:
 
     /// Verb "requestSliceSampleRate", arguments sliceId and rateHz.
     virtual CommandOutcome requestSliceSampleRate(int sliceId, int rateHz) = 0;
+
+    /// Parity Task 18 (B3.1, R-IOS-27): verb "slice.selectBand"
+    /// (bandSelectVersion 1), arguments sliceId and band (the Band value).
+    /// The Core runs its own band change on that slice, with its own band
+    /// memory, exactly as a band button at the Core does. The defaults
+    /// refuse, for links that did not negotiate it.
+    virtual bool bandSelectAvailable() const { return false; }
+    virtual CommandOutcome requestSelectBand(int /*sliceId*/, int /*band*/)
+    { return { false, QStringLiteral("This Core cannot change bands for this app. Updating the Core may help.") }; }
 
     // R3 remote C-Tune. Default refusals retain source compatibility for
     // older test links and transports that do not negotiate this capability.

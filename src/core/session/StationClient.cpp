@@ -194,6 +194,10 @@
 //   2026-09-26 - R-R3-01 (parity Task 17): spectrumDecimationAvailable
 //                (spectrumGrantVersion 2). J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-26 - Parity Task 18 (B3.1): the window's band buttons send
+//                slice.selectBand for a named slice to a Core at
+//                bandSelectVersion 1. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -3263,6 +3267,22 @@ StationClient::CommandOutcome StationClient::requestActiveSlice(int sliceId)
 {
     return sendCommand("setActiveSliceById", sliceId, { intArgument("sliceId", sliceId) },
                        QStringLiteral("the request to make slice %1 active").arg(sliceId));
+}
+
+bool StationClient::bandSelectAvailable() const
+{
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.bandSelectVersion >= 1;
+}
+
+StationClient::CommandOutcome StationClient::requestSelectBand(int sliceId, int band)
+{
+    if (!bandSelectAvailable()) {
+        return IStationLink::requestSelectBand(sliceId, band);
+    }
+    return sendCommand("slice.selectBand", sliceId,
+                       { intArgument("sliceId", sliceId), intArgument("band", band) },
+                       QStringLiteral("the band change"));
 }
 
 StationClient::CommandOutcome StationClient::requestSliceSampleRate(int sliceId, int rateHz)
