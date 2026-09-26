@@ -7430,11 +7430,12 @@ set_target_properties(nereus_rendezvous_peer PROPERTIES AUTOMOC ON)
 # The traversal harness (tests/scripts/traversal-harness.sh): Linux network
 # namespaces with nftables NATs (endpoint-independent, port-randomising at
 # both ends), UDP blocked, large datagrams dropped, an IPv6-only client
-# behind NAT64 and DNS64 with a CLAT, and netem loss, with the rendezvous
-# service and coturn started inside it and every secret made at run time.
-# Opt in with -DNEREUS_TRAVERSAL_TESTS=ON; it needs root and runs under the
-# ctest label `traversal` (the CI job of the same name), never on the live
-# server.
+# behind NAT64 and DNS64 with a CLAT, netem loss, and routed IPv6 at both
+# ends (an IPv6 pair must win), with the rendezvous service and coturn
+# started inside it and every secret made at run time. Opt in with
+# -DNEREUS_TRAVERSAL_TESTS=ON; it needs root and runs under the ctest label
+# `traversal` (the CI job of the same name, started by hand), never on the
+# live server.
 option(NEREUS_TRAVERSAL_TESTS "Register the traversal harness (Linux, root)" OFF)
 if(NEREUS_TRAVERSAL_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_test(NAME traversal_harness

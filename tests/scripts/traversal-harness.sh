@@ -21,7 +21,8 @@
 # and runs tests/tools/nereus_rendezvous_peer in `sta` and in `cli`/`cli6`
 # for each scenario, checking how the connection was made:
 #
-#   eim-nat            both behind endpoint-independent NAT: direct
+#   eim-nat            both behind endpoint-independent NAT, the relay
+#                      denied: direct (hole punching, nothing else)
 #   random-nat-both    port-randomising NAT at both ends: relayed
 #   udp-direct-blocked UDP between the two ends' public addresses dropped:
 #                      relayed
@@ -31,8 +32,12 @@
 #   mtu-1100           datagrams over 1100 bytes dropped: connected, a
 #                      60000-byte message echoed in 1000-byte datagrams
 #   ipv6-only-nat64    an IPv6-only client behind NAT64 and DNS64 with a
-#                      CLAT, the Core on IPv4: connected
+#                      CLAT, the Core on IPv4: the service's name answered
+#                      by DNS64, connected
 #   netem-loss         2 % loss and 40 ms delay on both uplinks: connected
+#   ipv6-both          routed IPv6 at both ends (behind their routers'
+#                      stateful firewalls) as well as IPv4 NAT, the relay
+#                      denied: direct, on an IPv6 pair
 #
 # Every secret (the TURN secret, the TLS key, both ends' keys) is made at
 # run time in a temporary directory and removed with it. It never touches
@@ -43,7 +48,7 @@
 # cryptography, turnserver (coturn), socat, openssl, unbound, tayga.
 # Registered as the ctest `traversal_harness` (label `traversal`) when
 # configured with -DNEREUS_TRAVERSAL_TESTS=ON; the CI job of that name runs
-# it.
+# it when the workflow is started by hand (workflow_dispatch).
 #
 # Usage: traversal-harness.sh --peer PATH --source DIR [--only SCENARIO]
 #
@@ -52,6 +57,9 @@
 #   2026-09-26: original implementation for NereusSDR by J.J. Boyd
 #               (KG4VCF), with AI-assisted implementation via Anthropic
 #               Claude Code.
+#   2026-09-26: Task 27 fix wave: ipv6-both, DNS64 through an auth-zone,
+#               eim-nat with the relay denied. J.J. Boyd (KG4VCF),
+#               AI-assisted via Anthropic Claude Code.
 # =================================================================
 
 set -euo pipefail
@@ -240,10 +248,30 @@ server:
     logfile: ""
     module-config: "dns64 iterator"
     dns64-prefix: 64:ff9b::/96
-    local-zone: "harness.test." static
-    local-data: "rv.harness.test. A 198.51.100.2"
-    local-data: "rv4.harness.test. A 198.51.100.2"
-    local-data: "rv6.harness.test. AAAA 2001:db8:1::2"
+    # harness.test is an auth-zone the iterator reads (for-upstream), not a
+    # local-zone: a local-zone answers before the dns64 module runs, so the
+    # IPv6-only client would get no synthesized AAAA for rv.harness.test and
+    # would reach the service through its CLAT, proving nothing about
+    # DNS64. Through the iterator, an A-only name gets its AAAA from dns64.
+    # unbound serves test. itself by default (RFC 6761), which would answer
+    # before the auth-zone: that default is turned off.
+    local-zone: "test." nodefault
+auth-zone:
+    name: "harness.test."
+    zonefile: "$WORK/harness.test.zone"
+    for-downstream: no
+    for-upstream: yes
+    fallback-enabled: no
+EOF
+cat > "$WORK/harness.test.zone" <<'EOF'
+$ORIGIN harness.test.
+$TTL 60
+@    IN SOA ns.harness.test. hostmaster.harness.test. 1 3600 600 86400 60
+@    IN NS  ns.harness.test.
+ns   IN A    198.51.100.2
+rv   IN A    198.51.100.2
+rv4  IN A    198.51.100.2
+rv6  IN AAAA 2001:db8:1::2
 EOF
 in_ns rvsrv unbound -d -c "$WORK/unbound.conf" >"$WORK/unbound.log" 2>&1 &
 PIDS+=($!)
@@ -418,10 +446,11 @@ scenario() {
 }
 
 # eim-nat: Linux masquerade keeps each flow's source port where it can, so
-# the mapping is endpoint independent: hole punching works.
+# the mapping is endpoint independent: hole punching works. The relay is
+# denied, so a relayed pair nominated first cannot pass it by.
 if scenario eim-nat; then
     reset_rules
-    start_station allow
+    start_station deny
     check eim-nat "$(run_client cli)" True False
     stop_station
 fi
@@ -492,9 +521,18 @@ EOF
 fi
 
 # ipv6-only-nat64: the client has only IPv6 (with DNS64, NAT64 and a CLAT),
-# the Core only IPv4 behind NAT.
+# the Core only IPv4 behind NAT. The service's IPv4-only name must come back
+# from DNS64 as an address in 64:ff9b::/96, so the scenario proves DNS64 and
+# not only the CLAT.
 if scenario ipv6-only-nat64; then
     reset_rules
+    synthesized="$(in_ns cli6 getent ahostsv6 rv.harness.test | awk '{print $1}' | sort -u | tr '\n' ' ' || true)"
+    if [[ "$synthesized" != *"64:ff9b::"* ]]; then
+        say "FAIL ipv6-only-nat64: DNS64 did not answer rv.harness.test (got: ${synthesized:-nothing})"
+        FAILED=1
+    else
+        say "DNS64 answered rv.harness.test with $synthesized"
+    fi
     start_station allow
     check ipv6-only-nat64 "$(run_client cli6)" True any
     stop_station
@@ -511,9 +549,72 @@ if scenario netem-loss; then
     stop_station
 fi
 
+# ipv6-both: routed IPv6 at both ends, as most ISPs give it, behind each
+# router's stateful firewall (nat_router's table inet filter: replies
+# only), beside the IPv4 NAT. Both ends then gather IPv6 host candidates as
+# well as IPv4 ones, and ICE must choose an IPv6 pair (the IPv6-preference
+# acceptance item of plan Task 27; its unit test skips on a computer with
+# no global IPv6). The relay is denied so only direct pairs compete. The
+# addresses are added for this scenario only and removed after it, so the
+# IPv4 scenarios stay IPv4.
+ipv6_both() {
+    if [[ "$1" == "up" ]]; then
+        in_ns natc ip -6 addr add 2001:db8:2::2/64 dev wan nodad
+        in_ns inet ip -6 addr add 2001:db8:2::1/64 dev inet-natc nodad
+        in_ns natc ip -6 route add default via 2001:db8:2::1
+        in_ns natc ip -6 addr add 2001:db8:11::1/64 dev lan nodad
+        in_ns cli ip -6 addr add 2001:db8:11::2/64 dev eth0 nodad
+        in_ns cli ip -6 route add default via 2001:db8:11::1
+        in_ns inet ip -6 route add 2001:db8:11::/64 via 2001:db8:2::2
+
+        in_ns nats ip -6 addr add 2001:db8:3::2/64 dev wan nodad
+        in_ns inet ip -6 addr add 2001:db8:3::1/64 dev inet-nats nodad
+        in_ns nats ip -6 route add default via 2001:db8:3::1
+        in_ns nats ip -6 addr add 2001:db8:12::1/64 dev lan nodad
+        in_ns sta ip -6 addr add 2001:db8:12::2/64 dev eth0 nodad
+        in_ns sta ip -6 route add default via 2001:db8:12::1
+        in_ns inet ip -6 route add 2001:db8:12::/64 via 2001:db8:3::2
+        return
+    fi
+    set +e
+    in_ns inet ip -6 route del 2001:db8:11::/64
+    in_ns inet ip -6 route del 2001:db8:12::/64
+    in_ns cli ip -6 route del default
+    in_ns sta ip -6 route del default
+    in_ns cli ip -6 addr del 2001:db8:11::2/64 dev eth0
+    in_ns sta ip -6 addr del 2001:db8:12::2/64 dev eth0
+    in_ns natc ip -6 route del default
+    in_ns nats ip -6 route del default
+    in_ns natc ip -6 addr del 2001:db8:11::1/64 dev lan
+    in_ns nats ip -6 addr del 2001:db8:12::1/64 dev lan
+    in_ns natc ip -6 addr del 2001:db8:2::2/64 dev wan
+    in_ns nats ip -6 addr del 2001:db8:3::2/64 dev wan
+    in_ns inet ip -6 addr del 2001:db8:2::1/64 dev inet-natc
+    in_ns inet ip -6 addr del 2001:db8:3::1/64 dev inet-nats
+    set -e
+}
+
+if scenario ipv6-both; then
+    reset_rules
+    ipv6_both up
+    start_station deny
+    result="$(run_client cli)"
+    check ipv6-both "$result" True False
+    local_address="$(field "$result" localAddress 2>/dev/null || echo None)"
+    remote_address="$(field "$result" remoteAddress 2>/dev/null || echo None)"
+    if [[ "$local_address" == *:* && "$remote_address" == *:* ]]; then
+        say "PASS ipv6-both: the selected pair is IPv6 ($local_address to $remote_address)"
+    else
+        say "FAIL ipv6-both: the selected pair is not IPv6 ($local_address to $remote_address)"
+        FAILED=1
+    fi
+    stop_station
+    ipv6_both down
+fi
+
 if (( FAILED )); then
     say "logs:"
-    for log in rendezvous coturn station client; do
+    for log in rendezvous coturn station client unbound; do
         echo "── $log ──" >&2
         tail -n 40 "$WORK/$log.log" >&2 2>/dev/null || true
     done
