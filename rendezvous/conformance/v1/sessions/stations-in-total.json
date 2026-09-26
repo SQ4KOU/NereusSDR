@@ -2,10 +2,13 @@
   "runs": [
     "service"
   ],
-  "serverSetup": {},
+  "serverSetup": {
+    "maxStations": 1
+  },
   "steps": [
     {
-      "connect": "station"
+      "connect": "station",
+      "address": "192.0.2.1"
     },
     {
       "from": "server",
@@ -54,7 +57,8 @@
       }
     },
     {
-      "connect": "station2"
+      "connect": "station2",
+      "address": "198.51.100.2"
     },
     {
       "from": "server",
@@ -74,8 +78,8 @@
       "role": "behaviour",
       "message": {
         "type": "register",
-        "id": "$key:a:id",
-        "publicKey": "$key:a:publicKey"
+        "id": "$key:b:id",
+        "publicKey": "$key:b:publicKey"
       }
     },
     {
@@ -91,12 +95,68 @@
       "role": "behaviour",
       "message": {
         "type": "prove",
-        "signature": "$register:a:challenge2:signed"
+        "signature": "$register:b:challenge2:signed"
       }
     },
     {
       "from": "server",
       "to": "station2",
+      "message": {
+        "type": "error",
+        "code": "overloaded",
+        "reason": "The remote access service is busy. Try again shortly.",
+        "retryAfterMs": 5000
+      }
+    },
+    {
+      "expectClosed": "station2",
+      "code": 1000
+    },
+    {
+      "connect": "station3",
+      "address": "203.0.113.3"
+    },
+    {
+      "from": "server",
+      "to": "station3",
+      "message": {
+        "type": "hello",
+        "version": 1,
+        "nonce": "$b64:32:station3Nonce",
+        "stun": [
+          "stun:rv6.conformance.invalid:3478",
+          "stun:rv4.conformance.invalid:3478"
+        ]
+      }
+    },
+    {
+      "from": "station3",
+      "role": "behaviour",
+      "message": {
+        "type": "register",
+        "id": "$key:a:id",
+        "publicKey": "$key:a:publicKey"
+      }
+    },
+    {
+      "from": "server",
+      "to": "station3",
+      "message": {
+        "type": "challenge",
+        "nonce": "$b64:32:challenge3"
+      }
+    },
+    {
+      "from": "station3",
+      "role": "behaviour",
+      "message": {
+        "type": "prove",
+        "signature": "$register:a:challenge3:signed"
+      }
+    },
+    {
+      "from": "server",
+      "to": "station3",
       "message": {
         "type": "registered",
         "id": "$key:a:id"
@@ -115,48 +175,6 @@
     {
       "expectClosed": "station",
       "code": 1000
-    },
-    {
-      "connect": "client"
-    },
-    {
-      "from": "server",
-      "to": "client",
-      "message": {
-        "type": "hello",
-        "version": 1,
-        "nonce": "$b64:32:clientNonce",
-        "stun": [
-          "stun:rv6.conformance.invalid:3478",
-          "stun:rv4.conformance.invalid:3478"
-        ]
-      }
-    },
-    {
-      "from": "client",
-      "role": "behaviour",
-      "message": {
-        "type": "introduce",
-        "id": "$key:a:id",
-        "device": "$device:d:id",
-        "deviceSignature": "$introduce:d:a:clientNonce:signed",
-        "offer": "$sdp:offer:offer"
-      }
-    },
-    {
-      "from": "server",
-      "to": "station2",
-      "message": {
-        "type": "introduction",
-        "from": "$b64:16:intro",
-        "device": "$device:d:id",
-        "deviceSignature": "$introduce:d:a:clientNonce:signed",
-        "offer": "$ref:offer",
-        "nonce": "$ref:clientNonce"
-      }
-    },
-    {
-      "expectSilent": "station"
     }
   ]
 }

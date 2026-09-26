@@ -56,7 +56,8 @@
       }
     },
     {
-      "expectClosed": "client"
+      "expectClosed": "client",
+      "code": 1000
     }
   ]
 }

@@ -158,17 +158,58 @@ def test_unknown_and_offline_answer_the_same_bytes():
     asyncio.run(go())
 
 
-def test_credentials_only_after_acceptance():
+def test_credentials_only_after_acceptance(monkeypatch):
+    """Relay credentials are minted only when the station answers with turn
+    true: never on an introduction alone, never on an answer with turn
+    false, and the one minted object goes to both ends."""
+    from nereus_rendezvous import service as service_module
+
+    minted = []
+    real_mint = service_module.turn.mint
+
+    def counting_mint(*args, **kwargs):
+        value = real_mint(*args, **kwargs)
+        minted.append(value)
+        return value
+
+    monkeypatch.setattr(service_module.turn, "mint", counting_mint)
+
     async def go():
         async with live_service() as (service, uri):
             st, _, sid = await register(uri)
+            # An introduction, unanswered: nothing minted, nothing sent on.
             cl, hello = await _client(uri)
             await cl.send(protocol.encode(introduce_message(sid, hello["nonce"])))
             intro = await recv_json(st)
-            # Before any answer: nothing reaches the client, no credentials.
+            assert intro["type"] == "introduction"
             await _silent(cl)
-            await st.send(protocol.encode({"type": "candidate", "to": intro["from"], "candidate": "c"}))
-            assert (await recv_json(st))["code"] == "protocolError"
+            await _silent(st)
+            assert minted == []
+            # Answered without relay: turn null, no credentials message.
+            await st.send(protocol.encode({"type": "answer", "to": intro["from"], "answer": "v=0\r\n", "turn": False}))
+            answer = await recv_json(cl)
+            assert answer == {"type": "answer", "answer": "v=0\r\n", "turn": None}
+            await _silent(st)
+            assert minted == []
+            await cl.close()
+            assert (await recv_json(st))["type"] == "introduction.end"
+            # Answered with relay: one object minted, the same to both ends.
+            cl2, hello2 = await _client(uri, "192.0.2.51")
+            await cl2.send(protocol.encode(introduce_message(sid, hello2["nonce"])))
+            intro2 = await recv_json(st)
+            await _silent(cl2)
+            assert minted == []
+            await st.send(protocol.encode({"type": "answer", "to": intro2["from"], "answer": "v=0\r\n", "turn": True}))
+            answer2 = await recv_json(cl2)
+            credentials = await recv_json(st)
+            assert len(minted) == 1
+            assert answer2["turn"] == minted[0]
+            assert credentials == {"type": "credentials", "from": intro2["from"], "turn": minted[0]}
+            assert minted[0]["username"].endswith(":" + sid)
+            # A second answer to the same introduction mints nothing more.
+            await st.send(protocol.encode({"type": "answer", "to": intro2["from"], "answer": "v=0\r\n", "turn": True}))
+            assert (await recv_json(st))["code"] == "unknownIntroduction"
+            assert len(minted) == 1
 
     asyncio.run(go())
 

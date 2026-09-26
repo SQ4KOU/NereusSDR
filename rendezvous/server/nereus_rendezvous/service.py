@@ -33,6 +33,9 @@ log = logging.getLogger("nereus_rendezvous")
 MINUTE_MS = 60000
 CLOSE_NORMAL = 1000
 CLOSE_GOING_AWAY = 1001
+# A peer that stops reading is closed with 1008 (policy violation) and no
+# error message, since it would not read one (rendezvous document section 2).
+CLOSE_NOT_READING = 1008
 
 
 def short(text: str) -> str:
@@ -75,9 +78,15 @@ class Connection:
         self.role: Optional[str] = None
         self.nonce = service.random(identity.NONCE_BYTES)
         self.queue: "asyncio.Queue[Any]" = asyncio.Queue()
+        self.queued_bytes = 0
+        self.writer: Optional["asyncio.Future[None]"] = None
+        self.close_task: Optional["asyncio.Future[None]"] = None
         self.closing = False
         self.detached = False
+        # Which pool the connection is counted in (section 9.1): every
+        # connection that is not a registered station, or the stations.
         self.counted = False
+        self.station_counted = False
         self.timer: Optional[TimerHandle] = None
         # Station role.
         self.challenge: Optional[bytes] = None
@@ -97,15 +106,45 @@ class Connection:
     def send(self, message: Dict[str, Any]) -> None:
         if self.closing:
             return
-        if self.queue.qsize() >= self.service.config.send_queue_messages:
-            # A peer that does not read its messages is dropped rather than
-            # buffered without bound.
-            log.warning("closed a connection that stopped reading")
-            self.closing = True
-            self.queue.put_nowait(_Close(CLOSE_NORMAL))
-            self.service.detach(self)
+        text = protocol.encode(message)
+        size = len(text.encode("utf-8"))
+        config = self.service.config
+        if (
+            self.queue.qsize() >= config.send_queue_messages
+            or self.queued_bytes + size > config.send_queue_bytes
+            or self.service.queued_bytes + size > config.send_budget_bytes
+        ):
+            self.stopped_reading()
             return
-        self.queue.put_nowait(protocol.encode(message))
+        self.queued_bytes += size
+        self.service.queued_bytes += size
+        self.queue.put_nowait((text, size))
+
+    def _release(self, size: int) -> None:
+        self.queued_bytes -= size
+        self.service.queued_bytes -= size
+
+    def stopped_reading(self) -> None:
+        """A peer whose messages pile up (its own cap, or the service's
+        budget for every queue together) is dropped rather than buffered
+        without bound: what is queued is discarded, the writer stops, and the
+        connection closes with 1008 and no error message."""
+        log.warning("closed a connection that stopped reading")
+        self.closing = True
+        while not self.queue.empty():
+            item = self.queue.get_nowait()
+            if isinstance(item, tuple):
+                self._release(item[1])
+        if self.writer is not None:
+            self.writer.cancel()
+        self.close_task = asyncio.ensure_future(self._close_quietly(CLOSE_NOT_READING))
+        self.service.detach(self)
+
+    async def _close_quietly(self, code: int) -> None:
+        try:
+            await self.transport.close(code)
+        except Exception:  # noqa: BLE001 - the peer is gone either way
+            return
 
     def fail(self, code: str, retry_after_ms: Optional[int] = None, close_code: int = CLOSE_NORMAL) -> None:
         """Send an error. An error that closes is followed by the close."""
@@ -132,7 +171,11 @@ class Connection:
                 if isinstance(item, _Close):
                     await self.transport.close(item.code)
                     return
-                await self.transport.send(item)
+                text, size = item
+                try:
+                    await self.transport.send(text)
+                finally:
+                    self._release(size)
         except Exception:  # noqa: BLE001 - the peer went away; the reader cleans up
             return
 
@@ -148,7 +191,15 @@ class Service:
         self.clock = clock or RealClock()
         self.random = random
         self.connections: Set[Connection] = set()
+        # Section 9.1's two pools: connections that are not registered
+        # stations (clients, and connections still starting), and
+        # registered stations, each counted in total and per address group.
+        self.unregistered = 0
         self.per_group: Dict[str, int] = {}
+        self.station_count = 0
+        self.stations_per_group: Dict[str, int] = {}
+        # Bytes waiting in every connection's outbound queue together.
+        self.queued_bytes = 0
         self.stations: Dict[str, Connection] = {}
         self.introductions: Dict[str, Introduction] = {}
         self.nameplates: Dict[int, Connection] = {}
@@ -169,28 +220,36 @@ class Service:
     async def run_connection(self, transport: Any, address: str) -> None:
         conn = Connection(self, transport, address)
         writer = asyncio.ensure_future(conn.write_loop())
+        conn.writer = writer
         self.accept(conn)
         try:
             async for frame in transport:
                 if not conn.closing:
-                    self.on_frame(conn, frame)
+                    try:
+                        self.on_frame(conn, frame)
+                    except Exception as exc:  # noqa: BLE001
+                        # A bug, not the peer's doing. The class name only:
+                        # an exception's text can hold what the peer sent.
+                        log.error("a message handler failed (%s); closing its connection", type(exc).__name__)
+                        self.frames_handled += 1
+                        break
                 self.frames_handled += 1
-        except Exception:  # noqa: BLE001 - any transport end is an end
-            pass
+        except Exception as exc:  # noqa: BLE001 - any transport end is an end
+            log.debug("a connection ended: %s", type(exc).__name__)
         finally:
             if not conn.closing:
                 self.peer_closes += 1
             self.detach(conn)
-            if conn.closing:
-                try:
-                    await asyncio.wait_for(asyncio.shield(writer), 5)
-                except Exception:  # noqa: BLE001
-                    writer.cancel()
-            else:
+            if conn.closing and not writer.done():
+                await asyncio.wait({writer}, timeout=5)
+            if not writer.done():
                 writer.cancel()
 
     def accept(self, conn: Connection) -> None:
-        if len(self.connections) >= self.config.max_connections:
+        # A new connection has no role yet; it is counted with the clients
+        # until it registers, so a registered station never holds a slot
+        # a client needs, nor the reverse.
+        if self.unregistered >= self.config.max_connections:
             conn.fail("overloaded")
             return
         if self.per_group.get(conn.group, 0) >= self.config.connections_per_address:
@@ -198,6 +257,7 @@ class Service:
             return
         conn.counted = True
         self.connections.add(conn)
+        self.unregistered += 1
         self.per_group[conn.group] = self.per_group.get(conn.group, 0) + 1
         conn.send(
             protocol.message(
@@ -221,13 +281,13 @@ class Service:
             return
         conn.detached = True
         conn.cancel_timer()
+        self.connections.discard(conn)
         if conn.counted:
-            self.connections.discard(conn)
-            left = self.per_group.get(conn.group, 1) - 1
-            if left > 0:
-                self.per_group[conn.group] = left
-            else:
-                self.per_group.pop(conn.group, None)
+            self._uncount(conn)
+        if conn.station_counted:
+            conn.station_counted = False
+            self.station_count -= 1
+            _decrement(self.stations_per_group, conn.group)
         if conn.role == "station":
             if conn.station_id is not None and self.stations.get(conn.station_id) is conn:
                 del self.stations[conn.station_id]
@@ -241,6 +301,11 @@ class Service:
                 self._end_introduction(conn.introduction, station_code="clientLeft", client_code=None)
             if conn.mailbox is not None:
                 self._close_mailbox(conn.mailbox, station_code="peerLeft", client_code=None)
+
+    def _uncount(self, conn: Connection) -> None:
+        conn.counted = False
+        self.unregistered -= 1
+        _decrement(self.per_group, conn.group)
 
     # ----------------------------------------------------------- dispatch
 
@@ -297,11 +362,33 @@ class Service:
             conn.fail("proofFailed")
             return
         station_id = conn.pending_id
-        conn.cancel_timer()
         previous = self.stations.get(station_id)
-        if previous is not None and previous is not conn:
+        if previous is conn:
+            previous = None
+        # Section 9.1: registered stations are a pool of their own, capped
+        # per address group and in total. The registration this one
+        # replaces does not count against it.
+        in_group = self.stations_per_group.get(conn.group, 0)
+        total = self.station_count
+        if previous is not None and previous.station_counted:
+            total -= 1
+            if previous.group == conn.group:
+                in_group -= 1
+        if in_group >= self.config.stations_per_address:
+            conn.fail("tooManyConnections")
+            return
+        if total >= self.config.max_stations:
+            conn.fail("overloaded")
+            return
+        conn.cancel_timer()
+        if previous is not None:
             log.info("station %s registered again; closing the older connection", short(station_id))
             previous.fail("replaced")
+        if conn.counted:
+            self._uncount(conn)
+        conn.station_counted = True
+        self.station_count += 1
+        self.stations_per_group[conn.group] = self.stations_per_group.get(conn.group, 0) + 1
         conn.station_id = station_id
         self.stations[station_id] = conn
         log.info("station %s registered", short(station_id))
@@ -408,13 +495,16 @@ class Service:
         now = self.clock.now_ms()
         self._maybe_sweep(now)
         station_id = msg["id"]
-        wait = first_allowed(now, (self.intro_by_address, conn.group), (self.intro_by_station, station_id))
+        # The per-station limit counts per station per network (JJ's ruling,
+        # 2026-09-25): a flood from one network blocks only that network.
+        station_key = "%s %s" % (station_id, conn.group)
+        wait = first_allowed(now, (self.intro_by_address, conn.group), (self.intro_by_station, station_key))
         if wait is not None:
             conn.fail("rateLimited", retry_after_ms=wait)
             self._start_idle(conn)
             return
         self.intro_by_address.record(conn.group, now)
-        self.intro_by_station.record(station_id, now)
+        self.intro_by_station.record(station_key, now)
         station = self.stations.get(station_id)
         if station is None or station.closing:
             # An unknown id and an offline one get the same bytes.
@@ -525,11 +615,15 @@ class Service:
             limiter.sweep(now)
 
     def _start_idle(self, conn: Connection) -> None:
+        """Section 3: the idle timer starts once, when a client is left with
+        nothing pending, and never restarts while it runs, so refused
+        requests cannot keep a connection open."""
         if conn.closing or conn.role != "client":
             return
         if conn.introduction is not None or conn.mailbox is not None:
             return
-        conn.cancel_timer()
+        if conn.timer is not None:
+            return
         conn.timer = self.clock.call_later(self.config.idle_timeout_ms, lambda: conn.fail("idle"))
 
     def _end_introduction(self, intro: Introduction, station_code: Optional[str], client_code: Optional[str]) -> None:
@@ -587,3 +681,11 @@ class Service:
             del self.nameplates[number]
             heapq.heappush(self._freed, number)
         log.info("station %s released its nameplate", short(conn.station_id or ""))
+
+
+def _decrement(table: Dict[str, int], key: str) -> None:
+    left = table.get(key, 1) - 1
+    if left > 0:
+        table[key] = left
+    else:
+        table.pop(key, None)

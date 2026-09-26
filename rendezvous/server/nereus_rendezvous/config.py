@@ -48,7 +48,9 @@ class Config:
     candidates_per_side: int = 64
     mailbox_messages_per_side: int = 32
     connections_per_address: int = 16
-    max_connections: int = 4096
+    stations_per_address: int = 4
+    max_connections: int = 512
+    max_stations: int = 512
     handshake_timeout_ms: int = 10000
     idle_timeout_ms: int = 30000
     introduction_lifetime_ms: int = 120000
@@ -56,6 +58,8 @@ class Config:
     ping_interval_seconds: int = 20
     ping_timeout_seconds: int = 20
     send_queue_messages: int = 256
+    send_queue_bytes: int = 1048576
+    send_budget_bytes: int = 33554432
     # Not from the file: the secret's bytes, read from turn_secret_file.
     turn_secret: Optional[bytes] = field(default=None, repr=False)
 
@@ -77,7 +81,9 @@ _SECTIONS = {
         "candidates_per_side",
         "mailbox_messages_per_side",
         "connections_per_address",
+        "stations_per_address",
         "max_connections",
+        "max_stations",
         "handshake_timeout_ms",
         "idle_timeout_ms",
         "introduction_lifetime_ms",
@@ -85,6 +91,8 @@ _SECTIONS = {
         "ping_interval_seconds",
         "ping_timeout_seconds",
         "send_queue_messages",
+        "send_queue_bytes",
+        "send_budget_bytes",
     ],
 }
 
@@ -150,8 +158,22 @@ def load(path: Optional[str]) -> Config:
     return config
 
 
+# Zero turns the WebSocket ping off; every other number must be at least 1,
+# because 0 would make the service refuse everything, or nothing.
+_MAY_BE_ZERO = ("ping_interval_seconds", "ping_timeout_seconds")
+
+
 def check(config: Config) -> None:
-    """URLs must fit the wire (rendezvous document section 5.2)."""
+    """URLs must fit the wire (rendezvous document section 5.2), and every
+    limit, timeout and cap must leave the service usable."""
+    for key in _SECTIONS["limits"] + ["turn_ttl_seconds"]:
+        value = getattr(config, key)
+        if not isinstance(value, int) or isinstance(value, bool):
+            raise ConfigError(f"{key}: not a whole number")
+        if value < 0 or (value == 0 and key not in _MAY_BE_ZERO):
+            raise ConfigError(f"{key}: must be at least 1" if key not in _MAY_BE_ZERO else f"{key}: negative")
+    if config.send_budget_bytes < config.send_queue_bytes:
+        raise ConfigError("send_budget_bytes: smaller than send_queue_bytes")
     for name in ("stun_urls", "turn_urls"):
         urls = getattr(config, name)
         if len(urls) > 8:

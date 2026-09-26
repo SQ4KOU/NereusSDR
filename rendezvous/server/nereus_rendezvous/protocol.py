@@ -21,8 +21,13 @@ VERSION = 1
 
 # Section 5.1: caps. The transport refuses a message longer than
 # MAX_MESSAGE_BYTES before it is decoded; the field caps are in UTF-8 bytes
-# of the decoded string.
+# of the decoded string, and a sender must also keep the whole encoded
+# message within MAX_MESSAGE_BYTES (section 2). A station or client accepts
+# messages from the service of up to PEER_RECEIVE_BYTES; the service never
+# sends one longer than MAX_SERVICE_MESSAGE_BYTES.
 MAX_MESSAGE_BYTES = 131072
+MAX_SERVICE_MESSAGE_BYTES = 132096
+PEER_RECEIVE_BYTES = 262144
 MAX_SDP_BYTES = 65536
 MAX_CANDIDATE_BYTES = 4096
 MAX_BODY_BYTES = 65536
@@ -60,7 +65,11 @@ def INT(lo: int, hi: int) -> Tuple[str, int, int]:
 
 
 SDP = UTF8(1, MAX_SDP_BYTES)
-CANDIDATE = UTF8(0, MAX_CANDIDATE_BYTES)
+# Section 5.2: the empty string (the end of candidates), or one candidate
+# attribute value as RFC 8839 writes it, starting "candidate:" and never
+# with the "a=" of an SDP line.
+CANDIDATE = ("candidate",)
+CANDIDATE_PREFIX = "candidate:"
 BODY = UTF8(1, MAX_BODY_BYTES)
 NAMEPLATE = INT(NAMEPLATE_MIN, NAMEPLATE_MAX)
 INTRO_ID = B64(identity.INTRODUCTION_ID_BYTES)
@@ -175,6 +184,10 @@ def _check(key: str, value: Any, kind: tuple) -> None:
         n = _utf8_len(value)
         if n is None or n < kind[1] or n > kind[2]:
             raise DecodeError(f"{key}: length out of range")
+    elif name == "candidate":
+        _check(key, value, UTF8(0, MAX_CANDIDATE_BYTES))
+        if value and not value.startswith(CANDIDATE_PREFIX):
+            raise DecodeError(f"{key}: not a candidate attribute value")
     elif name == "int":
         if not _is_int(value) or value < kind[1] or value > kind[2]:
             raise DecodeError(f"{key}: not a whole number in range")
@@ -284,8 +297,8 @@ ERRORS: Dict[str, Tuple[bool, str, int]] = {
     "timeout": (True, "The connection did not finish starting in time.", 0),
     "idle": (True, "The connection was closed because it was not being used.", 0),
     "tooManyConnections": (True, "Too many connections are open from this network. Try again shortly.", 5000),
-    "overloaded": (True, "The connection server is busy. Try again shortly.", 5000),
-    "shuttingDown": (True, "The connection server is restarting. Try again shortly.", 5000),
+    "overloaded": (True, "The remote access service is busy. Try again shortly.", 5000),
+    "shuttingDown": (True, "The remote access service is restarting. Try again shortly.", 5000),
     "offline": (
         False,
         "The Core is not reachable right now. Check that it is running and connected to the internet.",

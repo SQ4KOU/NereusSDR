@@ -22,9 +22,10 @@ from runner import ws_connect
     [
         ("192.0.2.1", "192.0.2.1"),
         ("::ffff:192.0.2.1", "192.0.2.1"),
-        ("2001:db8:1:2:3:4:5:6", "2001:db8:1:2::/64"),
-        ("2001:db8:1:2::", "2001:db8:1:2::/64"),
-        ("fe80::1%en0", "fe80::/64"),
+        ("2001:db8:1:2:3:4:5:6", "2001:db8:1::/56"),
+        ("2001:db8:1:ff::", "2001:db8:1::/56"),
+        ("2001:db8:1:100::1", "2001:db8:1:100::/56"),
+        ("fe80::1%en0", "fe80::/56"),
         ("not an address", "not an address"),
     ],
 )
@@ -68,6 +69,21 @@ def test_config_file(tmp_path):
         "[limits]\ncandidates_per_side = many\n",
         "[limits]\ncandidates_per_side = -1\n",
         "[rendezvous]\nlisten = nowhere\n",
+        "[rendezvous]\nturn_ttl_seconds = 0\n",
+        "[limits]\nconnections_per_address = 0\n",
+        "[limits]\nstations_per_address = 0\n",
+        "[limits]\nmax_connections = 0\n",
+        "[limits]\nmax_stations = 0\n",
+        "[limits]\nhandshake_timeout_ms = 0\n",
+        "[limits]\nidle_timeout_ms = 0\n",
+        "[limits]\nintroduction_lifetime_ms = 0\n",
+        "[limits]\nmailbox_lifetime_ms = 0\n",
+        "[limits]\nsend_queue_messages = 0\n",
+        "[limits]\nsend_queue_bytes = 0\n",
+        "[limits]\nsend_budget_bytes = 0\n",
+        "[limits]\nsend_queue_bytes = 2000\nsend_budget_bytes = 1000\n",
+        "[limits]\nintroductions_per_address_per_minute = 0\n",
+        "[limits]\nping_interval_seconds = -1\n",
     ],
 )
 def test_config_refused(tmp_path, text):
@@ -75,6 +91,21 @@ def test_config_refused(tmp_path, text):
     path.write_text(text)
     with pytest.raises(cfg.ConfigError):
         cfg.load(str(path))
+
+
+def test_config_refused_in_code():
+    """Service() checks a Config built in code (as the runner builds one)
+    the same way."""
+    config = cfg.Config()
+    config.max_connections = 0
+    with pytest.raises(cfg.ConfigError):
+        Service(config, ManualClock())
+
+
+def test_pings_may_be_off(tmp_path):
+    path = tmp_path / "r.conf"
+    path.write_text("[limits]\nping_interval_seconds = 0\nping_timeout_seconds = 0\n")
+    assert cfg.load(str(path)).ping_interval_seconds == 0
 
 
 def test_empty_secret_refused(tmp_path):
@@ -94,6 +125,9 @@ def test_defaults():
     assert config.mailbox_opens_per_address_per_minute == 10
     assert config.candidates_per_side == 64
     assert config.introduction_lifetime_ms == 120000
+    assert (config.connections_per_address, config.stations_per_address) == (16, 4)
+    assert (config.max_connections, config.max_stations) == (512, 512)
+    assert (config.send_queue_bytes, config.send_budget_bytes) == (1048576, 33554432)
     assert all("rv4.nereussdr.com" in u or "rv6.nereussdr.com" in u for u in config.turn_urls + config.stun_urls)
     assert {u.split(":")[2].split("?")[0] for u in config.turn_urls} == {"3478", "443"}
 

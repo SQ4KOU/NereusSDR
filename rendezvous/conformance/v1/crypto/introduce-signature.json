@@ -1,8 +1,7 @@
 {
   "description": "A device introduces itself by signing \"NereusSDR introduce v1\\n\" || station id (26 ASCII bytes) || nonce, where nonce is the 32 raw bytes the introducing connection's hello nonce decodes to. The rendezvous forwards the signature untouched; the station verifies it with the key of the paired device whose id is device (the base64url SHA-256 of its SPKI DER, link section 3.5).",
   "device": {
-    "testOnly": "A fixed key made for these vectors alone. It protects nothing and must never be used as a real identity.",
-    "privateKeyPkcs8": "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQg_n7ZuDL28TwiBUkPeNK66WgS5lTGFIqRGVIhyWmBRAahRANCAAT9a190PDrDz6APonA_OPx5mItnk67W8s8HHm3u2qjefoi6xUaIxkkkdoS444NpXwV3G12oPQ9YH0uSOCsRPzYz",
+    "fixed": "A fixed public key for these vectors. Its private key was discarded when the signatures were made; a runner only verifies with it.",
     "publicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE_WtfdDw6w8-gD6JwPzj8eZiLZ5Ou1vLPBx5t7tqo3n6IusVGiMZJJHaEuOODaV8FdxtdqD0PWB9LkjgrET82Mw",
     "id": "Vql0Tj7p5WRKQuJyMEUd4Pdrs9ZxVyXEPI5anvUOYnI"
   },
@@ -44,6 +43,30 @@
       "signature": "kZKmw3orvEzVrY-ddeGVLrTD9gUCUPUfebOgP3lOAzhzD_zzDXf3pWJVXNA4GdcT4WS1Bycl0QppJxg5ZcMCjA",
       "valid": false,
       "why": "signed by another device's key"
+    },
+    {
+      "name": "highS",
+      "signature": "KQ0RuGlhoBWV1kXWKxkK5vhQMVsKC_lKsadj4HApIh7JiVCfew8rvO7oyGmJs_QnR821nGJAYLsdw7sQBYGKEg",
+      "valid": true,
+      "why": "s replaced by n - s (a high-s signature): valid, since r and s are both from 1 to n - 1 and verifiers such as OpenSSL and CryptoKit accept it"
+    },
+    {
+      "name": "rZero",
+      "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA2dq9fhPDURBEXN5Z2TAvYdRlFEUTXPcnV9g-y9uGbPw",
+      "valid": false,
+      "why": "r is 0"
+    },
+    {
+      "name": "sIsN",
+      "signature": "KQ0RuGlhoBWV1kXWKxkK5vhQMVsKC_lKsadj4HApIh7_____AAAAAP__________vOb6racXnoTzucrC_GMlUQ",
+      "valid": false,
+      "why": "s equals the group order n"
+    },
+    {
+      "name": "rIsN",
+      "signature": "_____wAAAAD__________7zm-q2nF56E87nKwvxjJVE2dq9fhPDURBEXN5Z2TAvYdRlFEUTXPcnV9g-y9uGbPw",
+      "valid": false,
+      "why": "r equals the group order n"
     }
   ]
 }

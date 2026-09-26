@@ -692,6 +692,56 @@
       "id": "connections-per-ipv6-prefix",
       "file": "sessions/connections-per-ipv6-prefix.json",
       "kind": "session"
+    },
+    {
+      "id": "client-idle-after-refusals",
+      "file": "sessions/client-idle-after-refusals.json",
+      "kind": "session"
+    },
+    {
+      "id": "connection-pools",
+      "file": "sessions/connection-pools.json",
+      "kind": "session"
+    },
+    {
+      "id": "introduce-answer-other-station",
+      "file": "sessions/introduce-answer-other-station.json",
+      "kind": "session"
+    },
+    {
+      "id": "stations-in-total",
+      "file": "sessions/stations-in-total.json",
+      "kind": "session"
+    },
+    {
+      "id": "stations-per-address",
+      "file": "sessions/stations-per-address.json",
+      "kind": "session"
+    },
+    {
+      "id": "server-station-introduction-extra-keys",
+      "file": "control/server-station-introduction-extra-keys.json",
+      "kind": "control"
+    },
+    {
+      "id": "server-client-answer-extra-keys",
+      "file": "control/server-client-answer-extra-keys.json",
+      "kind": "control"
+    },
+    {
+      "id": "refuse-client-candidate-a-prefix",
+      "file": "control/refuse-client-candidate-a-prefix.json",
+      "kind": "control"
+    },
+    {
+      "id": "refuse-station-candidate-a-prefix",
+      "file": "control/refuse-station-candidate-a-prefix.json",
+      "kind": "control"
+    },
+    {
+      "id": "refuse-server-client-candidate-a-prefix",
+      "file": "control/refuse-server-client-candidate-a-prefix.json",
+      "kind": "control"
     }
   ]
 }

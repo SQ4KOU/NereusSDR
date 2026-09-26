@@ -1,8 +1,7 @@
 {
   "description": "A station proves its key by signing \"NereusSDR rendezvous register v1\\n\" || nonce, where nonce is the 32 raw bytes the challenge's base64url decodes to. ECDSA P-256 over SHA-256, raw r || s, base64url. valid is true only when the key is a canonical P-256 key and the signature verifies over this transcript.",
   "key": {
-    "testOnly": "A fixed key made for these vectors alone. It protects nothing and must never be used as a real identity.",
-    "privateKeyPkcs8": "MIGHAgEAMBMGByqGSM49AgEGCCqGSM49AwEHBG0wawIBAQQgvpnejkOTbg4ndFE0Qwz24W596RInK_6T_6_kCwv9okGhRANCAASD-ewnKoSHRddq_lUf-aTNvATMiyjlnRIEK4w-tYFnuK_mg4QVLXpsfqf11ZGRNLXwJnCmuaDb-mb6qEoOcd6P",
+    "fixed": "A fixed public key for these vectors. Its private key was discarded when the signatures were made; a runner only verifies with it.",
     "publicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEg_nsJyqEh0XXav5VH_mkzbwEzIso5Z0SBCuMPrWBZ7iv5oOEFS16bH6n9dWRkTS18CZwprmg2_pm-qhKDnHejw",
     "id": "lwhu2kyjnrfdwvpxvdckao3lb7"
   },
@@ -84,6 +83,34 @@
       "valid": false,
       "signature": "VprRjHqlrM-_fpzu1zxVgKU6yZFidw7uI8MyZrNk8EAAC2YoGzQIQRjTk-H1LSFRnfkMw33bbPiWjBw8W4kYiA",
       "why": "not strict base64url"
+    },
+    {
+      "name": "highS",
+      "publicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEg_nsJyqEh0XXav5VH_mkzbwEzIso5Z0SBCuMPrWBZ7iv5oOEFS16bH6n9dWRkTS18CZwprmg2_pm-qhKDnHejw",
+      "signature": "VprRjHqlrM-_fpzu1zxVgKU6yZFidw7uI8MyZrNk8ED_9JnW5Mv3v-csbB4K0t6uHu3t6ik8MYxdLa6GoNoMyQ",
+      "valid": true,
+      "why": "s replaced by n - s (a high-s signature): valid, since r and s are both from 1 to n - 1 and verifiers such as OpenSSL and CryptoKit accept it"
+    },
+    {
+      "name": "rZero",
+      "publicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEg_nsJyqEh0XXav5VH_mkzbwEzIso5Z0SBCuMPrWBZ7iv5oOEFS16bH6n9dWRkTS18CZwprmg2_pm-qhKDnHejw",
+      "signature": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAC2YoGzQIQRjTk-H1LSFRnfkMw33bbPiWjBw8W4kYiA",
+      "valid": false,
+      "why": "r is 0"
+    },
+    {
+      "name": "sIsN",
+      "publicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEg_nsJyqEh0XXav5VH_mkzbwEzIso5Z0SBCuMPrWBZ7iv5oOEFS16bH6n9dWRkTS18CZwprmg2_pm-qhKDnHejw",
+      "signature": "VprRjHqlrM-_fpzu1zxVgKU6yZFidw7uI8MyZrNk8ED_____AAAAAP__________vOb6racXnoTzucrC_GMlUQ",
+      "valid": false,
+      "why": "s equals the group order n"
+    },
+    {
+      "name": "rIsN",
+      "publicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEg_nsJyqEh0XXav5VH_mkzbwEzIso5Z0SBCuMPrWBZ7iv5oOEFS16bH6n9dWRkTS18CZwprmg2_pm-qhKDnHejw",
+      "signature": "_____wAAAAD__________7zm-q2nF56E87nKwvxjJVEAC2YoGzQIQRjTk-H1LSFRnfkMw33bbPiWjBw8W4kYiA",
+      "valid": false,
+      "why": "r equals the group order n"
     }
   ]
 }

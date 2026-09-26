@@ -63,6 +63,20 @@ addresses of both ends, that an id is online, and traffic timing.
   WebSocket layer, before anything is decoded; a longer one closes the
   connection with close code 1009 and no error message. The field caps of
   section 5.2 are smaller and are checked when a message is decoded.
+- **The sender's rule.** A field's cap (section 5.2) counts the UTF-8 bytes
+  of the decoded string, not of its JSON text, and the whole message as
+  sent, encoded, must also be at most 131072 bytes. A station or client
+  checks both before it sends, and treats a message that would break either
+  as it treats a field that is too long: it does not send it. The two
+  differ only for text that must be escaped: a 65536-byte body of control
+  characters is 393216 bytes encoded, while a body of up to 21000 bytes
+  always fits however its sender escapes it (an escape takes at most 6
+  bytes for each UTF-8 byte it stands for), and so does any real SDP or
+  `pair.*` message.
+- **What a peer accepts.** The service never sends a message longer than
+  132096 bytes (the largest inbound message plus the keys the service adds
+  when it forwards one), and a station or client accepts any message from
+  the service of up to 262144 bytes (256 KiB).
 - The service sends a WebSocket ping every 20 s and closes a connection whose
   pong has not come back 20 s later (section 9.2). Pings are control frames,
   not messages. Clients answer pings as any WebSocket stack does and need
@@ -70,7 +84,11 @@ addresses of both ends, that an id is online, and traffic timing.
 - The service closes a connection with close code 1000 after an error that
   closes (section 7), and with 1001 when it is shutting down. The reason a
   peer acts on is always in the `error` message before the close, never in
-  the close frame, whose reason text is empty.
+  the close frame, whose reason text is empty. Two closes come without an
+  `error` message: 1009 for a message over the cap (above), and 1008 for a
+  peer that has stopped reading, whose unsent messages have passed its
+  queue's cap or the service's budget for every queue together (section
+  9.1); it would not read an error message either.
 
 ## 3. Roles and the life of a connection
 
@@ -98,8 +116,12 @@ Timers (defaults in section 9.1, all configurable):
   mailbox for 30 s gets `error` `idle` and the close. The timer starts when
   the client's first message has been answered without leaving anything
   pending (an `offline` answer, say) and whenever its introduction or mailbox
-  ends. A registered station is never idle; the pings keep its connection
-  and its NAT mapping alive.
+  ends. It starts once: a refused request while it runs (`offline`,
+  `rateLimited`, `nameplateUnknown`, `nameplateBusy` or any other error)
+  does not start it again, so refused requests cannot keep a connection
+  open. Only a live introduction or an open mailbox stops it. A registered
+  station is never idle; the pings keep its connection and its NAT mapping
+  alive.
 
 ## 4. Identity values
 
@@ -115,7 +137,11 @@ change:
   uncompressed: 122 characters. Canonical means it loads as a P-256 key and
   encodes back to the same 91 bytes. Nothing else is accepted.
 - A **signature** is ECDSA P-256 over SHA-256, raw `r || s`, 64 bytes,
-  strict base64url: 86 characters. Not DER.
+  strict base64url: 86 characters. Not DER. `r` and `s` are each 32 bytes
+  big-endian and each from 1 to n - 1, n the order of the P-256 group; 0 and
+  n or above never verify. A high-s signature (`s` above n / 2) is valid:
+  OpenSSL and CryptoKit verify it, and nothing on this wire depends on a
+  signature being the only one for its message.
 - A **device id** is the link's device id (section 3.5): the SHA-256 of the
   device's SPKI DER, 32 bytes, strict base64url: 43 characters. It is the
   device's `id` in the Core's paired devices, not its key.
@@ -159,8 +185,8 @@ The station signs, with its station identity key:
 
 where `nonce` is the **32 raw bytes** the challenge's base64url decodes to,
 not its text. The prefix is 33 ASCII bytes ending in one line feed. The
-transcript is 65 bytes. `crypto/register-proof.json` gives a test-only key,
-a nonce, the transcript bytes and valid and invalid signatures.
+transcript is 65 bytes. `crypto/register-proof.json` gives a fixed public
+key, a nonce, the transcript bytes and valid and invalid signatures.
 
 ### 4.4 The introduction signature
 
@@ -186,9 +212,19 @@ device is not paired, revoked, or the signature does not verify (iPhone app
 plan Task 27). Binding the nonce stops an observer who saw one introduction
 from replaying it on a connection of its own; binding the station id stops a
 signature for one Core being shown to another.
-`crypto/introduce-signature.json` gives a test-only device key, a station
-id, a nonce, the transcript bytes and valid and invalid signatures,
-including one over the nonce's text.
+
+An accepted introduction is **not device authentication**. It is only a
+reason for the Core to spend an ICE attempt on the client. The service
+chooses the nonce and sees every signature, so a service that misbehaves
+could show a signature to the Core again; and one connection keeps its
+nonce for every introduction it makes, one after another, so a signature
+is not bound to a single introduction. The session that runs over the ICE
+connection authenticates the device again with its own key (the station
+link's device authentication), and the Core admits a device on that alone.
+
+`crypto/introduce-signature.json` gives a fixed device public key, a
+station id, a nonce, the transcript bytes and valid and invalid
+signatures, including one over the nonce's text.
 
 ## 5. Messages
 
@@ -204,21 +240,36 @@ sensitive. The rules for every message the service receives:
 - A kind the service does not know, a kind of the other role, JSON that
   does not parse, a top level that is not an object, a missing or non-string
   `type`, a key that appears twice in one object, `NaN` or `Infinity`, and a
-  string holding a lone surrogate (an escape such as `\ud800` that is not a
-  Unicode scalar value) are protocol errors.
+  string in a listed key holding a lone surrogate (an escape such as
+  `\ud800` that is not a Unicode scalar value) are protocol errors. A lone
+  surrogate in a key the kind does not list is ignored with that key.
 - A whole number is a JSON number written without a fraction or an
   exponent. `true` and `false` are not numbers, and `7.0` and `"7"` are not
   whole numbers.
 
 A string's length is counted in bytes of its UTF-8 encoding. "Forwarded
 unchanged" means the forwarded string is the same sequence of Unicode scalar
-values, so the same UTF-8 bytes; the escapes a sender chose (`é` for
+values, so the same UTF-8 bytes; the escapes a sender chose (`\u00e9` for
 `é`) are not preserved, because JSON text is re-encoded, and nothing a
 receiver decodes differs.
 
 The service encodes compactly, keys in the order the tables below list
 them, and writes non-ASCII characters as UTF-8 rather than escapes.
 Receivers must not depend on key order.
+
+**At a station or client.** A station or client decodes what the service
+sends by the same tables, with the same tolerance:
+
+- A key it does not know, in a kind it knows, is ignored (and so is a key it
+  does not know inside a `turn` object). The message is otherwise decoded as
+  usual.
+- A kind it does not know is ignored, as is a message it cannot decode: it
+  logs it and carries on (section 5.3).
+
+A later version relies on this to add keys to the service's messages
+(section 11). The control fixtures hold messages to a station and to a
+client that carry keys of no kind listed here, and they decode (section
+10.3).
 
 ### 5.2 Field kinds
 
@@ -231,7 +282,7 @@ Receivers must not depend on key order.
 | `nonce` | strict base64url of exactly 32 bytes, 43 characters |
 | `intro` | an introduction id: strict base64url of exactly 16 bytes, 22 characters, chosen by the service at random; opaque, never an address |
 | `sdp` | a string of 1 to 65536 bytes (UTF-8): an SDP offer or answer, passed on untouched |
-| `candidate` | a string of 0 to 4096 bytes: one ICE candidate line, passed on untouched; the empty string is the end of candidates |
+| `candidate` | a string of 0 to 4096 bytes: the empty string, which is the end of candidates, or one ICE candidate as the value of RFC 8839's `candidate` attribute, starting `candidate:` (for example `candidate:1 1 UDP 2122317823 2001:db8::7 50123 typ host`); passed on untouched. It never carries the `a=` of an SDP line: a sender whose ICE library gives `a=candidate:...` removes the `a=` before sending, and a candidate that does not start `candidate:` is a protocol error (the service refuses one and closes, and a peer ignores one from the service as a message it cannot decode) |
 | `body` | a string of 1 to 65536 bytes: one mailbox message, passed on untouched |
 | `nameplate` | a whole number from 1 to 999999 |
 | `bool` | `true` or `false` |
@@ -240,7 +291,7 @@ Receivers must not depend on key order.
 | `reason` | a string of 1 to 1024 bytes: plain words an app may show as sent |
 | `retry` | a whole number from 0 to 2147483647: milliseconds to wait before trying again; 0 means no advice |
 | `urls` | an array of 0 to 8 strings, each 1 to 512 bytes: STUN or TURN URLs (RFC 7064, RFC 7065) |
-| `turn` | `null`, or an object with exactly these keys: `username` (a string of 1 to 512 bytes), `password` (a string of 1 to 128 bytes), `expires` (a whole number from 0 to 4294967295, Unix seconds) and `urls` (`urls`); section 8 |
+| `turn` | `null`, or an object with these keys: `username` (a string of 1 to 512 bytes), `password` (a string of 1 to 128 bytes), `expires` (a whole number from 0 to 4294967295, Unix seconds) and `urls` (`urls`); section 8. The service sends exactly these; a receiver ignores any other key in it (section 5.1) |
 
 ### 5.3 The kinds
 
@@ -299,8 +350,10 @@ Receivers must not depend on key order.
 | `error` | `code` (`code`), `reason` (`reason`), `retryAfterMs` (`retry`) | section 7 |
 
 A station or client logs and ignores a message it cannot decode or a kind it
-does not know; the service ends the connection on one (section 5.1). That
-is the station link's rule (link section 13) applied here.
+does not know, and ignores a key it does not know in a kind it knows; the
+service ends the connection on a message it cannot decode or a kind it does
+not know, and ignores unknown keys (section 5.1). That is the station link's
+rule (link section 13) applied here.
 
 ## 6. Flows
 
@@ -334,6 +387,12 @@ service -> station:  {"type":"registered","id":<rid>}
 - `prove` must verify over the registration transcript with this
   connection's challenge (section 4.3), or it is `error` `proofFailed` and
   the close. Only a verified `prove` registers the id.
+- A verified `prove` whose address group already holds its share of
+  registered stations gets `error` `tooManyConnections`, and one when the
+  service holds its total, `error` `overloaded`, each instead of
+  `registered` and followed by the close (section 9.1). A registration that
+  replaces an older one of the same id is never refused for the older
+  one's slot.
 - A second registration of the same id, on another connection, replaces the
   first: the older connection gets `error` `replaced` and the close, and its
   introductions, nameplate and mailbox end as when a station leaves
@@ -376,7 +435,8 @@ either  -> service -> other:  candidates, then the end of candidates
   that asked always gets its `credentials` reply. With `turn` false the
   client's `turn` is null, nothing is minted and no `credentials` is sent.
 - **Candidates.** Each end trickles its ICE candidates through the service,
-  one `candidate` message per candidate line, forwarded untouched. The
+  one `candidate` message per candidate, in section 5.2's form (starting
+  `candidate:`, never `a=candidate:`), forwarded untouched. The
   client may send candidates as soon as its introduction is live; the
   station only after its `answer` (a station candidate before it is a
   protocol error). An empty `candidate` is the end of candidates and is
@@ -395,6 +455,14 @@ either  -> service -> other:  candidates, then the end of candidates
   spare, when both ends get `introduction.end` `expired`. A client that has
   its session running simply closes its rendezvous connection. A second
   `introduce` while one is live is a protocol error.
+- **What an end means to the Core.** `introduction.end` (`clientLeft`,
+  `expired` or any other code) ends only the introduction: the Core stops
+  sending that introduction's candidates and forgets its id. It never
+  touches a session already running over the ICE connection the
+  introduction set up, which ends only by its own rules (the station
+  link). A client closing its rendezvous connection once its session runs,
+  as above, is the ordinary case, and the Core then gets `clientLeft`. The
+  same holds at the client for `stationLeft` and `expired`.
 - **Order of the client's connection.** A client gathers with the relay
   credentials it receives in `answer`, so an offer carries no candidates of
   its own; both ends' candidates arrive by trickle. The station's
@@ -490,9 +558,9 @@ connection open.
 | `replaced` | yes | "The Core registered again on another connection, so this one was closed." | 0 | the same id registered on another connection |
 | `timeout` | yes | "The connection did not finish starting in time." | 0 | the handshake timer (section 3) |
 | `idle` | yes | "The connection was closed because it was not being used." | 0 | the idle timer (section 3) |
-| `tooManyConnections` | yes | "Too many connections are open from this network. Try again shortly." | 5000 | the per-address cap, sent instead of `hello` |
-| `overloaded` | yes | "The connection server is busy. Try again shortly." | 5000 | the total cap, sent instead of `hello` |
-| `shuttingDown` | yes | "The connection server is restarting. Try again shortly." | 5000 | the service is stopping |
+| `tooManyConnections` | yes | "Too many connections are open from this network. Try again shortly." | 5000 | the per-address-group cap on connections, sent instead of `hello`; or the per-address-group cap on registered stations, sent instead of `registered` (section 9.1) |
+| `overloaded` | yes | "The remote access service is busy. Try again shortly." | 5000 | the total cap on connections, sent instead of `hello`; or the total cap on registered stations, sent instead of `registered` (section 9.1) |
+| `shuttingDown` | yes | "The remote access service is restarting. Try again shortly." | 5000 | the service is stopping |
 | `offline` | no | "The Core is not reachable right now. Check that it is running and connected to the internet." | 0 | section 6.4 |
 | `rateLimited` | no | "Too many attempts. Try again in a minute." | until allowed | section 9.1 |
 | `noIntroduction` | no | "There is no connection attempt in progress." | 0 | a client candidate with no live introduction |
@@ -539,6 +607,14 @@ password = base64(HMAC-SHA1(secret, username)) standard base64, with padding
   `turn:rv4.nereussdr.com:3478?transport=udp` and
   `turn:rv4.nereussdr.com:443?transport=udp`, and the `stun` list of
   `hello` names the same two hosts on 3478. The names are configuration.
+- **Quotas.** coturn's quotas per user (per username, so per station id)
+  do not limit how much the relay is used in total: an id costs nothing
+  (anyone can make a key, register it and answer its own introduction with
+  `turn` true), so a user of the relay can have as many ids, and as many
+  per-id quotas, as it likes. What bounds the relay is coturn's total quota
+  and its bandwidth caps, which Task 26's second part sizes to the server's
+  transfer allowance. The per-station quota only keeps one Core's sessions
+  from taking all of that by themselves.
 - What coturn does when an allocation is refreshed after its credential has
   expired is recorded by the coturn check in Docker (Task 26's second part,
   `rendezvous/tests/coturn-check.sh`), and decides whether clients refresh
@@ -553,30 +629,70 @@ the service's code.
 ### 9.1 Limits
 
 Every value is configurable (`rendezvous.conf`, `[limits]`); these are the
-defaults.
+defaults. Every value must be at least 1, except that 0 turns the pings
+off; the service refuses to start otherwise.
+
+**Address groups.** Every count and limit "per address" is kept per
+address group: an IPv4 address by itself (an IPv4-mapped IPv6 address
+counts as its IPv4 address), or an IPv6 /56. A /56 is what an ISP commonly
+delegates to one household, and a host that owns a prefix can dial from
+every address in it, so counting by /64 would let one household multiply
+every limit by up to 256. (The station link counts its handshakes by /64,
+link section 12.3; the rendezvous, open to the whole internet, is stricter.)
+
+**Two pools.** Registered stations and every other connection are counted
+apart, so clients can never use up the room stations need, nor the
+reverse. A connection that has not registered (a client, or a connection
+still starting, whatever it will become) counts in the connection pool; a
+station moves from it to the station pool when its `prove` verifies, and
+leaves the connection pool then. A registration that replaces an older one
+of the same id (section 6.2) does not count the older one.
 
 | Limit | Default | Why |
 | --- | --- | --- |
-| Introductions per source address | 30 a minute | the brief's figure; a person retrying by hand never meets it |
-| Introductions per station id | 60 a minute | counted for every id asked for, online or not (section 6.4) |
-| Mailbox opens per source address | 10 a minute | each open can use up a pairing code; guessing nameplates is slow |
+| Introductions per address group | 30 a minute | the brief's figure; a person retrying by hand never meets it |
+| Introductions per station id, per address group | 60 a minute | counted per station per network (JJ's ruling, 2026-09-25), so a flood from one network blocks only that network's introductions to the station, never another network's; counted for every id asked for, online or not (section 6.4) |
+| Mailbox opens per address group | 10 a minute | each open can use up a pairing code; guessing nameplates is slow |
 | Candidates per side per introduction | 64 | more than any real gathering, within the message caps |
 | Bodies per side per mailbox | 32 | a pairing exchange is under ten each way |
-| Connections per source address | 16 | a household with several phones and Cores behind one address |
-| Connections in total | 4096 | bounds memory; `overloaded` beyond it |
+| Connections per address group (the connection pool) | 16 | a household with several phones behind one address; `tooManyConnections` instead of `hello` beyond it |
+| Registered stations per address group (the station pool) | 4 | a household runs one or two Cores; `tooManyConnections` instead of `registered` beyond it |
+| Connections in total (the connection pool) | 512 | bounds memory (below); `overloaded` instead of `hello` beyond it |
+| Registered stations in total (the station pool) | 512 | bounds memory (below); `overloaded` instead of `registered` beyond it |
 | Handshake timeout | 10 s | a registration is one round trip plus a signature |
 | Idle timeout for clients | 30 s | a client with nothing pending has no reason to stay |
 | Introduction lifetime | 120 s | gathering (23.5 s) plus ICE's 39.5 s timer, with room |
 | Mailbox lifetime | 300 s | the pairing exchange, with Argon2id hashing on the Core, and a person typing |
 | WebSocket ping interval and timeout | 20 s and 20 s | keeps a station's NAT mapping and Caddy's upstream alive; the station link uses 20 s too (link section 12.1) |
-| Outbound queue per connection | 256 messages | a peer that stops reading is closed rather than buffered without bound |
+| Outbound queue per connection | 256 messages or 1048576 bytes (1 MiB), whichever comes first | a peer that stops reading is closed (1008, section 2) rather than buffered without bound; 1 MiB holds 16 of the largest messages |
+| Outbound queues together | 33554432 bytes (32 MiB) | a budget for every connection's queue at once; the connection whose next message would pass it is closed (1008) |
+
+**Sizing the totals.** The defaults fit a server of 1 GB of memory and one
+virtual CPU that also runs the website (Caddy) and the relay (coturn),
+leaving the service about 256 MiB. Measured in an `ubuntu:24.04` container
+with Ubuntu's `python3-websockets` 10.4 on Python 3.12: the process starts
+at about 28 MiB; each idle connection adds about 24 KiB (a client) to
+27 KiB (a registered station), 1000 of each coming to about 50 MiB; and
+each connection holding a message of nearly 128 KiB that its peer never
+finishes sending adds about 153 KiB, which is the most a peer can make the
+service hold on the way in (the cap of section 2, with at most one whole
+message waiting behind it, `max_queue` 1, and the service reads each
+message as it arrives). On the way out a connection can add its WebSocket
+write buffer (32 KiB, `write_limit`), and every queue together at most the
+32 MiB budget. So the worst case for 1024 connections (512 in each pool)
+is about 28 + 1024 x (153 + 32) KiB + 32 MiB, near 245 MiB, where real
+traffic uses a small fraction of it. Caddy holds each proxied WebSocket
+too, estimated (not measured) at under 100 KiB with its TLS buffers. A
+larger server raises both totals; a deployment can also set a memory
+ceiling (systemd `MemoryMax`) as a backstop. One vCPU is not the limit:
+the service's work is a JSON decode per message and one signature check
+per registration.
 
 The windows are sliding: a limit of N a minute refuses an attempt when N
 were counted in the last 60 s, with `retryAfterMs` until the oldest leaves
-the window. A refused attempt is not counted. A source address counts by
-itself for IPv4 (and an IPv4-mapped IPv6 address as its IPv4 address) and by
-its /64 for any other IPv6 address, as the station link counts handshakes
-(link section 12.3).
+the window. A refused attempt is not counted. An introduction counts
+against its address group's limit and against its (station id, address
+group) limit; it is refused, with the longer wait, when either is full.
 
 The source address is the peer's, or, when the peer is a configured trusted
 proxy (by default the loopback addresses, where Caddy connects from), the
@@ -636,10 +752,12 @@ come from there being three parties rather than two, and are named below.
 - `sdp/offer.sdp`, `sdp/answer.sdp`: the SDP texts a runner sends where a
   fixture says `"$sdp:offer:<name>"` or `"$sdp:answer:<name>"`.
 
-The two test-only private keys in `crypto/` are marked as such in the file
-(`testOnly`). They were made for the vectors, protect nothing, and must
-never be used as an identity; every other key in the suite is made at run
-time.
+No file in the suite holds a private key. `crypto/` holds two fixed
+public keys (marked `fixed`) with fixed signatures made when the vectors
+were written, whose private keys were then discarded: a runner only
+verifies with them. Every key that signs during a run (the stations that
+register and the devices that introduce themselves in the session
+fixtures) is made at run time.
 
 ### 10.2 Crypto vectors
 
@@ -648,8 +766,8 @@ time.
 | `base64url.json` | `cases`: `{"text","valid","bytesHex"}` or `{"text","valid":false,"why"}` | its strict base64url decoder accepts exactly the valid texts, to those bytes |
 | `p256-spki.json` | `cases`: `{"name","spkiHex","valid"}`: a canonical key, a compressed point, P-384, secp256k1, a point off the curve, a BIT STRING with unused bits, a trailing byte, a truncated key | its key check accepts exactly the valid one |
 | `rendezvous-id.json` | `prefixHex` and `cases`: `{"publicKey","digestHex","id"}` | SHA-256 of the prefix and the key's DER is `digestHex`, and the id derived from it is `id` (section 4.2) |
-| `register-proof.json` | `key` (`testOnly`, `privateKeyPkcs8` as base64url of PKCS#8 DER, `publicKey`, `id`), `nonce`, `transcriptHex`, and `cases`: `{"name","publicKey","signature","valid"}` | the transcript of `nonce` is `transcriptHex`, and a case is valid exactly when its key is a canonical P-256 key and its signature (strict base64url, 64 bytes, raw) verifies over it: another nonce, a flipped bit, another key, a DER signature, padding, a short signature and three bad keys are not |
-| `introduce-signature.json` | `device` (`testOnly`, `privateKeyPkcs8`, `publicKey`, `id`), `stationId`, `nonce`, `transcriptHex`, and `cases`: `{"name","signature","valid"}` | the transcript of `stationId` and `nonce` is `transcriptHex`, `id` is the fingerprint of `publicKey`, and a case verifies with the device's key exactly when it is valid: another nonce, another station, the nonce's text, a flipped bit and another device are not |
+| `register-proof.json` | `key` (`fixed`, `publicKey`, `id`), `nonce`, `transcriptHex`, and `cases`: `{"name","publicKey","signature","valid"}` | `id` is the id of `publicKey`, the transcript of `nonce` is `transcriptHex`, and a case is valid exactly when its key is a canonical P-256 key and its signature (strict base64url, 64 bytes, raw) verifies over it: the signature and its high-s twin (`s` replaced by n - `s`, section 4.1) are; another nonce, a flipped bit, another key, a DER signature, padding, a short signature, three bad keys, `r` of 0, `r` of n and `s` of n are not |
+| `introduce-signature.json` | `device` (`fixed`, `publicKey`, `id`), `stationId`, `nonce`, `transcriptHex`, and `cases`: `{"name","signature","valid"}` | the transcript of `stationId` and `nonce` is `transcriptHex`, `id` is the fingerprint of `publicKey`, and a case verifies with the device's key exactly when it is valid: the signature and its high-s twin are; another nonce, another station, the nonce's text, a flipped bit, another device, `r` of 0, `r` of n and `s` of n are not |
 | `turn-credentials.json` | `cases`: `{"secret","expires","stationId","username","password"}` | the username and password from section 8 |
 
 ### 10.3 Control fixtures
@@ -661,7 +779,10 @@ client always goes to the service. This is the one difference from link
 section 16.2's `{"from","wire","decodes"}`.
 
 The receiving end decodes `wire`; when `decodes` is true it encodes the
-result again and the two compare equal as JSON values, key order ignored.
+result again and compares it with `wire` as JSON values, key order ignored,
+on the keys the kind lists only (and, inside a `turn` object, on its four
+keys only): a key the kind does not list is ignored by the receiver
+(section 5.1) and takes no part in the comparison.
 The service's runner decodes every fixture, in every direction, with the
 service's decoder for that direction, and also sends each refusal from a
 station or client to the running service, which must answer `error`
@@ -672,11 +793,16 @@ same for `"client"`.
 The fixtures cover every kind in each direction it travels (section 5.3):
 eight from a station, five from a client, thirteen to a station and eight to
 a client, with both ends of candidates, relay and no relay, and codes a
-receiver does not know. The refusals: an `id` in capitals and one of 25
+receiver does not know, and one message to a station
+(`server-station-introduction-extra-keys`) and one to a client
+(`server-client-answer-extra-keys`, also with an extra key in its `turn`)
+carrying keys no kind lists, which decode. The refusals: an `id` in capitals and one of 25
 characters; a padded key, a key that is a number, a `register` without
 `publicKey`; a 63-byte signature; `turn` as a string; an empty `answer`; an
 `answer`, an `offer` and a `body` over 65536 bytes (one counted in
-two-byte characters); a candidate over 4096 bytes and a null candidate; a
+two-byte characters); a candidate over 4096 bytes, a null candidate, and a
+candidate with the `a=` of an SDP line, from a station, from a client and
+(for a client's decoder) from the service; a
 `to` of 15 bytes; a station `candidate` without `to`; a `body` that is an
 object; a device key where a device id belongs; a padded device signature;
 an `introduce` without `offer`; nameplates 0, 1000000, `"7"`, `7.5` and
@@ -687,7 +813,10 @@ an `introduction` without `nonce`, a negative `retryAfterMs`, a
 `credentials` sent to a client and an unknown kind.
 
 The 128 KiB transport cap is enforced before decoding, so no fixture holds
-it; `test_control.py` checks it against the running service.
+it; `test_control.py` checks it against the running service, and
+`test_queues_and_sizes.py` checks the sender's rule of section 2 at its
+worst case. A lone surrogate cannot be written portably in a JSON fixture
+file, so `test_control.py` also holds section 5.1's rule for those.
 
 ### 10.4 Session fixtures
 
@@ -734,10 +863,12 @@ in the service's run.
 - `{"disconnect":"<conn>"}`: that end closes its connection. A core or app
   runner drives its own client to close; for another connection it does
   nothing.
-- `{"expectClosed":"<conn>"}`: the service has closed the connection, with
-  no message between the last one listed and the close. A core or app
-  runner closes its connection there (code 1000), and its client must send
-  nothing after it.
+- `{"expectClosed":"<conn>","code":<close code>}`: the service has closed
+  the connection with that WebSocket close code (1000 after an error that
+  closes, section 2), with no message between the last one listed and the
+  close. The service's runner checks the code in the close frame it
+  receives. A core or app runner closes its connection there with that
+  code, and its client must send nothing after it.
 - `{"expectSilent":"<conn>"}`: nothing more has arrived at that connection.
   The service's runner waits until the service has read everything sent and
   emptied its queues, then checks that nothing is waiting (a closed
@@ -760,7 +891,7 @@ absent keys have these defaults:
 | `turn` | `true`: a TURN secret is configured (the runner makes one at run time); `false`: none |
 | `turnTtlSeconds` | 86400 |
 | `wallClock` | 1800000000: the Unix time when the fixture starts; it moves only with `advanceMs` |
-| `introductionsPerAddressPerMinute`, `introductionsPerStationPerMinute`, `mailboxOpensPerAddressPerMinute`, `candidatesPerSide`, `mailboxMessagesPerSide`, `connectionsPerAddress`, `maxConnections`, `handshakeTimeoutMs`, `idleTimeoutMs`, `introductionLifetimeMs`, `mailboxLifetimeMs` | section 9.1 |
+| `introductionsPerAddressPerMinute`, `introductionsPerStationPerMinute`, `mailboxOpensPerAddressPerMinute`, `candidatesPerSide`, `mailboxMessagesPerSide`, `connectionsPerAddress`, `stationsPerAddress`, `maxConnections`, `maxStations`, `handshakeTimeoutMs`, `idleTimeoutMs`, `introductionLifetimeMs`, `mailboxLifetimeMs` | section 9.1 |
 
 A core or app runner reads `stunUrls`, `turnUrls`, `turnTtlSeconds` and
 `wallClock` to fill the service's messages, and ignores the rest.
@@ -788,7 +919,7 @@ them, without sending anything.
 | `"$register:<k>:<nonce>:<case>"` | a signature by station key `<k>` over the registration transcript of the nonce recorded as `<nonce>` (section 4.3); `<case>` is `signed`, `otherNonce` (over a random nonce instead) or `flippedBit` (the last bit of `s` flipped) | equal to the value filled for this placeholder |
 | `"$introduce:<d>:<k>:<nonce>:<case>"` | a signature by device key `<d>` over the introduction transcript of station key `<k>`'s id and the nonce recorded as `<nonce>` (section 4.4); cases as above | equal to the value filled for this placeholder |
 | `"$sdp:offer:<name>"`, `"$sdp:answer:<name>"` | the text of `sdp/offer.sdp` or `sdp/answer.sdp`; recorded | a non-empty string; recorded |
-| `"$candidate:<name>"` | a host candidate line of the runner's own; recorded | a string; recorded |
+| `"$candidate:<name>"` | a host candidate of the runner's own, in section 5.2's form; recorded | a string that decodes as a `candidate` (section 5.2); recorded |
 | `"$turn:<k>:<name>"` | credentials minted as section 8 with the runner's own secret, for station key `<k>`, expiring at `wallClock` plus the seconds advanced plus `turnTtlSeconds`, with `turnUrls`; recorded | exactly that object: the username is `<expires>:<id of k>`, the password the HMAC-SHA1 of it under the secret the runner gave the service (computed by the runner, not the service), `urls` the configured list; recorded |
 
 Keys and devices are named by short names (`a`, `b`, `d`, `e`) and made at
@@ -840,7 +971,9 @@ send (a nameplate number, a mailbox body), as in link section 16.3.
 | `introduction-expires` | service, core, app | nothing at 119999 ms; `expired` to both at 120000 ms |
 | `client-candidate-without-introduction` | service | `noIntroduction` |
 | `client-idle` | service | a client with nothing pending: nothing at 29999 ms, `idle` and the close at 30000 ms |
-| `introduce-rate-limit-address`, `introduce-rate-limit-station` | service | the per-address limit (2 here) with its `retryAfterMs`, allowed again when the window passes; the per-station limit (1 here) across two addresses, counted for an id that is offline |
+| `client-idle-after-refusals` | service | refusals (`offline` at 0 and 20000 ms, `nameplateUnknown`) do not start the idle timer again: `idle` and the close at 30000 ms after the first |
+| `introduce-answer-other-station` | service | with two stations registered, the other station's `answer` and `candidate` naming the first station's live introduction: `unknownIntroduction` twice, and nothing reaches the client or the first station |
+| `introduce-rate-limit-address`, `introduce-rate-limit-station` | service | the per-address limit (2 here) with its `retryAfterMs`, allowed again when the window passes; the per-station, per-network limit (1 here), counted for an id that is offline: a second client on the same network is refused, one on another network is still admitted, and the first network is admitted again when the window passes |
 | `nameplate-claim` | service, core | claim 1, claim again (1), release, release again, claim 1 |
 | `nameplate-lowest-free` | service | 1, 2, 3; 2 released and 1's station leaves; the next claim gets 1, and 2 again after it |
 | `mailbox-exchange` | service, core, app | open, `mailbox.opened` to both, bodies both ways (one with line ends, quotes, a backslash and characters outside ASCII) forwarded unchanged, close, `closed` and `peerClosed` |
@@ -851,7 +984,9 @@ send (a nameplate number, a mailbox body), as in link section 16.3.
 | `mailbox-expires` | service | `expired` to both at 300000 ms |
 | `mailbox-without-open`, `mailbox-message-cap`, `mailbox-rate-limit` | service | `noMailbox` from each side; `tooManyMessages` at the cap (1 here); the per-address open limit (1 here) |
 | `unknown-kind`, `client-claims-nameplate`, `station-introduces` | service | an unknown kind, and each role sending the other's: `protocolError`, the close |
-| `connections-per-address`, `connections-per-ipv6-prefix` | service | the per-address cap (1 here) answered with `tooManyConnections` instead of `hello`; an IPv6 /64 counted as one address, another /64 not; an IPv4-mapped address counted as its IPv4 address |
+| `connections-per-address`, `connections-per-ipv6-prefix` | service | the per-address-group cap (1 here) answered with `tooManyConnections` instead of `hello`; two addresses in one IPv6 /64, and two /64s in one /56, counted as one group, another /56 not; an IPv4-mapped address counted as its IPv4 address |
+| `connection-pools` | service | a connection counts in the connection pool until it registers: the per-group cap (1) and the total (2) refuse others while the station is starting, and once it is registered a client from its address, and one more elsewhere, are admitted |
+| `stations-per-address`, `stations-in-total` | service | the station pool's per-group cap (1 here, across one IPv6 /56) and its total (1 here): `tooManyConnections` or `overloaded` instead of `registered`, the close; a station on another /56 is registered, and a registration replacing the one that holds the slot is not refused |
 
 ### 10.5 Running the service's runner
 
@@ -878,6 +1013,13 @@ checks that the failure names the step and field that differ.
   added after version 1 only to a service whose `hello` `version` includes
   it, because an older service ends the connection on a kind it cannot
   decode (a key it does not know it ignores).
+- **The service adds to what peers receive by the peers' tolerance.** A
+  station or client ignores a key it does not know in a kind it knows, and a
+  kind it does not know (section 5.1). A later service may therefore add
+  keys to its messages, and new kinds, without asking which version a peer
+  speaks; that is what this rule is for, and the extra-key control
+  fixtures (section 10.3) hold every runner to it. A later service never
+  changes a key a peer already knows.
 - **Nothing on disk, nothing sensitive in the log** (section 9) is part of
   the wire's contract, not an implementation detail: a self-hoster relies
   on it.

@@ -36,7 +36,8 @@
       }
     },
     {
-      "expectClosed": "client2"
+      "expectClosed": "client2",
+      "code": 1000
     },
     {
       "connect": "client3",

@@ -1,10 +1,13 @@
 # no-port-check: NereusSDR-original.
 """Rate limits and address grouping.
 
-A source address counts as itself for IPv4 (and for an IPv4-mapped IPv6
-address, as its IPv4 address) and by its /64 prefix for any other IPv6
-address, because one host can use every address in its /64. The station
-link counts handshakes the same way (link section 12.3).
+Every per-address count and limit is kept per address group: an IPv4
+address by itself (an IPv4-mapped IPv6 address counts as its IPv4
+address), and any other IPv6 address by its /56 prefix. A /56 is what an
+ISP commonly delegates to one household, so one customer can dial from
+every address in it; counting by /64 would let a household (or a host that
+owns a /56) multiply every limit by up to 256. Rendezvous document section
+9.1.
 """
 
 from __future__ import annotations
@@ -12,6 +15,9 @@ from __future__ import annotations
 import collections
 import ipaddress
 from typing import Deque, Dict, Optional, Tuple
+
+
+IPV6_GROUP_BITS = 56
 
 
 def address_group(address: str) -> str:
@@ -24,7 +30,7 @@ def address_group(address: str) -> str:
     if isinstance(ip, ipaddress.IPv6Address):
         if ip.ipv4_mapped is not None:
             return str(ip.ipv4_mapped)
-        net = ipaddress.IPv6Network((int(ip) >> 64 << 64, 64))
+        net = ipaddress.IPv6Network((int(ip) >> (128 - IPV6_GROUP_BITS) << (128 - IPV6_GROUP_BITS), IPV6_GROUP_BITS))
         return str(net)
     return str(ip)
 

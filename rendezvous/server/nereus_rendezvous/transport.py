@@ -81,10 +81,21 @@ class WsTransport:
         return self.ws.__aiter__()
 
 
+MAX_QUEUE = 1
+WRITE_LIMIT_BYTES = 32768
+
+
 def serve_kwargs(config: Any) -> dict:
+    # max_queue: the service reads every message as soon as it arrives, so
+    # one waiting message is enough; with max_size it bounds what a peer can
+    # make the service hold on the way in (rendezvous document section 9.1).
+    # write_limit: the high-water mark of the write buffer, in bytes, under
+    # the same name and meaning in websockets 10.x (legacy) and 13 and later;
+    # the service's own outbound queue (send_queue_bytes) sits in front of it.
     kwargs = dict(
         max_size=protocol.MAX_MESSAGE_BYTES,
-        max_queue=16,
+        max_queue=MAX_QUEUE,
+        write_limit=WRITE_LIMIT_BYTES,
         ping_interval=config.ping_interval_seconds or None,
         ping_timeout=config.ping_timeout_seconds or None,
         close_timeout=5,

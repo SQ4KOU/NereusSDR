@@ -75,7 +75,8 @@
       }
     },
     {
-      "expectClosed": "station"
+      "expectClosed": "station",
+      "code": 1000
     }
   ]
 }

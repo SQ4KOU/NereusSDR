@@ -26,6 +26,22 @@ def _load(entry):
     return fixture, frm, to
 
 
+TURN_KEYS = ("username", "password", "expires", "urls")
+
+
+def _listed(wire, frm, to):
+    """Section 10.3: the re-encode comparison is on the keys the kind lists
+    (and, inside a turn object, the keys it lists); a key the receiver does
+    not know is ignored (section 5.1), so it takes no part."""
+    out = {"type": wire["type"]}
+    for key, kind in protocol.TABLES[(frm, to)][wire["type"]]:
+        value = wire[key]
+        if kind is protocol.TURN_OR_NULL and value is not None:
+            value = {k: value[k] for k in TURN_KEYS}
+        out[key] = value
+    return out
+
+
 @pytest.mark.parametrize("entry", CONTROL, ids=[f["id"] for f in CONTROL])
 def test_decode(entry):
     fixture, frm, to = _load(entry)
@@ -36,7 +52,39 @@ def test_decode(entry):
         assert fixture["decodes"] is False, entry["id"]
         return
     assert fixture["decodes"] is True, entry["id"]
-    assert json.loads(protocol.encode(decoded)) == fixture["wire"]
+    assert json.loads(protocol.encode(decoded)) == _listed(fixture["wire"], frm, to)
+
+
+def test_unknown_keys_at_peers_have_fixtures():
+    """Section 5.1: a station and a client ignore keys they do not know in
+    a kind they know. Server-to-peer additions (section 11) rely on it, so
+    each receiving role has a fixture carrying one."""
+    extra = set()
+    for entry in CONTROL:
+        fixture, frm, to = _load(entry)
+        if fixture["decodes"] and frm == "server" and fixture["wire"] != _listed(fixture["wire"], frm, to):
+            extra.add(to)
+    assert extra == {"station", "client"}
+
+
+def test_lone_surrogates_count_only_in_listed_keys():
+    """Section 5.1: a lone surrogate in a key the kind lists is a protocol
+    error; one in a key it does not list is ignored with that key. JSON
+    fixture files cannot hold a lone surrogate portably, so this is here."""
+    listed = '{"type":"mailbox","body":"\\ud800"}'
+    unlisted = '{"type":"mailbox.open","nameplate":5,"note":"\\ud800"}'
+    with pytest.raises(protocol.DecodeError):
+        protocol.decode(protocol.parse_text(listed), "client", "server")
+    assert protocol.decode(protocol.parse_text(unlisted), "client", "server") == {"type": "mailbox.open", "nameplate": 5}
+
+    async def go():
+        async with live_service() as (service, uri):
+            ws = await ws_connect(uri, "192.0.2.1")
+            await recv_json(ws)
+            await ws.send(unlisted)
+            assert (await recv_json(ws))["code"] == "nameplateUnknown"
+
+    asyncio.run(go())
 
 
 def test_every_kind_in_each_direction_has_a_fixture():

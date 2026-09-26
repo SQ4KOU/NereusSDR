@@ -29,6 +29,8 @@ NONCE_BYTES = 32
 FINGERPRINT_BYTES = 32
 INTRODUCTION_ID_BYTES = 16
 ID_CHARS = 26
+# The order n of the P-256 group (SEC 2, secp256r1).
+P256_ORDER = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
 
 ID_PREFIX = b"NereusSDR rendezvous id v1\n"
 REGISTER_PREFIX = b"NereusSDR rendezvous register v1\n"
@@ -142,7 +144,10 @@ def verify_raw(spki: bytes, message: bytes, signature: bytes) -> bool:
         return False
     r = int.from_bytes(signature[:32], "big")
     s = int.from_bytes(signature[32:], "big")
-    if r == 0 or s == 0:
+    # Rendezvous document section 4.1: r and s each from 1 to n - 1. A
+    # high-s signature (s above n / 2) is valid, as OpenSSL and CryptoKit
+    # verify it.
+    if not (1 <= r < P256_ORDER and 1 <= s < P256_ORDER):
         return False
     try:
         key.verify(encode_dss_signature(r, s), bytes(message), ec.ECDSA(hashes.SHA256()))

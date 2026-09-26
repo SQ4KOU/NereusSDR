@@ -3,6 +3,9 @@
     "service"
   ],
   "serverSetup": {},
+  "pairedDevices": [
+    "d"
+  ],
   "steps": [
     {
       "connect": "station"
@@ -54,7 +57,8 @@
       }
     },
     {
-      "connect": "station2"
+      "connect": "station2",
+      "address": "198.51.100.2"
     },
     {
       "from": "server",
@@ -74,8 +78,8 @@
       "role": "behaviour",
       "message": {
         "type": "register",
-        "id": "$key:a:id",
-        "publicKey": "$key:a:publicKey"
+        "id": "$key:b:id",
+        "publicKey": "$key:b:publicKey"
       }
     },
     {
@@ -91,7 +95,7 @@
       "role": "behaviour",
       "message": {
         "type": "prove",
-        "signature": "$register:a:challenge2:signed"
+        "signature": "$register:b:challenge2:signed"
       }
     },
     {
@@ -99,22 +103,8 @@
       "to": "station2",
       "message": {
         "type": "registered",
-        "id": "$key:a:id"
+        "id": "$key:b:id"
       }
-    },
-    {
-      "from": "server",
-      "to": "station",
-      "message": {
-        "type": "error",
-        "code": "replaced",
-        "reason": "The Core registered again on another connection, so this one was closed.",
-        "retryAfterMs": 0
-      }
-    },
-    {
-      "expectClosed": "station",
-      "code": 1000
     },
     {
       "connect": "client"
@@ -145,7 +135,7 @@
     },
     {
       "from": "server",
-      "to": "station2",
+      "to": "station",
       "message": {
         "type": "introduction",
         "from": "$b64:16:intro",
@@ -154,6 +144,48 @@
         "offer": "$ref:offer",
         "nonce": "$ref:clientNonce"
       }
+    },
+    {
+      "from": "station2",
+      "role": "scripted",
+      "message": {
+        "type": "answer",
+        "to": "$ref:intro",
+        "answer": "$sdp:answer:answer",
+        "turn": true
+      }
+    },
+    {
+      "from": "server",
+      "to": "station2",
+      "message": {
+        "type": "error",
+        "code": "unknownIntroduction",
+        "reason": "That connection attempt has already ended.",
+        "retryAfterMs": 0
+      }
+    },
+    {
+      "from": "station2",
+      "role": "scripted",
+      "message": {
+        "type": "candidate",
+        "to": "$ref:intro",
+        "candidate": "$candidate:s1"
+      }
+    },
+    {
+      "from": "server",
+      "to": "station2",
+      "message": {
+        "type": "error",
+        "code": "unknownIntroduction",
+        "reason": "That connection attempt has already ended.",
+        "retryAfterMs": 0
+      }
+    },
+    {
+      "expectSilent": "client"
     },
     {
       "expectSilent": "station"

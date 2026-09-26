@@ -117,7 +117,8 @@
       }
     },
     {
-      "expectClosed": "client"
+      "expectClosed": "client",
+      "code": 1000
     },
     {
       "from": "server",

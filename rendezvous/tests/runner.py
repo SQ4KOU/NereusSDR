@@ -58,7 +58,9 @@ _SETUP_KEYS = {
     "candidatesPerSide": "candidates_per_side",
     "mailboxMessagesPerSide": "mailbox_messages_per_side",
     "connectionsPerAddress": "connections_per_address",
+    "stationsPerAddress": "stations_per_address",
     "maxConnections": "max_connections",
+    "maxStations": "max_stations",
     "handshakeTimeoutMs": "handshake_timeout_ms",
     "idleTimeoutMs": "idle_timeout_ms",
     "introductionLifetimeMs": "introduction_lifetime_ms",
@@ -333,7 +335,7 @@ class Runner:
             self.records[parts[1]] = actual
             return
         if kind == "candidate":
-            need(isinstance(actual, str), "a candidate")
+            need(isinstance(actual, str) and (actual == "" or actual.startswith("candidate:")), "a candidate")
             self.records[parts[0]] = actual
             return
         if kind == "turn":
@@ -411,10 +413,16 @@ class Runner:
             await self.quiesce()
             return
         if "expectClosed" in step:
+            if set(step) != {"expectClosed", "code"}:
+                raise FixtureFailure("an expectClosed step has expectClosed and code")
             conn = step["expectClosed"]
             try:
                 text = await self.recv(conn, RECV_TIMEOUT_S)
-            except ConnectionClosed:
+            except ConnectionClosed as exc:
+                # rcvd is the close frame the service sent.
+                got = exc.rcvd.code if exc.rcvd is not None else None
+                if got != step["code"]:
+                    raise FixtureFailure(f"{conn} was closed with {got}, not {step['code']}") from None
                 return
             except asyncio.TimeoutError:
                 raise FixtureFailure(f"{conn} was not closed") from None

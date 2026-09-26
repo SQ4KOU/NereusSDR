@@ -7,7 +7,7 @@ import hashlib
 import hmac
 
 import pytest
-from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import ec
 
 from nereus_rendezvous import identity, turn
 from runner import load_fixture, load_manifest
@@ -53,16 +53,21 @@ def test_rendezvous_id():
         assert identity.is_rendezvous_id(case["id"])
 
 
-def _test_key(block):
-    assert "never be used" in block["testOnly"]
-    return serialization.load_der_private_key(identity.from_b64url(block["privateKeyPkcs8"]), None)
+EDGE_CASES = {"highS", "rZero", "sIsN", "rIsN"}
+
+
+def _fixed_key(block):
+    """The vectors hold a fixed public key and no private key (the Global
+    Constraints: no fixture holds a private key)."""
+    assert set(block) == {"fixed", "publicKey", "id"}, sorted(block)
+    spki = identity.b64url_of_length(block["publicKey"], identity.SPKI_BYTES)
+    assert spki is not None and identity.is_p256_spki(spki)
+    return spki
 
 
 def test_register_proof():
     vectors = load_fixture(CRYPTO["register-proof"])
-    key = _test_key(vectors["key"])
-    spki = identity.spki_of(key.public_key())
-    assert identity.to_b64url(spki) == vectors["key"]["publicKey"]
+    spki = _fixed_key(vectors["key"])
     assert identity.rendezvous_id(spki) == vectors["key"]["id"]
     nonce = identity.from_b64url(vectors["nonce"])
     transcript = identity.register_transcript(nonce)
@@ -75,23 +80,48 @@ def test_register_proof():
         sig = identity.b64url_of_length(case["signature"], identity.SIGNATURE_BYTES)
         ok = pub is not None and sig is not None and identity.verify_raw(pub, transcript, sig)
         assert ok is case["valid"], case["name"]
-    assert {"signed", "otherNonce", "flippedBit", "keyCompressed", "keyOtherCurve", "keyBadBase64url"} <= names
-    # A fresh signature by the test key verifies too.
-    assert identity.verify_raw(spki, transcript, identity.sign_raw(key, transcript))
+    assert {"signed", "otherNonce", "flippedBit", "keyCompressed", "keyOtherCurve", "keyBadBase64url"} | EDGE_CASES <= names
+
+
+def test_high_s_is_accepted_and_out_of_range_refused():
+    """Section 4.1: r and s are each from 1 to n - 1; a high-s signature is
+    valid. Checked here with a key made at run time."""
+    n = 0xFFFFFFFF00000000FFFFFFFFFFFFFFFFBCE6FAADA7179E84F3B9CAC2FC632551
+    key = ec.generate_private_key(ec.SECP256R1())
+    spki = identity.spki_of(key.public_key())
+    message = identity.register_transcript(bytes(32))
+    sig = identity.sign_raw(key, message)
+    r, s = int.from_bytes(sig[:32], "big"), int.from_bytes(sig[32:], "big")
+    other = (n - s).to_bytes(32, "big")
+    assert identity.verify_raw(spki, message, sig)
+    assert identity.verify_raw(spki, message, sig[:32] + other)
+    for bad_r, bad_s in ((0, s), (r, 0), (n, s), (r, n)):
+        assert not identity.verify_raw(spki, message, bad_r.to_bytes(32, "big") + bad_s.to_bytes(32, "big"))
 
 
 def test_introduce_signature():
     vectors = load_fixture(CRYPTO["introduce-signature"])
-    device = _test_key(vectors["device"])
-    spki = identity.spki_of(device.public_key())
+    spki = _fixed_key(vectors["device"])
     assert identity.to_b64url(identity.fingerprint(spki)) == vectors["device"]["id"]
     nonce = identity.from_b64url(vectors["nonce"])
     transcript = identity.introduce_transcript(vectors["stationId"], nonce)
     assert transcript.hex() == vectors["transcriptHex"]
     assert transcript == b"NereusSDR introduce v1\n" + vectors["stationId"].encode("ascii") + nonce
+    names = set()
     for case in vectors["cases"]:
+        names.add(case["name"])
         sig = identity.b64url_of_length(case["signature"], identity.SIGNATURE_BYTES)
         assert (sig is not None and identity.verify_raw(spki, transcript, sig)) is case["valid"], case["name"]
+    assert EDGE_CASES <= names
+
+
+def test_no_vector_holds_a_private_key():
+    from runner import CONFORMANCE
+
+    for path in CONFORMANCE.rglob("*"):
+        if path.is_file():
+            text = path.read_text(encoding="utf-8")
+            assert "PRIVATE KEY" not in text and "privateKey" not in text and "Pkcs8" not in text, path
 
 
 def test_turn_credentials():
