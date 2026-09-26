@@ -424,6 +424,10 @@
 //               released when its key ends, until Task 77. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: Transmit group fix wave C1: the session gate a key
+//               without a microphone line is judged by. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1314,6 +1318,20 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
         // Created after the holder's MOX follower above, so the holder
         // knows it is keyed before keyedBy is published.
         m_remoteKeying = std::make_unique<RemoteKeying>(m_radioModel, m_transmitHolder.get());
+        // Fix wave C1: the session gate a key without a microphone line is
+        // judged by first, on the connection the command came on.
+        m_remoteKeying->setSessionGate([this](const RemoteKeying::Command& command) -> TxRefusal {
+            const quint64 sessionId = sessionIdOfOwner(command.session);
+            for (auto it = m_peers.cbegin(); it != m_peers.cend(); ++it) {
+                if (it->sessionId == sessionId && it->sessionDeviceId == command.deviceId) {
+                    StationTxGate sessionOnly;
+                    sessionOnly.setRemoteTransmitAllowed(m_txGate.remoteTransmitAllowed());
+                    const TxDecision decision = sessionOnly.decide(peerInfoFor(it.key()));
+                    return decision.permitted ? TxRefusal{} : decision.refusal;
+                }
+            }
+            return TxRefusals::notReady();
+        });
 
         // iPhone app plan Task 37 (R-IOS-13; remote design section 12.1):
         // the transmit watchdog. It watches a device while keyedBy names it

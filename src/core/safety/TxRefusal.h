@@ -22,6 +22,10 @@
 //               key the Core has already stopped) and the holder's unkey
 //               refusal. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //               Claude Code.
+//   2026-09-26: Transmit group fix wave C1: micNotConnected, a remote
+//               voice key with no microphone line. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude
+//               Code.
 // =================================================================
 #pragma once
 
@@ -104,6 +108,9 @@ TxRefusal otherDeviceHolds(const QString& holderName);
 TxRefusal programNeedsTransmit();
 /// The PC microphone is not ready.
 TxRefusal micNotReady();
+/// Fix wave C1 (code micNotReady): a remote device's voice or program key
+/// while its media carries no microphone line.
+TxRefusal micNotConnected();
 /// Every key during a transfer of transmit.
 TxRefusal changingHands();
 /// Every key after a transfer that ended with MOX still on, until it

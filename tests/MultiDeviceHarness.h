@@ -27,6 +27,9 @@
 //               Task 34), which it replaces; latestCapabilityIf is its
 //               latestCapability. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave C1: openFakeMicrophoneLines
+//               (allowTransmit). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -57,6 +60,7 @@
 #include "core/session/SessionMessages.h"
 #include "core/session/StationCapabilities.h"
 #include "core/session/ObjectRegistry.h"
+#include "core/session/RemoteKeying.h"
 #include "core/session/StationServer.h"
 #include "core/WdspTypes.h"
 #include "core/MoxController.h"
@@ -559,6 +563,23 @@ bool txPermitted(const LoopbackTransport* app)
     return value.has_value() && value->toBool();
 }
 
+// Fix wave C1: a voice key needs the device's microphone line, which a
+// session-only test has no media for. Every device's line reads open and
+// its buffer full at once. A test that builds a DaemonMediaController after
+// this gets the real line instead.
+void openFakeMicrophoneLines(Core& core)
+{
+    RemoteKeying* keying = core.server->remoteKeying();
+    if (keying == nullptr) {
+        return;
+    }
+    RemoteKeying::MicUplink uplink;
+    uplink.carriesMic = [](const QByteArray&) { return true; };
+    uplink.prime = [](const QByteArray&, std::function<void(bool)> done) { done(true); };
+    uplink.endPriming = [](const QByteArray&) {};
+    keying->setMicUplink(uplink);
+}
+
 // The Core allows remote transmit; MOX walks with no delays; the slice is
 // on 20 m USB so the band plan admits a key.
 void allowTransmit(Core& core)
@@ -573,6 +594,8 @@ void allowTransmit(Core& core)
         slice->setDspMode(DSPMode::USB);
         slice->setFrequency(14200000.0);
     }
+    // Fix wave C1: every device's microphone line reads open.
+    openFakeMicrophoneLines(core);
 }
 
 // A device's key, as a remote tx.key will send it (Task 35).

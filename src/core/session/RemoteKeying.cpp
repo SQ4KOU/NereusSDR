@@ -13,6 +13,12 @@
 //   2026-09-25: iPhone app plan Task 36 (R-IOS-13): keying on a filled
 //               microphone buffer. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave C1: a voice or program key from a
+//               device with no microphone line is refused micNotReady at
+//               once (after the session gate and the holder), never keyed
+//               on the Core's own microphone; setSessionGate. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/RemoteKeying.h"
@@ -160,6 +166,27 @@ void RemoteKeying::handle(const Command& command, Reply reply)
         reply(*copy);
         return;
     }
+    // Fix wave C1: a key that carries the operator's voice (every mode but
+    // CW) from a device whose media carries no microphone line is refused
+    // at once; the Core never keys a remote device on its own microphone.
+    // The session's own gate and the holder's refusal come first, as the
+    // keying gate orders them. TUNE and two-tone need no microphone.
+    if (keyNeedsMicrophone(command) && !moxKeyedFor(command.deviceId)
+        && !(m_mic.carriesMic && m_mic.carriesMic(command.deviceId))) {
+        TxRefusal refusal = m_sessionGate ? m_sessionGate(command) : TxRefusal{};
+        if (refusal.isEmpty()) {
+            refusal = m_holder->keyRefusalFor(command.deviceId, command.trigger == kProgramTrigger);
+        }
+        if (refusal.isEmpty()) {
+            refusal = TxRefusals::micNotConnected();
+            qCInfo(lcDsp) << "Key from" << command.deviceId
+                          << "refused: its microphone line is not open";
+        }
+        const Result result = refused(refusal);
+        remember(command, result);
+        reply(result);
+        return;
+    }
     if (keyWaitsForMicrophone(command) && !moxKeyedFor(command.deviceId)) {
         // The holder's own refusal first, at once (a question only).
         if (const TxRefusal refusal =
@@ -233,6 +260,21 @@ void RemoteKeying::forgetSession(const QString& session)
             m_mic.endPriming(device);
         }
     }
+}
+
+bool RemoteKeying::keyNeedsMicrophone(const Command& command) const
+{
+    if (command.verb != Verb::Key) {
+        return false;
+    }
+    // Every mode but CW, whose key comes from the keyer. With no transmit
+    // slice the mode is unknown, so the microphone is needed.
+    const SliceModel* slice = m_model->txBoundSlice();
+    if (slice == nullptr) {
+        return true;
+    }
+    const DSPMode mode = slice->dspMode();
+    return mode != DSPMode::CWL && mode != DSPMode::CWU;
 }
 
 bool RemoteKeying::keyWaitsForMicrophone(const Command& command) const

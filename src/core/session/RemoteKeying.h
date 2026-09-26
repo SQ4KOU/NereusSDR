@@ -70,6 +70,12 @@
 //               microphone line's buffer (MicUplink), answered later
 //               through handle()'s reply. J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave C1: a voice or program key from a
+//               device with no microphone line is refused micNotReady at
+//               once (after the session gate and the holder), never keyed
+//               on the Core's own microphone; setSessionGate. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 #pragma once
 
@@ -144,6 +150,14 @@ public:
     };
     void setMicUplink(MicUplink uplink);
 
+    /// Fix wave C1: the session's own transmit gate (remote_transmit, its
+    /// hello, its pairing, its snapshot) for the connection `command` came
+    /// on, as a question (nothing changes): empty when permitted. Asked
+    /// before a key without a microphone line is refused, so a device that
+    /// may not transmit is told that first. Unset, nothing is refused by it.
+    using SessionGate = std::function<TxRefusal(const Command& command)>;
+    void setSessionGate(SessionGate gate) { m_sessionGate = std::move(gate); }
+
     using Reply = std::function<void(const Result& result)>;
 
     /// The trigger names tx.key takes.
@@ -169,6 +183,8 @@ public:
 private:
     /// The key itself, after any wait: the gates, MOX, the epoch.
     Result keyNow(const Command& command);
+    /// Fix wave C1: tx.key in a mode that transmits the operator's voice.
+    bool keyNeedsMicrophone(const Command& command) const;
     /// Whether this key waits for `command.deviceId`'s microphone line.
     bool keyWaitsForMicrophone(const Command& command) const;
     void finishWait(const QByteArray& deviceId, const Result& result);
@@ -220,6 +236,7 @@ private:
     QHash<QByteArray, Waiting> m_waiting;
     quint64 m_waitGeneration{0};
     MicUplink m_mic;
+    SessionGate m_sessionGate;
 };
 
 } // namespace NereusSDR

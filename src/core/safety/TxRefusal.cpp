@@ -13,6 +13,10 @@
 //   2026-09-25: iPhone app plan Task 35 (R-IOS-13): otherDeviceHoldsStop
 //               and keyEnded. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //               Claude Code.
+//   2026-09-26: Transmit group fix wave C1: micNotConnected, a remote
+//               voice key with no microphone line. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include "core/safety/TxRefusal.h"
@@ -119,6 +123,15 @@ TxRefusal micNotReady()
     // The same sentence RadioModel's microphone check gives (R-R3-36).
     return make(kMicNotReady,
                 QStringLiteral("Microphone is not ready. Check Audio settings and retry."));
+}
+
+TxRefusal micNotConnected()
+{
+    // Fix wave C1: the Core never keys a remote device's voice on its own
+    // microphone; the device waits for its line.
+    return make(kMicNotReady,
+                QStringLiteral("This device's microphone is not connected to the Core yet. "
+                               "Wait a moment and try again."));
 }
 
 TxRefusal changingHands()

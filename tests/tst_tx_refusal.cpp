@@ -16,6 +16,9 @@
 //   2026-09-25: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 34 (R-IOS-13), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave C1: micNotConnected. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -75,6 +78,11 @@ QList<Row> table()
          "takeTransmit"},
         {micNotReady(), "micNotReady",
          QStringLiteral("Microphone is not ready. Check Audio settings and retry."), {}},
+        // Fix wave C1: a remote voice key with no microphone line.
+        {micNotConnected(), "micNotReady",
+         QStringLiteral("This device's microphone is not connected to the Core yet. "
+                        "Wait a moment and try again."),
+         {}},
         {changingHands(), "changingHands",
          QStringLiteral("Transmit is changing hands. Try again in a moment."), {}},
         {stopNotConfirmed(), "stopNotConfirmed",

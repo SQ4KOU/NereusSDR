@@ -35,6 +35,10 @@
 //   2026-09-25: original test for NereusSDR by J.J. Boyd (KG4VCF), iPhone
 //               app plan Task 36 (R-IOS-13), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave C1: a key without the microphone
+//               line is refused and nothing keys. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -334,6 +338,7 @@ private slots:
     void keyWaitsForTheBufferThenKeys();
     void keyWithoutMicrophoneAudioIsRefusedMicNotReady();
     void tuneKeysAtOnceWithoutAMicrophone();
+    void aVoiceKeyWithoutTheMicrophoneLineNeverUsesTheStationsMicrophone();
     void releasedWhileWaitingItNeverKeys();
     void aLineLostMidKeyLeavesSilenceNotTheStationsMicrophone();
     void voxFromTheDevicesMicrophoneIsTheDevices();
@@ -578,6 +583,49 @@ void TestTxWorkerRemoteRing::tuneKeysAtOnceWithoutAMicrophone()
     QVERIFY(resultFor(station.app, 3621).value(QStringLiteral("accepted")).toBool());
     QTRY_VERIFY(station.core.model->moxController()->isMox());
     sendCommand(station.app, "tx.tune", 3622,
+                {MirrorUpdate{0, QByteArray("on"), MirrorWireKind::Bool, QVariant(false)}});
+    QTRY_VERIFY(!station.core.model->moxController()->isMox());
+}
+
+// Fix wave C1: a voice key (any person's trigger) or a program's key from a
+// device whose media carries no microphone line is refused at once with a
+// plain reason, and nothing keys: the Core never puts its own microphone
+// on the air for a remote key. TUNE and two-tone need no microphone and
+// key as before.
+void TestTxWorkerRemoteRing::aVoiceKeyWithoutTheMicrophoneLineNeverUsesTheStationsMicrophone()
+{
+    Station station;
+    // No media at all (a reconnect before media is back).
+    quint32 id = 3700;
+    for (const char* trigger : {"screen", "headset", "bluetooth", "actionButton", "tci"}) {
+        ++id;
+        sendCommand(station.app, "tx.key", id, {utf8("trigger", QString::fromLatin1(trigger))});
+        QTRY_VERIFY(!resultFor(station.app, id).isEmpty());
+        const QJsonObject result = resultFor(station.app, id);
+        QVERIFY2(!result.value(QStringLiteral("accepted")).toBool(true), trigger);
+        if (QByteArray(trigger) != "tci") {
+            QCOMPARE(refusalCode(result), QString::fromLatin1(TxRefusals::kMicNotReady));
+            QCOMPARE(result.value(QStringLiteral("reason")).toString(),
+                     TxRefusals::micNotConnected().text);
+        }
+        QVERIFY(!station.core.model->moxController()->isMox());
+        QVERIFY(!station.core.model->remoteMicInUse());
+    }
+    // Media without the line (a start that did not carry remoteTxVersion).
+    QVERIFY(station.startMedia(false));
+    sendCommand(station.app, "tx.key", ++id, {utf8("trigger", QStringLiteral("screen"))});
+    QTRY_VERIFY(!resultFor(station.app, id).isEmpty());
+    QCOMPARE(refusalCode(resultFor(station.app, id)), QString::fromLatin1(TxRefusals::kMicNotReady));
+    QVERIFY(!station.core.model->moxController()->isMox());
+    // A plain wording.
+    QVERIFY(OperatorWording::isPlain(TxRefusals::micNotConnected().text));
+    // TUNE needs no microphone: it keys.
+    sendCommand(station.app, "tx.tune", ++id,
+                {MirrorUpdate{0, QByteArray("on"), MirrorWireKind::Bool, QVariant(true)}});
+    QTRY_VERIFY(!resultFor(station.app, id).isEmpty());
+    QVERIFY(resultFor(station.app, id).value(QStringLiteral("accepted")).toBool());
+    QTRY_VERIFY(station.core.model->moxController()->isMox());
+    sendCommand(station.app, "tx.tune", ++id,
                 {MirrorUpdate{0, QByteArray("on"), MirrorWireKind::Bool, QVariant(false)}});
     QTRY_VERIFY(!station.core.model->moxController()->isMox());
 }

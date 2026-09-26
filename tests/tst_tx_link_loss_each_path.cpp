@@ -41,6 +41,10 @@
 //   2026-09-26: merge of Tasks 37 to 39: the window is told the watchdog's
 //               and the starvation's stops on txState. J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave C1: the window tests without
+//               media open a fake microphone line. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include "core/AppSettings.h"
@@ -213,6 +217,7 @@ private slots:
         Test::RemoteAudioSessionHarness h;
         h.pairWindow = true;
         h.makeTransmitReady();
+        h.openFakeMicrophoneLine();   // fix wave C1: no media here
         h.connectSession();
         QTRY_VERIFY(h.client.capabilities().txPermitted);
         RemoteTransmitClient* transmit = h.client.remoteTransmit();
@@ -254,6 +259,7 @@ private slots:
         Test::RemoteAudioSessionHarness h;
         h.pairWindow = true;
         h.makeTransmitReady();
+        h.openFakeMicrophoneLine();   // fix wave C1: no media here
         h.connectSession();
         QTRY_VERIFY(h.client.capabilities().txPermitted);
         QSignalSpy tripped(h.server.txWatchdog(), &RemoteTxWatchdog::tripped);
@@ -361,6 +367,7 @@ private slots:
         Test::RemoteAudioSessionHarness h;
         h.pairWindow = true;
         h.makeTransmitReady();
+        h.openFakeMicrophoneLine();   // fix wave C1: no media here
         h.connectSession();
         QTRY_VERIFY(h.client.capabilities().txPermitted);
         QSignalSpy tripped(h.server.txWatchdog(), &RemoteTxWatchdog::tripped);

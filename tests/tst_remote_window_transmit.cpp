@@ -26,6 +26,10 @@
 //               Tune Power from the window reach the Core. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: Transmit group fix wave C1: a key without the microphone
+//               line is refused and nothing keys. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include <QtTest>
@@ -260,6 +264,7 @@ private slots:
         Test::RemoteAudioSessionHarness h;
         h.pairWindow = true;
         h.makeTransmitReady();
+        h.openFakeMicrophoneLine();   // fix wave C1: no media here
         h.connectSession();
         QTRY_VERIFY(h.client.isHandshakeComplete());
         bool declared = false;
@@ -286,6 +291,7 @@ private slots:
         Test::RemoteAudioSessionHarness h;
         h.pairWindow = true;
         h.makeTransmitReady();
+        h.openFakeMicrophoneLine();   // fix wave C1: no media here
         h.server.setRemoteTransmitAllowed(false);
         h.connectSession();
         QTRY_VERIFY(h.client.isHandshakeComplete());
@@ -316,6 +322,7 @@ private slots:
         Test::RemoteAudioSessionHarness h;
         h.pairWindow = true;
         h.makeTransmitReady();
+        h.openFakeMicrophoneLine();   // fix wave C1: no media here
         h.connectSession();
         QTRY_VERIFY(h.client.capabilities().txPermitted);
         WindowControls window(h);
@@ -419,6 +426,7 @@ private slots:
         Test::RemoteAudioSessionHarness h;
         h.pairWindow = true;
         h.makeTransmitReady();
+        h.openFakeMicrophoneLine();   // fix wave C1: no media here
         h.connectSession();
         QTRY_VERIFY(h.client.capabilities().txPermitted);
         WindowControls window(h);
@@ -448,6 +456,7 @@ private slots:
         Test::RemoteAudioSessionHarness h;
         h.pairWindow = true;
         h.makeTransmitReady();
+        h.openFakeMicrophoneLine();   // fix wave C1: no media here
         h.connectSession();
         QTRY_VERIFY(h.client.capabilities().txPermitted);
         WindowControls window(h);
@@ -484,6 +493,7 @@ private slots:
         h.declareRemoteTx = false;
         h.pairWindow = true;
         h.makeTransmitReady();
+        h.openFakeMicrophoneLine();   // fix wave C1: no media here
         h.connectSession();
         QTRY_VERIFY(h.client.isHandshakeComplete());
         QCOMPARE(h.client.capabilities().remoteTxVersion, 0);
@@ -585,6 +595,31 @@ private slots:
                  QStringLiteral("Microphone is not ready. Check Audio settings and retry."));
         QVERIFY(!h.station.moxController()->isMox());
         QVERIFY(!remoteMedia.micUplinkRunning());
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // Fix wave C1: a window with no microphone line (no media yet, as right
+    // after a reconnect) is refused its voice key in plain words, and the
+    // Core never keys on its own microphone; TUNE still keys.
+    void aKeyWithoutTheMicrophoneLineIsRefusedAndNothingKeys()
+    {
+        Test::RemoteAudioSessionHarness h;
+        h.pairWindow = true;
+        h.makeTransmitReady();
+        h.connectSession();
+        QTRY_VERIFY(h.client.capabilities().txPermitted);
+        QSignalSpy refusedCodes(h.client.remoteTransmit(), &RemoteTransmitClient::refused);
+        h.remote.setMoxFromButton(true);
+        QTRY_COMPARE_WITH_TIMEOUT(refusedCodes.count(), 1, 5000);
+        QCOMPARE(refusedCodes.first().at(1).toString(), QStringLiteral("micNotReady"));
+        QCOMPARE(refusedCodes.first().at(0).toString(), TxRefusals::micNotConnected().text);
+        QVERIFY(!h.station.moxController()->isMox());
+        QVERIFY(!h.station.remoteMicInUse());
+        QTRY_VERIFY(!h.remote.moxController()->isMox());
+        h.remote.setTune(true);
+        QTRY_VERIFY(h.station.moxController()->isMox());
+        h.remote.setTune(false);
+        QTRY_VERIFY(!h.station.moxController()->isMox());
         h.client.disconnectFromStation(QStringLiteral("test complete"));
     }
 
@@ -735,6 +770,7 @@ private slots:
         Test::RemoteAudioSessionHarness h;
         h.pairWindow = true;
         h.makeTransmitReady();
+        h.openFakeMicrophoneLine();   // fix wave C1: no media here
         // The Core's meters, as its transmit lane would read them keyed.
         h.server.transmitState()->meterPump()->setSource([]() {
             TxMeterReadings r;
@@ -823,6 +859,7 @@ private slots:
         Test::RemoteAudioSessionHarness h;
         h.pairWindow = true;
         h.makeTransmitReady();
+        h.openFakeMicrophoneLine();   // fix wave C1: no media here
         qint64 timeOutNow = 0;
         h.station.txTimeOutTimer()->setClock([&timeOutNow]() { return timeOutNow; });
         h.connectSession();
@@ -859,6 +896,7 @@ private slots:
         Test::RemoteAudioSessionHarness h;
         h.pairWindow = true;
         h.makeTransmitReady();
+        h.openFakeMicrophoneLine();   // fix wave C1: no media here
         h.connectSession();
         QTRY_VERIFY(h.client.capabilities().txPermitted);
         QVERIFY(h.client.transmitSettingsAvailable(2));

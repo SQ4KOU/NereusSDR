@@ -49,6 +49,7 @@
 #include "core/session/SessionMessages.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationCapabilities.h"
+#include "core/session/RemoteKeying.h"
 #include "core/session/StationServer.h"
 #include "core/session/media/IReceiverPcmSink.h"
 #include "core/settings/SettingsProxy.h"
@@ -368,6 +369,23 @@ struct RemoteAudioSessionHarness {
             slice->setDspMode(DSPMode::USB);
             slice->setFrequency(14200000.0);
         }
+    }
+
+    // Fix wave C1: a voice key needs the window's microphone line, which a
+    // test without media has not got. The line reads open and its buffer
+    // full at once. A DaemonMediaController made after this installs the
+    // real line instead.
+    void openFakeMicrophoneLine()
+    {
+        RemoteKeying* keying = server.remoteKeying();
+        if (keying == nullptr) {
+            return;
+        }
+        RemoteKeying::MicUplink uplink;
+        uplink.carriesMic = [](const QByteArray&) { return true; };
+        uplink.prime = [](const QByteArray&, std::function<void(bool)> done) { done(true); };
+        uplink.endPriming = [](const QByteArray&) {};
+        keying->setMicUplink(uplink);
     }
 
     // Set before connectSession(): the Core appears to predate lossless.
