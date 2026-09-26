@@ -137,6 +137,10 @@
 //                                    (notchControlVersion 2), the desktop's
 //                                    +TNF on a slice.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  Checkpoint join (R-IOS-02, R-IOS-27):
+//                                    slice.selectBand and notch.addAtSlice
+//                                    refused for another device's slice.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -775,13 +779,15 @@ bool SessionCommandDispatcher::refusedForAnotherDevice(const SessionMessage& inv
     // requester's own slice (D53, the anchor rules; Tasks 74 and 75, which
     // run before this), and refusals on anyone else's, a slice nobody owns
     // or one held for a device, whatever receivers are in use (fix wave
-    // C1).
+    // C1). slice.selectBand and notch.addAtSlice (R-IOS-27) joined at the
+    // checkpoint merge: a band button or +TNF acts on its own slice only.
     static const QSet<QByteArray> kSliceVerbs{
         QByteArrayLiteral("removeSlice"), QByteArrayLiteral("setActiveSliceById"),
         QByteArrayLiteral("nnr.setDiagnostics"), QByteArrayLiteral("nnr.resetTuning"),
         QByteArrayLiteral("nnr.tryAgain"), QByteArrayLiteral("notch.add"),
         QByteArrayLiteral("requestSliceSampleRate"), QByteArrayLiteral("requestStreamCentre"),
-        QByteArrayLiteral("requestStreamCtunPinned")};
+        QByteArrayLiteral("requestStreamCtunPinned"), QByteArrayLiteral("slice.selectBand"),
+        QByteArrayLiteral("notch.addAtSlice")};
     if (m_requester.isEmpty() || !m_sliceAccess || !kSliceVerbs.contains(invoke.commandVerb)) {
         return false;
     }

@@ -2163,8 +2163,8 @@ belongs to <the owner's name>. It can be changed only there." (the name as
 `connectedDevices` numbers it; "the Core" for a slice nobody owns). Nothing
 else comes back. The commands `removeSlice`, `setActiveSliceById`,
 `nnr.setDiagnostics`, `nnr.resetTuning`, `nnr.tryAgain`, `notch.add`,
-`requestSliceSampleRate`, `requestStreamCentre` and
-`requestStreamCtunPinned` naming a slice that is not the requester's
+`notch.addAtSlice`, `slice.selectBand`, `requestSliceSampleRate`,
+`requestStreamCentre` and `requestStreamCtunPinned` naming a slice that is not the requester's
 (another device's, one nobody owns, or one held for a device) are refused
 with the same reason, whatever receivers are in use (section 9.1). On the
 requester's own slice, a C-Tune centre change or pin and a slice's band
@@ -2852,9 +2852,10 @@ These command groups need a sentence beyond the table:
   choice never moves it. The station's own duties that exist once per
   radio (the FreeDV Reporter's frequency, TCI's per-slice broadcasts)
   follow the most recent choice by any device. `removeSlice`,
-  `setActiveSliceById`, `nnr.*`, `notch.add`, `requestSliceSampleRate`,
-  `requestStreamCentre` and `requestStreamCtunPinned` naming a slice that
-  is not the requester's are refused (section 7.3).
+  `setActiveSliceById`, `nnr.*`, `notch.add`, `notch.addAtSlice`,
+  `slice.selectBand`, `requestSliceSampleRate`, `requestStreamCentre` and
+  `requestStreamCtunPinned` naming a slice that is not the requester's are
+  refused (section 7.3).
 
 - **A slice's band buttons.** `slice.selectBand` (`sliceId`, `band`,
   both `i64`; `bandSelectVersion` 1, agreed minor 11) does what a band

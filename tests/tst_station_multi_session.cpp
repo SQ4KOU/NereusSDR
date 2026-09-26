@@ -92,6 +92,10 @@
 //               harness comes from MultiDeviceHarness.h, one copy for every
 //               several-devices test. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-25: checkpoint join (R-IOS-02, R-IOS-27): slice.selectBand
+//               and notch.addAtSlice refused for another device's slice.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -105,6 +109,7 @@
 #include "core/session/media/DisplayLoadGovernor.h"
 #include "core/session/media/IMediaTransport.h"
 #include "core/session/media/SpectrumEndpoint.h"
+#include "models/Band.h"
 
 namespace {
 
@@ -1215,7 +1220,14 @@ private slots:
             {"requestStreamCentre", {int64("sliceId", 0), f64("centreHz", frequency + 1000.0)}},
             {"requestStreamCtunPinned",
              {int64("sliceId", 0), MirrorUpdate{0, "pinned", MirrorWireKind::Bool, true}}},
+            // The checkpoint join: the band buttons and +TNF on a slice.
+            {"slice.selectBand",
+             {int64("sliceId", 0),
+              int64("band", static_cast<int>(hers->band() == Band::Band40m ? Band::Band20m
+                                                                          : Band::Band40m))}},
+            {"notch.addAtSlice", {int64("sliceId", 0)}},
         };
+        const Band band = hers->band();
         const int notches = static_cast<int>(core.model->notchModel()->notches().size());
         for (const auto& verb : verbs) {
             const QJsonObject refused = core.invoke(appB, verb.first, verb.second);
@@ -1224,6 +1236,8 @@ private slots:
         }
         QVERIFY(core.model->sliceById(0) == hers);
         QVERIFY(hers->isActive());
+        QCOMPARE(hers->band(), band);
+        QCOMPARE(hers->frequency(), frequency);
         QCOMPARE(static_cast<int>(core.model->notchModel()->notches().size()), notches);
         QCOMPARE(core.model->activeSlice(), hers);
 
