@@ -3559,6 +3559,20 @@ target_compile_definitions(tst_radio_model_mox_hardware_flip PRIVATE NEREUS_BUIL
 nereus_add_test(tst_radio_model_stop_all_tx)
 target_compile_definitions(tst_radio_model_stop_all_tx PRIVATE NEREUS_BUILD_TESTS)
 
+# ── iPhone app plan Task 38 (R-IOS-04, D29): the transmit time-out ─────────
+# TxTimeOutTimer (Thetis TimeOutTimerManager) with an injected clock and
+# pinger: the MOX time-out from the rising edge, the ping time-out, the
+# remaining seconds; on a model with a mock radio: a phone's key stops
+# between 180 and 181 s, a computer's never with Thetis's defaults, TUNE and
+# two-tone stop too, and a limit changed while keyed counts from key-down.
+nereus_add_test(tst_tx_time_out_timer)
+target_compile_definitions(tst_tx_time_out_timer PRIVATE NEREUS_BUILD_TESTS)
+
+# The Options page's Time Out Timers group: Thetis's labels and ranges, the
+# phone and iPad row, the Station-scoped keys it writes, the host check.
+nereus_add_test(tst_general_options_time_out)
+target_compile_definitions(tst_general_options_time_out PRIVATE NEREUS_BUILD_TESTS)
+
 # ── Phase 3M-1a Task F.2: StepAttenuatorController TX-path activation ─────────
 # Verifies onMoxHardwareFlipped(bool isTx) slot and its four helpers:
 #   applyTxAttenuationForBand, shouldForce31Db, saveRxPreampMode,

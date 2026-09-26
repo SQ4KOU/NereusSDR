@@ -35,6 +35,12 @@
 //                 radio's safety timer stays on (operator decision).
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 38 (R-IOS-04, D29): the Time Out
+//                 Timers group from Thetis's Options-2 tab (groupBoxTS32:
+//                 MOX, Ping and its host) plus the time-out for phones
+//                 and tablets; all its settings are the Core's. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 //=================================================================
@@ -96,7 +102,10 @@
 #include <QHBoxLayout>
 #include <QGridLayout>
 #include <QGroupBox>
+#include <QHostAddress>
 #include <QLabel>
+#include <QLineEdit>
+#include <QPushButton>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QSignalBlocker>
@@ -159,6 +168,7 @@ GeneralOptionsPage::GeneralOptionsPage(RadioModel* model, QWidget* parent)
 
     buildHardwareConfigGroup();
     buildOptionsGroup();
+    buildTimeOutGroup();
     buildStepAttGroup();
     buildAutoAttGroup();
 
@@ -220,7 +230,8 @@ GeneralOptionsPage::GeneralOptionsPage(RadioModel* model, QWidget* parent)
 void GeneralOptionsPage::setStationSettingsAvailable(bool available, const QString& reason)
 {
     // R-R3-49: the Network Watchdog is the Core's setting too.
-    gateStationControls({m_comboFRSRegion, m_chkNetworkWDT}, available, reason);
+    // iPhone app plan Task 38: so is every transmit time-out.
+    gateStationControls({m_comboFRSRegion, m_chkNetworkWDT, m_grpTimeOut}, available, reason);
 }
 
 void GeneralOptionsPage::setReceiveOnlyVisible(bool visible)
@@ -556,6 +567,227 @@ void GeneralOptionsPage::buildOptionsGroup()
         rateRow->addStretch();
         vbox->addLayout(rateRow);
     }
+
+    contentLayout()->addWidget(group);
+}
+
+// ---------------------------------------------------------------------------
+// Time Out Timers group (iPhone app plan Task 38, R-IOS-04, D29)
+// From Thetis setup.designer.cs:10154-10299 [v2.10.3.15] (groupBoxTS32 on
+// tpOptions2, "Time Out Timers"): chkToTMox + udMoxToTSeconds +
+// lblMoxTotSec, chkToTPing + udPingToTSeconds + lblPingTotSec, txtToTPingIP
+// + btnPingDef. Handlers from setup.cs:28539-28583 [v2.10.3.15].
+// NereusSDR adds the time-out for phones and tablets (D29): on by default
+// at 180 s, the same range. Every value here is the Core's (Station scope);
+// RadioModel reads them at each tick of the time-out, so a change applies
+// at once, from key-down.
+// ---------------------------------------------------------------------------
+
+void GeneralOptionsPage::buildTimeOutGroup()
+{
+    // From Thetis setup.designer.cs:10169 [v2.10.3.15]:
+    //   this.groupBoxTS32.Text = "Time Out Timers";
+    auto* group = new QGroupBox(tr("Time Out Timers"), this);
+    group->setObjectName(QStringLiteral("grpTimeOutTimers"));
+    m_grpTimeOut = group;
+    auto* grid = new QGridLayout(group);
+    grid->setHorizontalSpacing(6);
+    grid->setVerticalSpacing(6);
+
+    const AppSettings& s = AppSettings::instance();
+    const auto readBool = [&s](const QString& key, bool fallback) {
+        return s.value(key, fallback ? QStringLiteral("True") : QStringLiteral("False")).toString()
+            == QStringLiteral("True");
+    };
+    const auto writeBool = [](const QString& key, bool on) {
+        AppSettings::instance().setValue(key, on ? QStringLiteral("True") : QStringLiteral("False"));
+    };
+    // One row: a checkbox, its seconds and "secs". Thetis's udMoxToTSeconds
+    // and udPingToTSeconds: 30 to 1800, default 180 (setup.designer.cs:
+    // 10279-10298 and 10226-10245 [v2.10.3.15]).
+    const auto makeSeconds = [group, &s](const QString& key) {
+        auto* spin = new QSpinBox(group);
+        spin->setRange(TxTimeOutTimer::kMinimumSeconds, TxTimeOutTimer::kMaximumSeconds);
+        spin->setFixedWidth(80);
+        bool ok = false;
+        const int seconds = s.value(key, TxTimeOutTimer::kDefaultSeconds).toInt(&ok);
+        spin->setValue(ok ? seconds : TxTimeOutTimer::kDefaultSeconds);
+        return spin;
+    };
+
+    // --- MOX ---
+    // From Thetis setup.designer.cs:10256-10257 [v2.10.3.15]:
+    //   this.chkToTMox.Text = "MOX";
+    //   this.toolTip1.SetToolTip(this.chkToTMox, "Time out Mox after X seconds");
+    m_chkToTMox = new QCheckBox(tr("MOX"), group);
+    m_chkToTMox->setObjectName(QStringLiteral("chkToTMox"));
+    m_chkToTMox->setToolTip(tr("Time out Mox after X seconds"));
+    m_chkToTMox->setChecked(readBool(QStringLiteral("MoxTimeOutEnabled"), false));
+    m_udMoxToTSeconds = makeSeconds(QStringLiteral("MoxTimeOutSeconds"));
+    m_udMoxToTSeconds->setObjectName(QStringLiteral("udMoxToTSeconds"));
+    // From Thetis setup.designer.cs:10293 [v2.10.3.15]
+    m_udMoxToTSeconds->setToolTip(tr("Stop mox if it is enabled for this duration"));
+    m_lblMoxTotSec = new QLabel(tr("secs"), group);
+    m_lblMoxTotSec->setObjectName(QStringLiteral("lblMoxTotSec"));
+    grid->addWidget(m_chkToTMox, 0, 0);
+    grid->addWidget(m_udMoxToTSeconds, 0, 1);
+    grid->addWidget(m_lblMoxTotSec, 0, 2);
+
+    // --- Ping ---
+    // From Thetis setup.designer.cs:10202-10204 [v2.10.3.15]:
+    //   this.chkToTPing.Text = "Ping";
+    //   SetToolTip(this.chkToTPing, "If ping fails for X seconds, then stop mox.\r\nNote: use cmd line to check you can ping this IP.");
+    m_chkToTPing = new QCheckBox(tr("Ping"), group);
+    m_chkToTPing->setObjectName(QStringLiteral("chkToTPing"));
+    m_chkToTPing->setToolTip(tr("If ping fails for X seconds, then stop mox.\n"
+                                "Note: use cmd line to check you can ping this IP."));
+    m_chkToTPing->setChecked(readBool(QStringLiteral("PingTimeOutEnabled"), false));
+    m_udPingToTSeconds = makeSeconds(QStringLiteral("PingTimeOutSeconds"));
+    m_udPingToTSeconds->setObjectName(QStringLiteral("udPingToTSeconds"));
+    // From Thetis setup.designer.cs:10240 [v2.10.3.15]
+    m_udPingToTSeconds->setToolTip(tr("If unable to ping for this long, stop mox"));
+    m_lblPingTotSec = new QLabel(tr("secs"), group);
+    m_lblPingTotSec->setObjectName(QStringLiteral("lblPingTotSec"));
+    grid->addWidget(m_chkToTPing, 1, 0);
+    grid->addWidget(m_udPingToTSeconds, 1, 1);
+    grid->addWidget(m_lblPingTotSec, 1, 2);
+
+    // From Thetis setup.designer.cs:10190-10191 [v2.10.3.15]:
+    //   this.txtToTPingIP.Text = "8.8.8.8";
+    //   SetToolTip(this.txtToTPingIP, "Try to ping this IP");
+    m_txtToTPingIP = new QLineEdit(group);
+    m_txtToTPingIP->setObjectName(QStringLiteral("txtToTPingIP"));
+    m_txtToTPingIP->setToolTip(tr("Try to ping this IP"));
+    m_txtToTPingIP->setFixedWidth(120);
+    m_txtToTPingIP->setText(
+        s.value(QStringLiteral("PingTimeOutHost"), QStringLiteral("8.8.8.8")).toString());
+    // From Thetis setup.designer.cs:10179-10180 [v2.10.3.15]:
+    //   this.btnPingDef.Text = "Def";
+    //   SetToolTip(this.btnPingDef, "Default value of 8.8.8.8 (Google DNS)");
+    m_btnPingDef = new QPushButton(tr("Def"), group);
+    m_btnPingDef->setObjectName(QStringLiteral("btnPingDef"));
+    m_btnPingDef->setToolTip(tr("Default value of 8.8.8.8 (Google DNS)"));
+    auto* hostRow = new QHBoxLayout;
+    hostRow->addWidget(m_txtToTPingIP);
+    hostRow->addWidget(m_btnPingDef);
+    hostRow->addStretch();
+    grid->addLayout(hostRow, 2, 0, 1, 3);
+
+    // --- Phone and iPad (NereusSDR, D29) ---
+    m_chkRemoteMoxTimeOut = new QCheckBox(tr("Phone and iPad"), group);
+    m_chkRemoteMoxTimeOut->setObjectName(QStringLiteral("chkRemoteMoxTimeOut"));
+    m_chkRemoteMoxTimeOut->setToolTip(
+        tr("Stop a transmission from a phone or iPad after this many seconds. "
+           "MOX and Ping above apply to this radio's own keys and to computers."));
+    m_chkRemoteMoxTimeOut->setChecked(
+        readBool(QStringLiteral("RemoteMoxTimeOutEnabled"), RadioModel::kRemoteMoxTimeOutDefault));
+    m_udRemoteMoxTimeOutSeconds = makeSeconds(QStringLiteral("RemoteMoxTimeOutSeconds"));
+    m_udRemoteMoxTimeOutSeconds->setObjectName(QStringLiteral("udRemoteMoxTimeOutSeconds"));
+    m_udRemoteMoxTimeOutSeconds->setToolTip(
+        tr("Stop a transmission from a phone or iPad if it lasts this long"));
+    m_lblRemoteMoxTotSec = new QLabel(tr("secs"), group);
+    m_lblRemoteMoxTotSec->setObjectName(QStringLiteral("lblRemoteMoxTotSec"));
+    grid->addWidget(m_chkRemoteMoxTimeOut, 3, 0);
+    grid->addWidget(m_udRemoteMoxTimeOutSeconds, 3, 1);
+    grid->addWidget(m_lblRemoteMoxTotSec, 3, 2);
+    grid->setColumnStretch(3, 1);
+
+    // From Thetis setup.cs:28539-28550 [v2.10.3.15]:
+    //   private void chkToTMox_CheckedChanged(object sender, EventArgs e)
+    //   {
+    //       if (initializing) return;
+    //       udMoxToTSeconds.Enabled = chkToTMox.Checked;
+    //       lblMoxTotSec.Enabled = chkToTMox.Checked;
+    //       TimeOutTimerManager.MoxTimeOut((int)udMoxToTSeconds.Value, chkToTMox.Checked);
+    //   }
+    //   private void udMoxToTSeconds_ValueChanged(object sender, EventArgs e)
+    //   {
+    //       chkToTMox_CheckedChanged(this, EventArgs.Empty);
+    //   }
+    // The values are saved; the time-out reads them at its next tick.
+    const auto applyMox = [this, writeBool]() {
+        m_udMoxToTSeconds->setEnabled(m_chkToTMox->isChecked());
+        m_lblMoxTotSec->setEnabled(m_chkToTMox->isChecked());
+        writeBool(QStringLiteral("MoxTimeOutEnabled"), m_chkToTMox->isChecked());
+        AppSettings::instance().setValue(QStringLiteral("MoxTimeOutSeconds"),
+                                         m_udMoxToTSeconds->value());
+    };
+    // From Thetis setup.cs:28552-28583 [v2.10.3.15]:
+    //   private void chkToTPing_CheckedChanged(object sender, EventArgs e)
+    //   {
+    //       if (initializing) return;
+    //       udPingToTSeconds.Enabled = chkToTPing.Checked;
+    //       txtToTPingIP.Enabled = chkToTPing.Checked;
+    //       btnPingDef.Enabled = chkToTPing.Checked;
+    //       lblPingTotSec.Enabled = chkToTPing.Checked;
+    //
+    //       bool bIPOk = IPAddress.TryParse(txtToTPingIP.Text, out IPAddress address);
+    //       if (bIPOk)
+    //       {
+    //           txtToTPingIP.BackColor = SystemColors.Window;
+    //           TimeOutTimerManager.PingTimeOut(txtToTPingIP.Text, (int)udPingToTSeconds.Value, chkToTPing.Checked);
+    //       }
+    //       else
+    //           txtToTPingIP.BackColor = Color.Red;
+    //   }
+    // udPingToTSeconds_ValueChanged and txtToTPingIP_TextChanged call it;
+    // btnPingDef_Click sets txtToTPingIP.Text = "8.8.8.8". As in Thetis,
+    // nothing is saved while the host does not parse.
+    const auto applyPing = [this, writeBool]() {
+        const bool on = m_chkToTPing->isChecked();
+        m_udPingToTSeconds->setEnabled(on);
+        m_txtToTPingIP->setEnabled(on);
+        m_btnPingDef->setEnabled(on);
+        m_lblPingTotSec->setEnabled(on);
+
+        const QString host = m_txtToTPingIP->text().trimmed();
+        const bool hostOk = !QHostAddress(host).isNull();
+        m_txtToTPingIP->setStyleSheet(hostOk ? QString()
+                                             : QStringLiteral("QLineEdit { background: red; }"));
+        if (hostOk) {
+            AppSettings::instance().setValue(QStringLiteral("PingTimeOutHost"), host);
+            AppSettings::instance().setValue(QStringLiteral("PingTimeOutSeconds"),
+                                             m_udPingToTSeconds->value());
+            writeBool(QStringLiteral("PingTimeOutEnabled"), on);
+        }
+    };
+    const auto applyRemote = [this, writeBool]() {
+        const bool on = m_chkRemoteMoxTimeOut->isChecked();
+        m_udRemoteMoxTimeOutSeconds->setEnabled(on);
+        m_lblRemoteMoxTotSec->setEnabled(on);
+        writeBool(QStringLiteral("RemoteMoxTimeOutEnabled"), on);
+        AppSettings::instance().setValue(QStringLiteral("RemoteMoxTimeOutSeconds"),
+                                         m_udRemoteMoxTimeOutSeconds->value());
+    };
+
+    // Thetis's "if (initializing) return;": the loaded values only set the
+    // enabled state; nothing is written until the operator changes one.
+    const auto showEnabled = [this]() {
+        m_udMoxToTSeconds->setEnabled(m_chkToTMox->isChecked());
+        m_lblMoxTotSec->setEnabled(m_chkToTMox->isChecked());
+        const bool ping = m_chkToTPing->isChecked();
+        m_udPingToTSeconds->setEnabled(ping);
+        m_txtToTPingIP->setEnabled(ping);
+        m_btnPingDef->setEnabled(ping);
+        m_lblPingTotSec->setEnabled(ping);
+        m_udRemoteMoxTimeOutSeconds->setEnabled(m_chkRemoteMoxTimeOut->isChecked());
+        m_lblRemoteMoxTotSec->setEnabled(m_chkRemoteMoxTimeOut->isChecked());
+    };
+    showEnabled();
+
+    connect(m_chkToTMox, &QCheckBox::toggled, this, applyMox);
+    connect(m_udMoxToTSeconds, QOverload<int>::of(&QSpinBox::valueChanged), this, applyMox);
+    connect(m_chkToTPing, &QCheckBox::toggled, this, applyPing);
+    connect(m_udPingToTSeconds, QOverload<int>::of(&QSpinBox::valueChanged), this, applyPing);
+    connect(m_txtToTPingIP, &QLineEdit::textChanged, this, applyPing);
+    connect(m_btnPingDef, &QPushButton::clicked, this, [this]() {
+        // From Thetis setup.cs:28580-28583 [v2.10.3.15]:
+        //   txtToTPingIP.Text = "8.8.8.8";
+        m_txtToTPingIP->setText(QStringLiteral("8.8.8.8"));
+    });
+    connect(m_chkRemoteMoxTimeOut, &QCheckBox::toggled, this, applyRemote);
+    connect(m_udRemoteMoxTimeOutSeconds, QOverload<int>::of(&QSpinBox::valueChanged), this,
+            applyRemote);
 
     contentLayout()->addWidget(group);
 }

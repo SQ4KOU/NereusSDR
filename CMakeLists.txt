@@ -1000,6 +1000,7 @@ set(CORE_SOURCES
     src/core/safety/TxRefusal.cpp
     src/core/safety/StationTxGate.cpp
     src/core/safety/UnkeyGate.cpp
+    src/core/safety/TxTimeOutTimer.cpp
     src/core/safety/TransmitHolder.cpp
     src/core/safety/safety_constants.cpp
     src/core/SpotCollectorClient.cpp
