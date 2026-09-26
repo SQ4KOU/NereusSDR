@@ -11,6 +11,12 @@
 //   2026-09-25: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 75 (R-IOS-30), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave 2: every holder on the air counts,
+//               the station device's own keys included (onAirHolder),
+//               exempt by change not by holder; ruling 8.11's freeze on
+//               every path (XIT, pan moves, a stored change at proceed); a
+//               hosting desktop's key named after it. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/DisturbanceCheck.h"
@@ -77,7 +83,7 @@ QList<DisturbanceCheck::Affected> DisturbanceCheck::check(const Scope& scope,
                 listed = true;
             }
         }
-        if (touched && !listed) {
+        if (touched && !listed && topology.transmit.holderAskable) {
             // Ruling 7.8: counted only because the transmitter is touched.
             affected.append(Affected{holder, true, {}});
         }
@@ -97,15 +103,31 @@ bool DisturbanceCheck::refusedOnAir(const Scope& scope, const Topology& topology
     if (scope.transmitPath || scope.stopsDataFlow) {
         return true;
     }
-    for (const Affected& a : affected) {
-        if (a.device != tx.holder) {
+    // Fix wave 2, Important 3: the transmit slice is judged whoever owns
+    // it. While the radio's own PTT (or the Core's own key) transmits on
+    // another device's slice, the holder owns none of its slices, and the
+    // requester's own frozen slice counts too (ruling 8.11).
+    Q_UNUSED(affected);
+    for (const SliceInfo& slice : topology.slices) {
+        const bool txSlice = slice.sliceId >= 0 && slice.sliceId == tx.txSliceId;
+        const bool frozen = slice.sliceId >= 0 && slice.sliceId == tx.frozenSliceId;
+        if (!txSlice && !frozen) {
             continue;
         }
-        for (const AffectedSlice& s : a.slices) {
-            if (s.sliceId == tx.txSliceId
-                && (s.effect == Effect::Moves || s.effect == Effect::Closes)) {
+        Effect effect = scope.effect;
+        const auto planned = scope.planned.constFind(slice.sliceId);
+        if (planned != scope.planned.cend()) {
+            // A rate change's plan reaches it: the frozen slice may not be
+            // touched at all.
+            if (frozen) {
                 return true;
             }
+            effect = *planned;
+        } else if (!reaches(scope, slice)) {
+            continue;
+        }
+        if (effect == Effect::Moves || effect == Effect::Closes) {
+            return true;
         }
     }
     return false;

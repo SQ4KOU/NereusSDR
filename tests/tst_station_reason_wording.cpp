@@ -137,6 +137,10 @@
 //                                    Task 16: receive only's reasons
 //                                    (MoxController, RadioModel) scanned.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Transmit group fix wave 2 (R-IOS-02):
+//                                    the freeze and on-air refusals' new
+//                                    forwards. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -732,6 +736,8 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("txDecision.refusal.text"),
           // Fix wave I2: the freeze's refusal (TxRefusal.cpp's words).
           QStringLiteral("frozen.text"), QStringLiteral("stationFreezeRefusal(sliceId).text"),
+          // Fix wave 2: the same freeze asked of a whole message.
+          QStringLiteral("freezeRefusalFor(message).text"),
           // R-R3-49 (parity Task 5): powerPageKeyValueRefusal's literals,
           // this file's own, scanned here.
           QStringLiteral("range")}},
@@ -764,6 +770,12 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("sliceClosedReason(planDevice(requester).name, lettersOf(it.value()))"),
           QStringLiteral("receiver ? receiverTakenReason(takerName, letters) : "
                          "sliceTakenReason(takerName, letters)"),
+          // Fix wave 2: the on-air and freeze refusals (TxRefusal.cpp's
+          // words, scanned there).
+          QStringLiteral("check.onAir.text"), QStringLiteral("frozen.text"),
+          QStringLiteral("freezeRefusalFor(question.original)"),
+          QStringLiteral("stationFreezeRefusal(id)"),
+          QStringLiteral("touches ? onAirWords(*holder) : TxRefusal{}"),
           // StationServer.cpp's slice refusal, scanned there.
           QStringLiteral("sliceRefusal(requester, sliceId)"), QStringLiteral("refusal"),
           // Today's refusals from the model, the allocator and the

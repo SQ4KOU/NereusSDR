@@ -446,6 +446,12 @@
 //               holder on the air for ruling 7.4; the freeze is the
 //               radio's own PTT's. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave 2: every holder on the air counts,
+//               the station device's own keys included (onAirHolder),
+//               exempt by change not by holder; ruling 8.11's freeze on
+//               every path (XIT, pan moves, a stored change at proceed); a
+//               hosting desktop's key named after it. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1229,6 +1235,15 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             QTimer::singleShot(ms, this, std::move(fire));
         };
         hooks.describe = [this](const QByteArray& id) -> std::optional<TransmitHolder::Words> {
+            if (id == KeyerIdentity::kStationDeviceId) {
+                // Fix wave 2 (ruling 8.1): the hosting desktop's words, when
+                // one hosts this Core.
+                if (m_stationWords.name.isEmpty()) {
+                    return std::nullopt;
+                }
+                return TransmitHolder::Words{m_stationWords.name, m_stationWords.shortName,
+                                             QStringLiteral("station")};
+            }
             if (const auto words = m_connectedDevices->describe(id)) {
                 return TransmitHolder::Words{words->name, words->shortName, words->kind};
             }
@@ -3237,14 +3252,7 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
             // Fix wave I2 (ruling 8.11): closing the frozen transmit slice,
             // or moving it to another band, waits for the radio's press to
             // end.
-            TxRefusal frozen;
-            if (message.commandVerb == "removeSlice" || message.commandVerb == "slice.selectBand") {
-                for (const MirrorUpdate& a : message.arguments) {
-                    if (a.name == "sliceId") {
-                        frozen = stationFreezeRefusal(static_cast<int>(a.value.toLongLong()));
-                    }
-                }
-            }
+            const TxRefusal frozen = freezeRefusalFor(message);
             if (!frozen.isEmpty()) {
                 send(transport, SessionMessages::commandResult(
                     message.commandVerb, message.commandId, false, frozen.text, {},
@@ -4332,6 +4340,7 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
     // applied, with no value of the other device's slice in the answer.
     {
         QString refusal;
+        bool withValues = false;
         const QByteArray requester = m_peers.value(transport).sessionDeviceId;
         if (message.objectKey.startsWith("slice:")) {
             bool ok = false;
@@ -4339,16 +4348,12 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
             if (ok) {
                 refusal = sliceRefusal(requester, sliceId);
                 // Fix wave I2 (ruling 8.11): the transmit slice is frozen
-                // while the radio's own PTT keys it.
+                // while the station device keys it.
                 if (refusal.isEmpty()) {
-                    for (const MirrorUpdate& update : message.updates) {
-                        const QByteArray& n = update.name;
-                        if (n == "frequency" || n == "dspMode" || n == "filterLow"
-                            || n == "filterHigh" || n == "txAntenna" || n == "band") {
-                            refusal = stationFreezeRefusal(sliceId).text;
-                            break;
-                        }
-                    }
+                    refusal = freezeRefusalFor(message).text;
+                    // The requester's own slice: its answer carries the
+                    // values kept, so the window shows them again.
+                    withValues = !refusal.isEmpty();
                 }
             }
         } else if (message.objectKey.startsWith("marker:")) {
@@ -4358,6 +4363,12 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
             }
         }
         if (!refusal.isEmpty()) {
+            QHash<QByteArray, MirrorUpdate> kept;
+            if (withValues) {
+                for (const MirrorUpdate& value : m_mirror->snapshot(message.objectKey)) {
+                    kept.insert(value.name, value);
+                }
+            }
             QList<SessionPropertyResult> results;
             QSet<QByteArray> reported;
             for (const MirrorUpdate& update : message.updates) {
@@ -4369,6 +4380,10 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
                 result.property = update.name;
                 result.accepted = false;
                 result.reason = refusal;
+                result.hasValue = kept.contains(update.name);
+                if (result.hasValue) {
+                    result.value = kept.value(update.name);
+                }
                 results.append(result);
             }
             if (m_peers.value(transport).agreedMinor >= kDspControlSessionProtocolMinor
@@ -5461,44 +5476,67 @@ void StationServer::noteHolderStopped(const QByteArray& deviceId, const char* st
     m_transmitState->recordStop(code, text);
 }
 
+std::optional<TransmitHolder::Holder> StationServer::onAirHolder() const
+{
+    // Fix wave 2, Important 1: one notion of a holder on the air for
+    // ruling 7.4's refusals, the shared-settings check, the planner's
+    // takes and ruling 8.11's freeze. Every keyed holder counts, the
+    // station device's own keys (the radio's PTT, the Core's own MOX or
+    // TUNE, a Tuner Genius hardware TUNE) as much as a device's.
+    if (!m_transmitHolder) {
+        return std::nullopt;
+    }
+    std::optional<TransmitHolder::Holder> holder = m_transmitHolder->holder();
+    if (!holder || !holder->keyed) {
+        return std::nullopt;
+    }
+    return holder;
+}
+
+TxRefusal StationServer::onAirWords(const TransmitHolder::Holder& holder) const
+{
+    // D60's words with the holder's short name; "The radio is on the air."
+    // after the radio's own PTT took transmit (ruling 7.4), and for the
+    // station device's own keys on a Core no desktop hosts (the radio is
+    // the only station there). A hosting desktop's own key is named after
+    // the desktop (ruling 8.1).
+    const bool radio = holder.source == TransmitHolder::Source::RadioPtt
+        || (holder.deviceId == KeyerIdentity::kStationDeviceId && m_stationWords.name.isEmpty());
+    return TxRefusals::holderOnAir(holder.shortName, radio);
+}
+
+void StationServer::setStationDeviceWords(const QString& name, const QString& shortName)
+{
+    m_stationWords.name = name;
+    m_stationWords.shortName = shortName.isEmpty() ? name : shortName;
+    if (m_transmitHolder && m_transmitHolder->holder()) {
+        onTransmitHolderChanged();
+    }
+}
+
 TxRefusal StationServer::onAirRefusal(const QByteArray& requester) const
 {
     // Ruling 7.4 (D60): while the holder is on the air, a change from any
     // other device waits. The holder's own change, and the Core's own (no
     // requester), are not refused by this rule.
-    const std::optional<TransmitHolder::Holder> holder = m_transmitHolder->holder();
-    if (!holder || !holder->keyed || requester.isEmpty() || requester == holder->deviceId) {
+    const std::optional<TransmitHolder::Holder> holder = onAirHolder();
+    if (!holder || requester.isEmpty() || requester == holder->deviceId) {
         return {};
     }
-    // The Core's own MOX (a hosting desktop's operator) keeps Thetis's
-    // single-operator behaviour: the other windows' changes go ahead, as the
-    // parity rounds ruled. The radio's own PTT and every device's key hold
-    // them.
-    if (holder->deviceId == KeyerIdentity::kStationDeviceId
-        && holder->source != TransmitHolder::Source::RadioPtt) {
-        return {};
-    }
-    // The station device (the radio's own PTT, or the Core's own keys) is
-    // "the radio".
-    return TxRefusals::holderOnAir(holder->shortName,
-                                   holder->source == TransmitHolder::Source::RadioPtt
-                                       || holder->deviceId == KeyerIdentity::kStationDeviceId);
+    return onAirWords(*holder);
 }
 
 int StationServer::stationFrozenSlice() const
 {
-    // Ruling 8.11 (D64): while the radio's own mic or footswitch is keyed,
-    // the slice it transmits on cannot be retuned, changed or closed until
-    // the press ends.
-    if (m_radioModel.isNull() || !m_transmitHolder) {
+    // Ruling 8.11 (D64): while the station device is keyed (the radio's
+    // own mic or footswitch, or the Core's own keys), the slice it
+    // transmits on cannot be retuned, changed, moved or closed until the
+    // key ends, whoever owns that slice.
+    if (m_radioModel.isNull()) {
         return -1;
     }
-    const std::optional<TransmitHolder::Holder> holder = m_transmitHolder->holder();
-    // The radio's own PTT only (the brief's I2 and D64's words): a hosting
-    // desktop's MOX leaves its slices as Thetis does (onBandButtonClicked
-    // has no on-air check).
-    if (!holder || !holder->keyed || holder->deviceId != KeyerIdentity::kStationDeviceId
-        || holder->source != TransmitHolder::Source::RadioPtt) {
+    const std::optional<TransmitHolder::Holder> holder = onAirHolder();
+    if (!holder || holder->deviceId != KeyerIdentity::kStationDeviceId) {
         return -1;
     }
     const SliceModel* slice = m_radioModel->txBoundSlice();
@@ -5510,9 +5548,39 @@ TxRefusal StationServer::stationFreezeRefusal(int sliceId) const
     if (sliceId < 0 || sliceId != stationFrozenSlice()) {
         return {};
     }
-    // The design's words: "The radio is on the air." (TxRefusal's holderOnAir
-    // for the radio).
-    return TxRefusals::holderOnAir(QStringLiteral("Radio"), /*radioPtt=*/true);
+    const std::optional<TransmitHolder::Holder> holder = onAirHolder();
+    return holder ? onAirWords(*holder) : TxRefusal{};
+}
+
+TxRefusal StationServer::freezeRefusalFor(const SessionMessage& message) const
+{
+    // Ruling 8.11: what would retune, change, move or close the frozen
+    // transmit slice. Fix wave 2, Important 3: the XIT too, since it moves
+    // the transmitted frequency.
+    if (message.kind == SessionMessageKind::PropertyWrite && message.objectKey.startsWith("slice:")) {
+        bool ok = false;
+        const int sliceId = message.objectKey.mid(6).toInt(&ok);
+        if (!ok) {
+            return {};
+        }
+        for (const MirrorUpdate& update : message.updates) {
+            const QByteArray& n = update.name;
+            if (n == "frequency" || n == "dspMode" || n == "filterLow" || n == "filterHigh"
+                || n == "txAntenna" || n == "band" || n == "xitEnabled" || n == "xitHz") {
+                return stationFreezeRefusal(sliceId);
+            }
+        }
+        return {};
+    }
+    if (message.kind == SessionMessageKind::CommandInvoke
+        && (message.commandVerb == "removeSlice" || message.commandVerb == "slice.selectBand")) {
+        for (const MirrorUpdate& a : message.arguments) {
+            if (a.name == "sliceId") {
+                return stationFreezeRefusal(static_cast<int>(a.value.toLongLong()));
+            }
+        }
+    }
+    return {};
 }
 
 TxRefusal StationServer::onAirPropertyRefusal(const QByteArray& requester,

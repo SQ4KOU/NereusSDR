@@ -4550,12 +4550,19 @@ settle.
 
 While the holder is keyed, these changes from any other device are refused
 with `holderOnAir`, never asked; the holder's own change is not refused by
-this rule, and with the holder unkeyed none is. The Core's own MOX (a
-hosting desktop's operator) is not a holder on the air for this rule: the
-other windows' changes go ahead as in Thetis, while the radio's own PTT and
-every device's key hold them. The saved amplifier and tuner addresses
+this rule, and with the holder unkeyed none is. Every holder counts, the
+station device's own keys included (the radio's PTT, and the Core's own MOX,
+TUNE or a Tuner Genius hardware TUNE): the rule names changes, not holders.
+The holder changes its transmit antennas on the air as in Thetis; another
+device's change waits. The saved amplifier and tuner addresses
 (`setTgxlAddress`, `setPgxlAddress`, `setRfKitAddress`) and the LAN scans go
-ahead on the air.
+ahead on the air; the addresses are still asked of a device that holds
+transmit (the several-devices design, table 7.1). The station device has no
+session, so a change that would disturb only it applies without a question.
+The words name the holder by its short name; "The radio is on the air. Try
+again when it stops." after the radio's own PTT took transmit, and for the
+Core's own keys on a Core no desktop hosts; a hosting desktop's own key is
+named after the desktop.
 
 - the transmit path: the amplifier (`configurePgxl`, `disconnectPgxl`,
   `setPgxlConnectionSettings`, `setPgxlName`, `setPgxlHardware`,
@@ -4573,13 +4580,18 @@ ahead on the air.
 - a C-Tune centre change on the receiver of the holder's transmit slice
   (`requestStreamCentre`).
 
-While the radio's own PTT (its mic or footswitch) keys, the slice it
-transmits on is frozen for every device, its owner's
-included (the several-devices design, ruling 8.11; D64): a write of its
-`frequency`, `dspMode`, `filterLow`, `filterHigh`, `txAntenna` or `band`,
-and `removeSlice` or `slice.selectBand` for it, is refused `holderOnAir`,
-"The radio is on the air. Try again when it stops." The freeze ends with the
-press. Until taking transmit is built (Task 77) the radio's own PTT is
+While the station device is keyed (the radio's own PTT, its mic or
+footswitch, or the Core's own keys), the slice it transmits on is frozen for
+every device, its owner's included (the several-devices design, ruling 8.11;
+D64): a write of its `frequency`, `dspMode`, `filterLow`, `filterHigh`,
+`txAntenna`, `band`, `xitEnabled` or `xitHz`, `removeSlice` or
+`slice.selectBand` for it, a pan move that would carry, move or close it (the
+owner's `requestStreamCentre` to a free receiver, or the anchor's move of its
+receiver), and a sample-rate change that reaches it, are refused
+`holderOnAir` with the holder's on-air words. A change asked before the key
+and confirmed during it is refused at `confirm.proceed` the same way, and
+nothing of it applies; so is a take of the transmit slice or its receiver.
+The freeze ends with the key. Until taking transmit is built (Task 77) the radio's own PTT is
 refused `otherDeviceHolds` while any device holds transmit, keyed or not,
 away included, and its take of unheld transmit ends with its key.
 

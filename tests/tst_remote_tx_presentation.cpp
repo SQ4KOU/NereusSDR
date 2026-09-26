@@ -11,6 +11,10 @@
 // 2026-09-25: R-R3-49, R-R3-21 (parity Task 11): the flag's XIT writes the
 // Core's slice in a remote window, as RIT does, whatever txPermitted says.
 // J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-26: R-IOS-02 (transmit group fix wave 2): while the Core's own
+// key transmits on the window's slice, its XIT and TX antenna writes wait
+// (rulings 7.4 and 8.11) and the window shows the kept values. J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include <QtTest>
 #include <QAction>
 #include <QDir>
@@ -240,26 +244,37 @@ private slots:
         QTRY_COMPARE(offset->value(), -150);
         stationSlice->setXitEnabled(false);
         QTRY_VERIFY(!xit->isChecked());
-        // Group B fix wave: on the air, as in Thetis, XIT and the TX antenna
-        // still change (console.cs udXIT_ValueChanged retunes with
-        // updateVFOFreqs(_mox); an Alex TX antenna applies at once with
-        // tx = _mox), from a remote window as from a local one.
+        // Transmit group fix wave 2 (the several-devices design, rulings
+        // 7.4 and 8.11): the Core's own key is a holder on the air like any
+        // device's, and the slice it transmits on is frozen for every other
+        // device. This window's XIT and TX antenna writes to that slice are
+        // refused until the key ends; the holder itself changes them on the
+        // air as in Thetis (tst_on_air_refusals).
         MoxController* const mox = station.moxController();
         QVERIFY(mox);
         mox->setMoxCheck({});
         mox->setMox(true);
         QTRY_VERIFY(window.radioModel()->isCoreOnAir());
-        QVERIFY(xit->isEnabled() && offset->isEnabled() && zero->isEnabled());
-        xit->click();
-        QTRY_VERIFY(stationSlice->xitEnabled());
-        offset->setValue(120);
-        QTRY_COMPARE(stationSlice->xitHz(), 120);
+        QCOMPARE(station.txBoundSlice(), stationSlice);
         const QString txAntenna = stationSlice->txAntenna() == QStringLiteral("ANT2")
             ? QStringLiteral("ANT3") : QStringLiteral("ANT2");
+        xit->click();
+        offset->setValue(120);
         window.radioModel()->sliceById(id)->setTxAntenna(txAntenna);
-        QTRY_COMPARE(stationSlice->txAntenna(), txAntenna);
+        QTest::qWait(300);
+        QVERIFY(!stationSlice->xitEnabled());
+        QCOMPARE(stationSlice->xitHz(), -150);
+        QVERIFY(stationSlice->txAntenna() != txAntenna);
+        // The window shows the Core's values again after each refusal.
+        QTRY_COMPARE(window.radioModel()->sliceById(id)->txAntenna(), stationSlice->txAntenna());
+        QTRY_VERIFY(!xit->isChecked());
         mox->setMox(false);
         QTRY_VERIFY(!window.radioModel()->isCoreOnAir());
+        // Off the air the same writes go ahead.
+        window.radioModel()->sliceById(id)->setTxAntenna(txAntenna);
+        QTRY_COMPARE(stationSlice->txAntenna(), txAntenna);
+        stationSlice->setXitEnabled(true);
+        QTRY_VERIFY(xit->isChecked());
         xit->click();
         QTRY_VERIFY(!stationSlice->xitEnabled());
         stationSlice->setXitHz(-150);

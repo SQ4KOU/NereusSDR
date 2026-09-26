@@ -33,6 +33,10 @@
 //               with its token (seedUpgradedCoreToken), as Part C's
 //               paired-device sign-in requires. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: transmit group fix wave 2 (R-IOS-02): while the Core's own
+//               key is on the air, this window's transmit antenna changes
+//               wait until it ends (ruling 7.4). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 
 #include <QtTest/QtTest>
 
@@ -296,26 +300,34 @@ private slots:
         core.setRxOutOnTx(false);
         QTRY_VERIFY(!bypass->isChecked());
 
-        // On the air: Thetis applies each of these at once while
-        // transmitting, so neither window holds them.
+        // On the air (transmit group fix wave 2, the several-devices
+        // design, ruling 7.4 and the controller's ruling): Thetis applies
+        // these at once for the operator who is transmitting, so the holder
+        // changes them on the air (tst_on_air_refusals); while the Core's
+        // own key is on the air this window is another operator, and its
+        // changes wait until the key ends.
         MoxController* const mox = h.station().moxController();
         QVERIFY(mox);
         mox->setMoxCheck({});
         mox->setMox(true);
         const auto unkey = qScopeGuard([mox] { mox->setMox(false); });
         QTRY_VERIFY(h.remoteModel()->isCoreOnAir());
-        QVERIFY(tab->txGridForTest()->isEnabled());
-        QVERIFY(tab->blockTxAnt2ForTest()->isEnabled());
-        QVERIFY(tab->ext2OutOnTxForTest()->isEnabled());
-        QVERIFY(bypass->isEnabled());
-        tab->txButtonForTest(Band::Band20m, 2)->click();
-        QTRY_COMPARE(core.txAnt(Band::Band20m), 2);
+        const int txAnt20 = core.txAnt(Band::Band20m);
+        const int wanted20 = txAnt20 == 2 ? 3 : 2;
+        tab->txButtonForTest(Band::Band20m, wanted20)->click();
         tab->ext2OutOnTxForTest()->click();
-        QTRY_VERIFY(core.ext2OutOnTx());
         bypass->click();
-        QTRY_VERIFY(core.rxOutOnTx());
+        QTest::qWait(300);
+        QCOMPARE(core.txAnt(Band::Band20m), txAnt20);
+        QVERIFY(!core.ext2OutOnTx());
+        QVERIFY(!core.rxOutOnTx());
         mox->setMox(false);
         QTRY_VERIFY(!h.remoteModel()->isCoreOnAir());
+        QTRY_VERIFY(!tab->ext2OutOnTxForTest()->isChecked());
+        tab->txButtonForTest(Band::Band20m, wanted20)->click();
+        QTRY_COMPARE(core.txAnt(Band::Band20m), wanted20);
+        tab->ext2OutOnTxForTest()->click();
+        QTRY_VERIFY(core.ext2OutOnTx());
     }
 
     // Parity the other way: a local window's Antenna Control stays live on

@@ -18,6 +18,12 @@
 //               a dropped holder's fence, so it never outlives the
 //               transfer that superseded it. J.J. Boyd (KG4VCF), with AI-
 //               assisted implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave 2: every holder on the air counts,
+//               the station device's own keys included (onAirHolder),
+//               exempt by change not by holder; ruling 8.11's freeze on
+//               every path (XIT, pan moves, a stored change at proceed); a
+//               hosting desktop's key named after it. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/safety/TransmitHolder.h"
@@ -74,7 +80,16 @@ std::optional<TransmitHolder::Holder> TransmitHolder::holder() const
         h.shortName = QStringLiteral("Radio");
         h.kind = QStringLiteral("station");
     } else if (h.deviceId == kStation) {
-        if (h.name.isEmpty()) {
+        // Ruling 8.1: a hosting desktop's own MOX or TUNE shows the
+        // desktop's name (the owner describes the station device when a
+        // desktop hosts the Core); on a Core with no desktop the station
+        // device's own keys are the radio's.
+        const std::optional<Words> words =
+            m_hooks.describe ? m_hooks.describe(h.deviceId) : std::nullopt;
+        if (words && !words->name.isEmpty()) {
+            h.name = words->name;
+            h.shortName = words->shortName.isEmpty() ? words->name : words->shortName;
+        } else if (h.name.isEmpty()) {
             h.name = QStringLiteral("Radio");
             h.shortName = QStringLiteral("Radio");
         }

@@ -1059,6 +1059,18 @@ device's "Unkey and take over" (D51) end a transmission; the other device can us
 take over, then make the change. A change the holder makes itself is not refused by this rule.
 These refusals are built with `TransmitHolder` (Task 34), so they exist from the moment
 transmit does (13.3).
+
+The transmit group's second fix round (2026-09-26) settles who counts and what is exempt:
+every holder on the air counts, the station device's own keys included (the radio's PTT, a
+hosting desktop's MOX or TUNE, a Tuner Genius hardware TUNE); the exemptions are by change,
+not by holder. The saved accessory addresses (`setTgxlAddress`, `setPgxlAddress`,
+`setRfKitAddress`) and the LAN scans go ahead on the air (the operator's parity ruling), the
+addresses still asked of a device that holds transmit (table 7.1, ruling 7.8); the
+amplifier and tuner switches wait. The transmit antennas (a slice's `txAntenna`,
+`alexAntennas`, `setAlexTxAntenna`) change on the air only for the holder, as in Thetis for
+the operator who is transmitting; any other device's change waits (the controller's
+ruling). The station device has no session, so it is never asked or told: a change that
+would disturb only it applies at once, while ruling 7.4 still holds the changes it names.
 The operator confirmed this narrowing of D50 and D53 on 2026-09-24 (D60, D64).
 
 ### 7.3 The confirm step

@@ -26,6 +26,12 @@
 //               PTT's refusal while a device holds transmit. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: Transmit group fix wave 2, Important 1: the Core's own
+//               key is a holder on the air like any device's; the holder
+//               changes its transmit antennas on the air; the saved
+//               accessory addresses go ahead; a hosting desktop's key is
+//               named after the desktop. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -278,6 +284,166 @@ private slots:
         QCOMPARE(r.value(QStringLiteral("reason")).toString(), QStringLiteral("The radio is on the air. Try again when it stops."));
         core.model->moxController()->onMicPttFromRadio(false);
         QTRY_COMPARE(core.model->moxController()->state(), MoxState::Rx);
+    }
+
+    // ---- Fix wave 2, Important 1: exempt by change, not by holder -------
+
+    // The Core's own key (its MOX, TUNE or a Tuner Genius hardware TUNE)
+    // is a holder on the air like any device's (rulings 7.4, 8.1): another
+    // device's transmit antennas, receive antennas and Protocol 1 rate
+    // change wait, and the slice it transmits on is frozen.
+    // The saved accessory addresses and the LAN scans go ahead on the air
+    // (the operator's parity ruling). With the key ended every one applies.
+    void theCoresOwnKeyHoldsAnotherDevicesChangesLikeAnyHolder()
+    {
+        Core core;
+        allowTransmit(core);
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(b);
+        LoopbackTransport* appB = core.signIn(b, kTransmitter);
+        QVERIFY(admitted(appB));
+        const QStringList bSlices = heldKeys(appB, QStringLiteral("slice:"));
+        QCOMPARE(bSlices.size(), 1);
+        const QByteArray bSlice = bSlices.first().toUtf8();
+        const QString kRadioOnAir = QStringLiteral("The radio is on the air. Try again when it stops.");
+
+        MoxController* mox = core.model->moxController();
+        mox->setMox(true);
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+        const std::optional<TransmitHolder::Holder> holder = core.server->transmitHolder()->holder();
+        QVERIFY(holder.has_value() && holder->keyed);
+        QCOMPARE(holder->deviceId, QByteArray(KeyerIdentity::kStationDeviceId));
+        QVERIFY(holder->source == TransmitHolder::Source::Device);
+
+        qint64 writeId = 800;
+        const auto write = [&](const QByteArray& key, const MirrorUpdate& update) {
+            const qint64 id = ++writeId;
+            appB->sendText(SessionMessages::encode(
+                SessionMessages::propertyWrite(key, {update}, static_cast<quint32>(id))));
+            const bool answered =
+                QTest::qWaitFor([appB, id]() { return !propertyResult(appB, id).isEmpty(); }, 5000);
+            Q_UNUSED(answered);
+            const QJsonArray results = propertyResult(appB, id).value(QStringLiteral("results")).toArray();
+            return results.isEmpty() ? QJsonObject{} : results.first().toObject();
+        };
+        for (const MirrorUpdate& update : {utf8("rxAntenna", QStringLiteral("ANT2")),
+                                           utf8("txAntenna", QStringLiteral("ANT2"))}) {
+            const QJsonObject result = write(bSlice, update);
+            QVERIFY2(!result.value(QStringLiteral("accepted")).toBool(true), update.name.constData());
+            QCOMPARE(result.value(QStringLiteral("reason")).toString(), kRadioOnAir);
+        }
+        const int txAnt = core.model->alexController().txAnt(Band::Band20m);
+        QJsonObject r = core.invoke(appB, "setAlexTxAntenna",
+                                    {int64("band", static_cast<int>(Band::Band20m)),
+                                     int64("antenna", txAnt == 2 ? 3 : 2)});
+        QCOMPARE(r.value(QStringLiteral("accepted")).toBool(true), false);
+        QCOMPARE(r.value(QStringLiteral("reason")).toString(), kRadioOnAir);
+        QCOMPARE(core.model->alexController().txAnt(Band::Band20m), txAnt);
+        r = core.invoke(appB, "requestSliceSampleRate",
+                        {int64("sliceId", bSlice.mid(6).toInt()), int64("rateHz", 96000)});
+        QCOMPARE(r.value(QStringLiteral("reason")).toString(), kRadioOnAir);
+        // (The amplifier and tuner switches, and the saved addresses going
+        // ahead, over a Core with the accessories: tst_remote_peripherals.)
+
+        // The saved addresses and the scans are not this rule's.
+        r = core.invoke(appB, "setPgxlAddress",
+                        {utf8("host", QStringLiteral("192.0.2.88")), int64("port", 9008)});
+        QVERIFY2(r.value(QStringLiteral("reason")).toString() != kRadioOnAir,
+                 qPrintable(r.value(QStringLiteral("reason")).toString()));
+        QVERIFY(r.value(QStringLiteral("reason")).toString()
+                != QStringLiteral("Waiting for you to confirm."));
+        r = core.invoke(appB, "scanPgxlLan");
+        QVERIFY(r.value(QStringLiteral("reason")).toString() != kRadioOnAir);
+
+        mox->setMox(false);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QTRY_VERIFY(!core.server->transmitHolder()->holder().has_value());
+        const QJsonObject after = write(bSlice, utf8("txAntenna", QStringLiteral("ANT2")));
+        QVERIFY2(after.value(QStringLiteral("accepted")).toBool(false),
+                 qPrintable(after.value(QStringLiteral("reason")).toString()));
+        r = core.invoke(appB, "setAlexTxAntenna",
+                        {int64("band", static_cast<int>(Band::Band20m)),
+                         int64("antenna", txAnt == 2 ? 3 : 2)});
+        QVERIFY2(r.value(QStringLiteral("accepted")).toBool(false),
+                 qPrintable(r.value(QStringLiteral("reason")).toString()));
+        QCOMPARE(core.model->alexController().txAnt(Band::Band20m), txAnt == 2 ? 3 : 2);
+    }
+
+    // Ruling 8.1: a desktop that hosts the Core names its own key after
+    // itself, on txState and in the on-air refusal.
+    void aHostingDesktopsKeyIsNamedAfterTheDesktop()
+    {
+        Core core;
+        allowTransmit(core);
+        core.server->setStationDeviceWords(QStringLiteral("Shack Mac mini"), QStringLiteral("Shack"));
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(b);
+        LoopbackTransport* appB = core.signIn(b, kTransmitter);
+        QVERIFY(admitted(appB));
+        MoxController* mox = core.model->moxController();
+        mox->setMox(true);
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+        const std::optional<TransmitHolder::Holder> holder = core.server->transmitHolder()->holder();
+        QVERIFY(holder.has_value());
+        QCOMPARE(holder->name, QStringLiteral("Shack Mac mini"));
+        QCOMPARE(holder->shortName, QStringLiteral("Shack"));
+        QCOMPARE(holder->kind, QStringLiteral("station"));
+        QTRY_COMPARE(latest(appB->received(), QStringLiteral("txState"),
+                            QStringLiteral("holderName")).toString(),
+                     QStringLiteral("Shack Mac mini"));
+        QCOMPARE(latest(appB->received(), QStringLiteral("txState"),
+                        QStringLiteral("holderSource")).toString(),
+                 QStringLiteral("device"));
+        QCOMPARE(latest(appB->received(), QStringLiteral("txState"),
+                        QStringLiteral("holderDeviceId")).toString(),
+                 QStringLiteral("station"));
+        const QJsonObject r = core.invoke(appB, "setAlexTxAntenna",
+                                          {int64("band", static_cast<int>(Band::Band20m)),
+                                           int64("antenna", 2)});
+        QCOMPARE(r.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("Shack is on the air. Try again when they stop."));
+        mox->setMox(false);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        // The radio's own PTT is still "Radio".
+        mox->onMicPttFromRadio(true);
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+        QCOMPARE(core.server->transmitHolder()->holder()->name, QStringLiteral("Radio"));
+        mox->onMicPttFromRadio(false);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+    }
+
+    // The controller's ruling (as in Thetis, for the operator who is
+    // transmitting): the device that holds transmit changes the transmit
+    // antennas on the air; another device's change waits.
+    void theHolderChangesTheTransmitAntennasOnTheAir()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a(QStringLiteral("Grant's iPhone"), QStringLiteral("phone"), QStringLiteral("iPhone"));
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        LoopbackTransport* appB = core.signIn(b, kTransmitter);
+        QVERIFY(admitted(appA) && admitted(appB));
+        MoxController* mox = core.model->moxController();
+        mox->setMox(true, keyerFor(a));
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+        const int txAnt = core.model->alexController().txAnt(Band::Band20m);
+        const int next = txAnt == 2 ? 3 : 2;
+        QJsonObject r = core.invoke(appB, "setAlexTxAntenna",
+                                    {int64("band", static_cast<int>(Band::Band20m)),
+                                     int64("antenna", next)});
+        QCOMPARE(r.value(QStringLiteral("reason")).toString(), kOnAir);
+        QCOMPARE(core.model->alexController().txAnt(Band::Band20m), txAnt);
+        r = core.invoke(appA, "setAlexTxAntenna",
+                        {int64("band", static_cast<int>(Band::Band20m)), int64("antenna", next)});
+        QVERIFY2(r.value(QStringLiteral("accepted")).toBool(false),
+                 qPrintable(r.value(QStringLiteral("reason")).toString()));
+        QCOMPARE(core.model->alexController().txAnt(Band::Band20m), next);
+        QVERIFY(mox->isMox());
+        mox->setMox(false, keyerFor(a));
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
     }
 
     // ---- Fix wave I2 (rulings 8.11 and 8.9) ------------------------------

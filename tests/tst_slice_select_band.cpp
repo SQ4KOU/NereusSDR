@@ -23,6 +23,10 @@
 // Modification history (NereusSDR):
 //   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06: created.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  R-IOS-02: transmit group fix wave 2,
+//                                    the Core's own key freezes the
+//                                    transmit slice for another device.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -201,7 +205,7 @@ private slots:
     void anUnknownReceiverIsRefused();
     void aBandOffTheGridIsRefused();
     void wrongArgumentsAreNotUnderstood();
-    void theDesktopAllowsABandChangeOnTheAirSoTheCoreDoes();
+    void aBandChangeWaitsWhileTheCoresOwnKeyIsOnTheAir();
     void anOlderAppIsToldToUpdate();
     void refusalsArePlainWords();
 
@@ -444,9 +448,11 @@ void TstSliceSelectBand::wrongArgumentsAreNotUnderstood()
 }
 
 // The desktop's band buttons are not held while the radio transmits
-// (onBandButtonClicked has no on-air check), so the verb is taken on the
-// air too.
-void TstSliceSelectBand::theDesktopAllowsABandChangeOnTheAirSoTheCoreDoes()
+// (onBandButtonClicked has no on-air check), but a remote device is another
+// operator: while the Core's own key transmits on its slice, that slice is
+// frozen (the several-devices design, rulings 7.4 and 8.11), and the band
+// change goes ahead once the key ends.
+void TstSliceSelectBand::aBandChangeWaitsWhileTheCoresOwnKeyIsOnTheAir()
 {
     Session s(m_securityDir.path(), this);
     QVERIFY(s.connect());
@@ -454,8 +460,14 @@ void TstSliceSelectBand::theDesktopAllowsABandChangeOnTheAirSoTheCoreDoes()
     s.core->onBandButtonClicked(slice, Band::Band20m);
     s.keyCore();
     QVERIFY(s.core->stationOnAirRefusal(nullptr));
-    const SessionMessage result = s.selectBand(slice->sliceIndex(), static_cast<int>(Band::Band40m));
+    const SessionMessage refused =
+        s.selectBand(slice->sliceIndex(), static_cast<int>(Band::Band40m));
+    QVERIFY(!refused.accepted);
+    QCOMPARE(refused.reason, QStringLiteral("The radio is on the air. Try again when it stops."));
+    QCOMPARE(bandFromFrequency(slice->frequency()), Band::Band20m);
     s.unkeyCore();
+    QTRY_VERIFY(!s.core->stationOnAirRefusal(nullptr));
+    const SessionMessage result = s.selectBand(slice->sliceIndex(), static_cast<int>(Band::Band40m));
     QVERIFY2(result.accepted, qPrintable(result.reason));
     QCOMPARE(bandFromFrequency(slice->frequency()), Band::Band40m);
 }

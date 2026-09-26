@@ -358,6 +358,12 @@
 //               while the radio's own PTT keys it (ruling 8.11). J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave 2: every holder on the air counts,
+//               the station device's own keys included (onAirHolder),
+//               exempt by change not by holder; ruling 8.11's freeze on
+//               every path (XIT, pan moves, a stored change at proceed); a
+//               hosting desktop's key named after it. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QHash>
@@ -385,6 +391,7 @@
 #include "core/session/StationCapabilities.h"
 #include "core/safety/StarvationPolicy.h"
 #include "core/safety/StationTxGate.h"
+#include "core/safety/TransmitHolder.h"
 #include "core/session/media/DisplayBudgetSplit.h"
 
 QT_BEGIN_NAMESPACE
@@ -940,6 +947,11 @@ public:
     bool remoteTransmitAllowed() const { return m_txGate.remoteTransmitAllowed(); }
     /// Who holds transmit (never null).
     TransmitHolder* transmitHolder() const { return m_transmitHolder.get(); }
+    /// Fix wave 2 (ruling 8.1): a desktop that hosts this Core names the
+    /// station device after itself, so its own MOX or TUNE is published,
+    /// and refused on the air, in the desktop's words. Unset on a Core no
+    /// desktop hosts: the station device's own keys are "Radio".
+    void setStationDeviceWords(const QString& name, const QString& shortName);
     /// 1: txPermitted per session, the `tx.setTxSlice` verb, the on-air
     /// refusals, and (Task 35) keying: `tx.key`, `tx.unkey`, `tx.tune` and
     /// `tx.twoTone`, for a peer at minor 11 whose hello declared remoteTx 1.
@@ -1295,14 +1307,30 @@ private:
     /// Ruling 7.4 (D60): the on-air refusal for a change from `requester`,
     /// or empty (nobody on the air, or the holder's own change).
     TxRefusal onAirRefusal(const QByteArray& requester) const;
-    /// Fix wave I2 (ruling 8.11, D64): the slice frozen while the radio's
-    /// own PTT (its mic or footswitch) keys: the transmit slice; -1
-    /// otherwise.
+    /// Fix wave 2, Important 1: the holder while it is on the air (any
+    /// holder, the station device's own keys included); nullopt otherwise.
+    std::optional<TransmitHolder::Holder> onAirHolder() const;
+    /// Ruling 7.4's words for `holder` on the air.
+    TxRefusal onAirWords(const TransmitHolder::Holder& holder) const;
+    /// Fix wave I2 (ruling 8.11, D64): the slice frozen while the station
+    /// device is keyed (the radio's own PTT, or the Core's own keys): the
+    /// transmit slice, whoever owns it; -1 otherwise.
     int stationFrozenSlice() const;
     /// The refusal for a change to `sliceId` that the freeze stops (its
     /// frequency, mode, filter, band or transmit antenna, or closing it),
     /// or empty.
     TxRefusal stationFreezeRefusal(int sliceId) const;
+    /// Fix wave 2, Important 3: the freeze's refusal for a whole message (a
+    /// slice property write naming a frozen property, removeSlice or
+    /// slice.selectBand), asked on arrival and again when a confirmed,
+    /// stored change is applied.
+    TxRefusal freezeRefusalFor(const SessionMessage& message) const;
+    /// Fix wave 2, Important 3: the refusal for proceeding with `question`
+    /// (answer `choice`, from `device`) while a holder is on the air: the
+    /// freeze of its stored change or of the slices it moves, or a take of
+    /// the transmit slice or its receiver. Empty when it may proceed.
+    TxRefusal proceedOnAirRefusal(const ConfirmStep::Question& question, int choice,
+                                  const QByteArray& device) const;
     /// The same for a property write to `objectKey`.`property`: a change to
     /// the transmit path (an antenna, PureSignal) while the holder is on
     /// the air.
@@ -1359,9 +1387,12 @@ private:
                                  std::optional<qint64> timeRanOutAtMs);
     struct PanMoveCheck {
         /// None: not a pan move (today's path); Apply: nobody would be
-        /// asked; Ask: another device's slice moves or closes.
-        enum class Kind { None, Apply, Ask };
+        /// asked; Ask: another device's slice moves or closes; OnAir: it
+        /// would move or close the transmit slice of a holder on the air
+        /// (ruling 7.4, and ruling 8.11's freeze), refused with `onAir`.
+        enum class Kind { None, Apply, Ask, OnAir };
         Kind kind = Kind::None;
+        TxRefusal onAir;
         int stream = -1;
         double centreHz = 0.0;
         int exemptSliceId = -1;
@@ -1611,6 +1642,11 @@ private:
     std::unique_ptr<ConnectedDevicesFacade> m_connectedDevices;
     // iPhone app plan Task 34: who holds transmit, and who may transmit.
     std::unique_ptr<TransmitHolder> m_transmitHolder;
+    /// setStationDeviceWords.
+    struct StationWords {
+        QString name;
+        QString shortName;
+    } m_stationWords;
     StationTxGate m_txGate;
     // iPhone app plan Task 35: keying from a remote device (a Local model
     // with a MoxController only).

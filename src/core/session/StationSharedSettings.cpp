@@ -61,6 +61,12 @@
 //               parity rounds' Thetis rule); the saved accessory
 //               addresses go ahead on the air. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave 2: every holder on the air counts,
+//               the station device's own keys included (onAirHolder),
+//               exempt by change not by holder; ruling 8.11's freeze on
+//               every path (XIT, pan moves, a stored change at proceed); a
+//               hosting desktop's key named after it. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -323,16 +329,13 @@ DisturbanceCheck::Transmit StationServer::transmitForCheck() const
     DisturbanceCheck::Transmit transmit;
     if (m_transmitHolder) {
         if (const std::optional<TransmitHolder::Holder> holder = m_transmitHolder->holder()) {
-            // The station device counts only after the radio's own PTT took
-            // transmit: the Core's own MOX on a hosting desktop keeps
-            // Thetis's single-operator behaviour (the parity rounds' rule:
-            // the transmit antennas and the accessories' addresses change
-            // on the air).
-            if (holder->deviceId != KeyerIdentity::kStationDeviceId
-                || holder->source == TransmitHolder::Source::RadioPtt) {
-                transmit.holder = holder->deviceId;
-                transmit.keyed = holder->keyed;
-            }
+            // Fix wave 2, Important 1: every holder counts, the station
+            // device's own keys included (ruling 7.4 names no exception).
+            transmit.holder = holder->deviceId;
+            transmit.keyed = holder->keyed;
+            // The station device has no session to ask or tell; its keys
+            // still hold the changes ruling 7.4 names (refusedOnAir).
+            transmit.holderAskable = holder->deviceId != KeyerIdentity::kStationDeviceId;
         }
     }
     if (!m_radioModel.isNull()) {
@@ -340,6 +343,9 @@ DisturbanceCheck::Transmit StationServer::transmitForCheck() const
             transmit.txSliceId = slice->sliceIndex();
         }
     }
+    // Ruling 8.11: the slice frozen while the station device is keyed,
+    // whoever owns it (the requester's own included).
+    transmit.frozenSliceId = stationFrozenSlice();
     return transmit;
 }
 
@@ -1091,7 +1097,8 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
         }
         // The operator's ruling (parity mini-round, rulings a to c): the
         // saved addresses go ahead on the air; they touch nothing on the
-        // transmit path.
+        // transmit path. They stay on design table 7.1's list, so another
+        // device's change still asks the holder (D53, ruling 7.8).
         if (verb == "setTgxlAddress" || verb == "setPgxlAddress" || verb == "setRfKitAddress") {
             c.scope.transmitPath = false;
         }
@@ -1207,7 +1214,12 @@ bool StationServer::handleSharedSetting(SessionTransport* transport, const Sessi
     const DisturbanceCheck::Topology topology = sharedTopology();
     const QList<DisturbanceCheck::Affected> affected =
         DisturbanceCheck::check(change.scope, topology, requester);
-    if (affected.isEmpty()) {
+    // Fix wave 2: asked before the empty-set shortcut, since the station
+    // device (never asked) still holds the changes ruling 7.4 names while
+    // it is keyed.
+    const bool onAirWaits =
+        DisturbanceCheck::refusedOnAir(change.scope, topology, requester, affected);
+    if (affected.isEmpty() && !onAirWaits) {
         // Nobody else is disturbed: it applies at once, as today.
         return false;
     }
@@ -1215,7 +1227,7 @@ bool StationServer::handleSharedSetting(SessionTransport* transport, const Sessi
     // Task 34: a command refused on the air carries the refusal's code and
     // fix in its values, as every transmit refusal does (the link, 18.3).
     QList<MirrorUpdate> refusalValues;
-    if (DisturbanceCheck::refusedOnAir(change.scope, topology, requester, affected)) {
+    if (onAirWaits) {
         // Ruling 7.4 (D60). Task 34: "The radio is on the air." when the
         // radio's own PTT holds transmit (onAirRefusal's words).
         const TxRefusal onAir = onAirRefusal(requester);

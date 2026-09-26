@@ -56,6 +56,11 @@
 //               takeable) and the transmitter's Core settings (asked while
 //               a device holds transmit). J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: transmit group fix wave 2 (R-IOS-02): ruling 8.11's freeze
+//               on every path (a pan move by the anchor or by the slice's
+//               owner, XIT, a stored change confirmed during the radio's
+//               PTT). J.J. Boyd (KG4VCF), with AI-assisted implementation
+//               via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -166,6 +171,19 @@ struct Shared {
         return core.invoke(app, "confirm.proceed", {int64("id", id), int64("choice", choice)});
     }
 };
+
+const QString kRadioOnAir = QStringLiteral("The radio is on the air. Try again when it stops.");
+
+// The radio's own PTT keys at once and with no PC microphone (fix wave 2):
+// MOX walks with no delays and the radio's microphone carries the audio.
+// The slices stay where Shared put them.
+void preparePtt(Core& core)
+{
+    core.server->setRemoteTransmitAllowed(true);
+    core.model->moxController()->setTimerIntervals(0, 0, 0, 0, 0, 0);
+    core.model->transmitModel().setMicSourceLocked(false);
+    core.model->transmitModel().setMicSource(MicSource::Radio);
+}
 
 QJsonObject waitForLast(const LoopbackTransport* app, const QString& type, int after)
 {
@@ -2198,6 +2216,112 @@ private slots:
         QCOMPARE(countOf(s.appA, QStringLiteral("confirm.request")), asks);
         QCOMPARE(s.core.settings->value(inhibit).toString(), QStringLiteral("False"));
         mox->setMox(false, keyerFor(s.b));
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+    }
+
+    // ---- Transmit group fix wave 2, Important 3 (ruling 8.11) ----------
+
+    // While the radio's own PTT keys on B's slice (inside A's receiver),
+    // that slice is frozen on every path: B moving its pan (ruling 6.6)
+    // would carry it, A moving the receiver (the anchor, ruling 6.4) would
+    // move it, and its XIT retunes what is transmitted. The press ends and
+    // each goes ahead again.
+    void theRadiosPttFreezesTheSliceOnEveryPath()
+    {
+        Shared s;
+        preparePtt(s.core);
+        s.core.model->sliceById(1)->setDspMode(DSPMode::LSB);
+        QVERIFY(s.core.model->txSliceArbiter()->requestHandoff(1));
+        const int receiver = s.receiver();
+        QCOMPARE(streamOf(s.core, 1), receiver);
+        const double centre = s.core.model->streamAllocator().streamCentreHz(receiver);
+        MoxController* mox = s.core.model->moxController();
+        mox->onMicPttFromRadio(true);
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+
+        // B, which does not anchor, moving its pan to a free receiver.
+        QJsonObject r = s.core.invoke(s.appB, "requestStreamCentre",
+                                      {int64("sliceId", 1), f64("centreHz", 7120000.0)});
+        QCOMPARE(r.value(QStringLiteral("accepted")).toBool(true), false);
+        QCOMPARE(r.value(QStringLiteral("reason")).toString(), kRadioOnAir);
+        QCOMPARE(streamOf(s.core, 1), receiver);
+
+        // A, the anchor, moving the receiver so B's slice would leave it:
+        // refused, nobody asked.
+        const int asks = countOf(s.appA, QStringLiteral("confirm.request"));
+        r = s.core.invoke(s.appA, "requestStreamCentre",
+                          {int64("sliceId", 0), f64("centreHz", 6990000.0)});
+        QCOMPARE(r.value(QStringLiteral("accepted")).toBool(true), false);
+        QCOMPARE(r.value(QStringLiteral("reason")).toString(), kRadioOnAir);
+        QTest::qWait(50);
+        QCOMPARE(countOf(s.appA, QStringLiteral("confirm.request")), asks);
+        QCOMPARE(s.core.model->streamAllocator().streamCentreHz(receiver), centre);
+
+        // B's XIT on the frozen slice.
+        quint32 writeId = 4100;
+        for (const MirrorUpdate& update :
+             {MirrorUpdate{0, "xitEnabled", MirrorWireKind::Bool, QVariant(true)},
+              MirrorUpdate{0, "xitHz", MirrorWireKind::Int64, QVariant(qlonglong(250))}}) {
+            const quint32 id = ++writeId;
+            s.appB->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+                ObjectRegistry::keyForSlice(1), {update}, id)));
+            QTRY_VERIFY(!propertyResult(s.appB, id).isEmpty());
+            const QJsonObject result = firstResultEntry(propertyResult(s.appB, id));
+            QCOMPARE(result.value(QStringLiteral("accepted")).toBool(true), false);
+            QCOMPARE(result.value(QStringLiteral("reason")).toString(), kRadioOnAir);
+        }
+        QVERIFY(!s.core.model->sliceById(1)->xitEnabled());
+        QCOMPARE(s.core.model->sliceById(1)->xitHz(), 0);
+
+        mox->onMicPttFromRadio(false);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QTRY_VERIFY(!s.core.server->transmitHolder()->holder().has_value());
+        r = s.core.invoke(s.appB, "requestStreamCentre",
+                          {int64("sliceId", 1), f64("centreHz", 7120000.0)});
+        QVERIFY2(r.value(QStringLiteral("accepted")).toBool(false),
+                 qPrintable(r.value(QStringLiteral("reason")).toString()));
+        QVERIFY(streamOf(s.core, 1) != receiver);
+    }
+
+    // A change asked before the press and confirmed during it asks the
+    // freeze again: B's retune of its slice, stored behind the receiver
+    // chooser, is refused on proceed while the radio's PTT keys on that
+    // slice, and nothing of it applies (C keeps its receiver and slice).
+    void aStoredChangeConfirmedDuringTheRadiosPttWaits()
+    {
+        Shared s;
+        preparePtt(s.core);
+        LoopbackTransport* appC = s.cOnTheOtherReceiver();
+        QVERIFY(admitted(appC));
+        const QList<int> cSlices = s.core.model->sliceOwnership()->ownedBy(s.c.key.fingerprint());
+        QCOMPARE(cSlices.size(), 1);
+        s.core.model->sliceById(1)->setDspMode(DSPMode::LSB);
+        QVERIFY(s.core.model->txSliceArbiter()->requestHandoff(1));
+
+        const QJsonObject refused = writeFrequency(s.appB, 1, 7250000.0, 4200);
+        QCOMPARE(firstResultEntry(refused).value(QStringLiteral("accepted")).toBool(true), false);
+        const QJsonObject ask = waitForLast(s.appB, QStringLiteral("confirm.request"), 0);
+        QCOMPARE(ask.value(QStringLiteral("kind")).toString(), QStringLiteral("takeReceiver"));
+        const int cReceiver = streamOf(s.core, cSlices.first());
+        int choice = -1;
+        for (const QJsonValue& v : ask.value(QStringLiteral("choices")).toArray()) {
+            if (v.toObject().value(QStringLiteral("streamIndex")).toInt() == cReceiver) {
+                QCOMPARE(v.toObject().value(QStringLiteral("takeable")).toBool(false), true);
+                choice = v.toObject().value(QStringLiteral("choice")).toInt();
+            }
+        }
+        QVERIFY(choice >= 0);
+
+        MoxController* mox = s.core.model->moxController();
+        mox->onMicPttFromRadio(true);
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+        const QJsonObject done = s.proceed(s.appB, ask.value(QStringLiteral("id")).toInteger(), choice);
+        QCOMPARE(done.value(QStringLiteral("accepted")).toBool(true), false);
+        QCOMPARE(done.value(QStringLiteral("reason")).toString(), kRadioOnAir);
+        QCOMPARE(s.core.model->sliceById(1)->frequency(), 7150000.0);
+        QVERIFY(s.core.model->sliceById(cSlices.first()) != nullptr);
+        QCOMPARE(s.core.model->sliceOwnership()->mark(cSlices.first()).owner, s.c.key.fingerprint());
+        mox->onMicPttFromRadio(false);
         QTRY_COMPARE(mox->state(), MoxState::Rx);
     }
 };
