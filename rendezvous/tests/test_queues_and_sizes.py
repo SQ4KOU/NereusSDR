@@ -108,7 +108,11 @@ def test_a_peer_that_stops_reading_is_closed_at_its_byte_cap():
     asyncio.run(go())
 
 
-def test_the_budget_for_every_queue_together_closes_the_one_that_would_pass_it():
+def test_the_budget_for_every_queue_together_closes_the_largest_holder():
+    """Section 9.1: a send that would pass the budget closes whoever holds
+    the most queued bytes, not the recipient, unless the recipient is the
+    largest holder itself."""
+
     async def go():
         service = _service(send_queue_bytes=1048576, send_budget_bytes=1500000)
         a_io, b_io = FakeTransport(reads=False), FakeTransport(reads=False)
@@ -118,17 +122,102 @@ def test_the_budget_for_every_queue_together_closes_the_one_that_would_pass_it()
         for _ in range(8):
             a.send(big)
         assert not a.closing and service.queued_bytes > 800000
-        for _ in range(8):
+        sent = 0
+        while not a.closing and sent < 8:
             b.send(big)
-            if b.closing:
-                break
-        # a holds 8 messages; b is closed on the message that would take the
-        # total past 1500000 bytes, though b is under its own cap.
-        assert b.closing and not a.closing
+            sent += 1
+        # a holds 8 messages and b fewer: the message to b that would pass
+        # 1500000 bytes closes a, the largest holder, and b keeps it.
+        assert a.closing and not b.closing
+        assert a.queued_bytes == 0 and service.queued_bytes == b.queued_bytes
         await _settle()
-        # b's hello, stuck in its writer, is released when the writer stops.
-        assert b.queued_bytes == 0 and service.queued_bytes == a.queued_bytes
+        assert a_io.closed_with == CLOSE_NOT_READING and b_io.closed_with is None
+        # Now b is the largest holder: its own next messages close it.
+        while not b.closing:
+            b.send(big)
+        assert b.queued_bytes == 0 and service.queued_bytes == 0
+        await _settle()
         assert b_io.closed_with == CLOSE_NOT_READING
+
+    asyncio.run(go())
+
+
+def test_a_writer_blocked_too_long_is_closed():
+    """Section 9.1: a connection whose writer spends longer than
+    send_stall_ms (30000 by default) on one message is closed with 1008,
+    since a ping stuck behind the same write would never time it out."""
+
+    async def go():
+        # A handshake timer longer than the stall limit, so only the stall
+        # can close the connection here.
+        service = _service(handshake_timeout_ms=600000)
+        assert service.config.send_stall_ms == 30000
+        io = FakeTransport(reads=False)
+        conn, task = await _start(service, io, "192.0.2.1")
+        conn.send({"type": "mailbox", "body": "queued behind the stuck hello"})
+        service.clock.advance(29999)
+        await _settle()
+        assert not conn.closing
+        service.clock.advance(1)
+        await _settle()
+        assert conn.closing and io.closed_with == CLOSE_NOT_READING
+        assert service.queued_bytes == 0
+        await task
+        assert service.queued_bytes == 0 and not service.holders
+
+    asyncio.run(go())
+
+
+class RaisingTransport(FakeTransport):
+    """A peer whose second send fails."""
+
+    async def send(self, text: str) -> None:
+        self.sent.append(text)
+        if len(self.sent) >= 2:
+            raise ConnectionResetError("gone")
+
+
+def test_no_path_leaves_bytes_counted():
+    """C1 of the follow-up review: whenever a writer ends or a connection
+    goes, every byte it had queued is released from the budget."""
+
+    async def go():
+        big = {"type": "mailbox", "body": "y" * 1000}
+        service = _service()
+
+        # The peer goes away while its writer is stuck with messages queued.
+        io = FakeTransport(reads=False)
+        conn, task = await _start(service, io, "192.0.2.1")
+        for _ in range(3):
+            conn.send(big)
+        assert service.queued_bytes > 3000
+        await io.incoming.put(None)
+        await task
+        assert conn.queued_bytes == 0 and service.queued_bytes == 0
+
+        # The writer's send raises with messages still queued.
+        io = RaisingTransport(reads=True)
+        conn, task = await _start(service, io, "192.0.2.2")
+        for _ in range(3):
+            conn.send(big)
+        await _settle()
+        assert conn.writer.done()
+        assert conn.queued_bytes == 0 and service.queued_bytes == 0
+        await io.incoming.put(None)
+        await task
+
+        # An error that closes, to a peer that never reads: the error and
+        # the close wait behind the stuck hello until the stall limit.
+        io = FakeTransport(reads=False)
+        conn, task = await _start(service, io, "192.0.2.3")
+        conn.send(big)
+        conn.fail("protocolError")
+        assert conn.closing and service.queued_bytes > 1000
+        service.clock.advance(service.config.send_stall_ms)
+        await _settle()
+        assert conn.queued_bytes == 0 and service.queued_bytes == 0
+        await task
+        assert service.queued_bytes == 0 and not service.holders
 
     asyncio.run(go())
 
@@ -228,3 +317,48 @@ def test_a_failing_handler_is_logged_by_class_name_only(caplog, monkeypatch):
     text = "\n".join(r.getMessage() for r in caplog.records)
     assert "ValueError" in text
     assert secret_words not in text
+
+
+def _turn_urls_of_json_length(total):
+    """Eight TURN URLs whose compact JSON array is exactly `total` bytes."""
+    chars = total - 2 - 7 - 8 * 2
+    lengths = [chars // 8] * 8
+    lengths[-1] += chars - sum(lengths)
+    urls = ["turn:" + "a" * (n - 5) for n in lengths]
+    assert len(json.dumps(urls, separators=(",", ":"))) == total
+    return urls
+
+
+def test_the_longest_answer_the_service_sends_is_within_its_bound():
+    """Section 2: the service never sends more than 132096 bytes. The
+    largest message it builds is the answer to a client, from a station's
+    answer of 131072 bytes, with a turn object whose URL list is at the
+    configuration's cap (768 bytes as JSON); one byte more is refused."""
+    from nereus_rendezvous import config as cfg
+
+    urls = _turn_urls_of_json_length(cfg.TURN_URLS_JSON_MAX)
+    over = _turn_urls_of_json_length(cfg.TURN_URLS_JSON_MAX + 1)
+    config = make_config({"turnUrls": over}, b"secret")
+    with pytest.raises(cfg.ConfigError):
+        Service(config, ManualClock())
+
+    async def go():
+        async with live_service({"turnUrls": urls}) as (service, uri):
+            st, _, sid = await register(uri)
+            cl = await ws_connect(uri, "198.51.100.1")
+            hello = await recv_json(cl)
+            await cl.send(protocol.encode(introduce_message(sid, hello["nonce"])))
+            intro = await recv_json(st)
+            msg = {"type": "answer", "to": intro["from"], "answer": "\x01", "turn": True}
+            short = len(protocol.encode(msg).encode())
+            msg["answer"] = "\x01" * ((protocol.MAX_MESSAGE_BYTES - short) // 6 + 1)
+            msg["answer"] += "v" * (protocol.MAX_MESSAGE_BYTES - len(protocol.encode(msg).encode()))
+            text = protocol.encode(msg)
+            assert len(text.encode()) == protocol.MAX_MESSAGE_BYTES
+            await st.send(text)
+            raw = await asyncio.wait_for(cl.recv(), 5)
+            answer = json.loads(raw)
+            assert answer["turn"]["urls"] == urls
+            assert protocol.MAX_MESSAGE_BYTES < len(raw.encode()) <= protocol.MAX_SERVICE_MESSAGE_BYTES
+
+    asyncio.run(go())

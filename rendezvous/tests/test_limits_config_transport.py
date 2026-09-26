@@ -84,6 +84,9 @@ def test_config_file(tmp_path):
         "[limits]\nsend_queue_bytes = 2000\nsend_budget_bytes = 1000\n",
         "[limits]\nintroductions_per_address_per_minute = 0\n",
         "[limits]\nping_interval_seconds = -1\n",
+        "[limits]\nsend_stall_ms = 0\n",
+        '[rendezvous]\nturn_urls = turn:a"b\n',
+        "[rendezvous]\nturn_urls = turn:a\\b\n",
     ],
 )
 def test_config_refused(tmp_path, text):
@@ -128,6 +131,7 @@ def test_defaults():
     assert (config.connections_per_address, config.stations_per_address) == (16, 4)
     assert (config.max_connections, config.max_stations) == (512, 512)
     assert (config.send_queue_bytes, config.send_budget_bytes) == (1048576, 33554432)
+    assert config.send_stall_ms == 30000
     assert all("rv4.nereussdr.com" in u or "rv6.nereussdr.com" in u for u in config.turn_urls + config.stun_urls)
     assert {u.split(":")[2].split("?")[0] for u in config.turn_urls} == {"3478", "443"}
 

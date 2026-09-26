@@ -1,7 +1,7 @@
 {
   "description": "A device introduces itself by signing \"NereusSDR introduce v1\\n\" || station id (26 ASCII bytes) || nonce, where nonce is the 32 raw bytes the introducing connection's hello nonce decodes to. The rendezvous forwards the signature untouched; the station verifies it with the key of the paired device whose id is device (the base64url SHA-256 of its SPKI DER, link section 3.5).",
   "device": {
-    "fixed": "A fixed public key for these vectors. Its private key was discarded when the signatures were made; a runner only verifies with it.",
+    "fixed": "A fixed public key for these vectors. The key was generated only to produce them and is used by nothing else (no Core, device or server); a runner only verifies with it.",
     "publicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAE_WtfdDw6w8-gD6JwPzj8eZiLZ5Ou1vLPBx5t7tqo3n6IusVGiMZJJHaEuOODaV8FdxtdqD0PWB9LkjgrET82Mw",
     "id": "Vql0Tj7p5WRKQuJyMEUd4Pdrs9ZxVyXEPI5anvUOYnI"
   },

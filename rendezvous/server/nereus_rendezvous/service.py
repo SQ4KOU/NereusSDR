@@ -79,6 +79,11 @@ class Connection:
         self.nonce = service.random(identity.NONCE_BYTES)
         self.queue: "asyncio.Queue[Any]" = asyncio.Queue()
         self.queued_bytes = 0
+        # The message the writer is sending now, and when a send takes too
+        # long, the timer that ends the connection (section 9.1).
+        self.inflight = 0
+        self.stall_timer: Optional[TimerHandle] = None
+        self.aborted = False
         self.writer: Optional["asyncio.Future[None]"] = None
         self.close_task: Optional["asyncio.Future[None]"] = None
         self.closing = False
@@ -109,32 +114,59 @@ class Connection:
         text = protocol.encode(message)
         size = len(text.encode("utf-8"))
         config = self.service.config
-        if (
-            self.queue.qsize() >= config.send_queue_messages
-            or self.queued_bytes + size > config.send_queue_bytes
-            or self.service.queued_bytes + size > config.send_budget_bytes
-        ):
+        if self.queue.qsize() >= config.send_queue_messages or self.queued_bytes + size > config.send_queue_bytes:
             self.stopped_reading()
             return
+        # The budget for every queue together: close whoever holds the most
+        # until this message fits, which is this connection only when it is
+        # itself the largest holder (rendezvous document section 9.1).
+        while self.service.queued_bytes + size > config.send_budget_bytes:
+            hog = self.service.largest_holder()
+            if hog is None or hog is self:
+                self.stopped_reading()
+                return
+            hog.stopped_reading()
+        self._hold(size)
+        self.queue.put_nowait((text, size))
+
+    def _hold(self, size: int) -> None:
         self.queued_bytes += size
         self.service.queued_bytes += size
-        self.queue.put_nowait((text, size))
+        self.service.holders.add(self)
 
     def _release(self, size: int) -> None:
         self.queued_bytes -= size
         self.service.queued_bytes -= size
+        if self.queued_bytes <= 0:
+            self.service.holders.discard(self)
 
-    def stopped_reading(self) -> None:
-        """A peer whose messages pile up (its own cap, or the service's
-        budget for every queue together) is dropped rather than buffered
-        without bound: what is queued is discarded, the writer stops, and the
-        connection closes with 1008 and no error message."""
-        log.warning("closed a connection that stopped reading")
-        self.closing = True
+    def release_all(self) -> None:
+        """Forget every byte this connection holds: what waits in its queue
+        and the message in flight. The one place a queue is emptied, called
+        whenever the writer ends, for any reason, and when the connection is
+        dropped, so no path leaves bytes counted against the budget."""
         while not self.queue.empty():
             item = self.queue.get_nowait()
             if isinstance(item, tuple):
                 self._release(item[1])
+        if self.inflight:
+            self._release(self.inflight)
+            self.inflight = 0
+        if self.stall_timer is not None:
+            self.stall_timer.cancel()
+            self.stall_timer = None
+
+    def stopped_reading(self) -> None:
+        """A peer whose messages pile up (its own cap, the largest share of
+        the service's budget, or one send blocked too long) is dropped rather
+        than buffered without bound: what is queued is discarded, the writer
+        stops, and the connection closes with 1008 and no error message."""
+        if self.aborted:
+            return
+        self.aborted = True
+        log.warning("closed a connection that stopped reading")
+        self.closing = True
+        self.release_all()
         if self.writer is not None:
             self.writer.cancel()
         self.close_task = asyncio.ensure_future(self._close_quietly(CLOSE_NOT_READING))
@@ -172,12 +204,21 @@ class Connection:
                     await self.transport.close(item.code)
                     return
                 text, size = item
-                try:
-                    await self.transport.send(text)
-                finally:
-                    self._release(size)
+                self.inflight = size
+                self.stall_timer = self.service.clock.call_later(
+                    self.service.config.send_stall_ms, self.stopped_reading
+                )
+                await self.transport.send(text)
+                self.stall_timer.cancel()
+                self.stall_timer = None
+                self.inflight = 0
+                self._release(size)
         except Exception:  # noqa: BLE001 - the peer went away; the reader cleans up
             return
+        finally:
+            # Cancelled, failed or closed: nothing this connection queued
+            # stays counted.
+            self.release_all()
 
 
 class Service:
@@ -198,8 +239,10 @@ class Service:
         self.per_group: Dict[str, int] = {}
         self.station_count = 0
         self.stations_per_group: Dict[str, int] = {}
-        # Bytes waiting in every connection's outbound queue together.
+        # Bytes waiting in every connection's outbound queue together, and
+        # the connections holding any.
         self.queued_bytes = 0
+        self.holders: Set[Connection] = set()
         self.stations: Dict[str, Connection] = {}
         self.introductions: Dict[str, Introduction] = {}
         self.nameplates: Dict[int, Connection] = {}
@@ -244,6 +287,19 @@ class Service:
                 await asyncio.wait({writer}, timeout=5)
             if not writer.done():
                 writer.cancel()
+                await asyncio.wait({writer})
+            conn.release_all()
+
+    def largest_holder(self) -> Optional[Connection]:
+        """The connection holding the most queued bytes, among those not
+        already being dropped."""
+        best: Optional[Connection] = None
+        for conn in self.holders:
+            if conn.aborted:
+                continue
+            if best is None or conn.queued_bytes > best.queued_bytes:
+                best = conn
+        return best
 
     def accept(self, conn: Connection) -> None:
         # A new connection has no role yet; it is counted with the clients

@@ -74,9 +74,16 @@ addresses of both ends, that an id is online, and traffic timing.
   bytes for each UTF-8 byte it stands for), and so does any real SDP or
   `pair.*` message.
 - **What a peer accepts.** The service never sends a message longer than
-  132096 bytes (the largest inbound message plus the keys the service adds
-  when it forwards one), and a station or client accepts any message from
-  the service of up to 262144 bytes (256 KiB).
+  132096 bytes, and a station or client accepts any message from the
+  service of up to 262144 bytes (256 KiB). The longest message the service
+  builds is the `answer` it sends a client: the station's `answer` (at most
+  131072 bytes) less its `to`, plus a `turn` object. The only part of that
+  object set by configuration is its URL list, so the service refuses to
+  start with TURN URLs that are not printable ASCII (a quote and a
+  backslash excluded, so none is ever escaped) or whose list, written as a
+  compact JSON array, is over 768 bytes; four URLs of the default form take
+  about 180. With that cap the bound holds (`test_queues_and_sizes.py`
+  checks it at the cap).
 - The service sends a WebSocket ping every 20 s and closes a connection whose
   pong has not come back 20 s later (section 9.2). Pings are control frames,
   not messages. Clients answer pings as any WebSocket stack does and need
@@ -86,9 +93,11 @@ addresses of both ends, that an id is online, and traffic timing.
   peer acts on is always in the `error` message before the close, never in
   the close frame, whose reason text is empty. Two closes come without an
   `error` message: 1009 for a message over the cap (above), and 1008 for a
-  peer that has stopped reading, whose unsent messages have passed its
-  queue's cap or the service's budget for every queue together (section
-  9.1); it would not read an error message either.
+  peer that has stopped reading: its unsent messages have passed its
+  queue's cap, or it holds the largest share of the service's budget for
+  every queue together when that budget runs out, or one message has taken
+  longer than 30 s to send (section 9.1). It would not read an error
+  message either.
 
 ## 3. Roles and the life of a connection
 
@@ -665,7 +674,8 @@ of the same id (section 6.2) does not count the older one.
 | Mailbox lifetime | 300 s | the pairing exchange, with Argon2id hashing on the Core, and a person typing |
 | WebSocket ping interval and timeout | 20 s and 20 s | keeps a station's NAT mapping and Caddy's upstream alive; the station link uses 20 s too (link section 12.1) |
 | Outbound queue per connection | 256 messages or 1048576 bytes (1 MiB), whichever comes first | a peer that stops reading is closed (1008, section 2) rather than buffered without bound; 1 MiB holds 16 of the largest messages |
-| Outbound queues together | 33554432 bytes (32 MiB) | a budget for every connection's queue at once; the connection whose next message would pass it is closed (1008) |
+| Outbound queues together | 33554432 bytes (32 MiB) | a budget for every connection's queue at once; a message that would pass it closes (1008) the connection holding the most queued bytes, and the next largest, until it fits, so the peer that stopped reading goes, not whoever happens to be sent to next (the recipient goes only when it is itself the largest) |
+| One message's send | 30 s | a connection whose writer has spent longer than this on one message is closed (1008): a peer that stops reading stops the WebSocket pings too (on websockets 10.4 a ping waits behind the same blocked write), so the ping timeout alone would never end it; 30 s is far longer than any real message takes |
 
 **Sizing the totals.** The defaults fit a server of 1 GB of memory and one
 virtual CPU that also runs the website (Caddy) and the relay (coturn),
@@ -753,9 +763,10 @@ come from there being three parties rather than two, and are named below.
   fixture says `"$sdp:offer:<name>"` or `"$sdp:answer:<name>"`.
 
 No file in the suite holds a private key. `crypto/` holds two fixed
-public keys (marked `fixed`) with fixed signatures made when the vectors
-were written, whose private keys were then discarded: a runner only
-verifies with them. Every key that signs during a run (the stations that
+public keys (marked `fixed`) with fixed signatures. Those keys were
+generated only to produce these vectors and are used by nothing else: no
+Core, device or server holds them as an identity. A runner only verifies
+with them. Every key that signs during a run (the stations that
 register and the devices that introduce themselves in the session
 fixtures) is made at run time.
 

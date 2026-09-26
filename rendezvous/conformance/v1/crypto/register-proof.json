@@ -1,7 +1,7 @@
 {
   "description": "A station proves its key by signing \"NereusSDR rendezvous register v1\\n\" || nonce, where nonce is the 32 raw bytes the challenge's base64url decodes to. ECDSA P-256 over SHA-256, raw r || s, base64url. valid is true only when the key is a canonical P-256 key and the signature verifies over this transcript.",
   "key": {
-    "fixed": "A fixed public key for these vectors. Its private key was discarded when the signatures were made; a runner only verifies with it.",
+    "fixed": "A fixed public key for these vectors. The key was generated only to produce them and is used by nothing else (no Core, device or server); a runner only verifies with it.",
     "publicKey": "MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAEg_nsJyqEh0XXav5VH_mkzbwEzIso5Z0SBCuMPrWBZ7iv5oOEFS16bH6n9dWRkTS18CZwprmg2_pm-qhKDnHejw",
     "id": "lwhu2kyjnrfdwvpxvdckao3lb7"
   },

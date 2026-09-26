@@ -16,6 +16,7 @@ trusted_proxies = 127.0.0.1 ::1
 stun_urls = stun:rv6.nereussdr.com:3478 stun:rv4.nereussdr.com:3478
 
 # Handed out with relay credentials, each name on UDP 3478 and UDP 443.
+# Printable ASCII only, at most 768 bytes as a JSON list together.
 turn_urls = turn:rv6.nereussdr.com:3478?transport=udp turn:rv6.nereussdr.com:443?transport=udp turn:rv4.nereussdr.com:3478?transport=udp turn:rv4.nereussdr.com:443?transport=udp
 
 # The file holding coturn's static-auth-secret, and nothing else. Empty: no
@@ -55,3 +56,6 @@ ping_timeout_seconds = 20
 send_queue_messages = 256
 send_queue_bytes = 1048576
 send_budget_bytes = 33554432
+# A connection whose writer spends longer than this on one message is closed
+# (code 1008) too.
+send_stall_ms = 30000

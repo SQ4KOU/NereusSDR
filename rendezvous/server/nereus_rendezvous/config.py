@@ -11,8 +11,14 @@ from __future__ import annotations
 
 import configparser
 import dataclasses
+import json
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple
+
+
+# The TURN URL list as the wire carries it (a compact JSON array) is at
+# most this many bytes (rendezvous document section 2).
+TURN_URLS_JSON_MAX = 768
 
 
 class ConfigError(Exception):
@@ -60,6 +66,7 @@ class Config:
     send_queue_messages: int = 256
     send_queue_bytes: int = 1048576
     send_budget_bytes: int = 33554432
+    send_stall_ms: int = 30000
     # Not from the file: the secret's bytes, read from turn_secret_file.
     turn_secret: Optional[bytes] = field(default=None, repr=False)
 
@@ -93,6 +100,7 @@ _SECTIONS = {
         "send_queue_messages",
         "send_queue_bytes",
         "send_budget_bytes",
+        "send_stall_ms",
     ],
 }
 
@@ -181,6 +189,16 @@ def check(config: Config) -> None:
         for url in urls:
             if not 1 <= len(url.encode("utf-8")) <= 512:
                 raise ConfigError(f"{name}: a URL longer than 512 bytes")
+            # Printable ASCII without a quote or a backslash, so a URL is
+            # never escaped on the wire and its length is exactly known.
+            if not all(0x21 <= ord(c) <= 0x7E and c not in '"\\' for c in url):
+                raise ConfigError(f"{name}: a URL must be printable ASCII without quotes or backslashes")
+    # Section 2: the service never sends more than 132096 bytes. The
+    # largest message it builds is an answer carrying a turn object, whose
+    # URL list is the only part set by configuration; this cap keeps it
+    # within that bound.
+    if len(json.dumps(config.turn_urls, separators=(",", ":"))) > TURN_URLS_JSON_MAX:
+        raise ConfigError(f"turn_urls: more than {TURN_URLS_JSON_MAX} bytes together")
     if config.log_level.upper() not in ("DEBUG", "INFO", "WARNING", "ERROR"):
         raise ConfigError("log_level: debug, info, warning or error")
 
