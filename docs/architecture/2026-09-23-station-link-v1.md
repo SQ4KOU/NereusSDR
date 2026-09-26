@@ -2767,15 +2767,17 @@ connected to the Core; nothing in it is per device.
 it again as a session's snapshot is first sent, and rebuilds it, at most
 once per turn of its event loop, when a filter preset or the CW pitch
 changes in its settings (from its own computer or a window, section 8),
-when its band plan data is read again, and when its radio changes (a radio
+when its band plan data is read again, when its own band plan changes (its
+View > Band Plan, or a device's `settings.write` or `settings.remove` of
+`BandPlanName`, section 8.1), and when its radio changes (a radio
 found after the session began included). A rebuild
 that changes nothing leaves `revision` alone; one that changes anything
 moves it by one, so the three settings of one preset move it once. The new
 value reaches a connected client as a `delta` (section 7.2).
 
 **Size.** At most 256 KiB of `json` for the largest radio
-(`StationCatalog::kMaxJsonBytes`); today's are about 40 KiB, most of it the
-band plans.
+(`StationCatalog::kMaxJsonBytes`); today's are about 61 KiB, most of it the
+band plans and their spots.
 
 **Units and forms.** A key names its unit (`Hz`, `Db`, `Dbm`, `W`);
 numbers are JSON numbers and a whole value is written without a fraction.
@@ -2795,7 +2797,7 @@ The object has exactly these fourteen keys:
 | `meters` | The gauges an app draws (below) |
 | `board` | The radio (below) |
 | `bands` | `[{id, label}]`: the desktop's per-pan BAND grid, in its order (160, 80, 60, 40, 30, 20, 17, 15, 12, 10, 6, WWV); `id` is the band as `slice.selectBand` takes it (0 for 160 m to 10 for 6 m, 12 for WWV) and `label` is the button's text. The desktop draws its grid from the same table, so the two cannot differ |
-| `bandPlans` | `[{id, name, default, segments: [{lowHz, highHz, label, licence, lowestClass, colour}]}]`: every bundled plan, `id` its file's name (`arrl-us`), `default` true on ARRL (US) alone; `licence` lists the licence classes (`E,G`), empty for a beacon or no transmit; `lowestClass` is the lowest class the segment allows, as the desktop's band-plan strip names it after the label (`PHONE General`): `Tech` when `licence` holds T, else `General` when it holds G, `Extra` when it is exactly `E`, and empty otherwise |
+| `bandPlans` | `[{id, name, default, active, segments: [{lowHz, highHz, label, licence, lowestClass, colour}], spots: [{hz, label}]}]`: every bundled plan, `id` its file's name (`arrl-us`), `default` true on ARRL (US) alone, `active` true on the Core's own plan alone (the plan settings `BandPlanName` names; a Core from before `active` sends none, and an app then reads `BandPlanName`); `spots` are the plan's marked frequencies, as its file lists them, `hz` the frequency in whole hertz and `label` the file's text (the desktop's strip draws each as a dot, without its label); `licence` lists the licence classes (`E,G`), empty for a beacon or no transmit; `lowestClass` is the lowest class the segment allows, as the desktop's band-plan strip names it after the label (`PHONE General`): `Tech` when `licence` holds T, else `General` when it holds G, `Extra` when it is exactly `E`, and empty otherwise |
 | `palettes` | `[{id, name, stops: [{at, colour}]}]`: the waterfall palettes, `id` the desktop's palette number, `at` from 0 to 1 to three places, lowest first. The Custom palette is each computer's own and is not listed |
 | `sliceColours` | `[colour]`: slice A's colour first, one for each slice the radio allows |
 | `tools` | `[{id, label, where, offered}]`: the desktop's Tools menu in its order, `where` `station` (works at the Core) or `both`; MIDI Mapping and Macro Buttons are not listed |
@@ -2978,7 +2980,9 @@ nobody owns it).
 The station refuses a write to a key outside the station scope ("Each app
 keeps this setting itself; the Core does not store it."), to another radio's `hardware/<mac>/` keys ("These settings
 are for a radio this Core is not connected to."), an out-of-range
-`SwrProtectionLimit` ("Choose an SWR protection limit from 1.0 to 5.0."), and transmit-side keys on a receive-only
+`SwrProtectionLimit` ("Choose an SWR protection limit from 1.0 to 5.0."), a
+`BandPlanName` that names none of its bundled plans ("This Core does not have
+that band plan."), and transmit-side keys on a receive-only
 station ("Transmit configuration is unavailable on this receive-only
 Core."). At `transmitSettingsVersion` 1 a receive-only station takes the
 DSP > Options TX keys (`DspOptions<Setting><Mode>Tx`,
@@ -4483,7 +4487,8 @@ same on every machine.
 | `devices-not-offered` | A window at minor 11 that declares no features receives no `devices` object, and `station.rename` is refused "Update this app to manage this Core's paired devices." Runs on the station alone |
 | `devices-pairing` | On the same Core as `devices`, `pairing.open` and `pairing.close` each with a renamed argument are refused; `pairing.open` is accepted with `values` `code` as `"$string"`, and the object's next `delta` has `pairingWindowOpen` true and `pairingCode` `"$string"`; `pairing.close` is accepted and the next `delta` has them false and `""`. Runs on the station alone |
 | `devices-retire-token-refused`, `devices-retire-token` | On an upgraded Core, a token connection that declares `deviceAuth` receives the object with `tokenActive` true; `station.retireToken` is refused with no device paired, and with one paired it is accepted and the connection ends: `session.end` `pairingRequired`, `retryable` false. Run on the station alone |
-| `catalog-anan-g2`, `catalog-hermes-lite-2` | The connect sequence to `snapshot.complete` on the static radio as an ANAN-G2 and as a Hermes Lite 2: the capabilities in full, and the `catalog` object with its `json` in full and `revision` 1 (section 7.4). The two differ exactly where the radios do: the board's model, name, attenuator (0 to 31 against -28 to 31), sample rates (six against four), antennas (three plus three receive-only against one plus none), PA rating and microphone input, and the RF power gauge its rating scales |
+| `catalog-anan-g2`, `catalog-hermes-lite-2` | The connect sequence to `snapshot.complete` on the static radio as an ANAN-G2 and as a Hermes Lite 2: the capabilities in full, and the `catalog` object with its `json` in full and `revision` 1 (section 7.4). The two differ exactly where the radios do: the board's model, name, attenuator (0 to 31 against -28 to 31), sample rates (six against four), antennas (three plus three receive-only against one plus none), PA rating and microphone input, and the RF power gauge its rating scales. On a Core that has not changed its plan, ARRL (US) is both `default` and `active`, and every plan carries its file's `spots` |
+| `settings-band-plan` | Two devices on a new Core: the fixture's device writes `BandPlanName` "IARU Region 1", and both devices get `settings.value` for it, then one catalogue `delta` each (`revision` 2) whose `json` marks `iaru-region1` alone `active` (`default` stays on ARRL (US)); a write of a plan the Core does not have gets `settings.reject` with the Core's value "IARU Region 1" and "This Core does not have that band plan.", to the writer alone; a `settings.remove` reaches both devices as an absent value, and the next `delta` (`revision` 3) marks ARRL (US) `active` again. The writing device's two deltas carry the catalogue's `json` in full; the other device's carry `active` and `default` for each plan and `"$any"` for the rest |
 | `connection-limit` | With twenty-four other connections still connecting, the station sends no `hello`: `session.end` "The Core already has as many connections as it allows. Try again shortly.", `retryable` true, then the close |
 | `lockout` | After five wrong tokens from other clients, the right token is refused as rate limited, `retryable` true |
 | `major-refused` | An older app's `hello` (no `majors`) with major 2 gets `session.end` "This Core runs link version 1 and this app runs version 2. Update the Core.", `retryable` false, `code` `linkVersion` |

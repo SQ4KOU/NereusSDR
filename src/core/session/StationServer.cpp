@@ -509,6 +509,10 @@
 //               mailbox pairing is refused before it takes a code. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: D79 (R-IOS-11, R-R3-49): a taken BandPlanName write or
+//               removal moves the Core's own band plan; a plan the Core
+//               does not have is refused. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -563,6 +567,7 @@
 #include "core/accessories/AlexAntennaFacade.h"
 #include "core/IoBoardHl2Facade.h"
 #include <QScopeGuard>
+#include "models/BandPlanManager.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -4990,6 +4995,16 @@ void StationServer::handleSettingsWrite(SessionTransport* transport,
                                                         restored.toString(), range));
         return;
     }
+    // D79 (R-IOS-11, R-R3-49): a band plan this Core does not have is
+    // refused, and the Core's value handed back.
+    if (const QString plan = bandPlanRefusal(key, message.updates.first().value);
+        !plan.isEmpty()) {
+        const QVariant restored = m_settings.value(key);
+        qCWarning(lcStation) << "Refused remote settings write" << key << ":" << plan;
+        send(transport, SessionMessages::settingsReject(key, restored.isValid(),
+                                                        restored.toString(), plan));
+        return;
+    }
     // Fix wave I3: a slice's own settings keys are its owner's alone.
     if (const QString refusal = sliceSettingsRefusal(transport, key); !refusal.isEmpty()) {
         const QVariant kept = m_settings.value(key);
@@ -5003,6 +5018,30 @@ void StationServer::handleSettingsWrite(SessionTransport* transport,
         return;
     }
     applySettingsWrite(transport, message, nullptr);
+}
+
+QString StationServer::bandPlanRefusal(const QString& key, const QVariant& value) const
+{
+    if (key != QLatin1String(kBandPlanNameKey) || m_radioModel.isNull()) {
+        return {};
+    }
+    return m_radioModel->bandPlanManager().availablePlans().contains(value.toString())
+        ? QString()
+        : QStringLiteral("This Core does not have that band plan.");
+}
+
+void StationServer::applyBandPlanSetting(const QString& key)
+{
+    // D79 (R-IOS-11, R-R3-49): the plan a device picks is the station's,
+    // as a remote window's View > Band Plan is. The Core's own strip
+    // redraws and the catalogue refreshes through planChanged. A removal
+    // reads the default, ARRL (US). The key already holds the value, so
+    // setActivePlan() writes nothing back.
+    if (key != QLatin1String(kBandPlanNameKey) || m_radioModel.isNull()) {
+        return;
+    }
+    m_radioModel->bandPlanManagerMutable().setActivePlan(
+        m_settings.value(key, QString::fromLatin1(BandPlanManager::kDefaultPlanName)).toString());
 }
 
 QString StationServer::sliceSettingsRefusal(SessionTransport* transport, const QString& key) const
@@ -5070,6 +5109,8 @@ bool StationServer::applySettingsWrite(SessionTransport* transport, const Sessio
         // sets the Core's meter pump rate at once, as the local page does.
         m_radioModel->applyMeterSetting(key, m_settings.value(key));
     }
+    // D79: the Core's own band plan follows BandPlanName.
+    applyBandPlanSetting(key);
     return true;
 }
 
@@ -5180,6 +5221,8 @@ void StationServer::applySettingsRemove(const SessionMessage& message)
         // R-R3-13 / R-R3-49 (parity Task 15): the default meter pump rate.
         m_radioModel->applyMeterSetting(key, QVariant());
     }
+    // D79: removing BandPlanName returns the Core to ARRL (US).
+    applyBandPlanSetting(key);
 }
 
 // ── Send helpers ─────────────────────────────────────────────────────────

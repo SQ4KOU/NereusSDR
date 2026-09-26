@@ -442,6 +442,10 @@
 //                bandSelectVersion 1, so the Core changes that slice with
 //                its own band memory. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-26 : D79 (R-IOS-11, R-R3-49): a remote window follows the
+//                Core's BandPlanName (stationSettingChanged), as RxOnly
+//                does. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1809,6 +1813,28 @@ RadioModel::RadioModel(Role role, QObject* parent)
             [this](const QString& key) {
                 if (key.isEmpty() || key == QLatin1String("RxOnly")) {
                     applyRxOnlySetting(rxOnlySetting());
+                }
+            });
+    // D79 (R-IOS-11, R-R3-49): the band plan is the station's. A remote
+    // window read its plan at startup, before the Core's settings arrived
+    // (the proxy returns the default); it takes the Core's plan with the
+    // snapshot and follows every later change. The settings already hold
+    // the value, so setActivePlan() writes nothing back. A name this
+    // window does not have leaves its plan as it is. Local windows never
+    // see stationSettingChanged, so they are unchanged.
+    connect(this, &RadioModel::stationSettingChanged, this,
+            [this](const QString& key) {
+                if (!key.isEmpty() && key != QLatin1String("BandPlanName")) {
+                    return;
+                }
+                const QString name = AppSettings::instance()
+                                         .value(QStringLiteral("BandPlanName"),
+                                                QString::fromLatin1(
+                                                    BandPlanManager::kDefaultPlanName))
+                                         .toString();
+                if (name != m_bandPlanManager.activePlanName()
+                    && m_bandPlanManager.availablePlans().contains(name)) {
+                    m_bandPlanManager.setActivePlan(name);
                 }
             });
 

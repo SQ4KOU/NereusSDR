@@ -41,6 +41,9 @@
 //                 AetherSDR src/gui/SpectrumWidget.cpp:2397-2420 [@0dea0dd7].
 //                 Keep a standalone widget's owning graphics window alive
 //                 until QRhiWidget teardown. AI-assisted via OpenAI Codex.
+//   2026-09-26 : bandPlanManager() accessor, so a test reads the plan the
+//                 strip draws (R-IOS-11, R-R3-49). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  enums.cs
@@ -886,6 +889,8 @@ public:
 
     // Bandplan overlay (Phase 3G RX Epic sub-epic D)
     void setBandPlanManager(NereusSDR::BandPlanManager* mgr);
+    // The plan manager whose active plan the strip draws (non-owning).
+    NereusSDR::BandPlanManager* bandPlanManager() const { return m_bandPlanMgr; }
     void setBandPlanFontSize(int pt);             // 0 = off
     int  bandPlanFontSize() const { return m_bandPlanFontSize; }
     bool bandPlanVisible() const { return m_bandPlanFontSize > 0; }

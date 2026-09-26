@@ -141,6 +141,9 @@
 //                                    the freeze and on-air refusals' new
 //                                    forwards. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  D79 (R-IOS-11, R-R3-49): the Core's
+//                                    unknown band plan refusal forwards.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -740,7 +743,10 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("freezeRefusalFor(message).text"),
           // R-R3-49 (parity Task 5): powerPageKeyValueRefusal's literals,
           // this file's own, scanned here.
-          QStringLiteral("range")}},
+          QStringLiteral("range"),
+          // D79 (R-IOS-11): bandPlanRefusal's literal, this file's own,
+          // scanned here.
+          QStringLiteral("plan")}},
         // iPhone app Task 74 (R-IOS-30): the confirm step's answers and
         // refusals, confirm.request and notice reasons, and the chooser's
         // `why`. Device names inserted are the operator's own words (ruling
