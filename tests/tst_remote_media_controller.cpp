@@ -46,6 +46,7 @@
 #include "gui/RemoteAudioStatus.h"
 #include "gui/RemoteConnectionController.h"
 #include "gui/RemoteMediaController.h"
+#include "gui/PanFloatingWindow.h"
 #include "gui/PanadapterStack.h"
 #include "gui/PanadapterApplet.h"
 #include "gui/SpectrumWidget.h"
@@ -2092,6 +2093,33 @@ private slots:
         SettingsProxy proxy;
         StationClient client(&remote, &proxy);
         auto stack = std::make_unique<PanadapterStack>();
+        // A failed check returns straight out of this test, and the stack
+        // would be destroyed without the event loop having run since the
+        // pan last moved between windows. The offscreen platform's backing
+        // store then faults: the floating window and the stack have both
+        // flushed the pan's native windows, Qt's static map remembers only
+        // the store that flushed last, and whichever store is destroyed
+        // second looks up a key the first one erased (QOffscreenBackingStore
+        // ::clearHash has no end() check). One failure then took the whole
+        // binary down with SIGSEGV. On a failed check, put the pan back in
+        // the stack and wait for the retired floating window to be deleted,
+        // which PanadapterStack does only once the pan has painted in the
+        // stack; then the stack owns those keys and teardown is orderly, as
+        // it is at the end of a passing run.
+        QPointer<PanFloatingWindow> floatedWindow;
+        const auto stackTeardown = qScopeGuard([&stack, &floatedWindow] {
+            if (!stack) { return; }
+            if (floatedWindow) {
+                if (stack->floatingWindowForTest(QStringLiteral("pan-0"))) {
+                    stack->dockPanadapter(QStringLiteral("pan-0"));
+                }
+                if (!QTest::qWaitFor([&floatedWindow] { return floatedWindow.isNull(); },
+                                     5000)) {
+                    qWarning("The floating pan window was not retired before teardown.");
+                }
+            }
+            stack.reset();
+        });
         PanadapterApplet* first = stack->addPanadapter(QStringLiteral("pan-0"));
         first->setActiveSliceIndex(sliceId);
         SpectrumWidget* firstWidget = first->spectrumWidget();
@@ -2142,9 +2170,6 @@ private slots:
         };
         QTRY_VERIFY_WITH_TIMEOUT(feedFirst(), 5000);
         QVERIFY(first->remoteDisplayStatus().isEmpty());
-        const int rowsBeforeReparent = firstWidget->dssRowsPushedForTest();
-        const QByteArray stalePacket = sourceMedia->displayPackets.constLast();
-        QVERIFY(!stalePacket.isEmpty());
 
         QTimer* subscriptionTimer = nullptr;
         for (QTimer* timer : controller.findChildren<QTimer*>()) {
@@ -2157,10 +2182,38 @@ private slots:
         const auto fireSubscriptionTimer = [&] {
             QVERIFY(QMetaObject::invokeMethod(subscriptionTimer, "timeout", Qt::DirectConnection));
         };
+        // The first frames move the pan's waterfall AGC levels, and the dBm
+        // window the pan asks the Core for follows them only once they have
+        // held for a frame period (33 ms at 30 fps) between two planner
+        // passes (settleDbmWindows). That renewal of this endpoint can still
+        // be owed here; left to whichever planner tick comes next, it landed
+        // inside the float below about 3 runs in 8 and was counted as a
+        // reparent subscribe. Run the planner until neither a subscribe nor
+        // a painted row has come for 250 ms, so the baseline below is the
+        // settled one and the reparent checks stay exact.
+        int lastSubscriptions = -1;
+        int lastRows = -1;
+        QElapsedTimer quietFor;
+        QVERIFY(QTest::qWaitFor([&] {
+            QMetaObject::invokeMethod(subscriptionTimer, "timeout", Qt::DirectConnection);
+            const int subscriptions = countControl(controls, QStringLiteral("subscribe"));
+            const int rows = firstWidget->dssRowsPushedForTest();
+            if (subscriptions != lastSubscriptions || rows != lastRows) {
+                lastSubscriptions = subscriptions;
+                lastRows = rows;
+                quietFor.start();
+            }
+            return quietFor.elapsed() >= 250;
+        }, 5000));
+        const int rowsBeforeReparent = firstWidget->dssRowsPushedForTest();
+        const QByteArray stalePacket = sourceMedia->displayPackets.constLast();
+        QVERIFY(!stalePacket.isEmpty());
         const int subscriptionsBeforeReparent = countControl(controls, QStringLiteral("subscribe"));
         const int unsubscriptionsBeforeReparent = countControl(controls, QStringLiteral("unsubscribe"));
 
         stack->floatPanadapter(QStringLiteral("pan-0"));
+        floatedWindow = stack->floatingWindowForTest(QStringLiteral("pan-0"));
+        QVERIFY(floatedWindow);
         QVERIFY(!firstWidget->isVisible());
         fireSubscriptionTimer();
         QCOMPARE(countControl(controls, QStringLiteral("subscribe")), subscriptionsBeforeReparent);
