@@ -1298,8 +1298,7 @@ private slots:
             }
 
             // No page the tree offers has nothing to show. (A leaf or a
-            // category the tree hides, such as PA without a radio that has
-            // one, is not offered.)
+            // category the tree hides is not offered.)
             QStringList empty;
             int offered = 0;
             for (int i = 0; i < tree->topLevelItemCount(); ++i) {
@@ -1316,6 +1315,14 @@ private slots:
                     // reason line, not an empty page.
                     if (page != nullptr
                         && page->objectName() == QStringLiteral("setupStationPlaceholder")) {
+                        continue;
+                    }
+                    // A PA page on a radio without power amplifier settings
+                    // (no radio here) is shown disabled under the dialog's
+                    // reason line (Task 16 fix wave 2: never hidden), not
+                    // offered as a page to use.
+                    if (page != nullptr && category->text(0) == QStringLiteral("PA")
+                        && !page->isEnabled() && !leaf->toolTip(0).isEmpty()) {
                         continue;
                     }
                     ++offered;

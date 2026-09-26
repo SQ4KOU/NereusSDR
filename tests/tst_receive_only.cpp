@@ -77,6 +77,7 @@
 #include "gui/setup/GeneralOptionsPage.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
+#include "models/TunerModel.h"
 
 #include "OperatorWording.h"
 #include "fakes/LoopbackTransport.h"
@@ -653,6 +654,33 @@ private slots:
         QCOMPARE(tune->toolTip(), tuneTip);
     }
 
+    // Fix wave 2 (Minor 2): a slice or mode change while the remote
+    // transmit-permission layer holds MOX keeps its reason on the button,
+    // and the new mode's tooltip comes back with permission.
+    void txAppletModeChangeKeepsThePermissionReason()
+    {
+        Rig rig;
+        rig.model->addSlice();
+        SliceModel* second = rig.model->slices().at(1);
+        second->setDspMode(DSPMode::CWU);
+        TxApplet applet(rig.model.get());
+        QPushButton* mox = applet.moxButton();
+        const QString waiting = QStringLiteral("Waiting for the Core.");
+        applet.setTransmitPermitted(false, waiting);
+        QVERIFY(!mox->isEnabled());
+        QCOMPARE(mox->toolTip(), waiting);
+
+        rig.model->setActiveSlice(1);
+        QCOMPARE(mox->toolTip(), waiting);
+        second->setDspMode(DSPMode::FM);
+        QCOMPARE(mox->toolTip(), waiting);
+        QVERIFY(!mox->isEnabled());
+
+        applet.setTransmitPermitted(true);
+        QVERIFY(mox->isEnabled());
+        QCOMPARE(mox->toolTip(), TxApplet::tooltipForMode(DSPMode::FM));
+    }
+
     void containerButtonsAreUnavailableWithTheReason()
     {
         Rig rig;
@@ -763,7 +791,11 @@ private slots:
     {
         QFETCH(QString, label);
         QFETCH(QString, category);
-        Rig rig;
+        // A radio with power amplifier settings (an ANAN-G2), so the PA
+        // pages are live until receive only disables them.
+        Rig rig(/*capsOverride=*/false);
+        rig.model->setBoardForTest(HPSDRHW::Saturn);
+        QVERIFY(rig.model->boardCapabilities().hasPaProfile);
         SetupDialog dialog(rig.model.get());
         dialog.selectPage(label);
         QWidget* page = dialog.realizePageForTest(label);
@@ -779,19 +811,13 @@ private slots:
         QVERIFY2(!page->isEnabled(), qPrintable(label + QStringLiteral(" left enabled")));
         QCOMPARE(page->toolTip(), reason);
         QCOMPARE(leaf->toolTip(0), reason);
-        if (category != QLatin1String("PA")) {
-            // PA is hidden on a radio with no PA profile (this rig), for
-            // that reason alone; the transmit leaves never hide.
-            QVERIFY(!leaf->isHidden());
-        }
-        // The notice above the page shown (selectPage cannot show a hidden
-        // PA leaf, so it is checked on the others).
-        if (category != QLatin1String("PA")) {
-            QVERIFY(page->isVisibleTo(&dialog));
-            QVERIFY(!notice->isHidden());
-            QCOMPARE(notice->text(), reason);
-        }
-        if (category == QLatin1String("Transmit")) {
+        // Never hidden (fix wave 2, Important 2: PA too), with the notice
+        // above the page.
+        QVERIFY(!leaf->isHidden());
+        QVERIFY(page->isVisibleTo(&dialog));
+        QVERIFY(!notice->isHidden());
+        QCOMPARE(notice->text(), reason);
+        if (category == QLatin1String("Transmit") || category == QLatin1String("PA")) {
             QTreeWidgetItem* root = setupRow(dialog, category, /*category=*/true);
             QVERIFY(root != nullptr);
             QVERIFY(!root->isHidden());
@@ -830,6 +856,92 @@ private slots:
         QVERIFY(transmit != nullptr);
         QVERIFY(!transmit->isHidden());
         QCOMPARE(transmit->toolTip(0), RadioModel::rxOnlyForcedReason());
+
+        // Fix wave 2 (Important 2): the PA category is shown on the kit,
+        // disabled with the kit's reason, not hidden.
+        QTreeWidgetItem* pa = setupRow(dialog, QStringLiteral("PA"), /*category=*/true);
+        QVERIFY(pa != nullptr);
+        QVERIFY(!pa->isHidden());
+        QCOMPARE(pa->toolTip(0), RadioModel::rxOnlyForcedReason());
+        auto* notice = dialog.findChild<QLabel*>(QStringLiteral("setupReceiveOnly"));
+        QVERIFY(notice != nullptr);
+        for (const QString& label : {QStringLiteral("PA Gain"), QStringLiteral("Watt Meter"),
+                                     QStringLiteral("PA Values")}) {
+            QTreeWidgetItem* leaf = setupRow(dialog, label, /*category=*/false);
+            QVERIFY2(leaf != nullptr, qPrintable(label));
+            QVERIFY2(!leaf->isHidden(), qPrintable(label));
+            QCOMPARE(leaf->toolTip(0), RadioModel::rxOnlyForcedReason());
+            dialog.selectPage(label);
+            QWidget* paPage = dialog.realizedPageForTest(label);
+            QVERIFY2(paPage != nullptr, qPrintable(label));
+            QVERIFY2(!paPage->isEnabled(), qPrintable(label));
+            QCOMPARE(paPage->toolTip(), RadioModel::rxOnlyForcedReason());
+            QVERIFY(paPage->isVisibleTo(&dialog));
+            QVERIFY(!notice->isHidden());
+            QCOMPARE(notice->text(), RadioModel::rxOnlyForcedReason());
+        }
+    }
+
+    // Fix wave 2 (Important 2): a radio without power amplifier settings
+    // (Atlas), or no radio yet, shows the PA pages disabled with the reason,
+    // never hidden; a radio that has them brings them back live.
+    void setupPaIsDisabledWithTheReasonWithoutPowerAmplifierSettings_data()
+    {
+        QTest::addColumn<int>("board");
+        QTest::addColumn<QString>("reason");
+        QTest::newRow("Atlas") << int(HPSDRHW::Atlas)
+                               << QStringLiteral("This radio has no power amplifier settings.");
+        QTest::newRow("no radio") << int(HPSDRHW::Unknown)
+                                  << QStringLiteral(
+                                         "Connect a radio to change its power amplifier settings.");
+    }
+
+    void setupPaIsDisabledWithTheReasonWithoutPowerAmplifierSettings()
+    {
+        QFETCH(int, board);
+        QFETCH(QString, reason);
+        RadioModel model;
+        if (static_cast<HPSDRHW>(board) != HPSDRHW::Unknown) {
+            model.setBoardForTest(static_cast<HPSDRHW>(board));
+        }
+        QVERIFY(!model.boardCapabilities().hasPaProfile);
+        QVERIFY(!model.isRxOnly());
+        SetupDialog dialog(&model);
+        QTreeWidgetItem* pa = setupRow(dialog, QStringLiteral("PA"), /*category=*/true);
+        QVERIFY(pa != nullptr);
+        QVERIFY(!pa->isHidden());
+        QCOMPARE(pa->toolTip(0), reason);
+        QVERIFY(OperatorWording::isPlain(reason));
+        auto* notice = dialog.findChild<QLabel*>(QStringLiteral("setupNoPowerAmplifier"));
+        QVERIFY(notice != nullptr);
+        const QStringList labels{QStringLiteral("PA Gain"), QStringLiteral("Watt Meter"),
+                                 QStringLiteral("PA Values")};
+        for (const QString& label : labels) {
+            QTreeWidgetItem* leaf = setupRow(dialog, label, /*category=*/false);
+            QVERIFY2(leaf != nullptr, qPrintable(label));
+            QVERIFY2(!leaf->isHidden(), qPrintable(label));
+            QCOMPARE(leaf->toolTip(0), reason);
+            dialog.selectPage(label);
+            QWidget* page = dialog.realizedPageForTest(label);
+            QVERIFY2(page != nullptr, qPrintable(label));
+            QVERIFY2(!page->isEnabled(), qPrintable(label));
+            QCOMPARE(page->toolTip(), reason);
+            QVERIFY(page->isVisibleTo(&dialog));
+            QVERIFY(!notice->isHidden());
+            QCOMPARE(notice->text(), reason);
+        }
+
+        // A radio with power amplifier settings connects (an ANAN-G2).
+        model.setBoardForTest(HPSDRHW::Saturn);
+        emit model.currentRadioChanged(RadioInfo{});
+        QVERIFY(pa->toolTip(0).isEmpty());
+        for (const QString& label : labels) {
+            QWidget* page = dialog.realizedPageForTest(label);
+            QVERIFY2(page->isEnabled(), qPrintable(label));
+            QVERIFY(page->toolTip().isEmpty());
+            QVERIFY(setupRow(dialog, label, /*category=*/false)->toolTip(0).isEmpty());
+        }
+        QVERIFY(notice->isHidden());
     }
 
     // A remote window: the Core's receive only, with the missing remote
@@ -856,10 +968,15 @@ private slots:
         QVERIFY(!notice->isHidden());
         QCOMPARE(notice->text(), both);
         QVERIFY(dialog.findChild<QLabel*>(QStringLiteral("setupTransmitUnavailable"))->isHidden());
+        // Fix wave 2 (Minor 1): the Transmit row says both, as its pages do.
+        QTreeWidgetItem* transmit = setupRow(dialog, QStringLiteral("Transmit"), /*category=*/true);
+        QVERIFY(transmit != nullptr);
+        QCOMPARE(transmit->toolTip(0), both);
 
         window.applyRxOnlySetting(false);
         QCOMPARE(page->toolTip(), transmitReason);
         QVERIFY(notice->isHidden());
+        QVERIFY(transmit->toolTip(0).isEmpty());
     }
 
     // ---- The TGXL autotune (fix wave M2) -----------------------------------
@@ -893,6 +1010,43 @@ private slots:
         QVERIFY(OperatorWording::isPlain(reason));
         pump();
         QVERIFY(!rig.mox()->isMox());
+        QVERIFY(!rig.model->isTune());
+    }
+
+    // Fix wave 2 (Minor 3): a TUNE press on the TGXL itself (it reports
+    // tuning=1) while transmit is blocked keys nothing and says why.
+    void tgxlHardwareTuneWhileBlockedSaysWhy_data()
+    {
+        QTest::addColumn<bool>("inhibit");
+        QTest::newRow("receive only") << false;
+        QTest::newRow("tx inhibit") << true;
+    }
+
+    void tgxlHardwareTuneWhileBlockedSaysWhy()
+    {
+        QFETCH(bool, inhibit);
+        Rig rig;
+        TunerModel* tuner = rig.model->tunerModel();
+        QVERIFY(tuner != nullptr);
+        TunerApplet applet(rig.model.get(), tuner);
+        if (inhibit) {
+            rig.mox()->setTxInhibited(true);
+        } else {
+            rig.model->setRxOnly(true);
+        }
+        const QString reason = rig.mox()->transmitBlockReason();
+        QVERIFY(!reason.isEmpty());
+        QSignalSpy refused(rig.model.get(), &RadioModel::tuneRefused);
+        tuner->applyStatus({{QStringLiteral("tuning"), QStringLiteral("1")}});
+        pump();
+        QCOMPARE(refused.count(), 1);
+        QCOMPARE(refused.at(0).at(0).toString(), reason);
+        QVERIFY(!rig.mox()->isMox());
+        QVERIFY(!rig.model->isTune());
+        // The sweep ends: nothing of ours to drop.
+        tuner->applyStatus({{QStringLiteral("tuning"), QStringLiteral("0")}});
+        pump();
+        QCOMPARE(refused.count(), 1);
         QVERIFY(!rig.model->isTune());
     }
 

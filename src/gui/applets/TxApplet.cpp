@@ -78,6 +78,10 @@
 //                 the lock names the remote transmit reason too (M6).
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                 Code.
+//   2026-09-25 : Task 16 fix wave 2: a mode or slice change while the
+//                 transmit-permission layer holds MOX changes the tooltip
+//                 it gives back, not the reason shown. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -226,6 +230,10 @@ namespace {
 // like the flag's other buttons.
 QString monitorSpeakersCaption()   { return QStringLiteral("SPEAKERS"); }
 QString monitorHeadphonesCaption() { return QStringLiteral("PHONES"); }
+
+// The tooltip a control had before the transmit-permission layer
+// (setTransmitPermitted) disabled it, given back when permission returns.
+constexpr auto kTransmitSavedTooltip = "TxAppletSavedTransmitTooltip";
 
 } // namespace
 
@@ -2019,7 +2027,14 @@ void TxApplet::onMoxModeChanged(DSPMode mode)
     // off, change the tooltip under it, and put it back.
     removeReceiveOnlyLock();
     if (m_moxBtn) {
-        m_moxBtn->setToolTip(tooltipForMode(mode));
+        // Task 16 fix wave 2 (Minor 2): while the transmit-permission layer
+        // holds the button, its reason stays visible and the mode's tooltip
+        // goes into the tooltip that layer gives back.
+        if (m_moxBtn->property(kTransmitSavedTooltip).isValid()) {
+            m_moxBtn->setProperty(kTransmitSavedTooltip, tooltipForMode(mode));
+        } else {
+            m_moxBtn->setToolTip(tooltipForMode(mode));
+        }
     }
     applyReceiveOnlyLock();
 }
@@ -2289,7 +2304,7 @@ void TxApplet::setTransmitPermitted(bool permitted, const QString& unavailableRe
     const auto apply = [permitted, &reason](QWidget* control) {
         if (!control) { return; }
 
-        static constexpr auto kSavedTooltip = "TxAppletSavedTransmitTooltip";
+        static constexpr auto kSavedTooltip = kTransmitSavedTooltip;
         static constexpr auto kSavedDescription = "TxAppletSavedTransmitDescription";
         static constexpr auto kSavedEnabled = "TxAppletSavedTransmitEnabled";
         if (!permitted) {

@@ -171,9 +171,11 @@ private:
     void buildTree();
 
     // Phase 8 of #167: applies BoardCapabilities to the PA category +
-    // sub-page visibility. Hides the category root when caps.isRxOnlySku
-    // or !caps.hasPaProfile; forwards the caps struct to each PA page so
-    // page-level controls can self-toggle (warning rows, banner labels).
+    // sub-pages. Task 16 fix wave 2 (Important 2): never hidden; on a radio
+    // without power amplifier settings (!caps.hasPaProfile) the PA pages are
+    // disabled with that reason, and on the receive-only kit with the kit's.
+    // Forwards the caps struct to each PA page so page-level controls can
+    // self-toggle (warning rows, banner labels).
     void applyPaVisibility(const BoardCapabilities& caps);
 
     // ── Lazy page registry (issues #272 + #301) ───────────────────────────────
@@ -207,6 +209,9 @@ private:
         // (Thetis setup.cs:6499-6501: tpTransmit, tpPowerAmplifier,
         // grpTestTXIMD). Only pages with requiresTransmit are marked.
         bool                      receiveOnlyGated = false;
+        // Task 16 fix wave 2 (Important 2): a PA page, disabled with
+        // m_noPaReason while the radio has no power amplifier settings.
+        bool                      paPage = false;
         // The page root was disabled because the Core's settings are
         // unavailable (not for any other reason), so it is enabled again,
         // and its tooltip cleared, when they return.
@@ -307,6 +312,13 @@ private:
     // tree rows carry it as their tooltip (Transmit, PA).
     QLabel*         m_receiveOnlyNotice = nullptr;
     std::vector<QTreeWidgetItem*> m_receiveOnlyCategories;
+    // Task 16 fix wave 2 (Important 2): whether the radio has power
+    // amplifier settings (applyPaVisibility), the reason the PA pages are
+    // disabled when it has none, and its notice above the page (objectName
+    // "setupNoPowerAmplifier").
+    bool            m_paAvailable = true;
+    QString         m_noPaReason;
+    QLabel*         m_noPaNotice = nullptr;
     QPointer<SettingsProxy> m_settingsProxy;
     int             m_snapshotGeneration = 0;
     bool            m_rebuildingPages = false;

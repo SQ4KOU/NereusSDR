@@ -730,6 +730,10 @@ private slots:
     void theSameSweepAgainstALocalModelDisablesNothing()
     {
         RadioModel model;
+        // A radio with power amplifier settings (an ANAN-G2): with no radio
+        // the PA pages are disabled with the reason (Task 16 fix wave 2),
+        // which is the radio's doing, not local mode's.
+        model.setBoardForTest(HPSDRHW::Saturn);
         SetupDialog dialog(&model);
 
         // By index, for the same reason as the remote twin above: the
@@ -2957,11 +2961,12 @@ private slots:
         QVERIFY(page.sidetoneRowVisibleForTest());
     }
 
-    // The PA category is not shown in a remote session: a remote model has
-    // no hardware profile, so its capabilities are the Unknown board's and
-    // hasPaProfile is false (SetupDialog::applyPaVisibility). The inventory
-    // records it as unavailable by absence; this pins that.
-    void remotePaCategoryIsNotShown()
+    // A remote window that does not know the Core's radio yet: its
+    // capabilities are the Unknown board's and hasPaProfile is false. Task 16
+    // fix wave 2 (the operator's rule, 2026-09-25: disabled with its reason,
+    // never hidden): the PA category and its pages are shown, disabled, and
+    // say why.
+    void remotePaCategoryIsShownDisabledWithTheReason()
     {
         RadioModel remote(RadioModel::Role::Remote);
         SetupDialog dialog(&remote);
@@ -2974,7 +2979,21 @@ private slots:
             }
         }
         QVERIFY(pa != nullptr);
-        QVERIFY(pa->isHidden());
+        QVERIFY(!pa->isHidden());
+        QVERIFY(!pa->toolTip(0).isEmpty());
+        QVERIFY(OperatorWording::isPlain(pa->toolTip(0)));
+        for (const QString& label : {QStringLiteral("PA Gain"), QStringLiteral("Watt Meter"),
+                                     QStringLiteral("PA Values")}) {
+            QTreeWidgetItem* const leaf = setupLeaf(dialog, label);
+            QVERIFY2(leaf != nullptr, qPrintable(label));
+            QVERIFY2(!leaf->isHidden(), qPrintable(label));
+            QVERIFY2(!leaf->toolTip(0).isEmpty(), qPrintable(label));
+            dialog.selectPage(label);
+            QWidget* const page = dialog.realizedPageForTest(label);
+            QVERIFY2(page != nullptr, qPrintable(label));
+            QVERIFY2(!page->isEnabled(), qPrintable(label));
+            QVERIFY(OperatorWording::isPlain(page->toolTip()));
+        }
     }
 
     // R-R3-46 / R-R3-10: with the Core's radio known (a Saturn ANAN-G2 1K,

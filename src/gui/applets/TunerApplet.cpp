@@ -32,6 +32,11 @@
 //                 transmit gaps plan, Task 16 fix wave M2), by J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code. NereusSDR-native; no AetherSDR equivalent.
+//   2026-09-25  A TUNE press on the TGXL itself while transmit is
+//                 blocked is refused with the reason (tuneRefused), as the
+//                 applet's TUNE is (Task 16 fix wave 2), by J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code. NereusSDR-native; no AetherSDR equivalent.
 // =================================================================
 
 #include "TunerApplet.h"
@@ -565,11 +570,18 @@ void TunerApplet::setTunerModel(TunerModel* model)
             // where TunerApplet TUNE click already started the cycle
             // (m_tgxlAutotuneInProgress is true) and TGXL then echoes by
             // pushing tuning=1; that re-entry is detected and ignored.
-            const bool localOrchestrationAllowed = m_transmitPermitted && m_model
+            const bool localOrchestration = m_transmitPermitted && m_model
                 && m_model->role() == RadioModel::Role::Local
-                && !m_model->receiveOnlyStationPolicy()
-                && !transmitBlocked();   // Task 16 fix wave (M2)
-            if (localOrchestrationAllowed && !m_carrierEngagedForTgxlTune) {
+                && !m_model->receiveOnlyStationPolicy();
+            if (localOrchestration && transmitBlocked()) {
+                // Task 16 fix wave 2 (Minor 3): a press on the TGXL itself
+                // while transmit is blocked keys nothing, and the operator
+                // is told why: startTgxlAutotune refuses before it touches
+                // the amplifier or the tuner and emits tuneRefused with the
+                // reason, as the applet's TUNE does. No carrier is ours to
+                // drop when the tuner finishes.
+                m_model->startTgxlAutotune(/*fromHardware=*/true);
+            } else if (localOrchestration && !m_carrierEngagedForTgxlTune) {
                 m_carrierEngagedForTgxlTune = true;
                 m_model->startTgxlAutotune(/*fromHardware=*/true);
             }
