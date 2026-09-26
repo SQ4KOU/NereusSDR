@@ -728,6 +728,12 @@ void DaemonApp::startStationServer(const DaemonConfig& cfg)
         m_stationServer.get(), m_radioModel.get(), this);
     // R-R3-23: before listen(), so the first peer and sender use it.
     m_mediaHub->setAudioTargetBitrate(cfg.audioBitrate);
+    // R-R3-21: once at start, the speakers' Opus rate this Core uses.
+    qCInfo(lcApp).noquote() << QStringLiteral("DaemonApp: speakers' audio is Opus at %1 bit/s, %2")
+                                   .arg(cfg.audioBitrate)
+                                   .arg(cfg.audioBitrate == DaemonConfig::kFullbandAudioBitrate
+                                            ? QStringLiteral("fullband (sound up to 20 kHz)")
+                                            : QStringLiteral("wideband (sound up to 8 kHz)"));
     m_mediaHub->setAudioLosslessAllowed(cfg.audioLosslessAllowed);
     // Install every source before advertising the capability. A client can
     // authenticate immediately after listen(), so there must be no window in

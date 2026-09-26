@@ -246,7 +246,7 @@ private slots:
                 "core_name = Rock 5C\n"
                 "display_application_bytes_per_second = 2400000\n"
                 "spectrum_sample_units_per_second = 1800000\n"
-                "audio_bitrate = 48000\n"
+                "audio_bitrate = 24000\n"
                 "thread_placement = off\n"
                 "display_adaptive = off\n"
                 "audio_lossless = deny\n"
@@ -269,7 +269,7 @@ private slots:
         QCOMPARE(c.remotePort, 4711);
         QCOMPARE(c.remoteBind, QStringLiteral("0.0.0.0"));
         QCOMPARE(c.coreName, QStringLiteral("Rock 5C"));
-        QCOMPARE(c.audioBitrate, 48000);
+        QCOMPARE(c.audioBitrate, 24000);
         QCOMPARE(c.threadPlacement, false);
         QCOMPARE(c.displayAdaptive, false);
         QCOMPARE(c.audioLosslessAllowed, false);
@@ -363,24 +363,25 @@ private slots:
         QCOMPARE(parsed.relayAllowed, true);
     }
 
-    // R-R3-23: 24000 and 48000 are the only encoder profiles. A missing key
-    // is 24000; any other value logs exactly one warning and keeps 24000,
-    // like remote_port's unparseable-value handling, never a startup error.
+    // R-R3-23: 24000 and 48000 are the only encoder profiles. R-R3-21: a
+    // missing key is 48000 (fullband) and an explicit 24000 still works; any
+    // other value logs exactly one warning and keeps 48000, like
+    // remote_port's unparseable-value handling, never a startup error.
     void audioBitrateAcceptsOnlyTheTwoProfiles_data()
     {
         QTest::addColumn<QByteArray>("text");
         QTest::addColumn<int>("expected");
         QTest::addColumn<bool>("warns");
-        QTest::newRow("missing") << QByteArray("slice_count = 1\n") << 24000 << false;
+        QTest::newRow("missing") << QByteArray("slice_count = 1\n") << 48000 << false;
         QTest::newRow("24000") << QByteArray("audio_bitrate = 24000\n") << 24000 << false;
         QTest::newRow("48000") << QByteArray("audio_bitrate = 48000\n") << 48000 << false;
-        QTest::newRow("32000") << QByteArray("audio_bitrate = 32000\n") << 24000 << true;
-        QTest::newRow("zero") << QByteArray("audio_bitrate = 0\n") << 24000 << true;
-        QTest::newRow("negative") << QByteArray("audio_bitrate = -48000\n") << 24000 << true;
-        QTest::newRow("words") << QByteArray("audio_bitrate = fast\n") << 24000 << true;
-        QTest::newRow("empty") << QByteArray("audio_bitrate =\n") << 24000 << true;
-        QTest::newRow("48k-then-bad")
-            << QByteArray("audio_bitrate = 48000\naudio_bitrate = 96000\n") << 24000 << true;
+        QTest::newRow("32000") << QByteArray("audio_bitrate = 32000\n") << 48000 << true;
+        QTest::newRow("zero") << QByteArray("audio_bitrate = 0\n") << 48000 << true;
+        QTest::newRow("negative") << QByteArray("audio_bitrate = -48000\n") << 48000 << true;
+        QTest::newRow("words") << QByteArray("audio_bitrate = fast\n") << 48000 << true;
+        QTest::newRow("empty") << QByteArray("audio_bitrate =\n") << 48000 << true;
+        QTest::newRow("24k-then-bad")
+            << QByteArray("audio_bitrate = 24000\naudio_bitrate = 96000\n") << 48000 << true;
     }
 
     void audioBitrateAcceptsOnlyTheTwoProfiles()
@@ -394,7 +395,7 @@ private slots:
         f.flush();
         if (warns) {
             QTest::ignoreMessage(QtWarningMsg,
-                QRegularExpression(QStringLiteral("audio_bitrate must be 24000 or 48000, keeping 24000")));
+                QRegularExpression(QStringLiteral("audio_bitrate must be 24000 or 48000, keeping 48000")));
         }
         QTest::failOnWarning(QRegularExpression(QStringLiteral(".*")));
         QString err;
@@ -520,10 +521,10 @@ private slots:
     void validateRefusesAnUnsupportedAudioBitrate()
     {
         DaemonConfig c = DaemonConfig::defaults();
-        QCOMPARE(c.audioBitrate, 24000);
+        QCOMPARE(c.audioBitrate, 48000);
         QString err;
         QVERIFY(c.validate(&err));
-        c.audioBitrate = 48000;
+        c.audioBitrate = 24000;
         QVERIFY(c.validate(&err));
         c.audioBitrate = 96000;
         QVERIFY(!c.validate(&err));

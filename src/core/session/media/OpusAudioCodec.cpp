@@ -250,6 +250,22 @@ OpusAudioEncoder::OpusAudioEncoder(const OpusAudioCodecConfig& config)
     if (!validConfig(config)) {
         return;
     }
+    // R-R3-21: in-band FEC stays off (operator decision 2026-09-26), read
+    // against the pinned Opus source (940d4e5):
+    // - include/opus_defines.h, OPUS_SET_INBAND_FEC: FEC "is only applicable
+    //   to the LPC layer" (SILK); value 1 makes Opus "switch to SILK even at
+    //   high rates", value 2 does not switch for music and so carries none
+    //   with OPUS_SIGNAL_MUSIC.
+    // - src/opus_encoder.c, mode decision: with FEC on and the expected loss
+    //   above (128 - voice_est) >> 4 (8 percent for music), every packet goes
+    //   SILK at wideband and hybrid at fullband. Measured at 48 kbit/s, a
+    //   15 kHz tone's energy against a 1 kHz tone fell from 0.99 to 0.005:
+    //   most of what fullband adds above 8 kHz is gone.
+    // - Hybrid frames stop at 20 ms, so a 40 ms packet is two frames and
+    //   src/opus_decoder.c's decode_fec path rebuilds only the last 20 ms of a
+    //   lost one. LBRR protects the one packet before, never a burst, which is
+    //   how the WAN path loses them.
+    // Opus DRED (deep redundancy, built for bursts) is the future option.
     int error = OPUS_OK;
     std::unique_ptr<State> state = std::make_unique<State>();
     state->config = config;

@@ -3119,8 +3119,8 @@ void TstDaemonMediaController::minorEightAudioContextsCarryEncoderOrReason()
                           {QStringLiteral("sampleRate"), 48000},
                           {QStringLiteral("channels"), 2},
                           {QStringLiteral("frameSamples"), 1920},
-                          {QStringLiteral("targetBitrate"), 24000},
-                          {QStringLiteral("audioBandwidthHz"), 8000}}));
+                          {QStringLiteral("targetBitrate"), 48000},
+                          {QStringLiteral("audioBandwidthHz"), 20000}}));
 
     Harness h;
     h.establishSession();
@@ -3220,8 +3220,9 @@ void TstDaemonMediaController::configuredAudioBitrateReachesOfferAndContext()
         QSKIP("Opus encoder is unavailable in this build");
     }
     Harness h;
-    QCOMPARE(h.controller.audioTargetBitrate(), 24000);
-    h.controller.setAudioTargetBitrate(48000);
+    // R-R3-21: 48000 is the default; 24000 set explicitly still reaches both.
+    QCOMPARE(h.controller.audioTargetBitrate(), 48000);
+    h.controller.setAudioTargetBitrate(24000);
     h.establishSession();
     QVERIFY(h.server.remoteAudioStatusAvailable());
     QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
@@ -3231,7 +3232,7 @@ void TstDaemonMediaController::configuredAudioBitrateReachesOfferAndContext()
         h.client.sessionEpoch()));
     QTRY_VERIFY(h.mediaTransport);
     QCOMPARE(h.mediaTransport->startOptions.role, IMediaTransport::Role::Offerer);
-    QCOMPARE(h.mediaTransport->startOptions.audioTargetBitrate, 48000);
+    QCOMPARE(h.mediaTransport->startOptions.audioTargetBitrate, 24000);
 
     h.mediaTransport->becomeReady();
     QVERIFY(h.client.sendMediaControl(audioControl(1, true), h.client.sessionEpoch()));
@@ -3250,8 +3251,8 @@ void TstDaemonMediaController::configuredAudioBitrateReachesOfferAndContext()
         decodeRemoteAudioContext(enabledContext(), true);
     QVERIFY(decoded.has_value());
     QVERIFY(decoded->encoder.has_value());
-    QCOMPARE(decoded->encoder->targetBitrate, 48000);
-    QCOMPARE(decoded->encoder->audioBandwidthHz, 20000); // fullband at 48 kbit/s
+    QCOMPARE(decoded->encoder->targetBitrate, 24000);
+    QCOMPARE(decoded->encoder->audioBandwidthHz, 8000); // wideband at 24 kbit/s
     h.finish();
 }
 
@@ -5483,6 +5484,9 @@ void TstDaemonMediaController::headphonesMixFollowsTheProfileAndTheRadio()
         QSKIP("Opus encoder is unavailable in this build");
     }
     Harness h;
+    // A Core set to 24000, so the speaker-side rate differs from the receiver
+    // streams' 48 kbit/s (R-R3-21 made 48000 the default).
+    h.controller.setAudioTargetBitrate(24'000);
     const auto routes = qScopeGuard([&h] { resetOutputRoutes(h); });
     AudioEngine* const engine = h.radio.audioEngine();
     engine->masterMixForTest().setRampFrames(1);
@@ -5512,7 +5516,7 @@ void TstDaemonMediaController::headphonesMixFollowsTheProfileAndTheRadio()
     QCOMPARE(context->profile, std::optional{RemoteAudioProfile::Opus});
     QVERIFY(context->encoder.has_value());
     QCOMPARE(context->encoder->targetBitrate, h.controller.audioTargetBitrate());
-    // A speaker-side mix: the Core's audio_bitrate (24 kbit/s by default),
+    // A speaker-side mix: the Core's audio_bitrate (set to 24 kbit/s above),
     // not the receiver streams' 48 kbit/s.
     QCOMPARE(context->encoder->targetBitrate, 24'000);
     feedSlicesBlock(h, {{h.sliceId, 0.0f}, {h.spareSliceId, 0.5f}});

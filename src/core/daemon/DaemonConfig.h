@@ -215,13 +215,15 @@ struct DaemonConfig {
 
     // R-R3-23: the Opus encoder target for station audio, bit/s. Only the
     // two supported profiles are accepted (OpusAudioEncoder refuses any
-    // other): 24000, the measured default, codes wideband sound up to 8 kHz;
-    // 48000 codes fullband sound up to 20 kHz (bandwidthForBitrate()).
-    // Anything else in the file logs one warning and keeps 24000.
-    // Feeds DaemonMediaController::setAudioTargetBitrate() from
-    // DaemonApp::startStationServer().
-    static constexpr int kDefaultAudioBitrate = 24000;
-    static constexpr int kHighAudioBitrate = 48000;
+    // other): 24000 codes wideband sound up to 8 kHz; 48000 codes fullband
+    // sound up to 20 kHz (bandwidthForBitrate()). R-R3-21: 48000 is the
+    // default for every mode (operator decision 2026-09-26); 24000 set
+    // explicitly keeps working. Anything else in the file logs one warning
+    // and keeps 48000. Feeds DaemonMediaController::setAudioTargetBitrate()
+    // from DaemonApp::startStationServer(), which logs the one in use.
+    static constexpr int kWidebandAudioBitrate = 24000;
+    static constexpr int kFullbandAudioBitrate = 48000;
+    static constexpr int kDefaultAudioBitrate = kFullbandAudioBitrate;
     int     audioBitrate {kDefaultAudioBitrate};
 
     // R-R3-41: thread_placement = auto (default) runs each busy signal

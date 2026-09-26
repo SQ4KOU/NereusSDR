@@ -10,8 +10,9 @@
 // bench measures the shipped settings and nothing else:
 //
 //   opus24    OpusAudioEncoder / OpusAudioDecoder at 24000 bit/s
-//             (the Core's default audio_bitrate, wideband)
-//   opus48    the same at 48000 bit/s (fullband)
+//             (wideband)
+//   opus48    the same at 48000 bit/s (fullband; the Core's default
+//             audio_bitrate since R-R3-21)
 //   lossless  PcmAudioPacketiser / decodeL16Rtp (L16, 16-bit)
 //
 // Each profile goes through RTP exactly as on the wire: 1920-frame

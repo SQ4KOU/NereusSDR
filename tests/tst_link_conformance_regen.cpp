@@ -303,8 +303,8 @@ void TstLinkConformanceRegen::writeNsdxDatagrams()
 void TstLinkConformanceRegen::writeOpusPackets()
 {
     // Four consecutive packets from one encoder at the station's settings
-    // (OpusAudioCodecConfig: 48 kHz stereo, 1920 samples, 24000 bit/s,
-    // wideband), each as the RTP packet the station sends. The reference
+    // (OpusAudioCodecConfig: 48 kHz stereo, 1920 samples, 48000 bit/s,
+    // fullband, R-R3-21), each as the RTP packet the station sends. The reference
     // PCM is the station's decoder's output decoding them in order.
     OpusAudioEncoder encoder;
     QVERIFY(encoder.isReady());

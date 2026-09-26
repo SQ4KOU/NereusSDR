@@ -115,7 +115,8 @@ private slots:
         QCOMPARE(encoded.status, OpusAudioCodecStatus::Accepted);
         QVERIFY(encoded.packet.size() <= OpusAudioCodecConfig::kMaxRtpPacketBytes);
         QCOMPARE(encoded.packetInfo.channels, 2);
-        QCOMPARE(encoded.packetInfo.bandwidth, OPUS_BANDWIDTH_WIDEBAND);
+        // R-R3-21: the default codes fullband.
+        QCOMPARE(encoded.packetInfo.bandwidth, OPUS_BANDWIDTH_FULLBAND);
         QCOMPARE(encoded.packetInfo.samplesPerChannel, 1920);
         const OpusRtpDecodeResult decoded = decoder.decodeRtp(encoded.packet, kSsrc);
         QCOMPARE(decoded.status, OpusAudioCodecStatus::Accepted);
@@ -128,7 +129,9 @@ private slots:
 
     void profileIsCorrectBeforeAnyEncodeAndAfterReset()
     {
-        const OpusEncoderProfile expected{48'000, 2, 1'920, 24'000, 8'000};
+        // R-R3-21: the default is 48 kbit/s fullband, sound up to 20 kHz.
+        const OpusEncoderProfile expected{48'000, 2, 1'920, 48'000, 20'000};
+        QCOMPARE(OpusAudioCodecConfig{}.bitrate, 48'000);
         OpusAudioEncoder encoder;
         QVERIFY(encoder.isReady());
         // Core announces an audio context straight after construction and
@@ -151,10 +154,10 @@ private slots:
     void alternateBitrateProfileAndUnreadyEncoder()
     {
         OpusAudioCodecConfig config;
-        config.bitrate = 48'000;
+        config.bitrate = 24'000;
         OpusAudioEncoder alternate(config);
-        // R-R3-23: 48 kbit/s codes fullband, sound up to 20 kHz.
-        const OpusEncoderProfile expected{48'000, 2, 1'920, 48'000, 20'000};
+        // R-R3-21: 24 kbit/s stays accepted and codes wideband, sound up to 8 kHz.
+        const OpusEncoderProfile expected{48'000, 2, 1'920, 24'000, 8'000};
         QVERIFY(alternate.profile().has_value());
         QCOMPARE(*alternate.profile(), expected);
         alternate.reset();

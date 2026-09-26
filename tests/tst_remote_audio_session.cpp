@@ -52,15 +52,15 @@ namespace {
 constexpr int kFrames = 480;
 constexpr double kPi = 3.14159265358979323846;
 
-// The encoder object a default Core announces.
+// The encoder object a default Core announces (R-R3-21: 48 kbit/s fullband).
 QJsonObject defaultEncoderJson()
 {
     return {{QStringLiteral("codec"), QStringLiteral("opus")},
             {QStringLiteral("sampleRate"), 48000},
             {QStringLiteral("channels"), 2},
             {QStringLiteral("frameSamples"), 1920},
-            {QStringLiteral("targetBitrate"), 24000},
-            {QStringLiteral("audioBandwidthHz"), 8000}};
+            {QStringLiteral("targetBitrate"), 48000},
+            {QStringLiteral("audioBandwidthHz"), 20000}};
 }
 
 // Every context the GUI accepted, captured when it said so.
@@ -251,7 +251,7 @@ private slots:
         // The GUI logs the profile Core reported, not one it assumes.
         QTest::ignoreMessage(QtInfoMsg, QRegularExpression(QStringLiteral(
             "^Remote audio receiving: Opus 48000 Hz, 2 channels, 1920-sample frames, "
-            "target 24000 bit/s, audio bandwidth 8000 Hz, context \\d+$")));
+            "target 48000 bit/s, audio bandwidth 20000 Hz, context \\d+$")));
 
         QTimer source;
         source.setInterval(10);
@@ -326,7 +326,7 @@ private slots:
         // This computer says it is playing, and names the profile Core reported.
         QTRY_COMPARE(remoteMedia.audioStatus().state, RemoteAudioStatus::State::Playing);
         QCOMPARE(remoteAudioCodecText(remoteMedia.audioStatus()),
-                 QStringLiteral("Opus stereo, 24\u00A0kbit/s target, 40\u00A0ms packets, audio up to 8\u00A0kHz"));
+                 QStringLiteral("Opus stereo, 48\u00A0kbit/s target, 40\u00A0ms packets, audio up to 20\u00A0kHz"));
 
         const double stationPanA = h.station.sliceById(h.sliceA)->audioPan();
         const double stationPanB = h.station.sliceById(h.sliceB)->audioPan();

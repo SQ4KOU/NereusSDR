@@ -152,10 +152,10 @@ station_bind =
 # paired with this Core to sign in.
 core_name =
 
-# Opus audio target for the speakers in remote windows, bit/s: 24000 (default) or 48000; any other value is ignored with a warning.
-# 24000 carries sound up to 8 kHz; 48000 carries sound up to 20 kHz.
+# Opus audio target for the speakers in remote windows, bit/s: 48000 (default) or 24000; any other value is ignored with a warning.
+# 48000 carries sound up to 20 kHz; 24000 carries sound up to 8 kHz and uses half the network.
 # Receiver audio for apps (VAX and TCI) always uses 48000 when it is compressed, whatever this says.
-audio_bitrate = 24000
+audio_bitrate = 48000
 
 # Where signal processing threads run, on Linux. auto (the default) gives
 # each busy receiver and the transmitter a fast processor core of its own,
