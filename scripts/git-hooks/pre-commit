@@ -148,6 +148,18 @@ if ! python3 scripts/verify-no-captured-slice-spectrum-wiring.py; then
     exit 1
 fi
 
+echo "[pre-commit] verify-no-image-cursors.py"
+if ! python3 scripts/verify-no-image-cursors.py; then
+    echo
+    echo "[pre-commit] BLOCKED: a cursor shape Qt draws from an image is back"
+    echo "             in src/ (SizeAllCursor, WaitCursor, BusyCursor or a"
+    echo "             bitmap cursor). Qt 6.11.0 crashes drawing these on"
+    echo "             macOS. Use a native shape, or mark a justified use with"
+    echo "             'native-cursor-ok: <reason>' on the line."
+    echo "             See scripts/verify-no-image-cursors.py."
+    exit 1
+fi
+
 echo "[pre-commit] verify-inline-tag-preservation.py (author-tag check)"
 # Auto-locate upstream clones. Search order:
 #   1. $NEREUS_<NAME>_DIR (explicit override)
