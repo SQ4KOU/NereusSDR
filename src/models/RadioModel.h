@@ -278,6 +278,17 @@
 //   2026-09-26 - R-R3-01 (parity Task 17 follow-up): fftEnginePool view
 //                hook, so Rendering > Decimation reaches every pan.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - Parity Task 19 (R-IOS-25): SpotSourceHost starts and
+//                stops the spot sources (the restore moved there; the Core
+//                runs the station's with restoreStationSpotSources, a remote
+//                window its own WSJT-X and SpotCollector); a remote window
+//                shows the Core's spots stream beside its own
+//                (applyStationRecordBatch). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
+//   2026-09-26 - Parity Task 21 (R-IOS-18): a remote window's copy of the
+//                Core's radios (stationRadios, stationRadiosChanged) and the
+//                Core's refusals of a radio request (stationRadioRefused).
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -340,6 +351,7 @@
 #include "core/TgxlConnection.h"
 #include "core/FaultLog.h"
 #include "core/session/IStationLink.h"
+#include "core/station/StationRadios.h"
 // Remote-daemon R2 Task 18: the handshake descriptor applyStationCapabilities()
 // takes by const reference. A by-value struct member of a public method
 // signature, so a forward declaration would not do.
@@ -487,6 +499,9 @@ class PotaClient;
 class FreeDVReporterClient;
 class FreeDVRadeReporterBridge;
 class PskReporterClient;
+class SpotSourceHost;
+struct RecordBatch;
+
 class DxccColorProvider;
 class SpotModel;
 class SpotTableModel;
@@ -584,6 +599,13 @@ class RadioModel : public QObject {
     // from DspAssetService (dfnrRunnable, mnrRunnable), the one source.
     Q_PROPERTY(qint64 dspOptionsLastApplyMs READ dspOptionsLastApplyMs
                    NOTIFY dspOptionsLastApplyMsChanged)
+    // Fix wave after parity Tasks 19 and 21 (M2, R-IOS-18): why the Core
+    // has no radio (it waits for a choice, for its chosen radio to appear,
+    // or for a radio another program holds), in plain words; empty while it
+    // has one or is connecting one. Set by nereusd's DaemonApp; Core to
+    // window only. This Core shows it.
+    Q_PROPERTY(QString stationRadioWaiting READ stationRadioWaiting
+                   NOTIFY stationRadioWaitingChanged)
 
 
 public:
@@ -2477,6 +2499,38 @@ public:
     PotaClient*           pota()                const { return m_pota.get(); }
     FreeDVReporterClient* freeDvReporter()      const { return m_freeDvReporter.get(); }
     PskReporterClient*    pskReporter()         const { return m_pskReporter.get(); }
+    // Parity Task 19 (R-IOS-25): the spot sources' starts and stops.
+    SpotSourceHost*       spotSourceHost()      const { return m_spotSourceHost.get(); }
+
+    /// Parity Task 19 (R-IOS-25): a remote window applies the Core's
+    /// `spots` stream (the Core's cluster, RBN, POTA and PSK Reporter
+    /// spots) into its SpotModel and Spot List, beside its own WSJT-X and
+    /// SpotCollector spots, and the Core's spotConsole:<source> streams
+    /// into the Spot Hub's consoles. A reset replaces the Core's spots.
+    void applyStationRecordBatch(const RecordBatch& batch);
+    /// The session ended: the Core's spots and its radio list leave this
+    /// window.
+    void clearStationRecords();
+    /// The Core's spots only (a `spots` reset, a new snapshot). Never the
+    /// Core's radio list, which has its own stream (fix wave, I3).
+    void clearStationSpots();
+    /// The Core's radio list only.
+    void clearStationRadios();
+
+    /// Parity Task 21 (R-IOS-18): a remote window's copy of the Core's
+    /// radios (the `stationRadios` stream), the Core's radio first.
+    QList<StationRadioEntry> stationRadios() const;
+    /// Parity Task 21: the Core refused a radio request (Change radio, Scan
+    /// again, Edit radio, Forget radio); This Core shows the reason.
+    void reportStationRadioRefused(const QString& reason);
+    /// Fix wave (M3): the Core is changing its radio (nereusd's DaemonApp).
+    /// Keying is refused until the change ends, so nothing keyed is torn
+    /// down by it.
+    void setStationRadioChangeUnderway(bool underway) { m_stationRadioChangeUnderway = underway; }
+    /// Fix wave (M2): the Core's waiting reason (see the property).
+    QString stationRadioWaiting() const { return m_stationRadioWaiting; }
+    void setStationRadioWaiting(const QString& reason);
+    bool stationRadioChangeUnderway() const { return m_stationRadioChangeUnderway; }
 
     // ── TNF (design section 8.1): the canonical notch store ─────────────────
     //
@@ -2509,6 +2563,12 @@ public:
     // Safe to call multiple times. Each client's start method already
     // guards against double-start.
     void restoreSpotClientAutoStartState();
+    /// Parity Task 19 (R-IOS-25): the Core (nereusd) starts the station's
+    /// sources (DX cluster, RBN, POTA, PSK Reporter) whose Auto-Connect or
+    /// Auto-Start is on, with no window. A window's restore above starts
+    /// every source when it runs its own radio, and only its own WSJT-X and
+    /// SpotCollector listeners in a remote window.
+    void restoreStationSpotSources();
 
     // ── Phase 3R Task I5: RadeChannel slot-graph wiring ─────────────────────
     //
@@ -4474,6 +4534,10 @@ signals:
     /// offset all agree again. `reason` is plain English, ready for a status
     /// bar, and names the frequency the slice stayed on.
     void sliceRetuneRejected(int sliceIndex, const QString& reason);
+    /// Parity Task 21 (R-IOS-18): the Core's radios changed (a remote
+    /// window), or the Core refused a radio request.
+    void stationRadiosChanged();
+    void stationRadioRefused(const QString& reason);
 
     /// Phase 3F Sub-Epic I: a stream's slice set changed. Consumers rebuild
     /// FFT routing; RadioModel republishes the set to RxDspWorker.
@@ -4620,6 +4684,8 @@ signals:
     void nrAvailabilityChanged();
     // Remote-window parity Task 16: dspOptionsLastApplyMs() changed.
     void dspOptionsLastApplyMsChanged(qint64 elapsedMs);
+    // Fix wave (M2): stationRadioWaiting() changed.
+    void stationRadioWaitingChanged(const QString& reason);
     // Remote-window parity Task 16: coreFilterResponse() changed.
     void coreFilterResponseChanged();
 
@@ -6550,6 +6616,16 @@ private:
     std::unique_ptr<PotaClient>           m_pota;
     std::unique_ptr<FreeDVReporterClient> m_freeDvReporter;
     std::unique_ptr<PskReporterClient>    m_pskReporter;
+    // Parity Task 19 (R-IOS-25): starts, stops and follows the clients
+    // above (all but FreeDV Reporter), locally and on the Core; the
+    // mirrored `spotSources` object.
+    std::unique_ptr<SpotSourceHost>       m_spotSourceHost;
+    // Parity Task 19: in a remote window, the Core's spot ids (the `spots`
+    // stream's record ids) and the SpotModel index each is shown under,
+    // beside this window's own WSJT-X and SpotCollector spots.
+    QHash<QString, int>                   m_stationSpotIndex;
+    // Parity Task 21: the Core's radios, by stream id, in the Core's order.
+    QList<StationRadioEntry>              m_stationRadioEntries;
 
     // TNF (design section 5): notch store. Persisted globally rather than
     // per-MAC (design D3) because a notch tracks a QRM source at the
@@ -6816,6 +6892,8 @@ private:
     int m_stationDspInfoVersion{0};
     int m_stationDspAssetVersion{0};
     qint64 m_dspOptionsLastApplyMs{0};
+    bool m_stationRadioChangeUnderway{false};
+    QString m_stationRadioWaiting;
     FilterResponse m_coreFilterResponse;
     bool m_coreFilterResponseWanted{false};
     bool m_coreFilterResponseDirty{false};

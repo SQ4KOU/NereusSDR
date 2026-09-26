@@ -55,6 +55,10 @@
 //               per-address handshake cap and 0600 on load. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic Claude
 //               Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 19 (R-IOS-25):
+//                                    recordStreamVersion and the record
+//                                    streams. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -86,6 +90,7 @@
 #include "core/session/StationCapabilities.h"
 #include "core/session/StationDevicesFacade.h"
 #include "core/session/StationServer.h"
+#include "core/station/StationRadios.h"
 #include "models/RadioModel.h"
 
 #include "OperatorWording.h"
@@ -1079,6 +1084,42 @@ private slots:
         QCOMPARE(core.window().state(), PairingWindow::State::ClosedClaimed);
     }
 
+    // Fix wave, I5: changing, editing, forgetting or scanning for the
+    // Core's radio is for a device signed in with its own key. A window
+    // signed in with the pairing token is refused as pairing.open is.
+    void theRadioVerbsNeedAPairedDevice()
+    {
+        Core core(/*upgradedWithToken=*/true);
+        StationRadios radios(*core.settings);
+        int rescans = 0;
+        radios.onRescan = [&rescans]() { ++rescans; };
+        core.server->setStationRadios(&radios);
+        LoopbackTransport* token = core.tokenSession();
+        QVERIFY(token != nullptr);
+        const QString why = QStringLiteral("Change the Core's radio from a paired device.");
+        QVERIFY2(OperatorWording::isPlain(why), qPrintable(why));
+        for (const QByteArray verb : {QByteArrayLiteral("station.rescanRadios"),
+                                      QByteArrayLiteral("station.selectRadio"),
+                                      QByteArrayLiteral("station.setRadioModel"),
+                                      QByteArrayLiteral("station.forgetRadio")}) {
+            const QJsonObject refused = core.invoke(token, verb);
+            QVERIFY2(!refused.value(QStringLiteral("accepted")).toBool(true), verb.constData());
+            QCOMPARE(refused.value(QStringLiteral("reason")).toString(), why);
+        }
+        QCOMPARE(rescans, 0);
+
+        // A device signed in with its own key (a desktop window after its
+        // enrolment, or the phone) is unaffected.
+        Device device;
+        QVERIFY(core.store().add(device.record()));
+        LoopbackTransport* app = core.deviceSession(device);
+        QVERIFY(app != nullptr);
+        const QJsonObject scanned = core.invoke(app, "station.rescanRadios");
+        QVERIFY(scanned.value(QStringLiteral("accepted")).toBool());
+        QCOMPARE(rescans, 1);
+        core.server->setStationRadios(nullptr);
+    }
+
     void thePairingVerbsNeedAHelloThatDeclaresDeviceAuth()
     {
         Core core(/*upgradedWithToken=*/true);
@@ -1146,13 +1187,17 @@ private slots:
         // 20's displayExtrasVersion, then R-R3-49's transmitSettingsVersion,
         // then R-IOS-27's bandSelectVersion, then parity Task 15's
         // meterReadingsVersion, then parity Task 16's dspInfoVersion.
-        QCOMPARE(updates.at(updates.size() - 7).name, QByteArray("pairingVersion"));
-        QCOMPARE(updates.at(updates.size() - 6).name, QByteArray("stationCatalogVersion"));
-        QCOMPARE(updates.at(updates.size() - 5).name, QByteArray("displayExtrasVersion"));
-        QCOMPARE(updates.at(updates.size() - 4).name, QByteArray("transmitSettingsVersion"));
-        QCOMPARE(updates.at(updates.size() - 3).name, QByteArray("bandSelectVersion"));
-        QCOMPARE(updates.at(updates.size() - 2).name, QByteArray("meterReadingsVersion"));
-        QCOMPARE(updates.last().name, QByteArray("dspInfoVersion"));
+        // Then parity Task 19's recordStreamVersion.
+        // Then parity Task 21's stationRadiosVersion.
+        QCOMPARE(updates.at(updates.size() - 9).name, QByteArray("pairingVersion"));
+        QCOMPARE(updates.at(updates.size() - 8).name, QByteArray("stationCatalogVersion"));
+        QCOMPARE(updates.at(updates.size() - 7).name, QByteArray("displayExtrasVersion"));
+        QCOMPARE(updates.at(updates.size() - 6).name, QByteArray("transmitSettingsVersion"));
+        QCOMPARE(updates.at(updates.size() - 5).name, QByteArray("bandSelectVersion"));
+        QCOMPARE(updates.at(updates.size() - 4).name, QByteArray("meterReadingsVersion"));
+        QCOMPARE(updates.at(updates.size() - 3).name, QByteArray("dspInfoVersion"));
+        QCOMPARE(updates.at(updates.size() - 2).name, QByteArray("recordStreamVersion"));
+        QCOMPARE(updates.last().name, QByteArray("stationRadiosVersion"));
         QCOMPARE(StationCapabilities::fromUpdates(updates).pairingVersion, 1);
     }
 

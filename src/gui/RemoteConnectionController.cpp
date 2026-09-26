@@ -88,7 +88,12 @@ QString RemoteConnectionController::statusText() const
     case ConnectionState::Connected: return tr("Core connected");
     case ConnectionState::Connecting:
     case ConnectionState::Probing: return tr("Connecting to Core");
-    case ConnectionState::LinkLost: return tr("Retrying Core (attempt %1)").arg(m_retryAttempt);
+    case ConnectionState::LinkLost:
+        // The Core restarted to change its radio: a reconnect, not a fault.
+        if (m_client && !m_client->radioChangeReason().isEmpty()) {
+            return tr("Core changing radio, reconnecting");
+        }
+        return tr("Retrying Core (attempt %1)").arg(m_retryAttempt);
     case ConnectionState::Disconnected:
         if (stopNotice() != CoreStopNotice::None) { return stopTitle(); }
         return m_operatorDisconnected ? tr("Core disconnected")
@@ -121,6 +126,12 @@ QString RemoteConnectionController::detailText() const
     if (stopNotice() != CoreStopNotice::None) {
         // R-R3-38: the stop message's own words, not the raw reason.
         text += QLatin1Char('\n') + stopText();
+    } else if (m_client && !m_client->isHandshakeComplete()
+               && !m_client->radioChangeReason().isEmpty()) {
+        // The operator's ruling of 2026-09-26: the Core's own words (which
+        // radio it switches to), then this window's.
+        text += tr("\n%1\nThis window reconnects by itself when the Core is back.")
+                    .arg(m_client->radioChangeReason());
     } else if (m_client && !m_client->isHandshakeComplete() && !m_operatorDisconnected
         && !m_client->lastError().isEmpty()) {
         // The raw reason is in the log; shown here in user words (R-R3-17).

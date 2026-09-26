@@ -1082,6 +1082,9 @@ set(CORE_SOURCES
     src/core/FreeDVReporterClient.cpp
     src/core/FreeDVRadeReporterBridge.cpp
     src/core/PskReporterClient.cpp
+    # Parity Task 19 (R-IOS-25): starts and stops the spot sources, locally
+    # and on the Core, and is the mirrored `spotSources` object.
+    src/core/SpotSourceHost.cpp
     src/core/CtyDatParser.cpp
     src/core/AdifParser.cpp
     src/core/DxccWorkedStatus.cpp
@@ -1386,6 +1389,10 @@ list(APPEND CORE_SOURCES
     src/core/session/StationDevicesFacade.cpp
     # iPhone app Task 19 (R-IOS-06): the mirrored `catalog` object.
     src/core/session/StationCatalog.cpp
+    # Parity Task 19 (R-IOS-25): the link's record streams.
+    src/core/session/RecordStream.cpp
+    # Parity Task 21 (R-IOS-18): the Core's radios and its choice of one.
+    src/core/station/StationRadios.cpp
     # iPhone app Task 71 (R-IOS-02): who holds a place on the Core, and the
     # mirrored `connectedDevices` object.
     src/core/session/DeviceSessionRegistry.cpp
@@ -1727,6 +1734,8 @@ set(GUI_SOURCES
     src/gui/setup/TgxlAdvancedPage.cpp
     src/gui/setup/PgxlInterlockPage.cpp
     src/gui/setup/FourO3APage.cpp
+    # Parity Task 21 (R-IOS-18): Setup > This Core in a remote window.
+    src/gui/setup/ThisCorePage.cpp
     src/gui/setup/RfKitPage.cpp
     src/gui/setup/TciLogWindow.cpp
     src/gui/setup/KeyboardSetupPages.cpp

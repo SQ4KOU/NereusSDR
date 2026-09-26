@@ -18,9 +18,11 @@
 # directory. See nereusd --help for the full option list.
 
 # MAC address of the radio to connect to, colon-separated hex
-# (e.g. 00:1C:2D:05:37:2A). Leave unset to connect to the first radio
-# nereusd discovers on the network.
-# Default: (unset -- first discovered)
+# (e.g. 00:1C:2D:05:37:2A). A radio chosen from an app (This Core >
+# Change radio) comes first and is kept across restarts. Leave this unset
+# and nereusd runs the one radio it can see on the network; with more than
+# one in sight it waits until one is chosen, and never picks one itself.
+# Default: (unset -- the chosen radio, else the only radio in sight)
 radio_mac =
 
 # Hardware I/Q sample rate in Hz. Leave it unset and nereusd comes back at

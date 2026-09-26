@@ -71,6 +71,7 @@
 #include "models/AccessoryDataModel.h"
 #include "models/AccessorySettingsModel.h"
 #include "core/session/StationCatalog.h"
+#include "core/SpotSourceHost.h"
 #include "core/session/StationDevicesFacade.h"
 #include "core/session/ConnectedDevicesFacade.h"
 #include "core/session/SliceMarker.h"
@@ -889,6 +890,9 @@ private:
                  &StationDevicesFacade::staticMetaObject,
                  // iPhone app Task 19 (R-IOS-06): the Core's catalogue.
                  &StationCatalog::staticMetaObject,
+                 // Parity Task 19 (recordStreamVersion 1): the Core's spot
+                 // sources, read-only.
+                 &SpotSourceHost::staticMetaObject,
                  // iPhone app Task 71 (R-IOS-02): who is on the Core.
                  &ConnectedDevicesFacade::staticMetaObject,
                  // iPhone app Task 73 (R-IOS-02): another device's slice.

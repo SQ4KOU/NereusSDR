@@ -133,6 +133,14 @@
 //                                    requestFilterResponse (dspInfoVersion
 //                                    1).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 21 (R-IOS-18): the Core's
+//                                    radio (stationRadiosVersion 1),
+//                                    requestStationRadio.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 19 (R-IOS-25): the Core's
+//                                    spot sources (recordStreamVersion 1),
+//                                    requestSpotSource.
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 18 (B3.1): a window's band
 //                                    buttons send slice.selectBand
 //                                    (bandSelectVersion 1) for a named
@@ -476,6 +484,37 @@ public:
     { return QStringLiteral("This Core does not send its filter curve. Updating the Core may help."); }
     virtual CommandOutcome requestFilterResponse(int /*sliceId*/, bool /*highResolution*/)
     { return { false, filterResponseUnavailableReason() }; }
+
+    // R-IOS-25 / R-R3-49 (parity Task 19, recordStreamVersion 1): the Core
+    // runs the station's spot sources (DX cluster, RBN, POTA, PSK
+    // Reporter). `verb` is spots.connect, spots.disconnect,
+    // spots.sendCommand (with `text`) or spots.clearAll (no source).
+    static QString spotSourcesUnavailableReason()
+    { return QStringLiteral("This Core does not run its spot sources for this app. Updating the Core may help."); }
+    virtual bool spotSourcesAvailable() const { return false; }
+
+    // R-IOS-18 / R-R3-49 (parity Task 21, stationRadiosVersion 1): This
+    // Core's Change radio. `verb` is station.selectRadio (mac),
+    // station.rescanRadios, station.setRadioModel (mac, model) or
+    // station.forgetRadio (mac); a refusal comes back as
+    // RadioModel::stationRadioRefused.
+    static QString stationRadiosUnavailableReason()
+    { return QStringLiteral("This Core does not let this app change its radio. Updating the Core may help."); }
+    virtual bool stationRadiosAvailable() const { return false; }
+    /// Fix wave (I5): whether this session signed in with this computer's
+    /// own device key. The Core takes the four radio requests only from
+    /// such a session (StationRadios::pairedDeviceReason otherwise).
+    virtual bool signedInWithDeviceKey() const { return false; }
+    /// Follow-up N1: this session signed in with the pairing token and
+    /// enrolled this computer's key in the same sign-in. Its next sign-in
+    /// is by key, so reconnecting is all the radio requests need.
+    virtual bool enrolledDeviceKeyThisSession() const { return false; }
+    virtual CommandOutcome requestStationRadio(const QByteArray& /*verb*/, const QString& /*mac*/,
+                                               int /*model*/)
+    { return { false, stationRadiosUnavailableReason() }; }
+    virtual CommandOutcome requestSpotSource(const QByteArray& /*verb*/, const QString& /*source*/,
+                                             const QString& /*text*/)
+    { return { false, spotSourcesUnavailableReason() }; }
 
     // R-R3-46 / R-R3-21 (radioHardwareVersion 4): the filter policy dialog
     // in a remote window. Whether the Core takes a filter policy change from
