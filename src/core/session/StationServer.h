@@ -388,6 +388,9 @@
 //                                    streams (spots, spotConsole:<source>)
 //                                    and the `spotSources` object.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26: D79 (R-IOS-11, R-R3-49): bandPlanRefusal() and
+//               applyBandPlanSetting(). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QHash>
@@ -1373,6 +1376,13 @@ private:
     /// slice's own settings key (Slice<N>/...) from a session whose device does not own live slice N; empty when
     /// it may, or when the key is not a slice's.
     QString sliceSettingsRefusal(SessionTransport* transport, const QString& key) const;
+    /// D79 (R-IOS-11): the refusal for a BandPlanName write naming a plan
+    /// this Core does not have; empty otherwise.
+    QString bandPlanRefusal(const QString& key, const QVariant& value) const;
+    /// D79: after a taken BandPlanName write or removal, the Core's own
+    /// BandPlanManager takes the stored plan (ARRL (US) when absent).
+    void applyBandPlanSetting(const QString& key);
+    static constexpr const char* kBandPlanNameKey = "BandPlanName";
     /// Removes a settings key and applies its default live (the removal's
     /// own effect, after its checks).
     void applySettingsRemove(const SessionMessage& message);

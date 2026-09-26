@@ -13,6 +13,10 @@
 //   - A change to a preset, the step list or the band plan data moves the
 //     revision once, and the new catalogue reaches a connected client.
 //   - The catalogue stays within 256 KiB for every radio.
+//   - Each band plan carries `active` (the Core's plan alone) and its
+//     file's `spots`; a device's BandPlanName write moves the Core's plan
+//     and the catalogue, an unknown name is refused, a removal returns
+//     ARRL (US).
 //
 //   cmake --build build --target tst_station_catalog
 //   QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^tst_station_catalog$' \
@@ -34,6 +38,10 @@
 //                                    recordStreamVersion and the record
 //                                    streams. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-26: each plan's `active` and `spots`; a device's BandPlanName
+//               write moves the Core's plan (D79; R-IOS-11, R-R3-49).
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -46,6 +54,7 @@
 #include <QSignalSpy>
 #include <QTemporaryDir>
 
+#include <cmath>
 #include <memory>
 
 #include "core/AppSettings.h"
@@ -125,10 +134,57 @@ QJsonArray strings(const QStringList& list)
     return out;
 }
 
+// The ids of the plans the catalogue marks `active`.
+QStringList activePlanIds(const QJsonObject& catalog)
+{
+    QStringList ids;
+    for (const QJsonValue& p : catalog.value(QStringLiteral("bandPlans")).toArray()) {
+        const QJsonObject plan = p.toObject();
+        if (!plan.value(QStringLiteral("active")).isBool()) {
+            ids << QStringLiteral("<no active on %1>")
+                       .arg(plan.value(QStringLiteral("id")).toString());
+        } else if (plan.value(QStringLiteral("active")).toBool()) {
+            ids << plan.value(QStringLiteral("id")).toString();
+        }
+    }
+    return ids;
+}
+
+// Each plan's `spots` are its file's, read here from the file itself:
+// hz = llround(freq MHz x 1e6), the label as written.
+void checkSpotsMatchTheFiles(const QJsonArray& plans)
+{
+    {
+        BandPlanManager loader;  // registers the :/bandplans resources
+        loader.loadPlans();
+    }
+    for (const QJsonValue& p : plans) {
+        const QJsonObject plan = p.toObject();
+        const QString id = plan.value(QStringLiteral("id")).toString();
+        QFile file(QStringLiteral(":/bandplans/%1.json").arg(id));
+        QVERIFY2(file.open(QIODevice::ReadOnly), qPrintable(id));
+        const QJsonArray fileSpots =
+            QJsonDocument::fromJson(file.readAll()).object().value(QStringLiteral("spots")).toArray();
+        QVERIFY2(!fileSpots.isEmpty(), qPrintable(id));
+        const QJsonArray spots = plan.value(QStringLiteral("spots")).toArray();
+        QCOMPARE(spots.size(), fileSpots.size());
+        for (int i = 0; i < spots.size(); ++i) {
+            const QJsonObject spot = spots.at(i).toObject();
+            const QJsonObject fileSpot = fileSpots.at(i).toObject();
+            QCOMPARE(spot.keys(), (QStringList{QStringLiteral("hz"), QStringLiteral("label")}));
+            QCOMPARE(spot.value(QStringLiteral("hz")).toInteger(),
+                     qint64(std::llround(fileSpot.value(QStringLiteral("freq")).toDouble() * 1.0e6)));
+            QCOMPARE(spot.value(QStringLiteral("label")).toString(),
+                     fileSpot.value(QStringLiteral("label")).toString());
+        }
+    }
+}
+
 // Inputs for one radio as the desktop would describe it: the board's
 // capabilities, the Core's (default) presets, the step list and the plans.
 StationCatalog::Inputs inputsFor(HPSDRModel model, ProtocolVersion protocol,
-                                 const BandPlanManager& plans)
+                                 const BandPlanManager& plans,
+                                 const QString& activePlan = QStringLiteral("ARRL (US)"))
 {
     StationCatalog::Inputs inputs;
     inputs.model = model;
@@ -142,9 +198,11 @@ StationCatalog::Inputs inputsFor(HPSDRModel model, ProtocolVersion protocol,
         inputs.tuneStepsHz.append(kStageOneStepLadder[i]);
     }
     for (const BandPlanManager::PlanData& plan : plans.plans()) {
-        inputs.bandPlans.append(StationCatalog::BandPlan{plan.id, plan.name, plan.segments});
+        inputs.bandPlans.append(
+            StationCatalog::BandPlan{plan.id, plan.name, plan.segments, plan.spots});
     }
     inputs.defaultBandPlanName = QString::fromLatin1(BandPlanManager::kDefaultPlanName);
+    inputs.activeBandPlanName = activePlan;
     return inputs;
 }
 
@@ -317,9 +375,15 @@ void checkDesktopValues(const QJsonObject& catalog, HPSDRModel model, ProtocolVe
         QCOMPARE(rxOnly.at(i).toString(), sku.rxOnlyLabels.at(static_cast<std::size_t>(i)));
     }
 
-    // Band plans: the five bundled plans, ARRL the default.
+    // Band plans: the five bundled plans, ARRL the default and, on a Core
+    // that has not changed it, the active one; each with its file's spots.
     const QJsonArray plans = catalog.value(QStringLiteral("bandPlans")).toArray();
     QCOMPARE(plans.size(), 5);
+    QCOMPARE(activePlanIds(catalog), QStringList{QStringLiteral("arrl-us")});
+    checkSpotsMatchTheFiles(plans);
+    if (QTest::currentTestFailed()) {
+        return;
+    }
     int defaults = 0;
     for (const QJsonValue& p : plans) {
         const QJsonObject plan = p.toObject();
@@ -495,12 +559,42 @@ struct Core {
             5000);
     }
 
+    // A second window at `minor`, signed in with the same token; null
+    // unless its snapshot completed.
+    std::unique_ptr<LoopbackTransport> connectAnother(quint16 minor)
+    {
+        auto other = std::make_unique<LoopbackTransport>(QStringLiteral("other"));
+        auto* station = new LoopbackTransport(QStringLiteral("station-2"), server.get());
+        station->linkTo(other.get());
+        server->acceptTransport(station);
+        LoopbackTransport* raw = other.get();
+        if (!QTest::qWaitFor([raw]() { return !raw->received().isEmpty(); }, 5000)) {
+            return {};
+        }
+        raw->sendText(SessionMessages::encode(SessionMessages::hello(
+            kSessionProtocolMajor, minor, 0, QStringLiteral("NereusSDR iPhone"))));
+        raw->sendText(SessionMessages::encode(SessionMessages::authRequest(server->token())));
+        if (!QTest::qWaitFor(
+                [raw]() {
+                    return raw->receivedKinds().contains(QByteArrayLiteral("snapshot.complete"));
+                },
+                5000)) {
+            return {};
+        }
+        return other;
+    }
+
     // The catalogue's revision as the client last heard it (object.create,
     // then each delta); -1 if it never heard of it.
     qint64 heardRevision(QString* json = nullptr) const
     {
+        return heardRevisionOn(*app, json);
+    }
+
+    static qint64 heardRevisionOn(const LoopbackTransport& client, QString* json = nullptr)
+    {
         qint64 revision = -1;
-        for (const QByteArray& wire : app->received()) {
+        for (const QByteArray& wire : client.received()) {
             const QJsonObject o = QJsonDocument::fromJson(wire).object();
             const QString type = o.value(QStringLiteral("type")).toString();
             if ((type != QStringLiteral("object.create") && type != QStringLiteral("delta"))
@@ -520,6 +614,34 @@ struct Core {
         return revision;
     }
 };
+
+// The settings messages `client` received for `key`, in order, each as
+// {type, value, reason}; value is the entry's value, or "<absent>" for an
+// entry list that is empty.
+QList<QStringList> settingsMessagesFor(const LoopbackTransport& client, const QString& key)
+{
+    QList<QStringList> out;
+    for (const QByteArray& wire : client.received()) {
+        const QJsonObject o = QJsonDocument::fromJson(wire).object();
+        const QString type = o.value(QStringLiteral("type")).toString();
+        if (!type.startsWith(QStringLiteral("settings."))
+            || o.value(QStringLiteral("key")).toString() != key) {
+            continue;
+        }
+        const QJsonArray properties = o.value(QStringLiteral("properties")).toArray();
+        const QString value = properties.isEmpty()
+            ? QStringLiteral("<absent>")
+            : properties.first().toObject().value(QStringLiteral("value")).toString();
+        out.append({type, value, o.value(QStringLiteral("reason")).toString()});
+    }
+    return out;
+}
+
+// The catalogue `json` names as active.
+QStringList activeInJson(const QString& json)
+{
+    return activePlanIds(QJsonDocument::fromJson(json.toUtf8()).object());
+}
 
 } // namespace
 
@@ -647,6 +769,121 @@ private slots:
         catalog.setInputs(inputs);
         QCOMPARE(catalog.revision(), 4u);
         QCOMPARE(changed.count(), 4);
+    }
+
+    // `active` marks the Core's plan and no other, whatever it is, and a
+    // change of plan moves the revision once.
+    void activeMarksTheCoresPlanAlone()
+    {
+        BandPlanManager plans;
+        plans.loadPlans();
+        StationCatalog catalog;
+        QSignalSpy changed(&catalog, &StationCatalog::catalogChanged);
+        const StationCatalog::Inputs arrl =
+            inputsFor(HPSDRModel::HERMESLITE, ProtocolVersion::Protocol1, plans);
+        catalog.setInputs(arrl);
+        QCOMPARE(activeInJson(catalog.json()), QStringList{QStringLiteral("arrl-us")});
+
+        const StationCatalog::Inputs region1 = inputsFor(
+            HPSDRModel::HERMESLITE, ProtocolVersion::Protocol1, plans,
+            QStringLiteral("IARU Region 1"));
+        catalog.setInputs(region1);
+        QCOMPARE(catalog.revision(), 2u);
+        QCOMPARE(changed.count(), 2);
+        const QJsonObject built = StationCatalog::build(region1);
+        QCOMPARE(activePlanIds(built), QStringList{QStringLiteral("iaru-region1")});
+        // `default` stays on ARRL (US), the plan a first launch picks.
+        for (const QJsonValue& p : built.value(QStringLiteral("bandPlans")).toArray()) {
+            const QJsonObject plan = p.toObject();
+            QCOMPARE(plan.value(QStringLiteral("default")).toBool(),
+                     plan.value(QStringLiteral("id")).toString() == QStringLiteral("arrl-us"));
+        }
+        checkSpotsMatchTheFiles(built.value(QStringLiteral("bandPlans")).toArray());
+
+        catalog.setInputs(region1);
+        QCOMPARE(catalog.revision(), 2u);
+    }
+
+    // The Core's catalogue reads the Core's plan: a change on the Core
+    // (its own View > Band Plan) moves `active` and the revision once.
+    void theCatalogueFollowsTheCoresPlan()
+    {
+        Core core;
+        QVERIFY(core.connect(kSessionProtocolMinor));
+        const quint32 before = core.server->catalog()->revision();
+        QCOMPARE(activeInJson(core.server->catalog()->json()),
+                 QStringList{QStringLiteral("arrl-us")});
+        QSignalSpy changed(core.server->catalog(), &StationCatalog::catalogChanged);
+
+        core.model->bandPlanManagerMutable().setActivePlan(QStringLiteral("RAC (Canada)"));
+        QTRY_COMPARE(changed.count(), 1);
+        QCOMPARE(core.server->catalog()->revision(), before + 1);
+        QCOMPARE(activeInJson(core.server->catalog()->json()),
+                 QStringList{QStringLiteral("rac-canada")});
+        QString json;
+        QTRY_COMPARE(core.heardRevision(&json), qint64(before + 1));
+        QCOMPARE(activeInJson(json), QStringList{QStringLiteral("rac-canada")});
+        QTest::qWait(100);
+        QCOMPARE(changed.count(), 1);
+    }
+
+    // D79: a plan a device picks is the station's. Its settings.write is
+    // echoed to every session, moves the Core's own plan and sends one
+    // catalogue delta; an unknown name is refused with the Core's value; a
+    // removal returns the Core to ARRL (US).
+    void aDevicePicksTheStationsPlan()
+    {
+        Core core;
+        QVERIFY(core.connect(kSessionProtocolMinor));
+        std::unique_ptr<LoopbackTransport> other = core.connectAnother(kSessionProtocolMinor);
+        QVERIFY(other != nullptr);
+        const QString key = QStringLiteral("BandPlanName");
+        const quint32 before = core.server->catalog()->revision();
+        QSignalSpy changed(core.server->catalog(), &StationCatalog::catalogChanged);
+
+        core.app->sendText(SessionMessages::encode(SessionMessages::settingsWrite(
+            key, QStringLiteral("IARU Region 1"), QStringLiteral("phone-1"))));
+        const QList<QStringList> echoed{
+            {QStringLiteral("settings.value"), QStringLiteral("IARU Region 1"), QString()}};
+        QTRY_COMPARE(settingsMessagesFor(*core.app, key), echoed);
+        QTRY_COMPARE(settingsMessagesFor(*other, key), echoed);
+        QCOMPARE(core.model->bandPlanManager().activePlanName(), QStringLiteral("IARU Region 1"));
+        QCOMPARE(core.settings->value(key).toString(), QStringLiteral("IARU Region 1"));
+        QTRY_COMPARE(changed.count(), 1);
+        QString json;
+        QTRY_COMPARE(core.heardRevision(&json), qint64(before + 1));
+        QCOMPARE(activeInJson(json), QStringList{QStringLiteral("iaru-region1")});
+        QTRY_COMPARE(Core::heardRevisionOn(*other, &json), qint64(before + 1));
+        QCOMPARE(activeInJson(json), QStringList{QStringLiteral("iaru-region1")});
+
+        // A plan this Core does not have: refused, the Core's value handed
+        // back, nothing moved, and the other device hears nothing.
+        core.app->sendText(SessionMessages::encode(SessionMessages::settingsWrite(
+            key, QStringLiteral("Mars Region 9"), QStringLiteral("phone-2"))));
+        const QList<QStringList> refused{
+            echoed.first(),
+            {QStringLiteral("settings.reject"), QStringLiteral("IARU Region 1"),
+             QStringLiteral("This Core does not have that band plan.")}};
+        QTRY_COMPARE(settingsMessagesFor(*core.app, key), refused);
+        QTest::qWait(100);
+        QCOMPARE(settingsMessagesFor(*other, key), echoed);
+        QCOMPARE(core.model->bandPlanManager().activePlanName(), QStringLiteral("IARU Region 1"));
+        QCOMPARE(core.settings->value(key).toString(), QStringLiteral("IARU Region 1"));
+        QCOMPARE(changed.count(), 1);
+
+        // A removal: ARRL (US) again, echoed as an absent value, one more
+        // revision.
+        core.app->sendText(SessionMessages::encode(SessionMessages::settingsRemove(key)));
+        const QList<QStringList> removed{
+            echoed.first(), {QStringLiteral("settings.value"), QStringLiteral("<absent>"), QString()}};
+        QTRY_COMPARE(settingsMessagesFor(*other, key), removed);
+        QCOMPARE(core.model->bandPlanManager().activePlanName(), QStringLiteral("ARRL (US)"));
+        QVERIFY(!core.settings->contains(key));
+        QTRY_COMPARE(changed.count(), 2);
+        QTRY_COMPARE(core.heardRevision(&json), qint64(before + 2));
+        QCOMPARE(activeInJson(json), QStringList{QStringLiteral("arrl-us")});
+        QTest::qWait(100);
+        QCOMPARE(changed.count(), 2);
     }
 
     // The catalogue follows the Core's store: one preset (three settings)

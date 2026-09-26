@@ -54,6 +54,10 @@
 //                                    permission push is watched on MOX;
 //                                    VOX waits for the microphone line.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  D79 (R-IOS-11, R-R3-49): the window
+//                                    follows the Core's band plan, strip
+//                                    and menu check.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -112,6 +116,7 @@
 #include "core/RadioDiscovery.h"
 #include "gui/widgets/VfoWidget.h"
 #include "gui/widgets/StationBlock.h"
+#include "models/BandPlanManager.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "fakes/RemoteWindowHarness.h"
@@ -974,6 +979,73 @@ private slots:
         QCOMPARE(poller->intervalMs(), 100);  // no Core settings yet
         QVERIFY(connectFromRadioMenu(h));
         QTRY_COMPARE(poller->intervalMs(), 250);
+    }
+
+    // D79 (R-IOS-11, R-R3-49): the band plan is the Core's. The window
+    // read its plan at startup, before the Core's settings arrived; it
+    // takes the Core's plan once they do and follows every later change,
+    // and so do its strip and its View > Band Plan check.
+    void windowFollowsTheCoresBandPlan()
+    {
+        const QString key = QStringLiteral("BandPlanName");
+        RemoteWindowHarness h;
+        h.stationSettings().setValue(key, QStringLiteral("IARU Region 2"));
+        QVERIFY(h.start());
+        RadioModel* model = h.window()->radioModel();
+        QVERIFY(model != nullptr);
+        const BandPlanManager& plans = model->bandPlanManager();
+        QCOMPARE(plans.activePlanName(), QStringLiteral("ARRL (US)"));  // no Core settings yet
+
+        // The strip on every pan draws this manager's plan; the menu's
+        // check is the one plan named.
+        auto stripDraws = [&](const QString& name) {
+            const QList<SpectrumWidget*> strips = h.window()->findChildren<SpectrumWidget*>();
+            if (strips.isEmpty() || plans.activePlanName() != name) {
+                return false;
+            }
+            for (SpectrumWidget* strip : strips) {
+                if (strip->bandPlanManager() != &plans) {
+                    return false;
+                }
+            }
+            for (const BandPlanManager::PlanData& plan : plans.plans()) {
+                if (plan.name == name) {
+                    return plans.segments().size() == plan.segments.size()
+                        && plans.spots().size() == plan.spots.size();
+                }
+            }
+            return false;
+        };
+        auto checkedPlans = [&]() {
+            QStringList checked;
+            for (const QString& name : plans.availablePlans()) {
+                QAction* action = h.menuAction(QStringLiteral("&Band Plan"), name);
+                if (action == nullptr) {
+                    checked << QStringLiteral("<no action for %1>").arg(name);
+                } else if (action->isChecked()) {
+                    checked << name;
+                }
+            }
+            return checked;
+        };
+        QCOMPARE(checkedPlans(), QStringList{QStringLiteral("ARRL (US)")});
+
+        QVERIFY(connectFromRadioMenu(h));
+        QTRY_VERIFY(stripDraws(QStringLiteral("IARU Region 2")));
+        QCOMPARE(checkedPlans(), QStringList{QStringLiteral("IARU Region 2")});
+
+        // A later change on the Core (another device's pick) reaches it.
+        h.stationSettings().setValue(key, QStringLiteral("RAC (Canada)"));
+        QTRY_VERIFY(stripDraws(QStringLiteral("RAC (Canada)")));
+        QCOMPARE(checkedPlans(), QStringList{QStringLiteral("RAC (Canada)")});
+
+        // A removal on the Core: ARRL (US), the Core's default.
+        h.stationSettings().remove(key);
+        QTRY_VERIFY(stripDraws(QStringLiteral("ARRL (US)")));
+        QCOMPARE(checkedPlans(), QStringList{QStringLiteral("ARRL (US)")});
+        // Following wrote nothing back to the Core.
+        QTest::qWait(kSettleMs);
+        QVERIFY(!h.stationSettings().contains(key));
     }
 
     // R-R3-46 / R-R3-21: a Core whose controller stands behind its

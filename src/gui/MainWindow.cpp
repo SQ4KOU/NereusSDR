@@ -283,6 +283,10 @@
 //                radio's IP and MAC; an unmanaged remote window's Manage
 //                Radios opens This Core. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-26 : D79 (R-IOS-11, R-R3-49): View > Band Plan's check
+//                follows planChanged, so a remote window's check follows
+//                the Core's plan. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -7918,6 +7922,15 @@ void MainWindow::buildMenuBar()
                 m_radioModel->bandPlanManagerMutable().setActivePlan(name);
             });
         }
+        // D79 (R-IOS-11, R-R3-49): the check follows the plan however it
+        // changes (a remote window following the Core's plan included).
+        connect(&m_radioModel->bandPlanManagerMutable(), &BandPlanManager::planChanged,
+                planGroup, [this, planGroup]() {
+                    const QString active = m_radioModel->bandPlanManager().activePlanName();
+                    for (QAction* action : planGroup->actions()) {
+                        action->setChecked(action->text() == active);
+                    }
+                });
     }
 
     {
