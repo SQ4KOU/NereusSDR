@@ -159,6 +159,12 @@
 //               the gate (a take); holdOffHeldMic; programKeyRefusal. J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: iPhone app plan Task 77 fix wave, I1 (ruling 8.9): the
+//               mic's press edge asks the gate whenever another device
+//               holds transmit (setOtherDeviceHolds), whatever its key
+//               (TUNE, two-tone, a tuner autotune, VOX). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -349,6 +355,11 @@ KeyerIdentity KeyerIdentity::station(PttMode source)
 void MoxController::setKeyingGate(KeyingGateFn gate)
 {
     m_keyingGate = std::move(gate);
+}
+
+void MoxController::setOtherDeviceHolds(OtherDeviceHoldsFn probe)
+{
+    m_otherDeviceHolds = std::move(probe);
 }
 
 void MoxController::setMox(bool on, const KeyerIdentity& keyer)
@@ -2322,18 +2333,37 @@ void MoxController::onMicPttFromRadio(bool pressed)
     if (!pressed) {
         clearHeldBits(kRefusedMic);   // M3 and R-R3-36: a new press
     }
-    // iPhone app plan Task 77 (rulings 8.8, 8.9): while another device's
-    // key is on, PollPTT never reaches the mic (a station source never
-    // rides another keyer's key), so its press edge asks the gate here: a
-    // press takes transmit, the transfer unkeying that device first. The
-    // press keys nothing now; it is held off until the take ends
-    // (onTakeFinished) or it is released.
-    if (pressEdge && m_mox && !m_currentKeyer.isStation() && m_keyingGate
-        && !m_manualKey && refusalBeforeTheGate().isEmpty()) {
-        const KeyingAnswer answer =
-            m_keyingGate(PttMode::Mic, KeyerIdentity::station(PttMode::Mic));
-        if (answer.verdict == KeyingVerdict::Refuse) {
-            reportRefusal(answer.refusal.text, answer.refusal, /*quiet=*/false);
+    // iPhone app plan Task 77 (rulings 8.8, 8.9): while another device
+    // holds transmit, whatever its key (tx.key, TUNE, two-tone, a Tuner
+    // Genius autotune, VOX), its press edge asks the gate here: PollPTT
+    // never reaches the mic then (a station source never rides another
+    // keyer's key, and a manual key skips the whole pass). A press takes
+    // transmit, the transfer unkeying that device first. The press keys
+    // nothing now; it is held off until the take ends (onTakeFinished) or
+    // it is released, so a press that took nothing never keys later
+    // without a fresh one.
+    // Fix wave I1: asked on the holder (TransmitHolder's state), not on
+    // who is keyed. TX inhibit, the PA trip and receive only still take
+    // nothing (fix wave M1). A holder on the air is taken from even when
+    // the band plan or the interlock would refuse the station's own key
+    // (ruling 8.9: the press stops the device first; PollPTT retries the
+    // station's key after the take); an unkeyed holder is taken from only
+    // when nothing before the gate refuses, as in tryPollKey.
+    const bool otherDeviceHolds = m_otherDeviceHolds
+                                      ? m_otherDeviceHolds()
+                                      : (m_mox && !m_currentKeyer.isStation() && !m_manualKey);
+    const bool onAir = m_mox || m_manualKey || m_state != MoxState::Rx;
+    if (pressEdge && otherDeviceHolds && m_keyingGate
+        && (onAir || refusalBeforeTheGate().isEmpty())) {
+        if (transmitBlocked()) {
+            const TxRefusal blocked = transmitBlockRefusal();
+            reportRefusal(blocked.text, blocked, /*quiet=*/false);
+        } else {
+            const KeyingAnswer answer =
+                m_keyingGate(PttMode::Mic, KeyerIdentity::station(PttMode::Mic));
+            if (answer.verdict == KeyingVerdict::Refuse) {
+                reportRefusal(answer.refusal.text, answer.refusal, /*quiet=*/false);
+            }
         }
         if (m_micPtt) {
             m_refusedHeld |= kRefusedMic;

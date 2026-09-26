@@ -185,6 +185,11 @@ public:
     /// The session ended: its commands are forgotten.
     void forgetSession(const QString& session);
 
+    /// iPhone app plan Task 77 fix wave, I4: a take ends `deviceId`'s Tuner
+    /// Genius autotune (keyed or still waiting for the amplifier) before
+    /// the transfer; its pending epoch goes with it.
+    void endAutotuneFor(const QByteArray& deviceId);
+
 private:
     /// The key itself, after any wait: the gates, MOX, the epoch.
     Result keyNow(const Command& command);

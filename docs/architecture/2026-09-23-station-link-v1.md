@@ -4917,10 +4917,20 @@ transmit through this Core."):
   standby (up to 1.5 s later), keyed as this device, so the watchdog
   watches it (section 18.7), and ends when the tuner finishes, or after
   3 s when the tuner never starts its sweep. `{on:false}`, or `tx.tune
-  {on:false}`, ends this device's cycle, keyed or still waiting. Refused
-  in plain words "No Tuner Genius is connected to the Core." when none is,
-  and "The tuner is already tuning." while any TUNE runs; the session's and
-  the holder's refusals come first.
+  {on:false}`, ends this device's cycle, keyed or still waiting. The
+  session's and the holder's refusals come first; then, while the radio is
+  on the air (MOX on or walking back to receive, or TUNE; the device's own
+  key included), it is refused `holderOnAir` "The radio is on the air. Try
+  again when it stops." with no fix, since the amplifier is never switched
+  between standby and operate while RF flows; then in plain words "No
+  Tuner Genius is connected to the Core." when none is, and "The tuner is
+  already tuning." while any cycle runs. While this device's cycle waits
+  for the amplifier, its own `tx.key`, `tx.tune {on:true}`, `tx.twoTone
+  {on:true}` and `ps3.twoTone {enabled:true}` are refused "The tuner is
+  already tuning."; if the radio goes on the air meanwhile (a VOX key), the
+  cycle ends without keying and the amplifier returns to operate once the
+  radio is back on receive. A take (section 18.9) ends the old holder's
+  cycle before the transfer.
 
 Every key passes the Core's gates in the order of section 18.1, then TX
 inhibit, the PA trip, receive only, the band plan and the interlock, and
@@ -5220,6 +5230,11 @@ first. Then:
 - a transfer running, or the radio not confirming its stop: refused
   `changingHands` or `stopNotConfirmed`.
 
+A copy of a `tx.take` (the same command id, which a device repeats as it
+does every transmit command) is never asked again and never takes twice:
+while the first one's take runs, that take's one result answers the id;
+after it, a copy gets the same answer again.
+
 `confirm.proceed {id, choice: -1}` takes transmit; when the holder was not
 on the air when asked and is now, or the holder changed, it is answered
 "Waiting for you to confirm." and a new `confirm.request` follows (the
@@ -5236,7 +5251,10 @@ the transfer ends: accepted with `holderEpoch`, or refused
 `transmitTaken`, "<taker> took transmit.", naming the taker (`bySource`
 `radioPtt` and "Radio" for the radio's own PTT), with Take it back. A
 holder taken from while away does not get transmit back when it returns:
-its notice waits and follows its `snapshot.complete`.
+its notice waits and follows its `snapshot.complete`. A taker whose own
+session ends while its take runs holds transmit away when the take ends
+(its 3 minutes running) if it dropped, and transmit is unheld if it left
+or was a token window.
 
 **Take it back.** `notice.takeBack {id}` of a `transmitTaken` notice is
 `tx.take {}` with its usual question (red when the taker is on the air,
@@ -5246,8 +5264,11 @@ is taken back at most once.
 **The radio's own PTT** (its mic or a footswitch, the radio's PTT bit),
 at a press edge: with the Core's own position already holding transmit it
 keys, the names and source unchanged; otherwise it takes transmit without
-a question, unkeying a holder on the air first, and keys only once the
-transfer ends and only while still pressed. A press released during the
+a question, unkeying a holder on the air first, whatever its key
+(`tx.key`, TUNE, two-tone, `tx.tunerTune` or VOX), and keys only once the
+transfer ends and only while still pressed. A press that takes nothing (TX
+inhibit, the PA trip, receive only, a transfer already running) is held
+off until it is released, so it never keys later without a fresh press. A press released during the
 transfer keys nothing. A press still held after a device takes transmit
 back does not take it again; the next press does, and releasing it never
 unkeys a device's key. `txState` then names "Radio" with `holderSource`

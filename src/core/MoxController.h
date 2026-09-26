@@ -215,6 +215,12 @@
 //               while another device's key is on asks the keying gate (a
 //               take). J.J. Boyd (KG4VCF), with AI-assisted implementation
 //               via Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 77 fix wave, I1 (ruling 8.9): the
+//               mic's press edge asks the gate whenever another device
+//               holds transmit (setOtherDeviceHolds), whatever its key
+//               (TUNE, two-tone, a tuner autotune, VOX). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -449,6 +455,15 @@ public:
     using KeyingGateFn = std::function<KeyingAnswer(PttMode source, const KeyerIdentity& keyer)>;
     void setKeyingGate(KeyingGateFn gate);
     bool hasKeyingGate() const noexcept { return static_cast<bool>(m_keyingGate); }
+    /// iPhone app plan Task 77 fix wave, I1 (ruling 8.9): whether a device
+    /// other than the station device holds transmit now (TransmitHolder's
+    /// state), whatever its key: tx.key, TUNE, two-tone, a Tuner Genius
+    /// autotune or VOX. While it does, every press edge of the radio's own
+    /// PTT asks the gate (a take), and a press that takes nothing is held
+    /// off until it is released. Without it, the press edge asks only
+    /// while another keyer's key is on.
+    using OtherDeviceHoldsFn = std::function<bool()>;
+    void setOtherDeviceHolds(OtherDeviceHoldsFn probe);
 
     // The keyer of the key now on (station() while unkeyed).
     const KeyerIdentity& currentKeyer() const noexcept { return m_currentKeyer; }
@@ -1615,6 +1630,7 @@ private:
     // iPhone app plan Task 34: the keying gate, who the key now on is for,
     // and the keyer a gate-admitted setMox(true) keys for.
     KeyingGateFn  m_keyingGate;
+    OtherDeviceHoldsFn m_otherDeviceHolds;
     KeyerIdentity m_currentKeyer{KeyerIdentity::station(PttMode::None)};
     KeyerIdentity m_admittedKeyer{KeyerIdentity::station(PttMode::None)};
     // Task 35: setTune(true, keyer) in progress, and for whom.

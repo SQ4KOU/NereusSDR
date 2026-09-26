@@ -20,6 +20,9 @@
 //   2026-09-26: Transmit group fix wave: M4 remoteMicNotReady. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: iPhone app plan Task 77 fix wave, I3: radioOnAir. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/safety/TxRefusal.h"
@@ -170,6 +173,13 @@ TxRefusal holderOnAir(const QString& holderShortName, bool radioPtt)
                          : QStringLiteral("%1 is on the air. Try again when they stop.")
                                .arg(holderShortName),
                 kFixTakeTransmit);
+}
+
+TxRefusal radioOnAir()
+{
+    // holderOnAir's words for the radio, without its fix: the device asking
+    // may be the one on the air, and taking transmit would not help.
+    return make(kHolderOnAir, QStringLiteral("The radio is on the air. Try again when it stops."));
 }
 
 TxRefusal notHolder()

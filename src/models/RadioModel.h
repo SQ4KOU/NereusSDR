@@ -284,6 +284,12 @@
 //                                    cancelTgxlAutotuneFor and a device's
 //                                    cycle; the arbiter's owner lookups. AI-
 //                                    assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Task 77 fix wave (I3, I4): a device's
+//                                    autotune refused on the air and ended
+//                                    unkeyed when MOX came on during its
+//                                    standby wait; the amplifier's restore
+//                                    waits for receive. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -6744,6 +6750,15 @@ private:
     /// Task 77: the cycle ended (or never keyed): the amplifier's state
     /// restored, the flags cleared.
     void finishTgxlAutotuneCycle();
+    /// Task 77 fix wave (I3, I4): the amplifier is never switched between
+    /// standby and operate while RF flows. A restore owed while MOX is on
+    /// or still walking back to receive waits here and is sent once MOX
+    /// reads receive (or carried into the next cycle's saved state).
+    bool m_pgxlRestoreWhenUnkeyed{false};
+    /// MOX is on, or its walk has not reached receive.
+    bool tgxlRfFlowing() const;
+    /// Sends operate=1 to the Power Genius (the restore itself).
+    void sendPgxlOperateRestore();
     /// The cycle itself (startTgxlAutotune's body before Task 77).
     void beginTgxlAutotune(bool fromHardware);
     bool m_awaitingInterlockForAutotune{false};

@@ -28,6 +28,10 @@
 //               tunerTune, a waiting autotune ended by TUNE off, the session
 //               gate first for two-tone. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-26: Task 77 fix wave: I3 tunerTune refused on the air, and the
+//               device's own keys refused while its autotune waits; I4
+//               endAutotuneFor. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/RemoteKeying.h"
@@ -46,6 +50,9 @@
 namespace NereusSDR {
 
 namespace {
+
+// Task 77: a Tuner Genius autotune that is running (its own words, plain).
+constexpr char kTunerTuning[] = "The tuner is already tuning.";
 
 // The refusal a key call reports, captured while it runs: the transmit
 // refusal MoxController sends (moxRefused) and TUNE's own plain reason
@@ -176,6 +183,18 @@ void RemoteKeying::handle(const Command& command, Reply reply)
         reply(*copy);
         return;
     }
+    // Task 77 fix wave, I3: while this device's Tuner Genius autotune waits
+    // for the amplifier's standby, its own key, TUNE and two-tone are
+    // refused: the cycle keys the tune carrier itself, and its pending
+    // epoch is never overwritten by another start.
+    const bool starts = command.verb == Verb::Key
+        || ((command.verb == Verb::Tune || command.verb == Verb::TwoTone) && command.on);
+    if (starts && autotuneRunningFor(command.deviceId) && !moxKeyedFor(command.deviceId)) {
+        const Result result = refusedPlain(QString::fromLatin1(kTunerTuning));
+        remember(command, result);
+        reply(result);
+        return;
+    }
     // Fix wave C1: a key that carries the operator's voice (every mode but
     // CW) from a device whose media carries no microphone line is refused
     // at once; the Core never keys a remote device on its own microphone.
@@ -254,6 +273,18 @@ void RemoteKeying::handle(const Command& command, Reply reply)
     }
     remember(command, result);
     reply(result);
+}
+
+void RemoteKeying::endAutotuneFor(const QByteArray& deviceId)
+{
+    if (!autotuneRunningFor(deviceId)) {
+        return;
+    }
+    m_model->cancelTgxlAutotuneFor(deviceId);
+    if (m_pending.has_value() && m_pending->deviceId == deviceId) {
+        m_pending.reset();
+    }
+    qCInfo(lcDsp) << "Tuner autotune of" << deviceId << "ended: transmit is being taken";
 }
 
 void RemoteKeying::forgetSession(const QString& session)
@@ -621,13 +652,20 @@ RemoteKeying::Result RemoteKeying::tunerTune(const Command& command)
     if (const TxRefusal refusal = m_holder->keyRefusalFor(command.deviceId); !refusal.isEmpty()) {
         return refused(refusal);
     }
+    // Fix wave I3: never started under RF. The cycle switches the amplifier
+    // to standby first, so while the radio is on the air (this device's
+    // own key, or MOX still walking) it is refused with the on-air words.
+    if (const MoxController* moxNow = m_model->moxController();
+        moxNow->isMox() || moxNow->state() != MoxState::Rx || m_model->isTune()) {
+        return refused(TxRefusals::radioOnAir());
+    }
     QString unavailable;
     TgxlConnection* tgxl = m_model->tgxlConnection();
     if (tgxl == nullptr || !tgxl->isConnected()) {
         return refusedPlain(QStringLiteral("No Tuner Genius is connected to the Core."));
     }
     if (m_model->isTgxlAutotuneInProgress() || m_model->isTune()) {
-        return refusedPlain(QStringLiteral("The tuner is already tuning."));
+        return refusedPlain(QString::fromLatin1(kTunerTuning));
     }
     MoxController* mox = m_model->moxController();
     KeyerIdentity keyer;

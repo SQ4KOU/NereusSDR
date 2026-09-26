@@ -141,6 +141,9 @@
 //                                    the freeze and on-air refusals' new
 //                                    forwards. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Task 77 fix wave, I3: the tuner's
+//                                    on-air refusal forward. AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -1004,7 +1007,10 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("transmitBlockReasonAlongside(QString())"),
           // startTgxlAutotuneFor's refusal: its own literals (scanned
           // here) or the transmit block's words above.
-          QStringLiteral("refusal")}},
+          QStringLiteral("refusal"),
+          // Task 77 fix wave, I3: the on-air refusal's words
+          // (TxRefusal.cpp, scanned there).
+          QStringLiteral("TxRefusals::radioOnAir().text")}},
         // A receiver count, and a frequency in MHz.
         {"src/core/SliceStreamAllocator.cpp", {}, {}, 4,
          {QStringLiteral("count"),

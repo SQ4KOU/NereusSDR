@@ -1532,6 +1532,14 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             }
             return answer;
         });
+        // iPhone app plan Task 77 fix wave, I1 (ruling 8.9): the radio's
+        // PTT press asks the gate while another device holds transmit,
+        // whatever that device's key (TUNE, two-tone, a tuner autotune,
+        // VOX), or while transmit is changing hands from it.
+        mox->setOtherDeviceHolds([this]() {
+            const std::optional<TransmitHolder::Holder> holder = m_transmitHolder->holder();
+            return holder.has_value() && holder->deviceId != KeyerIdentity::kStationDeviceId;
+        });
         // Whether the holder is on the air, and MOX as the transfer reads it.
         connect(mox, &MoxController::stateChanged, this, [this, mox](MoxState state) {
             const bool on = mox->isMox() || state != MoxState::Rx;
@@ -2298,6 +2306,7 @@ StationServer::~StationServer()
     if (m_radioModel && m_radioModel->moxController() != nullptr
         && m_radioModel->role() == RadioModel::Role::Local) {
         m_radioModel->moxController()->setKeyingGate({});
+        m_radioModel->moxController()->setOtherDeviceHolds({});
     }
     // Task 77: the arbiter's freeze asks this object too.
     if (m_radioModel && m_radioModel->txSliceArbiter() != nullptr
@@ -2937,6 +2946,8 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
     const QString owner = sessionOwner(it->sessionId);
     // iPhone app Task 76: this session's own media ends with it.
     const quint64 mediaEpoch = it->mediaEpoch;
+    // Task 77 fix wave, M6: its tx.take copies are forgotten with it.
+    m_takeCopies.remove(it->sessionId);
     m_peers.erase(it);
     if (!view.isNull()) {
         view->close();

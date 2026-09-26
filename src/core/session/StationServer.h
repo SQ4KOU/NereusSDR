@@ -1546,6 +1546,23 @@ private:
     /// stop recorded as takenOver. `done(assigned)` when it ends.
     void runTake(const QByteArray& taker, TransmitHolder::Source source,
                  std::function<void(bool assigned)> done);
+    /// Fix wave I2: a taker whose session ended while its take ran is
+    /// never left holding as if it were here. Paired and away: held for it,
+    /// away (holderDropped, its 180 s running); gone (it left, or a token
+    /// window): released. A taker with a live session is left as it is.
+    void settleTakerWithoutSession(const QByteArray& taker);
+    /// Fix wave M6: a tx.take and its copies (the same command id on the
+    /// same session): the first is run; a copy while it runs is answered by
+    /// its one result, and a later copy gets the same answer. Never a second
+    /// take.
+    struct TakeCopy {
+        quint32 commandId = 0;
+        bool answered = false;
+        SessionMessage result;
+    };
+    /// Per session id, the most recent tx.take ids (at most kTakeCopiesKept).
+    QHash<quint64, QList<std::shared_ptr<TakeCopy>>> m_takeCopies;
+    static constexpr int kTakeCopiesKept = 16;
     /// Runs the take for a confirm.proceed or notice.takeBack being
     /// answered now: its result when the transfer ends at once, otherwise
     /// the answer goes later (m_proceedAnsweredLater) and the returned

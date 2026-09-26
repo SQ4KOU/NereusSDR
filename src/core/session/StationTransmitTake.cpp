@@ -23,12 +23,18 @@
 //     from on the air has its stop recorded as takenOver.
 //   - Take it back (section 8.6): notice.takeBack of a transmitTaken notice
 //     is tx.take {} with its usual confirmation.
+//   - Fix wave (Task 77 review): a take ends the old holder's Tuner Genius
+//     autotune first (I4); a taker whose session ended during its take is
+//     held away or released at its end (I2); copies of a tx.take (the same
+//     command id) get the first one's answer and never take twice (M6).
 //
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-09-26: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 77 (R-IOS-02, R-IOS-03),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: Task 77 fix wave (I2, I4, M6) by J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -47,6 +53,7 @@
 #include "core/session/ConfirmStep.h"
 #include "core/session/ConnectedDevicesFacade.h"
 #include "core/session/DeviceSessionRegistry.h"
+#include "core/session/RemoteKeying.h"
 #include "core/session/SessionTransport.h"
 #include "core/session/TransmitStateFacade.h"
 #include "core/SliceOwnership.h"
@@ -206,6 +213,18 @@ void StationServer::runTake(const QByteArray& taker, TransmitHolder::Source sour
         && m_radioModel->moxController() != nullptr) {
         m_radioModel->moxController()->holdOffHeldMic();
     }
+    // Fix wave I4: the old holder's Tuner Genius autotune ends before the
+    // transfer, keyed or still waiting for the amplifier's standby, so it
+    // never keys for a device that no longer holds transmit. The amplifier
+    // goes back as it was only while nothing is keyed
+    // (RadioModel::finishTgxlAutotuneCycle).
+    if (old && old->deviceId != taker) {
+        if (m_remoteKeying) {
+            m_remoteKeying->endAutotuneFor(old->deviceId);
+        } else if (m_radioModel) {
+            m_radioModel->cancelTgxlAutotuneFor(old->deviceId);
+        }
+    }
     TransmitHolder::Holder next;
     next.deviceId = taker;
     next.source = source;
@@ -237,10 +256,36 @@ void StationServer::runTake(const QByteArray& taker, TransmitHolder::Source sour
                     self->tellDevice(notice, taker);
                 }
             }
+            if (!self.isNull() && assigned && !station) {
+                self->settleTakerWithoutSession(taker);
+            }
             if (done) {
                 done(assigned);
             }
         });
+}
+
+void StationServer::settleTakerWithoutSession(const QByteArray& taker)
+{
+    // Fix wave I2 (ruling 8.15, settled detail S4): dropPeer's release or
+    // holderDropped did nothing while the take ran (the taker did not hold
+    // transmit yet), so the end of the take does it now.
+    for (auto it = m_peers.cbegin(); it != m_peers.cend(); ++it) {
+        if (it->sessionDeviceId == taker) {
+            return;
+        }
+    }
+    if (!m_transmitHolder->isHeldBy(taker)) {
+        return;
+    }
+    const std::optional<DeviceSessionRegistry::Entry> entry = m_deviceSessions->entry(taker);
+    if (entry && entry->state == DeviceSessionRegistry::State::Away) {
+        qCInfo(lcDsp) << "Transmit taken by" << taker << "which dropped during the take; held away";
+        m_transmitHolder->holderDropped(taker, QStringLiteral("The device's link was lost."));
+    } else if (!entry) {
+        qCInfo(lcDsp) << "Transmit taken by" << taker << "which left during the take; released";
+        m_transmitHolder->release(taker, QStringLiteral("The device left the Core."));
+    }
 }
 
 void StationServer::takeTransmit(SessionTransport* transport, const SessionMessage& invoke,
@@ -252,6 +297,32 @@ void StationServer::takeTransmit(SessionTransport* transport, const SessionMessa
         reply(refusalResult(invoke, TxRefusals::notReady()));
         return;
     }
+    // Fix wave M6: a device sends each transmit command more than once as
+    // the same command (the same verb and id), as it does tx.key. A copy
+    // never asks again or takes a second time: while the first one's take
+    // runs, that take's answer (one result for the id) answers it; after,
+    // it gets the same answer again.
+    QList<std::shared_ptr<TakeCopy>>& copies = m_takeCopies[m_peers.value(transport).sessionId];
+    for (const std::shared_ptr<TakeCopy>& copy : copies) {
+        if (copy->commandId != invoke.commandId) {
+            continue;
+        }
+        if (copy->answered) {
+            reply(copy->result);
+        }
+        return;
+    }
+    const auto first = std::make_shared<TakeCopy>();
+    first->commandId = invoke.commandId;
+    copies.append(first);
+    while (copies.size() > kTakeCopiesKept) {
+        copies.removeFirst();
+    }
+    reply = [first, reply = std::move(reply)](const SessionMessage& result) {
+        first->answered = true;
+        first->result = result;
+        reply(result);
+    };
     // A device that cannot be asked (no sessionHolderVersion 1) cannot take.
     if (!peerHasSessionHolderVersion(transport)) {
         reply(refusalResult(invoke, TxRefusals::appCannotTransmit()));
