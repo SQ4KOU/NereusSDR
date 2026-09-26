@@ -330,9 +330,12 @@ private slots:
         QCOMPARE(f.window->servicePauseRemainingMs(), PairingWindow::kFirstServicePauseMs);
         QCOMPARE(f.window->retryAfterMs(PairingWindow::Route::Service),
                  std::max(PairingWindow::kFirstServicePauseMs, f.window->retryAfterMs()));
-        // The burned code still rotates (after 80 s, past this first pause).
+        // The burned code still rotates, after the first wait: the service
+        // is paused, so only the home network can take the next code.
         f.untilTheNextCode();
         QVERIFY(f.window->currentCode() != before);
+        QVERIFY(f.window->isPaused(PairingWindow::Route::Service));
+        f.advance(f.window->servicePauseRemainingMs());
         QVERIFY(!f.window->isPaused(PairingWindow::Route::Service));
         // Paused again (2 minutes): the next code pairs on the home network
         // while pairing through the service is still paused.
@@ -345,6 +348,47 @@ private slots:
         f.window->pairingSucceeded();
         QVERIFY(!f.window->isPaused(PairingWindow::Route::Service));
         QCOMPARE(states.size(), 0);
+    }
+
+    // The follow-up to the Task 27 re-review (new Minor 4): the burn that
+    // starts a pause makes the next code appear after the first wait, not
+    // the streak's fifth (80 s). So the first rung (1 minute) holds pairing
+    // through the service off while a code is shown, and the home network,
+    // which the pause never touches, is not left without a code.
+    void aBurnThatStartsAPauseShowsTheNextCodeAfterTheFirstWait()
+    {
+        Fixture f;
+        f.pauseTheService();
+        QCOMPARE(f.window->retryAfterMs(PairingWindow::Route::Direct),
+                 PairingWindow::kFirstRetryMs);
+        QCOMPARE(f.window->retryAfterMs(PairingWindow::Route::Service),
+                 PairingWindow::kFirstServicePauseMs);
+        f.advance(PairingWindow::kFirstRetryMs - 1);
+        QVERIFY(f.window->currentCode().isEmpty());
+        f.advance(1);
+        QVERIFY(!f.window->currentCode().isEmpty());
+        // The first rung is not a no-op: a code is shown and pairing through
+        // the service is still paused for the rest of the minute.
+        QVERIFY(f.window->isPaused(PairingWindow::Route::Service));
+        QCOMPARE(f.window->servicePauseRemainingMs(),
+                 PairingWindow::kFirstServicePauseMs - PairingWindow::kFirstRetryMs);
+        QCOMPARE(f.window->retryAfterMs(PairingWindow::Route::Service),
+                 PairingWindow::kFirstServicePauseMs - PairingWindow::kFirstRetryMs);
+        // The home network pairs with it at once.
+        QCOMPARE(f.window->retryAfterMs(PairingWindow::Route::Direct), qint64(0));
+        QVERIFY(!f.window->isPaused(PairingWindow::Route::Direct));
+        QVERIFY(f.window->takeCode(f.window->codeSerial()));
+        f.window->pairingSucceeded();
+        QVERIFY(!f.window->isPaused(PairingWindow::Route::Service));
+
+        // A later rung the same: 2 minutes paused, the next code after 5 s.
+        Fixture g;
+        g.pauseTheService();
+        g.advance(PairingWindow::kFirstServicePauseMs);
+        g.pauseTheService();
+        QCOMPARE(g.window->servicePauseRemainingMs(), 2 * PairingWindow::kFirstServicePauseMs);
+        QCOMPARE(g.window->retryAfterMs(PairingWindow::Route::Direct),
+                 PairingWindow::kFirstRetryMs);
     }
 
     // The pause lasts 1 minute, then twice as long each time it is hit

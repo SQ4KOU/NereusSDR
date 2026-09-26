@@ -45,7 +45,9 @@
 // burns nothing; pairing on a direct connection (the home network) stays
 // open throughout. A pairing, or reopening the window, ends the pause and
 // starts the ladder over. A burned code rotates either way, after the same
-// wait.
+// wait, except the burn that starts a pause: its next code follows after
+// the first wait (kFirstRetryMs), since only the home network can take it
+// (the follow-up to Task 27's re-review, new Minor 4).
 //
 // The state follows the device store: the first pairing claims the Core
 // and closes an unclaimed window; a Core reset to unclaimed from its
@@ -99,6 +101,10 @@
 //               through the service pause pairing through it (1 to 60
 //               minutes) instead of closing the window. J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: Task 27 follow-up (new Minor 4): the burn that starts a
+//               pause shows the next code after the first wait. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QObject>

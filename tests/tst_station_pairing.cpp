@@ -797,18 +797,15 @@ private slots:
         QVERIFY(core.window().isPaused(PairingWindow::Route::Service));
         QVERIFY(core.store().list().isEmpty());
 
-        // Wait for the next code: the pause (1 minute) is over by then, so
-        // pause it a second time (2 minutes) to try while it holds.
-        core.advance(core.window().retryAfterMs());
-        for (int i = 0; i < PairingWindow::kMaxConsecutiveFailures; ++i) {
-            if (core.window().currentCode().isEmpty()) {
-                core.advance(core.window().retryAfterMs());
-            }
-            core.pairByCodeThroughService(device, core.window().currentCode(), /*lie=*/true);
-        }
+        // The next code follows after the first wait (the follow-up to the
+        // Task 27 re-review, new Minor 4), inside the first pause (1
+        // minute): only the home network can take it.
+        QCOMPARE(core.window().retryAfterMs(), PairingWindow::kFirstRetryMs);
         core.advance(core.window().retryAfterMs());
         QVERIFY(!core.window().currentCode().isEmpty());
         QVERIFY(core.window().isPaused(PairingWindow::Route::Service));
+        QCOMPARE(core.window().servicePauseRemainingMs(),
+                 PairingWindow::kFirstServicePauseMs - PairingWindow::kFirstRetryMs);
         const QString code = core.window().currentCode();
         const quint64 serial = core.window().codeSerial();
         const qint64 remaining = core.window().servicePauseRemainingMs();

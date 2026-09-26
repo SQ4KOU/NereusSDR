@@ -23,6 +23,10 @@
 //               through the service pause pairing through it (1 to 60
 //               minutes) instead of closing the window. J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: Task 27 follow-up (new Minor 4): the burn that starts a
+//               pause shows the next code after the first wait. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/security/PairingWindow.h"
@@ -262,6 +266,7 @@ void PairingWindow::pairingFailed(Route route)
 {
     m_codeInUse = false;
     int streak = 0;
+    bool pauseStarted = false;
     if (route == Route::Service) {
         // Through the service (the ruling on Task 27 item I5): never toward
         // the ceiling. The fifth in a row pauses pairing through the service
@@ -274,6 +279,7 @@ void PairingWindow::pairingFailed(Route route)
             ++m_servicePauses;
             m_serviceFailures = 0;
             m_servicePausedUntil = now() + pause;
+            pauseStarted = true;
             qCInfo(lcPairing) << "Pairing from outside the Core's network paused for"
                               << pause / 1000 << "s after" << kMaxConsecutiveFailures
                               << "wrong pairing codes in a row";
@@ -288,10 +294,16 @@ void PairingWindow::pairingFailed(Route route)
             return;
         }
     }
-    // 5 s, 10 s, 20 s, 40 s (the ceiling closes the window before 80 s; a
-    // fifth burn through the service waits 80 s, and pauses the service).
+    // 5 s, 10 s, 20 s, 40 s (the ceiling closes the window before 80 s).
+    // The burn through the service that starts a pause waits only the first
+    // 5 s (the follow-up to the Task 27 re-review, new Minor 4): the service
+    // is paused, so only the home network can take the next code, which the
+    // pause never touches, and the first rung (1 minute) is not over before
+    // a code is shown.
     const int doublings = std::min(streak - 1, 16);
-    const qint64 wait = std::min<qint64>(kFirstRetryMs << doublings, kMaxRetryMs);
+    const qint64 wait = pauseStarted
+        ? kFirstRetryMs
+        : std::min<qint64>(kFirstRetryMs << doublings, kMaxRetryMs);
     m_nextCodeAt = now() + wait;
     qCInfo(lcPairing) << "Pairing failed; the next code follows in" << wait << "ms";
     commit(m_state, codeFor(m_state));
