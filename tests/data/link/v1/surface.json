@@ -264,6 +264,11 @@
             "kind": "i64",
             "name": "transmitSettingsVersion",
             "value": 6
+        },
+        {
+            "kind": "i64",
+            "name": "sessionHolderVersion",
+            "value": 1
         }
     ],
     "commands": [
@@ -1289,6 +1294,58 @@
             "capabilityVersion": 1,
             "minMinor": 11,
             "verb": "pairing.close"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "sessionHolderVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "session.leave"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "id",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "choice",
+                    "optional": false
+                }
+            ],
+            "capability": "sessionHolderVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "confirm.proceed"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "id",
+                    "optional": false
+                }
+            ],
+            "capability": "sessionHolderVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "confirm.cancel"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "id",
+                    "optional": false
+                }
+            ],
+            "capability": "sessionHolderVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "notice.takeBack"
         }
     ],
     "limits": {
@@ -1308,6 +1365,11 @@
                 30000,
                 60000
             ]
+        },
+        "confirmExpiryMs": {
+            "source": "ConfirmStep::kExpiryMs",
+            "unit": "ms",
+            "value": 60000
         },
         "connectDeadlineMs": {
             "source": "kStationHandshakeDeadlineMs",
@@ -1335,10 +1397,25 @@
                 "min": 1
             }
         },
+        "graceMs": {
+            "source": "DeviceSessionRegistry::kGraceMs",
+            "unit": "ms",
+            "value": 180000
+        },
         "heartbeatIntervalMs": {
             "source": "StationServer::kDefaultHeartbeatIntervalMs",
             "unit": "ms",
             "value": 20000
+        },
+        "lanAnnouncementMaxBytes": {
+            "source": "kStationLanMaxSchema2DatagramBytes",
+            "unit": "bytes",
+            "value": 480
+        },
+        "maxDeviceSessions": {
+            "source": "StationServer::kMaxDeviceSessions",
+            "unit": "count",
+            "value": 4
         },
         "maxDisplayEndpoints": {
             "source": "DaemonMediaController.cpp kMaxEndpoints",
@@ -1353,7 +1430,7 @@
         "maxPeers": {
             "source": "StationServer::kMaxConcurrentPeers",
             "unit": "count",
-            "value": 8
+            "value": 24
         },
         "mediaControlBytes": {
             "source": "kMaxMediaControlBytes",
@@ -1952,6 +2029,36 @@
                 "verb": "string"
             }
         },
+        "confirm.request": {
+            "optional": [
+                "change",
+                "choices",
+                "forCommandId",
+                "forSettingsKey",
+                "forWriteId"
+            ],
+            "required": [
+                "affected",
+                "expiresInMs",
+                "id",
+                "kind",
+                "reason",
+                "type"
+            ],
+            "types": {
+                "affected": "array",
+                "change": "object",
+                "choices": "array",
+                "expiresInMs": "number",
+                "forCommandId": "number",
+                "forSettingsKey": "string",
+                "forWriteId": "number",
+                "id": "number",
+                "kind": "string",
+                "reason": "string",
+                "type": "string"
+            }
+        },
         "delta": {
             "optional": [
             ],
@@ -2001,6 +2108,40 @@
             ],
             "types": {
                 "payload": "object",
+                "type": "string"
+            }
+        },
+        "notice": {
+            "optional": [
+                "byDeviceId",
+                "byKind",
+                "byName",
+                "byShortName",
+                "bySource",
+                "change",
+                "slices"
+            ],
+            "required": [
+                "id",
+                "kind",
+                "reason",
+                "secondsAgo",
+                "takeBack",
+                "type"
+            ],
+            "types": {
+                "byDeviceId": "string",
+                "byKind": "string",
+                "byName": "string",
+                "byShortName": "string",
+                "bySource": "string",
+                "change": "object",
+                "id": "number",
+                "kind": "string",
+                "reason": "string",
+                "secondsAgo": "number",
+                "slices": "array",
+                "takeBack": "boolean",
                 "type": "string"
             }
         },
@@ -2867,6 +3008,28 @@
                 }
             ]
         },
+        "ConnectedDevicesFacade": {
+            "properties": [
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "listJson",
+                    "ordinal": 0
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "revision",
+                    "ordinal": 1
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "deviceLimit",
+                    "ordinal": 2
+                }
+            ]
+        },
         "DspAssetService": {
             "properties": [
                 {
@@ -3453,6 +3616,139 @@
                     "kind": "i64",
                     "name": "bandFollowPort",
                     "ordinal": 29
+                }
+            ]
+        },
+        "SliceMarker": {
+            "properties": [
+                {
+                    "direction": "constantSnapshot",
+                    "kind": "i64",
+                    "name": "sliceId",
+                    "ordinal": 0
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "ownerDeviceId",
+                    "ordinal": 1
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "ownerName",
+                    "ordinal": 2
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "ownerShortName",
+                    "ordinal": 3
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "ownerKind",
+                    "ordinal": 4
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "ownerAway",
+                    "ordinal": 5
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "frequency",
+                    "ordinal": 6
+                },
+                {
+                    "direction": "outbound",
+                    "enumValues": [
+                        0,
+                        1,
+                        2,
+                        3,
+                        4,
+                        5,
+                        6,
+                        7,
+                        8,
+                        9,
+                        10,
+                        11,
+                        12,
+                        13
+                    ],
+                    "kind": "enum",
+                    "name": "dspMode",
+                    "ordinal": 7
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "filterLow",
+                    "ordinal": 8
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "filterHigh",
+                    "ordinal": 9
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "txSlice",
+                    "ordinal": 10
+                },
+                {
+                    "direction": "outbound",
+                    "enumValues": [
+                        0,
+                        1,
+                        2,
+                        3,
+                        4,
+                        5,
+                        6,
+                        7,
+                        8,
+                        9,
+                        10,
+                        11,
+                        12,
+                        13,
+                        14,
+                        15,
+                        16,
+                        17,
+                        18,
+                        19,
+                        20,
+                        21,
+                        22,
+                        23,
+                        24,
+                        25,
+                        26
+                    ],
+                    "kind": "enum",
+                    "name": "band",
+                    "ordinal": 11
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "streamIndex",
+                    "ordinal": 12
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "psPaused",
+                    "ordinal": 13
                 }
             ]
         },
@@ -5385,6 +5681,10 @@
             "key": "devices"
         },
         {
+            "class": "ConnectedDevicesFacade",
+            "key": "connectedDevices"
+        },
+        {
             "class": "StationCatalog",
             "key": "catalog"
         },
@@ -5395,6 +5695,10 @@
         {
             "class": "SliceModel",
             "key": "slice:<id>"
+        },
+        {
+            "class": "SliceMarker",
+            "key": "marker:<id>"
         }
     ],
     "settingsScope": {

@@ -34,6 +34,11 @@
 //                init burst and the live path, and each drained line
 //                carries the update gate of the event that queued it.
 //                AI-assisted transformation via Anthropic Claude Code.
+//   2026-09-25 - iPhone app Task 73 (R-IOS-02, ruling 5.13): a slice write
+//                gate; a per-receiver set command naming a slice the gate
+//                refuses changes nothing and is answered as its query.
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 
 #pragma once
 
@@ -42,6 +47,8 @@
 #include <QStringList>
 
 #include "TciUpdateGap.h"
+#include <functional>
+
 #include "TciVfoCoalescer.h"
 
 #include <QHash>
@@ -238,6 +245,16 @@ public:
     bool stationReceiveOnly() const { return m_stationReceiveOnly; }
     // Transmit is refused (a remote window or the station server).
     bool transmitRefused() const { return m_remoteWindow || m_stationReceiveOnly; }
+
+    // iPhone app Task 73 (the several-devices design, ruling 5.13): the
+    // Core's own server reads every slice (trx:N is slice N) and changes
+    // only the station device's own. With a gate set, a per-receiver set
+    // command (vfo, modulation, rx_filter_band, the DSP switches, ...)
+    // naming a slice the gate refuses changes nothing and is answered with
+    // the value the slice holds, as its query would be. No gate (a desktop
+    // on its own): every slice, as before.
+    using SliceWriteGate = std::function<bool(int sliceId)>;
+    void setSliceWriteGate(SliceWriteGate gate) { m_sliceWriteGate = std::move(gate); }
     // M1 (R-R3-48 / R-R3-25): `command` (one TCI command, with or without
     // its ';') changes transmit configuration an app may not change on the
     // receive-only station server: tx_profile_ex, xit_enable and xit_offset
@@ -812,6 +829,7 @@ private:
     int m_queryDispatchCount{0};
     bool m_remoteWindow{false};
     bool m_stationReceiveOnly{false};
+    SliceWriteGate m_sliceWriteGate;
 };
 
 } // namespace NereusSDR

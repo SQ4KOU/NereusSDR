@@ -104,6 +104,18 @@
 //                                    profile commands' and the RADE vocoder
 //                                    reset's reasons.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app Task 71 (R-IOS-02): the
+//                                    several-devices sentences are plain.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app Task 73 (R-IOS-02): the
+//                                    refusal for another device's slice,
+//                                    and a saved slice that did not fit.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app Task 74 (R-IOS-30): the
+//                                    confirm step's reasons, notices,
+//                                    chooser `why` and change label, with a
+//                                    name embedded and set aside.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -117,6 +129,7 @@
 #include <QRegularExpression>
 #include <QSet>
 
+#include "core/security/DeviceStore.h"
 #include "OperatorWording.h"
 
 using namespace NereusSDR;
@@ -624,8 +637,10 @@ const QList<ReasonSource>& reasonSources()
           "Qt reports no working TLS backend", "No authentication token available",
           "NereusSDR station", "\\n  ====="},
          30,
-         // The other app's network address (WebSocketTransport::peerDescription).
-         {QStringLiteral("description")},
+         // The other app's network address (WebSocketTransport::peerDescription),
+         // and (iPhone app Task 73) the name of the device a slice belongs
+         // to, the operator's own word (ruling 4.3).
+         {QStringLiteral("description"), QStringLiteral("owner")},
          {// listen(): the Core's own setup error (m_lastError), for its
           // console and log; never sent to an app.
           QStringLiteral("CertificateStore::tlsBackendDiagnostic()"),
@@ -633,6 +648,13 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("m_openingGate->errorString()"),
           // dropPeer's and sendRejected's parameter, from this file's calls.
           QStringLiteral("reason"),
+          // iPhone app Task 76: a display budget share's reason, a code
+          // (DisplayBudgetReason, the link's section 6.4), not words.
+          QStringLiteral("peer.budgetShareReason"), QStringLiteral("share.reason"),
+          QStringLiteral("DisplayBudgetReason::None"),
+          QStringLiteral("self->budgetShareReason"),
+          QStringLiteral("peerHoldsSessions(transport) ? reason "
+                         ": displayBudgetReasonForOlderDevice(reason)"),
           // SessionEndReasons' version and takeover reasons, scanned below.
           QStringLiteral("SessionEndReasons::versionRefused(m_supportedMajors, "
                          "message.supportedMajors)"),
@@ -651,6 +673,24 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("m_radioModel->alexAntennaFacade()->settleReason(update.name)"),
           // A constant of this file, its literal scanned here.
           QStringLiteral("QString::fromLatin1(kReceiveOnlyTransmitReason)"),
+          // iPhone app Task 71: constants of this file, their literals
+          // scanned here.
+          QStringLiteral("QString::fromLatin1(kCoreFullReason)"),
+          QStringLiteral("QString::fromLatin1(kOlderWindowCoreFullReason)"),
+          QStringLiteral("QString::fromLatin1(kSameDeviceReason)"),
+          QStringLiteral("QString::fromLatin1(kLeftReason)"),
+          // iPhone app Task 74: ruling 10.2's refusal at admission,
+          // StationReceivers.cpp's olderWindowWithoutSliceReason, scanned
+          // there.
+          QStringLiteral("noSlice"),
+          // iPhone app Task 73: functions of this file, their literals
+          // scanned here (the owner's name is the operator's own word,
+          // ruling 4.3).
+          QStringLiteral("sliceRefusal(requester, sliceId)"),
+          QStringLiteral("ownedElsewhereReason(sliceId)"),
+          // Fix wave I3: a slice's settings key; ownedElsewhereReason's
+          // words, scanned here.
+          QStringLiteral("sliceSettingsRefusal(transport, key)"),
           // StateMirror's and SettingsProxyServer's results, scanned below.
           QStringLiteral("result.reason"),
           QStringLiteral("m_settingsServer->otherRadioRefusal(key)"),
@@ -663,6 +703,78 @@ const QList<ReasonSource>& reasonSources()
           // R-R3-49 (parity Task 5): powerPageKeyValueRefusal's literals,
           // this file's own, scanned here.
           QStringLiteral("range")}},
+        // iPhone app Task 74 (R-IOS-30): the confirm step's answers and
+        // refusals, confirm.request and notice reasons, and the chooser's
+        // `why`. Device names inserted are the operator's own words (ruling
+        // 4.3); slice letters, counts and bands are plain.
+        {"src/core/session/StationReceivers.cpp", {}, {}, 12,
+         {QStringLiteral("anchorName"), QStringLiteral("names"), QStringLiteral("takerName"),
+          QStringLiteral("name, letterWords"), QStringLiteral("number"),
+          QStringLiteral("notRestored.size()"),
+          // Fix wave: a count of slices, and notRestoredSentence's own
+          // sentence, scanned here.
+          QStringLiteral("count"), QStringLiteral("notRestoredSentence(notRestored.size())")},
+         {// Constants of this file and its reason functions, their
+          // literals scanned here.
+          QStringLiteral("notRestoredSentence(notRestored.size())"),
+          QStringLiteral("QString::fromLatin1(kWaitingReason)"),
+          QStringLiteral("QString::fromLatin1(kNoQuestionReason)"),
+          QStringLiteral("QString::fromLatin1(kNoChoiceReason)"),
+          QStringLiteral("QString::fromLatin1(kChangedReason)"),
+          QStringLiteral("QString::fromLatin1(kNoTakeBackReason)"),
+          QStringLiteral("QString::fromLatin1(kCentreRefusedReason)"),
+          QStringLiteral("moved ? QString() : QString::fromLatin1(kCentreRefusedReason)"),
+          QStringLiteral("affected.isEmpty() ? QString::fromLatin1(kChangedReason) : QString()"),
+          QStringLiteral("pinReason(planDevice(anchor).name)"),
+          QStringLiteral("olderWindowAskReason(namesOf(check.named))"),
+          QStringLiteral("takenOverReason(planDevice(taker).name)"),
+          QStringLiteral("sliceMovedReason(planDevice(requester).name, letters)"),
+          QStringLiteral("sliceClosedReason(planDevice(requester).name, lettersOf(it.value()))"),
+          QStringLiteral("receiver ? receiverTakenReason(takerName, letters) : "
+                         "sliceTakenReason(takerName, letters)"),
+          // StationServer.cpp's slice refusal, scanned there.
+          QStringLiteral("sliceRefusal(requester, sliceId)"), QStringLiteral("refusal"),
+          // Today's refusals from the model, the allocator and the
+          // dispatcher (scanned where they are written), with the holders'
+          // names appended in this file's own sentence (holdersSentence).
+          QStringLiteral("withHolderNames(QString::fromLatin1(kPanNeedsReceiverReason), requester)"),
+          QStringLiteral("withHolderNames(result.reason, requester)"),
+          QStringLiteral("withHolderNames(r.reason, requester)"),
+          QStringLiteral("result.reason"), QStringLiteral("r.reason"), QStringLiteral("reason")}},
+        // iPhone app Task 75 (R-IOS-30): settings that affect every device:
+        // the refusals, the `change` words of confirm.request and notice,
+        // and the notice reasons. Device names inserted are the operator's
+        // own words (ruling 4.3); values, units, bands, antennas and slice
+        // letters are plain.
+        {"src/core/session/StationSharedSettings.cpp", {},
+         // The keys of `change` read back for the notice.
+         {QStringLiteral("label"), QStringLiteral("from"), QStringLiteral("to")}, 10,
+         {// The holder's and devices' names (the operator's own words); the
+          // change's own label, from and to (this file's words, a band, a
+          // value with its unit, or the operator's own setting); slice
+          // letters; an antenna's name; numbers.
+          QStringLiteral("holderShortName"), QStringLiteral("name, label, from, to"),
+          QStringLiteral("ReceiverPlanner::joinWords(letters)"),
+          QStringLiteral("antenna, names.first()"),
+          QStringLiteral("antenna, ReceiverPlanner::joinWords(names)"),
+          QStringLiteral("number"),
+          QStringLiteral("QString::number(centreHz / 1e6, 'f', 6), "
+                         "QString::number(std::lround(widthHz))"),
+          QStringLiteral("adc"), QStringLiteral("where"), QStringLiteral("what, group"),
+          QStringLiteral("hz / 1000"), QStringLiteral("receiverWords(reach.stream)"),
+          QStringLiteral("adcWords(chain)"),
+          QStringLiteral("QString::number(notch->centerHz / 1e6, 'f', 6)")},
+         {// This file's reason functions and StationReceivers.cpp's older
+          // window sentence, their literals scanned where written; the
+          // settings proxy's refusal (scanned there) and this file's.
+          QStringLiteral("onAirReason(planDevice(topology.transmit.holder).shortName)"),
+          QStringLiteral("olderWindowReason(ReceiverPlanner::joinWords(names))"),
+          QStringLiteral("QString::fromLatin1(kTargetChangedReason)"),
+          QStringLiteral("antennaKeptReason(antenna, names)"), QStringLiteral("reason"),
+          QStringLiteral("refusal"), QStringLiteral("applied ? QString() : refusal"),
+          // A deferred rate change's own result (the dispatcher's, scanned
+          // there).
+          QStringLiteral("result.reason")}},
         // command.result for every verb.
         // The device's name ("Power Genius", "Tuner Genius") and what the
         // request asked, both this file's own literals
@@ -681,6 +793,13 @@ const QList<ReasonSource>& reasonSources()
                          "alex->setRxAntForBand(Band(band), antenna)"),
           // A function of this file, its literal scanned here.
           QStringLiteral("notRepresentableReason()"),
+          // iPhone app Task 73: StationServer::sliceRefusal, scanned there.
+          QStringLiteral("m_sliceAccess(m_requester, sliceId)"),
+          // Fix wave 2: the same, re-run when a rate change is applied, and
+          // StationSharedSettings' kTargetChangedReason, handed over with
+          // the rate change's closes (scanned there).
+          QStringLiteral("access(requester, sliceId)"),
+          QStringLiteral("std::exchange(m_rateChangedReason, {})"),
           // AlexAntennaFacade's filter policy refusal, scanned below.
           QStringLiteral("alex->setBpfModeForChain(chain, mode)")}},
         // iPhone app Task 13 (R-IOS-08): the device administration verbs'
@@ -767,7 +886,7 @@ const QList<ReasonSource>& reasonSources()
         {"src/core/session/media/DaemonMediaController.cpp", {},
          {// statsSummary(): a log line's text.
           "largestKeyframe="},
-         18, {},
+         19, {},
          {// Parameters and fields that carry this file's own reasons.
           QStringLiteral("reason"), QStringLiteral("prior.reason"),
           QStringLiteral("admitted.refusal"), QStringLiteral("stream.profileRefusal"),
@@ -782,8 +901,13 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("RemoteAudioOffReason::EncoderUnavailable"),
           QStringLiteral("QString::fromLatin1(kRetireReasonSourceRetune)"),
           QStringLiteral("QString::fromLatin1(kRetireReasonStreamBindingChanged)"),
-          QStringLiteral("QString::fromLatin1(kRetireReasonSliceRemoved)")}},
+          QStringLiteral("QString::fromLatin1(kRetireReasonSliceRemoved)"),
+          // Fix wave 2: the budget refusal, shared with the client,
+          // DisplayBudget.h (scanned below).
+          QStringLiteral("QString::fromLatin1(kDisplayBudgetRefusalReason)")}},
         {"src/core/session/media/SpectrumEndpoint.h", {}, {}, 3},
+        // Fix wave 2: kDisplayBudgetRefusalReason.
+        {"src/core/session/media/DisplayBudget.h", {}, {}, 1},
         {"src/models/AccessoryDataModel.cpp", {QStringLiteral("readOnlyReason")}, {}, 1},
         {"src/models/AccessorySettingsModel.cpp", {QStringLiteral("readOnlyReason")}, {}, 1},
         // A Power Genius or Tuner Genius on another network: its
@@ -846,7 +970,10 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("nr3CannotRunReason"),
           // The slice cap reason, relayed by the addSlice and addSliceOnPan
           // verbs' results.
-          QStringLiteral("sliceCapReason")},
+          QStringLiteral("sliceCapReason"),
+          // iPhone app Task 73: why a device's saved slice did not fit (the
+          // Core's log today; Task 74's slicesNotRestored notice).
+          QStringLiteral("restoreSliceFor")},
          {// This app's own branch in a remote window (role Remote), shown
           // through OperatorReasonText; never sent by the Core.
           "There is no station session."},
@@ -1450,6 +1577,202 @@ private slots:
             QVERIFY2(wordingProblemIn(reason).isEmpty(), qPrintable(reason));
             QVERIFY2(reason.contains(QStringLiteral("Core")), qPrintable(reason));
         }
+    }
+
+    void severalDevicesSentencesArePlain()
+    {
+        // iPhone app Task 71 (R-IOS-02): the sentences the Core sends when
+        // several devices share it are plain and speak of the Core; names
+        // are the operator's own words and are validated as names, never
+        // held to the wording rules ("Grant's iPhone" is a name).
+        const QString code = codeOf(sourcePath(QStringLiteral("src/core/session/StationServer.cpp")));
+        QVERIFY(!code.isEmpty());
+        for (const QString& sentence :
+             {QStringLiteral("The Core already has four devices connected."),
+              QStringLiteral("The Core is full. Update NereusSDR to take a device's place, or try again later."),
+              QStringLiteral("This device connected again."),
+              QStringLiteral("This device left the Core.")}) {
+            QVERIFY2(code.contains(QLatin1Char('"') + sentence + QLatin1Char('"')),
+                     qPrintable(sentence));
+            QVERIFY2(wordingProblemIn(sentence).isEmpty(), qPrintable(sentence));
+            QVERIFY2(OperatorWording::coreCalledStationIn(sentence).isEmpty(),
+                     qPrintable(sentence));
+        }
+        const QString leave = QStringLiteral("The request to leave the Core was not understood.");
+        QVERIFY(codeOf(sourcePath(QStringLiteral("src/core/session/SessionCommandDispatcher.cpp")))
+                    .contains(QLatin1Char('"') + leave + QLatin1Char('"')));
+        QVERIFY2(wordingProblemIn(leave).isEmpty(), qPrintable(leave));
+        // A device's name is the operator's own words: the term list would
+        // refuse "Grant's iPhone", so a sentence that carries a name is
+        // checked with the name set aside, and the name as a name.
+        const QString name = QStringLiteral("Grant's iPhone");
+        QVERIFY(!OperatorWording::isPlain(name));
+        QVERIFY(DeviceStore::isValidName(name));
+        QString named = QStringLiteral("%1 connected to the Core.").arg(name);
+        named.remove(name);
+        QVERIFY2(wordingProblemIn(named).isEmpty(), qPrintable(named));
+    }
+
+    void receiverSentencesArePlain()
+    {
+        // iPhone app Task 74 (R-IOS-30; the several-devices design, section
+        // 17's list): the reason of confirm.request and notice, each
+        // chooser `why`, the three strings of `change`, and the refusals of
+        // the anchor, take and older-window rules. Names are the operator's
+        // own words and are set aside; "Grant's iPhone" is embedded to prove
+        // the sentence around it is what is checked.
+        const QString receivers =
+            codeOf(sourcePath(QStringLiteral("src/core/session/StationReceivers.cpp")));
+        const QString planner =
+            codeOf(sourcePath(QStringLiteral("src/core/session/ReceiverPlanner.cpp")));
+        QVERIFY(!receivers.isEmpty());
+        QVERIFY(!planner.isEmpty());
+        const QString name = QStringLiteral("Grant's iPhone");
+        const QStringList inReceivers{
+            QStringLiteral("Waiting for you to confirm."),
+            QStringLiteral("That question is no longer open. Make the change again."),
+            QStringLiteral("That choice is not in the list. Make the change again."),
+            QStringLiteral("What this change reaches has changed. Make the change again."),
+            QStringLiteral("That can no longer be taken back."),
+            QStringLiteral("All the radio's slices are in use. Try again when another device "
+                           "closes one."),
+            QStringLiteral("All the radio's receivers are in use. Try again when another device "
+                           "frees one."),
+            QStringLiteral("This panadapter shows %1's receiver. Its C-Tune setting is %1's."),
+            QStringLiteral("This change would affect %1. Update NereusSDR to confirm changes that "
+                           "affect other devices."),
+            QStringLiteral("%1 took the receiver this app was using. Update NereusSDR to share "
+                           "the Core."),
+            QStringLiteral("The radio's receivers are in use by %1."),
+            QStringLiteral("%1 moved their panadapter. Your slice %2 moved to another receiver."),
+            QStringLiteral("%1 moved their panadapter. Your slice %2 closed: no receiver was "
+                           "free."),
+            QStringLiteral("%1 took the receiver your slice %2 was on."),
+            QStringLiteral("%1 took your slice %2."),
+            QStringLiteral("You were away for more than 3 minutes. Your slices are back."),
+            QStringLiteral("%1 of your slices could not be restored: all the radio's receivers "
+                           "are in use."),
+            QStringLiteral("Receiver %1"),
+        };
+        const QStringList inPlanner{
+            QStringLiteral("Your slice %1 would close."),
+            QStringLiteral("Your slices %1 would close."),
+            QStringLiteral("Your panadapter already uses this receiver."),
+        };
+        const auto check = [&name](const QString& sentence) {
+            QString filled = sentence;
+            filled.replace(QStringLiteral("%1"), name).replace(QStringLiteral("%2"),
+                                                               QStringLiteral("B and C"));
+            // The name set aside, the sentence is held to the rule.
+            filled.remove(name);
+            return wordingProblemIn(filled);
+        };
+        const auto flat = [](const QString& code) {
+            // Adjacent literals split over lines, joined.
+            QString joined = code;
+            joined.replace(QRegularExpression(QStringLiteral("\"\\s*\n\\s*\"")), QString());
+            return joined;
+        };
+        const QString receiverCode = flat(receivers);
+        const QString plannerCode = flat(planner);
+        for (const QString& sentence : inReceivers) {
+            QVERIFY2(receiverCode.contains(QLatin1Char('"') + sentence + QLatin1Char('"')),
+                     qPrintable(sentence));
+            QVERIFY2(check(sentence).isEmpty(), qPrintable(sentence + QStringLiteral(" [")
+                                                           + check(sentence) + QLatin1Char(']')));
+            QVERIFY2(OperatorWording::coreCalledStationIn(sentence).isEmpty(),
+                     qPrintable(sentence));
+        }
+        for (const QString& sentence : inPlanner) {
+            QVERIFY2(plannerCode.contains(QLatin1Char('"') + sentence + QLatin1Char('"')),
+                     qPrintable(sentence));
+            QVERIFY2(check(sentence).isEmpty(), qPrintable(sentence));
+        }
+        // The bands of `change` ("40 m", "20 m") are the band's own label.
+        QVERIFY2(wordingProblemIn(QStringLiteral("Go to 20 m")).isEmpty(),
+                 qPrintable(wordingProblemIn(QStringLiteral("Go to 20 m"))));
+    }
+
+    void sharedSettingSentencesArePlain()
+    {
+        // iPhone app Task 75 (R-IOS-30; the several-devices design,
+        // sections 7.3 and 7.4, rulings 5.11a, 7.4 to 7.6): the refusals
+        // of the confirm step's target rules, the on-air refusal, the
+        // notices settingChanged and antennaKept, and the words of
+        // `change`. Names are the operator's own words and are set aside;
+        // "Grant's iPhone" is embedded to prove the sentence around it is
+        // what is checked.
+        const auto flat = [](const QString& code) {
+            QString joined = code;
+            joined.replace(QRegularExpression(QStringLiteral("\"\\s*\n\\s*\"")), QString());
+            return joined;
+        };
+        const QString shared =
+            flat(codeOf(sourcePath(QStringLiteral("src/core/session/StationSharedSettings.cpp"))));
+        const QString receivers =
+            flat(codeOf(sourcePath(QStringLiteral("src/core/session/StationReceivers.cpp"))));
+        QVERIFY(!shared.isEmpty());
+        const QString name = QStringLiteral("Grant's iPhone");
+        const QStringList inShared{
+            QStringLiteral("That setting changed since you asked. Make the change again."),
+            QStringLiteral("%1 is on the air. Try again when they stop."),
+            QStringLiteral("%1 changed %2 from %3 to %4."),
+            QStringLiteral("Your slice %1 moved to another receiver."),
+            QStringLiteral("Your slices %1 moved to another receiver."),
+            QStringLiteral("Your slice %1 closed: no receiver was free."),
+            QStringLiteral("Your slices %1 closed: no receiver was free."),
+            QStringLiteral("Your slice %1 pauses while the radio transmits."),
+            QStringLiteral("Your slices %1 pause while the radio transmits."),
+            QStringLiteral("The antenna stays on %1 while %2 listens on it."),
+            QStringLiteral("The antenna stays on %1 while %2 listen on it."),
+            QStringLiteral("Attenuator, %1"),
+            QStringLiteral("Preamp, %1"),
+            QStringLiteral("Automatic attenuator, %1"),
+            QStringLiteral("Receive antenna"),
+            QStringLiteral("Receive-only antenna"),
+            QStringLiteral("Receive on the transmit antenna"),
+            QStringLiteral("Transmit antenna"),
+            QStringLiteral("Diversity"),
+            QStringLiteral("Noise blanker, %1"),
+            QStringLiteral("Noise blanker settings, %1"),
+            QStringLiteral("PureSignal"),
+            QStringLiteral("Notch auto-widening"),
+            QStringLiteral("Amplifier"),
+            QStringLiteral("Sample rate, %1"),
+            QStringLiteral("Band filters, %1"),
+            QStringLiteral("%1, %2 modes"),
+            QStringLiteral("Tuner antenna"),
+            QStringLiteral("Tuner bypass"),
+            QStringLiteral("Transmit interlock"),
+            QStringLiteral("Amplifier power limit"),
+        };
+        const auto check = [&name](const QString& sentence) {
+            QString filled = sentence;
+            filled.replace(QStringLiteral("%1"), name)
+                .replace(QStringLiteral("%2"), QStringLiteral("Attenuator, ADC 1"))
+                .replace(QStringLiteral("%3"), QStringLiteral("0 dB"))
+                .replace(QStringLiteral("%4"), QStringLiteral("20 dB"));
+            filled.remove(name);
+            return wordingProblemIn(filled);
+        };
+        for (const QString& sentence : inShared) {
+            QVERIFY2(shared.contains(QLatin1Char('"') + sentence + QLatin1Char('"')),
+                     qPrintable(sentence));
+            QVERIFY2(check(sentence).isEmpty(), qPrintable(sentence + QStringLiteral(" [")
+                                                           + check(sentence) + QLatin1Char(']')));
+            QVERIFY2(OperatorWording::coreCalledStationIn(sentence).isEmpty(),
+                     qPrintable(sentence));
+        }
+        // Ruling 7.5, written with the confirm step's other answers.
+        const QString expired = QStringLiteral("That question has expired. Make the change again.");
+        QVERIFY(receivers.contains(QLatin1Char('"') + expired + QLatin1Char('"')));
+        QVERIFY2(wordingProblemIn(expired).isEmpty(), qPrintable(expired));
+        // A whole notice as sent, a name in it.
+        QString told = QStringLiteral("%1 changed Sample rate, Receiver 1 from 192 kHz to 96 kHz. "
+                                      "Your slice B moved to another receiver.")
+                           .arg(name);
+        told.remove(name);
+        QVERIFY2(wordingProblemIn(told).isEmpty(), qPrintable(told));
     }
 
     void everyReasonTheFixturesRecordIsPlain()

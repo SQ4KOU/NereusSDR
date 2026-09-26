@@ -98,6 +98,10 @@
 //   2026-09-24 - R-R3-49 (parity Task 1): transmitSettingsVersion, last
 //                in the minor-11 block. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-25: iPhone app Task 71 (R-IOS-02): sessionHolderVersion,
+//               sent only to a peer that declared sessionHolder. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include <QByteArray>
@@ -219,10 +223,19 @@ struct StationCapabilities {
     /// `transmit` write of any property but the keying set (mox, tune,
     /// voxEnabled, twoToneActive) and a DspOptions<Setting><Mode>Tx settings
     /// write or remove while its radio is off the air, and applies it at
-    /// once; each is refused while the radio is on the air. Sent last in
-    /// the same minor-11 block. 0: a window's transmit settings stay greyed
-    /// and say the Core cannot take them.
+    /// once; each is refused while the radio is on the air. Sent in the
+    /// same minor-11 block, after displayExtrasVersion. 0: a window's
+    /// transmit settings stay greyed and say the Core cannot take them.
     int transmitSettingsVersion = 0;
+    /// iPhone app Task 71 (R-IOS-02; the several-devices design, ruling
+    /// 10.1): 1 means the Core admits up to four devices at once, sends the
+    /// `connectedDevices` object and takes session.leave. Sent last in the
+    /// same minor-11 block, and only to a peer whose hello declared the
+    /// feature `sessionHolder` 1 with `deviceAuth` 1 (sessionHolderEntry);
+    /// any other peer is sent no entry and reads 0, so its capabilities
+    /// are exactly today's.
+    bool sessionHolderEntry = false;
+    int sessionHolderVersion = 0;
 
     /// Whether the DAEMON currently holds a live radio connection. A
     /// client that authenticated against a daemon whose radio is powered

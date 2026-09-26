@@ -48,6 +48,9 @@
 //   2026-09-24 - iPhone app Task 14 (R-IOS-08): StationDevicesFacade's
 //                 pairingWindowOpen and pairingCode, Outbound. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app Task 71 (R-IOS-02): ConnectedDevicesFacade,
+//                 all Outbound. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 //   2026-09-24 - iPhone app Task 19 (R-IOS-06): StationCatalog, all
 //   2026-09-24 - R-R3-49 (parity Task 2): the TX and Phone/CW applets'
 //                 thirteen TransmitModel settings Bidirectional;
@@ -68,6 +71,8 @@
 //   2026-09-25 - R-R3-49 (parity Task 6): RadioModel txInhibited
 //                 Outbound. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-25 - iPhone app Task 73 (R-IOS-02): SliceMarker, all Outbound.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -683,6 +688,30 @@ const MirrorPolicy::Entry kEntries[] = {
     // only with the Core's presets, band plans and radio.
     { "StationCatalog", "json", MirrorDirection::Outbound },
     { "StationCatalog", "revision", MirrorDirection::Outbound },
+
+    // iPhone app Task 71 (R-IOS-02, sessionHolderVersion 1): who is on the
+    // Core, read-only. It changes only as devices come, go, go away and act.
+    { "ConnectedDevicesFacade", "listJson", MirrorDirection::Outbound },
+    { "ConnectedDevicesFacade", "revision", MirrorDirection::Outbound },
+    { "ConnectedDevicesFacade", "deviceLimit", MirrorDirection::Outbound },
+
+    // iPhone app Task 73 (R-IOS-02, sessionHolderVersion 1): another device's
+    // slice, read-only (ruling 5.4). Only its owner changes the slice; a
+    // write to a marker is refused with the owner named (ruling 5.9).
+    { "SliceMarker", "sliceId", MirrorDirection::ConstantSnapshot },
+    { "SliceMarker", "ownerDeviceId", MirrorDirection::Outbound },
+    { "SliceMarker", "ownerName", MirrorDirection::Outbound },
+    { "SliceMarker", "ownerShortName", MirrorDirection::Outbound },
+    { "SliceMarker", "ownerKind", MirrorDirection::Outbound },
+    { "SliceMarker", "ownerAway", MirrorDirection::Outbound },
+    { "SliceMarker", "frequency", MirrorDirection::Outbound },
+    { "SliceMarker", "dspMode", MirrorDirection::Outbound },
+    { "SliceMarker", "filterLow", MirrorDirection::Outbound },
+    { "SliceMarker", "filterHigh", MirrorDirection::Outbound },
+    { "SliceMarker", "txSlice", MirrorDirection::Outbound },
+    { "SliceMarker", "band", MirrorDirection::Outbound },
+    { "SliceMarker", "streamIndex", MirrorDirection::Outbound },
+    { "SliceMarker", "psPaused", MirrorDirection::Outbound },
 
     // Normal PS3 configuration is distinct from operational arming/actions.
     { "PureSignalSettings", "autoCalEnabled", MirrorDirection::Bidirectional },

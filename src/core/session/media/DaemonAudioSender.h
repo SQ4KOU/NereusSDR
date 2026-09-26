@@ -112,6 +112,9 @@ public:
     /// Refused while running. Blocks, packets and pacing are the same.
     bool setSliceSource(int sliceId);
     int sliceSource() const noexcept;
+    /// iPhone app Task 76: the mixes from one owner mix of AudioEngine
+    /// (DaemonAudioSource::setOwnerMix). Refused while running.
+    bool setOwnerMix(int slot);
     void stop();
     bool isRunning() const noexcept;
 

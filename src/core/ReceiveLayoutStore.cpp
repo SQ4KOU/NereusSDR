@@ -11,11 +11,15 @@
 // Modification history (NereusSDR):
 //   2026-09-22: Original implementation for R-R3-34 by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Codex.
+//   2026-09-25: iPhone app plan Task 73 (R-IOS-02, ruling 5.3): owners and
+//               held-for marks. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/ReceiveLayoutStore.h"
 
 #include "core/AppSettings.h"
+#include "core/SliceOwnership.h"
 #include "core/WdspEngine.h"
 #include "core/session/MirrorEnumDomain.h"
 #include "models/SliceModel.h"
@@ -82,6 +86,41 @@ bool exactKeys(const QJsonObject& object, std::initializer_list<const char*> key
             return false;
         }
     }
+    return true;
+}
+
+// Task 73: an owner id as stored, and back. The station device is written
+// by name; any other id as base64url. A token window's id is not stored.
+bool storableOwner(const QByteArray& id)
+{
+    return !id.isEmpty() && !id.startsWith("token:");
+}
+
+QString storedOwner(const QByteArray& id)
+{
+    if (id == SliceOwnership::stationDevice()) {
+        return QString::fromLatin1(id);
+    }
+    return QString::fromLatin1(
+        id.toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals));
+}
+
+bool ownerFromStored(const QJsonValue& value, QByteArray* id)
+{
+    if (!value.isString() || value.toString().isEmpty()) {
+        return false;
+    }
+    const QByteArray text = value.toString().toLatin1();
+    if (text == SliceOwnership::stationDevice()) {
+        *id = text;
+        return true;
+    }
+    const auto decoded = QByteArray::fromBase64Encoding(
+        text, QByteArray::Base64UrlEncoding | QByteArray::AbortOnBase64DecodingErrors);
+    if (!decoded || decoded.decoded.isEmpty()) {
+        return false;
+    }
+    *id = decoded.decoded;
     return true;
 }
 
@@ -214,6 +253,16 @@ bool ReceiveLayoutStore::stage(AppSettings& settings, const QString& mac,
         object.insert(QStringLiteral("panKey"), slice.panKey);
         object.insert(QStringLiteral("frequencyHz"), slice.frequencyHz);
         object.insert(QStringLiteral("dspMode"), static_cast<int>(slice.dspMode));
+        // Task 73: written only when set, so a layout nobody owns is
+        // written exactly as before owners existed.
+        const bool held = storableOwner(slice.heldFor)
+            && slice.owner == SliceOwnership::stationDevice();
+        if (held) {
+            object.insert(QStringLiteral("owner"), storedOwner(slice.owner));
+            object.insert(QStringLiteral("heldFor"), storedOwner(slice.heldFor));
+        } else if (storableOwner(slice.owner)) {
+            object.insert(QStringLiteral("owner"), storedOwner(slice.owner));
+        }
         jsonSlices.append(object);
     }
     QJsonObject root;
@@ -300,7 +349,9 @@ ReceiveLayoutStore::LoadResult ReceiveLayoutStore::load(const AppSettings& setti
             return invalidData(QStringLiteral("Stored receive layout has an invalid slice."));
         }
         const QJsonObject object = value.toObject();
-        if (!exactKeys(object, {"id", "panKey", "frequencyHz", "dspMode"})) {
+        if (!exactKeys(object, {"id", "panKey", "frequencyHz", "dspMode"})
+            && !exactKeys(object, {"id", "panKey", "frequencyHz", "dspMode", "owner"})
+            && !exactKeys(object, {"id", "panKey", "frequencyHz", "dspMode", "owner", "heldFor"})) {
             return invalidData(QStringLiteral("Stored receive layout has an invalid slice schema."));
         }
 
@@ -322,6 +373,18 @@ ReceiveLayoutStore::LoadResult ReceiveLayoutStore::load(const AppSettings& setti
             return invalidData(QStringLiteral("Stored receive layout has invalid slice values."));
         }
         slice.dspMode = static_cast<DSPMode>(mode);
+        // Task 73: the owner, and the device a held slice is held for, which
+        // only the station device can hold a slice for.
+        if (object.contains(QStringLiteral("owner"))
+            && !ownerFromStored(object.value(QStringLiteral("owner")), &slice.owner)) {
+            return invalidData(QStringLiteral("Stored receive layout has an invalid slice owner."));
+        }
+        if (object.contains(QStringLiteral("heldFor"))
+            && (!ownerFromStored(object.value(QStringLiteral("heldFor")), &slice.heldFor)
+                || slice.owner != SliceOwnership::stationDevice()
+                || slice.heldFor == SliceOwnership::stationDevice())) {
+            return invalidData(QStringLiteral("Stored receive layout has an invalid slice owner."));
+        }
         slices.append(slice);
     }
 

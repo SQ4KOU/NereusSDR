@@ -47,6 +47,10 @@
 //                updates pass through its own update gap (Thetis
 //                udTCIRateLimit, TciUpdateGap). AI-assisted transformation
 //                via Anthropic Claude Code.
+//   2026-09-25 - iPhone app Task 73 (R-IOS-02, ruling 5.13): the slice write
+//                gate, handed to the protocol (setSliceWriteGate).
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 
 #pragma once
 #ifdef HAVE_WEBSOCKETS
@@ -140,6 +144,10 @@ public:
     // audio, I/Q, sensors) is unchanged. Off by default.
     void setStationReceiveOnly(bool receiveOnly);
     bool stationReceiveOnly() const { return m_stationReceiveOnly; }
+    // iPhone app Task 73 (ruling 5.13): the slices this server's apps may
+    // change (TciProtocol::setSliceWriteGate). The Core's own server passes
+    // the station device's; a server without one changes every slice.
+    void setSliceWriteGate(std::function<bool(int sliceId)> gate);
     // Follow-up 1b (R-R3-48): while its owner retries a listener that could
     // not start, the per-try listen, start and stop lines go to debug; the
     // owner logs once per state change instead.

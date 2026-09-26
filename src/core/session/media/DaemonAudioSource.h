@@ -101,6 +101,13 @@ public:
     static constexpr int kHeadphonesMix = -3;
     bool setSliceSource(int sliceId);
     int sliceSource() const noexcept { return m_sliceId; }
+    /// iPhone app Task 76 (ruling 9.2): with a slot >= 0 the mixes
+    /// (kMasterMix, kSpeakersMix, kHeadphonesMix) come from that owner mix
+    /// of AudioEngine (AudioEngine::acquireOwnerMix) instead of the master
+    /// and headphones taps: one device's own slices. -1 (the default) keeps
+    /// the master taps. A slice source is unaffected. Refused while running.
+    bool setOwnerMix(int slot);
+    int ownerMix() const noexcept { return m_ownerMix; }
 
     // The AudioEngine is non-owning. Changing engines stops capture first,
     // preventing a completed block from a previous station from surviving a
@@ -151,6 +158,7 @@ private:
     QPointer<AudioEngine> m_audioEngine;
     std::unique_ptr<Bridge> m_bridge;
     int m_sliceId{kMasterMix};
+    int m_ownerMix{-1};
 };
 
 } // namespace NereusSDR

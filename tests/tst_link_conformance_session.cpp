@@ -33,13 +33,24 @@
 //                    one connects (0); the lockout is the station's, not a
 //                    peer's
 //   otherConnections other clients connected and still connecting, which
-//                    send nothing (0); with 8 the station is at its limit
+//                    send nothing (0); with 24 the station is at its limit
 //   token            "active": a Core upgraded from before paired devices,
 //                    with its pairing token; "none": a new Core, without one
 //                    ("active")
-//   clientAnswersPings, preemptingClient, pairedDevice   read by the
-//                    player itself (pairedDevice: the runner's own device,
-//                    made at run time, is paired before the client connects)
+//   clientAnswersPings, pairedDevice, otherClients   read by the player
+//                    itself (pairedDevice: the runner's own device, made at
+//                    run time, is paired before the client connects;
+//                    otherClients: iPhone app Task 71, other clients the
+//                    player signs in as paired devices, LinkFixtures.h)
+//   receivers        iPhone app Task 74: the static radio's receivers,
+//                    192 kHz each, sized before its slices are made, so
+//                    slices bind to them (absent: none, as before)
+//   maxSlices        with receivers, the slice cap (5)
+//   alexRxAntennas   iPhone app Task 75: the static radio's receive antenna
+//                    per band, 14 numbers 1 to 3 in Band order (160 m ..
+//                    XVTR), and band tracking on (the per-band antenna
+//                    switch, ruling 5.11a) as though a radio were connected
+//                    (absent: no band tracking, as before)
 //   otherPairedDevices
 //                    devices besides the runner's own paired before the
 //                    client connects (0); their keys are made at run time
@@ -109,6 +120,25 @@
 //                                    station's TX profile bank is its
 //                                    radio's, as a connect makes it.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app Task 71 (R-IOS-02):
+//                                    stationSetup "otherClients" in place
+//                                    of "preemptingClient"; an app's
+//                                    fixture check skips other clients'
+//                                    steps. AI-assisted via Anthropic
+//                                    Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app Task 74 (R-IOS-30):
+//                                    stationSetup "receivers" and
+//                                    "maxSlices". AI-assisted via
+//                                    Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app Task 75 (R-IOS-30):
+//                                    stationSetup "alexRxAntennas".
+//                                    AI-assisted via Anthropic Claude
+//                                    Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app (R-IOS-01, R-IOS-02): the
+//                                    {"$json": ...} cases; a failure
+//                                    names its fixture first.
+//                                    AI-assisted via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -129,6 +159,7 @@
 #include "core/AppSettings.h"
 #include "core/ConnectionState.h"
 #include "core/StepAttenuatorController.h"
+#include "core/accessories/AlexController.h"
 #include "core/dsp/DspAssetService.h"
 #include "core/meters/SliceMeterPump.h"
 #include "core/session/LinkVersion.h"
@@ -137,6 +168,7 @@
 #include "core/session/SessionMessages.h"
 #include "core/session/StationServer.h"
 #include "core/settings/SettingsScope.h"
+#include "models/Band.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -158,10 +190,11 @@ const QStringList kSetupKeys{
     QStringLiteral("panadapters"),     QStringLiteral("coreAccessories"),
     QStringLiteral("stationTci"),      QStringLiteral("stepAttenuator"),
     QStringLiteral("media"),           QStringLiteral("priorFailedAuthentications"),
-    QStringLiteral("clientAnswersPings"), QStringLiteral("preemptingClient"),
+    QStringLiteral("clientAnswersPings"), QStringLiteral("otherClients"),
     QStringLiteral("otherConnections"), QStringLiteral("token"),
     QStringLiteral("pairedDevice"),    QStringLiteral("otherPairedDevices"),
-    QStringLiteral("board"),
+    QStringLiteral("board"),           QStringLiteral("receivers"),
+    QStringLiteral("maxSlices"),       QStringLiteral("alexRxAntennas"),
 };
 
 // The station a fixture's stationSetup describes. Members are declared in
@@ -262,6 +295,41 @@ QString buildStation(const QJsonObject& setup, Station* station, quint16 major)
         station->stepAtt = std::make_unique<StepAttenuatorController>();
         station->stepAtt->setTickTimerEnabled(false);
         model.setStepAttController(station->stepAtt.get());
+    }
+    // iPhone app Task 74: "receivers" sizes the static radio's receiver
+    // pool (192 kHz each), so slices bind to receivers and the anchor, pan
+    // move and take rules apply; "maxSlices" is its slice cap (5).
+    if (setup.contains(QStringLiteral("receivers"))) {
+        if (radio != QStringLiteral("static")) {
+            return QStringLiteral("stationSetup.receivers applies only to the static radio");
+        }
+        const int receivers = setup.value(QStringLiteral("receivers")).toInt(0);
+        const int maxSlices = setup.value(QStringLiteral("maxSlices")).toInt(5);
+        if (receivers < 1 || receivers > 5 || maxSlices < 1 || maxSlices > 5) {
+            return QStringLiteral("stationSetup.receivers and maxSlices must be 1 to 5");
+        }
+        model.configureStreamPool(receivers, maxSlices, 192000);
+    } else if (setup.contains(QStringLiteral("maxSlices"))) {
+        return QStringLiteral("stationSetup.maxSlices needs receivers");
+    }
+    // iPhone app Task 75: the receive antennas per band, and band tracking.
+    if (setup.contains(QStringLiteral("alexRxAntennas"))) {
+        if (radio != QStringLiteral("static")) {
+            return QStringLiteral("stationSetup.alexRxAntennas applies only to the static radio");
+        }
+        const QStringList antennas =
+            setup.value(QStringLiteral("alexRxAntennas")).toString().split(QLatin1Char(','));
+        if (antennas.size() != 14) {
+            return QStringLiteral("stationSetup.alexRxAntennas must list 14 antennas");
+        }
+        for (int band = 0; band < antennas.size(); ++band) {
+            const int antenna = antennas.at(band).trimmed().toInt();
+            if (antenna < 1 || antenna > 3) {
+                return QStringLiteral("stationSetup.alexRxAntennas: each antenna is 1 to 3");
+            }
+            model.alexControllerMutable().setRxAnt(static_cast<Band>(band), antenna);
+        }
+        model.enableBandTrackingForTest();
     }
     const int slices = setup.value(QStringLiteral("slices")).toInt(1);
     while (model.slices().size() < slices) {
@@ -414,6 +482,11 @@ QStringList appConformanceProblems(const QString& id, const QJsonObject& fixture
     const QJsonArray steps = fixture.value(QStringLiteral("steps")).toArray();
     for (int index = 0; index < steps.size(); ++index) {
         const QJsonObject step = steps.at(index).toObject();
+        // iPhone app Task 71: an app's runner plays only its own client and
+        // skips other clients' steps and the messages sent to them.
+        if (step.contains(QStringLiteral("client")) || step.contains(QStringLiteral("to"))) {
+            continue;
+        }
         const QJsonObject message = step.value(QStringLiteral("message")).toObject();
         const QString type = message.value(QStringLiteral("type")).toString();
         const QString from = step.value(QStringLiteral("from")).toString();
@@ -673,6 +746,7 @@ private slots:
     void theConformanceCheckCatchesWhatAnAppCannotSend();
     void refusalsOfOutboundWritesArePlain();
     void alteredFixturesFailReadably();
+    void jsonStringsMatchTheirShape();
 
 private:
     QString run(const QString& id, const QJsonObject& fixture,
@@ -740,7 +814,8 @@ QString TstLinkConformanceSession::run(const QString& id, const QJsonObject& fix
     station.server->acceptTransport(stationEnd);
     const QString failure = LinkFixtures::runSession(fixture, *station.server, client);
     writeTrace(id, client);
-    return failure;
+    // A failure names its fixture first, then the step and the path.
+    return failure.isEmpty() ? failure : QStringLiteral("%1: %2").arg(id, failure);
 }
 
 void TstLinkConformanceSession::sessionFixtures_data()
@@ -1322,6 +1397,116 @@ void TstLinkConformanceSession::alteredFixturesFailReadably()
     early.insert(QStringLiteral("steps"), steps);
     failure = run(QStringLiteral("altered-connect-deadline"), early);
     QVERIFY2(failure.contains(QStringLiteral("the station sent nothing more")),
+             qPrintable(failure));
+}
+
+void TstLinkConformanceSession::jsonStringsMatchTheirShape()
+{
+    // {"$json": <expectation>}: a string the station sends, parsed and
+    // matched against the expectation with the same placeholders.
+    const auto form = [](const QJsonValue& expectation) {
+        return QJsonObject{{QStringLiteral("$json"), expectation}};
+    };
+    const QJsonObject entry{{QStringLiteral("deviceId"), QStringLiteral("$string")},
+                            {QStringLiteral("state"), QStringLiteral("listening")},
+                            {QStringLiteral("listeningOn"),
+                             QJsonArray{QJsonObject{{QStringLiteral("sliceId"), 0},
+                                                    {QStringLiteral("letter"), QStringLiteral("A")}}}}};
+    LinkFixtures::Captures none;
+
+    // A match, and the same text with its keys in another order.
+    const QString text = QStringLiteral(
+        R"([{"deviceId":"abc","state":"listening","listeningOn":[{"sliceId":0,"letter":"A"}]}])");
+    const QString reordered = QStringLiteral(
+        R"( [ {"listeningOn":[{"letter":"A","sliceId":0}], "state":"listening", "deviceId":"x"} ] )");
+    QString result = LinkFixtures::match(form(QJsonArray{entry}), text, &none);
+    QVERIFY2(result.isEmpty(), qPrintable(result));
+    result = LinkFixtures::match(form(QJsonArray{entry}), reordered, &none);
+    QVERIFY2(result.isEmpty(), qPrintable(result));
+
+    // Array order matters: two entries the other way round fail, at the
+    // first element inside the string.
+    const QJsonObject other{{QStringLiteral("deviceId"), QStringLiteral("$string")},
+                            {QStringLiteral("state"), QStringLiteral("away")},
+                            {QStringLiteral("listeningOn"), QJsonArray{}}};
+    const QString two = QStringLiteral(
+        R"([{"deviceId":"b","state":"away","listeningOn":[]},)"
+        R"({"deviceId":"a","state":"listening","listeningOn":[{"sliceId":0,"letter":"A"}]}])");
+    result = LinkFixtures::match(form(QJsonArray{entry, other}), two, &none);
+    QVERIFY2(result.startsWith(QStringLiteral("$($json)[0].")), qPrintable(result));
+    result = LinkFixtures::match(form(QJsonArray{other, entry}), two, &none);
+    QVERIFY2(result.isEmpty(), qPrintable(result));
+
+    // Placeholders inside: a capture made inside one string is a $ref
+    // inside the next; a $json nests inside a $json; a scalar is JSON too.
+    LinkFixtures::Captures captures;
+    const QJsonObject captured{{QStringLiteral("id"), QStringLiteral("$capture:first")},
+                               {QStringLiteral("count"), QStringLiteral("$int")},
+                               {QStringLiteral("inner"), form(QJsonObject{
+                                    {QStringLiteral("ok"), true}})}};
+    result = LinkFixtures::match(
+        form(captured), QStringLiteral(R"({"id":"k1","count":3,"inner":"{\"ok\":true}"})"),
+        &captures);
+    QVERIFY2(result.isEmpty(), qPrintable(result));
+    QCOMPARE(captures.value(QStringLiteral("first")).toString(), QStringLiteral("k1"));
+    const QJsonObject referred{{QStringLiteral("id"), QStringLiteral("$ref:first")}};
+    QVERIFY(LinkFixtures::match(form(referred), QStringLiteral(R"({"id":"k1"})"), &captures)
+                .isEmpty());
+    result = LinkFixtures::match(form(referred), QStringLiteral(R"({"id":"k2"})"), &captures);
+    QVERIFY2(result.contains(QStringLiteral("$($json).id")), qPrintable(result));
+    result = LinkFixtures::match(form(QJsonObject{{QStringLiteral("inner"), form(true)}}),
+                                 QStringLiteral(R"({"inner":"false"})"), &none);
+    QVERIFY2(result.startsWith(QStringLiteral("$($json).inner($json)")), qPrintable(result));
+    QVERIFY(LinkFixtures::match(form(QStringLiteral("$int")), QStringLiteral("7"), &none).isEmpty());
+
+    // Not a string, not one JSON value, or a second key beside "$json".
+    QVERIFY(LinkFixtures::match(form(QJsonArray{}), QJsonArray{}, &none)
+                .contains(QStringLiteral("expected a string holding JSON")));
+    for (const QString& bad : {QStringLiteral("[1,"), QStringLiteral(""), QStringLiteral("1,2"),
+                               QStringLiteral("/tmp/key.pem")}) {
+        result = LinkFixtures::match(form(QStringLiteral("$any")), bad, &none);
+        QVERIFY2(result.startsWith(QStringLiteral("$: not JSON")), qPrintable(result));
+    }
+    QJsonObject twoKeys = form(QJsonArray{});
+    twoKeys.insert(QStringLiteral("other"), 1);
+    QVERIFY(LinkFixtures::match(twoKeys, QStringLiteral("[]"), &none)
+                .contains(QStringLiteral("stands alone")));
+
+    // Only the station sends one: a client message holding it is refused.
+    int counter = 0;
+    QString error;
+    LinkFixtures::substitute(QJsonObject{{QStringLiteral("value"), form(QJsonArray{})}}, &none,
+                             &counter, &error);
+    QVERIFY2(error.contains(QStringLiteral("cannot stand in a client message")), qPrintable(error));
+
+    // In a fixture: a string that does not parse fails with the fixture,
+    // the step, the path and "not JSON". keyPath is a file path, not JSON.
+    QJsonObject altered = fixture(QStringLiteral("session-connected-devices"));
+    QVERIFY(!altered.isEmpty());
+    QJsonArray steps = altered.value(QStringLiteral("steps")).toArray();
+    int index = -1;
+    for (int i = 0; i < steps.size() && index < 0; ++i) {
+        const QJsonObject message = steps.at(i).toObject().value(QStringLiteral("message")).toObject();
+        if (message.value(QStringLiteral("key")).toString() == QStringLiteral("devices")
+            && message.value(QStringLiteral("type")).toString() == QStringLiteral("delta")) {
+            index = i;
+        }
+    }
+    QVERIFY(index >= 0);
+    QJsonObject step = steps.at(index).toObject();
+    QJsonObject message = step.value(QStringLiteral("message")).toObject();
+    QJsonArray properties = message.value(QStringLiteral("properties")).toArray();
+    QJsonObject keyPath = properties.at(6).toObject();
+    QCOMPARE(keyPath.value(QStringLiteral("name")).toString(), QStringLiteral("keyPath"));
+    keyPath.insert(QStringLiteral("value"), form(QStringLiteral("$string")));
+    properties.replace(6, keyPath);
+    message.insert(QStringLiteral("properties"), properties);
+    step.insert(QStringLiteral("message"), message);
+    steps.replace(index, step);
+    altered.insert(QStringLiteral("steps"), steps);
+    const QString failure = run(QStringLiteral("altered-connected-devices"), altered);
+    QVERIFY2(failure.startsWith(QStringLiteral("altered-connected-devices: step %1").arg(index))
+                 && failure.contains(QStringLiteral("$.properties[6].value: not JSON")),
              qPrintable(failure));
 }
 

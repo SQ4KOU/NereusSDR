@@ -245,6 +245,23 @@ pending one only restates what the Core retains: the desktop client
 applies it only when it releases a reservation (acceptedRevision 0, zero
 charge) for the endpoint's current revision.
 
+A subscription refused because it does not fit the device's display budget
+share has the reason "The Core's display limit has no room left."
+(`kDisplayBudgetRefusalReason`, compared exactly by clients). With several
+devices on one Core (the several-devices design, ruling 9.3) its request
+still counts in that device's share of the budget after the refusal, and
+ends when the first of these happens: the GUI subscribes that endpoint
+again (the new request replaces it), the GUI unsubscribes it, or
+`DaemonMediaController::kRefusedDisplayDemandHoldMs` (10 s, the app's own
+allocation acknowledgement timeout, `kDisplayAllocationAckTimeoutMs`) passes
+after the refusal was sent without either. The refusal follows the
+`capabilities` that carry the share the request produced, so a GUI that
+still wants the display plans inside that share and subscribes again well
+inside the hold (the desktop re-plans on every capabilities change and every
+100 ms). A GUI that drops a display the Core refused (a pane closed, hidden,
+or paused because the share has no room for it) unsubscribes it, so it
+stops counting against the other devices at once.
+
 The [display codec specification](2026-09-20-display-codec-v1.md) defines
 the binary packets, reconstruction and loss recovery. Pending source/output
 slots and transport queues are bounded. A failed nonblocking send is not

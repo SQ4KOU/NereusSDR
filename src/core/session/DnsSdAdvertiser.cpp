@@ -9,6 +9,9 @@
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-25: iPhone app Task 71 (R-IOS-02): the sixth TXT entry,
+//               `devices`. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "DnsSdAdvertiser.h"
@@ -43,6 +46,7 @@ bool advertisable(const DnsSdRecord& record, QString* error)
     probe.identity = record.identity;
     probe.label = record.label;
     probe.pairing = record.pairing;
+    probe.devicesConnected = record.devicesConnected;
     QString codecError;
     if (encodeStationLanAnnouncement(probe, &codecError).isEmpty()) {
         setError(error, QStringLiteral("Bonjour record: %1").arg(codecError));
@@ -93,6 +97,8 @@ DnsSdTxtEntries dnsSdTxtEntries(const DnsSdRecord& record, QString* error)
                                                       : QByteArrayLiteral("0")},
         {QByteArrayLiteral("pair"), stationLanPairingName(record.pairing).toLatin1()},
         {QByteArrayLiteral("name"), record.label.toLatin1()},
+        // iPhone app Task 71 (ruling 10.4): how many devices hold a place.
+        {QByteArrayLiteral("devices"), QByteArray::number(record.devicesConnected)},
     };
     if (error) {
         error->clear();

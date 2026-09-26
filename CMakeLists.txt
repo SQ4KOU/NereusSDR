@@ -844,6 +844,12 @@ set(CORE_SOURCES
     src/core/BuildIdentity.cpp
     src/core/FFTRouter.cpp
     src/core/SliceStreamAllocator.cpp
+    # iPhone app Task 73 (R-IOS-02): whose each slice is, the held-for mark
+    # and each owner's active slice.
+    src/core/SliceOwnership.cpp
+    # iPhone app Task 75 (R-IOS-30): which other devices a radio-wide
+    # setting disturbs.
+    src/core/DisturbanceCheck.cpp
     src/core/WidebandFrameAccumulator.cpp
     src/core/WidebandFftEngine.cpp
     src/core/spectrum/WidebandDisplayReference.cpp
@@ -1111,6 +1117,9 @@ set(CORE_SOURCES
     # R-R3-34: bounded per-radio receive-layout persistence. Runtime
     # restoration is wired separately at the RadioModel/daemon boundary.
     src/core/ReceiveLayoutStore.cpp
+    # iPhone app Task 73 (R-IOS-02): each device's closed slices, with a copy
+    # of their own settings, kept per device and per radio for its return.
+    src/core/DeviceLayoutStore.cpp
     # R2 Task 7: the state-mirroring core. MirrorSchema walks Qt's
     # meta-object system over the five mirrored model classes and gives
     # each Q_PROPERTY a dense session-scoped ordinal plus a wire kind;
@@ -1125,6 +1134,12 @@ set(CORE_SOURCES
     src/core/session/MirrorEnumDomain.cpp
     src/core/session/MirrorPolicy.cpp
     src/core/session/StateMirror.cpp
+    # iPhone app Task 72 (R-IOS-02): one device's view of the mirror, with
+    # its own coalescer, burst and sink; echo withheld from the writer only.
+    src/core/session/MirrorView.cpp
+    # iPhone app Task 73 (R-IOS-02): the read-only marker another device sees
+    # for a slice that is not its own, one per slice.
+    src/core/session/SliceMarker.cpp
     # R2 Task 9: the slice-lifecycle half of the mirror. StateMirror forwards
     # property deltas for objects it already knows about; ObjectRegistry is
     # what tells a remote peer a slice appeared or vanished at all, by
@@ -1201,6 +1216,10 @@ set(CORE_SOURCES
     src/core/session/StationCapabilities.cpp
     src/core/session/StationServer.cpp
     src/core/session/StationOpeningGate.cpp
+    src/core/session/StationReceivers.cpp
+    src/core/session/StationSharedSettings.cpp
+    src/core/session/ReceiverPlanner.cpp
+    src/core/session/ConfirmStep.cpp
     src/core/session/StationLanAnnouncement.cpp
     src/core/session/StationLanCache.cpp
     src/core/session/StationLanDiscovery.cpp
@@ -1221,6 +1240,7 @@ set(CORE_SOURCES
     # iPhone app Task 20 (R-IOS-27): display extras and the NSDX datagram.
     src/core/session/media/DisplayExtras.cpp
     src/core/session/media/DisplayBudget.cpp
+    src/core/session/media/DisplayBudgetSplit.cpp
     src/core/session/media/DisplayLoadGovernor.cpp
     src/core/session/media/DssWideRow.cpp
     src/core/session/media/SpectrumEndpoint.cpp
@@ -1256,6 +1276,10 @@ list(APPEND CORE_SOURCES
     src/core/session/StationDevicesFacade.cpp
     # iPhone app Task 19 (R-IOS-06): the mirrored `catalog` object.
     src/core/session/StationCatalog.cpp
+    # iPhone app Task 71 (R-IOS-02): who holds a place on the Core, and the
+    # mirrored `connectedDevices` object.
+    src/core/session/DeviceSessionRegistry.cpp
+    src/core/session/ConnectedDevicesFacade.cpp
     # iPhone app Task 14 (R-IOS-08, D37): the pairing window, its code and
     # the SPAKE2+EE exchange (libsodium, cmake/NereusPairing.cmake).
     src/core/security/PairingCode.cpp

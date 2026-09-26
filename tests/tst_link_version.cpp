@@ -406,7 +406,9 @@ void TstLinkVersion::stationHelloDeclaresItsMajorsAndFeatures()
         // iPhone app Task 12: device sign-in; Task 14: pairing.
         QCOMPARE(hello.value(QStringLiteral("features")).toObject(),
                  (QJsonObject{{QStringLiteral("deviceAuth"), 1},
-                              {QStringLiteral("pairing"), 1}}));
+                              {QStringLiteral("pairing"), 1},
+                              // iPhone app Task 71: several devices at once.
+                              {QStringLiteral("sessionHolder"), 1}}));
     }
     {
         // Injected: the station's hello names its oldest major, which a

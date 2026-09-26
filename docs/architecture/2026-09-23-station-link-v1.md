@@ -259,7 +259,10 @@ to the Core's wording rules: "Grant's iPhone" passes. It sits outside the
 signed transcript, as `name` does. The Core stores it with the device and
 replaces it at each sign-in that carries a usable one; an absent or
 unusable one changes nothing and refuses nothing. When present it must be a
-string, or the message is malformed. A token sign-in that enrols its key
+string, or the message is malformed. Where the Core sends a device's name
+and short name (the `devices` and `connectedDevices` objects, section 7.1)
+it numbers them on collisions and gives a device with no usable short name
+its kind's word ("Phone", "Tablet", "Computer"). A token sign-in that enrols its key
 (below) stores it too. The desktop sends the computer's short host name,
 trimmed to the cap (`ClientDeviceIdentity::machineShortName`). Pairing does
 not carry it: `pair.start`'s `device` block and the code-mode box keep
@@ -485,9 +488,11 @@ writes.
 | `capabilities` | `properties` (array), `type` (string) | none |
 | `command.invoke` | `args` (array), `id` (number), `type` (string), `verb` (string) | none |
 | `command.result` | `accepted` (boolean), `affected` (array), `id` (number), `reason` (string), `type` (string), `verb` (string) | `values` (array) |
+| `confirm.request` | `affected` (array), `expiresInMs` (number), `id` (number), `kind` (string), `reason` (string), `type` (string) | `change` (object), `choices` (array), `forCommandId` (number), `forSettingsKey` (string), `forWriteId` (number) |
 | `delta` | `key` (string), `properties` (array), `type` (string) | none |
 | `hello` | `major` (number), `minor` (number), `peer` (string), `settingsSchema` (number), `type` (string) | `challenge` (string), `features` (object), `identity` (object), `majors` (array) |
 | `media.control` | `payload` (object), `type` (string) | none |
+| `notice` | `id` (number), `kind` (string), `reason` (string), `secondsAgo` (number), `takeBack` (boolean), `type` (string) | `byDeviceId` (string), `byKind` (string), `byName` (string), `byShortName` (string), `bySource` (string), `change` (object), `slices` (array) |
 | `object.create` | `class` (string), `key` (string), `properties` (array), `type` (string) | none |
 | `object.destroy` | `class` (string), `key` (string), `type` (string) | none |
 | `pair.accept` | `identity` (object), `label` (string), `type` (string) | none |
@@ -544,7 +549,7 @@ string in an `f64` entry is refused. The case is common: `SliceModel`'s
    before the client has sent anything (`StationServer::acceptTransport`).
    It names every link major the station supports (section 6.1), so a
    client can pick one, or leave without having sent its token. The one
-   exception: a station already holding its limit of connections (8,
+   exception: a station already holding its limit of connections (24,
    `kMaxConcurrentPeers`, section 15) sends no `hello`. The first and only
    message on the new connection is `session.end` "The Core already has
    as many connections as it allows. Try again shortly.", `retryable`
@@ -560,18 +565,37 @@ string in an `f64` entry is refused. The case is common: `SliceModel`'s
    identity and certificate binding). A device
    that is not paired sends `pair.start` instead, and the connection
    pairs and ends (section 3.6).
-4. The station sends `auth.result`. On success, in this order
+4. The station sends `auth.result`. On success it decides who is let in
+   (`StationServer::admit`, iPhone app plan Task 71): up to four devices
+   hold places on one Core at once (`kMaxDeviceSessions`, section 12.3). A
+   device that already holds a place, live or away (section 12.4), is let
+   in at once and its older connection ends with `session.end` "This device
+   connected again.", `retryable` false, `code` `sameDevice`; with a place
+   free the device is let in; with every place taken the station sends
+   `session.end` "The Core already has four devices connected.",
+   `retryable` true, no code, and closes (a window that did not declare
+   `sessionHolder` with `deviceAuth`, which cannot answer the fifth-device
+   question, is told "The Core is full. Update NereusSDR to take a device's place, or try again later." instead, `retryable` true, no code). No sign-in ever ends another
+   device's session. A device let in gets, in this order
    (`StationServer::promoteToSession`):
    - `capabilities` (section 6);
    - `settings.snapshot`: every station-scoped setting (section 8);
    - one `schema` per mirrored class, in the order the classes are first
-     watched (`StateMirror::attachSession`);
+     watched (`MirrorView::attach`);
    - one `object.create` per object, each with its full property set: the
-     fixed objects first, then one per slice;
+     fixed objects first, then one per slice the device owns and, to a
+     device with `sessionHolderVersion` 1, one `marker:<id>` per slice of
+     another device (section 7.1, iPhone app plan Task 73);
    - `snapshot.complete`.
+
+   These go to the device let in alone, from its own view of the station's
+   state (iPhone app plan Task 72): another device's session receives none
+   of them, and what the station had still to send another device is sent
+   to it as before.
 5. From then on the station sends `delta`, `object.create` and
    `object.destroy` as its state changes, and the client may send property
-   writes, settings writes and commands.
+   writes, settings writes and commands. With several devices on one Core,
+   each message goes where section 12.4's routing says.
 
 A `hello` carries `major`, `minor`, `settingsSchema` (the sender's settings
 schema version) and `peer` (a name for the sending program). A difference
@@ -591,9 +615,9 @@ accepted its pairing token.").
 
 - **A late radio.** A station can accept a client before its radio is
   found. When the radio connects, the station sends `capabilities` and
-  `settings.snapshot` again, one event-loop turn later, to the session
-  that was current when the radio arrived (`currentRadioChanged` in the
-  `StationServer` constructor). Settings are scoped to the connected radio,
+  `settings.snapshot` again, one event-loop turn later, to every session
+  let in when the radio arrived, each with its own capabilities
+  (`currentRadioChanged` in the `StationServer` constructor). Settings are scoped to the connected radio,
   so the snapshot is merged into the client's settings, not a replacement.
 - **A changed display allowance.** When the station's display budget
   changes, it sends `capabilities` again with the new allowance
@@ -669,8 +693,17 @@ sent (device authentication, pairing, the takeover question, Setup
 descriptions) is declared here, and asked with
 `StationServer::peerDeclares(peer, feature, minVersion)`; the desktop
 client asks `StationClient::stationDeclares(feature, minVersion)`. The station
-declares `deviceAuth` 1 (section 3.5) and `pairing` 1 (section 3.6) when
-its identity key is usable. The desktop client declares `deviceAuth` 1
+declares `deviceAuth` 1 (section 3.5), `pairing` 1 (section 3.6) and
+`sessionHolder` 1 (below) when its identity key is usable.
+
+**`sessionHolder` 1** (iPhone app plan Task 71; the several-devices
+design, ruling 10.1): the Core admits up to four devices at once (section
+5.1). A client declares it only together with `deviceAuth` 1 or later, and
+the station treats `sessionHolder` without `deviceAuth` as not declared.
+A client that declares it receives `sessionHolderVersion` in its
+capabilities (section 6.3) and the `connectedDevices` object (section
+7.1), and may send `session.leave` (section 9.1). A client that does not
+sees exactly the wire it was built for. The desktop client declares `deviceAuth` 1
 when it holds its own device key (`device-identity.pem` in its profile
 directory, `ClientDeviceIdentity`; it always does unless that file cannot
 be read) and sends `{}` otherwise (iPhone app plan Task 18). A client's
@@ -692,6 +725,12 @@ is `agreedMinor >= kRadioIdentitySessionProtocolMinor` (11) and
 `remoteRfKitControlVersion >= 2` (`StationClient.cpp`). The station applies
 the minor half again on its side and refuses a gated command from an older
 peer with a plain reason (section 9.3).
+
+What the several-devices design sends in place of `capabilities` (the
+fifth device's question, which a later version adds) is gated by the hello
+feature `sessionHolder` alone, in both ends' `hello`, since no capability
+has arrived by then; everything else it brings uses the two keys above,
+with `sessionHolderVersion`.
 
 Two gates in the table of section 9 need more than one row can say:
 
@@ -755,6 +794,7 @@ change shows as surface drift and as a change to this table.
 | `stationCatalogVersion` | 1 |
 | `displayExtrasVersion` | 1 |
 | `transmitSettingsVersion` | 6 |
+| `sessionHolderVersion` | 1 |
 
 <!-- /surface -->
 
@@ -897,6 +937,23 @@ When a feature is off, its version is 0:
   Options TX keys as before. `transmitSettingsVersion` is the last
   capabilities entry.
 
+- `sessionHolderVersion`: sent only at agreed minor 11, last, and only to
+  a peer whose hello declared `sessionHolder` 1 with `deviceAuth` 1; any
+  other peer is sent no entry (and reads 0), so its capabilities are
+  today's. 1: up to four devices at once, the `connectedDevices` object
+  (section 7.1), `session.leave` (section 9.1), and sharing the radio's
+  receivers: `confirm.request` and `notice`, and the verbs
+  `confirm.proceed`, `confirm.cancel` and `notice.takeBack` (section 7.5).
+  The table above shows the value a declaring peer is sent.
+- While several devices are on a Core, media and telemetry go to one of
+  them (section 11): any other is sent `remoteMediaVersion`,
+  `remoteWidebandDisplayVersion`, `remoteAudioStatusVersion`,
+  `spectrumGrantVersion`, `audioProfileVersion`, `audioClockVersion`,
+  `receiverAudioVersion`, `headphonesMixVersion`, `psDisplayVersion`,
+  `displayExtrasVersion` and `stationTelemetryVersion` as 0 and no display
+  budget. A Core with one device on it sends that device what the table
+  says.
+
 `txPermitted` is always false today: remote transmit is R4.
 
 ### 6.4 The capabilities message
@@ -907,8 +964,89 @@ The display budget entries (`displayApplicationBytesPerSecond`,
 `remotePs3DisplaySubscribed`, `displayBudgetReason`) are present only with a
 usable budget, and `displayBudgetReason` only at agreed minor 11. The radio
 identity entries from `hpsdrModel` onwards are present only at agreed minor
-11. A client ignores a capability it does not know
+11, and `sessionHolderVersion`, last, only for a peer that declared
+`sessionHolder` (section 6.1). A client ignores a capability it does not know
 (`StationCapabilities::fromUpdates`).
+
+**Each device's share of the display budget** (iPhone app plan Task 76; the
+several-devices design, ruling 9.3 and design ruling 9.3a). The Core has one
+display budget, its total: the display allowance its configuration sets, or
+its computed ceiling, lowered by the load governor when the Core computer is
+short of processing time. Every admitted session with media is given its own
+share of that total (`DisplayBudgetSplit`), and its capabilities carry that
+share in the budget entries: `displayApplicationBytesPerSecond` and
+`spectrumSampleUnitsPerSecond` are the device's own, and
+`displayBudgetGeneration` is the device's own generation. A share that does
+not change keeps its generation; one that does takes the total's generation
+when that is newer, otherwise the device's last plus one, so a device alone
+on the Core sees exactly the generations it saw before shares existed. When
+a device is admitted or leaves, the total changes, or a device's displays
+ask for more or less, every device whose share or reason changed is sent
+`capabilities` again. The rules of the
+split: the PureSignal display's charge comes off the total once and belongs
+to the device that subscribed to it (`remotePs3DisplaySubscribed` is true
+for that device only); a network device holding transmit gets its whole
+request, the rest is shared among the others; with transmit unheld, held by
+the station device or held by a device that is away, every device gets an
+equal share, and a device asking for less leaves the difference to the
+rest (max-min fair). A device's request is what its displays ask for: the
+sum of its display subscriptions' charges at the frame rate it subscribed
+at and the pixels it subscribed at, clamped to what its window can carry
+(the receiver's bins in that window), before the budget clamps them, a
+subscription refused for the
+budget included, until the display is closed, asked for again, or 10 s
+pass after its refusal without either (the media control document's
+display budget section), and never
+less than one useful pan (256 pixels at 10 frames a second with its wide
+plane). What that guarantees: with no network device holding transmit
+while present, each device's share is at least the smaller of one useful
+pan and an equal part of the total; the Core's own cut for a busy computer
+never takes the total below PureSignal's display plus one useful pan per
+device, so under that cut each device keeps one pan. Only a display
+allowance configured below one pan per device can leave each device less.
+Beside a device holding transmit, the others share only what its request
+leaves, which can be nothing useful (a share of 1) while it asks for the
+whole total. What no device asks for is shared equally among them as room to grow,
+so a device alone has the whole total. A subscription is admitted against the share the
+device has once it asks for it (for the transmit holder, its whole
+request), not the share it had. **Transmit joins here:** until the transmit
+holder exists (Task 34) transmit counts as unheld; Task 34 names the holder.
+The Core hands each device a share, never a frame rate: each client plans
+its own displays inside its share, and a share too small for one pan at 256
+pixels and 10 frames a second suspends that device's display, pane and
+slice kept. Every client, holding transmit or not, first subscribes its
+displays at the pixels and frame rate the operator wants, since its request
+is what gives it its share. A subscription refused because it does not fit
+(reason "The Core's display limit has no room left.") is the answer: the
+`capabilities` with the device's new share arrive before the refusal, and
+the client plans inside that share and subscribes again. It asks for what it
+wants again when that grows (a pane added, widened or sped up; a pane
+widened by a resize asks once its width has held for 200 ms, not at every
+step of the resize) and when the
+transmit holder changes (`txState`'s `holderEpoch` or `holderAway` moves: it
+takes transmit, the holder changes, or a holder lets go or goes away), never
+merely because a new generation arrived. Audio is never split and never cut
+when the Core runs short.
+
+`displayBudgetReason` says which of the Core's limits is short:
+
+| Value | Meaning |
+| --- | --- |
+| `none` | the device's share is not below its request, and nothing is cut |
+| `coreBusy` | the governor has cut the total, and the device is alone on the Core (or its share still covers its request) |
+| `sharedConnection` | another device is admitted and this device's share is below its request; the governor has cut nothing (the devices share what the Core sends) |
+| `sharedProcessing` | another device is admitted and this device's share is below its request; the governor's cut is in force (the Core computer is short of processing time) |
+
+A device's request is its demand as above (what its displays ask for, at
+least one useful pan). Because every client first asks for what the
+operator wants, a device that wants more than its share while another
+device is admitted hears `sharedConnection` or `sharedProcessing`; one
+whose share covers all it asks for hears `none` or `coreBusy`.
+
+`sharedConnection` and `sharedProcessing` go only to a device that declared
+`sessionHolder` (section 6.1). Any other device is told `none` in place of
+`sharedConnection` and `coreBusy` in place of `sharedProcessing`, so an
+older window sees only the values it was built for.
 
 <!-- surface:capabilities -->
 <!-- Generated by scripts/render-link-tables.py from tests/data/link/v1/surface.json. Do not edit by hand. -->
@@ -968,6 +1106,7 @@ identity entries from `hpsdrModel` onwards are present only at agreed minor
 | 51 | `stationCatalogVersion` | `i64` |
 | 52 | `displayExtrasVersion` | `i64` |
 | 53 | `transmitSettingsVersion` | `i64` |
+| 54 | `sessionHolderVersion` | `i64` |
 
 <!-- /surface -->
 
@@ -1098,6 +1237,14 @@ An enum property lists the values its domain allows.
 | 18 | `efficiencyText` | `utf8` | outbound |  |
 | 19 | `bandFollow` | `enum` | outbound | 0, 1, 2, 3 |
 
+**ConnectedDevicesFacade** (3 properties)
+
+| Ordinal | Property | Wire kind | Direction | Enum values |
+| --- | --- | --- | --- | --- |
+| 0 | `listJson` | `utf8` | outbound |  |
+| 1 | `revision` | `i64` | outbound |  |
+| 2 | `deviceLimit` | `i64` | outbound |  |
+
 **DspAssetService** (8 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
@@ -1226,6 +1373,25 @@ An enum property lists the values its domain allows.
 | 27 | `bandFollow` | `enum` | outbound | 0, 1, 2, 3 |
 | 28 | `bandFollowAddress` | `utf8` | outbound |  |
 | 29 | `bandFollowPort` | `i64` | outbound |  |
+
+**SliceMarker** (14 properties)
+
+| Ordinal | Property | Wire kind | Direction | Enum values |
+| --- | --- | --- | --- | --- |
+| 0 | `sliceId` | `i64` | constantSnapshot |  |
+| 1 | `ownerDeviceId` | `utf8` | outbound |  |
+| 2 | `ownerName` | `utf8` | outbound |  |
+| 3 | `ownerShortName` | `utf8` | outbound |  |
+| 4 | `ownerKind` | `utf8` | outbound |  |
+| 5 | `ownerAway` | `bool` | outbound |  |
+| 6 | `frequency` | `f64` | outbound |  |
+| 7 | `dspMode` | `enum` | outbound | 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13 |
+| 8 | `filterLow` | `i64` | outbound |  |
+| 9 | `filterHigh` | `i64` | outbound |  |
+| 10 | `txSlice` | `bool` | outbound |  |
+| 11 | `band` | `enum` | outbound | 0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26 |
+| 12 | `streamIndex` | `i64` | outbound |  |
+| 13 | `psPaused` | `bool` | outbound |  |
 
 **SliceModel** (144 properties)
 
@@ -1572,9 +1738,11 @@ destroyed during the session.
 | `accessoryData` | `AccessoryDataModel` |
 | `accessorySettings` | `AccessorySettingsModel` |
 | `devices` | `StationDevicesFacade` |
+| `connectedDevices` | `ConnectedDevicesFacade` |
 | `catalog` | `StationCatalog` |
 | `pan:<i>` | `PanadapterModel` |
 | `slice:<id>` | `SliceModel` |
+| `marker:<id>` | `SliceMarker` |
 
 <!-- /surface -->
 
@@ -1583,7 +1751,10 @@ Notes on the keys:
 - **`pan:<i>`.** The station watches every panadapter its model holds, but
   no code path in `nereusd` adds one: panadapters live in the window, and
   the Core's spectrum travels on display endpoints (media control). A real
-  Core therefore sends no `pan:<i>` objects today. The surface records one
+  Core therefore sends no `pan:<i>` objects, and a write to one changes
+  nothing; the key stays unused (the several-devices design, ruling 5.12).
+  A device's pans are its own: `addSliceOnPan`'s `panId` is the device's
+  own key, so two devices' "pan-0" are two pans. The surface records one
   so the key pattern is known.
 - **Minor 11 objects.** `stepAtt`, `alexAntennas` and `ioBoard` are sent
   only to a peer at agreed minor 11 and only while `radioHardwareVersion` is
@@ -1604,11 +1775,15 @@ Notes on the keys:
   9.1), and a write to it is refused as any `outbound` write is. Its
   properties (`StationDevicesFacade`):
   - `listJson` (`utf8`): a JSON array of the paired devices in pairing
-    order, each `{id, name, kind, pairedAt, lastSeen, connected}`: `id` is
-    the device's key fingerprint (SHA-256 of its public key's DER) in
-    base64url, `kind` is `phone`, `tablet` or `computer`, the two times
-    are ISO 8601 UTC (`""` when never seen), and `connected` says whether
-    that device holds an authenticated connection now.
+    order, each `{id, name, shortName, kind, pairedAt, lastSeen,
+    connected}`: `id` is the device's key fingerprint (SHA-256 of its
+    public key's DER) in base64url, `kind` is `phone`, `tablet` or
+    `computer`, the two times are ISO 8601 UTC (`""` when never seen), and
+    `connected` says whether that device holds a session now. `name` and
+    `shortName` are numbered as `connectedDevices` numbers them (below), so
+    one device reads the same on both lists; `shortName` is the one the
+    device last signed in with (section 3.5), or its kind's word ("Phone",
+    "Tablet", "Computer") when it sent none usable.
   - `revision` (`i64`): moves by one with every change to the object, from
     0 to 2^32 - 1 and then round to 0; compare by serial-number
     arithmetic.
@@ -1629,6 +1804,63 @@ Notes on the keys:
     `""` while the window is closed and while no code is shown. Sent only
     to a connection signed in with a paired device's own key; any other
     connection receives `""` (`StationServer::withPairingCodeFor`).
+- **`connectedDevices`** (iPhone app plan Task 71;
+  `ConnectedDevicesFacade`): who is on the Core, the list a device's
+  Devices page reads for "Connected now". Sent only at agreed minor 11 to
+  a peer whose hello declared `sessionHolder` 1 with `deviceAuth` 1
+  (`sessionHolderVersion` 1, section 6.3); any other peer never sees it or
+  its schema. Every property is `outbound`:
+  - `listJson` (`utf8`): a JSON array, one entry per device that holds a
+    place, live or away, in the order they were let in:
+    `{deviceId, name, shortName, kind, paired, hostsCore, revocable, state,
+    holdsTransmit, lastActivitySeconds, connectedForSeconds,
+    awayForSeconds, transmittingForSeconds, listeningOn}`. `deviceId` is
+    the `devices` object's `id` for a paired device, and `token:<n>` for a
+    window signed in with the older token and no key (`paired` false),
+    named "Computer at <its address>" with the short name "Computer".
+    `kind` is `phone`, `tablet` or `computer`, or `station` for a hosting
+    desktop's own window (`hostsCore` true). `revocable` is false for a
+    hosting desktop's window and for a token window. `state` is
+    `listening`, or `away` for a device whose link dropped without leaving
+    and that still holds its place (section 12.4). `holdsTransmit` is false
+    and `transmittingForSeconds` 0 until remote transmit; `transmittingOn`
+    is absent. `listeningOn` (iPhone app plan Task 73) lists every slice
+    the device owns, an away device's included, each `{sliceId, letter,
+    band, mode}` (`letter` "A" for slice 0; `band` and `mode` the values
+    the slice's own `band` and `dspMode` carry); a slice's frequency is on
+    its `marker:<id>`, so tuning does not change the list. Slices the Core
+    holds for a device that has left show only on their markers.
+    `lastActivitySeconds` counts from the device's last command, property
+    write or settings write, never a heartbeat, and moves at most once a
+    minute; `connectedForSeconds` from when the device took its place;
+    `awayForSeconds` from when it went away, 0 while it is not.
+  - `revision` (`i64`): moves by one with every change to the list, from 0
+    to 2^32 - 1 and then round to 0; compare by serial-number arithmetic.
+    The list changes, and is sent again, only when something in it other
+    than time passing changes.
+  - `deviceLimit` (`i64`): 4.
+
+  **Names.** A device's name is the one it paired with, or the one the
+  Core gives a token window; its short name is the one it signs in with
+  (section 3.5), or its kind's word. When two devices carry the same name,
+  the one paired later gets the next free number ("iPhone", "iPhone 2");
+  short names are numbered on their own collisions the same way ("Phone",
+  "Phone 2"). The order is the paired devices in pairing order, then a
+  hosting desktop the Core has not paired, then token windows in the order
+  they connected. Names and short names are the operator's own words: the
+  Core checks them as names (section 3.5), never against its own wording
+  rules.
+
+  **The one clock convention.** Every time the Core sends about a session,
+  a device, transmit, a notice or an end is a duration in whole seconds,
+  measured on the Core's own monotonic clock when the message is encoded,
+  named `...ForSeconds`, `...Seconds` or `secondsAgo`. No wall-clock time
+  from the Core reaches these screens, so a Core whose clock is wrong still
+  counts right. A duration inside an object is measured again whenever
+  that object or property is sent (its `object.create`, a `delta` on any
+  change), and not otherwise: an app counts on from its own receipt.
+  `devices`' `pairedAt` and `lastSeen` stay ISO 8601 dates, since they
+  outlive a session and a restart.
 - **`catalog`.** The values the Core owns and an app draws its controls
   from (section 7.4). Both properties are `outbound`
   (`StationCatalog`): `json` (`utf8`), the catalogue, and `revision`
@@ -1750,6 +1982,44 @@ Notes on the keys:
   takes them from a peer offered `transmitSettingsVersion` while its radio
   is off the air (section 7.3). Changing `attOnTxValue` with ATT on TX on
   sets the radio's TX attenuator; it keys nothing.
+- **Whose each slice is** (iPhone app plan Task 73; the several-devices
+  design, rulings 5.1 to 5.6). With several devices on one Core every
+  slice has an owner: the device that made it, the device that adopted it
+  (the first device let in while no other is on the Core takes every slice
+  nobody owns, and a device alone on the Core takes a slice the Core makes
+  itself, such as when its radio arrives late), or the station itself, which runs a slice **held for** a
+  device that has left while no other device was on the Core, until that
+  device signs in again. A session receives its own slices as `slice:<id>`
+  objects and nothing else of any other slice. A device let in that owns
+  no slice gets one at once, at the frequency of the Core's current
+  slice and on its receiver; with every slice in use it starts with none.
+  Owners live at the Core: no `slice:` property changed. Slice letters
+  come from one pool (`slice:<id>` is letter 'A' + id on every device), a
+  slice keeps its letter for its whole life, and a slice restored for a
+  device takes its old letter when it is free.
+- **`marker:<id>`** (`SliceMarker`, `sessionHolderVersion` 1). One per
+  slice, sent to every session with the feature except the one whose
+  slice it is (for a held slice, the device it is held for); an older
+  window never receives one or its schema. Every property is `outbound`:
+  `sliceId` (`constantSnapshot`; its letter is 'A' + `sliceId`),
+  `ownerDeviceId` (the owner's id as `connectedDevices` names it, or the
+  id of the device it is held for; `""` for a slice nobody owns),
+  `ownerName` and `ownerShortName` (numbered as below), `ownerKind`
+  (`phone`, `tablet`, `computer`, or `station` for a slice nobody owns),
+  `ownerAway` (the owner is away, or the slice is held for it), and
+  `frequency`, `dspMode`, `filterLow`, `filterHigh`, `txSlice`, `band`,
+  `streamIndex` (the receiver it sits on, -1 when none; a screen shows
+  "Receiver `streamIndex` + 1") and `psPaused`, each as the slice's own.
+  `txSlice` is the arbiter's binding until remote transmit makes it the
+  holder's alone. A marker has no colour on the wire: a client draws it in
+  its letter's colour. A write to a marker is refused (section 7.3).
+- **A change of owner** (a device adopting slices nobody owned, a slice
+  passing to the station for a device that left, a held slice returning)
+  reaches each session as `object.destroy` of the form it had and
+  `object.create` of the form it has now (`slice:<id>` to `marker:<id>`,
+  or back). A session first sent an object of a class after its
+  connect-time burst (its first marker, when a second device arrives) is
+  sent that class's `schema` just before it.
 - **Unknown classes.** A client that receives a schema for a class it does
   not know records the difference and drops that class's objects and
   deltas.
@@ -1771,7 +2041,9 @@ Notes on the keys:
 
 The station collects property changes and sends them at most every 50 ms
 (`kDefaultDeltaFlushMs`), one `delta` per object carrying the latest value
-of each changed property. The desktop client collects its own writes on
+of each changed property. It collects them for each device's session
+separately (`MirrorView`, iPhone app plan Task 72), so a device that
+signs in never takes another device's pending changes with it. The desktop client collects its own writes on
 the same 50 ms period (`kDefaultWriteFlushMs`).
 
 ### 7.3 Property writes and property.result
@@ -1852,10 +2124,302 @@ is at least 1 (`propertyResultsAvailable()`).
 
 Side effects of a write on other properties go back as a `delta`. A peer
 that did not negotiate results, or wrote without a `writeId`, also gets its
-requested properties back in that `delta`.
+requested properties back in that `delta`. Both go to the writer alone.
+
+**Echo per writer** (iPhone app plan Task 72; the several-devices design,
+ruling 5.7). What a write changes, the property written and any side effect
+on another object (two slices on one receiver share its noise blanker, so
+a change to one's blanker changes the other's), never comes back to the
+writer as a `delta`: the writer has its `property.result` and the readback
+above. Every other device's session receives each change as an ordinary
+`delta`. With one device on the Core nothing on its wire changes. The
+station's tests `tst_station_multi_session` and `tst_mirror_view` hold it
+to this; the several-client fixtures of later tasks (`two-devices` and
+after) carry it on the wire.
+
+**Another device's slice** (iPhone app plan Task 73; the several-devices
+design, ruling 5.9). A device changes only its own slices. A
+`property.write` to a `slice:<id>` the writer does not own, or to any
+`marker:<id>`, is refused before anything is read or applied: every
+property answers not accepted, with no value, and the reason "That slice
+belongs to <the owner's name>. It can be changed only there." (the name as
+`connectedDevices` numbers it; "the Core" for a slice nobody owns). Nothing
+else comes back. The commands `removeSlice`, `setActiveSliceById`,
+`nnr.setDiagnostics`, `nnr.resetTuning`, `nnr.tryAgain`, `notch.add`,
+`requestSliceSampleRate`, `requestStreamCentre` and
+`requestStreamCtunPinned` naming a slice that is not the requester's
+(another device's, one nobody owns, or one held for a device) are refused
+with the same reason, whatever receivers are in use (section 9.1). On the
+requester's own slice, a C-Tune centre change or pin and a slice's band
+change follow the receiver rules of section 7.5, and a sample-rate change
+the shared-setting rules of section 7.6.
+
+**Waiting for you to confirm** (iPhone app plan Task 74; the
+several-devices design, section 7.3). A write that would disturb another
+device, from a device with `sessionHolderVersion` 1, is not applied. Its
+`property.result` answers every property not accepted, with the value the
+Core keeps and the reason "Waiting for you to confirm.", and a
+`confirm.request` follows with `forWriteId` naming the write (section
+7.5). Today that is a band change of the anchor's slice on a receiver
+another device shares. A window without the feature is never asked: the
+same write is refused with "This change would affect <names>. Update
+NereusSDR to confirm changes that affect other devices.", the names as
+`connectedDevices` numbers them.
 
 A property write never keys the transmitter: `txPermitted` is false and
 the transmit safety gates stay at the station (section 17).
+
+### 7.5 Receivers several devices share
+
+iPhone app plan Task 74 (the several-devices design, sections 6.1 to 6.4,
+7.3 and 7.4). Up to four devices share the radio's receivers. A slice
+joins any receiver whose window covers its frequency, whoever claimed it,
+as it always has; two devices' slices can therefore share one receiver.
+
+**The anchor.** The device whose slice claimed a receiver anchors it.
+When the anchor's last slice leaves the receiver, the anchor passes to the
+device whose slice has been on it longest; nobody is asked or told. When
+the last slice leaves, the receiver is free. A shared receiver's window
+does not follow a slice's tuning inside it (the slice moves only its own
+shift, as several slices on one receiver always have).
+
+**The C-Tune pin** of a shared receiver is its anchor's.
+`requestStreamCtunPinned` from another device is refused with "This
+panadapter shows <anchor's name>'s receiver. Its C-Tune setting is
+<anchor's name>'s.".
+A pin lasts through its anchor's link dropping and its coming back as the
+same device (its `streamCtunPinned` is as it left it); it ends when the
+anchor leaves for good (`session.leave`, a token window's end, the end of
+its 180 s, revocation).
+
+**The anchor moves its panadapter.** A `requestStreamCentre` from the
+anchor that would leave another device's slice outside the new window is
+held: its `command.result` is not accepted, with the reason "Waiting for
+you to confirm." and `values` holding `phase` `needsConfirmation`, and a
+`confirm.request` of kind `panMove` follows. One that would leave the
+anchor's own slice outside is refused as before. On proceed the window
+moves; each other device's slice outside it moves to another receiver
+(one whose window covers it, or a free one) or, with none free, closes,
+and its device is told (`notice` `sliceMoved` or `sliceClosed`).
+
+**The anchor changes band.** A `property.write` of the `frequency` of one
+of the anchor's slices, outside its receiver's window, while another
+device's slice shares the receiver, is the same question (`panMove`),
+held as section 7.3 says, with `change` `{label, from, to}`:
+"Receiver <n>" and the bands, "20 m" and "40 m". On proceed the receiver
+follows the anchor's slice, centred on its new frequency; each other
+device's slice the new window no longer covers moves or closes, as above;
+one it still covers stays. When the anchor has another slice of its own
+on the receiver that the new window would not cover, the change is not a
+pan move: the slice leaves for another receiver as it always has (design
+ruling 6.5a). Cancel changes nothing. With nobody else on the receiver,
+nothing changes from before.
+
+**A device that does not anchor moves its panadapter** by taking it,
+with its slices there, to a free receiver centred where it asked; the
+anchor is not disturbed and nobody is asked. Its slices must fit the new
+window, as C-Tune requires.
+
+**Taking a receiver** (the several-devices design, section 6.4). A
+request that needs a receiver (`addSlice`, `addSliceOnPan`, a retune out
+of a window, a panadapter move by a device that does not anchor) and is
+refused because every receiver is in use is answered with the refusal,
+whose words now end "The radio's receivers are in use by <names>.", and,
+to a device with the feature, a `confirm.request` of kind `takeReceiver`
+with one choice per receiver in use. On proceed with a choice the Core
+checks again, closes every other device's slice on that receiver (even
+one the new window would cover), tells each owner (`notice`
+`receiverTaken`, with Take it back), and applies the held request on the
+freed receiver. The taker's own slices there stay when the new window
+covers them; a receiver where the taker's own slice would be left outside
+is offered with `takeable` false and `why` "Your slice E would close.",
+and a receiver the taker's own panadapter uses cannot give it a new one
+(`takeable` false, "Your panadapter already uses this receiver."). When
+the slice cap, not the receivers, is full, the question is `takeSlice`,
+one choice per slice of another device, and taking one closes only that
+slice (`notice` `sliceTaken`, with Take it back). A receiver or slice free
+by the time of the answer is used without taking anything.
+
+**Take it back.** `notice.takeBack {id}` asks the same question the other
+way: a `takeReceiver` whose first choice is the receiver the taker now
+holds, then any receiver free by then (for a slice, a `takeSlice` with the
+taker's slice and, when one is free, a choice with `sliceId` -1). Its own
+`command.result` is "Waiting for you to confirm." with `phase`
+`needsConfirmation`. On proceed the Core closes what the choice names
+(telling its owner, with Take it back) and recreates the device's closed
+slices at their frequencies, modes and panadapters, with their settings.
+Once taken back, a notice cannot be taken back again ("That can no longer
+be taken back.").
+
+**An older window** (a session without `sessionHolderVersion` 1) is never
+asked: it gets the refusal only, naming the devices involved. When a take
+closes its last slice its session ends: "<taker's name> took the receiver
+this app was using. Update NereusSDR to share the Core.", not retryable,
+`code` `takenOver`. With no slice for it at sign-in it is refused,
+retryable: "All the radio's slices are in use. Try again when another
+device closes one." when the slice cap is full, "All the radio's
+receivers are in use. Try again when another device frees one." otherwise
+(section 12.4).
+
+**`confirm.request`** (Core to device, to a session with
+`sessionHolderVersion` 1 only): `id` (number, unique on this Core), `kind`
+(`panMove`, `takeReceiver`, `takeSlice`, `sharedSetting` (section 7.6);
+a later task adds `takeTransmit`), `reason` ("Waiting for you to
+confirm."), `affected` (array), `expiresInMs` (60000, `confirmExpiryMs` in
+section 15), and, optionally, `change` `{label, from, to}` (absent for a
+take), `choices` (a take), and `forCommandId`, `forWriteId` or
+`forSettingsKey` naming the held change. `affected`
+has one entry per disturbed device, `{deviceId, deviceName,
+deviceShortName, state, holdsTransmit, slices}`, each slice `{sliceId,
+letter, frequencyHz, band, mode, adc, streamIndex, effect}`: `state` is
+`listening` or `away`, `mode` the slice's `dspMode` value, `band` its
+`Band` value, `adc` its receiver's ADC from 0, `streamIndex` its receiver
+from 0 (shown as "Receiver `streamIndex` + 1", "ADC `adc` + 1"), `effect`
+`moves` or `closes` for a pan move, and for a shared setting also
+`changes` (keeps receiving, differently) or `pausesWhileTransmitting`
+(section 7.6). A take's `affected` is empty: its choices say
+what each would close. A `takeReceiver` choice is `{choice, streamIndex,
+adc, centreHz, rateHz, anchorName, slices, devices, takeable, why}`, its
+slices `{sliceId, letter, deviceId, deviceName, frequencyHz, mode, band,
+txSlice}` and its devices `{deviceId, name, shortName, state,
+lastActivitySeconds}`; a free receiver (offered only by Take it back) has
+no slices. A `takeSlice` choice is `{choice, sliceId, letter, deviceId,
+deviceName, deviceShortName, state, frequencyHz, mode, band, txSlice,
+streamIndex, adc, takeable, why}`.
+
+**Answers** (section 9.1): `confirm.proceed {id, choice}` (`choice` -1
+for a `panMove` or a `sharedSetting`) or `confirm.cancel {id}`. Nothing a
+device sent before its answer changes anything. A device has one open
+question; a new one replaces it, and its session ending drops it. A
+question expires 60 s after it is sent (`expiresInMs`): a later
+`confirm.proceed` is refused "That question has expired. Make the change
+again." and changes nothing (iPhone app plan Task 75). On proceed the Core computes
+what the change reaches again: when that names a device or an effect the
+operator was not shown, the proceed is answered "Waiting for you to
+confirm." with `phase` `needsConfirmation`, a new `confirm.request`
+follows, and nothing is applied. Otherwise the change is applied exactly
+as the original request would have been, and the proceed's
+`command.result` carries the readback (ruling 7.4a): for a property
+write, `objectKey` and the settled value of every property the write
+named in `values` (its side effects on the written object reach the
+writer as the usual `delta`); for a settings write, `settingsKey` and
+`value` (the stored value) in `values`; for a command, the original
+command's own `affected` and `values` (a `requestSliceSampleRate`, which
+the Core runs on a later turn, answers the proceed when it has run). The change reaches every other session as a
+`delta`. A proceed that is refused ("That question is no longer open.
+Make the change again.", "That choice is not in the list. Make the change
+again.", "What this change reaches has changed. Make the change again.")
+carries no readback. The question is always sent after the answer to the
+request that raised it. A `sharedSetting` proceed is also refused "That
+setting changed since you asked. Make the change again." when what the
+change acts on moved since the question was asked, whoever moved it.
+Every slice a question names (the written slice, a `sliceId` argument, the
+slices a move carries) must still be the asking device's at proceed. A
+question whose slice closes or passes to another owner is dropped at once,
+since the Core hands the lowest free id to the next slice; its later
+`confirm.proceed` is refused as changed ("That setting changed since you
+asked. Make the change again." for a `sharedSetting`, "What this change
+reaches has changed. Make the change again." for any other kind) and
+changes nothing, and its `confirm.cancel` is accepted.
+
+**`notice`** (Core to device, `sessionHolderVersion` 1 only): `id`,
+`kind`, `reason`, `secondsAgo` (whole seconds since it happened, measured
+when sent), `takeBack` (boolean), and optionally `byDeviceId`, `byName`,
+`byShortName`, `byKind`, `bySource` (`device`) naming who did it,
+`slices` `[{sliceId, letter, frequencyHz, mode, band}]` (closed ones
+included) and `change`. Kinds here: `sliceMoved` and `sliceClosed` (no
+Take it back), `receiverTaken` and `sliceTaken` (Take it back),
+`settingChanged` (section 7.6: `change`, who, no Take it back),
+`graceEnded`, `slicesNotRestored` and `antennaKept` (about the device's
+own state: no `by` keys, no Take it back). `graceEnded`, "You were away for more than 3
+minutes. Your slices are back.", goes right after `snapshot.complete` to a
+device let in after its 3 minutes ran out, its `slices` listing any saved
+slice that could not be restored (then its words are "You were away for
+more than 3 minutes. <n> of your slices could not be restored: all the
+radio's receivers are in use."); otherwise `slicesNotRestored`, "<n> of
+your slices could not be restored: all the radio's receivers are in
+use.", reports those. An away device's notices wait and follow its
+`snapshot.complete`; after its 3 minutes they still arrive, after
+`graceEnded`, with `takeBack` false. The Core keeps them until the device
+returns, is removed, or the Core restarts. A session without
+`sessionHolderVersion` 1 is sent neither kind.
+
+While a device is on the air, the rules above that would move or close
+its transmit slice are refused instead (the several-devices design, ruling
+7.4): that refusal arrives with the transmit holder (a later task).
+
+### 7.6 Settings that affect every device
+
+iPhone app plan Task 75 (the several-devices design, sections 7.1 to 7.4,
+rulings 5.11a, 6.1 and 7.1 to 7.8). Some settings belong to the radio,
+not to one slice, so a change to one reaches every slice that listens
+through what it touches, whoever owns it. A change on this list that
+would disturb another device's slices (or, once transmit has a holder,
+the holder, when it touches the transmitter) is held and asked, as
+section 7.5 describes, with `kind` `sharedSetting`; one that disturbs
+nobody, or sets the value already there, applies at once as before. The
+requester's own slices never count, nor do slices nobody owns.
+
+| Change | Arrives as | What it reaches |
+| --- | --- | --- |
+| Sample rate | `requestSliceSampleRate` | Protocol 1: every receiver (the radio's data flow stops); Protocol 2: that receiver. Each other device's slice the narrower window leaves out moves to another receiver or, with none free, closes (the Core's own plan); it closes only once the change is certain, so a change refused after Confirm closes nothing and tells nobody |
+| Attenuator, preamp, automatic attenuator | `stepAtt` writes (`attenuationDb`, `enabled`, `preampMode`, `autoAtt...`) | ADC0's receivers |
+| ADC1 preamp | `stepAtt` `rx1Preamp` | ADC1's receivers |
+| Receive antenna | a slice's `rxAntenna`; `alexAntennas` `rxAntennas`, `rxOnlyAntennas`, `useTxAntennaForRx`; `setAlexRxAntenna` | every receiver on a 1-ADC board; on a 2-ADC board ADC0's (ANT1 to ANT3) and, for a receive-only input, ADC1's; a slice's own write also its receiver's other slices |
+| Receive filter policy | `setAlexBpfMode` | the receivers on that filter chain |
+| PureSignal | `pureSignalSettings` writes, `transmit` `pureSig`, `ps3.off`, `ps3.single`, `ps3.automatic`, `ps3.applyCurrent`, `ps3.restoreCorrection` | on a 1-ADC board every receiver, `pausesWhileTransmitting`; the transmitter |
+| Diversity | a slice's `diversityEnabled`, `diversityPhaseDeg`, `diversityGainDb`, `diversityFineNullEnabled` | receiver 0 on a 2-ADC board, every receiver on a 1-ADC board |
+| A shared receiver's noise blanker | a slice's `nbMode`, `nb1Threshold`, `nb1TransitionMs`, `nb1LeadMs`, `nb1LagMs`, `nb2Mode` | that receiver's slices |
+| Notches | `notch.add`, `notch.move`, `notch.setActive`, `notch.delete`; `notches` `globalEnabled`, `autoIncrease` | every slice whose passband overlaps the notch (the notches, for the two switches) |
+| Receive options | `settings.write` of the receive `DspOptions...Rx` keys (buffer size, filter size, filter type, per mode group) | every receiver |
+| Transmit antenna | a slice's `txAntenna` | the transmitter |
+| The amplifier, interlock, power limit | `amplifier` `operate`; `configurePgxl`, `disconnectPgxl`, `setPgxlConnectionSettings`, `setPgxlName`, `setPgxlHardware`, `setPgxlNetwork`, `savePgxlSettings`, `setTxInterlockPolicy`, `setPgxlPowerCap`, `configureRfKit`, `disconnectRfKit`, `setRfKitEnabled`; `settings.write` of `PGXL_...` | the transmitter |
+| 4O3A on or off | `setFourO3AEnabled` | as the tuner: ADC0's receivers on a 2-ADC board, every receiver on a 1-ADC board; the transmitter |
+| The tuner, the RF-Kit amplifier's antenna | `setTgxlAntenna`, `setTgxlOperate`, `setTgxlBypass`, `configureTgxl`, `disconnectTgxl`, `setTgxlName`, `setTgxlNetwork`, `saveTgxlSettings`; `settings.write` of `TGXL_...` and `RfKit_...` | ADC0's receivers on a 2-ADC board, every receiver on a 1-ADC board; the transmitter |
+
+A verb naming another device's slice is refused first, as section 7.3
+says. The words of `change` are the Core's: "Attenuator, ADC 1", "0 dB",
+"20 dB"; "Sample rate, Receiver 1", "192 kHz", "96 kHz"; "Noise blanker,
+Receiver 1", "Off", "NB"; "Diversity phase", "0 degrees", "45 degrees";
+"Diversity gain", "0 dB", "6 dB"; "Diversity fine null", "Off", "On"; "4O3A
+amplifier and tuner", "Off", "On". A `settings.write` held this way is answered by
+`settings.reject` with "Waiting for you to confirm." and the Core's value
+(section 8.1), and its `confirm.request` carries `forSettingsKey`.
+
+On proceed the change applies as the original request would have, the
+answer carrying the readback (section 7.5), and each disturbed device is
+sent a `notice` of kind `settingChanged`: who, `change`, `secondsAgo`,
+the slices of its it reached (`slices`), `takeBack` false, and a
+`reason` such as "iPhone changed Attenuator, ADC 1 from 0 dB to 20 dB."
+followed, where a slice moved, closed or pauses, by "Your slice B moved
+to another receiver.", "Your slice B closed: no receiver was free." or
+"Your slice B pauses while the radio transmits.". A new write from the
+requester to the same thing cancels its open question. A window without
+`sessionHolderVersion` 1 is never asked: its change is refused "This
+change would affect <names>. Update NereusSDR to confirm changes that
+affect other devices.".
+
+**The receive antenna stays put.** Band tracking re-applies a band's
+receive antenna when a slice crosses into it. While another device has a
+slice on a receiver fed by the ADC that antenna relay feeds (every
+receiver on a 1-ADC board, ADC0's on a 2-ADC board), the antenna stays
+where it is instead: the tuning goes ahead with no question, and the
+device tuning is sent a `notice` of kind `antennaKept`, "The antenna stays
+on ANT1 while <other device's short name> listens on it.", with the
+slice in `slices` and no `by` keys. It stays when a transmission ends
+too; the band's transmit antenna still applies at key-down. Once the
+other device's slices have left that ADC, the next band crossing switches
+as always; nothing switches on its own when they leave.
+
+**Transmit.** A change that touches the transmitter disturbs the
+transmit holder (listed with `holdsTransmit` true), and while the holder
+is on the air a change to the transmit path, a Protocol 1 sample rate, or
+a change that would move or close the holder's transmit slice is refused
+with "<holder's short name> is on the air. Try again when they stop."
+(ruling 7.4). Both arrive with the transmit holder (a later task); until
+then nobody holds transmit, so a change that touches only the
+transmitter disturbs nobody and applies at once, and `state` is never
+`transmitting`.
 
 ### 7.4 The catalogue
 
@@ -2043,14 +2607,34 @@ computer, never sent). `classifySettingsKey` (`SettingsScope.cpp`) decides:
   origin tag is the writing client's session identifier, not a sequence
   number. The station writes the value to its own store and sends
   `settings.value` for the key with the same `origin`, so the writer can
-  recognise its own echo. A change the Core makes itself goes out as
+  recognise its own echo. It sends that `settings.value` to every device's
+  session, each of which holds every station-scoped key; only the writer
+  finds its own `origin` in it (iPhone app plan Task 72). A change the Core makes itself goes out as
   `settings.value` with an empty origin. A removal goes out as
   `settings.value` with no property entry.
 - `settings.remove` removes a station-scoped key; the station ignores (and
   logs) a remove of an operator-local key.
 - A refused write or remove gets `settings.reject`: the key, the station's
   own value as the property entry when it has one, and a `reason`. The
-  client puts that value back.
+  client puts that value back. It goes to the session that wrote, and to
+  no other.
+
+A `settings.write` that would disturb another device (the several-devices
+design's section 7.1 list, section 7.6 here) is held as section 7.3 says:
+`settings.reject` with the reason "Waiting for you to confirm." and the
+Core's value, then a `confirm.request` with `forSettingsKey`; its proceed
+carries `settingsKey` and `value` as its readback (section 7.5). A
+`settings.remove` returns its key to the default, live, so it is checked
+exactly as a write of the default is: held and asked the same way, with
+`change.to` "Default", and its proceed carries `settingsKey` alone as its
+readback, since the key is gone.
+
+A slice's own keys, `Slice<N>/...`, are written and removed only by the
+device that owns slice N (the several-devices design, ruling 5.9). From
+any other device, and for an id no live slice holds, they get
+`settings.reject` with the Core's value and the reason "That slice belongs
+to <the owner's name>. It can be changed only there." ("the Core" when
+nobody owns it).
 
 The station refuses a write to a key outside the station scope ("Each app
 keeps this setting itself; the Core does not store it."), to another radio's `hardware/<mac>/` keys ("These settings
@@ -2122,7 +2706,16 @@ A client asks the station to act with `command.invoke`: a `verb`, an `id`
 and `args`, a list of property entries. The station answers each with
 `command.result`: the same `verb` and `id`, `accepted`, `reason` (empty on
 success), `affected` (the object keys the command changed) and, for
-commands that return data, `values`, a list of property entries. For the
+commands that return data, `values`, a list of property entries. Every
+`command.result`, including a later one (a PureSignal action's later
+phases, a sample-rate change answered on a later turn), goes to the session
+that sent the `command.invoke`, and to no other. Each client counts its
+own ids, so two devices may use the same `id` at once: the station tells
+their commands apart by the session that sent each, never by `verb` and
+`id` alone. A file a device is
+sending with `dspAssets.beginImport` belongs to that device's session: it is
+cancelled when that session ends, and another device leaving never touches
+it. For the
 `nnr.*`, `ps3.*` and `dspAssets.*` families the `id` must be a whole number
 from 1 to 4294967295 or the message is refused.
 
@@ -2219,13 +2812,29 @@ refused.
 | `station.retireToken` | none | `deviceAdminVersion` | 1 | 11 |
 | `pairing.open` | none | `pairingVersion` | 1 | 11 |
 | `pairing.close` | none | `pairingVersion` | 1 | 11 |
+| `session.leave` | none | `sessionHolderVersion` | 1 | 11 |
+| `confirm.proceed` | `id` i64, `choice` i64 | `sessionHolderVersion` | 1 | 11 |
+| `confirm.cancel` | `id` i64 | `sessionHolderVersion` | 1 | 11 |
+| `notice.takeBack` | `id` i64 | `sessionHolderVersion` | 1 | 11 |
 
 <!-- /surface -->
 
 The table's capability columns are the gate the desktop client applies
 before sending (section 6.2).
 
-Six command groups need a sentence beyond the table:
+These command groups need a sentence beyond the table:
+
+- **Slices** (iPhone app plan Task 73). With several devices on one Core,
+  `addSlice` and `addSliceOnPan` make a slice the asking device owns;
+  `setActiveSliceById` makes one of the asking device's own slices its
+  active slice, and a slice's `active` means "its owner's active slice", so
+  each device sees one active slice among its own and another device's
+  choice never moves it. The station's own duties that exist once per
+  radio (the FreeDV Reporter's frequency, TCI's per-slice broadcasts)
+  follow the most recent choice by any device. `removeSlice`,
+  `setActiveSliceById`, `nnr.*`, `notch.add`, `requestSliceSampleRate`,
+  `requestStreamCentre` and `requestStreamCtunPinned` naming a slice that
+  is not the requester's are refused (section 7.3).
 
 - **The filter policy.** `setAlexBpfMode` sets one receive filter chain's
   filter policy (`chain` 0 or 1; `mode` 0 Auto, 1 Force filter, 2 Force
@@ -2336,6 +2945,34 @@ Six command groups need a sentence beyond the table:
   either kind of connection. Either one with arguments is refused ("The
   request to open pairing was not understood.", "The request to close
   pairing was not understood.").
+- **Leaving on purpose.** `session.leave` (`sessionHolderVersion` 1, iPhone
+  app plan Task 71) ends the device's session with no away time: its
+  place is free at once (section 12.4). After the accepted result the
+  station closes the connection, with no `session.end`; the client closes
+  its end too. With arguments it is refused, "The request to leave the
+  Core was not understood.". From a peer without `sessionHolderVersion` 1
+  it is refused as a verb the station does not route is (section 9.2),
+  and the connection stays up.
+- **Answering the Core's questions** (`sessionHolderVersion` 1, iPhone
+  app plan Task 74; section 7.5). `confirm.proceed {id, choice}` applies
+  the change a `confirm.request` held (`choice` -1 when the kind has none,
+  a choice's `choice` for a take); `confirm.cancel {id}` drops it and
+  changes nothing; `notice.takeBack {id}` asks a `receiverTaken` or
+  `sliceTaken` notice's take the other way, answered "Waiting for you to
+  confirm." with `values` `phase` `needsConfirmation` and a
+  `confirm.request`. A missing or renamed argument is refused, "The Core
+  could not read this request."; an id that names no open question, "That
+  question is no longer open. Make the change again.". From a peer without
+  `sessionHolderVersion` 1 each is refused as a verb the station does not
+  route (section 9.2).
+- **Receiver requests from several devices** (section 7.5).
+  `requestStreamCtunPinned` from a device that does not anchor the
+  receiver is refused; `requestStreamCentre` from the anchor that would
+  leave another device's slice outside is held and asked, from another
+  device it takes the panadapter to a free receiver. `addSlice`,
+  `addSliceOnPan` and those refused because every receiver (or slice) is
+  in use name the devices holding them, and a device with the feature is
+  then asked to take one.
 
 ### 9.2 Unknown verbs
 
@@ -2402,8 +3039,33 @@ specified in
 [remote media control version 1](2026-09-20-remote-media-control-v1.md);
 the table lists the keys each operation carries as the code builds and
 checks them. A whole `media.control` message over 128 KiB is refused. The
-station accepts media control only from the current session, after
-`snapshot.complete`, when media is available. The `subscribe` fields that
+station accepts media control from each admitted session, for its own
+media, after `snapshot.complete`, when media is available (iPhone app plan
+Task 76; the several-devices design, ruling 9.1). Every admitted device has
+its own media: its own media connection, display endpoints (at most 8),
+receiver streams (at most 4) and headphones mix, and one device's
+`media.control` never reaches another's. A device subscribes displays, and
+asks for receiver streams, only for its own slices: a `subscribe` naming
+another device's slice gets an `allocation-result` (or `rejected`) "That
+slice belongs to another device.", and a `receiver-audio` naming one is
+answered as a slice that is not there (`slice-removed`). When a slice
+passes to another device, the old owner's displays on it retire as a
+removed slice's do (reason "slice removed", on the `allocation-result`
+for a budget-aware app, else `rejected`), and its receiver stream on it
+stops as `slice-removed`: that device's view has destroyed the slice. A
+receiver's
+spectrum is computed once for everyone watching it: two devices' pans on
+one receiver share its engine, which runs at the largest size and highest
+rate any of them was granted, and a grant limited by that engine says
+`sharedEngine` as it does between one device's pans. Each device hears its
+own slices: its main audio (the speakers' mix, or its whole program for an
+app without the headphones mix) and its headphones mix sum only its own
+slices, each with its own gain, pan, mute and route; the Core's own output
+plays only the station device's slices. A device that leaves ends its own
+media and no other's. Telemetry (`station.metrics.v1`) goes to every
+session that negotiated it, each on its own sequence. **Transmit joins
+here:** the transmit holder's mix carries the transmit monitor once remote
+transmit exists (Task 36). The `subscribe` fields that
 come with `displayExtrasVersion` (`peakBlobs`, `activePeakHold`,
 `noiseFloor`, `waterfallLevels`, `normalize`, `calibrationOffsetDb`,
 `averageTimeMs`, `waterfallAverageTimeMs`), their ranges and what the Core sends for them are
@@ -2484,19 +3146,25 @@ runs the same deadline on its side.
   its own address first, then the oldest of all) and takes its place, so
   openings that never finish do not keep a device out, and a client that
   redials while its own abandoned dials are still opening gets its newest
-  dial through. The total is 64, not the 8 connections below, because it
+  dial through. The total is 64, not the 24 connections below, because it
   is what a flood must fill to push a real device's opening out: with 2
   per address that takes 64 connects from at least 32 addresses or /64s
   within the device's own opening time. Each opening costs one file
   descriptor; `nereusd` runs under the default limit of 1024
   (`packaging/nereusd.service.in` sets no `LimitNOFILE`), so 64 openings
-  and the 8 connections stay far below it.
-- The station accepts at most 8 connections at once
-  (`kMaxConcurrentPeers`), counting those still connecting. The next one
-  gets `session.end` "The Core already has as many connections as it
-  allows. Try again shortly.",
-  `retryable` true, because a reconnecting client meets it while its own
-  dead sockets drain.
+  and the 24 connections stay far below it.
+- The station accepts at most 24 connections at once
+  (`kMaxConcurrentPeers`), counting every socket, signed in, connecting or
+  pairing: four devices each reconnecting with an old socket not yet
+  noticed dead and four racing attempts, and a fifth device's four. The
+  next one gets `session.end` "The Core already has as many connections
+  as it allows. Try again shortly.", `retryable` true, before any `hello`,
+  because a reconnecting client meets it while its own dead sockets
+  drain.
+- At most 4 devices hold places at once (`kMaxDeviceSessions`, iPhone app
+  plan Task 71): sessions let in, devices away in their 3 minutes, and a
+  hosting desktop's own window. Connections still connecting and pairing
+  connections take no place.
 - Of those, one address may hold at most 2 that are still connecting
   (their snapshot not yet sent; `kMaxHandshakesPerAddress`), so one host
   cannot hold every slot by redialling within the connect deadline. An
@@ -2508,7 +3176,7 @@ runs the same deadline on its side.
   the same `session.end`, `retryable` true. A connection
   with no address of its own (the relay's) is not counted by address.
 
-### 12.4 Ending, preemption and retryable
+### 12.4 Ending, admission and retryable
 
 `session.end` carries a `reason` and `retryable`. `auth.result` carries
 `retryable` too. A client redials only after a retryable end; after one
@@ -2532,7 +3200,11 @@ non-empty string; an empty one is refused like any mistyped key.
 | No shared major (section 6.1) | `session.end` naming both sides' versions and the side to update | false | `linkVersion` |
 | Message the station cannot decode (section 13) | `session.end` "The Core could not read a message from this app." | false | `protocolError` |
 | Out-of-order handshake (section 5.1) | `session.end` | false | `protocolError` |
-| Preempted by a newer authenticated connection | `session.end` "Another app at ... connected to the Core and took over. Connect again to take it back." | false | `takenOver` |
+| The same device connected again (section 5.1): its older connection | `session.end` "This device connected again." | false | `sameDevice` |
+| Every place on the Core is taken (section 5.1), a device that declared `sessionHolder` | `session.end` "The Core already has four devices connected." | true | none |
+| Every place on the Core is taken (section 5.1), an older window | `session.end` "The Core is full. Update NereusSDR to take a device's place, or try again later." | true | none |
+| A window without the several-devices feature, with no slice for it at sign-in (section 7.5) | `session.end` "All the radio's slices are in use. Try again when another device closes one." or "All the radio's receivers are in use. Try again when another device frees one." | true | none |
+| Such a window's last slice taken by another device (section 7.5) | `session.end` "<taker's name> took the receiver this app was using. Update NereusSDR to share the Core." | false | `takenOver` |
 | Connection limit reached | `session.end` | true | none |
 | Connect deadline expired | `session.end` | true | none |
 | Heartbeat timeout | `session.end` | true | none |
@@ -2557,7 +3229,10 @@ not verify for the certificate the connection presented, is refused and
 never trusted silently. A new certificate whose binding verifies is
 accepted without a question, whatever pin was saved.
 
-The takeover and version reasons are worded in one place,
+The one end the station sends today with `takenOver` is an older
+window's last slice taken (section 7.5), with its own words above; the
+fifth device's takeover, which will also carry it, is a later version's. The takeover and version
+reasons are worded in one place,
 `src/core/session/SessionEndReasons.{h,cpp}`: "Another app at
 *address:port* connected to the Core and took over. Connect again to take
 it back." and "This Core runs link version *N* and this app runs version
@@ -2574,10 +3249,52 @@ address and the two versions where they are present. It reads the words
 (`SessionEndReasons::parse`) only for an end that carries no code, from a
 Core older than the code.
 
-Only one session is authenticated at a time. A second connection that
-authenticates takes the session: the station ends the first with
-`retryable` false, so the two clients do not trade the radio back and
-forth, and the displaced operator reconnects by hand.
+**Several devices** (iPhone app plan Task 71). Up to four devices hold
+places at once, and no sign-in ever ends another device's session. A
+device's own newer connection replaces its older one, which ends with
+`sameDevice`, not retryable, so the two do not trade places. A paired
+device whose session ends without `session.leave` (a lost link, the
+heartbeat's end, a closed socket, an app its system stopped) is **away**
+for 3 minutes (`graceMs` 180000), keeping its place; signing in again
+within them is the same-device case, let in with no question. When the 3
+minutes end its place is freed and the Core keeps that its time ran out
+until the device next signs in, is removed, or the Core restarts. A window
+signed in with the token and no key, and a device that leaves with
+`session.leave` (section 9.1), frees its place at once; so does removing a
+device, away or not. The heartbeat timeout stays retryable: that end is
+what starts a device's 3 minutes.
+
+**What happens to a device's slices** (iPhone app plan Task 73; the
+several-devices design, rulings 4.11, 4.12 and 5.2). An away device's
+slices keep running, its own, their markers `ownerAway`. When its 3
+minutes end, or it leaves with `session.leave`, its slices close and the
+Core saves them for its return, with each slice's own settings; if no
+other device is on the Core they keep running instead, held for it. A
+token window's slices are not saved (it cannot be recognised again): with
+another device on the Core they close, otherwise they pass to nobody.
+Removing a device closes its slices, held ones included, and forgets what
+was saved for it. The Core never closes its last slice for any of these;
+that one stays, held (or owned by nobody). When a device is let in, the
+Core returns the slices held for it, restores its saved slices where they
+fit (a receiver window that covers each or a free receiver; its old
+letter when free, else the lowest free), keeps any that do not fit for
+next time, and, if it still owns none, gives it one (section 7.1).
+
+**Routing with several devices** (iPhone app plan Task 72; the
+several-devices design, ruling 5.8). Each session has its own view of the
+station's state, with its own pending changes and its own connect-time
+burst (section 5.1), each message fitted to what that session negotiated:
+its minor and its capabilities, as before.
+
+| Message | Goes to |
+| --- | --- |
+| `command.result`, `property.result`, `settings.reject` | the session that asked, only |
+| `confirm.request`, `notice` | the one device they are for, only with `sessionHolderVersion` 1; a notice for an away device waits for its return (section 7.5) |
+| `delta`, `object.create`, `object.destroy` | every session holding the object; a device's own write is not echoed to it (section 7.3). A `slice:<id>` only to the session of the device that owns it; a `marker:<id>` to every session with `sessionHolderVersion` 1 but that one (section 7.1) |
+| `settings.value` | every session, with the writer's `origin` (section 8.1) |
+| a write's readback of its side effects on the written object | the writer, only (section 7.3) |
+| `capabilities` | each session its own, with its own share of the display budget (section 6.4) |
+| `media.control`, media, `station.metrics.v1` | each session its own (section 11) |
 
 The desktop client redials on the schedule 1, 2, 5, 10, 30 and 60 s, then
 stays at 60 s (`kReconnectBackoffSteps` in `StationClient.cpp`), and starts
@@ -2616,7 +3333,7 @@ listener bound to loopback only is neither announced nor advertised
 `dnsSdInterfaceForListener` in `DnsSdAdvertiser.cpp`). Discovery is never
 trust: a client pins what it finds (section 3.2) or pairs (section 3.6).
 
-Both carry the same four facts about the Core, and both change when one
+Both carry the same five facts about the Core, and both change when one
 does (`DaemonApp::updateStationAnnouncement`):
 
 - **identity**: the identity fingerprint, SHA-256 of the identity key
@@ -2631,7 +3348,14 @@ does (`DaemonApp::updateStationAnnouncement`):
   `pairing_lan_click` allowed (one tap on this network pairs; the code does
   too), `code` while `OpenUnclaimed` with it denied or while
   `OpenReopened`, and `closed` while `ClosedClaimed` or when the Core does
-  not pair (`pairingVersion` 0).
+  not pair (`pairingVersion` 0);
+- **devices** (iPhone app plan Task 71): how many devices hold a place on
+  the Core, 0 to 4, counted as section 12.3 counts them
+  (`StationServer::devicesConnectedForDiscovery`); a Core no device has
+  claimed sends 0. A number only: who is on the Core reaches paired,
+  signed-in devices alone (`connectedDevices`, section 7.1). A Core
+  reached through the rendezvous or the relay has no announcement, so its
+  count shows only after sign-in.
 
 ### 14.1 The LAN announcement
 
@@ -2646,8 +3370,8 @@ does (`DaemonApp::updateStationAnnouncement`):
   (`kStationLanCacheTtlMs`);
 - a listener takes datagrams of at most 512 bytes
   (`kStationLanMaxDatagramBytes`); with the fields below a schema-2
-  datagram is at most 479 (`kStationLanMaxSchema2DatagramBytes`), so no
-  field is ever cut short.
+  datagram is at most 480 (`kStationLanMaxSchema2DatagramBytes`; 479 before
+  the device count), so no field is ever cut short.
 
 A station sends schema 2 only (`kStationLanAnnouncementSchema`). A listener
 reads schema 1 and schema 2, so a Core from before schema 2 is still found.
@@ -2671,6 +3395,7 @@ The datagram is binary, in this order; schema 1 ends after the radio MAC:
 | Label length | 1 byte | schema 2: 0 to 65 (`kStationLanMaxLabelBytes`) |
 | Label | that many bytes | schema 2: ASCII letters, digits, `/`, `_` and `-` (a callsign of up to 32, `/`, a suffix of up to 32) |
 | Pairing | 1 byte | schema 2: 0 `closed`, 1 `click`, 2 `code` |
+| Devices connected | 1 byte | schema 2, appended by iPhone app plan Task 71: 0 to 4 (`kStationLanMaxDevicesConnected`), the places taken; a station always sends it. A reader that never sees it (a datagram from an older Core) takes the count as not known and shows none |
 
 **Schema 2 extends by appending.** A reader ignores any bytes after the
 schema-2 fields it knows. It still refuses a datagram that is too short
@@ -2689,12 +3414,19 @@ schema-1 datagram for an endpoint that already sent schema 2 updates only
 the fields schema 1 carries; it never clears the identity, label, claimed
 state or pairing (`StationLanCache::ingest`).
 
-The conformance vectors `media/lan-announcement.bin` (schema 1) and
-`media/lan-announcement-2.bin` (schema 2) (section 16.4) are datagrams the
+A schema-1 datagram for an endpoint that already sent schema 2 does not
+clear its device count either.
+
+The conformance vectors `media/lan-announcement.bin` (schema 1),
+`media/lan-announcement-2.bin` (schema 2, from a Core before the device
+count) and `media/lan-announcement-2-devices.bin` (the same datagram with
+the count, 2) (section 16.4) are datagrams the
 station's own encoder wrote, with their decoded fields, `schema` among
-them, in the `.expect.json` beside each. `media/lan-announcement-2-trailing.bin`
-is the schema-2 datagram with five bytes appended, as a later field would
-be; its expectation holds the same fields and `ignoredTrailingBytes` 5. `tst_link_conformance_media`
+them, in the `.expect.json` beside each (`devicesConnected` only where the
+datagram carries it). `media/lan-announcement-2-trailing.bin` is the
+`lan-announcement-2-devices` datagram with five bytes appended after the
+count, as a later field would be; its expectation holds the same fields
+and `ignoredTrailingBytes` 5. `tst_link_conformance_media`
 decodes each and encodes the fields again, so a change to this layout
 fails there until the vectors, and this table, move with it.
 
@@ -2715,7 +3447,7 @@ The station registers one DNS-SD service:
   Bonjour renames it when another service holds the name, so a client reads
   the Core's label from the TXT record's `name`, not from the instance
   name;
-- a TXT record of five entries, in this order:
+- a TXT record of six entries, in this order:
 
 | Key | Value |
 | --- | --- |
@@ -2724,6 +3456,7 @@ The station registers one DNS-SD service:
 | `claimed` | `0` or `1` |
 | `pair` | `click`, `code` or `closed` |
 | `name` | the label, possibly empty; at most 65 characters |
+| `devices` | iPhone app plan Task 71: `0` to `4`, how many devices hold a place on the Core (section 14); `0` on a Core no device has claimed. `v` stays `1`: an older client ignores the key |
 
 A client ignores a key it does not know, so a newer station still lists,
 and treats a record whose `v` is not `1` as one it cannot read. `id` names
@@ -2742,7 +3475,7 @@ themselves (`DnsSdAdvertiser::unavailableText`).
 
 The conformance vector `media/dnssd-txt.bin` (section 16.4) is the TXT
 record the station's encoder writes for the Core of
-`media/lan-announcement-2.bin`, each entry preceded by its length in one
+`media/lan-announcement-2-devices.bin`, each entry preceded by its length in one
 byte (RFC 6763 section 6.1), with the service type and the entries as
 strings in `media/dnssd-txt.expect.json`.
 
@@ -2765,14 +3498,18 @@ maximum also equals `kMaximumSpectrumDisplayFramesPerSecond` in
 | --- | --- | --- | --- |
 | `clientInboundMessageBytes` | 8388608 | bytes | StationClient::kMaxIncomingMessageBytes |
 | `clientReconnectBackoffMs` | 1000, 2000, 5000, 10000, 30000, 60000 | ms | StationClient.cpp kReconnectBackoffSteps x StationClient::kDefaultReconnectBackoffUnitMs |
+| `confirmExpiryMs` | 60000 | ms | ConfirmStep::kExpiryMs |
 | `connectDeadlineMs` | 30000 | ms | kStationHandshakeDeadlineMs |
 | `deltaFlushMs` | 50 | ms | StationServer::kDefaultDeltaFlushMs |
 | `endpointFps` | 1 to 60 | frames per second | DaemonMediaController.cpp handleSubscribe literal 1; kMaximumSpectrumDisplayFramesPerSecond |
 | `endpointPixels` | 1 to 4096 | pixels | DaemonMediaController.cpp handleSubscribe literal 1; SpectrumEndpoint::kMaxPixels |
+| `graceMs` | 180000 | ms | DeviceSessionRegistry::kGraceMs |
 | `heartbeatIntervalMs` | 20000 | ms | StationServer::kDefaultHeartbeatIntervalMs |
+| `lanAnnouncementMaxBytes` | 480 | bytes | kStationLanMaxSchema2DatagramBytes |
+| `maxDeviceSessions` | 4 | count | StationServer::kMaxDeviceSessions |
 | `maxDisplayEndpoints` | 8 | count | DaemonMediaController.cpp kMaxEndpoints |
 | `maxHandshakesPerAddress` | 2 | count | StationServer::kMaxHandshakesPerAddress |
-| `maxPeers` | 8 | count | StationServer::kMaxConcurrentPeers |
+| `maxPeers` | 24 | count | StationServer::kMaxConcurrentPeers |
 | `mediaControlBytes` | 131072 | bytes | kMaxMediaControlBytes |
 | `missedPongs` | 2 | count | StationServer::kDefaultMaxMissedPongs |
 | `shortNameMaxBytes` | 32 | bytes | DeviceStore::kMaxShortNameBytes |
@@ -2859,6 +3596,32 @@ A number the station's DSP measures is written `"$within:<t>:<v>"`, with
 the tolerance stated, never `"$any"`; a counter whose value depends on
 timing is `"$int"`, not pinned.
 
+**JSON inside a string.** Where the station sends a string that holds
+JSON (a `utf8` property such as `connectedDevices`' `listJson`), a
+fixture may write `{"$json": <expectation>}` in the string's place: an
+object whose one key is `"$json"`. It matches a string that parses as
+exactly one JSON value (RFC 8259: an object, an array, a string, a
+number, `true`, `false` or `null`, with whitespace around it allowed),
+and that value must match `<expectation>` by this section's rules: the
+placeholders above stand inside it, a `{"$json": ...}` may nest inside
+it, object keys match in any order and arrays in order and length. A
+name recorded inside it is recorded for the whole fixture run, so a
+`"$ref:<name>"` inside or outside a string refers to it. A value that is
+not a string fails as a wrong type; a string that does not parse, or
+holds nothing or more than one value, fails with the fixture, the step,
+the path and "not JSON" (the station's runner reports
+`<fixture>: step <n> (station <type>): <path>: not JSON (<why>), got
+<the string>`); an object holding `"$json"` beside another key is a
+malformed fixture. The path inside the string is the string's path
+followed by `($json)`, as `$.properties[0].value($json)[1].state`.
+`{"$json": ...}` stands only in a station message: in a client message
+it is a malformed fixture, and neither runner fills one there. In a
+fixture for the app, its expectation holds only what a station message
+there may hold (section 16.3), and an app's runner sends it to its
+client as the string of the expectation filled as that section fills a
+station message, written as compact JSON (no whitespace, keys in any
+order).
+
 Matching is by value: objects must have the same keys and arrays the same
 length; numbers compare by value, so `1` and `1.0` are equal. A name is
 recorded once per fixture run; a later placeholder with the same name
@@ -2885,9 +3648,10 @@ again and the two JSON objects compare equal after parsing, key order
 ignored. The fixtures cover every message kind in each direction it
 travels: eleven from the client (`hello`, `auth.request`, `command.invoke`,
 `media.control`, `property.write`, `settings.write`, `settings.remove`,
-and `pair.start`, `pair.spake`, `pair.confirm`, `pair.fail`) and twenty
-from the station (the sixteen before pairing, and `pair.accept`,
-`pair.spake`, `pair.confirm`, `pair.fail`), with a `delta` carrying `"nan"` and `"-inf"`
+and `pair.start`, `pair.spake`, `pair.confirm`, `pair.fail`) and
+twenty-two from the station (the sixteen before pairing, `pair.accept`,
+`pair.spake`, `pair.confirm`, `pair.fail`, and `confirm.request` and
+`notice`, section 7.5), with a `delta` carrying `"nan"` and `"-inf"`
 (section 4.2). The client's `hello` has two fixtures: an older app's,
 without `majors` or `features`, and one declaring both; `auth.request` has
 three: a token, a device sign-in with its `device` block (section 3.5), and
@@ -2906,7 +3670,8 @@ a `hello` declaring a feature version that is not a whole number, a
 `hello` whose `identity` is not an object, an `auth.request` whose `device`
 lacks `signature`, one whose `shortName` is not a string, a `session.end` with an empty `code`, a `pair.start`
 whose `mode` is neither `lan` nor `code`, a `pair.spake` step outside 0 to
-3, a `pair.fail` whose `retryAfterMs` is not a whole number, and an
+3, a `pair.fail` whose `retryAfterMs` is not a whole number, a `notice`
+whose `takeBack` is not a boolean, and an
 unknown `type`. The pairing fixtures carry placeholders for keys, shares
 and boxes; the live exchange is proved by `nereus_pairing_peer` (section
 3.6).
@@ -2966,12 +3731,35 @@ client. Two runners play it, one from each end.
   client's own ids below 1000 while a fixture runs, so an answer to a
   scripted message never carries an id the client used.
 
+**Several clients** (iPhone app plan Task 71). A fixture may play other
+clients beside its own, each signing in as a paired device:
+`stationSetup.otherClients` is `[{"name": "b", "device": 1, "features":
+{...}, "shortName": "..."}]`, where `device` is `n` (the paired device
+`"$ref:device:<n>"` names, so `otherPairedDevices` pairs at least `n`) or
+`"self"` (the runner's own device), `features` is what that client's
+`hello` declares and `shortName`, when given, what its sign-in carries.
+A client step may carry `"client": "<name>"` and a station step
+`"to": "<name>"`; absent means the fixture's own client. Two more steps:
+`{"connect": "<name>"}` runs that client's whole connect sequence (its
+`hello`, its sign-in, and its messages up to `snapshot.complete`, taken
+without matching), and `{"close": "<name>"}` closes its connection;
+`expectClosed` may carry `"client"` too. The station's messages are
+matched per client, in that client's own arrival order. `otherConnections`
+stays for sockets that never sign in. **An app's runner** plays only its
+own client: it skips other clients' steps and the station messages sent
+to them, and a `connect` or `close` step names nothing it plays. A fixture
+where the own client shares the Core names the features its `hello`
+declares as a literal (`{"deviceAuth": 1, "sessionHolder": 1}`), not
+`"$object"`, since what the station sends it depends on them; an app's
+client declares them.
+
 **Which fixtures run on the app.** A fixture whose client behaviour no
 app can adopt runs on the station only (`"runs": ["station"]`): an older
 app's `hello` (`major-refused`, `lower-minor`), made-up majors or features
 (`version-*`), a client that answers no ping (`heartbeat-missed`) or never
-sends its token (`connect-deadline`), and the lockout and preemption,
-which need other clients (`lockout`, `preempted`), and the device proofs
+sends its token (`connect-deadline`), the lockout, which needs other
+clients (`lockout`), an older window meeting a full Core (`older-window`)
+and a device's own connection replaced (`same-device-again`), and the device proofs
 that fail (`device-other-challenge`, `device-other-certificate`), which
 hold the Core's verification to a block a conformant client never sends.
 Their client steps are all `scripted`. The device sign-in fixtures where
@@ -3018,7 +3806,9 @@ nothing an app's runner could not send its client:
 
 **Filling a station message (an app's runner).** An app's runner sends
 its client each station message with `"$string"` as `""`, `"$int"` as `0`,
-`"$ref:<name>"` as the recorded value and `"$within:<t>:<v>"` as `<v>`,
+`"$ref:<name>"` as the recorded value, `"$within:<t>:<v>"` as `<v>` and
+`{"$json": <expectation>}` as the compact JSON text of `<expectation>`
+filled by these same rules (section 16.1),
 except in the station `hello`:
 
 - `identity` is a test station identity the runner makes at run time (a
@@ -3098,9 +3888,12 @@ role.
 | `media` | media is enabled | false |
 | `priorFailedAuthentications` | other clients that each sent a wrong token before this one connects | 0 |
 | `clientAnswersPings` | the client's transport answers the station's pings | true |
-| `preemptingClient` | `{"afterStep": i}`: a second client authenticates once step `i` is done | none |
-| `otherConnections` | other clients connected before this one, still connecting and sending nothing; 8 puts the station at its connection limit | 0 |
+| `otherClients` | other clients the runner plays beside its own, each signing in as a paired device (above) | none |
+| `otherConnections` | other clients connected before this one, still connecting and sending nothing; 24 puts the station at its connection limit | 0 |
 | `token` | `"active"`: a Core upgraded from before paired devices, with a pairing token (made at run time) that `"$ref:token"` names; `"none"`: a new Core, without one (section 3.3) | `"active"` |
+| `receivers` | iPhone app plan Task 74: the static radio's receivers, 192 kHz wide each, sized before its slices are made, so slices bind to them and the rules of section 7.5 apply; only with `"radio": "static"` | none |
+| `maxSlices` | with `receivers`, the slice cap | 5 |
+| `alexRxAntennas` | iPhone app plan Task 75: the static radio's receive antenna per band, 14 numbers 1 to 3 in `Band` order (160 m to XVTR), and band tracking on (the per-band antenna switch of section 7.6) as though a radio were connected; only with `"radio": "static"` | none (no band tracking) |
 | `otherPairedDevices` | that many devices besides the runner's own are paired before the client connects, their keys made at run time and never written in a fixture; their ids are `"$ref:device:1"` onwards; an app's runner ignores it | 0 |
 | `pairedDevice` | the station runner's own device (its key made at run time, the one `"$device:<case>"` signs with) is paired with the station before the client connects; an app's runner ignores it, as it ignores all of `stationSetup`, and accepts its app's key | false |
 
@@ -3121,14 +3914,35 @@ same on every machine.
 | `devices-pairing` | On the same Core as `devices`, `pairing.open` and `pairing.close` each with a renamed argument are refused; `pairing.open` is accepted with `values` `code` as `"$string"`, and the object's next `delta` has `pairingWindowOpen` true and `pairingCode` `"$string"`; `pairing.close` is accepted and the next `delta` has them false and `""`. Runs on the station alone |
 | `devices-retire-token-refused`, `devices-retire-token` | On an upgraded Core, a token connection that declares `deviceAuth` receives the object with `tokenActive` true; `station.retireToken` is refused with no device paired, and with one paired it is accepted and the connection ends: `session.end` `pairingRequired`, `retryable` false. Run on the station alone |
 | `catalog-anan-g2`, `catalog-hermes-lite-2` | The connect sequence to `snapshot.complete` on the static radio as an ANAN-G2 and as a Hermes Lite 2: the capabilities in full, and the `catalog` object with its `json` in full and `revision` 1 (section 7.4). The two differ exactly where the radios do: the board's model, name, attenuator (0 to 31 against -28 to 31), sample rates (six against four), antennas (three plus three receive-only against one plus none), PA rating and microphone input, and the RF power gauge its rating scales |
-| `connection-limit` | With eight other connections still connecting, the station sends no `hello`: `session.end` "The Core already has as many connections as it allows. Try again shortly.", `retryable` true, then the close |
+| `connection-limit` | With twenty-four other connections still connecting, the station sends no `hello`: `session.end` "The Core already has as many connections as it allows. Try again shortly.", `retryable` true, then the close |
 | `lockout` | After five wrong tokens from other clients, the right token is refused as rate limited, `retryable` true |
 | `major-refused` | An older app's `hello` (no `majors`) with major 2 gets `session.end` "This Core runs link version 1 and this app runs version 2. Update the Core.", `retryable` false, `code` `linkVersion` |
 | `version-declares` | A `hello` with `majors` `[1]` and a declared feature is accepted, and authentication follows |
 | `version-app-one-ahead` | An app supporting `[1, 2]` chooses 1, the highest it shares with the station, and is accepted |
 | `version-app-two-ahead` | An app supporting `[2, 3]` that sends major 3 gets `session.end` "This Core runs link version 1 and this app runs version 3. Update the Core.", `retryable` false, `code` `linkVersion` |
 | `lower-minor` | A `hello` with minor 4 agrees minor 4: the capabilities without the minor-11 entries, and a minor-11 verb refused with a plain reason |
-| `preempted` | A second authenticated client ends this session: `session.end`, `retryable` false, `code` `takenOver` |
+| `same-device-again` | The device signs in again on another connection (`otherClients` `"self"`): the older connection ends with `session.end` "This device connected again.", `retryable` false, `code` `sameDevice`, and the newer one is let in with no question. Runs on the station alone |
+| `older-window` | A window that signs in by key but predates several devices is let in first and owns the Core's slice; when a device with the feature is let in with a slice of its own, the older window is sent no marker for it, only the `devices` list moving. Four devices then fill the Core; a window from before paired devices (the token, no features) is let through `auth.result` and then turned away: `session.end` "The Core is full. Update NereusSDR to take a device's place, or try again later.", `retryable` true, no code. Runs on the station alone |
+| `connected-devices` | A device that declares `sessionHolder` receives `connectedDevices` in its snapshot (`deviceLimit` 4, `revision` 1), and a `delta` of it (with one of `devices`) each time another device is let in, including a window that declares only `deviceAuth` and so never receives the object itself, and when one drops; each device let in gets a slice of its own, which reaches this device as a marker; `listJson` is a `{"$json": ...}` of the list's shape (section 16.1): each entry's keys with its literal name, short name, kind, flags, state and `listeningOn` (`{sliceId, letter, band, mode}`), its `deviceId` `"$string"` and its three durations `"$int"`, since ids are made at run time and a fixture for the app holds no capture |
+| `short-name` | Another device signs in with a short name, drops, and signs in again with a new one: each change moves `connectedDevices`' and `devices`' revisions, the new short name replacing the old in both lists and on its slice's marker |
+| `grace-return` | Another device drops and is away; a minute later nothing has been sent about it but its slice's marker turning `ownerAway`; it signs in again within its 3 minutes and is let in with no question, the list sent again and its marker back; it drops again, and when its 3 minutes end with this device still on the Core its slice closes (the marker's `object.destroy`) and is saved for its return |
+| `two-devices` | Another device holds the Core's slice; this device is let in with a slice of its own (`slice:1`) and the other's as `marker:0`, naming its owner, with the `SliceMarker` schema; the other device is sent `marker:1` for this device's slice, and when this device tunes its slice the other sees the marker move, never the slice |
+| `foreign-write-refused` | This device holds slice 0 and another device slice 1: a `property.write` to `slice:1` and to `marker:1`, and `removeSlice` and `setActiveSliceById` naming slice 1, are refused "That slice belongs to Other device 1. It can be changed only there.", with no value sent back and nothing changed; its own slice it may make active |
+| `held-for-device` | Another device, alone on the Core, leaves with `session.leave`: its slice keeps running, held for it. This device, let in meanwhile, does not adopt it: it gets a slice of its own and the other's as a marker with `ownerAway` true; the other device signs in again and the marker's `ownerAway` turns false (the slice is its own again) |
+| `share-receiver` | Another device's slice shares this device's receiver (this device anchors it); a C-Tune move that would leave it outside is answered "Waiting for you to confirm." with `phase` `needsConfirmation`, then a `confirm.request` `panMove` naming the other device and its slice's effect `moves`; `confirm.proceed` with a renamed argument is refused, with its own arguments it is accepted; the other device's slice moves to the free receiver and it is told (`notice` `sliceMoved`, no Take it back) |
+| `anchor-band-change` | The same two devices; this device retunes its slice from 20 m to 40 m: the write is answered "Waiting for you to confirm.", then `panMove` with `change` "Receiver 1", "20 m", "40 m"; `confirm.cancel` with a renamed argument is refused, with its own it changes nothing; the write again, `confirm.proceed`: its result carries `objectKey` and `frequency`, the receiver follows this device's slice and the other device's slice moves, the other device told |
+| `non-anchor-pan-move` | The other device moves its panadapter on this device's receiver while this device holds the second receiver: refused, naming this device, and asked to take one (`takeReceiver`); it cancels; this device removes its second slice and the other device's move goes to the free receiver, nobody asked |
+| `take-receiver` | Each device holds one receiver; this device's `addSliceOnPan` is refused naming the other and asked `takeReceiver` (its own receiver `takeable` false); proceed takes the other's receiver: the other device's slice closes and it is told `receiverTaken` with Take it back; `notice.takeBack` with a renamed argument is refused; with its own it asks the other way, and proceed closes this device's new slice (told `receiverTaken`) and restores the other's |
+| `take-slice` | The slice cap (2) full with a receiver free: `addSlice` is refused and asked `takeSlice`; proceed closes the other device's slice, which is told `sliceTaken`. Runs on the station alone |
+| `grace-expired` | Another device drops; after its 180 s its slice closes; it signs in again and `graceEnded` follows its `snapshot.complete`, `secondsAgo` from when its time ran out |
+| `older-window-taken-over` | A window without the feature holds the second receiver; this device takes it: the window's session ends `takenOver`, not retryable. Runs on the station alone |
+| `older-window-no-slice` | The slice cap full, a window without the feature signs in: `session.end` "All the radio's slices are in use. Try again when another device closes one.", retryable. Runs on the station alone |
+| `shared-setting-confirm` | iPhone app plan Task 75: another device's slice on the ADC this device's preamp feeds: the `stepAtt` write is answered "Waiting for you to confirm." with the Core's value, then a `confirm.request` `sharedSetting` with `change` "Preamp, ADC 1", "Off", "On" and `affected` naming the other device (`state` `listening`) and its slice's `mode`, `adc`, `streamIndex` and effect `changes`; `confirm.proceed` carries the readback (`objectKey`, `preampMode`), the other device is told (`notice` `settingChanged` with who, `change` and `secondsAgo`, no Take it back) and sent the `delta` |
+| `confirm-grew` | The same question; before it is answered the other device opens a second slice on the ADC: `confirm.proceed` is answered "Waiting for you to confirm." with `phase` `needsConfirmation` and a new `confirm.request` naming both its slices, nothing applied; `confirm.cancel` of the new one. Runs on the station alone |
+| `confirm-target-changed` | The same question; the other device changes the same preamp (asked, it goes ahead, this device is told `settingChanged`); this device's `confirm.proceed` is refused "That setting changed since you asked. Make the change again.", nothing more applied. Runs on the station alone |
+| `older-window-shared-setting` | A window without the feature changes the preamp while a device with the feature listens on the ADC: refused "This change would affect Other device 1. Update NereusSDR to confirm changes that affect other devices.", nothing applied, never asked. Runs on the station alone |
+| `antenna-kept` | An ANAN-G2 with ANT2 on 40 m and ANT3 on 80 m (`alexRxAntennas`); the other device's slice listens on the ADC on another receiver; this device tunes from 20 m to 40 m: the tuning goes ahead and this device is told `antennaKept`, "The antenna stays on ANT1 while Tablet B listens on it.", no `by` keys; the other device leaves, its slice closes, and this device's next crossing (to 80 m) switches the antenna (its slice's `rxAntenna` becomes ANT3), with no notice. Runs on the station alone |
+| `verbs-session-leave` | `session.leave` with an argument is refused, "The request to leave the Core was not understood."; without, it is accepted and the station closes the connection with no `session.end`. Runs on the station alone |
 | `heartbeat-answered`, `heartbeat-missed` | The heartbeat, above |
 | `connect-deadline` | No `auth.request` within 30000 ms: `session.end` "This app did not finish connecting to the Core in time.", `retryable` true |
 | `property-write` | A write and its `property.result` and side-effect `delta`; a refused outbound property and an unknown one; a write without a `writeId` answered by `delta`; a write to a slice's signal strength refused as outbound; on the receive-only Core, a `transmit` write of `power` taken off the air and a write of `mox` and `voxEnabled` refused with the receive-only reason; at `transmitSettingsVersion` 2, a write of `cpdrLevelDb` taken, and `micGainDb` and `monitorVolume` out of range refused with their ranges beside a write of the outbound `tunePowerForTxBand`; at `transmitSettingsVersion` 3, a write of `micBoost` and `lineInBoost` taken, and `lineInBoost` out of range refused with its range beside a write of the outbound `activeTxProfile`; at `transmitSettingsVersion` 4, a write of `txEqBandsJson`, `txEqUseLegacy` and `txLevelerDecay` taken, and a nine-value `txEqBandsJson`, a `cfcCompressionJson` with a value out of range and `txAlcDecay` out of range each refused whole with its range |
@@ -3140,6 +3954,13 @@ same on every machine.
 `tst_link_conformance_session` also checks that every verb in the
 `commands` table is invoked both ways by some fixture, and that the two
 legs of each get different answers.
+
+The several-devices design's `sharing-budget` fixture (a holder and another
+device over the Core's total: the holder's share is its whole request, the
+other's reason `sharedConnection`, or `sharedProcessing` under the
+governor's cut) needs the transmit holder, so it lands with Task 34; until
+then `tst_display_budget_split` and `tst_station_multi_session` hold each
+device's share, generation and reason (section 6.4).
 
 ### 16.4 Media vectors
 
@@ -3176,8 +3997,9 @@ processors; its vectors hold decoders to the reference PCM instead.
 | --- | --- | --- | --- |
 | `nrsc1` | `lan-announcement`: one schema-1 LAN announcement datagram, as a Core from before schema 2 sends it (section 14.1) | none | `schema` 1, `controlPort`, `fingerprint`, `coreName`, `radioName`, `radioMac`, `radioConnected`, exact |
 | `nrsc1` | `lan-announcement-2`: one schema-2 LAN announcement datagram, from a claimed Core whose pairing window was reopened (section 14.1) | none | `schema` 2, the fields above, `claimed` true, `identity` (base64url of the 32 bytes, no padding), `label` `KG4VCF/shack`, `pairing` `code`, exact |
-| `nrsc1` | `lan-announcement-2-trailing`: the `lan-announcement-2` datagram with five bytes appended after its known fields, which a reader ignores (section 14.1) | none | The same fields as `lan-announcement-2`, and `ignoredTrailingBytes` 5: the vector's last five bytes are not decoded, and the encoder writes the bytes before them, exact |
-| `dnssd-txt` | `dnssd-txt`: the Bonjour TXT record of the same Core (section 14.2) | none | `serviceType` `_nereus-station._tcp` and `txt`, the entries as strings (`v`, `id`, `claimed`, `pair`, `name`); the bytes are those entries in that order, exact |
+| `nrsc1` | `lan-announcement-2-devices`: the `lan-announcement-2` datagram with the device count byte, 2, appended after Pairing (section 14.1) | none | The fields of `lan-announcement-2` and `devicesConnected` 2, exact |
+| `nrsc1` | `lan-announcement-2-trailing`: the `lan-announcement-2-devices` datagram with five bytes appended after its known fields, which a reader ignores (section 14.1) | none | The same fields as `lan-announcement-2-devices`, and `ignoredTrailingBytes` 5: the vector's last five bytes are not decoded, and the encoder writes the bytes before them, exact |
+| `dnssd-txt` | `dnssd-txt`: the Bonjour TXT record of the Core of `lan-announcement-2-devices` (section 14.2) | none | `serviceType` `_nereus-station._tcp` and `txt`, the entries as strings (`v`, `id`, `claimed`, `pair`, `name`, `devices`); the bytes are those entries in that order, exact |
 | `ps3d` | `ps3d-frame`: one PureSignal display chunk, eight points and four correction points | none | Every header field and the eight value lists; `tolerance` `{"absolute": 0}`, because the values travel as IEEE-754 binary64 |
 | `nsdc1` | `nsdc1-full`: frame 1, a keyframe | none | `disposition` `accepted`, `reason` `none`, `keyframe` (the header's keyframe flag), the context (`endpointId`, `contextGeneration`, `minDbm`, `maxDbm`), `encoderSequence`, `producerTimestamp`, `waterfallAdvance` and the reconstructed `traceDbm`, `waterfallDbm` and `wideDbm` rows; `tolerance` `{"dbm": 0.01}` |
 | `nsdc1` | `nsdc1-delta`: frame 2, a delta | `nsdc1-full` | As above, `keyframe` false |
@@ -3248,7 +4070,9 @@ how a fixture is written to what the code does.
 - **Operator wording.** A reason a client may show an operator is plain
   English with no protocol terms. Every reason the station sends (the
   `reason` of `auth.result`, `session.end`, `command.result`,
-  `property.result`, `settings.reject`, `pair.fail` and the display's
+  `property.result`, `settings.reject`, `pair.fail`, `confirm.request`
+  and `notice`, a take choice's `why`, the three strings of `change`, and
+  the display's
   `rejected` and `allocation-result`) passes `OperatorWording::isPlain` and names no
   function, class, requirement or phase; `tst_station_reason_wording`
   checks the sources that word them (every reason literal, a reason of one
@@ -3272,4 +4096,9 @@ how a fixture is written to what the code does.
   spelling: an audio context's `reason` (`client-disabled`,
   `receiver-limit`, ...), `displayBudgetReason`, and the display retire
   reasons "slice removed" and "slice stream binding changed", which
-  windows in use compare as they are.
+  windows in use compare as they are. Device names and short names (the
+  `devices` and `connectedDevices` objects, section 7.1) are the
+  operator's own words, checked as names (section 3.5) and never held to
+  `isPlain`, whose terms would refuse an ordinary name such as "Grant's
+  iPhone"; a sentence of the station's that carries one is checked with
+  the name set aside.

@@ -1514,6 +1514,9 @@ nereus_add_test(tst_audio_engine_vax_gain)
 # the MOX gate, before mute/gain/pan/mix/master volume) with its own AF gain
 # undone; the master tap and speakers stay byte-for-byte unchanged.
 nereus_add_test(tst_audio_engine_slice_tap)
+# iPhone app Task 76 (R-IOS-31, ruling 9.2): one mix per owner, and the
+# Core's local output playing the station device's slices only.
+nereus_add_test(tst_audio_engine_owner_mix)
 
 # ── Phase 3O Sub-Phase 9 Task 9.2b: VaxApplet smoke tests ────────────────────
 # Widget-level construction, signal plumbing, AppSettings round-trip.
@@ -7010,6 +7013,14 @@ nereus_add_test(tst_mirror_lifecycle)
 # wire input.
 nereus_add_test(tst_mirror_snapshot)
 
+# iPhone app Task 72 (R-IOS-02; the several-devices design, rulings 5.6 and
+# 5.7): a MirrorView per device over one StateMirror. Echo per writer (a
+# shared blanker changed by A reaches B's view and not A's; WriterScope; a
+# write with no view; the single-session API unchanged), and each view's own
+# coalescer and burst (another view's pending deltas survive an attach; the
+# burst goes to its own view; nothing before attach or after close).
+nereus_add_test(tst_mirror_view)
+
 # Remote Daemon R2, Task 11: command verbs and results. Exercises the
 # SessionMessages CommandInvoke/CommandResult codec plus a real
 # SessionCommandDispatcher round trip over the in-process
@@ -7387,6 +7398,32 @@ nereus_add_test(tst_device_auth
 nereus_add_test(tst_station_devices
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
+# iPhone app Task 71 (R-IOS-02): who holds a place on the Core (the four,
+# the same device, away and its 180 s, leaving, names and short names, the
+# redial arithmetic) over an injected clock, and several devices signed in
+# at once over the in-process loopback.
+nereus_add_test(tst_device_session_registry EXTRA_LABELS session)
+nereus_add_test(tst_station_multi_session
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+# iPhone app Task 73 (R-IOS-02): whose each slice is (owners, held for,
+# adoption, each owner's active slice and the station-level one), and each
+# device's closed slices kept for its return.
+nereus_add_test(tst_slice_ownership EXTRA_LABELS session)
+# iPhone app Task 74 (R-IOS-02, R-IOS-30): each receiver's anchor, and the
+# confirm step (a pan move, a take, Take it back, the readback, notices).
+nereus_add_test(tst_receiver_anchor EXTRA_LABELS session)
+# iPhone app Task 75 (R-IOS-30): which other devices a radio-wide setting
+# disturbs, table-driven; the receive antenna kept on a band crossing.
+nereus_add_test(tst_disturbance_check EXTRA_LABELS session)
+nereus_add_test(tst_antenna_kept
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_antenna_kept PRIVATE NEREUS_BUILD_TESTS)
+nereus_add_test(tst_confirm_step
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+nereus_add_test(tst_device_layout_store EXTRA_LABELS session)
 # iPhone app Task 19 (R-IOS-06): the Core's catalogue; the G2 and HL2
 # catalogue fixtures against the desktop's own values, the revision, a
 # preset change reaching a client over the in-process loopback, the size.
@@ -7732,6 +7769,9 @@ nereus_add_test(tst_remote_audio_status)
 # Remote Daemon R3, Task 3: bounded native trace, waterfall, and DSS codec.
 nereus_add_test(tst_display_codec)
 nereus_add_test(tst_display_budget)
+# iPhone app Task 76 (R-IOS-31): the Core's display budget shared among
+# the devices signed in to it, holder first.
+nereus_add_test(tst_display_budget_split)
 nereus_add_test(tst_display_budget_contract fakes/LoopbackTransport.cpp)
 nereus_add_test(tst_remote_display_allocator)
 # R-R3-08/37/40: the Core lowers spectrum first when its computer is busy.

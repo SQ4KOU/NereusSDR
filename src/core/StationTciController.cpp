@@ -11,11 +11,15 @@
 // 2026-09-24: Lane B takes integration (R-IOS-01, R-R3-21): the blocked-port error
 // says the Core's address and the Core's TCI server. J.J. Boyd (KG4VCF),
 // AI-assisted via Anthropic Claude Code.
+// 2026-09-25: iPhone app Task 73 (R-IOS-02, ruling 5.13): the Core's server
+// changes only the station device's own slices. J.J. Boyd (KG4VCF),
+// AI-assisted via Anthropic Claude Code.
 #include "core/StationTciController.h"
 
 #include "core/AppSettings.h"
 #include "core/LogCategories.h"
 #include "core/StationNetwork.h"
+#include "core/SliceOwnership.h"
 #include "core/TciServer.h"
 #include "models/RadioModel.h"
 
@@ -43,6 +47,18 @@ StationTciController::StationTciController(RadioModel* radio, StationTciModel* m
     // operator's own earlier choices.
     m_server = std::make_unique<TciServer>(radio);
     m_server->setStationReceiveOnly(true);
+    // iPhone app Task 73 (ruling 5.13): it reads every slice (trx:N is
+    // slice N) and changes only the station device's own: the slices it
+    // runs held for an absent device, and, before any device is on the
+    // Core, the slices nobody owns yet. A device's slice changes only on
+    // that device.
+    m_server->setSliceWriteGate([radio = QPointer<RadioModel>(radio)](int sliceId) {
+        if (!radio) {
+            return false;
+        }
+        const QByteArray owner = radio->sliceOwnership()->mark(sliceId).owner;
+        return owner.isEmpty() || owner == SliceOwnership::stationDevice();
+    });
     // Rework follow-up 2: this controller logs the station listener's
     // state changes itself (once each); the server's per-attempt listen,
     // start and stop lines go to debug, so nothing is logged twice.

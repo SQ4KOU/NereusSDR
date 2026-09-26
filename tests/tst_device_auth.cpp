@@ -570,7 +570,9 @@ private slots:
         // With pairing (iPhone app Task 14) beside device sign-in.
         QCOMPARE(hello.value(QStringLiteral("features")).toObject(),
                  (QJsonObject{{QStringLiteral("deviceAuth"), 1},
-                              {QStringLiteral("pairing"), 1}}));
+                              {QStringLiteral("pairing"), 1},
+                              // iPhone app Task 71: several devices at once.
+                              {QStringLiteral("sessionHolder"), 1}}));
         const QJsonObject identity = hello.value(QStringLiteral("identity")).toObject();
         const QByteArray spki =
             StationIdentity::fromBase64Url(identity.value(QStringLiteral("publicKey")).toString());

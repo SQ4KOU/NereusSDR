@@ -62,6 +62,9 @@ constexpr Entry kEntries[] = {
      "The receiver was retuned and no longer covers this view.", "Refused"},
     {"This display's receiver is not on the Core.", "Refused: no slice",
      "This pan's slice is not available on the Core.", "Refused"},
+    // iPhone app Task 76 (ruling 9.1): displays only for a device's own slices.
+    {"That slice belongs to another device.", "Refused: other device",
+     "This pan's slice belongs to another device on the Core.", "Refused"},
     {kRetireReasonSliceRemoved, "Refused: no slice",
      "This pan's slice was removed.", "Refused"},
     {kRetireReasonStreamBindingChanged, "Refused: out of date",
@@ -305,6 +308,9 @@ constexpr Entry kEntries[] = {
     {"Station LAN announcement has an invalid label.", nullptr,
      "A Core announcement on this network could not be read, so that Core is not listed."},
     {"Station LAN announcement has an invalid pairing state.", nullptr,
+     "A Core announcement on this network could not be read, so that Core is not listed."},
+    // iPhone app Task 71: the device count appended to schema 2.
+    {"Station LAN announcement has an invalid device count.", nullptr,
      "A Core announcement on this network could not be read, so that Core is not listed."},
     {"Station LAN announcement schema 1 cannot carry the Core's identity.", nullptr,
      "A Core announcement on this network could not be read, so that Core is not listed."},

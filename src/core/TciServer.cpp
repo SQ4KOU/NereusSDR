@@ -69,6 +69,9 @@
 //                each line reaches an app's update gap with the gate its
 //                event named. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-25 - iPhone app Task 73 (R-IOS-02, ruling 5.13):
+//                setSliceWriteGate. NereusSDR-original. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 
 #ifdef HAVE_WEBSOCKETS
 
@@ -1469,6 +1472,11 @@ QList<QHostAddress> TciServer::listenAddresses() const
         }
     }
     return addresses;
+}
+
+void TciServer::setSliceWriteGate(std::function<bool(int sliceId)> gate)
+{
+    m_protocol->setSliceWriteGate(std::move(gate));
 }
 
 void TciServer::setStationReceiveOnly(bool receiveOnly)

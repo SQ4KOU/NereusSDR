@@ -25,6 +25,9 @@
 //               through the token is not revoked while the token works. J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-25: iPhone app Task 71 (R-IOS-02): each entry's name numbered
+//               by pairing order and its shortName. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationDevicesFacade.h"
@@ -35,6 +38,7 @@
 #include "core/security/StationIdentity.h"
 #include "core/security/StationLabel.h"
 #include "core/security/TokenStore.h"
+#include "core/session/DeviceSessionRegistry.h"
 
 #include <QDateTime>
 #include <QJsonArray>
@@ -95,10 +99,24 @@ StationDevicesFacade::State StationDevicesFacade::compute() const
 {
     State state;
     QJsonArray list;
-    for (const PairedDevice& device : m_devices.list()) {
+    // iPhone app Task 71 (ruling 4.3): the names and short names numbered as
+    // `connectedDevices` numbers them, by pairing order, so one device reads
+    // the same on both lists; a missing or unusable short name is the kind's
+    // word.
+    const QList<PairedDevice> paired = m_devices.list();
+    QList<DeviceSessionRegistry::NameInput> order;
+    for (const PairedDevice& device : paired) {
+        order.append({device.id, device.name,
+                      DeviceSessionRegistry::usableShortName(device.shortName, device.kind)});
+    }
+    const QHash<QByteArray, DeviceSessionRegistry::NumberedName> names =
+        DeviceSessionRegistry::numberNames(order);
+    for (const PairedDevice& device : paired) {
+        const DeviceSessionRegistry::NumberedName name = names.value(device.id);
         list.append(QJsonObject{
             {QStringLiteral("id"), StationIdentity::toBase64Url(device.id)},
-            {QStringLiteral("name"), device.name},
+            {QStringLiteral("name"), name.name},
+            {QStringLiteral("shortName"), name.shortName},
             {QStringLiteral("kind"), device.kind},
             {QStringLiteral("pairedAt"), wireTime(device.pairedAt)},
             {QStringLiteral("lastSeen"), wireTime(device.lastSeen)},

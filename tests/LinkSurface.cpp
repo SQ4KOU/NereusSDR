@@ -53,6 +53,18 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 19 (R-IOS-06): the
 //                                    `catalog` class. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-25: iPhone app Task 71 (R-IOS-02): ConnectedDevicesFacade,
+//               sessionHolderVersion (the live client declares
+//               sessionHolder), and the maxDeviceSessions, graceMs and
+//               lanAnnouncementMaxBytes limits. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app Task 73 (R-IOS-02): SliceMarker and the
+//               `marker:<id>` key (a slice held for an away device in the
+//               live session). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app Task 74 (R-IOS-30): confirm.request and notice
+//               samples, and the confirmExpiryMs limit. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "LinkSurface.h"
@@ -95,6 +107,12 @@
 #include "core/session/StationClient.h"
 #include "core/session/StationCatalog.h"
 #include "core/session/StationDevicesFacade.h"
+#include "core/session/ConnectedDevicesFacade.h"
+#include "core/session/SliceMarker.h"
+#include "core/SliceOwnership.h"
+#include "core/session/ConfirmStep.h"
+#include "core/session/DeviceSessionRegistry.h"
+#include "core/session/StationLanAnnouncement.h"
 #include "core/session/StationServer.h"
 #include "core/session/StationTelemetry.h"
 #include "core/session/media/DisplayBudget.h"
@@ -251,6 +269,35 @@ std::optional<SessionMessage> sampleMessage(SessionMessageKind kind)
         return SessionMessages::pairConfirm(QStringLiteral("box"));
     case SessionMessageKind::PairFail:
         return SessionMessages::pairFail(QStringLiteral("refused"), 5000);
+    // iPhone app Task 74: every optional key present.
+    case SessionMessageKind::ConfirmRequest: {
+        SessionPrompt prompt;
+        prompt.id = 1;
+        prompt.kind = QStringLiteral("panMove");
+        prompt.affected = QJsonArray{QJsonObject{}};
+        prompt.expiresInMs = 60000;
+        prompt.change = QJsonObject{{QStringLiteral("label"), QStringLiteral("Receiver 1")}};
+        prompt.choices = QJsonArray{QJsonObject{}};
+        prompt.forCommandId = 2;
+        prompt.forWriteId = 3;
+        prompt.forSettingsKey = QStringLiteral("StationCallsign");
+        return SessionMessages::confirmRequest(prompt, QStringLiteral("asked"));
+    }
+    case SessionMessageKind::Notice: {
+        SessionPrompt prompt;
+        prompt.id = 1;
+        prompt.kind = QStringLiteral("receiverTaken");
+        prompt.secondsAgo = 3;
+        prompt.takeBack = true;
+        prompt.byDeviceId = QStringLiteral("id");
+        prompt.byName = QStringLiteral("name");
+        prompt.byShortName = QStringLiteral("short");
+        prompt.byKind = QStringLiteral("phone");
+        prompt.bySource = QStringLiteral("device");
+        prompt.slices = QJsonArray{QJsonObject{}};
+        prompt.change = QJsonObject{{QStringLiteral("label"), QStringLiteral("Receiver 1")}};
+        return SessionMessages::notice(prompt, QStringLiteral("told"));
+    }
     }
     return std::nullopt;
 }
@@ -349,6 +396,11 @@ std::optional<QList<QByteArray>> liveSessionWire(
     model->setLastRadioInfoForTest(info);
     model->setConnectionStateForTest(ConnectionState::Connected);
     model->addSlice(QStringLiteral("pan-0"));
+    // iPhone app Task 73: a second slice the Core runs for another device
+    // that is away, so the session this peer sees holds a `marker:<id>` as
+    // well as its own `slice:<id>`.
+    const int held = model->addSlice(QStringLiteral("pan-0"));
+    model->sliceOwnership()->hold(held, QByteArray(32, '\x5a'));
     model->addPanadapter();
 
 
@@ -363,10 +415,12 @@ std::optional<QList<QByteArray>> liveSessionWire(
     stationEnd->linkTo(clientEnd.get());
     server.acceptTransport(stationEnd);
     // Declaring deviceAuth, as a device that signs in by key does, so the
-    // `devices` object (iPhone app Task 13) is among what the Core sends.
+    // `devices` object (iPhone app Task 13) is among what the Core sends;
+    // and sessionHolder (iPhone app Task 71), so `connectedDevices` and
+    // sessionHolderVersion are too.
     clientEnd->sendText(SessionMessages::encode(SessionMessages::hello(
         kSessionProtocolMajor, kSessionProtocolMinor, 0, QStringLiteral("link-surface"),
-        {kSessionProtocolMajor}, {{"deviceAuth", 1}})));
+        {kSessionProtocolMajor}, {{"deviceAuth", 1}, {"sessionHolder", 1}})));
     clientEnd->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
 
     // The loopback delivers on later event-loop turns, as a socket would.
@@ -392,6 +446,8 @@ QJsonArray captureCapabilities()
     caps.displayBudget = DisplayBudgetLimits{1, 1, 1};
     caps.displayBudgetReason = DisplayBudgetReason::CoreBusy;
     caps.radioIdentityEntries = true;
+    // iPhone app Task 71: sent to a peer that declared sessionHolder.
+    caps.sessionHolderEntry = true;
 
     // The values come from a live station with every feature a Core can
     // switch on: media, telemetry, an enforced display budget with its
@@ -511,6 +567,7 @@ QJsonArray captureObjectKeys()
 
     static const QRegularExpression kPan(QStringLiteral("^pan:[0-9]+$"));
     static const QRegularExpression kSlice(QStringLiteral("^slice:[0-9]+$"));
+    static const QRegularExpression kMarker(QStringLiteral("^marker:[0-9]+$"));
     QSet<QString> seen;
     for (const QByteArray& message : *wire) {
         SessionMessage decoded;
@@ -523,6 +580,8 @@ QJsonArray captureObjectKeys()
             pattern = QStringLiteral("pan:<i>");
         } else if (kSlice.match(pattern).hasMatch()) {
             pattern = QStringLiteral("slice:<id>");
+        } else if (kMarker.match(pattern).hasMatch()) {
+            pattern = QStringLiteral("marker:<id>");
         }
         if (seen.contains(pattern)) {
             continue;
@@ -1116,6 +1175,23 @@ QJsonObject captureLimits()
     limits.insert(QStringLiteral("maxHandshakesPerAddress"),
                   limit(StationServer::kMaxHandshakesPerAddress, QStringLiteral("count"),
                         QStringLiteral("StationServer::kMaxHandshakesPerAddress")));
+    // iPhone app Task 71 (R-IOS-02): the devices that hold a place at once,
+    // how long a dropped one keeps it, and the LAN announcement's largest
+    // schema-2 datagram now that it carries the count.
+    limits.insert(QStringLiteral("maxDeviceSessions"),
+                  limit(StationServer::kMaxDeviceSessions, QStringLiteral("count"),
+                        QStringLiteral("StationServer::kMaxDeviceSessions")));
+    limits.insert(QStringLiteral("graceMs"),
+                  limit(static_cast<qint64>(DeviceSessionRegistry::kGraceMs), QStringLiteral("ms"),
+                        QStringLiteral("DeviceSessionRegistry::kGraceMs")));
+    // iPhone app Task 74 (R-IOS-30): how long a question stays open
+    // (ruling 7.5; sent as expiresInMs, enforced from Task 75).
+    limits.insert(QStringLiteral("confirmExpiryMs"),
+                  limit(static_cast<qint64>(ConfirmStep::kExpiryMs), QStringLiteral("ms"),
+                        QStringLiteral("ConfirmStep::kExpiryMs")));
+    limits.insert(QStringLiteral("lanAnnouncementMaxBytes"),
+                  limit(kStationLanMaxSchema2DatagramBytes, QStringLiteral("bytes"),
+                        QStringLiteral("kStationLanMaxSchema2DatagramBytes")));
     // Part C fix wave: auth.request's optional device `shortName`.
     limits.insert(QStringLiteral("shortNameMaxBytes"),
                   limit(DeviceStore::kMaxShortNameBytes, QStringLiteral("bytes"),
@@ -1304,7 +1380,9 @@ QList<const QMetaObject*> LinkSurface::mirroredMetaObjects()
             &AccessoryDataModel::staticMetaObject,
             &AccessorySettingsModel::staticMetaObject,
             &StationDevicesFacade::staticMetaObject,
-            &StationCatalog::staticMetaObject};
+            &StationCatalog::staticMetaObject,
+            &ConnectedDevicesFacade::staticMetaObject,
+            &SliceMarker::staticMetaObject};
 }
 
 QJsonObject LinkSurface::capture()

@@ -254,6 +254,17 @@
 //                [v2.10.3.15]); External TX Inhibit applies at once
 //                (setup.cs:16660-16667 [v2.10.3.15]). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 74 (R-IOS-02, R-IOS-30): a slice's
+//                receiver reaches the anchors (SliceOwnership::noteStream);
+//                activateStreamAt (bindSliceToStream's claim arm, shared);
+//                a bound slice given a required stream joins it;
+//                moveStreamWindowFor and moveSlicesToStream. NereusSDR-
+//                original. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
+//   2026-09-25 - iPhone app plan Task 76 (R-IOS-31, ruling 9.2): the
+//                local output plays the station device's slices, the VAX
+//                mask. NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -572,6 +583,7 @@ warren@wpratt.com
 #include "core/StationPgxlController.h"
 #include "core/StationRfKitController.h"
 #include "core/StationTciController.h"
+#include "core/SliceOwnership.h"
 #include "core/RfKitBandFollow.h"
 #include "core/PgxlStatusGauges.h"
 #include "models/AmplifierModel.h"
@@ -790,6 +802,32 @@ RadioModel::RadioModel(Role role, QObject* parent)
     , m_wdspEngine(new WdspEngine(this))
 {
     m_role = role;
+    // iPhone app Task 73 (R-IOS-02): whose each slice is. A change of owner
+    // is saved with the restart manifest (ruling 5.3).
+    m_sliceOwnership = new SliceOwnership(this);
+    if (role == Role::Local) {
+        connect(m_sliceOwnership, &SliceOwnership::markChanged, this,
+                [this](int, const QByteArray&, const QByteArray&) { scheduleSettingsSave(); });
+        // Ruling 5.14: VAX on this computer carries only the station
+        // device's slices: every slice a device owns is left out. With no
+        // owners (a desktop on its own) every slice is carried.
+        const auto vaxFollowsOwners = [this]() {
+            quint32 mask = 0xFFFFFFFFu;
+            for (int id : m_sliceOwnership->liveSlices()) {
+                const QByteArray owner = m_sliceOwnership->mark(id).owner;
+                if (id >= 0 && id < 32 && !owner.isEmpty()
+                    && owner != SliceOwnership::stationDevice()) {
+                    mask &= ~(1u << id);
+                }
+            }
+            m_audioEngine->setVaxSliceMask(mask);
+            // iPhone app Task 76 (ruling 9.2): the Core's local output
+            // plays the station device's mix, the same slices.
+            m_audioEngine->setLocalOutputSliceMask(mask);
+        };
+        connect(m_sliceOwnership, &SliceOwnership::markChanged, this, vaxFollowsOwners);
+        connect(m_sliceOwnership, &SliceOwnership::activeChanged, this, vaxFollowsOwners);
+    }
     // R-R3-36: the PC microphone session demand follows the mic source.
     connect(&m_transmitModel, &TransmitModel::micSourceChanged, this,
             [this](MicSource) { updatePcCaptureDemand(); });
@@ -935,7 +973,17 @@ RadioModel::RadioModel(Role role, QObject* parent)
         // load-time's 14-per-band emit burst collapses to one write.
         m_alexControllerDirty = true;
         scheduleSettingsSave();
+        // iPhone app Task 75 (ruling 5.11a): while the receive antenna is
+        // kept on an earlier band's, a change to that band's antenna moves
+        // the relay (the kept band governs the receive side); a change to
+        // the current band's is the operator's own choice, and ends the
+        // keeping.
+        if (m_keptRxAntennaBand && b == *m_keptRxAntennaBand && b != m_lastBand) {
+            applyAlexAntennaForBand(m_lastBand);
+            return;
+        }
         if (b != m_lastBand) { return; }
+        m_keptRxAntennaBand.reset();
         applyAlexAntennaForBand(b);
         // T13 — keep the slice's cached ANT labels in sync so UI
         // surfaces reading slice->rxAntenna() see the current-band value.
@@ -2395,6 +2443,13 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // (kFreedvFreqDwellMs = 7 s) calls flushFreedvFrequencyDwell which
     // emits the cached pending freq.  See member declaration in
     // RadioModel.h for the full throttle policy.
+    // Fix wave (ruling 5.11): a RADE slice closing may hand the listing
+    // back to the station-level slice.
+    connect(this, &RadioModel::sliceRemoved, this, [this]() {
+        if (m_role == Role::Local) {
+            refreshFreedvReportedFrequency();
+        }
+    });
     m_freedvFreqDwellTimer = new QTimer(this);
     m_freedvFreqDwellTimer->setSingleShot(true);
     m_freedvFreqDwellTimer->setInterval(kFreedvFreqDwellMs);
@@ -6939,7 +6994,7 @@ void RadioModel::installReceiveFallbackSlice()
     // cloning an active RADE mode through its decoder-starting setter.
     const SliceModel defaults;
     const ReceiveSliceState seed{0, QStringLiteral("pan-0"),
-                                 defaults.frequency(), defaults.dspMode()};
+                                 defaults.frequency(), defaults.dspMode(), {}, {}};
     if (addSliceImpl(0, seed.panKey, &seed) >= 0) {
         SliceModel* fallback = sliceById(0);
         bindSliceToStream(fallback, fallback->frequency(), true);
@@ -7712,14 +7767,113 @@ bool RadioModel::requestStreamCentre(int sliceId, double centreHz)
     return true;
 }
 
-void RadioModel::clearStreamCtunPins()
+// iPhone app Task 74 (rulings 6.4, 6.5 and 6.7): a confirmed pan move on
+// the Core. The window moves to `centreHz` (as requestStreamCentre moves
+// it), then every slice it no longer covers, except `exemptSliceId`, is
+// placed again as any retune leaving a shared window is: another window
+// that covers it, or a free receiver. Returns the slices that found none;
+// the caller closes them.
+QList<int> RadioModel::moveStreamWindowFor(int stream, double centreHz, int exemptSliceId)
 {
+    QList<int> unplaced;
+    if (m_role != Role::Local || !std::isfinite(centreHz) || centreHz <= 0.0
+        || !m_streamAllocator.isStreamActive(stream)) {
+        return unplaced;
+    }
+    const int rateHz = m_streamAllocator.streamSampleRateHz(stream);
+    if (rateHz <= 0) {
+        return unplaced;
+    }
+    if (m_streamAllocator.streamCentreHz(stream) != centreHz) {
+        m_streamAllocator.activateStream(stream, centreHz, rateHz);
+        if (m_receiverManager) {
+            m_receiverManager->forceHardwareFrequency(stream, static_cast<quint64>(centreHz));
+        }
+        reshiftSlicesOnStream(stream, centreHz);
+        emit streamCentreChanged(stream, centreHz, rateHz);
+    }
+    const double halfWindow = static_cast<double>(rateHz) / 2.0;
+    for (const int id : slicesOnStream(stream)) {
+        SliceModel* slice = sliceById(id);
+        if (slice == nullptr || id == exemptSliceId) {
+            continue;
+        }
+        const double offset = slice->frequency() - centreHz;
+        if (offset > -halfWindow && offset < halfWindow) {
+            continue;
+        }
+        if (!bindSliceToStream(slice, slice->frequency())) {
+            unplaced.append(id);
+        }
+    }
+    return unplaced;
+}
+
+// iPhone app Task 74 (ruling 6.6): a device that does not anchor its
+// receiver takes its pan, with its slices, to `stream` centred on
+// `centreHz`: claimed when free (the allocator's own-window path), and
+// each slice joined to it. False, with nothing moved, when a slice does not
+// fit the window there.
+bool RadioModel::moveSlicesToStream(const QList<int>& sliceIds, int stream, double centreHz)
+{
+    if (m_role != Role::Local || sliceIds.isEmpty() || stream < 0
+        || stream >= m_streamAllocator.streamCount() || !std::isfinite(centreHz)
+        || centreHz <= 0.0) {
+        return false;
+    }
+    const bool wasActive = m_streamAllocator.isStreamActive(stream);
+    const int rateHz = wasActive ? m_streamAllocator.streamSampleRateHz(stream)
+                                 : (m_connectionSampleRateHz > 0 ? m_connectionSampleRateHz
+                                                                 : m_streamDefaultRateHz);
+    const double halfWindow = static_cast<double>(rateHz) / 2.0;
+    const double centre = wasActive ? m_streamAllocator.streamCentreHz(stream) : centreHz;
+    for (const int id : sliceIds) {
+        const SliceModel* slice = sliceById(id);
+        if (slice == nullptr) {
+            return false;
+        }
+        const double offset = slice->frequency() - centre;
+        if (!(offset > -halfWindow && offset < halfWindow)) {
+            return false;
+        }
+    }
+    if (!wasActive) {
+        activateStreamAt(stream, centreHz);
+    }
+    bool all = true;
+    for (const int id : sliceIds) {
+        SliceModel* slice = sliceById(id);
+        if (slice == nullptr || !bindSliceToStream(slice, slice->frequency(), false, stream)) {
+            all = false;
+        }
+    }
+    if (!wasActive && slicesOnStream(stream).isEmpty()) {
+        retireStream(stream);
+        syncReceiverToStream(stream, /*live=*/false);
+    }
+    return all;
+}
+
+void RadioModel::clearStreamCtunPinsAnchoredBy(const QByteArray& device)
+{
+    if (device.isEmpty() || m_sliceOwnership == nullptr) {
+        return;
+    }
     for (int stream = 0; stream < m_streamCtunPinned.size(); ++stream) {
-        setStreamCtunPinned(stream, false);
+        if (m_sliceOwnership->anchorOf(stream) == device) {
+            setStreamCtunPinned(stream, false);
+        }
     }
 }
 
 void RadioModel::requestSliceSampleRate(int sliceId, int rateHz)
+{
+    requestSliceSampleRateClosing(sliceId, rateHz, {}, {});
+}
+
+void RadioModel::requestSliceSampleRateClosing(int sliceId, int rateHz,
+                                               const QSet<int>& closing,
+                                               const std::function<void(int)>& close)
 {
     // Remote-daemon R2: the daemon owns the DDC windows, so a remote
     // operator's rate change is a request sent to it, never a local
@@ -7758,7 +7912,7 @@ void RadioModel::requestSliceSampleRate(int sliceId, int rateHz)
         // The slice picks up its stream's rate when it binds.
         return;
     }
-    if (!setStreamSampleRate(stream, rateHz)) {
+    if (!setStreamSampleRateClosing(stream, rateHz, closing, close)) {
         emit sliceRetuneRejected(
             sliceId,
             QStringLiteral(
@@ -7768,9 +7922,58 @@ void RadioModel::requestSliceSampleRate(int sliceId, int rateHz)
     }
 }
 
-std::optional<RadioModel::StreamRateChangePlan>
-RadioModel::planStreamSampleRateChange(int streamIndex, int rateHz) const
+RadioModel::SampleRateReach RadioModel::planSampleRateReach(
+    int sliceId, int rateHz, const std::function<bool(int)>& mayClose) const
 {
+    // iPhone app Task 75 (the several-devices design, ruling 7.3).
+    // NereusSDR-original: no Thetis logic; it runs today's plan.
+    SampleRateReach reach;
+    const SliceModel* slice = sliceById(sliceId);
+    if (m_role != Role::Local || slice == nullptr || slice->streamIndex() < 0) {
+        return reach;
+    }
+    reach.stream = slice->streamIndex();
+    reach.radioWide = sampleRateIsRadioWide();
+    reach.fromRateHz = m_streamAllocator.streamSampleRateHz(reach.stream);
+    QSet<int> closing;
+    for (;;) {
+        int rejected = -1;
+        const std::optional<StreamRateChangePlan> plan =
+            planStreamSampleRateChange(reach.stream, rateHz, closing, &rejected);
+        if (!plan) {
+            if (rejected >= 0 && !closing.contains(rejected) && mayClose && mayClose(rejected)) {
+                closing.insert(rejected);
+                continue;
+            }
+            reach.refusedSliceId = rejected;
+            return reach;
+        }
+        reach.refused = false;
+        for (const PlannedSlicePlacement& planned : plan->slices) {
+            const int to = planned.placement.streamIndex;
+            if (to != planned.previousStream) {
+                reach.moves.append(planned.sliceId);
+            } else if (reach.radioWide || to == reach.stream) {
+                reach.changes.append(planned.sliceId);
+            }
+        }
+        for (SliceModel* s : m_slices) {
+            if (s && closing.contains(s->sliceIndex())) {
+                reach.closes.append(s->sliceIndex());
+            }
+        }
+        return reach;
+    }
+}
+
+std::optional<RadioModel::StreamRateChangePlan>
+RadioModel::planStreamSampleRateChange(int streamIndex, int rateHz,
+                                       const QSet<int>& excluded,
+                                       int* rejectedSliceId) const
+{
+    if (rejectedSliceId != nullptr) {
+        *rejectedSliceId = -1;
+    }
     if (rateHz <= 0
         || streamIndex < 0
         || streamIndex >= m_streamAllocator.streamCount()
@@ -7780,6 +7983,30 @@ RadioModel::planStreamSampleRateChange(int streamIndex, int rateHz) const
 
     const bool isP1 = sampleRateIsRadioWide();
     StreamRateChangePlan plan{m_streamAllocator, {}};
+
+    // iPhone app Task 75: a stream only excluded slices held is free in the
+    // simulation, as it will be once they close.
+    if (!excluded.isEmpty()) {
+        for (int st = 0; st < plan.allocator.streamCount(); ++st) {
+            if (!plan.allocator.isStreamActive(st)) {
+                continue;
+            }
+            bool keep = false;
+            bool any = false;
+            for (SliceModel* slice : m_slices) {
+                if (slice && slice->streamIndex() == st) {
+                    any = true;
+                    keep = keep || !excluded.contains(slice->sliceIndex());
+                }
+            }
+            if (any && !keep) {
+                if (st == streamIndex) {
+                    return std::nullopt;
+                }
+                plan.allocator.deactivateStream(st);
+            }
+        }
+    }
 
     if (isP1) {
         for (int st = 0; st < plan.allocator.streamCount(); ++st) {
@@ -7801,7 +8028,7 @@ RadioModel::planStreamSampleRateChange(int streamIndex, int rateHz) const
     QVector<SimulatedSlice> simulated;
     simulated.reserve(m_slices.size());
     for (SliceModel* slice : m_slices) {
-        if (slice && slice->streamIndex() >= 0) {
+        if (slice && slice->streamIndex() >= 0 && !excluded.contains(slice->sliceIndex())) {
             simulated.append({
                 slice->sliceIndex(), slice->frequency(), slice->streamIndex()});
         }
@@ -7827,6 +8054,9 @@ RadioModel::planStreamSampleRateChange(int streamIndex, int rateHz) const
                 previousStream, occupantCount == 1, ddcPinned,
                 candidate.frequencyHz);
         if (placement.outcome == Outcome::Rejected) {
+            if (rejectedSliceId != nullptr) {
+                *rejectedSliceId = candidate.sliceId;
+            }
             return std::nullopt;
         }
 
@@ -7974,8 +8204,15 @@ void RadioModel::commitStreamSampleRateChange(
 
 bool RadioModel::setStreamSampleRate(int streamIndex, int rateHz)
 {
+    return setStreamSampleRateClosing(streamIndex, rateHz, {}, {});
+}
+
+bool RadioModel::setStreamSampleRateClosing(int streamIndex, int rateHz,
+                                            const QSet<int>& closing,
+                                            const std::function<void(int)>& close)
+{
     const std::optional<StreamRateChangePlan> plan =
-        planStreamSampleRateChange(streamIndex, rateHz);
+        planStreamSampleRateChange(streamIndex, rateHz, closing);
     if (!plan.has_value()) {
         return false;
     }
@@ -7993,6 +8230,18 @@ bool RadioModel::setStreamSampleRate(int streamIndex, int rateHz)
         // after preflight succeeds; requestDdcAssignment at commit's tail
         // recreates it from the committed geometry.
         stopExternalDiversityRoute();
+    }
+
+    // Fix wave (several-devices group review): the change is certain now,
+    // so the slices the plan set aside close, and only now. The plan was
+    // made without them, so it commits unchanged.
+    if (close) {
+        const QList<SliceModel*> slices = m_slices;
+        for (SliceModel* slice : slices) {
+            if (slice != nullptr && closing.contains(slice->sliceIndex())) {
+                close(slice->sliceIndex());
+            }
+        }
     }
 
     commitStreamSampleRateChange(*plan);
@@ -8048,6 +8297,74 @@ void RadioModel::syncReceiverToStream(int streamIndex, bool live)
         }
     }
     m_receiverManager->activateReceiver(streamIndex);
+}
+
+// iPhone app Task 74: claims `streamIndex` (or moves its centre when it is
+// already live) and centres it on `centreHz`: the NewStream and
+// RetunedStream arm of bindSliceToStream, which calls it, and the arm a
+// confirmed pan move to a free receiver uses (moveSlicesToStream).
+void RadioModel::activateStreamAt(int streamIndex, double centreHz)
+{
+    // Claim or move the DDC, then centre it on the slice.
+    //
+    // Preserve the stream's own rate when it is already live. A
+    // RetunedStream is a sole occupant dragging its existing DDC to a new
+    // centre, and that DDC keeps whatever width the operator gave it
+    // (Task 10). Only a freshly claimed DDC takes the connection default.
+    // Without this, every sole-occupant retune silently reset the stream
+    // back to the connection rate and threw away a per-stream width.
+    const bool streamAlreadyLive =
+        m_streamAllocator.isStreamActive(streamIndex);
+    const int existingRateHz =
+        m_streamAllocator.streamSampleRateHz(streamIndex);
+    const int rateForStream =
+        (streamAlreadyLive && existingRateHz > 0)
+            ? existingRateHz
+            : (m_connectionSampleRateHz > 0 ? m_connectionSampleRateHz
+                                            : m_streamDefaultRateHz);
+
+    if (!streamAlreadyLive) {
+        claimStreamEpoch(streamIndex);
+    }
+    m_streamAllocator.activateStream(
+        streamIndex, centreHz, rateForStream);
+
+    // A claimed stream is worthless until its hardware DDC routes.
+    // setReceiverFrequency below tunes the DDC; this is what makes
+    // ReceiverManager forward its samples.
+    syncReceiverToStream(streamIndex, /*live=*/true);
+
+    if (m_receiverManager) {
+        // forceHardwareFrequency, not setReceiverFrequency: this arm only
+        // runs when the stream CENTRE moved, and moving the centre is the
+        // operator asking for a retune, not a VFO nudge inside a pinned
+        // window. setReceiverFrequency respects m_ddcFreqLocked, so in
+        // CTUN it silently swallowed the push and the DDC never followed
+        // a band change. Confirmed on a live HL2 2026-07-31: the
+        // allocator returned NewStream for a 40 m to 60 m band press and
+        // the hardware emit was dropped with ddcLocked=true, leaving both
+        // the Alex high-pass and the receive low-pass on the old band
+        // until the operator nudged the VFO far enough to re-place.
+        //
+        // ReceiverManager draws exactly this distinction in its own
+        // comment on forceHardwareFrequency: the lock exists so a VFO
+        // move inside a pinned CTUN window does not retune the DDC,
+        // "while the pan drag itself is exactly the operator asking for a
+        // retune". A band button is the same act as a pan drag.
+        //
+        // The signal forceHardwareFrequency suppresses,
+        // receiverFrequencyChanged, has no consumer outside
+        // ReceiverManager, so nothing downstream loses an update. The
+        // JoinedExisting arm is deliberately untouched: that one really
+        // is a nudge inside the window, and it must keep respecting the
+        // lock.
+        m_receiverManager->forceHardwareFrequency(
+            streamIndex,
+            static_cast<quint64>(centreHz));
+    }
+    emit streamCentreChanged(
+        streamIndex, centreHz,
+        m_streamAllocator.streamSampleRateHz(streamIndex));
 }
 
 bool RadioModel::bindSliceToStream(SliceModel* slice, double frequencyHz,
@@ -8116,8 +8433,12 @@ bool RadioModel::bindSliceToStream(SliceModel* slice, double frequencyHz,
     // preferOwnStream applies only to a first bind. A retune already owns a
     // stream, and the retune path has its own rules about when it may keep,
     // move or leave it; forcing a fresh DDC there would strand the old one.
+    // iPhone app Task 74: a bound slice given a required stream moves onto
+    // it (a confirmed pan move taking its slices to another receiver,
+    // moveSlicesToStream); every other caller leaves requiredStream -1 on
+    // a retune, as before.
     const auto placement =
-        (previousStream < 0)
+        (previousStream < 0 || (requiredStream >= 0 && requiredStream != previousStream))
             ? (requiredStream >= 0
                 ? m_streamAllocator.joinStream(requiredStream, frequencyHz)
                 : m_streamAllocator.placeSlice(frequencyHz, preferOwnStream))
@@ -8174,66 +8495,7 @@ bool RadioModel::bindSliceToStream(SliceModel* slice, double frequencyHz,
 
     if (placement.outcome == Outcome::NewStream
         || placement.outcome == Outcome::RetunedStream) {
-        // Claim or move the DDC, then centre it on the slice.
-        //
-        // Preserve the stream's own rate when it is already live. A
-        // RetunedStream is a sole occupant dragging its existing DDC to a new
-        // centre, and that DDC keeps whatever width the operator gave it
-        // (Task 10). Only a freshly claimed DDC takes the connection default.
-        // Without this, every sole-occupant retune silently reset the stream
-        // back to the connection rate and threw away a per-stream width.
-        const bool streamAlreadyLive =
-            m_streamAllocator.isStreamActive(placement.streamIndex);
-        const int existingRateHz =
-            m_streamAllocator.streamSampleRateHz(placement.streamIndex);
-        const int rateForStream =
-            (streamAlreadyLive && existingRateHz > 0)
-                ? existingRateHz
-                : (m_connectionSampleRateHz > 0 ? m_connectionSampleRateHz
-                                                : m_streamDefaultRateHz);
-
-        if (!streamAlreadyLive) {
-            claimStreamEpoch(placement.streamIndex);
-        }
-        m_streamAllocator.activateStream(
-            placement.streamIndex, placement.newStreamCentreHz, rateForStream);
-
-        // A claimed stream is worthless until its hardware DDC routes.
-        // setReceiverFrequency below tunes the DDC; this is what makes
-        // ReceiverManager forward its samples.
-        syncReceiverToStream(placement.streamIndex, /*live=*/true);
-
-        if (m_receiverManager) {
-            // forceHardwareFrequency, not setReceiverFrequency: this arm only
-            // runs when the stream CENTRE moved, and moving the centre is the
-            // operator asking for a retune, not a VFO nudge inside a pinned
-            // window. setReceiverFrequency respects m_ddcFreqLocked, so in
-            // CTUN it silently swallowed the push and the DDC never followed
-            // a band change. Confirmed on a live HL2 2026-07-31: the
-            // allocator returned NewStream for a 40 m to 60 m band press and
-            // the hardware emit was dropped with ddcLocked=true, leaving both
-            // the Alex high-pass and the receive low-pass on the old band
-            // until the operator nudged the VFO far enough to re-place.
-            //
-            // ReceiverManager draws exactly this distinction in its own
-            // comment on forceHardwareFrequency: the lock exists so a VFO
-            // move inside a pinned CTUN window does not retune the DDC,
-            // "while the pan drag itself is exactly the operator asking for a
-            // retune". A band button is the same act as a pan drag.
-            //
-            // The signal forceHardwareFrequency suppresses,
-            // receiverFrequencyChanged, has no consumer outside
-            // ReceiverManager, so nothing downstream loses an update. The
-            // JoinedExisting arm is deliberately untouched: that one really
-            // is a nudge inside the window, and it must keep respecting the
-            // lock.
-            m_receiverManager->forceHardwareFrequency(
-                placement.streamIndex,
-                static_cast<quint64>(placement.newStreamCentreHz));
-        }
-        emit streamCentreChanged(
-            placement.streamIndex, placement.newStreamCentreHz,
-            m_streamAllocator.streamSampleRateHz(placement.streamIndex));
+        activateStreamAt(placement.streamIndex, placement.newStreamCentreHz);
     }
 
     slice->setStreamIndex(placement.streamIndex);
@@ -8612,8 +8874,13 @@ QString RadioModel::sliceCapReason(int cap) const
 }
 
 int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
-                             const ReceiveSliceState* restoreSeed)
+                             const ReceiveSliceState* restoreSeed, bool bindRestored)
 {
+    // iPhone app Task 73: `bindRestored` makes a device's saved slice again
+    // while the radio runs (restoreSliceFor). It restores `restoreSeed`'s
+    // frequency and mode like the startup hydration does, then binds at
+    // once, as an ordinary new slice does, instead of waiting for
+    // bindReceiveLayoutSlices.
     auto* slice = new SliceModel(this);
 
     // Phase 3F Sub-Epic I closeout, defect C3: lowest id not currently in
@@ -8649,8 +8916,17 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
     }
     slice->setSliceIndex(index);
     if (role() == Role::Local) {
-        slice->setSettingsRadioIdentity(restoreSeed || m_lastRadioInfo.macAddress.isEmpty()
-                                           ? m_receiveLayoutMac : m_lastRadioInfo.macAddress);
+        // iPhone app Task 74 (ruling 6.2): every change of the slice's
+        // receiver reaches the anchors, from its first bind on.
+        connect(slice, &SliceModel::streamIndexChanged, this, [this, slice](int stream) {
+            m_sliceOwnership->noteStream(slice->sliceIndex(), stream);
+        });
+        if (m_bandTrackingForTest) {
+            wireBandTrackingForTest(slice);
+        }
+        slice->setSettingsRadioIdentity((restoreSeed && !bindRestored)
+                                                || m_lastRadioInfo.macAddress.isEmpty()
+                                            ? m_receiveLayoutMac : m_lastRadioInfo.macAddress);
         // Restore before binding can activate a pooled receiver. Each stable
         // slice ID owns its NR selection even when another slice has focus.
         // loadFromSettings() restores the NR selection, the VAX channel
@@ -8688,8 +8964,18 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
         slice->setPanKey(initialPanId);
         slice->setProperty("initialPanId", initialPanId);
     }
-    if (restoreSeed && !slice->restoreReceiveState(restoreSeed->frequencyHz,
-                                                  restoreSeed->dspMode)) {
+    if (restoreSeed && bindRestored) {
+        // iPhone app Task 73: a device's slice made again while the radio
+        // runs. restoreReceiveState is the offline startup seam (it refuses
+        // once DSP exists), so this restores the way loadSliceState does at
+        // connect: the band's stored state from the slice's own keys (its
+        // settings copy was written there), then the saved frequency and
+        // mode through the ordinary setters, as a new slice's seed is.
+        slice->restoreFromSettings(bandFromFrequency(restoreSeed->frequencyHz));
+        slice->setFrequency(restoreSeed->frequencyHz);
+        slice->setDspMode(restoreSeed->dspMode);
+    } else if (restoreSeed && !slice->restoreReceiveState(restoreSeed->frequencyHz,
+                                                         restoreSeed->dspMode)) {
         delete slice;
         return -1;
     }
@@ -8726,9 +9012,19 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
     // publish a set that already contains this slice. The frequencyChanged
     // lambda is wired AFTER the bind, so the seed's setFrequency does not
     // trigger a second, redundant placement.
-    if (!restoreSeed && m_activeSlice && m_activeSlice != slice) {
-        slice->setFrequency(m_activeSlice->frequency());
-        slice->setDspMode(m_activeSlice->dspMode());
+    // iPhone app Task 73 (ruling 5.2 step 4): a device's new slice opens on
+    // its own active slice; a device with none opens on the station-level
+    // active slice, whose receiver it then joins (D48) at no cost.
+    SliceModel* seedFrom = m_activeSlice;
+    if (role() == Role::Local && !m_sliceOwnership->creator().isEmpty()) {
+        const int own = m_sliceOwnership->activeFor(m_sliceOwnership->creator());
+        if (SliceModel* mine = own >= 0 ? sliceById(own) : nullptr) {
+            seedFrom = mine;
+        }
+    }
+    if (!restoreSeed && seedFrom && seedFrom != slice) {
+        slice->setFrequency(seedFrom->frequency());
+        slice->setDspMode(seedFrom->dspMode());
     }
 
     // ── Roll back a slice the allocator refused ─────────────────────────
@@ -8769,8 +9065,16 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
     //
     // `slice` is excluded because m_slices.append above already added it, so
     // "are there slices on this pan" would otherwise always answer yes.
-    const bool openingANewPan =
-        !initialPanId.isEmpty() && slicesOnPan(initialPanId, slice).isEmpty();
+    // iPhone app Task 73 (ruling 5.2 step 2): a restored slice joins a
+    // window that covers it or claims a free receiver, whatever its pan.
+    // Fix wave I4 (ruling 5.12): a pan is a device plus a pan key, so on
+    // the Core only the creator's own slices on the key make it a pan that
+    // already exists; another device using the same key string ("pan-0")
+    // does not.
+    const QByteArray panOwner =
+        role() == Role::Local ? m_sliceOwnership->creator() : QByteArray();
+    const bool openingANewPan = !bindRestored && !initialPanId.isEmpty()
+        && !panHasSlicesFor(initialPanId, panOwner, slice);
 
     const bool poolReady = m_streamAllocator.streamCount() > 0;
     // Review fix round 1, finding 1(c): `&& role() == Role::Local` is a
@@ -8785,7 +9089,8 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
     // role guard returns ahead of that emit). A Role::Remote model must
     // behave the same way here regardless of how its pool got sized: the
     // slice survives unbound, exactly as it does before any pool exists.
-    if (!restoreSeed && !bindSliceToStream(slice, slice->frequency(), openingANewPan)
+    if ((!restoreSeed || bindRestored)
+        && !bindSliceToStream(slice, slice->frequency(), openingANewPan)
         && poolReady && role() == Role::Local) {
         // bindSliceToStream already emitted sliceAddRejected with the
         // allocator's reason for this first-bind case, so the operator has
@@ -9003,6 +9308,40 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
             refreshTransmitTuneBand();
         }
     });
+    connect(slice, &SliceModel::frequencyChanged, this, [this, slice](double freq) {
+        // Phase 3R K-bench: push the new freq to the FreeDV Reporter so
+        // our station's listed freq tracks the VFO. Without this, the
+        // reporter server has only the connect-time freq (or zero) and
+        // we never appear on-band to other operators. Mirrors freedv-
+        // gui's freqChangeImpl_ trigger pattern.
+        //
+        // 2026-05-12 bench: route through the dwell throttle so a VFO
+        // spin doesn't DoS qso.freedv.org with one packet per wheel
+        // tick.  7 s trailing dwell + 100 kHz band-jump fast-path; see
+        // publishFreedvFrequencyDwelled() body for the full policy.
+        //
+        // iPhone app Task 73 (ruling 5.11): only the station-level active
+        // slice's frequency is listed, so another device tuning its own
+        // slice never moves this station on the dashboard. Moved here
+        // from wireSliceSignals, which runs only once a radio connects.
+        //
+        // Fix wave (ruling 5.11): a slice in RADE mode is listed when one
+        // exists (the reporter lists FreeDV activity), else the
+        // station-level slice.
+        if (m_role != Role::Local || slice == freedvReportedSlice()) {
+            m_freedvWantedHz = static_cast<quint64>(freq);
+            if (m_freeDvReporter && m_freeDvReporter->isConnected()) {
+                publishFreedvFrequencyDwelled(static_cast<quint64>(freq));
+            }
+        }
+    });
+    // Fix wave (ruling 5.11): a slice entering or leaving RADE mode may
+    // change which slice the FreeDV Reporter lists.
+    connect(slice, &SliceModel::dspModeChanged, this, [this]() {
+        if (m_role == Role::Local) {
+            refreshFreedvReportedFrequency();
+        }
+    });
     connect(slice, &SliceModel::xitEnabledChanged, this, [this, slice]() {
         if (slice == txBoundSlice()) { pushTxFrequencyFromTxSlice(); }
     });
@@ -9045,7 +9384,16 @@ int RadioModel::addSliceImpl(int requestedId, const QString& initialPanId,
         reconcileWidebandDemand();
     });
 
-    if (!m_activeSlice) {
+    if (role() == Role::Local) {
+        // iPhone app Task 73: the slice is its creator's (or nobody's). It
+        // is its owner's active slice when the owner had none, and the
+        // station-level one when there was none (the first slice).
+        m_sliceOwnership->noteSliceAdded(index);
+        if (!m_activeSlice) {
+            m_sliceOwnership->setActive(m_sliceOwnership->mark(index).owner, index);
+        }
+        applyActiveSlices();
+    } else if (!m_activeSlice) {
         m_activeSlice = slice;
         // Mark the first slice as active so isActiveSlice() returns true for it.
         // AudioEngine::rxBlockReady (3M-1b E.4) reads this flag to gate the
@@ -9170,6 +9518,12 @@ void RadioModel::removeSliceImpl(int sliceId, bool persist)
         }
     }
 
+    // iPhone app Task 73: from here the slice is nobody's and no owner's
+    // active slice; its mark stays until sliceRemoved has been announced,
+    // so what the Core sends about its removal still knows whose it was.
+    if (role() == Role::Local) {
+        m_sliceOwnership->beginRemove(sliceId);
+    }
     SliceModel* slice = m_slices.takeAt(position);
     // R-R3-40: a slice created later with this ID must not inherit this
     // one's load snapshot or measure from its baseline.
@@ -9215,7 +9569,12 @@ void RadioModel::removeSliceImpl(int sliceId, bool persist)
     }
     requestDdcAssignment();
 
-    if (m_activeSlice == slice) {
+    if (role() == Role::Local) {
+        // iPhone app Task 73: the owner's next slice becomes its active one,
+        // and the station-level slice moves with it when this was it.
+        slice->setActive(false);
+        applyActiveSlices();
+    } else if (m_activeSlice == slice) {
         // Clear the active flag before reassigning. The deleted slice's flag
         // is moot, but the new active slice needs to be marked.
         slice->setActive(false);
@@ -9230,6 +9589,9 @@ void RadioModel::removeSliceImpl(int sliceId, bool persist)
     // any in-flight queued signals targeting this slice safe.
     slice->deleteLater();
     emit sliceRemoved(sliceId);
+    if (role() == Role::Local) {
+        m_sliceOwnership->endRemove(sliceId);
+    }
     if (m_receiveLayoutManaged && persist) {
         scheduleSettingsSave();
     }
@@ -10068,6 +10430,17 @@ void RadioModel::updateFreedvReporterVisibility()
 
 void RadioModel::setActiveSlice(int index)
 {
+    // iPhone app Task 73 (rulings 5.10, 5.11): the slice becomes its owner's
+    // active slice and the most recent choice, which the station-level
+    // active slice follows. Every slice's `active` is its owner's.
+    if (role() == Role::Local) {
+        if (index >= 0 && index < m_slices.size()) {
+            const int id = m_slices.at(index)->sliceIndex();
+            m_sliceOwnership->setActive(m_sliceOwnership->mark(id).owner, id);
+            applyActiveSlices();
+        }
+        return;
+    }
     if (index >= 0 && index < m_slices.size()) {
         SliceModel* newActive = m_slices.at(index);
         if (m_activeSlice == newActive) {
@@ -10083,6 +10456,126 @@ void RadioModel::setActiveSlice(int index)
         m_activeSlice->setActive(true);
         emitActiveSliceChanged(index);
     }
+}
+
+void RadioModel::applyActiveSlices()
+{
+    if (role() != Role::Local) {
+        return;
+    }
+    for (SliceModel* slice : std::as_const(m_slices)) {
+        slice->setActive(m_sliceOwnership->isActive(slice->sliceIndex()));
+    }
+    const int stationId = m_sliceOwnership->stationActiveSlice();
+    SliceModel* next = stationId >= 0 ? sliceById(stationId) : nullptr;
+    if (next == nullptr) {
+        next = (m_activeSlice && m_slices.contains(m_activeSlice))
+            ? m_activeSlice
+            : (m_slices.isEmpty() ? nullptr : m_slices.first());
+    }
+    if (next == m_activeSlice) {
+        return;
+    }
+    m_activeSlice = next;
+    emitActiveSliceChanged(next ? static_cast<int>(m_slices.indexOf(next)) : -1);
+    // Ruling 5.11: the FreeDV Reporter lists a RADE slice when there is
+    // one, else the station-level slice.
+    refreshFreedvReportedFrequency();
+}
+
+SliceModel* RadioModel::freedvReportedSlice() const
+{
+    // Fix wave (ruling 5.11): the first slice in RADE mode, in creation
+    // order; with none, the station-level active slice.
+    for (SliceModel* s : m_slices) {
+        if (s && (s->dspMode() == DSPMode::RADE_U || s->dspMode() == DSPMode::RADE_L)) {
+            return s;
+        }
+    }
+    return m_activeSlice;
+}
+
+void RadioModel::refreshFreedvReportedFrequency()
+{
+    const SliceModel* listed = freedvReportedSlice();
+    if (listed == nullptr) {
+        return;
+    }
+    const quint64 hz = static_cast<quint64>(listed->frequency());
+    if (hz == m_freedvWantedHz) {
+        return;
+    }
+    m_freedvWantedHz = hz;
+    publishFreedvFrequencyDwelled(m_freedvWantedHz);
+}
+
+bool RadioModel::setActiveSliceByIdFor(const QByteArray& owner, int sliceId)
+{
+    if (role() != Role::Local || sliceById(sliceId) == nullptr
+        || m_sliceOwnership->mark(sliceId).owner != owner) {
+        return false;
+    }
+    m_sliceOwnership->setActive(owner, sliceId);
+    applyActiveSlices();
+    return true;
+}
+
+void RadioModel::setTransmitHolder(const QByteArray& holder)
+{
+    if (role() != Role::Local) {
+        return;
+    }
+    m_sliceOwnership->setTransmitHolder(holder);
+    applyActiveSlices();
+}
+
+int RadioModel::lowestFreeSliceId() const
+{
+    for (int id = 0; id < sliceChannelLimit(); ++id) {
+        if (sliceById(id) == nullptr) {
+            return id;
+        }
+    }
+    return -1;
+}
+
+int RadioModel::restoreSliceFor(const QByteArray& owner, int sliceId,
+                                const ReceiveSliceState& state, QString* reason)
+{
+    const auto refuse = [reason](const QString& text) {
+        if (reason) {
+            *reason = text;
+        }
+        return -1;
+    };
+    if (role() != Role::Local) {
+        return refuse(QString());
+    }
+    const int cap = sliceChannelLimit();
+    if (m_slices.size() >= cap) {
+        return refuse(sliceCapReason(cap));
+    }
+    if (sliceId < 0 || sliceId >= cap || sliceById(sliceId) != nullptr) {
+        return refuse(tr("That slice's letter is in use."));
+    }
+    QString rejection;
+    const QMetaObject::Connection capture = connect(
+        this, &RadioModel::sliceAddRejected, this,
+        [&rejection](const QString& text) { rejection = text; });
+    int id = -1;
+    {
+        SliceOwnership::CreatorScope scope(m_sliceOwnership, owner);
+        id = addSliceImpl(sliceId, state.panKey, &state, /*bindRestored=*/true);
+    }
+    QObject::disconnect(capture);
+    if (id < 0) {
+        return refuse(rejection.isEmpty() ? tr("All the radio's receivers are in use.")
+                                          : rejection);
+    }
+    if (reason) {
+        reason->clear();
+    }
+    return id;
 }
 
 // Remote-daemon R2 Task 11. Resolves `index` to the slice actually sitting
@@ -13956,6 +14449,141 @@ void RadioModel::snapTransmitFilterForMode(DSPMode mode)
     }
 }
 
+// Band tracking's per-band antenna switch, for the slice that crossed a band
+// edge (wireSliceSignals' frequency handler).
+void RadioModel::crossBandForSlice(SliceModel* slice, Band newBand)
+{
+    const Band oldBand = m_lastBand;
+    m_lastBand = newBand;
+    // iPhone app Task 75 (the several-devices design, ruling 5.11a, D61):
+    // the receive antenna stays put while another device listens through
+    // it. Tuning goes ahead; the relay keeps the band whose receive antenna
+    // is on it now, and the person tuning is told (receiveAntennaKept). The
+    // new band's transmit antenna still applies at key-down: every MOX
+    // change re-routes the antennas (onMoxHardwareFlipped), and the kept
+    // band governs only the receive side. With nobody else listening, the
+    // crossing switches as it always has, and the kept band is forgotten.
+    const Band applied = m_keptRxAntennaBand.value_or(oldBand);
+    if (receiveAntennaDiffers(applied, newBand)) {
+        const QList<QByteArray> listeners = devicesListeningThroughRelay(slice);
+        if (!listeners.isEmpty()) {
+            m_keptRxAntennaBand = applied;
+            // The slice's labels are left as they are: they name the antenna
+            // on the relay, and writing them would store the kept antenna
+            // as the new band's own (rxAntennaChanged -> AlexController).
+            emit receiveAntennaKept(slice->sliceIndex(), receiveAntennaLabel(applied),
+                                    listeners);
+            return;
+        }
+    }
+    m_keptRxAntennaBand.reset();
+    // Phase 3P-I-a T10 — reapply per-band antenna on boundary
+    // crossing. Thetis UpdateAlexAntSelection equivalent
+    // (HPSDR/Alex.cs:310 [@501e3f5]).
+    applyAlexAntennaForBand(newBand);
+    // Phase 3P-I-a T10 follow-up — refresh the slice's cached
+    // rxAntenna/txAntenna labels from AlexController so the
+    // VFO Flag and RxApplet buttons show the new band's value.
+    // Without this call the wire switched but the UI stayed
+    // on the previous band's label (caught during PR #N
+    // bench testing — KG4VCF 2026-04-22). Mirrors the T9
+    // path at line 476-478.
+    //
+    // Issue #257: pass the SkuUiProfile so the new band's RX-only
+    // selection (if any) gets the right SKU-specific label.
+    // The slice that CHANGED band, not the active one. This handler
+    // is per slice now, so refreshing m_activeSlice here would move
+    // Slice A's antenna selection when Slice B crossed a band edge.
+    {
+        const SkuUiProfile sku = skuUiProfileFor(m_hardwareProfile.model);
+        slice->refreshAntennasFromAlex(m_alexController, newBand, &sku);
+    }
+}
+
+bool RadioModel::receiveAntennaDiffers(Band a, Band b) const
+{
+    // iPhone app Task 75: whether the relay's receive side would move from
+    // band a's antenna to band b's (the inputs applyAlexAntennaForBand's
+    // receive branch reads). No Alex, no relay to move.
+    if (a == b || !boardCapabilities().hasAlex) {
+        return false;
+    }
+    const AlexController& alex = m_alexController;
+    const bool rxAntDiffers = alex.useTxAntForRx() ? alex.txAnt(a) != alex.txAnt(b)
+                                                   : alex.rxAnt(a) != alex.rxAnt(b);
+    return rxAntDiffers || alex.rxOnlyAnt(a) != alex.rxOnlyAnt(b)
+        || (a == Band::XVTR) != (b == Band::XVTR);
+}
+
+QString RadioModel::receiveAntennaLabel(Band band) const
+{
+    // iPhone app Task 75: the receive antenna's name as a slice shows it
+    // (SliceModel::refreshAntennasFromAlex): the SKU's RX-only label when
+    // the bypass input is chosen, otherwise ANT1..ANT3.
+    const int rxOnly = m_alexController.rxOnlyAnt(band);
+    if (rxOnly >= 1 && rxOnly <= 3) {
+        const SkuUiProfile sku = skuUiProfileFor(m_hardwareProfile.model);
+        const QString& label = sku.rxOnlyLabels[static_cast<size_t>(rxOnly - 1)];
+        if (!label.isEmpty()) {
+            return label;
+        }
+    }
+    const int ant = m_alexController.useTxAntForRx() ? m_alexController.txAnt(band)
+                                                      : m_alexController.rxAnt(band);
+    return QStringLiteral("ANT%1").arg(ant >= 1 && ant <= 3 ? ant : 1);
+}
+
+QList<QByteArray> RadioModel::devicesListeningThroughRelay(const SliceModel* tuner) const
+{
+    // iPhone app Task 75 (ruling 5.11a): the other devices with a slice on
+    // a receiver fed by the ADC the relay feeds: every receiver on a 1-ADC
+    // board; on a 2-ADC board, ADC0's receivers (ANT1 to ANT3 feed ADC0,
+    // the several-devices design, 6.5). Slices nobody owns have nobody to
+    // tell, and the tuner's own device's slices do not count.
+    QList<QByteArray> devices;
+    if (m_role != Role::Local || m_sliceOwnership == nullptr || tuner == nullptr) {
+        return devices;
+    }
+    const QByteArray self = m_sliceOwnership->mark(tuner->sliceIndex()).subject();
+    const bool oneAdc = boardCapabilities().adcCount < 2;
+    for (const SliceModel* other : std::as_const(m_slices)) {
+        if (other == nullptr || other == tuner || other->streamIndex() < 0) {
+            continue;
+        }
+        const QByteArray who = m_sliceOwnership->mark(other->sliceIndex()).subject();
+        if (who.isEmpty() || who == self || devices.contains(who)) {
+            continue;
+        }
+        if (!oneAdc && adcForStream(other->streamIndex()) != 0) {
+            continue;
+        }
+        devices.append(who);
+    }
+    return devices;
+}
+
+#ifdef NEREUS_BUILD_TESTS
+void RadioModel::enableBandTrackingForTest()
+{
+    m_bandTrackingForTest = true;
+    for (SliceModel* slice : std::as_const(m_slices)) {
+        wireBandTrackingForTest(slice);
+    }
+}
+#endif
+
+void RadioModel::wireBandTrackingForTest(SliceModel* slice)
+{
+    // The frequency handler's band test, for a model with no connection
+    // (wireSliceSignals runs only once a radio connects).
+    connect(slice, &SliceModel::frequencyChanged, this, [this, slice](double freq) {
+        const Band newBand = bandFromFrequency(freq);
+        if (newBand != m_lastBand) {
+            crossBandForSlice(slice, newBand);
+        }
+    });
+}
+
 // Wire active slice signals to WDSP channel and radio hardware.
 // Called from wireConnectionSignals after connection is established.
 void RadioModel::wireSliceSignals(SliceModel* slice)
@@ -13978,23 +14606,15 @@ void RadioModel::wireSliceSignals(SliceModel* slice)
     // m_activeSlice and only from connect time, which is why tuning Slice B
     // or later never reached the radio.
     //
-    // What stays here is genuinely active-slice-only: the operator's
-    // listening frequency (FreeDV Reporter), the simplex TX-follows-RX
-    // push, band tracking, and the settings save.
+    // What stays here: band tracking and the settings save. (The FreeDV
+    // Reporter frequency now follows the station-level active slice from
+    // addSliceImpl, iPhone app Task 73; the simplex TX-follows-RX push has
+    // lived there longer.)
     connect(slice, &SliceModel::frequencyChanged, this, [this, slice](double freq) {
-        // Phase 3R K-bench: push the new freq to the FreeDV Reporter so
-        // our station's listed freq tracks the VFO. Without this, the
-        // reporter server has only the connect-time freq (or zero) and
-        // we never appear on-band to other operators. Mirrors freedv-
-        // gui's freqChangeImpl_ trigger pattern.
+        // The FreeDV Reporter push moved to addSliceImpl (iPhone app Task
+        // 73), wired once for every slice whatever the connection does, so
+        // it follows the station-level active slice alone.
         //
-        // 2026-05-12 bench: route through the dwell throttle so a VFO
-        // spin doesn't DoS qso.freedv.org with one packet per wheel
-        // tick.  7 s trailing dwell + 100 kHz band-jump fast-path; see
-        // publishFreedvFrequencyDwelled() body for the full policy.
-        if (m_freeDvReporter && m_freeDvReporter->isConnected()) {
-            publishFreedvFrequencyDwelled(static_cast<quint64>(freq));
-        }
         // The TX frequency fan-out lives in addSlice(), where it is wired
         // once for every slice regardless of connection lifecycle. Keeping
         // a second copy here used to publish each bound-slice retune twice.
@@ -14018,28 +14638,7 @@ void RadioModel::wireSliceSignals(SliceModel* slice)
             qCDebug(lcConnection) << "T10: band crossing" << bandLabel(m_lastBand)
                                   << "→" << bandLabel(newBand)
                                   << "(freq=" << freq << "Hz)";
-            m_lastBand = newBand;
-            // Phase 3P-I-a T10 — reapply per-band antenna on boundary
-            // crossing. Thetis UpdateAlexAntSelection equivalent
-            // (HPSDR/Alex.cs:310 [@501e3f5]).
-            applyAlexAntennaForBand(newBand);
-            // Phase 3P-I-a T10 follow-up — refresh the slice's cached
-            // rxAntenna/txAntenna labels from AlexController so the
-            // VFO Flag and RxApplet buttons show the new band's value.
-            // Without this call the wire switched but the UI stayed
-            // on the previous band's label (caught during PR #N
-            // bench testing — KG4VCF 2026-04-22). Mirrors the T9
-            // path at line 476-478.
-            //
-            // Issue #257: pass the SkuUiProfile so the new band's RX-only
-            // selection (if any) gets the right SKU-specific label.
-            // The slice that CHANGED band, not the active one. This handler
-            // is per slice now, so refreshing m_activeSlice here would move
-            // Slice A's antenna selection when Slice B crossed a band edge.
-            {
-                const SkuUiProfile sku = skuUiProfileFor(m_hardwareProfile.model);
-                slice->refreshAntennasFromAlex(m_alexController, newBand, &sku);
-            }
+            crossBandForSlice(slice, newBand);
         }
         scheduleSettingsSave();
     });
@@ -15115,27 +15714,35 @@ void RadioModel::applyAlexAntennaForBand(Band band, bool isTx)
 
         trxAnt = txAnt;
     } else {
-        // From Thetis Alex.cs:349-366 [@501e3f5].
-        rxOnlyAnt = m_alexController.rxOnlyAnt(band);
+        // iPhone app Task 75 (ruling 5.11a): the receive side follows the
+        // band whose antenna is kept on the relay, when one is.
+        // NereusSDR divergence (D61): Thetis reads RxOnlyAnt, RxAnt and
+        // TxAnt at the current band's index (idx) and derives xvtr from
+        // the current band; this branch reads them at rxBand, the kept
+        // band. With nothing kept rxBand is `band` and the branch is
+        // Thetis's exactly.
+        const Band rxBand = m_keptRxAntennaBand.value_or(band);
+        // From Thetis Alex.cs:349-366 [v2.10.3.15].
+        rxOnlyAnt = m_alexController.rxOnlyAnt(rxBand);
 
         // Thetis derives `xvtr` from the current console band
         // (console.vfoa_band == Band.XVTR). Mirror that: the user is in
         // XVTR mode when the active band slot is Band::XVTR. The session
         // flag m_xvtrActive acts as a secondary override for future
         // scenarios where XVTR state isn't tied to the band enum.
-        const bool xvtr = (band == Band::XVTR) || m_alexController.xvtrActive();
+        const bool xvtr = (rxBand == Band::XVTR) || m_alexController.xvtrActive();
         if (xvtr) {
             rxOnlyAnt = (rxOnlyAnt >= 3) ? 3 : 0;
         } else if (rxOnlyAnt >= 3) {
-            // "do not use XVTR ant port if not using transverter" — Alex.cs:358
+            // "do not use XVTR ant port if not using transverter", Alex.cs:358 [v2.10.3.15]
             rxOnlyAnt -= 3;
         }
 
         rxOut = (rxOnlyAnt != 0);
 
         trxAnt = m_alexController.useTxAntForRx()
-                   ? txAnt
-                   : m_alexController.rxAnt(band);
+                   ? m_alexController.txAnt(rxBand)
+                   : m_alexController.rxAnt(rxBand);
     }
 
     // From Thetis Alex.cs:368-375 rx_out_override [@501e3f5].
@@ -16358,7 +16965,11 @@ bool RadioModel::captureReceiveLayout(QString* error)
     QList<ReceiveSliceState> slices;
     bool hasRadeMode = false;
     for (const SliceModel* slice : std::as_const(m_slices)) {
-        slices.append({slice->sliceIndex(), slice->panKey(), slice->frequency(), slice->dspMode()});
+        // iPhone app Task 73 (ruling 5.3): each live slice with its owner,
+        // or the device the station device holds it for.
+        const SliceOwnership::Mark mark = m_sliceOwnership->mark(slice->sliceIndex());
+        slices.append({slice->sliceIndex(), slice->panKey(), slice->frequency(), slice->dspMode(),
+                       mark.owner, mark.heldFor});
         hasRadeMode = hasRadeMode || slice->dspMode() == DSPMode::RADE_U
             || slice->dspMode() == DSPMode::RADE_L;
     }
@@ -16484,6 +17095,26 @@ bool RadioModel::hydrateReceiveLayout(const QString& radioMac,
     for (const ReceiveSliceState& state : layout.slices) {
         m_receiveLayoutHydratedIds.insert(state.id);
     }
+    // iPhone app Task 73 (rulings 5.2, 5.3): owners come back with the
+    // layout. No device is connected yet after a restart, so a device's
+    // slice comes back held for it by the station device, and returns to
+    // it when it signs in (ruling 5.2 step 1); an entry with no owner (a
+    // manifest from before owners) restores with none, for the first
+    // device admitted alone to adopt.
+    QList<int> order;
+    for (const ReceiveSliceState& state : layout.slices) {
+        order.append(state.id);
+        if (state.owner == SliceOwnership::stationDevice() && !state.heldFor.isEmpty()) {
+            m_sliceOwnership->hold(state.id, state.heldFor);
+        } else if (state.owner == SliceOwnership::stationDevice()) {
+            m_sliceOwnership->setOwner(state.id, state.owner);
+        } else if (!state.owner.isEmpty()) {
+            m_sliceOwnership->hold(state.id, state.owner);
+        } else {
+            m_sliceOwnership->setOwner(state.id, QByteArray());
+        }
+    }
+    m_sliceOwnership->setOrder(order);
     // Descriptor order is authoritative, so an unchanged active identity can
     // still have a different list position. Publish the final pair together.
     if (!m_activeSlice || !m_slices.contains(m_activeSlice)) {
@@ -21210,6 +21841,18 @@ QVector<SliceModel*> RadioModel::slicesOnPan(const QString& panId,
         if (s->panKey() == panId) { found.append(s); }
     }
     return found;
+}
+
+// See RadioModel.h.
+bool RadioModel::panHasSlicesFor(const QString& panId, const QByteArray& owner,
+                                 const SliceModel* except) const
+{
+    for (const SliceModel* s : slicesOnPan(panId, except)) {
+        if (owner.isEmpty() || m_sliceOwnership->mark(s->sliceIndex()).owner == owner) {
+            return true;
+        }
+    }
+    return false;
 }
 
 // Codex review round 5, PR #293. See RadioModel.h.

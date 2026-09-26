@@ -651,7 +651,43 @@ private slots:
     void headphonesMixFollowsTheProfileAndTheRadio();
     void radioDropKeepsTheHeadphonesReasonWhenNothingIsRouted();
     void radioDropTellsAnAppWaitingOnMediaThatTheRadioIsGone();
+    void aBoundControllerServesItsOwnSessionAndHearsItsOwnMix();
 };
+
+// iPhone app Task 76 (ruling 9.1): a controller bound to a media session
+// serves that session alone and takes its own owner mix of the Core's
+// audio; one bound to another session never starts; both let their owner
+// mixes go when their session ends.
+void TstDaemonMediaController::aBoundControllerServesItsOwnSessionAndHearsItsOwnMix()
+{
+    Harness h;
+    h.establishSession();
+    const quint64 epoch = h.server.mediaSessionEpoch();
+    QVERIFY(epoch != 0);
+    QCOMPARE(h.controller.sessionEpoch(), epoch);
+    AudioEngine* const engine = h.radio.audioEngine();
+    QVERIFY(h.controller.ownerMixSlot() >= 0);
+    // The session's device owns both slices, so its mix carries both.
+    QTRY_COMPARE(engine->ownerMixSliceMask(h.controller.ownerMixSlot()),
+                 (1u << h.sliceId) | (1u << h.spareSliceId));
+    {
+        DaemonMediaController other(&h.server, &h.radio, epoch + 1,
+                                    std::make_shared<DaemonSharedSpectrum>(&h.radio));
+        QCOMPARE(other.sessionEpoch(), quint64{0});
+        QCOMPARE(other.ownerMixSlot(), -1);
+        DaemonMediaController bound(&h.server, &h.radio, epoch,
+                                    std::make_shared<DaemonSharedSpectrum>(&h.radio));
+        QCOMPARE(bound.sessionEpoch(), epoch);
+        QVERIFY(bound.ownerMixSlot() >= 0);
+        QVERIFY(bound.ownerMixSlot() != h.controller.ownerMixSlot());
+        QCOMPARE(engine->ownerMixCount(), 2);
+    }
+    QCOMPARE(engine->ownerMixCount(), 1);
+    h.finish();
+    QTRY_COMPARE(h.controller.sessionEpoch(), quint64{0});
+    QCOMPARE(h.controller.ownerMixSlot(), -1);
+    QCOMPARE(engine->ownerMixCount(), 0);
+}
 
 void TstDaemonMediaController::configuredBudgetReturnsExactAllocationResultsAndRejectsOvercommit()
 {
@@ -1141,7 +1177,7 @@ void runEightWidePans(bool budget, bool pureSignal, EightPanRun& result,
                                            [](int fps) { return fps > 0; }));
     QTRY_COMPARE_WITH_TIMEOUT(h.controller.activeEndpointCount(), admitted, 10'000);
     result.admitted = h.controller.activeEndpointCount();
-    auto* source = h.controller.findChild<DaemonSpectrumSource*>();
+    auto* source = &h.controller.sharedSpectrum()->source();
     QVERIFY(source);
     const QList<MediaSourceKey> keys = source->activeSources();
     QCOMPARE(keys.size(), twoSources ? 2 : 1);
@@ -1585,7 +1621,7 @@ void TstDaemonMediaController::realDisplayErrorIsCountedAndLoggedOnce()
     QTRY_VERIFY_WITH_TIMEOUT(!core->displayBusy(), kRealTransportWaitMs);
     constexpr qint64 kOutputPeriodMs = 1000 / 60 + 1;
     QTRY_VERIFY(sinceLastSend.elapsed() > 2 * kOutputPeriodMs);
-    auto* source = harness.controller.findChild<DaemonSpectrumSource*>();
+    auto* source = &harness.controller.sharedSpectrum()->source();
     QVERIFY(source);
     const QList<MediaSourceKey> sourceKeys = source->activeSources();
     QCOMPARE(sourceKeys.size(), 1);
@@ -1966,7 +2002,7 @@ void TstDaemonMediaController::spectrumAndPs3ShareALaggingWindowAndBothProgress(
     // The I/Q is fed again on each poll until all three hold. One deadline
     // covers every cycle, so a passing run stays well inside the binary's
     // 120 s ctest TIMEOUT however the waits add up.
-    auto* source = harness.controller.findChild<DaemonSpectrumSource*>();
+    auto* source = &harness.controller.sharedSpectrum()->source();
     QVERIFY(source);
     constexpr qint64 kOutputPeriodMs = 1000 / 60 + 1;
     const QDeadlineTimer cyclesDeadline(60'000);
@@ -2240,7 +2276,7 @@ void TstDaemonMediaController::failedSourceUpdateReleasesAllocationAndCanRecover
     // Remove the actual producer through its existing QObject/public seam.
     // The next overlapping retune reaches update() on a now-missing source
     // and exercises its real refusal without replacing the controller logic.
-    auto* source = harness.controller.findChild<DaemonSpectrumSource*>();
+    auto* source = &harness.controller.sharedSpectrum()->source();
     QVERIFY(source);
     source->deactivate({harness.streamIndex, FftTier::Wide});
     QCOMPARE(harness.controller.activeSourceCount(), 0);

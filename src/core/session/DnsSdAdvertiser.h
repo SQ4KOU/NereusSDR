@@ -15,6 +15,7 @@
 //                 claimed=0|1
 //                 pair=click|code|closed
 //                 name=<the Core's label>
+//                 devices=0..4 (iPhone app Task 71: places taken on the Core)
 //
 // Bonjour follows the announcer's rule: it advertises only where the
 // listener serves (dnsSdInterfaceForListener), so a loopback-only listener
@@ -35,6 +36,9 @@
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-25: iPhone app Task 71 (R-IOS-02): the sixth TXT entry,
+//               `devices`. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -78,6 +82,10 @@ struct DnsSdRecord {
     QByteArray identity;
     bool claimed = false;
     StationLanPairing pairing = StationLanPairing::Closed;
+    /// iPhone app Task 71 (ruling 10.4): `devices`, the places taken on the
+    /// Core, 0 to kStationLanMaxDevicesConnected (0 on a Core no device has
+    /// claimed). A number only: who is on the Core never goes here.
+    int devicesConnected = 0;
     /// kDnsSdAllInterfaces, an interface index, or kDnsSdThisComputerOnly.
     quint32 interfaceIndex = kDnsSdAllInterfaces;
 
@@ -86,9 +94,11 @@ struct DnsSdRecord {
 
 using DnsSdTxtEntries = QList<QPair<QByteArray, QByteArray>>;
 
-/// The TXT entries, in order v, id, claimed, pair, name. Empty, with
-/// `error` set, when the record cannot be advertised (an identity that is
-/// not 32 bytes, a label outside section 14's alphabet or length).
+/// The TXT entries, in order v, id, claimed, pair, name, devices (iPhone app
+/// Task 71: the sixth, after name; `v` stays 1, since a client ignores a key
+/// it does not know). Empty, with `error` set, when the record cannot be
+/// advertised (an identity that is not 32 bytes, a label outside section
+/// 14's alphabet or length, a device count outside 0 to 4).
 DnsSdTxtEntries dnsSdTxtEntries(const DnsSdRecord& record, QString* error = nullptr);
 /// The TXT record's bytes (RFC 6763 section 6: each `key=value` preceded by
 /// its length in one byte). Empty, with `error` set, as above.

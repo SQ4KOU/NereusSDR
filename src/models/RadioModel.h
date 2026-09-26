@@ -133,6 +133,19 @@
 //                passes every TCI release on; teardown unkeys; the MOX
 //                button completes a pending TUN-off before keying.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 73 (R-IOS-02): SliceOwnership (whose
+//                each slice is, each owner's active slice and the
+//                station-level one), owners in the restart manifest, a
+//                device's slice restored at its old frequency and letter,
+//                and the FreeDV Reporter frequency following the
+//                station-level active slice. NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 74 (R-IOS-02, R-IOS-30): each
+//                slice's receiver reported to the anchors;
+//                moveStreamWindowFor and moveSlicesToStream for a confirmed
+//                pan move; the allocator and the slice cap readable.
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -361,6 +374,7 @@ class StationPgxlController;
 class StationRfKitController;
 class StationTciController;
 class StationTciModel;
+class SliceOwnership;
 class RfKitBandFollow;
 class AmplifierModel;
 class RfKitModel;
@@ -1396,6 +1410,14 @@ public:
     /// DdcAssignment::rate[], which the codecs populate per stream, so there
     /// it applies only to the stream named.
     bool setStreamSampleRate(int streamIndex, int rateHz);
+    /// Fix wave after the several-devices group review (a rate proceed
+    /// closes only after the change succeeds): the same change with the
+    /// slices in `closing` set aside in the plan. `close` runs for each of
+    /// them only once the change is certain (the plan holds and, on
+    /// Protocol 1, the radio took the new rate), before the plan commits.
+    /// Refused, it closes nothing. Local only.
+    bool setStreamSampleRateClosing(int streamIndex, int rateHz, const QSet<int>& closing,
+                                    const std::function<void(int)>& close);
 
     /// Phase 3F Sub-Epic I closeout, defect G2: the operator picked a sample
     /// rate on one slice's VFO flag.
@@ -1417,6 +1439,10 @@ public:
     /// relayed onto sliceRetuneRejected by
     /// reportStationRetuneRejected().
     void requestSliceSampleRate(int sliceId, int rateHz);
+    /// requestSliceSampleRate on the Core with `closing` closed through
+    /// `close` only once the change is certain (setStreamSampleRateClosing).
+    void requestSliceSampleRateClosing(int sliceId, int rateHz, const QSet<int>& closing,
+                                       const std::function<void(int)>& close);
 
     /// Set the station-owned C-Tune pin for the bound stream named by a
     /// slice. Remote roles send the typed station command and never mutate
@@ -1428,10 +1454,49 @@ public:
     /// inside the target window or the request is refused without changes.
     bool requestStreamCentre(int sliceId, double centreHz);
 
-    /// End the session-scoped C-Tune state and project the cleared value to
-    /// every cohost. StationServer calls this when the authenticated session
-    /// goes away; it does not persist across a reconnect.
-    void clearStreamCtunPins();
+    /// iPhone app Task 74 (rulings 6.4, 6.5, 6.7): moves a receiver's
+    /// window on a confirmed pan move and places again every slice it no
+    /// longer covers (but `exemptSliceId`); returns those that found no
+    /// receiver, for the caller to close. Local only.
+    QList<int> moveStreamWindowFor(int stream, double centreHz, int exemptSliceId);
+    /// iPhone app Task 74 (ruling 6.6): takes these slices to `stream`,
+    /// claimed at `centreHz` when free. Local only.
+    bool moveSlicesToStream(const QList<int>& sliceIds, int stream, double centreHz);
+    /// iPhone app Task 74: the placement policy's state, read to plan a pan
+    /// move or a take on a copy before anything changes.
+    const NereusSDR::SliceStreamAllocator& streamAllocator() const { return m_streamAllocator; }
+    /// iPhone app Task 74 (ruling 6.9): the slice cap every device shares.
+    int sliceCapForDevices() const { return sliceChannelLimit(); }
+
+    /// iPhone app Task 75 (the several-devices design, ruling 7.3): what a
+    /// sample-rate change on `sliceId`'s receiver would do, simulated with
+    /// today's plan (planStreamSampleRateChange) and changing nothing. A
+    /// slice the plan would refuse and `mayClose` allows (another device's)
+    /// is set aside as closing and the plan run again without it; any other
+    /// refused slice refuses the whole change, as today (`refused`, with
+    /// `refusedSliceId`). Local only.
+    struct SampleRateReach {
+        bool refused = true;
+        int refusedSliceId = -1;
+        /// The receiver the change is on, and whether it is the radio's
+        /// (Protocol 1).
+        int stream = -1;
+        bool radioWide = false;
+        int fromRateHz = 0;
+        QList<int> changes;
+        QList<int> moves;
+        QList<int> closes;
+    };
+    SampleRateReach planSampleRateReach(int sliceId, int rateHz,
+                                        const std::function<bool(int)>& mayClose) const;
+
+    /// End the C-Tune pins of the receivers `device` anchors and project the
+    /// cleared value to every cohost. Fix wave after the several-devices
+    /// group review (ruling 4.8 keeps a device's pans): StationServer calls
+    /// this when a device leaves for good (session.leave, a token window's
+    /// end, the end of its 180 s, revocation), not when a session drops, so
+    /// a device coming back keeps its pins.
+    void clearStreamCtunPinsAnchoredBy(const QByteArray& device);
 
     /// Push a slice's just-restored per-band sample rate onto its DDC.
     ///
@@ -1541,6 +1606,40 @@ public:
     /// to ask.
     bool setActiveSliceById(int sliceId);
 
+    // ── iPhone app Task 73 (R-IOS-02): several devices on one Core ───────
+    //
+    // Whose each slice is (the several-devices design, sections 5.1 to 5.7).
+    // On a Local model every slice has an owner mark here; a slice's
+    // `active` means its owner's active slice, and activeSlice() is the
+    // station-level active slice (ruling 5.11): the transmit holder's while
+    // transmit is held, otherwise the most recent choice by any owner. With
+    // no owners (a desktop window on its own) every slice has the same
+    // owner, none, and this is exactly the one active slice of before.
+    SliceOwnership* sliceOwnership() const { return m_sliceOwnership; }
+
+    /// `owner` makes one of its own slices its active slice (ruling 5.10).
+    /// False, changing nothing, when the slice is not `owner`'s. Local only.
+    bool setActiveSliceByIdFor(const QByteArray& owner, int sliceId);
+
+    /// The device holding transmit, empty for none (Task 34 calls this).
+    /// While one holds it, its active slice is the station-level one
+    /// (ruling 5.11). Local only.
+    void setTransmitHolder(const QByteArray& holder);
+
+    /// The lowest slice id not in use (the next letter a new slice takes),
+    /// or -1 when every id with a channel is in use.
+    int lowestFreeSliceId() const;
+
+    /// Ruling 5.2 step 2: a device's saved slice made again for `owner`, on
+    /// `sliceId` (which must be free), at `state`'s frequency and mode, its
+    /// pan key `state.panKey`, after loading whatever settings that id's
+    /// keys hold. It joins a receiver window that covers it or claims a
+    /// free receiver, as any new slice does. Returns the id, or -1 with
+    /// `reason` (the slice cap, or no receiver) when it does not fit.
+    /// Local only.
+    int restoreSliceFor(const QByteArray& owner, int sliceId, const ReceiveSliceState& state,
+                        QString* reason = nullptr);
+
     /// Phase 3F Sub-Epic C Task 7: AetherSDR-faithful slice creation entry
     /// point.  Creates a new SliceModel (delegates to addSlice) and tags it
     /// with the supplied pan id as a dynamic property for Sub-Epic D wiring.
@@ -1606,6 +1705,14 @@ public:
     /// difference between two independent pans and two views of one.
     QVector<SliceModel*> slicesOnPan(const QString& panId,
                                      const SliceModel* except = nullptr) const;
+
+    /// Fix wave I4 (several-devices ruling 5.12): a pan is a device plus a
+    /// pan key. Whether `panId` already holds a slice of `owner`'s (the
+    /// SliceOwnership owner), skipping `except`. An empty `owner` counts
+    /// every slice on the key, as before several devices. Decides whether a
+    /// new slice there opens a new pan, on the Core as in addSliceImpl.
+    bool panHasSlicesFor(const QString& panId, const QByteArray& owner,
+                         const SliceModel* except = nullptr) const;
 
     /// Move surplus co-hosted slices onto pans in `panIds` that have none.
     /// Returns how many moved.
@@ -2696,6 +2803,9 @@ public:
     // injecting a mock connection, mirroring what wireConnectionSignals() does
     // when a real radio connects.
     void wireSliceSignalsForTest() { wireSliceSignals(m_activeSlice); }
+    // iPhone app Task 73: the frequency the FreeDV Reporter lists (the
+    // station-level active slice's), whether or not it is connected.
+    quint64 freedvWantedFrequencyHzForTest() const { return m_freedvWantedHz; }
     // The transmit-frequency derivation the push and both TUNE arms share.
     // setTune() itself is unreachable from a unit test (it requires a live
     // connection AND an audio engine, console.cs:30035-30043 [v2.10.3.15]'s
@@ -2712,6 +2822,13 @@ public:
     // TX inhibit monitor, and undo it, without the full connect pipeline.
     void wireTxInhibitInputForTest() { connectTxInhibitInput(); }
     void teardownTxInhibitInputForTest() { m_txInhibit.detachRadioInput(); }
+    /// iPhone app Task 75: band tracking (the per-band antenna switch) for
+    /// every slice, on a model with no connection; see crossBandForSlice.
+    void enableBandTrackingForTest();
+    /// The band whose receive antenna is kept on the relay, if any.
+    std::optional<NereusSDR::Band> keptReceiveAntennaBandForTest() const {
+        return m_keptRxAntennaBand;
+    }
     void setLastBandForTest(NereusSDR::Band b) {
         const bool cross = (b != m_lastBand);
         m_lastBand = b;
@@ -3546,6 +3663,12 @@ public slots:
     // publishes immediately (initial baseline / band-jump fast-path /
     // MOX force) or restarts the dwell timer for a deferred publish.
     void publishFreedvFrequencyDwelled(quint64 hz);
+    /// Fix wave (several-devices ruling 5.11): the slice whose frequency
+    /// the FreeDV Reporter lists: the first slice in RADE mode, else the
+    /// station-level active slice.
+    SliceModel* freedvReportedSlice() const;
+    /// Lists freedvReportedSlice()'s frequency when it changed.
+    void refreshFreedvReportedFrequency();
     // Force-publish the current pending freq right now and reset the
     // dwell.  Called from MoxController::txAboutToBegin so a TX engage
     // never leaves the reporter showing a stale freq.
@@ -3698,6 +3821,13 @@ signals:
     /// physical ADC (the extended pan's wideband wings) has to listen here.
     /// Codex, PR #318.
     void streamAdcRoutingChanged();
+
+    /// iPhone app Task 75 (the several-devices design, ruling 5.11a, D61):
+    /// slice `sliceId` crossed a band edge and the receive antenna stayed on
+    /// `antenna` because `listeners` (other devices, by id) listen through
+    /// it. Local only.
+    void receiveAntennaKept(int sliceId, const QString& antenna,
+                            const QList<QByteArray>& listeners);
 
     /// Phase 3F Sub-Epic I: emitted whenever the slice or stream set changes
     /// such that the per-board codec must recompute the DDC assignment.
@@ -4058,6 +4188,15 @@ private:
     /// Qt::UniqueConnection-safe member targets or are wired once at
     /// addSlice time.
     void wireSliceSignals(SliceModel* slice);
+    /// Band tracking's crossing for `slice` (m_lastBand, the per-band
+    /// antenna switch and the slice's antenna labels); iPhone app Task 75
+    /// keeps the receive antenna while another device listens (ruling
+    /// 5.11a).
+    void crossBandForSlice(SliceModel* slice, Band newBand);
+    bool receiveAntennaDiffers(Band a, Band b) const;
+    QString receiveAntennaLabel(Band band) const;
+    QList<QByteArray> devicesListeningThroughRelay(const SliceModel* tuner) const;
+    void wireBandTrackingForTest(SliceModel* slice);
 
     /// The transmitter's RADE passband snap: entering RADE_U/RADE_L sets the
     /// transmit filter to 650..2350 Hz; leaving RADE restores 100..3900 Hz
@@ -4267,6 +4406,9 @@ public:
     // tweak when they immediately close the app. No-op when nothing's
     // pending. Idempotent — calling repeatedly is safe.
     void flushPendingSettingsSave();
+    /// iPhone app Task 73: the coalesced settings save, for a store the
+    /// Core's session server changed (a device's saved slices).
+    void requestSettingsSave() { scheduleSettingsSave(); }
     QString settingsSaveError() const { return m_settingsSaveError; }
     void applyStationSettingsSaveError(const QString& reason);
     // R-R3-34: seed a validated local layout before any radio/DSP resources
@@ -4460,6 +4602,9 @@ public:
     void setStreamEpoch(int streamIndex, quint64 epoch);
     void claimStreamEpoch(int streamIndex);
     void retireStream(int streamIndex);
+    // iPhone app Task 74: claim a stream, or move a live one, centred on
+    // `centreHz` (bindSliceToStream's NewStream / RetunedStream arm).
+    void activateStreamAt(int streamIndex, double centreHz);
 
     /// Emit ddcAssignmentRequested and drive the per-board codec recompute.
     void requestDdcAssignment();
@@ -4595,8 +4740,14 @@ private:
         QVector<PlannedSlicePlacement> slices;
     };
 
+    // iPhone app Task 75 (ruling 7.3): `excluded` slices are left out of
+    // the simulation, as though already closed (a stream only they held is
+    // free); `rejectedSliceId`, when given, names the slice whose refusal
+    // made the plan fail (-1 for any other failure).
     std::optional<StreamRateChangePlan>
-    planStreamSampleRateChange(int streamIndex, int rateHz) const;
+    planStreamSampleRateChange(int streamIndex, int rateHz,
+                               const QSet<int>& excluded = {},
+                               int* rejectedSliceId = nullptr) const;
 
     void commitStreamSampleRateChange(const StreamRateChangePlan& plan);
 
@@ -4607,7 +4758,13 @@ private:
     /// used verbatim, and checking it for collision first is the caller's
     /// job (addSliceWithStationId does).
     int addSliceImpl(int requestedId, const QString& initialPanId,
-                     const ReceiveSliceState* restoreSeed = nullptr);
+                     const ReceiveSliceState* restoreSeed = nullptr,
+                     bool bindRestored = false);
+
+    /// iPhone app Task 73: every slice's `active` from its owner's active
+    /// slice, and activeSlice() moved to the station-level one (emitting
+    /// the active-slice signals when it moves). Local only.
+    void applyActiveSlices();
 
     /// The operator's reason for a refused add at the slice cap:
     /// "<radio> supports a maximum of <cap> slices" ("1 slice" for one), or,
@@ -4855,6 +5012,11 @@ private:
     QList<SliceModel*> m_slices;
     QList<PanadapterModel*> m_panadapters;
     SliceModel* m_activeSlice{nullptr};
+    // iPhone app Task 73: whose each slice is. Qt-parented to this model.
+    SliceOwnership* m_sliceOwnership{nullptr};
+    // iPhone app Task 73 (ruling 5.11): the frequency the FreeDV Reporter
+    // lists, the station-level active slice's; published when connected.
+    quint64 m_freedvWantedHz{0};
 
     // View hooks (non-owning, set by MainWindow). Phase 3G-8 + 3G-9c +
     // 3M-5d (m_txAnalyzer).
@@ -5074,6 +5236,11 @@ private:
     // press, not via VFO tune, so this lambda only tracks; it does NOT
     // save or restore at the boundary.
     Band m_lastBand{Band::Band20m};
+    /// iPhone app Task 75 (ruling 5.11a): the band whose receive antenna the
+    /// relay keeps while another device listens through it; empty when the
+    /// relay follows m_lastBand as always.
+    std::optional<Band> m_keptRxAntennaBand;
+    bool m_bandTrackingForTest{false};
 
     // Settings save coalescing
     bool m_settingsSaveScheduled{false};

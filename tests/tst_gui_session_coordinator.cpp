@@ -1,4 +1,7 @@
 // no-port-check: NereusSDR-original. R-R3-38 session replacement invariants.
+// iPhone app Task 71 (R-IOS-02): an end the operator did not ask for is the
+// Core retiring the token, now that a second window is admitted beside the
+// first. J.J. Boyd (KG4VCF), 2026-09-25, AI-assisted via Anthropic Claude Code.
 #include <QtTest/QtTest>
 #include <QApplication>
 #include <QFile>
@@ -14,6 +17,9 @@
 #include "core/WdspEngine.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
+#include "core/session/StationDevicesFacade.h"
+#include "core/security/StationIdentity.h"
+#include "core/security/DeviceStore.h"
 #include "core/settings/SettingsProxy.h"
 #include "gui/GuiSessionCoordinator.h"
 #include "gui/MainWindow.h"
@@ -470,13 +476,27 @@ private slots:
         QTest::qWait(100);
         QCOMPARE(picker.count(), 1);
 
-        // Another window takes the Core's one session over. That ends this
-        // session without the operator here asking: nothing opens.
+        // The Core ends this session without the operator here asking
+        // (iPhone app Task 71: another window signing in is now admitted
+        // beside this one, so the end is the Core retiring the token this
+        // window signed in with): nothing opens.
         controller->connectToStation();
         QTRY_VERIFY(client->isHandshakeComplete());
         picker.clear();
         other.connectToStation(QUrl(a.connection.url), a.connection.token, {}, true);
         QTRY_VERIFY(other.isHandshakeComplete());
+        QVERIFY(client->isConnectionActive());
+        PairedDevice paired;
+        {
+            QTemporaryDir keyDir;
+            const StationIdentity key = StationIdentity::loadOrCreate(keyDir.path());
+            paired.id = key.fingerprint();
+            paired.publicKeySpki = key.publicKeySpki();
+        }
+        paired.name = QStringLiteral("Shack iPhone");
+        paired.kind = QStringLiteral("phone");
+        QVERIFY(server.deviceStore()->add(paired));
+        QVERIFY(server.devicesFacade()->retireToken().accepted);
         QTRY_VERIFY(!client->isConnectionActive());
         QVERIFY(!client->isReconnectPending());
         QTest::qWait(100);

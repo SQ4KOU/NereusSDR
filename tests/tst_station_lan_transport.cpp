@@ -1,4 +1,7 @@
 // Focused transport regressions for bounded, untrusted LAN Core discovery.
+// iPhone app Task 71 (R-IOS-02, ruling 10.4): the "Devices connected" byte
+// appended after Pairing, its absence, and its bound. J.J. Boyd (KG4VCF),
+// 2026-09-25, AI-assisted via Anthropic Claude Code.
 #include <QtTest>
 
 #include <QSignalSpy>
@@ -213,6 +216,81 @@ private slots:
         }
         QVERIFY(heard.contains(newer));
         QVERIFY(heard.contains(announcement(2)));
+    }
+
+    void theDeviceCountIsOneByteAfterPairing()
+    {
+        QString error;
+        StationLanAnnouncement counted = announcementV2();
+        const QByteArray without = encodeStationLanAnnouncement(counted, &error);
+        QVERIFY2(!without.isEmpty(), qPrintable(error));
+        counted.devicesConnected = 3;
+        const QByteArray with = encodeStationLanAnnouncement(counted, &error);
+        QVERIFY2(!with.isEmpty(), qPrintable(error));
+        QCOMPARE(with.size(), without.size() + 1);
+        QCOMPARE(with.left(without.size()), without);
+        QCOMPARE(with.back(), char(3));
+        const auto decoded = decodeStationLanAnnouncement(with, &error);
+        QVERIFY2(decoded, qPrintable(error));
+        QCOMPARE(decoded->devicesConnected, std::optional<int>(3));
+        QCOMPARE(*decoded, counted);
+
+        // A datagram from a Core before the count: decoded, count unknown.
+        const auto older = decodeStationLanAnnouncement(without, &error);
+        QVERIFY2(older, qPrintable(error));
+        QVERIFY(!older->devicesConnected);
+
+        // Bytes after the count are ignored, as any appended field's are.
+        const auto extended =
+            decodeStationLanAnnouncement(with + QByteArray("\x07\x01\x00", 3), &error);
+        QVERIFY2(extended, qPrintable(error));
+        QCOMPARE(extended->devicesConnected, std::optional<int>(3));
+
+        // 0 to 4 only, either way.
+        StationLanAnnouncement tooMany = announcementV2();
+        tooMany.devicesConnected = kStationLanMaxDevicesConnected + 1;
+        QVERIFY(encodeStationLanAnnouncement(tooMany, &error).isEmpty());
+        QByteArray five = with;
+        five.back() = char(5);
+        QVERIFY(!decodeStationLanAnnouncement(five, &error));
+        // Schema 1 has nowhere to put it.
+        StationLanAnnouncement schemaOne = announcement();
+        schemaOne.devicesConnected = 1;
+        QVERIFY(encodeStationLanAnnouncement(schemaOne, &error).isEmpty());
+
+        // The largest datagram, both names and the label at their limits
+        // and the count, is 480 bytes, under a listener's 512.
+        StationLanAnnouncement largest = announcementV2();
+        largest.coreName = QString(kStationLanMaxCoreNameBytes, QLatin1Char('c'));
+        largest.radioName = QString(kStationLanMaxRadioNameBytes, QLatin1Char('r'));
+        largest.label = QString(32, QLatin1Char('K')) + QLatin1Char('/')
+            + QString(32, QLatin1Char('s'));
+        largest.devicesConnected = kStationLanMaxDevicesConnected;
+        const QByteArray biggest = encodeStationLanAnnouncement(largest, &error);
+        QVERIFY2(!biggest.isEmpty(), qPrintable(error));
+        QCOMPARE(biggest.size(), kStationLanMaxSchema2DatagramBytes);
+        QCOMPARE(kStationLanMaxSchema2DatagramBytes, 480);
+        QVERIFY(kStationLanMaxSchema2DatagramBytes <= kStationLanMaxDatagramBytes);
+    }
+
+    void aSchemaOneDatagramKeepsTheDeviceCount()
+    {
+        StationLanDiscovery discovery;
+        QVERIFY(discovery.start(0));
+        QUdpSocket sender;
+        QString error;
+        StationLanAnnouncement counted = announcementV2(4);
+        counted.devicesConnected = 2;
+        sendLoopback(&sender, encodeStationLanAnnouncement(counted, &error), discovery.port());
+        QTRY_COMPARE(discovery.endpoints().size(), 1);
+        QCOMPARE(discovery.endpoints().first().announcement.devicesConnected,
+                 std::optional<int>(2));
+        // The same endpoint in schema 1 refreshes what schema 1 carries.
+        sendLoopback(&sender, datagram(4), discovery.port());
+        QTest::qWait(50);
+        QCOMPARE(discovery.endpoints().size(), 1);
+        QCOMPARE(discovery.endpoints().first().announcement.devicesConnected,
+                 std::optional<int>(2));
     }
 
     void announcerRejectsInvalidState()
