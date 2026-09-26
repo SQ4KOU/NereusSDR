@@ -45,6 +45,10 @@
 //                                    transmitRefLevel() and
 //                                    transmitDynamicRange() readers.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 29 (R-R3-49, R-R3-12):
+//                                    drawsSpectrumTrace(); no stale receive
+//                                    trace under the transmit axis.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  enums.cs
@@ -1120,6 +1124,16 @@ public:
     // this slot drives the spectrum-panel TX filter shadow.
 
     bool isMoxOverlayActive() const noexcept { return m_moxOverlay; }
+    /// Whether the GPU path draws a spectrum trace this frame: new pixels,
+    /// or the last trace it built. Parity Task 29: never the last trace
+    /// while the MOX overlay is on and there are no transmit pixels (a
+    /// remote pan on a Core that sends no transmit display): the receive
+    /// trace would sit under the transmit axis and read at the wrong
+    /// frequencies, so the pan stays blank with its status line.
+    bool drawsSpectrumTrace() const noexcept
+    {
+        return !m_renderedPixels.isEmpty() || (m_visibleBinCount > 0 && !m_moxOverlay);
+    }
     float txAttenuatorOffsetDb() const noexcept { return m_txAttOffsetDb; }
     bool txFilterVisible() const noexcept { return m_txFilterVisible; }
 

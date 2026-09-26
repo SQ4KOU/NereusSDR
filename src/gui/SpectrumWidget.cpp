@@ -36,6 +36,10 @@
 //                 Hz/bin readout follow the Core's granted FFT size, and its
 //                 peak hold, blob and noise floor decay follow the frame
 //                 rate the Core sends. AI-assisted via Anthropic Claude Code.
+//   2026-09-26 J.J. Boyd / KG4VCF - R-R3-49 / R-R3-12 (parity Task 29): the
+//                 GPU path draws no stale receive trace while the MOX overlay
+//                 is on without transmit pixels (drawsSpectrumTrace).
+//                 AI-assisted via Anthropic Claude Code.
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
@@ -11066,7 +11070,7 @@ void SpectrumWidget::renderGpuFrame(QRhiCommandBuffer* cb)
         cb->setVertexInput(0, 1, &vbuf);
         cb->draw(4);
     } else if (!is3D && m_fftFillPipeline && m_fftLinePipeline
-               && m_visibleBinCount > 0) {
+               && m_visibleBinCount > 0 && drawsSpectrumTrace()) {
         float specVpX = static_cast<float>(specRect.x()) * dpr;
         float specVpY = static_cast<float>(h - specRect.bottom() - 1) * dpr;
         float specVpW = static_cast<float>(specRect.width()) * dpr;

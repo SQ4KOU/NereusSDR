@@ -627,12 +627,20 @@ private slots:
         SpectrumWidget* two = window.pan(QStringLiteral("two"));
         QVERIFY(window.receiveDraws(QStringLiteral("two")));
         const float txRef = two->m_txRefLevel;
+        // The GPU path had built a receive trace (offscreen has no GPU, so
+        // stand in for the trace it would have drawn).
+        two->m_visibleBinCount = 100;
+        QVERIFY(two->drawsSpectrumTrace());
 
         window.key(true);
         QTRY_VERIFY(window.controller->isKeyed());
         QVERIFY(two->m_moxOverlay);
         QCOMPARE(two->m_refLevel, txRef);
         QVERIFY(!one->m_moxOverlay);
+        // Coordinator ruling: no receive trace under the transmit axis (its
+        // frequencies would read wrong); the pan is blank with its status.
+        QVERIFY(two->m_renderedPixels.isEmpty());
+        QVERIFY(!two->drawsSpectrumTrace());
         const PanDisplayState state = window.gui->panDisplayState(QStringLiteral("two"));
         QVERIFY(state.transmitDisplayMissing);
         // The whole sentence on hover; the line itself in forms that fit.
