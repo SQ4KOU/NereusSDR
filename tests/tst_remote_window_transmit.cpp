@@ -30,6 +30,11 @@
 //               line is refused and nothing keys. J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude
 //               Code.
+//   2026-09-26: Transmit group fix wave 2 (M8): VOX shows disabled with the
+//               plain reason while this computer has no microphone line to
+//               the Core; the Core's refusal stays the backstop. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -223,12 +228,15 @@ struct WindowControls {
         return hooks;
     }
 
-    // As MainWindow's applyRemoteRoleGating does.
-    void follow(StationClient& client)
+    // As MainWindow's applyRemoteRoleGating does (fix wave 2, M8: VOX
+    // also follows this computer's microphone line, `media`).
+    void follow(StationClient& client, const RemoteMediaController* media = nullptr)
     {
         const bool permitted = client.isHandshakeComplete() && client.remoteTransmitAvailable()
             && client.capabilities().txPermitted;
         applet.setTransmitPermitted(permitted, client.capabilities().txRefusalReason);
+        const bool line = media == nullptr || media->micLineOpen();
+        applet.setVoxPermitted(line, line ? QString() : TxRefusals::micNotConnected().text);
     }
 };
 
@@ -652,6 +660,70 @@ private slots:
         QVERIFY(!h.client.remoteTransmit()->keepaliveRunning());
         h.station.transmitModel().setVoxEnabled(false);
         QTRY_VERIFY(!h.remote.transmitModel().voxEnabled());
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // Fix wave 2 (M8): until this computer's microphone line to the Core
+    // opens, the VOX button shows disabled with the plain reason (not
+    // refused on write); it comes alive when the media connection carries
+    // the line, and goes back when the line closes. The Core's refusal
+    // stays the backstop.
+    void voxShowsDisabledWithItsReasonUntilTheMicrophoneLineOpens()
+    {
+        Test::RemoteAudioSessionHarness h;
+        h.pairWindow = true;
+        h.makeTransmitReady();
+        attachMicrophone(h, 0.3f);
+        RemoteMediaController remoteMedia(&h.client, &h.remote, nullptr);
+        QSignalSpy line(&remoteMedia, &RemoteMediaController::micLineChanged);
+        WindowControls window(h);
+        QObject::connect(&remoteMedia, &RemoteMediaController::micLineChanged, &window.applet,
+                         [&]() { window.follow(h.client, &remoteMedia); });
+        auto daemonMedia = std::make_unique<DaemonMediaController>(&h.server, &h.station);
+        h.connectSession();
+        QTRY_VERIFY(h.client.capabilities().txPermitted);
+        window.follow(h.client, &remoteMedia);
+        if (!remoteMedia.micLineOpen()) {
+            // Transmit is permitted, the line is not there yet.
+            QVERIFY(!window.vox->isEnabled());
+            QCOMPARE(window.vox->toolTip(), TxRefusals::micNotConnected().text);
+            QVERIFY(window.mox->isEnabled());
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(remoteMedia.micLineOpen(), 5000);
+        QVERIFY(line.count() >= 1);
+        QCOMPARE(line.last().first().toBool(), true);
+        QTRY_VERIFY(window.vox->isEnabled());
+        QVERIFY(window.vox->toolTip() != TxRefusals::micNotConnected().text);
+
+        // The media connection goes (the line with it): disabled again,
+        // with the reason, while MOX stays as it was.
+        daemonMedia.reset();
+        QTRY_VERIFY_WITH_TIMEOUT(!remoteMedia.micLineOpen(), 5000);
+        QTRY_VERIFY(!window.vox->isEnabled());
+        QCOMPARE(window.vox->toolTip(), TxRefusals::micNotConnected().text);
+        QVERIFY(window.mox->isEnabled());
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // With no media at all (a window whose media never starts), VOX stays
+    // disabled with the reason while transmit is permitted.
+    void voxWithNoMediaStaysDisabledWithTheReason()
+    {
+        Test::RemoteAudioSessionHarness h;
+        h.pairWindow = true;
+        h.makeTransmitReady();
+        RemoteMediaController remoteMedia(&h.client, &h.remote, nullptr);
+        h.connectSession();
+        QTRY_VERIFY(h.client.capabilities().txPermitted);
+        WindowControls window(h);
+        window.follow(h.client, &remoteMedia);
+        QVERIFY(!remoteMedia.micLineOpen());
+        QVERIFY(!window.vox->isEnabled());
+        QCOMPARE(window.vox->toolTip(), TxRefusals::micNotConnected().text);
+        QCOMPARE(window.vox->accessibleDescription(), TxRefusals::micNotConnected().text);
+        // Transmit refused as a whole: that reason shows instead.
+        window.applet.setTransmitPermitted(false, QStringLiteral("This Core is set to receive only."));
+        QCOMPARE(window.vox->toolTip(), QStringLiteral("This Core is set to receive only."));
         h.client.disconnectFromStation(QStringLiteral("test complete"));
     }
 

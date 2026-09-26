@@ -17,6 +17,10 @@
 //               txState's holder; M6 the microphone streams unkeyed only for
 //               VOX this window armed. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-26: transmit group fix wave 2 (M8): micLineOpen and
+//               micLineChanged, so VOX shows disabled with its reason while
+//               this computer has no microphone line to the Core. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #include "core/session/media/DisplayBudget.h"
 #include "core/session/media/IReceiverPcmSink.h"
@@ -226,6 +230,10 @@ public:
     void setVoxArmed(bool armed);
     /// The uplink runs now.
     bool micUplinkRunning() const;
+    /// Fix wave 2 (M8): this computer's microphone line to the Core is
+    /// open (the media connection is ready and carries it), so VOX armed
+    /// here can hear this computer. micLineChanged() follows it.
+    bool micLineOpen() const;
     /// Packets sent on this media connection's microphone line.
     quint64 micPacketsSent() const;
     /// A program's transmit audio (TciServer::RemoteTransmit::audio): the
@@ -289,6 +297,8 @@ signals:
     void audioStatusChanged();
     /// R-R3-45: headphonesProblem() changed.
     void headphonesProblemChanged(const QString& problem);
+    /// Fix wave 2 (M8): micLineOpen() changed.
+    void micLineChanged(bool open);
 
 private:
     struct Private;
@@ -343,6 +353,8 @@ private:
     // Task 36: the microphone uplink.
     bool micUplinkWanted() const;
     void reconcileMicUplink();
+    // Fix wave 2 (M8): emits micLineChanged when micLineOpen() moved.
+    void noteMicLine();
     /// Sends the whole packets `pending` holds and keeps the rest.
     void sendMicAudio(std::vector<float>& pending);
     void receiveClockEcho(const QJsonObject& payload, qint64 receivedNs);

@@ -113,6 +113,11 @@
 //   2026-09-26: Transmit group fix wave: I4 the line saying who holds
 //               transmit. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave 2 (M8): VOX shows disabled with the
+//               plain reason while this computer has no microphone line to
+//               the Core; the Core's refusal stays the backstop. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 //=================================================================
@@ -314,6 +319,11 @@ public slots:
     // not alter TransmitModel, station settings, or the displayed state of an
     // already-authoritative control.
     void setTransmitPermitted(bool permitted, const QString& unavailableReason = QString());
+    // Fix wave 2 (M8): VOX listens to this computer's microphone line to
+    // the Core. While the window has none, the VOX button is shown disabled
+    // with `reason` (on top of setTransmitPermitted); the Core's refusal
+    // stays the backstop. Always true in a local window.
+    void setVoxPermitted(bool permitted, const QString& reason = QString());
     // R-R3-49 (parity Task 1): the transmit settings that key nothing (RF
     // Power, TX filter low and high). In a remote window MainWindow
     // supplies true while the Core takes them (transmitSettingsVersion)
@@ -620,6 +630,8 @@ private:
     // The words the transmit-permission gate shows while it holds; the
     // receive-only lock names them beside its own (Task 16 fix wave, M6).
     QString m_transmitPermissionReason;
+    bool m_voxPermitted{true};      // fix wave 2 (M8)
+    QString m_voxReason;
 };
 
 } // namespace NereusSDR

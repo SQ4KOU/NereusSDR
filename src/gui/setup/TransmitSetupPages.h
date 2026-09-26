@@ -40,6 +40,11 @@
 //                 their Core settings on transmitSettingsVersion 5 in a
 //                 remote window (Enable VOX keeps the transmit permission).
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave 2 (M8): VOX shows disabled with the
+//               plain reason while this computer has no microphone line to
+//               the Core; the Core's refusal stays the backstop. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 //=================================================================
@@ -335,10 +340,19 @@ public:
     // the Core's `transmit` and follows the transmit settings gate at
     // version 5 in a remote window.
     void setTransmitPermitted(bool permitted, const QString& reason) override;
+    // Fix wave 2 (M8): Enable VOX also needs this computer's microphone
+    // line to the Core, shown disabled with the reason while there is none.
+    void setVoxPermitted(bool permitted, const QString& reason) override;
     void setTransmitSettingsPermittedAt(int version, bool permitted,
                                         const QString& reason) override;
 
 private:
+    void gateVoxEnable();
+    bool m_transmitOk{true};
+    QString m_transmitWhy;
+    bool m_voxLineOk{true};
+    QString m_voxLineWhy;
+
     // ── grpDEXPVOX ───────────────────────────────────────────────────────────
     QCheckBox*      m_chkVOXEnable{nullptr};
     QCheckBox*      m_chkDEXPEnable{nullptr};

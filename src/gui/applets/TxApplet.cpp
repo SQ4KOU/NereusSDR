@@ -122,6 +122,11 @@
 //   2026-09-26: Transmit group fix wave: I4 the line saying who holds
 //               transmit. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave 2 (M8): VOX shows disabled with the
+//               plain reason while this computer has no microphone line to
+//               the Core; the Core's refusal stays the backstop. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 //=================================================================
@@ -2494,9 +2499,21 @@ void TxApplet::setTransmitPermitted(bool permitted, const QString& unavailableRe
     // setPureSignalArmingPermitted. This gate keeps the rest.
     apply(m_tuneBtn);
     apply(m_moxBtn);
-    apply(m_voxBtn);
+    // Fix wave 2 (M8): VOX also needs this computer's microphone line.
+    gateTransmitControl(m_voxBtn, permitted && m_voxPermitted,
+                        permitted ? m_voxReason : reason);
     apply(m_twoToneBtn);
     // Task 16: the receive-only lock back on top (checkpoint join).
+    applyReceiveOnlyLock();
+}
+
+void TxApplet::setVoxPermitted(bool permitted, const QString& reason)
+{
+    removeReceiveOnlyLock();
+    m_voxPermitted = permitted;
+    m_voxReason = reason;
+    gateTransmitControl(m_voxBtn, m_transmitPermitted && permitted,
+                        m_transmitPermitted ? reason : m_transmitPermissionReason);
     applyReceiveOnlyLock();
 }
 

@@ -239,6 +239,11 @@
 //               transmit; M8 a VOX arming the Core refuses is a toast.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave 2 (M8): VOX shows disabled with the
+//               plain reason while this computer has no microphone line to
+//               the Core; the Core's refusal stays the backstop. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -474,6 +479,7 @@ warren@wpratt.com
 #include "PanadapterStack.h"
 #include "PanadapterApplet.h"
 #include "PanLayoutDialog.h"
+#include "core/safety/TxRefusal.h"
 #include "core/FFTRouter.h"
 #include "StyleConstants.h"
 #include "models/RadioModel.h"
@@ -1528,6 +1534,12 @@ void MainWindow::ensureRemoteSession()
         // Setup is open.
         wireReceiverAudioNotePush(this, m_remoteMedia, m_radioModel,
                                   [this] { return receiverAudioNoteFor(m_remoteMedia); });
+        // Fix wave 2 (M8): VOX follows this computer's microphone line.
+        connect(m_remoteMedia, &RemoteMediaController::micLineChanged, this, [this](bool) {
+            if (!m_shuttingDown) {
+                applyRemoteRoleGating();
+            }
+        });
         connect(m_remoteMedia, &RemoteMediaController::recoveryRequested,
                 m_remoteConnection, &RemoteConnectionController::recoverMediaSession,
                 Qt::QueuedConnection);
@@ -11480,6 +11492,10 @@ SetupDialog* MainWindow::createSetupDialog()
                                                  transmitSettingsReason(version), version);
         }
     }
+    // Fix wave 2 (M8): Enable VOX needs this computer's microphone line.
+    if (m_remoteMedia != nullptr && !m_remoteMedia->micLineOpen()) {
+        dialog->setVoxPermitted(false, TxRefusals::micNotConnected().text);
+    }
     dialog->setStationSettingsAvailable(stationSettingsAvailable(), stationSettingsReason());
     seedReceiverAudioNote(dialog, [this] { return receiverAudioNoteFor(m_remoteMedia); });
     dialog->setAttribute(Qt::WA_DeleteOnClose);
@@ -11675,8 +11691,14 @@ void MainWindow::applyRemoteRoleGating()
     const bool processingPermitted = transmitSettingsPermitted(4);
     const QString processingReason = transmitSettingsReason(4);
     TxEqDialog::setSettingsPermitted(processingPermitted, processingReason);
+    // Fix wave 2 (M8): VOX listens to this computer's microphone line to
+    // the Core; without one it is shown disabled with the reason (the
+    // Core's refusal of arming it stays the backstop).
+    const bool voxLine = m_remoteMedia == nullptr || m_remoteMedia->micLineOpen();
+    const QString voxReason = voxLine ? QString() : TxRefusals::micNotConnected().text;
     if (m_txApplet) {
         m_txApplet->setTransmitPermitted(transmitPermitted, transmitReason);
+        m_txApplet->setVoxPermitted(voxLine, voxReason);
         m_txApplet->setTransmitSettingsPermitted(settingsPermitted, settingsReason);
         m_txApplet->setTransmitChainSettingsPermitted(chainPermitted, chainReason);
         m_txApplet->setTxProfilePermitted(profilePermitted, profileReason);
@@ -11727,6 +11749,7 @@ void MainWindow::applyRemoteRoleGating()
     const bool stationAvailable = stationSettingsAvailable();
     for (SetupDialog* dialog : findChildren<SetupDialog*>()) {
         dialog->setTransmitPermitted(transmitPermitted, transmitReason);
+        dialog->setVoxPermitted(voxLine, voxReason);
         dialog->setTransmitSettingsPermitted(settingsPermitted, settingsReason);
         dialog->setTransmitSettingsPermitted(chainPermitted, chainReason, 2);
         dialog->setTransmitSettingsPermitted(profilePermitted, profileReason, 3);

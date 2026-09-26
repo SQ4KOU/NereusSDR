@@ -15,6 +15,10 @@
 //               txState's holder; M6 the microphone streams unkeyed only for
 //               VOX this window armed. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-26: transmit group fix wave 2 (M8): micLineOpen and
+//               micLineChanged, so VOX shows disabled with its reason while
+//               this computer has no microphone line to the Core. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #include "gui/RemoteMediaController.h"
 #include "core/AppSettings.h"
@@ -637,6 +641,7 @@ struct RemoteMediaController::Private {
     bool micKeyDown = false;
     bool voxArmed = false;
     bool micRunning = false;
+    bool micLineWasOpen = false;   // fix wave 2 (M8): micLineChanged
     QTimer* micTimer = nullptr;
     CaptureSupervisor::Lease micLease;
     std::unique_ptr<RemoteMicEncoder> micEncoder;
@@ -1407,6 +1412,21 @@ quint64 RemoteMediaController::micPacketsSent() const
     return d->micPacketsSent;
 }
 
+bool RemoteMediaController::micLineOpen() const
+{
+    return micLineNegotiated() && d->peer && d->peer->isReady() && d->peer->micAudioSsrc() != 0;
+}
+
+void RemoteMediaController::noteMicLine()
+{
+    const bool open = micLineOpen();
+    if (open == d->micLineWasOpen) {
+        return;
+    }
+    d->micLineWasOpen = open;
+    emit micLineChanged(open);
+}
+
 bool RemoteMediaController::micUplinkWanted() const
 {
     if (!micLineNegotiated() || !d->peer || !d->peer->isReady() || d->peer->micAudioSsrc() == 0
@@ -1851,6 +1871,7 @@ void RemoteMediaController::stop()
         old->stop();
         old->deleteLater();
     }
+    noteMicLine();
     QList<QPair<QPointer<SpectrumWidget>, QString>> retiredWidgets;
     retiredWidgets.reserve(static_cast<qsizetype>(d->bindings.size()));
     for (const auto& [id, binding] : d->bindings) {
@@ -1991,6 +2012,7 @@ void RemoteMediaController::start()
             // session count as working for the reconnect backoff (R-R3-28).
             d->establishTimer->stop();
             d->client->noteMediaEstablished(epoch);
+            noteMicLine();
             if (!d->client->remoteDisplayBudgetLimits()) {
                 qCDebug(lcRemoteMedia)
                     << "Core supplied no aggregate display limits; using per-display subscriptions";

@@ -4796,7 +4796,10 @@ to the same rules.
 **VOX a device armed.** A device whose media carries no microphone line
 cannot arm it: its `transmit.voxEnabled` write is refused "This device's
 microphone is not connected to the Core yet. Wait a moment and try again."
-It goes off when that device's session ends, when its link goes quiet and
+That refusal is the backstop: a client shows its VOX control disabled with
+the same words while its media carries no microphone line (the desktop's
+TX applet VOX button and Setup's Enable VOX do). It goes off when that
+device's session ends, when its link goes quiet and
 when its microphone line closes. While it is on
 and that device's line does not carry the audio VOX listens to, a VOX key
 at the Core is refused (`micNotReady`): the Core never keys from its own
