@@ -97,6 +97,7 @@
 
 #include <QMap>
 #include <QString>
+#include <QStringList>
 #include <QVariant>
 #include <QWidget>
 
@@ -152,6 +153,8 @@ public:
     QString pinControlToolTipForTest() const;
     // The four response bytes as shown, space separated.
     QString i2cResponseTextForTest() const;
+    // The four byte boxes' tooltips, left to right (C1 box first).
+    QStringList i2cByteToolTipsForTest() const;
     QString i2cStatusTextForTest() const;
     // Drive the tool as a click does: enable it (and writes), set the
     // address, register and data, then Read or Write.
@@ -215,7 +218,9 @@ private:
     QSpinBox*    m_udI2cWriteData{nullptr};    // hex 0x00..0xFF
     QPushButton* m_btnRead{nullptr};
     QPushButton* m_btnWrite{nullptr};
-    QLabel*      m_byte0Label{nullptr};        // C1 = data[0] etc.
+    // mi0bot's txtI2CByte0..3: byte0 is C4 (the register, rightmost) ..
+    // byte3 is C1 (register + 3, leftmost).
+    QLabel*      m_byte0Label{nullptr};
     QLabel*      m_byte1Label{nullptr};
     QLabel*      m_byte2Label{nullptr};
     QLabel*      m_byte3Label{nullptr};

@@ -460,7 +460,7 @@ private:
 
     // Step machine for the mi0bot probe sequence.  mi0bot's I2CReadInitiate
     // refuses to enqueue if `in_index != out_index` (queue not empty), so reads
-    // must be sequenced ONE AT A TIME.  Driver: i2cReadResponseReceived signal
+    // must be sequenced ONE AT A TIME.  Driver: i2cReadAnswered signal
     // from IoBoardHl2.  Source: console.cs:25796-25831 [@c26a8a4]
     enum class Hl2ProbeStep {
         Idle,
@@ -473,8 +473,10 @@ private:
     Hl2ProbeStep m_hl2ProbeStep{Hl2ProbeStep::Idle};
     bool         m_hl2ProbeWired{false};   // one-shot signal-connect guard
     // Dispatch next step.  retAddr/retSubAddr identify the I2C read whose
-    // response just arrived (zero+zero from the initial bootstrap call so
-    // the Idle state's transition fires).  Phase 3L Codex P2 fix on PR #157.
+    // response just arrived: the device address and register of the
+    // pending read it answered, not C0's address bits (zero+zero from the
+    // initial bootstrap call so the Idle state's transition fires).  Phase
+    // 3L Codex P2 fix on PR #157; parity Task 14 follow-up.
     void hl2ProbeAdvance(quint8 retAddr, quint8 retSubAddr);
 
     // hl2CheckBandwidthMonitor — drives the HermesLiteBandwidthMonitor tick.

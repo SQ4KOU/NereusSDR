@@ -70,6 +70,13 @@ namespace {
 const QString kOnAir = QStringLiteral("The radio is on the air. Try again when it stops.");
 const QString kNoAnswer = QStringLiteral("The radio did not answer the I2C request.");
 const QString kMac = QStringLiteral("AA:BB:CC:DD:EE:14");
+// The four byte boxes left to right, as mi0bot lays them out
+// (setup.designer.cs txtI2CByte3..txtI2CByte0 [@c26a8a4]): C1 at register+3
+// on the left, C4 at the register itself on the right.
+const QStringList kByteToolTips = {QStringLiteral("Data at Reg/Ctrl + 3"),
+                                   QStringLiteral("Data at Reg/Ctrl + 2"),
+                                   QStringLiteral("Data at Reg/Ctrl + 1"),
+                                   QStringLiteral("Data at Reg/Ctrl")};
 constexpr quint8 kOutputRegister = 169;
 
 QString hw(const QString& rest)
@@ -239,6 +246,7 @@ private slots:
     void cleanup();
 
     void remoteReadShowsTheRadiosBytes();
+    void remoteProbeAdvancesOnTheAnswer();
     void remoteReadTheRadioDoesNotAnswerIsRefused();
     void remoteWriteAndPinReachTheBoardOffTheAir();
     void remoteWriteAndPinAreRefusedOnTheAirReadsAreNot();
@@ -299,6 +307,7 @@ void TstRemoteHl2Io::remoteReadShowsTheRadiosBytes()
     QCOMPARE(frame.bytes[3], quint8(0x00));          // register
     answer(s.board(), 0x01, 0x02, 0x03, IoBoardHl2::kHardwareVersion1);
     QTRY_COMPARE(tab->i2cResponseTextForTest(), QStringLiteral("01 02 03 F1"));
+    QCOMPARE(tab->i2cByteToolTipsForTest(), kByteToolTips);
     QVERIFY(tab->i2cStatusTextForTest().isEmpty());
     // The board answered as an I/O board: the Core and the window say so.
     QVERIFY(s.board().isDetected());
@@ -316,6 +325,43 @@ void TstRemoteHl2Io::remoteReadShowsTheRadiosBytes()
     QTRY_VERIFY(outcome.called);
     QVERIFY(outcome.ok);
     QCOMPARE(outcome.value, qint64(0xAABBCC07));
+    QString keyed;
+    QVERIFY2(nothingKeyed(*s.core.model, &keyed), qPrintable(keyed));
+}
+
+// Follow-up (R-R3-46): a remote window's Probe runs the Core's probe to the
+// end although the firmware's answer names the I2C controller in C0, not
+// the device. mi0bot networkproto1.c:478-493 [@c26a8a4] takes any C0 with
+// bit 7 set as the answer to the one read outstanding.
+void TstRemoteHl2Io::remoteProbeAdvancesOnTheAnswer()
+{
+    Session s(m_securityDir.path(), this);
+    QVERIFY(s.connect());
+    s.core.p1.setIoBoard(&s.board());
+    QVERIFY(s.window.requestIoBoardProbe().sent);
+    QTRY_COMPARE(s.board().i2cQueueDepth(), 1);
+    Frame frame = compose(s.board());
+    QCOMPARE(frame.bytes[2], quint8(0x80 | IoBoardHl2::kI2cAddrHwVersion));
+    answer(s.board(), 0, 0, 0, IoBoardHl2::kHardwareVersion1);
+    QVERIFY(s.board().isDetected());
+    // Firmware major, then minor, then the board is switched on.
+    QCOMPARE(s.board().i2cQueueDepth(), 1);
+    frame = compose(s.board());
+    QCOMPARE(frame.bytes[3],
+             quint8(static_cast<int>(IoBoardHl2::Register::REG_FIRMWARE_MAJOR)));
+    answer(s.board(), 0, 0, 0, 0x01);
+    QCOMPARE(s.board().i2cQueueDepth(), 1);
+    frame = compose(s.board());
+    QCOMPARE(frame.bytes[3],
+             quint8(static_cast<int>(IoBoardHl2::Register::REG_FIRMWARE_MINOR)));
+    answer(s.board(), 0, 0, 0, 0x02);
+    QCOMPARE(s.board().i2cQueueDepth(), 1);
+    frame = compose(s.board());
+    QCOMPARE(frame.bytes[1], quint8(0x06));   // write
+    QCOMPARE(frame.bytes[3], quint8(static_cast<int>(IoBoardHl2::Register::REG_CONTROL)));
+    QCOMPARE(frame.bytes[4], quint8(1));
+    QTRY_VERIFY(s.window.ioBoardFacade()->detected());
+    s.core.p1.setIoBoard(nullptr);
     QString keyed;
     QVERIFY2(nothingKeyed(*s.core.model, &keyed), qPrintable(keyed));
 }
@@ -376,11 +422,16 @@ void TstRemoteHl2Io::remoteWriteAndPinReachTheBoardOffTheAir()
     QCOMPARE(frame.bytes[4], quint8(0x5A));
     QVERIFY(tab->i2cStatusTextForTest().isEmpty());
 
-    // Pin Control needs the board: until it is found, the Core says so.
+    // Pin Control needs the board: until it is found, the Core says so,
+    // once, on the tab (not also through the window's general refusal
+    // notice).
+    QSignalSpy generalNotice(&s.window, &RadioModel::sliceAddRejected);
     tab->clickOutputPinForTest(3);
     QTRY_COMPARE(tab->i2cStatusTextForTest(),
                  QStringLiteral("The radio's I/O board was not found."));
     QCOMPARE(s.board().i2cQueueDepth(), 0);
+    QTest::qWait(50);
+    QCOMPARE(generalNotice.count(), 0);
 
     s.board().setDetected(true);
     QTRY_VERIFY(s.window.ioBoardFacade()->detected());
@@ -429,6 +480,8 @@ void TstRemoteHl2Io::remoteWriteAndPinAreRefusedOnTheAirReadsAreNot()
     s.board().setDetected(true);
     s.core.key();
     QVERIFY(s.core.model->stationOnAirRefusal(nullptr));
+    // Each refusal reaches the one that asked, and nowhere else.
+    QSignalSpy generalNotice(&s.window, &RadioModel::sliceAddRejected);
 
     Outcome write;
     RadioModel::IoBoardI2cRequest request;
@@ -447,6 +500,7 @@ void TstRemoteHl2Io::remoteWriteAndPinAreRefusedOnTheAirReadsAreNot()
     QVERIFY(!pin.ok);
     QCOMPARE(pin.reason, kOnAir);
     QCOMPARE(s.board().i2cQueueDepth(), 0);
+    QCOMPARE(generalNotice.count(), 0);
 
     Outcome read;
     request.write = false;
@@ -510,6 +564,7 @@ void TstRemoteHl2Io::localWindowDoesTheSame()
     QVERIFY(compose(board).composed);
     answer(board, 0x10, 0x20, 0x30, 0x40);
     QCOMPARE(tab->i2cResponseTextForTest(), QStringLiteral("10 20 30 40"));
+    QCOMPARE(tab->i2cByteToolTipsForTest(), kByteToolTips);
 
     tab->readI2cForTest(0x1D, 0x0B);
     QVERIFY(compose(board).composed);
@@ -534,9 +589,11 @@ void TstRemoteHl2Io::localWindowDoesTheSame()
     QVERIFY(!tab->isPinControlEnabledForTest());
     QVERIFY(tab->isI2cReadEnabledForTest());
     Outcome pin;
+    QSignalSpy generalNotice(local.model.get(), &RadioModel::sliceAddRejected);
     local.model->setIoBoardOutput(5, false, pin.done());
     QVERIFY(pin.called && !pin.ok);
     QCOMPARE(pin.reason, kOnAir);
+    QCOMPARE(generalNotice.count(), 0);
     QCOMPARE(board.i2cQueueDepth(), 0);
     local.unkey();
     QTRY_VERIFY(!local.model->isCoreOnAir());

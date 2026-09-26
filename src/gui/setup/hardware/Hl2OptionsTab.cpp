@@ -33,6 +33,11 @@
 //                 back; a write and Pin Control close while the radio is on
 //                 the air. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-26 - Parity Task 14 follow-up (R-R3-46): the four read-response
+//                 boxes follow mi0bot's txtI2CByte3..txtI2CByte0 (C1 at the
+//                 register + 3 on the left, C4 at the register on the right)
+//                 with its per-box tooltips. J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 //
 //=================================================================
@@ -382,26 +387,35 @@ void Hl2OptionsTab::buildI2cControl(QWidget* parent)
     grid->addWidget(m_chkI2cWriteEnable, row, 2, 1, 2);
     ++row;
 
-    // Read response display — 4 hex bytes.
+    // Read response display: 4 hex bytes, laid out as mi0bot lays them out.
+    // From mi0bot setup.designer.cs [@c26a8a4] (txtI2CByte0..3 Location and
+    // toolTip1.SetToolTip): left to right txtI2CByte3 (x 153, "Data at
+    // address+3"), txtI2CByte2 (x 184, +2), txtI2CByte1 (x 215, +1) and
+    // txtI2CByte0 (x 246, "Data at address"). btnI2CRead_MouseDown
+    // (setup.cs:21486-21489) fills byte0 from read_data[3] (C4) through
+    // byte3 from read_data[0] (C1), so the boxes read C1..C4 left to right,
+    // the register itself on the right. "address" in mi0bot's tooltips is
+    // the register chosen in Reg/Ctrl, so the tooltips name that control.
     grid->addWidget(new QLabel(tr("Read response:"), parent), row, 0);
     auto* respRow = new QHBoxLayout();
-    auto makeByteLbl = [parent]() {
+    auto makeByteLbl = [parent](const QString& tip) {
         auto* lbl = new QLabel(QStringLiteral("--"), parent);
         lbl->setFixedWidth(28);
         lbl->setAlignment(Qt::AlignCenter);
         lbl->setStyleSheet(QStringLiteral(
             "QLabel { background: white; color: black; "
             "font-family: monospace; border: 1px solid #555; padding: 2px; }"));
+        lbl->setToolTip(tip);
         return lbl;
     };
-    m_byte0Label = makeByteLbl();
-    m_byte1Label = makeByteLbl();
-    m_byte2Label = makeByteLbl();
-    m_byte3Label = makeByteLbl();
-    respRow->addWidget(m_byte0Label);
-    respRow->addWidget(m_byte1Label);
-    respRow->addWidget(m_byte2Label);
+    m_byte3Label = makeByteLbl(tr("Data at Reg/Ctrl + 3"));
+    m_byte2Label = makeByteLbl(tr("Data at Reg/Ctrl + 2"));
+    m_byte1Label = makeByteLbl(tr("Data at Reg/Ctrl + 1"));
+    m_byte0Label = makeByteLbl(tr("Data at Reg/Ctrl"));
     respRow->addWidget(m_byte3Label);
+    respRow->addWidget(m_byte2Label);
+    respRow->addWidget(m_byte1Label);
+    respRow->addWidget(m_byte0Label);
     respRow->addStretch();
     auto* respWrap = new QWidget(parent);
     respWrap->setLayout(respRow);
@@ -593,15 +607,17 @@ void Hl2OptionsTab::onI2cReadClicked()
             self->showI2cStatus(reason);
             return;
         }
-        // The four bytes as the radio returned them, C1 first.
+        // From mi0bot setup.cs:21486-21489 [@c26a8a4]: byte0 = read_data[3]
+        // (C4, the register itself) .. byte3 = read_data[0] (C1). `value`
+        // packs C1 in its top byte and C4 in its low byte.
         auto fmt = [value](int shift) {
             return QStringLiteral("%1").arg((value >> shift) & 0xFF, 2, 16, QLatin1Char('0'))
                                        .toUpper();
         };
-        if (self->m_byte0Label) { self->m_byte0Label->setText(fmt(24)); }
-        if (self->m_byte1Label) { self->m_byte1Label->setText(fmt(16)); }
-        if (self->m_byte2Label) { self->m_byte2Label->setText(fmt(8)); }
-        if (self->m_byte3Label) { self->m_byte3Label->setText(fmt(0)); }
+        if (self->m_byte0Label) { self->m_byte0Label->setText(fmt(0)); }
+        if (self->m_byte1Label) { self->m_byte1Label->setText(fmt(8)); }
+        if (self->m_byte2Label) { self->m_byte2Label->setText(fmt(16)); }
+        if (self->m_byte3Label) { self->m_byte3Label->setText(fmt(24)); }
     });
 }
 
@@ -711,10 +727,18 @@ QString Hl2OptionsTab::pinControlToolTipForTest() const
 QString Hl2OptionsTab::i2cResponseTextForTest() const
 {
     QStringList bytes;
-    for (const QLabel* label : {m_byte0Label, m_byte1Label, m_byte2Label, m_byte3Label}) {
+    for (const QLabel* label : {m_byte3Label, m_byte2Label, m_byte1Label, m_byte0Label}) {
         bytes << (label ? label->text() : QString());
     }
     return bytes.join(QLatin1Char(' '));
+}
+QStringList Hl2OptionsTab::i2cByteToolTipsForTest() const
+{
+    QStringList tips;
+    for (const QLabel* label : {m_byte3Label, m_byte2Label, m_byte1Label, m_byte0Label}) {
+        tips << (label ? label->toolTip() : QString());
+    }
+    return tips;
 }
 QString Hl2OptionsTab::i2cStatusTextForTest() const
 {

@@ -178,6 +178,10 @@
 //                answers routed to the model; the HL2 link fields kept only
 //                from a Core at stationTelemetryVersion 5. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - Parity Task 14 follow-up (R-R3-46): a refused I2C request
+//                or output pin is shown once, by the tab that asked, not
+//                also through the general refusal notice. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -3949,7 +3953,12 @@ void StationClient::handleCommandResult(const SessionMessage& message)
 
     // notch.* refusals are shown by NotchModel itself (notchAddRejected /
     // notchRequestRefused), in the words the window uses for a local one.
-    if (!message.accepted && !m_radioModel.isNull()
+    // requestIoBoardI2c / setIoBoardOutput refusals are shown by the HL2
+    // Options tab that asked (reportStationIoBoardResult below), once;
+    // routing them here as well showed the same refusal twice.
+    const bool ioBoardRequest = pending.verb == "requestIoBoardI2c"
+        || pending.verb == "setIoBoardOutput";
+    if (!message.accepted && !m_radioModel.isNull() && !ioBoardRequest
         && !message.commandVerb.startsWith("ps3.") && !message.commandVerb.startsWith("dspAssets.")
         && !message.commandVerb.startsWith("notch.")) {
         // The station's OWN reason, relayed verbatim. Wording a refusal
@@ -4055,8 +4064,7 @@ void StationClient::handleCommandResult(const SessionMessage& message)
     // R-R3-46 (parity Task 14): the Core's answer to an I2C request (a
     // read's bytes in `value`) or an output pin change, to the model,
     // which hands it to the tab that asked.
-    if ((pending.verb == "requestIoBoardI2c" || pending.verb == "setIoBoardOutput")
-        && !m_radioModel.isNull()) {
+    if (ioBoardRequest && !m_radioModel.isNull()) {
         std::optional<qint64> value;
         for (const MirrorUpdate& update : message.updates) {
             if (update.name == "value" && update.kind == MirrorWireKind::Int64) {

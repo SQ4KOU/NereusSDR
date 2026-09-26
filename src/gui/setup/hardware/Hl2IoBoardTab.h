@@ -179,6 +179,8 @@ public:
     // 250 ms m_bwTimer (HermesLiteBandwidthMonitor::ep6/ep2/throttle).
     int bandwidthPollIntervalMsForTest() const;
     QString ep6RateTextForTest() const;
+    int ep6BarPercentForTest() const;
+    int ep2BarPercentForTest() const;
     QString ep2RateTextForTest() const;
     QString throttleStatusTextForTest() const;
     QString throttleEventTextForTest() const;

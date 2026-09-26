@@ -792,8 +792,13 @@ private slots:
         QCOMPARE(figures.sequenceGaps, std::optional<qint64>(7));
         QVERIFY(!figures.throttleEvents);
         ioTab.pollBandwidthNowForTest();
-        QCOMPARE(ioTab.ep6RateTextForTest(), QStringLiteral("1.25 Mbps"));
-        QCOMPARE(ioTab.ep2RateTextForTest(), QStringLiteral("0.00 Mbps"));
+        // 1,250,000 bytes a second is 10.0 Mbit/s, mi0bot's unit
+        // (ucBandwidthView.cs toDisplayUnits [@c26a8a4]); the bar is full
+        // at 10 Mbit/s.
+        QCOMPARE(ioTab.ep6RateTextForTest(), QStringLiteral("10.0 Mbit/s"));
+        QCOMPARE(ioTab.ep2RateTextForTest(), QStringLiteral("0.0 Mbit/s"));
+        QCOMPARE(ioTab.ep6BarPercentForTest(), 100);
+        QCOMPARE(ioTab.ep2BarPercentForTest(), 0);
         QVERIFY(ioTab.throttleStatusTextForTest().contains(QStringLiteral("throttled")));
         QVERIFY(!ioTab.throttleStatusTextForTest().contains(QStringLiteral("not")));
         QCOMPARE(ioTab.throttleEventTextForTest(), QStringLiteral("Unavailable"));

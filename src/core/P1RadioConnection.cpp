@@ -41,6 +41,12 @@
 //                 status C1 bits 1..4 reported as the user digital inputs
 //                 (networkproto1.c:336 [v2.10.3.15]). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - Parity Task 14 follow-up (R-R3-46): the HL2 I/O board
+//                 probe advances on the answer to the read it sent
+//                 (IoBoardHl2::i2cReadAnswered), not on C0's address bits,
+//                 which mi0bot never reads (networkproto1.c:478-493
+//                 [@c26a8a4]). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -4163,20 +4169,32 @@ void P1RadioConnection::hl2SendIoBoardInit()
     // when in_index != out_index (netInterface.c:1478), and the C# driver
     // busy-waits for each response before issuing the next (console.cs:25796-
     // 25808).  We mirror that protocol via a step machine driven off the
-    // IoBoardHl2::i2cReadResponseReceived signal.  Source: [@c26a8a4]
+    // IoBoardHl2::i2cReadAnswered signal.  Source: [@c26a8a4]
+    //
+    // How the radio answers (mi0bot networkproto1.c:478-493 [@c26a8a4]): an
+    // EP6 frame whose C0 has bit 7 set carries the I2C answer, C1..C4 into
+    // read_data[0..3].  mi0bot never reads C0's address bits: the answer is
+    // the one outstanding read's, because there is only ever one.  Its
+    // `returned_address`, which the error test at networkproto1.c:480
+    // compares with 0x3f, is never set from the frame (only zeroed,
+    // netInterface.c:1623).  The request's C0 named the bus's I2C
+    // controller, (0x3d << 1) for bus 1 (networkproto1.c:912-919), not the
+    // device, so matching the answer's C0 against the device address could
+    // stall the probe on real firmware.  The answer is matched to its read
+    // by the pending-read record it popped instead.
     m_hl2ProbeStep = Hl2ProbeStep::Idle;
     if (!m_hl2ProbeWired) {
-        // Gate the step machine on (retAddr, retSubAddr) matching the
-        // expected (deviceAddr, register) for the current step.  Without
-        // this gate, unrelated I2C reads (e.g. from the new Hl2OptionsTab
-        // manual R/W tool, or NEREUS_HL2_I2C_SCAN traffic) would advance
-        // the probe out of order — false aborts or misleading "init
-        // complete" before the intended registers were probed.  Codex P2
-        // on PR #157.
-        connect(m_ioBoard, &IoBoardHl2::i2cReadResponseReceived, this,
-                [this](quint8 retAddr, quint8 retSubAddr,
+        // Gate the step machine on (deviceAddr, register) of the read the
+        // answer popped matching the expected pair for the current step.
+        // Without this gate, unrelated I2C reads (e.g. from the
+        // Hl2OptionsTab manual R/W tool, or NEREUS_HL2_I2C_SCAN traffic)
+        // would advance the probe out of order (false aborts or
+        // misleading "init complete" before the intended registers were
+        // probed).  Codex P2 on PR #157.
+        connect(m_ioBoard, &IoBoardHl2::i2cReadAnswered, this,
+                [this](quint8 deviceAddr, quint8 subAddr,
                        quint8, quint8, quint8, quint8) {
-                    hl2ProbeAdvance(retAddr, retSubAddr);
+                    hl2ProbeAdvance(deviceAddr, subAddr);
                 });
         m_hl2ProbeWired = true;
     }
@@ -4215,8 +4233,9 @@ void P1RadioConnection::hl2ProbeAdvance(quint8 retAddr, quint8 retSubAddr)
         m_ioBoard->enqueueI2c(txn);
     };
 
-    // Helper: did the just-received response match the read this step
-    // is waiting on?  If not, the response belongs to some other consumer
+    // Helper: did the just-received response answer the read this step
+    // is waiting on (its device address and register, from the pending-read
+    // record it popped)?  If not, the response belongs to some other consumer
     // (manual R/W tool, bus scan) and the step machine must NOT advance.
     auto matches = [retAddr, retSubAddr](quint8 wantAddr, quint8 wantSub) {
         return retAddr == wantAddr && retSubAddr == wantSub;
