@@ -37,6 +37,8 @@
 
 #include <memory>
 
+#include <openssl/err.h>
+
 #include "core/AppSettings.h"
 #include "core/security/CertificateStore.h"
 #include "core/security/ClientDeviceIdentity.h"
@@ -341,6 +343,23 @@ private slots:
         QVERIFY(waitFor([&pair] { return pair.answerer->countsForTest().pingsReceived == 3; },
                         5000));
         QCOMPARE(pongs.count(), 2);
+    }
+
+    // Loading the Core's certificate leaves nothing in this thread's
+    // OpenSSL error queue, where Qt's OpenSSL TLS backend would read it as
+    // its own error and end a wss:// connection on this thread.
+    void presentingTheCoresCertificateLeavesNoOpenSslError()
+    {
+        Core core;
+        ERR_clear_error();
+        DataChannelTransport answerer;
+        DataChannelTransport::Options options;
+        options.role = DataChannelTransport::Role::Answerer;
+        options.maxIncomingBytes = kStationCap;
+        options.certificatePemPath = core.server->certificatePemPath();
+        options.privateKeyPemPath = core.server->privateKeyPemPath();
+        QVERIFY(answerer.start(options));
+        QCOMPARE(ERR_peek_error(), 0UL);
     }
 
     // ── A session over the channel ─────────────────────────────────────
