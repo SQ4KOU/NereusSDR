@@ -120,6 +120,26 @@ endfunction()
 add_library(nereus_test_sandbox OBJECT EXCLUDE_FROM_ALL TestSandboxInit.cpp)
 target_link_libraries(nereus_test_sandbox PRIVATE Qt6::Core)
 
+# ── Shared FFTW wisdom cache for tests that start WDSP (2026-09-25) ─────
+# R-R3-49 parity mini-round. A test that starts WDSP in its own process
+# without WDSP's wisdom step (the synchronous test init, DaemonApp's
+# synchronous WDSP, the ConnectableRadioModel harness, or the WdspEngine
+# friend seam that primes m_initialized) planned every FFTW plan from
+# nothing: 45 to 85 s per test, enough to pass ctest's 120 s limit under
+# load. nereus_add_test() links this object into each such test (it finds
+# them by those names in the test's sources); its static constructor loads
+# one wisdom file per build directory and its exit step merges the new
+# plans back (see TestFftwWisdomCache.cpp). An OBJECT library for the same
+# reason as nereus_test_sandbox: it is all static constructor. It uses the
+# C++ library and FFTW's C API only, no PCH.
+if(FFTW3_FOUND)
+    add_library(nereus_test_fftw_wisdom OBJECT EXCLUDE_FROM_ALL TestFftwWisdomCache.cpp)
+    target_include_directories(nereus_test_fftw_wisdom PRIVATE ${FFTW3_INCLUDE_DIRS})
+    target_compile_features(nereus_test_fftw_wisdom PRIVATE cxx_std_20)
+    target_compile_definitions(nereus_test_fftw_wisdom PRIVATE
+        NEREUS_TEST_FFTW_WISDOM_FILE="${CMAKE_CURRENT_BINARY_DIR}/test-fftw-wisdom")
+endif()
+
 function(nereus_add_test name)
     # EXTRA_LABELS <label...> for the handful of tests whose subject
     # cannot be derived from their own #include lines. Guard tests are
@@ -207,6 +227,18 @@ function(nereus_add_test name)
     # this file from a global property each nereus_add_test() call
     # appends to.
     add_executable(${name} EXCLUDE_FROM_ALL ${name}.cpp $<TARGET_OBJECTS:nereus_test_sandbox> ${_extra_sources})
+    # R-R3-49 parity mini-round: a test that starts WDSP without its wisdom
+    # step gets the shared FFTW wisdom cache (nereus_test_fftw_wisdom above).
+    # Found by the names that start WDSP that way, in the test's own source
+    # or an extra source file it names (fakes/ConnectableRadioModel.cpp).
+    if(TARGET nereus_test_fftw_wisdom)
+        set(_wisdom_scan "${_extra_sources}")
+        file(READ "${CMAKE_CURRENT_SOURCE_DIR}/${name}.cpp" _wisdom_text)
+        string(APPEND _wisdom_scan "${_wisdom_text}")
+        if(_wisdom_scan MATCHES "setSynchronousInitForTest|m_synchronousWdspForTest|m_initialized = true|ConnectableRadioModel")
+            target_sources(${name} PRIVATE $<TARGET_OBJECTS:nereus_test_fftw_wisdom>)
+        endif()
+    endif()
     if(_nat_CORE_ONLY)
         target_link_libraries(${name} PRIVATE NereusCore Qt6::Test)
     else()
