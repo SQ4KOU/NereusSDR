@@ -78,6 +78,10 @@ private slots:
 void TstSetupDialogPaResetWiring::wattMeter_reset_button_clears_values_page_peak_min()
 {
     RadioModel model;
+    // A radio with power amplifier settings (an ANAN-G2): without one the
+    // PA pages are disabled with the reason (Task 16 fix wave 2) and the
+    // Reset button cannot be pressed.
+    model.setBoardForTest(HPSDRHW::Saturn);
     SetupDialog dialog(&model);
 
     // #272 / #301: pages are built on first visit, so realize both PA leaves

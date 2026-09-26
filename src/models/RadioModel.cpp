@@ -323,6 +323,17 @@
 //                local click refused on the air the remote window's
 //                reason. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-25 - Receiver and transmit gaps plan, Task 16: receive only
+//                stops every key (Thetis console.RXOnly,
+//                console.cs:15312-15334 [v2.10.3.15]); a Core setting the
+//                Core applies; the HL2 receive-only kit always receive
+//                only. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                Code.
+//   2026-09-25 - Task 16 fix wave: MOX disabled by receive only in every
+//                mode (I3); the TGXL autotune refused while transmit is
+//                blocked, before it reaches the amplifier or the tuner
+//                (M2); both reasons where two apply (M6). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1229,6 +1240,9 @@ RadioModel::RadioModel(Role role, QObject* parent)
         m_txInhibit.setReverseLogic(
             s.value(QStringLiteral("TxInhibitMonitorReversed"), QStringLiteral("False"))
              .toString() == QStringLiteral("True"));
+        // Task 16: Setup's Receive Only, read at start as Thetis restores
+        // it (setup.cs:740 [v2.10.3.15], InitGeneralTab).
+        m_rxOnlySetting = rxOnlySetting();
     }
 
     // R-R3-49 (parity Task 6): `txInhibited` follows this model's own
@@ -1498,6 +1512,18 @@ RadioModel::RadioModel(Role role, QObject* parent)
             });
     connect(this, &RadioModel::paTrippedChanged, this,
             [this](bool /*tripped*/) { applyTxKeyBlock(); });
+    // Task 16: receive only is the third gate. The board decides it too
+    // (the HL2 receive-only kit), so it is recomputed whenever the radio
+    // changes; a remote window follows the Core's copy of the setting.
+    applyRxOnly();
+    connect(this, &RadioModel::currentRadioChanged, this,
+            [this](const NereusSDR::RadioInfo&) { applyRxOnly(); });
+    connect(this, &RadioModel::stationSettingChanged, this,
+            [this](const QString& key) {
+                if (key.isEmpty() || key == QLatin1String("RxOnly")) {
+                    applyRxOnlySetting(rxOnlySetting());
+                }
+            });
 
     // MoxController::txReady → TxChannel::setRunning(true) and
     // MoxController::txaFlushed → TxChannel::setRunning(false) are wired in
@@ -6280,6 +6306,8 @@ void RadioModel::applyStationCapabilities(const NereusSDR::StationCapabilities& 
     // connect uses picks it; and a Core with no radio (Unknown board) gives
     // Unknown, never Hermes.
     m_hardwareProfile = ::NereusSDR::profileForStation(caps.board, caps.hpsdrModel);
+    // Task 16: a Core running the HL2 receive-only kit shows receive only.
+    applyRxOnly();
     // As a local connect does before its currentRadioChanged: display units
     // and clamps that depend on the model (HL2) read it from here.
     m_transmitModel.setHpsdrModel(m_hardwareProfile.model);
@@ -11555,7 +11583,7 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
     if (selectedModel == HPSDRModel::FIRST) {
         selectedModel = defaultModelForBoard(info.boardType);
     }
-    applyHpsdrModel(selectedModel);
+    applyHpsdrModel(selectedModel, info.boardType);
 
     qCDebug(lcConnection) << "HardwareProfile: model=" << displayName(m_hardwareProfile.model)
                           << "effectiveBoard=" << static_cast<int>(m_hardwareProfile.effectiveBoard)
@@ -18393,13 +18421,15 @@ void RadioModel::applyClaritySmoothDefaults()
 // HL2 / G2 / Saturn / RedPitaya unaffected because their codecs ignore
 // the model parameter (P1CodecHl2.cpp:530, P2CodecOrionMkII.cpp:436,
 // P1CodecRedPitaya.cpp:77).
-void RadioModel::applyHpsdrModel(HPSDRModel m)
+void RadioModel::applyHpsdrModel(HPSDRModel m, HPSDRHW board)
 {
-    m_hardwareProfile = ::NereusSDR::profileForModel(m);
+    m_hardwareProfile = ::NereusSDR::profileForRadio(board, m);
     m_transmitModel.setHpsdrModel(m_hardwareProfile.model);
     // Task 13: PollTXInhibit reads HardwareSpecific.Model on every pass
     // (console.cs:25855-25873 [v2.10.3.15]).
     m_txInhibit.setRadioModel(m_hardwareProfile.model);
+    // Task 16: the HL2 receive-only kit runs receive only.
+    applyRxOnly();
     if (m_receiverManager) {
         m_receiverManager->setHpsdrModel(m_hardwareProfile.model);
 
@@ -20273,7 +20303,12 @@ void RadioModel::applyTxKeyBlock()
     const bool inhibited = m_txInhibit.inhibited();
     m_moxController->setTxInhibited(inhibited);
     m_moxController->setPaTripped(m_paTripped);
-    if (!inhibited && !m_paTripped) {
+    // Task 16: receive only, the third gate (console.RXOnly,
+    // console.cs:15312-15334 [v2.10.3.15]: if (_rx_only && chkMOX.Checked)
+    // chkMOX.Checked = false). TUN and two-tone go off below as for the
+    // other two.
+    m_moxController->setRxOnly(m_rxOnlyEffective, rxOnlyReason());
+    if (!inhibited && !m_paTripped && !m_rxOnlyEffective) {
         return;
     }
     if (m_isTuning && !m_pendingTuneOff) {
@@ -20283,6 +20318,128 @@ void RadioModel::applyTxKeyBlock()
         && (m_twoToneController->isActive()
             || m_twoToneController->isActivationInFlight())) {
         m_twoToneController->setActive(false);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Task 16: receive only.
+//
+// From Thetis setup.cs:6479-6502 [v2.10.3.15]
+// (chkGeneralRXOnly_CheckedChanged):
+//   if (initializing) return;
+//   if (chkGeneralRXOnly.Focused &&
+//       !chkGeneralRXOnly.Checked)
+//   {
+//       DialogResult dr = MessageBox.Show(
+//           "Unchecking Receive Only may \n" +
+//           "cause damage to your hardware.  Are you sure you want \n" +
+//           "to enable transmit?",
+//           "Warning: Enable Transmit?",
+//           MessageBoxButtons.YesNo,
+//           MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2, Common.MB_TOPMOST); //MW0LGE_[2.9.0.7]);
+//       if (dr == DialogResult.No)
+//       {
+//           chkGeneralRXOnly.Checked = true;
+//           return;
+//       }
+//   }
+//   console.RXOnly = chkGeneralRXOnly.Checked;
+// The question is GeneralOptionsPage's; the setting and the gate are here.
+// Thetis saves it with the Setup form (default off) and restores it at
+// start (setup.cs:740 [v2.10.3.15]); NereusSDR keeps it as the Core's
+// "RxOnly" setting.
+// ---------------------------------------------------------------------------
+bool RadioModel::rxOnlySetting()
+{
+    return AppSettings::instance()
+               .value(QStringLiteral("RxOnly"), QStringLiteral("False"))
+               .toString()
+           == QStringLiteral("True");
+}
+
+void RadioModel::setRxOnly(bool on)
+{
+    AppSettings::instance().setValue(QStringLiteral("RxOnly"),
+                                     on ? QStringLiteral("True") : QStringLiteral("False"));
+    applyRxOnlySetting(on);
+}
+
+void RadioModel::applyRxOnlySetting(bool on)
+{
+    m_rxOnlySetting = on;
+    applyRxOnly();
+}
+
+QString RadioModel::rxOnlyForcedReason()
+{
+    return QStringLiteral("This radio has no transmitter, so it only receives.");
+}
+
+QString RadioModel::rxOnlyReason() const
+{
+    return m_rxOnlyForced ? rxOnlyForcedReason() : MoxController::defaultRxOnlyReason();
+}
+
+bool RadioModel::receiveOnlyDisablesMoxButton() const
+{
+    // From Thetis console.cs:15318-15321 [v2.10.3.15]:
+    //   if (_rx1_dsp_mode != DSPMode.SPEC &&
+    //       _rx1_dsp_mode != DSPMode.DRM &&
+    //       chkPower.Checked)
+    //       chkMOX.Enabled = !_rx_only;
+    // In SPEC and DRM Thetis's setter leaves the MOX button as it is.
+    // NereusSDR differs on purpose (Task 16 fix wave, I3): MOX is disabled
+    // with the reason in every mode, SPEC and DRM included, because the gate
+    // refuses the key in every mode (chkMOX_CheckedChanged2,
+    // console.cs:29378-29382), and a control that cannot run is shown
+    // disabled with its reason. The buttons are NereusSDR's own widgets;
+    // the radio behaviour, the refusal, is Thetis's and does not change.
+    return m_rxOnlyEffective;
+}
+
+namespace {
+// Task 16 fix wave (M6): one reason, or both when two block the control.
+QString joinTransmitReasons(const QString& local, const QString& other, bool localStandsAlone)
+{
+    if (local.isEmpty()) {
+        return other;
+    }
+    if (other.isEmpty() || localStandsAlone) {
+        return local;
+    }
+    return local + QLatin1Char(' ') + other;
+}
+} // namespace
+
+QString RadioModel::rxOnlyReasonAlongside(const QString& otherReason) const
+{
+    if (!m_rxOnlyEffective) {
+        return otherReason;
+    }
+    return joinTransmitReasons(rxOnlyReason(), otherReason, m_rxOnlyForced);
+}
+
+QString RadioModel::transmitBlockReasonAlongside(const QString& otherReason) const
+{
+    const QString local = m_moxController ? m_moxController->transmitBlockReason() : QString();
+    return joinTransmitReasons(local, otherReason,
+                               m_rxOnlyForced && local == rxOnlyForcedReason());
+}
+
+void RadioModel::applyRxOnly()
+{
+    // NereusSDR's own rule (not in Thetis or mi0bot-Thetis, which has no
+    // receive-only kit model; its HL2 receive only is the operator's RXOnly
+    // toggle, console.cs:15374-15395 [v2.10.3.13-beta2]): a radio with no
+    // transmitter always runs receive only.
+    const bool forced = boardCapabilities().isRxOnlySku;
+    const bool on = forced || m_rxOnlySetting;
+    const bool changed = on != m_rxOnlyEffective || forced != m_rxOnlyForced;
+    m_rxOnlyEffective = on;
+    m_rxOnlyForced = forced;
+    applyTxKeyBlock();
+    if (changed) {
+        emit rxOnlyChanged(on);
     }
 }
 
@@ -21811,9 +21968,19 @@ void RadioModel::onPgxlConnected()
 // restore PGXL to OPERATE (if it was operating before the tune cycle).
 void RadioModel::startTgxlAutotune(bool fromHardware)
 {
-    if (receiveOnlyTxOperationsBlocked()) {
-        emit tuneRefused(
-            QStringLiteral("Automatic tuning is not available from this Core yet."));
+    // Task 16 fix wave (M2): receive only, TX inhibit and a PA trip refuse
+    // the cycle before anything reaches the amplifier or the tuner; the
+    // TUN it would key is refused at MoxController's gate anyway, and
+    // without this the amplifier went to standby and the tuner swept with
+    // no carrier. With both this and a remote window's missing transmit,
+    // the operator is told both (M6).
+    const QString remoteReason = receiveOnlyTxOperationsBlocked()
+        ? QStringLiteral("Automatic tuning is not available from this Core yet.")
+        : QString();
+    const QString refusal = transmitBlockReasonAlongside(remoteReason);
+    if (!refusal.isEmpty()) {
+        qCInfo(lcConnection) << "TGXL autotune refused:" << refusal;
+        emit tuneRefused(refusal);
         return;
     }
 

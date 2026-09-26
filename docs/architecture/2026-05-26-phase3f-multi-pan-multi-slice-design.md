@@ -62,11 +62,11 @@ Existing fields used as inputs: `adcCount`, `supportedSampleRates`, `defaultSamp
 
 | SKU | ADCs | DDCs | User DDCs | maxSlices | Sample-rate ladder (kHz) | hasDiversity | widebandAdcs |
 |---|---|---|---|---|---|---|---|
-| HermesLite2 (HL2) | 1 | 4 | DDC0-1 | **5** | 48, 96, 192, 384 | false | 0 (defer, P1 mechanism) |
-| HermesLite2 RX-only | 1 | 4 | DDC0-1 | **5** | 48, 96, 192, 384 | false | 0 |
-| Metis | 1 | 3 | DDC0-2 | **3** | 48, 96, 192 | false | 0 |
-| Hermes (ANAN-10/100) | 1 | 4 | DDC0-3 | **4** | 48, 96, 192 | false | 0 |
-| HermesII (ANAN-10E/100B) | 1 | 2 | DDC0-1 | **2** | 48, 96, 192 | false | 0 |
+| HermesLite2 (HL2) (see note) | 1 | 4 | DDC0-1 | **5** | P1: 48, 96, 192, 384; P2: 48, 96, 192, 384, 768, 1536 | false | 0 (defer, P1 mechanism) |
+| HermesLite2 RX-only (model HERMESLITE, see note) | 1 | 4 | DDC0-1 | **5** | P1: 48, 96, 192, 384; P2: 48, 96, 192, 384, 768, 1536 | false | 0 |
+| Metis (see note) | 1 | 3 | DDC0-2 | **3** | P1: 48, 96, 192; P2: 48, 96, 192, 384, 768, 1536 | false | 0 |
+| Hermes (ANAN-10/100) (see note) | 1 | 4 | DDC0-3 | **4** | P1: 48, 96, 192; P2: 48, 96, 192, 384, 768, 1536 | false | 0 |
+| HermesII (ANAN-10E/100B) (see note) | 1 | 2 | DDC0-1 | **2** | P1: 48, 96, 192; P2: 48, 96, 192, 384, 768, 1536 | false | 0 |
 | Angelia (ANAN-100D) (see note) | 2 | 7 | DDC2-6 | **5** | P1: 48, 96, 192; P2: 48, 96, 192, 384, 768, 1536 | true | P1: 0; P2: 1 (ADC0) |
 | Orion (ANAN-200D) (see note) | 2 | 7 | DDC2-6 | **5** | P1: 48, 96, 192; P2: 48, 96, 192, 384, 768, 1536 | true | P1: 0; P2: 1 (ADC0) |
 | OrionMkII / 7000DLE / 8000DLE | 2 | 7 | DDC2-6 | **5** | 48, 96, 192, 384, 768, 1536 | true | 2 |
@@ -78,7 +78,7 @@ Existing fields used as inputs: `adcCount`, `supportedSampleRates`, `defaultSamp
 | RedPitaya (P2 mode) | 2 | 7 | DDC2-6 | **5** | 48, 96, 192, 384, 768, 1536 | true | 2 |
 
 Source cites:
-- Sample rate ladders: Thetis `setup.cs:847-850 [v2.10.3.15]` (P1 base, the RedPitaya's extra 384k tagged `//DH1KLM`, P2 array), mi0bot `setup.cs:849-851 [v2.10.3.13-beta2]` (HL2 384k extension via `include_extra_p1_rate`). The list is chosen by the protocol the radio is running (`NetworkIO.CurrentRadioProtocol`), not by the board; in code, `BoardCapsTable::sampleRatesFor(caps, protocol, model)`.
+- Sample rate ladders: Thetis `setup.cs:847-850 [v2.10.3.15]` (P1 base, the RedPitaya's extra 384k tagged `//DH1KLM`, P2 array), mi0bot `setup.cs:849-851 [v2.10.3.13-beta2]` (HL2 384k extension via `include_extra_p1_rate`; mi0bot's P2 array at `setup.cs:854` is Thetis's, with no HL2 case). A row whose ladder is written without a protocol serves Protocol 2 boards only; on Protocol 1 it offers 48, 96, 192 (384 for the RedPitaya). The list is chosen by the protocol the radio is running (`NetworkIO.CurrentRadioProtocol`), not by the board; in code, `BoardCapsTable::sampleRatesFor(caps, protocol, model)`.
 - Wideband: none on Protocol 1 for any board (Thetis `ChannelMaster/networkproto1.c:181-201 [v2.10.3.15]` takes EP6 only); on Protocol 2, Thetis enables ADC0 only, for every model, with no menu gate (`console.cs:43552-43558 [v2.10.3.15]`, `NetworkIO.SetWBEnable(0, 1)`). In code, `BoardCapsTable::widebandAdcsFor(caps, protocol)`, which gives 0 on Protocol 1 for every row.
 - DDC reservations: Thetis `console.cs:8186-8538 [v2.10.3.15]` (UpdateDDCs state machine)
 - HL2-specific PS rate carveout: mi0bot `console.cs:8409-8488 [v2.10.3.13]`
@@ -91,6 +91,12 @@ Corrected 2026-09-25 (receiver and transmit gaps plan, Task 5; the operator's ru
 - **Protocol 2:** 48 to 1536 kHz (`setup.cs:850`), and wideband on ADC0, as Thetis gives every Protocol 2 radio (`console.cs:43552-43558`). The row's `widebandAdcs` is 1 for that reason, not 2: Thetis never enables ADC1's wideband stream on any board.
 
 The row carries the union (`sampleRates` to 1536 kHz, `maxSampleRate` 1536000, `widebandAdcs` 1) and `sampleRatesFor` / `widebandAdcsFor` trim it to the protocol in use. The Radio Info tab shows the top rate for the protocol in use, and a Protocol 1 discovery reply now carries 192 kHz for every board except the HL2 (384 kHz), where it carried 384 kHz for all. The pinned gateware (`Orion.v`, `board_type = 8'h05`) is an OrionMKII-class build and says nothing about these two boards. Hardware verification is pending: no ANAN-100D or ANAN-200D on the bench.
+
+#### Note: the Metis, Hermes, HermesII and HL2 rows on Protocol 2, and the HL2 receive-only kit
+
+Corrected 2026-09-25 (receiver and transmit gaps plan, Task 15; the operator's ruling of 2026-09-25, "1 follow thetis"). These rows read `48, 96, 192` (Metis, Hermes, HermesII) and `48, 96, 192, 384` (both HL2 rows) for every protocol, and Task 5 pinned them below Thetis on Protocol 2 while the ANAN-100D and ANAN-200D moved. Thetis chooses the list by the protocol the radio runs, not by the board (`setup.cs:847-850 [v2.10.3.15]`), so on Protocol 2 these rows now offer 48 to 1536 kHz like every other row. mi0bot, authoritative for the HL2, gives the HL2 the same Protocol 2 array (`setup.cs:854 [v2.10.3.13-beta2]`); its only HL2 rate case is the Protocol 1 384 kHz (`setup.cs:849-851`). Protocol 1 lists are unchanged. The rows carry the union (`maxSampleRate` 1536000) and `sampleRatesFor` trims to the protocol in use.
+
+The receive-only kit (`HPSDRHW::HermesLiteRxOnly`, a NereusSDR-only board with no Thetis value) had no `HPSDRModel`, so `defaultModelForBoard` fell through to HERMES, and the connect then built a Hermes profile: the Hermes capability row (losing `isRxOnlySku`, the kit's transmit block), the standard Protocol 1 codec, and no 384 kHz. mi0bot has one HL2 board (`HPSDRHW.HermesLite`, `enums.cs:396`) and one HL2 model (HERMESLITE), and treats receive-only as the operator's RXOnly toggle (`console.cs:15374-15395`), so the kit now resolves to HERMESLITE: the HL2 codec, the HL2's rates (384 kHz on Protocol 1), its receiver count (4, mi0bot `console.cs:8409`), and every HERMESLITE-keyed path. `profileForRadio(board, model)` keeps the kit's own row under that model for local connects and, through `profileForStation`, for remote windows. The P1 stream count on connect is the HL2 codec's (2 with PureSignal off) rather than the standard codec's 4; see [2026-07-31-hl2-slice-cap-design.md](2026-07-31-hl2-slice-cap-design.md) §6. Hardware verification is pending: no receive-only kit on the bench, and none of these boards on the bench running Protocol 2.
 
 #### Note: the ANAN-G2E is the one 1-ADC Protocol 2 SKU
 

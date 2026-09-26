@@ -5988,8 +5988,7 @@
         "operatorLocalKeys": [
             "DisableHfPa",
             "ExtendedTxAllowed",
-            "PreventTxOnDifferentBandToRx",
-            "RxOnly"
+            "PreventTxOnDifferentBandToRx"
         ],
         "operatorLocalPrefixes": [
             "Tci",
@@ -6029,7 +6028,8 @@
             "TxInhibitMonitorReversed",
             "WindBackPowerSwr",
             "MultimeterDelayMs",
-            "NetworkWatchdogEnabled"
+            "NetworkWatchdogEnabled",
+            "RxOnly"
         ],
         "stationPrefixes": [
             "hardware/",

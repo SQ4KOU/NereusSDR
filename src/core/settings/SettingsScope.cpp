@@ -153,6 +153,9 @@
 //   2026-09-24 - iPhone app Task 19 (R-IOS-06, D40): the "filters/" prefix,
 //                the filter presets, is Station scope. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - Receiver and transmit gaps plan, Task 16: RxOnly is
+//                Station scope. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include "core/settings/SettingsScope.h"
@@ -529,13 +532,22 @@ const Rule kWholeKeys[] = {
     // pinned OperatorLocal below as a write-only setting with no consumer.
     { "NetworkWatchdogEnabled", SettingsScope::Station },
 
+    // Task 16 (receiver and transmit gaps plan): Receive Only stops every
+    // key on the radio, so it is the radio's setting, applied where the
+    // radio is (MoxController's gate, through RadioModel::applyRxOnly).
+    // One value for the Core and every window on it: a window cannot hold
+    // a radio in receive only that another window then keys. Until Task 16
+    // it was pinned OperatorLocal below as a write-only setting.
+    { "RxOnly", SettingsScope::Station },
+
     // ---- Reviewed and deliberately pinned OperatorLocal --------------
     // Each of these has a name that reads as a TX-safety or station-
     // behaviour flag, which is exactly the shape of key this table
     // exists to get right -- and each was checked, not guessed. Fix
     // round 1 (review) confirmed this narrower and stronger than
     // originally claimed: grepping the quoted literal for each of the
-    // five (four since R-R3-49 wired NetworkWatchdogEnabled, above)
+    // five (three since R-R3-49 wired NetworkWatchdogEnabled and Task 16
+    // wired RxOnly, above)
     // across src/core and src/models (not just the same-named
     // identifier -- an earlier pass's cruder grep matched things like
     // HPSDRHW::HermesLiteRxOnly, BoardCapabilities::isRxOnlySku, and the
@@ -551,7 +563,6 @@ const Rule kWholeKeys[] = {
     { "DisableHfPa", SettingsScope::OperatorLocal },
     { "ExtendedTxAllowed", SettingsScope::OperatorLocal },
     { "PreventTxOnDifferentBandToRx", SettingsScope::OperatorLocal },
-    { "RxOnly", SettingsScope::OperatorLocal },
 };
 
 } // namespace

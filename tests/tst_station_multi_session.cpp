@@ -96,6 +96,10 @@
 //               and notch.addAtSlice refused for another device's slice.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-25: checkpoint carry: the operator-local key refused is
+//               ExtendedTxAllowed, since RxOnly is a Core setting (gaps
+//               Task 16). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -1098,8 +1102,9 @@ private slots:
         QCOMPARE(sawValue(appA).value(QStringLiteral("origin")).toString(), QStringLiteral("origin-a"));
         QCOMPARE(sawValue(appB).value(QStringLiteral("origin")).toString(), QStringLiteral("origin-a"));
         // settings.reject: an operator-local key, refused to A only.
+        // (RxOnly became a Core setting with the gaps lane's Task 16.)
         appA->sendText(SessionMessages::encode(SessionMessages::settingsWrite(
-            QStringLiteral("RxOnly"), QStringLiteral("True"), QStringLiteral("origin-a"))));
+            QStringLiteral("ExtendedTxAllowed"), QStringLiteral("True"), QStringLiteral("origin-a"))));
         QVERIFY(QTest::qWaitFor(
             [appA]() { return !firstOfType(appA->received(), QStringLiteral("settings.reject")).isEmpty(); },
             5000));

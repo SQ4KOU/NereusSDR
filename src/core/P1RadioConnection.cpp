@@ -2459,7 +2459,9 @@ void P1RadioConnection::applyBoardQuirks()
     // applyBoardQuirks() runs at connect time).
     if (m_caps->adcCount >= 2) {
         m_p1AdcCntrl = 0x0004;
-    } else if (m_caps->board == HPSDRHW::HermesLite) {
+    } else if (m_caps->board == HPSDRHW::HermesLite
+               || m_caps->board == HPSDRHW::HermesLiteRxOnly) {
+        // Plan Task 15: the receive-only kit is the same HL2 silicon.
         m_p1AdcCntrl = 0x0004;
     } else {
         // Hermes / HermesII (and any future 1-ADC non-HL2 board)

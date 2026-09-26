@@ -123,6 +123,10 @@
 //   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06: addTnfFromStation
 //                                    (notch.addAtSlice) scanned.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  Receiver and transmit gaps plan,
+//                                    Task 16: receive only's reasons
+//                                    (MoxController, RadioModel) scanned.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -885,6 +889,22 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("m_values.minDb"), QStringLiteral("kMaxAttOnTxDb")},
          {QStringLiteral("kept")}},
         {"src/core/IoBoardHl2Facade.cpp", {}, {}, 1},
+        // Task 16 (receiver and transmit gaps plan): receive only's reason,
+        // what a refused key and a disabled transmit button show.
+        // Task 16 fix wave (M2): the words setMox refuses with, which the
+        // TGXL autotune and the Tuner applet's TUNE show too.
+        {"src/core/MoxController.cpp",
+         {QStringLiteral("defaultRxOnlyReason"), QStringLiteral("transmitBlockReason")}, {}, 3, {},
+         // The reason setRxOnly was given (RadioModel::rxOnlyReason, scanned).
+         {QStringLiteral("m_rxOnlyReason")}},
+        {"src/core/MoxController.h", {QStringLiteral("rxOnlyReason")}, {}, 0, {},
+         // The reason setRxOnly was given (RadioModel::rxOnlyReason, scanned).
+         {QStringLiteral("m_rxOnlyReason")}},
+        {"src/models/RadioModel.cpp",
+         {QStringLiteral("rxOnlyForcedReason"), QStringLiteral("rxOnlyReason")}, {}, 1, {},
+         // Both scanned here and in MoxController.cpp.
+         {QStringLiteral("m_rxOnlyForced ? rxOnlyForcedReason() : "
+                         "MoxController::defaultRxOnlyReason()")}},
         // A receiver count, and a frequency in MHz.
         {"src/core/SliceStreamAllocator.cpp", {}, {}, 4,
          {QStringLiteral("count"),

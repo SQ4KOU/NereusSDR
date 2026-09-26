@@ -37,7 +37,11 @@
 // Transmit (Task 34's TransmitHolder) joins at transmitForCheck(): today
 // nobody holds transmit, so a change that touches only the transmitter
 // disturbs nobody, `state` is never "transmitting", and ruling 7.4's on-air
-// refusal (DisturbanceCheck::refusedOnAir) never fires.
+// refusal (DisturbanceCheck::refusedOnAir) never fires. The Core settings
+// that touch only the transmitter (External TX Inhibit's keys and RxOnly,
+// receive only) are not on the list yet: they disturb no device's slices,
+// and they join as transmitter changes when the holder arrives with the
+// transmit work (checkpoint carry, 2026-09-25).
 //
 // =================================================================
 // Modification history (NereusSDR):

@@ -113,6 +113,9 @@ int RadioInfo::maxReceiversForBoard(HPSDRHW type)
     case HPSDRHW::Hermes:       return 4;
     case HPSDRHW::HermesII:     return 4;
     case HPSDRHW::HermesLite:   return 4;
+    case HPSDRHW::HermesLiteRxOnly: return 4; // Plan Task 15: the kit is an HL2
+                                              // (mi0bot console.cs:8409 HERMESLITE
+                                              // P1_rxcount = 4 [v2.10.3.13-beta2])
     case HPSDRHW::HermesC10:    return 4; // ANAN-G2E: HERMES-class single-ADC nrx=4
                                           // [N1GP G2E added; Thetis network.h:425 v2.10.3.15]
     case HPSDRHW::Angelia:      return 7;

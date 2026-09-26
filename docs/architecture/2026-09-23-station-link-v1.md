@@ -2671,10 +2671,10 @@ computer, never sent). `classifySettingsKey` (`SettingsScope.cpp`) decides:
 | 3. whole key | `WindBackPowerSwr` | station |
 | 3. whole key | `MultimeterDelayMs` | station |
 | 3. whole key | `NetworkWatchdogEnabled` | station |
+| 3. whole key | `RxOnly` | station |
 | 3. whole key | `DisableHfPa` | operatorLocal |
 | 3. whole key | `ExtendedTxAllowed` | operatorLocal |
 | 3. whole key | `PreventTxOnDifferentBandToRx` | operatorLocal |
-| 3. whole key | `RxOnly` | operatorLocal |
 
 <!-- /surface -->
 

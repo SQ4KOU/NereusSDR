@@ -11,6 +11,7 @@
 #include "core/audio/CaptureProtocol.h"
 
 #include <QCoreApplication>
+#include <QFile>
 #include <QtEndian>
 
 #include <chrono>
@@ -225,12 +226,30 @@ private:
         }
     }
 
+    // hang-open only: once the Open is answered and every later command is
+    // ignored, creates <dir>/<pid> when NEREUS_FAKE_CAPTURE_HANG_DIR names a
+    // directory, so a test can tell that the helper is now really hanging
+    // (before that, a Shutdown still ends it).
+    static void markHanging()
+    {
+        const QString dir = qEnvironmentVariable("NEREUS_FAKE_CAPTURE_HANG_DIR");
+        if (dir.isEmpty()) {
+            return;
+        }
+        QFile marker(dir + QLatin1Char('/')
+                     + QString::number(QCoreApplication::applicationPid()));
+        if (marker.open(QIODevice::WriteOnly)) {
+            marker.close();
+        }
+    }
+
     void open()
     {
         switch (m_scenario) {
         case Scenario::HangOpen:
             sendStatus(m_generation, P::HelperState::Opening);
             m_ignoring = true;
+            markHanging();
             return;
         case Scenario::PermissionThenReady:
             sendStatus(m_generation, P::HelperState::Permission);

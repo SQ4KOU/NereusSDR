@@ -362,6 +362,10 @@
 //                                    two-way, with no on-air rule, as in
 //                                    Thetis.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  Receiver and transmit gaps plan,
+//                                    Task 16: a window's Receive Only change
+//                                    reaches the Core's gate. AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1366,6 +1370,11 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                     m_radioModel->txInhibit().setEnabled(on);
                 } else if (key == QLatin1String("TxInhibitMonitorReversed")) {
                     m_radioModel->txInhibit().setReverseLogic(on);
+                } else if (key == QLatin1String("RxOnly")) {
+                    // Task 16: Receive Only gates the Core's keying, as
+                    // console.RXOnly does at once (setup.cs:6498
+                    // [v2.10.3.15]: console.RXOnly = chkGeneralRXOnly.Checked).
+                    m_radioModel->applyRxOnlySetting(on);
                 }
             });
     // Whole-branch review, Important 4. A removal has its own signal and
@@ -1417,6 +1426,9 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                     m_radioModel->txInhibit().setEnabled(false);
                 } else if (key == QLatin1String("TxInhibitMonitorReversed") && m_radioModel) {
                     m_radioModel->txInhibit().setReverseLogic(false);
+                } else if (key == QLatin1String("RxOnly") && m_radioModel) {
+                    // Task 16: Receive Only defaults off.
+                    m_radioModel->applyRxOnlySetting(false);
                 }
             });
 

@@ -977,6 +977,7 @@ public:
         // Map HPSDRHW → canonical HPSDRModel so selectCodec() picks the right subclass.
         switch (board) {
             case HPSDRHW::HermesLite: m_hardwareProfile.model = HPSDRModel::HERMESLITE;   break;
+            case HPSDRHW::HermesLiteRxOnly: m_hardwareProfile.model = HPSDRModel::HERMESLITE; break; // Task 15
             case HPSDRHW::OrionMKII:  m_hardwareProfile.model = HPSDRModel::ORIONMKII;    break;
             case HPSDRHW::Angelia:    m_hardwareProfile.model = HPSDRModel::ANAN100D;      break;
             case HPSDRHW::Orion:      m_hardwareProfile.model = HPSDRModel::ANAN200D;      break;
