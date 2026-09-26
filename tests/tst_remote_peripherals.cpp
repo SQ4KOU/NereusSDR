@@ -4287,8 +4287,9 @@ void RemotePeripheralsTest::remoteWindowScansAndKeepsTheAmpAddressOnTheCore()
 // beside the state badge, as a remote window's tab does. It sends the
 // local applet's own line (operate=1 or operate=0) through this computer's
 // PgxlConnection, reads Operate or Standby from the amp's report, and is
-// disabled with a plain reason while the amp is not connected. The local
-// applet's OPERATE has no on-the-air rule, so neither has this button.
+// disabled with a plain reason while the amp is not connected. Group B fix
+// wave (M5): it also waits on the air, as the local applet's OPERATE does
+// (localWindowAmpAndTunerSwitchesWaitOnTheAir covers that).
 void RemotePeripheralsTest::localPowerGeniusTabOperatesThisComputersAmp()
 {
     AppSettings::instance().clear();

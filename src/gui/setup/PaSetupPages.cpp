@@ -2238,6 +2238,11 @@ PaValuesPage::PaValuesPage(RadioModel* model, QWidget* parent)
     // 13.8 V supply (RadioConnection::handleSupplyRaw).
     // From Thetis setup.designer.cs:51365 [v2.10.3.15]
     //   this.labelTS254.Text = "DC Voltage";
+    // That label ships hidden; the reading itself carries the name in
+    // Thetis's own computation of it (parity mini-round):
+    // From Thetis console.cs:24782 [v2.10.3.15]
+    //   public float computeHermesDCVoltage()
+    //   ... int adc = NetworkIO.getHermesDCVoltage();
     paForm->addRow(QStringLiteral("DC Voltage:"), m_supplyVoltsLabel);
     paForm->addRow(QStringLiteral("FWD Voltage:"),    m_fwdVoltageLabel);
     paForm->addRow(QStringLiteral("REV Voltage:"),    m_revVoltageLabel);
