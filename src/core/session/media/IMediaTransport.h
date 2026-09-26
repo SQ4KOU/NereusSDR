@@ -18,6 +18,9 @@
 //               connection that came through the remote access service,
 //               gatherCandidates(), gatheringComplete() and selectedPath().
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26: Task 27 follow-up: MediaIcePath::relayed() also counts a
+//               remote at a relay candidate's address the far end sent.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //
 // =================================================================
 
@@ -26,6 +29,7 @@
 #include <QByteArray>
 #include <QList>
 #include <QObject>
+#include <QPair>
 #include <QString>
 
 #include <optional>
@@ -40,10 +44,23 @@ struct MediaIcePath {
     QString remoteType;
     QString localAddress;
     QString remoteAddress;
+    quint16 remotePort = 0;
+    /// The relay candidates (`typ relay`) the far end sent, as address and
+    /// port.
+    QList<QPair<QString, quint16>> farEndRelays;
 
+    /// Through the relay: either candidate is a relay one, or the remote is
+    /// at the address and port of a relay candidate the far end sent. The
+    /// last is the follow-up to the Task 27 re-review: a remote learned as
+    /// peer-reflexive from a check that came through the far end's relay,
+    /// before its relay candidate arrived through the service, is typed
+    /// `prflx` although the traffic goes through the relay.
     bool relayed() const
     {
-        return localType == QLatin1String("relay") || remoteType == QLatin1String("relay");
+        if (localType == QLatin1String("relay") || remoteType == QLatin1String("relay")) {
+            return true;
+        }
+        return remotePort != 0 && farEndRelays.contains(qMakePair(remoteAddress, remotePort));
     }
 };
 

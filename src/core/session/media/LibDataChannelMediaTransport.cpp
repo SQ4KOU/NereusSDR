@@ -20,6 +20,9 @@
 //               (StartOptions::ice; see IceConfiguration.h for the pinned
 //               libdatachannel and libjuice limits they follow). J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26: Task 27 follow-up: the far end's relay candidates are kept
+//               for selectedPath(). J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 //
 // =================================================================
 
@@ -489,6 +492,8 @@ struct LibDataChannelMediaTransport::Private {
     bool remoteDescribesLossless = false;
     bool remoteDescribesMicLossless = false;
     int acceptedCandidates = 0;
+    /// The far end's relay candidates, address and port (selectedPath()).
+    QList<QPair<QString, quint16>> farEndRelays;
     std::chrono::steady_clock::time_point lastRtpTimingWarning;
 };
 
@@ -784,6 +789,7 @@ bool LibDataChannelMediaTransport::start(const StartOptions& options)
         d->remoteDescribesLossless = false;
         d->remoteDescribesMicLossless = false;
         d->acceptedCandidates = 0;
+        d->farEndRelays.clear();
         d->drainTimer->start();
 
         if (options.role == Role::Offerer) {
@@ -862,6 +868,8 @@ std::optional<MediaIcePath> LibDataChannelMediaTransport::selectedPath() const
         path.remoteType = typeName(remote);
         path.localAddress = QString::fromStdString(local.address().value_or(std::string()));
         path.remoteAddress = QString::fromStdString(remote.address().value_or(std::string()));
+        path.remotePort = remote.port().value_or(0);
+        path.farEndRelays = d->farEndRelays;
         return path;
     } catch (const std::exception&) {
         return std::nullopt;
@@ -890,6 +898,7 @@ void LibDataChannelMediaTransport::stopInternal(bool notify)
     d->remoteDescribesLossless = false;
     d->remoteDescribesMicLossless = false;
     d->acceptedCandidates = 0;
+    d->farEndRelays.clear();
     d->ice.reset();
     d->gatherRequested = false;
     d->gatheringStarted = false;
@@ -1039,6 +1048,17 @@ bool LibDataChannelMediaTransport::acceptCandidate(const QString& candidate,
             // interface usable by a later approved STUN or relay
             // configuration.
             return false;
+        }
+        if (parsed.type() == rtc::Candidate::Type::Relayed) {
+            // Task 27 follow-up: where the far end's relay is, so a remote
+            // learned there as peer-reflexive still reads as relayed
+            // (MediaIcePath::relayed()). A numeric address only: no lookup.
+            rtc::Candidate relay = parsed;
+            if (relay.resolve(rtc::Candidate::ResolveMode::Simple) && relay.address()
+                && relay.port()) {
+                d->farEndRelays.append(
+                    qMakePair(QString::fromStdString(*relay.address()), *relay.port()));
+            }
         }
         d->peer->addRemoteCandidate(std::move(parsed));
         ++d->acceptedCandidates;

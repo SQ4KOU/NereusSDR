@@ -1807,7 +1807,17 @@ private slots:
         QVERIFY(!pair.offerer()->selectedPath()->relayed());
     }
 
-    void withDirectBlockedItConnectsThroughTheRelay()
+    // Only relay candidates are passed on, both ways, and the connection
+    // works through the relay. This asserts what a loopback test can prove
+    // (the follow-up to the Task 27 re-review): each end allocated on the
+    // relay, the relay carried checks both ways (at least one relay pair's
+    // checks crossed it), and the message arrived. It does not assert the
+    // relayed pair was the one chosen: on the loopback nothing blocks a
+    // direct packet, and libjuice pairs a peer-reflexive candidate learned
+    // from a relayed check with the host socket, so a direct pair can form
+    // and win. "Direct blocked means relayed" is the traversal harness's
+    // udp-direct-blocked scenario, where packets really are dropped.
+    void withOnlyRelayCandidatesTheRelayCarriesTheConnection()
     {
         LocalService service;
         QVERIFY(service.start());
@@ -1826,11 +1836,12 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(pair.clientReady && pair.stationReady, 60000);
         QCOMPARE(pair.stationRelays, 1);
         QCOMPARE(pair.clientRelays, 1);
-        const auto path = pair.offerer()->selectedPath();
-        QVERIFY(path.has_value());
-        QVERIFY(path->relayed());
-        QVERIFY(service.turnOutput().contains(QLatin1String("ALLOCATED")));
-        // Data crosses the relayed connection.
+        QVERIFY(pair.offerer()->selectedPath().has_value());
+        // Both ends allocated, and the relay carried checks both ways.
+        QTRY_VERIFY_WITH_TIMEOUT(service.turnOutput().contains(QLatin1String("ALLOCATED 2")), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(service.turnOutput().contains(QLatin1String("RELAYED OUT 1")), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(service.turnOutput().contains(QLatin1String("RELAYED IN 1")), 5000);
+        // The message arrives.
         QTRY_VERIFY_WITH_TIMEOUT(pair.offerer()->sendDisplay(QByteArrayLiteral("through the relay")),
                                  5000);
         QTRY_VERIFY_WITH_TIMEOUT(pair.stationReceived.contains(QByteArrayLiteral("through the relay")),

@@ -25,8 +25,10 @@ four for each Core's id), so a test can show a full relay is not fatal.
 Usage: fake_turn_server.py --secret-file FILE --port-file FILE [--listen ADDR]
                            [--quota-full]
 It writes the UDP port it bound to --port-file, then prints one line to
-standard output for each allocation and each relayed datagram count, so a
-test can see the relay was used. It never prints a credential.
+standard output for each allocation (ALLOCATED n) and, for datagrams it
+relays, at 1, 2, 4, 8 ... of them each way (RELAYED OUT n from a client to
+a peer, RELAYED IN n from a peer to a client), so a test can see the relay
+was used. It never prints a credential.
 """
 
 from __future__ import annotations
@@ -164,6 +166,7 @@ class Server:
         self.selector.register(self.sock, selectors.EVENT_READ, None)
         self.allocations = {}
         self.relayed = 0
+        self.relayed_out = 0
 
     def port(self) -> int:
         return self.sock.getsockname()[1]
@@ -174,6 +177,17 @@ class Server:
 
     def say(self, text: str) -> None:
         print(text, flush=True)
+
+    def count(self, direction: str, total: int) -> None:
+        # One line at 1, 2, 4, 8 ... datagrams each way, so a test sees the
+        # relay carried traffic both ways without a line per datagram.
+        if total & (total - 1) == 0:
+            self.say(f"RELAYED {direction} {total}")
+
+    def to_peer(self, allocation: Allocation, data: bytes, peer) -> None:
+        allocation.relay.sendto(data, peer)
+        self.relayed_out += 1
+        self.count("OUT", self.relayed_out)
 
     def run(self) -> None:
         while True:
@@ -189,6 +203,7 @@ class Server:
         if peer[0] not in allocation.permissions:
             return
         self.relayed += 1
+        self.count("IN", self.relayed)
         number = allocation.peers.get(peer)
         if number is not None:
             self.sock.sendto(struct.pack("!HH", number, len(data)) + data, allocation.client)
@@ -206,7 +221,7 @@ class Server:
             number, length = struct.unpack("!HH", data[:4])
             peer = allocation.channels.get(number)
             if peer is not None:
-                allocation.relay.sendto(data[4:4 + length], peer)
+                self.to_peer(allocation, data[4:4 + length], peer)
             return
         parsed = parse(data)
         if parsed is None:
@@ -223,7 +238,7 @@ class Server:
             if allocation and peer_value and payload is not None:
                 peer = read_xor_address(peer_value, txid)
                 if peer[0] in allocation.permissions:
-                    allocation.relay.sendto(payload, peer)
+                    self.to_peer(allocation, payload, peer)
             return
         if cls != REQUEST or method not in (ALLOCATE, REFRESH, CREATE_PERMISSION, CHANNEL_BIND):
             return

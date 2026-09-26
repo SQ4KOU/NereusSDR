@@ -339,6 +339,43 @@ private slots:
         QCOMPARE(handed.size(), 4);
     }
 
+    // The follow-up to Task 27's re-review: a path counts as relayed when
+    // either candidate is a relay one, and also when the remote sits at the
+    // address and port of a relay candidate the far end sent (a remote
+    // learned as peer-reflexive from a check through the far end's relay,
+    // before that relay candidate came through the service).
+    void aRemoteAtTheFarEndsRelayIsRelayed()
+    {
+        MediaIcePath path;
+        path.localType = QStringLiteral("host");
+        path.remoteType = QStringLiteral("prflx");
+        path.localAddress = QStringLiteral("192.168.1.20");
+        path.remoteAddress = QStringLiteral("203.0.113.9");
+        path.remotePort = 50000;
+        QVERIFY(!path.relayed());
+        path.farEndRelays = {qMakePair(QStringLiteral("203.0.113.9"), quint16(50001)),
+                             qMakePair(QStringLiteral("198.51.100.4"), quint16(50000))};
+        // The same address on another port, or the same port elsewhere, is
+        // not the relay.
+        QVERIFY(!path.relayed());
+        path.farEndRelays.append(qMakePair(QStringLiteral("203.0.113.9"), quint16(50000)));
+        QVERIFY(path.relayed());
+        // No remote port known: never matched.
+        path.remotePort = 0;
+        path.farEndRelays.append(qMakePair(QStringLiteral("203.0.113.9"), quint16(0)));
+        QVERIFY(!path.relayed());
+
+        MediaIcePath typed;
+        typed.localType = QStringLiteral("relay");
+        typed.remoteType = QStringLiteral("host");
+        QVERIFY(typed.relayed());
+        typed.localType = QStringLiteral("srflx");
+        typed.remoteType = QStringLiteral("relay");
+        QVERIFY(typed.relayed());
+        typed.remoteType = QStringLiteral("srflx");
+        QVERIFY(!typed.relayed());
+    }
+
     // Which of this end's addresses count, and the names a list uses.
     void usableAddressesAndNames()
     {
