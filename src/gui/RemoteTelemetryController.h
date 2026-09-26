@@ -68,7 +68,8 @@ public:
     // R-R3-32 / R-R3-46 (parity Task 6): the remote window's model takes
     // the Core's PA readings from each current sample, and all of them
     // absent while the measurements are out of date or the session ended
-    // (RadioModel::applyCorePaReadings).
+    // (RadioModel::applyCorePaReadings). R-R3-32 (parity Task 14): and the
+    // Core's HL2 link the same way (RadioModel::applyCoreHl2LinkFigures).
     void setPaReadingsTarget(RadioModel* model);
 signals:
     void changed();

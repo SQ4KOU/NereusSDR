@@ -8191,6 +8191,15 @@ nereus_add_test(tst_remote_oc_cal
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
 target_compile_definitions(tst_remote_oc_cal PRIVATE NEREUS_BUILD_TESTS)
+# R-R3-46 / R-R3-49 (remote-window parity Task 14): HL2 Options' I2C tool
+# and Pin Control through the Core (a fake I/O board answers or does not),
+# refused on the air; the Alex-1 tab's three transmit high-pass switches
+# from a remote window on and off the air. Loopback only, a test TxChannel,
+# no RF, no audio device; nothing keys.
+nereus_add_test(tst_remote_hl2_io
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_remote_hl2_io PRIVATE NEREUS_BUILD_TESTS)
 
 # --------------------------------------------------------------------------
 # Aggregate "all_tests" target  (2026-05-26 KG4VCF dev-loop fix, from PR #291)

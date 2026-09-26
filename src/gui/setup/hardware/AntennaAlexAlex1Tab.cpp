@@ -19,6 +19,12 @@
 //                 HPF bypass on TX and on PureSignal and Disable 6 m LNA on
 //                 TX stay shown, since plan Task 14 applies them. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-R3-46 / R-R3-49 (remote-window parity Task 14): HPF
+//                bypass on TX, HPF bypass on PureSignal and Disable 6 m LNA
+//                on TX follow whether the Core takes them (radioHardwareVersion
+//                7), with no on-air rule in either window, as Thetis sets them
+//                with no MOX check. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 //
 //=================================================================
@@ -957,13 +963,17 @@ void AntennaAlexAlex1Tab::onBpf1SpinChanged(double value, const QString& setting
 
 void AntennaAlexAlex1Tab::setTransmitPermitted(bool permitted, const QString& reason)
 {
-    for (QWidget* w : std::initializer_list<QWidget*>{
-             m_hpfBypassOnTx, m_hpfBypassOnPs, m_disable6mLnaOnTx}) {
-        HardwareTransmitGate::apply(w, permitted, reason);
-    }
     for (const LpfRowWidgets& row : m_lpfRows) {
         HardwareTransmitGate::apply(row.start, permitted, reason);
         HardwareTransmitGate::apply(row.end, permitted, reason);
+    }
+}
+
+void AntennaAlexAlex1Tab::setHpfSwitchesAvailable(bool available, const QString& reason)
+{
+    for (QWidget* w : std::initializer_list<QWidget*>{
+             m_hpfBypassOnTx, m_hpfBypassOnPs, m_disable6mLnaOnTx}) {
+        HardwareTransmitGate::apply(w, available, reason);
     }
 }
 

@@ -25,6 +25,8 @@
 //                model layer — Phase 3P-E Task 2 wires I2C intercept
 //                into P1CodecHl2; Task 4 builds the Setup → Hardware →
 //                HL2 I/O page UI.
+//   2026-09-26 - Remote-window parity Task 14 (R-R3-46): i2cReadAnswered.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // --- From Console/HPSDR/IoBoardHl2.cs ---
@@ -334,6 +336,9 @@ void IoBoardHl2::applyI2cReadResponse(quint8 c0, quint8 c1, quint8 c2,
     emit i2cReadResponseReceived(m_lastI2cRead.returnedAddress,
                                  havePending ? pr.subAddress : quint8(0),
                                  c1, c2, c3, c4);
+    if (havePending) {
+        emit i2cReadAnswered(pr.deviceAddress, pr.subAddress, c1, c2, c3, c4);
+    }
 }
 
 void IoBoardHl2::clearI2cReadAvailable()

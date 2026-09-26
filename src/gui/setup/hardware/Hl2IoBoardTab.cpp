@@ -29,6 +29,10 @@
 //                 receive-only note when the window's Core applies the whole
 //                 preset (transmitSettingsVersion 8). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-R3-32 (remote-window parity Task 14): the bandwidth
+//                 monitor reads RadioModel::hl2LinkFigures(), so a remote
+//                 window shows the Core's HL2 link ("From the Core").
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // --- From Console/setup.cs ---
@@ -557,6 +561,7 @@ void Hl2IoBoardTab::buildI2cAndBandwidthRow(QVBoxLayout* outer)
 
     // ── Right: Bandwidth monitor mini ─────────────────────────────────────────
     auto* bwGroup = new QGroupBox(tr("Bandwidth monitor"), this);
+    m_bwGroup = bwGroup;
     auto* bwLayout = new QVBoxLayout(bwGroup);
     bwLayout->setSpacing(4);
 
@@ -801,22 +806,52 @@ void Hl2IoBoardTab::updateBwDisplay()
     // 192k×24bit×2ch = ~9.2 Mbps; round to 10 Mbps as display ceiling.
     static constexpr double kMaxBps = 10.0e6;
 
-    const double ep6Bps = m_bwMonitor->ep6IngressBytesPerSec();
-    const double ep2Bps = m_bwMonitor->ep2EgressBytesPerSec();
+    // R-R3-32 (parity Task 14): this window's monitor, or in a remote
+    // window the Core's figures; one the Core has not sent shows as
+    // unavailable, never 0.
+    const RadioModel::Hl2LinkFigures figures = m_model->hl2LinkFigures();
+    const bool fromCore = m_model->hl2LinkFiguresFromCore();
+    const QString source = fromCore ? tr("From the Core") : QString();
+    const auto showRate = [&](std::optional<double> bps, QProgressBar* bar, QLabel* label) {
+        if (!bps) {
+            bar->setValue(0);
+            label->setText(tr("Unavailable"));
+        } else {
+            bar->setValue(qBound(0, static_cast<int>(*bps / kMaxBps * 100.0), 100));
+            label->setText(QStringLiteral("%1 Mbps").arg(*bps / 1.0e6, 0, 'f', 2));
+        }
+        label->setToolTip(source);
+    };
+    showRate(figures.rxBytesPerSecond, m_ep6Bar, m_ep6RateLabel);
+    showRate(figures.txBytesPerSecond, m_ep2Bar, m_ep2RateLabel);
+    showThrottleState(figures.throttled);
+    m_throttleStatusLabel->setToolTip(source);
 
-    const int ep6Pct = qBound(0, static_cast<int>(ep6Bps / kMaxBps * 100.0), 100);
-    const int ep2Pct = qBound(0, static_cast<int>(ep2Bps / kMaxBps * 100.0), 100);
+    m_throttleEventLabel->setText(figures.throttleEvents
+                                      ? QString::number(*figures.throttleEvents)
+                                      : tr("Unavailable"));
+    m_throttleEventLabel->setToolTip(fromCore ? tr("The Core does not send this count.")
+                                              : QString());
+    if (m_bwGroup) {
+        m_bwGroup->setTitle(fromCore ? tr("Bandwidth monitor, from the Core")
+                                     : tr("Bandwidth monitor"));
+    }
+}
 
-    m_ep6Bar->setValue(ep6Pct);
-    m_ep2Bar->setValue(ep2Pct);
-
-    m_ep6RateLabel->setText(
-        QStringLiteral("%1 Mbps").arg(ep6Bps / 1.0e6, 0, 'f', 2));
-    m_ep2RateLabel->setText(
-        QStringLiteral("%1 Mbps").arg(ep2Bps / 1.0e6, 0, 'f', 2));
-
-    m_throttleEventLabel->setText(
-        QString::number(m_bwMonitor->throttleEventCount()));
+void Hl2IoBoardTab::showThrottleState(std::optional<bool> throttled)
+{
+    if (!throttled) {
+        m_throttleStatusLabel->setText(tr("Unavailable"));
+        m_throttleStatusLabel->setStyleSheet(QStringLiteral("font-size: 10px;"));
+    } else if (*throttled) {
+        m_throttleStatusLabel->setText(tr("● throttled"));
+        m_throttleStatusLabel->setStyleSheet(
+            QStringLiteral("font-size: 10px; color: #ff4444;"));
+    } else {
+        m_throttleStatusLabel->setText(tr("○ not throttled"));
+        m_throttleStatusLabel->setStyleSheet(
+            QStringLiteral("font-size: 10px; color: #22cc44;"));
+    }
 }
 
 // ── decodeRegister ────────────────────────────────────────────────────────────
@@ -940,15 +975,12 @@ void Hl2IoBoardTab::onI2cQueueChanged()
 
 void Hl2IoBoardTab::onThrottledChanged(bool throttled)
 {
-    if (throttled) {
-        m_throttleStatusLabel->setText(tr("● throttled"));
-        m_throttleStatusLabel->setStyleSheet(
-            QStringLiteral("font-size: 10px; color: #ff4444;"));
-    } else {
-        m_throttleStatusLabel->setText(tr("○ not throttled"));
-        m_throttleStatusLabel->setStyleSheet(
-            QStringLiteral("font-size: 10px; color: #22cc44;"));
+    // This window's own monitor (a remote window's never changes; the
+    // Core's throttle reaches it through updateBwDisplay).
+    if (m_model->hl2LinkFiguresFromCore()) {
+        return;
     }
+    showThrottleState(throttled);
     m_throttleEventLabel->setText(
         QString::number(m_bwMonitor->throttleEventCount()));
 

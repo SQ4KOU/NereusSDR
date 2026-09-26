@@ -111,6 +111,9 @@
 //   2026-09-25 - R-IOS-27, R-IOS-06: displayExtrasVersion 2 documented
 //                (clarity-retune). J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-26 - R-R3-46 / R-R3-32 (parity Task 14): radioHardwareVersion
+//                7 and stationTelemetryVersion 5 documented. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -163,7 +166,10 @@ struct StationCapabilities {
     /// rest of the transmit antennas and relays two-way (`txAntennas`,
     /// `blockTxAnt2`, `blockTxAnt3`, `ext1OutOnTx`, `ext2OutOnTx`,
     /// `rxOutOverride`; parity Task 12) and the setAlexTxAntenna command
-    /// (one band's TX antenna; parity mini-round). Sent last in the same block as the three above,
+    /// (one band's TX antenna; parity mini-round); 7 the I/O board's
+    /// requestIoBoardI2c and setIoBoardOutput commands, `ioBoard` outputs
+    /// and the Alex tab's three transmit high-pass switches taken from a
+    /// window (parity Task 14). Sent last in the same block as the three above,
     /// so only at minor 11. 0: a window keeps today's behaviour and does
     /// not write `stepAtt`.
     int radioHardwareVersion = 0;
@@ -304,7 +310,8 @@ struct StationCapabilities {
     /// memory, temperature). 3: adds the receivers section (each receiver's
     /// processing load and input wait). 4 (remote-window parity Task 6,
     /// minor 11): adds the radio's PA readings and link quality to the
-    /// radio section. Negotiated minor still gates each version.
+    /// radio section. 5 (parity Task 14, minor 11): adds the Core's HL2 link
+    /// (hl2*). Negotiated minor still gates each version.
     int stationTelemetryVersion = 0;
     int remoteTgxlConfigVersion = 0;
     int remoteFourO3AControlVersion = 0;

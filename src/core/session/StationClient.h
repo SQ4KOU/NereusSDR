@@ -273,6 +273,12 @@
 //                                    operate, antenna, TCI mode and address
 //                                    requests (remoteRfKitControlVersion 4).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-32 (parity Task 14):
+//                                    radioHardwareAvailable, the I/O board's
+//                                    I2C and output pin requests
+//                                    (radioHardwareVersion 7), and the HL2
+//                                    link (stationTelemetryVersion 5).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -800,6 +806,14 @@ public:
     QString transmitAntennasUnavailableReason() const;
     /// Verb "requestIoBoardProbe": probe the Core's radio's HL2 I/O board.
     CommandOutcome requestIoBoardProbe() override;
+    /// Parity Task 14: the Core advertised radioHardwareVersion at least
+    /// `minVersion` on a session at minor 11 with property results.
+    bool radioHardwareAvailable(int minVersion) const override;
+    /// Parity Task 14 (radioHardwareVersion 7). Verb "requestIoBoardI2c".
+    CommandOutcome requestIoBoardI2c(int bus, int address, int reg, bool write,
+                                     int value) override;
+    /// Parity Task 14 (radioHardwareVersion 7). Verb "setIoBoardOutput".
+    CommandOutcome requestIoBoardOutput(int pin, bool on) override;
     /// R-R3-46 fix wave (radioHardwareVersion 3). Verb "setAlexRxAntenna":
     /// one band's RX antenna (rxOnly false, 1..3) or RX-only antenna
     /// (rxOnly true, 0..3) on the Core.

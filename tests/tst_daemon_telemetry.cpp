@@ -7,6 +7,7 @@
 #include "core/RadioConnection.h"
 #include "core/daemon/DaemonTelemetryController.h"
 #include "core/daemon/HostTelemetrySampler.h"
+#include "core/HermesLiteBandwidthMonitor.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
 #include "core/settings/SettingsProxy.h"
@@ -293,8 +294,9 @@ private slots:
         controller.disableAutomaticSamplingForTest();
         h.server.setTelemetryEnabled(true);
         // 4 since remote-window parity Task 6 (the radio's PA readings and
-        // link quality); host telemetry came with 2.
-        QCOMPARE(h.server.buildCapabilities().stationTelemetryVersion, 4);
+        // link quality), 5 since Task 14 (the HL2 link); host telemetry came
+        // with 2.
+        QCOMPARE(h.server.buildCapabilities().stationTelemetryVersion, 5);
         QSignalSpy samples(&h.client, &StationClient::telemetryReceived);
         h.connectClient(this);
         QTRY_VERIFY(h.client.telemetryAvailable());
@@ -559,6 +561,8 @@ private slots:
         QCOMPARE(snapshot.radio.packetLossPercent, std::optional<double>(100.0 / 11.0));
         QCOMPARE(snapshot.radio.jitterMs, std::optional<double>(0.0));
         QVERIFY(snapshot.radio.packetGapMs);
+        // Parity Task 14: a G2 has no HL2 bandwidth monitor, so no HL2 link.
+        QVERIFY(snapshot.radio.hasNoHl2Link());
 
         // The radio gone: nothing rides.
         h.station.injectConnectionForTest(nullptr);
@@ -568,6 +572,51 @@ private slots:
         snapshot = lastSnapshot(samples);
         QVERIFY(!snapshot.radio.connected);
         QVERIFY(snapshot.radio.hasNoRadioStatus());
+    }
+
+    // R-R3-32 (remote-window parity Task 14): an HL2 Core's bandwidth
+    // monitor (the one its HL2 I/O tab, Radio Status and Connection Quality
+    // read) rides the sample at stationTelemetryVersion 5, and none rides
+    // while the radio is not connected.
+    void hl2LinkRidesTheSampleOnAnHl2()
+    {
+        SessionHarness h;
+        h.station.setBoardForTest(HPSDRHW::HermesLite);
+        h.station.setHpsdrModelForTest(HPSDRModel::HERMESLITE);
+        QVERIFY(h.station.boardCapabilities().hasBandwidthMonitor);
+        qint64 nowMs = 0;
+        DaemonTelemetryController controller(
+            &h.server, &h.station, nullptr, nullptr, [&] { return nowMs; });
+        controller.disableAutomaticSamplingForTest();
+        h.server.setTelemetryEnabled(true);
+        NullRadioConnection connection;
+        h.station.injectConnectionForTest(&connection);
+        QSignalSpy samples(&h.client, &StationClient::telemetryReceived);
+        h.connectClient(this);
+        QTRY_VERIFY(h.client.telemetryAvailable());
+
+        HermesLiteBandwidthMonitor& bw = h.station.bwMonitorMutable();
+        bw.recordEp6SequenceError();
+        bw.recordEp6SequenceError();
+        bw.recordEp6Bytes(1032);
+        bw.recordEp2Bytes(1032);
+        bw.tick();
+        nowMs = 100;
+        controller.sampleNow();
+        QTRY_COMPARE(samples.count(), 1);
+        StationTelemetrySnapshot snapshot = lastSnapshot(samples);
+        QCOMPARE(snapshot.radio.hl2SequenceGaps, std::optional<qint64>(2));
+        QCOMPARE(snapshot.radio.hl2Throttled, std::optional<bool>(bw.isThrottled()));
+        QCOMPARE(snapshot.radio.hl2RxBytesPerSecond,
+                 std::optional<double>(bw.ep6IngressBytesPerSec()));
+        QCOMPARE(snapshot.radio.hl2TxBytesPerSecond,
+                 std::optional<double>(bw.ep2EgressBytesPerSec()));
+
+        h.station.injectConnectionForTest(nullptr);
+        nowMs = 1100;
+        controller.sampleNow();
+        QTRY_COMPARE(samples.count(), 2);
+        QVERIFY(lastSnapshot(samples).radio.hasNoHl2Link());
     }
 
     void queuedRadioReadsRejectAReplyFromTheReplacedConnection()

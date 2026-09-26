@@ -2,6 +2,7 @@
 
 #include "core/daemon/DaemonTelemetryController.h"
 
+#include "core/HermesLiteBandwidthMonitor.h"
 #include "core/RadioConnection.h"
 #include "core/session/StationServer.h"
 #include "models/RadioModel.h"
@@ -287,6 +288,19 @@ void DaemonTelemetryController::applyRadioStatus(StationTelemetrySnapshot& snaps
     const int rateHz = m_radioModel->connectionSampleRateHz();
     if (rateHz > 0) {
         snapshot.radio.sampleRateHz = rateHz;
+    }
+    // R-R3-32 (remote-window parity Task 14, stationTelemetryVersion 5):
+    // the Hermes Lite 2 link as the Core's own HL2 I/O tab, Radio Status and
+    // Connection Quality show it, from the bandwidth monitor the Core's
+    // connection feeds. Only a radio with the monitor (the HL2) reports it.
+    if (m_radioModel->boardCapabilities().hasBandwidthMonitor) {
+        const HermesLiteBandwidthMonitor& bw = m_radioModel->bwMonitor();
+        const double rx = bw.ep6IngressBytesPerSec();
+        const double tx = bw.ep2EgressBytesPerSec();
+        if (std::isfinite(rx) && rx >= 0.0) { snapshot.radio.hl2RxBytesPerSecond = rx; }
+        if (std::isfinite(tx) && tx >= 0.0) { snapshot.radio.hl2TxBytesPerSecond = tx; }
+        snapshot.radio.hl2Throttled = bw.isThrottled();
+        snapshot.radio.hl2SequenceGaps = std::max(0, bw.ep6SequenceErrorCount());
     }
 }
 

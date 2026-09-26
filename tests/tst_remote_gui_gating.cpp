@@ -2721,15 +2721,25 @@ private slots:
             }
             return nullptr;
         };
-        const QStringList transmitChecks{QStringLiteral("Allow hot switching"),
-                                         QStringLiteral("HPF Bypass on TX"),
-                                         QStringLiteral("HPF Bypass on PureSignal feedback"),
-                                         QStringLiteral("Disable 6m LNA on TX")};
+        const QStringList transmitChecks{QStringLiteral("Allow hot switching")};
         for (const QString& text : transmitChecks) {
             QCheckBox* box = check(text);
             QVERIFY2(box != nullptr, qPrintable(text));
             QVERIFY2(!box->isEnabled(), qPrintable(text));
             QCOMPARE(box->toolTip(), transmitReason);
+        }
+        // Parity Task 14: the Alex TX master switches follow whether the
+        // Core takes them (radioHardwareVersion 7), not the transmit
+        // permission; this window has no Core that does
+        // (tst_remote_hl2_io covers one that does).
+        const QStringList hpfChecks{QStringLiteral("HPF Bypass on TX"),
+                                    QStringLiteral("HPF Bypass on PureSignal feedback"),
+                                    QStringLiteral("Disable 6m LNA on TX")};
+        for (const QString& text : hpfChecks) {
+            QCheckBox* box = check(text);
+            QVERIFY2(box != nullptr, qPrintable(text));
+            QVERIFY2(!box->isEnabled(), qPrintable(text));
+            QCOMPARE(box->toolTip(), IStationLink::alexHpfSwitchesUnavailableReason());
         }
 
         // A Core that permits transmit lifts it.
@@ -2737,6 +2747,9 @@ private slots:
         QVERIFY(hl2Options->transmitTimingsEnabledForTest());
         for (const QString& text : transmitChecks) {
             QVERIFY2(check(text)->isEnabled(), qPrintable(text));
+        }
+        for (const QString& text : hpfChecks) {
+            QVERIFY2(!check(text)->isEnabled(), qPrintable(text));
         }
         // It does not open what the Core's transmit settings gate holds.
         for (const QString& title : settingsGroups) {

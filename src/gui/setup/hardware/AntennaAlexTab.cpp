@@ -26,6 +26,9 @@
 //                Alex facade), so only Alex-1 Filters gets the transmit
 //                permission. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-26 - R-R3-46 / R-R3-49 (parity Task 14): forwards the Alex-1
+//                high-pass switches' availability. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -187,6 +190,11 @@ void AntennaAlexTab::setTransmitPermitted(bool permitted, const QString& reason)
     // Parity Task 12: Antenna Control's transmit half follows the Alex
     // facade's transmit edit availability instead.
     m_alex1Tab->setTransmitPermitted(permitted, reason);
+}
+
+void AntennaAlexTab::setHpfSwitchesAvailable(bool available, const QString& reason)
+{
+    m_alex1Tab->setHpfSwitchesAvailable(available, reason);
 }
 
 // ── restoreSettings ───────────────────────────────────────────────────────────

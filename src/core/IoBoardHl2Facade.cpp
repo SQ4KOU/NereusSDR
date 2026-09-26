@@ -15,6 +15,9 @@
 //                                    via Anthropic Claude Code.
 //   2026-09-24  J.J. Boyd / KG4VCF  clearRemoteValues (follow-up). AI-
 //                                    assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  `outputs` (remote-window parity Task
+//                                    14, R-R3-46). AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/IoBoardHl2Facade.h"
@@ -113,6 +116,12 @@ bool IoBoardHl2Facade::applyRemoteProperty(const QByteArray& property, const QVa
             m_hardwareVersion = version;
             emit hardwareVersionChanged(version);
         }
+    } else if (property == "outputs") {
+        const int bits = value.toInt() & 0xFF;
+        if (m_outputs != bits) {
+            m_outputs = bits;
+            emit outputsChanged(bits);
+        }
     } else if (property == "registers") {
         Registers parsed{};
         if (!decodeRegisters(value.toString(), &parsed)) {
@@ -137,12 +146,15 @@ void IoBoardHl2Facade::clearRemoteValues()
     const bool wasDetected = m_detected;
     const bool hadVersion = m_hardwareVersion != 0;
     const bool hadRegisters = m_registers != Registers{};
+    const bool hadOutputs = m_outputs != 0;
     m_detected = false;
     m_hardwareVersion = 0;
     m_registers = Registers{};
+    m_outputs = 0;
     if (wasDetected) { emit detectedChanged(false); }
     if (hadVersion) { emit hardwareVersionChanged(0); }
     if (hadRegisters) { emit registersChanged(registers()); }
+    if (hadOutputs) { emit outputsChanged(0); }
     pushToTarget();
 }
 
@@ -171,6 +183,11 @@ void IoBoardHl2Facade::refresh()
         m_registers = next;
         emit registersChanged(registers());
     }
+    const int outputs = board->registerValue(IoBoardHl2::Register::REG_OUT_PINS);
+    if (m_outputs != outputs) {
+        m_outputs = outputs;
+        emit outputsChanged(outputs);
+    }
 }
 
 void IoBoardHl2Facade::pushToTarget()
@@ -185,6 +202,10 @@ void IoBoardHl2Facade::pushToTarget()
         target->setRegisterValue(static_cast<IoBoardHl2::Register>(i),
                                  m_registers[static_cast<std::size_t>(i)]);
     }
+    // The output pins last, so the strip reads the Core's `outputs` even
+    // when a register list older than it arrived after it.
+    target->setRegisterValue(IoBoardHl2::Register::REG_OUT_PINS,
+                             static_cast<quint8>(m_outputs));
     target->setHardwareVersion(static_cast<quint8>(m_hardwareVersion));
     target->setDetected(m_detected);
 }

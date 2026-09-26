@@ -15,6 +15,11 @@
 //   2026-04-20 — Original implementation for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-26 - R-R3-32 (remote-window parity Task 14): the Connection
+//                Quality figures from RadioModel::hl2LinkFigures(), the
+//                Core's HL2 link in a remote window and said so;
+//                unavailable, never 0, when absent. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -114,6 +119,8 @@ private:
     QLabel* m_bwEp2Label{nullptr};
     QLabel* m_bwThrottleLabel{nullptr};
     QLabel* m_bwSeqGapLabel{nullptr};
+    // R-R3-32 (parity Task 14): says "from the Core" in a remote window.
+    QLabel* m_connTitleLabel{nullptr};
 
     // ── Settings hygiene card ─────────────────────────────────────────────
     QListWidget*  m_issueList{nullptr};

@@ -14,6 +14,11 @@
 #include "gui/RemoteAudioStatus.h"
 #include "gui/RemoteMediaController.h"
 #include "gui/RemoteTelemetryController.h"
+#include "gui/setup/hardware/Hl2IoBoardTab.h"
+#include "gui/diagnostics/DiagnosticsPhaseHPages.h"
+#include "gui/diagnostics/RadioStatusPage.h"
+#include <QGroupBox>
+#include <QLabel>
 #include "models/RadioModel.h"
 #include "OperatorWording.h"
 #include "fakes/LoopbackTransport.h"
@@ -621,7 +626,7 @@ private slots:
         server.acceptTransport(coreWire);
         client.startSession(guiWire, server.token());
         QTRY_VERIFY(client.isHandshakeComplete());
-        QCOMPARE(client.capabilities().stationTelemetryVersion, 4);
+        QCOMPARE(client.capabilities().stationTelemetryVersion, 5);
 
         StationTelemetrySnapshot sample;
         sample.sequence = 1;
@@ -736,6 +741,153 @@ private slots:
         QVERIFY(!StationTelemetryCodec::decode(offline, &out));
         sample.radio.paVolts = -2.0;
         QVERIFY(!StationTelemetryCodec::encode(sample));
+    }
+
+    // R-R3-32 (parity Task 14, stationTelemetryVersion 5): the Core's HL2
+    // link reaches the window's model and the HL2 I/O tab's bandwidth
+    // monitor, said to be the Core's; out of date, every figure is absent
+    // and shown as unavailable, never 0. The throttle event count is not
+    // sent, so a remote window never shows one.
+    void coreHl2LinkReachesTheWindow()
+    {
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
+        server.setTelemetryEnabled(true);
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        qint64 now = 10000;
+        RemoteTelemetryController controller(&client, nullptr, nullptr, [&] { return now; });
+        controller.setPaReadingsTarget(&remote);
+        QVERIFY(remote.hl2LinkFiguresFromCore());
+        QVERIFY(!remote.hl2LinkFigures().rxBytesPerSecond);
+        Hl2IoBoardTab ioTab(&remote);
+        ioTab.pollBandwidthNowForTest();
+        QCOMPARE(ioTab.ep6RateTextForTest(), QStringLiteral("Unavailable"));
+
+        auto* guiWire = new ObservedLoopback;
+        auto* coreWire = new Test::LoopbackTransport(QStringLiteral("Core"));
+        guiWire->linkTo(coreWire);
+        server.acceptTransport(coreWire);
+        client.startSession(guiWire, server.token());
+        QTRY_VERIFY(client.isHandshakeComplete());
+        QCOMPARE(client.capabilities().stationTelemetryVersion, 5);
+
+        StationTelemetrySnapshot sample;
+        sample.sequence = 1;
+        sample.sampledElapsedMs = 100;
+        sample.radio.connected = true;
+        sample.radio.hl2RxBytesPerSecond = 1250000.0;
+        sample.radio.hl2TxBytesPerSecond = 0.0;       // a measured zero is a value
+        sample.radio.hl2Throttled = true;
+        sample.radio.hl2SequenceGaps = 7;
+        QVERIFY(server.sendTelemetry(sample, server.sessionEpoch()));
+        QTRY_COMPARE(controller.current().state, RemoteTelemetryView::State::Current);
+        RadioModel::Hl2LinkFigures figures = remote.hl2LinkFigures();
+        QCOMPARE(figures.rxBytesPerSecond, std::optional<double>(1250000.0));
+        QCOMPARE(figures.txBytesPerSecond, std::optional<double>(0.0));
+        QCOMPARE(figures.throttled, std::optional<bool>(true));
+        QCOMPARE(figures.sequenceGaps, std::optional<qint64>(7));
+        QVERIFY(!figures.throttleEvents);
+        ioTab.pollBandwidthNowForTest();
+        QCOMPARE(ioTab.ep6RateTextForTest(), QStringLiteral("1.25 Mbps"));
+        QCOMPARE(ioTab.ep2RateTextForTest(), QStringLiteral("0.00 Mbps"));
+        QVERIFY(ioTab.throttleStatusTextForTest().contains(QStringLiteral("throttled")));
+        QVERIFY(!ioTab.throttleStatusTextForTest().contains(QStringLiteral("not")));
+        QCOMPARE(ioTab.throttleEventTextForTest(), QStringLiteral("Unavailable"));
+        // Radio Status's Connection Quality card and Diagnostics >
+        // Connection Quality's Live Counters, each said to be the Core's.
+        const auto hasLabel = [](QWidget* root, const QString& text) {
+            for (QLabel* label : root->findChildren<QLabel*>()) {
+                if (label->text() == text) { return true; }
+            }
+            return false;
+        };
+        RadioStatusPage status(&remote);
+        ConnectionQualityPage quality(&remote);
+        QTRY_VERIFY(hasLabel(&status, QStringLiteral("Connection Quality, from the Core")));
+        QTRY_VERIFY(hasLabel(&status, QStringLiteral("1220.7 KB/s")));
+        QVERIFY(hasLabel(&status, QStringLiteral("Active")));
+        QVERIFY(hasLabel(&status, QStringLiteral("7")));
+        QTRY_VERIFY(hasLabel(&quality, QStringLiteral("1250000 B/s")));
+        QVERIFY(hasLabel(&quality, QStringLiteral("THROTTLED")));
+        bool liveTitled = false;
+        for (QGroupBox* box : quality.findChildren<QGroupBox*>()) {
+            liveTitled = liveTitled || box->title() == QStringLiteral("Live Counters, from the Core");
+        }
+        QVERIFY(liveTitled);
+
+        // Out of date: every figure absent, shown as unavailable.
+        now += 5000;
+        controller.sampleNow();
+        QCOMPARE(controller.current().state, RemoteTelemetryView::State::Stale);
+        figures = remote.hl2LinkFigures();
+        QVERIFY(!figures.rxBytesPerSecond && !figures.txBytesPerSecond && !figures.throttled
+                && !figures.sequenceGaps);
+        ioTab.pollBandwidthNowForTest();
+        QCOMPARE(ioTab.ep6RateTextForTest(), QStringLiteral("Unavailable"));
+        QCOMPARE(ioTab.throttleStatusTextForTest(), QStringLiteral("Unavailable"));
+        QTRY_VERIFY(!hasLabel(&quality, QStringLiteral("1250000 B/s")));
+        QVERIFY(hasLabel(&quality, QStringLiteral("Unavailable")));
+        QTRY_VERIFY(!hasLabel(&status, QStringLiteral("1220.7 KB/s")));
+
+        client.disconnectFromStation(QStringLiteral("done"));
+    }
+
+    // R-R3-32 (parity Task 14): the version 5 fields' wire rules.
+    void hl2LinkCodecRules()
+    {
+        StationTelemetrySnapshot sample;
+        sample.sequence = 1;
+        sample.radio.connected = true;
+        sample.radio.hl2RxBytesPerSecond = 10.5;
+        sample.radio.hl2Throttled = false;
+        sample.radio.hl2SequenceGaps = 0;
+        const std::optional<QJsonObject> wire = StationTelemetryCodec::encode(sample);
+        QVERIFY(wire);
+        StationTelemetrySnapshot decoded;
+        QVERIFY(StationTelemetryCodec::decode(*wire, &decoded));
+        QCOMPARE(decoded.radio.hl2RxBytesPerSecond, std::optional<double>(10.5));
+        QCOMPARE(decoded.radio.hl2Throttled, std::optional<bool>(false));
+        QCOMPARE(decoded.radio.hl2SequenceGaps, std::optional<qint64>(0));
+        QVERIFY(!decoded.radio.hl2TxBytesPerSecond);   // absent stays absent
+
+        const auto rejects = [&](const char* key, const QJsonValue& value) {
+            QJsonObject object = *wire;
+            QJsonObject radio = object.value(QStringLiteral("radio")).toObject();
+            radio.insert(QString::fromLatin1(key), value);
+            object.insert(QStringLiteral("radio"), radio);
+            StationTelemetrySnapshot out;
+            return !StationTelemetryCodec::decode(object, &out);
+        };
+        QVERIFY(rejects("hl2RxBytesPerSecond", -1.0));
+        QVERIFY(rejects("hl2TxBytesPerSecond", QStringLiteral("fast")));
+        QVERIFY(rejects("hl2Throttled", 1));
+        QVERIFY(rejects("hl2SequenceGaps", 2.5));
+        // A disconnected radio reports none of them.
+        QJsonObject offline = *wire;
+        QJsonObject radio = offline.value(QStringLiteral("radio")).toObject();
+        radio.insert(QStringLiteral("connected"), false);
+        offline.insert(QStringLiteral("radio"), radio);
+        StationTelemetrySnapshot out;
+        QVERIFY(!StationTelemetryCodec::decode(offline, &out));
+        sample.radio.hl2SequenceGaps = -1;
+        QVERIFY(!StationTelemetryCodec::encode(sample));
+    }
+
+    // A window at version 4 (an older Core) drops the HL2 link fields.
+    void hl2LinkNeedsVersion5()
+    {
+        StationTelemetrySnapshot sample;
+        sample.radio.connected = true;
+        sample.radio.hl2RxBytesPerSecond = 1.0;
+        sample.radio.hl2Throttled = true;
+        sample.radio.paVolts = 13.8;
+        sample.radio.clearHl2Link();
+        QVERIFY(sample.radio.hasNoHl2Link());
+        QCOMPARE(sample.radio.paVolts, std::optional<double>(13.8));
     }
 
     void olderCoreIsExplicitlyUnsupported()

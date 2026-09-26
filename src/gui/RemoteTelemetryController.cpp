@@ -103,6 +103,17 @@ void RemoteTelemetryController::pushPaReadings()
         readings.paTemperatureCelsius = m_view.radio.paTemperatureCelsius;
     }
     m_paTarget->applyCorePaReadings(readings);
+    // R-R3-32 (parity Task 14): the Core's HL2 link the same way (station
+    // telemetry version 5); the throttle event count stays absent, since
+    // the Core does not send it.
+    RadioModel::Hl2LinkFigures hl2;
+    if (m_view.state == RemoteTelemetryView::State::Current) {
+        hl2.rxBytesPerSecond = m_view.radio.hl2RxBytesPerSecond;
+        hl2.txBytesPerSecond = m_view.radio.hl2TxBytesPerSecond;
+        hl2.throttled = m_view.radio.hl2Throttled;
+        hl2.sequenceGaps = m_view.radio.hl2SequenceGaps;
+    }
+    m_paTarget->applyCoreHl2LinkFigures(hl2);
 }
 
 qint64 RemoteTelemetryController::nowMs() const

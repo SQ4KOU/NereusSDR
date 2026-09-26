@@ -21739,6 +21739,326 @@ RadioModel::IoBoardProbeOutcome RadioModel::requestIoBoardProbe()
     return {false, QStringLiteral("The radio is not connected, so there is no I/O board to probe.")};
 }
 
+// ---------------------------------------------------------------------------
+// HL2 Options' I2C Control tool and Pin Control (remote-window parity Task
+// 14, R-R3-46). One code path for a local window and for a Core answering a
+// remote window (SessionCommandDispatcher requestIoBoardI2c and
+// setIoBoardOutput); a remote window asks its Core.
+//
+// MI0BOT: HL2 access to I2C bus  [original comment above each handler, mi0bot setup.cs:21440]
+// From mi0bot setup.cs:21441-21496 [@c26a8a4] btnI2CRead_MouseDown: power
+//   must be on; I2CReadInitiate(bus, address, control) (control = the
+//   register); then
+//     do { Thread.Sleep(1); status = NetworkIO.I2CResponse(read_data);
+//          if (timeout++ >= 20) break; } while (1 == status);
+//   and the four bytes are shown.
+// From mi0bot setup.cs:21504-21530 [@c26a8a4] btnI2CWrite_MouseDown:
+//   NetworkIO.I2CWrite(bus, address, controlReg, data); and when
+//   controlReg == 169 the output strip is read back (ucOutPinsLedStripHF_Click).
+// From mi0bot setup.cs:30006-30056 [@c26a8a4] ucOutPinsLedStripHF_Click and
+//   ucOutPinsLedStripHF_MouseDown: with the I/O board present, a click with
+//   Pin Control on writes register 169 at 0x1d on bus 1 with the clicked
+//   pin toggled, then reads 169 back and shows read_data[3].
+//
+// NereusSDR differences: mi0bot's handlers block the GUI thread while they
+// poll; here the answer arrives as a signal and the 21 ms (kIoBoardI2cAnswerMs)
+// run from the moment the read went out on a C&C frame (the codec's
+// i2cTxComposed), which is when mi0bot's poll loop starts. mi0bot has no
+// on-air rule for the tool; NereusSDR refuses a write and an output pin on
+// the air, because they reach the I/O board and the N2ADR filter board in
+// the transmit path (the remote-window parity plan's ruling for Task 14).
+// ---------------------------------------------------------------------------
+QString RadioModel::ioBoardNoAnswerReason()
+{
+    return QStringLiteral("The radio did not answer the I2C request.");
+}
+
+QString RadioModel::ioBoardI2cUnreachableReason() const
+{
+    if (!isConnected() || qobject_cast<P1RadioConnection*>(m_connection) == nullptr) {
+        return QStringLiteral("The radio is not connected, so its I2C bus cannot be reached.");
+    }
+    if (!boardCapabilities().hasIoBoardHl2) {
+        return QStringLiteral("Only a Hermes Lite 2 has this I2C bus.");
+    }
+    return {};
+}
+
+void RadioModel::wireIoBoardTool()
+{
+    if (m_ioBoardToolWired) {
+        return;
+    }
+    m_ioBoardToolWired = true;
+    // The codec emits these on the connection thread; they arrive queued,
+    // in the order they were sent.
+    connect(&m_ioBoard, &IoBoardHl2::i2cTxComposed, this,
+            [this](quint8 /*c0*/, quint8 c1, quint8 c2, quint8 c3, quint8 /*c4*/) {
+                // A read goes out with C1 0x07; C2 is 0x80 | the address and
+                // C3 the register (P1CodecHl2::tryComposeI2cFrame).
+                if (c1 != 0x07) {
+                    return;
+                }
+                const quint8 address = static_cast<quint8>(c2 & 0x7F);
+                for (PendingIoBoardRead& read : m_pendingIoBoardReads) {
+                    if (!read.sent && read.address == address && read.reg == c3) {
+                        read.sent = true;
+                        const quint64 id = read.id;
+                        QTimer::singleShot(kIoBoardI2cAnswerMs, Qt::PreciseTimer, this,
+                                           [this, id]() {
+                                               finishIoBoardRead(id, false, 0,
+                                                                 ioBoardNoAnswerReason());
+                                           });
+                        return;
+                    }
+                }
+            });
+    connect(&m_ioBoard, &IoBoardHl2::i2cReadAnswered, this,
+            [this](quint8 address, quint8 reg, quint8 c1, quint8 c2, quint8 c3, quint8 c4) {
+                for (const PendingIoBoardRead& read : std::as_const(m_pendingIoBoardReads)) {
+                    if (read.address == address && read.reg == reg) {
+                        const qint64 value = (qint64(c1) << 24) | (qint64(c2) << 16)
+                                           | (qint64(c3) << 8) | qint64(c4);
+                        finishIoBoardRead(read.id, true, value, {});
+                        return;
+                    }
+                }
+            });
+    // A radio that goes away answers nothing more.
+    connect(this, &RadioModel::connectionStateChanged, this, [this]() {
+        if (isConnected()) {
+            return;
+        }
+        QList<quint64> ids;
+        for (const PendingIoBoardRead& read : std::as_const(m_pendingIoBoardReads)) {
+            ids.append(read.id);
+        }
+        for (quint64 id : ids) {
+            finishIoBoardRead(id, false, 0, ioBoardNoAnswerReason());
+        }
+    });
+}
+
+void RadioModel::finishIoBoardRead(quint64 id, bool ok, qint64 value, const QString& reason)
+{
+    for (qsizetype i = 0; i < m_pendingIoBoardReads.size(); ++i) {
+        if (m_pendingIoBoardReads.at(i).id == id) {
+            IoBoardI2cDone done = std::move(m_pendingIoBoardReads[i].done);
+            m_pendingIoBoardReads.removeAt(i);
+            if (done) {
+                done(ok, value, reason);
+            }
+            return;
+        }
+    }
+}
+
+void RadioModel::enqueueIoBoardTxn(quint8 address, quint8 reg, bool write, quint8 value)
+{
+    IoBoardHl2::I2cTxn txn;
+    txn.bus = IoBoardHl2::kI2cBusIndex;
+    txn.address = address;
+    txn.control = reg;
+    txn.writeData = write ? value : quint8(0);
+    txn.isRead = !write;
+    txn.needsResponse = !write;
+    if (!m_ioBoard.enqueueI2c(txn)) {
+        qCWarning(lcConnection) << "HL2: I2C queue full; transaction dropped"
+                                << Qt::hex << address << reg;
+    }
+}
+
+void RadioModel::requestIoBoardI2c(const IoBoardI2cRequest& request, IoBoardI2cDone done)
+{
+    const auto finish = [&done](bool ok, qint64 value, const QString& reason) {
+        if (done) {
+            done(ok, value, reason);
+        }
+    };
+    if (m_role == Role::Remote) {
+        if (m_station == nullptr) {
+            finish(false, 0, QStringLiteral("Connect to the Core to use the I2C bus."));
+            return;
+        }
+        const IStationLink::CommandOutcome outcome = m_station->requestIoBoardI2c(
+            request.bus, request.address, request.reg, request.write, request.value);
+        if (!outcome.sent) {
+            finish(false, 0, outcome.reason);
+            return;
+        }
+        m_stationIoBoardRequests.insert(outcome.commandId, std::move(done));
+        return;
+    }
+    if (const QString unreachable = ioBoardI2cUnreachableReason(); !unreachable.isEmpty()) {
+        finish(false, 0, unreachable);
+        return;
+    }
+    // The tool's own ranges (Hl2OptionsTab): bus 1, the daughterboard bus
+    // (bus 0 is not built); a 7-bit address; a register and data byte.
+    if (request.bus != IoBoardHl2::kI2cBusIndex) {
+        finish(false, 0, QStringLiteral("Only I2C bus 1 can be reached."));
+        return;
+    }
+    if (request.address < 0 || request.address > 0x7F) {
+        finish(false, 0, QStringLiteral("Choose an I2C address from 0x00 to 0x7F."));
+        return;
+    }
+    if (request.reg < 0 || request.reg > 0xFF
+        || (request.write && (request.value < 0 || request.value > 0xFF))) {
+        finish(false, 0, QStringLiteral("Choose a register and a value from 0x00 to 0xFF."));
+        return;
+    }
+    const quint8 address = static_cast<quint8>(request.address);
+    const quint8 reg = static_cast<quint8>(request.reg);
+    if (request.write) {
+        QString onAir;
+        if (stationOnAirRefusal(&onAir)) {
+            finish(false, 0, onAir);
+            return;
+        }
+        enqueueIoBoardTxn(address, reg, /*write=*/true, static_cast<quint8>(request.value));
+        // From mi0bot setup.cs:21524-21527 [@c26a8a4]: a write to 169 reads
+        // the output register back for the strip.
+        // MI0BOT: HL2 access to I2C bus  [original comment from mi0bot setup.cs:21532, the next handler's]
+        if (address == IoBoardHl2::kI2cAddrGeneral
+            && reg == static_cast<quint8>(IoBoardHl2::Register::REG_OUT_PINS)) {
+            refreshIoBoardOutputs();
+        }
+        finish(true, 0, {});
+        return;
+    }
+    wireIoBoardTool();
+    PendingIoBoardRead read;
+    read.id = m_nextIoBoardReadId++;
+    read.address = address;
+    read.reg = reg;
+    read.done = std::move(done);
+    m_pendingIoBoardReads.append(std::move(read));
+    enqueueIoBoardTxn(address, reg, /*write=*/false, 0);
+}
+
+void RadioModel::setIoBoardOutput(int pin, bool on, IoBoardI2cDone done)
+{
+    const auto finish = [&done](bool ok, const QString& reason) {
+        if (done) {
+            done(ok, 0, reason);
+        }
+    };
+    if (m_role == Role::Remote) {
+        if (m_station == nullptr) {
+            finish(false, QStringLiteral("Connect to the Core to switch the I/O board's outputs."));
+            return;
+        }
+        const IStationLink::CommandOutcome outcome = m_station->requestIoBoardOutput(pin, on);
+        if (!outcome.sent) {
+            finish(false, outcome.reason);
+            return;
+        }
+        m_stationIoBoardRequests.insert(outcome.commandId, std::move(done));
+        return;
+    }
+    if (const QString unreachable = ioBoardI2cUnreachableReason(); !unreachable.isEmpty()) {
+        finish(false, unreachable);
+        return;
+    }
+    if (pin < 0 || pin > 7) {
+        finish(false, QStringLiteral("The I/O board's outputs are numbered 0 to 7."));
+        return;
+    }
+    // From mi0bot setup.cs:30041-30043 [@c26a8a4]: only with the board present.
+    if (!m_ioBoard.isDetected()) {
+        finish(false, QStringLiteral("The radio's I/O board was not found."));
+        return;
+    }
+    QString onAir;
+    if (stationOnAirRefusal(&onAir)) {
+        finish(false, onAir);
+        return;
+    }
+    const quint8 bit = static_cast<quint8>(1u << pin);
+    const quint8 current = m_ioBoard.registerValue(IoBoardHl2::Register::REG_OUT_PINS);
+    const quint8 mask = on ? static_cast<quint8>(current | bit)
+                           : static_cast<quint8>(current & ~bit);
+    // From mi0bot setup.cs:30050 [@c26a8a4]:
+    //   NetworkIO.I2CWrite(1, 0x1d, 169, ucOutPinsLedStripHF.Bits ^ mask);
+    enqueueIoBoardTxn(IoBoardHl2::kI2cAddrGeneral,
+                      static_cast<quint8>(IoBoardHl2::Register::REG_OUT_PINS),
+                      /*write=*/true, mask);
+    // From mi0bot setup.cs:30054 [@c26a8a4]: ucOutPinsLedStripHF_Click
+    // reads the register back.
+    refreshIoBoardOutputs();
+    finish(true, {});
+}
+
+void RadioModel::refreshIoBoardOutputs()
+{
+    constexpr quint8 kOutputRegister = static_cast<quint8>(IoBoardHl2::Register::REG_OUT_PINS);
+    if (m_role == Role::Remote) {
+        // The Core reads it; the answer returns on `ioBoard` outputs.
+        if (m_station != nullptr && m_ioBoardFacade != nullptr && m_ioBoardFacade->detected()) {
+            IoBoardI2cRequest request;
+            request.address = IoBoardHl2::kI2cAddrGeneral;
+            request.reg = kOutputRegister;
+            requestIoBoardI2c(request, {});
+        }
+        return;
+    }
+    // From mi0bot setup.cs:30012-30016 [@c26a8a4]: only with the board
+    // present, I2CReadInitiate(1, 0x1d, 169).
+    if (!ioBoardI2cUnreachableReason().isEmpty() || !m_ioBoard.isDetected()) {
+        return;
+    }
+    enqueueIoBoardTxn(IoBoardHl2::kI2cAddrGeneral, kOutputRegister, /*write=*/false, 0);
+}
+
+void RadioModel::reportStationIoBoardResult(quint32 commandId, bool accepted,
+                                            const QString& reason,
+                                            std::optional<qint64> value)
+{
+    const auto it = m_stationIoBoardRequests.find(commandId);
+    if (it == m_stationIoBoardRequests.end()) {
+        return;
+    }
+    IoBoardI2cDone done = std::move(it.value());
+    m_stationIoBoardRequests.erase(it);
+    if (done) {
+        done(accepted, accepted ? value.value_or(0) : 0, accepted ? QString() : reason);
+    }
+}
+
+void RadioModel::failStationIoBoardRequests(const QString& reason)
+{
+    const QHash<quint32, IoBoardI2cDone> waiting = std::exchange(m_stationIoBoardRequests, {});
+    for (const IoBoardI2cDone& done : waiting) {
+        if (done) {
+            done(false, 0, reason);
+        }
+    }
+}
+
+RadioModel::Hl2LinkFigures RadioModel::hl2LinkFigures() const
+{
+    // R-R3-32 (parity Task 14): a remote window shows the Core's.
+    if (m_role == Role::Remote) {
+        return m_coreHl2LinkFigures;
+    }
+    Hl2LinkFigures figures;
+    figures.rxBytesPerSecond = m_bwMonitor.ep6IngressBytesPerSec();
+    figures.txBytesPerSecond = m_bwMonitor.ep2EgressBytesPerSec();
+    figures.throttled = m_bwMonitor.isThrottled();
+    figures.sequenceGaps = m_bwMonitor.ep6SequenceErrorCount();
+    figures.throttleEvents = m_bwMonitor.throttleEventCount();
+    return figures;
+}
+
+void RadioModel::applyCoreHl2LinkFigures(const Hl2LinkFigures& figures)
+{
+    if (m_role != Role::Remote) {
+        return;
+    }
+    m_coreHl2LinkFigures = figures;
+}
+
 // Phase 3Q Sub-PR-4 D.3 — Segment hover tooltip.
 // Jitter / packet-loss / audio-backend rows omitted until those metrics
 // have real sources — no NYI placeholders per the "no NYI" rule.

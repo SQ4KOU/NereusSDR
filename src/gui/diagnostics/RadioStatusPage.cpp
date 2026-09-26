@@ -20,6 +20,11 @@
 //                the Core's in a remote window and said so; unavailable,
 //                never 0, when absent. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-26 - R-R3-32 (remote-window parity Task 14): the Connection
+//                Quality figures from RadioModel::hl2LinkFigures(), the
+//                Core's HL2 link in a remote window and said so;
+//                unavailable, never 0, when absent. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "RadioStatusPage.h"
@@ -543,6 +548,7 @@ void RadioStatusPage::buildConnectionCard(QFrame* card)
     v->setContentsMargins(8, 6, 8, 6);
 
     auto* title = new QLabel(QStringLiteral("Connection Quality"), card);
+    m_connTitleLabel = title;
     title->setStyleSheet(QStringLiteral(
         "font-size: 10px; font-weight: bold; color: %1; border: none;"
     ).arg(QLatin1String(Style::kAccent)));
@@ -801,18 +807,34 @@ void RadioStatusPage::onBwPollTick()
 {
     if (!m_model) { return; }
 
-    const HermesLiteBandwidthMonitor& bw = m_model->bwMonitor();
-
-    double ep6Bps = bw.ep6IngressBytesPerSec();
-    double ep2Bps = bw.ep2EgressBytesPerSec();
-    bool throttled = bw.isThrottled();
-    int throttleEvents = bw.throttleEventCount();
-
-    m_bwEp6Label->setText(QStringLiteral("%1 KB/s").arg(ep6Bps / 1024.0, 0, 'f', 1));
-    m_bwEp2Label->setText(QStringLiteral("%1 KB/s").arg(ep2Bps / 1024.0, 0, 'f', 1));
-    m_bwThrottleLabel->setText(QStringLiteral("%1%2")
-        .arg(throttleEvents)
-        .arg(throttled ? QStringLiteral(" (active)") : QString{}));
+    // R-R3-32 (parity Task 14): this window's HL2 link, or in a remote
+    // window the Core's; one the Core has not sent shows as unavailable.
+    const RadioModel::Hl2LinkFigures figures = m_model->hl2LinkFigures();
+    const bool fromCore = m_model->hl2LinkFiguresFromCore();
+    const QString unavailable = tr("Unavailable");
+    const QString source = fromCore ? tr("From the Core") : QString();
+    if (m_connTitleLabel) {
+        m_connTitleLabel->setText(fromCore ? tr("Connection Quality, from the Core")
+                                           : tr("Connection Quality"));
+    }
+    const auto kilobytes = [&unavailable](std::optional<double> bps) {
+        return bps ? QStringLiteral("%1 KB/s").arg(*bps / 1024.0, 0, 'f', 1) : unavailable;
+    };
+    m_bwEp6Label->setText(kilobytes(figures.rxBytesPerSecond));
+    m_bwEp2Label->setText(kilobytes(figures.txBytesPerSecond));
+    const bool throttled = figures.throttled.value_or(false);
+    const QString active = throttled ? QStringLiteral(" (active)") : QString{};
+    if (figures.throttleEvents) {
+        m_bwThrottleLabel->setText(QStringLiteral("%1%2").arg(*figures.throttleEvents).arg(active));
+    } else if (figures.throttled) {
+        // The Core sends whether its link is throttled, not the count.
+        m_bwThrottleLabel->setText(throttled ? tr("Active") : tr("None active"));
+    } else {
+        m_bwThrottleLabel->setText(unavailable);
+    }
+    for (QLabel* label : {m_bwEp6Label, m_bwEp2Label, m_bwThrottleLabel, m_bwSeqGapLabel}) {
+        label->setToolTip(source);
+    }
 
     if (throttled) {
         m_bwThrottleLabel->setStyleSheet(QStringLiteral(
@@ -826,7 +848,8 @@ void RadioStatusPage::onBwPollTick()
 
     // R-R3-21: the EP6 sequence error count P1RadioConnection keeps (the
     // Connection Quality page shows the same number).
-    m_bwSeqGapLabel->setText(QString::number(bw.ep6SequenceErrorCount()));
+    m_bwSeqGapLabel->setText(figures.sequenceGaps ? QString::number(*figures.sequenceGaps)
+                                                  : unavailable);
 }
 
 void RadioStatusPage::refreshPttPills()

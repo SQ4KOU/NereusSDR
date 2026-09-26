@@ -39,6 +39,31 @@ struct StationRadioTelemetry {
     std::optional<qint64> sampleRateHz;
     std::optional<qint64> udpPacketsSeen;
 
+    // R-R3-32 (remote-window parity Task 14; session minor 11,
+    // stationTelemetryVersion 5). The Core's Hermes Lite 2 link as its own
+    // window shows it (RadioModel::bwMonitor(), HermesLiteBandwidthMonitor),
+    // each absent unless the Core's radio has the bandwidth monitor (the
+    // HL2) and is connected: the bytes per second received from the radio
+    // (EP6) and sent to it (EP2), whether the LAN link is throttled, and
+    // the EP6 sequence gaps since the radio connected.
+    std::optional<double> hl2RxBytesPerSecond;
+    std::optional<double> hl2TxBytesPerSecond;
+    std::optional<bool> hl2Throttled;
+    std::optional<qint64> hl2SequenceGaps;
+
+    // True when no version 5 field is present.
+    bool hasNoHl2Link() const
+    {
+        return !hl2RxBytesPerSecond && !hl2TxBytesPerSecond && !hl2Throttled
+            && !hl2SequenceGaps;
+    }
+    // Clears every version 5 field (for a peer that did not negotiate it).
+    void clearHl2Link()
+    {
+        hl2RxBytesPerSecond.reset(); hl2TxBytesPerSecond.reset();
+        hl2Throttled.reset(); hl2SequenceGaps.reset();
+    }
+
     // True when no version 4 field is present.
     bool hasNoRadioStatus() const
     {

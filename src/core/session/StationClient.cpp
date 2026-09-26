@@ -173,6 +173,11 @@
 //                antenna at a time (setAlexTxAntenna) from
 //                radioHardwareVersion 6. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-26 - R-R3-46 / R-R3-32 (parity Task 14): requestIoBoardI2c and
+//                setIoBoardOutput (radioHardwareVersion 7) with their
+//                answers routed to the model; the HL2 link fields kept only
+//                from a Core at stationTelemetryVersion 5. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -1261,6 +1266,10 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
             // R-R3-49: likewise the Core's transmit state, so a Core that
             // does not send `transmitting` never inherits "on the air".
             m_radioModel->clearRemoteTransmittingState();
+            // R-R3-46 (parity Task 14): an I2C or output pin request still
+            // waiting on the Core gets no answer now.
+            m_radioModel->failStationIoBoardRequests(
+                QStringLiteral("The link to the Core closed before the radio answered."));
             if (TunerModel* const tuner = m_radioModel->tunerModel()) {
                 TunerModel::StationConnectionState disconnected;
                 disconnected.configuredHost = tuner->configuredHost();
@@ -1516,6 +1525,12 @@ void StationClient::onTransportText(const QByteArray& wire)
             if (m_agreedMinor < kReceiverLoadSessionProtocolMinor
                 || m_capabilities.stationTelemetryVersion < 4) {
                 message.telemetry.radio.clearRadioStatus();
+            }
+            // R-R3-32 (parity Task 14): and the HL2 link only from one that
+            // negotiated version 5.
+            if (m_agreedMinor < kReceiverLoadSessionProtocolMinor
+                || m_capabilities.stationTelemetryVersion < 5) {
+                message.telemetry.radio.clearHl2Link();
             }
             emit telemetryReceived(message.telemetry, m_sessionEpoch);
         }
@@ -3407,6 +3422,37 @@ StationClient::CommandOutcome StationClient::requestFilterPolicy(int chain, int 
                        QStringLiteral("the filter policy change"));
 }
 
+bool StationClient::radioHardwareAvailable(int minVersion) const
+{
+    return remoteHardwareConfigAvailable()
+        && m_capabilities.radioHardwareVersion >= std::max(minVersion, 1);
+}
+
+StationClient::CommandOutcome StationClient::requestIoBoardI2c(int bus, int address, int reg,
+                                                              bool write, int value)
+{
+    if (!radioHardwareAvailable(7)) {
+        return {false, remoteHardwareConfigAvailable() ? ioBoardI2cUnavailableReason()
+                                                       : hardwareConfigUnavailableReason()};
+    }
+    return sendCommand("requestIoBoardI2c", -1,
+                       { intArgument("bus", bus), intArgument("address", address),
+                         intArgument("register", reg), boolArgument("write", write),
+                         intArgument("value", value) },
+                       QStringLiteral("the I2C request"));
+}
+
+StationClient::CommandOutcome StationClient::requestIoBoardOutput(int pin, bool on)
+{
+    if (!radioHardwareAvailable(7)) {
+        return {false, remoteHardwareConfigAvailable() ? ioBoardI2cUnavailableReason()
+                                                       : hardwareConfigUnavailableReason()};
+    }
+    return sendCommand("setIoBoardOutput", -1,
+                       { intArgument("pin", pin), boolArgument("on", on) },
+                       QStringLiteral("the I/O board output change"));
+}
+
 StationClient::CommandOutcome StationClient::requestIoBoardProbe()
 {
     if (!remoteHardwareConfigAvailable()) {
@@ -4005,6 +4051,22 @@ void StationClient::handleCommandResult(const SessionMessage& message)
             m_radioModel->pureSignalFacade()->receiveRemoteActionResult(message.commandId,
                 message.commandVerb, phase, message.reason, *values);
         }
+    }
+    // R-R3-46 (parity Task 14): the Core's answer to an I2C request (a
+    // read's bytes in `value`) or an output pin change, to the model,
+    // which hands it to the tab that asked.
+    if ((pending.verb == "requestIoBoardI2c" || pending.verb == "setIoBoardOutput")
+        && !m_radioModel.isNull()) {
+        std::optional<qint64> value;
+        for (const MirrorUpdate& update : message.updates) {
+            if (update.name == "value" && update.kind == MirrorWireKind::Int64) {
+                value = update.value.toLongLong();
+            }
+        }
+        const QPointer<StationClient> self(this);
+        m_radioModel->reportStationIoBoardResult(message.commandId, message.accepted,
+                                                 message.reason, value);
+        if (!self) { return; }
     }
     // R-R3-49 (parity Task 8): the Core's Scan LAN answer, to the window's
     // scan dialog (a refusal is also routed as an accessory refusal above).
