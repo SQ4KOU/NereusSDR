@@ -8,19 +8,22 @@ not on one network. It has two parts, and a server running it has both:
   to Cores over a WebSocket at `wss://rv.<your domain>/`, hands out relay
   credentials, and holds pairing mailboxes. It keeps everything in memory.
   Its wire is [the rendezvous document](../docs/architecture/2026-09-23-rendezvous-v1.md).
+  Caddy sits in front of it for TLS.
 - **The relay**: coturn, Ubuntu's own package, on UDP 3478 and UDP 443. It
   carries a session only when the two ends cannot reach each other directly.
 
-NereusSDR uses `rv.nereussdr.com`, which runs beside the website on the same
-server. Anyone can run their own; this file is the whole recipe. Every
-default in the scripts is nereussdr.com's, and each one is a setting.
+NereusSDR uses `rv.nereussdr.com`, on a server of its own. Anyone can run
+their own; this file is the whole recipe. Every default in the scripts is
+nereussdr.com's, and each one is a setting.
 
 - `server/`: the service. `rendezvous.conf.sample` lists every setting.
 - `deploy/`: `setup-server.sh` (prepares a server; safe to run again),
-  `turnserver.conf` (coturn's configuration), `nereus-rendezvous.service`
-  (the service's systemd unit), `coturn-override.conf` (a drop-in for
-  Ubuntu's coturn unit), and the data-use report (`data-use.py`,
-  `nereus-data-use.service` and `nereus-data-use.timer`; see "Data use").
+  `Caddyfile` (Caddy's configuration for the service), `turnserver.conf`
+  (coturn's configuration), `nereus-rendezvous.service` (the service's
+  systemd unit), `coturn-override.conf` and `caddy-override.conf` (drop-ins
+  for the packaged coturn and Caddy units), and the data-use report
+  (`data-use.py`, `nereus-data-use.service` and `nereus-data-use.timer`;
+  see "Data use").
 - `deploy.sh`: publishes the service's code to the server.
 - `conformance/`: the vectors the service, the Core and the app all run.
 - `tests/`: the service's tests (`python3 -m pytest rendezvous/tests -q`) and
@@ -42,12 +45,15 @@ program's outgoing connection.
 
 ## Self-hosting
 
-You need an Ubuntu 24.04 server with a public IPv4 and a public IPv6 address
-on its network interface (a typical VPS; behind a provider's NAT, coturn
-would also need its `external-ip` setting, which this recipe does not
-cover), a domain whose DNS you control, SSH to the server as root, and
-`rsync` on both ends (Ubuntu's server images and macOS have it). The commands below use `example.org`; use
-your own names.
+You need a server of its own for the rendezvous: Ubuntu 24.04 with a public
+IPv4 and a public IPv6 address on its network interface (a typical VPS;
+behind a provider's NAT, coturn would also need its `external-ip` setting,
+which this recipe does not cover), a domain whose DNS you control, SSH to
+the server as root, and `rsync` on your own computer (macOS has it). For up
+to 2000 Cores, 2 GB of memory is recommended; 1 GB carries them in normal
+use, and loses the service for a few seconds at a time if someone
+deliberately fills its connections (the rendezvous document, section 9.1).
+The commands below use `example.org`; use your own names.
 
 ### 1. DNS
 
@@ -63,11 +69,11 @@ both address families (a client on an IPv6-only mobile network needs an
 IPv6 relay, and one on an old IPv4-only network an IPv4 one), and the ICE
 library in NereusSDR looks up one address for each relay name, preferring
 IPv4. So each family gets a name of its own, and the service hands out
-both. The service's own name has both records.
+both, IPv4 first. The service's own name has both records.
 
 Caddy obtains the certificate for `rv.example.org` from Let's Encrypt on its
 own once the A and AAAA records point at the server and TCP 80 and 443 are
-open. The relay names need no certificate.
+open, so set DNS up first. The relay names need no certificate.
 
 ### 2. Firewall
 
@@ -86,7 +92,7 @@ ufw enable
 
 (With a cloud provider's firewall instead, open the same ports there, for
 both IPv4 and IPv6.) Nothing else needs to be reachable: the service listens
-on loopback only.
+on loopback only. `setup-server.sh` never changes the firewall.
 
 ### 3. Copy the files to the server
 
@@ -101,26 +107,13 @@ scp -r rendezvous root@rv.example.org:/root/rendezvous
 (The `rm` first: copying onto an earlier copy would put the new one inside
 it, as `/root/rendezvous/rendezvous`, and leave the old files in use.)
 
-### 4. The deploy account
-
-`deploy.sh` publishes the code as an ordinary account, never as root. On
-nereussdr.com that is the website's `nereusweb`. On a server of your own, as
-root, make one and give it your SSH public key:
-
-<!-- check: server -->
-```sh
-useradd --create-home --shell /bin/bash nereusweb
-install -d -m 700 -o nereusweb -g nereusweb /home/nereusweb/.ssh
-echo 'ssh-ed25519 AAAA...your key... you@computer' > /home/nereusweb/.ssh/authorized_keys
-chown nereusweb:nereusweb /home/nereusweb/.ssh/authorized_keys
-chmod 600 /home/nereusweb/.ssh/authorized_keys
-```
-
-### 5. Settings
+### 4. Settings
 
 On the server, as root, name your hosts, how many relays may run at once,
-and your server's monthly transfer allowance in GB (see "Limits" and "Data
-use" below):
+your server's monthly transfer allowance in GB (see "Limits" and "Data use"
+below), and the SSH public key of the account `deploy.sh` will publish the
+code as (`setup-server.sh` makes that account, `nereusrv`, with exactly
+this key):
 
 <!-- check: settings -->
 ```sh
@@ -129,123 +122,60 @@ export RV_RELAY_HOST4=rv4.example.org
 export RV_RELAY_HOST6=rv6.example.org
 export RV_RELAY_SLOTS=64
 export RV_TRANSFER_GB_PER_MONTH=1000
+export RV_DEPLOY_KEY='ssh-ed25519 AAAA...your key... you@computer'
 ```
 
-`setup-server.sh` finds the server's public addresses itself; set
-`RV_PUBLIC_IPV4` and `RV_PUBLIC_IPV6` if it picks the wrong ones. It counts
-data use on the interface of the default route; set `RV_DATA_USE_INTERFACE`
-to count another. Every value that belongs to one server is one of these
-settings, so the same files move to another server unchanged.
+`setup-server.sh` finds the rest itself; set `RV_PUBLIC_IPV4` and
+`RV_PUBLIC_IPV6` if it picks the wrong public addresses,
+`RV_DATA_USE_INTERFACE` to count data use on another interface than the
+default route's, and `RV_MEMORY_MB` to size the memory limits for another
+amount than the server reports. Every value that belongs to one server is
+one of these settings, so the same files move to another server unchanged.
 
-### 6. Caddy
-
-Caddy terminates TLS for the service. Install it from Caddy's own apt
-repository (the commands from Caddy's install page):
-
-<!-- check: server -->
-```sh
-apt-get update
-apt-get install -y debian-keyring debian-archive-keyring apt-transport-https curl gnupg
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/gpg.key' | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg
-curl -1sLf 'https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt' -o /etc/apt/sources.list.d/caddy-stable.list
-chmod o+r /usr/share/keyrings/caddy-stable-archive-keyring.gpg /etc/apt/sources.list.d/caddy-stable.list
-apt-get update
-apt-get install -y caddy
-```
-
-Then give it the rendezvous site. On a server with nothing else on it, this
-is the whole Caddyfile:
-
-<!-- check: server -->
-```sh
-cat > /etc/caddy/Caddyfile <<EOF
-{
-	# HTTP/3 off: it would take UDP 443, which is the relay's.
-	servers {
-		protocols h1 h2
-	}
-}
-
-${RV_HOST} {
-	header {
-		Strict-Transport-Security "max-age=31536000"
-		X-Content-Type-Options "nosniff"
-		Referrer-Policy "no-referrer"
-		X-Frame-Options "DENY"
-		Content-Security-Policy "default-src 'none'; frame-ancestors 'none'"
-		-Server
-		-Via
-	}
-
-	reverse_proxy 127.0.0.1:8710 [::1]:8710 {
-		lb_policy first
-		header_up X-Forwarded-For {remote_host}
-		stream_close_delay 5m
-	}
-
-	@http1 protocol http/1.1
-	header @http1 ?Upgrade websocket
-}
-EOF
-caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
-```
-
-<!-- check: service -->
-```sh
-systemctl reload caddy
-```
-
-Every request goes to the service, which upgrades a WebSocket and answers
-anything else with `426`, a short text and `Upgrade: websocket` (the last
-line puts that header back on HTTP/1.1 answers, since a proxy drops it). No
-matcher picks WebSockets out in Caddy, because Caddy compares header values
-exactly and Apple's WebSocket client sends `Upgrade: WebSocket`. Clients open
-the WebSocket over HTTP/1.1 (the rendezvous document, section 2): Caddy
-offers no WebSockets over HTTP/2.
-
-**Beside a website.** If the server already serves a website with Caddy, do
-not replace its Caddyfile: add the `${RV_HOST} { ... }` block to it, and make
-sure its global options block has `protocols h1 h2` as above (Caddy's HTTP/3
-would otherwise take UDP 443 from the relay). That is how nereussdr.com runs:
-see `website/deploy/Caddyfile`, whose `rv.nereussdr.com` site is this block
-with an error page. The website's own blocks do not change. The
-`header_up X-Forwarded-For {remote_host}` line matters: the service takes the
-client's address from the last entry of that header, and believes it only
-from a loopback peer.
-
-### 7. The relay and the service
+### 5. Set up the server
 
 As root, check first, then set up:
 
 <!-- check: server -->
 ```sh
-apt-get install -y python3   # already there on Ubuntu's server images
+apt-get update && apt-get install -y python3   # already there on Ubuntu server images
 bash /root/rendezvous/deploy/setup-server.sh --dry-run
 bash /root/rendezvous/deploy/setup-server.sh
 ```
 
-`setup-server.sh` installs coturn, `python3-websockets` and
-`python3-cryptography` from Ubuntu (without letting coturn start with its
-stock configuration, and with coturn disabled until its configuration is in
-place), makes the TURN secret (root only, in
-`/etc/nereus-rendezvous/turn-secret`), writes `/etc/turnserver.conf` and
-`/etc/nereus-rendezvous/rendezvous.conf`, installs the service's unit,
-coturn's drop-in and the data-use report, enables all three and starts
-coturn. Run again, it restarts coturn or the service only when one of its
-files changed (a coturn restart drops every relay in use), and the dry run
-says which it would restart. It refuses to go on while another program holds
-UDP 3478 or 443 (Caddy's TCP 443 is no obstacle). It never touches the
-firewall, Caddy, or any account but the deploy account's code directory,
-`/opt/nereus-rendezvous`.
+`setup-server.sh`:
 
-### 8. The service's code
+- installs Caddy from Caddy's own apt repository, and coturn,
+  `python3-websockets`, `python3-cryptography` and `rsync` from Ubuntu,
+  without letting any package start a service; coturn stays disabled until
+  its configuration is in place, also when the install fails;
+- makes the deploy account with exactly the given key, the TURN secret
+  (root only, in `/etc/nereus-rendezvous/turn-secret`), and writes
+  `/etc/turnserver.conf`, `/etc/nereus-rendezvous/rendezvous.conf` and
+  `/etc/caddy/Caddyfile` (the `Caddyfile` here with your `RV_HOST`, after
+  `caddy validate`);
+- installs the service's unit and the drop-ins for coturn and Caddy, with
+  memory limits worked out from the server's memory (see "Memory"), and the
+  data-use report;
+- enables and starts Caddy, coturn and the report, and checks that coturn
+  holds exactly UDP 3478 and 443 and no TCP port, and Caddy no UDP port.
 
-From your own computer, publish the code to the deploy account:
+Run again, it reloads Caddy after a Caddyfile change (open connections are
+kept) and restarts a service only when one of its files changed (a coturn
+restart drops every relay in use); the dry run says which it would do. It
+refuses to go on while another program holds UDP 3478 or 443.
+
+### 6. The service's code
+
+From your own computer, publish the code as the deploy account. With an
+entry for it in your `~/.ssh/config` (for example `Host nereus-rv`, with
+`HostName rv.example.org`, `User nereusrv` and your key), `deploy.sh`'s
+default target works as it is; without one, name the target:
 
 <!-- check: deploy -->
 ```sh
-NEREUS_RV_TARGET=nereusweb@rv.example.org:/opt/nereus-rendezvous/ rendezvous/deploy.sh --dry-run
-NEREUS_RV_TARGET=nereusweb@rv.example.org:/opt/nereus-rendezvous/ rendezvous/deploy.sh
+NEREUS_RV_TARGET=nereusrv@rv.example.org:/opt/nereus-rendezvous/ rendezvous/deploy.sh --dry-run
+NEREUS_RV_TARGET=nereusrv@rv.example.org:/opt/nereus-rendezvous/ rendezvous/deploy.sh
 ```
 
 Then, as root on the server, start it (and after every later deploy):
@@ -255,7 +185,7 @@ Then, as root on the server, start it (and after every later deploy):
 systemctl restart nereus-rendezvous
 ```
 
-### 9. Check it
+### 7. Check it
 
 From anywhere:
 
@@ -265,11 +195,45 @@ turnutils_stunclient -p 3478 rv4.example.org   # your address, over IPv4
 turnutils_stunclient -p 443 rv6.example.org    # the same over IPv6
 ```
 
-On the server: `systemctl status coturn nereus-rendezvous caddy`, and
+On the server: `systemctl status caddy coturn nereus-rendezvous`, and
 `ss -lntup` shows coturn on UDP 3478 and 443 only, the service on
 127.0.0.1:8710 and [::1]:8710, and Caddy on TCP 80 and 443.
 
 Then point NereusSDR at `rv.example.org` in its remote access settings.
+
+Every request to `rv.example.org` goes to the service, which upgrades a
+WebSocket and answers anything else with `426`, a short text and `Upgrade:
+websocket`. No matcher picks WebSockets out in Caddy, because Caddy compares
+header values exactly and Apple's WebSocket client sends `Upgrade:
+WebSocket`. Clients open the WebSocket over HTTP/1.1 (the rendezvous
+document, section 2): Caddy offers no WebSockets over HTTP/2.
+
+## Beside a website
+
+The rendezvous can share a server with a website that Caddy already serves,
+but it needs care, which is why nereussdr.com gives it a server of its own:
+
+- **Caddy's memory.** Every connection to the service is also a connection
+  Caddy holds. Measured, Caddy holds about 100 KiB for each idle Core, and
+  far more for a peer that sends part of a large message and stops: a peer
+  filling the service's connections can grow the Caddy that also serves the
+  website by several hundred MiB (the rendezvous document, section 9.1),
+  and nothing in the rendezvous's settings bounds that. Size the server for
+  both, or keep the connection pools small (`max_stations` and
+  `max_connections` in `rendezvous.conf`).
+- **UDP 443.** coturn needs UDP 443 and 3478 to itself: switch Caddy's
+  HTTP/3 off (`protocols h1 h2` in its global options block), and stop
+  anything else on the host that uses UDP 443 or 3478 (`setup-server.sh`
+  refuses to start coturn while one does).
+- **Leave the website's Caddy to the website.** Run `setup-server.sh` with
+  `RV_MANAGE_CADDY=no`: it then neither installs Caddy nor touches its
+  configuration or unit. Add the `(rv_headers)` snippet and the site block
+  from `deploy/Caddyfile` to the website's Caddyfile yourself, with your
+  host name, validate it, and reload Caddy. Consider the same drop-in
+  (`deploy/caddy-override.conf`: restart on failure, a lower OOM score, a
+  GOMEMLIMIT) for the website's Caddy, since the website depends on it too.
+- **The deploy account.** `setup-server.sh` makes its own (`nereusrv`),
+  apart from any account the website deploys as.
 
 ## Limits
 
@@ -301,12 +265,24 @@ drops the relays in use).
 
 The service's own limits (connections, rates, sizes) are in
 `server/rendezvous.conf.sample`, with the reasons in the rendezvous
-document, section 9: up to 2000 registered Cores and 1024 other connections
-at once. Its unit caps its memory at 256 MiB (it holds about 106 MiB with
-both pools full of idle connections, measured) and allows it 8192 open
-files. On a server of 1 GB, Caddy holds about 100 KiB for each connection
-it forwards, measured, so 2000 Cores and a full client pool take about
-370 MiB of Caddy's memory as well: section 9.1 has the whole budget.
+document, section 9: up to 2000 registered Cores and 256 other connections
+at once.
+
+## Memory
+
+`setup-server.sh` works the memory limits out from the server's memory
+(`RV_MEMORY_MB`, by default what the kernel reports), in one formula: 256
+MiB is kept for the system and coturn, Caddy's GOMEMLIMIT is half of the
+rest and the service's MemoryMax 35% of it, leaving 15% as headroom. On a
+1 GB server that is 352 MiB for Caddy and 246 MiB for the service; on 2 GB,
+855 and 598. With 2000 idle Cores and a full client pool the service holds
+about 86 MiB and Caddy about 270 MiB, measured.
+
+If memory runs short, the kernel ends the service first (it has the higher
+OOM score), which also frees the connections Caddy holds for it; systemd
+starts it again at once and the Cores register again. Caddy restarts on its
+own after any failure. The rendezvous document, section 9.1, has the
+measurements and the arithmetic at 1 GB and 2 GB.
 
 ## Data use
 
@@ -323,8 +299,8 @@ your plan's allowance):
 journalctl -u nereus-data-use --since today
 ```
 
-It counts everything the server sends on that interface (the website, the
-relay, updates), which is what a provider bills. What it cannot know: the
+It counts everything the server sends on that interface (the relay, the
+service, updates), which is what a provider bills. What it cannot know: the
 kernel's counter starts again at every boot, so the bytes sent between the
 last hourly reading and a restart are lost (the line then says the total is
 short); bytes sent before the report was first installed in a month are not
@@ -332,7 +308,6 @@ counted (the line says when it started counting); and the month is UTC's,
 which may not be the provider's billing month. It changes nothing on the
 server and needs no package beyond Python.
 
-## Rotating the secret
 
 ## Rotating the secret
 
@@ -367,11 +342,14 @@ Both log to the systemd journal only (`journalctl -u nereus-rendezvous`,
   setting that shortens those two lines; the journal is readable by root
   and the `adm` group only.
 
+
 ## Updating
 
 Pull NereusSDR, then `rendezvous/deploy.sh` and `systemctl restart
 nereus-rendezvous` for the service. For configuration changes, copy the
-tree again the same way as step 3 (remove the old copy first, or it nests):
+tree again the same way as step 3 (remove the old copy first, or it nests),
+with the same settings as step 4 (`RV_DEPLOY_KEY` may be left out once the
+account exists):
 
 ```sh
 ssh root@rv.example.org rm -rf /root/rendezvous
@@ -380,7 +358,8 @@ ssh root@rv.example.org bash /root/rendezvous/deploy/setup-server.sh --dry-run
 ssh root@rv.example.org bash /root/rendezvous/deploy/setup-server.sh
 ```
 
-The dry run says whether coturn or the service would be restarted.
+The dry run says whether Caddy would be reloaded or restarted and whether
+coturn or the service would be restarted.
 
 ## The checks
 
@@ -389,18 +368,17 @@ a real server:
 
 - `rendezvous/tests/coturn-check.sh`: `setup-server.sh` in a container
   (with apt-get failing, without systemd, and with a stand-in systemctl so
-  its start, restart and port checks run), then coturn as its unit starts
-  it: its ports, STUN, allocations on both ports in both families with
-  `turnutils_uclient`, refused credentials, every blocked destination, the
-  quotas, credentials minted by the running service, what happens to a relay
-  whose credential expires, and its logs.
-- `rendezvous/tests/caddy-check.sh`: `website/deploy/Caddyfile` with the
-  `rv` site: `caddy validate`, the website unchanged by it, a WebSocket
-  through Caddy to the service by host name with each client's own address,
-  Apple's exact opening request, the plain answer, and what an HTTP/2 client
-  gets.
+  its start, reload, restart and port checks run), then coturn as its unit
+  starts it: its ports, STUN, allocations on both ports in both families
+  with `turnutils_uclient`, refused credentials, every blocked destination,
+  the quotas, credentials minted by the running service, what happens to a
+  relay whose credential expires, and its logs.
+- `rendezvous/tests/caddy-check.sh`: `deploy/Caddyfile`: `caddy validate`,
+  a WebSocket through Caddy to the service by host name with each client's
+  own address, Apple's exact opening request, the plain answer, what an
+  HTTP/2 client gets, and no UDP port.
 - `rendezvous/tests/memory-check.sh`: the service and Caddy loaded with 2000
-  registered Cores and 1024 clients, then with unfinished messages and Cores
+  registered Cores and 256 clients, then with unfinished messages and Cores
   that stop reading, measured (the numbers in section 9.1).
 - `rendezvous/tests/readme-check.sh`: a fresh container set up by following
   this file (the blocks marked for it), then used as both the service and

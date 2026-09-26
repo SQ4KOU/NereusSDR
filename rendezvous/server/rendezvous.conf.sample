@@ -44,7 +44,7 @@ mailbox_messages_per_side = 32
 # Connections that are not registered stations (clients, and connections
 # still starting), per address group and in total.
 connections_per_address = 16
-max_connections = 1024
+max_connections = 256
 # Registered stations, per address group and in total: a pool of their own.
 stations_per_address = 4
 max_stations = 2000

@@ -141,7 +141,7 @@ def main(argv=None) -> int:
     parser.add_argument("--sync", required=True)
     parser.add_argument("--cacert")
     parser.add_argument("--stations", type=int, default=2000)
-    parser.add_argument("--clients", type=int, default=1024)
+    parser.add_argument("--clients", type=int, default=256)
     parser.add_argument("--partial", type=int, default=500)
     parser.add_argument("--stalled", type=int, default=100)
     args = parser.parse_args(argv)

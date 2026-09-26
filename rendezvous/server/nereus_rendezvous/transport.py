@@ -84,14 +84,18 @@ class WsTransport:
 
 
 # The answer to anything that is not a WebSocket upgrade. Caddy sends every
-# request for the service's host name here (website/deploy/Caddyfile), so
-# this is what a browser, or a probe, sees.
+# request for the service's host name here (rendezvous/deploy/Caddyfile),
+# so this is what a browser, or a probe, sees.
 NOT_A_WEBSOCKET_TEXT = (
     "This address is the NereusSDR connection service. It takes WebSocket "
     "connections from NereusSDR and the NereusSDR app only.\n"
 )
+# RFC 9110: a 426 names the protocol in Upgrade (section 15.5.22), and a
+# sender of Upgrade lists it in Connection (section 7.8); "close" because
+# the service ends the connection after this answer.
 _NOT_A_WEBSOCKET_HEADERS = (
     ("Upgrade", "websocket"),
+    ("Connection", "upgrade, close"),
     ("Content-Type", "text/plain; charset=utf-8"),
     ("Cache-Control", "no-store"),
 )

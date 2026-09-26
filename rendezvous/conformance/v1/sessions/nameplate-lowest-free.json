@@ -15,8 +15,8 @@
         "version": 1,
         "nonce": "$b64:32:stationNonce",
         "stun": [
-          "stun:rv6.conformance.invalid:3478",
-          "stun:rv4.conformance.invalid:3478"
+          "stun:rv4.conformance.invalid:3478",
+          "stun:rv6.conformance.invalid:3478"
         ]
       }
     },
@@ -79,8 +79,8 @@
         "version": 1,
         "nonce": "$b64:32:station2Nonce",
         "stun": [
-          "stun:rv6.conformance.invalid:3478",
-          "stun:rv4.conformance.invalid:3478"
+          "stun:rv4.conformance.invalid:3478",
+          "stun:rv6.conformance.invalid:3478"
         ]
       }
     },
@@ -143,8 +143,8 @@
         "version": 1,
         "nonce": "$b64:32:station3Nonce",
         "stun": [
-          "stun:rv6.conformance.invalid:3478",
-          "stun:rv4.conformance.invalid:3478"
+          "stun:rv4.conformance.invalid:3478",
+          "stun:rv6.conformance.invalid:3478"
         ]
       }
     },
@@ -224,8 +224,8 @@
         "version": 1,
         "nonce": "$b64:32:station4Nonce",
         "stun": [
-          "stun:rv6.conformance.invalid:3478",
-          "stun:rv4.conformance.invalid:3478"
+          "stun:rv4.conformance.invalid:3478",
+          "stun:rv6.conformance.invalid:3478"
         ]
       }
     },

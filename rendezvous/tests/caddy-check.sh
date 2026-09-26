@@ -1,29 +1,27 @@
 #!/usr/bin/env bash
 #
-# caddy-check.sh: the website's Caddyfile with the rendezvous site, in
-# Docker.
+# caddy-check.sh: the rendezvous server's own Caddyfile, in Docker.
 #
 # In ubuntu:24.04 with Caddy from Caddy's official apt repository (the
-# same source website/deploy/setup-server.sh installs from):
+# same source rendezvous/deploy/setup-server.sh installs from), with the
+# service behind Caddy as on the rendezvous server:
 #
-#   1. caddy validate passes on the real website/deploy/Caddyfile.
-#   2. Caddy serves the website's pages with the same status, headers and
-#      bodies with the rendezvous site as without it (the part of the
-#      Caddyfile before the rendezvous site, run on its own).
-#   3. A WebSocket to rv.nereussdr.com upgrades and reaches the service by
-#      host name; a WebSocket to the website's names does not. Written byte
-#      for byte, both the usual request (Upgrade: websocket, Host without a
-#      port) and Apple's Network.framework's (Upgrade: WebSocket, Host with
-#      :443) upgrade.
-#   4. The service sees each client's own address, whatever X-Forwarded-For
+#   1. caddy validate passes on the real rendezvous/deploy/Caddyfile, and on
+#      the test copy with local certificates.
+#   2. A WebSocket to rv.nereussdr.com upgrades and reaches the service by
+#      host name. Written byte for byte, both the usual request (Upgrade:
+#      websocket, Host without a port) and Apple's Network.framework's
+#      (Upgrade: WebSocket, Host with :443) upgrade.
+#   3. The service sees each client's own address, whatever X-Forwarded-For
 #      the client sends: with two connections allowed per address, a third
 #      from one client is refused while another client, over IPv4 or IPv6,
 #      is still let in.
-#   5. A plain request to rv gets the service's short plain answer (426)
-#      and the headers, "Upgrade: websocket" included over HTTP/1.1.
-#   6. What an HTTP/2 client gets: a plain GET, and whether Caddy offers
+#   4. A plain request to rv gets the service's short plain answer (426)
+#      and the headers, "Upgrade: websocket" and "Connection: upgrade"
+#      included over HTTP/1.1.
+#   5. What an HTTP/2 client gets: a plain GET, and whether Caddy offers
 #      WebSockets over HTTP/2 (RFC 8441) and what one gets.
-#   7. Caddy holds no UDP port (HTTP/3 stays off).
+#   6. Caddy holds no UDP port (HTTP/3 stays off: UDP 443 is coturn's).
 #
 # Certificates come from Caddy's own local authority, switched on for the
 # test only (local_certs in a copy of the Caddyfile); the real file is
@@ -45,7 +43,6 @@ readonly client_b="nereus-rv-caddy-b-${tag}"
 readonly client_c="nereus-rv-caddy-c-${tag}"
 readonly v4_net="198.51.100.0/24" v6_net="2001:db8:c0::/64"
 readonly server_v4="198.51.100.10" server_v6="2001:db8:c0::10"
-readonly marker="# The NereusSDR rendezvous service"
 
 passed=0
 pass() { passed=$((passed + 1)); printf 'ok %d - %s\n' "$passed" "$*"; }
@@ -82,31 +79,19 @@ docker network create --ipv6 --subnet "$v4_net" --subnet "$v6_net" "$net" >/dev/
 docker run -d --name "$server" --network "$net" --ip "$server_v4" --ip6 "$server_v6" \
     -v "${repo}:/repo:ro" "$image" sleep infinity >/dev/null
 
-# 1. The real file, unchanged.
-out="$(docker exec "$server" caddy validate --config /repo/website/deploy/Caddyfile --adapter caddyfile 2>&1)" \
-    || { printf '%s\n' "$out" >&2; fail "caddy validate refused website/deploy/Caddyfile"; }
+# 1. The real file, unchanged, and the test copy with local certificates
+# switched on in the global block (after its opening line, the first line
+# that is only "{").
+out="$(docker exec "$server" caddy validate --config /repo/rendezvous/deploy/Caddyfile --adapter caddyfile 2>&1)" \
+    || { printf '%s\n' "$out" >&2; fail "caddy validate refused rendezvous/deploy/Caddyfile"; }
 grep -q 'Valid configuration' <<<"$out" || { printf '%s\n' "$out" >&2; fail "no 'Valid configuration' from caddy validate"; }
-pass "caddy validate website/deploy/Caddyfile: Valid configuration"
-
-# The test copies: the whole file, and the website part alone (everything
-# before the rendezvous site), each with local certificates switched on in
-# the global block.
-docker exec -i "$server" bash -s -- "$marker" <<'EOS'
+docker exec -i "$server" bash -s <<'EOS' || fail "the test copy with local certificates does not validate"
 set -euo pipefail
-marker="$1"
-grep -q "^${marker}" /repo/website/deploy/Caddyfile
-local_certs() {
-    # After the global block's opening line (the first line that is only "{").
-    awk 'BEGIN { done = 0 } { print } !done && $0 == "{" { print "\tlocal_certs"; print "\tskip_install_trust"; done = 1 }'
-}
-local_certs < /repo/website/deploy/Caddyfile > /tmp/full.Caddyfile
-awk -v m="$marker" 'index($0, m) == 1 { exit } { print }' /repo/website/deploy/Caddyfile | local_certs > /tmp/website.Caddyfile
-caddy validate --config /tmp/full.Caddyfile --adapter caddyfile >/dev/null 2>&1
-caddy validate --config /tmp/website.Caddyfile --adapter caddyfile >/dev/null 2>&1
-mkdir -p /var/www/nereussdr
-cp -R /repo/website/public/. /var/www/nereussdr/
+awk 'BEGIN { done = 0 } { print } !done && $0 == "{" { print "\tlocal_certs"; print "\tskip_install_trust"; done = 1 }' \
+    /repo/rendezvous/deploy/Caddyfile > /tmp/rv.Caddyfile
+caddy validate --config /tmp/rv.Caddyfile --adapter caddyfile >/dev/null 2>&1
 EOS
-pass "test copies with local certificates validate (website alone, and whole)"
+pass "caddy validate rendezvous/deploy/Caddyfile: Valid configuration (and the test copy with local certificates)"
 
 # The service, as the unprivileged nobody, on loopback as in production,
 # with two connections allowed per address for step 4.
@@ -147,7 +132,7 @@ caddy_run() {
     fail "caddy does not listen on 443"
 }
 
-hosts=(--add-host "nereussdr.com:${server_v4}" --add-host "www.nereussdr.com:${server_v4}" --add-host "rv.nereussdr.com:${server_v4}")
+hosts=(--add-host "rv.nereussdr.com:${server_v4}")
 docker run -d --name "$client_a" --network "$net" --ip 198.51.100.30 "${hosts[@]}" \
     -v "${repo}:/repo:ro" "$image" sleep infinity >/dev/null
 docker run -d --name "$client_b" --network "$net" --ip 198.51.100.31 "${hosts[@]}" \
@@ -156,47 +141,13 @@ docker run -d --name "$client_c" --network "$net" --ip6 2001:db8:c0::32 \
     --add-host "rv.nereussdr.com:${server_v6}" \
     -v "${repo}:/repo:ro" "$image" sleep infinity >/dev/null
 
-# Each website request's status line, headers (all but Date) and a hash of
-# its body, with redirects not followed.
-snapshot() {
-    docker exec -i "$client_a" bash -s <<'EOS'
-set -euo pipefail
-urls=(
-    http://nereussdr.com/
-    https://nereussdr.com/
-    https://nereussdr.com/index.html
-    https://nereussdr.com/404
-    https://nereussdr.com/assets/css/site.css
-    https://nereussdr.com/assets/js/site.js
-    https://nereussdr.com/assets/img/nereus-64.png
-    https://nereussdr.com/robots.txt
-    https://www.nereussdr.com/
-    "https://www.nereussdr.com/some/page?x=1"
-)
-for url in "${urls[@]}"; do
-    echo "== ${url}"
-    curl -sS --cacert /tmp/ca.crt -o /tmp/body -D /tmp/head "$url"
-    tr -d '\r' < /tmp/head | grep -v -i '^date:' | { read -r status; echo "$status"; sort; }
-    echo "body $(sha256sum < /tmp/body | cut -c1-16)"
-done
-EOS
-}
-
-caddy_run start /tmp/website.Caddyfile
+caddy_run start /tmp/rv.Caddyfile
 docker exec "$server" cat /root/.local/share/caddy/pki/authorities/local/root.crt > "${work}/ca.crt"
 for c in "$client_a" "$client_b" "$client_c"; do
     docker cp "${work}/ca.crt" "${c}:/tmp/ca.crt"
 done
-snapshot > "${work}/website-alone.txt"
-caddy_run reload /tmp/full.Caddyfile
-snapshot > "${work}/website-with-rv.txt"
-grep -q '^HTTP/2 200' "${work}/website-alone.txt" || fail "the website did not answer 200 over HTTP/2"
-if ! diff -u "${work}/website-alone.txt" "${work}/website-with-rv.txt" >&2; then
-    fail "the website's answers differ once the rendezvous site is added (diff above)"
-fi
-pass "website requests: same status, headers and bodies with and without the rv site ($(grep -c '^== ' "${work}/website-alone.txt") compared)"
 
-# 3 and 4. WebSockets by host name, through Caddy, from three clients.
+# 2 and 3. WebSockets by host name, through Caddy, from three clients.
 docker exec "$client_a" python3 /repo/rendezvous/tests/caddy_probe.py open wss://rv.nereussdr.com/ \
     --cacert /tmp/ca.crt --count 3 --hold 6 > "${work}/a.txt" &
 probe_a=$!
@@ -218,13 +169,7 @@ PY
 pass "wss://rv.nereussdr.com/ upgrades and reaches the service (hello)"
 pass "the service counts each client by its own address: a third connection from one client refused (tooManyConnections) whatever X-Forwarded-For it sent, while another IPv4 client and an IPv6 client were let in"
 
-code="$(docker exec "$client_a" curl -sS --cacert /tmp/ca.crt -o /dev/null -w '%{http_code}' \
-    -H 'Connection: Upgrade' -H 'Upgrade: websocket' -H 'Sec-WebSocket-Version: 13' \
-    -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' --http1.1 https://nereussdr.com/)"
-[[ "$code" != "101" ]] || fail "a WebSocket to nereussdr.com was upgraded"
-pass "a WebSocket request to nereussdr.com is not upgraded (answered ${code})"
-
-# 3, byte for byte: the usual request, and Apple's.
+# 2, byte for byte: the usual request, and Apple's.
 raws="$(for pair in "websocket rv.nereussdr.com" "WebSocket rv.nereussdr.com:443"; do
     read -r upgrade host_header <<<"$pair"
     docker exec "$client_a" python3 /repo/rendezvous/tests/caddy_probe.py raw rv.nereussdr.com \
@@ -240,7 +185,7 @@ for l in lines:
 PY
 pass "byte for byte over HTTP/1.1, 'Upgrade: websocket' with 'Host: rv.nereussdr.com' and Apple's 'Upgrade: WebSocket' with 'Host: rv.nereussdr.com:443' both upgrade and get hello"
 
-# 5. A plain request to rv, over HTTP/1.1 and over HTTP/2.
+# 4. A plain request to rv, over HTTP/1.1 and over HTTP/2.
 for version in http1.1 http2; do
     docker exec "$client_a" curl -sS "--${version}" --cacert /tmp/ca.crt -o /tmp/rv-body -D /tmp/rv-head https://rv.nereussdr.com/
     docker exec "$client_a" cat /tmp/rv-head /tmp/rv-body | tr -d '\r' > "${work}/rv-${version}.txt"
@@ -258,13 +203,14 @@ for version in http1.1 http2; do
     grep -q 'NereusSDR connection service' "${work}/rv-${version}.txt" || fail "rv's ${version} answer lacks its text"
 done
 grep -qixF 'upgrade: websocket' "${work}/rv-http1.1.txt" || fail "rv's HTTP/1.1 426 lacks Upgrade: websocket"
+grep -qixF 'connection: upgrade' "${work}/rv-http1.1.txt" || fail "rv's HTTP/1.1 426 lacks Connection: upgrade"
 h2_upgrade="absent"
 if grep -qi '^upgrade:' "${work}/rv-http2.txt"; then
     h2_upgrade="present"
 fi
-pass "a plain request to rv gets the service's 426, its short text and the security headers, no Server or Via header; over HTTP/1.1 with Upgrade: websocket (over HTTP/2 the Upgrade header is ${h2_upgrade}: HTTP/2 has no Upgrade)"
+pass "a plain request to rv gets the service's 426, its short text and the security headers, no Server or Via header; over HTTP/1.1 with Upgrade: websocket and Connection: upgrade (over HTTP/2 the Upgrade header is ${h2_upgrade}: HTTP/2 has no Upgrade)"
 
-# 6. What an HTTP/2 client gets.
+# 5. What an HTTP/2 client gets.
 h2="$(docker exec "$client_a" python3 /repo/rendezvous/tests/caddy_probe.py h2 rv.nereussdr.com --cacert /tmp/ca.crt)"
 printf '%s\n' "$h2" | sed 's/^/# h2: /'
 h2_summary="$(python3 - "$h2" <<'PY'
@@ -284,7 +230,7 @@ PY
 )" || fail "the HTTP/2 probe: ${h2}"
 pass "HTTP/2: a plain GET gets 426; ${h2_summary}"
 
-# 7. HTTP/3 stays off.
+# 6. HTTP/3 stays off.
 udp="$(docker exec -i "$server" python3 - <<'PY'
 import os
 inodes = set()

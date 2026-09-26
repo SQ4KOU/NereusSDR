@@ -59,7 +59,7 @@ class Config:
     mailbox_messages_per_side: int = 32
     connections_per_address: int = 16
     stations_per_address: int = 4
-    max_connections: int = 1024
+    max_connections: int = 256
     max_stations: int = 2000
     handshake_timeout_ms: int = 10000
     idle_timeout_ms: int = 30000

@@ -38,7 +38,6 @@ readonly net="nereus-rv-readme-${tag}"
 readonly server="nereus-rv-readme-server-${tag}" client="nereus-rv-readme-client-${tag}"
 readonly s4="11.99.0.10" s6="2001:2:0:99::10"
 readonly c4="11.99.0.20" c6="2001:2:0:99::20"
-readonly test_settings="export RV_HOST=rv.test RV_RELAY_HOST4=rv4.test RV_RELAY_HOST6=rv6.test RV_RELAY_SLOTS=64 RV_TRANSFER_GB_PER_MONTH=1000"
 readonly test_env="export RV_PUBLIC_IPV4=${s4} RV_PUBLIC_IPV6=${s6} RV_ALLOW_DOCUMENTATION_ADDRESSES=1 DEBIAN_FRONTEND=noninteractive"
 
 passed=0
@@ -46,6 +45,10 @@ pass() { passed=$((passed + 1)); printf 'ok %d - %s\n' "$passed" "$*"; }
 fail() { printf 'not ok - %s\n' "$*" >&2; exit 1; }
 
 work="$(mktemp -d "${TMPDIR:-/tmp}/nereus-readme-check.XXXXXX")"
+# A deploy key made for this run only.
+ssh-keygen -q -t ed25519 -N "" -C readme-check -f "${work}/deploy"
+test_settings="export RV_HOST=rv.test RV_RELAY_HOST4=rv4.test RV_RELAY_HOST6=rv6.test RV_RELAY_SLOTS=64 RV_TRANSFER_GB_PER_MONTH=1000 RV_DEPLOY_KEY='$(cat "${work}/deploy.pub")'"
+readonly test_settings
 cleanup() {
     docker rm -f "$server" "$client" >/dev/null 2>&1 || true
     docker network rm "$net" >/dev/null 2>&1 || true
@@ -67,7 +70,7 @@ for n, m in enumerate(pattern.finditer(text)):
 PY
 blocks=("$work"/blocks/*.sh)
 echo "# ${#blocks[@]} marked blocks in rendezvous/README.md: $(for b in "${blocks[@]}"; do basename "$b" .sh; done | tr '\n' ' ')"
-[[ ${#blocks[@]} -ge 7 ]] || fail "too few marked blocks in the README"
+[[ ${#blocks[@]} -ge 5 ]] || fail "too few marked blocks in the README"
 
 docker network create --ipv6 --subnet 11.99.0.0/24 --subnet 2001:2:0:99::/64 "$net" >/dev/null
 # A plain ubuntu:24.04: everything on it comes from the README's blocks.
@@ -132,10 +135,10 @@ for block in "${blocks[@]}"; do
     kind="${name#*-}"
     case "$kind" in
         settings)
-            for var in RV_HOST RV_RELAY_HOST4 RV_RELAY_HOST6 RV_RELAY_SLOTS RV_TRANSFER_GB_PER_MONTH; do
+            for var in RV_HOST RV_RELAY_HOST4 RV_RELAY_HOST6 RV_RELAY_SLOTS RV_TRANSFER_GB_PER_MONTH RV_DEPLOY_KEY; do
                 grep -q "^export ${var}=" "$block" || fail "the settings block does not set ${var}"
             done
-            pass "${name}: sets RV_HOST, RV_RELAY_HOST4/6, RV_RELAY_SLOTS and RV_TRANSFER_GB_PER_MONTH (test names used instead)"
+            pass "${name}: sets RV_HOST, RV_RELAY_HOST4/6, RV_RELAY_SLOTS, RV_TRANSFER_GB_PER_MONTH and RV_DEPLOY_KEY (test values used instead)"
             ;;
         copy)
             grep -q 'rendezvous root@.*:/root/rendezvous$' "$block" || fail "the copy block does not copy rendezvous to /root/rendezvous"
@@ -154,21 +157,22 @@ for block in "${blocks[@]}"; do
             (cd "$repo" && sed "s|NEREUS_RV_TARGET=[^ ]*|NEREUS_RV_TARGET=${work}/code/|" "$block" | bash -euo pipefail) >"${work}/deploy.log" 2>&1 \
                 || { cat "${work}/deploy.log" >&2; fail "${name} failed"; }
             docker cp "${work}/code/." "${server}:/opt/nereus-rendezvous/"
-            docker exec "$server" chown -R nereusweb:nereusweb /opt/nereus-rendezvous
+            docker exec "$server" chown -R nereusrv:nereusrv /opt/nereus-rendezvous
             pass "${name}: deploy.sh (dry run, then real) published the code, copied to /opt/nereus-rendezvous"
             ;;
         service)
-            if grep -q 'caddy' "$block"; then
-                start_caddy || fail "${name}: Caddy did not start"
-                pass "${name}: Caddy started with the README's Caddyfile (local certificates for the test)"
-            else
-                start_services || fail "${name}: coturn or the service did not start"
-                pass "${name}: coturn and the service started as their units start them"
-            fi
+            start_caddy || fail "${name}: Caddy did not start"
+            start_services || fail "${name}: coturn or the service did not start"
+            pass "${name}: Caddy (with the Caddyfile setup-server.sh installed, local certificates for the test), coturn and the service started as their units start them"
             ;;
         *) fail "unknown block kind ${kind}" ;;
     esac
 done
+
+docker exec "$server" cat /home/nereusrv/.ssh/authorized_keys | cmp -s - "${work}/deploy.pub" \
+    || fail "the deploy account's authorized_keys is not exactly the given key"
+docker exec "$server" grep -qx 'rv.test {' /etc/caddy/Caddyfile || fail "the installed Caddyfile does not name rv.test"
+pass "setup-server.sh made the deploy account nereusrv with exactly the given key, and installed the Caddyfile for rv.test"
 
 # --------------------------------------------------------------- use it
 # A client on the same network, with the names in its hosts file as DNS

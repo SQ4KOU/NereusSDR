@@ -5,8 +5,9 @@
 #
 # A server container (ubuntu:24.04, Caddy from Caddy's apt repository,
 # Ubuntu's python3-websockets) runs the service on loopback behind Caddy
-# with the real rv site (local certificates for the test), as on the
-# shared server. A client container runs memory_probe.py through
+# with rendezvous/deploy/Caddyfile (local certificates for the test), as
+# on the rendezvous server, and GOMEMLIMIT as setup-server.sh sets it for
+# MEMORY_MB of memory. A client container runs memory_probe.py through
 # wss://rv.nereussdr.com/ and, after each step, the server container's
 # own cgroup is read: the service's and Caddy's resident memory, the
 # container's memory, the host's TCP socket memory (/proc/net/sockstat;
@@ -16,7 +17,7 @@
 # Steps, each on top of the one before:
 #   baseline   nothing connected
 #   stations   STATIONS registered stations, idle
-#   clients    CLIENTS clients past hello, idle
+#   clients    CLIENTS clients past hello, idle (the default pool, 256)
 #   partial    PARTIAL more clients, each holding all but one byte of a
 #              131072-byte message (the most one connection can make the
 #              service hold on the way in)
@@ -27,8 +28,9 @@
 # nothing; the numbers go into the rendezvous document section 9.1.
 #
 # Usage: rendezvous/tests/memory-check.sh
-#   environment: STATIONS (2000) CLIENTS (1024) PARTIAL (500) STALLED (100)
-#                SOCKET_BUFFER_BYTES (the service's default)
+#   environment: STATIONS (2000) CLIENTS (256) PARTIAL (500) STALLED (100)
+#                MEMORY_MB (1024: Caddy's GOMEMLIMIT as setup-server.sh
+#                works it out) SOCKET_BUFFER_BYTES (the service's default)
 
 set -euo pipefail
 
@@ -40,7 +42,10 @@ readonly net="nereus-rv-mem-${tag}"
 readonly server="nereus-rv-mem-server-${tag}"
 readonly client="nereus-rv-mem-client-${tag}"
 stations="${STATIONS:-2000}"
-clients="${CLIENTS:-1024}"
+clients="${CLIENTS:-256}"
+memory_mb="${MEMORY_MB:-1024}"
+# setup-server.sh: (memory - 256) x 50%.
+gomemlimit="$(( (memory_mb - 256) * 50 / 100 ))MiB"
 partial="${PARTIAL:-500}"
 stalled="${STALLED:-100}"
 buffer_line=""
@@ -87,7 +92,7 @@ docker run -d --name "$client" --network "$net" --ulimit nofile=65536:65536 \
 # the open-file limit to 1024), with the defaults except the limits this load would meet
 # first (every client comes from one address, and they wait far longer
 # than a real one); the rv site from the real Caddyfile.
-docker exec -i "$server" bash -s -- "$buffer_line" <<'EOS'
+docker exec -i "$server" bash -s -- "$buffer_line" "$gomemlimit" <<'EOS'
 set -euo pipefail
 mkdir -p /run/rv && chmod 755 /run/rv
 python3 -c 'import secrets; print(secrets.token_hex(32))' > /run/rv/secret
@@ -113,11 +118,9 @@ cd / && PYTHONPATH=/repo/rendezvous/server PYTHONDONTWRITEBYTECODE=1 \
     setsid setpriv --reuid=nobody --regid=nogroup --clear-groups python3 -m nereus_rendezvous --config /run/rv/rv.conf \
     > /run/rv/log 2>&1 < /dev/null &
 for _ in $(seq 50); do grep -q "listening on 2 addresses" /run/rv/log 2>/dev/null && break; sleep 0.2; done
-{
-    printf '{\n\tlocal_certs\n\tskip_install_trust\n\tservers {\n\t\tprotocols h1 h2\n\t}\n}\n'
-    awk '/^\(rv_headers\)/ { on = 1 } on { print }' /repo/website/deploy/Caddyfile
-} > /tmp/rv.Caddyfile
-caddy start --config /tmp/rv.Caddyfile --adapter caddyfile >/tmp/caddy.log 2>&1
+awk 'BEGIN { done = 0 } { print } !done && $0 == "{" { print "\tlocal_certs"; print "\tskip_install_trust"; done = 1 }' \
+    /repo/rendezvous/deploy/Caddyfile > /tmp/rv.Caddyfile
+GOMEMLIMIT="$2" caddy start --config /tmp/rv.Caddyfile --adapter caddyfile >/tmp/caddy.log 2>&1
 for _ in $(seq 50); do (exec 3<>/dev/tcp/127.0.0.1/443) 2>/dev/null && break; sleep 0.2; done
 sleep 1
 cp /root/.local/share/caddy/pki/authorities/local/root.crt /sync/ca.crt
@@ -171,7 +174,7 @@ for step in baseline stations clients partial stalled; do
     touch /sync/$step.done
 done'
 
-echo "# ${stations} stations, ${clients} clients, ${partial} unfinished messages, ${stalled} stalled stations; ${buffer_line:-socket_buffer_bytes default}"
+echo "# ${stations} stations, ${clients} clients, ${partial} unfinished messages, ${stalled} stalled stations; ${buffer_line:-socket_buffer_bytes default}; Caddy GOMEMLIMIT ${gomemlimit} (${memory_mb} MiB)"
 docker exec "$client" python3 /repo/rendezvous/tests/memory_probe.py wss://rv.nereussdr.com/ \
     --sync /sync --cacert /sync/ca.crt --stations "$stations" --clients "$clients" \
     --partial "$partial" --stalled "$stalled" | sed 's/^/# probe: /'

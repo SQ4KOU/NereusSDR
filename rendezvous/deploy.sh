@@ -9,10 +9,11 @@
 # Works from any directory: paths are resolved from this script's location.
 #
 # The destination is $NEREUS_RV_TARGET, by default
-# nereus-web:/opt/nereus-rendezvous/ (nereus-web is the SSH alias from
-# website/README.md; /opt/nereus-rendezvous is made for that account by
-# rendezvous/deploy/setup-server.sh, and the service's unit runs the code
-# from there). Point NEREUS_RV_TARGET at a local directory to try it
+# nereus-rv:/opt/nereus-rendezvous/ (nereus-rv is an SSH alias in
+# ~/.ssh/config for the deploy account on the rendezvous server, so no
+# address is in the repository; /opt/nereus-rendezvous is made for that
+# account by rendezvous/deploy/setup-server.sh, and the service's unit runs
+# the code from there). Point NEREUS_RV_TARGET at a local directory to try it
 # without the server.
 #
 # It publishes rendezvous/server/nereus_rendezvous/ and the sample
@@ -29,7 +30,7 @@
 
 set -euo pipefail
 
-readonly default_target="nereus-web:/opt/nereus-rendezvous/"
+readonly default_target="nereus-rv:/opt/nereus-rendezvous/"
 readonly required=(__init__.py __main__.py clock.py config.py identity.py limits.py protocol.py service.py transport.py turn.py)
 
 script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
@@ -44,7 +45,7 @@ usage() {
 Usage: rendezvous/deploy.sh [--dry-run]
 
 Publishes rendezvous/server/ (the service's code and sample configuration)
-with rsync to $NEREUS_RV_TARGET (default: nereus-web:/opt/nereus-rendezvous/).
+with rsync to $NEREUS_RV_TARGET (default: nereus-rv:/opt/nereus-rendezvous/).
 
   --dry-run   show what would change on the target; change nothing
 EOF
@@ -103,7 +104,7 @@ fi
 echo
 
 if ! rsync "${rsync_args[@]}" "${staging}/" "$target"; then
-    die "rsync failed (for the default target, check the nereus-web entry in ~/.ssh/config, see website/README.md)"
+    die "rsync failed (for the default target, check the nereus-rv entry in ~/.ssh/config, see rendezvous/README.md)"
 fi
 
 if (( dry_run )); then

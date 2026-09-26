@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
-# setup-server.sh: prepare a server for the NereusSDR rendezvous service and
-# its relay (coturn).
+# setup-server.sh: prepare a dedicated server for the NereusSDR rendezvous
+# service, its relay (coturn) and the Caddy in front of the service.
 #
 # Run it as root on the server itself, from a copy of rendezvous/deploy/
 # (it reads its sibling files). It is idempotent: every step looks at the
@@ -33,36 +33,54 @@
 #                            caps nothing)
 #   RV_DATA_USE_INTERFACE    the interface whose outbound  the default
 #                            bytes the report counts       route's
-#   RV_DEPLOY_USER           the account deploy.sh uses    nereusweb
+#   RV_MEMORY_MB             the server's memory, MiB,     found on the host
+#                            that the memory limits are
+#                            worked out from
+#   RV_DEPLOY_USER           the account deploy.sh uses    nereusrv
+#   RV_DEPLOY_KEY            that account's SSH public     (needed when the
+#                            key line ('ssh-ed25519 AAAA   account does not
+#                            ... comment'); its            exist yet)
+#                            authorized_keys ends up
+#                            holding exactly this line
+#   RV_MANAGE_CADDY          yes: install Caddy and own    yes
+#                            /etc/caddy/Caddyfile (a
+#                            dedicated server); no: leave
+#                            Caddy alone (a server shared
+#                            with a website; see the
+#                            README)
 #
 # Typical run, from the repository root on the maintainer's Mac (see
 # rendezvous/README.md; the rm keeps a second copy from landing inside the
 # first):
 #   ssh root@<server> rm -rf /root/rendezvous
 #   scp -r rendezvous root@<server>:/root/rendezvous
-#   ssh root@<server> bash /root/rendezvous/deploy/setup-server.sh --dry-run
-#   ssh root@<server> bash /root/rendezvous/deploy/setup-server.sh
+#   ssh root@<server> "RV_DEPLOY_KEY='$(cat ~/.ssh/<key>.pub)' bash /root/rendezvous/deploy/setup-server.sh --dry-run"
+#   ssh root@<server> "RV_DEPLOY_KEY='$(cat ~/.ssh/<key>.pub)' bash /root/rendezvous/deploy/setup-server.sh"
 #
 # Steps:
 #   1. Check the host, the inputs and the settings; refuse to go on while
 #      any other process holds UDP 3478 or UDP 443 (the relay's ports).
-#   2. Install coturn, python3-websockets and python3-cryptography from
-#      Ubuntu, without letting the package start coturn, and leave coturn
-#      disabled until step 7.
-#   3. Make the TURN secret (root only) once, and coturn's DTLS key pair.
-#   4. Write /etc/turnserver.conf: turnserver.conf from this directory plus
+#   2. Install Caddy from Caddy's own apt repository, and coturn,
+#      python3-websockets, python3-cryptography and rsync from Ubuntu,
+#      without letting a package start a service, and leave coturn disabled
+#      until step 9 (also when the install fails).
+#   3. Make the deploy account, with exactly the given SSH key.
+#   4. Make the TURN secret (root only) once, and coturn's DTLS key pair.
+#   5. Write /etc/turnserver.conf: turnserver.conf from this directory plus
 #      the lines only this server knows (secret, addresses, sizing).
-#   5. Write /etc/nereus-rendezvous/rendezvous.conf.
-#   6. Install the units (the service, coturn's drop-in, the data-use
-#      report and its timer) and make /opt/nereus-rendezvous for deploy.sh.
-#   7. Enable coturn, the service and the timer; start what is stopped and
-#      restart only what had a file change (a coturn restart drops every
-#      live relay); check exactly which ports each one holds.
-#   8. Print a summary.
+#   6. Write /etc/nereus-rendezvous/rendezvous.conf.
+#   7. Write /etc/caddy/Caddyfile from Caddyfile here, after caddy validate.
+#   8. Install the units and drop-ins (the service and its memory ceiling,
+#      coturn's, Caddy's, the data-use report and its timer) and make
+#      /opt/nereus-rendezvous for deploy.sh.
+#   9. Enable Caddy, coturn, the service and the timer; start what is
+#      stopped, reload Caddy after a Caddyfile change, and restart only what
+#      had a unit or configuration change (a coturn restart drops every live
+#      relay); check exactly which ports each one holds.
+#  10. Print a summary.
 #
-# It never changes the firewall, Caddy or its configuration, the website,
-# the SSH daemon, or any account but the ones named here (it creates none).
-# TLS for the service belongs to Caddy (website/deploy/Caddyfile).
+# It never changes the firewall (the README lists the rules) or the SSH
+# daemon, and touches no account but the deploy account.
 
 set -euo pipefail
 umask 022
@@ -74,10 +92,13 @@ readonly DTLS_CERT="${COTURN_DIR}/cert.pem"
 readonly DTLS_KEY="${COTURN_DIR}/key.pem"
 readonly SERVICE_CONF="${ETC_DIR}/rendezvous.conf"
 readonly TURNSERVER_CONF="/etc/turnserver.conf"
+readonly CADDYFILE_DEST="/etc/caddy/Caddyfile"
 readonly CODE_DIR="/opt/nereus-rendezvous"
 readonly UNIT_NAME="nereus-rendezvous.service"
 readonly UNIT_DEST="/etc/systemd/system/${UNIT_NAME}"
+readonly MEMORY_DROPIN_DEST="/etc/systemd/system/${UNIT_NAME}.d/memory.conf"
 readonly DROPIN_DEST="/etc/systemd/system/coturn.service.d/nereus.conf"
+readonly CADDY_DROPIN_DEST="/etc/systemd/system/caddy.service.d/nereus.conf"
 readonly USE_SERVICE_DEST="/etc/systemd/system/nereus-data-use.service"
 readonly USE_TIMER_DEST="/etc/systemd/system/nereus-data-use.timer"
 readonly USE_SCRIPT_DEST="/usr/local/libexec/nereus-rendezvous/data-use"
@@ -85,7 +106,17 @@ readonly USE_CONF="${ETC_DIR}/data-use.conf"
 readonly CREDENTIAL_PATH="/run/credentials/${UNIT_NAME}/turn-secret"
 readonly SERVICE_PORT=8710
 readonly RELAY_PORTS=(3478 443)
-readonly PACKAGES=(coturn python3 python3-websockets python3-cryptography)
+readonly PACKAGES=(coturn python3 python3-websockets python3-cryptography rsync)
+# The site address in the repository's Caddyfile, replaced by RV_HOST.
+readonly CADDYFILE_SITE="rv.nereussdr.com"
+
+# The official Caddy apt repository, as website/deploy/setup-server.sh and
+# the Caddy install docs have it.
+readonly CADDY_PREREQS=(debian-keyring debian-archive-keyring apt-transport-https curl gnupg)
+readonly CADDY_KEY_URL="https://dl.cloudsmith.io/public/caddy/stable/gpg.key"
+readonly CADDY_LIST_URL="https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt"
+readonly CADDY_KEYRING="/usr/share/keyrings/caddy-stable-archive-keyring.gpg"
+readonly CADDY_SOURCES="/etc/apt/sources.list.d/caddy-stable.list"
 
 # How many relays (allocations) coturn serves at once: its total-quota.
 # One session relayed at both ends takes 2, so 64 is about 32 sessions
@@ -97,14 +128,26 @@ readonly DEFAULT_RELAY_SLOTS=64
 # calendar month. It caps nothing.
 readonly DEFAULT_TRANSFER_GB_PER_MONTH=1000
 
+# The memory limits, worked out from the server's memory in one place
+# (rendezvous document section 9.1). The system and coturn keep a fixed
+# reserve; of the rest, Caddy's Go runtime aims to stay under half
+# (GOMEMLIMIT, a soft limit that makes it collect garbage harder) and the
+# service may use 35% before the kernel ends it (MemoryMax), leaving 15% as
+# headroom. At 1 GB (961 MiB seen by the kernel): Caddy 352 MiB, the service
+# 246 MiB. At 2 GB (1967 MiB): 855 and 598.
+readonly MEMORY_RESERVE_MB=256
+readonly CADDY_SHARE_PERCENT=50
+readonly SERVICE_SHARE_PERCENT=35
+readonly MEMORY_MIN_MB=768
+
 # Keys only this script writes into /etc/turnserver.conf. turnserver.conf
 # in the repository must not set any of them.
 readonly MANAGED_KEYS=(static-auth-secret listening-ip relay-ip external-ip cert pkey bps-capacity total-quota realm)
 
 export DEBIAN_FRONTEND=noninteractive
 # needrestart (part of Ubuntu server) can restart running services after
-# apt installs packages. List mode only reports, so no other service on
-# this host (Caddy, netbench) is restarted by this script.
+# apt installs packages. List mode only reports, so this script restarts
+# nothing it does not name.
 export NEEDRESTART_MODE=l
 
 log()  { printf '\n==> %s\n' "$*"; }
@@ -151,6 +194,8 @@ readonly script_dir
 readonly repo_turnserver_conf="${script_dir}/turnserver.conf"
 readonly repo_unit="${script_dir}/${UNIT_NAME}"
 readonly repo_dropin="${script_dir}/coturn-override.conf"
+readonly repo_caddy_dropin="${script_dir}/caddy-override.conf"
+readonly repo_caddyfile="${script_dir}/Caddyfile"
 readonly repo_use_service="${script_dir}/nereus-data-use.service"
 readonly repo_use_timer="${script_dir}/nereus-data-use.timer"
 readonly repo_use_script="${script_dir}/data-use.py"
@@ -160,7 +205,9 @@ relay_host4="${RV_RELAY_HOST4:-rv4.nereussdr.com}"
 relay_host6="${RV_RELAY_HOST6:-rv6.nereussdr.com}"
 relay_slots="${RV_RELAY_SLOTS:-$DEFAULT_RELAY_SLOTS}"
 transfer_gb="${RV_TRANSFER_GB_PER_MONTH:-$DEFAULT_TRANSFER_GB_PER_MONTH}"
-deploy_user="${RV_DEPLOY_USER:-nereusweb}"
+deploy_user="${RV_DEPLOY_USER:-nereusrv}"
+deploy_key="${RV_DEPLOY_KEY:-}"
+manage_caddy="${RV_MANAGE_CADDY:-yes}"
 
 # Root's temporary files, removed on exit.
 tmp_paths=()
@@ -325,8 +372,47 @@ install_file() {
     echo changed
 }
 
+# Rule (as in website/deploy/setup-server.sh): root does no file operation
+# inside a directory the deploy account can write (its home and ~/.ssh);
+# that work runs as the account, where a symlink it planted reaches only
+# files it could change anyway. runuser keeps the caller's working
+# directory, which the account may not enter, so the command starts in /.
+as_deploy_user() {
+    (cd / && runuser -u "$deploy_user" -- "$@")
+}
+
+# True when $1 is one SSH public key line whose key blob names the same
+# type as its first field (what ssh-keygen -l checks, without needing it).
+is_ssh_key_line() {
+    python3 - "$1" <<'PY'
+import base64, struct, sys
+line = sys.argv[1]
+if "\n" in line or "\r" in line:
+    sys.exit(1)
+fields = line.split()
+if len(fields) < 2 or not fields[0].startswith(("ssh-", "ecdsa-", "sk-")):
+    sys.exit(1)
+try:
+    blob = base64.b64decode(fields[1], validate=True)
+    (n,) = struct.unpack(">I", blob[:4])
+    ok = blob[4:4 + n].decode("ascii") == fields[0]
+except Exception:
+    ok = False
+sys.exit(0 if ok else 1)
+PY
+}
+
+# Every unit the script enables, and what it tells a failure by.
+enable_units() {
+    local out
+    if ! out="$(systemctl enable "$@" 2>&1)"; then
+        printf '%s\n' "$out" >&2
+        die "systemctl enable $* failed (above)"
+    fi
+}
+
 # ---------------------------------------------------------------------------
-log "1/8 Checking the host, the inputs and the settings"
+log "1/10 Checking the host, the inputs and the settings"
 
 if [[ "$(id -u)" -ne 0 ]]; then
     die "run this as root"
@@ -337,7 +423,9 @@ if [[ "$os_id" != "ubuntu" ]]; then
     die "this script supports Ubuntu only (found: ${os_id:-unknown})"
 fi
 command -v python3 >/dev/null 2>&1 || die "python3 is not installed (it is on every Ubuntu server image)"
-for f in "$repo_turnserver_conf" "$repo_unit" "$repo_dropin" "$repo_use_service" "$repo_use_timer" "$repo_use_script"; do
+command -v runuser >/dev/null 2>&1 || die "runuser (util-linux) is not installed"
+for f in "$repo_turnserver_conf" "$repo_unit" "$repo_dropin" "$repo_caddy_dropin" "$repo_caddyfile" \
+        "$repo_use_service" "$repo_use_timer" "$repo_use_script"; do
     [[ -f "$f" && -r "$f" ]] || die "missing ${f}; run this from a whole copy of rendezvous/deploy/"
 done
 (( dry_run )) && note "dry run: nothing is changed"
@@ -361,8 +449,17 @@ for name in "$rv_host" "$relay_host4" "$relay_host6"; do
 done
 [[ "$relay_slots" =~ ^[1-9][0-9]*$ ]] || die "RV_RELAY_SLOTS must be a whole number, at least 1 (got ${relay_slots})"
 [[ "$transfer_gb" =~ ^[1-9][0-9]*$ ]] || die "RV_TRANSFER_GB_PER_MONTH must be a whole number of GB (got ${transfer_gb})"
-id -u "$deploy_user" >/dev/null 2>&1 \
-    || die "the deploy account ${deploy_user} does not exist (website/deploy/setup-server.sh makes nereusweb; see rendezvous/README.md)"
+[[ "$manage_caddy" == yes || "$manage_caddy" == no ]] || die "RV_MANAGE_CADDY must be yes or no (got ${manage_caddy})"
+[[ "$deploy_user" =~ ^[a-z_][a-z0-9_-]*$ ]] || die "not an account name: ${deploy_user}"
+grep -q "^${CADDYFILE_SITE} {\$" "$repo_caddyfile" || die "${repo_caddyfile} has no '${CADDYFILE_SITE} {' site line"
+if [[ -n "$deploy_key" ]]; then
+    is_ssh_key_line "$deploy_key" || die "RV_DEPLOY_KEY is not one SSH public key line, such as 'ssh-ed25519 AAAA... comment'"
+    note "deploy key: ${deploy_key%% *} ... (for ${deploy_user})"
+elif id -u "$deploy_user" >/dev/null 2>&1; then
+    note "deploy account ${deploy_user} exists; no RV_DEPLOY_KEY given, so its keys are left as they are"
+else
+    die "the deploy account ${deploy_user} does not exist yet: set RV_DEPLOY_KEY to its SSH public key line"
+fi
 
 public4="${RV_PUBLIC_IPV4:-$(detect_address 4)}"
 public6="${RV_PUBLIC_IPV6:-$(detect_address 6)}"
@@ -386,6 +483,14 @@ bps_capacity=$(( relay_slots * max_bps ))
 peak_kbit=$(( bps_capacity * 8 / 1000 ))
 note "relay: ${total_quota} slots (total-quota), ${user_quota} per station id (user-quota), ${max_bps} bytes/s each way per slot (max-bps): bps-capacity ${bps_capacity} bytes/s, at most ${peak_kbit} kbit/s out when every slot is full"
 
+# Memory (the formula above).
+memory_mb="${RV_MEMORY_MB:-$(awk '/^MemTotal:/ { print int($2 / 1024) }' /proc/meminfo)}"
+[[ "$memory_mb" =~ ^[1-9][0-9]*$ ]] || die "RV_MEMORY_MB must be a whole number of MiB (got ${memory_mb})"
+(( memory_mb >= MEMORY_MIN_MB )) || die "${memory_mb} MiB of memory is too little; the rendezvous needs at least ${MEMORY_MIN_MB} (rendezvous document section 9.1)"
+caddy_limit_mb=$(( (memory_mb - MEMORY_RESERVE_MB) * CADDY_SHARE_PERCENT / 100 ))
+service_limit_mb=$(( (memory_mb - MEMORY_RESERVE_MB) * SERVICE_SHARE_PERCENT / 100 ))
+note "memory: ${memory_mb} MiB; ${MEMORY_RESERVE_MB} kept for the system and coturn; Caddy GOMEMLIMIT ${caddy_limit_mb} MiB; the service MemoryMax ${service_limit_mb} MiB"
+
 data_use_iface="${RV_DATA_USE_INTERFACE:-$(default_interface)}"
 [[ -n "$data_use_iface" ]] || die "no default route found for the data-use report; set RV_DATA_USE_INTERFACE"
 [[ "$data_use_iface" =~ ^[A-Za-z0-9_.:-]+$ && -r "/sys/class/net/${data_use_iface}/statistics/tx_bytes" ]] \
@@ -400,31 +505,43 @@ if [[ -n "$holders" ]]; then
     if (( no_start )); then
         note "another process holds a relay port (above); coturn is not started (--no-start)"
     else
-        die "another process holds UDP 3478 or 443 (above); stop it first (on nereussdr.com: the netbench service, with JJ's agreement). Nothing was changed."
+        die "another process holds UDP 3478 or 443 (above); stop it first. Nothing was changed."
     fi
 else
     note "UDP 3478 and 443 are free or held by coturn"
 fi
 
 # ---------------------------------------------------------------------------
-log "2/8 Packages: ${PACKAGES[*]}"
+log "2/10 Packages"
 
+packages=("${PACKAGES[@]}")
+if [[ "$manage_caddy" == yes ]]; then
+    packages+=(caddy)
+fi
 missing=()
-for pkg in "${PACKAGES[@]}"; do
+for pkg in "${packages[@]}"; do
     is_installed "$pkg" || missing+=("$pkg")
 done
+caddy_repo=0
+if [[ " ${missing[*]} " == *" caddy "* ]] && ! [[ -s "$CADDY_KEYRING" && -s "$CADDY_SOURCES" ]]; then
+    caddy_repo=1
+fi
 if [[ ${#missing[@]} -eq 0 ]]; then
-    note "already installed"
+    note "already installed: ${packages[*]}"
 elif (( dry_run )); then
     note "would install: ${missing[*]}"
+    if (( caddy_repo )); then
+        note "would add Caddy's apt repository first"
+    fi
 else
     note "installing: ${missing[*]}"
     # coturn's package starts coturn with its stock configuration, which
-    # allows anyone to relay. A policy-rc.d that answers 101 keeps any
-    # service from being started during this install; it is removed after,
-    # and one that was already there is left alone.
-    # It goes on the list of files removed on exit the moment it exists,
-    # so no failure below leaves it blocking every service on the host.
+    # allows anyone to relay, and Caddy's starts Caddy with its sample. A
+    # policy-rc.d that answers 101 keeps any service from being started
+    # during the install; it is removed after, and one that was already
+    # there is left alone. It goes on the list of files removed on exit the
+    # moment it exists, so no failure below leaves it blocking every
+    # service on the host.
     policy="/usr/sbin/policy-rc.d"
     added_policy=0
     if [[ ! -e "$policy" ]]; then
@@ -433,32 +550,94 @@ else
         chmod 755 "$policy"
         added_policy=1
     fi
-    apt_get update || die "apt-get update failed; nothing was installed"
-    apt_get install -y --no-install-recommends \
-        -o Dpkg::Options::=--force-confdef \
-        -o Dpkg::Options::=--force-confold \
-        "${missing[@]}" || die "apt-get install failed"
-    if (( added_policy )); then
-        rm -f -- "$policy"
+    install_status=0
+    apt_get update || install_status=$?
+    if (( install_status == 0 && caddy_repo )); then
+        note "adding Caddy's apt repository"
+        repo_missing=()
+        for pkg in "${CADDY_PREREQS[@]}"; do
+            is_installed "$pkg" || repo_missing+=("$pkg")
+        done
+        if [[ ${#repo_missing[@]} -gt 0 ]]; then
+            apt_get install -y "${repo_missing[@]}" || install_status=$?
+        fi
+        if (( install_status == 0 )); then
+            repo_dir="$(mktemp -d)"
+            tmp_paths+=("$repo_dir")
+            { curl -1sLf "$CADDY_KEY_URL" | gpg --dearmor -o "${repo_dir}/caddy.gpg" \
+                && curl -1sLf "$CADDY_LIST_URL" -o "${repo_dir}/caddy.list" \
+                && install -m 0644 "${repo_dir}/caddy.gpg" "$CADDY_KEYRING" \
+                && install -m 0644 "${repo_dir}/caddy.list" "$CADDY_SOURCES" \
+                && apt_get update; } || install_status=$?
+        fi
+    fi
+    if (( install_status == 0 )); then
+        apt_get install -y --no-install-recommends \
+            -o Dpkg::Options::=--force-confdef \
+            -o Dpkg::Options::=--force-confold \
+            "${missing[@]}" || install_status=$?
     fi
     if (( have_systemd )) && [[ " ${missing[*]} " == *" coturn "* ]]; then
         # The package enables coturn at boot on its stock, open
-        # configuration. Keep it disabled (and stopped, should anything
-        # have started it) until step 7, so a setup that stops before the
-        # configuration is written never leaves that behind.
+        # configuration, and it may have been unpacked even when the
+        # install as a whole failed. Keep it disabled (and stopped, should
+        # anything have started it) until step 9, whatever happened above.
         systemctl disable --now coturn >/dev/null 2>&1 || true
         note "coturn is disabled until its configuration is in place"
     fi
+    if (( added_policy )); then
+        rm -f -- "$policy"
+    fi
+    (( install_status == 0 )) || die "installing the packages failed (apt-get, above)"
 fi
 if ! (( dry_run )); then
     command -v turnserver >/dev/null 2>&1 || die "turnserver is not on PATH after installation"
     id -u turnserver >/dev/null 2>&1 || die "the turnserver account is missing after installation"
+    if [[ "$manage_caddy" == yes ]]; then
+        command -v caddy >/dev/null 2>&1 || die "caddy is not on PATH after installation"
+    fi
 fi
 
 # ---------------------------------------------------------------------------
-log "3/8 TURN secret and coturn's DTLS key pair"
+log "3/10 Deploy account ${deploy_user}"
 
-# What changes, for step 7: coturn and the service are restarted only when
+if (( dry_run )); then
+    if id -u "$deploy_user" >/dev/null 2>&1; then note "account present"; else note "would create ${deploy_user}"; fi
+    [[ -n "$deploy_key" ]] && note "would set its authorized_keys to exactly the given key"
+else
+    if ! id -u "$deploy_user" >/dev/null 2>&1; then
+        # No password: the account signs in with its key only.
+        useradd --create-home --shell /bin/bash "$deploy_user"
+        note "created ${deploy_user}"
+    fi
+    if [[ -n "$deploy_key" ]]; then
+        deploy_home="$(getent passwd "$deploy_user" | cut -d: -f6)"
+        # As the deploy account: ~/.ssh (700), the key line from stdin to a
+        # temp file there (600), renamed over authorized_keys.
+        key_script="$(cat <<'EOF'
+set -euo pipefail
+umask 077
+mkdir -p "$1"
+chmod 700 "$1"
+new_keys="$(mktemp "$1/.authorized_keys.XXXXXX")"
+trap 'rm -f -- "$new_keys"' EXIT
+cat > "$new_keys"
+chmod 600 "$new_keys"
+if [[ -f "$2" ]] && cmp -s "$new_keys" "$2"; then echo same; else echo set; fi
+mv -f -- "$new_keys" "$2"
+EOF
+)"
+        key_result="$(printf '%s\n' "$deploy_key" \
+            | as_deploy_user bash -c "$key_script" "as-${deploy_user}" "${deploy_home}/.ssh" "${deploy_home}/.ssh/authorized_keys")" \
+            || die "could not write ${deploy_home}/.ssh/authorized_keys as ${deploy_user} (above)"
+        note "authorized_keys: ${key_result}"
+    fi
+fi
+
+# ---------------------------------------------------------------------------
+log "4/10 TURN secret and coturn's DTLS key pair"
+
+# What changes, for step 9: coturn and the service are restarted only when
 # one of their own files changed.
 coturn_changed=0
 service_changed=0
@@ -536,12 +715,12 @@ PY
 fi
 
 # ---------------------------------------------------------------------------
-log "4/8 ${TURNSERVER_CONF}"
+log "5/10 ${TURNSERVER_CONF}"
 
 work_dir="$(mktemp -d)"
 tmp_paths+=("$work_dir")
 chmod 700 "$work_dir"
-secret_line="static-auth-secret=(made in step 3)"
+secret_line="static-auth-secret=(made in step 4)"
 if [[ -s "$SECRET_FILE" ]]; then
     secret_line="static-auth-secret=$(cat "$SECRET_FILE")"
 fi
@@ -560,18 +739,18 @@ fi
     printf 'total-quota=%s\n' "$total_quota"
     printf '%s\n' "$secret_line"
 } > "${work_dir}/turnserver.conf"
+would=""
+if (( dry_run )); then
+    would=" would be"
+fi
 result="$(install_file "${work_dir}/turnserver.conf" "$TURNSERVER_CONF" 640 root:turnserver secret)"
 if [[ "$result" == changed ]]; then
     coturn_changed=1
 fi
-if (( dry_run )); then
-    note "${TURNSERVER_CONF} would be: ${result}"
-else
-    note "${TURNSERVER_CONF}: ${result}"
-fi
+note "${TURNSERVER_CONF}${would}: ${result}"
 
 # ---------------------------------------------------------------------------
-log "5/8 ${SERVICE_CONF}"
+log "6/10 ${SERVICE_CONF}"
 
 {
     printf '# The NereusSDR rendezvous service on this server. Written by\n'
@@ -607,41 +786,76 @@ result="$(install_file "${work_dir}/rendezvous.conf" "$SERVICE_CONF" 644 root:ro
 if [[ "$result" == changed ]]; then
     service_changed=1
 fi
-if (( dry_run )); then
-    note "${SERVICE_CONF} would be: ${result}"
+note "${SERVICE_CONF}${would}: ${result}"
+
+# ---------------------------------------------------------------------------
+log "7/10 ${CADDYFILE_DEST}"
+
+caddyfile_changed=0
+if [[ "$manage_caddy" == no ]]; then
+    note "RV_MANAGE_CADDY=no: Caddy and its configuration are left alone (add the ${rv_host} site yourself; see the README)"
 else
-    note "${SERVICE_CONF}: ${result}"
+    sed "s|^${CADDYFILE_SITE} {\$|${rv_host} {|" "$repo_caddyfile" > "${work_dir}/Caddyfile"
+    if command -v caddy >/dev/null 2>&1; then
+        if ! out="$(caddy validate --config "${work_dir}/Caddyfile" --adapter caddyfile 2>&1)"; then
+            printf '%s\n' "$out" >&2
+            die "the Caddyfile failed caddy validate (above); ${CADDYFILE_DEST} was left unchanged"
+        fi
+        note "caddy validate: Valid configuration"
+    else
+        note "caddy is not installed yet: the Caddyfile will be validated once it is"
+    fi
+    if ! (( dry_run )); then
+        install -d -m 0755 -o root -g root "$(dirname "$CADDYFILE_DEST")"
+    fi
+    result="$(install_file "${work_dir}/Caddyfile" "$CADDYFILE_DEST" 644 root:root)"
+    if [[ "$result" == changed ]]; then
+        caddyfile_changed=1
+    fi
+    note "${CADDYFILE_DEST}${would}: ${result}"
 fi
 
 # ---------------------------------------------------------------------------
-log "6/8 Units and ${CODE_DIR}"
+log "8/10 Units, drop-ins and ${CODE_DIR}"
 
+caddy_changed=0
 printf 'RV_DATA_USE_INTERFACE=%s\nRV_TRANSFER_GB_PER_MONTH=%s\n' "$data_use_iface" "$transfer_gb" > "${work_dir}/data-use.conf"
-would=""
-if (( dry_run )); then
-    would=" would be"
-else
-    install -d -m 0755 -o root -g root "$(dirname "$DROPIN_DEST")" "$(dirname "$USE_SCRIPT_DEST")"
-fi
-result="$(install_file "$repo_unit" "$UNIT_DEST" 644 root:root)"
-note "service unit${would}: ${result}"
-if [[ "$result" == changed ]]; then
-    service_changed=1 units_changed=1
-fi
-result="$(install_file "$repo_dropin" "$DROPIN_DEST" 644 root:root)"
-note "coturn drop-in${would}: ${result}"
-if [[ "$result" == changed ]]; then
-    coturn_changed=1 units_changed=1
-fi
-for pair in "${repo_use_service}:${USE_SERVICE_DEST}" "${repo_use_timer}:${USE_TIMER_DEST}"; do
-    result="$(install_file "${pair%%:*}" "${pair#*:}" 644 root:root)"
-    note "${pair#*:}${would}: ${result}"
-    if [[ "$result" == changed ]]; then
-        units_changed=1
+{
+    printf '# Written by rendezvous/deploy/setup-server.sh from the server'"'"'s memory\n'
+    printf '# (%s MiB; the formula is in the script and the rendezvous document,\n' "$memory_mb"
+    printf '# section 9.1).\n[Service]\nMemoryMax=%sM\n' "$service_limit_mb"
+} > "${work_dir}/memory.conf"
+sed "s|@GOMEMLIMIT@|${caddy_limit_mb}MiB|" "$repo_caddy_dropin" > "${work_dir}/caddy-override.conf"
+if ! (( dry_run )); then
+    install -d -m 0755 -o root -g root "$(dirname "$DROPIN_DEST")" "$(dirname "$MEMORY_DROPIN_DEST")" \
+        "$(dirname "$USE_SCRIPT_DEST")"
+    if [[ "$manage_caddy" == yes ]]; then
+        install -d -m 0755 -o root -g root "$(dirname "$CADDY_DROPIN_DEST")"
     fi
-done
-note "${USE_SCRIPT_DEST}${would}: $(install_file "$repo_use_script" "$USE_SCRIPT_DEST" 755 root:root)"
-note "${USE_CONF}${would}: $(install_file "${work_dir}/data-use.conf" "$USE_CONF" 644 root:root)"
+fi
+# $1 source, $2 destination, $3 mode, $4..: flags to set when it changed.
+place() {
+    local src="$1" dest="$2" mode="$3" result flag
+    shift 3
+    result="$(install_file "$src" "$dest" "$mode" root:root)"
+    note "${dest}${would}: ${result}"
+    if [[ "$result" == changed ]]; then
+        for flag in "$@"; do
+            printf -v "$flag" 1
+        done
+    fi
+}
+units_changed=0
+place "$repo_unit" "$UNIT_DEST" 644 service_changed units_changed
+place "${work_dir}/memory.conf" "$MEMORY_DROPIN_DEST" 644 service_changed units_changed
+place "$repo_dropin" "$DROPIN_DEST" 644 coturn_changed units_changed
+if [[ "$manage_caddy" == yes ]]; then
+    place "${work_dir}/caddy-override.conf" "$CADDY_DROPIN_DEST" 644 caddy_changed units_changed
+fi
+place "$repo_use_service" "$USE_SERVICE_DEST" 644 units_changed
+place "$repo_use_timer" "$USE_TIMER_DEST" 644 units_changed
+place "$repo_use_script" "$USE_SCRIPT_DEST" 755
+place "${work_dir}/data-use.conf" "$USE_CONF" 644
 if (( dry_run )); then
     if [[ -d "$CODE_DIR" ]]; then note "${CODE_DIR} present"; else note "would make ${CODE_DIR} for ${deploy_user}"; fi
 else
@@ -654,7 +868,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-log "7/8 Services"
+log "9/10 Services"
 
 # $1: unit; $2: 1 when one of its files changed. Prints what happens (or
 # would happen): start a stopped unit, restart a running one only after a
@@ -666,11 +880,11 @@ plan_for() {
         echo start
     fi
 }
-# $1: unit; $2: start, restart or keep.
+# $1: unit; $2: start, restart, reload or keep.
 apply_plan() {
     case "$2" in
         keep) note "$1 is running and none of its files changed: left as it is" ;;
-        start | restart)
+        start | restart | reload)
             systemctl "$2" "$1" || die "$1 did not ${2}; see: journalctl -u $1 -n 50 --no-pager"
             sleep 1
             systemctl is-active --quiet "$1" || die "$1 is not active; see: journalctl -u $1 -n 50 --no-pager"
@@ -679,11 +893,28 @@ apply_plan() {
 }
 coturn_plan="$(plan_for coturn "$coturn_changed")"
 service_plan="$(plan_for "$UNIT_NAME" "$service_changed")"
+caddy_plan=keep
+if [[ "$manage_caddy" == yes ]]; then
+    caddy_plan="$(plan_for caddy "$caddy_changed")"
+    # A Caddyfile change alone is a reload, which keeps open WebSockets
+    # (stream_close_delay); only a change to its unit restarts Caddy.
+    if [[ "$caddy_plan" == keep ]] && (( caddyfile_changed )); then
+        caddy_plan=reload
+    fi
+fi
 code_present=0
 if [[ -f "${CODE_DIR}/nereus_rendezvous/__main__.py" ]]; then
     code_present=1
 fi
 if (( dry_run )); then
+    if [[ "$manage_caddy" == yes ]]; then
+        case "$caddy_plan" in
+            restart) note "caddy would be restarted (its unit changed); every WebSocket is dropped and the Cores connect again" ;;
+            reload) note "caddy would reload its configuration (open WebSockets are kept)" ;;
+            start) note "caddy would be started" ;;
+            keep) note "caddy would be left running (none of its files changed)" ;;
+        esac
+    fi
     case "$coturn_plan" in
         restart) note "coturn would be restarted (its files changed); a restart drops every live relay" ;;
         start) note "coturn would be started" ;;
@@ -703,7 +934,13 @@ else
     if (( units_changed )); then
         systemctl daemon-reload
     fi
-    systemctl enable coturn "$UNIT_NAME" nereus-data-use.timer >/dev/null 2>&1
+    if [[ "$manage_caddy" == yes ]]; then
+        enable_units caddy
+    fi
+    enable_units coturn "$UNIT_NAME" nereus-data-use.timer
+    if [[ "$manage_caddy" == yes ]]; then
+        apply_plan caddy "$caddy_plan"
+    fi
     apply_plan coturn "$coturn_plan"
     if (( code_present )); then
         apply_plan "$UNIT_NAME" "$service_plan"
@@ -716,12 +953,16 @@ fi
 
 if ! (( dry_run || no_start )); then
     # coturn: UDP 3478 and 443 on the two public addresses, and no TCP port.
-    # The service: TCP 8710 on loopback only.
+    # The service: TCP 8710 on loopback only. Caddy: no UDP (HTTP/3 off).
     held="$(socket_holders 3478 443 "$SERVICE_PORT")"
     note "sockets on UDP 3478, UDP 443 and TCP ${SERVICE_PORT}:"
     printf '%s\n' "$held" | sed 's/^/      /'
-    if [[ -n "$(socket_holders | awk '$1 == "tcp" && $5 == "turnserver"')" ]]; then
+    every="$(socket_holders)"
+    if [[ -n "$(awk '$1 == "tcp" && $5 == "turnserver"' <<<"$every")" ]]; then
         die "coturn holds a TCP port; it must use UDP only"
+    fi
+    if [[ -n "$(awk '$1 == "udp" && $5 == "caddy"' <<<"$every")" ]]; then
+        die "caddy holds a UDP port; HTTP/3 must stay off (the servers block in ${CADDYFILE_DEST})"
     fi
     for port in "${RELAY_PORTS[@]}"; do
         for addr in "$public4" "$public6"; do
@@ -732,22 +973,27 @@ if ! (( dry_run || no_start )); then
     if [[ -n "$(awk -v p="$SERVICE_PORT" '$1 == "tcp" && $2 == p && $3 != "127.0.0.1" && $3 != "::1"' <<<"$held")" ]]; then
         die "something listens on TCP ${SERVICE_PORT} beyond loopback"
     fi
-    note "coturn holds UDP 3478 and 443 on both addresses and no TCP port"
+    note "coturn holds UDP 3478 and 443 on both addresses and no TCP port; Caddy holds no UDP port"
 fi
 
 # ---------------------------------------------------------------------------
-log "8/8 Summary"
+log "10/10 Summary"
 
 if ! (( dry_run )); then
     note "coturn:        $(dpkg-query -W -f='${Version}' coturn 2>/dev/null || echo unknown)"
     note "websockets:    $(dpkg-query -W -f='${Version}' python3-websockets 2>/dev/null || echo unknown)"
+    if [[ "$manage_caddy" == yes ]]; then
+        note "caddy:         $(caddy version 2>/dev/null | cut -d' ' -f1 || echo unknown)"
+    fi
 fi
 note "service name:  ${rv_host} (Caddy forwards it to 127.0.0.1:${SERVICE_PORT} and [::1]:${SERVICE_PORT})"
 note "relay names:   ${relay_host4} (A ${public4}), ${relay_host6} (AAAA ${public6})"
 note "relay ports:   UDP 3478 and 443; relays on UDP 61000 to 65535"
 note "relay size:    ${total_quota} slots, ${user_quota} per station id, bps-capacity ${bps_capacity} bytes/s"
+note "memory:        Caddy GOMEMLIMIT ${caddy_limit_mb} MiB, the service MemoryMax ${service_limit_mb} MiB (of ${memory_mb})"
 note "data use:      ${data_use_iface}, report threshold ${transfer_gb} GB a month"
+note "deploy:        ${deploy_user} writes ${CODE_DIR}"
 note "secret:        ${SECRET_FILE} (root only; never printed)"
 note ""
-note "Caddy's site for ${rv_host} comes from website/deploy/Caddyfile, installed by"
-note "website/deploy/setup-server.sh; this script leaves Caddy alone."
+note "Caddy obtains the certificate for ${rv_host} from Let's Encrypt once its A and"
+note "AAAA records point at this server and TCP 80 and 443 are open."

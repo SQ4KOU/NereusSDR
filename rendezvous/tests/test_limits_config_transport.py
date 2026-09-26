@@ -130,7 +130,7 @@ def test_defaults():
     assert config.candidates_per_side == 64
     assert config.introduction_lifetime_ms == 120000
     assert (config.connections_per_address, config.stations_per_address) == (16, 4)
-    assert (config.max_connections, config.max_stations) == (1024, 2000)
+    assert (config.max_connections, config.max_stations) == (256, 2000)
     assert (config.send_queue_bytes, config.send_budget_bytes) == (1048576, 33554432)
     assert config.send_stall_ms == 30000
     # IPv4 first in both lists (rendezvous document section 8); the sample
@@ -338,7 +338,7 @@ def _live(go):
 
 def test_a_request_that_is_not_a_websocket_gets_426():
     """Caddy sends every request for rv to the service
-    (website/deploy/Caddyfile), so the service answers the rest itself:
+    (rendezvous/deploy/Caddyfile), so the service answers the rest itself:
     426, a short plain text, Upgrade: websocket, and no Server header."""
 
     async def go(port):
@@ -348,6 +348,7 @@ def test_a_request_that_is_not_a_websocket_gets_426():
         assert lines[0].startswith("HTTP/1.1 426"), lines[0]
         headers = {k.lower(): v.strip() for k, _, v in (line.partition(":") for line in lines[1:])}
         assert headers["upgrade"] == "websocket"
+        assert headers["connection"] == "upgrade, close"
         assert headers["content-type"] == "text/plain; charset=utf-8"
         assert headers["cache-control"] == "no-store"
         assert "server" not in headers
@@ -376,3 +377,33 @@ def test_websocket_upgrade_in_any_case_and_with_a_port_in_host(upgrade, host):
         assert b'"type":"hello"' in frame, frame
 
     _live(go)
+
+
+def _url_lists(value):
+    if isinstance(value, list):
+        if value and all(isinstance(x, str) and x.startswith(("stun:", "turn:")) for x in value):
+            yield value
+        for item in value:
+            yield from _url_lists(item)
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _url_lists(item)
+
+
+def test_every_url_list_puts_the_ipv4_name_first():
+    """Section 8: IPv4 first, in the service's defaults, the sample, the
+    runner's fixture settings and every URL list in the conformance
+    vectors (coturn-check.sh checks what setup-server.sh writes)."""
+    import json
+    from pathlib import Path
+
+    import runner
+
+    root = Path(__file__).resolve().parent.parent / "conformance"
+    lists = [runner.FIXTURE_STUN, runner.FIXTURE_TURN, cfg.Config().stun_urls, cfg.Config().turn_urls]
+    for path in sorted(root.rglob("*.json")):
+        lists.extend(_url_lists(json.loads(path.read_text(encoding="utf-8"))))
+    assert len(lists) > 60
+    for urls in lists:
+        families = ["rv4" if "rv4." in u else "rv6" if "rv6." in u else "other" for u in urls]
+        assert families == sorted(families, key=lambda f: {"rv4": 0, "rv6": 1, "other": 2}[f]), urls

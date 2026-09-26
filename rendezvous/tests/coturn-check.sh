@@ -3,7 +3,9 @@
 # coturn-check.sh: the relay's configuration, in Docker, on Ubuntu 24.04's
 # own coturn.
 #
-# A server container is set up by rendezvous/deploy/setup-server.sh (with
+# A server container (ubuntu:24.04 with Caddy from Caddy's apt repository
+# and Ubuntu's coturn and Python packages, as a dedicated server ends up) is
+# set up by rendezvous/deploy/setup-server.sh (with
 # --no-start, as the container has no systemd) and coturn is started the
 # way the unit and its drop-in start it: as the turnserver account with
 # CAP_NET_BIND_SERVICE only. A peer container on the same networks plays
@@ -14,14 +16,19 @@
 # 2001:db8:77::/64), which the relay must never reach, although it could.
 #
 # It checks:
-#   - setup-server.sh when apt-get fails (policy-rc.d never left behind);
+#   - setup-server.sh when apt-get fails (policy-rc.d never left behind,
+#     coturn disabled even when the install failed after unpacking);
 #   - setup-server.sh (dry run, then real, then again: nothing changes),
 #     the files it writes and their modes, and the default relay sizing;
 #   - setup-server.sh where systemd runs (a stand-in systemctl that starts
 #     the units' programs): a TCP 443 holder is allowed, a UDP 443 or 3478
 #     holder refused; coturn is disabled right after it is installed;
-#     step 7 starts, then leaves alone, then restarts only after a change,
-#     and checks the ports each one holds; the TURN secret's backups;
+#     step 9 starts Caddy, coturn and the service, then leaves them alone,
+#     reloads Caddy after a Caddyfile change and restarts only after a unit
+#     or configuration change, and checks the ports each one holds; a
+#     failing systemctl enable and a failing file install stop it with a
+#     message; the TURN secret's backups; the deploy account and its key;
+#     the Caddyfile, Caddy's drop-in and the memory limits;
 #   - coturn holds UDP 3478 and 443 on both addresses and no TCP port;
 #   - STUN answers on both ports in both families, without credentials;
 #   - turnutils_uclient: a valid allocation relays on both ports in both
@@ -45,7 +52,7 @@ set -euo pipefail
 
 repo="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)"
 readonly repo
-readonly image="nereus-rv-coturn:24.04"
+readonly image="nereus-rv-server:24.04"
 readonly tag="$$"
 readonly pub="nereus-rv-pub-${tag}" priv="nereus-rv-priv-${tag}"
 readonly server="nereus-rv-turn-${tag}" peer="nereus-rv-peer-${tag}"
@@ -67,12 +74,19 @@ trap cleanup EXIT
 
 command -v docker >/dev/null 2>&1 || fail "docker is not installed"
 
-echo "# building ${image} (ubuntu:24.04 with Ubuntu's coturn and Python packages)"
+echo "# building ${image} (ubuntu:24.04 with Caddy from Caddy's apt repository, Ubuntu's coturn, Python packages and rsync)"
 docker build -q -t "$image" - >/dev/null <<'EOF'
 FROM ubuntu:24.04
 RUN apt-get update \
  && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
-      coturn python3 python3-websockets python3-cryptography python3-pytest \
+      debian-keyring debian-archive-keyring apt-transport-https curl gnupg ca-certificates \
+ && curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/gpg.key \
+      | gpg --dearmor -o /usr/share/keyrings/caddy-stable-archive-keyring.gpg \
+ && curl -1sLf https://dl.cloudsmith.io/public/caddy/stable/debian.deb.txt \
+      -o /etc/apt/sources.list.d/caddy-stable.list \
+ && apt-get update \
+ && DEBIAN_FRONTEND=noninteractive apt-get install -y --no-install-recommends \
+      caddy coturn python3 python3-websockets python3-cryptography python3-pytest rsync \
  && rm -rf /var/lib/apt/lists/*
 EOF
 echo "# coturn $(docker run --rm "$image" dpkg-query -W -f='${Version}' coturn), $(docker run --rm "$image" turnserver --version 2>/dev/null | head -1)"
@@ -97,13 +111,28 @@ px() { docker exec -i "$peer" bash -s -- "$@"; }
 probe() { docker exec "$peer" python3 /repo/rendezvous/tests/turn_probe.py "$@"; }
 # Test-only settings for setup-server.sh: the test addresses stand in for
 # public ones, and the relay has 6 slots so the total quota can be reached.
-readonly setup_env="RV_PUBLIC_IPV4=${s4} RV_PUBLIC_IPV6=${s6} RV_ALLOW_DOCUMENTATION_ADDRESSES=1 RV_RELAY_SLOTS=6"
+# RV_MEMORY_MB fixes the memory the limits are worked out from.
+readonly setup_env="RV_PUBLIC_IPV4=${s4} RV_PUBLIC_IPV6=${s6} RV_ALLOW_DOCUMENTATION_ADDRESSES=1 RV_RELAY_SLOTS=6 RV_MEMORY_MB=1024"
 
 # --------------------------------------------------------------- setup
+# A deploy key made for this run only; setup-server.sh makes the account.
+work="$(mktemp -d "${TMPDIR:-/tmp}/nereus-coturn-check.XXXXXX")"
+ssh-keygen -q -t ed25519 -N "" -C coturn-check -f "${work}/deploy"
+docker cp "${work}/deploy.pub" "${server}:/run/deploy.pub"
+rm -rf -- "$work"
 sx <<'EOS'
 set -euo pipefail
-# The deploy account the website's setup makes on the real server.
-useradd -m -s /bin/bash nereusweb
+# setup-server.sh with RV_DEPLOY_KEY, which holds spaces, so it cannot ride
+# in the settings string the calls below pass through env.
+cat > /usr/local/bin/rv-setup <<'SH'
+#!/bin/bash
+RV_DEPLOY_KEY="$(cat /run/deploy.pub)"
+export RV_DEPLOY_KEY
+exec bash /repo/rendezvous/deploy/setup-server.sh "$@"
+SH
+chmod 755 /usr/local/bin/rv-setup
+# The packaged Caddyfile, to show a dry run leaves it alone.
+sha256sum /etc/caddy/Caddyfile > /run/caddyfile.sum
 # Docker's ubuntu image ships a policy-rc.d of its own; a server has none.
 rm -f /usr/sbin/policy-rc.d
 # A syslog socket, as journald provides on the server, so coturn's log
@@ -147,14 +176,15 @@ SH
 echo "$failing" > /run/apt-standin/failing
 chmod 755 /run/apt-standin/dpkg-query /run/apt-standin/apt-get
 # shellcheck disable=SC2086
-PATH=/run/apt-standin:$PATH env $2 bash /repo/rendezvous/deploy/setup-server.sh --no-start
+PATH=/run/apt-standin:$PATH env $2 rv-setup --no-start
 echo "exit $?"
 test -e /usr/sbin/policy-rc.d && echo "policy-rc.d left behind"
 cat /run/apt-standin/policy-seen 2>/dev/null
 rm -rf /run/apt-standin
 EOS
 )"
-    if ! grep -q "apt-get ${failing} failed" <<<"$out" || ! grep -qx 'exit 1' <<<"$out"             || ! grep -qx present <<<"$out" || grep -q 'left behind' <<<"$out"; then
+    if ! grep -q "installing the packages failed" <<<"$out" || ! grep -qx 'exit 1' <<<"$out" \
+            || ! grep -qx present <<<"$out" || grep -q 'left behind' <<<"$out"; then
         printf '%s
 ' "$out" >&2
         fail "setup-server.sh with a failing apt-get ${failing}"
@@ -167,17 +197,19 @@ pass "a failing apt-get update, and a failing apt-get install, stop setup-server
 
 out="$(sx <<EOS 2>&1
 set -euo pipefail
-env ${setup_env} bash /repo/rendezvous/deploy/setup-server.sh --dry-run --no-start
+env ${setup_env} rv-setup --dry-run --no-start
 EOS
 )" || { printf '%s\n' "$out" >&2; fail "setup-server.sh --dry-run failed"; }
 sx <<'EOS' || fail "the dry run changed something"
 test ! -e /etc/nereus-rendezvous && test ! -e /etc/systemd/system/nereus-rendezvous.service
+! id -u nereusrv >/dev/null 2>&1
+sha256sum --quiet -c /run/caddyfile.sum
 EOS
 grep -q 'relay: 6 slots (total-quota), 4 per station id (user-quota), 80000 bytes/s each way per slot (max-bps): bps-capacity 480000 bytes/s' <<<"$out" \
     || { printf '%s\n' "$out" >&2; fail "the dry run's sizing line (6 slots)"; }
 out="$(sx <<EOS 2>&1
 set -euo pipefail
-env RV_PUBLIC_IPV4=${s4} RV_PUBLIC_IPV6=${s6} RV_ALLOW_DOCUMENTATION_ADDRESSES=1 bash /repo/rendezvous/deploy/setup-server.sh --dry-run --no-start
+env RV_PUBLIC_IPV4=${s4} RV_PUBLIC_IPV6=${s6} RV_ALLOW_DOCUMENTATION_ADDRESSES=1 rv-setup --dry-run --no-start
 EOS
 )" || { printf '%s\n' "$out" >&2; fail "setup-server.sh --dry-run with the default sizing failed"; }
 grep -q 'relay: 64 slots (total-quota), 4 per station id (user-quota), 80000 bytes/s each way per slot (max-bps): bps-capacity 5120000 bytes/s, at most 40960 kbit/s out' <<<"$out" \
@@ -188,7 +220,7 @@ pass "setup-server.sh --dry-run passes and changes nothing; default relay 64 slo
 
 out="$(sx <<EOS 2>&1
 set -euo pipefail
-env ${setup_env} bash /repo/rendezvous/deploy/setup-server.sh --no-start
+env ${setup_env} rv-setup --no-start
 EOS
 )" || { printf '%s\n' "$out" >&2; fail "setup-server.sh failed"; }
 printf '%s\n' "$out" | grep -E 'bps-capacity|made|installed|changed' | sed 's/^/# /'
@@ -196,7 +228,7 @@ pass "setup-server.sh --no-start"
 
 out="$(sx <<EOS 2>&1
 set -euo pipefail
-env ${setup_env} bash /repo/rendezvous/deploy/setup-server.sh --no-start
+env ${setup_env} rv-setup --no-start
 EOS
 )" || { printf '%s\n' "$out" >&2; fail "setup-server.sh (second run) failed"; }
 if grep -q 'changed$' <<<"$out"; then
@@ -218,7 +250,17 @@ check /etc/systemd/system/nereus-data-use.service "root:root 644"
 check /etc/systemd/system/nereus-data-use.timer "root:root 644"
 check /usr/local/libexec/nereus-rendezvous/data-use "root:root 755"
 check /etc/nereus-rendezvous/data-use.conf "root:root 644"
-check /opt/nereus-rendezvous "nereusweb:nereusweb 755"
+check /opt/nereus-rendezvous "nereusrv:nereusrv 755"
+check /etc/caddy/Caddyfile "root:root 644"
+check /etc/systemd/system/caddy.service.d/nereus.conf "root:root 644"
+check /etc/systemd/system/nereus-rendezvous.service.d/memory.conf "root:root 644"
+check /home/nereusrv/.ssh/authorized_keys "nereusrv:nereusrv 600"
+cmp -s /home/nereusrv/.ssh/authorized_keys /run/deploy.pub
+grep -qx 'rv.nereussdr.com {' /etc/caddy/Caddyfile
+caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile >/dev/null 2>&1
+# RV_MEMORY_MB=1024: (1024 - 256) x 50% and x 35%.
+grep -qx 'Environment=GOMEMLIMIT=384MiB' /etc/systemd/system/caddy.service.d/nereus.conf
+grep -qx 'MemoryMax=268M' /etc/systemd/system/nereus-rendezvous.service.d/memory.conf
 grep -Eqx 'RV_DATA_USE_INTERFACE=eth[0-9]+' /etc/nereus-rendezvous/data-use.conf
 grep -qx 'RV_TRANSFER_GB_PER_MONTH=1000' /etc/nereus-rendezvous/data-use.conf
 grep -qx 'total-quota=6' /etc/turnserver.conf
@@ -240,7 +282,7 @@ for name in ("stun_urls", "turn_urls"):
 assert written.stun_urls[0].startswith("stun:rv4.") and written.turn_urls[0].startswith("turn:rv4."), written
 PY
 EOS
-pass "secret (root 600, 64 hex characters), coturn configuration (root:turnserver 640, total-quota 6, bps-capacity 480000, user-quota 4), service configuration (STUN and TURN URLs the same, in the same order, as the service's defaults and the sample: rv4 first), units, data-use report and code directory"
+pass "secret (root 600, 64 hex characters), coturn configuration (root:turnserver 640, total-quota 6, bps-capacity 480000, user-quota 4), service configuration (STUN and TURN URLs the same, in the same order, as the service's defaults and the sample: rv4 first), units, data-use report and code directory; the deploy account nereusrv with exactly the given key; the rv Caddyfile, validated; Caddy's drop-in with GOMEMLIMIT 384MiB and the service's MemoryMax 268M from 1024 MiB"
 
 # The data-use report as installed, run once the way its unit runs it.
 out="$(sx <<'EOS' 2>&1
@@ -274,10 +316,24 @@ running() {
         fi
     done
 }
-unit_of() { case "$1" in coturn | coturn.service) echo coturn ;; nereus-rendezvous | nereus-rendezvous.service) echo service ;; *) echo other ;; esac; }
+unit_of() {
+    case "$1" in
+        coturn | coturn.service) echo coturn ;;
+        caddy | caddy.service) echo caddy ;;
+        nereus-rendezvous | nereus-rendezvous.service) echo service ;;
+        *) echo other ;;
+    esac
+}
+# Caddy runs from a copy of the Caddyfile with its own local authority
+# (local_certs), so the check never asks Let's Encrypt for anything.
+caddy_test_config() {
+    awk 'BEGIN { done = 0 } { print } !done && $0 == "{" { print "\tlocal_certs"; print "\tskip_install_trust"; done = 1 }' \
+        /etc/caddy/Caddyfile > /run/Caddyfile.test
+}
 active() {
     case "$(unit_of "$1")" in
         coturn) [[ -n "$(running turnserver turnserver)" ]] ;;
+        caddy) [[ -n "$(running caddy caddy)" ]] ;;
         service) [[ -n "$(running python3 nereus_rendezvous)" ]] ;;
         *) [[ -e "/run/standin-active-$1" ]] ;;
     esac
@@ -286,6 +342,7 @@ stop() {
     local pid
     case "$(unit_of "$1")" in
         coturn) for pid in $(running turnserver turnserver); do kill "$pid"; done ;;
+        caddy) for pid in $(running caddy caddy); do kill "$pid"; done ;;
         service) for pid in $(running python3 nereus_rendezvous); do kill "$pid"; done ;;
         *) rm -f "/run/standin-active-$1" ;;
     esac
@@ -301,6 +358,14 @@ start() {
                 --inh-caps=-all,+net_bind_service --ambient-caps=-all,+net_bind_service \
                 --bounding-set=-all,+net_bind_service $exec_start </dev/null >/dev/null 2>&1 &
             sleep 2 ;;
+        caddy)
+            caddy_test_config
+            chown caddy:caddy /run/Caddyfile.test
+            setsid setpriv --reuid=caddy --regid=caddy --init-groups \
+                --inh-caps=-all,+net_bind_service --ambient-caps=-all,+net_bind_service \
+                --bounding-set=-all,+net_bind_service env HOME=/var/lib/caddy \
+                caddy run --config /run/Caddyfile.test --adapter caddyfile </dev/null >/run/caddy.log 2>&1 &
+            for _ in $(seq 50); do (exec 3<>/dev/tcp/127.0.0.1/443) 2>/dev/null && break; sleep 0.2; done ;;
         service)
             unit=/etc/systemd/system/nereus-rendezvous.service
             install -d -m 0755 /run/credentials/nereus-rendezvous.service
@@ -321,7 +386,15 @@ cmd="$1"; shift
 [[ "$cmd" == --quiet ]] && { cmd="$1"; shift; }
 [[ "${1:-}" == --quiet ]] && shift
 case "$cmd" in
-    daemon-reload | enable) exit 0 ;;
+    daemon-reload) exit 0 ;;
+    enable) [[ ! -e /run/standin-fail-enable ]] || { echo "Failed to enable unit: stand-in refuses" >&2; exit 1; } ;;
+    reload)
+        for u in "$@"; do
+            [[ "$(unit_of "$u")" == caddy ]] || continue
+            caddy_test_config
+            chown caddy:caddy /run/Caddyfile.test
+            runuser -u caddy -- env HOME=/var/lib/caddy caddy reload --config /run/Caddyfile.test --adapter caddyfile >/dev/null 2>&1
+        done ;;
     disable) if [[ "${1:-}" == --now ]]; then shift; for u in "$@"; do stop "$u"; done; fi; exit 0 ;;
     is-active) active "$1" ;;
     start) for u in "$@"; do active "$u" || start "$u"; done ;;
@@ -333,7 +406,7 @@ SH
 chmod 755 /usr/local/sbin/systemctl
 # The service's code, where deploy.sh would put it.
 cp -R /repo/rendezvous/server/nereus_rendezvous /opt/nereus-rendezvous/
-chown -R nereusweb:nereusweb /opt/nereus-rendezvous
+chown -R nereusrv:nereusrv /opt/nereus-rendezvous
 EOS
 
 # Holders of the relay's port numbers, then a dry run each time.
@@ -349,7 +422,7 @@ time.sleep(30)' "$1" "$2" &
 holder=$!
 sleep 1
 # shellcheck disable=SC2086
-env $3 bash /repo/rendezvous/deploy/setup-server.sh --dry-run
+env $3 rv-setup --dry-run
 echo "exit $?"
 kill "$holder"
 EOS
@@ -380,7 +453,7 @@ exit 0
 chmod 755 /run/apt-standin/*
 rm -f /run/systemctl.log
 # shellcheck disable=SC2086
-PATH=/run/apt-standin:$PATH env $1 bash /repo/rendezvous/deploy/setup-server.sh
+PATH=/run/apt-standin:$PATH env $1 rv-setup
 rm -rf /run/apt-standin
 echo "--- systemctl calls"
 cat /run/systemctl.log
@@ -395,12 +468,14 @@ assert "disable --now coturn" in calls, calls
 first_disable = calls.index("disable --now coturn")
 enable = calls.index("enable coturn nereus-rendezvous.service nereus-data-use.timer")
 assert first_disable < enable, calls
-assert "start coturn" in calls and "start nereus-rendezvous.service" in calls and "start nereus-data-use.timer" in calls, calls
-assert not any(c.startswith("restart") for c in calls), calls
+assert "enable caddy" in calls, calls
+for unit in ("caddy", "coturn", "nereus-rendezvous.service", "nereus-data-use.timer"):
+    assert "start " + unit in calls, (unit, calls)
+assert not any(c.startswith(("restart", "reload")) for c in calls), calls
 assert "coturn is disabled until its configuration is in place" in out
-assert "coturn holds UDP 3478 and 443 on both addresses and no TCP port" in out
+assert "coturn holds UDP 3478 and 443 on both addresses and no TCP port; Caddy holds no UDP port" in out
 PY
-pass "where systemd runs: coturn is disabled right after its install, then step 7 enables and starts coturn, the service and the timer, and finds coturn on exactly UDP 3478 and 443 on both addresses and no TCP port"
+pass "where systemd runs: coturn is disabled right after its install, then step 9 enables and starts Caddy, coturn, the service and the timer, and finds coturn on exactly UDP 3478 and 443 on both addresses and no TCP port, and Caddy on no UDP port"
 
 rerun() {
     # $@: extra arguments. Prints the output and the systemctl calls.
@@ -410,15 +485,16 @@ settings="$1"
 shift
 rm -f /run/systemctl.log
 # shellcheck disable=SC2086
-env $settings bash /repo/rendezvous/deploy/setup-server.sh "$@"
+env $settings rv-setup "$@"
 echo "--- systemctl calls"
 cat /run/systemctl.log 2>/dev/null || true
 EOS
 }
 out="$(rerun)" || { printf '%s\n' "$out" >&2; fail "a second run where systemd runs failed"; }
-grep -q 'coturn is running and none of its files changed: left as it is' <<<"$out" \
+grep -q 'caddy is running and none of its files changed: left as it is' <<<"$out" \
+    && grep -q 'coturn is running and none of its files changed: left as it is' <<<"$out" \
     && grep -q 'nereus-rendezvous.service is running and none of its files changed: left as it is' <<<"$out" \
-    && ! sed -n '/--- systemctl calls/,$p' <<<"$out" | grep -q '^restart' \
+    && ! sed -n '/--- systemctl calls/,$p' <<<"$out" | grep -Eq '^(restart|reload)' \
     && grep -q 'coturn holds UDP 3478 and 443 on both addresses' <<<"$out" \
     || { printf '%s\n' "$out" >&2; fail "a second run restarted something"; }
 out="$(rerun --dry-run --rotate-secret)" || { printf '%s\n' "$out" >&2; fail "--dry-run --rotate-secret failed"; }
@@ -442,12 +518,58 @@ backups=(/etc/turnserver.conf.bak-*)
 [[ "$(stat -c '%U:%G %a' "${backups[0]}")" == "root:root 600" ]] || { stat -c '%U:%G %a' "${backups[0]}" >&2; exit 1; }
 grep -qx "static-auth-secret=$1" "${backups[0]}"
 EOS
-pass "where systemd runs: a second run leaves coturn and the service running; --dry-run --rotate-secret says it would make a new secret and restart both (dropping live relays); --rotate-secret restarts both; one backup of /etc/turnserver.conf remains, root 600"
+# A changed Caddyfile is a reload, not a restart.
+sx <<<'echo "# changed by hand" >> /etc/caddy/Caddyfile'
+out="$(rerun --dry-run)" || { printf '%s\n' "$out" >&2; fail "--dry-run after a Caddyfile change failed"; }
+grep -q 'caddy would reload its configuration (open WebSockets are kept)' <<<"$out" \
+    || { printf '%s\n' "$out" >&2; fail "the dry run did not say Caddy would reload"; }
+out="$(rerun)" || { printf '%s\n' "$out" >&2; fail "a run after a Caddyfile change failed"; }
+calls="$(sed -n '/--- systemctl calls/,$p' <<<"$out")"
+grep -qx 'reload caddy' <<<"$calls" && ! grep -Eq '^restart' <<<"$calls" \
+    || { printf '%s\n' "$out" >&2; fail "a Caddyfile change did not reload Caddy alone"; }
+# A failing systemctl enable says so.
+sx <<<'touch /run/standin-fail-enable'
+out="$(rerun)" && { printf '%s\n' "$out" >&2; fail "a failing systemctl enable did not stop setup-server.sh"; }
+sx <<<'rm -f /run/standin-fail-enable'
+grep -q 'Failed to enable unit: stand-in refuses' <<<"$out" && grep -q 'systemctl enable caddy failed (above)' <<<"$out" \
+    || { printf '%s\n' "$out" >&2; fail "a failing systemctl enable gave no message"; }
+# A file that cannot be installed stops the script (install_file's die is
+# not lost inside a command substitution).
+sx <<<'rm -f /etc/nereus-rendezvous/data-use.conf && ln -s /etc/hostname /etc/nereus-rendezvous/data-use.conf'
+out="$(rerun)" && { printf '%s\n' "$out" >&2; fail "a symlinked data-use.conf did not stop setup-server.sh"; }
+sx <<<'rm -f /etc/nereus-rendezvous/data-use.conf'
+grep -q 'data-use.conf is a symlink; refusing to follow it as root' <<<"$out" && ! grep -q '10/10 Summary' <<<"$out" \
+    || { printf '%s\n' "$out" >&2; fail "a failing file install did not stop setup-server.sh with its message"; }
+out="$(rerun)" || { printf '%s\n' "$out" >&2; fail "a run to restore data-use.conf failed"; }
+# coturn stays disabled when the install fails after its package was
+# unpacked.
+out="$(sx "$setup_env" <<'EOS' 2>&1
+set -uo pipefail
+mkdir -p /run/apt-standin
+printf '#!/bin/sh\nexit 1\n' > /run/apt-standin/dpkg-query
+printf '#!/bin/sh\nfor a in "$@"; do [ "$a" = install ] && exit 100; done\nexit 0\n' > /run/apt-standin/apt-get
+chmod 755 /run/apt-standin/*
+rm -f /run/systemctl.log
+# shellcheck disable=SC2086
+PATH=/run/apt-standin:$PATH env $1 rv-setup
+echo "exit $?"
+test -e /usr/sbin/policy-rc.d && echo "policy-rc.d left behind"
+rm -rf /run/apt-standin
+echo "--- systemctl calls"
+cat /run/systemctl.log
+EOS
+)"
+grep -qx 'exit 1' <<<"$out" && grep -qx 'disable --now coturn' <<<"$out" && ! grep -q 'left behind' <<<"$out" \
+    || { printf '%s\n' "$out" >&2; fail "a failed install left coturn enabled"; }
+out="$(rerun)" || { printf '%s\n' "$out" >&2; fail "a run after the failed install failed"; }
+pass "where systemd runs: a Caddyfile change reloads Caddy (the dry run says so) and restarts nothing; a failing systemctl enable and a symlinked data-use.conf each stop the script with a message; a failed install after coturn was unpacked still disables coturn"
+
+pass "where systemd runs: a second run leaves Caddy, coturn and the service running; --dry-run --rotate-secret says it would make a new secret and restart both (dropping live relays); --rotate-secret restarts both; one backup of /etc/turnserver.conf remains, root 600"
 
 # Back to no systemd for the rest: the check starts coturn itself.
 sx <<'EOS'
 set -euo pipefail
-systemctl stop coturn nereus-rendezvous.service
+systemctl stop caddy coturn nereus-rendezvous.service
 rm -rf /run/systemd/system /usr/local/sbin/systemctl /run/credentials /opt/nereus-rendezvous/nereus_rendezvous
 EOS
 
