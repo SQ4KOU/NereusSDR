@@ -14,6 +14,11 @@
 // identity fingerprint (connection.identityFingerprint; empty for a Core
 // this computer has not paired with, which stays an address, token and
 // pin). A V1 document is migrated once on load and not read again.
+//
+// iPhone app plan Task 27 (R-IOS-16): each V2 record may carry the Core's
+// last good addresses (`lastAddresses`, most recent first), tried before
+// its saved address on the next connect; a record without any is written
+// exactly as before.
 // =================================================================
 
 #pragma once
@@ -48,6 +53,11 @@ public:
 
     bool upsert(const SavedCoreTarget&, QString* error = nullptr);
     bool remove(const QString& id, QString* error = nullptr);
+    /// iPhone app plan Task 27 (R-IOS-16): `url` is where this computer
+    /// just reached the saved Core `id`; it goes to the front of the Core's
+    /// last good addresses (at most RemoteStationOptions::
+    /// kMaxCachedAddresses), which the next connect tries first.
+    bool rememberAddress(const QString& id, const QString& url, QString* error = nullptr);
     bool select(const QString& id, QString* error = nullptr);
 
     static QString createId();

@@ -8,11 +8,12 @@
 // libdatachannel v0.24.5 and libjuice @3c40a354 (IceConfiguration.h).
 //
 //   - One STUN server: the first the service's hello lists that this build
-//     can use.
-//   - At most two relay servers, one for each of the first two hosts in the
-//     service's list, so the IPv6-only and the IPv4-only relay name each
-//     take a slot; TURN over TCP or TLS is never picked (libjuice speaks
-//     UDP only).
+//     can use (the IPv4-only name on rv.nereussdr.com).
+//   - One relay server by default, the first host the service lists, since
+//     each allocation takes one of the relay's four slots for the Core; two
+//     (one for each of the first two hosts, so the IPv4-only and the
+//     IPv6-only name each take a slot) only when asked for; TURN over TCP
+//     or TLS is never picked (libjuice speaks UDP only).
 //   - `relay = deny`: no relay servers, and the far end's relay candidates
 //     refused.
 //   - The MTU and deadlines: 996 bytes, 23.5 s of gathering and 39.5 s of
@@ -38,13 +39,14 @@ using namespace NereusSDR;
 
 namespace {
 
-// The NereusSDR server's lists (the rendezvous document, section 8).
-const QStringList kStun{QStringLiteral("stun:rv6.nereussdr.com:3478"),
-                        QStringLiteral("stun:rv4.nereussdr.com:3478")};
-const QStringList kTurn{QStringLiteral("turn:rv6.nereussdr.com:3478?transport=udp"),
-                        QStringLiteral("turn:rv6.nereussdr.com:443?transport=udp"),
-                        QStringLiteral("turn:rv4.nereussdr.com:3478?transport=udp"),
-                        QStringLiteral("turn:rv4.nereussdr.com:443?transport=udp")};
+// The NereusSDR server's lists (the rendezvous document, section 8), the
+// IPv4-only name first as rv.nereussdr.com lists it.
+const QStringList kStun{QStringLiteral("stun:rv4.nereussdr.com:3478"),
+                        QStringLiteral("stun:rv6.nereussdr.com:3478")};
+const QStringList kTurn{QStringLiteral("turn:rv4.nereussdr.com:3478?transport=udp"),
+                        QStringLiteral("turn:rv4.nereussdr.com:443?transport=udp"),
+                        QStringLiteral("turn:rv6.nereussdr.com:3478?transport=udp"),
+                        QStringLiteral("turn:rv6.nereussdr.com:443?transport=udp")};
 
 RendezvousWire::Turn turnWith(const QStringList& urls)
 {
@@ -107,7 +109,7 @@ private slots:
     {
         const IceConfiguration ice = IceConfiguration::throughRendezvous(kStun, true);
         QCOMPARE(ice.stunServer(),
-                 std::optional<IceServerAddress>(IceServerAddress{QStringLiteral("rv6.nereussdr.com"), 3478}));
+                 std::optional<IceServerAddress>(IceServerAddress{QStringLiteral("rv4.nereussdr.com"), 3478}));
         QVERIFY(!ice.relayKnown());
         QVERIFY(ice.relayServers().isEmpty());
 
@@ -118,18 +120,26 @@ private slots:
         QVERIFY(!IceConfiguration::throughRendezvous({}, true).stunServer());
     }
 
-    void twoRelayServersOneForEachFamilysName()
+    void oneRelayServerUnlessBothFamiliesAreAskedFor()
     {
+        // One allocation by default: the first host the service lists.
+        IceConfiguration one = IceConfiguration::throughRendezvous(kStun, true);
+        QCOMPARE(one.setRelay(turnWith(kTurn)), 1);
+        QVERIFY(one.relayKnown());
+        QCOMPARE(one.relayServers().at(0).host, QStringLiteral("rv4.nereussdr.com"));
+        QCOMPARE(one.relayServers().at(0).port, quint16(3478));
+        QCOMPARE(one.setRelay(turnWith(kTurn), 0), 1);
+
         IceConfiguration ice = IceConfiguration::throughRendezvous(kStun, true);
-        QCOMPARE(ice.setRelay(turnWith(kTurn)), 2);
-        QVERIFY(ice.relayKnown());
+        QCOMPARE(ice.setRelay(turnWith(kTurn), 2), 2);
+        QCOMPARE(ice.setRelay(turnWith(kTurn), 3), 2);
         const QList<IceRelayServer> relays = ice.relayServers();
         QCOMPARE(relays.size(), 2);
-        // One slot each for the IPv6-only and the IPv4-only name, never two
+        // One slot each for the IPv4-only and the IPv6-only name, never two
         // ports of one name.
-        QCOMPARE(relays.at(0).host, QStringLiteral("rv6.nereussdr.com"));
+        QCOMPARE(relays.at(0).host, QStringLiteral("rv4.nereussdr.com"));
         QCOMPARE(relays.at(0).port, quint16(3478));
-        QCOMPARE(relays.at(1).host, QStringLiteral("rv4.nereussdr.com"));
+        QCOMPARE(relays.at(1).host, QStringLiteral("rv6.nereussdr.com"));
         QCOMPARE(relays.at(1).port, quint16(3478));
         for (const IceRelayServer& relay : relays) {
             QCOMPARE(relay.username, turnWith(kTurn).username);
@@ -142,7 +152,8 @@ private slots:
                                           QStringLiteral("turn:b.example:3478?transport=tcp"),
                                           QStringLiteral("turn:c.example:3478?transport=udp"),
                                           QStringLiteral("turn:d.example:443"),
-                                          QStringLiteral("turn:e.example:3478")})),
+                                          QStringLiteral("turn:e.example:3478")}),
+                                 2),
                  2);
         QCOMPARE(mixed.relayServers().at(0).host, QStringLiteral("c.example"));
         QCOMPARE(mixed.relayServers().at(1).host, QStringLiteral("d.example"));
@@ -161,7 +172,7 @@ private slots:
     {
         IceConfiguration ice = IceConfiguration::throughRendezvous(kStun, false);
         QVERIFY(!ice.relayAllowed());
-        QCOMPARE(ice.setRelay(turnWith(kTurn)), 0);
+        QCOMPARE(ice.setRelay(turnWith(kTurn), 2), 0);
         QVERIFY(ice.relayServers().isEmpty());
         const QString relay =
             QStringLiteral("candidate:3 1 UDP 16777215 203.0.113.9 50000 typ relay raddr 0.0.0.0 rport 0");

@@ -18,7 +18,12 @@ It is a test fake, not a relay: one process, no quotas, no expiry, loopback
 only. The real relay is coturn (Task 26); the traversal harness
 (tests/scripts/traversal-harness.sh) runs that.
 
+With --quota-full every allocation is refused with 486 (Allocation Quota
+Reached), as a full relay refuses one (the relay is sized by allocations,
+four for each Core's id), so a test can show a full relay is not fatal.
+
 Usage: fake_turn_server.py --secret-file FILE --port-file FILE [--listen ADDR]
+                           [--quota-full]
 It writes the UDP port it bound to --port-file, then prints one line to
 standard output for each allocation and each relayed datagram count, so a
 test can see the relay was used. It never prints a credential.
@@ -146,8 +151,9 @@ class Allocation:
 
 
 class Server:
-    def __init__(self, listen: str, secret: bytes):
+    def __init__(self, listen: str, secret: bytes, quota_full: bool = False):
         self.secret = secret
+        self.quota_full = quota_full
         self.nonce = base64.b16encode(os.urandom(8)).lower()
         family = socket.AF_INET6 if ":" in listen else socket.AF_INET
         self.family = family
@@ -245,6 +251,11 @@ class Server:
                          client)
 
     def allocate(self, txid, client, key) -> None:
+        if self.quota_full:
+            error = struct.pack("!HBB", 0, 4, 86) + b"Allocation Quota Reached"
+            self.sock.sendto(build(ALLOCATE, ERROR, txid, [(ERROR_CODE, error)], key), client)
+            self.say("QUOTA 486")
+            return
         allocation = self.allocations.get(client)
         if allocation is None:
             relay = socket.socket(self.family, socket.SOCK_DGRAM)
@@ -297,10 +308,11 @@ def main() -> int:
     parser.add_argument("--secret-file", required=True)
     parser.add_argument("--port-file", required=True)
     parser.add_argument("--listen", default="127.0.0.1")
+    parser.add_argument("--quota-full", action="store_true")
     args = parser.parse_args()
     with open(args.secret_file, "rb") as handle:
         secret = handle.read().rstrip(b"\r\n")
-    server = Server(args.listen, secret)
+    server = Server(args.listen, secret, args.quota_full)
     with open(args.port_file + ".part", "w", encoding="ascii") as handle:
         handle.write(str(server.port()))
     os.replace(args.port_file + ".part", args.port_file)

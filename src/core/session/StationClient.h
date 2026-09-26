@@ -301,11 +301,19 @@
 //               and TUNE wait while another device holds. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: iPhone app plan Task 27 (R-IOS-16): the Core's last good
+//               addresses are tried first (setCachedAddresses()), and each
+//               connection attempt is recorded path by path
+//               (StationConnectionAttempt) for the connection messages. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
 #include <QByteArray>
+#include <QDateTime>
 #include <QHash>
+#include <QList>
 #include <QObject>
 #include <QPointer>
 #include <QSet>
@@ -340,6 +348,48 @@ class TransmitState;
 /// decides what a remote window offers next. Only an end that will not
 /// fix itself is recorded; a dropped link or any end the Core marks
 /// retryable leaves kind None, and the window retries as before.
+/// iPhone app plan Task 27 (R-IOS-16; spec section 5.3 item 14, "what
+/// the phone tried (this Wi-Fi, direct, relay)"): one connection attempt,
+/// path by path, as the desktop's connection messages describe it. The
+/// iPhone app's twin is ConnectionAttempt (plan Task 27a), with the same
+/// fields.
+struct StationConnectionAttempt {
+    /// This network: an address on one of this computer's own networks (or
+    /// this computer). Direct: any other address. Relay: through the remote
+    /// access service's relay (the control session across NAT, plan Task
+    /// 28, records it).
+    enum class Path { ThisNetwork, Direct, Relay };
+    enum class Outcome {
+        Trying,
+        Connected,
+        NoAnswer,     ///< nothing answered at that address
+        TimedOut,     ///< it did not answer in time
+        NotThisCore,  ///< another computer answered there
+        Failed,       ///< it answered, and the attempt ended there
+    };
+    struct Try {
+        Path path = Path::Direct;
+        /// host:port as the operator would type it.
+        QString address;
+        Outcome outcome = Outcome::Trying;
+    };
+
+    QDateTime started;
+    QList<Try> tries;
+
+    bool connected() const;
+    /// Plain words for the connection messages, for example "Tried this
+    /// network at 192.168.1.20:47910: no answer. Direct at
+    /// shack.example.net:47910: connected." Empty before any try.
+    QString summary() const;
+    static QString pathText(Path path);
+    static QString outcomeText(Outcome outcome);
+    /// ThisNetwork for a loopback address or one inside the subnet of an
+    /// address of one of this computer's running interfaces, or a name
+    /// ending ".local"; Direct otherwise.
+    static Path pathFor(const QUrl& url);
+};
+
 struct StationEndReport {
     enum class Kind {
         None,           ///< nothing recorded (still running, or a retryable end)
@@ -477,6 +527,23 @@ public:
                           const QString& expectedFingerprint,
                           bool allowUnpinned = false,
                           const QByteArray& stationIdentityFingerprint = QByteArray());
+
+    /// iPhone app plan Task 27 (R-IOS-16; the pairing design, section 5.3,
+    /// "cached address first"): the Core's last good addresses, most recent
+    /// first, tried before the url connectToStation() is given, on that
+    /// connect and on every automatic reconnect. An address that does not
+    /// answer, or at which another computer answers, gives way to the next
+    /// at once; one that is not the last in the list has
+    /// kCachedAddressOpenTimeoutMs to open before it gives way. Takes effect
+    /// on the next connectToStation().
+    void setCachedAddresses(const QList<QUrl>& addresses);
+    /// How long an address that is not the last to try may take to open.
+    static constexpr int kCachedAddressOpenTimeoutMs = 4000;
+    /// The current (or last) connection attempt, path by path.
+    const StationConnectionAttempt& connectionAttempt() const { return m_attempt; }
+    /// The address this session reached the Core at; empty until the
+    /// connect sequence completes.
+    QUrl connectedUrl() const { return m_connectedUrl; }
 
     /// Drive the session over an already-open transport instead of dialing
     /// one. Same code path from the first message onward; this is how the
@@ -920,6 +987,8 @@ signals:
                                 quint32 writeId, bool accepted, const QString& reason);
     /// Refresh connection controls after a dial, closure or retry cancellation.
     void connectionActivityChanged();
+    /// iPhone app plan Task 27: connectionAttempt() changed.
+    void connectionAttemptChanged();
     void mediaControlReceived(const QJsonObject& payload, quint32 epoch);
     /// Retires media even when a deliberate redial silently supersedes a link.
     void mediaSessionEnded(quint32 epoch);
@@ -1253,6 +1322,22 @@ private:
     /// arming anything, which is what keeps a session with nothing latched
     /// from ever being auto-retried: there is nothing to redial.
     QUrl m_lastUrl;
+    /// iPhone app plan Task 27: the addresses one attempt tries in order
+    /// (the cached ones, then the one asked for), where it stands, what it
+    /// was asked with, and its record.
+    QList<QUrl> m_cachedAddresses;
+    QList<QUrl> m_dialPlan;
+    int m_dialIndex = 0;
+    QString m_planToken;
+    bool m_transportOpened = false;
+    QTimer* m_openTimer = nullptr;
+    StationConnectionAttempt m_attempt;
+    QUrl m_connectedUrl;
+    /// Moves on to the next address of this attempt, recording how the
+    /// current one ended. False when none is left.
+    bool advanceDialPlan(StationConnectionAttempt::Outcome outcome);
+    void recordOutcome(StationConnectionAttempt::Outcome outcome);
+    void startDialPlan();
     // R-R3-48: -1 judge by m_lastUrl; 0 or 1 set by a test.
     int m_coreOnThisComputerForTest = -1;
     QString m_lastFingerprint;

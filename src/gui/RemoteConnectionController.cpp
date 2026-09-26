@@ -127,6 +127,12 @@ QString RemoteConnectionController::detailText() const
         text += tr("\nLast failure: %1")
                     .arg(OperatorReasonText::forDisplay(m_client->lastError()));
     }
+    // iPhone app plan Task 27 (R-IOS-16): what this computer tried, path by
+    // path, while it is not connected.
+    if (m_client && !m_client->isHandshakeComplete() && !m_operatorDisconnected
+        && !m_client->connectionAttempt().summary().isEmpty()) {
+        text += QLatin1Char('\n') + m_client->connectionAttempt().summary();
+    }
     return text;
 }
 
@@ -237,6 +243,12 @@ void RemoteConnectionController::connectToStation()
     if (!canConnect()) { return; }
     m_operatorDisconnected = false;
     m_retryAttempt = 0;
+    // iPhone app plan Task 27: where the Core was last reached, first.
+    QList<QUrl> cached;
+    for (const QString& address : std::as_const(m_options.cachedAddresses)) {
+        cached.append(QUrl(address));
+    }
+    m_client->setCachedAddresses(cached);
     m_client->connectToStation(QUrl(m_options.url), m_options.token,
                                m_options.fingerprint, m_options.allowUnpinned,
                                m_options.identityFingerprint);

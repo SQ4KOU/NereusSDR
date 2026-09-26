@@ -619,6 +619,16 @@ void GuiConnectionController::rememberAuthenticatedRadio()
     if (!client || !client->isHandshakeComplete()) { return; }
     auto target = m_store.target(m_sessions.selection().savedId);
     if (!target || !selectionMatchesSaved(m_sessions.selection(), *target)) { return; }
+    // iPhone app plan Task 27 (R-IOS-16): where this computer reached the
+    // Core, tried first next time.
+    if (client->connectedUrl().isValid()) {
+        QString error;
+        if (!m_store.rememberAddress(target->id, client->connectedUrl().toString(), &error)) {
+            m_selector->setNotice(error);
+        }
+        target = m_store.target(target->id);
+        if (!target) { return; }
+    }
     const auto& caps = client->capabilities();
     if (!caps.radioConnected || caps.macAddress.isEmpty()) { return; }
     if (target->lastRadioName == caps.stationName && target->lastRadioMac == caps.macAddress) { return; }

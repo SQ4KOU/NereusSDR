@@ -33,6 +33,13 @@
 //   - with the service stopped, a session that was running continues;
 //   - IPv6 is preferred where both ends have it.
 //
+// And the desktop (Step 2): a saved Core's last good addresses are tried
+// first, so with the service stopped a client with a cached address still
+// connects; an address that does not answer, that another computer
+// answers, or that never opens gives way to the next; each attempt is
+// recorded path by path in plain words; the saved Core keeps its last good
+// addresses, most recent first.
+//
 // Keys, codes, nonces and secrets are made at run time; nothing secret is
 // printed.
 //
@@ -56,10 +63,12 @@
 #include <QProcess>
 #include <QRandomGenerator>
 #include <QSignalSpy>
+#include <QSslSocket>
 #include <QStandardPaths>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include <QTemporaryDir>
+#include <QElapsedTimer>
 #include <QWebSocket>
 #include <QWebSocketServer>
 
@@ -85,8 +94,11 @@
 #include "core/session/RendezvousWire.h"
 #include "core/session/StationPairingClient.h"
 #include "core/session/StationRendezvous.h"
+#include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
 #include "core/session/media/LibDataChannelMediaTransport.h"
+#include "core/settings/SettingsProxy.h"
+#include "gui/CoreTargetStore.h"
 #include "models/RadioModel.h"
 
 #include "fakes/UpgradedCoreToken.h"
@@ -189,6 +201,7 @@ public:
             while (m_server.hasPendingConnections()) {
                 QWebSocket* socket = m_server.nextPendingConnection();
                 socket->setParent(this);
+                hostHeaders.append(QString::fromLatin1(socket->request().rawHeader("Host")));
                 auto* queue = new QStringList;
                 m_inbox.insert(socket, queue);
                 QObject::connect(socket, &QWebSocket::textMessageReceived, this,
@@ -231,6 +244,11 @@ public:
         }
         return queue->takeFirst();
     }
+
+    /// The Host header of each connection's opening request.
+    QStringList hostHeaders;
+
+    quint16 port() const { return m_server.serverPort(); }
 
     bool silentFor(QWebSocket* socket, int ms)
     {
@@ -633,6 +651,10 @@ public:
     /// the service mints relay credentials for the fake's TURN server.
     explicit LocalService(bool stun = true, bool relay = true) : m_stun(stun), m_relay(relay) {}
 
+    /// The fake relay refuses every allocation with 486 (Allocation Quota
+    /// Reached), as a full relay does. Before start().
+    void setRelayFull(bool full) { m_relayFull = full; }
+
     ~LocalService() { stop(); stopTurn(); }
 
     bool start()
@@ -743,10 +765,13 @@ private:
         const QString portFile = m_dir.filePath(QStringLiteral("turn-port"));
         m_turn = std::make_unique<QProcess>();
         m_turn->setProcessEnvironment(pythonEnvironment());
-        m_turn->start(QStringLiteral("python3"),
-                      {QStringLiteral(NEREUS_SOURCE_DIR "/tests/tools/fake_turn_server.py"),
-                       QStringLiteral("--secret-file"), secret.fileName(),
-                       QStringLiteral("--port-file"), portFile});
+        QStringList arguments{QStringLiteral(NEREUS_SOURCE_DIR "/tests/tools/fake_turn_server.py"),
+                              QStringLiteral("--secret-file"), secret.fileName(),
+                              QStringLiteral("--port-file"), portFile};
+        if (m_relayFull) {
+            arguments.append(QStringLiteral("--quota-full"));
+        }
+        m_turn->start(QStringLiteral("python3"), arguments);
         if (!m_turn->waitForStarted(10000)) {
             return false;
         }
@@ -772,6 +797,7 @@ private:
 
     bool m_stun = true;
     bool m_relay = true;
+    bool m_relayFull = false;
     QTemporaryDir m_dir;
     QByteArray m_secret = randomBytes(24).toHex();
     quint16 m_port = 0;
@@ -862,6 +888,22 @@ struct Core {
 
     ~Core() { server.reset(); }
 
+    // This computer, paired as a device the way a pairing leaves it.
+    bool pairComputer(const ClientDeviceIdentity& key)
+    {
+        PairedDevice device;
+        device.id = key.fingerprint();
+        device.publicKeySpki = key.publicKeySpki();
+        device.name = QStringLiteral("Shack MacBook");
+        device.kind = QStringLiteral("computer");
+        return server->deviceStore()->add(device);
+    }
+
+    QUrl url() const
+    {
+        return QUrl(QStringLiteral("wss://127.0.0.1:%1").arg(server->serverPort()));
+    }
+
     bool pair(const TestKey& key, const QString& name = QStringLiteral("Test phone"))
     {
         PairedDevice device;
@@ -940,8 +982,10 @@ public:
                 clientCandidates.append(candidate);
                 m_client->sendCandidate(candidate);
             });
-            QObject::connect(m_offerer.get(), &IMediaTransport::gatheringComplete, this,
-                             [this] { m_client->sendCandidate(QString()); });
+            QObject::connect(m_offerer.get(), &IMediaTransport::gatheringComplete, this, [this] {
+                clientGathered = true;
+                m_client->sendCandidate(QString());
+            });
             QObject::connect(m_offerer.get(), &IMediaTransport::ready, this,
                              [this] { clientReady = true; });
             QObject::connect(m_offerer.get(), &IMediaTransport::displayReceived, this,
@@ -958,6 +1002,8 @@ public:
 
     bool clientReady = false;
     bool stationReady = false;
+    bool clientGathered = false;
+    bool stationGathered = false;
     int stationHeard = 0;
     qsizetype stationRelays = -1;
     qsizetype clientRelays = -1;
@@ -991,8 +1037,10 @@ private:
             stationCandidates.append(candidate);
             m_station->sendCandidate(id, candidate);
         });
-        QObject::connect(m_answerer.get(), &IMediaTransport::gatheringComplete, this,
-                         [this, id] { m_station->sendCandidate(id, QString()); });
+        QObject::connect(m_answerer.get(), &IMediaTransport::gatheringComplete, this, [this, id] {
+            stationGathered = true;
+            m_station->sendCandidate(id, QString());
+        });
         QObject::connect(m_answerer.get(), &IMediaTransport::ready, this,
                          [this] { stationReady = true; });
         QObject::connect(m_answerer.get(), &IMediaTransport::displayReceived, this,
@@ -1290,6 +1338,23 @@ private slots:
         QCOMPARE(client.findChildren<QWebSocket*>().size(), 0);
     }
 
+    // The service is reached by host name through a web server (Caddy on
+    // rv.nereussdr.com), so the opening request is an HTTP/1.1 Upgrade
+    // (QWebSocket's only kind; never HTTP/2's extended CONNECT) carrying the
+    // service's name, not an address it resolved to.
+    void theServiceIsAskedForByName()
+    {
+        ServicePlayer player;
+        RendezvousClient client;
+        client.setServers(RendezvousClient::serverUrls(
+            {QStringLiteral("ws://localhost:%1").arg(player.port())}));
+        client.connectToService();
+        QVERIFY(player.waitForConnection() != nullptr);
+        QCOMPARE(player.hostHeaders,
+                 QStringList({QStringLiteral("localhost:%1").arg(player.port())}));
+        client.stop();
+    }
+
     // ── The Core's and the desktop's runners (section 10.4) ────────────
 
     void coreRunner_data()
@@ -1405,6 +1470,35 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(pair.offerer()->selectedPath().has_value()
                                      && !pair.offerer()->selectedPath()->relayed(),
                                  15000);
+    }
+
+    // A full relay (TURN 486, Allocation Quota Reached) is an ordinary
+    // outcome: gathering finishes without it on both ends and the
+    // connection goes on directly.
+    void aFullRelayIsNotFatal()
+    {
+        LocalService service;
+        service.setRelayFull(true);
+        QVERIFY(service.start());
+        Core core;
+        auto phone = makeKey();
+        QVERIFY(core.pair(*phone));
+        StationRendezvous rendezvous(core.server.get(), {service.url()}, true);
+        QSignalSpy registered(rendezvous.client(), &RendezvousClient::registered);
+        QVERIFY(rendezvous.start());
+        QTRY_COMPARE_WITH_TIMEOUT(registered.size(), 1, 10000);
+        RendezvousClient client;
+        client.setServers({service.url()});
+        IcePair pair(rendezvous.client(), &client, false);
+        pair.start(rendezvous.client()->stationId(), phone);
+        QTRY_VERIFY_WITH_TIMEOUT(pair.clientReady && pair.stationReady, 30000);
+        QTRY_VERIFY_WITH_TIMEOUT(pair.clientGathered && pair.stationGathered, 30000);
+        QTRY_VERIFY_WITH_TIMEOUT(service.turnOutput().contains(QLatin1String("QUOTA 486")), 5000);
+        QVERIFY(!service.turnOutput().contains(QLatin1String("ALLOCATED")));
+        for (const QString& candidate : pair.clientCandidates + pair.stationCandidates) {
+            QVERIFY(IceConfiguration::candidateType(candidate) != QLatin1String("relay"));
+        }
+        QVERIFY(!pair.offerer()->selectedPath()->relayed());
     }
 
     void withDirectBlockedItConnectsThroughTheRelay()
@@ -1642,6 +1736,179 @@ private slots:
                                  10000);
         QCOMPARE(QHostAddress(pair.offerer()->selectedPath()->remoteAddress).protocol(),
                  QAbstractSocket::IPv6Protocol);
+    }
+
+    // ── The desktop: cached addresses and the attempt record ───────────
+
+    // The pairing design, section 5.3: the cached address first, so a
+    // reconnect never needs the remote access service; none is running
+    // here at all.
+    void aCachedAddressConnectsWithoutTheService()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("No TLS backend");
+        }
+        Core core;
+        QVERIFY(core.server->listen(QHostAddress::LocalHost, 0));
+        QTemporaryDir keyDir;
+        auto key = std::make_shared<const ClientDeviceIdentity>(
+            ClientDeviceIdentity::loadOrCreate(keyDir.path()));
+        QVERIFY(core.pairComputer(*key));
+
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient window(&remote, &proxy);
+        window.setDeviceIdentity(key, QStringLiteral("Shack MacBook"));
+        window.setCachedAddresses({core.url()});
+        // The saved address is one nothing answers at: it is never needed.
+        const QUrl saved(QStringLiteral("wss://127.0.0.1:%1").arg(freeTcpPort()));
+        window.connectToStation(saved, QString(), QString(), false,
+                                core.server->stationIdentity().fingerprint());
+        QTRY_VERIFY_WITH_TIMEOUT(window.isHandshakeComplete(), 20000);
+        QCOMPARE(window.connectedUrl(), core.url());
+        const StationConnectionAttempt attempt = window.connectionAttempt();
+        QCOMPARE(attempt.tries.size(), 1);
+        QCOMPARE(attempt.tries.at(0).path, StationConnectionAttempt::Path::ThisNetwork);
+        QCOMPARE(attempt.tries.at(0).outcome, StationConnectionAttempt::Outcome::Connected);
+        QVERIFY(attempt.connected());
+        QCOMPARE(attempt.summary(),
+                 QStringLiteral("Tried this network (127.0.0.1:%1): connected.")
+                     .arg(core.server->serverPort()));
+        window.disconnectFromStation(QStringLiteral("test done"));
+    }
+
+    // A cached address nothing answers at, and one another computer
+    // answers at, each give way to the next address at once.
+    void aDeadOrForeignCachedAddressGivesWay()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("No TLS backend");
+        }
+        Core core;
+        Core other;
+        QVERIFY(core.server->listen(QHostAddress::LocalHost, 0));
+        QVERIFY(other.server->listen(QHostAddress::LocalHost, 0));
+        QTemporaryDir keyDir;
+        auto key = std::make_shared<const ClientDeviceIdentity>(
+            ClientDeviceIdentity::loadOrCreate(keyDir.path()));
+        QVERIFY(core.pairComputer(*key));
+
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient window(&remote, &proxy);
+        window.setDeviceIdentity(key, QStringLiteral("Shack MacBook"));
+        const QUrl dead(QStringLiteral("wss://127.0.0.1:%1").arg(freeTcpPort()));
+        window.setCachedAddresses({dead, other.url()});
+        window.connectToStation(core.url(), QString(), QString(), false,
+                                core.server->stationIdentity().fingerprint());
+        QTRY_VERIFY_WITH_TIMEOUT(window.isHandshakeComplete(), 20000);
+        QCOMPARE(window.connectedUrl(), core.url());
+        const StationConnectionAttempt attempt = window.connectionAttempt();
+        QCOMPARE(attempt.tries.size(), 3);
+        QCOMPARE(attempt.tries.at(0).outcome, StationConnectionAttempt::Outcome::NoAnswer);
+        QCOMPARE(attempt.tries.at(1).outcome, StationConnectionAttempt::Outcome::NotThisCore);
+        QCOMPARE(attempt.tries.at(2).outcome, StationConnectionAttempt::Outcome::Connected);
+        QVERIFY(attempt.summary().contains(QLatin1String("no answer")));
+        QVERIFY(attempt.summary().contains(QLatin1String("another computer answered")));
+        // The other Core was told nothing: this computer sent no sign-in.
+        QVERIFY(!other.server->hasAuthenticatedSession());
+        QCOMPARE(window.lastEndReport().kind, StationEndReport::Kind::None);
+        window.disconnectFromStation(QStringLiteral("test done"));
+    }
+
+    // A cached address that takes the connection and then never opens
+    // gives way after the short open time.
+    void aCachedAddressThatNeverOpensGivesWay()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("No TLS backend");
+        }
+        Core core;
+        QVERIFY(core.server->listen(QHostAddress::LocalHost, 0));
+        QTcpServer silent;
+        QVERIFY(silent.listen(QHostAddress::LocalHost, 0));
+        QTemporaryDir keyDir;
+        auto key = std::make_shared<const ClientDeviceIdentity>(
+            ClientDeviceIdentity::loadOrCreate(keyDir.path()));
+        QVERIFY(core.pairComputer(*key));
+
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient window(&remote, &proxy);
+        window.setDeviceIdentity(key, QStringLiteral("Shack MacBook"));
+        window.setCachedAddresses({QUrl(QStringLiteral("wss://127.0.0.1:%1").arg(silent.serverPort()))});
+        QElapsedTimer clock;
+        clock.start();
+        window.connectToStation(core.url(), QString(), QString(), false,
+                                core.server->stationIdentity().fingerprint());
+        QTRY_VERIFY_WITH_TIMEOUT(window.isHandshakeComplete(), 20000);
+        QVERIFY(clock.elapsed() >= StationClient::kCachedAddressOpenTimeoutMs - 100);
+        const StationConnectionAttempt attempt = window.connectionAttempt();
+        QCOMPARE(attempt.tries.size(), 2);
+        QCOMPARE(attempt.tries.at(0).outcome, StationConnectionAttempt::Outcome::TimedOut);
+        QCOMPARE(attempt.tries.at(1).outcome, StationConnectionAttempt::Outcome::Connected);
+        window.disconnectFromStation(QStringLiteral("test done"));
+    }
+
+    void pathsAreNamedForTheOperator()
+    {
+        QCOMPARE(StationConnectionAttempt::pathFor(QUrl(QStringLiteral("wss://127.0.0.1:47910"))),
+                 StationConnectionAttempt::Path::ThisNetwork);
+        QCOMPARE(StationConnectionAttempt::pathFor(QUrl(QStringLiteral("wss://shack.local:47910"))),
+                 StationConnectionAttempt::Path::ThisNetwork);
+        QCOMPARE(StationConnectionAttempt::pathFor(QUrl(QStringLiteral("wss://shack.example.net:47910"))),
+                 StationConnectionAttempt::Path::Direct);
+        QCOMPARE(StationConnectionAttempt::pathFor(QUrl(QStringLiteral("wss://[2001:db8::7]:47910"))),
+                 StationConnectionAttempt::Path::Direct);
+        StationConnectionAttempt attempt;
+        QCOMPARE(attempt.summary(), QString());
+        attempt.tries.append({StationConnectionAttempt::Path::ThisNetwork,
+                              QStringLiteral("192.168.1.20:47910"),
+                              StationConnectionAttempt::Outcome::NoAnswer});
+        attempt.tries.append({StationConnectionAttempt::Path::Direct,
+                              QStringLiteral("shack.example.net:47910"),
+                              StationConnectionAttempt::Outcome::TimedOut});
+        attempt.tries.append({StationConnectionAttempt::Path::Relay, QStringLiteral("rv.nereussdr.com"),
+                              StationConnectionAttempt::Outcome::Connected});
+        QCOMPARE(attempt.summary(),
+                 QStringLiteral("Tried this network (192.168.1.20:47910): no answer; direct "
+                                "(shack.example.net:47910): no answer in time; relay "
+                                "(rv.nereussdr.com): connected."));
+    }
+
+    // The saved Core keeps where it was reached, most recent first, at
+    // most four, and a record from before them still loads.
+    void theSavedCoreKeepsItsLastGoodAddresses()
+    {
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("NereusSDR.settings")));
+        CoreTargetStore store(settings);
+        QVERIFY(store.load());
+        SavedCoreTarget target;
+        target.id = CoreTargetStore::createId();
+        target.label = QStringLiteral("KG4VCF/shack");
+        target.connection.url = QStringLiteral("wss://shack.example.net:47910");
+        target.connection.identityFingerprint = QByteArray(32, '\x07');
+        QVERIFY(store.upsert(target));
+        QVERIFY(!settings.value(QStringLiteral("ConnectionTargets/V2")).toString().contains(
+            QLatin1String("lastAddresses")));
+
+        for (int port = 1; port <= 5; ++port) {
+            QVERIFY(store.rememberAddress(target.id,
+                                          QStringLiteral("wss://192.168.1.%1:47910").arg(port)));
+        }
+        QVERIFY(store.rememberAddress(target.id, QStringLiteral("wss://192.168.1.3:47910")));
+        QVERIFY(!store.rememberAddress(target.id, QStringLiteral("http://192.168.1.9")));
+        const QStringList expected{QStringLiteral("wss://192.168.1.3:47910"),
+                                   QStringLiteral("wss://192.168.1.5:47910"),
+                                   QStringLiteral("wss://192.168.1.4:47910"),
+                                   QStringLiteral("wss://192.168.1.2:47910")};
+        QCOMPARE(store.target(target.id)->connection.cachedAddresses, expected);
+
+        CoreTargetStore reloaded(settings);
+        QVERIFY(reloaded.load());
+        QCOMPARE(reloaded.target(target.id)->connection.cachedAddresses, expected);
+        QCOMPARE(reloaded.target(target.id)->connection.url, target.connection.url);
     }
 
     void aClientTriesTheNextServerWhenTheCoreIsNotOnTheFirst()

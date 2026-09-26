@@ -15,15 +15,24 @@
 //
 //   - One STUN server. libdatachannel picks one STUN server from its
 //     configuration at random (src/impl/icetransport.cpp:101-113), so this
-//     carries exactly one: the first the service's hello lists.
-//   - At most two TURN servers (icetransport.cpp:39, MAX_TURN_SERVERS_COUNT;
-//     libjuice agent.h:65, MAX_RELAY_ENTRIES_COUNT). libjuice resolves one
-//     address per TURN host and prefers IPv4 (agent.c:386-395), so a
-//     dual-stack name would only ever relay over IPv4. The service lists an
-//     IPv6-only and an IPv4-only relay name (section 8), and the two slots
-//     carry one of each: the first URL of each of the first two hosts.
-//     Only UDP relays: libjuice speaks TURN over UDP alone
-//     (icetransport.cpp:159-162).
+//     carries exactly one: the first the service's hello lists. On
+//     rv.nereussdr.com that is the IPv4-only name (rv4), because a peer
+//     that has only IPv4, behind NAT, needs a server-reflexive candidate
+//     (the service's operators, 2026-09-26).
+//   - Relay servers: libdatachannel takes at most two (icetransport.cpp:39,
+//     MAX_TURN_SERVERS_COUNT; libjuice agent.h:65, MAX_RELAY_ENTRIES_COUNT),
+//     and libjuice resolves one address per TURN host, preferring IPv4
+//     (agent.c:386-395), so each address family needs a name of its own:
+//     the service lists an IPv6-only and an IPv4-only relay name (section
+//     8). The relay is sized by allocations, four for each Core's id with
+//     both ends of a session sharing them, so one end relays on one family
+//     unless it asks for both: the first host of the service's list, the
+//     first URL for it (setRelay()'s `families`). Only UDP relays: libjuice
+//     speaks TURN over UDP alone (icetransport.cpp:159-162).
+//   - A full relay (TURN 486, Allocation Quota Reached) is an ordinary
+//     outcome, not an error: libjuice marks that relay failed and finishes
+//     gathering without it (agent.c:1941-1949), and the connection goes on
+//     with the paths it has.
 //   - Credentials are fixed when gathering starts: the peer is built with
 //     automatic gathering off, and gathering starts once the credentials
 //     are known (or known to be absent), with the TURN servers passed to
@@ -100,8 +109,12 @@ public:
 
     /// The relay credentials the introduction brought (the service's
     /// `turn`; nullopt when it sent null). Ignored when the relay is not
-    /// allowed. Returns how many relay servers the configuration now holds.
-    int setRelay(const std::optional<RendezvousWire::Turn>& turn);
+    /// allowed. `families` is how many relay hosts to allocate on, 1 (the
+    /// first the service lists) or 2 (the first two, one for each address
+    /// family, only where an end needs both); each allocation takes one of
+    /// the relay's slots for this Core. Returns how many relay servers the
+    /// configuration now holds.
+    int setRelay(const std::optional<RendezvousWire::Turn>& turn, int families = 1);
 
     std::optional<IceServerAddress> stunServer() const { return m_stun; }
     QList<IceRelayServer> relayServers() const { return m_relays; }

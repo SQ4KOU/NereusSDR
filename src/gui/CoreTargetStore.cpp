@@ -12,6 +12,10 @@
 // still finds its own list, but it follows V2's forgets and edits (Part C
 // fix wave, R2-M3): a forgotten Core's record, token and all, leaves V1
 // too, and an edited one is edited there.
+//
+// iPhone app plan Task 27 (R-IOS-16), 2026-09-26: `lastAddresses` on a V2
+// record, the Core's last good addresses (rememberAddress()). J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "gui/CoreTargetStore.h"
@@ -106,6 +110,17 @@ bool validateTarget(const SavedCoreTarget& target, QString* error)
         setError(error, QStringLiteral("Saved Core target has an invalid Core identity."));
         return false;
     }
+    // iPhone app plan Task 27: the Core's last good addresses.
+    if (target.connection.cachedAddresses.size() > RemoteStationOptions::kMaxCachedAddresses) {
+        setError(error, QStringLiteral("Saved Core target has too many saved addresses."));
+        return false;
+    }
+    for (const QString& address : target.connection.cachedAddresses) {
+        if (!isBounded(address, 4096) || !RemoteStationOptions::isValidStationUrl(address)) {
+            setError(error, QStringLiteral("Saved Core target has an invalid Core address."));
+            return false;
+        }
+    }
     return true;
 }
 
@@ -152,6 +167,12 @@ QJsonObject toJson(const SavedCoreTarget& target, int version)
     if (version == kVersion) {
         object.insert(QStringLiteral("identity"),
                       StationIdentity::toBase64Url(target.connection.identityFingerprint));
+        // iPhone app plan Task 27: absent when there are none, so a record
+        // with none is written exactly as before.
+        if (!target.connection.cachedAddresses.isEmpty()) {
+            object.insert(QStringLiteral("lastAddresses"),
+                          QJsonArray::fromStringList(target.connection.cachedAddresses));
+        }
     }
     return object;
 }
@@ -242,6 +263,21 @@ bool parseDocument(const QString& text, int expectedVersion, QList<SavedCoreTarg
                              && target.connection.identityFingerprint.size() != kIdentityBytes)) {
                 setError(error, QStringLiteral("Saved Core targets document has an invalid record."));
                 return false;
+            }
+            // iPhone app plan Task 27: optional; a list of addresses.
+            const QJsonValue addresses = object.value(QStringLiteral("lastAddresses"));
+            if (!addresses.isUndefined()) {
+                if (!addresses.isArray()) {
+                    setError(error, QStringLiteral("Saved Core targets document has an invalid record."));
+                    return false;
+                }
+                for (const QJsonValue& address : addresses.toArray()) {
+                    if (!address.isString()) {
+                        setError(error, QStringLiteral("Saved Core targets document has an invalid record."));
+                        return false;
+                    }
+                    target.connection.cachedAddresses.append(address.toString());
+                }
             }
         }
         parsed.append(target);
@@ -392,6 +428,31 @@ bool CoreTargetStore::upsert(const SavedCoreTarget& target, QString* error)
     m_targets = std::move(updated);
     clearError(error);
     return true;
+}
+
+bool CoreTargetStore::rememberAddress(const QString& id, const QString& url, QString* error)
+{
+    const std::optional<SavedCoreTarget> found = target(id);
+    if (!found) {
+        setError(error, QStringLiteral("Saved Core target was not found."));
+        return false;
+    }
+    if (!RemoteStationOptions::isValidStationUrl(url)) {
+        setError(error, QStringLiteral("Saved Core target has an invalid Core address."));
+        return false;
+    }
+    SavedCoreTarget updated = *found;
+    QStringList& addresses = updated.connection.cachedAddresses;
+    if (!addresses.isEmpty() && addresses.first() == url) {
+        clearError(error);
+        return true;
+    }
+    addresses.removeAll(url);
+    addresses.prepend(url);
+    while (addresses.size() > RemoteStationOptions::kMaxCachedAddresses) {
+        addresses.removeLast();
+    }
+    return upsert(updated, error);
 }
 
 bool CoreTargetStore::remove(const QString& id, QString* error)

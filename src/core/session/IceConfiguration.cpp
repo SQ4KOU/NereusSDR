@@ -17,6 +17,8 @@
 #include <QHostAddress>
 #include <QUrl>
 
+#include <algorithm>
+
 namespace NereusSDR {
 
 namespace {
@@ -98,15 +100,16 @@ IceConfiguration IceConfiguration::throughRendezvous(const QStringList& stunUrls
     return configuration;
 }
 
-int IceConfiguration::setRelay(const std::optional<RendezvousWire::Turn>& turn)
+int IceConfiguration::setRelay(const std::optional<RendezvousWire::Turn>& turn, int families)
 {
+    const int wanted = std::clamp(families, 1, kMaxRelayServers);
     m_relayKnown = true;
     m_relays.clear();
     if (!m_relayAllowed || !turn) {
         return 0;
     }
-    // One URL for each of the first two hosts, in the service's order: an
-    // IPv6-only and an IPv4-only relay name on the NereusSDR server.
+    // One URL for each of the first `wanted` hosts, in the service's order:
+    // on the NereusSDR server an IPv4-only and an IPv6-only relay name.
     for (const QString& url : turn->urls) {
         const auto address = parseTurnUrl(url);
         if (!address) {
@@ -124,7 +127,7 @@ int IceConfiguration::setRelay(const std::optional<RendezvousWire::Turn>& turn)
         }
         m_relays.append(IceRelayServer{address->host, address->port, turn->username,
                                        turn->password});
-        if (m_relays.size() >= kMaxRelayServers) {
+        if (m_relays.size() >= wanted) {
             break;
         }
     }
