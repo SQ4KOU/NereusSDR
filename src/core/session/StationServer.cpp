@@ -438,6 +438,10 @@
 //               line refused with the reason; M10 the keying gate judges
 //               the connection the key came on. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave I2: the transmit slice is frozen
+//               while the radio's own PTT keys it (ruling 8.11). J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -3226,7 +3230,24 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
             // (rulings 6.3, 6.4, 6.6) or a take (section 6.4).
             // iPhone app Task 75: a setting that affects every device
             // (the several-devices design, 7.1) is asked first.
-            if (!handleSharedSetting(transport, message)
+            // Fix wave I2 (ruling 8.11): closing the frozen transmit slice,
+            // or moving it to another band, waits for the radio's press to
+            // end.
+            TxRefusal frozen;
+            if (message.commandVerb == "removeSlice" || message.commandVerb == "slice.selectBand") {
+                for (const MirrorUpdate& a : message.arguments) {
+                    if (a.name == "sliceId") {
+                        frozen = stationFreezeRefusal(static_cast<int>(a.value.toLongLong()));
+                    }
+                }
+            }
+            if (!frozen.isEmpty()) {
+                send(transport, SessionMessages::commandResult(
+                    message.commandVerb, message.commandId, false, frozen.text, {},
+                    {{0, "refusalCode", MirrorWireKind::Utf8, QString::fromUtf8(frozen.code)},
+                     {0, "refusalFix", MirrorWireKind::Utf8, QString::fromUtf8(frozen.fix)}}));
+                m_resultSentInDispatch = true;
+            } else if (!handleSharedSetting(transport, message)
                 && !handleReceiverCommand(transport, message)) {
                 m_dispatcher->dispatch(message);
             }
@@ -4313,6 +4334,18 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
             const int sliceId = message.objectKey.mid(6).toInt(&ok);
             if (ok) {
                 refusal = sliceRefusal(requester, sliceId);
+                // Fix wave I2 (ruling 8.11): the transmit slice is frozen
+                // while the radio's own PTT keys it.
+                if (refusal.isEmpty()) {
+                    for (const MirrorUpdate& update : message.updates) {
+                        const QByteArray& n = update.name;
+                        if (n == "frequency" || n == "dspMode" || n == "filterLow"
+                            || n == "filterHigh" || n == "txAntenna" || n == "band") {
+                            refusal = stationFreezeRefusal(sliceId).text;
+                            break;
+                        }
+                    }
+                }
             }
         } else if (message.objectKey.startsWith("marker:")) {
             const int sliceId = SliceMarkerSet::sliceIdOf(message.objectKey);
@@ -5438,6 +5471,32 @@ TxRefusal StationServer::onAirRefusal(const QByteArray& requester) const
     return TxRefusals::holderOnAir(holder->shortName,
                                    holder->source == TransmitHolder::Source::RadioPtt
                                        || holder->deviceId == KeyerIdentity::kStationDeviceId);
+}
+
+int StationServer::stationFrozenSlice() const
+{
+    // Ruling 8.11 (D64): while the station device is keyed (the radio's own
+    // mic or footswitch, or the Core's own keys), the slice it transmits on
+    // cannot be retuned, changed or closed until the press ends.
+    if (m_radioModel.isNull() || !m_transmitHolder) {
+        return -1;
+    }
+    const std::optional<TransmitHolder::Holder> holder = m_transmitHolder->holder();
+    if (!holder || !holder->keyed || holder->deviceId != KeyerIdentity::kStationDeviceId) {
+        return -1;
+    }
+    const SliceModel* slice = m_radioModel->txBoundSlice();
+    return slice != nullptr ? slice->sliceIndex() : -1;
+}
+
+TxRefusal StationServer::stationFreezeRefusal(int sliceId) const
+{
+    if (sliceId < 0 || sliceId != stationFrozenSlice()) {
+        return {};
+    }
+    // The design's words: "The radio is on the air." (TxRefusal's holderOnAir
+    // for the radio).
+    return TxRefusals::holderOnAir(QStringLiteral("Radio"), /*radioPtt=*/true);
 }
 
 TxRefusal StationServer::onAirPropertyRefusal(const QByteArray& requester,

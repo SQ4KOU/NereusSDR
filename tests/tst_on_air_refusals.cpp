@@ -22,6 +22,10 @@
 //   2026-09-25: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 34 (R-IOS-02), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave I2: the freeze and the station
+//               PTT's refusal while a device holds transmit. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -274,6 +278,98 @@ private slots:
         QCOMPARE(r.value(QStringLiteral("reason")).toString(), QStringLiteral("The radio is on the air. Try again when it stops."));
         core.model->moxController()->onMicPttFromRadio(false);
         QTRY_COMPARE(core.model->moxController()->state(), MoxState::Rx);
+    }
+
+    // ---- Fix wave I2 (rulings 8.11 and 8.9) ------------------------------
+
+    // Ruling 8.11 (D64): while the radio's own PTT keys the transmit slice
+    // (another device's), that slice is frozen for every device, its owner
+    // included: frequency, mode, filter, band, transmit antenna, closing.
+    // The freeze ends with the press.
+    void theRadiosPttFreezesTheTransmitSlice()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a(QStringLiteral("Grant's iPhone"), QStringLiteral("phone"), QStringLiteral("iPhone"));
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        QVERIFY(admitted(appA));
+        const int txSlice = core.model->txSliceArbiter()->txBoundSliceId();
+        QVERIFY(txSlice >= 0);
+        QCOMPARE(core.model->sliceOwnership()->mark(txSlice).owner, a.key.fingerprint());
+        const QByteArray key = QByteArrayLiteral("slice:") + QByteArray::number(txSlice);
+        const QString kRadioOnAir = QStringLiteral("The radio is on the air. Try again when it stops.");
+        qint64 writeId = 700;
+        const auto write = [&](const MirrorUpdate& update) {
+            const qint64 id = ++writeId;
+            appA->sendText(SessionMessages::encode(
+                SessionMessages::propertyWrite(key, {update}, static_cast<quint32>(id))));
+            QTest::qWaitFor([appA, id]() { return !propertyResult(appA, id).isEmpty(); }, 5000);
+            const QJsonArray results = propertyResult(appA, id).value(QStringLiteral("results")).toArray();
+            return results.isEmpty() ? QJsonObject{} : results.first().toObject();
+        };
+        MoxController* mox = core.model->moxController();
+        mox->onMicPttFromRadio(true);
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+        const double before = core.model->sliceById(txSlice)->frequency();
+        for (const MirrorUpdate& update :
+             {MirrorUpdate{0, "frequency", MirrorWireKind::Float64, QVariant(14250000.0)},
+              MirrorUpdate{0, "dspMode", MirrorWireKind::Enum, QVariant(qlonglong(0))},
+              MirrorUpdate{0, "filterLow", MirrorWireKind::Int64, QVariant(qlonglong(200))},
+              MirrorUpdate{0, "filterHigh", MirrorWireKind::Int64, QVariant(qlonglong(2500))},
+              MirrorUpdate{0, "txAntenna", MirrorWireKind::Utf8, QVariant(QStringLiteral("ANT2"))}}) {
+            const QJsonObject result = write(update);
+            QVERIFY2(!result.value(QStringLiteral("accepted")).toBool(true), update.name.constData());
+            QCOMPARE(result.value(QStringLiteral("reason")).toString(), kRadioOnAir);
+        }
+        QCOMPARE(core.model->sliceById(txSlice)->frequency(), before);
+        const QJsonObject close = core.invoke(appA, "removeSlice", {int64("sliceId", txSlice)});
+        QVERIFY(!close.value(QStringLiteral("accepted")).toBool(true));
+        QCOMPARE(close.value(QStringLiteral("reason")).toString(), kRadioOnAir);
+        const QJsonObject band = core.invoke(appA, "slice.selectBand",
+                                             {int64("sliceId", txSlice), int64("band", 3)});
+        QVERIFY(!band.value(QStringLiteral("accepted")).toBool(true));
+        QCOMPARE(band.value(QStringLiteral("reason")).toString(), kRadioOnAir);
+        QVERIFY(core.model->sliceById(txSlice) != nullptr);
+        // The press ends: the owner retunes again.
+        mox->onMicPttFromRadio(false);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        const QJsonObject after =
+            write(MirrorUpdate{0, "frequency", MirrorWireKind::Float64, QVariant(14250000.0)});
+        QVERIFY2(after.value(QStringLiteral("accepted")).toBool(false),
+                 qPrintable(after.value(QStringLiteral("reason")).toString()));
+    }
+
+    // The station's own PTT is refused while any device holds transmit,
+    // keyed or not, present or away (Task 34's rule until Task 77 turns
+    // the press into a take), and keys nothing.
+    void theRadiosPttIsRefusedWhileADeviceHoldsTransmit()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a(QStringLiteral("Grant's iPhone"), QStringLiteral("phone"), QStringLiteral("iPhone"));
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        QVERIFY(admitted(appA));
+        TransmitHolder* holder = core.server->transmitHolder();
+        TransmitHolder::KeyRequest take;
+        take.deviceId = a.key.fingerprint();
+        QCOMPARE(holder->askKey(take).verdict, KeyingVerdict::Admit);
+        MoxController* mox = core.model->moxController();
+        QSignalSpy refused(mox, &MoxController::moxRefused);
+        mox->onMicPttFromRadio(true);
+        QVERIFY(!mox->isMox());
+        QCOMPARE(refused.count(), 1);
+        QCOMPARE(refused.first().first().value<TxRefusal>(),
+                 TxRefusals::otherDeviceHolds(QStringLiteral("Grant's iPhone")));
+        mox->onMicPttFromRadio(false);
+        // Away: still refused.
+        appA->closeLink(QStringLiteral("lost"));
+        QTRY_VERIFY(holder->holder().has_value() && holder->holder()->away);
+        mox->onMicPttFromRadio(true);
+        QVERIFY(!mox->isMox());
+        QVERIFY(holder->isHeldBy(a.key.fingerprint()));
+        mox->onMicPttFromRadio(false);
     }
 };
 

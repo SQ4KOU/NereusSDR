@@ -4568,6 +4568,16 @@ this rule, and with the holder unkeyed none is:
 - a C-Tune centre change on the receiver of the holder's transmit slice
   (`requestStreamCentre`).
 
+While the radio's own PTT (its mic or footswitch, or the Core's own keys)
+keys, the slice it transmits on is frozen for every device, its owner's
+included (the several-devices design, ruling 8.11; D64): a write of its
+`frequency`, `dspMode`, `filterLow`, `filterHigh`, `txAntenna` or `band`,
+and `removeSlice` or `slice.selectBand` for it, is refused `holderOnAir`,
+"The radio is on the air. Try again when it stops." The freeze ends with the
+press. Until taking transmit is built (Task 77) the radio's own PTT is
+refused `otherDeviceHolds` while any device holds transmit, keyed or not,
+away included, and its take of unheld transmit ends with its key.
+
 ### 18.5 `tx.setTxSlice`
 
 `tx.setTxSlice {sliceId}` moves the transmit flag to the slice with that

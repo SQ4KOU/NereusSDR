@@ -730,6 +730,8 @@ const QList<ReasonSource>& reasonSources()
           // txPermitted in capabilities (txRefusalReason) and remembered.
           QStringLiteral("txRefusalOf(caps)"),
           QStringLiteral("txDecision.refusal.text"),
+          // Fix wave I2: the freeze's refusal (TxRefusal.cpp's words).
+          QStringLiteral("frozen.text"), QStringLiteral("stationFreezeRefusal(sliceId).text"),
           // R-R3-49 (parity Task 5): powerPageKeyValueRefusal's literals,
           // this file's own, scanned here.
           QStringLiteral("range")}},
