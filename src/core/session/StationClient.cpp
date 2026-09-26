@@ -240,12 +240,17 @@
 //               (StationConnectionAttempt) for the connection messages. J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: iPhone app plan Task 77 (R-IOS-02, R-IOS-03, R-IOS-13):
+//               tgxlAutotuneAvailable, holdsTransmitHere, otherHolderReason.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
 
 #include "core/AppSettings.h"
 #include "core/FaultLog.h"
+#include "core/safety/TxRefusal.h"
 #include "core/security/ClientDeviceIdentity.h"
 #include "core/security/DeviceAuthenticator.h"
 #include "core/security/StationIdentity.h"
@@ -4639,6 +4644,14 @@ bool StationClient::tgxlDeviceSettingsAvailable() const
 }
 
 // R-R3-49 / R-R3-47: the Tuner Genius's antenna, operate and bypass.
+bool StationClient::tgxlAutotuneAvailable() const
+{
+    // iPhone app plan Task 77: tx.tunerTune, remoteTxVersion 2.
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.remoteTxVersion >= 2 && m_remoteTransmit != nullptr
+        && m_remoteTransmit->available();
+}
+
 bool StationClient::tgxlControlAvailable() const
 {
     return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
@@ -4931,6 +4944,37 @@ QString StationClient::transmitHolderText() const
                      .arg(name)
                : QStringLiteral("%1 holds transmit. MOX and TUNE here wait until it lets go.")
                      .arg(name);
+}
+
+bool StationClient::knowsTransmitHolder() const
+{
+    // A receive-only Core has no device holding transmit: its transmit
+    // settings stay this window's to change off the air (R-R3-49), whoever
+    // its own keys named.
+    return m_transmitState != nullptr && isHandshakeComplete()
+        && capabilities().txStateVersion >= 2 && remoteTransmitAvailable()
+        && capabilities().txRefusalCode != QString::fromLatin1(TxRefusals::kStationReceiveOnly);
+}
+
+bool StationClient::holdsTransmitHere() const
+{
+    if (!knowsTransmitHolder()) {
+        return false;
+    }
+    const QString self = thisDeviceWireId();
+    return !self.isEmpty() && m_transmitState->holderDeviceId() == self;
+}
+
+QString StationClient::otherHolderReason() const
+{
+    if (!knowsTransmitHolder() || m_transmitState->holderDeviceId().isEmpty()
+        || holdsTransmitHere()) {
+        return {};
+    }
+    const QString name = m_transmitState->holderName().isEmpty()
+        ? QStringLiteral("Another device")
+        : m_transmitState->holderName();
+    return TxRefusals::otherDeviceHolds(name).text;
 }
 
 // ── iPhone app plan Task 27: the attempt record ────────────────────────────

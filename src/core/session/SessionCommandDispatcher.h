@@ -177,6 +177,11 @@
 //   2026-09-26  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 16):
 //                                    handleFilterResponse.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  iPhone app plan Task 77 (R-IOS-02,
+//                                    R-IOS-03, R-IOS-13): tx.take and
+//                                    tx.tunerTune; TransmitAccess::take and
+//                                    ::transmitter. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -352,6 +357,20 @@ public:
         /// (it holds transmit, or nobody does), or the refusal naming the
         /// holder. Unset, every release is allowed.
         std::function<TxRefusal(const QByteArray& requester)> release;
+        /// iPhone app plan Task 77 (rulings 8.4, 8.7): tx.take from the
+        /// device being dispatched, its optional holderEpoch and
+        /// shownKeyed read. `reply` runs once with the command.result, now
+        /// or when the transfer ends. Unset, tx.take is refused
+        /// stationReceiveOnly.
+        std::function<void(const SessionMessage& invoke, std::optional<quint64> holderEpoch,
+                           std::optional<bool> shownKeyed,
+                           std::function<void(const SessionMessage& result)> reply)>
+            take;
+        /// iPhone app plan Task 77 (ruling 7.7): a change to the
+        /// transmitter's own settings (txProfile.select) from `requester`:
+        /// empty when it may (it holds transmit, or nobody does), or the
+        /// refusal naming the holder. Unset, every change is allowed.
+        std::function<TxRefusal(const QByteArray& requester)> transmitter;
     };
     void setTransmitAccess(TransmitAccess access) { m_transmitAccess = std::move(access); }
     /// iPhone app Task 74 (R-IOS-30): the Core's confirm step, which
@@ -512,6 +531,8 @@ private:
     void handleSetTxSlice(const NereusSDR::SessionMessage& invoke);
     // Task 37: tx.keepalive.
     void handleTxKeepalive(const NereusSDR::SessionMessage& invoke);
+    /// iPhone app plan Task 77: tx.take {holderEpoch, shownKeyed}.
+    void handleTxTake(const NereusSDR::SessionMessage& invoke);
     // Task 35: tx.key, tx.unkey, tx.tune, tx.twoTone.
     void handleTxKeying(const NereusSDR::SessionMessage& invoke);
     TransmitAccess m_transmitAccess;

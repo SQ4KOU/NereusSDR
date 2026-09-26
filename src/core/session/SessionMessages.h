@@ -141,6 +141,9 @@
 //   2026-09-25: iPhone app Task 74 (R-IOS-30): confirm.request and notice
 //               (SessionPrompt). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 77 (R-IOS-02, R-IOS-03, R-IOS-13):
+//               confirm.request holder (takeTransmit). J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -337,8 +340,8 @@ struct SessionPrompt {
     qint64 id = 0;
     /// Both: confirm.request panMove, takeReceiver, takeSlice (Tasks 75 and
     /// 77 add sharedSetting and takeTransmit); notice sliceMoved,
-    /// sliceClosed, receiverTaken, sliceTaken, graceEnded,
-    /// slicesNotRestored.
+    /// sliceClosed, receiverTaken, sliceTaken, transmitTaken (Task 77),
+    /// graceEnded, slicesNotRestored.
     QString kind;
 
     // ── confirm.request ─────────────────────────────────────────────────
@@ -353,6 +356,9 @@ struct SessionPrompt {
     std::optional<qint64> forWriteId;
     /// Sent when not empty.
     QString forSettingsKey;
+    /// iPhone app plan Task 77: takeTransmit's holder, the entry of the
+    /// device (or the radio) transmit would be taken from.
+    std::optional<QJsonObject> holder;
 
     // ── notice ──────────────────────────────────────────────────────────
     /// Whole seconds since it happened, measured when it is sent.

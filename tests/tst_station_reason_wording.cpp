@@ -745,6 +745,18 @@ const QList<ReasonSource>& reasonSources()
         // refusals, confirm.request and notice reasons, and the chooser's
         // `why`. Device names inserted are the operator's own words (ruling
         // 4.3); slice letters, counts and bands are plain.
+        // iPhone app plan Task 77: taking transmit's refusals and the
+        // transmitTaken notice's words. The taker's name is the operator's
+        // own words or "Radio" (ruling 4.3, ruling 8.1).
+        {"src/core/session/StationTransmitTake.cpp", {}, {}, 2,
+         {QStringLiteral("takerName")},
+         {// This file's own constant and reason function, scanned here;
+          // the refusals are TxRefusal.cpp's (scanned there).
+          QStringLiteral("QString::fromLatin1(kWaitingReason)"),
+          QStringLiteral("takenReason(takerName)"), QStringLiteral("refusal.text"),
+          // The session's own transmit gate (StationTxGate, TxRefusal.cpp's
+          // words).
+          QStringLiteral("sessionTransmitRefusal(transport)")}},
         {"src/core/session/StationReceivers.cpp", {}, {}, 12,
          {QStringLiteral("anchorName"), QStringLiteral("names"), QStringLiteral("takerName"),
           QStringLiteral("name, letterWords"), QStringLiteral("number"),
@@ -859,6 +871,9 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("m_transmitAccess.onAir(m_requester)"),
           // Fix wave M2: a release refused (TxRefusal.cpp's words).
           QStringLiteral("m_transmitAccess.release(m_requester)"),
+          // iPhone app plan Task 77 (ruling 7.7): the transmitter's
+          // settings held by the holder (TxRefusal.cpp's words).
+          QStringLiteral("m_transmitAccess.transmitter(m_requester)"),
           QStringLiteral("m_transmitAccess.txSlice(m_requester)"),
           // Parity mini-round: its TX antenna refusal (setAlexTxAntenna),
           // scanned below.
@@ -967,7 +982,10 @@ const QList<ReasonSource>& reasonSources()
          {QStringLiteral("defaultRxOnlyReason"), QStringLiteral("transmitBlockReason"),
           QStringLiteral("transmitBlockRefusal"),
           // Fix wave 2: the interlock's refusal, TxRefusal.cpp's words.
-          QStringLiteral("interlockRefusal")}, {}, 3, {},
+          QStringLiteral("interlockRefusal"),
+          // iPhone app plan Task 77: the keying gate's refusal of a
+          // program's key, TxRefusal.cpp's words.
+          QStringLiteral("programKeyRefusal")}, {}, 3, {},
          // The reason setRxOnly was given (RadioModel::rxOnlyReason, scanned),
          // and TxRefusal.cpp's refusals (scanned there).
          {QStringLiteral("m_rxOnlyReason"), QStringLiteral("TxRefusals::stationReceiveOnly()")}},
@@ -975,10 +993,18 @@ const QList<ReasonSource>& reasonSources()
          // The reason setRxOnly was given (RadioModel::rxOnlyReason, scanned).
          {QStringLiteral("m_rxOnlyReason")}},
         {"src/models/RadioModel.cpp",
-         {QStringLiteral("rxOnlyForcedReason"), QStringLiteral("rxOnlyReason")}, {}, 1, {},
+         {QStringLiteral("rxOnlyForcedReason"), QStringLiteral("rxOnlyReason"),
+          // iPhone app plan Task 77: a device's Tuner Genius autotune.
+          QStringLiteral("startTgxlAutotuneFor")}, {}, 1, {},
          // Both scanned here and in MoxController.cpp.
          {QStringLiteral("m_rxOnlyForced ? rxOnlyForcedReason() : "
-                         "MoxController::defaultRxOnlyReason()")}},
+                         "MoxController::defaultRxOnlyReason()"),
+          // Task 77: the transmit block's words (MoxController's
+          // transmitBlockReason, scanned there).
+          QStringLiteral("transmitBlockReasonAlongside(QString())"),
+          // startTgxlAutotuneFor's refusal: its own literals (scanned
+          // here) or the transmit block's words above.
+          QStringLiteral("refusal")}},
         // A receiver count, and a frequency in MHz.
         {"src/core/SliceStreamAllocator.cpp", {}, {}, 4,
          {QStringLiteral("count"),

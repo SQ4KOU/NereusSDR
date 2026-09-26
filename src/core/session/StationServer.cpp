@@ -509,9 +509,17 @@
 //               mailbox pairing is refused before it takes a code. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: iPhone app plan Task 77 (R-IOS-02, R-IOS-03, R-IOS-13): the
+//               radio's PTT takes transmit from another holder; the station
+//               keeps transmit after its key; tx.take wiring; VOX arming
+//               needs transmit; transmittingOn; the arbiter's freeze. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
+
+#include "core/TxSliceArbiter.h"
 
 #include "core/AppSettings.h"
 #include "core/BoardCapabilities.h"
@@ -1403,6 +1411,17 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             state.holderDeviceId = holder->deviceId;
             state.keyed = holder->keyed;
             state.keyedSinceMs = holder->keyedSinceMs;
+            // Task 77: connectedDevices.transmittingOn.
+            const SliceModel* slice = m_radioModel ? m_radioModel->txBoundSlice() : nullptr;
+            if (holder->keyed && slice != nullptr) {
+                const int id = slice->sliceIndex();
+                state.transmittingOn = QJsonObject{
+                    {QStringLiteral("sliceId"), id},
+                    {QStringLiteral("letter"), QString(QChar(QLatin1Char('A').unicode() + id))},
+                    {QStringLiteral("band"), static_cast<int>(slice->band())},
+                    {QStringLiteral("mode"), static_cast<int>(slice->dspMode())},
+                };
+            }
         }
         return state;
     });
@@ -1468,6 +1487,36 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                 // holder as its own key would, and VOX stays armed.
                 request.deviceId = m_radioModel->remoteVoxDevice();
             }
+            // iPhone app plan Task 77 (rulings 8.8, 8.9; D52 as D58 amended
+            // it): a press of the radio's own PTT (its mic or a footswitch)
+            // while another device holds transmit, keyed or not, away
+            // included, takes it without a question, the press being the
+            // confirmation. The transfer unkeys a holder on the air first;
+            // the press keys nothing while it runs, and keys afterwards,
+            // through this gate as a new key, only if it is still down
+            // (MoxController::onTakeFinished). The hosting desktop's own MOX
+            // and TUNE never take here (ruling 8.9a): they are refused
+            // naming the holder, and the desktop asks through tx.take's
+            // rules (takeTransmitForStation).
+            if (keyer.isStation() && source == PttMode::Mic
+                && m_transmitHolder->state() == TransmitHolder::State::Held
+                && !m_transmitHolder->isFenced() && !m_transmitHolder->isStopUnconfirmed()) {
+                const std::optional<TransmitHolder::Holder> holder = m_transmitHolder->holder();
+                if (holder && holder->deviceId != KeyerIdentity::kStationDeviceId) {
+                    const QPointer<MoxController> moxLater(m_radioModel->moxController());
+                    runTake(QByteArray(KeyerIdentity::kStationDeviceId),
+                            TransmitHolder::Source::RadioPtt,
+                            [this, moxLater, keyer](bool assigned) {
+                                // A turn later, out of the call that pressed.
+                                QTimer::singleShot(0, this, [moxLater, keyer, assigned]() {
+                                    if (!moxLater.isNull()) {
+                                        moxLater->onTakeFinished(keyer, assigned);
+                                    }
+                                });
+                            });
+                    return {KeyingVerdict::Take, {}};
+                }
+            }
             // The radio's own PTT (its mic or a footswitch) is PttMode::Mic
             // from the station device (ruling 8.5).
             request.source = keyer.isStation() && source == PttMode::Mic
@@ -1500,11 +1549,11 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                 m_transmitHolder->setKeyed(false);
             }
             m_transmitHolder->onMoxReading(on);
-            // Fix wave I1 (until Task 77): the station device's take (the
-            // radio's PTT, the Core's own keys, its VOX) ends with its key.
-            if (!on) {
-                m_transmitHolder->releaseStationTake();
-            }
+            // Task 77 (ruling 8.1): the station device's take (the radio's
+            // PTT, the Core's own keys, its VOX) no longer ends with its
+            // key: the station holds transmit, unkeyed, until a device
+            // takes it (tx.take), as any holder does. Fix wave I1's interim
+            // release is gone with the take that replaces it.
         });
         // iPhone app plan Task 35 (R-IOS-13): keying from a remote device.
         // Created after the holder's MOX follower above, so the holder
@@ -2130,6 +2179,29 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                                         RemoteTxWatchdog::Path::Session);
             }
         };
+        // Task 77 (ruling 7.7): the transmitter's own settings are the
+        // holder's while transmit is held.
+        // On the air, ruling 7.4's words come first. A receive-only Core
+        // has no device holding transmit to defer to: its transmit settings
+        // stay the windows' to change off the air (R-R3-49).
+        access.transmitter = [this](const QByteArray& requester) -> TxRefusal {
+            if (const TxRefusal onAir = onAirRefusal(requester); !onAir.isEmpty()) {
+                return onAir;
+            }
+            const std::optional<TransmitHolder::Holder> holder = m_transmitHolder->holder();
+            if (!m_txGate.remoteTransmitAllowed() || !holder || requester.isEmpty()
+                || holder->deviceId == requester) {
+                return {};
+            }
+            return TxRefusals::otherDeviceHolds(holder->name);
+        };
+        // Task 77: tx.take, on the connection being dispatched.
+        access.take = [this](const SessionMessage& invoke, std::optional<quint64> holderEpoch,
+                             std::optional<bool> shownKeyed,
+                             std::function<void(const SessionMessage&)> reply) {
+            takeTransmit(m_dispatchingTransport, invoke, holderEpoch, shownKeyed,
+                         std::move(reply));
+        };
         m_dispatcher->setTransmitAccess(std::move(access));
     }
     if (radioModel) {
@@ -2163,6 +2235,29 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
         });
         connect(radioModel, &RadioModel::sliceRemoved, m_connectedDevices.get(),
                 &ConnectedDevicesFacade::refresh);
+        // iPhone app plan Task 77 (ruling 8.12): the holder's last slice
+        // closing releases transmit; (ruling 5.4a) a new slice's TX mark.
+        connect(radioModel, &RadioModel::sliceRemoved, this,
+                [this](int sliceId) { onSliceClosedForHolder(sliceId); });
+        connect(radioModel, &RadioModel::sliceAdded, this, [this](int) { refreshTxMarks(); });
+        if (TxSliceArbiter* arbiter = radioModel->txSliceArbiter();
+            arbiter != nullptr && radioModel->role() == RadioModel::Role::Local) {
+            // Ruling 8.11: the flag never moves while the station device
+            // is keyed.
+            arbiter->setFrozen([this]() { return stationFrozenSlice() >= 0; });
+            // Ruling 8.10: the holder's choice is remembered for the next
+            // time it holds transmit; connectedDevices.transmittingOn.
+            connect(arbiter, &TxSliceArbiter::txBoundSliceChanged, this,
+                    [this](int, int newId) {
+                        const auto holder = m_transmitHolder->holder();
+                        if (holder && m_radioModel
+                            && m_radioModel->sliceOwnership()->mark(newId).subject()
+                                   == holder->deviceId) {
+                            m_chosenTxSlice.insert(holder->deviceId, newId);
+                        }
+                        m_connectedDevices->refresh();
+                    });
+        }
         // Fix wave I2: a question naming a slice that closed can no longer
         // be proceeded (its id may soon be another device's).
         connect(radioModel, &RadioModel::sliceRemoved, this,
@@ -2203,6 +2298,11 @@ StationServer::~StationServer()
     if (m_radioModel && m_radioModel->moxController() != nullptr
         && m_radioModel->role() == RadioModel::Role::Local) {
         m_radioModel->moxController()->setKeyingGate({});
+    }
+    // Task 77: the arbiter's freeze asks this object too.
+    if (m_radioModel && m_radioModel->txSliceArbiter() != nullptr
+        && m_radioModel->role() == RadioModel::Role::Local) {
+        m_radioModel->txSliceArbiter()->setFrozen({});
     }
     // iPhone app plan Task 39: the transmit state follows the model, which
     // may outlive this object; it lets go first, before the devices' clock
@@ -2900,6 +3000,12 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
         // purpose (or a token window, which cannot be recognised again)
         // releases transmit through a transfer to nobody; a dropped holder
         // is unkeyed at once through the fence and keeps transmit, away.
+        // iPhone app plan Task 77: a Tuner Genius autotune the device asked
+        // for ends with its session, keyed or still waiting for the
+        // amplifier, so it never keys for a device that is gone.
+        if (m_radioModel) {
+            m_radioModel->cancelTgxlAutotuneFor(sessionDevice);
+        }
         if (leaving || sessionDevice.startsWith("token:")) {
             m_transmitHolder->release(sessionDevice, QStringLiteral("The device left the Core."));
         } else {
@@ -4757,6 +4863,16 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
                 continue;
             }
         }
+        // iPhone app plan Task 77 (ruling 8.4): VOX keys on audio, not on a
+        // person, so it follows the holder strictly: arming it from a
+        // device that does not hold transmit is refused (another holder is
+        // named by the gate below); its client takes transmit first.
+        if (transmitObjectWrite && update.name == "voxEnabled" && update.value.toBool()
+            && !writer.isEmpty() && txDecision.permitted && m_transmitHolder
+            && !m_transmitHolder->isHeldBy(writer)) {
+            refusals.insert(update.name, TxRefusals::notHolder().text);
+            continue;
+        }
         // R-R3-49 (parity Task 1), merged: a receive-only Core's transmit
         // settings from a peer offered them are taken off the air above.
         // Fix wave M8: VOX a device arms listens to its microphone line;
@@ -5610,6 +5726,10 @@ void StationServer::onTransmitHolderChanged()
     }
     m_connectedDevices->refresh();
     publishTxPermitted();
+    // Task 77 (ruling 5.4a): TX marks only the holder's slice.
+    refreshTxMarks();
+    // Task 77 (ruling 8.10): a new holder's transmit slice.
+    bindTransmitSliceForHolder();
     // Fix wave I4 (ruling 8.1): txState names the holder for every device.
     if (m_transmitState) {
         TransmitState::Holder published;
@@ -5657,7 +5777,10 @@ void StationServer::watchUnstartedTake(quint64 epoch)
         const bool moxOn = mox != nullptr && (mox->isMox() || mox->state() != MoxState::Rx);
         const TwoToneController* twoTone =
             m_radioModel ? m_radioModel->twoToneController() : nullptr;
-        const bool starting = twoTone != nullptr && twoTone->isActivationInFlight();
+        // Task 77: a Tuner Genius autotune keys once the amplifier is in
+        // standby (up to 1.5 s), so its take is still starting meanwhile.
+        const bool starting = (twoTone != nullptr && twoTone->isActivationInFlight())
+            || (m_radioModel && m_radioModel->isTgxlAutotuneInProgress());
         if (moxOn || starting) {
             QTimer::singleShot(kUnstartedTakeRecheckMs, this,
                                [this, epoch]() { watchUnstartedTake(epoch); });
@@ -6085,6 +6208,8 @@ void StationServer::onSliceOwnerChanged(int sliceId, const QByteArray& oldOwner,
     dropQuestionsNaming(sliceId);
     // The markers name the new owner before any view is given one.
     m_markers->refreshOwners();
+    // Task 77 (ruling 5.4a): the TX mark follows the owner.
+    refreshTxMarks();
     m_connectedDevices->refresh();
     if (m_ownerChangesInBurst) {
         // Every view is about to receive its whole burst again.

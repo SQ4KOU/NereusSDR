@@ -1328,6 +1328,7 @@ set(CORE_SOURCES
     src/core/session/StationOpeningGate.cpp
     src/core/session/StationReceivers.cpp
     src/core/session/StationSharedSettings.cpp
+    src/core/session/StationTransmitTake.cpp
     src/core/session/ReceiverPlanner.cpp
     src/core/session/ConfirmStep.cpp
     src/core/session/StationLanAnnouncement.cpp

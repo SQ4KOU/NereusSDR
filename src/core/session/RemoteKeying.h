@@ -76,6 +76,10 @@
 //               on the Core's own microphone; setSessionGate. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: iPhone app plan Task 77 (R-IOS-02, R-IOS-03, R-IOS-13):
+//               tx.tunerTune (the Tuner Genius autotune) as a key; the
+//               session gate first for two-tone. J.J. Boyd (KG4VCF), with AI-
+//               assisted implementation via Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -101,7 +105,8 @@ class RemoteKeying : public QObject {
     Q_OBJECT
 
 public:
-    enum class Verb { Key, Unkey, Tune, TwoTone };
+    /// TunerTune (Task 77): the Tuner Genius autotune, tx.tunerTune.
+    enum class Verb { Key, Unkey, Tune, TwoTone, TunerTune };
 
     struct Command {
         Verb verb{Verb::Key};
@@ -113,7 +118,7 @@ public:
         /// tx.key: "screen", "headset", "bluetooth", "actionButton" or
         /// "tci" (a program's key).
         QByteArray trigger;
-        /// tx.tune, tx.twoTone.
+        /// tx.tune, tx.twoTone, tx.tunerTune.
         bool on{true};
         /// tx.unkey: the epoch of the key it ends.
         quint32 epoch{0};
@@ -191,6 +196,10 @@ private:
     Result unkey(const Command& command);
     Result tune(const Command& command);
     Result twoTone(const Command& command);
+    /// iPhone app plan Task 77: tx.tunerTune.
+    Result tunerTune(const Command& command);
+    /// The device's Tuner Genius autotune is running (keyed or not yet).
+    bool autotuneRunningFor(const QByteArray& deviceId) const;
     Result stopFrom(const QByteArray& deviceId, bool deviceKeyOn);
 
     /// The device's key is on, or its two-tone is on its way to keying,

@@ -442,6 +442,14 @@
 //                bandSelectVersion 1, so the Core changes that slice with
 //                its own band memory. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  iPhone app plan Task 77 (R-IOS-02,
+//                                    R-IOS-03, R-IOS-13): a device's Tuner
+//                                    Genius autotune (keyed as the device,
+//                                    ended by the tuner or after 3 s without a
+//                                    sweep), a remote window's TUNE through
+//                                    tx.tunerTune, the holder-aware fallback
+//                                    when the transmit slice closes. AI-
+//                                    assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1664,6 +1672,13 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // (already copied into m_role above) shadows the role() accessor
     // inside this function body.
     m_txSliceArbiter->setRemote(m_role == Role::Remote);
+    // iPhone app plan Task 77 (ruling 8.13): whose each slice is, each
+    // owner's active slice and who holds transmit, for tx.setTxSlice, the
+    // bind at a change of holder and the first bind.
+    m_txSliceArbiter->setOwnerLookup(
+        [this](int sliceId) { return m_sliceOwnership->mark(sliceId).subject(); },
+        [this](const QByteArray& owner) { return m_sliceOwnership->activeFor(owner); });
+    m_txSliceArbiter->setHolderLookup([this]() { return m_sliceOwnership->transmitHolder(); });
 
     // iPhone app plan Task 34 (R-IOS-03; remote design section 12.2): the
     // unkey-confirmed gate. The normal unkey ends TUNE and two-tone their
@@ -2076,6 +2091,18 @@ RadioModel::RadioModel(Role role, QObject* parent)
     m_tgxlConnection = new TgxlConnection(this);
     m_tunerModel     = new TunerModel(this);
     m_tunerModel->bindConnection(m_tgxlConnection);
+    // iPhone app plan Task 77: a device's Tuner Genius cycle ends with the
+    // tuner's own sweep, as the local Tuner page ends the Core's own.
+    connect(m_tunerModel, &TunerModel::tuningChanged, this, [this](bool tuning) {
+        if (!m_tgxlAutotuneInProgress || m_tgxlAutotuneDeviceId.isEmpty()) {
+            return;
+        }
+        if (tuning) {
+            m_tgxlDeviceCycleSawTuning = true;
+        } else if (m_tgxlDeviceCycleSawTuning && m_isTuning) {
+            setTune(false);
+        }
+    });
 
     // Phase 3P-III: RF-Kit RF2K-S connection. Constructed unconditionally;
     // the poller only starts when rfKitEnabled is set to true (reads
@@ -2343,30 +2370,8 @@ RadioModel::RadioModel(Role role, QObject* parent)
             // TUN drops won't trigger this branch because the flag stays
             // false (operator's full-beans TUN doesn't touch PGXL state).
             if (!isManual && m_tgxlAutotuneInProgress) {
-                m_tgxlAutotuneInProgress = false;
-                // Clear the interlock-grant gate too; if the cycle ends
-                // before interlockGranted fires (e.g. operator hit TUN-off
-                // very early, or PGXL force-tripped FAULT mid-handshake),
-                // we don't want a future interlockGranted from an
-                // unrelated TX to fire the (now stale) autotune.
-                m_awaitingInterlockForAutotune = false;
-                if (m_pgxlSavedOperate && m_pgxlConnection
-                    && m_pgxlConnection->isConnected()) {
-                    m_pgxlConnection->sendCommand(QStringLiteral("operate=1"));
-                    qCInfo(lcConnection)
-                        << "TGXL autotune complete: sent operate=1 to PGXL"
-                           " (expect state edge STANDBY -> OPERATE soon)";
-                } else if (m_pgxlSavedOperate) {
-                    qCWarning(lcConnection)
-                        << "TGXL autotune complete: PGXL was operating"
-                           " before cycle but connection is down; cannot"
-                           " send operate=1 -- amp will stay STANDBY";
-                } else {
-                    qCInfo(lcConnection)
-                        << "TGXL autotune complete: PGXL was not operating"
-                           " before cycle, leaving in current state";
-                }
-                m_pgxlSavedOperate = false;
+                // iPhone app plan Task 77: one ending for every cycle.
+                finishTgxlAutotuneCycle();
             }
         });
         // Split engage / release across two MoxController phase signals
@@ -10879,6 +10884,23 @@ void RadioModel::removeSliceImpl(int sliceId, bool persist)
     if (victim->isTxSlice() && m_txSliceArbiter) {
         const int fallbackPosition = (position == 0) ? 1 : 0;
         SliceModel* fallback = m_slices.at(fallbackPosition);
+        // iPhone app plan Task 77 (ruling 8.12): the holder's transmit slice
+        // closing moves transmit to another of the holder's slices. With
+        // none, the Core releases transmit (StationServer) and the binding
+        // goes wherever keeps one slice bound.
+        if (role() == Role::Local) {
+            const QByteArray holder = m_sliceOwnership->transmitHolder();
+            if (!holder.isEmpty()) {
+                for (int id : m_sliceOwnership->ownedBy(holder)) {
+                    SliceModel* own = sliceById(id);
+                    if (own != nullptr && own != victim
+                        && m_sliceOwnership->mark(id).subject() == holder) {
+                        fallback = own;
+                        break;
+                    }
+                }
+            }
+        }
         m_txSliceArbiter->requestHandoff(fallback->sliceIndex());
     }
 
@@ -24177,6 +24199,94 @@ void RadioModel::onPgxlConnected()
 // restore PGXL to OPERATE (if it was operating before the tune cycle).
 void RadioModel::startTgxlAutotune(bool fromHardware)
 {
+    // iPhone app plan Task 77 (controller addition): a remote window's
+    // Tuner page TUNE is the Core's autotune for this window
+    // (tx.tunerTune), under the Core's holder rules and watchdog.
+    if (!fromHardware && remoteTransmitRouted() && m_station->tgxlAutotuneAvailable()) {
+        m_station->remoteTransmit()->setTunerTune(true);
+        return;
+    }
+    // iPhone app plan Task 77: the Core's own cycle (its Tuner page, a
+    // Tuner Genius hardware TUNE) keys as the station device. A hardware
+    // echo during a device's cycle keeps that device's keyer.
+    if (!m_tgxlAutotuneInProgress) {
+        m_tgxlAutotuneDeviceId.clear();
+        m_tgxlAutotuneSession.clear();
+    }
+    beginTgxlAutotune(fromHardware);
+}
+
+bool RadioModel::startTgxlAutotuneFor(const KeyerIdentity& keyer, QString* reason)
+{
+    // iPhone app plan Task 77 (controller addition): a device's Tuner
+    // Genius TUNE. Asked here, before anything reaches the amplifier or
+    // the tuner, so a refusal changes nothing.
+    QString refusal;
+    if (!m_tgxlConnection || !m_tgxlConnection->isConnected()) {
+        refusal = QStringLiteral("No Tuner Genius is connected to the Core.");
+    } else if (m_tgxlAutotuneInProgress || m_isTuning) {
+        refusal = QStringLiteral("The tuner is already tuning.");
+    } else {
+        refusal = transmitBlockReasonAlongside(QString());
+    }
+    if (!refusal.isEmpty()) {
+        if (reason != nullptr) {
+            *reason = refusal;
+        }
+        return false;
+    }
+    m_tgxlAutotuneDeviceId = keyer.deviceId;
+    m_tgxlAutotuneSession = keyer.session;
+    beginTgxlAutotune(/*fromHardware=*/false);
+    return m_tgxlAutotuneInProgress;
+}
+
+bool RadioModel::cancelTgxlAutotuneFor(const QByteArray& deviceId)
+{
+    if (!m_tgxlAutotuneInProgress || deviceId.isEmpty() || m_tgxlAutotuneDeviceId != deviceId) {
+        return false;
+    }
+    if (m_isTuning) {
+        // The carrier drops; manualMoxChanged(false) finishes the cycle.
+        setTune(false);
+    } else {
+        finishTgxlAutotuneCycle();
+    }
+    return true;
+}
+
+void RadioModel::finishTgxlAutotuneCycle()
+{
+    if (!m_tgxlAutotuneInProgress) {
+        return;
+    }
+    m_tgxlAutotuneInProgress = false;
+    // Clear the interlock-grant gate too; if the cycle ends before
+    // interlockGranted fires (e.g. operator hit TUN-off very early, or PGXL
+    // force-tripped FAULT mid-handshake), we don't want a future
+    // interlockGranted from an unrelated TX to fire the (now stale)
+    // autotune.
+    m_awaitingInterlockForAutotune = false;
+    m_pgxlStandbyPending = false;
+    if (m_pgxlSavedOperate && m_pgxlConnection && m_pgxlConnection->isConnected()) {
+        m_pgxlConnection->sendCommand(QStringLiteral("operate=1"));
+        qCInfo(lcConnection) << "TGXL autotune complete: sent operate=1 to PGXL"
+                                " (expect state edge STANDBY -> OPERATE soon)";
+    } else if (m_pgxlSavedOperate) {
+        qCWarning(lcConnection) << "TGXL autotune complete: PGXL was operating"
+                                   " before cycle but connection is down; cannot"
+                                   " send operate=1 -- amp will stay STANDBY";
+    } else {
+        qCInfo(lcConnection) << "TGXL autotune complete: PGXL was not operating"
+                                " before cycle, leaving in current state";
+    }
+    m_pgxlSavedOperate = false;
+    m_tgxlAutotuneDeviceId.clear();
+    m_tgxlAutotuneSession.clear();
+}
+
+void RadioModel::beginTgxlAutotune(bool fromHardware)
+{
     // Task 16 fix wave (M2): receive only, TX inhibit and a PA trip refuse
     // the cycle before anything reaches the amplifier or the tuner; the
     // TUN it would key is refused at MoxController's gate anyway, and
@@ -24316,7 +24426,41 @@ void RadioModel::continueTgxlAutotuneAfterStandby()
     }
     qCInfo(lcConnection)
         << "TGXL autotune: PGXL standby ready, engaging local TUN carrier";
-    setTune(true);
+    if (!m_tgxlAutotuneDeviceId.isEmpty()) {
+        // iPhone app plan Task 77: a device's cycle keys as that device,
+        // through the keying gate (its session, the holder, the watchdog).
+        KeyerIdentity keyer;
+        keyer.deviceId = m_tgxlAutotuneDeviceId;
+        keyer.source = PttMode::Manual;
+        keyer.session = m_tgxlAutotuneSession;
+        setTune(true, keyer);
+    } else {
+        setTune(true);
+    }
+    if (!m_isTuning) {
+        // Refused (the device went away, another holds transmit, a block
+        // came on): nothing keyed, so the amplifier goes back now.
+        qCInfo(lcConnection) << "TGXL autotune: the tune carrier was refused; ending the cycle";
+        finishTgxlAutotuneCycle();
+        return;
+    }
+    if (!m_tgxlAutotuneDeviceId.isEmpty()) {
+        // iPhone app plan Task 77: a device's cycle has no Tuner page on the
+        // Core to watch the tuner, so the Core does what the local page
+        // does (TunerApplet's short watchdog and tuningChanged(false)): the
+        // carrier drops when the tuner finishes, and after 3 s when the
+        // tuner never started its sweep.
+        m_tgxlDeviceCycleSawTuning = m_tunerModel && m_tunerModel->isTuning();
+        const QByteArray device = m_tgxlAutotuneDeviceId;
+        QTimer::singleShot(kTgxlDeviceCycleStartMs, this, [this, device]() {
+            if (m_tgxlAutotuneInProgress && m_tgxlAutotuneDeviceId == device
+                && !m_tgxlDeviceCycleSawTuning) {
+                qCInfo(lcConnection) << "TGXL autotune: the tuner never started its sweep"
+                                        " for the device's cycle; dropping the carrier";
+                cancelTgxlAutotuneFor(device);
+            }
+        });
+    }
 
     if (m_tgxlAutotuneFromHardware) {
         // TGXL initiated this cycle via LAN PTT (`transmit tune on`); it's

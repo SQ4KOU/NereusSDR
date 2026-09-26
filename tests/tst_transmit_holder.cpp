@@ -23,6 +23,10 @@
 //               take whose key never starts is released). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: iPhone app plan Task 77 (R-IOS-02, R-IOS-03): taking
+//               transmit (askTake, the take during grace, the names after
+//               the radio's PTT). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -566,6 +570,166 @@ private slots:
         rig.holder.onMoxReading(false);
         rig.holder.releaseUnstartedTake();
         QVERIFY(rig.holder.isHeldBy("pad"));
+    }
+
+    // ---- Taking transmit (Task 77; rulings 8.2, 8.4, 8.7, 8.9) -----------
+
+    // Refusals first: a take while a transfer runs, during a dropped
+    // holder's fence and after a transfer the radio did not confirm.
+    void aTakeIsRefusedWhileTransmitChangesHands()
+    {
+        Rig rig;
+        rig.holdAndKey("phone");
+        rig.holder.transferTo(Rig::device("pad"), QStringLiteral("taken"));
+        QCOMPARE(rig.holder.state(), State::Transferring);
+        const TransmitHolder::TakeAnswer during = rig.holder.askTake("station");
+        QCOMPARE(during.verdict, TransmitHolder::TakeVerdict::Refuse);
+        QCOMPARE(during.refusal, TxRefusals::changingHands());
+        // Red check: the transfer refuses the old holder's re-press while
+        // it unkeys (with the refusal dropped, this key would be admitted).
+        QVERIFY(refusedWith(rig.key("phone"), TxRefusals::changingHands()));
+        rig.answerUnkey(UnkeyOutcome::Confirmed);
+        // MOX still reads on: stopped again, then the take fails.
+        QCOMPARE(rig.stops.size(), 1);
+        rig.fireTimer();
+        const TransmitHolder::TakeAnswer after = rig.holder.askTake("pad");
+        QCOMPARE(after.verdict, TransmitHolder::TakeVerdict::Refuse);
+        QCOMPARE(after.refusal, TxRefusals::stopNotConfirmed());
+    }
+
+    void aTakeOfUnheldTransmitIsAtOnceAndOfItsOwnChangesNothing()
+    {
+        Rig rig;
+        QCOMPARE(rig.holder.askTake("phone").verdict, TransmitHolder::TakeVerdict::AtOnce);
+        bool assigned = false;
+        rig.holder.transferTo(Rig::device("phone"), QStringLiteral("taken"),
+                              [&assigned](bool ok) { assigned = ok; });
+        QVERIFY(assigned);
+        QVERIFY(rig.holder.isHeldBy("phone"));
+        QVERIFY(!rig.holder.holder()->keyed);   // taking never keys (ruling 8.6)
+        QVERIFY(rig.unkeys.isEmpty());
+        QCOMPARE(rig.holder.askTake("phone").verdict, TransmitHolder::TakeVerdict::AlreadyHeld);
+    }
+
+    void aTakeFromAnotherHolderIsAskedUnlessTheDeviceShowedIt()
+    {
+        Rig rig;
+        QCOMPARE(rig.key("phone").verdict, KeyingVerdict::Admit);
+        const quint64 epoch = rig.holder.epoch();
+        // No arguments: asked.
+        QCOMPARE(rig.holder.askTake("pad").verdict, TransmitHolder::TakeVerdict::Ask);
+        // Ruling 8.7: shown the unkeyed holder at this epoch: at once.
+        QCOMPARE(rig.holder.askTake("pad", epoch, false).verdict,
+                 TransmitHolder::TakeVerdict::AtOnce);
+        // A different epoch (the holder changed since it was shown): asked.
+        QCOMPARE(rig.holder.askTake("pad", epoch + 1, false).verdict,
+                 TransmitHolder::TakeVerdict::Ask);
+        // The holder keyed since it was shown unkeyed: asked again, red.
+        rig.mox = true;
+        rig.holder.onMoxReading(true);
+        rig.holder.setKeyed(true);
+        QCOMPARE(rig.holder.askTake("pad", epoch, false).verdict,
+                 TransmitHolder::TakeVerdict::Ask);
+        // Shown on the air: at once, the red question answered on the device.
+        QCOMPARE(rig.holder.askTake("pad", epoch, true).verdict,
+                 TransmitHolder::TakeVerdict::AtOnce);
+    }
+
+    void aKeyedHolderIsUnkeyedBeforeTheNewHolderIsAssignedUnkeyed()
+    {
+        Rig rig;
+        rig.holdAndKey("phone");
+        const quint64 epoch = rig.holder.epoch();
+        bool assigned = false;
+        rig.holder.transferTo(Rig::device("pad"), QStringLiteral("taken"),
+                              [&assigned](bool ok) { assigned = ok; });
+        // The unkey gate runs first; nobody is assigned before MOX reads off.
+        QCOMPARE(rig.unkeys.size(), 1);
+        QVERIFY(!assigned);
+        QCOMPARE(rig.holder.state(), State::Transferring);
+        rig.mox = false;
+        rig.answerUnkey(UnkeyOutcome::Confirmed);
+        QVERIFY(assigned);
+        QVERIFY(rig.holder.isHeldBy("pad"));
+        QVERIFY(!rig.holder.holder()->keyed);
+        QVERIFY(rig.holder.epoch() > epoch);
+    }
+
+    void aTakeDuringGraceIsAskedWithoutRedAndTheAwayDeviceDoesNotGetItBack()
+    {
+        Rig rig;
+        QCOMPARE(rig.key("phone").verdict, KeyingVerdict::Admit);
+        rig.holder.holderDropped("phone", QStringLiteral("lost"));
+        QVERIFY(rig.holder.holder()->away);
+        QVERIFY(!rig.holder.holder()->keyed);   // nobody on the air: no red
+        const quint64 epoch = rig.holder.epoch();
+        QCOMPARE(rig.holder.askTake("pad").verdict, TransmitHolder::TakeVerdict::Ask);
+        QCOMPARE(rig.holder.askTake("pad", epoch, false).verdict,
+                 TransmitHolder::TakeVerdict::AtOnce);
+        rig.holder.transferTo(Rig::device("pad"), QStringLiteral("taken"));
+        QVERIFY(rig.unkeys.isEmpty());   // nothing to unkey
+        QVERIFY(rig.holder.isHeldBy("pad"));
+        // The away device returns: it does not hold transmit.
+        rig.holder.holderReturned("phone");
+        QVERIFY(rig.holder.isHeldBy("pad"));
+        QVERIFY(!rig.holder.isHeldBy("phone"));
+    }
+
+    void theReturningDeviceHoldsAgainOnlyIfNobodyTookIt()
+    {
+        Rig rig;
+        QCOMPARE(rig.key("phone").verdict, KeyingVerdict::Admit);
+        rig.holder.holderDropped("phone", QStringLiteral("lost"));
+        rig.holder.holderReturned("phone");
+        QVERIFY(rig.holder.isHeldBy("phone"));
+        QVERIFY(!rig.holder.holder()->away);
+    }
+
+    void theRadiosTakeIsNamedRadioAndADeviceCalledRadioIsADevice()
+    {
+        Rig rig;
+        QCOMPARE(rig.key("phone").verdict, KeyingVerdict::Admit);
+        TransmitHolder::Holder radio;
+        radio.deviceId = QByteArrayLiteral("station");
+        radio.source = Source::RadioPtt;
+        rig.holder.transferTo(radio, QStringLiteral("the radio's PTT"));
+        const auto h = rig.holder.holder();
+        QVERIFY(h.has_value());
+        QCOMPARE(h->name, QStringLiteral("Radio"));
+        QCOMPARE(h->shortName, QStringLiteral("Radio"));
+        QCOMPARE(h->kind, QStringLiteral("station"));
+        QCOMPARE(h->source, Source::RadioPtt);
+
+        // A device the operator named "Radio" keeps its source `device`.
+        Rig named;
+        TransmitHolder::Hooks hooks;
+        hooks.clock = [] { return 0; };
+        hooks.moxOn = [] { return false; };
+        hooks.describe = [](const QByteArray&) -> std::optional<TransmitHolder::Words> {
+            return TransmitHolder::Words{QStringLiteral("Radio"), QStringLiteral("Radio"),
+                                         QStringLiteral("phone")};
+        };
+        named.holder.setHooks(hooks);
+        QCOMPARE(named.key("phone").verdict, KeyingVerdict::Admit);
+        QCOMPARE(named.holder.holder()->name, QStringLiteral("Radio"));
+        QCOMPARE(named.holder.holder()->source, Source::Device);
+        QCOMPARE(named.holder.holder()->kind, QStringLiteral("phone"));
+    }
+
+    void theStationKeepsTransmitAfterItsKeyEnds()
+    {
+        // Task 77 (ruling 8.1): the station device's take is a holder's like
+        // any other, kept after its key until a device takes it.
+        Rig rig;
+        QCOMPARE(rig.key("station", Source::RadioPtt).verdict, KeyingVerdict::Admit);
+        rig.mox = true;
+        rig.holder.onMoxReading(true);
+        rig.holder.setKeyed(true);
+        rig.mox = false;
+        rig.holder.onMoxReading(false);
+        QVERIFY(rig.holder.isHeldBy("station"));
+        QVERIFY(refusedWith(rig.key("phone"), TxRefusals::otherDeviceHolds(QStringLiteral("Radio"))));
+        QCOMPARE(rig.holder.askTake("phone").verdict, TransmitHolder::TakeVerdict::Ask);
     }
 };
 

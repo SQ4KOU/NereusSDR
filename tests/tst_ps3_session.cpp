@@ -264,7 +264,9 @@ private slots:
         QTRY_COMPARE(replies.size(), 1);
         const SessionMessage reply = qvariant_cast<SessionMessage>(replies.last()[0]);
         QVERIFY(!reply.accepted);
-        QVERIFY2(reply.reason.contains("remote window"), qPrintable(reply.reason));
+        // iPhone app plan Task 77 (ruling 8.3): the two-tone test is a key,
+        // refused by this receive-only Core's transmit gate.
+        QCOMPARE(reply.reason, QStringLiteral("This Core is set to receive only."));
         QVERIFY(!station.twoToneController()->isActive());
         QCOMPARE(started.size(), 0);
         QVERIFY(!coordinator->isPsEnabled());

@@ -57,6 +57,9 @@
 //   2026-09-25: iPhone app Task 74 (R-IOS-30): the confirm.request and
 //               notice codec. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 77 (R-IOS-02, R-IOS-03, R-IOS-13):
+//               confirm.request holder (takeTransmit). J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionMessages.h"
@@ -1033,6 +1036,9 @@ QByteArray SessionMessages::encode(const SessionMessage& message)
         if (!p.forSettingsKey.isEmpty()) {
             o.insert(QStringLiteral("forSettingsKey"), p.forSettingsKey);
         }
+        if (p.holder) {
+            o.insert(QStringLiteral("holder"), *p.holder);
+        }
         break;
     }
     // iPhone app Task 74 (R-IOS-30): the several-devices design, 7.4.
@@ -1674,6 +1680,9 @@ bool SessionMessages::decode(const QByteArray& wire, SessionMessage* out)
                 p.forWriteId = static_cast<qint64>(o.value(QStringLiteral("forWriteId")).toDouble());
             }
             p.forSettingsKey = o.value(QStringLiteral("forSettingsKey")).toString();
+            if (o.value(QStringLiteral("holder")).isObject()) {
+                p.holder = o.value(QStringLiteral("holder")).toObject();
+            }
         } else {
             p.secondsAgo = static_cast<qint64>(o.value(QStringLiteral("secondsAgo")).toDouble());
             p.takeBack = o.value(QStringLiteral("takeBack")).toBool();

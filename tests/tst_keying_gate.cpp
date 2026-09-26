@@ -22,6 +22,10 @@
 //   2026-09-25: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 34 (R-IOS-02), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 77 (R-IOS-02, R-IOS-03, R-IOS-13): the
+//               mic press while another device's key is on asks the gate
+//               once. J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -184,9 +188,12 @@ private slots:
         rig.mox.setMox(false, remote("phone"));
         QVERIFY(!rig.mox.isMox());
         QTRY_COMPARE(rig.mox.state(), MoxState::Rx);
-        // The station's mic press while another device's key was on asked
-        // nothing either: it keys nothing then.
-        QCOMPARE(rig.gate.asked, askedBefore);
+        // Task 77 (ruling 8.9): the station's mic press while another
+        // device's key was on asked the gate once, at its press edge (a
+        // take), and keyed nothing then; the releases asked nothing.
+        QCOMPARE(rig.gate.asked, askedBefore + 1);
+        QCOMPARE(rig.gate.requests.last().first, PttMode::Mic);
+        QVERIFY(rig.gate.requests.last().second.isStation());
     }
 
     void aStationMicPressDoesNotRenameAnotherDevicesKey()

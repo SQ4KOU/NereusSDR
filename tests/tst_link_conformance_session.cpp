@@ -52,6 +52,9 @@
 //   transmitReady    iPhone app plan Task 35: the static radio's MOX walk
 //                    runs with no delays and the radio's own microphone
 //                    carries the audio, so a key can key it (false)
+//   unkeyWalkMs      iPhone app plan Task 77: with transmitReady, the MOX
+//                    walk back to receive takes this many real milliseconds
+//                    (0 to 5000), so a transfer is seen running (absent: 0)
 //   microphoneLine   fix wave C1: with transmitReady, every device's media
 //                    carries a microphone line whose buffer is full at
 //                    once, so a voice key keys (false: no device has the
@@ -193,6 +196,10 @@
 //   2026-09-26: Transmit group fix wave C1: stationSetup microphoneLine.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 77 (R-IOS-02, R-IOS-03, R-IOS-13):
+//               stationSetup unkeyWalkMs; a verb with only optional arguments
+//               may be sent with none. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -255,6 +262,7 @@ const QStringList kSetupKeys{
     QStringLiteral("maxSlices"),       QStringLiteral("alexRxAntennas"),
     QStringLiteral("lanScanWindowMs"), QStringLiteral("remoteTransmit"),
     QStringLiteral("transmitReady"),   QStringLiteral("microphoneLine"),
+    QStringLiteral("unkeyWalkMs"),
 };
 
 // NEREUS_LINK_CONNECTABLE (see the file comment).
@@ -481,6 +489,20 @@ QString buildStation(const QJsonObject& setup, Station* station, quint16 major)
         StationServer* server = station->server.get();
         station->model->txTimeOutTimer()->setClock(
             [server]() { return server->deviceSessions()->now(); });
+    }
+    // iPhone app plan Task 77: with transmitReady, the MOX walk from
+    // transmit back to receive takes this long in real time, so a transfer
+    // that unkeys a holder is still running when the next message arrives.
+    const QJsonValue unkeyWalk = setup.value(QStringLiteral("unkeyWalkMs"));
+    if (!unkeyWalk.isUndefined()) {
+        const double ms = unkeyWalk.toDouble(-1.0);
+        if (!unkeyWalk.isDouble() || ms < 0.0 || ms > 5000.0
+            || ms != static_cast<double>(static_cast<int>(ms)) || !transmitReady.toBool(false)) {
+            return QStringLiteral("stationSetup.unkeyWalkMs must be a whole number from 0 to "
+                                  "5000, with transmitReady");
+        }
+        const int walk = static_cast<int>(ms);
+        station->model->moxController()->setTimerIntervals(0, walk, 0, walk, walk, 0);
     }
     // Fix wave C1: a voice key needs the device's microphone line, which
     // travels on media, not on this session. microphoneLine stands for a
@@ -792,7 +814,14 @@ QStringList appConformanceProblems(const QString& id, const QJsonObject& fixture
                     fits = want.value(QStringLiteral("optional")).toBool();
                 }
             }
-            fits = fits && next == args.size() && (args.isEmpty() == declared.isEmpty());
+            // iPhone app plan Task 77: a verb whose arguments are all
+            // optional (tx.take) may be sent with none.
+            bool allOptional = !declared.isEmpty();
+            for (const QJsonValue& d : declared) {
+                allOptional = allOptional && d.toObject().value(QStringLiteral("optional")).toBool();
+            }
+            fits = fits && next == args.size()
+                && (args.isEmpty() == declared.isEmpty() || (args.isEmpty() && allOptional));
             if (!fits) {
                 fail(index, QStringLiteral("%1's arguments are not the ones it takes").arg(verb));
             }

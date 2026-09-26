@@ -44,6 +44,10 @@
 //                 the Core's channel's minimum notch width, outbound under
 //                 dspInfoVersion 1. By J.J. Boyd (KG4VCF), with Anthropic
 //                 Claude Code assistance.
+//   2026-09-26  J.J. Boyd / KG4VCF  iPhone app plan Task 77 (R-IOS-02,
+//                                    R-IOS-03, R-IOS-13): txSliceMarked and
+//                                    setTxMarkAllowed (ruling 5.4a). AI-
+//                                    assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -214,7 +218,9 @@ private:
     Q_PROPERTY(QString    rxAntenna    READ rxAntenna    WRITE setRxAntenna    NOTIFY rxAntennaChanged)
     Q_PROPERTY(QString    txAntenna    READ txAntenna    WRITE setTxAntenna    NOTIFY txAntennaChanged)
     Q_PROPERTY(bool       active       READ isActive     NOTIFY activeChanged)
-    Q_PROPERTY(bool       txSlice      READ isTxSlice    NOTIFY txSliceChanged)
+    // iPhone app plan Task 77 (ruling 5.4a): what the link sends as
+    // txSlice, the transmit slice only while its owner holds transmit.
+    Q_PROPERTY(bool       txSlice      READ txSliceMarked NOTIFY txSliceChanged)
 
     // ── Remote Daemon R2 Task 6: mirrorable slice identity + band ───────────
     // sliceIndex is the slice's stable id, assigned once by RadioModel::
@@ -639,6 +645,13 @@ public:
 
     bool isTxSlice() const { return m_txSlice; }
     void setTxSlice(bool tx);
+    /// iPhone app plan Task 77 (ruling 5.4a): the TX mark as the link sends
+    /// it: the transmit slice and (setTxMarkAllowed) its owner holds
+    /// transmit. isTxSlice() stays the arbiter's binding.
+    bool txSliceMarked() const { return m_txSlice && m_txMarkAllowed; }
+    /// Set by the Core: whether this slice's owner holds transmit. A change
+    /// that changes txSliceMarked() notifies txSliceChanged.
+    void setTxMarkAllowed(bool allowed);
 
     int sliceIndex() const { return m_sliceIndex; }
     void setSliceIndex(int idx) { m_sliceIndex = idx; }
@@ -1489,6 +1502,7 @@ private:
     QString m_txAntenna{QStringLiteral("ANT1")};
     bool    m_active{false};
     bool    m_txSlice{false};
+    bool    m_txMarkAllowed{true};  // Task 77, ruling 5.4a
     int     m_sliceIndex{0};
     int     m_panId{-1};
     QString m_panKey;                    // Phase 3F: owning pan id ("pan-N")

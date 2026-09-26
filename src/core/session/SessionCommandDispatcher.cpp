@@ -193,9 +193,18 @@
 //                                    dspInfoVersion 1): dsp.filterResponse,
 //                                    the filter graph's curve.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  iPhone app plan Task 77 (R-IOS-02,
+//                                    R-IOS-03, R-IOS-13): tx.take,
+//                                    tx.tunerTune, ps3.twoTone on as a key,
+//                                    txProfile.select held by the holder,
+//                                    tx.setTxSlice for the holder's own
+//                                    slices. AI-assisted via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
+
+#include "core/TxSliceArbiter.h"
 
 #include "core/SliceOwnership.h"
 #include "core/session/ObjectRegistry.h"
@@ -574,6 +583,14 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
         // armed. Sent once each (a lost one is overtaken by the next).
         {"tx.keepalive", {arg("sequence", kInt), arg("epoch", kInt)}, "remoteTxVersion", 1,
          kRadioIdentitySessionProtocolMinor},
+        // iPhone app plan Task 77 (R-IOS-02, R-IOS-03; rulings 8.4, 8.6,
+        // 8.7): take transmit without keying; and the Tuner Genius
+        // autotune from a device, a key under the holder rules.
+        {"tx.take",
+         {{"holderEpoch", MirrorWireKind::Int64, true}, {"shownKeyed", MirrorWireKind::Bool, true}},
+         "remoteTxVersion", 2, kRadioIdentitySessionProtocolMinor},
+        {"tx.tunerTune", {arg("on", kBool)}, "remoteTxVersion", 2,
+         kRadioIdentitySessionProtocolMinor},
         {"setAlexTxAntenna", {arg("band", kInt), arg("antenna", kInt)},
          "radioHardwareVersion", 6, kRadioIdentitySessionProtocolMinor},
         // HL2 Options' I2C tool and Pin Control (R-R3-46, parity Task 14).
@@ -828,12 +845,17 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         return;
     }
     if (invoke.commandVerb == "tx.key" || invoke.commandVerb == "tx.unkey"
-        || invoke.commandVerb == "tx.tune" || invoke.commandVerb == "tx.twoTone") {
+        || invoke.commandVerb == "tx.tune" || invoke.commandVerb == "tx.twoTone"
+        || invoke.commandVerb == "tx.tunerTune") {
         handleTxKeying(invoke);
         return;
     }
     if (invoke.commandVerb == "tx.keepalive") {
         handleTxKeepalive(invoke);
+        return;
+    }
+    if (invoke.commandVerb == "tx.take") {
+        handleTxTake(invoke);
         return;
     }
 
@@ -1039,8 +1061,9 @@ void SessionCommandDispatcher::handleTxKeying(const SessionMessage& invoke)
             && epoch <= static_cast<qlonglong>(std::numeric_limits<quint32>::max());
         command.epoch = readable ? static_cast<quint32>(epoch) : 0;
     } else {
-        command.verb = invoke.commandVerb == "tx.tune" ? RemoteKeying::Verb::Tune
-                                                       : RemoteKeying::Verb::TwoTone;
+        command.verb = invoke.commandVerb == "tx.tune"        ? RemoteKeying::Verb::Tune
+                     : invoke.commandVerb == "tx.tunerTune" ? RemoteKeying::Verb::TunerTune
+                                                            : RemoteKeying::Verb::TwoTone;
         QVariant on;
         readable = hasExactlyArguments(invoke.arguments, {"on"})
             && findArgument(invoke.arguments, "on", &on) && on.typeId() == QMetaType::Bool;
@@ -1087,6 +1110,50 @@ void SessionCommandDispatcher::handleTxKeying(const SessionMessage& invoke)
         self->emitResultAs(owner, SessionMessages::commandResult(verb, id, result.accepted,
                                                                  reason, {}, values));
     });
+}
+
+void SessionCommandDispatcher::handleTxTake(const SessionMessage& invoke)
+{
+    // iPhone app plan Task 77 (R-IOS-02, R-IOS-03; rulings 8.4, 8.6,
+    // 8.7): the rules are the Core's (TransmitAccess::take); this reads the
+    // arguments. Both are optional, and sent together or not at all.
+    std::optional<quint64> holderEpoch;
+    std::optional<bool> shownKeyed;
+    bool readable = true;
+    for (const MirrorUpdate& argument : invoke.arguments) {
+        if (argument.name == "holderEpoch" && argument.kind == MirrorWireKind::Int64
+            && !holderEpoch.has_value()) {
+            bool converted = false;
+            const qlonglong value = argument.value.toLongLong(&converted);
+            readable = readable && converted && value >= 0;
+            holderEpoch = static_cast<quint64>(std::max<qlonglong>(0, value));
+        } else if (argument.name == "shownKeyed" && argument.kind == MirrorWireKind::Bool
+                   && argument.value.typeId() == QMetaType::Bool && !shownKeyed.has_value()) {
+            shownKeyed = argument.value.toBool();
+        } else {
+            readable = false;
+        }
+    }
+    if (holderEpoch.has_value() != shownKeyed.has_value()) {
+        readable = false;
+    }
+    if (!readable) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core could not read this request."), {});
+        return;
+    }
+    if (!m_transmitAccess.take) {
+        emitRefusal(invoke.commandVerb, invoke.commandId, TxRefusals::stationReceiveOnly());
+        return;
+    }
+    const QPointer<SessionCommandDispatcher> self(this);
+    const QString owner = m_sessionOwner;
+    m_transmitAccess.take(invoke, holderEpoch, shownKeyed,
+                          [self, owner](const SessionMessage& result) {
+                              if (!self.isNull()) {
+                                  self->emitResultAs(owner, result);
+                              }
+                          });
 }
 
 void SessionCommandDispatcher::handleTxKeepalive(const SessionMessage& invoke)
@@ -1150,10 +1217,22 @@ void SessionCommandDispatcher::handleSetTxSlice(const SessionMessage& invoke)
                    QStringLiteral("That slice is no longer on the Core."), {});
         return;
     }
+    // iPhone app plan Task 77 (ruling 8.10): the holder's own slices only.
+    if (m_sliceAccess && !m_requester.isEmpty()) {
+        const QString reason = m_sliceAccess(m_requester, sliceId);
+        if (!reason.isEmpty()) {
+            emitResult(invoke.commandVerb, invoke.commandId, false, reason, {});
+            return;
+        }
+    }
     // While keyed the transmitter unkeys through the unkey gate first and
     // the flag moves once it is confirmed (TxSliceArbiter); unkeyed it
     // moves at once. Either way the slices' txSlice deltas carry it.
-    if (!m_radioModel->requestTxHandoffToSlice(sliceId)) {
+    TxSliceArbiter* arbiter = m_radioModel->txSliceArbiter();
+    const bool moved = arbiter != nullptr && !m_requester.isEmpty()
+        ? arbiter->requestHandoff(sliceId, m_requester)
+        : m_radioModel->requestTxHandoffToSlice(sliceId);
+    if (!moved) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
                    QStringLiteral("That slice is no longer on the Core."), {});
         return;
@@ -1261,6 +1340,53 @@ void SessionCommandDispatcher::handlePureSignalAction(const SessionMessage& invo
     const bool arming = *action == Ps3Action::Single || *action == Ps3Action::StartAutomatic
         || *action == Ps3Action::ApplyCurrentCorrection
         || *action == Ps3Action::RestoreCorrection;
+    // iPhone app plan Task 77 (rulings 7.7, 8.3): the two-tone test puts a
+    // carrier on the air, so starting it is a key: the same key as
+    // tx.twoTone {on:true}, under every holder rule (a person's start on
+    // unheld transmit takes it and keys; another device's while held is
+    // refused otherDeviceHolds) and watched as the device's key.
+    if (*action == Ps3Action::SetTwoTone && !stop && m_transmitAccess.keying
+        && !m_requester.isEmpty()) {
+        RemoteKeying::Command command;
+        command.verb = RemoteKeying::Verb::TwoTone;
+        command.deviceId = m_requester;
+        command.session = m_sessionOwner;
+        command.commandId = invoke.commandId;
+        command.on = true;
+        const QPointer<SessionCommandDispatcher> self(this);
+        const QByteArray verb = invoke.commandVerb;
+        const quint32 commandId = invoke.commandId;
+        const QString owner = m_sessionOwner;
+        m_transmitAccess.keying(command, [self, verb, commandId, owner](
+                                             const RemoteKeying::Result& result) {
+            if (self.isNull()) {
+                return;
+            }
+            QList<MirrorUpdate> values;
+            QString reason;
+            if (result.accepted) {
+                values.append({0, "phase", MirrorWireKind::Utf8, QStringLiteral("completed")});
+                if (result.epoch != 0) {
+                    values.append({0, "epoch", MirrorWireKind::Int64,
+                                   QVariant(static_cast<qlonglong>(result.epoch))});
+                }
+            } else if (!result.refusal.isEmpty()) {
+                reason = result.refusal.text;
+                values = {{0, "refusalCode", MirrorWireKind::Utf8,
+                           QString::fromUtf8(result.refusal.code)},
+                          {0, "refusalFix", MirrorWireKind::Utf8,
+                           QString::fromUtf8(result.refusal.fix)}};
+            } else {
+                reason = result.reason;
+            }
+            self->emitResultAs(owner, SessionMessages::commandResult(
+                                          verb, commandId, result.accepted, reason,
+                                          result.accepted ? QList<QByteArray>{"pureSignal"}
+                                                          : QList<QByteArray>{},
+                                          values));
+        });
+        return;
+    }
     if (!stop && *action != Ps3Action::SaveCorrection
         && !(arming && m_pureSignalArmingOffered)) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
@@ -2789,6 +2915,15 @@ void SessionCommandDispatcher::handleTxProfile(const SessionMessage& invoke)
         emitResult(verb, invoke.commandId, false,
                    QStringLiteral("The request for the transmit profile was not understood."), {});
         return;
+    }
+    // iPhone app plan Task 77 (ruling 7.7): selecting a transmit profile
+    // is the holder's while transmit is held.
+    if (verb == "txProfile.select" && m_transmitAccess.transmitter) {
+        if (const TxRefusal refusal = m_transmitAccess.transmitter(m_requester);
+            !refusal.isEmpty()) {
+            emitRefusal(verb, invoke.commandId, refusal);
+            return;
+        }
     }
     QString reason;
     bool done = false;

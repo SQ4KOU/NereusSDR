@@ -103,6 +103,10 @@
 //                on the window's microphone line (RemoteTransmit::audio).
 //                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  iPhone app plan Task 77 (R-IOS-02,
+//                                    R-IOS-03, R-IOS-13): the holder rule
+//                                    before the TX audio lock (ruling 8.14).
+//                                    AI-assisted via Anthropic Claude Code.
 
 #ifdef HAVE_WEBSOCKETS
 
@@ -3198,8 +3202,18 @@ void TciServer::onTextMessageReceived(const QString& msg)
                         const bool alreadyActiveTciPtt =
                             !m_txAudioActiveClient.isNull()
                             && m_txAudioActiveClient.data() == ws;
+                        // iPhone app plan Task 77 (ruling 8.14): the holder
+                        // rule first. A program keys only while this window
+                        // holds transmit; the TX audio lock is taken only
+                        // once the holder rule would admit its key, so a
+                        // refused key never holds it.
+                        const bool holderAdmits = !wantsMox || !m_model
+                            || m_model->moxController() == nullptr
+                            || m_model->moxController()
+                                   ->programKeyRefusal(KeyerIdentity::station(PttMode::Tci))
+                                   .isEmpty();
                         const bool wantsActiveTciPtt = hasTciArg && rxOk && wantsMox
-                            && (!alreadyMox || alreadyActiveTciPtt);
+                            && holderAdmits && (!alreadyMox || alreadyActiveTciPtt);
 
                         if (wantsActiveTciPtt) {
                             // From Thetis TCIServer.cs:8146-8163 [v2.10.3.15] --

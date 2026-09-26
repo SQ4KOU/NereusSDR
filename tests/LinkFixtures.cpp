@@ -49,6 +49,9 @@
 //               matches a station string holding JSON; a client message
 //               holding one is refused. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 77 (R-IOS-02, R-IOS-03, R-IOS-13): the
+//               radioPtt step. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "LinkFixtures.h"
@@ -77,6 +80,7 @@
 #include <memory>
 #include <vector>
 
+#include "core/MoxController.h"
 #include "core/dsp/Ps3Snapshot.h"
 #include "core/security/DeviceAuthenticator.h"
 #include "core/security/DeviceStore.h"
@@ -84,6 +88,7 @@
 #include "core/session/LinkVersion.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StationLanAnnouncement.h"
+#include "models/RadioModel.h"
 #include "core/session/DnsSdAdvertiser.h"
 #include "core/session/DeviceSessionRegistry.h"
 #include "core/session/StationServer.h"
@@ -996,6 +1001,17 @@ QString LinkFixtures::checkSessionFormat(const QJsonObject& fixture)
                                                      "client");
                 }
             }
+        } else if (step.contains(QStringLiteral("radioPtt"))) {
+            // iPhone app plan Task 77: the radio's own PTT pressed (true) or
+            // released (false) at the station. A station fixture only: an
+            // app's runner has no radio to press.
+            problem = expectKeys(step, {QStringLiteral("radioPtt")}, {}, where);
+            if (problem.isEmpty() && !step.value(QStringLiteral("radioPtt")).isBool()) {
+                problem = where + QStringLiteral(": radioPtt must be true or false");
+            }
+            if (problem.isEmpty() && runsOn(fixture, QStringLiteral("app"))) {
+                problem = where + QStringLiteral(": a radioPtt step runs on the station only");
+            }
         } else if (step.contains(QStringLiteral("connect")) || step.contains(QStringLiteral("close"))) {
             // iPhone app Task 71: another client's whole connect sequence,
             // or its close.
@@ -1010,7 +1026,7 @@ QString LinkFixtures::checkSessionFormat(const QJsonObject& fixture)
             }
         } else {
             problem = where + QStringLiteral(": not a message, advanceMs, expectClosed, "
-                                             "connect or close step");
+                                             "connect, close or radioPtt step");
         }
         if (!problem.isEmpty()) {
             return problem;
@@ -1283,6 +1299,8 @@ QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& serv
             }
         } else if (step.contains(QStringLiteral("advanceMs"))) {
             what = QStringLiteral("advanceMs");
+        } else if (step.contains(QStringLiteral("radioPtt"))) {
+            what = QStringLiteral("radioPtt");
         } else if (step.contains(QStringLiteral("connect"))) {
             what = QStringLiteral("connect %1").arg(step.value(QStringLiteral("connect")).toString());
         } else if (step.contains(QStringLiteral("close"))) {
@@ -1409,6 +1427,16 @@ QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& serv
             if (!error.isEmpty()) {
                 return QStringLiteral("%1: %2").arg(describe(index), error);
             }
+        } else if (step.contains(QStringLiteral("radioPtt"))) {
+            // iPhone app plan Task 77: the radio's own PTT level, as its
+            // status frames report it.
+            RadioModel* model = server.radioModel();
+            if (model == nullptr || model->moxController() == nullptr) {
+                return QStringLiteral("%1: the station has no radio to press").arg(describe(index));
+            }
+            model->moxController()->onMicPttFromRadio(step.value(QStringLiteral("radioPtt")).toBool());
+            drain();
+            clock.scan();
         } else if (step.contains(QStringLiteral("connect"))) {
             // iPhone app Task 71: another client's whole connect sequence;
             // its messages up to snapshot.complete are taken unmatched.
@@ -1522,8 +1550,8 @@ QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& serv
                     .arg(client->lastRetryable ? QStringLiteral("true") : QStringLiteral("false"));
             }
         } else {
-            return QStringLiteral("step %1: not a message, advanceMs, expectClosed, connect or "
-                                  "close step")
+            return QStringLiteral("step %1: not a message, advanceMs, expectClosed, connect, "
+                                  "close or radioPtt step")
                 .arg(index);
         }
     }

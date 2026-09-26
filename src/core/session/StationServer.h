@@ -383,6 +383,11 @@
 //               a pairing through the remote access service's mailbox (pair.*
 //               only, no hellos, no address). J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 77 (R-IOS-02, R-IOS-03, R-IOS-13):
+//               taking transmit (StationTransmitTake.cpp), remoteTxVersion 2,
+//               the radio's PTT take, TX marks, the transmit slice on a
+//               change of holder. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QHash>
@@ -991,15 +996,30 @@ public:
     bool remoteTransmitAllowed() const { return m_txGate.remoteTransmitAllowed(); }
     /// Who holds transmit (never null).
     TransmitHolder* transmitHolder() const { return m_transmitHolder.get(); }
+    /// The Core's model (the conformance runner presses its radio's PTT).
+    RadioModel* radioModel() const;
     /// Fix wave 2 (ruling 8.1): a desktop that hosts this Core names the
     /// station device after itself, so its own MOX or TUNE is published,
     /// and refused on the air, in the desktop's words. Unset on a Core no
     /// desktop hosts: the station device's own keys are "Radio".
     void setStationDeviceWords(const QString& name, const QString& shortName);
+    /// iPhone app plan Task 77 (ruling 8.9a, D64): the hosting desktop's
+    /// MOX or TUNE while another device holds transmit takes only through
+    /// tx.take's rules. AtOnce runs the take (`done(taken)` when it ends;
+    /// the button keys after it); Ask means the desktop shows its question
+    /// and calls again with the holderEpoch and keyed state it showed;
+    /// AlreadyHeld and Refuse change nothing.
+    TransmitHolder::TakeVerdict takeTransmitForStation(std::optional<quint64> shownEpoch,
+                                                       std::optional<bool> shownKeyed,
+                                                       std::function<void(bool taken)> done = {});
     /// 1: txPermitted per session, the `tx.setTxSlice` verb, the on-air
     /// refusals, and (Task 35) keying: `tx.key`, `tx.unkey`, `tx.tune` and
     /// `tx.twoTone`, for a peer at minor 11 whose hello declared remoteTx 1.
-    int remoteTxVersion() const { return 1; }
+    /// 2 (Task 77): `tx.take` (with sessionHolderVersion 1), its
+    /// takeTransmit question and transmitTaken notice, the radio's PTT
+    /// taking transmit, the transmitter's settings held by the holder, and
+    /// `tx.tunerTune`, the Tuner Genius autotune.
+    int remoteTxVersion() const { return 2; }
     /// Task 35: keying from a remote device; null without a Local model.
     RemoteKeying* remoteKeying() const { return m_remoteKeying.get(); }
     /// Task 37 (R-IOS-13; remote design section 12.1): the transmit
@@ -1503,6 +1523,58 @@ private:
                                    const ConfirmStep::Question& question, int choice,
                                    const SessionMessage& invoke);
     void sendHeldQuestions();
+
+    // ── iPhone app plan Task 77 (R-IOS-02, R-IOS-03): taking transmit
+    //    (StationTransmitTake.cpp) ───────────────────────────────────────
+    /// tx.take from `transport`'s device (rulings 8.4, 8.7): `reply` runs
+    /// once, now or when the transfer ends.
+    void takeTransmit(SessionTransport* transport, const SessionMessage& invoke,
+                      std::optional<quint64> shownEpoch, std::optional<bool> shownKeyed,
+                      std::function<void(const SessionMessage& result)> reply);
+    /// The session's own transmit gate (remote_transmit, its hello, its
+    /// pairing, its snapshot), without the holder's rule; empty when it
+    /// passes.
+    TxRefusal sessionTransmitRefusal(SessionTransport* transport) const;
+    /// The takeTransmit question's `holder` entry.
+    QJsonObject holderEntryJson(const TransmitHolder::Holder& holder) const;
+    /// Asks `transport`'s operator whether to take transmit from the holder
+    /// (confirm.request takeTransmit).
+    void askTakeTransmit(SessionTransport* transport, const SessionMessage& original,
+                         ConfirmStep::Held held, qint64 noticeId);
+    /// The take (ruling 8.2's transfer to `taker`), the old holder told
+    /// (transmitTaken, with Take it back) and, when it was on the air, the
+    /// stop recorded as takenOver. `done(assigned)` when it ends.
+    void runTake(const QByteArray& taker, TransmitHolder::Source source,
+                 std::function<void(bool assigned)> done);
+    /// Runs the take for a confirm.proceed or notice.takeBack being
+    /// answered now: its result when the transfer ends at once, otherwise
+    /// the answer goes later (m_proceedAnsweredLater) and the returned
+    /// message is dropped. `onTaken` runs when the take is assigned.
+    SessionMessage takeAnswering(SessionTransport* transport, const SessionMessage& invoke,
+                                 std::function<void()> onTaken = {});
+    SessionMessage proceedTakeTransmit(SessionTransport* transport,
+                                       const ConfirmStep::Question& question,
+                                       const SessionMessage& invoke);
+    /// notice.takeBack for a transmitTaken notice: tx.take {} with its
+    /// usual confirmation (section 8.6).
+    SessionMessage takeBackTransmit(SessionTransport* transport, const SessionMessage& invoke,
+                                    qint64 noticeId);
+    /// The words of the station device as a taker or holder: "Radio" after
+    /// the radio's PTT, otherwise a hosting desktop's own name.
+    TransmitHolder::Words stationTakerWords(TransmitHolder::Source source) const;
+    /// Ruling 5.4a: each slice's TX mark on the link, true only while its
+    /// owner holds transmit (SliceModel::setTxMarkAllowed).
+    void refreshTxMarks();
+    /// Ruling 8.10: when a transfer assigned a new holder, the transmit
+    /// slice goes to its chosen transmit slice, else its active slice (not
+    /// for the radio's own PTT, which transmits where the flag is).
+    void bindTransmitSliceForHolder();
+    /// Ruling 8.12: the holder's last slice closed: transmit is released.
+    void onSliceClosedForHolder(int sliceId);
+    /// Each device's chosen transmit slice (ruling 8.10), by device.
+    QHash<QByteArray, int> m_chosenTxSlice;
+    /// The holder epoch the transmit slice was last bound for.
+    quint64 m_txSliceBoundEpoch = 0;
     /// Section 7.3's refusal for an older window, naming who a change
     /// would affect.
     static QString olderWindowReason(const QString& names);

@@ -293,7 +293,7 @@ private slots:
             }
         }
         QVERIFY(declared);
-        QCOMPARE(h.client.capabilities().remoteTxVersion, 1);
+        QCOMPARE(h.client.capabilities().remoteTxVersion, 2);  // Task 77: 2
         QTRY_VERIFY(h.client.capabilities().txPermitted);
         QVERIFY(h.client.remoteTransmitAvailable());
         QVERIFY(h.remote.remoteTransmitRouted());
@@ -312,7 +312,7 @@ private slots:
         h.server.setRemoteTransmitAllowed(false);
         h.connectSession();
         QTRY_VERIFY(h.client.isHandshakeComplete());
-        QCOMPARE(h.client.capabilities().remoteTxVersion, 1);
+        QCOMPARE(h.client.capabilities().remoteTxVersion, 2);  // Task 77: 2
         QVERIFY(!h.client.capabilities().txPermitted);
         QCOMPARE(h.client.capabilities().txRefusalCode, QStringLiteral("stationReceiveOnly"));
         QCOMPARE(h.client.capabilities().txRefusalReason,
@@ -753,6 +753,14 @@ private slots:
         QTest::qWait(500);
         QCOMPARE(remoteMedia.micPacketsSent(), quint64(0));
 
+        // iPhone app plan Task 77 (ruling 8.4): arming VOX needs holding
+        // transmit. This window takes it with a press of its MOX (a
+        // person's key on unheld transmit takes it), then arms VOX.
+        h.remote.setMoxFromButton(true);
+        QTRY_VERIFY(h.station.moxController()->isMox());
+        h.remote.setMoxFromButton(false);
+        QTRY_VERIFY(!h.station.moxController()->isMox());
+        QTRY_COMPARE(h.client.transmitHolderText(), QStringLiteral("This computer holds transmit."));
         window.vox->click();
         QTRY_VERIFY(h.station.transmitModel().voxEnabled());
         QTRY_VERIFY(remoteMedia.micUplinkRunning());
@@ -1078,7 +1086,10 @@ private slots:
                      QStringLiteral("Radio holds transmit. MOX and TUNE here wait until it lets go."));
         h.station.moxController()->onMicPttFromRadio(false);
         QTRY_VERIFY(!h.station.moxController()->isMox());
-        QTRY_COMPARE(h.client.transmitHolderText(), QString());
+        // Task 77 (ruling 8.1): the radio keeps transmit after its press.
+        QTest::qWait(100);
+        QCOMPARE(h.client.transmitHolderText(),
+                 QStringLiteral("Radio holds transmit. MOX and TUNE here wait until it lets go."));
         h.client.disconnectFromStation(QStringLiteral("test complete"));
     }
 

@@ -58,6 +58,9 @@
 //               and TUNE wait while another device holds. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: iPhone app plan Task 77 (R-IOS-02, R-IOS-03, R-IOS-13):
+//               setTunerTune. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -137,6 +140,10 @@ public:
     void setScreenKey(bool down);
     void setTune(bool on);
     void setTwoTone(bool on);
+    /// iPhone app plan Task 77: the Core's Tuner Genius autotune
+    /// (tx.tunerTune {on}); the carrier it keys is this window's, watched
+    /// like TUNE's.
+    void setTunerTune(bool on);
 
     // ---- A program through this window's TCI server ("tci") ----
     void keyForProgram(std::function<void(const Answer&)> answer);

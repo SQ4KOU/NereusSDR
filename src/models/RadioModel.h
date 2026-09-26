@@ -278,6 +278,12 @@
 //   2026-09-26 - R-R3-01 (parity Task 17 follow-up): fftEnginePool view
 //                hook, so Rendering > Decimation reaches every pan.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  iPhone app plan Task 77 (R-IOS-02,
+//                                    R-IOS-03, R-IOS-13):
+//                                    startTgxlAutotuneFor,
+//                                    cancelTgxlAutotuneFor and a device's
+//                                    cycle; the arbiter's owner lookups. AI-
+//                                    assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -3933,6 +3939,24 @@ public slots:
     // step 4 because TGXL is already running its own sweep internally.
     void startTgxlAutotune(bool fromHardware);
 
+    // iPhone app plan Task 77 (controller addition): the same autotune for a
+    // remote device (tx.tunerTune), its tune carrier keyed as `keyer`
+    // through the keying gate, so the holder rules and the transmit
+    // watchdog apply to it as to the device's tx.tune. False, with the
+    // reason in plain words, when no Tuner Genius is connected, a cycle is
+    // already running, or transmit is blocked; nothing changes then.
+    bool startTgxlAutotuneFor(const KeyerIdentity& keyer, QString* reason);
+    /// Ends `deviceId`'s autotune cycle (its carrier, and the amplifier
+    /// back to operate). False when no cycle of that device runs.
+    bool cancelTgxlAutotuneFor(const QByteArray& deviceId);
+    bool isTgxlAutotuneInProgress() const { return m_tgxlAutotuneInProgress; }
+    /// The device the running autotune keys for; empty for the Core's own
+    /// (its Tuner page, a Tuner Genius hardware TUNE) or when none runs.
+    QByteArray tgxlAutotuneDeviceId() const
+    {
+        return m_tgxlAutotuneInProgress ? m_tgxlAutotuneDeviceId : QByteArray();
+    }
+
     // ── Phase 3J-1 follow-up: TCI Q_INVOKABLE shims (bench wire-up) ──────────
     //
     // TciProtocol calls into RadioModel by *method name string* via
@@ -6707,6 +6731,21 @@ private:
     bool m_tgxlAutotuneInProgress{false};
     bool m_pgxlStandbyPending{false};
     bool m_tgxlAutotuneFromHardware{false};
+    // Task 77: the device a remote autotune keys for, and the connection
+    // it asked on (KeyerIdentity::session); empty for the Core's own
+    // cycles.
+    QByteArray m_tgxlAutotuneDeviceId;
+    QString m_tgxlAutotuneSession;
+    /// Task 77: the tuner reported tuning during a device's cycle.
+    bool m_tgxlDeviceCycleSawTuning{false};
+    /// Task 77: how long a device's cycle waits for the tuner to start its
+    /// sweep once the carrier is up (TunerApplet's short watchdog, 3 s).
+    static constexpr int kTgxlDeviceCycleStartMs = 3000;
+    /// Task 77: the cycle ended (or never keyed): the amplifier's state
+    /// restored, the flags cleared.
+    void finishTgxlAutotuneCycle();
+    /// The cycle itself (startTgxlAutotune's body before Task 77).
+    void beginTgxlAutotune(bool fromHardware);
     bool m_awaitingInterlockForAutotune{false};
     void continueTgxlAutotuneAfterStandby();
     void sendTgxlAutotuneCmd();

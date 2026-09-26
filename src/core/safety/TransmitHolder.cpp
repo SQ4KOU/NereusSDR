@@ -30,6 +30,9 @@
 //               take whose key never starts is released). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: iPhone app plan Task 77 (R-IOS-02, R-IOS-03): askTake;
+//               releaseStationTake removed. J.J. Boyd (KG4VCF), with AI-
+//               assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/safety/TransmitHolder.h"
@@ -150,7 +153,7 @@ KeyingAnswer TransmitHolder::askKey(const KeyRequest& request)
         return {KeyingVerdict::Admit, {}};
     }
     // Unheld: a person's key takes transmit and keys (D63); the station
-    // device's own keys likewise until Task 77. Nobody is keyed and MOX
+    // device's own keys likewise. Nobody is keyed and MOX
     // reads off, so the transfer has nothing to unkey and ends at once.
     Holder next;
     next.deviceId = request.deviceId;
@@ -171,6 +174,32 @@ KeyingAnswer TransmitHolder::askKey(const KeyRequest& request)
     qCInfo(lcDsp) << "Transmit taken by" << next.deviceId << "(nobody held it)";
     emit changed();
     return {KeyingVerdict::Admit, {}};
+}
+
+TransmitHolder::TakeAnswer TransmitHolder::askTake(const QByteArray& requester,
+                                                   std::optional<quint64> shownEpoch,
+                                                   std::optional<bool> shownKeyed) const
+{
+    if (m_stopUnconfirmed) {
+        return {TakeVerdict::Refuse, TxRefusals::stopNotConfirmed()};
+    }
+    if (m_state == State::Transferring || m_fenced) {
+        return {TakeVerdict::Refuse, TxRefusals::changingHands()};
+    }
+    if (m_state != State::Held || !m_holder.has_value()) {
+        return {TakeVerdict::AtOnce, {}};
+    }
+    if (m_holder->deviceId == requester) {
+        return {TakeVerdict::AlreadyHeld, {}};
+    }
+    // Ruling 8.7: asked on the device first. The operator always sees the
+    // red question before a carrier is cut: a holder shown unkeyed that is
+    // on the air now is asked again.
+    if (shownEpoch.has_value() && *shownEpoch == m_epoch
+        && (!m_holder->keyed || shownKeyed.value_or(false))) {
+        return {TakeVerdict::AtOnce, {}};
+    }
+    return {TakeVerdict::Ask, {}};
 }
 
 void TransmitHolder::transferTo(std::optional<Holder> next, const QString& reason,
@@ -308,24 +337,6 @@ void TransmitHolder::release(const QByteArray& deviceId, const QString& reason)
         return;
     }
     transferTo(std::nullopt, reason);
-}
-
-void TransmitHolder::releaseStationTake()
-{
-    // Fix wave I1: until Task 77 turns a press against another holder into
-    // a take (ruling 8.9), a station take that outlived its key would lock
-    // every device out. Nothing to unkey and MOX reads off, so step 3 runs
-    // at once: unheld, the epoch advanced, published.
-    if (m_state != State::Held || !m_holder.has_value() || m_holder->deviceId != kStation
-        || m_holder->keyed || m_fenced || m_stopUnconfirmed || moxOn()) {
-        return;
-    }
-    m_holder.reset();
-    m_state = State::Unheld;
-    m_takeUnstarted = false;
-    ++m_epoch;
-    qCInfo(lcDsp) << "Transmit released by the station when its key ended";
-    emit changed();
 }
 
 void TransmitHolder::releaseUnstartedTake()

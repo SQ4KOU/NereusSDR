@@ -2376,7 +2376,10 @@ private slots:
 
         mox->onMicPttFromRadio(false);
         QTRY_COMPARE(mox->state(), MoxState::Rx);
-        QTRY_VERIFY(!s.core.server->transmitHolder()->holder().has_value());
+        // Task 77 (ruling 8.1): the radio keeps transmit, unkeyed; the
+        // freeze ends with the press.
+        QTRY_VERIFY(s.core.server->transmitHolder()->holder().has_value()
+                    && !s.core.server->transmitHolder()->holder()->keyed);
         r = s.core.invoke(s.appB, "requestStreamCentre",
                           {int64("sliceId", 1), f64("centreHz", 7120000.0)});
         QVERIFY2(r.value(QStringLiteral("accepted")).toBool(false),

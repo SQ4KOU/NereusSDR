@@ -315,6 +315,10 @@
 //               (StationConnectionAttempt) for the connection messages. J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: iPhone app plan Task 77 (R-IOS-02, R-IOS-03, R-IOS-13):
+//               tgxlAutotuneAvailable, holdsTransmitHere, otherHolderReason.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -717,6 +721,7 @@ public:
     bool pgxlDeviceSettingsAvailable() const override;
     bool tgxlDeviceSettingsAvailable() const override;
     bool tgxlControlAvailable() const override;
+    bool tgxlAutotuneAvailable() const override;
     bool tgxlOperateAppliesWhole() const override;
     bool tgxlFullControlAvailable() const override;
     bool pgxlFullControlAvailable() const override;
@@ -754,6 +759,18 @@ public:
     /// confirm it stopped transmitting."), or empty while nobody does or
     /// the Core does not say (txStateVersion 2).
     QString transmitHolderText() const;
+    /// iPhone app plan Task 77 (ruling 7.7): while another device holds
+    /// transmit, the transmitter's settings are its own: "<holder> has the
+    /// transmitter.", as the Core refuses a change. Empty while this window
+    /// holds transmit, nobody does, or the Core does not say.
+    QString otherHolderReason() const;
+    /// Task 77 (ruling 8.4): whether this window holds transmit on the Core
+    /// (false while nobody does, or the Core does not say).
+    bool holdsTransmitHere() const;
+    /// Task 77: whether the holder's rules reach this window: the Core
+    /// names who holds transmit (txStateVersion 2) and takes remote keys
+    /// (not receive-only).
+    bool knowsTransmitHolder() const;
     int coreStationTciStored() const override;
     /// Test seam: whether the Core counts as on this computer (a session
     /// started without a dial has no address to judge by).

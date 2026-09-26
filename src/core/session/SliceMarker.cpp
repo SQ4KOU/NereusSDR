@@ -11,6 +11,9 @@
 //   2026-09-25: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 73 (R-IOS-02), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 77 (R-IOS-02, R-IOS-03, R-IOS-13):
+//               txSlice by ruling 5.4a. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SliceMarker.h"
@@ -63,7 +66,8 @@ int SliceMarker::filterHigh() const
 
 bool SliceMarker::txSlice() const
 {
-    return m_slice && m_slice->isTxSlice();
+    // Ruling 5.4a (Task 77): TX only while the slice's owner holds transmit.
+    return m_slice && m_slice->txSliceMarked();
 }
 
 Band SliceMarker::band() const

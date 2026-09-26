@@ -22,8 +22,8 @@
 //   ownerAway       the owner is in its 180 s, or the slice is held for it
 //   frequency, dspMode, filterLow, filterHigh, band, streamIndex, psPaused
 //                   as the slice's own
-//   txSlice         as the arbiter binds it, until Task 77 applies ruling
-//                   5.4a (TX only while its owner holds transmit)
+//   txSlice         the transmit slice while its owner holds transmit
+//                   (ruling 5.4a, Task 77: SliceModel::txSliceMarked)
 //
 // A marker's colour is its letter's; no colour goes on the wire.
 //
@@ -40,6 +40,9 @@
 //   2026-09-25: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 73 (R-IOS-02), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 77 (R-IOS-02, R-IOS-03, R-IOS-13):
+//               txSlice by ruling 5.4a. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/WdspTypes.h"

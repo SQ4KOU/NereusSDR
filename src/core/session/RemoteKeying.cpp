@@ -24,12 +24,17 @@
 //               press during its own VOX key is that key; M10 keys name
 //               their connection. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 77 (R-IOS-02, R-IOS-03, R-IOS-13):
+//               tunerTune, a waiting autotune ended by TUNE off, the session
+//               gate first for two-tone. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/RemoteKeying.h"
 
 #include "core/LogCategories.h"
 #include "core/MoxController.h"
+#include "core/TgxlConnection.h"
 #include "core/TwoToneController.h"
 #include "core/safety/TransmitHolder.h"
 #include "models/RadioModel.h"
@@ -243,6 +248,9 @@ void RemoteKeying::handle(const Command& command, Reply reply)
     case Verb::TwoTone:
         result = twoTone(command);
         break;
+    case Verb::TunerTune:
+        result = tunerTune(command);
+        break;
     }
     remember(command, result);
     reply(result);
@@ -372,12 +380,18 @@ bool RemoteKeying::keyLive(const QByteArray& deviceId, quint32 epoch) const
     if (moxKeyedFor(deviceId)) {
         return epoch == 0 || m_model->keyedBy().epoch == epoch;
     }
-    // A two-tone start admitted and on its way to keying (its settle).
-    if (twoToneRunningFor(deviceId) && m_pending.has_value()
+    // A two-tone start admitted and on its way to keying (its settle), or
+    // (Task 77) a Tuner Genius autotune waiting for the amplifier.
+    if ((twoToneRunningFor(deviceId) || autotuneRunningFor(deviceId)) && m_pending.has_value()
         && m_pending->deviceId == deviceId) {
         return epoch == 0 || m_pending->epoch == epoch;
     }
     return false;
+}
+
+bool RemoteKeying::autotuneRunningFor(const QByteArray& deviceId) const
+{
+    return m_model && !deviceId.isEmpty() && m_model->tgxlAutotuneDeviceId() == deviceId;
 }
 
 // ---- The verbs ------------------------------------------------------------------
@@ -480,6 +494,15 @@ RemoteKeying::Result RemoteKeying::stopFrom(const QByteArray& deviceId, bool dev
 RemoteKeying::Result RemoteKeying::tune(const Command& command)
 {
     if (!command.on) {
+        // Task 77: TUNE off also ends this device's Tuner Genius cycle,
+        // keyed or still waiting for the amplifier.
+        if (autotuneRunningFor(command.deviceId) && !moxKeyedFor(command.deviceId)) {
+            m_model->cancelTgxlAutotuneFor(command.deviceId);
+            if (m_pending.has_value() && m_pending->deviceId == command.deviceId) {
+                m_pending.reset();
+            }
+            return accepted(0);
+        }
         return stopFrom(command.deviceId, m_model->isTune() && moxKeyedFor(command.deviceId));
     }
     if (m_model->isTune() && moxKeyedFor(command.deviceId)) {
@@ -516,8 +539,14 @@ RemoteKeying::Result RemoteKeying::twoTone(const Command& command)
     if (tt == nullptr) {
         return refusedPlain(QStringLiteral("The two-tone test is not available on this Core."));
     }
-    // The holder's refusal first (a question only; nothing changes), so a
-    // device that cannot key hears why before two-tone's own checks.
+    // Task 77: the session's own gate, then the holder's refusal (questions
+    // only; nothing changes), so a device that cannot key hears why before
+    // two-tone's own checks.
+    if (m_sessionGate) {
+        if (const TxRefusal refusal = m_sessionGate(command); !refusal.isEmpty()) {
+            return refused(refusal);
+        }
+    }
     if (const TxRefusal refusal = m_holder->keyRefusalFor(command.deviceId);
         !refusal.isEmpty()) {
         return refused(refusal);
@@ -554,6 +583,82 @@ RemoteKeying::Result RemoteKeying::twoTone(const Command& command)
         return refused(capture.refusal());
     }
     return refusedPlain(QStringLiteral("The two-tone test could not start on the Core."));
+}
+
+RemoteKeying::Result RemoteKeying::tunerTune(const Command& command)
+{
+    // iPhone app plan Task 77 (controller addition; rulings 7.7, 8.3): the
+    // Tuner Genius autotune keys the radio at its tune power, so it is a
+    // key for every rule: the session gate, TX inhibit, the PA trip,
+    // receive only and the interlock, then the holder (a person's key on
+    // unheld transmit takes it; another device's is refused). The carrier
+    // keys as this device once the amplifier is in standby, so the
+    // watchdog watches it as any key of the device's.
+    if (!command.on) {
+        if (autotuneRunningFor(command.deviceId)) {
+            m_model->cancelTgxlAutotuneFor(command.deviceId);
+            if (m_pending.has_value() && m_pending->deviceId == command.deviceId) {
+                m_pending.reset();
+            }
+            qCInfo(lcDsp) << "Tuner autotune cancelled by" << command.deviceId;
+            return accepted(0);
+        }
+        return stopFrom(command.deviceId, false);
+    }
+    if (autotuneRunningFor(command.deviceId)) {
+        return accepted(moxKeyedFor(command.deviceId) ? m_model->keyedBy().epoch
+                        : m_pending.has_value()      ? m_pending->epoch
+                                                     : 0);
+    }
+    // The holder's refusal first (a question only; nothing changes), so a
+    // device that cannot key hears who has the transmitter; then whether
+    // the tuner can run, asked before the gate so it takes nothing.
+    if (m_sessionGate) {
+        if (const TxRefusal refusal = m_sessionGate(command); !refusal.isEmpty()) {
+            return refused(refusal);
+        }
+    }
+    if (const TxRefusal refusal = m_holder->keyRefusalFor(command.deviceId); !refusal.isEmpty()) {
+        return refused(refusal);
+    }
+    QString unavailable;
+    TgxlConnection* tgxl = m_model->tgxlConnection();
+    if (tgxl == nullptr || !tgxl->isConnected()) {
+        return refusedPlain(QStringLiteral("No Tuner Genius is connected to the Core."));
+    }
+    if (m_model->isTgxlAutotuneInProgress() || m_model->isTune()) {
+        return refusedPlain(QStringLiteral("The tuner is already tuning."));
+    }
+    MoxController* mox = m_model->moxController();
+    KeyerIdentity keyer;
+    keyer.deviceId = command.deviceId;
+    keyer.source = PttMode::Manual;
+    keyer.session = command.session;
+    RefusalCapture capture(mox, nullptr);
+    // The gate: TX inhibit, the PA trip, receive only, the interlock, then
+    // the session and the holder. On unheld transmit this takes it.
+    if (!mox->admitKey(keyer)) {
+        if (!capture.refusal().isEmpty()) {
+            return refused(capture.refusal());
+        }
+        return refused(mox->lastRefusal().isEmpty() ? TxRefusals::changingHands()
+                                                    : mox->lastRefusal());
+    }
+    const quint32 epoch = nextEpoch();
+    m_pending = Pending{command.deviceId, QByteArrayLiteral("tune"), epoch};
+    if (!m_model->startTgxlAutotuneFor(keyer, &unavailable)) {
+        m_pending.reset();
+        return refusedPlain(unavailable.isEmpty()
+                                ? QStringLiteral("The tuner could not start tuning.")
+                                : unavailable);
+    }
+    // The carrier keys after the amplifier's standby: its epoch is spent
+    // now, so no other key takes it meanwhile (as two-tone's).
+    if (!moxKeyedFor(command.deviceId) && m_model->keyingEpoch() != epoch) {
+        m_model->advanceKeyingEpoch();
+    }
+    qCInfo(lcDsp) << "Tuner autotune started for" << command.deviceId << "epoch" << epoch;
+    return accepted(moxKeyedFor(command.deviceId) ? m_model->keyedBy().epoch : epoch);
 }
 
 // ---- Who is keyed ---------------------------------------------------------------
@@ -608,8 +713,8 @@ void RemoteKeying::publishKeyedBy()
         if (m_model->keyingEpoch() != keyedBy.epoch) {
             m_model->advanceKeyingEpoch();
         }
-        // A two-tone's key has now started.
-        if (m_pending->trigger == "twoTone") {
+        // A two-tone's key, or (Task 77) an autotune's, has now started.
+        if (m_pending->trigger == "twoTone" || autotuneRunningFor(m_pending->deviceId)) {
             m_pending.reset();
         }
     } else {

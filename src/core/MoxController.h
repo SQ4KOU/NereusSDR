@@ -210,6 +210,11 @@
 //               take whose key never starts is released). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: iPhone app plan Task 77 (R-IOS-02, R-IOS-03, R-IOS-13):
+//               holdOffHeldMic and programKeyRefusal; the radio's mic press
+//               while another device's key is on asks the keying gate (a
+//               take). J.J. Boyd (KG4VCF), with AI-assisted implementation
+//               via Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -456,6 +461,15 @@ public:
     // through the gate. A station PTT source is still down when its level
     // is; a remote keyer's press is its caller's to send again.
     void onTakeFinished(const KeyerIdentity& keyer, bool took);
+    /// iPhone app plan Task 77 (ruling 8.9): the radio's mic, if held now,
+    /// takes and keys nothing more until it is released; the Core calls
+    /// this when transmit is taken from the station device.
+    void holdOffHeldMic();
+    /// iPhone app plan Task 77 (ruling 8.14): the keying gate's refusal
+    /// for a program's key from `keyer` (TCI, CAT), asked as a question
+    /// (a program's key never takes transmit, so asking changes nothing);
+    /// empty when the gate would admit it or there is no gate.
+    TxRefusal programKeyRefusal(const KeyerIdentity& keyer) const;
 
     // A station key that starts more than MOX (TUNE, two-tone) asks the gate
     // before it changes anything, so a refused start never releases or rides

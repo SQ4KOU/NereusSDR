@@ -154,6 +154,11 @@
 //               take whose key never starts is released). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: iPhone app plan Task 77 (R-IOS-02, R-IOS-03, R-IOS-13): the
+//               radio's mic press edge while another device's key is on asks
+//               the gate (a take); holdOffHeldMic; programKeyRefusal. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -2312,11 +2317,54 @@ void MoxController::onMicPttFromRadio(bool pressed)
     // PTTMode.MIC from receive (console.cs:25526-25541), a release unkeys
     // only in PTTMode.MIC (console.cs:25589-25595), and neither does
     // anything during a manual key. Receiver and transmit gaps plan, Task 7.
+    const bool pressEdge = pressed && !m_micPtt;
     m_micPtt = pressed;
     if (!pressed) {
         clearHeldBits(kRefusedMic);   // M3 and R-R3-36: a new press
     }
+    // iPhone app plan Task 77 (rulings 8.8, 8.9): while another device's
+    // key is on, PollPTT never reaches the mic (a station source never
+    // rides another keyer's key), so its press edge asks the gate here: a
+    // press takes transmit, the transfer unkeying that device first. The
+    // press keys nothing now; it is held off until the take ends
+    // (onTakeFinished) or it is released.
+    if (pressEdge && m_mox && !m_currentKeyer.isStation() && m_keyingGate
+        && !m_manualKey && refusalBeforeTheGate().isEmpty()) {
+        const KeyingAnswer answer =
+            m_keyingGate(PttMode::Mic, KeyerIdentity::station(PttMode::Mic));
+        if (answer.verdict == KeyingVerdict::Refuse) {
+            reportRefusal(answer.refusal.text, answer.refusal, /*quiet=*/false);
+        }
+        if (m_micPtt) {
+            m_refusedHeld |= kRefusedMic;
+            m_notQueuedHeld |= kRefusedMic;
+        }
+        return;
+    }
     pollPtt();
+}
+
+TxRefusal MoxController::programKeyRefusal(const KeyerIdentity& keyer) const
+{
+    if (!m_keyingGate || !keyer.program) {
+        return {};
+    }
+    const KeyingAnswer answer = m_keyingGate(keyer.source, keyer);
+    if (answer.verdict == KeyingVerdict::Admit) {
+        return {};
+    }
+    return answer.refusal.isEmpty() ? TxRefusals::changingHands() : answer.refusal;
+}
+
+void MoxController::holdOffHeldMic()
+{
+    // iPhone app plan Task 77 (ruling 8.9): a PTT still held after another
+    // device takes transmit back does not take it again; the next press
+    // does. Held off until released (clearHeldBits on the release).
+    if (m_micPtt) {
+        m_refusedHeld |= kRefusedMic;
+        m_notQueuedHeld |= kRefusedMic;
+    }
 }
 
 // ---------------------------------------------------------------------------

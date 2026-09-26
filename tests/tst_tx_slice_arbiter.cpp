@@ -548,6 +548,97 @@ private slots:
         QCOMPARE(model.txSliceArbiter()->txBoundSliceId(), b);
     }
 
+    // ---- iPhone app plan Task 77 (rulings 8.10 to 8.13) ------------------
+
+    // Refusals first: tx.setTxSlice names only the requester's own slices,
+    // and the flag never moves while the station device is keyed.
+    void handoff_for_a_requester_refuses_another_owners_slice()
+    {
+        QVector<SliceModel*> slices;
+        buildSlicesWithIds(slices, {0, 1, 2});
+        TxSliceArbiter arb;
+        arb.setSliceList(&slices);
+        arb.syncToSliceList();
+        const QHash<int, QByteArray> owners{{0, "phone"}, {1, "pad"}, {2, "pad"}};
+        arb.setOwnerLookup([owners](int id) { return owners.value(id); },
+                           [](const QByteArray&) { return -1; });
+        QSignalSpy blocked(&arb, &TxSliceArbiter::handoffBlocked);
+        QVERIFY(!arb.requestHandoff(1, QByteArrayLiteral("phone")));
+        QCOMPARE(blocked.count(), 1);
+        QCOMPARE(arb.txBoundSliceId(), 0);
+        QVERIFY(arb.requestHandoff(2, QByteArrayLiteral("pad")));
+        QCOMPARE(arb.txBoundSliceId(), 2);
+    }
+
+    void the_flag_never_moves_while_frozen()
+    {
+        QVector<SliceModel*> slices;
+        buildSlicesWithIds(slices, {0, 1});
+        TxSliceArbiter arb;
+        arb.setSliceList(&slices);
+        arb.syncToSliceList();
+        bool frozen = true;
+        arb.setFrozen([&frozen]() { return frozen; });
+        QVERIFY(!arb.requestHandoff(1));
+        QVERIFY(!arb.bindForHolder(QByteArrayLiteral("pad"), 1));
+        QCOMPARE(arb.txBoundSliceId(), 0);
+        QVERIFY(slices[0]->isTxSlice());
+        frozen = false;   // the press ended
+        QVERIFY(arb.requestHandoff(1));
+        QCOMPARE(arb.txBoundSliceId(), 1);
+    }
+
+    void bind_for_holder_takes_its_chosen_slice_else_its_active_one()
+    {
+        QVector<SliceModel*> slices;
+        buildSlicesWithIds(slices, {0, 1, 2, 3});
+        TxSliceArbiter arb;
+        arb.setSliceList(&slices);
+        arb.syncToSliceList();
+        const QHash<int, QByteArray> owners{{0, "phone"}, {1, "pad"}, {2, "pad"}, {3, "pad"}};
+        arb.setOwnerLookup([owners](int id) { return owners.value(id); },
+                           [](const QByteArray& owner) { return owner == "pad" ? 3 : 0; });
+        // Its chosen transmit slice, still its own.
+        QVERIFY(arb.bindForHolder(QByteArrayLiteral("pad"), 2));
+        QCOMPARE(arb.txBoundSliceId(), 2);
+        // A choice that is not its own any more: its active slice.
+        QVERIFY(arb.bindForHolder(QByteArrayLiteral("pad"), 0));
+        QCOMPARE(arb.txBoundSliceId(), 3);
+        // A holder that owns no slice: nothing moves.
+        QVERIFY(!arb.bindForHolder(QByteArrayLiteral("mac"), -1));
+        QCOMPARE(arb.txBoundSliceId(), 3);
+    }
+
+    void the_first_bind_picks_among_the_holders_slices()
+    {
+        QVector<SliceModel*> slices;
+        buildSlicesWithIds(slices, {0, 1, 2}, /*flagFirst=*/false);
+        TxSliceArbiter arb;
+        arb.setSliceList(&slices);
+        const QHash<int, QByteArray> owners{{0, "phone"}, {1, "pad"}, {2, "pad"}};
+        arb.setOwnerLookup([owners](int id) { return owners.value(id); },
+                           [](const QByteArray& owner) { return owner == "pad" ? 2 : 0; });
+        arb.setHolderLookup([]() { return QByteArrayLiteral("pad"); });
+        arb.syncToSliceList();
+        QCOMPARE(arb.txBoundSliceId(), 2);
+        QVERIFY(slices[2]->isTxSlice());
+        QVERIFY(!slices[0]->isTxSlice());
+    }
+
+    void a_remote_windows_arbiter_still_does_nothing()
+    {
+        QVector<SliceModel*> slices;
+        buildSlicesWithIds(slices, {0, 1});
+        TxSliceArbiter arb;
+        arb.setSliceList(&slices);
+        arb.setRemote(true);
+        arb.setOwnerLookup([](int) { return QByteArrayLiteral("pad"); },
+                           [](const QByteArray&) { return 1; });
+        QVERIFY(!arb.bindForHolder(QByteArrayLiteral("pad"), 1));
+        QVERIFY(!arb.requestHandoff(1, QByteArrayLiteral("pad")));
+        QVERIFY(slices[0]->isTxSlice());
+    }
+
 private:
     // Build a list of N SliceModel instances for testing. Each slice is parented
     // to `this` for automatic cleanup. Slice 0 is marked TX-bound to mirror the

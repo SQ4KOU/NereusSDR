@@ -54,6 +54,10 @@
 //               every path (XIT, pan moves, a stored change at proceed); a
 //               hosting desktop's key named after it. J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 77 (R-IOS-02, R-IOS-03, R-IOS-13):
+//               takeTransmit questions and Take it back for transmit. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1353,6 +1357,11 @@ SessionMessage StationServer::answerConfirm(const SessionMessage& invoke, int id
                  {0, "refusalFix", MirrorWireKind::Utf8, QString::fromUtf8(frozen.fix)}});
         }
     }
+    // iPhone app plan Task 77: taking transmit, from tx.take or from Take
+    // it back.
+    if (question->kind == QLatin1String("takeTransmit")) {
+        return proceedTakeTransmit(transport, *question, invoke);
+    }
     if (question->kind == QLatin1String("sharedSetting")) {
         return proceedSharedSetting(transport, *question, invoke);
     }
@@ -1573,6 +1582,11 @@ SessionMessage StationServer::askTakeBack(SessionTransport* transport, const Ses
     if (!record) {
         return SessionMessages::commandResult(invoke.commandVerb, invoke.commandId, false,
                                               QString::fromLatin1(kNoTakeBackReason), {});
+    }
+    // iPhone app plan Task 77 (section 8.6): Take it back for transmit is
+    // tx.take with its usual confirmation.
+    if (record->prompt.kind == QLatin1String("transmitTaken")) {
+        return takeBackTransmit(transport, invoke, noticeId);
     }
     const ReceiverPlanner planner = receiverPlanner();
     const SliceStreamAllocator& live = m_radioModel->streamAllocator();

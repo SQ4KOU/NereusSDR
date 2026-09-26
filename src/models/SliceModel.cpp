@@ -63,6 +63,10 @@
 //                applied from the mirror in a remote window. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
 //                NereusSDR-original.
+//   2026-09-26  J.J. Boyd / KG4VCF  iPhone app plan Task 77 (R-IOS-02,
+//                                    R-IOS-03, R-IOS-13): setTxMarkAllowed
+//                                    (ruling 5.4a). AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 //=================================================================
@@ -672,6 +676,19 @@ void SliceModel::setTxSlice(bool tx)
     if (m_txSlice != tx) {
         m_txSlice = tx;
         emit txSliceChanged(tx);
+    }
+}
+
+void SliceModel::setTxMarkAllowed(bool allowed)
+{
+    if (m_txMarkAllowed == allowed) {
+        return;
+    }
+    const bool before = txSliceMarked();
+    m_txMarkAllowed = allowed;
+    if (txSliceMarked() != before) {
+        // The binding is unchanged; the link's mark moved (ruling 5.4a).
+        emit txSliceChanged(m_txSlice);
     }
 }
 
