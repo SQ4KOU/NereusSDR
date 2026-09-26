@@ -899,6 +899,24 @@
             "arguments": [
                 {
                     "kind": "i64",
+                    "name": "sequence",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "epoch",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteTxVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "tx.keepalive"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
                     "name": "sliceId",
                     "optional": false
                 },

@@ -9,6 +9,9 @@
 //   2026-09-25: iPhone app plan Task 36 (R-IOS-13): the microphone line
 //               and its SSRC. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //               Claude Code.
+//   2026-09-25: iPhone app plan Task 37 (R-IOS-13): the "tx" data channel
+//               with the line. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 //
 // =================================================================
 
@@ -313,6 +316,15 @@ bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId,
                 }
                 emit self->micRtpReceived(packet);
             });
+    // Task 37: the "tx" channel's messages, bounded.
+    connect(transport, &IMediaTransport::txReceived, this,
+            [self, isCurrentGeneration](const QByteArray& message) {
+                if (!isCurrentGeneration() || self->d->micAudioSsrc == 0 || message.isEmpty()
+                    || message.size() > IMediaTransport::kMaxTxMessageBytes) {
+                    return;
+                }
+                emit self->txReceived(message);
+            });
     connect(transport, &IMediaTransport::ready, this,
             [self, isCurrentGeneration] {
                 if (!isCurrentGeneration() || self->d->ready) {
@@ -362,6 +374,7 @@ bool MediaPeer::start(IMediaTransport::Role role, const QString& connectionId,
     options.receiverAudioSsrcs = d->receiverAudioSsrcs;
     options.headphonesAudioSsrc = d->headphonesAudioSsrc;
     options.micAudioSsrc = d->micAudioSsrc;
+    options.txChannel = d->micAudioSsrc != 0;
     const bool backendStarted = transport->start(options);
     if (!self) {
         return false;
@@ -550,6 +563,11 @@ bool MediaPeer::sendMicRtp(const QByteArray& packet)
         && packet.size() <= IMediaTransport::kMaxRawRtpBytes
         && rtpSsrc(packet) == d->micAudioSsrc
         && d->transport->sendMicRtp(packet);
+}
+
+bool MediaPeer::sendTx(const QByteArray& message)
+{
+    return d->started && d->transport && d->micAudioSsrc != 0 && d->transport->sendTx(message);
 }
 
 bool MediaPeer::isReady() const

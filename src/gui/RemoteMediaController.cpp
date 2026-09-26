@@ -7,6 +7,10 @@
 //               uplink's production callers (the window's transmit client
 //               and the Core's mirrored VOX). J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 37 (R-IOS-13): the transmit keepalive
+//               goes on this media connection's "tx" data channel while it
+//               is open. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 
 #include "gui/RemoteMediaController.h"
 #include "core/AppSettings.h"
@@ -21,6 +25,7 @@
 #include "core/FFTEngine.h"
 #include "core/session/StationClient.h"
 #include "core/session/RemoteTransmitClient.h"
+#include "core/safety/RemoteTxWatchdog.h"
 #include "models/TransmitModel.h"
 #include "core/session/media/DisplayCodec.h"
 #include "core/session/media/DisplayBudget.h"
@@ -833,6 +838,14 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
                 &RemoteMediaController::setHoldsTransmit);
         d->micKeyDown = transmit->micKeyDown();
         d->holdsTransmit = transmit->holdsTransmit();
+        // Task 37: the keepalive rides this connection's "tx" data channel
+        // (unordered, never retransmitted) while it is open; otherwise the
+        // transmit client sends it on the session.
+        const QPointer<RemoteMediaController> self(this);
+        transmit->setChannelKeepalive([self](quint64 sequence, quint32 epoch) {
+            return self && self->d->peer && self->d->peer->isReady()
+                && self->d->peer->sendTx(RemoteTxWatchdog::channelKeepalive(sequence, epoch));
+        });
     }
     connect(&model->transmitModel(), &TransmitModel::voxEnabledChanged, this,
             &RemoteMediaController::setVoxArmed);
@@ -983,6 +996,12 @@ RemoteMediaController::~RemoteMediaController()
     // and no consumer is told anything: they may already be gone.
     const QSignalBlocker blocker(this);
     d->destroying = true;
+    // Task 37: the transmit client falls back to the session.
+    if (d->client) {
+        if (RemoteTransmitClient* transmit = d->client->remoteTransmit()) {
+            transmit->setChannelKeepalive({});
+        }
+    }
     stop();
     for (auto& [sliceId, stream] : d->receiverStreams) {
         {

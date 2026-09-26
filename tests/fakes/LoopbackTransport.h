@@ -35,6 +35,9 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 18: the certificate
 //                                    the far end presents. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app plan Task 37: setSevered, a
+//                                    path that goes dead without closing.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -81,6 +84,12 @@ public:
     void setAnswersPings(bool answers) { m_answersPings = answers; }
     bool answersPings() const { return m_answersPings; }
 
+    /// Task 37: while true, the path through this end is dead without
+    /// closing: nothing it sends leaves (text or ping) and nothing arrives
+    /// at it. Neither end sees a close. Default false.
+    void setSevered(bool severed) { m_severed = severed; }
+    bool severed() const { return m_severed; }
+
     /// Every wire message this end has received, in arrival order.
     QList<QByteArray> received() const { return m_received; }
     void clearReceived() { m_received.clear(); }
@@ -100,6 +109,7 @@ private:
     QPointer<LoopbackTransport> m_peer;
     bool m_open = true;
     bool m_answersPings = true;
+    bool m_severed = false;
     int m_pingsSeen = 0;
     QString m_closeReason;
     QString m_peerAddress;

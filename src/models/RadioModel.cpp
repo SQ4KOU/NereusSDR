@@ -269,6 +269,10 @@
 //                never the window's own MoxController; the Core's refusal
 //                is reported (remoteTransmitRefused). NereusSDR-original.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 37 (R-IOS-13): remoteMicDeviceChanged,
+//                so the Core turns off VOX a device armed when its
+//                microphone line closes. NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -9711,6 +9715,8 @@ void RadioModel::setRemoteMicDevice(const QByteArray& deviceId)
         m_remoteMicVoxArmed = false;
     }
     updateRemoteMicSource();
+    // iPhone app plan Task 37.
+    emit remoteMicDeviceChanged(deviceId);
 }
 
 void RadioModel::setRemoteMicPriming(bool priming)

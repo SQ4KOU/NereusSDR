@@ -131,6 +131,10 @@
 //                                    RemoteKeying; an accepted key's
 //                                    epoch in the result's values.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app plan Task 37 (R-IOS-13):
+//                                    tx.keepalive {sequence, epoch} for the
+//                                    transmit watchdog.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -453,6 +457,11 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
          kRadioIdentitySessionProtocolMinor},
         {"tx.twoTone", {arg("on", kBool)}, "remoteTxVersion", 1,
          kRadioIdentitySessionProtocolMinor},
+        // iPhone app plan Task 37 (R-IOS-13): the transmit watchdog's
+        // keepalive, every 100 ms while the device is keyed or has VOX
+        // armed. Sent once each (a lost one is overtaken by the next).
+        {"tx.keepalive", {arg("sequence", kInt), arg("epoch", kInt)}, "remoteTxVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
         // Neural noise reduction.
         {"nnr.setDiagnostics",
          {arg("sliceId", kInt), arg("testMode", kInt), arg("outputMode", kInt)},
@@ -675,6 +684,10 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleTxKeying(invoke);
         return;
     }
+    if (invoke.commandVerb == "tx.keepalive") {
+        handleTxKeepalive(invoke);
+        return;
+    }
 
     if (invoke.commandVerb.startsWith("notch.")) {
         handleNotchAction(invoke);
@@ -883,6 +896,42 @@ void SessionCommandDispatcher::handleTxKeying(const SessionMessage& invoke)
         }
         self->emitResult(verb, id, false, result.reason, {});
     });
+}
+
+void SessionCommandDispatcher::handleTxKeepalive(const SessionMessage& invoke)
+{
+    // iPhone app plan Task 37 (R-IOS-13): the watchdog's rules are
+    // RemoteTxWatchdog's; this reads the arguments and answers. sequence
+    // is 1 or more (a whole number a JSON number carries exactly); epoch is
+    // the device's key's, 0 to 4294967295.
+    constexpr qlonglong kMaxExactInteger = 9007199254740991LL;
+    QVariant rawSequence;
+    QVariant rawEpoch;
+    bool sequenceOk = false;
+    bool epochOk = false;
+    bool readable = hasExactlyArguments(invoke.arguments, {"sequence", "epoch"})
+        && hasWireKind(invoke.arguments, "sequence", MirrorWireKind::Int64)
+        && hasWireKind(invoke.arguments, "epoch", MirrorWireKind::Int64)
+        && findArgument(invoke.arguments, "sequence", &rawSequence)
+        && findArgument(invoke.arguments, "epoch", &rawEpoch);
+    const qlonglong sequence = readable ? rawSequence.toLongLong(&sequenceOk) : 0;
+    const qlonglong epoch = readable ? rawEpoch.toLongLong(&epochOk) : -1;
+    readable = readable && sequenceOk && epochOk && sequence >= 1 && sequence <= kMaxExactInteger
+        && epoch >= 0 && epoch <= static_cast<qlonglong>(std::numeric_limits<quint32>::max());
+    if (!readable) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core could not read this request."), {});
+        return;
+    }
+    if (!m_transmitAccess.keepalive) {
+        emitRefusal(invoke.commandVerb, invoke.commandId, TxRefusals::stationReceiveOnly());
+        return;
+    }
+    m_transmitAccess.keepalive(m_requester, static_cast<quint64>(sequence),
+                               static_cast<quint32>(epoch));
+    // Answered accepted whether or not it counted (a keepalive while
+    // nothing is watched, a copy, an older epoch): it changes nothing then.
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
 }
 
 void SessionCommandDispatcher::handleSetTxSlice(const SessionMessage& invoke)

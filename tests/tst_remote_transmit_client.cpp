@@ -15,6 +15,8 @@
 //   2026-09-25 - Created for the desktop remote window's transmit
 //                (R-IOS-13, R-R3-42). J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 37 (R-IOS-13): the keepalive. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -274,6 +276,102 @@ private slots:
         client.setScreenKey(true);
         QCOMPARE(refused.count(), 1);
         QVERIFY(!client.micKeyDown());
+    }
+
+    // ---- Task 37: the keepalive -------------------------------------------
+
+    // Keepalives run from the press to the release, every 100 ms, on the
+    // "tx" channel when it takes them and otherwise on the session; the
+    // epoch is 4294967295 until the key's answer, then the key's; the
+    // sequence rises by one and never starts again while the link lasts.
+    void keepalivesRunWhileKeyedOnTheChannelFirst()
+    {
+        Recorder core;
+        RemoteTransmitClient client(core.sender());
+        struct Keepalive {
+            bool channel;
+            quint64 sequence;
+            quint32 epoch;
+        };
+        QList<Keepalive> sent;
+        bool channelOpen = false;
+        client.setChannelKeepalive([&](quint64 sequence, quint32 epoch) {
+            if (!channelOpen) { return false; }
+            sent.append({true, sequence, epoch});
+            return true;
+        });
+        client.setSessionKeepalive([&](quint64 sequence, quint32 epoch) {
+            sent.append({false, sequence, epoch});
+            return true;
+        });
+        client.setAvailable(true);
+        QVERIFY(!client.keepaliveRunning());
+        QVERIFY(sent.isEmpty());
+
+        client.setScreenKey(true);
+        QVERIFY(client.keepaliveRunning());
+        QCOMPARE(sent.size(), 1);   // the first goes at once
+        QCOMPARE(sent.at(0).channel, false);
+        QCOMPARE(sent.at(0).sequence, quint64(1));
+        QCOMPARE(sent.at(0).epoch, RemoteTransmitClient::kReleaseAnyEpoch);
+
+        answerCopies(client, core.sent.at(0), true, QString(), epochValue(7));
+        channelOpen = true;
+        client.keepaliveTick();
+        QCOMPARE(sent.size(), 2);
+        QCOMPARE(sent.at(1).channel, true);
+        QCOMPARE(sent.at(1).sequence, quint64(2));
+        QCOMPARE(sent.at(1).epoch, 7u);
+        QCOMPARE(client.channelKeepalivesSent(), quint64(1));
+        QCOMPARE(client.sessionKeepalivesSent(), quint64(1));
+
+        client.setScreenKey(false);
+        QVERIFY(!client.keepaliveRunning());
+
+        // A later key goes on counting.
+        client.setScreenKey(true);
+        QCOMPARE(sent.last().sequence, quint64(3));
+        client.setScreenKey(false);
+
+        // A new link starts again from 1.
+        client.setAvailable(false);
+        client.setAvailable(true);
+        client.setScreenKey(true);
+        QCOMPARE(sent.last().sequence, quint64(1));
+    }
+
+    // VOX armed, TUNE and two-tone asked keep the keepalive going; nothing
+    // runs without the link.
+    void voxTuneAndTwoToneKeepTheKeepaliveGoing()
+    {
+        Recorder core;
+        RemoteTransmitClient client(core.sender());
+        int sent = 0;
+        client.setSessionKeepalive([&](quint64, quint32) { ++sent; return true; });
+        client.setVoxArmed(true);
+        QVERIFY(!client.keepaliveRunning());   // no link yet
+        client.setAvailable(true);
+        QVERIFY(client.keepaliveRunning());
+        client.setVoxArmed(false);
+        QVERIFY(!client.keepaliveRunning());
+
+        client.setTune(true);
+        QVERIFY(client.keepaliveRunning());
+        client.setTune(false);
+        QVERIFY(!client.keepaliveRunning());
+
+        client.setTwoTone(true);
+        QVERIFY(client.keepaliveRunning());
+        // The Core stopped transmitting: two-tone is over.
+        client.setCoreTransmitting(true);
+        client.setCoreTransmitting(false);
+        QVERIFY(!client.keepaliveRunning());
+
+        client.setScreenKey(true);
+        QVERIFY(client.keepaliveRunning());
+        client.setAvailable(false);
+        QVERIFY(!client.keepaliveRunning());
+        QVERIFY(sent >= 4);
     }
 };
 

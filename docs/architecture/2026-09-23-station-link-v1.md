@@ -2114,6 +2114,7 @@ refused.
 | `tx.unkey` | `epoch` i64 | `remoteTxVersion` | 1 | 11 |
 | `tx.tune` | `on` bool | `remoteTxVersion` | 1 | 11 |
 | `tx.twoTone` | `on` bool | `remoteTxVersion` | 1 | 11 |
+| `tx.keepalive` | `sequence` i64, `epoch` i64 | `remoteTxVersion` | 1 | 11 |
 | `nnr.setDiagnostics` | `sliceId` i64, `testMode` i64, `outputMode` i64 | `nnrVersion` | 1 | 5 |
 | `nnr.resetTuning` | `sliceId` i64 | `nnrVersion` | 1 | 5 |
 | `nnr.tryAgain` | `sliceId` i64 | `nnrVersion` | 1 | 11 |
@@ -3108,6 +3109,7 @@ same on every machine.
 | `held-for-device` | Another device, alone on the Core, leaves with `session.leave`: its slice keeps running, held for it. This device, let in meanwhile, does not adopt it: it gets a slice of its own and the other's as a marker with `ownerAway` true; the other device signs in again and the marker's `ownerAway` turns false (the slice is its own again) |
 | `verbs-tx-set-tx-slice` | On a Core with `remote_transmit` allow (stationSetup `remoteTransmit`), a device that declares `remoteTx` is sent `txPermitted` false in its first `capabilities` and true in the `capabilities` sent again after `snapshot.complete`, each with `remoteTxVersion` 1 and the `txRefusal` entries (`notReady` first, empty once permitted); `tx.setTxSlice` with an argument it does not take is refused "The Core could not read this request."; with `sliceId` while nobody holds transmit it is refused "Take transmit on this device first." with the values `refusalCode` `notHolder` and `refusalFix` `takeTransmit`. Runs on the station alone |
 | `unheld-key` | On a Core with `remote_transmit` allow whose radio can key (stationSetup `transmitReady`), one device that declares `remoteTx`: each keying verb with an argument it does not take is refused "The Core could not read this request."; a program's `tx.key {trigger:"tci"}` on unheld transmit is refused `programNeedsTransmit` and nobody takes transmit; a person's `tx.key {trigger:"screen"}` takes it and keys (epoch 1; `transmitting` true, the device's entry transmitting); `tx.unkey {epoch:1}` unkeys; the same program's key then keys (epoch 2) and `tx.unkey {epoch:2}` unkeys; `tx.tune {on:true}` tunes (epoch 3, `transmit`'s `tune` true) and `{on:false}` ends it; `tx.twoTone {on:true}` on a radio with no transmit channel is refused "The two-tone test could not start on the Core." Runs on the station and the app |
+| `tx-keepalive` | On the same Core as `unheld-key`: `tx.keepalive` with an argument it does not take is refused "The Core could not read this request."; a keepalive while nothing of the device's is watched is accepted and changes nothing; the device keys (epoch 1) and sends keepalives 50 ms after the key and then 300 ms apart (sequences 2 to 4, epoch 1), each accepted, and the key stays on; then none for 450 ms: the watchdog stops transmitting (`transmitting` false, the device's entry no longer transmitting). Runs on the station and the app |
 | `grace-transmit-held` | Two devices that declare `remoteTx`: the other device keys and this one's permission goes false (`capabilities` sent again) and its `tx.key` is refused "Other device 1 has the transmitter."; the holder's link drops: this device is sent `capabilities` again with the refusal "Transmit is changing hands. Try again in a moment." and then "Other device 1 has the transmitter.", the Core stops transmitting at once (`transmitting` false) and the holder, away, still holds transmit (this device's `tx.key` is refused naming it); the holder signs in again a minute later, nothing keys until its own `tx.key` (epoch 2), and its `tx.unkey {epoch:2}` unkeys. Runs on the station and the app |
 | `on-air-refusals` | While another device (short name "Tablet B") is keyed, this device's Protocol 1 rate change, `ps3.off`, its slice's `rxAntenna` and `transmit`'s `pureSig` are each refused "Tablet B is on the air. Try again when they stop." (commands with `refusalCode` `holderOnAir` and `refusalFix` `takeTransmit`). Runs on the station alone |
 | `verbs-session-leave` | `session.leave` with an argument is refused, "The request to leave the Core was not understood."; without, it is accepted and the station closes the connection with no `session.end`. Runs on the station alone |
@@ -3269,8 +3271,9 @@ design, rulings 7.4, 8.1 to 8.5, 8.8, 8.13 and 8.15). This section is the
 Core's side of remote transmit that exists today. Keying from a device
 (`tx.key`, `tx.unkey`, `tx.tune`, `tx.twoTone`, section 18.6) came with
 Task 35, and the microphone line with keying on a filled buffer (section
-18.6) with Task 36; `txState` arrives with Task 39 and taking transmit
-(`tx.take`) with Task 77.
+18.6) with Task 36; the watchdog, its keepalive and the microphone
+starvation action (section 18.7) with Task 37; `txState` arrives with
+Task 39 and taking transmit (`tx.take`) with Task 77.
 
 ### 18.1 Who may transmit
 
@@ -3491,3 +3494,78 @@ writes `transmit.voxEnabled` (a permitted session's write, section 18.1),
 and while it is on the window streams its microphone on the microphone
 line unkeyed.
 
+### 18.7 The watchdog and microphone starvation
+
+iPhone app plan Task 37 (R-IOS-13; remote design sections 8.3, 12.1 and
+12.3; pairing design section 9.7; spec section 4.6 items 1 and 2).
+
+**The numbers, stated together.** A device keyed, or with VOX armed, sends
+a keepalive every 100 ms. The Core stops transmitting once more than
+400 ms pass without one from it (the link-loss deadline). A keyed device's
+microphone line counts as starved after 250 ms without audio (the
+starvation deadline). The Core's transmit buffer for the line targets
+60 ms and never holds more than 120 ms. A client's first reconnect comes
+1000 ms after a loss. So 120 < 250 < 400 < 1000: starvation is handled
+before the link counts as lost, and the Core has stopped before any
+reconnect (`RemoteTxWatchdog`, `RemoteMicConfig`, checked at compile time).
+
+**`tx.keepalive {sequence, epoch}`.** Under `remoteTxVersion` 1 at minor
+11, for a peer that declared `remoteTx` 1 (any other is refused "Update
+this app to transmit through this Core."), both arguments `i64`:
+
+- `sequence`: 1 for the first keepalive of a session, then one more with
+  each keepalive the device sends, whichever path it takes; it never starts
+  again while the session lasts. 0, or more than 9007199254740991, is
+  refused "The Core could not read this request."
+- `epoch`: the epoch of the device's key now on, from its answer (section
+  18.6); 4294967295 while a key's answer has not come and for a key the
+  device was never answered for (a VOX key, TUNE and two-tone when it did
+  not keep theirs), which is never older. 0 to 4294967295.
+
+It is sent once, never three times: a lost one is overtaken by the next.
+It is answered `accepted` with no values, whether or not it counted, and
+refused only when unreadable.
+
+**What the Core watches.** A device while `keyedBy` names it (its own key,
+its program's, TUNE, two-tone, or a VOX key that is its), and a device
+whose accepted write turned `transmit.voxEnabled` on, while VOX stays on.
+Watching starts with a fresh 400 ms. A keepalive counts when its
+`sequence` is newer than the last that counted from that device (a copy
+by another path, or one overtaken, does not) and its `epoch` is not older
+than the device's key's. The device's own release (`tx.unkey`, TUNE or
+two-tone off) ends the watch on its key at once, so a transmission that
+ends by itself after a release (a RADE end-of-over tail, later) is never
+taken for a lost link.
+
+**When it stops.** More than 400 ms without a keepalive that counts, or
+the device's session ending (a drop, leaving, a replacement or a
+revocation), and the Core turns off the VOX that device armed and, when
+the key on the air is that device's, stops transmitting at once (the
+emergency stop, then StopAllTx) with "The link to <device> went quiet, so
+the Core stopped transmitting.", "<device>" being its name as
+`connectedDevices` gives it. Nothing keys again by itself: the device's
+next key is a new `tx.key` (section 18.6).
+
+**The paths.** On the session's WebSocket the keepalive is this verb. On a
+media connection with the microphone line it travels on that connection's
+`tx` data channel instead (unordered, never retransmitted; 13 bytes, remote
+media control, "The "tx" data channel"), so a lost keepalive never waits
+behind a retransmission: at 5 % loss the channel's keepalives never trip
+the watchdog in ten minutes, while the same loss on a reliable in-order
+channel does (`tst_remote_tx_watchdog`). The rendezvous, relay and separate
+control connection (iPhone app plan Tasks 26 to 29) hand their keepalives
+to the same rules.
+
+**VOX a device armed.** It goes off when that device's session ends, when
+its link goes quiet and when its microphone line closes. While it is on
+and that device's line does not carry the audio VOX listens to, a VOX key
+at the Core is refused (`micNotReady`): the Core never keys from its own
+microphone because a device armed VOX.
+
+**Microphone starvation on a live link.** When the device's line starves
+while it is keyed on it, the transmit mode decides: LSB, USB, DSB, CWL,
+CWU, DIGL, DIGU and SPEC stay keyed (silence there puts no carrier on the
+air; WDSP's DSB adds none), until the time-out or the operator ends it;
+AM, SAM, FM, DRM, RADE_U and RADE_L stop at once with "No microphone audio
+arrived from <device>, so the Core stopped transmitting." TUNE and
+two-tone use no microphone and are never stopped by it.

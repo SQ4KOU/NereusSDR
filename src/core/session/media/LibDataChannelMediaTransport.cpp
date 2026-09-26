@@ -10,6 +10,11 @@
 //               second audio m-line (mid "mic") receive-only at the Core,
 //               offered only when asked. J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 37 (R-IOS-13): the "tx" data channel
+//               (unordered, never retransmitted) for the transmit
+//               keepalive, created and taken only when asked, and the
+//               receive-severed test seam. J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 //
 // =================================================================
 
@@ -39,6 +44,8 @@ namespace NereusSDR {
 namespace {
 
 constexpr char kDisplayLabel[] = "display";
+// Task 37: the transmit keepalive's channel.
+constexpr char kTxLabel[] = "tx";
 constexpr char kAudioMid[] = "audio";
 // Task 36: the microphone line and its a=ssrc cname.
 constexpr char kMicMid[] = "mic";
@@ -69,6 +76,8 @@ struct CallbackEvent {
         DisplayWritable,
         PeerClosed,
         PeerFailed,
+        // Task 37: a message on the "tx" channel (in `first`).
+        TxMessage,
     };
 
     Kind kind;
@@ -113,6 +122,13 @@ struct CallbackBridge {
     bool dataChannelAssigned = false;
     bool trackAssigned = false;
     bool micTrackAssigned = false;
+    // Task 37: whether this side takes a "tx" channel, and the answerer's
+    // once it arrived.
+    bool txChannelWanted = false;
+    bool txChannelAssigned = false;
+    std::shared_ptr<rtc::DataChannel> txChannel;
+    // Task 37 test seam: drop everything that arrives.
+    bool receiveSeveredForTest = false;
     std::atomic<quint64> receivedDisplayPayloadBytes{0};
     std::atomic<quint64> submittedDisplayPayloadBytes{0};
     std::atomic<quint64> receivedRtpBytes{0};
@@ -154,7 +170,7 @@ void queueDisplay(const std::weak_ptr<CallbackBridge>& weak, rtc::binary data)
     bridge->displayReceiveGate.wait(lock, [&bridge] {
         return !bridge->displayReceiveStalledForTest || bridge->cancelled;
     });
-    if (bridge->cancelled) {
+    if (bridge->cancelled || bridge->receiveSeveredForTest) {
         return;
     }
     if (data.size() > static_cast<std::size_t>(IMediaTransport::kMaxDisplayMessageBytes)) {
@@ -185,7 +201,7 @@ void queueRtp(const std::weak_ptr<CallbackBridge>& weak, rtc::binary data, bool 
     }
     const auto receivedAt = std::chrono::steady_clock::now();
     std::lock_guard lock(bridge->mutex);
-    if (bridge->cancelled) {
+    if (bridge->cancelled || bridge->receiveSeveredForTest) {
         return;
     }
     if (data.size() < static_cast<std::size_t>(IMediaTransport::kMinRawRtpBytes)
@@ -233,6 +249,41 @@ void bindDataChannel(const std::shared_ptr<rtc::DataChannel>& channel,
             queueEvent(weak, CallbackEvent::Kind::Error,
                        "text display message rejected");
         });
+}
+
+// Task 37: the "tx" channel. Its messages go through the event queue in
+// arrival order. Its closing or an error on it ends nothing else: a lost
+// keepalive channel shows at the Core as keepalives stopping, which is the
+// safe direction.
+void queueTx(const std::weak_ptr<CallbackBridge>& weak, rtc::binary data)
+{
+    const auto bridge = weak.lock();
+    if (!bridge) {
+        return;
+    }
+    std::lock_guard lock(bridge->mutex);
+    if (bridge->cancelled || bridge->receiveSeveredForTest || data.empty()
+        || data.size() > static_cast<std::size_t>(IMediaTransport::kMaxTxMessageBytes)
+        || bridge->events.size() >= kMaxPendingEvents) {
+        return;
+    }
+    bridge->events.push_back({CallbackEvent::Kind::TxMessage,
+                              std::string(reinterpret_cast<const char*>(data.data()), data.size()),
+                              {}});
+}
+
+void bindTxChannel(const std::shared_ptr<rtc::DataChannel>& channel,
+                   const std::weak_ptr<CallbackBridge>& weak)
+{
+    channel->onMessage(
+        [weak](rtc::binary data) { queueTx(weak, std::move(data)); },
+        [](std::string) {});
+}
+
+bool isUnorderedWithoutRetransmits(const rtc::Reliability& reliability)
+{
+    return reliability.unordered && reliability.maxRetransmits
+        && *reliability.maxRetransmits == 0;
 }
 
 void bindTrack(const std::shared_ptr<rtc::Track>& track,
@@ -405,6 +456,8 @@ struct LibDataChannelMediaTransport::Private {
     std::shared_ptr<CallbackBridge> bridge;
     std::shared_ptr<rtc::PeerConnection> peer;
     std::shared_ptr<rtc::DataChannel> display;
+    // Task 37: the "tx" channel, null without one.
+    std::shared_ptr<rtc::DataChannel> tx;
     std::shared_ptr<rtc::Track> audio;
     // Task 36: the microphone line (the offerer's receive-only track or the
     // answerer's send-only one), null without one.
@@ -462,6 +515,7 @@ bool LibDataChannelMediaTransport::start(const StartOptions& options)
     d->micAudioSsrc = options.micAudioSsrc;
     d->bridge = std::make_shared<CallbackBridge>();
     d->bridge->micSsrc = options.micAudioSsrc;
+    d->bridge->txChannelWanted = options.txChannel;
     // Task 36: the microphone line's packets share the queue with one more
     // stream's worth of room.
     d->bridge->rtpPacketCapacity =
@@ -517,6 +571,29 @@ bool LibDataChannelMediaTransport::start(const StartOptions& options)
         });
         d->peer->onDataChannel([weak](std::shared_ptr<rtc::DataChannel> channel) {
             const rtc::Reliability reliability = channel->reliability();
+            // Task 37: the "tx" channel, taken only by a side started with
+            // it, unordered and never retransmitted.
+            if (channel->label() == kTxLabel) {
+                const auto bridge = weak.lock();
+                bool take = false;
+                if (bridge && isUnorderedWithoutRetransmits(reliability)) {
+                    std::lock_guard lock(bridge->mutex);
+                    take = !bridge->cancelled && bridge->txChannelWanted
+                        && !bridge->txChannelAssigned;
+                    if (take) {
+                        bridge->txChannelAssigned = true;
+                        bridge->txChannel = channel;
+                    }
+                }
+                if (!take) {
+                    channel->close();
+                    queueEvent(weak, CallbackEvent::Kind::Error,
+                               "unexpected tx data channel rejected");
+                    return;
+                }
+                bindTxChannel(channel, weak);
+                return;
+            }
             if (channel->label() != kDisplayLabel || !reliability.unordered
                 || !reliability.maxRetransmits || *reliability.maxRetransmits != 0) {
                 channel->close();
@@ -609,6 +686,11 @@ bool LibDataChannelMediaTransport::start(const StartOptions& options)
             init.reliability.maxRetransmits = 0;
             d->display = d->peer->createDataChannel(kDisplayLabel, init);
             bindDataChannel(d->display, weak);
+            // Task 37: the keepalive's own channel, only when asked.
+            if (options.txChannel) {
+                d->tx = d->peer->createDataChannel(kTxLabel, init);
+                bindTxChannel(d->tx, weak);
+            }
 
             rtc::Description::Audio opus(kAudioMid,
                                          rtc::Description::Direction::SendOnly);
@@ -700,6 +782,7 @@ void LibDataChannelMediaTransport::stopInternal(bool notify)
     d->drainTimer->stop();
 
     std::shared_ptr<rtc::DataChannel> pendingDisplay;
+    std::shared_ptr<rtc::DataChannel> pendingTx;
     std::shared_ptr<rtc::Track> pendingAudio;
     std::shared_ptr<rtc::Track> pendingMic;
     if (d->bridge) {
@@ -711,10 +794,15 @@ void LibDataChannelMediaTransport::stopInternal(bool notify)
         d->bridge->displayBytes = 0;
         d->bridge->rtpPackets.clear();
         pendingDisplay = std::move(d->bridge->dataChannel);
+        pendingTx = std::move(d->bridge->txChannel);
         pendingAudio = std::move(d->bridge->track);
         pendingMic = std::move(d->bridge->micTrack);
     }
 
+    if (pendingTx && pendingTx != d->tx) {
+        pendingTx->resetCallbacks();
+        pendingTx->close();
+    }
     if (pendingDisplay && pendingDisplay != d->display) {
         pendingDisplay->resetCallbacks();
         pendingDisplay->close();
@@ -732,6 +820,10 @@ void LibDataChannelMediaTransport::stopInternal(bool notify)
         d->display->resetCallbacks();
         d->display->close();
     }
+    if (d->tx) {
+        d->tx->resetCallbacks();
+        d->tx->close();
+    }
     if (d->audio) {
         d->audio->resetCallbacks();
         d->audio->close();
@@ -746,6 +838,7 @@ void LibDataChannelMediaTransport::stopInternal(bool notify)
     }
 
     d->display.reset();
+    d->tx.reset();
     d->audio.reset();
     d->micAudio.reset();
     d->peer.reset();
@@ -928,6 +1021,35 @@ bool LibDataChannelMediaTransport::sendMicRtp(const QByteArray& packet)
     }
 }
 
+bool LibDataChannelMediaTransport::sendTx(const QByteArray& message)
+{
+    // Task 37: now or not at all. The channel never retransmits, so nothing
+    // waits behind a lost message; a message still held by the library is
+    // not joined by another (the next keepalive supersedes it anyway).
+    if (!d->started || !d->tx || !d->tx->isOpen() || message.isEmpty()
+        || message.size() > kMaxTxMessageBytes || d->tx->bufferedAmount() != 0) {
+        return false;
+    }
+    try {
+        d->tx->send(reinterpret_cast<const rtc::byte*>(message.constData()),
+                    static_cast<std::size_t>(message.size()));
+        return true;
+    } catch (const std::exception& error) {
+        qWarning().nospace() << "media tx channel send failed: " << error.what();
+        return false;
+    }
+}
+
+void LibDataChannelMediaTransport::setReceiveSeveredForTest(bool severed)
+{
+    const std::shared_ptr<CallbackBridge> bridge = d->bridge;
+    if (!bridge) {
+        return;
+    }
+    std::lock_guard lock(bridge->mutex);
+    bridge->receiveSeveredForTest = severed;
+}
+
 bool LibDataChannelMediaTransport::micLosslessNegotiated() const
 {
     if (!d->started || !d->peer || d->micAudioSsrc == 0 || !d->remoteDescribesMicLossless) {
@@ -998,6 +1120,7 @@ void LibDataChannelMediaTransport::drainCallbacks()
     std::chrono::steady_clock::duration maxRtpCallbackGap {};
     std::size_t droppedRtpPackets = 0;
     std::shared_ptr<rtc::DataChannel> incomingDisplay;
+    std::shared_ptr<rtc::DataChannel> incomingTx;
     std::shared_ptr<rtc::Track> incomingAudio;
     std::shared_ptr<rtc::Track> incomingMic;
     {
@@ -1014,12 +1137,16 @@ void LibDataChannelMediaTransport::drainCallbacks()
         droppedRtpPackets = bridge->droppedRtpPackets;
         bridge->droppedRtpPackets = 0;
         incomingDisplay = std::move(bridge->dataChannel);
+        incomingTx = std::move(bridge->txChannel);
         incomingAudio = std::move(bridge->track);
         incomingMic = std::move(bridge->micTrack);
     }
 
     if (!isCurrentGeneration()) {
         return;
+    }
+    if (!d->tx && incomingTx) {
+        d->tx = std::move(incomingTx);
     }
 
     if (!d->display && incomingDisplay) {
@@ -1070,6 +1197,10 @@ void LibDataChannelMediaTransport::drainCallbacks()
             break;
         case CallbackEvent::Kind::PeerClosed:
             mustStop = true;
+            break;
+        case CallbackEvent::Kind::TxMessage:
+            emit txReceived(QByteArray(event.first.data(),
+                                       static_cast<qsizetype>(event.first.size())));
             break;
         }
         if (!isCurrentGeneration()) {

@@ -135,6 +135,10 @@
 //                verbs go out three times each through RemoteTransmitClient
 //                and their answers come back to it. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 37 (R-IOS-13): tx.keepalive once
+//                each on the session (RemoteTransmitClient's keepalive when
+//                no "tx" data channel is open); its answers are dropped.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -478,9 +482,32 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
             return id;
         },
         this);
+    // iPhone app plan Task 37 (R-IOS-13): the Core's watchdog hears from
+    // this window every 100 ms while it transmits or has VOX armed; on the
+    // session a keepalive goes once (a lost one is overtaken by the next).
+    m_remoteTransmit->setSessionKeepalive([this](quint64 sequence, quint32 epoch) {
+        if (!remoteTransmitAvailable()) {
+            return false;
+        }
+        const quint32 id = m_nextCommandId++;
+        if (m_nextCommandId == 0) {
+            ++m_nextCommandId;
+        }
+        send(SessionMessages::commandInvoke(
+            QByteArrayLiteral("tx.keepalive"), id,
+            {MirrorUpdate{0, QByteArrayLiteral("sequence"), MirrorWireKind::Int64,
+                          QVariant(static_cast<qint64>(sequence))},
+             MirrorUpdate{0, QByteArrayLiteral("epoch"), MirrorWireKind::Int64,
+                          QVariant(static_cast<qint64>(epoch))}}));
+        return true;
+    });
     if (radioModel != nullptr) {
         connect(radioModel, &RadioModel::transmittingChanged, m_remoteTransmit,
                 &RemoteTransmitClient::setCoreTransmitting);
+        // Task 37: VOX armed (the Core's, mirrored) keeps the keepalive
+        // going while the window streams unkeyed.
+        connect(&radioModel->transmitModel(), &TransmitModel::voxEnabledChanged, m_remoteTransmit,
+                &RemoteTransmitClient::setVoxArmed);
         // A refused press is shown in the Core's words, where a local
         // refusal shows (MainWindow's toast; the buttons follow the Core).
         const QPointer<RadioModel> model(radioModel);
@@ -3663,6 +3690,11 @@ void StationClient::handleCommandResult(const SessionMessage& message)
     // Desktop remote transmit: the transmit verbs' answers (every copy's)
     // go to the window's transmit client, which shows a refusal once, in
     // the words a local refusal uses; none takes the generic routes below.
+    // Task 37: a keepalive's answer changes nothing; a refused one is
+    // logged above and goes nowhere else (ten a second while keyed).
+    if (message.commandVerb == "tx.keepalive") {
+        return;
+    }
     if (message.commandVerb == "tx.key" || message.commandVerb == "tx.unkey"
         || message.commandVerb == "tx.tune" || message.commandVerb == "tx.twoTone") {
         const QPointer<StationClient> self(this);

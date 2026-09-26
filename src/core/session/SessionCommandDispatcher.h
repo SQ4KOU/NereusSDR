@@ -139,6 +139,10 @@
 //                                    tx.twoTone (TransmitAccess::keying);
 //                                    an accepted key carries its epoch.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app plan Task 37 (R-IOS-13):
+//                                    tx.keepalive {sequence, epoch}
+//                                    (TransmitAccess::keepalive).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -256,6 +260,11 @@ public:
         std::function<TxRefusal(const QByteArray& requester)> txSlice;
         std::function<void(const RemoteKeying::Command& command, RemoteKeying::Reply reply)>
             keying;
+        /// Task 37 (R-IOS-13): tx.keepalive {sequence, epoch} from
+        /// `requester`, for the transmit watchdog. Unset, the verb is
+        /// refused stationReceiveOnly.
+        std::function<void(const QByteArray& requester, quint64 sequence, quint32 epoch)>
+            keepalive;
     };
     void setTransmitAccess(TransmitAccess access) { m_transmitAccess = std::move(access); }
 
@@ -359,6 +368,8 @@ private:
     /// and fix as the values refusalCode and refusalFix.
     void emitRefusal(const QByteArray& verb, quint32 commandId, const TxRefusal& refusal);
     void handleSetTxSlice(const NereusSDR::SessionMessage& invoke);
+    // Task 37: tx.keepalive.
+    void handleTxKeepalive(const NereusSDR::SessionMessage& invoke);
     // Task 35: tx.key, tx.unkey, tx.tune, tx.twoTone.
     void handleTxKeying(const NereusSDR::SessionMessage& invoke);
     TransmitAccess m_transmitAccess;

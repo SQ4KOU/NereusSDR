@@ -488,9 +488,27 @@ and 18.6). TUNE and two-tone use no microphone and key at once, and a
 device without the line keys with the Core's own source, as before.
 
 **Starvation.** While the device is keyed on its line, 250 ms without audio
-is starvation: the Core reports it to its transmit safety (what it does,
-mode by mode, is the watchdog's, iPhone app plan Task 37), and audio
-arriving again ends it.
+is starvation, and audio arriving again ends it. What the Core then does
+depends on the transmit mode (iPhone app plan Task 37; the link document,
+section 18.7): in LSB, USB, DSB, CWL, CWU, DIGL, DIGU and SPEC the key goes
+on, silent; in AM, SAM, FM, DRM, RADE_U and RADE_L the Core stops
+transmitting with "No microphone audio arrived from <device>, so the Core
+stopped transmitting." TUNE and two-tone are never stopped by it.
+
+**The "tx" data channel (iPhone app plan Task 37).** A media connection
+whose `start` carried `remoteTxVersion` also has a second SCTP data
+channel, labelled `tx`, which the Core (the offerer) opens beside
+`display`, like it unordered and with zero retransmissions, so a lost
+message is overtaken by the next instead of holding anything behind it.
+The answerer takes it only when its own start asked for the line; any
+other connection has only `display`, exactly as before. The device sends
+its transmit keepalive on it, one binary message of 13 bytes every 100 ms
+while it is keyed or has VOX armed: byte 0 is 1 (a keepalive), bytes 1
+to 8 the `sequence` and bytes 9 to 12 the `epoch`, both big-endian, with
+the meanings of `tx.keepalive` (the link document, section 18.7). The Core
+reads anything else on it as nothing. While the channel is open the device
+sends its keepalives there and not on the session; the Core counts either,
+and the same sequence twice once.
 
 **The monitor.** With MON on, the audio the Core sends a device while it
 is keyed carries the transmit monitor in the Core's mix, exactly as the

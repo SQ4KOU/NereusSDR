@@ -32,6 +32,10 @@
 //   2026-09-25: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 35 (R-IOS-13), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 37 (R-IOS-13): tx.keepalive's gate and
+//               readability, keepalives holding a key, an older epoch
+//               holding nothing, the watchdog's stop and the delayed copy.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "StationMultiSessionHarness.h"
@@ -40,6 +44,7 @@
 #include "core/RadioStatus.h"
 #include "core/TwoToneController.h"
 #include "core/session/RemoteKeying.h"
+#include "core/safety/RemoteTxWatchdog.h"
 
 namespace {
 
@@ -180,11 +185,14 @@ private slots:
         LoopbackTransport* app = core.signIn(a, kHolder);
         QVERIFY(admitted(app));
         for (const QByteArray& verb : {QByteArrayLiteral("tx.key"), QByteArrayLiteral("tx.unkey"),
-                                        QByteArrayLiteral("tx.tune"), QByteArrayLiteral("tx.twoTone")}) {
-            const QJsonObject r = core.invoke(app, verb,
-                                              verb == "tx.key"     ? trigger("screen")
-                                              : verb == "tx.unkey" ? QList<MirrorUpdate>{int64("epoch", 1)}
-                                                                   : QList<MirrorUpdate>{boolean("on", true)});
+                                        QByteArrayLiteral("tx.tune"), QByteArrayLiteral("tx.twoTone"),
+                                        QByteArrayLiteral("tx.keepalive")}) {
+            const QJsonObject r = core.invoke(
+                app, verb,
+                verb == "tx.key"         ? trigger("screen")
+                : verb == "tx.unkey"     ? QList<MirrorUpdate>{int64("epoch", 1)}
+                : verb == "tx.keepalive" ? QList<MirrorUpdate>{int64("sequence", 1), int64("epoch", 1)}
+                                         : QList<MirrorUpdate>{boolean("on", true)});
             QVERIFY2(!accepted(r), verb.constData());
             QCOMPARE(r.value(QStringLiteral("reason")).toString(),
                      TxRefusals::appCannotTransmit().text);
@@ -203,7 +211,13 @@ private slots:
                  {"tx.unkey", {int64("epoch", 0)}},
                  {"tx.unkey", {utf8("epoch", QStringLiteral("1"))}},
                  {"tx.tune", {int64("on", 1)}},
-                 {"tx.twoTone", {}}}) {
+                 {"tx.twoTone", {}},
+                 // Task 37: tx.keepalive {sequence >= 1, epoch 0..4294967295}.
+                 {"tx.keepalive", {int64("sequence", 0), int64("epoch", 1)}},
+                 {"tx.keepalive", {int64("sequence", 1), int64("epoch", -1)}},
+                 {"tx.keepalive", {int64("sequence", 1), int64("epoch", 4294967296LL)}},
+                 {"tx.keepalive", {int64("sequence", 1)}},
+                 {"tx.keepalive", {int64("sequence", 1), utf8("epoch", QStringLiteral("1"))}}}) {
             const QJsonObject r = p.send(p.appA, verb, args);
             QVERIFY2(!accepted(r), verb.constData());
             QCOMPARE(r.value(QStringLiteral("reason")).toString(), unreadable);
@@ -347,6 +361,56 @@ private slots:
         QCOMPARE(p.core.model->keyedBy().epoch, static_cast<quint32>(epochOf(second)));
         QVERIFY(accepted(p.send(p.appA, "tx.unkey", {int64("epoch", epochOf(second))})));
         QTRY_COMPARE(p.mox->state(), MoxState::Rx);
+    }
+
+    // Task 37 (remote design section 12.1): keepalives hold a remote key;
+    // keepalives naming an older epoch do not, and the Core stops within
+    // 500 ms of the last one that counted; a delayed copy of the key from
+    // before the stop never keys again.
+    void keepalivesHoldAKeyAndTheWatchdogStopsItWithoutThem()
+    {
+        Pair p;
+        QVERIFY(admitted(p.appA));
+        QSignalSpy tripped(p.core.server->txWatchdog(), &RemoteTxWatchdog::tripped);
+        const quint32 keyId = p.nextId++;
+        const QJsonObject key = invokeAs(p.appA, "tx.key", keyId, trigger("screen"));
+        QVERIFY2(accepted(key), qPrintable(describe(key)));
+        const qint64 epoch = epochOf(key);
+        QTRY_COMPARE(p.mox->state(), MoxState::Tx);
+        // The Core's clock is the harness's; it moves with real time here,
+        // 50 ms a step, so the watchdog's real timer finds it moved.
+        const auto step = [&p]() {
+            p.core.now += 50;
+            QTest::qWait(50);
+        };
+        qint64 sequence = 0;
+        for (int i = 0; i < 20; ++i) {
+            if (i % 2 == 0) {
+                QVERIFY(accepted(p.send(p.appA, "tx.keepalive",
+                                        {int64("sequence", ++sequence), int64("epoch", epoch)})));
+            }
+            step();
+        }
+        QVERIFY(p.mox->isMox());
+        QCOMPARE(tripped.count(), 0);
+        // From an earlier key: answered, but they hold nothing.
+        for (int i = 0; i < 30 && tripped.isEmpty(); ++i) {
+            if (i % 2 == 0) {
+                QVERIFY(accepted(p.send(p.appA, "tx.keepalive",
+                                        {int64("sequence", ++sequence), int64("epoch", epoch - 1)})));
+            }
+            step();
+        }
+        QCOMPARE(tripped.count(), 1);
+        const qint64 silent = tripped.first().at(2).toLongLong();
+        QVERIFY2(silent > RemoteTxWatchdog::kLinkLossDeadlineMs && silent <= 500,
+                 qPrintable(QString::number(silent)));
+        QVERIFY(!p.mox->isMox());
+        // The key's delayed copy: refused, nothing keys.
+        const QJsonObject copy = invokeAs(p.appA, "tx.key", keyId, trigger("screen"), 2);
+        QVERIFY2(refusedWith(copy, TxRefusals::keyEnded()), qPrintable(describe(copy)));
+        QTest::qWait(100);
+        QVERIFY(!p.mox->isMox());
     }
 
     void theEmergencyStopBeatsARemoteKeyAndADelayedCopyNeverKeysAgain()

@@ -7485,6 +7485,16 @@ nereus_add_test(tst_station_multi_session
 nereus_add_test(tst_remote_keying
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
+# iPhone app plan Task 37 (R-IOS-13; remote design sections 12.1 and 12.3):
+# the transmit watchdog's rules and the per-mode starvation action, on an
+# injected clock; and the watchdog on each path that exists, severed with
+# a key on (real time).
+nereus_add_test(tst_remote_tx_watchdog EXTRA_LABELS session)
+nereus_add_test(tst_starvation_policy EXTRA_LABELS session)
+nereus_add_test(tst_tx_link_loss_each_path
+    fakes/LoopbackTransport.cpp
+    REALTIME
+    EXTRA_LABELS session)
 # iPhone app Task 73 (R-IOS-02): whose each slice is (owners, held for,
 # adoption, each owner's active slice and the station-level one), and each
 # device's closed slices kept for its return.

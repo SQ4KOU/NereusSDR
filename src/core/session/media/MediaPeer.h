@@ -9,6 +9,11 @@
 // The controller owns authentication and session epochs. This class carries
 // only bounded SDP/candidate control and delegates media to IMediaTransport.
 //
+// Modification history (NereusSDR):
+//   2026-09-25: iPhone app plan Task 37 (R-IOS-13): the "tx" data channel
+//               with the microphone line (sendTx, txReceived). J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//
 // =================================================================
 
 #include "core/session/media/IMediaTransport.h"
@@ -57,6 +62,8 @@ public:
     // client whose media start carried remoteTxVersion. The offerer adds the
     // receive-only microphone line and the answerer takes it, sending
     // micAudioSsrcForConnection() on it. Off, nothing changes.
+    // Task 37: the same clients get the "tx" data channel for the transmit
+    // keepalive (IMediaTransport::StartOptions::txChannel) with the line.
     bool start(IMediaTransport::Role role, const QString& connectionId,
                int audioTargetBitrate = IMediaTransport::kDefaultAudioTargetBitrate,
                bool offerLosslessAudio = false,
@@ -73,6 +80,9 @@ public:
     /// Task 36: one packet on the microphone line (the answerer's), whose
     /// SSRC must be micAudioSsrc().
     bool sendMicRtp(const QByteArray& packet);
+    /// Task 37: one message on the "tx" data channel (only with the
+    /// microphone line); now or not at all.
+    bool sendTx(const QByteArray& message);
 
     /// Why the last start() returned false (R-R3-28, amended 2026-09-23).
     /// Only TransportConstructionFailed is transient and worth a retry;
@@ -140,6 +150,8 @@ signals:
     void rtpReceived(const QByteArray& packet);
     /// Task 36: a packet on the microphone line carrying micAudioSsrc().
     void micRtpReceived(const QByteArray& packet);
+    /// Task 37: a message on the "tx" data channel.
+    void txReceived(const QByteArray& message);
     void ready();
     void closed();
     void connectionFailed(const QString& message);

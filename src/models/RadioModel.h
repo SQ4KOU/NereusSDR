@@ -167,6 +167,10 @@
 //                never the window's own MoxController; the Core's refusal
 //                is reported (remoteTransmitRefused). NereusSDR-original.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 37 (R-IOS-13): remoteMicDeviceChanged,
+//                so the Core turns off VOX a device armed when its
+//                microphone line closes. NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -3673,6 +3677,10 @@ signals:
     void keyedByChanged();
     // iPhone app plan Task 36: remoteMicInUse() changed.
     void remoteMicInUseChanged(bool inUse);
+    // iPhone app plan Task 37: the device whose media carries a microphone
+    // line changed (empty: none now). The Core turns off the VOX a device
+    // armed when its line closes.
+    void remoteMicDeviceChanged(const QByteArray& deviceId);
     // Phase 3Q-1: parametrized — state passed so UI consumers can act without
     // a secondary RadioModel::connectionState() read under race conditions.
     // Existing no-arg slot connections (ConnectionPanel, MainWindow, SpectrumWidget)

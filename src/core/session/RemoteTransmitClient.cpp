@@ -9,6 +9,9 @@
 //   2026-09-25 - Created for the desktop remote window's transmit
 //                (R-IOS-13, R-R3-42). J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 37 (R-IOS-13): the keepalive for the
+//                Core's transmit watchdog. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/RemoteTransmitClient.h"
@@ -55,6 +58,66 @@ RemoteTransmitClient::RemoteTransmitClient(Sender sender, QObject* parent)
     : QObject(parent)
     , m_sender(std::move(sender))
 {
+    // Task 37: the keepalive's timer.
+    m_keepaliveTimer.setInterval(kKeepaliveIntervalMs);
+    m_keepaliveTimer.setTimerType(Qt::PreciseTimer);
+    connect(&m_keepaliveTimer, &QTimer::timeout, this, &RemoteTransmitClient::keepaliveTick);
+}
+
+void RemoteTransmitClient::setVoxArmed(bool armed)
+{
+    if (m_voxArmed == armed) {
+        return;
+    }
+    m_voxArmed = armed;
+    refreshKeepalive();
+}
+
+quint32 RemoteTransmitClient::keepaliveEpoch() const
+{
+    if (m_screen.phase == Phase::On && m_screen.epoch != 0) {
+        return m_screen.epoch;
+    }
+    if (m_program.phase == Phase::On && m_program.epoch != 0) {
+        return m_program.epoch;
+    }
+    // Before a key's answer, or for a key that has no epoch of this
+    // window's (VOX, TUNE, two-tone): never older than the Core's.
+    return kReleaseAnyEpoch;
+}
+
+void RemoteTransmitClient::refreshKeepalive()
+{
+    const bool wanted = m_available
+        && (micKeyDown() || holdsTransmit() || m_tuneAsked || m_twoToneAsked || m_voxArmed);
+    if (wanted == m_keepaliveTimer.isActive()) {
+        return;
+    }
+    if (wanted) {
+        qCInfo(lcRemoteTransmit) << "Keepalives start";
+        // The first goes at once: the Core's watch may already be running.
+        m_keepaliveTimer.start();
+        keepaliveTick();
+    } else {
+        m_keepaliveTimer.stop();
+        qCInfo(lcRemoteTransmit) << "Keepalives stop after" << m_keepaliveSequence;
+    }
+}
+
+void RemoteTransmitClient::keepaliveTick()
+{
+    if (!m_available) {
+        return;
+    }
+    const quint64 sequence = ++m_keepaliveSequence;
+    const quint32 epoch = keepaliveEpoch();
+    if (m_channelKeepalive && m_channelKeepalive(sequence, epoch)) {
+        ++m_channelKeepalives;
+        return;
+    }
+    if (m_sessionKeepalive && m_sessionKeepalive(sequence, epoch)) {
+        ++m_sessionKeepalives;
+    }
 }
 
 void RemoteTransmitClient::setAvailable(bool available)
@@ -67,7 +130,12 @@ void RemoteTransmitClient::setAvailable(bool available)
         // The Core unkeys a device whose link drops and never keys it
         // again by itself; nothing here survives.
         reset();
+        // Task 37: a new link starts its keepalives from 1.
+        m_keepaliveSequence = 0;
+        m_channelKeepalives = 0;
+        m_sessionKeepalives = 0;
     }
+    refreshKeepalive();
 }
 
 quint32 RemoteTransmitClient::send(const QByteArray& verb, const QList<MirrorUpdate>& arguments,
@@ -147,14 +215,18 @@ void RemoteTransmitClient::setTune(bool on)
     if (id == 0 && on) {
         emit refused(QString::fromLatin1(kNoLinkReason), QString(), QString());
     }
+    refreshKeepalive();
 }
 
 void RemoteTransmitClient::setTwoTone(bool on)
 {
-    if (send(QByteArrayLiteral("tx.twoTone"), {boolArgument("on", on)}, Kind::TwoTone) == 0
-        && on) {
+    const quint32 id =
+        send(QByteArrayLiteral("tx.twoTone"), {boolArgument("on", on)}, Kind::TwoTone);
+    m_twoToneAsked = on && id != 0;
+    if (id == 0 && on) {
         emit refused(QString::fromLatin1(kNoLinkReason), QString(), QString());
     }
+    refreshKeepalive();
 }
 
 void RemoteTransmitClient::keyForProgram(std::function<void(const Answer&)> answer)
@@ -274,10 +346,15 @@ void RemoteTransmitClient::commandFinished(quint32 commandId, const QByteArray& 
     case Kind::Tune:
         if (!accepted && m_tuneAsked) {
             m_tuneAsked = false;
+            refreshKeepalive();
         }
         [[fallthrough]];
     case Kind::Release:
     case Kind::TwoTone:
+        if (kind == Kind::TwoTone && !accepted && m_twoToneAsked) {
+            m_twoToneAsked = false;
+            refreshKeepalive();
+        }
         if (!accepted) {
             emit refused(shown, code, fix);
         }
@@ -289,9 +366,10 @@ void RemoteTransmitClient::setCoreTransmitting(bool on)
 {
     m_coreTransmitting = on;
     if (!on) {
-        // The Core stopped transmitting: a TUNE this window asked for is
-        // over too.
+        // The Core stopped transmitting: a TUNE or two-tone this window
+        // asked for is over too.
         m_tuneAsked = false;
+        m_twoToneAsked = false;
     }
     bool ended = false;
     for (Key* key : {&m_screen, &m_program}) {
@@ -311,6 +389,7 @@ void RemoteTransmitClient::setCoreTransmitting(bool on)
         qCInfo(lcRemoteTransmit) << "The Core ended this window's key";
         publish();
     }
+    refreshKeepalive();
 }
 
 bool RemoteTransmitClient::micKeyDown() const
@@ -328,6 +407,7 @@ void RemoteTransmitClient::reset()
     m_screen = Key{};
     m_program = Key{};
     m_tuneAsked = false;
+    m_twoToneAsked = false;
     m_pending.clear();
     auto reply = std::exchange(m_programAnswer, {});
     const QPointer<RemoteTransmitClient> self(this);
@@ -352,7 +432,9 @@ void RemoteTransmitClient::publish()
     if (holds != m_publishedHolds) {
         m_publishedHolds = holds;
         emit holdsTransmitChanged(holds);
+        if (!self) { return; }
     }
+    refreshKeepalive();
 }
 
 } // namespace NereusSDR

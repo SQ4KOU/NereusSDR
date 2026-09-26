@@ -299,6 +299,7 @@
 #include "core/session/LinkVersion.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StationCapabilities.h"
+#include "core/safety/StarvationPolicy.h"
 #include "core/safety/StationTxGate.h"
 
 QT_BEGIN_NAMESPACE
@@ -331,6 +332,7 @@ class StationDevicesFacade;
 class TokenStore;
 class TransmitHolder;
 class RemoteKeying;
+class RemoteTxWatchdog;
 
 class StationServer : public QObject {
     Q_OBJECT
@@ -739,6 +741,23 @@ public:
     int remoteTxVersion() const { return 1; }
     /// Task 35: keying from a remote device; null without a Local model.
     RemoteKeying* remoteKeying() const { return m_remoteKeying.get(); }
+    /// Task 37 (R-IOS-13; remote design section 12.1): the transmit
+    /// watchdog; null without a Local model. It watches a device while it
+    /// is keyed or has VOX armed and stops transmitting when its
+    /// keepalives (tx.keepalive on the session, or the media connection's
+    /// "tx" data channel) stop for more than 400 ms, or its session ends.
+    RemoteTxWatchdog* txWatchdog() const { return m_txWatchdog.get(); }
+    /// Task 37: a keepalive from the media connection's "tx" data channel
+    /// (RemoteTxWatchdog::channelKeepalive's 13 bytes), for the device the
+    /// media session is for. Anything else is ignored.
+    void txChannelMessage(const QByteArray& message);
+    /// Task 37 (remote design section 12.3): `deviceId`'s microphone line
+    /// starved (true) or carries audio again (false) while it is keyed on
+    /// it; the per-mode action (StarvationPolicy) follows.
+    void remoteMicStarved(const QByteArray& deviceId, bool starved);
+    /// Task 37: the device whose accepted write turned VOX on, while VOX is
+    /// on; empty when VOX is off or was turned on at the Core itself.
+    QByteArray voxArmedBy() const { return m_voxArmedBy; }
     /// The gate's answer for `transport` (what its txPermitted says).
     TxDecision txDecisionFor(SessionTransport* transport) const;
     /// The refusal a capabilities message carries (empty without one).
@@ -999,6 +1018,13 @@ private:
     /// The holder changed (who, keyed, away, a transfer): every session's
     /// txPermitted, connectedDevices, and the model's transmit holder.
     void onTransmitHolderChanged();
+    // Task 37: the watchdog follows who is keyed (RadioModel::keyedBy).
+    void followKeyedForWatchdog();
+    // Task 37: turns VOX off when `deviceId` armed it (its session ended,
+    // its link went quiet, its microphone line closed).
+    void disarmVoxArmedBy(const QByteArray& deviceId, const char* why);
+    // Task 37: the device's name for a stop sentence.
+    QString deviceNameForStop(const QByteArray& deviceId) const;
     /// Ruling 7.4 (D60): the on-air refusal for a change from `requester`,
     /// or empty (nobody on the air, or the holder's own change).
     TxRefusal onAirRefusal(const QByteArray& requester) const;
@@ -1089,6 +1115,15 @@ private:
     // iPhone app plan Task 35: keying from a remote device (a Local model
     // with a MoxController only).
     std::unique_ptr<RemoteKeying> m_remoteKeying;
+    // iPhone app plan Task 37: the transmit watchdog, its one check timer
+    // (a child, so the conformance player's virtual clock drives it), the
+    // per-mode starvation action, the device whose key the watchdog
+    // follows now, and the device that armed VOX.
+    std::unique_ptr<RemoteTxWatchdog> m_txWatchdog;
+    QTimer* m_txWatchdogTimer = nullptr;
+    StarvationPolicy m_starvation;
+    QByteArray m_watchedKeyedDevice;
+    QByteArray m_voxArmedBy;
     // iPhone app Task 73: one marker per slice (Qt-parented to this).
     SliceMarkerSet* m_markers = nullptr;
     // True while a restored layout's owners are settled just before every

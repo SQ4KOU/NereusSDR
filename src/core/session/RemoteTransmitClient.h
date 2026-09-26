@@ -27,11 +27,25 @@
 // that it holds transmit unkeyed until the holder reaches it (Task 39's
 // txState and Task 77); until then holding follows its own accepted key.
 //
+// Task 37 (R-IOS-13; remote design section 12.1): while this window has a
+// key down or on, asked TUNE or two-tone on, or has VOX armed, it sends
+// tx.keepalive {sequence, epoch} every 100 ms, so the Core's watchdog
+// knows the link is alive. Each goes once: on the media connection's "tx"
+// data channel when that is open (unordered, never retransmitted), and
+// otherwise on the session. The sequence starts at 1 and rises by one with
+// every keepalive, and never starts again while the link lasts; the epoch
+// is the window's key's (from its answer), or 4294967295 before the answer
+// and for a key that has none (VOX, TUNE, two-tone), which the Core counts
+// as never older.
+//
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-09-25 - Created for the desktop remote window's transmit
 //                (R-IOS-13, R-R3-42). J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 37 (R-IOS-13): the keepalive for the
+//                Core's transmit watchdog. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -39,6 +53,7 @@
 #include <QList>
 #include <QObject>
 #include <QString>
+#include <QTimer>
 
 #include <functional>
 
@@ -75,6 +90,29 @@ public:
         "This computer is not connected to the Core, so it cannot transmit.";
 
     explicit RemoteTransmitClient(Sender sender, QObject* parent = nullptr);
+
+    // ---- Task 37: the keepalive ----
+    /// Sends one keepalive; true when it went.
+    using KeepaliveSender = std::function<bool(quint64 sequence, quint32 epoch)>;
+    /// How often a keepalive goes (RemoteTxWatchdog::kKeepaliveIntervalMs).
+    static constexpr int kKeepaliveIntervalMs = 100;
+    /// The session's tx.keepalive (sent once, never three times).
+    void setSessionKeepalive(KeepaliveSender sender) { m_sessionKeepalive = std::move(sender); }
+    /// The media connection's "tx" data channel; tried first. Unset, or
+    /// false (no channel open), the session carries it.
+    void setChannelKeepalive(KeepaliveSender sender) { m_channelKeepalive = std::move(sender); }
+    /// The Core's VOX is on (the window's mirrored transmit.voxEnabled).
+    void setVoxArmed(bool armed);
+    /// Keepalives are going out now.
+    bool keepaliveRunning() const { return m_keepaliveTimer.isActive(); }
+    /// The epoch the next keepalive names.
+    quint32 keepaliveEpoch() const;
+    /// Keepalives sent on the channel and on the session since the link
+    /// came up.
+    quint64 channelKeepalivesSent() const { return m_channelKeepalives; }
+    quint64 sessionKeepalivesSent() const { return m_sessionKeepalives; }
+    /// One keepalive now (the timer's; public for tests).
+    void keepaliveTick();
 
     /// The Core takes this window's keys: the session is up and the Core
     /// told it remoteTxVersion 1 or later. Going false forgets every key
@@ -141,6 +179,16 @@ private:
     /// Commands still waiting for their first answer.
     QHash<quint32, Kind> m_pending;
     bool m_tuneAsked{false};
+    // Task 37.
+    bool m_twoToneAsked{false};
+    bool m_voxArmed{false};
+    KeepaliveSender m_sessionKeepalive;
+    KeepaliveSender m_channelKeepalive;
+    QTimer m_keepaliveTimer;
+    quint64 m_keepaliveSequence{0};
+    quint64 m_channelKeepalives{0};
+    quint64 m_sessionKeepalives{0};
+    void refreshKeepalive();
     /// The Core's `transmitting` as last heard.
     bool m_coreTransmitting{false};
     bool m_publishedKeyDown{false};

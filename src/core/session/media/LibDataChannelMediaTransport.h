@@ -9,6 +9,12 @@
 // The implementation hides all rtc types so the dependency stays private
 // to NereusCore.
 //
+// Modification history (NereusSDR):
+//   2026-09-25: iPhone app plan Task 37 (R-IOS-13): the "tx" data channel
+//               for the transmit keepalive, and the receive-severed test
+//               seam. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//               Code.
+//
 // =================================================================
 
 #include "core/session/media/IMediaTransport.h"
@@ -77,6 +83,7 @@ public:
     bool displayBusy() const override;
     bool sendRtp(const QByteArray& packet) override;
     bool sendMicRtp(const QByteArray& packet) override;
+    bool sendTx(const QByteArray& message) override;
 
     bool isReady() const override;
     bool losslessAudioNegotiated() const override;
@@ -87,6 +94,11 @@ public:
     /// display messages waits instead of handing them over, so SCTP stops
     /// reading and the peer's send side fills. stop() always releases it.
     void setDisplayReceiveStalledForTest(bool stalled);
+    /// Test seam (Task 37): while severed, everything that arrives (RTP on
+    /// every line, display messages and the "tx" channel's messages) is
+    /// dropped as it comes off the network, as if the path had gone dead
+    /// without closing. Sending is unchanged.
+    void setReceiveSeveredForTest(bool severed);
 
 private:
     struct Private;

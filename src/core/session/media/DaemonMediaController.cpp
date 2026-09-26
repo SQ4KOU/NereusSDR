@@ -6,6 +6,10 @@
 // Modification history (NereusSDR):
 //   2026-09-25: iPhone app plan Task 36 (R-IOS-13): the microphone line.
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 37 (R-IOS-13): the "tx" data
+//               channel's keepalives to the transmit watchdog, and the
+//               line's starvation to the Core's per-mode action. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/DaemonMediaController.h"
@@ -1130,6 +1134,14 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
             }
         }
     });
+    // Task 37: the "tx" data channel's keepalives go to the Core's
+    // transmit watchdog, for the device this media session is for.
+    connect(peer, &MediaPeer::txReceived, this,
+            [this, peer, peerEpoch](const QByteArray& message) {
+        if (m_peer.get() == peer && m_epoch == peerEpoch && m_server) {
+            m_server->txChannelMessage(message);
+        }
+    });
     // Task 36: the microphone line's packets go to its receiver.
     connect(peer, &MediaPeer::micRtpReceived, this,
             [this, peer, peerEpoch](const QByteArray& packet) {
@@ -1173,6 +1185,13 @@ void DaemonMediaController::startMicLine(MediaPeer* peer)
         return;
     }
     m_micDeviceId = m_server->mediaSessionDeviceId();
+    // Task 37 (remote design section 12.3): starvation while the device is
+    // keyed on its line takes the Core's per-mode action.
+    connect(m_micReceiver.get(), &RemoteMicReceiver::starved, this, [this](bool starved) {
+        if (m_server && !m_micDeviceId.isEmpty()) {
+            m_server->remoteMicStarved(m_micDeviceId, starved);
+        }
+    });
     m_radioModel->setRemoteMicDevice(m_micDeviceId);
     refreshMicVoxArmed();
     refreshMicWatching();

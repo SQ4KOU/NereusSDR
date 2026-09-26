@@ -285,6 +285,15 @@
 //                (txRefusalCode/Reason/Fix) for a peer that declared
 //                remoteTx, sent again when it changes. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 37 (R-IOS-13): the transmit watchdog
+//               (tx.keepalive on the session and the media connection's
+//               "tx" data channel; a session that ends while its device is
+//               keyed stops transmitting at once), the per-mode microphone
+//               starvation action, and VOX a device armed turned off with
+//               its session, its link or its microphone line (a station VOX
+//               key is refused while that VOX has no line to listen to).
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -310,7 +319,9 @@
 #include "core/session/SliceMarker.h"
 #include "core/SliceOwnership.h"
 #include "core/MoxController.h"
+#include "core/safety/RemoteTxWatchdog.h"
 #include "core/safety/TransmitHolder.h"
+#include "core/TwoToneController.h"
 #include "core/session/RemoteKeying.h"
 #include "core/safety/UnkeyGate.h"
 #include "core/session/ConnectedDevicesFacade.h"
@@ -989,6 +1000,13 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                     return {KeyingVerdict::Refuse, decision.refusal};
                 }
             }
+            // iPhone app plan Task 37: VOX a remote device armed listens to
+            // that device's microphone line or keys nothing; the Core never
+            // keys from its own microphone because of it.
+            if (keyer.isStation() && source == PttMode::Vox && !m_voxArmedBy.isEmpty()
+                && m_radioModel && m_radioModel->remoteVoxDevice() != m_voxArmedBy) {
+                return {KeyingVerdict::Refuse, TxRefusals::micNotReady()};
+            }
             TransmitHolder::KeyRequest request;
             request.deviceId = keyer.deviceId;
             request.program = keyer.program;
@@ -1039,6 +1057,92 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
         // Created after the holder's MOX follower above, so the holder
         // knows it is keyed before keyedBy is published.
         m_remoteKeying = std::make_unique<RemoteKeying>(m_radioModel, m_transmitHolder.get());
+
+        // iPhone app plan Task 37 (R-IOS-13; remote design section 12.1):
+        // the transmit watchdog. It watches a device while keyedBy names it
+        // or while it has VOX armed, on the Core's clock (the session
+        // registry's, so the conformance player's virtual time moves it)
+        // and one child timer. Its stop turns off the VOX that device armed
+        // first, so VOX cannot key again after it, then stops transmitting
+        // when the key on the air is that device's.
+        m_txWatchdog = std::make_unique<RemoteTxWatchdog>();
+        m_txWatchdogTimer = new QTimer(this);
+        m_txWatchdogTimer->setSingleShot(true);
+        m_txWatchdogTimer->setTimerType(Qt::PreciseTimer);
+        connect(m_txWatchdogTimer, &QTimer::timeout, this, [this]() {
+            if (m_txWatchdog) {
+                m_txWatchdog->onTimer();
+            }
+        });
+        {
+            RemoteTxWatchdog::Hooks hooks;
+            hooks.clock = [this]() { return m_deviceSessions->now(); };
+            hooks.startTimer = [this](int ms) { m_txWatchdogTimer->start(ms); };
+            hooks.stopTimer = [this]() { m_txWatchdogTimer->stop(); };
+            hooks.stop = [this](const QByteArray& deviceId, const QString& message) {
+                disarmVoxArmedBy(deviceId, "its link went quiet");
+                if (m_radioModel && m_radioModel->keyedBy().deviceId == deviceId) {
+                    m_radioModel->stopAllTx(message);
+                }
+            };
+            hooks.deviceName = [this](const QByteArray& id) { return deviceNameForStop(id); };
+            m_txWatchdog->setHooks(std::move(hooks));
+        }
+        connect(m_radioModel, &RadioModel::keyedByChanged, this,
+                &StationServer::followKeyedForWatchdog);
+
+        // Task 37 (remote design section 12.3): a keyed device's microphone
+        // line starving on a live link, per transmit mode.
+        {
+            StarvationPolicy::Hooks hooks;
+            hooks.transmitMode = [this]() -> std::optional<DSPMode> {
+                const SliceModel* slice = m_radioModel ? m_radioModel->txBoundSlice() : nullptr;
+                if (slice == nullptr) {
+                    return std::nullopt;
+                }
+                return slice->dspMode();
+            };
+            hooks.microphoneUnused = [this]() {
+                if (!m_radioModel) {
+                    return false;
+                }
+                const TwoToneController* twoTone = m_radioModel->twoToneController();
+                return m_radioModel->isTune()
+                    || (twoTone != nullptr
+                        && (twoTone->isActive() || twoTone->isActivationInFlight()));
+            };
+            hooks.stopAllTx = [this](const QString& message) {
+                if (m_radioModel) {
+                    m_radioModel->stopAllTx(message);
+                }
+            };
+            hooks.deviceName = [this](const QByteArray& id) { return deviceNameForStop(id); };
+            m_starvation.setHooks(std::move(hooks));
+        }
+
+        // Task 37 (carried from the desktop's transmit): the device whose
+        // write turned VOX on is watched while VOX stays on, and VOX goes
+        // off with its session, its link or its microphone line. VOX off
+        // by anyone ends it.
+        connect(&m_radioModel->transmitModel(), &TransmitModel::voxEnabledChanged, this,
+                [this](bool on) {
+                    if (on || m_voxArmedBy.isEmpty()) {
+                        return;
+                    }
+                    const QByteArray was = std::exchange(m_voxArmedBy, QByteArray());
+                    if (m_txWatchdog) {
+                        m_txWatchdog->setVoxArmed(was, false);
+                    }
+                });
+        connect(m_radioModel, &RadioModel::remoteMicDeviceChanged, this,
+                [this](const QByteArray& deviceId) {
+                    if (!m_voxArmedBy.isEmpty() && deviceId != m_voxArmedBy) {
+                        // The arming device's microphone line closed (or
+                        // another device's opened): VOX would otherwise
+                        // listen to the Core's own microphone.
+                        disarmVoxArmedBy(m_voxArmedBy, "its microphone line closed");
+                    }
+                });
     }
     // Revoking a device frees its place at once, live or away, and forgets
     // that its time ran out (ruling 4.11). Its live connection ends in the
@@ -1451,6 +1555,13 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             }
             // Task 36: a key waiting for its microphone buffer answers later.
             m_remoteKeying->handle(command, std::move(reply));
+        };
+        // Task 37: tx.keepalive on the session's own link.
+        access.keepalive = [this](const QByteArray& requester, quint64 sequence, quint32 epoch) {
+            if (m_txWatchdog) {
+                m_txWatchdog->keepalive(requester, sequence, epoch,
+                                        RemoteTxWatchdog::Path::Session);
+            }
         };
         m_dispatcher->setTransmitAccess(std::move(access));
     }
@@ -2107,6 +2218,20 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
         view->close();
         view->deleteLater();
     }
+    // iPhone app plan Task 37 (R-IOS-13; remote design section 12.1, spec
+    // section 4.6 item 1): the session of a device that is keyed, or has
+    // VOX armed, ended (a drop, leaving, a replacement or a revocation).
+    // The VOX it armed goes off first, then its key stops at once (the
+    // emergency stop, not the normal unkey), before the holder's own
+    // rules below run.
+    if (!sessionDevice.isEmpty() && m_txWatchdog) {
+        disarmVoxArmedBy(sessionDevice, "its connection ended");
+        if (m_txWatchdog->isWatching(sessionDevice)) {
+            m_txWatchdog->linkClosed(sessionDevice);
+        } else if (m_radioModel && m_radioModel->keyedBy().deviceId == sessionDevice) {
+            m_radioModel->stopAllTx(RemoteTxWatchdog::stopMessage(deviceNameForStop(sessionDevice)));
+        }
+    }
     if (!owner.isEmpty()) {
         m_dispatcher->endSessionOwner(owner);
         // Task 35: its keying commands (and their copies) are forgotten, so
@@ -2472,10 +2597,10 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
         }
         // iPhone app plan Task 34: tx.setTxSlice came with remoteTxVersion
         // 1, for a peer at minor 11 whose hello declared remoteTx; Task 35's
-        // keying verbs with it.
+        // keying verbs and Task 37's tx.keepalive with it.
         if ((message.commandVerb == "tx.setTxSlice" || message.commandVerb == "tx.key"
              || message.commandVerb == "tx.unkey" || message.commandVerb == "tx.tune"
-             || message.commandVerb == "tx.twoTone")
+             || message.commandVerb == "tx.twoTone" || message.commandVerb == "tx.keepalive")
             && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
                 || !peerDeclares(transport, QByteArrayLiteral("remoteTx"), 1))) {
             send(transport, SessionMessages::commandResult(
@@ -3758,6 +3883,18 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
             message.objectKey, update.name, update.value, m_peers.value(transport).view.data());
         if (!result.accepted) {
             refusals.insert(update.name, result.reason);
+        } else if (transmitObjectWrite && update.name == "voxEnabled" && !writer.isEmpty()
+                   && m_radioModel && m_radioModel->transmitModel().voxEnabled()) {
+            // iPhone app plan Task 37: this device armed VOX. It is watched
+            // while VOX stays on (it sends keepalives), and VOX goes off
+            // with its session, its link or its microphone line.
+            if (!m_voxArmedBy.isEmpty() && m_voxArmedBy != writer && m_txWatchdog) {
+                m_txWatchdog->setVoxArmed(m_voxArmedBy, false);
+            }
+            m_voxArmedBy = writer;
+            if (m_txWatchdog) {
+                m_txWatchdog->setVoxArmed(writer, true);
+            }
         }
     }
 
@@ -4259,6 +4396,84 @@ void StationServer::publishTxPermitted()
         it->txRefusalSent = refusal;
         send(it.key(), SessionMessages::capabilities(caps.toUpdates()));
     }
+}
+
+// ── iPhone app plan Task 37: the watchdog, starvation and VOX ─────────────
+
+void StationServer::followKeyedForWatchdog()
+{
+    if (!m_txWatchdog || !m_radioModel) {
+        return;
+    }
+    // The key on the air now: a remote device's (its own, its program's,
+    // TUNE, two-tone, or a VOX key that is its) is watched; the Core's own
+    // keys are not.
+    const RadioModel::KeyedBy keyedBy = m_radioModel->keyedBy();
+    const bool remoteKey = !keyedBy.isEmpty()
+        && keyedBy.deviceId != QByteArray(KeyerIdentity::kStationDeviceId);
+    if (!m_watchedKeyedDevice.isEmpty() && (!remoteKey || keyedBy.deviceId != m_watchedKeyedDevice)) {
+        // Ended (the device's release clears keyedBy at once, before MOX
+        // reads off), or another device's key now.
+        const QByteArray was = std::exchange(m_watchedKeyedDevice, QByteArray());
+        m_txWatchdog->setKeyed(was, false);
+    }
+    if (remoteKey) {
+        m_watchedKeyedDevice = keyedBy.deviceId;
+        // A VOX key was never answered to the device, so it has no epoch
+        // of it: any epoch counts.
+        m_txWatchdog->setKeyed(keyedBy.deviceId, true,
+                               keyedBy.trigger == QByteArrayLiteral("vox") ? 0 : keyedBy.epoch);
+    }
+}
+
+void StationServer::disarmVoxArmedBy(const QByteArray& deviceId, const char* why)
+{
+    if (deviceId.isEmpty() || m_voxArmedBy != deviceId) {
+        return;
+    }
+    m_voxArmedBy.clear();
+    if (m_txWatchdog) {
+        m_txWatchdog->setVoxArmed(deviceId, false);
+    }
+    if (m_radioModel && m_radioModel->transmitModel().voxEnabled()) {
+        qCInfo(lcStation) << "VOX armed by" << deviceId << "turned off:" << why;
+        m_radioModel->transmitModel().setVoxEnabled(false);
+    }
+}
+
+QString StationServer::deviceNameForStop(const QByteArray& deviceId) const
+{
+    if (m_connectedDevices) {
+        if (const auto words = m_connectedDevices->describe(deviceId)) {
+            if (!words->name.isEmpty()) {
+                return words->name;
+            }
+        }
+    }
+    return QStringLiteral("a device");
+}
+
+void StationServer::txChannelMessage(const QByteArray& message)
+{
+    quint64 sequence = 0;
+    quint32 epoch = 0;
+    if (!m_txWatchdog || !RemoteTxWatchdog::readChannelKeepalive(message, &sequence, &epoch)) {
+        return;
+    }
+    const QByteArray deviceId = mediaSessionDeviceId();
+    if (deviceId.isEmpty()) {
+        return;
+    }
+    m_txWatchdog->keepalive(deviceId, sequence, epoch, RemoteTxWatchdog::Path::TxChannel);
+}
+
+void StationServer::remoteMicStarved(const QByteArray& deviceId, bool starved)
+{
+    if (!m_radioModel || m_radioModel->keyedBy().deviceId != deviceId) {
+        // Only a key that is this device's is its line's to stop.
+        return;
+    }
+    m_starvation.onStarved(deviceId, starved);
 }
 
 void StationServer::onTransmitHolderChanged()

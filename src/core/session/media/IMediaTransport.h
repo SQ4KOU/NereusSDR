@@ -9,6 +9,12 @@
 // and model ownership remain above this interface. Implementations carry
 // already-encoded display messages and raw RTP packets only.
 //
+// Modification history (NereusSDR):
+//   2026-09-25: iPhone app plan Task 37 (R-IOS-13): the "tx" data channel
+//               (StartOptions::txChannel, sendTx, txReceived) for the
+//               transmit keepalive. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
+//
 // =================================================================
 
 #include <QByteArray>
@@ -96,7 +102,18 @@ public:
         // SSRC, a receiver SSRC or the headphones SSRC here is a
         // precondition refusal.
         quint32 micAudioSsrc = 0;
+        // iPhone app plan Task 37 (R-IOS-13): the transmit keepalive's
+        // data channel, labelled "tx", unordered and never retransmitted
+        // (maxRetransmits 0), so a lost keepalive is overtaken by the next
+        // instead of holding anything behind it. False (the default) keeps
+        // today's channels: an offerer creates it only when asked, and an
+        // answerer takes one only when it was started with it (an answerer
+        // from before refuses an unknown channel).
+        bool txChannel = false;
     };
+
+    /// Task 37: the largest message the "tx" channel carries.
+    static constexpr qsizetype kMaxTxMessageBytes = 256;
 
     /// R-R3-43: the most receiver audio streams one media connection
     /// declares beside the main stream.
@@ -207,6 +224,16 @@ public:
         return false;
     }
 
+    /// Task 37: one message on the "tx" data channel (either role). False
+    /// without that channel, before it is open, and for an empty or
+    /// oversized message. Never queued behind anything: it goes now or not
+    /// at all.
+    virtual bool sendTx(const QByteArray& message)
+    {
+        Q_UNUSED(message);
+        return false;
+    }
+
     virtual bool isReady() const = 0;
 
     /// R-R3-23: true once both this side's description and the remote
@@ -236,6 +263,8 @@ signals:
     /// Task 36: an RTP packet that arrived on the microphone line. Never
     /// also reported by rtpReceived().
     void micRtpReceived(const QByteArray& packet);
+    /// Task 37: a message that arrived on the "tx" data channel.
+    void txReceived(const QByteArray& message);
     void ready();
     void closed();
     /// The underlying peer connection entered a terminal transport-failure
