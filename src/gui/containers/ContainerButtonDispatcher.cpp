@@ -22,6 +22,10 @@
 //                                    RadioModel::setMoxFromButton (a manual
 //                                    key). AI-assisted via Anthropic Claude
 //                                    Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 7): PS-A follows
+//                                    the PureSignal arming gate in a remote
+//                                    window (the Core arms off the air).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "gui/containers/ContainerButtonDispatcher.h"
@@ -171,9 +175,15 @@ ContainerButtonDispatcher::stateOf(Id id, int rxSource) const
     case Id::PsA: {
         PureSignalSessionFacade* ps = m_model->pureSignalFacade();
         st.on = ps && ps->settings() && ps->settings()->autoCalEnabled();
-        if (transmitBlockedRemotely()) {
-            unavailable(remoteReason);
-        } else if (!ps || !ps->available() || !ps->canActuate()) {
+        // R-R3-49 (parity Task 7): arming keys nothing. A remote window
+        // arms on a Core that takes it (off the air), else says why.
+        const bool armingBlockedRemotely = !m_model->ownsLocalDsp()
+            && !(m_hooks.pureSignalArmingPermitted && m_hooks.pureSignalArmingPermitted());
+        if (armingBlockedRemotely) {
+            const QString reason = m_hooks.pureSignalArmingReason
+                ? m_hooks.pureSignalArmingReason() : QString();
+            unavailable(reason.isEmpty() ? remoteReason : reason);
+        } else if (!ps || !ps->available() || !ps->canArm()) {
             unavailable(QStringLiteral("PureSignal needs a connected radio that supports it."));
         }
         break;

@@ -325,6 +325,43 @@
 //   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06:
 //                                    displayExtrasVersion 2 (clarity-retune).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 7):
+//                                    transmitSettingsVersion 7: a peer
+//                                    offered it arms PureSignal off the air
+//                                    (ps3.single, ps3.automatic,
+//                                    ps3.applyCurrent, ps3.restoreCorrection)
+//                                    and changes pureSignalSettings live,
+//                                    refused while the radio is on the air.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 8):
+//                                    remoteTgxlControlVersion 4: the Tuner
+//                                    Genius's relay nudge, the Core's LAN
+//                                    scan and the saved address
+//                                    (moveTgxlRelay, scanTgxlLan,
+//                                    setTgxlAddress).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 9):
+//                                    remotePgxlControlVersion 4: the Power
+//                                    Genius's OPERATE and STANDBY, the
+//                                    Core's LAN scan and the saved address
+//                                    (setPgxlOperate, scanPgxlLan,
+//                                    setPgxlAddress).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 10):
+//                                    remoteRfKitControlVersion 4: the
+//                                    RF-Kit's OPERATE and STANDBY, antenna,
+//                                    TCI mode and saved address
+//                                    (setRfKitOperate, setRfKitAntenna,
+//                                    setRfKitTciMode, setRfKitAddress);
+//                                    accessoryDataVersion 2 (the rfkit*
+//                                    connection counts).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 / R-R3-46 (parity Task 12):
+//                                    radioHardwareVersion 6, the TX
+//                                    antennas and relays on `alexAntennas`
+//                                    two-way, with no on-air rule, as in
+//                                    Thetis.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -695,6 +732,28 @@ bool isTgxlDeviceSettingsVerb(const QByteArray& verb)
 bool isTgxlControlVerb(const QByteArray& verb)
 {
     return verb == "setTgxlAntenna" || verb == "setTgxlOperate" || verb == "setTgxlBypass";
+}
+
+// R-R3-49 (parity Task 9): the Power Genius's OPERATE and STANDBY, the
+// Core's LAN scan and the saved address (remotePgxlControlVersion 4).
+bool isPgxlFullControlVerb(const QByteArray& verb)
+{
+    return verb == "setPgxlOperate" || verb == "scanPgxlLan" || verb == "setPgxlAddress";
+}
+
+// R-R3-49 (parity Task 10): the RF-Kit's OPERATE and STANDBY, antenna, TCI
+// mode and saved address (remoteRfKitControlVersion 4).
+bool isRfKitFullControlVerb(const QByteArray& verb)
+{
+    return verb == "setRfKitOperate" || verb == "setRfKitAntenna" || verb == "setRfKitTciMode"
+        || verb == "setRfKitAddress";
+}
+
+// R-R3-49 (parity Task 8): the relay nudge, the Core's LAN scan and the
+// saved address (remoteTgxlControlVersion 4).
+bool isTgxlFullControlVerb(const QByteArray& verb)
+{
+    return verb == "moveTgxlRelay" || verb == "scanTgxlLan" || verb == "setTgxlAddress";
 }
 
 // R-R3-47: why a raw write of the RF-Kit switch is refused. A current app
@@ -2451,6 +2510,20 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                     : QStringLiteral("The Core has no filter settings ready."), {}));
             break;
         }
+        // R-R3-49 (parity Task 10): the RF-Kit's OPERATE and STANDBY,
+        // antenna, TCI mode and saved address came with
+        // remoteRfKitControlVersion 4.
+        if (isRfKitFullControlVerb(message.commandVerb)
+            && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                || rfKitControlVersion() < 4)) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                    ? QStringLiteral("Update this app to switch the RF-Kit amplifier on this "
+                                     "Core.")
+                    : QStringLiteral("This Core cannot change its amplifier and tuner settings."), {}));
+            break;
+        }
         // I4 (R-R3-47): Reset amp error came with remoteRfKitControlVersion 3.
         if (message.commandVerb == "resetRfKitError"
             && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
@@ -2502,6 +2575,18 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                     : QStringLiteral("This Core cannot change its amplifier and tuner settings."), {}));
             break;
         }
+        // R-R3-49 (parity Task 9): the Power Genius's OPERATE and STANDBY,
+        // LAN scan and saved address came with remotePgxlControlVersion 4.
+        if (isPgxlFullControlVerb(message.commandVerb)
+            && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                || pgxlControlVersion() < 4)) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                    ? QStringLiteral("Update this app to switch the Power Genius on this Core.")
+                    : QStringLiteral("This Core cannot change its amplifier and tuner settings."), {}));
+            break;
+        }
         if (isTgxlDeviceSettingsVerb(message.commandVerb)
             && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
                 || tgxlControlVersion() < 1)) {
@@ -2515,9 +2600,12 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
         }
         // R-R3-49 / R-R3-47: the tuner's antenna, operate and bypass came
         // with remoteTgxlControlVersion 2, in the same minor-11 block.
-        if (isTgxlControlVerb(message.commandVerb)
+        // R-R3-49 (parity Task 8): the relay nudge, LAN scan and saved
+        // address came with remoteTgxlControlVersion 4, with the same
+        // reasons.
+        if ((isTgxlControlVerb(message.commandVerb) || isTgxlFullControlVerb(message.commandVerb))
             && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
-                || tgxlControlVersion() < 2)) {
+                || tgxlControlVersion() < (isTgxlControlVerb(message.commandVerb) ? 2 : 4))) {
             send(transport, SessionMessages::commandResult(
                 message.commandVerb, message.commandId, false,
                 it->agreedMinor < kRadioIdentitySessionProtocolMinor
@@ -2627,6 +2715,9 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
             // iPhone app Task 72 (ruling 5.8): the command acts for this
             // session, so a DSP-asset job it starts is this device's.
             m_dispatcher->setSessionOwner(sessionOwner(m_peers.value(transport).sessionId));
+            // R-R3-49 (parity Task 7): whether this peer may arm PureSignal
+            // off the air, set per dispatch like the owner (checkpoint join).
+            m_dispatcher->setPureSignalArmingOffered(pureSignalArmingOffered(transport));
             // iPhone app Task 73 (rulings 5.9, 5.10): and for this device,
             // whose slices it may name and whose active slice it sets.
             m_dispatcher->setRequester(m_peers.value(transport).sessionDeviceId);
@@ -2640,6 +2731,7 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
             }
             sendHeldQuestions();
             m_dispatcher->setRequester({});
+            m_dispatcher->setPureSignalArmingOffered(false);
             m_dispatcher->setSessionOwner({});
             m_dispatchingTransport = nullptr;
             // iPhone app Task 71: a result still owed (it arrives on a later
@@ -3745,7 +3837,18 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
 {
     // Persist accepted PS preferences without replaying transmit operations.
     // This session advertises txPermitted=false until the R4 transmit path.
-    const QPointer<PureSignal> hydrating = message.objectKey == "pureSignalSettings"
+    // R-R3-49 (parity Task 7): a peer offered transmitSettingsVersion 7
+    // changes them as a local window does, applied to the Core's PureSignal
+    // at once (arming keys nothing), and only while the radio is off the
+    // air; the on-air check is read once for the batch.
+    const bool pureSignalSettingsWrite = message.objectKey == "pureSignalSettings";
+    const bool pureSignalSettingsLive = pureSignalSettingsWrite
+        && pureSignalArmingOffered(transport);
+    QString pureSignalOnAir;
+    if (pureSignalSettingsLive) {
+        m_radioModel->stationOnAirRefusal(&pureSignalOnAir);
+    }
+    const QPointer<PureSignal> hydrating = pureSignalSettingsWrite && !pureSignalSettingsLive
         && m_radioModel ? m_radioModel->pureSignal() : nullptr;
     if (hydrating) {
         hydrating->beginSettingsHydration();
@@ -3891,6 +3994,10 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
             || update.name.startsWith("nnr")
             || (update.name == "activeNr" && update.value.toInt() == static_cast<int>(NrSlot::NNR)))) {
             refusals.insert(update.name, QStringLiteral("Update this app to change these settings on this Core."));
+            continue;
+        }
+        if (pureSignalSettingsLive && !pureSignalOnAir.isEmpty()) {
+            refusals.insert(update.name, pureSignalOnAir);
             continue;
         }
         if (!outboundClass.isEmpty()
@@ -5294,7 +5401,9 @@ int StationServer::pgxlControlVersion() const
 {
     // 3: the amp's own settings (`accessorySettings` and its verbs), sent
     // by the Core's station controller (R-R3-47 / R-R3-22).
-    return accessoryStatusVersion() >= 1 ? 3 : 0;
+    // 4: setPgxlOperate, scanPgxlLan and setPgxlAddress, R-R3-49 (parity
+    // Task 9).
+    return accessoryStatusVersion() >= 1 ? 4 : 0;
 }
 
 // R-R3-49 (parity Task 1): the one list of transmit settings keys a
@@ -5378,7 +5487,18 @@ int StationServer::transmitSettingsVersion() const
     // hardware/<mac>/pa/... and hardware/<mac>/paCalibration/... keys taken
     // off the air and applied to the Core's PA profiles and calibration at
     // once (parity Task 6).
-    return m_radioModel.isNull() ? 0 : 6;
+    // 7: PureSignal arming: ps3.single, ps3.automatic, ps3.applyCurrent and
+    // ps3.restoreCorrection taken while the radio is off the air, and a
+    // pureSignalSettings write applied to the Core's PureSignal at once
+    // instead of only kept, refused while the radio is on the air;
+    // ps3.twoTone stays with remote transmit (parity Task 7).
+    return m_radioModel.isNull() ? 0 : 7;
+}
+
+bool StationServer::pureSignalArmingOffered(SessionTransport* transport) const
+{
+    // R-R3-49 (parity Task 7): offered transmitSettingsVersion 7.
+    return transmitSettingsOffered(transport) && transmitSettingsVersion() >= 7;
 }
 
 int StationServer::tgxlControlVersion() const
@@ -5387,14 +5507,18 @@ int StationServer::tgxlControlVersion() const
     // setTgxlOperate, setTgxlBypass), R-R3-49 / R-R3-47.
     // 3: setTgxlOperate on puts the tuner in OPERATE whole (bypass off and
     // operate on, one command), R-R3-49 fix wave.
-    return accessoryStatusVersion() >= 1 ? 3 : 0;
+    // 4: moveTgxlRelay, scanTgxlLan and setTgxlAddress, R-R3-49 (parity
+    // Task 8).
+    return accessoryStatusVersion() >= 1 ? 4 : 0;
 }
 
 int StationServer::rfKitControlVersion() const
 {
     // 3: Reset amp error (resetRfKitError), and the Core applies a window's
     // RF-Kit auto-reconnect and poll interval at once (R-R3-47 fix wave).
-    return accessoryStatusVersion() >= 1 ? 3 : 0;
+    // 4: setRfKitOperate, setRfKitAntenna, setRfKitTciMode and
+    // setRfKitAddress, R-R3-49 (parity Task 10).
+    return accessoryStatusVersion() >= 1 ? 4 : 0;
 }
 
 int StationServer::stationTciVersion() const
@@ -5406,7 +5530,10 @@ int StationServer::accessoryDataVersion() const
 {
     return accessoryStatusVersion() >= 1 && !m_radioModel.isNull()
             && m_radioModel->stationAccessoryData() != nullptr
-        ? 1 : 0;
+        // 2: the RF-Kit's connection counts (rfkit*), R-R3-49 (parity
+        // Task 10). 3: its average response time (rfkitRttAvgMs), group B
+        // fix wave (M7).
+        ? 3 : 0;
 }
 
 int StationServer::radioHardwareVersion() const
@@ -5420,8 +5547,28 @@ int StationServer::radioHardwareVersion() const
     // 3: the `ioBoard` object and the per-band antenna verb
     // (setAlexRxAntenna), R-R3-46 fix wave. 4: the filter policy verb
     // (setAlexBpfMode), R-R3-46 / R-R3-21, applied through the same
-    // `alexAntennas` facade.
-    return m_radioModel->ioBoardFacade()->isBound() ? 4 : 2;
+    // `alexAntennas` facade. 5: `rxOutOnTx` (RX bypass on TX) two-way,
+    // group B fix wave. 6: the rest of the transmit half two-way (the TX
+    // antenna for each band, Block TX on Ant 2 and 3, Ext 1 and Ext 2 on TX
+    // and the RX bypass relay override), parity Task 12, and the per-band
+    // TX antenna verb (setAlexTxAntenna), parity mini-round.
+    //
+    // None of them waits for the radio to leave the air, on this Core or in
+    // a local window, because Thetis has no such rule: each Setup handler
+    // applies at once, the antenna and Block-TX ones through
+    // console.AlexAntCtrlEnabled -> UpdateAlexAntSelection(RX1Band, _mox, ...)
+    // with tx = _mox, the relay ones by setting Alex's statics.
+    // From Thetis setup.cs:13780-13835 [v2.10.3.15] ProcessAlexAntRadioButton
+    //   Alex.getAlex().setTxAnt(band, (byte)ant); ... console.AlexAntCtrlEnabled = true;
+    // From Thetis setup.cs:18786-18833 [v2.10.3.15] chkBlockTxAnt2/3_CheckedChanged
+    //   console.AlexANT2RXOnly = chkBlockTxAnt2.Checked; // G8NJJ_21h
+    // From Thetis setup.cs:16520-16544 [v2.10.3.15] chkEXT1OutOnTx / chkEXT2OutOnTx
+    //   Alex.Ext1OutOnTx = chkEXT1OutOnTx.Checked;
+    // From Thetis setup.cs:17609-17614 [v2.10.3.15] chkDisableRXOut_CheckedChanged
+    //   console.RxOutOverride = chkDisableRXOut.Checked;
+    // RadioModel sends the TX routing for an antenna change while keyed and
+    // holds the relay flags for the next MOX edge (group B fix wave).
+    return m_radioModel->ioBoardFacade()->isBound() ? 6 : 2;
 }
 
 StationCapabilities StationServer::buildCapabilities() const
@@ -5470,7 +5617,8 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             // 2 once its Alex antennas are behind `alexAntennas` too, with
             // the hardware apply step and the I/O board probe; 3 with the
             // read-only `ioBoard` object and the per-band antenna verb; 4
-            // with the filter policy verb.
+            // with the filter policy verb; 5 with RX bypass on TX two-way;
+            // 6 with the rest of the transmit antennas and relays two-way.
             caps.radioHardwareVersion = radioHardwareVersion();
             // R-R3-47 / R-R3-22: 1 on a Core that owns its accessories: the
             // read-only `amplifier` and `rfkit` objects. The Power Genius is 2

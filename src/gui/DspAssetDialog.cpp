@@ -606,9 +606,15 @@ void DspAssetDialog::updateButtons()
         m_applyButton->setEnabled(available && m_radio);
     }
     if (m_restoreButton) {
-        const bool canRestore = m_radio && m_radio->pureSignalFacade()->canActuate();
+        // R-R3-49 (parity Task 7): restoring a correction arms PureSignal
+        // and keys nothing, so it follows canArm: a Core at
+        // transmitSettingsVersion 7 takes it from a remote window while its
+        // radio is off the air, and says why when it does not.
+        const bool canRestore = m_radio && m_radio->pureSignalFacade()->canArm();
+        const QString refusal = m_radio ? m_radio->pureSignalFacade()->armingRefusal() : QString();
         m_restoreButton->setEnabled(available && hasSelection && canRestore);
         m_restoreButton->setToolTip(canRestore ? QString()
+            : !refusal.isEmpty() ? refusal
             : tr("Restore applies a correction and requires permission to transmit. "
                  "It is not yet available from a remote window; import and export work."));
     }
@@ -1024,7 +1030,7 @@ void DspAssetDialog::applyNnrModels()
 void DspAssetDialog::restoreSelectedCorrection()
 {
     if (m_kind != DspAssetKind::Ps3Correction || m_operation != Operation::Idle
-        || m_requestId != 0 || !m_radio || !m_radio->pureSignalFacade()->canActuate()) {
+        || m_requestId != 0 || !m_radio || !m_radio->pureSignalFacade()->canArm()) {
         return;
     }
     const QString id = selectedAssetId();

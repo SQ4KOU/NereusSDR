@@ -124,6 +124,12 @@
 //                                    combos follow the transmit settings
 //                                    gate. AI-assisted via Anthropic Claude
 //                                    Code.
+//   2026-09-25 -- R-R3-49, R-R3-21, R-R3-44 (parity Task 11): the RX
+//                 applet's XIT row writes without remote transmit, the
+//                 container Antenna box's TX buttons write the Core's
+//                 transmit slice with no toast, and the VAX first-run check
+//                 runs in a remote window as in a local one. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -2628,12 +2634,35 @@ private slots:
             "Remote transmit controls are not available from this Core yet.");
         auto* antennas = hardware->findChild<AntennaAlexAntennaControlTab*>();
         QVERIFY(antennas != nullptr);
+        // Parity Task 12: Antenna Control's transmit half follows whether
+        // the Core takes it (radioHardwareVersion 6, RX bypass on TX 5),
+        // not the transmit permission; until told, "connect to the Core".
+        const QString connectReason = QStringLiteral(
+            "Connect to the Core to change the radio's hardware settings.");
         QVERIFY(!antennas->txGridForTest()->isEnabled());
-        QCOMPARE(antennas->txGridForTest()->toolTip(), transmitReason);
+        QCOMPARE(antennas->txGridForTest()->toolTip(), connectReason);
         QVERIFY(!antennas->blockTxAnt2ForTest()->isEnabled());
         QVERIFY(!antennas->rxOutOnTxForTest()->isEnabled());
         QVERIFY(antennas->useTxAntForRxForTest()->isEnabled());
         QVERIFY(antennas->rxButtonForTest(Band::Band40m, 2)->isEnabled());
+        const QString olderTx = QStringLiteral(
+            "This Core cannot change its radio's transmit antennas for this app. "
+            "Updating the Core may help.");
+        QVERIFY(OperatorWording::isPlain(olderTx));
+        alex->setTransmitEditAvailability(false, olderTx, true, {});
+        QVERIFY(!antennas->txGridForTest()->isEnabled());
+        QCOMPARE(antennas->txGridForTest()->toolTip(), olderTx);
+        QVERIFY(!antennas->ext1OutOnTxForTest()->isEnabled());
+        QCOMPARE(antennas->rxOutOverrideForTest()->toolTip(), olderTx);
+        QVERIFY(antennas->rxOutOnTxForTest()->isEnabled());
+        alex->setTransmitEditAvailability(true, {}, true, {});
+        QVERIFY(antennas->txGridForTest()->isEnabled());
+        QVERIFY(antennas->blockTxAnt2ForTest()->isEnabled());
+        QVERIFY(antennas->ext2OutOnTxForTest()->isEnabled());
+        QVERIFY(antennas->txGridForTest()->toolTip().isEmpty());
+        // The transmit permission does not take them away.
+        dialog.setTransmitPermitted(false, transmitReason);
+        QVERIFY(antennas->txGridForTest()->isEnabled());
         const auto group = [hardware](const QString& title) -> QGroupBox* {
             for (QGroupBox* box : hardware->findChildren<QGroupBox*>()) {
                 if (box->title() == title) { return box; }
@@ -2687,7 +2716,6 @@ private slots:
         for (const QString& text : transmitChecks) {
             QVERIFY2(check(text)->isEnabled(), qPrintable(text));
         }
-        QVERIFY(antennas->txGridForTest()->isEnabled());
         QVERIFY(group(QStringLiteral("User Dig Out"))->isEnabled());
         QVERIFY(group(QStringLiteral("TX Display Cal"))->toolTip().isEmpty());
 
@@ -3282,44 +3310,36 @@ private slots:
         QCOMPARE(att->toolTip(), older);
     }
 
-    // The RX applet's XIT row offsets the transmit frequency, so it takes
-    // the transmit permission the VFO flag's XIT takes. A remote model
-    // starts denied; clicking writes nothing; permission restores it.
-    void remoteRxAppletXitFollowsTheTransmitPermission()
+    // R-R3-49, R-R3-21 (parity Task 11): the RX applet's XIT row is a slice
+    // setting, as the VFO flag's is. A remote model with no transmit
+    // permission writes it, and so does a local one.
+    void remoteRxAppletXitWritesWithoutTransmitPermission()
     {
-        RadioModel remote(RadioModel::Role::Remote);
-        SliceModel slice(0);
-        RxApplet applet(&slice, &remote);
-        QPushButton* xit = nullptr;
-        for (QPushButton* b : applet.findChildren<QPushButton*>()) {
-            if (b->text() == QStringLiteral("XIT")) { xit = b; }
-        }
-        QVERIFY(xit != nullptr);
-        QVERIFY(!xit->isEnabled());
-        QVERIFY(xit->toolTip().contains(QStringLiteral("transmit")));
-
-        QSignalSpy xitChanged(&slice, &SliceModel::xitEnabledChanged);
-        xit->click();
-        QCOMPARE(xitChanged.count(), 0);
-        QVERIFY(!slice.xitEnabled());
-
-        const QString reason = QStringLiteral("Remote transmit is unavailable");
-        applet.setTransmitPermitted(false, reason);
-        QCOMPARE(xit->toolTip(), reason);
-        applet.setTransmitPermitted(true);
-        QVERIFY(xit->isEnabled());
-        QVERIFY(xit->toolTip() != reason);
-
-        RadioModel local;
-        SliceModel localSlice(0);
-        RxApplet localApplet(&localSlice, &local);
-        for (QPushButton* b : localApplet.findChildren<QPushButton*>()) {
-            if (b->text() == QStringLiteral("XIT")) {
-                QVERIFY(b->isEnabled());
-                b->click();
+        for (const bool remoteRole : {true, false}) {
+            RadioModel model(remoteRole ? RadioModel::Role::Remote : RadioModel::Role::Local);
+            SliceModel slice(0);
+            RxApplet applet(nullptr, &model);
+            applet.setSlice(&slice);  // as MainWindow wires it
+            QPushButton* xit = nullptr;
+            QList<QPushButton*> zeros;  // RIT's and XIT's
+            for (QPushButton* b : applet.findChildren<QPushButton*>()) {
+                if (b->text() == QStringLiteral("XIT")) { xit = b; }
+                if (b->text() == QStringLiteral("0")) { zeros.append(b); }
             }
+            QVERIFY(xit != nullptr);
+            QVERIFY(xit->isEnabled());
+            QVERIFY(!xit->toolTip().contains(QStringLiteral("permission")));
+            QVERIFY(!zeros.isEmpty());
+            for (QPushButton* zero : zeros) { QVERIFY(zero->isEnabled()); }
+
+            xit->click();
+            QVERIFY(slice.xitEnabled());
+            slice.setXitHz(300);
+            for (QPushButton* zero : zeros) { zero->click(); }
+            QCOMPARE(slice.xitHz(), 0);
+            slice.setXitEnabled(false);
+            QVERIFY(!xit->isChecked());
         }
-        QVERIFY(localSlice.xitEnabled());
     }
 
     // R-R3-44: VAX works in a remote window. The VAX channels are this
@@ -3747,8 +3767,10 @@ private slots:
     // ====================================================================
     // R-R3-21 fix wave: the RF-Kit RF2K-S applet. A Core with RF-Kit
     // enabled shows it in a remote window (rfKitEnabled is mirrored).
-    // OPERATE and the antenna buttons wait for remote transmit;
-    // Disconnect/Reconnect ask the Core, which owns the amp (R-R3-22).
+    // On a Core below remoteRfKitControlVersion 4, OPERATE and the antenna
+    // buttons stay greyed with the older reason; from version 4 they ask
+    // the Core (parity Task 10). Disconnect/Reconnect ask the Core, which
+    // owns the amp (R-R3-22).
     // ====================================================================
     void remoteRfKitAppletControlsAreUnavailable()
     {
@@ -3990,13 +4012,13 @@ private slots:
         };
 
         RadioModel remote(RadioModel::Role::Remote);
-        SliceModel slice(0);
         TxApplet tx(&remote);
-        RxApplet rx(&slice, &remote);
         PhoneCwApplet phone(&remote);
         VfoWidget flag;
         flag.setRadioModel(&remote);
-        for (QWidget* surface : std::initializer_list<QWidget*>{&tx, &rx, &phone, &flag}) {
+        // R-R3-49 (parity Task 11): the RX applet is not here. Its only
+        // transmit-gated controls were the XIT row, a slice setting now.
+        for (QWidget* surface : std::initializer_list<QWidget*>{&tx, &phone, &flag}) {
             const QStringList reasons = reasonsOn(surface);
             QVERIFY2(!reasons.isEmpty(), surface->metaObject()->className());
             for (const QString& reason : reasons) {
@@ -4136,8 +4158,8 @@ private slots:
                                     .arg(remoteReason)));
             QCOMPARE(reRoute->toolTip(), remoteReason);
 
-            // R-R3-21: the RX applet's XIT row gets the same reason through
-            // applyRemoteRoleGating once the handshake lands.
+            // R-R3-49, R-R3-21 (parity Task 11): the RX applet's XIT row is
+            // a slice setting and stays live without remote transmit.
             auto* const rxApplet = window->findChild<RxApplet*>();
             QVERIFY(rxApplet != nullptr);
             QPushButton* rxXit = nullptr;
@@ -4145,8 +4167,8 @@ private slots:
                 if (b->text() == QStringLiteral("XIT")) { rxXit = b; }
             }
             QVERIFY(rxXit != nullptr);
-            QVERIFY(!rxXit->isEnabled());
-            QCOMPARE(rxXit->toolTip(), remoteReason);
+            QVERIFY(rxXit->isEnabled());
+            QVERIFY(rxXit->toolTip() != remoteReason);
 
             // R-R3-49 (parity Task 1): the TX applet's RF Power follows the
             // transmit settings gate. The Core offers transmitSettingsVersion
@@ -4575,10 +4597,16 @@ private slots:
             // The transmit buttons say the transmit reason and change nothing.
             const QString reason =
                 QStringLiteral("Remote transmit controls are not available from this Core yet.");
-            for (Id id : {Id::Tun, Id::Mox, Id::TwoTon, Id::PsA}) {
+            for (Id id : {Id::Tun, Id::Mox, Id::TwoTon}) {
                 QVERIFY(!box.buttons->isButtonAvailable(id));
                 QCOMPARE(box.buttons->buttonUnavailableReason(box.buttons->indexOf(id)), reason);
             }
+            // R-R3-49 (parity Task 7): PS-A arms PureSignal and keys
+            // nothing, so the Core takes it off the air; this Core has no
+            // PureSignal running, and the button says so.
+            QVERIFY(!box.buttons->isButtonAvailable(Id::PsA));
+            QCOMPARE(box.buttons->buttonUnavailableReason(box.buttons->indexOf(Id::PsA)),
+                     QStringLiteral("PureSignal needs a connected radio that supports it."));
             emit box.container->otherButtonClicked(int(Id::Mox));
             QVERIFY(toastSaying(window, reason));
             QVERIFY(!station.moxController()->isMox());
@@ -4599,11 +4627,34 @@ private slots:
             const QString onAir = QStringLiteral("The radio is on the air. Try again when it stops.");
             QTRY_VERIFY(!box.buttons->isButtonAvailable(Id::Mon));
             QCOMPARE(box.buttons->buttonUnavailableReason(box.buttons->indexOf(Id::Mon)), onAir);
+            // R-R3-49 (parity Task 7): and PS-A waits too.
+            QTRY_COMPARE(box.buttons->buttonUnavailableReason(box.buttons->indexOf(Id::PsA)),
+                         onAir);
             emit box.container->otherButtonClicked(int(Id::Mon));
             QCOMPARE(station.transmitModel().monEnabled(), mon);
             station.moxController()->setMox(false);
             QTRY_VERIFY(station.moxController()->state() == MoxState::Rx);
             QTRY_VERIFY(box.buttons->isButtonAvailable(Id::Mon));
+
+            // R-R3-49, R-R3-21 (parity Task 11): the Antenna box's TX
+            // buttons (6 to 8) write the transmit slice's txAntenna on the
+            // Core as the VFO flag's TX antenna button does, with no toast.
+            SliceModel* const txTarget = model->txBoundSlice() ? model->txBoundSlice() : a;
+            SliceModel* const coreTx = station.sliceById(txTarget->sliceIndex());
+            QVERIFY(coreTx != nullptr);
+            const QString txAntBefore = coreTx->txAntenna();
+            const QString txAntWanted =
+                txAntBefore == QStringLiteral("ANT2") ? QStringLiteral("ANT3") : QStringLiteral("ANT2");
+            const int txButton = txAntWanted == QStringLiteral("ANT2") ? 7 : 8;
+            // The MOX click above left the transmit reason on screen.
+            qDeleteAll(window->findChildren<StatusToast*>());
+            QVERIFY(!toastSaying(window, reason));
+            emit box.container->antennaSelected(txButton);
+            QTRY_COMPARE(coreTx->txAntenna(), txAntWanted);
+            QTRY_COMPARE(txTarget->txAntenna(), txAntWanted);
+            QVERIFY(!toastSaying(window, reason));
+            emit box.container->antennaSelected(6);
+            QTRY_COMPARE(coreTx->txAntenna(), QStringLiteral("ANT1"));
 
             window->findChild<ContainerManager*>()->destroyContainer(box.container->id());
         }
@@ -4676,13 +4727,14 @@ private slots:
     }
 
     // ====================================================================
-    // R-R3-23: a remote window runs no VAX first-run check, as it already
-    // runs no Linux audio first-run. It opens no VAX outputs, so the dialog
-    // would offer to bind cables to nothing, and it would record
-    // audio/FirstRunComplete and the cable fingerprint for a later local
-    // session that never saw it. A local window still runs it.
+    // R-R3-44 (parity Task 11): the VAX first-run check for new virtual
+    // cables runs in a remote window as in a local one. The VAX outputs,
+    // audio/FirstRunComplete and the cable fingerprint are all this
+    // computer's, so a remote window records them where a later local
+    // window reads them. The dialog applies nothing until the operator
+    // picks, so no device opens here.
     // ====================================================================
-    void vaxFirstRunCheckRunsOnlyInALocalWindow()
+    void vaxFirstRunCheckRunsInRemoteAndLocalWindows()
     {
         RadioDiscovery::clearHoldOffForTest();
         {
@@ -4710,15 +4762,20 @@ private slots:
             MainWindow remote({QStringLiteral("ws://127.0.0.1:1"), {}, {}, true}, nullptr,
                               MainWindow::ConnectionStartup::Deferred);
             QVERIFY(!remote.radioModel()->ownsLocalDsp());
-            QCoreApplication::processEvents();
-            QVERIFY(remote.findChild<VaxFirstRunDialog*>() == nullptr);
-            QVERIFY(!AppSettings::instance().contains(QStringLiteral("audio/FirstRunComplete")));
             QVERIFY(!AppSettings::instance().contains(QStringLiteral("audio/LastDetectedCables")));
+            QCoreApplication::processEvents();
+            // It records this computer's cable fingerprint (never through
+            // the Core's settings) and, first-run not done, asks.
+            QVERIFY(AppSettings::instance().contains(QStringLiteral("audio/LastDetectedCables")));
+            QVERIFY(!proxy.handlesKey(QStringLiteral("audio/LastDetectedCables")));
+            QVERIFY(!proxy.handlesKey(QStringLiteral("audio/FirstRunComplete")));
+            QVERIFY(remote.findChild<VaxFirstRunDialog*>() != nullptr);
+            // Nothing is marked complete until the operator answers.
+            QVERIFY(!AppSettings::instance().contains(QStringLiteral("audio/FirstRunComplete")));
         }
 
-        // Non-vacuity: the same settings, a local window, and the check runs
-        // (it always records the cable fingerprint, and with first-run not
-        // yet complete it shows the dialog).
+        // A local window with the same settings asks too (still not done).
+        AppSettings::instance().remove(QStringLiteral("audio/LastDetectedCables"));
         MainWindow local({}, nullptr, MainWindow::ConnectionStartup::Deferred);
         QVERIFY(local.radioModel()->ownsLocalDsp());
         QCoreApplication::processEvents();

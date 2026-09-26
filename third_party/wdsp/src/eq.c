@@ -70,6 +70,11 @@ mw0lge@grange-lane.co.uk - Richard Samphire (c) 2026
 //                via Anthropic Claude Code. GPLv2+ upstream combined under
 //                NereusSDR's GPLv3 (the MW0LGE dual-licence clause is
 //                unaffected).
+//   2026-09-25 - R-R3-49 (group B fix wave): SetTXAEQCtfmode and
+//                SetTXAEQWintype rebuild a Q profile of any size, as
+//                Thetis's always rebuild (wdsp/eq.c:808-829 [v2.10.3.15]);
+//                the spline check alone skipped profiles of 2 or 3 points.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =============================================================================
 
 /*  eq.c
@@ -941,7 +946,10 @@ void SetTXAEQCtfmode (int channel, int mode)
 	NURBS b = a->peqimp->pnurbs;
 	EnterCriticalSection (&a->csEQ);
 	a->ctfmode = mode;
-	if (!checkSplineInputs (a->nfreqs, b->p, b->r, b->umethod, b->W))
+	// NereusSDR group B fix wave: a Q profile always rebuilds, as Thetis's
+	// SetTXAEQCtfmode does (wdsp/eq.c:808-817 [v2.10.3.15]); the spline
+	// check needs 4 points or more.
+	if (a->peqimp->useQ || !checkSplineInputs (a->nfreqs, b->p, b->r, b->umethod, b->W))
 	{
 		eq_impulse(a->peqimp, a->nc, a->nfreqs, a->F, a->G, a->samplerate,
 			1.0 / (2.0 * a->size), a->ctfmode, a->wintype, a->deg, a->impulse);
@@ -958,7 +966,9 @@ void SetTXAEQWintype (int channel, int wintype)
 	EnterCriticalSection (&ch[channel].csDSP);
 	EnterCriticalSection (&a->csEQ);
 	a->wintype = wintype;
-	if (!checkSplineInputs (a->nfreqs, b->p, b->r, b->umethod, b->W))
+	// NereusSDR group B fix wave: as SetTXAEQCtfmode above (Thetis
+	// wdsp/eq.c:819-829 [v2.10.3.15]).
+	if (a->peqimp->useQ || !checkSplineInputs (a->nfreqs, b->p, b->r, b->umethod, b->W))
 	{
 		setWintype_eqimp (a->peqimp, wintype);
 		eq_impulse(a->peqimp, a->nc, a->nfreqs, a->F, a->G, a->samplerate,

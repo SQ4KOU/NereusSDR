@@ -148,6 +148,12 @@
 //                 transmitSettingsVersion 5 (Enable VOX keeps the transmit
 //                 permission). J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-25: R-R3-49 (parity Task 8): selectNavigationTarget. The Power
+//                 Genius and Tuner Genius applets' Advanced entries and the
+//                 interlock entry open CAT & Network > 4O3A at their own
+//                 tab; the tree labels they named were folded into 4O3A.
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #include "SetupDialog.h"
@@ -199,6 +205,7 @@
 // Advanced / PGXL Interlock entries into a single tree node under a
 // master toggle.  PgxlInterlockPage's include lives inside FourO3APage.cpp.
 #include "setup/FourO3APage.h"
+#include <QHash>
 // RF-Kit RF2K-S integration page (Settings -> CAT & Network -> RF-Kit).
 #include "setup/RfKitPage.h"
 // Keyboard
@@ -439,6 +446,37 @@ void SetupDialog::selectPage(const QString& label)
             }
         }
     }
+}
+
+bool SetupDialog::selectNavigationTarget(const QString& pageKey)
+{
+    struct Target {
+        const char* label;
+        int fourO3ATab;   // -1: not a 4O3A tab
+    };
+    static const QHash<QString, Target> kTargets = {
+        {QStringLiteral("pgxlAdvanced"),
+         {"4O3A", static_cast<int>(FourO3APage::Tab::PowerGenius)}},
+        {QStringLiteral("tgxlAdvanced"),
+         {"4O3A", static_cast<int>(FourO3APage::Tab::TunerGenius)}},
+        {QStringLiteral("pgxlInterlock"),
+         {"4O3A", static_cast<int>(FourO3APage::Tab::General)}},
+        {QStringLiteral("peripherals"),
+         {"4O3A", static_cast<int>(FourO3APage::Tab::General)}},
+        // Phase 3P-III Task 14: RF-Kit setup page (CAT & Network > RF-Kit).
+        {QStringLiteral("rfKit"), {"RF-Kit", -1}},
+    };
+    const auto it = kTargets.constFind(pageKey);
+    if (it == kTargets.cend()) {
+        return false;
+    }
+    selectPage(QString::fromLatin1(it->label));
+    if (it->fourO3ATab >= 0) {
+        if (auto* page = findChild<FourO3APage*>()) {
+            page->selectTab(static_cast<FourO3APage::Tab>(it->fourO3ATab));
+        }
+    }
+    return true;
 }
 
 // Phase 3J-1 bench fix (2026-05-11): forward TciServer reference to the

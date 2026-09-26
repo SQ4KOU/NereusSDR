@@ -44,6 +44,13 @@
 //   2026-09-25: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 75 (R-IOS-30), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25: checkpoint join (R-IOS-30, R-R3-49): the parity lane's
+//               accessory verbs (moveTgxlRelay, setTgxlAddress,
+//               setPgxlOperate, setPgxlAddress, setRfKitOperate,
+//               setRfKitAntenna, setRfKitTciMode, setRfKitAddress),
+//               setAlexTxAntenna and the two-way transmit antennas and
+//               relays join the list. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -93,6 +100,7 @@ constexpr const char* kPureSignalSettings = "pureSignalSettings";
 constexpr const char* kNotches = "notches";
 constexpr const char* kAmplifier = "amplifier";
 constexpr const char* kTuner = "tuner";
+constexpr const char* kRfKit = "rfkit";
 
 // Ruling 7.4 (D60), for the holder Task 34 brings.
 QString onAirReason(const QString& holderShortName)
@@ -468,6 +476,60 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
             const SkuUiProfile sku = skuUiProfileFor(model.hardwareProfile().model);
             for (const MirrorUpdate& u : message.updates) {
                 const QByteArray& n = u.name;
+                // Checkpoint join (parity Task 12 with iPhone app Task 75):
+                // the transmit antennas and the transmit relays, two-way
+                // since radioHardwareVersion 6 (rxOutOnTx since 5), touch the
+                // transmitter (the table's "Transmit antenna", ruling 7.8).
+                // Nobody holds transmit yet (transmitForCheck), so today they
+                // disturb nobody and apply at once.
+                if (n == "txAntennas" || n == "blockTxAnt2" || n == "blockTxAnt3"
+                    || n == "rxOutOnTx" || n == "ext1OutOnTx" || n == "ext2OutOnTx") {
+                    transmitter();
+                    if (!listed(u)) {
+                        continue;
+                    }
+                    if (n != "txAntennas") {
+                        const QString label = n == "blockTxAnt2" ? QStringLiteral("Block TX on Ant 2")
+                            : n == "blockTxAnt3"                 ? QStringLiteral("Block TX on Ant 3")
+                            : n == "rxOutOnTx"                   ? QStringLiteral("RX Bypass on TX")
+                            : n == "ext1OutOnTx"                 ? QStringLiteral("Ext 1 on TX")
+                                                                 : QStringLiteral("Ext 2 on TX");
+                        words(label, currentWords(u, {}), valueWords(u.value, u.kind));
+                        continue;
+                    }
+                    const QList<int> before = bandList(current.value(n).value.toString());
+                    const QList<int> after = bandList(u.value.toString());
+                    int band = -1;
+                    for (int i = 0; i < std::min(before.size(), after.size()) && band < 0; ++i) {
+                        if (before.at(i) != after.at(i)) {
+                            band = i;
+                        }
+                    }
+                    const QString where = band >= 0
+                        ? QStringLiteral(", ") + ReceiverPlanner::bandWords(static_cast<Band>(band))
+                        : QString();
+                    words(QStringLiteral("Transmit antenna") + where,
+                          QStringLiteral("ANT%1").arg(band >= 0 ? before.at(band) : 0),
+                          QStringLiteral("ANT%1").arg(band >= 0 ? after.at(band) : 0));
+                    continue;
+                }
+                // Checkpoint join: Disable RX Bypass relay moves the receive
+                // side's bypass relay, so it touches what the receive-only
+                // antennas touch.
+                if (n == "rxOutOverride") {
+                    c.scope.transmitPath = true;
+                    if (oneAdc) {
+                        everyReceiver();
+                    } else {
+                        c.scope.adcs.insert(0);
+                        c.scope.adcs.insert(1);
+                    }
+                    if (listed(u)) {
+                        words(QStringLiteral("Disable RX Bypass relay"), currentWords(u, {}),
+                              valueWords(u.value, u.kind));
+                    }
+                    continue;
+                }
                 if (n != "rxAntennas" && n != "rxOnlyAntennas" && n != "useTxAntennaForRx") {
                     continue;
                 }
@@ -800,6 +862,22 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
               filterPolicyWords(mode));
         return c;
     }
+    // Checkpoint join (parity mini-round, radioHardwareVersion 6): one
+    // band's TX antenna, the table's "Transmit antenna" (ruling 7.8).
+    if (verb == "setAlexTxAntenna") {
+        const int band = intArgument(args, "band");
+        const int antenna = intArgument(args, "antenna");
+        const Band b = static_cast<Band>(band);
+        const int now = model.alexController().txAnt(b);
+        transmitter();
+        c.target = QStringLiteral("alextx:%1").arg(band);
+        c.targetValue = QString::number(now);
+        c.shared = now != antenna;
+        const QString where = ReceiverPlanner::bandWords(b);
+        words(QStringLiteral("Transmit antenna, %1").arg(where),
+              QStringLiteral("ANT%1").arg(now), QStringLiteral("ANT%1").arg(antenna));
+        return c;
+    }
     if (verb.startsWith("ps3.")) {
         // Every PureSignal action but the two-tone test (Task 34's
         // transmitter), the display subscription and saving a correction,
@@ -901,6 +979,41 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
         }
         return c;
     }
+    // Checkpoint join (parity Tasks 9 and 10): the Power Genius's and the
+    // RF-Kit's OPERATE and STANDBY (the amplifier, the transmitter) and the
+    // RF-Kit's antenna switch (ruling 7.2, what the tuner touches).
+    if (verb == "setPgxlOperate" || verb == "setRfKitOperate" || verb == "setRfKitAntenna") {
+        const bool pgxl = verb == "setPgxlOperate";
+        QHash<QByteArray, QVariant> now;
+        for (const MirrorUpdate& u : m_mirror->snapshot(pgxl ? kAmplifier : kRfKit)) {
+            now.insert(u.name, u.value);
+        }
+        if (verb == "setRfKitAntenna") {
+            tuner();
+            const int port = intArgument(args, "port");
+            const int was = now.value("activeAntennaNumber").toInt();
+            c.target = QStringLiteral("rfkit:antenna");
+            c.targetValue = QString::number(was);
+            c.shared = port != was;
+            words(QStringLiteral("RF-Kit antenna"), QStringLiteral("ANT%1").arg(was),
+                  QStringLiteral("ANT%1").arg(port));
+            return c;
+        }
+        transmitter();
+        const bool on = boolArgument(args, "on");
+        const bool was = now.value("operate").toBool();
+        const auto state = [](bool operate) {
+            return operate ? QStringLiteral("Operate") : QStringLiteral("Standby");
+        };
+        // The Power Genius's target is the amplifier property write's, so
+        // a later write to either cancels an open question.
+        c.target = pgxl ? QStringLiteral("amplifier:operate") : QStringLiteral("rfkit:operate");
+        c.targetValue = now.value("operate").toString();
+        c.shared = on != was;
+        words(pgxl ? QStringLiteral("Amplifier") : QStringLiteral("RF-Kit amplifier"), state(was),
+              state(on));
+        return c;
+    }
     // Fix wave (the D53 list): turning 4O3A on or off connects or drops the
     // amplifier and the tuner together, so it reaches what the tuner does.
     if (verb == "setFourO3AEnabled") {
@@ -913,15 +1026,21 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
         words(QStringLiteral("4O3A amplifier and tuner"), onOff(was), onOff(on));
         return c;
     }
+    // Checkpoint join: parity Task 8's relay nudge and saved address.
+    // scanTgxlLan only listens, and joins no list.
     static const QSet<QByteArray> kTunerVerbs{"configureTgxl", "disconnectTgxl", "setTgxlName",
-                                              "setTgxlNetwork", "saveTgxlSettings"};
+                                              "setTgxlNetwork", "saveTgxlSettings",
+                                              "moveTgxlRelay", "setTgxlAddress"};
     // The amplifier, its interlock and power limit (the transmitter). Task
     // 42's amp.operate and amp.standby join when that task lands.
     static const QSet<QByteArray> kAmplifierVerbs{
         "configurePgxl",   "disconnectPgxl",   "setPgxlConnectionSettings",
         "setPgxlName",     "setPgxlHardware",  "setPgxlNetwork",
         "savePgxlSettings", "setTxInterlockPolicy", "setPgxlPowerCap",
-        "configureRfKit",  "disconnectRfKit",  "setRfKitEnabled"};
+        "configureRfKit",  "disconnectRfKit",  "setRfKitEnabled",
+        // Checkpoint join: parity Tasks 9 and 10's saved addresses and the
+        // RF-Kit's TCI mode. scanPgxlLan only listens, and joins no list.
+        "setPgxlAddress",  "setRfKitAddress",  "setRfKitTciMode"};
     if (kTunerVerbs.contains(verb) || kAmplifierVerbs.contains(verb)) {
         if (kTunerVerbs.contains(verb)) {
             tuner();
@@ -932,6 +1051,7 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
         c.shared = true;
         const QString label = verb == "setTxInterlockPolicy" ? QStringLiteral("Transmit interlock")
             : verb == "setPgxlPowerCap"                      ? QStringLiteral("Amplifier power limit")
+            : verb == "moveTgxlRelay"                        ? QStringLiteral("Tuner relays")
             : kTunerVerbs.contains(verb)                     ? QStringLiteral("Tuner settings")
             : verb.contains("RfKit")                         ? QStringLiteral("RF-Kit amplifier")
                                                              : QStringLiteral("Amplifier settings");

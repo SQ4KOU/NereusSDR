@@ -41,6 +41,12 @@
 //   2026-05-21 -- Created in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-25 -- R-R3-49 (parity Task 8): selectTab, so the applets'
+//                 Advanced and Interlock entries open their own tab. J.J.
+//                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 -- R-R3-49 (parity Task 9): onRemotePgxlOperateClicked, the
+//                 remote Power Genius tab's Operate. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QWidget>
@@ -65,6 +71,12 @@ class FourO3APage : public QWidget {
 public:
     explicit FourO3APage(RadioModel* model, QWidget* parent = nullptr);
 
+    // R-R3-49 (parity Task 8): the page's tabs, in their order. The Power
+    // Genius interlock is a section of General.
+    enum class Tab { General = 0, PowerGenius = 1, TunerGenius = 2 };
+    void selectTab(Tab tab);
+    Tab currentTabForTesting() const;
+
 private slots:
     // Master toggle handler.  Persists the new state via
     // RadioModel::setFourO3AEnabled, then updates the disabled state of
@@ -85,6 +97,8 @@ private slots:
     // disconnect at the Core; send the connection settings).
     void onRemotePgxlConnectClicked();
     void onRemotePgxlApplySettingsClicked();
+    // R-R3-49 (parity Task 9): the remote Power Genius tab's Operate.
+    void onRemotePgxlOperateClicked();
 
 private:
     // Build the General tab content as a composite widget: master toggle
@@ -103,8 +117,9 @@ private:
 
     // R-R3-47 / R-R3-22: a remote window's Power Genius XL tab, a view of
     // the Core's `amplifier` object plus the Core's PGXL commands (connect,
-    // disconnect, connection settings). Operate stays disabled with the
-    // Core's receive-only reason.
+    // disconnect, connection settings). R-R3-49 (parity Task 9): Operate
+    // asks the Core on a Core at remotePgxlControlVersion 4; below it, it
+    // stays disabled with the Core's receive-only reason.
     QWidget* buildRemotePgxlTab();
     void refreshRemotePgxlTab();
     void loadRemotePgxlSettings();

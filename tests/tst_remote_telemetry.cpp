@@ -654,7 +654,7 @@ private slots:
         const QString detail = controller.detailText();
         for (const QString& expected : {
                  QStringLiteral("PA voltage from the Core: 13.8\u00A0V."),
-                 QStringLiteral("Supply voltage from the Core: 12.1\u00A0V."),
+                 QStringLiteral("DC voltage from the Core: 12.1\u00A0V."),
                  QStringLiteral("Packet loss between the Core and the radio, from the Core: 0.25\u00A0% over the last 5 seconds."),
                  QStringLiteral("Radio jitter from the Core: 0.37\u00A0ms."),
                  QStringLiteral("Longest gap between radio packets in the last second, from the Core: 4.2\u00A0ms."),

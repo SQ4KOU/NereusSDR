@@ -154,6 +154,29 @@
 //                notch.addAtSlice to a notchControlVersion 2 Core.
 //                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 7): pureSignalOperationPermitted, a
+//                receive-only Core lets a window arm PureSignal off the
+//                air. NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 8): moveTgxlRelayForStation,
+//                scanTgxlLanForStation and setTgxlAddressForStation
+//                (remoteTgxlControlVersion 4), and the window's LAN scan
+//                answer (reportStationTgxlLanScan). NereusSDR-original.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 9): setPgxlOperateForStation,
+//                scanPgxlLanForStation and setPgxlAddressForStation
+//                (remotePgxlControlVersion 4), and the window's LAN scan
+//                answer (reportStationPgxlLanScan). NereusSDR-original.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 10): setRfKitOperateForStation,
+//                setRfKitAntennaForStation, setRfKitTciModeForStation and
+//                setRfKitAddressForStation (remoteRfKitControlVersion 4).
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity mini-round, the operator's rulings a to
+//                c): refuseLocalAccessorySwitchOnAir; Scan LAN and the
+//                saved amp and tuner addresses go ahead on the air.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -280,6 +303,7 @@
 #include <atomic>     // AM Mod Monitor flags
 #include <array>      // std::array (HL2 temp averaging ring)
 #include <functional> // R-R3-21 DSP > Options apply observer (test seam)
+#include <vector>
 #include <memory>  // std::unique_ptr
 #include <optional>
 
@@ -326,6 +350,7 @@ class DspAssetService;
 class PureSignalSessionFacade;
 class StepAttenuatorFacade;
 class AlexAntennaFacade;
+class LanDiscovery;  // group B fix wave (M2): the running scans
 class IoBoardHl2Facade;
 class PsccPump;
 // Phase 4 Agent 4A of issue #167: PaProfileManager forward declaration.
@@ -670,6 +695,15 @@ public:
     /// stationCommandFinished for a sender that waits on its own command.
     /// Ends any page's claim on the command (noteAccessoryRequestShownOnPage).
     void reportStationCommandFinished(quint32 commandId, bool accepted, const QString& reason);
+    /// R-R3-49 (parity Task 8): the Core answered a window's scanTgxlLan
+    /// (`devicesJson` the answer's JSON array, empty on a refusal).
+    /// Role::Remote only. Routed to stationTgxlLanScanFinished.
+    void reportStationTgxlLanScan(quint32 commandId, bool accepted, const QString& reason,
+                                  const QString& devicesJson);
+    /// R-R3-49 (parity Task 9): the same for a window's scanPgxlLan.
+    /// Routed to stationPgxlLanScanFinished.
+    void reportStationPgxlLanScan(quint32 commandId, bool accepted, const QString& reason,
+                                  const QString& devicesJson);
 
     /// The station refused a sample-rate change, with its own reason.
     /// Role::Remote only. Routed to sliceRetuneRejected, which carries the
@@ -1931,6 +1965,23 @@ public:
     bool stationOnAirRefusal(QString* reason) const;
     // The sentence stationOnAirRefusal gives, for a window's own gate.
     static QString onAirReason();
+    // Parity mini-round (the operator's ruling c, 2026-09-25): a local
+    // window's own amp or tuner switch (`device` "pgxl", "tgxl" or
+    // "rfkit"), checked by stationOnAirRefusal. Its buttons are greyed by
+    // isCoreOnAir(), which can already read false while this still refuses
+    // (the hand-back to receive after MOX, the transmit model's MOX latch).
+    // True when refused: the click then goes out on accessoryRequestRefused
+    // with the reason a remote window gets from its Core, which MainWindow
+    // shows the same way, never a silent drop. False otherwise, and always
+    // false in a remote window, which asks its Core instead.
+    bool refuseLocalAccessorySwitchOnAir(const QString& device);
+
+    // R-R3-49 (parity Task 7): PureSignal's operational permission. True
+    // on a station, a receive-only Core included (a window arms PureSignal
+    // there off the air; arming keys nothing, and the correction runs only
+    // while the radio transmits). False in a remote window, which asks its
+    // Core instead.
+    bool pureSignalOperationPermitted() const;
 
     // R-R3-49 (parity Task 1): in a remote window, the Core's radio is on
     // the air as the Core last reported it: its `transmitting`, the
@@ -2209,6 +2260,27 @@ public:
     /// (0 turns it off, up to 3600).
     bool setPgxlConnectionSettingsForStation(bool autoReconnect, int keepaliveSec,
                                              int pingSec, QString* reason);
+    // R-R3-49 (parity Task 9, remotePgxlControlVersion 4): a window's
+    // OPERATE or STANDBY. The Core sends the local applet's own line,
+    // `operate=1` or `operate=0`, through its PgxlConnection; the amp's
+    // report returns on AmplifierModel. It keys nothing. Refused on a Core
+    // that does not own its accessories, while the radio is on the air, and
+    // while the Core is not connected to the amp; nothing is sent then.
+    bool setPgxlOperateForStation(bool on, QString* reason);
+    // A window's Scan LAN: as scanTgxlLanForStation, for Power Genius
+    // announcements (StationPgxlController::expectedProduct()). Nothing is
+    // sent to any device.
+    bool scanPgxlLanForStation(std::function<void(const QString& devicesJson)> done,
+                               QString* reason);
+    // A Host or Port typed on a window's Peripherals row without Connect:
+    // saves PGXL_ManualIp and PGXL_ManualPort for the Core's radio without
+    // dialling, with configurePgxl's address checks and reasons. A blank
+    // host is saved (group B fix wave, I1), as a local window's blank Host
+    // stops auto-connect. It switches nothing, so it goes ahead on the air
+    // (parity mini-round, rulings a and b). The `amplifier` object's
+    // configured address follows while the Core is not connecting or
+    // connected.
+    bool setPgxlAddressForStation(const QString& host, int port, QString* reason);
     // R-R3-47 / R-R3-22: the Core's RF-Kit RF2K-S. configure saves the
     // address for the Core's radio and starts identifying what answers
     // there; the amp is admitted once its /info names an RF2K-S.
@@ -2219,6 +2291,27 @@ public:
     bool resetRfKitErrorForStation(QString* reason);
     /// The station's RF-Kit switch, from a window's command.
     bool setRfKitEnabledForStation(bool enabled, QString* reason);
+    // R-R3-49 (parity Task 10, remoteRfKitControlVersion 4): a window's
+    // RF-Kit OPERATE or STANDBY, ANT 1 to 4 and "Set amp to TCI mode". The
+    // Core's admitted amp gets the request the local applet or page sends
+    // (StationRfKitController). None keys anything. Refused on a Core that
+    // does not own its accessories, while the radio is on the air, and
+    // while the Core is not connected to the amp; nothing is sent then. An
+    // antenna outside 1 to 4, or one the amp lists as disabled or does not
+    // list, is refused too.
+    bool setRfKitOperateForStation(bool on, QString* reason);
+    bool setRfKitAntennaForStation(int port, QString* reason);
+    bool setRfKitTciModeForStation(QString* reason);
+    // A Host and Port saved from a window's RF-Kit page: saves
+    // RfKit_ManualIp and RfKit_ManualPort for the Core's radio without
+    // dialling, with configureRfKit's address checks and reasons (the
+    // RF-Kit switch is not an address check: saving dials nothing). A
+    // blank host is saved (group B fix wave, I1), as a local window's
+    // blank Host stops auto-connect. It switches nothing, so it goes ahead
+    // on the air (parity mini-round, rulings a and b). The `rfkit` object's
+    // configured address follows while the Core is not connecting or
+    // connected.
+    bool setRfKitAddressForStation(const QString& host, int port, QString* reason);
 
     // R-R3-48: the Core runs the app's TCI server on the station network
     // (DaemonApp, before radio startup). `bindOverride` is nereusd.conf's
@@ -2403,6 +2496,30 @@ public:
     bool setTgxlAntennaForStation(int port, QString* reason);
     bool setTgxlOperateForStation(bool on, QString* reason);
     bool setTgxlBypassForStation(bool on, QString* reason);
+    // R-R3-49 (parity Task 8, remoteTgxlControlVersion 4): a window's
+    // mouse-wheel nudge of one matching relay (`relay` 0 C1, 1 L, 2 C2;
+    // `direction` -1 or 1), sent through the Core's own TunerModel as the
+    // local applet's `tune relay=<relay> move=<move>` line. It keys
+    // nothing. Refused as the switches above are, and for other values.
+    bool moveTgxlRelayForStation(int relay, int direction, QString* reason);
+    // A window's Scan LAN: the Core listens for Tuner Genius announcements
+    // for the local Scan LAN dialog's own window (kTgxlLanScanWindowMs) and
+    // calls `done` once with a JSON array of {"address","port","model",
+    // "serial","nickname"}. Refused on a Core that does not own its
+    // accessories; `done` is not called then. It only listens, so it goes
+    // ahead on the air (parity mini-round, rulings a and b). Nothing is
+    // sent to any device.
+    using TgxlLanScanDone = std::function<void(const QString& devicesJson)>;
+    bool scanTgxlLanForStation(TgxlLanScanDone done, QString* reason);
+    static constexpr int kTgxlLanScanWindowMs = 3000;
+    // A Host or Port typed on a window's Peripherals row without Connect:
+    // saves TGXL_ManualIp and TGXL_ManualPort for the Core's radio without
+    // dialling, with configureTgxl's address checks and reasons. A blank
+    // host is saved (group B fix wave, I1), as a local window's blank Host
+    // stops auto-connect. It switches nothing, so it goes ahead on the air
+    // (parity mini-round, rulings a and b). The `tuner` object's configured
+    // address follows while the Core is not connecting or connected.
+    bool setTgxlAddressForStation(const QString& host, int port, QString* reason);
     // R-R3-49 (parity Task 2, transmitSettingsVersion 2): a window's Tune
     // Power slider. Sets the tune power for the band the Core transmits on
     // and the tune drive source to the tune slider, as the local slider
@@ -2790,6 +2907,14 @@ public:
     // from the cmd-state machine's effective PSEnabled state. RadioModel owns
     // the returned coordinator, matching production lifetime.
     PureSignal* installPureSignalForTest(TxChannel* tx);
+    // Group B fix wave: the txaFlushed wiring connectToRadio makes, against
+    // the channel wireTransmitChainForTest set, and an observer called
+    // where PureSignal hears the radio is back on receive.
+    void wireTxaFlushedForTest() { wireTxaFlushed(); }
+    void setTxaFlushedPureSignalObserverForTest(std::function<void()> observer)
+    {
+        m_txaFlushedPureSignalObserverForTest = std::move(observer);
+    }
     // Phase 3F Sub-Epic I closeout, defect F1: attach a DSP worker without
     // standing up the connection / DSP-thread pipeline, so a test can
     // reproduce connectToRadio's real ordering (pool sized and slices bound
@@ -3137,6 +3262,11 @@ public:
         m_testP2FirstIqMs = firstIqMs;
         m_testP2EstablishedMs = establishedMs;
     }
+    // R-R3-49 (parity Task 8): a shorter Tuner Genius LAN scan window, so
+    // a test does not wait the dialog's three seconds.
+    void setTgxlLanScanWindowMsForTest(int ms) { m_tgxlLanScanWindowMs = ms; }
+    // R-R3-49 (parity Task 9): the same for the Power Genius scan.
+    void setPgxlLanScanWindowMsForTest(int ms) { m_pgxlLanScanWindowMs = ms; }
 #endif
 
     // Phase 3Q Task 10: arm / disarm the auto-connect-in-progress flag.
@@ -3795,6 +3925,9 @@ signals:
     void sliceAddRejected(QString reason);
     /// R-R3-47 / R-R3-22: the Core refused a request for an accessory's own
     /// settings (`device` "pgxl" or "tgxl"); `reason` is the Core's words.
+    /// Parity mini-round (ruling c): a local window's own switch refused on
+    /// the air arrives here too, with the same words
+    /// (refuseLocalAccessorySwitchOnAir).
     void accessoryRequestRefused(const QString& device, const QString& reason,
                                  bool shownOnPage);
     /// Remote window: a Core station setting changed (empty: a snapshot).
@@ -3804,6 +3937,12 @@ signals:
     /// the TCI switch's request wait both match their own id here (an
     /// accessory refusal also arrives on accessoryRequestRefused).
     void stationCommandFinished(quint32 commandId, bool accepted, const QString& reason);
+    /// R-R3-49 (parity Task 8): see reportStationTgxlLanScan.
+    /// R-R3-49 (parity Task 9): see reportStationPgxlLanScan.
+    void stationPgxlLanScanFinished(quint32 commandId, bool accepted, const QString& reason,
+                                    const QString& devicesJson);
+    void stationTgxlLanScanFinished(quint32 commandId, bool accepted, const QString& reason,
+                                    const QString& devicesJson);
 
     /// Phase 3F Sub-Epic I closeout, defect F4: the operator retuned a slice
     /// to a frequency no DDC can reach, and the frequency has been rolled
@@ -4138,6 +4277,19 @@ private:
     // switch the Core's Tuner Genius now (not the Core's tuner, the radio
     // on the air, or no tuner admitted).
     bool stationTgxlControlAllowed(QString* reason) const;
+    // R-R3-49 (parity Task 9): the Power Genius's OPERATE gate: a Core that
+    // owns its accessories, off the air, connected to the amp.
+    bool stationPgxlControlAllowed(QString* reason) const;
+    // R-R3-49 (parity Task 10): the RF-Kit's gate before its controller's
+    // own: a Core that owns its accessories, off the air.
+    bool stationRfKitControlAllowed(QString* reason) const;
+    // R-R3-49 (parity Tasks 8 and 9): the Core's own Scan LAN, one
+    // LanDiscovery child named `objectName` that keeps the announcements of
+    // `products` for `windowMs` and calls `done` once with the JSON array.
+    // Group B fix wave (M2): one scan per `objectName` at a time; a
+    // request while it listens joins it and gets the same answer.
+    void startStationLanScan(const QString& objectName, const QStringList& products,
+                             int windowMs, std::function<void(const QString&)> done);
     // R-R3-49 (parity Task 2): the transmit band for tunePowerForTxBand,
     // and the Core's transmit chain wiring (moved from connectToRadio()).
     void refreshTransmitTuneBand();
@@ -4317,6 +4469,18 @@ private:
     // DspOptions<Setting><Mode>Tx write, and the test observer.
     QSet<QString> m_pendingDspOptionsTxGroups;
     std::function<void(DSPMode)> m_dspOptionsTxApplyObserverForTest;
+    // Group B fix wave: MoxController::txaFlushed's two halves (the TX
+    // channel's stop on its thread, PureSignal on the main thread), and
+    // the test observer of the second.
+    void wireTxaFlushed();
+    // Group A follow-up (group B fix wave): the parametric TX EQ's pushes,
+    // coalesced to Thetis's 100 ms tick (eqform.cs:3613-3614 [v2.10.3.15]).
+    static constexpr int kTxEqPushCoalesceMs = 100;
+    QTimer* m_txEqPushTimer{nullptr};
+    // Group B fix wave: applies a held DSP > Options TX change and a held
+    // PA profile or calibration reload once the on-air rule clears.
+    void releaseHeldOnAirWork();
+    std::function<void()> m_txaFlushedPureSignalObserverForTest;
 
     // The connect-time DDC seed, factored out of the wireSliceSignals
     // singleShot so it can be driven without a live connection. Commands the
@@ -5454,6 +5618,12 @@ private:
     // Stable WDSP RX identity stopped at MOX entry. Release restores this
     // exact channel even if listening focus changes before key-up.
     int m_moxStoppedRxChannel{-1};
+    // Group B fix wave: whether onMoxHardwareFlipped last put the Alex
+    // relays on the TX routing, and for which band; an antenna changed
+    // meanwhile is applied on that routing, as Thetis applies it with
+    // tx = _mox.
+    bool m_alexRoutingTx{false};
+    NereusSDR::Band m_alexRoutingTxBand{NereusSDR::Band::Band20m};
 
     // Phase 3F Sub-Epic C: TX-slice arbiter (single-TX invariant + RF-safe
     // handoff). QObject child of RadioModel (Qt parent ownership). Wired
@@ -5788,6 +5958,18 @@ private:
     PgxlConnection* m_pgxlConnection{nullptr};
     TgxlConnection* m_tgxlConnection{nullptr};
     StationTgxlController* m_stationTgxl{nullptr};
+    // R-R3-49 (parity Task 8): scanTgxlLanForStation's listening window.
+    int m_tgxlLanScanWindowMs{kTgxlLanScanWindowMs};
+    // R-R3-49 (parity Task 9): scanPgxlLanForStation's listening window,
+    // the local dialog's (kTgxlLanScanWindowMs, the same three seconds).
+    int m_pgxlLanScanWindowMs{kTgxlLanScanWindowMs};
+    // Group B fix wave (M2): the scan listening for each device (keyed by
+    // the listener's object name) and the requests waiting for its answer.
+    struct StationLanScan {
+        QPointer<LanDiscovery> discovery;
+        std::vector<std::function<void(const QString&)>> waiting;
+    };
+    QHash<QString, StationLanScan> m_stationLanScans;
     StationPgxlController* m_stationPgxl{nullptr};
     TunerModel*     m_tunerModel{nullptr};
     AmplifierModel* m_amplifierModel{nullptr};

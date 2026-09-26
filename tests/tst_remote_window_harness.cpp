@@ -1068,7 +1068,8 @@ private slots:
     // it (radioHardwareVersion 2). The tabs are live and show the Core's
     // radio; an RX antenna change reaches the Core's own AlexController;
     // an OC receive pin reaches the Core's settings for that radio and the
-    // Core reloads its matrix; the transmit fields wait for remote transmit.
+    // Core reloads its matrix; the transmit fields that key nothing follow
+    // their own versions (parity tasks).
     void hardwareConfigReceiveSettingsReachTheCore()
     {
         StepAttenuatorController coreAtt;
@@ -1101,7 +1102,9 @@ private slots:
         // RX antenna: the Core's controller changes.
         auto* antennas = hardware->findChild<AntennaAlexAntennaControlTab*>();
         QVERIFY(antennas);
-        QVERIFY(!antennas->txGridForTest()->isEnabled());
+        // Parity Task 12: the TX antennas go to the Core too (version 6);
+        // tst_remote_tx_antennas covers them.
+        QTRY_VERIFY(antennas->txGridForTest()->isEnabled());
         QRadioButton* const ant2 = antennas->rxButtonForTest(Band::Band40m, 2);
         QVERIFY(ant2 && ant2->isEnabled());
         ant2->click();
@@ -1124,7 +1127,7 @@ private slots:
         // R-R3-46 fix wave (radioHardwareVersion 3): the HL2 I/O board tab
         // shows the Core's board, whose readings arrive on the Core after a
         // probe. (4 since the filter policy verb, R-R3-46 / R-R3-21.)
-        QCOMPARE(h.client()->capabilities().radioHardwareVersion, 4);
+        QCOMPARE(h.client()->capabilities().radioHardwareVersion, 6);
         auto* ioTab = hardware->findChild<Hl2IoBoardTab*>();
         QVERIFY(ioTab);
         const auto statusText = [ioTab]() {

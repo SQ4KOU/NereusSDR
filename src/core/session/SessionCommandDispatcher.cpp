@@ -141,6 +141,31 @@
 //                                    slice.selectBand and notch.addAtSlice
 //                                    refused for another device's slice.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 7): ps3.single,
+//                                    ps3.automatic, ps3.applyCurrent and
+//                                    ps3.restoreCorrection taken off the air
+//                                    from a peer offered
+//                                    transmitSettingsVersion 7; ps3.twoTone
+//                                    stays with remote transmit.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 8): moveTgxlRelay,
+//                                    scanTgxlLan and setTgxlAddress
+//                                    (remoteTgxlControlVersion 4).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 9): setPgxlOperate,
+//                                    scanPgxlLan and setPgxlAddress
+//                                    (remotePgxlControlVersion 4).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 10):
+//                                    setRfKitOperate, setRfKitAntenna,
+//                                    setRfKitTciMode and setRfKitAddress
+//                                    (remoteRfKitControlVersion 4).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 / R-R3-46 parity mini-round
+//                                    (radioHardwareVersion 6):
+//                                    setAlexTxAntenna, one band's TX
+//                                    antenna. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -327,14 +352,22 @@ QString notRepresentableReason()
 //   slice verbs            none: they predate capability gating
 //   requestStreamCtun*     remoteCtunAvailable()          (StationClient.cpp)
 //   configure/disconnectTgxl remoteTgxlConfigAvailable()
+//   setTgxlAntenna/Operate/Bypass tgxlControlAvailable() (version 2)
+//   moveTgxlRelay, scanTgxlLan, setTgxlAddress
+//                          tgxlFullControlAvailable() (version 4)
 //   setFourO3AEnabled      remoteFourO3AControlAvailable()
 //   *Pgxl*                 remotePgxlControlAvailable() (version 2)
+//   setPgxlOperate, scanPgxlLan, setPgxlAddress
+//                          pgxlFullControlAvailable() (version 4)
 //   *RfKit*                remoteRfKitControlAvailable() (version 2)
+//   setRfKitOperate, setRfKitAntenna, setRfKitTciMode, setRfKitAddress
+//                          rfKitFullControlAvailable() (version 4)
 //   setStationTci          stationTciAvailable() (version 1)
 //   setTxInterlockPolicy, setPgxlPowerCap, clearAccessoryFaults
 //                          accessoryDataAvailable() (version 1)
 //   requestIoBoardProbe    remoteHardwareConfigAvailable() (version 2)
 //   setAlexRxAntenna       radioHardwareVersion 3 (requestAlexRxAntenna)
+//   setAlexTxAntenna       radioHardwareVersion 6 (requestAlexTxAntenna)
 //   nnr.*                  nnrControlAvailable(); nnr.tryAgain adds
 //                          kNnrLimitSessionProtocolMinor
 //   nnr.applyModelSelection dspAssetVersion 1 (requestApplyNnrModels)
@@ -409,6 +442,13 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
          kRadioIdentitySessionProtocolMinor},
         {"readPgxlSettings", {}, "remotePgxlControlVersion", 3,
          kRadioIdentitySessionProtocolMinor},
+        // The Power Genius's OPERATE and STANDBY, LAN scan and saved address
+        // (R-R3-49, parity Task 9).
+        {"setPgxlOperate", {arg("on", kBool)}, "remotePgxlControlVersion", 4,
+         kRadioIdentitySessionProtocolMinor},
+        {"scanPgxlLan", {}, "remotePgxlControlVersion", 4, kRadioIdentitySessionProtocolMinor},
+        {"setPgxlAddress", {arg("host", kUtf8), arg("port", kInt)},
+         "remotePgxlControlVersion", 4, kRadioIdentitySessionProtocolMinor},
         {"setTgxlName", {arg("name", kUtf8)}, "remoteTgxlControlVersion", 1,
          kRadioIdentitySessionProtocolMinor},
         {"setTgxlNetwork",
@@ -426,6 +466,13 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
          kRadioIdentitySessionProtocolMinor},
         {"setTgxlBypass", {arg("on", kBool)}, "remoteTgxlControlVersion", 2,
          kRadioIdentitySessionProtocolMinor},
+        // The Tuner Genius's relay nudge, LAN scan and saved address
+        // (R-R3-49, parity Task 8).
+        {"moveTgxlRelay", {arg("relay", kInt), arg("direction", kInt)},
+         "remoteTgxlControlVersion", 4, kRadioIdentitySessionProtocolMinor},
+        {"scanTgxlLan", {}, "remoteTgxlControlVersion", 4, kRadioIdentitySessionProtocolMinor},
+        {"setTgxlAddress", {arg("host", kUtf8), arg("port", kInt)},
+         "remoteTgxlControlVersion", 4, kRadioIdentitySessionProtocolMinor},
         // The TX applet's Tune Power slider (R-R3-49, parity Task 2).
         {"setTunePowerForTxBand", {arg("watts", kInt)}, "transmitSettingsVersion", 2,
          kRadioIdentitySessionProtocolMinor},
@@ -449,6 +496,16 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
          kRadioIdentitySessionProtocolMinor},
         {"resetRfKitError", {}, "remoteRfKitControlVersion", 3,
          kRadioIdentitySessionProtocolMinor},
+        // The RF-Kit's OPERATE and STANDBY, antenna, TCI mode and saved
+        // address (R-R3-49, parity Task 10).
+        {"setRfKitOperate", {arg("on", kBool)}, "remoteRfKitControlVersion", 4,
+         kRadioIdentitySessionProtocolMinor},
+        {"setRfKitAntenna", {arg("port", kInt)}, "remoteRfKitControlVersion", 4,
+         kRadioIdentitySessionProtocolMinor},
+        {"setRfKitTciMode", {}, "remoteRfKitControlVersion", 4,
+         kRadioIdentitySessionProtocolMinor},
+        {"setRfKitAddress", {arg("host", kUtf8), arg("port", kInt)},
+         "remoteRfKitControlVersion", 4, kRadioIdentitySessionProtocolMinor},
         {"setStationTci", {arg("enabled", kBool), arg("port", kInt)}, "stationTciVersion", 1,
          kRadioIdentitySessionProtocolMinor},
         // The Core's accessory records and settings (R-R3-47, R-R3-22).
@@ -467,6 +524,8 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
          "radioHardwareVersion", 3, kRadioIdentitySessionProtocolMinor},
         {"setAlexBpfMode", {arg("chain", kInt), arg("mode", kInt)}, "radioHardwareVersion", 4,
          kRadioIdentitySessionProtocolMinor},
+        {"setAlexTxAntenna", {arg("band", kInt), arg("antenna", kInt)},
+         "radioHardwareVersion", 6, kRadioIdentitySessionProtocolMinor},
         // Neural noise reduction.
         {"nnr.setDiagnostics",
          {arg("sliceId", kInt), arg("testMode", kInt), arg("outputMode", kInt)},
@@ -606,6 +665,11 @@ void SessionCommandDispatcher::resetSessionState()
             m_radioModel->setNnrDiagnosticMode(slice->sliceIndex(), 0, 1);
         }
     }
+    // R-R3-49 (parity Task 7): the arming offer is set before each dispatch
+    // (setPureSignalArmingOffered); a Core with no session offers none. A
+    // Tuner Genius or Power Genius scan still due is dropped.
+    m_pureSignalArmingOffered = false;
+    ++m_sessionGeneration;
 }
 
 void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
@@ -730,6 +794,14 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleSetRfKitEnabled(invoke);
     } else if (invoke.commandVerb == "resetRfKitError") {
         handleResetRfKitError(invoke);
+    } else if (invoke.commandVerb == "setRfKitOperate") {
+        handleSetRfKitOperate(invoke);
+    } else if (invoke.commandVerb == "setRfKitAntenna") {
+        handleSetRfKitAntenna(invoke);
+    } else if (invoke.commandVerb == "setRfKitTciMode") {
+        handleSetRfKitTciMode(invoke);
+    } else if (invoke.commandVerb == "setRfKitAddress") {
+        handleSetRfKitAddress(invoke);
     } else if (invoke.commandVerb == "setStationTci") {
         handleSetStationTci(invoke);
     } else if (invoke.commandVerb == "setTxInterlockPolicy") {
@@ -749,6 +821,18 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
     } else if (invoke.commandVerb == "setTgxlAntenna" || invoke.commandVerb == "setTgxlOperate"
                || invoke.commandVerb == "setTgxlBypass") {
         handleTgxlControl(invoke);
+    } else if (invoke.commandVerb == "moveTgxlRelay") {
+        handleMoveTgxlRelay(invoke);
+    } else if (invoke.commandVerb == "scanTgxlLan") {
+        handleScanTgxlLan(invoke);
+    } else if (invoke.commandVerb == "setTgxlAddress") {
+        handleSetTgxlAddress(invoke);
+    } else if (invoke.commandVerb == "setPgxlOperate") {
+        handleSetPgxlOperate(invoke);
+    } else if (invoke.commandVerb == "scanPgxlLan") {
+        handleScanPgxlLan(invoke);
+    } else if (invoke.commandVerb == "setPgxlAddress") {
+        handleSetPgxlAddress(invoke);
     } else if (invoke.commandVerb == "setTunePowerForTxBand") {
         handleTunePowerForTxBand(invoke);
     } else if (invoke.commandVerb == "txProfile.select" || invoke.commandVerb == "txProfile.save"
@@ -762,6 +846,8 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleSetAlexRxAntenna(invoke);
     } else if (invoke.commandVerb == "setAlexBpfMode") {
         handleSetAlexBpfMode(invoke);
+    } else if (invoke.commandVerb == "setAlexTxAntenna") {
+        handleSetAlexTxAntenna(invoke);
     } else if (invoke.commandVerb == "nnr.setDiagnostics" || invoke.commandVerb == "nnr.resetTuning"
                || invoke.commandVerb == "nnr.tryAgain") {
         handleNnrAction(invoke);
@@ -858,10 +944,25 @@ void SessionCommandDispatcher::handlePureSignalAction(const SessionMessage& invo
     // The session currently advertises txPermitted=false. Keep the same hard
     // gate here even when a client bypasses its disabled controls. R4 owns
     // replacing this gate with negotiated, station-authorized transmit.
-    if (!stop && *action != Ps3Action::SaveCorrection) {
+    // R-R3-49 (parity Task 7): arming keys nothing (Single Cal, Automatic,
+    // Apply current correction, Restore a saved correction), so a peer
+    // offered transmitSettingsVersion 7 may ask for it while the radio is
+    // off the air. The two-tone test keys the radio and stays here.
+    const bool arming = *action == Ps3Action::Single || *action == Ps3Action::StartAutomatic
+        || *action == Ps3Action::ApplyCurrentCorrection
+        || *action == Ps3Action::RestoreCorrection;
+    if (!stop && *action != Ps3Action::SaveCorrection
+        && !(arming && m_pureSignalArmingOffered)) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
                    QStringLiteral("PureSignal cannot be run from a remote window yet."), {});
         return;
+    }
+    if (arming) {
+        QString onAir;
+        if (m_radioModel->stationOnAirRefusal(&onAir)) {
+            emitResult(invoke.commandVerb, invoke.commandId, false, onAir, {});
+            return;
+        }
     }
     for (const PendingPureSignalCommand& command : std::as_const(m_pureSignalCommands)) {
         // Fix wave I1: ids are counted per client, so another session's
@@ -1659,6 +1760,104 @@ void SessionCommandDispatcher::handleResetRfKitError(const SessionMessage& invok
     emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
 }
 
+// R-R3-49 (parity Task 10, remoteRfKitControlVersion 4): the RF-Kit's
+// OPERATE or STANDBY, sent to the Core's admitted amp as the local applet's
+// request. Refused while the radio is on the air or the Core is not
+// connected to the amp; nothing is sent then.
+void SessionCommandDispatcher::handleSetRfKitOperate(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    QVariant on;
+    if (!hasExactlyArguments(invoke.arguments, { "on" })
+        || !findArgument(invoke.arguments, "on", &on) || on.typeId() != QMetaType::Bool) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("The request to put the RF-Kit amplifier in operate or "
+                                  "standby was not understood."), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->setRfKitOperateForStation(on.toBool(), &reason)) {
+        emitResult(verb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not switch the RF-Kit "
+                                                     "amplifier.")
+                                    : reason, {});
+        return;
+    }
+    emitResult(verb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-49 (parity Task 10): the applet's ANT 1 to 4, an internal antenna.
+void SessionCommandDispatcher::handleSetRfKitAntenna(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    int port = 0;
+    if (!hasExactlyArguments(invoke.arguments, { "port" })
+        || !hasWireKind(invoke.arguments, "port", MirrorWireKind::Int64)
+        || findIntArgument(invoke.arguments, "port", &port) != ArgumentStatus::Ok) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("The request to switch the RF-Kit amplifier's antenna was "
+                                  "not understood."), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->setRfKitAntennaForStation(port, &reason)) {
+        emitResult(verb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not switch the RF-Kit "
+                                                     "amplifier's antenna.")
+                                    : reason, {});
+        return;
+    }
+    emitResult(verb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-49 (parity Task 10): the RF-Kit page's "Set amp to TCI mode".
+void SessionCommandDispatcher::handleSetRfKitTciMode(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    if (!hasExactlyArguments(invoke.arguments, {})) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("The request to put the RF-Kit amplifier in TCI mode was not "
+                                  "understood."), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->setRfKitTciModeForStation(&reason)) {
+        emitResult(verb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not put the RF-Kit amplifier "
+                                                     "in TCI mode.")
+                                    : reason, {});
+        return;
+    }
+    emitResult(verb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-49 (parity Task 10): the RF-Kit page's Host and Port, saved on the
+// Core for its radio without dialling.
+void SessionCommandDispatcher::handleSetRfKitAddress(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    QString host;
+    int port = 0;
+    if (!hasExactlyArguments(invoke.arguments, { "host", "port" })
+        || !findUtf8Argument(invoke.arguments, "host", &host)
+        || !hasWireKind(invoke.arguments, "port", MirrorWireKind::Int64)
+        || findIntArgument(invoke.arguments, "port", &port) != ArgumentStatus::Ok) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("The request to save the RF-Kit amplifier address was not "
+                                  "understood."), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->setRfKitAddressForStation(host, port, &reason)) {
+        emitResult(verb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not save the RF-Kit "
+                                                     "amplifier address.")
+                                    : reason, {});
+        return;
+    }
+    emitResult(verb, invoke.commandId, true, QString(), {});
+}
+
 void SessionCommandDispatcher::handleSetRfKitEnabled(const SessionMessage& invoke)
 {
     QVariant enabled;
@@ -2054,6 +2253,183 @@ void SessionCommandDispatcher::handleTgxlControl(const SessionMessage& invoke)
     emitResult(verb, invoke.commandId, true, QString(), {});
 }
 
+// R-R3-49 (parity Task 8, remoteTgxlControlVersion 4): a relay nudge
+// (`relay` 0 C1, 1 L, 2 C2; `direction` -1 or 1), through the Core's own
+// TunerModel. Refused as the switches are; nothing is sent then.
+void SessionCommandDispatcher::handleMoveTgxlRelay(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    int relay = 0;
+    int direction = 0;
+    if (!hasExactlyArguments(invoke.arguments, { "relay", "direction" })
+        || !hasWireKind(invoke.arguments, "relay", MirrorWireKind::Int64)
+        || !hasWireKind(invoke.arguments, "direction", MirrorWireKind::Int64)
+        || findIntArgument(invoke.arguments, "relay", &relay) != ArgumentStatus::Ok
+        || findIntArgument(invoke.arguments, "direction", &direction) != ArgumentStatus::Ok) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("The request to move a Tuner Genius relay was not understood."),
+                   {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->moveTgxlRelayForStation(relay, direction, &reason)) {
+        emitResult(verb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not switch the Tuner Genius.")
+                                    : reason, {});
+        return;
+    }
+    emitResult(verb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-49 (parity Task 8): the Core listens for Tuner Genius announcements
+// and answers once its window ends, with `values` devicesJson (utf8, a JSON
+// array of {"address","port","model","serial","nickname"}). An answer due
+// to an earlier session is dropped.
+void SessionCommandDispatcher::handleScanTgxlLan(const SessionMessage& invoke)
+{
+    const QByteArray verb = invoke.commandVerb;
+    const quint32 commandId = invoke.commandId;
+    if (!hasExactlyArguments(invoke.arguments, {})) {
+        emitResult(verb, commandId, false,
+                   QStringLiteral("The request to scan for a Tuner Genius was not understood."),
+                   {});
+        return;
+    }
+    QString reason;
+    const QPointer<SessionCommandDispatcher> self(this);
+    const quint64 generation = m_sessionGeneration;
+    // Checkpoint join (R-IOS-02): the answer comes on a later turn, so it
+    // is named for the session that asked (emitResultAs), not whichever
+    // session is being dispatched then.
+    const QString owner = m_sessionOwner;
+    const bool started = m_radioModel->scanTgxlLanForStation(
+        [self, generation, owner, verb, commandId](const QString& devicesJson) {
+            if (!self || self->m_sessionGeneration != generation) { return; }
+            self->emitResultAs(owner, SessionMessages::commandResult(
+                verb, commandId, true, QString(), {},
+                {{0, "devicesJson", MirrorWireKind::Utf8, devicesJson}}));
+        },
+        &reason);
+    if (!started) {
+        emitResult(verb, commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not scan for a Tuner Genius.")
+                                    : reason, {});
+    }
+}
+
+// R-R3-49 (parity Task 8): the Peripherals row's Host and Port, saved on
+// the Core for its radio without dialling (configureTgxl's address rules).
+void SessionCommandDispatcher::handleSetTgxlAddress(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    QString host;
+    int port = 0;
+    if (!hasExactlyArguments(invoke.arguments, { "host", "port" })
+        || !findUtf8Argument(invoke.arguments, "host", &host)
+        || !hasWireKind(invoke.arguments, "port", MirrorWireKind::Int64)
+        || findIntArgument(invoke.arguments, "port", &port) != ArgumentStatus::Ok) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("The request to save the Tuner Genius address was not "
+                                  "understood."), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->setTgxlAddressForStation(host, port, &reason)) {
+        emitResult(verb, invoke.commandId, false,
+                   reason.isEmpty()
+                       ? QStringLiteral("The Core did not save the Tuner Genius address.")
+                       : reason, {});
+        return;
+    }
+    emitResult(verb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-49 (parity Task 9, remotePgxlControlVersion 4): the Power Genius's
+// OPERATE or STANDBY, sent through the Core's own PgxlConnection as the
+// local applet's line. Refused while the radio is on the air or the Core is
+// not connected to the amp; nothing is sent then.
+void SessionCommandDispatcher::handleSetPgxlOperate(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    QVariant on;
+    if (!hasExactlyArguments(invoke.arguments, { "on" })
+        || !findArgument(invoke.arguments, "on", &on) || on.typeId() != QMetaType::Bool) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("The request to put the Power Genius in operate or standby "
+                                  "was not understood."), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->setPgxlOperateForStation(on.toBool(), &reason)) {
+        emitResult(verb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not switch the Power Genius.")
+                                    : reason, {});
+        return;
+    }
+    emitResult(verb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-49 (parity Task 9): the Core listens for Power Genius announcements
+// and answers once its window ends, as scanTgxlLan does.
+void SessionCommandDispatcher::handleScanPgxlLan(const SessionMessage& invoke)
+{
+    const QByteArray verb = invoke.commandVerb;
+    const quint32 commandId = invoke.commandId;
+    if (!hasExactlyArguments(invoke.arguments, {})) {
+        emitResult(verb, commandId, false,
+                   QStringLiteral("The request to scan for a Power Genius was not understood."),
+                   {});
+        return;
+    }
+    QString reason;
+    const QPointer<SessionCommandDispatcher> self(this);
+    const quint64 generation = m_sessionGeneration;
+    // Checkpoint join (R-IOS-02): the answer comes on a later turn, so it
+    // is named for the session that asked (emitResultAs), not whichever
+    // session is being dispatched then.
+    const QString owner = m_sessionOwner;
+    const bool started = m_radioModel->scanPgxlLanForStation(
+        [self, generation, owner, verb, commandId](const QString& devicesJson) {
+            if (!self || self->m_sessionGeneration != generation) { return; }
+            self->emitResultAs(owner, SessionMessages::commandResult(
+                verb, commandId, true, QString(), {},
+                {{0, "devicesJson", MirrorWireKind::Utf8, devicesJson}}));
+        },
+        &reason);
+    if (!started) {
+        emitResult(verb, commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not scan for a Power Genius.")
+                                    : reason, {});
+    }
+}
+
+// R-R3-49 (parity Task 9): the Peripherals row's Power Genius Host and
+// Port, saved on the Core for its radio without dialling.
+void SessionCommandDispatcher::handleSetPgxlAddress(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    QString host;
+    int port = 0;
+    if (!hasExactlyArguments(invoke.arguments, { "host", "port" })
+        || !findUtf8Argument(invoke.arguments, "host", &host)
+        || !hasWireKind(invoke.arguments, "port", MirrorWireKind::Int64)
+        || findIntArgument(invoke.arguments, "port", &port) != ArgumentStatus::Ok) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("The request to save the Power Genius address was not "
+                                  "understood."), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->setPgxlAddressForStation(host, port, &reason)) {
+        emitResult(verb, invoke.commandId, false,
+                   reason.isEmpty()
+                       ? QStringLiteral("The Core did not save the Power Genius address.")
+                       : reason, {});
+        return;
+    }
+    emitResult(verb, invoke.commandId, true, QString(), {});
+}
+
 // R-R3-49 (parity Task 2, transmitSettingsVersion 2): the TX applet's Tune
 // Power slider. The Core sets its transmit band's tune power and the tune
 // drive source to the tune slider, as the local slider does; the window
@@ -2226,6 +2602,42 @@ void SessionCommandDispatcher::handleSetAlexRxAntenna(const SessionMessage& invo
     const bool receiveOnly = rxOnly.toBool();
     const QString reason = receiveOnly ? alex->setRxOnlyAntForBand(Band(band), antenna)
                                        : alex->setRxAntForBand(Band(band), antenna);
+    emitResult(invoke.commandVerb, invoke.commandId, reason.isEmpty(), reason, {});
+}
+
+// Parity mini-round (radioHardwareVersion 6): one band's TX antenna from a
+// remote window's Antenna Control grid. Parity Task 12 sent the whole
+// 14-band txAntennas list, so a list built before a change the Core made to
+// another band put that band back; the Core now changes only the band
+// named, through its own AlexAntennaFacade and AlexController (the local
+// grid's setTxAnt), and every window follows the `alexAntennas` delta. A
+// port blocked for transmit is kept off the band, with its reason. Like the
+// whole list, it keys nothing and is taken on the air and on a receive-only
+// Core, as Thetis's own TX antenna grid is (parity Task 12's reading of
+// setup.cs ProcessAlexAntRadioButton).
+void SessionCommandDispatcher::handleSetAlexTxAntenna(const SessionMessage& invoke)
+{
+    int band = 0;
+    int antenna = 0;
+    if (!hasExactlyArguments(invoke.arguments, { "band", "antenna" })
+        || findIntArgument(invoke.arguments, "band", &band) != ArgumentStatus::Ok
+        || findIntArgument(invoke.arguments, "antenna", &antenna) != ArgumentStatus::Ok) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core could not read this request."), {});
+        return;
+    }
+    AlexAntennaFacade* const alex = m_radioModel->alexAntennaFacade();
+    if (alex == nullptr || !alex->isBound()) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core has no antenna settings ready."), {});
+        return;
+    }
+    if (band < 0 || band >= AlexAntennaFacade::kBandCount) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core keeps antennas for 14 bands."), {});
+        return;
+    }
+    const QString reason = alex->setTxAntForBand(Band(band), antenna);
     emitResult(invoke.commandVerb, invoke.commandId, reason.isEmpty(), reason, {});
 }
 

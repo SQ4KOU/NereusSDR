@@ -14,12 +14,21 @@
 // 2026-09-24: R-R3-49 fix wave: OPERATE on sends bypass=0 then operate=1
 // from one command (remoteTgxlControlVersion 3). J.J. Boyd (KG4VCF),
 // AI-assisted via Anthropic Claude Code.
+// 2026-09-25: R-R3-49 (parity Task 8): a window's relay nudge reaches the
+// (fake) tuner as the local applet's line; the Core's LAN scan answers with
+// the Tuner Genius announcements it heard; a typed address is saved without
+// dialling. Each refused while the radio is on the air, and the nudge with
+// no tuner. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include <QtTest/QtTest>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QTcpServer>
 #include <QTcpSocket>
 #include "core/AppSettings.h"
 #include "core/LanDiscovery.h"
 #include "core/MoxController.h"
+#include "core/StationTgxlController.h"
 #include "core/TwoToneController.h"
 #include "core/TxChannel.h"
 #include "models/AccessorySettingsModel.h"
@@ -39,6 +48,15 @@ class TgxlStationIdentityTest : public QObject {
         model.setLastRadioInfoForTest(radio);
         model.setConnectionStateForTest(ConnectionState::Connected);
         model.setPeripheralValue(QStringLiteral("FourO3A_Enabled"), QStringLiteral("True"));
+    }
+    // The Core's identity listener, a child of its StationTgxlController.
+    // Looked up through the controller, never the model, since a window's
+    // Scan LAN adds a LanDiscovery (tgxlLanScan) to the model itself
+    // (group B fix wave, M3).
+    static LanDiscovery* identityDiscovery(RadioModel& model)
+    {
+        auto* controller = model.findChild<StationTgxlController*>();
+        return controller ? controller->findChild<LanDiscovery*>() : nullptr;
     }
     static void announce(LanDiscovery* discovery, quint16 port,
                          const QString& product, const QString& serial)
@@ -197,7 +215,7 @@ private slots:
         auto* peer = server.nextPendingConnection();
         peer->write("V1.2.17\n"); peer->flush();
         QTRY_VERIFY_WITH_TIMEOUT(infoSequence(frames) != 0, 1500);
-        auto* discovery = model.findChild<LanDiscovery*>();
+        auto* discovery = identityDiscovery(model);
         QVERIFY(discovery);
         sendInfo(peer, infoSequence(frames), QStringLiteral("241288-1"));
         QTRY_COMPARE(model.tgxlConnection()->identityInfo().serial, QStringLiteral("241288-1"));
@@ -237,7 +255,7 @@ private slots:
         auto* peer = server.nextPendingConnection();
         peer->write("V1.2.17\n"); peer->flush();
         QTRY_VERIFY(infoSequence(frames) != 0);
-        auto* discovery = model.findChild<LanDiscovery*>(); QVERIFY(discovery);
+        auto* discovery = identityDiscovery(model); QVERIFY(discovery);
         sendInfo(peer, infoSequence(frames), QStringLiteral("241288-1"));
         QTRY_VERIFY(!model.tgxlConnection()->identityInfo().serial.isEmpty());
         announce(discovery, server.serverPort(), product, serial);
@@ -268,7 +286,7 @@ private slots:
         auto* peer = server.nextPendingConnection();
         peer->write("V1.2.17\n"); peer->flush();
         QTRY_VERIFY(infoSequence(frames) != 0);
-        auto* discovery = model.findChild<LanDiscovery*>(); QVERIFY(discovery);
+        auto* discovery = identityDiscovery(model); QVERIFY(discovery);
         sendInfo(peer, infoSequence(frames), QStringLiteral("241288-1"));
         QTRY_VERIFY(!model.tgxlConnection()->identityInfo().serial.isEmpty());
         announce(discovery, server.serverPort() == 9010 ? 9008 : 9010,
@@ -306,7 +324,7 @@ private slots:
         auto* peer = server.nextPendingConnection();
         peer->write("V1.2.17\n"); peer->flush();
         QTRY_VERIFY(infoSequence(frames) != 0);
-        auto* discovery = model.findChild<LanDiscovery*>();
+        auto* discovery = identityDiscovery(model);
         QVERIFY(discovery);
         sendInfo(peer, infoSequence(frames), QStringLiteral("241288-1"));
         QTRY_COMPARE(model.tgxlConnection()->identityInfo().serial,
@@ -390,7 +408,7 @@ private slots:
         auto* peer = server.nextPendingConnection();
         peer->write("V1.2.17\n"); peer->flush();
         QTRY_VERIFY_WITH_TIMEOUT(infoSequence(frames) != 0, 3000);
-        auto* discovery = model.findChild<LanDiscovery*>();
+        auto* discovery = identityDiscovery(model);
         QVERIFY(discovery);
         sendInfo(peer, infoSequence(frames), QStringLiteral("241288-1"));
         QTRY_VERIFY(!model.tgxlConnection()->identityInfo().serial.isEmpty());
@@ -421,7 +439,7 @@ private slots:
         auto* oldPeer = oldServer.nextPendingConnection();
         oldPeer->write("V1.2.17\n"); oldPeer->flush();
         QTRY_VERIFY(infoSequence(frames) != 0);
-        QPointer<LanDiscovery> oldDiscovery = model.findChild<LanDiscovery*>(); QVERIFY(oldDiscovery);
+        QPointer<LanDiscovery> oldDiscovery = identityDiscovery(model); QVERIFY(oldDiscovery);
         const auto oldToken = model.tgxlConnection()->socketAttemptToken();
         const auto oldSequence = infoSequence(frames);
         QVERIFY(model.configureTgxlForStation(QStringLiteral("127.0.0.1"), newServer.serverPort(), &reason));
@@ -439,7 +457,7 @@ private slots:
         peer->write("V1.2.17\n"); peer->flush();
         QTRY_VERIFY(infoSequence(frames) != 0);
         QTRY_VERIFY(oldDiscovery.isNull());
-        auto* discovery = model.findChild<LanDiscovery*>(); QVERIFY(discovery);
+        auto* discovery = identityDiscovery(model); QVERIFY(discovery);
         sendInfo(peer, infoSequence(frames), QStringLiteral("241288-1"));
         QTRY_VERIFY(!model.tgxlConnection()->identityInfo().serial.isEmpty());
         QVERIFY(!model.tunerModel()->hasDirectConnection());
@@ -470,7 +488,7 @@ private slots:
         auto* peer = server.nextPendingConnection();
         peer->write("V1.2.17\n"); peer->flush();
         QTRY_VERIFY_WITH_TIMEOUT(infoSequence(frames) != 0, 1500);
-        auto* discovery = model.findChild<LanDiscovery*>();
+        auto* discovery = identityDiscovery(model);
         QVERIFY(discovery);
         sendInfo(peer, infoSequence(frames), QStringLiteral("241288-1"));
         QTRY_COMPARE(model.tgxlConnection()->identityInfo().serial, QStringLiteral("241288-1"));
@@ -603,7 +621,7 @@ private slots:
         auto* peer = server.nextPendingConnection();
         peer->write("V1.2.17\n"); peer->flush();
         QTRY_VERIFY_WITH_TIMEOUT(infoSequence(frames) != 0, 1500);
-        auto* discovery = model.findChild<LanDiscovery*>();
+        auto* discovery = identityDiscovery(model);
         QVERIFY(discovery);
         sendInfo(peer, infoSequence(frames), QStringLiteral("241288-1"));
         QTRY_COMPARE(model.tgxlConnection()->identityInfo().serial, QStringLiteral("241288-1"));
@@ -745,6 +763,236 @@ private slots:
         QVERIFY(model.disconnectTgxlForStation(&reason));
     }
 
+    // R-R3-49 (parity Task 8, remoteTgxlControlVersion 4): a window moves
+    // one relay, scans the Core's network and saves an address, whenever
+    // the radio is not on the air, on a receive-only Core too. Every
+    // refusal is plain words and sends nothing to the tuner.
+    void windowMovesRelaysScansAndSavesAddressOnlyWhenItMay()
+    {
+        QString reason;
+        const QString notOwning =
+            QStringLiteral("This Core cannot change its amplifier and tuner settings.");
+        {   // A Core that does not own its accessories.
+            RadioModel plain;
+            QVERIFY(!plain.moveTgxlRelayForStation(0, 1, &reason));
+            QCOMPARE(reason, notOwning);
+            bool called = false;
+            QVERIFY(!plain.scanTgxlLanForStation([&called](const QString&) { called = true; },
+                                                 &reason));
+            QCOMPARE(reason, notOwning);
+            QVERIFY(!plain.setTgxlAddressForStation(QStringLiteral("192.0.2.9"), 9010, &reason));
+            QCOMPARE(reason, notOwning);
+            QTest::qWait(20);
+            QVERIFY(!called);
+        }
+        {   // No radio: the address has nowhere to be kept.
+            RadioModel noRadio;
+            noRadio.enableStationAccessoryIdentity();
+            QVERIFY(!noRadio.setTgxlAddressForStation(QStringLiteral("192.0.2.9"), 9010, &reason));
+            QCOMPARE(reason, QStringLiteral("Connect the Core to a radio before setting up its "
+                                            "Tuner Genius XL."));
+        }
+        QTcpServer server;
+        QVERIFY(server.listen(QHostAddress::LocalHost, 0));
+        RadioModel model;
+        prepare(model);
+        model.setTgxlLanScanWindowMsForTest(150);
+        QSignalSpy frames(model.tgxlConnection(), &TgxlConnection::testFrameWrittenForTesting);
+        const auto relaySent = [&] {
+            for (const auto& row : frames) {
+                if (row.first().toString().contains(QStringLiteral("|tune relay="))) { return true; }
+            }
+            return false;
+        };
+        const QString notUnderstood =
+            QStringLiteral("The request to move a Tuner Genius relay was not understood.");
+        for (const auto& [relay, direction] : QList<QPair<int, int>>{
+                 {3, 1}, {-1, 1}, {0, 0}, {0, 2}, {1, -2}}) {
+            QVERIFY(!model.moveTgxlRelayForStation(relay, direction, &reason));
+            QCOMPARE(reason, notUnderstood);
+        }
+        const QString notConnected = QStringLiteral("The Core is not connected to the Tuner Genius.");
+        QVERIFY(!model.moveTgxlRelayForStation(0, 1, &reason));
+        QCOMPARE(reason, notConnected);
+        // A bad address is refused with configureTgxl's words, before anything is saved.
+        const QString badAddress = QStringLiteral("Enter the Tuner Genius XL's IP address or host "
+                                                  "name, and a port from 1 to 65535.");
+        for (const auto& [host, port] : QList<QPair<QString, int>>{
+                 {QString(), 0}, {QStringLiteral("bad host!"), 9010},
+                 {QStringLiteral("192.0.2.9"), 0}, {QStringLiteral("192.0.2.9"), 65536}}) {
+            QVERIFY(!model.setTgxlAddressForStation(host, port, &reason));
+            QCOMPARE(reason, badAddress);
+        }
+        QVERIFY(model.peripheralValue(QStringLiteral("TGXL_ManualIp")).isEmpty());
+
+        QVERIFY(model.configureTgxlForStation(QStringLiteral("127.0.0.1"), server.serverPort(),
+                                              &reason));
+        QTRY_VERIFY_WITH_TIMEOUT(server.hasPendingConnections(), 1500);
+        auto* peer = server.nextPendingConnection();
+        peer->write("V1.2.17\n"); peer->flush();
+        QTRY_VERIFY_WITH_TIMEOUT(infoSequence(frames) != 0, 1500);
+        auto* discovery = identityDiscovery(model);
+        QVERIFY(discovery);
+        sendInfo(peer, infoSequence(frames), QStringLiteral("241288-1"));
+        announce(discovery, server.serverPort(), QStringLiteral("TunerGeniusXL"),
+                 QStringLiteral("241288-1"));
+        QTRY_VERIFY(model.tgxlConnection()->isConnected());
+
+        // On the air: the MOX latch, TUNE, then the Core's MoxController
+        // keyed by the radio's own PTT input (its receive-only pre-check
+        // lifted, standing in for a Core that can transmit).
+        const QString onAir = QStringLiteral("The radio is on the air. Try again when it stops.");
+        const auto expectRefused = [&] {
+            QVERIFY(!model.moveTgxlRelayForStation(0, 1, &reason));
+            QCOMPARE(reason, onAir);
+        };
+        // Parity mini-round (rulings a and b): Scan LAN only listens and the
+        // address is only saved, so both go ahead on the air, as a local
+        // window's do; neither switches the tuner nor sends it anything.
+        const auto expectListenAndSaveTaken = [&](const QString& host) {
+            bool scanAnswered = false;
+            QVERIFY(model.scanTgxlLanForStation(
+                [&scanAnswered](const QString&) { scanAnswered = true; }, &reason));
+            QVERIFY(reason.isEmpty());
+            QVERIFY(model.setTgxlAddressForStation(host, 9010, &reason));
+            QVERIFY(reason.isEmpty());
+            QCOMPARE(model.peripheralValue(QStringLiteral("TGXL_ManualIp")), host);
+            QTRY_VERIFY(scanAnswered);
+            QTRY_VERIFY(model.findChild<LanDiscovery*>(QStringLiteral("tgxlLanScan")) == nullptr);
+        };
+        model.transmitModel().setMox(true);
+        expectRefused();
+        if (QTest::currentTestFailed()) { return; }
+        expectListenAndSaveTaken(QStringLiteral("192.0.2.7"));
+        if (QTest::currentTestFailed()) { return; }
+        model.transmitModel().setMox(false);
+        model.transmitModel().setTune(true);
+        expectRefused();
+        if (QTest::currentTestFailed()) { return; }
+        model.transmitModel().setTune(false);
+        MoxController* const mox = model.moxController();
+        QVERIFY(mox);
+        mox->setMoxCheck({});
+        mox->onMicPttFromRadio(true);
+        QVERIFY(mox->isMox());
+        expectRefused();
+        if (QTest::currentTestFailed()) { return; }
+        expectListenAndSaveTaken(QStringLiteral("192.0.2.8"));
+        if (QTest::currentTestFailed()) { return; }
+        mox->onMicPttFromRadio(false);
+        QTRY_VERIFY(mox->state() == MoxState::Rx);
+        QTest::qWait(200);
+        QVERIFY(!relaySent());
+
+        // Off the air, on a receive-only Core: each relay nudge reaches the
+        // tuner as the local applet's own line, and keys nothing.
+        QVERIFY(model.receiveOnlyStationPolicy());
+        const auto sentLine = [&](const QString& command) {
+            for (const auto& row : frames) {
+                if (row.first().toString().endsWith(QLatin1Char('|') + command)) { return true; }
+            }
+            return false;
+        };
+        QVERIFY(model.moveTgxlRelayForStation(0, 1, &reason));
+        QTRY_VERIFY(sentLine(QStringLiteral("tune relay=0 move=1")));
+        QVERIFY(model.moveTgxlRelayForStation(1, -1, &reason));
+        QTRY_VERIFY(sentLine(QStringLiteral("tune relay=1 move=-1")));
+        QVERIFY(model.moveTgxlRelayForStation(2, 1, &reason));
+        QTRY_VERIFY(sentLine(QStringLiteral("tune relay=2 move=1")));
+        // The model reports what the tuner says, not the request.
+        QCOMPARE(model.tunerModel()->relayC1(), 0);
+        peer->write("S0|state relayC1=42 relayL=17 relayC2=3\n"); peer->flush();
+        QTRY_COMPARE(model.tunerModel()->relayC1(), 42);
+        QVERIFY(!mox->isMox());
+        QVERIFY(!model.transmitModel().isTune());
+        QVERIFY(!model.isTransmitting());
+
+        // The Core's Scan LAN: the Tuner Genius announcements it heard, in
+        // the scan's window, not the Power Genius's.
+        QString devicesJson;
+        bool answered = false;
+        QVERIFY(model.scanTgxlLanForStation(
+            [&](const QString& json) { devicesJson = json; answered = true; }, &reason));
+        // Group B fix wave (M2): one scan per device at a time. A second
+        // request while it listens joins it: no second listener, and both
+        // get the same answer when the window ends.
+        QString secondJson;
+        bool secondAnswered = false;
+        QVERIFY(model.scanTgxlLanForStation(
+            [&](const QString& json) { secondJson = json; secondAnswered = true; }, &reason));
+        QCOMPARE(model.findChildren<LanDiscovery*>(QStringLiteral("tgxlLanScan")).size(), 1);
+        auto* scan = model.findChild<LanDiscovery*>(QStringLiteral("tgxlLanScan"));
+        QVERIFY(scan);
+        scan->injectDatagramForTesting(
+            QStringLiteral("TunerGeniusXL ip=192.0.2.44 v=1.2.17 serial=9911-2 nickname=Shack_TGXL"),
+            9010);
+        scan->injectDatagramForTesting(
+            QStringLiteral("PowerGeniusXL ip=192.0.2.45 v=3.8.9 serial=5501-7 nickname=Amp"), 9008);
+        QTRY_VERIFY(answered);
+        QVERIFY(secondAnswered);
+        QCOMPARE(secondJson, devicesJson);
+        const QJsonArray devices = QJsonDocument::fromJson(devicesJson.toUtf8()).array();
+        bool heard = false;
+        for (const QJsonValue& value : devices) {
+            const QJsonObject device = value.toObject();
+            QVERIFY(device.value(QStringLiteral("model")).toString().startsWith(
+                QStringLiteral("TunerGenius")));
+            if (device.value(QStringLiteral("serial")).toString() == QStringLiteral("9911-2")) {
+                heard = true;
+                QCOMPARE(device.value(QStringLiteral("address")).toString(),
+                         QStringLiteral("192.0.2.44"));
+                QCOMPARE(device.value(QStringLiteral("port")).toInt(), 9010);
+                QCOMPARE(device.value(QStringLiteral("model")).toString(),
+                         QStringLiteral("TunerGeniusXL"));
+                QCOMPARE(device.value(QStringLiteral("nickname")).toString(),
+                         QStringLiteral("Shack_TGXL"));
+                QCOMPARE(device.keys().size(), 5);
+            }
+        }
+        QVERIFY(heard);
+        QTRY_VERIFY(model.findChild<LanDiscovery*>(QStringLiteral("tgxlLanScan")) == nullptr);
+
+        // A typed address: saved for the Core's radio. While the Core is
+        // connected its own address stays on `tuner`; once it is not, the
+        // saved one shows there, and nothing is dialled.
+        QVERIFY(model.setTgxlAddressForStation(QStringLiteral(" 192.0.2.9 "), 9011, &reason));
+        QCOMPARE(model.peripheralValue(QStringLiteral("TGXL_ManualIp")), QStringLiteral("192.0.2.9"));
+        QCOMPARE(model.peripheralValue(QStringLiteral("TGXL_ManualPort")), QStringLiteral("9011"));
+        QCOMPARE(model.tunerModel()->configuredHost(), QStringLiteral("127.0.0.1"));
+        QVERIFY(model.disconnectTgxlForStation(&reason));
+        QTRY_COMPARE(model.tunerModel()->connectionPhase(),
+                     TunerModel::ConnectionPhase::Disconnected);
+        QVERIFY(model.setTgxlAddressForStation(QStringLiteral("192.0.2.10"), 9012, &reason));
+        QCOMPARE(model.tunerModel()->configuredHost(), QStringLiteral("192.0.2.10"));
+        QCOMPARE(model.tunerModel()->configuredPort(), 9012);
+        QCOMPARE(model.tunerModel()->connectionPhase(),
+                 TunerModel::ConnectionPhase::Disconnected);
+        QTest::qWait(100);
+        QVERIFY(!model.tgxlConnection()->isConnected());
+        QCOMPARE(model.tunerModel()->connectionPhase(),
+                 TunerModel::ConnectionPhase::Disconnected);
+
+        // Group B fix wave (I1): a blank Host is kept, as a local window's
+        // blank Host is, and stops auto-connect. The Core shows the blank
+        // and its next start dials nothing, where a saved address dials.
+        QVERIFY(model.setTgxlAddressForStation(QStringLiteral("127.0.0.1"),
+                                               server.serverPort(), &reason));
+        QVERIFY(model.setTgxlAddressForStation(QStringLiteral("  "), 9013, &reason));
+        QVERIFY(reason.isEmpty());
+        QVERIFY(model.peripheralValue(QStringLiteral("TGXL_ManualIp")).isEmpty());
+        QCOMPARE(model.peripheralValue(QStringLiteral("TGXL_ManualPort")), QStringLiteral("9013"));
+        QVERIFY(model.tunerModel()->configuredHost().isEmpty());
+        QCOMPARE(model.tunerModel()->configuredPort(), 9013);
+        const quint64 blankToken = model.tgxlConnection()->socketAttemptToken();
+        model.applyPeripheralsForTest();
+        QTest::qWait(150);
+        QVERIFY(!server.hasPendingConnections());
+        QCOMPARE(model.tgxlConnection()->socketAttemptToken(), blankToken);
+        QVERIFY(model.tunerModel()->configuredHost().isEmpty());
+        QCOMPARE(model.tunerModel()->connectionPhase(),
+                 TunerModel::ConnectionPhase::Disconnected);
+    }
+
     void pendingLifecycleCancellation()
     {
         QFETCH(int, action);
@@ -757,7 +1005,7 @@ private slots:
         QTRY_VERIFY(server.hasPendingConnections());
         auto* peer = server.nextPendingConnection();
         peer->write("V1.2.17\n"); peer->flush();
-        QTRY_VERIFY(model.findChild<LanDiscovery*>());
+        QTRY_VERIFY(identityDiscovery(model));
         const auto token = model.tgxlConnection()->socketAttemptToken();
         if (action == 0) { QVERIFY(model.disconnectTgxlForStation(&reason)); }
         if (action == 1) { model.setFourO3AEnabled(false); }

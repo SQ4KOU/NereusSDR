@@ -172,6 +172,13 @@ PureSignalSessionFacade::PureSignalSessionFacade(RadioModel* radio, PureSignal* 
             connect(radio->twoToneController(), &TwoToneController::twoToneActiveChanged,
                     this, [this]() { refreshStatus(); });
         }
+        // R-R3-49 (parity Task 7): in a window, arming waits while the
+        // Core's radio is on the air; the controls follow it at once.
+        connect(radio, &RadioModel::coreOnAirChanged, this, [this]() {
+            if (remote()) {
+                emit statusChanged();
+            }
+        });
     }
     setCoordinator(coordinator ? coordinator : radio ? radio->pureSignal() : nullptr);
 }
@@ -199,6 +206,42 @@ PureSignalSessionFacade::~PureSignalSessionFacade()
 bool PureSignalSessionFacade::remote() const
 {
     return m_radio && m_radio->role() == RadioModel::Role::Remote;
+}
+
+bool PureSignalSessionFacade::isArmingAction(Ps3Action action)
+{
+    return action == Ps3Action::Single || action == Ps3Action::StartAutomatic
+        || action == Ps3Action::ApplyCurrentCorrection || action == Ps3Action::RestoreCorrection;
+}
+
+bool PureSignalSessionFacade::canArm() const
+{
+    if (!remote()) {
+        return m_canActuate;
+    }
+    if (!m_available || !m_remoteRuntimeCanActuate) {
+        return false;
+    }
+    return m_remoteTxPermitted || (m_remoteArmingOffered && !m_radio->isCoreOnAir());
+}
+
+QString PureSignalSessionFacade::armingRefusal() const
+{
+    if (!remote() || !m_remoteArmingOffered || m_remoteTxPermitted || canArm()) {
+        return {};
+    }
+    if (m_radio->isCoreOnAir()) {
+        return RadioModel::onAirReason();
+    }
+    return QStringLiteral("PureSignal needs a connected radio that supports it.");
+}
+
+QString PureSignalSessionFacade::settingsRefusal() const
+{
+    if (remote() && m_remoteArmingOffered && m_radio->isCoreOnAir()) {
+        return RadioModel::onAirReason();
+    }
+    return {};
 }
 PureSignalSettings* PureSignalSessionFacade::settings() const
 {
@@ -286,8 +329,13 @@ quint32 PureSignalSessionFacade::requestAction(Ps3Action action, const QVariantM
         const bool stop = action == Ps3Action::OffReset
             || (action == Ps3Action::SetTwoTone && oneArgument(arguments, "enabled", QMetaType::Bool)
                 && !arguments.value("enabled").toBool());
-        if (!stop && action != Ps3Action::SaveCorrection && !m_canActuate) {
-            m_lastError = QStringLiteral("PureSignal cannot be run from a remote window yet.");
+        // R-R3-49 (parity Task 7): arming follows canArm(); the two-tone
+        // test stays with remote transmit.
+        const bool permitted = isArmingAction(action) ? canArm() : m_canActuate;
+        if (!stop && action != Ps3Action::SaveCorrection && !permitted) {
+            const QString refusal = isArmingAction(action) ? armingRefusal() : QString();
+            m_lastError = refusal.isEmpty()
+                ? QStringLiteral("PureSignal cannot be run from a remote window yet.") : refusal;
             emit statusChanged();
             return 0;
         }
@@ -589,13 +637,15 @@ void PureSignalSessionFacade::setRemoteRequestHandler(RemoteRequestHandler handl
 {
     m_remoteRequest = std::move(handler);
 }
-void PureSignalSessionFacade::setRemoteCapabilities(bool available, bool canActuate)
+void PureSignalSessionFacade::setRemoteCapabilities(bool available, bool canActuate,
+                                                    bool armingOffered)
 {
     if (!remote()) {
         return;
     }
     m_remoteCapabilityAvailable = available;
     m_remoteTxPermitted = canActuate;
+    m_remoteArmingOffered = armingOffered;
     m_available = available && m_remoteRuntimeAvailable;
     m_canActuate = m_available && canActuate && m_remoteRuntimeCanActuate;
     emit statusChanged();
@@ -676,6 +726,7 @@ void PureSignalSessionFacade::resetSession()
         m_canActuate = false;
         m_remoteCapabilityAvailable = false;
         m_remoteTxPermitted = false;
+        m_remoteArmingOffered = false;
         m_remoteRuntimeAvailable = false;
         m_remoteRuntimeCanActuate = false;
         m_twoToneOn = false;

@@ -8,6 +8,9 @@
 // 2026-09-25: R-R3-49 (parity Task 5): Transmit > Power and DEXP/VOX open
 // without remote transmit and gate their settings on version 5. J.J. Boyd
 // (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-25: R-R3-49, R-R3-21 (parity Task 11): the flag's XIT writes the
+// Core's slice in a remote window, as RIT does, whatever txPermitted says.
+// J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include <QtTest>
 #include <QAction>
 #include <QDir>
@@ -28,6 +31,7 @@
 #include "gui/applets/TxEqDialog.h"
 #include "gui/widgets/ScrollableLabel.h"
 #include "gui/widgets/VfoWidget.h"
+#include "core/MoxController.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -176,7 +180,7 @@ private slots:
         action->trigger();
         QVERIFY(window.findChild<TxEqDialog*>());
     }
-    void authenticatedRemoteControlsCannotWriteXitButRitStillWorks()
+    void authenticatedRemoteControlsWriteXitAndRit()
     {
         QTemporaryDir directory;
         AppSettings stationSettings(directory.filePath(QStringLiteral("station.settings")));
@@ -210,8 +214,12 @@ private slots:
         auto* offset = window.findChild<ScrollableLabel*>(QStringLiteral("VfoXitOffset"));
         auto* rit = window.findChild<QPushButton*>(QStringLiteral("VfoRitButton"));
         QVERIFY(xit && zero && offset && rit);
-        QVERIFY(!xit->isEnabled() && !zero->isEnabled() && !offset->isEnabled());
+        // R-R3-49 (parity Task 11): XIT is a slice setting like RIT. The
+        // Core does not offer transmit here, and XIT still writes.
+        QVERIFY(!client->capabilities().txPermitted);
+        QVERIFY(xit->isEnabled() && zero->isEnabled() && offset->isEnabled());
         QVERIFY(rit->isEnabled());
+        QTRY_COMPARE(offset->value(), 230);
         // R-R3-49 (parity Task 4): Tools > TX Equalizer opens in a remote
         // window; opening it writes nothing.
         auto* action = window.findChild<QAction*>(QStringLiteral("toolsTxEqualizer"));
@@ -221,8 +229,41 @@ private slots:
         QTRY_VERIFY(TxEqDialog::settingsPermitted());
         stationLink->clearReceived();
         xit->click();
-        zero->click();
+        QTRY_VERIFY(stationSlice->xitEnabled());
         offset->setValue(400);
+        QTRY_COMPARE(stationSlice->xitHz(), 400);
+        QTRY_COMPARE(window.radioModel()->sliceById(id)->xitHz(), 400);
+        zero->click();
+        QTRY_COMPARE(stationSlice->xitHz(), 0);
+        // The Core's change comes back to the flag.
+        stationSlice->setXitHz(-150);
+        QTRY_COMPARE(offset->value(), -150);
+        stationSlice->setXitEnabled(false);
+        QTRY_VERIFY(!xit->isChecked());
+        // Group B fix wave: on the air, as in Thetis, XIT and the TX antenna
+        // still change (console.cs udXIT_ValueChanged retunes with
+        // updateVFOFreqs(_mox); an Alex TX antenna applies at once with
+        // tx = _mox), from a remote window as from a local one.
+        MoxController* const mox = station.moxController();
+        QVERIFY(mox);
+        mox->setMoxCheck({});
+        mox->setMox(true);
+        QTRY_VERIFY(window.radioModel()->isCoreOnAir());
+        QVERIFY(xit->isEnabled() && offset->isEnabled() && zero->isEnabled());
+        xit->click();
+        QTRY_VERIFY(stationSlice->xitEnabled());
+        offset->setValue(120);
+        QTRY_COMPARE(stationSlice->xitHz(), 120);
+        const QString txAntenna = stationSlice->txAntenna() == QStringLiteral("ANT2")
+            ? QStringLiteral("ANT3") : QStringLiteral("ANT2");
+        window.radioModel()->sliceById(id)->setTxAntenna(txAntenna);
+        QTRY_COMPARE(stationSlice->txAntenna(), txAntenna);
+        mox->setMox(false);
+        QTRY_VERIFY(!window.radioModel()->isCoreOnAir());
+        xit->click();
+        QTRY_VERIFY(!stationSlice->xitEnabled());
+        stationSlice->setXitHz(-150);
+        QTRY_COMPARE(offset->value(), -150);
         action->trigger();
         auto* eq = window.findChild<QPushButton*>(QStringLiteral("TxEqButton"));
         // R-R3-49 (parity Task 2): the EQ toggle is a transmit setting, live
@@ -236,25 +277,24 @@ private slots:
         QMetaObject::invokeMethod(eq, "customContextMenuRequested", Q_ARG(QPoint, QPoint()));
         QVERIFY(eqDialog->isVisible());
 
-        // A real accepted RX write is the drain barrier, and proves that
-        // suppressing TX gestures has not disabled all slice controls.
+        // RIT writes too.
         const bool desiredRit = !stationSlice->ritEnabled();
         rit->click();
         QTRY_COMPARE(stationSlice->ritEnabled(), desiredRit);
-        QCOMPARE(stationSlice->xitHz(), 230);
+        QCOMPARE(stationSlice->xitHz(), -150);
         QVERIFY(!stationSlice->xitEnabled());
-        QCOMPARE(window.radioModel()->sliceById(id)->xitHz(), 230);
-        QVERIFY(!window.radioModel()->sliceById(id)->xitEnabled());
-        QVERIFY(stationLink->receivedKinds().contains(QByteArrayLiteral("property.write")));
+        bool wroteXitEnabled = false;
+        bool wroteXitHz = false;
         for (const QByteArray& wire : stationLink->received()) {
             SessionMessage message;
             QVERIFY(SessionMessages::decode(wire, &message));
             if (message.kind != SessionMessageKind::PropertyWrite) { continue; }
             for (const MirrorUpdate& update : message.updates) {
-                QVERIFY(update.name != QByteArrayLiteral("xitEnabled"));
-                QVERIFY(update.name != QByteArrayLiteral("xitHz"));
+                wroteXitEnabled = wroteXitEnabled || update.name == QByteArrayLiteral("xitEnabled");
+                wroteXitHz = wroteXitHz || update.name == QByteArrayLiteral("xitHz");
             }
         }
+        QVERIFY(wroteXitEnabled && wroteXitHz);
 
         QAction* settingsAction = nullptr;
         for (QAction* candidate : window.findChildren<QAction*>()) {
@@ -291,7 +331,7 @@ private slots:
         stationLink->sendText(SessionMessages::encode(
             SessionMessages::capabilities(capabilities.toUpdates())));
         QTRY_VERIFY(!client->capabilities().txPermitted);
-        QTRY_VERIFY(!xit->isEnabled());
+        QVERIFY(xit->isEnabled() && zero->isEnabled() && offset->isEnabled());
         // R-R3-49 (parity Task 4): TX Equalizer stays available.
         QVERIFY(action->isEnabled());
         QVERIFY(proc->isEnabled() && eq->isEnabled());

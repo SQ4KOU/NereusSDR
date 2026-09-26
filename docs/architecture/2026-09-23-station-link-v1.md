@@ -782,18 +782,18 @@ change shows as surface drift and as a change to this table.
 | `audioClockVersion` | 1 |
 | `receiverAudioVersion` | 1 |
 | `headphonesMixVersion` | 1 |
-| `radioHardwareVersion` | 4 |
-| `remotePgxlControlVersion` | 3 |
-| `remoteRfKitControlVersion` | 3 |
+| `radioHardwareVersion` | 6 |
+| `remotePgxlControlVersion` | 4 |
+| `remoteRfKitControlVersion` | 4 |
 | `stationTciVersion` | 1 |
-| `accessoryDataVersion` | 1 |
-| `remoteTgxlControlVersion` | 3 |
+| `accessoryDataVersion` | 3 |
+| `remoteTgxlControlVersion` | 4 |
 | `stationIdentityVersion` | 1 |
 | `deviceAdminVersion` | 1 |
 | `pairingVersion` | 1 |
 | `stationCatalogVersion` | 1 |
 | `displayExtrasVersion` | 2 |
-| `transmitSettingsVersion` | 6 |
+| `transmitSettingsVersion` | 7 |
 | `bandSelectVersion` | 1 |
 | `sessionHolderVersion` | 1 |
 
@@ -826,22 +826,50 @@ When a feature is off, its version is 0:
 - `radioHardwareVersion`: sent only at agreed minor 11. 0 without the step
   attenuator bound; 1 with it; 2 with the Alex antennas too; 4 with the HL2
   I/O board too: the `ioBoard` object, `setAlexRxAntenna` (which needs 3)
-  and the filter policy command `setAlexBpfMode` (which needs 4). A station
-  no longer sends 3; a client compares the version as a minimum
-  (section 6.2), so 4 serves `setAlexRxAntenna` too.
+  and the filter policy command `setAlexBpfMode` (which needs 4); 5 (group
+  B fix wave) with `rxOutOnTx` on `alexAntennas` two-way (RX bypass on TX,
+  the VFO flag's BYPS; the Core applies it through its AlexController,
+  which clears `ext1OutOnTx` and `ext2OutOnTx`); 6 (parity Task 12) with
+  the rest of the transmit half of `alexAntennas` two-way: `txAntennas`,
+  `blockTxAnt2`, `blockTxAnt3`, `ext1OutOnTx`, `ext2OutOnTx` and
+  `rxOutOverride`, each applied through the Core's AlexController as the
+  local Antenna Control tab applies it (a TX antenna on a port blocked for
+  transmit is kept and settles with a reason; Block TX moves a band on that
+  port back to Ant 1; Ext 1 or Ext 2 on TX clears the other two). These
+  seven writes have no on-air rule, on the Core or in a local window, as in
+  Thetis: an antenna change while the radio transmits goes out on the TX
+  routing, and a relay flag reaches the relays at the next MOX edge. A
+  station no longer sends 3, 4 or 5; a client compares the version as a
+  minimum (section 6.2), so 6 serves `setAlexRxAntenna`, `setAlexBpfMode`
+  and `rxOutOnTx` too. 6 also carries `setAlexTxAntenna` (`band` i64,
+  `antenna` i64; parity mini-round): one band's TX antenna, applied
+  through the Core's AlexController as the local grid applies it, so an
+  edit cannot put back a TX antenna the Core changed on another band in
+  between, which a whole `txAntennas` list built before that change does.
+  A client at 6 sends one band's TX antenna with it; the Core still takes
+  a whole `txAntennas` list from a window that sends one. A port blocked for transmit is refused with "An
+  antenna blocked for transmit cannot be a band's TX antenna.", an antenna
+  outside 1 to 3 with "Antennas are numbered 1 to 3."; like the list, it
+  has no on-air rule.
 - `remotePgxlControlVersion`, `remoteRfKitControlVersion`,
   `remoteTgxlControlVersion`: sent only at agreed minor 11, and 0 unless
   the Core owns its accessories. `remotePgxlControlVersion` 3 adds the
-  Power Genius's own settings and `remoteTgxlControlVersion` 1 the Tuner
+  Power Genius's own settings, and 4 its OPERATE and STANDBY, the Core's
+  Scan LAN for it and its saved address (`setPgxlOperate`, `scanPgxlLan`,
+  `setPgxlAddress`, section 9.1, parity Task 9), and `remoteTgxlControlVersion` 1 the Tuner
   Genius's (the `accessorySettings` object and the device settings
   commands, section 9.1); `remoteTgxlControlVersion` 2 adds the Tuner
   Genius's antenna, operate and bypass (`setTgxlAntenna`,
-  `setTgxlOperate`, `setTgxlBypass`, section 9.1), and 3 has
+  `setTgxlOperate`, `setTgxlBypass`, section 9.1), 3 has
   `setTgxlOperate` with `on` true put the tuner in operate whole (bypass
-  off and operate on, from the one command);
+  off and operate on, from the one command), and 4 adds the relay nudge,
+  the Core's Scan LAN and the saved address (`moveTgxlRelay`,
+  `scanTgxlLan`, `setTgxlAddress`, section 9.1, parity Task 8);
   `remoteRfKitControlVersion` 3 adds `resetRfKitError`, the RF-Kit
-  amplifier's Reset amp error. `remoteTgxlControlVersion` is followed by
-  `stationIdentityVersion`.
+  amplifier's Reset amp error, and 4 its OPERATE and STANDBY, antenna,
+  TCI mode and saved address (`setRfKitOperate`, `setRfKitAntenna`,
+  `setRfKitTciMode`, `setRfKitAddress`, section 9.1, parity Task 10).
+  `remoteTgxlControlVersion` is followed by `stationIdentityVersion`.
 - `stationTciVersion`: sent only at agreed minor 11, and 0 unless the Core
   runs a station TCI server.
 - `accessoryDataVersion`: sent only at agreed minor 11, and 0 unless the
@@ -849,6 +877,12 @@ When a feature is off, its version is 0:
   `accessoryData` object (fault histories, connection counters, the
   transmit interlock and the Power Genius output limit) and accepts
   `setTxInterlockPolicy`, `setPgxlPowerCap` and `clearAccessoryFaults`.
+  At 2 (parity Task 10) the object also carries the RF-Kit's connection
+  counts (`rfkitConnectedSinceMs`, `rfkitPollsOk`, `rfkitPollsFailed`,
+  `rfkitReconnectCount`, `rfkitLastPollMs`), appended after the older
+  properties, which keep their ordinals. At 3 (group B fix wave) it also
+  carries the RF-Kit's average response time (`rfkitRttAvgMs`), appended
+  the same way.
 
 - `stationIdentityVersion`: sent only at agreed minor 11. 1 when the
   Core has its identity key and signs devices in by key (section 3.5);
@@ -938,8 +972,16 @@ When a feature is off, its version is 0:
   (`hardware/<mac>/paCalibration/...`: the Watt Meter page), taken while
   the radio is off the air (section 8) and applied to the Core's PA
   profiles and calibration at once. PA Gain's auto-calibrate sweep keys
-  the radio and waits for remote transmit. Each is refused while the radio
-  is on the air (section 7.3). The keying set stays refused on a receive-only
+  the radio and waits for remote transmit. At 7 it also covers PureSignal
+  arming: the commands `ps3.single`, `ps3.automatic`, `ps3.applyCurrent`
+  and `ps3.restoreCorrection` (section 9.1), and a `property.write` on
+  `pureSignalSettings`, which the Core then applies to its PureSignal at
+  once instead of only keeping it (section 7.3). Arming keys nothing, so a
+  receive-only Core permits PureSignal: its `pureSignal` object's
+  `canActuate` says whether PureSignal is ready on the Core's radio, not
+  whether this peer may transmit (`txPermitted`). `ps3.twoTone` with
+  `enabled` true keys the radio and waits for remote transmit. Each is
+  refused while the radio is on the air (section 7.3). The keying set stays refused on a receive-only
   Core, on and off the air, and so do raw settings writes of
   `hardware/<mac>/tx/...`, `powerByBand` and `tunePowerByBand` (the
   `transmit` object owns them). A window whose Core sends 0 keeps its
@@ -1141,7 +1183,7 @@ An enum property lists the values its domain allows.
 <!-- surface:mirrorClasses -->
 <!-- Generated by scripts/render-link-tables.py from tests/data/link/v1/surface.json. Do not edit by hand. -->
 
-**AccessoryDataModel** (42 properties)
+**AccessoryDataModel** (48 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -1187,6 +1229,12 @@ An enum property lists the values its domain allows.
 | 39 | `rfkitAntenna2Label` | `utf8` | outbound |  |
 | 40 | `rfkitAntenna3Label` | `utf8` | outbound |  |
 | 41 | `rfkitAntenna4Label` | `utf8` | outbound |  |
+| 42 | `rfkitConnectedSinceMs` | `i64` | outbound |  |
+| 43 | `rfkitPollsOk` | `i64` | outbound |  |
+| 44 | `rfkitPollsFailed` | `i64` | outbound |  |
+| 45 | `rfkitReconnectCount` | `i64` | outbound |  |
+| 46 | `rfkitLastPollMs` | `i64` | outbound |  |
+| 47 | `rfkitRttAvgMs` | `i64` | outbound |  |
 
 **AccessorySettingsModel** (21 properties)
 
@@ -1221,13 +1269,13 @@ An enum property lists the values its domain allows.
 | 0 | `rxAntennas` | `utf8` | bidirectional |  |
 | 1 | `rxOnlyAntennas` | `utf8` | bidirectional |  |
 | 2 | `useTxAntennaForRx` | `bool` | bidirectional |  |
-| 3 | `txAntennas` | `utf8` | outbound |  |
-| 4 | `blockTxAnt2` | `bool` | outbound |  |
-| 5 | `blockTxAnt3` | `bool` | outbound |  |
-| 6 | `rxOutOnTx` | `bool` | outbound |  |
-| 7 | `ext1OutOnTx` | `bool` | outbound |  |
-| 8 | `ext2OutOnTx` | `bool` | outbound |  |
-| 9 | `rxOutOverride` | `bool` | outbound |  |
+| 3 | `txAntennas` | `utf8` | bidirectional |  |
+| 4 | `blockTxAnt2` | `bool` | bidirectional |  |
+| 5 | `blockTxAnt3` | `bool` | bidirectional |  |
+| 6 | `rxOutOnTx` | `bool` | bidirectional |  |
+| 7 | `ext1OutOnTx` | `bool` | bidirectional |  |
+| 8 | `ext2OutOnTx` | `bool` | bidirectional |  |
+| 9 | `rxOutOverride` | `bool` | bidirectional |  |
 
 **AmplifierModel** (20 properties)
 
@@ -1777,7 +1825,7 @@ Notes on the keys:
   only to a peer at agreed minor 11 and only while `radioHardwareVersion` is
   at least 1, 2 and 3 respectively. `amplifier` and `rfkit` are sent only at
   minor 11 on a Core that owns its accessories, `accessoryData` only at
-  minor 11 while `accessoryDataVersion` is 1, `accessorySettings` only at
+  minor 11 while `accessoryDataVersion` is at least 1, `accessorySettings` only at
   minor 11 while `remotePgxlControlVersion` is at least 3 or
   `remoteTgxlControlVersion` at least 1, `stationTci` only at
   minor 11 on a Core that runs a station TCI server, and `catalog` only at
@@ -2120,7 +2168,11 @@ from 0 to 99 for each of the 14 bands."), `stepAtt`'s `attOnTxEnabled`,
 peer not offered `transmitSettingsVersion` (the receive-only reason) or
 while its radio is on the air (the on-air reason), and `attOnTxValue`
 outside the Core's range ("Choose an ATT on TX value from 0 to 31 dB.", on
-a Hermes Lite 2 from -28), and
+a Hermes Lite 2 from -28), a `pureSignalSettings` write from a peer
+offered `transmitSettingsVersion` 7 while the radio is on the air (the
+on-air reason; from such a peer an accepted write is applied to the Core's
+PureSignal at once, and from any other peer it is kept and applied when
+PureSignal next starts, as before), and
 DSP settings from a peer that did not negotiate them
 (`StationServer::handlePropertyWrite`). The on-air check is read once for
 the whole write, before anything in it is applied.
@@ -2129,6 +2181,18 @@ with the reason "The Core sets this itself; it cannot be changed from
 here.", unless one of the earlier, more specific refusals above applies
 first; this covers the station's own readings, such as a slice's signal
 strength, as well as properties changed through a command.
+
+`alexAntennas`' transmit properties (`txAntennas`, `blockTxAnt2`,
+`blockTxAnt3`, `rxOutOnTx`, `ext1OutOnTx`, `ext2OutOnTx`, `rxOutOverride`,
+two-way from `radioHardwareVersion` 5 and 6) are not held while the radio
+is on the air, and a receive-only station takes them from any peer that
+was offered the object: they key nothing, and Thetis changes them while
+transmitting (section 6.3). A `txAntennas` list that asks for a port
+blocked for transmit keeps that band's antenna and settles with "An
+antenna blocked for transmit cannot be a band's TX antenna." A current
+window changes one band's TX antenna with the `setAlexTxAntenna` command
+instead (section 6.3), so its edit cannot put back another band the Core
+changed; the whole-list write stays for a window that sends it.
 
 After the whole batch, the station reads each property back. When the
 agreed minor is at least 5 (`kDspControlSessionProtocolMinor`) and the
@@ -2778,6 +2842,9 @@ refused.
 | `setPgxlNetwork` | `dhcp` bool, `address` utf8, `netmask` utf8, `gateway` utf8 | `remotePgxlControlVersion` | 3 | 11 |
 | `savePgxlSettings` | none | `remotePgxlControlVersion` | 3 | 11 |
 | `readPgxlSettings` | none | `remotePgxlControlVersion` | 3 | 11 |
+| `setPgxlOperate` | `on` bool | `remotePgxlControlVersion` | 4 | 11 |
+| `scanPgxlLan` | none | `remotePgxlControlVersion` | 4 | 11 |
+| `setPgxlAddress` | `host` utf8, `port` i64 | `remotePgxlControlVersion` | 4 | 11 |
 | `setTgxlName` | `name` utf8 | `remoteTgxlControlVersion` | 1 | 11 |
 | `setTgxlNetwork` | `dhcp` bool, `address` utf8, `netmask` utf8, `gateway` utf8 | `remoteTgxlControlVersion` | 1 | 11 |
 | `saveTgxlSettings` | none | `remoteTgxlControlVersion` | 1 | 11 |
@@ -2785,6 +2852,9 @@ refused.
 | `setTgxlAntenna` | `port` i64 | `remoteTgxlControlVersion` | 2 | 11 |
 | `setTgxlOperate` | `on` bool | `remoteTgxlControlVersion` | 2 | 11 |
 | `setTgxlBypass` | `on` bool | `remoteTgxlControlVersion` | 2 | 11 |
+| `moveTgxlRelay` | `relay` i64, `direction` i64 | `remoteTgxlControlVersion` | 4 | 11 |
+| `scanTgxlLan` | none | `remoteTgxlControlVersion` | 4 | 11 |
+| `setTgxlAddress` | `host` utf8, `port` i64 | `remoteTgxlControlVersion` | 4 | 11 |
 | `setTunePowerForTxBand` | `watts` i64 | `transmitSettingsVersion` | 2 | 11 |
 | `txProfile.select` | `name` utf8 | `transmitSettingsVersion` | 3 | 11 |
 | `txProfile.save` | `name` utf8 | `transmitSettingsVersion` | 3 | 11 |
@@ -2794,6 +2864,10 @@ refused.
 | `disconnectRfKit` | none | `remoteRfKitControlVersion` | 2 | 11 |
 | `setRfKitEnabled` | `enabled` bool | `remoteRfKitControlVersion` | 2 | 11 |
 | `resetRfKitError` | none | `remoteRfKitControlVersion` | 3 | 11 |
+| `setRfKitOperate` | `on` bool | `remoteRfKitControlVersion` | 4 | 11 |
+| `setRfKitAntenna` | `port` i64 | `remoteRfKitControlVersion` | 4 | 11 |
+| `setRfKitTciMode` | none | `remoteRfKitControlVersion` | 4 | 11 |
+| `setRfKitAddress` | `host` utf8, `port` i64 | `remoteRfKitControlVersion` | 4 | 11 |
 | `setStationTci` | `enabled` bool, `port` i64 | `stationTciVersion` | 1 | 11 |
 | `setTxInterlockPolicy` | `mode` i64, `graceMs` i64, `swrGateEnabled` bool, `swrGateMax` f64 | `accessoryDataVersion` | 1 | 11 |
 | `setPgxlPowerCap` | `enabled` bool, `watts` i64 | `accessoryDataVersion` | 1 | 11 |
@@ -2801,6 +2875,7 @@ refused.
 | `requestIoBoardProbe` | none | `radioHardwareVersion` | 2 | 11 |
 | `setAlexRxAntenna` | `band` i64, `antenna` i64, `rxOnly` bool | `radioHardwareVersion` | 3 | 11 |
 | `setAlexBpfMode` | `chain` i64, `mode` i64 | `radioHardwareVersion` | 4 | 11 |
+| `setAlexTxAntenna` | `band` i64, `antenna` i64 | `radioHardwareVersion` | 6 | 11 |
 | `nnr.setDiagnostics` | `sliceId` i64, `testMode` i64, `outputMode` i64 | `nnrVersion` | 1 | 5 |
 | `nnr.resetTuning` | `sliceId` i64 | `nnrVersion` | 1 | 5 |
 | `nnr.tryAgain` | `sliceId` i64 | `nnrVersion` | 1 | 11 |
@@ -2923,6 +2998,51 @@ These command groups need a sentence beyond the table:
   antenna on a tuner with no antenna switch or a port outside 1 to 3.
   The reasons are in
   [remote accessory control version 1](2026-09-23-remote-accessory-control-v1.md).
+- **The tuner's relays, Scan LAN and saved address.** `moveTgxlRelay`
+  (`relay` 0 C1, 1 L, 2 C2; `direction` -1 or 1) moves one matching relay
+  one step through the Core's tuner model, sending the line a local
+  window's relay bar sends on a mouse-wheel step; the tuner's report
+  arrives on `tuner` (`relayC1`, `relayL`, `relayC2`). `scanTgxlLan` has
+  the Core listen for Tuner Genius announcements for three seconds; its
+  `command.result` is sent when the window ends, with `values` holding
+  `devicesJson` (utf8, a JSON array of
+  `{"address","port","model","serial","nickname"}`). `setTgxlAddress`
+  (`host`, `port`) saves the tuner's address for the Core's radio without
+  dialling, with `configureTgxl`'s checks. None keys anything, so a
+  receive-only Core takes them, but each is refused while the radio is
+  on the air ("The radio is on the air. Try again when it stops."); the
+  nudge also with no tuner admitted. The reasons are in the remote
+  accessory control document.
+- **The amp's OPERATE, Scan LAN and saved address.** `setPgxlOperate`
+  (`on` bool) sends the Core's Power Genius the line a local window's
+  applet OPERATE sends, `operate=1` or `operate=0`, through the Core's own
+  connection; `accepted` means the line left, and the amp's report arrives
+  on `amplifier` (`state`, `deviceState`, `operate`). `scanPgxlLan` and
+  `setPgxlAddress` (`host`, `port`) are `scanTgxlLan` and
+  `setTgxlAddress` for the Power Genius: Power Genius announcements only,
+  `values` `devicesJson` when the three seconds end, and `PGXL_ManualIp`
+  and `PGXL_ManualPort` saved without dialling with `configurePgxl`'s
+  checks. None keys anything, so a receive-only Core takes them, but each
+  is refused while the radio is on the air ("The radio is on the air. Try
+  again when it stops."); `setPgxlOperate` also while the Core is not
+  connected to the amp. A `property.write` of `amplifier` `operate` stays
+  refused. The reasons are in the remote accessory control document.
+- **The RF-Kit's OPERATE, antenna, TCI mode and saved address.**
+  `setRfKitOperate` (`on` bool), `setRfKitAntenna` (`port` i64, internal
+  antenna 1 to 4) and `setRfKitTciMode` (no arguments) send the Core's
+  admitted RF2K-S the REST request a local window's applet OPERATE, ANT
+  button and RF-Kit page's "Set amp to TCI mode" send (`PUT /operate-mode`,
+  `PUT /antennas/active`, `PUT /operational-interface`); `accepted` means
+  the request left, and the amp's report arrives on `rfkit` (`operate`,
+  `activeAntennaNumber`, `operationalInterface`). An antenna the amp lists
+  as disabled, or does not list once it has listed its antennas, is
+  refused. `setRfKitAddress` (`host`, `port`) saves `RfKit_ManualIp` and
+  `RfKit_ManualPort` without dialling with `configureRfKit`'s address
+  checks. None keys anything, so a receive-only Core takes them, but each
+  is refused while the radio is on the air ("The radio is on the air. Try
+  again when it stops."); the first three also while the Core is not
+  connected to the amp. The reasons are in the remote accessory control
+  document.
 - **The Tune Power slider.** `setTunePowerForTxBand` (`watts`, 0 to 100,
   0 to 99 on a Hermes Lite 2) does what the TX applet's Tune Power slider
   does in a local window: it sets the tune power for the band the Core
@@ -2960,6 +3080,22 @@ These command groups need a sentence beyond the table:
   understood." and "The request to reset the RADE vocoder was not
   understood." A peer below agreed minor 11 gets "Update this app to
   change transmit profiles on this Core."
+- **PureSignal arming.** `ps3.single` (Single Cal), `ps3.automatic`
+  (Automatic, and PS-A on), `ps3.applyCurrent` (Apply current correction)
+  and `ps3.restoreCorrection` (Restore a saved correction) arm PureSignal
+  on the Core as a local window's PureSignal controls do. Arming keys
+  nothing: it sets the calibration engine's state, and the correction runs
+  only while the radio transmits. A Core at `transmitSettingsVersion` 7
+  takes them from a peer at agreed minor 11 while its radio is off the air
+  and refuses them while it is on the air ("The radio is on the air. Try
+  again when it stops."). Any other peer gets "PureSignal cannot be run
+  from a remote window yet." as before, and so does `ps3.twoTone` with
+  `enabled` true from every peer: the two-tone test keys the radio and
+  waits for remote transmit. `ps3.off`, `ps3.twoTone` with `enabled` false
+  and `ps3.saveCorrection` are taken as before. A taken action answers
+  `accepted`, then `completed` or `failed` with the Core's reason (section
+  9.1, the `phase` value), and the Core's `pureSignal` and
+  `pureSignalSettings` objects follow in a `delta`.
 - **One TCI switch.** The Core keeps one TCI switch and port for its own
   TCI server (`setStationTci`, the `stationTci` object). A desktop window
   connected to a Core with `stationTciVersion` 1 shows that switch and
@@ -3938,7 +4074,7 @@ role.
 | Key | Meaning | Default |
 | --- | --- | --- |
 | `board` | the static radio's model: `"hermesLite2"`, a Hermes Lite 2 on Protocol 1, or `"ananG2"`, an ANAN-G2 on Protocol 2 (same MAC); only with `"radio": "static"` | `"hermesLite2"` |
-| `radio` | `"static"`: a model reporting a connected Hermes Lite 2 (MAC `AA:BB:CC:DD:EE:01`, or the `board` below) with no radio behind it, so nothing changes on its own; `"connectable"`: a model connected to the fake Protocol 1 radio, receive processing and all; PureSignal's readiness (`canActuate`) is off on a receive-only station from the moment the station makes the radio receive-only, and the runner waits for each slice's signal readings to leave the no-reading value before the client attaches | `"static"` |
+| `radio` | `"static"`: a model reporting a connected Hermes Lite 2 (MAC `AA:BB:CC:DD:EE:01`, or the `board` below) with no radio behind it, so nothing changes on its own; `"connectable"`: a model connected to the fake Protocol 1 radio, receive processing and all; a receive-only station permits PureSignal (`transmitSettingsVersion` 7), so the runner waits for PureSignal's readiness (`canActuate`) to come on, and it waits for each slice's signal readings to leave the no-reading value before the client attaches | `"static"` |
 | `slices` | slices before the client connects | 1 |
 | `panadapters` | panadapters before the client connects | 0 |
 | `coreAccessories` | the Core owns its accessories: the `tuner`, `amplifier`, `rfkit`, `accessoryData` and `accessorySettings` objects and the accessory commands | false |
@@ -3949,6 +4085,7 @@ role.
 | `clientAnswersPings` | the client's transport answers the station's pings | true |
 | `otherClients` | other clients the runner plays beside its own, each signing in as a paired device (above) | none |
 | `otherConnections` | other clients connected before this one, still connecting and sending nothing; 24 puts the station at its connection limit | 0 |
+| `lanScanWindowMs` | how long the Core's `scanTgxlLan` and `scanPgxlLan` listen, in milliseconds from 1; the scan fixtures set 150, since their answer is matched as any text | 3000 |
 | `token` | `"active"`: a Core upgraded from before paired devices, with a pairing token (made at run time) that `"$ref:token"` names; `"none"`: a new Core, without one (section 3.3) | `"active"` |
 | `receivers` | iPhone app plan Task 74: the static radio's receivers, 192 kHz wide each, sized before its slices are made, so slices bind to them and the rules of section 7.5 apply; only with `"radio": "static"` | none |
 | `maxSlices` | with `receivers`, the slice cap | 5 |
@@ -4008,7 +4145,7 @@ same on every machine.
 | `settings-write` | A station-scoped write echoed with its origin; an operator-local write rejected; a removal sent as `settings.value` with no entry; on the receive-only Core, a DSP > Options TX key and a PA forward-power table key (`paCalibration/calPoint1`, version 6) taken off the air and a transmit hardware key refused |
 | `unknown-verb` | `command.result` refused, "The Core does not know this request. Updating the Core may help."; the connection stays up |
 | `unknown-kind` | `session.end` "The Core could not read a message from this app.", `retryable` false, `code` `protocolError` |
-| `verbs-*` | Each verb in `commands`, grouped by the capability that gates it, invoked with its own arguments (for `setPgxlHardware`, one of its three optional ones) and, where it takes any, with one argument renamed (and nothing else changed: the same values and kinds); the two get different answers, so each shows the station read the arguments (a PureSignal action with arguments it does not take is refused "The Core could not read this PureSignal request." before the transmit gate is asked); `nnr.applyModelSelection` names the revision `dspAssets` gave in the snapshot |
+| `verbs-*` | Each verb in `commands`, grouped by the capability that gates it, invoked with its own arguments (for `setPgxlHardware`, one of its three optional ones) and, where it takes any, with one argument renamed (and nothing else changed: the same values and kinds); the two get different answers, so each shows the station read the arguments (a PureSignal action with arguments it does not take is refused "The Core could not read this PureSignal request." before the transmit gate is asked); `verbs-ps3` (which requires `psAlgorithmVersion` 3) invokes the PureSignal verbs whose answers do not depend on arming (`ps3.off`, `ps3.twoTone` off and `ps3.saveCorrection`), and `verbs-ps3-arming` (which also requires `transmitSettingsVersion` 7) invokes `ps3.twoTone` with `enabled` true, refused "PureSignal cannot be run from a remote window yet.", and the arming verbs (`ps3.single`, `ps3.automatic`, `ps3.applyCurrent`, `ps3.restoreCorrection`), taken and then failing on the static station, which has no PureSignal running ("PureSignal is unavailable until the radio is ready."); `nnr.applyModelSelection` names the revision `dspAssets` gave in the snapshot; `verbs-tgxl-control` (which requires `remoteTgxlControlVersion` 2) invokes the antenna, operate and bypass switches, and `verbs-tgxl-relays` (which requires `remoteTgxlControlVersion` 4) matches `scanTgxlLan`'s `devicesJson` as any text, since a real Tuner Genius on the test computer's network may answer, and its accepted `setTgxlAddress` is followed by the `tuner` delta carrying the saved address, then a blank host, saved and shown as blank, and the address again; `verbs-pgxl-control` (which requires `remotePgxlControlVersion` 4) does the same for `scanPgxlLan` and `setPgxlAddress` (the `amplifier` delta, and the blank host), and its `setPgxlOperate` is refused on the static station, which has no amp connected ("The Core is not connected to the Power Genius."); `verbs-rfkit` (which requires `remoteRfKitControlVersion` 2) connects, disconnects and switches the RF-Kit, and `verbs-rfkit-control` (which requires `remoteRfKitControlVersion` 4) invokes `setRfKitOperate`, `setRfKitAntenna` and `setRfKitTciMode`, refused on the static station with no amp admitted ("The Core is not connected to the RF-Kit amplifier."), and its accepted `setRfKitAddress` is followed by the `rfkit` delta carrying the saved address, then the blank host and the address again; `verbs-tx-antenna` (which requires `radioHardwareVersion` 6) invokes `setAlexTxAntenna` with a band's current antenna (taken, no delta) and with `band` renamed. A version's new verbs go in a fixture of their own, so an app at the older version still runs the older file |
 
 `tst_link_conformance_session` also checks that every verb in the
 `commands` table is invoked both ways by some fixture, and that the two
@@ -4093,8 +4230,14 @@ than N 16-bit steps from `pcm16`); the vector states which.
 
 ```
 cmake --build build --target tst_link_conformance_control tst_link_conformance_session tst_link_conformance_media
-QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^tst_link_conformance_(control|session|media)$' --output-on-failure
+QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^tst_link_conformance_(control|session|session_connectable|media)$' --output-on-failure
 ```
+
+The session runner is registered twice: `tst_link_conformance_session`
+runs every fixture but those whose `radio` is `"connectable"`, and
+`tst_link_conformance_session_connectable` runs those alone
+(`NEREUS_LINK_CONNECTABLE` set to `skip` and `only`; unset, the binary
+runs every fixture).
 
 Each runner also alters one of its fixtures in memory and checks that the
 failure names the step or field that differs; the media runner also checks

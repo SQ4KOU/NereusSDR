@@ -26,6 +26,20 @@
 // (KG4VCF), AI-assisted via Anthropic Claude Code.
 // 2026-09-24: R-R3-49 (parity Task 1): transmitSettingsVersion now travels
 // last. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-25: R-R3-49 (parity Task 8): remoteTgxlControlVersion 4 and the
+// refusals of moveTgxlRelay, scanTgxlLan and setTgxlAddress on the wire.
+// J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-25: R-R3-49 (parity Task 9): remotePgxlControlVersion 4 and the
+// refusals of setPgxlOperate, scanPgxlLan and setPgxlAddress on the wire.
+// J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-25: R-R3-49 (parity Task 10): remoteRfKitControlVersion 4 and
+// accessoryDataVersion 2, the refusals of setRfKitOperate, setRfKitAntenna,
+// setRfKitTciMode and setRfKitAddress on the wire, and the RF-Kit's
+// connection counts in the accessoryData fixture. J.J. Boyd (KG4VCF),
+// AI-assisted via Anthropic Claude Code.
+// 2026-09-25: checkpoint carry: parity Tasks 8 to 10's stations sign the
+// peer in with an upgraded Core's token (seedUpgradedCoreToken). J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include <QtTest/QtTest>
 #include <QFile>
 #include <QJsonArray>
@@ -587,6 +601,8 @@ private slots:
             if (owns) {
                 station.enableStationAccessoryIdentity();
             }
+            station.setTgxlLanScanWindowMsForTest(50);
+            station.setPgxlLanScanWindowMsForTest(50);
             // The Core's amp has sent one reading (the captured operate line).
             station.amplifierModel()->applyStatusFrame(
                 {{QStringLiteral("state"), QStringLiteral("OPERATE")},
@@ -707,15 +723,22 @@ private slots:
         }
         // R-R3-47: 2 once the Core's PGXL commands are offered (Task 2), 3
         // with the amp's own settings (Task 6).
-        QCOMPARE(caps.remotePgxlControlVersion, 3);
+        // R-R3-49 (parity Task 9): 4 with the amp's OPERATE and STANDBY,
+        // the Core's LAN scan and the saved address.
+        QCOMPARE(caps.remotePgxlControlVersion, 4);
         // R-R3-47: the Tuner Genius's own settings (Task 6); 2 with its
         // antenna, operate and bypass (R-R3-49); 3 when setTgxlOperate on
-        // puts the tuner in OPERATE whole (R-R3-49 fix wave).
-        QCOMPARE(caps.remoteTgxlControlVersion, 3);
-        // R-R3-47: 2 once the Core's RF-Kit commands are offered (Task 3).
-        QCOMPARE(caps.remoteRfKitControlVersion, 3);   // I4: Reset amp error
-        // R-R3-47: the accessory records and settings (Task 4).
-        QCOMPARE(caps.accessoryDataVersion, 1);
+        // puts the tuner in OPERATE whole (R-R3-49 fix wave); 4 with the
+        // relay nudge, the Core's LAN scan and the saved address (parity
+        // Task 8).
+        QCOMPARE(caps.remoteTgxlControlVersion, 4);
+        // R-R3-47: 2 once the Core's RF-Kit commands are offered (Task 3);
+        // 3 with Reset amp error (I4); 4 with OPERATE, the antennas, TCI
+        // mode and the saved address (R-R3-49, parity Task 10).
+        QCOMPARE(caps.remoteRfKitControlVersion, 4);
+        // R-R3-47: the accessory records and settings (Task 4); 2 with the
+        // RF-Kit's connection counts (R-R3-49, parity Task 10).
+        QCOMPARE(caps.accessoryDataVersion, 3);  // 3: rfkitRttAvgMs (group B fix wave, M7)
         QVERIFY(sawAmplifier);
         QVERIFY(sawRfKit);
         QVERIFY(sawAccessoryData);
@@ -773,6 +796,8 @@ private slots:
             if (owns) {
                 station.enableStationAccessoryIdentity();
             }
+            station.setTgxlLanScanWindowMsForTest(50);
+            station.setPgxlLanScanWindowMsForTest(50);
             AppSettings settings(dir.filePath(QStringLiteral("v-%1-%2.settings")
                                                   .arg(owns).arg(minor)));
             StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
@@ -864,6 +889,8 @@ private slots:
             if (owns) {
                 station.enableStationAccessoryIdentity();
             }
+            station.setTgxlLanScanWindowMsForTest(50);
+            station.setPgxlLanScanWindowMsForTest(50);
             AppSettings settings(dir.filePath(QStringLiteral("t-%1-%2-%3.settings")
                                                   .arg(owns).arg(minor).arg(onAir)));
             StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
@@ -927,6 +954,301 @@ private slots:
                            "understood."),
             QStringLiteral("The request to bypass the Tuner Genius was not understood.")}));
         for (const QString& reason : wrong + QStringList{update, notOwning, noTuner, onAir}) {
+            QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
+        }
+    }
+
+    // R-R3-49 (parity Task 8, remoteTgxlControlVersion 4): the relay
+    // nudge, the Core's LAN scan and the saved address on the wire. An older
+    // app, and a Core that does not own its accessories, are refused in
+    // bfab2b9e's words; a malformed request is not understood; the nudge
+    // with no tuner and the address with no radio say so; on the air the
+    // nudge is refused, on a receive-only Core as well, while the scan and
+    // the address are taken (parity mini-round, the operator's rulings a
+    // and b: they only listen or save).
+    void tunerRelayScanAndAddressVerbsNeedVersionFourAndAQuietRadio()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const auto results = [&](bool owns, quint16 minor, bool onAir,
+                                 const QList<SessionMessage>& invokes) {
+            RadioModel station;
+            if (owns) {
+                station.enableStationAccessoryIdentity();
+            }
+            station.setTgxlLanScanWindowMsForTest(50);
+            station.setPgxlLanScanWindowMsForTest(50);
+            AppSettings settings(dir.filePath(QStringLiteral("r-%1-%2-%3.settings")
+                                                  .arg(owns).arg(minor).arg(onAir)));
+            StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
+            if (onAir) {
+                station.transmitModel().setMox(true);
+            }
+            LoopbackTransport* peer = nullptr;
+            connectRawPeer(this, server, minor, &peer);
+            [&] { QTRY_VERIFY(snapshotDone(peer)); }();
+            for (const SessionMessage& invoke : invokes) {
+                peer->sendText(SessionMessages::encode(invoke));
+            }
+            QStringList reasons;
+            (void)QTest::qWaitFor([&] {
+                reasons.clear();
+                for (const SessionMessage& m : receivedMessages(peer)) {
+                    if (m.kind == SessionMessageKind::CommandResult) {
+                        reasons.append(m.accepted ? QStringLiteral("accepted") : m.reason);
+                    }
+                }
+                return reasons.size() == invokes.size();
+            }, 3000);
+            return reasons;
+        };
+        const auto intArg = [](const char* name, qlonglong v) {
+            return MirrorUpdate{0, name, MirrorWireKind::Int64, QVariant(v)};
+        };
+        const auto textArg = [](const char* name, const QString& v) {
+            return MirrorUpdate{0, name, MirrorWireKind::Utf8, QVariant(v)};
+        };
+        const QList<SessionMessage> right{
+            SessionMessages::commandInvoke("moveTgxlRelay", 51,
+                                           {intArg("relay", 0), intArg("direction", 1)}),
+            SessionMessages::commandInvoke("scanTgxlLan", 52, {}),
+            SessionMessages::commandInvoke("setTgxlAddress", 53,
+                                           {textArg("host", QStringLiteral("192.0.2.9")),
+                                            intArg("port", 9010)}),
+        };
+        const QString update = QStringLiteral("Update this app to switch the Tuner Genius on "
+                                              "this Core.");
+        QCOMPARE(results(true, quint16(kRadioIdentitySessionProtocolMinor - 1), false, right),
+                 (QStringList{update, update, update}));
+        const QString notOwning = QStringLiteral("This Core cannot change its amplifier and "
+                                                 "tuner settings.");
+        QCOMPARE(results(false, kRadioIdentitySessionProtocolMinor, false, right),
+                 (QStringList{notOwning, notOwning, notOwning}));
+        const QString onAir = QStringLiteral("The radio is on the air. Try again when it stops.");
+        const QString noTuner = QStringLiteral("The Core is not connected to the Tuner Genius.");
+        const QString noRadio = QStringLiteral("Connect the Core to a radio before setting up its "
+                                               "Tuner Genius XL.");
+        // The scan answers when its window ends, after the other two.
+        QCOMPARE(results(true, kRadioIdentitySessionProtocolMinor, true, right),
+                 (QStringList{onAir, noRadio, QStringLiteral("accepted")}));
+        const QStringList wrong = results(true, kRadioIdentitySessionProtocolMinor, false, {
+            right.at(0),
+            right.at(2),
+            SessionMessages::commandInvoke("moveTgxlRelay", 61,
+                                           {intArg("relay", 3), intArg("direction", 1)}),
+            SessionMessages::commandInvoke("moveTgxlRelay", 62,
+                                           {intArg("relay", 0), intArg("direction", 0)}),
+            SessionMessages::commandInvoke("moveTgxlRelay", 63, {intArg("relay", 0)}),
+            SessionMessages::commandInvoke("scanTgxlLan", 64, {intArg("seconds", 3)}),
+            SessionMessages::commandInvoke("setTgxlAddress", 65,
+                                           {textArg("host", QStringLiteral("192.0.2.9")),
+                                            textArg("port", QStringLiteral("9010"))}),
+        });
+        const QString relayNotUnderstood =
+            QStringLiteral("The request to move a Tuner Genius relay was not understood.");
+        QCOMPARE(wrong, (QStringList{
+            noTuner, noRadio, relayNotUnderstood, relayNotUnderstood, relayNotUnderstood,
+            QStringLiteral("The request to scan for a Tuner Genius was not understood."),
+            QStringLiteral("The request to save the Tuner Genius address was not understood.")}));
+        for (const QString& reason : wrong + QStringList{update, notOwning, onAir}) {
+            QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
+        }
+    }
+
+    // R-R3-49 (parity Task 9, remotePgxlControlVersion 4): the Power
+    // Genius's OPERATE and STANDBY, the Core's LAN scan and the saved
+    // address on the wire, refused as the Tuner Genius's are.
+    void ampOperateScanAndAddressVerbsNeedVersionFourAndAQuietRadio()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const auto results = [&](bool owns, quint16 minor, bool onAir,
+                                 const QList<SessionMessage>& invokes) {
+            RadioModel station;
+            if (owns) {
+                station.enableStationAccessoryIdentity();
+            }
+            station.setTgxlLanScanWindowMsForTest(50);
+            station.setPgxlLanScanWindowMsForTest(50);
+            AppSettings settings(dir.filePath(QStringLiteral("p-%1-%2-%3.settings")
+                                                  .arg(owns).arg(minor).arg(onAir)));
+            StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
+            if (onAir) {
+                station.transmitModel().setMox(true);
+            }
+            LoopbackTransport* peer = nullptr;
+            connectRawPeer(this, server, minor, &peer);
+            [&] { QTRY_VERIFY(snapshotDone(peer)); }();
+            for (const SessionMessage& invoke : invokes) {
+                peer->sendText(SessionMessages::encode(invoke));
+            }
+            QStringList reasons;
+            (void)QTest::qWaitFor([&] {
+                reasons.clear();
+                for (const SessionMessage& m : receivedMessages(peer)) {
+                    if (m.kind == SessionMessageKind::CommandResult) {
+                        reasons.append(m.accepted ? QStringLiteral("accepted") : m.reason);
+                    }
+                }
+                return reasons.size() == invokes.size();
+            }, 3000);
+            return reasons;
+        };
+        const auto intArg = [](const char* name, qlonglong v) {
+            return MirrorUpdate{0, name, MirrorWireKind::Int64, QVariant(v)};
+        };
+        const auto textArg = [](const char* name, const QString& v) {
+            return MirrorUpdate{0, name, MirrorWireKind::Utf8, QVariant(v)};
+        };
+        const auto boolArg = [](const char* name, bool v) {
+            return MirrorUpdate{0, name, MirrorWireKind::Bool, QVariant(v)};
+        };
+        const QList<SessionMessage> right{
+            SessionMessages::commandInvoke("setPgxlOperate", 71, {boolArg("on", true)}),
+            SessionMessages::commandInvoke("scanPgxlLan", 72, {}),
+            SessionMessages::commandInvoke("setPgxlAddress", 73,
+                                           {textArg("host", QStringLiteral("192.0.2.9")),
+                                            intArg("port", 9008)}),
+        };
+        const QString update = QStringLiteral("Update this app to switch the Power Genius on "
+                                              "this Core.");
+        QCOMPARE(results(true, quint16(kRadioIdentitySessionProtocolMinor - 1), false, right),
+                 (QStringList{update, update, update}));
+        const QString notOwning = QStringLiteral("This Core cannot change its amplifier and "
+                                                 "tuner settings.");
+        QCOMPARE(results(false, kRadioIdentitySessionProtocolMinor, false, right),
+                 (QStringList{notOwning, notOwning, notOwning}));
+        const QString onAir = QStringLiteral("The radio is on the air. Try again when it stops.");
+        const QString noAmp = QStringLiteral("The Core is not connected to the Power Genius.");
+        const QString noRadio = QStringLiteral("Connect the Core to a radio before setting up its "
+                                               "Power Genius.");
+        // Parity mini-round (rulings a and b): OPERATE waits on the air; the
+        // scan (answered when its window ends) and the address do not.
+        QCOMPARE(results(true, kRadioIdentitySessionProtocolMinor, true, right),
+                 (QStringList{onAir, noRadio, QStringLiteral("accepted")}));
+        const QStringList wrong = results(true, kRadioIdentitySessionProtocolMinor, false, {
+            right.at(0),
+            right.at(2),
+            SessionMessages::commandInvoke("setPgxlOperate", 81, {intArg("on", 1)}),
+            SessionMessages::commandInvoke("setPgxlOperate", 82, {}),
+            SessionMessages::commandInvoke("scanPgxlLan", 83, {intArg("seconds", 3)}),
+            SessionMessages::commandInvoke("setPgxlAddress", 84,
+                                           {textArg("host", QStringLiteral("192.0.2.9")),
+                                            textArg("port", QStringLiteral("9008"))}),
+        });
+        const QString operateNotUnderstood = QStringLiteral(
+            "The request to put the Power Genius in operate or standby was not understood.");
+        QCOMPARE(wrong, (QStringList{
+            noAmp, noRadio, operateNotUnderstood, operateNotUnderstood,
+            QStringLiteral("The request to scan for a Power Genius was not understood."),
+            QStringLiteral("The request to save the Power Genius address was not understood.")}));
+        for (const QString& reason : wrong + QStringList{update, notOwning, onAir}) {
+            QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
+        }
+    }
+
+    // R-R3-49 (parity Task 10): the RF-Kit's OPERATE, antenna, TCI mode and
+    // saved address on the wire: refused below minor 11, on a Core that
+    // does not own its accessories, on the air (the switches; the address
+    // is taken there, parity mini-round), and with the wrong arguments;
+    // nothing reaches an amp.
+    void rfKitOperateAntennaTciAndAddressVerbsNeedVersionFourAndAQuietRadio()
+    {
+        QTemporaryDir dir;
+        QVERIFY(dir.isValid());
+        const auto results = [&](bool owns, quint16 minor, bool onAir,
+                                 const QList<SessionMessage>& invokes) {
+            RadioModel station;
+            if (owns) {
+                station.enableStationAccessoryIdentity();
+            }
+            station.setTgxlLanScanWindowMsForTest(50);
+            station.setPgxlLanScanWindowMsForTest(50);
+            AppSettings settings(dir.filePath(QStringLiteral("r-%1-%2-%3.settings")
+                                                  .arg(owns).arg(minor).arg(onAir)));
+            StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
+            if (onAir) {
+                station.transmitModel().setMox(true);
+            }
+            LoopbackTransport* peer = nullptr;
+            connectRawPeer(this, server, minor, &peer);
+            [&] { QTRY_VERIFY(snapshotDone(peer)); }();
+            for (const SessionMessage& invoke : invokes) {
+                peer->sendText(SessionMessages::encode(invoke));
+            }
+            QStringList reasons;
+            (void)QTest::qWaitFor([&] {
+                reasons.clear();
+                for (const SessionMessage& m : receivedMessages(peer)) {
+                    if (m.kind == SessionMessageKind::CommandResult) {
+                        reasons.append(m.accepted ? QStringLiteral("accepted") : m.reason);
+                    }
+                }
+                return reasons.size() == invokes.size();
+            }, 3000);
+            return reasons;
+        };
+        const auto intArg = [](const char* name, qlonglong v) {
+            return MirrorUpdate{0, name, MirrorWireKind::Int64, QVariant(v)};
+        };
+        const auto textArg = [](const char* name, const QString& v) {
+            return MirrorUpdate{0, name, MirrorWireKind::Utf8, QVariant(v)};
+        };
+        const auto boolArg = [](const char* name, bool v) {
+            return MirrorUpdate{0, name, MirrorWireKind::Bool, QVariant(v)};
+        };
+        const QList<SessionMessage> right{
+            SessionMessages::commandInvoke("setRfKitOperate", 71, {boolArg("on", true)}),
+            SessionMessages::commandInvoke("setRfKitAntenna", 72, {intArg("port", 2)}),
+            SessionMessages::commandInvoke("setRfKitTciMode", 73, {}),
+            SessionMessages::commandInvoke("setRfKitAddress", 74,
+                                           {textArg("host", QStringLiteral("192.0.2.9")),
+                                            intArg("port", 8080)}),
+        };
+        const QString update = QStringLiteral("Update this app to switch the RF-Kit amplifier on "
+                                              "this Core.");
+        QCOMPARE(results(true, quint16(kRadioIdentitySessionProtocolMinor - 1), false, right),
+                 (QStringList{update, update, update, update}));
+        const QString notOwning = QStringLiteral("This Core cannot change its amplifier and "
+                                                 "tuner settings.");
+        QCOMPARE(results(false, kRadioIdentitySessionProtocolMinor, false, right),
+                 (QStringList{notOwning, notOwning, notOwning, notOwning}));
+        const QString onAir = QStringLiteral("The radio is on the air. Try again when it stops.");
+        const QString noAmp = QStringLiteral("The Core is not connected to the RF-Kit amplifier.");
+        const QString noRadio = QStringLiteral("Connect the Core to a radio before setting up its "
+                                               "RF-Kit amplifier.");
+        // Parity mini-round (rulings a and b): the three switches wait on
+        // the air; the address does not (it only saves).
+        QCOMPARE(results(true, kRadioIdentitySessionProtocolMinor, true, right),
+                 (QStringList{onAir, onAir, onAir, noRadio}));
+        const QStringList wrong = results(true, kRadioIdentitySessionProtocolMinor, false, {
+            right.at(0),
+            right.at(1),
+            right.at(2),
+            right.at(3),
+            SessionMessages::commandInvoke("setRfKitOperate", 81, {intArg("on", 1)}),
+            SessionMessages::commandInvoke("setRfKitOperate", 82, {}),
+            SessionMessages::commandInvoke("setRfKitAntenna", 83,
+                                           {textArg("port", QStringLiteral("2"))}),
+            SessionMessages::commandInvoke("setRfKitAntenna", 84, {intArg("port", 5)}),
+            SessionMessages::commandInvoke("setRfKitTciMode", 85,
+                                           {textArg("mode", QStringLiteral("TCI"))}),
+            SessionMessages::commandInvoke("setRfKitAddress", 86,
+                                           {textArg("host", QStringLiteral("192.0.2.9")),
+                                            textArg("port", QStringLiteral("8080"))}),
+        });
+        const QString operateNotUnderstood = QStringLiteral(
+            "The request to put the RF-Kit amplifier in operate or standby was not understood.");
+        QCOMPARE(wrong, (QStringList{
+            noAmp, noAmp, noAmp, noRadio, operateNotUnderstood, operateNotUnderstood,
+            QStringLiteral("The request to switch the RF-Kit amplifier's antenna was not "
+                           "understood."),
+            QStringLiteral("Choose RF-Kit amplifier antenna 1, 2, 3 or 4."),
+            QStringLiteral("The request to put the RF-Kit amplifier in TCI mode was not "
+                           "understood."),
+            QStringLiteral("The request to save the RF-Kit amplifier address was not "
+                           "understood.")}));
+        for (const QString& reason : wrong + QStringList{update, notOwning, onAir}) {
             QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
         }
     }
@@ -1193,6 +1515,10 @@ private slots:
         sources.tgxlDiagnostics = &tgxlDiag;
         sources.interlock = &policy;
         sources.tuneMemory = &memory;
+        // R-R3-49 (parity Task 10): the RF-Kit connection whose counts are
+        // published (never dialled here).
+        Rf2ksConnection rfkitConnection;
+        sources.rfkitConnection = &rfkitConnection;
         StationAccessoryData core(&data, sources);
 
         MirrorRecorder recorder("accessoryData", &data);
@@ -1213,6 +1539,11 @@ private slots:
         counters.lastFrameMs = 1790000059000;
         pgxlDiag.applyMirroredCounters(counters);
         recorder.flush();
+        // R-R3-49 (parity Task 10): one failed poll of an amp not yet
+        // answering, and the retry it schedules.
+        rfkitConnection.testMarkPollFailure();
+        core.publishAll();
+        recorder.flush();
         QString why;
         QVERIFY2(matchesFixture(QStringLiteral("accessoryData.jsonl"), recorder.text(), &why),
                  qPrintable(why));
@@ -1220,7 +1551,7 @@ private slots:
         QFile file(fixturePath(QStringLiteral("accessoryData.jsonl")));
         QVERIFY(file.open(QIODevice::ReadOnly));
         const QList<SessionMessage> messages = decodeLines(file.readAll());
-        QCOMPARE(messages.size(), 6);
+        QCOMPARE(messages.size(), 7);
         AccessoryDataModel window;
         for (const SessionMessage& m : messages) {
             for (const MirrorUpdate& u : m.updates) {
@@ -1241,6 +1572,8 @@ private slots:
         QVERIFY(OperatorWording::isPlain(window.powerCapAlertText()));
         QCOMPARE(window.pgxlReconnectCount(), 1);
         QCOMPARE(window.pgxlBytesIn(), 2048);
+        QCOMPARE(window.rfkitPollsFailed(), 1);
+        QCOMPARE(window.rfkitReconnectCount(), 1);
         QCOMPARE(window.tgxlAntenna1Label(), QStringLiteral("80 m dipole"));
         QCOMPARE(window.rfkitAntenna2Label(), QStringLiteral("Beam"));
         QVERIFY(window.autoTuneMemoryRecall());

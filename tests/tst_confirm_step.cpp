@@ -43,6 +43,10 @@
 //   2026-09-25: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 74 (R-IOS-02, R-IOS-30),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25: checkpoint join (R-IOS-30, R-R3-49): the parity lane's
+//               accessory verbs, the Alex transmit antennas and relays and
+//               setAlexTxAntenna on the D53 list. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -1565,6 +1569,70 @@ private slots:
         QCOMPARE(change.value(QStringLiteral("to")).toString(),
                  was ? QStringLiteral("Off") : QStringLiteral("On"));
         QCOMPARE(s.core.model->fourO3AEnabled(), was);
+    }
+
+    // Checkpoint join: the parity lane's verbs and the two-way Alex
+    // transmit side. The tuner's relays and the RF-Kit's antenna reach
+    // ADC0 (ruling 7.2), every receiver on the HL2, so each asks while B
+    // listens; Disable RX Bypass relay moves the receive side's relay, so
+    // it asks too. A transmit antenna, a transmit relay and the amp's
+    // operate touch only the transmitter, which nobody holds yet, so they
+    // go straight to the Core's own answer.
+    void theParityVerbsAndTheAlexTransmitSideAreOnTheList()
+    {
+        SharedAdc s;
+        QVERIFY(admitted(s.appB));
+        s.core.model->enableStationAccessoryIdentity();
+        const auto asks = [&](const QByteArray& verb, const QList<MirrorUpdate>& args,
+                              quint32 id) {
+            const int before = countOf(s.appA, QStringLiteral("confirm.request"));
+            s.appA->sendText(SessionMessages::encode(SessionMessages::commandInvoke(verb, id, args)));
+            return waitForLast(s.appA, QStringLiteral("confirm.request"), before);
+        };
+        const QJsonObject relay = asks("moveTgxlRelay", {int64("relay", 1), int64("direction", 1)}, 4301);
+        QCOMPARE(relay.value(QStringLiteral("kind")).toString(), QStringLiteral("sharedSetting"));
+        QCOMPARE(relay.value(QStringLiteral("change")).toObject()
+                     .value(QStringLiteral("label")).toString(),
+                 QStringLiteral("Tuner relays"));
+        QCOMPARE(relay.value(QStringLiteral("affected")).toArray().first().toObject()
+                     .value(QStringLiteral("deviceName")).toString(),
+                 QStringLiteral("iPad"));
+        const QJsonObject antenna = asks("setRfKitAntenna", {int64("port", 2)}, 4302);
+        QCOMPARE(antenna.value(QStringLiteral("change")).toObject()
+                     .value(QStringLiteral("label")).toString(),
+                 QStringLiteral("RF-Kit antenna"));
+
+        // The transmitter alone: no question, the Core's own answer.
+        const int asked = countOf(s.appA, QStringLiteral("confirm.request"));
+        const QJsonObject operate = s.core.invoke(
+            s.appA, "setPgxlOperate",
+            {MirrorUpdate{0, QByteArrayLiteral("on"), MirrorWireKind::Bool, QVariant(true)}});
+        QVERIFY(!operate.isEmpty());
+        QVERIFY(operate.value(QStringLiteral("reason")).toString() != kWaiting);
+        QCOMPARE(countOf(s.appA, QStringLiteral("confirm.request")), asked);
+
+        // The Alex facade: Disable RX Bypass relay asks; Block TX on Ant 2
+        // does not.
+        const int beforeOverride = countOf(s.appA, QStringLiteral("confirm.request"));
+        s.appA->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+            "alexAntennas",
+            {MirrorUpdate{0, QByteArrayLiteral("rxOutOverride"), MirrorWireKind::Bool,
+                          QVariant(!s.core.model->alexController().rxOutOverride())}},
+            4303)));
+        const QJsonObject bypass =
+            waitForLast(s.appA, QStringLiteral("confirm.request"), beforeOverride);
+        QCOMPARE(bypass.value(QStringLiteral("change")).toObject()
+                     .value(QStringLiteral("label")).toString(),
+                 QStringLiteral("Disable RX Bypass relay"));
+        const int beforeBlock = countOf(s.appA, QStringLiteral("confirm.request"));
+        const bool blocked = s.core.model->alexController().blockTxAnt2();
+        s.appA->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+            "alexAntennas",
+            {MirrorUpdate{0, QByteArrayLiteral("blockTxAnt2"), MirrorWireKind::Bool,
+                          QVariant(!blocked)}},
+            4304)));
+        QTRY_VERIFY(!propertyResult(s.appA, 4304).isEmpty());
+        QCOMPARE(countOf(s.appA, QStringLiteral("confirm.request")), beforeBlock);
     }
 
     void aNotchInsideAnotherDevicesPassbandAsksOneOutsideDoesNot()

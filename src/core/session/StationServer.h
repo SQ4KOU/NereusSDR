@@ -302,6 +302,20 @@
 //   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06:
 //                                    displayExtrasVersion 2 (clarity-retune).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 7):
+//                                    transmitSettingsVersion 7 and
+//                                    pureSignalArmingOffered.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 8):
+//                                    remoteTgxlControlVersion 4.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 9):
+//                                    remotePgxlControlVersion 4.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 10):
+//                                    remoteRfKitControlVersion 4 and
+//                                    accessoryDataVersion 2.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QHash>
@@ -793,22 +807,26 @@ public:
     StationCapabilities buildCapabilities() const;
     /// R-R3-46: what this Core offers a window of its radio's hardware:
     /// 0 nothing, 1 the `stepAtt` object, 2 also `alexAntennas`, the
-    /// hardware apply step and the I/O board probe.
+    /// hardware apply step and the I/O board probe; the I/O board today
+    /// raises it to 6 (the ioBoard object, the per-band antenna and filter
+    /// policy verbs, and the transmit antennas and relays two-way).
     int radioHardwareVersion() const;
     // R-R3-47 / R-R3-22: 1 when this Core owns its accessories and mirrors
     // the `amplifier` and `rfkit` objects (remotePgxlControlVersion and
     // remoteRfKitControlVersion); 0 otherwise.
     int accessoryStatusVersion() const;
-    // R-R3-47: remotePgxlControlVersion. 3 on a Core that owns its
+    // R-R3-47: remotePgxlControlVersion. 4 on a Core that owns its
     // accessories (the `amplifier` object, the configurePgxl,
     // disconnectPgxl and setPgxlConnectionSettings verbs, and the amp's own
-    // settings on `accessorySettings` with their verbs); 0 otherwise.
+    // settings on `accessorySettings` with their verbs); 4 from parity
+    // Task 9 (setPgxlOperate, scanPgxlLan, setPgxlAddress); 0 otherwise.
     int pgxlControlVersion() const;
     // R-R3-47 / R-R3-22: remoteTgxlControlVersion. 2 on a Core that owns its
     // accessories (the tuner's own settings on `accessorySettings` and the
     // setTgxlName, setTgxlNetwork, saveTgxlSettings and readTgxlSettings
     // verbs; from 2, R-R3-49, setTgxlAntenna, setTgxlOperate and
-    // setTgxlBypass); 0 otherwise.
+    // setTgxlBypass; from 4, parity Task 8, moveTgxlRelay, scanTgxlLan and
+    // setTgxlAddress); 0 otherwise.
     int tgxlControlVersion() const;
     // R-R3-49 (parity Task 1): transmitSettingsVersion. 1 on a Core with a
     // radio model: a receive-only Core takes a `transmit` write outside the
@@ -819,29 +837,35 @@ public:
     // each refused outside its range, and setTunePowerForTxBand. 3 (parity
     // Task 3): also the radio microphone settings, the Core's TX profiles
     // (activeTxProfile, txProfilesJson), the txProfile verbs and
-    // rade.resetVocoder.
+    // rade.resetVocoder. 7 (parity Task 7): also PureSignal arming and its
+    // settings, off the air.
     int transmitSettingsVersion() const;
     // R-IOS-27, R-IOS-06: bandSelectVersion. 1 on a Core with a radio
     // model: it takes slice.selectBand from a peer at minor 11; 0 otherwise.
     int bandSelectVersion() const;
+    // R-R3-49 (parity Task 7): the peer was offered transmitSettingsVersion
+    // 7: it arms PureSignal and changes pureSignalSettings off the air.
+    bool pureSignalArmingOffered(SessionTransport* transport) const;
     // R-R3-49 (parity Task 1): the one list of transmit settings keys a
     // receive-only Core takes while its radio is off the air (today the
     // DSP > Options TX keys, DspOptions<Setting><Mode>Tx). Every other
     // transmit-side key a receive-only Core refuses stays refused.
     static bool isTransmitSettingKeyAcceptedOffAir(const QString& key);
-    // R-R3-47: remoteRfKitControlVersion. 3 on a Core that owns its
+    // R-R3-47: remoteRfKitControlVersion. 4 on a Core that owns its
     // accessories (the `rfkit` object with its interface, antenna, tuner
     // and band-follow rows, the configureRfKit, disconnectRfKit and
-    // setRfKitEnabled verbs, and from 3 the resetRfKitError verb and a
-    // window's auto-reconnect and poll interval applied at once); 0
-    // otherwise.
+    // setRfKitEnabled verbs, from 3 the resetRfKitError verb and a
+    // window's auto-reconnect and poll interval applied at once, and from
+    // 4 setRfKitOperate, setRfKitAntenna, setRfKitTciMode and
+    // setRfKitAddress, parity Task 10); 0 otherwise.
     int rfKitControlVersion() const;
     // R-R3-48: stationTciVersion. 1 on a Core that runs its own station
     // TCI server (the `stationTci` object and the setStationTci verb).
     int stationTciVersion() const;
-    // R-R3-47 / R-R3-22: accessoryDataVersion. 1 on a Core that owns its
+    // R-R3-47 / R-R3-22: accessoryDataVersion. 2 on a Core that owns its
     // accessories (the `accessoryData` object and the setTxInterlockPolicy,
-    // setPgxlPowerCap and clearAccessoryFaults verbs); 0 otherwise.
+    // setPgxlPowerCap and clearAccessoryFaults verbs; from 2 the RF-Kit's
+    // rfkit* connection counts, parity Task 10); 0 otherwise.
     int accessoryDataVersion() const;
 
     /// iPhone app Task 71 (R-IOS-02): who holds a place on the Core, and

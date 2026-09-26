@@ -165,6 +165,8 @@ private slots:
     void dspOptionsTxKeyTakenOffTheAirAndApplied();
     void dspOptionsTxKeyRefusedWhileOnTheAir();
     void dspOptionsTxApplyWaitsForTheUnkey();
+    void dspOptionsTxApplyWaitsForTwoToneToEnd();
+    void paReloadWaitsWhileOnTheAir();
     void transmitHardwareKeysStayRefused();
     void windowOnAirFollowsTheCore();
     void windowOnAirClearsWhenTheSessionEnds();
@@ -201,9 +203,9 @@ void TstTransmitSettingsGate::coreOffersTransmitSettingsVersion()
     // since parity Task 3 (the microphone input and the TX profiles), 4
     // since parity Task 4 (TX EQ, CFC, phase rotator, CESSB, leveler, ALC),
     // 5 since parity Task 5 (Power, DEXP/VOX, Two-Tone IMD), 6 since
-    // parity Task 6 (Setup > PA).
-    QCOMPARE(s.server->buildCapabilities().transmitSettingsVersion, 6);
-    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 6);
+    // parity Task 6 (Setup > PA), 7 since parity Task 7 (PureSignal arming).
+    QCOMPARE(s.server->buildCapabilities().transmitSettingsVersion, 7);
+    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 7);
     QVERIFY(s.client->transmitSettingsAvailable());
     QVERIFY(s.client->transmitSettingsAvailable(1));
     QVERIFY(s.client->transmitSettingsAvailable(2));
@@ -211,7 +213,8 @@ void TstTransmitSettingsGate::coreOffersTransmitSettingsVersion()
     QVERIFY(s.client->transmitSettingsAvailable(4));
     QVERIFY(s.client->transmitSettingsAvailable(5));
     QVERIFY(s.client->transmitSettingsAvailable(6));
-    QVERIFY(!s.client->transmitSettingsAvailable(7));
+    QVERIFY(s.client->transmitSettingsAvailable(7));
+    QVERIFY(!s.client->transmitSettingsAvailable(8));
     QVERIFY(StationServer::isTransmitSettingKeyAcceptedOffAir(
         QStringLiteral("DspOptionsBufferSizePhoneTx")));
     QVERIFY(StationServer::isTransmitSettingKeyAcceptedOffAir(
@@ -587,6 +590,78 @@ void TstTransmitSettingsGate::dspOptionsTxApplyWaitsForTheUnkey()
     QCOMPARE(txApplies.first(), DSPMode::USB);
     QTest::qWait(120);
     QCOMPARE(txApplies.size(), 1);
+}
+
+// Group A follow-up (group B fix wave): the held change is also released
+// when two-tone ends (TwoToneController clears isActive after MOX drops),
+// not only on the next plain unkey.
+void TstTransmitSettingsGate::dspOptionsTxApplyWaitsForTwoToneToEnd()
+{
+    const QString txKey = QStringLiteral("DspOptionsBufferSizePhoneTx");
+    Session s(m_securityDir.path(), this);
+    QList<DSPMode> txApplies;
+    s.core->setDspOptionsTxApplyObserverForTest(
+        [&txApplies](DSPMode mode) { txApplies.append(mode); });
+    QVERIFY(s.connect());
+    SliceModel* txSlice = s.core->txBoundSlice();
+    QVERIFY(txSlice);
+    txSlice->setDspMode(DSPMode::USB);
+
+    TxChannel tx(/*channelId=*/1);
+    TwoToneController* const twoTone = s.core->twoToneController();
+    twoTone->setTxChannel(&tx);
+    s.core->moxController()->setMoxCheck({});
+    // Accepted off the air, then the two-tone test starts inside the
+    // coalescing window.
+    s.settings.setValue(txKey, QStringLiteral("2048"));
+    s.core->scheduleRemoteDspOptionsApply(txKey);
+    twoTone->setActive(true);
+    QTRY_VERIFY(twoTone->isActive());
+    QVERIFY(s.core->stationOnAirRefusal(nullptr));
+    QTest::qWait(150);
+    QVERIFY(txApplies.isEmpty());
+
+    twoTone->setActive(false);
+    QTRY_VERIFY(!twoTone->isActive());
+    QTRY_VERIFY(!s.core->stationOnAirRefusal(nullptr));
+    QTRY_COMPARE(txApplies.size(), 1);
+    QCOMPARE(txApplies.first(), DSPMode::USB);
+    QTest::qWait(120);
+    QCOMPARE(txApplies.size(), 1);
+    twoTone->setTxChannel(nullptr);
+}
+
+// Group A follow-up (group B fix wave): Setup > PA's reload on the 50 ms
+// timer re-checks the on-air rule: a PA key accepted off the air and keyed
+// inside the window reloads once the radio is back on receive.
+void TstTransmitSettingsGate::paReloadWaitsWhileOnTheAir()
+{
+    Session s(m_securityDir.path(), this);
+    QStringList reloads;
+    s.core->setHardwareApplyObserverForTest(
+        [&reloads](const QString& name) { reloads.append(name); });
+    QVERIFY(s.connect());
+    const QString mac = s.core->currentRadioMac();
+    QVERIFY(!mac.isEmpty());
+
+    s.core->scheduleRemoteHardwareApply(
+        QStringLiteral("hardware/%1/pa/profiles/active").arg(mac));
+    s.core->scheduleRemoteHardwareApply(
+        QStringLiteral("hardware/%1/paCalibration/fwd").arg(mac));
+    MoxController* const mox = s.core->moxController();
+    mox->setMoxCheck({});
+    mox->setMox(true);
+    QVERIFY(s.core->stationOnAirRefusal(nullptr));
+    QTest::qWait(150);
+    QVERIFY2(reloads.isEmpty(), qPrintable(reloads.join(u',')));
+
+    mox->setMox(false);
+    QTRY_VERIFY(mox->state() == MoxState::Rx);
+    QTRY_VERIFY(reloads.contains(QStringLiteral("pa")));
+    QVERIFY(reloads.contains(QStringLiteral("cal")));
+    QTest::qWait(120);
+    QCOMPARE(reloads.count(QStringLiteral("pa")), 1);
+    QCOMPARE(reloads.count(QStringLiteral("cal")), 1);
 }
 
 void TstTransmitSettingsGate::transmitHardwareKeysStayRefused()

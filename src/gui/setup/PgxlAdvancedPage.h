@@ -29,6 +29,10 @@
 //                                    page's confirmations and the amp's
 //                                    answers. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 9, operator
+//                                    amendment 2026-09-25): the local tab's
+//                                    Operate button. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -87,6 +91,8 @@ public:
     QPushButton* revertButtonForTesting() const { return m_revertBtn; }
     QPushButton* saveAndRebootButtonForTesting() const { return m_saveAndRebootBtn; }
     QCheckBox* pairAttemptCheckForTesting() const { return m_pairAttemptCheckbox; }
+    // R-R3-49 (parity Task 9): the local tab's Operate button.
+    QPushButton* operateButtonForTesting() const { return m_operateBtn; }
     QString firmwareTextForTesting() const;
     QString deviceAnswerForTesting() const;
     QString networkProblemForTesting() const;
@@ -105,6 +111,10 @@ private slots:
     void onPgxlConnected();
     void onPgxlDisconnected();
     void onPgxlStatusUpdated(const QMap<QString, QString>& kvs);
+    // R-R3-49 (parity Task 9): the local tab's Operate (this computer's
+    // PgxlConnection, the local applet's line).
+    void updateOperateButton();
+    void onOperateClicked();
     void onSetupResponse(const QMap<QString, QString>& fields);
     void onIfconfResponse(const QMap<QString, QString>& fields);
     void onDiagnosticsChanged();
@@ -177,6 +187,7 @@ private:
     QLabel*    m_firmwareVersion{nullptr};
     QLabel*    m_serialLabel{nullptr};
     QLabel*    m_stateBadge{nullptr};
+    QPushButton* m_operateBtn{nullptr};
     QLabel*    m_meffaLabel{nullptr};
 
     // Hardware section (5.6.2)

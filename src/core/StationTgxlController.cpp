@@ -9,6 +9,8 @@
 // 2026-09-24: R-R3-47: one connection fault per outage; a tuner on another
 // network is refused saying how to allow it. J.J. Boyd (KG4VCF),
 // AI-assisted via Anthropic Claude Code.
+// 2026-09-25: R-R3-49 (parity Task 8): showSavedEndpoint. J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include "core/StationTgxlController.h"
 #include "core/LanDiscovery.h"
 #include "core/LogCategories.h"
@@ -196,6 +198,18 @@ void StationTgxlController::cancel(bool disabled)
     m_outageFaulted = false;
     m_state.phase = disabled ? Phase::Disabled : Phase::Disconnected;
     m_state.error.clear();
+    publish();
+}
+
+void StationTgxlController::showSavedEndpoint(const QString& host, quint16 port)
+{
+    using Phase = TunerModel::ConnectionPhase;
+    if (m_state.phase != Phase::Disconnected && m_state.phase != Phase::Disabled
+        && m_state.phase != Phase::Error) {
+        return;
+    }
+    m_state.configuredHost = host;
+    m_state.configuredPort = port;
     publish();
 }
 

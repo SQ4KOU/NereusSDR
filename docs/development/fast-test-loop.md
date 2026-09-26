@@ -264,6 +264,20 @@ If a timing constant makes a test slow, add a narrow test-only seam rather
 than sleeping. Keep production defaults untouched, and make it obvious the
 setter has no production callers.
 
+**A test that starts WDSP shares one FFTW wisdom file.** A test that
+opens WDSP channels in its own process without WDSP's wisdom step
+(`WdspEngine::setSynchronousInitForTest`, `DaemonApp`'s
+`m_synchronousWdspForTest`, the `ConnectableRadioModel` harness, or the
+friend seam that primes `m_initialized`) used to plan every FFTW plan from
+nothing: 45 to 85 seconds each, enough to pass ctest's 120 second limit on
+a loaded machine. `nereus_add_test()` finds those names in a test's
+sources and links `tests/TestFftwWisdomCache.cpp`, which loads
+`build/tests/test-fftw-wisdom` before `main()` and merges what the test
+planned back into it at exit. The first such test in a fresh build
+directory pays the planning; the rest take a few seconds. Delete the file
+to measure a cold run. A new test that starts WDSP another way should use
+one of those names, or add its own to the rule.
+
 ## Where the settings file lives
 
 Tests redirect Qt's writable locations into a sandbox via

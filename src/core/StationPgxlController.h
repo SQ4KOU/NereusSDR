@@ -6,6 +6,9 @@
 // 2026-09-24: R-R3-47 / R-R3-22: the amp's own settings for a window
 // (deviceSettings, StationDeviceSettings.h). J.J. Boyd (KG4VCF),
 // AI-assisted via Anthropic Claude Code.
+// 2026-09-25: R-R3-49 (parity Task 9): showSavedEndpoint, a window's saved
+// address shown on the amplifier object without dialling. J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
 #pragma once
 
 #include "core/PgxlConnection.h"
@@ -53,6 +56,10 @@ public:
     /// Stop in any phase; nothing is redialled. `disabled` reports the
     /// station's switch as off.
     void cancel(bool disabled = false);
+    /// R-R3-49 (parity Task 9): a saved address the Core has not dialled
+    /// (setPgxlAddress). Shown as the configured address while nothing is
+    /// connecting or connected; a running connection keeps its own.
+    void showSavedEndpoint(const QString& host, quint16 port);
     /// R-R3-22 / R-R3-47: the Core hears identity announcements from the
     /// station network only (LanDiscovery::setStationBind). Unset (a
     /// desktop window, or a test) hears every announcement.

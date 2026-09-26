@@ -208,17 +208,17 @@
         {
             "kind": "i64",
             "name": "radioHardwareVersion",
-            "value": 4
+            "value": 6
         },
         {
             "kind": "i64",
             "name": "remotePgxlControlVersion",
-            "value": 3
+            "value": 4
         },
         {
             "kind": "i64",
             "name": "remoteRfKitControlVersion",
-            "value": 3
+            "value": 4
         },
         {
             "kind": "i64",
@@ -228,12 +228,12 @@
         {
             "kind": "i64",
             "name": "accessoryDataVersion",
-            "value": 1
+            "value": 3
         },
         {
             "kind": "i64",
             "name": "remoteTgxlControlVersion",
-            "value": 3
+            "value": 4
         },
         {
             "kind": "i64",
@@ -263,7 +263,7 @@
         {
             "kind": "i64",
             "name": "transmitSettingsVersion",
-            "value": 6
+            "value": 7
         },
         {
             "kind": "i64",
@@ -572,6 +572,45 @@
         {
             "arguments": [
                 {
+                    "kind": "bool",
+                    "name": "on",
+                    "optional": false
+                }
+            ],
+            "capability": "remotePgxlControlVersion",
+            "capabilityVersion": 4,
+            "minMinor": 11,
+            "verb": "setPgxlOperate"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "remotePgxlControlVersion",
+            "capabilityVersion": 4,
+            "minMinor": 11,
+            "verb": "scanPgxlLan"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "host",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "port",
+                    "optional": false
+                }
+            ],
+            "capability": "remotePgxlControlVersion",
+            "capabilityVersion": 4,
+            "minMinor": 11,
+            "verb": "setPgxlAddress"
+        },
+        {
+            "arguments": [
+                {
                     "kind": "utf8",
                     "name": "name",
                     "optional": false
@@ -664,6 +703,50 @@
             "capabilityVersion": 2,
             "minMinor": 11,
             "verb": "setTgxlBypass"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "relay",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "direction",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteTgxlControlVersion",
+            "capabilityVersion": 4,
+            "minMinor": 11,
+            "verb": "moveTgxlRelay"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "remoteTgxlControlVersion",
+            "capabilityVersion": 4,
+            "minMinor": 11,
+            "verb": "scanTgxlLan"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "host",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "port",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteTgxlControlVersion",
+            "capabilityVersion": 4,
+            "minMinor": 11,
+            "verb": "setTgxlAddress"
         },
         {
             "arguments": [
@@ -771,6 +854,58 @@
             "capabilityVersion": 3,
             "minMinor": 11,
             "verb": "resetRfKitError"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "bool",
+                    "name": "on",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteRfKitControlVersion",
+            "capabilityVersion": 4,
+            "minMinor": 11,
+            "verb": "setRfKitOperate"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "port",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteRfKitControlVersion",
+            "capabilityVersion": 4,
+            "minMinor": 11,
+            "verb": "setRfKitAntenna"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "remoteRfKitControlVersion",
+            "capabilityVersion": 4,
+            "minMinor": 11,
+            "verb": "setRfKitTciMode"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "host",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "port",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteRfKitControlVersion",
+            "capabilityVersion": 4,
+            "minMinor": 11,
+            "verb": "setRfKitAddress"
         },
         {
             "arguments": [
@@ -897,6 +1032,24 @@
             "capabilityVersion": 4,
             "minMinor": 11,
             "verb": "setAlexBpfMode"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "band",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "antenna",
+                    "optional": false
+                }
+            ],
+            "capability": "radioHardwareVersion",
+            "capabilityVersion": 6,
+            "minMinor": 11,
+            "verb": "setAlexTxAntenna"
         },
         {
             "arguments": [
@@ -2705,6 +2858,42 @@
                     "kind": "utf8",
                     "name": "rfkitAntenna4Label",
                     "ordinal": 41
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "rfkitConnectedSinceMs",
+                    "ordinal": 42
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "rfkitPollsOk",
+                    "ordinal": 43
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "rfkitPollsFailed",
+                    "ordinal": 44
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "rfkitReconnectCount",
+                    "ordinal": 45
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "rfkitLastPollMs",
+                    "ordinal": 46
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "rfkitRttAvgMs",
+                    "ordinal": 47
                 }
             ]
         },
@@ -2859,43 +3048,43 @@
                     "ordinal": 2
                 },
                 {
-                    "direction": "outbound",
+                    "direction": "bidirectional",
                     "kind": "utf8",
                     "name": "txAntennas",
                     "ordinal": 3
                 },
                 {
-                    "direction": "outbound",
+                    "direction": "bidirectional",
                     "kind": "bool",
                     "name": "blockTxAnt2",
                     "ordinal": 4
                 },
                 {
-                    "direction": "outbound",
+                    "direction": "bidirectional",
                     "kind": "bool",
                     "name": "blockTxAnt3",
                     "ordinal": 5
                 },
                 {
-                    "direction": "outbound",
+                    "direction": "bidirectional",
                     "kind": "bool",
                     "name": "rxOutOnTx",
                     "ordinal": 6
                 },
                 {
-                    "direction": "outbound",
+                    "direction": "bidirectional",
                     "kind": "bool",
                     "name": "ext1OutOnTx",
                     "ordinal": 7
                 },
                 {
-                    "direction": "outbound",
+                    "direction": "bidirectional",
                     "kind": "bool",
                     "name": "ext2OutOnTx",
                     "ordinal": 8
                 },
                 {
-                    "direction": "outbound",
+                    "direction": "bidirectional",
                     "kind": "bool",
                     "name": "rxOutOverride",
                     "ordinal": 9

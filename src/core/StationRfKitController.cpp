@@ -5,6 +5,10 @@
 // (KG4VCF), AI-assisted via Anthropic Claude Code.
 // 2026-09-24: R-R3-48: TCI mode once when band follow starts, not on every
 // reconnect. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-25: R-R3-49 (parity Task 10): a window's OPERATE, antenna and TCI
+// mode sent as the local applet and page send them, and a saved address
+// shown without dialling. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+// Claude Code.
 #include "core/StationRfKitController.h"
 
 namespace NereusSDR {
@@ -117,12 +121,20 @@ void StationRfKitController::cancel(bool disabled)
     }
 }
 
-bool StationRfKitController::resetError(QString* reason)
+bool StationRfKitController::ampAdmitted(QString* reason) const
 {
     if (!m_running || !m_connection || !m_connection->isConnected()) {
         if (reason) {
             *reason = QStringLiteral("The Core is not connected to the RF-Kit amplifier.");
         }
+        return false;
+    }
+    return true;
+}
+
+bool StationRfKitController::resetError(QString* reason)
+{
+    if (!ampAdmitted(reason)) {
         return false;
     }
     // The local page's "Reset amp error state" (RfKitPage::buildRf2ksTab).
@@ -131,6 +143,88 @@ bool StationRfKitController::resetError(QString* reason)
         reason->clear();
     }
     return true;
+}
+
+bool StationRfKitController::setOperate(bool on, QString* reason)
+{
+    if (!ampAdmitted(reason)) {
+        return false;
+    }
+    // The local applet's OPERATE (MainWindow's Rf2ksApplet::operateToggled
+    // handler): the amp's own words for its two states.
+    m_connection->setOperateMode(on ? QStringLiteral("OPERATE") : QStringLiteral("STANDBY"));
+    if (reason) {
+        reason->clear();
+    }
+    return true;
+}
+
+bool StationRfKitController::setAntenna(int number, QString* reason)
+{
+    if (!ampAdmitted(reason)) {
+        return false;
+    }
+    // Once the amp has listed its antennas, only an internal one it lists
+    // and does not list as disabled is offered (the local applet's buttons
+    // follow the same list: Rf2ksApplet::setAntennas).
+    const QList<RfKitAntenna> listed = m_connection->antennas();
+    bool anyInternal = false;
+    bool usable = false;
+    for (const RfKitAntenna& a : listed) {
+        if (a.type != RfKitAntenna::Type::Internal) {
+            continue;
+        }
+        anyInternal = true;
+        if (a.number == number && a.state != RfKitAntenna::State::Disabled) {
+            usable = true;
+        }
+    }
+    if (anyInternal && !usable) {
+        if (reason) {
+            *reason = QStringLiteral("This antenna is not available on the RF-Kit amplifier.");
+        }
+        return false;
+    }
+    // The local applet's ANT button (Rf2ksApplet::antennaRequested, an
+    // internal antenna, to Rf2ksConnection::setActiveAntenna).
+    m_connection->setActiveAntenna(RfKitAntenna::Type::Internal, number);
+    if (reason) {
+        reason->clear();
+    }
+    return true;
+}
+
+bool StationRfKitController::setTciMode(QString* reason)
+{
+    if (!ampAdmitted(reason)) {
+        return false;
+    }
+    // The local page's "Set amp to TCI mode" (RfKitPage::buildRf2ksTab).
+    m_connection->setOperationalInterface(kTciInterface);
+    if (reason) {
+        reason->clear();
+    }
+    return true;
+}
+
+void StationRfKitController::showSavedEndpoint(const QString& host, quint16 port)
+{
+    if (!m_model) {
+        return;
+    }
+    const Phase phase = m_model->connectionPhase();
+    if (phase != Phase::Disconnected && phase != Phase::Disabled && phase != Phase::Error) {
+        return;
+    }
+    // The next Connect (or the switch turned on) dials this address.
+    if (!m_running) {
+        m_host = host;
+        m_port = port;
+    }
+    RfKitModel::StationConnectionState next = m_model->stationConnectionState();
+    next.configuredHost = host;
+    next.configuredPort = port;
+    m_model->setStationConnectionState(next);
 }
 
 void StationRfKitController::setBandFollowWanted(bool wanted)

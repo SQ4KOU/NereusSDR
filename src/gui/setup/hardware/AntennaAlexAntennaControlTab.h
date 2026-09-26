@@ -18,6 +18,10 @@
 //   2026-09-23 - R-R3-46: remote window source and transmit
 //                 permission. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                 Code.
+//   2026-09-25 - R-R3-49 / R-R3-46 (parity Task 12): a remote window's
+//                 transmit half writes the Core and follows whether the Core
+//                 takes it. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 //=================================================================
@@ -130,10 +134,12 @@ public:
     // Expose a test accessor so unit tests can verify the controller reference.
     AlexController& controller();
 
-    // R-R3-46: the transmit half (TX antenna grid, Block-TX switches and the
-    // four TX relay switches) follows the transmit permission with its
-    // reason; the receive half stays live. Always permitted locally.
-    void setTransmitPermitted(bool permitted, const QString& reason);
+    // Parity Task 12 (R-R3-49 / R-R3-46): in a remote window the transmit
+    // half (TX antenna grid, Block-TX switches and the four TX relay
+    // switches) goes to the Core and follows whether the Core takes it (the
+    // Alex facade's transmit edit availability), disabled with its reason
+    // when not. It never waits for the radio to leave the air, as in
+    // Thetis. A local window's is always live.
 
 #ifdef NEREUS_BUILD_TESTS
     QRadioButton* rxButtonForTest(Band band, int ant) const;
@@ -141,7 +147,11 @@ public:
     QRadioButton* txButtonForTest(Band band, int ant) const;
     QCheckBox* useTxAntForRxForTest() const { return m_chkUseTxAntForRx; }
     QCheckBox* blockTxAnt2ForTest() const { return m_blockTxAnt2; }
+    QCheckBox* blockTxAnt3ForTest() const { return m_blockTxAnt3; }
     QCheckBox* rxOutOnTxForTest() const { return m_chkRxOutOnTx; }
+    QCheckBox* ext1OutOnTxForTest() const { return m_chkExt1OutOnTx; }
+    QCheckBox* ext2OutOnTxForTest() const { return m_chkExt2OutOnTx; }
+    QCheckBox* rxOutOverrideForTest() const { return m_chkRxOutOverride; }
     QWidget* txGridForTest() const { return m_txGridGroup; }
 #endif
 
@@ -167,6 +177,12 @@ private:
     // R-R3-46: re-read every row and switch (a remote window's source is the
     // Core's `alexAntennas` object).
     void syncAllFromSource();
+    // Parity Task 12: a remote window's four TX relay switches show the
+    // Core's values again (after an edit, or its refusal).
+    void syncTxRelaysFromSource();
+    // Parity Task 12: a remote window's transmit half follows the Alex
+    // facade's transmit edit availability.
+    void applyTransmitEditAvailability();
 
     // Where the tab reads its values: the window's own AlexController
     // locally, the Core's `alexAntennas` object in a remote window.

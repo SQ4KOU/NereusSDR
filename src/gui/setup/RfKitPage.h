@@ -34,6 +34,14 @@
 //                 the Core to switch, connect and disconnect the amp; the
 //                 band-follow line, local and remote. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-25 -- R-R3-49 (parity Task 10): in a remote window "Set amp to
+//                 TCI mode" asks the Core (setRfKitTciMode), Save keeps a
+//                 changed Host and Port on the Core without dialling
+//                 (setRfKitAddress), and Live diagnostics shows the Core's
+//                 connection counts; a local window's Live diagnostics
+//                 gains the connected-since and last-poll readings a remote
+//                 one shows. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include <QHash>
@@ -73,6 +81,11 @@ public:
     { return n >= 1 && n <= 4 ? m_antLabelEdits[n - 1] : nullptr; }
     QPushButton* saveButtonForTesting() const { return m_saveBtn; }
     QPushButton* resetErrorButtonForTesting() const { return m_resetErrBtn; }
+    // R-R3-49 (parity Task 10).
+    QPushButton* setTciButtonForTesting() const { return m_setTciBtn; }
+    QLineEdit*   hostEditForTesting() const { return m_hostEdit; }
+    QSpinBox*    portSpinForTesting() const { return m_portSpin; }
+    QString      diagnosticsTextForTesting() const;
 
 private slots:
     // Master toggle handler.  Persists the new state via
@@ -123,6 +136,14 @@ private:
     // Rework follow-up 3: values saved and not yet echoed by the Core.
     QHash<QString, QString> m_savedPending;
     void settleSaved(const QString& key);
+    // R-R3-49 (parity Task 10): a remote window's TCI mode button: enabled
+    // on a Core at remoteRfKitControlVersion 4 while the radio is off the
+    // air and the Core is connected to the amp; otherwise disabled with the
+    // reason. Parity mini-round (the operator's rulings a and b): the
+    // address fields only save, so they stay enabled on the air; a local
+    // window's TCI mode button waits on the air too, with the same reason.
+    void refreshRemoteControls();
+    void onSetTciClicked();
     void refreshBandFollow();
     void onConnectClicked();
     void onDisconnectClicked();

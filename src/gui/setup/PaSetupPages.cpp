@@ -2233,7 +2233,17 @@ PaValuesPage::PaValuesPage(RadioModel* model, QWidget* parent)
                                          QStringLiteral("No"), paGroup);
     paForm->addRow(QStringLiteral("PA Current:"),     m_paCurrentLabel);
     paForm->addRow(QStringLiteral("PA Temperature:"), m_paTempLabel);
-    paForm->addRow(QStringLiteral("Supply Voltage:"), m_supplyVoltsLabel);
+    // Group A follow-up (group B fix wave): the AIN6 reading carries
+    // Thetis's name for it. On MkII-class boards (the G2) it is not the
+    // 13.8 V supply (RadioConnection::handleSupplyRaw).
+    // From Thetis setup.designer.cs:51365 [v2.10.3.15]
+    //   this.labelTS254.Text = "DC Voltage";
+    // That label ships hidden; the reading itself carries the name in
+    // Thetis's own computation of it (parity mini-round):
+    // From Thetis console.cs:24782 [v2.10.3.15]
+    //   public float computeHermesDCVoltage()
+    //   ... int adc = NetworkIO.getHermesDCVoltage();
+    paForm->addRow(QStringLiteral("DC Voltage:"), m_supplyVoltsLabel);
     paForm->addRow(QStringLiteral("FWD Voltage:"),    m_fwdVoltageLabel);
     paForm->addRow(QStringLiteral("REV Voltage:"),    m_revVoltageLabel);
     paForm->addRow(QStringLiteral("ADC Overload:"),   m_adcOverloadLabel);

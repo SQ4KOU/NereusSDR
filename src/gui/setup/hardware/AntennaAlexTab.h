@@ -98,8 +98,9 @@ public:
     void populate(const RadioInfo& info, const BoardCapabilities& caps);
     void restoreSettings(const QMap<QString, QVariant>& settings);
 
-    // R-R3-46: the Antenna Control tab's transmit half follows the transmit
-    // permission with its reason. Always permitted locally.
+    // R-R3-46: the Alex-1 Filters tab's transmit fields follow the transmit
+    // permission with its reason. Always permitted locally. (Antenna
+    // Control's transmit half follows the Alex facade, parity Task 12.)
     void setTransmitPermitted(bool permitted, const QString& reason);
 
 signals:

@@ -29,6 +29,11 @@
 //                 and a status line shows the Core's connection and any
 //                 refusal. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-25  R-R3-49 (parity Task 9): a remote window's OPERATE asks
+//                 the Core (setPgxlOperate, remotePgxlControlVersion 4),
+//                 waits while the radio is on the air, and follows the
+//                 amp's reported state; coreDiagnosticsText. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -93,6 +98,13 @@ public:
     // Peripherals row says them: Disconnect when connected, Cancel while
     // the Core is still trying, Connect otherwise.
     static QString stationConnectionToggleText(TunerModel::ConnectionPhase phase);
+    // R-R3-49 (parity Task 9): the Core's Power Genius diagnostics for a
+    // remote window's Copy diagnostics: the mirrored `amplifier` object and
+    // accessoryData's pgxl* counters, never this computer's idle socket.
+    static QString coreDiagnosticsText(RadioModel* model);
+    bool operateButtonEnabledForTesting() const { return m_operateBtn->isEnabled(); }
+    QString operateButtonToolTipForTesting() const { return m_operateBtn->toolTip(); }
+    void clickOperateForTesting() { m_operateBtn->click(); }
 
     // Test seams (R-R3-47).
     double  fwdGaugeValueForTesting() const;
@@ -166,11 +178,18 @@ private slots:
     // R-R3-22 fix wave: the Core's answer to a command, by id; only the
     // applet's own Disconnect or Connect (m_pendingCommandId) is shown.
     void onStationCommandFinished(quint32 commandId, bool accepted, const QString& reason);
+    // R-R3-49 (parity Task 9): a remote window's OPERATE: enabled on a Core
+    // at remotePgxlControlVersion 4 that is connected to the amp while the
+    // radio is off the air; otherwise disabled with the reason.
+    void updateOperateButton();
 
 private:
     // R-R3-22: a remote window's Disconnect or Connect, sent to the Core.
     void requestRemoteConnectionToggle();
     bool isRemoteWindow() const;
+    // R-R3-49 (parity Task 9): the Core puts its amp in operate or standby
+    // for this remote window.
+    bool remoteOperateControl() const;
 
     // From AetherSDR src/gui/AmpApplet.h:29 [@0cd4559]
     void updatePowerLabel();

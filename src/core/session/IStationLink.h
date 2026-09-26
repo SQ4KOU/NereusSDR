@@ -95,6 +95,28 @@
 //                                    requestTxProfileSelect, Save, Delete
 //                                    and requestRadeResetVocoder.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 8):
+//                                    tgxlFullControlAvailable,
+//                                    requestTgxlRelayMove,
+//                                    requestTgxlLanScan and
+//                                    requestTgxlAddress
+//                                    (remoteTgxlControlVersion 4).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 9):
+//                                    pgxlFullControlAvailable,
+//                                    requestPgxlOperate,
+//                                    requestPgxlLanScan and
+//                                    requestPgxlAddress
+//                                    (remotePgxlControlVersion 4).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 10):
+//                                    rfKitFullControlAvailable,
+//                                    requestRfKitOperate,
+//                                    requestRfKitAntenna,
+//                                    requestRfKitTciMode and
+//                                    requestRfKitAddress
+//                                    (remoteRfKitControlVersion 4).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QString>
@@ -209,6 +231,29 @@ public:
     virtual bool rfKitSettingsAvailable() const { return false; }
     virtual CommandOutcome requestResetRfKitError()
     { return { false, QStringLiteral("This Core does not let this app reset the RF-Kit amplifier's error. Updating the Core may help.") }; }
+    /// R-R3-49 (parity Task 10, remoteRfKitControlVersion 4): the Core puts
+    /// its RF-Kit amplifier in operate or standby, switches it to internal
+    /// antenna 1 to 4 and puts it in TCI mode (the local applet's and
+    /// page's own requests; the amp's report returns on the mirrored `rfkit`
+    /// object), and saves a Host and Port typed on the RF-Kit page without
+    /// dialling. The Core refuses each while the radio is on the air.
+    virtual bool rfKitFullControlAvailable() const { return false; }
+    /// R-R3-49 (parity Task 10, accessoryDataVersion 2): the Core's RF-Kit
+    /// connection counts arrive on `accessoryData` (rfkit*).
+    virtual bool rfKitCountersAvailable() const { return false; }
+    /// Group B fix wave (M7, accessoryDataVersion 3): the Core's RF-Kit
+    /// average response time arrives on `accessoryData` (rfkitRttAvgMs).
+    virtual bool rfKitResponseTimeAvailable() const { return false; }
+    virtual CommandOutcome requestRfKitOperate(bool /*on*/)
+    { return { false, rfKitFullControlUnavailableReason() }; }
+    virtual CommandOutcome requestRfKitAntenna(int /*port*/)
+    { return { false, rfKitFullControlUnavailableReason() }; }
+    virtual CommandOutcome requestRfKitTciMode()
+    { return { false, rfKitFullControlUnavailableReason() }; }
+    virtual CommandOutcome requestRfKitAddress(const QString& /*host*/, int /*port*/)
+    { return { false, rfKitFullControlUnavailableReason() }; }
+    static QString rfKitFullControlUnavailableReason()
+    { return QStringLiteral("This Core does not let this app put the RF-Kit amplifier in operate or standby, switch its antenna or TCI mode, or save its address. Updating the Core may help."); }
 
     /// R-R3-48 (stationTciVersion 1): the Core runs its own TCI server on
     /// the station network, switched by this app's one TCI switch and port.
@@ -282,6 +327,39 @@ public:
     /// by the Core as one command), so STANDBY to OPERATE is one request.
     /// False below 3: the window sends bypass off, then operate on.
     virtual bool tgxlOperateAppliesWhole() const { return false; }
+    /// R-R3-49 (parity Task 8, remoteTgxlControlVersion 4): the Core nudges
+    /// one matching relay (`relay` 0 C1, 1 L, 2 C2; `direction` -1 or 1)
+    /// as the local applet's mouse wheel does; listens for Tuner Genius
+    /// announcements for this window's Scan LAN (the answer arrives as
+    /// RadioModel::stationTgxlLanScanFinished); and saves a Host and Port
+    /// typed without Connect, without dialling. The relay nudge keeps the
+    /// tuner's report on the mirrored `tuner` object; the Core refuses each
+    /// while the radio is on the air.
+    virtual bool tgxlFullControlAvailable() const { return false; }
+    virtual CommandOutcome requestTgxlRelayMove(int /*relay*/, int /*direction*/)
+    { return { false, tgxlFullControlUnavailableReason() }; }
+    virtual CommandOutcome requestTgxlLanScan()
+    { return { false, tgxlFullControlUnavailableReason() }; }
+    virtual CommandOutcome requestTgxlAddress(const QString& /*host*/, int /*port*/)
+    { return { false, tgxlFullControlUnavailableReason() }; }
+    /// R-R3-49 (parity Task 9, remotePgxlControlVersion 4): the Core puts
+    /// its Power Genius in operate or standby (the local applet's line;
+    /// the amp's report returns on the mirrored `amplifier` object);
+    /// listens for Power Genius announcements for this window's Scan LAN
+    /// (the answer arrives as RadioModel::stationPgxlLanScanFinished); and
+    /// saves a Host and Port typed without Connect, without dialling. The
+    /// Core refuses each while the radio is on the air.
+    virtual bool pgxlFullControlAvailable() const { return false; }
+    virtual CommandOutcome requestPgxlOperate(bool /*on*/)
+    { return { false, pgxlFullControlUnavailableReason() }; }
+    virtual CommandOutcome requestPgxlLanScan()
+    { return { false, pgxlFullControlUnavailableReason() }; }
+    virtual CommandOutcome requestPgxlAddress(const QString& /*host*/, int /*port*/)
+    { return { false, pgxlFullControlUnavailableReason() }; }
+    static QString pgxlFullControlUnavailableReason()
+    { return QStringLiteral("This Core does not let this app put the Power Genius in operate or standby, scan for it or save its address. Updating the Core may help."); }
+    static QString tgxlFullControlUnavailableReason()
+    { return QStringLiteral("This Core does not let this app move the Tuner Genius relays, scan for it or save its address. Updating the Core may help."); }
     static QString tgxlControlUnavailableReason()
     { return QStringLiteral("This Core does not let this app switch the Tuner Genius. Updating the Core may help."); }
     static QString pgxlDeviceSettingsUnavailableReason()

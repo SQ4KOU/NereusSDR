@@ -28,6 +28,20 @@
 //                 window's changes to them, except fields the operator
 //                 changed and the Core has not yet taken. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-25 -- R-R3-49 (parity Task 10): a remote window's "Set amp to
+//                 TCI mode" asks the Core (setRfKitTciMode); Save keeps a
+//                 changed Host and Port on the Core without dialling
+//                 (setRfKitAddress); both wait while the radio is on the
+//                 air. Live diagnostics shows the Core's connection counts
+//                 (accessoryData's rfkit*), and a local window's gains the
+//                 connected-since and last-poll readings. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 -- R-R3-49 (parity mini-round, the operator's rulings a to
+//                 c): Host, Port and Save no longer wait on the air in a
+//                 remote window; a local window's "Set amp to TCI mode"
+//                 waits on the air, and a click refused there shows the
+//                 remote window's reason. J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 #include "RfKitPage.h"
@@ -41,6 +55,7 @@
 #include "gui/OperatorReasonText.h"
 
 #include <QCheckBox>
+#include <QDateTime>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -54,6 +69,16 @@
 #include <QVBoxLayout>
 
 namespace NereusSDR {
+
+namespace {
+// R-R3-49 (parity Task 10): a count's time as Live diagnostics shows it.
+QString clockTime(qint64 msSinceEpoch)
+{
+    return msSinceEpoch > 0
+        ? QDateTime::fromMSecsSinceEpoch(msSinceEpoch).toString(QStringLiteral("HH:mm:ss"))
+        : QStringLiteral("--");
+}
+} // namespace
 
 RfKitPage::RfKitPage(RadioModel* model, QWidget* parent)
     : QWidget(parent)
@@ -216,12 +241,7 @@ QWidget* RfKitPage::buildRf2ksTab()
 
     connect(m_testConnBtn, &QPushButton::clicked, this, &RfKitPage::onConnectClicked);
     connect(m_disconnectBtn, &QPushButton::clicked, this, &RfKitPage::onDisconnectClicked);
-    connect(m_setTciBtn, &QPushButton::clicked, this, [this] {
-        if (m_model && m_model->rfKitConnection()) {
-            m_model->rfKitConnection()->setOperationalInterface(
-                QStringLiteral("TCI"));
-        }
-    });
+    connect(m_setTciBtn, &QPushButton::clicked, this, &RfKitPage::onSetTciClicked);
     connect(m_resetErrBtn, &QPushButton::clicked, this, &RfKitPage::onResetErrorClicked);
 
     // --- Antenna labels group ---
@@ -277,9 +297,21 @@ QWidget* RfKitPage::buildRf2ksTab()
                 m_portSpin->setValue(rfKit->configuredPort());
             }
         }
-        m_setTciBtn->setEnabled(false);
-        m_setTciBtn->setToolTip(tr("The Core puts the amplifier in TCI mode itself while the "
-                                   "Core's TCI server is on."));
+        // R-R3-49 (parity Task 10): TCI mode and the address, through the
+        // Core (refreshRemoteControls says when they wait and why).
+        connect(m_model, &RadioModel::stationLinkStateChanged,
+                this, &RfKitPage::refreshRemoteControls);
+        connect(m_model, &RadioModel::coreOnAirChanged,
+                this, &RfKitPage::refreshRemoteControls);
+        if (RfKitModel* rfKit = m_model->rfKitModel()) {
+            connect(rfKit, &RfKitModel::stationConnectionChanged,
+                    this, &RfKitPage::refreshRemoteControls);
+        }
+        if (AccessoryDataModel* data = m_model->accessoryDataModel()) {
+            connect(data, &AccessoryDataModel::rfkitDiagnosticsChanged,
+                    this, &RfKitPage::refreshLiveStatus);
+        }
+        refreshRemoteControls();
         // I4: the Core's settings and names, and whether it takes them.
         connect(m_model, &RadioModel::stationLinkStateChanged,
                 this, &RfKitPage::refreshRemoteSettings);
@@ -318,6 +350,12 @@ QWidget* RfKitPage::buildRf2ksTab()
                     [this, i] { m_touchedLabel[i] = true; });
         }
         refreshRemoteSettings();
+    } else if (m_model) {
+        // Parity mini-round (ruling a): the local TCI mode button waits on
+        // the air (refreshRemoteControls' local branch).
+        connect(m_model, &RadioModel::coreOnAirChanged,
+                this, &RfKitPage::refreshRemoteControls);
+        refreshRemoteControls();
     }
     return tab;
 }
@@ -379,6 +417,78 @@ void RfKitPage::refreshRemoteSettings()
             }
         }
     }
+}
+
+void RfKitPage::refreshRemoteControls()
+{
+    if (!m_setTciBtn) {
+        return;
+    }
+    if (!isRemote()) {
+        // Parity mini-round (the operator's ruling a, 2026-09-25): TCI mode
+        // switches the amp, so a local window's waits on the air too, with
+        // the remote window's reason.
+        const bool onAir = m_model && m_model->isCoreOnAir();
+        m_setTciBtn->setEnabled(!onAir);
+        m_setTciBtn->setToolTip(onAir ? RadioModel::onAirReason() : QString());
+        return;
+    }
+    const IStationLink* link = m_model->stationLink();
+    const bool full = link && link->rfKitFullControlAvailable();
+    const bool onAir = m_model->isCoreOnAir();
+    const RfKitModel* rfKit = m_model->rfKitModel();
+    const bool connected = rfKit
+        && rfKit->connectionPhase() == RfKitModel::ConnectionPhase::Connected;
+    QString tciReason;
+    if (!full) {
+        // An older Core: it switches the amp to TCI mode only by itself.
+        tciReason = tr("The Core puts the amplifier in TCI mode itself while the Core's TCI "
+                       "server is on.");
+    } else if (onAir) {
+        tciReason = RadioModel::onAirReason();
+    } else if (!connected) {
+        tciReason = tr("The Core is not connected to the RF-Kit amplifier.");
+    }
+    m_setTciBtn->setEnabled(tciReason.isEmpty());
+    m_setTciBtn->setToolTip(tciReason.isEmpty() ? tr("Ask the Core to put the amplifier in TCI "
+                                                     "mode.")
+                                                : tciReason);
+    // Parity mini-round (rulings a and b): the address is only saved, so it
+    // does not wait on the air (an older Core takes it only with Connect).
+    for (QWidget* w : std::initializer_list<QWidget*>{m_hostEdit, m_portSpin}) {
+        w->setEnabled(true);
+        w->setToolTip(QString());
+    }
+}
+
+void RfKitPage::onSetTciClicked()
+{
+    if (!m_model) { return; }
+    if (isRemote()) {
+        // R-R3-49 (parity Task 10): the Core sends its amp the request this
+        // button sends locally.
+        IStationLink* link = m_model->stationLink();
+        const auto outcome = link ? link->requestRfKitTciMode()
+            : IStationLink::CommandOutcome{ false, tr("Connect to the Core first.") };
+        m_model->noteAccessoryRequestShownOnPage(outcome.commandId, this);
+        m_remoteResult = outcome.sent ? QString() : OperatorReasonText::forDisplay(outcome.reason);
+        refreshLiveStatus();
+        return;
+    }
+    // Parity mini-round (rulings a and c): refused on the air by the Core's
+    // own rule, with the remote window's reason.
+    if (m_model->refuseLocalAccessorySwitchOnAir(QStringLiteral("rfkit"))) {
+        refreshRemoteControls();
+        return;
+    }
+    if (m_model->rfKitConnection()) {
+        m_model->rfKitConnection()->setOperationalInterface(QStringLiteral("TCI"));
+    }
+}
+
+QString RfKitPage::diagnosticsTextForTesting() const
+{
+    return m_diagnosticsLabel ? m_diagnosticsLabel->text() : QString();
 }
 
 void RfKitPage::settleSaved(const QString& key)
@@ -488,6 +598,23 @@ void RfKitPage::saveRf2ksSettings()
         // once (remoteRfKitControlVersion 3). The address goes with Connect.
         if (!remoteSettingsAvailable()) {
             return;
+        }
+        // R-R3-49 (parity Task 10): a Host or Port changed here is kept on
+        // the Core for its radio, as a local Save keeps it, without
+        // dialling (setRfKitAddress), on the air too (parity mini-round,
+        // rulings a and b); an older Core takes the address only with
+        // Connect.
+        IStationLink* link = m_model->stationLink();
+        const RfKitModel* rfKit = m_model->rfKitModel();
+        const QString host = m_hostEdit->text().trimmed();
+        const int port = m_portSpin->value();
+        if (link && link->rfKitFullControlAvailable() && rfKit
+            && (host != rfKit->configuredHost() || port != rfKit->configuredPort())) {
+            const auto outcome = link->requestRfKitAddress(host, port);
+            m_model->noteAccessoryRequestShownOnPage(outcome.commandId, this);
+            m_remoteResult = outcome.sent ? QString()
+                                          : OperatorReasonText::forDisplay(outcome.reason);
+            refreshLiveStatus();
         }
         auto& s = AppSettings::instance();
         s.setValue(QStringLiteral("RfKit_AutoReconnect"),
@@ -728,8 +855,29 @@ void RfKitPage::refreshLiveStatus()
         m_liveStatusLabel->setTextFormat(Qt::PlainText);
         m_liveStatusLabel->setText(tr("RF2K-S: %1").arg(text));
         if (m_diagnosticsLabel) {
-            m_diagnosticsLabel->setTextFormat(Qt::PlainText);
-            m_diagnosticsLabel->setText(tr("The Core keeps the amplifier's connection counts."));
+            // R-R3-49 (parity Task 10): the Core's counts (accessoryData,
+            // version 2); an older Core keeps them to itself.
+            const IStationLink* link = m_model->stationLink();
+            const AccessoryDataModel* data = m_model->accessoryDataModel();
+            if (link && link->rfKitCountersAvailable() && data) {
+                // Group B fix wave (M7): the response time as the local
+                // line shows it, from a Core at accessoryDataVersion 3.
+                const QString rtt = link->rfKitResponseTimeAvailable()
+                    ? QStringLiteral("%1 ms avg").arg(data->rfkitRttAvgMs())
+                    : QStringLiteral("--");
+                m_diagnosticsLabel->setTextFormat(Qt::RichText);
+                m_diagnosticsLabel->setText(QStringLiteral(
+                    "Polls: %1 OK / %2 failed &middot; RTT %3 &middot; Reconnects %4 &middot; "
+                    "Connected since %5 &middot; Last poll %6")
+                    .arg(data->rfkitPollsOk()).arg(data->rfkitPollsFailed())
+                    .arg(rtt).arg(data->rfkitReconnectCount())
+                    .arg(clockTime(data->rfkitConnectedSinceMs()),
+                         clockTime(data->rfkitLastPollMs())));
+            } else {
+                m_diagnosticsLabel->setTextFormat(Qt::PlainText);
+                m_diagnosticsLabel->setText(tr("The Core keeps the amplifier's connection "
+                                               "counts."));
+            }
         }
         return;
     }
@@ -744,10 +892,14 @@ void RfKitPage::refreshLiveStatus()
             .arg(conn->peerPort())
             .arg(conn->softwareVersion()));
     if (m_diagnosticsLabel) {
+        // R-R3-49 (parity Task 10): with the connected-since and last-poll
+        // readings a remote window shows from the Core.
         m_diagnosticsLabel->setText(QStringLiteral(
-            "Polls: %1 OK / %2 failed &middot; RTT %3 ms avg &middot; Reconnects %4")
+            "Polls: %1 OK / %2 failed &middot; RTT %3 ms avg &middot; Reconnects %4 &middot; "
+            "Connected since %5 &middot; Last poll %6")
             .arg(conn->pollsSucceeded()).arg(conn->pollsFailed())
-            .arg(conn->rttAvgLast10Ms()).arg(conn->reconnectAttempts()));
+            .arg(conn->rttAvgLast10Ms()).arg(conn->reconnectAttempts())
+            .arg(clockTime(conn->connectedSinceMs()), clockTime(conn->lastPollMs())));
     }
 }
 

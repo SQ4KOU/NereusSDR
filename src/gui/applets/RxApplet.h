@@ -223,11 +223,6 @@ public slots:
     // Called by MainWindow on currentRadioChanged after setBoardCapabilities.
     void setHpsdrSku(NereusSDR::HPSDRModel sku);
 
-    // R-R3-21: the negotiated transmit permission, as TxApplet and the VFO
-    // flag take it. Gates the XIT row. A remote-station model starts
-    // denied; local direct mode is permitted and MainWindow never calls
-    // this there.
-    void setTransmitPermitted(bool permitted, const QString& reason = QString());
     // R-R3-49 (parity Task 1): the transmit settings gate. The
     // filter-preset Shift-click TX passband match follows it; while it is
     // closed the RX preset still applies and transmitSettingRefused says
@@ -385,7 +380,6 @@ private:
     TriBtn*      m_ritPlus     = nullptr;
 
     // Control 16: XIT
-    bool         m_transmitPermitted = true;  // R-R3-21
     bool         m_transmitSettingsPermitted = true;  // R-R3-49
     QString      m_transmitSettingsReason;            // R-R3-49
     QPushButton* m_xitOnBtn    = nullptr;

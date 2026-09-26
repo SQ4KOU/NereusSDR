@@ -73,6 +73,13 @@
 //                 Claude Code.
 //   2026-09-25 - iPhone app Task 73 (R-IOS-02): SliceMarker, all Outbound.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 10): AccessoryDataModel's five
+//                 rfkit* connection counts Outbound. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 / R-R3-46 (parity Task 12): AlexAntennaFacade's
+//                 txAntennas, blockTxAnt2, blockTxAnt3, ext1OutOnTx,
+//                 ext2OutOnTx and rxOutOverride Bidirectional. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -510,13 +517,19 @@ const MirrorPolicy::Entry kEntries[] = {
     { "AlexAntennaFacade", "rxAntennas", MirrorDirection::Bidirectional },
     { "AlexAntennaFacade", "rxOnlyAntennas", MirrorDirection::Bidirectional },
     { "AlexAntennaFacade", "useTxAntennaForRx", MirrorDirection::Bidirectional },
-    { "AlexAntennaFacade", "txAntennas", MirrorDirection::Outbound },
-    { "AlexAntennaFacade", "blockTxAnt2", MirrorDirection::Outbound },
-    { "AlexAntennaFacade", "blockTxAnt3", MirrorDirection::Outbound },
-    { "AlexAntennaFacade", "rxOutOnTx", MirrorDirection::Outbound },
-    { "AlexAntennaFacade", "ext1OutOnTx", MirrorDirection::Outbound },
-    { "AlexAntennaFacade", "ext2OutOnTx", MirrorDirection::Outbound },
-    { "AlexAntennaFacade", "rxOutOverride", MirrorDirection::Outbound },
+    // Parity Task 12 (radioHardwareVersion 6): the transmit antennas and
+    // relays are two-way; the Core applies each through its own
+    // AlexController, as the local Antenna Control tab does.
+    { "AlexAntennaFacade", "txAntennas", MirrorDirection::Bidirectional },
+    { "AlexAntennaFacade", "blockTxAnt2", MirrorDirection::Bidirectional },
+    { "AlexAntennaFacade", "blockTxAnt3", MirrorDirection::Bidirectional },
+    // Group B fix wave (radioHardwareVersion 5): RX bypass on TX, the VFO
+    // flag's BYPS, is two-way; the Core applies it through its own
+    // AlexController.
+    { "AlexAntennaFacade", "rxOutOnTx", MirrorDirection::Bidirectional },
+    { "AlexAntennaFacade", "ext1OutOnTx", MirrorDirection::Bidirectional },
+    { "AlexAntennaFacade", "ext2OutOnTx", MirrorDirection::Bidirectional },
+    { "AlexAntennaFacade", "rxOutOverride", MirrorDirection::Bidirectional },
 
     // R-R3-46 (radioHardwareVersion 3): the Core's HL2 I/O board, as the
     // Core reads it; a window asks for a probe with a command.
@@ -638,6 +651,16 @@ const MirrorPolicy::Entry kEntries[] = {
     { "AccessoryDataModel", "rfkitAntenna2Label", MirrorDirection::Outbound },
     { "AccessoryDataModel", "rfkitAntenna3Label", MirrorDirection::Outbound },
     { "AccessoryDataModel", "rfkitAntenna4Label", MirrorDirection::Outbound },
+    // R-R3-49 (parity Task 10, accessoryDataVersion 2): the RF-Kit's
+    // connection counts, read-only.
+    { "AccessoryDataModel", "rfkitConnectedSinceMs", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "rfkitPollsOk", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "rfkitPollsFailed", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "rfkitReconnectCount", MirrorDirection::Outbound },
+    { "AccessoryDataModel", "rfkitLastPollMs", MirrorDirection::Outbound },
+    // Group B fix wave (M7, accessoryDataVersion 3): the RF-Kit's average
+    // response time, read-only.
+    { "AccessoryDataModel", "rfkitRttAvgMs", MirrorDirection::Outbound },
 
     // R-R3-47 / R-R3-22 (remotePgxlControlVersion 3, remoteTgxlControlVersion
     // 1): the amp's and tuner's own settings as the Core last heard them,

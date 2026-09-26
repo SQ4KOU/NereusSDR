@@ -811,7 +811,14 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("access(requester, sliceId)"),
           QStringLiteral("std::exchange(m_rateChangedReason, {})"),
           // AlexAntennaFacade's filter policy refusal, scanned below.
-          QStringLiteral("alex->setBpfModeForChain(chain, mode)")}},
+          QStringLiteral("alex->setBpfModeForChain(chain, mode)"),
+          // Parity mini-round: its TX antenna refusal (setAlexTxAntenna),
+          // scanned below.
+          QStringLiteral("alex->setTxAntForBand(Band(band), antenna)"),
+          // R-R3-49 (parity Task 7): RadioModel::stationOnAirRefusal's
+          // reason for a PureSignal arming verb (RadioModel::onAirReason,
+          // scanned with StationServer).
+          QStringLiteral("onAir")}},
         // iPhone app Task 13 (R-IOS-08): the device administration verbs'
         // command.result, forwarded by the dispatcher as result.reason; the
         // log lines never reach an app.
@@ -832,7 +839,10 @@ const QList<ReasonSource>& reasonSources()
          {// finishOperation's parameter and the store's import error, both
           // from this file; lastActionError as a remote window receives it.
           QStringLiteral("reason"), QStringLiteral("imported.error"),
-          QStringLiteral("value.toString()")}},
+          QStringLiteral("value.toString()"),
+          // R-R3-49 (parity Task 7): armingRefusal(), this file's own
+          // literal or RadioModel::onAirReason (scanned with StationServer).
+          QStringLiteral("isArmingAction(action) ? armingRefusal() : QString()")}},
         // Model and correction files; the store's and validator's own
         // messages are detail for the log unless isOperatorMessage says
         // otherwise (DspAssetService::rejectDetail).
@@ -863,7 +873,11 @@ const QList<ReasonSource>& reasonSources()
          {QStringLiteral("coreNewest"), QStringLiteral("appNewest"), QStringLiteral("update"),
           QStringLiteral("otherApp")}},
         // The window's reason it keeps: its own parameter, from this file.
-        {"src/core/accessories/AlexAntennaFacade.cpp", {}, {}, 6, {}, {QStringLiteral("kept")}},
+        // Parity Task 12: and its transmit edit reasons (txKept, bypassKept),
+        // from MainWindow's StationClient reasons, shown through
+        // OperatorReasonText.
+        {"src/core/accessories/AlexAntennaFacade.cpp", {}, {}, 6, {},
+         {QStringLiteral("kept"), QStringLiteral("txKept"), QStringLiteral("bypassKept")}},
         // The attenuator's range in dB.
         {"src/core/StepAttenuatorFacade.cpp", {}, {}, 6,
          {QStringLiteral("lo"), QStringLiteral("hi"),
@@ -925,8 +939,12 @@ const QList<ReasonSource>& reasonSources()
         // device's name and its address.
         {"src/core/StationNetwork.cpp", {QStringLiteral("offNetworkReason")}, {}, 1,
          {QStringLiteral("deviceName, address")}},
-        // Reset amp error's refusal (resetRfKitError).
-        {"src/core/StationRfKitController.cpp", {QStringLiteral("resetError")}, {}, 1},
+        // Reset amp error's refusal (resetRfKitError). R-R3-49 (parity Task
+        // 10): OPERATE, antenna and TCI mode, through ampAdmitted.
+        {"src/core/StationRfKitController.cpp",
+         {QStringLiteral("ampAdmitted"), QStringLiteral("resetError"),
+          QStringLiteral("setOperate"), QStringLiteral("setAntenna"),
+          QStringLiteral("setTciMode")}, {}, 2},
         // The amp's and tuner's own settings: the refusals of their
         // commands and the answers the `accessorySettings` object carries.
         // The device's name ("Power Genius", "Tuner Genius").
@@ -965,6 +983,21 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("onAirReason"), QStringLiteral("stationOnAirRefusal"),
           QStringLiteral("setTgxlAntennaForStation"), QStringLiteral("setTgxlOperateForStation"),
           QStringLiteral("setTgxlBypassForStation"),
+          // R-R3-49 (parity Task 8): the relay nudge, the Core's LAN scan and
+          // the saved address.
+          QStringLiteral("moveTgxlRelayForStation"), QStringLiteral("scanTgxlLanForStation"),
+          QStringLiteral("setTgxlAddressForStation"),
+          // R-R3-49 (parity Task 9): the Power Genius's OPERATE and STANDBY,
+          // the Core's LAN scan for it and the saved address.
+          QStringLiteral("stationPgxlControlAllowed"), QStringLiteral("setPgxlOperateForStation"),
+          QStringLiteral("scanPgxlLanForStation"), QStringLiteral("setPgxlAddressForStation"),
+          // R-R3-49 (parity Task 10): the RF-Kit's OPERATE and STANDBY,
+          // antenna, TCI mode and saved address.
+          QStringLiteral("stationRfKitControlAllowed"),
+          QStringLiteral("setRfKitOperateForStation"),
+          QStringLiteral("setRfKitAntennaForStation"),
+          QStringLiteral("setRfKitTciModeForStation"),
+          QStringLiteral("setRfKitAddressForStation"),
           // R-R3-49 (parity Task 2): the Tune Power slider's command.
           QStringLiteral("setTunePowerForTxBandForStation"),
           // R-R3-49 (parity Task 3): the TX profile commands and the RADE
@@ -1085,6 +1118,10 @@ const QList<AppSideReason>& appSideReasons()
          "a remote window's own reason the attenuator rows show"},
         {"src/core/accessories/AlexAntennaFacade.h", "windowUnavailableReason",
          "a remote window's own reason the antenna rows show"},
+        {"src/core/accessories/AlexAntennaFacade.h", "txAntennasUnavailableReason",
+         "a remote window's own reason the transmit antenna rows show (parity Task 12)"},
+        {"src/core/accessories/AlexAntennaFacade.h", "rxBypassUnavailableReason",
+         "a remote window's own reason RX bypass on TX shows (parity Task 12)"},
         {"src/core/TciServer.h", "operatorNoticeReason", "a remote window's own TCI notice"},
         {"src/models/RadioModel.cpp", "mirrorTxProfilesFromStation",
          "a window's TX profile requests: it shows the link's own reason for a request it "
@@ -1098,6 +1135,16 @@ const QList<AppSideReason>& appSideReasons()
         {"src/core/session/IStationLink.h", "tgxlDeviceSettingsUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
         {"src/core/session/IStationLink.h", "tgxlControlUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        // R-R3-49 (parity Task 8): the relay nudge, LAN scan and address.
+        {"src/core/session/IStationLink.h", "tgxlFullControlUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        // R-R3-49 (parity Task 9): the Power Genius's operate, scan and address.
+        {"src/core/session/IStationLink.h", "pgxlFullControlUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        // R-R3-49 (parity Task 10): the RF-Kit's operate, antenna, TCI mode
+        // and address.
+        {"src/core/session/IStationLink.h", "rfKitFullControlUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
         {"src/core/session/IStationLink.h", "transmitSettingsUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},

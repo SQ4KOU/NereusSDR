@@ -38,16 +38,26 @@
 //                 Core leaves the item off with the reason. OPERATE stays
 //                 with remote transmit. J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25  R-R3-49 (parity Task 9): a remote window's OPERATE asks
+//                 the Core (setPgxlOperate, remotePgxlControlVersion 4)
+//                 while the Core is connected to the amp and the radio is
+//                 off the air, disabled with the on-air reason otherwise;
+//                 the button follows the amp's reported state.
+//                 coreDiagnosticsText for Copy diagnostics. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include "AmpApplet.h"
 #include "core/session/IStationLink.h"
 #include "gui/OperatorReasonText.h"
 #include "gui/HGauge.h"
+#include "models/AccessoryDataModel.h"
 #include "models/AmplifierModel.h"
 #include "models/RadioModel.h"
 
 #include <QContextMenuEvent>
+#include <QDateTime>
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QMenu>
@@ -168,6 +178,21 @@ AmpApplet::AmpApplet(RadioModel* model, QWidget* parent)
         // Toggle: if currently in OPERATE state -> request standby, else -> request operate.
         // From AetherSDR src/gui/AmpApplet.cpp:70-72 [@0cd4559]
         bool isOp = (m_operateBtn->text() == QStringLiteral("OPERATE"));
+        // R-R3-49 (parity Task 9): a remote window asks the Core, whose amp
+        // switches; the button follows the amp's report, not the click.
+        if (isRemoteWindow()) {
+            if (remoteOperateControl() && !m_model->isCoreOnAir()) {
+                m_model->stationLink()->requestPgxlOperate(!isOp);
+            }
+            return;
+        }
+        // Group B fix wave (M5, the operator's ruling 2026-09-25): this
+        // computer's amp waits on the air too, by the Core's own rule.
+        // Parity mini-round (ruling c): a click refused there says why.
+        if (m_model && m_model->refuseLocalAccessorySwitchOnAir(QStringLiteral("pgxl"))) {
+            updateOperateButton();
+            return;
+        }
         emit operateToggled(!isOp);
     });
     telRow->addWidget(m_operateBtn, 1);
@@ -214,23 +239,109 @@ AmpApplet::AmpApplet(RadioModel* model, QWidget* parent)
                     this, &AmpApplet::syncFromAmplifier);
             connect(m_amp, &AmplifierModel::stationConnectionChanged,
                     this, &AmpApplet::updateConnectionLine);
+            connect(m_amp, &AmplifierModel::stationConnectionChanged,
+                    this, &AmpApplet::updateOperateButton);
             m_lastPhase = m_amp->connectionPhase();
         }
         connect(m_model, &RadioModel::stationLinkStateChanged,
                 this, &AmpApplet::updateStationState);
         connect(m_model, &RadioModel::stationCommandFinished,
                 this, &AmpApplet::onStationCommandFinished);
+        if (m_model->role() == RadioModel::Role::Remote) {
+            connect(m_model, &RadioModel::stationLinkStateChanged,
+                    this, &AmpApplet::updateOperateButton);
+        }
+        // Group B fix wave (M5): both windows wait on the air.
+        connect(m_model, &RadioModel::coreOnAirChanged,
+                this, &AmpApplet::updateOperateButton);
         syncFromAmplifier();
         updateStationState();
     }
 
     // R-R3-21: OPERATE drives this computer's own PgxlConnection
     // (MainWindow's operateToggled handler), which a remote window never
-    // connects: the amplifier sits at the station.
-    if (m_model && !m_model->ownsLocalDsp()) {
+    // connects: the amplifier sits at the station. R-R3-49 (parity Task 9):
+    // a Core at remotePgxlControlVersion 4 switches its own amp instead.
+    updateOperateButton();
+}
+
+bool AmpApplet::remoteOperateControl() const
+{
+    if (!isRemoteWindow()) { return false; }
+    const IStationLink* link = m_model->stationLink();
+    return link && link->pgxlFullControlAvailable();
+}
+
+void AmpApplet::updateOperateButton()
+{
+    if (!m_operateBtn) {
+        return;
+    }
+    if (!isRemoteWindow()) {
+        // Group B fix wave (M5, the operator's ruling 2026-09-25): a local
+        // window's OPERATE waits while the radio is on the air, with the
+        // remote window's reason; otherwise it is as before.
+        const bool onAir = m_model && m_model->isCoreOnAir();
+        m_operateBtn->setEnabled(!onAir);
+        m_operateBtn->setToolTip(onAir ? RadioModel::onAirReason() : QString());
+        return;
+    }
+    if (!remoteOperateControl()) {
         m_operateBtn->setEnabled(false);
         m_operateBtn->setToolTip(remoteUnavailableReason());
+        return;
     }
+    // It keys nothing, so a receive-only Core takes it; it waits while the
+    // radio is on the air and needs the Core connected to the amp.
+    const bool onAir = m_model->isCoreOnAir();
+    const bool connected = m_amp
+        && m_amp->connectionPhase() == TunerModel::ConnectionPhase::Connected;
+    m_operateBtn->setEnabled(!onAir && connected);
+    m_operateBtn->setToolTip(onAir ? RadioModel::onAirReason()
+                             : connected ? QString()
+                                         : tr("The Core is not connected to the Power Genius."));
+}
+
+QString AmpApplet::coreDiagnosticsText(RadioModel* model)
+{
+    const AmplifierModel* amp = model ? model->amplifierModel() : nullptr;
+    const AccessoryDataModel* data = model ? model->accessoryDataModel() : nullptr;
+    if (!amp) { return QString(); }
+    const auto time = [](qint64 ms) {
+        return ms > 0 ? QDateTime::fromMSecsSinceEpoch(ms).toString(Qt::ISODate)
+                      : QStringLiteral("--");
+    };
+    const bool connected = amp->connectionPhase() == TunerModel::ConnectionPhase::Connected;
+    QString text = QStringLiteral("PGXL Diagnostics (the Core's connection)\n");
+    text += QStringLiteral("Connected: %1\n").arg(connected ? QStringLiteral("Yes")
+                                                              : QStringLiteral("No"));
+    text += QStringLiteral("IP: %1\n").arg(amp->configuredHost().isEmpty()
+                                               ? QStringLiteral("--") : amp->configuredHost());
+    text += QStringLiteral("Address: %1:%2\n")
+                .arg(amp->configuredHost().isEmpty() ? QStringLiteral("--")
+                                                     : amp->configuredHost())
+                .arg(amp->configuredPort());
+    text += QStringLiteral("Model: %1\nSerial: %2\nFirmware: %3\n")
+                .arg(amp->deviceModel(), amp->deviceSerial(), amp->deviceVersion());
+    text += QStringLiteral("State: %1\nOperate: %2\n")
+                .arg(amp->deviceState().isEmpty() ? QStringLiteral("--") : amp->deviceState(),
+                     amp->operate() ? QStringLiteral("Yes") : QStringLiteral("No"));
+    if (!amp->connectionError().isEmpty()) {
+        text += QStringLiteral("Last error: %1\n").arg(amp->connectionError());
+    }
+    if (data) {
+        text += QStringLiteral("Connected since: %1\n").arg(time(data->pgxlConnectedSinceMs()));
+        text += QStringLiteral("Last response time: %1 ms\n").arg(data->pgxlLastRttMs());
+        text += QStringLiteral("Missed keepalives: %1\n").arg(data->pgxlKeepaliveMissed());
+        text += QStringLiteral("Reconnects: %1\n").arg(data->pgxlReconnectCount());
+        text += QStringLiteral("Lines in/out: %1 / %2\n")
+                    .arg(data->pgxlFramesIn()).arg(data->pgxlFramesOut());
+        text += QStringLiteral("Bytes in/out: %1 / %2\n")
+                    .arg(data->pgxlBytesIn()).arg(data->pgxlBytesOut());
+        text += QStringLiteral("Last line: %1\n").arg(time(data->pgxlLastFrameMs()));
+        text += QStringLiteral("Faults this session: %1\n").arg(data->pgxlFaultsSession());
+    }
+    return text;
 }
 
 QString AmpApplet::remoteUnavailableReason()

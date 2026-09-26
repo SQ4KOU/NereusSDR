@@ -16,6 +16,10 @@
 // Modification history (NereusSDR):
 //   2026-09-25  J.J. Boyd / KG4VCF  Created. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  Group B fix wave: a 2 or 3 point Q
+//                                    profile rebuilds on a cut-off mode or
+//                                    window change. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 #include <QtTest>
 #include <QTemporaryDir>
@@ -167,6 +171,49 @@ private slots:
         // A rebuild (the cut-off mode) keeps the Q.
         SetTXAEQCtfmode(kChannel, 0);
         QCOMPARE(impulse(), withQ);
+    }
+
+    // Group A follow-up (group B fix wave): a Q profile of 2 or 3 points
+    // is rebuilt on a cut-off mode or window change too. Thetis's
+    // SetTXAEQCtfmode and SetTXAEQWintype always rebuild (wdsp/eq.c:808-829
+    // [v2.10.3.15]); the vendored ones rebuilt only when the spline check
+    // passed, which needs 4 points or more.
+    void shortQProfileRebuildsOnCtfmodeAndWindow_data()
+    {
+        QTest::addColumn<int>("points");
+        QTest::newRow("2 points") << 2;
+        QTest::newRow("3 points") << 3;
+    }
+
+    void shortQProfileRebuildsOnCtfmodeAndWindow()
+    {
+        QFETCH(int, points);
+        std::vector<double> F;
+        std::vector<double> G;
+        std::vector<double> Q;
+        parametric(points, F, G, Q);
+        // The TX EQ's own cut-off mode and window (TXA.c create_eqp: 0 and
+        // 2), put back whatever happens, for the reference cases.
+        const auto restore = qScopeGuard([] {
+            SetTXAEQCtfmode(kChannel, 0);
+            SetTXAEQWintype(kChannel, 2);
+        });
+        SetTXAEQCtfmode(kChannel, 0);
+        SetTXAEQWintype(kChannel, 2);
+        SetTXAEQProfile(kChannel, points, F.data(), G.data(), Q.data());
+        const std::vector<double> base = impulse();
+
+        SetTXAEQCtfmode(kChannel, 1);
+        const std::vector<double> otherCutoff = impulse();
+        QVERIFY2(otherCutoff != base, "the cut-off mode change left the impulse as it was");
+        SetTXAEQCtfmode(kChannel, 0);
+        QCOMPARE(impulse(), base);
+
+        SetTXAEQWintype(kChannel, 1);
+        const std::vector<double> otherWindow = impulse();
+        QVERIFY2(otherWindow != base, "the window change left the impulse as it was");
+        SetTXAEQWintype(kChannel, 2);
+        QCOMPARE(impulse(), base);
     }
 
     // A profile without Q after one with it clears the Q: the legacy EQ

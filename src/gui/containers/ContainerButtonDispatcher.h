@@ -78,6 +78,10 @@ public:
         // this window's transmit settings now (off the air), and why not.
         std::function<bool()> transmitSettingsPermitted;
         std::function<QString()> transmitSettingsReason;
+        // R-R3-49 (parity Task 7): remote windows, whether the Core takes
+        // this window's PureSignal arming now (PS-A), and why not.
+        std::function<bool()> pureSignalArmingPermitted;
+        std::function<QString()> pureSignalArmingReason;
         // The panadapter that shows a slice (Peak, CTUN).
         std::function<SpectrumWidget*(SliceModel*)> spectrumFor;
         // This computer's VAX outputs (VAX 1, VAX 2). May be null.

@@ -15,6 +15,11 @@ namespace NereusSDR::Test {
 
 namespace {
 
+// Group B fix wave (I3) kept FFTW's plans for this harness here. The parity
+// mini-round moved that to tests/TestFftwWisdomCache.cpp, which
+// nereus_add_test() links into every test that starts WDSP without its
+// wisdom step, this harness's included; one file per build directory.
+
 void installOpenAudioBuses(AudioEngine& engine)
 {
     AudioFormat format;
@@ -37,7 +42,12 @@ void installOpenAudioBuses(AudioEngine& engine)
 
 } // namespace
 
-ConnectableRadioModel::~ConnectableRadioModel() = default;
+ConnectableRadioModel::~ConnectableRadioModel()
+{
+    // Member order as the header says: the model before the fake.
+    m_model.reset();
+    m_fake.reset();
+}
 
 std::unique_ptr<ConnectableRadioModel> ConnectableRadioModel::create(
     int timeoutMs, NereusSDR::RadioModel::Role role,

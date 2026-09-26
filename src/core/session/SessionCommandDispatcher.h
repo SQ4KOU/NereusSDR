@@ -143,6 +143,16 @@
 //                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06: notch.addAtSlice.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 8): moveTgxlRelay,
+//                                    scanTgxlLan and setTgxlAddress.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 9): setPgxlOperate,
+//                                    scanPgxlLan and setPgxlAddress.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 10):
+//                                    setRfKitOperate, setRfKitAntenna,
+//                                    setRfKitTciMode and setRfKitAddress.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -219,6 +229,12 @@ public:
     /// it and one device leaving cancels only its own. Nothing else
     /// changes.
     void setSessionOwner(const QString& owner);
+    /// R-R3-49 (parity Task 7): the session's peer was offered
+    /// transmitSettingsVersion 7, so ps3.single, ps3.automatic,
+    /// ps3.applyCurrent and ps3.restoreCorrection are taken from it while
+    /// the radio is off the air. False for every other peer, and again
+    /// whenever the session owner changes.
+    void setPureSignalArmingOffered(bool offered) { m_pureSignalArmingOffered = offered; }
 
     /// Cancels every DSP-asset job `owner` started (its session ended).
     void endSessionOwner(const QString& owner);
@@ -311,6 +327,7 @@ signals:
 
 private:
     Ps3DisplayAdmissionHandler m_ps3DisplayAdmission;
+    bool m_pureSignalArmingOffered = false;
     void handleAddSlice(const NereusSDR::SessionMessage& invoke);
     void handleRemoveSlice(const NereusSDR::SessionMessage& invoke);
     void handleRequestSliceSampleRate(const NereusSDR::SessionMessage& invoke);
@@ -348,6 +365,25 @@ private:
     // R-R3-49 / R-R3-47 (remoteTgxlControlVersion 2): the Tuner Genius's
     // antenna, operate and bypass, through the Core's own TunerModel.
     void handleTgxlControl(const NereusSDR::SessionMessage& invoke);
+    // R-R3-49 (parity Task 8, remoteTgxlControlVersion 4): a relay nudge,
+    // the Core's own Scan LAN (answered when its listening window ends) and
+    // the Peripherals row's address saved without dialling.
+    void handleMoveTgxlRelay(const NereusSDR::SessionMessage& invoke);
+    void handleScanTgxlLan(const NereusSDR::SessionMessage& invoke);
+    void handleSetTgxlAddress(const NereusSDR::SessionMessage& invoke);
+    // R-R3-49 (parity Task 9, remotePgxlControlVersion 4): the Power
+    // Genius's OPERATE or STANDBY, the Core's own Scan LAN for it and the
+    // Peripherals row's address saved without dialling.
+    void handleSetPgxlOperate(const NereusSDR::SessionMessage& invoke);
+    void handleScanPgxlLan(const NereusSDR::SessionMessage& invoke);
+    void handleSetPgxlAddress(const NereusSDR::SessionMessage& invoke);
+    // R-R3-49 (parity Task 10, remoteRfKitControlVersion 4): the RF-Kit's
+    // OPERATE or STANDBY, antenna and TCI mode, as the local applet and page
+    // send them, and the RF-Kit page's address saved without dialling.
+    void handleSetRfKitOperate(const NereusSDR::SessionMessage& invoke);
+    void handleSetRfKitAntenna(const NereusSDR::SessionMessage& invoke);
+    void handleSetRfKitTciMode(const NereusSDR::SessionMessage& invoke);
+    void handleSetRfKitAddress(const NereusSDR::SessionMessage& invoke);
     // R-R3-49 (parity Task 2, transmitSettingsVersion 2): the TX applet's
     // Tune Power slider, through the Core's own TransmitModel.
     void handleTunePowerForTxBand(const NereusSDR::SessionMessage& invoke);
@@ -363,6 +399,9 @@ private:
     // R-R3-46 fix wave (radioHardwareVersion 3): one band's RX or RX-only
     // antenna, applied through the Core's AlexAntennaFacade.
     void handleSetAlexRxAntenna(const NereusSDR::SessionMessage& invoke);
+    // Parity mini-round (radioHardwareVersion 6): one band's TX antenna,
+    // applied through the Core's AlexAntennaFacade.
+    void handleSetAlexTxAntenna(const NereusSDR::SessionMessage& invoke);
     // R-R3-46 / R-R3-21 (radioHardwareVersion 4): one receive filter
     // chain's filter policy, applied through the Core's AlexAntennaFacade.
     void handleSetAlexBpfMode(const NereusSDR::SessionMessage& invoke);
@@ -411,6 +450,9 @@ private:
     /// Set while a later result is emitted (emitResultAs).
     std::optional<QString> m_resultOwner;
     QHash<quint32, PendingPureSignalCommand> m_pureSignalCommands;
+    // R-R3-49 (parity Task 8): moves on each setSessionOwner, so a scan
+    // answer never reaches a later session.
+    quint64 m_sessionGeneration = 0;
 };
 
 } // namespace NereusSDR

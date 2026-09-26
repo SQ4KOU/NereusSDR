@@ -20,6 +20,15 @@
 //                                    for a remote window
 //                                    (setBpfModeForChain). AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 / R-R3-46 parity Task 12: the
+//                                    TX antennas and relays two-way, and
+//                                    the window's transmit edit
+//                                    availability. AI-assisted via
+//                                    Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 / R-R3-46 parity mini-round:
+//                                    setTxAntForBand and the TX band edit
+//                                    sender. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include "core/accessories/AlexAntennaFacade.h"
@@ -53,11 +62,23 @@ QString rxOnlyRangeReason()
     return QStringLiteral("The receive-only input is none or 1 to 3.");
 }
 
+QString txBlockedReason()
+{
+    return QStringLiteral("An antenna blocked for transmit cannot be a band's TX antenna.");
+}
+
+QString connectReason()
+{
+    return QStringLiteral("Connect to the Core to change the radio's hardware settings.");
+}
+
 } // namespace
 
 AlexAntennaFacade::AlexAntennaFacade(QObject* parent)
     : QObject(parent)
-    , m_windowReason(QStringLiteral("Connect to the Core to change the radio's hardware settings."))
+    , m_windowReason(connectReason())
+    , m_txAntennasReason(connectReason())
+    , m_rxBypassReason(connectReason())
     , m_values(defaults())
 {
 }
@@ -122,6 +143,24 @@ void AlexAntennaFacade::setWindowAvailability(bool available, const QString& rea
     m_windowAvailable = available;
     m_windowReason = kept;
     emit windowAvailabilityChanged(available);
+}
+
+void AlexAntennaFacade::setTransmitEditAvailability(bool txAntennas,
+                                                    const QString& txAntennasReason,
+                                                    bool rxBypass,
+                                                    const QString& rxBypassReason)
+{
+    const QString txKept = txAntennas ? QString() : txAntennasReason;
+    const QString bypassKept = rxBypass ? QString() : rxBypassReason;
+    if (m_txAntennasEditable == txAntennas && m_txAntennasReason == txKept
+        && m_rxBypassEditable == rxBypass && m_rxBypassReason == bypassKept) {
+        return;
+    }
+    m_txAntennasEditable = txAntennas;
+    m_txAntennasReason = txKept;
+    m_rxBypassEditable = rxBypass;
+    m_rxBypassReason = bypassKept;
+    emit transmitEditAvailabilityChanged();
 }
 
 QString AlexAntennaFacade::settleReason(const QByteArray& property) const
@@ -313,6 +352,132 @@ void AlexAntennaFacade::setUseTxAntennaForRx(bool on)
     publish(next);
 }
 
+void AlexAntennaFacade::setRxOutOnTx(bool on)
+{
+    if (!beginEdit("rxOutOnTx")) {
+        return;
+    }
+    if (AlexController* c = m_controller.data()) {
+        c->setRxOutOnTx(on);
+        refresh();
+        return;
+    }
+    Values next = m_values;
+    next.rxOutOnTx = on;
+    publish(next);
+}
+
+void AlexAntennaFacade::setTxAntennas(const QString& list)
+{
+    if (!beginEdit("txAntennas")) {
+        return;
+    }
+    BandList parsed{};
+    bool clamped = false;
+    if (!decode(list, kAntFirst, kAntLast, &parsed, &clamped)) {
+        settle("txAntennas", malformedListReason());
+        return;
+    }
+    if (clamped) {
+        settle("txAntennas", antennaRangeReason());
+    }
+    if (AlexController* c = m_controller.data()) {
+        // The local tab's call, one band at a time: the controller keeps a
+        // band on its antenna when the one asked for is blocked for transmit.
+        bool kept = false;
+        for (int b = 0; b < kBandCount; ++b) {
+            const int want = parsed[static_cast<std::size_t>(b)];
+            if (c->txAnt(Band(b)) != want) {
+                c->setTxAnt(Band(b), want);
+                kept = kept || c->txAnt(Band(b)) != want;
+            }
+        }
+        if (kept && !clamped) {
+            settle("txAntennas", txBlockedReason());
+        }
+        refresh();
+        return;
+    }
+    Values next = m_values;
+    next.txAnt = parsed;
+    publish(next);
+}
+
+void AlexAntennaFacade::setBlockTxAnt2(bool on)
+{
+    if (!beginEdit("blockTxAnt2")) {
+        return;
+    }
+    if (AlexController* c = m_controller.data()) {
+        c->setBlockTxAnt2(on);
+        refresh();
+        return;
+    }
+    Values next = m_values;
+    next.blockTxAnt2 = on;
+    publish(next);
+}
+
+void AlexAntennaFacade::setBlockTxAnt3(bool on)
+{
+    if (!beginEdit("blockTxAnt3")) {
+        return;
+    }
+    if (AlexController* c = m_controller.data()) {
+        c->setBlockTxAnt3(on);
+        refresh();
+        return;
+    }
+    Values next = m_values;
+    next.blockTxAnt3 = on;
+    publish(next);
+}
+
+void AlexAntennaFacade::setExt1OutOnTx(bool on)
+{
+    if (!beginEdit("ext1OutOnTx")) {
+        return;
+    }
+    if (AlexController* c = m_controller.data()) {
+        c->setExt1OutOnTx(on);
+        refresh();
+        return;
+    }
+    Values next = m_values;
+    next.ext1OutOnTx = on;
+    publish(next);
+}
+
+void AlexAntennaFacade::setExt2OutOnTx(bool on)
+{
+    if (!beginEdit("ext2OutOnTx")) {
+        return;
+    }
+    if (AlexController* c = m_controller.data()) {
+        c->setExt2OutOnTx(on);
+        refresh();
+        return;
+    }
+    Values next = m_values;
+    next.ext2OutOnTx = on;
+    publish(next);
+}
+
+void AlexAntennaFacade::setRxOutOverride(bool on)
+{
+    if (!beginEdit("rxOutOverride")) {
+        return;
+    }
+    if (AlexController* c = m_controller.data()) {
+        c->setRxOutOverride(on);
+        refresh();
+        return;
+    }
+    Values next = m_values;
+    next.rxOutOverride = on;
+    publish(next);
+}
+
 QString AlexAntennaFacade::setRxAntForBand(Band band, int antenna)
 {
     AlexController* c = m_controller.data();
@@ -353,6 +518,28 @@ QString AlexAntennaFacade::setRxOnlyAntForBand(Band band, int antenna)
     refresh();
     return c->rxOnlyAnt(band) == antenna
         ? QString() : QStringLiteral("The Core kept this band's receive-only input.");
+}
+
+QString AlexAntennaFacade::setTxAntForBand(Band band, int antenna)
+{
+    AlexController* c = m_controller.data();
+    const int b = static_cast<int>(band);
+    if (!c) {
+        return QStringLiteral("The Core has no antenna settings ready.");
+    }
+    if (b < 0 || b >= kBandCount) {
+        return malformedListReason();
+    }
+    if (antenna < kAntFirst || antenna > kAntLast) {
+        return antennaRangeReason();
+    }
+    // The local grid's call: the controller keeps a band on its antenna
+    // when the one asked for is blocked for transmit.
+    if (c->txAnt(band) != antenna) {
+        c->setTxAnt(band, antenna);
+    }
+    refresh();
+    return c->txAnt(band) == antenna ? QString() : txBlockedReason();
 }
 
 QString AlexAntennaFacade::setBpfModeForChain(int chain, int mode)
@@ -400,6 +587,26 @@ bool AlexAntennaFacade::sendBandEdit(const char* property, Band band, int ant, b
     return true;
 }
 
+bool AlexAntennaFacade::sendTxBandEdit(Band band, int ant)
+{
+    if (isBound() || !m_txBandEditSender) {
+        return false;
+    }
+    if (!beginEdit("txAntennas")) {
+        emit bandEditRefused();
+        return true;
+    }
+    QString reason;
+    if (!m_txBandEditSender(band, ant, &reason)) {
+        if (reason.isEmpty()) {
+            reason = QStringLiteral("The antennas cannot be changed from here right now.");
+        }
+        emit editRejected(reason);
+        emit bandEditRefused();
+    }
+    return true;
+}
+
 void AlexAntennaFacade::setRxAnt(Band band, int ant)
 {
     const int b = static_cast<int>(band);
@@ -426,6 +633,22 @@ void AlexAntennaFacade::setRxOnlyAnt(Band band, int ant)
     BandList list = m_values.rxOnlyAnt;
     list[static_cast<std::size_t>(b)] = ant;
     setRxOnlyAntennas(encode(list));
+}
+
+void AlexAntennaFacade::setTxAnt(Band band, int ant)
+{
+    const int b = static_cast<int>(band);
+    if (b < 0 || b >= kBandCount) {
+        return;
+    }
+    // Parity mini-round: the band alone when the Core takes it
+    // (setAlexTxAntenna); otherwise the whole list, as before.
+    if (sendTxBandEdit(band, ant)) {
+        return;
+    }
+    BandList list = m_values.txAnt;
+    list[static_cast<std::size_t>(b)] = ant;
+    setTxAntennas(encode(list));
 }
 
 void AlexAntennaFacade::refresh()

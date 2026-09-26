@@ -260,6 +260,19 @@
 //                                    profile requests and
 //                                    requestRadeResetVocoder.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 8): the Tuner
+//                                    Genius relay nudge, LAN scan and
+//                                    address requests
+//                                    (remoteTgxlControlVersion 4).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 9): the Power
+//                                    Genius operate, LAN scan and address
+//                                    requests (remotePgxlControlVersion 4).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 10): the RF-Kit
+//                                    operate, antenna, TCI mode and address
+//                                    requests (remoteRfKitControlVersion 4).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -582,11 +595,19 @@ public:
     bool tgxlDeviceSettingsAvailable() const override;
     bool tgxlControlAvailable() const override;
     bool tgxlOperateAppliesWhole() const override;
+    bool tgxlFullControlAvailable() const override;
+    bool pgxlFullControlAvailable() const override;
+    bool rfKitFullControlAvailable() const override;
+    bool rfKitCountersAvailable() const override;
+    bool rfKitResponseTimeAvailable() const override;
     /// R-R3-49 (parity Task 1): the link is ready at minor 11 and the Core
     /// offers transmitSettingsVersion at least `minVersion` (1 or more): it
     /// takes this window's transmit settings while its radio is off the
     /// air. False: IStationLink::transmitSettingsUnavailableReason().
     bool transmitSettingsAvailable(int minVersion = 1) const;
+    /// R-R3-49 (parity Task 7): minor 11 and transmitSettingsVersion 7: the
+    /// Core takes this window's PureSignal arming off the air.
+    bool pureSignalArmingOffered() const;
     bool stationTciAvailable() const override;
     bool coreServesTciOnThisComputer() const override;
     int coreStationTciStored() const override;
@@ -722,6 +743,16 @@ public:
     CommandOutcome requestTgxlAntenna(int port) override;
     CommandOutcome requestTgxlOperate(bool on) override;
     CommandOutcome requestTgxlBypass(bool on) override;
+    CommandOutcome requestTgxlRelayMove(int relay, int direction) override;
+    CommandOutcome requestTgxlLanScan() override;
+    CommandOutcome requestTgxlAddress(const QString& host, int port) override;
+    CommandOutcome requestPgxlOperate(bool on) override;
+    CommandOutcome requestPgxlLanScan() override;
+    CommandOutcome requestPgxlAddress(const QString& host, int port) override;
+    CommandOutcome requestRfKitOperate(bool on) override;
+    CommandOutcome requestRfKitAntenna(int port) override;
+    CommandOutcome requestRfKitTciMode() override;
+    CommandOutcome requestRfKitAddress(const QString& host, int port) override;
     // R-R3-49 (parity Task 2): see IStationLink.
     CommandOutcome requestTunePowerForTxBand(int watts) override;
     // R-R3-49 (parity Task 3): see IStationLink. Sent only to a Core at
@@ -755,12 +786,27 @@ public:
     /// Why Hardware Config edits cannot reach the Core, in plain words.
     /// Empty while remoteHardwareConfigAvailable().
     QString hardwareConfigUnavailableReason() const;
+    /// Group B fix wave (radioHardwareVersion 5): the Core takes this
+    /// window's RX bypass on TX (`rxOutOnTx` on `alexAntennas`).
+    bool remoteRxBypassOnTxAvailable() const;
+    /// Empty while remoteRxBypassOnTxAvailable().
+    QString rxBypassOnTxUnavailableReason() const;
+    /// Parity Task 12 (radioHardwareVersion 6): the Core takes this
+    /// window's transmit antennas and relays on `alexAntennas` (the TX
+    /// antenna for each band, Block TX on Ant 2 and 3, Ext 1 and Ext 2 on
+    /// TX and the RX bypass relay override).
+    bool remoteTransmitAntennasAvailable() const;
+    /// Empty while remoteTransmitAntennasAvailable().
+    QString transmitAntennasUnavailableReason() const;
     /// Verb "requestIoBoardProbe": probe the Core's radio's HL2 I/O board.
     CommandOutcome requestIoBoardProbe() override;
     /// R-R3-46 fix wave (radioHardwareVersion 3). Verb "setAlexRxAntenna":
     /// one band's RX antenna (rxOnly false, 1..3) or RX-only antenna
     /// (rxOnly true, 0..3) on the Core.
     CommandOutcome requestAlexRxAntenna(Band band, int antenna, bool rxOnly);
+    /// Parity mini-round (radioHardwareVersion 6). Verb "setAlexTxAntenna":
+    /// one band's TX antenna (1..3) on the Core.
+    CommandOutcome requestAlexTxAntenna(Band band, int antenna);
     /// R-R3-46 / R-R3-21 (radioHardwareVersion 4). Verb "setAlexBpfMode":
     /// one receive filter chain's filter policy on the Core.
     bool filterPolicyEditAvailable() const override;

@@ -275,6 +275,54 @@
 //                notchControlVersion 2, so the Core's own slice decides;
 //                below 2 it keeps notch.add. J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 7): pureSignalOperationPermitted,
+//                PureSignal's operational permission: a receive-only Core
+//                lets a window arm PureSignal off the air (the session gate
+//                refuses it on the air); the correction still runs only in
+//                a transmission. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 8): moveTgxlRelayForStation (the
+//                local applet's relay nudge, from AetherSDR), and
+//                scanTgxlLanForStation and setTgxlAddressForStation for a
+//                window's Peripherals row; reportStationTgxlLanScan.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 9): setPgxlOperateForStation (the
+//                local applet's OPERATE line), scanPgxlLanForStation and
+//                setPgxlAddressForStation for a window's Peripherals row
+//                (the scan shared with the Tuner Genius's through
+//                startStationLanScan); reportStationPgxlLanScan.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 10): setRfKitOperateForStation,
+//                setRfKitAntennaForStation, setRfKitTciModeForStation (the
+//                local applet's and page's REST requests, through the
+//                Core's StationRfKitController) and
+//                setRfKitAddressForStation for a window's RF-Kit page.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (group B fix wave, I1): the three
+//                set*AddressForStation save a blank host, as a local
+//                window's blank Host stops auto-connect.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (group B fix wave, M2): startStationLanScan runs
+//                one scan per device; a request while it listens joins it.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (group B fix wave): an Alex antenna changed
+//                while the radio transmits is applied on the TX routing, as
+//                Thetis's AlexAntCtrlEnabled applies it with tx = _mox
+//                (console.cs:14944-14961 [v2.10.3.15]); the out-on-TX flags
+//                wait for the next MOX edge (setup.cs:15459-15470,
+//                16520-16544 [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 / R-R3-46 (parity Task 12): teardownConnection
+//                clears the TX routing flag, so a disconnect while keyed
+//                does not leave the next connection's antenna changes on
+//                the TX routing. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity mini-round, the operator's rulings a to
+//                c): Scan LAN and the saved amp and tuner addresses go
+//                ahead on the air; refuseLocalAccessorySwitchOnAir gives a
+//                local click refused on the air the remote window's
+//                reason. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 //=================================================================
@@ -590,6 +638,7 @@ warren@wpratt.com
 // line PGXL sends so we can design the response layer in a follow-up.
 #include "core/SmartSdrApiListener.h"
 #include "core/StationTgxlController.h"
+#include "core/LanDiscovery.h"
 #include "core/StationPgxlController.h"
 #include "core/StationRfKitController.h"
 #include "core/StationTciController.h"
@@ -617,6 +666,9 @@ warren@wpratt.com
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QMetaObject>
 #include <QScopeGuard>
 #include <QScopedValueRollback>
@@ -983,18 +1035,36 @@ RadioModel::RadioModel(Role role, QObject* parent)
         // load-time's 14-per-band emit burst collapses to one write.
         m_alexControllerDirty = true;
         scheduleSettingsSave();
-        // iPhone app Task 75 (ruling 5.11a): while the receive antenna is
-        // kept on an earlier band's, a change to that band's antenna moves
-        // the relay (the kept band governs the receive side); a change to
-        // the current band's is the operator's own choice, and ends the
-        // keeping.
-        if (m_keptRxAntennaBand && b == *m_keptRxAntennaBand && b != m_lastBand) {
-            applyAlexAntennaForBand(m_lastBand);
-            return;
+        // Group B fix wave: while the radio transmits, the transmit band's
+        // TX routing, as Thetis applies an antenna change at once with
+        // tx = _mox:
+        // From Thetis console.cs:14944-14961 [v2.10.3.15] AlexAntCtrlEnabled
+        //   Alex.getAlex().UpdateAlexAntSelection(RX1Band, _mox, alex_ant_ctrl_enabled, false);
+        // (setup.cs:13815-13830 ProcessAlexAntRadioButton sets the band's
+        // antenna, then console.AlexAntCtrlEnabled = true.) Sending the
+        // receive routing here would move the relays to receive mid-TX.
+        if (m_alexRoutingTx) {
+            if (b == m_alexRoutingTxBand) { applyAlexAntennaForBand(b, /*isTx=*/true); }
+            // Checkpoint join (R-R3-49 with iPhone app Task 75): the receive
+            // routing, the kept band's included, is sent again when the radio
+            // returns to receive; a change to the current band's antenna still
+            // ends the keeping.
+            if (b != m_lastBand) { return; }
+            m_keptRxAntennaBand.reset();
+        } else {
+            // iPhone app Task 75 (ruling 5.11a): while the receive antenna is
+            // kept on an earlier band's, a change to that band's antenna moves
+            // the relay (the kept band governs the receive side); a change to
+            // the current band's is the operator's own choice, and ends the
+            // keeping.
+            if (m_keptRxAntennaBand && b == *m_keptRxAntennaBand && b != m_lastBand) {
+                applyAlexAntennaForBand(m_lastBand);
+                return;
+            }
+            if (b != m_lastBand) { return; }
+            m_keptRxAntennaBand.reset();
+            applyAlexAntennaForBand(b);
         }
-        if (b != m_lastBand) { return; }
-        m_keptRxAntennaBand.reset();
-        applyAlexAntennaForBand(b);
         // T13 — keep the slice's cached ANT labels in sync so UI
         // surfaces reading slice->rxAntenna() see the current-band value.
         //
@@ -1090,6 +1160,14 @@ RadioModel::RadioModel(Role role, QObject* parent)
     auto reapplyAndPersist = [this]() {
         m_alexControllerDirty = true;
         scheduleSettingsSave();
+        // Group B fix wave: while the radio transmits a flag waits for the
+        // next MOX edge (onMoxHardwareFlipped applies it), as Thetis's only
+        // set Alex's statics there:
+        // From Thetis setup.cs:15459-15470 [v2.10.3.15] chkRxOutOnTx_CheckedChanged
+        //   Alex.RxOutOnTx = chkRxOutOnTx.Checked;
+        // (and setup.cs:16520-16544 for Ext1OutOnTx and Ext2OutOnTx). The
+        // receive routing is never sent mid-transmission.
+        if (m_alexRoutingTx) { return; }
         Band b = m_activeSlice
                    ? bandFromFrequency(m_activeSlice->frequency())
                    : m_lastBand;
@@ -1650,6 +1728,21 @@ RadioModel::RadioModel(Role role, QObject* parent)
     if (m_pureSignalFacade) {
         m_pureSignalFacade->followTwoToneController();
     }
+    // Group B fix wave: held work is released when the on-air rule clears
+    // (see releaseHeldOnAirWork): two-tone's end here, MOX's return to
+    // receive below, TUNE's completion in completeTuneOff.
+    connect(m_twoToneController, &TwoToneController::twoToneActiveChanged, this,
+            [this](bool active) {
+                if (!active) { releaseHeldOnAirWork(); }
+            });
+    connect(this, &RadioModel::transmittingChanged, this, [this](bool transmitting) {
+        if (!transmitting) { releaseHeldOnAirWork(); }
+    });
+    if (m_moxController) {
+        connect(m_moxController, &MoxController::stateChanged, this, [this](MoxState state) {
+            if (state == MoxState::Rx) { releaseHeldOnAirWork(); }
+        });
+    }
 
     // ── Stage C2: FilterPresetStore ───────────────────────────────────────────
     // Wraps Thetis-verbatim defaults from SliceModel::presetsForMode with a
@@ -1753,6 +1846,8 @@ RadioModel::RadioModel(Role role, QObject* parent)
         sources.tgxlDiagnostics = m_tgxlDiagnostics;
         sources.interlock = m_txInterlockPolicy;
         sources.tuneMemory = m_tuneMemoryStore;
+        // R-R3-49 (parity Task 10): the RF-Kit's connection counts.
+        sources.rfkitConnection = m_rfKitConnection.get();
         m_stationAccessoryData = new StationAccessoryData(m_accessoryDataModel, sources, this);
         // The power-cap alert, computed where the amp is (was
         // MainWindow::onAmpMetersForPowerCap).
@@ -3986,6 +4081,21 @@ bool RadioModel::stationOnAirRefusal(QString* reason) const
     return onAir;
 }
 
+bool RadioModel::refuseLocalAccessorySwitchOnAir(const QString& device)
+{
+    if (m_role == Role::Remote) {
+        return false;
+    }
+    QString reason;
+    if (!stationOnAirRefusal(&reason)) {
+        return false;
+    }
+    // Parity mini-round (ruling c): the words a remote window's Core sends
+    // back for the same click, on the route MainWindow shows them from.
+    emit accessoryRequestRefused(device, reason, false);
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // R-R3-49 (parity Task 2, transmitSettingsVersion 2): the TX applet's Tune
 // Power slider from a window. The Core does what the local slider does
@@ -4385,11 +4495,38 @@ void RadioModel::wireTransmitProcessingChain()
             ParaEqCurve::txEqPointsFromParaEqData(m_transmitModel.txEqParaEqData()));
     };
 
-    auto pushEqProfile = [this, buildEqProfile, postToTx]() {
+    auto postEqProfileNow = [this, buildEqProfile, postToTx]() {
         if (!m_txChannel) { return; }
         postToTx([a = buildEqProfile()](TxChannel* ch) {
             ch->setTxEqProfile(a.f, a.g, a.q);
         });
+    };
+    // Group A follow-up (group B fix wave): the parametric curve reaches
+    // WDSP at most once per 100 ms, as Thetis's does (the Q branch rebuilds
+    // on the TX thread): setupWDSPdataFromParaEQ only marks it pending
+    //   From Thetis eqform.cs:2973 [v2.10.3.15]  _pendingTX_Update = true;
+    // and the tick sends it,
+    //   From Thetis eqform.cs:3613-3614 [v2.10.3.15]  100,    // init delay
+    //                                                 100);   // interval
+    // with the curve as it is then. The legacy EQ still pushes at once, as
+    // Thetis's setTXEQProfile does.
+    if (m_txEqPushTimer == nullptr) {
+        m_txEqPushTimer = new QTimer(this);
+        m_txEqPushTimer->setSingleShot(true);
+        connect(m_txEqPushTimer, &QTimer::timeout, this, postEqProfileNow);
+    }
+    auto pushEqProfile = [this, postEqProfileNow]() {
+        if (!m_txChannel) { return; }
+        if (m_transmitModel.txEqUseLegacy()) {
+            m_txEqPushTimer->stop();
+            postEqProfileNow();
+            return;
+        }
+        // Trailing edge from the first change, not restarted by later ones,
+        // so a steady drag still reaches WDSP every tick.
+        if (!m_txEqPushTimer->isActive()) {
+            m_txEqPushTimer->start(kTxEqPushCoalesceMs);
+        }
     };
 
     // CFC profile rebuild — mirrors pushEqProfile above.  CFC operates
@@ -4903,6 +5040,30 @@ void RadioModel::wireTransmitProcessingChain()
     }
 }
 
+// F.1, txaFlushed: the TX channel stops, and PureSignal hears the radio
+// is back on receive. Moved out of connectToRadioImpl (group B fix wave)
+// so a test can wire it against a test channel.
+void RadioModel::wireTxaFlushed()
+{
+    if (!m_moxController || !m_txChannel) {
+        return;
+    }
+    // PureSignal lives on the main thread (group A's re-review): it hears
+    // the radio is back on receive here, in RadioModel's context, first, as
+    // it did before the TX channel's stop.
+    connect(m_moxController, &MoxController::txaFlushed, this, [this]() {
+        if (m_pureSignal) {
+            if (m_txaFlushedPureSignalObserverForTest) { m_txaFlushedPureSignalObserverForTest(); }
+            m_pureSignal->onMoxChanged(false);
+        }
+    });
+    // The TX channel's own stop, on its thread.
+    connect(m_moxController, &MoxController::txaFlushed,
+            m_txChannel, [this]() {
+        m_txChannel->setRunning(false);
+    });
+}
+
 #ifdef NEREUS_BUILD_TESTS
 // Declared in RadioModel.h's NEREUS_BUILD_TESTS block.
 void RadioModel::wireTransmitChainForTest(TxChannel* channel)
@@ -4966,6 +5127,145 @@ bool RadioModel::setTgxlBypassForStation(bool on, QString* reason)
     return true;
 }
 
+// R-R3-49 (parity Task 8, remoteTgxlControlVersion 4): a window's
+// mouse-wheel nudge. The Core sends the local applet's own line through its
+// TunerModel (`tune relay=<relay> move=<move>`, TgxlConnection::adjustRelay).
+// It moves one matching relay and keys nothing.
+bool RadioModel::moveTgxlRelayForStation(int relay, int direction, QString* reason)
+{
+    if (relay < 0 || relay > 2 || (direction != -1 && direction != 1)) {
+        if (reason) {
+            *reason = QStringLiteral("The request to move a Tuner Genius relay was not "
+                                     "understood.");
+        }
+        return false;
+    }
+    if (!stationTgxlControlAllowed(reason)) { return false; }
+    // From AetherSDR src/gui/TunerApplet.cpp:176-182 [@0cd4559]: each relay
+    // bar's wheel step is TunerModel::adjustRelay(<0 C1, 1 L, 2 C2>, dir),
+    // which TgxlConnection.cpp:163-169 [@0cd4559] sends as
+    // "tune relay=%1 move=%2" with move = (direction > 0) ? 1 : -1.
+    m_tunerModel->adjustRelay(relay, direction);
+    return true;
+}
+
+// R-R3-49 (parity Task 8): the Core's own Scan LAN for a window. Listening
+// sends nothing; the answer is what the Core heard in the local dialog's
+// window, Tuner Genius announcements only, from the station network.
+// Parity mini-round (the operator's rulings a and b, 2026-09-25): it only
+// listens, so it goes ahead on the air, as a local window's Scan LAN does.
+bool RadioModel::scanTgxlLanForStation(TgxlLanScanDone done, QString* reason)
+{
+    if (m_role != Role::Local || !m_stationTgxl) { return refuseNoStationDevice(reason); }
+    // StationTgxlController admits the same two products.
+    startStationLanScan(QStringLiteral("tgxlLanScan"),
+                        {QStringLiteral("TunerGenius"), QStringLiteral("TunerGeniusXL")},
+                        m_tgxlLanScanWindowMs, std::move(done));
+    if (reason) { reason->clear(); }
+    return true;
+}
+
+// R-R3-49 (parity Tasks 8 and 9): one listening window for a window's Scan
+// LAN. Listening sends nothing; the answer is what the Core heard from the
+// station network, the named products only.
+void RadioModel::startStationLanScan(const QString& objectName, const QStringList& products,
+                                     int windowMs, std::function<void(const QString&)> done)
+{
+    // Group B fix wave (M2): one scan per device at a time. A request made
+    // while that device's scan listens joins it and gets the same answer
+    // when its window ends; no second pair of sockets is opened.
+    auto running = m_stationLanScans.find(objectName);
+    if (running != m_stationLanScans.end() && !running->discovery.isNull()) {
+        running->waiting.push_back(std::move(done));
+        return;
+    }
+    auto* discovery = new LanDiscovery(this);
+    StationLanScan& scanEntry = m_stationLanScans[objectName];
+    scanEntry.discovery = discovery;
+    scanEntry.waiting.clear();
+    scanEntry.waiting.push_back(std::move(done));
+    discovery->setObjectName(objectName);
+    if (m_stationBind) { discovery->setStationBind(*m_stationBind); }
+    auto devices = std::make_shared<QJsonArray>();
+    connect(discovery, &LanDiscovery::deviceDiscovered, discovery,
+            [devices, products](const QString& model, const QString& ip, quint16 port,
+                                const QString& /*version*/, const QString& serial,
+                                const QString& nickname) {
+                if (!products.contains(model)) {
+                    return;
+                }
+                devices->append(QJsonObject{
+                    {QStringLiteral("address"), ip},
+                    {QStringLiteral("port"), static_cast<int>(port)},
+                    {QStringLiteral("model"), model},
+                    {QStringLiteral("serial"), serial},
+                    {QStringLiteral("nickname"), nickname},
+                });
+            });
+    connect(discovery, &LanDiscovery::scanFinished, discovery,
+            [this, objectName, discovery, devices]() {
+                const QString json = QString::fromUtf8(
+                    QJsonDocument(*devices).toJson(QJsonDocument::Compact));
+                discovery->deleteLater();
+                std::vector<std::function<void(const QString&)>> waiting;
+                auto entry = m_stationLanScans.find(objectName);
+                if (entry != m_stationLanScans.end() && entry->discovery == discovery) {
+                    waiting = std::move(entry->waiting);
+                    m_stationLanScans.erase(entry);
+                }
+                for (const auto& done : waiting) {
+                    if (done) { done(json); }
+                }
+            });
+    discovery->start(windowMs);
+}
+
+bool RadioModel::stationPgxlControlAllowed(QString* reason) const
+{
+    if (m_role != Role::Local || !m_stationPgxl) { return refuseNoStationDevice(reason); }
+    if (stationOnAirRefusal(reason)) {
+        return false;
+    }
+    if (!m_pgxlConnection || !m_pgxlConnection->isConnected()) {
+        if (reason) { *reason = QStringLiteral("The Core is not connected to the Power Genius."); }
+        return false;
+    }
+    return true;
+}
+
+// R-R3-49 (parity Task 9, remotePgxlControlVersion 4): a window's OPERATE
+// or STANDBY. The Core sends the local applet's own line (MainWindow's
+// AmpApplet::operateToggled handler) through its own PgxlConnection. It
+// keys nothing: the amp amplifies only when the radio transmits.
+bool RadioModel::setPgxlOperateForStation(bool on, QString* reason)
+{
+    if (!stationPgxlControlAllowed(reason)) { return false; }
+    // Bench-fix 2026-05-19 (MainWindow's operateToggled handler): pcap
+    // stream 11 (.19 PowerGeniusDesktop -> .235 PGXL :9008) shows the
+    // actually-used wire command for OPERATE is `operate=1` (key=value),
+    // not bare `operate`. PGXL rejected `operate` / `standby` with error
+    // 50000016 every click.
+    m_pgxlConnection->sendCommand(on ? QStringLiteral("operate=1")
+                                     : QStringLiteral("operate=0"));
+    if (reason) { reason->clear(); }
+    return true;
+}
+
+// R-R3-49 (parity Task 9): the Core's own Scan LAN for a window's Power
+// Genius row: Power Genius announcements only.
+// Parity mini-round (rulings a and b): it only listens, so it goes ahead
+// on the air, as a local window's Scan LAN does.
+bool RadioModel::scanPgxlLanForStation(std::function<void(const QString&)> done,
+                                       QString* reason)
+{
+    if (m_role != Role::Local || !m_stationPgxl) { return refuseNoStationDevice(reason); }
+    startStationLanScan(QStringLiteral("pgxlLanScan"),
+                        {StationPgxlController::expectedProduct()},
+                        m_pgxlLanScanWindowMs, std::move(done));
+    if (reason) { reason->clear(); }
+    return true;
+}
+
 namespace {
 // An accessory address a station may dial: an IP address or a valid DNS
 // name (Task 4d's TGXL rule, shared with the PGXL by R-R3-47).
@@ -5015,6 +5315,37 @@ bool RadioModel::configureTgxlForStation(const QString& inputHost, quint16 port,
     return true; // Identification has started; connection is a later snapshot.
 }
 
+// R-R3-49 (parity Task 8): the Peripherals row's Host and Port, saved
+// without Connect. configureTgxl's checks and reasons, less the dial.
+bool RadioModel::setTgxlAddressForStation(const QString& inputHost, int port, QString* reason)
+{
+    const auto refuse = [reason](const QString& text) {
+        if (reason) { *reason = text; }
+        return false;
+    };
+    if (m_role != Role::Local || !m_stationTgxl) {
+        return refuse(QStringLiteral("This Core cannot change its amplifier and tuner settings."));
+    }
+    // Parity mini-round (rulings a and b): saving switches nothing, so it
+    // goes ahead on the air, as a local window's Host and Port do.
+    if (currentRadioMac().isEmpty()) {
+        return refuse(QStringLiteral("Connect the Core to a radio before setting up its Tuner Genius XL."));
+    }
+    const QString host = inputHost.trimmed();
+    // Group B fix wave (I1): a blank Host is saved, as a local window's
+    // blank Host is, and stops auto-connect: applyPeripheralsForCurrentMac
+    // dials only a saved host that is not empty.
+    if ((!host.isEmpty() && !validStationAccessoryHost(host)) || port < 1 || port > 65535) {
+        return refuse(QStringLiteral("Enter the Tuner Genius XL's IP address or host name, and a port from 1 to 65535."));
+    }
+    setPeripheralValue(QStringLiteral("TGXL_ManualIp"), host);
+    setPeripheralValue(QStringLiteral("TGXL_ManualPort"), QString::number(port));
+    AppSettings::instance().save();
+    m_stationTgxl->showSavedEndpoint(host, static_cast<quint16>(port));
+    if (reason) { reason->clear(); }
+    return true;
+}
+
 bool RadioModel::disconnectTgxlForStation(QString* reason)
 {
     if (m_role != Role::Local || !m_stationTgxl) {
@@ -5054,6 +5385,38 @@ bool RadioModel::configurePgxlForStation(const QString& inputHost, quint16 port,
     setPeripheralValue(QStringLiteral("PGXL_ManualPort"), QString::number(port));
     AppSettings::instance().save();
     m_stationPgxl->start(host, port);
+    if (reason) { reason->clear(); }
+    return true;
+}
+
+// R-R3-49 (parity Task 9): the Peripherals row's Host and Port, saved
+// without Connect. configurePgxl's checks and reasons, less the dial (the
+// 4O3A switch is not an address check: saving dials nothing).
+bool RadioModel::setPgxlAddressForStation(const QString& inputHost, int port, QString* reason)
+{
+    const auto refuse = [reason](const QString& text) {
+        if (reason) { *reason = text; }
+        return false;
+    };
+    if (m_role != Role::Local || !m_stationPgxl) {
+        return refuse(QStringLiteral("This Core cannot change its amplifier and tuner settings."));
+    }
+    // Parity mini-round (rulings a and b): saving switches nothing, so it
+    // goes ahead on the air, as a local window's Host and Port do.
+    if (currentRadioMac().isEmpty()) {
+        return refuse(QStringLiteral("Connect the Core to a radio before setting up its Power Genius."));
+    }
+    const QString host = inputHost.trimmed();
+    // Group B fix wave (I1): a blank Host is saved, as a local window's
+    // blank Host is, and stops auto-connect: applyPeripheralsForCurrentMac
+    // dials only a saved host that is not empty.
+    if ((!host.isEmpty() && !validStationAccessoryHost(host)) || port < 1 || port > 65535) {
+        return refuse(QStringLiteral("Enter the Power Genius's IP address or host name, and a port from 1 to 65535."));
+    }
+    setPeripheralValue(QStringLiteral("PGXL_ManualIp"), host);
+    setPeripheralValue(QStringLiteral("PGXL_ManualPort"), QString::number(port));
+    AppSettings::instance().save();
+    m_stationPgxl->showSavedEndpoint(host, static_cast<quint16>(port));
     if (reason) { reason->clear(); }
     return true;
 }
@@ -5101,6 +5464,26 @@ bool RadioModel::isTransmitting() const
     // R-R3-49: a remote window holds the Core's value as it last heard it.
     if (m_role == Role::Remote) { return m_remoteTransmitting; }
     return m_transmitting;
+}
+
+bool RadioModel::pureSignalOperationPermitted() const
+{
+    // R-R3-49 (parity Task 7, transmitSettingsVersion 7). Arming PureSignal
+    // keys nothing: Single Cal, Automatic, Apply current correction and
+    // Restore set the calibration engine's flags, and the engine corrects
+    // only while the radio transmits. Thetis arms the same way, by flags,
+    // from receive: AutoCalEnabled sets _autoON and PSState
+    //   From Thetis PSForm.cs:272-289 [v2.10.3.15]
+    // and the command state machine only then turns calibration on
+    //   From Thetis PSForm.cs:644-648 [v2.10.3.15]
+    //     puresignal.SetPSControl(_txachannel, 1, 0, 1, 0);
+    //     if (!PSEnabled) PSEnabled = true;
+    // (mi0bot-Thetis arms the HL2 the same way). So a receive-only Core
+    // permits it: its session gate takes a window's arming only while the
+    // radio is off the air, and its receive-only MOX check still keeps the
+    // radio from transmitting, so the correction waits for a transmission.
+    // A remote window never runs PureSignal itself; it asks its Core.
+    return m_role != Role::Remote;
 }
 
 bool RadioModel::isCoreOnAir() const
@@ -5336,6 +5719,79 @@ bool RadioModel::resetRfKitErrorForStation(QString* reason)
         return false;
     }
     return m_stationRfKit->resetError(reason);
+}
+
+// ---------------------------------------------------------------------------
+// R-R3-49 (parity Task 10, remoteRfKitControlVersion 4): a window's RF-Kit
+// OPERATE, antenna, TCI mode and saved address. NereusSDR-original; no
+// Thetis logic (the RF2K-S is a NereusSDR-native accessory).
+// ---------------------------------------------------------------------------
+
+bool RadioModel::stationRfKitControlAllowed(QString* reason) const
+{
+    if (m_role != Role::Local || !m_stationRfKit) {
+        if (reason) { *reason = QStringLiteral("This Core cannot change its amplifier and tuner settings."); }
+        return false;
+    }
+    return !stationOnAirRefusal(reason);
+}
+
+// Operating the amp keys nothing: it amplifies only when the radio
+// transmits.
+bool RadioModel::setRfKitOperateForStation(bool on, QString* reason)
+{
+    if (!stationRfKitControlAllowed(reason)) { return false; }
+    return m_stationRfKit->setOperate(on, reason);
+}
+
+bool RadioModel::setRfKitAntennaForStation(int port, QString* reason)
+{
+    // The applet's four internal antenna buttons, ANT 1 to ANT 4.
+    if (port < 1 || port > AccessoryDataModel::kRfKitAntennas) {
+        if (reason) { *reason = QStringLiteral("Choose RF-Kit amplifier antenna 1, 2, 3 or 4."); }
+        return false;
+    }
+    if (!stationRfKitControlAllowed(reason)) { return false; }
+    return m_stationRfKit->setAntenna(port, reason);
+}
+
+bool RadioModel::setRfKitTciModeForStation(QString* reason)
+{
+    if (!stationRfKitControlAllowed(reason)) { return false; }
+    return m_stationRfKit->setTciMode(reason);
+}
+
+// configureRfKit's checks and reasons, less the dial and the switch check
+// (saving dials nothing). Parity mini-round (rulings a and b): saving
+// switches nothing, so it goes ahead on the air, as a local window's Save
+// does; OPERATE, the antennas and TCI mode above still wait.
+bool RadioModel::setRfKitAddressForStation(const QString& inputHost, int port, QString* reason)
+{
+    const auto refuse = [reason](const QString& text) {
+        if (reason) { *reason = text; }
+        return false;
+    };
+    if (m_role != Role::Local || !m_stationRfKit) {
+        return refuse(QStringLiteral("This Core cannot change its amplifier and tuner settings."));
+    }
+    if (currentRadioMac().isEmpty()) {
+        return refuse(QStringLiteral("Connect the Core to a radio before setting up its RF-Kit "
+                                     "amplifier."));
+    }
+    const QString host = inputHost.trimmed();
+    // Group B fix wave (I1): a blank Host is saved, as a local window's
+    // blank Host is, and stops auto-connect: applyPeripheralsForCurrentMac
+    // dials only a saved host that is not empty.
+    if ((!host.isEmpty() && !validStationAccessoryHost(host)) || port < 1 || port > 65535) {
+        return refuse(QStringLiteral("Enter the RF-Kit amplifier's IP address or host name, "
+                                     "and a port from 1 to 65535."));
+    }
+    setPeripheralValue(QStringLiteral("RfKit_ManualIp"), host);
+    setPeripheralValue(QStringLiteral("RfKit_ManualPort"), QString::number(port));
+    AppSettings::instance().save();
+    m_stationRfKit->showSavedEndpoint(host, static_cast<quint16>(port));
+    if (reason) { reason->clear(); }
+    return true;
 }
 
 // ── Per-radio peripherals helpers ──────────────────────────────────────────
@@ -6044,6 +6500,24 @@ void RadioModel::reportStationCommandFinished(quint32 commandId, bool accepted,
     // (a refusal's claim was already taken by reportStationAccessoryRefusal).
     m_pageShownAccessoryRequests.remove(commandId);
     emit stationCommandFinished(commandId, accepted, reason);
+}
+
+void RadioModel::reportStationPgxlLanScan(quint32 commandId, bool accepted,
+                                          const QString& reason, const QString& devicesJson)
+{
+    if (m_role != Role::Remote) {
+        return;
+    }
+    emit stationPgxlLanScanFinished(commandId, accepted, reason, devicesJson);
+}
+
+void RadioModel::reportStationTgxlLanScan(quint32 commandId, bool accepted,
+                                          const QString& reason, const QString& devicesJson)
+{
+    if (m_role != Role::Remote) {
+        return;
+    }
+    emit stationTgxlLanScanFinished(commandId, accepted, reason, devicesJson);
 }
 
 void RadioModel::reportStationRetuneRejected(int sliceId, const QString& reason)
@@ -11885,8 +12359,9 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
             }
 
             m_pureSignal->setSettings(m_pureSignalSettings);
+            // R-R3-49 (parity Task 7): see pureSignalOperationPermitted.
             m_pureSignal->setOperationalPermissionPredicate([this]() {
-                return !receiveOnlyStationPolicy();
+                return pureSignalOperationPermitted();
             });
             m_pureSignal->setOperationalReadinessPredicate([this]() {
                 return isConnected() && m_txChannel && boardCapabilities().hasPureSignal;
@@ -12254,13 +12729,7 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
             // From Thetis console.cs:29607 [v2.10.3.13] — TX-off callsite with
             // dmode=1 (drain) in the TX→RX branch.
             // Thread.Sleep(space_mox_delay); // default 0 // from PSDR MW0LGE  [console.cs:29603]
-            connect(m_moxController, &MoxController::txaFlushed,
-                    m_txChannel, [this]() {
-                if (m_pureSignal) {
-                    m_pureSignal->onMoxChanged(false);
-                }
-                m_txChannel->setRunning(false);
-            });
+            wireTxaFlushed();
 
             // H.1 — voxRunRequested → setVoxRun.
             // From Thetis cmaster.cs:1039-1052 [v2.10.3.13] — CMSetTXAVoxRun.
@@ -17834,6 +18303,14 @@ void RadioModel::teardownConnection()
     // thread emits cross-thread warnings and can crash on Windows.
     teardownWorkerThreadedConnection(m_connection, m_connThread);
 
+    // Parity Task 12 (group B fix wave re-review, Minor 2): the relays of a
+    // radio that was transmitting when it went away are not on TX any more.
+    // Without this a disconnect while keyed left m_alexRoutingTx set, and
+    // after the next connect an antenna change on that band went out as the
+    // TX routing (and the relay flags waited for a MOX edge) until the next
+    // key-up.
+    m_alexRoutingTx = false;
+
     // Re-arm the discovery quiet period now that the protocol disconnect has
     // actually completed.  The arm at the top of this function starts the
     // clock at teardown *entry*, but run=0 does not leave until
@@ -19766,6 +20243,8 @@ void RadioModel::completeTuneOff()
     if (m_moxController) {
         m_moxController->setManualKey(false);
     }
+    // Group B fix wave: TUNE's end clears the on-air rule last.
+    releaseHeldOnAirWork();
 }
 
 // ---------------------------------------------------------------------------
@@ -19821,6 +20300,10 @@ void RadioModel::onMoxHardwareFlipped(bool isTx)
     const Band band = txSlice
                         ? bandFromFrequency(txSlice->frequency())
                         : m_lastBand;
+    // Group B fix wave: the routing the relays now hold, for an antenna
+    // changed while the radio transmits (see the antennaChanged connect).
+    m_alexRoutingTx = isTx;
+    m_alexRoutingTxBand = band;
     if (isTx) {
         // Defensive authority reconciliation: a listening slice may have
         // changed its stored TX antenna before becoming TX-bound.
@@ -20549,12 +21032,8 @@ void RadioModel::scheduleRemoteDspOptionsApply(const QString& key)
         connect(m_dspOptionsApplyTimer, &QTimer::timeout,
                 this, &RadioModel::flushRemoteDspOptionsApply);
         // R-R3-49 (group A fix wave, I2): TX groups held while the radio
-        // was on the air apply once it is back on receive.
-        connect(this, &RadioModel::transmittingChanged, this, [this](bool transmitting) {
-            if (!transmitting && !m_pendingDspOptionsTxGroups.isEmpty()) {
-                flushRemoteDspOptionsApply();
-            }
-        });
+        // was on the air apply once it is back on receive
+        // (releaseHeldOnAirWork, group B fix wave).
     }
     // Trailing edge from the first key of a burst, not restarted by later
     // ones: the whole burst lands in one apply, and a steady stream of
@@ -20574,8 +21053,9 @@ void RadioModel::flushRemoteDspOptionsApply()
     // R-R3-49 (group A fix wave, I2): the write was accepted off the air,
     // but the radio can be keyed inside the coalescing window, and this
     // apply reaches SetDSPBuffsize and its channel flush. While the radio
-    // is on the air the TX groups stay pending; the transmittingChanged
-    // connect in scheduleRemoteDspOptionsApply applies them on the unkey.
+    // is on the air the TX groups stay pending; releaseHeldOnAirWork applies
+    // them once the on-air rule clears (group B fix wave: after MOX, TUNE
+    // or two-tone alike).
     if (!m_pendingDspOptionsTxGroups.isEmpty() && !stationOnAirRefusal(nullptr)) {
         const QSet<QString> txGroups = m_pendingDspOptionsTxGroups;
         m_pendingDspOptionsTxGroups.clear();
@@ -20768,8 +21248,23 @@ void RadioModel::flushRemoteHardwareApply()
     if (m_pendingHardwareReloads.isEmpty()) {
         return;
     }
-    const QSet<QString> reloads = m_pendingHardwareReloads;
+    QSet<QString> reloads = m_pendingHardwareReloads;
     m_pendingHardwareReloads.clear();
+    // Group A follow-up (group B fix wave): the PA profiles and the PA
+    // calibration were accepted off the air, but the radio can be keyed
+    // inside the coalescing window; as with DSP > Options TX (group A's
+    // I2), they wait while the on-air rule holds and reload once it clears
+    // (releaseHeldOnAirWork).
+    if (stationOnAirRefusal(nullptr)) {
+        for (const QString& held : {QStringLiteral("pa"), QStringLiteral("cal")}) {
+            if (reloads.remove(held)) {
+                m_pendingHardwareReloads.insert(held);
+            }
+        }
+    }
+    if (reloads.isEmpty()) {
+        return;
+    }
     const QString mac = currentRadioMac();
     if (mac.isEmpty()) {
         return;
@@ -20928,6 +21423,25 @@ void RadioModel::applyAlexHpfSwitchSettings()
         m_alexHpfBypassOnPsSwitch = onPs;
         m_alexDisable6mLnaOnTxSwitch = lnaOffTx;
         republishAlexAdcSlices();
+    }
+}
+
+// Group B fix wave (group A's follow-ups): work a window's change left
+// waiting while the radio was on the air (a DSP > Options TX change, a PA
+// profile or calibration reload) applies once the on-air rule clears,
+// whichever way it clears: MOX back to receive, TUNE's completion or the
+// two-tone test's end.
+void RadioModel::releaseHeldOnAirWork()
+{
+    if (stationOnAirRefusal(nullptr)) {
+        return;
+    }
+    if (!m_pendingDspOptionsTxGroups.isEmpty()) {
+        flushRemoteDspOptionsApply();
+    }
+    if (!m_pendingHardwareReloads.isEmpty()
+        && !(m_hardwareApplyTimer && m_hardwareApplyTimer->isActive())) {
+        flushRemoteHardwareApply();
     }
 }
 
@@ -21656,6 +22170,12 @@ PureSignal* RadioModel::installPureSignalForTest(TxChannel* tx)
         /*engine=*/nullptr, tx, /*fb=*/nullptr, /*mox=*/nullptr,
         /*stepAtt=*/nullptr, /*twoTone=*/nullptr, /*parent=*/nullptr);
     m_pureSignal->setSettings(m_pureSignalSettings);
+    // R-R3-49 (parity Task 7): the same operational permission as a real
+    // connection (the readiness predicate needs a live radio and is left
+    // out, as before).
+    m_pureSignal->setOperationalPermissionPredicate([this]() {
+        return pureSignalOperationPermitted();
+    });
     connect(m_pureSignal.get(), &PureSignal::psEnabledChanged,
             this, &RadioModel::refreshDdcAssignmentForRadioState,
             Qt::UniqueConnection);
