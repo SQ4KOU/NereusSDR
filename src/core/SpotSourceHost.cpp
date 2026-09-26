@@ -1,23 +1,114 @@
-// no-port-check: NereusSDR-original. Starts and stops the spot sources.
-
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // =================================================================
 // src/core/SpotSourceHost.cpp  (NereusSDR)
 // =================================================================
 //
-// NereusSDR-original; no upstream port. See SpotSourceHost.h.
+// NereusSDR - SpotSourceHost implementation: starts, stops and follows the
+// spot sources. See SpotSourceHost.h.
 //
 // The start calls and the settings they read are the ones the local
 // window used before (RadioModel::restoreSpotClientAutoStartState and
 // MainWindow::openSpotHub's per-tab wiring), moved here unchanged, so a
 // window running its own radio behaves exactly as it did.
 //
-// =================================================================
+// Ported from freedv-gui src/main.cpp [@77e793a]: the PSK Reporter start
+// and stop (restoreAutoStart's PSK Reporter block, startPskReporterWith,
+// stopPskReporter, disconnectSource's PSK Reporter branch) follow
+//   - main.cpp:2575-2597 (PskReporter added to m_reporters[] and the
+//     5-minute m_pskReporterTimer started at audio start),
+//   - main.cpp:1609-1616 (the ID_TIMER_PSKREPORTER tick sends every
+//     reporter's in-progress packet),
+//   - main.cpp:2694 (m_pskReporterTimer.Stop()),
+// and src/reporting/pskreporter.cpp:148-169 [@77e793a] (the receiver's
+// callsign, grid square and software set before anything is reported).
+// These moved here from MainWindow.cpp and RadioModel.cpp in parity Task
+// 19 with their cites, which the move dropped and this file restores.
+// The rest of the file (the DX cluster, RBN, POTA, WSJT-X and
+// SpotCollector starts, the forwarding to a Core and its state) is
+// NereusSDR-original.
+//
+// License (upstream):
+//   - freedv-gui main.cpp carries the GPL v2.1 header reproduced verbatim
+//     below per the upstream redistribution clause.
+//   - freedv-gui carries an LGPLv2.1+ root license (`freedv-gui/COPYING`).
+//     The specific `pskreporter.cpp` file carries a permissive
+//     BSD-2-Clause-style file header (Copyright Mooneer Salem, no per-
+//     file project copyright line); the BSD permission block is
+//     reproduced verbatim below per the upstream redistribution clause.
+//
+// LGPL is upgrade-compatible to GPL-3 (LGPL §3 conversion clause); the
+// BSD-2-Clause file-header carve-out is GPL-compatible by its own terms.
+//
+// --- From freedv-gui/src/main.cpp [@77e793a] (verbatim header) ---
+//
+// ==========================================================================
+//  Name:            main.cpp
+//
+//  Purpose:         FreeDV main()
+//  Created:         Apr. 9, 2012
+//  Authors:         David Rowe, David Witten
+//
+//  License:
+//
+//   This program is free software; you can redistribute it and/or modify
+//   it under the terms of the GNU General Public License version 2.1,
+//   as published by the Free Software Foundation.  This program is
+//   distributed in the hope that it will be useful, but WITHOUT ANY
+//   WARRANTY; without even the implied warranty of MERCHANTABILITY or
+//   FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public
+//   License for more details.
+//
+//   You should have received a copy of the GNU General Public License
+//   along with this program; if not, see <http://www.gnu.org/licenses/>.
+//
+// ==========================================================================
+//
+// --- From freedv-gui src/reporting/pskreporter.cpp [@77e793a] (verbatim header) ---
+//
+// =========================================================================
+//  Name:            pskreporter.cpp
+//  Purpose:         Implementation of PSK Reporter support.
+//
+//  Authors:         Mooneer Salem
+//  License:
+//
+//  All rights reserved.
+//
+//  Redistribution and use in source and binary forms, with or without
+//  modification, are permitted provided that the following conditions
+//  are met:
+//
+//  - Redistributions of source code must retain the above copyright
+//  notice, this list of conditions and the following disclaimer.
+//
+//  - Redistributions in binary form must reproduce the above copyright
+//  notice, this list of conditions and the following disclaimer in the
+//  documentation and/or other materials provided with the distribution.
+//
+//  THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS
+//  ``AS IS'' AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT
+//  LIMITED TO, THE IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR
+//  A PARTICULAR PURPOSE ARE DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT OWNER
+//  OR CONTRIBUTORS BE LIABLE FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL,
+//  EXEMPLARY, OR CONSEQUENTIAL DAMAGES (INCLUDING, BUT NOT LIMITED TO,
+//  PROCUREMENT OF SUBSTITUTE GOODS OR SERVICES; LOSS OF USE, DATA, OR
+//  PROFITS; OR BUSINESS INTERRUPTION) HOWEVER CAUSED AND ON ANY THEORY OF
+//  LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING
+//  NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE OF THIS
+//  SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+// =========================================================================
+//
 // Modification history (NereusSDR):
 //   2026-09-26  J.J. Boyd / KG4VCF  Created (parity Task 19, R-IOS-25,
 //                                    R-R3-49). AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Fix wave after the review of parity
+//                                    Tasks 19 and 21 (M7): the freedv-gui
+//                                    header, cites and PROVENANCE row the
+//                                    move from MainWindow and RadioModel
+//                                    dropped are restored. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/SpotSourceHost.h"
@@ -260,9 +351,16 @@ void SpotSourceHost::restoreAutoStart(Placement placement)
         m_pota->startPolling(s.value(QStringLiteral("PotaPollInterval"), 30).toInt());
     }
 
-    // PSK Reporter: send-only. Identity refreshed from the User/* fall-back
-    // chain; when PskReporterAutoStart is on, the client's own reporting
-    // interval is armed, as RadioModel's restore did.
+    // PSK Reporter: send-only.  Identity refreshed from User/* fall-
+    // back chain.  2026-05-12 bench fix: if PskReporterAutoStart is
+    // True, arm the 5-minute auto-send timer now — source-first port
+    // from freedv-gui main.cpp:2575-2597 [@77e793a] which adds
+    // PskReporter to m_reporters[] AND starts m_pskReporterTimer at
+    // audio start time.  Previously the AutoStart flag persisted but
+    // had no effect (it only set identity), so users with auto-start
+    // checked would never see any spots reach pskreporter.info.
+    // [moved from RadioModel::restoreSpotClientAutoStartState in parity
+    // Task 19; the station's placement only]
     if (station && m_pskReporter) {
         const QString pskCall = resolveCall(QStringLiteral("PskReporter/Callsign"));
         const QString pskGrid = resolveGrid(QStringLiteral("PskReporter/GridSquare"));
@@ -360,6 +458,9 @@ bool SpotSourceHost::disconnectSource(const QString& source, QString* reason)
         m_pota->stopPolling();
         setSource(kPota, kOff);
     } else if (source == kPskReporter && m_pskReporter) {
+        // From freedv-gui main.cpp:2694 [@77e793a]:
+        //   m_pskReporterTimer.Stop();
+        // "Stop" = disarm the timer.
         m_pskReporter->setAutoSendIntervalSec(0);
         setSource(kPskReporter, kOff);
     }
@@ -468,8 +569,12 @@ void SpotSourceHost::clearStationValues()
     }
 }
 
-void SpotSourceHost::appendStationConsole(const QString& source, const QStringList& lines)
+void SpotSourceHost::appendStationConsole(const QString& source, const QStringList& lines,
+                                          bool replace)
 {
+    if (replace) {
+        emit consoleCleared(source);
+    }
     for (const QString& line : lines) {
         emit consoleLine(source, line);
     }
@@ -573,6 +678,11 @@ void SpotSourceHost::stopPskReporter()
     if (forward("spots.disconnect", kPskReporter) || !m_pskReporter) {
         return;
     }
+    // From freedv-gui main.cpp:2694 [@77e793a]:
+    //   m_pskReporterTimer.Stop();
+    // "Stop" = disarm the timer.  Any queued records flush on
+    // ~PskReporterClient when the client tears down (mirrors
+    // pskreporter.cpp:171-181 [@77e793a]).
     m_pskReporter->setAutoSendIntervalSec(0);
     setSource(kPskReporter, kOff);
 }
@@ -629,9 +739,28 @@ bool SpotSourceHost::forward(const QByteArray& verb, const QString& source, cons
 
 void SpotSourceHost::startPskReporterWith(const QString& callsign, const QString& gridSquare)
 {
-    // What the Spot Hub's Start did in MainWindow: the freshly checked
-    // identity reaches the client before its reporting interval is armed,
-    // so no report goes out with an empty receiver.
+    // 2026-05-12 bench fix: PSK Reporter Start button source-first
+    // port from freedv-gui.  The dialog emitted pskStartRequested
+    // but nothing in MainWindow handled it.
+    //
+    // From freedv-gui main.cpp:2597 [@77e793a]:
+    //   m_pskReporterTimer.Start(5 * 60 * 1000);
+    // and main.cpp:1609-1616 [@77e793a]:
+    //   if (timerId == ID_TIMER_PSKREPORTER) {
+    //       for (auto& obj : wxGetApp().m_reporters) obj->send();
+    //   }
+    // PSK Reporter is a send-only IPFIX client (pskreporter.h:65-68
+    // [@77e793a] — freqChange / transmit / inAnalogMode are no-ops).
+    // "Start" = arm the 5-minute auto-send timer.
+    //
+    // 2026-05-12 bench fix (PR #238 review P2):
+    // apply the freshly-validated identity to the
+    // live client BEFORE arming the timer.  Without
+    // this call, the client keeps the (often empty)
+    // identity set at RadioModel construction time
+    // and emits IPFIX datagrams with empty receiver
+    // fields.  pskreporter.cpp:148-169 [@77e793a].
+    // [moved from MainWindow::openSpotHub in parity Task 19]
     m_pskReporter->setIdentity(callsign, gridSquare, versionString());
     m_pskReporter->setAutoSendIntervalSec(PskReporterClient::kReportingIntervalSec);
     setSource(kPskReporter, kConnected, QStringLiteral("Reporting every 5 minutes"));

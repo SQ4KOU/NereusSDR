@@ -11,6 +11,12 @@
 // NereusSDR-original; no upstream port. Parity Task 19 (R-IOS-25, R-R3-49;
 // the iPhone app plan's Task 21 station half; remote design section 6.4).
 //
+// Independently implemented from freedv-gui interface: this declaration
+// is NereusSDR's own. The PSK Reporter start and stop in SpotSourceHost.cpp
+// are ported from freedv-gui (main.cpp and reporting/pskreporter.cpp
+// [@77e793a]); that file carries the upstream headers and its row in
+// docs/attribution/FREEDV-GUI-PROVENANCE.md.
+//
 // The spot clients (RadioModel owns them) are started, stopped and
 // followed here, in one place, for three placements:
 //
@@ -158,8 +164,11 @@ public:
     bool applyStationValue(const QByteArray& propertyName, const QVariant& value);
     /// No Core (session ended): the station's sources read off.
     void clearStationValues();
-    /// Console lines from the Core's spotConsole:<source> stream.
-    void appendStationConsole(const QString& source, const QStringList& lines);
+    /// Console lines from the Core's spotConsole:<source> stream. With
+    /// `replace` (the stream's reset: its backlog again, on each subscribe)
+    /// the console is cleared first, so a reconnect never repeats it.
+    void appendStationConsole(const QString& source, const QStringList& lines,
+                              bool replace = false);
     /// The Core refused a request for a source.
     void reportStationRefusal(const QString& source, const QString& reason);
 
@@ -189,6 +198,8 @@ signals:
     void sourcesChanged();
     void sourceChanged(const QString& source);
     void consoleLine(const QString& source, const QString& line);
+    /// The Core's console for a source starts again (its backlog follows).
+    void consoleCleared(const QString& source);
     void sourceRefused(const QString& source, const QString& reason);
 
 private:
