@@ -8,7 +8,10 @@
 
 **Goal:** A desktop window connected to a remote Core does everything a local window does for
 every control that does not put a carrier on the air: the 68 open B rows and every bug found in
-passing in the remote parity sweep of 2026-09-24.
+passing in the remote parity sweep of 2026-09-24. Since remote transmit exists, it also covers
+what a window shows while the Core is on the air: the transmit display and keyed view in both
+windows (A11, A12, display duplex, the transmit monitor, the CFC bars and PA Values' transmit
+readings) and a remote window's TCI raw I/Q, Tasks 23 and 27 to 34.
 
 **Architecture:** The Core owns the radio, its accessories and its transmit chain. A remote
 window asks the Core through the station link: a command in the existing documents' style, or
@@ -144,6 +147,17 @@ transmitting, and are refused while someone is on the air.
 - Display requests: `RemoteMediaController.cpp` builds `subscribe` with `minDbm` -180 and
   `maxDbm` 0 (`:313`); `DisplayCodec.cpp:142-148` quantises to 8 bits over that window.
 - The unbuilt-feature list: `src/gui/UnbuiltFeatures.h:46-110` (R-R3-49).
+- The transmit display (PR #317 in the trunk, not on `main`): `TxAnalyzer` (display 5), made by
+  `MainWindow` in a window that runs its own DSP (`MainWindow.cpp:5015`) and by
+  `DaemonApp::createTxAnalyzer` on a Core (started and stopped on MOX, its pixels read by
+  nothing); the local MOX edge lambda (`MainWindow.cpp:5185-5620`: the pan hosting the
+  transmit slice, `setMoxOverlay`, the analyzer's window, `updateSpectrumFromTxPixels`,
+  `pushTxWaterfallRow`); `TxDisplayPage` and the nine Station-scoped `DisplayTx*` analyzer keys
+  (`SettingsScope.cpp:469-477`); `SpectrumWidget::setDisplayDuplex` (starts true);
+  `UnbuiltFeature::Fdx` (the status bar's FDX and the container DUP button); the matrix
+  `docs/architecture/tx-display-verification/README.md` (rows 1 to 8 passed 2026-08-05 on an
+  ANAN-7000DLE, 9 to 14 pending, 15 and 16 open, 17 and 18 to re-check). A remote window has no
+  transmit display: while keyed its pan draws the receiver hearing the transmitter.
 - Tests to extend: `tst_remote_peripherals`, `tst_station_accessory_state`,
   `tst_tgxl_station_identity`, `tst_remote_gui_gating`, `tst_remote_tx_widgets`,
   `tst_remote_tx_presentation`, `tst_remote_meter_poller`, `tst_remote_media_controller`,
@@ -182,12 +196,22 @@ transmitting, and are refused while someone is on the air.
 | 24 Setup diagnostics and preferences | B6.7, B6.8, B6.9, B6.10 (passing bugs) | yes | | yes |
 | 25 Dead controls in both windows | passing bugs | yes | | yes |
 | 26 The R3 control matrix | the sweep's stale rows | | | |
+| 27 The transmit display's skirt (row 15) | A11 | yes (if the cause is there) | | |
+| 28 The Core sends the transmit display | A11 | | yes | yes |
+| 29 One MOX display controller for both windows | A11, row 16 | yes | | |
+| 30 Setup > Display > TX Display from a remote window | A12 | | yes | yes |
+| 31 DUP (display duplex) in both windows | A11 | yes | yes | yes |
+| 32 The transmit monitor to the transmit holder | Part F (MON) | yes | yes | |
+| 33 The CFC bar chart and PA Values' transmit readings | Part F (CFC, PA Values) | | yes | yes |
+| 34 Bench and land the transmit display and keyed view | matrix rows 9 to 27 | | | |
 
 Order: Task 1 first (every B5 task, Task 7, Task 12 and Task 13 use its gate and helpers).
 Tasks 2, 3, 4, 5, 6 and 7 in that order (each raises `transmitSettingsVersion` by one). Task 6
 before Task 14 (each raises `stationTelemetryVersion`). Task 12 before Task 14 (each raises
-`radioHardwareVersion`). Task 19 before Tasks 20, 21, 22 and 23 (record streams). Task 26
-last. Everything else in the order written, one at a time wherever the table shares a file.
+`radioHardwareVersion`). Task 19 before Tasks 20, 21, 22 and 23 (record streams). Tasks 27 to
+33 in that order: 27 fixes the analyzer both windows draw, 28 sends it, 29 draws it, and 28, 30
+and 31 raise `txDisplayVersion` to 1, 2 and 3. Task 26 after Task 33; Task 34 last.
+Everything else in the order written, one at a time wherever the table shares a file.
 
 ---
 
@@ -1304,19 +1328,34 @@ a remote window on the Pi 4's Core contains the Core's log.
 
 ## Task 23: TCI in a remote window
 
-**Requirements:** R-R3-42 (a remote window's TCI; raw I/Q refused until remote transmit);
+**Requirements:** R-R3-42 (a remote window's TCI; its "raw I/Q refused until remote transmit"
+is settled by the operator's decision of 2026-09-24 on Q2, that raw I/Q joins remote
+transmit's scope with its bandwidth charged to the window's display share; remote transmit
+exists, so this task carries it); R-R3-37 (the bytes are accounted in the display budget);
 R-R3-48 (the Core's station TCI server); the iPhone plan's Task 25 (`tciClients`); R-R3-49.
+Thetis publishes a receiver's I/Q at the hardware rate, not resampled
+(`TCIServer.cs:925-943 [v2.10.3.15]`, `getPublishedIQSampleRate`: the largest hardware rate,
+at least 48000 and at most 384000), for each receiver a client asked for, or every receiver
+while Always stream IQ is on (`TCIServer.cs:5802-5809 [v2.10.3.15]`, `wantsIQStream`).
 
 **Files:**
 - Modify: `src/gui/applets/TciApplet.cpp` (`:427-476, 584-604`), `src/core/TciSwitch.cpp`
   (`:218-236`), `src/gui/setup/CatNetworkSetupPages.cpp` (`:873-913`), `src/gui/MainWindow.cpp`
   (`:9578`), `src/core/StationTciController.{h,cpp}` (`:36-45, 177`), `src/models/StationTciModel.h`
   (`:38-42`), `src/core/session/SessionCommandDispatcher.cpp` (`:375, 1340-1356`),
-  `src/core/session/StationServer.cpp` (`stationTciVersion` 2), `src/core/TciServer.cpp`
-  (`:486, 2377-2385`)
-- Modify: the accessory control document (the `stationTci` object), the link document,
-  `surface.json`, fixtures
-- Test: `tests/tst_remote_station_tci.cpp` (new), the existing TCI switch tests
+  `src/core/session/StationServer.cpp` (`stationTciVersion` 2, `remoteIqVersion` 1),
+  `src/core/TciServer.{h,cpp}` (`:486, 2377-2385`; the remote window's I/Q path),
+  `src/core/TciProtocol.cpp` (`handleIqStartStopCommand`)
+- Modify (raw I/Q): `src/core/session/media/DaemonMediaController.{h,cpp}` (the Core's I/Q
+  tap per slice, the same raw I/Q a local `TciServer::onRawIqDataReceived` takes),
+  `src/core/session/media/DisplayBudgetSplit.{h,cpp}` (the charge),
+  `src/gui/RemoteMediaController.{h,cpp}`
+- Modify: the accessory control document (the `stationTci` object), the link document, the
+  media control document (a "Raw I/Q (iq-stream)" section), `surface.json`, vectors and
+  fixtures
+- Test: `tests/tst_remote_station_tci.cpp` (new), `tests/tst_remote_tci_iq.cpp` (new),
+  `tst_tci_remote_window`, `tst_tci_iq_roundtrip`, `tst_link_conformance_media`, the existing
+  TCI switch tests
 
 **Interfaces:**
 - Produces under `stationTciVersion` 2: stream `tciClients` `{id, name, address,
@@ -1328,6 +1367,31 @@ R-R3-48 (the Core's station TCI server); the iPhone plan's Task 25 (`tciClients`
   properties.
 - Where the Core's server listens stays `station_bind` in `nereusd.conf`; the page shows it
   read-only.
+- Produces media capability `remoteIqVersion` 1 (appended after the last minor-11 entry; 0
+  without media). A window that sees it may add `remoteIqVersion` to its media `start`; only
+  then:
+  - GUI-to-Core `iq-stream` with exactly `op`, `connectionId`, `sliceId` (the Core's slice,
+    TCI receiver N being slice N as for audio), `revision` (nonzero uint32, rising per slice)
+    and `enabled` (boolean).
+  - Core-to-GUI `iq-stream-context` with exactly `op`, `connectionId`, `sliceId`, `revision`,
+    `enabled`, `generation` (uint32), `sampleRateHz` (the slice's receiver rate, sent as
+    Thetis sends it, not resampled) and `reason` (empty, or why it is not sent).
+  - The I/Q itself: interleaved float32 pairs as the receiver delivers them, on its own stream
+    of the media peer, framed as the media document's new section writes it (a stream id, a
+    sequence number, a sample count); the Core starts it only while a request for that slice
+    is enabled.
+  - The stream's bytes are charged to that window's display share first; the window's pans
+    take what is left (frame rate lowered first, then pixels, R-R3-37), never below one frame
+    per second a visible pan (ruling C7). When that floor cannot be kept, the context says
+    `enabled` false with the reason "The link to the Core is too busy to send raw I/Q for this
+    receiver."
+  - `iq-stream` is a media operation, not a setting: it is answered on and off the air, as
+    receiver audio is.
+- The window's TCI server: an app's `iq_start` for receiver N asks the Core for slice N's
+  stream (the first app to ask starts it, the last `iq_stop` or disconnect releases it) and
+  feeds the frames to the subscribed apps as a local window's I/Q tap does, with Swap I/Q
+  applied here; Always stream IQ keeps the request while the server runs; `iq_samplerate`
+  reports the context's rate. A refusal goes to `operatorNotice()`, never onto the TCI wire.
 
 **Acceptance:**
 - **B8.1:** the TCI applet's Enable Server goes through `TciSwitch` (saved; not undone at the
@@ -1339,18 +1403,33 @@ R-R3-48 (the Core's station TCI server); the iPhone plan's Task 25 (`tciClients`
 - **B8.3:** Setup > CAT & Network > TCI Server gains a "The Core's TCI server" group whose
   Compatibility and Send initial state options change the Core's server; the window's own
   server's options stay this computer's (R-R3-42).
-- **B8.4 (the minimum, whatever the question decides):** in a remote window the IQ Stream
-  options (Swap I/Q, Always stream IQ) are disabled with "Raw I/Q is not sent from the Core to
-  this window." instead of live and doing nothing.
+- **B8.4:** in a remote window on a Core at `remoteIqVersion` 1, a TCI app's `iq_start 0`
+  receives slice 0's raw I/Q from the Core at the receiver's rate, in order and without gaps
+  over 60 s of a test stream (sequence numbers checked); Swap I/Q swaps it; Always stream IQ
+  keeps it flowing with no app asking; `iq_stop` from the last app stops the Core's stream
+  (the Core's tap count returns to 0).
+- **B8.4, the budget:** with I/Q running, the window's pans drop frame rate first and never
+  below one frame per second; a share too small for the floor gets `enabled` false with the
+  reason above, and the app gets no I/Q.
+- **B8.4, older Core:** on a Core below `remoteIqVersion` 1 the IQ Stream options are disabled
+  with "This Core does not send raw I/Q to this window. Updating the Core may help." and
+  `iq_start` sends nothing.
+- **B8.4, older window:** a peer that did not declare `remoteIqVersion` gets today's wire
+  (fixture).
 
-**Verification:** unit; tests first for the options and the disconnect. Bench (pending): with
-the RF2K-S following the band on the Core's TCI server, a remote window lists it.
+**Verification:** unit; tests first for the options and the disconnect, then vectors for the
+I/Q operations and the budget cases. Named tests, `tst_link_conformance_media`, surface,
+wording. Bench (pending): with the RF2K-S following the band on the Core's TCI server, a remote
+window lists it; on the G2 at the Rock, a TCI I/Q app (for example SDR-Console or CW Skimmer
+through TCI) in a remote window decodes from the Core's raw I/Q.
 
 **Execution note (advisory):** opus. After Task 19. Shares `MainWindow.cpp` and
 `StationServer.cpp`.
 
 - [ ] **Step 1:** The stream, the verbs, the options, tests.
-- [ ] **Step 2:** The applets, page, indicator, B8.4's minimum, fixtures, documents.
+- [ ] **Step 2:** The applets, page and indicator, fixtures, documents.
+- [ ] **Step 3:** Raw I/Q: the media operations, the Core's tap, the budget charge, the window's
+  TCI path, vectors, fixtures, documents.
 
 ## Task 24: Setup diagnostics and preferences
 
@@ -1453,9 +1532,610 @@ from unavailable features).
 
 **Verification:** `python3 scripts/render-link-tables.py --check`; no em dash.
 
-**Execution note (advisory):** sonnet (documentation). Last.
+**Execution note (advisory):** sonnet (documentation). After Task 33; Task 34 (the bench)
+follows it.
 
 - [ ] **Step 1:** Rewrite the rows, commit.
+
+## Task 27: The transmit display's skirt, found and fixed at its cause (row 15)
+
+**Requirements:** A11 (the pan while the Core transmits: the picture must be right before it
+is sent anywhere); R-R3-49; row 15 of `docs/architecture/tx-display-verification/README.md`
+(a skirt about 35 dB down 66 Hz from the peak with Blackman-Harris 4T selected, already in
+WDSP's raw `GetPixels` output, bench 2026-08-05). This runs in the local window first: both
+windows draw what this analyzer makes.
+
+**Source first** (Thetis v2.10.3.15 at `3759d096`; read each before comparing):
+- `Console/HPSDR/specHPSDR.cs:504-643` (`initAnalyzer`, the path Thetis uses for the transmit
+  panadapter): `CLIP_FRACTION` 0.04 (`:529`), overlap `ceil(fft_size - sample_rate /
+  frame_rate)` (`:532`), the zoom and pan span clips, `max_w` from `KEEP_TIME` 0.1
+  (`:487`, `:585`), and the `SetAnalyzer` call (`:624-643`); its fields `spur_eliminationtion_ffts`
+  1 (`:70`), `data_type` 1 (`:80`), `window_type` 4 (`:134`), `kaiser_pi` 14.0 (`:145`),
+  `stitches` 1 (`:206`), `frame_rate` 15 (`:335`), `_pixel_out` 2 (`:471`).
+- `Console/HPSDR/specHPSDR.cs:738-805` (`CalcSpectrum`: span clips by filter edges, `sclip` 0),
+  which Thetis uses for the transmit display only from `UpdateTXDisplayVars`
+  (`console.cs:8024-8059`) in the SPECTRUM, HISTOGRAM and SPECTRASCOPE modes; in PANADAPTER and
+  PANAFALL the transmit analyzer is set by `initAnalyzer` through `CalcTXDisplayFreq`
+  (`console.cs:7967-7971`). NereusSDR's `TxAnalyzer::applySetAnalyzer` follows `CalcSpectrum`
+  on the panadapter; the comparison says whether that matters.
+- `Console/radio.cs:2605-2624` (`BufferSize`: the transmit display's `BlockSize` is the TX DSP
+  buffer size and its `SampleRate` 96000), `console.cs:20197` (`FrameRate` = `wdspFps`),
+  `setup.cs:18149-18210` (the TX Display controls; FFT size `4096 * 2^slider` at `:18179`).
+- The tap: `wdsp/TXA.c:394-403` (`create_siphon`, size `dsp_size`, 16384 buffered), `:586`
+  (`xsiphon` after the ALC meter, before PureSignal's `xiqc`, the CFIR and the output
+  resampler), `:659` (`setSamplerate_siphon` at `dsp_rate`), `:733` (`setSize_siphon`
+  `dsp_size`); `Console/cmaster.cs:544-545` (`TXASetSipMode` 1, `TXASetSipDisplay` =
+  `cmaster.inid(1, 0)`); `ChannelMaster/cmaster.c:192-198` (`XCreateAnalyzer(in_id, &rc,
+  262144, 1, 1, "")`).
+If the cause turns out to sit inside WDSP's analyzer itself (Thetis's own argument set shows
+the same skirt on the same samples), stop with NEEDS_CONTEXT and the numbers: nothing in WDSP
+is changed without the operator.
+
+**Files:**
+- Modify: `src/core/TxAnalyzer.{h,cpp}` (the argument seam below; the fix if the cause is the
+  analyzer's set-up)
+- Modify, only where the comparison puts the cause: `src/gui/MainWindow.cpp` (the MOX edge's
+  block size, window or pixel count), `src/core/TxChannel.{h,cpp}` and
+  `src/core/TxWorkerThread.{h,cpp}` (block continuity or rate into the siphon),
+  `src/core/WdspEngine.cpp` (the siphon's mode, display and rate)
+- Modify: `docs/architecture/tx-display-verification/README.md` (row 15 and its section: the
+  cause, the fix, status "FIXED, bench re-check")
+- Test: `tests/tst_tx_analyzer_skirt.cpp` (new, labels `core REALTIME`: real WDSP, FFTW
+  planning), `tst_tx_analyzer_settings`, `tst_tx_display_window`
+
+**Interfaces:**
+- Produces `struct TxAnalyzerArgs` in `TxAnalyzer.h` (`nPixout`, `nFft`, `typ`, `sz`, `bfSz`,
+  `winType` (int), `pi` (double), `ovrlp`, `clp` (int), `fscLin`, `fscHin` (double), `nPix`,
+  `nStch`, `calset` (int), `fmin`, `fmax` (double), `maxW` (int), `sampleRateHz` (double)),
+  every value `SetAnalyzer` and `SetDisplaySampleRate` are handed, and
+  `TxAnalyzerArgs TxAnalyzer::currentArgs() const`, filled by the same code
+  `applySetAnalyzer` uses (one computation, read by the call and by the test).
+
+**Acceptance:**
+- **The comparison, in the report first:** a table of every `TxAnalyzerArgs` field with
+  NereusSDR's value at TUNE in LSB, TX filter 100 to 2900 Hz, on a 1200-pixel pan at the
+  default zoom, beside Thetis's value from the cites above for the same state (FFT size 32768
+  from slider 3, block size the TX DSP buffer, 96000 Hz, 15 frames a second, and the window
+  selected), each row marked same or different with the Thetis line. The tap row compares the
+  TX channel's siphon (position, `dsp_rate`, `dsp_size`, mode and display) with `TXA.c` and
+  `cmaster.cs`, read from NereusSDR's channel set-up, not assumed.
+- **Synthetic tone:** `tst_tx_analyzer_skirt` creates the analyzer at display 5 as
+  `cmaster.c:192-198` does, applies `currentArgs()` with window 1 (Blackman-Harris 4T), and
+  feeds a continuous complex tone at -600 Hz of amplitude 0.99999 (Thetis's `MAX_TONE_MAG`) in
+  blocks of the TX channel's `dspBlockFrames()` through `Spectrum0`, as the siphon does. The
+  pixel 66 Hz either side of the peak pixel is at least 90 dB below the peak, and so is every
+  pixel beyond it out to the window's edge.
+- **Through the TX channel:** the same test opens a real TX channel (the
+  `tst_dsp_control_transmit` pattern, no radio), runs the TUNE generator with the settings the
+  TUNE path gives it, and pumps blocks the way `TxWorkerThread` does; the same 90 dB holds, and
+  the test counts that every block reaches the siphon once, in order, with none skipped or
+  repeated.
+- Both cases fail before the fix when the cause is on NereusSDR's side (the report shows the
+  failing numbers), and pass after it. The fix changes only what the comparison marked
+  different or the continuity count caught; every other argument stays as it is.
+- Rows 1 to 8 of the matrix still hold in the unit tests that cover them
+  (`tst_tx_analyzer_settings`, `tst_tx_display_window`), and `bf_sz` still equals the TX
+  channel's `dsp_size`.
+
+**Verification:** a cause first, then the fix: the comparison table, then the two skirt cases
+red, then green. Build `NereusSDR`, `tst_tx_analyzer_skirt`, `tst_tx_analyzer_settings`,
+`tst_tx_display_window`; run each by exact name with `QT_QPA_PLATFORM=offscreen` and
+`--no-tests=error`. Bench (pending, the operator's): row 15 re-checked on the G2 in a local
+window, TUNE into a dummy load, Blackman-Harris 4T: the skirt at 66 Hz is at least 90 dB
+down, and an A/B screenshot against Thetis on the same radio and frequency agrees.
+
+**Execution note (advisory):** opus. Before Task 28 (the Core sends what this analyzer makes).
+Touches `MainWindow.cpp` only if the cause is there.
+
+- [ ] **Step 1:** The argument seam, the comparison table, the two skirt cases (red).
+- [ ] **Step 2:** The fix at the cause, the cases green, row 15 written up, commit.
+
+## Task 28: The Core sends the transmit display
+
+**Requirements:** A11 (the panadapter while the Core transmits); R-R3-49; R-R3-01 and R-R3-08
+(the display request and its grant); R-R3-37 (display bytes stay in the budget); R-IOS-13 (the
+keyed view on a remote device). Thetis shows the transmit analyzer, never the receiver, on
+the transmitting receiver's display while keyed and display duplex is off:
+`console.cs:24281-24338 [v2.10.3.15]` (DisplayThread, `if (bLocalMox && !_display_duplex)`
+then `GetPixels(cmaster.inid(1, 0), 0, ...)` for the trace and `GetPixels(cmaster.inid(1, 0),
+1, ...)` for the waterfall). While keyed, the transmit display follows XIT when duplex is off:
+`console.cs:22069-22150 [v2.10.3.15]` (`getLowHighForRXn`, "xit, only when txing", `if
+(chkXIT.Checked && !_display_duplex)`).
+
+**Files:**
+- Create: `src/core/TxDisplayFeed.{h,cpp}` (one owner of the TX analyzer's view, start and stop,
+  for every viewer)
+- Modify: `src/core/TxAnalyzer.{h,cpp}` (`clampViewToBaseband`), `src/models/RadioModel.{h,cpp}`
+  (`txDisplayFeed()`, made in `setTxAnalyzer`), `src/core/daemon/DaemonApp.cpp` (its MOX
+  start and stop move into the feed), `src/core/session/TransmitStateFacade.{h,cpp}` and
+  `src/core/session/MirrorPolicy.cpp` (`highSwr`, `swrWindBackLatched`)
+- Modify: `src/core/session/media/DaemonMediaController.{h,cpp}`,
+  `src/core/session/media/DaemonSpectrumSource.{h,cpp}` (the transmitting pan's endpoints take
+  their frames from the feed while keyed), `src/core/session/StationServer.cpp`
+  (`txDisplayVersion` 1), `src/gui/RemoteMediaController.{h,cpp}` (declares it at `start`,
+  sends `txMinDbm`/`txMaxDbm`, reads `transmit`, hands transmit frames on; drawing them is
+  Task 29)
+- Modify: `docs/architecture/2026-09-20-remote-media-control-v1.md` (a "Transmit display"
+  section after "Display subscriptions"), the link document (section 6.3's `txDisplayVersion`
+  note, section 18.8's `txState` table), `surface.json` (regen), the media vectors under
+  `tests/data/link/v1/media/` and the session fixtures, written from traces
+  (`NEREUS_LINK_TRACE_DIR` with the conformance runners)
+- Test: `tests/tst_tx_display_feed.cpp` (new), `tests/tst_remote_tx_display.cpp` (new),
+  `tst_remote_media_controller`, `tst_remote_spectrum_context`, `tst_link_conformance_media`,
+  `tst_link_conformance_session`
+
+**Interfaces:**
+- Produces `struct TxDisplayView { double carrierHz; int lowHz; int highHz; int pixels; }` and
+  `static TxDisplayView TxAnalyzer::clampViewToBaseband(double carrierHz, double centreHz,
+  double spanHz, int pixels)`: the view clamped inside the siphon's +/-48 kHz baseband, its edges
+  relative to the carrier and quantised to 100 Hz, a span under 1000 Hz left as the last good
+  one: the rule `MainWindow`'s `syncTxAnalyzerToView` applies today, moved here unchanged.
+- Produces `class TxDisplayFeed : public QObject` (owned by `RadioModel`,
+  `TxDisplayFeed* RadioModel::txDisplayFeed() const`, null without a TX analyzer):
+  - `int addViewer(double centreHz, double spanHz, int pixels, bool local)`,
+    `void updateViewer(int id, double centreHz, double spanHz, int pixels)`,
+    `void removeViewer(int id)`.
+  - The governing viewer sets the analyzer's view: the local viewer when there is one (a
+    desktop window running its own DSP, or one hosting a Core), otherwise the lowest id.
+    `TxDisplayView currentView() const`, `bool isGoverning(int id) const`.
+  - On the MOX rise (`MoxController::moxStateChanged`, any source) it sets the analyzer's
+    block size from `TxChannel::dspBlockFrames()`, the carrier from
+    `RadioModel::txFrequencyForSlice(txBoundSlice())`, the view and pixel count from the
+    governing viewer, and starts it; on the fall it stops it and clears the window (the
+    analyzer runs on every key, viewers or not, as `DaemonApp::createTxAnalyzer` does today).
+    While keyed it recomputes the carrier and view on every change of the transmit slice's
+    frequency, `xitEnabled` or `xitHz`, and on a viewer's update.
+  - Signals: `void viewChanged(const TxDisplayView& view)`, `void traceReady(const
+    QVector<float>& dbm)`, `void waterfallReady(const QVector<float>& dbm)` (the analyzer's
+    `txFftReady` and `txWaterfallReady`), `void keyedChanged(bool keyed)`.
+- Produces capability `txDisplayVersion` 1 (appended after the last entry of the minor-11
+  block; 0 below minor 11 and on a station with no TX analyzer). A window that sees it may add
+  `txDisplayVersion` (a whole number of at least 1) to its media `start`, as
+  `receiverAudioVersion`; only then:
+  - `subscribe` may carry `txMinDbm` and `txMaxDbm` (finite, `txMinDbm < txMaxDbm`, inside -400
+    to 100; the transmit quantisation window; absent, the endpoint's `minDbm`/`maxDbm`).
+  - Every `context` for that peer carries one more field, `transmit` (boolean).
+  - While the Core's radio is keyed, each endpoint of that peer whose slice is the transmit
+    slice or shares its pan on the Core (`panKey`) is a viewer of the feed: it is sent a new
+    context with `transmit` true, `sourceCentreHz` the carrier, `sampleRateHz` 96000,
+    `centreHz` and `spanHz` the feed's view (carrier plus `(lowHz + highHz) / 2`, `highHz -
+    lowHz`), `traceSamples` and `waterfallSamples` the view's pixels, `grantedFftSize` the
+    analyzer's FFT size, `fps` the analyzer's output rate, `minDbm`/`maxDbm` the transmit window,
+    and `limit` `shared` when it does not govern; then trace and waterfall frames from
+    `traceReady` and `waterfallReady`, encoded by `DisplayCodec` as receive frames are. No
+    receive frame is sent to that endpoint until the fall, which sends a context with
+    `transmit` false and resumes receive frames (the window asks a keyframe as after any
+    context).
+  - A later `subscribe` from that endpoint while keyed updates its viewer (a pan or zoom on the
+    transmitting pan moves the analyzer's view when it governs).
+  - Transmit frames are charged to the display budget exactly as receive frames of the same
+    size.
+- A peer that did not declare it gets exactly today's wire: no `transmit` field, and receive
+  frames while keyed.
+- Produces on `txState`, Outbound, under `txDisplayVersion` 1: `highSwr` and
+  `swrWindBackLatched` (bool), the values `RadioModel` hands the local window's
+  `setHighSwrOverlay` (`RadioModel.cpp:1537-1543`), for Task 29's high-SWR border.
+
+**Acceptance:**
+- **Rise:** a declaring window with a pan on the transmit slice; the Core keyed through its
+  `MoxController` against a test `TxChannel` (the Global Constraints' pattern). Within one frame
+  period the endpoint gets a context with `transmit` true, the carrier from
+  `txFrequencyForSlice` and the view clamped by `clampViewToBaseband`; the frames it gets decode
+  to the pixels the feed emitted (a test seam emits known pixels); no receive frame reaches that
+  endpoint between the rise and the fall (counted: 0).
+- **Fall:** a context with `transmit` false, then receive frames again, with the receive
+  centre, span and window the endpoint had before the rise.
+- **Other pans:** an endpoint on a pan without the transmit slice keeps receive frames through
+  the whole key.
+- **Row 16 (XIT, Core side):** changing XIT or the transmit slice's frequency while keyed
+  sends a renewed context with the new centre within one frame period, and the frames follow
+  it.
+- **Several viewers:** two endpoints on the transmitting pan asking different spans: the
+  lower id governs, the other's context says `limit` `shared` with the governing view; when the
+  governing one leaves, the other governs and its context says `none`. With a local viewer (a
+  desktop window hosting the Core), the local one governs.
+- **Baseband:** a requested view past +/-48 kHz from the carrier comes back clamped; a span
+  under 1000 Hz keeps the last good view.
+- **Older peers:** a peer that did not declare `txDisplayVersion` gets byte-for-byte today's
+  contexts and receive frames (a fixture from the trace proves it); a peer below minor 11 never
+  sees the capability; a Core without a TX analyzer sends 0.
+- **Refusals:** `txMinDbm` at or above `txMaxDbm`, or outside -400 to 100, is refused as a
+  request the Core cannot read, as the receive window is.
+- **Budget:** a keyed endpoint's bytes per second stay within its share; a lowered share
+  lowers the transmit frame rate as it does the receive one.
+
+**Verification:** a media wire change: vectors and fixtures first (from traces), then the
+feed. Build `NereusSDR`, `nereusd` and the named tests; run them by exact name, then
+`tst_link_conformance_media`, `tst_link_conformance_session`, `tst_link_surface_manifest`,
+`render-link-tables.py --check` and the wording sweep. Bench (pending): with Task 29, rows 19
+and 20 of the matrix.
+
+**Execution note (advisory):** opus. After Task 27. Shares `StationServer.cpp` and
+`RadioModel.cpp`.
+
+- [ ] **Step 1:** `clampViewToBaseband`, `TxDisplayFeed` and its tests; `DaemonApp` onto the
+  feed.
+- [ ] **Step 2:** The capability, the subscribe fields, the transmit context and frames, the
+  `txState` flags, the documents, vectors and fixtures.
+
+## Task 29: One MOX display controller for both windows
+
+**Requirements:** A11 (the transmit view in a remote window: the transmit spectrum and
+waterfall, the red border, the TX filter overlay, the high-SWR border, the waterfall stop and
+the transmitting pan's tuning while keyed); R-R3-49 (parity both ways); R-R3-12 (the GUI keeps
+its TX pause and palette); row 16 of the verification matrix (XIT while keyed). Thetis
+(v2.10.3.15): the waterfall's own transmit levels, colour scheme and low colour while keyed
+(`display.cs:6420-6427`, `TXWFAmpMin` -70 and `TXWFAmpMax` 30 at `display.cs:1917-1937`); the
+MOX edge caches the waterfall minimum and purges buffers (`display.cs:1575-1597`); the transmit
+grid while keyed (`SpectrumGridMaxMoxModified`, `display.cs:1782-1790`); XIT while keyed
+(`console.cs:22069-22150`, `getLowHighForRXn`).
+
+**Files:**
+- Create: `src/gui/MoxDisplayController.{h,cpp}`, `src/gui/TxDisplaySource.{h,cpp}` (the
+  interface and its local and remote sources)
+- Modify: `src/gui/MainWindow.{h,cpp}` (the MOX lambda at `:5185-5620` becomes a call into the
+  controller; `dispatchFftFrameToPans`' suppression reads the controller's pan),
+  `src/gui/RemoteMediaController.{h,cpp}` (the transmit frames and context to the remote
+  source; the receive frames of the transmitting pan held while keyed),
+  `src/gui/SpectrumWidget.{h,cpp}` (only what the remote source needs to feed the existing
+  `updateSpectrumFromTxPixels` and `pushTxWaterfallRow`)
+- Test: `tests/tst_mox_display_controller.cpp` (new), `tst_spectrum_widget_mox_overlay`,
+  `tst_tx_display_window`, `tst_remote_spectrum_render`
+
+**Interfaces:**
+- Produces `class ITxDisplaySource` with `virtual void beginTransmitView(SpectrumWidget* pan,
+  double carrierHz) = 0`, `virtual void requestView(double centreHz, double spanHz, int
+  pixels) = 0`, `virtual void endTransmitView(SpectrumWidget* pan) = 0`,
+  `virtual bool available() const = 0`; `class LocalTxDisplaySource` (a viewer of
+  `RadioModel::txDisplayFeed()`, `local` true, its trace and waterfall into the pan) and
+  `class RemoteTxDisplaySource` (the pan's endpoint in `RemoteMediaController`: re-subscribes
+  with the view and the transmit window, draws the transmit frames; `available()` is the
+  Core's `txDisplayVersion` of at least 1).
+- Produces `class MoxDisplayController : public QObject`:
+  - `MoxDisplayController(PanadapterStack* pans, RadioModel* model, QObject* parent)`,
+    `void setSource(ITxDisplaySource* source)`.
+  - `void setKeyed(bool keyed, int txSliceId)`: the rise and fall. A local window calls it
+    from `MoxController::moxStateChanged` with `txBoundSlice()`; a remote window from the
+    mirrored `txState`'s `keyed` and `txSliceId` (`TransmitState::stateChanged`), or, on a
+    Core that sends no `txState` to it, from `radio.transmitting` and the slice whose
+    `txSlice` is true.
+  - `QString transmitPanId() const` (empty unless keyed), `void carrierChanged(double
+    carrierHz)` (row 16's live path, from the feed's `viewChanged` locally and the transmit
+    context remotely).
+  - On the rise, on the pan hosting the transmit slice (never the active pan, never a
+    fallback): `setMoxOverlay(true)` (red border, TX grid, TX palette and TX waterfall levels),
+    the saved receive rate and DDC centre, the view moved to the carrier, Clarity paused,
+    `setTxExternalWaterfall(true)`, waterfall AGC reset and averaging cleared, then
+    `source->beginTransmitView`; the view-window signal (`txViewWindowChanged`) goes to
+    `source->requestView`. The fall undoes each of them, on the pan recorded at the rise.
+  - The high-SWR border on the transmitting pan follows `txState`'s `highSwr` and
+    `swrWindBackLatched` in a remote window, as `RadioModel` drives it locally.
+- User-visible string: "This Core does not send its transmit display. Updating the Core may
+  help." (the transmitting pan's status line in a remote window on a Core below
+  `txDisplayVersion` 1).
+
+**Acceptance:**
+- **The local window unchanged:** every existing TX display test passes, and a new test
+  drives `setKeyed` in a local window and checks the same widget calls, in the same order, as
+  the old lambda made (a recorded list), on the pan hosting the transmit slice.
+- **Remote rise:** in a remote window on a Core at `txDisplayVersion` 1, `txState.keyed`
+  going true for the slice on pan 2 puts the red border, TX grid, TX palette and TX waterfall
+  levels (-70 to 30 by default) on pan 2 only, and pan 2 draws the transmit frames at the
+  context's centre and span; pan 1 keeps drawing its receive frames.
+- **Remote fall:** `keyed` false restores pan 2's receive grid, palette, levels, rate and
+  centre exactly (the values before the rise), and receive frames draw again.
+- **Older Core:** on a Core below version 1 the transmitting pan still takes the red border
+  and TX grid, draws no receive frame while keyed (its trace and waterfall hold), and shows
+  "This Core does not send its transmit display. Updating the Core may help."; the full-width
+  band of receiver leakage never reaches the waterfall.
+- **Row 16 (XIT while keyed), both windows:** changing XIT or its offset while keyed moves
+  the trace, the TX filter overlay and the view to the new carrier within one frame period
+  (locally from the feed, remotely from the renewed context); un-keying restores as before.
+- **Tuning while keyed:** a click, wheel or spot click on the transmitting pan while keyed does
+  in a remote window what it does in a local window while keyed (one test drives both).
+- **High SWR:** `txState.highSwr` true with `swrWindBackLatched` true shows the high-SWR border
+  with fold-back on the transmitting pan of a remote window, as a local window shows it.
+- **Layout change while keyed (row 14):** changing the pan layout while keyed, then un-keying,
+  leaves no pan showing transmit, in either window.
+
+**Verification:** tests first for the recorded local sequence (it must match before the lambda
+moves), then the remote cases. Build `NereusSDR` and the named tests; run by exact name.
+Bench (pending): matrix rows 19, 20, 21 and 22.
+
+**Execution note (advisory):** opus. After Task 28. Touches `MainWindow.cpp`.
+
+- [ ] **Step 1:** The recorded-sequence test, the controller and the local source; the lambda
+  moves.
+- [ ] **Step 2:** The remote source, the older-Core case, row 16 in both windows, high SWR,
+  commit.
+
+## Task 30: Setup > Display > TX Display from a remote window
+
+**Requirements:** A12 (Setup > Display > TX Display); R-R3-49; R-R3-21; R-R3-10 (a local
+window keeps its own analyzer). Thetis: the TX Display controls set the transmit display's
+analyzer at once (`setup.cs:18149-18210 [v2.10.3.15]`), keyed or not; the matrix's row 6
+checks that live.
+
+**Files:**
+- Modify: `src/gui/setup/DisplaySetupPages.{h,cpp}` (`TxDisplayPage`: in a remote window its
+  nine analyzer controls write the Core's keys and show the Core's values),
+  `src/gui/SetupDialog.cpp`, `src/core/session/StationServer.cpp` (the nine keys accepted from a
+  window on a receive-only Core, `txDisplayVersion` 2), `src/models/RadioModel.{h,cpp}`
+  (`applyRemoteTxDisplaySetting`), `src/core/TxAnalyzer.{h,cpp}` (`reloadSetting`)
+- Modify: the link document (section 6.3's `txDisplayVersion` note; section 8's settings
+  sentence for the nine keys), `surface.json` (regen), fixtures
+- Test: `tests/tst_remote_tx_display_settings.cpp` (new), `tst_tx_analyzer_settings`
+
+**Interfaces:**
+- The nine Station-scoped keys (`SettingsScope.cpp:469-477`): `DisplayTxFftSize`,
+  `DisplayTxWindowType`, `DisplayTxPanDetector`, `DisplayTxPanAveraging`,
+  `DisplayTxPanAvTimeMs`, `DisplayTxPanNormalize`, `DisplayTxWfDetector`,
+  `DisplayTxWfAveraging`, `DisplayTxWfAvTimeMs`.
+- Produces `void RadioModel::applyRemoteTxDisplaySetting(const QString& key)` and
+  `void TxAnalyzer::reloadSetting(const QString& key)`: the Core, on a window's
+  `settings.write` of one of the nine, applies it to its analyzer through the setter the local
+  page calls (`setFftSize`, `setWindowType` and the rest), at once, keyed or not.
+- Produces `txDisplayVersion` 2 (a revision: the Core applies the nine live). The
+  on-the-air rule does not apply to these nine writes (Q4 below, its recommendation taken):
+  they change only the Core's display analyzer, never the radio, and a local window changes
+  them mid-transmission (row 6).
+- The page's other groups (the TX waterfall levels, palette, low colour and gradient, the TX
+  grid) stay this window's own: Window-scoped, drawn by this window.
+- User-visible string: "This Core does not apply transmit display settings from this app.
+  Updating the Core may help." (the nine controls on a Core below version 2).
+
+**Acceptance:**
+- **Remote:** each of the nine controls in a remote window shows the Core's value, and a
+  change reaches the Core's `TxAnalyzer` at once (a test reads the analyzer's own getter and
+  `analyzerConfigCount()`, not the settings file), on a receive-only Core too; a second window
+  sees the new value.
+- **On the air:** a change while the Core is keyed is applied (the Window change of row 6
+  works remotely), and nothing reaches the radio.
+- **Older Core:** below version 2 the nine are disabled with the reason above; the Window-scoped
+  groups still work.
+- **Local:** a local window drives its own analyzer exactly as today; a desktop window hosting
+  a Core shows a remote window's change on its own transmit display (one analyzer).
+- The bin-width readout uses the Core's FFT size and 96000 Hz.
+
+**Verification:** tests first for the live apply and the older-Core case. Named tests,
+`tst_link_conformance_session`, `tst_link_surface_manifest`, wording. Bench (pending): matrix
+row 23.
+
+**Execution note (advisory):** opus. After Task 29. Shares `StationServer.cpp` and
+`RadioModel.cpp`.
+
+- [ ] **Step 1:** Tests, `reloadSetting`, the Core's live apply, the version, the page,
+  documents, fixtures.
+
+## Task 31: DUP (display duplex) in both windows
+
+**Requirements:** A11; R-R3-49 (parity both ways). Thetis v2.10.3.15:
+- `console.cs:15390-15395` (`_display_duplex`, false by default); `console.cs:37555-37575`
+  (`chkRX2SR_CheckedChanged`, "chkRX2SR is the DUPlex button"), saved with the console's
+  check boxes (`console.cs:3278-3288`, `addControlState`); the container's `DUP` button
+  (`ucOtherButtonsOptionsGrid.cs:540`, "Duplex mode, view the tx rx").
+- `console.cs:24281-24338` (DisplayThread): with DUP on, the receiver stays on the display
+  while keyed.
+- While keyed with DUP on: the transmit grid (`display.cs:1782-1790`, `localMox` does not read
+  DUP) and the transmit waterfall levels, colours and low colour (`display.cs:6420-6427`) still
+  apply; the TX filter is drawn against the receive span (`display.cs:4564-4594`,
+  `getFilterXPositions`); the receive trace's calibration adds the receive calibration and the
+  transmit attenuator offset to the transmit calibration (`display.cs:4820-4850`, `RX1Offset`,
+  with its tags `//[2.10.1.0] MW0LGE fix issue #137` and `//[2.10.3.6]MW0LGE att_fix // change fixes #482`, kept verbatim in the port); XIT does not
+  move the display (`console.cs:22144`); noise blanking is turned off while keyed and restored
+  after (`console.cs:29179`, `:29213`); changing DUP while keyed resets blob maxima and spectrum
+  peaks (`display.cs:514-521`); the IMD overlay needs DUP (`display.cs` `_show_imd_measurements
+  && displayduplex`, already at `SpectrumWidget.cpp:3945`).
+- DUP acts on the first receiver only (`display.cs:4619-4629`, `isRxDuplex`): here, the pan
+  hosting the transmit slice.
+
+**Files:**
+- Modify: `src/gui/MoxDisplayController.{h,cpp}` (with DUP on, no transmit view: the overlay
+  only), `src/gui/SpectrumWidget.{h,cpp}` (`setDisplayDuplex` default false; the filter span and
+  calibration rules above), `src/gui/MainWindow.{h,cpp}` (the View menu item, the setting),
+  `src/gui/meters/OtherButtonItem.cpp` and `src/gui/containers/ContainerButtonDispatcher.cpp`
+  (the DUP button), `src/gui/UnbuiltFeatures.{h,cpp}` (the DUP button leaves `Fdx`; the status
+  bar's FDX, which names full duplex, stays hidden as unbuilt), `src/models/RadioModel.{h,cpp}`
+  (noise blanking off while keyed with DUP on, local and on the Core)
+- Modify: `src/core/TxDisplayFeed.cpp`, `src/core/session/media/DaemonMediaController.cpp`
+  (the `duplex` field), `src/core/session/StationServer.cpp` (`txDisplayVersion` 3),
+  `src/gui/RemoteMediaController.cpp`
+- Modify: the media control document's "Transmit display" section, the link document,
+  `surface.json` (regen), vectors and fixtures
+- Test: `tests/tst_display_duplex.cpp` (new), `tst_mox_display_controller`,
+  `tst_remote_tx_display`, `tst_unbuilt_features`, `tst_spectrum_widget_mox_overlay`
+
+**Interfaces:**
+- Produces the Window-scoped setting `DisplayDuplex` ("True"/"False", default "False" as
+  Thetis), `bool MoxDisplayController::displayDuplex() const` and
+  `void setDisplayDuplex(bool on)`; `void displayDuplexChanged(bool on)`.
+- Controls: the container `DUP` button (built), and View > "Show receiver while transmitting
+  (DUP)", checkable; both follow the one setting.
+- Produces `txDisplayVersion` 3: `subscribe` may carry `duplex` (boolean, absent false). While
+  keyed, an endpoint with `duplex` true is not a viewer of the feed and keeps receive frames;
+  its contexts say `transmit` false.
+- With DUP on while keyed, noise blanking on the transmit slice is off and restored at the
+  fall, on the Core for a remote holder, as `console.cs:29179` and `:29213` do.
+- User-visible string: "This Core does not show the receiver while transmitting for this
+  app. Updating the Core may help." (DUP's controls in a remote window below version 3,
+  disabled).
+
+**Acceptance:**
+- **DUP off (default):** the transmitting pan shows the transmit display, as after Task 29.
+- **DUP on, local and remote:** keyed, the transmitting pan keeps the receiver's trace and
+  waterfall, with the red border, the transmit grid and the transmit waterfall levels; the TX
+  filter overlay sits against the receive span; XIT does not move the view; the IMD overlay
+  shows during two-tone only with DUP on.
+- **Calibration:** with DUP on and keyed, the receive trace is offset by the transmit
+  calibration plus the receive calibration plus the transmit attenuator offset (a test with
+  known offsets).
+- **Noise blanking:** NB on before the key is off while keyed with DUP on and back on after;
+  with DUP off it is untouched.
+- **Mid-key change:** toggling DUP while keyed switches the pan between the two views within
+  one frame period and resets blob maxima and spectrum peaks.
+- **Older Core:** below version 3, DUP's controls in a remote window are disabled with the
+  reason above and the pan behaves as DUP off.
+- The FDX status-bar label stays hidden (`tst_unbuilt_features`); the DUP button is visible
+  and works.
+- The setting survives a restart of the window.
+
+**Verification:** tests first for the calibration and noise blanking rules. Named tests, the
+media runner, surface, wording. Bench (pending): matrix row 24.
+
+**Execution note (advisory):** opus. After Task 30. Shares all three big files.
+
+- [ ] **Step 1:** The setting, the controller branch, the widget rules, the button and menu,
+  tests.
+- [ ] **Step 2:** The `duplex` field, the version, NB on the Core, documents, fixtures.
+
+## Task 32: The transmit monitor to the device that holds transmit
+
+**Requirements:** R-IOS-13 (the iPhone plan's Task 36: with MON on, the audio sent to the
+remote device carries the transmit monitor while keyed); R-R3-49; parity both ways (MON works
+from any window as it does locally). The iPhone plan's Part F lists it as not yet on the link.
+Thetis: `console.cs:29040-29066 [v2.10.3.15]` (`chkMON_CheckedChanged`) and
+`audio.cs:407-424 [v2.10.3.15]` (`Audio.MON`: `SetAAudioMixWhat` for the transmitter's stream,
+at `SetAAudioMixVol` 0.5).
+
+**Files:**
+- Modify: `src/core/AudioEngine.{h,cpp}` (the TX monitor block, as `txMonitorBlockReady`
+  scales it, offered to the Core's media sender), `src/core/session/media/DaemonAudioSender.{h,cpp}`
+  and `src/core/session/media/DaemonMediaController.{h,cpp}` (the holder's chosen stream),
+  `src/core/session/StationServer.cpp` (`txMonitorAudioVersion` 1)
+- Modify: `src/gui/RemoteMediaController.{h,cpp}` (declares it, sends `monitor-audio`),
+  `src/gui/MainWindow.cpp` (the MON output choice pushed on change and at start),
+  `src/gui/applets/TxApplet.cpp` (MON SPEAKERS/PHONES in a remote window)
+- Modify: the media control document (a "Transmit monitor (monitor-audio)" section), the link
+  document (section 6.3), `surface.json` (regen), vectors and fixtures
+- Test: `tests/tst_remote_tx_monitor.cpp` (new), `tst_remote_audio_session`,
+  `tst_link_conformance_media`
+
+**Interfaces:**
+- Produces capability `txMonitorAudioVersion` 1 (appended after the last minor-11 entry; 0
+  without media). A window that sees it may add `txMonitorAudioVersion` to its media `start`.
+- Produces GUI-to-Core media operation `monitor-audio` with exactly `op`, `connectionId`,
+  `revision` (nonzero uint32, rising) and `route` (`speakers`, `headphones` or `none`),
+  answered by one `monitor-audio-context` with `op`, `connectionId`, `revision` and `route` as
+  applied.
+- The Core: while its radio is keyed, `monEnabled` is true and this device holds transmit
+  (`txState`'s `holderDeviceId` is this session's device), it adds the TX monitor, at
+  `monitorVolume`, to this device's main stream (`speakers`) or its headphones stream
+  (`headphones`, when it declared `headphonesMixVersion`, else its main stream); `none` sends
+  it nowhere. No other device's stream carries it.
+- The desktop sends its MON output choice (`audio/TxMonitor/Output`) as `route`; the phone's
+  rule (MON in headphones only) is its own (see "Plan text to change").
+- User-visible string: "This Core does not send the transmit monitor. Updating the Core may
+  help." (MON SPEAKERS/PHONES in a remote window below version 1; MON itself still turns on the
+  Core's monitor, Task 2).
+
+**Acceptance:**
+- With MON on and a test tone through the Core's TX chain, the keyed holder's main stream
+  carries it at `monitorVolume` within 1 dB; with `route` `headphones` it moves to the
+  headphones stream; MON off, or `route` `none`, carries nothing.
+- A second device on the Core, not holding transmit, receives no monitor audio.
+- A peer that did not declare the capability gets today's wire (fixture).
+- Un-keying ends the monitor audio within one audio frame.
+- A local window's MON is unchanged.
+
+**Verification:** tests first (holder only, route, levels). Named tests, the media runner,
+surface, wording. Bench (pending): matrix row 25.
+
+**Execution note (advisory):** opus. After Task 31. Shares `MainWindow.cpp` and
+`StationServer.cpp`.
+
+- [ ] **Step 1:** The Core's tap and route, the operation, tests.
+- [ ] **Step 2:** The window's choice and applet, documents, fixtures.
+
+## Task 33: The CFC bar chart and PA Values' transmit readings in a remote window
+
+**Requirements:** R-R3-49; R-R3-32 (a reading names its source); R-IOS-13 (the keyed view);
+the iPhone plan's Part F, which lists both as not yet on the link. Thetis:
+`frmCFCConfig.cs:393-447 [v2.10.3.15]` (`timerTick`: `GetTXACFCOMPDisplayCompression` every
+50 ms while the form is visible, `binsPerHz` over 48000 Hz). The PA readings and their scaling
+are the ones `PaValuesPage` already uses (`PaTelemetryScaling`, citing Thetis
+`console.cs` `computeAlexFwdPower`); the Core sends the raw values, never a new formula.
+
+**Files:**
+- Modify: `src/core/session/TransmitStateFacade.{h,cpp}` and `src/core/session/MirrorPolicy.cpp`
+  (`forwardAdcRaw`, `reflectedAdcRaw`), `src/core/session/StationServer.{h,cpp}`
+  (`txReadingsVersion` 1; the `txCfcCompression` record stream in `setUpRecordStreams`),
+  `src/models/RadioModel.cpp` (the Core fills them from its `RadioConnection::paTelemetryUpdated`
+  and `TxChannel::getCfcDisplayCompression`)
+- Modify: `src/gui/applets/TxCfcDialog.{h,cpp}` (in a remote window the bar chart reads the
+  stream while open), `src/gui/setup/PaSetupPages.cpp` (`PaValuesPage` in a remote window)
+- Modify: the link document (section 6.3, section 7.7's stream table, section 18.8's
+  `txState`), `surface.json` (regen), fixtures
+- Test: `tests/tst_remote_tx_readings.cpp` (new), `tst_remote_pa_pages`, `tst_pa_values_page`
+
+**Interfaces:**
+- Produces capability `txReadingsVersion` 1, sent right after `txStateVersion` and only with
+  it.
+- Produces on `txState`, Outbound, under version 1: `forwardAdcRaw`, `reflectedAdcRaw` (i64,
+  the radio's raw forward and reflected power readings, refreshed with the other `txState`
+  meters, keyed or not).
+- Produces the record stream `txCfcCompression` (capacity 1, one record, `id` "0"):
+  `atMs` (number) and `binsDbTenths` (string: the 1025 values of
+  `TxChannel::kCfcDisplayBinCount`, each rounded to a tenth of a dB, as little-endian int16
+  in base64). The Core reads `getCfcDisplayCompression` every 50 ms (Thetis's interval) only
+  while at least one peer subscribes and its radio is keyed with CFC on, and publishes a new
+  record when WDSP says new data is ready.
+- In a remote window, PA Values' forward (raw) power, forward and reflected RF voltage and the
+  forward and reflected ADC readings come from `forwardAdcRaw` and `reflectedAdcRaw` through
+  the same scaling the local page uses, with the Core's `hpsdrModel`; forward power,
+  reflected power and SWR from `txState`; ADC overload from the mirrored step attenuator's
+  `overloadAdc0` and `overloadAdc1`. Each says it is the Core's (R-R3-32).
+- User-visible string: "This Core does not send this reading. Updating the Core may help."
+  (below version 1, replacing "The Core sends this reading when this window can transmit.").
+
+**Acceptance:**
+- With the Core keyed and CFC on, the remote CFC dialog's bar chart draws the same bars as
+  the Core's own values over the same frequency range (a test compares against the Core's
+  `getCfcDisplayCompression` output); closing the dialog unsubscribes, and the Core stops
+  reading.
+- PA Values in a remote window shows the Core's readings, with the local page's peak and
+  minimum tracking, and each value matches the local page's scaling of the same raw inputs
+  (one test feeds both).
+- Below version 1, each of those readings shows unavailable with the reason above; never 0.
+- The eight container meter bindings Task 39 names (`remoteTxBindingsNotSent`) are unchanged
+  here (A9 stays with the iPhone plan's Task 39).
+
+**Verification:** tests first for the stream and the scaling match. Named tests,
+`tst_link_conformance_session`, surface, wording. Bench (pending): matrix row 26.
+
+**Execution note (advisory):** opus. After Task 32. Shares `StationServer.cpp` and
+`RadioModel.cpp`.
+
+- [ ] **Step 1:** Tests, the properties, the stream, the version.
+- [ ] **Step 2:** The dialog and the page, documents, fixtures.
+
+## Task 34: Bench the transmit display and keyed view, then land them
+
+**Requirements:** A11, A12; R-R3-49; the verification matrix
+(`docs/architecture/tx-display-verification/README.md`, rows 9 to 27). The trunk's transmit
+display (PR #317, merged into the trunk 2026-09-20) is not on `main`; it lands with this
+work, once benched.
+
+**Files:** `docs/architecture/tx-display-verification/README.md` (statuses, the operator's
+dates and notes), `docs/architecture/2026-09-20-remote-daemon-r3-verification/remote-controls.md`
+(the rows these tasks changed).
+
+**Acceptance:**
+- The controller deploys the Core to the Pi 4 (the HL2) and the Rock (the G2) and relaunches
+  the window, and the operator runs rows 9 to 18 in a local window and rows 19 to 27 in a
+  remote window, on both radios where the row names no radio class. Rows 11 (ORION class) and
+  13 (HERMES class with PureSignal) run on the radio class they name, or stay pending with that
+  reason.
+- Each row's status is his: PASS with the date, or FAIL with his words, which become a fix
+  task in this plan before landing.
+- When every row he can run has passed, the controller drafts the pull request that takes the
+  transmit display to `main` and waits for his go before posting it.
+
+**Verification:** the operator's bench; nothing here is verified until he says so.
+
+**Execution note (advisory):** the controller and the operator. Last.
+
+- [ ] **Step 1:** Deploy, relaunch, hand the operator the rows.
+- [ ] **Step 2:** Record his results; fix tasks for any FAIL; the landing pull request draft.
 
 ---
 
@@ -1500,7 +2180,7 @@ Every B row and its home. A row split across tasks names each part.
 | B7.1, B7.2 | 19 |
 | B7.3, B7.4 | 20 |
 | B8.1, B8.2, B8.3 | 23 |
-| B8.4 | 23 (the minimum) and question Q2 |
+| B8.4 | 23 (raw I/Q from the Core; Q2 decided) |
 
 In passing: the Advanced navigation targets (8); the Pan Layout and +PAN limit, Grid Lines,
 the Display flyout and Clarity badge per pan, spot left-click (18); PA Voltage, the HW Volts,
@@ -1510,10 +2190,16 @@ Send IQ to VAX (24); the PA trip and TX Inhibit badges, PBSNR, `FilterDisplayIte
 Multimeter Averaging window, General > Options' four settings, TX Grid Scale (25); RADE
 end-of-over decodes (question Q3).
 
+The transmit display and keyed view: row 15's skirt (27); the Core's transmit display, A11
+(28, 29); Setup > Display > TX Display, A12 (30); display duplex (31); the transmit monitor
+(32); the CFC bar chart and PA Values' transmit readings (33); matrix rows 9 to 27 and the
+landing on `main` (34); a remote window's TCI raw I/Q (23).
+
 ## The A rows
 
 Each stays with remote transmit; the task that covers it is in the iPhone plan
-(`codex/lane-b`, `docs/architecture/2026-09-23-iphone-app-plan.md`), Part F and Part G.
+(`codex/lane-b`, `docs/architecture/2026-09-23-iphone-app-plan.md`), Part F and Part G,
+except A11 and A12, which show what the Core does while on the air and are built here.
 
 | Row | Covered by |
 | --- | --- |
@@ -1527,8 +2213,8 @@ Each stays with remote transmit; the task that covers it is in the iPhone plan
 | A8 PA auto-calibrate sweep | Task 35 (`tx.tune`), once its text names it (see below) |
 | A9 transmit readouts | Task 39, once its text adds the compression and ALC gain readings and the Radio Status page (see below) |
 | A10 AM Mod Monitor applet | Task 39, once its text names it (see below) |
-| A11 the panadapter while the Core transmits | Part F, once Task 39's text adds it (see below) |
-| A12 Setup > Display > TX Display | Part F, once Task 39's text adds it (see below) |
+| A11 the panadapter while the Core transmits | This plan: Tasks 27, 28, 29 and 31, benched in Task 34 |
+| A12 Setup > Display > TX Display | This plan: Task 30 |
 | A13 TCI transmit from apps | Tasks 35, 36 and 39; D58 |
 
 ## Plan text to change
@@ -1574,11 +2260,30 @@ For the controller, in the plans named; nothing here is a task of this plan.
 - **iPhone plan Task 35:** its `tx.tune` names the PA auto-calibrate sweep (A8) as a consumer.
 - **iPhone plan Task 39:** `txState` gains the compression and ALC gain readings (A9), and
   its desktop half names Setup > Diagnostics > Radio Status's Forward, Reflected, SWR, PTT
-  source and Mode (A9), the AM Mod Monitor applet (A10), the remote panadapter's transmit view
-  (TX spectrum and waterfall, the red border, the TX filter and IMD overlays, the High-SWR
-  border, the tune guard, the waterfall stop, and blocking click, wheel and spot tuning while
-  the Core is keyed; A11) and Setup > Display > TX Display (A12, which needs the Core's TX
-  analyzer that Task 32 moves).
+  source and Mode (A9) and the AM Mod Monitor applet (A10). The remote panadapter's transmit
+  view (A11) and Setup > Display > TX Display (A12) are built by this plan's Tasks 27 to 31
+  instead; Task 39 and Task 78 drop them. `txState` gains `highSwr` and `swrWindBackLatched`
+  (Task 28), `forwardAdcRaw` and `reflectedAdcRaw` (Task 33), which its section 18.8 table
+  should list.
+- **iPhone plan Part F's "Part F gains" list** (lane B, after Task 40): its four items now have
+  owners here. 1, a remote window's TCI raw I/Q: Task 23 (`remoteIqVersion` 1). 2, the TX
+  monitor to a remote holder: Task 32 (`txMonitorAudioVersion` 1, `monitor-audio`). 3, a remote
+  pan showing the transmit spectrum while keyed: Tasks 28 and 29 (`txDisplayVersion`). 4, the
+  CFC bar chart and PA Values' transmit readings: Task 33 (`txReadingsVersion` 1,
+  `txCfcCompression`). The list should say so.
+- **iPhone plan Task 54 (the keyed view):** the phone may declare `txDisplayVersion` at its
+  media `start` and then draws the transmit frames on its pan while the Core is keyed, with its
+  own orange TX filter; without declaring it keeps today's receive frames (Task 28's older-peer
+  rule). It may send `duplex` (version 3) if it offers the choice.
+- **iPhone plan Task 36 (the monitor):** its sentence "with MON on, the station's audio sent to
+  the remote device carries the transmit monitor while keyed" is built by this plan's Task 32.
+  The phone declares `txMonitorAudioVersion` and sends `monitor-audio` with `route`
+  `headphones` while its output is headphones and `none` otherwise (its rule: MON in
+  headphones only).
+- **R-R3-42** (the R3 plan's requirement table): "transmit and raw I/Q are refused in plain
+  words until remote transmit" becomes "transmit is refused in plain words until remote
+  transmit; raw I/Q comes from the Core, charged to the window's display share (the operator's
+  decision of 2026-09-24; this plan's Task 23)".
 - **The accessory control document** ("What waits for remote transmit" and "Switching the
   Tuner Genius"): Tasks 8 to 10 rewrite them as they land; the Core-owned accessories plan
   (`2026-09-23-r3-core-owned-accessories-plan.md:60-62`) and the document's own
@@ -1615,6 +2320,9 @@ transmit, so the sweep's "should work now" meets an approved requirement.
 Recommendation: (b) for now, because the link has no raw I/Q stream and one receiver's I/Q at
 192 kHz is several times today's per-window budget on the Rock and Pi 4 (R-R3-37); but it is
 your rule that gaps become scope, so if you choose (a) it becomes Task 27 of this plan.
+**Decided (2026-09-24):** raw I/Q joins remote transmit's scope (Part F), with its bandwidth
+charged to that window's display share. Remote transmit now exists, so Task 23 builds it
+(`remoteIqVersion` 1); no Task 27 is added for it.
 
 **Q3 (passing). RADE end-of-over decodes never reach `RxDecodeModel`.** End-of-over callsigns
 are not decoded on receive or sent on transmit at all today.
@@ -1702,6 +2410,26 @@ the Core.
 Recommendation: (a): they fake local events the Core never had, and R-R3-49 prefers hidden to
 greyed-and-inert.
 
+**Q4 (Task 30). Setup > Display > TX Display's analyzer settings while the radio is on the air,
+from a remote window.** The Global Constraints refuse every write this plan adds while the
+Core is on the air.
+- (a) Exempt these nine keys, as ruling M4 exempts `records.*` and `spots.*`: they change only
+  the Core's display analyzer and never reach the radio, and a local window changes them
+  mid-transmission (matrix row 6).
+- (b) Refuse them while on the air, like every other setting.
+Recommendation: (a). Parity both ways: with (b) a remote window could not do what row 6 checks
+a local one does, and the only time the analyzer draws is while on the air.
+
+**Q5 (Task 31). DUP's default and where its control lives.**
+- (a) Default off, as Thetis (`console.cs:15390`); the control is the container DUP button plus
+  View > "Show receiver while transmitting (DUP)".
+- (b) Default on, keeping today's IMD overlay behaviour (`SpectrumWidget` starts with duplex
+  true), with the same two controls.
+Recommendation: (a). The transmit display is what DUP off shows, and it is the view this work
+exists to deliver; Thetis starts there. Caveat: with (a) the PureSignal two-tone IMD overlay
+appears only with DUP on, as in Thetis, which changes what a local window shows today; the
+View menu item is new UI for your review.
+
 ## Controller rulings on the questions (2026-09-24)
 
 The operator's standing rule, that a remote window does everything a local window does, and
@@ -1721,4 +2449,7 @@ settle these. Each takes its recommendation. He may overrule any of them.
 - **Q1:** yes. Settings import and export in a remote window carry both computers' settings, and
   the Core applies its part through a radio reconnect.
 
-Q2 (TCI raw I/Q) and Q3 (RADE end-of-over callsigns) go to the operator, one at a time.
+Q2 (TCI raw I/Q) was decided by the operator on 2026-09-24 (above) and is planned in Task 23.
+Q3 (RADE end-of-over callsigns), Q4 and Q5 go to the operator, one at a time; Tasks 30 and 31
+are written to their recommendations, and the controller confirms each before dispatching
+that task.
