@@ -144,6 +144,10 @@
 //                profiles and PA table reloaded in the window as their keys
 //                arrive. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-25 - R-R3-21, R-IOS-27: the window's NotchModel is told the
+//                Core's notchControlVersion, so its +TNF sends
+//                notch.addAtSlice to a version 2 Core. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -1976,6 +1980,9 @@ void StationClient::handleCapabilities(const SessionMessage& message)
             && m_capabilities.notchControlVersion >= 1;
         if (mirrored) {
             notches->setMirrorMode(true);
+            // R-R3-21, R-IOS-27: version 2 lets the window's +TNF send
+            // notch.addAtSlice (RadioModel::addTnfForSlice).
+            notches->setRemoteControlVersion(m_capabilities.notchControlVersion);
             notches->setRemoteRequestHandler(
                 [self](const QByteArray& verb, const QVariantMap& arguments) -> quint32 {
                 if (!self || !self->remoteNotchControlAvailable() || !verb.startsWith("notch.")) {
@@ -1990,6 +1997,7 @@ void StationClient::handleCapabilities(const SessionMessage& message)
             m_objects.remove("notches");
             m_outboundMirror->unwatch("notches");
             notches->setRemoteRequestHandler({});
+            notches->setRemoteControlVersion(0);
             notches->setMirrorMode(false);
         }
     }

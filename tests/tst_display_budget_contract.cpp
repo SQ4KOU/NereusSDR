@@ -745,7 +745,9 @@ private slots:
                                    // iPhone app Task 20: display extras.
                                    "displayExtrasVersion",
                                    // R-R3-49: the transmit settings.
-                                   "transmitSettingsVersion"});
+                                   "transmitSettingsVersion",
+                                   // R-IOS-27: a slice's band buttons.
+                                   "bandSelectVersion"});
                 QCOMPARE(names, withReason);
                 const int reason = updateIndex(last.updates,
                                                QByteArrayLiteral("displayBudgetReason"));
@@ -787,7 +789,8 @@ private slots:
                                            QByteArrayLiteral("pairingVersion"),
                                            QByteArrayLiteral("stationCatalogVersion"),
                                            QByteArrayLiteral("displayExtrasVersion"),
-                                           QByteArrayLiteral("transmitSettingsVersion")}) {
+                                           QByteArrayLiteral("transmitSettingsVersion"),
+                                           QByteArrayLiteral("bandSelectVersion")}) {
                 stripped.removeAt(updateIndex(stripped, name));
             }
             QCOMPARE(SessionMessages::encode(SessionMessages::capabilities(stripped)), older);

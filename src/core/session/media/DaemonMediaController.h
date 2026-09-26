@@ -265,6 +265,10 @@ public:
         double waterfallAlpha{0.0};
     };
     std::optional<SpectrumAveraging> spectrumAveraging(quint32 endpointId) const;
+    /// R-IOS-27, R-IOS-06: a live endpoint's display extras, for tests that
+    /// drive its computations directly (nullptr for an unknown endpoint or
+    /// one that asked for none).
+    DisplayExtrasProcessor* displayExtrasForTest(quint32 endpointId);
     /// Whether that engine's transforms follow its frame rate: true only
     /// while the display budget is lowered because the Core is busy
     /// (R-R3-08, R-R3-40). Empty for an unknown endpoint.
@@ -353,6 +357,12 @@ private:
     bool handleSubscribe(const QJsonObject& control);
     bool handleUnsubscribe(const QJsonObject& control);
     bool handleKeyframe(const QJsonObject& control);
+    /// R-IOS-27, R-IOS-06 (displayExtrasVersion 2): {op:"clarity-retune",
+    /// connectionId, endpointId}. Clarity's Re-tune for that endpoint, what
+    /// the desktop's Re-tune button does for its pan. Nothing is sent when
+    /// it runs; a refusal is a `rejected` naming the endpoint with
+    /// revision 0. A request of another shape is ignored.
+    bool handleClarityRetune(const QJsonObject& control);
     bool handleAudio(const QJsonObject& control);
     /// R-R3-43: {op:"receiver-audio", connectionId, sliceId, revision,
     /// enabled, profile}, only from a GUI that declared receiverAudioVersion

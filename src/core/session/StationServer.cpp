@@ -315,6 +315,16 @@
 //               at admission is refused; notices after snapshot.complete.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06: bandSelectVersion
+//                                    1, last in the minor-11 block, and
+//                                    slice.selectBand refused below it.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06: notchControlVersion
+//                                    2 (notch.addAtSlice).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06:
+//                                    displayExtrasVersion 2 (clarity-retune).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1715,7 +1725,8 @@ int StationServer::stationCatalogVersion() const
 int StationServer::displayExtrasVersion() const
 {
     // The extras travel on the media display channel, so they come with it.
-    return m_mediaEnabled ? 1 : 0;
+    // 2 (R-IOS-27, R-IOS-06): also the clarity-retune operation.
+    return m_mediaEnabled ? 2 : 0;
 }
 
 int StationServer::deviceAdminVersion() const
@@ -2524,6 +2535,18 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                 it->agreedMinor < kRadioIdentitySessionProtocolMinor
                     ? QStringLiteral("Update this app to change the tune power on this Core.")
                     : QStringLiteral("This Core cannot change its transmit settings."), {}));
+            break;
+        }
+        // R-IOS-27, R-IOS-06: a slice's band buttons came with
+        // bandSelectVersion 1, in the minor-11 block.
+        if (message.commandVerb == "slice.selectBand"
+            && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                || bandSelectVersion() < 1)) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                    ? QStringLiteral("Update this app to change bands on this Core.")
+                    : QStringLiteral("This Core cannot change bands for an app."), {}));
             break;
         }
         // R-R3-49 (parity Task 3): the TX profile verbs and the RADE vocoder
@@ -5319,6 +5342,13 @@ QString StationServer::transmitSettingOnAirRefusal(const QString& key) const
     return reason;
 }
 
+int StationServer::bandSelectVersion() const
+{
+    // The desktop's band button on a slice (RadioModel::onBandButtonClicked),
+    // for a band the catalogue's `bands` lists.
+    return m_radioModel ? 1 : 0;
+}
+
 int StationServer::transmitSettingsVersion() const
 {
     // 1: `transmit` writes outside the keying set and the DspOptions*Tx
@@ -5469,6 +5499,8 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             caps.displayExtrasVersion = media ? displayExtrasVersion() : 0;
             // R-R3-49 (parity Task 1): the transmit settings.
             caps.transmitSettingsVersion = transmitSettingsVersion();
+            // R-IOS-27, R-IOS-06: slice.selectBand.
+            caps.bandSelectVersion = bandSelectVersion();
             // iPhone app Task 71 (ruling 10.1): several devices at once, for
             // a peer that declared sessionHolder with deviceAuth; any other
             // peer is sent no entry, so its capabilities are today's.
@@ -5554,8 +5586,9 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
     caps.propertyResultVersion = 1;
     // R-R3-21 / R-R3-09: the Core owns the notch list (the `notches` object
     // and the notch.* commands). Independent of WDSP: the list lives on
-    // NotchModel whether or not channels exist.
-    caps.notchControlVersion = 1;
+    // NotchModel whether or not channels exist. 2 (R-IOS-27, R-IOS-06):
+    // also notch.addAtSlice, the desktop's +TNF on a slice.
+    caps.notchControlVersion = 2;
 #ifdef HAVE_WDSP
     caps.wdspVersion = 210;
     caps.wdspCompatibilityVersion = 1;

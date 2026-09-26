@@ -296,6 +296,12 @@
 //                                    session for its own media; the
 //                                    PureSignal display's subscriber.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06: bandSelectVersion
+//                                    1 and slice.selectBand.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06:
+//                                    displayExtrasVersion 2 (clarity-retune).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QHash>
@@ -547,8 +553,9 @@ public:
     StationCatalog* catalog() const;
     /// 1: the Core sends `catalog` to a peer at minor 11.
     int stationCatalogVersion() const;
-    /// iPhone app Task 20 (R-IOS-27): 1 while media is enabled; a peer at
-    /// minor 11 may then ask a spectrum subscription for display extras.
+    /// iPhone app Task 20 (R-IOS-27): 2 while media is enabled (0 without);
+    /// a peer at minor 11 may then ask a spectrum subscription for display
+    /// extras (1) and send clarity-retune (2, R-IOS-27, R-IOS-06).
     int displayExtrasVersion() const;
 
     /// The first-run block, exactly as the operator is shown it: the TLS
@@ -814,6 +821,9 @@ public:
     // (activeTxProfile, txProfilesJson), the txProfile verbs and
     // rade.resetVocoder.
     int transmitSettingsVersion() const;
+    // R-IOS-27, R-IOS-06: bandSelectVersion. 1 on a Core with a radio
+    // model: it takes slice.selectBand from a peer at minor 11; 0 otherwise.
+    int bandSelectVersion() const;
     // R-R3-49 (parity Task 1): the one list of transmit settings keys a
     // receive-only Core takes while its radio is off the air (today the
     // DSP > Options TX keys, DspOptions<Setting><Mode>Tx). Every other

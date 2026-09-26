@@ -26,6 +26,10 @@
 //   2026-09-25: each band-plan segment's lowestClass (R-IOS-27,
 //               R-IOS-11). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-25: the `bands` key is the desktop's BAND grid, in its order
+//               (R-IOS-27, R-IOS-06); bandSelectVersion now follows
+//               transmitSettingsVersion. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -52,6 +56,7 @@
 #include "core/session/StationCatalog.h"
 #include "core/session/StationServer.h"
 #include "core/spectrum/WaterfallPalettes.h"
+#include "models/BandGrid.h"
 #include "models/BandPlanManager.h"
 #include "models/FilterPresetStore.h"
 #include "models/RadioModel.h"
@@ -68,7 +73,7 @@ namespace {
 const QSet<QString> kTopLevelKeys{
     QStringLiteral("modes"),       QStringLiteral("filterPresets"), QStringLiteral("tuneSteps"),
     QStringLiteral("agc"),         QStringLiteral("receive"),       QStringLiteral("meters"),
-    QStringLiteral("board"),
+    QStringLiteral("board"),       QStringLiteral("bands"),
     QStringLiteral("bandPlans"),   QStringLiteral("palettes"),      QStringLiteral("sliceColours"),
     QStringLiteral("tools"),       QStringLiteral("radioItems"),    QStringLiteral("audio"),
 };
@@ -147,6 +152,18 @@ void checkDesktopValues(const QJsonObject& catalog, HPSDRModel model, ProtocolVe
 
     const QStringList keys = catalog.keys();
     QCOMPARE(QSet<QString>(keys.cbegin(), keys.cend()), kTopLevelKeys);
+
+    // Bands: the desktop's per-pan BAND grid (kBandGrid), in its order, each
+    // with its Band value and its button's text.
+    const QJsonArray bands = catalog.value(QStringLiteral("bands")).toArray();
+    QCOMPARE(bands.size(), kBandGridCount);
+    for (int i = 0; i < kBandGridCount; ++i) {
+        const QJsonObject band = bands.at(i).toObject();
+        QCOMPARE(band.keys(), (QStringList{QStringLiteral("id"), QStringLiteral("label")}));
+        QCOMPARE(band.value(QStringLiteral("id")).toInt(), static_cast<int>(kBandGrid[i].band));
+        QCOMPARE(band.value(QStringLiteral("label")).toString(),
+                 QString::fromLatin1(kBandGrid[i].label));
+    }
 
     // Modes: DSPMode 0 to 13 with SliceModel's names.
     const QJsonArray modes = catalog.value(QStringLiteral("modes")).toArray();
@@ -509,6 +526,37 @@ private slots:
     void init() { AppSettings::instance().clear(); }
     void cleanup() { AppSettings::instance().clear(); }
 
+    // The grid the desktop draws, in the order it draws it: 160 to 6 m, then
+    // WWV, each id the Band enum's value.
+    void theBandsAreTheDesktopsGrid()
+    {
+        BandPlanManager plans;
+        plans.loadPlans();
+        const QJsonObject catalog = StationCatalog::build(
+            inputsFor(HPSDRModel::HERMESLITE, ProtocolVersion::Protocol1, plans));
+        const QJsonArray bands = catalog.value(QStringLiteral("bands")).toArray();
+        QStringList labels;
+        QList<int> ids;
+        for (const QJsonValue& value : bands) {
+            labels.append(value.toObject().value(QStringLiteral("label")).toString());
+            ids.append(value.toObject().value(QStringLiteral("id")).toInt());
+        }
+        QCOMPARE(labels, (QStringList{QStringLiteral("160"), QStringLiteral("80"),
+                                      QStringLiteral("60"), QStringLiteral("40"),
+                                      QStringLiteral("30"), QStringLiteral("20"),
+                                      QStringLiteral("17"), QStringLiteral("15"),
+                                      QStringLiteral("12"), QStringLiteral("10"),
+                                      QStringLiteral("6"), QStringLiteral("WWV")}));
+        QCOMPARE(ids, (QList<int>{static_cast<int>(Band::Band160m), static_cast<int>(Band::Band80m),
+                                  static_cast<int>(Band::Band60m), static_cast<int>(Band::Band40m),
+                                  static_cast<int>(Band::Band30m), static_cast<int>(Band::Band20m),
+                                  static_cast<int>(Band::Band17m), static_cast<int>(Band::Band15m),
+                                  static_cast<int>(Band::Band12m), static_cast<int>(Band::Band10m),
+                                  static_cast<int>(Band::Band6m), static_cast<int>(Band::WWV)}));
+        QCOMPARE(ids.first(), 0);
+        QCOMPARE(ids.last(), 12);
+    }
+
     // The two fixtures hold the desktop's own values for their radio.
     void fixturesHoldTheDesktopsValues()
     {
@@ -648,10 +696,11 @@ private slots:
         caps.stationCatalogVersion = 1;
         const QList<MirrorUpdate> updates = caps.toUpdates();
         // iPhone app Task 20's displayExtrasVersion follows it, then
-        // R-R3-49's transmitSettingsVersion.
-        QCOMPARE(updates.at(updates.size() - 3).name, QByteArray("stationCatalogVersion"));
-        QCOMPARE(updates.at(updates.size() - 2).name, QByteArray("displayExtrasVersion"));
-        QCOMPARE(updates.last().name, QByteArray("transmitSettingsVersion"));
+        // R-R3-49's transmitSettingsVersion, then bandSelectVersion.
+        QCOMPARE(updates.at(updates.size() - 4).name, QByteArray("stationCatalogVersion"));
+        QCOMPARE(updates.at(updates.size() - 3).name, QByteArray("displayExtrasVersion"));
+        QCOMPARE(updates.at(updates.size() - 2).name, QByteArray("transmitSettingsVersion"));
+        QCOMPARE(updates.last().name, QByteArray("bandSelectVersion"));
         QCOMPARE(StationCapabilities::fromUpdates(updates).stationCatalogVersion, 1);
         StationCapabilities older;
         older.stationCatalogVersion = 1;

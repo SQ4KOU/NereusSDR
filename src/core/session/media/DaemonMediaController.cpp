@@ -721,6 +721,12 @@ DaemonMediaController::spectrumAveraging(quint32 endpointId) const
                              it->second.request.waterfall.averageAlpha};
 }
 
+DisplayExtrasProcessor* DaemonMediaController::displayExtrasForTest(quint32 endpointId)
+{
+    const auto it = m_endpoints.find(endpointId);
+    return it == m_endpoints.end() ? nullptr : it->second.extras.get();
+}
+
 std::optional<int> DaemonMediaController::spectrumSourceFps(quint32 endpointId) const
 {
     const auto it = m_endpoints.find(endpointId);
@@ -1261,6 +1267,14 @@ void DaemonMediaController::onControl(const QJsonObject& control, quint64 epoch)
     if (op == QLatin1String("subscribe")) { handleSubscribe(control); return; }
     if (op == QLatin1String("unsubscribe")) { handleUnsubscribe(control); return; }
     if (op == QLatin1String("keyframe")) { handleKeyframe(control); return; }
+    // R-IOS-27, R-IOS-06: only for a peer the Core told displayExtrasVersion
+    // 2; any other peer's request goes where an unknown operation always
+    // has.
+    if (op == QLatin1String("clarity-retune") && m_server && m_server->displayExtrasAvailable()
+        && m_server->displayExtrasVersion() >= 2) {
+        handleClarityRetune(control);
+        return;
+    }
     if (op == QLatin1String("audio")) { handleAudio(control); return; }
     if (op == QLatin1String("receiver-audio")) { handleReceiverAudio(control); return; }
     if (op == QLatin1String("headphones-audio")) { handleHeadphonesAudio(control); return; }
@@ -1837,6 +1851,37 @@ bool DaemonMediaController::handleKeyframe(const QJsonObject& control)
     }
     ++it->second.keyframesInWindow;
     it->second.forceKeyframe = true;
+    return true;
+}
+
+bool DaemonMediaController::handleClarityRetune(const QJsonObject& control)
+{
+    quint32 endpointId = 0;
+    if (!exactKeys(control, {"op", "connectionId", "endpointId"})
+        || !canonicalConnectionId(control.value(QStringLiteral("connectionId")))
+        || !exactUnsigned(control.value(QStringLiteral("endpointId")), endpointId, true)) {
+        return false;
+    }
+    // A refusal names the endpoint with revision 0: never a subscription's
+    // revision, so it retires nothing, and never the whole-peer refusal
+    // (endpoint and revision both 0).
+    const QString connectionId = control.value(QStringLiteral("connectionId")).toString();
+    if (!m_peer || connectionId != m_peer->connectionId()) {
+        sendRejected(connectionId, endpointId, 0,
+                     QStringLiteral("That display is not one this app opened."));
+        return false;
+    }
+    const auto it = m_endpoints.find(endpointId);
+    if (it == m_endpoints.end()) {
+        sendRejected(connectionId, endpointId, 0,
+                     QStringLiteral("That display is no longer open on the Core."));
+        return false;
+    }
+    if (!it->second.extras || !it->second.extras->retuneClarity()) {
+        sendRejected(connectionId, endpointId, 0,
+                     QStringLiteral("Clarity is not setting this display's waterfall levels."));
+        return false;
+    }
     return true;
 }
 

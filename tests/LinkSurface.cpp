@@ -65,6 +65,9 @@
 //   2026-09-25: iPhone app Task 74 (R-IOS-30): confirm.request and notice
 //               samples, and the confirmExpiryMs limit. J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06: the clarity-retune
+//                                    media operation. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "LinkSurface.h"
@@ -920,6 +923,10 @@ QJsonObject guiToCoreOps()
     ops.insert(QStringLiteral("keyframe"),
                declaredOp(kMedia, peer + QStringList{QStringLiteral("endpointId"),
                                                      QStringLiteral("contextGeneration")}));
+    // DaemonMediaController.cpp handleClarityRetune (R-IOS-27, R-IOS-06):
+    // displayExtrasVersion 2.
+    ops.insert(QStringLiteral("clarity-retune"),
+               declaredOp(extras, peer + QStringList{QStringLiteral("endpointId")}));
     // DaemonMediaController.cpp handleAudio: profile only from a GUI that
     // negotiated the audio detail and the Core's audio profiles.
     ops.insert(QStringLiteral("audio"),

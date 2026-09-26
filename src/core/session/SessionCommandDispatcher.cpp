@@ -129,6 +129,14 @@
 //               slice is its requester's; setActiveSliceById sets the
 //               requester's own active slice. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06: slice.selectBand
+//                                    (bandSelectVersion 1), the desktop's
+//                                    band button on a slice.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06: notch.addAtSlice
+//                                    (notchControlVersion 2), the desktop's
+//                                    +TNF on a slice.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -140,6 +148,7 @@
 #include "PureSignalSessionFacade.h"
 #include "core/accessories/AlexAntennaFacade.h"
 #include "core/session/StationDevicesFacade.h"
+#include "models/BandGrid.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -357,6 +366,10 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
         {"requestSliceSampleRate", {arg("sliceId", kInt), arg("rateHz", kInt)}, {}, 0, 0},
         {"addSliceOnPan", {arg("panId", kUtf8)}, {}, 0, 0},
         {"setActiveSliceById", {arg("sliceId", kInt)}, {}, 0, 0},
+        // A slice's band buttons (R-IOS-27, R-IOS-06): the desktop's per-pan
+        // BAND grid, for a band the catalogue's `bands` lists.
+        {"slice.selectBand", {arg("sliceId", kInt), arg("band", kInt)}, "bandSelectVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
         // C-Tune.
         {"requestStreamCtunPinned", {arg("sliceId", kInt), arg("pinned", kBool)},
          "remoteCtunVersion", 1, kRemoteCtunSessionProtocolMinor},
@@ -501,6 +514,9 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
         {"notch.setActive", {arg("id", kInt), arg("active", kBool)}, "notchControlVersion", 1,
          kDspControlSessionProtocolMinor},
         {"notch.delete", {arg("id", kInt)}, "notchControlVersion", 1,
+         kDspControlSessionProtocolMinor},
+        // R-IOS-27, R-IOS-06: the desktop's +TNF on a slice.
+        {"notch.addAtSlice", {arg("sliceId", kInt)}, "notchControlVersion", 2,
          kDspControlSessionProtocolMinor},
         // The Core's paired devices, its name, its key backup and its old
         // pairing token (iPhone app Task 13, R-IOS-08).
@@ -684,6 +700,8 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleAddSliceOnPan(invoke);
     } else if (invoke.commandVerb == "setActiveSliceById") {
         handleSetActiveSliceById(invoke);
+    } else if (invoke.commandVerb == "slice.selectBand") {
+        handleSelectBand(invoke);
     } else if (invoke.commandVerb == "requestStreamCtunPinned") {
         handleRequestStreamCtunPinned(invoke);
     } else if (invoke.commandVerb == "requestStreamCentre") {
@@ -946,6 +964,12 @@ void SessionCommandDispatcher::handleNotchAction(const SessionMessage& invoke)
         valid = hasExactlyArguments(invoke.arguments, {"id"})
             && kindIs("id", MirrorWireKind::Int64)
             && findIntArgument(invoke.arguments, "id", &id) == ArgumentStatus::Ok;
+    } else if (verb == "notch.addAtSlice") {
+        // R-IOS-27, R-IOS-06 (notchControlVersion 2): the desktop's +TNF.
+        // The Core composes the centre and width from its own slice.
+        valid = hasExactlyArguments(invoke.arguments, {"sliceId"})
+            && kindIs("sliceId", MirrorWireKind::Int64)
+            && findIntArgument(invoke.arguments, "sliceId", &sliceId) == ArgumentStatus::Ok;
     } else {
         emitResult(verb, invoke.commandId, false,
                    QStringLiteral("The Core does not know this request. Updating the Core may help."), {});
@@ -962,6 +986,8 @@ void SessionCommandDispatcher::handleNotchAction(const SessionMessage& invoke)
     int addedId = -1;
     if (verb == "notch.add") {
         accepted = m_radioModel->addNotchFromStation(sliceId, centreHz, widthHz, &addedId, &reason);
+    } else if (verb == "notch.addAtSlice") {
+        accepted = m_radioModel->addTnfFromStation(sliceId, &addedId, &reason);
     } else if (verb == "notch.move") {
         accepted = m_radioModel->moveNotchFromStation(id, centreHz, widthHz, &reason);
     } else if (verb == "notch.setActive") {
@@ -976,7 +1002,7 @@ void SessionCommandDispatcher::handleNotchAction(const SessionMessage& invoke)
         // own view of the edit until the mirror has caught up with it.
         values.append({0, "revision", MirrorWireKind::Int64,
                        static_cast<qlonglong>(m_radioModel->notchListRevision())});
-        if (verb == "notch.add") {
+        if (verb == "notch.add" || verb == "notch.addAtSlice") {
             values.append({0, "id", MirrorWireKind::Int64, static_cast<qlonglong>(addedId)});
         }
     }
@@ -1091,6 +1117,67 @@ void SessionCommandDispatcher::handleRemoveSlice(const SessionMessage& invoke)
     const QByteArray key = ObjectRegistry::keyForSlice(sliceId);
     m_radioModel->removeSlice(sliceId);
     emitResult(invoke.commandVerb, invoke.commandId, true, QString(), { key });
+}
+
+// ── slice.selectBand ─────────────────────────────────────────────────────
+
+// R-IOS-27, R-IOS-06 (bandSelectVersion 1): a band button of the desktop's
+// per-pan BAND grid, for one slice. The Core runs the desktop's own band
+// change on that slice (RadioModel::onBandButtonClicked(SliceModel*, Band),
+// as ContainerButtonDispatcher does for a container's slice), so the band's
+// saved frequency, mode and filter come back, or its seed on a first visit.
+// The desktop offers every grid band on every radio and does not hold a
+// band change while the radio is on the air, so neither is refused here.
+// Its own refusal (a locked slice) comes back through bandClickIgnored with
+// the desktop's words. A band the slice is already on changes nothing and
+// is accepted, as the desktop's click is silently a no-op.
+void SessionCommandDispatcher::handleSelectBand(const SessionMessage& invoke)
+{
+    int sliceId = -1;
+    int bandId = -1;
+    if (!hasExactlyArguments(invoke.arguments, { "sliceId", "band" })
+        || !hasWireKind(invoke.arguments, "sliceId", MirrorWireKind::Int64)
+        || !hasWireKind(invoke.arguments, "band", MirrorWireKind::Int64)
+        || findIntArgument(invoke.arguments, "sliceId", &sliceId) != ArgumentStatus::Ok
+        || findIntArgument(invoke.arguments, "band", &bandId) != ArgumentStatus::Ok) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The request to change band was not understood."), {});
+        return;
+    }
+    SliceModel* const slice = m_radioModel->sliceById(sliceId);
+    if (slice == nullptr) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("That receiver is no longer on the Core."), {});
+        return;
+    }
+    const BandGridEntry* entry = nullptr;
+    for (const BandGridEntry& candidate : kBandGrid) {
+        if (static_cast<int>(candidate.band) == bandId) {
+            entry = &candidate;
+        }
+    }
+    if (entry == nullptr) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core has no band button for that band."), {});
+        return;
+    }
+
+    // onBandButtonClicked returns nothing; a refusal is its bandClickIgnored
+    // signal, emitted synchronously inside the call (the same-thread
+    // invariant handleAddSlice relies on).
+    QString ignoredReason;
+    const QMetaObject::Connection conn = connect(
+        m_radioModel, &RadioModel::bandClickIgnored, this,
+        [&ignoredReason](Band, const QString& reason) { ignoredReason = reason; });
+    m_radioModel->onBandButtonClicked(slice, entry->band);
+    QObject::disconnect(conn);
+
+    if (!ignoredReason.isEmpty()) {
+        emitResult(invoke.commandVerb, invoke.commandId, false, ignoredReason, {});
+        return;
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(),
+               { ObjectRegistry::keyForSlice(sliceId) });
 }
 
 // ── addSliceOnPan ────────────────────────────────────────────────────────

@@ -139,6 +139,10 @@
 //               per session (setSessionOwner before each dispatch,
 //               endSessionOwner, resetSessionState). J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06: slice.selectBand.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06: notch.addAtSlice.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -347,6 +351,9 @@ private:
     // R-R3-49 (parity Task 2, transmitSettingsVersion 2): the TX applet's
     // Tune Power slider, through the Core's own TransmitModel.
     void handleTunePowerForTxBand(const NereusSDR::SessionMessage& invoke);
+    // R-IOS-27, R-IOS-06 (bandSelectVersion 1): the desktop's band button on
+    // one slice, RadioModel::onBandButtonClicked(SliceModel*, Band).
+    void handleSelectBand(const NereusSDR::SessionMessage& invoke);
     // R-R3-49 (parity Task 3, transmitSettingsVersion 3): txProfile.select,
     // save and delete through the Core's MicProfileManager, and
     // rade.resetVocoder on the Core's RADE channel.

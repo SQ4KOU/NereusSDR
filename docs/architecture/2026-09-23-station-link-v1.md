@@ -777,7 +777,7 @@ change shows as surface drift and as a change to this table.
 | `propertyResultVersion` | 1 |
 | `dspAssetVersion` | 2 |
 | `psDisplayVersion` | 1 |
-| `notchControlVersion` | 1 |
+| `notchControlVersion` | 2 |
 | `audioProfileVersion` | 1 |
 | `audioClockVersion` | 1 |
 | `receiverAudioVersion` | 1 |
@@ -792,8 +792,9 @@ change shows as surface drift and as a change to this table.
 | `deviceAdminVersion` | 1 |
 | `pairingVersion` | 1 |
 | `stationCatalogVersion` | 1 |
-| `displayExtrasVersion` | 1 |
+| `displayExtrasVersion` | 2 |
 | `transmitSettingsVersion` | 6 |
+| `bandSelectVersion` | 1 |
 | `sessionHolderVersion` | 1 |
 
 <!-- /surface -->
@@ -816,6 +817,12 @@ When a feature is off, its version is 0:
   WDSP. `psDisplayVersion` also needs media.
 - `remoteCtunVersion`, `propertyResultVersion` and `notchControlVersion`
   are never 0.
+- `notchControlVersion`: 2. At 1 the Core owns the notch list (the
+  `notches` object, `notch.add`, `notch.move`, `notch.setActive` and
+  `notch.delete`); 2 adds `notch.addAtSlice`, the desktop's +TNF on a
+  slice (section 9.1). The four earlier verbs need 1, so a client that
+  compares the version as a minimum reads 2 exactly as it read 1. It is
+  sent at every minor, as before; the notch verbs need agreed minor 5.
 - `radioHardwareVersion`: sent only at agreed minor 11. 0 without the step
   attenuator bound; 1 with it; 2 with the Alex antennas too; 4 with the HL2
   I/O board too: the `ioBoard` object, `setAlexRxAntenna` (which needs 3)
@@ -862,13 +869,17 @@ When a feature is off, its version is 0:
   Core that has it: the read-only `catalog` object (section 7.4) goes to
   every peer at minor 11. A Core from before it sends neither the entry
   nor the object.
-- `displayExtrasVersion`: sent only at agreed minor 11. 1 while the
-  Core's media is enabled: a `subscribe` operation (section 11) may then
+- `displayExtrasVersion`: sent only at agreed minor 11. 2 while the
+  Core's media is enabled. At 1 a `subscribe` operation (section 11) may
   carry the display extras fields, and the Core sends an NSDX datagram
   beside each NSDC frame of an endpoint that asks for a section
-  ([display extras v1](2026-09-23-display-extras-v1.md)). 0 otherwise; a
-  Core from before it sends no entry and refuses the fields as keys it
-  cannot read.
+  ([display extras v1](2026-09-23-display-extras-v1.md)); 2 adds the
+  media control operation `clarity-retune`, Clarity's Re-tune for one
+  endpoint ([remote media control
+  v1](2026-09-20-remote-media-control-v1.md), "Clarity re-tune"). The
+  extras need 1, so a client that compares the version as a minimum reads
+  2 as it read 1. 0 otherwise; a Core from before it sends no entry and
+  refuses the fields as keys it cannot read.
 - `transmitSettingsVersion`: sent only at agreed minor 11, and 0 on a
   station with no radio model. At 1 a receive-only Core takes a
   `property.write` on `transmit` of any property except the keying set
@@ -934,8 +945,13 @@ When a feature is off, its version is 0:
   `transmit` object owns them). A window whose Core sends 0 keeps its
   transmit settings unavailable. A peer below agreed minor 11 is never
   offered it, and a receive-only Core refuses its transmit writes and DSP >
-  Options TX keys as before. `transmitSettingsVersion` is the last
-  capabilities entry.
+  Options TX keys as before. `transmitSettingsVersion` is followed by
+  `bandSelectVersion`.
+- `bandSelectVersion`: sent only at agreed minor 11, last, and 0 on a
+  station with no radio model. At 1 the Core takes `slice.selectBand`
+  (section 9.1), a device's band button for a slice, for the bands the
+  catalogue's `bands` lists (section 7.4). An app keeps its band buttons
+  greyed on a Core that sends 0 or no entry.
 
 - `sessionHolderVersion`: sent only at agreed minor 11, last, and only to
   a peer whose hello declared `sessionHolder` 1 with `deviceAuth` 1; any
@@ -1106,7 +1122,8 @@ older window sees only the values it was built for.
 | 51 | `stationCatalogVersion` | `i64` |
 | 52 | `displayExtrasVersion` | `i64` |
 | 53 | `transmitSettingsVersion` | `i64` |
-| 54 | `sessionHolderVersion` | `i64` |
+| 54 | `bandSelectVersion` | `i64` |
+| 55 | `sessionHolderVersion` | `i64` |
 
 <!-- /surface -->
 
@@ -2426,8 +2443,8 @@ transmitter disturbs nobody and applies at once, and `state` is never
 The `catalog` object's `json` is one JSON object (RFC 8259, UTF-8,
 compact) holding the values the Core owns and an app shows: the modes, the
 Core's filter presets, the tune steps, the AGC, receive and gauge ranges, the
-radio's capabilities, the band plans, the waterfall palettes, the slice
-colours and the Core's tools (`StationCatalog`, spec section 4.10). An app
+radio's capabilities, the band buttons, the band plans, the waterfall
+palettes, the slice colours and the Core's tools (`StationCatalog`, spec section 4.10). An app
 draws its controls from it and carries no table of its own, so a Hermes
 Lite 2 and an ANAN-G2 each get their own. It is the same for every device
 connected to the Core; nothing in it is per device.
@@ -2452,7 +2469,7 @@ Colours are `#RRGGBB`, upper case. Labels are the desktop's own words,
 shown as sent. A key an app does not know is ignored; an app given an
 empty `json` (the stand-in of section 16.3) has no catalogue yet.
 
-The object has exactly these thirteen keys:
+The object has exactly these fourteen keys:
 
 | Key | Holds |
 | --- | --- |
@@ -2463,6 +2480,7 @@ The object has exactly these thirteen keys:
 | `receive` | `{afGain, ssqlThresh, amsqThresh, fmsqThresh}`, each `{min, max, step}` for the slice setting of that name, as the desktop's own control holds it: `afGain` 0 to 100 in the AF slider's units, `ssqlThresh` 0 to 100 in the SQL slider's units, `amsqThresh` and `fmsqThresh` -160 to 0 dB; every step 1 |
 | `meters` | The gauges an app draws (below) |
 | `board` | The radio (below) |
+| `bands` | `[{id, label}]`: the desktop's per-pan BAND grid, in its order (160, 80, 60, 40, 30, 20, 17, 15, 12, 10, 6, WWV); `id` is the band as `slice.selectBand` takes it (0 for 160 m to 10 for 6 m, 12 for WWV) and `label` is the button's text. The desktop draws its grid from the same table, so the two cannot differ |
 | `bandPlans` | `[{id, name, default, segments: [{lowHz, highHz, label, licence, lowestClass, colour}]}]`: every bundled plan, `id` its file's name (`arrl-us`), `default` true on ARRL (US) alone; `licence` lists the licence classes (`E,G`), empty for a beacon or no transmit; `lowestClass` is the lowest class the segment allows, as the desktop's band-plan strip names it after the label (`PHONE General`): `Tech` when `licence` holds T, else `General` when it holds G, `Extra` when it is exactly `E`, and empty otherwise |
 | `palettes` | `[{id, name, stops: [{at, colour}]}]`: the waterfall palettes, `id` the desktop's palette number, `at` from 0 to 1 to three places, lowest first. The Custom palette is each computer's own and is not listed |
 | `sliceColours` | `[colour]`: slice A's colour first, one for each slice the radio allows |
@@ -2746,6 +2764,7 @@ refused.
 | `requestSliceSampleRate` | `sliceId` i64, `rateHz` i64 | none | 0 | 0 |
 | `addSliceOnPan` | `panId` utf8 | none | 0 | 0 |
 | `setActiveSliceById` | `sliceId` i64 | none | 0 | 0 |
+| `slice.selectBand` | `sliceId` i64, `band` i64 | `bandSelectVersion` | 1 | 11 |
 | `requestStreamCtunPinned` | `sliceId` i64, `pinned` bool | `remoteCtunVersion` | 1 | 2 |
 | `requestStreamCentre` | `sliceId` i64, `centreHz` f64 | `remoteCtunVersion` | 1 | 2 |
 | `configureTgxl` | `host` utf8, `port` i64 | `remoteTgxlConfigVersion` | 1 | 4 |
@@ -2806,6 +2825,7 @@ refused.
 | `notch.move` | `id` i64, `centreHz` f64, `widthHz` f64 | `notchControlVersion` | 1 | 5 |
 | `notch.setActive` | `id` i64, `active` bool | `notchControlVersion` | 1 | 5 |
 | `notch.delete` | `id` i64 | `notchControlVersion` | 1 | 5 |
+| `notch.addAtSlice` | `sliceId` i64 | `notchControlVersion` | 2 | 5 |
 | `devices.revoke` | `id` utf8 | `deviceAdminVersion` | 1 | 11 |
 | `station.rename` | `label` utf8 | `deviceAdminVersion` | 1 | 11 |
 | `station.acknowledgeKeyBackup` | none | `deviceAdminVersion` | 1 | 11 |
@@ -2836,6 +2856,43 @@ These command groups need a sentence beyond the table:
   `requestStreamCentre` and `requestStreamCtunPinned` naming a slice that
   is not the requester's are refused (section 7.3).
 
+- **A slice's band buttons.** `slice.selectBand` (`sliceId`, `band`,
+  both `i64`; `bandSelectVersion` 1, agreed minor 11) does what a band
+  button of the desktop's per-pan BAND grid does for that slice: the Core
+  runs its own band change (`RadioModel::onBandButtonClicked`), so the
+  slice gets back the frequency, mode, filter and the rest it last had on
+  that band, or the band's starting frequency and mode on a first visit,
+  and saves what it leaves for the band it left. `band` is an `id` from
+  the catalogue's `bands` (section 7.4). A band the slice is already on
+  is accepted and changes nothing, as on the desktop. `accepted` names
+  the slice (`slice:<id>`) in `affected`; the change reaches it in the
+  next `delta`. The refusals: "That receiver is no longer on the Core."
+  (an unknown `sliceId`), "The Core has no band button for that band."
+  (a `band` the catalogue does not list), the desktop's own reason for a
+  locked slice ("Band 40m ignored: the slice is locked. Unlock it to
+  change bands."), and "The request to change band was not understood."
+  (arguments it does not take). The desktop offers every grid band on
+  every radio and changes band while the radio is on the air, so the
+  Core refuses neither. A peer below agreed minor 11 gets "Update this
+  app to change bands on this Core.", and a Core that sends
+  `bandSelectVersion` 0 answers "This Core cannot change bands for an
+  app."
+- **A notch at a slice.** `notch.addAtSlice` (`sliceId` `i64`;
+  `notchControlVersion` 2, agreed minor 5) does what the desktop's +TNF
+  button does for that slice: the Core puts a notch of 200 Hz
+  (`NotchModel::kDefaultNotchWidthHz`) at the slice's demodulated
+  frequency (the VFO, RIT and the DIGU/DIGL click-tune offset) moved by
+  the middle of its receive filter (Thetis TNFAdd with
+  notchSidebandShift), through `RadioModel::addTnfForSlice`, the one
+  function the desktop's button calls too. The add is `notch.add`'s, so
+  its rules and refusals are too (the notch control document): an
+  unknown `sliceId` is refused with "That receiver is not on this Core",
+  a second press on the same signal with "A notch already exists within
+  10 Hz", and arguments it does not take with "This notch change is not
+  one this Core understands.". An accepted result is `notch.add`'s:
+  `affected` `["notches"]` and the values `revision` and `id`. A peer
+  below agreed minor 5 gets "Update this app to change notches on this
+  Core.".
 - **The filter policy.** `setAlexBpfMode` sets one receive filter chain's
   filter policy (`chain` 0 or 1; `mode` 0 Auto, 1 Force filter, 2 Force
   bypass), the call the Core's own filter policy dialog makes on Apply.
@@ -3082,6 +3139,7 @@ Client to station:
 | --- | --- | --- | --- | --- |
 | `audio` | `remoteMediaVersion` | `connectionId`, `enabled`, `op`, `revision` | `profile` with audioProfileVersion, remoteAudioStatusVersion | none |
 | `candidate` | `remoteMediaVersion` | `candidate`, `connectionId`, `mid`, `op` | none | none |
+| `clarity-retune` | `displayExtrasVersion` | `connectionId`, `endpointId`, `op` | none | none |
 | `clock-probe` | `audioClockVersion` | `connectionId`, `id`, `op`, `t0` | none | none |
 | `description` | `remoteMediaVersion` | `connectionId`, `op`, `sdp`, `type` | none | none |
 | `headphones-audio` | `headphonesMixVersion` | `connectionId`, `enabled`, `op`, `profile`, `revision` | none | none |

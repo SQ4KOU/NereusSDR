@@ -19,6 +19,10 @@
 //               strip's own rule (lowestLicenceClass, models/BandPlan.h).
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-25: the `bands` key, the desktop's per-pan BAND grid from its
+//               own table (kBandGrid, models/BandGrid.h), for an app's band
+//               buttons (R-IOS-27, R-IOS-06). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationCatalog.h"
@@ -28,6 +32,7 @@
 #include "core/SampleRateCatalog.h"
 #include "core/SkuUiProfile.h"
 #include "core/spectrum/WaterfallPalettes.h"
+#include "models/BandGrid.h"
 #include "models/BandPlanManager.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
@@ -422,6 +427,18 @@ QJsonArray radioItemsArray()
     return items;
 }
 
+// The desktop's per-pan BAND grid, in its order: each button's Band (the
+// value slice.selectBand takes) and its text.
+QJsonArray bandsArray()
+{
+    QJsonArray bands;
+    for (const BandGridEntry& entry : kBandGrid) {
+        bands.append(QJsonObject{{QStringLiteral("id"), static_cast<int>(entry.band)},
+                                 {QStringLiteral("label"), QString::fromLatin1(entry.label)}});
+    }
+    return bands;
+}
+
 // SliceModel's tune-step list (today the six-entry stand-in the STEP
 // buttons cycle; the catalogue follows whatever SliceModel holds).
 QList<int> sliceTuneSteps()
@@ -457,6 +474,7 @@ QJsonObject StationCatalog::build(const Inputs& inputs)
         {QStringLiteral("meters"), metersObject(inputs)},
         {QStringLiteral("board"), boardObject(inputs)},
         {QStringLiteral("bandPlans"), bandPlansArray(inputs)},
+        {QStringLiteral("bands"), bandsArray()},
         {QStringLiteral("palettes"), palettesArray()},
         {QStringLiteral("sliceColours"), sliceColoursArray(inputs)},
         {QStringLiteral("tools"), toolsArray()},

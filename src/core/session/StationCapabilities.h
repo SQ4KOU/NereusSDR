@@ -102,6 +102,15 @@
 //               sent only to a peer that declared sessionHolder. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic Claude
 //               Code.
+//   2026-09-25 - R-IOS-27, R-IOS-06: bandSelectVersion, last in the
+//                minor-11 block. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-25 - R-IOS-27, R-IOS-06: notchControlVersion 2 documented
+//                (notch.addAtSlice). J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-25 - R-IOS-27, R-IOS-06: displayExtrasVersion 2 documented
+//                (clarity-retune). J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -218,6 +227,8 @@ struct StationCapabilities {
     /// calibration and averaging applied at the Core; the Core then sends
     /// an NSDX datagram beside each NSDC frame (display extras v1). Sent
     /// last in the same minor-11 block, after stationCatalogVersion.
+    /// 2 (R-IOS-27, R-IOS-06) adds the media control operation
+    /// clarity-retune, Clarity's Re-tune for one endpoint.
     int displayExtrasVersion = 0;
     /// R-R3-49 (parity Task 1): 1 means a receive-only Core takes a
     /// `transmit` write of any property but the keying set (mox, tune,
@@ -227,6 +238,12 @@ struct StationCapabilities {
     /// same minor-11 block, after displayExtrasVersion. 0: a window's
     /// transmit settings stay greyed and say the Core cannot take them.
     int transmitSettingsVersion = 0;
+    /// R-IOS-27, R-IOS-06: 1 means the Core takes `slice.selectBand`, which
+    /// runs the desktop's band button on a slice (its saved frequency, mode
+    /// and filter for that band come back), for a band the catalogue's
+    /// `bands` lists. Sent in the same minor-11 block, after
+    /// transmitSettingsVersion. 0: an app's band buttons stay greyed.
+    int bandSelectVersion = 0;
     /// iPhone app Task 71 (R-IOS-02; the several-devices design, ruling
     /// 10.1): 1 means the Core admits up to four devices at once, sends the
     /// `connectedDevices` object and takes session.leave. Sent last in the
@@ -297,6 +314,8 @@ struct StationCapabilities {
     /// R-R3-21 / R-R3-09: the Core owns the notch list, mirrors it as the
     /// `notches` object and takes notch.add / notch.move / notch.setActive
     /// / notch.delete. 0 means a window keeps today's settings-based notches.
+    /// 2 (R-IOS-27, R-IOS-06) adds notch.addAtSlice, the desktop's +TNF on
+    /// a slice, with the Core composing the notch.
     int notchControlVersion = 0;
     /// R-R3-23: 1 means the Core can send lossless audio (uncompressed
     /// 16-bit stereo, L16) beside Opus. A GUI that sees it may add

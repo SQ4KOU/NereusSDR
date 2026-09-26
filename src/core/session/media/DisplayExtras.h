@@ -17,6 +17,10 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  Created for iPhone app Task 20.
 //                                    AI-assisted via Anthropic Claude
 //                                    Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06: Clarity's
+//                                    Re-tune for one endpoint
+//                                    (displayExtrasVersion 2).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/DisplayCodec.h"
@@ -208,6 +212,12 @@ public:
     /// estimates for the `noise-floor` operation, before any shift.
     void feedNoiseFloor(float floorDbm, qint64 nowMs);
 
+    /// R-IOS-27, R-IOS-06 (displayExtrasVersion 2): Clarity's Re-tune, what
+    /// the desktop's Re-tune button does for its pan
+    /// (ClarityController::retuneNow). False, and nothing changes, when this
+    /// endpoint's waterfall levels are not in Clarity mode.
+    bool retuneClarity();
+
     /// What the Core adds to every dBm it sends for this endpoint:
     /// calibrationOffsetDb plus the normalise shift.
     float displayShiftDb(double binWidthHz) const;
@@ -223,6 +233,8 @@ public:
     const ActivePeakHoldTrace& activePeakHold() const { return m_peakHold; }
     const NoiseFloorFollower& noiseFloor() const { return m_noiseFloor; }
     std::pair<float, float> waterfallLevels() const { return {m_activeLow, m_activeHigh}; }
+    /// This endpoint's Clarity controller, or nullptr outside Clarity mode.
+    const ClarityController* clarity() const { return m_clarity.get(); }
 
 private:
     DisplayExtrasRequest m_request;
