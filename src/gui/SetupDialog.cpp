@@ -129,7 +129,10 @@
 //                 the receive-only kit it is disabled with the kit's
 //                 reason, and on a radio without power amplifier settings
 //                 with that reason. The Transmit and PA rows name the
-//                 remote transmit reason beside receive only's. J.J. Boyd
+//                 remote transmit reason beside receive only's. Receive
+//                 only disables Audio > TX Input too (grpBoxMic is on
+//                 tpTransmit), which a remote window without transmit
+//                 keeps live. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
 // =================================================================
@@ -939,8 +942,8 @@ void SetupDialog::refreshTransmitPresentation()
         if (entry.requiresTransmit) {
             // A negotiated TX permission cannot make this client's absent DSP
             // available. Preserve the independent resource gate and child rules.
-            // Task 16 fix wave (I1): receive only disables it as well (every
-            // receive-only gated page is a transmit page).
+            // Task 16 fix wave (I1): receive only disables it as well (a
+            // gated non-transmit page is handled below, fix wave 2).
             // Fix wave 2 (Important 2): so does a radio without power
             // amplifier settings, on the PA pages (all transmit pages).
             entry.widget->setEnabled(m_transmitPermitted && !entry.localDspUnavailable
@@ -954,7 +957,26 @@ void SetupDialog::refreshTransmitPresentation()
             }
         }
         entry.stationDisabled = blocked;
-        if (!entry.requiresTransmit && !entry.localDspUnavailable && !blocked) { continue; }
+        // Fix wave 2 (Minor 4): a non-transmit page receive only reaches
+        // (Audio > TX Input) is disabled while it is on, and given back the
+        // state the other gates decide when it goes off.
+        bool receiveOnlyLifted = false;
+        if (!entry.requiresTransmit) {
+            if (rxOnlyOff) {
+                entry.widget->setEnabled(false);
+            } else if (entry.receiveOnlyDisabled) {
+                entry.widget->setEnabled(!blocked && !entry.localDspUnavailable
+                                         && !entry.placeholder);
+                receiveOnlyLifted = true;
+            }
+            entry.receiveOnlyDisabled = rxOnlyOff;
+        }
+        if (!entry.requiresTransmit && !entry.localDspUnavailable && !blocked && !rxOnlyOff) {
+            if (receiveOnlyLifted) {
+                entry.widget->setToolTip(QString());
+            }
+            continue;
+        }
         entry.widget->setToolTip(unavailableReason(entry));
         if (m_stack->currentWidget() == entry.widget) {
             if (blocked) {
@@ -977,7 +999,8 @@ void SetupDialog::refreshTransmitPresentation()
         const int index = (*it)->data(0, Qt::UserRole).toInt();
         if (index >= 0 && index < static_cast<int>(m_pages.size())) {
             const PageEntry& entry = m_pages[static_cast<std::size_t>(index)];
-            if (coreBlocked(entry) || entry.requiresTransmit || entry.localDspUnavailable) {
+            if (coreBlocked(entry) || entry.requiresTransmit || entry.localDspUnavailable
+                || entry.receiveOnlyGated) {
                 (*it)->setToolTip(0, unavailableReason(entry));
             } else if (remoteSession && !entry.remoteUnavailableReason.isEmpty()) {
                 // Declared unavailable but not visited yet: the leaf already
@@ -1017,17 +1040,25 @@ void SetupDialog::refreshTransmitPresentation()
     }
 }
 
-void SetupDialog::markReceiveOnlyGated(QTreeWidgetItem* item)
+void SetupDialog::markReceiveOnlyGated(QTreeWidgetItem* item, bool nonTransmitPage)
 {
     if (!item) {
         return;
     }
     const int index = item->data(0, Qt::UserRole).toInt();
     if (index >= 0 && index < static_cast<int>(m_pages.size())) {
-        m_pages[static_cast<std::size_t>(index)].receiveOnlyGated = true;
+        PageEntry& entry = m_pages[static_cast<std::size_t>(index)];
+        // Fix wave 2 (Minor 4): a gated page is one the gate reaches. A
+        // transmit page rides the requiresTransmit enable path; any other
+        // page must be named as one on purpose, and is disabled on its own
+        // path in refreshTransmitPresentation.
+        Q_ASSERT_X(entry.requiresTransmit || nonTransmitPage, "markReceiveOnlyGated",
+                   "a receive-only gated page must be a transmit page or marked as a "
+                   "non-transmit page the gate reaches");
+        entry.receiveOnlyGated = true;
     }
     for (int i = 0; i < item->childCount(); ++i) {
-        markReceiveOnlyGated(item->child(i));
+        markReceiveOnlyGated(item->child(i), nonTransmitPage);
     }
 }
 
@@ -1279,8 +1310,16 @@ void SetupDialog::buildTree()
     // hardware controls follow the transmit permission inside the page
     // (AudioTxInputPage::setTransmitPermitted), so the leaf itself is no
     // longer a whole-page transmit leaf.
-    registerPage(audio, "TX Input", SetupScope::Mixed,  // I.1
-                 [this] { return wrapWithAudioBackendStrip(new AudioTxInputPage(m_model)); });
+    //
+    // Task 16 fix wave 2 (Minor 4): receive only disables it, with its
+    // reason, as Thetis's tpTransmit.Enabled = !RXOnly (setup.cs:6499
+    // [v2.10.3.15]) disables grpBoxMic, which sits on tpTransmit
+    // (setup.designer.cs:46443 [v2.10.3.15]). It is not a transmit page, so a
+    // remote window without transmit keeps it live (R-R3-36).
+    markReceiveOnlyGated(
+        registerPage(audio, "TX Input", SetupScope::Mixed,  // I.1
+                     [this] { return wrapWithAudioBackendStrip(new AudioTxInputPage(m_model)); }),
+        /*nonTransmitPage=*/true);
     // R-R3-44: the VAX channels are this computer's in a remote window as in
     // a local one (a remote window feeds them from the Core's receiver
     // streams), and the page writes only this computer's audio/Vax* keys,

@@ -832,6 +832,63 @@ private slots:
         QVERIFY(notice->isHidden());
     }
 
+    // Fix wave 2 (Minor 4): Audio > TX Input follows receive only, as
+    // Thetis's grpBoxMic on tpTransmit does (setup.designer.cs:46443
+    // [v2.10.3.15]; setup.cs:6499 [v2.10.3.15]), with the reason.
+    void setupTxInputFollowsReceiveOnly()
+    {
+        Rig rig;
+        SetupDialog dialog(rig.model.get());
+        const QString label = QStringLiteral("TX Input");
+        dialog.selectPage(label);
+        QWidget* page = dialog.realizedPageForTest(label);
+        QVERIFY(page != nullptr);
+        QVERIFY(page->isEnabled());
+        QTreeWidgetItem* leaf = setupRow(dialog, label, /*category=*/false);
+        QVERIFY(leaf != nullptr);
+        auto* notice = dialog.findChild<QLabel*>(QStringLiteral("setupReceiveOnly"));
+        QVERIFY(notice != nullptr);
+
+        rig.model->setRxOnly(true);
+        const QString reason = rig.model->rxOnlyReason();
+        QVERIFY(!page->isEnabled());
+        QCOMPARE(page->toolTip(), reason);
+        QCOMPARE(leaf->toolTip(0), reason);
+        QVERIFY(!leaf->isHidden());
+        QVERIFY(!notice->isHidden());
+        QCOMPARE(notice->text(), reason);
+
+        rig.model->setRxOnly(false);
+        QVERIFY(page->isEnabled());
+        QVERIFY(page->toolTip().isEmpty());
+        QVERIFY(leaf->toolTip(0).isEmpty());
+        QVERIFY(notice->isHidden());
+    }
+
+    // Fix wave 2 (Minor 4): a remote window without transmit keeps TX Input
+    // live (R-R3-36); only receive only disables it, with its own reason.
+    void setupTxInputInARemoteWindowOnlyFollowsReceiveOnly()
+    {
+        const QString transmitReason = QStringLiteral("Remote transmit is unavailable.");
+        RadioModel window(RadioModel::Role::Remote);
+        SetupDialog dialog(&window);
+        dialog.setTransmitPermitted(false, transmitReason);
+        const QString label = QStringLiteral("TX Input");
+        dialog.selectPage(label);
+        QWidget* page = dialog.realizedPageForTest(label);
+        QVERIFY(page != nullptr);
+        QVERIFY(page->isEnabled());
+
+        window.applyRxOnlySetting(true);
+        QVERIFY(!page->isEnabled());
+        QCOMPARE(page->toolTip(), window.rxOnlyReason());
+        QCOMPARE(setupRow(dialog, label, /*category=*/false)->toolTip(0), window.rxOnlyReason());
+
+        window.applyRxOnlySetting(false);
+        QVERIFY(page->isEnabled());
+        QVERIFY(page->toolTip().isEmpty());
+    }
+
     // A receive page stays live; only the transmit pages follow.
     void setupReceivePagesStayEnabled()
     {

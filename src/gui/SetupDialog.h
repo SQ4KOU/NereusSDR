@@ -205,10 +205,15 @@ private:
         // A Core page opened before the Core's settings ever arrived: an
         // empty stand-in, replaced by the real page once they are available.
         bool                      placeholder = false;
-        // Task 16 fix wave (I1): a transmit page receive only disables
-        // (Thetis setup.cs:6499-6501: tpTransmit, tpPowerAmplifier,
-        // grpTestTXIMD). Only pages with requiresTransmit are marked.
+        // Task 16 fix wave (I1): a page receive only disables (Thetis
+        // setup.cs:6499-6501: tpTransmit, tpPowerAmplifier, grpTestTXIMD).
+        // A transmit page (requiresTransmit), or one marked as a
+        // non-transmit page the gate also reaches (fix wave 2: Audio > TX
+        // Input, Thetis's grpBoxMic on tpTransmit).
         bool                      receiveOnlyGated = false;
+        // Fix wave 2: a non-transmit page root disabled by receive only
+        // (not for any other reason), enabled again when it goes off.
+        bool                      receiveOnlyDisabled = false;
         // Task 16 fix wave 2 (Important 2): a PA page, disabled with
         // m_noPaReason while the radio has no power amplifier settings.
         bool                      paPage = false;
@@ -235,7 +240,11 @@ private:
 
     // Task 16 fix wave (I1): marks a leaf, or every leaf under a category,
     // as disabled with the receive-only reason while receive only is on.
-    void markReceiveOnlyGated(QTreeWidgetItem* item);
+    // Every marked page must be one the gate reaches: a transmit page
+    // (requiresTransmit), or, with `nonTransmitPage`, a page the gate
+    // disables on its own path (fix wave 2, Minor 4: Audio > TX Input,
+    // which a remote window without transmit keeps live, R-R3-36).
+    void markReceiveOnlyGated(QTreeWidgetItem* item, bool nonTransmitPage = false);
 
     // Realization phase: build the page if it has not been built yet, add it
     // to the stack, and return it. Returns nullptr for an out-of-range index
