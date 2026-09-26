@@ -56,6 +56,11 @@
 //               setAlexTxAntenna and the two-way transmit antennas and
 //               relays join the list. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave: the Core's own MOX is not a
+//               holder on the air for the shared-settings check (the
+//               parity rounds' Thetis rule); the saved accessory
+//               addresses go ahead on the air. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -318,8 +323,16 @@ DisturbanceCheck::Transmit StationServer::transmitForCheck() const
     DisturbanceCheck::Transmit transmit;
     if (m_transmitHolder) {
         if (const std::optional<TransmitHolder::Holder> holder = m_transmitHolder->holder()) {
-            transmit.holder = holder->deviceId;
-            transmit.keyed = holder->keyed;
+            // The station device counts only after the radio's own PTT took
+            // transmit: the Core's own MOX on a hosting desktop keeps
+            // Thetis's single-operator behaviour (the parity rounds' rule:
+            // the transmit antennas and the accessories' addresses change
+            // on the air).
+            if (holder->deviceId != KeyerIdentity::kStationDeviceId
+                || holder->source == TransmitHolder::Source::RadioPtt) {
+                transmit.holder = holder->deviceId;
+                transmit.keyed = holder->keyed;
+            }
         }
     }
     if (!m_radioModel.isNull()) {
@@ -1075,6 +1088,12 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
             tuner();
         } else {
             transmitter();
+        }
+        // The operator's ruling (parity mini-round, rulings a to c): the
+        // saved addresses go ahead on the air; they touch nothing on the
+        // transmit path.
+        if (verb == "setTgxlAddress" || verb == "setPgxlAddress" || verb == "setRfKitAddress") {
+            c.scope.transmitPath = false;
         }
         c.target = QStringLiteral("verb:") + QString::fromLatin1(verb);
         c.shared = true;

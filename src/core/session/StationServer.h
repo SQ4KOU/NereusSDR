@@ -1295,9 +1295,9 @@ private:
     /// Ruling 7.4 (D60): the on-air refusal for a change from `requester`,
     /// or empty (nobody on the air, or the holder's own change).
     TxRefusal onAirRefusal(const QByteArray& requester) const;
-    /// Fix wave I2 (ruling 8.11, D64): the slice frozen while the station
-    /// device (the radio's own PTT, the Core's own keys) is keyed: its
-    /// transmit slice; -1 otherwise.
+    /// Fix wave I2 (ruling 8.11, D64): the slice frozen while the radio's
+    /// own PTT (its mic or footswitch) keys: the transmit slice; -1
+    /// otherwise.
     int stationFrozenSlice() const;
     /// The refusal for a change to `sliceId` that the freeze stops (its
     /// frequency, mode, filter, band or transmit antenna, or closing it),

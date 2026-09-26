@@ -442,6 +442,10 @@
 //               while the radio's own PTT keys it (ruling 8.11). J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave: the Core's own MOX is not a
+//               holder on the air for ruling 7.4; the freeze is the
+//               radio's own PTT's. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -5466,6 +5470,14 @@ TxRefusal StationServer::onAirRefusal(const QByteArray& requester) const
     if (!holder || !holder->keyed || requester.isEmpty() || requester == holder->deviceId) {
         return {};
     }
+    // The Core's own MOX (a hosting desktop's operator) keeps Thetis's
+    // single-operator behaviour: the other windows' changes go ahead, as the
+    // parity rounds ruled. The radio's own PTT and every device's key hold
+    // them.
+    if (holder->deviceId == KeyerIdentity::kStationDeviceId
+        && holder->source != TransmitHolder::Source::RadioPtt) {
+        return {};
+    }
     // The station device (the radio's own PTT, or the Core's own keys) is
     // "the radio".
     return TxRefusals::holderOnAir(holder->shortName,
@@ -5475,14 +5487,18 @@ TxRefusal StationServer::onAirRefusal(const QByteArray& requester) const
 
 int StationServer::stationFrozenSlice() const
 {
-    // Ruling 8.11 (D64): while the station device is keyed (the radio's own
-    // mic or footswitch, or the Core's own keys), the slice it transmits on
-    // cannot be retuned, changed or closed until the press ends.
+    // Ruling 8.11 (D64): while the radio's own mic or footswitch is keyed,
+    // the slice it transmits on cannot be retuned, changed or closed until
+    // the press ends.
     if (m_radioModel.isNull() || !m_transmitHolder) {
         return -1;
     }
     const std::optional<TransmitHolder::Holder> holder = m_transmitHolder->holder();
-    if (!holder || !holder->keyed || holder->deviceId != KeyerIdentity::kStationDeviceId) {
+    // The radio's own PTT only (the brief's I2 and D64's words): a hosting
+    // desktop's MOX leaves its slices as Thetis does (onBandButtonClicked
+    // has no on-air check).
+    if (!holder || !holder->keyed || holder->deviceId != KeyerIdentity::kStationDeviceId
+        || holder->source != TransmitHolder::Source::RadioPtt) {
         return -1;
     }
     const SliceModel* slice = m_radioModel->txBoundSlice();
