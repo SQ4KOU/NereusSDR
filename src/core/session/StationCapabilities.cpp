@@ -53,6 +53,18 @@
 //               last in the minor-11 block, for a peer that declared
 //               sessionHolder. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 34 (R-IOS-02): remoteTxVersion, last,
+//               sent only to a peer whose hello declared remoteTx; txPermitted
+//               now the station transmit gate's answer. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan, desktop remote transmit (R-IOS-13,
+//               R-R3-42): txRefusalCode, txRefusalReason and txRefusalFix
+//               after remoteTxVersion. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 39 (D14, R-IOS-13): txStateVersion,
+//               after remoteTxVersion and only with it (the `txState`
+//               object). J.J. Boyd (KG4VCF), with AI-assisted implementation
+//               via Anthropic Claude Code.
 //   2026-09-25 - R-IOS-27, R-IOS-06: bandSelectVersion, last in the
 //                minor-11 block. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
@@ -184,6 +196,17 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         // a peer that declared the feature.
         if (sessionHolderEntry) {
             updates.append(intEntry("sessionHolderVersion", sessionHolderVersion));
+        }
+        // iPhone app plan Task 34: remote transmit, last, and only for a
+        // peer that declared the feature.
+        if (remoteTxEntry) {
+            updates.append(intEntry("remoteTxVersion", remoteTxVersion));
+            // Desktop remote transmit: the Core's reason with it.
+            updates.append(stringEntry("txRefusalCode", txRefusalCode));
+            updates.append(stringEntry("txRefusalReason", txRefusalReason));
+            updates.append(stringEntry("txRefusalFix", txRefusalFix));
+            // iPhone app plan Task 39: the `txState` object, with it.
+            updates.append(intEntry("txStateVersion", txStateVersion));
         }
     }
     return updates;
@@ -376,7 +399,9 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "bandSelectVersion"
                    || u.name == "meterReadingsVersion"
                    || u.name == "dspInfoVersion"
-                   || u.name == "sessionHolderVersion") {
+                   || u.name == "sessionHolderVersion"
+                   || u.name == "remoteTxVersion"
+                   || u.name == "txStateVersion") {
             // R-R3-47 / R-R3-22 / R-R3-48: sent in the same block as the
             // four above.
             caps.radioIdentityEntries = true;
@@ -404,6 +429,11 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                 } else if (u.name == "sessionHolderVersion") {
                     caps.sessionHolderEntry = true;
                     caps.sessionHolderVersion = version;
+                } else if (u.name == "remoteTxVersion") {
+                    caps.remoteTxEntry = true;
+                    caps.remoteTxVersion = version;
+                } else if (u.name == "txStateVersion") {
+                    caps.txStateVersion = version;
                 } else if (u.name == "remoteTgxlControlVersion") {
                     caps.remoteTgxlControlVersion = version;
                 } else if (u.name == "transmitSettingsVersion") {
@@ -415,6 +445,20 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                 } else {
                     caps.bandSelectVersion = version;
                 }
+            }
+        } else if (u.name == "txRefusalCode" || u.name == "txRefusalReason"
+                   || u.name == "txRefusalFix") {
+            // Desktop remote transmit: text only; anything else reads empty.
+            const QString text = u.kind == MirrorWireKind::Utf8
+                    && u.value.typeId() == QMetaType::QString
+                ? u.value.toString()
+                : QString();
+            if (u.name == "txRefusalCode") {
+                caps.txRefusalCode = text;
+            } else if (u.name == "txRefusalReason") {
+                caps.txRefusalReason = text;
+            } else {
+                caps.txRefusalFix = text;
             }
         } else if (u.name == "settingsSchemaVersion") {
             caps.settingsSchemaVersion = static_cast<qint32>(u.value.toLongLong());

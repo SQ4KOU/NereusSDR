@@ -11,8 +11,14 @@
 // 2026-09-25: R-R3-49, R-R3-21 (parity Task 11): the flag's XIT writes the
 // Core's slice in a remote window, as RIT does, whatever txPermitted says.
 // J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-26: R-IOS-02 (transmit group fix wave 2): the window-only
+// transmit controls reach the Core through the real gate (MainWindow);
+// while the Core's own key transmits on the window's slice, its XIT and TX
+// antenna writes wait (rulings 7.4 and 8.11) and the window shows the kept
+// values. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include <QtTest>
 #include <QAction>
+#include <QComboBox>
 #include <QDir>
 #include <QFile>
 #include <QLabel>
@@ -180,6 +186,115 @@ private slots:
         action->trigger();
         QVERIFY(window.findChild<TxEqDialog*>());
     }
+    // Transmit group fix wave 2 (the re-review's minor): the window-only
+    // transmit controls that key nothing (MON, LEV, EQ, CFC, the TX profile,
+    // VOX threshold and hold) reach the Core through the real gate: the
+    // window's own MainWindow opens them from the Core's capabilities
+    // (transmitSettingsVersion 2 and 3, off the air), not a test granting
+    // them by hand. Nothing keys.
+    void windowOnlyTransmitControlsReachTheCoreThroughTheRealGate()
+    {
+        QTemporaryDir directory;
+        AppSettings stationSettings(directory.filePath(QStringLiteral("station.settings")));
+        stationSettings.setValue(QLatin1String(AppSettings::kDaemonProfileSeededKey),
+                                 QStringLiteral("True"));
+        RadioModel station;
+        station.setBoardForTest(HPSDRHW::Saturn);
+        station.configureStreamPool(5, 5, 192000);
+        station.setConnectionStateForTest(ConnectionState::Connected);
+        station.addSlice(QStringLiteral("pan-0"));
+        RadioInfo info;
+        info.macAddress = QStringLiteral("AA:BB:CC:DD:EE:31");
+        info.boardType = HPSDRHW::Saturn;
+        station.setLastRadioInfoForTest(info);
+        station.scopeTxProfiles(info.macAddress);
+        StationServer server(&station, stationSettings,
+                             NereusSDR::Test::seedUpgradedCoreToken(directory.path()));
+        SettingsProxy proxy;
+        BackendScope backend(&proxy);
+        MainWindow window({QStringLiteral("ws://127.0.0.1:1"), {}, {}, true}, nullptr,
+                          MainWindow::ConnectionStartup::Deferred);
+        auto* client = window.findChild<StationClient*>();
+        QVERIFY(client);
+        auto* stationLink = new Test::LoopbackTransport(QStringLiteral("station"));
+        auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
+        stationLink->linkTo(clientLink);
+        client->startSession(clientLink, server.token());
+        server.acceptTransport(stationLink);
+        QTRY_VERIFY(client->isHandshakeComplete());
+        TxApplet* applet = window.findChild<TxApplet*>();
+        QVERIFY(applet);
+        const auto named = [applet](const QString& accessible) -> QWidget* {
+            for (QWidget* w : applet->findChildren<QWidget*>()) {
+                if (w->accessibleName() == accessible) {
+                    return w;
+                }
+            }
+            return nullptr;
+        };
+        auto* mon = qobject_cast<QPushButton*>(named(QStringLiteral("Monitor enable")));
+        auto* lev = applet->findChild<QPushButton*>(QStringLiteral("TxLevButton"));
+        auto* eq = applet->findChild<QPushButton*>(QStringLiteral("TxEqButton"));
+        auto* cfc = applet->findChild<QPushButton*>(QStringLiteral("TxCfcButton"));
+        auto* voxLevel = applet->findChild<QSlider*>(QStringLiteral("TxVoxThresholdSlider"));
+        auto* voxHold = applet->findChild<QSlider*>(QStringLiteral("TxVoxHoldSlider"));
+        auto* profile = qobject_cast<QComboBox*>(named(QStringLiteral("TX profile")));
+        QVERIFY(mon && lev && eq && cfc && voxLevel && voxHold && profile);
+        // The real gate opens them once the Core's settings are here.
+        for (QWidget* control : {static_cast<QWidget*>(mon), static_cast<QWidget*>(lev),
+                                 static_cast<QWidget*>(eq), static_cast<QWidget*>(cfc),
+                                 static_cast<QWidget*>(voxLevel), static_cast<QWidget*>(voxHold),
+                                 static_cast<QWidget*>(profile)}) {
+            QTRY_VERIFY2(control->isEnabled(), qPrintable(control->accessibleName()));
+        }
+        TransmitModel& core = station.transmitModel();
+        const bool monWant = !core.monEnabled();
+        mon->click();
+        QTRY_COMPARE(core.monEnabled(), monWant);
+        const bool levWant = !core.txLevelerOn();
+        lev->click();
+        QTRY_COMPARE(core.txLevelerOn(), levWant);
+        const bool eqWant = !core.txEqEnabled();
+        eq->click();
+        QTRY_COMPARE(core.txEqEnabled(), eqWant);
+        const bool cfcWant = !core.cfcEnabled();
+        cfc->click();
+        QTRY_COMPARE(core.cfcEnabled(), cfcWant);
+        const int levelWant = core.voxThresholdDb() == -40 ? -41 : -40;
+        voxLevel->setValue(levelWant);
+        QTRY_COMPARE(core.voxThresholdDb(), levelWant);
+        const int holdWant = voxHold->value() == voxHold->minimum() + 10 * voxHold->singleStep()
+                                 ? voxHold->minimum() + 20 * voxHold->singleStep()
+                                 : voxHold->minimum() + 10 * voxHold->singleStep();
+        voxHold->setValue(holdWant);
+        QTRY_COMPARE(core.voxHangTimeMs(), holdWant);
+        // The TX profile: the pick goes to the Core as txProfile.select.
+        // (This harness shares one AppSettings between the Core and the
+        // window, so the Core's own profile store is not seeded here;
+        // tst_remote_tx_profiles shows the Core taking the pick.)
+        QTRY_VERIFY(profile->count() > 1);
+        const QString pick = profile->itemText(profile->currentIndex() == 0 ? 1 : 0);
+        stationLink->clearReceived();
+        profile->setCurrentText(pick);
+        const auto selected = [stationLink, &pick]() {
+            for (const QByteArray& wire : stationLink->received()) {
+                SessionMessage message;
+                if (SessionMessages::decode(wire, &message)
+                    && message.kind == SessionMessageKind::CommandInvoke
+                    && message.commandVerb == "txProfile.select") {
+                    for (const MirrorUpdate& a : message.arguments) {
+                        if (a.name == "name" && a.value.toString() == pick) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        };
+        QTRY_VERIFY(selected());
+        QVERIFY(!station.moxController()->isMox());
+    }
+
     void authenticatedRemoteControlsWriteXitAndRit()
     {
         QTemporaryDir directory;
@@ -240,26 +355,37 @@ private slots:
         QTRY_COMPARE(offset->value(), -150);
         stationSlice->setXitEnabled(false);
         QTRY_VERIFY(!xit->isChecked());
-        // Group B fix wave: on the air, as in Thetis, XIT and the TX antenna
-        // still change (console.cs udXIT_ValueChanged retunes with
-        // updateVFOFreqs(_mox); an Alex TX antenna applies at once with
-        // tx = _mox), from a remote window as from a local one.
+        // Transmit group fix wave 2 (the several-devices design, rulings
+        // 7.4 and 8.11): the Core's own key is a holder on the air like any
+        // device's, and the slice it transmits on is frozen for every other
+        // device. This window's XIT and TX antenna writes to that slice are
+        // refused until the key ends; the holder itself changes them on the
+        // air as in Thetis (tst_on_air_refusals).
         MoxController* const mox = station.moxController();
         QVERIFY(mox);
         mox->setMoxCheck({});
         mox->setMox(true);
         QTRY_VERIFY(window.radioModel()->isCoreOnAir());
-        QVERIFY(xit->isEnabled() && offset->isEnabled() && zero->isEnabled());
-        xit->click();
-        QTRY_VERIFY(stationSlice->xitEnabled());
-        offset->setValue(120);
-        QTRY_COMPARE(stationSlice->xitHz(), 120);
+        QCOMPARE(station.txBoundSlice(), stationSlice);
         const QString txAntenna = stationSlice->txAntenna() == QStringLiteral("ANT2")
             ? QStringLiteral("ANT3") : QStringLiteral("ANT2");
+        xit->click();
+        offset->setValue(120);
         window.radioModel()->sliceById(id)->setTxAntenna(txAntenna);
-        QTRY_COMPARE(stationSlice->txAntenna(), txAntenna);
+        QTest::qWait(300);
+        QVERIFY(!stationSlice->xitEnabled());
+        QCOMPARE(stationSlice->xitHz(), -150);
+        QVERIFY(stationSlice->txAntenna() != txAntenna);
+        // The window shows the Core's values again after each refusal.
+        QTRY_COMPARE(window.radioModel()->sliceById(id)->txAntenna(), stationSlice->txAntenna());
+        QTRY_VERIFY(!xit->isChecked());
         mox->setMox(false);
         QTRY_VERIFY(!window.radioModel()->isCoreOnAir());
+        // Off the air the same writes go ahead.
+        window.radioModel()->sliceById(id)->setTxAntenna(txAntenna);
+        QTRY_COMPARE(stationSlice->txAntenna(), txAntenna);
+        stationSlice->setXitEnabled(true);
+        QTRY_VERIFY(xit->isChecked());
         xit->click();
         QTRY_VERIFY(!stationSlice->xitEnabled());
         stationSlice->setXitHz(-150);

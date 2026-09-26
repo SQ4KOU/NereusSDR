@@ -31,6 +31,23 @@
 //                 section 3), after Thetis ChannelMaster cmaster.c:365-366
 //                 [v2.10.3.15], by J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-24 - R-R3-39: every WDSP call runs on the receive lane
+//                 (DspControlThread). Setters change the wrapper's state at
+//                 once and post their WDSP call, keyed per parameter; meters
+//                 read a cache the lane refreshes; readbacks are requests;
+//                 processIq outputs silence until the lane has opened the
+//                 channel. NereusSDR-original, by J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25 - R-R3-39, Sub-epic C-1: the DeepFilterNet3 instance is built
+//                 at a channel's first DFNR selection, on the receive lane,
+//                 not in the constructor; availability comes from HAVE_DFNR
+//                 and ModelPaths without a load. NereusSDR-original, by
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
+//   2026-09-25 - R-R3-49, Sub-epic C-1: dfnrUnavailable reports a first
+//                 DFNR selection whose model is missing or failed to load.
+//                 NereusSDR-original, by J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 //   2026-09-26 - Remote-window parity Task 16 (R-R3-49): the filter
 //                 response split into filterResponseBins and
 //                 resampleFilterResponse, so a Core can send its bins.
@@ -219,6 +236,7 @@ warren@wpratt.com
 #include "NbFamily.h"
 #include "WdspTypes.h"
 #include "dsp/ChannelConfig.h"
+#include "dsp/NnrSettings.h"
 #include "dsp/Notch.h"
 #include "dsp/RxChannelState.h"
 
@@ -233,13 +251,18 @@ warren@wpratt.com
 #include <QList>
 #include <QObject>
 
+#include <array>
 #include <atomic>
 #include <cstring>
+#include <functional>
 #include <memory>
+#include <mutex>
+#include <optional>
 
 namespace NereusSDR {
 
 class WdspEngine;  // forward declaration for rebuild()
+class DspControlThread;
 
 // The DSP > Options mode group a slice mode reads its per-mode keys from:
 // "Phone" (USB, LSB, AM, SAM, DSB), "Cw" (CWU, CWL), "Dig" (DIGU, DIGL,
@@ -258,8 +281,12 @@ QString dspOptionsModeGroup(DSPMode mode);
 //
 // Thread safety:
 //   - Main thread: create/destroy, all property setters
-//   - Audio thread (future): processIq() calls fexchange2
-//   - Meter timer: getMeter() — WDSP meter reads are lock-free
+//   - DSP thread (RxDspWorker): processIq() calls fexchange2
+//   - Receive lane (R-R3-39, setControlLane): every other WDSP call. A
+//     setter changes the wrapper's state at once and posts its WDSP call;
+//     getMeter() and the readbacks read what the lane last read. With no
+//     lane set (unit tests, a bare WdspEngine) every WDSP call runs on the
+//     caller's thread, as before.
 //
 // Ported from Thetis cmaster.c create_rcvr / wdsp-integration.md section 4.
 class RxChannel : public QObject {
@@ -272,12 +299,49 @@ class RxChannel : public QObject {
 public:
     explicit RxChannel(int channelId, int bufferSize, int sampleRate,
                        QObject* parent = nullptr);
+    // R-R3-39: a channel whose WDSP calls run on `lane` (see
+    // setControlLane). Its NbFamily makes no WDSP call here: WdspEngine
+    // runs createWdspObjectsOnLane() on the lane after OpenChannel.
+    RxChannel(int channelId, int bufferSize, int sampleRate,
+              DspControlThread* lane, QObject* parent);
     ~RxChannel() override;
 
     int channelId() const { return m_channelId; }
-    int bufferSize() const { return m_bufferSize; }
-    int sampleRate() const { return m_sampleRate; }
+    int bufferSize() const { return m_bufferSize.load(std::memory_order_acquire); }
+    int sampleRate() const { return m_sampleRate.load(std::memory_order_acquire); }
 
+    // --- R-R3-39: the receive lane ---
+    //
+    // Every WDSP call this channel (and its NbFamily and NNR) makes runs on
+    // `lane`. A setter updates the wrapper's state at once and posts its
+    // WDSP call, keyed per parameter, so a burst of changes to one control
+    // costs the lane one call. A call made on the lane itself runs at once.
+    // Null (the default) runs every WDSP call on the caller's thread.
+    // Set by WdspEngine before the channel is used; never while jobs of this
+    // channel are queued.
+    void setControlLane(DspControlThread* lane);
+    DspControlThread* controlLane() const { return m_lane; }
+
+    // True once the WDSP channel behind this wrapper is open. WdspEngine
+    // clears it on a wrapper whose OpenChannel is still queued on the lane
+    // and sets it from there; processIq outputs silence until then.
+    bool isWdspReady() const { return m_wdspReady.load(std::memory_order_acquire); }
+    void setWdspReady(bool ready) { m_wdspReady.store(ready, std::memory_order_release); }
+
+    // WdspEngine's lane-side lifecycle hooks: the NbFamily's WDSP objects are
+    // created after OpenChannel and destroyed before CloseChannel, on the
+    // lane. markRetired() makes every job of this wrapper still queued a
+    // no-op. Lane (or the caller's thread with no lane) only.
+    void createWdspObjectsOnLane();
+    void destroyWdspObjectsOnLane();
+    void markRetired();
+
+    // The C++ side of setSampleRate: the rate and input size carried by the
+    // wrapper, no WDSP call. WdspEngine's asynchronous rate change updates it
+    // at once and runs applySampleRateOnLane() from the lane with the rate
+    // and input size the carry holds.
+    void setSampleRateCarry(int newRateHz);
+    void applySampleRateOnLane(int rateHz, int bufferSize);
     // --- Live sample-rate change (Thetis-faithful, replaces rebuild) ---
     //
     // Apply a new wire input rate to the existing WDSP channel without
@@ -339,6 +403,13 @@ public:
     //   if (agc_thresh_point < -160.0) agc_thresh_point = -160.0; //[2.10.3.6]MW0LGE changed from -143
     // Returns clamped value in -160..+2 dB range (Thetis console.cs:50423-50424 [v2.10.3.15]).
     double readBackAgcThresh() const;
+
+    // R-R3-39: both readbacks above, read on the lane after every AGC
+    // setter already posted, then `done(top, thresh)` on `context`'s thread.
+    // `done` never runs once `context` is gone. With no lane both are read
+    // and `done` runs before this returns.
+    void requestAgcReadBack(QObject* context,
+                            std::function<void(double top, double thresh)> done);
 
     // AGC advanced parameters
     // From Thetis Project Files/Source/Console/radio.cs:1037-1124
@@ -509,6 +580,37 @@ public:
     bool requestNnrLimit(int limit);
     int nnrLimit() const { return m_nnrLimit.load(std::memory_order_acquire); }
 
+    // --- R-R3-39: NNR with a receive lane ---
+    //
+    // With a lane, NNR's WDSP calls (which take the channel's DSP lock) run
+    // there. setNnrTuning, setNnrDiagnostics, setActiveNr and selectNr then
+    // decide at once from what the lane last read (nnrDiagnostics()),
+    // refusing with the same reasons WDSP gives, and accept otherwise; the
+    // lane applies the change and, should WDSP still refuse it, emits
+    // nnrRequestRefused. After every NNR call the lane re-reads the
+    // diagnostics and emits nnrDiagnosticsRefreshed. Without a lane all of
+    // this runs at once, as before, and the signals are emitted before the
+    // call returns.
+
+    // Re-reads the NNR diagnostics (on the lane), then emits
+    // nnrDiagnosticsRefreshed.
+    void refreshNnrDiagnostics();
+
+    // The selection path RadioModel's selection applier runs: when
+    // `tuningFirst` is set, that tuning is applied before the selection and
+    // a refused tuning refuses the selection too (so a receiver never runs a
+    // model other than the saved one); then setActiveNr(slot). `previous` is
+    // the selection to go back to when the lane refuses it later.
+    bool selectNr(NrSlot slot, const NnrSettings* tuningFirst, NrSlot previous,
+                  QString* reason = nullptr);
+
+    // RadioModel::applyNnrStateToChannel as one operation: the limit, the
+    // saved tuning, then the saved selection, or NR off when the tuning is
+    // refused while NNR is selected or when `nr3Blocked`. The diagnostics it
+    // leaves carry the tuning's refusal reason as their explanation.
+    void applyNnrState(int limit, const NnrSettings& settings, NrSlot slot,
+                       bool nr3Blocked);
+
     // Per-knob convenience setters (single WDSP call each).
     // Gain/leakage are in raw WDSP domain (caller is responsible for 1e-6/1e-3 scaling).
     // From Thetis setup.cs:8539-8566 [v2.10.3.13]
@@ -553,12 +655,21 @@ public:
     bool mnrActive () const { return m_mnrActive .load(std::memory_order_acquire); }
 
     // DFNR — DeepFilterNet3 neural noise reduction (Sub-epic C-1, Task 9)
-    // Tuning setters forward to the DeepFilterFilter instance if present.
+    // Tuning setters keep the value and forward it to the DeepFilterFilter
+    // instance once one exists; an instance built later starts with them.
     // Safe to call unconditionally — no-ops when HAVE_DFNR is not defined.
 #ifdef HAVE_DFNR
     void setDfnrAttenLimit(float dB);
     void setDfnrPostFilterBeta(float beta);
 #endif
+
+    // R-R3-39: whether DFNR can run in this build: HAVE_DFNR and a
+    // DeepFilterNet3 model ModelPaths can find. Loads nothing.
+    static bool dfnrAvailable();
+    // True once this channel's DeepFilterNet3 instance is built. It is built
+    // at the channel's first DFNR selection, on the receive lane, and kept
+    // until the channel is destroyed.
+    bool dfnrLoaded() const;
 
     // MNR — Apple Accelerate MMSE-Wiener spectral NR (Sub-epic C-1, Task 11).
     // macOS only (HAVE_MNR is defined only on Apple platforms). On other
@@ -679,7 +790,7 @@ public:
     // (third_party/wdsp/src/nbp.c:487-496 is its sole writer) and
     // calc_nbp_lightweight reads it with no reference to any run flag
     // (nbp.c:192), so a shift that stops being pushed fails silently.
-    double notchShiftHz() const { return m_notchShiftHz; }
+    double notchShiftHz() const { return m_notchShiftHz.load(std::memory_order_acquire); }
 
     // --- Manual notch filter (TNF) ---
     //
@@ -758,6 +869,30 @@ public:
     /// would read a notch that does not exist. `out.id` is left untouched:
     /// WDSP's database is positional and carries no id.
     bool notchAt(int index, Notch& out) const;
+
+    // --- R-R3-39: the notch database with a receive lane ---
+    //
+    // notchCount(), notchAt() and the WDSP-reading paths above take the
+    // channel's DSP lock; with a lane only the lane may call them (and
+    // minNotchWidthHz() returns what the lane last read). The owner uses
+    // the forms below, which run in order on the lane (at once without
+    // one).
+
+    /// addNotch / editNotch / deleteNotch, then RadioModel's recovery: a
+    /// refused change resyncs the whole list to `expected`, and a count that
+    /// still differs from `expected.size()` resyncs too.
+    void addNotchReconciled(int index, const Notch& n, const QList<Notch>& expected);
+    void editNotchReconciled(int index, const Notch& n, const QList<Notch>& expected);
+    void deleteNotchReconciled(int index, const QList<Notch>& expected);
+    /// Resyncs to `expected` when WDSP holds a different number of notches.
+    void reconcileNotchCount(const QList<Notch>& expected);
+
+    /// Readbacks on the lane, answered on `context`'s thread (never once
+    /// `context` is gone); at once without a lane.
+    void requestNotchCount(QObject* context, std::function<void(int)> done);
+    void requestNotchAt(int index, QObject* context,
+                        std::function<void(bool ok, Notch notch)> done);
+    void requestMinNotchWidth(QObject* context, std::function<void(double)> done);
 
     // --- Filter convenience setters (single-axis) ---
     // Thin wrappers that remember the pending low/high and call setFilterFreqs.
@@ -894,6 +1029,10 @@ public:
     // blocks of input while I/Q flows (Task 8). Then it counts as inactive
     // and activeChanged(false) is emitted. With no I/Q arriving the stop ends
     // at WDSP's 100 ms drain timeout.
+    //
+    // R-R3-39: with a receive lane this is the state the owner asked for; it
+    // changes at once, while the lane runs the SetChannelState calls (and a
+    // draining stop's wait) in the order above. processIq follows the lane.
     bool isActive() const { return m_active.load(); }
 
 #ifdef NEREUS_BUILD_TESTS
@@ -943,7 +1082,18 @@ public:
 
     // --- Metering ---
 
+    // R-R3-39: with a receive lane this reads a cache and asks the lane to
+    // refresh it (one queued refresh however many readers ask, so the cache
+    // follows the fastest reader's interval); it never touches WDSP on the
+    // caller's thread. -140 dBm until the lane's first read of a running
+    // channel, and while the channel is off, as before.
     double getMeter(RxMeterType type) const;
+
+    // R-R3-39: whether getMeter's cache holds a reading the lane took after
+    // the last change of isActive() (always true with no lane). Until then
+    // the cache may still show the state before it; a reader that must not
+    // publish a stale reading treats the channel as having none yet.
+    bool meterReadingReady() const;
 
     // --- DSP load (R-R3-40, NereusSDR-original) ---
     //
@@ -998,9 +1148,31 @@ public:
     // been set via setWdspEngine() before this slot fires.
     void setWdspEngine(WdspEngine* engine) { m_wdspEngine = engine; }
 
+    // R-R3-39: with a receive lane the new sizes are carried at once, the
+    // WDSP calls run on the lane, and this returns 0; dspOptionsApplied
+    // carries the time the lane took.
     qint64 onModeChanged(DSPMode newMode);
 
 signals:
+    // R-R3-39: the lane re-read the NNR diagnostics (nnrDiagnostics() now
+    // returns them).
+    void nnrDiagnosticsRefreshed();
+
+    // R-R3-39: an NNR change accepted at once was refused by WDSP on the
+    // lane. `previousSlot` is the NrSlot to go back to for a refused
+    // selection, or -1 for a refused tuning or diagnostic mode.
+    void nnrRequestRefused(const QString& reason, int previousSlot);
+
+    // R-R3-49, Sub-epic C-1: this channel's first DFNR selection found the
+    // DeepFilterNet model missing (modelMissing) or failing to load, so DFNR
+    // cannot run. Emitted once, on the receive lane (the caller's thread
+    // with no lane). RadioModel turns the Core's dfnrRunnable off.
+    void dfnrUnavailable(bool modelMissing);
+
+    // R-R3-39: onModeChanged's filter and buffer sizes were applied on the
+    // lane, taking `elapsedMs`.
+    void dspOptionsApplied(qint64 elapsedMs);
+
     void modeChanged(NereusSDR::DSPMode mode);
     void agcModeChanged(NereusSDR::AGCMode mode);
     void activeChanged(bool active);
@@ -1044,16 +1216,77 @@ signals:
 private:
     // Shared body of setActive / deactivateWithoutDrain.
     void applyActive(bool active, bool drainOnStop);
+    // readBackAgcThresh at a given channel rate (a lane job reads the rate
+    // the owner had when it asked).
+    double readBackAgcThreshAt(int sampleRate) const;
+    // The WDSP half of applyActive, in the lane's order (R-R3-39).
+    void applyActiveOnLane(bool active, bool drainOnStop, bool alsoRequested);
     // Completes a no-drain stop WDSP has not reported done (Task 8).
     void finishPendingStop();
+
+    // ── R-R3-39: running WDSP calls on the receive lane ──────────────────
+    // runKeyed: at once with no lane (or on the lane itself); otherwise
+    // queued under the key of (channel, parameter, sub), so a newer call for
+    // the same parameter replaces one still queued. runOrdered: the same,
+    // unkeyed, for calls whose order against the others matters (state,
+    // notches, NNR, sizes). Both drop the job once the wrapper is retired.
+    void runKeyed(quint64 parameter, int sub, std::function<void()> job) const;
+    void runOrdered(std::function<void()> job) const;
+    // Posts one keyed meter-cache refresh (getMeter).
+    void requestMeterRefresh() const;
+    void refreshMeterCacheOnLane(quint64 generation) const;
+    // NNR on the lane: re-read the diagnostics into the cache (with an
+    // optional explanation override) and emit nnrDiagnosticsRefreshed.
+    void refreshNnrDiagnosticsOnLane(const QString* explanationOverride = nullptr);
+    // The body setActiveNr always ran; returns false when NNR would not run.
+    bool applyActiveNrOnLane(NrSlot slot);
+    // Sets the NR selection flags (m_activeNr and the ones kept with it).
+    void storeActiveNrFlags(NrSlot slot);
+    // R-R3-39: builds this channel's DeepFilterNet3 instance when `slot` is
+    // DFNR and none is built yet (on the receive lane when there is one), publishes the
+    // pointer, then sets m_dfnrActive from the current selection.
+    void ensureDfnrOnLane(NrSlot slot);
+    // NNR readiness as the lane last read it: nullopt before its first read.
+    std::optional<NnrDiagnostics> knownNnrDiagnostics() const;
+    void refreshMinNotchWidthOnLane();
+    double readMinNotchWidthNow() const;
+    void syncNotchesNow(const QList<Notch>& notches);
+    void reconcileNotchCountNow(const QList<Notch>& expected);
+
+    DspControlThread* m_lane{nullptr};
+    // Shared with every queued job: false once the wrapper is retired, so a
+    // job still queued never touches it (WdspEngine deletes it afterwards).
+    std::shared_ptr<std::atomic<bool>> m_alive{std::make_shared<std::atomic<bool>>(true)};
+    // True once the WDSP channel is open (see isWdspReady).
+    std::atomic<bool> m_wdspReady{true};
+    // The state the lane has applied: processIq and the meter cache follow
+    // this, isActive() follows m_active (R-R3-39). Equal without a lane.
+    std::atomic<bool> m_dspActive{false};
+    // getMeter's cache, one slot per RxMeterType, refreshed on the lane.
+    static constexpr int kRxMeterTypes = static_cast<int>(RxMeterType::AgcAvg) + 1;
+    mutable std::array<std::atomic<double>, kRxMeterTypes> m_meterCache{};
+    // Bumped by every change of the requested state; a refresh posted
+    // before the change does not mark the cache ready.
+    std::atomic<quint64> m_meterGeneration{0};
+    mutable std::atomic<bool> m_meterCacheReady{false};
+    // NNR as the lane last read it, and the accepted tuning (the lane writes
+    // what WDSP accepted). Guarded by m_nnrMutex: read on the owner's
+    // thread, written on the lane.
+    mutable std::mutex m_nnrMutex;
+    NnrDiagnostics m_nnrDiagnosticsCache;
+    bool m_nnrDiagnosticsKnown{false};
+    // The narrowest notch the lane last read (minNotchWidthHz with a lane).
+    std::atomic<double> m_minNotchWidthCache{0.0};
 
     const int m_channelId;
     // m_bufferSize and m_sampleRate are mutated by setSampleRate() — they
     // were const in the original construction-time-immutable design, but
     // live rate change (Thetis cmaster.c:453-507 [v2.10.3.13]) mutates the
     // WDSP-side rate/size so the cached values must follow.
-    int m_bufferSize;
-    int m_sampleRate;
+    // Atomic (R-R3-39): the owner changes the carry at once while the DSP
+    // worker reads bufferSize() for its external-diversity chunk.
+    std::atomic<int> m_bufferSize;
+    std::atomic<int> m_sampleRate;
 
     // Atomic flags for lock-free audio thread reads
     std::atomic<int> m_mode{static_cast<int>(DSPMode::LSB)};  // Must match WdspEngine::createRxChannel init
@@ -1147,10 +1380,22 @@ private:
 
 #ifdef HAVE_DFNR
     // DeepFilterNet3 filter instance (Sub-epic C-1, Task 9).
-    // Created in constructor; null if model not found or df_create failed.
-    // Accessed only from the audio thread during processIq(); main thread
-    // writes tuning parameters via atomic setters in DeepFilterFilter.
+    // R-R3-39: built at the channel's first DFNR selection, on the receive
+    // lane (ensureDfnrOnLane), never in the constructor: the model load is
+    // about 250 ms and a connect opens five channels. m_dfnr owns it and is
+    // written only there; it is freed with the channel. The audio thread
+    // reads m_dfnrActive (acquire) and then m_dfnrInstance (acquire), and
+    // uses the instance only when both are set. The instance is published
+    // (release) before m_dfnrActive can be set, so a set flag never shows a
+    // half-built instance.
     std::unique_ptr<NereusSDR::DeepFilterFilter> m_dfnr;
+    std::atomic<NereusSDR::DeepFilterFilter*> m_dfnrInstance{nullptr};
+    // Set when the model could not be found or loaded; DFNR then stays off
+    // on this channel and the load is not tried again.
+    std::atomic<bool> m_dfnrUnavailable{false};
+    // Tuning kept for an instance built later (DeepFilterFilter's defaults).
+    std::atomic<float> m_dfnrAttenLimit{100.0f};
+    std::atomic<float> m_dfnrPostFilterBeta{0.0f};
 #endif
 
 #ifdef HAVE_MNR
@@ -1200,7 +1445,8 @@ private:
     // RXANBPSetShiftFrequency). Main-thread-only, same reasoning as
     // m_notchTuneFrequencyHz. Do NOT move this write away from the WDSP
     // call it mirrors in setShiftFrequency; that co-location is the point.
-    double m_notchShiftHz{0.0};
+    // Atomic: with a receive lane it is written there (R-R3-39).
+    std::atomic<double> m_notchShiftHz{0.0};
 
     // Manual notch carries. Main-thread only, no atomics: WDSP owns the
     // authoritative per-channel notch state and there is no WDSP getter for

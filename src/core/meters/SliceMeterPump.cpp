@@ -28,6 +28,11 @@
 //                 :46910-46914 [v2.10.3.15]) per slice, cleared with the
 //                 rest; polled(). J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-24 -- R-R3-39: RxChannel::getMeter reads the cache the
+//                 receive lane refreshes, so this poll, on the event loop,
+//                 makes no WDSP call; its reads keep the cache refreshed at
+//                 this timer's interval. J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -252,6 +257,7 @@ void SliceMeterPump::poll()
         const double signalPeakDbm =
             ch->getMeter(RxMeterType::SignalPeak) + rxOffsetDb;
 
+
         // From Thetis Console/dsp.cs:957 [@501e3f5] (CalculateRXMeter):
         //   case MeterType.AVG_SIGNAL_STRENGTH: val = GetRXAMeter(channel, RXA_S_AV);
         // The adjacent ADC_REAL case at dsp.cs:959 carries //MW0LGE [2.9.0.7]
@@ -259,6 +265,16 @@ void SliceMeterPump::poll()
         // Display-side offset per console.cs:46828 [v2.10.3.13].
         const double signalAverageDbm =
             ch->getMeter(RxMeterType::SignalAvg) + rxOffsetDb;
+
+        // R-R3-39: the readings above come from the receive lane's cache,
+        // and reading them asked the lane for a fresh one. Until the lane
+        // has read the channel since its last start or stop the cache may
+        // hold the state before it, so the slice shows no reading yet, the
+        // same as a slice with no channel.
+        if (!ch->meterReadingReady()) {
+            clearSliceReadings(slice);
+            continue;
+        }
 
         double dbm = -140.0;
         switch (source) {

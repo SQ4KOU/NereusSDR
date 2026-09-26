@@ -47,8 +47,25 @@
 //                updates pass through its own update gap (Thetis
 //                udTCIRateLimit, TciUpdateGap). AI-assisted transformation
 //                via Anthropic Claude Code.
+//   2026-09-25 - R-R3-39 by J.J. Boyd (KG4VCF): receive audio's WDSP
+//                resamplers are made, run and destroyed on the model's
+//                receive lane, and a resampled block is sent back on this
+//                object's thread in the order it was taken. AI-assisted
+//                transformation via Anthropic Claude Code.
 //   2026-09-25 - iPhone app Task 73 (R-IOS-02, ruling 5.13): the slice write
 //                gate, handed to the protocol (setSliceWriteGate).
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 35 (R-IOS-13; the several-devices
+//                design, ruling 8.14): a remote window forwards an app's
+//                transmit to its Core as tx.key {trigger:"tci"} under the
+//                holder rule (setRemoteTransmit); the TX audio lock is taken
+//                only after the Core admits the key; trx:N,false releases
+//                only this window's own key. NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 36 (R-IOS-13): through a remote
+//                window the lock holder's transmit audio goes to the Core
+//                on the window's microphone line (RemoteTransmit::audio).
 //                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
 
@@ -78,6 +95,7 @@ class QTimer;
 
 namespace NereusSDR {
 
+class DspControlThread;
 class RadioModel;
 class RxChannel;
 class SliceModel;
@@ -126,6 +144,54 @@ public:
     // through it first, and receivers apps still listen to are asked for
     // again through the new one.
     void setRemoteReceiverAudio(RemoteReceiverAudio source);
+
+    // ── iPhone app plan Task 35: a remote window's TCI transmit ────────────
+    //
+    // The several-devices design, ruling 8.14: an app's transmit through a
+    // remote window is forwarded to the Core as tx.key {trigger:"tci"} and
+    // keys only while this window's device holds transmit (the holder rule,
+    // decided by the Core). Among this server's apps, which all act as the
+    // same device, the gaps plan's Task 4 rule (Thetis's handleTrxMessage)
+    // decides whether a second app's trx keys: while this window's key is
+    // on, another app's trx:N,true does nothing and is not answered. Where
+    // the two differ the holder rule wins.
+    //
+    // The TX audio lock (m_txAudioActiveClient) is taken only after the
+    // Core admits the key. A refused key takes nothing and is answered to
+    // the asking app as Task 4 answers a refused trx (trx:N,false, the
+    // real state); the Core's reason goes to operatorNotice(), never onto
+    // the TCI wire. An app's trx:N,false sends tx.unkey for this window's
+    // key only (the Core releases nothing else). When the Core ends the
+    // key on its own (RadioModel::transmittingChanged(false) in the
+    // window), the lock is released and every app hears trx:0,false.
+    //
+    // Without a forwarder (an older Core, or a window that does not
+    // declare remote transmit) transmit stays refused as before.
+    struct RemoteKeyAnswer {
+        bool accepted{false};
+        /// The accepted key's epoch (tx.unkey names it).
+        quint32 epoch{0};
+        /// The Core's sentence when refused.
+        QString reason;
+    };
+    struct RemoteTransmit {
+        /// Sends tx.key {trigger:"tci"}; `answer` runs once, on this
+        /// object's thread, with the Core's verdict.
+        std::function<void(std::function<void(const RemoteKeyAnswer&)> answer)> key;
+        /// Sends tx.unkey {epoch}.
+        std::function<void(quint32 epoch)> unkey;
+        /// iPhone app plan Task 36 (R-IOS-13): the app's transmit audio,
+        /// sent on the window's microphone line in place of the microphone
+        /// (samples interleaved `channels`, at `sampleRate`). Only the app
+        /// holding the TX audio lock (taken once the Core accepted its key)
+        /// reaches it. Unset, the audio goes where it always went.
+        std::function<void(const float* samples, int frames, int channels, int sampleRate)> audio;
+    };
+    /// Remote window only; an empty forwarder (no key) turns it off.
+    void setRemoteTransmit(RemoteTransmit forward);
+    bool forwardsRemoteTransmit() const;
+    /// This window's key on the Core, or 0.
+    quint32 remoteKeyEpoch() const { return m_remoteKeyEpoch; }
 
     // The plain reasons this server gives the operator (never an app).
     static constexpr const char* kRemoteTransmitRefusedReason =
@@ -202,6 +268,11 @@ public:
     // Phase 16 Task 16.3 (sub-commit b): sum of audioResamplers.size() across
     // all connected sessions.  Exposed for lifecycle test assertions.
     int totalResamplerInstances() const;
+
+    // R-R3-39: WDSP resamplers (one per channel) that receive audio holds
+    // right now, across every TciServer. Counted where they are made and
+    // destroyed, on the receive lane or at once. For tests.
+    static int liveRxAudioResamplersForTest();
 
     // Phase 17: TX audio mutex status — 0 or 1 active TX clients.
     // Used by Phase 22 ClientChainApplet to render the TX badge.
@@ -381,8 +452,12 @@ private slots:
     void cleanupResamplers(std::shared_ptr<TciClientSession>& session);
     // R-R3-42 fix wave: a receiver's left and right resamplers, made and
     // destroyed together (both null when either could not be made).
-    static TciClientSession::RxAudioResamplers createRxAudioResamplers(int inRate, int outRate);
-    static void destroyRxAudioResamplers(TciClientSession::RxAudioResamplers& pair);
+    // R-R3-39: made (and destroyed) by a job on the model's receive lane,
+    // at once when the model has no lane (a remote window, or no model).
+    std::shared_ptr<TciRxAudioResampler> makeRxAudioResampler(int inRate, int outRate);
+    void releaseRxAudioResampler(std::shared_ptr<TciRxAudioResampler> resampler);
+    // R-R3-39: the receive lane WDSP resampling runs on, or null.
+    DspControlThread* rxAudioLane() const;
 
     // Phase 3J-1 review P2.3: connect RX audio tap (RxChannel::audioFrameReady
     // → onAudioFrameReady) and IQ tap (RadioModel::rawIqData →
@@ -530,7 +605,11 @@ private:
     void collectRxAudio();
     // One block of receiver `rx` for one client, or nothing when the
     // client has not got a whole block waiting yet.
-    void sendRxAudioBlock(QWebSocket* ws, TciClientSession& session, int rx);
+    // R-R3-39: a block that needs resampling (and any block while an
+    // earlier one of this client is still on the lane) is resampled and
+    // encoded on the receive lane and sent back here, in order.
+    void sendRxAudioBlock(QWebSocket* ws, const std::shared_ptr<TciClientSession>& session,
+                          int rx);
 
     // Phase 3J-1 closeout Item 12 (2026-05-12): per-slice RX gain applied
     // to the audio drained from m_audioRing BEFORE the resample + encode.
@@ -572,16 +651,10 @@ private:
     // We size for the largest legal audioStreamSamples (2048) * 2 channels.
     static constexpr int kMaxDrainSamples = 2048 * 2;
     std::array<float, kMaxDrainSamples> m_drainScratch{};
-    // R-R3-42 fix wave: per-channel resampling scratch. Input: one channel
-    // of a block (up to 2048 frames); output: up to 8x that (384 kHz).
+    // R-R3-42 fix wave: a block of up to 2048 frames per channel is
+    // resampled; the resampler's scratch (TciRxAudioResampler) holds up to
+    // 8x that (384 kHz).
     static constexpr int kMaxResampleFrames = 2048;
-    static constexpr int kMaxResampleOutFrames = kMaxResampleFrames * 8;
-    // Allocated once in the constructor.
-    std::vector<float> m_resampleInLeft;
-    std::vector<float> m_resampleInRight;
-    std::vector<float> m_resampleOutLeft;
-    std::vector<float> m_resampleOutRight;
-    std::vector<float> m_resampleOut;
 
     // Handle for the WdspEngine::initializedChanged connection so we can
     // disconnect it if TciServer is destroyed before WDSP initializes.
@@ -731,6 +804,21 @@ private:
     std::array<bool, kMaxTciRxSlices> m_remoteRequesting{};
     // The app whose audio_start is being handled, while it is.
     const TciClientSession* m_subscribingSession{nullptr};
+    // Task 35: the forwarder, this window's key on the Core (its epoch, 0
+    // for none), a key asked for and not yet answered, an app's
+    // trx:N,false that arrived while it was, and which asks are current.
+    RemoteTransmit m_remoteTransmit;
+    quint32 m_remoteKeyEpoch{0};
+    bool m_remoteKeyPending{false};
+    bool m_remoteReleaseWhilePending{false};
+    quint64 m_remoteKeyGeneration{0};
+    // Task 35: an app's trx through a remote window that forwards transmit.
+    void handleRemoteTrx(QWebSocket* ws, const QString& peer, int rx, bool wantsMox,
+                         bool hasTciArg);
+    // Task 35: this window's key ended (released, or ended by the Core):
+    // the TX audio lock and TX_CHRONO stop, and every app hears it.
+    void endRemoteKey();
+    void broadcastRemoteKeyState(bool on);
 
     QString m_noticeReason;
     bool m_noticeFromReceiverStop{false};

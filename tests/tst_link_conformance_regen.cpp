@@ -40,6 +40,9 @@
 //               announcement-2-devices; the trailing vector follows the count.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-26: transmit group fix wave M9: the "tx" channel keepalive.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -53,6 +56,7 @@
 
 #include "core/dsp/Ps3Snapshot.h"
 #include "core/session/Ps3DisplayCodec.h"
+#include "core/safety/RemoteTxWatchdog.h"
 #include "core/session/StationLanAnnouncement.h"
 #include "core/session/DnsSdAdvertiser.h"
 #include "core/session/media/DisplayCodec.h"
@@ -74,6 +78,7 @@ private slots:
     void writeLanAnnouncement2Devices();
     void writeLanAnnouncement2Trailing();
     void writeDnsSdTxt();
+    void writeTxChannelKeepalive();
     void writePs3dFrame();
     void writeNsdcFrames();
     void writeNsdxDatagrams();
@@ -162,6 +167,21 @@ void TstLinkConformanceRegen::writeLanAnnouncement2Trailing()
     QVERIFY(write(QStringLiteral("lan-announcement-2-trailing"), known + trailing,
                   QJsonObject{{QStringLiteral("codec"), QStringLiteral("nrsc1")},
                               {QStringLiteral("expect"), expect}}));
+}
+
+// Fix wave M9: the "tx" data channel's keepalive, 13 bytes (link section
+// 18.7, remote media control "The \"tx\" data channel").
+void TstLinkConformanceRegen::writeTxChannelKeepalive()
+{
+    const quint64 sequence = 4097;
+    const quint32 epoch = 4294967295U;
+    const QByteArray bytes = RemoteTxWatchdog::channelKeepalive(sequence, epoch);
+    QCOMPARE(bytes.size(), 13);
+    QVERIFY(write(QStringLiteral("tx-keepalive"), bytes,
+                  QJsonObject{{QStringLiteral("codec"), QStringLiteral("tx-keepalive")},
+                              {QStringLiteral("expect"),
+                               QJsonObject{{QStringLiteral("sequence"), qint64(sequence)},
+                                           {QStringLiteral("epoch"), qint64(epoch)}}}}));
 }
 
 void TstLinkConformanceRegen::writeDnsSdTxt()

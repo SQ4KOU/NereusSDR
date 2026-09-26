@@ -24,6 +24,10 @@
 //   2026-09-24 - J.J. Boyd (KG4VCF). R-R3-49 / R-R3-21:
 //                 firstRunPromptsBarredForTestRun(). AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-25 - J.J. Boyd (KG4VCF). iPhone app plan, desktop remote
+//                 transmit (R-IOS-13, R-R3-42): remoteTransmitReason() and
+//                 the TCI transmit forwarder. AI-assisted implementation
+//                 via Anthropic Claude Code.
 //   2026-09-24 - J.J. Boyd (KG4VCF). R-R3-49 (parity Task 1):
 //                 transmitSettingsPermitted() and transmitSettingsReason().
 //                 AI-assisted implementation via Anthropic Claude Code.
@@ -291,6 +295,9 @@ public:
     // (empty when accepted). The menu is the one place a menu refusal is
     // shown; a VFO flag click shows its own.
     static QString applyNrMenuChoice(SliceModel* slice, NereusSDR::NrSlot slot);
+    // R-R3-49, Sub-epic C-1 (tx-followup-4): the DSP > NR menu's entries
+    // (label, slot) in order. BNR is not among them.
+    static QList<std::pair<QString, NereusSDR::NrSlot>> nrMenuEntries();
     // R-R3-43 / R-R3-44: the VAX page's note about the Core's receiver
     // streams. receiverAudioNoteFor reads it from the audio status and
     // whether the Core sends receiver streams (None without media).
@@ -646,6 +653,13 @@ private slots:
     /// content, keeping the layout under it.
     void placeCoreStopBanner();
     bool transmitControlsPermitted() const;
+    /// Desktop remote transmit (R-IOS-13): why this remote window may not
+    /// transmit now, in the Core's words when the Core gave them.
+    QString remoteTransmitReason() const;
+    /// Desktop remote transmit (R-R3-42): the TCI server forwards a
+    /// program's transmit to the Core while the Core takes this window's
+    /// keys, and not otherwise.
+    void refreshTciRemoteTransmit();
     // Group B fix wave: whether BYPS (RX bypass on TX) may change the
     // radio's relay setting, and why not.
     bool rxBypassPermitted() const;
@@ -833,6 +847,9 @@ private slots:
 
 private:
     void ensureRemoteSession();
+    // iPhone app plan Task 39 (D14, R-IOS-13): a remote window's transmit
+    // meters from the Core's `txState`.
+    void wireRemoteTransmitMeters();
     void buildUI();
     void buildMenuBar();
     void buildStatusBar();
@@ -1495,6 +1512,8 @@ private:
     // Phase 23: TCI server + applets.
     // m_tciServer is nullptr in non-WebSocket builds (HAVE_WEBSOCKETS not defined).
     TciServer*         m_tciServer{nullptr};
+    // Desktop remote transmit (R-R3-42): the forwarder is installed.
+    bool               m_tciRemoteTransmitInstalled{false};
     // R-R3-48: the one TCI switch (this window's server and, on a Core with
     // a station server, the Core's) and the RF-Kit's band follow over this
     // window's server in a local window.

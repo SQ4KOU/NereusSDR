@@ -55,6 +55,24 @@
 //                own update gap (Thetis udTCIRateLimit), read at start and
 //                changed live. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-25 - R-R3-39 (station Task 32): the TX sensors' mic level is
+//                TxChannel::txMeter, the transmit lane's last reading,
+//                not a GetTXAMeter call on the event loop. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - D14 / R-R3-49: the mic level names TxMeterType::MicAvg,
+//                mapped to its WDSP index by TxChannel::txMeter. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-39: receive audio's WDSP resamplers (create, run,
+//                destroy) move to the model's receive lane; a resampled
+//                block is encoded there and sent back here in order. J.J.
+//                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-39: stop() ends a TX audio holder's cycle as its
+//                disconnect does (txAudioActiveClientChanged(nullptr), then
+//                stopTxChrono), so the TCI transmit resampler is freed.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - D14 / R-R3-49: the TX sensors' mic level is Thetis's MIC
+//                reading, max(-195, TXA_MIC_AV) (thetisTxReading). J.J.
+//                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-24 - Receiver and transmit gaps plan, Task 7 fix wave
 //                (R-R3-49): the trx note says what an app's trx:N,false
 //                does since Task 7 (it releases a TCI key only). J.J. Boyd
@@ -72,6 +90,19 @@
 //   2026-09-25 - iPhone app Task 73 (R-IOS-02, ruling 5.13):
 //                setSliceWriteGate. NereusSDR-original. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 35 (R-IOS-13; the several-devices
+//                design, ruling 8.14): a remote window forwards an app's
+//                transmit to its Core as tx.key {trigger:"tci"}
+//                (setRemoteTransmit, handleRemoteTrx); the TX audio lock
+//                only after the Core admits the key; trx:N,false and the
+//                lock holder's disconnect release only this window's key.
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 36 (R-IOS-13): through a remote
+//                window the lock holder's transmit audio goes to the Core
+//                on the window's microphone line (RemoteTransmit::audio).
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 
 #ifdef HAVE_WEBSOCKETS
 
@@ -93,6 +124,7 @@
 #include "AudioEngine.h"           // Phase 3J-1 closeout (review P1 #1): volume change broadcast.
 #include "TciVolume.h"             // tciLinearToDbVolume / tciAudioGainToDb for volume frames.
 #include "WdspEngine.h"
+#include "DspControlThread.h"
 #include "wdsp_api.h"   // Phase 3J-1 closeout Item 15 (2026-05-12) — GetTXAMeter direct call
 #include "RxChannel.h"
 #include "TxChannel.h"
@@ -151,11 +183,6 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
     for (auto& history : m_rxHistory) {
         history.assign(static_cast<std::size_t>(kRxHistoryFrames) * 2, 0.0f);
     }
-    m_resampleInLeft.assign(kMaxResampleFrames, 0.0f);
-    m_resampleInRight.assign(kMaxResampleFrames, 0.0f);
-    m_resampleOutLeft.assign(kMaxResampleOutFrames, 0.0f);
-    m_resampleOutRight.assign(kMaxResampleOutFrames, 0.0f);
-    m_resampleOut.assign(static_cast<std::size_t>(kMaxResampleOutFrames) * 2, 0.0f);
 
     // Phase 3J-1 closeout Item 12 (2026-05-12): seed per-slice RX gain atomics
     // to 1.0 (0 dB).  TciApplet pushes the persisted slice-A gain via
@@ -311,7 +338,7 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
             QWebSocket* ws = cit.key();
             TciClientSession& session = *cit.value();
             for (int rx : std::as_const(session.audioStreamEnabled)) {
-                sendRxAudioBlock(ws, session, rx);
+                sendRxAudioBlock(ws, cit.value(), rx);
             }
         }
     });
@@ -460,11 +487,18 @@ TciServer::TciServer(RadioModel* model, QObject* parent)
         // WDSP.id(1,0) per Thetis dsp.cs:926-944.  Only call when the TX
         // channel exists to avoid a WDSP nullptr deref against an
         // unallocated stage.
+        //
+        // R-R3-39: through the TX channel, which reads the meter on the
+        // transmit lane and hands back the lane's last reading, so this
+        // timer never waits on WDSP.
         double micDbm = -140.0;
         if (auto* wdsp = m_remoteWindow ? nullptr : m_model->wdspEngine()) {
-            if (wdsp->txChannel(WdspEngine::kTxChannelId) != nullptr) {
-                micDbm = GetTXAMeter(WdspEngine::kTxChannelId,
-                                     static_cast<int>(TxMeterType::MicAvg));
+            if (auto* tx = wdsp->txChannel(WdspEngine::kTxChannelId)) {
+                // D14, R-R3-49: Thetis sends its MIC reading
+                // (TCIServer.cs MeterReadingsChanged reads Reading.MIC),
+                // max(-195, TXA_MIC_AV) (thetisTxReading, WdspTypes.h).
+                micDbm = thetisTxReading(ThetisTxReading::Mic,
+                                         [tx](TxMeterType meter) { return tx->txMeter(meter); });
             }
         }
         const double fwdWatts  = m_model->radioStatus().forwardPowerWatts();
@@ -1124,6 +1158,18 @@ void TciServer::hookGlobalBroadcasts()
         return;
     }
 
+    // Task 35: in a remote window, the Core ending this window's key on its
+    // own (a safety stop, a take) ends it here too.
+    if (m_remoteWindow) {
+        connect(m_model, &RadioModel::transmittingChanged, this, [this](bool on) {
+            if (!on && m_remoteKeyEpoch != 0) {
+                qCInfo(lcTci) << "TciServer: the Core ended this window's key";
+                m_remoteKeyEpoch = 0;
+                endRemoteKey();
+            }
+        });
+    }
+
     // ── MOX (trx: line) ────────────────────────────────────────────────────
     // Source: Thetis MoxChangeHandlers at TCIServer.cs:6727 [v2.10.3.15]
     // routed to OnMoxChangeHandler -> sendMOX.  MoxController is the
@@ -1635,7 +1681,27 @@ void TciServer::stop()
     m_txSensorTimer->stop();
 
     // Phase 17: release TX audio mutex — no client is active after stop().
+    // R-R3-39: as a holder's disconnect does, end its TX cycle: the TCI
+    // input ring drains and the transmit lane frees the TCI resampler
+    // (TxChannel::clearTciAudio). Without it a server stopped mid-cycle left
+    // the resampler to leak.
+    // Task 35: a remote window's key on the Core ends with the server.
+    if (m_remoteKeyEpoch != 0 && m_remoteTransmit.unkey) {
+        m_remoteTransmit.unkey(m_remoteKeyEpoch);
+    }
+    m_remoteKeyEpoch = 0;
+    m_remoteKeyPending = false;
+    m_remoteReleaseWhilePending = false;
+    ++m_remoteKeyGeneration;
+    const bool heldTxAudio = !m_txAudioActiveClient.isNull();
     m_txAudioActiveClient = nullptr;
+    if (heldTxAudio) {
+        // As on a holder's disconnect: nothing keeps showing a TX audio
+        // client (the indicator, and MainWindow's TCI audio gate on the TX
+        // channel) once the server has stopped.
+        emit txAudioActiveClientChanged(nullptr);
+        stopTxChrono();
+    }
 
     // Disconnect all connected clients.  We disconnect the socket's signals
     // from this object first to prevent onClientDisconnected() re-entry during
@@ -1855,6 +1921,14 @@ void TciServer::onClientDisconnected()
     // but we clear explicitly here so activeTxClientCount() returns 0 in the
     // same event-loop pass as the disconnect.
     if (!m_txAudioActiveClient.isNull() && m_txAudioActiveClient.data() == ws) {
+        // Task 35: the app whose audio a remote window's key carried is
+        // gone; nothing would ever send its trx:N,false, so the key is
+        // released on the Core.
+        if (m_remoteWindow && m_remoteKeyEpoch != 0 && m_remoteTransmit.unkey) {
+            m_remoteTransmit.unkey(m_remoteKeyEpoch);
+            m_remoteKeyEpoch = 0;
+            broadcastRemoteKeyState(false);
+        }
         m_txAudioActiveClient = nullptr;
         qCInfo(lcTci) << "TciServer: TX audio mutex released on disconnect";
         // Phase 23: notify indicator / MainWindow.
@@ -1928,7 +2002,7 @@ QWebSocket* TciServer::activeTxAudioClient() const
     return m_txAudioActiveClient.data();
 }
 
-// ── createRxAudioResamplers() / destroyRxAudioResamplers() ────────────────────
+// ── TciRxAudioResampler ──────────────────────────────────────────────────────
 //
 // R-R3-42 fix wave: one resampler per channel, created and destroyed
 // together, so stereo keeps its left and right apart at every client rate.
@@ -1940,28 +2014,145 @@ QWebSocket* TciServer::activeTxAudioClient() const
 // create_resampleFV(in_rate, out_rate) — from resample.c:342-344 [WDSP v1.29]:
 //   return (void *)create_resampleF(1, 0, 0, 0, in_rate, out_rate);
 // size=0 + null buffers are intentional; xresampleFV sets them per-call.
-TciClientSession::RxAudioResamplers TciServer::createRxAudioResamplers(int inRate, int outRate)
-{
-    TciClientSession::RxAudioResamplers pair;
-    pair.left = create_resampleFV(inRate, outRate);
-    pair.right = create_resampleFV(inRate, outRate);
-    if (!pair.left || !pair.right) {
-        destroyRxAudioResamplers(pair);
+//
+// R-R3-39: the pair and its scratch belong to the receive lane. create(),
+// resample() and destroy() run in jobs posted there, in the order they were
+// posted (at once, on the caller, when the model has no lane). The
+// destructor destroys what is left only if a destroy job never ran (a lane
+// that stopped for good).
+namespace {
+std::atomic<int> s_liveRxAudioResamplers{0};
+} // namespace
+
+struct TciRxAudioResampler {
+    // Output at most 8x the input (384000 / 48000).
+    static constexpr int kMaxOutFrames = 2048 * 8;
+
+    int inRate{48000};
+    int outRate{48000};
+    void* left{nullptr};
+    void* right{nullptr};
+    std::vector<float> inLeft;
+    std::vector<float> inRight;
+    std::vector<float> outLeft;
+    std::vector<float> outRight;
+    std::vector<float> out;
+
+    TciRxAudioResampler(int in, int outHz) : inRate(in), outRate(outHz) {}
+    ~TciRxAudioResampler() { destroy(); }
+    TciRxAudioResampler(const TciRxAudioResampler&) = delete;
+    TciRxAudioResampler& operator=(const TciRxAudioResampler&) = delete;
+
+    void create()
+    {
+        if (left || right) {
+            return;
+        }
+        left = create_resampleFV(inRate, outRate);
+        right = create_resampleFV(inRate, outRate);
+        s_liveRxAudioResamplers.fetch_add((left ? 1 : 0) + (right ? 1 : 0),
+                                          std::memory_order_relaxed);
+        if (!left || !right) {
+            qCWarning(lcTci) << "TciServer: create_resampleFV failed"
+                             << "in_rate" << inRate << "out_rate" << outRate;
+            destroy();
+            return;
+        }
+        inLeft.assign(static_cast<std::size_t>(kMaxOutFrames / 8), 0.0f);
+        inRight.assign(static_cast<std::size_t>(kMaxOutFrames / 8), 0.0f);
+        outLeft.assign(static_cast<std::size_t>(kMaxOutFrames), 0.0f);
+        outRight.assign(static_cast<std::size_t>(kMaxOutFrames), 0.0f);
+        out.assign(static_cast<std::size_t>(kMaxOutFrames) * 2, 0.0f);
     }
-    return pair;
+
+    void destroy()
+    {
+        // destroy_resampleFV, from resample.c:358-360 [WDSP v1.29]:
+        //   destroy_resampleF((RESAMPLEF)ptr);
+        if (left) {
+            destroy_resampleFV(left);
+            left = nullptr;
+            s_liveRxAudioResamplers.fetch_sub(1, std::memory_order_relaxed);
+        }
+        if (right) {
+            destroy_resampleFV(right);
+            right = nullptr;
+            s_liveRxAudioResamplers.fetch_sub(1, std::memory_order_relaxed);
+        }
+    }
+
+    // Resamples one block of `frames` frames of `channels` interleaved
+    // samples. Returns the output and sets `outSamples` (the flat count);
+    // with no resamplers the input comes back unchanged.
+    const float* resample(const float* input, int frames, int channels, int& outSamples)
+    {
+        outSamples = frames * channels;
+        if (!left || !right || frames > kMaxOutFrames / 8) {
+            return input;
+        }
+        // R-R3-42 fix wave: each channel through its own resampler, then
+        // interleaved again. One resampler used to run over the
+        // interleaved L/R, mixing the channels at the wrong rate.
+        // From Thetis TCIServer.cs:1060-1064 [v2.10.3.15]:
+        //   WDSP.xresampleFV(pLeftInput, pLeftOutput, samples, &leftOutputSamples, ...);
+        //   WDSP.xresampleFV(pRightInput, pRightOutput, samples, &rightOutputSamples, ...);
+        //   int outputSamples = Math.Min(leftOutputSamples, rightOutputSamples);
+        // A mono block is the left channel alone (the right resampler idles).
+        if (channels <= 1) {
+            int leftOut = 0;
+            xresampleFV(const_cast<float*>(input), outLeft.data(), frames, &leftOut, left);
+            outSamples = std::clamp(leftOut, 0, kMaxOutFrames);
+            return outLeft.data();
+        }
+        for (int i = 0; i < frames; ++i) {
+            inLeft[static_cast<std::size_t>(i)] = input[2 * i];
+            inRight[static_cast<std::size_t>(i)] = input[2 * i + 1];
+        }
+        int leftOut = 0;
+        int rightOut = 0;
+        xresampleFV(inLeft.data(), outLeft.data(), frames, &leftOut, left);
+        xresampleFV(inRight.data(), outRight.data(), frames, &rightOut, right);
+        const int outFrames = std::clamp(std::min(leftOut, rightOut), 0, kMaxOutFrames);
+        for (int i = 0; i < outFrames; ++i) {
+            out[static_cast<std::size_t>(2 * i)] = outLeft[static_cast<std::size_t>(i)];
+            out[static_cast<std::size_t>(2 * i + 1)] = outRight[static_cast<std::size_t>(i)];
+        }
+        outSamples = outFrames * 2;
+        return out.data();
+    }
+};
+
+int TciServer::liveRxAudioResamplersForTest()
+{
+    return s_liveRxAudioResamplers.load(std::memory_order_relaxed);
 }
 
-void TciServer::destroyRxAudioResamplers(TciClientSession::RxAudioResamplers& pair)
+DspControlThread* TciServer::rxAudioLane() const
 {
-    // destroy_resampleFV — from resample.c:358-360 [WDSP v1.29]:
-    //   destroy_resampleF((RESAMPLEF)ptr);
-    if (pair.left) {
-        destroy_resampleFV(pair.left);
-        pair.left = nullptr;
+    return m_model ? m_model->receiveLane() : nullptr;
+}
+
+std::shared_ptr<TciRxAudioResampler> TciServer::makeRxAudioResampler(int inRate, int outRate)
+{
+    auto resampler = std::make_shared<TciRxAudioResampler>(inRate, outRate);
+    if (DspControlThread* lane = rxAudioLane()) {
+        lane->post([resampler]() { resampler->create(); });
+    } else {
+        resampler->create();
     }
-    if (pair.right) {
-        destroy_resampleFV(pair.right);
-        pair.right = nullptr;
+    return resampler;
+}
+
+void TciServer::releaseRxAudioResampler(std::shared_ptr<TciRxAudioResampler> resampler)
+{
+    if (!resampler) {
+        return;
+    }
+    // After every block of it already posted: the lane runs jobs in order.
+    if (DspControlThread* lane = rxAudioLane()) {
+        lane->post([resampler = std::move(resampler)]() { resampler->destroy(); });
+    } else {
+        resampler->destroy();
     }
 }
 
@@ -1990,16 +2181,11 @@ void TciServer::handleAudioSubscribe(std::shared_ptr<TciClientSession>& session,
     if (!session->audioResamplers.contains(rx)) {
         const int inRate  = 48000;                        // WDSP RX output is always 48 kHz
         const int outRate = session->audioSampleRate;     // negotiated client rate (default 48000)
-        const TciClientSession::RxAudioResamplers pair = createRxAudioResamplers(inRate, outRate);
-        if (pair.left && pair.right) {
-            session->audioResamplers.insert(rx, pair);
-            qCInfo(lcTci) << "TciServer: audio resamplers created for rx" << rx
-                          << "peer" << session->peer
-                          << "in_rate" << inRate << "out_rate" << outRate;
-        } else {
-            qCWarning(lcTci) << "TciServer: create_resampleFV failed for rx" << rx
-                             << "in_rate" << inRate << "out_rate" << outRate;
-        }
+        // R-R3-39: made on the receive lane; a failure is logged there.
+        session->audioResamplers.insert(rx, makeRxAudioResampler(inRate, outRate));
+        qCInfo(lcTci) << "TciServer: audio resamplers created for rx" << rx
+                      << "peer" << session->peer
+                      << "in_rate" << inRate << "out_rate" << outRate;
     }
 }
 
@@ -2020,7 +2206,7 @@ void TciServer::handleAudioUnsubscribe(std::shared_ptr<TciClientSession>& sessio
 
     auto rIt = session->audioResamplers.find(rx);
     if (rIt != session->audioResamplers.end()) {
-        destroyRxAudioResamplers(rIt.value());
+        releaseRxAudioResampler(rIt.value());
         session->audioResamplers.erase(rIt);
         qCInfo(lcTci) << "TciServer: audio resampler destroyed for rx" << rx
                       << "peer" << session->peer;
@@ -2035,7 +2221,7 @@ void TciServer::cleanupResamplers(std::shared_ptr<TciClientSession>& session)
 {
     for (auto rIt = session->audioResamplers.begin();
          rIt != session->audioResamplers.end(); ++rIt) {
-        destroyRxAudioResamplers(rIt.value());
+        releaseRxAudioResampler(rIt.value());
     }
     session->audioResamplers.clear();
     session->audioStreamEnabled.clear();
@@ -2144,8 +2330,10 @@ void TciServer::collectRxAudio()
     }
 }
 
-void TciServer::sendRxAudioBlock(QWebSocket* ws, TciClientSession& session, int rx)
+void TciServer::sendRxAudioBlock(QWebSocket* ws,
+                                 const std::shared_ptr<TciClientSession>& sessionPtr, int rx)
 {
+    TciClientSession& session = *sessionPtr;
     if (rx < 0 || rx >= kMaxTciRxSlices) { return; }
 
     // audioStreamSamples is per channel (frames); default 2048.
@@ -2200,51 +2388,62 @@ void TciServer::sendRxAudioBlock(QWebSocket* ws, TciClientSession& session, int 
     // Resample if the client requested a rate other than 48000 Hz.
     // Phase 16: xresampleFV resamples using the per-session per-slice
     // RESAMPLEF instance created in handleAudioSubscribe.
-    const float* samples = m_drainScratch.data();
-    int outSamples = totalSamples;
     auto rIt = session.audioResamplers.find(rx);
+    std::shared_ptr<TciRxAudioResampler> resampler;
     if (rIt != session.audioResamplers.end() && session.audioSampleRate != 48000
         && frames <= kMaxResampleFrames) {
-        // R-R3-42 fix wave: each channel through its own resampler, then
-        // interleaved again. One resampler used to run over the
-        // interleaved L/R, mixing the channels at the wrong rate.
-        // From Thetis TCIServer.cs:1060-1064 [v2.10.3.15]:
-        //   WDSP.xresampleFV(pLeftInput, pLeftOutput, samples, &leftOutputSamples, ...);
-        //   WDSP.xresampleFV(pRightInput, pRightOutput, samples, &rightOutputSamples, ...);
-        //   int outputSamples = Math.Min(leftOutputSamples, rightOutputSamples);
-        // A mono block is the left channel alone (the right resampler idles).
-        // Output at most 8x the input (384000 / 48000).
-        TciClientSession::RxAudioResamplers& pair = rIt.value();
-        if (channels <= 1) {
-            int leftOut = 0;
-            xresampleFV(m_drainScratch.data(), m_resampleOutLeft.data(),
-                        frames, &leftOut, pair.left);
-            outSamples = std::clamp(leftOut, 0, kMaxResampleOutFrames);
-            samples = m_resampleOutLeft.data();
-        } else {
-            for (int i = 0; i < frames; ++i) {
-                m_resampleInLeft[static_cast<std::size_t>(i)] =
-                    m_drainScratch[static_cast<std::size_t>(2 * i)];
-                m_resampleInRight[static_cast<std::size_t>(i)] =
-                    m_drainScratch[static_cast<std::size_t>(2 * i + 1)];
-            }
-            int leftOut = 0;
-            int rightOut = 0;
-            xresampleFV(m_resampleInLeft.data(), m_resampleOutLeft.data(),
-                        frames, &leftOut, pair.left);
-            xresampleFV(m_resampleInRight.data(), m_resampleOutRight.data(),
-                        frames, &rightOut, pair.right);
-            const int outFrames =
-                std::clamp(std::min(leftOut, rightOut), 0, kMaxResampleOutFrames);
-            for (int i = 0; i < outFrames; ++i) {
-                m_resampleOut[static_cast<std::size_t>(2 * i)] =
-                    m_resampleOutLeft[static_cast<std::size_t>(i)];
-                m_resampleOut[static_cast<std::size_t>(2 * i + 1)] =
-                    m_resampleOutRight[static_cast<std::size_t>(i)];
-            }
-            outSamples = outFrames * 2;
-            samples = m_resampleOut.data();
-        }
+        resampler = rIt.value();
+    }
+    const int sampleRate = session.audioSampleRate;
+    const int sampleType = session.audioSampleType;
+
+    // R-R3-39: WDSP's resampler runs on the receive lane, never here. The
+    // lane resamples and encodes the block, and it is sent from this thread
+    // once the lane is done. Jobs run in the order they were posted and
+    // their results arrive here in that order, so each client's blocks keep
+    // their order; a block that needs no resampler goes the same way while
+    // an earlier block of this client is still on the lane.
+    if (DspControlThread* lane = rxAudioLane();
+        lane != nullptr && (resampler || session.rxAudioBlocksOnLane > 0)) {
+        std::vector<float> block(m_drainScratch.begin(),
+                                 m_drainScratch.begin() + totalSamples);
+        ++session.rxAudioBlocksOnLane;
+        const std::weak_ptr<TciClientSession> weakSession = sessionPtr;
+        const QPointer<QWebSocket> socket(ws);
+        lane->request<QByteArray>(
+            [resampler, block = std::move(block), frames, channels, rx, sampleRate,
+             sampleType]() {
+                int outSamples = frames * channels;
+                const float* samples = block.data();
+                if (resampler) {
+                    samples = resampler->resample(block.data(), frames, channels, outSamples);
+                }
+                // The same encoding as the at-once path below.
+                return TciBinaryFrame::buildStreamPayload(
+                    rx, sampleRate, sampleType, outSamples,
+                    static_cast<int>(TciStreamType::RxAudioStream), channels, samples);
+            },
+            this,
+            [this, weakSession, socket, rx](QByteArray frame) {
+                const std::shared_ptr<TciClientSession> live = weakSession.lock();
+                if (!live) {
+                    return;   // the client has gone
+                }
+                --live->rxAudioBlocksOnLane;
+                if (!socket || !m_clients.contains(socket.data())
+                    || !live->audioStreamEnabled.contains(rx)) {
+                    return;
+                }
+                socket->sendBinaryMessage(frame);
+            });
+        return;
+    }
+
+    // No lane (a remote window, or no model): at once, as before.
+    const float* samples = m_drainScratch.data();
+    int outSamples = totalSamples;
+    if (resampler) {
+        samples = resampler->resample(m_drainScratch.data(), frames, channels, outSamples);
     }
 
     // Encode + send binary frame.
@@ -2254,8 +2453,8 @@ void TciServer::sendRxAudioBlock(QWebSocket* ws, TciClientSession& session, int 
     //       channels, encoded));
     const QByteArray frame = TciBinaryFrame::buildStreamPayload(
         rx,
-        session.audioSampleRate,
-        session.audioSampleType,
+        sampleRate,
+        sampleType,
         outSamples,         // flat count (length field in header)
         static_cast<int>(TciStreamType::RxAudioStream),
         channels,
@@ -2392,6 +2591,148 @@ double TciServer::remoteReceiverLevelDbm() const
     // The Core has no reading.
     if (!std::isfinite(dbm) || dbm <= SliceMeterPump::kNoReadingDbm) { return kFloorDbm; }
     return dbm;
+}
+
+// ── iPhone app plan Task 35: a remote window's TCI transmit ────────────────
+
+void TciServer::setRemoteTransmit(RemoteTransmit forward)
+{
+    if (!m_remoteWindow) {
+        return;
+    }
+    // A key this window holds through the old forwarder is released there.
+    if (m_remoteKeyEpoch != 0 && m_remoteTransmit.unkey) {
+        m_remoteTransmit.unkey(m_remoteKeyEpoch);
+        m_remoteKeyEpoch = 0;
+        endRemoteKey();
+    }
+    m_remoteKeyPending = false;
+    m_remoteReleaseWhilePending = false;
+    ++m_remoteKeyGeneration;
+    m_remoteTransmit = std::move(forward);
+    m_protocol->setRemoteTransmitForwarded(forwardsRemoteTransmit());
+}
+
+bool TciServer::forwardsRemoteTransmit() const
+{
+    return m_remoteWindow && static_cast<bool>(m_remoteTransmit.key)
+        && static_cast<bool>(m_remoteTransmit.unkey);
+}
+
+void TciServer::handleRemoteTrx(QWebSocket* ws, const QString& peer, int rx, bool wantsMox,
+                                bool hasTciArg)
+{
+    const QPointer<QWebSocket> asker(ws);
+    const auto answerAsker = [this, asker](int trx, bool keyed) {
+        if (asker.isNull()) {
+            return;
+        }
+        const auto it = m_clients.find(asker.data());
+        if (it != m_clients.end()) {
+            it.value()->sendQueue.push(TciSendQueue::Priority::Control,
+                                       QStringLiteral("trx:%1,%2;")
+                                           .arg(trx)
+                                           .arg(keyed ? QStringLiteral("true")
+                                                      : QStringLiteral("false")));
+        }
+    };
+
+    if (!wantsMox) {
+        // trx:N,false: this window's key only (ruling 8.14); any app of this
+        // server may release it, as any app's trx:N,false releases a TCI key
+        // in Thetis's handleTrxMessage (TCIServer.cs:3623-3672
+        // [v2.10.3.15]).
+        if (m_remoteKeyPending) {
+            m_remoteReleaseWhilePending = true;
+        }
+        if (m_remoteKeyEpoch != 0) {
+            qCInfo(lcTci) << "TciServer: trx release from" << peer
+                          << "unkeys this window's key, epoch" << m_remoteKeyEpoch;
+            m_remoteTransmit.unkey(m_remoteKeyEpoch);
+            m_remoteKeyEpoch = 0;
+            endRemoteKey();
+        }
+        answerAsker(rx, false);
+        return;
+    }
+
+    // Thetis's handleTrxMessage, TCIServer.cs:3623-3661 [v2.10.3.15]:
+    //   if (bMox && alreadyMox) { ...; return; }
+    // Among this server's apps: while this window's key is on (or being
+    // asked for), another trx:N,true does nothing and is not answered.
+    if (m_remoteKeyEpoch != 0 || m_remoteKeyPending) {
+        qCInfo(lcTci) << "TciServer: trx from" << peer
+                      << "ignored: this window's key is already on, as Thetis does";
+        return;
+    }
+
+    m_remoteKeyPending = true;
+    m_remoteReleaseWhilePending = false;
+    const quint64 generation = ++m_remoteKeyGeneration;
+    qCInfo(lcTci) << "TciServer: trx from" << peer << "forwarded to the Core as a program's key";
+    m_remoteTransmit.key([this, asker, peer, rx, hasTciArg, generation, answerAsker](
+                             const RemoteKeyAnswer& answer) {
+        if (generation != m_remoteKeyGeneration || !m_remoteKeyPending) {
+            // A stale answer (the server stopped or the forwarder changed):
+            // an accepted key it brings is released at once.
+            if (answer.accepted && answer.epoch != 0 && m_remoteTransmit.unkey) {
+                m_remoteTransmit.unkey(answer.epoch);
+            }
+            return;
+        }
+        m_remoteKeyPending = false;
+        if (!answer.accepted) {
+            // The holder rule refused it: no TX audio lock; the app is
+            // answered with the real state, and the operator hears why.
+            qCInfo(lcTci) << "TciServer: the Core refused the key for" << peer << ":"
+                          << answer.reason;
+            answerAsker(rx, false);
+            raiseOperatorNotice(peer, answer.reason);
+            return;
+        }
+        if (m_remoteReleaseWhilePending) {
+            // The app let go before the Core answered.
+            m_remoteReleaseWhilePending = false;
+            m_remoteTransmit.unkey(answer.epoch);
+            answerAsker(rx, false);
+            return;
+        }
+        m_remoteKeyEpoch = answer.epoch;
+        // Admitted: now the TX audio lock (Thetis's
+        // TryAcquireActiveTxAudioListener, TCIServer.cs:8146-8163
+        // [v2.10.3.15]: granted when nobody holds it or the asker does).
+        if (hasTciArg && !asker.isNull()
+            && (m_txAudioActiveClient.isNull() || m_txAudioActiveClient.data() == asker.data())) {
+            m_txAudioActiveClient = asker.data();
+            qCInfo(lcTci) << "TciServer: TX audio mutex acquired by" << peer;
+            emit txAudioActiveClientChanged(asker.data());
+            startTxChrono(asker.data(), rx);
+        }
+        answerAsker(rx, true);
+        broadcastRemoteKeyState(true);
+    });
+}
+
+void TciServer::endRemoteKey()
+{
+    if (!m_txAudioActiveClient.isNull()) {
+        m_txAudioActiveClient = nullptr;
+        qCInfo(lcTci) << "TciServer: TX audio mutex released: this window's key ended";
+        emit txAudioActiveClientChanged(nullptr);
+        stopTxChrono();
+    }
+    broadcastRemoteKeyState(false);
+}
+
+void TciServer::broadcastRemoteKeyState(bool on)
+{
+    // As the MOX change broadcast (hookGlobalBroadcasts, Thetis sendMOX at
+    // TCIServer.cs:2207-2211 [v2.10.3.13]) tells every app, for this
+    // window's key.
+    const QString boolStr = on ? QStringLiteral("true") : QStringLiteral("false");
+    m_protocol->enqueueLocalBroadcast(QStringLiteral("trx:0,%1;").arg(boolStr));
+    m_protocol->enqueueLocalBroadcast(QStringLiteral("trx:1,false;"));
+    broadcastPendingNotifications();
 }
 
 bool TciServer::raiseOperatorNotice(const QString& peer, const QString& reason,
@@ -2601,17 +2942,15 @@ void TciServer::onTextMessageReceived(const QString& msg)
                                   << "peer" << session->peer;
                     // Recreate the resampler for any active audio subscriptions,
                     // since the target rate has changed.  Destroy old, rebuild.
+                    // R-R3-39: both on the receive lane, after every block
+                    // already posted at the old rate.
                     for (int rx : session->audioStreamEnabled) {
                         auto rIt = session->audioResamplers.find(rx);
                         if (rIt != session->audioResamplers.end()) {
-                            destroyRxAudioResamplers(rIt.value());
+                            releaseRxAudioResampler(rIt.value());
                             session->audioResamplers.erase(rIt);
                         }
-                        const TciClientSession::RxAudioResamplers pair =
-                            createRxAudioResamplers(48000, sr);
-                        if (pair.left && pair.right) {
-                            session->audioResamplers.insert(rx, pair);
-                        }
+                        session->audioResamplers.insert(rx, makeRxAudioResampler(48000, sr));
                     }
                 }
             } else if (trimmed.startsWith(kAudioStreamSamples)) {
@@ -2796,7 +3135,15 @@ void TciServer::onTextMessageReceived(const QString& msg)
                     const bool wantsMox = (parts.at(1).trimmed().compare(
                         QLatin1String("true"), Qt::CaseInsensitive) == 0);
 
-                    if (m_remoteWindow || m_stationReceiveOnly) {
+                    if (m_remoteWindow && forwardsRemoteTransmit()) {
+                        // Task 35: forwarded to the Core under the holder
+                        // rule; the answer comes back later.
+                        bool rxOk = false;
+                        const int trxIdx = parts.at(0).trimmed().toInt(&rxOk);
+                        if (rxOk) {
+                            handleRemoteTrx(ws, session->peer, trxIdx, wantsMox, hasTciArg);
+                        }
+                    } else if (m_remoteWindow || m_stationReceiveOnly) {
                         // R-R3-42 / R-R3-25: no TX audio lock and no
                         // TX_CHRONO in a remote window, nor on the Core's
                         // station server until remote transmit (R-R3-48).
@@ -3147,6 +3494,14 @@ void TciServer::onBinaryMessageReceived(const QByteArray& data)
     // or L,L,L... for mono).  The ring stores raw float bytes; TxChannel's
     // feedTxAudioFromTci drains them per block.
     const int frames = (channels > 1) ? (decodedValueCount / channels) : decodedValueCount;
+    // iPhone app plan Task 36 (R-IOS-13): through a remote window, the app's
+    // transmit audio goes to the Core on the window's microphone line.
+    if (m_remoteTransmit.key && m_remoteTransmit.audio) {
+        if (frames > 0) {
+            m_remoteTransmit.audio(decoded.data(), frames, channels, sampleRate);
+        }
+        return;
+    }
     if (frames > 0) {
         m_txAudioRing.tryPushCopy(
             reinterpret_cast<const uint8_t*>(decoded.data()),

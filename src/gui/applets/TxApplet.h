@@ -110,6 +110,14 @@
 //                 transmit permission's reason kept for the receive-only
 //                 lock (M6). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-26: Transmit group fix wave: I4 the line saying who holds
+//               transmit. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave 2 (M8): VOX shows disabled with the
+//               plain reason while this computer has no microphone line to
+//               the Core; the Core's refusal stays the backstop. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 //=================================================================
@@ -311,6 +319,11 @@ public slots:
     // not alter TransmitModel, station settings, or the displayed state of an
     // already-authoritative control.
     void setTransmitPermitted(bool permitted, const QString& unavailableReason = QString());
+    // Fix wave 2 (M8): VOX listens to this computer's microphone line to
+    // the Core. While the window has none, the VOX button is shown disabled
+    // with `reason` (on top of setTransmitPermitted); the Core's refusal
+    // stays the backstop. Always true in a local window.
+    void setVoxPermitted(bool permitted, const QString& reason = QString());
     // R-R3-49 (parity Task 1): the transmit settings that key nothing (RF
     // Power, TX filter low and high). In a remote window MainWindow
     // supplies true while the Core takes them (transmitSettingsVersion)
@@ -365,6 +378,12 @@ public:
     QPushButton* voxButton()         const { return m_voxBtn; }
     // Issue #175 Task 7: HL2 slider rescale + dB label test access.
     QSlider*     rfPowerSlider()    const noexcept { return m_rfPowerSlider; }
+    /// Fix wave I4: a remote window's line under MOX and TUNE saying who
+    /// holds transmit on the Core ("Grant's iPhone holds transmit.",
+    /// "... holds transmit and is away.", "Transmit is changing hands.").
+    /// Empty hides it.
+    void setTransmitHolderText(const QString& text);
+    QString transmitHolderText() const;
     QSlider*     tunePowerSlider()  const noexcept { return m_tunePwrSlider; }
     QLabel*      rfPowerLabel()     const noexcept { return m_rfPowerValue; }
     QLabel*      tunePowerLabel()   const noexcept { return m_tunePwrValue; }
@@ -480,6 +499,7 @@ private:
 
     // 0. Mic-source badge (J.3 Phase 3M-1b) — read-only label above the gauges.
     QLabel*  m_micSourceBadge = nullptr;
+    QLabel*  m_holderLabel = nullptr;   // fix wave I4
     // 1. Forward Power gauge
     HGauge*  m_fwdPowerGauge  = nullptr;
     // 2. SWR gauge
@@ -610,6 +630,8 @@ private:
     // The words the transmit-permission gate shows while it holds; the
     // receive-only lock names them beside its own (Task 16 fix wave, M6).
     QString m_transmitPermissionReason;
+    bool m_voxPermitted{true};      // fix wave 2 (M8)
+    QString m_voxReason;
 };
 
 } // namespace NereusSDR

@@ -50,6 +50,10 @@
 //                                    Reset vocoder follow the transmit
 //                                    settings gate.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Transmit group fix wave 2 (M8): the
+//                                    permission push is watched on MOX;
+//                                    VOX waits for the microphone line.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -76,6 +80,7 @@
 #include <QTreeWidget>
 #include <QTreeWidgetItemIterator>
 
+#include "core/safety/TxRefusal.h"
 #include "OperatorWording.h"
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
@@ -1314,9 +1319,18 @@ private slots:
         // R-R3-49 (parity Task 4): Tools > TX Equalizer opens in a remote
         // window whatever the Core permits (the dialog shows why it is
         // greyed), so the remote transmit push is watched on the TX
-        // applet's VOX button, which keeps it.
-        auto* txEq = h.window()->findChild<QPushButton*>(QStringLiteral("TxVoxButton"));
+        // applet's MOX button, which keeps it. (Transmit group fix wave 2:
+        // VOX also waits for this computer's microphone line, which this
+        // harness never opens, so it stays disabled with that reason.)
+        QPushButton* txEq = nullptr;
+        for (QPushButton* b : h.window()->findChildren<QPushButton*>()) {
+            if (b->accessibleName() == QStringLiteral("MOX transmit")) {
+                txEq = b;
+            }
+        }
         QVERIFY(txEq);
+        auto* vox = h.window()->findChild<QPushButton*>(QStringLiteral("TxVoxButton"));
+        QVERIFY(vox);
         auto* txEqualizer = h.window()->findChild<QAction*>(QStringLiteral("toolsTxEqualizer"));
         QVERIFY(txEqualizer && txEqualizer->isEnabled());
         QVERIFY(!client->capabilities().txPermitted);
@@ -1339,6 +1353,8 @@ private slots:
         QTRY_VERIFY(txEq->isEnabled());
         QVERIFY(client->capabilities().txPermitted);
         QVERIFY(txEq->toolTip() != reason);
+        QVERIFY(!vox->isEnabled());
+        QCOMPARE(vox->toolTip(), TxRefusals::micNotConnected().text);
         QVERIFY(radeProfile->isEnabled());
         QVERIFY(radeReset->isEnabled());
 

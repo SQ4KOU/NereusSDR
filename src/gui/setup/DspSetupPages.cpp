@@ -42,6 +42,10 @@
 //                 remote window), disabled with the plain reason; TNF's
 //                 minimum notch width is the Core's in a remote window.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-R3-49 (trunk merge of parity Tasks 16 to 18): the DFNR
+//                 and MNR tabs read RadioModel::nrCannotRunReason (the one
+//                 source, DspAssetService) and follow its signals.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -97,6 +101,7 @@
 #include "core/RadioConnection.h"
 #include "core/RxChannel.h"
 #include "core/WdspEngine.h"
+#include "core/dsp/DspAssetService.h"
 #include "core/session/IStationLink.h"
 #include "core/wdsp_api.h"
 #include "models/NotchModel.h"
@@ -1268,8 +1273,8 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
         tabLay->insertWidget(0, dfnrNote);
         QWidget* dfnrGroup = grpLay->parentWidget();
         const auto applyDfnr = [model, dfnrNote, dfnrGroup]() {
-            const QString reason = model ? model->noiseReductionUnavailableReason(NrSlot::DFNR)
-                                         : RadioModel::localNoiseReductionUnavailableReason(
+            const QString reason = model ? model->nrCannotRunReason(NrSlot::DFNR)
+                                         : RadioModel::nrCannotRunInThisBuildReason(
                                                NrSlot::DFNR);
             dfnrNote->setText(reason);
             dfnrNote->setVisible(!reason.isEmpty());
@@ -1277,7 +1282,12 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
         };
         applyDfnr();
         if (model) {
-            connect(model, &RadioModel::noiseReductionMethodsChanged, dfnrGroup, applyDfnr);
+            // Trunk merge: the one availability source, DspAssetService,
+            // and whether an older Core says at all.
+            if (model->dspAssets()) {
+                connect(model->dspAssets(), &DspAssetService::dfnrAvailabilityChanged, dfnrGroup, applyDfnr);
+            }
+            connect(model, &RadioModel::nrAvailabilityChanged, dfnrGroup, applyDfnr);
         }
 
         // Attenuation Limit (0-100 dB) — use the shared addSliderRow helper
@@ -1393,8 +1403,8 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
 
         QWidget* mnrGroup = grpLay->parentWidget();
         const auto applyMnr = [model, mnrNote, mnrGroup]() {
-            const QString reason = model ? model->noiseReductionUnavailableReason(NrSlot::MNR)
-                                         : RadioModel::localNoiseReductionUnavailableReason(
+            const QString reason = model ? model->nrCannotRunReason(NrSlot::MNR)
+                                         : RadioModel::nrCannotRunInThisBuildReason(
                                                NrSlot::MNR);
             mnrNote->setText(reason);
             mnrNote->setVisible(!reason.isEmpty());
@@ -1402,7 +1412,12 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
         };
         applyMnr();
         if (model) {
-            connect(model, &RadioModel::noiseReductionMethodsChanged, mnrGroup, applyMnr);
+            // Trunk merge: the one availability source, DspAssetService,
+            // and whether an older Core says at all.
+            if (model->dspAssets()) {
+                connect(model->dspAssets(), &DspAssetService::mnrAvailabilityChanged, mnrGroup, applyMnr);
+            }
+            connect(model, &RadioModel::nrAvailabilityChanged, mnrGroup, applyMnr);
         }
 
         tabLay->addStretch(1);

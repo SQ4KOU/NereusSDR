@@ -42,6 +42,29 @@
 //                 dsp.cs:1056 [v2.10.3.15]); PROC off reads -30, not -400.
 //                 J.J. Boyd (KG4VCF), with AI-assisted transformation via
 //                 Anthropic Claude Code.
+//   2026-09-24: R-R3-39: the RX readings (RxChannel::getMeter and
+//                 WdspEngine::getRxaSignalPeak) come from the cache the
+//                 receive lane refreshes, so this GUI-thread poll makes no
+//                 RX WDSP call. J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
+//   2026-09-25: R-R3-39 (station Task 32): the TX readings too
+//               (TxChannel::txMeter, the transmit lane's last reading).
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25: D14 / R-R3-49: the TX readings name a TxMeterType, which
+//               TxChannel::txMeter maps to its WDSP index; ALC, ALC gain
+//               and COMP had read TXA_COMP_PK, TXA_COMP_AV and TXA_CFC_AV.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25: D14 / R-R3-49: every WDSP-read TX binding (MIC, EQ,
+//               Leveler, Leveler gain, CFC, CFC gain, COMP, ALC, ALC gain,
+//               ALC group) is polled and shows Thetis's reading
+//               (thetisTxReading: CalculateTXMeter's alcgain and sign, then
+//               the console.cs floors). J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 39 (D14, R-IOS-13): a remote window's
+//               ALC and MIC bindings from the Core's `txState` while it
+//               transmits; the transmit meters the Core does not send are
+//               disabled with the reason. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 //   2026-09-25 - R-R3-32 (remote-window parity Task 6): HwVolts, HwAmps
 //                 and HwTemperature fed from RadioModel::paReadings() on
 //                 every poll (console.cs:47061-47068 [v2.10.3.15]).
@@ -53,6 +76,11 @@
 //                 Gain binding shows Thetis's 0 - RXA_AGC_GAIN in both
 //                 windows (console.cs:46914 [v2.10.3.15]). J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - Trunk merge of remote transmit (R-R3-49, R-IOS-13): on a
+//                 connected Core below meterReadingsVersion 1 those five
+//                 bindings are shown disabled with the reason
+//                 (setBindingUnavailable), as Task 39's transmit meters are.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -111,6 +139,7 @@ mw0lge@grange-lane.co.uk
 #include "core/WdspEngine.h"
 // Parity Task 15: the AGC Gain reading both windows show.
 #include "core/meters/SliceMeterPump.h"
+#include "core/session/TransmitStateFacade.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -180,11 +209,147 @@ void MeterPoller::setRemoteRadioModel(RadioModel* model,
     m_remoteModel = m_remoteRole ? model : nullptr;
     m_remoteSnapshotReady = std::move(snapshotReady);
     m_remoteMaxBinSource = std::move(maxBinSource);
+    // Task 39: whichever of the two setters runs last marks the meters.
+    refreshRemoteTxAvailability(/*force=*/true);
+}
+
+void MeterPoller::setRemoteTransmitState(TransmitState* state,
+                                         std::function<QString()> unavailableText)
+{
+    if (m_remoteTransmitState) {
+        disconnect(m_remoteTransmitState, nullptr, this, nullptr);
+    }
+    m_remoteTransmitState = state;
+    m_remoteTransmitUnavailable = std::move(unavailableText);
+    if (state != nullptr) {
+        // Power, reflected power and SWR go into this window's RadioStatus,
+        // which the S-meter's TX needle, the TX applet's power gauge and the
+        // container meters already follow (setRadioStatus). The local
+        // window's RadioModel fills it from the radio; a remote window's
+        // model has no radio, so the Core's readings fill it here.
+        connect(state, &TransmitState::metersChanged, this, [this]() {
+            TransmitState* s = m_remoteTransmitState.data();
+            RadioModel* model = m_remoteModel.data();
+            if (s == nullptr || model == nullptr) {
+                return;
+            }
+            model->radioStatus().setForwardPower(s->forwardPowerWatts());
+            model->radioStatus().setReflectedPower(s->reflectedPowerWatts());
+        });
+        // The local window switches on MoxController's walk; a remote
+        // window's controller never keys, so the Core's keyed state does.
+        connect(state, &TransmitState::stateChanged, this, [this]() {
+            if (TransmitState* s = m_remoteTransmitState.data()) {
+                setInTx(s->keyed());
+            }
+        });
+    }
+    refreshRemoteTxAvailability(/*force=*/true);
+}
+
+const QList<int>& MeterPoller::remoteTxBindingsNotSent()
+{
+    // Task 39: txState v1 carries forward and reflected power, SWR, ALC and
+    // MIC. These eight readings stay on the Core.
+    static const QList<int> bindings{
+        MeterBinding::TxEq,       MeterBinding::TxLeveler, MeterBinding::TxLevelerGain,
+        MeterBinding::TxCfc,      MeterBinding::TxCfcGain, MeterBinding::TxComp,
+        MeterBinding::TxAlcGain,  MeterBinding::TxAlcGroup,
+    };
+    return bindings;
+}
+
+QString MeterPoller::remoteTxMeterNotSentText()
+{
+    return tr("The Core does not send this meter to a remote window yet.");
+}
+
+QString MeterPoller::remoteTransmitUnavailableText() const
+{
+    return m_remoteTransmitUnavailable ? m_remoteTransmitUnavailable() : QString();
+}
+
+void MeterPoller::refreshRemoteTxAvailability(bool force)
+{
+    if (!m_remoteRole || !m_remoteTransmitState) {
+        return;
+    }
+    const QString unavailable = remoteTransmitUnavailableText();
+    if (!force && m_remoteTxAvailabilityShown && unavailable == m_remoteTxUnavailableShown) {
+        return;
+    }
+    m_remoteTxAvailabilityShown = true;
+    m_remoteTxUnavailableShown = unavailable;
+    const QList<int>& notSent = remoteTxBindingsNotSent();
+    for (const auto& guarded : m_targets) {
+        MeterWidget* target = guarded.data();
+        if (!target) { continue; }
+        for (int bindingId = MeterBinding::TxPower; bindingId <= MeterBinding::TxCfcGain;
+             ++bindingId) {
+            QString reason = unavailable;
+            if (reason.isEmpty() && notSent.contains(bindingId)) {
+                reason = remoteTxMeterNotSentText();
+            }
+            target->setBindingUnavailable(bindingId, reason);
+        }
+    }
+}
+
+void MeterPoller::pollRemoteTxMeters()
+{
+    TransmitState* state = m_remoteTransmitState.data();
+    if (!state || !m_inTx || !remoteTransmitUnavailableText().isEmpty()) {
+        return;
+    }
+    // The Core's readings, already worked as Thetis shows them
+    // (TxMeterPump: thetisTxReading ALC and MIC).
+    handOutTxReading(MeterBinding::TxAlc, state->alcDb());
+    handOutTxReading(MeterBinding::TxMic, state->micLevelDb());
 }
 
 void MeterPoller::setRemoteMeterReadingsAvailable(std::function<bool()> available)
 {
     m_remoteMeterReadingsAvailable = std::move(available);
+    refreshRemoteMeterReadingsAvailability(/*force=*/true);
+}
+
+const QList<int>& MeterPoller::remoteMeterReadingBindings()
+{
+    static const QList<int> bindings{
+        MeterBinding::AdcPeak, MeterBinding::AdcAvg, MeterBinding::AgcGain,
+        MeterBinding::AgcPeak, MeterBinding::AgcAvg,
+    };
+    return bindings;
+}
+
+QString MeterPoller::remoteMeterReadingsNotSentText()
+{
+    return tr("This Core does not send this meter. Update the Core to see it here.");
+}
+
+void MeterPoller::refreshRemoteMeterReadingsAvailability(bool force)
+{
+    if (!m_remoteRole) {
+        return;
+    }
+    // Trunk merge (R-R3-49): only a connected Core can be below version 1;
+    // with no Core the meters show no reading ("--"), as the signal meters do.
+    const bool connected = m_remoteModel && m_remoteModel->isConnected()
+        && m_remoteSnapshotReady && m_remoteSnapshotReady();
+    const bool sends = m_remoteMeterReadingsAvailable && m_remoteMeterReadingsAvailable();
+    const QString reason = connected && !sends ? remoteMeterReadingsNotSentText() : QString();
+    if (!force && m_remoteReadingsAvailabilityShown && reason == m_remoteReadingsUnavailableShown) {
+        return;
+    }
+    m_remoteReadingsAvailabilityShown = true;
+    m_remoteReadingsUnavailableShown = reason;
+    for (const auto& guarded : m_targets) {
+        MeterWidget* target = guarded.data();
+        if (!target) { continue; }
+        for (int bindingId : remoteMeterReadingBindings()) {
+            target->setBindingUnavailable(bindingId, reason);
+        }
+    }
 }
 
 // RX meter cal offset source (Thetis-faithful port).
@@ -259,6 +424,11 @@ void MeterPoller::addTarget(MeterWidget* widget)
         if (p.data() == widget) { return; }
     }
     m_targets.append(QPointer<MeterWidget>(widget));
+    // Task 39: a new container on a remote window learns at once which
+    // transmit meters the Core cannot feed.
+    refreshRemoteTxAvailability(/*force=*/true);
+    // Trunk merge: and which of the ADC and AGC meters it cannot feed.
+    refreshRemoteMeterReadingsAvailability(/*force=*/true);
 }
 
 void MeterPoller::removeTarget(MeterWidget* widget)
@@ -353,6 +523,12 @@ void MeterPoller::poll()
     // R3: a remote window must never fall through to the inactive local
     // DSP, including after its model has been destroyed or disconnected.
     if (m_remoteRole) {
+        // Task 39: the Core's transmit meters, and which it cannot send.
+        refreshRemoteTxAvailability();
+        // Trunk merge (R-R3-49): the ADC and AGC meters an older Core
+        // does not send.
+        refreshRemoteMeterReadingsAvailability();
+        pollRemoteTxMeters();
         pollRemoteRxMeters();
         return;
     }
@@ -396,7 +572,9 @@ void MeterPoller::poll()
     //       console.cs:46828 -> ... = CalculateRXMeter(...) + offset;  // AVG_SIGNAL_STRENGTH
     const double rxOffsetDb = m_rxOffsetSource ? m_rxOffsetSource() : 0.0;
 
-    // Poll all RX meter types. GetRXAMeter is lock-free.
+    // Poll all RX meter types. R-R3-39: RxChannel::getMeter reads the cache
+    // the receive lane refreshes (GetRXAMeter takes a meter lock, so it
+    // never runs on this, the GUI, thread); with no lane it reads WDSP.
     double smeterDbm = -140.0;
     for (int bindingId = MeterBinding::SignalPeak;
          bindingId <= MeterBinding::AgcAvg; ++bindingId) {
@@ -635,72 +813,78 @@ void MeterPoller::pollSMeter()
     sm->setLevel(dbm);
 }
 
-// Poll the four WDSP TX meters active in 3M-1a and push to meter widget targets.
+// Poll the WDSP TX meters and push Thetis's reading of each to the meter
+// widget targets.
 //
-// Porting from Thetis dsp.cs:999-1029 [v2.10.3.13] CalculateTXMeter:
-//   case MeterType.TXA_OUT_PK:   val = GetTXAMeter(channel, TXA_OUT_PK);   // output peak
-//   case MeterType.TXA_ALC_AV:   val = GetTXAMeter(channel, TXA_ALC_AV);   // ALC average
-//   case MeterType.TXA_ALC_PK:   val = GetTXAMeter(channel, TXA_ALC_PK);   // ALC peak
-//   case MeterType.TXA_ALC_GAIN: val = GetTXAMeter(channel, TXA_ALC_GAIN) + alcgain; // ALC gain
+// D14, R-R3-49: every TX binding a WDSP meter feeds, each worked as Thetis
+// works it (thetisTxReading, WdspTypes.h): CalculateTXMeter (dsp.cs:992-1053
+// [v2.10.3.15]) and the MOX reading step (console.cs:46969-46986
+// [v2.10.3.15]). Before this, ALC showed the raw TXA_ALC_AV without the -30
+// floor, ALC gain the raw TXA_ALC_GAIN without alcgain's +3, and MIC, EQ,
+// Leveler, Leveler gain, CFC, CFC gain and ALC group were not polled.
 //
-// 3M-1a scope: hardware PA meters (forward/reflected/SWR) are driven by the
-// existing RadioStatus::powerChanged connection (setRadioStatus()), which
-// is active regardless of TX/RX state. No duplication needed.
+// Hardware PA meters (forward/reflected/SWR) are driven by the existing
+// RadioStatus::powerChanged connection (setRadioStatus()), which is active
+// regardless of TX/RX state, as Thetis's PWR reading comes from the
+// hardware, not CalculateTXMeter.
 //
-// Without HAVE_WDSP the reads return -140.0 (silent fallback — no WDSP channel).
+// Without HAVE_WDSP every WDSP reading is -140.0 (no WDSP channel).
+namespace {
+struct TxReadingEntry { int bindingId; ThetisTxReading reading; };
+// Which of Thetis's readings each NereusSDR binding shows (MeterPoller.h
+// names each binding's WDSP meter; MeterItem.cpp its label).
+constexpr TxReadingEntry kTxReadings[] = {
+    { MeterBinding::TxMic,         ThetisTxReading::Mic      },   // TXA_MIC_AV
+    { MeterBinding::TxEq,          ThetisTxReading::Eq       },   // TXA_EQ_AV
+    { MeterBinding::TxLeveler,     ThetisTxReading::Leveler  },   // TXA_LVLR_AV
+    { MeterBinding::TxLevelerGain, ThetisTxReading::LvlG     },   // TXA_LVLR_GAIN
+    { MeterBinding::TxCfc,         ThetisTxReading::CfcAv    },   // TXA_CFC_AV
+    { MeterBinding::TxCfcGain,     ThetisTxReading::CfcG     },   // TXA_CFC_GAIN
+    { MeterBinding::TxComp,        ThetisTxReading::Comp     },   // TXA_COMP_AV
+    { MeterBinding::TxAlc,         ThetisTxReading::Alc      },   // TXA_ALC_AV
+    { MeterBinding::TxAlcGain,     ThetisTxReading::AlcG     },   // TXA_ALC_GAIN + 3
+    { MeterBinding::TxAlcGroup,    ThetisTxReading::AlcGroup },   // ALC_PK + ALC_G
+};
+} // namespace
+
+double MeterPoller::txReadingForBinding(int bindingId,
+                                        const std::function<double(TxMeterType)>& readRaw)
+{
+    for (const TxReadingEntry& entry : kTxReadings) {
+        if (entry.bindingId == bindingId) {
+            return thetisTxReading(entry.reading, readRaw);
+        }
+    }
+    return -400.0;
+}
+
 void MeterPoller::pollTxMeters()
 {
     if (!m_txChannel) {
         return;  // no TX channel yet (WDSP not initialized or disconnected)
     }
 
-    const int chanId = m_txChannel->channelId();
-
-    // Meter binding IDs → WDSP TxMeterType values.
-    // From Thetis dsp.cs:999-1029 [v2.10.3.13]:
-    //   TXA_OUT_PK  → TxMeterType::OutPeak  (12)
-    //   TXA_ALC_PK  → TxMeterType::AlcPeak  (9)
-    //   TXA_ALC_AV  → TxMeterType::AlcAvg   (10)
-    //   TXA_ALC_GAIN→ TxMeterType::AlcGain  (11)
-    struct TxPollEntry { int bindingId; int wdspMt; };
-    static constexpr TxPollEntry kTxPollSet[] = {
-        { MeterBinding::TxAlc,     static_cast<int>(TxMeterType::AlcAvg)  },   // TXA_ALC_AV  [v2.10.3.13]
-        { MeterBinding::TxAlcGain, static_cast<int>(TxMeterType::AlcGain) },   // TXA_ALC_GAIN [v2.10.3.13]
-        // TxPower uses the TXA_OUT_PK reading for the power bar in 3M-1a.
-        // Hardware PA forward power is pushed via RadioStatus::powerChanged
-        // (the existing setRadioStatus() path); this reading is the WDSP
-        // TXA output peak (post-ALC, pre-PA), a different quantity.
-        // Both are useful; 3M-1a populates both for completeness.
-        // R-R3-21: the compression reading. It read TXA_OUT_PK, the output
-        // peak, although TxComp is TXA_COMP_AV (MeterPoller.h) as in
-        // Thetis: From Thetis dsp.cs:1013-1014 [v2.10.3.15]
-        //   case MeterType.COMP: val = GetTXAMeter(channel, txaMeterType.TXA_COMP_AV);
-        { MeterBinding::TxComp,    static_cast<int>(TxMeterType::CompAvg) },   // TXA_COMP_AV [v2.10.3.15]
-    };
-
-    for (const auto& entry : kTxPollSet) {
-        double value = -140.0;
+    // R-R3-39: TxChannel::txMeter reads GetTXAMeter on the transmit lane and
+    // returns the lane's last reading, so this poll never waits on WDSP. It
+    // maps each TxMeterType to its WDSP index (wdspTxaMeterIndex).
+    TxChannel* channel = m_txChannel;
+    const auto readRaw = [channel](TxMeterType meter) -> double {
 #ifdef HAVE_WDSP
-        // GetTXAMeter(channel, mt) — lock-free, matches GetRXAMeter pattern.
-        // From Thetis dsp.cs:390-391 [v2.10.3.13].
-        value = GetTXAMeter(chanId, entry.wdspMt);
+        return channel->txMeter(meter);
 #else
-        Q_UNUSED(chanId)
-        Q_UNUSED(entry)
+        Q_UNUSED(channel)
+        Q_UNUSED(meter)
+        return -140.0;
 #endif
-        handOutTxReading(entry.bindingId, value);
+    };
+    for (const TxReadingEntry& entry : kTxReadings) {
+        handOutTxReading(entry.bindingId, thetisTxReading(entry.reading, readRaw));
     }
 }
 
-// Hands one WDSP transmit reading to the meters and to txMeterReading.
+// Hands one transmit reading to the meters and to txMeterReading.
 void MeterPoller::handOutTxReading(int bindingId, double value)
 {
-    // R-R3-21: Thetis floors the Compression reading at -30 before any
-    // meter sees it (console.cs:46979 [v2.10.3.15]); PROC off (-400)
-    // reads -30.
-    if (bindingId == MeterBinding::TxComp) {
-        value = compressionReading(value);
-    }
     for (auto& guarded : m_targets) {
         MeterWidget* target = guarded.data();
         if (!target) { continue; }
@@ -713,10 +897,11 @@ void MeterPoller::handOutTxReading(int bindingId, double value)
 //   updateMetersReading(Reading.COMP, (float)Math.Max(-30.0f, -WDSP.CalculateTXMeter(1, WDSP.MeterType.COMP)), 0);
 // with dsp.cs:1013-1014 + :1056 [v2.10.3.15]: CalculateTXMeter reads
 // TXA_COMP_AV and returns -(float)val, so the reading is max(-30, raw).
+// D14, R-R3-49: now thetisTxReading's COMP reading.
 double MeterPoller::compressionReading(double rawTxaCompAv)
 {
-    if (!std::isfinite(rawTxaCompAv)) { return MeterBinding::kTxCompFloorDb; }
-    return std::max(MeterBinding::kTxCompFloorDb, rawTxaCompAv);
+    return thetisTxReading(ThetisTxReading::Comp,
+                           [rawTxaCompAv](TxMeterType) { return rawTxaCompAv; });
 }
 
 void MeterPoller::setRadioStatus(RadioStatus* status)

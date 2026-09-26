@@ -121,9 +121,32 @@
 //   2026-09-24 - R-R3-49 fix wave: tgxlOperateAppliesWhole
 //                (remoteTgxlControlVersion 3). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49, Sub-epic C-1: a slice refuses DFNR while the
+//                Core's mirrored dfnrRunnable is false. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49, Sub-epic C-1: and MNR while the Core's mirrored
+//                mnrRunnable is false, and BNR (in no build). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-24: Part C fix wave: the optional device shortName in
 //               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan, desktop remote transmit (R-IOS-13,
+//                R-R3-42): the hello declares remoteTx 1; the transmit
+//                verbs go out three times each through RemoteTransmitClient
+//                and their answers come back to it. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 37 (R-IOS-13): tx.keepalive once
+//                each on the session (RemoteTransmitClient's keepalive when
+//                no "tx" data channel is open); its answers are dropped.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 39 (D14, R-IOS-13): the Core's
+//               `txState` object (TransmitState, txStateVersion 1), read-only,
+//               for the window's transmit meters. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: merge of Tasks 38 and 39: transmitTimeOutAvailable() (a
+//               Core sending txStateVersion 1 has the transmit time-out).
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 //   2026-09-24 - R-R3-49 (parity Task 1): transmitSettingsAvailable
 //                (transmitSettingsVersion), and the radio's `transmitting`
 //                cleared when the session ends. J.J. Boyd (KG4VCF),
@@ -186,6 +209,19 @@
 //                AGC slice readings applied as plain state, and
 //                meterReadingsVersion read from its capabilities. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave: I4 thisDeviceWireId and
+//               transmitHolderText; M6 voxArmedHere; M7 a Core stop ends
+//               this window's key. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave 2, the re-review's minors:
+//               holderTransferring true while keys are refused for a
+//               transfer's reasons (a dropped holder's fence, a transfer
+//               ended with MOX on); stopEpoch names the key a stop ended so
+//               a newer key is never ended by it; VOX at the Core listens
+//               only to the device that armed it; the window says why MOX
+//               and TUNE wait while another device holds. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 //   2026-09-26 - R-R3-49 / R-R3-21 / R-R3-40 (parity Task 16): the Core's
 //                noise reduction, DSP Options apply time and minimum notch
 //                widths applied as plain state; dsp.filterResponse sent and
@@ -212,6 +248,7 @@
 #include "core/session/ObjectRegistry.h"
 #include "core/session/SessionEndReasons.h"
 #include "core/session/SessionTransport.h"
+#include "core/session/TransmitStateFacade.h"
 #include "core/settings/SettingsProxy.h"
 #include "models/AmplifierModel.h"
 #include "models/NotchModel.h"
@@ -491,6 +528,8 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     std::sort(m_supportedMajors.begin(), m_supportedMajors.end());
     m_supportedMajors.erase(std::unique(m_supportedMajors.begin(), m_supportedMajors.end()),
                             m_supportedMajors.end());
+    // iPhone app plan Task 39: the Core's transmit state, unbound (a mirror).
+    m_transmitState = new TransmitState(this);
     m_localSettingsSchema = readLocalSettingsSchemaVersion();
     if (m_localSettingsSchema == 0) {
         // The observable trace of CoreInit::initialize() not having run
@@ -518,6 +557,85 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     // never consults the link at all.
     if (radioModel != nullptr) {
         radioModel->attachStation(this);
+    }
+
+    // iPhone app plan, desktop remote transmit (R-IOS-13, R-R3-42): this
+    // window transmits through the Core (link section 18.6), so its hello
+    // says so and the Core answers with txPermitted and remoteTxVersion.
+    m_declaredFeatures.insert(QByteArrayLiteral("remoteTx"), 1);
+    // Each transmit verb goes out as the same command three times (the
+    // copies rule); the Core acts on the first and answers every copy.
+    m_remoteTransmit = new RemoteTransmitClient(
+        [this](const QByteArray& verb, const QList<MirrorUpdate>& arguments) -> quint32 {
+            if (!remoteTransmitAvailable()) {
+                return 0;
+            }
+            const quint32 id = m_nextCommandId++;
+            if (m_nextCommandId == 0) {
+                ++m_nextCommandId;
+            }
+            const SessionMessage command = SessionMessages::commandInvoke(verb, id, arguments);
+            for (int copy = 0; copy < RemoteTransmitClient::kCopies; ++copy) {
+                send(command);
+            }
+            return id;
+        },
+        this);
+    // iPhone app plan Task 37 (R-IOS-13): the Core's watchdog hears from
+    // this window every 100 ms while it transmits or has VOX armed; on the
+    // session a keepalive goes once (a lost one is overtaken by the next).
+    m_remoteTransmit->setSessionKeepalive([this](quint64 sequence, quint32 epoch) {
+        if (!remoteTransmitAvailable()) {
+            return false;
+        }
+        const quint32 id = m_nextCommandId++;
+        if (m_nextCommandId == 0) {
+            ++m_nextCommandId;
+        }
+        send(SessionMessages::commandInvoke(
+            QByteArrayLiteral("tx.keepalive"), id,
+            {MirrorUpdate{0, QByteArrayLiteral("sequence"), MirrorWireKind::Int64,
+                          QVariant(static_cast<qint64>(sequence))},
+             MirrorUpdate{0, QByteArrayLiteral("epoch"), MirrorWireKind::Int64,
+                          QVariant(static_cast<qint64>(epoch))}}));
+        return true;
+    });
+    if (radioModel != nullptr) {
+        connect(radioModel, &RadioModel::transmittingChanged, m_remoteTransmit,
+                &RemoteTransmitClient::setCoreTransmitting);
+        // Task 37: VOX armed (the Core's, mirrored) keeps the keepalive
+        // going while the window streams unkeyed.
+        // Fix wave M7: a stop the Core records ends this window's key on,
+        // even one the mirrored `transmitting` never showed.
+        // Fix wave 2: queued, so the whole update (stopSerial and the
+        // stopEpoch after it, and keyed) is applied before it is judged.
+        connect(
+            m_transmitState, &TransmitState::stopChanged, m_remoteTransmit,
+            [this]() {
+                m_remoteTransmit->coreStopped(
+                    m_transmitState->stopSerial(), m_transmitState->keyed(),
+                    static_cast<quint32>(m_transmitState->stopEpoch()));
+            },
+            Qt::QueuedConnection);
+        // Fix wave M6: only VOX this window armed (its own write, not the
+        // Core's value for another device's).
+        connect(&radioModel->transmitModel(), &TransmitModel::voxEnabledChanged, this,
+                [this](bool on) {
+                    const bool armedHere = on && (m_voxArmedHere || !m_applyingInbound);
+                    if (armedHere == m_voxArmedHere) {
+                        return;
+                    }
+                    m_voxArmedHere = armedHere;
+                    m_remoteTransmit->setVoxArmed(armedHere);
+                    emit voxArmedHereChanged(armedHere);
+                });
+        // A refused press is shown in the Core's words, where a local
+        // refusal shows (MainWindow's toast; the buttons follow the Core).
+        const QPointer<RadioModel> model(radioModel);
+        connect(m_remoteTransmit, &RemoteTransmitClient::refused, this,
+                [model](const QString& reason, const QString&, const QString&) {
+                    if (model) { model->reportRemoteTransmitRefused(reason); }
+                });
     }
 
     m_outboundMirror = new StateMirror(this);
@@ -1185,6 +1303,9 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
     m_authenticated = false;
     m_forwardLocalChanges = false;
     m_propertyWriteIds.clear();
+    // Desktop remote transmit: the Core unkeys this device when the link
+    // drops and never keys it again by itself; nothing of it is kept.
+    refreshRemoteTransmit();
     if (m_radioModel) {
         m_radioModel->dspAssets()->resetSession();
         m_radioModel->dspAssets()->setRemoteNr3ModelsSupported(false);
@@ -1266,6 +1387,10 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
     m_objects.clear();
     m_outboundMirror->unwatchAll();
     m_outboundCoalescer.clear();
+    // iPhone app plan Task 39: nothing is on the air as far as this window
+    // can tell once its Core is gone; the last stop stays until the next
+    // snapshot replaces it.
+    m_transmitState->clearStationValues();
 
     if (!m_settingsProxy.isNull()) {
         m_settingsProxy->setReady(false);
@@ -1641,6 +1766,7 @@ void StationClient::onTransportText(const QByteArray& wire)
         // the station its own state back.
         m_forwardLocalChanges = true;
         m_writeFlushTimer->start();
+        refreshRemoteTransmit();
         if (firstSnapshot) {
             qCInfo(lcStationClient) << "Session established with" << m_capabilities.stationName;
             emit handshakeComplete();
@@ -1951,6 +2077,7 @@ void StationClient::handleCapabilities(const SessionMessage& message)
         }
     }
     m_capabilities = incoming;
+    refreshRemoteTransmit();
 
     if (m_capabilities.effectiveMaxSlices < m_capabilities.boardMaxSlices) {
         qCInfo(lcStationClient)
@@ -2217,6 +2344,17 @@ void StationClient::handleCapabilities(const SessionMessage& message)
             m_objects.remove(key);
             m_outboundMirror->unwatch(key);
         }
+    }
+
+    // iPhone app plan Task 39 (txStateVersion 1): the Core's transmit state
+    // and meters, read only; never written back. Against a Core that does
+    // not send it the key is not held and the window's copy reads idle.
+    if (m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.txStateVersion >= 1) {
+        m_objects.insert(QByteArrayLiteral("txState"), m_transmitState);
+    } else {
+        m_objects.remove(QByteArrayLiteral("txState"));
+        m_transmitState->clearStationValues();
     }
 
     const QList<PanadapterModel*> pans = m_radioModel->panadapters();
@@ -2809,7 +2947,6 @@ bool StationClient::applyOne(QObject* target, const MirrorProperty& prop,
         // R-R3-49 (parity Task 6): likewise the Core's TX inhibit.
         QByteArrayLiteral("RadioModel.txInhibited"),
         // Parity Task 16: likewise the Core's DSP facts.
-        QByteArrayLiteral("RadioModel.noiseReductionMethods"),
         QByteArrayLiteral("RadioModel.dspOptionsLastApplyMs"),
         QByteArrayLiteral("SliceModel.minNotchWidthHz"),
         QByteArrayLiteral("SliceModel.signalStrengthDbm"),
@@ -2899,6 +3036,12 @@ bool StationClient::applyClientOnlyProperty(QObject* target, const QByteArray& c
         return tx != nullptr && tx->applyStationValue(propertyName, native);
     }
     // R-R3-47 / R-R3-22: plain state applies; never a command to an amp.
+    // iPhone app plan Task 39: a plain state apply; the Core's transmitter
+    // is never changed from here.
+    if (className == "TransmitState") {
+        auto* state = qobject_cast<TransmitState*>(target);
+        return state != nullptr && state->applyStationValue(propertyName, native);
+    }
     if (className == "AmplifierModel") {
         auto* amp = qobject_cast<AmplifierModel*>(target);
         return amp != nullptr && amp->applyStationValue(propertyName, native);
@@ -3023,6 +3166,30 @@ void StationClient::watchForOutbound(const QByteArray& objectKey, QObject* objec
                         : assets->nr3ModelStatus();
                 }
                 return false;
+            }
+            // R-R3-49, Sub-epic C-1: likewise DFNR (mirrored dfnrRunnable).
+            if (requested == NrSlot::DFNR && assets && !assets->dfnrRunnable()) {
+                if (reason) {
+                    *reason = assets->dfnrModelStatus().isEmpty()
+                        ? QStringLiteral("DFNR cannot run on this Core.")
+                        : assets->dfnrModelStatus();
+                }
+                return false;
+            }
+            // And MNR (the Core's mirrored mnrRunnable: it runs only on a
+            // Mac Core) and BNR (in no build), in the model's words; and
+            // DFNR or MNR on a Core too old to say (trunk merge, parity
+            // Task 16's rule).
+            if ((requested == NrSlot::DFNR || requested == NrSlot::MNR
+                 || requested == NrSlot::BNR) && owner
+                && owner->m_radioModel) {
+                const QString cannot = owner->m_radioModel->nrCannotRunReason(requested);
+                if (!cannot.isEmpty()) {
+                    if (reason) {
+                        *reason = cannot;
+                    }
+                    return false;
+                }
             }
             return true;
         });
@@ -3971,6 +4138,19 @@ StationClient::CommandOutcome StationClient::requestFourO3AEnabled(bool enabled)
                        QStringLiteral("the 4O3A master change"));
 }
 
+bool StationClient::remoteTransmitAvailable() const
+{
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.remoteTxVersion >= 1;
+}
+
+void StationClient::refreshRemoteTransmit()
+{
+    if (m_remoteTransmit != nullptr) {
+        m_remoteTransmit->setAvailable(remoteTransmitAvailable());
+    }
+}
+
 void StationClient::handleCommandResult(const SessionMessage& message)
 {
     // R-R3-21: the app shows a refusal in user words (OperatorReasonText),
@@ -3979,6 +4159,27 @@ void StationClient::handleCommandResult(const SessionMessage& message)
         qCInfo(lcStationClient).noquote()
             << "Station refused" << QString::fromUtf8(message.commandVerb)
             << "command" << message.commandId << ":" << message.reason;
+    }
+    // Desktop remote transmit: the transmit verbs' answers (every copy's)
+    // go to the window's transmit client, which shows a refusal once, in
+    // the words a local refusal uses; none takes the generic routes below.
+    // Task 37: a keepalive's answer changes nothing; a refused one is
+    // logged above and goes nowhere else (ten a second while keyed).
+    if (message.commandVerb == "tx.keepalive") {
+        return;
+    }
+    if (message.commandVerb == "tx.key" || message.commandVerb == "tx.unkey"
+        || message.commandVerb == "tx.tune" || message.commandVerb == "tx.twoTone") {
+        const QPointer<StationClient> self(this);
+        if (m_remoteTransmit != nullptr) {
+            m_remoteTransmit->commandFinished(message.commandId, message.commandVerb,
+                                              message.accepted, message.reason, message.updates);
+        }
+        if (!self) { return; }
+        emit commandResponse(message);
+        if (!self) { return; }
+        emit commandResult(message.commandId, message.accepted, message.reason);
+        return;
     }
     if (message.commandVerb == "ps3.subscribeDisplay" && m_pendingPs3Display
         && m_pendingPs3Display->first == message.commandId) {
@@ -4228,6 +4429,13 @@ bool StationClient::stationLinkReady() const
 {
     return m_sessionActive && m_authenticated && m_handshakeComplete
         && m_transport && m_transport->isOpen();
+}
+
+bool StationClient::transmitTimeOutAvailable() const
+{
+    // The time-out (Task 38) and txState (Task 39) ship together; a Core
+    // that sends txStateVersion 1 counts the time-out's time left.
+    return stationLinkReady() && m_capabilities.txStateVersion >= 1;
 }
 
 bool StationClient::remoteAmplifierStatusAvailable() const
@@ -4525,6 +4733,46 @@ QList<QByteArray> StationClient::mirroredObjectKeys() const
 QObject* StationClient::mirroredObject(const QByteArray& objectKey) const
 {
     return m_objects.value(objectKey).data();
+}
+
+QString StationClient::thisDeviceWireId() const
+{
+    return m_deviceIdentity ? StationIdentity::toBase64Url(m_deviceIdentity->fingerprint())
+                            : QString();
+}
+
+QString StationClient::transmitHolderText() const
+{
+    // Fix wave I4 (the several-devices design, ruling 8.1).
+    if (m_transmitState == nullptr || !isHandshakeComplete()
+        || capabilities().txStateVersion < 2) {
+        return {};
+    }
+    const TransmitState& tx = *m_transmitState;
+    if (tx.holderTransferring()) {
+        // Fix wave 2: with nobody holding, a transfer ended with MOX still
+        // reading on (TxRefusals::stopNotConfirmed's words).
+        return tx.holderDeviceId().isEmpty()
+                   ? QStringLiteral("The radio did not confirm it stopped transmitting.")
+                   : QStringLiteral("Transmit is changing hands.");
+    }
+    if (tx.holderDeviceId().isEmpty()) {
+        return {};
+    }
+    const QString self = thisDeviceWireId();
+    if (!self.isEmpty() && tx.holderDeviceId() == self) {
+        return QStringLiteral("This computer holds transmit.");
+    }
+    const QString name = tx.holderName().isEmpty() ? QStringLiteral("Another device")
+                                                   : tx.holderName();
+    // Fix wave 2: the name and why this window's MOX and TUNE are refused
+    // until the holder lets go (until taking transmit is built, Task 77).
+    return tx.holderAway()
+               ? QStringLiteral("%1 holds transmit and is away. MOX and TUNE here wait until "
+                                "it lets go.")
+                     .arg(name)
+               : QStringLiteral("%1 holds transmit. MOX and TUNE here wait until it lets go.")
+                     .arg(name);
 }
 
 } // namespace NereusSDR

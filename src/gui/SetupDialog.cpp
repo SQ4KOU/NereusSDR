@@ -172,6 +172,11 @@
 //                 keeps live. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-09-26: Transmit group fix wave 2 (M8): VOX shows disabled with the
+//               plain reason while this computer has no microphone line to
+//               the Core; the Core's refusal stays the backstop. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "SetupDialog.h"
@@ -931,6 +936,16 @@ void SetupDialog::setTransmitPermitted(bool permitted, const QString& reason)
     refreshTransmitPresentation();
 }
 
+void SetupDialog::setVoxPermitted(bool permitted, const QString& reason)
+{
+    if (m_voxPermitted == permitted && m_voxReason == reason) {
+        return;
+    }
+    m_voxPermitted = permitted;
+    m_voxReason = reason;
+    refreshTransmitPresentation();
+}
+
 void SetupDialog::setTransmitSettingsPermitted(bool permitted, const QString& reason,
                                                int minVersion)
 {
@@ -1017,6 +1032,8 @@ void SetupDialog::refreshTransmitPresentation()
         }
         for (SetupPage* setupPage : setupPages) {
             setupPage->setTransmitPermitted(m_transmitPermitted, m_transmitReason);
+            // Fix wave 2 (M8): VOX needs this computer's microphone line.
+            setupPage->setVoxPermitted(m_voxPermitted, m_voxReason);
             // R-R3-49 (parity Task 1): the transmit settings that key nothing.
             setupPage->setTransmitSettingsPermitted(m_transmitSettingsPermitted,
                                                     m_transmitSettingsReason);

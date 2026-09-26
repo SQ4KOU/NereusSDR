@@ -128,7 +128,7 @@
         {
             "kind": "i64",
             "name": "dspAssetVersion",
-            "value": 2
+            "value": 4
         },
         {
             "kind": "i64",
@@ -284,6 +284,31 @@
             "kind": "i64",
             "name": "sessionHolderVersion",
             "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "remoteTxVersion",
+            "value": 1
+        },
+        {
+            "kind": "utf8",
+            "name": "txRefusalCode",
+            "value": "stationReceiveOnly"
+        },
+        {
+            "kind": "utf8",
+            "name": "txRefusalReason",
+            "value": "This Core is set to receive only."
+        },
+        {
+            "kind": "utf8",
+            "name": "txRefusalFix",
+            "value": ""
+        },
+        {
+            "kind": "i64",
+            "name": "txStateVersion",
+            "value": 2
         }
     ],
     "commands": [
@@ -1042,6 +1067,89 @@
             "capabilityVersion": 4,
             "minMinor": 11,
             "verb": "setAlexBpfMode"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "sliceId",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteTxVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "tx.setTxSlice"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "trigger",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteTxVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "tx.key"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "epoch",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteTxVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "tx.unkey"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "bool",
+                    "name": "on",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteTxVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "tx.tune"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "bool",
+                    "name": "on",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteTxVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "tx.twoTone"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "sequence",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "epoch",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteTxVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "tx.keepalive"
         },
         {
             "arguments": [
@@ -2102,6 +2210,9 @@
                     ],
                     "receiverAudioVersion": [
                         "receiverAudioVersion"
+                    ],
+                    "remoteTxVersion": [
+                        "remoteTxVersion"
                     ]
                 },
                 "fields": [
@@ -3394,6 +3505,30 @@
                     "kind": "bool",
                     "name": "nr3Runnable",
                     "ordinal": 7
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "dfnrModelStatus",
+                    "ordinal": 8
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "dfnrRunnable",
+                    "ordinal": 9
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "mnrStatus",
+                    "ordinal": 10
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "mnrRunnable",
+                    "ordinal": 11
                 }
             ]
         },
@@ -3733,15 +3868,9 @@
                 },
                 {
                     "direction": "outbound",
-                    "kind": "utf8",
-                    "name": "noiseReductionMethods",
-                    "ordinal": 24
-                },
-                {
-                    "direction": "outbound",
                     "kind": "i64",
                     "name": "dspOptionsLastApplyMs",
-                    "ordinal": 25
+                    "ordinal": 24
                 }
             ]
         },
@@ -5322,13 +5451,13 @@
         "TransmitModel": {
             "properties": [
                 {
-                    "direction": "bidirectional",
+                    "direction": "outbound",
                     "kind": "bool",
                     "name": "mox",
                     "ordinal": 0
                 },
                 {
-                    "direction": "bidirectional",
+                    "direction": "outbound",
                     "kind": "bool",
                     "name": "tune",
                     "ordinal": 1
@@ -5840,6 +5969,190 @@
                     "kind": "enum",
                     "name": "twoToneDrivePowerSource",
                     "ordinal": 84
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "voxEnabled",
+                    "ordinal": 85
+                }
+            ]
+        },
+        "TransmitState": {
+            "properties": [
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "keyed",
+                    "ordinal": 0
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "tuning",
+                    "ordinal": 1
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "twoTone",
+                    "ordinal": 2
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "txSliceId",
+                    "ordinal": 3
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "keyedByName",
+                    "ordinal": 4
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "keyedByKind",
+                    "ordinal": 5
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "keyedTrigger",
+                    "ordinal": 6
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "keyedSinceMs",
+                    "ordinal": 7
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "timeOutRemainingSeconds",
+                    "ordinal": 8
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "forwardPowerWatts",
+                    "ordinal": 9
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "reflectedPowerWatts",
+                    "ordinal": 10
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "swr",
+                    "ordinal": 11
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "alcDb",
+                    "ordinal": 12
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "micLevelDb",
+                    "ordinal": 13
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "txEnding",
+                    "ordinal": 14
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "stopReason",
+                    "ordinal": 15
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "stopText",
+                    "ordinal": 16
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "stopSerial",
+                    "ordinal": 17
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "holderDeviceId",
+                    "ordinal": 18
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "holderName",
+                    "ordinal": 19
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "holderShortName",
+                    "ordinal": 20
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "holderKind",
+                    "ordinal": 21
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "holderSource",
+                    "ordinal": 22
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "holderForSeconds",
+                    "ordinal": 23
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "holderEpoch",
+                    "ordinal": 24
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "holderAway",
+                    "ordinal": 25
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "holderTransferring",
+                    "ordinal": 26
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "keyedForSeconds",
+                    "ordinal": 27
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "stopEpoch",
+                    "ordinal": 28
                 }
             ]
         },
@@ -6054,6 +6367,10 @@
             "key": "connectedDevices"
         },
         {
+            "class": "TransmitState",
+            "key": "txState"
+        },
+        {
             "class": "StationCatalog",
             "key": "catalog"
         },
@@ -6165,6 +6482,13 @@
             "WindBackPowerSwr",
             "MultimeterDelayMs",
             "NetworkWatchdogEnabled",
+            "MoxTimeOutEnabled",
+            "MoxTimeOutSeconds",
+            "PingTimeOutEnabled",
+            "PingTimeOutSeconds",
+            "PingTimeOutHost",
+            "RemoteMoxTimeOutEnabled",
+            "RemoteMoxTimeOutSeconds",
             "RxOnly"
         ],
         "stationPrefixes": [

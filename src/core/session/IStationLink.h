@@ -85,6 +85,11 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 fix wave: tgxlOperateAppliesWhole
 //                                    (remoteTgxlControlVersion 3).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app plan, desktop remote
+//                                    transmit (R-IOS-13): remoteTransmit().
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Merge of Tasks 38 and 39:
+//                                    transmitTimeOutAvailable().
 //   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 1):
 //                                    transmitSettingsUnavailableReason.
 //                                    AI-assisted via Anthropic Claude Code.
@@ -139,6 +144,8 @@
 #include <QtGlobal>
 
 namespace NereusSDR {
+
+class RemoteTransmitClient;
 
 /// Non-owning control-plane seam. RadioModel holds a pointer to one via
 /// attachStation()/detachStation() without owning or including anything
@@ -221,6 +228,11 @@ public:
     /// arrived. False while connecting and after the Core is lost, when a
     /// window's copy of the Core's readings is stale.
     virtual bool stationLinkReady() const { return false; }
+    /// Merge of Tasks 38 and 39 (R-IOS-04): the Core has the transmit
+    /// time-out (iPhone app plan Task 38) and uses its seven settings. A Core
+    /// that sends `txStateVersion` 1 has it (txState carries the time left);
+    /// an older Core stores the settings and ignores them.
+    virtual bool transmitTimeOutAvailable() const { return false; }
     /// R-R3-47 / R-R3-22: the Core reports its Power Genius XL (the
     /// `amplifier` object) and its RF-Kit RF2K-S (the `rfkit` object) to
     /// this app. Both false on an older Core or link.
@@ -475,6 +487,13 @@ public:
     { return QStringLiteral("This Core cannot change its filter policy for this app. Updating the Core may help."); }
     virtual CommandOutcome requestFilterPolicy(int /*chain*/, int /*mode*/)
     { return { false, filterPolicyUnavailableReason() }; }
+
+    /// iPhone app plan, desktop remote transmit (R-IOS-13): the window's
+    /// side of the transmit verbs, or null for a link without them. A
+    /// remote window keys through it and never through its own
+    /// MoxController; RadioModel routes MOX, TUNE and two-tone here while
+    /// it is available().
+    virtual RemoteTransmitClient* remoteTransmit() { return nullptr; }
 };
 
 } // namespace NereusSDR

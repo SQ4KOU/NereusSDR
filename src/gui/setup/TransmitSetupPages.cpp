@@ -184,6 +184,11 @@
 //                 TX Inhibit boxes apply to the gate at once, as
 //                 setup.cs:16660-16667 [v2.10.3.15] does. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave 2 (M8): VOX shows disabled with the
+//               plain reason while this computer has no microphone line to
+//               the Core; the Core's refusal stays the backstop. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 #include "TransmitSetupPages.h"
 #include "gui/StyleConstants.h"
@@ -2183,10 +2188,26 @@ DexpVoxPage::DexpVoxPage(RadioModel* model, QWidget* parent)
 
 void DexpVoxPage::setTransmitPermitted(bool permitted, const QString& reason)
 {
-    gateTransmitControls({m_chkVOXEnable}, permitted,
-        reason.isEmpty()
-            ? tr("Remote transmit controls are not available from this Core yet.")
-            : reason);
+    m_transmitOk = permitted;
+    m_transmitWhy = reason.isEmpty()
+        ? tr("Remote transmit controls are not available from this Core yet.")
+        : reason;
+    gateVoxEnable();
+}
+
+void DexpVoxPage::setVoxPermitted(bool permitted, const QString& reason)
+{
+    m_voxLineOk = permitted;
+    m_voxLineWhy = reason;
+    gateVoxEnable();
+}
+
+void DexpVoxPage::gateVoxEnable()
+{
+    // One call, both conditions (gateTransmitControls keeps one saved
+    // state per control).
+    gateTransmitControls({m_chkVOXEnable}, m_transmitOk && m_voxLineOk,
+                         !m_transmitOk ? m_transmitWhy : m_voxLineWhy);
 }
 
 void DexpVoxPage::setTransmitSettingsPermittedAt(int version, bool permitted,

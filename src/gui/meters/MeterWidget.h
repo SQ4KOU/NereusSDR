@@ -12,6 +12,11 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-25 - iPhone app plan Task 39 (D14, R-IOS-13): a binding can be
+//                 marked unavailable with a plain reason; its items are
+//                 drawn dimmed and the reason is their tooltip (a meter a
+//                 remote window cannot show yet is disabled, never hidden).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -87,6 +92,19 @@ public:
 
     void updateMeterValue(int bindingId, double value);
 
+    // iPhone app plan Task 39 (NereusSDR-native): the items bound to
+    // `bindingId` cannot show a reading here (a remote window's Core does
+    // not send it). They stay where they are, drawn dimmed, and hovering
+    // one shows `reason`. An empty reason makes the binding available
+    // again.
+    void setBindingUnavailable(int bindingId, const QString& reason);
+    QString bindingUnavailableReason(int bindingId) const
+    {
+        return m_unavailableBindings.value(bindingId);
+    }
+    // The reason for the unavailable item under `pos`, or empty.
+    QString unavailableReasonAt(const QPointF& pos) const;
+
     // Rescale the Power BarItem + ScaleItem pair (objectName "PowerBar" /
     // "PowerScale") for the connected SKU's PA ceiling.  20% headroom
     // past the red zone, sub-watt tick resolution for QRP radios.
@@ -149,9 +167,13 @@ protected:
     void mouseReleaseEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void wheelEvent(QWheelEvent* event) override;
+    bool event(QEvent* event) override;
 
 private:
     void drawItems(QPainter& p);
+    // Task 39: dims each drawn item whose binding is unavailable.
+    void drawUnavailableVeils(QPainter& p) const;
+    QHash<int, QString> m_unavailableBindings;
     QVector<MeterItem*> m_items;
 
     // Visibility filter state — see setMox/setDisplayGroup doc.

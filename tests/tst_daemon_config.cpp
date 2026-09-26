@@ -213,6 +213,10 @@ private slots:
             // iPhone app Task 12: reaches StationServer::
             // setPairingLanClickAllowed() from DaemonApp::startStationServer().
             QStringLiteral("pairing_lan_click"),
+            // iPhone app plan Task 34: reaches StationServer::
+            // setRemoteTransmitAllowed() and the model's receive-only policy
+            // from DaemonApp::start().
+            QStringLiteral("remote_transmit"),
             // iPhone app Task 17: reach StationStatusPage from DaemonApp::
             // startStationServer(), and the control socket's place (the
             // daemon's and every console command's).
@@ -242,6 +246,7 @@ private slots:
                 "audio_lossless = deny\n"
                 "station_bind = 192.168.1.20\n"
                 "pairing_lan_click = deny\n"
+                "remote_transmit = deny\n"
                 "status_page = off\n"
                 "status_port = 8080\n"
                 "state_directory = /var/lib/nereusd\n");
@@ -262,6 +267,7 @@ private slots:
         QCOMPARE(c.audioLosslessAllowed, false);
         QCOMPARE(c.stationBind, QStringLiteral("192.168.1.20"));
         QCOMPARE(c.pairingLanClickAllowed, false);
+        QCOMPARE(c.remoteTransmitAllowed, false);
         QCOMPARE(c.statusPage, false);
         QCOMPARE(c.statusPort, 8080);
         QCOMPARE(c.stateDirectory, QStringLiteral("/var/lib/nereusd"));
@@ -687,6 +693,44 @@ private slots:
         const DaemonConfig c = DaemonConfig::fromFile(f.fileName(), &err);
         QVERIFY2(err.isEmpty(), qPrintable(err));
         QCOMPARE(c.pairingLanClickAllowed, allowed);
+    }
+
+    // iPhone app plan Task 34 (R-IOS-02): remote_transmit is allow by
+    // default (the shipped sample says so too); deny keeps the Core
+    // receive-only; anything else warns and denies.
+    void remoteTransmitIsAllowOrDeny_data()
+    {
+        QTest::addColumn<QByteArray>("contents");
+        QTest::addColumn<bool>("allowed");
+        QTest::addColumn<bool>("warns");
+        QTest::newRow("absent") << QByteArray("slice_count = 1\n") << true << false;
+        QTest::newRow("allow") << QByteArray("remote_transmit = allow\n") << true << false;
+        QTest::newRow("deny") << QByteArray("remote_transmit = deny\n") << false << false;
+        QTest::newRow("Allow") << QByteArray("remote_transmit = Allow\n") << true << false;
+        QTest::newRow("garbage") << QByteArray("remote_transmit = yes\n") << false << true;
+    }
+
+    void remoteTransmitIsAllowOrDeny()
+    {
+        QFETCH(QByteArray, contents);
+        QFETCH(bool, allowed);
+        QFETCH(bool, warns);
+        QTemporaryFile f;
+        QVERIFY(f.open());
+        f.write(contents);
+        f.flush();
+        if (warns) {
+            QTest::ignoreMessage(QtWarningMsg,
+                                 QRegularExpression(QStringLiteral("remote_transmit must be")));
+        }
+        QString err;
+        const DaemonConfig c = DaemonConfig::fromFile(f.fileName(), &err);
+        QVERIFY2(err.isEmpty(), qPrintable(err));
+        QCOMPARE(c.remoteTransmitAllowed, allowed);
+        QVERIFY(DaemonConfig::defaults().remoteTransmitAllowed);
+        const DaemonConfig sample = DaemonConfig::fromFile(
+            QStringLiteral(NEREUS_SOURCE_DIR "/packaging/nereusd.conf.sample"), &err);
+        QVERIFY(sample.remoteTransmitAllowed);
     }
 
     // iPhone app Task 17 (R-IOS-08): the status page is on by default, on

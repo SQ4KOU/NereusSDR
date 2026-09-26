@@ -127,10 +127,45 @@
 //                the filter curve (filterResponseForStation,
 //                coreFilterResponse). NereusSDR-original. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-R3-49 (trunk merge of parity Tasks 16 to 18): one noise
+//                reduction availability source. noiseReductionMethods and
+//                noiseReductionUnavailableReason dropped for
+//                nrCannotRunReason (DspAssetService), which in a remote
+//                window gives the "does not say" reason on a Core below
+//                dspAssetVersion 3 (DFNR) or 4 (MNR). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 //   2026-09-24 - R-R3-21: before a pool is sized, the slice-limit refusal
 //                names the Core only on a Core (NereusSDR in a window with
 //                no Core); stale slice-limit comments corrected.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-39: receive DSP off the event loop. A local model
+//                owns the receive lane (DspControlThread); the live sample
+//                rate change runs there (setSampleRateLiveAsync,
+//                sampleRateChangeFinished) and the calls into RxDspWorker
+//                that blocked the event loop became lane jobs. NereusSDR-
+//                original. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
+//   2026-09-25 - R-R3-39: transmit DSP off the event loop. A local model
+//                owns the transmit lane too; the TX channel stays on this
+//                thread and posts its WDSP calls there; MoxController's
+//                keying steps reach it through wireTxChannelKeying
+//                (setRunningAsync). NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - Task 33 (R-IOS-03): stopTransmitNow (the emergency
+//                stop, NereusSDR-original), stopAllTx (ported from Thetis
+//                console.cs StopAllTx), transmitStopped, onMoxRxReady.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49, Sub-epic C-1: the Core's DFNR availability
+//                (DspAssetService dfnrRunnable / dfnrModelStatus), set at
+//                start and when a channel's first DFNR load fails; DFNR is
+//                refused, and turned off on a slice, while it cannot run.
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-25 - R-R3-49, Sub-epic C-1: the Core's MNR availability
+//                (DspAssetService mnrRunnable / mnrStatus) and BNR's
+//                build-wide reason; both are refused, and turned off on a
+//                slice, while they cannot run. NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-24 - Receiver and transmit gaps plan, Task 7: setMoxFromButton
 //                (Thetis chkMOX_Click, console.cs:29730-29747 [v2.10.3.15])
 //                for the MOX buttons, and setMox, the TCI trx shim, now keys
@@ -150,6 +185,39 @@
 //                and the FreeDV Reporter frequency following the
 //                station-level active slice. NereusSDR-original. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 34 (R-IOS-02, R-IOS-03): the
+//                unkey-confirmed gate (UnkeyGate, unkeyGate()), which the TX
+//                slice arbiter's handoff while keyed waits for; TUNE asks the
+//                keying gate before it starts (admitStationKey); the MOX
+//                check names its refusal codes (stationReceiveOnly,
+//                micNotReady); stopAllTx's MOX = false goes to the
+//                controller. NereusSDR-original. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 35 (R-IOS-13): who is keyed
+//                (keyedBy, naming the transmit holder) and the keying
+//                epoch; setTune for a remote device's key; PttSource::Remote
+//                while a device is keyed. NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 36 (R-IOS-13): the station's
+//                microphone source follows a remote device (RemoteMicFeed)
+//                while it transmits or has VOX armed; PttSource::Vox for a
+//                device's VOX key. NereusSDR-original. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan, desktop remote transmit (R-IOS-13,
+//                R-R3-42): in a remote window MOX, TUNE and two-tone go to
+//                the Core through the transmit verbs (setTwoTone added),
+//                never the window's own MoxController; the Core's refusal
+//                is reported (remoteTransmitRefused). NereusSDR-original.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 37 (R-IOS-13): remoteMicDeviceChanged,
+//                so the Core turns off VOX a device armed when its
+//                microphone line closes. NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 38 (R-IOS-04, D29): the transmit
+//                time-out (TxTimeOutTimer, Thetis TimeOutTimerManager)
+//                with its limit for whoever is keyed, timeOutRemainingSeconds
+//                and the timeOut stop reason; timeOutTimer from console.cs.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-25 - iPhone app plan Task 74 (R-IOS-02, R-IOS-30): each
 //                slice's receiver reported to the anchors;
 //                moveStreamWindowFor and moveSlicesToStream for a confirmed
@@ -202,6 +270,11 @@
 //                tool and Pin Control, local and through the Core), and
 //                hl2LinkFigures / applyCoreHl2LinkFigures. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave C2: the microphone lines by
+//               device (openRemoteMicLine, closeRemoteMicLine, per-device
+//               priming and VOX), one writer at a time (remoteMicWriter),
+//               VOX following the holder. J.J. Boyd (KG4VCF), with AI-
+//               assisted implementation via Anthropic Claude Code.
 //   2026-09-26 - R-R3-01 (parity Task 17 follow-up): fftEnginePool view
 //                hook, so Rendering > Decimation reaches every pan.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
@@ -305,6 +378,7 @@
 #include "core/safety/SwrProtectionController.h"
 #include "core/safety/TxInhibitMonitor.h"
 #include "core/safety/BandPlanGuard.h"
+#include "core/safety/TxTimeOutTimer.h"
 
 #include <QByteArray>
 #include <QDateTime>
@@ -333,7 +407,9 @@
 #include <functional> // R-R3-21 DSP > Options apply observer (test seam)
 #include <vector>
 #include <memory>  // std::unique_ptr
+#include <mutex>   // R-R3-39 RxWorkerTarget
 #include <optional>
+#include <vector>
 
 namespace NereusSDR {
 
@@ -341,6 +417,7 @@ class ReceiverManager;
 class AudioEngine;
 class WdspEngine;
 class RxDspWorker;
+class DspControlThread;
 class NoiseFloorTracker;
 // Remote Daemon R2 Task 12: per-slice S-meter QTimer (src/core/meters/).
 // Owned directly (constructed in the constructor body, Role::Local only);
@@ -353,6 +430,7 @@ class SliceMeterPump;
 class WidebandFftEngine;
 // 3M-1a G.1: forward declarations for TX-side components.
 class MoxController;
+struct KeyerIdentity;
 class TxChannel;
 class AmModulationAnalyzer;
 // Phase 3F Sub-Epic J Task 11: forward decl for rxChannelForSlice()'s
@@ -360,6 +438,7 @@ class AmModulationAnalyzer;
 class RxChannel;
 // Phase 3F Sub-Epic C: TX-slice arbiter (single-TX invariant + RF-safe handoff).
 class TxSliceArbiter;
+class UnkeyGate;
 // 3M-1b L.1: forward declarations for mic-source strategy objects.
 class PcMicSource;
 class RadioMicSource;
@@ -389,6 +468,8 @@ class PsccPump;
 class PaProfileManager;
 // 3M-1c TX pump architecture redesign — TxWorkerThread.
 class TxWorkerThread;
+// iPhone app plan Task 36: the remote microphone ring.
+class RemoteMicFeed;
 // Stage C2 filter preset editor — user-override layer over Thetis defaults.
 class FilterPresetStore;
 
@@ -498,12 +579,9 @@ class RadioModel : public QObject {
     Q_PROPERTY(int bandOutputsBand READ bandOutputsBand NOTIFY bandOutputsChanged)
     Q_PROPERTY(bool bandOutputsKeyed READ bandOutputsKeyed NOTIFY bandOutputsChanged)
     // R-R3-49 / R-R3-21 / R-R3-40 (remote-window parity Task 16, dspInfoVersion
-    // 1): the noise reduction this Core's build and computer can run, comma
-    // separated from nr1, nr2, nr3, nr4, dfnr, mnr and anf, as RxChannel's
-    // own build and platform checks decide; and how long the Core's last DSP
-    // Options apply took, in ms (0 before any). Core to window only.
-    Q_PROPERTY(QString noiseReductionMethods READ noiseReductionMethods
-                   NOTIFY noiseReductionMethodsChanged)
+    // 1): how long the Core's last DSP Options apply took, in ms (0 before
+    // any). Core to window only. Which noise reduction the Core runs comes
+    // from DspAssetService (dfnrRunnable, mnrRunnable), the one source.
     Q_PROPERTY(qint64 dspOptionsLastApplyMs READ dspOptionsLastApplyMs
                    NOTIFY dspOptionsLastApplyMsChanged)
 
@@ -1112,20 +1190,13 @@ public:
     bool isTxInhibited() const;
 
     // ── Remote-window parity Task 16 (R-R3-49, R-R3-21, R-R3-40) ──────────
-    // The noise reduction this station runs: a local model's own build and
-    // computer (localNoiseReductionMethods), a remote window's Core as it
-    // last said (empty until it does, and on a Core below dspInfoVersion 1).
-    QString noiseReductionMethods() const;
-    // nr1, nr2, nr3, nr4 and anf with WDSP; dfnr with HAVE_DFNR and its model
-    // found (RxChannel's DeepFilterFilter checks); mnr with HAVE_MNR (macOS).
-    static QString localNoiseReductionMethods();
-    // Why `slot` cannot be offered here, in plain words, or empty when it
-    // can. Only DFNR and MNR depend on the build or computer; a remote
-    // window asks its Core, and a Core below dspInfoVersion 1 does not say.
-    QString noiseReductionUnavailableReason(NrSlot slot) const;
+    // Which noise reduction runs is nrCannotRunReason's (DspAssetService,
+    // the one source). A remote window on a Core below dspAssetVersion 3
+    // (DFNR) or 4 (MNR) is not told, and shows them disabled with this.
     static QString noiseReductionNotSaidReason();
-    // This build's and computer's reason alone (no model needed).
-    static QString localNoiseReductionUnavailableReason(NrSlot slot);
+    // The Core's dspAssetVersion as a remote window last heard it (0 on a
+    // local model, or before the Core says).
+    int stationDspAssetVersion() const { return m_stationDspAssetVersion; }
     // The Core's dspInfoVersion as a remote window last heard it (0 on a
     // local model, or before the Core says).
     int stationDspInfoVersion() const { return m_stationDspInfoVersion; }
@@ -1162,6 +1233,7 @@ public:
                                      double startHz, double stepHz, const QString& json);
     // Remote window: capabilities or the link changed.
     void setStationDspInfoVersion(int version);
+    void setStationDspAssetVersion(int version);
     // Remote window: the link closed with a curve request unanswered.
     void failStationFilterResponse();
     // Core: each slice's minNotchWidthHz follows its receiver's channel.
@@ -1811,6 +1883,82 @@ public:
     /// (ruling 5.11). Local only.
     void setTransmitHolder(const QByteArray& holder);
 
+    /// iPhone app plan Task 35 (R-IOS-13): who is keyed. While MOX is on it
+    /// names the transmit holder (a device's key, a program's key through
+    /// its window, and VOX all name the device that holds transmit; the
+    /// Core's own keys name the station device, kind "station"), how it
+    /// keyed and the key's epoch. Empty deviceId while unkeyed. The Core
+    /// sets it (StationServer, through RemoteKeying); a desktop on its own
+    /// leaves it empty.
+    struct KeyedBy {
+        QByteArray deviceId;
+        QString deviceName;
+        QString deviceKind;
+        /// A device's trigger ("screen", "headset", "bluetooth",
+        /// "actionButton", "tci"), "tune" or "twoTone" for those keys,
+        /// "vox", or for the station device's own keys "radioPtt", "cat"
+        /// or "station".
+        QByteArray trigger;
+        /// The keying epoch: advances with every key, so each key has its
+        /// own.
+        quint32 epoch{0};
+
+        bool isEmpty() const { return deviceId.isEmpty(); }
+        bool operator==(const KeyedBy& other) const = default;
+    };
+    KeyedBy keyedBy() const { return m_keyedBy; }
+    /// Local only. Also shows PttSource::Remote in RadioStatus while a
+    /// device other than the station is keyed.
+    void setKeyedBy(const KeyedBy& keyedBy);
+    /// The next keying epoch (each call advances it; never 0).
+    quint32 advanceKeyingEpoch();
+    quint32 keyingEpoch() const { return m_keyingEpoch; }
+
+    // ── iPhone app plan Task 36 (R-IOS-13): the remote microphone ──────
+    //
+    // The station's microphone source follows a remote device while it
+    // transmits: the transmit pump takes the device's microphone line
+    // (remoteMicFeed()) instead of the operator's configured source while
+    //   - the device is keyed (keyedBy() names it and MOX is on: its own
+    //     key, its program's key, or a VOX key attributed to it),
+    //   - it has VOX armed (setRemoteMicVoxArmed: VOX on and its session
+    //     permitted to transmit), or
+    //   - its key is waiting for the buffer to fill (setRemoteMicPriming).
+    // Otherwise the operator's source applies, and every change empties
+    // the ring, so at unkey nothing of the device's audio is left. Local
+    // only; the Core's media controller names the device and drives the
+    // priming and VOX inputs.
+
+    //
+    // Fix wave C2: several devices may carry a line at once (one media
+    // controller each). Exactly one line writes the ring at a time, the
+    // writer (remoteMicWriter()): the keyed device's while MOX is on and it
+    // has a line; otherwise the device whose key is waiting for its buffer;
+    // otherwise the VOX device. A change of writer empties the ring, so one
+    // device's audio is never mixed into another's transmission.
+
+    /// The ring the transmit pump pulls (null on a remote window's model).
+    RemoteMicFeed* remoteMicFeed() const { return m_remoteMicFeed.get(); }
+    /// `deviceId`'s media carries a microphone line now (opened once per
+    /// media connection that carries one; closed as often).
+    void openRemoteMicLine(const QByteArray& deviceId);
+    void closeRemoteMicLine(const QByteArray& deviceId);
+    bool remoteMicLineOpen(const QByteArray& deviceId) const;
+    /// `deviceId`'s key is waiting for its line's buffer to fill.
+    void setRemoteMicPriming(const QByteArray& deviceId, bool priming);
+    /// `deviceId` has VOX armed (VOX on, its session may transmit, and VOX
+    /// was not armed by another device).
+    void setRemoteMicVoxArmed(const QByteArray& deviceId, bool armed);
+    /// The pump takes a remote device's microphone now.
+    bool remoteMicInUse() const { return m_remoteMicInUse; }
+    /// The one line that writes the ring now, or empty (none, or a key
+    /// whose line was lost mid-key: silence).
+    QByteArray remoteMicWriter() const { return m_remoteMicWriter; }
+    /// The device whose microphone VOX listens to now (its VOX key is its
+    /// own), or empty: the transmit holder when it has VOX armed and a
+    /// line, else the one device with VOX armed and a line.
+    QByteArray remoteVoxDevice() const;
+
     /// The lowest slice id not in use (the next letter a new slice takes),
     /// or -1 when every id with a channel is in use.
     int lowestFreeSliceId() const;
@@ -2222,6 +2370,10 @@ public:
     // Used by the upcoming VfoWidget TX-badge click handoff path and any
     // future code that needs the authoritative TX-bound slice index.
     TxSliceArbiter* txSliceArbiter() const { return m_txSliceArbiter; }
+    /// iPhone app plan Task 34 (R-IOS-03): the unkey-confirmed gate (never
+    /// null). The arbiter's handoff while keyed and a transfer of transmit
+    /// (TransmitHolder) unkey through it.
+    UnkeyGate* unkeyGate() const { return m_unkeyGate; }
 
     // The slice bound to the transmitter — the source of every transmit
     // frequency. NOT activeSlice(), which is only the slice the operator is
@@ -2905,8 +3057,33 @@ public:
     //     dropped.  Callers should ensure MOX is off before calling.
     //   - dspChangeMeasured(qint64) signal (Task 1.8) is emitted on completion.
     //     The elapsed time is also returned synchronously.
+    //
+    // R-R3-39: the steps run on the receive lane now (setSampleRateLiveAsync);
+    // this form waits for them in a local event loop. Tests only; production
+    // callers use setSampleRateLiveAsync.
     qint64 setSampleRateLive(int newRateHz,
                              bool reconcileDiversity = true);
+
+    // R-R3-39: the same change without waiting. Returns at once; the twelve
+    // steps (Thetis setup.cs:7003-7159 [v2.10.3.13]) run in their order as
+    // one receive-lane barrier, and sampleRateChangeFinished(rate, ok)
+    // follows exactly once for each change it starts (ok false when there
+    // is no connection or WDSP is not ready, or when a later request
+    // replaced this one before it started). A request for the rate the
+    // radio is at, or is already changing to, starts nothing and emits
+    // nothing. A request made while a change runs starts when it finishes.
+    // The allocator state, the published sizes and the slices' rates change
+    // at once; each channel's rate when the lane re-rates it (step 6, as
+    // before); the wire rate (connectionSampleRateHz,
+    // wireSampleRateChanged) at the end.
+    void setSampleRateLiveAsync(int rateHz, bool reconcileDiversity = true);
+
+    // R-R3-39: the receive lane every RX WDSP call runs on (null on a
+    // remote model).
+    DspControlThread* receiveLane() const { return m_rxLane.get(); }
+    // R-R3-39: the transmit lane every TX WDSP call runs on (null on a
+    // remote model). The desktop's TxAnalyzer runs its calls here too.
+    DspControlThread* transmitLane() const { return m_txLane.get(); }
 
     // Task 1.7 — Active-RX-count live-apply coordinator.
     //
@@ -3131,10 +3308,11 @@ public:
     // from the cmd-state machine's effective PSEnabled state. RadioModel owns
     // the returned coordinator, matching production lifetime.
     PureSignal* installPureSignalForTest(TxChannel* tx);
-    // Group B fix wave: the txaFlushed wiring connectToRadio makes, against
-    // the channel wireTransmitChainForTest set, and an observer called
-    // where PureSignal hears the radio is back on receive.
-    void wireTxaFlushedForTest() { wireTxaFlushed(); }
+    // Group B fix wave: the unkey wiring connectToRadio makes, against the
+    // channel wireTransmitChainForTest set, and an observer called where
+    // PureSignal hears the radio is going back to receive (the TX drain's
+    // request, since Task 33's Thetis unkey order: wireTxChannelKeying).
+    void wireTxaFlushedForTest() { wireTxChannelKeying(); }
     void setTxaFlushedPureSignalObserverForTest(std::function<void()> observer)
     {
         m_txaFlushedPureSignalObserverForTest = std::move(observer);
@@ -3145,6 +3323,14 @@ public:
     // FIRST, worker constructed second) and assert the bindings still reach
     // it. Non-owning, exactly like the production m_dspWorker.
     void attachDspWorkerForTest(RxDspWorker* w);
+    // R-R3-39: waits until every job on the receive lane has run and then
+    // delivers the answers they queued for this thread. False on timeout.
+    bool waitForReceiveLaneForTest(int timeoutMs = 600000);
+    // R-R3-39: the same for the transmit lane.
+    bool waitForTransmitLaneForTest(int timeoutMs = 600000);
+    // R-R3-39: wires MoxController's txReady and txaFlushed to an injected TX
+    // channel (injectTxChannelForTest) exactly as the connect path does.
+    void wireTxChannelKeyingForTest() { wireTxChannelKeying(); }
     // Phase 3F Sub-Epic I closeout, defect F3: force the radio-state inputs
     // the codec branches on, so the PureSignal and diversity branches are
     // reachable without standing up a connection, a WDSP engine and a
@@ -3607,6 +3793,76 @@ public slots:
     // QMetaObject::invokeMethod (see implementation).
     void onMoxHardwareFlipped(bool isTx);
 
+    // Task 33: MoxController::rxReady (after ptt_out_delay) turns the
+    // receiver MOX stopped back on, as Thetis does after HdwMOXChanged and
+    // ptt_out_delay (console.cs:29678-29680 [v2.10.3.15]).
+    void onMoxRxReady();
+
+    // iPhone app plan Task 38: Thetis's console.cs timeOutTimer, the
+    // time-out's callback ("MOX" or "PING", with the limit that fired).
+    void onTxTimeOut(const QString& which, int limitSeconds);
+
+    // ── Task 33 (R-IOS-03, remote design §12.1): stopping transmission ─────
+    //
+    // stopTransmitNow: the emergency stop. Closes the TX channel's RF gate
+    // and hands MOX off and the T/R relay off to the connection's thread
+    // before it returns; it makes no WDSP call and waits for no lane. Until
+    // the next key begins (MoxController::txAboutToBegin), no keying step
+    // queued before it (a hardware flip, txReady, an interlock grant) can
+    // key the radio again. It does not change the MOX, TUNE or two-tone
+    // state: the caller clears those (stopAllTx does) and their normal
+    // unkey then finishes on the lanes. It never waits for a RADE
+    // end-of-over tail. `reason` goes to the log only.
+    void stopTransmitNow(const QString& reason);
+
+    // stopAllTx: ported from Thetis console.cs StopAllTx
+    // (console.cs:45324-45342 [v2.10.3.15]). When MOX, manual MOX, TUNE or
+    // two-tone is on: stopTransmitNow(message), then MOX, manual MOX, TUNE
+    // and two-tone off, and transmitStopped(message) once. Otherwise it does
+    // nothing. A held PTT then does not key again until it is released
+    // (MoxController::latchStopAllTx).
+    void stopAllTx(const QString& message = QString());
+
+public:
+    // ── iPhone app plan Task 38 (R-IOS-04, D29): the transmit time-out ──
+    //
+    // TxTimeOutTimer (Thetis TimeOutTimerManager) on a model with its own
+    // radio (Local). The limit is the one for whoever is keyed now
+    // (keyedBy().deviceKind):
+    //   - the station and computers: Thetis's own MOX time-out (default
+    //     off, 180 s) and ping time-out (default off, 180 s, 8.8.8.8);
+    //   - phones and tablets: RemoteMoxTimeOutEnabled (default on) and
+    //     RemoteMoxTimeOutSeconds (default 180), no ping time-out.
+    // All seven keys are the Core's (Station scope) and are read at every
+    // tick, so a change applies at once, counted from key-down. When it
+    // fires, stopAllTx("MOX Time Out Timer") (or "PING ...") and the stop
+    // reason timeOut with the limit.
+    static constexpr bool kRemoteMoxTimeOutDefault = true;
+    /// The limits for a key by a device of `deviceKind` ("phone",
+    /// "tablet", "computer", "station" or empty), read from the settings.
+    static TxTimeOutTimer::Settings txTimeOutSettingsFor(const QString& deviceKind);
+    /// Whole seconds before the MOX time-out stops the transmission, or -1
+    /// when no time-out applies (unkeyed, the limit off for this key, or a
+    /// model without its own radio).
+    int timeOutRemainingSeconds() const;
+    /// The time-out itself (null on a remote window's model). Tests drive
+    /// its clock and tick.
+    TxTimeOutTimer* txTimeOutTimer() const { return m_txTimeOut; }
+
+    /// Why the Core last stopped a transmission on its own. Task 38 sets
+    /// code "timeOut" with `which` ("mox" or "ping") and the limit in
+    /// seconds; the transmit state (Task 39) reads it.
+    struct TransmitStopReason {
+        QByteArray code;
+        QByteArray which;
+        int limitSeconds{-1};
+
+        bool operator==(const TransmitStopReason& other) const = default;
+    };
+    TransmitStopReason lastTransmitStopReason() const { return m_lastTransmitStopReason; }
+
+public slots:
+
     // ── Phase 3M-1a Task G.4: TUN function orchestrator ─────────────────────
     // Activate / release the TUNE function.
     //
@@ -3644,6 +3900,11 @@ public slots:
     //
     // Cite: Thetis console.cs:29978-30157 [v2.10.3.13] — chkTUN_CheckedChanged.
     void setTune(bool on);
+    // iPhone app plan Task 35 (R-IOS-13): TUNE for `keyer`, a remote
+    // device's key: the keying gate is asked for that device (a person's key
+    // on unheld transmit takes it) and the tune's MOX key is that device's.
+    // setTune(false) ends it as any TUNE ends.
+    void setTune(bool on, const KeyerIdentity& keyer);
 
     // TGXL autotune orchestration (NereusSDR-native, no Thetis source).
     //
@@ -3716,6 +3977,19 @@ public slots:
     /// on the way off TUN and two-tone are turned off as chkMOX_Click does
     /// (first, keeping the manual key until their own ends; see the .cpp).
     void setMoxFromButton(bool on);
+
+    /// iPhone app plan, desktop remote transmit (R-IOS-13): the 2-TONE
+    /// buttons (TxApplet and the container). A local window starts or stops
+    /// its TwoToneController; a remote window asks the Core (tx.twoTone).
+    void setTwoTone(bool on);
+
+    /// A remote window whose Core takes its keys: MOX, TUNE and two-tone go
+    /// to the Core through the transmit verbs (RemoteTransmitClient) and the
+    /// window's own MoxController keys nothing. False in a local window.
+    bool remoteTransmitRouted() const;
+
+    /// The Core refused this remote window's press, in the Core's words.
+    void reportRemoteTransmitRefused(const QString& reason);
 
     /// Query MOX (PTT).  Returns the current MOX latch state.
     /// From Thetis TCIServer.cs:3555-3558 [v2.10.3.13] — sendMOX.
@@ -4071,6 +4345,24 @@ public slots:
 
 signals:
     void infoChanged();
+    // Task 33: stopAllTx stopped a transmission. A non-empty message is for
+    // the operator (MainWindow shows it for 10 s, as Thetis's
+    // infoBar.Warning(msg, false, 10000)).
+    void transmitStopped(QString message);
+    // iPhone app plan Task 38: the Core stopped a transmission for a
+    // reason of its own (lastTransmitStopReason()); emitted after
+    // transmitStopped.
+    void transmitStopReasonRaised(const QByteArray& code, int limitSeconds);
+    // iPhone app plan Task 35: keyedBy() changed.
+    void keyedByChanged();
+    // iPhone app plan Task 36: remoteMicInUse() changed.
+    void remoteMicInUseChanged(bool inUse);
+    // iPhone app plan Task 37 (fix wave C2): a device's microphone line
+    // opened or closed. The Core turns off the VOX a device armed when its
+    // line closes.
+    void remoteMicLinesChanged();
+    // Fix wave C2: remoteMicWriter() changed.
+    void remoteMicWriterChanged(const QByteArray& deviceId);
     // Phase 3Q-1: parametrized — state passed so UI consumers can act without
     // a secondary RadioModel::connectionState() read under race conditions.
     // Existing no-arg slot connections (ConnectionPanel, MainWindow, SpectrumWidget)
@@ -4082,6 +4374,9 @@ signals:
     // known. MainWindow reacts by updating FFTEngine + SpectrumWidget so
     // bin math matches the wire rate (P1=192k, P2=768k).
     void wireSampleRateChanged(double rateHz);
+    // R-R3-39: a change setSampleRateLiveAsync started has finished (ok) or
+    // could not run.
+    void sampleRateChangeFinished(int rateHz, bool ok);
     // Task 1.7: emitted after setActiveRxCountLive() successfully applies
     // the new receiver count to both hardware and WDSP channels.
     void activeRxCountChanged(int newCount);
@@ -4317,9 +4612,12 @@ signals:
     // elapsed wall-clock milliseconds for the rebuild. Used by
     // DspOptionsPage's "Time to last change" readout.
     void dspChangeMeasured(qint64 elapsedMs);
-    // Remote-window parity Task 16: noiseReductionMethods() or what a
-    // remote window knows of its Core's (stationDspInfoVersion) changed.
-    void noiseReductionMethodsChanged();
+    // Remote-window parity Task 16: stationDspInfoVersion() changed (the
+    // filter curve's availability follows it).
+    void stationDspInfoVersionChanged();
+    // nrCannotRunReason may have changed for a reason DspAssetService's own
+    // signals do not carry: whether the Core says (stationDspAssetVersion).
+    void nrAvailabilityChanged();
     // Remote-window parity Task 16: dspOptionsLastApplyMs() changed.
     void dspOptionsLastApplyMsChanged(qint64 elapsedMs);
     // Remote-window parity Task 16: coreFilterResponse() changed.
@@ -4348,6 +4646,11 @@ signals:
     // NereusSDR equivalent: emit signal; UI reacts with a toast or status bar message.
     // Subscribers should uncheck the TUN button and display `reason` to the user.
     void tuneRefused(const QString& reason);
+
+    /// iPhone app plan, desktop remote transmit (R-IOS-13): the Core
+    /// refused a MOX, TUNE or two-tone press from this remote window (or its
+    /// release). Shown as a local refusal is; the buttons follow the Core.
+    void remoteTransmitRefused(const QString& reason);
 
     // ── Plan 4 D8: per-profile TX filter relay signal ─────────────────────────
     //
@@ -4708,10 +5011,8 @@ private:
     // DspOptions<Setting><Mode>Tx write, and the test observer.
     QSet<QString> m_pendingDspOptionsTxGroups;
     std::function<void(DSPMode)> m_dspOptionsTxApplyObserverForTest;
-    // Group B fix wave: MoxController::txaFlushed's two halves (the TX
-    // channel's stop on its thread, PureSignal on the main thread), and
-    // the test observer of the second.
-    void wireTxaFlushed();
+    // Group B fix wave: the test observer of PureSignal hearing the unkey
+    // on the main thread (wireTxChannelKeying).
     // Group A follow-up (group B fix wave): the parametric TX EQ's pushes,
     // coalesced to Thetis's 100 ms tick (eqform.cs:3613-3614 [v2.10.3.15]).
     static constexpr int kTxEqPushCoalesceMs = 100;
@@ -4830,6 +5131,50 @@ private:
     // NR3 model (NR off, the reason set). Local role only.
     QString nr3CannotRunReason() const;
     void turnOffNr3WithoutModel(SliceModel* slice);
+    // R-R3-49, Sub-epic C-1: DFNR's counterparts. The reason this Core
+    // cannot run DFNR (no DFNR in the build, the model missing, or failed
+    // to load); a slice holding DFNR the Core cannot run turns it off.
+    static QString dfnrCannotRunReason(bool modelMissing);
+    void turnOffDfnrWithoutModel(SliceModel* slice);
+    // A channel's RxChannel::dfnrUnavailable (queued from the receive lane).
+    void onRxChannelDfnrUnavailable(bool modelMissing);
+#ifdef NEREUS_BUILD_TESTS
+public:
+    // R-R3-49: what a channel's failed first DFNR load does to the model.
+    void reportDfnrUnavailableForTest(bool modelMissing)
+    {
+        onRxChannelDfnrUnavailable(modelMissing);
+    }
+private:
+#endif
+public:
+    // R-R3-49, Sub-epic C-1: the plain reasons MNR and BNR cannot run, for
+    // the Core's refusals and the VFO flag's disabled MNR button. MNR runs
+    // only on a Mac (a Core built without it sends this as mnrStatus); BNR
+    // is in no build and has no control (tx-followup-4), so its reason is
+    // only the refusal's, which holds everywhere.
+    static QString mnrCannotRunReason();
+    static QString bnrCannotRunReason();
+    // Why the noise filter in `slot` cannot run for this model's receivers,
+    // in plain words, or empty when it can. DFNR and MNR follow this
+    // model's DspAssetService (the Core's, mirrored, in a remote window);
+    // BNR is in no build. Every other filter returns empty.
+    QString nrCannotRunReason(NrSlot slot) const;
+    // The same for a flag with no model: this build alone decides.
+    static QString nrCannotRunInThisBuildReason(NrSlot slot);
+    // Whether this build can run BNR (never, today: HAVE_BNR is not set).
+    static constexpr bool bnrBuilt()
+    {
+#ifdef HAVE_BNR
+        return true;
+#else
+        return false;
+#endif
+    }
+private:
+    // A slice holding MNR or BNR the Core cannot run turns it off, with the
+    // reason, as turnOffDfnrWithoutModel does. Local role only.
+    void turnOffNrThatCannotRun(SliceModel* slice);
 
 public:
     // Force-run any pending coalesced slice save synchronously. Call this
@@ -5288,6 +5633,57 @@ private:
     // connection from ReceiverManager::iqDataForReceiverStamped (R-R3-40).
     RxDspWorker*     m_dspWorker{nullptr};
 
+    // R-R3-39: the receive lane (local role only), and what its barriers
+    // park: the DSP worker and its thread, set while the worker runs and
+    // cleared (after the lane is drained) before either is deleted.
+    std::unique_ptr<DspControlThread> m_rxLane;
+    // R-R3-39: the transmit lane (local role only).
+    std::unique_ptr<DspControlThread> m_txLane;
+    // MoxController's txReady / txaFlushed to m_txChannel (connect path).
+    void wireTxChannelKeying();
+    struct RxWorkerTarget {
+        std::mutex mutex;
+        RxDspWorker* worker{nullptr};
+        QThread* thread{nullptr};
+    };
+    std::shared_ptr<RxWorkerTarget> m_rxWorkerTarget{std::make_shared<RxWorkerTarget>()};
+    void setRxWorkerTarget(RxDspWorker* worker, QThread* thread);
+    // Runs `fn` on the DSP worker's thread and waits for it, from the lane
+    // (what the BlockingQueuedConnection calls did from the event loop).
+    // Runs it at once when the worker's thread is not running.
+    void runOnDspWorkerFromLane(RxDspWorker* worker, const std::function<void()>& fn);
+    // True when `worker` is the running DSP worker and its thread is not
+    // the caller's.
+    bool dspWorkerThreadRunning(RxDspWorker* worker) const;
+    // Connects a new RX channel's lane signals (NNR diagnostics and late
+    // refusals, DSP-options timing) to the slice that owns it.
+    void wireRxChannelLaneSignals(int channelId);
+    // Reads the AGC top back (on the lane) after an AGC-T set and puts it in
+    // the slice's RF gain. m_agcReadbackSerial keeps only the newest
+    // readback per slice.
+    void syncRfGainFromAgcTop(SliceModel* slice, RxChannel* channel);
+    QHash<const SliceModel*, quint64> m_agcReadbackSerial;
+    // The live rate change (setSampleRateLiveAsync).
+    struct SampleRateRequest {
+        int rateHz{0};
+        bool reconcileDiversity{true};
+        std::function<void(bool)> onFinished;
+    };
+    bool m_sampleRateChangeInFlight{false};
+    // An applyStreamDspGeometry that arrived while a change ran.
+    bool m_streamGeometryPending{false};
+    int m_sampleRateTargetHz{0};
+    std::vector<std::function<void(bool)>> m_sampleRateInFlightCallbacks;
+    std::optional<SampleRateRequest> m_pendingSampleRateChange;
+    quint64 m_sampleRateChangeGeneration{0};
+    void requestSampleRateChange(SampleRateRequest request);
+    void startSampleRateChange(SampleRateRequest request);
+    void finishSampleRateChange(int rateHz, bool reconcileDiversity,
+                                bool restartExternalDiversity, qint64 elapsedMs);
+    bool canChangeSampleRateLive() const;
+    // Ends an in-flight change at teardown: its callers hear ok=false.
+    void abandonSampleRateChange();
+
     // R-R3-40: per-slice DSP load snapshots, refreshed every
     // ReceiverDspLoadSampler::kSampleIntervalMs by m_dspLoadTimer (local
     // role only). Main thread only.
@@ -5447,6 +5843,31 @@ private:
     SliceModel* m_activeSlice{nullptr};
     // iPhone app Task 73: whose each slice is. Qt-parented to this model.
     SliceOwnership* m_sliceOwnership{nullptr};
+    // iPhone app plan Task 35.
+    KeyedBy m_keyedBy;
+    // iPhone app plan Task 38: the transmit time-out (Local only; Qt
+    // parent this) and the last reason the Core stopped a transmission.
+    TxTimeOutTimer* m_txTimeOut{nullptr};
+    TransmitStopReason m_lastTransmitStopReason;
+    quint32 m_keyingEpoch{0};
+    // iPhone app plan Task 36: the remote microphone ring (Local only; it
+    // outlives the transmit pump, which holds a plain pointer to it) and
+    // what puts it in use.
+    std::unique_ptr<RemoteMicFeed> m_remoteMicFeed;
+    // Fix wave C2: every device with a line open (a count per device, one
+    // per media connection), the device priming, the devices with VOX
+    // armed, and the one writer.
+    QHash<QByteArray, int> m_remoteMicLines;
+    QByteArray m_remoteMicPrimingDevice;
+    QSet<QByteArray> m_remoteMicVoxArmed;
+    QByteArray m_remoteMicWriter;
+    bool m_remoteMicInUse{false};
+    // The device keyed on its line: if the line goes away mid-key, the
+    // ring stays the source (silence) until that key ends, so a remote key
+    // never falls back to the station's own microphone.
+    QByteArray m_remoteMicKeyedDevice;
+    // Set while setTune(true, keyer) runs: the keyer TUNE asks and keys for.
+    const KeyerIdentity* m_tuneKeyer{nullptr};
     // iPhone app Task 73 (ruling 5.11): the frequency the FreeDV Reporter
     // lists, the station-level active slice's; published when connected.
     quint64 m_freedvWantedHz{0};
@@ -5485,6 +5906,9 @@ private:
     static constexpr int kExternalDiversityId = 0;
     static constexpr int kExternalDiversityTargetSliceId = 0;
     bool m_externalDiversityRouteActive{false};
+    // R-R3-39: bumped by every route start and stop, so a lane answer about
+    // an older start is ignored.
+    quint64 m_externalDiversityRouteGeneration{0};
     int m_externalDiversityPrimaryDdc{-1};
     int m_externalDiversitySecondaryDdc{-1};
     int m_externalDiversityChunkSize{0};
@@ -5594,6 +6018,9 @@ private:
     // on pcCaptureRequired().
     bool pcCaptureGatesKeying() const;
     bool generatedKeyInFlight() const;
+    // iPhone app plan Task 36: recomputes remoteMicInUse() and puts the
+    // ring in or out of use.
+    void updateRemoteMicSource();
     bool pcCaptureReady() const;
     void onCaptureStatusChanged(const CaptureSupervisor::Status& status);
     // R-R3-36: true only across the m_moxController->setTune(true) call in
@@ -5881,6 +6308,7 @@ private:
     // accessor and docs/architecture/2026-05-26-phase3f-sub-epic-c-tx-arbiter-lifecycle-plan.md
     // Task 6.
     TxSliceArbiter* m_txSliceArbiter{nullptr};
+    UnkeyGate* m_unkeyGate{nullptr};   // Task 34, Qt-parented to this
 
     // Phase 3F Sub-Epic D Task 13: receiver -> pan FFT fan-out router.
     // QObject child of RadioModel. Constructed in the ctor body after
@@ -6318,6 +6746,14 @@ private:
     // grant handler.
     bool m_txReadyReceived{false};
 
+    // Task 33: set by stopTransmitNow, cleared when the next key begins
+    // (MoxController::txAboutToBegin). While set, a keying step queued
+    // before the stop (hardwareFlipped(true), txReady, an interlock grant)
+    // does not key the radio.
+    bool m_transmitStopHold{false};
+    // Task 33: the TX channel drain the TX→RX walk is waiting for.
+    quint64 m_pendingTxDrainSequence{0};
+
     // Phase 3P-II Task 86: TxInterlockPolicy -- NereusSDR-native TX gate.
     // Qt parent-ownership (parent=this); non-null from construction time.
     TxInterlockPolicy* m_txInterlockPolicy{nullptr};
@@ -6374,12 +6810,11 @@ private:
     // R-R3-49 (parity Task 6): the Core's TX inhibit as a remote window
     // last heard it.
     bool m_remoteTxInhibited{false};
-    // Remote-window parity Task 16: this computer's noise reduction (a
-    // local model), the Core's as a remote window last heard it, and its
-    // dspInfoVersion; the last DSP Options apply time; the filter curve.
-    QString m_localNoiseReductionMethods;
-    QString m_remoteNoiseReductionMethods;
+    // Remote-window parity Task 16: the Core's dspInfoVersion and
+    // dspAssetVersion as a remote window last heard them; the last DSP
+    // Options apply time; the filter curve.
     int m_stationDspInfoVersion{0};
+    int m_stationDspAssetVersion{0};
     qint64 m_dspOptionsLastApplyMs{0};
     FilterResponse m_coreFilterResponse;
     bool m_coreFilterResponseWanted{false};

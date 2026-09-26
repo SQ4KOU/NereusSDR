@@ -34,14 +34,15 @@
 //     another device listens through it (RadioModel::receiveAntennaKept),
 //     the person tuning is told (notice antennaKept).
 //
-// Transmit (Task 34's TransmitHolder) joins at transmitForCheck(): today
-// nobody holds transmit, so a change that touches only the transmitter
-// disturbs nobody, `state` is never "transmitting", and ruling 7.4's on-air
-// refusal (DisturbanceCheck::refusedOnAir) never fires. The Core settings
-// that touch only the transmitter (External TX Inhibit's keys and RxOnly,
-// receive only) are not on the list yet: they disturb no device's slices,
-// and they join as transmitter changes when the holder arrives with the
-// transmit work (checkpoint carry, 2026-09-25).
+// Transmit (Task 34's TransmitHolder) joins at transmitForCheck(): a
+// change that touches the transmitter disturbs its holder (asked while the
+// holder is another device), a holder on the air is "transmitting", and
+// ruling 7.4's on-air refusal (DisturbanceCheck::refusedOnAir) fires while
+// it is keyed. The Core settings that touch only the transmitter (External
+// TX Inhibit's keys and RxOnly, receive only) are on the list as
+// transmitter changes; the transmit settings themselves are a permitted
+// session's (StationServer's transmit gate), so a device that does not hold
+// transmit is refused them, never asked.
 //
 // =================================================================
 // Modification history (NereusSDR):
@@ -55,6 +56,22 @@
 //               setAlexTxAntenna and the two-way transmit antennas and
 //               relays join the list. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave: the Core's own MOX is not a
+//               holder on the air for the shared-settings check (the
+//               parity rounds' Thetis rule); the saved accessory
+//               addresses go ahead on the air. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave 2: every holder on the air counts,
+//               the station device's own keys included (onAirHolder),
+//               exempt by change not by holder; ruling 8.11's freeze on
+//               every path (XIT, pan moves, a stored change at proceed); a
+//               hosting desktop's key named after it. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: Trunk merge of remote transmit (R-R3-46, R-IOS-02): the
+//               Alex tab's three transmit high-pass switches are the
+//               transmitter's settings (SettingsProxyServer::sharedFamilyOf),
+//               as the TX antennas are. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -70,6 +87,8 @@
 #include "core/BoardCapabilities.h"
 #include "core/DeviceLayoutStore.h"
 #include "core/SkuUiProfile.h"
+#include "core/safety/TransmitHolder.h"
+#include "core/safety/TxRefusal.h"
 #include "core/SliceOwnership.h"
 #include "core/SliceStreamAllocator.h"
 #include "core/StepAttenuatorController.h"
@@ -308,10 +327,31 @@ int adcOfAntennaLabel(const QString& label)
 
 DisturbanceCheck::Transmit StationServer::transmitForCheck() const
 {
-    // Task 34 joins here: TransmitHolder's holder (a device id, or the
-    // station device for the radio's own PTT), whether it is keyed, and its
-    // transmit slice. Until then nobody holds transmit.
-    return {};
+    // Task 34's join (merge of the trunk into the transmit lane):
+    // TransmitHolder's holder (a device id, or the station device for the
+    // radio's own PTT and the Core's own keys), whether it is on the air,
+    // and the transmit slice.
+    DisturbanceCheck::Transmit transmit;
+    if (m_transmitHolder) {
+        if (const std::optional<TransmitHolder::Holder> holder = m_transmitHolder->holder()) {
+            // Fix wave 2, Important 1: every holder counts, the station
+            // device's own keys included (ruling 7.4 names no exception).
+            transmit.holder = holder->deviceId;
+            transmit.keyed = holder->keyed;
+            // The station device has no session to ask or tell; its keys
+            // still hold the changes ruling 7.4 names (refusedOnAir).
+            transmit.holderAskable = holder->deviceId != KeyerIdentity::kStationDeviceId;
+        }
+    }
+    if (!m_radioModel.isNull()) {
+        if (const SliceModel* slice = m_radioModel->txBoundSlice()) {
+            transmit.txSliceId = slice->sliceIndex();
+        }
+    }
+    // Ruling 8.11: the slice frozen while the station device is keyed,
+    // whoever owns it (the requester's own included).
+    transmit.frozenSliceId = stationFrozenSlice();
+    return transmit;
 }
 
 DisturbanceCheck::Topology StationServer::sharedTopology() const
@@ -484,8 +524,7 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
                 // the transmit antennas and the transmit relays, two-way
                 // since radioHardwareVersion 6 (rxOutOnTx since 5), touch the
                 // transmitter (the table's "Transmit antenna", ruling 7.8).
-                // Nobody holds transmit yet (transmitForCheck), so today they
-                // disturb nobody and apply at once.
+                // They disturb the holder of transmit (transmitForCheck).
                 if (n == "txAntennas" || n == "blockTxAnt2" || n == "blockTxAnt3"
                     || n == "rxOutOnTx" || n == "ext1OutOnTx" || n == "ext2OutOnTx") {
                     transmitter();
@@ -753,6 +792,25 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
             tuner();
             label = key.startsWith(QLatin1String("RfKit_")) ? QStringLiteral("RF-Kit amplifier setting")
                                                             : QStringLiteral("Tuner setting");
+            break;
+        case SettingsProxyServer::SharedFamily::Transmitter:
+            transmitter();
+            if (key == QLatin1String("RxOnly")) {
+                label = QStringLiteral("Receive Only");
+            } else if (SettingsProxyServer::isAlexHpfTransmitSwitchKey(key)) {
+                // Trunk merge of remote transmit: the Alex tab's three
+                // transmit high-pass switches, in the Alex tab's words.
+                const QString field = key.section(QLatin1Char('/'), -1).toLower();
+                label = field == QLatin1String("hpfbypassontx")
+                    ? QStringLiteral("HPF Bypass on TX")
+                    : field == QLatin1String("hpfbypassonps")
+                    ? QStringLiteral("HPF Bypass on PureSignal feedback")
+                    : QStringLiteral("Disable 6m LNA on TX");
+            } else {
+                label = key.endsWith(QLatin1String("Reversed"))
+                    ? QStringLiteral("External TX Inhibit, reversed")
+                    : QStringLiteral("External TX Inhibit");
+            }
             break;
         case SettingsProxyServer::SharedFamily::None:
             break;
@@ -1051,6 +1109,13 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
         } else {
             transmitter();
         }
+        // The operator's ruling (parity mini-round, rulings a to c): the
+        // saved addresses go ahead on the air; they touch nothing on the
+        // transmit path. They stay on design table 7.1's list, so another
+        // device's change still asks the holder (D53, ruling 7.8).
+        if (verb == "setTgxlAddress" || verb == "setPgxlAddress" || verb == "setRfKitAddress") {
+            c.scope.transmitPath = false;
+        }
         c.target = QStringLiteral("verb:") + QString::fromLatin1(verb);
         c.shared = true;
         const QString label = verb == "setTxInterlockPolicy" ? QStringLiteral("Transmit interlock")
@@ -1163,15 +1228,31 @@ bool StationServer::handleSharedSetting(SessionTransport* transport, const Sessi
     const DisturbanceCheck::Topology topology = sharedTopology();
     const QList<DisturbanceCheck::Affected> affected =
         DisturbanceCheck::check(change.scope, topology, requester);
-    if (affected.isEmpty()) {
+    // Fix wave 2: asked before the empty-set shortcut, since the station
+    // device (never asked) still holds the changes ruling 7.4 names while
+    // it is keyed.
+    const bool onAirWaits =
+        DisturbanceCheck::refusedOnAir(change.scope, topology, requester, affected);
+    if (affected.isEmpty() && !onAirWaits) {
         // Nobody else is disturbed: it applies at once, as today.
         return false;
     }
     QString refusal;
-    if (DisturbanceCheck::refusedOnAir(change.scope, topology, requester, affected)) {
+    // Task 34: a command refused on the air carries the refusal's code and
+    // fix in its values, as every transmit refusal does (the link, 18.3).
+    QList<MirrorUpdate> refusalValues;
+    if (onAirWaits) {
         // Ruling 7.4 (D60). Task 34: "The radio is on the air." when the
-        // radio's own PTT holds transmit.
-        refusal = onAirReason(planDevice(topology.transmit.holder).shortName);
+        // radio's own PTT holds transmit (onAirRefusal's words).
+        const TxRefusal onAir = onAirRefusal(requester);
+        refusal = onAir.text;
+        if (refusal.isEmpty()) {
+            refusal = onAirReason(planDevice(topology.transmit.holder).shortName);
+        } else {
+            refusalValues = {
+                {0, "refusalCode", MirrorWireKind::Utf8, QString::fromUtf8(onAir.code)},
+                {0, "refusalFix", MirrorWireKind::Utf8, QString::fromUtf8(onAir.fix)}};
+        }
     } else if (!peerHasSessionHolderVersion(transport)) {
         // An older window gets the refusal only (section 7.3, D59).
         QStringList names;
@@ -1187,7 +1268,7 @@ bool StationServer::handleSharedSetting(SessionTransport* transport, const Sessi
         if (message.kind == SessionMessageKind::CommandInvoke) {
             answerHere(transport, SessionMessages::commandResult(message.commandVerb,
                                                                  message.commandId, false,
-                                                                 refusal, {}));
+                                                                 refusal, {}, refusalValues));
         } else if (message.kind == SessionMessageKind::PropertyWrite) {
             answerWrite(transport, message, refusal);
         } else {
@@ -1249,9 +1330,19 @@ SessionMessage StationServer::proceedSharedSetting(SessionTransport* transport,
     const QList<DisturbanceCheck::Affected> affected =
         DisturbanceCheck::check(now.scope, topology, requester);
     if (DisturbanceCheck::refusedOnAir(now.scope, topology, requester, affected)) {
-        return SessionMessages::commandResult(
-            invoke.commandVerb, invoke.commandId, false,
-            onAirReason(planDevice(topology.transmit.holder).shortName), {});
+        // Task 34: the holder's on-air words ("The radio is on the air."
+        // for the radio's own PTT).
+        const TxRefusal refused = onAirRefusal(requester);
+        QString onAir = refused.text;
+        QList<MirrorUpdate> values;
+        if (onAir.isEmpty()) {
+            onAir = onAirReason(planDevice(topology.transmit.holder).shortName);
+        } else {
+            values = {{0, "refusalCode", MirrorWireKind::Utf8, QString::fromUtf8(refused.code)},
+                      {0, "refusalFix", MirrorWireKind::Utf8, QString::fromUtf8(refused.fix)}};
+        }
+        return SessionMessages::commandResult(invoke.commandVerb, invoke.commandId, false, onAir,
+                                              {}, values);
     }
     // Step 5: a device or an effect the operator was not shown is asked
     // again, and nothing is applied.

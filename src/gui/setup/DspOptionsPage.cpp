@@ -647,7 +647,7 @@ void DspOptionsPage::buildUI()
             m_highResFilterChars->setToolTip(reason.isEmpty() ? ownTip : reason);
         };
         follow();
-        connect(rm, &RadioModel::noiseReductionMethodsChanged, this, follow);
+        connect(rm, &RadioModel::stationDspInfoVersionChanged, this, follow);
     }
 
     loadCheck(m_highResFilterChars, "DspOptionsHighResFilterCharacteristics", false);

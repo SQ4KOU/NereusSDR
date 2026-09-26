@@ -1137,10 +1137,10 @@ void TstRemoteTxEqCfc::unreadableCurveIsRefusedWithAReason()
     }
 }
 
-// Group A follow-up (group B fix wave): MoxController::txaFlushed stops
-// the TX channel on its own thread, and tells PureSignal (a main-thread
-// object) the radio is back on receive on the main thread, never on the TX
-// thread.
+// Group A follow-up (group B fix wave): the unkey stops the TX channel on
+// its own thread, and tells PureSignal (a main-thread object) the radio is
+// going back to receive on the main thread, never on the TX thread. Since
+// Task 33 (Thetis's unkey order) both happen at the TX drain's request.
 void TstRemoteTxEqCfc::txaFlushedTellsPureSignalOnTheMainThread()
 {
     auto core = makeStationRadioModel();
@@ -1158,7 +1158,7 @@ void TstRemoteTxEqCfc::txaFlushedTellsPureSignalOnTheMainThread()
     QThread worker;
     worker.start();
     channel.moveToThread(&worker);
-    emit core->moxController()->txaFlushed();
+    emit core->moxController()->txDrainRequested();
     QTRY_COMPARE(told, 1);
     QCOMPARE(pureSignalThread, QCoreApplication::instance()->thread());
     // The channel's own stop still runs on its thread.

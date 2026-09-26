@@ -129,6 +129,21 @@
 //               slice is its requester's; setActiveSliceById sets the
 //               requester's own active slice. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app plan Task 34 (R-IOS-02):
+//                                    tx.setTxSlice and the on-air refusals
+//                                    (setTransmitAccess), refusals with
+//                                    refusalCode and refusalFix values.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app plan Task 35 (R-IOS-13):
+//                                    tx.key, tx.unkey, tx.tune and
+//                                    tx.twoTone, routed to the Core's
+//                                    RemoteKeying; an accepted key's
+//                                    epoch in the result's values.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app plan Task 37 (R-IOS-13):
+//                                    tx.keepalive {sequence, epoch} for the
+//                                    transmit watchdog.
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06: slice.selectBand
 //                                    (bandSelectVersion 1), the desktop's
 //                                    band button on a slice.
@@ -170,6 +185,10 @@
 //                                    radioHardwareVersion 7):
 //                                    requestIoBoardI2c and setIoBoardOutput.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave: M2 TransmitAccess::release, a
+//               two-tone stop from another device refused. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 //   2026-09-26  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 16,
 //                                    dspInfoVersion 1): dsp.filterResponse,
 //                                    the filter graph's curve.
@@ -536,6 +555,25 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
          "radioHardwareVersion", 3, kRadioIdentitySessionProtocolMinor},
         {"setAlexBpfMode", {arg("chain", kInt), arg("mode", kInt)}, "radioHardwareVersion", 4,
          kRadioIdentitySessionProtocolMinor},
+        // iPhone app plan Task 34 (R-IOS-02, ruling 8.10): move the TX flag
+        // to one of the holder's slices, by its id (never a list position).
+        {"tx.setTxSlice", {arg("sliceId", kInt)}, "remoteTxVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        // iPhone app plan Task 35 (R-IOS-13): keying from a device. Each is
+        // sent three times as the same command; the Core acts once.
+        {"tx.key", {arg("trigger", kUtf8)}, "remoteTxVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        {"tx.unkey", {arg("epoch", kInt)}, "remoteTxVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        {"tx.tune", {arg("on", kBool)}, "remoteTxVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        {"tx.twoTone", {arg("on", kBool)}, "remoteTxVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        // iPhone app plan Task 37 (R-IOS-13): the transmit watchdog's
+        // keepalive, every 100 ms while the device is keyed or has VOX
+        // armed. Sent once each (a lost one is overtaken by the next).
+        {"tx.keepalive", {arg("sequence", kInt), arg("epoch", kInt)}, "remoteTxVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
         {"setAlexTxAntenna", {arg("band", kInt), arg("antenna", kInt)},
          "radioHardwareVersion", 6, kRadioIdentitySessionProtocolMinor},
         // HL2 Options' I2C tool and Pin Control (R-R3-46, parity Task 14).
@@ -732,6 +770,11 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
     }
 
     if (invoke.commandVerb.startsWith("ps3.")) {
+        // Task 34 (ruling 7.4): PureSignal waits while the holder is on the
+        // air, two-tone and the display subscription aside.
+        if (refusedWhileOnAir(invoke)) {
+            return;
+        }
         handlePureSignalAction(invoke);
         return;
     }
@@ -772,6 +815,25 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
     // iPhone app Task 73 (ruling 5.9): a device addresses only its own
     // slices. Refused before anything is looked at or changed.
     if (refusedForAnotherDevice(invoke)) {
+        return;
+    }
+    // iPhone app plan Task 34 (ruling 7.4, D60): a change to the transmit
+    // path, a Protocol 1 rate change or a move of the holder's transmit
+    // slice waits while another device's holder is on the air.
+    if (refusedWhileOnAir(invoke)) {
+        return;
+    }
+    if (invoke.commandVerb == "tx.setTxSlice") {
+        handleSetTxSlice(invoke);
+        return;
+    }
+    if (invoke.commandVerb == "tx.key" || invoke.commandVerb == "tx.unkey"
+        || invoke.commandVerb == "tx.tune" || invoke.commandVerb == "tx.twoTone") {
+        handleTxKeying(invoke);
+        return;
+    }
+    if (invoke.commandVerb == "tx.keepalive") {
+        handleTxKeepalive(invoke);
         return;
     }
 
@@ -885,6 +947,226 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
     }
 }
 
+void SessionCommandDispatcher::emitRefusal(const QByteArray& verb, quint32 commandId,
+                                           const TxRefusal& refusal)
+{
+    emit commandResultReady(SessionMessages::commandResult(
+        verb, commandId, false, refusal.text, {},
+        {{0, "refusalCode", MirrorWireKind::Utf8, QString::fromUtf8(refusal.code)},
+         {0, "refusalFix", MirrorWireKind::Utf8, QString::fromUtf8(refusal.fix)}}));
+}
+
+bool SessionCommandDispatcher::refusedWhileOnAir(const SessionMessage& invoke)
+{
+    if (m_requester.isEmpty() || !m_transmitAccess.onAir || m_radioModel.isNull()) {
+        return false;
+    }
+    // Ruling 7.4's list, as it exists when Task 34 lands. The transmit
+    // path: the amplifier and its settings verbs, the tuner, a receive or
+    // transmit antenna (setAlexRxAntenna; the slices' and alexAntennas'
+    // antennas are property writes, refused in StationServer), PureSignal
+    // (ps3.* but two-tone), the interlock and the power cap. Task 42 adds
+    // its own verbs.
+    static const QSet<QByteArray> kTransmitPath{
+        QByteArrayLiteral("configurePgxl"), QByteArrayLiteral("disconnectPgxl"),
+        QByteArrayLiteral("setPgxlConnectionSettings"), QByteArrayLiteral("setPgxlName"),
+        QByteArrayLiteral("setPgxlHardware"), QByteArrayLiteral("setPgxlNetwork"),
+        QByteArrayLiteral("savePgxlSettings"), QByteArrayLiteral("configureTgxl"),
+        QByteArrayLiteral("disconnectTgxl"), QByteArrayLiteral("setTgxlName"),
+        QByteArrayLiteral("setTgxlNetwork"), QByteArrayLiteral("saveTgxlSettings"),
+        QByteArrayLiteral("setTgxlAntenna"), QByteArrayLiteral("setTgxlOperate"),
+        QByteArrayLiteral("setTgxlBypass"), QByteArrayLiteral("setAlexRxAntenna"),
+        QByteArrayLiteral("setTxInterlockPolicy"), QByteArrayLiteral("setPgxlPowerCap")};
+    bool waits = kTransmitPath.contains(invoke.commandVerb);
+    if (invoke.commandVerb.startsWith("ps3.")) {
+        waits = invoke.commandVerb != "ps3.twoTone" && invoke.commandVerb != "ps3.subscribeDisplay";
+    }
+    if (invoke.commandVerb == "requestSliceSampleRate") {
+        // A Protocol 1 rate change stops the radio's data flow. The
+        // Protocol 2 rate changes are Task 75's to route.
+        waits = m_radioModel->currentRadioInfo().protocol == ProtocolVersion::Protocol1;
+    }
+    if (invoke.commandVerb == "requestStreamCentre") {
+        // A C-Tune centre change on the receiver of the holder's transmit
+        // slice moves that slice's receiver.
+        int sliceId = -1;
+        const SliceModel* txSlice = m_radioModel->txBoundSlice();
+        if (findIntArgument(invoke.arguments, "sliceId", &sliceId) == ArgumentStatus::Ok
+            && txSlice != nullptr) {
+            const SliceModel* slice = m_radioModel->sliceById(sliceId);
+            waits = slice != nullptr
+                && (slice == txSlice
+                    || (slice->streamIndex() >= 0 && slice->streamIndex() == txSlice->streamIndex()));
+        }
+    }
+    if (!waits) {
+        return false;
+    }
+    const TxRefusal refusal = m_transmitAccess.onAir(m_requester);
+    if (refusal.isEmpty()) {
+        return false;
+    }
+    emitRefusal(invoke.commandVerb, invoke.commandId, refusal);
+    return true;
+}
+
+void SessionCommandDispatcher::handleTxKeying(const SessionMessage& invoke)
+{
+    // iPhone app plan Task 35 (R-IOS-13): keying from a device. The rules
+    // are RemoteKeying's; this reads the arguments and answers.
+    RemoteKeying::Command command;
+    command.deviceId = m_requester;
+    command.session = m_sessionOwner;
+    command.commandId = invoke.commandId;
+    bool readable = false;
+    if (invoke.commandVerb == "tx.key") {
+        command.verb = RemoteKeying::Verb::Key;
+        QString trigger;
+        readable = hasExactlyArguments(invoke.arguments, {"trigger"})
+            && findUtf8Argument(invoke.arguments, "trigger", &trigger)
+            && RemoteKeying::isTrigger(trigger.toUtf8());
+        command.trigger = trigger.toUtf8();
+    } else if (invoke.commandVerb == "tx.unkey") {
+        command.verb = RemoteKeying::Verb::Unkey;
+        QVariant raw;
+        bool converted = false;
+        readable = hasExactlyArguments(invoke.arguments, {"epoch"})
+            && hasWireKind(invoke.arguments, "epoch", MirrorWireKind::Int64)
+            && findArgument(invoke.arguments, "epoch", &raw);
+        const qlonglong epoch = readable ? raw.toLongLong(&converted) : 0;
+        // An epoch the Core issued: 1 to 4294967295.
+        readable = readable && converted && epoch >= 1
+            && epoch <= static_cast<qlonglong>(std::numeric_limits<quint32>::max());
+        command.epoch = readable ? static_cast<quint32>(epoch) : 0;
+    } else {
+        command.verb = invoke.commandVerb == "tx.tune" ? RemoteKeying::Verb::Tune
+                                                       : RemoteKeying::Verb::TwoTone;
+        QVariant on;
+        readable = hasExactlyArguments(invoke.arguments, {"on"})
+            && findArgument(invoke.arguments, "on", &on) && on.typeId() == QMetaType::Bool;
+        command.on = readable && on.toBool();
+    }
+    if (!readable) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core could not read this request."), {});
+        return;
+    }
+    if (!m_transmitAccess.keying) {
+        // No Core transmit rules behind this dispatcher: nothing keys.
+        emitRefusal(invoke.commandVerb, invoke.commandId, TxRefusals::stationReceiveOnly());
+        return;
+    }
+    // Task 36: answered through the reply, now or once a key's microphone
+    // buffer has filled or timed out.
+    //
+    // Merge of the trunk into the transmit lane (the multi-client fix wave
+    // I1): a result is named by the session it answers, so every answer,
+    // at once or later, is emitted as this dispatch's session owner's.
+    const QPointer<SessionCommandDispatcher> self(this);
+    const QByteArray verb = invoke.commandVerb;
+    const quint32 id = invoke.commandId;
+    const QString owner = m_sessionOwner;
+    m_transmitAccess.keying(command, [self, verb, id, owner](const RemoteKeying::Result& result) {
+        if (self.isNull()) {
+            return;
+        }
+        QList<MirrorUpdate> values;
+        QString reason;
+        if (result.accepted) {
+            if (result.epoch != 0) {
+                values.append({0, "epoch", MirrorWireKind::Int64,
+                               QVariant(static_cast<qlonglong>(result.epoch))});
+            }
+        } else if (!result.refusal.isEmpty()) {
+            reason = result.refusal.text;
+            values = {{0, "refusalCode", MirrorWireKind::Utf8, QString::fromUtf8(result.refusal.code)},
+                      {0, "refusalFix", MirrorWireKind::Utf8, QString::fromUtf8(result.refusal.fix)}};
+        } else {
+            reason = result.reason;
+        }
+        self->emitResultAs(owner, SessionMessages::commandResult(verb, id, result.accepted,
+                                                                 reason, {}, values));
+    });
+}
+
+void SessionCommandDispatcher::handleTxKeepalive(const SessionMessage& invoke)
+{
+    // iPhone app plan Task 37 (R-IOS-13): the watchdog's rules are
+    // RemoteTxWatchdog's; this reads the arguments and answers. sequence
+    // is 1 or more (a whole number a JSON number carries exactly); epoch is
+    // the device's key's, 0 to 4294967295.
+    constexpr qlonglong kMaxExactInteger = 9007199254740991LL;
+    QVariant rawSequence;
+    QVariant rawEpoch;
+    bool sequenceOk = false;
+    bool epochOk = false;
+    bool readable = hasExactlyArguments(invoke.arguments, {"sequence", "epoch"})
+        && hasWireKind(invoke.arguments, "sequence", MirrorWireKind::Int64)
+        && hasWireKind(invoke.arguments, "epoch", MirrorWireKind::Int64)
+        && findArgument(invoke.arguments, "sequence", &rawSequence)
+        && findArgument(invoke.arguments, "epoch", &rawEpoch);
+    const qlonglong sequence = readable ? rawSequence.toLongLong(&sequenceOk) : 0;
+    const qlonglong epoch = readable ? rawEpoch.toLongLong(&epochOk) : -1;
+    readable = readable && sequenceOk && epochOk && sequence >= 1 && sequence <= kMaxExactInteger
+        && epoch >= 0 && epoch <= static_cast<qlonglong>(std::numeric_limits<quint32>::max());
+    if (!readable) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core could not read this request."), {});
+        return;
+    }
+    if (!m_transmitAccess.keepalive) {
+        emitRefusal(invoke.commandVerb, invoke.commandId, TxRefusals::stationReceiveOnly());
+        return;
+    }
+    m_transmitAccess.keepalive(m_requester, static_cast<quint64>(sequence),
+                               static_cast<quint32>(epoch));
+    // Answered accepted whether or not it counted (a keepalive while
+    // nothing is watched, a copy, an older epoch): it changes nothing then.
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
+}
+
+void SessionCommandDispatcher::handleSetTxSlice(const SessionMessage& invoke)
+{
+    // iPhone app plan Task 34 (R-IOS-02, ruling 8.10): the holder's verb.
+    // The argument is a slice's id (SliceModel::sliceIndex), never a list
+    // position (remote design section 7.1).
+    int sliceId = -1;
+    if (!hasExactlyArguments(invoke.arguments, {"sliceId"})
+        || !hasWireKind(invoke.arguments, "sliceId", MirrorWireKind::Int64)
+        || findIntArgument(invoke.arguments, "sliceId", &sliceId) != ArgumentStatus::Ok) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core could not read this request."), {});
+        return;
+    }
+    if (m_transmitAccess.txSlice) {
+        const TxRefusal refusal = m_transmitAccess.txSlice(m_requester);
+        if (!refusal.isEmpty()) {
+            emitRefusal(invoke.commandVerb, invoke.commandId, refusal);
+            return;
+        }
+    }
+    if (m_radioModel->sliceById(sliceId) == nullptr) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("That slice is no longer on the Core."), {});
+        return;
+    }
+    // While keyed the transmitter unkeys through the unkey gate first and
+    // the flag moves once it is confirmed (TxSliceArbiter); unkeyed it
+    // moves at once. Either way the slices' txSlice deltas carry it.
+    if (!m_radioModel->requestTxHandoffToSlice(sliceId)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("That slice is no longer on the Core."), {});
+        return;
+    }
+    QList<QByteArray> affected;
+    for (const SliceModel* slice : m_radioModel->slices()) {
+        if (slice != nullptr) {
+            affected.append(ObjectRegistry::keyForSlice(slice->sliceIndex()));
+        }
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), affected);
+}
+
 bool SessionCommandDispatcher::refusedForAnotherDevice(const SessionMessage& invoke)
 {
     // Every verb that names a slice by `sliceId` (ruling 5.9): a device
@@ -984,6 +1266,15 @@ void SessionCommandDispatcher::handlePureSignalAction(const SessionMessage& invo
         emitResult(invoke.commandVerb, invoke.commandId, false,
                    QStringLiteral("PureSignal cannot be run from a remote window yet."), {});
         return;
+    }
+    // Fix wave M2 (ruling 8.5): stopping the two-tone test is a release of
+    // the transmission, the holder's; another device stops it only by
+    // taking transmit.
+    if (*action == Ps3Action::SetTwoTone && stop && m_transmitAccess.release) {
+        if (const TxRefusal refusal = m_transmitAccess.release(m_requester); !refusal.isEmpty()) {
+            emitRefusal(invoke.commandVerb, invoke.commandId, refusal);
+            return;
+        }
     }
     if (arming) {
         QString onAir;

@@ -139,6 +139,19 @@
 //               per session (setSessionOwner before each dispatch,
 //               endSessionOwner, resetSessionState). J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app plan Task 34 (R-IOS-02):
+//                                    tx.setTxSlice and the on-air refusals
+//                                    (setTransmitAccess), refusals with
+//                                    refusalCode and refusalFix values.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app plan Task 35 (R-IOS-13):
+//                                    tx.key, tx.unkey, tx.tune and
+//                                    tx.twoTone (TransmitAccess::keying);
+//                                    an accepted key carries its epoch.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app plan Task 37 (R-IOS-13):
+//                                    tx.keepalive {sequence, epoch}
+//                                    (TransmitAccess::keepalive).
 //   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06: slice.selectBand.
 //                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06: notch.addAtSlice.
@@ -157,6 +170,10 @@
 //                                    handleRequestIoBoardI2c and
 //                                    handleSetIoBoardOutput.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave: M2 TransmitAccess::release, a
+//               two-tone stop from another device refused. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 //   2026-09-26  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 16):
 //                                    handleFilterResponse.
 //                                    AI-assisted via Anthropic Claude Code.
@@ -173,8 +190,10 @@
 #include <optional>
 #include <utility>
 
+#include "core/session/RemoteKeying.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StationDevicesFacade.h"
+#include "core/safety/TxRefusal.h"
 
 namespace NereusSDR {
 
@@ -306,6 +325,35 @@ public:
     using SliceAccess = std::function<QString(const QByteArray& requester, int sliceId)>;
     void setSliceAccess(SliceAccess access) { m_sliceAccess = std::move(access); }
 
+    /// iPhone app plan Task 34 (R-IOS-02, R-IOS-13; ruling 7.4, D60): the
+    /// Core's transmit rules for the requester. onAir: the on-air refusal
+    /// for a change from `requester` while another device's holder is on
+    /// the air, or empty. txSlice: the refusal for tx.setTxSlice from
+    /// `requester` (the holder's verb, ruling 8.10), or empty. Unset, no
+    /// verb is refused by either rule.
+    /// Task 35 (R-IOS-13): keying: the Core's answer to tx.key, tx.unkey,
+    /// tx.tune and tx.twoTone (RemoteKeying::handle). Unset, those verbs
+    /// are refused stationReceiveOnly and nothing keys.
+    /// Task 36: the answer comes through the reply, at once or later (a key
+    /// waiting for its microphone buffer); a later one is emitted then, and
+    /// the Core routes it by verb and id to the session that asked.
+    struct TransmitAccess {
+        std::function<TxRefusal(const QByteArray& requester)> onAir;
+        std::function<TxRefusal(const QByteArray& requester)> txSlice;
+        std::function<void(const RemoteKeying::Command& command, RemoteKeying::Reply reply)>
+            keying;
+        /// Task 37 (R-IOS-13): tx.keepalive {sequence, epoch} from
+        /// `requester`, for the transmit watchdog. Unset, the verb is
+        /// refused stationReceiveOnly.
+        std::function<void(const QByteArray& requester, quint64 sequence, quint32 epoch)>
+            keepalive;
+        /// Fix wave M2 (ruling 8.5): a release of the transmission (the
+        /// PureSignal two-tone test off) from `requester`: empty when it may
+        /// (it holds transmit, or nobody does), or the refusal naming the
+        /// holder. Unset, every release is allowed.
+        std::function<TxRefusal(const QByteArray& requester)> release;
+    };
+    void setTransmitAccess(TransmitAccess access) { m_transmitAccess = std::move(access); }
     /// iPhone app Task 74 (R-IOS-30): the Core's confirm step, which
     /// answers confirm.proceed (`choice` -1 when the kind has none),
     /// confirm.cancel and notice.takeBack with the command.result to send.
@@ -455,6 +503,18 @@ private:
     /// Refuses (and answers) a verb whose sliceId names another device's
     /// slice. True when it did.
     bool refusedForAnotherDevice(const NereusSDR::SessionMessage& invoke);
+    /// Task 34: refuses (and answers) a change ruling 7.4 makes wait while
+    /// another device's holder is on the air. True when it did.
+    bool refusedWhileOnAir(const NereusSDR::SessionMessage& invoke);
+    /// A refusal's command.result: its sentence as the reason, and its code
+    /// and fix as the values refusalCode and refusalFix.
+    void emitRefusal(const QByteArray& verb, quint32 commandId, const TxRefusal& refusal);
+    void handleSetTxSlice(const NereusSDR::SessionMessage& invoke);
+    // Task 37: tx.keepalive.
+    void handleTxKeepalive(const NereusSDR::SessionMessage& invoke);
+    // Task 35: tx.key, tx.unkey, tx.tune, tx.twoTone.
+    void handleTxKeying(const NereusSDR::SessionMessage& invoke);
+    TransmitAccess m_transmitAccess;
     struct PendingPureSignalCommand {
         quint32 commandId;
         QByteArray verb;

@@ -35,6 +35,9 @@
 // Modification history (NereusSDR):
 //   2026-09-24  J.J. Boyd / KG4VCF  Created (R-R3-49, R-R3-21). AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app plan, desktop remote
+//                                    transmit (R-IOS-13): the Core's reason
+//                                    now (remoteTransmitReasonNow).
 //   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 2): MON follows
 //                                    the transmit settings gate in a
 //                                    remote window (the Core's monEnabled).
@@ -74,6 +77,9 @@ public:
         // controls, and the reason shown when it does not.
         std::function<bool()> transmitPermitted;
         QString remoteTransmitReason;
+        // Desktop remote transmit (R-IOS-13): the Core's own reason now,
+        // when set; preferred over remoteTransmitReason.
+        std::function<QString()> remoteTransmitReasonNow;
         // R-R3-49 (parity Task 2): remote windows, whether the Core takes
         // this window's transmit settings now (off the air), and why not.
         std::function<bool()> transmitSettingsPermitted;

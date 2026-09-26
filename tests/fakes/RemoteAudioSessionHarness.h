@@ -28,15 +28,28 @@
 // before the headphones mix (no headphonesMixVersion), and
 // attachRemoteHeadphones() gives the remote window a paced headphones
 // device beside its speakers.
+// iPhone app plan Task 36 (R-IOS-13): declareRemoteTx makes the window's
+// hello declare remoteTx 1, so the Core tells it remoteTxVersion and the media
+// connection gets the microphone line; grantTransmit makes the Core's
+// capabilities say txPermitted, as for a paired device, so VOX armed can be
+// shown over the token sign-in. Desktop remote transmit: the window's own
+// hello now declares remoteTx, so declareRemoteTx defaults to true and false
+// takes the declaration out (a window from before remote transmit).
+// pairWindow signs the window in with its own paired device key instead of
+// the token, so the Core's gate permits it to transmit for real.
 //
 // =================================================================
 
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
 #include "core/HpsdrModel.h"
+#include "core/MoxController.h"
+#include "core/security/ClientDeviceIdentity.h"
+#include "core/security/DeviceStore.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationCapabilities.h"
+#include "core/session/RemoteKeying.h"
 #include "core/session/StationServer.h"
 #include "core/session/media/IReceiverPcmSink.h"
 #include "core/settings/SettingsProxy.h"
@@ -99,15 +112,18 @@ public:
 
     void sendText(const QByteArray& wire) override
     {
-        const bool mayRewrite = (m_helloMinor && wire.contains("\"hello\""))
+        const bool mayRewrite = ((m_helloMinor || !declareRemoteTx) && wire.contains("\"hello\""))
+            || (grantTransmit && wire.contains("\"capabilities\""))
             || (forgeNextAudioContext && wire.contains("\"audio-context\""))
             || ((hideAudioProfile || hideAudioClock || hideReceiverAudio || hideHeadphonesMix)
                 && wire.contains("\"capabilities\""));
         SessionMessage message;
         if (mayRewrite && SessionMessages::decode(wire, &message)) {
-            if ((hideAudioProfile || hideAudioClock || hideReceiverAudio || hideHeadphonesMix)
+            if ((hideAudioProfile || hideAudioClock || hideReceiverAudio || hideHeadphonesMix
+                 || grantTransmit)
                 && message.kind == SessionMessageKind::Capabilities) {
                 StationCapabilities capabilities = StationCapabilities::fromUpdates(message.updates);
+                if (grantTransmit) { capabilities.txPermitted = true; }
                 if (hideAudioProfile) { capabilities.audioProfileVersion = 0; }
                 if (hideAudioClock) { capabilities.audioClockVersion = 0; }
                 if (hideReceiverAudio) { capabilities.receiverAudioVersion = 0; }
@@ -115,6 +131,18 @@ public:
                 ++hiddenAudioProfiles;
                 LoopbackTransport::sendText(SessionMessages::encode(
                     SessionMessages::capabilities(capabilities.toUpdates())));
+                return;
+            }
+            if (!declareRemoteTx && message.kind == SessionMessageKind::Hello) {
+                // A window from before remote transmit: its hello without
+                // remoteTx; everything else it said is kept.
+                QHash<QByteArray, int> features = message.features;
+                features.remove(QByteArrayLiteral("remoteTx"));
+                QList<quint16> majors = message.supportedMajors;
+                if (majors.isEmpty()) { majors.append(message.protocolMajor); }
+                LoopbackTransport::sendText(SessionMessages::encode(SessionMessages::hello(
+                    message.protocolMajor, m_helloMinor.value_or(message.protocolMinor),
+                    message.settingsSchemaVersion, message.peerName, majors, features)));
                 return;
             }
             if (m_helloMinor && message.kind == SessionMessageKind::Hello) {
@@ -145,6 +173,8 @@ public:
     bool hideAudioClock = false;
     bool hideReceiverAudio = false;
     bool hideHeadphonesMix = false;
+    bool declareRemoteTx = true;
+    bool grantTransmit = false;
 
 private:
     std::optional<quint16> m_helloMinor;
@@ -274,9 +304,33 @@ struct RemoteAudioSessionHarness {
         station->hideAudioClock = hideAudioClock;
         station->hideReceiverAudio = hideReceiverAudio;
         station->hideHeadphonesMix = hideHeadphonesMix;
+        station->grantTransmit = grantTransmit;
+        clientEnd->declareRemoteTx = declareRemoteTx;
         stationLink = station;
         station->linkTo(clientEnd);
-        client.startSession(clientEnd, server.token());
+        if (pairWindow) {
+            // Desktop remote transmit: the window signs in by its own key,
+            // which the Core has paired, so the gate may permit it.
+            if (!windowKey) {
+                windowKey = std::make_shared<const ClientDeviceIdentity>(
+                    ClientDeviceIdentity::loadOrCreate(windowKeyDir.path()));
+                client.setDeviceIdentity(windowKey, QStringLiteral("Shack MacBook"),
+                                         QStringLiteral("MacBook"));
+                PairedDevice device;
+                device.id = windowKey->fingerprint();
+                device.publicKeySpki = windowKey->publicKeySpki();
+                device.name = QStringLiteral("Shack MacBook");
+                device.kind = QStringLiteral("computer");
+                QVERIFY(server.deviceStore()->add(device));
+            }
+            QString pin = server.certificateFingerprint();
+            pin.remove(QLatin1Char(':'));
+            clientEnd->setPeerCertificateSha256(QByteArray::fromHex(pin.toLatin1()));
+            client.startSession(clientEnd, QString(), QString(),
+                                server.stationIdentity().fingerprint());
+        } else {
+            client.startSession(clientEnd, server.token());
+        }
         server.acceptTransport(station);
         QTRY_VERIFY(server.mediaAvailable());
         if (helloMinor) {
@@ -295,6 +349,45 @@ struct RemoteAudioSessionHarness {
         }
     }
 
+    // Desktop remote transmit: set before connectSession(): the window
+    // signs in with its own paired key (the Core permits it to transmit
+    // when makeTransmitReady() allowed remote transmit).
+    bool pairWindow = false;
+    QTemporaryDir windowKeyDir;
+    std::shared_ptr<const ClientDeviceIdentity> windowKey;
+
+    // Desktop remote transmit: the Core allows remote transmit and its
+    // radio keys at once (no MOX delays, the radio's own microphone as its
+    // configured source, slice A on 20 m USB).
+    void makeTransmitReady()
+    {
+        server.setRemoteTransmitAllowed(true);
+        station.moxController()->setTimerIntervals(0, 0, 0, 0, 0, 0);
+        station.transmitModel().setMicSourceLocked(false);
+        station.transmitModel().setMicSource(MicSource::Radio);
+        if (SliceModel* slice = station.sliceById(sliceA)) {
+            slice->setDspMode(DSPMode::USB);
+            slice->setFrequency(14200000.0);
+        }
+    }
+
+    // Fix wave C1: a voice key needs the window's microphone line, which a
+    // test without media has not got. The line reads open and its buffer
+    // full at once. A DaemonMediaController made after this installs the
+    // real line instead.
+    void openFakeMicrophoneLine()
+    {
+        RemoteKeying* keying = server.remoteKeying();
+        if (keying == nullptr) {
+            return;
+        }
+        RemoteKeying::MicUplink uplink;
+        uplink.carriesMic = [](const QByteArray&) { return true; };
+        uplink.prime = [](const QByteArray&, std::function<void(bool)> done) { done(true); };
+        uplink.endPriming = [](const QByteArray&) {};
+        keying->setMicUplink(uplink);
+    }
+
     // Set before connectSession(): the Core appears to predate lossless.
     bool hideAudioProfile = false;
     // Set before connectSession(): the Core appears to predate measured
@@ -306,6 +399,11 @@ struct RemoteAudioSessionHarness {
     // Set before connectSession(): the Core appears to predate the
     // headphones mix (R-R3-45).
     bool hideHeadphonesMix = false;
+    // Task 36: set before connectSession(): the window's hello declares
+    // remoteTx 1 (as the desktop's own does; false takes it out); the
+    // Core's capabilities say txPermitted.
+    bool declareRemoteTx = true;
+    bool grantTransmit = false;
 
     // R-R3-45: the remote window's headphones, a paced fake device the test
     // renders like the speakers. Open, so the window can play the Core's

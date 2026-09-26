@@ -20,6 +20,9 @@
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                Code: MoxCheckResult::notQueued (R-R3-36).
 //                NereusSDR-original.
+//   2026-09-25: iPhone app plan Task 34 (R-IOS-13), by J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code:
+//                MoxCheckResult::refusalCode. NereusSDR-original.
 // =================================================================
 
 // --- From console.cs ---
@@ -120,6 +123,7 @@ mw0lge@grange-lane.co.uk
 #pragma once
 
 #include <cstdint>
+#include <QByteArray>
 #include <QString>
 #include "models/Band.h"
 #include "core/WdspTypes.h"
@@ -206,6 +210,10 @@ public:
         /// band-plan and interlock refusals keep Thetis's retry on every
         /// PollPTT pass. NereusSDR-native.
         bool    notQueued{false};
+        /// iPhone app plan Task 34 (R-IOS-13): the TxRefusal code this
+        /// refusal carries (TxRefusal.h). Empty means a band-plan refusal;
+        /// RadioModel's check names micNotReady and stationReceiveOnly.
+        QByteArray refusalCode{};
     };
 
     MoxCheckResult checkMoxAllowed(Region region, std::int64_t freqHz,

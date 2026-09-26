@@ -69,6 +69,16 @@ public:
 
     ReceiverPlanner(const RadioModel& model, Describe describe);
 
+    /// Ruling 6.8 (D64): the transmit slice of a holder on the air, and the
+    /// holder, so the receiver carrying it is listed not takeable with
+    /// `why`. Unset (sliceId -1) while nobody is on the air.
+    struct OnAirTransmit {
+        int sliceId = -1;
+        QByteArray holder;
+        QString why;
+    };
+    void setOnAirTransmit(OnAirTransmit onAir) { m_onAir = std::move(onAir); }
+
     enum class Effect { Moves, Closes };
     struct Disturbed {
         int sliceId = -1;
@@ -147,6 +157,7 @@ private:
 
     const RadioModel& m_model;
     Describe m_describe;
+    OnAirTransmit m_onAir;
 };
 
 } // namespace NereusSDR

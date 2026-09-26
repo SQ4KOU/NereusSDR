@@ -80,6 +80,7 @@
 #include <cmath>
 #include <optional>
 
+#include "core/safety/RemoteTxWatchdog.h"
 #include "core/dsp/Ps3Snapshot.h"
 #include "core/session/LinkVersion.h"
 #include "core/session/Ps3DisplayCodec.h"
@@ -257,6 +258,32 @@ QString checkAnnouncement(const QByteArray& bytes, QJsonObject expect)
 // iPhone app Task 16: the Bonjour TXT record. The expectation is the
 // service type and the entries as strings; the bytes are those entries in
 // the station's order, each preceded by its length.
+// Fix wave M9: the "tx" data channel's 13-byte keepalive.
+QString checkTxKeepalive(const QByteArray& bytes, const QJsonObject& expect)
+{
+    for (auto it = expect.constBegin(); it != expect.constEnd(); ++it) {
+        if (it.key() != QStringLiteral("sequence") && it.key() != QStringLiteral("epoch")) {
+            return QStringLiteral("media expectation: unknown field \"%1\"").arg(it.key());
+        }
+    }
+    if (bytes.size() != 13) {
+        return QStringLiteral("tx-keepalive: %1 bytes, not 13").arg(bytes.size());
+    }
+    quint64 sequence = 0;
+    quint32 epoch = 0;
+    if (!RemoteTxWatchdog::readChannelKeepalive(bytes, &sequence, &epoch)) {
+        return QStringLiteral("tx-keepalive: the station does not read it");
+    }
+    if (qint64(sequence) != expect.value(QStringLiteral("sequence")).toInteger()
+        || qint64(epoch) != expect.value(QStringLiteral("epoch")).toInteger()) {
+        return QStringLiteral("tx-keepalive: read sequence %1 epoch %2").arg(sequence).arg(epoch);
+    }
+    if (RemoteTxWatchdog::channelKeepalive(sequence, epoch) != bytes) {
+        return QStringLiteral("tx-keepalive: the station encodes it differently");
+    }
+    return QString();
+}
+
 QString checkDnsSdTxt(const QByteArray& bytes, const QJsonObject& expect)
 {
     for (auto it = expect.constBegin(); it != expect.constEnd(); ++it) {
@@ -507,6 +534,9 @@ QString checkVector(const Vectors& all, const QString& id)
     if (codec == QStringLiteral("dnssd-txt")) {
         return checkDnsSdTxt(vector.bytes, expect);
     }
+    if (codec == QStringLiteral("tx-keepalive")) {
+        return checkTxKeepalive(vector.bytes, expect);
+    }
     if (codec == QStringLiteral("ps3d")) {
         return checkPs3d(before, vector.bytes, expect);
     }
@@ -602,7 +632,7 @@ void TstLinkConformanceMedia::vectorsCoverThePlan()
           QStringLiteral("media-lan-announcement-2"),
           QStringLiteral("media-lan-announcement-2-devices"),
           QStringLiteral("media-lan-announcement-2-trailing"), QStringLiteral("media-dnssd-txt"),
-          QStringLiteral("media-ps3d-frame")}) {
+          QStringLiteral("media-ps3d-frame"), QStringLiteral("media-tx-keepalive")}) {
         QVERIFY2(m_vectors.contains(id), qPrintable(id));
     }
     // iPhone app Task 16: the announcement vectors name their schema; the

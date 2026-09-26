@@ -111,6 +111,16 @@
 //                                    refusal for another device's slice,
 //                                    and a saved slice that did not fit.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 34 (R-IOS-02): the transmit refusals
+//               (TxRefusal.cpp) and their forwards. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
+//   2026-09-25 - iPhone app plan, desktop remote transmit (R-IOS-13): the
+//                refusal sent with txPermitted is named as a forward. J.J.
+//                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 39 (D14, R-IOS-13): txState's stop
+//               texts (TransmitStateFacade.cpp). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 //   2026-09-25  J.J. Boyd / KG4VCF  iPhone app Task 74 (R-IOS-30): the
 //                                    confirm step's reasons, notices,
 //                                    chooser `why` and change label, with a
@@ -127,6 +137,10 @@
 //                                    Task 16: receive only's reasons
 //                                    (MoxController, RadioModel) scanned.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Transmit group fix wave 2 (R-IOS-02):
+//                                    the freeze and on-air refusals' new
+//                                    forwards. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -711,6 +725,19 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("onAir"),
           // A code windows compare, not a reason (section 17).
           QStringLiteral("m_displayBudgetReason"),
+          // iPhone app plan Task 34: the transmit refusals' sentences,
+          // written in src/core/safety/TxRefusal.cpp (scanned below).
+          QStringLiteral("m_transmitHolder->keyRefusalFor(requester)"),
+          QStringLiteral("TxRefusals::appCannotTransmit().text"),
+          QStringLiteral("decision.refusal.text"),
+          // Desktop remote transmit: the same sentences, sent with
+          // txPermitted in capabilities (txRefusalReason) and remembered.
+          QStringLiteral("txRefusalOf(caps)"),
+          QStringLiteral("txDecision.refusal.text"),
+          // Fix wave I2: the freeze's refusal (TxRefusal.cpp's words).
+          QStringLiteral("frozen.text"), QStringLiteral("stationFreezeRefusal(sliceId).text"),
+          // Fix wave 2: the same freeze asked of a whole message.
+          QStringLiteral("freezeRefusalFor(message).text"),
           // R-R3-49 (parity Task 5): powerPageKeyValueRefusal's literals,
           // this file's own, scanned here.
           QStringLiteral("range")}},
@@ -743,6 +770,12 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("sliceClosedReason(planDevice(requester).name, lettersOf(it.value()))"),
           QStringLiteral("receiver ? receiverTakenReason(takerName, letters) : "
                          "sliceTakenReason(takerName, letters)"),
+          // Fix wave 2: the on-air and freeze refusals (TxRefusal.cpp's
+          // words, scanned there).
+          QStringLiteral("check.onAir.text"), QStringLiteral("frozen.text"),
+          QStringLiteral("freezeRefusalFor(question.original)"),
+          QStringLiteral("stationFreezeRefusal(id)"),
+          QStringLiteral("touches ? onAirWords(*holder) : TxRefusal{}"),
           // StationServer.cpp's slice refusal, scanned there.
           QStringLiteral("sliceRefusal(requester, sliceId)"), QStringLiteral("refusal"),
           // Today's refusals from the model, the allocator and the
@@ -779,6 +812,9 @@ const QList<ReasonSource>& reasonSources()
           // window sentence, their literals scanned where written; the
           // settings proxy's refusal (scanned there) and this file's.
           QStringLiteral("onAirReason(planDevice(topology.transmit.holder).shortName)"),
+          // Merge of the trunk into the transmit lane: Task 34's on-air
+          // refusal (TxRefusal.cpp's words, scanned there).
+          QStringLiteral("onAir.text"), QStringLiteral("refused.text"), QStringLiteral("onAir"),
           QStringLiteral("olderWindowReason(ReceiverPlanner::joinWords(names))"),
           QStringLiteral("QString::fromLatin1(kTargetChangedReason)"),
           QStringLiteral("antennaKeptReason(antenna, names)"), QStringLiteral("reason"),
@@ -816,6 +852,14 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("std::exchange(m_rateChangedReason, {})"),
           // AlexAntennaFacade's filter policy refusal, scanned below.
           QStringLiteral("alex->setBpfModeForChain(chain, mode)"),
+          // iPhone app plan Task 34: the transmit refusals, worded in
+          // src/core/safety/TxRefusal.cpp (scanned below) and handed in by
+          // StationServer's transmit access.
+          QStringLiteral("refusal.text"), QStringLiteral("result.refusal.text"),
+          QStringLiteral("m_transmitAccess.onAir(m_requester)"),
+          // Fix wave M2: a release refused (TxRefusal.cpp's words).
+          QStringLiteral("m_transmitAccess.release(m_requester)"),
+          QStringLiteral("m_transmitAccess.txSlice(m_requester)"),
           // Parity mini-round: its TX antenna refusal (setAlexTxAntenna),
           // scanned below.
           QStringLiteral("alex->setTxAntForBand(Band(band), antenna)"),
@@ -826,6 +870,20 @@ const QList<ReasonSource>& reasonSources()
           // R-R3-46 (parity Task 14): RadioModel::requestIoBoardI2c's
           // refusal (scanned in RadioModel.cpp's entry), on a later turn.
           QStringLiteral("ok ? QString() : reason")}},
+        // iPhone app plan Task 34 (R-IOS-13): every transmit refusal's
+        // sentence. The device name put into two of them is the operator's
+        // own word (ruling 4.3); a band plan reason is the band plan's
+        // sentence, passed on only when it is plain.
+        {"src/core/safety/TxRefusal.cpp", {}, {}, 15,
+         {QStringLiteral("holderName"), QStringLiteral("holderShortName")},
+         {QStringLiteral("reason"), QStringLiteral("std::move(text)"),
+          QStringLiteral("bandPlanReasonIsPlain(reason) ? reason : QStringLiteral(\"The band plan does not allow transmitting here.\")")}},
+        // iPhone app plan Task 34: MoxController records and reports a
+        // refusal it is given (the band plan's, the interlock's, the
+        // keying gate's), whose words are scanned where they are written.
+        {"src/core/MoxController.cpp", {QStringLiteral("reportRefusal")}, {}, 0, {},
+         {QStringLiteral("reason"), QStringLiteral("refusal")}},
+        {"src/core/MoxController.h", {QStringLiteral("lastRefusal")}, {}, 0, {}, {}},
         // iPhone app Task 13 (R-IOS-08): the device administration verbs'
         // command.result, forwarded by the dispatcher as result.reason; the
         // log lines never reach an app.
@@ -865,6 +923,12 @@ const QList<ReasonSource>& reasonSources()
         {"src/core/dsp/DspAssetValidation.cpp", {QStringLiteral("isOperatorMessage")}, {}, 6},
         // The explanation it restores is one this file words.
         {"src/core/dsp/NnrAdapter.cpp", {}, {}, 6, {}, {QStringLiteral("before.explanation")}},
+        // R-R3-39: with a receive lane, RxChannel refuses at once with the
+        // same words NnrAdapter uses (the lane's own refusal is NnrAdapter's).
+        {"src/core/RxChannel.cpp",
+         {QStringLiteral("setNnrTuning"), QStringLiteral("setNnrDiagnostics"),
+          QStringLiteral("selectNr")},
+         {}, 4},
         // The model paths' refusal reaches nnr.applyModelSelection.
         {"src/core/WdspEngine.cpp", {QStringLiteral("setNnrModelPaths")}, {}, 2},
         // A refused PureSignal settings write (property.result).
@@ -896,10 +960,17 @@ const QList<ReasonSource>& reasonSources()
         // what a refused key and a disabled transmit button show.
         // Task 16 fix wave (M2): the words setMox refuses with, which the
         // TGXL autotune and the Tuner applet's TUNE show too.
+        // Merge of the trunk into the transmit lane: the same gate as a
+        // TxRefusal (transmitBlockRefusal), its words TxRefusal.cpp's or
+        // the reason setRxOnly was given.
         {"src/core/MoxController.cpp",
-         {QStringLiteral("defaultRxOnlyReason"), QStringLiteral("transmitBlockReason")}, {}, 3, {},
-         // The reason setRxOnly was given (RadioModel::rxOnlyReason, scanned).
-         {QStringLiteral("m_rxOnlyReason")}},
+         {QStringLiteral("defaultRxOnlyReason"), QStringLiteral("transmitBlockReason"),
+          QStringLiteral("transmitBlockRefusal"),
+          // Fix wave 2: the interlock's refusal, TxRefusal.cpp's words.
+          QStringLiteral("interlockRefusal")}, {}, 3, {},
+         // The reason setRxOnly was given (RadioModel::rxOnlyReason, scanned),
+         // and TxRefusal.cpp's refusals (scanned there).
+         {QStringLiteral("m_rxOnlyReason"), QStringLiteral("TxRefusals::stationReceiveOnly()")}},
         {"src/core/MoxController.h", {QStringLiteral("rxOnlyReason")}, {}, 0, {},
          // The reason setRxOnly was given (RadioModel::rxOnlyReason, scanned).
          {QStringLiteral("m_rxOnlyReason")}},
@@ -1043,6 +1114,13 @@ const QList<ReasonSource>& reasonSources()
           // addNotchFromStation's reasons.
           QStringLiteral("addTnfFromStation"),
           QStringLiteral("nr3CannotRunReason"),
+          // R-R3-49: DFNR's, sent as dspAssets' dfnrModelStatus.
+          QStringLiteral("dfnrCannotRunReason"),
+          // R-R3-49 (tx-followup-3): MNR's, sent as dspAssets' mnrStatus,
+          // BNR's, and the one reason the flag, the menu and the refusals
+          // read.
+          QStringLiteral("mnrCannotRunReason"), QStringLiteral("bnrCannotRunReason"),
+          QStringLiteral("nrCannotRunReason"), QStringLiteral("nrCannotRunInThisBuildReason"),
           // The slice cap reason, relayed by the addSlice and addSliceOnPan
           // verbs' results.
           QStringLiteral("sliceCapReason"),
@@ -1123,6 +1201,14 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("kTwoToneFreq2HzMin"), QStringLiteral("kTwoToneFreq2HzMax"),
           QStringLiteral("kTwoTonePowerMin"), QStringLiteral("kTwoTonePowerMax"),
           QStringLiteral("kTwoToneFreq2DelayMsMin"), QStringLiteral("kTwoToneFreq2DelayMsMax")}},
+        // iPhone app plan Task 39: txState's stopReason is the wire code
+        // (linkLost, timeOut, ...), never shown; its words are stopText,
+        // scanned with the property texts. Task 38's lastTransmitStopReason
+        // is a code, which half and a limit, never shown either.
+        {"src/core/session/TransmitStateFacade.h", {QStringLiteral("stopReason")}, {}, 0, {},
+         {QStringLiteral("m_stopReason")}},
+        {"src/models/RadioModel.h", {QStringLiteral("lastTransmitStopReason")}, {}, 0, {},
+         {QStringLiteral("m_lastTransmitStopReason")}},
     };
     return sources;
 }
@@ -1171,14 +1257,10 @@ const QList<AppSideReason>& appSideReasons()
          "could not send"},
         {"src/models/RadioModel.cpp", "noStationReason",
          "a remote window's own notice when it has no link to the Core"},
-        // R-R3-49 (parity Task 16): why DFNR or MNR is disabled, the
-        // window's own words from the Core's list (or this computer's).
+        // R-R3-49 (parity Task 16, trunk merge): why DFNR or MNR is
+        // disabled on a Core too old to say, the window's own words.
         {"src/models/RadioModel.cpp", "noiseReductionNotSaidReason",
          "a remote window's own reason DFNR and MNR are disabled"},
-        {"src/models/RadioModel.cpp", "localNoiseReductionUnavailableReason",
-         "a window's own reason DFNR and MNR are disabled"},
-        {"src/models/RadioModel.cpp", "noiseReductionUnavailableReason",
-         "a window's own reason DFNR and MNR are disabled"},
         {"src/models/RadioModel.cpp", "coreFilterResponseUnavailableReason",
          "a remote window's own reason the high-resolution filter graph is disabled"},
         {"src/models/RadioModel.cpp", "reportStationAccessoryRefusal",
@@ -1293,6 +1375,17 @@ const QList<ReasonSource>& propertyTextSources()
         // The Power Genius's efficiency: the device's own reading (a
         // number and a unit), passed on as it reports it.
         {"src/core/PgxlStatusGauges.cpp", {}, {}, 0, {}, {}, true},
+        // iPhone app plan Task 39: txState's stopText. The limit ("3:00",
+        // durationText) and a device's name as the Core numbers it.
+        {"src/core/session/TransmitStateFacade.cpp",
+         {QStringLiteral("timeOutText"), QStringLiteral("linkLostText"),
+          QStringLiteral("micStarvedText"), QStringLiteral("revokedText"),
+          QStringLiteral("takenOverText"), QStringLiteral("stationText")},
+         // Fix wave M3: linkLostText is the watchdog's sentence (scanned in
+         // RemoteTxWatchdog.cpp).
+         {}, 7,
+         {QStringLiteral("after"), QStringLiteral("deviceOrDefault(deviceName)"),
+          QStringLiteral("leadingDevice(deviceName)"), QStringLiteral("leadingDevice(takerName)")}},
     };
     return sources;
 }

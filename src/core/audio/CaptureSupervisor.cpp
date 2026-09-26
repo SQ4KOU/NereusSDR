@@ -3,6 +3,11 @@
 // =================================================================
 // no-port-check: NereusSDR-original.  Helper process supervision for
 // optional microphone capture; no Thetis logic.
+//
+// Modification history (NereusSDR):
+//   2026-09-25: iPhone app plan Task 36 (R-IOS-13): the remote window's
+//               demand named in the log. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/audio/CaptureSupervisor.h"
@@ -889,6 +894,24 @@ CaptureSupervisor::~CaptureSupervisor()
     shutdown();
 }
 
+namespace {
+
+// Who holds a capture demand, for the log.
+const char* demandName(CaptureSupervisor::Demand demand)
+{
+    switch (demand) {
+    case CaptureSupervisor::Demand::TestMic:
+        return "Test Mic";
+    case CaptureSupervisor::Demand::RemoteWindow:
+        return "the remote window's microphone uplink";
+    case CaptureSupervisor::Demand::LocalSession:
+        break;
+    }
+    return "the local session";
+}
+
+} // namespace
+
 CaptureSupervisor::Lease CaptureSupervisor::acquire(Demand demand)
 {
     if (m_shutDown) {
@@ -896,8 +919,7 @@ CaptureSupervisor::Lease CaptureSupervisor::acquire(Demand demand)
     }
     const quint64 id = m_nextLeaseId++;
     m_leases.insert(id, demand);
-    qCInfo(lcAudio) << "capture: demand acquired by"
-                    << (demand == Demand::TestMic ? "Test Mic" : "the local session")
+    qCInfo(lcAudio) << "capture: demand acquired by" << demandName(demand)
                     << "(" << m_leases.size() << "active)";
     if (m_leases.size() == 1) {
         CaptureSupervisorWorker* worker = m_worker.get();
@@ -915,8 +937,7 @@ void CaptureSupervisor::releaseLease(quint64 id)
     }
     const Demand demand = it.value();
     m_leases.erase(it);
-    qCInfo(lcAudio) << "capture: demand released by"
-                    << (demand == Demand::TestMic ? "Test Mic" : "the local session")
+    qCInfo(lcAudio) << "capture: demand released by" << demandName(demand)
                     << "(" << m_leases.size() << "active)";
     if (m_leases.isEmpty() && !m_shutDown) {
         CaptureSupervisorWorker* worker = m_worker.get();

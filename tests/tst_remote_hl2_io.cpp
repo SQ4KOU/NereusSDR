@@ -13,8 +13,11 @@
 // The on-air rule is the parity plan's for this task: an I2C write and an
 // output pin are refused while the radio is on the air (they reach the
 // N2ADR filter board in the transmit path); a read is not. The three
-// high-pass switches have no on-air rule in either window, as Thetis sets
-// them with no MOX check (console.cs:18719-18803 [v2.10.3.15]).
+// high-pass switches have no on-air rule in a local window, as Thetis sets
+// them with no MOX check (console.cs:18719-18803 [v2.10.3.15]); from a
+// remote window they follow the TX antennas' rule since the trunk merge of
+// remote transmit: the device holding transmit changes them on the air,
+// and another device's change waits (the Core's own key is a holder).
 //
 // Loopback link, no RF and no hardware: nothing here keys a radio. The
 // "radio" is the Core's own IoBoardHl2 queue, drained by a real P1CodecHl2
@@ -25,6 +28,11 @@
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-09-26  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-49 (parity Task 14).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Trunk merge of remote transmit: the
+//                                    three switches from a window wait
+//                                    while the Core's own key is on the
+//                                    air, as the TX antennas do.
 //                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
@@ -626,8 +634,10 @@ void TstRemoteHl2Io::olderCoreKeepsTheToolAndSwitchesClosedWithItsReason()
 }
 
 // The carried item: HPF bypass on TX, HPF bypass on PureSignal and
-// Disable 6 m LNA on TX from a remote window reach the Core's connection,
-// on the air too.
+// Disable 6 m LNA on TX from a remote window reach the Core's connection.
+// Trunk merge of remote transmit (join d): on the air they follow the TX
+// antennas' rule. While the Core's own key is on the air this window is
+// another device, so its change waits and goes ahead after the key ends.
 void TstRemoteHl2Io::alexHpfSwitchesFromARemoteWindowOnAndOffTheAir()
 {
     Session s(m_securityDir.path(), this);
@@ -647,9 +657,33 @@ void TstRemoteHl2Io::alexHpfSwitchesFromARemoteWindowOnAndOffTheAir()
     QTRY_VERIFY(s.core.p1.hpfBypassOnTx());
     QVERIFY(reloads.contains(QStringLiteral("alex")));
 
-    // On the air: taken and applied at once, as Thetis's setters apply.
+    // On the air, keyed by the Core's own key: this window's change waits.
     s.core.key();
     QVERIFY(s.core.model->stationOnAirRefusal(nullptr));
+    s.proxy.setValue(hw(QStringLiteral("alex/master/hpfBypassOnTx")), QStringLiteral("False"));
+    QTRY_COMPARE(rejected.count(), 1);
+    QVERIFY(s.core.p1.hpfBypassOnTx());
+    QCOMPARE(s.settings.value(hw(QStringLiteral("alex/master/hpfBypassOnTx"))).toString(),
+             QStringLiteral("True"));
+
+    // The window's switches stay open on the air, with no reason: the
+    // Core's refusal is the one answer, as for the TX antennas.
+    s.window.alexAntennaFacade()->setWindowAvailability(true, {});
+    {
+        HardwarePage page(&s.window);
+        QTRY_VERIFY(s.window.isCoreOnAir());
+        for (const QString& name : {QStringLiteral("alexHpfBypassOnTx"),
+                                    QStringLiteral("alexHpfBypassOnPs"),
+                                    QStringLiteral("alexDisable6mLnaOnTx")}) {
+            auto* w = page.findChild<QWidget*>(name);
+            QVERIFY2(w != nullptr && w->isEnabled(), qPrintable(name));
+            QVERIFY2(w->toolTip() != kOnAir, qPrintable(name));
+        }
+    }
+    s.core.unkey();
+    QTRY_COMPARE(s.core.model->moxController()->state(), MoxState::Rx);
+
+    // Off the air again: taken and applied at once.
     s.proxy.setValue(hw(QStringLiteral("alex/master/disable6mLnaOnTx")), QStringLiteral("False"));
     s.proxy.setValue(hw(QStringLiteral("alex/master/hpfBypassOnPs")), QStringLiteral("False"));
     s.proxy.setValue(hw(QStringLiteral("alex/master/hpfBypassOnTx")), QStringLiteral("False"));
@@ -658,24 +692,10 @@ void TstRemoteHl2Io::alexHpfSwitchesFromARemoteWindowOnAndOffTheAir()
                  QStringLiteral("False"));
     QCOMPARE(s.settings.value(hw(QStringLiteral("alex/master/hpfBypassOnPs"))).toString(),
              QStringLiteral("False"));
-    QCOMPARE(rejected.count(), 0);
+    QCOMPARE(rejected.count(), 1);
     // The LPF band edges stay refused.
     s.proxy.setValue(hw(QStringLiteral("alex/lpf/20m/start")), QStringLiteral("10.0"));
-    QTRY_COMPARE(rejected.count(), 1);
-
-    // The window's switches are open on the air, with no reason.
-    s.window.alexAntennaFacade()->setWindowAvailability(true, {});
-    HardwarePage page(&s.window);
-    QTRY_VERIFY(s.window.isCoreOnAir());
-    for (const QString& name : {QStringLiteral("alexHpfBypassOnTx"),
-                                QStringLiteral("alexHpfBypassOnPs"),
-                                QStringLiteral("alexDisable6mLnaOnTx")}) {
-        auto* w = page.findChild<QWidget*>(name);
-        QVERIFY2(w != nullptr && w->isEnabled(), qPrintable(name));
-        QVERIFY2(w->toolTip() != kOnAir, qPrintable(name));
-    }
-    s.core.unkey();
-    QTRY_COMPARE(s.core.model->moxController()->state(), MoxState::Rx);
+    QTRY_COMPARE(rejected.count(), 2);
 }
 
 void TstRemoteHl2Io::localAlexHpfSwitchesStayLiveOnTheAir()

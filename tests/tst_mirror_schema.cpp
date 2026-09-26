@@ -74,6 +74,7 @@
 #include "core/session/StationDevicesFacade.h"
 #include "core/session/ConnectedDevicesFacade.h"
 #include "core/session/SliceMarker.h"
+#include "core/session/TransmitStateFacade.h"
 
 using namespace NereusSDR;
 
@@ -891,7 +892,9 @@ private:
                  // iPhone app Task 71 (R-IOS-02): who is on the Core.
                  &ConnectedDevicesFacade::staticMetaObject,
                  // iPhone app Task 73 (R-IOS-02): another device's slice.
-                 &SliceMarker::staticMetaObject };
+                 &SliceMarker::staticMetaObject,
+                 // iPhone app plan Task 39 (D14, R-IOS-13): the Core's transmitter.
+                 &TransmitState::staticMetaObject };
     }
 };
 

@@ -10,8 +10,10 @@
 // the Core, under dspInfoVersion 1.
 //
 //   B2.4  The VFO flag, Setup > DSP > NR/ANF and DSP > NR offer DFNR and MNR
-//         by the Core's noiseReductionMethods, never this computer's build;
-//         below version 1 they are disabled with a plain reason.
+//         by the Core's word, never this computer's build. Since the trunk
+//         merge the one source is DspAssetService (dfnrRunnable,
+//         mnrRunnable); on a Core below dspAssetVersion 3 (DFNR) or 4 (MNR)
+//         they are disabled with a plain reason.
 //   B3.4  A remote pan's notch width presets are checked against the Core's
 //         minNotchWidthHz, and the TNF page shows it.
 //   B3.6  The high-resolution filter graph works in a remote window and
@@ -27,6 +29,11 @@
 //   2026-09-26 -- New test file for remote-window parity Task 16. J.J.
 //                 Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-26 -- Trunk merge of parity Tasks 16 to 18: the noise reduction
+//                 cases read the one source, DspAssetService and
+//                 RadioModel::nrCannotRunReason; kNotSaid is the reason
+//                 below dspAssetVersion 3 or 4. J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -49,6 +56,7 @@
 #include "core/HardwareProfile.h"
 #include "core/RxChannel.h"
 #include "core/WdspEngine.h"
+#include "core/dsp/DspAssetService.h"
 #include "core/session/IStationLink.h"
 #include "core/session/MirrorPolicy.h"
 #include "core/session/SessionMessages.h"
@@ -154,10 +162,10 @@ QVariant valueOf(const SessionMessage& message, const QByteArray& name)
     return {};
 }
 
-bool listHas(const QString& list, const char* method)
-{
-    return list.split(QLatin1Char(',')).contains(QLatin1String(method));
-}
+const QString kMnrNotAMac = QStringLiteral(
+    "MNR runs only on a Mac, and this Core is not a Mac, so MNR cannot run.");
+const QString kDfnrNoModel = QStringLiteral(
+    "No DFNR model file was found on this Core, so DFNR cannot run.");
 
 } // namespace
 
@@ -176,12 +184,14 @@ private slots:
 
     void cleanupTestCase() { QVERIFY(RemoteWindowHarness::removeIsolatedProfile()); }
 
-    // The three properties are Core to window only, with no WRITE.
+    // The two properties are Core to window only, with no WRITE. Which
+    // noise reduction runs has one source, DspAssetService: the radio
+    // object carries no list of its own.
     void factsAreOutbound()
     {
         RadioModel radio;
+        QCOMPARE(radio.metaObject()->indexOfProperty("noiseReductionMethods"), -1);
         const struct { const QMetaObject* mo; const char* cls; const char* name; int type; } props[] = {
-            {radio.metaObject(), "RadioModel", "noiseReductionMethods", QMetaType::QString},
             {radio.metaObject(), "RadioModel", "dspOptionsLastApplyMs", QMetaType::LongLong},
             {&SliceModel::staticMetaObject, "SliceModel", "minNotchWidthHz", QMetaType::Double},
         };
@@ -197,31 +207,27 @@ private slots:
         }
     }
 
-    // What a computer can run is its own build's and platform's, as
-    // RxChannel decides: NR1 to NR4 and ANF always, MNR only with HAVE_MNR.
-    void localMethodsFollowTheBuild()
+    // What a computer can run is its own build's and platform's: MNR only
+    // with HAVE_MNR, DFNR only with HAVE_DFNR.
+    void localNoiseReductionFollowsTheBuild()
     {
-        const QString methods = RadioModel::localNoiseReductionMethods();
-        for (const char* m : {"nr1", "nr2", "nr3", "nr4", "anf"}) {
-            QVERIFY2(listHas(methods, m), m);
-        }
 #ifdef HAVE_MNR
-        QVERIFY(listHas(methods, "mnr"));
-        QVERIFY(RadioModel::localNoiseReductionUnavailableReason(NrSlot::MNR).isEmpty());
+        QVERIFY(RadioModel::nrCannotRunInThisBuildReason(NrSlot::MNR).isEmpty());
 #else
-        QVERIFY(!listHas(methods, "mnr"));
-        QCOMPARE(RadioModel::localNoiseReductionUnavailableReason(NrSlot::MNR),
-                 QStringLiteral("This computer cannot run MNR. It runs only on a Mac."));
+        QCOMPARE(RadioModel::nrCannotRunInThisBuildReason(NrSlot::MNR), kMnrNotAMac);
 #endif
 #ifndef HAVE_DFNR
-        QVERIFY(!listHas(methods, "dfnr"));
+        QVERIFY(!RadioModel::nrCannotRunInThisBuildReason(NrSlot::DFNR).isEmpty());
 #endif
         RadioModel local;
-        QCOMPARE(local.noiseReductionMethods(), methods);
-        QVERIFY(local.noiseReductionUnavailableReason(NrSlot::NR2).isEmpty());
+        QVERIFY(local.nrCannotRunReason(NrSlot::NR2).isEmpty());
+        // A local model is never "not told".
+        QVERIFY(local.nrCannotRunReason(NrSlot::MNR) != kNotSaid);
+        QVERIFY(local.nrCannotRunReason(NrSlot::DFNR) != kNotSaid);
     }
 
-    // The Core offers dspInfoVersion 1 and its own list reaches the window.
+    // The Core's DspAssetService word reaches the window over a real
+    // session, with dspAssetVersion 4, so the window is told.
     void coreSaysWhichNoiseReductionItRuns()
     {
         std::unique_ptr<RadioModel> core = makeStationRadioModel();
@@ -229,10 +235,15 @@ private slots:
         QCOMPARE(s.server->dspInfoVersion(), 1);
         QVERIFY(s.connect());
         QCOMPARE(s.client->capabilities().dspInfoVersion, 1);
-        QTRY_COMPARE(s.window.noiseReductionMethods(), core->noiseReductionMethods());
+        QVERIFY(s.client->capabilities().dspAssetVersion >= 4);
         QCOMPARE(s.window.stationDspInfoVersion(), 1);
-        QCOMPARE(s.window.noiseReductionUnavailableReason(NrSlot::MNR).isEmpty(),
-                 listHas(core->noiseReductionMethods(), "mnr"));
+        QVERIFY(s.window.stationDspAssetVersion() >= 4);
+        QTRY_COMPARE(s.window.dspAssets()->mnrRunnable(), core->dspAssets()->mnrRunnable());
+        QTRY_COMPARE(s.window.dspAssets()->dfnrRunnable(), core->dspAssets()->dfnrRunnable());
+        QCOMPARE(s.window.nrCannotRunReason(NrSlot::MNR).isEmpty(),
+                 core->dspAssets()->mnrRunnable());
+        QVERIFY(s.window.nrCannotRunReason(NrSlot::MNR) != kNotSaid);
+        QVERIFY(s.window.nrCannotRunReason(NrSlot::DFNR) != kNotSaid);
 
         // A Core with no local radio model offers 0.
         RadioModel remote(RadioModel::Role::Remote);
@@ -245,17 +256,19 @@ private slots:
 
     // B2.4: the Core decides, never this computer's build. A Mac window on
     // a Linux Core offers no MNR; a Linux window on a Mac Core offers it.
-    // Below version 1 both are disabled with the plain reason.
+    // On a Core too old to say, both are disabled with the plain reason.
     void flagAndPagesOfferWhatTheCoreRuns()
     {
         RadioModel window(RadioModel::Role::Remote);
+        DspAssetService* assets = window.dspAssets();
+        QVERIFY(assets);
         VfoWidget flag;
         flag.setRadioModel(&window);
         QPushButton* mnr = flag.mnrButtonForTest();
         QPushButton* dfnr = flag.dfnrButtonForTest();
         QVERIFY(mnr && dfnr);
 
-        // Below version 1: shown, disabled, with the reason.
+        // A Core that does not say: shown, disabled, with the reason.
         QVERIFY(!mnr->isHidden());
         QVERIFY(!mnr->isEnabled());
         QVERIFY(!dfnr->isEnabled());
@@ -263,26 +276,30 @@ private slots:
         QCOMPARE(dfnr->toolTip(), kNotSaid);
         QVERIFY(OperatorWording::isPlain(kNotSaid));
 
-        // A Linux Core: no MNR, no DFNR.
+        // A Linux Core without the DFNR model: no MNR, no DFNR.
         StationCapabilities caps;
         caps.dspInfoVersion = 1;
+        caps.dspAssetVersion = 4;
         window.applyStationCapabilities(caps);
-        QCOMPARE(window.applyMirroredValue("noiseReductionMethods",
-                                           QStringLiteral("nr1,nr2,nr3,nr4,anf")),
-                 QString());
+        QVERIFY(assets->applyRemoteProperty("mnrStatus", kMnrNotAMac));
+        QVERIFY(assets->applyRemoteProperty("mnrRunnable", false));
+        QVERIFY(assets->applyRemoteProperty("dfnrModelStatus", kDfnrNoModel));
+        QVERIFY(assets->applyRemoteProperty("dfnrRunnable", false));
         QVERIFY(!mnr->isEnabled());
-        QCOMPARE(mnr->toolTip(), QStringLiteral("The Core cannot run MNR. It runs only on a Mac."));
+        QCOMPARE(mnr->toolTip(), kMnrNotAMac);
         QVERIFY(!dfnr->isEnabled());
+        QCOMPARE(dfnr->toolTip(), kDfnrNoModel);
         QVERIFY(OperatorWording::isPlain(mnr->toolTip()));
         QVERIFY(OperatorWording::isPlain(dfnr->toolTip()));
 
         // A Mac Core with DFNR: both offered, whatever this build has.
-        QCOMPARE(window.applyMirroredValue("noiseReductionMethods",
-                                           QStringLiteral("nr1,nr2,nr3,nr4,dfnr,mnr,anf")),
-                 QString());
+        QVERIFY(assets->applyRemoteProperty("mnrStatus", QString()));
+        QVERIFY(assets->applyRemoteProperty("mnrRunnable", true));
+        QVERIFY(assets->applyRemoteProperty("dfnrModelStatus", QString()));
+        QVERIFY(assets->applyRemoteProperty("dfnrRunnable", true));
         QVERIFY(mnr->isEnabled());
         QVERIFY(dfnr->isEnabled());
-        QVERIFY(mnr->toolTip().startsWith(QStringLiteral("MNR:")));
+        QVERIFY(mnr->toolTip() != kNotSaid && mnr->toolTip() != kMnrNotAMac);
 
         // Setup > DSP > NR/ANF follows the same word.
         NrAnfSetupPage page(&window);
@@ -291,13 +308,22 @@ private slots:
         QVERIFY(mnrNote && dfnrNote);
         QVERIFY(mnrNote->isHidden());
         QVERIFY(mnrNote->parentWidget() != nullptr);
-        QCOMPARE(window.applyMirroredValue("noiseReductionMethods",
-                                           QStringLiteral("nr1,nr2,nr3,nr4,anf")),
-                 QString());
+        QVERIFY(assets->applyRemoteProperty("mnrStatus", kMnrNotAMac));
+        QVERIFY(assets->applyRemoteProperty("mnrRunnable", false));
+        QVERIFY(assets->applyRemoteProperty("dfnrModelStatus", kDfnrNoModel));
+        QVERIFY(assets->applyRemoteProperty("dfnrRunnable", false));
         QVERIFY(!mnrNote->isHidden());
-        QCOMPARE(mnrNote->text(), QStringLiteral("The Core cannot run MNR. It runs only on a Mac."));
-        QVERIFY(!dfnrNote->text().isEmpty());
+        QCOMPARE(mnrNote->text(), kMnrNotAMac);
+        QCOMPARE(dfnrNote->text(), kDfnrNoModel);
         QVERIFY(!mnr->isEnabled());
+
+        // And the page, like the flag, says so on a Core too old to say.
+        caps.dspAssetVersion = 2;
+        window.applyStationCapabilities(caps);
+        QCOMPARE(mnrNote->text(), kNotSaid);
+        QCOMPARE(dfnrNote->text(), kNotSaid);
+        QCOMPARE(mnr->toolTip(), kNotSaid);
+        QCOMPARE(dfnr->toolTip(), kNotSaid);
     }
 
     // B3.8: the Core's apply time reaches the window and its page.
@@ -343,7 +369,9 @@ private slots:
         // slice follows the channel's signal.
         const double before = ch->minNotchWidthHz();
         ch->setFilterSizeSamples(8192);
-        QVERIFY(ch->minNotchWidthHz() < before);
+        // Trunk merge: the WDSP call runs on the receive lane (R-R3-39), so
+        // the new minimum lands once the lane has run it.
+        QTRY_VERIFY(ch->minNotchWidthHz() < before);
         QTRY_COMPARE(slice->minNotchWidthHz(), ch->minNotchWidthHz());
         harness.reset();
     }
@@ -388,8 +416,8 @@ private slots:
         coreSlice->setMinNotchWidthHz(200.0);
         QTRY_COMPARE(pan->notchMinWidthHzForTest(), 200.0);
 
-        QTRY_COMPARE(h.remoteModel()->noiseReductionMethods(),
-                     h.station().noiseReductionMethods());
+        QTRY_COMPARE(h.remoteModel()->dspAssets()->mnrRunnable(),
+                     h.station().dspAssets()->mnrRunnable());
     }
 
     // B3.6 on the wire: dsp.filterResponse answers with the Core's bins;

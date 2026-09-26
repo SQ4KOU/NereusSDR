@@ -18,6 +18,10 @@
 //   2026-09-25: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 75 (R-IOS-30), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: transmit group fix wave 2 (R-IOS-02): the transmit slice
+//               counts whoever owns it, ruling 8.11's frozen slice, and a
+//               station holder nobody can ask. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -324,6 +328,71 @@ private slots:
                 QVERIFY2(!a.device.isEmpty(), row.name);
             }
         }
+    }
+
+    // Fix wave 2, Important 3 (rulings 7.4 and 8.11): while the station
+    // device is keyed on another device's slice, the holder owns no slice,
+    // yet a move, a close or a rate change reaching that slice waits,
+    // whoever asks, the slice's owner included.
+    void theFrozenSliceCountsWhoeverOwnsIt()
+    {
+        DisturbanceCheck::Topology t = twoAdcCore();
+        t.transmit.holder = QByteArrayLiteral("station");
+        t.transmit.keyed = true;
+        t.transmit.txSliceId = 1;
+        t.transmit.frozenSliceId = 1;
+        t.transmit.holderAskable = false;
+
+        // A's Protocol 2 rate change moves B's frozen slice.
+        DisturbanceCheck::Scope moves;
+        moves.receivers = {1};
+        moves.planned.insert(1, Effect::Moves);
+        QList<DisturbanceCheck::Affected> affected = DisturbanceCheck::check(moves, t, kA);
+        QCOMPARE(describe(affected), QStringLiteral("b:1=moves"));
+        QVERIFY(DisturbanceCheck::refusedOnAir(moves, t, kA, affected));
+
+        // A pan move closing it, by a device that does not own it.
+        DisturbanceCheck::Scope closes;
+        closes.receivers = {1};
+        closes.effect = Effect::Closes;
+        affected = DisturbanceCheck::check(closes, t, kC);
+        QVERIFY(DisturbanceCheck::refusedOnAir(closes, t, kC, affected));
+
+        // B's own rate change of the frozen slice's receiver, which only
+        // changes it: its own slice never counts in check(), and the
+        // freeze still refuses it.
+        DisturbanceCheck::Scope own;
+        own.receivers = {1};
+        own.planned.insert(1, Effect::Changes);
+        affected = DisturbanceCheck::check(own, t, kB);
+        QVERIFY(affected.isEmpty());
+        QVERIFY(DisturbanceCheck::refusedOnAir(own, t, kB, affected));
+
+        // A change that only changes it (a shared noise blanker) is not a
+        // take, move or rate change.
+        DisturbanceCheck::Scope blanker;
+        blanker.receivers = {1};
+        affected = DisturbanceCheck::check(blanker, t, kA);
+        QVERIFY(!DisturbanceCheck::refusedOnAir(blanker, t, kA, affected));
+
+        // A saved accessory address: the transmitter, not its path. The
+        // station device has nobody to ask, so it applies at once.
+        DisturbanceCheck::Scope address;
+        address.transmitter = true;
+        affected = DisturbanceCheck::check(address, t, kA);
+        QVERIFY(affected.isEmpty());
+        QVERIFY(!DisturbanceCheck::refusedOnAir(address, t, kA, affected));
+        // The same with a device holding: it is asked, not refused.
+        t.transmit = {kC, true, 3};
+        affected = DisturbanceCheck::check(address, t, kA);
+        QCOMPARE(describe(affected), QStringLiteral("c+:"));
+        QVERIFY(!DisturbanceCheck::refusedOnAir(address, t, kA, affected));
+
+        // Unkeyed, nothing is frozen.
+        t.transmit = {QByteArrayLiteral("station"), false, 1};
+        t.transmit.holderAskable = false;
+        affected = DisturbanceCheck::check(own, t, kB);
+        QVERIFY(!DisturbanceCheck::refusedOnAir(own, t, kB, affected));
     }
 
     void effectNamesAreTheWireWords()

@@ -54,17 +54,32 @@
 //                 follow-up TX waterfall fix (Option 1: full WDSP
 //                 analyzer port).  AI-assisted source-first protocol
 //                 via Anthropic Claude Code.
+//   2026-09-25 : R-R3-39 (station Task 32) by J.J. Boyd (KG4VCF): with a
+//                 transmit lane every analyzer call (create, configure,
+//                 GetPixels, destroy) runs there; the poll hands the pixels
+//                 back to this object's thread. AI-assisted implementation
+//                 via Anthropic Claude Code.
+//   2026-09-25 : R-R3-39 / R-IOS-03 by J.J. Boyd (KG4VCF): applyStationRates(),
+//                 the rate and frame rate the desktop window and nereusd
+//                 both give their TX analyzer. AI-assisted implementation
+//                 via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
 
 #include <QObject>
+#include <QPointer>
 #include <QTimer>
 #include <QVector>
 
+#include <atomic>
+#include <functional>
+#include <memory>
 #include <utility>
 
 namespace NereusSDR {
+
+class DspControlThread;
 
 class TxAnalyzer : public QObject {
     Q_OBJECT
@@ -77,7 +92,11 @@ public:
     /// disp ID.
     static constexpr int kTxDispId = 5;
 
-    explicit TxAnalyzer(int dispId = kTxDispId, QObject* parent = nullptr);
+    // R-R3-39: with `lane` (RadioModel::transmitLane), every WDSP analyzer
+    // call runs there in the order it is made, and each poll's pixels come
+    // back to this object's thread; without one they run here, as before.
+    explicit TxAnalyzer(int dispId = kTxDispId, QObject* parent = nullptr,
+                        DspControlThread* lane = nullptr);
     ~TxAnalyzer() override;
 
     /// Bins to clip from the low and high ends of the FFT so the analyzer
@@ -143,6 +162,11 @@ public:
     /// analyzer overlap calculation per specHPSDR.cs:784 [v2.10.3.13+501e3f51].
     /// Default 15 fps per specHPSDR.cs:335 [v2.10.3.13+501e3f51].
     void setOutputFps(int fps);
+
+    /// The station's set-up of this analyzer, shared by the desktop window
+    /// and nereusd so the two cannot drift: the TX DSP rate (96 kHz, see
+    /// setSampleRate) and Thetis's 15 frames a second (setOutputFps).
+    void applyStationRates();
 
     /// Begin polling GetPixels at outputFps.  Called by MainWindow on
     /// MOX-up.  No-op if already running.
@@ -334,6 +358,17 @@ private:
     // From Thetis specHPSDR.cs:471 [v2.10.3.13+501e3f51] — _pixel_out
     // default = 2.
     int m_nPixout{2};
+
+    // R-R3-39: runs `job` on the lane (in call order) or, with no lane, at
+    // once. Jobs carry values, never this object.
+    void runWdsp(std::function<void()> job) const;
+    // Guarded: the desktop deletes its RadioModel (and the lane with it)
+    // before this analyzer; from then on the calls run here, after the TX
+    // channel feeding the analyzer has closed.
+    QPointer<DspControlThread> m_lane;
+    // A poll still on the lane: the next tick skips rather than queue more.
+    std::shared_ptr<std::atomic<bool>> m_pollInFlight{
+        std::make_shared<std::atomic<bool>>(false)};
 
     QTimer m_pollTimer;
     QVector<float> m_pixBuf;     // pixout=0 (spectrum trace)

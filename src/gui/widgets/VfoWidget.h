@@ -27,6 +27,16 @@
 //                 block (VAX design 6.2), with a plain notice when the
 //                 headphones are chosen but none are set up. By J.J. Boyd
 //                 (KG4VCF), with Anthropic Claude Code assistance.
+//   2026-09-25 : R-R3-49, Sub-epic C-1 DFNR hidden while it cannot run
+//                 (dfnrOffered, updateDfnrAvailability), by J.J. Boyd
+//                 (KG4VCF), with Anthropic Claude Code assistance.
+//   2026-09-25 : R-R3-49, Sub-epic C-1 (tx-followup-3) DFNR, MNR and BNR
+//                 shown disabled with the plain reason, never hidden
+//                 (nrCannotRunReason, updateNrAvailability), by J.J. Boyd
+//                 (KG4VCF), with Anthropic Claude Code assistance.
+//   2026-09-25 : R-R3-49, Sub-epic C-1 (tx-followup-4) the BNR button and
+//                 its quick controls removed (not offered for now), by J.J.
+//                 Boyd (KG4VCF), with Anthropic Claude Code assistance.
 //   2026-09-26 : R-R3-49 / R-R3-21 (remote-window parity Task 16) DFNR and
 //                 MNR offered by the station's noise reduction (the Core's
 //                 in a remote window), disabled with the plain reason and
@@ -321,6 +331,7 @@ warren@wpratt.com
 #include <QLineEdit>
 #include <QPointer>
 
+#include <array>
 #include <limits>
 #include <optional>
 
@@ -527,7 +538,7 @@ public:
     QPushButton* playButtonForTest() const { return m_playBtn; }
     // Fix wave I3: the last refused noise-reducer choice this flag showed.
     QString nrRefusalForTest() const { return m_nrRefusal; }
-    // Parity Task 16: the DSP grid's DFNR and MNR buttons.
+    // R-R3-49: the DSP grid's DFNR button (hidden while DFNR cannot run).
     QPushButton* dfnrButtonForTest() const { return m_dfnrBtn; }
     QPushButton* mnrButtonForTest() const { return m_mnrBtn; }
 
@@ -706,15 +717,13 @@ private:
     void onNnrLimitChanged(int limit);
     void requestNrSetup(NereusSDR::NrSlot slot);
     void showDfnrPopup(const QPoint& globalPos);
-    void showBnrPopup(const QPoint& globalPos);
-    void showMnrPopup(const QPoint& globalPos);
-    // Parity Task 16: why DFNR or MNR cannot be offered (the model's word,
-    // the Core's in a remote window, or this build's with no model), empty
-    // when it can; and applying that to their buttons: shown always,
-    // disabled with the reason while it cannot.
-    QString nrUnavailableReason(NereusSDR::NrSlot slot) const;
+    // R-R3-49, Sub-epic C-1: why a noise filter cannot run (the model's
+    // word, the Core's in a remote window, or this build's with no model),
+    // empty when it can; and applying that to the DSP grid's DFNR and MNR
+    // buttons: shown always, disabled with the reason while it cannot.
+    QString nrCannotRunReason(NereusSDR::NrSlot slot) const;
     void updateNrAvailability();
-    QMetaObject::Connection m_nrAvailabilityConn;
+    void showMnrPopup(const QPoint& globalPos);
 
     // Guard to prevent signal re-emission during model updates
     bool m_updatingFromModel{false};
@@ -728,6 +737,8 @@ private:
     // setRadioModel(); the contextMenuEvent falls back to a stub antenna submenu
     // when null. See setRadioModel() above for the wiring contract.
     NereusSDR::RadioModel* m_radioModel{nullptr};
+    // R-R3-49: the model's DFNR and MNR availability signals.
+    std::array<QMetaObject::Connection, 3> m_nrAvailabilityConns;
 
     // Internal helper — update m_locked + drive Close-strip lock button + emit lockChanged.
     // Called by the floating m_lockBtn toggled lambda.  X/RIT-tab Lock removed (B7).
@@ -878,12 +889,11 @@ private:
     QPushButton* m_nr3Btn  = nullptr;
     QPushButton* m_nr4Btn  = nullptr;
     QPushButton* m_dfnrBtn = nullptr;
-    QPushButton* m_bnrBtn  = nullptr;
     QPushButton* m_mnrBtn  = nullptr;
     QPushButton* m_nnrBtn  = nullptr;
     QLabel*      m_nnrLimitIndicator = nullptr;   // R-R3-40
     QString      m_nnrToolTip;
-    QString      m_dfnrToolTip;   // Parity Task 16: each one's own tooltip
+    QString      m_dfnrToolTip;   // R-R3-49: each filter's own tooltip
     QString      m_mnrToolTip;
     QPushButton*        m_anfToggle{nullptr};
     QPushButton*        m_snbToggle{nullptr};

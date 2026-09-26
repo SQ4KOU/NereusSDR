@@ -45,6 +45,10 @@
 //                refuses changes nothing and is answered as its query.
 //                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 35 (R-IOS-13, ruling 8.14): a remote
+//                window that forwards transmit leaves the trx answer to
+//                TciServer (the Core's verdict). NereusSDR-original. J.J.
+//                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #include "TciProtocol.h"
 
@@ -2121,6 +2125,13 @@ QString TciProtocol::handleTrxCommand(const QStringList& args)
             return {};
         }
         const bool mox = (boolStr == QStringLiteral("true"));
+        // iPhone app plan Task 35 (ruling 8.14): a remote window that
+        // forwards transmit hands the trx to its Core (TciServer); the
+        // server answers the app with the Core's verdict. Nothing keys here.
+        if (remoteTransmitForwarded()) {
+            (void)mox;
+            return {};
+        }
         // R-R3-42 / R-R3-25: a remote window never keys the transmitter,
         // nor does the Core's station server until remote transmit
         // (R-R3-48). No MOX write and no broadcast; the asking app alone

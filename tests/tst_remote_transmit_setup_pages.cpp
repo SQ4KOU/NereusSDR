@@ -23,6 +23,11 @@
 //                                    (seedUpgradedCoreToken), as Part C's
 //                                    paired-device sign-in requires.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Transmit group fix wave 2 (M8,
+//                                    R-IOS-13): Enable VOX shows disabled
+//                                    with the reason while this computer
+//                                    has no microphone line to the Core.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -43,6 +48,7 @@
 
 #include <memory>
 
+#include "core/safety/TxRefusal.h"
 #include "core/AppSettings.h"
 #include "core/ConnectionState.h"
 #include "core/HardwareProfile.h"
@@ -829,6 +835,20 @@ void TstRemoteTransmitSetupPages::remoteDexpPageChangesTheCoreAndVoxWaitsForTran
     page.setTransmitPermitted(false, kTransmitReason);
     page.setTransmitSettingsPermittedAt(5, true, QString());
     QVERIFY(dexp->isEnabled() && attack->isEnabled() && antiVoxGain->isEnabled());
+    QVERIFY(!vox->isEnabled());
+    QCOMPARE(vox->toolTip(), kTransmitReason);
+    // Fix wave 2 (M8): with transmit permitted, Enable VOX still waits for
+    // this computer's microphone line, disabled with the plain reason.
+    const QString noLine = TxRefusals::micNotConnected().text;
+    page.setVoxPermitted(false, noLine);
+    QCOMPARE(vox->toolTip(), kTransmitReason);
+    page.setTransmitPermitted(true, QString());
+    QVERIFY(!vox->isEnabled());
+    QCOMPARE(vox->toolTip(), noLine);
+    page.setVoxPermitted(true, QString());
+    QVERIFY(vox->isEnabled());
+    QVERIFY(vox->toolTip() != noLine);
+    page.setTransmitPermitted(false, kTransmitReason);
     QVERIFY(!vox->isEnabled());
     QCOMPARE(vox->toolTip(), kTransmitReason);
 

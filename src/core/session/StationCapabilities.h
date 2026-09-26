@@ -102,6 +102,18 @@
 //               sent only to a peer that declared sessionHolder. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic Claude
 //               Code.
+//   2026-09-25: iPhone app plan Task 34 (R-IOS-02): remoteTxVersion, last,
+//               sent only to a peer whose hello declared remoteTx; txPermitted
+//               now the station transmit gate's answer. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan, desktop remote transmit (R-IOS-13,
+//               R-R3-42): txRefusalCode, txRefusalReason and txRefusalFix
+//               after remoteTxVersion. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 39 (D14, R-IOS-13): txStateVersion,
+//               after remoteTxVersion and only with it (the `txState`
+//               object). J.J. Boyd (KG4VCF), with AI-assisted implementation
+//               via Anthropic Claude Code.
 //   2026-09-25 - R-IOS-27, R-IOS-06: bandSelectVersion, last in the
 //                minor-11 block. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
@@ -268,13 +280,13 @@ struct StationCapabilities {
     /// reading.
     int meterReadingsVersion = 0;
     /// R-R3-49 / R-R3-21 / R-R3-40 (remote-window parity Task 16): 1 means
-    /// the Core says which noise reduction it can run (`radio`
-    /// noiseReductionMethods), how long its last DSP Options apply took
-    /// (`radio` dspOptionsLastApplyMs), each slice's minimum notch width
+    /// the Core says how long its last DSP Options apply took (`radio`
+    /// dspOptionsLastApplyMs), each slice's minimum notch width
     /// (minNotchWidthHz), and takes dsp.filterResponse for the filter
     /// graph's curve. Sent in the same minor-11 block, after
-    /// meterReadingsVersion. 0 (no local radio model): a window shows DFNR
-    /// and MNR disabled with the reason and its filter curve unavailable.
+    /// meterReadingsVersion. 0 (no local radio model): a window shows its
+    /// filter curve unavailable. Which noise reduction the Core runs is
+    /// DspAssetService's (dspAssetVersion 3 and 4).
     int dspInfoVersion = 0;
     /// iPhone app Task 71 (R-IOS-02; the several-devices design, ruling
     /// 10.1): 1 means the Core admits up to four devices at once, sends the
@@ -285,6 +297,24 @@ struct StationCapabilities {
     /// are exactly today's.
     bool sessionHolderEntry = false;
     int sessionHolderVersion = 0;
+    /// iPhone app plan Task 34: remote transmit (txPermitted per session,
+    /// tx.setTxSlice, the on-air refusals). Sent last, only to a peer whose
+    /// hello declared remoteTx 1 (remoteTxEntry); 0 otherwise.
+    bool remoteTxEntry = false;
+    int remoteTxVersion = 0;
+    /// Desktop remote transmit (R-IOS-13, R-R3-42): why txPermitted is
+    /// false, as the Core's refusal (link section 18.3): its code, its
+    /// sentence and its fix. Sent right after remoteTxVersion and only with
+    /// it; all three empty while permitted.
+    QString txRefusalCode;
+    QString txRefusalReason;
+    QString txRefusalFix;
+    /// iPhone app plan Task 39 (D14, R-IOS-13): 1 means the Core sends the
+    /// read-only `txState` object (TransmitState: keyed, who keyed, the
+    /// time left, the transmit meters and why the Core last stopped a
+    /// transmission). Sent after remoteTxVersion and its three txRefusal*
+    /// entries, and only with them.
+    int txStateVersion = 0;
 
     /// Whether the DAEMON currently holds a live radio connection. A
     /// client that authenticated against a daemon whose radio is powered

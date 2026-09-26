@@ -84,6 +84,10 @@ public:
     // (the dialog stays at its first page).
     bool selectNavigationTarget(const QString& pageKey);
     void setTransmitPermitted(bool permitted, const QString& reason = QString());
+    // Fix wave 2 (M8): whether VOX can hear this computer (its microphone
+    // line to the Core is open), pushed to every realized page
+    // (SetupPage::setVoxPermitted). True in a local window.
+    void setVoxPermitted(bool permitted, const QString& reason = QString());
     // R-R3-49 (parity Task 1): the transmit settings gate, pushed to every
     // realized page (SetupPage::setTransmitSettingsPermitted). True in a
     // local window; MainWindow pushes it in a remote one.
@@ -319,6 +323,8 @@ private:
     QLabel*         m_transmitNotice = nullptr;
     bool            m_transmitPermitted = false;
     QString         m_transmitReason;
+    bool            m_voxPermitted = true;   // fix wave 2 (M8)
+    QString         m_voxReason;
     bool            m_transmitSettingsPermitted = false;  // R-R3-49
     QString         m_transmitSettingsReason;              // R-R3-49
     // R-R3-49 (parity Task 3): the gate for each later transmitSettingsVersion.

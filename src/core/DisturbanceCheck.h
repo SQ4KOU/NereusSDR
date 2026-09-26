@@ -41,6 +41,12 @@
 //   2026-09-25: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 75 (R-IOS-30), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave 2: every holder on the air counts,
+//               the station device's own keys included (onAirHolder),
+//               exempt by change not by holder; ruling 8.11's freeze on
+//               every path (XIT, pan moves, a stored change at proceed); a
+//               hosting desktop's key named after it. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -77,6 +83,14 @@ public:
         QByteArray holder;
         bool keyed = false;
         int txSliceId = -1;
+        /// Ruling 8.11: the transmit slice while the station device is
+        /// keyed, whoever owns it; -1 otherwise. No take, move or rate
+        /// change may touch it.
+        int frozenSliceId = -1;
+        /// Whether the holder can be asked and told (ruling 7.8). False for
+        /// the station device, which has no session: it still counts for
+        /// refusedOnAir, but a change it alone would disturb applies.
+        bool holderAskable = true;
     };
 
     struct Topology {
@@ -139,8 +153,11 @@ public:
     /// Ruling 7.4 (D60): whether the change must be refused because the
     /// transmit holder, another device than `requester`, is on the air: it
     /// touches the transmit path, stops the radio's data flow, or would
-    /// move or close the holder's transmit slice. `affected` is check()'s
-    /// answer for the same change. Never true while nobody holds transmit.
+    /// move or close the holder's transmit slice, whoever owns that slice
+    /// (the requester's own included). Ruling 8.11: a rate change that
+    /// reaches the frozen slice at all is refused too. `affected` is
+    /// check()'s answer for the same change. Never true while nobody holds
+    /// transmit.
     static bool refusedOnAir(const Scope& scope, const Topology& topology,
                              const QByteArray& requester, const QList<Affected>& affected);
 

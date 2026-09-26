@@ -6,6 +6,12 @@
 // coordination; it contains neither GUI nor radio control policy.
 //
 // Modification history (NereusSDR):
+//   2026-09-25: iPhone app plan Task 36 (R-IOS-13): the microphone line.
+//               A start carrying remoteTxVersion gets it; its receiver
+//               feeds RadioModel's remote microphone ring; keys wait on it
+//               (RemoteKeying::MicUplink); VOX armed and starvation follow
+//               the device. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 //   2026-09-25 - iPhone app plan Task 76 (R-IOS-31; the several-devices
 //                design, rulings 9.1 to 9.4): one controller per admitted
 //                session (DaemonMediaHub), each bound to its session's
@@ -16,6 +22,12 @@
 //                PureSignal display only to its subscriber. J.J. Boyd
 //                (KG4VCF), with AI-assisted implementation via Anthropic
 //                Claude Code.
+//   2026-09-26: Transmit group fix wave C2: each controller opens and
+//               closes only its own device's line and writes the feed
+//               only while it is the writer; the hub routes the keying's
+//               view of the lines by device; VOX another device armed is
+//               never this one's. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/NoiseFloorEstimator.h"
@@ -26,7 +38,9 @@
 #include "core/session/media/DisplayExtras.h"
 #include "core/session/media/MediaPeer.h"
 #include "core/session/media/RemoteAudioContext.h"
+#include "core/session/media/RemoteMicReceiver.h"
 #include "core/session/media/SpectrumEndpoint.h"
+#include "core/session/RemoteKeying.h"
 
 #include <QElapsedTimer>
 #include <QJsonObject>
@@ -282,6 +296,22 @@ public:
     /// What the display load governor scales when the Core is busy.
     DisplayBudgetCharge acceptedDisplayCharge() const;
 
+    /// iPhone app plan Task 36 (R-IOS-13): the media connection's microphone
+    /// line receiver, while its start carried remoteTxVersion; null
+    /// otherwise. Its starved(bool) is the Core's starvation signal.
+    RemoteMicReceiver* micReceiver() const { return m_micReceiver.get(); }
+    /// Task 36: the keying's view of the line (RemoteKeying::setMicUplink;
+    /// a controller on its own installs it on the Core's RemoteKeying, and
+    /// DaemonMediaHub installs one that routes by device, fix wave C2).
+    RemoteKeying::MicUplink micUplink();
+    /// Fix wave C2: the device this controller's microphone line is for
+    /// (empty without a line), whether it carries the line now, and its
+    /// key's wait on the line's buffer.
+    QByteArray micDeviceId() const { return m_micDeviceId; }
+    bool carriesMicFor(const QByteArray& deviceId) const;
+    void primeMic(std::function<void(bool)> done);
+    void endMicPriming();
+
 private:
     struct EndpointEntry;
     struct AllocationRecord {
@@ -386,6 +416,11 @@ private:
     /// end (DaemonAudioSenderTelemetry::captureTimestamp/captureNs); all
     /// three are 0 when no audio context is capturing.
     bool handleClockProbe(const QJsonObject& control, qint64 receivedNs);
+    // Task 36: the microphone line.
+    void startMicLine(MediaPeer* peer);
+    void stopMicLine();
+    void refreshMicVoxArmed();
+    void refreshMicWatching();
     bool acceptPeerControl(const QJsonObject& control);
 
     void clearSession();
@@ -534,6 +569,10 @@ private:
     HeadphonesAudioStream m_headphones;
     quint32 m_nextHeadphonesContextGeneration{0};
     bool m_headphonesRouted{false};
+    // Task 36: the microphone line of the current media peer, and the
+    // device it is for.
+    std::unique_ptr<RemoteMicReceiver> m_micReceiver;
+    QByteArray m_micDeviceId;
     std::map<quint32, EndpointEntry> m_endpoints;
     QTimer m_sendTimer;
     QTimer m_audioDiagnosticsTimer;

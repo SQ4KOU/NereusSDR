@@ -390,6 +390,39 @@ if(TARGET wdsp_static)
     # leave its loop before freeing its memory (dsplock.c). REALTIME: it
     # holds an idle teardown's wait to the worker's measured wake-up time.
     nereus_add_test(tst_wdsp_channel_shutdown EXTRA_LABELS core REALTIME)
+    # R-R3-39: the DSP control lanes (ordering, keyed jobs, barriers,
+    # request completion) and the WDSP caller check that counts WDSP calls
+    # made from the event loop. wdsp_static arrives through the core
+    # library. REALTIME: it holds the event loop's 10 ms timer and every
+    # post() to wall-clock bounds while a lane waits on a 200 ms DSP block.
+    nereus_add_test(tst_dsp_control_thread EXTRA_LABELS core REALTIME)
+    # R-R3-39 (Task 31): receive DSP off the event loop. Two real channels
+    # on the receive lane with 150 ms blocks take setters, an off and on, a
+    # rate change and a destroy and recreate with no WDSP call on the event
+    # loop; the live rate change returns at once and finishes once; the
+    # MeterPoller reads the lane's cache. REALTIME: it holds the event
+    # loop's 10 ms timer to a wall-clock bound while the lane waits.
+    nereus_add_test(tst_dsp_control_receive EXTRA_LABELS core REALTIME)
+    # Its first OpenChannel plans FFTs with no wisdom (about 30 s alone, over
+    # 100 s under a loaded build), so the default 120 s is too close.
+    set_tests_properties(tst_dsp_control_receive PROPERTIES TIMEOUT 900)
+    # R-R3-39 (Task 32): transmit DSP off the event loop. A real TX channel
+    # on the transmit lane keeps the rf_delay keying order; twenty MOX, TUNE
+    # and two-tone cycles with the PureSignal poll make no WDSP call on the
+    # event loop while both lanes' channels run 200 ms blocks; setters queued
+    # before a rebuild never run; the unkey drain is measured. REALTIME: it
+    # holds the event loop's 10 ms timer to a wall-clock bound. Its first
+    # OpenChannel plans FFTs with no wisdom, hence the 900 s timeout.
+    nereus_add_test(tst_dsp_control_transmit EXTRA_LABELS core REALTIME)
+    set_tests_properties(tst_dsp_control_transmit PROPERTIES TIMEOUT 900)
+    # Task 33 (R-IOS-03): stopping transmission at once. With both lanes
+    # held for 200 ms, stopTransmitNow returns within 2 ms with the RF gate
+    # shut and MOX off at the connection before either lane is free, and no
+    # TX block follows it; the normal unkey drains before the hardware flip
+    # (Thetis's order). REALTIME: wall-clock bounds on real channels; the
+    # first OpenChannel plans FFTs with no wisdom, hence the 900 s timeout.
+    nereus_add_test(tst_stop_transmit_now EXTRA_LABELS core REALTIME)
+    set_tests_properties(tst_stop_transmit_now PROPERTIES TIMEOUT 900)
     if(NOT WIN32)
         # R-R3-41: linux_port.c's thread-start hook fires once per channel
         # worker and flush thread, on that thread, with its kind and channel.
@@ -2127,6 +2160,32 @@ nereus_add_test(tst_stream_pool_binding)
 # delivers I/Q paced in real time.
 nereus_add_test(tst_rx_channel_stop_feed REALTIME)
 
+# R-R3-39, Sub-epic C-1: an RxChannel loads the DeepFilterNet3 model only at
+# its first DFNR selection, on its receive lane, never in the constructor, so
+# a connect's five channels load nothing.
+nereus_add_test(tst_rx_channel_dfnr_lazy)
+
+# R-R3-49, Sub-epic C-1: DFNR is offered only while it can run. No model (or
+# no DFNR in the build) hides the VFO flag's DFNR button and refuses DFNR; a
+# model failing at a channel's first selection turns it off with the reason;
+# a remote window follows the Core's mirrored dfnrRunnable.
+nereus_add_test(tst_dfnr_availability EXTRA_LABELS gui)
+
+# R-R3-49, Sub-epic C-1: MNR and BNR stay on the VFO flag, disabled with the
+# plain reason when they cannot run (MNR only on a Mac Core, mirrored to a
+# window; BNR in no build), and choosing them is refused.
+nereus_add_test(tst_mnr_bnr_availability EXTRA_LABELS gui)
+
+# D14, R-R3-49: every NereusSDR TX meter maps to the WDSP txaMeterType index
+# Thetis reads for it (wdspTxaMeterIndex); the expected indices are written
+# by hand from the compiled third_party/wdsp/src/TXA.h.
+nereus_add_test(tst_tx_meter_index)
+
+# D14, R-R3-49: every WDSP-read TX meter binding shows Thetis's reading
+# (CalculateTXMeter's alcgain and sign, then console.cs's MOX-branch floors);
+# the expected values are worked by hand from Thetis v2.10.3.15.
+nereus_add_test(tst_tx_meter_reading)
+
 # ── Tunable Notch Filter Task 1: the notch DB's tune frequency ─────────────
 # WDSP maps absolute-Hz notch centres into a channel's passband with
 # offset = tunefreq + shift (third_party/wdsp/src/nbp.c:192). tunefreq had
@@ -2999,6 +3058,12 @@ nereus_add_test(tst_general_setup_hardware_config)
 nereus_add_test(tst_general_options_page_rx_only)
 target_compile_definitions(tst_general_options_page_rx_only PRIVATE NEREUS_BUILD_TESTS)
 
+# A disabled control on a page styled by Style::applyDarkPageStyle looks
+# disabled (the style guide's disabled colours) and an enabled one keeps the
+# page style: the operator's rule that a control that cannot run is shown
+# disabled with its reason.
+nereus_add_test(tst_dark_page_disabled_look)
+
 # ── Phase 3M-0 Task 13: Options group box on Setup → General ─────────────────
 # Verifies grpGeneralOptions has chkPreventTXonDifferentBandToRX per
 # Thetis setup.designer.cs:9050-9059 [v2.10.3.13]. Tooltip NereusSDR-original
@@ -3561,6 +3626,27 @@ nereus_add_test(tst_radio_model_dexp_routing)
 # all-steps-fire, slot connectable via QObject::connect.
 nereus_add_test(tst_radio_model_mox_hardware_flip)
 target_compile_definitions(tst_radio_model_mox_hardware_flip PRIVATE NEREUS_BUILD_TESTS)
+
+# Task 33 (R-IOS-03): RadioModel::stopAllTx, ported from Thetis console.cs
+# StopAllTx. MOX, TUNE and two-tone each end with all four keying states
+# off and one transmitStopped; nothing keyed does nothing; a held PTT does
+# not key again until released; a key queued before the stop does not key.
+nereus_add_test(tst_radio_model_stop_all_tx)
+target_compile_definitions(tst_radio_model_stop_all_tx PRIVATE NEREUS_BUILD_TESTS)
+
+# ── iPhone app plan Task 38 (R-IOS-04, D29): the transmit time-out ─────────
+# TxTimeOutTimer (Thetis TimeOutTimerManager) with an injected clock and
+# pinger: the MOX time-out from the rising edge, the ping time-out, the
+# remaining seconds; on a model with a mock radio: a phone's key stops
+# between 180 and 181 s, a computer's never with Thetis's defaults, TUNE and
+# two-tone stop too, and a limit changed while keyed counts from key-down.
+nereus_add_test(tst_tx_time_out_timer)
+target_compile_definitions(tst_tx_time_out_timer PRIVATE NEREUS_BUILD_TESTS)
+
+# The Options page's Time Out Timers group: Thetis's labels and ranges, the
+# phone and iPad row, the Station-scoped keys it writes, the host check.
+nereus_add_test(tst_general_options_time_out)
+target_compile_definitions(tst_general_options_time_out PRIVATE NEREUS_BUILD_TESTS)
 
 # ── Phase 3M-1a Task F.2: StepAttenuatorController TX-path activation ─────────
 # Verifies onMoxHardwareFlipped(bool isTx) slot and its four helpers:
@@ -5412,6 +5498,15 @@ if(Qt6WebSockets_FOUND)
     target_link_libraries(tst_tci_audio_roundtrip PRIVATE Qt6::WebSockets)
 endif()
 
+# R-R3-39: TCI receive audio's WDSP resampler runs on the receive lane. With
+# apps subscribed at 12 kHz stereo, 24 kHz mono (changed to 8 kHz mid-stream)
+# and 48 kHz, through audio_stop, a disconnect and the server's stop, the
+# event loop makes no WDSP call, and every block matches a lane-less server's.
+if(Qt6WebSockets_FOUND)
+    nereus_add_test(tst_tci_rx_audio_lane EXTRA_LABELS core)
+    target_link_libraries(tst_tci_rx_audio_lane PRIVATE Qt6::WebSockets)
+endif()
+
 # ── Phase 3J-1 Task 18.1: IQ binary stream pipeline + IQSwap + AlwaysStreamIQ ──
 # Spins up a real TciServer + real QWebSocket client, subscribes to IQ for
 # slice 0, injects synthetic I/Q via the test-only injectRawIqForTest hook,
@@ -6266,8 +6361,10 @@ target_link_libraries(tst_station_rfkit_controller PRIVATE Qt6::Network)
 # R-R3-48 / R-R3-25: the Core's station TCI server (where it listens, the
 # switch it keeps, what an app at the station hears, transmit refused), the
 # RF-Kit's band follow over it, and the app's one TCI switch. Loopback only.
+# iPhone app plan Task 35 (ruling 8.14): the Core's own server never keys,
+# with transmit unheld or held by a device (a Core over the loopback).
 if(Qt6WebSockets_FOUND)
-    nereus_add_test(tst_station_tci_server)
+    nereus_add_test(tst_station_tci_server fakes/LoopbackTransport.cpp)
     target_link_libraries(tst_station_tci_server PRIVATE Qt6::WebSockets Qt6::Network)
 endif()
 
@@ -7160,7 +7257,7 @@ nereus_add_test(tst_slice_meter_pump_readings
 
 # Remote-window parity Task 16 (R-R3-49, R-R3-21, R-R3-40): DSP facts from the
 # Core under dspInfoVersion 1. The flag, NR/ANF and DSP > NR offer DFNR and
-# MNR by the Core's noiseReductionMethods; the TNF page and a real remote
+# MNR by the Core's DspAssetService word (dfnrRunnable, mnrRunnable); the TNF page and a real remote
 # window's pan follow the Core's minNotchWidthHz; dsp.filterResponse's bins,
 # resampled in the window, are the curve the Core's channel draws; "Time to
 # last change" is the Core's. Loopback and a fake radio only, no RF, no
@@ -7511,7 +7608,43 @@ nereus_add_test(tst_station_devices
 # redial arithmetic) over an injected clock, and several devices signed in
 # at once over the in-process loopback.
 nereus_add_test(tst_device_session_registry EXTRA_LABELS session)
+# iPhone app plan Task 34 (R-IOS-13, R-IOS-02, R-IOS-03): transmit
+# refusals, the station transmit gate, the unkey-confirmed gate, the
+# transmit holder and its transfer, the keying gate on press edges, and the
+# on-air refusals.
+nereus_add_test(tst_tx_refusal)
+nereus_add_test(tst_station_tx_gate)
+nereus_add_test(tst_unkey_gate)
+nereus_add_test(tst_transmit_holder)
+nereus_add_test(tst_keying_gate)
+nereus_add_test(tst_on_air_refusals
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
 nereus_add_test(tst_station_multi_session
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+# iPhone app plan Task 35 (R-IOS-13): keying from a remote device (tx.key,
+# tx.unkey, tx.tune, tx.twoTone): every refusal, holder and gate rule, the
+# keying epoch and its copies, the reconnect, and keyedBy.
+nereus_add_test(tst_remote_keying
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+# iPhone app plan Task 37 (R-IOS-13; remote design sections 12.1 and 12.3):
+# the transmit watchdog's rules and the per-mode starvation action, on an
+# injected clock; and the watchdog on each path that exists, severed with
+# a key on (real time).
+nereus_add_test(tst_remote_tx_watchdog EXTRA_LABELS session)
+nereus_add_test(tst_starvation_policy EXTRA_LABELS session)
+nereus_add_test(tst_tx_link_loss_each_path
+    fakes/LoopbackTransport.cpp
+    REALTIME
+    EXTRA_LABELS session)
+# iPhone app plan Task 39 (D14, R-IOS-13, R-IOS-21): the Core's transmit
+# meter pump, and the mirrored `txState` object (TransmitState): who keyed,
+# the time left, the meters ten times a second while keyed, and why the Core
+# last stopped a transmission.
+nereus_add_test(tst_tx_meter_pump)
+nereus_add_test(tst_transmit_state_facade
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
 # iPhone app Task 73 (R-IOS-02): whose each slice is (owners, held for,
@@ -7839,6 +7972,27 @@ nereus_add_test(tst_session_link_loss
 # loopback handshake inside a fixed 10 s wait, which misses at load 20-30.
 nereus_add_test(tst_media_transport REALTIME)
 
+# iPhone app plan Task 36 (R-IOS-13): the microphone uplink at the Core: the
+# feed's 60 ms target and 120 ms maximum, a tone through 1 % loss, a sender
+# 200 ppm fast and slow for 10 simulated minutes, the key's wait and
+# starvation. Injected clocks throughout.
+nereus_add_test(tst_remote_mic_receiver)
+# Two 10-minute runs of simulated time through WDSP rmatch take tens of
+# seconds of processor time; the default 120 s would trip on a loaded
+# machine, as it would for any heavy computation.
+if(TEST tst_remote_mic_receiver)
+    set_tests_properties(tst_remote_mic_receiver PROPERTIES TIMEOUT 600)
+endif()
+
+# iPhone app plan Task 36 (R-IOS-13): the remote microphone ring at the
+# transmitter: the pump's branch in the normal and RADE paths, the Core's
+# microphone line, keying on a filled buffer (micNotReady), VOX from the
+# device, and the monitor in the remote audio.
+nereus_add_test(tst_tx_worker_remote_ring
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_tx_worker_remote_ring PRIVATE NEREUS_BUILD_TESTS)
+
 # Remote Daemon R3, Task 1: strict connection-scoped signalling bridge and
 # live queued-control exchange over the encrypted media transport.
 nereus_add_test(tst_media_peer)
@@ -7954,6 +8108,20 @@ nereus_add_test(tst_remote_spectrum_render)
 # subscription lifecycle, stale context rejection, and teardown.
 nereus_add_test(tst_remote_media_controller
     fakes/LoopbackTransport.cpp)
+
+# iPhone app plan, desktop remote transmit (R-IOS-13, R-R3-42): the window's
+# side of the transmit verbs (copies, epochs, releases) on its own.
+nereus_add_test(tst_remote_transmit_client EXTRA_LABELS session)
+
+# iPhone app plan, desktop remote transmit (R-IOS-13, R-R3-42): a remote
+# window keys a real in-process Core (MOX, TUNE, two-tone, the microphone,
+# VOX and TCI) through the transmit verbs; nothing keys a real radio and
+# the window's microphone is a test bus.
+if(Qt6WebSockets_FOUND)
+    nereus_add_test(tst_remote_window_transmit
+        fakes/LoopbackTransport.cpp)
+    target_link_libraries(tst_remote_window_transmit PRIVATE Qt6::WebSockets)
+endif()
 
 # Remote Daemon R3 daemon controller: authenticated session/media lifecycle,
 # real FFT/display production, stale control rejection, and slice cleanup.

@@ -7,6 +7,11 @@
 //
 // Design: docs/architecture/2026-09-22-optional-microphone-capture-design.md
 // (Ownership and interfaces; Process and PCM contract).  Requirement R-R3-36.
+//
+// Modification history (NereusSDR):
+//   2026-09-25: iPhone app plan Task 36 (R-IOS-13): a remote window's
+//               microphone uplink is a demand too (Demand::RemoteWindow).
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -66,7 +71,9 @@ class CaptureSupervisor final : public QObject {
     Q_OBJECT
 
 public:
-    enum class Demand { LocalSession, TestMic };
+    /// RemoteWindow (iPhone app plan Task 36): a remote window sending the
+    /// microphone chosen in Audio > Devices to its Core, while it transmits.
+    enum class Demand { LocalSession, TestMic, RemoteWindow };
 
     struct Status {
         enum class State { Closed, PreparingPermission, Opening, Ready, Failed, Stopping };

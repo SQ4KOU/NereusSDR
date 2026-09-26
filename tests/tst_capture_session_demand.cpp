@@ -377,6 +377,17 @@ private slots:
     // disconnect and a reconnect both finish while the helper still hangs.
     void hangingHelperDoesNotDelayConnectOrDisconnect()
     {
+        // R-R3-39: the receive channels open on the receive lane, so a cold
+        // first connect no longer holds the event loop while FFTW plans; the
+        // hanging helper's 10 s open timeout would then run out before the
+        // check below. Plan first with a helper that answers, so the measured
+        // connect is warm, as the reconnect below already is.
+        {
+            auto warm = ConnectableRadioModel::create(
+                10000, RadioModel::Role::Local, withFakeHelper(QStringLiteral("ready"), false));
+            QVERIFY(warm);
+            QVERIFY(warm->model().waitForReceiveLaneForTest());
+        }
         HangMarkers markers;
         QVERIFY(markers.isValid());
         QElapsedTimer connectTimer;

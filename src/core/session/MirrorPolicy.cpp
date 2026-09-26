@@ -42,6 +42,12 @@
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-24 - R-R3-49 fix wave: RadioModel transmitting Outbound. J.J.
 //                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49, Sub-epic C-1: DspAssetService's dfnrModelStatus
+//                and dfnrRunnable, Outbound. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49, Sub-epic C-1: DspAssetService's mnrStatus and
+//                mnrRunnable, Outbound. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 //   2026-09-24 - iPhone app Task 13 (R-IOS-08): StationDevicesFacade, all
 //                 Outbound. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
@@ -73,6 +79,15 @@
 //                 Claude Code.
 //   2026-09-25 - iPhone app Task 73 (R-IOS-02): SliceMarker, all Outbound.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 35 (R-IOS-13): TransmitModel's mox
+//                 and tune Outbound (the transmit verbs key). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan, desktop remote transmit (R-IOS-13):
+//                 TransmitModel's voxEnabled Bidirectional. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 39 (D14, R-IOS-13): TransmitState,
+//                 all Outbound. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 //   2026-09-25 - R-R3-49 (parity Task 10): AccessoryDataModel's five
 //                 rfkit* connection counts Outbound. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
@@ -87,10 +102,27 @@
 //                 AGC readings (adcPeakDbfs, adcAverageDbfs, agcGainDb,
 //                 agcPeakDb, agcAverageDb) Outbound. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave: I4 TransmitState's holder
+//               properties Outbound. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave 2, the re-review's minors:
+//               holderTransferring true while keys are refused for a
+//               transfer's reasons (a dropped holder's fence, a transfer
+//               ended with MOX on); stopEpoch names the key a stop ended so
+//               a newer key is never ended by it; VOX at the Core listens
+//               only to the device that armed it; the window says why MOX
+//               and TUNE wait while another device holds. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 //   2026-09-26 - R-R3-49 / R-R3-21 / R-R3-40 (parity Task 16): RadioModel
 //                 noiseReductionMethods and dspOptionsLastApplyMs, SliceModel
 //                 minNotchWidthHz, all Outbound. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-R3-49 (trunk merge of parity Tasks 16 to 18):
+//                 noiseReductionMethods dropped (DspAssetService is the one
+//                 noise reduction source); an older Core's DFNR and MNR are
+//                 shown disabled with the "does not say" reason. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -351,9 +383,13 @@ const MirrorPolicy::Entry kEntries[] = {
     // minimum notch width (RadioModel::refreshSliceMinNotchWidths).
     { "SliceModel", "minNotchWidthHz", MirrorDirection::Outbound },
 
-    // ---- TransmitModel (85 entries) ----
-    { "TransmitModel", "mox", MirrorDirection::Bidirectional },
-    { "TransmitModel", "tune", MirrorDirection::Bidirectional },
+    // ---- TransmitModel (86 entries) ----
+    // iPhone app plan Task 35 (R-IOS-13): MOX and TUNE travel from the
+    // Core only. A remote device keys with the transmit verbs (tx.key,
+    // tx.tune), which pass the Core's gates; a property write never keys
+    // (StationServer refuses it: "Use the transmit button.").
+    { "TransmitModel", "mox", MirrorDirection::Outbound },
+    { "TransmitModel", "tune", MirrorDirection::Outbound },
     { "TransmitModel", "power", MirrorDirection::Bidirectional },
     { "TransmitModel", "micGain", MirrorDirection::Bidirectional },
     { "TransmitModel", "pureSig", MirrorDirection::Bidirectional },
@@ -452,6 +488,10 @@ const MirrorPolicy::Entry kEntries[] = {
     { "TransmitModel", "twoToneInvert", MirrorDirection::Bidirectional },
     { "TransmitModel", "twoToneFreq2Delay", MirrorDirection::Bidirectional },
     { "TransmitModel", "twoToneDrivePowerSource", MirrorDirection::Bidirectional },
+    // Desktop remote transmit (R-IOS-13): a remote window arms the Core's
+    // VOX. A write is the permitted sessions' only (the station transmit
+    // gate), and the Core turns VOX off at every change of holder.
+    { "TransmitModel", "voxEnabled", MirrorDirection::Bidirectional },
 
     // ---- TunerModel (21 entries) ----
     { "TunerModel", "relayC1", MirrorDirection::Outbound },
@@ -496,6 +536,19 @@ const MirrorPolicy::Entry kEntries[] = {
     // refuses turning NR3 on with nr3ModelStatus. An older Core never sends
     // it and the window keeps its default, true.
     { "DspAssetService", "nr3Runnable", MirrorDirection::Outbound },
+    // R-R3-49, Sub-epic C-1 (dspAssetVersion 3): the same pair for DFNR. A
+    // window shows DFNR disabled with dfnrModelStatus while dfnrRunnable is
+    // false. An older Core never sends them; the window then shows DFNR
+    // disabled with "This Core does not say which noise reduction it can
+    // run." (RadioModel::nrCannotRunReason, parity Task 16's rule).
+    { "DspAssetService", "dfnrModelStatus", MirrorDirection::Outbound },
+    { "DspAssetService", "dfnrRunnable", MirrorDirection::Outbound },
+    // R-R3-49, Sub-epic C-1 (dspAssetVersion 4): the same pair for MNR,
+    // which runs only on a Mac. A window shows MNR disabled with mnrStatus
+    // while mnrRunnable is false; an older Core (below 4) never sends them,
+    // and the window shows MNR disabled with the same "does not say" reason.
+    { "DspAssetService", "mnrStatus", MirrorDirection::Outbound },
+    { "DspAssetService", "mnrRunnable", MirrorDirection::Outbound },
 
     // R-R3-21 / R-R3-09 (notchControlVersion 1): the Core's notch list. The
     // list and its revision are Outbound; a window changes the list only
@@ -762,6 +815,42 @@ const MirrorPolicy::Entry kEntries[] = {
     { "SliceMarker", "streamIndex", MirrorDirection::Outbound },
     { "SliceMarker", "psPaused", MirrorDirection::Outbound },
 
+    // iPhone app plan Task 39 (D14, R-IOS-13, txStateVersion 1): the Core's
+    // transmitter, read-only. It changes only as the radio keys, unkeys and
+    // reads its meters, and as the Core stops a transmission.
+    { "TransmitState", "keyed", MirrorDirection::Outbound },
+    { "TransmitState", "tuning", MirrorDirection::Outbound },
+    { "TransmitState", "twoTone", MirrorDirection::Outbound },
+    { "TransmitState", "txSliceId", MirrorDirection::Outbound },
+    { "TransmitState", "keyedByName", MirrorDirection::Outbound },
+    { "TransmitState", "keyedByKind", MirrorDirection::Outbound },
+    { "TransmitState", "keyedTrigger", MirrorDirection::Outbound },
+    { "TransmitState", "keyedSinceMs", MirrorDirection::Outbound },
+    { "TransmitState", "timeOutRemainingSeconds", MirrorDirection::Outbound },
+    { "TransmitState", "forwardPowerWatts", MirrorDirection::Outbound },
+    { "TransmitState", "reflectedPowerWatts", MirrorDirection::Outbound },
+    { "TransmitState", "swr", MirrorDirection::Outbound },
+    { "TransmitState", "alcDb", MirrorDirection::Outbound },
+    { "TransmitState", "micLevelDb", MirrorDirection::Outbound },
+    { "TransmitState", "txEnding", MirrorDirection::Outbound },
+    { "TransmitState", "stopReason", MirrorDirection::Outbound },
+    { "TransmitState", "stopText", MirrorDirection::Outbound },
+    { "TransmitState", "stopSerial", MirrorDirection::Outbound },
+    // Fix wave I4 (txStateVersion 2): who holds transmit, and how long the
+    // key has been on. The Core's report.
+    { "TransmitState", "holderDeviceId", MirrorDirection::Outbound },
+    { "TransmitState", "holderName", MirrorDirection::Outbound },
+    { "TransmitState", "holderShortName", MirrorDirection::Outbound },
+    { "TransmitState", "holderKind", MirrorDirection::Outbound },
+    { "TransmitState", "holderSource", MirrorDirection::Outbound },
+    { "TransmitState", "holderForSeconds", MirrorDirection::Outbound },
+    { "TransmitState", "holderEpoch", MirrorDirection::Outbound },
+    { "TransmitState", "holderAway", MirrorDirection::Outbound },
+    { "TransmitState", "holderTransferring", MirrorDirection::Outbound },
+    { "TransmitState", "keyedForSeconds", MirrorDirection::Outbound },
+    // Fix wave 2: the keying epoch of the key the last stop ended.
+    { "TransmitState", "stopEpoch", MirrorDirection::Outbound },
+
     // Normal PS3 configuration is distinct from operational arming/actions.
     { "PureSignalSettings", "autoCalEnabled", MirrorDirection::Bidirectional },
     { "PureSignalSettings", "runCalibrationProcessing", MirrorDirection::Bidirectional },
@@ -811,9 +900,9 @@ const MirrorPolicy::Entry kEntries[] = {
     // R-R3-49 (parity Task 6): the Core's TX inhibit, Core to window only.
     { "RadioModel", "txInhibited", MirrorDirection::Outbound },
     // R-R3-49 / R-R3-21 / R-R3-40 (parity Task 16, dspInfoVersion 1): the
-    // noise reduction the Core can run and its last DSP Options apply time,
-    // Core to window only.
-    { "RadioModel", "noiseReductionMethods", MirrorDirection::Outbound },
+    // Core's last DSP Options apply time, Core to window only. Which noise
+    // reduction the Core runs is DspAssetService's (dfnrRunnable,
+    // mnrRunnable), the one source.
     { "RadioModel", "dspOptionsLastApplyMs", MirrorDirection::Outbound },
 
     // ---- PanadapterModel (4 entries) ----

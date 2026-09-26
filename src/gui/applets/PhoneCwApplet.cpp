@@ -41,6 +41,10 @@
 //                 and zones come from ControlRanges.h, which the Core's
 //                 catalogue reads too. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 39 (D14, R-IOS-13): the compression
+//                 gauge can be shown unavailable with a reason (a remote
+//                 window's Core does not send it yet). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 //   2026-09-24 - R-R3-49 (parity Task 2): the mic level, PROC and its
 //                 level, AM carrier and DEXP follow the transmit settings
 //                 gate (setTransmitSettingsPermitted), not the keying gate.
@@ -1408,6 +1412,27 @@ void PhoneCwApplet::setCompressionReading(double dB)
     // non-finite value, draws an empty gauge.
     const double v = std::isfinite(dB) ? std::clamp(dB, -25.0, 0.0) : -25.0;
     m_compGauge->setValue(v);
+}
+
+void PhoneCwApplet::setCompressionUnavailable(const QString& reason)
+{
+    if (!m_compGauge) { return; }
+    static constexpr auto kSavedTooltip = "PhoneCwSavedCompressionTooltip";
+    if (!reason.isEmpty()) {
+        if (!m_compGauge->property(kSavedTooltip).isValid()) {
+            m_compGauge->setProperty(kSavedTooltip, m_compGauge->toolTip());
+        }
+        m_compGauge->setUnavailable(true);
+        m_compGauge->setToolTip(reason);
+        m_compGauge->setAccessibleDescription(reason);
+        return;
+    }
+    m_compGauge->setUnavailable(false);
+    if (m_compGauge->property(kSavedTooltip).isValid()) {
+        m_compGauge->setToolTip(m_compGauge->property(kSavedTooltip).toString());
+        m_compGauge->setProperty(kSavedTooltip, QVariant());
+    }
+    m_compGauge->setAccessibleDescription(QString());
 }
 
 void PhoneCwApplet::rebuildMicProfileCombo()

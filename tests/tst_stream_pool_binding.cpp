@@ -540,6 +540,8 @@ private slots:
         // 14.400 sits outside +-96 kHz but inside +-384 kHz, so it only
         // fits once the window is widened.
         model.setStreamSampleRate(0, 768000);
+        // R-R3-39: the WDSP and worker sides of the change run on the receive lane.
+        QVERIFY(model.waitForReceiveLaneForTest());
 
         const int b = model.addSlice();
         model.slices().at(b)->setFrequency(14400000.0);
@@ -561,6 +563,8 @@ private slots:
         QSignalSpy assignments(&model, &RadioModel::ddcAssignmentRequested);
 
         QVERIFY(model.setStreamSampleRate(0, 768000));
+        // R-R3-39: the WDSP and worker sides of the change run on the receive lane.
+        QVERIFY(model.waitForReceiveLaneForTest());
 
         QCOMPARE(model.streamSampleRateHzForTest(0), 768000);
         QCOMPARE(model.sliceById(a)->sampleRateHz(), 768000);
@@ -582,6 +586,8 @@ private slots:
         QSignalSpy assignments(&model, &RadioModel::ddcAssignmentRequested);
 
         QVERIFY(!model.setStreamSampleRate(0, 0));
+        // R-R3-39: the WDSP and worker sides of the change run on the receive lane.
+        QVERIFY(model.waitForReceiveLaneForTest());
 
         QCOMPARE(model.streamSampleRateHzForTest(0), 192000);
         QCOMPARE(model.sliceById(a)->sampleRateHz(), 192000);
@@ -598,6 +604,8 @@ private slots:
         const int a = model.addSlice();
         model.slices().at(a)->setFrequency(14200000.0);
         model.setStreamSampleRate(0, 768000);
+        // R-R3-39: the WDSP and worker sides of the change run on the receive lane.
+        QVERIFY(model.waitForReceiveLaneForTest());
 
         const int b = model.addSlice();
         model.slices().at(b)->setFrequency(14400000.0);
@@ -607,6 +615,8 @@ private slots:
         // its own DDC, not be left silently aliased on a window that no
         // longer contains it.
         QVERIFY(model.setStreamSampleRate(0, 192000));
+        // R-R3-39: the WDSP and worker sides of the change run on the receive lane.
+        QVERIFY(model.waitForReceiveLaneForTest());
 
         QVERIFY(model.slices().at(b)->streamIndex() != 0);
         QCOMPARE(model.activeStreamCount(), 2);
@@ -626,6 +636,8 @@ private slots:
         const int a = model.addSlice();
         model.sliceById(a)->setFrequency(14200000.0);
         model.setStreamSampleRate(0, 768000);
+        // R-R3-39: the WDSP and worker sides of the change run on the receive lane.
+        QVERIFY(model.waitForReceiveLaneForTest());
 
         const int b = model.addSlice();
         model.sliceById(b)->setFrequency(14400000.0);
@@ -682,6 +694,8 @@ private slots:
         QSignalSpy assignments(&model, &RadioModel::ddcAssignmentRequested);
 
         QVERIFY(!model.setStreamSampleRate(0, 192000));
+        // R-R3-39: the WDSP and worker sides of the change run on the receive lane.
+        QVERIFY(model.waitForReceiveLaneForTest());
 
         for (int st = 0; st < 2; ++st) {
             QCOMPARE(model.streamActiveForTest(st), streamsBefore[st].active);
@@ -1237,6 +1251,8 @@ private slots:
         QVERIFY(engine->rxChannel(b) != nullptr);
 
         model.setStreamSampleRate(streamA, 768000);
+        // R-R3-39: the WDSP and worker sides of the change run on the receive lane.
+        QVERIFY(model.waitForReceiveLaneForTest());
 
         // A's channel follows its stream, input rate AND input buffsize.
         QCOMPARE(engine->rxChannel(a)->sampleRate(), 768000);
@@ -1272,6 +1288,8 @@ private slots:
         QCoreApplication::processEvents();
 
         model.setStreamSampleRate(streamA, 768000);
+        // R-R3-39: the WDSP and worker sides of the change run on the receive lane.
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCoreApplication::processEvents();
 
         QSignalSpy spy(&worker, &RxDspWorker::chunkDrainedForStream);
@@ -1325,6 +1343,8 @@ private slots:
                                 192000, 48000, 48000);
 
         model.setStreamSampleRate(streamA, 384000);
+        // R-R3-39: the WDSP and worker sides of the change run on the receive lane.
+        QVERIFY(model.waitForReceiveLaneForTest());
 
         QCOMPARE(engine->rxChannel(a)->sampleRate(), 384000);
         QCOMPARE(engine->rxChannel(b)->sampleRate(), 384000);
@@ -1368,6 +1388,8 @@ private slots:
 
         QVERIFY(model.sampleRateIsRadioWide());
         model.setStreamSampleRate(streamA, 384000);
+        // R-R3-39: the WDSP and worker sides of the change run on the receive lane.
+        QVERIFY(model.waitForReceiveLaneForTest());
 
         // setSampleRateLive marshals the wire write to the connection with a
         // queued invocation; in production the connection thread's event loop
@@ -1402,6 +1424,8 @@ private slots:
 
         QSignalSpy spy(&model, &RadioModel::streamCentreChanged);
         model.setStreamSampleRate(streamA, 384000);
+        // R-R3-39: the WDSP and worker sides of the change run on the receive lane.
+        QVERIFY(model.waitForReceiveLaneForTest());
 
         QCOMPARE(spy.count(), 0);
         QCOMPARE(model.sliceById(a)->sampleRateHz(), 192000);
@@ -1663,10 +1687,13 @@ private slots:
         QObject recorder;
         for (int ch : {chA, chB, chC, chD}) {
             RxChannel* rx = engine->rxChannel(ch);
+            // R-R3-39: the change stops and restarts the channels on the
+            // receive lane; record there, as it happens (the model's wait
+            // for the change keeps the event loop off `events`).
             connect(rx, &RxChannel::activeChanged, &recorder,
                     [&events, rx, ch](bool on) {
                         events.append({ch, on, rx->sampleRate()});
-                    });
+                    }, Qt::DirectConnection);
         }
 
         QVERIFY(model.setSampleRateLive(384000, false) >= 0);
@@ -1727,8 +1754,10 @@ private slots:
         QObject recorder;   // dies before `events`; see the test above
         RxChannel* rx0 = engine->rxChannel(0);
         QVERIFY(rx0->isActive());
+        // R-R3-39: recorded on the receive lane, as it happens.
         connect(rx0, &RxChannel::activeChanged, &recorder,
-                [&events, rx0](bool on) { events.append({on, rx0->sampleRate()}); });
+                [&events, rx0](bool on) { events.append({on, rx0->sampleRate()}); },
+                Qt::DirectConnection);
         for (int ch = 1; ch < 5; ++ch) {
             connect(engine->rxChannel(ch), &RxChannel::activeChanged, &recorder,
                     [ch](bool) { QFAIL(qPrintable(
@@ -1781,6 +1810,8 @@ private slots:
         // Slice B's channel already runs at the rate the change moves to,
         // as the per-slice rate menu leaves it on Protocol 2.
         QVERIFY(engine->setRxChannelRate(rxB->channelId(), 384000));
+        // R-R3-39: the channels open, start and re-rate on the receive lane.
+        QVERIFY(model.waitForReceiveLaneForTest());
         QVERIFY2(settledPeakFromATone(rxA, 192000) > 0.0, "slice A silent before the change");
         QVERIFY2(settledPeakFromATone(rxB, 384000) > 0.0, "slice B silent before the change");
 

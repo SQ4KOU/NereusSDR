@@ -250,6 +250,15 @@
 //   2026-09-24: Part C fix wave: the optional device shortName in
 //               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan, desktop remote transmit (R-IOS-13,
+//               R-R3-42): the hello declares remoteTx 1; the transmit verbs
+//               go out through RemoteTransmitClient, three copies each.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 39 (D14, R-IOS-13): the Core's
+//               `txState` object (TransmitState, txStateVersion 1), read-only,
+//               for the window's transmit meters. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 //   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 1):
 //                                    transmitSettingsAvailable.
 //                                    AI-assisted via Anthropic Claude Code.
@@ -279,6 +288,19 @@
 //                                    (radioHardwareVersion 7), and the HL2
 //                                    link (stationTelemetryVersion 5).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave: I4 thisDeviceWireId and
+//               transmitHolderText; M6 voxArmedHere; M7 a Core stop ends
+//               this window's key. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave 2, the re-review's minors:
+//               holderTransferring true while keys are refused for a
+//               transfer's reasons (a dropped holder's fence, a transfer
+//               ended with MOX on); stopEpoch names the key a stop ended so
+//               a newer key is never ended by it; VOX at the Core listens
+//               only to the device that armed it; the window says why MOX
+//               and TUNE wait while another device holds. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 //   2026-09-26  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 16):
 //                                    requestFilterResponse
 //                                    (dspInfoVersion 1).
@@ -301,6 +323,7 @@
 #include <memory>
 
 #include "core/session/IStationLink.h"
+#include "core/session/RemoteTransmitClient.h"
 #include "core/session/LinkVersion.h"
 #include "models/Band.h"
 #include "core/session/MirrorSchema.h"
@@ -319,6 +342,7 @@ class ClientDeviceIdentity;
 class RadioModel;
 class SessionTransport;
 class SettingsProxy;
+class TransmitState;
 
 /// R-R3-21 / R-R3-23 / R-R3-38: how the last session ended, as far as it
 /// decides what a remote window offers next. Only an end that will not
@@ -599,6 +623,8 @@ public:
     bool remoteFourO3AControlAvailable() const override;
     // R-R3-47 / R-R3-22: see IStationLink.
     bool stationLinkReady() const override;
+    // Merge of Tasks 38 and 39: see IStationLink.
+    bool transmitTimeOutAvailable() const override;
     bool remoteAmplifierStatusAvailable() const override;
     bool remoteRfKitStatusAvailable() const override;
     // R-R3-47 / R-R3-22: see IStationLink.
@@ -627,6 +653,27 @@ public:
     bool pureSignalArmingOffered() const;
     bool stationTciAvailable() const override;
     bool coreServesTciOnThisComputer() const override;
+    /// iPhone app plan Task 39 (D14, R-IOS-13): the Core's `txState` as this
+    /// window last heard it (never null). Its values are the idle ones while
+    /// the Core does not send it (txStateVersion 0) and after a session
+    /// ends; its stop fields keep the last stop until the next snapshot.
+    TransmitState* transmitState() const { return m_transmitState; }
+    /// Fix wave I4: this window's device id as the Core sends device ids
+    /// (connectedDevices, txState's holderDeviceId), or empty without a
+    /// device identity.
+    QString thisDeviceWireId() const;
+    /// Fix wave M6: this window armed the Core's VOX (its own write turned
+    /// `transmit.voxEnabled` on, and VOX is still on). VOX another device
+    /// armed is not this window's: it neither streams its microphone for it
+    /// nor keeps its keepalives going.
+    bool voxArmedHere() const { return m_voxArmedHere; }
+    /// Fix wave I4: who holds transmit on the Core, in plain words for the
+    /// window ("This computer holds transmit.", "Grant's iPhone holds
+    /// transmit. MOX and TUNE here wait until it lets go.", "... and is
+    /// away. ...", "Transmit is changing hands.", "The radio did not
+    /// confirm it stopped transmitting."), or empty while nobody does or
+    /// the Core does not say (txStateVersion 2).
+    QString transmitHolderText() const;
     int coreStationTciStored() const override;
     /// Test seam: whether the Core counts as on this computer (a session
     /// started without a dial has no address to judge by).
@@ -854,6 +901,12 @@ public:
     /// operator's own action only, never for a station echo.
     CommandOutcome requestNnrRetry(int sliceId);
 
+    /// iPhone app plan, desktop remote transmit (R-IOS-13): the transmit
+    /// verbs (link section 18.6). Available while the session is up and
+    /// the Core told this window remoteTxVersion 1 or later.
+    RemoteTransmitClient* remoteTransmit() override { return m_remoteTransmit; }
+    bool remoteTransmitAvailable() const;
+
     void setHeartbeatIntervalMs(int ms);
     int heartbeatIntervalMs() const { return m_heartbeatIntervalMs; }
     void setMaxMissedPongs(int misses);
@@ -874,6 +927,8 @@ public:
     int handshakeDeadlineMs() const { return m_handshakeDeadlineMs; }
 
 signals:
+    /// Fix wave M6: voxArmedHere() changed.
+    void voxArmedHereChanged(bool armed);
     void displayBudgetChanged();
     void ps3DisplaySubscriptionRequested(bool enabled);
     /// Published before transport callbacks can deliver a synchronous reply.
@@ -1078,6 +1133,9 @@ private:
     /// features, and what the current station's hello declared.
     QList<quint16> m_supportedMajors;
     QHash<QByteArray, int> m_declaredFeatures;
+    /// Desktop remote transmit: owned (child).
+    RemoteTransmitClient* m_remoteTransmit = nullptr;
+    void refreshRemoteTransmit();
 
     /// iPhone app Task 18: this computer's device key and name, the paired
     /// Core's identity fingerprint this client trusts (latched across
@@ -1116,11 +1174,14 @@ private:
     /// called on it -- that is the DAEMON's connect-time burst, and a
     /// client has nothing to burst.
     StateMirror* m_outboundMirror = nullptr;
+    // iPhone app plan Task 39: the Core's `txState` (Qt-parented to this).
+    TransmitState* m_transmitState = nullptr;
     MirrorCoalescer m_outboundCoalescer;
 
     /// True for the duration of one inbound apply. See the class comment's
     /// echo-guard section.
     bool m_applyingInbound = false;
+    bool m_voxArmedHere = false;   // fix wave M6
 
     /// True once the snapshot-complete marker has arrived. Until then no
     /// local change is forwarded: everything moving is the station's own

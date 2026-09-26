@@ -53,7 +53,7 @@ starts its media over through its usual recovery on the two drop reasons.
 
 | Operation | Exact payload fields beyond `op` and `connectionId` |
 | --- | --- |
-| `start` | None; a GUI whose Core advertised `audioProfileVersion` adds `audioProfileVersion`, a whole number of at least 1 (anything else is refused and no peer starts); a GUI whose Core advertised `receiverAudioVersion` may add `receiverAudioVersion` the same way (see Receiver audio), and one whose Core advertised `headphonesMixVersion` may add `headphonesMixVersion` the same way (see Headphones mix) |
+| `start` | None; a GUI whose Core advertised `audioProfileVersion` adds `audioProfileVersion`, a whole number of at least 1 (anything else is refused and no peer starts); a GUI whose Core advertised `receiverAudioVersion` may add `receiverAudioVersion` the same way (see Receiver audio), one whose Core advertised `headphonesMixVersion` may add `headphonesMixVersion` the same way (see Headphones mix), and one whose Core advertised `remoteTxVersion` may add `remoteTxVersion` the same way (see Microphone line) |
 | `description` | `sdp`, `type` (`offer` or `answer`, appropriate to peer role) |
 | `candidate` | `candidate`, `mid` |
 
@@ -108,6 +108,27 @@ none of these. It is declared only when the GUI added
 receiver lines, one `a=ssrc:<headphones> cname:nereus-headphones-mix` line,
 and each peer also sends and accepts that SSRC. Without it nothing above
 changes.
+
+The microphone line (iPhone app plan Task 36) is a second audio m-line,
+`a=mid:mic`, after the main one, which the client sends on and the Core
+receives. It is offered only when the client added `remoteTxVersion` to
+its `start` (see Microphone line); without it the offer, the answer and
+every audio line are exactly as before. Core's offer declares it
+receive-only (`a=recvonly`), with no SSRC of the Core's, carrying Opus as
+`a=rtpmap:111 opus/48000/2` with
+`a=fmtp:111 minptime=10;useinbandfec=1;stereo=0;maxaveragebitrate=24000`,
+and, when the offer carries the lossless format on the main line, the same
+`a=rtpmap:96 L16/48000/2` after Opus. The answer takes it send-only and
+declares the microphone's SSRC on it:
+`a=ssrc:<microphone> cname:nereus-microphone`. That SSRC is formed from the
+ASCII prefix `NereusSDR/media-mic-ssrc/v1:` followed by the canonical
+connection UUID; a value that is zero, the main SSRC, any of the four
+receiver SSRCs or the headphones SSRC (declared or not) is replaced by the
+next integer (modulo 2^32) until it is none of these. The client sends only
+that SSRC on the line and the Core accepts only it; the line joins the
+bundle and the lip-sync group (`a=group:BUNDLE audio mic 0`,
+`a=group:LS audio mic`). The Core's queue of received RTP holds 64 more
+packets for it.
 
 ## Display subscriptions
 
@@ -561,6 +582,85 @@ The new reason string `no-headphones-receiver` occurs only in
 `headphones-audio-context`; an `audio-context` or `receiver-audio-context`
 carrying it is malformed. A GUI shows reasons through `OperatorReasonText`
 in plain words, never as the wire string.
+
+## Microphone line (iPhone app plan Task 36)
+
+Capability `remoteTxVersion=1` (R-IOS-13), which the Core sends only to a
+client whose hello declared `remoteTx` 1 at minor 11 (the link document,
+section 18), negotiates it; the session protocol minor is unchanged. Such a
+client may add `remoteTxVersion` (a whole number of at least 1) to its
+`start`; from any other client, or malformed, the start is refused and no
+peer starts. Only then does the offer carry the microphone line (see Media
+peer). There is no control operation for the line: the client sends on it
+when it transmits, and the Core decides what the transmitter takes.
+
+**What the client sends.** The microphone, mono 48 kHz, as Opus 20 ms
+frames with in-band FEC (payload type 111, one channel), or, from a desktop
+remote window whose operator chose lossless audio and whose line agreed
+the L16 format, as L16 packets of 192 frames with the microphone in both
+channels (payload type 96). A client sends while its device holds transmit,
+while its own key is down, or while it has VOX armed (the Core's VOX on and
+its session permitted to transmit), and never otherwise. A program keying
+through a desktop window's TCI server is sent on the line in place of the
+microphone while its audio comes (the app's left channel, resampled to 48
+kHz).
+
+**What the Core does with it.** Packets are put in sequence order; one
+behind the stream (reordered too late, or repeated) is dropped and counted.
+A gap is rebuilt when the next packet arrives: every lost packet but the
+last by Opus loss concealment, the last from the arriving packet's in-band
+FEC (Opus codes FEC only for frames its voice detector calls active; for
+any other frame the decoder conceals); a lost L16 packet is 4 ms of
+silence. A gap longer than 60 ms inserts nothing. The decoded audio goes to
+the transmit jitter buffer, WDSP rmatch run on the transmit pump's thread,
+which matches the sender's clock to the radio's in both directions: its
+ring targets 60 ms (rmatch holds it half full) and never exceeds 120 ms
+(beyond that the oldest audio is dropped and counted). After every change
+of use the buffer starts empty and the pump hears silence until it holds
+60 ms, then the audio.
+
+**When the transmitter takes it.** The transmitter's microphone is the line
+while the device whose media carries it is keyed (its own key, its
+program's key, or a VOX key that is its), while its key waits for the
+buffer, and while it has VOX armed; otherwise the operator's configured
+source applies. Every change empties the buffer, so at unkey nothing of the
+device's audio is left. In the RADE modes the line feeds the RADE encoder
+as any microphone does.
+
+**Keying on a filled buffer.** A `tx.key` from a device whose media carries
+the line, in a mode that transmits the microphone (every mode but CWL and
+CWU), keys once the line's buffer holds its 60 ms target; if it has not
+within 250 ms it is refused `micNotReady` (the link document, sections 18.3
+and 18.6). TUNE and two-tone use no microphone and key at once, and a
+device without the line keys with the Core's own source, as before.
+
+**Starvation.** While the device is keyed on its line, 250 ms without audio
+is starvation, and audio arriving again ends it. What the Core then does
+depends on the transmit mode (iPhone app plan Task 37; the link document,
+section 18.7): in LSB, USB, DSB, CWL, CWU, DIGL, DIGU and SPEC the key goes
+on, silent; in AM, SAM, FM, DRM, RADE_U and RADE_L the Core stops
+transmitting with "No microphone audio arrived from <device>, so the Core
+stopped transmitting." TUNE and two-tone are never stopped by it.
+
+**The "tx" data channel (iPhone app plan Task 37).** A media connection
+whose `start` carried `remoteTxVersion` also has a second SCTP data
+channel, labelled `tx`, which the Core (the offerer) opens beside
+`display`, like it unordered and with zero retransmissions, so a lost
+message is overtaken by the next instead of holding anything behind it.
+The answerer takes it only when its own start asked for the line; any
+other connection has only `display`, exactly as before. The device sends
+its transmit keepalive on it, one binary message of 13 bytes every 100 ms
+while it is keyed or has VOX armed: byte 0 is 1 (a keepalive), bytes 1
+to 8 the `sequence` and bytes 9 to 12 the `epoch`, both big-endian, with
+the meanings of `tx.keepalive` (the link document, section 18.7). The Core
+reads anything else on it as nothing. While the channel is open the device
+sends its keepalives there and not on the session; the Core counts either,
+and the same sequence twice once.
+
+**The monitor.** With MON on, the audio the Core sends a device while it
+is keyed carries the transmit monitor in the Core's mix, exactly as the
+Core's own speakers would play it (the monitor level, before the speakers'
+volume). The phone plays it on headphones only.
 
 ## Measured audio delay (clock-probe and clock-echo)
 
