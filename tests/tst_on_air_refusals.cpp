@@ -304,7 +304,9 @@ private slots:
             const qint64 id = ++writeId;
             appA->sendText(SessionMessages::encode(
                 SessionMessages::propertyWrite(key, {update}, static_cast<quint32>(id))));
-            QTest::qWaitFor([appA, id]() { return !propertyResult(appA, id).isEmpty(); }, 5000);
+            const bool answered =
+                QTest::qWaitFor([appA, id]() { return !propertyResult(appA, id).isEmpty(); }, 5000);
+            Q_UNUSED(answered);
             const QJsonArray results = propertyResult(appA, id).value(QStringLiteral("results")).toArray();
             return results.isEmpty() ? QJsonObject{} : results.first().toObject();
         };
