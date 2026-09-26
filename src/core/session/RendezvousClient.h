@@ -112,6 +112,12 @@ public:
     /// The most candidates the Core sends for one introduction (section
     /// 9.1's per-side cap).
     static constexpr int kMaxCandidatesPerIntroduction = 64;
+    /// The most introductions the Core holds open at once. Each is a
+    /// paired device asking for a connection, and the service ends one
+    /// after 120 s (section 9.1), so a few are plenty; one past this is
+    /// dropped and counted, as a service that replays accepted
+    /// introductions could otherwise grow the list without end.
+    static constexpr int kMaxLiveIntroductions = 16;
 
     explicit RendezvousClient(QObject* parent = nullptr);
     ~RendezvousClient() override;

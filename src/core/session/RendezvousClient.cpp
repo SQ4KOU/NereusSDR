@@ -735,9 +735,11 @@ void RendezvousClient::handleIntroduction(const RendezvousWire::Message& message
         && StationIdentity::verify(deviceKey,
                                    RendezvousWire::introduceTranscript(m_stationId, message.nonce),
                                    message.deviceSignature);
-    if (!verified) {
+    if (!verified || m_liveIntroductions.size() >= kMaxLiveIntroductions) {
         ++m_droppedIntroductions;
-        qCInfo(lcRendezvous) << "Dropped an introduction that is not from a paired device ("
+        qCInfo(lcRendezvous) << (verified ? "Dropped an introduction: too many are open ("
+                                          : "Dropped an introduction that is not from a paired "
+                                            "device (")
                              << m_droppedIntroductions << "so far)";
         return;
     }

@@ -1271,6 +1271,54 @@ private slots:
         QVERIFY(client > 0);
     }
 
+    // A service that replays an accepted introduction under new ids gets
+    // at most kMaxLiveIntroductions of them reported; the rest are dropped
+    // and counted.
+    void theCoreHoldsABoundedNumberOfIntroductions()
+    {
+        ServicePlayer player;
+        auto coreKey = makeKey();
+        auto device = makeKey();
+        const QByteArray deviceId = StationIdentity::fingerprintOf(device->spki());
+        RendezvousClient core;
+        core.setServers({player.url()});
+        QSignalSpy registered(&core, &RendezvousClient::registered);
+        QSignalSpy introduced(&core, &RendezvousClient::introduced);
+        core.registerStation(coreKey->spki(),
+                             [coreKey](const QByteArray& m) { return coreKey->sign(m); },
+                             [device, deviceId](const QByteArray& id) {
+                                 return id == deviceId ? device->spki() : QByteArray();
+                             });
+        QWebSocket* station = player.waitForConnection();
+        QVERIFY(station != nullptr);
+        const auto send = [station](const QJsonObject& message) {
+            station->sendTextMessage(compact(message));
+        };
+        send({{"type", "hello"}, {"version", 1}, {"nonce", b64(randomBytes(32))},
+              {"stun", QJsonArray()}});
+        QVERIFY(player.waitForMessage(station).has_value());
+        const QByteArray challenge = randomBytes(32);
+        send({{"type", "challenge"}, {"nonce", b64(challenge)}});
+        QVERIFY(player.waitForMessage(station).has_value());
+        const QString id = Wire::rendezvousId(coreKey->spki());
+        send({{"type", "registered"}, {"id", id}});
+        QTRY_COMPARE(registered.size(), 1);
+        const QByteArray nonce = randomBytes(32);
+        const QString signature = b64(device->sign(Wire::introduceTranscript(id, nonce)));
+        const QString offer = readText(kSuite + QStringLiteral("/sdp/offer.sdp"));
+        const int sent = RendezvousClient::kMaxLiveIntroductions + 4;
+        for (int index = 0; index < sent; ++index) {
+            send({{"type", "introduction"}, {"from", b64(randomBytes(16))},
+                  {"device", b64(deviceId)}, {"deviceSignature", signature}, {"offer", offer},
+                  {"nonce", b64(nonce)}});
+        }
+        QTRY_COMPARE(introduced.size() + static_cast<qsizetype>(core.droppedIntroductions()),
+                     static_cast<qsizetype>(sent));
+        QCOMPARE(introduced.size(), static_cast<qsizetype>(RendezvousClient::kMaxLiveIntroductions));
+        QCOMPARE(core.droppedIntroductions(), quint64(4));
+        core.stop();
+    }
+
     void theSenderKeepsToTheWire()
     {
         // Section 2: a message over the cap is not sent, whatever its kind.
