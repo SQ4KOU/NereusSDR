@@ -22,6 +22,10 @@
 //   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06: clarity-retune
 //                                    and displayExtrasVersion 2.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 19 (R-IOS-25):
+//                                    recordStreamVersion and the record
+//                                    streams. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -892,11 +896,15 @@ private slots:
         // R-R3-49's transmitSettingsVersion follows it, then R-IOS-27's
         // bandSelectVersion, then parity Task 15's meterReadingsVersion,
         // then parity Task 16's dspInfoVersion.
-        QCOMPARE(updates.at(updates.size() - 5).name, QByteArray("displayExtrasVersion"));
-        QCOMPARE(updates.at(updates.size() - 4).name, QByteArray("transmitSettingsVersion"));
-        QCOMPARE(updates.at(updates.size() - 3).name, QByteArray("bandSelectVersion"));
-        QCOMPARE(updates.at(updates.size() - 2).name, QByteArray("meterReadingsVersion"));
-        QCOMPARE(updates.last().name, QByteArray("dspInfoVersion"));
+        // Then parity Task 19's recordStreamVersion.
+        // Then parity Task 21's stationRadiosVersion.
+        QCOMPARE(updates.at(updates.size() - 7).name, QByteArray("displayExtrasVersion"));
+        QCOMPARE(updates.at(updates.size() - 6).name, QByteArray("transmitSettingsVersion"));
+        QCOMPARE(updates.at(updates.size() - 5).name, QByteArray("bandSelectVersion"));
+        QCOMPARE(updates.at(updates.size() - 4).name, QByteArray("meterReadingsVersion"));
+        QCOMPARE(updates.at(updates.size() - 3).name, QByteArray("dspInfoVersion"));
+        QCOMPARE(updates.at(updates.size() - 2).name, QByteArray("recordStreamVersion"));
+        QCOMPARE(updates.last().name, QByteArray("stationRadiosVersion"));
         QCOMPARE(StationCapabilities::fromUpdates(updates).displayExtrasVersion, 2);
         // An older peer's block (no minor-11 entries) carries none.
         StationCapabilities older;

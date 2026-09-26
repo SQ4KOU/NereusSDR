@@ -60,6 +60,9 @@
 //   2026-09-26: iPhone app plan Task 77 (R-IOS-02, R-IOS-03, R-IOS-13):
 //               confirm.request holder (takeTransmit). J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: parity Task 19 (R-IOS-25): the record.batch codec.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionMessages.h"
@@ -321,6 +324,14 @@ SessionMessage SessionMessages::notice(const SessionPrompt& prompt, const QStrin
     return m;
 }
 
+SessionMessage SessionMessages::recordBatch(const RecordBatch& batch)
+{
+    SessionMessage m;
+    m.kind = SessionMessageKind::RecordBatch;
+    m.recordBatch = batch;
+    return m;
+}
+
 SessionMessage SessionMessages::propertyWrite(const QByteArray& objectKey,
                                               const QList<MirrorUpdate>& updates,
                                               quint32 writeId)
@@ -451,6 +462,8 @@ constexpr KindName kKindNames[] = {
     // iPhone app Task 74 (R-IOS-30): asking first, telling afterwards.
     { SessionMessageKind::ConfirmRequest, "confirm.request" },
     { SessionMessageKind::Notice, "notice" },
+    // Parity Task 19 (R-IOS-25): a record stream's changes.
+    { SessionMessageKind::RecordBatch, "record.batch" },
 };
 
 struct WireKindName {
@@ -525,6 +538,7 @@ QList<SessionMessageKind> SessionMessages::allKinds()
         SessionMessageKind::PairFail,
         SessionMessageKind::ConfirmRequest,
         SessionMessageKind::Notice,
+        SessionMessageKind::RecordBatch,
     };
 }
 
@@ -1072,6 +1086,21 @@ QByteArray SessionMessages::encode(const SessionMessage& message)
         }
         break;
     }
+    // Parity Task 19 (R-IOS-25): the link's "Record streams" section.
+    case SessionMessageKind::RecordBatch: {
+        const RecordBatch& b = message.recordBatch;
+        o.insert(QStringLiteral("stream"), b.stream);
+        o.insert(QStringLiteral("generation"), static_cast<double>(b.generation));
+        o.insert(QStringLiteral("reset"), b.reset);
+        QJsonArray upserts;
+        for (const RecordUpsert& u : b.upserts) {
+            upserts.append(QJsonObject{{QStringLiteral("id"), u.id},
+                                       {QStringLiteral("fields"), u.fields}});
+        }
+        o.insert(QStringLiteral("upserts"), upserts);
+        o.insert(QStringLiteral("removes"), QJsonArray::fromStringList(b.removes));
+        break;
+    }
     case SessionMessageKind::SettingsWrite:
     case SessionMessageKind::SettingsValue:
     case SessionMessageKind::SettingsRemove:
@@ -1356,6 +1385,31 @@ bool SessionMessages::decode(const QByteArray& wire, SessionMessage* out)
         && (!isWholeNumberIn(o.value(QStringLiteral("secondsAgo")), 0.0, 9007199254740991.0)
             || !o.value(QStringLiteral("takeBack")).isBool())) {
         return false;
+    }
+    // Parity Task 19: a record batch names its stream and generation, and
+    // every upsert carries an id and its fields; every remove is an id.
+    if (kind == SessionMessageKind::RecordBatch) {
+        if (!o.value(QStringLiteral("stream")).isString()
+            || o.value(QStringLiteral("stream")).toString().isEmpty()
+            || !isWholeNumberIn(o.value(QStringLiteral("generation")), 1.0, 9007199254740991.0)
+            || !o.value(QStringLiteral("reset")).isBool()
+            || !o.value(QStringLiteral("upserts")).isArray()
+            || !o.value(QStringLiteral("removes")).isArray()) {
+            return false;
+        }
+        for (const QJsonValue& u : o.value(QStringLiteral("upserts")).toArray()) {
+            const QJsonObject upsert = u.toObject();
+            if (!u.isObject() || !upsert.value(QStringLiteral("id")).isString()
+                || upsert.value(QStringLiteral("id")).toString().isEmpty()
+                || !upsert.value(QStringLiteral("fields")).isObject()) {
+                return false;
+            }
+        }
+        for (const QJsonValue& r : o.value(QStringLiteral("removes")).toArray()) {
+            if (!r.isString() || r.toString().isEmpty()) {
+                return false;
+            }
+        }
     }
     // Task 11: CommandInvoke and CommandResult share "verb" and "id";
     // everything else is kind-specific. Same presence-and-type discipline
@@ -1694,6 +1748,21 @@ bool SessionMessages::decode(const QByteArray& wire, SessionMessage* out)
             if (o.value(QStringLiteral("slices")).isArray()) {
                 p.slices = o.value(QStringLiteral("slices")).toArray();
             }
+        }
+        break;
+    }
+    case SessionMessageKind::RecordBatch: {
+        RecordBatch& b = message.recordBatch;
+        b.stream = o.value(QStringLiteral("stream")).toString();
+        b.generation = static_cast<quint64>(o.value(QStringLiteral("generation")).toDouble());
+        b.reset = o.value(QStringLiteral("reset")).toBool();
+        for (const QJsonValue& u : o.value(QStringLiteral("upserts")).toArray()) {
+            const QJsonObject upsert = u.toObject();
+            b.upserts.append({upsert.value(QStringLiteral("id")).toString(),
+                              upsert.value(QStringLiteral("fields")).toObject()});
+        }
+        for (const QJsonValue& r : o.value(QStringLiteral("removes")).toArray()) {
+            b.removes.append(r.toString());
         }
         break;
     }

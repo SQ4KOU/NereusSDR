@@ -476,6 +476,9 @@ nereus_add_test(tst_radio_model_slice_state_restored)
 # MOX no longer requires a prior TUN press to seed TXA mode + bp0.
 nereus_add_test(tst_radio_model_push_tx_mode_and_bandpass)
 nereus_add_test(tst_container_persistence)
+# R-R3-49: container title bar and filter passband use native hand cursors
+# (Qt 6.11.0 crashes drawing SizeAllCursor on macOS).
+nereus_add_test(tst_native_cursors EXTRA_LABELS gui)
 nereus_add_test(tst_meter_item_bar)
 nereus_add_test(tst_reading_name)
 nereus_add_test(tst_meter_item_scale)
@@ -7726,6 +7729,32 @@ nereus_add_test(tst_confirm_step
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
 nereus_add_test(tst_device_layout_store EXTRA_LABELS session)
+# Parity Task 19 (R-IOS-25, R-R3-49): the link's record streams: backlog,
+# merged changes, a slow peer bounded to a reset, the record.batch codec.
+nereus_add_test(tst_record_stream EXTRA_LABELS session)
+# Parity Task 19 (R-IOS-25): SpotSourceHost's placements, the Core's
+# refusals, a remote window's forwarding, a spot record's fields and the
+# listeners' settings scope. Loopback ports only.
+nereus_add_test(tst_spot_source_host EXTRA_LABELS session)
+# Parity Task 19 (R-IOS-25, B7.1, B7.2): the Core's spots, consoles and
+# sources in a remote window over the loopback, and the Spot Hub's Core
+# settings in a real remote window. No RF, no audio device.
+nereus_add_test(tst_remote_spots
+    fakes/LoopbackTransport.cpp
+    fakes/RemoteWindowHarness.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_remote_spots PRIVATE NEREUS_BUILD_TESTS)
+# Parity Task 21 (R-IOS-18, R-R3-38): the Core's choice of radio (the
+# order, the requests, the on-air rule, DaemonApp's wait, switch and saved
+# choice). Discovery is the test's own list; nothing connects.
+nereus_add_test(tst_station_radios EXTRA_LABELS session)
+target_compile_definitions(tst_station_radios PRIVATE NEREUS_BUILD_TESTS)
+# Parity Task 21 (B6.2, B6.3): Setup > This Core and the menus in a real
+# remote window over a local WebSocket. No radio, no audio device.
+nereus_add_test(tst_this_core_page
+    fakes/RemoteWindowHarness.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_this_core_page PRIVATE NEREUS_BUILD_TESTS)
 # iPhone app Task 19 (R-IOS-06): the Core's catalogue; the G2 and HL2
 # catalogue fixtures against the desktop's own values, the revision, a
 # preset change reaching a client over the in-process loopback, the size.

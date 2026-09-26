@@ -388,6 +388,14 @@
 //               the radio's PTT take, TX marks, the transmit slice on a
 //               change of holder. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  R-IOS-25 / R-R3-49 (parity Task 19):
+//                                    recordStreamVersion, the record
+//                                    streams (spots, spotConsole:<source>)
+//                                    and the `spotSources` object.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26: D79 (R-IOS-11, R-R3-49): bandPlanRefusal() and
+//               applyBandPlanSetting(). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QHash>
@@ -401,6 +409,7 @@
 #include <QSslConfiguration>
 #include <QString>
 
+#include <map>
 #include <memory>
 #include <functional>
 #include <optional>
@@ -411,6 +420,7 @@
 #include "core/session/LinkVersion.h"
 #include "core/session/ReceiverPlanner.h"
 #include "core/DisturbanceCheck.h"
+#include "core/session/RecordStream.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StationCapabilities.h"
 #include "core/safety/StarvationPolicy.h"
@@ -445,6 +455,7 @@ class SettingsProxyServer;
 class StateMirror;
 class StationOpeningGate;
 class StationCatalog;
+class StationRadios;
 class StationDevicesFacade;
 class TokenStore;
 class TransmitHolder;
@@ -597,6 +608,27 @@ public:
     bool listen(const QHostAddress& address, quint16 port);
 
     void close();
+    /// Fix wave after parity Tasks 19 and 21: ends every session for a
+    /// radio change (the Core restarts its run) with `reason`, retryable,
+    /// code radioChanging. Each connection outlives this server until its
+    /// close is written (or kRadioChangeLingerMs), so what was sent before
+    /// it (a command's answer, the confirm step's notices) and the end
+    /// itself reach the wire.
+    void endSessionsForRadioChange(const QString& reason);
+    /// Follow-up N3 (the coordinator's ruling (a)): the Core's DaemonApp
+    /// accepted a radio change (StationRadios::onSelect). Until
+    /// finishRadioChange, the chooser's accepted station.selectRadio answer
+    /// (or, after the confirm step, its confirm.proceed answer) and the
+    /// other devices' settingChanged notices are held, as a rate change's
+    /// proceed is (DeferredProceed).
+    void holdRadioChangeAnswers();
+    /// The restart turn: sends what was held. `proceeded`: the answer as
+    /// accepted, then the notices (before endSessionsForRadioChange).
+    /// Otherwise the answer is refused with `refusal` and nobody is told.
+    void finishRadioChange(bool proceeded, const QString& refusal);
+    /// NereusSDR-original bound: how long an ended connection waits for its
+    /// close to be written before it is deleted.
+    static constexpr int kRadioChangeLingerMs = 5000;
     bool isListening() const;
     quint16 serverPort() const;
     QHostAddress serverAddress() const;
@@ -748,6 +780,11 @@ public:
     /// kMaxUnfinishedOpenings and kMaxHandshakesPerAddress, from the next
     /// listen() on, so a test on one loopback address can reach the total.
     void setOpeningLimitsForTest(int total, int perAddress);
+    /// A window over a bench link (no TLS pin) cannot enrol its key, so it
+    /// always signs in with the token. This lets such a window's session
+    /// change the Core's radio, so a window test can reach the Core's
+    /// answers (fix wave, I5).
+    void setTokenSessionsMayChangeRadioForTest(bool may) { m_tokenSessionsMayChangeRadioForTest = may; }
 #endif
 
     /// See kDefaultAuthDeadlineMs. Values below 1 disable the deadline,
@@ -943,6 +980,23 @@ public:
     // dspOptionsLastApplyMs, its slices
     // minNotchWidthHz, and it takes dsp.filterResponse; 0 otherwise.
     int dspInfoVersion() const;
+    // R-IOS-25 / R-R3-49 (parity Task 19): recordStreamVersion. 1 on a Core
+    // with a local radio model: records.subscribe / records.unsubscribe
+    // and record.batch (the `spots` stream and each station source's
+    // spotConsole:<source>), the read-only `spotSources` object, and the
+    // spots.* verbs; 0 otherwise.
+    int recordStreamVersion() const;
+    // R-IOS-18 / R-R3-49 (parity Task 21): stationRadiosVersion. 1 when the
+    // Core chooses its own radio (nereusd attaches StationRadios): the
+    // `stationRadios` stream and the station.selectRadio,
+    // station.rescanRadios, station.setRadioModel and station.forgetRadio
+    // verbs; 0 otherwise.
+    int stationRadiosVersion() const;
+    /// Parity Task 21: the Core's radios (nereusd's DaemonApp owns it).
+    void setStationRadios(StationRadios* radios);
+    /// For a test: the stream by name (spots, spotConsole:<source>), or
+    /// null.
+    RecordStream* recordStreamForTest(const QString& name) const;
     // R-R3-49 (parity Task 7): the peer was offered transmitSettingsVersion
     // 7: it arms PureSignal and changes pureSignalSettings off the air.
     bool pureSignalArmingOffered(SessionTransport* transport) const;
@@ -1209,6 +1263,11 @@ private:
     void handleHello(SessionTransport* transport, const SessionMessage& message);
     void handleAuthRequest(SessionTransport* transport, const SessionMessage& message);
     void handlePropertyWrite(SessionTransport* transport, const SessionMessage& message);
+    // Parity Task 19 (R-IOS-25): the record streams.
+    void setUpRecordStreams();
+    void handleRecordsCommand(SessionTransport* transport, const SessionMessage& message);
+    void scheduleRecordFlush();
+    void flushRecordStreams();
     void handleSettingsWrite(SessionTransport* transport, const SessionMessage& message);
     /// The body of handleSettingsWrite after its checks: applies the write
     /// through the settings proxy. A refusal goes to `refusal` when given,
@@ -1337,6 +1396,13 @@ private:
     /// slice's own settings key (Slice<N>/...) from a session whose device does not own live slice N; empty when
     /// it may, or when the key is not a slice's.
     QString sliceSettingsRefusal(SessionTransport* transport, const QString& key) const;
+    /// D79 (R-IOS-11): the refusal for a BandPlanName write naming a plan
+    /// this Core does not have; empty otherwise.
+    QString bandPlanRefusal(const QString& key, const QVariant& value) const;
+    /// D79: after a taken BandPlanName write or removal, the Core's own
+    /// BandPlanManager takes the stored plan (ARRL (US) when absent).
+    void applyBandPlanSetting(const QString& key);
+    static constexpr const char* kBandPlanNameKey = "BandPlanName";
     /// Removes a settings key and applies its default live (the removal's
     /// own effect, after its checks).
     void applySettingsRemove(const SessionMessage& message);
@@ -1673,6 +1739,16 @@ private:
         QList<QByteArray> closedDevices;
     };
     QHash<ResultKey, DeferredProceed> m_deferredProceeds;
+    /// Follow-up N3: a radio change's answer (and, after the confirm step,
+    /// its notices), held from holdRadioChangeAnswers to finishRadioChange.
+    struct HeldRadioChange {
+        ResultKey key;
+        SessionMessage result;
+        bool proceed = false;  // a confirm.proceed answer, with `later`
+        DeferredProceed later;
+    };
+    bool m_holdingRadioChange = false;
+    std::optional<HeldRadioChange> m_heldRadioChange;
     /// The proceed answered later, whose immediate answer is not sent.
     std::optional<ResultKey> m_proceedAnsweredLater;
     /// True when `result`, keyed `key`, finished a deferred proceed (and
@@ -1714,6 +1790,14 @@ private:
     std::unique_ptr<StationDevicesFacade> m_devicesFacade;
     // iPhone app Task 19: the Core's catalogue.
     std::unique_ptr<StationCatalog> m_catalog;
+    // Parity Task 19 (R-IOS-25): the record streams by name, the id of the
+    // last console line, and the send that follows a change.
+    std::map<QString, std::unique_ptr<RecordStream>> m_recordStreams;
+    quint64 m_consoleLineId = 0;
+    QTimer* m_recordFlushTimer = nullptr;
+    // Parity Task 21: the Core's radios and their stream.
+    QPointer<StationRadios> m_stationRadios;
+    void publishStationRadios();
     // iPhone app Task 71: who holds a place on the Core.
     std::unique_ptr<DeviceSessionRegistry> m_deviceSessions;
     // The connection whose command.invoke is being dispatched, and the end
@@ -1771,6 +1855,7 @@ private:
     quint64 m_ps3SubscriberEpoch = 0;
     /// close() is ending every session.
     bool m_closing = false;
+    bool m_lingerOnDrop = false;
     SessionPs3DisplayAdmissionHandler m_ps3DisplayAdmission;
     DisplayDemandProvider m_displayDemand;
     /// During promoteToSession()'s attach: the session its burst is for.
@@ -1827,6 +1912,7 @@ private:
 
     int m_authDeadlineMs = kDefaultAuthDeadlineMs;
     int m_heartbeatIntervalMs = kDefaultHeartbeatIntervalMs;
+    bool m_tokenSessionsMayChangeRadioForTest = false;
     int m_maxMissedPongs = kDefaultMaxMissedPongs;
     int m_sustainableSliceLimit = 0;
 };

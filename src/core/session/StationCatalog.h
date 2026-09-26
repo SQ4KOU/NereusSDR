@@ -38,6 +38,9 @@
 //   2026-09-24: the `receive` key (AF gain, SSQL, AM and FM squelch
 //               ranges). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-26: each band plan's `active` (the Core's own plan) and
+//               `spots` (R-IOS-11, R-R3-49). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/BoardCapabilities.h"
@@ -75,6 +78,8 @@ public:
         QString id;    // the plan file's name without .json, e.g. "arrl-us"
         QString name;  // its display name, e.g. "ARRL (US)"
         QVector<BandSegment> segments;
+        /// The plan's spots (its file's `spots`), as the strip draws them.
+        QVector<BandSpot> spots;
     };
 
     /// What the catalogue is built from. inputsFrom() fills it from a
@@ -90,6 +95,9 @@ public:
         QList<BandPlan> bandPlans;
         /// The band plan marked as the default.
         QString defaultBandPlanName;
+        /// The Core's own band plan (BandPlanManager::activePlanName()),
+        /// the one plan marked `active`.
+        QString activeBandPlanName;
     };
 
     explicit StationCatalog(QObject* parent = nullptr);

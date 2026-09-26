@@ -1,0 +1,277 @@
+// no-port-check: NereusSDR-original.
+// =================================================================
+// tests/tst_spot_source_host.cpp  (NereusSDR)
+// =================================================================
+//
+// Parity Task 19 (R-IOS-25, R-R3-49; the iPhone app plan's Task 21 station
+// half): SpotSourceHost, the one place the spot sources start and stop.
+//
+//   - Each placement starts only its own sources from Auto-Connect /
+//     Auto-Start: a window running its own radio every one, the Core the
+//     station's (DX cluster, RBN, POTA, PSK Reporter), a remote window its
+//     own WSJT-X and SpotCollector.
+//   - The Core's verbs refuse in plain words (an unknown source, a
+//     computer's own listener, no callsign, a cluster that is not
+//     connected) and stopping a stopped source changes nothing.
+//   - A remote window's station-source buttons are sent to the Core, its
+//     own listeners run here, and the Core's state shows through
+//     applyStationValue.
+//   - A spot's record carries the fields the link names.
+//   - The WSJT-X and SpotCollector settings are this computer's; the
+//     station sources' are the Core's.
+//
+// No packet leaves the machine: the cluster points at 127.0.0.1 on a port
+// nothing listens on, WSJT-X and SpotCollector bind loopback UDP ports,
+// POTA and PSK Reporter are never started against their servers.
+//
+//   cmake --build build --target tst_spot_source_host
+//   QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^tst_spot_source_host$' \
+//       --output-on-failure
+//
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-09-26: original implementation for NereusSDR by J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
+// =================================================================
+
+#include <QtTest>
+
+#include <QSignalSpy>
+
+#include "OperatorWording.h"
+#include "core/AppSettings.h"
+#include "core/DxClusterClient.h"
+#include "core/PotaClient.h"
+#include "core/PskReporterClient.h"
+#include "core/SpotCollectorClient.h"
+#include "core/SpotSourceHost.h"
+#include "core/WsjtxClient.h"
+#include "core/settings/SettingsScope.h"
+#include "models/Band.h"
+#include "models/SpotModel.h"
+
+using namespace NereusSDR;
+
+namespace {
+
+struct Sources {
+    DxClusterClient dx;
+    DxClusterClient rbn;
+    WsjtxClient wsjtx;
+    SpotCollectorClient spotCollector;
+    PotaClient pota;
+    PskReporterClient psk;
+    SpotModel spots;
+    SpotSourceHost host{&dx, &rbn, &wsjtx, &spotCollector, &pota, &psk, &spots};
+};
+
+void setAutoStartsOnLoopback()
+{
+    auto& s = AppSettings::instance();
+    s.setValue(QStringLiteral("DxClusterAutoConnect"), QStringLiteral("True"));
+    s.setValue(QStringLiteral("DxClusterHost"), QStringLiteral("127.0.0.1"));
+    s.setValue(QStringLiteral("DxClusterPort"), 18391);
+    s.setValue(QStringLiteral("DxClusterCallsign"), QStringLiteral("KG4VCF"));
+    s.setValue(QStringLiteral("RbnAutoConnect"), QStringLiteral("True"));
+    s.setValue(QStringLiteral("RbnHost"), QStringLiteral("127.0.0.1"));
+    s.setValue(QStringLiteral("RbnPort"), 18392);
+    s.setValue(QStringLiteral("RbnCallsign"), QStringLiteral("KG4VCF"));
+    s.setValue(QStringLiteral("WsjtxAutoStart"), QStringLiteral("True"));
+    s.setValue(QStringLiteral("WsjtxAddress"), QStringLiteral("127.0.0.1"));
+    s.setValue(QStringLiteral("WsjtxPort"), 28391);
+    s.setValue(QStringLiteral("SpotCollectorAutoStart"), QStringLiteral("True"));
+    s.setValue(QStringLiteral("SpotCollectorPort"), 28392);
+}
+
+} // namespace
+
+class TstSpotSourceHost : public QObject {
+    Q_OBJECT
+
+private slots:
+    void init() { AppSettings::instance().clear(); }
+    void cleanup() { AppSettings::instance().clear(); }
+
+    void theCoreStartsOnlyTheStationSources()
+    {
+        setAutoStartsOnLoopback();
+        Sources s;
+        QSignalSpy dxError(&s.dx, &DxClusterClient::connectionError);
+        QSignalSpy rbnError(&s.rbn, &DxClusterClient::connectionError);
+        s.host.restoreAutoStart(SpotSourceHost::Placement::StationSources);
+        QCOMPARE(s.host.state(SpotSourceHost::kDxCluster), SpotSourceHost::kConnecting);
+        QTRY_VERIFY_WITH_TIMEOUT(dxError.count() > 0, 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(rbnError.count() > 0, 5000);
+        QCOMPARE(s.host.state(SpotSourceHost::kDxCluster), SpotSourceHost::kError);
+        QVERIFY(!s.wsjtx.isListening());
+        QVERIFY(!s.spotCollector.isListening());
+    }
+
+    void aRemoteWindowStartsOnlyItsOwnListeners()
+    {
+        setAutoStartsOnLoopback();
+        Sources s;
+        QSignalSpy dxError(&s.dx, &DxClusterClient::connectionError);
+        s.host.restoreAutoStart(SpotSourceHost::Placement::WindowSources);
+        QVERIFY(s.wsjtx.isListening());
+        QVERIFY(s.spotCollector.isListening());
+        QTest::qWait(300);
+        QCOMPARE(dxError.count(), 0);
+        QVERIFY(!s.dx.isConnected());
+        QCOMPARE(s.host.state(SpotSourceHost::kDxCluster), SpotSourceHost::kOff);
+    }
+
+    void aLocalWindowStartsEverySourceAsBefore()
+    {
+        setAutoStartsOnLoopback();
+        Sources s;
+        QSignalSpy dxError(&s.dx, &DxClusterClient::connectionError);
+        s.host.restoreAutoStart(SpotSourceHost::Placement::Everything);
+        QVERIFY(s.wsjtx.isListening());
+        QVERIFY(s.spotCollector.isListening());
+        QTRY_VERIFY_WITH_TIMEOUT(dxError.count() > 0, 5000);
+    }
+
+    void theCoresVerbsRefuseInPlainWords()
+    {
+        Sources s;
+        QString reason;
+        QVERIFY(!s.host.connectSource(QStringLiteral("nowhere"), &reason));
+        QCOMPARE(reason, QStringLiteral("The Core does not run that spot source."));
+        QVERIFY(!s.host.connectSource(SpotSourceHost::kWsjtx, &reason));
+        QCOMPARE(reason, QStringLiteral("WSJT-X and SpotCollector listen on each computer, not "
+                                        "on the Core."));
+        QVERIFY(!s.host.connectSource(SpotSourceHost::kDxCluster, &reason));
+        QCOMPARE(reason, QStringLiteral("Enter your callsign in Spot Hub first."));
+        AppSettings::instance().setValue(QStringLiteral("User/Callsign"), QStringLiteral("KG4VCF"));
+        QVERIFY(!s.host.connectSource(SpotSourceHost::kPskReporter, &reason));
+        QCOMPARE(reason, QStringLiteral("Enter your callsign and grid square in Spot Hub first."));
+        QVERIFY(!s.host.sendCommand(SpotSourceHost::kDxCluster, QStringLiteral("sh/dx"), &reason));
+        QCOMPARE(reason, QStringLiteral("The DX cluster is not connected."));
+        QVERIFY(!s.host.sendCommand(SpotSourceHost::kRbn, QStringLiteral("  "), &reason));
+        QCOMPARE(reason, QStringLiteral("Type a command first."));
+        QVERIFY(!s.host.sendCommand(SpotSourceHost::kPota, QStringLiteral("x"), &reason));
+        QCOMPARE(reason, QStringLiteral("Only the DX cluster and the Reverse Beacon Network take "
+                                        "typed commands."));
+        for (const QString& text :
+             {QStringLiteral("The Core does not run that spot source."),
+              QStringLiteral("Enter your callsign in Spot Hub first."),
+              QStringLiteral("The DX cluster is not connected."),
+              SpotSourceHost::readOnlyReason()}) {
+            QVERIFY2(OperatorWording::isPlain(text), qPrintable(text));
+        }
+        // Stopping what is not running changes nothing and is taken.
+        QSignalSpy changed(&s.host, &SpotSourceHost::sourcesChanged);
+        QVERIFY(s.host.disconnectSource(SpotSourceHost::kPota, &reason));
+        QCOMPARE(changed.count(), 0);
+        QVERIFY(!s.host.disconnectSource(SpotSourceHost::kWsjtx, &reason));
+    }
+
+    void theCoreConnectsFromItsSavedSettings()
+    {
+        auto& settings = AppSettings::instance();
+        settings.setValue(QStringLiteral("DxClusterHost"), QStringLiteral("127.0.0.1"));
+        settings.setValue(QStringLiteral("DxClusterPort"), 18393);
+        settings.setValue(QStringLiteral("User/Callsign"), QStringLiteral("KG4VCF"));
+        Sources s;
+        QSignalSpy dxError(&s.dx, &DxClusterClient::connectionError);
+        QString reason;
+        QVERIFY(s.host.connectSource(SpotSourceHost::kDxCluster, &reason));
+        QCOMPARE(s.host.dxClusterState(), SpotSourceHost::kConnecting);
+        QTRY_VERIFY_WITH_TIMEOUT(dxError.count() > 0, 5000);
+        QCOMPARE(s.host.dxClusterState(), SpotSourceHost::kError);
+        QVERIFY(!s.host.dxClusterText().isEmpty());
+    }
+
+    void aRemoteWindowSendsTheStationSourcesToTheCore()
+    {
+        Sources s;
+        QStringList sent;
+        s.host.setStationForwarder([&sent](const QByteArray& verb, const QString& source,
+                                           const QString& text, QString* reason) {
+            sent.append(QString::fromUtf8(verb) + QLatin1Char(':') + source
+                        + (text.isEmpty() ? QString() : QLatin1Char(':') + text));
+            if (source == SpotSourceHost::kPota) {
+                *reason = QStringLiteral("Not connected to the Core.");
+                return false;
+            }
+            return true;
+        });
+        QSignalSpy refused(&s.host, &SpotSourceHost::sourceRefused);
+        QSignalSpy dxError(&s.dx, &DxClusterClient::connectionError);
+        s.host.connectCluster(QStringLiteral("127.0.0.1"), 18394, QStringLiteral("KG4VCF"));
+        s.host.connectRbn(QStringLiteral("127.0.0.1"), 18395, QStringLiteral("KG4VCF"));
+        s.host.startPota(30);
+        s.host.startPskReporter(QStringLiteral("KG4VCF"), QStringLiteral("EM73"));
+        s.host.typeCommand(SpotSourceHost::kDxCluster, QStringLiteral("sh/dx 20"));
+        s.host.disconnectCluster();
+        s.host.clearAllSpots();
+        QCOMPARE(sent, (QStringList{QStringLiteral("spots.connect:dxCluster"),
+                                    QStringLiteral("spots.connect:rbn"),
+                                    QStringLiteral("spots.connect:pota"),
+                                    QStringLiteral("spots.connect:pskReporter"),
+                                    QStringLiteral("spots.sendCommand:dxCluster:sh/dx 20"),
+                                    QStringLiteral("spots.disconnect:dxCluster"),
+                                    QStringLiteral("spots.clearAll:")}));
+        QCOMPARE(refused.count(), 1);
+        QCOMPARE(refused.first().at(0).toString(), SpotSourceHost::kPota);
+        // Nothing dialled here.
+        QTest::qWait(200);
+        QCOMPARE(dxError.count(), 0);
+        QVERIFY(!s.psk.isAutoSendActive());
+        // This computer's own listener runs here.
+        s.host.startWsjtx(QStringLiteral("127.0.0.1"), 28393);
+        QVERIFY(s.wsjtx.isListening());
+        QCOMPARE(s.host.state(SpotSourceHost::kWsjtx), SpotSourceHost::kConnected);
+
+        // The Core's state, as its `spotSources` object sends it.
+        QSignalSpy changed(&s.host, &SpotSourceHost::sourceChanged);
+        QVERIFY(s.host.applyStationValue("dxClusterState", QStringLiteral("connected")));
+        QVERIFY(s.host.applyStationValue("dxClusterText", QStringLiteral("")));
+        QVERIFY(!s.host.applyStationValue("wsjtxState", QStringLiteral("connected")));
+        QVERIFY(!s.host.applyStationValue("dxClusterState", 3));
+        QCOMPARE(s.host.dxClusterState(), SpotSourceHost::kConnected);
+        QVERIFY(s.host.isRunning(SpotSourceHost::kDxCluster));
+        QCOMPARE(changed.count(), 1);
+        s.host.clearStationValues();
+        QCOMPARE(s.host.dxClusterState(), SpotSourceHost::kOff);
+    }
+
+    void aSpotRecordCarriesTheLinksFields()
+    {
+        SpotData spot;
+        spot.index = 7;
+        spot.callsign = QStringLiteral("JA1ABC");
+        spot.rxFreqMhz = 14.025;
+        spot.mode = QStringLiteral("CW");
+        spot.source = QStringLiteral("Cluster");
+        spot.spotterCallsign = QStringLiteral("W3LPL");
+        spot.comment = QStringLiteral("big signal");
+        spot.timestamp = QDateTime(QDate(2026, 9, 26), QTime(18, 24), QTimeZone::UTC);
+        const QJsonObject f = SpotSourceHost::spotRecordFields(spot, nullptr);
+        QCOMPARE(f.keys(), (QStringList{"band", "call", "comment", "dxccColour", "dxccPriority",
+                                        "frequencyHz", "mode", "source", "spotter", "timeUtc"}));
+        QCOMPARE(f.value("frequencyHz").toDouble(), 14025000.0);
+        QCOMPARE(f.value("call").toString(), QStringLiteral("JA1ABC"));
+        QCOMPARE(f.value("timeUtc").toString(), QStringLiteral("2026-09-26T18:24:00Z"));
+        QCOMPARE(f.value("band").toInt(), static_cast<int>(Band::Band20m));
+        QCOMPARE(f.value("dxccColour").toString(), QString());
+        QCOMPARE(f.value("dxccPriority").toInt(), 0);
+    }
+
+    void theListenersAreThisComputersAndTheRestTheCores()
+    {
+        for (const char* key : {"WsjtxPort", "WsjtxAddress", "WsjtxAutoStart",
+                                "SpotCollectorPort", "SpotCollectorAutoStart"}) {
+            QCOMPARE(classifySettingsKey(QString::fromLatin1(key)), SettingsScope::OperatorLocal);
+        }
+        for (const char* key : {"DxClusterHost", "RbnCallsign", "PotaPollInterval",
+                                "PskReporterAutoStart", "User/Callsign"}) {
+            QCOMPARE(classifySettingsKey(QString::fromLatin1(key)), SettingsScope::Station);
+        }
+    }
+};
+
+QTEST_GUILESS_MAIN(TstSpotSourceHost)
+#include "tst_spot_source_host.moc"

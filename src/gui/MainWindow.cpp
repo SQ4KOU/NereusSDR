@@ -276,6 +276,23 @@
 //                                    holder (the transmitter's settings and
 //                                    VOX disabled with the reason). AI-
 //                                    assisted via Anthropic Claude Code.
+//   2026-09-26 - Remote-window parity Task 19 (R-IOS-25): the Spot Hub's
+//                starts and stops go through SpotSourceHost; a remote
+//                window's cluster, RBN, POTA and PSK Reporter are the
+//                Core's; the Spot Hub's Core settings are disabled with
+//                Setup's words while there is no Core session. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - Remote-window parity Task 21 (R-IOS-18, B6.2, B6.3): the
+//                Radio menu, the station block and the title bar offer
+//                Change radio, Edit radio and Forget radio for the Core's
+//                radio (Setup > This Core); the title bar copies the Core's
+//                radio's IP and MAC; an unmanaged remote window's Manage
+//                Radios opens This Core. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-26 : D79 (R-IOS-11, R-R3-49): View > Band Plan's check
+//                follows planChanged, so a remote window's check follows
+//                the Core's plan. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -584,6 +601,9 @@ warren@wpratt.com
 #include "applets/TxEqDialog.h"
 // Phase 3J-2 H1: Tools menu modeless singletons (Spot Hub + FreeDV Reporter).
 #include "SpotHubDialog.h"
+#include "core/SpotSourceHost.h"
+#include "core/station/StationRadios.h"
+#include "gui/setup/ThisCorePage.h"
 #include "FreeDVReporterDialog.h"
 // Phase 3F Sub-Epic G T4: bench-minimum Diversity dialog (Tools menu).
 #include "DiversityDialog.h"
@@ -1718,6 +1738,15 @@ void MainWindow::ensureRemoteSession()
             }
             m_stationLinkLostSeen = true;
             m_lastStationLinkLostReason = reason;
+            // The operator's ruling of 2026-09-26: a radio change restarts
+            // the Core; this window reconnects by itself, so it is not a
+            // lost link. The Core's words name the radio.
+            if (!m_stationClient->radioChangeReason().isEmpty()) {
+                showToast(tr("The Core is changing its radio. This window reconnects by "
+                             "itself."),
+                          ToastSeverity::Info, 5000);
+                return;
+            }
             // The raw reason is logged above and compared as text here;
             // only the toast is in user words (R-R3-17, R-R3-21).
             showToast(tr("Link to the Core lost: %1")
@@ -1737,6 +1766,10 @@ void MainWindow::ensureRemoteSession()
             }
             m_reconnectToastSeen = true;
             m_lastReconnectToastReason = m_lastStationLinkLostReason;
+            // A radio change said it reconnects already (above).
+            if (!m_stationClient->radioChangeReason().isEmpty()) {
+                return;
+            }
             showToast(tr("Reconnecting to the Core (attempt %1) in %2 s")
                           .arg(attempt).arg((delayMs + 999) / 1000),
                       ToastSeverity::Info, 3000);
@@ -7690,10 +7723,38 @@ void MainWindow::buildMenuBar()
 
     // Manage Radios — always enabled; sole purpose is to open the panel
     // (which has its own ↻ Scan button for fresh broadcast discovery).
+    // Parity Task 21 (R-IOS-18): in a remote window that is not managed by
+    // the Connections picker, the Core's radios are on Setup > This Core
+    // (the Connection panel is this computer's radios, which a remote
+    // window does not run).
     m_actManageRadios = radioMenu->addAction(QStringLiteral("&Manage Radios…"),
-        this, &MainWindow::showConnectionPanel);
+        this, [this]() {
+            if (!m_connectionPickerManaged && m_radioModel != nullptr
+                && !m_radioModel->ownsLocalDsp()) {
+                openThisCore(ThisCoreFocus::ChangeRadio);
+                return;
+            }
+            showConnectionPanel();
+        });
     m_actManageRadios->setToolTip(QStringLiteral(
         "Open the Connection Panel (radio list + ↻ Scan)"));
+    // Parity Task 21 (R-IOS-18, B6.2; the operator's "Option A"): a remote
+    // window's Core's radio, beside Connections. A window running its own
+    // radio changes it in the Connection panel.
+    m_actChangeCoreRadio = radioMenu->addAction(tr("Change radio…"), this, [this]() {
+        openThisCore(ThisCoreFocus::ChangeRadio);
+    });
+    m_actEditCoreRadio = radioMenu->addAction(tr("Edit radio…"), this, [this]() {
+        openThisCore(ThisCoreFocus::EditRadio);
+    });
+    m_actForgetCoreRadio = radioMenu->addAction(tr("Forget radio"), this, [this]() {
+        openThisCore(ThisCoreFocus::ForgetRadio);
+    });
+    radioMenu->setToolTipsVisible(true);
+    for (QAction* a : {m_actChangeCoreRadio, m_actEditCoreRadio, m_actForgetCoreRadio}) {
+        a->setVisible(m_radioModel != nullptr && !m_radioModel->ownsLocalDsp());
+    }
+    connect(radioMenu, &QMenu::aboutToShow, this, &MainWindow::refreshCoreRadioActions);
 
     radioMenu->addSeparator();
 
@@ -7869,6 +7930,15 @@ void MainWindow::buildMenuBar()
                 m_radioModel->bandPlanManagerMutable().setActivePlan(name);
             });
         }
+        // D79 (R-IOS-11, R-R3-49): the check follows the plan however it
+        // changes (a remote window following the Core's plan included).
+        connect(&m_radioModel->bandPlanManagerMutable(), &BandPlanManager::planChanged,
+                planGroup, [this, planGroup]() {
+                    const QString active = m_radioModel->bandPlanManager().activePlanName();
+                    for (QAction* action : planGroup->actions()) {
+                        action->setChecked(action->text() == active);
+                    }
+                });
     }
 
     {
@@ -11685,6 +11755,103 @@ QString MainWindow::stationSettingsReason() const
     return tr("Connect to the Core to change these.");
 }
 
+// ── Parity Task 21 (R-IOS-18): the Core's radio from a remote window ──────
+
+QString MainWindow::coreRadioAddressText() const
+{
+    return m_stationClient != nullptr && m_stationClient->isConnectionActive()
+        ? m_stationClient->capabilities().radioAddress
+        : QString();
+}
+
+QString MainWindow::coreRadioMacText() const
+{
+    return m_stationClient != nullptr && m_stationClient->isConnectionActive()
+        ? m_stationClient->capabilities().macAddress
+        : QString();
+}
+
+QString MainWindow::forgetCoreRadioReason() const
+{
+    // The Core's own radio cannot be forgotten while it runs it (the
+    // Core's rule); This Core forgets the others.
+    for (const StationRadioEntry& radio : m_radioModel->stationRadios()) {
+        if (radio.inUse) {
+            return StationRadios::inUseReason();
+        }
+    }
+    return {};
+}
+
+void MainWindow::addCoreRadioActions(QMenu& menu)
+{
+    menu.addAction(tr("Change radio…"), this, [this]() {
+        openThisCore(ThisCoreFocus::ChangeRadio);
+    });
+    menu.addAction(tr("Edit radio…"), this, [this]() {
+        openThisCore(ThisCoreFocus::EditRadio);
+    });
+    QAction* forget = menu.addAction(tr("Forget radio"), this, [this]() {
+        openThisCore(ThisCoreFocus::ForgetRadio);
+    });
+    const QString why = forgetCoreRadioReason();
+    forget->setEnabled(why.isEmpty());
+    forget->setToolTip(why);
+}
+
+void MainWindow::refreshCoreRadioActions()
+{
+    if (m_actForgetCoreRadio == nullptr || m_radioModel == nullptr) {
+        return;
+    }
+    const QString why = forgetCoreRadioReason();
+    m_actForgetCoreRadio->setEnabled(why.isEmpty());
+    m_actForgetCoreRadio->setToolTip(why);
+}
+
+void MainWindow::openThisCore(ThisCoreFocus focus)
+{
+    auto* dialog = createSetupDialog();
+    if (dialog == nullptr) {
+        return;
+    }
+    // selectPage realizes the lazily built page before it returns.
+    dialog->selectPage(QStringLiteral("This Core"));
+    if (auto* page = dialog->findChild<ThisCorePage*>()) {
+        if (focus != ThisCoreFocus::ChangeRadio) {
+            page->selectCoreRadio();
+        }
+        if (focus == ThisCoreFocus::EditRadio) {
+            page->modelCombo()->setFocus();
+        } else if (focus == ThisCoreFocus::ForgetRadio) {
+            page->forgetButton()->setFocus();
+        }
+    }
+    dialog->show();
+    dialog->raise();
+}
+
+void MainWindow::refreshSpotHubAvailability()
+{
+    // Parity Task 19 (R-IOS-25, B7.2): a window running its own radio runs
+    // every source itself. A remote window's Spot Hub edits the Core's
+    // settings (Setup's words while there is no Core session) and asks the
+    // Core to run the station's sources.
+    if (!m_spotHubDialog || m_radioModel == nullptr) {
+        return;
+    }
+    if (m_radioModel->ownsLocalDsp()) {
+        m_spotHubDialog->setStationSettingsAvailable(true, QString());
+        m_spotHubDialog->setStationSourcesAvailable(true, QString());
+        return;
+    }
+    const bool settings = stationSettingsAvailable();
+    m_spotHubDialog->setStationSettingsAvailable(settings, stationSettingsReason());
+    const bool sources = m_stationClient != nullptr && m_stationClient->spotSourcesAvailable();
+    m_spotHubDialog->setStationSourcesAvailable(
+        sources, settings ? IStationLink::spotSourcesUnavailableReason() : stationSettingsReason());
+}
+
 RemoteReceiverAudioNote MainWindow::receiverAudioNoteFor(const RemoteMediaController* media)
 {
     // Only a remote window has remote media, and only a Core that sends
@@ -11956,6 +12123,8 @@ void MainWindow::applyRemoteRoleGating()
         dialog->setTransmitSettingsPermitted(settingsAt(8), settingsReasonAt(8), 8);
         dialog->setStationSettingsAvailable(stationAvailable, stationSettingsReason());
     }
+    // Parity Task 19 (B7.2): and the Spot Hub's Core settings and sources.
+    refreshSpotHubAvailability();
     if (m_actTxEqualizer) {
         // R-R3-49 (parity Task 4): opens whatever the Core says; the dialog
         // shows why it is greyed.
@@ -12013,12 +12182,13 @@ void MainWindow::applyRemoteRoleGating()
             tr("Disconnect from Core and stop automatic connection attempts"));
     }
     if (m_actManageRadios != nullptr) {
-        m_actManageRadios->setEnabled(m_connectionPickerManaged);
+        // Parity Task 21 (R-IOS-18): a window started for one Core manages
+        // that Core's radios on Setup > This Core.
+        m_actManageRadios->setEnabled(true);
         m_actManageRadios->setToolTip(
             m_connectionPickerManaged
                 ? tr("Choose a Core/radio pair or a radio for this computer")
-                : tr("Unavailable: this window was started for one Core with "
-                     "--station, so the radio list cannot change it."));
+                : tr("See and change the Core's radio (Setup > This Core)"));
     }
     // R-R3-46 / R-R3-21: the attenuator, preamp and auto-attenuate
     // controls (RX applet, Setup > General > Options) follow the Core's
@@ -12106,10 +12276,29 @@ void MainWindow::showSegmentContextMenu(const QPoint& globalPos)
 {
     QMenu menu(this);
     if (!m_radioModel->ownsLocalDsp()) {
+        menu.setToolTipsVisible(true);
         menu.addAction(m_actConnect);
         menu.addAction(m_actDisconnect);
         menu.addAction(tr("Core connection details..."),
                        this, &MainWindow::showRemoteConnectionPanel);
+        // Parity Task 21 (R-IOS-18, B6.2): the Core's radio.
+        menu.addSeparator();
+        addCoreRadioActions(menu);
+        // B6.3: the Core's radio's address, as a local window copies its own.
+        menu.addSeparator();
+        const QString ip = coreRadioAddressText();
+        const QString mac = coreRadioMacText();
+        QAction* copyIp = menu.addAction(tr("Copy IP address"), this, [ip]() {
+            QGuiApplication::clipboard()->setText(ip);
+        });
+        QAction* copyMac = menu.addAction(tr("Copy MAC address"), this, [mac]() {
+            QGuiApplication::clipboard()->setText(mac);
+        });
+        const QString none = tr("The Core has not reported its radio.");
+        copyIp->setEnabled(!ip.isEmpty());
+        copyIp->setToolTip(ip.isEmpty() ? none : QString());
+        copyMac->setEnabled(!mac.isEmpty());
+        copyMac->setToolTip(mac.isEmpty() ? none : QString());
         menu.exec(globalPos);
         return;
     }
@@ -12158,10 +12347,14 @@ void MainWindow::showStationContextMenu(const QPoint& globalPos)
 
     QMenu menu(this);
     if (!m_radioModel->ownsLocalDsp()) {
+        menu.setToolTipsVisible(true);
         menu.addAction(m_actConnect);
         menu.addAction(m_actDisconnect);
         menu.addAction(tr("Core connection details..."),
                        this, &MainWindow::showRemoteConnectionPanel);
+        // Parity Task 21 (R-IOS-18, B6.2): the Core's radio.
+        menu.addSeparator();
+        addCoreRadioActions(menu);
         menu.exec(globalPos);
         return;
     }
@@ -12311,8 +12504,10 @@ void MainWindow::openSpotHub()
         // Bridge spotsClearedAll (Display tab's "Clear All Spots" button)
         // to SpotModel::clear so the global QShortcut and the dialog
         // button share one truth-source.
+        // Parity Task 19 (R-IOS-25): through the spot source host, which
+        // clears this window's spots and, in a remote window, the Core's.
         connect(m_spotHubDialog.data(), &SpotHubDialog::spotsClearedAll,
-                m_radioModel->spotModel(), &SpotModel::clear);
+                m_radioModel->spotSourceHost(), &SpotSourceHost::clearAllSpots);
         // Spot List double-click tuneRequested(double Mhz) drives the
         // active slice. SliceModel::setFrequency takes Hz (double), so
         // multiply by 1e6 to convert MHz to Hz.
@@ -12369,96 +12564,37 @@ void MainWindow::openSpotHub()
         // these connects the per-tab Connect / Start / Stop buttons in
         // SpotHubDialog emit signals into the void — the FreeDV pair
         // above was wired but DX Cluster, RBN, WSJT-X, SpotCollector,
-        // and POTA buttons all silently no-op'd.  The auto-start path
-        // (RadioModel::restoreSpotClientAutoStartState) calls the same
-        // client methods directly and worked; only the manual-button
-        // path was broken.  Clients themselves are correct — proven by
-        // the spotReceived → spotModel wires at RadioModel.cpp:973-981.
-        if (auto* dxc = m_radioModel->dxCluster()) {
-            connect(m_spotHubDialog.data(),
-                    &SpotHubDialog::connectRequested,
-                    dxc, &DxClusterClient::connectToCluster);
-            connect(m_spotHubDialog.data(),
-                    &SpotHubDialog::disconnectRequested,
-                    dxc, &DxClusterClient::disconnect);
-        }
-        if (auto* rbn = m_radioModel->rbn()) {
-            connect(m_spotHubDialog.data(),
-                    &SpotHubDialog::rbnConnectRequested,
-                    rbn, &DxClusterClient::connectToCluster);
-            connect(m_spotHubDialog.data(),
-                    &SpotHubDialog::rbnDisconnectRequested,
-                    rbn, &DxClusterClient::disconnect);
-        }
-        if (auto* wsjtx = m_radioModel->wsjtx()) {
-            connect(m_spotHubDialog.data(),
-                    &SpotHubDialog::wsjtxStartRequested,
-                    wsjtx, &WsjtxClient::startListening);
-            connect(m_spotHubDialog.data(),
-                    &SpotHubDialog::wsjtxStopRequested,
-                    wsjtx, &WsjtxClient::stopListening);
-        }
-        if (auto* sc = m_radioModel->spotCollector()) {
-            connect(m_spotHubDialog.data(),
-                    &SpotHubDialog::spotCollectorStartRequested,
-                    sc, &SpotCollectorClient::startListening);
-            connect(m_spotHubDialog.data(),
-                    &SpotHubDialog::spotCollectorStopRequested,
-                    sc, &SpotCollectorClient::stopListening);
-        }
-        if (auto* pota = m_radioModel->pota()) {
-            connect(m_spotHubDialog.data(),
-                    &SpotHubDialog::potaStartRequested,
-                    pota, &PotaClient::startPolling);
-            connect(m_spotHubDialog.data(),
-                    &SpotHubDialog::potaStopRequested,
-                    pota, &PotaClient::stopPolling);
-        }
-
-        // 2026-05-12 bench fix: PSK Reporter Start button source-first
-        // port from freedv-gui.  The dialog emitted pskStartRequested
-        // but nothing in MainWindow handled it.
+        // and POTA buttons all silently no-op'd.
         //
-        // From freedv-gui main.cpp:2597 [@77e793a]:
-        //   m_pskReporterTimer.Start(5 * 60 * 1000);
-        // and main.cpp:1609-1616 [@77e793a]:
-        //   if (timerId == ID_TIMER_PSKREPORTER) {
-        //       for (auto& obj : wxGetApp().m_reporters) obj->send();
-        //   }
-        // PSK Reporter is a send-only IPFIX client (pskreporter.h:65-68
-        // [@77e793a] — freqChange / transmit / inAnalogMode are no-ops).
-        // "Start" = arm the 5-minute auto-send timer.
-        //
-        // From freedv-gui main.cpp:2694 [@77e793a]:
-        //   m_pskReporterTimer.Stop();
-        // "Stop" = disarm the timer.  Any queued records flush on
-        // ~PskReporterClient when the client tears down (mirrors
-        // pskreporter.cpp:171-181 [@77e793a]).
-        if (auto* psk = m_radioModel->pskReporter()) {
-            connect(m_spotHubDialog.data(),
-                    &SpotHubDialog::pskStartRequested,
-                    psk, [psk](const QString& call,
-                               const QString& grid) {
-                        // 2026-05-12 bench fix (PR #238 review P2):
-                        // apply the freshly-validated identity to the
-                        // live client BEFORE arming the timer.  Without
-                        // this call, the client keeps the (often empty)
-                        // identity set at RadioModel construction time
-                        // and emits IPFIX datagrams with empty receiver
-                        // fields.  pskreporter.cpp:148-169 [@77e793a].
-                        psk->setIdentity(
-                            call, grid,
-                            QStringLiteral("NereusSDR ") +
-                                QStringLiteral(NEREUSSDR_VERSION));
-                        psk->setAutoSendIntervalSec(
-                            PskReporterClient::kReportingIntervalSec);
-                    });
-            connect(m_spotHubDialog.data(),
-                    &SpotHubDialog::pskStopRequested,
-                    psk, [psk]() {
-                        psk->setAutoSendIntervalSec(0);
-                    });
+        // Parity Task 19 (R-IOS-25): the starts and stops moved into the
+        // spot source host (the same client calls, and the PSK Reporter
+        // Start that arms the client's reporting interval after setting
+        // the freshly checked identity). In a remote window it sends the
+        // DX cluster, RBN, POTA and PSK Reporter buttons to the Core, which
+        // runs them; WSJT-X and SpotCollector listen on this computer.
+        if (SpotSourceHost* host = m_radioModel->spotSourceHost()) {
+            SpotHubDialog* hub = m_spotHubDialog.data();
+            connect(hub, &SpotHubDialog::connectRequested, host, &SpotSourceHost::connectCluster);
+            connect(hub, &SpotHubDialog::disconnectRequested, host,
+                    &SpotSourceHost::disconnectCluster);
+            connect(hub, &SpotHubDialog::rbnConnectRequested, host, &SpotSourceHost::connectRbn);
+            connect(hub, &SpotHubDialog::rbnDisconnectRequested, host,
+                    &SpotSourceHost::disconnectRbn);
+            connect(hub, &SpotHubDialog::wsjtxStartRequested, host, &SpotSourceHost::startWsjtx);
+            connect(hub, &SpotHubDialog::wsjtxStopRequested, host, &SpotSourceHost::stopWsjtx);
+            connect(hub, &SpotHubDialog::spotCollectorStartRequested, host,
+                    &SpotSourceHost::startSpotCollector);
+            connect(hub, &SpotHubDialog::spotCollectorStopRequested, host,
+                    &SpotSourceHost::stopSpotCollector);
+            connect(hub, &SpotHubDialog::potaStartRequested, host, &SpotSourceHost::startPota);
+            connect(hub, &SpotHubDialog::potaStopRequested, host, &SpotSourceHost::stopPota);
+            connect(hub, &SpotHubDialog::pskStartRequested, host,
+                    &SpotSourceHost::startPskReporter);
+            connect(hub, &SpotHubDialog::pskStopRequested, host,
+                    &SpotSourceHost::stopPskReporter);
+            hub->setSourceHost(host);
         }
+        refreshSpotHubAvailability();
 
         // 2026-05-12 bench fix: Save & Propagate writes User/GridSquare
         // to AppSettings but the FreeDVStationModel only reads its

@@ -88,9 +88,21 @@
 //               while its pairing window is open, and pairs through the
 //               service's mailbox (startRendezvous()). J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: Parity Task 19 (R-IOS-25): the Core starts the station's
+//               spot sources whose Auto-Connect or Auto-Start is on, with
+//               no window. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
+//   2026-09-26: Parity Task 21 (R-IOS-18): the Core's choice of radio
+//               (StationRadios::choose: a radio chosen from an app, then
+//               radio_mac, then the one radio in sight, else wait; never
+//               the first found); station.selectRadio restarts the run on
+//               the chosen radio; station.rescanRadios scans while
+//               connected. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/daemon/DaemonApp.h"
+#include "core/station/StationRadios.h"
 #include "core/daemon/DaemonAgcSource.h"
 #include "core/daemon/DaemonTelemetryController.h"
 #include "core/daemon/HostTelemetrySampler.h"
@@ -142,6 +154,9 @@ DaemonApp::DaemonApp(QObject* parent)
     m_radioRetryTimer->setSingleShot(true);
     connect(m_radioRetryTimer, &QTimer::timeout,
             this, &DaemonApp::attemptRadioDiscovery);
+    m_radioSwitchDeadline = new QTimer(this);
+    m_radioSwitchDeadline->setSingleShot(true);
+    connect(m_radioSwitchDeadline, &QTimer::timeout, this, &DaemonApp::endRadioSwitch);
     m_stationListenRetryTimer = new QTimer(this);
     m_stationListenRetryTimer->setSingleShot(true);
     connect(m_stationListenRetryTimer, &QTimer::timeout,
@@ -176,7 +191,22 @@ bool DaemonApp::start(const DaemonConfig& cfg)
     }
     m_stopDeferred = false;
     m_radioConfig = cfg;
-    m_selectedRadioMac = cfg.radioMac;
+    // Parity Task 21 (R-IOS-18): the choice order's first two steps, a radio
+    // chosen from an app, then radio_mac; empty leaves the third (the one
+    // radio in sight) to the first scan (StationRadios::choose).
+    ensureStationRadios();
+    {
+        // Fix wave, I6: this run's pending choice (a radio change in this
+        // process), then the last choice that connected, then radio_mac. A
+        // new nereusd has no pending choice, so one that never connected is
+        // never reloaded.
+        const QString pending = m_stationRadios->pendingChoice();
+        const QString saved = m_stationRadios->savedChoice();
+        m_selectedRadioMac = !pending.isEmpty() ? pending
+            : !saved.isEmpty()                 ? saved
+                                               : cfg.radioMac;
+        m_stationRadios->setTarget(m_selectedRadioMac);
+    }
     m_radioAttempted = false;
     m_radioConnectedBefore = false;
     m_radioRetryNextMs = m_radioRetryInitialMs;
@@ -194,6 +224,10 @@ bool DaemonApp::start(const DaemonConfig& cfg)
     // can connect the model, so no local-session capture demand is ever
     // taken and the capture helper is never started.
     m_radioModel->setPcCaptureAllowed(false);
+    // Fix wave, M3: a key that arrives while the Core changes its radio is
+    // refused.
+    m_radioModel->setStationRadioChangeUnderway(m_stationRadios->switching());
+    m_radioModel->setStationRadioWaiting(m_stationRadios->waitingReason());
     // R-R3-44: nor does it publish VAX devices. A remote window's VAX
     // channels are on the operator's computer; outputs here would be
     // devices nothing on the Core host feeds.
@@ -322,7 +356,7 @@ bool DaemonApp::start(const DaemonConfig& cfg)
         // Bring up the station before asynchronous discovery. An authenticated
         // client can observe the disconnected state while a radio powers up.
         m_radioRecoveryEnabled = true;
-        radioMac = cfg.radioMac;
+        radioMac = m_selectedRadioMac;
         m_radioModel->prepareReceiveLayout(radioMac);
     }
 
@@ -344,6 +378,13 @@ bool DaemonApp::start(const DaemonConfig& cfg)
     // way, but there is no reason to make it the only cover.
     startStationServer(cfg);
 
+    // Parity Task 19 (R-IOS-25; remote design section 6.4): the station's
+    // spot sources (DX cluster, RBN, POTA, PSK Reporter) whose Auto-Connect
+    // or Auto-Start is on in the Core's settings run here, with no window.
+    // After the station server, so its streams hold the first console
+    // lines. Each window runs its own WSJT-X and SpotCollector listeners.
+    m_radioModel->restoreStationSpotSources();
+
     // Fix round 1, Finding 1: mintFftEndpoints() only fills m_topology's
     // own private bookkeeping. Without this call the subscriptions never
     // reached RadioModel's live FFTRouter (RadioModel::fftRouter()) and
@@ -360,13 +401,26 @@ void DaemonApp::stop()
 {
     // iPhone app Task 17: nothing answers the console or a browser once
     // the Core is going away.
-    m_controlSocket.reset();
-    m_controlCommands.reset();
+    // Fix wave (I1): a radio change's restart keeps the console commands.
+    if (!m_keepConsoleOnStop) {
+        m_controlSocket.reset();
+        m_controlCommands.reset();
+    }
     m_statusPage.reset();
     // iPhone app plan Task 27: before the server its callbacks read.
     m_rendezvous.reset();
     m_radioRecoveryEnabled = false;
     cancelRadioDiscovery();
+    // Parity Task 21: a rescan still listening is dropped.
+    ++m_radioScanGeneration;
+    if (m_radioScanThread) {
+        m_radioScanThread->requestInterruption();
+        m_radioScanThread->wait();
+        m_radioScanThread.reset();
+    }
+    if (m_stationRadios) {
+        m_stationRadios->clearCurrent();
+    }
     cancelStationServerListenRetry();
     m_stationAnnouncer.reset();
     m_dnsSdAdvertiser.reset();
@@ -620,6 +674,9 @@ void DaemonApp::startStationServer(const DaemonConfig& cfg)
     // default): the station transmit gate, and the model's receive-only
     // policy when it is deny.
     m_stationServer->setRemoteTransmitAllowed(cfg.remoteTransmitAllowed);
+    // Parity Task 21 (R-IOS-18): the radios the Core finds and its choice of
+    // one (stationRadiosVersion 1).
+    m_stationServer->setStationRadios(m_stationRadios.get());
     // iPhone app Task 17 (R-IOS-08): the status page, bound exactly where the
     // listener binds: `bind` above, listenerAddressFor(remote_bind), which is
     // DaemonConfig::listenAddressFor's rule (R-R3-26). A Core bound to one
@@ -1291,18 +1348,32 @@ void DaemonApp::finishRadioDiscovery(const QList<RadioInfo>& found)
     if (!m_radioRecoveryEnabled || !m_radioModel) {
         return;
     }
-    const auto selected = std::find_if(found.cbegin(), found.cend(), [this](const RadioInfo& info) {
-        return !info.inUse && !info.macAddress.isEmpty()
-            && (m_selectedRadioMac.isEmpty()
-                || info.macAddress.compare(m_selectedRadioMac, Qt::CaseInsensitive) == 0);
-    });
-    if (selected == found.cend()) {
+    // Parity Task 21 (R-IOS-18): the Core's choice order. Never the first
+    // radio found: a radio chosen from an app, radio_mac, the one radio in
+    // sight, or wait for a choice (StationRadios::choose). This run's radio,
+    // once identified, is kept across a reconnect.
+    m_stationRadios->setVisible(found);
+    const StationRadios::Choice choice = StationRadios::choose(
+        found, m_selectedRadioMac, m_stationRadios->savedChoice(), m_radioConfig.radioMac);
+    if (choice.pick != StationRadios::Pick::Radio) {
+        m_stationRadios->setWaiting(choice.reason);
+        endRadioSwitch();
         scheduleRadioDiscovery();
         return;
     }
+    RadioInfo chosen = choice.radio;
+    // The model an app set for this radio (station.setRadioModel), as the
+    // local window's Edit radio override applies at connect.
+    const HPSDRModel modelOverride = m_stationRadios->overrideFor(chosen.macAddress);
+    if (modelOverride != HPSDRModel::FIRST) {
+        chosen.modelOverride = modelOverride;
+    }
+    const RadioInfo* const selected = &chosen;
     if (m_selectedRadioMac.isEmpty()) {
         m_selectedRadioMac = selected->macAddress;
+        m_stationRadios->setTarget(m_selectedRadioMac);
     }
+    m_stationRadios->setCurrent(chosen);
     const bool preserve = m_radioAttempted;
     m_radioAttempted = true;
     if (!preserve) {
@@ -1324,6 +1395,11 @@ void DaemonApp::finishRadioDiscovery(const QList<RadioInfo>& found)
         return;
     }
     if (RadioConnection* const connection = m_radioModel->connection()) {
+        // Fix wave, C1: a change that neither connects nor fails within the
+        // Core's connect bound ends anyway.
+        if (m_stationRadios->switching()) {
+            m_radioSwitchDeadline->start(m_radioSwitchBoundMs);
+        }
         const quint64 generation = m_radioRecoveryGeneration;
         connect(connection, &RadioConnection::connectFailed, this,
                 [this, generation](ConnectFailure, const QString&) {
@@ -1332,6 +1408,8 @@ void DaemonApp::finishRadioDiscovery(const QList<RadioInfo>& found)
             }
         }, Qt::QueuedConnection);
     } else {
+        // The connect did not start: the change has failed.
+        endRadioSwitch();
         scheduleRadioDiscovery();
     }
 }
@@ -1343,6 +1421,13 @@ void DaemonApp::onRadioStateForRecovery(ConnectionState state)
         return;
     }
     if (state == ConnectionState::Connected) {
+        // Parity Task 21: a radio change has finished. Fix wave, I6: a
+        // pending choice becomes the saved one now that it connected.
+        if (m_stationRadios && m_radioModel->connection()) {
+            m_stationRadios->confirmChoice(
+                m_radioModel->connection()->radioInfo().macAddress);
+        }
+        endRadioSwitch();
         m_radioModel->completeReceiveLayoutStartup();
         m_radioRetryNextMs = m_radioRetryInitialMs;
         if (!m_radioConnectedBefore) {
@@ -1364,6 +1449,9 @@ void DaemonApp::retireRadioAndRetry()
     if (!m_radioRecoveryEnabled || !m_radioModel || m_retiringRadio) {
         return;
     }
+    // Fix wave, C1: the new radio's connect failed or its link was lost, so a
+    // radio change under way ends (its choice is kept as this run's radio).
+    endRadioSwitch();
     // Invalidate both discovery completions and terminal reports from the
     // retired connection. RadioModel keeps the slices while retiring all DSP.
     cancelRadioDiscovery();
@@ -1371,6 +1459,10 @@ void DaemonApp::retireRadioAndRetry()
     m_retiringRadio = true;
     m_radioModel->disconnectFromRadio();
     m_retiringRadio = false;
+    // Parity Task 21: no radio until it is found again; it stays listed.
+    if (m_stationRadios) {
+        m_stationRadios->clearCurrent();
+    }
     scheduleRadioDiscovery();
 }
 
@@ -1469,5 +1561,184 @@ QList<int> DaemonApp::fftRouterMappingsForTest(const QString& consumerId) const
     return m_radioModel->fftRouter()->receiversForPan(consumerId);
 }
 #endif
+
+
+// ── Parity Task 21 (R-IOS-18): the Core's radio ───────────────────────────
+
+void DaemonApp::ensureStationRadios()
+{
+    if (m_stationRadios) {
+        return;
+    }
+    // The Core's own store (server_main.cpp resolved the profile first).
+    m_stationRadios = std::make_unique<StationRadios>(AppSettings::instance());
+    m_stationRadios->onSelect = [this](const QString& mac) { switchRadio(mac); };
+    m_stationRadios->onRescan = [this]() { rescanRadios(); };
+    // Fix wave (M2): the waiting reason reaches every window as the Core's
+    // radio property stationRadioWaiting.
+    connect(m_stationRadios.get(), &StationRadios::entriesChanged, this, [this]() {
+        if (m_radioModel) {
+            m_radioModel->setStationRadioWaiting(m_stationRadios->waitingReason());
+        }
+    });
+}
+
+void DaemonApp::switchRadio(const QString& mac)
+{
+    // The choice is pending (StationRadios::select) until it connects. The
+    // operator's ruling of 2026-09-26: the radio is changed by restarting
+    // the run, and every app reconnects by itself: the receive layout and per-radio
+    // settings of a Core run belong to one radio (RadioModel's receive
+    // layout refuses another identity), so the new radio comes up exactly
+    // as it would on the Core's next start, with its own layout, settings,
+    // capabilities, catalogue and announcement. Every window reconnects.
+    // After this turn: the change itself, preceded by its held answer.
+    qCInfo(lcApp) << "DaemonApp: changing the Core's radio to" << mac;
+    const std::optional<RadioInfo> radio =
+        m_stationRadios ? m_stationRadios->radioFor(mac) : std::nullopt;
+    m_radioChangeReason = radioChangeReason(radio ? radio->displayName() : mac);
+    if (m_radioModel) {
+        m_radioModel->setStationRadioChangeUnderway(true);
+    }
+    // Follow-up N3 (ruling (a)): the chooser's answer and the other
+    // devices' notices wait for the restart turn, which says whether the
+    // change happens.
+    if (m_stationServer) {
+        m_stationServer->holdRadioChangeAnswers();
+    }
+    QTimer::singleShot(0, this, &DaemonApp::restartForRadioChange);
+}
+
+QString DaemonApp::radioChangeReason(const QString& radioName)
+{
+    return QStringLiteral("The Core is switching to %1. This app reconnects by itself.")
+        .arg(radioName);
+}
+
+void DaemonApp::endRadioSwitch()
+{
+    m_radioSwitchDeadline->stop();
+    if (m_stationRadios) {
+        m_stationRadios->setSwitching(false);
+    }
+    if (m_radioModel) {
+        m_radioModel->setStationRadioChangeUnderway(false);
+    }
+}
+
+bool DaemonApp::refuseRadioChangeOnAir()
+{
+    QString reason;
+    if (!m_radioModel || !m_radioModel->stationOnAirRefusal(&reason)) {
+        return false;
+    }
+    qCWarning(lcApp) << "DaemonApp: the radio change was refused:" << reason;
+    if (m_stationRadios) {
+        m_stationRadios->dropPendingChoice();
+    }
+    // Follow-up N3: the chooser is answered refused with the on-air reason;
+    // nobody is told the radio changed.
+    if (m_stationServer) {
+        m_stationServer->finishRadioChange(false, reason);
+    }
+    endRadioSwitch();
+    return true;
+}
+
+void DaemonApp::restartForRadioChange()
+{
+    if (m_radioConnectInProgress) {
+        // A connect's nested WDSP start is running; retry once it unwinds.
+        QTimer::singleShot(100, this, &DaemonApp::restartForRadioChange);
+        return;
+    }
+    // Fix wave, M3: on the air now (a key that raced the change) refuses
+    // the change; nothing keyed is torn down.
+    if (refuseRadioChangeOnAir()) {
+        return;
+    }
+    // The operator's ruling of 2026-09-26 (I2): every app is told why and
+    // reconnects by itself. The command's answer and the confirm step's
+    // notices, held until now (follow-up N3), are written first, and each
+    // connection outlives the station server until its end is on the wire.
+    if (m_stationServer) {
+        // Follow-up N3: the held answer, then the notices, then each end.
+        m_stationServer->finishRadioChange(true, {});
+        m_stationServer->endSessionsForRadioChange(m_radioChangeReason);
+    }
+    const DaemonConfig cfg = m_radioConfig;
+    // Fix wave (I1): the console commands answer across the restart.
+    m_keepConsoleOnStop = true;
+    const bool started = start(cfg);
+    m_keepConsoleOnStop = false;
+    if (!started) {
+        qCWarning(lcApp) << "DaemonApp: the Core could not restart for its new radio";
+        endRadioSwitch();
+    }
+}
+
+void DaemonApp::rescanRadios()
+{
+    if (!m_radioModel) {
+        return;
+    }
+    if (!m_radioModel->isConnected()) {
+        // Searching already: its next pass updates the list. Bring it
+        // forward.
+        if (!m_radioDiscoveryThread && m_radioRecoveryEnabled) {
+            m_radioRetryTimer->start(0);
+        }
+        return;
+    }
+    if (m_radioScanThread) {
+        return; // a scan is listening
+    }
+    // Connected: a scan that only lists what answers (it connects nothing).
+    const quint64 generation = ++m_radioScanGeneration;
+    auto result = std::make_shared<QList<RadioInfo>>();
+#ifdef NEREUS_BUILD_TESTS
+    const auto provider = m_discoveryProviderForTest;
+    auto* worker = QThread::create([result, provider]() {
+        if (provider) {
+            *result = provider();
+            return;
+        }
+#else
+    auto* worker = QThread::create([result]() {
+#endif
+        RadioDiscovery discovery;
+        QEventLoop loop;
+        QTimer cancellation;
+        cancellation.setInterval(25);
+        QObject::connect(&cancellation, &QTimer::timeout, &loop, [&loop]() {
+            if (QThread::currentThread()->isInterruptionRequested()) {
+                loop.quit();
+            }
+        });
+        QObject::connect(&discovery, &RadioDiscovery::discoveryFinished,
+                         &loop, &QEventLoop::quit);
+        QTimer::singleShot(0, &discovery, [&discovery]() {
+            discovery.startDiscovery();
+        });
+        cancellation.start();
+        loop.exec();
+        if (!QThread::currentThread()->isInterruptionRequested()) {
+            *result = discovery.discoveredRadios();
+        }
+    });
+    worker->setObjectName(QStringLiteral("DaemonRadioScan"));
+    m_radioScanThread.reset(worker);
+    connect(worker, &QThread::finished, this, [this, worker, generation, result]() {
+        if (generation != m_radioScanGeneration || m_radioScanThread.get() != worker) {
+            return;
+        }
+        worker->wait();
+        m_radioScanThread.reset();
+        if (m_stationRadios) {
+            m_stationRadios->setVisible(*result);
+        }
+    });
+    worker->start();
+}
 
 } // namespace NereusSDR

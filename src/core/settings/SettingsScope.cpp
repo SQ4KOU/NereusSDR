@@ -159,6 +159,10 @@
 //   2026-09-25 - Receiver and transmit gaps plan, Task 16: RxOnly is
 //                Station scope. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-26 - Parity Task 19 (R-IOS-25): the WSJT-X and SpotCollector
+//                keys are this computer's (OperatorLocal); the Core runs
+//                the station's other spot sources. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/settings/SettingsScope.h"
@@ -399,8 +403,12 @@ const Rule kPrefixes[] = {
     { "Pota", SettingsScope::Station },
     { "PskReporter", SettingsScope::Station },
     { "FreeDv", SettingsScope::Station }, // FreeDvReporter/* and FreeDvSpot*
-    { "SpotCollector", SettingsScope::Station },
-    { "Wsjtx", SettingsScope::Station },
+    // Parity Task 19 (R-IOS-25; remote design section 6.4): WSJT-X and
+    // SpotCollector listen for programs on the computer they run on, so
+    // each window runs its own and keeps its own settings (addresses,
+    // ports, colours, lifetimes). The Core runs the four sources above.
+    { "SpotCollector", SettingsScope::OperatorLocal },
+    { "Wsjtx", SettingsScope::OperatorLocal },
 
     // Self-reporting identity used to seed the spot-source clients above
     // (POTA/PSKReporter/FreeDVReporter self-spots, distance/bearing

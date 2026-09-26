@@ -79,9 +79,14 @@
 //                                    R-IOS-03, R-IOS-13): the takeTransmit
 //                                    holder in the confirm.request sample. AI-
 //                                    assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Remote-window parity Task 19 (R-IOS-25):
+//                                    the record.batch sample.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "LinkSurface.h"
+
+#include "core/SpotSourceHost.h"
 
 #include <QCoreApplication>
 #include <QDeadlineTimer>
@@ -314,6 +319,16 @@ std::optional<SessionMessage> sampleMessage(SessionMessageKind kind)
         prompt.slices = QJsonArray{QJsonObject{}};
         prompt.change = QJsonObject{{QStringLiteral("label"), QStringLiteral("Receiver 1")}};
         return SessionMessages::notice(prompt, QStringLiteral("told"));
+    }
+    // Parity Task 19: a record stream's changes.
+    case SessionMessageKind::RecordBatch: {
+        RecordBatch batch;
+        batch.stream = QStringLiteral("spots");
+        batch.generation = 1;
+        batch.upserts = {{QStringLiteral("1"), QJsonObject{{QStringLiteral("call"),
+                                                            QStringLiteral("K1ABC")}}}};
+        batch.removes = {QStringLiteral("2")};
+        return SessionMessages::recordBatch(batch);
     }
     }
     return std::nullopt;
@@ -1418,6 +1433,7 @@ QList<const QMetaObject*> LinkSurface::mirroredMetaObjects()
             &AccessorySettingsModel::staticMetaObject,
             &StationDevicesFacade::staticMetaObject,
             &StationCatalog::staticMetaObject,
+            &SpotSourceHost::staticMetaObject,
             &ConnectedDevicesFacade::staticMetaObject,
             &SliceMarker::staticMetaObject,
             &TransmitState::staticMetaObject};

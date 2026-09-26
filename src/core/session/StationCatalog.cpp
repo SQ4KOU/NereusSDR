@@ -23,6 +23,10 @@
 //               own table (kBandGrid, models/BandGrid.h), for an app's band
 //               buttons (R-IOS-27, R-IOS-06). J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: each band plan's `active` (the Core's own plan, from
+//               BandPlanManager::activePlanName()) and `spots` (D79;
+//               R-IOS-11, R-R3-49). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationCatalog.h"
@@ -316,10 +320,21 @@ QJsonArray bandPlansArray(const StationCatalog::Inputs& inputs)
                 {QStringLiteral("colour"), colourText(segment.color)},
             });
         }
+        // R-IOS-11 (D79): the plan's spots, as its file lists them, and
+        // whether it is the Core's own plan.
+        QJsonArray spots;
+        for (const BandSpot& spot : plan.spots) {
+            spots.append(QJsonObject{
+                {QStringLiteral("hz"), static_cast<qint64>(std::llround(spot.freqMhz * 1.0e6))},
+                {QStringLiteral("label"), spot.label},
+            });
+        }
         plans.append(QJsonObject{{QStringLiteral("id"), plan.id},
                                  {QStringLiteral("name"), plan.name},
                                  {QStringLiteral("default"), plan.name == inputs.defaultBandPlanName},
-                                 {QStringLiteral("segments"), segments}});
+                                 {QStringLiteral("active"), plan.name == inputs.activeBandPlanName},
+                                 {QStringLiteral("segments"), segments},
+                                 {QStringLiteral("spots"), spots}});
     }
     return plans;
 }
@@ -513,9 +528,10 @@ StationCatalog::Inputs StationCatalog::inputsFrom(const RadioModel& model)
     inputs.tuneStepsHz = sliceTuneSteps();
 
     for (const BandPlanManager::PlanData& plan : model.bandPlanManager().plans()) {
-        inputs.bandPlans.append(BandPlan{plan.id, plan.name, plan.segments});
+        inputs.bandPlans.append(BandPlan{plan.id, plan.name, plan.segments, plan.spots});
     }
     inputs.defaultBandPlanName = QString::fromLatin1(BandPlanManager::kDefaultPlanName);
+    inputs.activeBandPlanName = model.bandPlanManager().activePlanName();
     return inputs;
 }
 
@@ -532,8 +548,8 @@ void StationCatalog::bind(RadioModel* model)
     if (model == nullptr) {
         return;
     }
-    // A preset changed on this computer, the band plan data was read again,
-    // or the radio (and with it the board) changed. A preset written from
+    // A preset changed on this computer, the band plan data was read again
+    // or the Core's plan changed (planChanged, R-IOS-11), or the radio (and with it the board) changed. A preset written from
     // another window reaches StationServer as a settings change, which
     // schedules a refresh the same way.
     if (FilterPresetStore* store = model->filterPresetStore()) {

@@ -257,7 +257,11 @@ private slots:
                 for (const auto& wire : coreEnd->received()) {
                     SessionMessage message;
                     QVERIFY(SessionMessages::decode(wire, &message));
-                    QVERIFY(message.kind != SessionMessageKind::CommandInvoke);
+                    // Parity Task 19: a window's own record subscriptions
+                    // (the Core's spots and radios) change nothing on the
+                    // Core; any other command would.
+                    QVERIFY(message.kind != SessionMessageKind::CommandInvoke
+                            || message.commandVerb == "records.subscribe");
                     QVERIFY(message.kind != SessionMessageKind::PropertyWrite);
                 }
             }

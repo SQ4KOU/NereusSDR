@@ -108,6 +108,9 @@
 //               holds a nameplate while its pairing window is open and pairs
 //               through the service's mailbox. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: Parity Task 21 (R-IOS-18): StationRadios, the radio switch
+//               and the connected rescan. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/RadioDiscovery.h"       // RadioInfo, RadioDiscovery, HPSDRHW
@@ -137,6 +140,7 @@ class QTimer;
 namespace NereusSDR {
 
 class RadioModel;
+class StationRadios;
 class StationServer;
 class StationLanAnnouncer;
 class DnsSdAdvertiser;
@@ -182,6 +186,9 @@ public:
     /// "::" (DaemonConfig::listenAddressFor, R-R3-26). A null address for
     /// text that is not one.
     static QHostAddress listenerAddressFor(const QString& bind);
+
+    /// The session end every app gets when the Core switches to `radioName`.
+    static QString radioChangeReason(const QString& radioName);
 
     explicit DaemonApp(QObject* parent = nullptr);
     ~DaemonApp() override;
@@ -270,6 +277,9 @@ public:
     // production code never asks, because start()/stop() own the lifetime
     // and start() already logs whether the listener came up.
     StationServer* stationServer() const { return m_stationServer.get(); }
+    /// Parity Task 21: the Core's radios and its choice of one (kept across
+    /// a radio change's restart).
+    StationRadios* stationRadios() const { return m_stationRadios.get(); }
 
     // R-R3-39 / R-IOS-03: the running RadioModel (nullptr before start() and
     // after stop()), so a test can key the model the daemon builds.
@@ -491,6 +501,40 @@ private:
     std::unique_ptr<RadioModel> m_radioModel;
     DaemonConfig m_radioConfig;
     QString m_selectedRadioMac;
+    // Parity Task 21 (R-IOS-18): the radios this Core finds, its choice of
+    // one and the requests that change it. Kept across a restart (a radio
+    // change restarts the run), so the list a window shows stays.
+    std::unique_ptr<StationRadios> m_stationRadios;
+    std::unique_ptr<QThread> m_radioScanThread;
+    quint64 m_radioScanGeneration {0};
+    void ensureStationRadios();
+    void switchRadio(const QString& mac);
+    void restartForRadioChange();
+    void rescanRadios();
+    // Fix wave (C1): a radio change ends (the "switching" flag clears, so a
+    // window can choose again) when the new radio connects, its connect
+    // fails, its link is lost, a scan does not pick it, or the Core's
+    // connect bound passes with none of those. The pending choice is kept
+    // as this run's radio either way.
+    void endRadioSwitch();
+    // Fix wave (M3): the on-the-air rule, again at the moment the change
+    // runs. True when the radio is on the air: the change is refused and
+    // nothing is torn down.
+    bool refuseRadioChangeOnAir();
+    // The connect watchdog budget of both OpenHPSDR connections:
+    // P1RadioConnection.h kConnectTimeoutMs (2000 ms, "Connect watchdog:
+    // fires this many ms after connectToRadio() if no first ep6 frame
+    // arrives") and P2RadioConnection.h kConnectTimeoutMs (2000 ms, "Connect
+    // watchdog budget -- 2 s matches P1"). NereusSDR-original values.
+    static constexpr int kRadioSwitchConnectBoundMs = 2000;
+    int m_radioSwitchBoundMs {kRadioSwitchConnectBoundMs};
+    QTimer* m_radioSwitchDeadline {nullptr};
+    // The operator's ruling of 2026-09-26: a radio change restarts the run,
+    // and every app reconnects by itself. The end reason its sessions get.
+    QString m_radioChangeReason;
+    // I1: the console commands survive that restart (stop() keeps them
+    // while this is set).
+    bool m_keepConsoleOnStop {false};
     std::unique_ptr<QThread> m_radioDiscoveryThread;
     QTimer* m_radioRetryTimer {nullptr};
     quint64 m_radioRecoveryGeneration {0};
