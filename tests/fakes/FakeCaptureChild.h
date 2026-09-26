@@ -10,7 +10,10 @@
 //                         PCM record of a 1 kHz tone every 10 ms.  Stop
 //                         ends PCM and answers Stopped.
 //   hang-open             Hello; on Open: Opening, then nothing at all
-//                         (Stop and Shutdown are ignored too).
+//                         (Stop and Shutdown are ignored too).  With
+//                         NEREUS_FAKE_CAPTURE_HANG_DIR set, it then creates
+//                         the empty file <dir>/<its pid>.  Before that
+//                         Open, Shutdown still ends it.
 //   no-hello              Never writes anything and ignores every command.
 //   permission-then-ready Hello; on Open: Permission, 300 ms later as ready.
 //   crash-after-ready     As ready; exits with code 3 after 100 ms of PCM.
