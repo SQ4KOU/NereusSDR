@@ -7954,6 +7954,43 @@ if(TEST tst_link_conformance_session)
         "NEREUS_LINK_CONNECTABLE=skip")
     set_property(TEST tst_link_conformance_session_connectable APPEND PROPERTY ENVIRONMENT
         "NEREUS_LINK_CONNECTABLE=only")
+    # iPhone app plan Task 77 fix wave, M4: the fixtures whose MOX walk runs
+    # in real time (stationSetup.unkeyWalkMs, transfer-refuses-keys) run as
+    # a third entry of the same binary, NEREUS_LINK_REALTIME=only, labelled
+    # realtime so a busy machine's `-LE realtime` run leaves them out; the
+    # other two entries skip them.
+    add_test(NAME tst_link_conformance_session_realtime COMMAND tst_link_conformance_session)
+    set(_lcs_rt_labels ${_lcs_labels})
+    list(APPEND _lcs_rt_labels "realtime")
+    list(REMOVE_DUPLICATES _lcs_rt_labels)
+    set_tests_properties(tst_link_conformance_session_realtime PROPERTIES
+        LABELS "${_lcs_rt_labels}"
+        TIMEOUT ${_lcs_timeout})
+    set_property(GLOBAL APPEND PROPERTY NEREUS_TEST_LABEL_NAMES "realtime")
+    set_property(GLOBAL APPEND PROPERTY NEREUS_TESTS_LABEL_realtime tst_link_conformance_session)
+    if(_lcs_env_mod)
+        set_property(TEST tst_link_conformance_session_realtime
+            PROPERTY ENVIRONMENT_MODIFICATION ${_lcs_env_mod})
+    endif()
+    if(NEREUS_TESTS_OFFSCREEN AND CMAKE_VERSION VERSION_LESS 3.22)
+        set_property(TEST tst_link_conformance_session_realtime APPEND PROPERTY ENVIRONMENT
+            "QT_QPA_PLATFORM=offscreen")
+    endif()
+    if(NOT WIN32)
+        set(_lcs_rt_home "${CMAKE_CURRENT_BINARY_DIR}/test-home/tst_link_conformance_session_realtime")
+        file(MAKE_DIRECTORY "${_lcs_rt_home}")
+        set_property(TEST tst_link_conformance_session_realtime APPEND PROPERTY ENVIRONMENT
+            "HOME=${_lcs_rt_home}")
+        if(APPLE)
+            set_property(TEST tst_link_conformance_session_realtime APPEND PROPERTY ENVIRONMENT
+                "CFFIXED_USER_HOME=${_lcs_rt_home}")
+        endif()
+    endif()
+    foreach(_lcs_entry tst_link_conformance_session tst_link_conformance_session_connectable)
+        set_property(TEST ${_lcs_entry} APPEND PROPERTY ENVIRONMENT "NEREUS_LINK_REALTIME=skip")
+    endforeach()
+    set_property(TEST tst_link_conformance_session_realtime APPEND PROPERTY ENVIRONMENT
+        "NEREUS_LINK_REALTIME=only")
 endif()
 nereus_add_test(tst_link_conformance_media
     LinkFixtures.cpp

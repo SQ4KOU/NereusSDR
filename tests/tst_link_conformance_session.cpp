@@ -85,6 +85,13 @@
 // tst_link_conformance_session_connectable), so neither entry carries the
 // other's time against its limit.
 //
+// NEREUS_LINK_REALTIME picks the fixtures that run a real-time MOX walk
+// (stationSetup.unkeyWalkMs above 0) the same way: "only" runs just those,
+// "skip" runs everything but them. Their ctest entry,
+// tst_link_conformance_session_realtime, carries the realtime label, so a
+// busy machine's `-LE realtime` run leaves them out (Task 77 fix wave, M4);
+// the other two entries skip them.
+//
 //   cmake --build build --target tst_link_conformance_session
 //   QT_QPA_PLATFORM=offscreen ctest --test-dir build \
 //       -R '^tst_link_conformance_session(_connectable)?$' --output-on-failure
@@ -200,6 +207,10 @@
 //               stationSetup unkeyWalkMs; a verb with only optional arguments
 //               may be sent with none. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-26: Task 77 fix wave, M4: NEREUS_LINK_REALTIME for the real-time
+//               fixtures' own ctest entry (labelled realtime). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -271,6 +282,19 @@ enum class ConnectableSelection { All, Only, Skip };
 ConnectableSelection connectableSelection()
 {
     const QByteArray value = qgetenv("NEREUS_LINK_CONNECTABLE");
+    if (value == "only") {
+        return ConnectableSelection::Only;
+    }
+    if (value == "skip") {
+        return ConnectableSelection::Skip;
+    }
+    return ConnectableSelection::All;
+}
+
+// NEREUS_LINK_REALTIME (see the file comment).
+ConnectableSelection realtimeSelection()
+{
+    const QByteArray value = qgetenv("NEREUS_LINK_REALTIME");
     if (value == "only") {
         return ConnectableSelection::Only;
     }
@@ -957,6 +981,10 @@ void TstLinkConformanceSession::init()
         && qstrcmp(QTest::currentTestFunction(), "sessionFixtures") != 0) {
         QSKIP("NEREUS_LINK_CONNECTABLE=only runs the connectable fixtures alone");
     }
+    if (realtimeSelection() == ConnectableSelection::Only
+        && qstrcmp(QTest::currentTestFunction(), "sessionFixtures") != 0) {
+        QSKIP("NEREUS_LINK_REALTIME=only runs the real-time fixtures alone");
+    }
 }
 
 void TstLinkConformanceSession::cleanupTestCase()
@@ -1012,14 +1040,21 @@ void TstLinkConformanceSession::sessionFixtures_data()
         LinkFixtures::entries(m_manifest, QStringLiteral("session"));
     QVERIFY(!entries.isEmpty());
     const ConnectableSelection selection = connectableSelection();
+    const ConnectableSelection realtime = realtimeSelection();
     // Once per link major the suite covers (manifest linkMajors).
     for (const quint16 major : LinkFixtures::linkMajors(m_manifest)) {
         for (const LinkFixtures::Entry& entry : entries) {
-            const bool connectable = fixture(entry.id).value(QStringLiteral("stationSetup"))
-                                         .toObject().value(QStringLiteral("radio")).toString()
-                == QStringLiteral("connectable");
+            const QJsonObject setup =
+                fixture(entry.id).value(QStringLiteral("stationSetup")).toObject();
+            const bool connectable =
+                setup.value(QStringLiteral("radio")).toString() == QStringLiteral("connectable");
             if ((selection == ConnectableSelection::Only && !connectable)
                 || (selection == ConnectableSelection::Skip && connectable)) {
+                continue;
+            }
+            const bool walksInRealTime = setup.value(QStringLiteral("unkeyWalkMs")).toDouble(0.0) > 0.0;
+            if ((realtime == ConnectableSelection::Only && !walksInRealTime)
+                || (realtime == ConnectableSelection::Skip && walksInRealTime)) {
                 continue;
             }
             QTest::newRow(qPrintable(QStringLiteral("%1 link %2").arg(entry.id).arg(major)))
