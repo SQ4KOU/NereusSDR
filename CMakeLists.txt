@@ -1423,6 +1423,10 @@ list(APPEND CORE_SOURCES
     src/core/session/RendezvousMailboxTransport.cpp
     src/core/session/StationRendezvous.cpp
     src/core/session/IceConfiguration.cpp
+    # iPhone app plan Task 28 (R-IOS-16): the control session over a data
+    # channel, for a connection the service introduced.
+    src/core/session/DataChannelTransport.cpp
+    src/core/session/RendezvousDialer.cpp
 )
 
 # CoreAudioHalBus — macOS-only IAudioBus implementation bridging to the

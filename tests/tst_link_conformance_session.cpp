@@ -205,6 +205,13 @@
 //   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 21 (R-IOS-18): stationSetup
 //                                    stationRadios. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-26: iPhone app plan Task 28 (R-IOS-16): the data-channel mode
+//               (sessionFixturesOverADataChannel): every session fixture
+//               again, each client joined to the station over a control
+//               data channel (DataChannelTransport, DTLS and SCTP on this
+//               computer) instead of an in-process pipe. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -236,6 +243,7 @@
 #include "core/session/SessionCommandDispatcher.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/RemoteKeying.h"
+#include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
 #include "core/station/StationRadios.h"
 #include "core/settings/SettingsScope.h"
@@ -246,6 +254,7 @@
 #include "LinkFixtures.h"
 #include "OperatorWording.h"
 #include "fakes/ConnectableRadioModel.h"
+#include "fakes/DataChannelPair.h"
 #include "fakes/LoopbackTransport.h"
 #include "fakes/UpgradedCoreToken.h"
 
@@ -284,6 +293,25 @@ ConnectableSelection connectableSelection()
         return ConnectableSelection::Skip;
     }
     return ConnectableSelection::All;
+}
+
+// Task 28: which transports the fixture rows run over. NEREUS_LINK_MODE
+// "loopback" or "datachannel" runs one; unset, both. The connectable
+// fixtures run one mode per process (their own ctest entries): a second
+// connectable station in one process can read its slice meter before the
+// receiver has measured again, so its snapshot carries the no-reading value.
+enum class ModeSelection { Both, Loopback, DataChannel };
+
+ModeSelection modeSelection()
+{
+    const QByteArray value = qgetenv("NEREUS_LINK_MODE");
+    if (value == "loopback") {
+        return ModeSelection::Loopback;
+    }
+    if (value == "datachannel") {
+        return ModeSelection::DataChannel;
+    }
+    return ModeSelection::Both;
 }
 
 // The station a fixture's stationSetup describes. Members are declared in
@@ -915,6 +943,8 @@ private slots:
 
     void sessionFixtures_data();
     void sessionFixtures();
+    void sessionFixturesOverADataChannel_data();
+    void sessionFixturesOverADataChannel();
     void everyVerbIsInvokedRightAndWrong();
     void rightAndWrongLegsGetDifferentAnswers();
     void everyFixtureRunsOnTheStation();
@@ -926,7 +956,8 @@ private slots:
 
 private:
     QString run(const QString& id, const QJsonObject& fixture,
-                quint16 major = kSessionProtocolMajor);
+                quint16 major = kSessionProtocolMajor, bool overDataChannel = false);
+    void runFixtureRow(bool overDataChannel);
     QJsonObject fixture(const QString& id);
     QJsonObject m_manifest;
 };
@@ -961,7 +992,8 @@ void TstLinkConformanceSession::initTestCase()
 void TstLinkConformanceSession::init()
 {
     if (connectableSelection() == ConnectableSelection::Only
-        && qstrcmp(QTest::currentTestFunction(), "sessionFixtures") != 0) {
+        && qstrcmp(QTest::currentTestFunction(), "sessionFixtures") != 0
+        && qstrcmp(QTest::currentTestFunction(), "sessionFixturesOverADataChannel") != 0) {
         QSKIP("NEREUS_LINK_CONNECTABLE=only runs the connectable fixtures alone");
     }
 }
@@ -990,7 +1022,7 @@ QJsonObject TstLinkConformanceSession::fixture(const QString& id)
 }
 
 QString TstLinkConformanceSession::run(const QString& id, const QJsonObject& fixture,
-                                       quint16 major)
+                                       quint16 major, bool overDataChannel)
 {
     Station station;
     const QString problem =
@@ -1001,11 +1033,55 @@ QString TstLinkConformanceSession::run(const QString& id, const QJsonObject& fix
     // Declared after the station, so it goes first; the server owns the
     // station end once it accepts it.
     LoopbackTransport client(QStringLiteral("conformance-client"));
-    auto* stationEnd = new LoopbackTransport(QStringLiteral("conformance"), station.server.get());
-    stationEnd->linkTo(&client);
-    station.server->acceptTransport(stationEnd);
+    if (!overDataChannel) {
+        auto* stationEnd =
+            new LoopbackTransport(QStringLiteral("conformance"), station.server.get());
+        stationEnd->linkTo(&client);
+        station.server->acceptTransport(stationEnd);
+        const QString failure = LinkFixtures::runSession(fixture, *station.server, client);
+        writeTrace(id, client);
+        return failure.isEmpty() ? failure : QStringLiteral("%1: %2").arg(id, failure);
+    }
+
+    // Task 28, the data-channel mode: each client the player plays reaches
+    // the station over a control data channel of its own, the station
+    // presenting its own certificate. Declared after `client`, so the
+    // bridges (and the channels) go before the clients they carry.
+    StationServer* server = station.server.get();
+    const QString certificate = server->certificatePemPath();
+    const QString key = server->privateKeyPemPath();
+    if (certificate.isEmpty() || key.isEmpty()) {
+        return QStringLiteral("%1: the station has no certificate for a data channel").arg(id);
+    }
+    std::vector<std::unique_ptr<NereusSDR::Test::DataChannelBridge>> bridges;
+    const auto join = [&bridges, server, certificate, key](LoopbackTransport* joined) {
+        auto bridge = std::make_unique<NereusSDR::Test::DataChannelBridge>(
+            joined, StationServer::kMaxIncomingMessageBytes,
+            StationClient::kMaxIncomingMessageBytes, certificate, key,
+            [server](DataChannelTransport* end) { server->acceptTransport(end); });
+        NereusSDR::Test::DataChannelBridge* opened = bridge.get();
+        bridges.push_back(std::move(bridge));
+        // Real time: the DTLS and SCTP handshakes on this computer.
+        return opened->started()
+            && NereusSDR::Test::waitFor([opened] { return opened->opened(); }, 15000);
+    };
+    if (!join(&client)) {
+        return QStringLiteral("%1: the data channel did not open").arg(id);
+    }
+    LinkFixtures::setSettleCheck([&bridges] {
+        for (const auto& bridge : bridges) {
+            if (!bridge->settled()) {
+                return false;
+            }
+        }
+        return true;
+    });
+    LinkFixtures::setConnectClient([&join](LoopbackTransport* joined, StationServer&) {
+        join(joined);
+    });
     const QString failure = LinkFixtures::runSession(fixture, *station.server, client);
-    writeTrace(id, client);
+    LinkFixtures::setSettleCheck({});
+    LinkFixtures::setConnectClient({});
     // A failure names its fixture first, then the step and the path.
     return failure.isEmpty() ? failure : QStringLiteral("%1: %2").arg(id, failure);
 }
@@ -1037,6 +1113,28 @@ void TstLinkConformanceSession::sessionFixtures_data()
 
 void TstLinkConformanceSession::sessionFixtures()
 {
+    if (modeSelection() == ModeSelection::DataChannel) {
+        QSKIP("NEREUS_LINK_MODE=datachannel runs the data-channel mode alone");
+    }
+    runFixtureRow(false);
+}
+
+// Task 28 (R-IOS-16): the whole suite again over the control data channel.
+void TstLinkConformanceSession::sessionFixturesOverADataChannel_data()
+{
+    sessionFixtures_data();
+}
+
+void TstLinkConformanceSession::sessionFixturesOverADataChannel()
+{
+    if (modeSelection() == ModeSelection::Loopback) {
+        QSKIP("NEREUS_LINK_MODE=loopback runs the in-process mode alone");
+    }
+    runFixtureRow(true);
+}
+
+void TstLinkConformanceSession::runFixtureRow(bool overDataChannel)
+{
     QFETCH(QString, id);
     QFETCH(QString, file);
     QFETCH(int, major);
@@ -1052,7 +1150,7 @@ void TstLinkConformanceSession::sessionFixtures()
         QTest::ignoreMessage(QtWarningMsg,
                              QRegularExpression(QStringLiteral("^Refusing connection from")));
     }
-    const QString failure = run(id, o, quint16(major));
+    const QString failure = run(id, o, quint16(major), overDataChannel);
     QVERIFY2(failure.isEmpty(), qPrintable(failure));
 }
 

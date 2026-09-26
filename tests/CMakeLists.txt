@@ -7445,6 +7445,17 @@ nereus_add_test(tst_ice_configuration)
 nereus_add_test(tst_rendezvous_client fakes/LoopbackTransport.cpp)
 target_compile_definitions(tst_rendezvous_client PRIVATE
     NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+# iPhone app plan Task 28 (R-IOS-16): the control session over a data
+# channel on this computer: the chunking and heartbeat bytes and the framing
+# fixtures (tests/data/link/v1/framing/), each end's cap, a whole session
+# signed in by device key, a Core whose DTLS certificate is not the bound
+# one refused before anything is sent, and the heartbeat at both ends.
+nereus_add_test(tst_data_channel_transport
+    LinkFixtures.cpp
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_data_channel_transport PRIVATE
+    NEREUS_LINK_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data/link/v1")
 # iPhone app plan Task 27: one end of a connection through the remote
 # access service, for the traversal harness below. Not linked with the test
 # sandbox: it reaches a service in another network namespace, which a
@@ -7982,7 +7993,38 @@ if(TEST tst_link_conformance_session)
     set_property(TEST tst_link_conformance_session APPEND PROPERTY ENVIRONMENT
         "NEREUS_LINK_CONNECTABLE=skip")
     set_property(TEST tst_link_conformance_session_connectable APPEND PROPERTY ENVIRONMENT
-        "NEREUS_LINK_CONNECTABLE=only")
+        "NEREUS_LINK_CONNECTABLE=only" "NEREUS_LINK_MODE=loopback")
+    # iPhone app plan Task 28 (R-IOS-16): the first entry runs every other
+    # fixture over both transports (the in-process pipe and the control data
+    # channel), so it gets more time; the connectable fixture over the data
+    # channel runs in its own process, as the in-process one does.
+    set_tests_properties(tst_link_conformance_session PROPERTIES TIMEOUT 300)
+    add_test(NAME tst_link_conformance_session_connectable_datachannel
+        COMMAND tst_link_conformance_session)
+    set_tests_properties(tst_link_conformance_session_connectable_datachannel PROPERTIES
+        LABELS "${_lcs_labels}"
+        TIMEOUT ${_lcs_timeout})
+    if(_lcs_env_mod)
+        set_property(TEST tst_link_conformance_session_connectable_datachannel
+            PROPERTY ENVIRONMENT_MODIFICATION ${_lcs_env_mod})
+    endif()
+    if(NEREUS_TESTS_OFFSCREEN AND CMAKE_VERSION VERSION_LESS 3.22)
+        set_property(TEST tst_link_conformance_session_connectable_datachannel APPEND PROPERTY
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    endif()
+    if(NOT WIN32)
+        set(_lcs_dc_home
+            "${CMAKE_CURRENT_BINARY_DIR}/test-home/tst_link_conformance_session_connectable_datachannel")
+        file(MAKE_DIRECTORY "${_lcs_dc_home}")
+        set_property(TEST tst_link_conformance_session_connectable_datachannel APPEND PROPERTY
+            ENVIRONMENT "HOME=${_lcs_dc_home}")
+        if(APPLE)
+            set_property(TEST tst_link_conformance_session_connectable_datachannel APPEND
+                PROPERTY ENVIRONMENT "CFFIXED_USER_HOME=${_lcs_dc_home}")
+        endif()
+    endif()
+    set_property(TEST tst_link_conformance_session_connectable_datachannel APPEND PROPERTY
+        ENVIRONMENT "NEREUS_LINK_CONNECTABLE=only" "NEREUS_LINK_MODE=datachannel")
 endif()
 nereus_add_test(tst_link_conformance_media
     LinkFixtures.cpp

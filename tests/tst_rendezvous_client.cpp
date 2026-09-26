@@ -48,6 +48,12 @@
 //   2026-09-26: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: iPhone app plan Task 28 (R-IOS-16): a session through the
+//               service and its relay given back, an answer with no
+//               credentials and its retirement, the plain words of a
+//               service connection; the Task 27 ICE tests answer
+//               introductions themselves. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -90,6 +96,8 @@
 #include "core/security/PairingWindow.h"
 #include "core/security/SpakeExchange.h"
 #include "core/security/StationIdentity.h"
+#include "core/session/DataChannelTransport.h"
+#include "core/session/RendezvousDialer.h"
 #include "core/session/IceConfiguration.h"
 #include "core/session/RendezvousClient.h"
 #include "core/session/RendezvousMailboxTransport.h"
@@ -103,6 +111,7 @@
 #include "gui/CoreTargetStore.h"
 #include "models/RadioModel.h"
 
+#include "OperatorWording.h"
 #include "fakes/UpgradedCoreToken.h"
 
 #include <openssl/evp.h>
@@ -1723,6 +1732,8 @@ private slots:
         auto phone = makeKey();
         QVERIFY(core.pair(*phone));
         StationRendezvous rendezvous(core.server.get(), {service.url()}, /*relayAllowed=*/true);
+        // Task 27's ICE tests answer the introduction themselves (IcePair).
+        rendezvous.setAnswersIntroductionsForTest(false);
         QSignalSpy registered(rendezvous.client(), &RendezvousClient::registered);
         QVERIFY(rendezvous.start());
         QTRY_COMPARE_WITH_TIMEOUT(registered.size(), 1, 10000);
@@ -1763,6 +1774,8 @@ private slots:
         auto phone = makeKey();
         QVERIFY(core.pair(*phone));
         StationRendezvous rendezvous(core.server.get(), {service.url()}, true);
+        // Task 27's ICE tests answer the introduction themselves (IcePair).
+        rendezvous.setAnswersIntroductionsForTest(false);
         QSignalSpy registered(rendezvous.client(), &RendezvousClient::registered);
         QVERIFY(rendezvous.start());
         QTRY_COMPARE_WITH_TIMEOUT(registered.size(), 1, 10000);
@@ -1790,6 +1803,8 @@ private slots:
         auto phone = makeKey();
         QVERIFY(core.pair(*phone));
         StationRendezvous rendezvous(core.server.get(), {service.url()}, true);
+        // Task 27's ICE tests answer the introduction themselves (IcePair).
+        rendezvous.setAnswersIntroductionsForTest(false);
         QSignalSpy registered(rendezvous.client(), &RendezvousClient::registered);
         QVERIFY(rendezvous.start());
         QTRY_COMPARE_WITH_TIMEOUT(registered.size(), 1, 10000);
@@ -1825,6 +1840,8 @@ private slots:
         auto phone = makeKey();
         QVERIFY(core.pair(*phone));
         StationRendezvous rendezvous(core.server.get(), {service.url()}, true);
+        // Task 27's ICE tests answer the introduction themselves (IcePair).
+        rendezvous.setAnswersIntroductionsForTest(false);
         QSignalSpy registered(rendezvous.client(), &RendezvousClient::registered);
         QVERIFY(rendezvous.start());
         QTRY_COMPARE_WITH_TIMEOUT(registered.size(), 1, 10000);
@@ -1856,6 +1873,8 @@ private slots:
         auto phone = makeKey();
         QVERIFY(core.pair(*phone));
         StationRendezvous rendezvous(core.server.get(), {service.url()}, /*relayAllowed=*/false);
+        // Task 27's ICE tests answer the introduction themselves (IcePair).
+        rendezvous.setAnswersIntroductionsForTest(false);
         QSignalSpy registered(rendezvous.client(), &RendezvousClient::registered);
         QSignalSpy credentials(rendezvous.client(), &RendezvousClient::credentialsReceived);
         QVERIFY(rendezvous.start());
@@ -1881,6 +1900,8 @@ private slots:
         auto revoked = makeKey();
         QVERIFY(core.pair(*revoked));
         StationRendezvous rendezvous(core.server.get(), {service.url()}, true);
+        // Task 27's ICE tests answer the introduction themselves (IcePair).
+        rendezvous.setAnswersIntroductionsForTest(false);
         QSignalSpy registered(rendezvous.client(), &RendezvousClient::registered);
         QSignalSpy introduced(rendezvous.client(), &RendezvousClient::introduced);
         QVERIFY(rendezvous.start());
@@ -1919,6 +1940,8 @@ private slots:
         Core core;
         QVERIFY(core.server->pairingWindow()->isOpen());
         StationRendezvous rendezvous(core.server.get(), {relay.url()}, true);
+        // Task 27's ICE tests answer the introduction themselves (IcePair).
+        rendezvous.setAnswersIntroductionsForTest(false);
         QSignalSpy nameplates(rendezvous.client(), &RendezvousClient::nameplateClaimed);
         QVERIFY(rendezvous.start());
         QTRY_COMPARE_WITH_TIMEOUT(nameplates.size(), 1, 10000);
@@ -1990,6 +2013,8 @@ private slots:
         auto phone = makeKey();
         QVERIFY(core.pair(*phone));
         StationRendezvous rendezvous(core.server.get(), {service.url()}, true);
+        // Task 27's ICE tests answer the introduction themselves (IcePair).
+        rendezvous.setAnswersIntroductionsForTest(false);
         rendezvous.client()->setReconnectDelaysMs({200});
         QSignalSpy registered(rendezvous.client(), &RendezvousClient::registered);
         QSignalSpy lost(rendezvous.client(), &RendezvousClient::connectionLost);
@@ -2029,6 +2054,8 @@ private slots:
         auto phone = makeKey();
         QVERIFY(core.pair(*phone));
         StationRendezvous rendezvous(core.server.get(), {service.url()}, true);
+        // Task 27's ICE tests answer the introduction themselves (IcePair).
+        rendezvous.setAnswersIntroductionsForTest(false);
         QSignalSpy registered(rendezvous.client(), &RendezvousClient::registered);
         QVERIFY(rendezvous.start());
         QTRY_COMPARE_WITH_TIMEOUT(registered.size(), 1, 10000);
@@ -2370,6 +2397,173 @@ private slots:
         QCOMPARE(reloaded.target(target.id)->connection.url, target.connection.url);
     }
 
+    // ── Task 28: the control session through the service ─────────────
+
+    // A paired computer reaches the Core through the service: the Core
+    // answers the introduction with a control connection presenting its own
+    // certificate, the whole session runs over it, the introduction is
+    // retired as the connection opens, and when the session ends both ends
+    // give their relay allocations back.
+    void aSessionRunsThroughTheServiceAndGivesTheRelayBack()
+    {
+        LocalService service;
+        QVERIFY(service.start());
+        Core core;
+        QTemporaryDir keyDir;
+        auto key = std::make_shared<const ClientDeviceIdentity>(
+            ClientDeviceIdentity::loadOrCreate(keyDir.path()));
+        QVERIFY(core.pairComputer(*key));
+        StationRendezvous rendezvous(core.server.get(), {service.url()}, /*relayAllowed=*/true);
+        QSignalSpy registered(rendezvous.client(), &RendezvousClient::registered);
+        QSignalSpy introduced(rendezvous.client(), &RendezvousClient::introduced);
+        QVERIFY(rendezvous.start());
+        QTRY_COMPARE_WITH_TIMEOUT(registered.size(), 1, 10000);
+
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient window(&remote, &proxy);
+        window.setDeviceIdentity(key, QStringLiteral("Shack MacBook"));
+        QSignalSpy ended(&window, &StationClient::sessionEnded);
+        window.connectThroughService({service.url()}, rendezvous.client()->stationId(),
+                                     core.server->stationIdentity().fingerprint());
+        QVERIFY(window.isConnectionActive());
+        QTRY_VERIFY_WITH_TIMEOUT(window.isHandshakeComplete(), 60000);
+        QCOMPARE(ended.size(), 0);
+        QCOMPARE(introduced.size(), 1);
+        QVERIFY(core.server->hasAuthenticatedSession());
+        // Retired here, not at the service's 120 s.
+        QCOMPARE(rendezvous.client()->liveIntroductions(), 0);
+        QCOMPARE(rendezvous.pendingAnswers(), 0);
+        // What the attempt record shows, and the settings media reuses.
+        const StationConnectionAttempt attempt = window.connectionAttempt();
+        QCOMPARE(attempt.tries.size(), 1);
+        QCOMPARE(attempt.tries.at(0).outcome, StationConnectionAttempt::Outcome::Connected);
+        const std::optional<IceConfiguration> ice = window.sessionIceConfiguration();
+        QVERIFY(ice.has_value());
+        QVERIFY(ice->relayKnown());
+        QCOMPARE(ice->relayServers().size(), 1);
+        const quint64 epoch = core.server->mediaSessionEpoch();
+        QVERIFY(core.server->sessionIceConfiguration(epoch).has_value());
+        QTRY_VERIFY_WITH_TIMEOUT(service.turnOutput().contains(QLatin1String("ALLOCATED 2")),
+                                 10000);
+
+        window.disconnectFromStation(QStringLiteral("test done"));
+        QTRY_VERIFY_WITH_TIMEOUT(!core.server->hasAuthenticatedSession(), 10000);
+        // Both allocations, the Core's and the computer's, given back at
+        // once rather than held for their lifetime.
+        QTRY_VERIFY_WITH_TIMEOUT(service.turnOutput().contains(QLatin1String("RELEASED 2")),
+                                 15000);
+    }
+
+    // The Core answered with the relay allowed and the credentials never
+    // came: after the bound it gathers without the relay, and an answer
+    // whose connection never opens is retired at its deadline.
+    void anAnswerWithoutCredentialsGathersAndIsRetired()
+    {
+        ServicePlayer player;
+        Core core;
+        auto device = makeKey();
+        QVERIFY(core.pair(*device));
+        StationRendezvous rendezvous(core.server.get(), {player.url()}, /*relayAllowed=*/true);
+        rendezvous.setCredentialsTimeoutMs(200);
+        rendezvous.setAnswerDeadlineMs(1500);
+        QVERIFY(rendezvous.start());
+        QWebSocket* station = player.waitForConnection();
+        QVERIFY(station != nullptr);
+        const auto send = [station](const QJsonObject& message) {
+            station->sendTextMessage(compact(message));
+        };
+        send({{"type", "hello"}, {"version", 1}, {"nonce", b64(randomBytes(32))},
+              {"stun", QJsonArray()}});
+        QVERIFY(player.waitForMessage(station).has_value());  // register
+        send({{"type", "challenge"}, {"nonce", b64(randomBytes(32))}});
+        QVERIFY(player.waitForMessage(station).has_value());  // prove
+        const QString id = Wire::rendezvousId(core.server->stationIdentity().publicKeySpki());
+        send({{"type", "registered"}, {"id", id}});
+        QTRY_VERIFY(rendezvous.client()->isRegistered());
+
+        // A real control offer, from a device's end.
+        DataChannelTransport offerer;
+        QSignalSpy offered(&offerer, &DataChannelTransport::localDescription);
+        DataChannelTransport::Options options;
+        options.role = DataChannelTransport::Role::Offerer;
+        options.maxIncomingBytes = StationClient::kMaxIncomingMessageBytes;
+        options.ice = IceConfiguration::throughRendezvous({}, true, AddressFamilies{},
+                                                          HostFamilies{});
+        QVERIFY(offerer.start(options));
+        QTRY_COMPARE(offered.size(), 1);
+        const QByteArray nonce = randomBytes(32);
+        const QByteArray intro = randomBytes(16);
+        send({{"type", "introduction"}, {"from", b64(intro)},
+              {"device", b64(StationIdentity::fingerprintOf(device->spki()))},
+              {"deviceSignature", b64(device->sign(Wire::introduceTranscript(id, nonce)))},
+              {"offer", offered.at(0).at(0).toString()}, {"nonce", b64(nonce)}});
+
+        const std::optional<QString> answer = player.waitForMessage(station);
+        QVERIFY(answer.has_value());
+        const QJsonObject answerObject = QJsonDocument::fromJson(answer->toUtf8()).object();
+        QCOMPARE(answerObject.value("type").toString(), QStringLiteral("answer"));
+        QCOMPARE(answerObject.value("turn").toBool(), true);
+        QCOMPARE(rendezvous.pendingAnswers(), 1);
+        // No credentials: the Core gathers anyway and ends its candidates.
+        bool ended = false;
+        QDeadlineTimer deadline(5000);
+        while (!ended && !deadline.hasExpired()) {
+            const std::optional<QString> next = player.waitForMessage(station, 200);
+            if (next) {
+                const QJsonObject message = QJsonDocument::fromJson(next->toUtf8()).object();
+                ended = message.value("type").toString() == QStringLiteral("candidate")
+                    && message.value("candidate").toString().isEmpty();
+            }
+        }
+        QVERIFY2(ended, "the Core never ended its candidates without the credentials");
+        // Nothing connects (the device's end never hears the answer): the
+        // introduction is retired at the deadline and its place is free.
+        QTRY_COMPARE_WITH_TIMEOUT(rendezvous.pendingAnswers(), 0, 5000);
+        QCOMPARE(rendezvous.client()->liveIntroductions(), 0);
+        // The same introduction handed back is dropped.
+        QSignalSpy introducedAgain(rendezvous.client(), &RendezvousClient::introduced);
+        send({{"type", "introduction"}, {"from", b64(intro)},
+              {"device", b64(StationIdentity::fingerprintOf(device->spki()))},
+              {"deviceSignature", b64(device->sign(Wire::introduceTranscript(id, nonce)))},
+              {"offer", offered.at(0).at(0).toString()}, {"nonce", b64(nonce)}});
+        QVERIFY(player.silentFor(station, 300));
+        QCOMPARE(introducedAgain.size(), 0);
+        rendezvous.client()->stop();
+    }
+
+    // A client with no paired Core, or no key, is told plainly and nothing
+    // is dialled.
+    void connectingThroughTheServiceNeedsAPairedCore()
+    {
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient window(&remote, &proxy);
+        QSignalSpy ended(&window, &StationClient::sessionEnded);
+        window.connectThroughService({QUrl(QStringLiteral("ws://127.0.0.1:9/"))},
+                                     QStringLiteral("aaaaaaaaaaaaaaaaaaaaaaaaaa"),
+                                     QByteArray(32, 'x'));
+        QCOMPARE(ended.size(), 1);
+        QVERIFY(!window.isConnectionActive());
+        QVERIFY(NereusSDR::OperatorWording::isPlain(ended.at(0).at(0).toString()));
+        // The dialer's own words, and a service that is not there.
+        RendezvousDialer noKey;
+        QSignalSpy noKeyFailed(&noKey, &RendezvousDialer::failed);
+        noKey.dial({QUrl(QStringLiteral("ws://127.0.0.1:9/"))},
+                   QStringLiteral("aaaaaaaaaaaaaaaaaaaaaaaaaa"), nullptr);
+        QTRY_COMPARE(noKeyFailed.size(), 1);
+        QVERIFY(NereusSDR::OperatorWording::isPlain(noKeyFailed.at(0).at(0).toString()));
+        QTemporaryDir keyDir;
+        auto key = std::make_shared<const ClientDeviceIdentity>(
+            ClientDeviceIdentity::loadOrCreate(keyDir.path()));
+        RendezvousDialer nowhere;
+        QSignalSpy nowhereFailed(&nowhere, &RendezvousDialer::failed);
+        nowhere.dial({QUrl(QStringLiteral("ws://127.0.0.1:%1/").arg(freeTcpPort()))},
+                     QStringLiteral("aaaaaaaaaaaaaaaaaaaaaaaaaa"), key);
+        QTRY_COMPARE_WITH_TIMEOUT(nowhereFailed.size(), 1, 15000);
+        QVERIFY(NereusSDR::OperatorWording::isPlain(nowhereFailed.at(0).at(0).toString()));
+    }
+
     void aClientTriesTheNextServerWhenTheCoreIsNotOnTheFirst()
     {
         LocalService first(/*stun=*/false, /*relay=*/false);
@@ -2382,6 +2576,8 @@ private slots:
         // The Core is registered only with the second server; the first
         // answers `offline`, and the client moves on down its list.
         StationRendezvous rendezvous(core.server.get(), {second.url()}, true);
+        // Task 27's ICE tests answer the introduction themselves (IcePair).
+        rendezvous.setAnswersIntroductionsForTest(false);
         QSignalSpy registered(rendezvous.client(), &RendezvousClient::registered);
         QSignalSpy introduced(rendezvous.client(), &RendezvousClient::introduced);
         QVERIFY(rendezvous.start());

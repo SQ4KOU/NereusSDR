@@ -391,7 +391,13 @@
 //   2026-09-26: D79 (R-IOS-11, R-R3-49): bandPlanRefusal() and
 //               applyBandPlanSetting(). J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 28 (R-IOS-16): certificatePemPath()
+//               and privateKeyPemPath(), for the control connection through
+//               the remote access service. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
+
+#include "core/session/IceConfiguration.h"
 
 #include <QHash>
 #include <QHostAddress>
@@ -655,6 +661,13 @@ public:
     /// is generated any more). And the TLS fingerprint a client pins.
     QString token() const;
     QString certificateFingerprint() const;
+    /// iPhone app plan Task 28 (R-IOS-16): the PEM files of the Core's own
+    /// TLS certificate and its key, what a control connection through the
+    /// remote access service presents in DTLS (DataChannelTransport), so a
+    /// device sees there the certificate the hello binds. Empty when the
+    /// certificate is not usable.
+    QString certificatePemPath() const;
+    QString privateKeyPemPath() const;
 
     /// iPhone app Task 12 (R-IOS-08): the Core's paired devices and its
     /// identity key. Never null / always present; the identity may be
@@ -816,6 +829,11 @@ public:
     /// the primary media session: the earliest admitted of those live.
     bool mediaAvailable() const;
     bool mediaAvailable(quint64 epoch) const;
+    /// iPhone app plan Task 28 (R-IOS-16): the ICE settings of the session
+    /// `epoch`'s connection when it came through the remote access service
+    /// (a DataChannelTransport): its media connection uses the same STUN
+    /// server and relay. None for a WebSocket session.
+    std::optional<IceConfiguration> sessionIceConfiguration(quint64 epoch) const;
     bool remoteWidebandAvailable() const;
     bool remoteWidebandAvailable(quint64 epoch) const;
     /// The session agreed minor 8 or later: audio contexts carry the encoder

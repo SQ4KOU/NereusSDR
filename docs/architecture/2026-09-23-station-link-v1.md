@@ -21,8 +21,10 @@ renumber.
 ## 1. The link and its normative parts
 
 The link is one control connection per client: a TLS WebSocket carrying
-JSON messages. Media (display rows and audio) travels on a separate
-encrypted media connection that the control connection negotiates.
+JSON messages, or, for a device the rendezvous introduced, a data channel
+carrying the same messages (section 20). Media (display rows and audio)
+travels on a separate encrypted media connection that the control
+connection negotiates.
 
 This document states the connection-level rules itself (transport,
 identity, the connect sequence, versions, the envelope of every message,
@@ -4296,6 +4298,7 @@ maximum also equals `kMaximumSpectrumDisplayFramesPerSecond` in
 | `clientReconnectBackoffMs` | 1000, 2000, 5000, 10000, 30000, 60000 | ms | StationClient.cpp kReconnectBackoffSteps x StationClient::kDefaultReconnectBackoffUnitMs |
 | `confirmExpiryMs` | 60000 | ms | ConfirmStep::kExpiryMs |
 | `connectDeadlineMs` | 30000 | ms | kStationHandshakeDeadlineMs |
+| `controlChannelChunkBytes` | 61440 | bytes | ControlFraming::kMaxChunkBytes |
 | `deltaFlushMs` | 50 | ms | StationServer::kDefaultDeltaFlushMs |
 | `endpointFps` | 1 to 60 | frames per second | DaemonMediaController.cpp handleSubscribe literal 1; kMaximumSpectrumDisplayFramesPerSecond |
 | `endpointPixels` | 1 to 4096 | pixels | DaemonMediaController.cpp handleSubscribe literal 1; SpectrumEndpoint::kMaxPixels |
@@ -4335,7 +4338,7 @@ files against its own client.
   `capabilities` entry carries the `value` a station with every feature on
   sends; section 6.3 is rendered from it.
 - `manifest.json` lists the fixtures:
-  `{"linkMajors":[1],"fixtures":[{"id":"<fixture id>","file":"<path under v1/>","kind":"control"|"session"|"media","requires":{"<feature>":<version>}}]}`.
+  `{"linkMajors":[1],"fixtures":[{"id":"<fixture id>","file":"<path under v1/>","kind":"control"|"session"|"media"|"framing","requires":{"<feature>":<version>}}]}`.
   `requires` names the capability versions a fixture exercises, and is
   `{}` for a fixture every major-1 station passes. Each version is a
   minimum: a station passes the fixture's requirement when it advertises
@@ -4350,7 +4353,8 @@ files against its own client.
   majors the station supports (`LinkVersion::supportedMajors()`). Each runner runs its fixtures once per
   major in it, against a station that offers that major, and fails when
   this station does not offer it. Every file under
-  `control/`, `sessions/` and `media/` is listed once; a media entry names
+  `control/`, `sessions/`, `media/` and `framing/` is listed once; a media
+  entry names
   its `.bin`, and its `.expect.json` sits beside it.
 - `control/*.json`: `{"from":"station"|"client","wire":{<the exact message>},"decodes":true|false}`.
 - `sessions/*.json`:
@@ -4362,6 +4366,26 @@ files against its own client.
   `{"from":"client","role":"behaviour"|"scripted","message":{<a message>}}`,
   `{"advanceMs":N}` or `{"expectClosed":{"retryable":true|false}}`.
   No other key is allowed at either level.
+- `framing/*.json` (iPhone app plan Task 28): the chunking and heartbeat
+  bytes of the control data channel (section 20), as
+  `{"receiver":"station"|"client","message":[<pieces>],"frames":[<frames>],"encodes":true|false,"outcome":"delivered"|"refused","replies":["<hex>",...]}`.
+  `message` is the session message's bytes, its pieces joined in order:
+  `{"text":"<string>"}` is the string's UTF-8 bytes and
+  `{"repeat":"<string>","times":N}` those bytes N times (N a whole number of
+  at least 1); no piece is empty. `frames` are the data-channel messages, in
+  order: `{"chunk":"more"|"last","from":A,"length":L}` is the chunk whose
+  first byte is `0x01` (more) or `0x02` (last) followed by the message's
+  bytes from offset A for L bytes, and `{"hex":"<lower-case hex>"}` is a
+  message of exactly those bytes (possibly none). A fixture with
+  `encodes` true holds chunks only, and a sender cutting `message` must
+  make exactly `frames`. Every fixture is also fed, frame by frame, to a
+  receiver with the inbound cap of the end `receiver` names (section 12.3):
+  with `outcome` `"delivered"` it must deliver exactly one message, equal to
+  `message`, with nothing left over; with `"refused"` it must end the
+  connection, having delivered nothing. Either way it must answer the pings
+  among `frames` with exactly `replies`, in order, each a pong's bytes in
+  lower-case hex. No other key is allowed at either level. The manifest
+  lists each with `"kind": "framing"`.
 - `media/*.bin` with `*.expect.json`: the bytes of one packet exactly as
   it travels, and `{"codec":<codec>,"expect":{<decoded values>}}`, where
   `<codec>` is `nsdc1`, `nsdx1` (the display extras datagram), `ps3d`,
@@ -4838,14 +4862,32 @@ than N 16-bit steps from `pcm16`); the vector states which.
 
 ```
 cmake --build build --target tst_link_conformance_control tst_link_conformance_session tst_link_conformance_media
-QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^tst_link_conformance_(control|session|session_connectable|media)$' --output-on-failure
+QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^tst_link_conformance_(control|session|session_connectable|session_connectable_datachannel|media)$' --output-on-failure
 ```
 
-The session runner is registered twice: `tst_link_conformance_session`
+The session runner is registered three times: `tst_link_conformance_session`
 runs every fixture but those whose `radio` is `"connectable"`, and
 `tst_link_conformance_session_connectable` runs those alone
 (`NEREUS_LINK_CONNECTABLE` set to `skip` and `only`; unset, the binary
-runs every fixture).
+runs every fixture). It runs each fixture twice, in two modes: over an
+in-process pipe (`sessionFixtures`) and over the control data channel of
+section 20 (`sessionFixturesOverADataChannel`, iPhone app plan Task 28),
+where every client the fixture plays reaches the station over a data
+channel of its own on this computer, DTLS and SCTP included, the station
+presenting its own certificate. The connectable fixtures run one mode per
+process: `tst_link_conformance_session_connectable` over the pipe and
+`tst_link_conformance_session_connectable_datachannel` over the data
+channel (`NEREUS_LINK_MODE` set to `loopback` or `datachannel`; unset, both
+modes). In the data-channel mode the station's end reports no address of
+the client's own, as the pipe does, since the fixtures were written over
+it.
+
+`tst_data_channel_transport` runs the framing fixtures (the sender's cut
+and the receiver's joining, section 16.1), and over a real connection on
+this computer: a message each way, a 300 KiB settings snapshot in chunks,
+each end's cap, a whole session signed in by device key, a Core whose
+DTLS certificate is not the bound one refused before the device sends
+anything, and the heartbeat declaring the link dead at each end.
 
 Each runner also alters one of its fixtures in memory and checks that the
 failure names the step or field that differs; the media runner also checks
@@ -5377,3 +5419,109 @@ Core's identity key from the station's box and checks the certificate
 binding against the certificate of its first sign-in (section 3.4). The
 Core gives its nameplate back only after that mailbox has closed, since
 releasing a nameplate ends its mailbox.
+
+## 20. Control over a data channel
+
+iPhone app plan Task 28 (R-IOS-16; the remote design, section 10.4). A
+device the rendezvous introduced (section 19; the rendezvous document,
+section 6.3) runs this link over a WebRTC data channel instead of a
+WebSocket. Everything from section 3 on applies unchanged: the same
+messages, the same connect sequence (the station sends `hello` first, as
+soon as its end opens), the same identity checks, caps, heartbeat,
+deadlines and endings. This section says what differs: how the connection
+is made and how messages travel on it (`DataChannelTransport`,
+`StationRendezvous`, `RendezvousDialer`).
+
+**The connection.**
+
+- It is a peer connection of its own, carrying one data channel and
+  nothing else: labelled `control`, reliable and ordered (neither
+  `maxRetransmits` nor `maxPacketLifeTime`), announced in band, made by the
+  device, which makes the offer. The offer is `introduce`'s `offer` and the
+  Core's answer is its `answer`. Each description holds one `m=application`
+  line and no candidates; a description with any other line, or with a
+  candidate in it, is refused, so the Core answers no introduction whose
+  offer is not a control connection. Candidates travel one at a time
+  through the rendezvous (`candidate`), the end of candidates as an empty
+  one.
+- ICE is as the rendezvous document, sections 6.3 and 8, says: one STUN
+  server, from the rendezvous's `hello`; the relay credentials the answer
+  brings; each end chooses the STUN server and its one relay host by its
+  own address families, the names resolved on that end first
+  (`IceConfiguration`); gathering starts once the credentials are known;
+  the path MTU is 996 bytes. A Core that answered with `turn` true and has
+  no `credentials` within 5 s (`StationRendezvous::kCredentialsTimeoutMs`)
+  gathers without the relay. With `relay = deny` no relay candidate is used
+  in either direction.
+- The Core forgets an introduction, freeing its place among the 16 it
+  holds (`RendezvousClient::kMaxLiveIntroductions`), as soon as its
+  connection opens or fails, or when it has not opened within
+  `StationRendezvous::kAnswerDeadlineMs` (the credentials wait, two name
+  lookups of 3 s and the 63 s connect deadline); nothing goes on the wire
+  for it. An introduction handed back after that is dropped. The desktop
+  gives one attempt `RendezvousDialer::kDialDeadlineMs` (the service's 10 s
+  hello time, two lookups and the connect deadline), then retries with the
+  same backoff as a WebSocket connection (section 12.4), through the
+  rendezvous again. Once the channel opens the device leaves the
+  rendezvous; the session never passes through it.
+- The media connection (section 11) of such a session is a second peer
+  connection, negotiated in `media.control` exactly as section 11 says, with
+  the same ICE settings as the control connection: the same STUN server and
+  the same relay credentials, each end allocating on its chosen relay host,
+  and candidates of every type. The desktop allows its connection stage
+  23.5 s more for the gathering (`RemoteMediaController`). A session over a
+  WebSocket keeps host candidates only.
+- When a connection ends, each end gives each of its relay allocations back
+  at once, with a TURN `Refresh` whose `LIFETIME` is 0 (RFC 8656 section
+  7.2), rather than holding it, and a place in the relay's quota for the
+  Core's id, for the allocation's lifetime.
+
+**The certificate.** The Core presents its own persistent TLS certificate
+(section 3.1, the one its identity key binds, section 3.4) in the control
+connection's DTLS handshake; the media connection keeps one-off
+certificates. The device takes the SHA-256 of the certificate the DTLS
+handshake carried (the DTLS layer also holds it equal to the SDP's
+`a=fingerprint`, but the SDP arrives through the rendezvous, so its
+fingerprint alone is never trusted) and uses it wherever a WebSocket
+session uses the TLS certificate's: the `hello`'s `certBinding` must verify
+for it before the device sends anything (section 3.4), and it is the
+certificate hash in the device's sign-in transcript (section 3.5). A Core
+whose DTLS certificate is not the bound one is refused, as
+`identityChanged`, before the device's `hello`. Only a paired device is
+introduced, so a session over a data channel is always signed in by device
+key; the Core's end sees no certificate of the device's.
+
+**Messages.**
+
+- A session message (section 4: one JSON object, UTF-8) travels as one or
+  more binary data-channel messages, its chunks, each at most 61440 bytes
+  (`controlChannelChunkBytes` in section 15): a first byte of `0x01` (more of
+  this message follows) or `0x02` (this chunk ends it), then the next piece
+  of the message, at least one byte. A sender fills every chunk but the last
+  (61439 bytes of the message each), so a message of n bytes takes
+  ceil(n / 61439) chunks, and sends a message's chunks one after another.
+  Nothing travels as a text data-channel message.
+- A receiver joins the pieces in order. It ends the connection, as the
+  WebSocket's cap does, the moment the bytes it has joined for one message
+  pass its inbound cap (section 12.3: the station 1 MiB, the client 8 MiB),
+  without waiting for the last chunk. It also ends it on an empty message,
+  a chunk with no piece, a first byte it does not know, a message longer
+  than 61440 bytes, a text message, and a ping or pong that is not 5 bytes.
+- The heartbeat (section 12.1) uses 5-byte messages: a ping is `0x10`
+  followed by a 4-byte id (big-endian, the first 1, then one more each
+  time), a pong `0x11` followed by the id of the ping it answers. The
+  transport answers a ping at once, as a WebSocket stack does; a pong for a
+  ping this end sent is the only evidence the link is alive, and the rules
+  of section 12.1 (a ping every 20 s, the link dead at a tick with 2
+  unanswered) are unchanged. A ping or pong may arrive between two chunks of
+  a message and leaves the message being joined as it is.
+- An end closes by closing the channel and its connection. As on a
+  WebSocket, the reason a client acts on arrives first in `session.end` or
+  `auth.result`; the close itself carries none.
+- On a relayed path the station's end has no address of the device's own
+  (section 12.3's connection with no address): it is not counted by
+  address, and one tap never pairs over it.
+
+The framing fixtures (`framing/`, section 16.1) hold both ends to the
+chunking and the heartbeat bytes; section 16.5 names the station's runners.
+

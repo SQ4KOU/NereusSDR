@@ -5,6 +5,12 @@
 // no-port-check: NereusSDR-original. Remote-daemon R3 Task 1.
 //
 // =================================================================
+// Modification history (NereusSDR):
+//   2026-09-26: iPhone app plan Task 28 (R-IOS-16): the ICE settings of a
+//               session through the remote access service reach the media
+//               transport's start. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
+// =================================================================
 
 #include "core/session/media/MediaPeer.h"
 
@@ -13,6 +19,7 @@
 #include <QSet>
 #include <QSignalSpy>
 #include <QThread>
+#include <QUuid>
 #include <QtTest>
 
 #include <stdexcept>
@@ -77,6 +84,7 @@ public:
         startedSsrc = options.localAudioSsrc;
         startedReceiverSsrcs = options.receiverAudioSsrcs;
         startedHeadphonesSsrc = options.headphonesAudioSsrc;
+        startedIce = options.ice;
         return started;
     }
 
@@ -141,6 +149,7 @@ public:
     quint32 startedSsrc = 0;
     QList<quint32> startedReceiverSsrcs;
     quint32 startedHeadphonesSsrc = 0;
+    std::optional<IceConfiguration> startedIce;
     QList<QPair<QString, QString>> descriptions;
     QList<QPair<QString, QString>> candidates;
     QList<QByteArray> sentDisplay;
@@ -176,6 +185,7 @@ private slots:
     void receiverSsrcsAreDerivedAndDistinct();
     void receiverStreamsFollowTheStartOption();
     void headphonesMixFollowsTheStartOption();
+    void iceSettingsReachTheTransport();
     void realPeersCarryDeclaredReceiverStreams();
 };
 
@@ -837,6 +847,45 @@ void TestMediaPeer::headphonesMixFollowsTheStartOption()
     QCOMPARE(errors.size(), 1);
     peer.stop();
     QCOMPARE(peer.headphonesAudioSsrc(), quint32{0});
+}
+
+// iPhone app plan Task 28 (R-IOS-16): a session through the remote access
+// service starts its media transport with the session's ICE settings (the
+// same STUN server and relay); without them, host candidates only.
+void TestMediaPeer::iceSettingsReachTheTransport()
+{
+    QList<QPointer<FakeTransport>> transports;
+    MediaPeer peer(nullptr, [&transports](QObject* parent) -> IMediaTransport* {
+        auto* transport = new FakeTransport(parent);
+        transports.push_back(transport);
+        return transport;
+    });
+    QVERIFY(!peer.usesIce());
+    QVERIFY(peer.start(IMediaTransport::Role::Answerer, QLatin1String(kConnectionA)));
+    QVERIFY(!transports.constLast()->startedIce.has_value());
+    peer.stop();
+
+    IceConfiguration ice = IceConfiguration::throughRendezvous(
+        {QStringLiteral("stun:192.0.2.1:3478")}, true, AddressFamilies{}, HostFamilies{});
+    RendezvousWire::Turn turn;
+    turn.urls = {QStringLiteral("turn:192.0.2.1:3478?transport=udp")};
+    turn.username = QStringLiteral("1800086400:aaaaaaaaaaaaaaaaaaaaaaaaaa");
+    turn.password = QUuid::createUuid().toString(QUuid::WithoutBraces);
+    QCOMPARE(ice.setRelay(turn, 1), 1);
+    peer.setIceConfiguration(ice);
+    QVERIFY(peer.usesIce());
+    QVERIFY(peer.start(IMediaTransport::Role::Answerer, QLatin1String(kConnectionA)));
+    const std::optional<IceConfiguration> started = transports.constLast()->startedIce;
+    QVERIFY(started.has_value());
+    QCOMPARE(started->stunServer()->host, QStringLiteral("192.0.2.1"));
+    QCOMPARE(started->relayServers().size(), 1);
+    QVERIFY(started->relayKnown());
+    peer.stop();
+
+    peer.setIceConfiguration(std::nullopt);
+    QVERIFY(peer.start(IMediaTransport::Role::Answerer, QLatin1String(kConnectionA)));
+    QVERIFY(!transports.constLast()->startedIce.has_value());
+    peer.stop();
 }
 
 QTEST_GUILESS_MAIN(TestMediaPeer)

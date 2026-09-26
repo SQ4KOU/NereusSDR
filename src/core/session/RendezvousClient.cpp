@@ -11,6 +11,10 @@
 //   2026-09-26: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: iPhone app plan Task 28 (R-IOS-16): retireIntroduction():
+//               an introduction the Core has finished with is forgotten at
+//               once, and never taken back. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/RendezvousClient.h"
@@ -750,9 +754,23 @@ void RendezvousClient::handle(const RendezvousWire::Message& message)
     }
 }
 
+bool RendezvousClient::retireIntroduction(const QByteArray& introductionId)
+{
+    if (m_role != Role::Station || !m_liveIntroductions.remove(introductionId)) {
+        return false;
+    }
+    m_answered.remove(introductionId);
+    m_retiredIntroductions.append(introductionId);
+    while (m_retiredIntroductions.size() > kMaxLiveIntroductions * 4) {
+        m_retiredIntroductions.removeFirst();
+    }
+    return true;
+}
+
 void RendezvousClient::handleIntroduction(const RendezvousWire::Message& message)
 {
-    if (m_role != Role::Station || !m_registered || m_liveIntroductions.contains(message.intro)) {
+    if (m_role != Role::Station || !m_registered || m_liveIntroductions.contains(message.intro)
+        || m_retiredIntroductions.contains(message.intro)) {
         return;
     }
     // Section 4.4: the device must be one this Core paired (a revoked one

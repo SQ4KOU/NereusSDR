@@ -78,6 +78,9 @@
 //   2026-09-26  J.J. Boyd / KG4VCF  Remote-window parity Task 19 (R-IOS-25):
 //                                    the record.batch sample.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 28 (R-IOS-16): the
+//               controlChannelChunkBytes limit. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "LinkSurface.h"
@@ -112,6 +115,7 @@
 #include "core/accessories/AlexAntennaFacade.h"
 #include "core/dsp/DspAssetService.h"
 #include "core/security/DeviceStore.h"
+#include "core/session/DataChannelTransport.h"
 #include "core/session/MirrorEnumDomain.h"
 #include "core/session/MirrorPolicy.h"
 #include "core/session/MirrorSchema.h"
@@ -1184,6 +1188,12 @@ QJsonObject captureLimits()
                   limit(static_cast<qint64>(StationClient::kMaxIncomingMessageBytes),
                         QStringLiteral("bytes"),
                         QStringLiteral("StationClient::kMaxIncomingMessageBytes")));
+    // iPhone app plan Task 28 (R-IOS-16): the control data channel's
+    // longest message (the link document, "Control over a data channel").
+    limits.insert(QStringLiteral("controlChannelChunkBytes"),
+                  limit(static_cast<qint64>(ControlFraming::kMaxChunkBytes),
+                        QStringLiteral("bytes"),
+                        QStringLiteral("ControlFraming::kMaxChunkBytes")));
     limits.insert(QStringLiteral("mediaControlBytes"),
                   limit(static_cast<qint64>(kMaxMediaControlBytes), QStringLiteral("bytes"),
                         QStringLiteral("kMaxMediaControlBytes")));

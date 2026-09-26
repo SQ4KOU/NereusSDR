@@ -171,6 +171,19 @@
         {"id": "media-opus-1", "file": "media/opus-1.bin", "kind": "media", "requires": {"remoteMediaVersion": 1}},
         {"id": "media-opus-2", "file": "media/opus-2.bin", "kind": "media", "requires": {"remoteMediaVersion": 1}},
         {"id": "media-opus-3", "file": "media/opus-3.bin", "kind": "media", "requires": {"remoteMediaVersion": 1}},
-        {"id": "media-opus-4", "file": "media/opus-4.bin", "kind": "media", "requires": {"remoteMediaVersion": 1}}
+        {"id": "media-opus-4", "file": "media/opus-4.bin", "kind": "media", "requires": {"remoteMediaVersion": 1}},
+        {"id": "framing-one-chunk", "file": "framing/one-chunk.json", "kind": "framing", "requires": {}},
+        {"id": "framing-exactly-one-chunk", "file": "framing/exactly-one-chunk.json", "kind": "framing", "requires": {}},
+        {"id": "framing-one-byte-over-a-chunk", "file": "framing/one-byte-over-a-chunk.json", "kind": "framing", "requires": {}},
+        {"id": "framing-settings-snapshot-300k", "file": "framing/settings-snapshot-300k.json", "kind": "framing", "requires": {}},
+        {"id": "framing-ping-and-pong-between-chunks", "file": "framing/ping-and-pong-between-chunks.json", "kind": "framing", "requires": {}},
+        {"id": "framing-station-cap-exactly", "file": "framing/station-cap-exactly.json", "kind": "framing", "requires": {}},
+        {"id": "framing-station-cap-passed", "file": "framing/station-cap-passed.json", "kind": "framing", "requires": {}},
+        {"id": "framing-client-cap-passed", "file": "framing/client-cap-passed.json", "kind": "framing", "requires": {}},
+        {"id": "framing-empty-message-refused", "file": "framing/empty-message-refused.json", "kind": "framing", "requires": {}},
+        {"id": "framing-empty-chunk-refused", "file": "framing/empty-chunk-refused.json", "kind": "framing", "requires": {}},
+        {"id": "framing-unknown-kind-refused", "file": "framing/unknown-kind-refused.json", "kind": "framing", "requires": {}},
+        {"id": "framing-short-ping-refused", "file": "framing/short-ping-refused.json", "kind": "framing", "requires": {}},
+        {"id": "framing-chunk-too-long-refused", "file": "framing/chunk-too-long-refused.json", "kind": "framing", "requires": {}}
     ]
 }

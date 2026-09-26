@@ -1897,6 +1897,11 @@
             "unit": "ms",
             "value": 30000
         },
+        "controlChannelChunkBytes": {
+            "source": "ControlFraming::kMaxChunkBytes",
+            "unit": "bytes",
+            "value": 61440
+        },
         "deltaFlushMs": {
             "source": "StationServer::kDefaultDeltaFlushMs",
             "unit": "ms",

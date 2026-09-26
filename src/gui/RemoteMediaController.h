@@ -21,6 +21,10 @@
 //               micLineChanged, so VOX shows disabled with its reason while
 //               this computer has no microphone line to the Core. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 28 (R-IOS-16): the connection stage of
+//               a session through the remote access service is longer by
+//               the gathering bound. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 
 #include "core/session/media/DisplayBudget.h"
 #include "core/session/media/IReceiverPcmSink.h"
@@ -83,6 +87,11 @@ public:
     /// That is 105,500 ms, which the library's report always comes before.
     /// The whole bound, kMediaEstablishmentDeadlineMs, is the two stages'
     /// sum, 125,500 ms. The .cpp checks each derivation.
+    ///
+    /// iPhone app plan Task 28 (R-IOS-16): for a session through the remote
+    /// access service, whose media connection gathers STUN and relay
+    /// candidates before the library's stages run, stage two is longer by
+    /// the gathering bound (IceConfiguration::kGatheringDeadlineMs, 23.5 s).
     ///
     /// The deadline only ever fires on a live control link: if control
     /// dies first (the heartbeat declares Core dead after two missed

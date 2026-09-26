@@ -526,9 +526,15 @@
 //               removal moves the Core's own band plan; a plan the Core
 //               does not have is refused. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 28 (R-IOS-16): certificatePemPath(),
+//               privateKeyPemPath() and sessionIceConfiguration(). J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
+
+#include "core/session/DataChannelTransport.h"
 
 #include "core/AppSettings.h"
 #include "core/BoardCapabilities.h"
@@ -2490,6 +2496,20 @@ QString StationServer::token() const
 QString StationServer::certificateFingerprint() const
 {
     return m_certificates != nullptr ? m_certificates->fingerprintSha256() : QString();
+}
+
+QString StationServer::certificatePemPath() const
+{
+    return m_certificates != nullptr && m_certificates->isValid()
+               ? m_certificates->certificatePath()
+               : QString();
+}
+
+QString StationServer::privateKeyPemPath() const
+{
+    return m_certificates != nullptr && m_certificates->isValid()
+               ? m_certificates->privateKeyPath()
+               : QString();
 }
 
 DeviceStore* StationServer::deviceStore() const
@@ -6714,6 +6734,12 @@ bool StationServer::sendTelemetry(const StationTelemetrySnapshot& snapshot,
 bool StationServer::mediaAvailable() const
 {
     return mediaAvailable(mediaSessionEpoch());
+}
+
+std::optional<IceConfiguration> StationServer::sessionIceConfiguration(quint64 epoch) const
+{
+    const auto* transport = qobject_cast<const DataChannelTransport*>(mediaSessionFor(epoch));
+    return transport != nullptr ? transport->iceConfiguration() : std::nullopt;
 }
 
 bool StationServer::mediaAvailable(quint64 epoch) const

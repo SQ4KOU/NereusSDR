@@ -19,6 +19,11 @@
 //               micLineChanged, so VOX shows disabled with its reason while
 //               this computer has no microphone line to the Core. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 28 (R-IOS-16): the media connection of
+//               a session through the remote access service uses its ICE
+//               settings, and its connection stage the gathering bound
+//               more. J.J. Boyd (KG4VCF), with AI-assisted implementation
+//               via Anthropic Claude Code.
 
 #include "gui/RemoteMediaController.h"
 #include "core/AppSettings.h"
@@ -90,6 +95,15 @@ static_assert(RemoteMediaController::kMediaConnectDeadlineMs
                   == kLibraryIcePacTimeoutMs + kLibraryDtlsHandshakeFailMs
                          + kLibrarySctpInitFailMs,
               "the connection stage must be the library's slowest serial failure");
+// iPhone app plan Task 28 (R-IOS-16): through the remote access service
+// the media connection gathers first (STUN and the relay, up to
+// IceConfiguration::kGatheringDeadlineMs) before the library's own stages
+// run, so its connection stage is that much longer.
+int connectStageMs(int connectDeadlineMs, bool throughService)
+{
+    return connectDeadlineMs + (throughService ? IceConfiguration::kGatheringDeadlineMs : 0);
+}
+
 // The audio status refresh, which runs only while a receiver runs or a
 // playback problem awaits recovery.
 constexpr int kAudioStatusRefreshMs = 250;
@@ -975,7 +989,9 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
             ? QStringLiteral("Core sent no station media description within %1 seconds")
                   .arg(QString::number(d->descriptionDeadlineMs / 1000.0))
             : QStringLiteral("Station media did not connect within %1 seconds")
-                  .arg(QString::number(d->connectDeadlineMs / 1000.0)));
+                  .arg(QString::number(connectStageMs(d->connectDeadlineMs,
+                                                      d->peer->usesIce())
+                                       / 1000.0)));
     });
     d->audio = std::make_unique<RemoteAudioReceiver>(model->audioEngine());
     d->selectedOutput = selectedSpeakerOutput();
@@ -2316,6 +2332,10 @@ void RemoteMediaController::start()
     // R-R3-45: likewise the headphones mix's stream id.
     // Task 36: likewise the microphone line.
     const bool micLine = micLineNegotiated();
+    // iPhone app plan Task 28 (R-IOS-16): a session through the remote
+    // access service makes its media connection with the same ICE settings
+    // as its control connection.
+    peer->setIceConfiguration(d->client->sessionIceConfiguration());
     const bool started = peer->start(IMediaTransport::Role::Answerer, d->connectionId,
                                      IMediaTransport::kDefaultAudioTargetBitrate,
                                      /*offerLosslessAudio=*/false, receiverAudioNegotiated(),
@@ -4086,7 +4106,7 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
             // Stage two: Core's description is here; the connection now
             // has the pinned library's own slowest failure report.
             d->awaitingDescription = false;
-            d->establishTimer->start(d->connectDeadlineMs);
+            d->establishTimer->start(connectStageMs(d->connectDeadlineMs, peer->usesIce()));
         }
         return;
     }
