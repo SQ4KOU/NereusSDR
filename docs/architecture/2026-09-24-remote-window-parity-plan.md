@@ -203,7 +203,7 @@ transmitting, and are refused while someone is on the air.
 | 31 DUP (display duplex) in both windows | A11 | yes | yes | yes |
 | 32 The transmit monitor to the transmit holder | Part F (MON) | yes | yes | |
 | 33 The CFC bar chart and PA Values' transmit readings | Part F (CFC, PA Values) | | yes | yes |
-| 34 Bench and land the transmit display and keyed view | matrix rows 9 to 27 | | | |
+| 34 Bench and land the transmit display and keyed view | matrix rows 9 to 28 | | | |
 
 Order: Task 1 first (every B5 task, Task 7, Task 12 and Task 13 use its gate and helpers).
 Tasks 2, 3, 4, 5, 6 and 7 in that order (each raises `transmitSettingsVersion` by one). Task 6
@@ -2063,6 +2063,9 @@ are the ones `PaValuesPage` already uses (`PaTelemetryScaling`, citing Thetis
   and `TxChannel::getCfcDisplayCompression`)
 - Modify: `src/gui/applets/TxCfcDialog.{h,cpp}` (in a remote window the bar chart reads the
   stream while open), `src/gui/setup/PaSetupPages.cpp` (`PaValuesPage` in a remote window)
+- Modify: `src/gui/applets/TxApplet.cpp` (the RF Pwr and SWR bars in a remote window),
+  `src/gui/meters/MeterPoller.{h,cpp}` (the container meters' transmit bindings in a remote
+  window), and the remote window's feed of `RadioStatus::powerChanged` from `txState`
 - Modify: the link document (section 6.3, section 7.7's stream table, section 18.8's
   `txState`), `surface.json` (regen), fixtures
 - Test: `tests/tst_remote_tx_readings.cpp` (new), `tst_remote_pa_pages`, `tst_pa_values_page`
@@ -2084,6 +2087,15 @@ are the ones `PaValuesPage` already uses (`PaTelemetryScaling`, citing Thetis
   the same scaling the local page uses, with the Core's `hpsdrModel`; forward power,
   reflected power and SWR from `txState`; ADC overload from the mirrored step attenuator's
   `overloadAdc0` and `overloadAdc1`. Each says it is the Core's (R-R3-32).
+- **A remote window's transmit meters read the Core while keyed** (found on the operator's G2
+  bench on 2026-09-26: the Core's G2 read about 4 W forward on TUNE while the remote window's
+  RF Pwr and SWR bars stayed at zero). The TX applet's RF Pwr and SWR bars, and every
+  container meter bound to a transmit reading (forward power, reflected power, SWR, ALC,
+  compression, mic), take their values from `txState` (`forwardPowerWatts`,
+  `reflectedPowerWatts`, `swr`, `alcDb`, `micLevelDb`), or from the record or property that
+  carries each reading `txState` does not, with the same scaling, smoothing and peak handling
+  as a local window. A reading no property carries yet stays disabled with its reason, never
+  0 (the not-sent list below).
 - User-visible string: "This Core does not send this reading. Updating the Core may help."
   (below version 1, replacing "The Core sends this reading when this window can transmit.").
 
@@ -2096,11 +2108,16 @@ are the ones `PaValuesPage` already uses (`PaTelemetryScaling`, citing Thetis
   minimum tracking, and each value matches the local page's scaling of the same raw inputs
   (one test feeds both).
 - Below version 1, each of those readings shows unavailable with the reason above; never 0.
-- The eight container meter bindings Task 39 names (`remoteTxBindingsNotSent`) are unchanged
-  here (A9 stays with the iPhone plan's Task 39).
+- Keyed with a fake radio reporting forward power, the remote TX applet's RF Pwr bar and a
+  container Power meter show the same value a local window shows for the same reading (one
+  test feeds both); the SWR bar and a container SWR meter likewise. Unkeyed, they fall as a
+  local window's do.
+- The container meter bindings Task 39 names (`remoteTxBindingsNotSent`) that no property
+  carries yet stay disabled with their reason; the rest of A9 stays with the iPhone plan's
+  Task 39.
 
 **Verification:** tests first for the stream and the scaling match. Named tests,
-`tst_link_conformance_session`, surface, wording. Bench (pending): matrix row 26.
+`tst_link_conformance_session`, surface, wording. Bench (pending): matrix rows 26 and 28.
 
 **Execution note (advisory):** opus. After Task 32. Shares `StationServer.cpp` and
 `RadioModel.cpp`.
@@ -2111,7 +2128,7 @@ are the ones `PaValuesPage` already uses (`PaTelemetryScaling`, citing Thetis
 ## Task 34: Bench the transmit display and keyed view, then land them
 
 **Requirements:** A11, A12; R-R3-49; the verification matrix
-(`docs/architecture/tx-display-verification/README.md`, rows 9 to 27). The trunk's transmit
+(`docs/architecture/tx-display-verification/README.md`, rows 9 to 28). The trunk's transmit
 display (PR #317, merged into the trunk 2026-09-20) is not on `main`; it lands with this
 work, once benched.
 
@@ -2121,7 +2138,7 @@ dates and notes), `docs/architecture/2026-09-20-remote-daemon-r3-verification/re
 
 **Acceptance:**
 - The controller deploys the Core to the Pi 4 (the HL2) and the Rock (the G2) and relaunches
-  the window, and the operator runs rows 9 to 18 in a local window and rows 19 to 27 in a
+  the window, and the operator runs rows 9 to 18 in a local window and rows 19 to 28 in a
   remote window, on both radios where the row names no radio class. Rows 11 (ORION class) and
   13 (HERMES class with PureSignal) run on the radio class they name, or stay pending with that
   reason.
@@ -2192,7 +2209,7 @@ end-of-over decodes (question Q3).
 
 The transmit display and keyed view: row 15's skirt (27); the Core's transmit display, A11
 (28, 29); Setup > Display > TX Display, A12 (30); display duplex (31); the transmit monitor
-(32); the CFC bar chart and PA Values' transmit readings (33); matrix rows 9 to 27 and the
+(32); the CFC bar chart and PA Values' transmit readings (33); matrix rows 9 to 28 and the
 landing on `main` (34); a remote window's TCI raw I/Q (23).
 
 ## The A rows

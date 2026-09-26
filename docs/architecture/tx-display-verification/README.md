@@ -68,6 +68,7 @@ is not evidence.** Rows below check numbers, not vibes.
 | 25 | Transmit monitor to the holder | MON on, transmit from a remote window with MON on speakers, then phones; a second device connected | The holder hears the monitor on the chosen output; the second device hears none | PENDING |
 | 26 | CFC bars and PA Values while keyed | Open the CFC dialog and Setup > PA > PA Values in a remote window, transmit with CFC on | The bars move as on the Core's own window; PA Values shows the Core's readings | PENDING |
 | 27 | Older Core | A current window on a Core without the transmit display, key TUNE | The pan shows the reason, keeps the red border and transmit grid, and its waterfall holds instead of painting the receiver | PENDING |
+| 28 | Remote transmit meters while keyed | In a remote window on the Rock Core (G2) and the Pi 4 Core (HL2), key TUNE; watch the TX applet's RF Pwr and SWR bars and a container's Power, SWR and ALC meters beside a local window on the same Core | The remote bars and meters read what the local window reads (about 4 W forward on the G2's TUNE, found at zero on 2026-09-26) and fall to rest on un-key as the local window's do | PENDING |
 
 ---
 
