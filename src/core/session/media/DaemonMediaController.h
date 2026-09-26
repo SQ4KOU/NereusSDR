@@ -228,7 +228,7 @@ public:
     /// this controller sends (R-R3-23: nereusd's audio_bitrate). Applies to
     /// the next media peer and audio sender it creates, so DaemonApp sets it
     /// before the listener opens. Default is the encoder's own default
-    /// target. Receiver streams do not follow it: see
+    /// target, 48 kbit/s fullband (R-R3-21). Receiver streams do not follow it: see
     /// kReceiverAudioOpusBitrate.
     void setAudioTargetBitrate(int bitsPerSecond);
     /// R-R3-43, R-R3-44: the Opus target, bit/s, of every receiver stream

@@ -98,9 +98,9 @@ constexpr quint16 kAudioFirstSequence = 100;
 // audio cannot leave the helper sending.
 constexpr int kMaxAudioPackets = 750;
 // The Opus profile the Core's audio context reports by default: 48 kHz
-// stereo, 1920-sample frames, 24000 bit/s, wideband (8 kHz audio).
+// stereo, 1920-sample frames, 48000 bit/s, fullband (20 kHz audio; R-R3-21).
 constexpr int kOpusTargetBitrate = IMediaTransport::kDefaultAudioTargetBitrate;
-constexpr int kOpusAudioBandwidthHz = 8000;
+constexpr int kOpusAudioBandwidthHz = 20000;
 
 
 void emitLine(const QJsonObject& object)

@@ -89,7 +89,7 @@ public:
     // OpusAudioCodecConfig's default bitrate, named here so this interface
     // does not include the codec for one number; MediaPeer.cpp checks that
     // the two agree.
-    static constexpr int kDefaultAudioTargetBitrate = 24000;
+    static constexpr int kDefaultAudioTargetBitrate = 48000;
 
     struct StartOptions {
         Role role;

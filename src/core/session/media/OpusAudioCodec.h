@@ -26,7 +26,9 @@ struct OpusAudioCodecConfig {
     static constexpr int kMaxRtpPacketBytes = 940;
     static constexpr int kMaxPayloadBytes = kMaxRtpPacketBytes - kRtpHeaderBytes;
 
-    int bitrate {24'000}; // the measured default; 48 kbit/s is the only alternate
+    // R-R3-21: 48 kbit/s fullband is the default for every mode (operator
+    // decision 2026-09-26); 24 kbit/s wideband stays accepted.
+    int bitrate {48'000};
 };
 
 /// The coded audio bandwidth the encoder forces for a supported target

@@ -47,18 +47,19 @@ const QList<RemoteAudioOffReason> kAllReasons{
 
 OpusEncoderProfile defaultProfile()
 {
-    return {48'000, 2, 1'920, 24'000, 8'000};
+    return {48'000, 2, 1'920, 48'000, 20'000}; // R-R3-21: fullband default
 }
 
 // The exact encoder object R-R3-23 specifies for the default encoder.
+// R-R3-21: the default encoder is 48 kbit/s fullband.
 QJsonObject defaultEncoderJson()
 {
     return {{QStringLiteral("codec"), QStringLiteral("opus")},
             {QStringLiteral("sampleRate"), 48000},
             {QStringLiteral("channels"), 2},
             {QStringLiteral("frameSamples"), 1920},
-            {QStringLiteral("targetBitrate"), 24000},
-            {QStringLiteral("audioBandwidthHz"), 8000}};
+            {QStringLiteral("targetBitrate"), 48000},
+            {QStringLiteral("audioBandwidthHz"), 20000}};
 }
 
 // The context exactly as DaemonMediaController::sendAudioContext built it
@@ -239,9 +240,9 @@ private slots:
         const QJsonObject onWire = encodeReceiverAudioContext(on);
         QCOMPARE(wire(onWire),
                  QByteArrayLiteral("{\"connectionId\":\"11111111-2222-4333-8444-555555555555\","
-                                   "\"enabled\":true,\"encoder\":{\"audioBandwidthHz\":8000,"
+                                   "\"enabled\":true,\"encoder\":{\"audioBandwidthHz\":20000,"
                                    "\"channels\":2,\"codec\":\"opus\",\"frameSamples\":1920,"
-                                   "\"sampleRate\":48000,\"targetBitrate\":24000},"
+                                   "\"sampleRate\":48000,\"targetBitrate\":48000},"
                                    "\"firstSequence\":65000,\"firstTimestamp\":4294963200,"
                                    "\"generation\":7,\"op\":\"receiver-audio-context\","
                                    "\"profile\":\"opus\",\"profileRefusal\":\"lossless-unavailable\","
@@ -364,8 +365,8 @@ private slots:
         QTest::addColumn<int>("targetBitrate");
         QTest::addColumn<int>("audioBandwidthHz");
         QTest::newRow("lowest bitrate") << 6'000 << 8'000;
-        QTest::newRow("default") << 24'000 << 8'000;
-        QTest::newRow("alternate") << 48'000 << 8'000;
+        QTest::newRow("default") << 48'000 << 20'000;
+        QTest::newRow("alternate") << 24'000 << 8'000;
         QTest::newRow("highest bitrate") << 510'000 << 8'000;
         QTest::newRow("narrowband") << 24'000 << 4'000;
         QTest::newRow("mediumband") << 24'000 << 6'000;

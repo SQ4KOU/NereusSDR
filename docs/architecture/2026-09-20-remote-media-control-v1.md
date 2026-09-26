@@ -73,6 +73,18 @@ an unsigned big-endian integer; zero maps to one. Both peers use this ID,
 and reject mismatching RTP. SSRC is a routing identity; authentication comes
 from the pinned WSS session and its negotiated DTLS peer.
 
+The speakers' mix and the headphones mix are Opus at the Core's
+`audio_bitrate`: 48000 bit/s with fullband sound (audio up to 20 kHz) by
+default for every mode (R-R3-21, operator decision of 2026-09-26), or 24000
+bit/s with wideband sound (up to 8 kHz) when the Core sets `audio_bitrate =
+24000`, which stays accepted. Either way the packets are 48 kHz stereo, 40 ms
+(1920 samples), constrained VBR, with Opus in-band FEC off: FEC lives only in
+Opus's speech layer, turning it on moves every packet to that layer, which at
+48000 bit/s gives up most of the sound above 8 kHz, and it rebuilds at most
+the one packet before, never a burst. The media offer's `maxaveragebitrate`
+is that same rate. The `encoder` object of each audio context reports the
+rate in use, so a GUI assumes none.
+
 Receiver audio streams (R-R3-43) share the one audio m-line and its SRTP
 context with the main stream; only their SSRCs differ. Receiver stream `n`,
 for `n` from 0 to 3, has the SSRC formed the same way from the ASCII prefix

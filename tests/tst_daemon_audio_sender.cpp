@@ -317,27 +317,28 @@ private slots:
 
     // R-R3-23: the Core's audio_bitrate reaches the encoder. The encoder's
     // own profile (read back from libopus) is the evidence, and a sender
-    // built at 48000 still produces packets the default decoder accepts.
+    // built at 24000 still produces packets the default decoder accepts.
+    // R-R3-21: 48000 (fullband) is the default.
     void configuredBitrateIsTheEncoderTarget()
     {
         const DaemonAudioSender defaultSender(nullptr);
         QVERIFY(defaultSender.encoderProfile().has_value());
-        QCOMPARE(defaultSender.encoderProfile()->targetBitrate, 24'000);
+        QCOMPARE(defaultSender.encoderProfile()->targetBitrate, 48'000);
 
-        OpusAudioCodecConfig high;
-        high.bitrate = 48'000;
+        OpusAudioCodecConfig low;
+        low.bitrate = 24'000;
         Harness h;
         h.engine->setSliceStreaming(h.sliceB, false);
-        DaemonAudioSender sender(h.engine, high);
+        DaemonAudioSender sender(h.engine, low);
         const std::optional<OpusEncoderProfile> profile = sender.encoderProfile();
         QVERIFY(profile.has_value());
-        QCOMPARE(profile->targetBitrate, 48'000);
-        // Only the bitrate and the bandwidth it forces move: 48 kbit/s codes
-        // fullband, sound up to 20 kHz; the rest of the profile is today's.
+        QCOMPARE(profile->targetBitrate, 24'000);
+        // Only the bitrate and the bandwidth it forces move: 24 kbit/s codes
+        // wideband, sound up to 8 kHz; the rest of the profile is the default's.
         OpusEncoderProfile expected = *defaultSender.encoderProfile();
-        QCOMPARE(expected.audioBandwidthHz, 8'000);
-        expected.targetBitrate = 48'000;
-        expected.audioBandwidthHz = 20'000;
+        QCOMPARE(expected.audioBandwidthHz, 20'000);
+        expected.targetBitrate = 24'000;
+        expected.audioBandwidthHz = 8'000;
         QCOMPARE(*profile, expected);
 
         QSignalSpy packets(&sender, &DaemonAudioSender::packetReady);
@@ -346,7 +347,7 @@ private slots:
         sender.drain();
         QCOMPARE(packets.count(), 1);
         // reset() on start keeps the configured target.
-        QCOMPARE(sender.encoderProfile()->targetBitrate, 48'000);
+        QCOMPARE(sender.encoderProfile()->targetBitrate, 24'000);
         OpusAudioDecoder decoder;
         QCOMPARE(decoder.decodeRtp(packetAt(packets, 0), kSsrc).status,
                  OpusAudioCodecStatus::Accepted);

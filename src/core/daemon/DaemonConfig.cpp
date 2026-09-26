@@ -127,7 +127,7 @@ DaemonConfig DaemonConfig::fromFile(const QString& path, QString* errorOut)
         } else if (key == QLatin1String("audio_bitrate")) {
             bool ok = false;
             const int v = value.toInt(&ok);
-            if (ok && (v == kDefaultAudioBitrate || v == kHighAudioBitrate)) {
+            if (ok && (v == kWidebandAudioBitrate || v == kFullbandAudioBitrate)) {
                 cfg.audioBitrate = v;
             } else {
                 cfg.audioBitrate = kDefaultAudioBitrate;
@@ -340,7 +340,7 @@ bool DaemonConfig::validate(QString* errorOut) const
         }
         return false;
     }
-    if (audioBitrate != kDefaultAudioBitrate && audioBitrate != kHighAudioBitrate) {
+    if (audioBitrate != kWidebandAudioBitrate && audioBitrate != kFullbandAudioBitrate) {
         if (errorOut) {
             *errorOut = QStringLiteral("audio_bitrate must be 24000 or 48000, got %1")
                             .arg(audioBitrate);
