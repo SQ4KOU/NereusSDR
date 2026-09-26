@@ -23,6 +23,12 @@
 //   2026-09-24 - R-R3-49: the Diversity tab is removed (DiversityTab
 //                 deleted); saved diversity/* values stay in the file.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-46 / R-R3-49 (remote-window parity Task 13): the OC
+//                 transmit pins close on the air in both windows (Thetis
+//                 UpdateForHotSwitch); the pin actions and transmit
+//                 calibration follow transmitSettingsVersion 8, User Dig Out
+//                 the transmit settings gate. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -87,6 +93,7 @@
 #include "core/BoardCapabilities.h"
 #include "core/HardwareProfile.h"
 #include "core/RadioDiscovery.h"
+#include "core/session/IStationLink.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
 
@@ -187,6 +194,14 @@ HardwarePage::HardwarePage(RadioModel* model, QWidget* parent)
         }
         applyRemoteAvailability();
     }
+
+    // R-R3-46 / R-R3-49 (parity Task 13): the OC transmit pins close while
+    // the radio is on the air, in a local window and a remote one alike.
+    if (m_model) {
+        connect(m_model, &RadioModel::coreOnAirChanged,
+                this, [this](bool) { applyTransmitHardwareGates(); });
+    }
+    applyTransmitHardwareGates();
 
     if (m_model) {
         connect(m_model, &RadioModel::currentRadioChanged,
@@ -345,9 +360,49 @@ void HardwarePage::setTransmitPermitted(bool permitted, const QString& reason)
 {
     m_antennaAlexTab->setTransmitPermitted(permitted, reason);
     m_ocOutputsTab->setTransmitPermitted(permitted, reason);
-    m_paCalTab->setTransmitPermitted(permitted, reason);
     m_hl2OptionsTab->setTransmitPermitted(permitted, reason);
     m_hl2IoTab->setTransmitPermitted(permitted, reason);
+}
+
+void HardwarePage::setTransmitSettingsPermitted(bool permitted, const QString& reason)
+{
+    m_ocOutputsTab->setUserDigOutPermitted(permitted, reason);
+    applyTransmitHardwareGates();
+}
+
+void HardwarePage::setTransmitSettingsPermittedAt(int /*version*/, bool /*permitted*/,
+                                                  const QString& /*reason*/)
+{
+    // The dialog pushes each version on every link change; the gates here
+    // read the link and the on-air state themselves (below), since the
+    // version 8 push also closes on the air and part of version 8 does not.
+    applyTransmitHardwareGates();
+}
+
+void HardwarePage::applyTransmitHardwareGates()
+{
+    if (!m_ocOutputsTab || !m_paCalTab || !m_hl2IoTab) {
+        return;
+    }
+    // R-R3-46 / R-R3-49 (parity Task 13): a local window changes its own
+    // radio; a remote one only a Core at transmitSettingsVersion 8.
+    const IStationLink* link = m_model ? m_model->stationLink() : nullptr;
+    const bool offered = !m_remote || (link != nullptr && link->transmitSettingsAvailable(8));
+    const QString notOffered = IStationLink::transmitSettingsUnavailableReason();
+    // Thetis greys the TX pin boxes while MOX is on unless OC hot switching
+    // is allowed, which NereusSDR does not build (the box is hidden), so
+    // they close on the air in both windows. The pin actions, TX Display
+    // Cal and Volts/Amps Calibration have no such rule in Thetis.
+    // From Thetis setup.cs:21944 [v2.10.3.15] UpdateForHotSwitch
+    //   bool enable = !tx || (tx && chkAllowHotSwitching.Checked);
+    const bool onAir = m_model != nullptr && m_model->isCoreOnAir();
+    m_ocOutputsTab->setTransmitPinsPermitted(offered && !onAir,
+                                             offered ? RadioModel::onAirReason() : notOffered);
+    m_ocOutputsTab->setPinActionsPermitted(offered, notOffered);
+    m_paCalTab->setTransmitCalibrationPermitted(offered, notOffered);
+    // The N2ADR switch: a Core at version 8 applies its whole preset, so
+    // its tooltip no longer says it moves the receive filters only.
+    m_hl2IoTab->setCoreAppliesWholeN2adrPreset(m_remote && offered);
 }
 
 bool HardwarePage::showAntennaTab()

@@ -22,6 +22,10 @@
 //   2026-09-24 - R-R3-49: the second I2C bus choice (bus 0) is hidden until
 //                 it is built (UnbuiltFeatures).
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (remote-window parity Task 13, plan C6): the TX
+//                 buffer latency and PTT hang rows are hidden until built
+//                 (UnbuiltFeatures). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 //
 //=================================================================
@@ -196,7 +200,12 @@ void Hl2OptionsTab::buildHermesLiteOptions(QWidget* parent)
     m_udTxLatency->setRange(Hl2OptionsModel::kTxLatencyMinMs,
                             Hl2OptionsModel::kTxLatencyMaxMs);
     m_udTxLatency->setSuffix(tr(" ms"));
+    m_udTxLatency->setObjectName(QStringLiteral("hl2TxBufferLatency"));
     grid->addWidget(m_udTxLatency, row, 1);
+    // R-R3-49 (remote-window parity Task 13, plan C6): the wire always
+    // sends 20 ms (P1RadioConnection), so the row is hidden until built;
+    // its saved value stays in the settings file.
+    UnbuiltFeatures::hideRowUnlessBuilt(m_udTxLatency, UnbuiltFeature::Hl2TxTiming, grid);
     ++row;
 
     // From mi0bot setup.designer.cs:11235-11258 udPTTHang (PTT hang,
@@ -206,7 +215,11 @@ void Hl2OptionsTab::buildHermesLiteOptions(QWidget* parent)
     m_udPttHang->setRange(Hl2OptionsModel::kPttHangMinMs,
                           Hl2OptionsModel::kPttHangMaxMs);
     m_udPttHang->setSuffix(tr(" ms"));
+    m_udPttHang->setObjectName(QStringLiteral("hl2PttHang"));
     grid->addWidget(m_udPttHang, row, 1);
+    // R-R3-49 (remote-window parity Task 13, plan C6): the wire always
+    // sends 12 ms, so the row is hidden until built; its saved value stays.
+    UnbuiltFeatures::hideRowUnlessBuilt(m_udPttHang, UnbuiltFeature::Hl2TxTiming, grid);
     ++row;
 
     // From mi0bot setup.designer.cs:11166-11176 chkCl2Enable +

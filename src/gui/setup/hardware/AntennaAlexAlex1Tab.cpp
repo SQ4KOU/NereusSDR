@@ -14,6 +14,11 @@
 //   2026-09-24 - R-R3-46: transmit permission for the TX low-pass table
 //                and TX master switches. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (remote-window parity Task 13, plan C5): HPF
+//                 bypass on TX and on PureSignal, Disable 6 m LNA on TX and
+//                 the LPF band edges are hidden until built
+//                 (UnbuiltFeatures). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 //
 //=================================================================
@@ -67,6 +72,7 @@
 
 #include "AntennaAlexAlex1Tab.h"
 #include "HardwareTransmitGate.h"
+#include "gui/UnbuiltFeatures.h"
 
 #include "core/AlexSettingsKeys.h"
 #include "core/AppSettings.h"
@@ -372,6 +378,15 @@ AntennaAlexAlex1Tab::AntennaAlexAlex1Tab(RadioModel* model, QWidget* parent)
                              m_disable6mLnaOnTx, m_disable6mLnaOnRx }) {
         hpfVBox->addWidget(chk);
     }
+    // R-R3-49 (remote-window parity Task 13, plan C5): nothing reads these
+    // three in any window yet, so they are hidden until built; their saved
+    // values stay in the settings file.
+    m_hpfBypassOnTx->setObjectName(QStringLiteral("alexHpfBypassOnTx"));
+    m_hpfBypassOnPs->setObjectName(QStringLiteral("alexHpfBypassOnPs"));
+    m_disable6mLnaOnTx->setObjectName(QStringLiteral("alexDisable6mLnaOnTx"));
+    for (QCheckBox* chk : { m_hpfBypassOnTx, m_hpfBypassOnPs, m_disable6mLnaOnTx }) {
+        UnbuiltFeatures::hideUnlessBuilt(chk, UnbuiltFeature::AlexTxFilterOptions);
+    }
 
     auto wireMaster = [this](QCheckBox* chk, const QString& key) {
         connect(chk, &QCheckBox::toggled, this,
@@ -507,6 +522,13 @@ AntennaAlexAlex1Tab::AntennaAlexAlex1Tab(RadioModel* model, QWidget* parent)
         LpfRowWidgets w;
         w.start = makeFreqSpin(band.startMhz, lpfFormWidget);
         w.end   = makeFreqSpin(band.endMhz,   lpfFormWidget);
+        // R-R3-49 (remote-window parity Task 13, plan C5): the band edges
+        // are not applied in any window yet, so they are hidden until built
+        // (the row's LED stays); their saved values stay in the file.
+        w.start->setObjectName(QStringLiteral("alexLpfStart_%1").arg(QLatin1String(band.slug)));
+        w.end->setObjectName(QStringLiteral("alexLpfEnd_%1").arg(QLatin1String(band.slug)));
+        UnbuiltFeatures::hideUnlessBuilt(w.start, UnbuiltFeature::AlexTxFilterOptions);
+        UnbuiltFeatures::hideUnlessBuilt(w.end, UnbuiltFeature::AlexTxFilterOptions);
 
         auto* led = new QFrame(lpfFormWidget);
         led->setFixedSize(12, 12);

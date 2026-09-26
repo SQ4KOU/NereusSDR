@@ -18,6 +18,9 @@
 //   2026-04-20 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-25 - R-R3-46 / R-R3-49 (remote-window parity Task 13):
+//                 loadTransmitCalibration. J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 // --- From setup.cs ---
@@ -239,6 +242,12 @@ public:
     void setMacAddress(const QString& mac);
     void load();   // hydrate from AppSettings under hardware/<mac>/cal/...
     void save();   // persist current state to AppSettings
+    // R-R3-46 / R-R3-49 (remote-window parity Task 13): re-read only TX
+    // Display Cal and Volts/Amps Calibration (cal/txDisplayOffset, paSens,
+    // paOffset), through their setters, so a window's change to them
+    // applies on the Core at once, on the air too, without reloading the
+    // PA forward-power table that waits for receive.
+    void loadTransmitCalibration();
 
 signals:
     // Emitted after any setter changes state. P2RadioConnection listens so

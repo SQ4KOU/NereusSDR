@@ -195,6 +195,9 @@
 //                (radioHardwareVersion 6) and RX bypass on TX (5); Setup >
 //                Antenna Control follows it. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (remote-window parity Task 13): the Setup dialog
+//                 gets the transmitSettingsVersion 8 gate. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -11347,7 +11350,9 @@ SetupDialog* MainWindow::createSetupDialog()
         // R-R3-49 (parity Tasks 2 and 3): the settings later versions
         // brought (Audio > TX Input's microphone, Audio > TX Profile).
         // R-R3-49 (parity Task 6): and version 6, Setup > PA.
-        for (const int version : {2, 3, 4, 5, 6}) {
+        // R-R3-49 (parity Task 13): and version 8, Hardware Config's OC
+        // transmit pins, pin actions and transmit calibration.
+        for (const int version : {2, 3, 4, 5, 6, 8}) {
             dialog->setTransmitSettingsPermitted(transmitSettingsPermitted(version),
                                                  transmitSettingsReason(version), version);
         }
@@ -11576,6 +11581,10 @@ void MainWindow::applyRemoteRoleGating()
         // R-R3-49 (parity Task 6): Setup > PA came with version 6.
         dialog->setTransmitSettingsPermitted(transmitSettingsPermitted(6),
                                              transmitSettingsReason(6), 6);
+        // R-R3-49 (parity Task 13): Hardware Config's OC transmit pins, pin
+        // actions and transmit calibration came with version 8.
+        dialog->setTransmitSettingsPermitted(transmitSettingsPermitted(8),
+                                             transmitSettingsReason(8), 8);
         dialog->setStationSettingsAvailable(stationAvailable, stationSettingsReason());
     }
     if (m_actTxEqualizer) {

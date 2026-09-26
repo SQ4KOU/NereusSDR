@@ -6085,9 +6085,10 @@ void TstStationSession::receiveOnlyCoreRefusesTransmitHardwareKeys()
     // R-R3-46 / R-R3-21 (transmit safety). The Core's hardware apply step
     // reloads oc/, cal/ and hl2/ into its live controllers, so a raw write
     // of a transmit-side hardware key would reach the radio's transmit
-    // path. A receive-only Core refuses every such key, write and remove,
-    // with the transmit reason: its saved value and its live controller
-    // stay as they were, and nothing is reloaded.
+    // path. A receive-only Core refuses every such key the parity tasks
+    // have not moved onto its off-air list, write and remove, with the
+    // transmit reason: its saved value and its live controller stay as they
+    // were, and nothing is reloaded.
     AppSettings& settings = AppSettings::instance();
     settings.clearHardwareValues(kHardwareMac);
     const QStringList globalKeys{QStringLiteral("hardware/oc/extPa/model"),
@@ -6130,17 +6131,15 @@ void TstStationSession::receiveOnlyCoreRefusesTransmitHardwareKeys()
     QVERIFY(!oc.pinEnabled(Band::Band40m, 2, /*tx=*/true));
 
     // One key of each class, with a value its controller would take.
+    // R-R3-49 (parity Task 6): the PA forward-power table
+    // (paCalibration/boardClass, calPoint1..10) and the PA profiles (pa/...)
+    // are taken off the air at transmitSettingsVersion 6
+    // (tst_remote_pa_pages). R-R3-46 / R-R3-49 (parity Task 13): the OC
+    // transmit pins (oc/tx/...), the OC pin actions (oc/actions/...) and
+    // TX Display Cal and Volts/Amps Calibration (cal/txDisplayOffset,
+    // paSens, paOffset, and the Calibration tab's paCalibration/cal/
+    // copies) at version 8 (tst_remote_oc_cal).
     const QList<QPair<QString, QString>> writes{
-        {hw(QStringLiteral("oc/tx/40m/pin3")), QStringLiteral("True")},
-        {hw(QStringLiteral("oc/actions/pin1/action")), QStringLiteral("tune")},
-        {hw(QStringLiteral("cal/txDisplayOffset")), QStringLiteral("7.5")},
-        {hw(QStringLiteral("cal/paSens")), QStringLiteral("3.25")},
-        {hw(QStringLiteral("cal/paOffset")), QStringLiteral("1.5")},
-        // R-R3-49 (parity Task 6): the PA forward-power table
-        // (paCalibration/boardClass, calPoint1..10) and the PA profiles
-        // (pa/...) are taken off the air at transmitSettingsVersion 6
-        // (tst_remote_pa_pages); the Calibration tab's own copy stays refused.
-        {hw(QStringLiteral("paCalibration/cal/paSens")), QStringLiteral("3.25")},
         {hw(QStringLiteral("hl2/pttHangMs")), QStringLiteral("30")},
         {hw(QStringLiteral("hl2/txLatencyMs")), QStringLiteral("40")},
         {hw(QStringLiteral("tx/UserDigOut")), QStringLiteral("15")},
@@ -6168,14 +6167,14 @@ void TstStationSession::receiveOnlyCoreRefusesTransmitHardwareKeys()
     }
 
     // A remove of a transmit key the Core already holds keeps it.
-    const QString held = hw(QStringLiteral("oc/tx/20m/pin1"));
-    settings.setValue(held, QStringLiteral("True"));
+    const QString held = hw(QStringLiteral("hl2/txLatencyMs"));
+    settings.setValue(held, QStringLiteral("25"));
     s.proxy->remove(held);
     ++expected;
     QTRY_COMPARE(rejected.count(), expected);
     QCOMPARE(rejected.last().at(0).toString(), held);
-    QCOMPARE(rejected.last().at(1).toString(), QStringLiteral("True"));
-    QCOMPARE(settings.value(held).toString(), QStringLiteral("True"));
+    QCOMPARE(rejected.last().at(1).toString(), QStringLiteral("25"));
+    QCOMPARE(settings.value(held).toString(), QStringLiteral("25"));
 
     // Nothing reached the Core's controllers.
     QTest::qWait(150);
@@ -6190,23 +6189,24 @@ void TstStationSession::receiveOnlyCoreRefusesTransmitHardwareKeys()
     QCOMPARE(hl2.pttHangMs(), pttHang);
     QCOMPARE(hl2.txLatencyMs(), txLatency);
 
-    // Follow-up item 1: the N2ADR switch. On a receive-only Core only the
-    // preset's receive half applies; every transmit pin stays as it was
-    // (the preset would clear them and set its own), in memory and saved.
+    // Follow-up item 1: the N2ADR switch. R-R3-46 / R-R3-49 (parity Task
+    // 13): a receive-only Core now takes the OC transmit pins off the air
+    // (transmitSettingsVersion 8), so off the air the whole preset applies,
+    // transmit pins included, in memory and saved, as the local switch does
+    // (tst_remote_oc_cal covers the wait on the air).
     reloads.clear();
     s.core->ocMatrixMutable().setPin(Band::Band20m, 0, /*tx=*/true, true);
     const QString n2adr = hw(QStringLiteral("hl2IoBoard/n2adrFilter"));
     s.proxy->setValue(n2adr, QStringLiteral("True"));
     QTRY_COMPARE(reloads, QStringList{QStringLiteral("n2adr")});
     QVERIFY(oc.pinEnabled(Band::Band40m, 2, /*tx=*/false));   // receive half applied
-    QVERIFY(oc.pinEnabled(Band::Band20m, 0, /*tx=*/true));    // not cleared
-    QVERIFY(!oc.pinEnabled(Band::Band40m, 2, /*tx=*/true));   // not set
-    QVERIFY(settings.value(hw(QStringLiteral("oc/tx/40m/pin3")), QStringLiteral("False"))
-                .toString() != QStringLiteral("True"));
+    QVERIFY(!oc.pinEnabled(Band::Band20m, 0, /*tx=*/true));   // cleared by the preset
+    QVERIFY(oc.pinEnabled(Band::Band40m, 2, /*tx=*/true));    // set by the preset
+    QCOMPARE(settings.value(hw(QStringLiteral("oc/tx/40m/pin3")), QStringLiteral("False"))
+                 .toString(), QStringLiteral("True"));
     s.proxy->setValue(n2adr, QStringLiteral("False"));
     QTRY_VERIFY(!oc.pinEnabled(Band::Band40m, 2, /*tx=*/false));
-    QVERIFY(oc.pinEnabled(Band::Band20m, 0, /*tx=*/true));
-    s.core->ocMatrixMutable().setPin(Band::Band20m, 0, /*tx=*/true, false);
+    QVERIFY(!oc.pinEnabled(Band::Band40m, 2, /*tx=*/true));
 
     // The receive side is still the window's to change.
     s.proxy->setValue(hw(QStringLiteral("oc/rx/40m/pin3")), QStringLiteral("True"));

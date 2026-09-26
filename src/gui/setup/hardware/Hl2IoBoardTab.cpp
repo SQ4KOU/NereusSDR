@@ -25,6 +25,10 @@
 //   2026-09-24 - R-R3-46: the N2ADR switch applies only its receive half
 //                without the transmit permission, and its tooltip says so.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-R3-46 / R-R3-49 (remote-window parity Task 13): no
+//                 receive-only note when the window's Core applies the whole
+//                 preset (transmitSettingsVersion 8). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // --- From Console/setup.cs ---
@@ -976,8 +980,21 @@ void Hl2IoBoardTab::setTransmitPermitted(bool permitted, const QString& reason)
 {
     Q_UNUSED(reason);  // the switch stays usable: its receive half applies
     m_transmitPermitted = permitted;
-    // Say so on the switch: without transmit it moves only the receive
-    // filters (applyN2adrMatrix).
+    refreshN2adrToolTip();
+}
+
+void Hl2IoBoardTab::setCoreAppliesWholeN2adrPreset(bool whole)
+{
+    m_coreAppliesWholePreset = whole;
+    refreshN2adrToolTip();
+}
+
+void Hl2IoBoardTab::refreshN2adrToolTip()
+{
+    // Say so on the switch when it moves only the receive filters: without
+    // transmit (applyN2adrMatrix) and with a Core that applies only that
+    // half. A Core at transmitSettingsVersion 8 applies the whole preset
+    // from the switch itself (RadioModel::flushRemoteHardwareApply).
     if (m_n2adrFilter) {
         static const char* const kOwnTip = "nereusN2adrOwnToolTip";
         if (!m_n2adrFilter->property(kOwnTip).isValid()) {
@@ -985,8 +1002,9 @@ void Hl2IoBoardTab::setTransmitPermitted(bool permitted, const QString& reason)
         }
         const QString own = m_n2adrFilter->property(kOwnTip).toString();
         const QString note = receiveOnlyN2adrNote();
-        m_n2adrFilter->setToolTip(permitted ? own
-                                            : (own.isEmpty() ? note : own + QLatin1Char('\n') + note));
+        const bool receiveOnly = !m_transmitPermitted && !m_coreAppliesWholePreset;
+        m_n2adrFilter->setToolTip(!receiveOnly ? own
+                                               : (own.isEmpty() ? note : own + QLatin1Char('\n') + note));
     }
 }
 

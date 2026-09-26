@@ -387,7 +387,7 @@ change shows as surface drift and as a change to this table.
 | `stationTciVersion` | 1 |
 | `accessoryDataVersion` | 3 |
 | `remoteTgxlControlVersion` | 4 |
-| `transmitSettingsVersion` | 7 |
+| `transmitSettingsVersion` | 8 |
 
 <!-- /surface -->
 
@@ -522,7 +522,18 @@ When a feature is off, its version is 0:
   `canActuate` says whether PureSignal is ready on the Core's radio, not
   whether this peer may transmit (`txPermitted`). `ps3.twoTone` with
   `enabled` true keys the radio and waits for remote transmit. Each is
-  refused while the radio is on the air (section 7.3). The keying set stays refused on a receive-only
+  refused while the radio is on the air (section 7.3). At 8 it also covers
+  Setup > Hardware Config's OC Outputs and Calibration: the OC transmit
+  pins (`hardware/<mac>/oc/tx/...`: the HF and SWL TX matrices and their
+  resets), taken while the radio is off the air; and the OC pin actions
+  (`hardware/<mac>/oc/actions/...`), TX Display Cal and Volts/Amps
+  Calibration (`hardware/<mac>/cal/txDisplayOffset`, `cal/paSens`,
+  `cal/paOffset` and the Calibration tab's copies under
+  `hardware/<mac>/paCalibration/cal/`), taken on and off the air, as Thetis
+  changes them while transmitting (section 8). The Core applies each to its
+  OC matrix or calibration at once; an OC matrix change, and the N2ADR
+  switch on its HL2 (which now applies its whole preset, transmit pins
+  included), wait until the radio is back on receive. The keying set stays refused on a receive-only
   Core, on and off the air, and so do raw settings writes of
   `hardware/<mac>/tx/...`, `powerByBand` and `tunePowerByBand` (the
   `transmit` object owns them). A window whose Core sends 0 keeps its
@@ -1584,8 +1595,27 @@ profile `pa/profile/active`) and `hardware/<mac>/paCalibration/...` (the
 PA forward-power table, `boardClass` and `calPoint1` to `calPoint10`),
 from a peer at agreed minor 11. A taken key, or its removal, applies to
 the Core's PA profiles or calibration at once, and a window reloads its
-copies of both when those keys change. The rest of the transmit-side
-hardware keys stay refused.
+copies of both when those keys change. At `transmitSettingsVersion` 8 the
+same off-air rule holds for Hardware Config's OC transmit pins,
+`hardware/<mac>/oc/tx/<band>/pin<n>` (the HF and SWL TX matrices, and the
+resets, which write them), from a peer at agreed minor 11; its OC pin
+actions, `hardware/<mac>/oc/actions/pin<n>/action`, and its TX Display Cal
+and Volts/Amps Calibration, `hardware/<mac>/cal/txDisplayOffset`,
+`cal/paSens` and `cal/paOffset` with the Calibration tab's copies
+`hardware/<mac>/paCalibration/cal/{txDisplayOffset,paSens,paOffset,paDefaultRestored,logVoltsAmps}`,
+are taken on the air too, because Thetis changes them while transmitting
+(its TX pin boxes alone are greyed while MOX is on, unless OC hot switching
+is allowed, which NereusSDR does not build). A taken OC key applies to the
+Core's OC matrix, which the radio's codec reads for every frame, once the
+radio is back on receive; a taken calibration key applies to the Core's
+calibration at once. The N2ADR switch (`hardware/<mac>/hl2IoBoard/n2adrFilter`)
+on a Core's HL2 applies its whole preset, transmit pins included, likewise
+once the radio is on receive. User Dig Out is the `transmit` object's
+`userDigOut` (version 1). The rest of the transmit-side hardware keys stay
+refused: the HL2's TX buffer latency and PTT hang (`hl2/...`), the Alex
+TX filter options (`alex/master/...`, `alex/lpf/...`), which both windows
+hide until they are applied, and the OC hot switching and external PA
+keys.
 
 ### 8.2 Keys the Core owns by code
 
@@ -2418,7 +2448,7 @@ same on every machine.
 | `heartbeat-answered`, `heartbeat-missed` | The heartbeat, above |
 | `connect-deadline` | No `auth.request` within 30000 ms: `session.end` "This app did not finish connecting to the Core in time.", `retryable` true |
 | `property-write` | A write and its `property.result` and side-effect `delta`; a refused outbound property and an unknown one; a write without a `writeId` answered by `delta`; a write to a slice's signal strength refused as outbound; on the receive-only Core, a `transmit` write of `power` taken off the air and a write of `mox` and `voxEnabled` refused with the receive-only reason; at `transmitSettingsVersion` 2, a write of `cpdrLevelDb` taken, and `micGainDb` and `monitorVolume` out of range refused with their ranges beside a write of the outbound `tunePowerForTxBand`; at `transmitSettingsVersion` 3, a write of `micBoost` and `lineInBoost` taken, and `lineInBoost` out of range refused with its range beside a write of the outbound `activeTxProfile`; at `transmitSettingsVersion` 4, a write of `txEqBandsJson`, `txEqUseLegacy` and `txLevelerDecay` taken, and a nine-value `txEqBandsJson`, a `cfcCompressionJson` with a value out of range and `txAlcDecay` out of range each refused whole with its range |
-| `settings-write` | A station-scoped write echoed with its origin; an operator-local write rejected; a removal sent as `settings.value` with no entry; on the receive-only Core, a DSP > Options TX key and a PA forward-power table key (`paCalibration/calPoint1`, version 6) taken off the air and a transmit hardware key refused |
+| `settings-write` | A station-scoped write echoed with its origin; an operator-local write rejected; a removal sent as `settings.value` with no entry; on the receive-only Core, a DSP > Options TX key and a PA forward-power table key (`paCalibration/calPoint1`, version 6) taken off the air, an OC transmit pin (`oc/tx/20m/pin3`), an OC pin action (`oc/actions/pin1/action`) and TX Display Cal (`cal/txDisplayOffset`) taken off the air (version 8), and a transmit hardware key refused |
 | `unknown-verb` | `command.result` refused, "The Core does not know this request. Updating the Core may help."; the connection stays up |
 | `unknown-kind` | `session.end` "The Core could not read a message from this app.", `retryable` false |
 | `verbs-*` | Each verb in `commands`, grouped by the capability that gates it, invoked with its own arguments (for `setPgxlHardware`, one of its three optional ones) and, where it takes any, with one argument renamed (and nothing else changed: the same values and kinds); the two get different answers, so each shows the station read the arguments (a PureSignal action with arguments it does not take is refused "The Core could not read this PureSignal request." before the transmit gate is asked); `verbs-ps3` (which requires `psAlgorithmVersion` 3) invokes the PureSignal verbs whose answers do not depend on arming (`ps3.off`, `ps3.twoTone` off and `ps3.saveCorrection`), and `verbs-ps3-arming` (which also requires `transmitSettingsVersion` 7) invokes `ps3.twoTone` with `enabled` true, refused "PureSignal cannot be run from a remote window yet.", and the arming verbs (`ps3.single`, `ps3.automatic`, `ps3.applyCurrent`, `ps3.restoreCorrection`), taken and then failing on the static station, which has no PureSignal running ("PureSignal is unavailable until the radio is ready."); `nnr.applyModelSelection` names the revision `dspAssets` gave in the snapshot; `verbs-tgxl-control` (which requires `remoteTgxlControlVersion` 2) invokes the antenna, operate and bypass switches, and `verbs-tgxl-relays` (which requires `remoteTgxlControlVersion` 4) matches `scanTgxlLan`'s `devicesJson` as any text, since a real Tuner Genius on the test computer's network may answer, and its accepted `setTgxlAddress` is followed by the `tuner` delta carrying the saved address, then a blank host, saved and shown as blank, and the address again; `verbs-pgxl-control` (which requires `remotePgxlControlVersion` 4) does the same for `scanPgxlLan` and `setPgxlAddress` (the `amplifier` delta, and the blank host), and its `setPgxlOperate` is refused on the static station, which has no amp connected ("The Core is not connected to the Power Genius."); `verbs-rfkit` (which requires `remoteRfKitControlVersion` 2) connects, disconnects and switches the RF-Kit, and `verbs-rfkit-control` (which requires `remoteRfKitControlVersion` 4) invokes `setRfKitOperate`, `setRfKitAntenna` and `setRfKitTciMode`, refused on the static station with no amp admitted ("The Core is not connected to the RF-Kit amplifier."), and its accepted `setRfKitAddress` is followed by the `rfkit` delta carrying the saved address, then the blank host and the address again; `verbs-tx-antenna` (which requires `radioHardwareVersion` 6) invokes `setAlexTxAntenna` with a band's current antenna (taken, no delta) and with `band` renamed. A version's new verbs go in a fixture of their own, so an app at the older version still runs the older file |

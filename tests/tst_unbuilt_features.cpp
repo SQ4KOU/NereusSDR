@@ -58,6 +58,10 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  R3 unfinished controls, fix wave.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  Remote-window parity Task 13: the
+//                                    Alex-1 TX filter options and HL2 TX
+//                                    timings. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -66,6 +70,7 @@
 #include <QApplication>
 #include <QCheckBox>
 #include <QComboBox>
+#include <QDoubleSpinBox>
 #include <QFile>
 #include <QGroupBox>
 #include <QLabel>
@@ -770,6 +775,30 @@ QMap<F, QList<Surface>> surfaces()
     map[F::FrequencyCalibration] = {onPage(QStringLiteral("Hardware Config"),
                                            QStringLiteral("frequency calibration Start"),
                                            named(QStringLiteral("freqCalStartButton")))};
+    // Plan C5 and C6 (parity Task 13): nothing reads the Alex-1 TX filter
+    // options in any window; the HL2 wire always carries its own timings.
+    map[F::AlexTxFilterOptions] = {
+        onPage(QStringLiteral("Hardware Config"), QStringLiteral("HPF bypass on TX"),
+               named(QStringLiteral("alexHpfBypassOnTx"))),
+        onPage(QStringLiteral("Hardware Config"), QStringLiteral("HPF bypass on PureSignal"),
+               named(QStringLiteral("alexHpfBypassOnPs"))),
+        onPage(QStringLiteral("Hardware Config"), QStringLiteral("Disable 6 m LNA on TX"),
+               named(QStringLiteral("alexDisable6mLnaOnTx"))),
+        onPage(QStringLiteral("Hardware Config"), QStringLiteral("LPF band edges"),
+               [](QWidget* root) {
+                   for (QDoubleSpinBox* spin : root->findChildren<QDoubleSpinBox*>()) {
+                       if (spin->objectName().startsWith(QStringLiteral("alexLpf"))
+                           && shownWithin(spin, root)) {
+                           return true;
+                       }
+                   }
+                   return false;
+               })};
+    map[F::Hl2TxTiming] = {
+        onPage(QStringLiteral("Hardware Config"), QStringLiteral("TX buffer latency"),
+               named(QStringLiteral("hl2TxBufferLatency"))),
+        onPage(QStringLiteral("Hardware Config"), QStringLiteral("PTT hang"),
+               named(QStringLiteral("hl2PttHang")))};
     return map;
 }
 

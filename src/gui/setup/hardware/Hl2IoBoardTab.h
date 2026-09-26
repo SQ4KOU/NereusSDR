@@ -29,6 +29,10 @@
 //   2026-09-24 - R-R3-46: the N2ADR switch applies only its receive half
 //                without the transmit permission, and its tooltip says so.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-R3-46 / R-R3-49 (remote-window parity Task 13): no
+//                 receive-only note when the window's Core applies the whole
+//                 preset (transmitSettingsVersion 8). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim mi0bot Console/setup.cs header (lines 1-50) ===
@@ -141,7 +145,12 @@ public:
     // is receive-only) the N2ADR switch applies only its receive half; the
     // transmit OC pins stay the Core's. Always permitted locally.
     void setTransmitPermitted(bool permitted, const QString& reason);
-    /// The N2ADR switch's tooltip line while transmit is not permitted.
+    // R-R3-46 / R-R3-49 (parity Task 13): the window's Core applies the
+    // switch's whole preset itself (transmitSettingsVersion 8), so the
+    // tooltip drops the receive-only note. The window still composes only
+    // the receive half into its own copy; the Core saves the transmit pins.
+    void setCoreAppliesWholeN2adrPreset(bool whole);
+    /// The N2ADR switch's tooltip line while only the receive half applies.
     static QString receiveOnlyN2adrNote();
     QString n2adrToolTipForTest() const;
 
@@ -208,12 +217,17 @@ private:
     void appendI2cLogEntry(const QString& text);
     void updateBwDisplay();
 
+    // R-R3-46 / R-R3-49: the N2ADR switch's tooltip from the two flags.
+    void refreshN2adrToolTip();
+
     // Decoded string for a register value (human-readable).
     QString decodeRegister(IoBoardHl2::Register reg, quint8 value) const;
 
     RadioModel*                   m_model{nullptr};
     // R-R3-46: see setTransmitPermitted.
     bool                          m_transmitPermitted{true};
+    // R-R3-49 (parity Task 13): see setCoreAppliesWholeN2adrPreset.
+    bool                          m_coreAppliesWholePreset{false};
     IoBoardHl2*                   m_ioBoard{nullptr};
     HermesLiteBandwidthMonitor*   m_bwMonitor{nullptr};
 

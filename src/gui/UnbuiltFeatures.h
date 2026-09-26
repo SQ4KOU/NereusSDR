@@ -32,6 +32,9 @@
 //   2026-09-25 - R-R3-49 (remote-window parity Task 6): LocalNetworkStats
 //                 retired; the rows are measured and shown. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (remote-window parity Task 13): AlexTxFilterOptions
+//                 and Hl2TxTiming (plan C5, C6). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -107,6 +110,9 @@ enum class UnbuiltFeature {
     FrequencyCalibration, // Setup > Hardware > Calibration: the frequency calibration Start button
     FmTones,          // CTCSS tone encode and tone squelch: the VFO flag's FM tone mode and tone
                       // choices (plan row fm-flag)
+    AlexTxFilterOptions, // Setup > Hardware > Alex-1 Filters: HPF bypass on TX, HPF bypass on
+                         // PureSignal, Disable 6 m LNA on TX, the LPF band edges (plan C5)
+    Hl2TxTiming,      // Setup > Hardware > HL2 Options: TX buffer latency, PTT hang (plan C6)
 };
 
 namespace UnbuiltFeatures {

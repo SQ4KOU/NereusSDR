@@ -269,15 +269,19 @@ void TstRemotePaPages::paKeysAreOnTheOffAirListAtVersion6()
     // The rest of the transmit hardware stays refused.
     QVERIFY(!StationServer::isTransmitSettingKeyAcceptedOffAir(
         QStringLiteral("hardware/%1/tx/micGainDb").arg(kMac)));
-    QVERIFY(!StationServer::isTransmitSettingKeyAcceptedOffAir(
-        QStringLiteral("hardware/%1/cal/paSens").arg(kMac)));
-    QVERIFY(!StationServer::isTransmitSettingKeyAcceptedOffAir(
+    // The Calibration tab's transmit fields joined at version 8 (parity
+    // Task 13, tst_remote_oc_cal), taken on the air too; the PA table keeps
+    // version 6's on-air rule.
+    QVERIFY(StationServer::isTransmitSettingKeyTakenOnAir(
         QStringLiteral("hardware/%1/paCalibration/cal/paSens").arg(kMac)));
+    QVERIFY(!StationServer::isTransmitSettingKeyTakenOnAir(calKey(QStringLiteral("calPoint3"))));
 
     Session s(m_securityDir.path(), this, /*coreUsesProcessSettings=*/false);
     QVERIFY(s.connect());
-    // 7 since parity Task 7 (PureSignal arming); 6 is within it.
-    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 7);
+    // 7 since parity Task 7 (PureSignal arming), 8 since parity Task 13
+    // (Hardware Config's OC transmit pins and transmit calibration); 6 is
+    // within it.
+    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 8);
     QVERIFY(s.client->transmitSettingsAvailable(6));
 }
 

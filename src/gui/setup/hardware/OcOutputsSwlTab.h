@@ -40,6 +40,9 @@
 //                via Anthropic Claude Code.
 //   2026-09-23 - R-R3-46: transmit permission. J.J. Boyd (KG4VCF), AI-
 //                 assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-46 / R-R3-49 (remote-window parity Task 13): the TX
+//                 pins, pin actions and resets follow their own gates.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim mi0bot setup.designer.cs header (Thetis upstream) ===
@@ -114,9 +117,11 @@ public:
     bool rxPinCheckedForTest(int swlBandRow, int pin) const;
     bool txPinCheckedForTest(int swlBandRow, int pin) const;
 
-    // R-R3-46: the TX pin matrix and the reset (which clears TX pins too)
-    // follow the transmit permission with its reason.
-    void setTransmitPermitted(bool permitted, const QString& reason);
+    // R-R3-46 / R-R3-49 (parity Task 13): the TX pin matrix and the reset
+    // (which clears TX pins too), closed while the radio is on the air in
+    // either window, and in a remote window while its Core does not take
+    // them (HardwarePage decides).
+    void setTransmitPinsPermitted(bool permitted, const QString& reason);
 
 private slots:
     void onMatrixChanged();
