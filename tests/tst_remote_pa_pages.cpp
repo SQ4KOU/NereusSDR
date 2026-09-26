@@ -1,0 +1,624 @@
+// no-port-check: NereusSDR-original. R-R3-46 / R-R3-49 / R-R3-32
+// (remote-window parity Task 6): Setup > PA (PA Gain, Watt Meter, PA Values),
+// Radio Status's PA card and the HW Volts, Amps and Temperature meters in a
+// remote window; the PA keys taken by the Core off the air and applied at
+// once; the Core's TX inhibit mirrored. Loopback link, no RF and no
+// hardware: nothing here keys a radio. "On the air" keys the Core's own
+// MoxController with the receive-only MOX pre-check lifted, as
+// tst_remote_transmit_setup_pages does. No audio device is opened.
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-46 / R-R3-49 / R-R3-32 (parity
+//                                    Task 6). AI-assisted via Anthropic
+//                                    Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  Integration carry: the window signs in
+//                                    to an upgraded Core with its token
+//                                    (seedUpgradedCoreToken), as Part C's
+//                                    paired-device sign-in requires.
+//                                    AI-assisted via Anthropic Claude Code.
+// =================================================================
+
+#include <QtTest/QtTest>
+#include <QCheckBox>
+#include <QComboBox>
+#include <QCoreApplication>
+#include <QDoubleSpinBox>
+#include <QFile>
+#include <QLabel>
+#include <QSignalSpy>
+#include <QTemporaryDir>
+
+#include <memory>
+
+#include "core/AppSettings.h"
+#include "core/CalibrationController.h"
+#include "core/ConnectionState.h"
+#include "core/HardwareProfile.h"
+#include "core/MoxController.h"
+#include "core/PaCalProfile.h"
+#include "core/PaProfile.h"
+#include "core/PaProfileManager.h"
+#include "core/TxChannel.h"
+#include "core/session/IStationLink.h"
+#include "core/session/SessionMessages.h"
+#include "core/session/StationClient.h"
+#include "core/session/StationServer.h"
+#include "core/settings/SettingsProxy.h"
+#include "fakes/LoopbackTransport.h"
+#include "fakes/UpgradedCoreToken.h"
+#include "gui/RemoteTelemetryController.h"
+#include "gui/diagnostics/RadioStatusPage.h"
+#include "gui/meters/MeterItem.h"
+#include "gui/meters/MeterPoller.h"
+#include "gui/meters/MeterWidget.h"
+#include "gui/setup/PaSetupPages.h"
+#include "gui/setup/hardware/PaCalibrationGroup.h"
+#include "gui/widgets/SystemTile.h"
+#include "models/Band.h"
+#include "models/RadioModel.h"
+#include "models/TransmitModel.h"
+
+#include "OperatorWording.h"
+
+using namespace NereusSDR;
+using NereusSDR::Test::LoopbackTransport;
+
+namespace {
+
+const QString kOnAir = QStringLiteral("The radio is on the air. Try again when it stops.");
+const QString kTransmitReason = QStringLiteral("Remote transmit is not here yet");
+const QString kMac = QStringLiteral("AA:BB:CC:DD:EE:06");
+
+QString paKey(const QString& rest)
+{
+    return QStringLiteral("hardware/%1/pa/profile/%2").arg(kMac, rest);
+}
+
+QString calKey(const QString& rest)
+{
+    return QStringLiteral("hardware/%1/paCalibration/%2").arg(kMac, rest);
+}
+
+std::unique_ptr<RadioModel> makeStationRadioModel()
+{
+    auto model = std::make_unique<RadioModel>();
+    model->setBoardForTest(HPSDRHW::Saturn);
+    model->setHpsdrModelForTest(HPSDRModel::ANAN_G2);
+    RadioInfo info;
+    info.macAddress = kMac;
+    info.name = QStringLiteral("Bench G2");
+    info.boardType = HPSDRHW::Saturn;
+    model->setLastRadioInfoForTest(info);
+    model->setConnectionStateForTest(ConnectionState::Connected);
+    model->addSlice(QStringLiteral("pan-0"));
+    return model;
+}
+
+// A receive-only Core with its transmit chain wired to a test TxChannel and
+// one window, handshake complete. `store` is the Core's settings store: the
+// process-wide AppSettings for the Core-side cases (so the Core's live PA
+// objects read what the server stored), a separate file for the window-page
+// cases (whose window reads through its own SettingsProxy).
+struct Session {
+    Session(const QString& securityDir, QObject* parent, bool coreUsesProcessSettings)
+        : ownSettings(settingsDir.filePath(QStringLiteral("NereusSDR.settings")))
+        , settings(coreUsesProcessSettings ? AppSettings::instance() : ownSettings)
+        , txChannel(/*channelId=*/1)
+    {
+        settings.setValue(QStringLiteral("SettingsSchemaVersion"), QStringLiteral("7"));
+        core = makeStationRadioModel();
+        core->wireTransmitChainForTest(&txChannel);
+        server = std::make_unique<StationServer>(
+            core.get(), settings, NereusSDR::Test::seedUpgradedCoreToken(securityDir));
+        client = std::make_unique<StationClient>(&window, &proxy);
+        coreEnd = new LoopbackTransport(QStringLiteral("station-end"), parent);
+        windowEnd = new LoopbackTransport(QStringLiteral("client-end"), parent);
+        coreEnd->linkTo(windowEnd);
+    }
+    ~Session()
+    {
+        AppSettings::instance().setRemoteBackend(nullptr);
+        client.reset();
+        server.reset();
+        core->injectTxChannelForTest(nullptr);
+    }
+    bool connect()
+    {
+        QSignalSpy completed(client.get(), &StationClient::handshakeComplete);
+        client->startSession(windowEnd, server->token());
+        server->acceptTransport(coreEnd);
+        return completed.wait(5000) || completed.count() == 1;
+    }
+    void keyCore()
+    {
+        MoxController* const mox = core->moxController();
+        mox->setMoxCheck({});
+        mox->setMox(true);
+    }
+    void unkeyCore()
+    {
+        core->moxController()->setMox(false);
+    }
+
+    QTemporaryDir settingsDir;
+    AppSettings ownSettings;
+    AppSettings& settings;
+    TxChannel txChannel;
+    std::unique_ptr<RadioModel> core;
+    std::unique_ptr<StationServer> server;
+    RadioModel window{RadioModel::Role::Remote};
+    SettingsProxy proxy;
+    std::unique_ptr<StationClient> client;
+    LoopbackTransport* coreEnd = nullptr;
+    LoopbackTransport* windowEnd = nullptr;
+};
+
+// MOX, TUNE, the two-tone test and VOX all stay off on the Core.
+bool nothingKeyed(const Session& s, QString* what)
+{
+    const TransmitModel& tx = s.core->transmitModel();
+    const auto fail = [what](const char* name) {
+        if (what) { *what = QString::fromLatin1(name); }
+        return false;
+    };
+    if (s.core->mox() || tx.isMox()) { return fail("MOX"); }
+    if (s.core->tune() || s.core->isTune() || tx.isTune()) { return fail("TUNE"); }
+    if (tx.isTwoToneActive()) { return fail("two-tone"); }
+    if (tx.voxEnabled()) { return fail("VOX"); }
+    if (s.core->moxController()->state() != MoxState::Rx) { return fail("MoxController"); }
+    return true;
+}
+
+QString settingsRejectReason(LoopbackTransport* windowEnd, const QString& key)
+{
+    QString reason;
+    for (const QByteArray& wire : windowEnd->received()) {
+        SessionMessage message;
+        if (SessionMessages::decode(wire, &message)
+            && message.kind == SessionMessageKind::SettingsReject
+            && QString::fromUtf8(message.objectKey) == key) {
+            reason = message.reason;
+        }
+    }
+    return reason;
+}
+
+// A bank of one user profile "Bench" (active) and the G2's factory profile,
+// written straight into a Core store, 20 m gain `gain20m`.
+void seedBank(AppSettings& store, float gain20m)
+{
+    PaProfile bench(QStringLiteral("Bench"), HPSDRModel::ANAN_G2, false);
+    bench.setGainForBand(Band::Band20m, gain20m);
+    PaProfile factory(QStringLiteral("Default - ANAN_G2"), HPSDRModel::ANAN_G2, true);
+    store.setValue(paKey(QStringLiteral("_names")), QStringLiteral("Bench,Default - ANAN_G2"));
+    store.setValue(paKey(QStringLiteral("Bench")), bench.dataToString());
+    store.setValue(paKey(QStringLiteral("Default - ANAN_G2")), factory.dataToString());
+    store.setValue(paKey(QStringLiteral("active")), QStringLiteral("Bench"));
+}
+
+float storedGain20m(AppSettings& store, const QString& name)
+{
+    PaProfile p;
+    if (!p.dataFromString(store.value(paKey(name)).toString())) { return -1.0f; }
+    return p.getGainForBand(Band::Band20m);
+}
+
+StationTelemetrySnapshot paSample(quint32 sequence)
+{
+    StationTelemetrySnapshot sample;
+    sample.sequence = sequence;
+    sample.sampledElapsedMs = 100 * sequence;
+    sample.radio.connected = true;
+    sample.radio.paVolts = 13.8;
+    sample.radio.supplyVolts = 12.1;
+    sample.radio.paCurrentAmps = 1.5;
+    sample.radio.paTemperatureCelsius = 38.0;
+    return sample;
+}
+
+}  // namespace
+
+class TstRemotePaPages : public QObject {
+    Q_OBJECT
+
+private slots:
+    void initTestCase();
+    void cleanupTestCase();
+    void cleanup();
+
+    void paKeysAreOnTheOffAirListAtVersion6();
+    void paProfileWriteReachesTheCoresBankAtOnce();
+    void paCalibrationWriteReachesTheCoresTableAtOnce();
+    void paKeysWaitWhileOnTheAir();
+    void remotePaGainPageShowsAndChangesTheCoresBank();
+    void remoteWattMeterPageChangesTheCoresTable();
+    void remotePaReadingsShowOnRadioStatusPaValuesAndMeters();
+    void localRadioStatusSetsPaVoltage();
+    void coreTxInhibitReachesTheWindow();
+    void systemTileSaysTheReadingsAreTheCores();
+    void newReasonsArePlain();
+
+private:
+    QTemporaryDir m_securityDir;
+};
+
+void TstRemotePaPages::initTestCase()
+{
+    QVERIFY(m_securityDir.isValid());
+    const QString profile = QStringLiteral("remote-pa-pages-%1")
+                                .arg(QCoreApplication::applicationPid());
+    AppSettings::setProfileOverride(profile);
+    AppSettings::instance().clear();
+    AppSettings::instance().setValue(QStringLiteral("SettingsSchemaVersion"), QStringLiteral("7"));
+}
+
+void TstRemotePaPages::cleanupTestCase()
+{
+    AppSettings::instance().setRemoteBackend(nullptr);
+    const QString path = AppSettings::instance().filePath();
+    QFile::remove(path);
+    QFile::remove(path + QStringLiteral(".bak"));
+}
+
+void TstRemotePaPages::cleanup()
+{
+    AppSettings::instance().setRemoteBackend(nullptr);
+    AppSettings::instance().clear();
+    AppSettings::instance().setValue(QStringLiteral("SettingsSchemaVersion"), QStringLiteral("7"));
+}
+
+void TstRemotePaPages::paKeysAreOnTheOffAirListAtVersion6()
+{
+    QVERIFY(StationServer::isTransmitSettingKeyAcceptedOffAir(paKey(QStringLiteral("Bench"))));
+    QVERIFY(StationServer::isTransmitSettingKeyAcceptedOffAir(paKey(QStringLiteral("active"))));
+    QVERIFY(StationServer::isTransmitSettingKeyAcceptedOffAir(calKey(QStringLiteral("calPoint3"))));
+    QVERIFY(StationServer::isTransmitSettingKeyAcceptedOffAir(calKey(QStringLiteral("boardClass"))));
+    // The rest of the transmit hardware stays refused.
+    QVERIFY(!StationServer::isTransmitSettingKeyAcceptedOffAir(
+        QStringLiteral("hardware/%1/tx/micGainDb").arg(kMac)));
+    QVERIFY(!StationServer::isTransmitSettingKeyAcceptedOffAir(
+        QStringLiteral("hardware/%1/cal/paSens").arg(kMac)));
+    QVERIFY(!StationServer::isTransmitSettingKeyAcceptedOffAir(
+        QStringLiteral("hardware/%1/paCalibration/cal/paSens").arg(kMac)));
+
+    Session s(m_securityDir.path(), this, /*coreUsesProcessSettings=*/false);
+    QVERIFY(s.connect());
+    // 7 since parity Task 7 (PureSignal arming); 6 is within it.
+    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 7);
+    QVERIFY(s.client->transmitSettingsAvailable(6));
+}
+
+// B5.15: a PA Gain change from a window reaches the Core's live PA profile
+// bank at once (the in-memory profile its drive is computed from).
+void TstRemotePaPages::paProfileWriteReachesTheCoresBankAtOnce()
+{
+    Session s(m_securityDir.path(), this, /*coreUsesProcessSettings=*/true);
+    PaProfileManager* const bank = s.core->paProfileManager();
+    bank->setMacAddress(kMac);
+    bank->load(HPSDRModel::ANAN_G2);
+    QVERIFY(bank->activeProfile());
+    const QString active = bank->activeProfileName();
+    QVERIFY(s.connect());
+    QVERIFY(s.proxy.ready());
+
+    PaProfile edited = *bank->activeProfile();
+    edited.setGainForBand(Band::Band20m, 44.5f);
+    s.proxy.setValue(paKey(active), edited.dataToString());
+    QTRY_COMPARE(bank->activeProfile()->getGainForBand(Band::Band20m), 44.5f);
+
+    // A new profile, made active, as the page's New does.
+    PaProfile fresh(QStringLiteral("Contest"), HPSDRModel::ANAN_G2, false);
+    fresh.setGainForBand(Band::Band40m, 51.0f);
+    QSignalSpy listChanged(bank, &PaProfileManager::profileListChanged);
+    s.proxy.setValue(paKey(QStringLiteral("Contest")), fresh.dataToString());
+    s.proxy.setValue(paKey(QStringLiteral("_names")),
+                     bank->profileNames().join(QLatin1Char(',')) + QStringLiteral(",Contest"));
+    s.proxy.setValue(paKey(QStringLiteral("active")), QStringLiteral("Contest"));
+    QTRY_COMPARE(bank->activeProfileName(), QStringLiteral("Contest"));
+    QCOMPARE(bank->activeProfile()->getGainForBand(Band::Band40m), 51.0f);
+    QVERIFY(listChanged.count() >= 1);
+
+    // A removed profile leaves the bank.
+    s.proxy.setValue(paKey(QStringLiteral("active")), active);
+    s.proxy.setValue(paKey(QStringLiteral("_names")),
+                     QStringList(bank->profileNames()).filter(QRegularExpression(QStringLiteral("^(?!Contest$)")))
+                         .join(QLatin1Char(',')));
+    s.proxy.remove(paKey(QStringLiteral("Contest")));
+    QTRY_VERIFY(!bank->profileByName(QStringLiteral("Contest")));
+    QTRY_COMPARE(bank->activeProfileName(), active);
+    QString keyed;
+    QVERIFY2(nothingKeyed(s, &keyed), qPrintable(keyed));
+}
+
+// B5.15: the Watt Meter's PA forward-power table reaches the Core's
+// calibration controller at once.
+void TstRemotePaPages::paCalibrationWriteReachesTheCoresTableAtOnce()
+{
+    Session s(m_securityDir.path(), this, /*coreUsesProcessSettings=*/true);
+    QVERIFY(s.connect());
+    QVERIFY(s.proxy.ready());
+    CalibrationController& cal = s.core->calibrationControllerMutable();
+    s.proxy.setValue(calKey(QStringLiteral("boardClass")),
+                     QString::number(static_cast<int>(PaCalBoardClass::Anan100)));
+    s.proxy.setValue(calKey(QStringLiteral("calPoint3")), QStringLiteral("33.5"));
+    QTRY_COMPARE(cal.paCalProfile().boardClass, PaCalBoardClass::Anan100);
+    QTRY_COMPARE(cal.paCalProfile().watts[3], 33.5f);
+}
+
+void TstRemotePaPages::paKeysWaitWhileOnTheAir()
+{
+    Session s(m_securityDir.path(), this, /*coreUsesProcessSettings=*/true);
+    PaProfileManager* const bank = s.core->paProfileManager();
+    bank->setMacAddress(kMac);
+    bank->load(HPSDRModel::ANAN_G2);
+    const QString active = bank->activeProfileName();
+    const float before = bank->activeProfile()->getGainForBand(Band::Band20m);
+    QVERIFY(s.connect());
+
+    s.keyCore();
+    QTRY_VERIFY(s.window.isCoreOnAir());
+    PaProfile edited = *bank->activeProfile();
+    edited.setGainForBand(Band::Band20m, before + 3.0f);
+    s.proxy.setValue(paKey(active), edited.dataToString());
+    QTRY_COMPARE(settingsRejectReason(s.windowEnd, paKey(active)), kOnAir);
+    s.proxy.setValue(calKey(QStringLiteral("calPoint2")), QStringLiteral("19"));
+    QTRY_COMPARE(settingsRejectReason(s.windowEnd, calKey(QStringLiteral("calPoint2"))), kOnAir);
+    QCoreApplication::processEvents();
+    QCOMPARE(bank->activeProfile()->getGainForBand(Band::Band20m), before);
+    s.unkeyCore();
+    QTRY_VERIFY(!s.window.isCoreOnAir());
+    QTRY_COMPARE(s.core->moxController()->state(), MoxState::Rx);
+}
+
+// B5.15: PA Gain in a remote window shows the Core's bank and changes it;
+// the Core's own change shows on the page; on the air a change is refused
+// and the page goes back to the Core's value; auto-calibrate keeps the
+// remote transmit reason.
+void TstRemotePaPages::remotePaGainPageShowsAndChangesTheCoresBank()
+{
+    Session s(m_securityDir.path(), this, /*coreUsesProcessSettings=*/false);
+    seedBank(s.settings, 47.5f);
+    AppSettings::instance().setRemoteBackend(&s.proxy);
+    QVERIFY(s.connect());
+    QVERIFY(s.proxy.ready());
+    QTRY_COMPARE(s.window.paProfileManager()->activeProfileName(), QStringLiteral("Bench"));
+
+    PaGainByBandPage page(&s.window);
+    QComboBox* combo = page.profileComboForTest();
+    QDoubleSpinBox* gain20 = page.gainSpinForTest(Band::Band20m);
+    QDoubleSpinBox* max20 = page.maxPowerSpinForTest(Band::Band20m);
+    QCheckBox* autoCal = page.autoCalibrateCheckForTest();
+    QVERIFY(combo && gain20 && max20 && autoCal);
+
+    // Closed until the dialog pushes the version 6 gate, with its reason.
+    QVERIFY(!gain20->isEnabled());
+    QCOMPARE(gain20->toolTip(), IStationLink::transmitSettingsUnavailableReason());
+    page.setTransmitSettingsPermittedAt(6, true, QString());
+    page.setTransmitPermitted(false, kTransmitReason);
+    QVERIFY(gain20->isEnabled() && combo->isEnabled() && max20->isEnabled());
+    QVERIFY(page.newButtonForTest()->isEnabled());
+    // The sweep keys the radio: it keeps the remote transmit reason.
+    QVERIFY(!autoCal->isEnabled());
+    QCOMPARE(autoCal->toolTip(), kTransmitReason);
+    // A capability pass does not reopen it.
+    page.applyCapabilityVisibility(s.window.boardCapabilities());
+    QVERIFY(!autoCal->isEnabled());
+    QVERIFY(gain20->isEnabled());
+
+    // The Core's values.
+    QCOMPARE(combo->currentText(), QStringLiteral("Bench"));
+    QCOMPARE(gain20->value(), 47.5);
+
+    // A change reaches the Core's store at once.
+    gain20->setValue(45.0);
+    QTRY_COMPARE(storedGain20m(s.settings, QStringLiteral("Bench")), 45.0f);
+
+    // The Core's own change shows on the page.
+    PaProfile coreEdit;
+    QVERIFY(coreEdit.dataFromString(s.settings.value(paKey(QStringLiteral("Bench"))).toString()));
+    coreEdit.setGainForBand(Band::Band20m, 49.0f);
+    s.settings.setValue(paKey(QStringLiteral("Bench")), coreEdit.dataToString());
+    QTRY_COMPARE(gain20->value(), 49.0);
+
+    // On the air the change is refused and the page goes back.
+    s.keyCore();
+    QTRY_VERIFY(s.window.isCoreOnAir());
+    gain20->setValue(40.0);
+    QTRY_COMPARE(settingsRejectReason(s.windowEnd, paKey(QStringLiteral("Bench"))), kOnAir);
+    QTRY_COMPARE(gain20->value(), 49.0);
+    QCOMPARE(storedGain20m(s.settings, QStringLiteral("Bench")), 49.0f);
+    s.unkeyCore();
+    QTRY_VERIFY(!s.window.isCoreOnAir());
+    QTRY_COMPARE(s.core->moxController()->state(), MoxState::Rx);
+
+    // The gate closes the editor with its reason.
+    page.setTransmitSettingsPermittedAt(6, false, kOnAir);
+    QVERIFY(!gain20->isEnabled() && !combo->isEnabled());
+    QCOMPARE(gain20->toolTip(), kOnAir);
+    QString keyed;
+    QVERIFY2(nothingKeyed(s, &keyed), qPrintable(keyed));
+}
+
+// B5.15: the Watt Meter in a remote window changes the Core's PA table.
+void TstRemotePaPages::remoteWattMeterPageChangesTheCoresTable()
+{
+    Session s(m_securityDir.path(), this, /*coreUsesProcessSettings=*/false);
+    AppSettings::instance().setRemoteBackend(&s.proxy);
+    QVERIFY(s.connect());
+    QVERIFY(s.proxy.ready());
+    // The window shows its G2's factory table until one is saved.
+    QTRY_COMPARE(s.window.calibrationController().paCalProfile().boardClass,
+                 PaCalBoardClass::Anan100);
+
+    PaWattMeterPage page(&s.window);
+    auto* group = page.findChild<PaCalibrationGroup*>();
+    QVERIFY(group);
+    QCOMPARE(group->spinBoxCountForTest(), 10);
+    QVERIFY(!group->isEnabled());
+    page.setTransmitSettingsPermittedAt(6, true, QString());
+    QVERIFY(group->isEnabled());
+
+    group->setSpinValueForTest(4, 41.0);
+    QTRY_COMPARE(s.settings.value(calKey(QStringLiteral("calPoint4"))).toString(),
+                 QStringLiteral("41"));
+    QCOMPARE(s.settings.value(calKey(QStringLiteral("boardClass"))).toInt(),
+             static_cast<int>(PaCalBoardClass::Anan100));
+
+    // The Core's own change shows on the page.
+    s.settings.setValue(calKey(QStringLiteral("calPoint4")), QStringLiteral("43"));
+    QTRY_COMPARE(group->spinValueForTest(4), 43.0);
+}
+
+// B6.5: the Core's PA readings on Radio Status, PA Values and the HW meters
+// in a remote window, each said to be the Core's; stale is unavailable.
+void TstRemotePaPages::remotePaReadingsShowOnRadioStatusPaValuesAndMeters()
+{
+    Session s(m_securityDir.path(), this, /*coreUsesProcessSettings=*/false);
+    s.server->setTelemetryEnabled(true);
+    qint64 now = 10000;
+    RemoteTelemetryController telemetry(s.client.get(), nullptr, nullptr, [&] { return now; });
+    telemetry.setPaReadingsTarget(&s.window);
+    QVERIFY(s.connect());
+    QTRY_VERIFY(s.client->telemetryAvailable());
+
+    RadioStatusPage status(&s.window);
+    auto* statusTitle = status.findChild<QLabel*>();
+    Q_UNUSED(statusTitle);
+    PaValuesPage values(&s.window);
+    MeterWidget meters;
+    auto* volts = new TextItem(&meters);
+    auto* amps = new TextItem(&meters);
+    auto* temperature = new TextItem(&meters);
+    volts->setBindingId(MeterBinding::HwVolts);
+    amps->setBindingId(MeterBinding::HwAmps);
+    temperature->setBindingId(MeterBinding::HwTemperature);
+    meters.addItem(volts);
+    meters.addItem(amps);
+    meters.addItem(temperature);
+    MeterPoller poller;
+    poller.addTarget(&meters);
+    poller.setPaReadingsModel(&s.window);
+    const auto tick = [&]() {
+        QVERIFY(QMetaObject::invokeMethod(&poller, "poll", Qt::DirectConnection));
+    };
+
+    const auto labelWithText = [&status](const QString& text) {
+        for (QLabel* label : status.findChildren<QLabel*>()) {
+            if (label->text() == text) { return label; }
+        }
+        return static_cast<QLabel*>(nullptr);
+    };
+
+    // Before any reading: unavailable, never 0.
+    QVERIFY(labelWithText(QStringLiteral("PA Status, from the Core")));
+    QVERIFY(labelWithText(QStringLiteral("Unavailable")));
+    QCOMPARE(values.paCurrentTextForTest(), QStringLiteral("Unavailable"));
+    QCOMPARE(values.supplyVoltsTextForTest(), QStringLiteral("Unavailable"));
+    tick();
+    QVERIFY(isNoMeterReading(volts->value()));
+    QVERIFY(isNoMeterReading(temperature->value()));
+
+    QVERIFY(s.server->sendTelemetry(paSample(1), s.server->sessionEpoch()));
+    QTRY_COMPARE(s.window.paReadings().paVolts, std::optional<double>(13.8));
+    // Radio Status: PA Voltage (the G2's PA volts), PA Current, PA Temp.
+    QLabel* voltage = labelWithText(QStringLiteral("13.8 V"));
+    QVERIFY(voltage);
+    QCOMPARE(voltage->toolTip(), QStringLiteral("From the Core"));
+    QVERIFY(labelWithText(QStringLiteral("1.5 A")));
+    QCOMPARE(values.paCurrentTextForTest(), QStringLiteral("1.50 A"));
+    QCOMPARE(values.supplyVoltsTextForTest(), QStringLiteral("12.1 V"));
+    QVERIFY(values.paTempTextForTest().contains(QStringLiteral("38.0")));
+    // The Core's transmit readings wait for remote transmit.
+    QCOMPARE(values.fwdAdcTextForTest(), QStringLiteral("Unavailable"));
+    tick();
+    QCOMPARE(volts->value(), 13.8);
+    QCOMPARE(amps->value(), 1.5);
+    QCOMPARE(temperature->value(), 38.0);
+
+    // Stale: unavailable again.
+    now += 4000;
+    telemetry.sampleNow();
+    QTRY_VERIFY(!s.window.paReadings().paVolts);
+    QVERIFY(!labelWithText(QStringLiteral("13.8 V")));
+    QCOMPARE(values.paCurrentTextForTest(), QStringLiteral("Unavailable"));
+    tick();
+    QVERIFY(isNoMeterReading(volts->value()));
+    QVERIFY(volts->isNoReading(volts->value()));
+}
+
+// Passing (PA Voltage never set): locally Radio Status's PA Voltage comes
+// from this window's own radio.
+void TstRemotePaPages::localRadioStatusSetsPaVoltage()
+{
+    RadioModel local;
+    local.setBoardForTest(HPSDRHW::Saturn);
+    local.setHpsdrModelForTest(HPSDRModel::ANAN_G2);
+    RadioStatusPage status(&local);
+    const auto hasText = [&status](const QString& text) {
+        for (QLabel* label : status.findChildren<QLabel*>()) {
+            if (label->text() == text) { return true; }
+        }
+        return false;
+    };
+    QVERIFY(hasText(QStringLiteral("PA Status")));
+    QVERIFY(hasText(QStringLiteral("Unavailable")));
+    QVERIFY(!local.paReadingsFromCore());
+}
+
+// Carried from gaps Task 13: the Core's TX inhibit reaches the window as
+// `txInhibited`, and clears when the session ends.
+void TstRemotePaPages::coreTxInhibitReachesTheWindow()
+{
+    Session s(m_securityDir.path(), this, /*coreUsesProcessSettings=*/false);
+    QVERIFY(s.connect());
+    QVERIFY(!s.window.isTxInhibited());
+    QSignalSpy changed(&s.window, &RadioModel::txInhibitedChanged);
+    // The radio's inhibit input, as gaps Task 13's connection feeds it.
+    bool input = true;
+    safety::TxInhibitMonitor& monitor = s.core->txInhibit();
+    monitor.setEnabled(true);
+    monitor.setUserIoReader([&input] { return input; });
+    QVERIFY(s.core->isTxInhibited());
+    QTRY_VERIFY(s.window.isTxInhibited());
+    QVERIFY(changed.count() >= 1);
+    input = false;
+    monitor.setUserIoReader([&input] { return input; });
+    QTRY_VERIFY(!s.window.isTxInhibited());
+    input = true;
+    monitor.setUserIoReader([&input] { return input; });
+    QTRY_VERIFY(s.window.isTxInhibited());
+    s.window.clearRemoteTransmittingState();
+    QVERIFY(!s.window.isTxInhibited());
+    monitor.setUserIoReader({});
+    monitor.setEnabled(false);
+}
+
+// B6.5 / R-R3-32: the System tile's PA row names its source in a remote
+// window; a local window's row carries only its own hint.
+void TstRemotePaPages::systemTileSaysTheReadingsAreTheCores()
+{
+    SystemTile tile;
+    tile.setPaVolts(13.8);
+    QVERIFY(tile.toolTip().isEmpty());
+    tile.setPaSourceNote(QStringLiteral("From the Core"));
+    QCOMPARE(tile.toolTip(), QStringLiteral("From the Core"));
+    tile.setPaTempCelsius(40.0);
+    QVERIFY(tile.toolTip().startsWith(QStringLiteral("From the Core\n")));
+    tile.setPaSourceNote(QString());
+    QVERIFY(!tile.toolTip().contains(QStringLiteral("Core")));
+}
+
+void TstRemotePaPages::newReasonsArePlain()
+{
+    for (const QString& text : {
+             QStringLiteral("Unavailable"), QStringLiteral("From the Core"),
+             QStringLiteral("PA Status, from the Core"),
+             QStringLiteral("The Core sends this reading when this window can transmit."),
+             QStringLiteral("Not measured yet"),
+             QStringLiteral("Expected a boolean TX inhibit observation.")}) {
+        QVERIFY2(OperatorWording::isPlain(text), qPrintable(text));
+    }
+}
+
+QTEST_MAIN(TstRemotePaPages)
+#include "tst_remote_pa_pages.moc"

@@ -8,6 +8,12 @@
 // Phase 3M-1c chunk J.3 + J.4.
 //
 // Written by J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//
+// Modification history (NereusSDR):
+//   2026-09-25 - R-R3-49 (parity Task 3): the transmit settings gates for
+//                 a remote window, each control on the version that brought
+//                 it. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis-derived semantics are
@@ -16,6 +22,7 @@
 #include "TxProfileSetupPage.h"
 
 #include "core/MicProfileManager.h"
+#include "core/session/IStationLink.h"
 #include "gui/StyleConstants.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
@@ -49,6 +56,14 @@ TxProfileSetupPage::TxProfileSetupPage(RadioModel* model,
     buildUi();
     rebuildCombo();
     wireDirtyTracking();
+
+    // R-R3-49 (parity Task 3): in a remote window the controls start closed
+    // until the Core says it takes them (SetupDialog pushes each version).
+    if (model && !model->ownsLocalDsp()) {
+        setTransmitSettingsPermitted(false, QString());
+        setTransmitSettingsPermittedAt(2, false, QString());
+        setTransmitSettingsPermittedAt(3, false, QString());
+    }
 
     if (m_profileMgr) {
         // Refresh on external add/remove (e.g. CAT-imported profile).
@@ -124,6 +139,7 @@ void TxProfileSetupPage::buildUi()
         filterForm->setContentsMargins(0, 0, 0, 0);
 
         auto* lowSpin = new QSpinBox(filterGroup);
+        m_filterLowSpin = lowSpin;
         lowSpin->setRange(0, 5000);
         lowSpin->setSuffix(QStringLiteral(" Hz"));
         lowSpin->setStyleSheet(QString::fromLatin1(Style::kSpinBoxStyle));
@@ -133,6 +149,7 @@ void TxProfileSetupPage::buildUi()
         filterForm->addRow(QStringLiteral("Low cutoff:"), lowSpin);
 
         auto* highSpin = new QSpinBox(filterGroup);
+        m_filterHighSpin = highSpin;
         highSpin->setRange(200, 10000);
         highSpin->setSuffix(QStringLiteral(" Hz"));
         highSpin->setStyleSheet(QString::fromLatin1(Style::kSpinBoxStyle));
@@ -143,6 +160,7 @@ void TxProfileSetupPage::buildUi()
 
         // AM / SAM / DSB carrier level (Thetis TXProfile AM_Carrier_Level).
         auto* carrierSpin = new QSpinBox(filterGroup);
+        m_amCarrierSpin = carrierSpin;
         carrierSpin->setRange(TransmitModel::kAmCarrierLevelMin,
                               TransmitModel::kAmCarrierLevelMax);
         carrierSpin->setSuffix(QStringLiteral(" %"));
@@ -453,6 +471,30 @@ void TxProfileSetupPage::onDeleteClicked()
         } else {
             QMessageBox::information(this, tr("Cannot Delete Profile"), msg);
         }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// R-R3-49 (parity Task 3): the transmit settings gates in a remote window.
+// SetupDialog pushes them; a local window never calls these.
+// ---------------------------------------------------------------------------
+void TxProfileSetupPage::setTransmitSettingsPermitted(bool permitted, const QString& reason)
+{
+    // The TX filter (filterLow / filterHigh), transmitSettingsVersion 1.
+    gateTransmitControls({m_filterLowSpin, m_filterHighSpin}, permitted,
+                         reason.isEmpty() ? IStationLink::transmitSettingsUnavailableReason()
+                                          : reason);
+}
+
+void TxProfileSetupPage::setTransmitSettingsPermittedAt(int version, bool permitted,
+                                                        const QString& reason)
+{
+    const QString shown = reason.isEmpty()
+        ? IStationLink::transmitSettingsUnavailableReason() : reason;
+    if (version == 2) {
+        gateTransmitControls({m_amCarrierSpin}, permitted, shown);
+    } else if (version == 3) {
+        gateTransmitControls({m_combo, m_saveBtn, m_deleteBtn}, permitted, shown);
     }
 }
 

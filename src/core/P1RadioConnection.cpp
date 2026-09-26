@@ -32,6 +32,11 @@
 //                 setWatchdogEnabled quotes setup.cs:18024-18028
 //                 [v2.10.3.15]. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-25 - R-R3-32 / R-R3-49 (remote-window parity Task 6): every
+//                 datagram from the radio, the ep6 sequence errors and the
+//                 ep6 arrivals feed the link counters (RadioLinkStats: UDP
+//                 packets seen, packet loss, RFC 3550 jitter, packet gap).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-25 - Receiver and transmit gaps plan, Task 13: case-0x00
 //                 status C1 bits 1..4 reported as the user digital inputs
 //                 (networkproto1.c:336 [v2.10.3.15]). J.J. Boyd (KG4VCF),
@@ -770,6 +775,9 @@ void P1RadioConnection::connectToRadio(const RadioInfo& info)
     m_reconnectAttempts = 0;
     m_lastEp6At = QDateTime();
     m_firstEp6Logged = false;
+    // R-R3-32 (parity Task 6): the link counters start with the connection.
+    m_linkStats.reset();
+    m_ep6SeqPrimed = false;
     m_parseFailLogged = false;
     m_firstEmitLogged = false;
 
@@ -2451,7 +2459,9 @@ void P1RadioConnection::applyBoardQuirks()
     // applyBoardQuirks() runs at connect time).
     if (m_caps->adcCount >= 2) {
         m_p1AdcCntrl = 0x0004;
-    } else if (m_caps->board == HPSDRHW::HermesLite) {
+    } else if (m_caps->board == HPSDRHW::HermesLite
+               || m_caps->board == HPSDRHW::HermesLiteRxOnly) {
+        // Plan Task 15: the receive-only kit is the same HL2 silicon.
         m_p1AdcCntrl = 0x0004;
     } else {
         // Hermes / HermesII (and any future 1-ADC non-HL2 board)
@@ -2869,6 +2879,12 @@ void P1RadioConnection::onReadyRead()
 
         if (data.isEmpty()) { continue; }
 
+        // R-R3-32 / R-R3-49 (parity Task 6): every datagram from the radio
+        // counts toward UDP packets seen and the packet gap. Atomic stores
+        // only; no lock, no allocation (RadioLinkStats).
+        const qint64 arrivalUs = RadioLinkStats::nowUs();
+        m_linkStats.noteDatagram(arrivalUs);
+
         // ep6 frames are exactly 1032 bytes
         // Source: networkproto1.c:319 — MetisReadThreadMainLoop receives 1032-byte frames
         if (data.size() == 1032) {
@@ -2941,9 +2957,24 @@ void P1RadioConnection::onReadyRead()
                 if (hdr[0] == 0xEF && hdr[1] == 0xFE && hdr[2] == 0x01 && hdr[3] == 0x06) {
                     const quint32 seqnum = (quint32(hdr[4]) << 24) | (quint32(hdr[5]) << 16)
                                          | (quint32(hdr[6]) << 8)  |  quint32(hdr[7]);
-                    if (seqnum != (1 + m_ep6LastRecvSeq)) {
+                    const bool seqError = seqnum != (1 + m_ep6LastRecvSeq);
+                    if (seqError) {
                         if (m_bwMonitor) { m_bwMonitor->recordEp6SequenceError(); }
                     }
+                    // R-R3-32 (parity Task 6): the same count, one per
+                    // mismatch, feeds the link's packet loss. The first
+                    // frame of a connection has no number before it.
+                    m_linkStats.noteSequenced(arrivalUs,
+                                              (seqError && m_ep6SeqPrimed) ? 1U : 0U);
+                    // NereusSDR-native jitter (RFC 3550 section 6.4.1, see
+                    // RadioLinkStats): one ep6 datagram is two 504-byte
+                    // sub-frames of spr samples each, spr = 504 / (6*nddc + 2)
+                    // (networkproto1.c:358 [v2.10.3.15]).
+                    const int spr = 504 / (6 * std::max(1, m_activeRxCount) + 2);
+                    const double spacingUs = m_sampleRate > 0
+                        ? (2.0 * spr * 1.0e6) / static_cast<double>(m_sampleRate) : 0.0;
+                    m_linkStats.noteStreamArrival(0, seqnum, arrivalUs, spacingUs);
+                    m_ep6SeqPrimed = true;
                     m_ep6LastRecvSeq = seqnum;
                 }
             }

@@ -48,7 +48,7 @@
 //               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
-#include "StationMultiSessionHarness.h"
+#include "MultiDeviceHarness.h"
 
 #include "core/RadioConnection.h"
 #include "core/RadioStatus.h"

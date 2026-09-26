@@ -38,7 +38,7 @@
 //               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
-#include "StationMultiSessionHarness.h"
+#include "MultiDeviceHarness.h"
 
 #include "core/PttSource.h"
 #include "core/RadioStatus.h"

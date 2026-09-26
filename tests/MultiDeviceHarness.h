@@ -1,20 +1,33 @@
+#pragma once
 // no-port-check: NereusSDR-original.
 // =================================================================
-// tests/StationMultiSessionHarness.h  (NereusSDR)
+// tests/MultiDeviceHarness.h  (NereusSDR)
 // =================================================================
 //
-// Several devices on one Core over the in-process loopback: the harness
-// tst_station_multi_session (iPhone app plan Task 71) built, shared with
-// Task 34's tst_on_air_refusals. Moved here unchanged; each test file that
-// includes it gets its own copy of these helpers.
+// iPhone app plan Task 74 (R-IOS-02, R-IOS-30): the several-devices
+// harness of tst_station_multi_session (Tasks 71 to 73), shared by
+// tst_station_multi_session, tst_confirm_step and tst_antenna_kept: one
+// Core over the in-process loopback, in scratch directories, with an
+// injected monotonic clock, and devices signed in by keys made at run time.
+// Its helpers sit in an unnamed namespace: include it once per test
+// executable.
 //
 // =================================================================
 // Modification history (NereusSDR):
-//   2026-09-25: moved out of tst_station_multi_session.cpp for NereusSDR by
-//               J.J. Boyd (KG4VCF), iPhone app plan Task 34 (R-IOS-02), with
+//   2026-09-25: original implementation for NereusSDR by J.J. Boyd
+//               (KG4VCF), iPhone app plan Task 74 (R-IOS-02, R-IOS-30),
+//               copied from tst_station_multi_session's harness, with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25: fix wave after the group review of Tasks 71 to 76: the one
+//               harness; tst_station_multi_session includes it instead of
+//               its own copy. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
+//   2026-09-26: merge of the trunk into the transmit lane: the transmit
+//               helpers of StationMultiSessionHarness.h (iPhone app plan
+//               Task 34), which it replaces; latestCapabilityIf is its
+//               latestCapability. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
-#pragma once
 
 #include <QtTest>
 
@@ -43,13 +56,14 @@
 #include "core/session/DeviceSessionRegistry.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StationCapabilities.h"
+#include "core/session/ObjectRegistry.h"
 #include "core/session/StationServer.h"
+#include "core/WdspTypes.h"
 #include "core/MoxController.h"
 #include "core/safety/TransmitHolder.h"
 #include "core/TxSliceArbiter.h"
 #include "core/audio/CompositeTxMicRouter.h"
 #include "models/TransmitModel.h"
-#include "core/WdspTypes.h"
 #include "core/dsp/DspAssetService.h"
 #include "models/NotchModel.h"
 #include "models/RadioModel.h"
@@ -58,6 +72,7 @@
 #include "OperatorWording.h"
 #include "fakes/LoopbackTransport.h"
 #include "fakes/UpgradedCoreToken.h"
+
 
 using namespace NereusSDR;
 using NereusSDR::Test::LoopbackTransport;
@@ -347,13 +362,19 @@ QJsonObject endOf(LoopbackTransport* app)
     return firstOfType(app->received(), QStringLiteral("session.end"));
 }
 
-void verifyCoreFull(LoopbackTransport* app)
+// Fix wave, the full-Core wording (the several-devices design, 15.2): an
+// older window cannot answer the fifth-device question, so it is told to
+// update or try later.
+const QString kOlderWindowCoreFull =
+    QStringLiteral("The Core is full. Update NereusSDR to take a device's place, or try again later.");
+
+void verifyCoreFull(LoopbackTransport* app, const QString& reason = kCoreFull)
 {
     const QJsonObject result = firstOfType(app->received(), QStringLiteral("auth.result"));
     QCOMPARE(result.value(QStringLiteral("accepted")).toBool(false), true);
     const QJsonObject end = endOf(app);
     QVERIFY(!app->isOpen());
-    QCOMPARE(end.value(QStringLiteral("reason")).toString(), kCoreFull);
+    QCOMPARE(end.value(QStringLiteral("reason")).toString(), reason);
     QCOMPARE(end.value(QStringLiteral("retryable")).toBool(false), true);
     QVERIFY(!end.contains(QStringLiteral("code")));
     // Nothing of a session reached it.
@@ -512,15 +533,14 @@ int addCoHostedSlice(RadioModel& model)
     return second;
 }
 
-
 // ---- iPhone app plan Task 34: transmit ------------------------------------
 
 // A device that declares remote transmit (with several devices).
 const QHash<QByteArray, int> kTransmitter{{"deviceAuth", 1}, {"sessionHolder", 1}, {"remoteTx", 1}};
 
 // The latest value of capability `name` on `app` (capabilities is sent
-// again when txPermitted changes).
-std::optional<QJsonValue> latestCapability(const QList<QByteArray>& received, const QString& name)
+// again when txPermitted changes), or none when it was never sent.
+std::optional<QJsonValue> latestCapabilityIf(const QList<QByteArray>& received, const QString& name)
 {
     std::optional<QJsonValue> value;
     for (const QJsonObject& caps : ofType(received, QStringLiteral("capabilities"))) {
@@ -535,7 +555,7 @@ std::optional<QJsonValue> latestCapability(const QList<QByteArray>& received, co
 
 bool txPermitted(const LoopbackTransport* app)
 {
-    const std::optional<QJsonValue> value = latestCapability(app->received(), QStringLiteral("txPermitted"));
+    const std::optional<QJsonValue> value = latestCapabilityIf(app->received(), QStringLiteral("txPermitted"));
     return value.has_value() && value->toBool();
 }
 
@@ -565,4 +585,3 @@ KeyerIdentity keyerFor(const Device& device)
 }
 
 } // namespace
-

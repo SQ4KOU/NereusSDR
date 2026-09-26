@@ -28,6 +28,9 @@
 //                 first connect (16 Default-<model> + Bypass) per Thetis
 //                 initPAProfiles. Stored profiles win over factory
 //                 defaults at deserialization per Thetis RecoverPAProfiles.
+//   2026-09-25 - R-R3-46 / R-R3-49 (remote-window parity Task 6):
+//                 reloadFromSettings() and profileDataChanged. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // --- From setup.cs ---
@@ -142,6 +145,16 @@ public:
     ///       (stored-wins-over-factory semantics).
     void load(HPSDRModel connectedModel);
 
+    /// R-R3-46 / R-R3-49 (remote-window parity Task 6): re-read the bank
+    /// and the active profile from AppSettings exactly as they are saved,
+    /// writing nothing and seeding nothing. The Core calls it after a
+    /// window's change to hardware/<mac>/pa/..., so its in-memory bank is
+    /// what the local page's edit would have left; a remote window calls it
+    /// to show the Core's bank. Emits profileListChanged when the names
+    /// change, activeProfileChanged when the active profile does, and
+    /// profileDataChanged when any stored profile's values do.
+    void reloadFromSettings();
+
     /// List all profile names currently in the manager (sorted).
     QStringList profileNames() const;
 
@@ -223,6 +236,10 @@ signals:
     /// Emitted when the active profile has changed (either via
     /// setActiveProfile or via deleteProfile of the active one).
     void activeProfileChanged(const QString& name);
+
+    /// Emitted by reloadFromSettings() when a profile's stored values
+    /// changed (another window, or the Core, saved it).
+    void profileDataChanged();
 
 private:
     /// Read the profile-name manifest from AppSettings. Empty list means

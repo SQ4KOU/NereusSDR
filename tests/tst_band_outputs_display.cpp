@@ -295,7 +295,8 @@ private slots:
         core.model.setConnectionStateForTest(ConnectionState::Connected);
         AppSettings settings(settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
         settings.setValue(QStringLiteral("SettingsSchemaVersion"), QStringLiteral("6"));
-        StationServer server(&core.model, settings, NereusSDR::Test::seedUpgradedCoreToken(securityDir.path()));
+        StationServer server(&core.model, settings,
+                             NereusSDR::Test::seedUpgradedCoreToken(securityDir.path()));
 
         RadioModel remote(RadioModel::Role::Remote);
         SettingsProxy proxy;

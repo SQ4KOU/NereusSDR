@@ -46,6 +46,9 @@
 //   2026-09-24 - iPhone app Task 20 (R-IOS-27): displayExtrasVersion,
 //                last in the minor-11 block. J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 (parity Task 1): transmitSettingsVersion, last
+//                in the minor-11 block. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 //   2026-09-25: iPhone app Task 71 (R-IOS-02): sessionHolderVersion,
 //               last in the minor-11 block, for a peer that declared
 //               sessionHolder. J.J. Boyd (KG4VCF), with AI-assisted
@@ -62,6 +65,9 @@
 //               after remoteTxVersion and only with it (the `txState`
 //               object). J.J. Boyd (KG4VCF), with AI-assisted implementation
 //               via Anthropic Claude Code.
+//   2026-09-25 - R-IOS-27, R-IOS-06: bandSelectVersion, last in the
+//                minor-11 block. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationCapabilities.h"
@@ -170,6 +176,11 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         updates.append(intEntry("stationCatalogVersion", stationCatalogVersion));
         // iPhone app Task 20: display extras.
         updates.append(intEntry("displayExtrasVersion", displayExtrasVersion));
+        // R-R3-49 (parity Task 1): the transmit settings a receive-only
+        // Core takes while the radio is off the air.
+        updates.append(intEntry("transmitSettingsVersion", transmitSettingsVersion));
+        // R-IOS-27, R-IOS-06: slice.selectBand.
+        updates.append(intEntry("bandSelectVersion", bandSelectVersion));
         // iPhone app Task 71: several devices at once, last, and only for
         // a peer that declared the feature.
         if (sessionHolderEntry) {
@@ -373,6 +384,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "pairingVersion"
                    || u.name == "stationCatalogVersion"
                    || u.name == "displayExtrasVersion"
+                   || u.name == "transmitSettingsVersion"
+                   || u.name == "bandSelectVersion"
                    || u.name == "sessionHolderVersion"
                    || u.name == "remoteTxVersion"
                    || u.name == "txStateVersion") {
@@ -408,8 +421,12 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                     caps.remoteTxVersion = version;
                 } else if (u.name == "txStateVersion") {
                     caps.txStateVersion = version;
-                } else {
+                } else if (u.name == "remoteTgxlControlVersion") {
                     caps.remoteTgxlControlVersion = version;
+                } else if (u.name == "transmitSettingsVersion") {
+                    caps.transmitSettingsVersion = version;
+                } else {
+                    caps.bandSelectVersion = version;
                 }
             }
         } else if (u.name == "txRefusalCode" || u.name == "txRefusalReason"

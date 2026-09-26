@@ -14,6 +14,10 @@
 // R-R3-36 (2026-09-23): usable in a remote window through
 //   RadioModel::localAudioDevices(); the controls held for the radio follow
 //   the transmit permission.
+// R-R3-49 parity Task 3 (2026-09-25): Mic Gain and the radio microphone
+//   groups follow the transmit settings gate (transmitSettingsVersion 3)
+//   and change the Core's values off the air; the mic source keeps the
+//   transmit permission.
 //
 // Written by J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
@@ -28,6 +32,7 @@
 #include "core/AppSettings.h"
 #include "core/BoardCapabilities.h"
 #include "core/AudioEngine.h"
+#include "core/session/IStationLink.h"
 #include "gui/HGauge.h"
 
 #include <QAbstractButton>
@@ -259,6 +264,13 @@ AudioTxInputPage::AudioTxInputPage(RadioModel* model, QWidget* parent)
     m_vuTimer = new QTimer(this);
     m_vuTimer->setInterval(10);
     connect(m_vuTimer, &QTimer::timeout, this, &AudioTxInputPage::onVuTimerTick);
+
+    // R-R3-49 (parity Task 3): in a remote window Mic Gain and the radio
+    // microphone groups start closed until the Core says it takes them
+    // (SetupDialog pushes setTransmitSettingsPermittedAt(3, ...)).
+    if (model && !model->ownsLocalDsp()) {
+        setTransmitSettingsPermittedAt(3, false, QString());
+    }
 }
 
 AudioTxInputPage::~AudioTxInputPage()
@@ -386,15 +398,34 @@ void AudioTxInputPage::setStationSettingsAvailable(bool available, const QString
     applyHeldControlGate();
 }
 
-// One gate for both conditions: the save/restore helper keeps one saved
-// state per control, so the two are combined here rather than stacked.
+// R-R3-49 (parity Task 3): Mic Gain (micGainDb) and the radio microphone
+// groups are transmit settings that key nothing; in a remote window they
+// change the Core's values while its radio is off the air.
+void AudioTxInputPage::setTransmitSettingsPermittedAt(int version, bool permitted,
+                                                      const QString& reason)
+{
+    if (version != 3) {
+        return;
+    }
+    m_heldSettingsPermitted = permitted;
+    m_heldSettingsReason = reason.isEmpty()
+        ? IStationLink::transmitSettingsUnavailableReason() : reason;
+    applyHeldControlGate();
+}
+
+// One gate for both conditions on each control: the save/restore helper
+// keeps one saved state per control, so the conditions are combined here
+// rather than stacked. The mic source follows the transmit permission (C2);
+// Mic Gain and the radio microphone groups the transmit settings gate.
 void AudioTxInputPage::applyHeldControlGate()
 {
-    const bool allowed = m_heldTransmitPermitted && m_heldStationAvailable;
-    gateTransmitControls({m_micSourceGroup, m_micGainSlider, m_micGainLabel,
-                          m_hermesGroup, m_orionGroup, m_saturnGroup},
-        allowed,
+    gateTransmitControls({m_micSourceGroup},
+        m_heldTransmitPermitted && m_heldStationAvailable,
         m_heldStationAvailable ? m_heldTransmitReason : m_heldStationReason);
+    gateTransmitControls({m_micGainSlider, m_micGainLabel,
+                          m_hermesGroup, m_orionGroup, m_saturnGroup},
+        m_heldSettingsPermitted && m_heldStationAvailable,
+        m_heldStationAvailable ? m_heldSettingsReason : m_heldStationReason);
 }
 
 // ---------------------------------------------------------------------------

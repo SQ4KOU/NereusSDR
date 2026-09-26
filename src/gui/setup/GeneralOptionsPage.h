@@ -30,6 +30,10 @@
 //                 older-Core gate) and disabled controls that look
 //                 disabled. J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-25 - Receiver and transmit gaps plan, Task 16: Receive Only is
+//                 never hidden and follows RadioModel::isRxOnly.
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -79,6 +83,8 @@
 
 #pragma once
 
+#include <functional>
+
 #include "gui/SetupPage.h"
 
 class QCheckBox;
@@ -102,13 +108,10 @@ public:
 
     void syncFromModel() override;
 
-    /// Show or hide the Receive Only checkbox.  Hidden by default per
-    /// Thetis setup.designer.cs:8535-8544 [v2.10.3.13] (Visible=false).
-    /// Called by the constructor on initial connect and by currentRadioChanged
-    /// so reconnects to a different radio (e.g. full-TX board after an HL2-RX)
-    /// update visibility correctly.  BoardCapabilities::isRxOnlySku
-    /// (NereusSDR-original) is the authoritative source.
-    void setReceiveOnlyVisible(bool visible);
+    /// Task 16: the question asked before Receive Only is turned off
+    /// (setup.cs:6484 [v2.10.3.15]). Tests answer it instead of a message
+    /// box; true means Yes.
+    void setEnableTransmitConfirmForTest(std::function<bool()> confirm);
 
     // R-R3-21 / R-R3-10: the Region is the Core's setting (where the radio is),
     // so its combo is disabled while the Core's settings are unavailable;
@@ -170,6 +173,12 @@ private:
     void syncFromFacade();
     void applyRadioHardwareAvailability();
 
+    // Task 16: Receive Only follows the model; a radio with no transmitter
+    // locks it on (disabled, with the reason).
+    void syncReceiveOnly();
+    void setReceiveOnlyLocked(bool locked, const QString& reason);
+    bool confirmEnableTransmit();
+
     StepAttenuatorController* m_ctrl{nullptr};
     StepAttenuatorFacade* m_stepAtt{nullptr};
 
@@ -179,6 +188,9 @@ private:
     QCheckBox* m_chkExtended{nullptr};
     QLabel*    m_lblWarningRegionExtended{nullptr};
     QCheckBox* m_chkGeneralRXOnly{nullptr};
+    // Task 16: shown when an older Core refuses a window's change.
+    QLabel*    m_lblRxOnlyCore{nullptr};
+    std::function<bool()> m_confirmEnableTransmit;
     QCheckBox* m_chkNetworkWDT{nullptr};
     // R-R3-49: shown when an older Core refuses a window's change.
     QLabel*    m_lblNetworkWDTCore{nullptr};

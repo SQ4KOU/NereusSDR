@@ -338,6 +338,10 @@ void TstSetupDialogLazyPages::lazily_realized_page_persists_edits_to_appsettings
 void TstSetupDialogLazyPages::pa_reset_realizes_the_values_page_on_demand()
 {
     RadioModel model;
+    // A radio with power amplifier settings (an ANAN-G2): without one the
+    // PA pages are disabled with the reason (Task 16 fix wave 2) and the
+    // Reset button cannot be pressed.
+    model.setBoardForTest(HPSDRHW::Saturn);
     SetupDialog dialog(&model);
 
     QVERIFY(dialog.realizePageForTest(kWattMeter) != nullptr);
@@ -362,6 +366,10 @@ void TstSetupDialogLazyPages::pa_reset_realizes_the_values_page_on_demand()
 void TstSetupDialogLazyPages::pa_reset_still_works_when_values_page_visited_first()
 {
     RadioModel model;
+    // A radio with power amplifier settings (an ANAN-G2): without one the
+    // PA pages are disabled with the reason (Task 16 fix wave 2) and the
+    // Reset button cannot be pressed.
+    model.setBoardForTest(HPSDRHW::Saturn);
     SetupDialog dialog(&model);
 
     QVERIFY(dialog.realizePageForTest(kPaValues)  != nullptr);

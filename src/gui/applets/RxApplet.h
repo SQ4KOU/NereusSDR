@@ -19,6 +19,10 @@
 //   2026-09-23 - R-R3-46 / R-R3-21: in a remote window the attenuator row
 //                 follows the Core's `stepAtt` object. J.J. Boyd (KG4VCF),
 //                 with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 (parity Task 1): the filter-preset Shift-click TX
+//                 passband match follows setTransmitSettingsPermitted and
+//                 says why when it cannot. J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -219,11 +223,11 @@ public slots:
     // Called by MainWindow on currentRadioChanged after setBoardCapabilities.
     void setHpsdrSku(NereusSDR::HPSDRModel sku);
 
-    // R-R3-21: the negotiated transmit permission, as TxApplet and the VFO
-    // flag take it. Gates the XIT row and the filter-preset Shift-click TX
-    // passband match. A remote-station model starts denied; local direct
-    // mode is permitted and MainWindow never calls this there.
-    void setTransmitPermitted(bool permitted, const QString& reason = QString());
+    // R-R3-49 (parity Task 1): the transmit settings gate. The
+    // filter-preset Shift-click TX passband match follows it; while it is
+    // closed the RX preset still applies and transmitSettingRefused says
+    // why. A remote-station model starts denied.
+    void setTransmitSettingsPermitted(bool permitted, const QString& reason = QString());
 
 #ifdef NEREUS_BUILD_TESTS
 public:
@@ -261,6 +265,9 @@ signals:
     // RadioModel::setActiveSlice. Mirrors AetherSDR
     // RxApplet::sliceActivationRequested (RxApplet.h:96 [@6a142807]).
     void sliceActivationRequested(int sliceIndex);
+    // R-R3-49 (parity Task 1): a Shift-click could not also set the TX
+    // passband; `reason` is plain words for the operator.
+    void transmitSettingRefused(const QString& reason);
 
 private:
     void buildUi();
@@ -373,7 +380,8 @@ private:
     TriBtn*      m_ritPlus     = nullptr;
 
     // Control 16: XIT
-    bool         m_transmitPermitted = true;  // R-R3-21
+    bool         m_transmitSettingsPermitted = true;  // R-R3-49
+    QString      m_transmitSettingsReason;            // R-R3-49
     QPushButton* m_xitOnBtn    = nullptr;
     QLabel*      m_xitLabel    = nullptr;
     QPushButton* m_xitZero     = nullptr;

@@ -14,10 +14,17 @@ code the desktop's `SpectrumWidget` runs (`src/core/spectrum`:
 
 Requirements: R-IOS-27, R-IOS-11. Capability: `displayExtrasVersion` 1.
 
+Version 2 (R-IOS-27, R-IOS-06) adds the media control operation
+`clarity-retune`, Clarity's Re-tune for one endpoint whose waterfall
+levels are in `"clarity"` mode ([remote media control
+v1](2026-09-20-remote-media-control-v1.md), "Clarity re-tune"). The Core
+sends 2; everything below needs 1, so a client that compares the version as
+a minimum reads 2 as it read 1.
+
 ## 1. Who may ask
 
-The Core advertises `displayExtrasVersion`, last in the minor-11 block of
-the capabilities message (station link section 6.3), 1 while media is
+The Core advertises `displayExtrasVersion` in the minor-11 block of
+the capabilities message (station link section 6.3), 2 while media is
 enabled and 0 otherwise. A client may put the fields of section 2 in a
 `subscribe` operation only when the Core it is connected to sent 1 and the
 session agreed minor 11. A Core that did not advertise it, or a subscription

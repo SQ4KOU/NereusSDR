@@ -94,6 +94,17 @@ HardwareProfile profileForModel(HPSDRModel model);
 // Return the default (auto-guessed) HPSDRModel for a discovered board byte.
 HPSDRModel defaultModelForBoard(HPSDRHW board);
 
+// Plan Task 15 (NereusSDR-original): the profile for a radio whose board and
+// model are both known, the way a connect has them. profileForModel(model),
+// except that the HL2 receive-only kit (HPSDRHW::HermesLiteRxOnly, a
+// NereusSDR-only board with no Thetis value) keeps its own capability row
+// under the HL2 model. mi0bot-Thetis has one HL2 board (HPSDRHW.HermesLite,
+// enums.cs:396 [v2.10.3.13-beta2]) and one HL2 model (HERMESLITE), and
+// treats receive-only as the operator's RXOnly toggle (console.cs:15374-15395
+// [v2.10.3.13-beta2]); the kit's row carries isRxOnlySku, which blocks
+// transmit whatever the operator sets.
+HardwareProfile profileForRadio(HPSDRHW board, HPSDRModel model);
+
 // R-R3-46 (NereusSDR-original, remote windows only): the profile a remote
 // window uses for the Core's radio. The Core's reported model wins when its
 // own profile resolves to the reported board, so an ANAN-8000DLE or

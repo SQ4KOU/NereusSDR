@@ -21,12 +21,20 @@
 //                reference console.cs:15283-15307, console.cs:6770-6806,
 //                console.cs:29435-29481, and Andromeda.cs:285-306 as the
 //                Thetis upstream context for each inhibit source.
+//                (notifyRxOnly removed by Task 16, below.)
 //   2026-09-25 - Task 13 (receiver and transmit gaps plan): reads the
 //                radio's own TX inhibit input the way PollTXInhibit does
 //                (console.cs:25849-25887 [v2.10.3.15]): attachRadioInput,
 //                setRadioModel, notifyUserDigitalInputs and the per-model
 //                bit choice inhibitInputFromUserIo. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - Task 16 (receiver and transmit gaps plan): notifyRxOnly
+//                and the Rx2OnlyRadio source removed. It never had a
+//                caller, and this monitor acts only while External TX
+//                Inhibit is on; Thetis keeps _rx_only apart from
+//                _tx_inhibit (console.cs:15312-15334, 25470 [v2.10.3.15]),
+//                so receive only is MoxController::setRxOnly. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // --- From console.cs ---
@@ -90,11 +98,11 @@ namespace NereusSDR::safety {
 
 /// GPIO-poll-based TX inhibit monitor ported from Thetis PollTXInhibit.
 ///
-/// Aggregates four inhibit predicates into a single inhibited() state and
+/// Aggregates three inhibit predicates into a single inhibited() state and
 /// emits txInhibitedChanged(bool, Source) on transitions only (not per tick).
 ///
 /// Source priority (highest → lowest):
-///   UserIo01 > Rx2OnlyRadio > OutOfBand > BlockTxAntenna > None
+///   UserIo01 > OutOfBand > BlockTxAntenna > None
 ///
 /// UserIo01 — per-board GPIO pin polled at 100 ms.
 ///   Cite: console.cs:25801-25839 [v2.10.3.13] (PollTXInhibit loop).
@@ -104,8 +112,9 @@ namespace NereusSDR::safety {
 ///   reader (setUserIoReader) returns the logical ASSERTED state instead.
 ///   setReverseLogic() applies an additional inversion on top of either.
 ///
-/// Rx2OnlyRadio — radio is hardware-only-RX (no PA fitted).
-///   Cite: console.cs:15283-15307 [v2.10.3.13] (RXOnly property setter).
+/// Receive only is not an inhibit source here (Task 16): it is
+///   MoxController::setRxOnly, Thetis _rx_only, which gates keying whether
+///   or not External TX Inhibit is on.
 ///
 /// OutOfBand — VFO frequency falls outside a legal TX band.
 ///   Cite: console.cs:6770-6806 [v2.10.3.13] (CheckValidTXFreq).
@@ -129,7 +138,8 @@ public:
     enum class Source : std::uint8_t {
         None           = 0,
         UserIo01       = 1,
-        Rx2OnlyRadio   = 2,
+        // 2 was Rx2OnlyRadio; receive only is MoxController::setRxOnly
+        // (Task 16).
         OutOfBand      = 3,
         BlockTxAntenna = 4,
     };
@@ -185,10 +195,6 @@ public:
     bool isReverseLogic() const noexcept { return m_reverseLogic; }
     bool hasRadioInput() const noexcept { return m_radioInputAttached; }
 
-    /// Notify that the radio's RX-only flag changed.
-    /// Cite: console.cs:15283-15307 [v2.10.3.13] (RXOnly property setter).
-    void notifyRxOnly(bool isRxOnly);
-
     /// Notify that the VFO frequency moved outside a legal TX band.
     /// Cite: console.cs:6770-6806 [v2.10.3.13] (CheckValidTXFreq).
     void notifyOutOfBand(bool isOutOfBand);
@@ -216,7 +222,6 @@ private:
 
     // Per-source predicates
     bool m_userIoAsserted     = false;  // result of last reader() call
-    bool m_rxOnly             = false;
     bool m_outOfBand          = false;
     bool m_blockTxAntenna     = false;
 

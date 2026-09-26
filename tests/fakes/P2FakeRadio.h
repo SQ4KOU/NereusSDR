@@ -46,6 +46,9 @@ public:
     bool ingressEnabled() const { return m_ingressEnabled; }
 
     void sendDdc(int ddc = 2, float iSample = 0.5f, float qSample = 0.0f);
+    // Skip `count` DDC sequence numbers, as a radio whose I/Q datagrams were
+    // lost on the way would appear (R-R3-32, parity Task 6).
+    void skipDdcSequence(quint32 count) { m_ddcSequence += count; }
     void sendStatus();
     void sendWideband(int adc = 0);
     void sendStatusTo(const QHostAddress& clientAddress, quint16 clientPort);

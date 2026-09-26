@@ -1089,7 +1089,7 @@ private slots:
 
         StationServer* const server = app.stationServer();
         RadioModel* const model = app.m_radioModel.get();
-        DaemonMediaController* const media = app.m_mediaController.get();
+        DaemonMediaHub* const media = app.m_mediaHub.get();
         QVERIFY(server != nullptr);
         QVERIFY(model != nullptr);
         QVERIFY(media != nullptr);
@@ -1112,7 +1112,7 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(app.stationListenerReady(), 1000);
         QCOMPARE(app.stationServer(), server);
         QCOMPARE(app.m_radioModel.get(), model);
-        QCOMPARE(app.m_mediaController.get(), media);
+        QCOMPARE(app.m_mediaHub.get(), media);
         QCOMPARE(server->stationIdentity().fingerprint(), identity);
         QVERIFY(model->slices() == slices);
         QCOMPARE(server->serverPort(), port);

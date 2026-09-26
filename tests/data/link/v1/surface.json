@@ -88,7 +88,7 @@
         {
             "kind": "i64",
             "name": "stationTelemetryVersion",
-            "value": 3
+            "value": 4
         },
         {
             "kind": "i64",
@@ -138,7 +138,7 @@
         {
             "kind": "i64",
             "name": "notchControlVersion",
-            "value": 1
+            "value": 2
         },
         {
             "kind": "i64",
@@ -208,17 +208,17 @@
         {
             "kind": "i64",
             "name": "radioHardwareVersion",
-            "value": 4
+            "value": 6
         },
         {
             "kind": "i64",
             "name": "remotePgxlControlVersion",
-            "value": 3
+            "value": 4
         },
         {
             "kind": "i64",
             "name": "remoteRfKitControlVersion",
-            "value": 3
+            "value": 4
         },
         {
             "kind": "i64",
@@ -228,12 +228,12 @@
         {
             "kind": "i64",
             "name": "accessoryDataVersion",
-            "value": 1
+            "value": 3
         },
         {
             "kind": "i64",
             "name": "remoteTgxlControlVersion",
-            "value": 3
+            "value": 4
         },
         {
             "kind": "i64",
@@ -258,6 +258,16 @@
         {
             "kind": "i64",
             "name": "displayExtrasVersion",
+            "value": 2
+        },
+        {
+            "kind": "i64",
+            "name": "transmitSettingsVersion",
+            "value": 7
+        },
+        {
+            "kind": "i64",
+            "name": "bandSelectVersion",
             "value": 1
         },
         {
@@ -361,6 +371,24 @@
             "capabilityVersion": 0,
             "minMinor": 0,
             "verb": "setActiveSliceById"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "sliceId",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "band",
+                    "optional": false
+                }
+            ],
+            "capability": "bandSelectVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "slice.selectBand"
         },
         {
             "arguments": [
@@ -569,6 +597,45 @@
         {
             "arguments": [
                 {
+                    "kind": "bool",
+                    "name": "on",
+                    "optional": false
+                }
+            ],
+            "capability": "remotePgxlControlVersion",
+            "capabilityVersion": 4,
+            "minMinor": 11,
+            "verb": "setPgxlOperate"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "remotePgxlControlVersion",
+            "capabilityVersion": 4,
+            "minMinor": 11,
+            "verb": "scanPgxlLan"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "host",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "port",
+                    "optional": false
+                }
+            ],
+            "capability": "remotePgxlControlVersion",
+            "capabilityVersion": 4,
+            "minMinor": 11,
+            "verb": "setPgxlAddress"
+        },
+        {
+            "arguments": [
+                {
                     "kind": "utf8",
                     "name": "name",
                     "optional": false
@@ -665,6 +732,110 @@
         {
             "arguments": [
                 {
+                    "kind": "i64",
+                    "name": "relay",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "direction",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteTgxlControlVersion",
+            "capabilityVersion": 4,
+            "minMinor": 11,
+            "verb": "moveTgxlRelay"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "remoteTgxlControlVersion",
+            "capabilityVersion": 4,
+            "minMinor": 11,
+            "verb": "scanTgxlLan"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "host",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "port",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteTgxlControlVersion",
+            "capabilityVersion": 4,
+            "minMinor": 11,
+            "verb": "setTgxlAddress"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "watts",
+                    "optional": false
+                }
+            ],
+            "capability": "transmitSettingsVersion",
+            "capabilityVersion": 2,
+            "minMinor": 11,
+            "verb": "setTunePowerForTxBand"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "name",
+                    "optional": false
+                }
+            ],
+            "capability": "transmitSettingsVersion",
+            "capabilityVersion": 3,
+            "minMinor": 11,
+            "verb": "txProfile.select"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "name",
+                    "optional": false
+                }
+            ],
+            "capability": "transmitSettingsVersion",
+            "capabilityVersion": 3,
+            "minMinor": 11,
+            "verb": "txProfile.save"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "name",
+                    "optional": false
+                }
+            ],
+            "capability": "transmitSettingsVersion",
+            "capabilityVersion": 3,
+            "minMinor": 11,
+            "verb": "txProfile.delete"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "transmitSettingsVersion",
+            "capabilityVersion": 3,
+            "minMinor": 11,
+            "verb": "rade.resetVocoder"
+        },
+        {
+            "arguments": [
+                {
                     "kind": "utf8",
                     "name": "host",
                     "optional": false
@@ -708,6 +879,58 @@
             "capabilityVersion": 3,
             "minMinor": 11,
             "verb": "resetRfKitError"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "bool",
+                    "name": "on",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteRfKitControlVersion",
+            "capabilityVersion": 4,
+            "minMinor": 11,
+            "verb": "setRfKitOperate"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "port",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteRfKitControlVersion",
+            "capabilityVersion": 4,
+            "minMinor": 11,
+            "verb": "setRfKitAntenna"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "remoteRfKitControlVersion",
+            "capabilityVersion": 4,
+            "minMinor": 11,
+            "verb": "setRfKitTciMode"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "host",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "port",
+                    "optional": false
+                }
+            ],
+            "capability": "remoteRfKitControlVersion",
+            "capabilityVersion": 4,
+            "minMinor": 11,
+            "verb": "setRfKitAddress"
         },
         {
             "arguments": [
@@ -917,6 +1140,24 @@
             "capabilityVersion": 1,
             "minMinor": 11,
             "verb": "tx.keepalive"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "band",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "antenna",
+                    "optional": false
+                }
+            ],
+            "capability": "radioHardwareVersion",
+            "capabilityVersion": 6,
+            "minMinor": 11,
+            "verb": "setAlexTxAntenna"
         },
         {
             "arguments": [
@@ -1283,6 +1524,19 @@
         {
             "arguments": [
                 {
+                    "kind": "i64",
+                    "name": "sliceId",
+                    "optional": false
+                }
+            ],
+            "capability": "notchControlVersion",
+            "capabilityVersion": 2,
+            "minMinor": 5,
+            "verb": "notch.addAtSlice"
+        },
+        {
+            "arguments": [
+                {
                     "kind": "utf8",
                     "name": "id",
                     "optional": false
@@ -1345,6 +1599,50 @@
             "capabilityVersion": 1,
             "minMinor": 11,
             "verb": "session.leave"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "id",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "choice",
+                    "optional": false
+                }
+            ],
+            "capability": "sessionHolderVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "confirm.proceed"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "id",
+                    "optional": false
+                }
+            ],
+            "capability": "sessionHolderVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "confirm.cancel"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "id",
+                    "optional": false
+                }
+            ],
+            "capability": "sessionHolderVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "notice.takeBack"
         }
     ],
     "limits": {
@@ -1364,6 +1662,11 @@
                 30000,
                 60000
             ]
+        },
+        "confirmExpiryMs": {
+            "source": "ConfirmStep::kExpiryMs",
+            "unit": "ms",
+            "value": 60000
         },
         "connectDeadlineMs": {
             "source": "kStationHandshakeDeadlineMs",
@@ -1761,6 +2064,14 @@
                     "op"
                 ]
             },
+            "clarity-retune": {
+                "capability": "displayExtrasVersion",
+                "fields": [
+                    "connectionId",
+                    "endpointId",
+                    "op"
+                ]
+            },
             "clock-probe": {
                 "capability": "audioClockVersion",
                 "fields": [
@@ -2026,6 +2337,36 @@
                 "verb": "string"
             }
         },
+        "confirm.request": {
+            "optional": [
+                "change",
+                "choices",
+                "forCommandId",
+                "forSettingsKey",
+                "forWriteId"
+            ],
+            "required": [
+                "affected",
+                "expiresInMs",
+                "id",
+                "kind",
+                "reason",
+                "type"
+            ],
+            "types": {
+                "affected": "array",
+                "change": "object",
+                "choices": "array",
+                "expiresInMs": "number",
+                "forCommandId": "number",
+                "forSettingsKey": "string",
+                "forWriteId": "number",
+                "id": "number",
+                "kind": "string",
+                "reason": "string",
+                "type": "string"
+            }
+        },
         "delta": {
             "optional": [
             ],
@@ -2075,6 +2416,40 @@
             ],
             "types": {
                 "payload": "object",
+                "type": "string"
+            }
+        },
+        "notice": {
+            "optional": [
+                "byDeviceId",
+                "byKind",
+                "byName",
+                "byShortName",
+                "bySource",
+                "change",
+                "slices"
+            ],
+            "required": [
+                "id",
+                "kind",
+                "reason",
+                "secondsAgo",
+                "takeBack",
+                "type"
+            ],
+            "types": {
+                "byDeviceId": "string",
+                "byKind": "string",
+                "byName": "string",
+                "byShortName": "string",
+                "bySource": "string",
+                "change": "object",
+                "id": "number",
+                "kind": "string",
+                "reason": "string",
+                "secondsAgo": "number",
+                "slices": "array",
+                "takeBack": "boolean",
                 "type": "string"
             }
         },
@@ -2594,6 +2969,42 @@
                     "kind": "utf8",
                     "name": "rfkitAntenna4Label",
                     "ordinal": 41
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "rfkitConnectedSinceMs",
+                    "ordinal": 42
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "rfkitPollsOk",
+                    "ordinal": 43
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "rfkitPollsFailed",
+                    "ordinal": 44
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "rfkitReconnectCount",
+                    "ordinal": 45
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "rfkitLastPollMs",
+                    "ordinal": 46
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "rfkitRttAvgMs",
+                    "ordinal": 47
                 }
             ]
         },
@@ -2748,43 +3159,43 @@
                     "ordinal": 2
                 },
                 {
-                    "direction": "outbound",
+                    "direction": "bidirectional",
                     "kind": "utf8",
                     "name": "txAntennas",
                     "ordinal": 3
                 },
                 {
-                    "direction": "outbound",
+                    "direction": "bidirectional",
                     "kind": "bool",
                     "name": "blockTxAnt2",
                     "ordinal": 4
                 },
                 {
-                    "direction": "outbound",
+                    "direction": "bidirectional",
                     "kind": "bool",
                     "name": "blockTxAnt3",
                     "ordinal": 5
                 },
                 {
-                    "direction": "outbound",
+                    "direction": "bidirectional",
                     "kind": "bool",
                     "name": "rxOutOnTx",
                     "ordinal": 6
                 },
                 {
-                    "direction": "outbound",
+                    "direction": "bidirectional",
                     "kind": "bool",
                     "name": "ext1OutOnTx",
                     "ordinal": 7
                 },
                 {
-                    "direction": "outbound",
+                    "direction": "bidirectional",
                     "kind": "bool",
                     "name": "ext2OutOnTx",
                     "ordinal": 8
                 },
                 {
-                    "direction": "outbound",
+                    "direction": "bidirectional",
                     "kind": "bool",
                     "name": "rxOutOverride",
                     "ordinal": 9
@@ -3345,21 +3756,27 @@
                 },
                 {
                     "direction": "outbound",
-                    "kind": "i64",
-                    "name": "bandOutputsByte",
+                    "kind": "bool",
+                    "name": "txInhibited",
                     "ordinal": 20
                 },
                 {
                     "direction": "outbound",
                     "kind": "i64",
-                    "name": "bandOutputsBand",
+                    "name": "bandOutputsByte",
                     "ordinal": 21
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "bandOutputsBand",
+                    "ordinal": 22
                 },
                 {
                     "direction": "outbound",
                     "kind": "bool",
                     "name": "bandOutputsKeyed",
-                    "ordinal": 22
+                    "ordinal": 23
                 }
             ]
         },
@@ -4880,6 +5297,24 @@
                     "kind": "bool",
                     "name": "adcLinked",
                     "ordinal": 14
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "attOnTxEnabled",
+                    "ordinal": 15
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "attOnTxValue",
+                    "ordinal": 16
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "forceAttWhenPsOff",
+                    "ordinal": 17
                 }
             ]
         },
@@ -4977,9 +5412,439 @@
                 },
                 {
                     "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "tunePower",
+                    "ordinal": 15
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "voxThresholdDb",
+                    "ordinal": 16
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "voxHangTimeMs",
+                    "ordinal": 17
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "monEnabled",
+                    "ordinal": 18
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "monitorVolume",
+                    "ordinal": 19
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "txLevelerOn",
+                    "ordinal": 20
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "txEqEnabled",
+                    "ordinal": 21
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "cfcEnabled",
+                    "ordinal": 22
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "cpdrOn",
+                    "ordinal": 23
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "cpdrLevelDb",
+                    "ordinal": 24
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "amCarrierLevel",
+                    "ordinal": 25
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "dexpEnabled",
+                    "ordinal": 26
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "micGainDb",
+                    "ordinal": 27
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "tunePowerForTxBand",
+                    "ordinal": 28
+                },
+                {
+                    "direction": "bidirectional",
+                    "enumValues": [
+                        0,
+                        1,
+                        2
+                    ],
+                    "kind": "enum",
+                    "name": "tuneDrivePowerSource",
+                    "ordinal": 29
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "micBoost",
+                    "ordinal": 30
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "micXlr",
+                    "ordinal": 31
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "micTipRing",
+                    "ordinal": 32
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "micBias",
+                    "ordinal": 33
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "micPttDisabled",
+                    "ordinal": 34
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "lineIn",
+                    "ordinal": 35
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "lineInBoost",
+                    "ordinal": 36
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "activeTxProfile",
+                    "ordinal": 37
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "txProfilesJson",
+                    "ordinal": 38
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "txEqUseLegacy",
+                    "ordinal": 39
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "txEqPreamp",
+                    "ordinal": 40
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "utf8",
+                    "name": "txEqBandsJson",
+                    "ordinal": 41
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "utf8",
+                    "name": "txEqFreqsJson",
+                    "ordinal": 42
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "txEqNc",
+                    "ordinal": 43
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "txEqMp",
+                    "ordinal": 44
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "txEqCtfmode",
+                    "ordinal": 45
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "txEqWintype",
+                    "ordinal": 46
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "utf8",
+                    "name": "txEqParaEqData",
+                    "ordinal": 47
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "utf8",
+                    "name": "cfcCompressionJson",
+                    "ordinal": 48
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "utf8",
+                    "name": "cfcEqFreqJson",
+                    "ordinal": 49
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "utf8",
+                    "name": "cfcPostEqBandGainJson",
+                    "ordinal": 50
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "cfcPostEqEnabled",
+                    "ordinal": 51
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "cfcPostEqGainDb",
+                    "ordinal": 52
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "cfcPrecompDb",
+                    "ordinal": 53
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "utf8",
+                    "name": "cfcParaEqData",
+                    "ordinal": 54
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "phaseRotatorEnabled",
+                    "ordinal": 55
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "phaseRotatorFreqHz",
+                    "ordinal": 56
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "phaseRotatorStages",
+                    "ordinal": 57
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "phaseReverseEnabled",
+                    "ordinal": 58
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "cessbOn",
+                    "ordinal": 59
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "txLevelerMaxGain",
+                    "ordinal": 60
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "txLevelerDecay",
+                    "ordinal": 61
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "txAlcMaxGain",
+                    "ordinal": 62
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "txAlcDecay",
+                    "ordinal": 63
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "utf8",
+                    "name": "powerByBandJson",
+                    "ordinal": 64
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "utf8",
+                    "name": "tunePowerByBandJson",
+                    "ordinal": 65
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "dexpAttackTimeMs",
+                    "ordinal": 66
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "dexpDetectorTauMs",
+                    "ordinal": 67
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "dexpExpansionRatioDb",
+                    "ordinal": 68
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "dexpHighCutHz",
+                    "ordinal": 69
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "dexpHysteresisRatioDb",
+                    "ordinal": 70
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "dexpLookAheadEnabled",
+                    "ordinal": 71
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "dexpLookAheadMs",
+                    "ordinal": 72
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "dexpLowCutHz",
+                    "ordinal": 73
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "dexpReleaseTimeMs",
+                    "ordinal": 74
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "dexpSideChannelFilterEnabled",
+                    "ordinal": 75
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "antiVoxGainDb",
+                    "ordinal": 76
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "twoToneFreq1",
+                    "ordinal": 77
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "twoToneFreq2",
+                    "ordinal": 78
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "f64",
+                    "name": "twoToneLevel",
+                    "ordinal": 79
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "twoTonePower",
+                    "ordinal": 80
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "twoTonePulsed",
+                    "ordinal": 81
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "twoToneInvert",
+                    "ordinal": 82
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "i64",
+                    "name": "twoToneFreq2Delay",
+                    "ordinal": 83
+                },
+                {
+                    "direction": "bidirectional",
+                    "enumValues": [
+                        0,
+                        1,
+                        2
+                    ],
+                    "kind": "enum",
+                    "name": "twoToneDrivePowerSource",
+                    "ordinal": 84
+                },
+                {
+                    "direction": "bidirectional",
                     "kind": "bool",
                     "name": "voxEnabled",
-                    "ordinal": 15
+                    "ordinal": 85
                 }
             ]
         },
@@ -5380,8 +6245,7 @@
         "operatorLocalKeys": [
             "DisableHfPa",
             "ExtendedTxAllowed",
-            "PreventTxOnDifferentBandToRx",
-            "RxOnly"
+            "PreventTxOnDifferentBandToRx"
         ],
         "operatorLocalPrefixes": [
             "Tci",
@@ -5428,7 +6292,8 @@
             "PingTimeOutSeconds",
             "PingTimeOutHost",
             "RemoteMoxTimeOutEnabled",
-            "RemoteMoxTimeOutSeconds"
+            "RemoteMoxTimeOutSeconds",
+            "RxOnly"
         ],
         "stationPrefixes": [
             "hardware/",
@@ -5537,6 +6402,47 @@
                 ],
                 "minMinor": 11,
                 "version": 3
+            },
+            {
+                "fields": [
+                    "audio.active",
+                    "audio.contextGeneration",
+                    "audio.encodeFailuresPerSecond",
+                    "audio.encodedPacketsPerSecond",
+                    "audio.sendAcceptedPerSecond",
+                    "audio.sendRejectedPerSecond",
+                    "audio.sourceDropsPerSecond",
+                    "audio.sourceFramesPerSecond",
+                    "host.hottestZoneCelsius",
+                    "host.hottestZoneName",
+                    "host.memoryAvailableKiB",
+                    "host.memoryTotalKiB",
+                    "host.processCpuPercent",
+                    "host.processResidentKiB",
+                    "host.systemCpuPercent",
+                    "radio.connected",
+                    "radio.jitterMs",
+                    "radio.paCurrentAmps",
+                    "radio.paTemperatureCelsius",
+                    "radio.paVolts",
+                    "radio.packetGapMs",
+                    "radio.packetLossPercent",
+                    "radio.rttAgeMs",
+                    "radio.rttMs",
+                    "radio.rxMbps",
+                    "radio.sampleRateHz",
+                    "radio.supplyVolts",
+                    "radio.txMbps",
+                    "radio.udpPacketsSeen",
+                    "receivers[].inputDelayMs",
+                    "receivers[].loadPercent",
+                    "receivers[].skippedInputMs",
+                    "receivers[].sliceId",
+                    "sampledElapsedMs",
+                    "sequence"
+                ],
+                "minMinor": 11,
+                "version": 4
             }
         ]
     }

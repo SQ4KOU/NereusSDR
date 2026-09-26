@@ -21,7 +21,7 @@
 // allows remote transmit, the Core's own server still never keys, with
 // transmit unheld or held by a device, and never releases a device's key.
 // J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
-#include "StationMultiSessionHarness.h"
+#include "MultiDeviceHarness.h"
 
 #include <QtTest/QtTest>
 #include <QNetworkInterface>

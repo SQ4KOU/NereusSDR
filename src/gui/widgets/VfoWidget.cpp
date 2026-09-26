@@ -77,6 +77,10 @@
 //   2026-09-24 - iPhone app follow-up (R-IOS-06): the AF and SQL slider
 //                 ranges come from ControlRanges.h too. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49, R-R3-21 (parity Task 11): the XIT button, offset
+//                 and zero write the slice in a remote window as in a local
+//                 one; they no longer follow the transmit permission.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -364,6 +368,17 @@ warren@wpratt.com
 
 namespace NereusSDR {
 
+namespace {
+// BYPS's tooltip while it may be pressed (group B fix wave: kept in one
+// place, since setRxBypassPermitted puts it back).
+QString rxBypassToolTip()
+{
+    return QStringLiteral(
+        "RX Bypass on TX: routes the receive path through the bypass relay "
+        "while transmitting.");
+}
+} // namespace
+
 // 2026-05-13 bench fix (PR #238): QStackedWidget subclass that reports
 // the CURRENT page's sizeHint instead of the maximum across all pages.
 //
@@ -641,12 +656,13 @@ void VfoWidget::buildHeaderRow()
     m_rxBypassBtn->setFixedHeight(18);
     // Maps to Thetis chkRxOutOnTx (Alex.cs:61) [cite moved from the tooltip,
     // R-R3-17].
-    m_rxBypassBtn->setToolTip(QStringLiteral(
-        "RX Bypass on TX: routes the receive path through the bypass relay "
-        "while transmitting."));
+    m_rxBypassBtn->setToolTip(rxBypassToolTip());
     m_rxBypassBtn->setVisible(false);  // hidden until setBoardCapabilities + setHpsdrSku confirm gates
     connect(m_rxBypassBtn, &QPushButton::toggled, this, [this](bool on) {
-        if (m_updatingFromModel || !m_transmitPermitted) { return; }
+        // Group B fix wave: a receive relay setting, not a key. A remote
+        // window's BYPS follows whether its Core takes it
+        // (setRxBypassPermitted), not the transmit permission.
+        if (m_updatingFromModel || !m_rxBypassPermitted) { return; }
         emit rxBypassToggled(on);
     });
     hdr->addWidget(m_rxBypassBtn);
@@ -1979,20 +1995,22 @@ void VfoWidget::buildXRitTab()
         }
     });
 
+    // R-R3-49, R-R3-21 (parity Task 11): XIT is a slice setting, written
+    // in a remote window as in a local one (the Core's slice follows), and
+    // not tied to the transmit permission. RIT above has the same shape.
     connect(m_xitBtn, &QPushButton::toggled, this, [this](bool on) {
-        if (!m_updatingFromModel && m_transmitPermitted) {
+        if (!m_updatingFromModel) {
             emit xitEnabledChanged(on);
         }
     });
 
     connect(m_xitLabel, &ScrollableLabel::valueChanged, this, [this](int hz) {
-        if (!m_updatingFromModel && m_transmitPermitted) {
+        if (!m_updatingFromModel) {
             emit xitHzChanged(hz);
         }
     });
 
     connect(m_xitZeroBtn, &QPushButton::clicked, this, [this]() {
-        if (!m_transmitPermitted) { return; }
         m_xitLabel->setValue(0);
         if (!m_updatingFromModel) {
             emit xitHzChanged(0);
@@ -3520,6 +3538,8 @@ void VfoWidget::setRadioModel(RadioModel* model)
     updateNrAvailability();
     if (model && model->role() == RadioModel::Role::Remote) {
         setTransmitPermitted(false);
+        // Group B fix wave: until MainWindow hears the Core takes it.
+        setRxBypassPermitted(false, QString());
         // R-R3-44: the VAX selector stays live. In a remote window it picks
         // this computer's VAX channel for the Core's slice; the remote model
         // keeps the choice on this computer (RadioModel::
@@ -3560,6 +3580,22 @@ void VfoWidget::updateNrAvailability()
     }
 }
 
+void VfoWidget::setRxBypassPermitted(bool permitted, const QString& reason)
+{
+    // Group B fix wave: BYPS (RX bypass on TX) writes the Core's
+    // AlexController through `alexAntennas` in a remote window; disabled
+    // with the reason when the Core does not take it.
+    m_rxBypassPermitted = permitted;
+    if (!m_rxBypassBtn) { return; }
+    m_rxBypassBtn->setEnabled(permitted);
+    const QString tip = permitted ? rxBypassToolTip()
+        : (reason.isEmpty()
+               ? tr("Connect to the Core to change the radio's hardware settings.")
+               : reason);
+    m_rxBypassBtn->setToolTip(tip);
+    m_rxBypassBtn->setAccessibleDescription(permitted ? QString() : tip);
+}
+
 void VfoWidget::setTransmitPermitted(bool permitted, const QString& reason)
 {
     m_transmitPermitted = permitted;
@@ -3597,11 +3633,9 @@ void VfoWidget::updateTransmitControlAvailability()
         }
     };
 
-    apply(m_xitBtn);
-    apply(m_xitLabel);
-    apply(m_xitZeroBtn);
+    // R-R3-49 (parity Task 11): XIT is not here; it writes the slice.
+    // Group B fix wave: nor is BYPS (setRxBypassPermitted).
     apply(m_txBadge);
-    apply(m_rxBypassBtn);
 }
 
 SliceModel* VfoWidget::contextMenuSliceForTest() const

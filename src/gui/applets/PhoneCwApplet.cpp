@@ -45,6 +45,14 @@
 //                 gauge can be shown unavailable with a reason (a remote
 //                 window's Core does not send it yet). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 (parity Task 2): the mic level, PROC and its
+//                 level, AM carrier and DEXP follow the transmit settings
+//                 gate (setTransmitSettingsPermitted), not the keying gate.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 3): the mic profile combo follows
+//                 setTxProfilePermitted; in a remote window it picks the
+//                 Core's profiles. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -104,6 +112,7 @@
 #include "core/AudioEngine.h"
 #include "core/MoxController.h"
 #include "core/TxChannel.h"
+#include "core/session/IStationLink.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
 #include "gui/StyleConstants.h"
@@ -180,6 +189,8 @@ PhoneCwApplet::PhoneCwApplet(RadioModel* model, QWidget* parent)
     wireControls();
     if (model && model->role() == RadioModel::Role::Remote) {
         setTransmitPermitted(false);
+        setTransmitSettingsPermitted(false);
+        setTxProfilePermitted(false);
     }
 }
 
@@ -904,7 +915,7 @@ void PhoneCwApplet::wireControls()
 
     // UI → Model
     connect(m_micLevelSlider, &QSlider::valueChanged, this, [this, &tx](int val) {
-        if (m_updatingFromModel || !m_transmitPermitted) { return; }
+        if (m_updatingFromModel || !m_transmitSettingsPermitted) { return; }
         m_micLevelLabel->setText(QStringLiteral("%1 dB").arg(val));
         tx.setMicGainDb(val);
     });
@@ -923,7 +934,7 @@ void PhoneCwApplet::wireControls()
     // Mic mute state → slider enabled / greyed.
     // NOTE: micMute == true means mic IS in use; false means muted/disabled.
     connect(&tx, &TransmitModel::micMuteChanged, this, [this](bool micInUse) {
-        if (m_transmitPermitted) {
+        if (m_transmitSettingsPermitted) {
             m_micLevelSlider->setEnabled(micInUse);
         } else {
             m_micLevelSlider->setProperty("PhoneCwSavedTransmitEnabled", micInUse);
@@ -949,7 +960,7 @@ void PhoneCwApplet::wireControls()
         }
         // UI → Model
         connect(m_procBtn, &QPushButton::toggled, this, [this, &tx](bool on) {
-            if (m_updatingFromModel || !m_transmitPermitted) { return; }
+            if (m_updatingFromModel || !m_transmitSettingsPermitted) { return; }
             tx.setCpdrOn(on);
         });
         // Model → UI
@@ -976,7 +987,7 @@ void PhoneCwApplet::wireControls()
             if (m_procValueLabel) {
                 m_procValueLabel->setText(QStringLiteral("%1 dB").arg(v));
             }
-            if (m_updatingFromModel || !m_transmitPermitted) { return; }
+            if (m_updatingFromModel || !m_transmitSettingsPermitted) { return; }
             tx.setCpdrLevelDb(v);
         });
         // Model → UI
@@ -1051,7 +1062,7 @@ void PhoneCwApplet::wireControls()
         }
         // UI → Model
         connect(m_dexpBtn, &QPushButton::toggled, this, [this, &tx](bool on) {
-            if (m_updatingFromModel || !m_transmitPermitted) { return; }
+            if (m_updatingFromModel || !m_transmitSettingsPermitted) { return; }
             tx.setDexpEnabled(on);
         });
         // Model → UI
@@ -1154,7 +1165,7 @@ void PhoneCwApplet::wireControls()
         });
         connect(m_micProfileCombo, &QComboBox::currentTextChanged,
                 this, [this, &tx](const QString& name) {
-            if (m_updatingFromModel || !m_transmitPermitted || name.isEmpty()) { return; }
+            if (m_updatingFromModel || !m_txProfilePermitted || name.isEmpty()) { return; }
             if (MicProfileManager* m = m_model->micProfileManager()) {
                 m->setActiveProfile(name, &tx);
             }
@@ -1190,7 +1201,7 @@ void PhoneCwApplet::wireControls()
     }
     connect(m_amCarSlider, &QSlider::valueChanged, this, [this, &tx](int v) {
         m_amCarLabel->setText(QString::number(v));
-        if (m_updatingFromModel || !m_transmitPermitted) { return; }
+        if (m_updatingFromModel || !m_transmitSettingsPermitted) { return; }
         tx.setAmCarrierLevel(v);
     });
     connect(&tx, &TransmitModel::amCarrierLevelChanged, this, [this](int percent) {
@@ -1260,7 +1271,7 @@ void PhoneCwApplet::syncFromModel()
         m_micLevelSlider->setRange(caps.micGainMinDb, caps.micGainMaxDb);
         m_micLevelSlider->setValue(tx.micGainDb());
         m_micLevelLabel->setText(QStringLiteral("%1 dB").arg(tx.micGainDb()));
-        if (m_transmitPermitted) {
+        if (m_transmitSettingsPermitted) {
             m_micLevelSlider->setEnabled(tx.micMute());
         } else {
             m_micLevelSlider->setProperty("PhoneCwSavedTransmitEnabled", tx.micMute());
@@ -1325,22 +1336,43 @@ void PhoneCwApplet::setTransmitPermitted(bool permitted, const QString& reason)
     updateTransmitControlAvailability();
 }
 
+// R-R3-49 (parity Task 2): the transmit settings that key nothing. The two
+// gates hold disjoint controls.
+void PhoneCwApplet::setTransmitSettingsPermitted(bool permitted, const QString& reason)
+{
+    m_transmitSettingsPermitted = permitted;
+    m_transmitSettingsReason = reason.isEmpty()
+        ? IStationLink::transmitSettingsUnavailableReason()
+        : reason;
+    updateTransmitControlAvailability();
+}
+
+// R-R3-49 (parity Task 3): the mic profile combo's own gate.
+void PhoneCwApplet::setTxProfilePermitted(bool permitted, const QString& reason)
+{
+    m_txProfilePermitted = permitted;
+    m_txProfileReason = reason.isEmpty()
+        ? IStationLink::transmitSettingsUnavailableReason()
+        : reason;
+    updateTransmitControlAvailability();
+}
+
 void PhoneCwApplet::updateTransmitControlAvailability()
 {
-    const auto apply = [this](QWidget* control) {
+    const auto gate = [](QWidget* control, bool permitted, const QString& reason) {
         if (!control) { return; }
         static constexpr auto kSavedTooltip = "PhoneCwSavedTransmitTooltip";
         static constexpr auto kSavedDescription = "PhoneCwSavedTransmitDescription";
         static constexpr auto kSavedEnabled = "PhoneCwSavedTransmitEnabled";
-        if (!m_transmitPermitted) {
+        if (!permitted) {
             if (!control->property(kSavedTooltip).isValid()) {
                 control->setProperty(kSavedTooltip, control->toolTip());
                 control->setProperty(kSavedDescription, control->accessibleDescription());
                 control->setProperty(kSavedEnabled, control->isEnabled());
             }
             control->setEnabled(false);
-            control->setToolTip(m_transmitPermissionReason);
-            control->setAccessibleDescription(m_transmitPermissionReason);
+            control->setToolTip(reason);
+            control->setAccessibleDescription(reason);
             return;
         }
         if (control->property(kSavedTooltip).isValid()) {
@@ -1353,14 +1385,21 @@ void PhoneCwApplet::updateTransmitControlAvailability()
         }
     };
 
-    apply(m_micLevelSlider);
-    apply(m_micProfileCombo);
-    apply(m_micSourceCombo);
-    apply(m_amCarSlider);
-    apply(m_procBtn);
-    apply(m_procSlider);
-    apply(m_vaxBtn);
-    apply(m_dexpBtn);
+    // The keying gate: the mic source and VAX.
+    for (QWidget* control : {static_cast<QWidget*>(m_micSourceCombo),
+                             static_cast<QWidget*>(m_vaxBtn)}) {
+        gate(control, m_transmitPermitted, m_transmitPermissionReason);
+    }
+    // R-R3-49 (parity Task 3): the mic profile.
+    gate(m_micProfileCombo, m_txProfilePermitted, m_txProfileReason);
+    // R-R3-49 (parity Task 2): the transmit settings gate.
+    for (QWidget* control : {static_cast<QWidget*>(m_micLevelSlider),
+                             static_cast<QWidget*>(m_amCarSlider),
+                             static_cast<QWidget*>(m_procBtn),
+                             static_cast<QWidget*>(m_procSlider),
+                             static_cast<QWidget*>(m_dexpBtn)}) {
+        gate(control, m_transmitSettingsPermitted, m_transmitSettingsReason);
+    }
 }
 
 // ── R-R3-21: compression gauge, mic profile and mic source ───────────────────

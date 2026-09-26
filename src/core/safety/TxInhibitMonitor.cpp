@@ -20,6 +20,9 @@
 //                own input, read per model and protocol as PollTXInhibit
 //                reads it (console.cs:25849-25887 [v2.10.3.15]). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - Task 16 (receiver and transmit gaps plan): notifyRxOnly
+//                removed; receive only is MoxController::setRxOnly.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // --- From console.cs ---
@@ -114,15 +117,6 @@ void TxInhibitMonitor::setReverseLogic(bool on)
 void TxInhibitMonitor::setUserIoReader(std::function<bool()> reader)
 {
     m_userIoReader = std::move(reader);
-    recompute();
-}
-
-void TxInhibitMonitor::notifyRxOnly(bool isRxOnly)
-{
-    if (m_rxOnly == isRxOnly) {
-        return;
-    }
-    m_rxOnly = isRxOnly;
     recompute();
 }
 
@@ -310,12 +304,11 @@ void TxInhibitMonitor::recompute()
     }
 
     // Step 3 — compute highest-priority active source.
-    // Priority: UserIo01 > Rx2OnlyRadio > OutOfBand > BlockTxAntenna > None.
+    // Priority: UserIo01 > OutOfBand > BlockTxAntenna > None. (Receive
+    // only is MoxController::setRxOnly, Task 16.)
     Source newSource = Source::None;
     if (m_userIoAsserted) {
         newSource = Source::UserIo01;
-    } else if (m_rxOnly) {
-        newSource = Source::Rx2OnlyRadio;
     } else if (m_outOfBand) {
         newSource = Source::OutOfBand;
     } else if (m_blockTxAntenna) {

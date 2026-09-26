@@ -53,8 +53,20 @@
 // when it signs in; revoking closes its slices, held ones included, and
 // forgets its layout; connectedDevices lists what each device listens on.
 //
-// Keys are made at run time in scratch directories. Media on a second
-// device is not asserted: Task 76 owns it.
+// Then, from Task 76 (the several-devices design, rulings 9.1 to 9.4),
+// media and capacity per device: each admitted device gets its own media
+// controller (DaemonMediaHub) and its own share of the display budget in
+// its own capabilities (sharedConnection, or sharedProcessing under the
+// governor's cut, only while another device is admitted; coreBusy or none
+// to a device that did not declare sessionHolder); A's media control
+// reaches A's controller only; each device hears only its own slices
+// (distinct tones per slice, read back from each device's lossless audio);
+// displays and receiver streams only for its own slices; two devices
+// watching one receiver share one FFT; B leaving ends only B's media; the
+// Core's local output plays only the station device's slices; telemetry
+// reaches every session that negotiated it.
+//
+// Keys are made at run time in scratch directories.
 //
 // =================================================================
 // Modification history (NereusSDR):
@@ -70,6 +82,24 @@
 //               slice per device, held slices and saved layouts. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-25: iPhone app plan Task 74 (R-IOS-02): the anchor passes
+//               with the C-Tune pin. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 76 (R-IOS-31): media and capacity
+//               per device. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
+//   2026-09-25: fix wave after the group review of Tasks 71 to 76: the
+//               harness comes from MultiDeviceHarness.h, one copy for every
+//               several-devices test. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
+//   2026-09-25: checkpoint join (R-IOS-02, R-IOS-27): slice.selectBand
+//               and notch.addAtSlice refused for another device's slice.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
+//   2026-09-25: checkpoint carry: the operator-local key refused is
+//               ExtendedTxAllowed, since RxOnly is a Core setting (gaps
+//               Task 16). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 //   2026-09-25: iPhone app plan Task 34 (R-IOS-02): the harness moved to
 //               StationMultiSessionHarness.h; who may transmit, the holder,
 //               a dropped holder, releases, tx.setTxSlice. J.J. Boyd
@@ -78,9 +108,239 @@
 //   2026-09-25: iPhone app plan Task 35 (R-IOS-13): a device's tx.key over
 //               the link takes transmit for every device to see. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26: merge of the trunk into the transmit lane: the transmit
+//               helpers come from MultiDeviceHarness.h too
+//               (latestCapabilityIf). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
-#include "StationMultiSessionHarness.h"
+#include "MultiDeviceHarness.h"
+
+#include <QtEndian>
+
+#include "core/daemon/DaemonTelemetryController.h"
+#include "core/session/PureSignalSessionFacade.h"
+#include "core/session/media/DaemonMediaController.h"
+#include "core/session/media/DisplayBudget.h"
+#include "core/session/media/DisplayLoadGovernor.h"
+#include "core/session/media/IMediaTransport.h"
+#include "core/session/media/SpectrumEndpoint.h"
+#include "models/Band.h"
+
+namespace {
+
+// ── Task 76: media per device ───────────────────────────────────────────
+
+// A media transport that records what it is given; ready on demand.
+class MediaFake final : public IMediaTransport {
+public:
+    explicit MediaFake(QObject* parent = nullptr) : IMediaTransport(parent) {}
+    bool start(const StartOptions& options) override
+    {
+        startOptions = options;
+        started = true;
+        return true;
+    }
+    void stop() override { started = readyState = false; }
+    bool acceptDescription(const QString&, const QString&) override { return true; }
+    bool acceptCandidate(const QString&, const QString&) override { return true; }
+    bool sendDisplay(const QByteArray& bytes) override
+    {
+        if (readyState) { displays.append(bytes); }
+        return readyState;
+    }
+    bool sendRtp(const QByteArray& packet) override
+    {
+        if (readyState) { rtpPackets.append(packet); }
+        return readyState;
+    }
+    bool isReady() const override { return readyState; }
+    bool losslessAudioNegotiated() const override { return true; }
+    void becomeReady() { readyState = true; emit ready(); }
+
+    bool started{false};
+    bool readyState{false};
+    StartOptions startOptions{Role::Answerer, 0};
+    QList<QByteArray> displays;
+    QList<QByteArray> rtpPackets;
+};
+
+constexpr char kMediaConnection[] = "11111111-2222-4333-8444-555555555555";
+
+void sendMedia(LoopbackTransport* app, const QJsonObject& payload)
+{
+    SessionMessage message;
+    message.kind = SessionMessageKind::MediaControl;
+    message.mediaPayload = payload;
+    app->sendText(SessionMessages::encode(message));
+}
+
+// Every media control `op` the Core sent `app`, in arrival order.
+QList<QJsonObject> mediaOps(const LoopbackTransport* app, const QString& op)
+{
+    QList<QJsonObject> out;
+    for (const QByteArray& wire : app->received()) {
+        SessionMessage message;
+        if (SessionMessages::decode(wire, &message)
+            && message.kind == SessionMessageKind::MediaControl
+            && message.mediaPayload.value(QStringLiteral("op")).toString() == op) {
+            out.append(message.mediaPayload);
+        }
+    }
+    return out;
+}
+
+// The last value of capability `name` the Core told `app`.
+QJsonValue latestCapability(const QList<QByteArray>& received, const QString& name)
+{
+    QJsonValue value;
+    for (const QJsonObject& caps : ofType(received, QStringLiteral("capabilities"))) {
+        for (const QJsonValue& p : caps.value(QStringLiteral("properties")).toArray()) {
+            if (p.toObject().value(QStringLiteral("name")).toString() == name) {
+                value = p.toObject().value(QStringLiteral("value"));
+            }
+        }
+    }
+    return value;
+}
+
+// The media start of an app that understands audio profiles and receiver
+// streams.
+QJsonObject mediaStart()
+{
+    return {{QStringLiteral("op"), QStringLiteral("start")},
+            {QStringLiteral("connectionId"), QLatin1String(kMediaConnection)},
+            {QStringLiteral("audioProfileVersion"), 1},
+            {QStringLiteral("receiverAudioVersion"), 1}};
+}
+
+QJsonObject spectrumPlane()
+{
+    return {{QStringLiteral("detector"), 0},
+            {QStringLiteral("averageMode"), -1},
+            {QStringLiteral("averageAlpha"), 0.0}};
+}
+
+QJsonObject displayRequest(quint32 endpointId, int sliceId, double centreHz);
+
+// displayRequest at `fps` frames a second (128 pixels, no wide plane).
+QJsonObject displayRequestAt(quint32 endpointId, int sliceId, double centreHz, int fps,
+                             quint32 revision = 1)
+{
+    QJsonObject request = displayRequest(endpointId, sliceId, centreHz);
+    request.insert(QStringLiteral("fps"), fps);
+    request.insert(QStringLiteral("revision"), static_cast<qint64>(revision));
+    return request;
+}
+
+QJsonObject displayRequest(quint32 endpointId, int sliceId, double centreHz)
+{
+    return {{QStringLiteral("op"), QStringLiteral("subscribe")},
+            {QStringLiteral("connectionId"), QLatin1String(kMediaConnection)},
+            {QStringLiteral("endpointId"), static_cast<qint64>(endpointId)},
+            {QStringLiteral("revision"), 1},
+            {QStringLiteral("sliceId"), sliceId},
+            {QStringLiteral("tier"), QStringLiteral("wide")},
+            {QStringLiteral("fftSize"), 1024},
+            {QStringLiteral("windowType"), 0},
+            {QStringLiteral("centreHz"), centreHz},
+            {QStringLiteral("spanHz"), 48000.0},
+            {QStringLiteral("pixels"), 128},
+            {QStringLiteral("fps"), 10},
+            {QStringLiteral("framesPerLine"), 1},
+            {QStringLiteral("trace"), spectrumPlane()},
+            {QStringLiteral("waterfall"), spectrumPlane()},
+            {QStringLiteral("minDbm"), -180.0},
+            {QStringLiteral("maxDbm"), 0.0},
+            {QStringLiteral("wideSpanFactor"), 0.0}};
+}
+
+// The left samples of an L16 packet (RTP header of 12 bytes, big-endian
+// 16-bit stereo), each as the float it was.
+QList<float> l16Left(const QByteArray& packet)
+{
+    QList<float> left;
+    for (qsizetype at = 12; at + 4 <= packet.size(); at += 4) {
+        left.append(static_cast<float>(qFromBigEndian<qint16>(packet.constData() + at))
+                    / 32768.0f);
+    }
+    return left;
+}
+
+// Two devices on one Core with media on and a hub making their media
+// controllers; A holds slice 0, B its own first slice.
+struct MediaCore {
+    Core core{/*upgradedWithToken=*/true};
+    Device a{QStringLiteral("iPhone"), QStringLiteral("phone")};
+    Device b{QStringLiteral("iPad"), QStringLiteral("tablet")};
+    QList<QPointer<MediaFake>> transports;
+    std::unique_ptr<DaemonMediaHub> hub;
+    LoopbackTransport* appA = nullptr;
+    LoopbackTransport* appB = nullptr;
+
+    explicit MediaCore(std::optional<DisplayBudgetLimits> budget = std::nullopt)
+    {
+        // Receivers for the slices, so displays have a stream to ride.
+        core.model->configureStreamPool(5, 5, 192000);
+        core.model->sliceById(0)->setFrequency(14200000.0);
+        core.server->setMediaEnabled(true);
+        core.server->setTelemetryEnabled(true);
+        if (budget) {
+            core.server->setDisplayBudgetLimits(*budget);
+        }
+        hub = std::make_unique<DaemonMediaHub>(
+            core.server.get(), core.model.get(), nullptr,
+            [this](QObject* parent) -> IMediaTransport* {
+                auto* transport = new MediaFake(parent);
+                transports.append(transport);
+                return transport;
+            });
+        core.pair(a);
+        core.pair(b);
+    }
+
+    ~MediaCore()
+    {
+        hub.reset();
+    }
+
+    void signInBoth()
+    {
+        appA = core.signIn(a);
+        QVERIFY(admitted(appA));
+        appB = core.signIn(b);
+        QVERIFY(admitted(appB));
+        QTRY_COMPARE(hub->controllerCount(), 2);
+    }
+
+    quint64 epochOf(int index) const { return core.server->mediaSessionEpochs().at(index); }
+
+    int sliceOf(quint64 epoch) const
+    {
+        for (const SliceModel* slice : core.model->slices()) {
+            if (core.server->mediaSessionOwnsSlice(epoch, slice->sliceIndex())) {
+                return slice->sliceIndex();
+            }
+        }
+        return -1;
+    }
+
+    // Starts `app`'s media and makes its transport (the next one made)
+    // ready.
+    MediaFake* startMedia(LoopbackTransport* app)
+    {
+        const qsizetype before = transports.size();
+        sendMedia(app, mediaStart());
+        if (!QTest::qWaitFor([this, before]() { return transports.size() > before; }, 5000)) {
+            return nullptr;
+        }
+        MediaFake* transport = transports.last();
+        transport->becomeReady();
+        return transport;
+    }
+};
+
+} // namespace
 
 class TstStationMultiSession : public QObject {
     Q_OBJECT
@@ -133,12 +393,14 @@ private slots:
             core.pair(devices[i]);
             QVERIFY(admitted(core.signIn(devices[i])));
         }
-        // Today's desktop: the token, no features.
-        verifyCoreFull(core.tokenSignIn());
+        // Today's desktop: the token, no features. Told to update or try
+        // later, since it cannot answer the fifth-device question.
+        QVERIFY(OperatorWording::isPlain(kOlderWindowCoreFull));
+        verifyCoreFull(core.tokenSignIn(), kOlderWindowCoreFull);
         // A window that signs in by key but predates the feature: the same.
         Device window(QStringLiteral("Shack Mac"), QStringLiteral("computer"));
         core.pair(window);
-        verifyCoreFull(core.signIn(window, {{"deviceAuth", 1}}));
+        verifyCoreFull(core.signIn(window, {{"deviceAuth", 1}}), kOlderWindowCoreFull);
     }
 
     void anAwayDeviceHoldsItsPlaceAgainstAFifth()
@@ -644,7 +906,7 @@ private slots:
         QVERIFY(caps.size() >= 2);
         QCOMPARE(capability(app->received(), QStringLiteral("txPermitted")).value_or(-1), 0);
         QTRY_VERIFY(txPermitted(app));
-        QCOMPARE(latestCapability(app->received(), QStringLiteral("remoteTxVersion"))->toInt(), 1);
+        QCOMPARE(latestCapabilityIf(app->received(), QStringLiteral("remoteTxVersion"))->toInt(), 1);
         int completeAt = -1;
         int resendAt = -1;
         for (int i = 0; i < app->received().size(); ++i) {
@@ -664,7 +926,7 @@ private slots:
         QVERIFY(admitted(oldApp));
         QTest::qWait(50);
         QVERIFY(!txPermitted(oldApp));
-        QVERIFY(!latestCapability(oldApp->received(), QStringLiteral("remoteTxVersion")).has_value());
+        QVERIFY(!latestCapabilityIf(oldApp->received(), QStringLiteral("remoteTxVersion")).has_value());
         QCOMPARE(countOfType(oldApp->received(), 0, QStringLiteral("capabilities")), 1);
     }
 
@@ -1071,16 +1333,34 @@ private slots:
                           QVariant(static_cast<int>(NbMode::NB))}},
             77)));
 
-        // A: its own answer, with the value the Core kept.
+        // A: the blanker is the shared receiver's, so B's slice there makes
+        // it a change that affects B (ruling 6.1, iPhone app Task 75): held
+        // and asked. Nothing changes until A goes ahead.
         QVERIFY(QTest::qWaitFor(
-            [appA]() { return !firstOfType(appA->received(), QStringLiteral("property.result")).isEmpty(); },
+            [appA]() { return !firstOfType(appA->received(), QStringLiteral("confirm.request")).isEmpty(); },
             5000));
-        const QJsonObject result = firstOfType(appA->received(), QStringLiteral("property.result"));
-        QCOMPARE(result.value(QStringLiteral("writeId")).toInteger(), 77);
-        const QJsonObject kept = result.value(QStringLiteral("results")).toArray().first().toObject();
-        QCOMPARE(kept.value(QStringLiteral("accepted")).toBool(false), true);
-        QCOMPARE(kept.value(QStringLiteral("value")).toObject().value(QStringLiteral("value")).toInt(),
-                 static_cast<int>(NbMode::NB));
+        const QJsonObject held = firstOfType(appA->received(), QStringLiteral("property.result"));
+        QCOMPARE(held.value(QStringLiteral("writeId")).toInteger(), 77);
+        QCOMPARE(held.value(QStringLiteral("results")).toArray().first().toObject()
+                     .value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("Waiting for you to confirm."));
+        QCOMPARE(core.model->sliceById(second)->nbMode(), NbMode::Off);
+        const QJsonObject question = firstOfType(appA->received(), QStringLiteral("confirm.request"));
+        QCOMPARE(question.value(QStringLiteral("kind")).toString(), QStringLiteral("sharedSetting"));
+        const QJsonObject proceeded = core.invoke(
+            appA, "confirm.proceed",
+            {int64("id", question.value(QStringLiteral("id")).toInteger()), int64("choice", -1)});
+        QCOMPARE(proceeded.value(QStringLiteral("accepted")).toBool(false), true);
+        // Its readback, with the value the Core kept (ruling 7.4a).
+        bool readBack = false;
+        for (const QJsonValue& v : proceeded.value(QStringLiteral("values")).toArray()) {
+            if (v.toObject().value(QStringLiteral("name")).toString() == QStringLiteral("nbMode")) {
+                QCOMPARE(v.toObject().value(QStringLiteral("value")).toInt(),
+                         static_cast<int>(NbMode::NB));
+                readBack = true;
+            }
+        }
+        QVERIFY(readBack);
         QCOMPARE(core.model->sliceById(second)->nbMode(), NbMode::NB);
 
         // B: A's two slices are A's (Task 73), so B never sees them; the
@@ -1099,6 +1379,8 @@ private slots:
         QVERIFY(!everSaw(appB, QStringLiteral("slice:0")));
         QVERIFY(!everSaw(appB, sharedKey));
         QCOMPARE(countOfType(appB->received(), fromB, QStringLiteral("property.result")), 0);
+        // B is told who changed what.
+        QTRY_COMPARE(countOfType(appB->received(), fromB, QStringLiteral("notice")), 1);
 
         // A: no echo of its own write, on either slice, over several flushes.
         QTest::qWait(3 * StationServer::kDefaultDeltaFlushMs);
@@ -1187,8 +1469,9 @@ private slots:
         QCOMPARE(sawValue(appA).value(QStringLiteral("origin")).toString(), QStringLiteral("origin-a"));
         QCOMPARE(sawValue(appB).value(QStringLiteral("origin")).toString(), QStringLiteral("origin-a"));
         // settings.reject: an operator-local key, refused to A only.
+        // (RxOnly became a Core setting with the gaps lane's Task 16.)
         appA->sendText(SessionMessages::encode(SessionMessages::settingsWrite(
-            QStringLiteral("RxOnly"), QStringLiteral("True"), QStringLiteral("origin-a"))));
+            QStringLiteral("ExtendedTxAllowed"), QStringLiteral("True"), QStringLiteral("origin-a"))));
         QVERIFY(QTest::qWaitFor(
             [appA]() { return !firstOfType(appA->received(), QStringLiteral("settings.reject")).isEmpty(); },
             5000));
@@ -1204,6 +1487,47 @@ private slots:
         QCOMPARE(countOfType(appB->received(), fromB, QStringLiteral("command.result")), 0);
         QCOMPARE(countOfType(appB->received(), fromB, QStringLiteral("property.result")), 0);
         QCOMPARE(countOfType(appB->received(), fromB, QStringLiteral("settings.reject")), 0);
+    }
+
+    // Fix wave I1: every client counts its command ids from 1, so two
+    // devices use the same id at once. A result that arrives on a later
+    // turn (the sample rate is the dispatcher's asynchronous verb) goes to
+    // the session that asked, once, never to the other.
+    void aLaterResultGoesToItsOwnDeviceWhenTwoUseTheSameCommandId()
+    {
+        Core core;
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a);
+        LoopbackTransport* appB = core.signIn(b);
+        QVERIFY(admitted(appA));
+        QVERIFY(admitted(appB));
+        const int aSlice = core.model->sliceOwnership()->ownedBy(a.key.fingerprint()).first();
+        const int bSlice = core.model->sliceOwnership()->ownedBy(b.key.fingerprint()).first();
+        const quint32 sameId = 4242;
+        // Both sent before the Core's event loop runs either rate change.
+        appA->sendText(SessionMessages::encode(SessionMessages::commandInvoke(
+            "requestSliceSampleRate", sameId, {int64("sliceId", aSlice), int64("rateHz", 96000)})));
+        appB->sendText(SessionMessages::encode(SessionMessages::commandInvoke(
+            "requestSliceSampleRate", sameId, {int64("sliceId", bSlice), int64("rateHz", 96000)})));
+        const auto resultsFor = [sameId](const LoopbackTransport* app) {
+            QList<QJsonObject> out;
+            for (const QJsonObject& o : ofType(app->received(), QStringLiteral("command.result"))) {
+                if (o.value(QStringLiteral("id")).toInteger() == sameId) {
+                    out.append(o);
+                }
+            }
+            return out;
+        };
+        QTRY_VERIFY(!resultsFor(appA).isEmpty() && !resultsFor(appB).isEmpty());
+        QTest::qWait(2 * StationServer::kDefaultDeltaFlushMs);
+        QCOMPARE(resultsFor(appA).size(), 1);
+        QCOMPARE(resultsFor(appB).size(), 1);
+        QVERIFY2(resultsFor(appA).first().value(QStringLiteral("accepted")).toBool(false),
+                 QJsonDocument(resultsFor(appA).first()).toJson().constData());
+        QVERIFY(resultsFor(appB).first().value(QStringLiteral("accepted")).toBool(false));
     }
 
     // ── Slice ownership (Task 73) ────────────────────────────────────────
@@ -1261,7 +1585,21 @@ private slots:
             {"nnr.tryAgain", {int64("sliceId", 0)}},
             {"nnr.setDiagnostics", {int64("sliceId", 0), int64("testMode", 1), int64("outputMode", 1)}},
             {"notch.add", {int64("sliceId", 0), f64("centreHz", frequency + 500.0), f64("widthHz", 100.0)}},
+            // Fix wave C1 (ruling 5.9): the three verbs that are routes on
+            // a device's own slice are refusals on another's, with no
+            // receiver in use yet.
+            {"requestSliceSampleRate", {int64("sliceId", 0), int64("rateHz", 96000)}},
+            {"requestStreamCentre", {int64("sliceId", 0), f64("centreHz", frequency + 1000.0)}},
+            {"requestStreamCtunPinned",
+             {int64("sliceId", 0), MirrorUpdate{0, "pinned", MirrorWireKind::Bool, true}}},
+            // The checkpoint join: the band buttons and +TNF on a slice.
+            {"slice.selectBand",
+             {int64("sliceId", 0),
+              int64("band", static_cast<int>(hers->band() == Band::Band40m ? Band::Band20m
+                                                                          : Band::Band40m))}},
+            {"notch.addAtSlice", {int64("sliceId", 0)}},
         };
+        const Band band = hers->band();
         const int notches = static_cast<int>(core.model->notchModel()->notches().size());
         for (const auto& verb : verbs) {
             const QJsonObject refused = core.invoke(appB, verb.first, verb.second);
@@ -1270,6 +1608,8 @@ private slots:
         }
         QVERIFY(core.model->sliceById(0) == hers);
         QVERIFY(hers->isActive());
+        QCOMPARE(hers->band(), band);
+        QCOMPARE(hers->frequency(), frequency);
         QCOMPARE(static_cast<int>(core.model->notchModel()->notches().size()), notches);
         QCOMPARE(core.model->activeSlice(), hers);
 
@@ -1280,6 +1620,171 @@ private slots:
                  true);
         // And never saw A's.
         QVERIFY(!everSaw(appB, QStringLiteral("slice:0")));
+    }
+
+    // Fix wave I3: a slice's own settings keys (Slice<N>/...) are written
+    // or removed only by slice N's owner; anyone else is refused with the
+    // foreign-slice reason and nothing is stored. (Its NNR keys under
+    // hardware/<mac>/slices/<N>/ are model-owned, refused to everyone.)
+    void aSlicesSettingsKeysAreWrittenOrRemovedOnlyByItsOwner()
+    {
+        Core core;
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a);
+        LoopbackTransport* appB = core.signIn(b);
+        QVERIFY(admitted(appA));
+        QVERIFY(admitted(appB));
+        QCOMPARE(core.model->sliceOwnership()->mark(0).owner, a.key.fingerprint());
+        const int own = core.model->sliceOwnership()->ownedBy(b.key.fingerprint()).first();
+        const QString sliceKey = QStringLiteral("Slice0/AfGain");
+        core.settings->setValue(sliceKey, QStringLiteral("17"));
+        const QString reason = ownedElsewhere(QStringLiteral("iPhone"));
+        const auto rejectFor = [appB](const QString& key) {
+            for (const QJsonObject& o : ofType(appB->received(), QStringLiteral("settings.reject"))) {
+                if (o.value(QStringLiteral("key")).toString() == key) {
+                    return o;
+                }
+            }
+            return QJsonObject{};
+        };
+
+        appB->sendText(SessionMessages::encode(
+            SessionMessages::settingsWrite(sliceKey, QStringLiteral("5"), QStringLiteral("b-1"))));
+        QTRY_VERIFY(!rejectFor(sliceKey).isEmpty());
+        QCOMPARE(rejectFor(sliceKey).value(QStringLiteral("reason")).toString(), reason);
+        QCOMPARE(core.settings->value(sliceKey).toString(), QStringLiteral("17"));
+        const int rejectsBefore = static_cast<int>(ofType(appB->received(),
+                                                          QStringLiteral("settings.reject")).size());
+        appB->sendText(SessionMessages::encode(SessionMessages::settingsRemove(sliceKey)));
+        QTRY_VERIFY(ofType(appB->received(), QStringLiteral("settings.reject")).size() > rejectsBefore);
+        QCOMPARE(ofType(appB->received(), QStringLiteral("settings.reject")).last()
+                     .value(QStringLiteral("reason")).toString(),
+                 reason);
+        QCOMPARE(core.settings->value(sliceKey).toString(), QStringLiteral("17"));
+        // A slice that is not live has no owner: its keys, which would
+        // seed the next slice under that id, are nobody's to write.
+        const QString unusedKey = QStringLiteral("Slice4/AfGain");
+        QVERIFY(!core.model->sliceOwnership()->isLive(4));
+        appB->sendText(SessionMessages::encode(
+            SessionMessages::settingsWrite(unusedKey, QStringLiteral("3"), QStringLiteral("b-3"))));
+        QTRY_VERIFY(!rejectFor(unusedKey).isEmpty());
+        QVERIFY(!core.settings->contains(unusedKey));
+
+        // Its own slice's keys, and A its own, are written as before.
+        const QString ownKey = QStringLiteral("Slice%1/AfGain").arg(own);
+        appB->sendText(SessionMessages::encode(
+            SessionMessages::settingsWrite(ownKey, QStringLiteral("9"), QStringLiteral("b-2"))));
+        QTRY_COMPARE(core.settings->value(ownKey).toString(), QStringLiteral("9"));
+        appA->sendText(SessionMessages::encode(
+            SessionMessages::settingsWrite(sliceKey, QStringLiteral("21"), QStringLiteral("a-1"))));
+        QTRY_COMPARE(core.settings->value(sliceKey).toString(), QStringLiteral("21"));
+        QVERIFY(rejectFor(ownKey).isEmpty());
+    }
+
+    // Fix wave C1 (ruling 5.9): a sample rate, a C-Tune centre or pin
+    // naming another device's slice, a slice nobody owns, or a slice held
+    // for a device, is refused with the foreign-slice reason whatever the
+    // receivers are, and neither the rate nor the window moves.
+    void rateCentreAndPinOnASliceNotTheRequestersAreRefused()
+    {
+        Core core;
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        Device c(QStringLiteral("MacBook"), QStringLiteral("computer"));
+        core.pair(a);
+        core.pair(b);
+        core.pair(c);
+        core.model->configureStreamPool(5, 5, 192000);
+        core.model->sliceById(0)->setFrequency(14200000.0);
+        // A signs in and leaves: its slice is held for it.
+        LoopbackTransport* appA = core.signIn(a);
+        QVERIFY(admitted(appA));
+        QVERIFY(core.invoke(appA, "session.leave").value(QStringLiteral("accepted")).toBool());
+        QTRY_VERIFY(!appA->isOpen());
+        QCOMPARE(core.model->sliceOwnership()->mark(0).heldFor, a.key.fingerprint());
+        LoopbackTransport* appB = core.signIn(b);
+        LoopbackTransport* appC = core.signIn(c);
+        QVERIFY(admitted(appB));
+        QVERIFY(admitted(appC));
+        const int bSlice = core.model->sliceOwnership()->ownedBy(b.key.fingerprint()).first();
+        // A slice the Core makes with several devices on it is nobody's.
+        const int nobodys = core.model->addSlice(QStringLiteral("pan-0"));
+        QVERIFY(nobodys >= 0);
+        QVERIFY(core.model->sliceOwnership()->mark(nobodys).owner.isEmpty());
+        QVERIFY(core.model->streamAllocator().streamCount() > 0);
+
+        const QList<QPair<int, QString>> targets{
+            {bSlice, ownedElsewhere(QStringLiteral("iPad"))},
+            {0, ownedElsewhere(QStringLiteral("iPhone"))},
+            {nobodys, QStringLiteral("That slice belongs to the Core. It can be changed only there.")},
+        };
+        for (const auto& target : targets) {
+            SliceModel* slice = core.model->sliceById(target.first);
+            QVERIFY(slice != nullptr);
+            const int stream = slice->streamIndex();
+            const int rate = slice->sampleRateHz();
+            const double centre = stream >= 0 ? core.model->streamAllocator().streamCentreHz(stream)
+                                              : 0.0;
+            const QList<QPair<QByteArray, QList<MirrorUpdate>>> verbs{
+                {"requestSliceSampleRate", {int64("sliceId", target.first), int64("rateHz", 96000)}},
+                {"requestStreamCentre",
+                 {int64("sliceId", target.first), f64("centreHz", slice->frequency() + 1000.0)}},
+                {"requestStreamCtunPinned",
+                 {int64("sliceId", target.first),
+                  MirrorUpdate{0, "pinned", MirrorWireKind::Bool, true}}},
+            };
+            for (const auto& verb : verbs) {
+                const QJsonObject refused = core.invoke(appC, verb.first, verb.second);
+                QVERIFY2(!refused.value(QStringLiteral("accepted")).toBool(true),
+                         verb.first.constData());
+                QCOMPARE(refused.value(QStringLiteral("reason")).toString(), target.second);
+            }
+            // Nothing a later turn of the event loop could apply either.
+            QTest::qWait(50);
+            QCOMPARE(slice->sampleRateHz(), rate);
+            if (stream >= 0) {
+                QCOMPARE(core.model->streamAllocator().streamCentreHz(stream), centre);
+            }
+        }
+    }
+
+    // Fix wave 2 (re-review Minor 1): C1's refusal with no receivers in
+    // use: the rate, the C-Tune centre and the pin on another device's
+    // slice are refused with the foreign-slice reason, and nothing moves.
+    void rateCentreAndPinOnAnotherDevicesSliceAreRefusedWithNoReceiversInUse()
+    {
+        Core core;
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a);
+        LoopbackTransport* appB = core.signIn(b);
+        QVERIFY(admitted(appA));
+        QVERIFY(admitted(appB));
+        QVERIFY(core.model->streamAllocator().streamCount() <= 0);
+        QCOMPARE(core.model->sliceOwnership()->mark(0).owner, a.key.fingerprint());
+        SliceModel* slice = core.model->sliceById(0);
+        QVERIFY(slice != nullptr);
+        const int rate = slice->sampleRateHz();
+        const QList<QPair<QByteArray, QList<MirrorUpdate>>> verbs{
+            {"requestSliceSampleRate", {int64("sliceId", 0), int64("rateHz", 96000)}},
+            {"requestStreamCentre", {int64("sliceId", 0), f64("centreHz", slice->frequency() + 1000.0)}},
+            {"requestStreamCtunPinned",
+             {int64("sliceId", 0), MirrorUpdate{0, "pinned", MirrorWireKind::Bool, true}}},
+        };
+        for (const auto& verb : verbs) {
+            const QJsonObject refused = core.invoke(appB, verb.first, verb.second);
+            QVERIFY2(!refused.value(QStringLiteral("accepted")).toBool(true), verb.first.constData());
+            QCOMPARE(refused.value(QStringLiteral("reason")).toString(),
+                     ownedElsewhere(QStringLiteral("iPhone")));
+        }
+        QTest::qWait(50);
+        QCOMPARE(slice->sampleRateHz(), rate);
+        QVERIFY(!slice->streamCtunPinned());
     }
 
     // Each device receives its own slices and a marker for every other.
@@ -1447,6 +1952,19 @@ private slots:
         QCOMPARE(core.model->freedvWantedFrequencyHzForTest(), quint64(7076000));
         QCOMPARE(activeOwn(appA), 1);
         QCOMPARE(activeOwn(appB), 1);
+
+        // Fix wave (ruling 5.11): a slice in RADE mode is the one the FreeDV
+        // Reporter lists, whoever's active slice leads; retuning it moves
+        // the listing even though it is not the active one, and the
+        // station-level slice leads again once no slice is in RADE.
+        core.model->sliceById(2)->setDspMode(DSPMode::RADE_U);
+        QCOMPARE(core.model->freedvWantedFrequencyHzForTest(), quint64(21074000));
+        core.model->sliceById(2)->setFrequency(14236000.0);
+        QCOMPARE(core.model->freedvWantedFrequencyHzForTest(), quint64(14236000));
+        core.model->sliceById(1)->setFrequency(7078000.0);
+        QCOMPARE(core.model->freedvWantedFrequencyHzForTest(), quint64(14236000));
+        core.model->sliceById(2)->setDspMode(DSPMode::USB);
+        QCOMPARE(core.model->freedvWantedFrequencyHzForTest(), quint64(7078000));
     }
 
     // Where a device's slices come from, and where they go (ruling 5.2,
@@ -1491,6 +2009,76 @@ private slots:
         QCOMPARE(core.model->slices().size(), full);
         QVERIFY(heldKeys(appC, QStringLiteral("slice:")).isEmpty());
         QCOMPARE(heldKeys(appC, QStringLiteral("marker:")).size(), full);
+    }
+
+    // Fix wave I4 (ruling 5.12): a pan is a device plus a pan key. B's
+    // first slice on a pan key A also uses ("pan-x") opens B's own pan and
+    // claims a receiver of its own; B's second slice there is on B's pan,
+    // and costs nothing more.
+    void aPanIsADeviceAndAPanKey()
+    {
+        Core core;
+        core.model->configureStreamPool(4, 5, 192000);
+        core.model->sliceById(0)->setFrequency(14200000.0);
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a);
+        QVERIFY(admitted(appA));
+        QVERIFY(core.invoke(appA, "addSliceOnPan", {utf8("panId", QStringLiteral("pan-x"))})
+                    .value(QStringLiteral("accepted")).toBool());
+        LoopbackTransport* appB = core.signIn(b);
+        QVERIFY(admitted(appB));
+        const int before = receiversInUse(*core.model);
+        QVERIFY(!core.model->slicesOnPan(QStringLiteral("pan-x")).isEmpty());
+
+        const QJsonObject opened =
+            core.invoke(appB, "addSliceOnPan", {utf8("panId", QStringLiteral("pan-x"))});
+        QVERIFY2(opened.value(QStringLiteral("accepted")).toBool(false),
+                 qPrintable(opened.value(QStringLiteral("reason")).toString()));
+        const int bPan = opened.value(QStringLiteral("affected")).toArray().first().toString()
+                             .mid(6).toInt();
+        QCOMPARE(core.model->sliceOwnership()->mark(bPan).owner, b.key.fingerprint());
+        const int bStream = core.model->sliceById(bPan)->streamIndex();
+        QVERIFY(bStream >= 0);
+        // A receiver of its own: no other slice is on it.
+        QCOMPARE(core.model->slicesOnStream(bStream), QVector<int>{bPan});
+        QCOMPARE(receiversInUse(*core.model), before + 1);
+
+        // B's second slice on its own pan-x joins B's pan, no new receiver.
+        const QJsonObject joined =
+            core.invoke(appB, "addSliceOnPan", {utf8("panId", QStringLiteral("pan-x"))});
+        QVERIFY(joined.value(QStringLiteral("accepted")).toBool(false));
+        QCOMPARE(receiversInUse(*core.model), before + 1);
+    }
+
+    // Fix wave I4 (ruling 5.12): the Core mirrors no pans. Its model holds
+    // no PanadapterModel (only RadioModel::addPanadapter makes one, and no
+    // Core or window path calls it), so no device is sent a `pan:<i>` and a
+    // write to one changes nothing.
+    void theCoreMirrorsNoPansAndAPanWriteChangesNothing()
+    {
+        Core core;
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a);
+        LoopbackTransport* appB = core.signIn(b);
+        QVERIFY(admitted(appA));
+        QVERIFY(admitted(appB));
+        QVERIFY(core.model->panadapters().isEmpty());
+        appB->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+            "pan:0", {f64("centerFrequency", 7074000.0)}, 611)));
+        QTRY_VERIFY(!propertyResult(appB, 611).isEmpty());
+        const QJsonObject refused =
+            propertyResult(appB, 611).value(QStringLiteral("results")).toArray().first().toObject();
+        QCOMPARE(refused.value(QStringLiteral("accepted")).toBool(true), false);
+        QVERIFY(core.model->panadapters().isEmpty());
+        QTest::qWait(2 * StationServer::kDefaultDeltaFlushMs);
+        QVERIFY(heldKeys(appA, QStringLiteral("pan:")).isEmpty());
+        QVERIFY(heldKeys(appB, QStringLiteral("pan:")).isEmpty());
     }
 
     void theLastDeviceLeavingPassesItsSlicesToTheStationHeldForIt()
@@ -1805,6 +2393,77 @@ private slots:
         }));
     }
 
+    // iPhone app Task 74 (ruling 6.2): the anchor passes to the device whose
+    // slice has been on the receiver longest when the anchor's last slice
+    // leaves it, and with it the C-Tune pin (ruling 6.3); nobody is asked
+    // or told.
+    void theAnchorPassesWithThePinWhenItsLastSliceLeaves()
+    {
+        Core core;
+        core.model->configureStreamPool(2, 5, 192000);
+        core.model->sliceById(0)->setFrequency(7074000.0);
+        Device a;
+        Device b(QStringLiteral("iPad"), QStringLiteral("tablet"));
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a);
+        LoopbackTransport* appB = core.signIn(b);
+        QVERIFY(admitted(appA));
+        QVERIFY(admitted(appB));
+        const int receiver = core.model->sliceById(0)->streamIndex();
+        QCOMPARE(core.model->sliceById(1)->streamIndex(), receiver);
+        QCOMPARE(core.model->sliceOwnership()->anchorOf(receiver), a.key.fingerprint());
+        const MirrorUpdate pin{0, "pinned", MirrorWireKind::Bool, true};
+        QCOMPARE(core.invoke(appB, "requestStreamCtunPinned", {int64("sliceId", 1), pin})
+                     .value(QStringLiteral("accepted")).toBool(true),
+                 false);
+        // A's slice leaves for 20 m, a receiver of its own.
+        core.model->sliceById(0)->setFrequency(14074000.0);
+        QVERIFY(core.model->sliceById(0)->streamIndex() != receiver);
+        QCOMPARE(core.model->sliceOwnership()->anchorOf(receiver), b.key.fingerprint());
+        QCOMPARE(core.invoke(appB, "requestStreamCtunPinned", {int64("sliceId", 1), pin})
+                     .value(QStringLiteral("accepted")).toBool(false),
+                 true);
+        QVERIFY(!appA->receivedKinds().contains(QByteArrayLiteral("confirm.request")));
+        QVERIFY(!appB->receivedKinds().contains(QByteArrayLiteral("notice")));
+    }
+
+    // Fix wave (ruling 4.8 keeps a device's pans): a device's C-Tune pin
+    // survives its link dropping, its media ending with it, and its coming
+    // back as the same device; it ends when the device leaves for good.
+    void aDevicesPinSurvivesItsReturnAndEndsWhenItLeaves()
+    {
+        MediaCore m;
+        m.appA = m.core.signIn(m.a);
+        QVERIFY(admitted(m.appA));
+        QTRY_COMPARE(m.hub->controllerCount(), 1);
+        QVERIFY(m.startMedia(m.appA) != nullptr);
+        QTRY_COMPARE(m.core.server->mediaSessionEpochs().size(), 1);
+        const SliceModel* slice = m.core.model->sliceById(0);
+        QVERIFY(slice->streamIndex() >= 0);
+        QCOMPARE(m.core.model->sliceOwnership()->anchorOf(slice->streamIndex()),
+                 m.a.key.fingerprint());
+        const MirrorUpdate pin{0, "pinned", MirrorWireKind::Bool, true};
+        QVERIFY(m.core.invoke(m.appA, "requestStreamCtunPinned", {int64("sliceId", 0), pin})
+                    .value(QStringLiteral("accepted")).toBool(false));
+        QVERIFY(slice->streamCtunPinned());
+
+        // The link drops: A is away, its media has ended, the pin stays.
+        m.appA->closeLink(QStringLiteral("the link dropped"));
+        QTRY_VERIFY(m.core.server->mediaSessionEpochs().isEmpty());
+        QVERIFY(m.core.model->sliceById(0)->streamCtunPinned());
+
+        // A back as the same device: its pin is as it left it.
+        LoopbackTransport* back = m.core.signIn(m.a);
+        QVERIFY(admitted(back));
+        QVERIFY(m.core.model->sliceById(0)->streamCtunPinned());
+
+        // A leaves for good: the pin ends.
+        m.core.invoke(back, "session.leave");
+        QTRY_VERIFY(!back->isOpen());
+        QVERIFY(!m.core.model->sliceById(0)->streamCtunPinned());
+    }
+
     void aDspAssetJobEndsWithItsOwnDeviceOnly()
     {
         Core core;
@@ -1859,6 +2518,913 @@ private slots:
         QVERIFY(QTest::qWaitFor([&core]() { return core.server->authenticatedSessionCount() == 0; },
                                 5000));
         QVERIFY(!store->appendImport(jobA, QByteArray("x")));
+    }
+
+    // ── Task 76: media and capacity per device ─────────────────────────
+
+    // Each device's capabilities carry its own share of the Core's display
+    // budget, its own generation and its own reason: sharedConnection
+    // while another device is admitted, sharedProcessing under the
+    // governor's cut, and alone again the total's own reason. A device that
+    // did not declare sessionHolder hears coreBusy or none instead.
+    // Task 76 (ruling 9.3, design ruling 9.3a) and fix wave 2 (Important
+    // 3): each device asks for what it wants (here a pan wider than the
+    // Core grants, so each is admitted while its request stays above half
+    // the samples). While a device's share is below its request and another
+    // device is admitted, its reason is sharedConnection, or
+    // sharedProcessing under the governor's cut; alone it hears none or
+    // coreBusy.
+    void eachDeviceGetsItsOwnShareOfTheDisplayBudget()
+    {
+        MediaCore m(DisplayBudgetLimits{1'000'000, 100'000, 5});
+        m.appA = m.core.signIn(m.a);
+        QVERIFY(admitted(m.appA));
+        const QList<QByteArray> aloneA = m.appA->received();
+        QCOMPARE(latestCapability(aloneA, QStringLiteral("remoteMediaVersion")).toInteger(), 1);
+        QCOMPARE(latestCapability(aloneA, QStringLiteral("displayApplicationBytesPerSecond"))
+                     .toInteger(), 1'000'000);
+        QCOMPARE(latestCapability(aloneA, QStringLiteral("displayBudgetGeneration")).toInteger(), 5);
+        QCOMPARE(latestCapability(aloneA, QStringLiteral("displayBudgetReason")).toString(),
+                 QStringLiteral("none"));
+        // Each asks for 512 pixels at 60 frames a second over a window its
+        // 4096-bin engine gives 1024 bins, so all 512 are carried (fix wave
+        // 3: a request counts only the pixels its window can carry; at the
+        // 1024-bin engine's 256 bins it would ask for half): 61'440 samples
+        // a second, more
+        // than half the total's 100'000. The first is admitted whole; the
+        // second, over its half, is refused for the budget and still asked
+        // for (its request is held while it may ask again).
+        const auto wants = [&m](LoopbackTransport* app, quint64 epoch, bool fits = true) {
+            const int slice = m.sliceOf(epoch);
+            const double centre =
+                m.core.model->streamCentreHz(m.core.model->sliceById(slice)->streamIndex());
+            QJsonObject request = displayRequestAt(1, slice, centre, 60);
+            request.insert(QStringLiteral("fftSize"), 4096);
+            request.insert(QStringLiteral("pixels"), 512);
+            sendMedia(app, request);
+            QTRY_COMPARE(mediaOps(app, QStringLiteral("allocation-result")).size(), 1);
+            const QJsonObject result = mediaOps(app, QStringLiteral("allocation-result")).last();
+            QCOMPARE(result.value(QStringLiteral("accepted")).toBool(!fits), fits);
+            if (!fits) {
+                QCOMPARE(result.value(QStringLiteral("reason")).toString(),
+                         QString::fromLatin1(kDisplayBudgetRefusalReason));
+            }
+        };
+        QVERIFY(m.startMedia(m.appA));
+        wants(m.appA, m.epochOf(0));
+        // Alone it has the whole total and the total's own reason.
+        QCOMPARE(latestCapability(m.appA->received(), QStringLiteral("displayBudgetReason"))
+                     .toString(), QStringLiteral("none"));
+        QCOMPARE(latestCapability(m.appA->received(), QStringLiteral("displayBudgetGeneration"))
+                     .toInteger(), 5);
+
+        m.appB = m.core.signIn(m.b);
+        QVERIFY(admitted(m.appB));
+        QTRY_COMPARE(m.hub->controllerCount(), 2);
+        QCOMPARE(latestCapability(m.appB->received(), QStringLiteral("remoteMediaVersion"))
+                     .toInteger(), 1);
+        QVERIFY(m.startMedia(m.appB));
+        wants(m.appB, m.epochOf(1), false);
+        // Both ask for more than half: equal halves, each told the
+        // connection is shared.
+        for (LoopbackTransport* app : {m.appA, m.appB}) {
+            QTRY_COMPARE(latestCapability(app->received(),
+                                          QStringLiteral("spectrumSampleUnitsPerSecond"))
+                             .toInteger(), 50'000);
+            QCOMPARE(latestCapability(app->received(),
+                                      QStringLiteral("displayApplicationBytesPerSecond"))
+                         .toInteger(), 500'000);
+            QCOMPARE(latestCapability(app->received(), QStringLiteral("displayBudgetReason"))
+                         .toString(), QStringLiteral("sharedConnection"));
+        }
+        // A is told its new share with a new generation.
+        QVERIFY(latestCapability(m.appA->received(), QStringLiteral("displayBudgetGeneration"))
+                    .toInteger() > 5);
+
+        // The governor cuts the total: sharedProcessing, each half of it.
+        QVERIFY(m.core.server->setDisplayBudgetLimits(DisplayBudgetLimits{500'000, 50'000, 7},
+                                                      DisplayBudgetReason::CoreBusy));
+        QTRY_COMPARE(latestCapability(m.appA->received(), QStringLiteral("displayBudgetReason"))
+                         .toString(), QStringLiteral("sharedProcessing"));
+        QCOMPARE(latestCapability(m.appB->received(), QStringLiteral("displayBudgetReason"))
+                     .toString(), QStringLiteral("sharedProcessing"));
+        QCOMPARE(latestCapability(m.appB->received(),
+                                  QStringLiteral("displayApplicationBytesPerSecond")).toInteger(),
+                 250'000);
+
+        // B leaves: A alone again, the whole cut total and the total's own
+        // reason, with a newer generation.
+        const qint64 generationBefore =
+            latestCapability(m.appA->received(), QStringLiteral("displayBudgetGeneration"))
+                .toInteger();
+        QVERIFY(m.core.invoke(m.appB, "session.leave").value(QStringLiteral("accepted")).toBool());
+        QTRY_COMPARE(m.hub->controllerCount(), 1);
+        QTRY_COMPARE(latestCapability(m.appA->received(),
+                                      QStringLiteral("displayApplicationBytesPerSecond"))
+                         .toInteger(), 500'000);
+        QCOMPARE(latestCapability(m.appA->received(), QStringLiteral("displayBudgetReason"))
+                     .toString(), QStringLiteral("coreBusy"));
+        QVERIFY(latestCapability(m.appA->received(), QStringLiteral("displayBudgetGeneration"))
+                    .toInteger() > generationBefore);
+
+        // An older window beside A: A, short of its request, hears
+        // sharedProcessing; the older window, which asks for no display yet
+        // and has its one useful pan, hears the reason it knows (coreBusy
+        // under the cut).
+        LoopbackTransport* older = m.core.tokenSignIn();
+        QVERIFY(admitted(older));
+        QTRY_COMPARE(latestCapability(m.appA->received(), QStringLiteral("displayBudgetReason"))
+                         .toString(), QStringLiteral("sharedProcessing"));
+        QCOMPARE(latestCapability(older->received(), QStringLiteral("displayBudgetReason"))
+                     .toString(), QStringLiteral("coreBusy"));
+        const DisplayBudgetCharge floorPan = DisplayLoadGovernor::floorPanCharge();
+        QVERIFY(static_cast<quint64>(latestCapability(older->received(),
+                                                      QStringLiteral("spectrumSampleUnitsPerSecond"))
+                                         .toInteger())
+                >= floorPan.spectrumSampleUnitsPerSecond);
+        QTRY_COMPARE(latestCapability(m.appA->received(),
+                                      QStringLiteral("spectrumSampleUnitsPerSecond"))
+                         .toInteger(),
+                     static_cast<qint64>(50'000 - floorPan.spectrumSampleUnitsPerSecond));
+    }
+
+    // Fix wave I5 (ruling 9.3): each device's request is its demand, the
+    // charges of its displays as subscribed (a display refused for the
+    // budget included), not what it was granted, and (fix wave 2, Critical
+    // 1) at least one useful pan. A sound-only device and a one-pan device
+    // beside a four-pan device each get what they ask for, and the rest
+    // goes max-min fair to the four-pan device. The link cannot tell the
+    // sound-only device from one that has not subscribed yet, so it keeps
+    // the floor of one useful pan.
+    // Fix wave 3 (the re-review's third out-of-scope item): a device's
+    // request counts the pixels its window can carry (the source bins the
+    // grant clamps to), not more. B asks for 1024 pixels over a window
+    // whose bins are far fewer; it is fully served, hears none, and A has
+    // the rest.
+    void aDevicesRequestCountsOnlyThePixelsItsWindowCanCarry()
+    {
+        const DisplayBudgetCharge p = spectrumDisplayCost(128, 60, false)->charge;
+        const DisplayBudgetCharge f = DisplayLoadGovernor::floorPanCharge();
+        const DisplayBudgetCharge wide = spectrumDisplayCost(1024, 60, false)->charge;
+        const DisplayBudgetLimits total{f.applicationBytesPerSecond + 5 * p.applicationBytesPerSecond,
+                                        f.spectrumSampleUnitsPerSecond
+                                            + 5 * p.spectrumSampleUnitsPerSecond,
+                                        1};
+        // Asked for as 1024 pixels, B's pan would want more than half.
+        QVERIFY(2 * wide.spectrumSampleUnitsPerSecond > total.spectrumSampleUnitsPerSecond);
+        MediaCore m(total);
+        m.signInBoth();
+        QTRY_COMPARE(m.hub->controllerCount(), 2);
+        const int sliceA = m.sliceOf(m.epochOf(0));
+        const int sliceB = m.sliceOf(m.epochOf(1));
+        const double centre =
+            m.core.model->streamCentreHz(m.core.model->sliceById(sliceA)->streamIndex());
+        QVERIFY(m.startMedia(m.appA));
+        QVERIFY(m.startMedia(m.appB));
+
+        QJsonObject many = displayRequestAt(1, sliceB, centre, 60);
+        many.insert(QStringLiteral("pixels"), 1024);
+        sendMedia(m.appB, many);
+        QTRY_COMPARE(mediaOps(m.appB, QStringLiteral("allocation-result")).size(), 1);
+        QVERIFY(mediaOps(m.appB, QStringLiteral("allocation-result")).last()
+                    .value(QStringLiteral("accepted")).toBool());
+        for (quint32 endpoint = 1; endpoint <= 4; ++endpoint) {
+            sendMedia(m.appA, displayRequestAt(endpoint, sliceA, centre, 60));
+        }
+        QTRY_COMPARE(mediaOps(m.appA, QStringLiteral("allocation-result")).size(), 4);
+
+        const auto share = [](const LoopbackTransport* app, const char* name) {
+            return static_cast<quint64>(
+                latestCapability(app->received(), QString::fromLatin1(name)).toInteger());
+        };
+        // B is given what its window can carry, below half the total, and
+        // is told nothing is short.
+        QTRY_COMPARE(latestCapability(m.appB->received(), QStringLiteral("displayBudgetReason"))
+                         .toString(), QStringLiteral("none"));
+        const quint64 bSamples = share(m.appB, "spectrumSampleUnitsPerSecond");
+        QVERIFY2(bSamples < wide.spectrumSampleUnitsPerSecond, qPrintable(QString::number(bSamples)));
+        QVERIFY(2 * bSamples < total.spectrumSampleUnitsPerSecond);
+        // A, short of its four pans, has everything B leaves.
+        QTRY_COMPARE(share(m.appA, "spectrumSampleUnitsPerSecond"),
+                     total.spectrumSampleUnitsPerSecond - bSamples);
+        QCOMPARE(latestCapability(m.appA->received(), QStringLiteral("displayBudgetReason"))
+                     .toString(), QStringLiteral("sharedConnection"));
+    }
+
+    // Fix wave 3 (the re-review's Important 2, ruling 9.3), with a holder
+    // injected into the split input (Task 34's holder at the merge). A and
+    // B settle at half the total. A becomes the present holder: its share
+    // stays its request (half) until it asks for more, and then it has its
+    // whole request. B, cut back beside the holder, is left short when the
+    // holder lets go until it asks again, and then the two are equal.
+    void aHolderChangeGivesTheRulesOnlyToDevicesThatAskAgain()
+    {
+        const DisplayBudgetCharge p = spectrumDisplayCost(256, 30, false)->charge;
+        // Samples are the limit that binds (bytes have ample room: a pan's
+        // endpoint charge carries more bytes than the bare spectrum cost),
+        // at 30 frames a second so four pans stay inside the sender's
+        // message rate.
+        const DisplayBudgetLimits total{40 * p.applicationBytesPerSecond,
+                                        4 * p.spectrumSampleUnitsPerSecond, 1};
+        MediaCore m(total);
+        m.signInBoth();
+        QTRY_COMPARE(m.hub->controllerCount(), 2);
+        const quint64 epochA = m.epochOf(0);
+        const int sliceA = m.sliceOf(epochA);
+        const int sliceB = m.sliceOf(m.epochOf(1));
+        const double centre =
+            m.core.model->streamCentreHz(m.core.model->sliceById(sliceA)->streamIndex());
+        QVERIFY(m.startMedia(m.appA));
+        QVERIFY(m.startMedia(m.appB));
+        // One pan: 256 pixels (all its window's bins) at 30 frames a second,
+        // above the one-useful-pan floor.
+        QVERIFY(p.spectrumSampleUnitsPerSecond
+                > DisplayLoadGovernor::floorPanCharge().spectrumSampleUnitsPerSecond);
+        const auto pan = [&centre](quint32 endpoint, int slice, quint32 revision = 1) {
+            QJsonObject request = displayRequestAt(endpoint, slice, centre, 30, revision);
+            request.insert(QStringLiteral("pixels"), 256);
+            return request;
+        };
+        const auto samples = [](const LoopbackTransport* app) {
+            return static_cast<quint64>(
+                latestCapability(app->received(), QStringLiteral("spectrumSampleUnitsPerSecond"))
+                    .toInteger());
+        };
+        const auto accepted = [](const LoopbackTransport* app, quint32 endpoint) {
+            for (const QJsonObject& r : mediaOps(app, QStringLiteral("allocation-result"))) {
+                if (r.value(QStringLiteral("endpointId")).toInteger() == endpoint
+                    && r.value(QStringLiteral("accepted")).toBool()) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        for (quint32 endpoint = 1; endpoint <= 2; ++endpoint) {
+            sendMedia(m.appA, pan(endpoint, sliceA));
+            sendMedia(m.appB, pan(endpoint, sliceB));
+        }
+        QTRY_VERIFY(accepted(m.appA, 2) && accepted(m.appB, 2));
+        QTRY_COMPARE(samples(m.appA), 2 * p.spectrumSampleUnitsPerSecond);
+        QTRY_COMPARE(samples(m.appB), 2 * p.spectrumSampleUnitsPerSecond);
+
+        // A becomes the present holder (Task 34's TransmitHolder, as a key
+        // on unheld transmit makes it): rule 1 gives it its request, which
+        // is still half.
+        TransmitHolder* holder = m.core.server->transmitHolder();
+        QVERIFY(holder != nullptr);
+        TransmitHolder::KeyRequest take;
+        take.deviceId = m.core.server->mediaSessionDevice(epochA);
+        QVERIFY(!take.deviceId.isEmpty());
+        QCOMPARE(holder->askKey(take).verdict, KeyingVerdict::Admit);
+        QVERIFY(holder->isHeldBy(take.deviceId));
+        QTest::qWait(50);
+        QCOMPARE(samples(m.appA), 2 * p.spectrumSampleUnitsPerSecond);
+        // A asks again for what its operator wants (four pans): all of it.
+        for (quint32 endpoint = 3; endpoint <= 4; ++endpoint) {
+            sendMedia(m.appA, pan(endpoint, sliceA));
+        }
+        QTRY_VERIFY(accepted(m.appA, 3) && accepted(m.appA, 4));
+        QTRY_COMPARE(samples(m.appA), 4 * p.spectrumSampleUnitsPerSecond);
+
+        // B, cut back beside the holder, drops a pan.
+        QJsonObject drop{{QStringLiteral("op"), QStringLiteral("unsubscribe")},
+                         {QStringLiteral("connectionId"), QLatin1String(kMediaConnection)},
+                         {QStringLiteral("endpointId"), 2},
+                         {QStringLiteral("revision"), 2}};
+        sendMedia(m.appB, drop);
+        // The holder lets go: B is left with the one pan it still asks for.
+        m.core.server->releaseTransmitFor(take.deviceId, QStringLiteral("The test let go."));
+        QTRY_COMPARE(holder->state(), TransmitHolder::State::Unheld);
+        QTRY_COMPARE(samples(m.appB), p.spectrumSampleUnitsPerSecond);
+        QCOMPARE(samples(m.appA), 3 * p.spectrumSampleUnitsPerSecond);
+        // B asks again for its two pans (a closed display's id is not used
+        // again): equal halves (rule 3).
+        sendMedia(m.appB, pan(3, sliceB));
+        QTRY_COMPARE(samples(m.appB), 2 * p.spectrumSampleUnitsPerSecond);
+        QTRY_COMPARE(samples(m.appA), 2 * p.spectrumSampleUnitsPerSecond);
+    }
+
+    void eachDevicesRequestIsWhatItsDisplaysAskFor()
+    {
+        const auto pan = spectrumDisplayCost(128, 60, false);
+        QVERIFY(pan.has_value());
+        const DisplayBudgetCharge p = pan->charge;
+        const DisplayBudgetCharge f = DisplayLoadGovernor::floorPanCharge();
+        QVERIFY(p.applicationBytesPerSecond > f.applicationBytesPerSecond);
+        QVERIFY(p.spectrumSampleUnitsPerSecond > f.spectrumSampleUnitsPerSecond);
+        const auto total = [&](quint64 pans) {
+            return DisplayBudgetLimits{f.applicationBytesPerSecond + pans * p.applicationBytesPerSecond,
+                                       f.spectrumSampleUnitsPerSecond
+                                           + pans * p.spectrumSampleUnitsPerSecond,
+                                       1};
+        };
+        MediaCore m(total(3));
+        Device soundOnly(QStringLiteral("Shack speaker"), QStringLiteral("phone"));
+        m.core.pair(soundOnly);
+        m.signInBoth();
+        LoopbackTransport* appC = m.core.signIn(soundOnly);
+        QVERIFY(admitted(appC));
+        QTRY_COMPARE(m.hub->controllerCount(), 3);
+        const int sliceA = m.sliceOf(m.epochOf(0));
+        const int sliceB = m.sliceOf(m.epochOf(1));
+        const double centre =
+            m.core.model->streamCentreHz(m.core.model->sliceById(sliceA)->streamIndex());
+        QVERIFY(m.startMedia(m.appA));
+        QVERIFY(m.startMedia(m.appB));
+
+        // B: one pan.
+        sendMedia(m.appB, displayRequestAt(1, sliceB, centre, 60));
+        QTRY_COMPARE(mediaOps(m.appB, QStringLiteral("allocation-result")).size(), 1);
+        QVERIFY(mediaOps(m.appB, QStringLiteral("allocation-result")).last()
+                    .value(QStringLiteral("accepted")).toBool());
+        // A: four pans; what does not fit its share is refused, and still
+        // asked for.
+        for (quint32 endpoint = 1; endpoint <= 4; ++endpoint) {
+            sendMedia(m.appA, displayRequestAt(endpoint, sliceA, centre, 60));
+        }
+        QTRY_COMPARE(mediaOps(m.appA, QStringLiteral("allocation-result")).size(), 4);
+
+        const auto share = [](const LoopbackTransport* app, const char* name) {
+            return static_cast<quint64>(
+                latestCapability(app->received(), QString::fromLatin1(name)).toInteger());
+        };
+        // The sound-only device: one useful pan, its floor.
+        QTRY_COMPARE(share(appC, "displayApplicationBytesPerSecond"), f.applicationBytesPerSecond);
+        QCOMPARE(share(appC, "spectrumSampleUnitsPerSecond"), f.spectrumSampleUnitsPerSecond);
+        QCOMPARE(latestCapability(appC->received(), QStringLiteral("displayBudgetReason"))
+                     .toString(), QStringLiteral("none"));
+        // The one-pan device gets its one pan.
+        QTRY_COMPARE(share(m.appB, "displayApplicationBytesPerSecond"),
+                     p.applicationBytesPerSecond);
+        QCOMPARE(share(m.appB, "spectrumSampleUnitsPerSecond"), p.spectrumSampleUnitsPerSecond);
+        QCOMPARE(latestCapability(m.appB->received(), QStringLiteral("displayBudgetReason"))
+                     .toString(), QStringLiteral("none"));
+        // The four-pan device the rest, below its request, told the
+        // connection is shared.
+        QTRY_COMPARE(share(m.appA, "displayApplicationBytesPerSecond"),
+                     2 * p.applicationBytesPerSecond);
+        QCOMPARE(share(m.appA, "spectrumSampleUnitsPerSecond"), 2 * p.spectrumSampleUnitsPerSecond);
+        QCOMPARE(latestCapability(m.appA->received(), QStringLiteral("displayBudgetReason"))
+                     .toString(), QStringLiteral("sharedConnection"));
+        int acceptedA = 0;
+        for (const QJsonObject& r : mediaOps(m.appA, QStringLiteral("allocation-result"))) {
+            acceptedA += r.value(QStringLiteral("accepted")).toBool() ? 1 : 0;
+        }
+        QCOMPARE(acceptedA, 2);
+
+        // Under the governor's cut the device short of its request hears
+        // sharedProcessing; the one given its request the total's reason.
+        DisplayBudgetLimits cut = total(2);
+        cut.generation = 2;
+        QVERIFY(m.core.server->setDisplayBudgetLimits(cut, DisplayBudgetReason::CoreBusy));
+        QTRY_COMPARE(latestCapability(m.appA->received(), QStringLiteral("displayBudgetReason"))
+                         .toString(), QStringLiteral("sharedProcessing"));
+        QCOMPARE(latestCapability(m.appB->received(), QStringLiteral("displayBudgetReason"))
+                     .toString(), QStringLiteral("coreBusy"));
+        QCOMPARE(share(m.appB, "displayApplicationBytesPerSecond"), p.applicationBytesPerSecond);
+        DisplayBudgetLimits restored = total(3);
+        restored.generation = 3;
+        QVERIFY(m.core.server->setDisplayBudgetLimits(restored, DisplayBudgetReason::None));
+        QTRY_COMPARE(latestCapability(m.appA->received(), QStringLiteral("displayBudgetReason"))
+                         .toString(), QStringLiteral("sharedConnection"));
+
+        // B closes its pan: its demand goes (to the floor), and A grows into
+        // what B no longer asks for.
+        QJsonObject stop{{QStringLiteral("op"), QStringLiteral("unsubscribe")},
+                         {QStringLiteral("connectionId"), QLatin1String(kMediaConnection)},
+                         {QStringLiteral("endpointId"), 1},
+                         {QStringLiteral("revision"), 2}};
+        sendMedia(m.appB, stop);
+        QTRY_COMPARE(share(m.appA, "displayApplicationBytesPerSecond"),
+                     restored.applicationBytesPerSecond - 2 * f.applicationBytesPerSecond);
+        QCOMPARE(share(m.appB, "displayApplicationBytesPerSecond"), f.applicationBytesPerSecond);
+    }
+
+    // Fix wave 2 (Critical 1, the re-review's case): A alone subscribes
+    // displays costing the whole total. B is admitted: before it asks for
+    // anything it has one useful pan, not a share of 1. Once B asks for
+    // the whole total too, it has at least half.
+    void aDeviceThatJoinsSecondIsNotStarved()
+    {
+        const auto pan = spectrumDisplayCost(128, 60, false);
+        QVERIFY(pan.has_value());
+        const DisplayBudgetCharge p = pan->charge;
+        const DisplayBudgetLimits total{2 * p.applicationBytesPerSecond,
+                                        2 * p.spectrumSampleUnitsPerSecond, 1};
+        MediaCore m(total);
+        m.appA = m.core.signIn(m.a);
+        QVERIFY(admitted(m.appA));
+        QTRY_COMPARE(m.hub->controllerCount(), 1);
+        const int sliceA = m.sliceOf(m.epochOf(0));
+        const double centre =
+            m.core.model->streamCentreHz(m.core.model->sliceById(sliceA)->streamIndex());
+        QVERIFY(m.startMedia(m.appA));
+        for (quint32 endpoint = 1; endpoint <= 2; ++endpoint) {
+            sendMedia(m.appA, displayRequestAt(endpoint, sliceA, centre, 60));
+        }
+        QTRY_COMPARE(mediaOps(m.appA, QStringLiteral("allocation-result")).size(), 2);
+        for (const QJsonObject& r : mediaOps(m.appA, QStringLiteral("allocation-result"))) {
+            QVERIFY(r.value(QStringLiteral("accepted")).toBool());
+        }
+
+        m.appB = m.core.signIn(m.b);
+        QVERIFY(admitted(m.appB));
+        QTRY_COMPARE(m.hub->controllerCount(), 2);
+        const auto share = [](const LoopbackTransport* app, const char* name) {
+            return static_cast<quint64>(
+                latestCapability(app->received(), QString::fromLatin1(name)).toInteger());
+        };
+        // The newcomer, before it asks: one useful pan.
+        const DisplayBudgetCharge f = DisplayLoadGovernor::floorPanCharge();
+        QTRY_VERIFY(share(m.appB, "displayApplicationBytesPerSecond")
+                    >= f.applicationBytesPerSecond);
+        QVERIFY(share(m.appB, "spectrumSampleUnitsPerSecond") >= f.spectrumSampleUnitsPerSecond);
+        // A, below what it asks for beside B: the connection is shared.
+        QTRY_COMPARE(latestCapability(m.appA->received(), QStringLiteral("displayBudgetReason"))
+                         .toString(), QStringLiteral("sharedConnection"));
+
+        // B asks for the whole total: at least half of it.
+        const int sliceB = m.sliceOf(m.epochOf(1));
+        const double centreB =
+            m.core.model->streamCentreHz(m.core.model->sliceById(sliceB)->streamIndex());
+        QVERIFY(m.startMedia(m.appB));
+        for (quint32 endpoint = 1; endpoint <= 2; ++endpoint) {
+            sendMedia(m.appB, displayRequestAt(endpoint, sliceB, centreB, 60));
+        }
+        QTRY_COMPARE(mediaOps(m.appB, QStringLiteral("allocation-result")).size(), 2);
+        QTRY_VERIFY(share(m.appB, "displayApplicationBytesPerSecond")
+                    >= total.applicationBytesPerSecond / 2);
+        QVERIFY(share(m.appB, "spectrumSampleUnitsPerSecond")
+                >= total.spectrumSampleUnitsPerSecond / 2);
+        QCOMPARE(share(m.appA, "displayApplicationBytesPerSecond"),
+                 total.applicationBytesPerSecond / 2);
+    }
+
+    // Fix wave 2 (Important 2): a display refused for the budget counts in
+    // its device's request only until the client asks for it again or
+    // closes it, or the hold after its refusal runs out. B's refused pan,
+    // dropped without an unsubscribe, stops cutting A once the hold ends;
+    // refused again and then closed, it stops at once.
+    void aRefusedDisplaysRequestEndsWhenItIsNotAskedForAgain()
+    {
+        const auto pan = spectrumDisplayCost(128, 60, false);
+        const auto wide = spectrumDisplayCost(256, 60, false);
+        QVERIFY(pan.has_value() && wide.has_value());
+        const DisplayBudgetCharge p = pan->charge;
+        MediaCore m(DisplayBudgetLimits{4 * p.applicationBytesPerSecond,
+                                        4 * p.spectrumSampleUnitsPerSecond, 1});
+        m.signInBoth();
+        const int sliceA = m.sliceOf(m.epochOf(0));
+        const int sliceB = m.sliceOf(m.epochOf(1));
+        const double centreA =
+            m.core.model->streamCentreHz(m.core.model->sliceById(sliceA)->streamIndex());
+        const double centreB =
+            m.core.model->streamCentreHz(m.core.model->sliceById(sliceB)->streamIndex());
+        QVERIFY(m.startMedia(m.appA));
+        QVERIFY(m.startMedia(m.appB));
+        const auto share = [](const LoopbackTransport* app) {
+            return static_cast<quint64>(
+                latestCapability(app->received(), QStringLiteral("displayApplicationBytesPerSecond"))
+                    .toInteger());
+        };
+        const auto results = [](const LoopbackTransport* app) {
+            return mediaOps(app, QStringLiteral("allocation-result"));
+        };
+
+        // A: three pans, all admitted.
+        for (quint32 endpoint = 1; endpoint <= 3; ++endpoint) {
+            sendMedia(m.appA, displayRequestAt(endpoint, sliceA, centreA, 60));
+        }
+        QTRY_COMPARE(results(m.appA).size(), 3);
+        for (const QJsonObject& r : results(m.appA)) {
+            QVERIFY(r.value(QStringLiteral("accepted")).toBool());
+        }
+        // B: one pan, admitted; A keeps its three.
+        sendMedia(m.appB, displayRequestAt(1, sliceB, centreB, 60));
+        QTRY_COMPARE(results(m.appB).size(), 1);
+        QVERIFY(results(m.appB).last().value(QStringLiteral("accepted")).toBool());
+        QTRY_COMPARE(share(m.appA), 3 * p.applicationBytesPerSecond);
+
+        // B asks for a wider pan that does not fit: refused, and while its
+        // request stands A is cut to half.
+        DaemonMediaController* controllerB = m.hub->controllerFor(m.epochOf(1));
+        QVERIFY(controllerB);
+        controllerB->setRefusedDisplayDemandHoldMsForTest(300);
+        QJsonObject wider = displayRequestAt(2, sliceB, centreB, 60);
+        wider.insert(QStringLiteral("pixels"), 256);
+        sendMedia(m.appB, wider);
+        QTRY_COMPARE(results(m.appB).size(), 2);
+        QVERIFY(!results(m.appB).last().value(QStringLiteral("accepted")).toBool(true));
+        QCOMPARE(results(m.appB).last().value(QStringLiteral("reason")).toString(),
+                 QLatin1String(kDisplayBudgetRefusalReason));
+        QTRY_COMPARE(share(m.appA), 2 * p.applicationBytesPerSecond);
+        // B drops it without a word: once the hold runs out, A has its
+        // three pans' room back.
+        QTRY_COMPARE(share(m.appA), 3 * p.applicationBytesPerSecond);
+
+        // Refused again, then closed: A has its room back at once, long
+        // before any hold would end.
+        controllerB->setRefusedDisplayDemandHoldMsForTest(60'000);
+        wider.insert(QStringLiteral("revision"), 2);
+        sendMedia(m.appB, wider);
+        QTRY_COMPARE(results(m.appB).size(), 3);
+        QVERIFY(!results(m.appB).last().value(QStringLiteral("accepted")).toBool(true));
+        QTRY_COMPARE(share(m.appA), 2 * p.applicationBytesPerSecond);
+        sendMedia(m.appB, QJsonObject{{QStringLiteral("op"), QStringLiteral("unsubscribe")},
+                                      {QStringLiteral("connectionId"),
+                                       QLatin1String(kMediaConnection)},
+                                      {QStringLiteral("endpointId"), 2},
+                                      {QStringLiteral("revision"), 3}});
+        QTRY_COMPARE(share(m.appA), 3 * p.applicationBytesPerSecond);
+    }
+
+    // A's media control reaches A's controller only; B leaving ends only
+    // B's media.
+    void eachDevicesMediaControlReachesItsOwnControllerOnly()
+    {
+        MediaCore m;
+        m.signInBoth();
+        MediaFake* transportA = m.startMedia(m.appA);
+        QVERIFY(transportA);
+        QCOMPARE(m.transports.size(), 1);
+        // Only A's controller made a media connection; B was sent nothing.
+        QVERIFY(!m.appB->receivedKinds().contains(QByteArrayLiteral("media.control")));
+        QCOMPARE(m.hub->controllerFor(m.epochOf(0))->sessionEpoch(), m.epochOf(0));
+
+        MediaFake* transportB = m.startMedia(m.appB);
+        QVERIFY(transportB);
+        QVERIFY(transportA != transportB);
+        QVERIFY(transportA->started && transportB->started);
+
+        // B leaves: its media stops, A's goes on.
+        m.appB->closeLink(QStringLiteral("test"));
+        QTRY_COMPARE(m.hub->controllerCount(), 1);
+        QTRY_VERIFY(!transportB || !transportB->started);
+        QVERIFY(transportA->started);
+        QVERIFY(transportA->readyState);
+    }
+
+    // A device's media peer goes while its session stays: the Core dropped
+    // it, or the device started media again on a new connection (its old
+    // peer half-open). Its displays and its demand go with the peer, so the
+    // other device's share grows back at once; the other device's media is
+    // not touched.
+    void aDevicesPeerGoingGivesItsDisplayShareBack_data()
+    {
+        QTest::addColumn<bool>("newStart");
+        QTest::newRow("core-dropped") << false;
+        QTest::newRow("new-start") << true;
+    }
+
+    void aDevicesPeerGoingGivesItsDisplayShareBack()
+    {
+        QFETCH(bool, newStart);
+        const auto pan = spectrumDisplayCost(128, 60, false);
+        QVERIFY(pan.has_value());
+        const DisplayBudgetCharge p = pan->charge;
+        MediaCore m(DisplayBudgetLimits{4 * p.applicationBytesPerSecond,
+                                        4 * p.spectrumSampleUnitsPerSecond, 1});
+        m.signInBoth();
+        const int sliceA = m.sliceOf(m.epochOf(0));
+        const int sliceB = m.sliceOf(m.epochOf(1));
+        const double centreA =
+            m.core.model->streamCentreHz(m.core.model->sliceById(sliceA)->streamIndex());
+        const double centreB =
+            m.core.model->streamCentreHz(m.core.model->sliceById(sliceB)->streamIndex());
+        MediaFake* transportA = m.startMedia(m.appA);
+        MediaFake* transportB = m.startMedia(m.appB);
+        QVERIFY(transportA && transportB);
+        const QPointer<MediaFake> oldA(transportA);
+        const auto share = [](const LoopbackTransport* app) {
+            return static_cast<quint64>(
+                latestCapability(app->received(), QStringLiteral("displayApplicationBytesPerSecond"))
+                    .toInteger());
+        };
+        for (quint32 endpoint = 1; endpoint <= 3; ++endpoint) {
+            sendMedia(m.appA, displayRequestAt(endpoint, sliceA, centreA, 60));
+            sendMedia(m.appB, displayRequestAt(endpoint, sliceB, centreB, 60));
+        }
+        // Both ask for three pans: two each.
+        QTRY_COMPARE(share(m.appB), 2 * p.applicationBytesPerSecond);
+        DaemonMediaController* controllerA = m.hub->controllerFor(m.epochOf(0));
+        QVERIFY(controllerA);
+        QTRY_VERIFY(controllerA->activeEndpointCount() > 0);
+
+        if (newStart) {
+            QJsonObject start = mediaStart();
+            start.insert(QStringLiteral("connectionId"),
+                         QStringLiteral("22222222-3333-4444-8555-666666666666"));
+            sendMedia(m.appA, start);
+            QTRY_COMPARE(m.transports.size(), 3);
+            QVERIFY(m.transports.last()->started);
+        } else {
+            emit transportA->connectionFailed(QStringLiteral("ICE consent check failed"));
+            emit transportA->closed();
+            QTRY_VERIFY(!mediaOps(m.appA, QStringLiteral("rejected")).isEmpty());
+        }
+        QTRY_VERIFY(oldA.isNull() || !oldA->started);
+        QCOMPARE(controllerA->activeEndpointCount(), 0);
+        QCOMPARE(controllerA->displayDemand(), DisplayBudgetCharge{});
+        // B has A's room back, less the one useful pan every device is
+        // counted as asking for (DisplayBudgetSplit's minimum request).
+        QTRY_VERIFY(share(m.appB) > 2 * p.applicationBytesPerSecond);
+        QVERIFY(transportB->started && transportB->readyState);
+        QVERIFY(mediaOps(m.appB, QStringLiteral("rejected")).isEmpty());
+    }
+
+    // The same device signs in again while the Core still holds its old,
+    // half-open media peer (the link dropped; ICE consent has not timed out
+    // yet). Its new session's start is taken at once and replaces the old
+    // peer: torn down, its displays retired, its demand gone. The other
+    // device's media goes on untouched.
+    void theSameDeviceBackReplacesItsHalfOpenMediaPeer()
+    {
+        MediaCore m;
+        m.signInBoth();
+        const quint64 epochA = m.epochOf(0);
+        const int sliceA = m.sliceOf(epochA);
+        QVERIFY(sliceA >= 0);
+        MediaFake* halfOpen = m.startMedia(m.appA);
+        MediaFake* transportB = m.startMedia(m.appB);
+        QVERIFY(halfOpen && transportB);
+        const QPointer<MediaFake> oldPeer(halfOpen);
+        sendMedia(m.appA, displayRequest(3, sliceA,
+                                         m.core.model->sliceById(sliceA)->frequency()));
+        DaemonMediaController* oldController = m.hub->controllerFor(epochA);
+        QVERIFY(oldController);
+        QTRY_COMPARE(oldController->activeEndpointCount(), 1);
+        const QPointer<DaemonMediaController> retired(oldController);
+
+        // The same device again, on a new link; its old link is still open
+        // on the app's side as far as the Core can tell.
+        LoopbackTransport* again = m.core.signIn(m.a);
+        QVERIFY(admitted(again));
+        QCOMPARE(endOf(m.appA).value(QStringLiteral("code")).toString(),
+                 QStringLiteral("sameDevice"));
+        // The old peer is gone with its session; the old controller too.
+        QTRY_VERIFY(oldPeer.isNull() || !oldPeer->started);
+        QTRY_VERIFY(retired.isNull());
+        QTRY_COMPARE(m.hub->controllerCount(), 2);
+
+        // The new session's start is taken, not refused.
+        MediaFake* fresh = m.startMedia(again);
+        // A third transport made (a raw address may be reused once the old
+        // one is deleted, so count them).
+        QVERIFY(fresh);
+        QCOMPARE(m.transports.size(), 3);
+        QVERIFY(fresh->started);
+        QVERIFY(mediaOps(again, QStringLiteral("rejected")).isEmpty());
+        sendMedia(again, displayRequest(3, sliceA,
+                                        m.core.model->sliceById(sliceA)->frequency()));
+        // The device's new controller: a new session's, still owning A's slice.
+        DaemonMediaController* newController = nullptr;
+        for (DaemonMediaController* controller : m.hub->controllers()) {
+            if (controller->sessionEpoch() != epochA
+                && m.core.server->mediaSessionOwnsSlice(controller->sessionEpoch(), sliceA)) {
+                newController = controller;
+            }
+        }
+        QVERIFY(newController);
+        QTRY_COMPARE(newController->activeEndpointCount(), 1);
+        // B never noticed.
+        QVERIFY(transportB->started && transportB->readyState);
+        QVERIFY(m.appB->isOpen());
+    }
+
+    // Each device hears only its own slices: distinct tones per slice, read
+    // back from each device's lossless audio. The Core's local output
+    // plays neither (both slices are devices', none is the station's).
+    void eachDeviceHearsOnlyItsOwnSlices()
+    {
+        MediaCore m;
+        m.signInBoth();
+        const int sliceA = m.sliceOf(m.epochOf(0));
+        const int sliceB = m.sliceOf(m.epochOf(1));
+        QVERIFY(sliceA >= 0 && sliceB >= 0 && sliceA != sliceB);
+        AudioEngine* engine = m.core.model->audioEngine();
+        engine->masterMixForTest().setRampFrames(1);
+        engine->masterMixForTest().setSlewUpFrames(0);
+        engine->setSliceStreaming(sliceA, true);
+        engine->setSliceStreaming(sliceB, true);
+        // The Core's own speakers carry neither device's slice.
+        QCOMPARE(engine->localOutputSliceMask() & ((1u << sliceA) | (1u << sliceB)), 0u);
+
+        MediaFake* transportA = m.startMedia(m.appA);
+        MediaFake* transportB = m.startMedia(m.appB);
+        QVERIFY(transportA && transportB);
+        for (LoopbackTransport* app : {m.appA, m.appB}) {
+            sendMedia(app, {{QStringLiteral("op"), QStringLiteral("audio")},
+                            {QStringLiteral("connectionId"), QLatin1String(kMediaConnection)},
+                            {QStringLiteral("revision"), 1},
+                            {QStringLiteral("enabled"), true},
+                            {QStringLiteral("profile"), QStringLiteral("lossless")}});
+        }
+        QTRY_VERIFY(!mediaOps(m.appA, QStringLiteral("audio-context")).isEmpty()
+                    && !mediaOps(m.appB, QStringLiteral("audio-context")).isEmpty());
+        QVERIFY(mediaOps(m.appA, QStringLiteral("audio-context")).last()
+                    .value(QStringLiteral("enabled")).toBool());
+
+        // A's slice plays 0.5, B's 0.25 on the left, several capture blocks.
+        const QVector<float> toneA(64 * 2, 0.5f);
+        const QVector<float> toneB(64 * 2, 0.25f);
+        const auto feed = [&](int blocks) {
+            for (int frame = 0; frame < blocks * 1920; frame += 64) {
+                engine->rxBlockReady(sliceA, toneA.constData(), 64);
+                engine->rxBlockReady(sliceB, toneB.constData(), 64);
+            }
+        };
+        feed(3);
+        QTRY_VERIFY(transportA->rtpPackets.size() >= 10 && transportB->rtpPackets.size() >= 10);
+        const QList<float> heardA = l16Left(transportA->rtpPackets.last());
+        const QList<float> heardB = l16Left(transportB->rtpPackets.last());
+        QVERIFY(!heardA.isEmpty() && !heardB.isEmpty());
+        // Each hears its own tone at its own slice gain, never the other's:
+        // the two levels stand in the ratio of the tones fed.
+        const float levelA = heardA.last();
+        const float levelB = heardB.last();
+        QVERIFY(levelA > 0.0f && levelB > 0.0f);
+        QVERIFY2(std::abs(levelA / levelB - 2.0f) < 0.01f,
+                 qPrintable(QStringLiteral("A %1, B %2").arg(levelA).arg(levelB)));
+        for (float sample : heardA) {
+            QVERIFY(std::abs(sample - levelA) < 1.0f / 16384.0f);
+        }
+
+        // B's slice alone: A's mix falls silent, B's carries on.
+        const QVector<float> silence(64 * 2, 0.0f);
+        const qsizetype packetsA = transportA->rtpPackets.size();
+        const qsizetype packetsB = transportB->rtpPackets.size();
+        for (int frame = 0; frame < 3 * 1920; frame += 64) {
+            engine->rxBlockReady(sliceA, silence.constData(), 64);
+            engine->rxBlockReady(sliceB, toneB.constData(), 64);
+        }
+        QTRY_VERIFY(transportA->rtpPackets.size() >= packetsA + 10
+                    && transportB->rtpPackets.size() >= packetsB + 10);
+        // Fix wave: the tone fed first is still queued ahead of the silence
+        // (three blocks fed, about one taken), so A falls silent once it has
+        // drained; a fixed packet count raced the drain under load.
+        QTRY_COMPARE(l16Left(transportA->rtpPackets.last()).last(), 0.0f);
+        QVERIFY(std::abs(l16Left(transportB->rtpPackets.last()).last() - levelB) < 1.0f / 16384.0f);
+
+        // A slice A makes joins A's mix at once, and not B's.
+        const QJsonObject added =
+            m.core.invoke(m.appA, "addSlice", {utf8("initialPanId", QString())});
+        QVERIFY2(added.value(QStringLiteral("accepted")).toBool(false),
+                 qPrintable(added.value(QStringLiteral("reason")).toString()));
+        int sliceA2 = -1;
+        for (const SliceModel* slice : m.core.model->slices()) {
+            if (slice->sliceIndex() != sliceA && slice->sliceIndex() != sliceB) {
+                sliceA2 = slice->sliceIndex();
+            }
+        }
+        QVERIFY(sliceA2 >= 0);
+        const int mixA = m.hub->controllerFor(m.epochOf(0))->ownerMixSlot();
+        const int mixB = m.hub->controllerFor(m.epochOf(1))->ownerMixSlot();
+        QTRY_COMPARE(engine->ownerMixSliceMask(mixA), (1u << sliceA) | (1u << sliceA2));
+        QCOMPARE(engine->ownerMixSliceMask(mixB), 1u << sliceB);
+    }
+
+    // A device subscribes displays and receiver streams only for its own
+    // slices; two devices watching one receiver share one FFT, and it keeps
+    // running for A when B leaves.
+    void displaysOnlyForOwnSlicesAndOneFftPerReceiver()
+    {
+        MediaCore m(DisplayBudgetLimits{10'000'000, 1'000'000, 1});
+        m.signInBoth();
+        const int sliceA = m.sliceOf(m.epochOf(0));
+        const int sliceB = m.sliceOf(m.epochOf(1));
+        SliceModel* a = m.core.model->sliceById(sliceA);
+        SliceModel* b = m.core.model->sliceById(sliceB);
+        QVERIFY(a && b);
+        QCOMPARE(a->streamIndex(), b->streamIndex());
+        const double centre = m.core.model->streamCentreHz(a->streamIndex());
+        QVERIFY(m.startMedia(m.appA));
+        QVERIFY(m.startMedia(m.appB));
+
+        // A asks for B's slice: refused, nothing set up.
+        sendMedia(m.appA, displayRequest(1, sliceB, centre));
+        QTRY_VERIFY(!mediaOps(m.appA, QStringLiteral("allocation-result")).isEmpty());
+        QJsonObject refused = mediaOps(m.appA, QStringLiteral("allocation-result")).last();
+        QCOMPARE(refused.value(QStringLiteral("accepted")).toBool(true), false);
+        QCOMPARE(refused.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("That slice belongs to another device."));
+        QVERIFY(OperatorWording::isPlain(refused.value(QStringLiteral("reason")).toString()));
+        QCOMPARE(m.hub->controllerFor(m.epochOf(0))->activeEndpointCount(), 0);
+
+        // Each asks for its own: both accepted, on one engine.
+        sendMedia(m.appA, displayRequest(2, sliceA, centre));
+        sendMedia(m.appB, displayRequest(1, sliceB, centre));
+        QTRY_COMPARE(mediaOps(m.appA, QStringLiteral("allocation-result")).size(), 2);
+        QTRY_COMPARE(mediaOps(m.appB, QStringLiteral("allocation-result")).size(), 1);
+        QVERIFY(mediaOps(m.appA, QStringLiteral("allocation-result")).last()
+                    .value(QStringLiteral("accepted")).toBool());
+        QVERIFY(mediaOps(m.appB, QStringLiteral("allocation-result")).last()
+                    .value(QStringLiteral("accepted")).toBool());
+        QCOMPARE(m.hub->controllerFor(m.epochOf(0))->activeEndpointCount(), 1);
+        QCOMPARE(m.hub->controllerFor(m.epochOf(1))->activeEndpointCount(), 1);
+        QCOMPARE(m.hub->sharedSpectrum()->source().activeSources().size(), 1);
+
+        // A's receiver stream for B's slice is refused as a slice not there.
+        sendMedia(m.appA, {{QStringLiteral("op"), QStringLiteral("receiver-audio")},
+                           {QStringLiteral("connectionId"), QLatin1String(kMediaConnection)},
+                           {QStringLiteral("sliceId"), sliceB},
+                           {QStringLiteral("revision"), 1},
+                           {QStringLiteral("enabled"), true},
+                           {QStringLiteral("profile"), QStringLiteral("opus")}});
+        QTRY_VERIFY(!mediaOps(m.appA, QStringLiteral("receiver-audio-context")).isEmpty());
+        const QJsonObject stream =
+            mediaOps(m.appA, QStringLiteral("receiver-audio-context")).last();
+        QCOMPARE(stream.value(QStringLiteral("enabled")).toBool(true), false);
+        QCOMPARE(stream.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("slice-removed"));
+
+        // B leaves: A's pan and the engine it rides go on.
+        m.appB->closeLink(QStringLiteral("test"));
+        QTRY_COMPARE(m.hub->controllerCount(), 1);
+        QCOMPARE(m.hub->controllerFor(m.epochOf(0))->activeEndpointCount(), 1);
+        QCOMPARE(m.hub->sharedSpectrum()->source().activeSources().size(), 1);
+    }
+
+    // Fix wave (ruling 9.1): a display on a slice that passes to another
+    // owner retires as a removed slice's does; the new owner's goes on.
+    void aDisplayRetiresWhenItsSlicePassesToAnotherOwner()
+    {
+        MediaCore m(DisplayBudgetLimits{10'000'000, 1'000'000, 1});
+        m.signInBoth();
+        const int sliceA = m.sliceOf(m.epochOf(0));
+        const int sliceB = m.sliceOf(m.epochOf(1));
+        SliceModel* a = m.core.model->sliceById(sliceA);
+        QVERIFY(a != nullptr && sliceB >= 0);
+        const double centre = m.core.model->streamCentreHz(a->streamIndex());
+        QVERIFY(m.startMedia(m.appA));
+        QVERIFY(m.startMedia(m.appB));
+        sendMedia(m.appA, displayRequest(2, sliceA, centre));
+        sendMedia(m.appB, displayRequest(1, sliceB, centre));
+        QTRY_COMPARE(m.hub->controllerFor(m.epochOf(0))->activeEndpointCount(), 1);
+        QTRY_COMPARE(m.hub->controllerFor(m.epochOf(1))->activeEndpointCount(), 1);
+
+        m.core.model->sliceOwnership()->setOwner(sliceA, m.b.key.fingerprint());
+        QTRY_COMPARE(m.hub->controllerFor(m.epochOf(0))->activeEndpointCount(), 0);
+        const auto retired = [&m]() {
+            for (const QString& op : {QStringLiteral("allocation-result"), QStringLiteral("rejected")}) {
+                for (const QJsonObject& o : mediaOps(m.appA, op)) {
+                    if (o.value(QStringLiteral("endpointId")).toInteger() == 2
+                        && o.value(QStringLiteral("reason")).toString()
+                            == QLatin1String(kRetireReasonSliceRemoved)) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        };
+        QTRY_VERIFY(retired());
+        QCOMPARE(m.hub->controllerFor(m.epochOf(1))->activeEndpointCount(), 1);
+    }
+
+    // The governor sees every device's display charge, PureSignal's once.
+    void theGovernorSeesEveryDevicesCharge()
+    {
+        MediaCore m(DisplayBudgetLimits{10'000'000, 1'000'000, 1});
+        m.signInBoth();
+        const int sliceA = m.sliceOf(m.epochOf(0));
+        const int sliceB = m.sliceOf(m.epochOf(1));
+        const double centre = m.core.model->streamCentreHz(
+            m.core.model->sliceById(sliceA)->streamIndex());
+        QVERIFY(m.startMedia(m.appA));
+        QVERIFY(m.startMedia(m.appB));
+        sendMedia(m.appA, displayRequest(1, sliceA, centre));
+        sendMedia(m.appB, displayRequest(1, sliceB, centre));
+        QTRY_COMPARE(m.hub->controllerFor(m.epochOf(0))->activeEndpointCount(), 1);
+        QTRY_COMPARE(m.hub->controllerFor(m.epochOf(1))->activeEndpointCount(), 1);
+        const DisplayBudgetCharge one = m.hub->controllerFor(m.epochOf(0))->ownDisplayCharge();
+        QVERIFY(one.applicationBytesPerSecond > 0);
+        QCOMPARE(m.hub->acceptedDisplayCharge(), *sumDisplayCharges({one, one}));
+    }
+
+    // Telemetry reaches every session that negotiated it, each on its own
+    // sequence.
+    void telemetryReachesEverySessionThatNegotiatedIt()
+    {
+        MediaCore m;
+        m.signInBoth();
+        std::vector<std::unique_ptr<DaemonTelemetryController>> collectors;
+        for (quint64 epoch : m.core.server->mediaSessionEpochs()) {
+            QVERIFY(m.core.server->telemetryAvailable(epoch));
+            auto collector = std::make_unique<DaemonTelemetryController>(
+                m.core.server.get(), m.core.model.get(), nullptr);
+            collector->disableAutomaticSamplingForTest();
+            collector->bindToSession(epoch);
+            QCOMPARE(collector->sessionEpoch(), epoch);
+            collectors.push_back(std::move(collector));
+        }
+        for (auto& collector : collectors) {
+            collector->sampleNow();
+        }
+        QTRY_COMPARE(ofType(m.appA->received(), QStringLiteral("station.metrics.v1")).size(), 1);
+        QTRY_COMPARE(ofType(m.appB->received(), QStringLiteral("station.metrics.v1")).size(), 1);
+        // A new session's own collector never takes another's.
+        QCOMPARE(collectors.front()->sessionEpoch(), m.epochOf(0));
+        QCOMPARE(collectors.back()->sessionEpoch(), m.epochOf(1));
+        collectors.clear();
     }
 };
 

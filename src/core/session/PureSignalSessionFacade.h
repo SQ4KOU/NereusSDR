@@ -54,8 +54,30 @@ public:
     Ps3ActionResult executeAction(Ps3Action action, const QVariantMap& arguments,
                                   quint32 operationId);
     void setCoordinator(PureSignal* coordinator);
+    /// R-R3-49 (parity Task 1): follow the station's two-tone controller
+    /// (`twoToneOn`). RadioModel builds this facade before that controller,
+    /// so it calls this once the controller exists.
+    void followTwoToneController();
     void setRemoteRequestHandler(RemoteRequestHandler handler);
-    void setRemoteCapabilities(bool available, bool canActuate);
+    /// `canActuate` is the Core's transmit permission (txPermitted).
+    /// R-R3-49 (parity Task 7): `armingOffered` is a Core at
+    /// transmitSettingsVersion 7, which takes this window's arming while
+    /// its radio is off the air.
+    void setRemoteCapabilities(bool available, bool canActuate, bool armingOffered = false);
+    /// R-R3-49 (parity Task 7): Single Cal, Automatic, Apply current
+    /// correction, Restore a saved correction and PS-A may be asked for.
+    /// On a station this is canActuate(). In a remote window it also holds
+    /// for a Core that offers arming while its radio is off the air; the
+    /// two-tone test stays on canActuate() (remote transmit).
+    bool canArm() const;
+    /// R-R3-49 (parity Task 7): why canArm() is false, for a Core that
+    /// offers arming: its radio is on the air, or PureSignal is not ready.
+    /// Empty otherwise, so a window keeps the reason it gave before.
+    QString armingRefusal() const;
+    /// R-R3-49 (parity Task 7): why a Core that offers arming refuses a
+    /// pureSignalSettings change now (its radio is on the air). Empty
+    /// otherwise.
+    QString settingsRefusal() const;
     void receiveRemoteActionResult(quint32 operationId, const QByteArray& verb, Ps3ActionPhase phase,
                                     const QString& reason, const QVariantMap& values);
     bool applyRemoteProperty(const QByteArray& property, const QVariant& value);
@@ -102,6 +124,7 @@ private:
     void finishOperation(quint32 operationId, Ps3ActionPhase phase,
                           const QString& reason, const QVariantMap& values = {});
     bool remote() const;
+    static bool isArmingAction(Ps3Action action);
 
     QPointer<RadioModel> m_radio;
     QPointer<PureSignal> m_coordinator;
@@ -121,6 +144,7 @@ private:
     bool m_available{false};
     bool m_remoteCapabilityAvailable{false};
     bool m_remoteTxPermitted{false};
+    bool m_remoteArmingOffered{false};
     bool m_remoteRuntimeAvailable{false};
     bool m_remoteRuntimeCanActuate{false};
     bool m_canActuate{false};

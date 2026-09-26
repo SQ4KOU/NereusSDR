@@ -878,6 +878,9 @@ set(CORE_SOURCES
     # iPhone app Task 73 (R-IOS-02): whose each slice is, the held-for mark
     # and each owner's active slice.
     src/core/SliceOwnership.cpp
+    # iPhone app Task 75 (R-IOS-30): which other devices a radio-wide
+    # setting disturbs.
+    src/core/DisturbanceCheck.cpp
     src/core/WidebandFrameAccumulator.cpp
     src/core/WidebandFftEngine.cpp
     src/core/spectrum/WidebandDisplayReference.cpp
@@ -891,6 +894,7 @@ set(CORE_SOURCES
     src/core/SupportBundle.cpp
     src/core/RadioDiscovery.cpp
     src/core/RadioConnection.cpp
+    src/core/RadioLinkStats.cpp
     src/core/TciProtocol.cpp
     src/core/TciSendQueue.cpp
     src/core/TciVfoCoalescer.cpp
@@ -943,6 +947,8 @@ set(CORE_SOURCES
     src/core/MoxController.cpp
     src/core/MicProfileManager.cpp
     src/core/ParaEqEnvelope.cpp
+    src/core/ParaEqCurve.cpp
+    src/core/ParaEqCurve.h
     src/core/TwoToneController.cpp
     src/core/TxSliceArbiter.cpp
     src/core/TxSliceArbiter.h
@@ -1255,6 +1261,11 @@ set(CORE_SOURCES
     src/core/session/SessionTransport.cpp
     src/core/session/StationCapabilities.cpp
     src/core/session/StationServer.cpp
+    src/core/session/StationOpeningGate.cpp
+    src/core/session/StationReceivers.cpp
+    src/core/session/StationSharedSettings.cpp
+    src/core/session/ReceiverPlanner.cpp
+    src/core/session/ConfirmStep.cpp
     src/core/session/StationLanAnnouncement.cpp
     src/core/session/StationLanCache.cpp
     src/core/session/StationLanDiscovery.cpp
@@ -1275,6 +1286,7 @@ set(CORE_SOURCES
     # iPhone app Task 20 (R-IOS-27): display extras and the NSDX datagram.
     src/core/session/media/DisplayExtras.cpp
     src/core/session/media/DisplayBudget.cpp
+    src/core/session/media/DisplayBudgetSplit.cpp
     src/core/session/media/DisplayLoadGovernor.cpp
     src/core/session/media/DssWideRow.cpp
     src/core/session/media/SpectrumEndpoint.cpp
@@ -1849,7 +1861,9 @@ set_target_properties(NereusSDR PROPERTIES
 # for any app that opens an audio capture stream — without it the stream
 # opens but macOS silently delivers zero-filled buffers (no permission
 # dialog, no error). CMake's MACOSX_BUNDLE template doesn't include the
-# key; inject it post-build + re-sign so TCC accepts the updated bundle.
+# key; inject it post-build. The bundle is signed once, after every file
+# the build puts in it, by the last POST_BUILD at the end of this file
+# (R-R3-50).
 #
 # Uses Set-then-Add pattern via /bin/sh so the operation is idempotent:
 # Set succeeds when the key already exists from a prior build; falls
@@ -1868,9 +1882,7 @@ if(APPLE)
         COMMAND /bin/sh -c "/usr/libexec/PlistBuddy -c \"Set :NSLocalNetworkUsageDescription '${_nereus_lan_desc}'\" \"$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Info.plist\" 2>/dev/null || /usr/libexec/PlistBuddy -c \"Add :NSLocalNetworkUsageDescription string '${_nereus_lan_desc}'\" \"$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Info.plist\""
         COMMAND ${CMAKE_COMMAND} -E make_directory "$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Helpers"
         COMMAND ${CMAKE_COMMAND} -E copy_if_different "$<TARGET_FILE:nereus-audio-capture>" "$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Helpers/"
-        COMMAND codesign --force --sign - --entitlements "${CMAKE_CURRENT_SOURCE_DIR}/packaging/macos/app-entitlements.plist" "$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Helpers/nereus-audio-capture"
-        COMMAND codesign --force --deep --sign - "$<TARGET_BUNDLE_DIR:NereusSDR>"
-        COMMENT "Stage private libraries and the capture helper, inject NSMicrophoneUsageDescription and NSLocalNetworkUsageDescription, and re-sign bundle"
+        COMMENT "Stage private libraries and the capture helper, inject NSMicrophoneUsageDescription and NSLocalNetworkUsageDescription"
         VERBATIM
     )
 endif()
@@ -2904,4 +2916,36 @@ endif()
 option(NEREUSSDR_BUILD_HAL_PLUGIN "Build macOS CoreAudio HAL Audio Server plug-in" OFF)
 if(APPLE AND NEREUSSDR_BUILD_HAL_PLUGIN)
     add_subdirectory(hal-plugin)
+endif()
+
+# --------------------------------------------------------------------------
+# macOS: sign the app bundle once, after everything is in it (R-R3-50).
+#
+# POST_BUILD commands on a target run in the order they are added, so this
+# block stays the LAST add_custom_command(TARGET NereusSDR POST_BUILD) in
+# the configure: the private libraries, the capture helper and the
+# Info.plist strings (staged above, after set_target_properties) and the
+# DeepFilterNet3 model (the ENABLE_DFNR block) are all in the bundle by
+# the time it runs. Signing earlier left the model outside the seal, and
+# `codesign --verify --deep --strict` failed with "a sealed resource is
+# missing or invalid".
+#
+# Nested code is signed inside out and keeps its own signature: the two
+# private libraries, then the capture helper with its entitlements
+# (disable-library-validation, audio-input), then the outer bundle, which
+# seals the nested signatures without re-signing them. No --deep: a --deep
+# re-sign of the bundle replaces every nested signature with one that
+# carries no entitlements, which stripped the helper's microphone
+# entitlement. Ad hoc identity ("-"), as before; the release workflow
+# signs again with its own identity after macdeployqt.
+# --------------------------------------------------------------------------
+if(APPLE)
+    add_custom_command(TARGET NereusSDR POST_BUILD
+        COMMAND codesign --force --sign - "$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Frameworks/$<TARGET_FILE_NAME:NereusCore>"
+        COMMAND codesign --force --sign - "$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Frameworks/$<TARGET_FILE_NAME:NereusSDRLib>"
+        COMMAND codesign --force --sign - --entitlements "${CMAKE_CURRENT_SOURCE_DIR}/packaging/macos/app-entitlements.plist" "$<TARGET_BUNDLE_CONTENT_DIR:NereusSDR>/Helpers/nereus-audio-capture"
+        COMMAND codesign --force --sign - "$<TARGET_BUNDLE_DIR:NereusSDR>"
+        COMMENT "Sign the private libraries, the capture helper (with its entitlements) and then the app bundle"
+        VERBATIM
+    )
 endif()

@@ -32,6 +32,10 @@
 //   2026-09-23 -- R-R3-45: speakers and headphones sums from one drain.
 //                 NereusSDR-original. Authored by J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25 -- iPhone app Task 76 (R-IOS-31): one mix per owner from
+//                 the same drain, and a local mask for the local sums.
+//                 NereusSDR-original. J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 // --- From aamix.c ---
@@ -297,8 +301,14 @@ int MasterMixer::tryDrain(float* out, int maxFrames) {
 }
 
 int MasterMixer::tryDrain(float* out, float* hpOut, int maxFrames) {
+    return tryDrain(out, hpOut, maxFrames, 0xFFFFFFFFu, nullptr, 0);
+}
+
+int MasterMixer::tryDrain(float* out, float* hpOut, int maxFrames,
+                          std::uint32_t localMask, OwnerOutput* owners, int ownerCount) {
     // `out` is the speakers sum, `hpOut` the headphones sum (R-R3-45).
     if ((out == nullptr && hpOut == nullptr) || maxFrames <= 0) { return 0; }
+    if (owners == nullptr) { ownerCount = 0; }
     const std::uint64_t admittedEpoch =
         m_membershipEpoch.load(std::memory_order_acquire);
 
@@ -372,6 +382,17 @@ int MasterMixer::tryDrain(float* out, float* hpOut, int maxFrames) {
     if (hpOut != nullptr) {
         std::fill(hpOut, hpOut + static_cast<size_t>(n) * 2, 0.0f);
     }
+    // Task 76: each owner's sums start silent too.
+    for (int k = 0; k < ownerCount; ++k) {
+        OwnerOutput& owner = owners[k];
+        if (owner.sliceMask == 0) { continue; }
+        if (owner.speakers != nullptr) {
+            std::fill(owner.speakers, owner.speakers + static_cast<size_t>(n) * 2, 0.0f);
+        }
+        if (owner.headphones != nullptr) {
+            std::fill(owner.headphones, owner.headphones + static_cast<size_t>(n) * 2, 0.0f);
+        }
+    }
 
     const float step = 1.0f / static_cast<float>(std::max(1, m_rampFrames));
 
@@ -389,6 +410,14 @@ int MasterMixer::tryDrain(float* out, float* hpOut, int maxFrames) {
         }
         const int take = std::min(n, st.avail);
         if (take <= 0) { continue; }
+        // Task 76: which sums this slice reaches. Slot ids outside 0..31
+        // (the transmit monitor's) are local only.
+        const int id = kv.first;
+        const bool inMask = id >= 0 && id < 32;
+        const std::uint32_t bit = inMask ? (std::uint32_t{1} << id) : 0u;
+        const bool local = !inMask || (localMask & bit) != 0;
+        float* const sliceOut = local ? out : nullptr;
+        float* const sliceHpOut = local ? hpOut : nullptr;
 
         // Target gains. Mute is a ramp target, not a hard gate, so a
         // muted slice fades out over m_rampFrames instead of clicking.
@@ -427,13 +456,29 @@ int MasterMixer::tryDrain(float* out, float* hpOut, int maxFrames) {
                 std::clamp(hpTgtR - stagedHpCurR, -step, step);
             const size_t r = static_cast<size_t>(stagedRd) * 2;
             const size_t o = static_cast<size_t>(i) * 2;
-            if (out != nullptr) {
-                out[o + 0] += st.ring[r + 0] * stagedCurL;
-                out[o + 1] += st.ring[r + 1] * stagedCurR;
+            const float spkL = st.ring[r + 0] * stagedCurL;
+            const float spkR = st.ring[r + 1] * stagedCurR;
+            const float hpL = st.ring[r + 0] * stagedHpCurL;
+            const float hpR = st.ring[r + 1] * stagedHpCurR;
+            if (sliceOut != nullptr) {
+                sliceOut[o + 0] += spkL;
+                sliceOut[o + 1] += spkR;
             }
-            if (hpOut != nullptr) {
-                hpOut[o + 0] += st.ring[r + 0] * stagedHpCurL;
-                hpOut[o + 1] += st.ring[r + 1] * stagedHpCurR;
+            if (sliceHpOut != nullptr) {
+                sliceHpOut[o + 0] += hpL;
+                sliceHpOut[o + 1] += hpR;
+            }
+            for (int k = 0; k < ownerCount; ++k) {
+                OwnerOutput& owner = owners[k];
+                if ((owner.sliceMask & bit) == 0) { continue; }
+                if (owner.speakers != nullptr) {
+                    owner.speakers[o + 0] += spkL;
+                    owner.speakers[o + 1] += spkR;
+                }
+                if (owner.headphones != nullptr) {
+                    owner.headphones[o + 0] += hpL;
+                    owner.headphones[o + 1] += hpR;
+                }
             }
             stagedRd = (stagedRd + 1) % st.capFrames;
         }
@@ -477,6 +522,19 @@ int MasterMixer::tryDrain(float* out, float* hpOut, int maxFrames) {
             if (hpOut != nullptr) {
                 hpOut[o + 0] *= g;
                 hpOut[o + 1] *= g;
+            }
+            // And every owner's sums with them (Task 76).
+            for (int k = 0; k < ownerCount; ++k) {
+                OwnerOutput& owner = owners[k];
+                if (owner.sliceMask == 0) { continue; }
+                if (owner.speakers != nullptr) {
+                    owner.speakers[o + 0] *= g;
+                    owner.speakers[o + 1] *= g;
+                }
+                if (owner.headphones != nullptr) {
+                    owner.headphones[o + 0] *= g;
+                    owner.headphones[o + 1] *= g;
+                }
             }
         }
     }

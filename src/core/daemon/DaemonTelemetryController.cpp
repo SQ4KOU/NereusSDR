@@ -93,10 +93,28 @@ qint64 DaemonTelemetryController::sessionElapsedMs() const
     return std::max<qint64>(0, clockNowMs() - m_sessionStartedMs);
 }
 
+void DaemonTelemetryController::bindToSession(quint64 epoch)
+{
+    m_boundEpoch = epoch;
+    if (m_epoch != epoch && m_server && m_server->telemetryAvailable(epoch)) {
+        onSessionStarted(epoch);
+    }
+}
+
 void DaemonTelemetryController::onSessionStarted(quint64 epoch)
 {
+    // iPhone app Task 76: one controller per session. A bound one serves
+    // its own session alone; one on its own never leaves a live session
+    // for a newer one.
+    if (m_boundEpoch != 0 && epoch != m_boundEpoch) {
+        return;
+    }
+    if (m_boundEpoch == 0 && m_epoch != 0 && m_epoch != epoch && m_server
+        && m_server->telemetryAvailable(m_epoch)) {
+        return;
+    }
     stopCollecting();
-    if (epoch == 0 || !m_server || !m_server->telemetryAvailable()) {
+    if (epoch == 0 || !m_server || !m_server->telemetryAvailable(epoch)) {
         return;
     }
 
@@ -244,6 +262,34 @@ void DaemonTelemetryController::applyRadioObservation(
     }
 }
 
+void DaemonTelemetryController::applyRadioStatus(StationTelemetrySnapshot& snapshot) const
+{
+    // R-R3-32 / R-R3-46 (remote-window parity Task 6): what the Core's own
+    // window shows for its radio, read as it is now: the PA readings
+    // (RadioModel::paReadings(), each absent when the radio has none) and
+    // the link counters (RadioConnection::linkStats(), atomics its receive
+    // path writes, safe to read from here). Only while the radio is
+    // connected; StationServer strips all of it for a peer below minor 11.
+    if (!snapshot.radio.connected || !m_radioModel || !m_radioConnection) {
+        return;
+    }
+    const RadioModel::PaReadings pa = m_radioModel->paReadings();
+    snapshot.radio.paVolts = pa.paVolts;
+    snapshot.radio.supplyVolts = pa.supplyVolts;
+    snapshot.radio.paCurrentAmps = pa.paCurrentAmps;
+    snapshot.radio.paTemperatureCelsius = pa.paTemperatureCelsius;
+    const RadioLinkStats::Snapshot link = m_radioConnection->linkStats();
+    snapshot.radio.udpPacketsSeen = static_cast<qint64>(
+        std::min<quint64>(link.udpPacketsSeen, 9007199254740991ULL));
+    snapshot.radio.packetLossPercent = link.packetLossPercent;
+    snapshot.radio.jitterMs = link.jitterMs;
+    snapshot.radio.packetGapMs = link.packetGapMs;
+    const int rateHz = m_radioModel->connectionSampleRateHz();
+    if (rateHz > 0) {
+        snapshot.radio.sampleRateHz = rateHz;
+    }
+}
+
 void DaemonTelemetryController::applyAudioObservation(
     StationTelemetrySnapshot& snapshot, qint64 sampledElapsedMs)
 {
@@ -359,6 +405,7 @@ void DaemonTelemetryController::sampleNow()
     snapshot.sequence = m_sequence;
     snapshot.sampledElapsedMs = sampledElapsedMs;
     applyRadioObservation(snapshot, sampledElapsedMs);
+    applyRadioStatus(snapshot);
     applyAudioObservation(snapshot, sampledElapsedMs);
     snapshot.host = m_hostSampler->reading();
     if (m_hostCpuBaselinePending) {

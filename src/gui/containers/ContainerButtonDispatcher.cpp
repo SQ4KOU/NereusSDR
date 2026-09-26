@@ -13,6 +13,10 @@
 // Modification history (NereusSDR):
 //   2026-09-24  J.J. Boyd / KG4VCF  Created (R-R3-49, R-R3-21). AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 2): MON follows
+//                                    the transmit settings gate in a
+//                                    remote window (the Core's monEnabled).
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-24  J.J. Boyd / KG4VCF  Receiver and transmit gaps plan, Task
 //                                    7: the MOX button keys through
 //                                    RadioModel::setMoxFromButton (a manual
@@ -24,6 +28,19 @@
 //                                    Core; 2-TONE goes through
 //                                    RadioModel::setTwoTone. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 7): PS-A follows
+//                                    the PureSignal arming gate in a remote
+//                                    window (the Core arms off the air).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  Receiver and transmit gaps plan, Task
+//                                    16: TUNE, MOX (outside SPEC and DRM)
+//                                    and 2-Tone are unavailable with the
+//                                    receive-only reason. AI-assisted via
+//                                    Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  Task 16 fix wave: MOX in every mode
+//                                    (I3); both reasons in a remote window
+//                                    (M6). AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include "gui/containers/ContainerButtonDispatcher.h"
@@ -146,7 +163,14 @@ ContainerButtonDispatcher::stateOf(Id id, int rxSource) const
         break;
     case Id::Mon:
         st.on = m_model->transmitModel().monEnabled();
-        if (transmitBlockedRemotely()) { unavailable(remoteReason); }
+        // R-R3-49 (parity Task 2): a transmit setting, not a key. A remote
+        // window toggles the Core's monEnabled while the Core takes it.
+        if (!m_model->ownsLocalDsp()
+            && !(m_hooks.transmitSettingsPermitted && m_hooks.transmitSettingsPermitted())) {
+            const QString reason = m_hooks.transmitSettingsReason
+                ? m_hooks.transmitSettingsReason() : QString();
+            unavailable(reason.isEmpty() ? remoteReason : reason);
+        }
         break;
     case Id::Tun:
     case Id::Mox:
@@ -165,7 +189,19 @@ ContainerButtonDispatcher::stateOf(Id id, int rxSource) const
         } else {
             st.on = m_model->twoToneController() && m_model->twoToneController()->isActive();
         }
-        if (transmitBlockedRemotely()) {
+        // Task 16: receive only disables TUN, 2TONE and MOX, as Thetis
+        // console.RXOnly does (console.cs:15318-15323 [v2.10.3.15]; the
+        // 2TONE line carries // MW0LGE_21a). MOX too in SPEC and DRM, where
+        // Thetis leaves it alone (RadioModel::receiveOnlyDisablesMoxButton,
+        // fix wave I3). First, since it holds however this window reaches
+        // the radio; with a remote window's missing transmit as well, both
+        // reasons show, so turning receive only off does not leave the
+        // button blocked for a reason never named (fix wave M6).
+        if (m_model->isRxOnly()
+            && (id != Id::Mox || m_model->receiveOnlyDisablesMoxButton())) {
+            unavailable(m_model->rxOnlyReasonAlongside(
+                transmitBlockedRemotely() ? remoteReason : QString()));
+        } else if (transmitBlockedRemotely()) {
             unavailable(remoteReason);
         } else if (!m_model->isConnected()) {
             unavailable(noRadioTransmitReason());
@@ -177,9 +213,15 @@ ContainerButtonDispatcher::stateOf(Id id, int rxSource) const
     case Id::PsA: {
         PureSignalSessionFacade* ps = m_model->pureSignalFacade();
         st.on = ps && ps->settings() && ps->settings()->autoCalEnabled();
-        if (transmitBlockedRemotely()) {
-            unavailable(remoteReason);
-        } else if (!ps || !ps->available() || !ps->canActuate()) {
+        // R-R3-49 (parity Task 7): arming keys nothing. A remote window
+        // arms on a Core that takes it (off the air), else says why.
+        const bool armingBlockedRemotely = !m_model->ownsLocalDsp()
+            && !(m_hooks.pureSignalArmingPermitted && m_hooks.pureSignalArmingPermitted());
+        if (armingBlockedRemotely) {
+            const QString reason = m_hooks.pureSignalArmingReason
+                ? m_hooks.pureSignalArmingReason() : QString();
+            unavailable(reason.isEmpty() ? remoteReason : reason);
+        } else if (!ps || !ps->available() || !ps->canArm()) {
             unavailable(QStringLiteral("PureSignal needs a connected radio that supports it."));
         }
         break;

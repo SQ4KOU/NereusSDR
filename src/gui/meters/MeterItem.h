@@ -25,6 +25,9 @@
 //                 meter keeps WDSP's -400 zero-power floor as a number.
 //                 J.J. Boyd (KG4VCF), with AI-assisted transformation via
 //                 Anthropic Claude Code.
+//   2026-09-25 - R-R3-32 (remote-window parity Task 6):
+//                 isHardwareTelemetryBinding, isNoReadingBinding. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -161,6 +164,18 @@ inline bool isNoMeterReading(double dbm)
 // 10 * log10(x + 1.0e-40)), which is a real reading and keeps its number.
 bool isReceiveSignalBinding(int bindingId);
 
+// R-R3-32 (remote-window parity Task 6): the hardware telemetry bindings
+// (HwVolts, HwAmps, HwTemperature), which MeterPoller feeds the sentinel to
+// while RadioModel::paReadings() has no such reading. No volts, amps or
+// temperature reading can be at or below -400.
+bool isHardwareTelemetryBinding(int bindingId);
+// The bindings whose items treat the sentinel as no reading: receive signal
+// and hardware telemetry.
+inline bool isNoReadingBinding(int bindingId)
+{
+    return isReceiveSignalBinding(bindingId) || isHardwareTelemetryBinding(bindingId);
+}
+
 
 class MeterItem : public QObject {
     Q_OBJECT
@@ -213,7 +228,7 @@ public:
     // receive-signal binding and v is the sentinel (isNoMeterReading).
     bool isNoReading(double v) const
     {
-        return isReceiveSignalBinding(m_bindingId) && isNoMeterReading(v);
+        return isNoReadingBinding(m_bindingId) && isNoMeterReading(v);
     }
 
     int zOrder() const { return m_zOrder; }

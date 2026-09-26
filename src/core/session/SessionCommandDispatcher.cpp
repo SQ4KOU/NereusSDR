@@ -107,6 +107,15 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 14 (R-IOS-08):
 //                                    pairing.open and pairing.close.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 2):
+//                                    setTunePowerForTxBand
+//                                    (transmitSettingsVersion 2).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 3):
+//                                    txProfile.select, txProfile.save,
+//                                    txProfile.delete and rade.resetVocoder
+//                                    (transmitSettingsVersion 3).
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-25: iPhone app Task 71 (R-IOS-02): session.leave
 //               (sessionHolderVersion 1). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
@@ -135,6 +144,43 @@
 //                                    tx.keepalive {sequence, epoch} for the
 //                                    transmit watchdog.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06: slice.selectBand
+//                                    (bandSelectVersion 1), the desktop's
+//                                    band button on a slice.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06: notch.addAtSlice
+//                                    (notchControlVersion 2), the desktop's
+//                                    +TNF on a slice.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  Checkpoint join (R-IOS-02, R-IOS-27):
+//                                    slice.selectBand and notch.addAtSlice
+//                                    refused for another device's slice.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 7): ps3.single,
+//                                    ps3.automatic, ps3.applyCurrent and
+//                                    ps3.restoreCorrection taken off the air
+//                                    from a peer offered
+//                                    transmitSettingsVersion 7; ps3.twoTone
+//                                    stays with remote transmit.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 8): moveTgxlRelay,
+//                                    scanTgxlLan and setTgxlAddress
+//                                    (remoteTgxlControlVersion 4).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 9): setPgxlOperate,
+//                                    scanPgxlLan and setPgxlAddress
+//                                    (remotePgxlControlVersion 4).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 10):
+//                                    setRfKitOperate, setRfKitAntenna,
+//                                    setRfKitTciMode and setRfKitAddress
+//                                    (remoteRfKitControlVersion 4).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 / R-R3-46 parity mini-round
+//                                    (radioHardwareVersion 6):
+//                                    setAlexTxAntenna, one band's TX
+//                                    antenna. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -146,6 +192,7 @@
 #include "PureSignalSessionFacade.h"
 #include "core/accessories/AlexAntennaFacade.h"
 #include "core/session/StationDevicesFacade.h"
+#include "models/BandGrid.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -320,14 +367,22 @@ QString notRepresentableReason()
 //   slice verbs            none: they predate capability gating
 //   requestStreamCtun*     remoteCtunAvailable()          (StationClient.cpp)
 //   configure/disconnectTgxl remoteTgxlConfigAvailable()
+//   setTgxlAntenna/Operate/Bypass tgxlControlAvailable() (version 2)
+//   moveTgxlRelay, scanTgxlLan, setTgxlAddress
+//                          tgxlFullControlAvailable() (version 4)
 //   setFourO3AEnabled      remoteFourO3AControlAvailable()
 //   *Pgxl*                 remotePgxlControlAvailable() (version 2)
+//   setPgxlOperate, scanPgxlLan, setPgxlAddress
+//                          pgxlFullControlAvailable() (version 4)
 //   *RfKit*                remoteRfKitControlAvailable() (version 2)
+//   setRfKitOperate, setRfKitAntenna, setRfKitTciMode, setRfKitAddress
+//                          rfKitFullControlAvailable() (version 4)
 //   setStationTci          stationTciAvailable() (version 1)
 //   setTxInterlockPolicy, setPgxlPowerCap, clearAccessoryFaults
 //                          accessoryDataAvailable() (version 1)
 //   requestIoBoardProbe    remoteHardwareConfigAvailable() (version 2)
 //   setAlexRxAntenna       radioHardwareVersion 3 (requestAlexRxAntenna)
+//   setAlexTxAntenna       radioHardwareVersion 6 (requestAlexTxAntenna)
 //   nnr.*                  nnrControlAvailable(); nnr.tryAgain adds
 //                          kNnrLimitSessionProtocolMinor
 //   nnr.applyModelSelection dspAssetVersion 1 (requestApplyNnrModels)
@@ -363,6 +418,10 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
         {"requestSliceSampleRate", {arg("sliceId", kInt), arg("rateHz", kInt)}, {}, 0, 0},
         {"addSliceOnPan", {arg("panId", kUtf8)}, {}, 0, 0},
         {"setActiveSliceById", {arg("sliceId", kInt)}, {}, 0, 0},
+        // A slice's band buttons (R-IOS-27, R-IOS-06): the desktop's per-pan
+        // BAND grid, for a band the catalogue's `bands` lists.
+        {"slice.selectBand", {arg("sliceId", kInt), arg("band", kInt)}, "bandSelectVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
         // C-Tune.
         {"requestStreamCtunPinned", {arg("sliceId", kInt), arg("pinned", kBool)},
          "remoteCtunVersion", 1, kRemoteCtunSessionProtocolMinor},
@@ -398,6 +457,13 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
          kRadioIdentitySessionProtocolMinor},
         {"readPgxlSettings", {}, "remotePgxlControlVersion", 3,
          kRadioIdentitySessionProtocolMinor},
+        // The Power Genius's OPERATE and STANDBY, LAN scan and saved address
+        // (R-R3-49, parity Task 9).
+        {"setPgxlOperate", {arg("on", kBool)}, "remotePgxlControlVersion", 4,
+         kRadioIdentitySessionProtocolMinor},
+        {"scanPgxlLan", {}, "remotePgxlControlVersion", 4, kRadioIdentitySessionProtocolMinor},
+        {"setPgxlAddress", {arg("host", kUtf8), arg("port", kInt)},
+         "remotePgxlControlVersion", 4, kRadioIdentitySessionProtocolMinor},
         {"setTgxlName", {arg("name", kUtf8)}, "remoteTgxlControlVersion", 1,
          kRadioIdentitySessionProtocolMinor},
         {"setTgxlNetwork",
@@ -415,6 +481,26 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
          kRadioIdentitySessionProtocolMinor},
         {"setTgxlBypass", {arg("on", kBool)}, "remoteTgxlControlVersion", 2,
          kRadioIdentitySessionProtocolMinor},
+        // The Tuner Genius's relay nudge, LAN scan and saved address
+        // (R-R3-49, parity Task 8).
+        {"moveTgxlRelay", {arg("relay", kInt), arg("direction", kInt)},
+         "remoteTgxlControlVersion", 4, kRadioIdentitySessionProtocolMinor},
+        {"scanTgxlLan", {}, "remoteTgxlControlVersion", 4, kRadioIdentitySessionProtocolMinor},
+        {"setTgxlAddress", {arg("host", kUtf8), arg("port", kInt)},
+         "remoteTgxlControlVersion", 4, kRadioIdentitySessionProtocolMinor},
+        // The TX applet's Tune Power slider (R-R3-49, parity Task 2).
+        {"setTunePowerForTxBand", {arg("watts", kInt)}, "transmitSettingsVersion", 2,
+         kRadioIdentitySessionProtocolMinor},
+        // The TX profile combos, Setup > Audio > TX Profile and the RADE
+        // applet's Reset vocoder (R-R3-49, parity Task 3).
+        {"txProfile.select", {arg("name", kUtf8)}, "transmitSettingsVersion", 3,
+         kRadioIdentitySessionProtocolMinor},
+        {"txProfile.save", {arg("name", kUtf8)}, "transmitSettingsVersion", 3,
+         kRadioIdentitySessionProtocolMinor},
+        {"txProfile.delete", {arg("name", kUtf8)}, "transmitSettingsVersion", 3,
+         kRadioIdentitySessionProtocolMinor},
+        {"rade.resetVocoder", {}, "transmitSettingsVersion", 3,
+         kRadioIdentitySessionProtocolMinor},
         // The Core's RF-Kit RF2K-S and the station TCI server (R-R3-47,
         // R-R3-48).
         {"configureRfKit", {arg("host", kUtf8), arg("port", kInt)},
@@ -425,6 +511,16 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
          kRadioIdentitySessionProtocolMinor},
         {"resetRfKitError", {}, "remoteRfKitControlVersion", 3,
          kRadioIdentitySessionProtocolMinor},
+        // The RF-Kit's OPERATE and STANDBY, antenna, TCI mode and saved
+        // address (R-R3-49, parity Task 10).
+        {"setRfKitOperate", {arg("on", kBool)}, "remoteRfKitControlVersion", 4,
+         kRadioIdentitySessionProtocolMinor},
+        {"setRfKitAntenna", {arg("port", kInt)}, "remoteRfKitControlVersion", 4,
+         kRadioIdentitySessionProtocolMinor},
+        {"setRfKitTciMode", {}, "remoteRfKitControlVersion", 4,
+         kRadioIdentitySessionProtocolMinor},
+        {"setRfKitAddress", {arg("host", kUtf8), arg("port", kInt)},
+         "remoteRfKitControlVersion", 4, kRadioIdentitySessionProtocolMinor},
         {"setStationTci", {arg("enabled", kBool), arg("port", kInt)}, "stationTciVersion", 1,
          kRadioIdentitySessionProtocolMinor},
         // The Core's accessory records and settings (R-R3-47, R-R3-22).
@@ -462,6 +558,8 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
         // armed. Sent once each (a lost one is overtaken by the next).
         {"tx.keepalive", {arg("sequence", kInt), arg("epoch", kInt)}, "remoteTxVersion", 1,
          kRadioIdentitySessionProtocolMinor},
+        {"setAlexTxAntenna", {arg("band", kInt), arg("antenna", kInt)},
+         "radioHardwareVersion", 6, kRadioIdentitySessionProtocolMinor},
         // Neural noise reduction.
         {"nnr.setDiagnostics",
          {arg("sliceId", kInt), arg("testMode", kInt), arg("outputMode", kInt)},
@@ -514,6 +612,9 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
          kDspControlSessionProtocolMinor},
         {"notch.delete", {arg("id", kInt)}, "notchControlVersion", 1,
          kDspControlSessionProtocolMinor},
+        // R-IOS-27, R-IOS-06: the desktop's +TNF on a slice.
+        {"notch.addAtSlice", {arg("sliceId", kInt)}, "notchControlVersion", 2,
+         kDspControlSessionProtocolMinor},
         // The Core's paired devices, its name, its key backup and its old
         // pairing token (iPhone app Task 13, R-IOS-08).
         {"devices.revoke", {arg("id", kUtf8)}, "deviceAdminVersion", 1,
@@ -529,6 +630,15 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
         {"pairing.close", {}, "pairingVersion", 1, kRadioIdentitySessionProtocolMinor},
         // Leaving the Core on purpose (iPhone app Task 71, R-IOS-02).
         {"session.leave", {}, "sessionHolderVersion", 1, kRadioIdentitySessionProtocolMinor},
+        // Answering the Core's questions and taking back (iPhone app Task
+        // 74, R-IOS-30; the several-devices design, section 10.4).
+        {"confirm.proceed",
+         {{"id", MirrorWireKind::Int64, false}, {"choice", MirrorWireKind::Int64, false}},
+         "sessionHolderVersion", 1, kRadioIdentitySessionProtocolMinor},
+        {"confirm.cancel", {{"id", MirrorWireKind::Int64, false}}, "sessionHolderVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        {"notice.takeBack", {{"id", MirrorWireKind::Int64, false}}, "sessionHolderVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
     };
     return specs;
 }
@@ -557,7 +667,7 @@ SessionCommandDispatcher::SessionCommandDispatcher(RadioModel* radioModel, QObje
                 m_pureSignalCommands.remove(id);
             }
             values.insert("phase", state);
-            emit commandResultReady(SessionMessages::commandResult(command.verb, command.commandId,
+            emitResultAs(command.owner, SessionMessages::commandResult(command.verb, command.commandId,
                 phase != Ps3ActionPhase::Failed, reason, {"pureSignal"},
                 dspCommandValues(values).value_or(QList<MirrorUpdate>{})));
         });
@@ -589,6 +699,11 @@ void SessionCommandDispatcher::resetSessionState()
             m_radioModel->setNnrDiagnosticMode(slice->sliceIndex(), 0, 1);
         }
     }
+    // R-R3-49 (parity Task 7): the arming offer is set before each dispatch
+    // (setPureSignalArmingOffered); a Core with no session offers none. A
+    // Tuner Genius or Power Genius scan still due is dropped.
+    m_pureSignalArmingOffered = false;
+    ++m_sessionGeneration;
 }
 
 void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
@@ -613,6 +728,13 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
     // iPhone app Task 71: nor does leaving the Core.
     if (invoke.commandVerb == "session.leave") {
         handleSessionLeave(invoke);
+        return;
+    }
+    // iPhone app Task 74: an answer to the Core's question, or Take it
+    // back; the Core's confirm step decides.
+    if (invoke.commandVerb == "confirm.proceed" || invoke.commandVerb == "confirm.cancel"
+        || invoke.commandVerb == "notice.takeBack") {
+        handleConfirmAnswer(invoke);
         return;
     }
     if (m_radioModel.isNull()) {
@@ -704,6 +826,8 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleAddSliceOnPan(invoke);
     } else if (invoke.commandVerb == "setActiveSliceById") {
         handleSetActiveSliceById(invoke);
+    } else if (invoke.commandVerb == "slice.selectBand") {
+        handleSelectBand(invoke);
     } else if (invoke.commandVerb == "requestStreamCtunPinned") {
         handleRequestStreamCtunPinned(invoke);
     } else if (invoke.commandVerb == "requestStreamCentre") {
@@ -728,6 +852,14 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleSetRfKitEnabled(invoke);
     } else if (invoke.commandVerb == "resetRfKitError") {
         handleResetRfKitError(invoke);
+    } else if (invoke.commandVerb == "setRfKitOperate") {
+        handleSetRfKitOperate(invoke);
+    } else if (invoke.commandVerb == "setRfKitAntenna") {
+        handleSetRfKitAntenna(invoke);
+    } else if (invoke.commandVerb == "setRfKitTciMode") {
+        handleSetRfKitTciMode(invoke);
+    } else if (invoke.commandVerb == "setRfKitAddress") {
+        handleSetRfKitAddress(invoke);
     } else if (invoke.commandVerb == "setStationTci") {
         handleSetStationTci(invoke);
     } else if (invoke.commandVerb == "setTxInterlockPolicy") {
@@ -747,12 +879,33 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
     } else if (invoke.commandVerb == "setTgxlAntenna" || invoke.commandVerb == "setTgxlOperate"
                || invoke.commandVerb == "setTgxlBypass") {
         handleTgxlControl(invoke);
+    } else if (invoke.commandVerb == "moveTgxlRelay") {
+        handleMoveTgxlRelay(invoke);
+    } else if (invoke.commandVerb == "scanTgxlLan") {
+        handleScanTgxlLan(invoke);
+    } else if (invoke.commandVerb == "setTgxlAddress") {
+        handleSetTgxlAddress(invoke);
+    } else if (invoke.commandVerb == "setPgxlOperate") {
+        handleSetPgxlOperate(invoke);
+    } else if (invoke.commandVerb == "scanPgxlLan") {
+        handleScanPgxlLan(invoke);
+    } else if (invoke.commandVerb == "setPgxlAddress") {
+        handleSetPgxlAddress(invoke);
+    } else if (invoke.commandVerb == "setTunePowerForTxBand") {
+        handleTunePowerForTxBand(invoke);
+    } else if (invoke.commandVerb == "txProfile.select" || invoke.commandVerb == "txProfile.save"
+               || invoke.commandVerb == "txProfile.delete") {
+        handleTxProfile(invoke);
+    } else if (invoke.commandVerb == "rade.resetVocoder") {
+        handleRadeResetVocoder(invoke);
     } else if (invoke.commandVerb == "requestIoBoardProbe") {
         handleRequestIoBoardProbe(invoke);
     } else if (invoke.commandVerb == "setAlexRxAntenna") {
         handleSetAlexRxAntenna(invoke);
     } else if (invoke.commandVerb == "setAlexBpfMode") {
         handleSetAlexBpfMode(invoke);
+    } else if (invoke.commandVerb == "setAlexTxAntenna") {
+        handleSetAlexTxAntenna(invoke);
     } else if (invoke.commandVerb == "nnr.setDiagnostics" || invoke.commandVerb == "nnr.resetTuning"
                || invoke.commandVerb == "nnr.tryAgain") {
         handleNnrAction(invoke);
@@ -873,28 +1026,34 @@ void SessionCommandDispatcher::handleTxKeying(const SessionMessage& invoke)
     }
     // Task 36: answered through the reply, now or once a key's microphone
     // buffer has filled or timed out.
+    //
+    // Merge of the trunk into the transmit lane (the multi-client fix wave
+    // I1): a result is named by the session it answers, so every answer,
+    // at once or later, is emitted as this dispatch's session owner's.
     const QPointer<SessionCommandDispatcher> self(this);
     const QByteArray verb = invoke.commandVerb;
     const quint32 id = invoke.commandId;
-    m_transmitAccess.keying(command, [self, verb, id](const RemoteKeying::Result& result) {
+    const QString owner = m_sessionOwner;
+    m_transmitAccess.keying(command, [self, verb, id, owner](const RemoteKeying::Result& result) {
         if (self.isNull()) {
             return;
         }
+        QList<MirrorUpdate> values;
+        QString reason;
         if (result.accepted) {
-            QList<MirrorUpdate> values;
             if (result.epoch != 0) {
                 values.append({0, "epoch", MirrorWireKind::Int64,
                                QVariant(static_cast<qlonglong>(result.epoch))});
             }
-            emit self->commandResultReady(
-                SessionMessages::commandResult(verb, id, true, QString(), {}, values));
-            return;
+        } else if (!result.refusal.isEmpty()) {
+            reason = result.refusal.text;
+            values = {{0, "refusalCode", MirrorWireKind::Utf8, QString::fromUtf8(result.refusal.code)},
+                      {0, "refusalFix", MirrorWireKind::Utf8, QString::fromUtf8(result.refusal.fix)}};
+        } else {
+            reason = result.reason;
         }
-        if (!result.refusal.isEmpty()) {
-            self->emitRefusal(verb, id, result.refusal);
-            return;
-        }
-        self->emitResult(verb, id, false, result.reason, {});
+        self->emitResultAs(owner, SessionMessages::commandResult(verb, id, result.accepted,
+                                                                 reason, {}, values));
     });
 }
 
@@ -978,14 +1137,21 @@ void SessionCommandDispatcher::handleSetTxSlice(const SessionMessage& invoke)
 
 bool SessionCommandDispatcher::refusedForAnotherDevice(const SessionMessage& invoke)
 {
-    // The verbs that name a slice of the requester's by `sliceId` (ruling
-    // 5.9). requestSliceSampleRate, requestStreamCtunPinned and
-    // requestStreamCentre are routes on a shared receiver, not refusals
-    // (Tasks 74 and 75).
+    // Every verb that names a slice by `sliceId` (ruling 5.9): a device
+    // addresses only its own slices. requestSliceSampleRate,
+    // requestStreamCtunPinned and requestStreamCentre are routes on the
+    // requester's own slice (D53, the anchor rules; Tasks 74 and 75, which
+    // run before this), and refusals on anyone else's, a slice nobody owns
+    // or one held for a device, whatever receivers are in use (fix wave
+    // C1). slice.selectBand and notch.addAtSlice (R-IOS-27) joined at the
+    // checkpoint merge: a band button or +TNF acts on its own slice only.
     static const QSet<QByteArray> kSliceVerbs{
         QByteArrayLiteral("removeSlice"), QByteArrayLiteral("setActiveSliceById"),
         QByteArrayLiteral("nnr.setDiagnostics"), QByteArrayLiteral("nnr.resetTuning"),
-        QByteArrayLiteral("nnr.tryAgain"), QByteArrayLiteral("notch.add")};
+        QByteArrayLiteral("nnr.tryAgain"), QByteArrayLiteral("notch.add"),
+        QByteArrayLiteral("requestSliceSampleRate"), QByteArrayLiteral("requestStreamCentre"),
+        QByteArrayLiteral("requestStreamCtunPinned"), QByteArrayLiteral("slice.selectBand"),
+        QByteArrayLiteral("notch.addAtSlice")};
     if (m_requester.isEmpty() || !m_sliceAccess || !kSliceVerbs.contains(invoke.commandVerb)) {
         return false;
     }
@@ -1056,13 +1222,30 @@ void SessionCommandDispatcher::handlePureSignalAction(const SessionMessage& invo
     // The session currently advertises txPermitted=false. Keep the same hard
     // gate here even when a client bypasses its disabled controls. R4 owns
     // replacing this gate with negotiated, station-authorized transmit.
-    if (!stop && *action != Ps3Action::SaveCorrection) {
+    // R-R3-49 (parity Task 7): arming keys nothing (Single Cal, Automatic,
+    // Apply current correction, Restore a saved correction), so a peer
+    // offered transmitSettingsVersion 7 may ask for it while the radio is
+    // off the air. The two-tone test keys the radio and stays here.
+    const bool arming = *action == Ps3Action::Single || *action == Ps3Action::StartAutomatic
+        || *action == Ps3Action::ApplyCurrentCorrection
+        || *action == Ps3Action::RestoreCorrection;
+    if (!stop && *action != Ps3Action::SaveCorrection
+        && !(arming && m_pureSignalArmingOffered)) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
                    QStringLiteral("PureSignal cannot be run from a remote window yet."), {});
         return;
     }
+    if (arming) {
+        QString onAir;
+        if (m_radioModel->stationOnAirRefusal(&onAir)) {
+            emitResult(invoke.commandVerb, invoke.commandId, false, onAir, {});
+            return;
+        }
+    }
     for (const PendingPureSignalCommand& command : std::as_const(m_pureSignalCommands)) {
-        if (command.commandId == invoke.commandId) {
+        // Fix wave I1: ids are counted per client, so another session's
+        // action with the same id is not this one.
+        if (command.commandId == invoke.commandId && command.owner == m_sessionOwner) {
             emitResult(invoke.commandVerb, invoke.commandId, false,
                        QStringLiteral("This PureSignal request is already in progress."), {});
             return;
@@ -1073,7 +1256,7 @@ void SessionCommandDispatcher::handlePureSignalAction(const SessionMessage& invo
         emitResult(invoke.commandVerb, invoke.commandId, false, facade->lastActionError(), {});
         return;
     }
-    m_pureSignalCommands.insert(id, {invoke.commandId, invoke.commandVerb});
+    m_pureSignalCommands.insert(id, {invoke.commandId, invoke.commandVerb, m_sessionOwner});
     emit commandResultReady(SessionMessages::commandResult(invoke.commandVerb, invoke.commandId,
         true, {}, {}, {{0, "phase", MirrorWireKind::Utf8, QStringLiteral("accepted")}}));
 }
@@ -1166,6 +1349,12 @@ void SessionCommandDispatcher::handleNotchAction(const SessionMessage& invoke)
         valid = hasExactlyArguments(invoke.arguments, {"id"})
             && kindIs("id", MirrorWireKind::Int64)
             && findIntArgument(invoke.arguments, "id", &id) == ArgumentStatus::Ok;
+    } else if (verb == "notch.addAtSlice") {
+        // R-IOS-27, R-IOS-06 (notchControlVersion 2): the desktop's +TNF.
+        // The Core composes the centre and width from its own slice.
+        valid = hasExactlyArguments(invoke.arguments, {"sliceId"})
+            && kindIs("sliceId", MirrorWireKind::Int64)
+            && findIntArgument(invoke.arguments, "sliceId", &sliceId) == ArgumentStatus::Ok;
     } else {
         emitResult(verb, invoke.commandId, false,
                    QStringLiteral("The Core does not know this request. Updating the Core may help."), {});
@@ -1182,6 +1371,8 @@ void SessionCommandDispatcher::handleNotchAction(const SessionMessage& invoke)
     int addedId = -1;
     if (verb == "notch.add") {
         accepted = m_radioModel->addNotchFromStation(sliceId, centreHz, widthHz, &addedId, &reason);
+    } else if (verb == "notch.addAtSlice") {
+        accepted = m_radioModel->addTnfFromStation(sliceId, &addedId, &reason);
     } else if (verb == "notch.move") {
         accepted = m_radioModel->moveNotchFromStation(id, centreHz, widthHz, &reason);
     } else if (verb == "notch.setActive") {
@@ -1196,7 +1387,7 @@ void SessionCommandDispatcher::handleNotchAction(const SessionMessage& invoke)
         // own view of the edit until the mirror has caught up with it.
         values.append({0, "revision", MirrorWireKind::Int64,
                        static_cast<qlonglong>(m_radioModel->notchListRevision())});
-        if (verb == "notch.add") {
+        if (verb == "notch.add" || verb == "notch.addAtSlice") {
             values.append({0, "id", MirrorWireKind::Int64, static_cast<qlonglong>(addedId)});
         }
     }
@@ -1211,6 +1402,16 @@ void SessionCommandDispatcher::emitResult(const QByteArray& verb, quint32 comman
 {
     emit commandResultReady(
         SessionMessages::commandResult(verb, commandId, accepted, reason, affectedKeys));
+}
+
+void SessionCommandDispatcher::emitResultAs(const QString& owner, const SessionMessage& result)
+{
+    // Fix wave I1: saved and restored, so a later result emitted inside
+    // another session's dispatch leaves that dispatch's owner in place.
+    const std::optional<QString> previous = m_resultOwner;
+    m_resultOwner = owner;
+    emit commandResultReady(result);
+    m_resultOwner = previous;
 }
 
 // ── addSlice ─────────────────────────────────────────────────────────────
@@ -1278,7 +1479,11 @@ void SessionCommandDispatcher::handleRemoveSlice(const SessionMessage& invoke)
         break;
     }
 
-    if (m_radioModel->sliceById(sliceId) == nullptr) {
+    // Fix wave 3 (Important 1): the slice asked about, by identity, so a
+    // slice closed and its id reused before the change runs (by any
+    // device, the asker included) is never changed in its place.
+    const QPointer<SliceModel> askedSlice(m_radioModel->sliceById(sliceId));
+    if (askedSlice.isNull()) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
                    QStringLiteral("That receiver is no longer on the Core."), {});
         return;
@@ -1297,6 +1502,67 @@ void SessionCommandDispatcher::handleRemoveSlice(const SessionMessage& invoke)
     const QByteArray key = ObjectRegistry::keyForSlice(sliceId);
     m_radioModel->removeSlice(sliceId);
     emitResult(invoke.commandVerb, invoke.commandId, true, QString(), { key });
+}
+
+// ── slice.selectBand ─────────────────────────────────────────────────────
+
+// R-IOS-27, R-IOS-06 (bandSelectVersion 1): a band button of the desktop's
+// per-pan BAND grid, for one slice. The Core runs the desktop's own band
+// change on that slice (RadioModel::onBandButtonClicked(SliceModel*, Band),
+// as ContainerButtonDispatcher does for a container's slice), so the band's
+// saved frequency, mode and filter come back, or its seed on a first visit.
+// The desktop offers every grid band on every radio and does not hold a
+// band change while the radio is on the air, so neither is refused here.
+// Its own refusal (a locked slice) comes back through bandClickIgnored with
+// the desktop's words. A band the slice is already on changes nothing and
+// is accepted, as the desktop's click is silently a no-op.
+void SessionCommandDispatcher::handleSelectBand(const SessionMessage& invoke)
+{
+    int sliceId = -1;
+    int bandId = -1;
+    if (!hasExactlyArguments(invoke.arguments, { "sliceId", "band" })
+        || !hasWireKind(invoke.arguments, "sliceId", MirrorWireKind::Int64)
+        || !hasWireKind(invoke.arguments, "band", MirrorWireKind::Int64)
+        || findIntArgument(invoke.arguments, "sliceId", &sliceId) != ArgumentStatus::Ok
+        || findIntArgument(invoke.arguments, "band", &bandId) != ArgumentStatus::Ok) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The request to change band was not understood."), {});
+        return;
+    }
+    SliceModel* const slice = m_radioModel->sliceById(sliceId);
+    if (slice == nullptr) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("That receiver is no longer on the Core."), {});
+        return;
+    }
+    const BandGridEntry* entry = nullptr;
+    for (const BandGridEntry& candidate : kBandGrid) {
+        if (static_cast<int>(candidate.band) == bandId) {
+            entry = &candidate;
+        }
+    }
+    if (entry == nullptr) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core has no band button for that band."), {});
+        return;
+    }
+
+    // onBandButtonClicked returns nothing; a refusal is its bandClickIgnored
+    // signal, emitted synchronously inside the call (the same-thread
+    // invariant handleAddSlice relies on).
+    QString ignoredReason;
+    const QMetaObject::Connection conn = connect(
+        m_radioModel, &RadioModel::bandClickIgnored, this,
+        [&ignoredReason](Band, const QString& reason) { ignoredReason = reason; });
+    m_radioModel->onBandButtonClicked(slice, entry->band);
+    QObject::disconnect(conn);
+
+    if (!ignoredReason.isEmpty()) {
+        emitResult(invoke.commandVerb, invoke.commandId, false, ignoredReason, {});
+        return;
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(),
+               { ObjectRegistry::keyForSlice(sliceId) });
 }
 
 // ── addSliceOnPan ────────────────────────────────────────────────────────
@@ -1353,6 +1619,10 @@ void SessionCommandDispatcher::handleAddSliceOnPan(const SessionMessage& invoke)
 
 void SessionCommandDispatcher::handleRequestSliceSampleRate(const SessionMessage& invoke)
 {
+    // Fix wave: a confirmed rate change's closes, for this dispatch only.
+    const QHash<int, ClosingSlice> closingOwners = std::exchange(m_rateClosing, {});
+    const std::function<void(int)> close = std::exchange(m_rateClose, {});
+    const QString changedReason = std::exchange(m_rateChangedReason, {});
     int sliceId = 0;
     int rateHz = 0;
     const ArgumentStatus sliceIdStatus =
@@ -1378,7 +1648,11 @@ void SessionCommandDispatcher::handleRequestSliceSampleRate(const SessionMessage
         return;
     }
 
-    if (m_radioModel->sliceById(sliceId) == nullptr) {
+    // Fix wave 3 (Important 1): the slice asked about, by identity, so a
+    // slice closed and its id reused before the change runs (by any
+    // device, the asker included) is never changed in its place.
+    const QPointer<SliceModel> askedSlice(m_radioModel->sliceById(sliceId));
+    if (askedSlice.isNull()) {
         emitResult(invoke.commandVerb, invoke.commandId, false,
                    QStringLiteral("That receiver is no longer on the Core."), {});
         return;
@@ -1393,14 +1667,63 @@ void SessionCommandDispatcher::handleRequestSliceSampleRate(const SessionMessage
     // a caller-owned temporary) has returned.
     const QByteArray verb = invoke.commandVerb;
     const quint32 commandId = invoke.commandId;
+    // Fix wave I1: the result is this session's, whichever dispatch is
+    // running when it arrives.
+    const QString owner = m_sessionOwner;
+    // Fix wave 2 (Important 4): the device this change acts for, and the
+    // check that refused another device's slice here, run again when the
+    // change is applied: the slice may have closed and its id gone to
+    // another device's new slice in between.
+    const QByteArray requester = m_requester;
+    const SliceAccess access = m_sliceAccess;
     const QPointer<SessionCommandDispatcher> self(this);
     const QPointer<RadioModel> radioModel(m_radioModel);
 
     QMetaObject::invokeMethod(
         m_radioModel,
-        [self, radioModel, verb, commandId, sliceId, rateHz]() {
+        [self, radioModel, verb, commandId, sliceId, rateHz, owner, closingOwners, close,
+         changedReason, requester, access, askedSlice]() {
             if (self.isNull() || radioModel.isNull()) {
                 return;
+            }
+            if (!requester.isEmpty() && access) {
+                const QString refusal = access(requester, sliceId);
+                if (!refusal.isEmpty()) {
+                    self->emitResultAs(owner, SessionMessages::commandResult(
+                        verb, commandId, false, refusal, {}));
+                    return;
+                }
+            }
+            // Fix wave 3 (Important 1): the id must still name the slice
+            // asked about; a reuse by another device is refused above as
+            // that device's, a reuse by the asker (or by nobody) here.
+            if (askedSlice.isNull() || radioModel->sliceById(sliceId) != askedSlice.data()) {
+                self->emitResultAs(owner, SessionMessages::commandResult(
+                    verb, commandId, false,
+                    QStringLiteral("That receiver is no longer on the Core."), {}));
+                return;
+            }
+            // A confirmed change closes exactly the slices it was confirmed
+            // for: each id must still name the same slice, with the owner
+            // it had at the proceed, or the whole change is refused and
+            // nothing closes (fix wave 3: identity, so an id reused by the
+            // same owner, or by nobody, is caught too).
+            QSet<int> closing;
+            for (auto it = closingOwners.cbegin(); it != closingOwners.cend(); ++it) {
+                SliceModel* const now = radioModel->sliceById(it.key());
+                if (now == nullptr || it.value().slice.isNull() || now != it.value().slice.data()
+                    || radioModel->sliceOwnership()->mark(it.key()).subject()
+                           != it.value().owner) {
+                    self->emitResultAs(owner, SessionMessages::commandResult(
+                        verb, commandId, false,
+                        changedReason.isEmpty()
+                            ? QStringLiteral("That setting changed since you asked. "
+                                             "Make the change again.")
+                            : changedReason,
+                        {}));
+                    return;
+                }
+                closing.insert(it.key());
             }
 
             // Actual scope, not requested scope (see the class comment):
@@ -1432,11 +1755,12 @@ void SessionCommandDispatcher::handleRequestSliceSampleRate(const SessionMessage
             const QMetaObject::Connection conn = connect(
                 radioModel, &RadioModel::sliceRetuneRejected, self,
                 [&rejectionReason](int, const QString& reason) { rejectionReason = reason; });
-            radioModel->requestSliceSampleRate(sliceId, rateHz);
+            radioModel->requestSliceSampleRateClosing(sliceId, rateHz, closing, close);
             QObject::disconnect(conn);
 
             if (!rejectionReason.isEmpty()) {
-                self->emitResult(verb, commandId, false, rejectionReason, {});
+                self->emitResultAs(owner, SessionMessages::commandResult(
+                                              verb, commandId, false, rejectionReason, {}));
                 return;
             }
 
@@ -1455,7 +1779,8 @@ void SessionCommandDispatcher::handleRequestSliceSampleRate(const SessionMessage
             // requestSliceSampleRate()'s own idempotent-check paths,
             // RadioModel.cpp), not a failure: RadioModel raised no
             // rejection, so nothing here second-guesses that.
-            self->emitResult(verb, commandId, true, QString(), affected);
+            self->emitResultAs(owner, SessionMessages::commandResult(verb, commandId, true,
+                                                                     QString(), affected));
         },
         Qt::QueuedConnection);
 }
@@ -1713,6 +2038,104 @@ void SessionCommandDispatcher::handleResetRfKitError(const SessionMessage& invok
     emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
 }
 
+// R-R3-49 (parity Task 10, remoteRfKitControlVersion 4): the RF-Kit's
+// OPERATE or STANDBY, sent to the Core's admitted amp as the local applet's
+// request. Refused while the radio is on the air or the Core is not
+// connected to the amp; nothing is sent then.
+void SessionCommandDispatcher::handleSetRfKitOperate(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    QVariant on;
+    if (!hasExactlyArguments(invoke.arguments, { "on" })
+        || !findArgument(invoke.arguments, "on", &on) || on.typeId() != QMetaType::Bool) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("The request to put the RF-Kit amplifier in operate or "
+                                  "standby was not understood."), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->setRfKitOperateForStation(on.toBool(), &reason)) {
+        emitResult(verb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not switch the RF-Kit "
+                                                     "amplifier.")
+                                    : reason, {});
+        return;
+    }
+    emitResult(verb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-49 (parity Task 10): the applet's ANT 1 to 4, an internal antenna.
+void SessionCommandDispatcher::handleSetRfKitAntenna(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    int port = 0;
+    if (!hasExactlyArguments(invoke.arguments, { "port" })
+        || !hasWireKind(invoke.arguments, "port", MirrorWireKind::Int64)
+        || findIntArgument(invoke.arguments, "port", &port) != ArgumentStatus::Ok) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("The request to switch the RF-Kit amplifier's antenna was "
+                                  "not understood."), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->setRfKitAntennaForStation(port, &reason)) {
+        emitResult(verb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not switch the RF-Kit "
+                                                     "amplifier's antenna.")
+                                    : reason, {});
+        return;
+    }
+    emitResult(verb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-49 (parity Task 10): the RF-Kit page's "Set amp to TCI mode".
+void SessionCommandDispatcher::handleSetRfKitTciMode(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    if (!hasExactlyArguments(invoke.arguments, {})) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("The request to put the RF-Kit amplifier in TCI mode was not "
+                                  "understood."), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->setRfKitTciModeForStation(&reason)) {
+        emitResult(verb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not put the RF-Kit amplifier "
+                                                     "in TCI mode.")
+                                    : reason, {});
+        return;
+    }
+    emitResult(verb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-49 (parity Task 10): the RF-Kit page's Host and Port, saved on the
+// Core for its radio without dialling.
+void SessionCommandDispatcher::handleSetRfKitAddress(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    QString host;
+    int port = 0;
+    if (!hasExactlyArguments(invoke.arguments, { "host", "port" })
+        || !findUtf8Argument(invoke.arguments, "host", &host)
+        || !hasWireKind(invoke.arguments, "port", MirrorWireKind::Int64)
+        || findIntArgument(invoke.arguments, "port", &port) != ArgumentStatus::Ok) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("The request to save the RF-Kit amplifier address was not "
+                                  "understood."), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->setRfKitAddressForStation(host, port, &reason)) {
+        emitResult(verb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not save the RF-Kit "
+                                                     "amplifier address.")
+                                    : reason, {});
+        return;
+    }
+    emitResult(verb, invoke.commandId, true, QString(), {});
+}
+
 void SessionCommandDispatcher::handleSetRfKitEnabled(const SessionMessage& invoke)
 {
     QVariant enabled;
@@ -1749,6 +2172,30 @@ void SessionCommandDispatcher::handleSessionLeave(const SessionMessage& invoke)
     }
     emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
     emit sessionLeaveRequested();
+}
+
+// iPhone app Task 74 (R-IOS-30): confirm.proceed {id, choice},
+// confirm.cancel {id}, notice.takeBack {id}. The arguments are read here;
+// what they do is the Core's confirm step (StationServer).
+void SessionCommandDispatcher::handleConfirmAnswer(const SessionMessage& invoke)
+{
+    const bool proceed = invoke.commandVerb == "confirm.proceed";
+    int id = 0;
+    int choice = -1;
+    const bool shape = proceed ? hasExactlyArguments(invoke.arguments, {"id", "choice"})
+                               : hasExactlyArguments(invoke.arguments, {"id"});
+    if (!shape || findIntArgument(invoke.arguments, "id", &id) != ArgumentStatus::Ok
+        || (proceed && findIntArgument(invoke.arguments, "choice", &choice) != ArgumentStatus::Ok)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core could not read this request."), {});
+        return;
+    }
+    if (!m_confirmAnswer) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("That question is no longer open. Make the change again."), {});
+        return;
+    }
+    emit commandResultReady(m_confirmAnswer(invoke, id, choice));
 }
 
 // R-R3-48: the one TCI switch and port, kept by the Core.
@@ -2084,6 +2531,261 @@ void SessionCommandDispatcher::handleTgxlControl(const SessionMessage& invoke)
     emitResult(verb, invoke.commandId, true, QString(), {});
 }
 
+// R-R3-49 (parity Task 8, remoteTgxlControlVersion 4): a relay nudge
+// (`relay` 0 C1, 1 L, 2 C2; `direction` -1 or 1), through the Core's own
+// TunerModel. Refused as the switches are; nothing is sent then.
+void SessionCommandDispatcher::handleMoveTgxlRelay(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    int relay = 0;
+    int direction = 0;
+    if (!hasExactlyArguments(invoke.arguments, { "relay", "direction" })
+        || !hasWireKind(invoke.arguments, "relay", MirrorWireKind::Int64)
+        || !hasWireKind(invoke.arguments, "direction", MirrorWireKind::Int64)
+        || findIntArgument(invoke.arguments, "relay", &relay) != ArgumentStatus::Ok
+        || findIntArgument(invoke.arguments, "direction", &direction) != ArgumentStatus::Ok) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("The request to move a Tuner Genius relay was not understood."),
+                   {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->moveTgxlRelayForStation(relay, direction, &reason)) {
+        emitResult(verb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not switch the Tuner Genius.")
+                                    : reason, {});
+        return;
+    }
+    emitResult(verb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-49 (parity Task 8): the Core listens for Tuner Genius announcements
+// and answers once its window ends, with `values` devicesJson (utf8, a JSON
+// array of {"address","port","model","serial","nickname"}). An answer due
+// to an earlier session is dropped.
+void SessionCommandDispatcher::handleScanTgxlLan(const SessionMessage& invoke)
+{
+    const QByteArray verb = invoke.commandVerb;
+    const quint32 commandId = invoke.commandId;
+    if (!hasExactlyArguments(invoke.arguments, {})) {
+        emitResult(verb, commandId, false,
+                   QStringLiteral("The request to scan for a Tuner Genius was not understood."),
+                   {});
+        return;
+    }
+    QString reason;
+    const QPointer<SessionCommandDispatcher> self(this);
+    const quint64 generation = m_sessionGeneration;
+    // Checkpoint join (R-IOS-02): the answer comes on a later turn, so it
+    // is named for the session that asked (emitResultAs), not whichever
+    // session is being dispatched then.
+    const QString owner = m_sessionOwner;
+    const bool started = m_radioModel->scanTgxlLanForStation(
+        [self, generation, owner, verb, commandId](const QString& devicesJson) {
+            if (!self || self->m_sessionGeneration != generation) { return; }
+            self->emitResultAs(owner, SessionMessages::commandResult(
+                verb, commandId, true, QString(), {},
+                {{0, "devicesJson", MirrorWireKind::Utf8, devicesJson}}));
+        },
+        &reason);
+    if (!started) {
+        emitResult(verb, commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not scan for a Tuner Genius.")
+                                    : reason, {});
+    }
+}
+
+// R-R3-49 (parity Task 8): the Peripherals row's Host and Port, saved on
+// the Core for its radio without dialling (configureTgxl's address rules).
+void SessionCommandDispatcher::handleSetTgxlAddress(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    QString host;
+    int port = 0;
+    if (!hasExactlyArguments(invoke.arguments, { "host", "port" })
+        || !findUtf8Argument(invoke.arguments, "host", &host)
+        || !hasWireKind(invoke.arguments, "port", MirrorWireKind::Int64)
+        || findIntArgument(invoke.arguments, "port", &port) != ArgumentStatus::Ok) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("The request to save the Tuner Genius address was not "
+                                  "understood."), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->setTgxlAddressForStation(host, port, &reason)) {
+        emitResult(verb, invoke.commandId, false,
+                   reason.isEmpty()
+                       ? QStringLiteral("The Core did not save the Tuner Genius address.")
+                       : reason, {});
+        return;
+    }
+    emitResult(verb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-49 (parity Task 9, remotePgxlControlVersion 4): the Power Genius's
+// OPERATE or STANDBY, sent through the Core's own PgxlConnection as the
+// local applet's line. Refused while the radio is on the air or the Core is
+// not connected to the amp; nothing is sent then.
+void SessionCommandDispatcher::handleSetPgxlOperate(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    QVariant on;
+    if (!hasExactlyArguments(invoke.arguments, { "on" })
+        || !findArgument(invoke.arguments, "on", &on) || on.typeId() != QMetaType::Bool) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("The request to put the Power Genius in operate or standby "
+                                  "was not understood."), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->setPgxlOperateForStation(on.toBool(), &reason)) {
+        emitResult(verb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not switch the Power Genius.")
+                                    : reason, {});
+        return;
+    }
+    emitResult(verb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-49 (parity Task 9): the Core listens for Power Genius announcements
+// and answers once its window ends, as scanTgxlLan does.
+void SessionCommandDispatcher::handleScanPgxlLan(const SessionMessage& invoke)
+{
+    const QByteArray verb = invoke.commandVerb;
+    const quint32 commandId = invoke.commandId;
+    if (!hasExactlyArguments(invoke.arguments, {})) {
+        emitResult(verb, commandId, false,
+                   QStringLiteral("The request to scan for a Power Genius was not understood."),
+                   {});
+        return;
+    }
+    QString reason;
+    const QPointer<SessionCommandDispatcher> self(this);
+    const quint64 generation = m_sessionGeneration;
+    // Checkpoint join (R-IOS-02): the answer comes on a later turn, so it
+    // is named for the session that asked (emitResultAs), not whichever
+    // session is being dispatched then.
+    const QString owner = m_sessionOwner;
+    const bool started = m_radioModel->scanPgxlLanForStation(
+        [self, generation, owner, verb, commandId](const QString& devicesJson) {
+            if (!self || self->m_sessionGeneration != generation) { return; }
+            self->emitResultAs(owner, SessionMessages::commandResult(
+                verb, commandId, true, QString(), {},
+                {{0, "devicesJson", MirrorWireKind::Utf8, devicesJson}}));
+        },
+        &reason);
+    if (!started) {
+        emitResult(verb, commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not scan for a Power Genius.")
+                                    : reason, {});
+    }
+}
+
+// R-R3-49 (parity Task 9): the Peripherals row's Power Genius Host and
+// Port, saved on the Core for its radio without dialling.
+void SessionCommandDispatcher::handleSetPgxlAddress(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    QString host;
+    int port = 0;
+    if (!hasExactlyArguments(invoke.arguments, { "host", "port" })
+        || !findUtf8Argument(invoke.arguments, "host", &host)
+        || !hasWireKind(invoke.arguments, "port", MirrorWireKind::Int64)
+        || findIntArgument(invoke.arguments, "port", &port) != ArgumentStatus::Ok) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("The request to save the Power Genius address was not "
+                                  "understood."), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->setPgxlAddressForStation(host, port, &reason)) {
+        emitResult(verb, invoke.commandId, false,
+                   reason.isEmpty()
+                       ? QStringLiteral("The Core did not save the Power Genius address.")
+                       : reason, {});
+        return;
+    }
+    emitResult(verb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-49 (parity Task 2, transmitSettingsVersion 2): the TX applet's Tune
+// Power slider. The Core sets its transmit band's tune power and the tune
+// drive source to the tune slider, as the local slider does; the window
+// sees both on the `transmit` object. Refused while the radio is on the air
+// and outside the tune power range; nothing changes then. Keys nothing.
+void SessionCommandDispatcher::handleTunePowerForTxBand(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    int watts = 0;
+    if (!hasExactlyArguments(invoke.arguments, { "watts" })
+        || !hasWireKind(invoke.arguments, "watts", MirrorWireKind::Int64)
+        || findIntArgument(invoke.arguments, "watts", &watts) != ArgumentStatus::Ok) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("The request to change the tune power was not understood."), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->setTunePowerForTxBandForStation(watts, &reason)) {
+        emitResult(verb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not change the tune power.")
+                                    : reason, {});
+        return;
+    }
+    emitResult(verb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-49 (parity Task 3, transmitSettingsVersion 3): the TX profile
+// combos and Setup > Audio > TX Profile, through the Core's own
+// MicProfileManager as the local controls use it. The Core's active profile
+// and list come back on `transmit`. Refused while the radio is on the air;
+// nothing changes then. Keys nothing.
+void SessionCommandDispatcher::handleTxProfile(const SessionMessage& invoke)
+{
+    const QByteArray& verb = invoke.commandVerb;
+    QString name;
+    if (!hasExactlyArguments(invoke.arguments, { "name" })
+        || !findUtf8Argument(invoke.arguments, "name", &name)) {
+        emitResult(verb, invoke.commandId, false,
+                   QStringLiteral("The request for the transmit profile was not understood."), {});
+        return;
+    }
+    QString reason;
+    bool done = false;
+    if (verb == "txProfile.select") {
+        done = m_radioModel->selectTxProfileForStation(name, &reason);
+    } else if (verb == "txProfile.save") {
+        done = m_radioModel->saveTxProfileForStation(name, &reason);
+    } else {
+        done = m_radioModel->deleteTxProfileForStation(name, &reason);
+    }
+    if (!done) {
+        emitResult(verb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not change the transmit profile.")
+                                    : reason, {});
+        return;
+    }
+    emitResult(verb, invoke.commandId, true, QString(), {});
+}
+
+// R-R3-49 (parity Task 3): the RADE applet's Reset vocoder, on the Core's
+// RADE channel as the local button does. Keys nothing.
+void SessionCommandDispatcher::handleRadeResetVocoder(const SessionMessage& invoke)
+{
+    if (!hasExactlyArguments(invoke.arguments, {})) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The request to reset the RADE vocoder was not understood."), {});
+        return;
+    }
+    QString reason;
+    if (!m_radioModel->resetRadeVocoderForStation(&reason)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   reason.isEmpty() ? QStringLiteral("The Core did not reset the RADE vocoder.")
+                                    : reason, {});
+        return;
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, true, QString(), {});
+}
+
 void SessionCommandDispatcher::handleDisconnectPgxl(const SessionMessage& invoke)
 {
     if (!hasExactlyArguments(invoke.arguments, {})) {
@@ -2178,6 +2880,42 @@ void SessionCommandDispatcher::handleSetAlexRxAntenna(const SessionMessage& invo
     const bool receiveOnly = rxOnly.toBool();
     const QString reason = receiveOnly ? alex->setRxOnlyAntForBand(Band(band), antenna)
                                        : alex->setRxAntForBand(Band(band), antenna);
+    emitResult(invoke.commandVerb, invoke.commandId, reason.isEmpty(), reason, {});
+}
+
+// Parity mini-round (radioHardwareVersion 6): one band's TX antenna from a
+// remote window's Antenna Control grid. Parity Task 12 sent the whole
+// 14-band txAntennas list, so a list built before a change the Core made to
+// another band put that band back; the Core now changes only the band
+// named, through its own AlexAntennaFacade and AlexController (the local
+// grid's setTxAnt), and every window follows the `alexAntennas` delta. A
+// port blocked for transmit is kept off the band, with its reason. Like the
+// whole list, it keys nothing and is taken on the air and on a receive-only
+// Core, as Thetis's own TX antenna grid is (parity Task 12's reading of
+// setup.cs ProcessAlexAntRadioButton).
+void SessionCommandDispatcher::handleSetAlexTxAntenna(const SessionMessage& invoke)
+{
+    int band = 0;
+    int antenna = 0;
+    if (!hasExactlyArguments(invoke.arguments, { "band", "antenna" })
+        || findIntArgument(invoke.arguments, "band", &band) != ArgumentStatus::Ok
+        || findIntArgument(invoke.arguments, "antenna", &antenna) != ArgumentStatus::Ok) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core could not read this request."), {});
+        return;
+    }
+    AlexAntennaFacade* const alex = m_radioModel->alexAntennaFacade();
+    if (alex == nullptr || !alex->isBound()) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core has no antenna settings ready."), {});
+        return;
+    }
+    if (band < 0 || band >= AlexAntennaFacade::kBandCount) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core keeps antennas for 14 bands."), {});
+        return;
+    }
+    const QString reason = alex->setTxAntForBand(Band(band), antenna);
     emitResult(invoke.commandVerb, invoke.commandId, reason.isEmpty(), reason, {});
 }
 

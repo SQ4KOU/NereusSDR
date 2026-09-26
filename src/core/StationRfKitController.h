@@ -1,6 +1,9 @@
 // no-port-check: NereusSDR-original. R-R3-47 / R-R3-48 / R-R3-22 station-owned RF2K-S.
 // The Power Genius controller's shape (StationPgxlController.h).
 // J.J. Boyd (KG4VCF), September 2026; AI-assisted via Anthropic Claude Code.
+// 2026-09-25: R-R3-49 (parity Task 10): setOperate, setAntenna, setTciMode
+// and showSavedEndpoint for a window. J.J. Boyd (KG4VCF), AI-assisted via
+// Anthropic Claude Code.
 #pragma once
 
 #include "core/Rf2ksConnection.h"
@@ -55,6 +58,25 @@ public:
     /// request the local page's button sends (Rf2ksConnection::resetError,
     /// POST /error/reset). Refused, in plain words, with no amp admitted.
     bool resetError(QString* reason);
+    /// R-R3-49 (parity Task 10): a window's OPERATE or STANDBY. The admitted
+    /// amp gets the request the local applet's OPERATE button sends
+    /// (Rf2ksConnection::setOperateMode, PUT /operate-mode). Refused, in
+    /// plain words, with no amp admitted.
+    bool setOperate(bool on, QString* reason);
+    /// R-R3-49 (parity Task 10): a window's ANT 1 to 4, the local applet's
+    /// request (Rf2ksConnection::setActiveAntenna, internal antenna `number`,
+    /// PUT /antennas/active). Refused with no amp admitted, and for an
+    /// antenna the amp lists as disabled or does not list (once it has
+    /// listed its antennas).
+    bool setAntenna(int number, QString* reason);
+    /// R-R3-49 (parity Task 10): the local page's "Set amp to TCI mode"
+    /// (Rf2ksConnection::setOperationalInterface("TCI")). Refused with no
+    /// amp admitted.
+    bool setTciMode(QString* reason);
+    /// R-R3-49 (parity Task 10): a saved address the Core has not dialled
+    /// (setRfKitAddress). Shown as the configured address while nothing is
+    /// connecting or connected; a running connection keeps its own.
+    void showSavedEndpoint(const QString& host, quint16 port);
     /// Whether this amp was already asked for TCI mode since band follow
     /// started.
     bool tciModeRequestedForTesting() const { return m_tciSwitched.contains(ampKey()); }
@@ -62,6 +84,8 @@ public:
 private:
     void publish(RfKitModel::ConnectionPhase phase, const QString& error = {});
     void maybeRequestTciMode();
+    // R-R3-49 (parity Task 10): the admitted amp, or the plain reason why not.
+    bool ampAdmitted(QString* reason) const;
     QString ampKey() const { return m_host + QLatin1Char(':') + QString::number(m_port); }
 
     QPointer<Rf2ksConnection> m_connection;

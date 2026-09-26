@@ -9,6 +9,9 @@
 // 2026-09-24: R-R3-47 / R-R3-22: the tuner's own settings for a window
 // (deviceSettings, StationDeviceSettings.h). J.J. Boyd (KG4VCF),
 // AI-assisted via Anthropic Claude Code.
+// 2026-09-25: R-R3-49 (parity Task 8): showSavedEndpoint, a window's saved
+// address shown on the tuner object without dialling. J.J. Boyd (KG4VCF),
+// AI-assisted via Anthropic Claude Code.
 #pragma once
 
 #include "core/TgxlConnection.h"
@@ -34,6 +37,10 @@ public:
     void resetScope(const QString& host, quint16 port, bool enabled);
     void start(const QString& host, quint16 port);
     void cancel(bool disabled = false);
+    /// R-R3-49 (parity Task 8): a saved address the Core has not dialled
+    /// (setTgxlAddress). Shown as the configured address while nothing is
+    /// connecting or connected; a running connection keeps its own.
+    void showSavedEndpoint(const QString& host, quint16 port);
     /// R-R3-22 / R-R3-47: the Core hears identity announcements from the
     /// station network only (LanDiscovery::setStationBind). Unset (a
     /// desktop window, or a test) hears every announcement.

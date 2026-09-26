@@ -23,6 +23,10 @@
 //   menuOpensTgxlAdvanced        - action 0 emits navigationRequested("tgxlAdvanced")
 //
 // NereusSDR-native test; Phase 3P-II Phase 4 Task 89.
+// 2026-09-25: R-R3-49 (parity Task 8): in a remote window Recall tune
+// memory is offered (it copies the stored values into the bars and sends
+// nothing) and Open TGXL Advanced opens the Tuner Genius tab. J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #include <QtTest>
 #include <QMenu>
@@ -194,7 +198,11 @@ void TunerAppletContextMenuTest::receiveOnlyPermissionKeepsAccessoryCommandsDisa
         }
     }
     QVERIFY(recallAction != nullptr);
-    QVERIFY(!recallAction->isEnabled());
+    // R-R3-49 (parity Task 8): recall copies the stored values into the
+    // bars and sends nothing, so a remote window offers it.
+    QVERIFY(recallAction->isEnabled());
+    recallAction->trigger();
+    QCOMPARE(localFrames.count(), 0);
 
     // A telemetry refresh changes labels and readouts, but cannot undo the
     // negotiated permission that owns command availability.
@@ -257,12 +265,11 @@ void TunerAppletContextMenuTest::remoteConnectionActionNavigatesToPeripheralsAnd
         }
     }
     QVERIFY(remoteAdvancedAction != nullptr);
-    QVERIFY(!remoteAdvancedAction->isEnabled());
-    QCOMPARE(remoteAdvancedAction->toolTip(),
-             QStringLiteral("TGXL Advanced administration is unavailable in a window "
-                            "connected to a remote Core."));
+    // R-R3-49 (parity Task 8): the remote Tuner Genius tab shows the Core's.
+    QVERIFY(remoteAdvancedAction->isEnabled());
     remoteAdvancedAction->trigger();
-    QCOMPARE(remoteNavigation.count(), 0);
+    QCOMPARE(remoteNavigation.count(), 1);
+    QCOMPARE(remoteNavigation.takeFirst().at(0).toString(), QStringLiteral("tgxlAdvanced"));
 
     QAction* const remoteAction = findConnectionAction(remoteMenu);
     QVERIFY(remoteAction != nullptr);

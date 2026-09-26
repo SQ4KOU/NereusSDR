@@ -40,11 +40,13 @@
 //
 // FftEnginePool (Task 6) is not constructed here. The daemon's display
 // FFT engines are built on demand by the media path instead:
-// m_mediaController (DaemonMediaController) owns a DaemonSpectrumSource,
-// which owns an FftEnginePool keyed by (stream, tier) and fed straight from
-// RadioModel::rawIqDataForStream once a remote subscription activates a
-// source. DaemonMediaController decides each engine's size and what every
-// endpoint is granted (R3 remote display limits plan, Task 1).
+// m_mediaHub (DaemonMediaHub, iPhone app Task 76) makes one
+// DaemonMediaController per admitted session; they share one
+// DaemonSharedSpectrum, whose DaemonSpectrumSource owns an FftEnginePool
+// keyed by (stream, tier) and fed straight from RadioModel::rawIqDataForStream
+// once a remote subscription activates a source. The controllers decide
+// each engine's size and what every endpoint is granted (R3 remote display
+// limits plan, Task 1), across every device watching that receiver.
 //
 // FIX ROUND 1, FINDING 1: subscribing endpoints in m_topology is only
 // half the job -- RadioModel already unconditionally owns a live
@@ -119,6 +121,7 @@
 #include "core/ConnectionState.h"
 
 #include <functional>
+#include <map>
 #include <memory>
 #include <optional>
 #include <utility>
@@ -133,6 +136,7 @@ class StationServer;
 class StationLanAnnouncer;
 class DnsSdAdvertiser;
 class DaemonMediaController;
+class DaemonMediaHub;
 class DaemonTelemetryController;
 class DaemonAgcSource;
 class DisplayLoadGovernor;
@@ -524,10 +528,16 @@ private:
     quint16 m_stationListenPort {0};
     /// Must be destroyed before StationServer/RadioModel: it owns queued
     /// source, peer and endpoint work referring to both.
-    std::unique_ptr<DaemonMediaController> m_mediaController;
+    std::unique_ptr<DaemonMediaHub> m_mediaHub;
     /// Destroyed before media/server/model so no timer or queued observation
-    /// can publish into a retiring session.
-    std::unique_ptr<DaemonTelemetryController> m_telemetryController;
+    /// can publish into a retiring session. iPhone app Task 76: one per
+    /// session that negotiated telemetry, by its media epoch.
+    std::map<quint64, std::unique_ptr<DaemonTelemetryController>> m_telemetryControllers;
+    void startSessionTelemetry(quint64 epoch);
+    void endSessionTelemetry(quint64 epoch);
+    /// Some media session has a display budget in force (the governor has
+    /// something to lower).
+    bool anyDisplayBudgetInForce() const;
     /// R-R3-40: the Core's one host sampler, read by telemetry and the
     /// display load governor alike.
     std::shared_ptr<SharedHostSampler> m_hostSampler;

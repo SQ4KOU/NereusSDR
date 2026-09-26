@@ -185,38 +185,43 @@ private slots:
         QCOMPARE(speakersWith, speakersWithout);
     }
 
-    // Four slots. A fifth tap is refused; clearing one frees its slot;
-    // installing a tap already in a slot moves it to the new slice; clearing
-    // one tap leaves the others fed.
-    void fourSlotsMoveAndIndependentClear()
+    // kMaxSliceAudioTaps slots (eight from iPhone app Task 76, so every
+    // slice a board can have fits whichever devices own them). One more tap
+    // is refused; clearing one frees its slot; installing a tap already in
+    // a slot moves it to the new slice; clearing one tap leaves the others
+    // fed.
+    void everySlotMovesAndClearsIndependently()
     {
         Harness h;
         const int sliceC = h.radio->addSlice();
         QVERIFY(sliceC >= 0);
-        RecordingSliceTap taps[5];
-        for (int i = 0; i < AudioEngine::kMaxSliceAudioTaps; ++i) {
+        constexpr int kSlots = AudioEngine::kMaxSliceAudioTaps;
+        QVERIFY(kSlots >= 5);
+        RecordingSliceTap taps[kSlots + 1];
+        for (int i = 0; i < kSlots; ++i) {
             QVERIFY(h.engine->setSliceAudioTap(i % 2 == 0 ? h.sliceA : h.sliceB, &taps[i]));
         }
-        QCOMPARE(h.engine->sliceAudioTapCount(), 4);
-        QVERIFY(!h.engine->setSliceAudioTap(h.sliceA, &taps[4]));
+        QCOMPARE(h.engine->sliceAudioTapCount(), kSlots);
+        QVERIFY(!h.engine->setSliceAudioTap(h.sliceA, &taps[kSlots]));
         QVERIFY(!h.engine->setSliceAudioTap(-1, &taps[0]));
         QVERIFY(!h.engine->setSliceAudioTap(h.sliceA, nullptr));
 
-        // Moving taps[1] to slice A keeps the count at four.
+        // Moving taps[1] to slice A keeps the count.
         QVERIFY(h.engine->setSliceAudioTap(h.sliceA, &taps[1]));
-        QCOMPARE(h.engine->sliceAudioTapCount(), 4);
+        QCOMPARE(h.engine->sliceAudioTapCount(), kSlots);
         h.engine->clearSliceAudioTap(&taps[0]);
-        QCOMPARE(h.engine->sliceAudioTapCount(), 3);
-        QVERIFY(h.engine->setSliceAudioTap(sliceC, &taps[4]));
+        QCOMPARE(h.engine->sliceAudioTapCount(), kSlots - 1);
+        QVERIFY(h.engine->setSliceAudioTap(sliceC, &taps[kSlots]));
 
         const std::vector<float> a = ramp(0.25f);
         const std::vector<float> b = ramp(-0.5f);
         h.feedBoth(a, b, 2);
         QCOMPARE(taps[0].calls, 0);
         QVERIFY(taps[1].received == repeated(a, 2));
-        QVERIFY(taps[2].received == repeated(a, 2));
-        QVERIFY(taps[3].received == repeated(b, 2));
-        QCOMPARE(taps[4].calls, 0);
+        for (int i = 2; i < kSlots; ++i) {
+            QVERIFY(taps[i].received == repeated(i % 2 == 0 ? a : b, 2));
+        }
+        QCOMPARE(taps[kSlots].calls, 0);
         for (RecordingSliceTap& tap : taps) {
             h.engine->clearSliceAudioTap(&tap);
         }

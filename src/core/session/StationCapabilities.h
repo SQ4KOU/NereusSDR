@@ -95,6 +95,9 @@
 //   2026-09-24 - iPhone app Task 20 (R-IOS-27): displayExtrasVersion,
 //                last in the minor-11 block. J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 (parity Task 1): transmitSettingsVersion, last
+//                in the minor-11 block. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 //   2026-09-25: iPhone app Task 71 (R-IOS-02): sessionHolderVersion,
 //               sent only to a peer that declared sessionHolder. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic Claude
@@ -111,6 +114,15 @@
 //               after remoteTxVersion and only with it (the `txState`
 //               object). J.J. Boyd (KG4VCF), with AI-assisted implementation
 //               via Anthropic Claude Code.
+//   2026-09-25 - R-IOS-27, R-IOS-06: bandSelectVersion, last in the
+//                minor-11 block. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-25 - R-IOS-27, R-IOS-06: notchControlVersion 2 documented
+//                (notch.addAtSlice). J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-25 - R-IOS-27, R-IOS-06: displayExtrasVersion 2 documented
+//                (clarity-retune). J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -159,7 +171,11 @@ struct StationCapabilities {
     /// (`alexAntennas`), the hardware apply step and the I/O board probe; 3
     /// the read-only `ioBoard` object and the setAlexRxAntenna command; 4
     /// the setAlexBpfMode command (a receive filter chain's filter policy,
-    /// R-R3-46 / R-R3-21). Sent last in the same block as the three above,
+    /// R-R3-46 / R-R3-21); 5 `rxOutOnTx` two-way (group B fix wave); 6 the
+    /// rest of the transmit antennas and relays two-way (`txAntennas`,
+    /// `blockTxAnt2`, `blockTxAnt3`, `ext1OutOnTx`, `ext2OutOnTx`,
+    /// `rxOutOverride`; parity Task 12) and the setAlexTxAntenna command
+    /// (one band's TX antenna; parity mini-round). Sent last in the same block as the three above,
     /// so only at minor 11. 0: a window keeps today's behaviour and does
     /// not write `stepAtt`.
     int radioHardwareVersion = 0;
@@ -192,7 +208,7 @@ struct StationCapabilities {
     /// R-R3-47 / R-R3-22: 1 means the Core sends its Tuner Genius's own
     /// settings (the tgxl* properties of `accessorySettings`) and takes the
     /// setTgxlName, setTgxlNetwork, saveTgxlSettings and readTgxlSettings
-    /// commands. Sent last in the same minor-11 block. 0: a window cannot
+    /// commands. Sent in the same minor-11 block. 0: a window cannot
     /// change the tuner's own settings on this Core and says so.
     int remoteTgxlControlVersion = 0;
     /// iPhone app Task 12 (R-IOS-08): 1 means the Core has its own identity
@@ -227,7 +243,23 @@ struct StationCapabilities {
     /// calibration and averaging applied at the Core; the Core then sends
     /// an NSDX datagram beside each NSDC frame (display extras v1). Sent
     /// last in the same minor-11 block, after stationCatalogVersion.
+    /// 2 (R-IOS-27, R-IOS-06) adds the media control operation
+    /// clarity-retune, Clarity's Re-tune for one endpoint.
     int displayExtrasVersion = 0;
+    /// R-R3-49 (parity Task 1): 1 means a receive-only Core takes a
+    /// `transmit` write of any property but the keying set (mox, tune,
+    /// voxEnabled, twoToneActive) and a DspOptions<Setting><Mode>Tx settings
+    /// write or remove while its radio is off the air, and applies it at
+    /// once; each is refused while the radio is on the air. Sent in the
+    /// same minor-11 block, after displayExtrasVersion. 0: a window's
+    /// transmit settings stay greyed and say the Core cannot take them.
+    int transmitSettingsVersion = 0;
+    /// R-IOS-27, R-IOS-06: 1 means the Core takes `slice.selectBand`, which
+    /// runs the desktop's band button on a slice (its saved frequency, mode
+    /// and filter for that band come back), for a band the catalogue's
+    /// `bands` lists. Sent in the same minor-11 block, after
+    /// transmitSettingsVersion. 0: an app's band buttons stay greyed.
+    int bandSelectVersion = 0;
     /// iPhone app Task 71 (R-IOS-02; the several-devices design, ruling
     /// 10.1): 1 means the Core admits up to four devices at once, sends the
     /// `connectedDevices` object and takes session.leave. Sent last in the
@@ -300,8 +332,9 @@ struct StationCapabilities {
     int remoteCtunVersion = 0;
     /// 1: radio and audio telemetry. 2: adds the Core host section (CPU,
     /// memory, temperature). 3: adds the receivers section (each receiver's
-    /// processing load and input wait). Negotiated minor still gates each
-    /// version.
+    /// processing load and input wait). 4 (remote-window parity Task 6,
+    /// minor 11): adds the radio's PA readings and link quality to the
+    /// radio section. Negotiated minor still gates each version.
     int stationTelemetryVersion = 0;
     int remoteTgxlConfigVersion = 0;
     int remoteFourO3AControlVersion = 0;
@@ -315,6 +348,8 @@ struct StationCapabilities {
     /// R-R3-21 / R-R3-09: the Core owns the notch list, mirrors it as the
     /// `notches` object and takes notch.add / notch.move / notch.setActive
     /// / notch.delete. 0 means a window keeps today's settings-based notches.
+    /// 2 (R-IOS-27, R-IOS-06) adds notch.addAtSlice, the desktop's +TNF on
+    /// a slice, with the Core composing the notch.
     int notchControlVersion = 0;
     /// R-R3-23: 1 means the Core can send lossless audio (uncompressed
     /// 16-bit stereo, L16) beside Opus. A GUI that sees it may add

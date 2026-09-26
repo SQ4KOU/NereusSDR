@@ -47,6 +47,14 @@
 //                 a disabled control on this page looks disabled in the
 //                 dark theme. J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-25 - Receiver and transmit gaps plan, Task 16: Receive Only is
+//                 shown on every radio and reaches the keying gate
+//                 (RadioModel::setRxOnly, the Core's from a remote window);
+//                 turning it off asks first (chkGeneralRXOnly_CheckedChanged,
+//                 setup.cs:6479 [v2.10.3.15]); on a radio with no
+//                 transmitter it is checked and disabled with the reason.
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -113,6 +121,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
+#include <QMessageBox>
 #include <QCheckBox>
 #include <QComboBox>
 #include <QSignalBlocker>
@@ -197,20 +206,17 @@ GeneralOptionsPage::GeneralOptionsPage(RadioModel* model, QWidget* parent)
     buildStepAttGroup();
     buildAutoAttGroup();
 
-    // 3M-1a G.2: wire Receive Only checkbox visibility from caps.isRxOnlySku.
-    // Hidden by default (see buildHardwareConfigGroup); shown only for RX-only
-    // SKUs (HL2-RX, etc.).  Named slot mirrors HardwarePage::onCurrentRadioChanged.
-    // Cite: Thetis setup.designer.cs:8535-8544 [v2.10.3.13] (Visible=false default);
-    //       BoardCapabilities::isRxOnlySku (NereusSDR-original).
+    // Task 16: the Receive Only checkbox follows the model's receive-only
+    // state (Thetis console.RXOnly keeps SetupForm.RXOnly in step,
+    // console.cs:15328-15332 [v2.10.3.15]), including a Core's change seen
+    // from a remote window and a radio with no transmitter.
     if (model) {
-        // Initial state: apply caps of the already-connected radio (if any).
-        setReceiveOnlyVisible(model->boardCapabilities().isRxOnlySku);
-
-        // Live updates: reconnects to a different radio (e.g. HL2-RX → ANAN-G2)
-        // must flip visibility without reopening Setup.
+        connect(model, &RadioModel::rxOnlyChanged, this,
+                [this](bool) { syncReceiveOnly(); });
         connect(model, &RadioModel::currentRadioChanged,
                 this, &GeneralOptionsPage::onCurrentRadioChanged);
     }
+    syncReceiveOnly();
 
     if (m_ctrl) {
         // hermes-filter-debug Bug 1: pull BOTH bounds from the controller —
@@ -243,19 +249,15 @@ GeneralOptionsPage::GeneralOptionsPage(RadioModel* model, QWidget* parent)
     }
 }
 
-// ---------------------------------------------------------------------------
-// setReceiveOnlyVisible
-// ---------------------------------------------------------------------------
-// 3M-1a G.2: public setter so RadioModel (via currentRadioChanged) and the
-// constructor can show/hide the RX-only checkbox without direct access to
-// the private m_chkGeneralRXOnly member.
-// Cite: Thetis setup.designer.cs:8535-8544 [v2.10.3.13] (Visible=false default);
-//       BoardCapabilities::isRxOnlySku (NereusSDR-original).
-
 void GeneralOptionsPage::setStationSettingsAvailable(bool available, const QString& reason)
 {
-    // R-R3-49: the Network Watchdog is the Core's setting too.
-    gateStationControls({m_comboFRSRegion, m_chkNetworkWDT}, available, reason);
+    // R-R3-49: the Network Watchdog is the Core's setting too; so is
+    // Receive Only (Task 16). The radio-has-no-transmitter lock sits on top
+    // of the Core's gate, so it is taken off first and put back after.
+    setReceiveOnlyLocked(false, QString());
+    gateStationControls({m_comboFRSRegion, m_chkNetworkWDT, m_chkGeneralRXOnly},
+                        available, reason);
+    syncReceiveOnly();
     // iPhone app plan Task 38: so is every transmit time-out. A Core older
     // than the time-out stores these settings and ignores them, so a window
     // on it shows the group disabled and says why.
@@ -271,11 +273,87 @@ QString GeneralOptionsPage::timeOutNeedsNewerCoreText()
               "settings.");
 }
 
-void GeneralOptionsPage::setReceiveOnlyVisible(bool visible)
+// ---------------------------------------------------------------------------
+// Task 16: Receive Only.
+//
+// Thetis's designer hides chkGeneralRXOnly (setup.designer.cs:8535-8544
+// [v2.10.3.13], Visible=false), and comboRadioModel_SelectedIndexChanged
+// shows it for every model (setup.cs:19878, 19911 and on [v2.10.3.15]);
+// mi0bot-Thetis shows it for the HL2 (setup.cs:20199 [v2.10.3.13-beta2]).
+// NereusSDR shows it on every radio too, and with no radio (the operator,
+// 2026-09-25: a control that cannot run is shown disabled with its reason,
+// never hidden). On a radio with no
+// transmitter (BoardCapabilities::isRxOnlySku, the HL2 receive-only kit) it
+// is checked and disabled with that reason: NereusSDR's own rule, since
+// mi0bot-Thetis has no kit model, only the operator's toggle.
+// ---------------------------------------------------------------------------
+void GeneralOptionsPage::syncReceiveOnly()
 {
-    if (m_chkGeneralRXOnly) {
-        m_chkGeneralRXOnly->setVisible(visible);
+    if (!m_chkGeneralRXOnly) {
+        return;
     }
+    RadioModel* radio = model();
+    const bool on = radio ? radio->isRxOnly() : RadioModel::rxOnlySetting();
+    const bool forced = radio && radio->isRxOnlyForced();
+    {
+        const QSignalBlocker blocker(m_chkGeneralRXOnly);
+        m_chkGeneralRXOnly->setChecked(on);
+    }
+    setReceiveOnlyLocked(forced, RadioModel::rxOnlyForcedReason());
+}
+
+void GeneralOptionsPage::setReceiveOnlyLocked(bool locked, const QString& reason)
+{
+    static constexpr auto kSavedTooltip = "GeneralRxOnlyLockedTooltip";
+    static constexpr auto kSavedDescription = "GeneralRxOnlyLockedDescription";
+    static constexpr auto kSavedEnabled = "GeneralRxOnlyLockedEnabled";
+    QCheckBox* box = m_chkGeneralRXOnly;
+    if (!box) {
+        return;
+    }
+    if (locked) {
+        if (!box->property(kSavedTooltip).isValid()) {
+            box->setProperty(kSavedTooltip, box->toolTip());
+            box->setProperty(kSavedDescription, box->accessibleDescription());
+            box->setProperty(kSavedEnabled, box->isEnabled());
+        }
+        box->setEnabled(false);
+        box->setToolTip(reason);
+        box->setAccessibleDescription(reason);
+    } else if (box->property(kSavedTooltip).isValid()) {
+        box->setEnabled(box->property(kSavedEnabled).toBool());
+        box->setToolTip(box->property(kSavedTooltip).toString());
+        box->setAccessibleDescription(box->property(kSavedDescription).toString());
+        box->setProperty(kSavedTooltip, QVariant());
+        box->setProperty(kSavedDescription, QVariant());
+        box->setProperty(kSavedEnabled, QVariant());
+    }
+}
+
+bool GeneralOptionsPage::confirmEnableTransmit()
+{
+    if (m_confirmEnableTransmit) {
+        return m_confirmEnableTransmit();
+    }
+    // From Thetis setup.cs:6484-6490 [v2.10.3.15]:
+    //   DialogResult dr = MessageBox.Show(
+    //       "Unchecking Receive Only may \n" +
+    //       "cause damage to your hardware.  Are you sure you want \n" +
+    //       "to enable transmit?",
+    //       "Warning: Enable Transmit?",
+    //       MessageBoxButtons.YesNo,
+    //       MessageBoxIcon.Warning, MessageBoxDefaultButton.Button2, Common.MB_TOPMOST); //MW0LGE_[2.9.0.7]);
+    const QMessageBox::StandardButton answer = QMessageBox::warning(
+        this, tr("Warning: Enable Transmit?"),
+        tr("Unchecking Receive Only may cause damage to your hardware. "
+           "Are you sure you want to enable transmit?"),
+        QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
+    return answer == QMessageBox::Yes;
+}
+
+void GeneralOptionsPage::setEnableTransmitConfirmForTest(std::function<bool()> confirm)
+{
+    m_confirmEnableTransmit = std::move(confirm);
 }
 
 // ---------------------------------------------------------------------------
@@ -288,7 +366,8 @@ void GeneralOptionsPage::setReceiveOnlyVisible(bool visible)
 void GeneralOptionsPage::onCurrentRadioChanged(const NereusSDR::RadioInfo& /*info*/)
 {
     if (model()) {
-        setReceiveOnlyVisible(model()->boardCapabilities().isRxOnlySku);
+        // Task 16: a radio with no transmitter locks Receive Only on.
+        syncReceiveOnly();
 
         // hermes-filter-debug Bug 1: re-range the step-att spinboxes when
         // the connected board changes (e.g. user switches HL2 ↔ ANAN-G2
@@ -308,7 +387,8 @@ void GeneralOptionsPage::onCurrentRadioChanged(const NereusSDR::RadioInfo& /*inf
 // Hardware Configuration group
 // From Thetis setup.designer.cs:8045-8396 [v2.10.3.13] (tpGeneralHardware)
 // Controls: comboFRSRegion, chkExtended, lblWarningRegionExtended,
-//           chkGeneralRXOnly (hidden), chkNetworkWDT (default ON).
+//           chkGeneralRXOnly (shown on every radio), chkNetworkWDT
+//           (default ON).
 // ---------------------------------------------------------------------------
 
 void GeneralOptionsPage::buildHardwareConfigGroup()
@@ -392,19 +472,47 @@ void GeneralOptionsPage::buildHardwareConfigGroup()
     m_lblWarningRegionExtended->setWordWrap(true);
     vbox->addWidget(m_lblWarningRegionExtended);
 
-    // --- Receive Only checkbox (hidden by default) ---
-    // From Thetis setup.designer.cs:8535-8544 [v2.10.3.13] — Visible=false
+    // --- Receive Only checkbox ---
+    // From Thetis setup.designer.cs:8535-8544 [v2.10.3.13] (text and
+    // tooltip). The designer hides it (Visible=false) and Thetis shows it
+    // for every model (setup.cs:19878 and on [v2.10.3.15]); NereusSDR shows
+    // it on every radio (Task 16, syncReceiveOnly).
     m_chkGeneralRXOnly = new QCheckBox(tr("Receive Only"), group);
     m_chkGeneralRXOnly->setObjectName(QStringLiteral("chkGeneralRXOnly"));
     m_chkGeneralRXOnly->setToolTip(QStringLiteral("Check to disable transmit functionality."));
-    m_chkGeneralRXOnly->setChecked(
-        s.value(QStringLiteral("RxOnly"), QStringLiteral("False")).toString() == QStringLiteral("True"));
-    m_chkGeneralRXOnly->setVisible(false);  // per-board visibility set via setReceiveOnlyVisible() — 3M-1a G.2
-    connect(m_chkGeneralRXOnly, &QCheckBox::toggled, this, [](bool on) {
-        AppSettings::instance().setValue(QStringLiteral("RxOnly"),
-                                          on ? QStringLiteral("True") : QStringLiteral("False"));
+    m_chkGeneralRXOnly->setChecked(RadioModel::rxOnlySetting());
+    // Task 16. From Thetis setup.cs:6479-6502 [v2.10.3.15]
+    // (chkGeneralRXOnly_CheckedChanged): the operator unchecking it
+    // (chkGeneralRXOnly.Focused) is asked first, and No puts the check back;
+    // then console.RXOnly = chkGeneralRXOnly.Checked. `clicked` is the
+    // operator's click only, as Focused is in Thetis; the model's own
+    // updates reach the box through syncReceiveOnly with signals blocked.
+    connect(m_chkGeneralRXOnly, &QCheckBox::clicked, this, [this](bool on) {
+        if (m_lblRxOnlyCore) {
+            m_lblRxOnlyCore->setVisible(false);
+        }
+        if (!on && !confirmEnableTransmit()) {
+            const QSignalBlocker blocker(m_chkGeneralRXOnly);
+            m_chkGeneralRXOnly->setChecked(true);
+            return;
+        }
+        if (RadioModel* radio = model()) {
+            radio->setRxOnly(on);
+        } else {
+            AppSettings::instance().setValue(QStringLiteral("RxOnly"),
+                                              on ? QStringLiteral("True") : QStringLiteral("False"));
+        }
     });
     vbox->addWidget(m_chkGeneralRXOnly);
+
+    // Task 16 / R-R3-21: an older Core keeps Receive Only to itself and
+    // refuses a window's change; the box goes back and the page says why.
+    m_lblRxOnlyCore = new QLabel(
+        tr("The Core needs updating before this window can change Receive Only."), group);
+    m_lblRxOnlyCore->setObjectName(QStringLiteral("lblRxOnlyCore"));
+    m_lblRxOnlyCore->setWordWrap(true);
+    m_lblRxOnlyCore->setVisible(false);
+    vbox->addWidget(m_lblRxOnlyCore);
 
     // --- Network Watchdog checkbox (default ON) ---
     // From Thetis setup.designer.cs:8385-8395 [v2.10.3.13] — Checked=true
@@ -456,6 +564,19 @@ void GeneralOptionsPage::buildHardwareConfigGroup()
     if (auto* proxy = dynamic_cast<SettingsProxy*>(AppSettings::instance().remoteBackend())) {
         connect(proxy, &SettingsProxy::valueRejected, this,
                 [this](const QString& key, const QVariant& restored) {
+            if (key == QLatin1String("RxOnly")) {
+                // Task 16: the window goes back to what the Core has.
+                const bool restoredOn = restored.isValid()
+                                        && restored.toString() == QLatin1String("True");
+                if (RadioModel* radio = model()) {
+                    radio->applyRxOnlySetting(restoredOn);
+                }
+                syncReceiveOnly();
+                if (m_lblRxOnlyCore) {
+                    m_lblRxOnlyCore->setVisible(true);
+                }
+                return;
+            }
             if (key != QLatin1String("NetworkWatchdogEnabled") || !m_chkNetworkWDT) {
                 return;
             }

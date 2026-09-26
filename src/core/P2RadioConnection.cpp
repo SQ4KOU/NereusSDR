@@ -67,6 +67,9 @@
 //                 Anthropic Claude Code.
 //   2026-09-24 - R-R3-49 fix wave: setup.cs's header added below, since setWatchdogEnabled quotes
 //                 setup.cs:18024-18028 [v2.10.3.15]. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-32 / R-R3-49 (remote-window parity Task 6): every datagram from the radio,
+//                 the per-DDC sequence errors and the DDC arrivals feed the link counters
+//                 (RadioLinkStats). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-25 - Receiver and transmit gaps plan, Task 13: high-priority status ReadBufp[55] (datagram byte 59)
 //                 reported as the user digital inputs (network.c:756 [v2.10.3.15]). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
@@ -803,6 +806,9 @@ void P2RadioConnection::connectToRadio(const RadioInfo& info)
         m_alex.lpfBitsTx = NereusSDR::codec::alex::computeLpf(
             m_tx[0].frequency / 1.0e6);
     }
+
+    // R-R3-32 (parity Task 6): the link counters start with the connection.
+    m_linkStats.reset();
 
     setState(ConnectionState::Connecting);
 
@@ -2447,6 +2453,11 @@ void P2RadioConnection::onReadyRead()
             continue;
         }
 
+        // R-R3-32 / R-R3-49 (parity Task 6): every datagram from the radio,
+        // on every port, counts toward UDP packets seen and the packet gap.
+        // Atomic stores only; no lock, no allocation (RadioLinkStats).
+        m_linkStats.noteDatagram(RadioLinkStats::nowUs());
+
         // Debug: log first 5 real packets
         static int debugCount = 0;
         if (debugCount < 5) {
@@ -3582,14 +3593,31 @@ void P2RadioConnection::processIqPacket(const QByteArray& data, int ddcIndex)
                | (static_cast<quint32>(raw[3]));
 
     // From Thetis ReadUDPFrame:619-626 — sequence error detection
+    bool seqError = false;
     if (seq != (1 + m_rx[ddcIndex].rxInSeqNo) && seq != 0
         && m_rx[ddcIndex].rxInSeqNo != 0) {
         m_rx[ddcIndex].rxInSeqErr += 1;
+        seqError = true;
         qCDebug(lcProtocol) << "P2: DDC" << ddcIndex
                             << "seq error this:" << seq
                             << "last:" << m_rx[ddcIndex].rxInSeqNo;
     }
     m_rx[ddcIndex].rxInSeqNo = seq;
+
+    // R-R3-32 (parity Task 6): the same per-DDC count (one per mismatch, as
+    // rx_in_seq_err) feeds the link's packet loss, and this DDC's arrivals
+    // the NereusSDR-native jitter of the lowest active stream (RFC 3550
+    // section 6.4.1, see RadioLinkStats): a datagram carries spp samples at
+    // the DDC's rate (kHz).
+    {
+        const qint64 arrivalUs = RadioLinkStats::nowUs();
+        m_linkStats.noteSequenced(arrivalUs, seqError ? 1U : 0U);
+        const int rateKhz = m_rx[ddcIndex].samplingRate;
+        const double spacingUs = rateKhz > 0
+            ? (static_cast<double>(m_rx[ddcIndex].spp) * 1000.0) / static_cast<double>(rateKhz)
+            : 0.0;
+        m_linkStats.noteStreamArrival(ddcIndex, seq, arrivalUs, spacingUs);
+    }
 
     // From Thetis ReadUDPFrame:629 — copy I/Q data (skip 16-byte header)
     // memcpy(bufp, readbuf + 16, 1428);

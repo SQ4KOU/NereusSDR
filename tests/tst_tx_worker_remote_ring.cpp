@@ -37,7 +37,7 @@
 //               implementation via Anthropic Claude Code.
 // =================================================================
 
-#include "StationMultiSessionHarness.h"
+#include "MultiDeviceHarness.h"
 
 #include "core/AudioEngine.h"
 #include "core/IAudioBus.h"

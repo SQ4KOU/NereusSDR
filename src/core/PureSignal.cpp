@@ -1209,10 +1209,16 @@ void PureSignal::processNewInfo(const int newInfo[16])
     // previous in m_oldInfo, so the comparison is the same.
     const bool changed = hasInfoChanged(newInfo);
 
-    // BENCH DIAGNOSTIC (Phase 3M-4 Task 17): log info[] every ~10 ticks
-    // (~1 sec) so the bench can see whether calcc is progressing.
-    static int diagCounter = 0;
-    if (++diagCounter % 10 == 0) {
+    // BENCH DIAGNOSTIC (Phase 3M-4 Task 17): sample info[] every ~10 ticks
+    // (~1 sec) so the bench can see whether calcc is progressing. The line
+    // is written only when a value it reports differs from the last line
+    // written, so an idle radio no longer puts the same line in the Core's
+    // journal once a second. Logged on change only, the same shape as the
+    // txLpf lines in P1RadioConnection::setTxFrequency and
+    // P2RadioConnection::setTxFrequency: it marks the event rather than the
+    // poll cadence. A calibration in progress still changes these values
+    // every sample, so the bench sees it tick as before.
+    if (++m_diagTick % 10 == 0) {
         // hwPeak + maxTX added 2026-08-01 (J.J. Boyd, KG4VCF). PureSignal
         // parks in LCOLLECT on a live HL2 with both PS streams measurably
         // hot, so the question is no longer whether samples arrive but
@@ -1232,17 +1238,23 @@ void PureSignal::processNewInfo(const int newInfo[16])
         // as the number we believe we pushed.
         const double hwPeak = m_tx ? m_tx->getPSHWPeak() : -1.0;
         const double maxTx  = m_tx ? m_tx->getPSMaxTX()  : -1.0;
-        qCInfo(lcDsp).nospace()
-            << "PureSignal info[]: state=" << newInfo[15]
-            << " corrApplied=" << newInfo[14]
-            << " calCount=" << newInfo[5]
-            << " feedbackLevel=" << newInfo[4]
-            << " dogCount=" << newInfo[13]
-            << " hwPeak=" << hwPeak
-            << " maxTX=" << maxTx
-            << " binReach=" << (hwPeak > 0.0 ? maxTx / hwPeak : -1.0)
-            << " (mox=" << (m_mox && m_mox->isMox())
-            << " autoCal=" << isAutoCalEnabled() << ")";
+        const DiagLine line{newInfo[15], newInfo[14], newInfo[5], newInfo[4],
+                            newInfo[13], hwPeak, maxTx,
+                            m_mox && m_mox->isMox(), isAutoCalEnabled()};
+        if (m_lastDiagLine != line) {
+            m_lastDiagLine = line;
+            qCInfo(lcDsp).nospace()
+                << "PureSignal info[]: state=" << newInfo[15]
+                << " corrApplied=" << newInfo[14]
+                << " calCount=" << newInfo[5]
+                << " feedbackLevel=" << newInfo[4]
+                << " dogCount=" << newInfo[13]
+                << " hwPeak=" << hwPeak
+                << " maxTX=" << maxTx
+                << " binReach=" << (hwPeak > 0.0 ? maxTx / hwPeak : -1.0)
+                << " (mox=" << line.mox
+                << " autoCal=" << line.autoCal << ")";
+        }
     }
 
     // From Thetis PSForm.cs:1097-1098 CalibrationAttemptsChanged

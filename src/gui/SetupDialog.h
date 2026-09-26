@@ -11,6 +11,7 @@
 // =================================================================
 
 #include <QDialog>
+#include <QMap>
 #include <QString>
 #include <QStringList>
 #include <QTreeWidget>
@@ -76,7 +77,21 @@ public:
 
     // Navigate to a page by its label text (e.g. "AGC/ALC").
     void selectPage(const QString& label);
+    // R-R3-49 (parity Task 8): an applet's right-click entry. "pgxlAdvanced",
+    // "tgxlAdvanced" and "pgxlInterlock" open CAT & Network > 4O3A at their
+    // own tab (Power Genius XL, Tuner Genius XL, General), "peripherals"
+    // 4O3A's General tab, "rfKit" the RF-Kit page. False for an unknown key
+    // (the dialog stays at its first page).
+    bool selectNavigationTarget(const QString& pageKey);
     void setTransmitPermitted(bool permitted, const QString& reason = QString());
+    // R-R3-49 (parity Task 1): the transmit settings gate, pushed to every
+    // realized page (SetupPage::setTransmitSettingsPermitted). True in a
+    // local window; MainWindow pushes it in a remote one.
+    // R-R3-49 (parity Task 3): minVersion above 1 is the gate for the
+    // settings that transmitSettingsVersion brought, pushed through
+    // SetupPage::setTransmitSettingsPermittedAt.
+    void setTransmitSettingsPermitted(bool permitted, const QString& reason = QString(),
+                                      int minVersion = 1);
 
     // R-R3-21 / R-R3-10 / R-R3-17: whether the Core's settings can be
     // changed from this window. MainWindow pushes it (applyRemoteRoleGating):
@@ -171,9 +186,11 @@ private:
     void buildTree();
 
     // Phase 8 of #167: applies BoardCapabilities to the PA category +
-    // sub-page visibility. Hides the category root when caps.isRxOnlySku
-    // or !caps.hasPaProfile; forwards the caps struct to each PA page so
-    // page-level controls can self-toggle (warning rows, banner labels).
+    // sub-pages. Task 16 fix wave 2 (Important 2): never hidden; on a radio
+    // without power amplifier settings (!caps.hasPaProfile) the PA pages are
+    // disabled with that reason, and on the receive-only kit with the kit's.
+    // Forwards the caps struct to each PA page so page-level controls can
+    // self-toggle (warning rows, banner labels).
     void applyPaVisibility(const BoardCapabilities& caps);
 
     // ── Lazy page registry (issues #272 + #301) ───────────────────────────────
@@ -203,6 +220,18 @@ private:
         // A Core page opened before the Core's settings ever arrived: an
         // empty stand-in, replaced by the real page once they are available.
         bool                      placeholder = false;
+        // Task 16 fix wave (I1): a page receive only disables (Thetis
+        // setup.cs:6499-6501: tpTransmit, tpPowerAmplifier, grpTestTXIMD).
+        // A transmit page (requiresTransmit), or one marked as a
+        // non-transmit page the gate also reaches (fix wave 2: Audio > TX
+        // Input, Thetis's grpBoxMic on tpTransmit).
+        bool                      receiveOnlyGated = false;
+        // Fix wave 2: a non-transmit page root disabled by receive only
+        // (not for any other reason), enabled again when it goes off.
+        bool                      receiveOnlyDisabled = false;
+        // Task 16 fix wave 2 (Important 2): a PA page, disabled with
+        // m_noPaReason while the radio has no power amplifier settings.
+        bool                      paPage = false;
         // The page root was disabled because the Core's settings are
         // unavailable (not for any other reason), so it is enabled again,
         // and its tooltip cleared, when they return.
@@ -223,6 +252,14 @@ private:
     // session the page is disabled with `reason` above it; local direct
     // mode is untouched.
     void markRemoteUnavailable(QTreeWidgetItem* leaf, const QString& reason);
+
+    // Task 16 fix wave (I1): marks a leaf, or every leaf under a category,
+    // as disabled with the receive-only reason while receive only is on.
+    // Every marked page must be one the gate reaches: a transmit page
+    // (requiresTransmit), or, with `nonTransmitPage`, a page the gate
+    // disables on its own path (fix wave 2, Minor 4: Audio > TX Input,
+    // which a remote window without transmit keeps live, R-R3-36).
+    void markReceiveOnlyGated(QTreeWidgetItem* item, bool nonTransmitPage = false);
 
     // Realization phase: build the page if it has not been built yet, add it
     // to the stack, and return it. Returns nullptr for an out-of-range index
@@ -282,6 +319,14 @@ private:
     QLabel*         m_transmitNotice = nullptr;
     bool            m_transmitPermitted = false;
     QString         m_transmitReason;
+    bool            m_transmitSettingsPermitted = false;  // R-R3-49
+    QString         m_transmitSettingsReason;              // R-R3-49
+    // R-R3-49 (parity Task 3): the gate for each later transmitSettingsVersion.
+    struct TransmitSettingsGate {
+        bool permitted = false;
+        QString reason;
+    };
+    QMap<int, TransmitSettingsGate> m_transmitSettingsGates;
     // R-R3-21: the visible reason for a page the local-DSP gate disabled.
     // Shown above the page (objectName "setupLocalUnavailable") and as the
     // page's and its tree leaf's tooltip. Never shown in local direct mode,
@@ -294,6 +339,18 @@ private:
     bool            m_stationAvailable = true;
     QString         m_stationReason;
     QLabel*         m_stationNotice = nullptr;
+    // Task 16 fix wave (I1): the receive-only reason above a page it
+    // disables (objectName "setupReceiveOnly"), and the categories whose
+    // tree rows carry it as their tooltip (Transmit, PA).
+    QLabel*         m_receiveOnlyNotice = nullptr;
+    std::vector<QTreeWidgetItem*> m_receiveOnlyCategories;
+    // Task 16 fix wave 2 (Important 2): whether the radio has power
+    // amplifier settings (applyPaVisibility), the reason the PA pages are
+    // disabled when it has none, and its notice above the page (objectName
+    // "setupNoPowerAmplifier").
+    bool            m_paAvailable = true;
+    QString         m_noPaReason;
+    QLabel*         m_noPaNotice = nullptr;
     QPointer<SettingsProxy> m_settingsProxy;
     int             m_snapshotGeneration = 0;
     bool            m_rebuildingPages = false;

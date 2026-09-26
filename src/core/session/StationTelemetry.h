@@ -18,6 +18,41 @@ struct StationRadioTelemetry {
     std::optional<double> txMbps;
     std::optional<qint64> rttMs;
     std::optional<qint64> rttAgeMs;
+    // R-R3-32 / R-R3-46 (remote-window parity Task 6; session minor 11,
+    // stationTelemetryVersion 4). The Core's PA readings as its own window
+    // shows them (RadioModel::paReadings()), each absent when the radio has
+    // none or has not reported it: the PA drain volts (user ADC0), the
+    // supply volts, the PA current, the PA temperature.
+    std::optional<double> paVolts;
+    std::optional<double> supplyVolts;
+    std::optional<double> paCurrentAmps;
+    std::optional<double> paTemperatureCelsius;
+    // The Core's radio link (RadioConnection::linkStats(), RadioLinkStats):
+    // lost / (received + lost) over the last 5 s in percent, RFC 3550
+    // interarrival jitter of the lowest receive stream in ms, the longest
+    // interval between two datagrams in the last second in ms, the
+    // datagrams seen since the radio connected, and the radio's sample
+    // rate in Hz.
+    std::optional<double> packetLossPercent;
+    std::optional<double> jitterMs;
+    std::optional<double> packetGapMs;
+    std::optional<qint64> sampleRateHz;
+    std::optional<qint64> udpPacketsSeen;
+
+    // True when no version 4 field is present.
+    bool hasNoRadioStatus() const
+    {
+        return !paVolts && !supplyVolts && !paCurrentAmps && !paTemperatureCelsius
+            && !packetLossPercent && !jitterMs && !packetGapMs && !sampleRateHz
+            && !udpPacketsSeen;
+    }
+    // Clears every version 4 field (for a peer that did not negotiate it).
+    void clearRadioStatus()
+    {
+        paVolts.reset(); supplyVolts.reset(); paCurrentAmps.reset();
+        paTemperatureCelsius.reset(); packetLossPercent.reset(); jitterMs.reset();
+        packetGapMs.reset(); sampleRateHz.reset(); udpPacketsSeen.reset();
+    }
 };
 
 struct StationAudioTelemetry {

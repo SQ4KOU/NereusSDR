@@ -24,6 +24,10 @@
 //   2026-09-24 - R-R3-48 / R-R3-25: setStationReceiveOnly() and
 //                transmitRefused(). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 3): buildTxProfilesExLine and
+//                buildTxProfileExLine public for TciServer's remote-window
+//                profile broadcast. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 //   2026-09-25 - Receiver and transmit gaps plan, Task 12 (R-R3-49) by
 //                J.J. Boyd (KG4VCF): if goes out with each VFO and centre
 //                change, dds carries the centre, one if builder for the
@@ -174,6 +178,12 @@ public:
     // event below. The if offset is read when the queue drains, so it names
     // the offset the slice settled on, not the one it passed through.
     void enqueueLocalBroadcast(const QString& frame);
+    // R-R3-49 (parity Task 3): the tx_profiles_ex / tx_profile_ex lines,
+    // public so TciServer's remote-window profile broadcast writes the same
+    // frames. From Thetis TCIServer.cs:4721-4731 / 4715-4720 [v2.10.3.13]
+    // (sendTXProfiles, sendTXProfile).
+    static QString buildTxProfilesExLine(const QStringList& names);
+    static QString buildTxProfileExLine(const QString& active);
     void enqueueLocalBroadcastVfo(int rxIndex, qint64 hz, bool isTxBound);
 
     /// A centre change for receiver rxIndex: dds then if:rx,0, both on the
@@ -697,9 +707,9 @@ private:
     // From Thetis TCIServer.cs:4690-4694 [v2.10.3.13] — sendCTUN (rx_ctun_ex suffix).
     static QString buildRxCtunExLine(int rx, bool en);
     // From Thetis TCIServer.cs:4721-4731 [v2.10.3.13] — sendTXProfiles.
-    static QString buildTxProfilesExLine(const QStringList& names);
     // From Thetis TCIServer.cs:4715-4720 [v2.10.3.13] — sendTXProfile.
-    static QString buildTxProfileExLine(const QString& active);
+    // buildTxProfilesExLine / buildTxProfileExLine: public (R-R3-49 parity
+    // Task 3, TciServer's remote-window profile broadcast).
     // From Thetis TCIServer.cs:4766-4775 [v2.10.3.13] — sendCalibration (F6 C-locale).
     static QString buildCalibrationExLine(int rx, double meter, double display,
                                           double xvtr, double sixMeter,

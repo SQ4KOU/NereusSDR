@@ -12,6 +12,9 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  Saves the records soon after a change
 //                                    (R-R3-47). AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 10): the RF-Kit's
+//                                    connection counts. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "core/StationAccessoryData.h"
@@ -19,6 +22,7 @@
 #include "core/AppSettings.h"
 #include "core/ConnectionDiagnostics.h"
 #include "core/FaultLog.h"
+#include "core/Rf2ksConnection.h"
 #include "core/TuneMemoryStore.h"
 #include "core/TxInterlockPolicy.h"
 #include "models/AccessoryDataModel.h"
@@ -75,6 +79,19 @@ StationAccessoryData::StationAccessoryData(AccessoryDataModel* model, const Sour
             }
         });
     }
+    if (m_sources.rfkitConnection != nullptr) {
+        // R-R3-49 (parity Task 10): the connection has no signal per count,
+        // so its counts are read once a second, and at once when it
+        // connects or drops.
+        m_rfkitCountersTimer.setInterval(kRfKitCountersIntervalMs);
+        connect(&m_rfkitCountersTimer, &QTimer::timeout,
+                this, &StationAccessoryData::publishRfKitCounters);
+        m_rfkitCountersTimer.start();
+        connect(m_sources.rfkitConnection, &Rf2ksConnection::connected,
+                this, &StationAccessoryData::publishRfKitCounters);
+        connect(m_sources.rfkitConnection, &Rf2ksConnection::disconnected,
+                this, &StationAccessoryData::publishRfKitCounters);
+    }
     if (m_sources.interlock != nullptr) {
         connect(m_sources.interlock, &TxInterlockPolicy::changed,
                 this, &StationAccessoryData::publishInterlock);
@@ -125,10 +142,27 @@ void StationAccessoryData::publishAll()
     if (m_model && m_sources.tgxlDiagnostics) {
         m_model->setTgxlDiagnostics(m_sources.tgxlDiagnostics->counters());
     }
+    publishRfKitCounters();
     publishInterlock();
     publishPowerCapSettings();
     publishTuneMemory();
     publishLabels();
+}
+
+void StationAccessoryData::publishRfKitCounters()
+{
+    const Rf2ksConnection* conn = m_sources.rfkitConnection;
+    if (!m_model || conn == nullptr) {
+        return;
+    }
+    AccessoryDataModel::RfKitCounters counters;
+    counters.connectedSinceMs = conn->connectedSinceMs();
+    counters.pollsOk = conn->pollsSucceeded();
+    counters.pollsFailed = conn->pollsFailed();
+    counters.reconnectCount = conn->reconnectAttempts();
+    counters.lastPollMs = conn->lastPollMs();
+    counters.rttAvgMs = conn->rttAvgLast10Ms();  // group B fix wave (M7)
+    m_model->setRfKitDiagnostics(counters);
 }
 
 void StationAccessoryData::publishFaults()

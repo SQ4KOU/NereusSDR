@@ -155,6 +155,13 @@
 //                 local VAX tee carries only the slices setVaxSliceMask()
 //                 allows (the station device's own on a Core with several
 //                 devices). NereusSDR-original.
+//   2026-09-25: iPhone app plan Task 76 (R-IOS-31, ruling 9.2) by J.J.
+//                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code. One
+//                 mix per owner in place of the one master tap: up to
+//                 kMaxOwnerMixes owner mixes, each summing only its own
+//                 slices for its own speakers and headphones taps, and the
+//                 local output carrying only setLocalOutputSliceMask()'s
+//                 slices (the station device's). NereusSDR-original.
 // =================================================================
 
 #include "AudioDeviceConfig.h"
@@ -367,7 +374,10 @@ public:
     // installed is moved) and returns false when every slot is taken or the
     // arguments are invalid. clearSliceAudioTap removes `tap` wherever it is
     // installed and returns once no callback into it is running.
-    static constexpr int kMaxSliceAudioTaps = 4;
+    // iPhone app Task 76: eight, so every slice a board can have (five at
+    // most) can be tapped at once whichever devices own them; each device
+    // still sends at most IMediaTransport::kMaxReceiverAudioStreams.
+    static constexpr int kMaxSliceAudioTaps = 8;
     bool setSliceAudioTap(int sliceId, SliceAudioTap* tap);
     void clearSliceAudioTap(SliceAudioTap* tap);
     /// Slots holding a tap now; diagnostics and leak checks.
@@ -508,6 +518,45 @@ public:
     // without a lock.
     void setVaxSliceMask(quint32 mask) { m_vaxSliceMask.store(mask, std::memory_order_release); }
     quint32 vaxSliceMask() const { return m_vaxSliceMask.load(std::memory_order_acquire); }
+
+    // iPhone app Task 76 (the several-devices design, ruling 9.2): which
+    // slice ids the local output plays, one bit per id: the speakers and
+    // headphones buses, the master tap and the headphones-mix tap carry
+    // only these. The Core's local output plays the station device's mix,
+    // so RadioModel sets the same mask as setVaxSliceMask(). All bits by
+    // default: a desktop on its own plays every slice, as before. The
+    // transmit monitor always plays locally. Any thread.
+    void setLocalOutputSliceMask(quint32 mask)
+    {
+        m_localOutputSliceMask.store(mask, std::memory_order_release);
+    }
+    quint32 localOutputSliceMask() const
+    {
+        return m_localOutputSliceMask.load(std::memory_order_acquire);
+    }
+
+    // iPhone app Task 76 (ruling 9.2): one mix per owner. A device's media
+    // controller takes an owner mix for its session, names its slices, and
+    // hangs its speakers' (or whole program) and headphones taps on it,
+    // exactly as the master and headphones taps are used, from the same
+    // drain and barrier, before master volume and mute. Each tap has its
+    // own admission gate, so installing or removing one never withholds a
+    // block from another. acquireOwnerMix returns a free slot, or -1 with
+    // all taken; releaseOwnerMix removes both taps (returning once no
+    // callback into them runs) and frees the slot. Control thread.
+    static constexpr int kMaxOwnerMixes = 4;
+    int acquireOwnerMix();
+    void releaseOwnerMix(int slot);
+    void setOwnerMixSliceMask(int slot, quint32 mask);
+    quint32 ownerMixSliceMask(int slot) const;
+    /// The owner's program (its speakers and headphones sums added) unless
+    /// `speakersOnly`, as setMasterMixAudioTap. False for a slot not taken.
+    bool setOwnerMixAudioTap(int slot, MasterMixAudioTap* tap, bool speakersOnly = false);
+    void clearOwnerMixAudioTap(int slot, MasterMixAudioTap* tap);
+    bool setOwnerHeadphonesMixAudioTap(int slot, MasterMixAudioTap* tap);
+    void clearOwnerHeadphonesMixAudioTap(int slot, MasterMixAudioTap* tap);
+    /// Owner mixes taken now; diagnostics and leak checks.
+    int ownerMixCount() const;
 
     // A remote window opens the four VAX receive outputs start() opens (the
     // engine itself never starts there), skipping a slot that already has
@@ -1200,6 +1249,35 @@ private:
     };
     std::array<SliceTapSlot, kMaxSliceAudioTaps> m_sliceTaps;
     std::mutex m_sliceTapControlMutex;
+
+    // iPhone app Task 76: the owner mixes. Each tap has the master tap's
+    // gate. `taken` and the mask are written on the control thread (under
+    // m_ownerMixControlMutex); the DSP thread reads them without a lock.
+    struct MixTapGate {
+        std::atomic<MasterMixAudioTap*> tap{nullptr};
+        std::atomic<bool> admissionClosed{false};
+        std::atomic<unsigned> callsInFlight{0};
+    };
+    struct OwnerMixSlot {
+        std::atomic<bool> taken{false};
+        std::atomic<quint32> sliceMask{0};
+        MixTapGate program;
+        std::atomic<bool> programSpeakersOnly{false};
+        MixTapGate headphones;
+    };
+    std::array<OwnerMixSlot, kMaxOwnerMixes> m_ownerMixes;
+    mutable std::mutex m_ownerMixControlMutex;
+    std::atomic<quint32> m_localOutputSliceMask{0xFFFFFFFFu};
+    // Each owner's two sums and one program scratch, sized with the mix
+    // scratch (ensureMixScratchFrames), never on the DSP thread.
+    std::array<std::vector<float>, kMaxOwnerMixes> m_ownerSpeakersScratch;
+    std::array<std::vector<float>, kMaxOwnerMixes> m_ownerHeadphonesScratch;
+    static void closeAndDrainMixTap(MixTapGate& gate);
+    static void invokeMixTap(MixTapGate& gate, const float* samples, int frames) noexcept;
+    bool validOwnerMixSlot(int slot) const
+    {
+        return slot >= 0 && slot < kMaxOwnerMixes;
+    }
     void closeAndDrainSliceTap(SliceTapSlot& slot);
     // DSP thread. Hands each tap for `sliceId` the block with the slice's AF
     // gain undone (afGainInverseForSlice).

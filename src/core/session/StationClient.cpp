@@ -147,6 +147,55 @@
 //               Core sending txStateVersion 1 has the transmit time-out).
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 (parity Task 1): transmitSettingsAvailable
+//                (transmitSettingsVersion), and the radio's `transmitting`
+//                cleared when the session ends. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 (parity Task 2): requestTunePowerForTxBand
+//                (transmitSettingsVersion 2), the Core's tunePowerForTxBand
+//                and tuneDrivePowerSource applied as plain state, and a
+//                refused Tune Power change shows the Core's value again.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 3): the TX profile requests and
+//                requestRadeResetVocoder (transmitSettingsVersion 3); a
+//                refused profile request shows the Core's profile again.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-32 / R-R3-46 / R-R3-49 (parity Task 6): the radio's
+//                PA readings and link quality kept only from a Core at
+//                minor 11 and stationTelemetryVersion 4; the Core's
+//                `txInhibited` applied as plain state; the Core's PA
+//                profiles and PA table reloaded in the window as their keys
+//                arrive. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
+//   2026-09-25 - R-R3-21, R-IOS-27: the window's NotchModel is told the
+//                Core's notchControlVersion, so its +TNF sends
+//                notch.addAtSlice to a version 2 Core. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 7): PureSignal arming offered to the
+//                window by a Core at transmitSettingsVersion 7 (the
+//                facade's canArm, which also follows the Core's on-air
+//                state). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 8): moveTgxlRelay, scanTgxlLan and
+//                setTgxlAddress (remoteTgxlControlVersion 4); the scan's
+//                answer goes to RadioModel::reportStationTgxlLanScan.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 9): setPgxlOperate, scanPgxlLan and
+//                setPgxlAddress (remotePgxlControlVersion 4); the scan's
+//                answer goes to RadioModel::reportStationPgxlLanScan.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 10): setRfKitOperate,
+//                setRfKitAntenna, setRfKitTciMode and setRfKitAddress
+//                (remoteRfKitControlVersion 4). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 / R-R3-46 (parity Task 12): the transmit antennas
+//                and relays from radioHardwareVersion 6
+//                (remoteTransmitAntennasAvailable). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 / R-R3-46 (parity mini-round): one band's TX
+//                antenna at a time (setAlexTxAntenna) from
+//                radioHardwareVersion 6. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -156,6 +205,7 @@
 #include "core/security/ClientDeviceIdentity.h"
 #include "core/security/DeviceAuthenticator.h"
 #include "core/security/StationIdentity.h"
+#include "core/MicProfileManager.h"
 #include "core/session/MirrorPolicy.h"
 #include "core/session/ObjectRegistry.h"
 #include "core/session/SessionEndReasons.h"
@@ -1298,6 +1348,9 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
             // can arrive, so a disconnected station is never presented as
             // still listening on this machine.
             m_radioModel->clearRemoteFourO3AState();
+            // R-R3-49: likewise the Core's transmit state, so a Core that
+            // does not send `transmitting` never inherits "on the air".
+            m_radioModel->clearRemoteTransmittingState();
             if (TunerModel* const tuner = m_radioModel->tunerModel()) {
                 TunerModel::StationConnectionState disconnected;
                 disconnected.configuredHost = tuner->configuredHost();
@@ -1548,6 +1601,12 @@ void StationClient::onTransportText(const QByteArray& wire)
                 || m_capabilities.stationTelemetryVersion < 3) {
                 message.telemetry.receivers.reset();
             }
+            // R-R3-32 (parity Task 6): and the radio's PA readings and link
+            // quality only from one that negotiated version 4.
+            if (m_agreedMinor < kReceiverLoadSessionProtocolMinor
+                || m_capabilities.stationTelemetryVersion < 4) {
+                message.telemetry.radio.clearRadioStatus();
+            }
             emit telemetryReceived(message.telemetry, m_sessionEpoch);
         }
         break;
@@ -1598,9 +1657,11 @@ void StationClient::onTransportText(const QByteArray& wire)
         // R-R3-16/17: the connect sequence finished inside its deadline.
         m_handshakeDeadlineTimer->stop();
         if (m_radioModel) {
+            // R-R3-49 (parity Task 7): and arming off the air from a Core
+            // at transmitSettingsVersion 7.
             m_radioModel->pureSignalFacade()->setRemoteCapabilities(
                 m_agreedMinor >= kDspControlSessionProtocolMinor && m_capabilities.psAlgorithmVersion == 3,
-                m_capabilities.txPermitted);
+                m_capabilities.txPermitted, pureSignalArmingOffered());
             m_radioModel->dspAssets()->setRemoteNr3ModelsSupported(remoteNr3ModelsAvailable());
         }
         if (m_radioModel) {
@@ -1973,7 +2034,7 @@ void StationClient::handleCapabilities(const SessionMessage& message)
     if (m_handshakeComplete) {
         m_radioModel->pureSignalFacade()->setRemoteCapabilities(
             m_agreedMinor >= kDspControlSessionProtocolMinor && m_capabilities.psAlgorithmVersion == 3,
-            m_capabilities.txPermitted);
+            m_capabilities.txPermitted, pureSignalArmingOffered());
         if (!self || m_sessionEpoch != epoch || !m_sessionActive || !m_radioModel) { return; }
         m_radioModel->dspAssets()->setRemoteNr3ModelsSupported(remoteNr3ModelsAvailable());
         if (!self || m_sessionEpoch != epoch || !m_sessionActive || !m_radioModel) { return; }
@@ -2038,6 +2099,9 @@ void StationClient::handleCapabilities(const SessionMessage& message)
             && m_capabilities.notchControlVersion >= 1;
         if (mirrored) {
             notches->setMirrorMode(true);
+            // R-R3-21, R-IOS-27: version 2 lets the window's +TNF send
+            // notch.addAtSlice (RadioModel::addTnfForSlice).
+            notches->setRemoteControlVersion(m_capabilities.notchControlVersion);
             notches->setRemoteRequestHandler(
                 [self](const QByteArray& verb, const QVariantMap& arguments) -> quint32 {
                 if (!self || !self->remoteNotchControlAvailable() || !verb.startsWith("notch.")) {
@@ -2052,6 +2116,7 @@ void StationClient::handleCapabilities(const SessionMessage& message)
             m_objects.remove("notches");
             m_outboundMirror->unwatch("notches");
             notches->setRemoteRequestHandler({});
+            notches->setRemoteControlVersion(0);
             notches->setMirrorMode(false);
         }
     }
@@ -2121,6 +2186,24 @@ void StationClient::handleCapabilities(const SessionMessage& message)
             });
         } else {
             alex->setBandEditSender({});
+        }
+        // Parity mini-round (radioHardwareVersion 6): one band's TX antenna
+        // at a time too (setAlexTxAntenna), so the grid cannot put back a
+        // TX antenna the Core changed on another band.
+        if (m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+            && m_capabilities.radioHardwareVersion >= 6) {
+            alex->setTxBandEditSender([self](Band band, int antenna, QString* reason) {
+                if (!self) {
+                    return false;
+                }
+                const CommandOutcome outcome = self->requestAlexTxAntenna(band, antenna);
+                if (!outcome.sent && reason) {
+                    *reason = outcome.reason;
+                }
+                return outcome.sent;
+            });
+        } else {
+            alex->setTxBandEditSender({});
         }
     }
 
@@ -2235,6 +2318,8 @@ void StationClient::handleSettingsSnapshot(const SessionMessage& message)
         for (auto it = data.constBegin(); it != data.constEnd(); ++it) {
             m_radioModel->scheduleRemoteOcReload(it.key());
         }
+        // R-R3-46 (parity Task 6): and its PA profiles and PA table, once.
+        m_radioModel->scheduleRemotePaReload(QString());
         // Follow-up 6: pages showing the Core's settings re-read them.
         m_radioModel->reportStationSettingChanged(QString());
     }
@@ -2298,6 +2383,8 @@ void StationClient::handleSettingsValue(const SessionMessage& message)
     // window's copy, so its next save cannot send a stale cell back.
     if (!m_radioModel.isNull()) {
         m_radioModel->scheduleRemoteOcReload(key);
+        // R-R3-46 (parity Task 6): likewise the PA profiles and PA table.
+        m_radioModel->scheduleRemotePaReload(key);
         // Follow-up 6: another window's (or the Core's) change reaches the
         // pages that show it.
         m_radioModel->reportStationSettingChanged(key);
@@ -2318,6 +2405,8 @@ void StationClient::handleSettingsReject(const SessionMessage& message)
     // R-R3-46: a refused OC cell settles the window's copy on the Core's.
     if (!m_radioModel.isNull()) {
         m_radioModel->scheduleRemoteOcReload(QString::fromUtf8(message.objectKey));
+        // R-R3-46 (parity Task 6): a refused PA write settles on the Core's.
+        m_radioModel->scheduleRemotePaReload(QString::fromUtf8(message.objectKey));
     }
     if (!message.reason.isEmpty() && m_radioModel) {
         m_radioModel->reportStationSliceCommandRejected(message.reason);
@@ -2783,6 +2872,8 @@ bool StationClient::applyOne(QObject* target, const MirrorProperty& prop,
         QByteArrayLiteral("RadioModel.rfKitEnabled"),
         // R-R3-49: likewise the Core's transmit state; it never keys here.
         QByteArrayLiteral("RadioModel.transmitting"),
+        // R-R3-49 (parity Task 6): likewise the Core's TX inhibit.
+        QByteArrayLiteral("RadioModel.txInhibited"),
         QByteArrayLiteral("SliceModel.signalStrengthDbm"),
         QByteArrayLiteral("SliceModel.signalPeakDbm"),
         QByteArrayLiteral("SliceModel.signalAverageDbm"),
@@ -2856,6 +2947,12 @@ bool StationClient::applyClientOnlyProperty(QObject* target, const QByteArray& c
     if (className == "TunerModel") {
         auto* tuner = qobject_cast<TunerModel*>(target);
         return tuner != nullptr && tuner->applyStationValue(propertyName, native);
+    }
+    // R-R3-49 (parity Task 2): the Core's tune power for its transmit band
+    // and tune drive source, plain state; they change only by command.
+    if (className == "TransmitModel") {
+        auto* tx = qobject_cast<TransmitModel*>(target);
+        return tx != nullptr && tx->applyStationValue(propertyName, native);
     }
     // R-R3-47 / R-R3-22: plain state applies; never a command to an amp.
     // iPhone app plan Task 39: a plain state apply; the Core's transmitter
@@ -3149,16 +3246,19 @@ QString accessoryRefusalDevice(const QByteArray& verb, const QString& faultsDevi
     if (verb == "setPgxlName" || verb == "setPgxlHardware" || verb == "setPgxlNetwork"
         || verb == "savePgxlSettings" || verb == "readPgxlSettings"
         || verb == "setPgxlPowerCap" || verb == "configurePgxl" || verb == "disconnectPgxl"
-        || verb == "setPgxlConnectionSettings") {
+        || verb == "setPgxlConnectionSettings" || verb == "setPgxlOperate"
+        || verb == "scanPgxlLan" || verb == "setPgxlAddress") {
         return QStringLiteral("pgxl");
     }
     if (verb == "setTgxlName" || verb == "setTgxlNetwork" || verb == "saveTgxlSettings"
         || verb == "readTgxlSettings" || verb == "configureTgxl" || verb == "disconnectTgxl"
-        || verb == "setTgxlAntenna" || verb == "setTgxlOperate" || verb == "setTgxlBypass") {
+        || verb == "setTgxlAntenna" || verb == "setTgxlOperate" || verb == "setTgxlBypass"
+        || verb == "moveTgxlRelay" || verb == "scanTgxlLan" || verb == "setTgxlAddress") {
         return QStringLiteral("tgxl");
     }
     if (verb == "configureRfKit" || verb == "disconnectRfKit" || verb == "setRfKitEnabled"
-        || verb == "resetRfKitError") {
+        || verb == "resetRfKitError" || verb == "setRfKitOperate" || verb == "setRfKitAntenna"
+        || verb == "setRfKitTciMode" || verb == "setRfKitAddress") {
         return QStringLiteral("rfkit");
     }
     if (verb == "setTxInterlockPolicy") {
@@ -3353,6 +3453,40 @@ QString StationClient::hardwareConfigUnavailableReason() const
                           "app. Updating the Core may help.");
 }
 
+bool StationClient::remoteRxBypassOnTxAvailable() const
+{
+    return remoteHardwareConfigAvailable() && m_capabilities.radioHardwareVersion >= 5;
+}
+
+QString StationClient::rxBypassOnTxUnavailableReason() const
+{
+    if (remoteRxBypassOnTxAvailable()) {
+        return {};
+    }
+    if (!remoteHardwareConfigAvailable()) {
+        return hardwareConfigUnavailableReason();
+    }
+    return QStringLiteral("This Core cannot switch its receive bypass on transmit for this "
+                          "app. Updating the Core may help.");
+}
+
+bool StationClient::remoteTransmitAntennasAvailable() const
+{
+    return remoteHardwareConfigAvailable() && m_capabilities.radioHardwareVersion >= 6;
+}
+
+QString StationClient::transmitAntennasUnavailableReason() const
+{
+    if (remoteTransmitAntennasAvailable()) {
+        return {};
+    }
+    if (!remoteHardwareConfigAvailable()) {
+        return hardwareConfigUnavailableReason();
+    }
+    return QStringLiteral("This Core cannot change its radio's transmit antennas for this "
+                          "app. Updating the Core may help.");
+}
+
 StationClient::CommandOutcome StationClient::requestAlexRxAntenna(Band band, int antenna,
                                                                   bool rxOnly)
 {
@@ -3362,6 +3496,17 @@ StationClient::CommandOutcome StationClient::requestAlexRxAntenna(Band band, int
     return sendCommand("setAlexRxAntenna", -1,
                        { intArgument("band", static_cast<int>(band)),
                          intArgument("antenna", antenna), boolArgument("rxOnly", rxOnly) },
+                       QStringLiteral("the antenna change"));
+}
+
+StationClient::CommandOutcome StationClient::requestAlexTxAntenna(Band band, int antenna)
+{
+    if (!remoteTransmitAntennasAvailable()) {
+        return {false, transmitAntennasUnavailableReason()};
+    }
+    return sendCommand("setAlexTxAntenna", -1,
+                       { intArgument("band", static_cast<int>(band)),
+                         intArgument("antenna", antenna) },
                        QStringLiteral("the antenna change"));
 }
 
@@ -3504,6 +3649,45 @@ StationClient::CommandOutcome StationClient::requestRfKitEnabled(bool enabled)
     }
     return sendCommand("setRfKitEnabled", -1, { boolArgument("enabled", enabled) },
                        QStringLiteral("the RF-Kit amplifier switch"));
+}
+
+// R-R3-49 (parity Task 10): a Core below remoteRfKitControlVersion 4 is not
+// asked; the window says why in its own words.
+StationClient::CommandOutcome StationClient::requestRfKitOperate(bool on)
+{
+    if (!rfKitFullControlAvailable()) {
+        return IStationLink::requestRfKitOperate(on);
+    }
+    return sendCommand("setRfKitOperate", -1, { boolArgument("on", on) },
+                       QStringLiteral("the RF-Kit amplifier operate"));
+}
+
+StationClient::CommandOutcome StationClient::requestRfKitAntenna(int port)
+{
+    if (!rfKitFullControlAvailable()) {
+        return IStationLink::requestRfKitAntenna(port);
+    }
+    return sendCommand("setRfKitAntenna", -1, { intArgument("port", port) },
+                       QStringLiteral("the RF-Kit amplifier antenna"));
+}
+
+StationClient::CommandOutcome StationClient::requestRfKitTciMode()
+{
+    if (!rfKitFullControlAvailable()) {
+        return IStationLink::requestRfKitTciMode();
+    }
+    return sendCommand("setRfKitTciMode", -1, {},
+                       QStringLiteral("the RF-Kit amplifier TCI mode"));
+}
+
+StationClient::CommandOutcome StationClient::requestRfKitAddress(const QString& host, int port)
+{
+    if (!rfKitFullControlAvailable()) {
+        return IStationLink::requestRfKitAddress(host, port);
+    }
+    return sendCommand("setRfKitAddress", -1,
+                       { stringArgument("host", host), intArgument("port", port) },
+                       QStringLiteral("the RF-Kit amplifier address"));
 }
 
 // R-R3-48 (stationTciVersion 1): the one TCI switch and port.
@@ -3680,6 +3864,114 @@ StationClient::CommandOutcome StationClient::requestTgxlBypass(bool on)
                        QStringLiteral("the Tuner Genius bypass"));
 }
 
+// R-R3-49 (parity Task 8): a Core below remoteTgxlControlVersion 4 is not
+// asked; the window says why in its own words.
+StationClient::CommandOutcome StationClient::requestTgxlRelayMove(int relay, int direction)
+{
+    if (!tgxlFullControlAvailable()) {
+        return IStationLink::requestTgxlRelayMove(relay, direction);
+    }
+    return sendCommand("moveTgxlRelay", -1,
+                       { intArgument("relay", relay), intArgument("direction", direction) },
+                       QStringLiteral("the Tuner Genius relay"));
+}
+
+StationClient::CommandOutcome StationClient::requestTgxlLanScan()
+{
+    if (!tgxlFullControlAvailable()) {
+        return IStationLink::requestTgxlLanScan();
+    }
+    return sendCommand("scanTgxlLan", -1, {}, QStringLiteral("the Tuner Genius scan"));
+}
+
+StationClient::CommandOutcome StationClient::requestTgxlAddress(const QString& host, int port)
+{
+    if (!tgxlFullControlAvailable()) {
+        return IStationLink::requestTgxlAddress(host, port);
+    }
+    return sendCommand("setTgxlAddress", -1,
+                       { stringArgument("host", host), intArgument("port", port) },
+                       QStringLiteral("the Tuner Genius address"));
+}
+
+// R-R3-49 (parity Task 9): a Core below remotePgxlControlVersion 4 is not
+// asked; the window says why in its own words.
+StationClient::CommandOutcome StationClient::requestPgxlOperate(bool on)
+{
+    if (!pgxlFullControlAvailable()) {
+        return IStationLink::requestPgxlOperate(on);
+    }
+    return sendCommand("setPgxlOperate", -1, { boolArgument("on", on) },
+                       QStringLiteral("the Power Genius operate"));
+}
+
+StationClient::CommandOutcome StationClient::requestPgxlLanScan()
+{
+    if (!pgxlFullControlAvailable()) {
+        return IStationLink::requestPgxlLanScan();
+    }
+    return sendCommand("scanPgxlLan", -1, {}, QStringLiteral("the Power Genius scan"));
+}
+
+StationClient::CommandOutcome StationClient::requestPgxlAddress(const QString& host, int port)
+{
+    if (!pgxlFullControlAvailable()) {
+        return IStationLink::requestPgxlAddress(host, port);
+    }
+    return sendCommand("setPgxlAddress", -1,
+                       { stringArgument("host", host), intArgument("port", port) },
+                       QStringLiteral("the Power Genius address"));
+}
+
+// R-R3-49 (parity Task 2): the TX applet's Tune Power slider. A Core
+// below transmitSettingsVersion 2 is not asked.
+StationClient::CommandOutcome StationClient::requestTunePowerForTxBand(int watts)
+{
+    if (!transmitSettingsAvailable(2)) {
+        return IStationLink::requestTunePowerForTxBand(watts);
+    }
+    return sendCommand("setTunePowerForTxBand", -1, { intArgument("watts", watts) },
+                       QStringLiteral("the tune power"));
+}
+
+// R-R3-49 (parity Task 3): the TX profile combos, Setup > Audio > TX
+// Profile and the RADE applet's Reset vocoder. A Core below
+// transmitSettingsVersion 3 is not asked.
+StationClient::CommandOutcome StationClient::requestTxProfileSelect(const QString& name)
+{
+    if (!transmitSettingsAvailable(3)) {
+        return IStationLink::requestTxProfileSelect(name);
+    }
+    return sendCommand("txProfile.select", -1, { stringArgument("name", name) },
+                       QStringLiteral("the transmit profile"));
+}
+
+StationClient::CommandOutcome StationClient::requestTxProfileSave(const QString& name)
+{
+    if (!transmitSettingsAvailable(3)) {
+        return IStationLink::requestTxProfileSave(name);
+    }
+    return sendCommand("txProfile.save", -1, { stringArgument("name", name) },
+                       QStringLiteral("the transmit profile"));
+}
+
+StationClient::CommandOutcome StationClient::requestTxProfileDelete(const QString& name)
+{
+    if (!transmitSettingsAvailable(3)) {
+        return IStationLink::requestTxProfileDelete(name);
+    }
+    return sendCommand("txProfile.delete", -1, { stringArgument("name", name) },
+                       QStringLiteral("the transmit profile"));
+}
+
+StationClient::CommandOutcome StationClient::requestRadeResetVocoder()
+{
+    if (!transmitSettingsAvailable(3)) {
+        return IStationLink::requestRadeResetVocoder();
+    }
+    return sendCommand("rade.resetVocoder", -1, {}, QStringLiteral("the RADE vocoder reset"));
+}
+
 StationClient::CommandOutcome StationClient::requestDisconnectTgxl()
 {
     if (!remoteTgxlConfigAvailable()) {
@@ -3808,9 +4100,21 @@ void StationClient::handleCommandResult(const SessionMessage& message)
         } else {
             m_radioModel->reportStationSliceCommandRejected(reason);
         }
+        // R-R3-49 (parity Task 2): a refused Tune Power change leaves the
+        // Core's value; the slider shows it again.
+        if (pending.verb == "setTunePowerForTxBand") {
+            m_radioModel->transmitModel().reportTunePowerForTxBandRefused();
+        }
+        // R-R3-49 (parity Task 3): a refused profile request leaves the
+        // Core's profile; every profile combo shows it again.
+        if (pending.verb.startsWith("txProfile.")) {
+            if (MicProfileManager* profiles = m_radioModel->micProfileManager()) {
+                profiles->reportStationRequestRefused();
+            }
+        }
         // R-R3-46 fix wave: a refused band antenna leaves the window's
         // values as the Core's; the Setup tab that showed the click re-reads.
-        if (pending.verb == "setAlexRxAntenna") {
+        if (pending.verb == "setAlexRxAntenna" || pending.verb == "setAlexTxAntenna") {
             if (AlexAntennaFacade* alex = m_radioModel->alexAntennaFacade()) {
                 alex->reportBandEditRefused();
             }
@@ -3865,6 +4169,27 @@ void StationClient::handleCommandResult(const SessionMessage& message)
             m_radioModel->pureSignalFacade()->receiveRemoteActionResult(message.commandId,
                 message.commandVerb, phase, message.reason, *values);
         }
+    }
+    // R-R3-49 (parity Task 8): the Core's Scan LAN answer, to the window's
+    // scan dialog (a refusal is also routed as an accessory refusal above).
+    // R-R3-49 (parity Task 9): the same for the Power Genius's scan.
+    if ((pending.verb == "scanTgxlLan" || pending.verb == "scanPgxlLan")
+        && !m_radioModel.isNull()) {
+        QString devicesJson;
+        for (const MirrorUpdate& value : message.updates) {
+            if (value.name == "devicesJson" && value.kind == MirrorWireKind::Utf8) {
+                devicesJson = value.value.toString();
+            }
+        }
+        const QPointer<StationClient> self(this);
+        if (pending.verb == "scanTgxlLan") {
+            m_radioModel->reportStationTgxlLanScan(message.commandId, message.accepted,
+                                                   message.reason, devicesJson);
+        } else {
+            m_radioModel->reportStationPgxlLanScan(message.commandId, message.accepted,
+                                                   message.reason, devicesJson);
+        }
+        if (!self) { return; }
     }
     // R-R3-22 fix wave: every result by its id, so a sender (the amp
     // applets, the TCI switch) clears its own pending request and shows
@@ -3970,10 +4295,58 @@ bool StationClient::tgxlControlAvailable() const
         && m_capabilities.remoteTgxlControlVersion >= 2;
 }
 
+bool StationClient::transmitSettingsAvailable(int minVersion) const
+{
+    // R-R3-49 (parity Task 1): the Core takes this window's transmit
+    // settings while its radio is off the air.
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.transmitSettingsVersion >= std::max(minVersion, 1);
+}
+
+bool StationClient::pureSignalArmingOffered() const
+{
+    // R-R3-49 (parity Task 7): the Core takes this window's PureSignal
+    // arming while its radio is off the air. Read at the handshake's end
+    // and when capabilities change, so not through stationLinkReady().
+    return m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.transmitSettingsVersion >= 7;
+}
+
 bool StationClient::tgxlOperateAppliesWhole() const
 {
     // R-R3-49 fix wave: a Core at 3 applies setTgxlOperate on whole.
     return tgxlControlAvailable() && m_capabilities.remoteTgxlControlVersion >= 3;
+}
+
+bool StationClient::rfKitFullControlAvailable() const
+{
+    // R-R3-49 (parity Task 10): setRfKitOperate, setRfKitAntenna,
+    // setRfKitTciMode, setRfKitAddress.
+    return remoteRfKitControlAvailable() && m_capabilities.remoteRfKitControlVersion >= 4;
+}
+
+bool StationClient::rfKitCountersAvailable() const
+{
+    // R-R3-49 (parity Task 10): accessoryData's rfkit* counters.
+    return accessoryDataAvailable() && m_capabilities.accessoryDataVersion >= 2;
+}
+
+bool StationClient::rfKitResponseTimeAvailable() const
+{
+    // Group B fix wave (M7): accessoryData's rfkitRttAvgMs.
+    return accessoryDataAvailable() && m_capabilities.accessoryDataVersion >= 3;
+}
+
+bool StationClient::pgxlFullControlAvailable() const
+{
+    // R-R3-49 (parity Task 9): setPgxlOperate, scanPgxlLan, setPgxlAddress.
+    return remotePgxlControlAvailable() && m_capabilities.remotePgxlControlVersion >= 4;
+}
+
+bool StationClient::tgxlFullControlAvailable() const
+{
+    // R-R3-49 (parity Task 8): moveTgxlRelay, scanTgxlLan, setTgxlAddress.
+    return tgxlControlAvailable() && m_capabilities.remoteTgxlControlVersion >= 4;
 }
 
 bool StationClient::stationTciAvailable() const

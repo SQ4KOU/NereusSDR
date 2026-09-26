@@ -45,6 +45,10 @@
 //               on the virtual clock, so advanceMs reaches the end of a
 //               device's 180 s. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app (R-IOS-01, R-IOS-02): {"$json": <expectation>}
+//               matches a station string holding JSON; a client message
+//               holding one is refused. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "LinkFixtures.h"
@@ -138,6 +142,7 @@ QString placeholderArgument(const QString& text, const QString& prefix)
 //   $within:<t>:<v>      a number no further than <t> from <v>
 //   $majors              only as a hello's "majors": whole numbers from 0 to
 //                        65535, ascending, no repeats, naming its "major"
+// and one object form, {"$json": <expectation>} (isJsonForm below).
 bool isPlaceholder(const QJsonValue& value)
 {
     if (!value.isString()) {
@@ -152,6 +157,37 @@ bool isPlaceholder(const QJsonValue& value)
         || (text.startsWith(QStringLiteral("$capture:")) && text.size() > 9)
         || (text.startsWith(QStringLiteral("$ref:")) && text.size() > 5)
         || text.startsWith(QStringLiteral("$within:"));
+}
+
+// Whether `value` is the form {"$json": <expectation>} (section 16.1): an
+// object holding the key "$json". It stands where the station sends a
+// string holding JSON; a second key beside "$json" is a malformed fixture,
+// which the matcher reports.
+bool isJsonForm(const QJsonValue& value)
+{
+    return value.isObject() && value.toObject().contains(QStringLiteral("$json"));
+}
+
+// `text` parsed as one JSON value of any kind (an object, an array, a
+// string, a number, true, false or null); `why` set, and undefined
+// returned, when it is not exactly one. QJsonDocument parses only an
+// object or an array at the top, so the text is read as the one element
+// of an array.
+QJsonValue parseJsonText(const QString& text, QString* why)
+{
+    QJsonParseError error{};
+    const QJsonDocument document = QJsonDocument::fromJson(
+        QByteArrayLiteral("[") + text.toUtf8() + QByteArrayLiteral("]"), &error);
+    if (error.error != QJsonParseError::NoError) {
+        *why = error.errorString();
+        return QJsonValue(QJsonValue::Undefined);
+    }
+    if (document.array().size() != 1) {
+        *why = document.array().isEmpty() ? QStringLiteral("empty")
+                                           : QStringLiteral("more than one value");
+        return QJsonValue(QJsonValue::Undefined);
+    }
+    return document.array().at(0);
 }
 
 // Why `actual` is not a list of majors naming `major`, or an empty
@@ -596,6 +632,31 @@ QString LinkFixtures::match(const QJsonValue& expected, const QJsonValue& actual
         return match(captures->value(ref), actual, captures, path);
     }
 
+    if (isJsonForm(expected)) {
+        // {"$json": <expectation>}: a string the station sends, holding
+        // JSON, matched against the expectation (section 16.1). Object key
+        // order inside it is the parser's business; array order matters.
+        const QJsonObject form = expected.toObject();
+        if (form.size() != 1) {
+            return QStringLiteral("%1: {\"$json\": ...} stands alone in its object").arg(path);
+        }
+        if (actual.isUndefined()) {
+            return QStringLiteral("%1: expected a string holding JSON, the key is absent")
+                .arg(path);
+        }
+        if (!actual.isString()) {
+            return QStringLiteral("%1: expected a string holding JSON, got %2")
+                .arg(path, shown(actual));
+        }
+        QString why;
+        const QJsonValue parsed = parseJsonText(actual.toString(), &why);
+        if (!why.isEmpty()) {
+            return QStringLiteral("%1: not JSON (%2), got %3").arg(path, why, shown(actual));
+        }
+        return match(form.value(QStringLiteral("$json")), parsed, captures,
+                     path + QStringLiteral("($json)"));
+    }
+
     if (expected.isObject()) {
         if (!actual.isObject()) {
             return QStringLiteral("%1: expected an object, got %2").arg(path, shown(actual));
@@ -713,6 +774,11 @@ QJsonValue LinkFixtures::substitute(const QJsonValue& value, Captures* captures,
             return {};
         }
         return captures->value(ref);
+    }
+    if (isJsonForm(value)) {
+        // Only the station sends a {"$json": ...}; no runner fills one.
+        *error = QStringLiteral("{\"$json\": ...} cannot stand in a client message");
+        return {};
     }
     if (value.isObject()) {
         QJsonObject out;

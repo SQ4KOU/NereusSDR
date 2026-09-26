@@ -22,6 +22,10 @@
 //                forward power, SWR, ALC and MIC through txState, and is
 //                told the Core's time-out stopped its key. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26: merge of the trunk into the transmit lane: RF Power and
+//               Tune Power from the window reach the Core. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -30,6 +34,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QPushButton>
+#include <QSlider>
 #include <QSignalSpy>
 #include <QWebSocket>
 
@@ -843,6 +848,47 @@ private slots:
         h.client.disconnectFromStation(QStringLiteral("test complete"));
         AppSettings::instance().remove(QStringLiteral("MoxTimeOutEnabled"));
         AppSettings::instance().remove(QStringLiteral("MoxTimeOutSeconds"));
+    }
+
+    // Merge of the trunk into the transmit lane: the window-only transmit
+    // controls reach the Core through the parity lane's settings path. On a
+    // Core with remote transmit, from a permitted window, the TX applet's
+    // RF Power (the drive) and Tune Power sliders change the Core's.
+    void tunePowerAndDriveFromTheWindowReachTheCore()
+    {
+        Test::RemoteAudioSessionHarness h;
+        h.pairWindow = true;
+        h.makeTransmitReady();
+        h.connectSession();
+        QTRY_VERIFY(h.client.capabilities().txPermitted);
+        QVERIFY(h.client.transmitSettingsAvailable(2));
+        WindowControls window(h);
+        window.follow(h.client);
+        // As MainWindow's applyRemoteRoleGating does for these settings.
+        window.applet.setTransmitSettingsPermitted(true, {});
+        window.applet.setTransmitChainSettingsPermitted(true, {});
+        QSlider* drive = nullptr;
+        QSlider* tune = nullptr;
+        for (QSlider* slider : window.applet.findChildren<QSlider*>()) {
+            if (slider->accessibleName() == QStringLiteral("RF power")) { drive = slider; }
+            if (slider->accessibleName() == QStringLiteral("Tune power")) { tune = slider; }
+        }
+        QVERIFY(drive && tune);
+        QVERIFY(drive->isEnabled());
+        QVERIFY(tune->isEnabled());
+
+        TransmitModel& core = h.station.transmitModel();
+        const int driveWanted = core.power() == 37 ? 38 : 37;
+        drive->setValue(driveWanted);
+        QTRY_COMPARE(core.power(), driveWanted);
+
+        const int tuneWanted = core.tunePowerForTxBand() == 23 ? 24 : 23;
+        tune->setValue(tuneWanted);
+        QTRY_COMPARE(core.tunePowerForTxBand(), tuneWanted);
+        QTRY_COMPARE(h.remote.transmitModel().tunePowerForTxBand(), tuneWanted);
+        // Nothing keyed.
+        QVERIFY(!h.station.moxController()->isMox());
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
     }
 };
 

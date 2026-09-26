@@ -92,6 +92,18 @@
 //               to standard output (the journal on a packaged Core). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic Claude
 //               Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 1): the Core's
+//                                    on-the-air refusal and the window's
+//                                    transmit settings reason.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 2): the transmit
+//                                    settings' range refusals and the Tune
+//                                    Power command's reasons.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 3): the TX
+//                                    profile commands' and the RADE vocoder
+//                                    reset's reasons.
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-25  J.J. Boyd / KG4VCF  iPhone app Task 71 (R-IOS-02): the
 //                                    several-devices sentences are plain.
 //                                    AI-assisted via Anthropic Claude Code.
@@ -109,6 +121,22 @@
 //   2026-09-25: iPhone app plan Task 39 (D14, R-IOS-13): txState's stop
 //               texts (TransmitStateFacade.cpp). J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app Task 74 (R-IOS-30): the
+//                                    confirm step's reasons, notices,
+//                                    chooser `why` and change label, with a
+//                                    name embedded and set aside.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06: slice.selectBand
+//                                    relays onBandButtonClicked's refusal,
+//                                    now scanned. AI-assisted via Anthropic
+//                                    Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06: addTnfFromStation
+//                                    (notch.addAtSlice) scanned.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  Receiver and transmit gaps plan,
+//                                    Task 16: receive only's reasons
+//                                    (MoxController, RadioModel) scanned.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -638,9 +666,16 @@ const QList<ReasonSource>& reasonSources()
           // console and log; never sent to an app.
           QStringLiteral("CertificateStore::tlsBackendDiagnostic()"),
           QStringLiteral("m_certificates->lastError()"),
-          QStringLiteral("m_wsServer->errorString()"),
+          QStringLiteral("m_openingGate->errorString()"),
           // dropPeer's and sendRejected's parameter, from this file's calls.
           QStringLiteral("reason"),
+          // iPhone app Task 76: a display budget share's reason, a code
+          // (DisplayBudgetReason, the link's section 6.4), not words.
+          QStringLiteral("peer.budgetShareReason"), QStringLiteral("share.reason"),
+          QStringLiteral("DisplayBudgetReason::None"),
+          QStringLiteral("self->budgetShareReason"),
+          QStringLiteral("peerHoldsSessions(transport) ? reason "
+                         ": displayBudgetReasonForOlderDevice(reason)"),
           // SessionEndReasons' version and takeover reasons, scanned below.
           QStringLiteral("SessionEndReasons::versionRefused(m_supportedMajors, "
                          "message.supportedMajors)"),
@@ -662,17 +697,28 @@ const QList<ReasonSource>& reasonSources()
           // iPhone app Task 71: constants of this file, their literals
           // scanned here.
           QStringLiteral("QString::fromLatin1(kCoreFullReason)"),
+          QStringLiteral("QString::fromLatin1(kOlderWindowCoreFullReason)"),
           QStringLiteral("QString::fromLatin1(kSameDeviceReason)"),
           QStringLiteral("QString::fromLatin1(kLeftReason)"),
+          // iPhone app Task 74: ruling 10.2's refusal at admission,
+          // StationReceivers.cpp's olderWindowWithoutSliceReason, scanned
+          // there.
+          QStringLiteral("noSlice"),
           // iPhone app Task 73: functions of this file, their literals
           // scanned here (the owner's name is the operator's own word,
           // ruling 4.3).
           QStringLiteral("sliceRefusal(requester, sliceId)"),
           QStringLiteral("ownedElsewhereReason(sliceId)"),
+          // Fix wave I3: a slice's settings key; ownedElsewhereReason's
+          // words, scanned here.
+          QStringLiteral("sliceSettingsRefusal(transport, key)"),
           // StateMirror's and SettingsProxyServer's results, scanned below.
           QStringLiteral("result.reason"),
           QStringLiteral("m_settingsServer->otherRadioRefusal(key)"),
           QStringLiteral("refusal"),
+          // R-R3-49 (parity Task 1): RadioModel::stationOnAirRefusal's
+          // reason (RadioModel::onAirReason, scanned below).
+          QStringLiteral("onAir"),
           // A code windows compare, not a reason (section 17).
           QStringLiteral("m_displayBudgetReason"),
           // iPhone app plan Task 34: the transmit refusals' sentences,
@@ -683,7 +729,85 @@ const QList<ReasonSource>& reasonSources()
           // Desktop remote transmit: the same sentences, sent with
           // txPermitted in capabilities (txRefusalReason) and remembered.
           QStringLiteral("txRefusalOf(caps)"),
-          QStringLiteral("txDecision.refusal.text")}},
+          QStringLiteral("txDecision.refusal.text"),
+          // R-R3-49 (parity Task 5): powerPageKeyValueRefusal's literals,
+          // this file's own, scanned here.
+          QStringLiteral("range")}},
+        // iPhone app Task 74 (R-IOS-30): the confirm step's answers and
+        // refusals, confirm.request and notice reasons, and the chooser's
+        // `why`. Device names inserted are the operator's own words (ruling
+        // 4.3); slice letters, counts and bands are plain.
+        {"src/core/session/StationReceivers.cpp", {}, {}, 12,
+         {QStringLiteral("anchorName"), QStringLiteral("names"), QStringLiteral("takerName"),
+          QStringLiteral("name, letterWords"), QStringLiteral("number"),
+          QStringLiteral("notRestored.size()"),
+          // Fix wave: a count of slices, and notRestoredSentence's own
+          // sentence, scanned here.
+          QStringLiteral("count"), QStringLiteral("notRestoredSentence(notRestored.size())")},
+         {// Constants of this file and its reason functions, their
+          // literals scanned here.
+          QStringLiteral("notRestoredSentence(notRestored.size())"),
+          QStringLiteral("QString::fromLatin1(kWaitingReason)"),
+          QStringLiteral("QString::fromLatin1(kNoQuestionReason)"),
+          QStringLiteral("QString::fromLatin1(kNoChoiceReason)"),
+          QStringLiteral("QString::fromLatin1(kChangedReason)"),
+          QStringLiteral("QString::fromLatin1(kNoTakeBackReason)"),
+          QStringLiteral("QString::fromLatin1(kCentreRefusedReason)"),
+          QStringLiteral("moved ? QString() : QString::fromLatin1(kCentreRefusedReason)"),
+          QStringLiteral("affected.isEmpty() ? QString::fromLatin1(kChangedReason) : QString()"),
+          QStringLiteral("pinReason(planDevice(anchor).name)"),
+          QStringLiteral("olderWindowAskReason(namesOf(check.named))"),
+          QStringLiteral("takenOverReason(planDevice(taker).name)"),
+          QStringLiteral("sliceMovedReason(planDevice(requester).name, letters)"),
+          QStringLiteral("sliceClosedReason(planDevice(requester).name, lettersOf(it.value()))"),
+          QStringLiteral("receiver ? receiverTakenReason(takerName, letters) : "
+                         "sliceTakenReason(takerName, letters)"),
+          // StationServer.cpp's slice refusal, scanned there.
+          QStringLiteral("sliceRefusal(requester, sliceId)"), QStringLiteral("refusal"),
+          // Today's refusals from the model, the allocator and the
+          // dispatcher (scanned where they are written), with the holders'
+          // names appended in this file's own sentence (holdersSentence).
+          QStringLiteral("withHolderNames(QString::fromLatin1(kPanNeedsReceiverReason), requester)"),
+          QStringLiteral("withHolderNames(result.reason, requester)"),
+          QStringLiteral("withHolderNames(r.reason, requester)"),
+          QStringLiteral("result.reason"), QStringLiteral("r.reason"), QStringLiteral("reason")}},
+        // iPhone app Task 75 (R-IOS-30): settings that affect every device:
+        // the refusals, the `change` words of confirm.request and notice,
+        // and the notice reasons. Device names inserted are the operator's
+        // own words (ruling 4.3); values, units, bands, antennas and slice
+        // letters are plain.
+        {"src/core/session/StationSharedSettings.cpp", {},
+         // The keys of `change` read back for the notice.
+         {QStringLiteral("label"), QStringLiteral("from"), QStringLiteral("to")}, 10,
+         {// The holder's and devices' names (the operator's own words); the
+          // change's own label, from and to (this file's words, a band, a
+          // value with its unit, or the operator's own setting); slice
+          // letters; an antenna's name; numbers.
+          QStringLiteral("holderShortName"), QStringLiteral("name, label, from, to"),
+          QStringLiteral("ReceiverPlanner::joinWords(letters)"),
+          QStringLiteral("antenna, names.first()"),
+          QStringLiteral("antenna, ReceiverPlanner::joinWords(names)"),
+          QStringLiteral("number"),
+          QStringLiteral("QString::number(centreHz / 1e6, 'f', 6), "
+                         "QString::number(std::lround(widthHz))"),
+          QStringLiteral("adc"), QStringLiteral("where"), QStringLiteral("what, group"),
+          QStringLiteral("hz / 1000"), QStringLiteral("receiverWords(reach.stream)"),
+          QStringLiteral("adcWords(chain)"),
+          QStringLiteral("QString::number(notch->centerHz / 1e6, 'f', 6)")},
+         {// This file's reason functions and StationReceivers.cpp's older
+          // window sentence, their literals scanned where written; the
+          // settings proxy's refusal (scanned there) and this file's.
+          QStringLiteral("onAirReason(planDevice(topology.transmit.holder).shortName)"),
+          // Merge of the trunk into the transmit lane: Task 34's on-air
+          // refusal (TxRefusal.cpp's words, scanned there).
+          QStringLiteral("onAir.text"), QStringLiteral("refused.text"), QStringLiteral("onAir"),
+          QStringLiteral("olderWindowReason(ReceiverPlanner::joinWords(names))"),
+          QStringLiteral("QString::fromLatin1(kTargetChangedReason)"),
+          QStringLiteral("antennaKeptReason(antenna, names)"), QStringLiteral("reason"),
+          QStringLiteral("refusal"), QStringLiteral("applied ? QString() : refusal"),
+          // A deferred rate change's own result (the dispatcher's, scanned
+          // there).
+          QStringLiteral("result.reason")}},
         // command.result for every verb.
         // The device's name ("Power Genius", "Tuner Genius") and what the
         // request asked, both this file's own literals
@@ -698,20 +822,35 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("refusal"), QStringLiteral("facade->lastActionError()"),
           QStringLiteral("slice->nnrLastError()"), QStringLiteral("accepted ? QString() : reason"),
           QStringLiteral("rejectionReason"), QStringLiteral("outcome.reason"),
+          // slice.selectBand: RadioModel::onBandButtonClicked's refusal,
+          // scanned in RadioModel.cpp's entry.
+          QStringLiteral("ignoredReason"),
           QStringLiteral("receiveOnly ? alex->setRxOnlyAntForBand(Band(band), antenna) : "
                          "alex->setRxAntForBand(Band(band), antenna)"),
           // A function of this file, its literal scanned here.
           QStringLiteral("notRepresentableReason()"),
           // iPhone app Task 73: StationServer::sliceRefusal, scanned there.
           QStringLiteral("m_sliceAccess(m_requester, sliceId)"),
+          // Fix wave 2: the same, re-run when a rate change is applied, and
+          // StationSharedSettings' kTargetChangedReason, handed over with
+          // the rate change's closes (scanned there).
+          QStringLiteral("access(requester, sliceId)"),
+          QStringLiteral("std::exchange(m_rateChangedReason, {})"),
           // AlexAntennaFacade's filter policy refusal, scanned below.
           QStringLiteral("alex->setBpfModeForChain(chain, mode)"),
           // iPhone app plan Task 34: the transmit refusals, worded in
           // src/core/safety/TxRefusal.cpp (scanned below) and handed in by
           // StationServer's transmit access.
-          QStringLiteral("refusal.text"),
+          QStringLiteral("refusal.text"), QStringLiteral("result.refusal.text"),
           QStringLiteral("m_transmitAccess.onAir(m_requester)"),
-          QStringLiteral("m_transmitAccess.txSlice(m_requester)")}},
+          QStringLiteral("m_transmitAccess.txSlice(m_requester)"),
+          // Parity mini-round: its TX antenna refusal (setAlexTxAntenna),
+          // scanned below.
+          QStringLiteral("alex->setTxAntForBand(Band(band), antenna)"),
+          // R-R3-49 (parity Task 7): RadioModel::stationOnAirRefusal's
+          // reason for a PureSignal arming verb (RadioModel::onAirReason,
+          // scanned with StationServer).
+          QStringLiteral("onAir")}},
         // iPhone app plan Task 34 (R-IOS-13): every transmit refusal's
         // sentence. The device name put into two of them is the operator's
         // own word (ruling 4.3); a band plan reason is the band plan's
@@ -746,7 +885,10 @@ const QList<ReasonSource>& reasonSources()
          {// finishOperation's parameter and the store's import error, both
           // from this file; lastActionError as a remote window receives it.
           QStringLiteral("reason"), QStringLiteral("imported.error"),
-          QStringLiteral("value.toString()")}},
+          QStringLiteral("value.toString()"),
+          // R-R3-49 (parity Task 7): armingRefusal(), this file's own
+          // literal or RadioModel::onAirReason (scanned with StationServer).
+          QStringLiteral("isArmingAction(action) ? armingRefusal() : QString()")}},
         // Model and correction files; the store's and validator's own
         // messages are detail for the log unless isOperatorMessage says
         // otherwise (DspAssetService::rejectDetail).
@@ -783,11 +925,39 @@ const QList<ReasonSource>& reasonSources()
          {QStringLiteral("coreNewest"), QStringLiteral("appNewest"), QStringLiteral("update"),
           QStringLiteral("otherApp")}},
         // The window's reason it keeps: its own parameter, from this file.
-        {"src/core/accessories/AlexAntennaFacade.cpp", {}, {}, 6, {}, {QStringLiteral("kept")}},
+        // Parity Task 12: and its transmit edit reasons (txKept, bypassKept),
+        // from MainWindow's StationClient reasons, shown through
+        // OperatorReasonText.
+        {"src/core/accessories/AlexAntennaFacade.cpp", {}, {}, 6, {},
+         {QStringLiteral("kept"), QStringLiteral("txKept"), QStringLiteral("bypassKept")}},
         // The attenuator's range in dB.
         {"src/core/StepAttenuatorFacade.cpp", {}, {}, 6,
-         {QStringLiteral("lo"), QStringLiteral("hi")}, {QStringLiteral("kept")}},
+         {QStringLiteral("lo"), QStringLiteral("hi"),
+          // R-R3-49 (parity Task 5): the ATT on TX value's range in dB.
+          QStringLiteral("m_values.minDb"), QStringLiteral("kMaxAttOnTxDb")},
+         {QStringLiteral("kept")}},
         {"src/core/IoBoardHl2Facade.cpp", {}, {}, 1},
+        // Task 16 (receiver and transmit gaps plan): receive only's reason,
+        // what a refused key and a disabled transmit button show.
+        // Task 16 fix wave (M2): the words setMox refuses with, which the
+        // TGXL autotune and the Tuner applet's TUNE show too.
+        // Merge of the trunk into the transmit lane: the same gate as a
+        // TxRefusal (transmitBlockRefusal), its words TxRefusal.cpp's or
+        // the reason setRxOnly was given.
+        {"src/core/MoxController.cpp",
+         {QStringLiteral("defaultRxOnlyReason"), QStringLiteral("transmitBlockReason"),
+          QStringLiteral("transmitBlockRefusal")}, {}, 3, {},
+         // The reason setRxOnly was given (RadioModel::rxOnlyReason, scanned),
+         // and TxRefusal.cpp's refusals (scanned there).
+         {QStringLiteral("m_rxOnlyReason"), QStringLiteral("TxRefusals::stationReceiveOnly()")}},
+        {"src/core/MoxController.h", {QStringLiteral("rxOnlyReason")}, {}, 0, {},
+         // The reason setRxOnly was given (RadioModel::rxOnlyReason, scanned).
+         {QStringLiteral("m_rxOnlyReason")}},
+        {"src/models/RadioModel.cpp",
+         {QStringLiteral("rxOnlyForcedReason"), QStringLiteral("rxOnlyReason")}, {}, 1, {},
+         // Both scanned here and in MoxController.cpp.
+         {QStringLiteral("m_rxOnlyForced ? rxOnlyForcedReason() : "
+                         "MoxController::defaultRxOnlyReason()")}},
         // A receiver count, and a frequency in MHz.
         {"src/core/SliceStreamAllocator.cpp", {}, {}, 4,
          {QStringLiteral("count"),
@@ -813,7 +983,7 @@ const QList<ReasonSource>& reasonSources()
         {"src/core/session/media/DaemonMediaController.cpp", {},
          {// statsSummary(): a log line's text.
           "largestKeyframe="},
-         18, {},
+         19, {},
          {// Parameters and fields that carry this file's own reasons.
           QStringLiteral("reason"), QStringLiteral("prior.reason"),
           QStringLiteral("admitted.refusal"), QStringLiteral("stream.profileRefusal"),
@@ -828,8 +998,19 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("RemoteAudioOffReason::EncoderUnavailable"),
           QStringLiteral("QString::fromLatin1(kRetireReasonSourceRetune)"),
           QStringLiteral("QString::fromLatin1(kRetireReasonStreamBindingChanged)"),
-          QStringLiteral("QString::fromLatin1(kRetireReasonSliceRemoved)")}},
+          QStringLiteral("QString::fromLatin1(kRetireReasonSliceRemoved)"),
+          // Fix wave 2: the budget refusal, shared with the client,
+          // DisplayBudget.h (scanned below).
+          QStringLiteral("QString::fromLatin1(kDisplayBudgetRefusalReason)"),
+          // The Core's media-peer drop reasons, shared with the client,
+          // MediaPeer.h (scanned below).
+          QStringLiteral("QString::fromLatin1(m_peerLost ? kMediaPeerLostReason : "
+                         "kMediaPeerClosedReason)")}},
         {"src/core/session/media/SpectrumEndpoint.h", {}, {}, 3},
+        // Fix wave 2: kDisplayBudgetRefusalReason.
+        {"src/core/session/media/DisplayBudget.h", {}, {}, 1},
+        // kMediaPeerLostReason and kMediaPeerClosedReason.
+        {"src/core/session/media/MediaPeer.h", {}, {}, 2},
         {"src/models/AccessoryDataModel.cpp", {QStringLiteral("readOnlyReason")}, {}, 1},
         {"src/models/AccessorySettingsModel.cpp", {QStringLiteral("readOnlyReason")}, {}, 1},
         // A Power Genius or Tuner Genius on another network: its
@@ -837,8 +1018,12 @@ const QList<ReasonSource>& reasonSources()
         // device's name and its address.
         {"src/core/StationNetwork.cpp", {QStringLiteral("offNetworkReason")}, {}, 1,
          {QStringLiteral("deviceName, address")}},
-        // Reset amp error's refusal (resetRfKitError).
-        {"src/core/StationRfKitController.cpp", {QStringLiteral("resetError")}, {}, 1},
+        // Reset amp error's refusal (resetRfKitError). R-R3-49 (parity Task
+        // 10): OPERATE, antenna and TCI mode, through ampAdmitted.
+        {"src/core/StationRfKitController.cpp",
+         {QStringLiteral("ampAdmitted"), QStringLiteral("resetError"),
+          QStringLiteral("setOperate"), QStringLiteral("setAntenna"),
+          QStringLiteral("setTciMode")}, {}, 2},
         // The amp's and tuner's own settings: the refusals of their
         // commands and the answers the `accessorySettings` object carries.
         // The device's name ("Power Genius", "Tuner Genius").
@@ -873,11 +1058,40 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("readTgxlSettingsForStation"),
           // R-R3-49: the Tuner Genius's antenna, operate and bypass.
           QStringLiteral("stationTgxlControlAllowed"),
+          // R-R3-49 (parity Task 1): the Core's one on-the-air refusal.
+          QStringLiteral("onAirReason"), QStringLiteral("stationOnAirRefusal"),
           QStringLiteral("setTgxlAntennaForStation"), QStringLiteral("setTgxlOperateForStation"),
-          QStringLiteral("setTgxlBypassForStation"), QStringLiteral("setNnrDiagnosticMode"),
+          QStringLiteral("setTgxlBypassForStation"),
+          // R-R3-49 (parity Task 8): the relay nudge, the Core's LAN scan and
+          // the saved address.
+          QStringLiteral("moveTgxlRelayForStation"), QStringLiteral("scanTgxlLanForStation"),
+          QStringLiteral("setTgxlAddressForStation"),
+          // R-R3-49 (parity Task 9): the Power Genius's OPERATE and STANDBY,
+          // the Core's LAN scan for it and the saved address.
+          QStringLiteral("stationPgxlControlAllowed"), QStringLiteral("setPgxlOperateForStation"),
+          QStringLiteral("scanPgxlLanForStation"), QStringLiteral("setPgxlAddressForStation"),
+          // R-R3-49 (parity Task 10): the RF-Kit's OPERATE and STANDBY,
+          // antenna, TCI mode and saved address.
+          QStringLiteral("stationRfKitControlAllowed"),
+          QStringLiteral("setRfKitOperateForStation"),
+          QStringLiteral("setRfKitAntennaForStation"),
+          QStringLiteral("setRfKitTciModeForStation"),
+          QStringLiteral("setRfKitAddressForStation"),
+          // R-R3-49 (parity Task 2): the Tune Power slider's command.
+          QStringLiteral("setTunePowerForTxBandForStation"),
+          // R-R3-49 (parity Task 3): the TX profile commands and the RADE
+          // vocoder reset.
+          QStringLiteral("selectTxProfileForStation"),
+          QStringLiteral("saveTxProfileForStation"),
+          QStringLiteral("deleteTxProfileForStation"),
+          QStringLiteral("resetRadeVocoderForStation"),
+          QStringLiteral("setNnrDiagnosticMode"),
           QStringLiteral("applyNnrModelSelection"), QStringLiteral("addNotchFromStation"),
           QStringLiteral("moveNotchFromStation"), QStringLiteral("setNotchActiveFromStation"),
           QStringLiteral("deleteNotchFromStation"), QStringLiteral("requestIoBoardProbe"),
+          // R-IOS-27, R-IOS-06: notch.addAtSlice, which relays
+          // addNotchFromStation's reasons.
+          QStringLiteral("addTnfFromStation"),
           QStringLiteral("nr3CannotRunReason"),
           // R-R3-49: DFNR's, sent as dspAssets' dfnrModelStatus.
           QStringLiteral("dfnrCannotRunReason"),
@@ -891,21 +1105,67 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("sliceCapReason"),
           // iPhone app Task 73: why a device's saved slice did not fit (the
           // Core's log today; Task 74's slicesNotRestored notice).
-          QStringLiteral("restoreSliceFor")},
+          QStringLiteral("restoreSliceFor"),
+          // R-IOS-27, R-IOS-06: the desktop's band button, whose refusal
+          // (bandClickIgnored) slice.selectBand relays.
+          QStringLiteral("onBandButtonClicked")},
          {// This app's own branch in a remote window (role Remote), shown
           // through OperatorReasonText; never sent by the Core.
           "There is no station session."},
          20,
          // sliceCapReason: the radio's product label and the slice count,
-         // worded "1 slice" or "N slices" from its own literals.
-         {QStringLiteral("radioLabel, slices"), QStringLiteral("slices"), QStringLiteral("cap")},
+         // worded "1 slice" or "N slices" from its own literals. R-R3-49
+         // (parity Task 3): name, the transmit profile's own name.
+         {QStringLiteral("radioLabel, slices"), QStringLiteral("slices"), QStringLiteral("cap"),
+          QStringLiteral("name"),
+          // onBandButtonClicked: the band's own label ("40m").
+          QStringLiteral("bandLabel(band)")},
          {// The refuse lambdas' parameter (literals of these functions),
           // the facades' and allocators' results (scanned), and the notch
           // refusals, constants of this file checked in
           // notchConstantsArePlain below.
           QStringLiteral("text"), QStringLiteral("result.reason"),
           QStringLiteral("outcome.reason"), QStringLiteral("kUnknownNotchReason"),
-          QStringLiteral("kNotchListBusyReason")}},
+          QStringLiteral("kNotchListBusyReason"),
+          // R-R3-49 (parity Task 1): onAirReason, a function of this file
+          // scanned here.
+          QStringLiteral("onAirReason()"),
+          // R-R3-49 (parity Task 2): TransmitModel::settingRangeRefusal,
+          // scanned below.
+          QStringLiteral("range")}},
+        // R-R3-49 (parity Task 2): a transmit setting's range, in
+        // property.result and setTunePowerForTxBand's command.result. The
+        // inserts are the setters' own range numbers.
+        {"src/models/TransmitModel.cpp", {QStringLiteral("settingRangeRefusal")}, {}, 7,
+         {QStringLiteral("hi"), QStringLiteral("kVoxThresholdDbMin"),
+          QStringLiteral("kVoxThresholdDbMax"), QStringLiteral("kVoxHangTimeMsMin"),
+          QStringLiteral("kVoxHangTimeMsMax"), QStringLiteral("kCpdrLevelDbMin"),
+          QStringLiteral("kCpdrLevelDbMax"), QStringLiteral("kAmCarrierLevelMin"),
+          QStringLiteral("kAmCarrierLevelMax"), QStringLiteral("kMicGainDbMin"),
+          QStringLiteral("kMicGainDbMax"),
+          // R-R3-49 (parity Task 4): the TX EQ, CFC, phase rotator, leveler
+          // and ALC ranges, and the ten-value band arrays' ranges.
+          QStringLiteral("kTxEqPreampDbMin"), QStringLiteral("kTxEqPreampDbMax"),
+          QStringLiteral("kTxEqNcMin"), QStringLiteral("kTxEqNcMax"),
+          QStringLiteral("kCfcPrecompDbMin"), QStringLiteral("kCfcPrecompDbMax"),
+          QStringLiteral("kCfcPostEqGainDbMin"), QStringLiteral("kCfcPostEqGainDbMax"),
+          QStringLiteral("kPhaseRotatorFreqHzMin"), QStringLiteral("kPhaseRotatorFreqHzMax"),
+          QStringLiteral("kPhaseRotatorStagesMin"), QStringLiteral("kPhaseRotatorStagesMax"),
+          QStringLiteral("kTxLevelerMaxGainDbMin"), QStringLiteral("kTxLevelerMaxGainDbMax"),
+          QStringLiteral("kTxLevelerDecayMsMin"), QStringLiteral("kTxLevelerDecayMsMax"),
+          QStringLiteral("kTxAlcMaxGainDbMin"), QStringLiteral("kTxAlcMaxGainDbMax"),
+          QStringLiteral("kTxAlcDecayMsMin"), QStringLiteral("kTxAlcDecayMsMax"),
+          QStringLiteral("kTxEqBandDbMin"), QStringLiteral("kTxEqBandDbMax"),
+          QStringLiteral("kTxEqFreqHzMin"), QStringLiteral("kTxEqFreqHzMax"),
+          QStringLiteral("kCfcCompressionDbMin"), QStringLiteral("kCfcCompressionDbMax"),
+          QStringLiteral("kCfcEqFreqHzMin"), QStringLiteral("kCfcEqFreqHzMax"),
+          QStringLiteral("kCfcPostEqBandGainDbMin"), QStringLiteral("kCfcPostEqBandGainDbMax"),
+          // R-R3-49 (parity Task 5): the anti-VOX gain and two-tone ranges.
+          QStringLiteral("kAntiVoxGainDbMin"), QStringLiteral("kAntiVoxGainDbMax"),
+          QStringLiteral("kTwoToneFreq1HzMin"), QStringLiteral("kTwoToneFreq1HzMax"),
+          QStringLiteral("kTwoToneFreq2HzMin"), QStringLiteral("kTwoToneFreq2HzMax"),
+          QStringLiteral("kTwoTonePowerMin"), QStringLiteral("kTwoTonePowerMax"),
+          QStringLiteral("kTwoToneFreq2DelayMsMin"), QStringLiteral("kTwoToneFreq2DelayMsMax")}},
         // iPhone app plan Task 39: txState's stopReason is the wire code
         // (linkLost, timeOut, ...), never shown; its words are stopText,
         // scanned with the property texts. Task 38's lastTransmitStopReason
@@ -952,7 +1212,14 @@ const QList<AppSideReason>& appSideReasons()
          "a remote window's own reason the attenuator rows show"},
         {"src/core/accessories/AlexAntennaFacade.h", "windowUnavailableReason",
          "a remote window's own reason the antenna rows show"},
+        {"src/core/accessories/AlexAntennaFacade.h", "txAntennasUnavailableReason",
+         "a remote window's own reason the transmit antenna rows show (parity Task 12)"},
+        {"src/core/accessories/AlexAntennaFacade.h", "rxBypassUnavailableReason",
+         "a remote window's own reason RX bypass on TX shows (parity Task 12)"},
         {"src/core/TciServer.h", "operatorNoticeReason", "a remote window's own TCI notice"},
+        {"src/models/RadioModel.cpp", "mirrorTxProfilesFromStation",
+         "a window's TX profile requests: it shows the link's own reason for a request it "
+         "could not send"},
         {"src/models/RadioModel.cpp", "noStationReason",
          "a remote window's own notice when it has no link to the Core"},
         {"src/models/RadioModel.cpp", "reportStationAccessoryRefusal",
@@ -962,6 +1229,18 @@ const QList<AppSideReason>& appSideReasons()
         {"src/core/session/IStationLink.h", "tgxlDeviceSettingsUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
         {"src/core/session/IStationLink.h", "tgxlControlUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        // R-R3-49 (parity Task 8): the relay nudge, LAN scan and address.
+        {"src/core/session/IStationLink.h", "tgxlFullControlUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        // R-R3-49 (parity Task 9): the Power Genius's operate, scan and address.
+        {"src/core/session/IStationLink.h", "pgxlFullControlUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        // R-R3-49 (parity Task 10): the RF-Kit's operate, antenna, TCI mode
+        // and address.
+        {"src/core/session/IStationLink.h", "rfKitFullControlUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        {"src/core/session/IStationLink.h", "transmitSettingsUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
         {"src/core/session/IStationLink.h", "filterPolicyUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
@@ -1478,6 +1757,7 @@ private slots:
         QVERIFY(!code.isEmpty());
         for (const QString& sentence :
              {QStringLiteral("The Core already has four devices connected."),
+              QStringLiteral("The Core is full. Update NereusSDR to take a device's place, or try again later."),
               QStringLiteral("This device connected again."),
               QStringLiteral("This device left the Core.")}) {
             QVERIFY2(code.contains(QLatin1Char('"') + sentence + QLatin1Char('"')),
@@ -1499,6 +1779,168 @@ private slots:
         QString named = QStringLiteral("%1 connected to the Core.").arg(name);
         named.remove(name);
         QVERIFY2(wordingProblemIn(named).isEmpty(), qPrintable(named));
+    }
+
+    void receiverSentencesArePlain()
+    {
+        // iPhone app Task 74 (R-IOS-30; the several-devices design, section
+        // 17's list): the reason of confirm.request and notice, each
+        // chooser `why`, the three strings of `change`, and the refusals of
+        // the anchor, take and older-window rules. Names are the operator's
+        // own words and are set aside; "Grant's iPhone" is embedded to prove
+        // the sentence around it is what is checked.
+        const QString receivers =
+            codeOf(sourcePath(QStringLiteral("src/core/session/StationReceivers.cpp")));
+        const QString planner =
+            codeOf(sourcePath(QStringLiteral("src/core/session/ReceiverPlanner.cpp")));
+        QVERIFY(!receivers.isEmpty());
+        QVERIFY(!planner.isEmpty());
+        const QString name = QStringLiteral("Grant's iPhone");
+        const QStringList inReceivers{
+            QStringLiteral("Waiting for you to confirm."),
+            QStringLiteral("That question is no longer open. Make the change again."),
+            QStringLiteral("That choice is not in the list. Make the change again."),
+            QStringLiteral("What this change reaches has changed. Make the change again."),
+            QStringLiteral("That can no longer be taken back."),
+            QStringLiteral("All the radio's slices are in use. Try again when another device "
+                           "closes one."),
+            QStringLiteral("All the radio's receivers are in use. Try again when another device "
+                           "frees one."),
+            QStringLiteral("This panadapter shows %1's receiver. Its C-Tune setting is %1's."),
+            QStringLiteral("This change would affect %1. Update NereusSDR to confirm changes that "
+                           "affect other devices."),
+            QStringLiteral("%1 took the receiver this app was using. Update NereusSDR to share "
+                           "the Core."),
+            QStringLiteral("The radio's receivers are in use by %1."),
+            QStringLiteral("%1 moved their panadapter. Your slice %2 moved to another receiver."),
+            QStringLiteral("%1 moved their panadapter. Your slice %2 closed: no receiver was "
+                           "free."),
+            QStringLiteral("%1 took the receiver your slice %2 was on."),
+            QStringLiteral("%1 took your slice %2."),
+            QStringLiteral("You were away for more than 3 minutes. Your slices are back."),
+            QStringLiteral("%1 of your slices could not be restored: all the radio's receivers "
+                           "are in use."),
+            QStringLiteral("Receiver %1"),
+        };
+        const QStringList inPlanner{
+            QStringLiteral("Your slice %1 would close."),
+            QStringLiteral("Your slices %1 would close."),
+            QStringLiteral("Your panadapter already uses this receiver."),
+        };
+        const auto check = [&name](const QString& sentence) {
+            QString filled = sentence;
+            filled.replace(QStringLiteral("%1"), name).replace(QStringLiteral("%2"),
+                                                               QStringLiteral("B and C"));
+            // The name set aside, the sentence is held to the rule.
+            filled.remove(name);
+            return wordingProblemIn(filled);
+        };
+        const auto flat = [](const QString& code) {
+            // Adjacent literals split over lines, joined.
+            QString joined = code;
+            joined.replace(QRegularExpression(QStringLiteral("\"\\s*\n\\s*\"")), QString());
+            return joined;
+        };
+        const QString receiverCode = flat(receivers);
+        const QString plannerCode = flat(planner);
+        for (const QString& sentence : inReceivers) {
+            QVERIFY2(receiverCode.contains(QLatin1Char('"') + sentence + QLatin1Char('"')),
+                     qPrintable(sentence));
+            QVERIFY2(check(sentence).isEmpty(), qPrintable(sentence + QStringLiteral(" [")
+                                                           + check(sentence) + QLatin1Char(']')));
+            QVERIFY2(OperatorWording::coreCalledStationIn(sentence).isEmpty(),
+                     qPrintable(sentence));
+        }
+        for (const QString& sentence : inPlanner) {
+            QVERIFY2(plannerCode.contains(QLatin1Char('"') + sentence + QLatin1Char('"')),
+                     qPrintable(sentence));
+            QVERIFY2(check(sentence).isEmpty(), qPrintable(sentence));
+        }
+        // The bands of `change` ("40 m", "20 m") are the band's own label.
+        QVERIFY2(wordingProblemIn(QStringLiteral("Go to 20 m")).isEmpty(),
+                 qPrintable(wordingProblemIn(QStringLiteral("Go to 20 m"))));
+    }
+
+    void sharedSettingSentencesArePlain()
+    {
+        // iPhone app Task 75 (R-IOS-30; the several-devices design,
+        // sections 7.3 and 7.4, rulings 5.11a, 7.4 to 7.6): the refusals
+        // of the confirm step's target rules, the on-air refusal, the
+        // notices settingChanged and antennaKept, and the words of
+        // `change`. Names are the operator's own words and are set aside;
+        // "Grant's iPhone" is embedded to prove the sentence around it is
+        // what is checked.
+        const auto flat = [](const QString& code) {
+            QString joined = code;
+            joined.replace(QRegularExpression(QStringLiteral("\"\\s*\n\\s*\"")), QString());
+            return joined;
+        };
+        const QString shared =
+            flat(codeOf(sourcePath(QStringLiteral("src/core/session/StationSharedSettings.cpp"))));
+        const QString receivers =
+            flat(codeOf(sourcePath(QStringLiteral("src/core/session/StationReceivers.cpp"))));
+        QVERIFY(!shared.isEmpty());
+        const QString name = QStringLiteral("Grant's iPhone");
+        const QStringList inShared{
+            QStringLiteral("That setting changed since you asked. Make the change again."),
+            QStringLiteral("%1 is on the air. Try again when they stop."),
+            QStringLiteral("%1 changed %2 from %3 to %4."),
+            QStringLiteral("Your slice %1 moved to another receiver."),
+            QStringLiteral("Your slices %1 moved to another receiver."),
+            QStringLiteral("Your slice %1 closed: no receiver was free."),
+            QStringLiteral("Your slices %1 closed: no receiver was free."),
+            QStringLiteral("Your slice %1 pauses while the radio transmits."),
+            QStringLiteral("Your slices %1 pause while the radio transmits."),
+            QStringLiteral("The antenna stays on %1 while %2 listens on it."),
+            QStringLiteral("The antenna stays on %1 while %2 listen on it."),
+            QStringLiteral("Attenuator, %1"),
+            QStringLiteral("Preamp, %1"),
+            QStringLiteral("Automatic attenuator, %1"),
+            QStringLiteral("Receive antenna"),
+            QStringLiteral("Receive-only antenna"),
+            QStringLiteral("Receive on the transmit antenna"),
+            QStringLiteral("Transmit antenna"),
+            QStringLiteral("Diversity"),
+            QStringLiteral("Noise blanker, %1"),
+            QStringLiteral("Noise blanker settings, %1"),
+            QStringLiteral("PureSignal"),
+            QStringLiteral("Notch auto-widening"),
+            QStringLiteral("Amplifier"),
+            QStringLiteral("Sample rate, %1"),
+            QStringLiteral("Band filters, %1"),
+            QStringLiteral("%1, %2 modes"),
+            QStringLiteral("Tuner antenna"),
+            QStringLiteral("Tuner bypass"),
+            QStringLiteral("Transmit interlock"),
+            QStringLiteral("Amplifier power limit"),
+        };
+        const auto check = [&name](const QString& sentence) {
+            QString filled = sentence;
+            filled.replace(QStringLiteral("%1"), name)
+                .replace(QStringLiteral("%2"), QStringLiteral("Attenuator, ADC 1"))
+                .replace(QStringLiteral("%3"), QStringLiteral("0 dB"))
+                .replace(QStringLiteral("%4"), QStringLiteral("20 dB"));
+            filled.remove(name);
+            return wordingProblemIn(filled);
+        };
+        for (const QString& sentence : inShared) {
+            QVERIFY2(shared.contains(QLatin1Char('"') + sentence + QLatin1Char('"')),
+                     qPrintable(sentence));
+            QVERIFY2(check(sentence).isEmpty(), qPrintable(sentence + QStringLiteral(" [")
+                                                           + check(sentence) + QLatin1Char(']')));
+            QVERIFY2(OperatorWording::coreCalledStationIn(sentence).isEmpty(),
+                     qPrintable(sentence));
+        }
+        // Ruling 7.5, written with the confirm step's other answers.
+        const QString expired = QStringLiteral("That question has expired. Make the change again.");
+        QVERIFY(receivers.contains(QLatin1Char('"') + expired + QLatin1Char('"')));
+        QVERIFY2(wordingProblemIn(expired).isEmpty(), qPrintable(expired));
+        // A whole notice as sent, a name in it.
+        QString told = QStringLiteral("%1 changed Sample rate, Receiver 1 from 192 kHz to 96 kHz. "
+                                      "Your slice B moved to another receiver.")
+                           .arg(name);
+        told.remove(name);
+        QVERIFY2(wordingProblemIn(told).isEmpty(), qPrintable(told));
     }
 
     void everyReasonTheFixturesRecordIsPlain()

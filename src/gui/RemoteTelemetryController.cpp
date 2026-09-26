@@ -3,6 +3,7 @@
 #include "gui/RemoteAudioStatus.h"
 #include "gui/RemoteMediaController.h"
 #include "core/session/StationClient.h"
+#include "models/RadioModel.h"
 #include <QLoggingCategory>
 #include <QStringList>
 
@@ -79,6 +80,29 @@ RemoteTelemetryController::RemoteTelemetryController(
     }
     sampleNow();
     m_timer.start();
+}
+
+void RemoteTelemetryController::setPaReadingsTarget(RadioModel* model)
+{
+    m_paTarget = model;
+    connect(this, &RemoteTelemetryController::changed, this,
+            &RemoteTelemetryController::pushPaReadings, Qt::UniqueConnection);
+    pushPaReadings();
+}
+
+void RemoteTelemetryController::pushPaReadings()
+{
+    if (!m_paTarget) { return; }
+    // The view's radio section is empty unless the Core's measurements are
+    // current, so an out-of-date reading becomes absent, never a 0.
+    RadioModel::PaReadings readings;
+    if (m_view.state == RemoteTelemetryView::State::Current) {
+        readings.paVolts = m_view.radio.paVolts;
+        readings.supplyVolts = m_view.radio.supplyVolts;
+        readings.paCurrentAmps = m_view.radio.paCurrentAmps;
+        readings.paTemperatureCelsius = m_view.radio.paTemperatureCelsius;
+    }
+    m_paTarget->applyCorePaReadings(readings);
 }
 
 qint64 RemoteTelemetryController::nowMs() const
@@ -477,6 +501,31 @@ QString RemoteTelemetryController::detailText() const
         ? tr("Radio RTT: %1 ms, measured %2 ms ago.").arg(*m_view.radio.rttMs).arg(*m_view.radio.rttAgeMs)
         : tr("Radio RTT: unavailable."));
     text << tr("RTT graphs hold the last measurement between pings; age advances independently and stale values disappear.");
+    // R-R3-32 (parity Task 6): the Core's own readings of its radio, each
+    // named as the Core's; an absent or out-of-date one says so, never 0.
+    const StationRadioTelemetry& radio = m_view.radio;
+    const QString unavailable = tr("unavailable");
+    const auto measured = [&unavailable](std::optional<double> value, int decimals,
+                                         const QString& unit) {
+        return value ? QString::number(*value, 'f', decimals) + unit : unavailable;
+    };
+    text << tr("PA voltage from the Core: %1.").arg(measured(radio.paVolts, 1, tr("\u00A0V")));
+    // Group A follow-up (group B fix wave): the AIN6 reading, named as
+    // Thetis names it (setup.designer.cs:51365 [v2.10.3.15], "DC Voltage",
+    // a label Thetis ships hidden, and computeHermesDCVoltage at
+    // console.cs:24782 [v2.10.3.15], which computes the reading); on
+    // MkII-class boards it is not the supply.
+    text << tr("DC voltage from the Core: %1.").arg(measured(radio.supplyVolts, 1, tr("\u00A0V")));
+    text << tr("Packet loss between the Core and the radio, from the Core: %1 over the last 5 seconds.")
+        .arg(measured(radio.packetLossPercent, 2, tr("\u00A0%")));
+    text << tr("Radio jitter from the Core: %1.").arg(measured(radio.jitterMs, 2, tr("\u00A0ms")));
+    text << tr("Longest gap between radio packets in the last second, from the Core: %1.")
+        .arg(measured(radio.packetGapMs, 1, tr("\u00A0ms")));
+    text << tr("Radio sample rate from the Core: %1.")
+        .arg(radio.sampleRateHz ? tr("%1\u00A0kHz").arg(double(*radio.sampleRateHz) / 1000.0, 0, 'g', 6)
+                                : unavailable);
+    text << tr("UDP packets seen from the radio since it connected, from the Core: %1.")
+        .arg(radio.udpPacketsSeen ? QString::number(*radio.udpPacketsSeen) : unavailable);
     text << tr("Core audio: %1 frames/s; encoded %2, sent %3, not sent %4 packets/s; dropped before encoding %5 events/s.")
         .arg(number(m_view.coreAudio.sourceFramesPerSecond, 0), number(m_view.coreAudio.encodedPacketsPerSecond),
              number(m_view.coreAudio.sendAcceptedPerSecond), number(m_view.coreAudio.sendRejectedPerSecond),

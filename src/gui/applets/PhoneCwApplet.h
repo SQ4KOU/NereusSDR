@@ -44,6 +44,12 @@
 //                 gauge can be shown unavailable with a reason (a remote
 //                 window's Core does not send it yet). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 (parity Task 2): setTransmitSettingsPermitted for
+//                 the mic level, PROC and its level, AM carrier and DEXP.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 3): setTxProfilePermitted for the
+//                 mic profile combo. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -130,6 +136,15 @@ public:
     // Remote-station presentation gate.  This affects only controls that
     // configure a TX input or TX DSP; model-to-widget updates remain live.
     void setTransmitPermitted(bool permitted, const QString& reason = QString());
+    // R-R3-49 (parity Task 2): the transmit settings that key nothing (mic
+    // level, PROC and its level, AM carrier, DEXP). In a remote window they
+    // are live while the Core takes them (transmitSettingsVersion 2) and
+    // its radio is off the air; the Core refuses a change that races a key.
+    void setTransmitSettingsPermitted(bool permitted, const QString& reason = QString());
+    // R-R3-49 (parity Task 3): the mic profile combo. In a remote window it
+    // lists the Core's profiles and selects through the Core
+    // (transmitSettingsVersion 3), live while its radio is off the air.
+    void setTxProfilePermitted(bool permitted, const QString& reason = QString());
 
     // Switch the stacked widget page: 0=Phone, 1=CW, 2=FM
     void showPage(int index);
@@ -198,6 +213,10 @@ private:
     QTimer*  m_micLevelTimer{nullptr};
     bool m_transmitPermitted{true};
     QString m_transmitPermissionReason;
+    bool m_transmitSettingsPermitted{true};
+    QString m_transmitSettingsReason;
+    bool m_txProfilePermitted{true};
+    QString m_txProfileReason;
 
     // ── Phone page (13 controls) ──────────────────────────────────────────────
     // #1  Mic level gauge (HGauge -40..+10 dBFS, yellow -10, red 0)

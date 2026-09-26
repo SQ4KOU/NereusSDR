@@ -65,6 +65,10 @@
 //               transmits; the transmit meters the Core does not send are
 //               disabled with the reason. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-25 - R-R3-32 (remote-window parity Task 6): HwVolts, HwAmps
+//                 and HwTemperature fed from RadioModel::paReadings() on
+//                 every poll (console.cs:47061-47068 [v2.10.3.15]).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -451,6 +455,10 @@ void MeterPoller::poll()
         target->update();
     }
 
+    // R-R3-32 (parity Task 6): the PA readings reach their meters in every
+    // window and every state, transmitting or not.
+    pollHardwareTelemetry();
+
     // R3: a remote window must never fall through to the inactive local
     // DSP, including after its model has been destroyed or disconnected.
     if (m_remoteRole) {
@@ -539,6 +547,41 @@ void MeterPoller::poll()
     // never disagree on source.
     Q_UNUSED(smeterDbm);
     pollSMeter();
+}
+
+void MeterPoller::setPaReadingsModel(RadioModel* model)
+{
+    m_paReadingsModel = model;
+}
+
+void MeterPoller::pollHardwareTelemetry()
+{
+    RadioModel* const model = m_paReadingsModel.data();
+    if (!model) { return; }
+    // From Thetis console.cs:47061-47068 [v2.10.3.15]: the VOLTS and AMPS
+    // meter readings are _MKIIPAVolts and _MKIIPAAmps, the same PA volts and
+    // amps the status bar shows (console.cs:26216-26239):
+    //   if (bNeedVolts) _RX1MeterValues[Reading.VOLTS] = _MKIIPAVolts;
+    //   if (bNeedAmps) _RX1MeterValues[Reading.AMPS] = _MKIIPAAmps;
+    // NereusSDR takes them from RadioModel::paReadings(), which the System
+    // tile's PA row reads too (the G2E's supply volts, as its row shows).
+    // HwTemperature (NereusSDR's own binding; Thetis has no temperature
+    // reading) is the PA temperature. Absent: the no-reading sentinel.
+    const RadioModel::PaReadings readings = model->paReadings();
+    const RadioModel::PaRowVolts row = model->paRowVolts();
+    const auto valueOf = [](std::optional<double> v) {
+        return v ? *v : kNoMeterReadingDbm;
+    };
+    const double volts = valueOf(row.volts);
+    const double amps = valueOf(readings.paCurrentAmps);
+    const double temperature = valueOf(readings.paTemperatureCelsius);
+    for (const auto& guarded : m_targets) {
+        MeterWidget* target = guarded.data();
+        if (!target) { continue; }
+        target->updateMeterValue(MeterBinding::HwVolts, volts);
+        target->updateMeterValue(MeterBinding::HwAmps, amps);
+        target->updateMeterValue(MeterBinding::HwTemperature, temperature);
+    }
 }
 
 void MeterPoller::pollRemoteRxMeters()

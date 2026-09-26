@@ -161,6 +161,25 @@
 //                 Transmit > DEXP/VOX (it asked for a "VOX/DEXP" page that
 //                 does not exist). J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 5): Setup > Transmit > Power and
+//                 DEXP/VOX work from a remote window while the radio is
+//                 off the air: every Core setting follows the transmit
+//                 settings gate at version 5, ATT on TX and Force ATT go
+//                 through the Core's mirrored step attenuator, the SWR
+//                 Protection and External TX Inhibit boxes show the Core's
+//                 values; Enable VOX keeps the transmit permission. A local
+//                 window's SWR Protection change applies at once, as Thetis
+//                 does. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
+//   2026-09-25 - R-R3-49 (group A fix wave, M8): the TX inhibit tooltip in
+//                 plain words naming NereusSDR, and Manage... points to
+//                 Setup > Audio > TX Profile for saving profiles. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (group A fix wave): the ATT on TX box takes the
+//                 radio's own range (-28 to 31 dB on the HL2 per mi0bot-Thetis,
+//                 0 to 31 dB elsewhere), the Core's radio's in a remote
+//                 window. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 //   2026-09-25 - Receiver and transmit gaps plan, Task 13: the External
 //                 TX Inhibit boxes apply to the gate at once, as
 //                 setup.cs:16660-16667 [v2.10.3.15] does. J.J. Boyd
@@ -173,6 +192,9 @@
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
 #include "core/StepAttenuatorController.h"
+#include "core/StepAttenuatorFacade.h"
+#include "core/session/IStationLink.h"
+#include "core/settings/SettingsProxy.h"
 #include "gui/applets/TxEqDialog.h"
 
 #include <QVBoxLayout>
@@ -226,6 +248,21 @@ void PowerPage::buildUI()
             applyHpsdrModel(model()->hardwareProfile().model);
         });
         applyHpsdrModel(model()->hardwareProfile().model);
+    }
+
+    // R-R3-49 (parity Task 5): in a remote window the SWR Protection and
+    // External TX Inhibit boxes show the Core's keys: another window's (or
+    // the Core's) change and a refused change both bring them back to it.
+    // Every Core setting starts closed until SetupDialog pushes the
+    // version 5 gate.
+    if (model() && !model()->ownsLocalDsp()) {
+        connect(model(), &RadioModel::stationSettingChanged,
+                this, &PowerPage::refreshStationKeys);
+        if (auto* proxy = dynamic_cast<SettingsProxy*>(AppSettings::instance().remoteBackend())) {
+            connect(proxy, &SettingsProxy::valueRejected, this,
+                    [this](const QString& key, const QVariant&) { refreshStationKeys(key); });
+        }
+        setTransmitSettingsPermittedAt(5, false, QString());
     }
 
     // TODO(future): Thetis Transmit tab also has these groups not yet
@@ -308,7 +345,20 @@ void PowerPage::buildPowerGroup()
     m_chkAttOnTx->setObjectName(QStringLiteral("chkATTOnTX"));
     m_chkAttOnTx->setToolTip(QStringLiteral("Enables Attenuator on Mercury during Transmit."));
 
-    if (model()) {
+    // R-R3-49 (parity Task 5): a remote window changes the Core's value
+    // through the mirrored step attenuator (`stepAtt`) and shows it.
+    StepAttenuatorFacade* remoteAtt =
+        (model() && !model()->ownsLocalDsp()) ? model()->stepAttFacade() : nullptr;
+    if (remoteAtt) {
+        m_chkAttOnTx->setChecked(remoteAtt->attOnTxEnabled());
+        connect(m_chkAttOnTx, &QCheckBox::toggled,
+                remoteAtt, &StepAttenuatorFacade::setAttOnTxEnabled);
+        connect(remoteAtt, &StepAttenuatorFacade::attOnTxEnabledChanged, m_chkAttOnTx,
+                [this](bool on) {
+            QSignalBlocker b(m_chkAttOnTx);
+            m_chkAttOnTx->setChecked(on);
+        });
+    } else if (model()) {
         if (StepAttenuatorController* att = model()->stepAttController()) {
             m_chkAttOnTx->setChecked(att->attOnTxEnabled());
             connect(m_chkAttOnTx, &QCheckBox::toggled,
@@ -331,23 +381,58 @@ void PowerPage::buildPowerGroup()
     // logarithmic formula instead of the constant fallback.
     m_spinAttOnTxValue = new QSpinBox(pwrGroup);
     m_spinAttOnTxValue->setObjectName(QStringLiteral("udATTOnTX"));
-    m_spinAttOnTxValue->setRange(0, 31);
     m_spinAttOnTxValue->setSingleStep(1);
     m_spinAttOnTxValue->setSuffix(QStringLiteral(" dB"));
-    m_spinAttOnTxValue->setToolTip(QStringLiteral(
-        "ATT on TX value in dB (0..31).  Active when the ATT on TX checkbox "
-        "is enabled.  AutoAtt (PS-A) will adjust this automatically during "
-        "PureSignal cycles; setting a sane starting value (e.g. 10 dB) before "
-        "arming PS-A avoids the 31.1 dB initial-overload slam on radios where "
-        "the coupler+PA delivers calcc FB level > 256 at ATT=0."));
 
-    if (model()) {
+    // R-R3-49 (group A fix wave): the box takes the radio's own ATT on TX
+    // range, the Core's radio's in a remote window. mi0bot-Thetis widens
+    // the bottom to -28 on the HL2:
+    // From mi0bot-Thetis setup.cs:1080-1084 [v2.10.3.13-beta2]
+    //   if (HPSDRHW.HermesLite == Audio.LastRadioHardware ||
+    //       HPSDRModel.HERMESLITE == HardwareSpecific.Model)     // MI0BOT: Changes for HL2 only having a 16 step output attenuator 
+    //   {
+    //       udATTOnTX.Minimum = -28;
+    // and keeps the designer's 0 to 31 elsewhere (setup.designer.cs:5810-5819).
+    // The bottom is the step attenuator's minimum (-28 on the HL2, 0
+    // otherwise), which setAttOnTxValue clamps to as well; the top is
+    // StepAttenuatorFacade::kMaxAttOnTxDb (31). A range change never writes
+    // a value: the box shows the source's value again under a blocker.
+    const auto applyAttOnTxRange = [this](int minDb, int value) {
+        if (!m_spinAttOnTxValue) { return; }
+        QSignalBlocker b(m_spinAttOnTxValue);
+        m_spinAttOnTxValue->setRange(minDb, StepAttenuatorFacade::kMaxAttOnTxDb);
+        m_spinAttOnTxValue->setValue(value);
+        m_spinAttOnTxValue->setToolTip(QStringLiteral(
+            "ATT on TX value in dB (%1..%2).  Active when the ATT on TX checkbox "
+            "is enabled.  AutoAtt (PS-A) will adjust this automatically during "
+            "PureSignal cycles; setting a sane starting value (e.g. 10 dB) before "
+            "arming PS-A avoids the 31.1 dB initial-overload slam on radios where "
+            "the coupler+PA delivers calcc FB level > 256 at ATT=0.")
+            .arg(minDb).arg(StepAttenuatorFacade::kMaxAttOnTxDb));
+    };
+    applyAttOnTxRange(0, 0);
+
+    if (remoteAtt) {
+        applyAttOnTxRange(remoteAtt->minDb(), remoteAtt->attOnTxValue());
+        connect(remoteAtt, &StepAttenuatorFacade::minDbChanged, m_spinAttOnTxValue,
+                [remoteAtt, applyAttOnTxRange](int minDb) {
+            applyAttOnTxRange(minDb, remoteAtt->attOnTxValue());
+        });
+        connect(m_spinAttOnTxValue, QOverload<int>::of(&QSpinBox::valueChanged),
+                remoteAtt, &StepAttenuatorFacade::setAttOnTxValue);
+        connect(remoteAtt, &StepAttenuatorFacade::attOnTxValueChanged, m_spinAttOnTxValue,
+                [this](int dB) {
+            QSignalBlocker b(m_spinAttOnTxValue);
+            m_spinAttOnTxValue->setValue(dB);
+        });
+    } else if (model()) {
         if (StepAttenuatorController* att = model()->stepAttController()) {
             // Initialize from current value
-            {
-                QSignalBlocker b(m_spinAttOnTxValue);
-                m_spinAttOnTxValue->setValue(att->attOnTxValue());
-            }
+            applyAttOnTxRange(att->minAttenuation(), att->attOnTxValue());
+            connect(att, &StepAttenuatorController::attenuationRangeChanged,
+                    m_spinAttOnTxValue, [att, applyAttOnTxRange](int minDb, int /*maxDb*/) {
+                applyAttOnTxRange(minDb, att->attOnTxValue());
+            });
             // Spinbox → controller
             connect(m_spinAttOnTxValue,
                     QOverload<int>::of(&QSpinBox::valueChanged),
@@ -377,7 +462,26 @@ void PowerPage::buildPowerGroup()
     m_chkForceAttWhenPsOff->setToolTip(
         QStringLiteral("Forces ATT on Tx to 31 when PS-A is off. CW will do this anyway"));
 
-    if (model()) {
+    if (remoteAtt) {
+        m_chkForceAttWhenPsOff->setChecked(remoteAtt->forceAttWhenPsOff());
+        connect(m_chkForceAttWhenPsOff, &QCheckBox::toggled,
+                remoteAtt, &StepAttenuatorFacade::setForceAttWhenPsOff);
+        connect(remoteAtt, &StepAttenuatorFacade::forceAttWhenPsOffChanged,
+                m_chkForceAttWhenPsOff, [this](bool on) {
+            QSignalBlocker b(m_chkForceAttWhenPsOff);
+            m_chkForceAttWhenPsOff->setChecked(on);
+        });
+        // An edit the window could not send settles all three back on the
+        // Core's values.
+        connect(remoteAtt, &StepAttenuatorFacade::editRejected, this, [this, remoteAtt]() {
+            const QSignalBlocker b1(m_chkAttOnTx);
+            const QSignalBlocker b2(m_spinAttOnTxValue);
+            const QSignalBlocker b3(m_chkForceAttWhenPsOff);
+            m_chkAttOnTx->setChecked(remoteAtt->attOnTxEnabled());
+            m_spinAttOnTxValue->setValue(remoteAtt->attOnTxValue());
+            m_chkForceAttWhenPsOff->setChecked(remoteAtt->forceAttWhenPsOff());
+        });
+    } else if (model()) {
         if (StepAttenuatorController* att = model()->stepAttController()) {
             m_chkForceAttWhenPsOff->setChecked(att->forceAttWhenPsOff());
             connect(m_chkForceAttWhenPsOff, &QCheckBox::toggled,
@@ -583,8 +687,70 @@ void PowerPage::buildTuneGroup()
 // designer wiring where the spinbox is meaningful only in Fixed mode.
 void PowerPage::onTuneDriveSourceChanged(DrivePowerSource src)
 {
-    if (m_fixedTunePwrSpin) {
-        m_fixedTunePwrSpin->setEnabled(src == DrivePowerSource::Fixed);
+    m_tuneSource = src;
+    applyFixedTuneSpinGate();
+}
+
+// R-R3-49 (parity Task 5): "Use Fixed Drive" and, in a remote window, the
+// version 5 gate. The spin box has no tooltip of its own; a closed gate
+// shows its reason.
+void PowerPage::applyFixedTuneSpinGate()
+{
+    if (!m_fixedTunePwrSpin) {
+        return;
+    }
+    m_fixedTunePwrSpin->setEnabled(m_settingsPermitted
+                                   && m_tuneSource == DrivePowerSource::Fixed);
+    m_fixedTunePwrSpin->setToolTip(m_settingsPermitted ? QString() : m_settingsReason);
+    m_fixedTunePwrSpin->setAccessibleDescription(
+        m_settingsPermitted ? QString() : m_settingsReason);
+}
+
+void PowerPage::setTransmitSettingsPermittedAt(int version, bool permitted,
+                                               const QString& reason)
+{
+    if (version != 5) {
+        return;
+    }
+    m_settingsPermitted = permitted;
+    m_settingsReason = reason.isEmpty() ? IStationLink::transmitSettingsUnavailableReason()
+                                        : reason;
+    gateTransmitControls({m_maxPowerSlider, m_chkAttOnTx, m_spinAttOnTxValue,
+                          m_chkForceAttWhenPsOff, m_radDriveSlider, m_radTuneSlider,
+                          m_radFixedDrive, m_chkSWRProtection, m_udSwrProtectionLimit,
+                          m_chkSWRTuneProtection, m_udTunePowerSwrIgnore,
+                          m_chkWindBackPowerSWR, m_chkTXInhibit, m_chkTXInhibitReverse},
+                         permitted, m_settingsReason);
+    applyFixedTuneSpinGate();
+}
+
+void PowerPage::refreshStationKeys(const QString& key)
+{
+    auto& s = AppSettings::instance();
+    const auto box = [&s, &key](QCheckBox* check, const char* name) {
+        if (!check || (!key.isEmpty() && key != QLatin1String(name))) {
+            return;
+        }
+        const QSignalBlocker b(check);
+        check->setChecked(s.value(QLatin1String(name), QStringLiteral("False")).toString()
+                          == QStringLiteral("True"));
+    };
+    box(m_chkSWRProtection, "SwrProtectionEnabled");
+    box(m_chkSWRTuneProtection, "SwrTuneProtectionEnabled");
+    box(m_chkWindBackPowerSWR, "WindBackPowerSwr");
+    box(m_chkTXInhibit, "TxInhibitMonitorEnabled");
+    box(m_chkTXInhibitReverse, "TxInhibitMonitorReversed");
+    if (m_udSwrProtectionLimit
+        && (key.isEmpty() || key == QLatin1String("SwrProtectionLimit"))) {
+        const QSignalBlocker b(m_udSwrProtectionLimit);
+        m_udSwrProtectionLimit->setValue(
+            s.value(QStringLiteral("SwrProtectionLimit"), QStringLiteral("2.0")).toDouble());
+    }
+    if (m_udTunePowerSwrIgnore
+        && (key.isEmpty() || key == QLatin1String("TunePowerSwrIgnore"))) {
+        const QSignalBlocker b(m_udTunePowerSwrIgnore);
+        m_udTunePowerSwrIgnore->setValue(
+            s.value(QStringLiteral("TunePowerSwrIgnore"), QStringLiteral("35")).toInt());
     }
 }
 
@@ -677,8 +843,14 @@ void PowerPage::buildSwrProtectionGroup()
     m_chkSWRProtection->setToolTip(tr("Show a visual SWR warning in the spectral area"));
     m_chkSWRProtection->setChecked(
         s.value(QStringLiteral("SwrProtectionEnabled"), QStringLiteral("False")).toString() == QStringLiteral("True"));
-    connect(m_chkSWRProtection, &QCheckBox::toggled, this, [](bool on) {
-        AppSettings::instance().setValue(QStringLiteral("SwrProtectionEnabled"), on ? QStringLiteral("True") : QStringLiteral("False"));
+    connect(m_chkSWRProtection, &QCheckBox::toggled, this, [this](bool on) {
+        const QString value = on ? QStringLiteral("True") : QStringLiteral("False");
+        AppSettings::instance().setValue(QStringLiteral("SwrProtectionEnabled"), value);
+        // R-R3-49 (parity Task 5): applied at once, as Thetis does; a
+        // remote window's save goes to the Core, which applies it there.
+        if (model() && model()->ownsLocalDsp()) {
+            model()->applySwrProtectionSetting(QStringLiteral("SwrProtectionEnabled"), value);
+        }
     });
     layout->addRow(QString(), m_chkSWRProtection);
 
@@ -691,8 +863,13 @@ void PowerPage::buildSwrProtectionGroup()
     m_udSwrProtectionLimit->setDecimals(1);
     m_udSwrProtectionLimit->setValue(
         s.value(QStringLiteral("SwrProtectionLimit"), QStringLiteral("2.0")).toDouble());
-    connect(m_udSwrProtectionLimit, &QDoubleSpinBox::valueChanged, this, [](double v) {
-        AppSettings::instance().setValue(QStringLiteral("SwrProtectionLimit"), QString::number(v, 'f', 1));
+    connect(m_udSwrProtectionLimit, &QDoubleSpinBox::valueChanged, this, [this](double v) {
+        const QString value = QString::number(v, 'f', 1);
+        AppSettings::instance().setValue(QStringLiteral("SwrProtectionLimit"), value);
+        // R-R3-49 (parity Task 5): applied at once (see the box above).
+        if (model() && model()->ownsLocalDsp()) {
+            model()->applySwrProtectionSetting(QStringLiteral("SwrProtectionLimit"), value);
+        }
     });
     layout->addRow(tr("SWR Limit:"), m_udSwrProtectionLimit);
 
@@ -703,8 +880,14 @@ void PowerPage::buildSwrProtectionGroup()
     m_chkSWRTuneProtection->setToolTip(tr("Disables SWR Protection during Tune."));
     m_chkSWRTuneProtection->setChecked(
         s.value(QStringLiteral("SwrTuneProtectionEnabled"), QStringLiteral("False")).toString() == QStringLiteral("True"));
-    connect(m_chkSWRTuneProtection, &QCheckBox::toggled, this, [](bool on) {
-        AppSettings::instance().setValue(QStringLiteral("SwrTuneProtectionEnabled"), on ? QStringLiteral("True") : QStringLiteral("False"));
+    connect(m_chkSWRTuneProtection, &QCheckBox::toggled, this, [this](bool on) {
+        const QString value = on ? QStringLiteral("True") : QStringLiteral("False");
+        AppSettings::instance().setValue(QStringLiteral("SwrTuneProtectionEnabled"), value);
+        // R-R3-49 (parity Task 5): applied at once, as Thetis does; a
+        // remote window's save goes to the Core, which applies it there.
+        if (model() && model()->ownsLocalDsp()) {
+            model()->applySwrProtectionSetting(QStringLiteral("SwrTuneProtectionEnabled"), value);
+        }
     });
     layout->addRow(QString(), m_chkSWRTuneProtection);
 
@@ -716,8 +899,13 @@ void PowerPage::buildSwrProtectionGroup()
     m_udTunePowerSwrIgnore->setSingleStep(1);
     m_udTunePowerSwrIgnore->setValue(
         s.value(QStringLiteral("TunePowerSwrIgnore"), QStringLiteral("35")).toInt());
-    connect(m_udTunePowerSwrIgnore, &QSpinBox::valueChanged, this, [](int v) {
-        AppSettings::instance().setValue(QStringLiteral("TunePowerSwrIgnore"), QString::number(v));
+    connect(m_udTunePowerSwrIgnore, &QSpinBox::valueChanged, this, [this](int v) {
+        const QString value = QString::number(v);
+        AppSettings::instance().setValue(QStringLiteral("TunePowerSwrIgnore"), value);
+        // R-R3-49 (parity Task 5): applied at once (see the box above).
+        if (model() && model()->ownsLocalDsp()) {
+            model()->applySwrProtectionSetting(QStringLiteral("TunePowerSwrIgnore"), value);
+        }
     });
     layout->addRow(tr("Tune Pwr (W):"), m_udTunePowerSwrIgnore);
 
@@ -728,8 +916,14 @@ void PowerPage::buildSwrProtectionGroup()
     m_chkWindBackPowerSWR->setToolTip(tr("Winds back the power if high swr protection kicks in"));
     m_chkWindBackPowerSWR->setChecked(
         s.value(QStringLiteral("WindBackPowerSwr"), QStringLiteral("False")).toString() == QStringLiteral("True"));
-    connect(m_chkWindBackPowerSWR, &QCheckBox::toggled, this, [](bool on) {
-        AppSettings::instance().setValue(QStringLiteral("WindBackPowerSwr"), on ? QStringLiteral("True") : QStringLiteral("False"));
+    connect(m_chkWindBackPowerSWR, &QCheckBox::toggled, this, [this](bool on) {
+        const QString value = on ? QStringLiteral("True") : QStringLiteral("False");
+        AppSettings::instance().setValue(QStringLiteral("WindBackPowerSwr"), value);
+        // R-R3-49 (parity Task 5): applied at once, as Thetis does; a
+        // remote window's save goes to the Core, which applies it there.
+        if (model() && model()->ownsLocalDsp()) {
+            model()->applySwrProtectionSetting(QStringLiteral("WindBackPowerSwr"), value);
+        }
     });
     layout->addRow(QString(), m_chkWindBackPowerSWR);
 
@@ -750,8 +944,10 @@ void PowerPage::buildExternalTxInhibitGroup()
     // chkTXInhibit — From Thetis setup.designer.cs:46637-46646 [v2.10.3.13]
     m_chkTXInhibit = new QCheckBox(tr("Update with TX Inhibit state"), group);
     m_chkTXInhibit->setObjectName(QStringLiteral("chkTXInhibit"));
-    // From Thetis setup.designer.cs:46645 [v2.10.3.13]
-    m_chkTXInhibit->setToolTip(tr("Thetis will update on TX inhibit state change"));
+    // From Thetis setup.designer.cs:46645 [v2.10.3.13] (reworded, R-R3-49
+    // group A fix wave M8: the original names Thetis, "Thetis will update
+    // on TX inhibit state change").
+    m_chkTXInhibit->setToolTip(tr("NereusSDR follows the radio's TX inhibit input when it changes."));
     m_chkTXInhibit->setChecked(
         s.value(QStringLiteral("TxInhibitMonitorEnabled"), QStringLiteral("False")).toString() == QStringLiteral("True"));
     // Task 13: the box applies at once, as Thetis
@@ -908,8 +1104,8 @@ void SpeechProcessorPage::buildUI()
 // SpeechProcessorPage::buildActiveProfileSection
 //
 // Single read-only label showing MicProfileManager::activeProfileName(), with
-// a "Manage…" button that opens TxEqDialog (which hosts the profile combo +
-// Save / Save As / Delete buttons added in 3M-3a-i Batch 4).  Without a
+// a "Manage…" button that opens TxEqDialog (profiles are saved and deleted
+// in Setup > Audio > TX Profile).  Without a
 // connected radio MicProfileManager is unscoped and returns "Default" — the
 // label still reads meaningfully.
 // ---------------------------------------------------------------------------
@@ -934,9 +1130,11 @@ void SpeechProcessorPage::buildActiveProfileSection()
     m_manageProfileBtn = new QPushButton(QStringLiteral("Manage..."));
     m_manageProfileBtn->setObjectName(QStringLiteral("btnManageProfile"));
     m_manageProfileBtn->setAutoDefault(false);
+    // R-R3-49 (group A fix wave, M8): profiles are saved and deleted in
+    // Setup > Audio > TX Profile, not in the TX EQ editor.
     m_manageProfileBtn->setToolTip(QStringLiteral(
-        "Open the TX EQ editor (Tools → TX Equalizer). The profile combo "
-        "and Save / Save As / Delete buttons live there."));
+        "Open the TX equalizer. To save or delete a TX profile, use "
+        "Setup > Audio > TX Profile."));
     m_manageProfileBtn->setStyleSheet(QStringLiteral(
         "QPushButton { background: #1a2a3a; border: 1px solid #304050;"
         "  border-radius: 3px; color: #c8d8e8; font-size: 12px; padding: 3px 10px; }"
@@ -1972,6 +2170,39 @@ DexpVoxPage::DexpVoxPage(RadioModel* model, QWidget* parent)
         QSignalBlocker b(m_udAntiVoxGain);
         m_udAntiVoxGain->setValue(dB);
     });
+
+    // R-R3-49 (parity Task 5): in a remote window both gates start closed
+    // until SetupDialog pushes them. Every control but Enable VOX is a
+    // setting on the Core's `transmit` (version 5 and earlier); Enable VOX
+    // arms the radio to key and waits for remote transmit.
+    if (!model->ownsLocalDsp()) {
+        setTransmitPermitted(false, QString());
+        setTransmitSettingsPermittedAt(5, false, QString());
+    }
+}
+
+void DexpVoxPage::setTransmitPermitted(bool permitted, const QString& reason)
+{
+    gateTransmitControls({m_chkVOXEnable}, permitted,
+        reason.isEmpty()
+            ? tr("Remote transmit controls are not available from this Core yet.")
+            : reason);
+}
+
+void DexpVoxPage::setTransmitSettingsPermittedAt(int version, bool permitted,
+                                                 const QString& reason)
+{
+    if (version != 5) {
+        return;
+    }
+    gateTransmitControls({m_chkDEXPEnable, m_udDEXPThreshold, m_udDEXPHysteresisRatio,
+                          m_udDEXPExpansionRatio, m_udDEXPAttack, m_udDEXPHold,
+                          m_udDEXPRelease, m_udDEXPDetTau, m_chkDEXPLookAheadEnable,
+                          m_udDEXPLookAhead, m_chkSCFEnable, m_udSCFLowCut, m_udSCFHighCut,
+                          m_chkAntiVoxEnable, m_udAntiVoxGain, m_udAntiVoxTau},
+                         permitted,
+                         reason.isEmpty() ? IStationLink::transmitSettingsUnavailableReason()
+                                          : reason);
 }
 
 

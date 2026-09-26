@@ -122,9 +122,19 @@
 //                                    pairing.open and pairing.close, routed
 //                                    to the same facade.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 2):
+//                                    setTunePowerForTxBand.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 3): the
+//                                    txProfile verbs and rade.resetVocoder.
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-25: iPhone app Task 71 (R-IOS-02): session.leave and
 //               sessionLeaveRequested. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app Task 74 (R-IOS-30): confirm.proceed,
+//               confirm.cancel, notice.takeBack (setConfirmAnswer).
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 //   2026-09-25: iPhone app Task 72 (R-IOS-02, ruling 5.8): the owner is
 //               per session (setSessionOwner before each dispatch,
 //               endSessionOwner, resetSessionState). J.J. Boyd (KG4VCF),
@@ -142,6 +152,19 @@
 //   2026-09-25  J.J. Boyd / KG4VCF  iPhone app plan Task 37 (R-IOS-13):
 //                                    tx.keepalive {sequence, epoch}
 //                                    (TransmitAccess::keepalive).
+//   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06: slice.selectBand.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06: notch.addAtSlice.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 8): moveTgxlRelay,
+//                                    scanTgxlLan and setTgxlAddress.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 9): setPgxlOperate,
+//                                    scanPgxlLan and setPgxlAddress.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 10):
+//                                    setRfKitOperate, setRfKitAntenna,
+//                                    setRfKitTciMode and setRfKitAddress.
 //                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
@@ -150,7 +173,10 @@
 #include <QObject>
 #include <QPointer>
 #include <QHash>
+#include <QSet>
+
 #include <functional>
+#include <optional>
 #include <utility>
 
 #include "core/session/RemoteKeying.h"
@@ -161,6 +187,7 @@
 namespace NereusSDR {
 
 class RadioModel;
+class SliceModel;
 
 /// One named argument of a command verb, as dispatch() reads it: the name,
 /// the wire kind it must carry, and whether it may be left out.
@@ -217,9 +244,26 @@ public:
     /// it and one device leaving cancels only its own. Nothing else
     /// changes.
     void setSessionOwner(const QString& owner);
+    /// R-R3-49 (parity Task 7): the session's peer was offered
+    /// transmitSettingsVersion 7, so ps3.single, ps3.automatic,
+    /// ps3.applyCurrent and ps3.restoreCorrection are taken from it while
+    /// the radio is off the air. False for every other peer, and again
+    /// whenever the session owner changes.
+    void setPureSignalArmingOffered(bool offered) { m_pureSignalArmingOffered = offered; }
 
     /// Cancels every DSP-asset job `owner` started (its session ended).
     void endSessionOwner(const QString& owner);
+
+    /// Fix wave I1: the session owner the result being emitted by
+    /// commandResultReady() answers. A result emitted inside dispatch()
+    /// belongs to that dispatch's owner; one that arrives on a later turn
+    /// (requestSliceSampleRate, a PureSignal action's later phases) belongs
+    /// to the owner of the dispatch that started it, even when another
+    /// session's dispatch is running. Read it inside a commandResultReady()
+    /// handler only. Command ids are counted per client, so the owner, not
+    /// the verb and id, names who asked.
+    QString resultOwner() const
+    { return m_resultOwner ? *m_resultOwner : m_sessionOwner; }
 
     /// Forgets pending PureSignal actions and returns every slice to normal
     /// NNR audio. The Core calls it when the session media goes to starts
@@ -238,6 +282,33 @@ public:
     /// a new slice has no owner and setActiveSliceById moves the one active
     /// slice.
     void setRequester(const QByteArray& device) { m_requester = device; }
+    /// Fix wave after the several-devices group review: the next
+    /// requestSliceSampleRate dispatched (a confirmed rate change) closes
+    /// `closing` through `close`, and only once the change is certain
+    /// (RadioModel::setStreamSampleRateClosing). Used by that one dispatch
+    /// and cleared, whether it runs or not.
+    ///
+    /// Fix wave 2 (Important 4): `closing` maps each slice id to its owner
+    /// (SliceOwnership::Mark::subject()) at the proceed. The change runs on
+    /// a later turn; if any of those slices is gone or has another owner
+    /// then (closed, and its id reused), the whole change is refused with
+    /// `changedReason` and nothing closes.
+    ///
+    /// Fix wave 3 (Important 1): the owner alone cannot tell a reused id
+    /// that stayed with the same device (or with nobody), so each entry
+    /// also carries the slice itself; the change runs only when the id
+    /// still names that same slice object.
+    struct ClosingSlice {
+        QPointer<SliceModel> slice;
+        QByteArray owner;
+    };
+    void setRateClosing(QHash<int, ClosingSlice> closing, std::function<void(int)> close,
+                        QString changedReason = {})
+    {
+        m_rateClosing = std::move(closing);
+        m_rateClose = std::move(close);
+        m_rateChangedReason = std::move(changedReason);
+    }
     /// The plain refusal for `requester` naming `sliceId`, or empty when it
     /// may: "That slice belongs to <owner>. It can be changed only there."
     using SliceAccess = std::function<QString(const QByteArray& requester, int sliceId)>;
@@ -267,6 +338,12 @@ public:
             keepalive;
     };
     void setTransmitAccess(TransmitAccess access) { m_transmitAccess = std::move(access); }
+    /// iPhone app Task 74 (R-IOS-30): the Core's confirm step, which
+    /// answers confirm.proceed (`choice` -1 when the kind has none),
+    /// confirm.cancel and notice.takeBack with the command.result to send.
+    using ConfirmAnswer =
+        std::function<SessionMessage(const SessionMessage& invoke, int id, int choice)>;
+    void setConfirmAnswer(ConfirmAnswer answer) { m_confirmAnswer = std::move(answer); }
 
     /// R-IOS-01: every verb dispatch() routes, declared beside the routing
     /// rather than derived from it. A family routed by prefix ("ps3.",
@@ -289,6 +366,7 @@ signals:
 
 private:
     Ps3DisplayAdmissionHandler m_ps3DisplayAdmission;
+    bool m_pureSignalArmingOffered = false;
     void handleAddSlice(const NereusSDR::SessionMessage& invoke);
     void handleRemoveSlice(const NereusSDR::SessionMessage& invoke);
     void handleRequestSliceSampleRate(const NereusSDR::SessionMessage& invoke);
@@ -326,10 +404,43 @@ private:
     // R-R3-49 / R-R3-47 (remoteTgxlControlVersion 2): the Tuner Genius's
     // antenna, operate and bypass, through the Core's own TunerModel.
     void handleTgxlControl(const NereusSDR::SessionMessage& invoke);
+    // R-R3-49 (parity Task 8, remoteTgxlControlVersion 4): a relay nudge,
+    // the Core's own Scan LAN (answered when its listening window ends) and
+    // the Peripherals row's address saved without dialling.
+    void handleMoveTgxlRelay(const NereusSDR::SessionMessage& invoke);
+    void handleScanTgxlLan(const NereusSDR::SessionMessage& invoke);
+    void handleSetTgxlAddress(const NereusSDR::SessionMessage& invoke);
+    // R-R3-49 (parity Task 9, remotePgxlControlVersion 4): the Power
+    // Genius's OPERATE or STANDBY, the Core's own Scan LAN for it and the
+    // Peripherals row's address saved without dialling.
+    void handleSetPgxlOperate(const NereusSDR::SessionMessage& invoke);
+    void handleScanPgxlLan(const NereusSDR::SessionMessage& invoke);
+    void handleSetPgxlAddress(const NereusSDR::SessionMessage& invoke);
+    // R-R3-49 (parity Task 10, remoteRfKitControlVersion 4): the RF-Kit's
+    // OPERATE or STANDBY, antenna and TCI mode, as the local applet and page
+    // send them, and the RF-Kit page's address saved without dialling.
+    void handleSetRfKitOperate(const NereusSDR::SessionMessage& invoke);
+    void handleSetRfKitAntenna(const NereusSDR::SessionMessage& invoke);
+    void handleSetRfKitTciMode(const NereusSDR::SessionMessage& invoke);
+    void handleSetRfKitAddress(const NereusSDR::SessionMessage& invoke);
+    // R-R3-49 (parity Task 2, transmitSettingsVersion 2): the TX applet's
+    // Tune Power slider, through the Core's own TransmitModel.
+    void handleTunePowerForTxBand(const NereusSDR::SessionMessage& invoke);
+    // R-IOS-27, R-IOS-06 (bandSelectVersion 1): the desktop's band button on
+    // one slice, RadioModel::onBandButtonClicked(SliceModel*, Band).
+    void handleSelectBand(const NereusSDR::SessionMessage& invoke);
+    // R-R3-49 (parity Task 3, transmitSettingsVersion 3): txProfile.select,
+    // save and delete through the Core's MicProfileManager, and
+    // rade.resetVocoder on the Core's RADE channel.
+    void handleTxProfile(const NereusSDR::SessionMessage& invoke);
+    void handleRadeResetVocoder(const NereusSDR::SessionMessage& invoke);
     void handleRequestIoBoardProbe(const NereusSDR::SessionMessage& invoke);
     // R-R3-46 fix wave (radioHardwareVersion 3): one band's RX or RX-only
     // antenna, applied through the Core's AlexAntennaFacade.
     void handleSetAlexRxAntenna(const NereusSDR::SessionMessage& invoke);
+    // Parity mini-round (radioHardwareVersion 6): one band's TX antenna,
+    // applied through the Core's AlexAntennaFacade.
+    void handleSetAlexTxAntenna(const NereusSDR::SessionMessage& invoke);
     // R-R3-46 / R-R3-21 (radioHardwareVersion 4): one receive filter
     // chain's filter policy, applied through the Core's AlexAntennaFacade.
     void handleSetAlexBpfMode(const NereusSDR::SessionMessage& invoke);
@@ -348,16 +459,24 @@ private:
     void handlePairingWindow(const NereusSDR::SessionMessage& invoke);
     // iPhone app Task 71 (R-IOS-02, sessionHolderVersion 1): session.leave.
     void handleSessionLeave(const NereusSDR::SessionMessage& invoke);
+    // iPhone app Task 74 (R-IOS-30, sessionHolderVersion 1).
+    void handleConfirmAnswer(const NereusSDR::SessionMessage& invoke);
 
     void emitResult(const QByteArray& verb, quint32 commandId, bool accepted,
                     const QString& reason, const QList<QByteArray>& affectedKeys);
+    /// Emits `result` as `owner`'s (a result that arrives on a later turn).
+    void emitResultAs(const QString& owner, const NereusSDR::SessionMessage& result);
 
     QPointer<RadioModel> m_radioModel;
     QPointer<StationDevicesFacade> m_deviceAdmin;
     QString m_sessionOwner{QStringLiteral("local")};
     // iPhone app Task 73.
     QByteArray m_requester;
+    QHash<int, ClosingSlice> m_rateClosing;
+    std::function<void(int)> m_rateClose;
+    QString m_rateChangedReason;
     SliceAccess m_sliceAccess;
+    ConfirmAnswer m_confirmAnswer;
     /// Refuses (and answers) a verb whose sliceId names another device's
     /// slice. True when it did.
     bool refusedForAnotherDevice(const NereusSDR::SessionMessage& invoke);
@@ -376,8 +495,15 @@ private:
     struct PendingPureSignalCommand {
         quint32 commandId;
         QByteArray verb;
+        /// The session that asked (fix wave I1): its later phases are its.
+        QString owner;
     };
+    /// Set while a later result is emitted (emitResultAs).
+    std::optional<QString> m_resultOwner;
     QHash<quint32, PendingPureSignalCommand> m_pureSignalCommands;
+    // R-R3-49 (parity Task 8): moves on each setSessionOwner, so a scan
+    // answer never reaches a later session.
+    quint64 m_sessionGeneration = 0;
 };
 
 } // namespace NereusSDR

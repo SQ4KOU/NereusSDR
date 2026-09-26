@@ -18,6 +18,9 @@
 //   2026-09-24 - R-R3-49: settings schema v8 drops the TCI rate limit
 //                 saved in messages per second (TciRateLimitMsgsPerSec).
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - Receiver and transmit gaps plan, Task 16: the N2ADR
+//                 filter migration covers the HL2 receive-only kit.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1376,7 +1379,12 @@ void AppSettings::migrateLegacyN2adrFilter(AppSettings& s)
     int hl2Count      = 0;
     int migratedCount = 0;
     for (const SavedRadio& r : s.savedRadios()) {
-        if (r.info.boardType != HPSDRHW::HermesLite) {
+        // Task 16 (receiver and transmit gaps plan): the HL2 receive-only
+        // kit is an HL2 (Task 15) and has the HL2's I/O board
+        // (hasIoBoardHl2), so a kit saved while the global setting was in
+        // use gets the value too.
+        if (r.info.boardType != HPSDRHW::HermesLite
+            && r.info.boardType != HPSDRHW::HermesLiteRxOnly) {
             continue;
         }
         ++hl2Count;

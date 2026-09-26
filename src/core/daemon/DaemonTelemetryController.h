@@ -53,6 +53,12 @@ public:
     ~DaemonTelemetryController() override;
 
     bool isCollecting() const noexcept { return m_epoch != 0; }
+    /// iPhone app Task 76 (ruling 9.1): collect for the one media session
+    /// `epoch` names, starting now when its telemetry is available, and
+    /// never for another. Without it a controller serves one session at a
+    /// time, the first to start while it has none live.
+    void bindToSession(quint64 epoch);
+    quint64 sessionEpoch() const noexcept { return m_epoch; }
 
     /// One receiver's wire entry from its cached load snapshot (R-R3-40):
     /// load as a percentage of real time, absent when the receiver was idle.
@@ -110,6 +116,8 @@ private:
                                qint64 sampledElapsedMs) const;
     void applyAudioObservation(StationTelemetrySnapshot& snapshot,
                                qint64 sampledElapsedMs);
+    // R-R3-32 (parity Task 6): the radio's PA readings and link quality.
+    void applyRadioStatus(StationTelemetrySnapshot& snapshot) const;
     void stopCollecting();
     std::optional<QVector<StationReceiverTelemetry>> radioModelReceiverLoads() const;
 
@@ -135,6 +143,7 @@ private:
     std::optional<RadioObservation> m_radioObservation;
     std::optional<AudioBaseline> m_audioBaseline;
     quint64 m_epoch{0};
+    quint64 m_boundEpoch{0};
     quint64 m_nextRadioRequestId{0};
     quint64 m_outstandingRadioRequestId{0};
     qint64 m_sessionStartedMs{0};

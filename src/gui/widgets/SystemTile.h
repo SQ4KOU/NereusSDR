@@ -32,6 +32,10 @@ public:
 
     /// "PA" on most boards, "PSU" on the ANAN-G2E supply_volts path.
     void setPaLabel(const QString& label);
+    // R-R3-32 (remote-window parity Task 6): where the PA readings come
+    // from, shown in the PA row's tooltip ("From the Core" in a remote
+    // window; empty for this computer's own radio).
+    void setPaSourceNote(const QString& note);
     QString paLabel() const;
 
     /// Row-one value text, empty when the row is hidden.
@@ -59,6 +63,7 @@ private:
     bool   m_hasTemp{false};
     double m_volts{0.0};
     double m_celsius{0.0};
+    QString m_paSourceNote;
 };
 
 } // namespace NereusSDR

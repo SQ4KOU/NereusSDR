@@ -7,6 +7,8 @@
 // 2026-09-24: R-R3-47: an amp on another network is refused saying how to
 // allow it (only this amp: its address or serial). J.J. Boyd (KG4VCF),
 // AI-assisted via Anthropic Claude Code.
+// 2026-09-25: R-R3-49 (parity Task 9): showSavedEndpoint. J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include "core/StationPgxlController.h"
 #include "core/AppSettings.h"
 #include "core/LanDiscovery.h"
@@ -183,6 +185,17 @@ void StationPgxlController::cancel(bool disabled)
     m_settings->reset();
     m_state.phase = disabled ? Phase::Disabled : Phase::Disconnected;
     m_state.error.clear();
+    publish();
+}
+
+void StationPgxlController::showSavedEndpoint(const QString& host, quint16 port)
+{
+    if (m_state.phase != Phase::Disconnected && m_state.phase != Phase::Disabled
+        && m_state.phase != Phase::Error) {
+        return;
+    }
+    m_state.configuredHost = host;
+    m_state.configuredPort = port;
     publish();
 }
 

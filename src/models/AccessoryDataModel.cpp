@@ -9,6 +9,9 @@
 // Modification history (NereusSDR):
 //   2026-09-24  J.J. Boyd / KG4VCF  Created (R-R3-47, R-R3-22). AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 10): the RF-Kit's
+//                                    connection counts. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "models/AccessoryDataModel.h"
@@ -79,6 +82,15 @@ void AccessoryDataModel::setTgxlDiagnostics(const ConnectionDiagnostics::Counter
     }
     m_tgxl = counters;
     emit tgxlDiagnosticsChanged();
+}
+
+void AccessoryDataModel::setRfKitDiagnostics(const RfKitCounters& counters)
+{
+    if (counters == m_rfkit) {
+        return;
+    }
+    m_rfkit = counters;
+    emit rfkitDiagnosticsChanged();
 }
 
 void AccessoryDataModel::setInterlock(InterlockMode mode, int graceMs, bool swrGateEnabled,
@@ -200,6 +212,28 @@ bool AccessoryDataModel::applyStationValue(const QByteArray& propertyName, const
         QStringList r = m_rfkitLabels;
         (tgxl ? t : r)[index] = value.toString();
         setLabels(t, r);
+        return true;
+    }
+    if (propertyName.startsWith("rfkit")) {
+        // R-R3-49 (parity Task 10): the RF-Kit's connection counts (its
+        // faults and antenna names are handled above).
+        RfKitCounters next = m_rfkit;
+        if (propertyName == "rfkitConnectedSinceMs") {
+            next.connectedSinceMs = value.toLongLong();
+        } else if (propertyName == "rfkitPollsOk") {
+            next.pollsOk = value.toInt();
+        } else if (propertyName == "rfkitPollsFailed") {
+            next.pollsFailed = value.toInt();
+        } else if (propertyName == "rfkitReconnectCount") {
+            next.reconnectCount = value.toInt();
+        } else if (propertyName == "rfkitLastPollMs") {
+            next.lastPollMs = value.toLongLong();
+        } else if (propertyName == "rfkitRttAvgMs") {
+            next.rttAvgMs = value.toInt();
+        } else {
+            return false;
+        }
+        setRfKitDiagnostics(next);
         return true;
     }
     if (propertyName.startsWith("tgxl")) {

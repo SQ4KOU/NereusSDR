@@ -97,6 +97,13 @@ public:
     // install capture supervisor options or policy flags that must be in
     // place before the connect path starts the AudioEngine.
     //
+    // Group B fix wave (I3): FFTW's plans are kept beside the test
+    // binaries, since the synchronous test init never loads WDSP's wisdom
+    // and planning from nothing took about 45 s on every run. The parity
+    // mini-round moved the cache to tests/TestFftwWisdomCache.cpp (one
+    // file per build directory, test-fftw-wisdom), linked into every test
+    // that starts WDSP this way.
+    //
     // Receiver and transmit gaps plan Task 1: `board` is the board type the
     // RadioInfo announces (Protocol 1, the P1FakeRadio's wire either way),
     // so a test can connect a smaller board than the Hermes Lite 2 default.

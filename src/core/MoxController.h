@@ -190,6 +190,15 @@
 //                 TUNE and two-tone ask and key as that device.
 //                 NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-25 - Receiver and transmit gaps plan, Task 16: setRxOnly /
+//                 isRxOnly, Thetis _rx_only (console.cs:15312-15334,
+//                 25470 and 29378 [v2.10.3.15]), the third gate that
+//                 refuses every key and unkeys. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - Task 16 fix wave (M2): transmitBlockReason and
+//                 transmitBlockChanged, so the TGXL autotune and the Tuner
+//                 applet follow the gate. J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -358,6 +367,9 @@ public:
     // keying source (Task 7 fix wave, I2). See setTxInhibited / setPaTripped.
     bool     isTxInhibited() const noexcept { return m_txInhibited; }
     bool     isPaTripped()   const noexcept { return m_paTripped; }
+    // isRxOnly: Thetis _rx_only, the third PollPTT gate (Task 16). See
+    // setRxOnly.
+    bool     isRxOnly()      const noexcept { return m_rxOnly; }
 
     // isTciPttHeld: Thetis _tci_ptt, the level an app's trx last left
     // (onTciPtt). False after a refused trx (the refusal drops it) and
@@ -566,6 +578,28 @@ public slots:
     // setTxInhibited (console.cs:25470, and chkMOX_CheckedChanged2's abort
     // at console.cs:29364-29371 [v2.10.3.15]); setting it unkeys.
     void setPaTripped(bool on);
+
+    // setRxOnly: Thetis console.RXOnly (console.cs:15312-15334
+    // [v2.10.3.15]). RadioModel feeds it from Setup's Receive Only and the
+    // HL2 receive-only kit (Task 16). While set, PollPTT skips every source
+    // (console.cs:25470), setMox(true) refuses every other key with
+    // moxRejected(reason) (chkMOX_CheckedChanged2, console.cs:29378-29382),
+    // CAT and TCI requests are dropped as under TX inhibit, and setting it
+    // unkeys an active transmission (if (_rx_only && chkMOX.Checked)
+    // chkMOX.Checked = false). `reason` is the plain words a refusal
+    // shows; empty keeps the default.
+    void setRxOnly(bool on, const QString& reason = QString());
+    QString rxOnlyReason() const { return m_rxOnlyReason; }
+    static QString defaultRxOnlyReason();
+
+    // transmitBlockReason: the words setMox(true) refuses with while TX
+    // inhibit, a PA trip or receive only holds (the trip first, then
+    // receive only, then TX inhibit); empty when none does. Task 16 fix
+    // wave (M2). transmitBlockChanged reports a change.
+    QString transmitBlockReason() const;
+    // iPhone app plan Task 34: the same gate as a TxRefusal (empty when
+    // none holds).
+    TxRefusal transmitBlockRefusal() const;
 
     // setVoxEnabled: engage/disengage VOX with voice-family mode-gate.
     //
@@ -1012,6 +1046,10 @@ public slots:
     void onTxDrained();
 
 signals:
+    // Task 16 fix wave (M2): transmitBlockReason() changed; `reason` is the
+    // new value, empty when nothing blocks transmit any more.
+    void transmitBlockChanged(const QString& reason);
+
     // ── K.2: rejection signal ────────────────────────────────────────────────
     //
     // moxRejected: emitted when setMox(true) is called but the MoxCheckFn
@@ -1430,6 +1468,17 @@ private:
     // _ganymede_pa_issue (console.cs:25470 [v2.10.3.15]).
     bool     m_txInhibited{false};
     bool     m_paTripped{false};
+    // m_rxOnly: Thetis _rx_only (Task 16), with the words a refusal shows.
+    bool     m_rxOnly{false};
+    QString  m_rxOnlyReason;
+    // One predicate for the three PollPTT gates that block every source.
+    bool     transmitBlocked() const noexcept
+    {
+        return m_txInhibited || m_paTripped || m_rxOnly;
+    }
+    // Emits transmitBlockChanged when transmitBlockReason() differs from
+    // `before` (a gate setter's value on entry).
+    void     emitTransmitBlockIfChanged(const QString& before);
 
     // ── PollPTT source levels (console.cs:25467-25477 [v2.10.3.15]) ──────────
     // The last level each PollPTT source reported. setMox(false) and a

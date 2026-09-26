@@ -13,7 +13,8 @@
 // What the Core keeps for its Power Genius XL, Tuner Genius XL and RF-Kit
 // RF2K-S beyond their live readings: the fault history of each (with a
 // revision that moves whenever any list changes), the connection counters
-// of the Power Genius and Tuner Genius, the transmit interlock policy, the
+// of the Power Genius and Tuner Genius (and, from accessoryDataVersion 2,
+// the RF-Kit's REST polling counts), the transmit interlock policy, the
 // Power Genius output limit and its alert, the Tuner Genius tune memory,
 // and the antenna names. The Core mirrors it as the read-only
 // `accessoryData` object (accessoryDataVersion 1); every window shows the
@@ -26,6 +27,10 @@
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-09-24  J.J. Boyd / KG4VCF  Created (R-R3-47, R-R3-22). AI-assisted
+//                                    via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 10): the RF-Kit's
+//                                    connection counts (rfkit*,
+//                                    accessoryDataVersion 2). AI-assisted
 //                                    via Anthropic Claude Code.
 // =================================================================
 
@@ -107,9 +112,33 @@ private:
     Q_PROPERTY(QString rfkitAntenna3Label READ rfkitAntenna3Label NOTIFY labelsChanged)
     Q_PROPERTY(QString rfkitAntenna4Label READ rfkitAntenna4Label NOTIFY labelsChanged)
 
+    // R-R3-49 (parity Task 10, accessoryDataVersion 2): the RF-Kit's
+    // connection counts, as Rf2ksConnection keeps them on the Core (ms since
+    // the epoch; 0 when not connected, or before the first answer). Last,
+    // so the older properties keep their ordinals.
+    Q_PROPERTY(qint64 rfkitConnectedSinceMs READ rfkitConnectedSinceMs NOTIFY rfkitDiagnosticsChanged)
+    Q_PROPERTY(int rfkitPollsOk READ rfkitPollsOk NOTIFY rfkitDiagnosticsChanged)
+    Q_PROPERTY(int rfkitPollsFailed READ rfkitPollsFailed NOTIFY rfkitDiagnosticsChanged)
+    Q_PROPERTY(int rfkitReconnectCount READ rfkitReconnectCount NOTIFY rfkitDiagnosticsChanged)
+    Q_PROPERTY(qint64 rfkitLastPollMs READ rfkitLastPollMs NOTIFY rfkitDiagnosticsChanged)
+    // Group B fix wave (M7, accessoryDataVersion 3): the amp's average
+    // response time over its last ten polls, as the local page shows it.
+    Q_PROPERTY(int rfkitRttAvgMs READ rfkitRttAvgMs NOTIFY rfkitDiagnosticsChanged)
+
 public:
     static constexpr int kTgxlAntennas = 3;
     static constexpr int kRfKitAntennas = 4;
+
+    /// R-R3-49 (parity Task 10): the RF-Kit's connection counts.
+    struct RfKitCounters {
+        qint64 connectedSinceMs{0};
+        int pollsOk{0};
+        int pollsFailed{0};
+        int reconnectCount{0};
+        qint64 lastPollMs{0};
+        int rttAvgMs{0};
+        bool operator==(const RfKitCounters&) const = default;
+    };
 
     struct PowerCap {
         bool enabled{false};
@@ -156,6 +185,13 @@ public:
     qint64 tgxlBytesOut() const { return m_tgxl.bytesOut; }
     qint64 tgxlLastFrameMs() const { return m_tgxl.lastFrameMs; }
     int tgxlFaultsSession() const { return m_tgxl.faultsSession; }
+    RfKitCounters rfkitDiagnostics() const { return m_rfkit; }
+    qint64 rfkitConnectedSinceMs() const { return m_rfkit.connectedSinceMs; }
+    int rfkitPollsOk() const { return m_rfkit.pollsOk; }
+    int rfkitPollsFailed() const { return m_rfkit.pollsFailed; }
+    int rfkitReconnectCount() const { return m_rfkit.reconnectCount; }
+    qint64 rfkitLastPollMs() const { return m_rfkit.lastPollMs; }
+    int rfkitRttAvgMs() const { return m_rfkit.rttAvgMs; }
 
     // ---- Interlock ----
     InterlockMode interlockMode() const { return m_interlockMode; }
@@ -191,6 +227,7 @@ public:
     void setFaults(const QString& pgxl, const QString& tgxl, const QString& rfkit);
     void setPgxlDiagnostics(const ConnectionDiagnostics::Counters& counters);
     void setTgxlDiagnostics(const ConnectionDiagnostics::Counters& counters);
+    void setRfKitDiagnostics(const RfKitCounters& counters);
     void setInterlock(InterlockMode mode, int graceMs, bool swrGateEnabled, double swrGateMax);
     void setPowerCap(const PowerCap& cap);
     void setTuneMemory(const QString& json, bool autoRecall);
@@ -203,6 +240,7 @@ signals:
     void faultsChanged();
     void pgxlDiagnosticsChanged();
     void tgxlDiagnosticsChanged();
+    void rfkitDiagnosticsChanged();
     void interlockChanged();
     void powerCapChanged();
     void tuneMemoryChanged();
@@ -219,6 +257,7 @@ private:
     QString m_rfkitFaults{QStringLiteral("[]")};
     ConnectionDiagnostics::Counters m_pgxl;
     ConnectionDiagnostics::Counters m_tgxl;
+    RfKitCounters m_rfkit;
     InterlockMode m_interlockMode{InterlockMode::Disabled};
     int m_interlockGraceMs{3000};
     bool m_interlockSwrGateEnabled{false};

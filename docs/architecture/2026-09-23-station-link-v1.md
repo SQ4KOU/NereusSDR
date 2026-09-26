@@ -75,6 +75,45 @@ and the [R3 plan](2026-09-20-remote-daemon-r3-plan.md).
   `127.0.0.1` (`kExplicitConfigRemotePort`, `kExplicitConfigRemoteBind`), and
   a `remote_port` that is not a number leaves the listener off.
   `remote_port = 0` turns the listener and the announcement off.
+- The opening request (the HTTP upgrade) is read by the station before
+  Qt sees it (`StationOpeningGate`, in front of the `QWebSocketServer`).
+  The station routes nothing by `Host`, so it accepts any `Host` in these
+  forms: an IPv6 address in brackets, with or without a port
+  (`[2001:db8::1]:47910`, `[::1]`); an IPv6 address without brackets, with
+  or without a port (`2001:db8::1:47910`, `::1`, what Apple's
+  `NWProtocolWebSocket` sends for an IPv6 URL); an IPv4 address with or
+  without a port; and a host name (labels of 1 to 63 letters, digits, `-`
+  and `_`, split by single dots, none starting or ending with `-`), with or
+  without a port. An IPv6 zone (`%en0`) is dropped. A value
+  without brackets that reads both as an address and as an address and a
+  port (`::1:8080`) is taken as an address; the station reads nothing from
+  it either way. Qt itself cannot read an unbracketed IPv6 `Host` and
+  answers such a request with nothing, so the station writes the `Host`
+  back in brackets before handing the request on.
+- A request the station cannot read gets `400 Bad Request` with
+  `Connection: close` and a one-line plain text body, and the connection
+  closes: no `Host`, more than one `Host`, a `Host` in none of the forms
+  above (or one Qt's URL parser finds no host in), a request line other
+  than `GET <path> HTTP/1.1`, a header line that is not `name: value`
+  with a token name (a folded line, one starting with a space or tab,
+  included), a control character other than a tab in a value, more than
+  100 header lines, a first `Upgrade` header that is not exactly
+  `websocket`, a first `Connection` header without `Upgrade`, a first
+  `Sec-WebSocket-Key` that is not 16 bytes, or a `Sec-WebSocket-Version`
+  that is missing or is not a comma-separated list of numbers. A head
+  longer than 8192 bytes (`kMaxRequestHeadBytes`) gets the same. These
+  follow how Qt reads the request, so that each request the station
+  passes on is one Qt answers. A `Sec-WebSocket-Version` number the
+  station does not speak (`8`) is Qt's to answer: its own `400`, then the
+  close. If Qt closes a request without writing anything, for any other
+  reason, the station writes the same `400` first. No complete opening
+  request ends without an answer; one never finished is closed at the
+  deadline below.
+- The whole opening, from the TCP accept through TLS to the `101`, must
+  finish within 10 s (`StationServer::kDefaultOpeningDeadlineMs`, Qt's own
+  default handshake timeout); a connection that has not opened by then is
+  closed. `tst_station_ws_host` sends each form over TLS to the real
+  listener.
 - Messages travel as WebSocket text frames. Each text message is one JSON
   object, encoded compactly, with a string `type` key naming its kind
   (`SessionMessages::encode`). The station ignores binary frames: only
@@ -449,9 +488,11 @@ writes.
 | `capabilities` | `properties` (array), `type` (string) | none |
 | `command.invoke` | `args` (array), `id` (number), `type` (string), `verb` (string) | none |
 | `command.result` | `accepted` (boolean), `affected` (array), `id` (number), `reason` (string), `type` (string), `verb` (string) | `values` (array) |
+| `confirm.request` | `affected` (array), `expiresInMs` (number), `id` (number), `kind` (string), `reason` (string), `type` (string) | `change` (object), `choices` (array), `forCommandId` (number), `forSettingsKey` (string), `forWriteId` (number) |
 | `delta` | `key` (string), `properties` (array), `type` (string) | none |
 | `hello` | `major` (number), `minor` (number), `peer` (string), `settingsSchema` (number), `type` (string) | `challenge` (string), `features` (object), `identity` (object), `majors` (array) |
 | `media.control` | `payload` (object), `type` (string) | none |
+| `notice` | `id` (number), `kind` (string), `reason` (string), `secondsAgo` (number), `takeBack` (boolean), `type` (string) | `byDeviceId` (string), `byKind` (string), `byName` (string), `byShortName` (string), `bySource` (string), `change` (object), `slices` (array) |
 | `object.create` | `class` (string), `key` (string), `properties` (array), `type` (string) | none |
 | `object.destroy` | `class` (string), `key` (string), `type` (string) | none |
 | `pair.accept` | `identity` (object), `label` (string), `type` (string) | none |
@@ -532,7 +573,9 @@ string in an `f64` entry is refused. The case is common: `SliceModel`'s
    connected again.", `retryable` false, `code` `sameDevice`; with a place
    free the device is let in; with every place taken the station sends
    `session.end` "The Core already has four devices connected.",
-   `retryable` true, no code, and closes. No sign-in ever ends another
+   `retryable` true, no code, and closes (a window that did not declare
+   `sessionHolder` with `deviceAuth`, which cannot answer the fifth-device
+   question, is told "The Core is full. Update NereusSDR to take a device's place, or try again later." instead, `retryable` true, no code). No sign-in ever ends another
    device's session. A device let in gets, in this order
    (`StationServer::promoteToSession`):
    - `capabilities` (section 6);
@@ -740,7 +783,7 @@ change shows as surface drift and as a change to this table.
 | `spectrumGrantVersion` | 1 |
 | `remoteDisplayBudgetVersion` | 1 |
 | `remoteCtunVersion` | 1 |
-| `stationTelemetryVersion` | 3 |
+| `stationTelemetryVersion` | 4 |
 | `remoteTgxlConfigVersion` | 1 |
 | `remoteFourO3AControlVersion` | 1 |
 | `wdspVersion` | 210 |
@@ -750,22 +793,24 @@ change shows as surface drift and as a change to this table.
 | `propertyResultVersion` | 1 |
 | `dspAssetVersion` | 4 |
 | `psDisplayVersion` | 1 |
-| `notchControlVersion` | 1 |
+| `notchControlVersion` | 2 |
 | `audioProfileVersion` | 1 |
 | `audioClockVersion` | 1 |
 | `receiverAudioVersion` | 1 |
 | `headphonesMixVersion` | 1 |
-| `radioHardwareVersion` | 4 |
-| `remotePgxlControlVersion` | 3 |
-| `remoteRfKitControlVersion` | 3 |
+| `radioHardwareVersion` | 6 |
+| `remotePgxlControlVersion` | 4 |
+| `remoteRfKitControlVersion` | 4 |
 | `stationTciVersion` | 1 |
-| `accessoryDataVersion` | 1 |
-| `remoteTgxlControlVersion` | 3 |
+| `accessoryDataVersion` | 3 |
+| `remoteTgxlControlVersion` | 4 |
 | `stationIdentityVersion` | 1 |
 | `deviceAdminVersion` | 1 |
 | `pairingVersion` | 1 |
 | `stationCatalogVersion` | 1 |
-| `displayExtrasVersion` | 1 |
+| `displayExtrasVersion` | 2 |
+| `transmitSettingsVersion` | 7 |
+| `bandSelectVersion` | 1 |
 | `sessionHolderVersion` | 1 |
 | `remoteTxVersion` | 1 |
 | `txStateVersion` | 1 |
@@ -780,7 +825,9 @@ When a feature is off, its version is 0:
   unless media is enabled.
 - `remoteDisplayBudgetVersion`: 0 unless media and budget enforcement are
   on and a budget has been computed.
-- `stationTelemetryVersion`: 0 unless telemetry is enabled.
+- `stationTelemetryVersion`: 0 unless telemetry is enabled. At 4 the
+  radio section also carries, for a peer at agreed minor 11, the Core's
+  PA readings and radio link quality (section 10).
 - `remoteTgxlConfigVersion`, `remoteFourO3AControlVersion`: 0 unless the
   Core owns its accessories.
 - `wdspVersion`, `wdspCompatibilityVersion`, `nnrVersion`,
@@ -804,25 +851,59 @@ When a feature is off, its version is 0:
   window shows a BNR control. A BNR selection (`activeNr` 6, which keeps
   its value) is refused by the Core and by a window with a plain reason,
   and a slice holding one turns off.
+- `notchControlVersion`: 2. At 1 the Core owns the notch list (the
+  `notches` object, `notch.add`, `notch.move`, `notch.setActive` and
+  `notch.delete`); 2 adds `notch.addAtSlice`, the desktop's +TNF on a
+  slice (section 9.1). The four earlier verbs need 1, so a client that
+  compares the version as a minimum reads 2 exactly as it read 1. It is
+  sent at every minor, as before; the notch verbs need agreed minor 5.
 - `radioHardwareVersion`: sent only at agreed minor 11. 0 without the step
   attenuator bound; 1 with it; 2 with the Alex antennas too; 4 with the HL2
   I/O board too: the `ioBoard` object, `setAlexRxAntenna` (which needs 3)
-  and the filter policy command `setAlexBpfMode` (which needs 4). A station
-  no longer sends 3; a client compares the version as a minimum
-  (section 6.2), so 4 serves `setAlexRxAntenna` too.
+  and the filter policy command `setAlexBpfMode` (which needs 4); 5 (group
+  B fix wave) with `rxOutOnTx` on `alexAntennas` two-way (RX bypass on TX,
+  the VFO flag's BYPS; the Core applies it through its AlexController,
+  which clears `ext1OutOnTx` and `ext2OutOnTx`); 6 (parity Task 12) with
+  the rest of the transmit half of `alexAntennas` two-way: `txAntennas`,
+  `blockTxAnt2`, `blockTxAnt3`, `ext1OutOnTx`, `ext2OutOnTx` and
+  `rxOutOverride`, each applied through the Core's AlexController as the
+  local Antenna Control tab applies it (a TX antenna on a port blocked for
+  transmit is kept and settles with a reason; Block TX moves a band on that
+  port back to Ant 1; Ext 1 or Ext 2 on TX clears the other two). These
+  seven writes have no on-air rule, on the Core or in a local window, as in
+  Thetis: an antenna change while the radio transmits goes out on the TX
+  routing, and a relay flag reaches the relays at the next MOX edge. A
+  station no longer sends 3, 4 or 5; a client compares the version as a
+  minimum (section 6.2), so 6 serves `setAlexRxAntenna`, `setAlexBpfMode`
+  and `rxOutOnTx` too. 6 also carries `setAlexTxAntenna` (`band` i64,
+  `antenna` i64; parity mini-round): one band's TX antenna, applied
+  through the Core's AlexController as the local grid applies it, so an
+  edit cannot put back a TX antenna the Core changed on another band in
+  between, which a whole `txAntennas` list built before that change does.
+  A client at 6 sends one band's TX antenna with it; the Core still takes
+  a whole `txAntennas` list from a window that sends one. A port blocked for transmit is refused with "An
+  antenna blocked for transmit cannot be a band's TX antenna.", an antenna
+  outside 1 to 3 with "Antennas are numbered 1 to 3."; like the list, it
+  has no on-air rule.
 - `remotePgxlControlVersion`, `remoteRfKitControlVersion`,
   `remoteTgxlControlVersion`: sent only at agreed minor 11, and 0 unless
   the Core owns its accessories. `remotePgxlControlVersion` 3 adds the
-  Power Genius's own settings and `remoteTgxlControlVersion` 1 the Tuner
+  Power Genius's own settings, and 4 its OPERATE and STANDBY, the Core's
+  Scan LAN for it and its saved address (`setPgxlOperate`, `scanPgxlLan`,
+  `setPgxlAddress`, section 9.1, parity Task 9), and `remoteTgxlControlVersion` 1 the Tuner
   Genius's (the `accessorySettings` object and the device settings
   commands, section 9.1); `remoteTgxlControlVersion` 2 adds the Tuner
   Genius's antenna, operate and bypass (`setTgxlAntenna`,
-  `setTgxlOperate`, `setTgxlBypass`, section 9.1), and 3 has
+  `setTgxlOperate`, `setTgxlBypass`, section 9.1), 3 has
   `setTgxlOperate` with `on` true put the tuner in operate whole (bypass
-  off and operate on, from the one command);
+  off and operate on, from the one command), and 4 adds the relay nudge,
+  the Core's Scan LAN and the saved address (`moveTgxlRelay`,
+  `scanTgxlLan`, `setTgxlAddress`, section 9.1, parity Task 8);
   `remoteRfKitControlVersion` 3 adds `resetRfKitError`, the RF-Kit
-  amplifier's Reset amp error. `remoteTgxlControlVersion` is followed by
-  `stationIdentityVersion`.
+  amplifier's Reset amp error, and 4 its OPERATE and STANDBY, antenna,
+  TCI mode and saved address (`setRfKitOperate`, `setRfKitAntenna`,
+  `setRfKitTciMode`, `setRfKitAddress`, section 9.1, parity Task 10).
+  `remoteTgxlControlVersion` is followed by `stationIdentityVersion`.
 - `stationTciVersion`: sent only at agreed minor 11, and 0 unless the Core
   runs a station TCI server.
 - `accessoryDataVersion`: sent only at agreed minor 11, and 0 unless the
@@ -830,6 +911,12 @@ When a feature is off, its version is 0:
   `accessoryData` object (fault histories, connection counters, the
   transmit interlock and the Power Genius output limit) and accepts
   `setTxInterlockPolicy`, `setPgxlPowerCap` and `clearAccessoryFaults`.
+  At 2 (parity Task 10) the object also carries the RF-Kit's connection
+  counts (`rfkitConnectedSinceMs`, `rfkitPollsOk`, `rfkitPollsFailed`,
+  `rfkitReconnectCount`, `rfkitLastPollMs`), appended after the older
+  properties, which keep their ordinals. At 3 (group B fix wave) it also
+  carries the RF-Kit's average response time (`rfkitRttAvgMs`), appended
+  the same way.
 
 - `stationIdentityVersion`: sent only at agreed minor 11. 1 when the
   Core has its identity key and signs devices in by key (section 3.5);
@@ -850,20 +937,106 @@ When a feature is off, its version is 0:
   Core that has it: the read-only `catalog` object (section 7.4) goes to
   every peer at minor 11. A Core from before it sends neither the entry
   nor the object.
-- `displayExtrasVersion`: sent only at agreed minor 11, last. 1 while the
-  Core's media is enabled: a `subscribe` operation (section 11) may then
+- `displayExtrasVersion`: sent only at agreed minor 11. 2 while the
+  Core's media is enabled. At 1 a `subscribe` operation (section 11) may
   carry the display extras fields, and the Core sends an NSDX datagram
   beside each NSDC frame of an endpoint that asks for a section
-  ([display extras v1](2026-09-23-display-extras-v1.md)). 0 otherwise; a
-  Core from before it sends no entry and refuses the fields as keys it
-  cannot read.
+  ([display extras v1](2026-09-23-display-extras-v1.md)); 2 adds the
+  media control operation `clarity-retune`, Clarity's Re-tune for one
+  endpoint ([remote media control
+  v1](2026-09-20-remote-media-control-v1.md), "Clarity re-tune"). The
+  extras need 1, so a client that compares the version as a minimum reads
+  2 as it read 1. 0 otherwise; a Core from before it sends no entry and
+  refuses the fields as keys it cannot read.
+- `transmitSettingsVersion`: sent only at agreed minor 11, and 0 on a
+  station with no radio model. At 1 a receive-only Core takes a
+  `property.write` on `transmit` of any property except the keying set
+  (`mox`, `tune`, `voxEnabled`, `twoToneActive`), and a `settings.write`
+  or `settings.remove` of a DSP > Options TX key
+  (`DspOptions<Setting><Mode>Tx`), while its radio is off the air, and
+  applies it at once (a DSP > Options TX key reaches the Core's TX channel
+  when the TX slice's mode is in its group). Version 1 covers the
+  `transmit` properties mirrored today: `power`, `micGain`, `filterLow`,
+  `filterHigh`, `lineInGain`, `userDigOut`, `pureSig`,
+  `forceAttwhenPSAoff`, `forceAttwhenPowerChangesWhenPSAon`,
+  `forceAttwhenPowerChangesWhenPSAonAndDecreased`, `antiVoxTauMs`,
+  `antiVoxRun` and `paSettingsBypass`. At 2 it also covers the TX and
+  Phone/CW applets' settings on `transmit`: `tunePower`, `voxThresholdDb`,
+  `voxHangTimeMs`, `monEnabled`, `monitorVolume`, `txLevelerOn`,
+  `txEqEnabled`, `cfcEnabled`, `cpdrOn`, `cpdrLevelDb`, `amCarrierLevel`,
+  `dexpEnabled` and `micGainDb`, each refused outside its range with the
+  range in plain words (section 7.3); the read-only `tunePowerForTxBand`
+  and `tuneDrivePowerSource`; and the command `setTunePowerForTxBand`
+  (section 9.1). At 3 it also covers the radio's microphone input on
+  `transmit` (Setup > Audio > TX Input): `micBoost`, `micXlr`,
+  `micTipRing`, `micBias`, `micPttDisabled`, `lineIn` and `lineInBoost`,
+  `lineInBoost` refused outside its range (section 7.3); the Core's TX
+  profiles, the read-only `activeTxProfile` and `txProfilesJson`; and the
+  commands `txProfile.select`, `txProfile.save`, `txProfile.delete` and
+  `rade.resetVocoder` (section 9.1). At 4 it also covers the TX EQ, CFC,
+  phase rotator, CESSB, leveler and ALC settings on `transmit` (the TX EQ
+  and CFC dialogs, Setup > DSP > CFC and AGC/ALC's TX Leveler and TX ALC):
+  `txEqUseLegacy`, `txEqPreamp`, `txEqBandsJson`, `txEqFreqsJson`,
+  `txEqNc`, `txEqMp`, `txEqCtfmode`, `txEqWintype`, `txEqParaEqData`,
+  `cfcCompressionJson`, `cfcEqFreqJson`, `cfcPostEqBandGainJson`,
+  `cfcPostEqEnabled`, `cfcPostEqGainDb`, `cfcPrecompDb`, `cfcParaEqData`,
+  `phaseRotatorEnabled`, `phaseRotatorFreqHz`, `phaseRotatorStages`,
+  `phaseReverseEnabled`, `cessbOn`, `txLevelerMaxGain`, `txLevelerDecay`,
+  `txAlcMaxGain` and `txAlcDecay`, each refused outside its range and a
+  band array refused whole (section 7.3). At 5 it also covers Setup >
+  Transmit > Power, Transmit > DEXP/VOX and Test > Two-Tone IMD: on
+  `transmit`, `tuneDrivePowerSource` becomes two-way, and
+  `powerByBandJson`, `tunePowerByBandJson`, `dexpAttackTimeMs`,
+  `dexpDetectorTauMs`, `dexpExpansionRatioDb`, `dexpHighCutHz`,
+  `dexpHysteresisRatioDb`, `dexpLookAheadEnabled`, `dexpLookAheadMs`,
+  `dexpLowCutHz`, `dexpReleaseTimeMs`, `dexpSideChannelFilterEnabled`,
+  `antiVoxGainDb`, `twoToneFreq1`, `twoToneFreq2`, `twoToneLevel`,
+  `twoTonePower`, `twoTonePulsed`, `twoToneInvert`, `twoToneFreq2Delay`
+  and `twoToneDrivePowerSource`, each refused outside its range and a band
+  map refused whole (section 7.3); on `stepAtt`, `attOnTxEnabled`,
+  `attOnTxValue` and `forceAttWhenPsOff`; and the Power page's SWR
+  Protection and External TX Inhibit keys (`SwrProtectionEnabled`,
+  `SwrProtectionLimit`, `SwrTuneProtectionEnabled`, `TunePowerSwrIgnore`,
+  `WindBackPowerSwr`, `TxInhibitMonitorEnabled`,
+  `TxInhibitMonitorReversed`), taken while the radio is off the air
+  (section 8), the SWR Protection keys applied to the Core's SWR
+  protection at once. At 6 it also covers Setup > PA: the PA profiles
+  (`hardware/<mac>/pa/...`: PA Gain's profiles, per-band gains, adjust
+  matrix and max power) and the PA forward-power table
+  (`hardware/<mac>/paCalibration/...`: the Watt Meter page), taken while
+  the radio is off the air (section 8) and applied to the Core's PA
+  profiles and calibration at once. PA Gain's auto-calibrate sweep keys
+  the radio and waits for remote transmit. At 7 it also covers PureSignal
+  arming: the commands `ps3.single`, `ps3.automatic`, `ps3.applyCurrent`
+  and `ps3.restoreCorrection` (section 9.1), and a `property.write` on
+  `pureSignalSettings`, which the Core then applies to its PureSignal at
+  once instead of only keeping it (section 7.3). Arming keys nothing, so a
+  receive-only Core permits PureSignal: its `pureSignal` object's
+  `canActuate` says whether PureSignal is ready on the Core's radio, not
+  whether this peer may transmit (`txPermitted`). `ps3.twoTone` with
+  `enabled` true keys the radio and waits for remote transmit. Each is
+  refused while the radio is on the air (section 7.3). The keying set stays refused on a receive-only
+  Core, on and off the air, and so do raw settings writes of
+  `hardware/<mac>/tx/...`, `powerByBand` and `tunePowerByBand` (the
+  `transmit` object owns them). A window whose Core sends 0 keeps its
+  transmit settings unavailable. A peer below agreed minor 11 is never
+  offered it, and a receive-only Core refuses its transmit writes and DSP >
+  Options TX keys as before. `transmitSettingsVersion` is followed by
+  `bandSelectVersion`.
+- `bandSelectVersion`: sent only at agreed minor 11, last, and 0 on a
+  station with no radio model. At 1 the Core takes `slice.selectBand`
+  (section 9.1), a device's band button for a slice, for the bands the
+  catalogue's `bands` lists (section 7.4). An app keeps its band buttons
+  greyed on a Core that sends 0 or no entry.
 
 - `sessionHolderVersion`: sent only at agreed minor 11, last, and only to
   a peer whose hello declared `sessionHolder` 1 with `deviceAuth` 1; any
   other peer is sent no entry (and reads 0), so its capabilities are
   today's. 1: up to four devices at once, the `connectedDevices` object
-  (section 7.1) and `session.leave` (section 9.1). The table above shows
-  the value a declaring peer is sent.
+  (section 7.1), `session.leave` (section 9.1), and sharing the radio's
+  receivers: `confirm.request` and `notice`, and the verbs
+  `confirm.proceed`, `confirm.cancel` and `notice.takeBack` (section 7.5).
+  The table above shows the value a declaring peer is sent.
 - While several devices are on a Core, media and telemetry go to one of
   them (section 11): any other is sent `remoteMediaVersion`,
   `remoteWidebandDisplayVersion`, `remoteAudioStatusVersion`,
@@ -913,6 +1086,86 @@ identity entries from `hpsdrModel` onwards are present only at agreed minor
 `sessionHolder` (section 6.1); `remoteTxVersion` and the three
 `txRefusal` entries after it only for a peer that declared `remoteTx`. A client ignores a capability it does not know
 (`StationCapabilities::fromUpdates`).
+
+**Each device's share of the display budget** (iPhone app plan Task 76; the
+several-devices design, ruling 9.3 and design ruling 9.3a). The Core has one
+display budget, its total: the display allowance its configuration sets, or
+its computed ceiling, lowered by the load governor when the Core computer is
+short of processing time. Every admitted session with media is given its own
+share of that total (`DisplayBudgetSplit`), and its capabilities carry that
+share in the budget entries: `displayApplicationBytesPerSecond` and
+`spectrumSampleUnitsPerSecond` are the device's own, and
+`displayBudgetGeneration` is the device's own generation. A share that does
+not change keeps its generation; one that does takes the total's generation
+when that is newer, otherwise the device's last plus one, so a device alone
+on the Core sees exactly the generations it saw before shares existed. When
+a device is admitted or leaves, the total changes, or a device's displays
+ask for more or less, every device whose share or reason changed is sent
+`capabilities` again. The rules of the
+split: the PureSignal display's charge comes off the total once and belongs
+to the device that subscribed to it (`remotePs3DisplaySubscribed` is true
+for that device only); a network device holding transmit gets its whole
+request, the rest is shared among the others; with transmit unheld, held by
+the station device or held by a device that is away, every device gets an
+equal share, and a device asking for less leaves the difference to the
+rest (max-min fair). A device's request is what its displays ask for: the
+sum of its display subscriptions' charges at the frame rate it subscribed
+at and the pixels it subscribed at, clamped to what its window can carry
+(the receiver's bins in that window), before the budget clamps them, a
+subscription refused for the
+budget included, until the display is closed, asked for again, or 10 s
+pass after its refusal without either (the media control document's
+display budget section), and never
+less than one useful pan (256 pixels at 10 frames a second with its wide
+plane). What that guarantees: with no network device holding transmit
+while present, each device's share is at least the smaller of one useful
+pan and an equal part of the total; the Core's own cut for a busy computer
+never takes the total below PureSignal's display plus one useful pan per
+device, so under that cut each device keeps one pan. Only a display
+allowance configured below one pan per device can leave each device less.
+Beside a device holding transmit, the others share only what its request
+leaves, which can be nothing useful (a share of 1) while it asks for the
+whole total. What no device asks for is shared equally among them as room to grow,
+so a device alone has the whole total. A subscription is admitted against the share the
+device has once it asks for it (for the transmit holder, its whole
+request), not the share it had. **Transmit joins here:** until the transmit
+holder exists (Task 34) transmit counts as unheld; Task 34 names the holder.
+The Core hands each device a share, never a frame rate: each client plans
+its own displays inside its share, and a share too small for one pan at 256
+pixels and 10 frames a second suspends that device's display, pane and
+slice kept. Every client, holding transmit or not, first subscribes its
+displays at the pixels and frame rate the operator wants, since its request
+is what gives it its share. A subscription refused because it does not fit
+(reason "The Core's display limit has no room left.") is the answer: the
+`capabilities` with the device's new share arrive before the refusal, and
+the client plans inside that share and subscribes again. It asks for what it
+wants again when that grows (a pane added, widened or sped up; a pane
+widened by a resize asks once its width has held for 200 ms, not at every
+step of the resize) and when the
+transmit holder changes (`txState`'s `holderEpoch` or `holderAway` moves: it
+takes transmit, the holder changes, or a holder lets go or goes away), never
+merely because a new generation arrived. Audio is never split and never cut
+when the Core runs short.
+
+`displayBudgetReason` says which of the Core's limits is short:
+
+| Value | Meaning |
+| --- | --- |
+| `none` | the device's share is not below its request, and nothing is cut |
+| `coreBusy` | the governor has cut the total, and the device is alone on the Core (or its share still covers its request) |
+| `sharedConnection` | another device is admitted and this device's share is below its request; the governor has cut nothing (the devices share what the Core sends) |
+| `sharedProcessing` | another device is admitted and this device's share is below its request; the governor's cut is in force (the Core computer is short of processing time) |
+
+A device's request is its demand as above (what its displays ask for, at
+least one useful pan). Because every client first asks for what the
+operator wants, a device that wants more than its share while another
+device is admitted hears `sharedConnection` or `sharedProcessing`; one
+whose share covers all it asks for hears `none` or `coreBusy`.
+
+`sharedConnection` and `sharedProcessing` go only to a device that declared
+`sessionHolder` (section 6.1). Any other device is told `none` in place of
+`sharedConnection` and `coreBusy` in place of `sharedProcessing`, so an
+older window sees only the values it was built for.
 
 <!-- surface:capabilities -->
 <!-- Generated by scripts/render-link-tables.py from tests/data/link/v1/surface.json. Do not edit by hand. -->
@@ -971,12 +1224,14 @@ identity entries from `hpsdrModel` onwards are present only at agreed minor
 | 50 | `pairingVersion` | `i64` |
 | 51 | `stationCatalogVersion` | `i64` |
 | 52 | `displayExtrasVersion` | `i64` |
-| 53 | `sessionHolderVersion` | `i64` |
-| 54 | `remoteTxVersion` | `i64` |
-| 55 | `txRefusalCode` | `utf8` |
-| 56 | `txRefusalReason` | `utf8` |
-| 57 | `txRefusalFix` | `utf8` |
-| 58 | `txStateVersion` | `i64` |
+| 53 | `transmitSettingsVersion` | `i64` |
+| 54 | `bandSelectVersion` | `i64` |
+| 55 | `sessionHolderVersion` | `i64` |
+| 56 | `remoteTxVersion` | `i64` |
+| 57 | `txRefusalCode` | `utf8` |
+| 58 | `txRefusalReason` | `utf8` |
+| 59 | `txRefusalFix` | `utf8` |
+| 60 | `txStateVersion` | `i64` |
 
 <!-- /surface -->
 
@@ -994,7 +1249,7 @@ An enum property lists the values its domain allows.
 <!-- surface:mirrorClasses -->
 <!-- Generated by scripts/render-link-tables.py from tests/data/link/v1/surface.json. Do not edit by hand. -->
 
-**AccessoryDataModel** (42 properties)
+**AccessoryDataModel** (48 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -1040,6 +1295,12 @@ An enum property lists the values its domain allows.
 | 39 | `rfkitAntenna2Label` | `utf8` | outbound |  |
 | 40 | `rfkitAntenna3Label` | `utf8` | outbound |  |
 | 41 | `rfkitAntenna4Label` | `utf8` | outbound |  |
+| 42 | `rfkitConnectedSinceMs` | `i64` | outbound |  |
+| 43 | `rfkitPollsOk` | `i64` | outbound |  |
+| 44 | `rfkitPollsFailed` | `i64` | outbound |  |
+| 45 | `rfkitReconnectCount` | `i64` | outbound |  |
+| 46 | `rfkitLastPollMs` | `i64` | outbound |  |
+| 47 | `rfkitRttAvgMs` | `i64` | outbound |  |
 
 **AccessorySettingsModel** (21 properties)
 
@@ -1074,13 +1335,13 @@ An enum property lists the values its domain allows.
 | 0 | `rxAntennas` | `utf8` | bidirectional |  |
 | 1 | `rxOnlyAntennas` | `utf8` | bidirectional |  |
 | 2 | `useTxAntennaForRx` | `bool` | bidirectional |  |
-| 3 | `txAntennas` | `utf8` | outbound |  |
-| 4 | `blockTxAnt2` | `bool` | outbound |  |
-| 5 | `blockTxAnt3` | `bool` | outbound |  |
-| 6 | `rxOutOnTx` | `bool` | outbound |  |
-| 7 | `ext1OutOnTx` | `bool` | outbound |  |
-| 8 | `ext2OutOnTx` | `bool` | outbound |  |
-| 9 | `rxOutOverride` | `bool` | outbound |  |
+| 3 | `txAntennas` | `utf8` | bidirectional |  |
+| 4 | `blockTxAnt2` | `bool` | bidirectional |  |
+| 5 | `blockTxAnt3` | `bool` | bidirectional |  |
+| 6 | `rxOutOnTx` | `bool` | bidirectional |  |
+| 7 | `ext1OutOnTx` | `bool` | bidirectional |  |
+| 8 | `ext2OutOnTx` | `bool` | bidirectional |  |
+| 9 | `rxOutOverride` | `bool` | bidirectional |  |
 
 **AmplifierModel** (20 properties)
 
@@ -1184,7 +1445,7 @@ An enum property lists the values its domain allows.
 | 8 | `hardwarePeakOverride` | `f64` | bidirectional |  |
 | 9 | `lastLoadError` | `utf8` | outbound |  |
 
-**RadioModel** (23 properties)
+**RadioModel** (24 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -1208,9 +1469,10 @@ An enum property lists the values its domain allows.
 | 17 | `rxFilter1Band` | `i64` | outbound |  |
 | 18 | `rxFilter1Reason` | `utf8` | outbound |  |
 | 19 | `transmitting` | `bool` | outbound |  |
-| 20 | `bandOutputsByte` | `i64` | outbound |  |
-| 21 | `bandOutputsBand` | `i64` | outbound |  |
-| 22 | `bandOutputsKeyed` | `bool` | outbound |  |
+| 20 | `txInhibited` | `bool` | outbound |  |
+| 21 | `bandOutputsByte` | `i64` | outbound |  |
+| 22 | `bandOutputsBand` | `i64` | outbound |  |
+| 23 | `bandOutputsKeyed` | `bool` | outbound |  |
 
 **RfKitModel** (30 properties)
 
@@ -1446,7 +1708,7 @@ An enum property lists the values its domain allows.
 | 3 | `stationAddress` | `utf8` | outbound |  |
 | 4 | `error` | `utf8` | outbound |  |
 
-**StepAttenuatorFacade** (15 properties)
+**StepAttenuatorFacade** (18 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -1465,8 +1727,11 @@ An enum property lists the values its domain allows.
 | 12 | `overloadAdc0` | `i64` | outbound |  |
 | 13 | `overloadAdc1` | `i64` | outbound |  |
 | 14 | `adcLinked` | `bool` | outbound |  |
+| 15 | `attOnTxEnabled` | `bool` | bidirectional |  |
+| 16 | `attOnTxValue` | `i64` | bidirectional |  |
+| 17 | `forceAttWhenPsOff` | `bool` | bidirectional |  |
 
-**TransmitModel** (16 properties)
+**TransmitModel** (86 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -1485,7 +1750,77 @@ An enum property lists the values its domain allows.
 | 12 | `antiVoxTauMs` | `i64` | bidirectional |  |
 | 13 | `antiVoxRun` | `bool` | bidirectional |  |
 | 14 | `paSettingsBypass` | `bool` | bidirectional |  |
-| 15 | `voxEnabled` | `bool` | bidirectional |  |
+| 15 | `tunePower` | `i64` | bidirectional |  |
+| 16 | `voxThresholdDb` | `i64` | bidirectional |  |
+| 17 | `voxHangTimeMs` | `i64` | bidirectional |  |
+| 18 | `monEnabled` | `bool` | bidirectional |  |
+| 19 | `monitorVolume` | `f64` | bidirectional |  |
+| 20 | `txLevelerOn` | `bool` | bidirectional |  |
+| 21 | `txEqEnabled` | `bool` | bidirectional |  |
+| 22 | `cfcEnabled` | `bool` | bidirectional |  |
+| 23 | `cpdrOn` | `bool` | bidirectional |  |
+| 24 | `cpdrLevelDb` | `i64` | bidirectional |  |
+| 25 | `amCarrierLevel` | `i64` | bidirectional |  |
+| 26 | `dexpEnabled` | `bool` | bidirectional |  |
+| 27 | `micGainDb` | `i64` | bidirectional |  |
+| 28 | `tunePowerForTxBand` | `i64` | outbound |  |
+| 29 | `tuneDrivePowerSource` | `enum` | bidirectional | 0, 1, 2 |
+| 30 | `micBoost` | `bool` | bidirectional |  |
+| 31 | `micXlr` | `bool` | bidirectional |  |
+| 32 | `micTipRing` | `bool` | bidirectional |  |
+| 33 | `micBias` | `bool` | bidirectional |  |
+| 34 | `micPttDisabled` | `bool` | bidirectional |  |
+| 35 | `lineIn` | `bool` | bidirectional |  |
+| 36 | `lineInBoost` | `f64` | bidirectional |  |
+| 37 | `activeTxProfile` | `utf8` | outbound |  |
+| 38 | `txProfilesJson` | `utf8` | outbound |  |
+| 39 | `txEqUseLegacy` | `bool` | bidirectional |  |
+| 40 | `txEqPreamp` | `i64` | bidirectional |  |
+| 41 | `txEqBandsJson` | `utf8` | bidirectional |  |
+| 42 | `txEqFreqsJson` | `utf8` | bidirectional |  |
+| 43 | `txEqNc` | `i64` | bidirectional |  |
+| 44 | `txEqMp` | `bool` | bidirectional |  |
+| 45 | `txEqCtfmode` | `i64` | bidirectional |  |
+| 46 | `txEqWintype` | `i64` | bidirectional |  |
+| 47 | `txEqParaEqData` | `utf8` | bidirectional |  |
+| 48 | `cfcCompressionJson` | `utf8` | bidirectional |  |
+| 49 | `cfcEqFreqJson` | `utf8` | bidirectional |  |
+| 50 | `cfcPostEqBandGainJson` | `utf8` | bidirectional |  |
+| 51 | `cfcPostEqEnabled` | `bool` | bidirectional |  |
+| 52 | `cfcPostEqGainDb` | `i64` | bidirectional |  |
+| 53 | `cfcPrecompDb` | `i64` | bidirectional |  |
+| 54 | `cfcParaEqData` | `utf8` | bidirectional |  |
+| 55 | `phaseRotatorEnabled` | `bool` | bidirectional |  |
+| 56 | `phaseRotatorFreqHz` | `i64` | bidirectional |  |
+| 57 | `phaseRotatorStages` | `i64` | bidirectional |  |
+| 58 | `phaseReverseEnabled` | `bool` | bidirectional |  |
+| 59 | `cessbOn` | `bool` | bidirectional |  |
+| 60 | `txLevelerMaxGain` | `i64` | bidirectional |  |
+| 61 | `txLevelerDecay` | `i64` | bidirectional |  |
+| 62 | `txAlcMaxGain` | `i64` | bidirectional |  |
+| 63 | `txAlcDecay` | `i64` | bidirectional |  |
+| 64 | `powerByBandJson` | `utf8` | bidirectional |  |
+| 65 | `tunePowerByBandJson` | `utf8` | bidirectional |  |
+| 66 | `dexpAttackTimeMs` | `f64` | bidirectional |  |
+| 67 | `dexpDetectorTauMs` | `f64` | bidirectional |  |
+| 68 | `dexpExpansionRatioDb` | `f64` | bidirectional |  |
+| 69 | `dexpHighCutHz` | `f64` | bidirectional |  |
+| 70 | `dexpHysteresisRatioDb` | `f64` | bidirectional |  |
+| 71 | `dexpLookAheadEnabled` | `bool` | bidirectional |  |
+| 72 | `dexpLookAheadMs` | `f64` | bidirectional |  |
+| 73 | `dexpLowCutHz` | `f64` | bidirectional |  |
+| 74 | `dexpReleaseTimeMs` | `f64` | bidirectional |  |
+| 75 | `dexpSideChannelFilterEnabled` | `bool` | bidirectional |  |
+| 76 | `antiVoxGainDb` | `i64` | bidirectional |  |
+| 77 | `twoToneFreq1` | `i64` | bidirectional |  |
+| 78 | `twoToneFreq2` | `i64` | bidirectional |  |
+| 79 | `twoToneLevel` | `f64` | bidirectional |  |
+| 80 | `twoTonePower` | `i64` | bidirectional |  |
+| 81 | `twoTonePulsed` | `bool` | bidirectional |  |
+| 82 | `twoToneInvert` | `bool` | bidirectional |  |
+| 83 | `twoToneFreq2Delay` | `i64` | bidirectional |  |
+| 84 | `twoToneDrivePowerSource` | `enum` | bidirectional | 0, 1, 2 |
+| 85 | `voxEnabled` | `bool` | bidirectional |  |
 
 **TransmitState** (18 properties)
 
@@ -1576,13 +1911,16 @@ Notes on the keys:
 - **`pan:<i>`.** The station watches every panadapter its model holds, but
   no code path in `nereusd` adds one: panadapters live in the window, and
   the Core's spectrum travels on display endpoints (media control). A real
-  Core therefore sends no `pan:<i>` objects today. The surface records one
+  Core therefore sends no `pan:<i>` objects, and a write to one changes
+  nothing; the key stays unused (the several-devices design, ruling 5.12).
+  A device's pans are its own: `addSliceOnPan`'s `panId` is the device's
+  own key, so two devices' "pan-0" are two pans. The surface records one
   so the key pattern is known.
 - **Minor 11 objects.** `stepAtt`, `alexAntennas` and `ioBoard` are sent
   only to a peer at agreed minor 11 and only while `radioHardwareVersion` is
   at least 1, 2 and 3 respectively. `amplifier` and `rfkit` are sent only at
   minor 11 on a Core that owns its accessories, `accessoryData` only at
-  minor 11 while `accessoryDataVersion` is 1, `accessorySettings` only at
+  minor 11 while `accessoryDataVersion` is at least 1, `accessorySettings` only at
   minor 11 while `remotePgxlControlVersion` is at least 3 or
   `remoteTgxlControlVersion` at least 1, `stationTci` only at
   minor 11 on a Core that runs a station TCI server, and `catalog` only at
@@ -1695,6 +2033,119 @@ Notes on the keys:
   either is refused as any `outbound` write is. Today's desktop window
   holds no object for the key and drops it, as it does any class it does
   not know.
+- **`transmit`.** Every property is `bidirectional` on the wire, but a
+  receive-only Core takes only the transmit settings: at
+  `transmitSettingsVersion` 1, a write of any property except `mox`,
+  `tune`, `voxEnabled` and `twoToneActive`, and only while its radio is
+  off the air (section 7.3). The Core also publishes its real transmit
+  state as `radio`'s `transmitting` (outbound); a window reads "on the
+  air" from it, the mirrored `transmit.tune`, and `pureSignal`'s
+  `twoToneOn`. `radio`'s `txInhibited` (bool, outbound) is the Core's TX
+  inhibit (its `TxInhibitMonitor`); a window's TX indicator shows it. It
+  needs no capability: a window that does not know it ignores it. A window
+  clears its copy of `transmitting` and `txInhibited` when the session
+  ends.
+- **`transmit` at `transmitSettingsVersion` 2.** Each property carries its
+  setter's type: `tunePower` (i64, the fixed tune power Setup uses, 0 to
+  100 W, 0 to 99 on a Hermes Lite 2), `voxThresholdDb` (i64, -80 to 0 dB),
+  `voxHangTimeMs` (i64, 1 to 2000 ms), `monEnabled` (bool), `monitorVolume`
+  (f64, 0.0 to 1.0; a window's slider shows it as 0 to 100),
+  `txLevelerOn`, `txEqEnabled`, `cfcEnabled`, `cpdrOn` (bool; `cpdrOn` is
+  PROC), `cpdrLevelDb` (i64, 0 to 20 dB), `amCarrierLevel` (i64, 0 to 100
+  percent), `dexpEnabled` (bool) and `micGainDb` (i64, -50 to 70 dB).
+  `tunePowerForTxBand` (i64, outbound) is the tune power for the band the
+  Core transmits on (its transmit slice's band, as TUNE reads it), which
+  the TX applet's Tune Power slider shows; it follows the transmit slice
+  across bands. `tuneDrivePowerSource` (enum: 0 the drive slider, 1 the
+  tune slider, 2 the fixed tune power) is where TUNE takes its power from.
+  At version 2 both change only through `setTunePowerForTxBand`, and
+  `tuneDrivePowerSource` is outbound; at version 5 it is two-way (Setup >
+  Transmit > Power's Tune group), and `tunePowerForTxBand` stays outbound. None of these
+  keys the radio. The MON output choice (speakers or phones) is not on the
+  link: it is each window's own audio routing.
+- **`transmit` at `transmitSettingsVersion` 3.** The radio's microphone
+  input, each under its setter's name and type: `micBoost` (bool, the
+  +20 dB mic boost), `micXlr` (bool, XLR rather than the 3.5 mm jack on a
+  radio with both), `micTipRing` (bool, true when the tip is the mic),
+  `micBias` (bool), `micPttDisabled` (bool, true when the mic's PTT is
+  ignored), `lineIn` (bool, Line In rather than Mic In) and `lineInBoost`
+  (f64, the Line In gain, -34.5 to 12.0 dB). The mic source is not among
+  them. `activeTxProfile` (utf8, outbound) is the Core's active TX
+  profile, and `txProfilesJson` (utf8, outbound) its TX profiles as a JSON
+  array of names in the Core's order (for example
+  `["AM","Default","Default DX"]`); a station with no radio sends `""` and
+  `[]`. Both change only through the `txProfile.*` commands (or at the
+  Core). TX and mic profiles are one set. A window never keeps its own
+  copy of the Core's profiles: its profile combos and Setup > Audio > TX
+  Profile show these two and ask the Core. None of these keys the radio.
+- **`transmit` at `transmitSettingsVersion` 4.** The TX EQ, CFC, phase
+  rotator, CESSB, leveler and ALC settings, each under its setter's name
+  and type. `txEqUseLegacy` (bool, default true) is the TX EQ dialog's
+  Legacy EQ box: true, the ten-band EQ reaches the TX channel; false, the
+  parametric curve in `txEqParaEqData` does. The Core applies the curve
+  itself, whichever window changed it, and it is saved with the TX profile
+  (Thetis's `EQUseLegacy`). `txEqPreamp` (i64, -12 to 15 dB),
+  `txEqBandsJson` (utf8, the ten band gains, each -12 to 15 dB),
+  `txEqFreqsJson` (utf8, the ten band centres, each 10 to 22000 Hz),
+  `txEqNc` (i64, 32 to 8192), `txEqMp` (bool), `txEqCtfmode` (i64, 0
+  peaking or 1 notch), `txEqWintype` (i64, 0 Blackman-Harris or 1 Hann),
+  `txEqParaEqData` (utf8, the parametric curve as Thetis saves it: gzip,
+  then base64url, of the curve's JSON; empty for none). `cfcCompressionJson`
+  (utf8, the ten compression levels, each 0 to 16 dB), `cfcEqFreqJson`
+  (utf8, the ten band centres, each 0 to 20000 Hz),
+  `cfcPostEqBandGainJson` (utf8, the ten post-EQ gains, each -24 to 24 dB),
+  `cfcPostEqEnabled` (bool), `cfcPostEqGainDb` (i64, -24 to 24 dB),
+  `cfcPrecompDb` (i64, 0 to 16 dB), `cfcParaEqData` (utf8, as
+  `txEqParaEqData`). A non-empty `txEqParaEqData` or `cfcParaEqData` the
+  Core cannot read as a curve is refused ("The Core could not read that
+  equalizer curve. Save the curve again and retry.") and changes nothing. `phaseRotatorEnabled` (bool), `phaseRotatorFreqHz`
+  (i64, 10 to 2000 Hz), `phaseRotatorStages` (i64, 2 to 16),
+  `phaseReverseEnabled` (bool), `cessbOn` (bool), `txLevelerMaxGain` (i64,
+  0 to 20 dB), `txLevelerDecay` (i64, 1 to 5000 ms), `txAlcMaxGain` (i64, 0
+  to 120 dB) and `txAlcDecay` (i64, 1 to 50 ms). Each ten-value array is a
+  compact JSON array of ten whole numbers in band order (for example
+  `[-12,-12,-12,-1,1,4,9,12,-10,-10]`); an array of any other length, or
+  with a value that is not a whole number or is out of range, is refused
+  whole and changes nothing. None of these keys the radio.
+- **`transmit` at `transmitSettingsVersion` 5.** Setup > Transmit > Power,
+  Transmit > DEXP/VOX and Test > Two-Tone IMD, each under its setter's
+  name and its getter's type. `tuneDrivePowerSource` becomes two-way.
+  `powerByBandJson` and `tunePowerByBandJson` (utf8) are the per-band power
+  and tune power in whole watts, a compact JSON object keyed by the app's
+  band key for the 14 bands (`160m`, `80m`, `60m`, `40m`, `30m`, `20m`,
+  `17m`, `15m`, `12m`, `10m`, `6m`, `GEN`, `WWV`, `XVTR`); the Core writes
+  its keys in its own order, and a window reads it as an object. A write
+  carries all 14 bands, each a whole number from 0 to 100 W (tune power 0
+  to 99 on a Hermes Lite 2); a map with a band missing, a key that is not
+  a band, or a value that is not a whole number or is out of range is
+  refused whole and changes nothing. A map the Core takes reads back as
+  the same object in the Core's key order, and is accepted.
+  `dexpAttackTimeMs` (f64, 2 to 100 ms), `dexpDetectorTauMs` (f64, 1 to 100
+  ms), `dexpExpansionRatioDb` (f64, 0.0 to 30.0 dB), `dexpHighCutHz` and
+  `dexpLowCutHz` (f64, 100 to 10000 Hz, the VOX trigger filter),
+  `dexpHysteresisRatioDb` (f64, 0.0 to 10.0 dB), `dexpLookAheadEnabled`
+  (bool), `dexpLookAheadMs` (f64, 10 to 999 ms), `dexpReleaseTimeMs` (f64, 2
+  to 1000 ms), `dexpSideChannelFilterEnabled` (bool), `antiVoxGainDb` (i64,
+  -60 to 60 dB). `twoToneFreq1` and `twoToneFreq2` (i64, -20000 to 20000
+  Hz), `twoToneLevel` (f64, -96 to 0 dB), `twoTonePower` (i64, 0 to 100
+  percent), `twoTonePulsed` and `twoToneInvert` (bool), `twoToneFreq2Delay`
+  (i64, 0 to 1000 ms) and `twoToneDrivePowerSource` (enum, as
+  `tuneDrivePowerSource`). The two-tone settings are read when a two-tone
+  test starts; the test itself (`twoToneActive`) and Enable VOX
+  (`voxEnabled`) stay in the keying set. None of these keys the radio. The
+  Core's runtime SWR foldback (Thetis's `NetworkIO.SWRProtect`) is not a
+  setting and is not on the link.
+- **`stepAtt` at `transmitSettingsVersion` 5.** Setup > Transmit > Power's
+  `attOnTxEnabled` (bool, ATT on TX), `attOnTxValue` (i64, the ATT on TX
+  value in dB for the Core's transmit band, from the Core's attenuator
+  minimum to 31: 0 to 31, -28 to 31 on a Hermes Lite 2) and
+  `forceAttWhenPsOff` (bool, Force ATT on Tx to 31 when PS-A is off),
+  declared after `adcLinked`. The Core applies each through its step
+  attenuator, as the local page does; `attOnTxValue` also follows
+  PureSignal's AutoAtt. They are transmit settings: a receive-only Core
+  takes them from a peer offered `transmitSettingsVersion` while its radio
+  is off the air (section 7.3). Changing `attOnTxValue` with ATT on TX on
+  sets the radio's TX attenuator; it keys nothing.
 - **Whose each slice is** (iPhone app plan Task 73; the several-devices
   design, rulings 5.1 to 5.6). With several devices on one Core every
   slice has an owner: the device that made it, the device that adopted it
@@ -1770,14 +2221,77 @@ property in one write, an unknown property or a wrong wire kind, an
 `outbound` property, a read-only object (`ioBoard`, `amplifier`, `rfkit`,
 `stationTci`, `accessoryData`, `accessorySettings`), a `stepAtt` or `alexAntennas` write from a peer below minor
 11 or while the Core has no controller behind it, a raw write of `radio`'s
-`rfKitEnabled` (changed only with `setRfKitEnabled`), transmit
-configuration on a receive-only station, and DSP settings from a peer that
-did not negotiate them (`StationServer::handlePropertyWrite`).
+`rfKitEnabled` (changed only with `setRfKitEnabled`), the keying
+`transmit` properties (`mox`, `tune`, `voxEnabled`, `twoToneActive`) on a
+receive-only station, whether or not the station mirrors them ("Transmit
+configuration is unavailable on this receive-only Core."), any
+`transmit` property on a receive-only station from a peer below agreed
+minor 11 (it was never offered `transmitSettingsVersion`; the same
+reason), any other `transmit` property on a receive-only station while
+its radio is on the air ("The radio is on the air. Try again when it stops.": keyed through
+its `MoxController` from any source, a hardware PTT included, until the
+hand-back to receive ends; TUNE on; or the two-tone test running), a
+`transmit` setting outside its setter's range, with the range ("Choose a
+tune power from 0 to 100 W.", "Choose a VOX level from -80 to 0 dB.",
+"Choose a VOX delay from 1 to 2000 ms.", "Choose a monitor level from 0.0
+to 1.0.", "Choose a PROC level from 0 to 20 dB.", "Choose an AM carrier
+level from 0 to 100 percent.", "Choose a mic level from -50 to 70 dB.",
+"Choose a Line In gain from -34.5 to 12.0 dB.", "Choose a TX EQ preamp
+from -12 to 15 dB.", "Choose a TX EQ Nc from 32 to 8192.", "Choose a TX EQ
+cutoff of 0 (peaking) or 1 (notch).", "Choose a TX EQ window of 0
+(Blackman-Harris) or 1 (Hann).", "Choose a CFC pre-compression from 0 to 16
+dB.", "Choose a CFC post-EQ gain from -24 to 24 dB.", "Choose a phase
+rotator frequency from 10 to 2000 Hz.", "Choose from 2 to 16 phase rotator
+stages.", "Choose a leveler maximum gain from 0 to 20 dB.", "Choose a
+leveler decay from 1 to 5000 ms.", "Choose an ALC maximum gain from 0 to
+120 dB.", "Choose an ALC decay from 1 to 50 ms."; a ten-value array of
+the wrong length or with a value out of range is refused whole: "Choose
+ten TX EQ band levels, each from -12 to 15 dB.", "Choose ten TX EQ band
+centres, each from 10 to 22000 Hz.", "Choose ten CFC compression levels,
+each from 0 to 16 dB.", "Choose ten CFC band centres, each from 0 to 20000
+Hz.", "Choose ten CFC post-EQ band levels, each from -24 to 24 dB.";
+at `transmitSettingsVersion` 5, "Choose a DEXP attack time from 2 to 100
+ms.", "Choose a DEXP detector time from 1 to 100 ms.", "Choose a DEXP
+release time from 2 to 1000 ms.", "Choose a DEXP expansion ratio from 0.0
+to 30.0 dB.", "Choose a DEXP hysteresis ratio from 0.0 to 10.0 dB.",
+"Choose a look-ahead time from 10 to 999 ms.", "Choose a VOX trigger
+filter cut from 100 to 10000 Hz.", "Choose an anti-VOX gain from -60 to 60
+dB.", "Choose a tone frequency from -20000 to 20000 Hz.", "Choose a
+two-tone level from -96 to 0 dB.", "Choose a two-tone power from 0 to 100
+percent.", "Choose a second tone delay from 0 to 1000 ms.", and a band map
+refused whole: "Choose a power from 0 to 100 W for each of the 14 bands.",
+"Choose a tune power from 0 to 100 W for each of the 14 bands."; a Hermes
+Lite 2 says "Choose a tune power from 0 to 99." and "Choose a tune power
+from 0 to 99 for each of the 14 bands."), `stepAtt`'s `attOnTxEnabled`,
+`attOnTxValue` and `forceAttWhenPsOff` on a receive-only station from a
+peer not offered `transmitSettingsVersion` (the receive-only reason) or
+while its radio is on the air (the on-air reason), and `attOnTxValue`
+outside the Core's range ("Choose an ATT on TX value from 0 to 31 dB.", on
+a Hermes Lite 2 from -28), a `pureSignalSettings` write from a peer
+offered `transmitSettingsVersion` 7 while the radio is on the air (the
+on-air reason; from such a peer an accepted write is applied to the Core's
+PureSignal at once, and from any other peer it is kept and applied when
+PureSignal next starts, as before), and
+DSP settings from a peer that did not negotiate them
+(`StationServer::handlePropertyWrite`). The on-air check is read once for
+the whole write, before anything in it is applied.
 A write to an `outbound` property is refused before anything is applied,
 with the reason "The Core sets this itself; it cannot be changed from
 here.", unless one of the earlier, more specific refusals above applies
 first; this covers the station's own readings, such as a slice's signal
 strength, as well as properties changed through a command.
+
+`alexAntennas`' transmit properties (`txAntennas`, `blockTxAnt2`,
+`blockTxAnt3`, `rxOutOnTx`, `ext1OutOnTx`, `ext2OutOnTx`, `rxOutOverride`,
+two-way from `radioHardwareVersion` 5 and 6) are not held while the radio
+is on the air, and a receive-only station takes them from any peer that
+was offered the object: they key nothing, and Thetis changes them while
+transmitting (section 6.3). A `txAntennas` list that asks for a port
+blocked for transmit keeps that band's antenna and settles with "An
+antenna blocked for transmit cannot be a band's TX antenna." A current
+window changes one band's TX antenna with the `setAlexTxAntenna` command
+instead (section 6.3), so its edit cannot put back another band the Core
+changed; the whole-list write stays for a window that sends it.
 
 After the whole batch, the station reads each property back. When the
 agreed minor is at least 5 (`kDspControlSessionProtocolMinor`) and the
@@ -1811,10 +2325,26 @@ property answers not accepted, with no value, and the reason "That slice
 belongs to <the owner's name>. It can be changed only there." (the name as
 `connectedDevices` numbers it; "the Core" for a slice nobody owns). Nothing
 else comes back. The commands `removeSlice`, `setActiveSliceById`,
-`nnr.setDiagnostics`, `nnr.resetTuning`, `nnr.tryAgain` and `notch.add`
-naming another device's slice are refused with the same reason (section
-9.1). A sample-rate change, a C-Tune centre change or pin and a receiver's
-band change are not refused this way: later tasks route them.
+`nnr.setDiagnostics`, `nnr.resetTuning`, `nnr.tryAgain`, `notch.add`,
+`notch.addAtSlice`, `slice.selectBand`, `requestSliceSampleRate`,
+`requestStreamCentre` and `requestStreamCtunPinned` naming a slice that is not the requester's
+(another device's, one nobody owns, or one held for a device) are refused
+with the same reason, whatever receivers are in use (section 9.1). On the
+requester's own slice, a C-Tune centre change or pin and a slice's band
+change follow the receiver rules of section 7.5, and a sample-rate change
+the shared-setting rules of section 7.6.
+
+**Waiting for you to confirm** (iPhone app plan Task 74; the
+several-devices design, section 7.3). A write that would disturb another
+device, from a device with `sessionHolderVersion` 1, is not applied. Its
+`property.result` answers every property not accepted, with the value the
+Core keeps and the reason "Waiting for you to confirm.", and a
+`confirm.request` follows with `forWriteId` naming the write (section
+7.5). Today that is a band change of the anchor's slice on a receiver
+another device shares. A window without the feature is never asked: the
+same write is refused with "This change would affect <names>. Update
+NereusSDR to confirm changes that affect other devices.", the names as
+`connectedDevices` numbers them.
 
 A receiver property the station accepted reads back with its new value at
 once: the station's receive DSP applies it afterwards, on its own thread,
@@ -1836,13 +2366,265 @@ allows (refused otherwise with the gate's sentence); while another
 device's holder is on the air, a change to the transmit path is refused
 with the on-air sentence (section 18.4).
 
+### 7.5 Receivers several devices share
+
+iPhone app plan Task 74 (the several-devices design, sections 6.1 to 6.4,
+7.3 and 7.4). Up to four devices share the radio's receivers. A slice
+joins any receiver whose window covers its frequency, whoever claimed it,
+as it always has; two devices' slices can therefore share one receiver.
+
+**The anchor.** The device whose slice claimed a receiver anchors it.
+When the anchor's last slice leaves the receiver, the anchor passes to the
+device whose slice has been on it longest; nobody is asked or told. When
+the last slice leaves, the receiver is free. A shared receiver's window
+does not follow a slice's tuning inside it (the slice moves only its own
+shift, as several slices on one receiver always have).
+
+**The C-Tune pin** of a shared receiver is its anchor's.
+`requestStreamCtunPinned` from another device is refused with "This
+panadapter shows <anchor's name>'s receiver. Its C-Tune setting is
+<anchor's name>'s.".
+A pin lasts through its anchor's link dropping and its coming back as the
+same device (its `streamCtunPinned` is as it left it); it ends when the
+anchor leaves for good (`session.leave`, a token window's end, the end of
+its 180 s, revocation).
+
+**The anchor moves its panadapter.** A `requestStreamCentre` from the
+anchor that would leave another device's slice outside the new window is
+held: its `command.result` is not accepted, with the reason "Waiting for
+you to confirm." and `values` holding `phase` `needsConfirmation`, and a
+`confirm.request` of kind `panMove` follows. One that would leave the
+anchor's own slice outside is refused as before. On proceed the window
+moves; each other device's slice outside it moves to another receiver
+(one whose window covers it, or a free one) or, with none free, closes,
+and its device is told (`notice` `sliceMoved` or `sliceClosed`).
+
+**The anchor changes band.** A `property.write` of the `frequency` of one
+of the anchor's slices, outside its receiver's window, while another
+device's slice shares the receiver, is the same question (`panMove`),
+held as section 7.3 says, with `change` `{label, from, to}`:
+"Receiver <n>" and the bands, "20 m" and "40 m". On proceed the receiver
+follows the anchor's slice, centred on its new frequency; each other
+device's slice the new window no longer covers moves or closes, as above;
+one it still covers stays. When the anchor has another slice of its own
+on the receiver that the new window would not cover, the change is not a
+pan move: the slice leaves for another receiver as it always has (design
+ruling 6.5a). Cancel changes nothing. With nobody else on the receiver,
+nothing changes from before.
+
+**A device that does not anchor moves its panadapter** by taking it,
+with its slices there, to a free receiver centred where it asked; the
+anchor is not disturbed and nobody is asked. Its slices must fit the new
+window, as C-Tune requires.
+
+**Taking a receiver** (the several-devices design, section 6.4). A
+request that needs a receiver (`addSlice`, `addSliceOnPan`, a retune out
+of a window, a panadapter move by a device that does not anchor) and is
+refused because every receiver is in use is answered with the refusal,
+whose words now end "The radio's receivers are in use by <names>.", and,
+to a device with the feature, a `confirm.request` of kind `takeReceiver`
+with one choice per receiver in use. On proceed with a choice the Core
+checks again, closes every other device's slice on that receiver (even
+one the new window would cover), tells each owner (`notice`
+`receiverTaken`, with Take it back), and applies the held request on the
+freed receiver. The taker's own slices there stay when the new window
+covers them; a receiver where the taker's own slice would be left outside
+is offered with `takeable` false and `why` "Your slice E would close.",
+and a receiver the taker's own panadapter uses cannot give it a new one
+(`takeable` false, "Your panadapter already uses this receiver."). When
+the slice cap, not the receivers, is full, the question is `takeSlice`,
+one choice per slice of another device, and taking one closes only that
+slice (`notice` `sliceTaken`, with Take it back). A receiver or slice free
+by the time of the answer is used without taking anything.
+
+**Take it back.** `notice.takeBack {id}` asks the same question the other
+way: a `takeReceiver` whose first choice is the receiver the taker now
+holds, then any receiver free by then (for a slice, a `takeSlice` with the
+taker's slice and, when one is free, a choice with `sliceId` -1). Its own
+`command.result` is "Waiting for you to confirm." with `phase`
+`needsConfirmation`. On proceed the Core closes what the choice names
+(telling its owner, with Take it back) and recreates the device's closed
+slices at their frequencies, modes and panadapters, with their settings.
+Once taken back, a notice cannot be taken back again ("That can no longer
+be taken back.").
+
+**An older window** (a session without `sessionHolderVersion` 1) is never
+asked: it gets the refusal only, naming the devices involved. When a take
+closes its last slice its session ends: "<taker's name> took the receiver
+this app was using. Update NereusSDR to share the Core.", not retryable,
+`code` `takenOver`. With no slice for it at sign-in it is refused,
+retryable: "All the radio's slices are in use. Try again when another
+device closes one." when the slice cap is full, "All the radio's
+receivers are in use. Try again when another device frees one." otherwise
+(section 12.4).
+
+**`confirm.request`** (Core to device, to a session with
+`sessionHolderVersion` 1 only): `id` (number, unique on this Core), `kind`
+(`panMove`, `takeReceiver`, `takeSlice`, `sharedSetting` (section 7.6);
+a later task adds `takeTransmit`), `reason` ("Waiting for you to
+confirm."), `affected` (array), `expiresInMs` (60000, `confirmExpiryMs` in
+section 15), and, optionally, `change` `{label, from, to}` (absent for a
+take), `choices` (a take), and `forCommandId`, `forWriteId` or
+`forSettingsKey` naming the held change. `affected`
+has one entry per disturbed device, `{deviceId, deviceName,
+deviceShortName, state, holdsTransmit, slices}`, each slice `{sliceId,
+letter, frequencyHz, band, mode, adc, streamIndex, effect}`: `state` is
+`listening` or `away`, `mode` the slice's `dspMode` value, `band` its
+`Band` value, `adc` its receiver's ADC from 0, `streamIndex` its receiver
+from 0 (shown as "Receiver `streamIndex` + 1", "ADC `adc` + 1"), `effect`
+`moves` or `closes` for a pan move, and for a shared setting also
+`changes` (keeps receiving, differently) or `pausesWhileTransmitting`
+(section 7.6). A take's `affected` is empty: its choices say
+what each would close. A `takeReceiver` choice is `{choice, streamIndex,
+adc, centreHz, rateHz, anchorName, slices, devices, takeable, why}`, its
+slices `{sliceId, letter, deviceId, deviceName, frequencyHz, mode, band,
+txSlice}` and its devices `{deviceId, name, shortName, state,
+lastActivitySeconds}`; a free receiver (offered only by Take it back) has
+no slices. A `takeSlice` choice is `{choice, sliceId, letter, deviceId,
+deviceName, deviceShortName, state, frequencyHz, mode, band, txSlice,
+streamIndex, adc, takeable, why}`.
+
+**Answers** (section 9.1): `confirm.proceed {id, choice}` (`choice` -1
+for a `panMove` or a `sharedSetting`) or `confirm.cancel {id}`. Nothing a
+device sent before its answer changes anything. A device has one open
+question; a new one replaces it, and its session ending drops it. A
+question expires 60 s after it is sent (`expiresInMs`): a later
+`confirm.proceed` is refused "That question has expired. Make the change
+again." and changes nothing (iPhone app plan Task 75). On proceed the Core computes
+what the change reaches again: when that names a device or an effect the
+operator was not shown, the proceed is answered "Waiting for you to
+confirm." with `phase` `needsConfirmation`, a new `confirm.request`
+follows, and nothing is applied. Otherwise the change is applied exactly
+as the original request would have been, and the proceed's
+`command.result` carries the readback (ruling 7.4a): for a property
+write, `objectKey` and the settled value of every property the write
+named in `values` (its side effects on the written object reach the
+writer as the usual `delta`); for a settings write, `settingsKey` and
+`value` (the stored value) in `values`; for a command, the original
+command's own `affected` and `values` (a `requestSliceSampleRate`, which
+the Core runs on a later turn, answers the proceed when it has run). The change reaches every other session as a
+`delta`. A proceed that is refused ("That question is no longer open.
+Make the change again.", "That choice is not in the list. Make the change
+again.", "What this change reaches has changed. Make the change again.")
+carries no readback. The question is always sent after the answer to the
+request that raised it. A `sharedSetting` proceed is also refused "That
+setting changed since you asked. Make the change again." when what the
+change acts on moved since the question was asked, whoever moved it.
+Every slice a question names (the written slice, a `sliceId` argument, the
+slices a move carries) must still be the asking device's at proceed. A
+question whose slice closes or passes to another owner is dropped at once,
+since the Core hands the lowest free id to the next slice; its later
+`confirm.proceed` is refused as changed ("That setting changed since you
+asked. Make the change again." for a `sharedSetting`, "What this change
+reaches has changed. Make the change again." for any other kind) and
+changes nothing, and its `confirm.cancel` is accepted.
+
+**`notice`** (Core to device, `sessionHolderVersion` 1 only): `id`,
+`kind`, `reason`, `secondsAgo` (whole seconds since it happened, measured
+when sent), `takeBack` (boolean), and optionally `byDeviceId`, `byName`,
+`byShortName`, `byKind`, `bySource` (`device`) naming who did it,
+`slices` `[{sliceId, letter, frequencyHz, mode, band}]` (closed ones
+included) and `change`. Kinds here: `sliceMoved` and `sliceClosed` (no
+Take it back), `receiverTaken` and `sliceTaken` (Take it back),
+`settingChanged` (section 7.6: `change`, who, no Take it back),
+`graceEnded`, `slicesNotRestored` and `antennaKept` (about the device's
+own state: no `by` keys, no Take it back). `graceEnded`, "You were away for more than 3
+minutes. Your slices are back.", goes right after `snapshot.complete` to a
+device let in after its 3 minutes ran out, its `slices` listing any saved
+slice that could not be restored (then its words are "You were away for
+more than 3 minutes. <n> of your slices could not be restored: all the
+radio's receivers are in use."); otherwise `slicesNotRestored`, "<n> of
+your slices could not be restored: all the radio's receivers are in
+use.", reports those. An away device's notices wait and follow its
+`snapshot.complete`; after its 3 minutes they still arrive, after
+`graceEnded`, with `takeBack` false. The Core keeps them until the device
+returns, is removed, or the Core restarts. A session without
+`sessionHolderVersion` 1 is sent neither kind.
+
+While a device is on the air, the rules above that would move or close
+its transmit slice are refused instead (the several-devices design, ruling
+7.4): that refusal arrives with the transmit holder (a later task).
+
+### 7.6 Settings that affect every device
+
+iPhone app plan Task 75 (the several-devices design, sections 7.1 to 7.4,
+rulings 5.11a, 6.1 and 7.1 to 7.8). Some settings belong to the radio,
+not to one slice, so a change to one reaches every slice that listens
+through what it touches, whoever owns it. A change on this list that
+would disturb another device's slices (or, once transmit has a holder,
+the holder, when it touches the transmitter) is held and asked, as
+section 7.5 describes, with `kind` `sharedSetting`; one that disturbs
+nobody, or sets the value already there, applies at once as before. The
+requester's own slices never count, nor do slices nobody owns.
+
+| Change | Arrives as | What it reaches |
+| --- | --- | --- |
+| Sample rate | `requestSliceSampleRate` | Protocol 1: every receiver (the radio's data flow stops); Protocol 2: that receiver. Each other device's slice the narrower window leaves out moves to another receiver or, with none free, closes (the Core's own plan); it closes only once the change is certain, so a change refused after Confirm closes nothing and tells nobody |
+| Attenuator, preamp, automatic attenuator | `stepAtt` writes (`attenuationDb`, `enabled`, `preampMode`, `autoAtt...`) | ADC0's receivers |
+| ADC1 preamp | `stepAtt` `rx1Preamp` | ADC1's receivers |
+| Receive antenna | a slice's `rxAntenna`; `alexAntennas` `rxAntennas`, `rxOnlyAntennas`, `useTxAntennaForRx`; `setAlexRxAntenna` | every receiver on a 1-ADC board; on a 2-ADC board ADC0's (ANT1 to ANT3) and, for a receive-only input, ADC1's; a slice's own write also its receiver's other slices |
+| Receive filter policy | `setAlexBpfMode` | the receivers on that filter chain |
+| PureSignal | `pureSignalSettings` writes, `transmit` `pureSig`, `ps3.off`, `ps3.single`, `ps3.automatic`, `ps3.applyCurrent`, `ps3.restoreCorrection` | on a 1-ADC board every receiver, `pausesWhileTransmitting`; the transmitter |
+| Diversity | a slice's `diversityEnabled`, `diversityPhaseDeg`, `diversityGainDb`, `diversityFineNullEnabled` | receiver 0 on a 2-ADC board, every receiver on a 1-ADC board |
+| A shared receiver's noise blanker | a slice's `nbMode`, `nb1Threshold`, `nb1TransitionMs`, `nb1LeadMs`, `nb1LagMs`, `nb2Mode` | that receiver's slices |
+| Notches | `notch.add`, `notch.move`, `notch.setActive`, `notch.delete`; `notches` `globalEnabled`, `autoIncrease` | every slice whose passband overlaps the notch (the notches, for the two switches) |
+| Receive options | `settings.write` of the receive `DspOptions...Rx` keys (buffer size, filter size, filter type, per mode group) | every receiver |
+| Transmit antenna | a slice's `txAntenna` | the transmitter |
+| The amplifier, interlock, power limit | `amplifier` `operate`; `configurePgxl`, `disconnectPgxl`, `setPgxlConnectionSettings`, `setPgxlName`, `setPgxlHardware`, `setPgxlNetwork`, `savePgxlSettings`, `setTxInterlockPolicy`, `setPgxlPowerCap`, `configureRfKit`, `disconnectRfKit`, `setRfKitEnabled`; `settings.write` of `PGXL_...` | the transmitter |
+| 4O3A on or off | `setFourO3AEnabled` | as the tuner: ADC0's receivers on a 2-ADC board, every receiver on a 1-ADC board; the transmitter |
+| The tuner, the RF-Kit amplifier's antenna | `setTgxlAntenna`, `setTgxlOperate`, `setTgxlBypass`, `configureTgxl`, `disconnectTgxl`, `setTgxlName`, `setTgxlNetwork`, `saveTgxlSettings`; `settings.write` of `TGXL_...` and `RfKit_...` | ADC0's receivers on a 2-ADC board, every receiver on a 1-ADC board; the transmitter |
+
+A verb naming another device's slice is refused first, as section 7.3
+says. The words of `change` are the Core's: "Attenuator, ADC 1", "0 dB",
+"20 dB"; "Sample rate, Receiver 1", "192 kHz", "96 kHz"; "Noise blanker,
+Receiver 1", "Off", "NB"; "Diversity phase", "0 degrees", "45 degrees";
+"Diversity gain", "0 dB", "6 dB"; "Diversity fine null", "Off", "On"; "4O3A
+amplifier and tuner", "Off", "On". A `settings.write` held this way is answered by
+`settings.reject` with "Waiting for you to confirm." and the Core's value
+(section 8.1), and its `confirm.request` carries `forSettingsKey`.
+
+On proceed the change applies as the original request would have, the
+answer carrying the readback (section 7.5), and each disturbed device is
+sent a `notice` of kind `settingChanged`: who, `change`, `secondsAgo`,
+the slices of its it reached (`slices`), `takeBack` false, and a
+`reason` such as "iPhone changed Attenuator, ADC 1 from 0 dB to 20 dB."
+followed, where a slice moved, closed or pauses, by "Your slice B moved
+to another receiver.", "Your slice B closed: no receiver was free." or
+"Your slice B pauses while the radio transmits.". A new write from the
+requester to the same thing cancels its open question. A window without
+`sessionHolderVersion` 1 is never asked: its change is refused "This
+change would affect <names>. Update NereusSDR to confirm changes that
+affect other devices.".
+
+**The receive antenna stays put.** Band tracking re-applies a band's
+receive antenna when a slice crosses into it. While another device has a
+slice on a receiver fed by the ADC that antenna relay feeds (every
+receiver on a 1-ADC board, ADC0's on a 2-ADC board), the antenna stays
+where it is instead: the tuning goes ahead with no question, and the
+device tuning is sent a `notice` of kind `antennaKept`, "The antenna stays
+on ANT1 while <other device's short name> listens on it.", with the
+slice in `slices` and no `by` keys. It stays when a transmission ends
+too; the band's transmit antenna still applies at key-down. Once the
+other device's slices have left that ADC, the next band crossing switches
+as always; nothing switches on its own when they leave.
+
+**Transmit.** A change that touches the transmitter disturbs the
+transmit holder (listed with `holdsTransmit` true), and while the holder
+is on the air a change to the transmit path, a Protocol 1 sample rate, or
+a change that would move or close the holder's transmit slice is refused
+with "<holder's short name> is on the air. Try again when they stop."
+(ruling 7.4). Both arrive with the transmit holder (a later task); until
+then nobody holds transmit, so a change that touches only the
+transmitter disturbs nobody and applies at once, and `state` is never
+`transmitting`.
+
 ### 7.4 The catalogue
 
 The `catalog` object's `json` is one JSON object (RFC 8259, UTF-8,
 compact) holding the values the Core owns and an app shows: the modes, the
 Core's filter presets, the tune steps, the AGC, receive and gauge ranges, the
-radio's capabilities, the band plans, the waterfall palettes, the slice
-colours and the Core's tools (`StationCatalog`, spec section 4.10). An app
+radio's capabilities, the band buttons, the band plans, the waterfall
+palettes, the slice colours and the Core's tools (`StationCatalog`, spec section 4.10). An app
 draws its controls from it and carries no table of its own, so a Hermes
 Lite 2 and an ANAN-G2 each get their own. It is the same for every device
 connected to the Core; nothing in it is per device.
@@ -1867,7 +2649,7 @@ Colours are `#RRGGBB`, upper case. Labels are the desktop's own words,
 shown as sent. A key an app does not know is ignored; an app given an
 empty `json` (the stand-in of section 16.3) has no catalogue yet.
 
-The object has exactly these thirteen keys:
+The object has exactly these fourteen keys:
 
 | Key | Holds |
 | --- | --- |
@@ -1878,7 +2660,8 @@ The object has exactly these thirteen keys:
 | `receive` | `{afGain, ssqlThresh, amsqThresh, fmsqThresh}`, each `{min, max, step}` for the slice setting of that name, as the desktop's own control holds it: `afGain` 0 to 100 in the AF slider's units, `ssqlThresh` 0 to 100 in the SQL slider's units, `amsqThresh` and `fmsqThresh` -160 to 0 dB; every step 1 |
 | `meters` | The gauges an app draws (below) |
 | `board` | The radio (below) |
-| `bandPlans` | `[{id, name, default, segments: [{lowHz, highHz, label, licence, colour}]}]`: every bundled plan, `id` its file's name (`arrl-us`), `default` true on ARRL (US) alone; `licence` lists the licence classes (`E,G`), empty for a beacon or no transmit |
+| `bands` | `[{id, label}]`: the desktop's per-pan BAND grid, in its order (160, 80, 60, 40, 30, 20, 17, 15, 12, 10, 6, WWV); `id` is the band as `slice.selectBand` takes it (0 for 160 m to 10 for 6 m, 12 for WWV) and `label` is the button's text. The desktop draws its grid from the same table, so the two cannot differ |
+| `bandPlans` | `[{id, name, default, segments: [{lowHz, highHz, label, licence, lowestClass, colour}]}]`: every bundled plan, `id` its file's name (`arrl-us`), `default` true on ARRL (US) alone; `licence` lists the licence classes (`E,G`), empty for a beacon or no transmit; `lowestClass` is the lowest class the segment allows, as the desktop's band-plan strip names it after the label (`PHONE General`): `Tech` when `licence` holds T, else `General` when it holds G, `Extra` when it is exactly `E`, and empty otherwise |
 | `palettes` | `[{id, name, stops: [{at, colour}]}]`: the waterfall palettes, `id` the desktop's palette number, `at` from 0 to 1 to three places, lowest first. The Custom palette is each computer's own and is not listed |
 | `sliceColours` | `[colour]`: slice A's colour first, one for each slice the radio allows |
 | `tools` | `[{id, label, where, offered}]`: the desktop's Tools menu in its order, `where` `station` (works at the Core) or `both`; MIDI Mapping and Macro Buttons are not listed |
@@ -2011,10 +2794,10 @@ computer, never sent). `classifySettingsKey` (`SettingsScope.cpp`) decides:
 | 3. whole key | `PingTimeOutHost` | station |
 | 3. whole key | `RemoteMoxTimeOutEnabled` | station |
 | 3. whole key | `RemoteMoxTimeOutSeconds` | station |
+| 3. whole key | `RxOnly` | station |
 | 3. whole key | `DisableHfPa` | operatorLocal |
 | 3. whole key | `ExtendedTxAllowed` | operatorLocal |
 | 3. whole key | `PreventTxOnDifferentBandToRx` | operatorLocal |
-| 3. whole key | `RxOnly` | operatorLocal |
 
 <!-- /surface -->
 
@@ -2041,11 +2824,55 @@ computer, never sent). `classifySettingsKey` (`SettingsScope.cpp`) decides:
   client puts that value back. It goes to the session that wrote, and to
   no other.
 
+A `settings.write` that would disturb another device (the several-devices
+design's section 7.1 list, section 7.6 here) is held as section 7.3 says:
+`settings.reject` with the reason "Waiting for you to confirm." and the
+Core's value, then a `confirm.request` with `forSettingsKey`; its proceed
+carries `settingsKey` and `value` as its readback (section 7.5). A
+`settings.remove` returns its key to the default, live, so it is checked
+exactly as a write of the default is: held and asked the same way, with
+`change.to` "Default", and its proceed carries `settingsKey` alone as its
+readback, since the key is gone.
+
+A slice's own keys, `Slice<N>/...`, are written and removed only by the
+device that owns slice N (the several-devices design, ruling 5.9). From
+any other device, and for an id no live slice holds, they get
+`settings.reject` with the Core's value and the reason "That slice belongs
+to <the owner's name>. It can be changed only there." ("the Core" when
+nobody owns it).
+
 The station refuses a write to a key outside the station scope ("Each app
 keeps this setting itself; the Core does not store it."), to another radio's `hardware/<mac>/` keys ("These settings
 are for a radio this Core is not connected to."), an out-of-range
 `SwrProtectionLimit` ("Choose an SWR protection limit from 1.0 to 5.0."), and transmit-side keys on a receive-only
-station.
+station ("Transmit configuration is unavailable on this receive-only
+Core."). At `transmitSettingsVersion` 1 a receive-only station takes the
+DSP > Options TX keys (`DspOptions<Setting><Mode>Tx`,
+`StationServer::isTransmitSettingKeyAcceptedOffAir`) while its radio is off
+the air, and refuses a write or remove of one while it is on the air ("The
+radio is on the air. Try again when it stops."), handing back its own
+value. At `transmitSettingsVersion` 5 the same holds for Setup >
+Transmit > Power's SWR Protection keys (`SwrProtectionEnabled`,
+`SwrProtectionLimit`, `SwrTuneProtectionEnabled`, `TunePowerSwrIgnore`,
+`WindBackPowerSwr`) and External TX Inhibit keys
+(`TxInhibitMonitorEnabled`, `TxInhibitMonitorReversed`), on any peer. A
+value the page's own control cannot hold is refused with the Core's value
+handed back: `TunePowerSwrIgnore` outside 5 to 50 ("Choose a tune power
+to ignore from 5 to 50 W."), a box that is not `True` or `False` ("The
+Core expected this box to be on or off."). A taken SWR Protection key, or
+its removal, applies to the Core's SWR protection at once (a removal
+returns the default: off, limit 2.0, tune power to ignore 35 W). A taken
+External TX Inhibit key is stored on the Core, whose TX inhibit gate
+follows it (the receiver and transmit gaps plan, Task 13). At
+`transmitSettingsVersion` 6 the same off-air rule holds for Setup > PA's
+keys, `hardware/<mac>/pa/...` (the PA profiles: the profile list
+`pa/profile/_names`, each profile `pa/profile/<name>`, and the active
+profile `pa/profile/active`) and `hardware/<mac>/paCalibration/...` (the
+PA forward-power table, `boardClass` and `calPoint1` to `calPoint10`),
+from a peer at agreed minor 11. A taken key, or its removal, applies to
+the Core's PA profiles or calibration at once, and a window reloads its
+copies of both when those keys change. The rest of the transmit-side
+hardware keys stay refused.
 
 ### 8.2 Keys the Core owns by code
 
@@ -2087,7 +2914,10 @@ success), `affected` (the object keys the command changed) and, for
 commands that return data, `values`, a list of property entries. Every
 `command.result`, including a later one (a PureSignal action's later
 phases, a sample-rate change answered on a later turn), goes to the session
-that sent the `command.invoke`, and to no other. A file a device is
+that sent the `command.invoke`, and to no other. Each client counts its
+own ids, so two devices may use the same `id` at once: the station tells
+their commands apart by the session that sent each, never by `verb` and
+`id` alone. A file a device is
 sending with `dspAssets.beginImport` belongs to that device's session: it is
 cancelled when that session ends, and another device leaving never touches
 it. For the
@@ -2121,6 +2951,7 @@ refused.
 | `requestSliceSampleRate` | `sliceId` i64, `rateHz` i64 | none | 0 | 0 |
 | `addSliceOnPan` | `panId` utf8 | none | 0 | 0 |
 | `setActiveSliceById` | `sliceId` i64 | none | 0 | 0 |
+| `slice.selectBand` | `sliceId` i64, `band` i64 | `bandSelectVersion` | 1 | 11 |
 | `requestStreamCtunPinned` | `sliceId` i64, `pinned` bool | `remoteCtunVersion` | 1 | 2 |
 | `requestStreamCentre` | `sliceId` i64, `centreHz` f64 | `remoteCtunVersion` | 1 | 2 |
 | `configureTgxl` | `host` utf8, `port` i64 | `remoteTgxlConfigVersion` | 1 | 4 |
@@ -2134,6 +2965,9 @@ refused.
 | `setPgxlNetwork` | `dhcp` bool, `address` utf8, `netmask` utf8, `gateway` utf8 | `remotePgxlControlVersion` | 3 | 11 |
 | `savePgxlSettings` | none | `remotePgxlControlVersion` | 3 | 11 |
 | `readPgxlSettings` | none | `remotePgxlControlVersion` | 3 | 11 |
+| `setPgxlOperate` | `on` bool | `remotePgxlControlVersion` | 4 | 11 |
+| `scanPgxlLan` | none | `remotePgxlControlVersion` | 4 | 11 |
+| `setPgxlAddress` | `host` utf8, `port` i64 | `remotePgxlControlVersion` | 4 | 11 |
 | `setTgxlName` | `name` utf8 | `remoteTgxlControlVersion` | 1 | 11 |
 | `setTgxlNetwork` | `dhcp` bool, `address` utf8, `netmask` utf8, `gateway` utf8 | `remoteTgxlControlVersion` | 1 | 11 |
 | `saveTgxlSettings` | none | `remoteTgxlControlVersion` | 1 | 11 |
@@ -2141,10 +2975,22 @@ refused.
 | `setTgxlAntenna` | `port` i64 | `remoteTgxlControlVersion` | 2 | 11 |
 | `setTgxlOperate` | `on` bool | `remoteTgxlControlVersion` | 2 | 11 |
 | `setTgxlBypass` | `on` bool | `remoteTgxlControlVersion` | 2 | 11 |
+| `moveTgxlRelay` | `relay` i64, `direction` i64 | `remoteTgxlControlVersion` | 4 | 11 |
+| `scanTgxlLan` | none | `remoteTgxlControlVersion` | 4 | 11 |
+| `setTgxlAddress` | `host` utf8, `port` i64 | `remoteTgxlControlVersion` | 4 | 11 |
+| `setTunePowerForTxBand` | `watts` i64 | `transmitSettingsVersion` | 2 | 11 |
+| `txProfile.select` | `name` utf8 | `transmitSettingsVersion` | 3 | 11 |
+| `txProfile.save` | `name` utf8 | `transmitSettingsVersion` | 3 | 11 |
+| `txProfile.delete` | `name` utf8 | `transmitSettingsVersion` | 3 | 11 |
+| `rade.resetVocoder` | none | `transmitSettingsVersion` | 3 | 11 |
 | `configureRfKit` | `host` utf8, `port` i64 | `remoteRfKitControlVersion` | 2 | 11 |
 | `disconnectRfKit` | none | `remoteRfKitControlVersion` | 2 | 11 |
 | `setRfKitEnabled` | `enabled` bool | `remoteRfKitControlVersion` | 2 | 11 |
 | `resetRfKitError` | none | `remoteRfKitControlVersion` | 3 | 11 |
+| `setRfKitOperate` | `on` bool | `remoteRfKitControlVersion` | 4 | 11 |
+| `setRfKitAntenna` | `port` i64 | `remoteRfKitControlVersion` | 4 | 11 |
+| `setRfKitTciMode` | none | `remoteRfKitControlVersion` | 4 | 11 |
+| `setRfKitAddress` | `host` utf8, `port` i64 | `remoteRfKitControlVersion` | 4 | 11 |
 | `setStationTci` | `enabled` bool, `port` i64 | `stationTciVersion` | 1 | 11 |
 | `setTxInterlockPolicy` | `mode` i64, `graceMs` i64, `swrGateEnabled` bool, `swrGateMax` f64 | `accessoryDataVersion` | 1 | 11 |
 | `setPgxlPowerCap` | `enabled` bool, `watts` i64 | `accessoryDataVersion` | 1 | 11 |
@@ -2158,6 +3004,7 @@ refused.
 | `tx.tune` | `on` bool | `remoteTxVersion` | 1 | 11 |
 | `tx.twoTone` | `on` bool | `remoteTxVersion` | 1 | 11 |
 | `tx.keepalive` | `sequence` i64, `epoch` i64 | `remoteTxVersion` | 1 | 11 |
+| `setAlexTxAntenna` | `band` i64, `antenna` i64 | `radioHardwareVersion` | 6 | 11 |
 | `nnr.setDiagnostics` | `sliceId` i64, `testMode` i64, `outputMode` i64 | `nnrVersion` | 1 | 5 |
 | `nnr.resetTuning` | `sliceId` i64 | `nnrVersion` | 1 | 5 |
 | `nnr.tryAgain` | `sliceId` i64 | `nnrVersion` | 1 | 11 |
@@ -2182,6 +3029,7 @@ refused.
 | `notch.move` | `id` i64, `centreHz` f64, `widthHz` f64 | `notchControlVersion` | 1 | 5 |
 | `notch.setActive` | `id` i64, `active` bool | `notchControlVersion` | 1 | 5 |
 | `notch.delete` | `id` i64 | `notchControlVersion` | 1 | 5 |
+| `notch.addAtSlice` | `sliceId` i64 | `notchControlVersion` | 2 | 5 |
 | `devices.revoke` | `id` utf8 | `deviceAdminVersion` | 1 | 11 |
 | `station.rename` | `label` utf8 | `deviceAdminVersion` | 1 | 11 |
 | `station.acknowledgeKeyBackup` | none | `deviceAdminVersion` | 1 | 11 |
@@ -2189,6 +3037,9 @@ refused.
 | `pairing.open` | none | `pairingVersion` | 1 | 11 |
 | `pairing.close` | none | `pairingVersion` | 1 | 11 |
 | `session.leave` | none | `sessionHolderVersion` | 1 | 11 |
+| `confirm.proceed` | `id` i64, `choice` i64 | `sessionHolderVersion` | 1 | 11 |
+| `confirm.cancel` | `id` i64 | `sessionHolderVersion` | 1 | 11 |
+| `notice.takeBack` | `id` i64 | `sessionHolderVersion` | 1 | 11 |
 
 <!-- /surface -->
 
@@ -2205,9 +3056,48 @@ These command groups need a sentence beyond the table:
   choice never moves it. The station's own duties that exist once per
   radio (the FreeDV Reporter's frequency, TCI's per-slice broadcasts)
   follow the most recent choice by any device. `removeSlice`,
-  `setActiveSliceById`, `nnr.*` and `notch.add` naming another device's
-  slice are refused (section 7.3).
+  `setActiveSliceById`, `nnr.*`, `notch.add`, `notch.addAtSlice`,
+  `slice.selectBand`, `requestSliceSampleRate`, `requestStreamCentre` and
+  `requestStreamCtunPinned` naming a slice that is not the requester's are
+  refused (section 7.3).
 
+- **A slice's band buttons.** `slice.selectBand` (`sliceId`, `band`,
+  both `i64`; `bandSelectVersion` 1, agreed minor 11) does what a band
+  button of the desktop's per-pan BAND grid does for that slice: the Core
+  runs its own band change (`RadioModel::onBandButtonClicked`), so the
+  slice gets back the frequency, mode, filter and the rest it last had on
+  that band, or the band's starting frequency and mode on a first visit,
+  and saves what it leaves for the band it left. `band` is an `id` from
+  the catalogue's `bands` (section 7.4). A band the slice is already on
+  is accepted and changes nothing, as on the desktop. `accepted` names
+  the slice (`slice:<id>`) in `affected`; the change reaches it in the
+  next `delta`. The refusals: "That receiver is no longer on the Core."
+  (an unknown `sliceId`), "The Core has no band button for that band."
+  (a `band` the catalogue does not list), the desktop's own reason for a
+  locked slice ("Band 40m ignored: the slice is locked. Unlock it to
+  change bands."), and "The request to change band was not understood."
+  (arguments it does not take). The desktop offers every grid band on
+  every radio and changes band while the radio is on the air, so the
+  Core refuses neither. A peer below agreed minor 11 gets "Update this
+  app to change bands on this Core.", and a Core that sends
+  `bandSelectVersion` 0 answers "This Core cannot change bands for an
+  app."
+- **A notch at a slice.** `notch.addAtSlice` (`sliceId` `i64`;
+  `notchControlVersion` 2, agreed minor 5) does what the desktop's +TNF
+  button does for that slice: the Core puts a notch of 200 Hz
+  (`NotchModel::kDefaultNotchWidthHz`) at the slice's demodulated
+  frequency (the VFO, RIT and the DIGU/DIGL click-tune offset) moved by
+  the middle of its receive filter (Thetis TNFAdd with
+  notchSidebandShift), through `RadioModel::addTnfForSlice`, the one
+  function the desktop's button calls too. The add is `notch.add`'s, so
+  its rules and refusals are too (the notch control document): an
+  unknown `sliceId` is refused with "That receiver is not on this Core",
+  a second press on the same signal with "A notch already exists within
+  10 Hz", and arguments it does not take with "This notch change is not
+  one this Core understands.". An accepted result is `notch.add`'s:
+  `affected` `["notches"]` and the values `revision` and `id`. A peer
+  below agreed minor 5 gets "Update this app to change notches on this
+  Core.".
 - **The filter policy.** `setAlexBpfMode` sets one receive filter chain's
   filter policy (`chain` 0 or 1; `mode` 0 Auto, 1 Force filter, 2 Force
   bypass), the call the Core's own filter policy dialog makes on Apply.
@@ -2237,6 +3127,104 @@ These command groups need a sentence beyond the table:
   antenna on a tuner with no antenna switch or a port outside 1 to 3.
   The reasons are in
   [remote accessory control version 1](2026-09-23-remote-accessory-control-v1.md).
+- **The tuner's relays, Scan LAN and saved address.** `moveTgxlRelay`
+  (`relay` 0 C1, 1 L, 2 C2; `direction` -1 or 1) moves one matching relay
+  one step through the Core's tuner model, sending the line a local
+  window's relay bar sends on a mouse-wheel step; the tuner's report
+  arrives on `tuner` (`relayC1`, `relayL`, `relayC2`). `scanTgxlLan` has
+  the Core listen for Tuner Genius announcements for three seconds; its
+  `command.result` is sent when the window ends, with `values` holding
+  `devicesJson` (utf8, a JSON array of
+  `{"address","port","model","serial","nickname"}`). `setTgxlAddress`
+  (`host`, `port`) saves the tuner's address for the Core's radio without
+  dialling, with `configureTgxl`'s checks. None keys anything, so a
+  receive-only Core takes them, but each is refused while the radio is
+  on the air ("The radio is on the air. Try again when it stops."); the
+  nudge also with no tuner admitted. The reasons are in the remote
+  accessory control document.
+- **The amp's OPERATE, Scan LAN and saved address.** `setPgxlOperate`
+  (`on` bool) sends the Core's Power Genius the line a local window's
+  applet OPERATE sends, `operate=1` or `operate=0`, through the Core's own
+  connection; `accepted` means the line left, and the amp's report arrives
+  on `amplifier` (`state`, `deviceState`, `operate`). `scanPgxlLan` and
+  `setPgxlAddress` (`host`, `port`) are `scanTgxlLan` and
+  `setTgxlAddress` for the Power Genius: Power Genius announcements only,
+  `values` `devicesJson` when the three seconds end, and `PGXL_ManualIp`
+  and `PGXL_ManualPort` saved without dialling with `configurePgxl`'s
+  checks. None keys anything, so a receive-only Core takes them, but each
+  is refused while the radio is on the air ("The radio is on the air. Try
+  again when it stops."); `setPgxlOperate` also while the Core is not
+  connected to the amp. A `property.write` of `amplifier` `operate` stays
+  refused. The reasons are in the remote accessory control document.
+- **The RF-Kit's OPERATE, antenna, TCI mode and saved address.**
+  `setRfKitOperate` (`on` bool), `setRfKitAntenna` (`port` i64, internal
+  antenna 1 to 4) and `setRfKitTciMode` (no arguments) send the Core's
+  admitted RF2K-S the REST request a local window's applet OPERATE, ANT
+  button and RF-Kit page's "Set amp to TCI mode" send (`PUT /operate-mode`,
+  `PUT /antennas/active`, `PUT /operational-interface`); `accepted` means
+  the request left, and the amp's report arrives on `rfkit` (`operate`,
+  `activeAntennaNumber`, `operationalInterface`). An antenna the amp lists
+  as disabled, or does not list once it has listed its antennas, is
+  refused. `setRfKitAddress` (`host`, `port`) saves `RfKit_ManualIp` and
+  `RfKit_ManualPort` without dialling with `configureRfKit`'s address
+  checks. None keys anything, so a receive-only Core takes them, but each
+  is refused while the radio is on the air ("The radio is on the air. Try
+  again when it stops."); the first three also while the Core is not
+  connected to the amp. The reasons are in the remote accessory control
+  document.
+- **The Tune Power slider.** `setTunePowerForTxBand` (`watts`, 0 to 100,
+  0 to 99 on a Hermes Lite 2) does what the TX applet's Tune Power slider
+  does in a local window: it sets the tune power for the band the Core
+  transmits on and sets the tune drive source to the tune slider, so TUNE
+  uses that power. The Core reports both on `transmit`
+  (`tunePowerForTxBand`, `tuneDrivePowerSource`). It keys nothing, so a
+  receive-only Core takes it, but it is refused while the radio is on the
+  air ("The radio is on the air. Try again when it stops."), outside the
+  tune power range ("Choose a tune power from 0 to 100 W.", or "Choose a
+  tune power from 0 to 99." on a Hermes Lite 2), and when not understood
+  ("The request to change the tune power was not understood."). A peer
+  below agreed minor 11 gets "Update this app to change the tune power on
+  this Core."
+- **TX profiles and the RADE vocoder.** `txProfile.select` (`name`)
+  applies the named TX profile on the Core as the TX applet's profile
+  combo does in a local window: its settings become the Core's transmit
+  settings and it becomes the active profile. `txProfile.save` (`name`)
+  saves the Core's current transmit settings under the name, as Setup >
+  Audio > TX Profile's Save... does: a new name adds a profile, the name
+  of an existing one overwrites that profile only, and a comma in the name
+  becomes `_`. `txProfile.delete` (`name`) deletes the profile; deleting
+  the active one makes another active, as locally. The Core reports its
+  active profile and list on `transmit` (`activeTxProfile`,
+  `txProfilesJson`). `rade.resetVocoder` (no arguments) clears the RADE
+  transmit vocoder of the Core's active slice, as the RADE applet's Reset
+  vocoder does. None keys the radio, so a receive-only Core takes them,
+  but each is refused while the radio is on the air ("The radio is on the
+  air. Try again when it stops."). The other refusals: "There is no
+  transmit profile called <name>." (select and delete), "Give the transmit
+  profile a name." (save with a blank name), "The Core has no radio to
+  keep transmit profiles for." (save before the Core has a radio), "It is
+  not possible to delete the last remaining TX profile." (the local page's
+  own words), "RADE is not running on the Core's active slice." (reset
+  with no RADE channel), "The request for the transmit profile was not
+  understood." and "The request to reset the RADE vocoder was not
+  understood." A peer below agreed minor 11 gets "Update this app to
+  change transmit profiles on this Core."
+- **PureSignal arming.** `ps3.single` (Single Cal), `ps3.automatic`
+  (Automatic, and PS-A on), `ps3.applyCurrent` (Apply current correction)
+  and `ps3.restoreCorrection` (Restore a saved correction) arm PureSignal
+  on the Core as a local window's PureSignal controls do. Arming keys
+  nothing: it sets the calibration engine's state, and the correction runs
+  only while the radio transmits. A Core at `transmitSettingsVersion` 7
+  takes them from a peer at agreed minor 11 while its radio is off the air
+  and refuses them while it is on the air ("The radio is on the air. Try
+  again when it stops."). Any other peer gets "PureSignal cannot be run
+  from a remote window yet." as before, and so does `ps3.twoTone` with
+  `enabled` true from every peer: the two-tone test keys the radio and
+  waits for remote transmit. `ps3.off`, `ps3.twoTone` with `enabled` false
+  and `ps3.saveCorrection` are taken as before. A taken action answers
+  `accepted`, then `completed` or `failed` with the Core's reason (section
+  9.1, the `phase` value), and the Core's `pureSignal` and
+  `pureSignalSettings` objects follow in a `delta`.
 - **One TCI switch.** The Core keeps one TCI switch and port for its own
   TCI server (`setStationTci`, the `stationTci` object). A desktop window
   connected to a Core with `stationTciVersion` 1 shows that switch and
@@ -2288,6 +3276,26 @@ These command groups need a sentence beyond the table:
   Core was not understood.". From a peer without `sessionHolderVersion` 1
   it is refused as a verb the station does not route is (section 9.2),
   and the connection stays up.
+- **Answering the Core's questions** (`sessionHolderVersion` 1, iPhone
+  app plan Task 74; section 7.5). `confirm.proceed {id, choice}` applies
+  the change a `confirm.request` held (`choice` -1 when the kind has none,
+  a choice's `choice` for a take); `confirm.cancel {id}` drops it and
+  changes nothing; `notice.takeBack {id}` asks a `receiverTaken` or
+  `sliceTaken` notice's take the other way, answered "Waiting for you to
+  confirm." with `values` `phase` `needsConfirmation` and a
+  `confirm.request`. A missing or renamed argument is refused, "The Core
+  could not read this request."; an id that names no open question, "That
+  question is no longer open. Make the change again.". From a peer without
+  `sessionHolderVersion` 1 each is refused as a verb the station does not
+  route (section 9.2).
+- **Receiver requests from several devices** (section 7.5).
+  `requestStreamCtunPinned` from a device that does not anchor the
+  receiver is refused; `requestStreamCentre` from the anchor that would
+  leave another device's slice outside is held and asked, from another
+  device it takes the panadapter to a free receiver. `addSlice`,
+  `addSliceOnPan` and those refused because every receiver (or slice) is
+  in use name the devices holding them, and a device with the feature is
+  then asked to take one.
 
 ### 9.2 Unknown verbs
 
@@ -2313,7 +3321,24 @@ is never a command. The client drops a message whose `sequence` is not
 higher than the last, or whose `sampledElapsedMs` went backwards, and
 ignores host fields unless the agreed minor is at least 10 and the version
 at least 2, and receiver fields unless the minor is at least 11 and the
-version at least 3. A message over 16 KiB is refused.
+version at least 3, and the radio section's PA readings and link quality
+unless the minor is at least 11 and the version at least 4. A message
+over 16 KiB is refused.
+
+At version 4 (remote-window parity Task 6) the radio section carries, each
+absent when the radio has none or has not reported it and all absent while
+the radio is not connected: `paVolts` (the PA drain volts, user ADC0),
+`supplyVolts`, `paCurrentAmps` and `paTemperatureCelsius` (the Core's
+`RadioModel::paReadings()`), `packetLossPercent` (lost over received plus
+lost in the last 5 seconds, from the sequence errors Thetis counts, one
+per mismatch), `jitterMs` (RFC 3550 section 6.4.1 interarrival jitter of
+the lowest active receive stream), `packetGapMs` (the longest interval
+between two datagrams from the radio in the last second), `sampleRateHz`
+and `udpPacketsSeen` (datagrams from the radio since it connected). Volts,
+amps, jitter and gap are finite and not negative, the loss is 0 to 100, a
+temperature is not below absolute zero, and the counts are whole numbers.
+A window shows each as the Core's, and one that is absent or out of date
+as unavailable, never 0.
 
 <!-- surface:telemetry -->
 <!-- Generated by scripts/render-link-tables.py from tests/data/link/v1/surface.json. Do not edit by hand. -->
@@ -2325,6 +3350,7 @@ Message kind `station.metrics.v1`.
 | 1 | 3 | 15 | `audio.active`, `audio.contextGeneration`, `audio.encodeFailuresPerSecond`, `audio.encodedPacketsPerSecond`, `audio.sendAcceptedPerSecond`, `audio.sendRejectedPerSecond`, `audio.sourceDropsPerSecond`, `audio.sourceFramesPerSecond`, `radio.connected`, `radio.rttAgeMs`, `radio.rttMs`, `radio.rxMbps`, `radio.txMbps`, `sampledElapsedMs`, `sequence` |
 | 2 | 10 | 22 | `host.hottestZoneCelsius`, `host.hottestZoneName`, `host.memoryAvailableKiB`, `host.memoryTotalKiB`, `host.processCpuPercent`, `host.processResidentKiB`, `host.systemCpuPercent` |
 | 3 | 11 | 26 | `receivers[].inputDelayMs`, `receivers[].loadPercent`, `receivers[].skippedInputMs`, `receivers[].sliceId` |
+| 4 | 11 | 35 | `radio.jitterMs`, `radio.paCurrentAmps`, `radio.paTemperatureCelsius`, `radio.paVolts`, `radio.packetGapMs`, `radio.packetLossPercent`, `radio.sampleRateHz`, `radio.supplyVolts`, `radio.udpPacketsSeen` |
 
 <!-- /surface -->
 
@@ -2336,12 +3362,33 @@ specified in
 [remote media control version 1](2026-09-20-remote-media-control-v1.md);
 the table lists the keys each operation carries as the code builds and
 checks them. A whole `media.control` message over 128 KiB is refused. The
-station accepts media control only from the session media goes to, after
-`snapshot.complete`, when media is available. While several devices are on
-a Core (section 5.1), media and telemetry go to one of them: the first let
-in while no other holds them. Another device is told they are off (section
-6.3) and its media control is ignored, so media never goes to two sessions
-at once; each device having its own is a later version's. The `subscribe` fields that
+station accepts media control from each admitted session, for its own
+media, after `snapshot.complete`, when media is available (iPhone app plan
+Task 76; the several-devices design, ruling 9.1). Every admitted device has
+its own media: its own media connection, display endpoints (at most 8),
+receiver streams (at most 4) and headphones mix, and one device's
+`media.control` never reaches another's. A device subscribes displays, and
+asks for receiver streams, only for its own slices: a `subscribe` naming
+another device's slice gets an `allocation-result` (or `rejected`) "That
+slice belongs to another device.", and a `receiver-audio` naming one is
+answered as a slice that is not there (`slice-removed`). When a slice
+passes to another device, the old owner's displays on it retire as a
+removed slice's do (reason "slice removed", on the `allocation-result`
+for a budget-aware app, else `rejected`), and its receiver stream on it
+stops as `slice-removed`: that device's view has destroyed the slice. A
+receiver's
+spectrum is computed once for everyone watching it: two devices' pans on
+one receiver share its engine, which runs at the largest size and highest
+rate any of them was granted, and a grant limited by that engine says
+`sharedEngine` as it does between one device's pans. Each device hears its
+own slices: its main audio (the speakers' mix, or its whole program for an
+app without the headphones mix) and its headphones mix sum only its own
+slices, each with its own gain, pan, mute and route; the Core's own output
+plays only the station device's slices. A device that leaves ends its own
+media and no other's. Telemetry (`station.metrics.v1`) goes to every
+session that negotiated it, each on its own sequence. **Transmit joins
+here:** the transmit holder's mix carries the transmit monitor once remote
+transmit exists (Task 36). The `subscribe` fields that
 come with `displayExtrasVersion` (`peakBlobs`, `activePeakHold`,
 `noiseFloor`, `waterfallLevels`, `normalize`, `calibrationOffsetDb`,
 `averageTimeMs`, `waterfallAverageTimeMs`), their ranges and what the Core sends for them are
@@ -2358,6 +3405,7 @@ Client to station:
 | --- | --- | --- | --- | --- |
 | `audio` | `remoteMediaVersion` | `connectionId`, `enabled`, `op`, `revision` | `profile` with audioProfileVersion, remoteAudioStatusVersion | none |
 | `candidate` | `remoteMediaVersion` | `candidate`, `connectionId`, `mid`, `op` | none | none |
+| `clarity-retune` | `displayExtrasVersion` | `connectionId`, `endpointId`, `op` | none | none |
 | `clock-probe` | `audioClockVersion` | `connectionId`, `id`, `op`, `t0` | none | none |
 | `description` | `remoteMediaVersion` | `connectionId`, `op`, `sdp`, `type` | none | none |
 | `headphones-audio` | `headphonesMixVersion` | `connectionId`, `enabled`, `op`, `profile`, `revision` | none | none |
@@ -2413,6 +3461,22 @@ runs the same deadline on its side.
   socket before any frame is read.
 - `media.control` messages are capped at 128 KiB and `station.metrics.v1`
   at 16 KiB, when encoded and when decoded.
+- Openings (connections whose TLS or upgrade has not finished) are
+  counted apart from connections: at most 64 at once
+  (`StationServer::kMaxUnfinishedOpenings`) and 2 from one address or IPv6 /64
+  (`kMaxHandshakesPerAddress`, counted as below), each until it opens, is
+  refused or reaches the 10 s opening deadline (section 2). A new
+  connection at either limit closes the oldest unfinished opening (from
+  its own address first, then the oldest of all) and takes its place, so
+  openings that never finish do not keep a device out, and a client that
+  redials while its own abandoned dials are still opening gets its newest
+  dial through. The total is 64, not the 24 connections below, because it
+  is what a flood must fill to push a real device's opening out: with 2
+  per address that takes 64 connects from at least 32 addresses or /64s
+  within the device's own opening time. Each opening costs one file
+  descriptor; `nereusd` runs under the default limit of 1024
+  (`packaging/nereusd.service.in` sets no `LimitNOFILE`), so 64 openings
+  and the 24 connections stay far below it.
 - The station accepts at most 24 connections at once
   (`kMaxConcurrentPeers`), counting every socket, signed in, connecting or
   pairing: four devices each reconnecting with an old socket not yet
@@ -2461,7 +3525,10 @@ non-empty string; an empty one is refused like any mistyped key.
 | Message the station cannot decode (section 13) | `session.end` "The Core could not read a message from this app." | false | `protocolError` |
 | Out-of-order handshake (section 5.1) | `session.end` | false | `protocolError` |
 | The same device connected again (section 5.1): its older connection | `session.end` "This device connected again." | false | `sameDevice` |
-| Every place on the Core is taken (section 5.1) | `session.end` "The Core already has four devices connected." | true | none |
+| Every place on the Core is taken (section 5.1), a device that declared `sessionHolder` | `session.end` "The Core already has four devices connected." | true | none |
+| Every place on the Core is taken (section 5.1), an older window | `session.end` "The Core is full. Update NereusSDR to take a device's place, or try again later." | true | none |
+| A window without the several-devices feature, with no slice for it at sign-in (section 7.5) | `session.end` "All the radio's slices are in use. Try again when another device closes one." or "All the radio's receivers are in use. Try again when another device frees one." | true | none |
+| Such a window's last slice taken by another device (section 7.5) | `session.end` "<taker's name> took the receiver this app was using. Update NereusSDR to share the Core." | false | `takenOver` |
 | Connection limit reached | `session.end` | true | none |
 | Connect deadline expired | `session.end` | true | none |
 | Heartbeat timeout | `session.end` | true | none |
@@ -2486,8 +3553,9 @@ not verify for the certificate the connection presented, is refused and
 never trusted silently. A new certificate whose binding verifies is
 accepted without a question, whatever pin was saved.
 
-No end the station sends today carries `takenOver`: the fifth device's
-takeover, which will, is a later version's. The takeover and version
+The one end the station sends today with `takenOver` is an older
+window's last slice taken (section 7.5), with its own words above; the
+fifth device's takeover, which will also carry it, is a later version's. The takeover and version
 reasons are worded in one place,
 `src/core/session/SessionEndReasons.{h,cpp}`: "Another app at
 *address:port* connected to the Core and took over. Connect again to take
@@ -2545,11 +3613,12 @@ its minor and its capabilities, as before.
 | Message | Goes to |
 | --- | --- |
 | `command.result`, `property.result`, `settings.reject` | the session that asked, only |
-| `confirm.request`, `notice` (when the station sends them) | the one device they are for |
+| `confirm.request`, `notice` | the one device they are for, only with `sessionHolderVersion` 1; a notice for an away device waits for its return (section 7.5) |
 | `delta`, `object.create`, `object.destroy` | every session holding the object; a device's own write is not echoed to it (section 7.3). A `slice:<id>` only to the session of the device that owns it; a `marker:<id>` to every session with `sessionHolderVersion` 1 but that one (section 7.1) |
 | `settings.value` | every session, with the writer's `origin` (section 8.1) |
 | a write's readback of its side effects on the written object | the writer, only (section 7.3) |
-| `capabilities` | each session its own |
+| `capabilities` | each session its own, with its own share of the display budget (section 6.4) |
+| `media.control`, media, `station.metrics.v1` | each session its own (section 11) |
 
 The desktop client redials on the schedule 1, 2, 5, 10, 30 and 60 s, then
 stays at 60 s (`kReconnectBackoffSteps` in `StationClient.cpp`), and starts
@@ -2753,6 +3822,7 @@ maximum also equals `kMaximumSpectrumDisplayFramesPerSecond` in
 | --- | --- | --- | --- |
 | `clientInboundMessageBytes` | 8388608 | bytes | StationClient::kMaxIncomingMessageBytes |
 | `clientReconnectBackoffMs` | 1000, 2000, 5000, 10000, 30000, 60000 | ms | StationClient.cpp kReconnectBackoffSteps x StationClient::kDefaultReconnectBackoffUnitMs |
+| `confirmExpiryMs` | 60000 | ms | ConfirmStep::kExpiryMs |
 | `connectDeadlineMs` | 30000 | ms | kStationHandshakeDeadlineMs |
 | `deltaFlushMs` | 50 | ms | StationServer::kDefaultDeltaFlushMs |
 | `endpointFps` | 1 to 60 | frames per second | DaemonMediaController.cpp handleSubscribe literal 1; kMaximumSpectrumDisplayFramesPerSecond |
@@ -2850,6 +3920,32 @@ A number the station's DSP measures is written `"$within:<t>:<v>"`, with
 the tolerance stated, never `"$any"`; a counter whose value depends on
 timing is `"$int"`, not pinned.
 
+**JSON inside a string.** Where the station sends a string that holds
+JSON (a `utf8` property such as `connectedDevices`' `listJson`), a
+fixture may write `{"$json": <expectation>}` in the string's place: an
+object whose one key is `"$json"`. It matches a string that parses as
+exactly one JSON value (RFC 8259: an object, an array, a string, a
+number, `true`, `false` or `null`, with whitespace around it allowed),
+and that value must match `<expectation>` by this section's rules: the
+placeholders above stand inside it, a `{"$json": ...}` may nest inside
+it, object keys match in any order and arrays in order and length. A
+name recorded inside it is recorded for the whole fixture run, so a
+`"$ref:<name>"` inside or outside a string refers to it. A value that is
+not a string fails as a wrong type; a string that does not parse, or
+holds nothing or more than one value, fails with the fixture, the step,
+the path and "not JSON" (the station's runner reports
+`<fixture>: step <n> (station <type>): <path>: not JSON (<why>), got
+<the string>`); an object holding `"$json"` beside another key is a
+malformed fixture. The path inside the string is the string's path
+followed by `($json)`, as `$.properties[0].value($json)[1].state`.
+`{"$json": ...}` stands only in a station message: in a client message
+it is a malformed fixture, and neither runner fills one there. In a
+fixture for the app, its expectation holds only what a station message
+there may hold (section 16.3), and an app's runner sends it to its
+client as the string of the expectation filled as that section fills a
+station message, written as compact JSON (no whitespace, keys in any
+order).
+
 Matching is by value: objects must have the same keys and arrays the same
 length; numbers compare by value, so `1` and `1.0` are equal. A name is
 recorded once per fixture run; a later placeholder with the same name
@@ -2876,9 +3972,10 @@ again and the two JSON objects compare equal after parsing, key order
 ignored. The fixtures cover every message kind in each direction it
 travels: eleven from the client (`hello`, `auth.request`, `command.invoke`,
 `media.control`, `property.write`, `settings.write`, `settings.remove`,
-and `pair.start`, `pair.spake`, `pair.confirm`, `pair.fail`) and twenty
-from the station (the sixteen before pairing, and `pair.accept`,
-`pair.spake`, `pair.confirm`, `pair.fail`), with a `delta` carrying `"nan"` and `"-inf"`
+and `pair.start`, `pair.spake`, `pair.confirm`, `pair.fail`) and
+twenty-two from the station (the sixteen before pairing, `pair.accept`,
+`pair.spake`, `pair.confirm`, `pair.fail`, and `confirm.request` and
+`notice`, section 7.5), with a `delta` carrying `"nan"` and `"-inf"`
 (section 4.2). The client's `hello` has two fixtures: an older app's,
 without `majors` or `features`, and one declaring both; `auth.request` has
 three: a token, a device sign-in with its `device` block (section 3.5), and
@@ -2897,7 +3994,8 @@ a `hello` declaring a feature version that is not a whole number, a
 `hello` whose `identity` is not an object, an `auth.request` whose `device`
 lacks `signature`, one whose `shortName` is not a string, a `session.end` with an empty `code`, a `pair.start`
 whose `mode` is neither `lan` nor `code`, a `pair.spake` step outside 0 to
-3, a `pair.fail` whose `retryAfterMs` is not a whole number, and an
+3, a `pair.fail` whose `retryAfterMs` is not a whole number, a `notice`
+whose `takeBack` is not a boolean, and an
 unknown `type`. The pairing fixtures carry placeholders for keys, shares
 and boxes; the live exchange is proved by `nereus_pairing_peer` (section
 3.6).
@@ -3032,7 +4130,9 @@ nothing an app's runner could not send its client:
 
 **Filling a station message (an app's runner).** An app's runner sends
 its client each station message with `"$string"` as `""`, `"$int"` as `0`,
-`"$ref:<name>"` as the recorded value and `"$within:<t>:<v>"` as `<v>`,
+`"$ref:<name>"` as the recorded value, `"$within:<t>:<v>"` as `<v>` and
+`{"$json": <expectation>}` as the compact JSON text of `<expectation>`
+filled by these same rules (section 16.1),
 except in the station `hello`:
 
 - `identity` is a test station identity the runner makes at run time (a
@@ -3103,7 +4203,7 @@ role.
 | Key | Meaning | Default |
 | --- | --- | --- |
 | `board` | the static radio's model: `"hermesLite2"`, a Hermes Lite 2 on Protocol 1, or `"ananG2"`, an ANAN-G2 on Protocol 2 (same MAC); only with `"radio": "static"` | `"hermesLite2"` |
-| `radio` | `"static"`: a model reporting a connected Hermes Lite 2 (MAC `AA:BB:CC:DD:EE:01`, or the `board` below) with no radio behind it, so nothing changes on its own; `"connectable"`: a model connected to the fake Protocol 1 radio, receive processing and all; PureSignal's readiness (`canActuate`) is off on a receive-only station from the moment the station makes the radio receive-only, and the runner waits for each slice's signal readings to leave the no-reading value before the client attaches | `"static"` |
+| `radio` | `"static"`: a model reporting a connected Hermes Lite 2 (MAC `AA:BB:CC:DD:EE:01`, or the `board` below) with no radio behind it, so nothing changes on its own; `"connectable"`: a model connected to the fake Protocol 1 radio, receive processing and all; a receive-only station permits PureSignal (`transmitSettingsVersion` 7), so the runner waits for PureSignal's readiness (`canActuate`) to come on, and it waits for each slice's signal readings to leave the no-reading value before the client attaches | `"static"` |
 | `slices` | slices before the client connects | 1 |
 | `panadapters` | panadapters before the client connects | 0 |
 | `coreAccessories` | the Core owns its accessories: the `tuner`, `amplifier`, `rfkit`, `accessoryData` and `accessorySettings` objects and the accessory commands | false |
@@ -3114,7 +4214,11 @@ role.
 | `clientAnswersPings` | the client's transport answers the station's pings | true |
 | `otherClients` | other clients the runner plays beside its own, each signing in as a paired device (above) | none |
 | `otherConnections` | other clients connected before this one, still connecting and sending nothing; 24 puts the station at its connection limit | 0 |
+| `lanScanWindowMs` | how long the Core's `scanTgxlLan` and `scanPgxlLan` listen, in milliseconds from 1; the scan fixtures set 150, since their answer is matched as any text | 3000 |
 | `token` | `"active"`: a Core upgraded from before paired devices, with a pairing token (made at run time) that `"$ref:token"` names; `"none"`: a new Core, without one (section 3.3) | `"active"` |
+| `receivers` | iPhone app plan Task 74: the static radio's receivers, 192 kHz wide each, sized before its slices are made, so slices bind to them and the rules of section 7.5 apply; only with `"radio": "static"` | none |
+| `maxSlices` | with `receivers`, the slice cap | 5 |
+| `alexRxAntennas` | iPhone app plan Task 75: the static radio's receive antenna per band, 14 numbers 1 to 3 in `Band` order (160 m to XVTR), and band tracking on (the per-band antenna switch of section 7.6) as though a radio were connected; only with `"radio": "static"` | none (no band tracking) |
 | `otherPairedDevices` | that many devices besides the runner's own are paired before the client connects, their keys made at run time and never written in a fixture; their ids are `"$ref:device:1"` onwards; an app's runner ignores it | 0 |
 | `pairedDevice` | the station runner's own device (its key made at run time, the one `"$device:<case>"` signs with) is paired with the station before the client connects; an app's runner ignores it, as it ignores all of `stationSetup`, and accepts its app's key | false |
 
@@ -3143,8 +4247,8 @@ same on every machine.
 | `version-app-two-ahead` | An app supporting `[2, 3]` that sends major 3 gets `session.end` "This Core runs link version 1 and this app runs version 3. Update the Core.", `retryable` false, `code` `linkVersion` |
 | `lower-minor` | A `hello` with minor 4 agrees minor 4: the capabilities without the minor-11 entries, and a minor-11 verb refused with a plain reason |
 | `same-device-again` | The device signs in again on another connection (`otherClients` `"self"`): the older connection ends with `session.end` "This device connected again.", `retryable` false, `code` `sameDevice`, and the newer one is let in with no question. Runs on the station alone |
-| `older-window` | A window that signs in by key but predates several devices is let in first and owns the Core's slice; when a device with the feature is let in with a slice of its own, the older window is sent no marker for it, only the `devices` list moving. Four devices then fill the Core; a window from before paired devices (the token, no features) is let through `auth.result` and then turned away: `session.end` "The Core already has four devices connected.", `retryable` true, no code. Runs on the station alone |
-| `connected-devices` | A device that declares `sessionHolder` receives `connectedDevices` in its snapshot (`deviceLimit` 4, `revision` 1), and a `delta` of it (with one of `devices`) each time another device is let in, including a window that declares only `deviceAuth` and so never receives the object itself, and when one drops; each device let in gets a slice of its own, which reaches this device as a marker; `listJson` is `"$string"`, since it carries run-time ids (its `listeningOn` is held to its content by the station's own tests, `tst_station_multi_session`) |
+| `older-window` | A window that signs in by key but predates several devices is let in first and owns the Core's slice; when a device with the feature is let in with a slice of its own, the older window is sent no marker for it, only the `devices` list moving. Four devices then fill the Core; a window from before paired devices (the token, no features) is let through `auth.result` and then turned away: `session.end` "The Core is full. Update NereusSDR to take a device's place, or try again later.", `retryable` true, no code. Runs on the station alone |
+| `connected-devices` | A device that declares `sessionHolder` receives `connectedDevices` in its snapshot (`deviceLimit` 4, `revision` 1), and a `delta` of it (with one of `devices`) each time another device is let in, including a window that declares only `deviceAuth` and so never receives the object itself, and when one drops; each device let in gets a slice of its own, which reaches this device as a marker; `listJson` is a `{"$json": ...}` of the list's shape (section 16.1): each entry's keys with its literal name, short name, kind, flags, state and `listeningOn` (`{sliceId, letter, band, mode}`), its `deviceId` `"$string"` and its three durations `"$int"`, since ids are made at run time and a fixture for the app holds no capture |
 | `short-name` | Another device signs in with a short name, drops, and signs in again with a new one: each change moves `connectedDevices`' and `devices`' revisions, the new short name replacing the old in both lists and on its slice's marker |
 | `grace-return` | Another device drops and is away; a minute later nothing has been sent about it but its slice's marker turning `ownerAway`; it signs in again within its 3 minutes and is let in with no question, the list sent again and its marker back; it drops again, and when its 3 minutes end with this device still on the Core its slice closes (the marker's `object.destroy`) and is saved for its return |
 | `two-devices` | Another device holds the Core's slice; this device is let in with a slice of its own (`slice:1`) and the other's as `marker:0`, naming its owner, with the `SliceMarker` schema; the other device is sent `marker:1` for this device's slice, and when this device tunes its slice the other sees the marker move, never the slice |
@@ -3155,18 +4259,38 @@ same on every machine.
 | `tx-keepalive` | On the same Core as `unheld-key`: `tx.keepalive` with an argument it does not take is refused "The Core could not read this request."; a keepalive while nothing of the device's is watched is accepted and changes nothing; the device keys (epoch 1) and sends keepalives 50 ms after the key and then 300 ms apart (sequences 2 to 4, epoch 1), each accepted, and the key stays on; then none for 450 ms: the watchdog stops transmitting (`transmitting` false, the device's entry no longer transmitting). `txState` follows the key (180 s left, 179 a second later), and the watchdog's stop is its stop: `stopReason` `linkLost`, `stopSerial` 1, "The link to Conformance device went quiet, so the Core stopped transmitting." Runs on the station and the app |
 | `grace-transmit-held` | Two devices that declare `remoteTx`: the other device keys and this one's permission goes false (`capabilities` sent again) and its `tx.key` is refused "Other device 1 has the transmitter."; the holder's link drops: this device is sent `capabilities` again with the refusal "Transmit is changing hands. Try again in a moment." and then "Other device 1 has the transmitter.", the Core stops transmitting at once (`transmitting` false) and the holder, away, still holds transmit (this device's `tx.key` is refused naming it); the holder signs in again a minute later, nothing keys until its own `tx.key` (epoch 2), and its `tx.unkey {epoch:2}` unkeys. `txState` follows each key, and the holder's dropped link is its stop: `stopReason` `linkLost`, `stopSerial` 1, "The link to Other device 1 was lost, so the Core stopped transmitting." Runs on the station and the app |
 | `on-air-refusals` | While another device (short name "Tablet B") is keyed, this device's Protocol 1 rate change, `ps3.off`, its slice's `rxAntenna` and `transmit`'s `pureSig` are each refused "Tablet B is on the air. Try again when they stop." (commands with `refusalCode` `holderOnAir` and `refusalFix` `takeTransmit`). Runs on the station alone |
+| `share-receiver` | Another device's slice shares this device's receiver (this device anchors it); a C-Tune move that would leave it outside is answered "Waiting for you to confirm." with `phase` `needsConfirmation`, then a `confirm.request` `panMove` naming the other device and its slice's effect `moves`; `confirm.proceed` with a renamed argument is refused, with its own arguments it is accepted; the other device's slice moves to the free receiver and it is told (`notice` `sliceMoved`, no Take it back) |
+| `anchor-band-change` | The same two devices; this device retunes its slice from 20 m to 40 m: the write is answered "Waiting for you to confirm.", then `panMove` with `change` "Receiver 1", "20 m", "40 m"; `confirm.cancel` with a renamed argument is refused, with its own it changes nothing; the write again, `confirm.proceed`: its result carries `objectKey` and `frequency`, the receiver follows this device's slice and the other device's slice moves, the other device told |
+| `non-anchor-pan-move` | The other device moves its panadapter on this device's receiver while this device holds the second receiver: refused, naming this device, and asked to take one (`takeReceiver`); it cancels; this device removes its second slice and the other device's move goes to the free receiver, nobody asked |
+| `take-receiver` | Each device holds one receiver; this device's `addSliceOnPan` is refused naming the other and asked `takeReceiver` (its own receiver `takeable` false); proceed takes the other's receiver: the other device's slice closes and it is told `receiverTaken` with Take it back; `notice.takeBack` with a renamed argument is refused; with its own it asks the other way, and proceed closes this device's new slice (told `receiverTaken`) and restores the other's |
+| `take-slice` | The slice cap (2) full with a receiver free: `addSlice` is refused and asked `takeSlice`; proceed closes the other device's slice, which is told `sliceTaken`. Runs on the station alone |
+| `grace-expired` | Another device drops; after its 180 s its slice closes; it signs in again and `graceEnded` follows its `snapshot.complete`, `secondsAgo` from when its time ran out |
+| `older-window-taken-over` | A window without the feature holds the second receiver; this device takes it: the window's session ends `takenOver`, not retryable. Runs on the station alone |
+| `older-window-no-slice` | The slice cap full, a window without the feature signs in: `session.end` "All the radio's slices are in use. Try again when another device closes one.", retryable. Runs on the station alone |
+| `shared-setting-confirm` | iPhone app plan Task 75: another device's slice on the ADC this device's preamp feeds: the `stepAtt` write is answered "Waiting for you to confirm." with the Core's value, then a `confirm.request` `sharedSetting` with `change` "Preamp, ADC 1", "Off", "On" and `affected` naming the other device (`state` `listening`) and its slice's `mode`, `adc`, `streamIndex` and effect `changes`; `confirm.proceed` carries the readback (`objectKey`, `preampMode`), the other device is told (`notice` `settingChanged` with who, `change` and `secondsAgo`, no Take it back) and sent the `delta` |
+| `confirm-grew` | The same question; before it is answered the other device opens a second slice on the ADC: `confirm.proceed` is answered "Waiting for you to confirm." with `phase` `needsConfirmation` and a new `confirm.request` naming both its slices, nothing applied; `confirm.cancel` of the new one. Runs on the station alone |
+| `confirm-target-changed` | The same question; the other device changes the same preamp (asked, it goes ahead, this device is told `settingChanged`); this device's `confirm.proceed` is refused "That setting changed since you asked. Make the change again.", nothing more applied. Runs on the station alone |
+| `older-window-shared-setting` | A window without the feature changes the preamp while a device with the feature listens on the ADC: refused "This change would affect Other device 1. Update NereusSDR to confirm changes that affect other devices.", nothing applied, never asked. Runs on the station alone |
+| `antenna-kept` | An ANAN-G2 with ANT2 on 40 m and ANT3 on 80 m (`alexRxAntennas`); the other device's slice listens on the ADC on another receiver; this device tunes from 20 m to 40 m: the tuning goes ahead and this device is told `antennaKept`, "The antenna stays on ANT1 while Tablet B listens on it.", no `by` keys; the other device leaves, its slice closes, and this device's next crossing (to 80 m) switches the antenna (its slice's `rxAntenna` becomes ANT3), with no notice. Runs on the station alone |
 | `verbs-session-leave` | `session.leave` with an argument is refused, "The request to leave the Core was not understood."; without, it is accepted and the station closes the connection with no `session.end`. Runs on the station alone |
 | `heartbeat-answered`, `heartbeat-missed` | The heartbeat, above |
 | `connect-deadline` | No `auth.request` within 30000 ms: `session.end` "This app did not finish connecting to the Core in time.", `retryable` true |
-| `property-write` | A write and its `property.result` and side-effect `delta`; a refused outbound property and an unknown one; a write without a `writeId` answered by `delta`; a write to a slice's signal strength refused as outbound |
-| `settings-write` | A station-scoped write echoed with its origin; an operator-local write rejected; a removal sent as `settings.value` with no entry |
+| `property-write` | A write and its `property.result` and side-effect `delta`; a refused outbound property and an unknown one; a write without a `writeId` answered by `delta`; a write to a slice's signal strength refused as outbound; on the receive-only Core, a `transmit` write of `power` taken off the air and a write of `mox` and `voxEnabled` refused with the receive-only reason; at `transmitSettingsVersion` 2, a write of `cpdrLevelDb` taken, and `micGainDb` and `monitorVolume` out of range refused with their ranges beside a write of the outbound `tunePowerForTxBand`; at `transmitSettingsVersion` 3, a write of `micBoost` and `lineInBoost` taken, and `lineInBoost` out of range refused with its range beside a write of the outbound `activeTxProfile`; at `transmitSettingsVersion` 4, a write of `txEqBandsJson`, `txEqUseLegacy` and `txLevelerDecay` taken, and a nine-value `txEqBandsJson`, a `cfcCompressionJson` with a value out of range and `txAlcDecay` out of range each refused whole with its range |
+| `settings-write` | A station-scoped write echoed with its origin; an operator-local write rejected; a removal sent as `settings.value` with no entry; on the receive-only Core, a DSP > Options TX key and a PA forward-power table key (`paCalibration/calPoint1`, version 6) taken off the air and a transmit hardware key refused |
 | `unknown-verb` | `command.result` refused, "The Core does not know this request. Updating the Core may help."; the connection stays up |
 | `unknown-kind` | `session.end` "The Core could not read a message from this app.", `retryable` false, `code` `protocolError` |
-| `verbs-*` | Each verb in `commands`, grouped by the capability that gates it, invoked with its own arguments (for `setPgxlHardware`, one of its three optional ones) and, where it takes any, with one argument renamed (and nothing else changed: the same values and kinds); the two get different answers, so each shows the station read the arguments (a PureSignal action with arguments it does not take is refused "The Core could not read this PureSignal request." before the transmit gate is asked); `nnr.applyModelSelection` names the revision `dspAssets` gave in the snapshot |
+| `verbs-*` | Each verb in `commands`, grouped by the capability that gates it, invoked with its own arguments (for `setPgxlHardware`, one of its three optional ones) and, where it takes any, with one argument renamed (and nothing else changed: the same values and kinds); the two get different answers, so each shows the station read the arguments (a PureSignal action with arguments it does not take is refused "The Core could not read this PureSignal request." before the transmit gate is asked); `verbs-ps3` (which requires `psAlgorithmVersion` 3) invokes the PureSignal verbs whose answers do not depend on arming (`ps3.off`, `ps3.twoTone` off and `ps3.saveCorrection`), and `verbs-ps3-arming` (which also requires `transmitSettingsVersion` 7) invokes `ps3.twoTone` with `enabled` true, refused "PureSignal cannot be run from a remote window yet.", and the arming verbs (`ps3.single`, `ps3.automatic`, `ps3.applyCurrent`, `ps3.restoreCorrection`), taken and then failing on the static station, which has no PureSignal running ("PureSignal is unavailable until the radio is ready."); `nnr.applyModelSelection` names the revision `dspAssets` gave in the snapshot; `verbs-tgxl-control` (which requires `remoteTgxlControlVersion` 2) invokes the antenna, operate and bypass switches, and `verbs-tgxl-relays` (which requires `remoteTgxlControlVersion` 4) matches `scanTgxlLan`'s `devicesJson` as any text, since a real Tuner Genius on the test computer's network may answer, and its accepted `setTgxlAddress` is followed by the `tuner` delta carrying the saved address, then a blank host, saved and shown as blank, and the address again; `verbs-pgxl-control` (which requires `remotePgxlControlVersion` 4) does the same for `scanPgxlLan` and `setPgxlAddress` (the `amplifier` delta, and the blank host), and its `setPgxlOperate` is refused on the static station, which has no amp connected ("The Core is not connected to the Power Genius."); `verbs-rfkit` (which requires `remoteRfKitControlVersion` 2) connects, disconnects and switches the RF-Kit, and `verbs-rfkit-control` (which requires `remoteRfKitControlVersion` 4) invokes `setRfKitOperate`, `setRfKitAntenna` and `setRfKitTciMode`, refused on the static station with no amp admitted ("The Core is not connected to the RF-Kit amplifier."), and its accepted `setRfKitAddress` is followed by the `rfkit` delta carrying the saved address, then the blank host and the address again; `verbs-tx-antenna` (which requires `radioHardwareVersion` 6) invokes `setAlexTxAntenna` with a band's current antenna (taken, no delta) and with `band` renamed. A version's new verbs go in a fixture of their own, so an app at the older version still runs the older file |
 
 `tst_link_conformance_session` also checks that every verb in the
 `commands` table is invoked both ways by some fixture, and that the two
 legs of each get different answers.
+
+The several-devices design's `sharing-budget` fixture (a holder and another
+device over the Core's total: the holder's share is its whole request, the
+other's reason `sharedConnection`, or `sharedProcessing` under the
+governor's cut) needs the transmit holder, so it lands with Task 34; until
+then `tst_display_budget_split` and `tst_station_multi_session` hold each
+device's share, generation and reason (section 6.4).
 
 ### 16.4 Media vectors
 
@@ -3240,8 +4364,14 @@ than N 16-bit steps from `pcm16`); the vector states which.
 
 ```
 cmake --build build --target tst_link_conformance_control tst_link_conformance_session tst_link_conformance_media
-QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^tst_link_conformance_(control|session|media)$' --output-on-failure
+QT_QPA_PLATFORM=offscreen ctest --test-dir build -R '^tst_link_conformance_(control|session|session_connectable|media)$' --output-on-failure
 ```
+
+The session runner is registered twice: `tst_link_conformance_session`
+runs every fixture but those whose `radio` is `"connectable"`, and
+`tst_link_conformance_session_connectable` runs those alone
+(`NEREUS_LINK_CONNECTABLE` set to `skip` and `only`; unset, the binary
+runs every fixture).
 
 Each runner also alters one of its fixtures in memory and checks that the
 failure names the step or field that differs; the media runner also checks
@@ -3276,7 +4406,9 @@ how a fixture is written to what the code does.
 - **Operator wording.** A reason a client may show an operator is plain
   English with no protocol terms. Every reason the station sends (the
   `reason` of `auth.result`, `session.end`, `command.result`,
-  `property.result`, `settings.reject`, `pair.fail` and the display's
+  `property.result`, `settings.reject`, `pair.fail`, `confirm.request`
+  and `notice`, a take choice's `why`, the three strings of `change`, and
+  the display's
   `rejected` and `allocation-result`) passes `OperatorWording::isPlain` and names no
   function, class, requirement or phase; `tst_station_reason_wording`
   checks the sources that word them (every reason literal, a reason of one
@@ -3678,3 +4810,17 @@ no stop. The reasons:
 The Core sends the object to the holder and to every other declaring peer,
 so a device that lost its link learns why from the snapshot when it signs
 in again. A device that was removed is not connected to learn it.
+
+## 19. The rendezvous
+
+A client reaches a Core it cannot address directly through the rendezvous
+at `rv.nereussdr.com` (or a self-hosted one), specified in its own document,
+[2026-09-23-rendezvous-v1.md](2026-09-23-rendezvous-v1.md), with its
+conformance suite in `rendezvous/conformance/v1/`. It uses this document's
+identity values unchanged (section 3.4): the Core registers under an id
+derived from its station identity key, a device introduces itself by its
+device id (section 3.5) with a signature by its device key, and pairing by
+code carries section 3.6's `pair.*` messages, as text, inside the
+rendezvous's mailbox messages. The rendezvous introduces the two ends and
+mints relay credentials; the session that follows is this link, on its own
+connection, direct or through the relay, never through the rendezvous.

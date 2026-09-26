@@ -27,6 +27,9 @@
 //               (setRemoteTransmitState), the meters the Core does not send
 //               shown disabled with the reason. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25 - R-R3-32 (remote-window parity Task 6):
+//                 setPaReadingsModel. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -194,6 +197,11 @@ public:
     static const QList<int>& remoteTxBindingsNotSent();
     /// Why: the Core sends transmit state but not this meter.
     static QString remoteTxMeterNotSentText();
+    // R-R3-32 (remote-window parity Task 6): the model whose
+    // paReadings() feed the HwVolts, HwAmps and HwTemperature bindings on
+    // every poll, in a local window (this radio) and a remote one (the
+    // Core's), with the no-reading sentinel when a reading is absent.
+    void setPaReadingsModel(RadioModel* model);
 
     // ── TX meter bindings (H.2, Phase 3M-1a) ─────────────────────────────
     //
@@ -383,6 +391,8 @@ private:
     std::function<double()> m_rxOffsetSource;
     bool m_remoteRole{false};
     QPointer<RadioModel> m_remoteModel;
+    QPointer<RadioModel> m_paReadingsModel;
+    void pollHardwareTelemetry();
     std::function<bool()> m_remoteSnapshotReady;
     std::function<double(const SliceModel*)> m_remoteMaxBinSource;
     // Task 39: the Core's transmit state and whether it sends it.

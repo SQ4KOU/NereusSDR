@@ -78,6 +78,11 @@
 //               Bonjour record carry how many devices hold a place. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic Claude
 //               Code.
+//   2026-09-25: iPhone app Task 76 (R-IOS-31): a media controller and a
+//               telemetry controller per admitted session (DaemonMediaHub),
+//               the governor fed every controller's charge and running
+//               while any media session is live. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/daemon/DaemonApp.h"
@@ -384,9 +389,9 @@ void DaemonApp::stop()
     // it. The station is still alive while connected clients are detached.
     m_displayGovernorTimer.reset();
     m_displayGovernor.reset();
-    m_telemetryController.reset();
+    m_telemetryControllers.clear();
     m_hostSampler.reset();
-    m_mediaController.reset();
+    m_mediaHub.reset();
     m_stationServer.reset();
     m_agcSource.reset();
 
@@ -651,22 +656,23 @@ void DaemonApp::startStationServer(const DaemonConfig& cfg)
     if (displayCeiling) {
         m_stationServer->setDisplayBudgetLimits(*displayCeiling);
     }
-    m_mediaController = std::make_unique<DaemonMediaController>(
+    // iPhone app Task 76 (ruling 9.1): a media controller per admitted
+    // session, each made as its session's media starts.
+    m_mediaHub = std::make_unique<DaemonMediaHub>(
         m_stationServer.get(), m_radioModel.get(), this);
     // R-R3-23: before listen(), so the first peer and sender use it.
-    m_mediaController->setAudioTargetBitrate(cfg.audioBitrate);
-    m_mediaController->setAudioLosslessAllowed(cfg.audioLosslessAllowed);
+    m_mediaHub->setAudioTargetBitrate(cfg.audioBitrate);
+    m_mediaHub->setAudioLosslessAllowed(cfg.audioLosslessAllowed);
     // Install every source before advertising the capability. A client can
     // authenticate immediately after listen(), so there must be no window in
-    // which telemetry is negotiated without a collector to publish it.
+    // which telemetry is negotiated without a collector to publish it: each
+    // session's collector is made as its telemetry starts (Task 76).
     m_hostSampler = std::make_shared<SharedHostSampler>();
-    m_telemetryController = std::make_unique<DaemonTelemetryController>(
-        m_stationServer.get(), m_radioModel.get(), m_mediaController.get(), this,
-        DaemonTelemetryController::MonotonicClock{},
-        DaemonTelemetryController::AudioDiagnosticsProvider{},
-        std::unique_ptr<HostTelemetrySampler>{},
-        DaemonTelemetryController::ReceiverLoadProvider{}, m_hostSampler);
-    m_stationServer->setTelemetryEnabled(m_telemetryController != nullptr);
+    connect(m_stationServer.get(), &StationServer::telemetrySessionStarted,
+            this, &DaemonApp::startSessionTelemetry);
+    connect(m_stationServer.get(), &StationServer::telemetrySessionEnded,
+            this, &DaemonApp::endSessionTelemetry);
+    m_stationServer->setTelemetryEnabled(true);
     if (cfg.displayAdaptive && displayCeiling) {
         m_displayGovernor = std::make_unique<DisplayLoadGovernor>(*displayCeiling);
         m_displayGovernorClock.start();
@@ -680,7 +686,11 @@ void DaemonApp::startStationServer(const DaemonConfig& cfg)
             if (m_displayGovernorTimer) { m_displayGovernorTimer->start(); }
         });
         connect(m_stationServer.get(), &StationServer::mediaSessionEnded, this, [this] {
-            if (!m_displayGovernor || !m_displayGovernorTimer) { return; }
+            // Task 76: the load goes on while another device is on.
+            if (!m_displayGovernor || !m_displayGovernorTimer
+                || !m_stationServer->mediaSessionEpochs().isEmpty()) {
+                return;
+            }
             m_displayGovernorTimer->stop();
             publishDisplayBudget(m_displayGovernor->reset());
         });
@@ -838,14 +848,64 @@ DisplayLoadInputs DaemonApp::gatherDisplayLoadInputs()
     return inputs;
 }
 
+void DaemonApp::startSessionTelemetry(quint64 epoch)
+{
+    if (!m_stationServer || !m_radioModel || m_telemetryControllers.count(epoch) != 0) {
+        return;
+    }
+    // Task 76: this session's own collector, with its own sequence and its
+    // own audio diagnostics (its media controller's).
+    const QPointer<DaemonApp> self(this);
+    auto controller = std::make_unique<DaemonTelemetryController>(
+        m_stationServer.get(), m_radioModel.get(), nullptr, nullptr,
+        DaemonTelemetryController::MonotonicClock{},
+        [self, epoch] {
+            return self && self->m_mediaHub ? self->m_mediaHub->audioDiagnostics(epoch)
+                                            : DaemonAudioDiagnostics{};
+        },
+        std::unique_ptr<HostTelemetrySampler>{},
+        DaemonTelemetryController::ReceiverLoadProvider{}, m_hostSampler);
+    controller->bindToSession(epoch);
+    m_telemetryControllers.emplace(epoch, std::move(controller));
+}
+
+void DaemonApp::endSessionTelemetry(quint64 epoch)
+{
+    auto it = m_telemetryControllers.find(epoch);
+    if (it == m_telemetryControllers.end()) {
+        return;
+    }
+    // It hears this same signal and stops itself; it goes once the signal
+    // has unwound.
+    DaemonTelemetryController* controller = it->second.release();
+    m_telemetryControllers.erase(it);
+    controller->deleteLater();
+}
+
+bool DaemonApp::anyDisplayBudgetInForce() const
+{
+    const QList<quint64> epochs = m_stationServer->mediaSessionEpochs();
+    if (epochs.isEmpty()) {
+        // No device yet: what a first one would be given.
+        return m_stationServer->displayBudgetLimits().has_value();
+    }
+    for (quint64 epoch : epochs) {
+        if (m_stationServer->displayBudgetLimits(epoch)) {
+            return true;
+        }
+    }
+    return false;
+}
+
 void DaemonApp::evaluateDisplayLoad()
 {
-    if (!m_displayGovernor || !m_radioModel || !m_mediaController || !m_stationServer) {
+    if (!m_displayGovernor || !m_radioModel || !m_mediaHub || !m_stationServer) {
         return;
     }
     // An app older than the budget reason plans without a budget (legacy
-    // mode): there is nothing for it to follow.
-    if (!m_stationServer->displayBudgetLimits()) {
+    // mode): there is nothing for it to follow. Task 76: with several
+    // devices, the governor runs while any of them has a budget.
+    if (!anyDisplayBudgetInForce()) {
         return;
     }
     // Cached readings only: RadioModel's 500 ms load snapshot, the shared
@@ -854,9 +914,12 @@ void DaemonApp::evaluateDisplayLoad()
     const qint64 nowMs = m_displayGovernorNowForTest ? m_displayGovernorNowForTest()
                                                      : m_displayGovernorClock.elapsed();
     const DisplayBudgetCharge accepted = m_acceptedDisplayChargeForTest
-        ? m_acceptedDisplayChargeForTest() : m_mediaController->acceptedDisplayCharge();
-    const DisplayLoadReading reading
+        ? m_acceptedDisplayChargeForTest() : m_mediaHub->acceptedDisplayCharge();
+    DisplayLoadReading reading
         = displayLoadReadingFrom(gatherDisplayLoadInputs(), nowMs, accepted);
+    // Fix wave 3 (ruling 9.3): one floor pan for each device sharing the
+    // budget, so a cut never pauses every device's display.
+    reading.floorPans = m_stationServer->displayBudgetSharingCount();
     const std::optional<DisplayLoadDecision> decision = m_displayGovernor->update(reading);
     if (!decision) {
         return;

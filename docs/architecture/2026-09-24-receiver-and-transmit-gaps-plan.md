@@ -687,3 +687,101 @@ byte can therefore change from what an earlier build sent in two states:
   baseline in its own commit.
 - [ ] **Step 4:** HPF Bypass on TX on both protocols. Update the HL2 bench script with the
   transmit steps.
+
+## Task 15: The HL2 receive-only kit and the older radios' Protocol 2 rates
+
+**Requirements:** CLAUDE.md's hardware-fact rules; the Phase 3F design section 2 table; the
+operator's rulings: every board gets Thetis's values for the protocol it runs (2026-09-24,
+"follow thetis", Task 5) and Atlas, Hermes, HermesII and HL2 rows on Protocol 2 follow Thetis
+too (2026-09-25, "1 follow thetis"); mi0bot-Thetis is authoritative for the Hermes Lite 2.
+
+**Source first:** Thetis `setup.cs` `InitAudioTab`, the per-protocol rate lists
+(`setup.cs:847-853 [v2.10.3.15]`, with its `//DH1KLM` line); mi0bot-Thetis for the HL2's rates on
+each protocol and for how it identifies and models the HL2 receive-only kit (its discovery and
+model code, and wherever it sets `HPSDRModel` for that board). Task 5's reports
+(`task-5-report-2.md` in the controller's crew workspace) hold the first reading, including the
+four rows pinned below Thetis with a reason.
+
+**Files:** `src/core/BoardCapabilities.{h,cpp}` (the Protocol 2 lists for the Atlas, Hermes,
+HermesII and HL2 rows; the HermesLiteRxOnly row); wherever a connect resolves a board to a model
+(`HardwareProfile.cpp`, `RadioDiscovery.cpp`, and what reads the result); the Radio Info tab if
+its top rate reads the model; the Phase 3F design's section 2 table and any plan that states the
+old values; `tests/tst_board_capabilities_phase3f.cpp`, `tests/tst_radio_discovery_parse.cpp`,
+and the hardware-profile tests.
+
+**Acceptance:**
+- On Protocol 2, the Atlas, Hermes, HermesII and HL2 rows offer Thetis's Protocol 2 list (48 to
+  1536 kHz), unless mi0bot gives the HL2 a different Protocol 2 list, in which case the HL2
+  follows mi0bot and the report says so with the cite. Their Protocol 1 lists do not change.
+- The table test's pinned exception for these four rows is gone: it asserts that every row
+  offers Thetis's list for each protocol (mi0bot's for the HL2), with no row excepted.
+- An HL2 receive-only kit resolves on connect to the model mi0bot gives it, not HERMES, and on
+  Protocol 1 offers the HL2's rates including 384 kHz. Everything else mi0bot keys on that model
+  for the kit (receiver count, controls it hides or disables) follows from the same model, or
+  the report lists what differs.
+- A remote window offers the same rates as a local window on the same radio (the Core's list).
+- A rate saved per radio that the new list still offers is kept; nothing saved is silently
+  changed.
+- The design table and the code change in the same commit, with tests of every value per
+  protocol, cited.
+
+**Verification:** a capability table and a model resolution; tests of the values.
+`tst_p1_regression_freeze` and `tst_p2_regression_freeze` pass unchanged (no wire byte changes
+at an existing rate). Hardware pending: none of these boards is on the bench running Protocol 2,
+and there is no receive-only kit on the bench.
+
+**Execution note (advisory):** opus.
+
+- [ ] **Step 1:** Read Thetis and mi0bot, test red, fix the rows and the model resolution,
+  commit.
+
+## Task 16: Receive only stops every key, as Thetis's RXOnly does
+
+**Requirements:** 3M-1 transmit (the keying gate); remote parity both ways (the operator,
+2026-09-25: "we want parity no matter how i am connected"); a control that cannot run is shown
+disabled with its reason, never hidden (the operator, 2026-09-25). Found by Task 15: the
+`isRxOnlySku` flag is read only by two Setup screens, `TxInhibitMonitor::notifyRxOnly` has no
+caller, and `GeneralOptionsPage` hides `m_chkGeneralRXOnly` (`GeneralOptionsPage.cpp:216-229`).
+
+**Source first:** Thetis `console.cs` `RXOnly` (`console.cs:15312-15334 [v2.10.3.15]`: MOX
+disabled unless SPEC or DRM, TUN, 2TONE (`// MW0LGE_21a`) and VOX disabled, MOX dropped if
+keyed, Setup kept in step) and `setup.cs` `chkGeneralRXOnly_CheckedChanged`
+(`setup.cs:6479 [v2.10.3.15]`) with its recovery line (`setup.cs:740`); mi0bot-Thetis for the
+HL2 (Task 15's report: mi0bot models no receive-only kit, only the operator's toggle). Every
+author tag preserved.
+
+**Files:** the keying gate (`MoxController` and the admission path Task 7 and Task 13 use for
+TX inhibit, so every source is refused: MOX, TUNE, two-tone, VOX, the radio's PTT, CAT, TCI);
+`TxInhibitMonitor::notifyRxOnly` (wire it, or remove it if the gate has one better place);
+`GeneralOptionsPage.{h,cpp}` (the checkbox shown on every radio, disabled with a reason where it
+cannot change); the TX applet, the VFO flag and the container buttons for MOX, TUNE, 2TONE and
+VOX (disabled with the reason while receive only is on); the `RxOnly` setting's scope
+(`SettingsScope.cpp:540`) and the remote path (Setup's checkbox from a remote window, the Core's
+gate, the mirrored state); the N2ADR settings migration (Task 15's concern: it covers radios
+saved as a standard HL2, not the kit).
+
+**Acceptance:**
+- With receive only on, every keying source is refused through the one gate, with a plain
+  reason, on a local window and on a Core; a keyed MOX drops when it is turned on, as Thetis
+  does. MOX, TUNE, 2TONE and VOX show disabled with the reason (MOX follows Thetis's SPEC and
+  DRM exception).
+- The HL2 receive-only kit (board byte 12, `isRxOnlySku`) always runs receive only: the
+  checkbox shows checked and disabled with a plain reason that the radio has no transmitter.
+  This is NereusSDR's own rule (mi0bot has no kit model); say so in a comment.
+- The checkbox is never hidden on any radio.
+- A remote window shows the Core's receive-only state, can change it off the air exactly as a
+  local window can (or, if the design scopes it per window, says in the report how the Core's
+  gate and each window's controls then follow; ask with NEEDS_CONTEXT before choosing a scope
+  that lets one window's setting key a radio another window has in receive only).
+- The N2ADR migration covers the kit, or the report shows why it needs none.
+- Tests show each refusal red first; the Task 7 and Task 13 keying tests stay green.
+
+**Verification:** the transmit safety boundary: unit tests through the real gate, a remote
+window through the session, and the regression freezes (no wire byte changes while receive only
+is off). Hardware pending (an HL2 with receive only on: nothing keys; no kit on the bench). Its
+own review follows, as Task 7's did.
+
+**Execution note (advisory):** opus.
+
+- [ ] **Step 1:** Read Thetis and mi0bot, test red, port the gate and the controls, commit.
+- [ ] **Step 2:** The remote path, the kit's forced receive only and the N2ADR migration.

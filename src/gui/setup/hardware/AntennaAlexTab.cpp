@@ -21,6 +21,11 @@
 //   2026-09-24 - R-R3-46: forwards the transmit permission to Alex-1
 //                Filters too. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-25 - R-R3-49 / R-R3-46 (parity Task 12): Antenna Control's
+//                transmit half now follows whether the Core takes it (the
+//                Alex facade), so only Alex-1 Filters gets the transmit
+//                permission. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 //=================================================================
@@ -179,7 +184,8 @@ void AntennaAlexTab::populate(const RadioInfo& info, const BoardCapabilities& ca
 
 void AntennaAlexTab::setTransmitPermitted(bool permitted, const QString& reason)
 {
-    m_antennaControlTab->setTransmitPermitted(permitted, reason);
+    // Parity Task 12: Antenna Control's transmit half follows the Alex
+    // facade's transmit edit availability instead.
     m_alex1Tab->setTransmitPermitted(permitted, reason);
 }
 

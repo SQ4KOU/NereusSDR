@@ -486,7 +486,11 @@ opened (the link, section 12.2). And an absent device's receivers return to the 
 - **After the 180 s, the device**, coming back to a Core with a place free, is admitted and
   receives a `notice` of kind `graceEnded` after `snapshot.complete`: "You were away for more
   than 3 minutes. Your slices are back, and transmit was freed." (the last clause only when it
-  held transmit), with `slices` listing any saved slice that could not be restored (5.2). So
+  held transmit), with `slices` listing any saved slice that could not be restored (5.2). When
+  one did not fit, the notice does not say the slices are back; it names what was not restored
+  in the words of the `slicesNotRestored` notice: "You were away for more than 3 minutes. 2 of
+  your slices could not be restored: all the radio's receivers are in use." (fix wave,
+  2026-09-25). So
   the iPhone design's screen 15, "transmit was still yours", is shown only within the 180 s;
   after them the phone shows this notice and `txState` as it stands (review finding 6).
   Coming back to a full Core, it meets the fifth-device question with `placeFreed` (4.3).
@@ -676,11 +680,20 @@ iPhone. It can be changed only there.":
 - a `property.write` to a `slice:` key outside the writer's view, or to any `marker:` key;
 - `removeSlice`, `setActiveSliceById`, `nnr.*` and `notch.add` naming another device's slice
   (the link, lines 1370, 1373, 1402-1404 and 1422);
+- `requestSliceSampleRate`, `requestStreamCentre` and `requestStreamCtunPinned` naming a
+  slice that is not the requester's (fix wave C1, 2026-09-25): another device's, one nobody
+  owns, or one held for a device, whatever receivers are in use;
+- a `settings.write` or `settings.remove` of a slice's own keys, `Slice<N>/...` (the `Slice`
+  keys, Core scope; the link, section 8), from a device that does not own slice N, or for an
+  id no live slice holds, whose keys would seed the next slice under it (fix wave I3,
+  2026-09-25; the settings reject carries the Core's value);
 - `tx.setTxSlice` (Task 34) naming another device's slice.
 
-Four requests on a shared receiver are routes, not refusals: a sample-rate change is D53
-(section 7); a C-Tune centre change or pin follows the anchor rules (6.2, 6.3); and the
-anchor's own band change is a pan move (ruling 6.5).
+Four requests on a shared receiver are routes, not refusals, when they name the requester's
+own slice: a sample-rate change is D53 (section 7); a C-Tune centre change or pin follows the
+anchor rules (6.2, 6.3); and the anchor's own band change is a pan move (ruling 6.5). Naming
+any other slice, they are refused as above: a device reaches a shared receiver only through
+its own slice on it.
 
 ### 5.7 The active slice
 
@@ -702,7 +715,12 @@ active slice:
   moves), and TCI's two broadcasts that exist once per radio, `digl_offset` and
   `digu_offset` (`TciServer.cpp:1030-1043` `@46b40373`, which read `RadioModel::activeSlice()`, now the
   station-level slice). `RadioModel::activeSlice()` itself is the station-level slice on the
-  Core.
+  Core. The FreeDV Reporter narrows this (settled by the fix wave after the group review of
+  Tasks 71 to 76): it lists the frequency of a slice in RADE mode when one exists (the first in
+  creation order, whoever owns it), and the station-level slice's otherwise, because the
+  reporter lists FreeDV activity. A slice entering or leaving RADE mode, or closing, re-checks
+  which slice is listed (`RadioModel::freedvReportedSlice`,
+  `RadioModel::refreshFreedvReportedFrequency`).
 - **Per slice, and they stay so:** the simplex transmit-follows-receive push follows the
   transmit-bound slice, not the active one (`RadioModel.cpp:7787` `@46b40373` in `addSliceImpl`, gated on
   `txBoundSlice()`, `RadioModel.cpp:12636-12642` `@46b40373`, the arbiter's binding with no active-slice
@@ -731,6 +749,16 @@ own when they leave.
 own strings today (`RadioModel.cpp:7120-7132`). The Core keeps, for each receiver, the pan
 that anchors it (6.2). It does not mirror pans: markers do not need them, and the `pan:<i>`
 key stays unused (the link, lines 1130-1134).
+
+Built by fix wave I4 (2026-09-25), with no wire change: whether a new slice opens a new pan
+(`addSliceImpl`'s `openingANewPan`, and the take chooser's `AddPan` need) counts only the
+requesting device's own slices on that pan key (`RadioModel::panHasSlicesFor`), so a second
+device's first slice on "pan-0" claims a receiver of its own even though the first device's
+"pan-0" holds slices. `pan:<i>` is unused in fact: only `RadioModel::addPanadapter` makes a
+`PanadapterModel`, and neither the Core nor a window calls it (a window's panadapters are its
+`PanadapterStack` applets, whose centre, span and dBm range are the window's own), so no Core
+sends `pan:<i>` and a write to it changes nothing. A window moves its receiver's centre with
+`requestStreamCentre` (6.3), never through a pan object.
 
 ### 5.9 TCI and VAX
 
@@ -782,6 +810,12 @@ moves. When the last slice leaves, the receiver is free.
 receiver's window (`RadioModel.cpp:6139-6145`, read by every placement on it at `6604-6605`),
 so `requestStreamCtunPinned` from a device that does not anchor the receiver is refused ("This
 panadapter shows iPhone's receiver. Its C-Tune setting is iPhone's.").
+A pin lasts as its anchor's pans do (ruling 4.8): through the anchor's link dropping, its
+media ending and its coming back as the same device. It ends when the anchor leaves for good
+(`session.leave`, a token window's end, the end of its 180 s, revocation), and the receiver
+keeps its window, unpinned (fix wave after the group review of Tasks 71 to 76,
+`RadioModel::clearStreamCtunPinsAnchoredBy`; before it, every pin ended with the Core's last
+media session).
 
 ### 6.3 Moving a pan (D50)
 
@@ -839,6 +873,14 @@ window, as today's C-Tune rule requires. The anchor and the receiver it leaves a
 disturbed, so nobody is asked and nothing is refused. With no free receiver it gets the
 chooser of section 6.4. D50 is not narrowed: it asks whenever a move would disturb
 another device, and this move disturbs none.
+
+**Ruling 6.6a. Slices with no owner in a pan move** (fix wave after the group review of Tasks
+71 to 76, accepting the code as it is). A pan move (rulings 6.4 and 6.5) names only slices a
+device owns or is holding for a device that is away; a slice with no owner (5.2, step 3) that
+the new window leaves outside goes to a free receiver or, with none free, closes, with nobody
+asked and nobody told (`StationServer::checkPanMove`, the `Apply` kind). Nobody's work is lost:
+no device holds such a slice, and a held slice is its owner's and is named and saved as
+ruling 5.2 says.
 
 A sample-rate change on a shared receiver is D53 (section 7); slices that no longer fit
 the narrower window follow the same move-or-close rule, and the on-air refusal (ruling 7.4)
@@ -946,16 +988,17 @@ The "Saved as" column gives each setting's keys and their scope in the link's se
 | Sample rate, Protocol 2 | the same verb | the same | that receiver (`RadioModel.cpp:6284-6287`) |
 | Attenuator, preamp | `stepAtt` (`attenuationDb`, `preampMode`, `enabled`, auto-attenuate) | `hardware/<mac>/options/stepAtt/...`, `.../autoAtt/...`, `.../preamp/...`, Core-owned (line 1324) | ADC0 (`P2RadioConnection.cpp:1127-1148`; `P1RadioConnection.cpp:1217-1245`) |
 | ADC1 preamp | `stepAtt.rx1Preamp` | the same family | ADC1 (`P2RadioConnection.cpp:1150-1160`) |
-| Receive antenna | a slice's `rxAntenna`; `alexAntennas`; `setAlexRxAntenna` | `hardware/<mac>/alex/antenna/...`, Core-owned (line 1325) | the ADC the relay feeds (every receiver on a 1-ADC board) and the receiver's other slices (`RadioModel.cpp:19061-19077`) |
+| Receive antenna | a slice's `rxAntenna`; `alexAntennas` (`rxOutOverride`, Disable RX Bypass relay, joined at the checkpoint carry of 2026-09-25); `setAlexRxAntenna` | `hardware/<mac>/alex/antenna/...`, Core-owned (line 1325) | the ADC the relay feeds (every receiver on a 1-ADC board) and the receiver's other slices (`RadioModel.cpp:19061-19077`) |
 | Receive filter policy | `setAlexBpfMode` | saved for its radio (line 1437) | its chain's ADC |
 | PureSignal | `pureSignalSettings`, `transmit.pureSig`, `ps3.*` except two-tone | `hardware/<mac>/puresignal/...`, Core-owned (line 1327) | on a 1-ADC board every user receiver while the holder transmits (6.5); the transmitter |
-| Diversity | a slice's `diversityEnabled` | the `Slice` keys, Core scope (line 1224) | receiver 0 on a 2-ADC board (`P2CodecOrionMkII.cpp:1260-1289`); every receiver on a 1-ADC board (`P2CodecHermes.cpp:284-302`; `P1CodecStandard.cpp:927-941`) |
+| Diversity | a slice's `diversityEnabled`, `diversityPhaseDeg`, `diversityGainDb` and `diversityFineNullEnabled` (the last three added by the fix wave after the group review of Tasks 71 to 76) | the `Slice` keys, Core scope (line 1224) | receiver 0 on a 2-ADC board (`P2CodecOrionMkII.cpp:1260-1289`); every receiver on a 1-ADC board (`P2CodecHermes.cpp:284-302`; `P1CodecStandard.cpp:927-941`) |
 | Noise blanker, shared receiver | a slice's `nbMode` and NB1/NB2 knobs | the `Slice` and `Nb` keys, Core scope (lines 1224, 1240) | that receiver's slices (`RadioModel.cpp:6737-6760`) |
 | Notches | `notch.*`, `notches.globalEnabled`, `notches.autoIncrease` | `NotchCount`, `Notch<N>...`, Core-owned (line 1323) | every slice whose passband holds the notch (one list for every slice: `RadioModel.cpp:5120-5135`; applied per channel, `RxChannel.cpp:1613`) |
 | Receive DSP options | `settings.write` (`RadioModel.cpp:18278-18290`) | `DspOptions...Rx`, Core scope (line 1239) | every receiver |
-| Transmit antenna | a slice's `txAntenna`; `alexAntennas` | `hardware/<mac>/alex/antenna/...`, Core-owned (line 1325) | the transmitter (7.5) |
-| The amplifier | `amp.operate`, `amp.standby` (Task 42); `configurePgxl` and its settings verbs | `PGXL_...`, Core scope (line 1226) | the transmitter |
-| The tuner, the RF-Kit amplifier's antenna | `tuner.operate`, `tuner.bypass`, `tuner.antenna`, `rfkit.antenna` (Task 42); `configureTgxl` | `TGXL_...`, `RfKit_...`, Core scope (lines 1227-1228) | ADC0's receivers on a 2-ADC board, every receiver on a 1-ADC board, and the transmitter |
+| Transmit antenna | a slice's `txAntenna`; `alexAntennas` (`txAntennas`, `blockTxAnt2`, `blockTxAnt3`, `rxOutOnTx`, `ext1OutOnTx`, `ext2OutOnTx`); `setAlexTxAntenna` (these joined at the checkpoint carry of 2026-09-25) | `hardware/<mac>/alex/antenna/...`, Core-owned (line 1325) | the transmitter (7.5) |
+| The amplifier | `amp.operate`, `amp.standby` (Task 42); `configurePgxl` and its settings verbs; `setPgxlOperate`, `setPgxlAddress`, `setRfKitOperate`, `setRfKitTciMode`, `setRfKitAddress` (joined at the checkpoint carry of 2026-09-25; the scans only listen and join no list) | `PGXL_...`, Core scope (line 1226) | the transmitter |
+| The tuner, the RF-Kit amplifier's antenna | `tuner.operate`, `tuner.bypass`, `tuner.antenna`, `rfkit.antenna` (Task 42); `configureTgxl`; `moveTgxlRelay`, `setTgxlAddress`, `setRfKitAntenna` (joined at the checkpoint carry of 2026-09-25) | `TGXL_...`, `RfKit_...`, Core scope (lines 1227-1228) | ADC0's receivers on a 2-ADC board, every receiver on a 1-ADC board, and the transmitter |
+| 4O3A on or off | `setFourO3AEnabled` (added by the fix wave after the group review of Tasks 71 to 76) | `hardware/<mac>/peripherals/FourO3A_Enabled`, saved for its radio (`RadioModel::peripheralValue`) | what the tuner touches: ADC0's receivers on a 2-ADC board, every receiver on a 1-ADC board, and the transmitter, since it connects or drops the amplifier and the tuner together |
 | Transmit interlock, power cap | `setTxInterlockPolicy`, `setPgxlPowerCap` | `PGXL_TxInterlockMode` and its three siblings (`src/core/TxInterlockPolicy.cpp:136-160`), `PGXL_PowerCapEnabled`, `PGXL_PowerCapW` (`src/core/StationAccessoryData.cpp:164-166`), Core scope | the transmitter |
 | The radio | `station.selectRadio` (Task 25, the plan, lines 2421-2425) | the Core's saved choice (Task 25) | every slice |
 
@@ -966,6 +1009,10 @@ wiring.
 
 A change that touches nothing beyond the requester's own slices applies at once: a slice's own
 settings on a receiver it does not share, display defaults, spot and reporter settings.
+
+A `settings.remove` returns its key to the default, live, so it is a write of the default: it
+is checked, asked and told exactly as that write would be (fix wave I3, 2026-09-25), with
+`change.to` "Default".
 
 ### 7.2 The disturbed set
 
@@ -979,7 +1026,20 @@ touched. The requester's own slices never count.
 
 A rate change is simulated with today's plan (`planStreamSampleRateChange`,
 `RadioModel.cpp:6264-6324`). Another device's slice the plan would refuse becomes `closes`; the
-requester's own refused slice still refuses the whole change, as today.
+requester's own refused slice still refuses the whole change, as today. After Confirm, those
+slices close only once the rate change is certain (the plan still holds and, on Protocol 1, the
+radio took the new rate), just before it commits; a rate change refused on its later turn closes
+nothing and tells nobody (fix wave after the group review of Tasks 71 to 76,
+`RadioModel::setStreamSampleRateClosing`). The proceed records each closing slice with its id,
+the slice itself and its owner (`SliceOwnership::Mark::subject()`); if, on that later turn, any id
+no longer names that same slice or has another owner (closed, and its id reused by any new slice,
+the same owner's or an unowned one included), the whole change is refused with "That setting
+changed since you asked. Make the change again." and nothing closes (fix wave 2, Important 4; fix
+wave 3, Important 1, identity rather than owner alone). Any `requestSliceSampleRate`, confirmed or
+not, also re-checks on that turn that its slice is still the requester's, and is refused with the
+foreign-slice reason when it is not, and with "That receiver is no longer on the Core." when its
+id now names a different slice of the requester's own (or nobody's)
+(`SessionCommandDispatcher::handleRequestSliceSampleRate`).
 
 **Ruling 7.4. Changes wait while the holder is on the air (D60).** While a holder is on the
 air, these changes from any other device are refused, not asked:
@@ -1075,6 +1135,14 @@ whoever changed it, the requester included, the proceed is refused with "That se
 since you asked. Make the change again." A new write from the requester to the same target
 cancels its open request.
 
+**Ruling 7.6a** (fix wave I2, 2026-09-25). Every slice a request names (the written slice, a
+`sliceId` argument, the slices a move carries) must still be the requester's at proceed; a
+slice id is handed out lowest free first (ruling 5.5), so a slice closed within the 60 s may
+be another device's under the same id. A request whose slice closes or passes to another
+owner is dropped at once, and its proceed is refused as changed ("That setting changed since
+you asked. Make the change again." for `sharedSetting`, "What this change reaches has
+changed. Make the change again." for the other kinds); nothing is applied.
+
 An older window gets the refusal only, with the reason "This change would affect iPhone.
 Update NereusSDR to confirm changes that affect other devices." (D59). The older-window
 reasons do not say "computer": a phone that has not yet declared the feature meets them too.
@@ -1110,7 +1178,17 @@ question the other way and, on proceed, recreates the closed slices with their s
 are sent right after its `snapshot.complete`. When it comes back after its 3 minutes have
 ended they still arrive, after its `graceEnded` notice and without Take it back, so it
 learns who took what and when; the Core keeps them until the device returns, it is revoked,
-or the Core restarts.
+or the Core restarts. A slice taken from an away device lives only in its notice while Take it
+back is possible; when the 3 minutes end first, Take it back ends and the slice is saved in the
+device's `DeviceLayoutStore` with its settings, as ruling 5.2 saves a held slice another device
+closes, so the device's next admission restores it (fix wave 2,
+`StationServer::saveTakenSlicesFor`). A Take it back already delivered (the device was there
+when its slice was taken) ends the same way: when the device's next away period ends, the record
+goes and the slice is saved then (fix wave 3; `ConfirmStep::endTakeBacks` ends every record the
+device has, delivered or waiting). The save needs the radio the store is kept under: when no
+radio is connected as the 3 minutes end, nothing can be saved, so Take it back is kept and
+arrives with the notice at the device's return; it ends, the slice saved, at the end of the
+device's next away period with a radio connected (fix wave 3, the re-review's Minor 2).
 
 ### 7.5 The transmitter's own settings
 
@@ -1440,7 +1518,11 @@ display endpoints (at most 8, `DaemonMediaController.cpp:35`), receiver streams 
 
 - A receiver's FFT stays shared between everyone watching it, as the budget design keeps it
   (the budget design, section "Capacity descriptor and accounting"). A device subscribes a
-  display only for its own slices; its pans ride its slices' receivers, shared or not.
+  display only for its own slices; its pans ride its slices' receivers, shared or not. When a
+  slice passes to another owner, the old owner's displays on it retire exactly as a removed
+  slice's do (reason `slice removed`), since that device's view destroys the slice (ruling
+  5.8); its receiver streams already stopped as `slice-removed` (fix wave after the group review
+  of Tasks 71 to 76, `DaemonMediaController::retireSliceDisplays`).
 - A hosting desktop's own window draws locally and sends nothing over the network, so it has no
   media controller.
 - Telemetry (`station.metrics.v1`) goes to every session that negotiated it.
@@ -1478,6 +1560,118 @@ capabilities (the existing budget entries, the link, section 6.4):
    floor counts it (`DisplayLoadGovernor.h:141-143`); charging it per device would count it
    four times.
 
+**The requested charge is demand, not grant** (fix wave I5, 2026-09-25; fix wave 2,
+2026-09-25; fix wave 3, 2026-09-25). A device's request is the sum of its display subscriptions'
+charges as subscribed, at the frame rate it asked for and the pixels it asked for clamped to what
+its window can carry (the source bins in the window at the engine's FFT size,
+`SpectrumEndpoint::grantedPixels`; a device asking for more pixels than its window has bins
+would otherwise keep a demand it cannot use, taking share from the others and hearing
+`sharedConnection` while fully served), before the budget clamps them, a subscription refused
+for the budget included (until the bound below), and never less than one useful pan: 256 pixels
+at 10 frames a second with its wide plane, the governor's own floor pan
+(`DisplayLoadGovernor::floorPanCharge`, the same floor as `DisplayLoadGovernor.h:135-136` and
+`RemoteDisplayAllocator.cpp:20-21`). The floor is what keeps a device that joins second from
+being starved: before it has subscribed anything, or when it is an older client that plans
+inside its share and so never asks for more, it is still counted as wanting one pan, so another
+device that is not a present holder, asking for the whole total, cannot leave it less than one
+useful pan while the total holds one for each device (below). The link carries nothing that
+tells a sound-only device from one that has not subscribed yet, so every admitted network device
+is floored, the sound-only one included; the floor it keeps is a budget it never spends. What no
+device asks for is shared equally among the devices as room to grow into, so a device alone
+keeps the whole total, as before shares. A subscription is admitted against the share the device
+has with its new request (for a present holder, what rule 1 gives it), not the share it had.
+
+**What the floor guarantees, exactly** (fix wave 3, the re-review's Minor 1 and its first
+out-of-scope item):
+
+- With no present network holder (rule 3, or rule 2's others when the holder is the station
+  device or away), each admitted network device's share is at least the smaller of one useful
+  pan and an equal part of the total, in each field.
+- The load governor never cuts the total below PureSignal's display plus one useful pan for
+  each network device sharing the budget (`DisplayLoadGovernor::floorCharge(pans)`, fed
+  `StationServer::displayBudgetSharingCount` on every reading), capped at its ceiling; when a
+  device joins while a cut is in force, the cut rises to that floor at once. So a cut never
+  pauses every device's display: without a present holder each device keeps one useful pan
+  under any cut.
+- A total smaller than that can come only from configuration: a display allowance configured
+  for the Core (`DaemonConfig::displayBudgetLimits`) below one useful pan per device. Then each
+  device gets an equal part of it, which can be less than one pan, and a device whose part is
+  too small pauses its display, sound kept.
+- Beside a present network holder (rule 1, with Task 34), the other devices share only what the
+  holder's request leaves. A holder asking for the whole total leaves them a share of 1 (the
+  least a share can be), so their displays pause, sound kept, for as long as it asks for that;
+  the floor does not reserve anything against a holder.
+
+**A refused request ends** (fix wave 2, Important 2). A display the client drops, closes or
+pauses leaves its device's request. The client unsubscribes a display the Core refused when it
+drops it (the desktop does, `RemoteMediaController::sendRefusedRelease`), and the Core does not
+rely on that alone: a subscription refused for the budget counts in the request until the client
+asks for that endpoint again (a new subscribe replaces it), unsubscribes it, or does not ask
+again within `DaemonMediaController::kRefusedDisplayDemandHoldMs` of the refusal. The refusal is
+sent after the `capabilities` carrying the share the request produced (the next budget
+generation it was sent), and a planner that still wants the display re-plans at once: the
+desktop's runs on every capabilities change and every 100 ms. The hold is the app's own
+allocation acknowledgement timeout (`kDisplayAllocationAckTimeoutMs`, 10 s), the longest the
+app waits for the Core's answer on a slow link, so a re-ask within the same round trip is never
+missed, while a display dropped without a word stops cutting the other devices then. When the
+hold ends the endpoint asks for what it asked before the refusal (its live display's request,
+or nothing).
+
+**Every client asks for what the operator wants** (fix wave 2, Critical 1). A planner that only
+ever asks for what its share allows never shows its demand, so its share never grows past the
+equal part it started with, and rules 2 and 3 fail for a device that joins second. So every
+client, holder or not, subscribes each pane at the pixels and frame rate the operator wants. A
+subscription refused for the budget (reason "The Core's display limit has no room left.") is
+answered by the `capabilities` share the Core publishes with the new request, sent before the
+refusal; the planner then plans inside that share as before (lower background frame rates first,
+then detail, then the active pan, down to one pan at 256 pixels and 10 frames a second) and
+subscribes again, and what it subscribes then is its request. The demand the Core records is
+therefore what each device asked for, and the split is fair. A planner asks again when what the
+operator wants grows (a pan added, a pan made wider or faster), and when the transmit holder
+changes (fix wave 3, the re-review's Important 2). A pan made wider by a resize (the same pans at
+the same frame rates, only their widths changed) asks once the widths have stayed put for
+`RemoteMediaController::kResizeSettleMs`, 200 ms, two of the desktop planner's 100 ms ticks
+(`kPlannerIntervalMs`), so a window dragged wider asks once when the drag stops, not at every
+step (fix wave 3, the re-review's Minor 3); any other growth asks at once. The holder changes that
+ask:
+
+- this device becomes the present holder (it takes transmit, or comes back from away holding it):
+  rule 1 gives a holder its whole request, and its request is the plan it made inside its old
+  share until it asks again;
+- the holder changes to another device, or to the station device or the radio's PTT;
+- a holder lets go or goes away (transmit released, or its device away): rule 3's equal shares
+  come back only for devices that ask again, since a device held down beside the holder asks for
+  what it planned there.
+
+The client reads these from the holder notification (`txState`'s `holderEpoch`, which moves with
+every change of holder, a release included, and `holderAway`; ruling 8.1): a change of either is
+an ask. Asking again on every new generation would let two constrained devices trade their
+planning leftovers back and forth without end; a change of holder is an operator event, not a
+generation, and rule 1 is not symmetric (only the holder is kept whole), so asking on it cannot
+loop. A share that grows because another device asks for less is grown into by planning inside
+it.
+
+- The desktop's planner (`RemoteMediaController::refreshBudgetSubscriptions`, with
+  `RemoteDisplayAllocator`) does this: it plans without the share while asking, sends every pan's
+  wanted request whatever the share, ends the ask at the first budget refusal or once every pan
+  has been answered, and then plans inside the share. Its holder trigger is
+  `RemoteMediaController::setTransmitHolder(holderEpoch, holderAway)`. This branch receives no
+  holder notification (the Core's holder is always unheld until Task 34), so nothing calls it
+  yet: **the merge with Task 34 connects the client's `txState` (`holderEpoch`, `holderAway`) to
+  it**, and replaces the Core's test seam `StationServer::setDisplayBudgetHolderForTest` with
+  `TransmitHolder`'s holder in `splitDisplayBudget`.
+- The phone's planner, `DisplayQualityAllocator` (phone Task 52), must do the same: at the start
+  of its media session, whenever the displays the operator wants grow (a pane widened by a
+  resize or a rotation once its width has held for 200 ms, not at every step), and whenever
+  `txState`'s
+  `holderEpoch` or `holderAway` changes (it takes transmit, the holder changes, a holder lets go or
+  goes away), subscribe every visible pane at its wanted pixels and frame rate; on an
+  `allocation-result` refused with the reason
+  above, plan inside the share in the `capabilities` it already holds and subscribe the planned
+  qualities; otherwise plan inside the share as the budget design says; never ask again only
+  because a new generation arrived; and unsubscribe any endpoint the Core refused that it then
+  drops (a pane paused, closed or hidden).
+
 **The phone computes its own frame rate** (review finding 5). The Core hands each device a
 share, never a frame rate. Inside its share each device's own client plans its displays: it
 lowers background frame rates first, then detail, then the active pan, down to one useful pan
@@ -1489,8 +1683,9 @@ at 256 pixels and 10 frames a second (the budget design, lines 93-102; the deskt
 plan; the `fps` of a display endpoint's `context` only echoes what the phone subscribed at, so
 it is not a separate answer from the Core. On the phone the planner is
 `DisplayQualityAllocator`, phone Task 52 (the plan at `590d2e36`, lines 4479-4489), whose
-settled frame rate is what the chip shows (re-review finding 11). A share too small even for that one pan, possible only when
-the holder's request takes nearly all of a total the governor has cut, suspends that device's
+settled frame rate is what the chip shows (re-review finding 11). A share too small even for that one pan (beside a
+present holder whose request leaves too little, or under a configured display allowance smaller
+than one useful pan per device; see "What the floor guarantees" above) suspends that device's
 display as the budget design already does, pane and slice kept and the band marked paused
 (the budget design, lines 107-112); its sound is never cut (ruling 9.4; D64).
 
@@ -1514,9 +1709,16 @@ What a slowed device is told:
   - `sharedProcessing`: the governor has cut the total because the Core computer is short of
     processing time (the reason `coreBusy` would be in force alone). It has no drawn words
     yet; the phone session writes them.
-  They take the place of `coreBusy` while another device is admitted; alone on the Core a
-  device still sees `coreBusy` or `none`. Only devices with the new feature receive the new
-  values.
+  They take the place of `coreBusy` while another device is admitted and the device's share
+  is below its request; alone on the Core a device still sees `coreBusy` or `none`, and so
+  does a device beside others whose share covers all it asks for. Only devices with the new
+  feature receive the new values. Under demand-based requests (fix wave 2, Important 3) the
+  request is the device's demand, at least one useful pan; since every client asks for what the
+  operator wants (above), a device that wants more than its share beside another device hears
+  `sharedConnection` (or `sharedProcessing` under the governor's cut), as this ruling meant from
+  the start. The first fix wave's clients planned inside their share, so their demand never
+  exceeded it and they heard `none` or `coreBusy` beside another device; that is what this
+  round undoes.
 - A change of holder or of devices publishes new generations.
 
 **Design ruling 9.3a.** Finding 5 asks the reason to say whether "the uplink or the
@@ -1739,7 +1941,7 @@ the holder's (8.3, 8.7); Task 42's accessory verbs follow 7.5.
   | --- | --- | --- | --- |
   | Replaced by a fifth device | `session.end` naming the taker, with `takenOverBy`, `takenOverById` and `secondsAgo` | false | `takenOver` |
   | The fifth device cancelled or did not answer | `session.end` "The Core already has four devices connected." | false | `coreFull` (new) |
-  | An older window meets a full Core | `session.end` "The Core already has four devices connected." | true | none |
+  | An older window meets a full Core | `session.end` "The Core is full. Update NereusSDR to take a device's place, or try again later." (15.2, the operator's wording) | true | none |
   | The same device connected again | `session.end` "This device connected again." | false | `sameDevice` (new) |
   | An older window's last slice was taken | `session.end` naming the taker (ruling 6.10) | false | `takenOver` |
 
@@ -1803,8 +2005,9 @@ The operator let older windows in (D59: "Let it in").
 - While a place is free it is admitted with its own slices and the Core's objects; no markers,
   `connectedDevices`, confirmations or notices.
 - A refusal that involves another device names it and says to update NereusSDR.
-- A full Core refuses it with a retryable end ("The Core already has four devices
-  connected."), since it cannot answer the question; it tries again on its own backoff.
+- A full Core refuses it with a retryable end ("The Core is full. Update NereusSDR to take a device's place, or try again later.", the wording
+  the operator confirmed in 15.2), since it cannot answer the question; it tries again on its
+  own backoff. A device with the feature keeps the fifth-device flow (4.3).
 - When a take would close its last slice, its session ends (ruling 6.10).
 - **Ruling 10.2.** It gets a slice at admission (5.2) when the slice cap allows. When it does
   not, it is refused, retryable, in words that name the limit that is full: "All the radio's

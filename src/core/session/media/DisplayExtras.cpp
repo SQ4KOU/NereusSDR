@@ -9,6 +9,10 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  Created for iPhone app Task 20.
 //                                    AI-assisted via Anthropic Claude
 //                                    Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06: Clarity's
+//                                    Re-tune for one endpoint
+//                                    (displayExtrasVersion 2).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/DisplayExtras.h"
@@ -542,6 +546,15 @@ void DisplayExtrasProcessor::feedNoiseFloor(float floorDbm, qint64 nowMs)
     if (m_clarity) {
         m_clarity->feedNoiseFloor(floorDbm, nowMs);
     }
+}
+
+bool DisplayExtrasProcessor::retuneClarity()
+{
+    if (!m_clarity) {
+        return false;
+    }
+    m_clarity->retuneNow();
+    return true;
 }
 
 float DisplayExtrasProcessor::displayShiftDb(double binWidthHz) const

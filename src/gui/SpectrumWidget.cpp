@@ -8,6 +8,11 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-25 J.J. Boyd / KG4VCF : the band-plan strip's lowest-licence-
+//                 class rule moved unchanged to lowestLicenceClass() in
+//                 models/BandPlan.h, which the station catalogue also
+//                 calls (R-IOS-27, R-IOS-11). AI-assisted via Anthropic
+//                 Claude Code.
 //   2026-09-24 J.J. Boyd / KG4VCF : processNoiseFloor, the fast-attack
 //                 setter, the waterfall level composition, the normalise
 //                 shift, the averaging constant, the calibration range and
@@ -4941,10 +4946,7 @@ void SpectrumWidget::drawBandPlan(QPainter& p, const QRect& specRect)
             f.setBold(true);
             p.setFont(f);
 
-            QString lowestClass;
-            if      (lic.contains(QLatin1Char('T'))) { lowestClass = QStringLiteral("Tech"); }
-            else if (lic.contains(QLatin1Char('G'))) { lowestClass = QStringLiteral("General"); }
-            else if (lic == QLatin1String("E"))      { lowestClass = QStringLiteral("Extra"); }
+            const QString lowestClass = lowestLicenceClass(lic);
 
             QString label = seg.label;
             if (!lowestClass.isEmpty() && x2 - x1 > 60) {

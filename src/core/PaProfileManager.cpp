@@ -12,6 +12,11 @@
 //   2026-05-03 — Original implementation for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code. Phase 2 Agent 2B of issue #167.
+//   2026-09-25 - R-R3-46 / R-R3-49 (remote-window parity Task 6):
+//                 reloadFromSettings(), a read-only reload for the Core
+//                 after a window's change and for a remote window.
+//                 NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 // --- From setup.cs ---
@@ -311,6 +316,55 @@ void PaProfileManager::load(HPSDRModel connectedModel)
     m_activeProfileName = resolved;
     if (!resolved.isEmpty()) {
         writeActiveKey(resolved);
+    }
+}
+
+// R-R3-46 / R-R3-49 (remote-window parity Task 6). NereusSDR-original: a
+// read-only reload of what load() reads, with no seeding and no writes, so
+// it can run in a remote window (whose writes would go to the Core) and on
+// the Core after a window's change.
+void PaProfileManager::reloadFromSettings()
+{
+    if (m_mac.isEmpty()) {
+        return;
+    }
+    const QStringList names = readManifest();
+    QHash<QString, PaProfile> profiles;
+    for (const QString& name : names) {
+        PaProfile p;
+        if (readProfileBlob(name, p)) {
+            profiles.insert(name, p);
+        }
+    }
+    QStringList oldNames = m_profiles.keys();
+    QStringList newNames = profiles.keys();
+    std::sort(oldNames.begin(), oldNames.end());
+    std::sort(newNames.begin(), newNames.end());
+    const bool listChanged = oldNames != newNames;
+    bool dataChanged = false;
+    for (auto it = profiles.constBegin(); it != profiles.constEnd(); ++it) {
+        const auto old = m_profiles.constFind(it.key());
+        if (old != m_profiles.constEnd()
+            && old.value().dataToString() != it.value().dataToString()) {
+            dataChanged = true;
+        }
+    }
+    m_profiles = profiles;
+
+    const QString storedActive = readActiveKey();
+    const bool activeChanged = !storedActive.isEmpty() && storedActive != m_activeProfileName
+        && m_profiles.contains(storedActive);
+    if (activeChanged) {
+        m_activeProfileName = storedActive;
+    }
+    if (listChanged) {
+        emit profileListChanged();
+    }
+    if (activeChanged) {
+        emit activeProfileChanged(m_activeProfileName);
+    }
+    if (dataChanged) {
+        emit profileDataChanged();
     }
 }
 

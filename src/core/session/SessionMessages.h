@@ -138,12 +138,16 @@
 //   2026-09-25: iPhone app Task 71 (R-IOS-02):
 //               SessionEndCode::kSameDevice. J.J. Boyd (KG4VCF), with AI-
 //               assisted implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app Task 74 (R-IOS-30): confirm.request and notice
+//               (SessionPrompt). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
 #include <QHash>
 #include <QList>
 #include <QMetaType>
+#include <QJsonArray>
 #include <QJsonObject>
 
 #include <optional>
@@ -196,6 +200,13 @@ enum class SessionMessageKind {
     PairSpake,    // both: one SPAKE2+EE step, 0 to 3
     PairConfirm,  // both: a confirmation box under the agreed keys
     PairFail,     // Core -> device: why not, and when to try again
+    // iPhone app Task 74 (R-IOS-30; the several-devices design, sections
+    // 7.3 and 7.4): Core -> device, only to a device with
+    // sessionHolderVersion 1. A change that reaches another device, or a
+    // take, asks first (confirm.request); what another device did is told
+    // afterwards (notice).
+    ConfirmRequest,
+    Notice,
 };
 
 /// The session protocol's own semantic version, advertised by BOTH ends in
@@ -240,7 +251,9 @@ inline constexpr quint16 kRemoteSpectrumGrantSessionProtocolMinor = 9;
 inline constexpr quint16 kCoreHostTelemetrySessionProtocolMinor = 10;
 // Station telemetry carries each receiver's processing load, input wait and
 // skipped input in an optional receivers section (stationTelemetryVersion 3).
-// Minor-10 peers receive exactly the radio, audio and host sections.
+// Minor-10 peers receive exactly the radio, audio and host sections. The
+// radio's PA readings and link quality (stationTelemetryVersion 4) also need
+// minor 11; below it the radio section carries none of them.
 inline constexpr quint16 kReceiverLoadSessionProtocolMinor = 11;
 // A receiver that cannot keep up with neural noise reduction is stepped back
 // at runtime: SliceModel's nnrLimit property and the nnr.tryAgain command.
@@ -314,6 +327,48 @@ struct SessionStationIdentity {
 
 /// iPhone app Task 12: auth.request's `device`, base64url text as on the
 /// wire (the link document, section 3.5).
+/// iPhone app Task 74 (R-IOS-30): the body of a confirm.request or a
+/// notice (the several-devices design, sections 7.3 and 7.4; the link
+/// document, section 7.3). Its `reason` rides in SessionMessage::reason.
+/// The nested values (affected, change, choices, slices) are JSON the Core
+/// builds and the device reads as the link document describes them.
+struct SessionPrompt {
+    /// Both: the question's or the notice's id, unique on this Core.
+    qint64 id = 0;
+    /// Both: confirm.request panMove, takeReceiver, takeSlice (Tasks 75 and
+    /// 77 add sharedSetting and takeTransmit); notice sliceMoved,
+    /// sliceClosed, receiverTaken, sliceTaken, graceEnded,
+    /// slicesNotRestored.
+    QString kind;
+
+    // ── confirm.request ─────────────────────────────────────────────────
+    /// One entry per disturbed device.
+    QJsonArray affected;
+    qint64 expiresInMs = 0;
+    /// {label, from, to}; absent for a take.
+    std::optional<QJsonObject> change;
+    /// A take's list, one entry per receiver or slice.
+    std::optional<QJsonArray> choices;
+    std::optional<qint64> forCommandId;
+    std::optional<qint64> forWriteId;
+    /// Sent when not empty.
+    QString forSettingsKey;
+
+    // ── notice ──────────────────────────────────────────────────────────
+    /// Whole seconds since it happened, measured when it is sent.
+    qint64 secondsAgo = 0;
+    bool takeBack = false;
+    /// Who did it; each sent when not empty. None on a notice about the
+    /// device's own state.
+    QString byDeviceId;
+    QString byName;
+    QString byShortName;
+    QString byKind;
+    QString bySource;
+    /// [{sliceId, letter, frequencyHz, mode, band}], closed ones included.
+    std::optional<QJsonArray> slices;
+};
+
 /// iPhone app Task 14: the device pair.start names (its key as base64url of
 /// SPKI DER, a name and a kind). In code mode the name and kind inside the
 /// device's confirmation box win over these.
@@ -579,6 +634,9 @@ struct SessionMessage {
     /// fields after the authenticated, snapshot-ready session gate. This
     /// envelope carries signalling/subscriptions, never audio or FFT arrays.
     QJsonObject mediaPayload;
+
+    /// iPhone app Task 74: ConfirmRequest and Notice only.
+    SessionPrompt prompt;
 };
 
 /// Builders plus the JSON codec. A static-method utility class with no
@@ -731,6 +789,13 @@ public:
     /// `reason` is what the operator reads; `retryAfterMs` is when trying
     /// again makes sense.
     static SessionMessage pairFail(const QString& reason, qint64 retryAfterMs);
+
+    /// iPhone app Task 74 (R-IOS-30): Core to device, a question before a
+    /// change that reaches another device, or a take.
+    static SessionMessage confirmRequest(const SessionPrompt& prompt, const QString& reason);
+    /// iPhone app Task 74 (R-IOS-30): Core to device, what another device
+    /// did to it, or what happened to its own state.
+    static SessionMessage notice(const SessionPrompt& prompt, const QString& reason);
 
     static SessionMessage settingsReject(const QString& key, bool hasRestoredValue,
                                          const QString& restoredValue,

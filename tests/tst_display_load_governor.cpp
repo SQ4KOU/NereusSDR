@@ -13,6 +13,7 @@
 #include <functional>
 
 #include "core/daemon/DisplayLoadInputs.h"
+#include "core/session/media/DisplayBudgetSplit.h"
 #include "core/session/media/DisplayLoadGovernor.h"
 
 using namespace NereusSDR;
@@ -509,6 +510,78 @@ private slots:
             return loadReading(t, 0.95, floor);
         }).isEmpty());
         QCOMPARE(quiet.limits(), ceiling);
+    }
+
+    // Fix wave 3 (the re-review's first out-of-scope item, ruling 9.3): the
+    // floor keeps one useful pan for each device sharing the budget, so a
+    // cut never pauses every device's display.
+    void theFloorKeepsOneUsefulPanForEachSharingDevice()
+    {
+        const DisplayBudgetCharge onePan = DisplayLoadGovernor::floorPanCharge();
+        const DisplayBudgetCharge two = DisplayLoadGovernor::floorCharge(2);
+        QCOMPARE(two.applicationBytesPerSecond,
+                 ps3DisplayCharge().applicationBytesPerSecond
+                     + 2 * onePan.applicationBytesPerSecond);
+        QCOMPARE(two.spectrumSampleUnitsPerSecond, 2 * onePan.spectrumSampleUnitsPerSecond);
+        QCOMPARE(DisplayLoadGovernor::floorCharge(0).spectrumSampleUnitsPerSecond,
+                 onePan.spectrumSampleUnitsPerSecond);
+
+        const DisplayBudgetLimits ceiling = DisplayLoadGovernor::computedCeiling();
+        DisplayLoadGovernor governor(ceiling);
+        const auto busyForTwo = [&governor](qint64 t) {
+            DisplayLoadReading reading = loadReading(t, 2.0 - 0.04 * governor.steps());
+            reading.floorPans = 2;
+            return reading;
+        };
+        QVERIFY(feed(governor, 0, 600'000, busyForTwo).size() > 1);
+        QCOMPARE(governor.limits().applicationBytesPerSecond, two.applicationBytesPerSecond);
+        QCOMPARE(governor.limits().spectrumSampleUnitsPerSecond, two.spectrumSampleUnitsPerSecond);
+
+        // Split between the two devices, each asking for four pans, with
+        // nobody subscribed to PureSignal's display: each keeps one pan.
+        DisplayBudgetSplitInput in;
+        in.total = governor.limits();
+        in.governorCut = true;
+        in.minimumRequest = onePan;
+        for (const char* id : {"a", "b"}) {
+            DisplayBudgetSplitDevice device;
+            device.id = id;
+            device.request = fourPans();
+            in.devices.append(device);
+        }
+        for (const DisplayBudgetShare& share : DisplayBudgetSplit::split(in)) {
+            QVERIFY(share.limits.applicationBytesPerSecond >= onePan.applicationBytesPerSecond);
+            QVERIFY(share.limits.spectrumSampleUnitsPerSecond
+                    >= onePan.spectrumSampleUnitsPerSecond);
+        }
+    }
+
+    // Fix wave 3: a cut in force at one device's floor rises to two floor
+    // pans at once when a second device shares the budget, the step kept.
+    void aCutInForceRisesToTheFloorWhenADeviceJoins()
+    {
+        const DisplayBudgetLimits ceiling = DisplayLoadGovernor::computedCeiling();
+        DisplayLoadGovernor governor(ceiling);
+        QVERIFY(feed(governor, 0, 600'000, [&governor](qint64 t) {
+            return loadReading(t, 2.0 - 0.04 * governor.steps());
+        }).size() > 1);
+        const DisplayBudgetCharge one = DisplayLoadGovernor::floorCharge();
+        QCOMPARE(governor.limits().spectrumSampleUnitsPerSecond, one.spectrumSampleUnitsPerSecond);
+        const int steps = governor.steps();
+        const quint32 generation = governor.limits().generation;
+
+        DisplayLoadReading joined = loadReading(600'500, 2.0 - 0.04 * steps);
+        joined.floorPans = 2;
+        const auto decision = step(governor, joined);
+        QVERIFY(decision.has_value());
+        const DisplayBudgetCharge two = DisplayLoadGovernor::floorCharge(2);
+        QCOMPARE(decision->limits.applicationBytesPerSecond, two.applicationBytesPerSecond);
+        QCOMPARE(decision->limits.spectrumSampleUnitsPerSecond, two.spectrumSampleUnitsPerSecond);
+        QCOMPARE(decision->limits.generation, generation + 1);
+        QCOMPARE(decision->reason, DisplayBudgetReason::CoreBusy);
+        QCOMPARE(governor.steps(), steps);
+        // Held there: nothing more while two devices share it.
+        QVERIFY(!step(governor, joined));
     }
 
     void calmForTenSecondsRestoresOneStepAtATime()

@@ -12,7 +12,7 @@
         {"from": "client", "role": "scripted", "message": {"type": "hello", "major": 1, "minor": 11, "settingsSchema": 0, "peer": "NereusSDR"}},
         {"from": "client", "role": "scripted", "message": {"type": "auth.request", "token": "$ref:token"}},
         {"from": "station", "message": {"accepted": true, "reason": "", "retryable": false, "type": "auth.result"}},
-        {"from": "station", "message": {"reason": "The Core already has four devices connected.", "retryable": true, "type": "session.end"}},
+        {"from": "station", "message": {"reason": "The Core is full. Update NereusSDR to take a device's place, or try again later.", "retryable": true, "type": "session.end"}},
         {"expectClosed": {"retryable": true}}
     ]
 }

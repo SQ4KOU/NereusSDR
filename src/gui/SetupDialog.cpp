@@ -121,6 +121,57 @@
 //                 a Core page; the presets live on the Core. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-09-24: R-R3-49 (parity Task 1): setTransmitSettingsPermitted,
+//                 pushed to every realized page beside the transmit
+//                 permission. J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
+//   2026-09-25: R-R3-49 (parity Task 3): the transmit settings gate per
+//                 transmitSettingsVersion (setTransmitSettingsPermitted's
+//                 minVersion); Audio > TX Profile no longer waits for
+//                 remote transmit, and gates its own controls. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
+//   2026-09-25: R-R3-49 (parity Task 4): DSP > CFC and Transmit > Speech
+//                 Processor no longer wait for remote transmit; CFC gates
+//                 its own controls at transmitSettingsVersion 4. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
+//   2026-09-25: R-R3-49 / R-R3-46 (parity Task 6): PA > PA Gain, Watt
+//                 Meter and PA Values no longer wait for remote transmit;
+//                 each gates its own controls at transmitSettingsVersion 6
+//                 (the auto-calibrate sweep keeps the transmit permission).
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
+//   2026-09-25: R-R3-49 (parity Task 5): Transmit > Power, Transmit >
+//                 DEXP/VOX and Test > Two-Tone IMD no longer wait for remote
+//                 transmit; each gates its own controls at
+//                 transmitSettingsVersion 5 (Enable VOX keeps the transmit
+//                 permission). J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
+//   2026-09-25: R-R3-49 (parity Task 8): selectNavigationTarget. The Power
+//                 Genius and Tuner Genius applets' Advanced entries and the
+//                 interlock entry open CAT & Network > 4O3A at their own
+//                 tab; the tree labels they named were folded into 4O3A.
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
+//   2026-09-25: Receiver and transmit gaps plan, Task 16 fix wave (I1).
+//                 While receive only is on, the Transmit and PA categories
+//                 and Test > Two-Tone IMD are disabled with its reason,
+//                 never hidden, following RadioModel::rxOnlyChanged, as
+//                 Thetis's chkGeneralRXOnly_CheckedChanged disables
+//                 tpTransmit, tpPowerAmplifier and grpTestTXIMD
+//                 (setup.cs:6499-6501 [v2.10.3.15]). J.J. Boyd (KG4VCF),
+//                 with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25: Task 16 fix wave 2. The PA category is never hidden: on
+//                 the receive-only kit it is disabled with the kit's
+//                 reason, and on a radio without power amplifier settings
+//                 with that reason. The Transmit and PA rows name the
+//                 remote transmit reason beside receive only's. Receive
+//                 only disables Audio > TX Input too (grpBoxMic is on
+//                 tpTransmit), which a remote window without transmit
+//                 keeps live. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include "SetupDialog.h"
@@ -172,6 +223,7 @@
 // Advanced / PGXL Interlock entries into a single tree node under a
 // master toggle.  PgxlInterlockPage's include lives inside FourO3APage.cpp.
 #include "setup/FourO3APage.h"
+#include <QHash>
 // RF-Kit RF2K-S integration page (Settings -> CAT & Network -> RF-Kit).
 #include "setup/RfKitPage.h"
 // Keyboard
@@ -203,7 +255,7 @@ namespace {
 // Current board capabilities for the connected radio, with the same
 // conservative fallback the ctor has always used: boardCapabilities()
 // returns Unknown caps when no radio has ever connected, and Unknown sets
-// hasPaProfile=false so the PA category stays hidden.
+// hasPaProfile=false so the PA pages are disabled with their reason.
 //
 // Factored out of the ctor so the lazily-built PA pages can pick up the
 // live caps at realization time without SetupDialog having to cache a
@@ -234,6 +286,7 @@ SetupDialog::SetupDialog(RadioModel* model, QWidget* parent)
     : QDialog(parent), m_model(model)
 {
     m_transmitPermitted = model && model->ownsLocalDsp();
+    m_transmitSettingsPermitted = m_transmitPermitted;
     m_transmitReason = tr("Remote transmit controls are not available from this Core yet.");
     m_localUnavailableReason = tr(
         "These settings control audio and signal processing on this computer. "
@@ -308,6 +361,26 @@ SetupDialog::SetupDialog(RadioModel* model, QWidget* parent)
         QStringLiteral("QLabel { color: #c8d8e8; background: #1a2a3a; }"));
     m_stationNotice->hide();
     pageLayout->addWidget(m_stationNotice);
+    // Task 16 fix wave (I1): the receive-only reason above a page it
+    // disables.
+    m_receiveOnlyNotice = new QLabel(pageContainer);
+    m_receiveOnlyNotice->setObjectName(QStringLiteral("setupReceiveOnly"));
+    m_receiveOnlyNotice->setWordWrap(true);
+    m_receiveOnlyNotice->setMargin(12);
+    m_receiveOnlyNotice->setStyleSheet(
+        QStringLiteral("QLabel { color: #c8d8e8; background: #1a2a3a; }"));
+    m_receiveOnlyNotice->hide();
+    pageLayout->addWidget(m_receiveOnlyNotice);
+    // Task 16 fix wave 2 (Important 2): why the PA pages are disabled on a
+    // radio without power amplifier settings.
+    m_noPaNotice = new QLabel(pageContainer);
+    m_noPaNotice->setObjectName(QStringLiteral("setupNoPowerAmplifier"));
+    m_noPaNotice->setWordWrap(true);
+    m_noPaNotice->setMargin(12);
+    m_noPaNotice->setStyleSheet(
+        QStringLiteral("QLabel { color: #c8d8e8; background: #1a2a3a; }"));
+    m_noPaNotice->hide();
+    pageLayout->addWidget(m_noPaNotice);
     pageLayout->addWidget(m_stack, 1);
     splitter->addWidget(m_tree);
     splitter->addWidget(pageContainer);
@@ -363,13 +436,17 @@ SetupDialog::SetupDialog(RadioModel* model, QWidget* parent)
     if (m_model) {
         connect(m_model, &RadioModel::currentRadioChanged,
                 this, &SetupDialog::onCurrentRadioChanged);
+        // Task 16 fix wave (I1): receive only turning on or off, or its
+        // reason changing (the kit), in a local and a remote window alike.
+        connect(m_model, &RadioModel::rxOnlyChanged,
+                this, [this](bool) { refreshTransmitPresentation(); });
     }
 
     // Apply initial visibility at construction time so the dialog opens
     // with the right state even when no currentRadioChanged has fired yet.
     // boardCapabilities() falls back to Unknown caps when no radio has
-    // ever connected; Unknown sets hasPaProfile=false → PA category
-    // hidden, matching the conservative default.
+    // ever connected; Unknown sets hasPaProfile=false → PA pages
+    // disabled with their reason, matching the conservative default.
     //
     // #272 / #301: this pass now only decides nav-tree row visibility, since
     // the three PA page widgets do not exist yet. Each PA factory re-applies
@@ -411,6 +488,37 @@ void SetupDialog::selectPage(const QString& label)
             }
         }
     }
+}
+
+bool SetupDialog::selectNavigationTarget(const QString& pageKey)
+{
+    struct Target {
+        const char* label;
+        int fourO3ATab;   // -1: not a 4O3A tab
+    };
+    static const QHash<QString, Target> kTargets = {
+        {QStringLiteral("pgxlAdvanced"),
+         {"4O3A", static_cast<int>(FourO3APage::Tab::PowerGenius)}},
+        {QStringLiteral("tgxlAdvanced"),
+         {"4O3A", static_cast<int>(FourO3APage::Tab::TunerGenius)}},
+        {QStringLiteral("pgxlInterlock"),
+         {"4O3A", static_cast<int>(FourO3APage::Tab::General)}},
+        {QStringLiteral("peripherals"),
+         {"4O3A", static_cast<int>(FourO3APage::Tab::General)}},
+        // Phase 3P-III Task 14: RF-Kit setup page (CAT & Network > RF-Kit).
+        {QStringLiteral("rfKit"), {"RF-Kit", -1}},
+    };
+    const auto it = kTargets.constFind(pageKey);
+    if (it == kTargets.cend()) {
+        return false;
+    }
+    selectPage(QString::fromLatin1(it->label));
+    if (it->fourO3ATab >= 0) {
+        if (auto* page = findChild<FourO3APage*>()) {
+            page->selectTab(static_cast<FourO3APage::Tab>(it->fourO3ATab));
+        }
+    }
+    return true;
 }
 
 // Phase 3J-1 bench fix (2026-05-11): forward TciServer reference to the
@@ -823,6 +931,20 @@ void SetupDialog::setTransmitPermitted(bool permitted, const QString& reason)
     refreshTransmitPresentation();
 }
 
+void SetupDialog::setTransmitSettingsPermitted(bool permitted, const QString& reason,
+                                               int minVersion)
+{
+    if (minVersion <= 1) {
+        m_transmitSettingsPermitted = permitted;
+        m_transmitSettingsReason = reason;
+    } else {
+        // R-R3-49 (parity Task 3): a later version's settings, pushed to the
+        // pages through SetupPage::setTransmitSettingsPermittedAt.
+        m_transmitSettingsGates.insert(minVersion, TransmitSettingsGate{permitted, reason});
+    }
+    refreshTransmitPresentation();
+}
+
 void SetupDialog::refreshTransmitPresentation()
 {
     // The reason a page is unavailable, if it is. The transmit reason wins
@@ -837,9 +959,34 @@ void SetupDialog::refreshTransmitPresentation()
     const auto coreBlocked = [stationBlocked](const PageEntry& entry) {
         return stationBlocked && entry.scope == SetupScope::Core;
     };
-    const auto unavailableReason = [this, &coreBlocked](const PageEntry& entry) -> QString {
+    // Task 16 fix wave (I1). From Thetis setup.cs:6499-6501 [v2.10.3.15]
+    // (chkGeneralRXOnly_CheckedChanged):
+    //   tpTransmit.Enabled = !chkGeneralRXOnly.Checked;
+    //   tpPowerAmplifier.Enabled = !chkGeneralRXOnly.Checked;
+    //   grpTestTXIMD.Enabled = !chkGeneralRXOnly.Checked;
+    // Disabled with the reason (the kit's for the kit), never hidden. With a
+    // remote window's missing transmit as well, both reasons (M6).
+    const bool rxOnly = m_model && m_model->isRxOnly();
+    const auto rxOnlyBlocked = [rxOnly](const PageEntry& entry) {
+        return rxOnly && entry.receiveOnlyGated;
+    };
+    // Task 16 fix wave 2 (Important 2): a radio without power amplifier
+    // settings shows the PA pages disabled with that reason, never hidden.
+    // Receive only's reason comes first (the kit's for the kit).
+    const auto paBlocked = [this](const PageEntry& entry) {
+        return entry.paPage && !m_paAvailable;
+    };
+    const auto unavailableReason = [this, &coreBlocked, &rxOnlyBlocked, &paBlocked](
+                                       const PageEntry& entry) -> QString {
         if (coreBlocked(entry)) {
             return m_stationReason;
+        }
+        if (rxOnlyBlocked(entry)) {
+            return m_model->rxOnlyReasonAlongside(
+                entry.requiresTransmit && !m_transmitPermitted ? m_transmitReason : QString());
+        }
+        if (paBlocked(entry)) {
+            return m_noPaReason;
         }
         if (entry.requiresTransmit && !m_transmitPermitted) {
             return m_transmitReason;
@@ -854,6 +1001,9 @@ void SetupDialog::refreshTransmitPresentation()
     bool showNotice = false;
     bool showLocalNotice = false;
     bool showStationNotice = false;
+    bool showReceiveOnlyNotice = false;
+    bool showNoPaNotice = false;
+    QString receiveOnlyNoticeText;
     QString localNoticeText = m_localUnavailableReason;
     for (PageEntry& entry : m_pages) {
         if (!entry.widget) { continue; }
@@ -867,15 +1017,30 @@ void SetupDialog::refreshTransmitPresentation()
         }
         for (SetupPage* setupPage : setupPages) {
             setupPage->setTransmitPermitted(m_transmitPermitted, m_transmitReason);
+            // R-R3-49 (parity Task 1): the transmit settings that key nothing.
+            setupPage->setTransmitSettingsPermitted(m_transmitSettingsPermitted,
+                                                    m_transmitSettingsReason);
+            // R-R3-49 (parity Task 3): each later version's settings.
+            for (auto gate = m_transmitSettingsGates.cbegin();
+                 gate != m_transmitSettingsGates.cend(); ++gate) {
+                setupPage->setTransmitSettingsPermittedAt(gate.key(), gate->permitted,
+                                                          gate->reason);
+            }
             // R-R3-21: a Mixed page gates its own Core controls.
             setupPage->setStationSettingsAvailable(!stationBlocked, m_stationReason);
         }
         const bool blocked = coreBlocked(entry);
+        const bool rxOnlyOff = rxOnlyBlocked(entry);
+        const bool paOff = paBlocked(entry);
         if (entry.requiresTransmit) {
             // A negotiated TX permission cannot make this client's absent DSP
             // available. Preserve the independent resource gate and child rules.
+            // Task 16 fix wave (I1): receive only disables it as well (a
+            // gated non-transmit page is handled below, fix wave 2).
+            // Fix wave 2 (Important 2): so does a radio without power
+            // amplifier settings, on the PA pages (all transmit pages).
             entry.widget->setEnabled(m_transmitPermitted && !entry.localDspUnavailable
-                                     && !blocked);
+                                     && !blocked && !rxOnlyOff && !paOff);
         } else if (blocked && !entry.stationDisabled) {
             entry.widget->setEnabled(false);
         } else if (!blocked && entry.stationDisabled) {
@@ -885,11 +1050,40 @@ void SetupDialog::refreshTransmitPresentation()
             }
         }
         entry.stationDisabled = blocked;
-        if (!entry.requiresTransmit && !entry.localDspUnavailable && !blocked) { continue; }
+        // Fix wave 2 (Minor 4): a non-transmit page receive only reaches
+        // (Audio > TX Input) is disabled while it is on, and given back the
+        // state the other gates decide when it goes off.
+        // Checkpoint join: the PA pages are non-transmit pages since parity
+        // Task 6, so a radio without power amplifier settings disables them
+        // here too (fix wave 2, Important 2).
+        bool receiveOnlyLifted = false;
+        if (!entry.requiresTransmit) {
+            const bool off = rxOnlyOff || paOff;
+            if (off) {
+                entry.widget->setEnabled(false);
+            } else if (entry.receiveOnlyDisabled) {
+                entry.widget->setEnabled(!blocked && !entry.localDspUnavailable
+                                         && !entry.placeholder);
+                receiveOnlyLifted = true;
+            }
+            entry.receiveOnlyDisabled = off;
+        }
+        if (!entry.requiresTransmit && !entry.localDspUnavailable && !blocked && !rxOnlyOff
+            && !paOff) {
+            if (receiveOnlyLifted) {
+                entry.widget->setToolTip(QString());
+            }
+            continue;
+        }
         entry.widget->setToolTip(unavailableReason(entry));
         if (m_stack->currentWidget() == entry.widget) {
             if (blocked) {
                 showStationNotice = true;
+            } else if (rxOnlyOff) {
+                showReceiveOnlyNotice = true;
+                receiveOnlyNoticeText = unavailableReason(entry);
+            } else if (paOff) {
+                showNoPaNotice = true;
             } else if (entry.requiresTransmit && !m_transmitPermitted) {
                 showNotice = true;
             } else if (entry.localDspUnavailable) {
@@ -903,7 +1097,8 @@ void SetupDialog::refreshTransmitPresentation()
         const int index = (*it)->data(0, Qt::UserRole).toInt();
         if (index >= 0 && index < static_cast<int>(m_pages.size())) {
             const PageEntry& entry = m_pages[static_cast<std::size_t>(index)];
-            if (coreBlocked(entry) || entry.requiresTransmit || entry.localDspUnavailable) {
+            if (coreBlocked(entry) || entry.requiresTransmit || entry.localDspUnavailable
+                || entry.receiveOnlyGated) {
                 (*it)->setToolTip(0, unavailableReason(entry));
             } else if (remoteSession && !entry.remoteUnavailableReason.isEmpty()) {
                 // Declared unavailable but not visited yet: the leaf already
@@ -923,6 +1118,59 @@ void SetupDialog::refreshTransmitPresentation()
     m_localUnavailableNotice->setVisible(showLocalNotice);
     m_stationNotice->setText(m_stationReason);
     m_stationNotice->setVisible(showStationNotice);
+    m_receiveOnlyNotice->setText(receiveOnlyNoticeText);
+    m_receiveOnlyNotice->setVisible(showReceiveOnlyNotice);
+    m_noPaNotice->setText(m_noPaReason);
+    m_noPaNotice->setVisible(showNoPaNotice);
+    // The Transmit and PA categories themselves say why, as Thetis's tab
+    // pages do by being disabled as a whole: with a remote window's missing
+    // transmit as well, both reasons, as the pages under them say (fix
+    // wave 2, Minor 1).
+    // Checkpoint join: since parity Tasks 4 to 6 most of these pages no
+    // longer wait for remote transmit, so a category names the missing
+    // transmit only while a page under it still does.
+    const auto holdsTransmitPage = [this](const QTreeWidgetItem* category) {
+        for (int i = 0; i < category->childCount(); ++i) {
+            const int index = category->child(i)->data(0, Qt::UserRole).toInt();
+            if (index >= 0 && index < static_cast<int>(m_pages.size())
+                && m_pages[static_cast<std::size_t>(index)].requiresTransmit) {
+                return true;
+            }
+        }
+        return false;
+    };
+    for (QTreeWidgetItem* category : m_receiveOnlyCategories) {
+        const bool transmitToo = !m_transmitPermitted && holdsTransmitPage(category);
+        category->setToolTip(0, rxOnly ? m_model->rxOnlyReasonAlongside(
+                                             transmitToo ? m_transmitReason : QString())
+                                       : QString());
+    }
+    // The PA category on a radio without power amplifier settings.
+    if (m_paCategoryItem && !rxOnly && !m_paAvailable) {
+        m_paCategoryItem->setToolTip(0, m_noPaReason);
+    }
+}
+
+void SetupDialog::markReceiveOnlyGated(QTreeWidgetItem* item, bool nonTransmitPage)
+{
+    if (!item) {
+        return;
+    }
+    const int index = item->data(0, Qt::UserRole).toInt();
+    if (index >= 0 && index < static_cast<int>(m_pages.size())) {
+        PageEntry& entry = m_pages[static_cast<std::size_t>(index)];
+        // Fix wave 2 (Minor 4): a gated page is one the gate reaches. A
+        // transmit page rides the requiresTransmit enable path; any other
+        // page must be named as one on purpose, and is disabled on its own
+        // path in refreshTransmitPresentation.
+        Q_ASSERT_X(entry.requiresTransmit || nonTransmitPage, "markReceiveOnlyGated",
+                   "a receive-only gated page must be a transmit page or marked as a "
+                   "non-transmit page the gate reaches");
+        entry.receiveOnlyGated = true;
+    }
+    for (int i = 0; i < item->childCount(); ++i) {
+        markReceiveOnlyGated(item->child(i), nonTransmitPage);
+    }
 }
 
 void SetupDialog::markRemoteUnavailable(QTreeWidgetItem* leaf, const QString& reason)
@@ -1085,10 +1333,11 @@ void SetupDialog::buildTree()
     //   - PA Values       → NereusSDR-spin live telemetry page (Phase 4)
     //
     // Phase 8 of #167 — the PA category and 3 sub-pages are now ALWAYS
-    // built. Per-SKU visibility is driven dynamically via
+    // built. Per-SKU availability is driven dynamically via
     // applyPaVisibility() (called from onCurrentRadioChanged + at end of
-    // ctor). The category root is hidden when caps.isRxOnlySku
-    // or when !caps.hasPaProfile. Each child page additionally toggles
+    // ctor). Task 16 fix wave 2: never hidden; the pages are disabled with
+    // the reason when caps.isRxOnlySku (the kit's) or when
+    // !caps.hasPaProfile. Each child page additionally toggles
     // its own informational rows / banners per the BoardCapabilities flags.
     //
     // This replaces the construction-time hasPaProfile gate (which
@@ -1099,6 +1348,7 @@ void SetupDialog::buildTree()
     tick("Hardware");
 
     m_paCategoryItem  = addCategory("PA");
+    m_receiveOnlyCategories.push_back(m_paCategoryItem);
 
     // #272 / #301: each PA factory re-applies the live BoardCapabilities to
     // its own page, because applyPaVisibility() ran in the ctor (or on an
@@ -1106,13 +1356,16 @@ void SetupDialog::buildTree()
     //
     // R-R3-46 / R-R3-10: the three are transmit settings. A remote window
     // now knows the Core's radio, so they are shown for a radio that has
-    // them, and follow the transmit permission with its reason until remote
-    // transmit arrives (requiresTransmit). Local mode is always permitted.
+    // them. R-R3-49 (parity Task 6): no longer held whole for remote
+    // transmit. The Core takes their settings while its radio is off the
+    // air, so each page gates its own controls on transmitSettingsVersion
+    // 6; PA Gain's auto-calibrate sweep, which keys the radio, keeps the
+    // transmit permission. Local mode is always permitted.
     m_paGainItem = registerPage(m_paCategoryItem, "PA Gain", SetupScope::Core, [this]() -> QWidget* {
         m_paGainPage = new PaGainByBandPage(m_model);
         m_paGainPage->applyCapabilityVisibility(capsForModel(m_model));
         return m_paGainPage;
-    }, /*requiresTransmit=*/true);
+    });
 
     m_paWattMeterItem = registerPage(m_paCategoryItem, "Watt Meter", SetupScope::Core,
                                      [this]() -> QWidget* {
@@ -1142,17 +1395,22 @@ void SetupDialog::buildTree()
                     }
                 });
         return m_paWattMeterPage;
-    }, /*requiresTransmit=*/true);
+    });
 
     m_paValuesItem = registerPage(m_paCategoryItem, "PA Values", SetupScope::Core, [this]() -> QWidget* {
         m_paValuesPage = new PaValuesPage(m_model);
         m_paValuesPage->applyCapabilityVisibility(capsForModel(m_model));
         return m_paValuesPage;
-    }, /*requiresTransmit=*/true);
+    });
 
     // Cache the registry index so the Watt Meter cross-wire above can realize
     // the PA Values page without a label lookup on every button press.
     m_paValuesEntry = m_paValuesItem->data(0, Qt::UserRole).toInt();
+    // Task 16 fix wave (I1): tpPowerAmplifier.Enabled = !RXOnly
+    // (setup.cs:6500 [v2.10.3.15]). Checkpoint join: the PA pages are no
+    // longer transmit pages (parity Task 6), so the gate reaches them as
+    // non-transmit pages.
+    markReceiveOnlyGated(m_paCategoryItem, /*nonTransmitPage=*/true);
 
     tick("PA");
 
@@ -1168,8 +1426,16 @@ void SetupDialog::buildTree()
     // hardware controls follow the transmit permission inside the page
     // (AudioTxInputPage::setTransmitPermitted), so the leaf itself is no
     // longer a whole-page transmit leaf.
-    registerPage(audio, "TX Input", SetupScope::Mixed,  // I.1
-                 [this] { return wrapWithAudioBackendStrip(new AudioTxInputPage(m_model)); });
+    //
+    // Task 16 fix wave 2 (Minor 4): receive only disables it, with its
+    // reason, as Thetis's tpTransmit.Enabled = !RXOnly (setup.cs:6499
+    // [v2.10.3.15]) disables grpBoxMic, which sits on tpTransmit
+    // (setup.designer.cs:46443 [v2.10.3.15]). It is not a transmit page, so a
+    // remote window without transmit keeps it live (R-R3-36).
+    markReceiveOnlyGated(
+        registerPage(audio, "TX Input", SetupScope::Mixed,  // I.1
+                     [this] { return wrapWithAudioBackendStrip(new AudioTxInputPage(m_model)); }),
+        /*nonTransmitPage=*/true);
     // R-R3-44: the VAX channels are this computer's in a remote window as in
     // a local one (a remote window feeds them from the Core's receiver
     // streams), and the page writes only this computer's audio/Vax* keys,
@@ -1197,6 +1463,11 @@ void SetupDialog::buildTree()
                  [this] { return wrapWithAudioBackendStrip(new AudioAdvancedPage(m_model)); });
     // Phase 3M-1c J.3: TX Profile editor.
     //
+    // R-R3-49 (parity Task 3): no longer held for remote transmit. In a
+    // remote window the manager mirrors the Core's profiles and the page
+    // gates its own controls on transmitSettingsVersion 3
+    // (TxProfileSetupPage::setTransmitSettingsPermittedAt).
+    //
     // 3M-1c L.1 update: RadioModel now constructs MicProfileManager in its
     // ctor (per RadioModel::m_micProfileMgr in RadioModel.cpp), so this page
     // gets the live manager pointer at SetupDialog construction time.  The
@@ -1204,12 +1475,19 @@ void SetupDialog::buildTree()
     // RadioModel::connectToRadio().  Before any radio has connected the
     // manager is unscoped and every mutator silently no-ops; the page still
     // renders correctly (combo is empty) and Setup → TX Profile is harmless.
-    registerPage(audio, "TX Profile", SetupScope::Core, [this]() -> QWidget* {
+    // Task 16 fix wave (I1): Thetis's TX profile group (grpTXProfile) sits on
+    // tpTransmit (setup.designer.cs:46448 [v2.10.3.15]), so receive only
+    // disables it with the Transmit category (setup.cs:6499). Thetis's
+    // "TX Profile has changed" label is hidden while receive only is on
+    // (setup.cs:27362 [v2.10.3.15]:
+    //   lblTXProfileWarning.Visible = !console.RXOnly && bChanged;);
+    // NereusSDR shows no such label, so there is nothing to hide.
+    markReceiveOnlyGated(registerPage(audio, "TX Profile", SetupScope::Core, [this]() -> QWidget* {
         return new TxProfileSetupPage(
             m_model,
             m_model ? m_model->micProfileManager() : nullptr,
             m_model ? &m_model->transmitModel() : nullptr);
-    }, true);
+    }), /*nonTransmitPage=*/true);
 
     tick("Audio");
 
@@ -1233,15 +1511,16 @@ void SetupDialog::buildTree()
     // instance is shared with the [CFC] right-click on the TxApplet).
     //
     // R-R3-21: a transmit page. Phase Rotator, CFC and CESSB are all TXA
-    // stages, and the [Configure CFC bands] button opens the TX CFC editor,
-    // so the page follows the negotiated transmit permission like the six
-    // Transmit/Audio TX leaves.
+    // stages, and the [Configure CFC bands] button opens the TX CFC editor.
+    // R-R3-49 (parity Task 4): no longer held for remote transmit. The Core
+    // mirrors every setting on it; the page gates its own controls on
+    // transmitSettingsVersion 4 (CfcSetupPage::setTransmitSettingsPermittedAt).
     registerPage(dsp, "CFC", SetupScope::Core, [this]() -> QWidget* {
         auto* cfcPage = new CfcSetupPage(m_model);
         connect(cfcPage, &CfcSetupPage::openCfcDialogRequested,
                 this,    &SetupDialog::cfcDialogRequested);
         return cfcPage;
-    }, true);
+    });
 
     registerPage(dsp, "TNF", SetupScope::Core, [this] { return new MnfSetupPage(m_model); });
     // Stage C2: user-customisable filter preset editor (10 slots × 12 modes).
@@ -1317,7 +1596,10 @@ void SetupDialog::buildTree()
 
     // ── Transmit ──────────────────────────────────────────────────────────────
     QTreeWidgetItem* transmit = addCategory("Transmit");
-    registerPage(transmit, "Power", SetupScope::Core,       [this] { return new PowerPage(m_model);      }, true);
+    // R-R3-49 (parity Task 5): no longer held for remote transmit. The Core
+    // mirrors every setting on it; the page gates its own controls on
+    // transmitSettingsVersion 5 (PowerPage::setTransmitSettingsPermittedAt).
+    registerPage(transmit, "Power", SetupScope::Core,       [this] { return new PowerPage(m_model);      });
     if (UnbuiltFeatures::isBuilt(UnbuiltFeature::TxProfilesLeaf)) {
         registerPage(transmit, "TX Profiles", SetupScope::Core,
                      [this] { return new TxProfilesPage(m_model); }, true);
@@ -1327,6 +1609,9 @@ void SetupDialog::buildTree()
     // openSetupRequested(category, page) signal feeds straight back into
     // selectPage() so the cross-link buttons jump within the same dialog
     // instance — no MainWindow round-trip required.
+    // R-R3-49 (parity Task 4): no longer held for remote transmit. The page
+    // shows the Core's TX chain and opens the TX EQ dialog and the pages
+    // that change it, each of which follows the Core's gate.
     registerPage(transmit, "Speech Processor", SetupScope::Core, [this]() -> QWidget* {
         auto* speechPage = new SpeechProcessorPage(m_model);
         connect(speechPage, &SpeechProcessorPage::openSetupRequested,
@@ -1334,7 +1619,7 @@ void SetupDialog::buildTree()
             selectPage(page);
         });
         return speechPage;
-    }, true);
+    });
 
     // Note: Setup → Transmit → PureSignal page retired in Phase 3M-4 Task 14
     // (no Thetis equivalent; PsForm at Tools > PureSignal is the entire PS
@@ -1347,12 +1632,23 @@ void SetupDialog::buildTree()
     // from the legacy DSP > VOX/DEXP placeholder above (line 245), which
     // remains a lightweight 4-control disabled stub for back-compat with
     // the Thetis tpDSPVOX tab IA.
-    registerPage(transmit, "DEXP/VOX", SetupScope::Core, [this] { return new DexpVoxPage(m_model); }, true);
+    // R-R3-49 (parity Task 5): no longer held for remote transmit. Enable VOX
+    // follows the transmit permission; the rest follows
+    // transmitSettingsVersion 5 (DexpVoxPage).
+    registerPage(transmit, "DEXP/VOX", SetupScope::Core, [this] { return new DexpVoxPage(m_model); });
 
     // 2026-05-22 menu cleanup: the standalone "PGXL Interlock" entry that
     // previously lived here is removed. The same controls live under
     // Setup -> CAT & Network -> 4O3A -> General as an embedded section
     // (FourO3APage owns the PgxlInterlockPage instance).
+
+    // Task 16 fix wave (I1): tpTransmit.Enabled = !RXOnly
+    // (setup.cs:6499 [v2.10.3.15]). Checkpoint join: Power, Speech
+    // Processor and DEXP/VOX are no longer transmit pages (parity Tasks 4
+    // and 5), so the gate reaches them as non-transmit pages; TX Profiles
+    // still rides the transmit path.
+    markReceiveOnlyGated(transmit, /*nonTransmitPage=*/true);
+    m_receiveOnlyCategories.push_back(transmit);
 
     tick("Transmit");
 
@@ -1470,10 +1766,18 @@ void SetupDialog::buildTree()
     // ── Test ──────────────────────────────────────────────────────────────────
     // Phase 3M-1c H.1: top-level Test category for the Two-Tone IMD page.
     QTreeWidgetItem* test = addCategory("Test");
-    // R-R3-21: a transmit page. Every control writes the TransmitModel's
-    // two-tone test settings, which drive a keyed two-tone transmission.
-    registerPage(test, "Two-Tone IMD", SetupScope::Core, [this] { return new TestTwoTonePage(m_model); },
-                 true);
+    // R-R3-21: every control writes the TransmitModel's two-tone test
+    // settings, which a keyed two-tone transmission reads when it starts.
+    // R-R3-49 (parity Task 5): no longer held for remote transmit. The
+    // settings key nothing; the page gates them on transmitSettingsVersion
+    // 5, and the two-tone start (the TX applet's 2-Tone) keeps the transmit
+    // permission.
+    // Task 16 fix wave (I1): grpTestTXIMD.Enabled = !RXOnly
+    // (setup.cs:6501 [v2.10.3.15]). Checkpoint join: no longer a transmit
+    // page (parity Task 5), so the gate reaches it as a non-transmit page.
+    markReceiveOnlyGated(registerPage(test, "Two-Tone IMD", SetupScope::Core,
+                                      [this] { return new TestTwoTonePage(m_model); }),
+                         /*nonTransmitPage=*/true);
 
     tick("Test");
 
@@ -1524,10 +1828,11 @@ void SetupDialog::buildTree()
 // radio changes (radio swap, fresh connect, MAC switch). Forwarded
 // from RadioModel::currentRadioChanged.
 //
-// applyPaVisibility: collapses the per-SKU visibility decisions into
-// a single switch. The PA category root is hidden when caps.isRxOnlySku
-// (no TX hardware at all) or when !caps.hasPaProfile (the connected
-// board has TX but no PA gain calibration support — Atlas, RedPitaya).
+// applyPaVisibility: collapses the per-SKU decisions into a single
+// switch. The PA pages are disabled with the reason (never hidden, Task 16
+// fix wave 2) when caps.isRxOnlySku (no TX hardware at all) or when
+// !caps.hasPaProfile (the connected board has TX but no PA gain
+// calibration support: Atlas, RedPitaya).
 // Each child page additionally gates its own warning rows on the
 // individual capability flags via applyCapabilityVisibility().
 //
@@ -1545,23 +1850,27 @@ void SetupDialog::onCurrentRadioChanged(const RadioInfo& /*info*/)
 
 void SetupDialog::applyPaVisibility(const BoardCapabilities& caps)
 {
-    // Hide the entire PA category for RX-only SKUs and for boards that
-    // lack PA gain calibration support. Hidden via QTreeWidgetItem::
-    // setHidden which collapses the row out of the navigation tree
-    // entirely (clean visual — no greyed-out unreachable entry).
-    const bool paAvailable = !caps.isRxOnlySku && caps.hasPaProfile;
-
-    if (m_paCategoryItem) {
-        m_paCategoryItem->setHidden(!paAvailable);
+    // Task 16 fix wave 2 (Important 2): the operator's rule (2026-09-25) is
+    // that a control that cannot run is shown disabled with its reason,
+    // never hidden. The PA category and its pages stay in the tree on every
+    // radio. On the receive-only kit they are disabled with the kit's reason
+    // (receive only, refreshTransmitPresentation); on a radio without power
+    // amplifier settings (Atlas, or no radio yet) with that reason.
+    m_paAvailable = !caps.isRxOnlySku && caps.hasPaProfile;
+    m_noPaReason = caps.board == HPSDRHW::Unknown
+        ? tr("Connect a radio to change its power amplifier settings.")
+        : tr("This radio has no power amplifier settings.");
+    for (QTreeWidgetItem* item : {m_paCategoryItem, m_paGainItem, m_paWattMeterItem,
+                                  m_paValuesItem}) {
+        if (item) {
+            item->setHidden(false);
+        }
     }
-    if (m_paGainItem) {
-        m_paGainItem->setHidden(!paAvailable);
-    }
-    if (m_paWattMeterItem) {
-        m_paWattMeterItem->setHidden(!paAvailable);
-    }
-    if (m_paValuesItem) {
-        m_paValuesItem->setHidden(!paAvailable);
+    for (QTreeWidgetItem* leaf : {m_paGainItem, m_paWattMeterItem, m_paValuesItem}) {
+        const int index = leaf ? leaf->data(0, Qt::UserRole).toInt() : -1;
+        if (index >= 0 && index < static_cast<int>(m_pages.size())) {
+            m_pages[static_cast<std::size_t>(index)].paPage = true;
+        }
     }
 
     // Forward the caps to each PA page so it can self-toggle the
@@ -1583,6 +1892,7 @@ void SetupDialog::applyPaVisibility(const BoardCapabilities& caps)
     if (m_paValuesPage) {
         m_paValuesPage->applyCapabilityVisibility(caps);
     }
+    refreshTransmitPresentation();
 }
 
 

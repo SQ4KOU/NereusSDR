@@ -23,6 +23,12 @@
 //   2026-09-24 - R-R3-49: the Conflict policy group is hidden until the
 //                 policy is read (UnbuiltFeatures).
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 / R-R3-46 (parity Task 12): a remote window's TX
+//                 antenna grid, Block-TX switches and TX relay switches write
+//                 the Core's `alexAntennas` object and follow whether the
+//                 Core takes them; no on-air rule in either window, as in
+//                 Thetis. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 //=================================================================
@@ -176,6 +182,10 @@ AntennaAlexAntennaControlTab::AntennaAlexAntennaControlTab(RadioModel* model, QW
                 &AntennaAlexAntennaControlTab::onBlockTxChanged);
         connect(m_remoteAlex, &AlexAntennaFacade::blockTxAnt3Changed, this,
                 &AntennaAlexAntennaControlTab::onBlockTxChanged);
+        // Parity Task 12: the transmit half is live while the Core takes it.
+        connect(m_remoteAlex, &AlexAntennaFacade::transmitEditAvailabilityChanged, this,
+                &AntennaAlexAntennaControlTab::applyTransmitEditAvailability);
+        applyTransmitEditAvailability();
     } else {
         connect(m_alex, &AlexController::antennaChanged,
                 this, &AntennaAlexAntennaControlTab::onAntennaChanged);
@@ -228,15 +238,22 @@ void AntennaAlexAntennaControlTab::buildBlockTxStrip(QVBoxLayout* outerLayout)
     outerLayout->addWidget(frame);
 
     // ── Wire Block-TX checkboxes → controller ─────────────────────────────────
-    // R-R3-46: in a remote window these are the Core's transmit settings,
-    // which change only on the Core until remote transmit; an edit shows the
-    // Core's value again.
+    // Parity Task 12: in a remote window these go to the Core's controller
+    // (radioHardwareVersion 6); the boxes then show the Core's values.
     connect(m_blockTxAnt2, &QCheckBox::toggled, this, [this](bool checked) {
-        if (m_remoteAlex) { onBlockTxChanged(); return; }
+        if (m_remoteAlex) {
+            m_remoteAlex->setBlockTxAnt2(checked);
+            onBlockTxChanged();
+            return;
+        }
         m_alex->setBlockTxAnt2(checked);
     });
     connect(m_blockTxAnt3, &QCheckBox::toggled, this, [this](bool checked) {
-        if (m_remoteAlex) { onBlockTxChanged(); return; }
+        if (m_remoteAlex) {
+            m_remoteAlex->setBlockTxAnt3(checked);
+            onBlockTxChanged();
+            return;
+        }
         m_alex->setBlockTxAnt3(checked);
     });
 }
@@ -294,7 +311,13 @@ void AntennaAlexAntennaControlTab::buildTxGrid(QBoxLayout* outerLayout)
             // Wire to controller
             connect(rb, &QRadioButton::toggled, this, [this, band, antNum = a + 1](bool checked) {
                 if (!checked) { return; }
-                if (m_remoteAlex) { syncTxRow(static_cast<int>(band)); return; }
+                if (m_remoteAlex) {
+                    // Parity Task 12: the Core applies it; the row shows
+                    // what the Core keeps.
+                    m_remoteAlex->setTxAnt(band, antNum);
+                    syncTxRow(static_cast<int>(band));
+                    return;
+                }
                 m_alex->setTxAnt(band, antNum);
             });
         }
@@ -561,13 +584,31 @@ void AntennaAlexAntennaControlTab::buildTxBypassStrip(QVBoxLayout* outerLayout)
     outerLayout->addWidget(frame);
 
     if (m_remoteAlex) {
-        // R-R3-46: in a remote window "Use TX antenna for RX" is the one
-        // receive switch here; it goes to the Core, and the four TX relay
-        // switches follow the Core's values (they wait for remote transmit).
+        // R-R3-46: in a remote window "Use TX antenna for RX" goes to the
+        // Core. Parity Task 12: so do the four TX relay switches (RX bypass
+        // on TX from radioHardwareVersion 5, the other three from 6); each
+        // box then shows the Core's values, so a switch the Core cleared
+        // (Ext 1 on TX clears the other two) or refused shows that too.
         connect(m_chkUseTxAntForRx, &QCheckBox::toggled, this, [this](bool on) {
             m_remoteAlex->setUseTxAntennaForRx(on);
             QSignalBlocker b(m_chkUseTxAntForRx);
             m_chkUseTxAntForRx->setChecked(m_remoteAlex->useTxAntennaForRx());
+        });
+        connect(m_chkRxOutOnTx, &QCheckBox::toggled, this, [this](bool on) {
+            m_remoteAlex->setRxOutOnTx(on);
+            syncTxRelaysFromSource();
+        });
+        connect(m_chkExt1OutOnTx, &QCheckBox::toggled, this, [this](bool on) {
+            m_remoteAlex->setExt1OutOnTx(on);
+            syncTxRelaysFromSource();
+        });
+        connect(m_chkExt2OutOnTx, &QCheckBox::toggled, this, [this](bool on) {
+            m_remoteAlex->setExt2OutOnTx(on);
+            syncTxRelaysFromSource();
+        });
+        connect(m_chkRxOutOverride, &QCheckBox::toggled, this, [this](bool on) {
+            m_remoteAlex->setRxOutOverride(on);
+            syncTxRelaysFromSource();
         });
         const auto follow = [this](auto signal, QCheckBox* box) {
             connect(m_remoteAlex, signal, this, [box](bool on) {
@@ -734,7 +775,7 @@ void AntennaAlexAntennaControlTab::applySkuProfile()
     }
 }
 
-// ── R-R3-46: remote window source, transmit permission ───────────────────────
+// ── R-R3-46: remote window source; parity Task 12: its transmit half ─────────
 
 int AntennaAlexAntennaControlTab::txAntOf(Band band) const
 {
@@ -795,15 +836,45 @@ void AntennaAlexAntennaControlTab::syncAllFromSource()
     onBlockTxChanged();
 }
 
-void AntennaAlexAntennaControlTab::setTransmitPermitted(bool permitted, const QString& reason)
+void AntennaAlexAntennaControlTab::syncTxRelaysFromSource()
 {
-    // The TX antenna grid, the Block-TX strip and the four TX relay
-    // switches; "Use TX antenna for RX" is a receive setting and stays.
-    for (QWidget* w : std::initializer_list<QWidget*>{
-             m_txGridGroup, m_blockTxFrame, m_chkRxOutOnTx, m_chkExt1OutOnTx,
-             m_chkExt2OutOnTx, m_chkRxOutOverride}) {
-        HardwareTransmitGate::apply(w, permitted, reason);
+    const auto show = [](QCheckBox* box, bool on) {
+        if (!box) { return; }
+        QSignalBlocker b(box);
+        box->setChecked(on);
+    };
+    show(m_chkRxOutOnTx, rxOutOnTxNow());
+    show(m_chkExt1OutOnTx, ext1OutOnTxNow());
+    show(m_chkExt2OutOnTx, ext2OutOnTxNow());
+    show(m_chkRxOutOverride, rxOutOverrideNow());
+}
+
+void AntennaAlexAntennaControlTab::applyTransmitEditAvailability()
+{
+    if (!m_remoteAlex) {
+        return;
     }
+    // Parity Task 12: the TX antenna grid, the Block-TX strip, Ext 1 and
+    // Ext 2 on TX and the RX bypass relay override go to a Core at
+    // radioHardwareVersion 6; RX bypass on TX to one at 5. "Use TX antenna
+    // for RX" is a receive setting and follows the whole tab. No on-air
+    // rule: Thetis applies each at once while transmitting (see
+    // StationServer::radioHardwareVersion).
+    const QString fallback = m_remoteAlex->windowUnavailableReason().isEmpty()
+        ? tr("Connect to the Core to change the radio's hardware settings.")
+        : m_remoteAlex->windowUnavailableReason();
+    const bool txAntennas = m_remoteAlex->txAntennasEditable();
+    const QString txReason = m_remoteAlex->txAntennasUnavailableReason().isEmpty()
+        ? fallback : m_remoteAlex->txAntennasUnavailableReason();
+    for (QWidget* w : std::initializer_list<QWidget*>{
+             m_txGridGroup, m_blockTxFrame, m_chkExt1OutOnTx, m_chkExt2OutOnTx,
+             m_chkRxOutOverride}) {
+        HardwareTransmitGate::apply(w, txAntennas, txReason);
+    }
+    const bool rxBypass = m_remoteAlex->rxBypassEditable();
+    const QString bypassReason = m_remoteAlex->rxBypassUnavailableReason().isEmpty()
+        ? fallback : m_remoteAlex->rxBypassUnavailableReason();
+    HardwareTransmitGate::apply(m_chkRxOutOnTx, rxBypass, bypassReason);
 }
 
 #ifdef NEREUS_BUILD_TESTS

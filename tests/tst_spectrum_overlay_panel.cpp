@@ -9,11 +9,17 @@
 // bidirectionally to slice 0's vaxChannel() with echo prevention.
 // The IQ Ch combo stays disabled (feature-flagged per design spec
 // §6.7/§11.3).
+//
+// 2026-09-25 (R-IOS-27, R-IOS-06): the BAND flyout draws the same twelve
+// buttons, in the same places, and emits the same bandSelected arguments
+// now that its table lives in models/BandGrid.h. J.J. Boyd (KG4VCF),
+// AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
 #include <QSignalSpy>
 #include <QComboBox>
+#include <QGridLayout>
 #include <QLabel>
 #include <QPushButton>
 
@@ -361,6 +367,47 @@ private slots:
         h.panel->bindToPanSlice();
         QVERIFY(vax->isEnabled());
         QCOMPARE(vax->currentIndex(), 1);
+    }
+
+    // The BAND flyout as it was drawn before its table moved to
+    // models/BandGrid.h: twelve buttons, four to a row, each emitting the
+    // name, frequency and mode it always did.
+    void bandFlyoutDrawsAsBefore() {
+        PanelHarness h;
+        QGridLayout* grid = nullptr;
+        for (QGridLayout* candidate : h.host.findChildren<QGridLayout*>()) {
+            if (candidate->count() == 12) {
+                grid = candidate;
+            }
+        }
+        QVERIFY(grid);
+        const struct {
+            const char* label;
+            const char* name;
+            double freqHz;
+            const char* mode;
+        } expected[] = {
+            {"160", "160m", 1.8e6, "LSB"},   {"80", "80m", 3.5e6, "LSB"},
+            {"60", "60m", 5.3e6, "USB"},     {"40", "40m", 7.0e6, "LSB"},
+            {"30", "30m", 10.1e6, "DIGU"},   {"20", "20m", 14.0e6, "USB"},
+            {"17", "17m", 18.068e6, "USB"},  {"15", "15m", 21.0e6, "USB"},
+            {"12", "12m", 24.89e6, "USB"},   {"10", "10m", 28.0e6, "USB"},
+            {"6", "6m", 50.0e6, "USB"},      {"WWV", "WWV", 10.0e6, "AM"},
+        };
+        QSignalSpy selected(h.panel, &SpectrumOverlayPanel::bandSelected);
+        for (int i = 0; i < 12; ++i) {
+            QLayoutItem* item = grid->itemAtPosition(i / 4, i % 4);
+            QVERIFY(item);
+            auto* button = qobject_cast<QPushButton*>(item->widget());
+            QVERIFY(button);
+            QCOMPARE(button->text(), QString::fromLatin1(expected[i].label));
+            QCOMPARE(button->size(), QSize(48, 26));
+            button->click();
+            QCOMPARE(selected.count(), i + 1);
+            QCOMPARE(selected.last().at(0).toString(), QString::fromLatin1(expected[i].name));
+            QCOMPARE(selected.last().at(1).toDouble(), expected[i].freqHz);
+            QCOMPARE(selected.last().at(2).toString(), QString::fromLatin1(expected[i].mode));
+        }
     }
 };
 

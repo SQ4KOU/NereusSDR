@@ -92,6 +92,9 @@ boydsoftprez@gmail.com
 //                 to the caller check, by J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code
 //                 (R-R3-39).
+//   2026-09-25 - Test-only WDSPSetTestBlockHook declared by J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code (R-R3-40).
 // =================================================================
 
 #ifndef _dsplock_h
@@ -240,6 +243,13 @@ PORT void WDSPSetTestPeriodicDelayUs (int channel, int microseconds, int everyBl
 // update) and returns 1; hold 0 releases it. Never call it in production
 // code.
 PORT void WDSPSetTestHoldLoadPair (int channel, int hold);
+
+// Test-only: install (or, with 0, remove) a function every channel worker
+// calls on itself at each block's start (endNs 0) and end, with the block's
+// start and end on the monotonic clock it times blocks with (the clock
+// GetChannelDspLoad's readNs uses). A test measures the worker's busy share
+// from it without the load counters. Never call it in production code.
+PORT void WDSPSetTestBlockHook (void (*hook) (int channel, long long startNs, long long endNs));
 
 // Test-only: how long, in microseconds, the channel's latest teardown spent
 // waiting for its worker to leave its loop (WdspWaitWorkerExit alone, not

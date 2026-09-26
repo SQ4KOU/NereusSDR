@@ -38,6 +38,10 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  Saves the records soon after a change
 //                                    (R-R3-47). AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 10): the RF-Kit's
+//                                    connection counts, read from its
+//                                    Rf2ksConnection once a second.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QObject>
@@ -50,6 +54,7 @@ namespace NereusSDR {
 class AccessoryDataModel;
 class ConnectionDiagnostics;
 class FaultLog;
+class Rf2ksConnection;
 class TuneMemoryStore;
 class TxInterlockPolicy;
 
@@ -64,6 +69,9 @@ public:
         ConnectionDiagnostics* tgxlDiagnostics{nullptr};
         TxInterlockPolicy* interlock{nullptr};
         TuneMemoryStore* tuneMemory{nullptr};
+        // R-R3-49 (parity Task 10): the RF-Kit connection whose counts are
+        // published (rfkit* on accessoryData).
+        Rf2ksConnection* rfkitConnection{nullptr};
     };
 
     // The output-limit range the Setup page offers and the Core accepts.
@@ -73,6 +81,11 @@ public:
     // How long after a change the settings file is written (a burst of
     // changes is one write).
     static constexpr int kSaveDelayMs = 500;
+
+    // R-R3-49 (parity Task 10): how often the RF-Kit's connection counts are
+    // read. Its REST poll updates them several times a second; a window
+    // hears them once a second, as the Power Genius's coalesced counters.
+    static constexpr int kRfKitCountersIntervalMs = 1000;
 
     StationAccessoryData(AccessoryDataModel* model, const Sources& sources,
                          QObject* parent = nullptr);
@@ -104,11 +117,13 @@ private:
     void publishPowerCapSettings();
     void publishTuneMemory();
     void publishLabels();
+    void publishRfKitCounters();
     void scheduleSave();
     void saveNow();
 
     QPointer<AccessoryDataModel> m_model;
     QTimer m_saveTimer;
+    QTimer m_rfkitCountersTimer;
     Sources m_sources;
     bool m_alertArmed{true};
 };

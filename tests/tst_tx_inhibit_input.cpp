@@ -40,14 +40,18 @@
 //   has no Hermes Lite 2 branch: the HL2 reads !getUserI01() on P1.
 //
 // Also covered: a change reaches the gate within one status frame (not
-// only on the 100 ms poll), and the Setup checkboxes reach the monitor on
-// a local radio and, from a remote window, on the Core.
+// only on the 100 ms poll), the Setup checkboxes reach the monitor on
+// a local radio and, from a remote window, on the Core, and a window's
+// txInhibited follows the Core's input once its box is on.
 //
 // No hardware; nothing keys a radio; no audio device is opened.
 //
 // Modification history (NereusSDR):
 //   2026-09-25: created (Task 13), by J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25: checkpoint A: a remote window's box reaches the Core's
+//               monitor and the window's txInhibited follows the input.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -468,7 +472,8 @@ private slots:
         AppSettings coreSettings(dir.filePath(QStringLiteral("station.settings")));
         RadioModel core;
         {
-            StationServer server(&core, coreSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
+            StationServer server(&core, coreSettings,
+                                 NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
             RadioModel window(RadioModel::Role::Remote);
             SettingsProxy proxy;
             StationClient client(&window, &proxy);
@@ -499,6 +504,87 @@ private slots:
             // A settings reset on the Core reads the defaults (off).
             coreSettings.remove(kReversedKey);
             QTRY_VERIFY(!core.txInhibit().isReverseLogic());
+        }
+    }
+
+    // Checkpoint A: the three pieces joined. Remote-window parity Task 5
+    // takes the two External TX Inhibit keys from a window while the radio
+    // is off the air, gaps Task 13 applies them to the Core's live monitor,
+    // and parity Task 6 mirrors the monitor to the window as txInhibited.
+    // All through the real paths: the window's Setup box, the session, the
+    // Core's settings, the Core's Protocol 1 status parser, and back.
+    void remoteBoxGatesTheCoreAndTheWindowFollowsTheInput()
+    {
+        QTemporaryDir dir;
+        AppSettings coreSettings(dir.filePath(QStringLiteral("station.settings")));
+        coreSettings.setValue(QStringLiteral("SettingsSchemaVersion"), QStringLiteral("7"));
+        RadioModel core;
+        core.setHpsdrModelForTest(HPSDRModel::ANAN8000D);  // P1: inhibit on I02
+        P1RadioConnection conn;
+        conn.init();
+        core.injectConnectionForTest(&conn);
+        const auto detach = qScopeGuard([&core] {
+            core.teardownTxInhibitInputForTest();
+            core.injectConnectionForTest(nullptr);
+        });
+        core.wireTxInhibitInputForTest();
+        const auto feed = [&conn](quint8 userDigIn) {
+            conn.parseEp6FrameForTest(p1StatusWithC1(c1ForUserInputs(userDigIn)));
+            QCoreApplication::processEvents();
+        };
+        {
+            StationServer server(&core, coreSettings,
+                                 NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
+            RadioModel window(RadioModel::Role::Remote);
+            SettingsProxy proxy;
+            StationClient client(&window, &proxy);
+            auto* stationEnd = new LoopbackTransport(QStringLiteral("station-end"), this);
+            auto* clientEnd = new LoopbackTransport(QStringLiteral("client-end"), this);
+            stationEnd->linkTo(clientEnd);
+            QSignalSpy completed(&client, &StationClient::handshakeComplete);
+            client.startSession(clientEnd, server.token());
+            server.acceptTransport(stationEnd);
+            QVERIFY(completed.wait(5000) || !completed.isEmpty());
+
+            ScopedRemoteBackend backend(&proxy);
+            PowerPage page(&window);
+            auto* use = page.findChild<QCheckBox*>(QStringLiteral("chkTXInhibit"));
+            auto* reverse = page.findChild<QCheckBox*>(QStringLiteral("chkTXInhibitReverse"));
+            QVERIFY(use != nullptr && reverse != nullptr);
+
+            // The input reads "inhibit" (I02 clear), but the box is off.
+            feed(0x01);
+            QVERIFY(!core.isTxInhibited());
+            QVERIFY(!window.isTxInhibited());
+
+            // The window's box reaches the Core's monitor; the window then
+            // shows the Core's inhibit.
+            use->setChecked(true);
+            QTRY_COMPARE(coreSettings.value(kEnabledKey).toString(), QStringLiteral("True"));
+            QTRY_VERIFY(core.txInhibit().isEnabled());
+            QTRY_VERIFY(core.isTxInhibited());
+            QTRY_VERIFY(core.moxController()->isTxInhibited());
+            QTRY_VERIFY(window.isTxInhibited());
+
+            // The input changes on the radio; the window follows it.
+            feed(0x02);
+            QTRY_VERIFY(!core.isTxInhibited());
+            QTRY_VERIFY(!window.isTxInhibited());
+            feed(0x00);
+            QTRY_VERIFY(window.isTxInhibited());
+            feed(0x02);
+            QTRY_VERIFY(!window.isTxInhibited());
+
+            // Reversed logic from the window: I02 set now inhibits.
+            reverse->setChecked(true);
+            QTRY_VERIFY(core.txInhibit().isReverseLogic());
+            QTRY_VERIFY(window.isTxInhibited());
+
+            // Box off from the window: the Core's gate opens, the window follows.
+            use->setChecked(false);
+            QTRY_VERIFY(!core.txInhibit().isEnabled());
+            QTRY_VERIFY(!core.isTxInhibited());
+            QTRY_VERIFY(!window.isTxInhibited());
         }
     }
 };

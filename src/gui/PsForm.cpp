@@ -16,6 +16,13 @@
 //                 with AI-assisted transformation via Anthropic Claude
 //                 Code.
 //   2026-09-21 — Removed obsolete PS2-only controls for the PS3 ABI migration.
+//   2026-09-25 - R-R3-49 (parity Task 7): Single Cal, Start Auto and Apply
+//                 Current follow the facade's canArm (a remote window arms
+//                 PureSignal on a Core at transmitSettingsVersion 7 off the
+//                 air); Two-tone stays on canActuate; while the Core's
+//                 radio is on the air the arming buttons and the settings
+//                 grey with the reason. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 /*  PSForm.cs
@@ -107,6 +114,38 @@ static const char* const kGeometrySettingsKey =
 static const char* const kAlwaysOnTopSettingsKey = "puresignal/alwaysOnTop";
 static const char* const kLoopbackSettingsKey = "puresignal/displayLoopback";
 static const char* const kShowTwoToneSettingsKey = "puresignal/showTwoToneMeasurements";
+
+namespace {
+
+// R-R3-49 (parity Task 7): grey `control` with `reason` as its tooltip,
+// remembering its own tooltip and state, or put them back and apply
+// `enabled`. An empty reason means no gate.
+void gateWithReason(QWidget* control, bool enabled, const QString& reason)
+{
+    if (!control) {
+        return;
+    }
+    static constexpr auto kSavedTooltip = "PsFormSavedTooltip";
+    static constexpr auto kSavedEnabled = "PsFormSavedEnabled";
+    if (!reason.isEmpty()) {
+        if (!control->property(kSavedTooltip).isValid()) {
+            control->setProperty(kSavedTooltip, control->toolTip());
+            control->setProperty(kSavedEnabled, control->isEnabled());
+        }
+        control->setEnabled(false);
+        control->setToolTip(reason);
+        return;
+    }
+    if (control->property(kSavedTooltip).isValid()) {
+        control->setToolTip(control->property(kSavedTooltip).toString());
+        enabled = enabled && control->property(kSavedEnabled).toBool();
+        control->setProperty(kSavedTooltip, QVariant());
+        control->setProperty(kSavedEnabled, QVariant());
+    }
+    control->setEnabled(enabled);
+}
+
+} // namespace
 
 // Bisque #FFE4C4 — colour Thetis uses for read-only data labels in the
 // Calibration Information grid (PSForm.designer.cs:484-688 [v2.10.3.13]).
@@ -927,14 +966,29 @@ void PsForm::refreshFacadeStatus()
 
     const bool available = m_facade && m_facade->available();
     const bool canActuate = m_facade && m_facade->canActuate();
-    if (m_btnSingleCal) {
-        m_btnSingleCal->setEnabled(canActuate);
-    }
-    if (m_btnAutomatic) {
-        m_btnAutomatic->setEnabled(canActuate);
-    }
-    if (m_btnApplyCurrent) {
-        m_btnApplyCurrent->setEnabled(canActuate);
+    // R-R3-49 (parity Task 7): arming keys nothing, so it follows canArm;
+    // the two-tone test below keys the radio and stays on canActuate.
+    const bool canArm = m_facade && m_facade->canArm();
+    const QString armingRefusal = m_facade ? m_facade->armingRefusal() : QString();
+    gateWithReason(m_btnSingleCal, canArm, armingRefusal);
+    gateWithReason(m_btnAutomatic, canArm, armingRefusal);
+    gateWithReason(m_btnApplyCurrent, canArm, armingRefusal);
+    // The settings a Core offering arming takes only off the air.
+    const QString settingsRefusal = m_facade ? m_facade->settingsRefusal() : QString();
+    for (QWidget* control : {static_cast<QWidget*>(m_chkAutoAttenuate),
+                             static_cast<QWidget*>(m_chkQuickAttenuate),
+                             static_cast<QWidget*>(m_chkAutoCalEnabled),
+                             static_cast<QWidget*>(m_chkRunCalibrationProcessing),
+                             static_cast<QWidget*>(m_chkHardwarePeakOverride),
+                             static_cast<QWidget*>(m_txtPSpeak),
+                             static_cast<QWidget*>(m_btnDefaultPeaks),
+                             static_cast<QWidget*>(m_spinMoxDelay),
+                             static_cast<QWidget*>(m_spinCalDelay),
+                             static_cast<QWidget*>(m_spinAmpDelay)}) {
+        if (control && (!settingsRefusal.isEmpty()
+                        || control->property("PsFormSavedTooltip").isValid())) {
+            gateWithReason(control, true, settingsRefusal);
+        }
     }
     if (m_btnTwoTone) {
         const QSignalBlocker blocker(m_btnTwoTone);

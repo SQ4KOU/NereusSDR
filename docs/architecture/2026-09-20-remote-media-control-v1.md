@@ -24,6 +24,33 @@ the offerer and the GUI the answerer. Every subsequent operation carries
 the same ID. Control-session replacement retires the old peer, subscriptions,
 codec histories and callbacks, including deliberate silent redials.
 
+A `start` on a new `connectionId` while the Core still holds a peer for the
+same session replaces that peer; it is never refused. One media controller
+serves one device's session, so the peer it holds is that device's own:
+usually a half-open one whose media died on the app's side before the Core's
+ICE consent check noticed. The old peer is torn down, its endpoints retired
+and its display demand removed (every other device's budget share follows,
+`DaemonMediaController::retirePeerKeepingSession`), and nothing is sent for
+the old `connectionId`. A different device has its own session and its own
+controller, so its media is untouched. A device that signs in again gets a
+new session; its older connection ends with `sameDevice` and its media with
+it (the several-devices design, ruling 4.8).
+
+When the Core drops a media peer on its own, it tells the app at once with
+the whole-peer `rejected` (`endpointId` 0, `revision` 0) for that peer's
+`connectionId`, before it clears the peer, so the app starts media again
+without waiting for its own peer to time out. It is sent when the Core's
+transport reports the connection failed (ICE consent lost, a failed DTLS
+handshake), reason exactly "The Core lost the audio and display
+connection.", and when the connection closes without a reported failure,
+reason exactly "The audio and display connection to the Core closed."
+(`kMediaPeerLostReason` and `kMediaPeerClosedReason`, `MediaPeer.h`). It is
+not sent when the session itself ends (the control link is gone) or when a
+new `start` replaces the peer. An app treats these two reasons as "media is
+gone, start again"; every other whole-peer `rejected` (the Core could not
+start a peer) ends media for that connection. The desktop's remote window
+starts its media over through its usual recovery on the two drop reasons.
+
 | Operation | Exact payload fields beyond `op` and `connectionId` |
 | --- | --- |
 | `start` | None; a GUI whose Core advertised `audioProfileVersion` adds `audioProfileVersion`, a whole number of at least 1 (anything else is refused and no peer starts); a GUI whose Core advertised `receiverAudioVersion` may add `receiverAudioVersion` the same way (see Receiver audio), one whose Core advertised `headphonesMixVersion` may add `headphonesMixVersion` the same way (see Headphones mix), and one whose Core advertised `remoteTxVersion` may add `remoteTxVersion` the same way (see Microphone line) |
@@ -266,6 +293,23 @@ pending one only restates what the Core retains: the desktop client
 applies it only when it releases a reservation (acceptedRevision 0, zero
 charge) for the endpoint's current revision.
 
+A subscription refused because it does not fit the device's display budget
+share has the reason "The Core's display limit has no room left."
+(`kDisplayBudgetRefusalReason`, compared exactly by clients). With several
+devices on one Core (the several-devices design, ruling 9.3) its request
+still counts in that device's share of the budget after the refusal, and
+ends when the first of these happens: the GUI subscribes that endpoint
+again (the new request replaces it), the GUI unsubscribes it, or
+`DaemonMediaController::kRefusedDisplayDemandHoldMs` (10 s, the app's own
+allocation acknowledgement timeout, `kDisplayAllocationAckTimeoutMs`) passes
+after the refusal was sent without either. The refusal follows the
+`capabilities` that carry the share the request produced, so a GUI that
+still wants the display plans inside that share and subscribes again well
+inside the hold (the desktop re-plans on every capabilities change and every
+100 ms). A GUI that drops a display the Core refused (a pane closed, hidden,
+or paused because the share has no room for it) unsubscribes it, so it
+stops counting against the other devices at once.
+
 The [display codec specification](2026-09-20-display-codec-v1.md) defines
 the binary packets, reconstruction and loss recovery. Pending source/output
 slots and transport queues are bounded. A failed nonblocking send is not
@@ -274,6 +318,45 @@ the following attempt uses a keyframe. Dropped I/Q invalidates the FFT input
 history before post-gap samples are processed. Endpoint cadence follows an
 advancing schedule with bounded early-jitter tolerance; it does not restart
 its entire interval after each arrival or catch up with a burst after a stall.
+
+### Clarity re-tune (clarity-retune)
+
+Capability `displayExtrasVersion=2` (R-IOS-27, R-IOS-06; display extras
+v1 is its version 1) at agreed minor 11 adds GUI-to-Core `clarity-retune`,
+with exactly `op`, `connectionId` and `endpointId` (a nonzero uint32).
+It is Clarity's Re-tune for that endpoint: the Core calls
+`ClarityController::retuneNow` on the endpoint's own Clarity controller,
+the one a subscription whose `waterfallLevels` mode is `"clarity"` owns
+([display extras v1](2026-09-23-display-extras-v1.md)), which is what the
+desktop's Re-tune button does for its pan. The next noise floor re-anchors
+the smoothing and the waterfall levels at once, inside the poll window,
+and the new levels reach the app in the endpoint's next NSDX datagram.
+Other endpoints are untouched. `DaemonMediaController::handleClarityRetune`
+is the code.
+
+A re-tune that runs is not answered. The Core refuses one it cannot run
+with Core-to-GUI `rejected` (its five fields, above) naming the endpoint,
+with `revision` 0 and one of these reasons:
+
+| Reason | When |
+| --- | --- |
+| "That display is not one this app opened." | `connectionId` is not the active media peer's |
+| "That display is no longer open on the Core." | no live endpoint has that `endpointId` |
+| "Clarity is not setting this display's waterfall levels." | the endpoint's `waterfallLevels` mode is not `"clarity"`, or it asked for no display extras |
+
+No other `rejected` names an endpoint with `revision` 0 (a subscription's
+revision is never 0, and the whole-peer refusal has `endpointId` 0 too), so
+this refusal retires nothing: the endpoint stays open and its frames keep
+coming. The budget wire does not change this: the refusal is still
+`rejected`, never `allocation-result`, because it answers no subscribe or
+unsubscribe. A request of any other shape (another key, an `endpointId` of
+0 or not a whole number, a `connectionId` that is not a canonical UUID) is
+ignored and not answered.
+
+A peer the Core did not tell `displayExtrasVersion` 2 (an older Core, or a
+session below minor 11, which is never told the capability) gets exactly
+today's behaviour: the operation goes where an unknown operation always
+has, and nothing is answered. `tst_display_extras` holds all of this.
 
 ## Receiver audio (receiver-audio and receiver-audio-context)
 

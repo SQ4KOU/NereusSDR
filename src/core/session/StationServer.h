@@ -71,11 +71,17 @@
 // readback of its side effects on the written object goes to the writer
 // alone. The dispatcher's owner is station:<sessionId>, so a device's
 // DSP-asset jobs end with its own session and nobody else's.
-// Media and telemetry stay with one session (m_mediaSession, the first
-// admitted while none holds it) until Task 76 gives each device a media
-// controller: another admitted session is told no media is available
-// (remoteMediaVersion 0 in its capabilities) and its media control is
-// ignored, so media never goes to two sessions at once.
+// Media and telemetry (iPhone app Task 76, the several-devices design,
+// rulings 9.1 to 9.4): every admitted session has its own media epoch,
+// given when it is let in, and is told media is on; its media control
+// reaches the media controller for that epoch alone (DaemonMediaHub makes
+// one per session), and telemetry goes to every session that negotiated
+// it. The Core's one display budget (set by configuration or the load
+// governor) is split among the sessions by DisplayBudgetSplit, and each
+// session's capabilities carry its own share, generation and reason. The
+// PureSignal display goes to the session that subscribed to it, and is
+// charged to that session alone. Transmit joins here once Task 34 lands:
+// TransmitHolder's holder feeds the split (see recomputeDisplayBudgetShares).
 //
 // A connection that has NOT yet authenticated does not touch the mirror at
 // all -- it holds nothing but its own handshake state -- so a peer
@@ -236,6 +242,21 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 20 (R-IOS-27):
 //                                    displayExtrasVersion 1. AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 1):
+//                                    transmitSettingsVersion and
+//                                    isTransmitSettingKeyAcceptedOffAir.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 2):
+//                                    transmitSettingsVersion 2.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 3):
+//                                    transmitSettingsVersion 3.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  Core WebSocket opening (R-IOS-01,
+//                                    R-R3-26): StationOpeningGate listens in
+//                                    front of the QWebSocketServer, so every
+//                                    Host form opens and a request the Core
+//                                    cannot read gets 400.
 //   2026-09-25  J.J. Boyd / KG4VCF  iPhone app Task 71 (R-IOS-02): up to
 //                                    four device sessions, admission and
 //                                    the same-device rule in place of
@@ -285,11 +306,54 @@
 //               removed while keyed record their stop reasons. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app Task 74 (R-IOS-02,
+//                                    R-IOS-30): receivers several devices
+//                                    share (the anchor, the pin, pan
+//                                    moves, takes and Take it back), the
+//                                    confirm step with its readback, and
+//                                    notices (StationReceivers.cpp).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app Task 76 (R-IOS-31): media
+//                                    and telemetry for every admitted
+//                                    session, each with its own media
+//                                    epoch; the display budget split among
+//                                    them (DisplayBudgetSplit) with each
+//                                    device's share and reason in its own
+//                                    capabilities; media control from each
+//                                    session for its own media; the
+//                                    PureSignal display's subscriber.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06: bandSelectVersion
+//                                    1 and slice.selectBand.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06:
+//                                    displayExtrasVersion 2 (clarity-retune).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 7):
+//                                    transmitSettingsVersion 7 and
+//                                    pureSignalArmingOffered.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 8):
+//                                    remoteTgxlControlVersion 4.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 9):
+//                                    remotePgxlControlVersion 4.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 10):
+//                                    remoteRfKitControlVersion 4 and
+//                                    accessoryDataVersion 2.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Checkpoint carry: the uncapped message
+//                                    size's memory figure follows
+//                                    kMaxConcurrentPeers 24 (48 GiB).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QHash>
 #include <QHostAddress>
 #include <QJsonArray>
+#include <QJsonObject>
+#include <QSet>
 #include <QPair>
 #include <QObject>
 #include <QPointer>
@@ -302,11 +366,15 @@
 #include <utility>
 
 #include "core/DeviceLayoutStore.h"
+#include "core/session/ConfirmStep.h"
 #include "core/session/LinkVersion.h"
+#include "core/session/ReceiverPlanner.h"
+#include "core/DisturbanceCheck.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StationCapabilities.h"
 #include "core/safety/StarvationPolicy.h"
 #include "core/safety/StationTxGate.h"
+#include "core/session/media/DisplayBudgetSplit.h"
 
 QT_BEGIN_NAMESPACE
 class QThread;
@@ -333,6 +401,7 @@ class SessionCommandDispatcher;
 class SessionTransport;
 class SettingsProxyServer;
 class StateMirror;
+class StationOpeningGate;
 class StationCatalog;
 class StationDevicesFacade;
 class TokenStore;
@@ -395,6 +464,27 @@ public:
     /// addressKey()). A connection with no address of its own (the
     /// relay, later) is not counted here.
     static constexpr int kMaxHandshakesPerAddress = 2;
+    /// Core WebSocket opening (R-IOS-01, R-R3-26): connections whose TLS
+    /// or WebSocket upgrade has not finished, counted by
+    /// StationOpeningGate apart from the peers above, each until it opens,
+    /// is refused or reaches kDefaultOpeningDeadlineMs. At this total the
+    /// oldest unfinished opening is closed to make room for the new one;
+    /// kMaxHandshakesPerAddress of them per address (IPv6 by /64) still
+    /// applies first, closing that address's own oldest.
+    ///
+    /// Why 64, and not kMaxConcurrentPeers: the pool is what a flood has
+    /// to fill to push a real device's opening out. Each address holds
+    /// only 2, so pushing a device out takes 64 connects from at least 32
+    /// addresses or /64s inside that device's own opening time (TCP
+    /// connect to the end of its request, well under a second): at 8 it
+    /// took 8 plain TCP connects from 5 addresses. What 64 costs is file
+    /// descriptors, one per opening. packaging/nereusd.service.in sets no
+    /// LimitNOFILE, so nereusd runs under the default soft limit of 1024;
+    /// 64 openings, kMaxConcurrentPeers peers, the status page and the
+    /// radio's sockets stay far below it, and the pool keeps a flood from
+    /// ever reaching it (before the gate a flood of unfinished openings
+    /// could climb toward 1024 at about 100 connects a second).
+    static constexpr int kMaxUnfinishedOpenings = 64;
 
     /// Largest inbound WebSocket message, and frame, on an ACCEPTED
     /// socket. Applied by WebSocketTransport's constructor.
@@ -405,8 +495,8 @@ public:
     /// per socket. Qt buffers a complete message before it emits
     /// textMessageReceived, so kDefaultAuthDeadlineMs bounds how LONG an
     /// unauthenticated peer may sit here but bounds no BYTES at all.
-    /// Uncapped, kMaxConcurrentPeers of them come to roughly 16 GiB on a
-    /// daemon whose stated hardware floor is a Pi 4.
+    /// Uncapped, kMaxConcurrentPeers (24) of them come to roughly 48 GiB on
+    /// a daemon whose stated hardware floor is a Pi 4.
     ///
     /// Sized against the largest message a legitimate client can send,
     /// which is not a guess:
@@ -514,8 +604,9 @@ public:
     StationCatalog* catalog() const;
     /// 1: the Core sends `catalog` to a peer at minor 11.
     int stationCatalogVersion() const;
-    /// iPhone app Task 20 (R-IOS-27): 1 while media is enabled; a peer at
-    /// minor 11 may then ask a spectrum subscription for display extras.
+    /// iPhone app Task 20 (R-IOS-27): 2 while media is enabled (0 without);
+    /// a peer at minor 11 may then ask a spectrum subscription for display
+    /// extras (1) and send clarity-retune (2, R-IOS-27, R-IOS-06).
     int displayExtrasVersion() const;
 
     /// The first-run block, exactly as the operator is shown it: the TLS
@@ -603,12 +694,29 @@ public:
     /// restores the real one.
     void setPairingHasherForTest(std::function<QByteArray(const QString&)> hasher);
     bool isHashingPairingCodeForTest() const;
+    /// The opening pool's total and per-address limits in place of
+    /// kMaxUnfinishedOpenings and kMaxHandshakesPerAddress, from the next
+    /// listen() on, so a test on one loopback address can reach the total.
+    void setOpeningLimitsForTest(int total, int perAddress);
 #endif
 
     /// See kDefaultAuthDeadlineMs. Values below 1 disable the deadline,
     /// which is logged as a warning rather than silently accepted.
     void setAuthDeadlineMs(int ms);
     int authDeadlineMs() const { return m_authDeadlineMs; }
+
+    /// Core WebSocket opening (R-IOS-01, R-R3-26): TCP accept to the 101,
+    /// TLS included, is bounded by this; StationOpeningGate.h explains the
+    /// value (Qt's own handshake timeout default) and the .cpp asserts the
+    /// two agree. Values below 1 are ignored. Takes effect at the next
+    /// listen(); tests shorten it.
+    static constexpr int kDefaultOpeningDeadlineMs = 10000;
+    void setOpeningDeadlineMs(int ms);
+    int openingDeadlineMs() const { return m_openingDeadlineMs; }
+
+    /// Connections accepted whose opening (TLS and the WebSocket upgrade)
+    /// has not finished. They are not peers yet and are not in peerCount().
+    int openingCount() const;
 
     /// Every peer currently attached, authenticated or not.
     int peerCount() const { return static_cast<int>(m_peers.size()); }
@@ -621,39 +729,63 @@ public:
 
     /// Configure before accepting sessions. Old peers remain control-only.
     void setMediaEnabled(bool enabled);
+    /// Each takes a media session's epoch (iPhone app Task 76: every
+    /// admitted session has its own). The forms without one answer for
+    /// the primary media session: the earliest admitted of those live.
     bool mediaAvailable() const;
+    bool mediaAvailable(quint64 epoch) const;
     bool remoteWidebandAvailable() const;
+    bool remoteWidebandAvailable(quint64 epoch) const;
     /// The session agreed minor 8 or later: audio contexts carry the encoder
     /// profile or the off reason. Minor-7 peers keep the eight-key context.
     bool remoteAudioStatusAvailable() const;
+    bool remoteAudioStatusAvailable(quint64 epoch) const;
     /// The session agreed minor 9 or later: spectrum contexts report the
     /// grant Core made. Minor-8 peers keep the 19-key (20 with wideband) context.
     bool spectrumGrantAvailable() const;
+    bool spectrumGrantAvailable(quint64 epoch) const;
     /// The session agreed minor 11 and the Core advertised
     /// displayExtrasVersion 1: a subscription may carry the display extras
     /// fields (iPhone app Task 20, display extras v1).
     bool displayExtrasAvailable() const;
-    /// iPhone app plan Task 36 (R-IOS-13): the media session was told
-    /// remoteTxVersion (it agreed minor 11 and its hello declared remoteTx
-    /// 1), so its media start may carry remoteTxVersion and get the
+    bool displayExtrasAvailable(quint64 epoch) const;
+    /// iPhone app Task 76: the epochs of the media sessions live now, in
+    /// admission order; the device a media session is for; whether a slice
+    /// is that device's own (ruling 9.1: a device subscribes displays and
+    /// receiver streams only for its own slices, and hears only its own).
+    QList<quint64> mediaSessionEpochs() const;
+    QByteArray mediaSessionDevice(quint64 epoch) const;
+    bool mediaSessionOwnsSlice(quint64 epoch, int sliceId) const;
+    /// The media session the PureSignal display goes to (the one whose
+    /// ps3.subscribeDisplay was last accepted), or 0 for none known.
+    quint64 ps3DisplaySubscriberEpoch() const { return m_ps3SubscriberEpoch; }
+    /// iPhone app plan Task 36 (R-IOS-13): the media session `epoch` was
+    /// told remoteTxVersion (it agreed minor 11 and its hello declared
+    /// remoteTx 1), so its media start may carry remoteTxVersion and get the
     /// microphone line.
-    bool remoteTxAvailableForMedia() const;
-    /// Task 36: the device the media session is for (DeviceSessionRegistry's
-    /// id), or empty without one.
-    QByteArray mediaSessionDeviceId() const;
-    /// Task 36: whether the media session may transmit now (its
+    bool remoteTxAvailableForMedia(quint64 epoch) const;
+    /// Task 36: whether the media session `epoch` may transmit now (its
     /// txPermitted).
-    bool mediaSessionTxPermitted() const;
+    bool mediaSessionTxPermitted(quint64 epoch) const;
     /// Installs newer limits (a later generation) and why they are below the
     /// Core's ceiling (R-R3-08, R-R3-37). A new reason needs a new
     /// generation; the same limits with the same reason are accepted as-is.
     bool setDisplayBudgetLimits(const DisplayBudgetLimits& limits,
                                 DisplayBudgetReason reason = DisplayBudgetReason::None);
-    /// The budget in force for the media session: the limits last set,
-    /// except that with setDisplayBudgetForReasonPeersOnly(true) a peer
-    /// below kDisplayBudgetReasonSessionProtocolMinor (or no peer) has none
-    /// and keeps legacy mode.
+    /// The budget in force for a media session: its share of the limits
+    /// last set (iPhone app Task 76, DisplayBudgetSplit), except that with
+    /// setDisplayBudgetForReasonPeersOnly(true) a peer below
+    /// kDisplayBudgetReasonSessionProtocolMinor (or no peer) has none and
+    /// keeps legacy mode. Without an epoch: the primary media session's,
+    /// or with none, what a first session would be given.
     std::optional<DisplayBudgetLimits> displayBudgetLimits() const;
+    std::optional<DisplayBudgetLimits> displayBudgetLimits(quint64 epoch) const;
+    /// The share a media session would have with the PureSignal display
+    /// charged to it (ruling 9.3 item 4), for its subscription's admission.
+    std::optional<DisplayBudgetLimits> displayBudgetLimitsAsPs3Subscriber(quint64 epoch) const;
+    /// Why a media session's share is short (ruling 9.3a): its own reason,
+    /// before the mapping for a device without sessionHolder.
+    DisplayBudgetReason displayBudgetShareReason(quint64 epoch) const;
     /// The limits last set, whichever peer is attached.
     std::optional<DisplayBudgetLimits> configuredDisplayBudgetLimits() const
     {
@@ -663,13 +795,36 @@ public:
     /// configuration (display_adaptive on, no limits configured): only an
     /// app that understands the budget reason is put in budget mode.
     void setDisplayBudgetForReasonPeersOnly(bool reasonPeersOnly);
+    /// The reason of the Core's total (the governor's CoreBusy, or None).
     DisplayBudgetReason displayBudgetReason() const { return m_displayBudgetReason; }
+    /// Fix wave 3 (ruling 9.3, the governor's floor): how many admitted
+    /// network devices the display budget is split among now (those
+    /// splitDisplayBudget shares it with), 0 with no budget in force. The
+    /// load governor keeps one floor pan for each.
+    int displayBudgetSharingCount() const;
     void setDisplayBudgetEnforcementEnabled(bool enabled);
     bool displayBudgetAvailable() const;
+    bool displayBudgetAvailable(quint64 epoch) const;
+    /// Splits the budget again and sends each media session whose budget
+    /// entries changed its capabilities (Task 76).
     void publishDisplayBudgetCapabilities();
     using Ps3DisplayAdmissionHandler = std::function<bool(bool, QString*)>;
     void setPs3DisplayAdmissionHandler(Ps3DisplayAdmissionHandler handler);
-    quint64 mediaSessionEpoch() const { return m_mediaSessionEpoch; }
+    /// iPhone app Task 76: the admission handler told which media session
+    /// asks (0 when the asker has none).
+    using SessionPs3DisplayAdmissionHandler = std::function<bool(quint64, bool, QString*)>;
+    void setSessionPs3DisplayAdmissionHandler(SessionPs3DisplayAdmissionHandler handler);
+    /// Fix wave I5 (ruling 9.3): each media session's display demand, the
+    /// charges of its displays as subscribed (before grants clamp them, a
+    /// display refused for the budget included). DaemonMediaHub installs
+    /// it; a session it has no controller for asks for nothing. Without a
+    /// provider every budget-aware session asks for the whole total, as
+    /// before several devices.
+    using DisplayDemandProvider = std::function<std::optional<DisplayBudgetCharge>(quint64)>;
+    void setDisplayDemandProvider(DisplayDemandProvider provider)
+    { m_displayDemand = std::move(provider); }
+    /// The primary media session's epoch (0 with none).
+    quint64 mediaSessionEpoch() const;
     /// expectedEpoch is captured by the producer when its session starts;
     /// late work must never target a replacement session.
     bool sendMediaControl(const QJsonObject& payload, quint64 expectedEpoch);
@@ -678,7 +833,10 @@ public:
     /// Configure before accepting a client; never change negotiated support live.
     void setTelemetryEnabled(bool enabled);
     bool telemetryAvailable() const;
-    quint64 sessionEpoch() const { return m_mediaSessionEpoch; }
+    bool telemetryAvailable(quint64 epoch) const;
+    quint64 sessionEpoch() const { return mediaSessionEpoch(); }
+    /// To the media session `expectedEpoch` names, when it negotiated
+    /// telemetry (iPhone app Task 76: every session that did gets its own).
     bool sendTelemetry(const StationTelemetrySnapshot& snapshot, quint64 expectedEpoch);
 
     /// The capability descriptor this daemon would advertise right now.
@@ -687,36 +845,65 @@ public:
     StationCapabilities buildCapabilities() const;
     /// R-R3-46: what this Core offers a window of its radio's hardware:
     /// 0 nothing, 1 the `stepAtt` object, 2 also `alexAntennas`, the
-    /// hardware apply step and the I/O board probe.
+    /// hardware apply step and the I/O board probe; the I/O board today
+    /// raises it to 6 (the ioBoard object, the per-band antenna and filter
+    /// policy verbs, and the transmit antennas and relays two-way).
     int radioHardwareVersion() const;
     // R-R3-47 / R-R3-22: 1 when this Core owns its accessories and mirrors
     // the `amplifier` and `rfkit` objects (remotePgxlControlVersion and
     // remoteRfKitControlVersion); 0 otherwise.
     int accessoryStatusVersion() const;
-    // R-R3-47: remotePgxlControlVersion. 3 on a Core that owns its
+    // R-R3-47: remotePgxlControlVersion. 4 on a Core that owns its
     // accessories (the `amplifier` object, the configurePgxl,
     // disconnectPgxl and setPgxlConnectionSettings verbs, and the amp's own
-    // settings on `accessorySettings` with their verbs); 0 otherwise.
+    // settings on `accessorySettings` with their verbs); 4 from parity
+    // Task 9 (setPgxlOperate, scanPgxlLan, setPgxlAddress); 0 otherwise.
     int pgxlControlVersion() const;
     // R-R3-47 / R-R3-22: remoteTgxlControlVersion. 2 on a Core that owns its
     // accessories (the tuner's own settings on `accessorySettings` and the
     // setTgxlName, setTgxlNetwork, saveTgxlSettings and readTgxlSettings
     // verbs; from 2, R-R3-49, setTgxlAntenna, setTgxlOperate and
-    // setTgxlBypass); 0 otherwise.
+    // setTgxlBypass; from 4, parity Task 8, moveTgxlRelay, scanTgxlLan and
+    // setTgxlAddress); 0 otherwise.
     int tgxlControlVersion() const;
-    // R-R3-47: remoteRfKitControlVersion. 3 on a Core that owns its
+    // R-R3-49 (parity Task 1): transmitSettingsVersion. 1 on a Core with a
+    // radio model: a receive-only Core takes a `transmit` write outside the
+    // keying set (mox, tune, voxEnabled, twoToneActive) and a key on
+    // isTransmitSettingKeyAcceptedOffAir's list while its radio is off the
+    // air, and refuses each while it is on the air; 0 otherwise. 2 (parity
+    // Task 2): also the TX and Phone/CW applets' settings on `transmit`,
+    // each refused outside its range, and setTunePowerForTxBand. 3 (parity
+    // Task 3): also the radio microphone settings, the Core's TX profiles
+    // (activeTxProfile, txProfilesJson), the txProfile verbs and
+    // rade.resetVocoder. 7 (parity Task 7): also PureSignal arming and its
+    // settings, off the air.
+    int transmitSettingsVersion() const;
+    // R-IOS-27, R-IOS-06: bandSelectVersion. 1 on a Core with a radio
+    // model: it takes slice.selectBand from a peer at minor 11; 0 otherwise.
+    int bandSelectVersion() const;
+    // R-R3-49 (parity Task 7): the peer was offered transmitSettingsVersion
+    // 7: it arms PureSignal and changes pureSignalSettings off the air.
+    bool pureSignalArmingOffered(SessionTransport* transport) const;
+    // R-R3-49 (parity Task 1): the one list of transmit settings keys a
+    // receive-only Core takes while its radio is off the air (today the
+    // DSP > Options TX keys, DspOptions<Setting><Mode>Tx). Every other
+    // transmit-side key a receive-only Core refuses stays refused.
+    static bool isTransmitSettingKeyAcceptedOffAir(const QString& key);
+    // R-R3-47: remoteRfKitControlVersion. 4 on a Core that owns its
     // accessories (the `rfkit` object with its interface, antenna, tuner
     // and band-follow rows, the configureRfKit, disconnectRfKit and
-    // setRfKitEnabled verbs, and from 3 the resetRfKitError verb and a
-    // window's auto-reconnect and poll interval applied at once); 0
-    // otherwise.
+    // setRfKitEnabled verbs, from 3 the resetRfKitError verb and a
+    // window's auto-reconnect and poll interval applied at once, and from
+    // 4 setRfKitOperate, setRfKitAntenna, setRfKitTciMode and
+    // setRfKitAddress, parity Task 10); 0 otherwise.
     int rfKitControlVersion() const;
     // R-R3-48: stationTciVersion. 1 on a Core that runs its own station
     // TCI server (the `stationTci` object and the setStationTci verb).
     int stationTciVersion() const;
-    // R-R3-47 / R-R3-22: accessoryDataVersion. 1 on a Core that owns its
+    // R-R3-47 / R-R3-22: accessoryDataVersion. 2 on a Core that owns its
     // accessories (the `accessoryData` object and the setTxInterlockPolicy,
-    // setPgxlPowerCap and clearAccessoryFaults verbs); 0 otherwise.
+    // setPgxlPowerCap and clearAccessoryFaults verbs; from 2 the RF-Kit's
+    // rfkit* connection counts, parity Task 10); 0 otherwise.
     int accessoryDataVersion() const;
 
     /// iPhone app Task 71 (R-IOS-02): who holds a place on the Core, and
@@ -756,8 +943,8 @@ public:
     RemoteTxWatchdog* txWatchdog() const { return m_txWatchdog.get(); }
     /// Task 37: a keepalive from the media connection's "tx" data channel
     /// (RemoteTxWatchdog::channelKeepalive's 13 bytes), for the device the
-    /// media session is for. Anything else is ignored.
-    void txChannelMessage(const QByteArray& message);
+    /// media session `epoch` is for. Anything else is ignored.
+    void txChannelMessage(quint64 epoch, const QByteArray& message);
     /// Task 37 (remote design section 12.3): `deviceId`'s microphone line
     /// starved (true) or carries audio again (false) while it is keyed on
     /// it; the per-mode action (StarvationPolicy) follows.
@@ -822,6 +1009,18 @@ signals:
     void peerHeartbeatTimeout(const QString& peer);
 
 private:
+    /// R-R3-49 (parity Task 1): the on-air reason for a settings write or
+    /// remove of a key on isTransmitSettingKeyAcceptedOffAir's list on a
+    /// receive-only Core; empty when the key may be applied now.
+    QString transmitSettingOnAirRefusal(const QString& key) const;
+    /// R-R3-49 (parity Task 1): this peer agreed minor 11 and was offered
+    /// transmitSettingsVersion 1.
+    bool transmitSettingsOffered(SessionTransport* transport) const;
+    /// Whether a receive-only Core refuses a settings write or remove of
+    /// `key` from this peer as transmit configuration (with
+    /// kReceiveOnlyTransmitReason).
+    bool receiveOnlyRefusesKey(SessionTransport* transport, const QString& key) const;
+
     /// Per-connection state. Deliberately small: everything that is not
     /// per-CONNECTION (the mirror, the registry, the dispatcher, the
     /// settings server) is shared among the admitted sessions until Tasks
@@ -878,6 +1077,14 @@ private:
         /// Desktop remote transmit: the refusal it was last sent with it
         /// (empty for a peer without remoteTx, or while permitted).
         TxRefusal txRefusalSent;
+        /// iPhone app Task 76: this admitted session's media epoch (never
+        /// 0 once admitted, unique for the Core's life), its share of the
+        /// display budget and why, and what its capabilities last said of
+        /// the budget, so a change is published once.
+        quint64 mediaEpoch = 0;
+        std::optional<DisplayBudgetLimits> budgetShare;
+        DisplayBudgetReason budgetShareReason = DisplayBudgetReason::None;
+        QByteArray publishedBudget;
 
         /// Pings sent since the last pong. Reset to 0 by every pong; the
         /// heartbeat tick declares death when it reaches maxMissedPongs().
@@ -908,6 +1115,11 @@ private:
     void handleAuthRequest(SessionTransport* transport, const SessionMessage& message);
     void handlePropertyWrite(SessionTransport* transport, const SessionMessage& message);
     void handleSettingsWrite(SessionTransport* transport, const SessionMessage& message);
+    /// The body of handleSettingsWrite after its checks: applies the write
+    /// through the settings proxy. A refusal goes to `refusal` when given,
+    /// otherwise to the writer as settings.reject. True when applied.
+    bool applySettingsWrite(SessionTransport* transport, const SessionMessage& message,
+                            QString* refusal);
     void handleSettingsRemove(SessionTransport* transport, const SessionMessage& message);
     // iPhone app Task 14 (R-IOS-08): pairing, before any sign-in.
     void handlePairStart(SessionTransport* transport, const SessionMessage& message);
@@ -1008,10 +1220,28 @@ private:
     /// Rulings 4.11, 4.12: a device's slices when its 180 s end or it
     /// leaves (a token window: when its session ends).
     void releaseDeviceSlices(const QByteArray& deviceId);
+    /// Fix wave 2: at the end of an away device's 180 s, the slices other
+    /// devices took from it (kept by its waiting Take it back notices) are
+    /// saved in its DeviceLayoutStore, so its next admission restores them.
+    void saveTakenSlicesFor(const QByteArray& deviceId);
     /// Closes slice `sliceId` for a reason other than its owner's own
     /// request, saving it for `saveFor` when set; false (nothing done)
     /// when it is the Core's last slice.
-    bool closeSliceFor(int sliceId, const QByteArray& saveFor);
+    bool closeSliceFor(int sliceId, const QByteArray& saveFor, SavedSlice* closed = nullptr);
+    /// Fix wave C2 (ruling 5.2, its last paragraph): the paired device a
+    /// slice another device's take, pan move or rate change is about to
+    /// close must be saved for, because it has left (no registry entry)
+    /// and nobody is there to ask or tell; empty for a device holding a
+    /// place (its notice keeps the slice), a token window, the station
+    /// device, or a slice nobody owns.
+    QByteArray saveForAbsentSubject(int sliceId) const;
+    /// Fix wave I3: the foreign-slice refusal for a write or removal of a
+    /// slice's own settings key (Slice<N>/...) from a session whose device does not own live slice N; empty when
+    /// it may, or when the key is not a slice's.
+    QString sliceSettingsRefusal(SessionTransport* transport, const QString& key) const;
+    /// Removes a settings key and applies its default live (the removal's
+    /// own effect, after its checks).
+    void applySettingsRemove(const SessionMessage& message);
     /// Each attached view's `slice:` and `marker:` forms after an owner
     /// change: object.destroy of the old form, object.create of the new.
     void onSliceOwnerChanged(int sliceId, const QByteArray& oldOwner,
@@ -1065,6 +1295,203 @@ private:
     /// there).
     void adoptForLoneDevice();
 
+    // ── iPhone app Task 74 (R-IOS-30): receivers, anchors, the confirm
+    //    step and notices (StationReceivers.cpp) ─────────────────────────
+    /// The rest of handlePropertyWrite: applies the write as this
+    /// session's, answers it (when `answer`), and sends its side effects.
+    /// `adjust` may reword the results first. Returns them.
+    QList<SessionPropertyResult> applyPropertyWrite(
+        SessionTransport* transport, const SessionMessage& message, bool answer,
+        const std::function<void(QList<SessionPropertyResult>&)>& adjust);
+    /// A command about receivers (the pin, a C-Tune move, adding a slice or
+    /// a pan) under the anchor and take rules. True when it answered.
+    bool handleReceiverCommand(SessionTransport* transport, const SessionMessage& message);
+    /// A slice retune that leaves its shared receiver (ruling 6.5). True
+    /// when it answered.
+    bool handleSliceRetune(SessionTransport* transport, const SessionMessage& message);
+    /// confirm.proceed, confirm.cancel, notice.takeBack.
+    SessionMessage answerConfirm(const SessionMessage& invoke, int id, int choice);
+    /// "<n> of your slices could not be restored: all the radio's receivers
+    /// are in use." (ruling 5.2 step 2), for slicesNotRestored and a
+    /// partial graceEnded.
+    static QString notRestoredSentence(qsizetype count);
+    /// Fix wave I2: the slices `question` names (the written slice, a
+    /// `sliceId` argument, the slices in `moving`).
+    QList<int> slicesNamedBy(const ConfirmStep::Question& question) const;
+    /// Fix wave I2: a slice a question names closed or changed owner; the
+    /// question can no longer be proceeded.
+    void dropQuestionsNaming(int sliceId);
+    /// Fix wave I2: the refusal for a question whose slices are no longer
+    /// the requester's: "changed since you asked" for a shared setting,
+    /// "what this change reaches has changed" for any other kind.
+    static QString changedSinceAskedReason(const QString& kind);
+    /// The shared setting's "changed since you asked" words.
+    static QString sharedTargetChangedReason();
+    /// Ruling 10.2's refusal for an older window left with no slice at
+    /// admission; empty when it has one or is not an older window.
+    QString olderWindowWithoutSliceReason(SessionTransport* transport) const;
+    /// graceEnded or slicesNotRestored, then the notices that waited.
+    void deliverAdmissionNotices(SessionTransport* transport,
+                                 std::optional<qint64> timeRanOutAtMs);
+    struct PanMoveCheck {
+        /// None: not a pan move (today's path); Apply: nobody would be
+        /// asked; Ask: another device's slice moves or closes.
+        enum class Kind { None, Apply, Ask };
+        Kind kind = Kind::None;
+        int stream = -1;
+        double centreHz = 0.0;
+        int exemptSliceId = -1;
+        ReceiverPlanner::WindowMove plan;
+        /// The disturbed slices of devices (a slice nobody owns moves or
+        /// closes without asking anyone).
+        QList<ReceiverPlanner::Disturbed> named;
+    };
+    PanMoveCheck checkPanMove(const QByteArray& requester, const SessionMessage& original) const;
+    ReceiverPlanner::DeviceInfo planDevice(const QByteArray& deviceId) const;
+    ReceiverPlanner receiverPlanner() const;
+    SessionTransport* liveTransportFor(const QByteArray& deviceId) const;
+    QString withHolderNames(const QString& reason, const QByteArray& requester) const;
+    QString namesOf(const QList<ReceiverPlanner::Disturbed>& disturbed) const;
+    void answerHere(SessionTransport* transport, const SessionMessage& result);
+    void answerWrite(SessionTransport* transport, const SessionMessage& write,
+                     const QString& reason);
+    bool handleCentreMove(SessionTransport* transport, const SessionMessage& message,
+                          const QByteArray& requester);
+    bool handleAddWithTake(SessionTransport* transport, const SessionMessage& message,
+                           const QByteArray& requester);
+    void refuseWhileAsking(SessionTransport* transport, const SessionMessage& original);
+    void sendQuestion(SessionTransport* transport, ConfirmStep::Question question,
+                      SessionPrompt prompt);
+    void askPanMove(SessionTransport* transport, const SessionMessage& original,
+                    const PanMoveCheck& check, const std::optional<QJsonObject>& change);
+    void askTake(SessionTransport* transport, const SessionMessage& original,
+                 const ReceiverPlanner::TakeRequest& request);
+    void askTakeSlice(SessionTransport* transport, const SessionMessage& original,
+                      const QList<ReceiverPlanner::Choice>& choices);
+    void applyPanMove(const PanMoveCheck& check, const QByteArray& requester);
+    SessionMessage runHeldCommand(const SessionMessage& original);
+    SessionMessage applyHeld(SessionTransport* transport, const ConfirmStep::Question& question,
+                             int stream, const SessionMessage& invoke);
+    bool heldFitsNow(const ConfirmStep::Question& question) const;
+    QHash<QByteArray, QList<SavedSlice>> closeForTake(const QList<int>& sliceIds);
+    void tellTaken(const QHash<QByteArray, QList<SavedSlice>>& closedBy, const QByteArray& taker,
+                   const QString& kind, int stream, int takerSlice);
+    void endOlderWindowsWithoutSlices(const QList<QByteArray>& devices, const QByteArray& taker);
+    void tellDevice(ConfirmStep::Notice notice, const QByteArray& by);
+    void sendNotice(SessionTransport* transport, const ConfirmStep::Notice& notice);
+    SessionMessage askAgain(const SessionMessage& invoke);
+    SessionMessage proceedPanMove(SessionTransport* transport, const ConfirmStep::Question& question,
+                                  const SessionMessage& invoke);
+    SessionMessage proceedTakeReceiver(SessionTransport* transport,
+                                       const ConfirmStep::Question& question, int choice,
+                                       const SessionMessage& invoke);
+    SessionMessage proceedTakeSlice(SessionTransport* transport,
+                                    const ConfirmStep::Question& question, int choice,
+                                    const SessionMessage& invoke);
+    SessionMessage askTakeBack(SessionTransport* transport, const SessionMessage& invoke,
+                               int noticeId);
+    SessionMessage proceedTakeBack(SessionTransport* transport,
+                                   const ConfirmStep::Question& question, int choice,
+                                   const SessionMessage& invoke);
+    void sendHeldQuestions();
+    /// Section 7.3's refusal for an older window, naming who a change
+    /// would affect.
+    static QString olderWindowReason(const QString& names);
+
+    // ── iPhone app Task 75 (R-IOS-30): settings that affect every device
+    //    (StationSharedSettings.cpp) ────────────────────────────────────
+    /// A change on the several-devices design's list (7.1): what it
+    /// touches, its words, and what it acts on (ruling 7.6).
+    struct SharedChange {
+        /// On the list and a real change (not the value already there).
+        bool shared = false;
+        DisturbanceCheck::Scope scope;
+        /// {label, from, to} in plain words.
+        QJsonObject change;
+        /// What it acts on and that target's value now; set whenever the
+        /// message names a listed target, shared or not.
+        QString target;
+        QString targetValue;
+        /// A sample rate the Core's own plan refuses for the requester's
+        /// own slice: left to today's path, which refuses it.
+        bool refusedToday = false;
+        /// A sample rate: other devices' slices it closes before applying.
+        QList<int> closes;
+    };
+    SharedChange classifyShared(const SessionMessage& message, const QByteArray& requester) const;
+    DisturbanceCheck::Topology sharedTopology() const;
+    /// Who holds transmit, for the check. Empty until Task 34's
+    /// TransmitHolder joins here.
+    DisturbanceCheck::Transmit transmitForCheck() const;
+    /// A command, property write or settings write on the list: asked
+    /// (a device with the feature), refused (an older window), or left to
+    /// today's path. True when it answered.
+    bool handleSharedSetting(SessionTransport* transport, const SessionMessage& message);
+    QJsonArray sharedAffectedJson(const QList<DisturbanceCheck::Affected>& affected) const;
+    static QSet<QString> sharedShown(const QList<DisturbanceCheck::Affected>& affected);
+    void askSharedSetting(SessionTransport* transport, const SessionMessage& original,
+                          const SharedChange& change,
+                          const QList<DisturbanceCheck::Affected>& affected,
+                          bool answerOriginal);
+    SessionMessage proceedSharedSetting(SessionTransport* transport,
+                                        const ConfirmStep::Question& question,
+                                        const SessionMessage& invoke);
+    void tellSettingChanged(const QList<DisturbanceCheck::Affected>& affected,
+                            const QHash<int, QJsonObject>& sliceWords,
+                            const QJsonObject& change, const QByteArray& by);
+    /// A proceed whose held command answers on a later turn
+    /// (requestSliceSampleRate, the dispatcher's one asynchronous verb):
+    /// its answer, the readback and the notices wait for that result.
+    /// Fix wave I1: a command result is named by the session that asked
+    /// with its verb and id, since every client counts its ids from 1.
+    struct ResultKey {
+        quint64 sessionId = 0;
+        QByteArray verb;
+        quint32 commandId = 0;
+        friend bool operator==(const ResultKey& a, const ResultKey& b)
+        {
+            return a.sessionId == b.sessionId && a.commandId == b.commandId && a.verb == b.verb;
+        }
+        friend size_t qHash(const ResultKey& key, size_t seed = 0) noexcept
+        {
+            return qHashMulti(seed, key.sessionId, key.verb, key.commandId);
+        }
+    };
+    /// The session id an owner string `station:<sessionId>` names; 0 for
+    /// any other.
+    static quint64 sessionIdOfOwner(const QString& owner);
+    /// The key of `result` for the session the dispatcher says it answers.
+    ResultKey resultKeyOf(const SessionMessage& result) const;
+    /// Whether `result` is the last its command sends (its route goes).
+    static bool isLastResult(const SessionMessage& result);
+    struct DeferredProceed {
+        QPointer<SessionTransport> transport;
+        QByteArray proceedVerb;
+        quint32 proceedId = 0;
+        QList<DisturbanceCheck::Affected> affected;
+        QHash<int, QJsonObject> sliceWords;
+        QJsonObject change;
+        QByteArray requester;
+        QList<QByteArray> closedDevices;
+    };
+    QHash<ResultKey, DeferredProceed> m_deferredProceeds;
+    /// The proceed answered later, whose immediate answer is not sent.
+    std::optional<ResultKey> m_proceedAnsweredLater;
+    /// True when `result`, keyed `key`, finished a deferred proceed (and
+    /// was consumed).
+    bool finishDeferredProceed(const ResultKey& key, const SessionMessage& result);
+    /// Ruling 5.11a: RadioModel kept the receive antenna; the person tuning
+    /// is told.
+    void onReceiveAntennaKept(int sliceId, const QString& antenna,
+                              const QList<QByteArray>& listeners);
+
+    std::unique_ptr<ConfirmStep> m_confirm;
+    bool m_holdQuestions = false;
+    QList<QPair<SessionTransport*, SessionMessage>> m_heldQuestions;
+    /// While set, every result the dispatcher emits passes through it
+    /// first; false keeps it from being sent.
+    std::function<bool(SessionMessage&)> m_resultHook;
+
     QPointer<RadioModel> m_radioModel;
     AppSettings& m_settings;
     QString m_securityDirectory;
@@ -1111,6 +1538,10 @@ private:
     std::function<QByteArray(const QString&)> m_pairingHasher;
 
     QWebSocketServer* m_wsServer = nullptr;
+    StationOpeningGate* m_openingGate = nullptr;
+    int m_openingDeadlineMs = kDefaultOpeningDeadlineMs;
+    int m_maxOpenings = kMaxUnfinishedOpenings;
+    int m_maxOpeningsPerAddress = kMaxHandshakesPerAddress;
 
     StateMirror* m_mirror = nullptr;
     ObjectRegistry* m_registry = nullptr;
@@ -1119,15 +1550,39 @@ private:
     bool m_mirrorBuilt = false;
 
     QHash<SessionTransport*, Peer> m_peers;
-    /// iPhone app Task 71: the one admitted session media and telemetry go
-    /// to until Task 76 (see the topology note); null when none holds them.
-    SessionTransport* m_mediaSession = nullptr;
+    /// iPhone app Task 76: the admitted session with this media epoch, or
+    /// null; the earliest admitted of those live (the primary).
+    SessionTransport* mediaSessionFor(quint64 epoch) const;
+    SessionTransport* primaryMediaSession() const;
+    bool mediaAvailableFor(SessionTransport* transport) const;
+    /// The Core's total as a peer sees it (none for an older peer when it
+    /// is computed, setDisplayBudgetForReasonPeersOnly).
+    std::optional<DisplayBudgetLimits> displayBudgetTotalFor(SessionTransport* transport) const;
+    /// Splits the total among the media sessions (DisplayBudgetSplit) into
+    /// each Peer's share; true when any share or reason changed.
+    bool recomputeDisplayBudgetShares();
+    /// The split itself: each sharing session with its share. With
+    /// `ps3Subscriber` the PureSignal display is charged to that session
+    /// whether or not it is subscribed now.
+    QList<QPair<SessionTransport*, DisplayBudgetShare>> splitDisplayBudget(
+        std::optional<quint64> ps3Subscriber) const;
+    /// What a session's capabilities say of the budget, to publish a
+    /// change once.
+    QByteArray budgetEntriesFor(SessionTransport* transport) const;
+    void publishBudgetToChangedSessions();
+    quint64 m_ps3SubscriberEpoch = 0;
+    /// close() is ending every session.
+    bool m_closing = false;
+    SessionPs3DisplayAdmissionHandler m_ps3DisplayAdmission;
+    DisplayDemandProvider m_displayDemand;
     /// During promoteToSession()'s attach: the session its burst is for.
     quint64 m_nextSessionId = 0;
     /// Command results owed to a session other than the one being
-    /// dispatched now (a result that arrives on a later turn), by verb and
-    /// id.
-    QHash<QPair<QByteArray, quint32>, QPointer<SessionTransport>> m_resultRoutes;
+    /// dispatched now (a result that arrives on a later turn), by the
+    /// session, verb and id (fix wave I1). A route is erased once its last
+    /// result is delivered (a PureSignal action's completed or failed
+    /// phase; any other command's one result), or when its session ends.
+    QHash<ResultKey, QPointer<SessionTransport>> m_resultRoutes;
     bool m_resultSentInDispatch = false;
     std::unique_ptr<ConnectedDevicesFacade> m_connectedDevices;
     // iPhone app plan Task 34: who holds transmit, and who may transmit.

@@ -4,6 +4,8 @@
 #include <QRegularExpression>
 #include <QTemporaryDir>
 #include <QTimer>
+#include <QJsonObject>
+#include <QSignalSpy>
 #include "core/AppSettings.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
@@ -591,6 +593,149 @@ private slots:
         QTRY_COMPARE(controller.current().state, RemoteTelemetryView::State::Disconnected);
         QVERIFY(!controller.current().coreReceiversReported);
         QVERIFY(!controller.current().coreReceivers);
+    }
+
+    // R-R3-32 / R-R3-46 (remote-window parity Task 6): station telemetry
+    // version 4 carries the Core's PA readings and radio link quality; the
+    // window's model shows the Core's (present), leaves a reading the Core
+    // did not send absent (absent), and clears them all when the
+    // measurements are out of date (stale), never showing 0 for either.
+    void coreRadioPaReadingsAndLinkQuality()
+    {
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
+        server.setTelemetryEnabled(true);
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        qint64 now = 10000;
+        RemoteTelemetryController controller(&client, nullptr, nullptr, [&] { return now; });
+        controller.setPaReadingsTarget(&remote);
+        QVERIFY(!remote.paReadings().paVolts);
+
+        auto* guiWire = new ObservedLoopback;
+        auto* coreWire = new Test::LoopbackTransport(QStringLiteral("Core"));
+        guiWire->linkTo(coreWire);
+        server.acceptTransport(coreWire);
+        client.startSession(guiWire, server.token());
+        QTRY_VERIFY(client.isHandshakeComplete());
+        QCOMPARE(client.capabilities().stationTelemetryVersion, 4);
+
+        StationTelemetrySnapshot sample;
+        sample.sequence = 1;
+        sample.sampledElapsedMs = 100;
+        sample.radio.connected = true;
+        sample.radio.paVolts = 13.8;
+        sample.radio.supplyVolts = 12.1;
+        sample.radio.paCurrentAmps = 0.0;          // a measured zero is a value
+        sample.radio.paTemperatureCelsius = 41.5;
+        sample.radio.packetLossPercent = 0.25;
+        sample.radio.jitterMs = 0.37;
+        sample.radio.packetGapMs = 4.2;
+        sample.radio.sampleRateHz = 192000;
+        sample.radio.udpPacketsSeen = 123456;
+        QSignalSpy paChanged(&remote, &RadioModel::paReadingsChanged);
+        QVERIFY(server.sendTelemetry(sample, server.sessionEpoch()));
+        QTRY_COMPARE(controller.current().state, RemoteTelemetryView::State::Current);
+        const StationRadioTelemetry& radio = controller.current().radio;
+        QCOMPARE(radio.packetLossPercent, std::optional<double>(0.25));
+        QCOMPARE(radio.udpPacketsSeen, std::optional<qint64>(123456));
+        QCOMPARE(radio.sampleRateHz, std::optional<qint64>(192000));
+        RadioModel::PaReadings pa = remote.paReadings();
+        QCOMPARE(pa.paVolts, std::optional<double>(13.8));
+        QCOMPARE(pa.supplyVolts, std::optional<double>(12.1));
+        QCOMPARE(pa.paCurrentAmps, std::optional<double>(0.0));
+        QCOMPARE(pa.paTemperatureCelsius, std::optional<double>(41.5));
+        QVERIFY(paChanged.count() >= 1);
+        QVERIFY(remote.paReadingsFromCore());
+
+        const QString detail = controller.detailText();
+        for (const QString& expected : {
+                 QStringLiteral("PA voltage from the Core: 13.8\u00A0V."),
+                 QStringLiteral("DC voltage from the Core: 12.1\u00A0V."),
+                 QStringLiteral("Packet loss between the Core and the radio, from the Core: 0.25\u00A0% over the last 5 seconds."),
+                 QStringLiteral("Radio jitter from the Core: 0.37\u00A0ms."),
+                 QStringLiteral("Longest gap between radio packets in the last second, from the Core: 4.2\u00A0ms."),
+                 QStringLiteral("Radio sample rate from the Core: 192\u00A0kHz."),
+                 QStringLiteral("UDP packets seen from the radio since it connected, from the Core: 123456.")}) {
+            QVERIFY2(detail.contains(expected), qPrintable(expected + QStringLiteral("\n") + detail));
+        }
+        for (const QString& line : detail.split(QLatin1Char('\n'))) {
+            QVERIFY2(OperatorWording::isPlain(line), qPrintable(line));
+        }
+
+        // Absent: a reading the Core did not send stays absent.
+        sample.sequence = 2;
+        sample.sampledElapsedMs = 1100;
+        sample.radio.paCurrentAmps.reset();
+        sample.radio.jitterMs.reset();
+        now += 1000;
+        QVERIFY(server.sendTelemetry(sample, server.sessionEpoch()));
+        QTRY_VERIFY(!remote.paReadings().paCurrentAmps);
+        QCOMPARE(remote.paReadings().paVolts, std::optional<double>(13.8));
+        QVERIFY(controller.detailText().contains(QStringLiteral("Radio jitter from the Core: unavailable.")));
+
+        // Stale: out-of-date measurements leave every reading absent.
+        now += 4000;
+        controller.sampleNow();
+        QCOMPARE(controller.current().state, RemoteTelemetryView::State::Stale);
+        pa = remote.paReadings();
+        QVERIFY(!pa.paVolts && !pa.supplyVolts && !pa.paCurrentAmps && !pa.paTemperatureCelsius);
+        QVERIFY(controller.detailText().contains(QStringLiteral("PA voltage from the Core: unavailable.")));
+
+        // A fresh sample brings them back; the session ending clears them.
+        sample.sequence = 3;
+        sample.sampledElapsedMs = 5100;
+        QVERIFY(server.sendTelemetry(sample, server.sessionEpoch()));
+        QTRY_COMPARE(remote.paReadings().paVolts, std::optional<double>(13.8));
+        client.disconnectFromStation(QStringLiteral("done"));
+        QTRY_VERIFY(!remote.paReadings().paVolts);
+    }
+
+    // R-R3-32 (parity Task 6): the version 4 radio fields' wire rules.
+    void radioStatusCodecRules()
+    {
+        StationTelemetrySnapshot sample;
+        sample.sequence = 1;
+        sample.radio.connected = true;
+        sample.radio.paVolts = 13.8;
+        sample.radio.paTemperatureCelsius = -5.0;   // a cold PA is a value
+        sample.radio.packetLossPercent = 100.0;
+        sample.radio.udpPacketsSeen = 0;
+        const std::optional<QJsonObject> wire = StationTelemetryCodec::encode(sample);
+        QVERIFY(wire);
+        StationTelemetrySnapshot decoded;
+        QVERIFY(StationTelemetryCodec::decode(*wire, &decoded));
+        QCOMPARE(decoded.radio.paVolts, std::optional<double>(13.8));
+        QCOMPARE(decoded.radio.paTemperatureCelsius, std::optional<double>(-5.0));
+        QCOMPARE(decoded.radio.udpPacketsSeen, std::optional<qint64>(0));
+        QVERIFY(!decoded.radio.supplyVolts);   // absent stays absent
+
+        const auto rejects = [&](const char* key, const QJsonValue& value, bool connected = true) {
+            QJsonObject object = *wire;
+            QJsonObject radio = object.value(QStringLiteral("radio")).toObject();
+            radio.insert(QStringLiteral("connected"), connected);
+            radio.insert(QString::fromLatin1(key), value);
+            object.insert(QStringLiteral("radio"), radio);
+            StationTelemetrySnapshot out;
+            return !StationTelemetryCodec::decode(object, &out);
+        };
+        QVERIFY(rejects("paVolts", -1.0));
+        QVERIFY(rejects("packetLossPercent", 100.5));
+        QVERIFY(rejects("paTemperatureCelsius", -300.0));
+        QVERIFY(rejects("udpPacketsSeen", 1.5));
+        QVERIFY(rejects("sampleRateHz", QStringLiteral("192k")));
+        // A disconnected radio reports none of them.
+        QJsonObject offline = *wire;
+        QJsonObject radio = offline.value(QStringLiteral("radio")).toObject();
+        radio.insert(QStringLiteral("connected"), false);
+        offline.insert(QStringLiteral("radio"), radio);
+        StationTelemetrySnapshot out;
+        QVERIFY(!StationTelemetryCodec::decode(offline, &out));
+        sample.radio.paVolts = -2.0;
+        QVERIFY(!StationTelemetryCodec::encode(sample));
     }
 
     void olderCoreIsExplicitlyUnsupported()

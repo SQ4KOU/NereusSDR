@@ -111,6 +111,14 @@
 //                 Behaviour unchanged; pure visual. Authored by J.J. Boyd
 //                 (KG4VCF) with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-09-25 - R-R3-46 / R-R3-49 / R-R3-32 (remote-window parity
+//                 Task 6): PA Gain's editor and the Watt Meter's PA table
+//                 follow transmitSettingsVersion 6 in a remote window (the
+//                 auto-calibrate sweep keeps the transmit permission); PA
+//                 Values' PA current, temperature and supply volts come from
+//                 RadioModel::paReadings() (the Core's in a remote window),
+//                 unavailable when absent. J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -173,6 +181,7 @@
 #include "core/PaTelemetryScaling.h"
 #include "core/RadioConnection.h"
 #include "core/RadioStatus.h"
+#include "core/session/IStationLink.h"
 #include "gui/StyleConstants.h"
 #include "gui/setup/hardware/PaCalibrationGroup.h"
 #include "gui/widgets/MetricLabel.h"
@@ -822,6 +831,68 @@ PaGainByBandPage::PaGainByBandPage(RadioModel* model, QWidget* parent)
     if (const PaProfile* active = m_paProfileManager->activeProfile()) {
         loadProfileIntoUi(*active);
     }
+
+    // R-R3-46 / R-R3-49 (remote-window parity Task 6): a profile's values
+    // saved elsewhere (another window, the Core, or the Core handing back
+    // its own after a refused change) reach the editor.
+    connect(m_paProfileManager, &PaProfileManager::profileDataChanged, this, [this]() {
+        if (const PaProfile* active = m_paProfileManager->activeProfile()) {
+            loadProfileIntoUi(*active);
+        }
+    });
+    // In a remote window the editor starts closed until SetupDialog pushes
+    // the version 6 gate and the transmit permission.
+    if (!model->ownsLocalDsp()) {
+        setTransmitSettingsPermittedAt(6, false, QString());
+        setTransmitPermitted(false, QString());
+    }
+}
+
+QList<QWidget*> PaGainByBandPage::paSettingsControls() const
+{
+    QList<QWidget*> controls{m_profileCombo, m_btnNew, m_btnCopy, m_btnDelete, m_btnReset,
+                             m_newCalCheck, m_bypassPaSettingsCheck};
+    for (int n = 0; n < kPaBandCount; ++n) {
+        controls << m_gainSpins[n] << m_maxPowerSpins[n] << m_useMaxPowerChecks[n];
+        for (int step = 0; step < kAutoCalDriveSteps; ++step) {
+            controls << m_adjustSpins[n][step];
+        }
+    }
+    return controls;
+}
+
+QList<QWidget*> PaGainByBandPage::paKeyingControls() const
+{
+    // The sweep engages TUNE on every band (Thetis chkAutoPACalibrate), so
+    // it waits for remote transmit.
+    return {m_autoCalibrateCheck, m_autoCalPanel};
+}
+
+void PaGainByBandPage::applyPaGates()
+{
+    gateTransmitControls(paSettingsControls(), m_paSettingsPermitted, m_paSettingsReason);
+    gateTransmitControls(paKeyingControls(), m_paKeyingPermitted, m_paKeyingReason);
+}
+
+void PaGainByBandPage::setTransmitPermitted(bool permitted, const QString& reason)
+{
+    m_paKeyingPermitted = permitted;
+    m_paKeyingReason = reason.isEmpty()
+        ? tr("Remote transmit controls are not available from this Core yet.")
+        : reason;
+    gateTransmitControls(paKeyingControls(), m_paKeyingPermitted, m_paKeyingReason);
+}
+
+void PaGainByBandPage::setTransmitSettingsPermittedAt(int version, bool permitted,
+                                                      const QString& reason)
+{
+    if (version != 6) {
+        return;
+    }
+    m_paSettingsPermitted = permitted;
+    m_paSettingsReason = reason.isEmpty() ? IStationLink::transmitSettingsUnavailableReason()
+                                          : reason;
+    gateTransmitControls(paSettingsControls(), m_paSettingsPermitted, m_paSettingsReason);
 }
 
 // ── Phase 8 of #167: per-SKU visibility wiring ────────────────────────────────
@@ -851,6 +922,11 @@ void PaGainByBandPage::applyCapabilityVisibility(const BoardCapabilities& caps)
     // isn't built; m_placeholderLabel rides the same editorEnabled flag
     // so test seams can verify the toggle behavior.
     const bool editorEnabled = caps.hasPaProfile;
+
+    // R-R3-46 (parity Task 6): the capability decides each control's own
+    // enabled state; the transmit gates are laid over it again below.
+    gateTransmitControls(paSettingsControls(), true, QString());
+    gateTransmitControls(paKeyingControls(), true, QString());
 
     if (m_profileCombo)        { m_profileCombo->setEnabled(editorEnabled); }
     if (m_btnNew)              { m_btnNew->setEnabled(editorEnabled); }
@@ -927,6 +1003,8 @@ void PaGainByBandPage::applyCapabilityVisibility(const BoardCapabilities& caps)
     // for Phase 3M-4 PureSignal but has no observable behaviour in v0.3.2;
     // the user-facing UI surface lands with PureSignal in 3M-4.
     // (Field caps.hasStepAttenuatorCal is still consulted by other components.)
+
+    applyPaGates();
 }
 
 #ifdef NEREUS_BUILD_TESTS
@@ -1934,6 +2012,11 @@ PaWattMeterPage::PaWattMeterPage(RadioModel* model, QWidget* parent)
                 m_paCalGroup->populate(calCtrl, calCtrl->paCalProfile().boardClass);
             }
         });
+        // R-R3-46 (parity Task 6): in a remote window the table starts
+        // closed until SetupDialog pushes the version 6 gate.
+        if (!model->ownsLocalDsp()) {
+            setTransmitSettingsPermittedAt(6, false, QString());
+        }
     }
 
     // ── chkPAValues "Show PA Values page" toggle ────────────────────────────
@@ -1988,6 +2071,21 @@ PaWattMeterPage::PaWattMeterPage(RadioModel* model, QWidget* parent)
 // chkPAValues toggle + Reset PA Values button; the page itself is hidden by
 // SetupDialog when the parent PA category goes hidden (caps.isRxOnlySku
 // or !caps.hasPaProfile).
+void PaWattMeterPage::setTransmitSettingsPermittedAt(int version, bool permitted,
+                                                     const QString& reason)
+{
+    // R-R3-46 / R-R3-49 (parity Task 6): the PA forward-power table
+    // (hardware/<mac>/paCalibration/...) is taken by the Core while its
+    // radio is off the air. Show PA Values and Reset PA Values are this
+    // window's own.
+    if (version != 6 || !m_paCalGroup) {
+        return;
+    }
+    gateTransmitControls({m_paCalGroup}, permitted,
+                         reason.isEmpty() ? IStationLink::transmitSettingsUnavailableReason()
+                                          : reason);
+}
+
 void PaWattMeterPage::applyCapabilityVisibility(const BoardCapabilities& caps)
 {
     // The PaCalibrationGroup auto-rebuilds via paCalProfileChanged when the
@@ -2135,7 +2233,17 @@ PaValuesPage::PaValuesPage(RadioModel* model, QWidget* parent)
                                          QStringLiteral("No"), paGroup);
     paForm->addRow(QStringLiteral("PA Current:"),     m_paCurrentLabel);
     paForm->addRow(QStringLiteral("PA Temperature:"), m_paTempLabel);
-    paForm->addRow(QStringLiteral("Supply Voltage:"), m_supplyVoltsLabel);
+    // Group A follow-up (group B fix wave): the AIN6 reading carries
+    // Thetis's name for it. On MkII-class boards (the G2) it is not the
+    // 13.8 V supply (RadioConnection::handleSupplyRaw).
+    // From Thetis setup.designer.cs:51365 [v2.10.3.15]
+    //   this.labelTS254.Text = "DC Voltage";
+    // That label ships hidden; the reading itself carries the name in
+    // Thetis's own computation of it (parity mini-round):
+    // From Thetis console.cs:24782 [v2.10.3.15]
+    //   public float computeHermesDCVoltage()
+    //   ... int adc = NetworkIO.getHermesDCVoltage();
+    paForm->addRow(QStringLiteral("DC Voltage:"), m_supplyVoltsLabel);
     paForm->addRow(QStringLiteral("FWD Voltage:"),    m_fwdVoltageLabel);
     paForm->addRow(QStringLiteral("REV Voltage:"),    m_revVoltageLabel);
     paForm->addRow(QStringLiteral("ADC Overload:"),   m_adcOverloadLabel);
@@ -2177,7 +2285,8 @@ PaValuesPage::PaValuesPage(RadioModel* model, QWidget* parent)
     RadioStatus& rs = model->radioStatus();
 
     connect(&rs, &RadioStatus::powerChanged, this,
-            [this](double fwdW, double revW, double swr) {
+            [this, model](double fwdW, double revW, double swr) {
+                if (model->paReadingsFromCore()) { return; }  // see the ctor's end
                 m_fwdCurrent = fwdW;
                 m_revCurrent = revW;
                 m_swrCurrent = swr;
@@ -2198,25 +2307,12 @@ PaValuesPage::PaValuesPage(RadioModel* model, QWidget* parent)
                 }
             });
 
-    connect(&rs, &RadioStatus::paCurrentChanged, this,
-            [this](double amps) {
-                m_paCurrentCurrent = amps;
-                m_paCurrentPeakMin.update(amps);
-                if (m_paCurrentLabel) {
-                    m_paCurrentLabel->setValue(formatWithPeakMin(
-                        amps, m_paCurrentPeakMin, QStringLiteral(" A"), 2));
-                }
-            });
-
-    connect(&rs, &RadioStatus::paTemperatureChanged, this,
-            [this](double celsius) {
-                m_paTempCurrent = celsius;
-                m_paTempPeakMin.update(celsius);
-                if (m_paTempLabel) {
-                    m_paTempLabel->setValue(
-                        formatPaTempWithPeakMin(celsius, m_paTempPeakMin));
-                }
-            });
+    // R-R3-32 / R-R3-46 (parity Task 6): PA current, PA temperature and
+    // supply volts come from the one PA reading source,
+    // RadioModel::paReadings() (the Core's in a remote window), an absent
+    // reading shown as unavailable.
+    connect(model, &RadioModel::paReadingsChanged,
+            this, &PaValuesPage::refreshPaReadings);
 
     // Live re-format on °C / °F toggle without waiting for the next
     // telemetry sample — the peak/min trackers stay in their canonical
@@ -2224,7 +2320,7 @@ PaValuesPage::PaValuesPage(RadioModel* model, QWidget* parent)
     connect(&PaTempUnitNotifier::instance(),
             &PaTempUnitNotifier::unitChanged, this,
             [this](PaTempUnit /*unit*/) {
-        if (m_paTempLabel) {
+        if (m_paTempLabel && m_paTempPresent) {
             m_paTempLabel->setValue(
                 formatPaTempWithPeakMin(m_paTempCurrent, m_paTempPeakMin));
         }
@@ -2238,18 +2334,13 @@ PaValuesPage::PaValuesPage(RadioModel* model, QWidget* parent)
     m_fwdCurrent       = rs.forwardPowerWatts();
     m_revCurrent       = rs.reflectedPowerWatts();
     m_swrCurrent       = rs.swrRatio();
-    m_paCurrentCurrent = rs.paCurrentAmps();
-    m_paTempCurrent    = rs.paTemperatureCelsius();
     m_fwdCalibratedLabel->setValue(formatWithPeakMin(
         m_fwdCurrent, m_fwdPeakMin, QStringLiteral(" W"), 2));
     m_revPowerLabel->setValue(formatWithPeakMin(
         m_revCurrent, m_revPeakMin, QStringLiteral(" W"), 2));
     m_swrLabel->setValue(formatWithPeakMin(
         m_swrCurrent, m_swrPeakMin, QString(), 2));
-    m_paCurrentLabel->setValue(formatWithPeakMin(
-        m_paCurrentCurrent, m_paCurrentPeakMin, QStringLiteral(" A"), 2));
-    m_paTempLabel->setValue(
-        formatPaTempWithPeakMin(m_paTempCurrent, m_paTempPeakMin));
+    refreshPaReadings();
 
     // ── TransmitModel drive subscription (Phase 5B #167) ─────────────────
     // The Drive label tracks the user's TX power slider position via
@@ -2271,17 +2362,6 @@ PaValuesPage::PaValuesPage(RadioModel* model, QWidget* parent)
     // time SetupDialog opens, so a stale page will be destroyed first).
     auto* conn = model->connection();
     if (conn) {
-        connect(conn, &RadioConnection::supplyVoltsChanged, this,
-                [this](float volts) {
-                    const double v = static_cast<double>(volts);
-                    m_supplyCurrent = v;
-                    m_supplyPeakMin.update(v);
-                    if (m_supplyVoltsLabel) {
-                        m_supplyVoltsLabel->setValue(formatWithPeakMin(
-                            v, m_supplyPeakMin, QStringLiteral(" V"), 1));
-                    }
-                });
-
         // Capture HPSDRModel by value so the lambda survives any later
         // hardware-profile swap (PaValuesPage reconstructs on Setup-open
         // anyway; this is just defensive against mid-page-life swaps).
@@ -2342,6 +2422,23 @@ PaValuesPage::PaValuesPage(RadioModel* model, QWidget* parent)
                         }
                     });
                 });
+    }
+
+    // R-R3-32 / R-R3-46 (parity Task 6): in a remote window the power,
+    // raw ADC and RF voltage readings are the Core's transmit readings,
+    // which come with remote transmit; until then each says unavailable
+    // rather than showing a 0 nothing measured. The PA readings above are
+    // the Core's.
+    if (model->paReadingsFromCore()) {
+        const QString waits = tr("The Core sends this reading when this window can transmit.");
+        for (MetricLabel* label : {m_fwdCalibratedLabel, m_fwdRawLabel, m_revPowerLabel,
+                                   m_swrLabel, m_fwdVoltageLabel, m_revVoltageLabel,
+                                   m_adcOverloadLabel, m_fwdAdcLabel, m_revAdcLabel}) {
+            if (label) {
+                label->setValue(tr("Unavailable"));
+                label->setToolTip(waits);
+            }
+        }
     }
 }
 
@@ -2412,6 +2509,9 @@ void PaValuesPage::applyCapabilityVisibility(const BoardCapabilities& caps)
 // ---------------------------------------------------------------------------
 void PaValuesPage::resetPaValues()
 {
+    // R-R3-32 (parity Task 6): take the latest PA readings first, so each
+    // tracker restarts at the live value rather than a stale one.
+    refreshPaReadings();
     m_fwdPeakMin.reset(m_fwdCurrent);
     m_revPeakMin.reset(m_revCurrent);
     m_swrPeakMin.reset(m_swrCurrent);
@@ -2422,30 +2522,65 @@ void PaValuesPage::resetPaValues()
     // Re-render every tracked label so the (P/M) annotation collapses to
     // P==M==current — the reset is visible to the user immediately even
     // when telemetry is paused (e.g. radio disconnected).
-    if (m_fwdCalibratedLabel) {
+    // R-R3-32 (parity Task 6): a remote window's power readings stay
+    // unavailable (see the ctor's end).
+    const bool powerFromCore = model() && model()->paReadingsFromCore();
+    if (m_fwdCalibratedLabel && !powerFromCore) {
         m_fwdCalibratedLabel->setValue(formatWithPeakMin(
             m_fwdCurrent, m_fwdPeakMin, QStringLiteral(" W"), 2));
     }
-    if (m_revPowerLabel) {
+    if (m_revPowerLabel && !powerFromCore) {
         m_revPowerLabel->setValue(formatWithPeakMin(
             m_revCurrent, m_revPeakMin, QStringLiteral(" W"), 2));
     }
-    if (m_swrLabel) {
+    if (m_swrLabel && !powerFromCore) {
         m_swrLabel->setValue(formatWithPeakMin(
             m_swrCurrent, m_swrPeakMin, QString(), 2));
     }
+    // R-R3-32 (parity Task 6): an absent PA reading stays unavailable.
+    refreshPaReadings();
+}
+
+void PaValuesPage::refreshPaReadings()
+{
+    RadioModel* const radio = model();
+    if (!radio) { return; }
+    const RadioModel::PaReadings readings = radio->paReadings();
+    const QString unavailable = tr("Unavailable");
+    m_paCurrentPresent = readings.paCurrentAmps.has_value();
+    m_paTempPresent = readings.paTemperatureCelsius.has_value();
+    m_supplyPresent = readings.supplyVolts.has_value();
+    if (m_paCurrentPresent) {
+        m_paCurrentCurrent = *readings.paCurrentAmps;
+        m_paCurrentPeakMin.update(m_paCurrentCurrent);
+    }
+    if (m_paTempPresent) {
+        m_paTempCurrent = *readings.paTemperatureCelsius;
+        m_paTempPeakMin.update(m_paTempCurrent);
+    }
+    if (m_supplyPresent) {
+        m_supplyCurrent = *readings.supplyVolts;
+        m_supplyPeakMin.update(m_supplyCurrent);
+    }
     if (m_paCurrentLabel) {
-        m_paCurrentLabel->setValue(formatWithPeakMin(
-            m_paCurrentCurrent, m_paCurrentPeakMin, QStringLiteral(" A"), 2));
+        m_paCurrentLabel->setValue(m_paCurrentPresent
+            ? formatWithPeakMin(m_paCurrentCurrent, m_paCurrentPeakMin, QStringLiteral(" A"), 2)
+            : unavailable);
     }
     if (m_paTempLabel) {
-        m_paTempLabel->setValue(formatWithPeakMin(
-            m_paTempCurrent, m_paTempPeakMin,
-            QStringLiteral(" \xC2\xB0""C"), 1));
+        m_paTempLabel->setValue(m_paTempPresent
+            ? formatPaTempWithPeakMin(m_paTempCurrent, m_paTempPeakMin)
+            : unavailable);
     }
     if (m_supplyVoltsLabel) {
-        m_supplyVoltsLabel->setValue(formatWithPeakMin(
-            m_supplyCurrent, m_supplyPeakMin, QStringLiteral(" V"), 1));
+        m_supplyVoltsLabel->setValue(m_supplyPresent
+            ? formatWithPeakMin(m_supplyCurrent, m_supplyPeakMin, QStringLiteral(" V"), 1)
+            : unavailable);
+    }
+    // R-R3-32: a remote window's readings are the Core's, and say so.
+    const QString source = radio->paReadingsFromCore() ? tr("From the Core") : QString();
+    for (MetricLabel* label : {m_paCurrentLabel, m_paTempLabel, m_supplyVoltsLabel}) {
+        if (label) { label->setToolTip(source); }
     }
 }
 

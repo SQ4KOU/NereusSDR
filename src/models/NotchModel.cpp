@@ -51,6 +51,11 @@
 //                 limited to one move per 100 ms plus a final one).
 //                 NereusSDR-original session code, no Thetis logic added.
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-21, R-IOS-27: requestAddAtSlice
+//                 (notch.addAtSlice) for a Core at notchControlVersion 2;
+//                 its refusal reaches notchAddRejected as notch.add's does.
+//                 NereusSDR-original session code. AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 // --- From radio.cs ---
@@ -993,6 +998,27 @@ NotchModel::PendingEdit& NotchModel::pendingEditFor(int id)
 
 quint32 NotchModel::requestAdd(int sliceId, double centreHz, double widthHz)
 {
+    return sendAddRequest("notch.add",
+                          {{QStringLiteral("sliceId"), sliceId},
+                           {QStringLiteral("centreHz"), centreHz},
+                           {QStringLiteral("widthHz"), widthHz}});
+}
+
+quint32 NotchModel::requestAddAtSlice(int sliceId)
+{
+    if (m_remoteControlVersion < 2) {
+        return 0;
+    }
+    return sendAddRequest("notch.addAtSlice", {{QStringLiteral("sliceId"), sliceId}});
+}
+
+void NotchModel::setRemoteControlVersion(int version)
+{
+    m_remoteControlVersion = version;
+}
+
+quint32 NotchModel::sendAddRequest(const QByteArray& verb, const QVariantMap& arguments)
+{
     if (!m_mirrorMode) {
         return 0;
     }
@@ -1002,12 +1028,7 @@ quint32 NotchModel::requestAdd(int sliceId, double centreHz, double widthHz)
         emit notchAddRejected(QStringLiteral("The TNF settings page is mid-edit"));
         return 0;
     }
-    const quint32 request = sendRequest(
-        "notch.add",
-        {{QStringLiteral("sliceId"), sliceId},
-         {QStringLiteral("centreHz"), centreHz},
-         {QStringLiteral("widthHz"), widthHz}},
-        0);
+    const quint32 request = sendRequest(verb, arguments, 0);
     if (request == 0) {
         emit notchAddRejected(QStringLiteral("This window cannot reach the Core right now"));
     }
@@ -1148,7 +1169,7 @@ void NotchModel::receiveRemoteResult(quint32 requestId, const QByteArray& verb,
     }
 
     if (!accepted) {
-        if (verb == "notch.add") {
+        if (verb == "notch.add" || verb == "notch.addAtSlice") {
             emit notchAddRejected(reason.isEmpty() ? QStringLiteral("The Core refused it")
                                                    : reason);
         } else {

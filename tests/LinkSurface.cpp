@@ -66,6 +66,12 @@
 //               `marker:<id>` key (a slice held for an away device in the
 //               live session). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app Task 74 (R-IOS-30): confirm.request and notice
+//               samples, and the confirmExpiryMs limit. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06: the clarity-retune
+//                                    media operation. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "LinkSurface.h"
@@ -112,6 +118,7 @@
 #include "core/session/SliceMarker.h"
 #include "core/session/TransmitStateFacade.h"
 #include "core/SliceOwnership.h"
+#include "core/session/ConfirmStep.h"
 #include "core/session/DeviceSessionRegistry.h"
 #include "core/session/StationLanAnnouncement.h"
 #include "core/session/StationServer.h"
@@ -250,7 +257,7 @@ std::optional<SessionMessage> sampleMessage(SessionMessageKind kind)
     case SessionMessageKind::StationTelemetry: {
         SessionMessage m;
         m.kind = SessionMessageKind::StationTelemetry;
-        m.telemetry = sampleTelemetry(3);
+        m.telemetry = sampleTelemetry(4);
         return m;
     }
     // iPhone app Task 14: the pair.* kinds. Placeholders, never a real key,
@@ -270,6 +277,35 @@ std::optional<SessionMessage> sampleMessage(SessionMessageKind kind)
         return SessionMessages::pairConfirm(QStringLiteral("box"));
     case SessionMessageKind::PairFail:
         return SessionMessages::pairFail(QStringLiteral("refused"), 5000);
+    // iPhone app Task 74: every optional key present.
+    case SessionMessageKind::ConfirmRequest: {
+        SessionPrompt prompt;
+        prompt.id = 1;
+        prompt.kind = QStringLiteral("panMove");
+        prompt.affected = QJsonArray{QJsonObject{}};
+        prompt.expiresInMs = 60000;
+        prompt.change = QJsonObject{{QStringLiteral("label"), QStringLiteral("Receiver 1")}};
+        prompt.choices = QJsonArray{QJsonObject{}};
+        prompt.forCommandId = 2;
+        prompt.forWriteId = 3;
+        prompt.forSettingsKey = QStringLiteral("StationCallsign");
+        return SessionMessages::confirmRequest(prompt, QStringLiteral("asked"));
+    }
+    case SessionMessageKind::Notice: {
+        SessionPrompt prompt;
+        prompt.id = 1;
+        prompt.kind = QStringLiteral("receiverTaken");
+        prompt.secondsAgo = 3;
+        prompt.takeBack = true;
+        prompt.byDeviceId = QStringLiteral("id");
+        prompt.byName = QStringLiteral("name");
+        prompt.byShortName = QStringLiteral("short");
+        prompt.byKind = QStringLiteral("phone");
+        prompt.bySource = QStringLiteral("device");
+        prompt.slices = QJsonArray{QJsonObject{}};
+        prompt.change = QJsonObject{{QStringLiteral("label"), QStringLiteral("Receiver 1")}};
+        return SessionMessages::notice(prompt, QStringLiteral("told"));
+    }
     }
     return std::nullopt;
 }
@@ -630,7 +666,8 @@ QJsonObject captureSettingsScope()
 
 // ── telemetry ────────────────────────────────────────────────────────────
 
-// Version 1: radio and audio. 2: adds host. 3: adds receivers
+// Version 1: radio and audio. 2: adds host. 3: adds receivers. 4: adds the
+// radio's PA readings and link quality in the radio section
 // (StationCapabilities.h stationTelemetryVersion; StationServer::
 // sendTelemetry strips host below kCoreHostTelemetrySessionProtocolMinor and
 // receivers below kReceiverLoadSessionProtocolMinor). Every optional field
@@ -670,6 +707,17 @@ StationTelemetrySnapshot sampleTelemetry(int version)
         receiver.skippedInputMs = 1;
         s.receivers = QVector<StationReceiverTelemetry>{receiver};
     }
+    if (version >= 4) {
+        s.radio.paVolts = 1.0;
+        s.radio.supplyVolts = 1.0;
+        s.radio.paCurrentAmps = 1.0;
+        s.radio.paTemperatureCelsius = 1.0;
+        s.radio.packetLossPercent = 1.0;
+        s.radio.jitterMs = 1.0;
+        s.radio.packetGapMs = 1.0;
+        s.radio.sampleRateHz = 1;
+        s.radio.udpPacketsSeen = 1;
+    }
     return s;
 }
 
@@ -695,11 +743,13 @@ void flattenPaths(const QString& prefix, const QJsonValue& value, QStringList* o
 
 QJsonObject captureTelemetry()
 {
+    // Version 4 (remote-window parity Task 6) needs minor 11, as 3 does.
     const quint16 minors[] = {kStationTelemetrySessionProtocolMinor,
                               kCoreHostTelemetrySessionProtocolMinor,
+                              kReceiverLoadSessionProtocolMinor,
                               kReceiverLoadSessionProtocolMinor};
     QJsonArray versions;
-    for (int version = 1; version <= 3; ++version) {
+    for (int version = 1; version <= 4; ++version) {
         const std::optional<QJsonObject> payload =
             StationTelemetryCodec::encode(sampleTelemetry(version));
         QStringList paths;
@@ -883,6 +933,10 @@ QJsonObject guiToCoreOps()
     ops.insert(QStringLiteral("keyframe"),
                declaredOp(kMedia, peer + QStringList{QStringLiteral("endpointId"),
                                                      QStringLiteral("contextGeneration")}));
+    // DaemonMediaController.cpp handleClarityRetune (R-IOS-27, R-IOS-06):
+    // displayExtrasVersion 2.
+    ops.insert(QStringLiteral("clarity-retune"),
+               declaredOp(extras, peer + QStringList{QStringLiteral("endpointId")}));
     // DaemonMediaController.cpp handleAudio: profile only from a GUI that
     // negotiated the audio detail and the Core's audio profiles.
     ops.insert(QStringLiteral("audio"),
@@ -1147,6 +1201,11 @@ QJsonObject captureLimits()
     limits.insert(QStringLiteral("graceMs"),
                   limit(static_cast<qint64>(DeviceSessionRegistry::kGraceMs), QStringLiteral("ms"),
                         QStringLiteral("DeviceSessionRegistry::kGraceMs")));
+    // iPhone app Task 74 (R-IOS-30): how long a question stays open
+    // (ruling 7.5; sent as expiresInMs, enforced from Task 75).
+    limits.insert(QStringLiteral("confirmExpiryMs"),
+                  limit(static_cast<qint64>(ConfirmStep::kExpiryMs), QStringLiteral("ms"),
+                        QStringLiteral("ConfirmStep::kExpiryMs")));
     limits.insert(QStringLiteral("lanAnnouncementMaxBytes"),
                   limit(kStationLanMaxSchema2DatagramBytes, QStringLiteral("bytes"),
                         QStringLiteral("kStationLanMaxSchema2DatagramBytes")));

@@ -1076,6 +1076,57 @@ private slots:
     // The fix: emit correctionsBeingAppliedChanged for the info[14] path and
     // keep correctingChanged only for the FeedbackLevel > 90 path.
 
+    // ── The info[] status line is written on change, not every second ─────
+    //
+    // The Core journal showed "PureSignal info[]: state=0 corrApplied=0 ..."
+    // once a second while nothing transmitted. The line now marks a change
+    // in what it reports, the same shape as the P1/P2 txLpf lines.
+
+    static int& statusLineCount()
+    {
+        static int count = 0;
+        return count;
+    }
+
+    static void countStatusLines(QtMsgType, const QMessageLogContext&,
+                                 const QString& msg)
+    {
+        if (msg.contains(QStringLiteral("PureSignal info[]:"))) {
+            ++statusLineCount();
+        }
+    }
+
+    void infoStatusLine_notRepeatedWhileValuesUnchanged()
+    {
+        TxChannel tx(kTxChannelId);
+        PureSignal ps(nullptr, &tx, nullptr, nullptr, nullptr, nullptr);
+        ps.setTimersEnabled(false);
+
+        statusLineCount() = 0;
+        const QtMessageHandler previous = qInstallMessageHandler(countStatusLines);
+
+        // 100 ticks is ten seconds of the 100 ms poll with nothing changing.
+        int info[16] = {};
+        for (int i = 0; i < 100; ++i) {
+            ps.processNewInfo(info);
+        }
+        const int idleLines = statusLineCount();
+
+        // A change in a reported value is still written.
+        info[15] = 3;   // engine state
+        for (int i = 0; i < 20; ++i) {
+            ps.processNewInfo(info);
+        }
+        const int afterChange = statusLineCount();
+
+        qInstallMessageHandler(previous);
+
+        QVERIFY2(idleLines <= 1,
+                 qPrintable(QStringLiteral("idle ticks wrote %1 status lines")
+                                .arg(idleLines)));
+        QCOMPARE(afterChange, idleLines + 1);
+    }
+
     void correctionsBeingAppliedChanged_emittedOnInfo14Toggle()
     {
         // Toggling _info[14] between 0 and 1 must emit

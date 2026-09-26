@@ -34,6 +34,7 @@
 #include "core/settings/SettingsProxy.h"
 #include "gui/RemoteDisplayAllocator.h"
 #include "fakes/LoopbackTransport.h"
+#include "OperatorWording.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -603,6 +604,9 @@ private slots:
     void synchronousDisplayClosureRetiresDemandAndAllowsNewPeer();
     void synchronousControlClosureRetiresDemand_data();
     void synchronousControlClosureRetiresDemand();
+    void aPeerTheCoreDropsIsToldToTheAppAtOnce_data();
+    void aPeerTheCoreDropsIsToldToTheAppAtOnce();
+    void aNewStartReplacesTheSessionsHalfOpenPeer();
     void staleRevisionAndWrongEpochPreserveTheActiveSource();
     void streamRemovalRetiresEndpointAndSource();
     void nonoverlappingCropIsRejectedBeforeSourceActivation();
@@ -651,7 +655,43 @@ private slots:
     void headphonesMixFollowsTheProfileAndTheRadio();
     void radioDropKeepsTheHeadphonesReasonWhenNothingIsRouted();
     void radioDropTellsAnAppWaitingOnMediaThatTheRadioIsGone();
+    void aBoundControllerServesItsOwnSessionAndHearsItsOwnMix();
 };
+
+// iPhone app Task 76 (ruling 9.1): a controller bound to a media session
+// serves that session alone and takes its own owner mix of the Core's
+// audio; one bound to another session never starts; both let their owner
+// mixes go when their session ends.
+void TstDaemonMediaController::aBoundControllerServesItsOwnSessionAndHearsItsOwnMix()
+{
+    Harness h;
+    h.establishSession();
+    const quint64 epoch = h.server.mediaSessionEpoch();
+    QVERIFY(epoch != 0);
+    QCOMPARE(h.controller.sessionEpoch(), epoch);
+    AudioEngine* const engine = h.radio.audioEngine();
+    QVERIFY(h.controller.ownerMixSlot() >= 0);
+    // The session's device owns both slices, so its mix carries both.
+    QTRY_COMPARE(engine->ownerMixSliceMask(h.controller.ownerMixSlot()),
+                 (1u << h.sliceId) | (1u << h.spareSliceId));
+    {
+        DaemonMediaController other(&h.server, &h.radio, epoch + 1,
+                                    std::make_shared<DaemonSharedSpectrum>(&h.radio));
+        QCOMPARE(other.sessionEpoch(), quint64{0});
+        QCOMPARE(other.ownerMixSlot(), -1);
+        DaemonMediaController bound(&h.server, &h.radio, epoch,
+                                    std::make_shared<DaemonSharedSpectrum>(&h.radio));
+        QCOMPARE(bound.sessionEpoch(), epoch);
+        QVERIFY(bound.ownerMixSlot() >= 0);
+        QVERIFY(bound.ownerMixSlot() != h.controller.ownerMixSlot());
+        QCOMPARE(engine->ownerMixCount(), 2);
+    }
+    QCOMPARE(engine->ownerMixCount(), 1);
+    h.finish();
+    QTRY_COMPARE(h.controller.sessionEpoch(), quint64{0});
+    QCOMPARE(h.controller.ownerMixSlot(), -1);
+    QCOMPARE(engine->ownerMixCount(), 0);
+}
 
 void TstDaemonMediaController::configuredBudgetReturnsExactAllocationResultsAndRejectsOvercommit()
 {
@@ -1141,7 +1181,7 @@ void runEightWidePans(bool budget, bool pureSignal, EightPanRun& result,
                                            [](int fps) { return fps > 0; }));
     QTRY_COMPARE_WITH_TIMEOUT(h.controller.activeEndpointCount(), admitted, 10'000);
     result.admitted = h.controller.activeEndpointCount();
-    auto* source = h.controller.findChild<DaemonSpectrumSource*>();
+    auto* source = &h.controller.sharedSpectrum()->source();
     QVERIFY(source);
     const QList<MediaSourceKey> keys = source->activeSources();
     QCOMPARE(keys.size(), twoSources ? 2 : 1);
@@ -1585,7 +1625,7 @@ void TstDaemonMediaController::realDisplayErrorIsCountedAndLoggedOnce()
     QTRY_VERIFY_WITH_TIMEOUT(!core->displayBusy(), kRealTransportWaitMs);
     constexpr qint64 kOutputPeriodMs = 1000 / 60 + 1;
     QTRY_VERIFY(sinceLastSend.elapsed() > 2 * kOutputPeriodMs);
-    auto* source = harness.controller.findChild<DaemonSpectrumSource*>();
+    auto* source = &harness.controller.sharedSpectrum()->source();
     QVERIFY(source);
     const QList<MediaSourceKey> sourceKeys = source->activeSources();
     QCOMPARE(sourceKeys.size(), 1);
@@ -1966,7 +2006,7 @@ void TstDaemonMediaController::spectrumAndPs3ShareALaggingWindowAndBothProgress(
     // The I/Q is fed again on each poll until all three hold. One deadline
     // covers every cycle, so a passing run stays well inside the binary's
     // 120 s ctest TIMEOUT however the waits add up.
-    auto* source = harness.controller.findChild<DaemonSpectrumSource*>();
+    auto* source = &harness.controller.sharedSpectrum()->source();
     QVERIFY(source);
     constexpr qint64 kOutputPeriodMs = 1000 / 60 + 1;
     const QDeadlineTimer cyclesDeadline(60'000);
@@ -2240,7 +2280,7 @@ void TstDaemonMediaController::failedSourceUpdateReleasesAllocationAndCanRecover
     // Remove the actual producer through its existing QObject/public seam.
     // The next overlapping retune reaches update() on a now-missing source
     // and exercises its real refusal without replacing the controller logic.
-    auto* source = harness.controller.findChild<DaemonSpectrumSource*>();
+    auto* source = &harness.controller.sharedSpectrum()->source();
     QVERIFY(source);
     source->deactivate({harness.streamIndex, FftTier::Wide});
     QCOMPARE(harness.controller.activeSourceCount(), 0);
@@ -2801,6 +2841,106 @@ void TstDaemonMediaController::synchronousControlClosureRetiresDemand()
     QCOMPARE(h.controller.activeSourceCount(), 0);
     QCOMPARE(h.p2.wbEnableMask(), quint8(0));
     QTRY_VERIFY(h.mediaTransport.isNull());
+}
+
+void TstDaemonMediaController::aPeerTheCoreDropsIsToldToTheAppAtOnce_data()
+{
+    // The transport's failure signals, faked as the real one sends them:
+    // a failed connection (ICE consent lost, or DTLS failed) reports
+    // connectionFailed and then closes; a closing connection only closes.
+    QTest::addColumn<QString>("failure");
+    QTest::addColumn<bool>("closesWithoutFailure");
+    QTest::newRow("consent-lost") << QStringLiteral("ICE consent check failed") << false;
+    QTest::newRow("dtls-failed") << QStringLiteral("DTLS handshake failed") << false;
+    QTest::newRow("connection-closed") << QString() << true;
+}
+
+void TstDaemonMediaController::aPeerTheCoreDropsIsToldToTheAppAtOnce()
+{
+    QFETCH(QString, failure);
+    QFETCH(bool, closesWithoutFailure);
+    Harness h;
+    h.establishSession();
+    h.startReadyPeer();
+    auto request = subscription(71, 1, h.sliceId, h.radio.streamCentreHz(h.streamIndex));
+    QVERIFY(h.client.sendMediaControl(request, h.client.sessionEpoch()));
+    QTRY_COMPARE(h.controller.activeEndpointCount(), 1);
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+    QPointer<FakeTransport> dropped = h.mediaTransport;
+    if (!closesWithoutFailure) {
+        emit dropped->connectionFailed(failure);
+    }
+    emit dropped->closed();
+
+    // The app hears the whole-peer refusal for its connection, with a plain
+    // reason, and nothing else about the old peer after it.
+    QTRY_VERIFY(messageIndex(controls, QStringLiteral("rejected"), 0) >= 0);
+    const QJsonObject rejected = messageFor(controls, QStringLiteral("rejected"), 0);
+    QCOMPARE(rejected.size(), 5);
+    QCOMPARE(rejected.value(QStringLiteral("connectionId")).toString(),
+             QLatin1String(kConnectionId));
+    QCOMPARE(rejected.value(QStringLiteral("revision")).toInteger(-1), 0);
+    const QString reason = rejected.value(QStringLiteral("reason")).toString();
+    QVERIFY(!reason.isEmpty());
+    QVERIFY2(OperatorWording::isPlain(reason), qPrintable(reason));
+    QCOMPARE(reason, QString::fromLatin1(closesWithoutFailure ? kMediaPeerClosedReason
+                                                              : kMediaPeerLostReason));
+    // The library's own words stay in the Core's log.
+    QVERIFY(failure.isEmpty() || !reason.contains(failure));
+    QCOMPARE(messageCount(controls, QStringLiteral("rejected"), 0), 1);
+    QCOMPARE(h.controller.activeEndpointCount(), 0);
+    QCOMPARE(h.controller.activeSourceCount(), 0);
+    QTRY_VERIFY(dropped.isNull());
+
+    // The session carries on: the app's new start is taken at once.
+    const QString fresh = QStringLiteral("22222222-3333-4444-8555-666666666666");
+    QVERIFY(h.client.sendMediaControl({{QStringLiteral("op"), QStringLiteral("start")},
+                                       {QStringLiteral("connectionId"), fresh}},
+                                      h.client.sessionEpoch()));
+    QTRY_VERIFY(h.mediaTransport && h.mediaTransport->started);
+    QCOMPARE(messageCount(controls, QStringLiteral("rejected"), 0), 1);
+    h.finish();
+}
+
+void TstDaemonMediaController::aNewStartReplacesTheSessionsHalfOpenPeer()
+{
+    // The phone's media died, the Core's peer has not noticed yet (it
+    // still reads ready), and the device starts media again on its session.
+    // A controller serves one device's session, so this is always its own
+    // old peer: it is replaced, never refused.
+    Harness h;
+    h.establishSession();
+    h.startReadyPeer();
+    auto request = subscription(72, 1, h.sliceId, h.radio.streamCentreHz(h.streamIndex));
+    QVERIFY(h.client.sendMediaControl(request, h.client.sessionEpoch()));
+    QTRY_COMPARE(h.controller.activeEndpointCount(), 1);
+    QPointer<FakeTransport> halfOpen = h.mediaTransport;
+    QVERIFY(halfOpen->readyState);
+    QSignalSpy controls(&h.client, &StationClient::mediaControlReceived);
+
+    const QString fresh = QStringLiteral("22222222-3333-4444-8555-666666666666");
+    QVERIFY(h.client.sendMediaControl({{QStringLiteral("op"), QStringLiteral("start")},
+                                       {QStringLiteral("connectionId"), fresh}},
+                                      h.client.sessionEpoch()));
+    QTRY_VERIFY(h.mediaTransport && h.mediaTransport != halfOpen);
+    QVERIFY(h.mediaTransport->started);
+    // The old peer is torn down, its displays retired and its demand gone.
+    QTRY_VERIFY(halfOpen.isNull() || !halfOpen->started);
+    QCOMPARE(h.controller.activeEndpointCount(), 0);
+    QCOMPARE(h.controller.activeSourceCount(), 0);
+    QCOMPARE(h.controller.displayDemand(), DisplayBudgetCharge{});
+    // Nothing refused the new start, and the old connection is not told
+    // anything: the app already left it.
+    QCOMPARE(messageCount(controls, QStringLiteral("rejected"), 0), 0);
+
+    // The new peer serves the device: a display on the new connection runs.
+    h.mediaTransport->becomeReady();
+    request.insert(QStringLiteral("connectionId"), fresh);
+    request.insert(QStringLiteral("revision"), 2);
+    QVERIFY(h.client.sendMediaControl(request, h.client.sessionEpoch()));
+    QTRY_COMPARE(h.controller.activeEndpointCount(), 1);
+    QTRY_VERIFY(([&] { h.feedRadio(); return !h.mediaTransport->displays.isEmpty(); })());
+    h.finish();
 }
 
 void TstDaemonMediaController::olderPeerKeepsLegacyContextAndCannotAcquireWideband()

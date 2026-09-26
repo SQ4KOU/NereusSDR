@@ -237,6 +237,17 @@ class PeripheralsPage : public QWidget {
 
 public:
     explicit PeripheralsPage(RadioModel* model, QWidget* parent = nullptr);
+    ~PeripheralsPage() override;
+
+    // Group B fix wave (M1): whether the page still has its RadioModel.
+    // False once the model is gone, so nothing asks it again.
+    bool hasModelForTest() const { return !m_model.isNull(); }
+
+protected:
+    // R-R3-49 (parity Task 8): Setup closing (or the tab changing) sends a
+    // remote window's unsent Tuner Genius Host or Port to the Core
+    // (parity Task 9: and the Power Genius's).
+    void hideEvent(QHideEvent* event) override;
 
 private slots:
     void onScanLan(int rowIdx);
@@ -262,7 +273,10 @@ private:
     void refreshRemotePgxlRow();
     bool isRemoteMode() const;
 
-    RadioModel*   m_model{nullptr};
+    // Group B fix wave (M1): held weakly. RadioModel is MainWindow's first
+    // child, so it goes before a Setup dialog still open at quit, and the
+    // destructor's unsent-address flush must then find it gone.
+    QPointer<RadioModel> m_model;
     QGridLayout*  m_grid{nullptr};
 
     // Per-row status labels; indexed by row (0 = TGXL, 1 = PGXL).
@@ -277,6 +291,18 @@ private:
     quint16 m_lastDisplayedCoreTgxlPort{0};
     QString m_lastDisplayedCorePgxlHost;
     quint16 m_lastDisplayedCorePgxlPort{0};
+
+    // R-R3-49 (parity Task 8, remoteTgxlControlVersion 4): a Host or Port
+    // the operator typed in a remote window without pressing Connect goes
+    // to the Core (setTgxlAddress) when editing finishes or Setup closes.
+    void sendRemoteTgxlAddress();
+    bool m_tgxlAddressEdited{false};
+    bool m_fillingTgxlFromCore{false};
+    // R-R3-49 (parity Task 9, remotePgxlControlVersion 4): the same for the
+    // Power Genius row (setPgxlAddress).
+    void sendRemotePgxlAddress();
+    bool m_pgxlAddressEdited{false};
+    bool m_fillingPgxlFromCore{false};
 };
 
 } // namespace NereusSDR

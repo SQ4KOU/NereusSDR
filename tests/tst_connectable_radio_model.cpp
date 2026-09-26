@@ -136,10 +136,11 @@ private slots:
     {
         // iPhone app Part A fix wave (Task 4b finding, R-IOS-01): the
         // station's pureSignal object says whether PureSignal can run
-        // (canActuate). It learned of a receive-only change only on the
-        // coordinator's next 100 ms status poll, so a client attaching in
-        // that window read true. Both directions now follow the policy on
-        // the call that changes it, before any event is processed.
+        // (canActuate), and follows a receive-only change on the call that
+        // makes it, before any event is processed.
+        // R-R3-49 (parity Task 7): a receive-only Core permits PureSignal
+        // (a window arms it there off the air; arming keys nothing), so
+        // canActuate stays true through the change.
         auto harness = ConnectableRadioModel::create();
         QVERIFY(harness);
         RadioModel& model = harness->model();
@@ -150,8 +151,8 @@ private slots:
 
         QSignalSpy changed(facade, &PureSignalSessionFacade::statusChanged);
         model.setReceiveOnlyStationPolicy(true);
-        QVERIFY(!coordinator->canActuate());
-        QVERIFY(!facade->canActuate());
+        QVERIFY(coordinator->canActuate());
+        QVERIFY(facade->canActuate());
         QVERIFY(!changed.isEmpty());
 
         changed.clear();

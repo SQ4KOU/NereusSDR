@@ -38,6 +38,11 @@
 //                through deleteLater, not raw delete; addListener adds an
 //                address to a running server (rework). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 / R-R3-42 (parity Task 3): in a remote window,
+//                tx_profile_ex and tx_profiles_ex go to the apps when the
+//                Core's active profile or profile list changes (Thetis
+//                TXProfileChangedHandlers / TXProfilesChangedHandlers).
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-24 - Receiver and transmit gaps plan, Task 4 (R-R3-49): an
 //                app's trx follows Thetis handleTrxMessage (ignored while
 //                the transmitter is keyed; keys it otherwise, TX audio or
@@ -114,6 +119,7 @@
 #include "models/NotchModel.h"  // TNF section 6.4: master notch enable broadcast.
 #include "models/TransmitModel.h"  // Phase 3J-1 closeout (review P2): MON / TUN broadcast wireup.
 #include "MoxController.h"         // Phase 3J-1 closeout (review P2): MOX broadcast wireup.
+#include "MicProfileManager.h"     // R-R3-49 (parity Task 3): a remote window's TX profiles.
 #include "TxSliceArbiter.h"        // Codex review round 6: tx_frequency follows the TX-bound slice.
 #include "AudioEngine.h"           // Phase 3J-1 closeout (review P1 #1): volume change broadcast.
 #include "TciVolume.h"             // tciLinearToDbVolume / tciAudioGainToDb for volume frames.
@@ -1241,6 +1247,34 @@ void TciServer::hookGlobalBroadcasts()
                 m_protocol->enqueueLocalBroadcast(
                     QStringLiteral("tune:1,false;"));  // !VFOBTX path
             });
+
+    // ── TX profile (tx_profile_ex: / tx_profiles_ex: lines), remote window ─
+    // Source: Thetis TXProfileChangedHandlers + TXProfilesChangedHandlers
+    // at TCIServer.cs:6782-6783 [v2.10.3.15] routed to OnTXProfileChanged /
+    // OnTXProfilesChanged (TCIServer.cs:7746-7767 [v2.10.3.15]) ->
+    // sendTXProfile / sendTXProfiles (TCIServer.cs:5053-5069
+    // [v2.10.3.15]). R-R3-49 / R-R3-42 (parity Task 3): a remote window's
+    // profiles are the Core's (its MicProfileManager mirrors them), so the
+    // apps hear a profile change once the Core has made it, including one
+    // an app asked for (TciProtocol does not echo tx_profile_ex there). A
+    // local window keeps its immediate echo.
+    if (m_remoteWindow) {
+        if (MicProfileManager* profiles = m_model->micProfileManager()) {
+            connect(profiles, &MicProfileManager::activeProfileChanged, this,
+                    [this](const QString& name) {
+                        if (name.isEmpty()) { return; }
+                        m_protocol->enqueueLocalBroadcast(
+                            TciProtocol::buildTxProfileExLine(name));
+                    });
+            connect(profiles, &MicProfileManager::profileListChanged, this,
+                    [this, profiles]() {
+                        const QStringList names = profiles->profileNames();
+                        if (names.isEmpty()) { return; }
+                        m_protocol->enqueueLocalBroadcast(
+                            TciProtocol::buildTxProfilesExLine(names));
+                    });
+        }
+    }
 
     // ── MON enable + volume (mon_enable: / mon_volume: lines) ──────────────
     // Source: Thetis MONChangedHandlers + MONVolumeChangedHandlers at

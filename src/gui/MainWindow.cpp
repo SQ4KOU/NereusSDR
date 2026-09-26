@@ -161,6 +161,80 @@
 //                 and the poller; the meters the Core does not send are
 //                 shown disabled with the reason. AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-24 - R-R3-49 (parity Task 1): transmitSettingsPermitted(). The
+//                TX applet's RF Power and TX filter, the RX applet's and
+//                flag's Shift-click TX passband match and DSP > Options' TX
+//                combos follow it; applyRemoteRoleGating runs again when
+//                the Core's radio goes on or off the air. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 (parity Task 2): the TX applet's Tune Power, VOX
+//                level and delay, MON, LEV, EQ and CFC, the Phone/CW
+//                applet's mic level, PROC, AM carrier and DEXP, and the
+//                container MON button follow transmitSettingsPermitted(2).
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 3): the TX, Phone/CW and RADE
+//                applets' profile combos, RADE's Reset vocoder and Setup's
+//                versioned transmit settings gates (Audio > TX Input's
+//                microphone, Audio > TX Profile) follow
+//                transmitSettingsPermitted(3) and (2). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 4): Tools > TX Equalizer opens in a
+//                remote window; the TX EQ and CFC dialogs and Setup's
+//                version 4 pages (DSP > CFC, AGC/ALC's TX Leveler and ALC)
+//                follow transmitSettingsPermitted(4). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 5): Setup's version 5 pages
+//                (Transmit > Power, DEXP/VOX, Test > Two-Tone IMD) follow
+//                transmitSettingsPermitted(5). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 / R-R3-32 (parity Task 6): Setup > PA follows
+//                transmitSettingsPermitted(6); the System tile's PA row and
+//                the HW Volts, Amps and Temperature meters read
+//                RadioModel::paReadings() (the Core's in a remote window);
+//                the TX badge follows RadioModel::txInhibitedChanged.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-IOS-27, R-IOS-06: onAddTnfClicked calls
+//                RadioModel::addTnfForSlice, the +TNF add the Core's
+//                notch.addAtSlice shares. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 7): PS-A on the TX applet and the
+//                container follows pureSignalArmingPermitted(), which a
+//                Core at transmitSettingsVersion 7 offers off the air; the
+//                PureSignal menu entries say so. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 8): openSetup's page keys go through
+//                SetupDialog::selectNavigationTarget (the Advanced and
+//                Interlock entries open their CAT & Network > 4O3A tab);
+//                the Tuner Genius applet's Copy diagnostics copies the
+//                Core's connection in a remote window. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 9): the Power Genius applet's OPERATE
+//                asks the Core in a remote window (never this computer's
+//                idle connection), and its Copy diagnostics copies the
+//                Core's connection. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity Task 10): the RF-Kit applet's OPERATE and
+//                ANT ask the Core in a remote window (never this
+//                computer's idle connection); its Copy diagnostics copies
+//                the Core's connection there, and a local window's copy
+//                gains the operate, interface, reconnect, connected-since
+//                and last-poll lines a remote one shows. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-25 - R-R3-49, R-R3-21, R-R3-44 (parity Task 11): the RX
+//                applet's XIT row takes no transmit gate; the container
+//                Antenna box's TX buttons write the transmit slice's
+//                antenna in a remote window with no toast, as the VFO
+//                flag's do; the VAX first-run check for new virtual cables
+//                runs in a remote window as in a local one. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 / R-R3-46 (parity Task 12): the Alex facade learns
+//                whether the Core takes the transmit antennas and relays
+//                (radioHardwareVersion 6) and RX bypass on TX (5); Setup >
+//                Antenna Control follows it. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - Receiver and transmit gaps plan, Task 16: the container
+//                buttons follow receive only (RadioModel::rxOnlyChanged).
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -1413,10 +1487,17 @@ void MainWindow::ensureRemoteSession()
         });
         connect(m_radioModel, &RadioModel::stationLinkStateChanged,
                 this, &MainWindow::applyRemoteRoleGating);
+        // R-R3-49 (parity Task 1): the transmit settings grey while the
+        // Core's radio is on the air and come back when it stops.
+        connect(m_radioModel, &RadioModel::coreOnAirChanged,
+                this, &MainWindow::applyRemoteRoleGating);
         m_remoteMedia = new RemoteMediaController(m_stationClient, m_radioModel,
                                                m_panStack, m_stationClient);
         m_remoteTelemetry = new RemoteTelemetryController(
             m_stationClient, m_remoteMedia, this);
+        // R-R3-32 (parity Task 6): the Core's PA readings reach this
+        // window's model, which every PA surface reads.
+        m_remoteTelemetry->setPaReadingsTarget(m_radioModel);
         connect(m_remoteTelemetry, &RemoteTelemetryController::changed, this, [this] {
             if (m_titleBar) {
                 m_titleBar->connectionSegment()->setRemoteTelemetryText(m_remoteTelemetry->bannerText());
@@ -2026,7 +2107,10 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
     newFlag->setStepHz(slice->stepHz());
     newFlag->setBoardCapabilities(m_radioModel->boardCapabilities());
     newFlag->setHpsdrSku(m_radioModel->hardwareProfile().model);
-    newFlag->setRxBypassActive(m_radioModel->alexController().rxOutOnTx());
+    // Group B fix wave: BYPS shows and writes the radio's RX bypass on TX
+    // through the Alex facade: this computer's AlexController locally, the
+    // Core's in a remote window (radioHardwareVersion 5).
+    newFlag->setRxBypassActive(m_radioModel->alexAntennaFacade()->rxOutOnTx());
     newFlag->setFilterPresetStore(m_radioModel->filterPresetStore());
     // Phase 3F closeout — give the per-slice VfoWidget the RadioModel pointer
     // so its right-click antenna submenu builds AntennaPickerMenu with live
@@ -2034,6 +2118,7 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
     newFlag->setRadioModel(m_radioModel);
     newFlag->setTransmitPermitted(transmitControlsPermitted(),
         tr("Remote transmit controls are not available from this Core yet."));
+    newFlag->setRxBypassPermitted(rxBypassPermitted(), rxBypassUnavailableReason());
     wireRadeFlagForTest(m_radioModel, newFlag, sliceIndex);
     if (TxSliceArbiter* arb = m_radioModel->txSliceArbiter()) {
         newFlag->setTxSlice(arb->txBoundSliceId() == sliceIndex);
@@ -2220,7 +2305,9 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
     // model, so the per-slice model->WDSP work could not help them.
     // createSliceFlag is now the single place a flag is wired.
     connect(newFlag, &VfoWidget::rxBypassToggled,
-            &m_radioModel->alexControllerMutable(), &AlexController::setRxOutOnTx);
+            m_radioModel->alexAntennaFacade(), &AlexAntennaFacade::setRxOutOnTx);
+    connect(m_radioModel->alexAntennaFacade(), &AlexAntennaFacade::rxOutOnTxChanged,
+            newFlag, &VfoWidget::setRxBypassActive);
     connect(slice, &SliceModel::lastRadeRxCallsignChanged,
             newFlag, &VfoWidget::setRadeCallsign);
     wireSliceFlagPresentation(slice, newFlag);
@@ -2228,9 +2315,9 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
     newFlag->setNbMode(slice->nbMode());   // initial sync
     connect(newFlag, &VfoWidget::txFilterMatchRequested, this,
             [this](int audioLow, int audioHigh) {
-        if (!transmitControlsPermitted()) {
-            showToast(tr("Remote transmit controls are not available from this Core yet."),
-                      ToastSeverity::Info, 3000);
+        // R-R3-49 (parity Task 1): the TX passband is a transmit setting.
+        if (!transmitSettingsPermitted()) {
+            showToast(transmitSettingsReason(), ToastSeverity::Info, 3000);
             return;
         }
         m_radioModel->transmitModel().setFilterLow(audioLow);
@@ -2863,15 +2950,9 @@ void MainWindow::onAddTnfClicked(const QString& panId)
     if (!m_radioModel) { return; }
     SliceModel* slice = sliceForPan(panId);
     if (!m_radioModel->notchModel() || !slice) { return; }
-    // demodulatedRxFrequency(), not effectiveRxFrequency(): composedShiftHz
-    // feeds WDSP the notch origin including the DIG click-tune offset, so a
-    // centre computed without it lands displaced by exactly that offset in
-    // DIGU/DIGL. Codex review of PR #313.
-    m_radioModel->addNotchForSlice(
-        slice,
-        NotchModel::tnfAddCenterHz(slice->demodulatedRxFrequency(),
-                                   slice->filterLow(), slice->filterHigh()),
-        NotchModel::kDefaultNotchWidthHz);
+    // The centre and width live in RadioModel::addTnfForSlice, which the
+    // Core's notch.addAtSlice runs too (R-IOS-27, R-IOS-06).
+    m_radioModel->addTnfForSlice(slice);
 }
 
 // A rejected add is not a failure worth an error badge, but it must not be
@@ -4186,6 +4267,12 @@ void MainWindow::buildUI()
             }
         };
         hooks.transmitPermitted = [this] { return transmitControlsPermitted(); };
+        // R-R3-49 (parity Task 2): MON is a transmit setting (version 2).
+        hooks.transmitSettingsPermitted = [this] { return transmitSettingsPermitted(2); };
+        hooks.transmitSettingsReason = [this] { return transmitSettingsReason(2); };
+        // R-R3-49 (parity Task 7): PS-A arms PureSignal (version 7).
+        hooks.pureSignalArmingPermitted = [this] { return pureSignalArmingPermitted(); };
+        hooks.pureSignalArmingReason = [this] { return pureSignalArmingReason(); };
         hooks.remoteTransmitReason =
             tr("Remote transmit controls are not available from this Core yet.");
         // Desktop remote transmit: the Core's own reason when it gave one.
@@ -4228,6 +4315,8 @@ void MainWindow::buildUI()
         connect(m_radioModel, &RadioModel::transmittingChanged, this, refresh);
         connect(m_radioModel, &RadioModel::remoteTransmitRefused, this, refresh);
         connect(&m_radioModel->transmitModel(), &TransmitModel::tuneChanged, this, refresh);
+        // Task 16: receive only disables TUN, MOX and 2TONE.
+        connect(m_radioModel, &RadioModel::rxOnlyChanged, this, refresh);
         if (MoxController* mox = m_radioModel->moxController()) {
             connect(mox, &MoxController::moxStateChanged, this, refresh);
             connect(mox, &MoxController::moxRejected, this, refresh);
@@ -4260,6 +4349,9 @@ void MainWindow::buildUI()
     // apply live interval + averaging-window changes without a MainWindow
     // round-trip.  Non-owning; RadioModel stores the pointer only.
     m_radioModel->setMeterPoller(m_meterPoller);
+    // R-R3-32 (parity Task 6): the HW Volts, Amps and Temperature meters
+    // read the one PA reading source (the Core's in a remote window).
+    m_meterPoller->setPaReadingsModel(m_radioModel);
     // Task 3.2: expose ContainerManager via RadioModel so MultimeterPage
     // can broadcast unit-mode changes to all live MeterItems.
     m_radioModel->setContainerManager(m_containerManager);
@@ -6128,11 +6220,13 @@ void MainWindow::buildUI()
     // setTxInhibited() was added in Task 14 and toggles m_txInhibitLabel
     // visibility. The Source parameter is ignored by the UI slot (the pill
     // is binary: visible or hidden).
-    connect(&m_radioModel->txInhibit(),
-            &safety::TxInhibitMonitor::txInhibitedChanged,
-            this, [this](bool inhibited, safety::TxInhibitMonitor::Source /*source*/) {
-        setTxInhibited(inhibited);
-    });
+    //
+    // R-R3-49 (parity Task 6): through RadioModel::txInhibitedChanged, which
+    // follows this window's own monitor locally and the Core's mirrored
+    // `txInhibited` in a remote window, so both show the radio's inhibit.
+    connect(m_radioModel, &RadioModel::txInhibitedChanged,
+            this, &MainWindow::setTxInhibited);
+    setTxInhibited(m_radioModel->isTxInhibited());
 }
 
 void MainWindow::rebuildEditContainerSubmenu()
@@ -6610,6 +6704,12 @@ void MainWindow::populateDefaultMeter()
             [this](int sliceId) {
         if (m_radioModel) { m_radioModel->setActiveSliceById(sliceId); }
     });
+    // R-R3-49 (parity Task 1): a Shift-click that could not also set the TX
+    // passband says why, as the VFO flag's does.
+    connect(m_rxApplet, &RxApplet::transmitSettingRefused, this,
+            [this](const QString& reason) {
+        showToast(reason, ToastSeverity::Info, 3000);
+    });
 
     auto refreshSliceTabs = [this]() {
         if (m_rxApplet && m_radioModel) {
@@ -6922,10 +7022,27 @@ void MainWindow::populateDefaultMeter()
             // (the Core's `rfkit` object in a remote window).
 
             // Applet -> connection (antenna click, operate toggle).
+            // R-R3-49 (parity Task 10): a remote window's applet asks the
+            // Core itself (setRfKitAntenna, setRfKitOperate); this
+            // computer's RF-Kit connection is local only.
             connect(m_rfKitApplet, &Rf2ksApplet::antennaRequested,
-                    rfKitConn, &Rf2ksConnection::setActiveAntenna);
+                    this, [this](RfKitAntenna::Type type, int number) {
+                // Group B fix wave (M5): refused on the air, as the applet
+                // and a remote window are.
+                if (m_radioModel->role() == RadioModel::Role::Remote
+                    || m_radioModel->stationOnAirRefusal(nullptr)) {
+                    return;
+                }
+                if (Rf2ksConnection* conn = m_radioModel->rfKitConnection()) {
+                    conn->setActiveAntenna(type, number);
+                }
+            });
             connect(m_rfKitApplet, &Rf2ksApplet::operateToggled,
                     this, [this](bool wantOperate) {
+                if (m_radioModel->role() == RadioModel::Role::Remote
+                    || m_radioModel->stationOnAirRefusal(nullptr)) {   // M5
+                    return;
+                }
                 Rf2ksConnection* conn = m_radioModel->rfKitConnection();
                 if (!conn) { return; }
                 conn->setOperateMode(wantOperate
@@ -6970,6 +7087,14 @@ void MainWindow::populateDefaultMeter()
 
         connect(m_rfKitApplet, &Rf2ksApplet::diagnosticsCopyRequested,
                 this, [this]() {
+            // R-R3-49 (parity Task 10): a remote window copies the Core's
+            // connection (the mirrored `rfkit` object and accessoryData's
+            // rfkit counters), not this computer's idle one.
+            if (m_radioModel->role() == RadioModel::Role::Remote) {
+                QGuiApplication::clipboard()->setText(
+                    Rf2ksApplet::coreDiagnosticsText(m_radioModel));
+                return;
+            }
             Rf2ksConnection* conn = m_radioModel->rfKitConnection();
             QString diag;
             diag += QStringLiteral("RF-Kit RF2K-S diagnostics\n");
@@ -6983,6 +7108,21 @@ void MainWindow::populateDefaultMeter()
                             .arg(conn->pollsFailed());
                 diag += QStringLiteral("RTT avg: %1 ms\n")
                             .arg(conn->rttAvgLast10Ms());
+                // R-R3-49 (parity Task 10): the lines a remote window's copy
+                // shows from the Core's counters.
+                const auto time = [](qint64 ms) {
+                    return ms > 0 ? QDateTime::fromMSecsSinceEpoch(ms).toString(Qt::ISODate)
+                                  : QStringLiteral("--");
+                };
+                diag += QStringLiteral("Operate: %1\nInterface: %2\n")
+                            .arg(conn->operateMode() == QStringLiteral("OPERATE")
+                                     ? QStringLiteral("Yes") : QStringLiteral("No"),
+                                 conn->operationalInterface().isEmpty()
+                                     ? QStringLiteral("--") : conn->operationalInterface());
+                diag += QStringLiteral("Reconnects: %1\n").arg(conn->reconnectAttempts());
+                diag += QStringLiteral("Connected since: %1\n")
+                            .arg(time(conn->connectedSinceMs()));
+                diag += QStringLiteral("Last poll: %1\n").arg(time(conn->lastPollMs()));
             } else {
                 diag += QStringLiteral("(connection unavailable)\n");
             }
@@ -8195,7 +8335,9 @@ void MainWindow::buildMenuBar()
         txEqAction->setToolTip(QStringLiteral(
             "Open the 10-band TX EQ dialog (preamp + 10 band gains + center frequencies)."));
         connect(txEqAction, &QAction::triggered, this, [this]() {
-            if (!transmitControlsPermitted()) { return; }
+            // R-R3-49 (parity Task 4): opens in a remote window too; the
+            // dialog greys itself with the reason while the Core cannot
+            // take a change (TxEqDialog::setSettingsPermitted).
             TxEqDialog* dlg = TxEqDialog::instance(m_radioModel, this);
             dlg->show();
             dlg->raise();
@@ -9036,105 +9178,60 @@ void MainWindow::buildStatusBar()
         m_chromeBar->relayout(m_chromeBarWidget->width());
     };
 
-    // Wire voltage signals: re-bind on every new connection, reset on disconnect.
-    connect(m_radioModel, &RadioModel::connectionStateChanged, this,
-            [this, refreshChromeBarForSystemTile](ConnectionState s) {
-        if (s != ConnectionState::Connected) {
+    // R-R3-32 / R-R3-46 (parity Task 6): the PA row reads the one PA
+    // reading source, RadioModel::paReadings(): this window's own radio, or
+    // in a remote window the Core's (station telemetry version 4). A reading
+    // that is absent (none on this board, not reported yet, disconnected,
+    // or the Core's telemetry out of date) clears its half of the row; it
+    // is never shown as 0.
+    //
+    // 2026-05-25 KG4VCF G2E bench finding: ANAN-G2E (HermesC10) firmware
+    // leaves user_adc0 (AIN3 / status bytes 53-54) dark (0.1 V against an
+    // actual 13.4 V supply), so the G2E row shows supply_volts (AIN6 /
+    // bytes 45-46) labelled "PSU"; on the other MKII boards user_adc0 IS
+    // the PA drain sense, which is what the "PA" label means
+    // (RadioModel::paRowVolts). The choice reads the model at each update,
+    // when it is settled.
+    //
+    // 2026-08-03 KG4VCF G2E bench finding: status frames can be parsed
+    // before RadioModel reaches Connected, and the connection suppresses
+    // re-emitting an unchanged value, so a steady supply would never reach
+    // a listener bound late. paReadings() reads the connection's cached
+    // values, and RadioModel re-announces them on every connection state
+    // change, so the first reading is never missed.
+    auto refreshPaRow = [this, refreshChromeBarForSystemTile]() {
+        // R-R3-32: a remote window's readings are the Core's, and say so.
+        m_systemTile->setPaSourceNote(m_radioModel->paReadingsFromCore()
+                                          ? tr("From the Core") : QString());
+        const RadioModel::PaRowVolts row = m_radioModel->paRowVolts();
+        // Task 3.6: ANAN-8000DLE user preference gate. For ANAN-8000D
+        // radios, consult the "Show volts/amps in title bar" AppSettings key
+        // (default true). Other MKII-class boards (7000DLE, AnvelinaPro3)
+        // have no such checkbox, so the gate is always open.
+        const bool is8000D = (m_radioModel->hardwareProfile().model == HPSDRModel::ANAN8000D);
+        const bool showVolts = !is8000D ||
+            AppSettings::instance().value(
+                QStringLiteral("HardwareAnan8000DleShowVoltsAmps"),
+                QStringLiteral("True")).toString() == QStringLiteral("True");
+        if (row.volts && showVolts) {
+            m_systemTile->setPaLabel(row.supply ? QStringLiteral("PSU") : QStringLiteral("PA"));
+            m_systemTile->setPaVolts(*row.volts);
+        } else {
             m_systemTile->clearPaVolts();
+        }
+        // PA temperature (HL2 publishes it via the handlePaTelemetry HL2
+        // branch). The label formatting respects
+        // PaTempUnitNotifier::currentUnit().
+        const RadioModel::PaReadings readings = m_radioModel->paReadings();
+        if (readings.paTemperatureCelsius) {
+            m_systemTile->setPaTempCelsius(*readings.paTemperatureCelsius);
+        } else {
             m_systemTile->clearPaTemp();
-            refreshChromeBarForSystemTile();
         }
-        if (auto* conn = m_radioModel->connection()) {
-            // conn is a new object on each reconnect — no deduplication needed.
-            // Qt::UniqueConnection is not supported for lambda connects anyway.
-            //
-            // 2026-05-25 KG4VCF G2E bench finding: ANAN-G2E (HermesC10)
-            // firmware leaves user_adc0 (AIN3 / status bytes 53-54) dark.
-            // Bench reading was 0.1 V against an actual 13.4 V supply.
-            // Route supply_volts (AIN6 / bytes 45-46) to the tile on G2E
-            // and rename "PA" to "PSU".  Other MKII boards keep the
-            // existing user_adc0 path -- on those SKUs user_adc0 IS the
-            // PA drain sense, which is what the "PA" label means.
-            //
-            // Implementation note: we bind BOTH signals unconditionally
-            // and gate inside each slot on the CURRENT model.  The outer
-            // lambda fires on every connectionStateChanged transition
-            // (Connecting / Probing / Connected), and at Connecting time
-            // hardwareProfile.model may not yet be set to ANAN_G2E -- so
-            // a branch-at-bind-time approach picked the wrong slot and
-            // the tile stayed dark.  Gating inside the slot reads the
-            // model at each signal emission, when it is guaranteed to be
-            // set (status frames only arrive after the Connected handler
-            // has populated the profile).
-            auto onUserAdc0 = [this, refreshChromeBarForSystemTile](float v) {
-                const auto model = m_radioModel->hardwareProfile().model;
-                if (model == HPSDRModel::ANAN_G2E) {
-                    return;  // G2E uses supply_volts; ignore user_adc0.
-                }
-                // Task 3.6: ANAN-8000DLE user preference gate.
-                // For ANAN-8000D radios, consult the "Show volts/amps in title
-                // bar" AppSettings key (default true). For other MKII-class
-                // boards (7000DLE, AnvelinaPro3) the gate is always open —
-                // those boards don't have the per-SKU preference checkbox.
-                const bool is8000D = (model == HPSDRModel::ANAN8000D);
-                const bool showVolts = !is8000D ||
-                    AppSettings::instance().value(
-                        QStringLiteral("HardwareAnan8000DleShowVoltsAmps"),
-                        QStringLiteral("True")).toString() == QStringLiteral("True");
-                if (!showVolts) { return; }
-                m_systemTile->setPaLabel(QStringLiteral("PA"));
-                m_systemTile->setPaVolts(static_cast<double>(v));
-                refreshChromeBarForSystemTile();
-                qInfo() << "PA tile updated via userAdc0:" << v << "V";
-            };
-            connect(conn, &RadioConnection::userAdc0Changed, this, onUserAdc0);
-
-            auto onSupplyVolts = [this, refreshChromeBarForSystemTile](float v) {
-                const auto model = m_radioModel->hardwareProfile().model;
-                if (model != HPSDRModel::ANAN_G2E) {
-                    return;  // Non-G2E uses user_adc0 path.
-                }
-                m_systemTile->setPaLabel(QStringLiteral("PSU"));
-                m_systemTile->setPaVolts(static_cast<double>(v));
-                refreshChromeBarForSystemTile();
-                qInfo() << "PSU tile updated via supplyVolts:" << v << "V";
-            };
-            connect(conn, &RadioConnection::supplyVoltsChanged, this, onSupplyVolts);
-
-            // 2026-08-03 KG4VCF G2E bench finding: neither qInfo above ever
-            // printed against a live G2E, although it stayed Connected for
-            // minutes. Root cause: P2RadioConnection starts parsing
-            // High-Priority status frames (and calling handleSupplyRaw /
-            // handleUserAdc0Raw) as soon as its UDP socket is live -- the
-            // bench log's first "P2: UDP packet: port 1025 ... size 60"
-            // trace lands about 19 ms BEFORE RadioModel reaches Connected.
-            // The connect() calls just above cannot exist before this exact
-            // lambda runs, so that first sample's userAdc0Changed /
-            // supplyVoltsChanged emission fires with nobody listening.
-            // handleSupplyRaw/handleUserAdc0Raw then suppress every later
-            // re-emit of an unchanged value (identical-raw suppression), so
-            // a steady supply never gives the tile a second chance. Pull
-            // whatever the connection already computed instead of waiting
-            // on a change that will never come.
-            if (conn->lastUserAdc0Volts() >= 0.0f) {
-                onUserAdc0(conn->lastUserAdc0Volts());
-            }
-            if (conn->lastSupplyVolts() >= 0.0f) {
-                onSupplyVolts(conn->lastSupplyVolts());
-            }
-        }
-    });
-
-    // PA temperature row — driven by RadioStatus::paTemperatureChanged
-    // (HL2 publishes via the handlePaTelemetry HL2 branch; future boards
-    // may publish via the same RadioStatus signal).  The label
-    // formatting respects PaTempUnitNotifier::currentUnit() so a
-    // °C / °F toggle reformats live.
-    connect(&m_radioModel->radioStatus(), &RadioStatus::paTemperatureChanged,
-            this, [this, refreshChromeBarForSystemTile](double celsius) {
-        m_systemTile->setPaTempCelsius(celsius);
         refreshChromeBarForSystemTile();
-    });
+    };
+    connect(m_radioModel, &RadioModel::paReadingsChanged, this, refreshPaRow);
+    refreshPaRow();
 
     // Live re-format on °C / °F toggle without waiting for the next
     // telemetry sample. There is no toggle(); flip explicitly, matching
@@ -9776,26 +9873,18 @@ void MainWindow::openTciSetupPage()
 // entry points in this file).
 void MainWindow::openSetup(const QString& pageKey)
 {
-    static const QHash<QString, QString> kKeyToLabel = {
-        {QStringLiteral("pgxlAdvanced"),  QStringLiteral("PGXL Advanced")},
-        {QStringLiteral("tgxlAdvanced"),  QStringLiteral("TGXL Advanced")},
-        {QStringLiteral("pgxlInterlock"), QStringLiteral("PGXL Interlock")},
-        {QStringLiteral("peripherals"),   QStringLiteral("4O3A")},
-        // Phase 3P-III Task 14: RF-Kit setup page (Setup > CAT & Network > RF-Kit).
-        {QStringLiteral("rfKit"),         QStringLiteral("RF-Kit")},
-    };
-
     auto* dialog = createSetupDialog();
     if (dialog == nullptr) {
         return;  // the gate refused and has already said why
     }
 
-    const QString label = kKeyToLabel.value(pageKey);
-    if (label.isEmpty()) {
+    // R-R3-49 (parity Task 8): the key-to-page map lives in SetupDialog. The
+    // "PGXL Advanced", "TGXL Advanced" and "PGXL Interlock" tree labels this
+    // map named were folded into CAT & Network > 4O3A, so those entries
+    // opened Setup's first page; they now open their 4O3A tab.
+    if (!dialog->selectNavigationTarget(pageKey)) {
         qWarning("MainWindow::openSetup: unknown pageKey '%s' -- opening at default page",
                  qUtf8Printable(pageKey));
-    } else {
-        dialog->selectPage(label);
     }
     dialog->show();
     dialog->raise();
@@ -10173,11 +10262,10 @@ void MainWindow::onContainerAntennaSelected(ContainerWidget* c, int index)
         const SkuUiProfile sku = skuUiProfileFor(m_radioModel->hardwareProfile().model);
         slice->setRxAntenna(sku.rxOnlyLabels[static_cast<size_t>(index - 3)]);
     } else if (index >= 6 && index <= 8) {
-        if (!transmitControlsPermitted()) {
-            showToast(tr("Remote transmit controls are not available from this Core yet."),
-                      ToastSeverity::Warning, 3000);
-            return;
-        }
+        // R-R3-49, R-R3-21 (parity Task 11): the transmit slice's txAntenna,
+        // as the VFO flag's TX antenna button writes it: a slice setting,
+        // written in a remote window too (the Core's slice follows), not
+        // tied to the transmit permission.
         SliceModel* tx = m_radioModel->txBoundSlice();
         (tx ? tx : slice)->setTxAntenna(QStringLiteral("ANT%1").arg(index - 5));
     }
@@ -10599,12 +10687,13 @@ void MainWindow::wireSliceToSpectrum()
     // correctly (ANAN10/ANAN8000D/G2/G2_1K suppress it despite hasRxBypassRelay).
     vfo->setBoardCapabilities(m_radioModel->boardCapabilities());
     vfo->setHpsdrSku(m_radioModel->hardwareProfile().model);
-    vfo->setRxBypassActive(m_radioModel->alexController().rxOutOnTx());
+    vfo->setRxBypassActive(m_radioModel->alexAntennaFacade()->rxOutOnTx());
     // Phase 3F closeout — give Slice A's VfoWidget the RadioModel pointer so
     // contextMenuEvent builds AntennaPickerMenu instead of the stub fallback.
     vfo->setRadioModel(m_radioModel);
     vfo->setTransmitPermitted(transmitControlsPermitted(),
         tr("Remote transmit controls are not available from this Core yet."));
+    vfo->setRxBypassPermitted(rxBypassPermitted(), rxBypassUnavailableReason());
     connect(m_radioModel, &RadioModel::currentRadioChanged, vfo,
             [this, vfo]() {
         vfo->setBoardCapabilities(m_radioModel->boardCapabilities());
@@ -10628,8 +10717,10 @@ void MainWindow::wireSliceToSpectrum()
     // nothing downstream reads.
     // Phase 3F closeout — AntennaPickerMenu pick forwards to SliceModel::setRxAntenna.
 
-    // Phase 3P-I-b T9 — VFO BYPS button ↔ AlexController::rxOutOnTx
-    connect(&m_radioModel->alexController(), &AlexController::rxOutOnTxChanged,
+    // Phase 3P-I-b T9: VFO BYPS button ↔ AlexController::rxOutOnTx.
+    // Group B fix wave: through the Alex facade, the Core's in a remote
+    // window (see createSliceFlag).
+    connect(m_radioModel->alexAntennaFacade(), &AlexAntennaFacade::rxOutOnTxChanged,
             vfo, &VfoWidget::setRxBypassActive);
 
     // Stage C2: wire FilterPresetStore so VFO flag filter buttons use user overrides.
@@ -11361,6 +11452,18 @@ SetupDialog* MainWindow::createSetupDialog()
     auto* dialog = new SetupDialog(m_radioModel, this);
     dialog->setTransmitPermitted(transmitControlsPermitted(),
         tr("Remote transmit controls are not available from this Core yet."));
+    // R-R3-49 (parity Task 1): the transmit settings that key nothing.
+    dialog->setTransmitSettingsPermitted(transmitSettingsPermitted(),
+                                         transmitSettingsReason());
+    if (!m_radioModel || !m_radioModel->ownsLocalDsp()) {
+        // R-R3-49 (parity Tasks 2 and 3): the settings later versions
+        // brought (Audio > TX Input's microphone, Audio > TX Profile).
+        // R-R3-49 (parity Task 6): and version 6, Setup > PA.
+        for (const int version : {2, 3, 4, 5, 6}) {
+            dialog->setTransmitSettingsPermitted(transmitSettingsPermitted(version),
+                                                 transmitSettingsReason(version), version);
+        }
+    }
     dialog->setStationSettingsAvailable(stationSettingsAvailable(), stationSettingsReason());
     seedReceiverAudioNote(dialog, [this] { return receiverAudioNoteFor(m_remoteMedia); });
     dialog->setAttribute(Qt::WA_DeleteOnClose);
@@ -11452,6 +11555,61 @@ QString MainWindow::remoteTransmitReason() const
     return tr("Remote transmit controls are not available from this Core yet.");
 }
 
+bool MainWindow::rxBypassPermitted() const
+{
+    // Group B fix wave: a local window's BYPS writes this computer's
+    // AlexController; a remote window's the Core's, from radioHardwareVersion 5.
+    return m_radioModel && (m_radioModel->ownsLocalDsp()
+        || (m_stationClient && m_stationClient->remoteRxBypassOnTxAvailable()));
+}
+
+QString MainWindow::rxBypassUnavailableReason() const
+{
+    if (rxBypassPermitted() || !m_stationClient) {
+        return {};
+    }
+    return m_stationClient->rxBypassOnTxUnavailableReason();
+}
+
+bool MainWindow::transmitSettingsPermitted(int minVersion) const
+{
+    // R-R3-49 (parity Task 1): the Core decides; this only says whether a
+    // change is worth sending. The Core still refuses one that races a key.
+    return m_radioModel && (m_radioModel->ownsLocalDsp()
+        || (m_stationClient && m_stationClient->isHandshakeComplete()
+            && m_stationClient->transmitSettingsAvailable(minVersion)
+            && !m_radioModel->isCoreOnAir()));
+}
+
+QString MainWindow::transmitSettingsReason(int minVersion) const
+{
+    if (transmitSettingsPermitted(minVersion)) {
+        return QString();
+    }
+    if (m_radioModel && m_radioModel->isCoreOnAir()) {
+        return RadioModel::onAirReason();
+    }
+    return IStationLink::transmitSettingsUnavailableReason();
+}
+
+bool MainWindow::pureSignalArmingPermitted() const
+{
+    // R-R3-49 (parity Task 7): arming keys nothing, so a Core at
+    // transmitSettingsVersion 7 takes it while its radio is off the air.
+    return transmitControlsPermitted() || transmitSettingsPermitted(7);
+}
+
+QString MainWindow::pureSignalArmingReason() const
+{
+    if (pureSignalArmingPermitted()) {
+        return QString();
+    }
+    if (m_stationClient && m_stationClient->pureSignalArmingOffered()) {
+        return transmitSettingsReason(7);
+    }
+    return remoteTransmitReason();
+}
+
 void MainWindow::refreshTciRemoteTransmit()
 {
 #ifdef HAVE_WEBSOCKETS
@@ -11484,26 +11642,64 @@ void MainWindow::applyRemoteRoleGating()
     const QString transmitReason = remoteTransmitReason();
     // Desktop remote transmit (R-R3-42): TCI programs key through the Core.
     refreshTciRemoteTransmit();
+    // R-R3-49 (parity Task 1): the transmit settings that key nothing, live
+    // while the Core takes them and its radio is off the air.
+    const bool settingsPermitted = transmitSettingsPermitted();
+    const QString settingsReason = transmitSettingsReason();
+    // R-R3-49 (parity Task 2): the applets' other transmit settings came
+    // with transmitSettingsVersion 2.
+    const bool chainPermitted = transmitSettingsPermitted(2);
+    const QString chainReason = transmitSettingsReason(2);
+    // R-R3-49 (parity Task 3): the TX profiles, the radio microphone
+    // settings and RADE's Reset vocoder came with transmitSettingsVersion 3.
+    const bool profilePermitted = transmitSettingsPermitted(3);
+    const QString profileReason = transmitSettingsReason(3);
+    // R-R3-49 (parity Task 4): the TX EQ and CFC dialogs, Setup > DSP >
+    // CFC and AGC/ALC's TX Leveler and ALC came with version 4.
+    const bool processingPermitted = transmitSettingsPermitted(4);
+    const QString processingReason = transmitSettingsReason(4);
+    TxEqDialog::setSettingsPermitted(processingPermitted, processingReason);
     if (m_txApplet) {
         m_txApplet->setTransmitPermitted(transmitPermitted, transmitReason);
+        m_txApplet->setTransmitSettingsPermitted(settingsPermitted, settingsReason);
+        m_txApplet->setTransmitChainSettingsPermitted(chainPermitted, chainReason);
+        m_txApplet->setTxProfilePermitted(profilePermitted, profileReason);
+        m_txApplet->setTxProcessingPermitted(processingPermitted, processingReason);
+        // R-R3-49 (group A fix wave, M3): the RF Power slider's per-band
+        // and drive-source writes came with version 5.
+        m_txApplet->setPowerByBandPermitted(transmitSettingsPermitted(5));
+        // R-R3-49 (parity Task 7): PS-A arms PureSignal (version 7).
+        m_txApplet->setPureSignalArmingPermitted(pureSignalArmingPermitted(),
+                                                 pureSignalArmingReason());
     }
     if (m_phoneCwApplet) {
         m_phoneCwApplet->setTransmitPermitted(transmitPermitted, transmitReason);
+        m_phoneCwApplet->setTransmitSettingsPermitted(chainPermitted, chainReason);
+        m_phoneCwApplet->setTxProfilePermitted(profilePermitted, profileReason);
     }
     // R-R3-44: the VAX applet's TX row (VAX as the microphone).
     if (m_vaxApplet) {
         m_vaxApplet->setTransmitPermitted(transmitPermitted, transmitReason);
     }
-    // R-R3-21: the RX applet's XIT row and TX passband Shift-click.
+    // R-R3-49 (parity Task 1): the RX applet's TX passband Shift-click.
+    // Its XIT row is a slice setting and takes no gate (parity Task 11).
     if (m_rxApplet) {
-        m_rxApplet->setTransmitPermitted(transmitPermitted, transmitReason);
+        m_rxApplet->setTransmitSettingsPermitted(settingsPermitted, settingsReason);
     }
     // R-R3-21: the RADE applet's profile combo writes the TX mic profile.
     if (m_radeApplet) {
         m_radeApplet->setTransmitPermitted(transmitPermitted, transmitReason);
+        m_radeApplet->setTxProfilePermitted(profilePermitted, profileReason);
     }
+    // Group B fix wave: BYPS follows whether the Core takes RX bypass on
+    // TX (radioHardwareVersion 5), not the transmit permission.
+    const bool rxBypass = rxBypassPermitted();
+    const QString rxBypassReason = rxBypassUnavailableReason();
     for (VfoWidget* flag : m_vfoWidgetsBySlice) {
-        if (flag) { flag->setTransmitPermitted(transmitPermitted, transmitReason); }
+        if (flag) {
+            flag->setTransmitPermitted(transmitPermitted, transmitReason);
+            flag->setRxBypassPermitted(rxBypass, rxBypassReason);
+        }
     }
     // R-R3-21: the container function buttons: the transmit ones are
     // unavailable with this reason, Power follows the Core session.
@@ -11515,12 +11711,24 @@ void MainWindow::applyRemoteRoleGating()
     const bool stationAvailable = stationSettingsAvailable();
     for (SetupDialog* dialog : findChildren<SetupDialog*>()) {
         dialog->setTransmitPermitted(transmitPermitted, transmitReason);
+        dialog->setTransmitSettingsPermitted(settingsPermitted, settingsReason);
+        dialog->setTransmitSettingsPermitted(chainPermitted, chainReason, 2);
+        dialog->setTransmitSettingsPermitted(profilePermitted, profileReason, 3);
+        dialog->setTransmitSettingsPermitted(processingPermitted, processingReason, 4);
+        // R-R3-49 (parity Task 5): Transmit > Power, DEXP/VOX and Test >
+        // Two-Tone IMD came with version 5.
+        dialog->setTransmitSettingsPermitted(transmitSettingsPermitted(5),
+                                             transmitSettingsReason(5), 5);
+        // R-R3-49 (parity Task 6): Setup > PA came with version 6.
+        dialog->setTransmitSettingsPermitted(transmitSettingsPermitted(6),
+                                             transmitSettingsReason(6), 6);
         dialog->setStationSettingsAvailable(stationAvailable, stationSettingsReason());
     }
     if (m_actTxEqualizer) {
-        m_actTxEqualizer->setEnabled(transmitPermitted);
-        m_actTxEqualizer->setToolTip(transmitPermitted
-            ? tr("Open the TX equalizer.") : transmitReason);
+        // R-R3-49 (parity Task 4): opens whatever the Core says; the dialog
+        // shows why it is greyed.
+        m_actTxEqualizer->setEnabled(true);
+        m_actTxEqualizer->setToolTip(tr("Open the TX equalizer."));
     }
     // The Tools menu's developer test entries fake an antenna switch and a
     // TX-bound re-route that nothing on the Core stands behind, so they
@@ -11544,10 +11752,16 @@ void MainWindow::applyRemoteRoleGating()
         if (!action) { continue; }
         const bool ps3Supported = m_stationClient && m_stationClient->isHandshakeComplete()
             && m_stationClient->capabilities().psAlgorithmVersion == 3;
+        // R-R3-49 (parity Task 7): a Core at transmitSettingsVersion 7 takes
+        // calibration from here off the air; the two-tone test still waits
+        // for remote transmit.
+        const bool armingOffered = m_stationClient && m_stationClient->pureSignalArmingOffered();
         action->setEnabled(ps3Supported);
-        action->setToolTip(ps3Supported
-            ? tr("PureSignal 3 settings, saved corrections and diagnostics. Remote transmit controls are not available from this Core yet.")
-            : tr("The connected Core has not advertised PureSignal 3."));
+        action->setToolTip(!ps3Supported
+            ? tr("The connected Core has not advertised PureSignal 3.")
+            : armingOffered
+                ? tr("PureSignal 3 settings, calibration, saved corrections and diagnostics. The two-tone test is not available from this Core yet.")
+                : tr("PureSignal 3 settings, saved corrections and diagnostics. Remote transmit controls are not available from this Core yet."));
     }
     if (m_pureSignalApplet) {
         const bool ps3Supported = m_stationClient && m_stationClient->isHandshakeComplete()
@@ -11596,6 +11810,20 @@ void MainWindow::applyRemoteRoleGating()
             : m_stationClient != nullptr
                 ? OperatorReasonText::forDisplay(m_stationClient->hardwareConfigUnavailableReason())
                 : tr("Connect to the Core to change the radio's hardware settings."));
+        // R-R3-49 / R-R3-46 (parity Task 12): the transmit antennas and
+        // relays go through the Core from radioHardwareVersion 6, RX bypass
+        // on TX from 5, whatever the transmit permission says; a local
+        // window's own controller always takes them.
+        const bool localWindow = m_radioModel->ownsLocalDsp();
+        const bool txAntennas = localWindow
+            || (m_stationClient != nullptr && m_stationClient->remoteTransmitAntennasAvailable());
+        alex->setTransmitEditAvailability(
+            txAntennas, txAntennas ? QString()
+                : m_stationClient != nullptr
+                    ? OperatorReasonText::forDisplay(
+                          m_stationClient->transmitAntennasUnavailableReason())
+                    : tr("Connect to the Core to change the radio's hardware settings."),
+            rxBypassPermitted(), OperatorReasonText::forDisplay(rxBypassUnavailableReason()));
     }
     // R-R3-46: Protocol Info shows the Core's radio (showCoreRadioInfo(),
     // never connection(), which a remote model does not have) once the
@@ -12505,6 +12733,15 @@ void MainWindow::onConnectionStateChanged()
 
             connect(m_ampApplet, &AmpApplet::operateToggled,
                     this, [this](bool wantOperate) {
+                // R-R3-49 (parity Task 9): a remote window's applet asks the
+                // Core itself (setPgxlOperate); this computer's Power Genius
+                // connection is local only.
+                // Group B fix wave (M5): refused on the air, as the applet
+                // and a remote window are.
+                if (m_radioModel->role() == RadioModel::Role::Remote
+                    || m_radioModel->stationOnAirRefusal(nullptr)) {
+                    return;
+                }
                 // Bench-fix 2026-05-19: pcap stream 11 (.19 PowerGeniusDesktop
                 // -> .235 PGXL :9008) shows the actually-used wire command
                 // for OPERATE is `operate=1` (key=value), not bare `operate`.
@@ -12577,6 +12814,15 @@ void MainWindow::onConnectionStateChanged()
             // diagnosticsCopyRequested: build a brief diagnostic string and copy to clipboard.
             connect(m_ampApplet, &AmpApplet::diagnosticsCopyRequested,
                     this, [this]() {
+                // R-R3-49 (parity Task 9): a remote window copies the Core's
+                // connection (the mirrored `amplifier` object and
+                // accessoryData's pgxl counters), not this computer's idle
+                // socket.
+                if (m_radioModel->role() == RadioModel::Role::Remote) {
+                    QGuiApplication::clipboard()->setText(
+                        AmpApplet::coreDiagnosticsText(m_radioModel));
+                    return;
+                }
                 PgxlConnection* pgxl = m_radioModel->pgxlConnection();
                 const QString text = QStringLiteral(
                     "PGXL Diagnostics\n"
@@ -12630,6 +12876,14 @@ void MainWindow::onConnectionStateChanged()
             // diagnosticsCopyRequested: build diagnostic string and copy to clipboard.
             connect(m_tunerApplet, &TunerApplet::diagnosticsCopyRequested,
                     this, [this]() {
+                // R-R3-49 (parity Task 8): a remote window copies the Core's
+                // connection (the mirrored `tuner` object and accessoryData's
+                // tgxl counters), not this computer's idle socket.
+                if (m_radioModel->role() == RadioModel::Role::Remote) {
+                    QGuiApplication::clipboard()->setText(
+                        TunerApplet::coreDiagnosticsText(m_radioModel));
+                    return;
+                }
                 TgxlConnection* tgxl = m_radioModel->tgxlConnection();
                 const QString text = QStringLiteral(
                     "TGXL Diagnostics\n"
@@ -12924,15 +13178,12 @@ void MainWindow::tryAutoReconnect()
 // NereusSDR-original; no Thetis equivalent.
 void MainWindow::checkVaxFirstRun()
 {
-    // R-R3-23: skipped in a remote window, as the Linux audio first-run
-    // below already is. R-R3-44: a remote window does open this computer's
-    // VAX outputs, but only the ones start() would open (Setup > Audio >
-    // VAX changes them); the check would record audio/FirstRunComplete and
-    // the cable fingerprint for a later local session that never saw the
-    // dialog, so it still runs only in a local window.
-    if (!m_radioModel->ownsLocalDsp()) {
-        return;
-    }
+    // R-R3-44 (parity Task 11): runs in a remote window as in a local one.
+    // The VAX outputs are this computer's in both (a remote window feeds
+    // them from the Core's receiver streams), and audio/FirstRunComplete,
+    // the cable fingerprint and audio/Vax<ch>/DeviceName are this
+    // computer's settings, never the Core's, so a later local window reads
+    // what the operator answered here.
     auto& s = AppSettings::instance();
     const bool firstRunDone =
         (s.value(QStringLiteral("audio/FirstRunComplete"),
@@ -12983,7 +13234,9 @@ void MainWindow::checkVaxFirstRun()
     // first-run complete so the user isn't re-ambushed on next launch.
     connect(dlg, &VaxFirstRunDialog::applySuggested, this,
             [this](const QVector<QPair<int, QString>>& bindings) {
-        auto* engine = m_radioModel->audioEngine();
+        // This computer's VAX outputs, live in a remote window too
+        // (R-R3-44), so not the audited local-DSP accessor.
+        auto* engine = m_radioModel->localAudioDevices();
         if (!engine) {
             qCWarning(lcAudio)
                 << "VAX first-run: applySuggested with no AudioEngine; "

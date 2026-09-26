@@ -85,6 +85,31 @@
 //                 row, with a plain notice when the headphones are chosen
 //                 and not open. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-24 : R-R3-49 (parity Task 1): setTransmitSettingsPermitted.
+//                 RF Power and the TX filter low and high follow the
+//                 transmit settings gate in a remote window; the keying
+//                 controls keep setTransmitPermitted. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-09-24 : R-R3-49 (parity Task 2): setTransmitChainSettingsPermitted
+//                 for Tune Power, the VOX level and delay, MON, its level
+//                 and output, LEV, EQ and CFC. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-09-25 : R-R3-49 (parity Task 3): setTxProfilePermitted for the
+//                 profile combo, which picks the Core's profiles in a
+//                 remote window. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-09-25 : R-R3-49 (parity Task 4): setTxProcessingPermitted for the
+//                 CFC dialog; the EQ and CFC right-clicks open their
+//                 dialogs in a remote window. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-09-25 : R-R3-49 (parity Task 7): setPureSignalArmingPermitted for
+//                 PS-A, which arms PureSignal on the Core from a remote
+//                 window off the air. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-09-25 : Task 16 fix wave: followActiveSliceMode (M3) and the
+//                 transmit permission's reason kept for the receive-only
+//                 lock (M6). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 //=================================================================
@@ -286,6 +311,47 @@ public slots:
     // not alter TransmitModel, station settings, or the displayed state of an
     // already-authoritative control.
     void setTransmitPermitted(bool permitted, const QString& unavailableReason = QString());
+    // R-R3-49 (parity Task 1): the transmit settings that key nothing (RF
+    // Power, TX filter low and high). In a remote window MainWindow
+    // supplies true while the Core takes them (transmitSettingsVersion)
+    // and its radio is off the air, and the reason otherwise. Widget
+    // availability only, as setTransmitPermitted.
+    void setTransmitSettingsPermitted(bool permitted,
+                                      const QString& unavailableReason = QString());
+    // R-R3-49 (parity Task 2): the rest of this applet's transmit settings
+    // (Tune Power, the VOX level and delay, MON and its level, the MON
+    // output pair, LEV, EQ, CFC), live while the Core takes them
+    // (transmitSettingsVersion 2) and its radio is off the air. The VOX
+    // button, TUNE, MOX, 2-Tone, PS-A and the profile stay on
+    // setTransmitPermitted.
+    void setTransmitChainSettingsPermitted(bool permitted,
+                                           const QString& unavailableReason = QString());
+    // R-R3-49 (parity Task 3): the profile combo. In a remote window it
+    // lists the Core's profiles and selects through the Core
+    // (transmitSettingsVersion 3), live while its radio is off the air.
+    void setTxProfilePermitted(bool permitted,
+                               const QString& unavailableReason = QString());
+    // R-R3-49 (group A fix wave, M3): whether an RF Power move also writes
+    // the per-band power and the tune drive source (powerByBandJson and
+    // tuneDrivePowerSource on the link), which a Core takes from
+    // transmitSettingsVersion 5. MainWindow supplies false for an older
+    // Core, which would refuse them on every move. Always true locally.
+    void setPowerByBandPermitted(bool permitted) { m_powerByBandPermitted = permitted; }
+    // R-R3-49 (parity Task 4): the CFC dialog (transmitSettingsVersion 4).
+    // The EQ and CFC right-clicks open their dialogs in any window; this
+    // greys the CFC dialog with the reason while a remote window cannot
+    // change it (the TX EQ dialog takes TxEqDialog::setSettingsPermitted).
+    void setTxProcessingPermitted(bool permitted,
+                                  const QString& unavailableReason = QString());
+    // The CFC dialog, once a right-click or Setup has built it.
+    TxCfcDialog* cfcDialog() const { return m_cfcDialog; }
+    // R-R3-49 (parity Task 7): PS-A arms PureSignal and keys nothing. It
+    // follows this gate (not setTransmitPermitted): a remote window whose
+    // Core offers arming (transmitSettingsVersion 7) uses it while the
+    // Core's radio is off the air; otherwise it is greyed with the reason.
+    // Always true locally.
+    void setPureSignalArmingPermitted(bool permitted,
+                                      const QString& unavailableReason = QString());
 public:
 
     // ── Test accessors ──────────────────────────────────────────────────────
@@ -293,6 +359,10 @@ public:
     // TestTwoTonePage (matches AudioTxInputPage / RxApplet patterns).
     QComboBox*   profileCombo()      const { return m_profileCombo; }
     QPushButton* twoToneButton()     const { return m_twoToneBtn; }
+    // Task 16: the keying buttons receive only disables.
+    QPushButton* moxButton()         const { return m_moxBtn; }
+    QPushButton* tuneButton()        const { return m_tuneBtn; }
+    QPushButton* voxButton()         const { return m_voxBtn; }
     // Issue #175 Task 7: HL2 slider rescale + dB label test access.
     QSlider*     rfPowerSlider()    const noexcept { return m_rfPowerSlider; }
     QSlider*     tunePowerSlider()  const noexcept { return m_tunePwrSlider; }
@@ -372,6 +442,18 @@ private:
     // K.2: slot called when SliceModel::dspModeChanged fires (via RadioModel).
     // Updates m_moxBtn->setToolTip(tooltipForMode(mode)).
     void onMoxModeChanged(DSPMode mode);
+
+    // Task 16: receive only disables MOX (in every mode, fix wave I3), TUNE,
+    // 2-Tone and VOX with its reason, as Thetis console.RXOnly does
+    // (console.cs:15318-15324 [v2.10.3.15]). It sits on top of the remote
+    // transmit-permission gate: remove it, change the layer below, put it
+    // back.
+    void removeReceiveOnlyLock();
+    void applyReceiveOnlyLock();
+    // Task 16 fix wave (M3): follow the active slice's mode for the MOX
+    // tooltip; m_moxModeConnection is the current slice's connection.
+    void followActiveSliceMode();
+    QMetaObject::Connection m_moxModeConnection;
 
     // Canonical TX band derived from the active slice's frequency.  This
     // is the band the radio actually transmits on (RadioModel.cpp:903-905
@@ -513,6 +595,21 @@ private:
     // Defaults to local-direct behaviour. Remote MainWindow wiring replaces it
     // after handshake/capability evaluation.
     bool m_transmitPermitted{true};
+    bool m_transmitSettingsPermitted{true};
+    bool m_transmitChainSettingsPermitted{true};
+    bool m_txProfilePermitted{true};
+    bool m_txProcessingPermitted{true};   // R-R3-49 (parity Task 4)
+    bool m_powerByBandPermitted{true};    // R-R3-49 (group A fix wave, M3)
+    bool m_psArmingPermitted{true};       // R-R3-49 (parity Task 7)
+    QString m_txProcessingReason;
+    // R-R3-49 (parity Task 2): a remote window's Tune Power slider asks the
+    // Core (setTunePowerForTxBand) and shows the Core's tunePowerForTxBand.
+    bool remoteTunePower() const;
+    int  shownTunePower(Band band) const;
+    void requestRemoteTunePower(int watts);
+    // The words the transmit-permission gate shows while it holds; the
+    // receive-only lock names them beside its own (Task 16 fix wave, M6).
+    QString m_transmitPermissionReason;
 };
 
 } // namespace NereusSDR

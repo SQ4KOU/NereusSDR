@@ -215,7 +215,8 @@ not traversal.
 
 The daemon registers under a **scrambled name derived from its public key**, not
 from its label. A client holding the daemon's key derives the same value and
-asks where it is. The server matches opaque strings.
+asks where it is. The server matches opaque strings. The derivation is defined
+in [2026-09-23-rendezvous-v1.md](2026-09-23-rendezvous-v1.md), section 4.2.
 
 | The rendezvous sees | The rendezvous cannot see |
 | --- | --- |

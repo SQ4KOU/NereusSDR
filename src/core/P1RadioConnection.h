@@ -19,6 +19,8 @@
 //                 (networkproto1.c:292-294 [v2.10.3.15]) and the RUNSTOP test
 //                 seams no longer carry the setting. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-32 (remote-window parity Task 6): m_ep6SeqPrimed.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -567,6 +569,9 @@ private:
     // count. From Thetis networkproto1.c:28 "int MetisLastRecvSeq = 0;"
     // [v2.10.3.15].
     quint32 m_ep6LastRecvSeq{0};
+    // R-R3-32 (parity Task 6): an ep6 frame has arrived since connect, so
+    // the next one has a number to follow (RadioLinkStats packet loss).
+    bool m_ep6SeqPrimed{false};
     int     m_ccRoundRobinIdx{0};
 
     // 3M-1a E.3: force the next sendCommandFrame() to start with bank 0 so
@@ -972,6 +977,7 @@ public:
         // Map HPSDRHW → canonical HPSDRModel so selectCodec() picks the right subclass.
         switch (board) {
             case HPSDRHW::HermesLite: m_hardwareProfile.model = HPSDRModel::HERMESLITE;   break;
+            case HPSDRHW::HermesLiteRxOnly: m_hardwareProfile.model = HPSDRModel::HERMESLITE; break; // Task 15
             case HPSDRHW::OrionMKII:  m_hardwareProfile.model = HPSDRModel::ORIONMKII;    break;
             case HPSDRHW::Angelia:    m_hardwareProfile.model = HPSDRModel::ANAN100D;      break;
             case HPSDRHW::Orion:      m_hardwareProfile.model = HPSDRModel::ANAN200D;      break;

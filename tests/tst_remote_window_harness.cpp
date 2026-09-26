@@ -46,6 +46,10 @@
 //                                    their features are not built.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 3): the RADE applet's profile combo and
+//                                    Reset vocoder follow the transmit
+//                                    settings gate.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -80,6 +84,7 @@
 #include "core/StepAttenuatorController.h"
 #include "core/StepAttenuatorFacade.h"
 #include "core/session/StationCapabilities.h"
+#include "core/session/IStationLink.h"
 #include "core/session/StationClient.h"
 #include "gui/meters/MeterPoller.h"
 #include "gui/MainWindow.h"
@@ -1063,7 +1068,8 @@ private slots:
     // it (radioHardwareVersion 2). The tabs are live and show the Core's
     // radio; an RX antenna change reaches the Core's own AlexController;
     // an OC receive pin reaches the Core's settings for that radio and the
-    // Core reloads its matrix; the transmit fields wait for remote transmit.
+    // Core reloads its matrix; the transmit fields that key nothing follow
+    // their own versions (parity tasks).
     void hardwareConfigReceiveSettingsReachTheCore()
     {
         StepAttenuatorController coreAtt;
@@ -1096,7 +1102,9 @@ private slots:
         // RX antenna: the Core's controller changes.
         auto* antennas = hardware->findChild<AntennaAlexAntennaControlTab*>();
         QVERIFY(antennas);
-        QVERIFY(!antennas->txGridForTest()->isEnabled());
+        // Parity Task 12: the TX antennas go to the Core too (version 6);
+        // tst_remote_tx_antennas covers them.
+        QTRY_VERIFY(antennas->txGridForTest()->isEnabled());
         QRadioButton* const ant2 = antennas->rxButtonForTest(Band::Band40m, 2);
         QVERIFY(ant2 && ant2->isEnabled());
         ant2->click();
@@ -1119,7 +1127,7 @@ private slots:
         // R-R3-46 fix wave (radioHardwareVersion 3): the HL2 I/O board tab
         // shows the Core's board, whose readings arrive on the Core after a
         // probe. (4 since the filter policy verb, R-R3-46 / R-R3-21.)
-        QCOMPARE(h.client()->capabilities().radioHardwareVersion, 4);
+        QCOMPARE(h.client()->capabilities().radioHardwareVersion, 6);
         auto* ioTab = hardware->findChild<Hl2IoBoardTab*>();
         QVERIFY(ioTab);
         const auto statusText = [ioTab]() {
@@ -1303,18 +1311,27 @@ private slots:
         QVERIFY(connectFromRadioMenu(h));
         const quint32 epoch = client->sessionEpoch();
 
-        auto* txEq = h.window()->findChild<QAction*>(QStringLiteral("toolsTxEqualizer"));
+        // R-R3-49 (parity Task 4): Tools > TX Equalizer opens in a remote
+        // window whatever the Core permits (the dialog shows why it is
+        // greyed), so the remote transmit push is watched on the TX
+        // applet's VOX button, which keeps it.
+        auto* txEq = h.window()->findChild<QPushButton*>(QStringLiteral("TxVoxButton"));
         QVERIFY(txEq);
+        auto* txEqualizer = h.window()->findChild<QAction*>(QStringLiteral("toolsTxEqualizer"));
+        QVERIFY(txEqualizer && txEqualizer->isEnabled());
         QVERIFY(!client->capabilities().txPermitted);
         QVERIFY(!txEq->isEnabled());
         const QString reason = txEq->toolTip();
         QVERIFY(!reason.isEmpty());
-        // The RADE applet's profile combo follows the same push.
+        // R-R3-49 (parity Task 3): the RADE applet's profile combo and Reset
+        // vocoder follow the transmit settings gate, not the remote transmit
+        // push: the Core takes them while its radio is off the air.
         auto* rade = h.window()->findChild<RadeApplet*>();
         QVERIFY(rade);
         QComboBox* const radeProfile = rade->profileComboForTest();
-        QVERIFY(!radeProfile->isEnabled());
-        QCOMPARE(radeProfile->toolTip(), reason);
+        QPushButton* const radeReset = rade->resetVocoderButtonForTest();
+        QTRY_VERIFY(radeProfile->isEnabled());
+        QVERIFY(radeReset->isEnabled());
 
         StationCapabilities granted = h.server().buildCapabilities();
         granted.txPermitted = true;
@@ -1323,24 +1340,25 @@ private slots:
         QVERIFY(client->capabilities().txPermitted);
         QVERIFY(txEq->toolTip() != reason);
         QVERIFY(radeProfile->isEnabled());
-        QVERIFY(radeProfile->toolTip() != reason);
-        // Reset vocoder stays unavailable: the vocoder runs on the Core,
-        // and once transmit is permitted it says so instead of the
-        // transmit reason.
-        QPushButton* const radeReset = rade->resetVocoderButtonForTest();
-        QVERIFY(!radeReset->isEnabled());
-        QCOMPARE(radeReset->toolTip(),
-                 QStringLiteral("The RADE vocoder runs on the Core's computer and "
-                                "cannot be reset from a remote window."));
+        QVERIFY(radeReset->isEnabled());
 
         StationCapabilities withdrawn = h.server().buildCapabilities();
         withdrawn.txPermitted = false;
         h.pushCapabilities(withdrawn);
         QTRY_VERIFY(!txEq->isEnabled());
         QCOMPARE(txEq->toolTip(), reason);
-        QVERIFY(!radeProfile->isEnabled());
-        QCOMPARE(radeProfile->toolTip(), reason);
-        QCOMPARE(radeReset->toolTip(), reason);
+        QVERIFY(radeProfile->isEnabled());
+        QVERIFY(radeReset->isEnabled());
+
+        // A Core without the TX profile commands (transmitSettingsVersion
+        // below 3) greys both with the plain reason, on the live session.
+        StationCapabilities older = h.server().buildCapabilities();
+        older.transmitSettingsVersion = 2;
+        h.pushCapabilities(older);
+        QTRY_VERIFY(!radeProfile->isEnabled());
+        QCOMPARE(radeProfile->toolTip(), IStationLink::transmitSettingsUnavailableReason());
+        QVERIFY(!radeReset->isEnabled());
+        QCOMPARE(radeReset->toolTip(), IStationLink::transmitSettingsUnavailableReason());
 
         QCOMPARE(client->sessionEpoch(), epoch);
         QCOMPARE(h.acceptedConnections(), 1);

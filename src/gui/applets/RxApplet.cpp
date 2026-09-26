@@ -41,6 +41,15 @@
 //   2026-09-24 - iPhone app follow-up (R-IOS-06): the SQL slider's range
 //                 comes from ControlRanges.h too. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49 (parity Task 1): the filter-preset Shift-click TX
+//                 passband match follows setTransmitSettingsPermitted and
+//                 says why when it cannot. J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49, R-R3-21 (parity Task 11): the XIT row writes the
+//                 slice in a remote window as the VFO flag's XIT does; it
+//                 no longer follows the transmit permission, and
+//                 setTransmitPermitted, which gated only it, is gone.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -157,6 +166,7 @@
 #include "core/StepAttenuatorController.h"
 #include "core/StepAttenuatorFacade.h"
 #include "core/accessories/AlexController.h"
+#include "core/session/IStationLink.h"
 #include "gui/ComboStyle.h"
 #include "gui/StyleConstants.h"
 #include "gui/styles/PopupMenuStyle.h"
@@ -231,10 +241,11 @@ RxApplet::RxApplet(SliceModel* slice, RadioModel* model, QWidget* parent)
 
     syncFromModel();
 
-    // R-R3-21: a remote-station model starts with transmit denied until the
-    // handshake grants it, as TxApplet and the VFO flag do.
+    // R-R3-49 (parity Task 1): a remote-station model starts with the
+    // transmit settings denied until the handshake grants them. XIT is a
+    // slice setting and writes in a remote window (parity Task 11).
     if (m_model && !m_model->ownsLocalDsp()) {
-        setTransmitPermitted(false);
+        setTransmitSettingsPermitted(false);
     }
 
     // R-R3-46 / R-R3-21: a remote window has no attenuator of its own. The
@@ -1257,8 +1268,13 @@ void RxApplet::rebuildFilterButtons(DSPMode mode)
             // values to TX audio Hz: LSB family flips magnitude order, USB
             // family is identity, symmetric uses (0, |high|).
             if (QGuiApplication::keyboardModifiers() & Qt::ShiftModifier) {
-                // R-R3-21: the TX passband match is a transmit write.
-                if (!m_model || !m_transmitPermitted) { return; }
+                // R-R3-49 (parity Task 1): the TX passband match is a
+                // transmit setting; when it cannot be made, say why.
+                if (!m_model) { return; }
+                if (!m_transmitSettingsPermitted) {
+                    emit transmitSettingRefused(m_transmitSettingsReason);
+                    return;
+                }
                 const bool isSymmetric =
                     mode == DSPMode::AM || mode == DSPMode::SAM
                  || mode == DSPMode::DSB || mode == DSPMode::FM
@@ -1466,42 +1482,18 @@ void RxApplet::setAntennaList(const QStringList& ants)
     }
 }
 
-// Phase 3P-I-a T16 — hide antenna buttons on boards without Alex.
-// R-R3-21: XIT offsets the transmit frequency, so its row follows the
-// negotiated transmit permission like the VFO flag's XIT. Prior enabled
-// state and tooltips are restored when permission returns; no model state
-// is written here.
-void RxApplet::setTransmitPermitted(bool permitted, const QString& reason)
+// R-R3-49 (parity Task 1): the transmit settings gate. Only the
+// Shift-click TX passband match reads it; no control is disabled, because
+// the preset buttons are receive controls.
+void RxApplet::setTransmitSettingsPermitted(bool permitted, const QString& reason)
 {
-    m_transmitPermitted = permitted;
-    const QString text = reason.isEmpty()
-        ? tr("Transmit controls are unavailable until the Core confirms "
-             "transmit permission.")
+    m_transmitSettingsPermitted = permitted;
+    m_transmitSettingsReason = reason.isEmpty()
+        ? IStationLink::transmitSettingsUnavailableReason()
         : reason;
-    static constexpr auto kSavedTooltip = "RxAppletSavedTransmitTooltip";
-    static constexpr auto kSavedEnabled = "RxAppletSavedTransmitEnabled";
-    for (QWidget* control : {static_cast<QWidget*>(m_xitOnBtn),
-                             static_cast<QWidget*>(m_xitZero),
-                             static_cast<QWidget*>(m_xitMinus),
-                             static_cast<QWidget*>(m_xitLabel),
-                             static_cast<QWidget*>(m_xitPlus)}) {
-        if (!control) { continue; }
-        if (!permitted) {
-            if (!control->property(kSavedTooltip).isValid()) {
-                control->setProperty(kSavedTooltip, control->toolTip());
-                control->setProperty(kSavedEnabled, control->isEnabled());
-            }
-            control->setEnabled(false);
-            control->setToolTip(text);
-        } else if (control->property(kSavedTooltip).isValid()) {
-            control->setEnabled(control->property(kSavedEnabled).toBool());
-            control->setToolTip(control->property(kSavedTooltip).toString());
-            control->setProperty(kSavedTooltip, QVariant());
-            control->setProperty(kSavedEnabled, QVariant());
-        }
-    }
 }
 
+// Phase 3P-I-a T16: hide antenna buttons on boards without Alex.
 // HL2 / Atlas / bare-ADC SKUs have no antenna relay; the buttons
 // would be zombie controls (visible but no-op) and would mislead users.
 // Matches VfoWidget::setBoardCapabilities (T15) one-for-one so the whole

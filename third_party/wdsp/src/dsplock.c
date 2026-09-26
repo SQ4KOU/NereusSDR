@@ -134,6 +134,12 @@ boydsoftprez@gmail.com
 //                 before doing anything else (one pointer test when none
 //                 is installed), by J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code (R-R3-39).
+//   2026-09-25 - Test-only block hook (WDSPSetTestBlockHook): reports each
+//                 block's start and end on the clock the worker times it
+//                 with, so a test measures the busy share the way the load
+//                 counters do, independently of them. By J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code (R-R3-40).
 // =================================================================
 
 #include "comm.h"
@@ -446,6 +452,20 @@ static void test_busy_wait_us (long delay)
 	}
 }
 
+// Test-only block hook (WDSPSetTestBlockHook), 0 when none. The worker
+// loads it once at each block's start and end.
+typedef void (*WdspTestBlockHook) (int channel, long long startNs, long long endNs);
+static WdspTestBlockHook volatile test_block_hook = 0;
+
+static WdspTestBlockHook load_test_block_hook (void)
+{
+#ifdef _WIN32
+	return (WdspTestBlockHook)InterlockedCompareExchangePointer ((PVOID volatile*)&test_block_hook, 0, 0);
+#else
+	return __atomic_load_n (&test_block_hook, __ATOMIC_ACQUIRE);
+#endif
+}
+
 static void test_block_delay (int channel)
 {
 	test_busy_wait_us (load_test_block_delay (channel));
@@ -505,9 +525,16 @@ void WdspWorkerEnter (int channel)
 		{
 			InterlockedExchange (&load_block_period_us[channel], period_us);
 		}
+		const int64_t start_ns = dsplock_now_ns ();
+		WdspTestBlockHook hook;
 		load_seq_step (channel);
-		load_store64 (&block_start_ns[channel], (long long)dsplock_now_ns ());
+		load_store64 (&block_start_ns[channel], (long long)start_ns);
 		load_seq_step (channel);
+		hook = load_test_block_hook ();
+		if (hook != 0)
+		{
+			hook (channel, (long long)start_ns, 0);
+		}
 		test_block_delay (channel);
 	}
 }
@@ -515,7 +542,10 @@ void WdspWorkerEnter (int channel)
 // Worker only, csDSP held: adds the block that just ended to the counters.
 static void record_block (int channel)
 {
-	const int64_t elapsed_ns = dsplock_now_ns () - (int64_t)block_start_ns[channel];
+	const int64_t start_ns = (int64_t)block_start_ns[channel];
+	const int64_t end_ns = dsplock_now_ns ();
+	const int64_t elapsed_ns = end_ns - start_ns;
+	WdspTestBlockHook hook;
 	const long long elapsed_us = (long long)(elapsed_ns / 1000);
 	const long period_us = load_block_period_us[channel];
 	// The block moves from "in progress" to busyNs as one change.
@@ -533,6 +563,11 @@ static void record_block (int channel)
 	}
 	load_max64 (&load_interval_max_us[channel], elapsed_us);
 	load_add64 (&load_blocks[channel], 1);
+	hook = load_test_block_hook ();
+	if (hook != 0)
+	{
+		hook (channel, (long long)start_ns, (long long)end_ns);
+	}
 }
 
 void WdspWorkerLeave (int channel)
@@ -706,6 +741,16 @@ void WDSPSetTestHoldLoadPair (int channel, int hold)
 	// the hold is steady (a parity trick on load_seq was not: the worker's
 	// own steps briefly made it even again).
 	InterlockedExchange (&test_load_pair_held[channel], hold ? 1L : 0L);
+}
+
+PORT
+void WDSPSetTestBlockHook (void (*hook) (int channel, long long startNs, long long endNs))
+{
+#ifdef _WIN32
+	InterlockedExchangePointer ((PVOID volatile*)&test_block_hook, (PVOID)hook);
+#else
+	__atomic_store_n (&test_block_hook, hook, __ATOMIC_RELEASE);
+#endif
 }
 
 PORT

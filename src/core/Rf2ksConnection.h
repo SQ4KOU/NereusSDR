@@ -131,6 +131,9 @@ public:
     // test can walk the down transition and the reconnect-probe-failed path
     // that keeps the retry schedule alive.
     void testMarkPollFailure() { markPollFailure(); }
+    // Group B fix wave (M7): a poll answered in `rttMs`, for the response
+    // time average.
+    void testMarkPollSuccess(int rttMs) { markPollSuccess(rttMs); }
 
 public slots:
     void connectToAmp(const QString& host, quint16 port = 8080);

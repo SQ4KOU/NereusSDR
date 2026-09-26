@@ -24,7 +24,7 @@
 //               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
-#include "StationMultiSessionHarness.h"
+#include "MultiDeviceHarness.h"
 
 #include "core/session/SessionCommandDispatcher.h"
 
@@ -234,10 +234,19 @@ private slots:
         QJsonObject r = core.invoke(appB, "requestSliceSampleRate",
                                     {int64("sliceId", bSlice.mid(6).toInt()), int64("rateHz", 96000)});
         QCOMPARE(r.value(QStringLiteral("reason")).toString(), kOnAir);
+        // A C-Tune move of the holder's transmit slice itself is refused;
+        // since the several-devices ownership rule (Task 73, merged from the
+        // trunk) the slice's owner answers first: only A changes its slice.
         const int txSlice = core.model->txSliceArbiter()->txBoundSliceId();
+        const double centreBefore =
+            core.model->streamCentreHz(core.model->sliceById(txSlice)->streamIndex());
         r = core.invoke(appB, "requestStreamCentre",
                         {int64("sliceId", txSlice), f64("centreHz", 14150000.0)});
-        QCOMPARE(r.value(QStringLiteral("reason")).toString(), kOnAir);
+        QVERIFY(!r.value(QStringLiteral("accepted")).toBool(true));
+        QCOMPARE(r.value(QStringLiteral("reason")).toString(),
+                 QStringLiteral("That slice belongs to Grant's iPhone. It can be changed only there."));
+        QCOMPARE(core.model->streamCentreHz(core.model->sliceById(txSlice)->streamIndex()),
+                 centreBefore);
 
         // Unkeyed: none of them is refused by this rule.
         mox->setMox(false, keyerFor(a));

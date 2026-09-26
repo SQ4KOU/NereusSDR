@@ -80,6 +80,12 @@
 //                controls are also disabled, with "Connect to the Core to
 //                change these.", while a remote window does not have the
 //                Core's settings (setStationSettingsAvailable).
+//   2026-09-25 : R-R3-49 (parity Task 3) by J.J. Boyd (KG4VCF), with
+//                AI-assisted implementation via Anthropic Claude Code. Mic
+//                Gain and the radio microphone groups follow the transmit
+//                settings gate (setTransmitSettingsPermittedAt, version 3)
+//                and change the Core's values off the air; the mic source
+//                keeps the transmit permission.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; no Thetis logic ported here.
@@ -183,6 +189,14 @@ public:
     // SetupDialog pushes the permission to every realized page; locally it
     // is always granted, so nothing changes there.
     void setTransmitPermitted(bool permitted, const QString& reason) override;
+
+    // R-R3-49 (parity Task 3): Mic Gain and the radio microphone groups
+    // follow the transmit settings gate for transmitSettingsVersion 3
+    // instead: the Core takes them while its radio is off the air. The mic
+    // source keeps setTransmitPermitted (the PC mic and VAX wait for remote
+    // transmit's microphone audio).
+    void setTransmitSettingsPermittedAt(int version, bool permitted,
+                                        const QString& reason) override;
 
     // R-R3-21 / R-R3-10: the held controls are the Core's settings too, so
     // they are also disabled while those are unavailable. That reason wins
@@ -303,6 +317,9 @@ private:
     QString m_heldTransmitReason;
     bool    m_heldStationAvailable = true;
     QString m_heldStationReason;
+    // R-R3-49 (parity Task 3): the transmit settings gate (version 3).
+    bool    m_heldSettingsPermitted = true;
+    QString m_heldSettingsReason;
     void applyHeldControlGate();
     QLabel*      m_micGainLabel{nullptr};
 

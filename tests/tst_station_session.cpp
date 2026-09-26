@@ -327,6 +327,9 @@ private slots:
     void receiverLoadIsOmittedForMinorTenPeer();
     void clientKeepsReceiverLoadOnlyWhenNegotiated_data();
     void clientKeepsReceiverLoadOnlyWhenNegotiated();
+    void radioStatusIsOmittedForMinorTenPeer();
+    void clientKeepsRadioStatusOnlyWhenNegotiated_data();
+    void clientKeepsRadioStatusOnlyWhenNegotiated();
     void nnrLimitReachesMinorElevenPeerAndTryAgainClearsIt();
     void nnrLimitIsOmittedForMinorTenPeer();
     void minorTenWriteThatClearsTheLimitCarriesNoNnrLimit();
@@ -363,9 +366,9 @@ private slots:
     void aRemovedStationSettingReachesTheClientAsAbsenceNotAnEmptyString();
     void schemaSkewIsCaughtByNameComparison();
     void receiveOnlyStationBlocksRemoteBandRecall();
-    void receiveOnlyStationRefusesTransmitPropertyWrites();
-    void receiveOnlyStationRefusesTransmitDspOptionsSettingsWrites();
-    void receiveOnlyStationRefusesTransmitDspOptionsSettingsRemoves();
+    void receiveOnlyStationRefusesTransmitKeyingWrites();
+    void receiveOnlyStationTakesTransmitDspOptionsSettingsWrites();
+    void receiveOnlyStationTakesTransmitDspOptionsSettingsRemoves();
     void acceptedReceiveDspOptionsWriteAppliesToMatchingSlices();
     void receiveOnlyPolicySurvivesRadioTeardown();
     void nr3ModelChoiceLoadsOnceOnTheCoreAndMirrors();
@@ -408,6 +411,7 @@ private slots:
     void receiveOnlyCoreRefusesTransmitHardwareKeys();
     void ioBoardProbeIsAskedOfTheCore();
     void windowBandAntennaEditKeepsTheCoresNewerBands();
+    void windowTxBandAntennaEditKeepsTheCoresNewerBands();
     void windowShowsTheCoresIoBoard();
     void windowForgetsTheIoBoardOfACoreThatDoesNotOfferIt();
     void windowOcMatrixFollowsTheCore();
@@ -763,7 +767,7 @@ void TstStationSession::hostTelemetryReachesVersionTwoPeer()
     auto model = makeStationRadioModel(0);
     StationServer server(model.get(), settings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     server.setTelemetryEnabled(true);
-    QCOMPARE(server.buildCapabilities().stationTelemetryVersion, 3);
+    QCOMPARE(server.buildCapabilities().stationTelemetryVersion, 4);
     RadioModel remote(RadioModel::Role::Remote);
     SettingsProxy proxy;
     StationClient client(&remote, &proxy);
@@ -901,7 +905,7 @@ void TstStationSession::receiverLoadReachesVersionThreePeer()
     auto model = makeStationRadioModel(0);
     StationServer server(model.get(), settings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     server.setTelemetryEnabled(true);
-    QCOMPARE(server.buildCapabilities().stationTelemetryVersion, 3);
+    QCOMPARE(server.buildCapabilities().stationTelemetryVersion, 4);
     RadioModel remote(RadioModel::Role::Remote);
     SettingsProxy proxy;
     StationClient client(&remote, &proxy);
@@ -1045,6 +1049,108 @@ void TstStationSession::clientKeepsReceiverLoadOnlyWhenNegotiated()
     QCOMPARE(received.receivers.has_value(), kept);
     // The host section follows its own negotiation, untouched by this one.
     QCOMPARE(received.host.isEmpty(), version < 2);
+}
+
+// R-R3-32 (remote-window parity Task 6): a minor-10 GUI receives no PA
+// readings or link quality in the radio section.
+void TstStationSession::radioStatusIsOmittedForMinorTenPeer()
+{
+    QTemporaryDir settingsDir;
+    AppSettings settings(settingsDir.filePath(QStringLiteral("radio-status-old.settings")));
+    auto model = makeStationRadioModel(0);
+    StationServer server(model.get(), settings, m_securityDir.path());
+    server.setTelemetryEnabled(true);
+    auto* station = new LoopbackTransport(QStringLiteral("minor10-radio-station"), this);
+    auto* peer = new LoopbackTransport(QStringLiteral("minor10-radio-client"), this);
+    station->linkTo(peer);
+    server.acceptTransport(station);
+    peer->sendText(SessionMessages::encode(SessionMessages::hello(
+        kSessionProtocolMajor, kReceiverLoadSessionProtocolMinor - 1, 6,
+        QStringLiteral("minor-10-client"))));
+    peer->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
+    QTRY_VERIFY(server.telemetryAvailable());
+    peer->clearReceived();
+
+    StationTelemetrySnapshot snapshot;
+    snapshot.sequence = 3;
+    snapshot.sampledElapsedMs = 2000;
+    snapshot.radio.connected = true;
+    snapshot.radio.rxMbps = 12.0;
+    snapshot.radio.paVolts = 13.8;
+    snapshot.radio.paTemperatureCelsius = 40.0;
+    snapshot.radio.packetLossPercent = 1.0;
+    snapshot.radio.udpPacketsSeen = 10;
+    QVERIFY(server.sendTelemetry(snapshot, server.sessionEpoch()));
+    QByteArray wire;
+    QTRY_VERIFY([&] {
+        for (const QByteArray& message : peer->received()) {
+            if (QJsonDocument::fromJson(message).object().value(QStringLiteral("type"))
+                    == QStringLiteral("station.metrics.v1")) {
+                wire = message;
+                return true;
+            }
+        }
+        return false;
+    }());
+    const QByteArray golden =
+        R"({"payload":{"audio":{"active":false,"contextGeneration":0},)"
+        R"("radio":{"connected":true,"rxMbps":12},"sampledElapsedMs":2000,"sequence":3},)"
+        R"("type":"station.metrics.v1"})";
+    QCOMPARE(wire, golden);
+}
+
+// The GUI accepts the radio's PA readings and link quality only from a Core
+// that negotiated both minor 11 and telemetry version 4.
+void TstStationSession::clientKeepsRadioStatusOnlyWhenNegotiated_data()
+{
+    QTest::addColumn<int>("minor");
+    QTest::addColumn<int>("version");
+    QTest::addColumn<bool>("kept");
+    QTest::newRow("minor 11, version 4")
+        << int(kReceiverLoadSessionProtocolMinor) << 4 << true;
+    QTest::newRow("minor 11, version 3")
+        << int(kReceiverLoadSessionProtocolMinor) << 3 << false;
+    QTest::newRow("minor 10, version 4")
+        << int(kReceiverLoadSessionProtocolMinor - 1) << 4 << false;
+}
+
+void TstStationSession::clientKeepsRadioStatusOnlyWhenNegotiated()
+{
+    QFETCH(int, minor);
+    QFETCH(int, version);
+    QFETCH(bool, kept);
+    RadioModel remote(RadioModel::Role::Remote);
+    SettingsProxy proxy;
+    StationClient client(&remote, &proxy);
+    QSignalSpy samples(&client, &StationClient::telemetryReceived);
+    auto* station = new LoopbackTransport(QStringLiteral("raw-radio-station"), this);
+    auto* peer = new LoopbackTransport(QStringLiteral("raw-radio-client"), this);
+    station->linkTo(peer);
+    client.startSession(peer, QStringLiteral("test-token"));
+    const auto send = [&](const SessionMessage& message) {
+        station->sendText(SessionMessages::encode(message));
+    };
+    send(SessionMessages::hello(kSessionProtocolMajor, static_cast<quint16>(minor), 6,
+                                QStringLiteral("station")));
+    send(SessionMessages::authResult(true, {}, false));
+    StationCapabilities caps;
+    caps.stationTelemetryVersion = version;
+    send(SessionMessages::capabilities(caps.toUpdates()));
+    send(SessionMessages::snapshotComplete());
+    QTRY_VERIFY(client.telemetryAvailable());
+    SessionMessage sample;
+    sample.kind = SessionMessageKind::StationTelemetry;
+    sample.telemetry.sequence = 1;
+    sample.telemetry.radio.connected = true;
+    sample.telemetry.radio.rxMbps = 3.0;
+    sample.telemetry.radio.paVolts = 13.8;
+    sample.telemetry.radio.jitterMs = 0.5;
+    send(sample);
+    QTRY_COMPARE(samples.count(), 1);
+    const auto received = qvariant_cast<StationTelemetrySnapshot>(samples.first().at(0));
+    QCOMPARE(received.radio.paVolts.has_value(), kept);
+    QCOMPARE(received.radio.jitterMs.has_value(), kept);
+    QCOMPARE(received.radio.rxMbps, std::optional<double>(3.0));
 }
 
 // R-R3-40: a current GUI sees the Core's runtime NNR step-back and asks for
@@ -3355,13 +3461,16 @@ void TstStationSession::receiveOnlyStationBlocksRemoteBandRecall()
     settings.remove(QStringLiteral("TGXL_AutoTuneMemoryRecall"));
 }
 
-void TstStationSession::receiveOnlyStationRefusesTransmitPropertyWrites()
+void TstStationSession::receiveOnlyStationRefusesTransmitKeyingWrites()
 {
     // R-R3-25 applies at the authenticated StationServer boundary too.
-    // TransmitModel is mirrored bidirectionally (mox and tune from the Core
-    // only, iPhone app plan Task 35), but an R3
-    // receive-only server must reject those writes and return authoritative
-    // accepted-state results rather than adopting the client's optimistic state.
+    // TransmitModel is mirrored bidirectionally for later phases (mox and
+    // tune from the Core only, iPhone app plan Task 35), but an R3
+    // receive-only server must reject the keying writes (mox, tune) and
+    // return authoritative accepted-state results rather than adopting the
+    // client's optimistic state. R-R3-49 (parity Task 1): a transmit
+    // setting such as power is taken while the radio is off the air
+    // (transmitSettingsVersion 1; tst_transmit_settings_gate has the rest).
     QTemporaryDir settingsDir;
     QVERIFY(settingsDir.isValid());
     AppSettings stationSettings(
@@ -3405,10 +3514,10 @@ void TstStationSession::receiveOnlyStationRefusesTransmitPropertyWrites()
     // radio socket emitted RF in the uncorrected implementation.
     QVERIFY(!stationTx.isMox());
     QVERIFY(!stationTx.isTune());
-    QCOMPARE(stationTx.power(), settledPower);
+    QTRY_COMPARE(stationTx.power(), requestedPower);
 
     QTRY_VERIFY(clientEnd->receivedKinds().contains(QByteArrayLiteral("property.result")));
-    QTRY_COMPARE(clientTx.power(), settledPower);
+    QTRY_COMPARE(clientTx.power(), requestedPower);
     // iPhone app plan Task 35: mox and tune travel from the Core only
     // (MirrorPolicy Outbound), so the window never sends them: a device
     // keys with the transmit verbs. Only the power reached the Core.
@@ -4454,14 +4563,14 @@ void TstStationSession::olderAppIgnoresTheNotchesObjectGolden()
     removeLocalNotchKeys();
 }
 
-void TstStationSession::receiveOnlyStationRefusesTransmitDspOptionsSettingsWrites()
+void TstStationSession::receiveOnlyStationTakesTransmitDspOptionsSettingsWrites()
 {
     // R-R3-21. The DSP > Options TX combos write station transmit settings:
-    // DspOptions keys are Station-scoped (SettingsScope.cpp), so a remote
-    // window's write would otherwise land in the Core's store. A receive-only
-    // Core refuses them for the same reason it refuses direct TransmitModel
-    // writes, and the GUI learns it through the ordinary settings rejection.
-    // Receive DSP options are still the operator's to change.
+    // DspOptions keys are Station-scoped (SettingsScope.cpp). R-R3-49
+    // (parity Task 1): a receive-only Core takes them while its radio is
+    // off the air (transmitSettingsVersion 1) and refuses them while it is
+    // on the air (tst_transmit_settings_gate). Receive DSP options are the
+    // operator's to change as before.
     const QString txKey = QStringLiteral("DspOptionsBufferSizePhoneTx");
     const QString rxKey = QStringLiteral("DspOptionsBufferSizePhoneRx");
 
@@ -4494,27 +4603,22 @@ void TstStationSession::receiveOnlyStationRefusesTransmitDspOptionsSettingsWrite
     QSignalSpy rejected(&proxy, &SettingsProxy::valueRejected);
     QSignalSpy toast(&clientModel, &RadioModel::sliceAddRejected);
     proxy.setValue(txKey, QStringLiteral("2048"));
-    QTRY_COMPARE(rejected.count(), 1);
-    QCOMPARE(rejected.first().at(0).toString(), txKey);
-    QCOMPARE(rejected.first().at(1).toString(), QStringLiteral("1024"));
-    QCOMPARE(stationSettings.value(txKey).toString(), QStringLiteral("1024"));
-    QCOMPARE(proxy.value(txKey, QString()).toString(), QStringLiteral("1024"));
-    QCOMPARE(toast.count(), 1);
-    QCOMPARE(toast.first().at(0).toString(),
-             QStringLiteral("Transmit configuration is unavailable on this receive-only Core."));
+    QTRY_COMPARE(stationSettings.value(txKey).toString(), QStringLiteral("2048"));
+    QCOMPARE(proxy.value(txKey, QString()).toString(), QStringLiteral("2048"));
+    QCOMPARE(rejected.count(), 0);
+    QCOMPARE(toast.count(), 0);
 
     proxy.setValue(rxKey, QStringLiteral("2048"));
     QTRY_COMPARE(stationSettings.value(rxKey).toString(), QStringLiteral("2048"));
-    QCOMPARE(rejected.count(), 1);
-    QCOMPARE(stationSettings.value(txKey).toString(), QStringLiteral("1024"));
+    QCOMPARE(rejected.count(), 0);
 }
 
-void TstStationSession::receiveOnlyStationRefusesTransmitDspOptionsSettingsRemoves()
+void TstStationSession::receiveOnlyStationTakesTransmitDspOptionsSettingsRemoves()
 {
-    // R-R3-21. A remove resets a DSP > Options TX setting to its default,
-    // so a receive-only Core refuses it exactly as it refuses a write to
-    // the same key, and hands its own value back so the remote cache
-    // settles on it. Removing a receive DSP option is still allowed.
+    // R-R3-21. A remove resets a DSP > Options TX setting to its default.
+    // R-R3-49 (parity Task 1): a receive-only Core takes it as it takes a
+    // write to the same key, while the radio is off the air. Removing a
+    // receive DSP option is allowed as before.
     const QString txKey = QStringLiteral("DspOptionsBufferSizePhoneTx");
     const QString rxKey = QStringLiteral("DspOptionsBufferSizePhoneRx");
 
@@ -4548,20 +4652,15 @@ void TstStationSession::receiveOnlyStationRefusesTransmitDspOptionsSettingsRemov
     QSignalSpy toast(&clientModel, &RadioModel::sliceAddRejected);
     proxy.remove(txKey);
     QVERIFY(!proxy.contains(txKey));
-    QTRY_COMPARE(rejected.count(), 1);
-    QCOMPARE(rejected.first().at(0).toString(), txKey);
-    QCOMPARE(rejected.first().at(1).toString(), QStringLiteral("1024"));
-    QVERIFY(stationSettings.contains(txKey));
-    QCOMPARE(stationSettings.value(txKey).toString(), QStringLiteral("1024"));
-    QCOMPARE(proxy.value(txKey, QString()).toString(), QStringLiteral("1024"));
-    QCOMPARE(toast.count(), 1);
-    QCOMPARE(toast.first().at(0).toString(),
-             QStringLiteral("Transmit configuration is unavailable on this receive-only Core."));
+    QTRY_VERIFY(!stationSettings.contains(txKey));
+    QTest::qWait(50);
+    QCOMPARE(rejected.count(), 0);
+    QCOMPARE(toast.count(), 0);
+    QVERIFY(!proxy.contains(txKey));
 
     proxy.remove(rxKey);
     QTRY_VERIFY(!stationSettings.contains(rxKey));
-    QCOMPARE(rejected.count(), 1);
-    QCOMPARE(stationSettings.value(txKey).toString(), QStringLiteral("1024"));
+    QCOMPARE(rejected.count(), 0);
 }
 
 void TstStationSession::acceptedReceiveDspOptionsWriteAppliesToMatchingSlices()
@@ -4569,8 +4668,9 @@ void TstStationSession::acceptedReceiveDspOptionsWriteAppliesToMatchingSlices()
     // R-R3-21. A DSP > Options RX write or remove from a remote window takes
     // effect on the Core at once: the Core re-runs the mode-change apply for
     // each slice in the key's mode group instead of waiting for the next
-    // mode change. A refused TX key, an unrelated key and a local write to
-    // the Core's own store apply nothing.
+    // mode change. A TX key (R-R3-49, parity Task 1: taken off the air; its
+    // TX apply is tst_transmit_settings_gate's), an unrelated key and a
+    // local write to the Core's own store apply nothing to a receive slice.
     const QString phoneRx = QStringLiteral("DspOptionsBufferSizePhoneRx");
     const QString cwRx = QStringLiteral("DspOptionsFilterSizeCwRx");
     const QString phoneTx = QStringLiteral("DspOptionsBufferSizePhoneTx");
@@ -4617,10 +4717,11 @@ void TstStationSession::acceptedReceiveDspOptionsWriteAppliesToMatchingSlices()
     QTRY_COMPARE(applied.size(), 1);
     QCOMPARE(applied.first(), qMakePair(phoneSlice->sliceIndex(), DSPMode::USB));
 
-    // Refused TX write and an unrelated accepted key: nothing applied.
+    // A TX write and an unrelated accepted key: no receive slice applies.
     QSignalSpy rejected(&proxy, &SettingsProxy::valueRejected);
     proxy.setValue(phoneTx, QStringLiteral("2048"));
-    QTRY_COMPARE(rejected.count(), 1);
+    QTRY_COMPARE(stationSettings.value(phoneTx).toString(), QStringLiteral("2048"));
+    QCOMPARE(rejected.count(), 0);
     proxy.setValue(unrelated, QStringLiteral("True"));
     QTRY_COMPARE(stationSettings.value(unrelated).toString(), QStringLiteral("True"));
     QTest::qWait(200);
@@ -5610,7 +5711,9 @@ void TstStationSession::radioIdentityEntriesRoundTrip()
     // then stationIdentityVersion (iPhone app Task 12), then
     // deviceAdminVersion (iPhone app Task 13), then pairingVersion (iPhone
     // app Task 14), then stationCatalogVersion (iPhone app Task 19), then
-    // displayExtrasVersion (iPhone app Task 20).
+    // displayExtrasVersion (iPhone app Task 20), then
+    // transmitSettingsVersion (R-R3-49, parity Task 1), then
+    // bandSelectVersion (R-IOS-27, R-IOS-06).
     StationCapabilities sent = g21kCaps();
     sent.radioHardwareVersion = 1;
     sent.remotePgxlControlVersion = 1;
@@ -5623,9 +5726,11 @@ void TstStationSession::radioIdentityEntriesRoundTrip()
     sent.pairingVersion = 1;
     sent.stationCatalogVersion = 1;
     sent.displayExtrasVersion = 1;
+    sent.transmitSettingsVersion = 1;
+    sent.bandSelectVersion = 1;
     const QList<MirrorUpdate> updates = sent.toUpdates();
     const int model = updateIndexOf(updates, "hpsdrModel");
-    QCOMPARE(model, int(updates.size()) - 14);
+    QCOMPARE(model, int(updates.size()) - 16);
     QCOMPARE(updateIndexOf(updates, "radioProtocol"), model + 1);
     QCOMPARE(updateIndexOf(updates, "radioAddress"), model + 2);
     QCOMPARE(updateIndexOf(updates, "radioHardwareVersion"), model + 3);
@@ -5639,6 +5744,8 @@ void TstStationSession::radioIdentityEntriesRoundTrip()
     QCOMPARE(updateIndexOf(updates, "pairingVersion"), model + 11);
     QCOMPARE(updateIndexOf(updates, "stationCatalogVersion"), model + 12);
     QCOMPARE(updateIndexOf(updates, "displayExtrasVersion"), model + 13);
+    QCOMPARE(updateIndexOf(updates, "transmitSettingsVersion"), model + 14);
+    QCOMPARE(updateIndexOf(updates, "bandSelectVersion"), model + 15);
     const StationCapabilities received = StationCapabilities::fromUpdates(updates);
     QVERIFY(received.radioIdentityEntries);
     QCOMPARE(received.radioHardwareVersion, 1);
@@ -5652,6 +5759,8 @@ void TstStationSession::radioIdentityEntriesRoundTrip()
     QCOMPARE(received.pairingVersion, 1);
     QCOMPARE(received.stationCatalogVersion, 1);
     QCOMPARE(received.displayExtrasVersion, 1);
+    QCOMPARE(received.transmitSettingsVersion, 1);
+    QCOMPARE(received.bandSelectVersion, 1);
     QCOMPARE(received.hpsdrModel, HPSDRModel::ANAN_G2_1K);
     QCOMPARE(received.radioProtocol, 2);
     QCOMPARE(received.radioAddress, QStringLiteral("192.168.1.50"));
@@ -5745,10 +5854,11 @@ void TstStationSession::coreSendsRadioIdentityOnlyFromMinorEleven()
                              "accessoryDataVersion", "remoteTgxlControlVersion",
                              "stationIdentityVersion", "deviceAdminVersion",
                              "pairingVersion", "stationCatalogVersion",
-                             "displayExtrasVersion"}) {
+                             "displayExtrasVersion", "transmitSettingsVersion",
+                             "bandSelectVersion"}) {
         QCOMPARE(updateIndexOf(older, name), -1);
     }
-    // Byte for byte: the minor-11 descriptor without the fourteen (and the
+    // Byte for byte: the minor-11 descriptor without the sixteen (and the
     // display budget reason, which is not sent here) is the minor-10 one.
     QList<MirrorUpdate> stripped = current;
     for (const char* name : {"hpsdrModel", "radioProtocol", "radioAddress",
@@ -5757,7 +5867,8 @@ void TstStationSession::coreSendsRadioIdentityOnlyFromMinorEleven()
                              "accessoryDataVersion", "remoteTgxlControlVersion",
                              "stationIdentityVersion", "deviceAdminVersion",
                              "pairingVersion", "stationCatalogVersion",
-                             "displayExtrasVersion"}) {
+                             "displayExtrasVersion", "transmitSettingsVersion",
+                             "bandSelectVersion"}) {
         stripped.removeAt(updateIndexOf(stripped, name));
     }
     QCOMPARE(SessionMessages::encode(SessionMessages::capabilities(stripped)),
@@ -5982,7 +6093,7 @@ void TstStationSession::coreOffersTheAttenuatorOnlyFromMinorEleven()
     // step (2), and its I/O board and the per-band antenna verb (3, fix
     // wave) are behind it too; 4 with the filter policy verb (R-R3-46 /
     // R-R3-21).
-    QCOMPARE(StationCapabilities::fromUpdates(capabilitiesIn(current)).radioHardwareVersion, 4);
+    QCOMPARE(StationCapabilities::fromUpdates(capabilitiesIn(current)).radioHardwareVersion, 6);
     // Schema, object, the Core's change and the accepted write's echo.
     QVERIFY(aboutStepAtt(current) >= 3);
     QCOMPARE(currentResults.size(), 1);
@@ -6181,6 +6292,23 @@ void TstStationSession::windowAntennaEditsReachTheCoresController()
     QTRY_COMPARE(s.core->alexController().rxOnlyAnt(Band::Band20m), 3);
     window->setUseTxAntennaForRx(true);
     QTRY_VERIFY(s.core->alexController().useTxAntForRx());
+    // Group B fix wave (radioHardwareVersion 5): RX bypass on TX, the VFO
+    // flag's BYPS, reaches the Core's controller too, which clears Ext1
+    // and Ext2 out on TX as Thetis's chkRxOutOnTx does.
+    QVERIFY(s.client->remoteRxBypassOnTxAvailable());
+    QVERIFY(s.client->rxBypassOnTxUnavailableReason().isEmpty());
+    s.core->alexControllerMutable().setExt1OutOnTx(true);
+    QTRY_VERIFY(window->ext1OutOnTx());
+    window->setRxOutOnTx(true);
+    QTRY_VERIFY(s.core->alexController().rxOutOnTx());
+    QVERIFY(!s.core->alexController().ext1OutOnTx());
+    QTRY_VERIFY(!window->ext1OutOnTx());
+    QVERIFY(window->rxOutOnTx());
+    window->setRxOutOnTx(false);
+    QTRY_VERIFY(!s.core->alexController().rxOutOnTx());
+    // The Core's own change reaches the window.
+    s.core->alexControllerMutable().setRxOutOnTx(true);
+    QTRY_VERIFY(window->rxOutOnTx());
     QCOMPARE(refused.count(), 0);
 
     // The Core's transmit settings, changed on the Core, reach the window.
@@ -6188,6 +6316,18 @@ void TstStationSession::windowAntennaEditsReachTheCoresController()
     s.core->alexControllerMutable().setBlockTxAnt2(true);
     QTRY_COMPARE(window->txAnt(Band::Band20m), 3);
     QTRY_VERIFY(window->blockTxAnt2());
+    // Parity Task 12 (radioHardwareVersion 6): and the window's reach the
+    // Core's controller.
+    QVERIFY(s.client->remoteTransmitAntennasAvailable());
+    window->setTxAnt(Band::Band40m, 3);
+    QTRY_COMPARE(s.core->alexController().txAnt(Band::Band40m), 3);
+    window->setBlockTxAnt2(false);
+    QTRY_VERIFY(!s.core->alexController().blockTxAnt2());
+    window->setExt2OutOnTx(true);
+    QTRY_VERIFY(s.core->alexController().ext2OutOnTx());
+    QTRY_VERIFY(!window->rxOutOnTx());  // cleared by the Core, as Thetis does
+    window->setRxOutOverride(true);
+    QTRY_VERIFY(s.core->alexController().rxOutOverride());
     // And a receive change made on the Core.
     s.core->alexControllerMutable().setRxAnt(Band::Band80m, 3);
     QTRY_COMPARE(window->rxAnt(Band::Band80m), 3);
@@ -6201,7 +6341,7 @@ void TstStationSession::windowAntennaEditsWaitForACoreThatOffersThem()
     // R-R3-46 fix wave: from radioHardwareVersion 3 a band's edit is the
     // setAlexRxAntenna command, not a whole-list property write, and the
     // window's value follows the Core's answer.
-    for (const int version : {0, 1, 2, 3}) {
+    for (const int version : {0, 1, 2, 3, 4, 5, 6}) {
         RadioModel remote(RadioModel::Role::Remote);
         SettingsProxy proxy;
         StationClient client(&remote, &proxy);
@@ -6220,6 +6360,19 @@ void TstStationSession::windowAntennaEditsWaitForACoreThatOffersThem()
         station->sendText(SessionMessages::encode(SessionMessages::snapshotComplete()));
         QTRY_VERIFY(client.isHandshakeComplete());
         QCOMPARE(client.remoteHardwareConfigAvailable(), version >= 2);
+        // Group B fix wave: RX bypass on TX from radioHardwareVersion 5.
+        QCOMPARE(client.remoteRxBypassOnTxAvailable(), version >= 5);
+        QCOMPARE(client.rxBypassOnTxUnavailableReason().isEmpty(), version >= 5);
+        // Parity Task 12: the rest of the transmit antennas and relays from 6.
+        QCOMPARE(client.remoteTransmitAntennasAvailable(), version >= 6);
+        // Parity mini-round: and one band's TX antenna at a time
+        // (setAlexTxAntenna) from 6.
+        QCOMPARE(remote.alexAntennaFacade()->hasTxBandEditSender(), version >= 6);
+        const QString txAntennasReason = client.transmitAntennasUnavailableReason();
+        QCOMPARE(txAntennasReason.isEmpty(), version >= 6);
+        if (version >= 2 && version < 6) {
+            QVERIFY2(OperatorWording::isPlain(txAntennasReason), qPrintable(txAntennasReason));
+        }
         const QString reason = client.hardwareConfigUnavailableReason();
         QCOMPARE(reason.isEmpty(), version >= 2);
         if (version < 2) {
@@ -6456,13 +6609,14 @@ void TstStationSession::receiveOnlyCoreRefusesTransmitHardwareKeys()
         {hw(QStringLiteral("cal/txDisplayOffset")), QStringLiteral("7.5")},
         {hw(QStringLiteral("cal/paSens")), QStringLiteral("3.25")},
         {hw(QStringLiteral("cal/paOffset")), QStringLiteral("1.5")},
-        {hw(QStringLiteral("paCalibration/boardClass")), QStringLiteral("2")},
-        {hw(QStringLiteral("paCalibration/calPoint1")), QStringLiteral("123")},
+        // R-R3-49 (parity Task 6): the PA forward-power table
+        // (paCalibration/boardClass, calPoint1..10) and the PA profiles
+        // (pa/...) are taken off the air at transmitSettingsVersion 6
+        // (tst_remote_pa_pages); the Calibration tab's own copy stays refused.
         {hw(QStringLiteral("paCalibration/cal/paSens")), QStringLiteral("3.25")},
         {hw(QStringLiteral("hl2/pttHangMs")), QStringLiteral("30")},
         {hw(QStringLiteral("hl2/txLatencyMs")), QStringLiteral("40")},
         {hw(QStringLiteral("tx/UserDigOut")), QStringLiteral("15")},
-        {hw(QStringLiteral("pa/profile/active")), QStringLiteral("Custom")},
         {hw(QStringLiteral("powerByBand/40m")), QStringLiteral("100")},
         {hw(QStringLiteral("tunePowerByBand/40m")), QStringLiteral("100")},
         {hw(QStringLiteral("ocOutputs/hardware/oc/extPa/model")), QStringLiteral("2")},
@@ -6570,7 +6724,7 @@ void TstStationSession::windowBandAntennaEditKeepsTheCoresNewerBands()
     joinHardwareWindow(s, coreStore, this, m_securityDir.path());
     const auto cleanup = qScopeGuard([&s] { leaveHardwareSession(s); });
     if (QTest::currentTestFailed()) { return; }
-    QCOMPARE(s.client->capabilities().radioHardwareVersion, 4);
+    QCOMPARE(s.client->capabilities().radioHardwareVersion, 6);
     s.core->alexControllerMutable().setMacAddress(kHardwareMac);
     AlexAntennaFacade* window = s.window->alexAntennaFacade();
     QVERIFY(window->hasBandEditSender());
@@ -6606,6 +6760,61 @@ void TstStationSession::windowBandAntennaEditKeepsTheCoresNewerBands()
     QCOMPARE(window->rxAnt(Band::Band17m), 1);
 }
 
+void TstStationSession::windowTxBandAntennaEditKeepsTheCoresNewerBands()
+{
+    // Parity mini-round (radioHardwareVersion 6, setAlexTxAntenna). Task 12
+    // sent a window's TX antenna click as all 14 bands as the window last
+    // saw them, so a TX antenna the Core changed on another band in between
+    // (another window, the Core's own Setup) was put back. The window now
+    // sends only the band clicked, as setAlexRxAntenna does for receive.
+    AppSettings& coreStore = AppSettings::instance();
+    coreStore.clearHardwareValues(kHardwareMac);
+    const auto cleanStore = qScopeGuard([&coreStore] { coreStore.clearHardwareValues(kHardwareMac); });
+    HardwareSession s;
+    joinHardwareWindow(s, coreStore, this, m_securityDir.path());
+    const auto cleanup = qScopeGuard([&s] { leaveHardwareSession(s); });
+    if (QTest::currentTestFailed()) { return; }
+    QCOMPARE(s.client->capabilities().radioHardwareVersion, 6);
+    QVERIFY(s.client->remoteTransmitAntennasAvailable());
+    s.core->alexControllerMutable().setMacAddress(kHardwareMac);
+    AlexAntennaFacade* window = s.window->alexAntennaFacade();
+    QCOMPARE(window->txAnt(Band::Band20m), 1);
+
+    // The Core moves 20 m's TX antenna to Ant 3; before that reaches the
+    // window, the window's operator picks Ant 2 for 40 m.
+    QVERIFY(window->hasTxBandEditSender());
+    s.core->alexControllerMutable().setTxAnt(Band::Band20m, 3);
+    QCOMPARE(window->txAnt(Band::Band20m), 1);
+    window->setTxAnt(Band::Band40m, 2);
+    QTRY_COMPARE(s.core->alexController().txAnt(Band::Band40m), 2);
+    QTest::qWait(150);
+    QCOMPARE(s.core->alexController().txAnt(Band::Band20m), 3);
+    QTRY_COMPARE(window->txAnt(Band::Band20m), 3);
+    QTRY_COMPARE(window->txAnt(Band::Band40m), 2);
+
+    // A port blocked for transmit, and a value outside 1 to 3, are refused
+    // in plain words; the window's view re-reads the Core's value.
+    // (Block TX on Ant 2 moves 40 m back to Ant 1, as the local tab does.)
+    s.core->alexControllerMutable().setBlockTxAnt2(true);
+    QTRY_VERIFY(window->blockTxAnt2());
+    QTRY_COMPARE(window->txAnt(Band::Band40m), 1);
+    QSignalSpy resync(window, &AlexAntennaFacade::bandEditRefused);
+    QSignalSpy toast(s.window.get(), &RadioModel::sliceAddRejected);
+    window->setTxAnt(Band::Band17m, 2);
+    QTRY_COMPARE(resync.count(), 1);
+    QTRY_COMPARE(toast.count(), 1);
+    QCOMPARE(toast.last().at(0).toString(),
+             QStringLiteral("An antenna blocked for transmit cannot be a band's TX antenna."));
+    QCOMPARE(s.core->alexController().txAnt(Band::Band17m), 1);
+    QCOMPARE(window->txAnt(Band::Band17m), 1);
+    window->setTxAnt(Band::Band15m, 7);
+    QTRY_COMPARE(resync.count(), 2);
+    QTRY_COMPARE(toast.count(), 2);
+    QVERIFY(OperatorWording::isPlain(toast.last().at(0).toString()));
+    QCOMPARE(s.core->alexController().txAnt(Band::Band15m), 1);
+    QCOMPARE(s.core->alexController().txAnt(Band::Band20m), 3);
+}
+
 void TstStationSession::windowFilterPolicyReachesTheCore()
 {
     // R-R3-46 / R-R3-21 (radioHardwareVersion 4). The filter policy dialog
@@ -6619,7 +6828,7 @@ void TstStationSession::windowFilterPolicyReachesTheCore()
     joinHardwareWindow(s, coreStore, this, m_securityDir.path());
     const auto cleanup = qScopeGuard([&s] { leaveHardwareSession(s); });
     if (QTest::currentTestFailed()) { return; }
-    QCOMPARE(s.client->capabilities().radioHardwareVersion, 4);
+    QCOMPARE(s.client->capabilities().radioHardwareVersion, 6);
     QVERIFY(s.client->filterPolicyEditAvailable());
     QVERIFY(s.client->filterPolicyUnavailableReason().isEmpty());
     s.core->alexControllerMutable().setMacAddress(kHardwareMac);
@@ -6888,7 +7097,7 @@ void TstStationSession::windowShowsTheCoresIoBoard()
     joinHardwareWindow(s, settings, this, m_securityDir.path());
     const auto cleanup = qScopeGuard([&s] { leaveHardwareSession(s); });
     if (QTest::currentTestFailed()) { return; }
-    QCOMPARE(s.client->capabilities().radioHardwareVersion, 4);
+    QCOMPARE(s.client->capabilities().radioHardwareVersion, 6);
     const IoBoardHl2& windowBoard = s.window->ioBoard();
     QVERIFY(!windowBoard.isDetected());
 

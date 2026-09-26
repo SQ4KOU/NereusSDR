@@ -42,6 +42,9 @@
 //   2026-09-25 : Task 33 by J.J. Boyd (KG4VCF): test-only friendship for
 //                 the stop-transmit test. AI-assisted via Anthropic Claude
 //                 Code.
+//   2026-09-25 : Test-only friendship for the confirm-step test (several-
+//                 devices fix wave 2). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 /*  cmaster.cs
@@ -178,6 +181,9 @@ class TestDspControlReceive;
 class TestDspControlTransmit;
 // Task 33: the stop-transmit test opens real TX and RX channels on lanes.
 class TestStopTransmitNow;
+// Several-devices fix wave 2: the confirm-step test drives a Protocol 1
+// rate change, which needs an initialized engine with RX channels.
+class TstConfirmStep;
 #endif
 
 namespace NereusSDR {
@@ -1039,6 +1045,10 @@ private:
     friend class ::TestDspControlTransmit;
     // Task 33: same friendship for the stop-transmit test.
     friend class ::TestStopTransmitNow;
+    // Several-devices fix wave 2: same friendship for the confirm-step
+    // test's Protocol 1 rate change (the synchronous init would open the
+    // PureSignal feedback channel too, which the test does not need).
+    friend class ::TstConfirmStep;
 #endif
 };
 

@@ -294,10 +294,12 @@ namespace {
 // Source: network.h:448 (Atlas=0), clsHardwareSpecific.cs Model→Hardware map
 // Upstream tags preserved: //N1GP (from cited network.h:446) [v2.10.3.15]
 // ADC: single (clsHardwareSpecific.cs: no explicit SetRxADC for HPSDR model,
-//      defaults to 1). Metis/Atlas board is Protocol 1 only.
+//      defaults to 1). Metis/Atlas board is Protocol 1 hardware; the row's
+//      Protocol 2 rates follow Thetis's list all the same (plan Task 15).
 // No Alex port on bare Atlas kit; OC outputs via Penny board (not addressable
 //   the same way). Atlas max receivers = 7 (P1 hardware limit), though
-//   typically 3 in practice. maxSampleRate = 192k for P1 standard.
+//   typically 3 in practice. maxSampleRate spans both protocols (1536k);
+//   Protocol 1 tops out at 192k (sampleRatesFor).
 // Firmware floor: none. Thetis NetworkIO.cs has no Atlas firmware check.
 // NOTE: Changed from constexpr to const in Phase 3P-B Task 6 because
 // BoardCapabilities now contains QList<SaturnBpf1Edge> (p2SaturnBpf1Edges),
@@ -318,8 +320,15 @@ const BoardCapabilities kAtlas = {
     .maxSlices        = 3,   // Phase 3F: Atlas/Metis 3-slice cap (1-ADC, 3 DDCs, no PS support)
     .userDdcCount     = 3,   // Phase 3F Sub-Epic I: Metis user DDCs = DDC0-2 (design doc §2)
     .widebandAdcs     = 0,   // Phase 3F: P1 board — wideband mechanism differs; deferred to 3F-W
-    .sampleRates      = {48000, 96000, 192000, 0, 0, 0},
-    .maxSampleRate    = 192000,
+    // Every rate the board is offered on either protocol (plan Task 15, the
+    // operator's ruling of 2026-09-25: these rows follow Thetis on Protocol 2
+    // too). sampleRatesFor trims the row to the protocol in use: Protocol 1
+    // 48/96/192 kHz, Protocol 2 all six.
+    //   From Thetis setup.cs:847-850 [v2.10.3.15] (p1_rates / p2_rates)
+    //   bool include_extra_p1_rate = HardwareSpecific.Model == HPSDRModel.REDPITAYA; //DH1KLM
+    //   (not this board: the extra Protocol 1 rate is the RedPitaya's)
+    .sampleRates      = {48000, 96000, 192000, 384000, 768000, 1536000},
+    .maxSampleRate    = 1536000,
     .attenuator       = {0, 0, 0, false, 0x1F, 0x20, false},
     .preamp           = {false, false},
     .ocOutputCount    = 0,
@@ -374,8 +383,15 @@ const BoardCapabilities kHermes = {
     .maxSlices        = 4,   // Phase 3F: Hermes 4-slice cap (1-ADC, 4 DDCs; PS reclaims DDC0+1 on TX)
     .userDdcCount     = 4,   // Phase 3F Sub-Epic I: Hermes user DDCs = DDC0-3 (design doc §2)
     .widebandAdcs     = 0,   // Phase 3F: P1 board — wideband mechanism differs; deferred to 3F-W
-    .sampleRates      = {48000, 96000, 192000, 0, 0, 0},
-    .maxSampleRate    = 192000,
+    // Every rate the board is offered on either protocol (plan Task 15, the
+    // operator's ruling of 2026-09-25: these rows follow Thetis on Protocol 2
+    // too). sampleRatesFor trims the row to the protocol in use: Protocol 1
+    // 48/96/192 kHz, Protocol 2 all six.
+    //   From Thetis setup.cs:847-850 [v2.10.3.15] (p1_rates / p2_rates)
+    //   bool include_extra_p1_rate = HardwareSpecific.Model == HPSDRModel.REDPITAYA; //DH1KLM
+    //   (not this board: the extra Protocol 1 rate is the RedPitaya's)
+    .sampleRates      = {48000, 96000, 192000, 384000, 768000, 1536000},
+    .maxSampleRate    = 1536000,
     .attenuator       = {0, 31, 1, true, 0x1F, 0x20, false},
     .preamp           = {true, false},
     .ocOutputCount    = 7,
@@ -436,8 +452,15 @@ const BoardCapabilities kHermesII = {
     .maxSlices        = 2,   // Phase 3F: HermesII 2-slice cap (1-ADC, 2 DDCs)
     .userDdcCount     = 2,   // Phase 3F Sub-Epic I: HermesII user DDCs = DDC0-1 (design doc §2)
     .widebandAdcs     = 0,   // Phase 3F: P1 board — wideband mechanism differs; deferred to 3F-W
-    .sampleRates      = {48000, 96000, 192000, 0, 0, 0},
-    .maxSampleRate    = 192000,
+    // Every rate the board is offered on either protocol (plan Task 15, the
+    // operator's ruling of 2026-09-25: these rows follow Thetis on Protocol 2
+    // too). sampleRatesFor trims the row to the protocol in use: Protocol 1
+    // 48/96/192 kHz, Protocol 2 all six.
+    //   From Thetis setup.cs:847-850 [v2.10.3.15] (p1_rates / p2_rates)
+    //   bool include_extra_p1_rate = HardwareSpecific.Model == HPSDRModel.REDPITAYA; //DH1KLM
+    //   (not this board: the extra Protocol 1 rate is the RedPitaya's)
+    .sampleRates      = {48000, 96000, 192000, 384000, 768000, 1536000},
+    .maxSampleRate    = 1536000,
     .attenuator       = {0, 31, 1, true, 0x1F, 0x20, false},
     .preamp           = {true, false},
     .ocOutputCount    = 7,
@@ -898,8 +921,19 @@ const BoardCapabilities kHermesLite = {
     .maxSlices        = 5,
     .userDdcCount     = 2,
     .widebandAdcs     = 0,   // Phase 3F: P1 board — wideband mechanism differs; deferred to 3F-W
-    .sampleRates      = {48000, 96000, 192000, 384000, 0, 0},
-    .maxSampleRate    = 384000,
+    // Every rate the board is offered on either protocol (plan Task 15, the
+    // operator's ruling of 2026-09-25). sampleRatesFor trims the row to the
+    // protocol in use: Protocol 1 48/96/192/384 kHz, Protocol 2 all six.
+    // mi0bot is authoritative for the HL2 and gives it Thetis's Protocol 2
+    // list unchanged; its only HL2 case is the Protocol 1 384 kHz:
+    //   From mi0bot-Thetis setup.cs:847-854 [v2.10.3.13-beta2]
+    //   bool include_extra_p1_rate = HardwareSpecific.Model == HPSDRModel.REDPITAYA; //DH1KLM
+    //   // The HL supports 384K
+    //   if (HardwareSpecific.Model == HPSDRModel.HERMESLITE)
+    //       include_extra_p1_rate = true;
+    //   int[] p2_rates = { 48000, 96000, 192000, 384000, 768000, 1536000 };
+    .sampleRates      = {48000, 96000, 192000, 384000, 768000, 1536000},
+    .maxSampleRate    = 1536000,
     // HL2: signed user-facing range −28..+31 dB.  mi0bot widens to +32 at
     // console.cs:11043 [v2.10.3.13-beta2] (RadioModelChanged HL2 branch) but
     // that is an off-by-one upstream bug: wire encoding `31 - userDb`
@@ -1007,8 +1041,14 @@ const BoardCapabilities kHermesLiteRxOnly = {
     .maxSlices        = 5,
     .userDdcCount     = 2,
     .widebandAdcs     = 0,   // Phase 3F: P1 board — wideband mechanism differs; deferred to 3F-W
-    .sampleRates      = {48000, 96000, 192000, 384000, 0, 0},
-    .maxSampleRate    = 384000,
+    // The kit is an HL2 (it resolves to HPSDRModel::HERMESLITE on connect,
+    // defaultModelForBoard), so it has the HL2's rates on each protocol;
+    // see kHermesLite for the mi0bot cite (setup.cs:847-854
+    // [v2.10.3.13-beta2]; the Protocol 1 flag reads, verbatim,
+    //   bool include_extra_p1_rate = HardwareSpecific.Model == HPSDRModel.REDPITAYA; //DH1KLM
+    // before the HL2 case sets it).
+    .sampleRates      = {48000, 96000, 192000, 384000, 768000, 1536000},
+    .maxSampleRate    = 1536000,
     // HL2 RX-only inherits the standard HL2 signed −28..+31 dB ATT range.
     // See kHermesLite for the maintainer-approved deviation from mi0bot's
     // off-by-one upstream bug at console.cs:11043 (issue #175 follow-up).
