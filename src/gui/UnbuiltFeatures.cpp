@@ -224,6 +224,14 @@ const QList<Entry>& all()
         {F::FmTones, QStringLiteral("fm-tone"),
          QStringLiteral("CTCSS tone encode and tone squelch: the VFO flag's FM tone mode and "
                         "tone choices")},
+        // Plan C5 and C6 (parity Task 13): nothing reads these keys in any
+        // window; the HL2 wire always carries PTT hang 12 and TX latency 20.
+        // The Alex-1 high-pass switches C5 also named are applied since plan
+        // Task 14 and stay shown.
+        {F::AlexTxFilterOptions, QStringLiteral("alex-tx-filters"),
+         QStringLiteral("Setup > Hardware > Alex-1 Filters: the LPF band edges")},
+        {F::Hl2TxTiming, QStringLiteral("hl2-tx-timing"),
+         QStringLiteral("Setup > Hardware > HL2 Options: TX buffer latency, PTT hang")},
     };
     return entries;
 }

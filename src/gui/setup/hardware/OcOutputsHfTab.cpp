@@ -28,6 +28,11 @@
 //                 control are hidden until they are applied
 //                 (UnbuiltFeatures).
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-46 / R-R3-49 (remote-window parity Task 13): the TX
+//                 pins and the reset follow the transmit settings gate and
+//                 the radio being on the air; the pin actions follow the
+//                 gate alone. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 //
 //=================================================================
@@ -167,7 +172,9 @@ OcOutputsHfTab::OcOutputsHfTab(RadioModel* model, OcMatrix* ocMatrix,
         resetBtn->setToolTip(tr("Reset all OC matrix pin assignments and pin actions to Thetis defaults"));
         row->addWidget(resetBtn);
         connect(resetBtn, &QPushButton::clicked, this, &OcOutputsHfTab::onResetClicked);
-        m_transmitWidgets.append(resetBtn);
+        // R-R3-46 / R-R3-49 (parity Task 13): the reset clears the TX pins
+        // too, so it follows setTransmitPinsPermitted.
+        m_resetButton = resetBtn;
 
         outerLayout->addLayout(row);
     }
@@ -190,7 +197,7 @@ OcOutputsHfTab::OcOutputsHfTab(RadioModel* model, OcMatrix* ocMatrix,
         ));
         buildMatrixGrid(txGroup, /*tx=*/true);
         matrixRow->addWidget(txGroup, 1);
-        m_transmitWidgets.append(txGroup);
+        m_txGroup = txGroup;
 
         outerLayout->addLayout(matrixRow);
     }
@@ -255,7 +262,7 @@ OcOutputsHfTab::OcOutputsHfTab(RadioModel* model, OcMatrix* ocMatrix,
             }
 
             bottomRow->addWidget(actionGroup, 3);
-            m_transmitWidgets.append(actionGroup);
+            m_actionGroup = actionGroup;
         }
 
         // ── USB BCD output ───────────────────────────────────────────────────
@@ -656,6 +663,17 @@ void OcOutputsHfTab::setTransmitPermitted(bool permitted, const QString& reason)
     for (QWidget* w : std::as_const(m_transmitWidgets)) {
         HardwareTransmitGate::apply(w, permitted, reason);
     }
+}
+
+void OcOutputsHfTab::setTransmitPinsPermitted(bool permitted, const QString& reason)
+{
+    HardwareTransmitGate::apply(m_txGroup, permitted, reason);
+    HardwareTransmitGate::apply(m_resetButton, permitted, reason);
+}
+
+void OcOutputsHfTab::setPinActionsPermitted(bool permitted, const QString& reason)
+{
+    HardwareTransmitGate::apply(m_actionGroup, permitted, reason);
 }
 
 } // namespace NereusSDR

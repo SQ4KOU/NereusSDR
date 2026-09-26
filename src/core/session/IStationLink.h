@@ -117,6 +117,9 @@
 //                                    requestRfKitAddress
 //                                    (remoteRfKitControlVersion 4).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 13):
+//                                    transmitSettingsAvailable on the link.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QString>
@@ -370,6 +373,13 @@ public:
     /// on a Core without transmitSettingsVersion.
     static QString transmitSettingsUnavailableReason()
     { return QStringLiteral("This Core does not let this app change transmit settings. Updating the Core may help."); }
+    /// R-R3-49 (parity Task 13): the link is ready and the Core offers
+    /// transmitSettingsVersion at least `minVersion`. A page that holds
+    /// settings the Core takes on the air too (Hardware Config's OC pin
+    /// actions and transmit calibration) asks this directly, since the
+    /// dialog's version gates also close on the air. The default refuses,
+    /// for links that did not negotiate it.
+    virtual bool transmitSettingsAvailable(int /*minVersion*/ = 1) const { return false; }
     /// R-R3-49 (parity Task 2, transmitSettingsVersion 2): the TX applet's
     /// Tune Power slider. The Core sets the tune power for the band it
     /// transmits on and the tune drive source to the tune slider, as the

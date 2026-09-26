@@ -12,6 +12,12 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-25 - R-R3-46 / R-R3-49 (remote-window parity Task 13): the OC
+//                 transmit pins close on the air in both windows (Thetis
+//                 UpdateForHotSwitch); the pin actions and transmit
+//                 calibration follow transmitSettingsVersion 8, User Dig Out
+//                 the transmit settings gate. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -114,10 +120,19 @@ public:
     // The tab the page is showing (its QTabWidget text).
     QString currentTabText() const;
 
-    // R-R3-46: the transmit fields of each tab (TX antennas, relays,
-    // external PA, User Dig Out, the PA's current calibration) follow the
+    // R-R3-46: the transmit fields of each tab that still wait for remote
+    // transmit (the hidden OC extras and Alex TX filter options, the hidden
+    // HL2 TX timings, the HL2 I/O board's transmit fields) follow the
     // transmit permission with its reason; the rest of the page stays live.
     void setTransmitPermitted(bool permitted, const QString& reason) override;
+    // R-R3-49 (parity Task 1 / Task 13): User Dig Out writes the mirrored
+    // transmit.userDigOut, taken by the Core off the air.
+    void setTransmitSettingsPermitted(bool permitted, const QString& reason) override;
+    // R-R3-46 / R-R3-49 (parity Task 13): transmitSettingsVersion 8, the OC
+    // transmit pins, pin actions and transmit calibration. Any version's
+    // push re-reads the gates (applyTransmitHardwareGates).
+    void setTransmitSettingsPermittedAt(int version, bool permitted,
+                                        const QString& reason) override;
 
 signals:
     // Phase 3M-4 Task 11: pass-through for the IMD-warning-gated HPF Bypass
@@ -152,6 +167,11 @@ private:
     // disabled with the reason, shown above them.
     void applyRemoteAvailability();
     bool remoteEditsAvailable() const;
+    // R-R3-46 / R-R3-49 (parity Task 13): the OC Outputs TX pins and
+    // resets, the TX pin actions and the Calibration tab's transmit groups,
+    // from whether the window's Core takes them (transmitSettingsVersion 8;
+    // always in a local window) and whether the radio is on the air.
+    void applyTransmitHardwareGates();
 
     RadioModel*  m_model{nullptr};
     QTabWidget*  m_tabs{nullptr};

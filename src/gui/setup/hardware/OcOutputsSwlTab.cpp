@@ -19,6 +19,9 @@
 //   2026-09-23 - R-R3-46: TX pins and reset follow the transmit
 //                 permission. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //                 Code.
+//   2026-09-25 - R-R3-46 / R-R3-49 (remote-window parity Task 13): the TX
+//                 pins, pin actions and resets follow their own gates.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 //=================================================================
@@ -273,7 +276,7 @@ bool OcOutputsSwlTab::txPinCheckedForTest(int swlBandRow, int pin) const
            m_txPins[swlBandRow][pin]->isChecked();
 }
 
-void OcOutputsSwlTab::setTransmitPermitted(bool permitted, const QString& reason)
+void OcOutputsSwlTab::setTransmitPinsPermitted(bool permitted, const QString& reason)
 {
     HardwareTransmitGate::apply(m_txGroup, permitted, reason);
     HardwareTransmitGate::apply(m_resetButton, permitted, reason);

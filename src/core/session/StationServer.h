@@ -316,6 +316,9 @@
 //                                    remoteRfKitControlVersion 4 and
 //                                    accessoryDataVersion 2.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 / R-R3-46 (parity Task 13):
+//                                    transmitSettingsVersion 8 and
+//                                    isTransmitSettingKeyTakenOnAir.
 //   2026-09-26  J.J. Boyd / KG4VCF  Checkpoint carry: the uncapped message
 //                                    size's memory figure follows
 //                                    kMaxConcurrentPeers 24 (48 GiB).
@@ -842,7 +845,9 @@ public:
     // Task 3): also the radio microphone settings, the Core's TX profiles
     // (activeTxProfile, txProfilesJson), the txProfile verbs and
     // rade.resetVocoder. 7 (parity Task 7): also PureSignal arming and its
-    // settings, off the air.
+    // settings, off the air. 8 (parity Task 13): also Hardware Config's OC
+    // transmit pins off the air, and its OC pin actions, TX Display Cal and
+    // Volts/Amps Calibration on and off the air.
     int transmitSettingsVersion() const;
     // R-IOS-27, R-IOS-06: bandSelectVersion. 1 on a Core with a radio
     // model: it takes slice.selectBand from a peer at minor 11; 0 otherwise.
@@ -855,6 +860,11 @@ public:
     // DSP > Options TX keys, DspOptions<Setting><Mode>Tx). Every other
     // transmit-side key a receive-only Core refuses stays refused.
     static bool isTransmitSettingKeyAcceptedOffAir(const QString& key);
+    // R-R3-46 / R-R3-49 (parity Task 13): the keys on that list the Core
+    // also takes while its radio is on the air, because Thetis changes them
+    // while transmitting (the OC pin actions, TX Display Cal and Volts/Amps
+    // Calibration). The on-air refusal skips them.
+    static bool isTransmitSettingKeyTakenOnAir(const QString& key);
     // R-R3-47: remoteRfKitControlVersion. 4 on a Core that owns its
     // accessories (the `rfkit` object with its interface, antenna, tuner
     // and band-follow rows, the configureRfKit, disconnectRfKit and

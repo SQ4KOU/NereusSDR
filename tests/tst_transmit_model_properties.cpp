@@ -378,15 +378,17 @@ void TstTransmitModelProperties::task4PropertiesAreOnTheLinkUnderTheirGetters()
 void TstTransmitModelProperties::coreOffersTransmitSettingsVersion4()
 {
     // 5 since parity Task 5 (Power, DEXP/VOX, Two-Tone IMD), 6 since parity
-    // Task 6 (Setup > PA), 7 since parity Task 7 (PureSignal arming); 4 is
-    // within it.
+    // Task 6 (Setup > PA), 7 since parity Task 7 (PureSignal arming), 8
+    // since parity Task 13 (Hardware Config's OC transmit pins and transmit
+    // calibration); 4 is within it.
     Session s(m_securityDir.path(), this);
     QVERIFY(s.connect());
-    QCOMPARE(s.server->buildCapabilities().transmitSettingsVersion, 7);
-    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 7);
+    QCOMPARE(s.server->buildCapabilities().transmitSettingsVersion, 8);
+    QCOMPARE(s.client->capabilities().transmitSettingsVersion, 8);
     QVERIFY(s.client->transmitSettingsAvailable(4));
     QVERIFY(s.client->transmitSettingsAvailable(7));
-    QVERIFY(!s.client->transmitSettingsAvailable(8));
+    QVERIFY(s.client->transmitSettingsAvailable(8));
+    QVERIFY(!s.client->transmitSettingsAvailable(9));
 }
 
 // R-R3-49 (parity Task 5): the version 5 properties, after txAlcDecay in

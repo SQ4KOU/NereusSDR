@@ -30,6 +30,10 @@
 //   2026-09-24 - R-R3-49: the VHF sub-tab is hidden until transverters are
 //                 built (UnbuiltFeatures).
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-46 / R-R3-49 (remote-window parity Task 13): User
+//                 Dig Out follows the transmit settings gate; the TX pins,
+//                 pin actions and resets follow their own gates.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -213,12 +217,32 @@ void OcOutputsTab::restoreSettings(const QMap<QString, QVariant>& /*settings*/)
 
 void OcOutputsTab::setTransmitPermitted(bool permitted, const QString& reason)
 {
-    HardwareTransmitGate::apply(m_userDigOutGroup, permitted, reason);
+    // R-R3-46 / R-R3-49 (parity Task 13): only the HF tab's hidden extras
+    // (hot switching, external PA) still wait for remote transmit.
     if (m_hfTab) {
         m_hfTab->setTransmitPermitted(permitted, reason);
     }
+}
+
+void OcOutputsTab::setUserDigOutPermitted(bool permitted, const QString& reason)
+{
+    HardwareTransmitGate::apply(m_userDigOutGroup, permitted, reason);
+}
+
+void OcOutputsTab::setTransmitPinsPermitted(bool permitted, const QString& reason)
+{
+    if (m_hfTab) {
+        m_hfTab->setTransmitPinsPermitted(permitted, reason);
+    }
     if (m_swlTab) {
-        m_swlTab->setTransmitPermitted(permitted, reason);
+        m_swlTab->setTransmitPinsPermitted(permitted, reason);
+    }
+}
+
+void OcOutputsTab::setPinActionsPermitted(bool permitted, const QString& reason)
+{
+    if (m_hfTab) {
+        m_hfTab->setPinActionsPermitted(permitted, reason);
     }
 }
 

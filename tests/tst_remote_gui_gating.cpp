@@ -2677,17 +2677,31 @@ private slots:
             }
             return nullptr;
         };
-        for (const QString& title : {QStringLiteral("TX OC Pins per Band"),
-                                     QStringLiteral("TX Pin Action mapping"),
-                                     QStringLiteral("External PA control"),
-                                     QStringLiteral("User Dig Out"),
-                                     QStringLiteral("TX Display Cal"),
-                                     QStringLiteral("Volts/Amps Calibration")}) {
+        for (const QString& title : {QStringLiteral("External PA control")}) {
             QGroupBox* box = group(title);
             QVERIFY2(box != nullptr, qPrintable(title));
             QVERIFY2(!box->isEnabled(), qPrintable(title));
             QCOMPARE(box->toolTip(), transmitReason);
         }
+        // Parity Task 13: the OC transmit pins, pin actions and transmit
+        // calibration follow whether the Core takes them
+        // (transmitSettingsVersion 8), not the transmit permission; this
+        // window has no Core that does (tst_remote_oc_cal covers one that
+        // does). User Dig Out follows the transmit settings gate.
+        const QString olderSettings = IStationLink::transmitSettingsUnavailableReason();
+        const QStringList settingsGroups{QStringLiteral("TX OC Pins per Band"),
+                                         QStringLiteral("TX Pin Action mapping"),
+                                         QStringLiteral("TX Display Cal"),
+                                         QStringLiteral("Volts/Amps Calibration")};
+        for (const QString& title : settingsGroups) {
+            QGroupBox* box = group(title);
+            QVERIFY2(box != nullptr, qPrintable(title));
+            QVERIFY2(!box->isEnabled(), qPrintable(title));
+            QCOMPARE(box->toolTip(), olderSettings);
+        }
+        dialog.setTransmitSettingsPermitted(false, olderSettings);
+        QVERIFY(!group(QStringLiteral("User Dig Out"))->isEnabled());
+        QCOMPARE(group(QStringLiteral("User Dig Out"))->toolTip(), olderSettings);
         for (const QString& title : {QStringLiteral("RX OC Pins per Band"),
                                      QStringLiteral("HPSDR Freq Cal Diagnostic"),
                                      QStringLiteral("USB BCD output")}) {
@@ -2724,8 +2738,13 @@ private slots:
         for (const QString& text : transmitChecks) {
             QVERIFY2(check(text)->isEnabled(), qPrintable(text));
         }
+        // It does not open what the Core's transmit settings gate holds.
+        for (const QString& title : settingsGroups) {
+            QVERIFY2(!group(title)->isEnabled(), qPrintable(title));
+        }
+        dialog.setTransmitSettingsPermitted(true, QString());
         QVERIFY(group(QStringLiteral("User Dig Out"))->isEnabled());
-        QVERIFY(group(QStringLiteral("TX Display Cal"))->toolTip().isEmpty());
+        QVERIFY(group(QStringLiteral("User Dig Out"))->toolTip() != olderSettings);
 
         // Local direct mode: everything live, no notice.
         AppSettings::instance().setRemoteBackend(nullptr);

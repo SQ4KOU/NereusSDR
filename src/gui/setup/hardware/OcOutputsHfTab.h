@@ -23,6 +23,9 @@
 //                MOX state.
 //   2026-09-23 - R-R3-46: transmit permission. J.J. Boyd (KG4VCF), AI-
 //                 assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-46 / R-R3-49 (remote-window parity Task 13): the TX
+//                 pins, pin actions and resets follow their own gates.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 // === Verbatim Thetis Console/setup.designer.cs header (lines 1-50) ===
@@ -149,10 +152,19 @@ public:
     // inject a byte without spinning a full RadioModel + band change.
     void setCurrentOcByte(quint8 byte);
 
-    // R-R3-46: the TX pin matrix, the TX pin actions, the external PA
-    // group and the reset (which clears TX pins too) follow the transmit
-    // permission with its reason. Always permitted locally.
+    // R-R3-46: the external PA group and "Allow hot switching" (both hidden
+    // until built) follow the transmit permission with its reason. Always
+    // permitted locally.
     void setTransmitPermitted(bool permitted, const QString& reason);
+    // R-R3-46 / R-R3-49 (parity Task 13): the TX pin matrix and Reset OC
+    // defaults (which clears the TX pins too), closed while the radio is on
+    // the air in either window, and in a remote window while its Core does
+    // not take them (HardwarePage decides).
+    void setTransmitPinsPermitted(bool permitted, const QString& reason);
+    // R-R3-46 / R-R3-49 (parity Task 13): the TX pin actions, which Thetis
+    // changes while transmitting; closed only in a remote window whose Core
+    // does not take them.
+    void setPinActionsPermitted(bool permitted, const QString& reason);
 
 private slots:
     void onMatrixChanged();
@@ -172,6 +184,9 @@ private:
     // Master toggles (AppSettings keys under hardware/<mac>/oc/)
     // Issue #174: m_n2adrFilter removed — see OcOutputsHfTab.cpp:113.
     QList<QWidget*> m_transmitWidgets;
+    QWidget*     m_txGroup{nullptr};
+    QWidget*     m_actionGroup{nullptr};
+    QPushButton* m_resetButton{nullptr};
     QCheckBox* m_pennyExtCtrl{nullptr};
     QCheckBox* m_allowHotSwitching{nullptr};
 

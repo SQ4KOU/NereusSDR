@@ -323,6 +323,12 @@
 //                local click refused on the air the remote window's
 //                reason. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-25 - R-R3-46 / R-R3-49 (parity Task 13): a window's OC matrix
+//                and N2ADR changes wait on the Core while its radio is on
+//                the air and the N2ADR switch applies its whole preset;
+//                TX Display Cal and Volts/Amps Calibration reload alone,
+//                on the air too. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 //   2026-09-25 - Receiver and transmit gaps plan, Task 16: receive only
 //                stops every key (Thetis console.RXOnly,
 //                console.cs:15312-15334 [v2.10.3.15]); a Core setting the
@@ -21359,6 +21365,13 @@ void RadioModel::scheduleRemoteHardwareApply(const QString& key)
         reload = QStringLiteral("oc");
     } else if (rest == QLatin1String("hl2IoBoard/n2adrFilter")) {
         reload = QStringLiteral("n2adr");
+    } else if (rest.compare(QLatin1String("cal/txDisplayOffset"), Qt::CaseInsensitive) == 0
+               || rest.compare(QLatin1String("cal/paSens"), Qt::CaseInsensitive) == 0
+               || rest.compare(QLatin1String("cal/paOffset"), Qt::CaseInsensitive) == 0) {
+        // R-R3-46 / R-R3-49 (parity Task 13): TX Display Cal and Volts/Amps
+        // Calibration, taken on the air as Thetis takes them, apply at once
+        // without the PA forward-power table's wait for receive.
+        reload = QStringLiteral("txCal");
     } else if (rest.startsWith(QLatin1String("cal/"))
                || rest.startsWith(QLatin1String("paCalibration/"))) {
         // R-R3-46 (parity Task 6): the PA forward-power table
@@ -21412,8 +21425,16 @@ void RadioModel::flushRemoteHardwareApply()
     // inside the coalescing window; as with DSP > Options TX (group A's
     // I2), they wait while the on-air rule holds and reload once it clears
     // (releaseHeldOnAirWork).
+    // R-R3-46 / R-R3-49 (parity Task 13): so do the OC matrix and the
+    // N2ADR switch. The codec sends the matrix's TX pins while the radio
+    // transmits, and Thetis never switches them under MOX unless OC hot
+    // switching is allowed, which NereusSDR does not build:
+    // From Thetis setup.cs:21944 [v2.10.3.15] UpdateForHotSwitch.
+    // A pin action taken on the air (Thetis stores it without a MOX check)
+    // therefore reaches the radio once it is back on receive.
     if (stationOnAirRefusal(nullptr)) {
-        for (const QString& held : {QStringLiteral("pa"), QStringLiteral("cal")}) {
+        for (const QString& held : {QStringLiteral("pa"), QStringLiteral("cal"),
+                                    QStringLiteral("oc"), QStringLiteral("n2adr")}) {
             if (reloads.remove(held)) {
                 m_pendingHardwareReloads.insert(held);
             }
@@ -21448,16 +21469,13 @@ void RadioModel::flushRemoteHardwareApply()
                                                 QStringLiteral("True"))
                                  .toString() == QStringLiteral("True");
         m_ocMatrix.setMacAddress(mac);
-        // R-R3-46 / R-R3-21: the preset also sets every transmit OC pin.
-        // A receive-only Core refuses a window's transmit pins
-        // (StationServer), so from a window it applies only the receive
-        // half: the operator's receive filtering follows the switch, the
-        // transmit pins stay as they were.
-        if (receiveOnlyStationPolicy()) {
-            applyN2adrPresetReceiveOnly(m_ocMatrix, n2adrOn);
-        } else {
-            applyN2adrPreset(m_ocMatrix, n2adrOn);
-        }
+        // R-R3-46 / R-R3-49 (parity Task 13): the preset also sets every
+        // transmit OC pin. A receive-only Core now takes a window's
+        // transmit pins while the radio is off the air (StationServer,
+        // transmitSettingsVersion 8), and this reload waits for receive
+        // (above), so the whole preset applies, as the local switch
+        // applies it (Hl2IoBoardTab::onN2adrToggled).
+        applyN2adrPreset(m_ocMatrix, n2adrOn);
         m_ocMatrix.save();
         observe(QStringLiteral("n2adr"));
     }
@@ -21475,6 +21493,13 @@ void RadioModel::flushRemoteHardwareApply()
                 PaCalProfile::defaults(paCalBoardClassFor(m_hardwareProfile.model)));
         }
         observe(QStringLiteral("cal"));
+    }
+    // R-R3-46 / R-R3-49 (parity Task 13): TX Display Cal and Volts/Amps
+    // Calibration alone, on the air too.
+    if (reloads.contains(QStringLiteral("txCal"))) {
+        m_calController.setMacAddress(mac);
+        m_calController.loadTransmitCalibration();
+        observe(QStringLiteral("txCal"));
     }
     if (reloads.contains(QStringLiteral("hl2"))) {
         m_hl2Options.setMacAddress(mac);

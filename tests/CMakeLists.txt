@@ -8187,6 +8187,16 @@ nereus_add_test(tst_remote_puresignal_arming
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
 target_compile_definitions(tst_remote_puresignal_arming PRIVATE NEREUS_BUILD_TESTS)
+# R-R3-46 / R-R3-49 (remote-window parity Task 13): Hardware Config's OC
+# transmit pins (off the air), OC pin actions and transmit calibration (on
+# and off the air, as in Thetis) and User Dig Out from a remote window, the
+# OC byte the Core's P1 codec composes, and the hidden Alex-1 TX filter
+# options and HL2 TX timings. Loopback only, a test TxChannel, no RF, no
+# audio device; nothing keys.
+nereus_add_test(tst_remote_oc_cal
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_remote_oc_cal PRIVATE NEREUS_BUILD_TESTS)
 
 # --------------------------------------------------------------------------
 # Aggregate "all_tests" target  (2026-05-26 KG4VCF dev-loop fix, from PR #291)

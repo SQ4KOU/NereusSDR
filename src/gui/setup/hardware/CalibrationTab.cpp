@@ -32,6 +32,10 @@
 //   2026-09-24 - R-R3-49 / R-R3-21: the frequency calibration Start button
 //                 is hidden until built (freq-cal). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-46 / R-R3-49 (remote-window parity Task 13): TX
+//                 Display Cal and Volts/Amps Calibration follow the transmit
+//                 settings gate instead of the transmit permission.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // --- From setup.cs ---
@@ -606,9 +610,9 @@ void CalibrationTab::populate(const RadioInfo& info, const BoardCapabilities& /*
     // PaWattMeterPage (Setup IA reshape Phase 3A, 2026-05-02).
 }
 
-// -- setTransmitPermitted (R-R3-46) -------------------------------------------
+// -- setTransmitCalibrationPermitted (R-R3-46, R-R3-49) ------------------------
 
-void CalibrationTab::setTransmitPermitted(bool permitted, const QString& reason)
+void CalibrationTab::setTransmitCalibrationPermitted(bool permitted, const QString& reason)
 {
     HardwareTransmitGate::apply(m_txDisplayGroup, permitted, reason);
     HardwareTransmitGate::apply(m_vaCalGroup, permitted, reason);

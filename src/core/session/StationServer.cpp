@@ -362,6 +362,13 @@
 //                                    two-way, with no on-air rule, as in
 //                                    Thetis.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 / R-R3-46 (parity Task 13):
+//                                    transmitSettingsVersion 8: the OC
+//                                    transmit pins off the air; the OC pin
+//                                    actions, TX Display Cal and Volts/Amps
+//                                    Calibration on and off the air, as in
+//                                    Thetis.
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-25  J.J. Boyd / KG4VCF  Receiver and transmit gaps plan,
 //                                    Task 16: a window's Receive Only change
 //                                    reaches the Core's gate. AI-assisted
@@ -897,7 +904,8 @@ bool isPowerPageTransmitKey(const QString& key)
 // page). Taken while the radio is off the air and applied at once
 // (RadioModel::scheduleRemoteHardwareApply). The Calibration tab's own
 // copies of its transmit fields (paCalibration/cal/...) are Hardware
-// Config's, not the PA pages', and stay refused.
+// Config's, not the PA pages': parity Task 13 takes them
+// (isTransmitHardwareKeyTakenOnAir).
 bool isPaPageTransmitKey(const QString& rawKey)
 {
     const QStringList parts = rawKey.toLower().split(QLatin1Char('/'));
@@ -908,6 +916,59 @@ bool isPaPageTransmitKey(const QString& rawKey)
         return true;
     }
     return parts[2] == QLatin1String("pacalibration") && parts[3] != QLatin1String("cal");
+}
+
+// R-R3-46 / R-R3-49 (parity Task 13): Setup > Hardware Config's OC
+// Outputs transmit pins (the HF and SWL TX matrices and their resets:
+// hardware/<mac>/oc/tx/...). Taken while the radio is off the air and
+// applied to the Core's OC matrix (the codec reads it for every C&C frame)
+// once the radio is back on receive. Thetis greys these boxes while MOX is
+// on unless OC hot switching is allowed, which NereusSDR does not build:
+// From Thetis setup.cs:21944 [v2.10.3.15] UpdateForHotSwitch
+// (enable = !tx || (tx && chkAllowHotSwitching.Checked)), called on every
+// MOX edge from console.cs:14920 [v2.10.3.15] updateOCTXPins.
+bool isOcTransmitPinKey(const QStringList& parts)
+{
+    return parts.size() >= 4 && parts[0] == QLatin1String("hardware")
+        && parts[2] == QLatin1String("oc") && parts[3] == QLatin1String("tx");
+}
+
+// R-R3-46 / R-R3-49 (parity Task 13): the transmit settings of Hardware
+// Config that Thetis changes while transmitting, so a Core takes them on
+// and off the air:
+//   hardware/<mac>/oc/actions/...     OC Outputs' TX pin actions. Thetis's
+//     comboPin<N>TXAction handlers only store the action (Penny
+//     setTXPinAction), with no MOX check.
+//     From Thetis setup.cs:21773 [v2.10.3.15] comboPin1TXActionHF_SelectedIndexChanged
+//   hardware/<mac>/cal/{txDisplayOffset,paSens,paOffset}, and the
+//   Calibration tab's own copies under paCalibration/cal/ (with its
+//   paDefaultRestored and logVoltsAmps): TX Display Cal and Volts/Amps
+//   Calibration. Thetis applies each at once, keyed or not.
+//     From Thetis setup.cs:14364 [v2.10.3.15] udTXDisplayCalOffset_ValueChanged
+//     From Thetis setup.cs:24353 [v2.10.3.15] udAmpVoff_ValueChanged
+//     From Thetis setup.cs:27627 [v2.10.3.15] chkLogVoltsAmps_CheckedChanged
+bool isTransmitHardwareKeyTakenOnAir(const QStringList& parts)
+{
+    if (parts.size() < 4 || parts[0] != QLatin1String("hardware")) {
+        return false;
+    }
+    const QString& area = parts[2];
+    const QString& item = parts[3];
+    if (area == QLatin1String("oc")) {
+        return item == QLatin1String("actions");
+    }
+    if (area == QLatin1String("cal")) {
+        return item == QLatin1String("txdisplayoffset") || item == QLatin1String("pasens")
+            || item == QLatin1String("paoffset");
+    }
+    if (area == QLatin1String("pacalibration") && item == QLatin1String("cal")
+        && parts.size() > 4) {
+        const QString& field = parts[4];
+        return field == QLatin1String("txdisplayoffset") || field == QLatin1String("pasens")
+            || field == QLatin1String("paoffset") || field == QLatin1String("padefaultrestored")
+            || field == QLatin1String("logvoltsamps");
+    }
+    return false;
 }
 
 // R-R3-49 (parity Task 5): the plain refusal for a Power page key's value
@@ -5428,8 +5489,21 @@ bool StationServer::isTransmitSettingKeyAcceptedOffAir(const QString& key)
     // and External TX Inhibit keys.
     // R-R3-46 / R-R3-49 (parity Task 6): and Setup > PA's PA profiles and
     // PA forward-power table.
-    return isTransmitDspOptionsKey(key) || isPowerPageTransmitKey(key)
-        || isPaPageTransmitKey(key);
+    // R-R3-46 / R-R3-49 (parity Task 13): and Hardware Config's OC transmit
+    // pins, OC pin actions, TX Display Cal and Volts/Amps Calibration.
+    if (isTransmitDspOptionsKey(key) || isPowerPageTransmitKey(key)
+        || isPaPageTransmitKey(key)) {
+        return true;
+    }
+    const QStringList parts = key.toLower().split(QLatin1Char('/'));
+    return isOcTransmitPinKey(parts) || isTransmitHardwareKeyTakenOnAir(parts);
+}
+
+bool StationServer::isTransmitSettingKeyTakenOnAir(const QString& key)
+{
+    // R-R3-46 / R-R3-49 (parity Task 13): the keys Thetis changes while
+    // transmitting (isTransmitHardwareKeyTakenOnAir).
+    return isTransmitHardwareKeyTakenOnAir(key.toLower().split(QLatin1Char('/')));
 }
 
 bool StationServer::transmitSettingsOffered(SessionTransport* transport) const
@@ -5457,6 +5531,11 @@ QString StationServer::transmitSettingOnAirRefusal(const QString& key) const
     QString reason;
     if (m_radioModel.isNull() || !m_radioModel->receiveOnlyStationPolicy()
         || !isTransmitSettingKeyAcceptedOffAir(key)) {
+        return reason;
+    }
+    // R-R3-46 / R-R3-49 (parity Task 13): Thetis has no on-air rule for
+    // these; the Core follows it.
+    if (isTransmitSettingKeyTakenOnAir(key)) {
         return reason;
     }
     m_radioModel->stationOnAirRefusal(&reason);
@@ -5504,7 +5583,15 @@ int StationServer::transmitSettingsVersion() const
     // pureSignalSettings write applied to the Core's PureSignal at once
     // instead of only kept, refused while the radio is on the air;
     // ps3.twoTone stays with remote transmit (parity Task 7).
-    return m_radioModel.isNull() ? 0 : 7;
+    // 8: Setup > Hardware Config's OC Outputs transmit pins (the HF and SWL
+    // TX matrices, Reset OC defaults, Reset SWL OC pins), taken off the air
+    // and refused on it; the OC pin actions, TX Display Cal and Volts/Amps
+    // Calibration, taken on and off the air as Thetis changes them while
+    // transmitting. Each applies to the Core's OC matrix or calibration at
+    // once (the OC matrix after the radio is back on receive), and the
+    // N2ADR switch on the Core's HL2 applies its whole preset off the air
+    // (parity Task 13).
+    return m_radioModel.isNull() ? 0 : 8;
 }
 
 bool StationServer::pureSignalArmingOffered(SessionTransport* transport) const

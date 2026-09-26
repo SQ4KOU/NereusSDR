@@ -23,6 +23,9 @@
 //   2026-09-25 - R-R3-46 (remote-window parity Task 6): load() announces a
 //                 PA forward-power table that changed. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-46 / R-R3-49 (remote-window parity Task 13):
+//                 loadTransmitCalibration. J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 // --- From setup.cs ---
@@ -379,6 +382,22 @@ void CalibrationController::load()
         emit paCalProfileChanged();
         emit changed();
     }
+}
+
+void CalibrationController::loadTransmitCalibration()
+{
+    if (m_mac.isEmpty()) { return; }
+
+    // The same keys and defaults load() reads, through the setters, so a
+    // change announces itself (changed()).
+    auto& s = AppSettings::instance();
+    const QString base = QStringLiteral("hardware/%1/cal/").arg(m_mac);
+    setTxDisplayOffsetDb(s.value(base + QStringLiteral("txDisplayOffset"),
+                                 QStringLiteral("0.0")).toDouble());
+    setPaCurrentSensitivity(s.value(base + QStringLiteral("paSens"),
+                                    QStringLiteral("1.0")).toDouble());
+    setPaCurrentOffset(s.value(base + QStringLiteral("paOffset"),
+                               QStringLiteral("0.0")).toDouble());
 }
 
 void CalibrationController::save()

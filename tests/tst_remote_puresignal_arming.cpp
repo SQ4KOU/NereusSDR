@@ -254,7 +254,8 @@ void TstRemotePureSignalArming::coreOffersArmingAtVersionSeven()
 {
     Session s(m_securityDir.path(), this);
     QVERIFY(s.connect());
-    QCOMPARE(s.server->buildCapabilities().transmitSettingsVersion, 7);
+    // 8 since parity Task 13; 7 is within it.
+    QCOMPARE(s.server->buildCapabilities().transmitSettingsVersion, 8);
     QVERIFY(s.client->transmitSettingsAvailable(7));
     QVERIFY(s.client->pureSignalArmingOffered());
     PureSignalSessionFacade* facade = s.window.pureSignalFacade();
