@@ -499,6 +499,16 @@
 //                                    spectrumGrantVersion 2 (a subscribe's
 //                                    decimation reaches the pan's engine).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 27 (R-IOS-08): acceptPairingMailbox(),
+//               a pairing through the remote access service's mailbox (pair.*
+//               only, no hellos, no address). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: Task 27 fix wave (I5, the operator's ruling): a code burned
+//               through the mailbox counts toward the pause of pairing
+//               through the service, not the window's ceiling, and a paused
+//               mailbox pairing is refused before it takes a code. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1288,6 +1298,10 @@ struct StationServer::PairingAttempt {
     /// paired with or burned (dropPeer burns it unless `finished`).
     bool codeTaken = false;
     bool finished = false;
+    /// Through the remote access service's mailbox, or direct: what a
+    /// burned code counts toward (PairingWindow, the ruling on Task 27
+    /// item I5).
+    PairingWindow::Route route = PairingWindow::Route::Direct;
 };
 
 StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
@@ -2628,6 +2642,16 @@ void StationServer::onNewWebSocketConnection()
 
 void StationServer::acceptTransport(SessionTransport* transport)
 {
+    adoptTransport(transport, /*mailbox=*/false);
+}
+
+void StationServer::acceptPairingMailbox(SessionTransport* transport)
+{
+    adoptTransport(transport, /*mailbox=*/true);
+}
+
+void StationServer::adoptTransport(SessionTransport* transport, bool mailbox)
+{
     if (transport == nullptr) {
         return;
     }
@@ -2715,6 +2739,11 @@ void StationServer::acceptTransport(SessionTransport* transport)
         peer.authDeadline = deadline;
     }
 
+    // iPhone app plan Task 27: a mailbox carries no hello either way; the
+    // pairing starts at pair.start.
+    peer.mailboxPairing = mailbox;
+    peer.helloReceived = mailbox;
+
     m_peers.insert(transport, peer);
 
     connect(transport, &SessionTransport::textReceived, this,
@@ -2730,6 +2759,11 @@ void StationServer::acceptTransport(SessionTransport* transport)
 
     if (!m_heartbeatTimer->isActive() && m_heartbeatIntervalMs > 0) {
         m_heartbeatTimer->start();
+    }
+
+    if (mailbox) {
+        qCDebug(lcStation) << "Pairing mailbox attached";
+        return;
     }
 
     // The daemon greets first, so a client can refuse on a major version
@@ -2844,7 +2878,7 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
     }
     if (pairing && pairing->codeTaken && !pairing->finished) {
         pairing->finished = true;
-        m_pairingWindow->pairingFailed();
+        m_pairingWindow->pairingFailed(pairing->route);
     }
     // iPhone app Task 74 (ruling 7.5): a session's open question ends with
     // it (a newer connection of the same device asks afresh).
@@ -3031,6 +3065,16 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
     SessionMessage message;
     if (!SessionMessages::decode(wire, &message)) {
         dropPeer(transport, QStringLiteral("The Core could not read a message from this app."), true,
+                 /*retryable=*/false, QString::fromLatin1(SessionEndCode::kProtocolError));
+        return;
+    }
+
+    // iPhone app plan Task 27: a mailbox carries pairing messages only.
+    if (it->mailboxPairing && message.kind != SessionMessageKind::PairStart
+        && message.kind != SessionMessageKind::PairSpake
+        && message.kind != SessionMessageKind::PairConfirm
+        && message.kind != SessionMessageKind::PairFail) {
+        dropPeer(transport, QStringLiteral("This app started pairing out of order."), true,
                  /*retryable=*/false, QString::fromLatin1(SessionEndCode::kProtocolError));
         return;
     }
@@ -3919,7 +3963,7 @@ void StationServer::finishPairingHash(quint64 serial, const QByteArray& stored)
             sendPairFail(transport,
                          QStringLiteral("The pairing code changed. Enter the code the Core "
                                         "shows now."),
-                         m_pairingWindow->retryAfterMs());
+                         m_pairingWindow->retryAfterMs(attempt->route));
         } else if (serial == attempt->codeSerial) {
             // Its own code's hash came back empty.
             attempt->awaitingHash = false;
@@ -3975,6 +4019,8 @@ void StationServer::handlePairStart(SessionTransport* transport, const SessionMe
     }
     auto attempt = std::make_shared<PairingAttempt>();
     it->pairing = attempt;
+    attempt->route = it->mailboxPairing ? PairingWindow::Route::Service
+                                        : PairingWindow::Route::Direct;
     const QString address = transport->peerAddress();
 
     if (pairingVersion() < 1) {
@@ -4061,18 +4107,30 @@ void StationServer::handlePairStart(SessionTransport* transport, const SessionMe
 
     // ── The code ──
     attempt->codeMode = true;
+    // The ruling on Task 27 item I5: after wrong codes in a row through the
+    // remote access service, pairing through it pauses for a while. Refused
+    // before any code is taken, so it burns nothing; a direct connection is
+    // not paused.
+    if (m_pairingWindow->isPaused(attempt->route)) {
+        sendPairFail(transport,
+                     QStringLiteral("The Core has paused pairing from outside its network "
+                                    "after several wrong codes. Try again later, or pair on "
+                                    "the Core's own network."),
+                     m_pairingWindow->retryAfterMs(attempt->route));
+        return;
+    }
     if (m_pairingWindow->codeInUse()) {
         sendPairFail(transport,
                      QStringLiteral("Another device is pairing with this Core right now. Try "
                                     "again shortly."),
-                     m_pairingWindow->retryAfterMs());
+                     m_pairingWindow->retryAfterMs(attempt->route));
         return;
     }
     if (m_pairingWindow->currentCode().isEmpty()) {
         sendPairFail(transport,
                      QStringLiteral("The Core is waiting before it shows a new pairing code. "
                                     "Try again when the new code appears."),
-                     m_pairingWindow->retryAfterMs());
+                     m_pairingWindow->retryAfterMs(attempt->route));
         return;
     }
     attempt->codeSerial = m_pairingWindow->codeSerial();
@@ -4110,7 +4168,7 @@ void StationServer::handlePairSpake(SessionTransport* transport, const SessionMe
             sendPairFail(transport,
                          QStringLiteral("The pairing code changed. Enter the code the Core "
                                         "shows now."),
-                         m_pairingWindow->retryAfterMs());
+                         m_pairingWindow->retryAfterMs(attempt->route));
             return;
         }
         QByteArray stored = m_pairingStored;
@@ -4119,7 +4177,7 @@ void StationServer::handlePairSpake(SessionTransport* transport, const SessionMe
             sendPairFail(transport,
                          QStringLiteral("Another device is pairing with this Core right now. "
                                         "Try again shortly."),
-                         m_pairingWindow->retryAfterMs());
+                         m_pairingWindow->retryAfterMs(attempt->route));
             return;
         }
         attempt->codeTaken = true;
@@ -4128,11 +4186,11 @@ void StationServer::handlePairSpake(SessionTransport* transport, const SessionMe
         SpakeExchange::wipe(stored);
         if (step2.isEmpty()) {
             attempt->finished = true;
-            m_pairingWindow->pairingFailed();
+            m_pairingWindow->pairingFailed(attempt->route);
             sendPairFail(transport,
                          QStringLiteral("The pairing code was not accepted. A new code will "
                                         "appear on the Core."),
-                         m_pairingWindow->retryAfterMs());
+                         m_pairingWindow->retryAfterMs(attempt->route));
             return;
         }
         attempt->expecting = 3;
@@ -4143,11 +4201,11 @@ void StationServer::handlePairSpake(SessionTransport* transport, const SessionMe
     // Step 3: the device shows it held the same code (step 4).
     if (!ok || !attempt->exchange->stationStep4(data)) {
         attempt->finished = true;
-        m_pairingWindow->pairingFailed();
+        m_pairingWindow->pairingFailed(attempt->route);
         sendPairFail(transport,
                      QStringLiteral("The pairing code was not right. A new code will appear on "
                                     "the Core."),
-                     m_pairingWindow->retryAfterMs());
+                     m_pairingWindow->retryAfterMs(attempt->route));
         return;
     }
     attempt->expecting = 4;   // its box
@@ -4168,8 +4226,8 @@ void StationServer::handlePairConfirm(SessionTransport* transport, const Session
     }
     const auto refuse = [this, transport, &attempt](const QString& reason) {
         attempt->finished = true;
-        m_pairingWindow->pairingFailed();
-        sendPairFail(transport, reason, m_pairingWindow->retryAfterMs());
+        m_pairingWindow->pairingFailed(attempt->route);
+        sendPairFail(transport, reason, m_pairingWindow->retryAfterMs(attempt->route));
     };
     // Part C fix wave (R1-M1): a window that closed (the operator's close,
     // its ten minutes, or a close and reopen) since this exchange took the
@@ -4242,12 +4300,12 @@ void StationServer::handlePairFailFromDevice(SessionTransport* transport)
     // told when the next one appears.
     if (attempt->codeTaken) {
         attempt->finished = true;
-        m_pairingWindow->pairingFailed();
+        m_pairingWindow->pairingFailed(attempt->route);
     }
     sendPairFail(transport,
                  QStringLiteral("The pairing code was not right. A new code will appear on "
                                 "the Core."),
-                 m_pairingWindow->retryAfterMs());
+                 m_pairingWindow->retryAfterMs(attempt->route));
 }
 
 void StationServer::promoteToSession(SessionTransport* transport)

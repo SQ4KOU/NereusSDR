@@ -85,6 +85,21 @@ audio_device =
 # do not trust, set deny.
 pairing_lan_click = allow
 
+# The remote access service this Core registers with, so a paired device can
+# reach it from anywhere and a new device can pair with its code from
+# anywhere: an ordered list, separated by spaces or commas, your own server
+# first and the default behind it. Each is a host name, host:port, or a
+# wss:// address. The service only introduces the two ends and never carries
+# the radio's traffic itself. An empty value uses no service at all; then
+# devices reach this Core only on its own network or at an address you type.
+rendezvous_servers = rv.nereussdr.com
+
+# Whether this Core may use the service's relay when the two ends cannot
+# reach each other directly: allow (default) or deny. With deny every
+# connection is direct or nothing. Any other value is treated as allow, with
+# a warning.
+relay = allow
+
 # Whether paired devices may transmit through this Core: allow (default) or
 # deny. With allow, a paired device whose app can transmit may key once it
 # has connected and while no other device has the transmitter; the Core's

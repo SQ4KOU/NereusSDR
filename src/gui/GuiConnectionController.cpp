@@ -174,6 +174,22 @@ void GuiConnectionController::attachWindow(MainWindow* window)
     if (m_remoteControls) {
         m_windowConnections.append(connect(m_remoteControls, &RemoteConnectionController::changed,
                                             this, update));
+        // iPhone app plan Task 27 fix wave: a reconnect in this window reads
+        // the store's current last good addresses (rememberAuthenticatedRadio()
+        // adds to them after each connect), not the list the window was made
+        // with.
+        const QPointer<GuiConnectionController> self(this);
+        m_remoteControls->setCachedAddressSource(
+            [self, generation]() -> std::optional<QStringList> {
+                if (!self || generation != self->m_sessions.generation() || !self->m_storeLoaded) {
+                    return std::nullopt;
+                }
+                const auto target = self->m_store.target(self->m_sessions.selection().savedId);
+                if (!target || !selectionMatchesSaved(self->m_sessions.selection(), *target)) {
+                    return std::nullopt;
+                }
+                return target->connection.cachedAddresses;
+            });
     }
     if (auto* client = window->findChild<StationClient*>()) {
         const auto remember = [this, generation] {
@@ -619,6 +635,16 @@ void GuiConnectionController::rememberAuthenticatedRadio()
     if (!client || !client->isHandshakeComplete()) { return; }
     auto target = m_store.target(m_sessions.selection().savedId);
     if (!target || !selectionMatchesSaved(m_sessions.selection(), *target)) { return; }
+    // iPhone app plan Task 27 (R-IOS-16): where this computer reached the
+    // Core, tried first next time.
+    if (client->connectedUrl().isValid()) {
+        QString error;
+        if (!m_store.rememberAddress(target->id, client->connectedUrl().toString(), &error)) {
+            m_selector->setNotice(error);
+        }
+        target = m_store.target(target->id);
+        if (!target) { return; }
+    }
     const auto& caps = client->capabilities();
     if (!caps.radioConnected || caps.macAddress.isEmpty()) { return; }
     if (target->lastRadioName == caps.stationName && target->lastRadioMac == caps.macAddress) { return; }

@@ -104,6 +104,17 @@ SavedCoreTarget CoreTargetEditor::target() const
         result.lastRadioName.clear();
         result.lastRadioMac.clear();
     }
+    // iPhone app plan Task 27 fix wave (I1): the Core's last good addresses
+    // were reached with the old address, token, pin and identity. With any
+    // of those changed they may name another computer, and the next connect
+    // would try them first with the new token, so they are forgotten.
+    const RemoteStationOptions& before = m_initial.connection;
+    const RemoteStationOptions& after = result.connection;
+    if (after.url != before.url || after.token != before.token
+        || after.fingerprint != before.fingerprint || after.allowUnpinned != before.allowUnpinned
+        || after.identityFingerprint != before.identityFingerprint) {
+        result.connection.cachedAddresses.clear();
+    }
     return result;
 }
 

@@ -234,6 +234,12 @@
 //                slice.selectBand for a named slice to a Core at
 //                bandSelectVersion 1. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 27 (R-IOS-16): the Core's last good
+//               addresses are tried first (setCachedAddresses()), and each
+//               connection attempt is recorded path by path
+//               (StationConnectionAttempt) for the connection messages. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -697,6 +703,17 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     m_reconnectTimer->setSingleShot(true);
     connect(m_reconnectTimer, &QTimer::timeout, this, &StationClient::onReconnectTimeout);
 
+    // iPhone app plan Task 27: an address that is not the last to try gets
+    // kCachedAddressOpenTimeoutMs to open before the next one is tried.
+    m_openTimer = new QTimer(this);
+    m_openTimer->setSingleShot(true);
+    m_openTimer->setInterval(kCachedAddressOpenTimeoutMs);
+    connect(m_openTimer, &QTimer::timeout, this, [this] {
+        if (!m_transportOpened) {
+            advanceDialPlan(StationConnectionAttempt::Outcome::TimedOut);
+        }
+    });
+
     // ── The settings proxy's OUTBOUND half ───────────────────────────────
     //
     // SettingsProxy.h's own contract says it emits these "for a live
@@ -788,7 +805,68 @@ void StationClient::connectToStation(const QUrl& url, const QString& token,
     // onReconnectTimeout(), deliberately does not reset this at all.
     m_reconnectAttempts = 0;
 
-    dialStation(url, token, expectedFingerprint, allowUnpinned, stationIdentityFingerprint);
+    // iPhone app plan Task 27: the Core's last good addresses first, then
+    // the one asked for.
+    // Fix wave I1: never for a Core saved with "connect without a
+    // certificate fingerprint", whose token must go only where the operator
+    // pointed it.
+    m_dialPlan.clear();
+    if (!allowUnpinned) {
+        for (const QUrl& cached : std::as_const(m_cachedAddresses)) {
+            if (cached.isValid() && cached != url && !m_dialPlan.contains(cached)) {
+                m_dialPlan.append(cached);
+            }
+        }
+    }
+    m_dialPlan.append(url);
+    m_planToken = token;
+    startDialPlan();
+    dialStation(m_dialPlan.first(), token, expectedFingerprint, allowUnpinned,
+                stationIdentityFingerprint);
+}
+
+void StationClient::setCachedAddresses(const QList<QUrl>& addresses)
+{
+    m_cachedAddresses = addresses;
+}
+
+void StationClient::setCachedAddressOpenTimeoutMs(int ms)
+{
+    m_openTimer->setInterval(std::max(1, ms));
+}
+
+void StationClient::startDialPlan()
+{
+    m_dialIndex = 0;
+    m_attempt = StationConnectionAttempt{};
+    m_attempt.started = QDateTime::currentDateTimeUtc();
+    m_connectedUrl.clear();
+    emit connectionAttemptChanged();
+}
+
+void StationClient::recordOutcome(StationConnectionAttempt::Outcome outcome)
+{
+    if (m_attempt.tries.isEmpty()
+        || m_attempt.tries.last().outcome != StationConnectionAttempt::Outcome::Trying) {
+        return;
+    }
+    m_attempt.tries.last().outcome = outcome;
+    emit connectionAttemptChanged();
+}
+
+bool StationClient::advanceDialPlan(StationConnectionAttempt::Outcome outcome)
+{
+    m_openTimer->stop();
+    if (m_dialPlan.isEmpty() || m_dialIndex + 1 >= m_dialPlan.size()
+        || m_lastUrl != m_dialPlan.at(m_dialIndex)) {
+        return false;
+    }
+    recordOutcome(outcome);
+    ++m_dialIndex;
+    qCInfo(lcStationClient) << "Trying the Core's next address";
+    dialStation(m_dialPlan.at(m_dialIndex), m_planToken, m_lastFingerprint, m_lastAllowUnpinned,
+                m_stationIdentity);
+    return true;
 }
 
 void StationClient::dialStation(const QUrl& url, const QString& token,
@@ -939,6 +1017,9 @@ void StationClient::dialStation(const QUrl& url, const QString& token,
         if (transportGuard.isNull() || transportGuard.data() != m_transport) {
             return;
         }
+        // iPhone app plan Task 27: this address answered.
+        m_transportOpened = true;
+        m_openTimer->stop();
         ensurePinSatisfied();
     });
 
@@ -955,6 +1036,14 @@ void StationClient::dialStation(const QUrl& url, const QString& token,
                 }
                 qCWarning(lcStationClient)
                     << "Station connection error:" << socket->errorString();
+                // iPhone app plan Task 27: an address that never opened
+                // gives way to the next one this attempt has.
+                if (!m_transportOpened
+                    && advanceDialPlan(StationConnectionAttempt::Outcome::NoAnswer)) {
+                    return;
+                }
+                recordOutcome(m_transportOpened ? StationConnectionAttempt::Outcome::Failed
+                                                : StationConnectionAttempt::Outcome::NoAnswer);
                 // A refused or unreachable station emits this and may never
                 // emit disconnected at all, so waiting for a close would
                 // leave the caller with no signal whatsoever. endSession()
@@ -967,6 +1056,24 @@ void StationClient::dialStation(const QUrl& url, const QString& token,
             });
 
     attachTransport(transport, token);
+
+    // iPhone app plan Task 27: this address, in the attempt's record (after
+    // the attach, which ends the address before it silently); one that is
+    // not the last to try gets a short time to open.
+    m_transportOpened = false;
+    StationConnectionAttempt::Try attempted;
+    attempted.path = StationConnectionAttempt::pathFor(url);
+    const QString host = url.host().contains(QLatin1Char(':'))
+        ? QLatin1Char('[') + url.host() + QLatin1Char(']')
+        : url.host();
+    attempted.address = url.port() > 0 ? QStringLiteral("%1:%2").arg(host).arg(url.port()) : host;
+    m_attempt.tries.append(attempted);
+    emit connectionAttemptChanged();
+    if (m_dialIndex + 1 < m_dialPlan.size() && m_dialPlan.at(m_dialIndex) == url) {
+        m_openTimer->start();
+    } else {
+        m_openTimer->stop();
+    }
     socket->open(url);
 }
 
@@ -1029,6 +1136,16 @@ bool StationClient::ensurePinSatisfied()
     const QString pinned = m_lastFingerprint.toUpper();
     const QString actual = formatFingerprint(peerDigest);
     if (actual != pinned) {
+        // Fix wave I1: another computer at an address that is not the last
+        // this attempt has (a cached address given to something else since)
+        // gives way to the next, before the token was sent, as
+        // refuseStation() does for identityChanged. The redial retires this
+        // transport, so its later socket signals are ignored.
+        if (advanceDialPlan(StationConnectionAttempt::Outcome::NotThisCore)) {
+            qCInfo(lcStationClient)
+                << "Another certificate answered at a saved address of the Core";
+            return false;
+        }
         m_lastError = QStringLiteral("Station certificate fingerprint does not match the saved pin.");
         qCWarning(lcStationClient) << m_lastError;
         // See the ordering note above: endSession, then abort.
@@ -1077,6 +1194,9 @@ void StationClient::startSession(SessionTransport* transport, const QString& tok
     // default empty argument that is byte-identical to the clear this
     // replaced.
     m_lastUrl.clear();
+    // iPhone app plan Task 27: nothing to redial, so no addresses either.
+    m_dialPlan.clear();
+    m_openTimer->stop();
     m_lastFingerprint = expectedFingerprint;
     m_lastAllowUnpinned = false;
     attachTransport(transport, token);
@@ -1255,6 +1375,11 @@ void StationClient::onTransportClosed()
         return;
     }
     m_settingsSnapshotThisLink = false;   // rework follow-up 4
+    // iPhone app plan Task 27: an address that closed before it ever opened
+    // gives way to the next one this attempt has.
+    if (!m_transportOpened && advanceDialPlan(StationConnectionAttempt::Outcome::NoAnswer)) {
+        return;
+    }
     // Task 19: a plain transport close with no station-sent reason is
     // exactly the case automatic reconnect exists for -- "kill the
     // daemon" (a clean TCP close) is the bench scenario the parent task
@@ -1298,6 +1423,11 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
         return;  // already reported for this attach
     }
     m_sessionActive = false;
+    // iPhone app plan Task 27: an address still being tried ended here (the
+    // connect deadline, a refusal, the operator).
+    m_openTimer->stop();
+    recordOutcome(m_transportOpened ? StationConnectionAttempt::Outcome::Failed
+                                    : StationConnectionAttempt::Outcome::NoAnswer);
 
     m_handshakeComplete = false;
     m_authenticated = false;
@@ -1627,6 +1757,14 @@ void StationClient::onReconnectTimeout()
         emit connectionActivityChanged();
         return;
     }
+    // iPhone app plan Task 27: every retry runs the same addresses again,
+    // the Core's last good one first.
+    if (!m_dialPlan.isEmpty()) {
+        startDialPlan();
+        dialStation(m_dialPlan.first(), m_planToken, m_lastFingerprint, m_lastAllowUnpinned,
+                    m_stationIdentity);
+        return;
+    }
     dialStation(m_lastUrl, m_token, m_lastFingerprint, m_lastAllowUnpinned, m_stationIdentity);
 }
 
@@ -1769,6 +1907,15 @@ void StationClient::onTransportText(const QByteArray& wire)
         refreshRemoteTransmit();
         if (firstSnapshot) {
             qCInfo(lcStationClient) << "Session established with" << m_capabilities.stationName;
+            // iPhone app plan Task 27: where the Core was reached, tried
+            // first next time.
+            m_openTimer->stop();
+            if (m_lastUrl.isValid()) {
+                m_connectedUrl = m_lastUrl;
+                m_cachedAddresses.removeAll(m_lastUrl);
+                m_cachedAddresses.prepend(m_lastUrl);
+            }
+            recordOutcome(StationConnectionAttempt::Outcome::Connected);
             emit handshakeComplete();
         }
         emit stateSnapshotApplied();
@@ -1894,6 +2041,17 @@ void StationClient::setDeviceIdentity(std::shared_ptr<const ClientDeviceIdentity
 void StationClient::refuseStation(const QString& reason, StationEndReport::Kind kind,
                                   const QString& code)
 {
+    // iPhone app plan Task 27: another computer at a cached address (its
+    // address given to something else since) gives way to the next address
+    // this attempt has, before anything was sent.
+    if (kind == StationEndReport::Kind::IdentityChanged
+        && advanceDialPlan(StationConnectionAttempt::Outcome::NotThisCore)) {
+        qCInfo(lcStationClient) << "Another computer answered at a saved address of the Core";
+        return;
+    }
+    recordOutcome(kind == StationEndReport::Kind::IdentityChanged
+                      ? StationConnectionAttempt::Outcome::NotThisCore
+                      : StationConnectionAttempt::Outcome::Failed);
     m_lastError = reason;
     qCWarning(lcStationClient) << "Not signing in to the Core:" << reason;
     // Recorded before the end is reported, so the window reads it.
@@ -4773,6 +4931,98 @@ QString StationClient::transmitHolderText() const
                      .arg(name)
                : QStringLiteral("%1 holds transmit. MOX and TUNE here wait until it lets go.")
                      .arg(name);
+}
+
+// ── iPhone app plan Task 27: the attempt record ────────────────────────────
+
+bool StationConnectionAttempt::connected() const
+{
+    for (const Try& attempt : tries) {
+        if (attempt.outcome == Outcome::Connected) {
+            return true;
+        }
+    }
+    return false;
+}
+
+QString StationConnectionAttempt::pathText(Path path)
+{
+    switch (path) {
+    case Path::ThisNetwork:
+        return QStringLiteral("this network");
+    case Path::Direct:
+        return QStringLiteral("direct");
+    case Path::Relay:
+        return QStringLiteral("relay");
+    }
+    return {};
+}
+
+QString StationConnectionAttempt::outcomeText(Outcome outcome)
+{
+    switch (outcome) {
+    case Outcome::Trying:
+        return QStringLiteral("still trying");
+    case Outcome::Connected:
+        return QStringLiteral("connected");
+    case Outcome::NoAnswer:
+        return QStringLiteral("no answer");
+    case Outcome::TimedOut:
+        return QStringLiteral("no answer in time");
+    case Outcome::NotThisCore:
+        return QStringLiteral("another computer answered");
+    case Outcome::Failed:
+        return QStringLiteral("did not connect");
+    }
+    return {};
+}
+
+QString StationConnectionAttempt::summary() const
+{
+    if (tries.isEmpty()) {
+        return {};
+    }
+    QStringList parts;
+    for (const Try& attempt : tries) {
+        parts.append(QStringLiteral("%1 (%2): %3")
+                         .arg(pathText(attempt.path), attempt.address,
+                              outcomeText(attempt.outcome)));
+    }
+    return QStringLiteral("Tried ") + parts.join(QStringLiteral("; ")) + QLatin1Char('.');
+}
+
+StationConnectionAttempt::Path StationConnectionAttempt::pathFor(const QUrl& url)
+{
+    const QString host = url.host();
+    if (host.endsWith(QLatin1String(".local"), Qt::CaseInsensitive)
+        || host.compare(QLatin1String("localhost"), Qt::CaseInsensitive) == 0) {
+        return Path::ThisNetwork;
+    }
+    QHostAddress address(host);
+    if (address.isNull()) {
+        return Path::Direct;
+    }
+    if (address.isLoopback()) {
+        return Path::ThisNetwork;
+    }
+    bool mapped = false;
+    const quint32 ipv4 = address.toIPv4Address(&mapped);
+    if (mapped) {
+        address = QHostAddress(ipv4);
+    }
+    for (const QNetworkInterface& interface : QNetworkInterface::allInterfaces()) {
+        if (!(interface.flags() & QNetworkInterface::IsUp)
+            || !(interface.flags() & QNetworkInterface::IsRunning)) {
+            continue;
+        }
+        for (const QNetworkAddressEntry& entry : interface.addressEntries()) {
+            if (entry.prefixLength() >= 0
+                && address.isInSubnet(entry.ip(), entry.prefixLength())) {
+                return Path::ThisNetwork;
+            }
+        }
+    }
+    return Path::Direct;
 }
 
 } // namespace NereusSDR

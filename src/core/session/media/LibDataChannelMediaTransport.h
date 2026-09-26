@@ -14,6 +14,12 @@
 //               for the transmit keepalive, and the receive-severed test
 //               seam. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
 //               Code.
+//   2026-09-26: iPhone app plan Task 27 (R-IOS-16): ICE settings for a
+//               connection that came through the remote access service
+//               (StartOptions::ice): one STUN server, two relay servers once
+//               the credentials are known, a 996-byte MTU, every candidate
+//               type. Host candidates only otherwise, as before. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 //
 // =================================================================
 
@@ -86,6 +92,8 @@ public:
     bool sendTx(const QByteArray& message) override;
 
     bool isReady() const override;
+    bool gatherCandidates(const QList<IceRelayServer>& relays) override;
+    std::optional<MediaIcePath> selectedPath() const override;
     bool losslessAudioNegotiated() const override;
     bool micLosslessNegotiated() const override;
     std::optional<MediaTransportTelemetry> telemetry() const override;
@@ -105,6 +113,9 @@ private:
     std::unique_ptr<Private> d;
 
     void drainCallbacks();
+    /// Task 27: gathers once the local description is set and the relay is
+    /// known.
+    void gatherIfReady();
     void stopInternal(bool notify);
 };
 

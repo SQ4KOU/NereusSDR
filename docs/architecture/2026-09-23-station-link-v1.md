@@ -333,12 +333,24 @@ connection's:
   closed. Nothing pairs until the console reopens it (`nereusd pairing
   open`); no device is paired to do it, so physical access decides.
 
-**The attempt ceiling.** Five burned codes in a row
-(`PairingWindow::kMaxConsecutiveFailures`) close any open window,
-reopened or unclaimed. A closed window opens again only from the Core's
-console or, on a claimed Core, from a paired device (`pairing.open`).
-Reopening starts afresh: no failures counted and no wait, so the code is
-there at once.
+**The attempt ceiling.** Five codes burned in a row on a direct
+connection (`PairingWindow::kMaxConsecutiveFailures`) close any open
+window, reopened or unclaimed. A closed window opens again only from the
+Core's console or, on a claimed Core, from a paired device
+(`pairing.open`). Reopening starts afresh: no failures counted and no wait,
+so the code is there at once.
+
+**Codes burned through the rendezvous** (a pairing mailbox, section 19)
+never count toward the ceiling and never close the window (the operator's
+ruling of 2026-09-26). Five of them in a row pause pairing through the
+rendezvous instead: 1 minute (`PairingWindow::kFirstServicePauseMs`), then
+twice as long each time it is hit again with no pairing in between, at
+most 60 minutes (`PairingWindow::kMaxServicePauseMs`). While paused, a
+mailbox's `pair.start` gets `pair.fail` with `retryAfterMs` the time left,
+before any code is taken, so it burns nothing. Pairing on a direct
+connection stays open throughout. A pairing, or reopening the window, ends
+the pause and starts over at 1 minute. A code burned either way rotates
+after the same wait.
 
 The first pairing closes an unclaimed window, for good. `devices.revoke`
 never removes the last device while no token is active (section 9.1), so a
@@ -349,8 +361,14 @@ claimed Core becomes unclaimed again only through its console's `reset
 example `7-anvil-harbor`. The words come from
 `resources/pairing-words-v1.txt`: 256 lowercase words of 4 to 7 letters,
 no two within one edit of each other and no two alike in sound. The
-number is the rendezvous nameplate (Part E); until the rendezvous exists
-the station picks one from 1 to 99 (`PairingWindow::kLocalNameplateMax`).
+number is the rendezvous nameplate: while the Core is registered with the
+rendezvous (section 19) it holds a nameplate there while its pairing window
+is open and shows that number. A Core that has never held one picks a
+number from 1 to 99 (`PairingWindow::kLocalNameplateMax`). A Core that
+loses the rendezvous keeps showing the number it last held, since the code
+still pairs on a direct connection (the number is part of the password, not
+an address there), and shows the new number when it registers again and
+claims one; a change makes a new code unless the code is being tried.
 Both ends normalise a typed code before they use it
 (`PairingCode::normalise`). Normalising lowercases and trims, drops any
 leading zeros of the number, and joins the three parts with single
@@ -5118,3 +5136,16 @@ code carries section 3.6's `pair.*` messages, as text, inside the
 rendezvous's mailbox messages. The rendezvous introduces the two ends and
 mints relay credentials; the session that follows is this link, on its own
 connection, direct or through the relay, never through the rendezvous.
+
+**Pairing through a mailbox** (iPhone app plan Task 27). A mailbox carries
+the `pair.*` messages of section 3.6 and nothing else: no `hello` goes
+either way and no `session.end`. The device sends `pair.start` in code
+mode as the mailbox's first message (one tap never pairs through it: a
+mailbox has no address of its own), and the exchange then runs exactly as
+on a direct connection, the station's `pair.fail` or `pair.confirm` ending
+it. A message of any other kind from the device ends the pairing as a
+protocol error. A mailbox has no certificate, so the device keeps the
+Core's identity key from the station's box and checks the certificate
+binding against the certificate of its first sign-in (section 3.4). The
+Core gives its nameplate back only after that mailbox has closed, since
+releasing a nameplate ends its mailbox.

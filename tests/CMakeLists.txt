@@ -7422,6 +7422,52 @@ nereus_add_test(tst_gui_connection_controller)
 nereus_add_test(tst_station_pairing_client fakes/LoopbackTransport.cpp)
 target_compile_definitions(tst_station_pairing_client PRIVATE
     NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+# iPhone app plan Task 27 (R-IOS-16): the ICE settings of a connection
+# through the remote access service, shaped by the pinned libdatachannel and
+# libjuice.
+nereus_add_test(tst_ice_configuration)
+# iPhone app plan Task 27 (R-IOS-08, R-IOS-16): the rendezvous wire and its
+# crypto and control vectors, the Core's and the desktop's conformance
+# runners (rendezvous/conformance/v1/), and the Core against the Python
+# service run on this computer: registration, introductions from paired and
+# unpaired devices, an ICE connection, pairing by code through the mailbox,
+# and a session that outlives the service.
+nereus_add_test(tst_rendezvous_client fakes/LoopbackTransport.cpp)
+target_compile_definitions(tst_rendezvous_client PRIVATE
+    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+# iPhone app plan Task 27: one end of a connection through the remote
+# access service, for the traversal harness below. Not linked with the test
+# sandbox: it reaches a service in another network namespace, which a
+# test-mode RendezvousClient refuses to contact.
+add_executable(nereus_rendezvous_peer EXCLUDE_FROM_ALL tools/nereus_rendezvous_peer.cpp)
+target_link_libraries(nereus_rendezvous_peer PRIVATE NereusCore)
+set_target_properties(nereus_rendezvous_peer PROPERTIES AUTOMOC ON)
+# The traversal harness (tests/scripts/traversal-harness.sh): Linux network
+# namespaces with nftables NATs (endpoint-independent, port-randomising at
+# both ends), UDP blocked, large datagrams dropped, an IPv6-only client
+# behind NAT64 and DNS64 with a CLAT, netem loss, and routed IPv6 at both
+# ends (an IPv6 pair must win), with the rendezvous service and coturn
+# started inside it and every secret made at run time. Opt in with
+# -DNEREUS_TRAVERSAL_TESTS=ON; it needs root and runs under the ctest label
+# `traversal` (the CI job of the same name, started by hand), never on the
+# live server.
+option(NEREUS_TRAVERSAL_TESTS "Register the traversal harness (Linux, root)" OFF)
+if(NEREUS_TRAVERSAL_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_test(NAME traversal_harness
+        COMMAND bash ${CMAKE_SOURCE_DIR}/tests/scripts/traversal-harness.sh
+            --peer $<TARGET_FILE:nereus_rendezvous_peer>
+            --source ${CMAKE_SOURCE_DIR})
+    set_tests_properties(traversal_harness PROPERTIES
+        LABELS traversal
+        TIMEOUT 1800
+        RUN_SERIAL TRUE)
+endif()
+# Real ICE connections, each within the libraries' own deadlines. It runs
+# the Python service, which needs python3 with websockets and cryptography
+# (the Linux CI job installs them from apt).
+if(TEST tst_rendezvous_client)
+    set_tests_properties(tst_rendezvous_client PROPERTIES TIMEOUT 300)
+endif()
 
 # R3 remote window harness plan, Task 2 (R-R3-16/17/21/24): one real remote
 # MainWindow dialling an in-process StationServer over a loopback ws://

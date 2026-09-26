@@ -29,10 +29,15 @@
 //                                    paired Core's identity fingerprint.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  iPhone app plan Task 27 (R-IOS-16):
+//                                    the Core's last good addresses.
+//                                    AI-assisted via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 #include <QByteArray>
 #include <QString>
+#include <QStringList>
 
 namespace NereusSDR {
 
@@ -64,6 +69,13 @@ struct RemoteStationOptions {
     /// and this computer signs in with its own device key. The pin and the
     /// token are then not used (the link document, sections 3.4 and 3.5).
     QByteArray identityFingerprint;
+
+    /// iPhone app plan Task 27 (R-IOS-16; the pairing design, section 5.3):
+    /// where this computer last reached the Core (station URLs, the most
+    /// recent first, at most kMaxCachedAddresses), tried before `url` so a
+    /// reconnect never needs the remote access service.
+    static constexpr int kMaxCachedAddresses = 4;
+    QStringList cachedAddresses;
 
     /// True when this process should run as a remote client.
     bool isRemote() const { return !url.isEmpty(); }

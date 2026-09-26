@@ -12,7 +12,8 @@
 // code the Core shows, each ending in the Core's identity and label.
 //
 // One pairing runs on a connection of its own, to the Core's address
-// directly (until the rendezvous of plan Task 27 exists):
+// directly, or (plan Task 27) through the remote access service's pairing
+// mailbox, which carries the pair.* messages below and nothing else:
 //
 //   - the Core's hello, which must declare `features.pairing` 1;
 //   - this computer's hello (declaring deviceAuth 1) and `pair.start`
@@ -36,9 +37,14 @@
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: iPhone app plan Task 27 (R-IOS-08): pairing by code
+//               through the remote access service's mailbox. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QByteArray>
+#include <QList>
 #include <QMetaType>
 #include <QObject>
 #include <QPointer>
@@ -56,6 +62,7 @@ QT_END_NAMESPACE
 namespace NereusSDR {
 
 class ClientDeviceIdentity;
+class RendezvousClient;
 class SessionTransport;
 class SpakeExchange;
 struct SessionMessage;
@@ -109,6 +116,17 @@ public:
     /// of the list fails at once and is never sent.
     void pairByCode(const QString& code, const QString& host, quint16 port);
 
+    /// iPhone app plan Task 27 (R-IOS-08): pairs by the code over a
+    /// pairing mailbox of the remote access service that is already open
+    /// (`mailbox`, a RendezvousMailboxTransport, owned from then on). No
+    /// hello travels through a mailbox, so pair.start goes at once; and a
+    /// mailbox has no certificate, so the Core's certificate binding is
+    /// checked at this computer's first sign-in (StationClient) instead.
+    void pairByCodeOverMailbox(const QString& code, SessionTransport* mailbox);
+    /// Opens the mailbox on the code's number through the remote access
+    /// service (`servers`, tried in order) and pairs over it.
+    void pairByCodeFromAnywhere(const QString& code, const QList<QUrl>& servers);
+
     /// Stops a pairing in progress; no signal follows.
     void cancel();
     bool isPairing() const { return m_state != State::Idle; }
@@ -135,6 +153,7 @@ signals:
 private:
     enum class State {
         Idle,
+        OpeningMailbox,  // Task 27: waiting for the service to open the mailbox
         AwaitHello,
         AwaitAccept,     // one tap: pair.accept or pair.fail
         AwaitStep0,
@@ -145,6 +164,10 @@ private:
     };
 
     void begin(bool lan, const QString& normalisedCode, const QString& host, quint16 port);
+    /// Task 27: the code's exchange over an open mailbox.
+    void startMailbox(const QString& normalisedCode, SessionTransport* mailbox);
+    /// The checks before any pairing by code; false after failed().
+    bool readyForCode();
     void onText(const QByteArray& wire);
     void onClosed();
     void handleHello(const SessionMessage& message);
@@ -172,6 +195,10 @@ private:
     quint16 m_port = 0;
     QByteArray m_helloIdentityKey;
     QPointer<SessionTransport> m_transport;
+    /// Task 27: this pairing runs through a mailbox, and the connection to
+    /// the remote access service that holds it (pairByCodeFromAnywhere()).
+    bool m_mailbox = false;
+    QPointer<RendezvousClient> m_rendezvous;
     std::shared_ptr<SpakeExchange> m_exchange;
     QTimer* m_deadlineTimer = nullptr;
     /// Bumped by every begin() and cancel(); a worker's result for an

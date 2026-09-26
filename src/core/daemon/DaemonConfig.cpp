@@ -12,12 +12,16 @@
 // Code.
 // 2026-09-25: iPhone app plan Task 34 (R-IOS-02): remote_transmit, J.J.
 // Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-26: iPhone app plan Task 27 (R-IOS-08, R-IOS-16):
+// rendezvous_servers and relay, J.J. Boyd (KG4VCF), AI-assisted via
+// Anthropic Claude Code.
 // =================================================================
 
 #include "DaemonConfig.h"
 
 #include "core/AppSettings.h"
 #include "core/LogCategories.h"
+#include "core/session/RendezvousClient.h"
 
 #include <QDir>
 #include <QFile>
@@ -179,6 +183,32 @@ DaemonConfig DaemonConfig::fromFile(const QString& path, QString* errorOut)
                 qCWarning(lcApp) << "nereusd.conf" << path << "line" << lineNo
                                   << "pairing_lan_click must be allow or deny, keeping allow:"
                                   << value;
+            }
+        } else if (key == QLatin1String("rendezvous_servers")) {
+            // iPhone app plan Task 27: an ordered list; empty names none.
+            QStringList entries;
+            for (const QString& entry :
+                 value.split(QRegularExpression(QStringLiteral("[\\s,]+")), Qt::SkipEmptyParts)) {
+                QStringList rejected;
+                if (RendezvousClient::serverUrls({entry}, &rejected).isEmpty()) {
+                    qCWarning(lcApp) << "nereusd.conf" << path << "line" << lineNo
+                                      << "rendezvous_servers entry is not a server address, "
+                                         "skipped:"
+                                      << entry;
+                    continue;
+                }
+                entries.append(entry);
+            }
+            cfg.rendezvousServers = entries;
+        } else if (key == QLatin1String("relay")) {
+            if (value.compare(QLatin1String("allow"), Qt::CaseInsensitive) == 0) {
+                cfg.relayAllowed = true;
+            } else if (value.compare(QLatin1String("deny"), Qt::CaseInsensitive) == 0) {
+                cfg.relayAllowed = false;
+            } else {
+                cfg.relayAllowed = true;
+                qCWarning(lcApp) << "nereusd.conf" << path << "line" << lineNo
+                                  << "relay must be allow or deny, keeping allow:" << value;
             }
         } else if (key == QLatin1String("remote_transmit")) {
             // iPhone app plan Task 34: allow or deny; anything else denies.

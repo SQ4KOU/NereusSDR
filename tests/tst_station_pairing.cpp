@@ -266,19 +266,23 @@ struct DeviceSide {
     QJsonObject hello;
     // Runs just before the device sends its box (the confirm step).
     std::function<void()> beforeConfirm;
+    // Through the remote access service's mailbox: no hello either way.
+    bool throughService = false;
 
     explicit DeviceSide(const Device& d) : device(d), boxName(d.name), boxKind(d.kind) {}
 
     bool greet(Link& link, const QString& startName = QString(),
                const QString& startKind = QString(), const QString& mode = QStringLiteral("code"))
     {
-        hello = link.next();
-        if (hello.value(QStringLiteral("type")).toString() != QLatin1String("hello")) {
-            return false;
+        if (!throughService) {
+            hello = link.next();
+            if (hello.value(QStringLiteral("type")).toString() != QLatin1String("hello")) {
+                return false;
+            }
+            link.send(SessionMessages::hello(kSessionProtocolMajor, kSessionProtocolMinor, 0,
+                                             QStringLiteral("NereusSDR iPhone"),
+                                             {kSessionProtocolMajor}, {{"deviceAuth", 1}}));
         }
-        link.send(SessionMessages::hello(kSessionProtocolMajor, kSessionProtocolMinor, 0,
-                                         QStringLiteral("NereusSDR iPhone"),
-                                         {kSessionProtocolMajor}, {{"deviceAuth", 1}}));
         link.send(SessionMessages::pairStart(
             mode, SessionPairDevice{device.publicKey(),
                                     startName.isEmpty() ? device.name : startName,
@@ -472,6 +476,29 @@ struct Core {
         clients.append(app);
         server->acceptTransport(station);
         return app;
+    }
+
+    // A pairing mailbox, as StationRendezvous hands one over: no hello, no
+    // address.
+    LoopbackTransport* openMailbox()
+    {
+        auto* app = new LoopbackTransport(QStringLiteral("app"));
+        auto* station = new LoopbackTransport(QStringLiteral("mailbox"));
+        station->linkTo(app);
+        clients.append(app);
+        server->acceptPairingMailbox(station);
+        return app;
+    }
+
+    Outcome pairByCodeThroughService(const Device& device, const QString& typed,
+                                     bool lie = false)
+    {
+        LoopbackLink link(openMailbox());
+        DeviceSide side(device);
+        side.throughService = true;
+        const Outcome outcome = side.code(link, typed, lie);
+        link.ended();
+        return outcome;
     }
 
     Outcome pairByCode(const Device& device, const QString& typed, bool lie = false,
@@ -747,6 +774,60 @@ private slots:
         QCOMPARE(core.pairByCode(device, core.window().currentCode()).type,
                  QStringLiteral("pair.confirm"));
         QCOMPARE(core.window().consecutiveFailures(), 0);
+    }
+
+    // The operator's ruling on Task 27 item I5 (2026-09-26): wrong codes
+    // through the remote access service pause pairing through it, never the
+    // window and never pairing on the home network. A paused mailbox
+    // pairing is refused before it takes a code, so it burns nothing.
+    void wrongCodesThroughTheServicePauseOnlyTheService()
+    {
+        Core core;
+        Device device;
+        for (int i = 0; i < PairingWindow::kMaxConsecutiveFailures; ++i) {
+            if (core.window().currentCode().isEmpty()) {
+                core.advance(core.window().retryAfterMs());
+            }
+            const Outcome outcome =
+                core.pairByCodeThroughService(device, core.window().currentCode(), /*lie=*/true);
+            verifyPlainRefusal(outcome);
+        }
+        QCOMPARE(core.window().state(), PairingWindow::State::OpenUnclaimed);
+        QCOMPARE(core.window().consecutiveFailures(), 0);
+        QVERIFY(core.window().isPaused(PairingWindow::Route::Service));
+        QVERIFY(core.store().list().isEmpty());
+
+        // The next code follows after the first wait (the follow-up to the
+        // Task 27 re-review, new Minor 4), inside the first pause (1
+        // minute): only the home network can take it.
+        QCOMPARE(core.window().retryAfterMs(), PairingWindow::kFirstRetryMs);
+        core.advance(core.window().retryAfterMs());
+        QVERIFY(!core.window().currentCode().isEmpty());
+        QVERIFY(core.window().isPaused(PairingWindow::Route::Service));
+        QCOMPARE(core.window().servicePauseRemainingMs(),
+                 PairingWindow::kFirstServicePauseMs - PairingWindow::kFirstRetryMs);
+        const QString code = core.window().currentCode();
+        const quint64 serial = core.window().codeSerial();
+        const qint64 remaining = core.window().servicePauseRemainingMs();
+
+        // Even the right code is refused through the service while paused,
+        // and nothing is burned.
+        const Outcome paused = core.pairByCodeThroughService(device, code);
+        verifyPlainRefusal(paused);
+        QCOMPARE(paused.reason,
+                 QStringLiteral("The Core has paused pairing from outside its network after "
+                                "several wrong codes. Try again later, or pair on the Core's "
+                                "own network."));
+        QCOMPARE(paused.retryAfterMs, remaining);
+        QCOMPARE(core.window().currentCode(), code);
+        QCOMPARE(core.window().codeSerial(), serial);
+        QCOMPARE(core.window().consecutiveServiceFailures(), 0);
+        QVERIFY(core.store().list().isEmpty());
+
+        // On the home network the same code pairs at once.
+        QCOMPARE(core.pairByCode(device, code).type, QStringLiteral("pair.confirm"));
+        QVERIFY(core.store().find(device.id()));
+        QVERIFY(!core.window().isPaused(PairingWindow::Route::Service));
     }
 
     void leavingAfterTheCoreCommittedBurnsTheCode()

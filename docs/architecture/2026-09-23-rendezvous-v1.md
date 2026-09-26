@@ -565,8 +565,12 @@ service -> other:    {"type":"mailbox.closed","code":"peerClosed"}
 The rendezvous learns nothing it could test guesses against (link section
 3.6): the SPAKE2 exchange runs inside the bodies. Anyone can open a
 mailbox on a guessed small number, which uses up the station's current
-code; the per-address limit on `mailbox.open` (section 9.1) and the link's
-attempt ceiling bound that.
+code; the per-address limit on `mailbox.open` (section 9.1) and the
+station's pause of pairing through the service bound that. A NereusSDR
+Core never closes its pairing window for codes burned through a mailbox:
+five in a row pause pairing through the service for 1 minute, doubling each
+time with no pairing in between, at most 60 minutes, while pairing on a
+direct connection stays open (link section 3.6, the attempt ceiling).
 
 ## 7. Errors
 
@@ -646,6 +650,13 @@ password = base64(HMAC-SHA1(secret, username)) standard base64, with padding
   built-in defaults, `rendezvous/server/rendezvous.conf.sample` and what
   `rendezvous/deploy/setup-server.sh` writes all list them in this order
   (`test_limits_config_transport.py` and `coturn-check.sh` check it).
+- The order serves an end that takes the first entry; an end must still not
+  depend on it. It chooses its STUN server, and the relay host it allocates
+  on, by the address families it has: the first entry whose name resolves,
+  on that end, to a family it has a usable address in, or the first entry
+  when it has both families or cannot tell. An IPv4-only end behind NAT so
+  takes the IPv4-only name whichever the service lists first (NereusSDR:
+  `IceConfiguration`).
 - **Quotas.** coturn's quotas per user (per username, so per station id)
   do not limit how much the relay is used in total: an id costs nothing
   (anyone can make a key, register it and answer its own introduction with

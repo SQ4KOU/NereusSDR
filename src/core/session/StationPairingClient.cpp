@@ -10,6 +10,10 @@
 //   2026-09-24: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: iPhone app plan Task 27 (R-IOS-08): pairing by code
+//               through the remote access service's mailbox. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/StationPairingClient.h"
@@ -20,6 +24,8 @@
 #include "core/security/SpakeExchange.h"
 #include "core/security/StationIdentity.h"
 #include "core/session/LinkVersion.h"
+#include "core/session/RendezvousClient.h"
+#include "core/session/RendezvousMailboxTransport.h"
 #include "core/session/SessionEndReasons.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/SessionTransport.h"
@@ -225,11 +231,138 @@ void StationPairingClient::pairByCode(const QString& code, const QString& host, 
     begin(false, normalised, host, port);
 }
 
+void StationPairingClient::pairByCodeOverMailbox(const QString& code, SessionTransport* mailbox)
+{
+    const QString normalised = PairingCode::normalise(code);
+    cancel();
+    if (normalised.isEmpty()) {
+        if (mailbox != nullptr) {
+            mailbox->closeLink(QString());
+            mailbox->deleteLater();
+        }
+        emit failed(QStringLiteral("That is not a pairing code. A code is a number and two "
+                                   "words, such as 7-anvil-harbor."));
+        return;
+    }
+    if (!readyForCode()) {
+        if (mailbox != nullptr) {
+            mailbox->closeLink(QString());
+            mailbox->deleteLater();
+        }
+        return;
+    }
+    startMailbox(normalised, mailbox);
+}
+
+void StationPairingClient::pairByCodeFromAnywhere(const QString& code,
+                                                  const QList<QUrl>& servers)
+{
+    // Refused before anything is sent, as on a direct connection.
+    const QString normalised = PairingCode::normalise(code);
+    cancel();
+    if (normalised.isEmpty()) {
+        emit failed(QStringLiteral("That is not a pairing code. A code is a number and two "
+                                   "words, such as 7-anvil-harbor."));
+        return;
+    }
+    if (!readyForCode()) {
+        return;
+    }
+    // The number in the code is the Core's nameplate on the service.
+    const int nameplate = normalised.section(QLatin1Char('-'), 0, 0).toInt();
+    m_code = normalised;
+    m_mailbox = true;
+    m_state = State::OpeningMailbox;
+    auto* rendezvous = new RendezvousClient(this);
+    m_rendezvous = rendezvous;
+    rendezvous->setServers(servers);
+    const quint64 attempt = m_attempt;
+    connect(rendezvous, &RendezvousClient::mailboxOpened, this, [this, attempt, rendezvous] {
+        if (attempt != m_attempt || m_state != State::OpeningMailbox) {
+            return;
+        }
+        startMailbox(m_code, new RendezvousMailboxTransport(rendezvous));
+    });
+    connect(rendezvous, &RendezvousClient::unreachable, this,
+            [this, attempt](const QString& reason) {
+        if (attempt == m_attempt) {
+            fail(reason);
+        }
+    });
+    if (m_deadlineMs > 0) {
+        m_deadlineTimer->start(m_deadlineMs);
+    }
+    rendezvous->openMailbox(nameplate);
+}
+
+bool StationPairingClient::readyForCode()
+{
+    if (!m_identity || !m_identity->isValid()) {
+        emit failed(QStringLiteral("This computer's own key could not be read, so it cannot "
+                                   "pair with a Core."));
+        return false;
+    }
+    if (!SpakeExchange::isAvailable()) {
+        emit failed(QStringLiteral("This computer cannot pair by code."));
+        return false;
+    }
+    return true;
+}
+
+void StationPairingClient::startMailbox(const QString& normalisedCode, SessionTransport* mailbox)
+{
+    if (mailbox == nullptr || !mailbox->isOpen()) {
+        if (mailbox != nullptr) {
+            mailbox->deleteLater();
+        }
+        m_state = State::AwaitStep0;
+        fail(QStringLiteral("The remote access service closed the pairing before it began. "
+                            "Try again."));
+        return;
+    }
+    m_mailbox = true;
+    m_lan = false;
+    m_code = normalisedCode;
+    m_host.clear();
+    m_port = 0;
+    mailbox->setParent(this);
+    m_transport = mailbox;
+    const quint64 attempt = m_attempt;
+    connect(mailbox, &SessionTransport::textReceived, this,
+            [this, attempt](const QByteArray& wire) {
+        if (attempt == m_attempt) {
+            onText(wire);
+        }
+    });
+    connect(mailbox, &SessionTransport::closed, this, [this, attempt] {
+        if (attempt == m_attempt) {
+            onClosed();
+        }
+    });
+    if (m_deadlineMs > 0 && !m_deadlineTimer->isActive()) {
+        m_deadlineTimer->start(m_deadlineMs);
+    }
+    // No hellos through a mailbox (the rendezvous document, section 6.5):
+    // pair.start first, in code mode, the only mode a mailbox carries.
+    send(SessionMessages::pairStart(
+        QStringLiteral("code"),
+        SessionPairDevice{StationIdentity::toBase64Url(m_identity->publicKeySpki()), m_deviceName,
+                          QString::fromLatin1(ClientDeviceIdentity::kKind)}));
+    m_state = State::AwaitStep0;
+}
+
 void StationPairingClient::cancel()
 {
     ++m_attempt;
     m_deadlineTimer->stop();
     stopTransport();
+    m_mailbox = false;
+    if (m_rendezvous) {
+        RendezvousClient* rendezvous = m_rendezvous;
+        m_rendezvous = nullptr;
+        rendezvous->stop();
+        rendezvous->deleteLater();
+    }
     m_exchange.reset();
     wipeCode();
     m_helloIdentityKey.clear();
@@ -344,6 +477,7 @@ void StationPairingClient::onText(const QByteArray& wire)
         }
         break;
     case State::Idle:
+    case State::OpeningMailbox:
     case State::Hashing:
     case State::AwaitCoreFail:
         break;
@@ -492,6 +626,23 @@ void StationPairingClient::complete(const QString& publicKey, const QString& cer
     const QByteArray binding = StationIdentity::fromBase64Url(certBinding, &bindingOk);
     if (!keyOk || !bindingOk || !StationIdentity::isP256Spki(spki)) {
         fail(unreadableAnswer());
+        return;
+    }
+    // Task 27: a mailbox carries no certificate. The key came in the box
+    // sealed with the code's shared key, so it is the Core's; its binding is
+    // checked against the certificate of this computer's first sign-in.
+    if (m_mailbox) {
+        if (binding.size() != StationIdentity::kSignatureBytes) {
+            fail(unreadableAnswer());
+            return;
+        }
+        PairedStationRecord record;
+        record.identityKey = spki;
+        record.identityFingerprint = StationIdentity::fingerprintOf(spki);
+        record.label = label;
+        cancel();
+        qCInfo(lcPairing) << "Paired with a Core through the remote access service";
+        emit paired(record);
         return;
     }
     // The key the Core paired with is the one its hello showed.

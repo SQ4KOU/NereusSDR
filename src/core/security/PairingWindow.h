@@ -30,7 +30,24 @@
 //
 // The attempt ceiling (fix wave R1-I2): kMaxConsecutiveFailures (5)
 // burned codes in a row close any open window, reopened or unclaimed, and
-// reopening starts afresh (no failures, no wait).
+// reopening starts afresh (no failures, no wait). It counts only codes
+// burned on a direct connection (Route::Direct).
+//
+// Codes burned through the remote access service (Route::Service, a
+// pairing mailbox; the operator's ruling of 2026-09-26 on iPhone plan Task
+// 27's review item I5) never close the window: an unclaimed Core claims the
+// lowest free nameplate there, so anyone could otherwise shut a fresh
+// Core's pairing from the internet. Instead, kMaxConsecutiveFailures of
+// them in a row pause pairing through the service: 1 minute the first
+// time, doubling each time it is hit again with no pairing in between, at
+// most 60 minutes (kFirstServicePauseMs, kMaxServicePauseMs). While paused,
+// a pairing through the service is refused before it takes a code, so it
+// burns nothing; pairing on a direct connection (the home network) stays
+// open throughout. A pairing, or reopening the window, ends the pause and
+// starts the ladder over. A burned code rotates either way, after the same
+// wait, except the burn that starts a pause: its next code follows after
+// the first wait (kFirstRetryMs), since only the home network can take it
+// (the follow-up to Task 27's re-review, new Minor 4).
 //
 // The state follows the device store: the first pairing claims the Core
 // and closes an unclaimed window; a Core reset to unclaimed from its
@@ -76,6 +93,18 @@
 //               per-address handshake cap and 0600 on load. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic Claude
 //               Code.
+//   2026-09-26: iPhone app plan Task 27 (R-IOS-08): the nameplate comes
+//               from the remote access service while the Core is
+//               registered. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
+//   2026-09-26: Task 27 fix wave (I5, the operator's ruling): codes burned
+//               through the service pause pairing through it (1 to 60
+//               minutes) instead of closing the window. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: Task 27 follow-up (new Minor 4): the burn that starts a
+//               pause shows the next code after the first wait. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QObject>
@@ -102,13 +131,25 @@ public:
     /// it doubles after each consecutive failure between the two.
     static constexpr qint64 kFirstRetryMs = 5000;
     static constexpr qint64 kMaxRetryMs = 300000;
-    /// The nameplate until the rendezvous supplies one: 1 to this.
+    /// The nameplate when the remote access service has supplied none: 1
+    /// to this.
     static constexpr int kLocalNameplateMax = 99;
     /// Fix wave R1-I2 (the controller's ruling, 2026-09-24): consecutive
     /// burned codes that close any open window, and how long a reopened
     /// window stays open.
     static constexpr int kMaxConsecutiveFailures = 5;
     static constexpr qint64 kReopenedLifetimeMs = 10 * 60 * 1000;
+    /// The operator's ruling on Task 27 item I5 (2026-09-26): how long
+    /// pairing through the remote access service pauses after
+    /// kMaxConsecutiveFailures codes burned through it in a row, doubling
+    /// each time up to the ceiling.
+    static constexpr qint64 kFirstServicePauseMs = 60 * 1000;
+    static constexpr qint64 kMaxServicePauseMs = 60 * 60 * 1000;
+
+    /// How a pairing reached the Core: on a direct connection, or through
+    /// the remote access service's mailbox.
+    enum class Route { Direct, Service };
+    Q_ENUM(Route)
 
     /// `devices` is not owned and must outlive this object.
     explicit PairingWindow(DeviceStore& devices, QObject* parent = nullptr);
@@ -130,8 +171,15 @@ public:
     /// being tried, and while the wait after a failure runs.
     QString currentCode() const { return m_code; }
 
-    /// Task 27 supplies the rendezvous nameplate; until then a random
-    /// number from 1 to kLocalNameplateMax. A change makes a new code.
+    /// The number in the code. While the Core is registered with the
+    /// remote access service it is the nameplate the service gave it
+    /// (iPhone app plan Task 27: DaemonApp::startRendezvous() claims one
+    /// while the window is open and passes it here). A Core that has never
+    /// held one shows a random number from 1 to kLocalNameplateMax, for
+    /// pairing on this network or at a typed address; one that lost the
+    /// service keeps the number it last held (the link document, section
+    /// 3.6). A change makes a new code, unless the code is in use, when the
+    /// next one carries it.
     void setNameplate(int nameplate);
     int nameplate() const { return m_nameplate; }
 
@@ -149,8 +197,10 @@ public:
     /// unclaimed one.
     void pairingSucceeded();
     /// The code taken was wrong, or its exchange ended without pairing:
-    /// burned, and the next code waits.
-    void pairingFailed();
+    /// burned, and the next code waits. `route` decides what it counts
+    /// toward: the ceiling that closes the window (Direct), or the pause of
+    /// pairing through the service (Service).
+    void pairingFailed(Route route = Route::Direct);
     /// True between takeCode() and the exchange's outcome.
     bool codeInUse() const { return m_codeInUse; }
     /// Part C fix wave (R1-M1): the exchange that took the code of `serial`
@@ -163,9 +213,18 @@ public:
     }
     /// Milliseconds until the next code appears: 0 when one is shown or
     /// the window is closed; kFirstRetryMs while another exchange holds
-    /// the code.
-    qint64 retryAfterMs() const;
+    /// the code. For Route::Service, at least until the pause ends.
+    qint64 retryAfterMs(Route route = Route::Direct) const;
+    /// Codes burned on a direct connection in a row (the ceiling's count).
     int consecutiveFailures() const { return m_failures; }
+    /// Codes burned through the service in a row since the last pause.
+    int consecutiveServiceFailures() const { return m_serviceFailures; }
+    /// Whether a pairing by `route` is paused now: only Route::Service
+    /// ever is, and only while the window is open.
+    bool isPaused(Route route) const;
+    /// Milliseconds until pairing through the service resumes; 0 when it
+    /// is not paused.
+    qint64 servicePauseRemainingMs() const;
 
     void setClock(Clock clock);
     /// Re-checks the wait against the clock: a code whose wait has ended
@@ -182,6 +241,8 @@ private:
     void followDevices();
     /// No failures counted and no wait (reopen() and a reset).
     void startAfresh();
+    /// Pairing through the service unpaused, its ladder back to the start.
+    void endServicePause();
     /// The attempt ceiling: closes the open window.
     void closeForCeiling();
     /// Sets the state and the code, then signals each that moved.
@@ -202,6 +263,12 @@ private:
     bool m_codeInUse = false;
     int m_failures = 0;
     qint64 m_nextCodeAt = 0;
+    /// Pairing through the service (the ruling on Task 27 item I5): codes
+    /// burned through it in a row since the last pause, how many pauses
+    /// since the last pairing or reopening, and when the current one ends.
+    int m_serviceFailures = 0;
+    int m_servicePauses = 0;
+    qint64 m_servicePausedUntil = 0;
     /// When a reopened window closes by itself; 0 for none.
     qint64 m_openUntil = 0;
 };

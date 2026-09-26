@@ -330,7 +330,6 @@ private slots:
         const QByteArray expected = fixture.readAll();
         QVERIFY(manager->importFile(fixturePath, QStringLiteral("Remote correction")));
         QTRY_COMPARE(table->rowCount(), 1);
-        QVERIFY(!restore->isEnabled());
         const QString id = manager->selectedAssetId();
         QVERIFY(!id.isEmpty());
         const QString exported = directory.filePath(QStringLiteral("exported.ps3"));

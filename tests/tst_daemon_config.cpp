@@ -37,6 +37,8 @@
 // marker); the slots here stay focused on resolveDaemonProfileArgument()'s
 // own argument-resolution contract.
 //
+// iPhone app plan Task 27 (2026-09-26): rendezvous_servers and relay.
+//
 // 2026-09-23: listenAddressFor() pins remote_bind "::" as dual stack, and
 // the shipped sample may no longer pin sample_rate_hz, by J.J. Boyd
 // (KG4VCF), with AI-assisted implementation via Anthropic Claude Code.
@@ -217,6 +219,10 @@ private slots:
             // setRemoteTransmitAllowed() and the model's receive-only policy
             // from DaemonApp::start().
             QStringLiteral("remote_transmit"),
+            // iPhone app plan Task 27: reach RendezvousClient from
+            // DaemonApp::startStationServer().
+            QStringLiteral("rendezvous_servers"),
+            QStringLiteral("relay"),
             // iPhone app Task 17: reach StationStatusPage from DaemonApp::
             // startStationServer(), and the control socket's place (the
             // daemon's and every console command's).
@@ -247,6 +253,8 @@ private slots:
                 "station_bind = 192.168.1.20\n"
                 "pairing_lan_click = deny\n"
                 "remote_transmit = deny\n"
+                "rendezvous_servers = rv.example.net:8443, rv.nereussdr.com\n"
+                "relay = deny\n"
                 "status_page = off\n"
                 "status_port = 8080\n"
                 "state_directory = /var/lib/nereusd\n");
@@ -268,6 +276,10 @@ private slots:
         QCOMPARE(c.stationBind, QStringLiteral("192.168.1.20"));
         QCOMPARE(c.pairingLanClickAllowed, false);
         QCOMPARE(c.remoteTransmitAllowed, false);
+        QCOMPARE(c.rendezvousServers,
+                 QStringList({QStringLiteral("rv.example.net:8443"),
+                              QStringLiteral("rv.nereussdr.com")}));
+        QCOMPARE(c.relayAllowed, false);
         QCOMPARE(c.statusPage, false);
         QCOMPARE(c.statusPort, 8080);
         QCOMPARE(c.stateDirectory, QStringLiteral("/var/lib/nereusd"));
@@ -313,6 +325,42 @@ private slots:
         QStringList expected = documented;
         expected.sort();
         QCOMPARE(found, expected);
+    }
+
+    // iPhone app plan Task 27: the remote access service is rv.nereussdr.com
+    // and the relay is allowed unless the file says otherwise; an empty list
+    // names no service; an entry that is not a server address is skipped with
+    // a warning; any relay value but allow or deny keeps allow.
+    void rendezvousDefaultsAndBadValues()
+    {
+        const DaemonConfig defaults = DaemonConfig::defaults();
+        QCOMPARE(defaults.rendezvousServers, QStringList({QStringLiteral("rv.nereussdr.com")}));
+        QCOMPARE(defaults.relayAllowed, true);
+
+        QTemporaryFile empty;
+        QVERIFY(empty.open());
+        empty.write("rendezvous_servers =\n");
+        empty.flush();
+        QString err;
+        QCOMPARE(DaemonConfig::fromFile(empty.fileName(), &err).rendezvousServers,
+                 QStringList());
+
+        QTemporaryFile bad;
+        QVERIFY(bad.open());
+        bad.write("rendezvous_servers = http://rv.example.net ws://rv.example.net ws://127.0.0.1:8710\n"
+                  "relay = maybe\n");
+        bad.flush();
+        QTest::ignoreMessage(QtWarningMsg,
+                             QRegularExpression(QStringLiteral("rendezvous_servers entry.*http")));
+        QTest::ignoreMessage(QtWarningMsg,
+                             QRegularExpression(
+                                 QStringLiteral("rendezvous_servers entry.*ws://rv.example.net")));
+        QTest::ignoreMessage(QtWarningMsg, QRegularExpression(QStringLiteral("relay must be")));
+        const DaemonConfig parsed = DaemonConfig::fromFile(bad.fileName(), &err);
+        // A plain ws:// address only to this computer (a service running
+        // beside the Core).
+        QCOMPARE(parsed.rendezvousServers, QStringList({QStringLiteral("ws://127.0.0.1:8710")}));
+        QCOMPARE(parsed.relayAllowed, true);
     }
 
     // R-R3-23: 24000 and 48000 are the only encoder profiles. A missing key

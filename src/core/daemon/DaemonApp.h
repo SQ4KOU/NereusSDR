@@ -103,6 +103,11 @@
 //               remote listener, the first start's notice, and the console
 //               socket (startControlSocket()). J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 27 (R-IOS-08, R-IOS-16): the Core
+//               registers with the remote access service (startRendezvous()),
+//               holds a nameplate while its pairing window is open and pairs
+//               through the service's mailbox. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/RadioDiscovery.h"       // RadioInfo, RadioDiscovery, HPSDRHW
@@ -145,6 +150,7 @@ class SliceModel;
 class StepAttenuatorController;
 class TxAnalyzer;
 class StationControlCommands;
+class StationRendezvous;
 
 // Connects a headless nereusd process to a radio and keeps its slice list
 // in sync with the resolved DaemonConfig. See the file header above for
@@ -402,6 +408,11 @@ private:
     // plane when cfg.remotePort is non-zero. Opt-in; a listener that
     // cannot bind is logged, not fatal. See the definition.
     void startStationServer(const DaemonConfig& cfg);
+    // iPhone app plan Task 27: registers the Core with the remote access
+    // service (cfg.rendezvousServers, in order; none: nothing) through
+    // StationRendezvous. Called from startStationServer() once the server
+    // exists.
+    void startRendezvous(const DaemonConfig& cfg);
     void attemptStationServerListen();
     void scheduleStationServerListenRetry();
     void cancelStationServerListenRetry();
@@ -509,6 +520,10 @@ private:
     std::unique_ptr<StationServer> m_stationServer;
     /// iPhone app Task 17: before the server in stop(); reads it per request.
     std::unique_ptr<StationStatusPage> m_statusPage;
+    /// iPhone app plan Task 27: the Core's connection to the remote access
+    /// service. Before the server in stop(): its callbacks reach the
+    /// server's identity key, device list and pairing window.
+    std::unique_ptr<StationRendezvous> m_rendezvous;
     std::unique_ptr<StationControlCommands> m_controlCommands;
     std::unique_ptr<StationControlSocket> m_controlSocket;
     QList<quint16> m_linkMajors;

@@ -379,6 +379,10 @@
 //   2026-09-26  J.J. Boyd / KG4VCF  R-R3-49 / R-R3-21 / R-R3-40 (parity
 //                                    Task 16): dspInfoVersion.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 27 (R-IOS-08): acceptPairingMailbox(),
+//               a pairing through the remote access service's mailbox (pair.*
+//               only, no hellos, no address). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QHash>
@@ -660,6 +664,14 @@ public:
     /// code path, no test-only branch (SessionTransport.h explains why the
     /// seam exists at all). Takes ownership by reparenting.
     void acceptTransport(SessionTransport* transport);
+    /// iPhone app plan Task 27 (R-IOS-08): adopts a pairing that arrives
+    /// through the remote access service's mailbox
+    /// (RendezvousMailboxTransport). A mailbox carries the link's `pair.*`
+    /// messages and nothing else (the rendezvous document, section 6.5), so
+    /// no hello goes either way: the connection starts where pair.start is
+    /// expected, and any other kind ends it as a protocol error. It has no
+    /// address, so one tap is refused and only the code pairs.
+    void acceptPairingMailbox(SessionTransport* transport);
 
     /// Parent design section 4.5's EFFECTIVE slice limit: what this daemon
     /// can sustain, which on the Pi 4 floor may be fewer than the radio
@@ -1093,6 +1105,9 @@ private:
         SessionTransport* transport = nullptr;
         QString description;
         bool helloReceived = false;
+        /// iPhone app plan Task 27: a pairing through the rendezvous's
+        /// mailbox (acceptPairingMailbox()), which carries pair.* only.
+        bool mailboxPairing = false;
         bool authenticated = false;
         quint16 agreedMinor = 0;
         /// iPhone app Task 4: the major the peer's hello chose (0 until
@@ -1206,6 +1221,9 @@ private:
     SessionMessage withPairingCodeFor(SessionTransport* transport,
                                       const SessionMessage& message) const;
 
+    /// acceptTransport() and acceptPairingMailbox(): `mailbox` skips the
+    /// hello and admits pair.* only.
+    void adoptTransport(SessionTransport* transport, bool mailbox);
     /// iPhone app Task 71: after an accepted sign-in, asks the registry
     /// who is let in (ruling 4.4) and ends the device's own older
     /// connection (sameDevice), admits, or turns a full Core's newcomer

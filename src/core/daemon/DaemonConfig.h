@@ -51,10 +51,14 @@
 //   2026-09-24: iPhone app Task 17 (R-IOS-08): status_page, status_port
 //               and state_directory. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 27 (R-IOS-08, R-IOS-16):
+//               rendezvous_servers and relay. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QHostAddress>
 #include <QString>
+#include <QStringList>
 #include <optional>
 
 #include "core/session/media/DisplayBudget.h"
@@ -132,6 +136,27 @@ struct DaemonConfig {
     // StationServer::setPairingLanClickAllowed() from
     // DaemonApp::startStationServer(); the pairing window (Task 14) reads it.
     bool    pairingLanClickAllowed {true};
+
+    // iPhone app plan Task 27 (R-IOS-08, R-IOS-16; the pairing design,
+    // section 5.3): the remote access service (the rendezvous) this Core
+    // registers with, so a paired device can reach it from anywhere and
+    // pair by code through it. nereusd.conf `rendezvous_servers`: an ordered
+    // list, separated by spaces or commas, the operator's own server first
+    // and the default behind it; each a host name, host:port, or a wss://
+    // address (RendezvousClient::serverUrls). Default rv.nereussdr.com. An
+    // empty value names none, and the Core then registers nowhere. Entries
+    // that cannot be read log one warning each and are skipped. Feeds
+    // RendezvousClient from DaemonApp::startStationServer().
+    QStringList rendezvousServers {QStringLiteral("rv.nereussdr.com")};
+
+    // iPhone app plan Task 27 (the pairing design, section 5.4, "Switchable
+    // off"): whether this Core uses the relay when a direct path fails.
+    // nereusd.conf `relay = allow|deny`, default allow. deny asks the
+    // service for no relay credentials and refuses the far end's relay
+    // addresses, so every connection is direct or nothing. Any other value
+    // logs one warning and keeps allow. Feeds RendezvousClient::
+    // setRelayAllowed() from DaemonApp::startStationServer().
+    bool    relayAllowed {true};
 
     // iPhone app plan Task 34 (R-IOS-02): whether devices may transmit
     // through this Core. nereusd.conf `remote_transmit = allow|deny`,
