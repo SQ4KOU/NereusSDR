@@ -20,6 +20,7 @@
 
 #include "gui/PanadapterApplet.h"
 #include "gui/SpectrumWidget.h"
+#include "gui/StyleConstants.h"
 #include "gui/widgets/SpectrumStatusOverlay.h"
 #include "models/SliceModel.h"
 #include "core/AppSettings.h"
@@ -54,6 +55,17 @@ PanadapterApplet::PanadapterApplet(const QString& panId, QWidget* parent)
     // above the SpectrumWidget's QRhi surface without becoming a child of it.
     m_statusOverlay = new SpectrumStatusOverlay(this);
     m_statusOverlay->raise();
+
+    // Parity Task 18 (C8): a connected pan with no slice says why it is
+    // empty. Clicks pass through to the pan underneath.
+    m_noSliceHint = new QLabel(noSliceHintText(), this);
+    m_noSliceHint->setAlignment(Qt::AlignCenter);
+    m_noSliceHint->setWordWrap(true);
+    m_noSliceHint->setAttribute(Qt::WA_TransparentForMouseEvents);
+    m_noSliceHint->setStyleSheet(
+        QStringLiteral("QLabel { color: %1; background: transparent; }")
+            .arg(QLatin1String(Style::kTextSecondary)));
+    m_noSliceHint->hide();
 
     // Phase 3F: clicking anywhere in this pan makes it the active pan.
     //
@@ -98,6 +110,7 @@ void PanadapterApplet::addSlice(int sliceIndex)
     if (m_activeSliceIndex == -1) {
         setActiveSliceIndex(sliceIndex);
     }
+    refreshNoSliceHint();
 }
 
 void PanadapterApplet::removeSlice(int sliceIndex)
@@ -106,6 +119,35 @@ void PanadapterApplet::removeSlice(int sliceIndex)
     if (m_activeSliceIndex == sliceIndex) {
         m_activeSliceIndex = m_associatedSlices.isEmpty() ? -1 : *m_associatedSlices.begin();
         emit activeSliceChanged(m_panId, m_activeSliceIndex);
+    }
+    refreshNoSliceHint();
+}
+
+QString PanadapterApplet::noSliceHintText()
+{
+    return QStringLiteral("No slice here yet. Add one with +RX.");
+}
+
+void PanadapterApplet::setNoSliceHintAllowed(bool allowed)
+{
+    if (m_noSliceHintAllowed == allowed) { return; }
+    m_noSliceHintAllowed = allowed;
+    refreshNoSliceHint();
+}
+
+QString PanadapterApplet::visibleNoSliceHint() const
+{
+    return m_noSliceHint && !m_noSliceHint->isHidden() ? m_noSliceHint->text() : QString();
+}
+
+void PanadapterApplet::refreshNoSliceHint()
+{
+    if (!m_noSliceHint) { return; }
+    const bool show = m_noSliceHintAllowed && m_associatedSlices.isEmpty();
+    m_noSliceHint->setVisible(show);
+    if (show) {
+        m_noSliceHint->setGeometry(rect().adjusted(16, 0, -16, 0));
+        m_noSliceHint->raise();
     }
 }
 
@@ -153,6 +195,7 @@ void PanadapterApplet::resizeEvent(QResizeEvent* event)
 {
     QWidget::resizeEvent(event);
     repositionStatusOverlay();
+    refreshNoSliceHint();
 }
 
 QByteArrayList PanadapterApplet::statusOverlaySliceProperties()

@@ -71,6 +71,10 @@
 //   2026-09-26 - R-R3-13 / R-R3-49 (parity Task 15): meterReadingsVersion,
 //                after bandSelectVersion in the minor-11 block. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-R3-49 / R-R3-21 / R-R3-40 (parity Task 16):
+//                dspInfoVersion, after meterReadingsVersion in the minor-11
+//                block. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 #include "core/session/StationCapabilities.h"
@@ -186,6 +190,8 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         updates.append(intEntry("bandSelectVersion", bandSelectVersion));
         // R-R3-13 / R-R3-49 (parity Task 15): the ADC and AGC readings.
         updates.append(intEntry("meterReadingsVersion", meterReadingsVersion));
+        // R-R3-49 / R-R3-21 / R-R3-40 (parity Task 16): the DSP facts.
+        updates.append(intEntry("dspInfoVersion", dspInfoVersion));
         // iPhone app Task 71: several devices at once, last, and only for
         // a peer that declared the feature.
         if (sessionHolderEntry) {
@@ -392,6 +398,7 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "transmitSettingsVersion"
                    || u.name == "bandSelectVersion"
                    || u.name == "meterReadingsVersion"
+                   || u.name == "dspInfoVersion"
                    || u.name == "sessionHolderVersion"
                    || u.name == "remoteTxVersion"
                    || u.name == "txStateVersion") {
@@ -433,6 +440,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                     caps.transmitSettingsVersion = version;
                 } else if (u.name == "meterReadingsVersion") {
                     caps.meterReadingsVersion = version;
+                } else if (u.name == "dspInfoVersion") {
+                    caps.dspInfoVersion = version;
                 } else {
                     caps.bandSelectVersion = version;
                 }

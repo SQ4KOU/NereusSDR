@@ -55,6 +55,10 @@
 //                                    IStationLink. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Remote-window parity Task 16: a
+//                                    refused filter curve request raises
+//                                    no slice notice. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -211,6 +215,9 @@ private slots:
     // ---- A refusal is visible, and nothing was optimistically flipped ----
     void stationRefusalReachesAnOperatorFacingSignalAndChangesNothingLocally();
     void stationRefusedSampleRateReachesSliceRetuneRejected();
+    // Parity Task 16: the filter graph's own curve request is not an
+    // operator's command; the Core's refusal is not shown as one.
+    void refusedFilterCurveRequestRaisesNoSliceNotice();
 
     // ---- No link at all ----
     void withNoStationLinkEverySliceCommandRefusesInsteadOfMutatingLocally();
@@ -624,6 +631,37 @@ void TstRemoteSliceCommands::
     QCOMPARE(station.slices().size(), 1);
     QCOMPARE(client.activeSlice(), client.sliceById(onlyId));
     QCOMPARE(station.activeSlice(), station.sliceById(onlyId));
+}
+
+void TstRemoteSliceCommands::refusedFilterCurveRequestRaisesNoSliceNotice()
+{
+    auto fixture = establishSession(0);
+    QVERIFY(fixture != nullptr);
+    RadioModel& client = *fixture->clientModel;
+    QCOMPARE(fixture->client->capabilities().dspInfoVersion, 1);
+
+    // This station has no WDSP channel, so it refuses the curve ("The
+    // Core's receiver for this slice is not running."); the window keeps
+    // its passband and no slice notice appears.
+    QSignalSpy rejected(&client, &RadioModel::sliceAddRejected);
+    QSignalSpy curve(&client, &RadioModel::coreFilterResponseChanged);
+    client.setCoreFilterResponseWanted(true);
+    QTRY_COMPARE(curve.count(), 1);
+    QVERIFY(client.coreFilterResponse().magnitudesDb.isEmpty());
+    QTest::qWait(100);
+    QCOMPARE(rejected.count(), 0);
+
+    // A filter change asks again, and still raises nothing.
+    SliceModel* slice = client.slices().first();
+    slice->setFilter(200, 2800);
+    QTRY_COMPARE(curve.count(), 2);
+    QCOMPARE(rejected.count(), 0);
+
+    // Not wanted: a change asks nothing.
+    client.setCoreFilterResponseWanted(false);
+    slice->setFilter(300, 2700);
+    QTest::qWait(250);
+    QCOMPARE(curve.count(), 2);
 }
 
 void TstRemoteSliceCommands::stationRefusedSampleRateReachesSliceRetuneRejected()

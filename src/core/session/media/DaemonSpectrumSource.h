@@ -36,6 +36,11 @@ struct DaemonSpectrumSourceConfig {
     /// frame rate it changes how far the window moves, not what a bin
     /// represents.
     bool transformsFollowFrameRate{false};
+    /// Parity Task 17 (R-R3-01): the engine's input decimation, 1 to 32
+    /// (FFTEngine::setDecimation, Setup > Display > Rendering > Decimation):
+    /// only every Nth I/Q pair reaches the FFT. A change renews the input
+    /// history, as the FFT size does.
+    int decimation{1};
 };
 
 /// A complete, unreduced FFT frame.  `generation` changes on every accepted
@@ -96,6 +101,9 @@ public:
     /// Frames the engine published into this source's latest-frame slot,
     /// each replacing the one before (so it can exceed frameAvailable).
     quint64 publishedFrames(const MediaSourceKey& key) const;
+    /// The decimation the source's engine runs at (FFTEngine::decimation),
+    /// 0 for an unknown source.
+    int engineDecimation(const MediaSourceKey& key) const;
 
     /// Returns and clears the one latest frame slot for key.  A slow consumer
     /// can therefore miss frames but cannot cause an output-frame backlog.

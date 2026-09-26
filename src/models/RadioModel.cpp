@@ -228,6 +228,20 @@
 //                SliceMeterPump at once (setup.cs
 //                udDisplayMeterDelay_ValueChanged [v2.10.3.15]). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-R3-49 / R-R3-21 / R-R3-40 (parity Task 16): the DSP
+//                facts a window reads from its Core: noiseReductionMethods
+//                (RxChannel's build and platform checks), the last DSP
+//                Options apply time, each slice's minNotchWidthHz following
+//                its channel, and dsp.filterResponse's curve (the local
+//                filter graph's computation). NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-R3-49 (trunk merge of parity Tasks 16 to 18): one noise
+//                reduction availability source. noiseReductionMethods and
+//                noiseReductionUnavailableReason dropped for
+//                nrCannotRunReason (DspAssetService), which in a remote
+//                window says the Core does not say below dspAssetVersion 3
+//                (DFNR) or 4 (MNR). J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 //   2026-09-25 - R-R3-32 / R-R3-46 / R-R3-49 (parity Task 6): paReadings
 //                and paRowVolts, the one PA reading source (the Core's in a
 //                remote window, applyCorePaReadings); `txInhibited` follows
@@ -423,6 +437,11 @@
 //               priming and VOX), one writer at a time (remoteMicWriter),
 //               VOX following the holder. J.J. Boyd (KG4VCF), with AI-
 //               assisted implementation via Anthropic Claude Code.
+//   2026-09-26 - Parity Task 18 (B3.1): a remote window's band button for a
+//                named slice sends slice.selectBand to a Core at
+//                bandSelectVersion 1, so the Core changes that slice with
+//                its own band memory. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -636,6 +655,7 @@ warren@wpratt.com
 #include "RadioModel.h"
 #include "core/AmModulationAnalyzer.h"
 #include "BandDefaults.h"
+#include "BandGrid.h"
 #include "RxDspWorker.h"
 #include "core/platform/ThreadPlacement.h"
 #include "core/FFTEngine.h"
@@ -1422,6 +1442,35 @@ RadioModel::RadioModel(Role role, QObject* parent)
         // Task 16: Setup's Receive Only, read at start as Thetis restores
         // it (setup.cs:740 [v2.10.3.15], InitGeneralTab).
         m_rxOnlySetting = rxOnlySetting();
+    }
+
+    // R-R3-49 (parity Task 16): a local model's noise reduction is its own
+    // build's and computer's, and its DSP Options apply time its own
+    // rebuilds'; a remote window holds the Core's (applyMirroredValue).
+    if (m_role == Role::Remote) {
+        // The filter graph's curve follows the slice it draws as slices
+        // come and go (coreFilterResponseSlice).
+        const auto rewatch = [this]() {
+            if (!m_coreFilterResponseWanted) {
+                return;
+            }
+            watchCoreFilterResponseSlice();
+            requestCoreFilterResponse();
+        };
+        connect(this, &RadioModel::activeSliceChanged, this, rewatch);
+        connect(this, &RadioModel::sliceAdded, this, rewatch);
+        connect(this, &RadioModel::sliceRemoved, this, rewatch);
+    } else {
+        // Parity Task 16: a new slice carries its channel's minimum notch
+        // width at once (0 until its channel opens).
+        connect(this, &RadioModel::sliceAdded, this, &RadioModel::refreshSliceMinNotchWidths);
+        connect(this, &RadioModel::dspChangeMeasured, this, [this](qint64 elapsedMs) {
+            if (m_dspOptionsLastApplyMs == elapsedMs) {
+                return;
+            }
+            m_dspOptionsLastApplyMs = elapsedMs;
+            emit dspOptionsLastApplyMsChanged(elapsedMs);
+        });
     }
 
     // R-R3-49 (parity Task 6): `txInhibited` follows this model's own
@@ -3312,6 +3361,17 @@ QString RadioModel::applyMirroredValue(const QByteArray& propertyName, const QVa
             if (m_remoteRfKitEnabled != value.toBool()) {
                 m_remoteRfKitEnabled = value.toBool();
                 emit rfKitEnabledChanged(m_remoteRfKitEnabled);
+            }
+            return {};
+        }
+        if (propertyName == "dspOptionsLastApplyMs") {
+            // R-R3-49 (parity Task 16): the Core's last DSP Options apply.
+            bool ok = false;
+            const qint64 ms = value.toLongLong(&ok);
+            if (!ok) { return QStringLiteral("Expected a whole number of milliseconds."); }
+            if (m_dspOptionsLastApplyMs != ms) {
+                m_dspOptionsLastApplyMs = ms;
+                emit dspOptionsLastApplyMsChanged(ms);
             }
             return {};
         }
@@ -6548,6 +6608,10 @@ void RadioModel::applyStationCapabilities(const NereusSDR::StationCapabilities& 
 
     m_stationMaxSlices = caps.effectiveMaxSlices > 0 ? caps.effectiveMaxSlices : 1;
     m_stationUserDdcCount = caps.userDdcCount;
+    // R-R3-49 (parity Task 16): whether the Core sends its filter curve,
+    // and (trunk merge) whether it says which noise reduction it runs.
+    setStationDspInfoVersion(caps.dspInfoVersion);
+    setStationDspAssetVersion(caps.dspAssetVersion);
 
     if (infoMoved) {
         emit infoChanged();
@@ -6703,6 +6767,269 @@ bool RadioModel::isSwrProtectionSettingKey(const QString& key)
         || key == QLatin1String("SwrTuneProtectionEnabled")
         || key == QLatin1String("TunePowerSwrIgnore")
         || key == QLatin1String("WindBackPowerSwr");
+}
+
+// ── Remote-window parity Task 16 (R-R3-49, R-R3-21, R-R3-40) ────────────────
+//
+// NereusSDR-original. The facts a remote window needs about its Core's DSP
+// that it used to read from its own build or its own (idle) channels.
+
+QString RadioModel::noiseReductionNotSaidReason()
+{
+    return QStringLiteral("This Core does not say which noise reduction it can run. "
+                          "Updating the Core may help.");
+}
+
+void RadioModel::setStationDspInfoVersion(int version)
+{
+    if (m_role != Role::Remote) {
+        return;
+    }
+    const bool changed = m_stationDspInfoVersion != version;
+    m_stationDspInfoVersion = version;
+    if (changed) {
+        emit stationDspInfoVersionChanged();
+    }
+    if (m_coreFilterResponseWanted) {
+        watchCoreFilterResponseSlice();
+        requestCoreFilterResponse();
+    }
+}
+
+void RadioModel::setStationDspAssetVersion(int version)
+{
+    // Trunk merge of parity Tasks 16 to 18 (R-R3-49): a Core below
+    // dspAssetVersion 3 never sends dfnrRunnable, below 4 never mnrRunnable;
+    // nrCannotRunReason then says it does not say.
+    if (m_role != Role::Remote || m_stationDspAssetVersion == version) {
+        return;
+    }
+    m_stationDspAssetVersion = version;
+    emit nrAvailabilityChanged();
+}
+
+qint64 RadioModel::dspOptionsLastApplyMs() const
+{
+    return m_dspOptionsLastApplyMs;
+}
+
+bool RadioModel::filterResponseForStation(int sliceId, bool highResolution,
+                                          FilterResponse* out, QString* reason) const
+{
+    const auto refuse = [reason](const QString& text) {
+        if (reason) {
+            *reason = text;
+        }
+        return false;
+    };
+    SliceModel* slice = sliceById(sliceId);
+    if (slice == nullptr) {
+        return refuse(QStringLiteral("The Core has no such slice."));
+    }
+    FilterResponse response;
+    if (highResolution) {
+        // The filter graph's own computation (DspOptionsPage binds
+        // FilterDisplayItem to the channel and it paints
+        // filterResponseMagnitudes): the bins it resamples.
+        RxChannel* channel = rxChannelForSlice(slice->sliceIndex());
+        if (channel == nullptr) {
+            return refuse(QStringLiteral("The Core's receiver for this slice is not running."));
+        }
+        double stepHz = 0.0;
+        const QVector<double> bins = channel->filterResponseBins(&stepHz);
+        if (bins.isEmpty()) {
+            return refuse(QStringLiteral("The Core cannot work out this filter's curve."));
+        }
+        double peak = 0.0;
+        for (double m : bins) {
+            peak = std::max(peak, m);
+        }
+        peak = std::max(peak, 1e-30);
+        response.stepHz = stepHz;
+        response.magnitudesDb.reserve(bins.size());
+        for (double m : bins) {
+            // The graph's own floor (RxChannel::resampleFilterResponse).
+            response.magnitudesDb.append(
+                std::max(20.0 * std::log10(std::max(m, 1e-300) / peak), -120.0));
+        }
+    }
+    if (out) {
+        *out = response;
+    }
+    return true;
+}
+
+QString RadioModel::filterResponseToJson(const QVector<double>& magnitudesDb)
+{
+    QJsonArray array;
+    for (double db : magnitudesDb) {
+        array.append(std::round(db * 1000.0) / 1000.0);
+    }
+    return QString::fromUtf8(QJsonDocument(array).toJson(QJsonDocument::Compact));
+}
+
+std::optional<QVector<double>> RadioModel::filterResponseFromJson(const QString& json)
+{
+    QJsonParseError error{};
+    const QJsonDocument doc = QJsonDocument::fromJson(json.toUtf8(), &error);
+    if (error.error != QJsonParseError::NoError || !doc.isArray()) {
+        return std::nullopt;
+    }
+    QVector<double> values;
+    const QJsonArray array = doc.array();
+    values.reserve(array.size());
+    for (const QJsonValue& v : array) {
+        if (!v.isDouble() || !std::isfinite(v.toDouble())) {
+            return std::nullopt;
+        }
+        values.append(v.toDouble());
+    }
+    return values;
+}
+
+QString RadioModel::coreFilterResponseUnavailableReason() const
+{
+    if (m_role != Role::Remote) {
+        return {};
+    }
+    if (m_stationDspInfoVersion < 1) {
+        return IStationLink::filterResponseUnavailableReason();
+    }
+    return {};
+}
+
+SliceModel* RadioModel::coreFilterResponseSlice() const
+{
+    // A local window's graph draws channel 0 (DspOptionsPage's
+    // filterGraphChannel); a remote window asks for the same receiver,
+    // slice 0, or the active slice when there is none.
+    if (SliceModel* first = sliceById(0)) {
+        return first;
+    }
+    return m_activeSlice;
+}
+
+void RadioModel::watchCoreFilterResponseSlice()
+{
+    for (QMetaObject::Connection& conn : m_coreFilterResponseSliceConns) {
+        disconnect(conn);
+    }
+    m_coreFilterResponseSliceConns.clear();
+    if (m_role != Role::Remote || !m_coreFilterResponseWanted) {
+        return;
+    }
+    SliceModel* slice = coreFilterResponseSlice();
+    if (slice == nullptr) {
+        return;
+    }
+    // The curve follows the channel's filter edges and rate; the minimum
+    // notch width moves with the rate (nbp.c min_notch_width), so it stands
+    // in for a rate change the window cannot see otherwise.
+    const auto again = [this]() { requestCoreFilterResponse(); };
+    m_coreFilterResponseSliceConns << connect(slice, &SliceModel::filterChanged, this, again)
+                                   << connect(slice, &SliceModel::dspModeChanged, this, again)
+                                   << connect(slice, &SliceModel::minNotchWidthHzChanged, this,
+                                              again);
+}
+
+void RadioModel::setCoreFilterResponseWanted(bool wanted)
+{
+    if (m_role != Role::Remote) {
+        return;
+    }
+    if (m_coreFilterResponseWanted == wanted) {
+        return;
+    }
+    m_coreFilterResponseWanted = wanted;
+    if (!wanted) {
+        watchCoreFilterResponseSlice();
+        return;
+    }
+    watchCoreFilterResponseSlice();
+    requestCoreFilterResponse();
+}
+
+void RadioModel::requestCoreFilterResponse()
+{
+    if (m_role != Role::Remote || !m_coreFilterResponseWanted || m_station == nullptr
+        || m_stationDspInfoVersion < 1) {
+        return;
+    }
+    // One request at a time: a change while one is out asks again when it
+    // is answered, so a filter drag sends no more than the Core answers.
+    if (m_coreFilterResponseCommand != 0) {
+        m_coreFilterResponseDirty = true;
+        return;
+    }
+    SliceModel* slice = coreFilterResponseSlice();
+    if (slice == nullptr) {
+        return;
+    }
+    const IStationLink::CommandOutcome outcome =
+        m_station->requestFilterResponse(slice->sliceIndex(), /*highResolution=*/true);
+    if (!outcome.sent) {
+        return;
+    }
+    m_coreFilterResponseDirty = false;
+    m_coreFilterResponseCommand = outcome.commandId != 0 ? outcome.commandId : 1;
+}
+
+void RadioModel::reportStationFilterResponse(quint32 commandId, bool accepted,
+                                             const QString& reason, double startHz,
+                                             double stepHz, const QString& json)
+{
+    Q_UNUSED(reason);
+    if (m_coreFilterResponseCommand == 0 || commandId != m_coreFilterResponseCommand) {
+        return;
+    }
+    m_coreFilterResponseCommand = 0;
+    if (accepted) {
+        const std::optional<QVector<double>> values = filterResponseFromJson(json);
+        FilterResponse response;
+        if (values && std::isfinite(startHz) && std::isfinite(stepHz) && stepHz >= 0.0) {
+            response.startHz = startHz;
+            response.stepHz = stepHz;
+            response.magnitudesDb = *values;
+        }
+        m_coreFilterResponse = response;
+    } else {
+        // No curve to draw (no receiver yet): the graph shows its passband.
+        m_coreFilterResponse = FilterResponse{};
+    }
+    emit coreFilterResponseChanged();
+    if (m_coreFilterResponseDirty) {
+        requestCoreFilterResponse();
+    }
+}
+
+void RadioModel::failStationFilterResponse()
+{
+    // The link closed: the curve request it held gets no answer, so the
+    // next session asks afresh (setStationDspInfoVersion).
+    m_coreFilterResponseCommand = 0;
+    m_coreFilterResponseDirty = false;
+}
+
+void RadioModel::refreshSliceMinNotchWidths()
+{
+    if (m_role == Role::Remote) {
+        return;
+    }
+    // Each slice carries its own receiver's minimum (as the local TNF page
+    // reads RxChannel::minNotchWidthHz), 0 while it has no channel. The
+    // channel's own signal re-runs this when a filter size or rate moves it
+    // (console.cs:48787-48818 UpdateMinimumNotchWidthRX [v2.10.3.15] is the
+    // same re-read in Thetis).
+    for (SliceModel* slice : m_slices) {
+        RxChannel* channel = rxChannelForSlice(slice->sliceIndex());
+        if (channel == nullptr) {
+            slice->setMinNotchWidthHz(0.0);
+            continue;
+        }
+        connect(channel, &RxChannel::minNotchWidthChanged, this,
+                &RadioModel::refreshSliceMinNotchWidths, Qt::UniqueConnection);
+        slice->setMinNotchWidthHz(channel->minNotchWidthHz());
+    }
 }
 
 bool RadioModel::applyMeterSetting(const QString& key, const QVariant& value)
@@ -7007,6 +7334,10 @@ void RadioModel::openRxChannelPool(int poolSize, int inputBufferSize,
     // is not (RXANBPSetTuneFrequency short-circuits at
     // third_party/wdsp/src/nbp.c:479).
     syncNotchesToAllChannels();
+
+    // R-R3-49 (parity Task 16): each slice's minNotchWidthHz follows the
+    // channel this pool just opened for it.
+    refreshSliceMinNotchWidths();
 }
 
 // ── Phase 3F Sub-Epic I: pooled-channel activation ──────────────────────────
@@ -7273,6 +7604,15 @@ QString RadioModel::nrCannotRunReason(NrSlot slot) const
     // R-R3-49, Sub-epic C-1: the Core's word, mirrored in a remote window.
     if (!m_dspAssets) {
         return nrCannotRunInThisBuildReason(slot);
+    }
+    // Trunk merge of parity Tasks 16 to 18 (R-R3-49, parity Task 16's B2.4):
+    // a Core below dspAssetVersion 3 does not say whether it runs DFNR, and
+    // below 4 whether it runs MNR. Shown disabled with the reason, never
+    // offered for the Core to refuse.
+    if (m_role == Role::Remote
+        && ((slot == NrSlot::DFNR && m_stationDspAssetVersion < 3)
+            || (slot == NrSlot::MNR && m_stationDspAssetVersion < 4))) {
+        return noiseReductionNotSaidReason();
     }
     switch (slot) {
     case NrSlot::DFNR:
@@ -12024,6 +12364,21 @@ void RadioModel::onBandButtonClicked(SliceModel* slice, Band band)
     if (!slice) {
         // No slice (pre-connection, between-slice teardown, etc.).
         // Silent — avoids log spam from UI events firing during startup.
+        return;
+    }
+
+    // Parity Task 18 (B3.1, R-IOS-27): a remote window asks the Core to run
+    // this same band change on the named slice (slice.selectBand), so the
+    // band memory, seed and lock refusal are the Core's, as for a band
+    // button at the Core. The Core takes the band grid's bands; anything
+    // else, or a Core without the verb, keeps the path below.
+    if (m_role == Role::Remote && m_station != nullptr && m_station->bandSelectAvailable()
+        && bandGridEntry(band) != nullptr) {
+        const IStationLink::CommandOutcome outcome =
+            m_station->requestSelectBand(slice->sliceIndex(), static_cast<int>(band));
+        if (!outcome.sent) {
+            emit bandClickIgnored(band, outcome.reason);
+        }
         return;
     }
 
@@ -19149,6 +19504,8 @@ void RadioModel::teardownConnection()
 
     // Shutdown WDSP (destroys all channels, saves cache)
     m_wdspEngine->shutdown();
+    // R-R3-49 (parity Task 16): no channel, no minimum notch width.
+    refreshSliceMinNotchWidths();
 
     // Disconnect remaining signals (prevents new work being queued)
     QObject::disconnect(m_connection, nullptr, this, nullptr);
@@ -22514,6 +22871,10 @@ qint64 RadioModel::setActiveRxCountLive(int newCount)
             }
         }
     }
+
+    // R-R3-49 (parity Task 16): the slices' minimum notch widths follow
+    // the channels just opened or closed.
+    refreshSliceMinNotchWidths();
 
     // ── Step 4: Reconfigure ReceiverManager DDC mapping ──────────────────────
     if (m_receiverManager) {

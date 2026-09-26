@@ -347,6 +347,34 @@ private slots:
     // -- a use-after-free racing the pool's own teardown. Queue real work
     // onto the engine's thread right before destroying the pool, so the
     // destructor races an actual in-flight call rather than an idle one.
+    // Parity Task 17 follow-up (R-R3-01): Rendering > Decimation reaches
+    // every engine the pool has and every one it makes afterwards; before
+    // any call the pool leaves each engine's own decimation alone (the
+    // Core's spectrum source sets it per engine).
+    void decimationAppliesToExistingAndFutureEngines()
+    {
+        FftEnginePool pool;
+        FFTEngine* first = pool.engineForStream(0);
+        QVERIFY(first);
+        first->setDecimation(3);
+        pool.engineForSource({0, FftTier::Fine}, pool.config());
+        QCOMPARE(pool.engineForStream(1)->decimation(), 1);
+        QCOMPARE(first->decimation(), 3);
+
+        pool.setDecimation(5);
+        QCOMPARE(pool.decimation(), 5);
+        for (const FftSourceKey& key : pool.sources()) {
+            QCOMPARE(pool.engineForSource(key, pool.config())->decimation(), 5);
+        }
+        QCOMPARE(pool.engineForStream(2)->decimation(), 5);
+
+        // Outside 1 to 32 is ignored, as FFTEngine::setDecimation ignores it.
+        pool.setDecimation(0);
+        pool.setDecimation(33);
+        QCOMPARE(pool.decimation(), 5);
+        QCOMPARE(first->decimation(), 5);
+    }
+
     void destroysSafelyWithPendingWorkQueued()
     {
         auto* pool = new FftEnginePool;

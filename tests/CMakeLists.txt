@@ -7255,6 +7255,21 @@ nereus_add_test(tst_slice_meter_pump_readings
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
 
+# Remote-window parity Task 16 (R-R3-49, R-R3-21, R-R3-40): DSP facts from the
+# Core under dspInfoVersion 1. The flag, NR/ANF and DSP > NR offer DFNR and
+# MNR by the Core's DspAssetService word (dfnrRunnable, mnrRunnable); the TNF page and a real remote
+# window's pan follow the Core's minNotchWidthHz; dsp.filterResponse's bins,
+# resampled in the window, are the curve the Core's channel draws; "Time to
+# last change" is the Core's. Loopback and a fake radio only, no RF, no
+# audio device.
+nereus_add_test(tst_remote_dsp_info
+    fakes/P1FakeRadio.cpp
+    fakes/ConnectableRadioModel.cpp
+    fakes/LoopbackTransport.cpp
+    fakes/RemoteWindowHarness.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_remote_dsp_info PRIVATE NEREUS_BUILD_TESTS)
+
 # Remote Daemon R2, Task 13: AppSettings mutator funnel. Before this task
 # only setValue()/remove()/clear() touched the m_settings map directly;
 # everything else (setHardwareValue/hardwareValue/hardwareValues/
@@ -7418,6 +7433,14 @@ nereus_add_test(tst_remote_window_harness fakes/RemoteWindowHarness.cpp)
 # R3 Setup fix wave (R-R3-21): SetupDialog's test seams (page scopes by
 # registry index) for the case that realizes every Core page.
 target_compile_definitions(tst_remote_window_harness PRIVATE NEREUS_BUILD_TESTS)
+
+# Remote-window parity Task 18 (R-R3-09, R-R3-24, R-R3-34, R-R3-49): a
+# control drawn on a pan acts on that pan, in a local window and a remote
+# one: the BAND flyout (B3.1), an empty pan's reason (C8), the Display
+# flyout and Clarity badge per pan, a spot's left-click, and the Pan Layout
+# limit. Loopback WebSocket and test models only; no RF, no audio device.
+nereus_add_test(tst_pan_actions_per_pan fakes/RemoteWindowHarness.cpp)
+target_compile_definitions(tst_pan_actions_per_pan PRIVATE NEREUS_BUILD_TESTS)
 
 # Remote Daemon R3 R-R3-30: a secondary slice flag may be destroyed and
 # replaced while its SliceModel and MainWindow remain alive during a pan-layout

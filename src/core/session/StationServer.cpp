@@ -489,6 +489,16 @@
 //               and TUNE wait while another device holds. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  R-R3-49 / R-R3-21 / R-R3-40 (parity
+//                                    Task 16): dspInfoVersion 1 (the Core's
+//                                    noise reduction, DSP Options apply
+//                                    time, minimum notch widths and
+//                                    dsp.filterResponse).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  R-R3-01 / R-R3-49 (parity Task 17):
+//                                    spectrumGrantVersion 2 (a subscribe's
+//                                    decimation reaches the pan's engine).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -6699,6 +6709,13 @@ int StationServer::bandSelectVersion() const
     return m_radioModel ? 1 : 0;
 }
 
+int StationServer::dspInfoVersion() const
+{
+    // R-R3-49 / R-R3-21 / R-R3-40 (parity Task 16): the DSP facts come from
+    // this Core's own build and channels, so a local radio model.
+    return m_radioModel && m_radioModel->role() != RadioModel::Role::Remote ? 1 : 0;
+}
+
 int StationServer::meterReadingsVersion() const
 {
     // R-R3-13 / R-R3-49 (parity Task 15): the pump that fills the slices'
@@ -6916,6 +6933,8 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             caps.bandSelectVersion = bandSelectVersion();
             // R-R3-13 / R-R3-49 (parity Task 15): the ADC and AGC readings.
             caps.meterReadingsVersion = meterReadingsVersion();
+            // R-R3-49 / R-R3-21 / R-R3-40 (parity Task 16): the DSP facts.
+            caps.dspInfoVersion = dspInfoVersion();
             // iPhone app Task 71 (ruling 10.1): several devices at once, for
             // a peer that declared sessionHolder with deviceAuth; any other
             // peer is sent no entry, so its capabilities are today's.
@@ -6974,7 +6993,9 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
     caps.remoteMediaVersion = media ? 1 : 0;
     caps.remoteWidebandDisplayVersion = media ? 1 : 0;
     caps.remoteAudioStatusVersion = media ? 1 : 0;
-    caps.spectrumGrantVersion = media ? 1 : 0;
+    // Parity Task 17 (R-R3-01): version 2 adds the subscribe's
+    // `decimation`, applied to the endpoint's engine.
+    caps.spectrumGrantVersion = media ? 2 : 0;
     // R-R3-23: lossless audio beside Opus. Advertised with media whatever
     // nereusd.conf audio_lossless says, so a GUI can be told plainly when
     // the Core's own setting refuses it.

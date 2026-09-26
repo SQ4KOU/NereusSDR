@@ -1392,6 +1392,7 @@ set(MODEL_SOURCES
     src/models/FilterPresetStore.cpp
     src/models/NotchModel.cpp
     src/models/SpotModel.cpp
+    src/models/SpotModeResolver.cpp
     src/models/SpotTableModel.cpp
     src/models/BandFilterProxy.cpp
     src/models/FreeDVStationModel.cpp

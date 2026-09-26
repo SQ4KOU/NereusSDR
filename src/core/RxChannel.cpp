@@ -44,6 +44,11 @@
 //                 DFNR selection whose model is missing or failed to load.
 //                 NereusSDR-original, by J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26 - Remote-window parity Task 16 (R-R3-49): the filter
+//                 response split into filterResponseBins and
+//                 resampleFilterResponse, so a Core can send its bins.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code. NereusSDR-original.
 // =================================================================
 
 //=================================================================
@@ -3663,7 +3668,16 @@ QVector<float> RxChannel::filterResponseMagnitudes(int nPoints) const
     if (nPoints <= 0) {
         return {};
     }
+    // Parity Task 16: the bins, then the graph's resampling, so a remote
+    // window drawing a Core's bins draws what this channel would.
+    return resampleFilterResponse(filterResponseBins(), nPoints);
+}
 
+QVector<double> RxChannel::filterResponseBins(double* stepHz) const
+{
+    if (stepHz) {
+        *stepHz = 0.0;
+    }
 #if defined(HAVE_WDSP) && defined(HAVE_FFTW3)
     // Number of FIR taps.  The default WDSP BANDPASS uses nc = 1025 taps
     // (a power-of-two-plus-one) with wintype=1 (7-term Blackman-Harris) and
@@ -3693,7 +3707,7 @@ QVector<float> RxChannel::filterResponseMagnitudes(int nPoints) const
     // FFT size must be >= kTapCount; use next power-of-two >= 4096 to ensure
     // sufficient frequency resolution for the display (≥ 4 Hz/bin at 48 kHz).
     // A 4096-point FFT gives 48000 / 4096 ≈ 11.7 Hz/bin.
-    constexpr int kFftSize = 4096;
+    constexpr int kFftSize = kFilterResponseFftSize;
     static_assert(kFftSize >= kTapCount, "FFT size must exceed tap count");
 
     // Allocate aligned FFTW3 buffers.
@@ -3725,9 +3739,38 @@ QVector<float> RxChannel::filterResponseMagnitudes(int nPoints) const
     fftw_execute(plan);
     fftw_destroy_plan(plan);
 
-    // Compute magnitude in dB for the positive half-spectrum [0, sampleRate/2].
+    // Magnitude for the positive half-spectrum [0, sampleRate/2].
     // out[0..kFftSize/2] covers DC to Nyquist — kFftSize/2 + 1 unique bins.
     const int halfSize = kFftSize / 2 + 1;  // DC + positive frequencies
+    QVector<double> bins(halfSize);
+    for (int j = 0; j < halfSize; ++j) {
+        const double re = out[j][0];
+        const double im = out[j][1];
+        bins[j] = std::sqrt(re * re + im * im);
+    }
+
+    fftw_free(in);
+    fftw_free(out);
+
+    if (stepHz) {
+        *stepHz = sr / static_cast<double>(kFftSize);
+    }
+    return bins;
+
+#else
+    // WDSP or FFTW3 not available: return an empty vector so callers can
+    // gracefully skip high-resolution rendering.
+    return {};
+#endif
+}
+
+QVector<float> RxChannel::resampleFilterResponse(const QVector<double>& binMagnitudes,
+                                                 int nPoints)
+{
+    const int halfSize = static_cast<int>(binMagnitudes.size());
+    if (nPoints <= 0 || halfSize <= 0) {
+        return {};
+    }
 
     // Decimate to nPoints output samples by linear interpolation over the
     // positive half-spectrum.  Index j in [0, halfSize-1] maps to frequency
@@ -3741,11 +3784,8 @@ QVector<float> RxChannel::filterResponseMagnitudes(int nPoints) const
     // Find peak magnitude for normalisation (reference = peak = 0 dB).
     double peakMag = 0.0;
     for (int j = 0; j < halfSize; ++j) {
-        const double re  = out[j][0];
-        const double im  = out[j][1];
-        const double mag = std::sqrt(re * re + im * im);
-        if (mag > peakMag) {
-            peakMag = mag;
+        if (binMagnitudes[j] > peakMag) {
+            peakMag = binMagnitudes[j];
         }
     }
     if (peakMag < 1e-30) {
@@ -3760,13 +3800,7 @@ QVector<float> RxChannel::filterResponseMagnitudes(int nPoints) const
         const double frac    = fracIdx - static_cast<double>(idx0);
 
         // Linear-interpolate magnitude (not dB) for smooth curve.
-        auto binMag = [&](int j) -> double {
-            const double re = out[j][0];
-            const double im = out[j][1];
-            return std::sqrt(re * re + im * im);
-        };
-
-        const double mag = binMag(idx0) * (1.0 - frac) + binMag(idx1) * frac;
+        const double mag = binMagnitudes[idx0] * (1.0 - frac) + binMagnitudes[idx1] * frac;
 
         // Convert to dB, normalised to peak (0 dB = passband).
         // Clamp at -120 dB to avoid -inf in dead stopband.
@@ -3774,17 +3808,7 @@ QVector<float> RxChannel::filterResponseMagnitudes(int nPoints) const
         result[i] = static_cast<float>(std::max(magDb, -120.0));
     }
 
-    fftw_free(in);
-    fftw_free(out);
-
     return result;
-
-#else
-    // WDSP or FFTW3 not available — return empty vector so callers can
-    // gracefully skip high-resolution rendering.
-    Q_UNUSED(nPoints);
-    return {};
-#endif
 }
 
 } // namespace NereusSDR

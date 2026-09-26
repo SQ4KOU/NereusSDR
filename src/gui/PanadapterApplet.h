@@ -47,6 +47,13 @@
 //                                    upstream carries it on docked pans
 //                                    too. AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Remote-window parity Task 18 (C8,
+//                                    R-R3-24, R-R3-34): a connected pan
+//                                    with no slice says so and how to add
+//                                    one, instead of standing blank.
+//                                    NereusSDR-original. AI-assisted
+//                                    transformation via Anthropic Claude
+//                                    Code.
 // =================================================================
 #pragma once
 
@@ -59,6 +66,7 @@
 #include <QSet>
 
 class QContextMenuEvent;
+class QLabel;
 class QMenu;
 
 namespace NereusSDR {
@@ -148,6 +156,15 @@ public:
     qint64  statusFrequencyHz() const;
     QString statusMode() const;
     int     statusChainIndex() const;
+    /// Parity Task 18 (C8, R-R3-24, R-R3-34): the words a connected pan with
+    /// no slice shows over its display.
+    static QString noSliceHintText();
+    /// Whether a pan with no slice may say so: true while the radio is
+    /// connected and the window knows the slices it has. The hint shows
+    /// while this is true and the pan hosts no slice.
+    void setNoSliceHintAllowed(bool allowed);
+    /// The hint as shown now; empty when hidden.
+    QString visibleNoSliceHint() const;
     /// Remote display status (R-R3-37): the short line is painted under the
     /// badges, the explanation is the overlay's hover text.
     void setRemoteDisplayStatus(const PanStatusText& status);
@@ -221,6 +238,7 @@ protected:
     /// fit its pills, and setGeometry clamps up to that minimum by expanding
     /// rightward, which walks the strip back under the dBm range arrows.
     void repositionStatusOverlay();
+    void refreshNoSliceHint();
     void resizeEvent(QResizeEvent* event) override;
     /// Delegates to buildContextMenu(). Task B5 added the add-slice / float
     /// entries at the top of the menu; the pre-existing Extended-view
@@ -250,6 +268,9 @@ private:
     SpectrumWidget*         m_spectrum {nullptr};
     SpectrumStatusOverlay*  m_statusOverlay {nullptr};
     QWidget*                m_floatTitleBar {nullptr};
+    // Parity Task 18 (C8): shown over an empty connected pan.
+    QLabel*                 m_noSliceHint {nullptr};
+    bool                    m_noSliceHintAllowed {false};
     int                     m_activeSliceIndex {-1};
     QSet<int>               m_associatedSlices;
     double                  m_centerMhz {14.225};

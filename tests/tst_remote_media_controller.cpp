@@ -46,6 +46,7 @@
 #include "core/session/media/RemoteSpectrumContext.h"
 #include "core/session/media/SpectrumEndpoint.h"
 #include "core/session/media/WidebandDisplayContext.h"
+#include "core/spectrum/DisplayFollowers.h"
 #include "core/session/PureSignalSessionFacade.h"
 #include "core/session/Ps3DisplayCodec.h"
 #include "core/FFTEngine.h"
@@ -54,6 +55,7 @@
 #include "gui/RemoteAudioStatus.h"
 #include "gui/RemoteConnectionController.h"
 #include "gui/RemoteMediaController.h"
+#include "gui/PanFloatingWindow.h"
 #include "gui/PanadapterStack.h"
 #include "gui/PanadapterApplet.h"
 #include "gui/SpectrumWidget.h"
@@ -1386,6 +1388,12 @@ private slots:
         auto* widget = first->spectrumWidget();
         widget->setCtunEnabled(true);
         cohost->spectrumWidget()->setCtunEnabled(false);
+        // Parity Task 17 follow-up: with waterfall AGC the dBm window follows
+        // the levels AGC sets from the first frames and asks again once,
+        // blanking the trace until the new context. This test is about the
+        // C-Tune centre, so its pans use the stored levels.
+        widget->setWfAgcEnabled(false);
+        cohost->spectrumWidget()->setWfAgcEnabled(false);
         // This is the existing MainWindow click/wheel -> mirrored VFO path.
         connect(widget, &SpectrumWidget::frequencyClicked, &remote,
             [&remote, sliceId](double hz) { remote.sliceById(sliceId)->setFrequency(hz); });
@@ -1710,6 +1718,117 @@ private slots:
         client.disconnectFromStation(QStringLiteral("test complete"));
     }
 
+    // Parity Task 18, B3.5 (R-R3-09): on a pan with two slices on one
+    // receiver, selecting the other slice's flag moves the pan's display to
+    // that slice without losing what the pan has drawn: the waterfall, its
+    // rewind history and the 3D stack stay, as they do in a local window.
+    void selectingTheOtherSliceOnOneReceiverKeepsThePansHistory_data()
+    {
+        QTest::addColumn<bool>("threeD");
+        QTest::addColumn<bool>("budget");
+        QTest::newRow("waterfall") << false << false;
+        QTest::newRow("3D stack") << true << false;
+        QTest::newRow("waterfall, display budget") << false << true;
+        QTest::newRow("3D stack, display budget") << true << true;
+    }
+    void selectingTheOtherSliceOnOneReceiverKeepsThePansHistory()
+    {
+        QFETCH(bool, threeD);
+        QFETCH(bool, budget);
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        station.setBoardForTest(HPSDRHW::Saturn);
+        station.configureStreamPool(5, 5, 192000);
+        station.setConnectionStateForTest(ConnectionState::Connected);
+        const int firstId = station.addSlice();
+        auto* firstSlice = station.sliceById(firstId);
+        QVERIFY(firstSlice);
+        const int stream = firstSlice->streamIndex();
+        QVERIFY(stream >= 0);
+        const double centre = station.streamCentreHz(stream);
+        const int secondId = station.addSlice();
+        auto* secondSlice = station.sliceById(secondId);
+        QVERIFY(secondSlice);
+        secondSlice->setFrequency(centre + 20000);
+        QCOMPARE(secondSlice->streamIndex(), stream);
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
+        server.setMediaEnabled(true);
+        if (budget) {
+            QVERIFY(server.setDisplayBudgetLimits({10'000'000, 10'000'000, 1}));
+        }
+        QPointer<DisplayTransport> sourceMedia;
+        DaemonMediaController daemon(&server, &station, nullptr,
+            [&sourceMedia](QObject* owner) -> IMediaTransport* {
+                sourceMedia = new DisplayTransport(owner);
+                return sourceMedia;
+            });
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        PanadapterStack stack;
+        auto* pan = stack.addPanadapter(QStringLiteral("pan"));
+        stack.setActivePan(QStringLiteral("pan"));
+        pan->addSlice(firstId);
+        pan->addSlice(secondId);
+        pan->setActiveSliceIndex(firstId);
+        auto* widget = pan->spectrumWidget();
+        widget->setDisplayWindowPreservingHistory(centre, 96000);
+        widget->setVfoFrequency(centre);
+        widget->setConnectionState(ConnectionState::Connected);
+        if (threeD) {
+            widget->setSpectrumRenderMode(static_cast<int>(SpectrumRenderMode::Mode3D));
+        }
+        stack.resize(600, 700);
+        stack.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&stack));
+        QPointer<DisplayTransport> sinkMedia;
+        RemoteMediaController gui(&client, &remote, &stack, nullptr,
+            [&sinkMedia](QObject* owner) -> IMediaTransport* {
+                sinkMedia = new DisplayTransport(owner);
+                return sinkMedia;
+            });
+        auto* stationLink = new Test::LoopbackTransport(QStringLiteral("station"));
+        auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
+        stationLink->linkTo(clientLink);
+        client.startSession(clientLink, server.token());
+        server.acceptTransport(stationLink);
+        QTRY_VERIFY(sourceMedia && sinkMedia);
+        sourceMedia->other = sinkMedia;
+        sourceMedia->activate();
+        sinkMedia->activate();
+        QTRY_VERIFY(remote.sliceById(secondId)
+            && remote.sliceById(secondId)->streamIndex() == stream);
+        QCOMPARE(client.remoteDisplayBudgetLimits().has_value(), budget);
+        QVector<float> iq(2048, 0.001f);
+        const auto feed = [&] {
+            QMetaObject::invokeMethod(&station, "rawIqDataForStream", Qt::DirectConnection,
+                Q_ARG(int, stream), Q_ARG(QVector<float>, iq));
+        };
+        const auto drawn = [&] {
+            return threeD ? widget->dssRowsPushedForTest()
+                          : widget->waterfallHistoryRowsForTest();
+        };
+        QTRY_VERIFY_WITH_TIMEOUT((feed(), drawn() >= 5), 10000);
+        const int before = drawn();
+
+        // The operator selects the other slice's flag on this pan.
+        pan->setActiveSliceIndex(secondId);
+        // The pan asks for the new slice's display; until it arrives, and
+        // once it does, nothing drawn so far is lost.
+        for (int i = 0; i < 20; ++i) {
+            QVERIFY2(drawn() >= before,
+                     qPrintable(QStringLiteral("history fell from %1 to %2")
+                                    .arg(before).arg(drawn())));
+            feed();
+            QTest::qWait(25);
+        }
+        QTRY_VERIFY_WITH_TIMEOUT((feed(), drawn() > before), 10000);
+        QVERIFY(!widget->renderedPixels().isEmpty());
+        client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
     // R-R3-19: a pan whose stream is its own still re-centres the Core on a
     // zoom, as before this hotfix; the Core always accepts that centre.
     void ctunZoomOnOwnStreamStillMovesCoreCentre()
@@ -1850,6 +1969,12 @@ private slots:
         for (auto* applet : {first, second}) {
             applet->setActiveSliceIndex(sliceId);
             applet->spectrumWidget()->setDisplayWindowPreservingHistory(centre, 48000);
+            // Parity Task 17: the Core quantises on the pan's own range, so
+            // the pans show -180 to 0 dBm, where the fixture's noise lies;
+            // and it averages at the pan's averaging time, so the shortest
+            // lets a level step show within a frame or two.
+            applet->spectrumWidget()->setDbmRange(-180.0f, 0.0f);
+            applet->spectrumWidget()->setSpectrumAverageTimeMs(10);
         }
         stack.resize(600, 700);
         stack.show();
@@ -2064,6 +2189,33 @@ private slots:
         SettingsProxy proxy;
         StationClient client(&remote, &proxy);
         auto stack = std::make_unique<PanadapterStack>();
+        // A failed check returns straight out of this test, and the stack
+        // would be destroyed without the event loop having run since the
+        // pan last moved between windows. The offscreen platform's backing
+        // store then faults: the floating window and the stack have both
+        // flushed the pan's native windows, Qt's static map remembers only
+        // the store that flushed last, and whichever store is destroyed
+        // second looks up a key the first one erased (QOffscreenBackingStore
+        // ::clearHash has no end() check). One failure then took the whole
+        // binary down with SIGSEGV. On a failed check, put the pan back in
+        // the stack and wait for the retired floating window to be deleted,
+        // which PanadapterStack does only once the pan has painted in the
+        // stack; then the stack owns those keys and teardown is orderly, as
+        // it is at the end of a passing run.
+        QPointer<PanFloatingWindow> floatedWindow;
+        const auto stackTeardown = qScopeGuard([&stack, &floatedWindow] {
+            if (!stack) { return; }
+            if (floatedWindow) {
+                if (stack->floatingWindowForTest(QStringLiteral("pan-0"))) {
+                    stack->dockPanadapter(QStringLiteral("pan-0"));
+                }
+                if (!QTest::qWaitFor([&floatedWindow] { return floatedWindow.isNull(); },
+                                     5000)) {
+                    qWarning("The floating pan window was not retired before teardown.");
+                }
+            }
+            stack.reset();
+        });
         PanadapterApplet* first = stack->addPanadapter(QStringLiteral("pan-0"));
         first->setActiveSliceIndex(sliceId);
         SpectrumWidget* firstWidget = first->spectrumWidget();
@@ -2114,9 +2266,6 @@ private slots:
         };
         QTRY_VERIFY_WITH_TIMEOUT(feedFirst(), 5000);
         QVERIFY(first->remoteDisplayStatus().isEmpty());
-        const int rowsBeforeReparent = firstWidget->dssRowsPushedForTest();
-        const QByteArray stalePacket = sourceMedia->displayPackets.constLast();
-        QVERIFY(!stalePacket.isEmpty());
 
         QTimer* subscriptionTimer = nullptr;
         for (QTimer* timer : controller.findChildren<QTimer*>()) {
@@ -2129,10 +2278,38 @@ private slots:
         const auto fireSubscriptionTimer = [&] {
             QVERIFY(QMetaObject::invokeMethod(subscriptionTimer, "timeout", Qt::DirectConnection));
         };
+        // The first frames move the pan's waterfall AGC levels, and the dBm
+        // window the pan asks the Core for follows them only once they have
+        // held for a frame period (33 ms at 30 fps) between two planner
+        // passes (settleDbmWindows). That renewal of this endpoint can still
+        // be owed here; left to whichever planner tick comes next, it landed
+        // inside the float below about 3 runs in 8 and was counted as a
+        // reparent subscribe. Run the planner until neither a subscribe nor
+        // a painted row has come for 250 ms, so the baseline below is the
+        // settled one and the reparent checks stay exact.
+        int lastSubscriptions = -1;
+        int lastRows = -1;
+        QElapsedTimer quietFor;
+        QVERIFY(QTest::qWaitFor([&] {
+            QMetaObject::invokeMethod(subscriptionTimer, "timeout", Qt::DirectConnection);
+            const int subscriptions = countControl(controls, QStringLiteral("subscribe"));
+            const int rows = firstWidget->dssRowsPushedForTest();
+            if (subscriptions != lastSubscriptions || rows != lastRows) {
+                lastSubscriptions = subscriptions;
+                lastRows = rows;
+                quietFor.start();
+            }
+            return quietFor.elapsed() >= 250;
+        }, 5000));
+        const int rowsBeforeReparent = firstWidget->dssRowsPushedForTest();
+        const QByteArray stalePacket = sourceMedia->displayPackets.constLast();
+        QVERIFY(!stalePacket.isEmpty());
         const int subscriptionsBeforeReparent = countControl(controls, QStringLiteral("subscribe"));
         const int unsubscriptionsBeforeReparent = countControl(controls, QStringLiteral("unsubscribe"));
 
         stack->floatPanadapter(QStringLiteral("pan-0"));
+        floatedWindow = stack->floatingWindowForTest(QStringLiteral("pan-0"));
+        QVERIFY(floatedWindow);
         QVERIFY(!firstWidget->isVisible());
         fireSubscriptionTimer();
         QCOMPARE(countControl(controls, QStringLiteral("subscribe")), subscriptionsBeforeReparent);
@@ -2910,6 +3087,16 @@ private slots:
             else { reduced.insert(endpoint); }
         }
         QVERIFY(!reduced.isEmpty());
+        // Parity Task 17 (B3.10): each request's averaging constants are for
+        // the rate it asks, including the rates the budget cut pans back to.
+        const int traceTimeMs = stack.allApplets().first()->spectrumWidget()
+                                    ->spectrumAverageTimeMs();
+        for (const QJsonObject& each : controlsFor(outbound, QStringLiteral("subscribe"))) {
+            QCOMPARE(each.value(QStringLiteral("trace")).toObject()
+                         .value(QStringLiteral("averageAlpha")).toDouble(),
+                     double(averageAlphaForTimeMs(traceTimeMs,
+                                                  each.value(QStringLiteral("fps")).toInt())));
+        }
         const auto askedAsWanted = [&](int from) {
             const QList<QJsonObject> all = controlsFor(outbound, QStringLiteral("subscribe"));
             for (int i = from; i < all.size(); ++i) {
@@ -3808,6 +3995,12 @@ private slots:
             widget->setClarityActive(true);
             widget->setClarityWaterfallThresholds(low, high);
         });
+        // Parity Task 17 follow-up: the dBm window holds the run-time
+        // waterfall levels with headroom. Levels that already take in the
+        // ones Clarity sets below (-137.375 to -77.375) keep this test's
+        // request count about the context, not about the window.
+        widget->setWfLowThreshold(-140.0f);
+        widget->setWfHighThreshold(-70.0f);
         const float savedLow = widget->wfLowThreshold();
         const float savedHigh = widget->wfHighThreshold();
         widget->setDisplayWindowPreservingHistory(14225000, 24000);
@@ -4201,6 +4394,298 @@ private slots:
         QTRY_VERIFY2(applet->remoteDisplayStatus().isEmpty(),
                      qPrintable(applet->remoteDisplayStatus()));
         QVERIFY(!media || !media->active);
+    }
+
+    // Parity Task 17 (B3.3, B3.7, B3.10): a pan asks the Core for a dBm
+    // window that is what it shows (its own range widened by the
+    // waterfall's levels), so a signal above 0 dBm is not flattened and a
+    // 20 dB pan steps by less than 0.1 dB; a range change asks again once
+    // it has held for a frame period, never at every step of a drag; the
+    // averaging constants are for the rate asked; Rendering > Decimation
+    // goes with the request to a Core at spectrumGrantVersion 2.
+    void subscribeCarriesThePansDbmWindowAveragingAndDecimation()
+    {
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        auto& appSettings = AppSettings::instance();
+        const bool hadFps = appSettings.contains(QStringLiteral("DisplaySpectrumFps"));
+        const QVariant savedFps = appSettings.value(QStringLiteral("DisplaySpectrumFps"));
+        appSettings.setValue(QStringLiteral("DisplaySpectrumFps"), QStringLiteral("20"));
+        const auto restoreFps = qScopeGuard([&] {
+            if (hadFps) { appSettings.setValue(QStringLiteral("DisplaySpectrumFps"), savedFps); }
+            else { appSettings.remove(QStringLiteral("DisplaySpectrumFps")); }
+        });
+        RadioModel station;
+        station.setBoardForTest(HPSDRHW::HermesLite);
+        station.setConnectionStateForTest(ConnectionState::Connected);
+        station.addSlice(QStringLiteral("pan-0"));
+        QVERIFY(!station.slices().isEmpty());
+        SliceModel* stationSlice = station.slices().first();
+        stationSlice->setStreamIndex(0);
+        stationSlice->setFrequency(14225000);
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
+        server.setMediaEnabled(true);
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true); // Display fixture opens no speaker.
+        NereusSDR::FFTEngine windowEngine(-1); // Rendering > Decimation keeps its value here.
+        windowEngine.setDecimation(4);
+        remote.setFftEngine(&windowEngine);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        PanadapterStack stack;
+        auto* applet = stack.addPanadapter(QStringLiteral("pan-0"));
+        applet->setActiveSliceIndex(stationSlice->sliceIndex());
+        auto* widget = applet->spectrumWidget();
+        widget->setDisplayWindowPreservingHistory(14225000, 24000);
+        widget->setDispNormalize(false);
+        widget->setWfUseSpectrumMinMax(false);
+        // The stored levels colour the waterfall (no AGC, no Clarity); the
+        // run-time levels are runtimeWaterfallLevelsWidenTheDbmWindow's.
+        widget->setWfAgcEnabled(false);
+        widget->setDbmRange(-100.0f, 20.0f); // Ref Level above 0 dBm.
+        widget->setWfLowThreshold(-130.0f);
+        widget->setWfHighThreshold(-70.0f);
+        widget->setSpectrumAverageTimeMs(200);
+        widget->setWaterfallAverageTimeMs(500);
+        stack.resize(600, 400);
+        stack.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&stack));
+        qint64 now = 1'000;
+        QPointer<DisplayTransport> media;
+        RemoteMediaController controller(&client, &remote, &stack, nullptr,
+            [&media](QObject* owner) -> IMediaTransport* {
+                media = new DisplayTransport(owner);
+                return media;
+            },
+            [&now] { return now; });
+        QSignalSpy controls(&server, &StationServer::mediaControlReceived);
+        auto* stationLink = new Test::LoopbackTransport(QStringLiteral("station"));
+        auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
+        stationLink->linkTo(clientLink);
+        client.startSession(clientLink, server.token());
+        server.acceptTransport(stationLink);
+        QTRY_VERIFY(client.mediaAvailable());
+        QVERIFY(client.spectrumDecimationAvailable());
+        QTRY_VERIFY(media);
+        media->activate();
+        QTRY_COMPARE(countControl(controls, QStringLiteral("subscribe")), 1);
+        QVERIFY(!client.remoteDisplayBudgetLimits().has_value());
+
+        QJsonObject asked = lastControl(controls, QStringLiteral("subscribe"));
+        // The pan shows -100 to +20 dBm and the waterfall -130 to -70: the
+        // window spans both, so +20 dBm is not clipped at 0.
+        QCOMPARE(asked.value(QStringLiteral("minDbm")).toDouble(), -130.0);
+        QCOMPARE(asked.value(QStringLiteral("maxDbm")).toDouble(), 20.0);
+        // The averaging times at the 20 frames a second asked.
+        QCOMPARE(asked.value(QStringLiteral("fps")).toInt(), 20);
+        QCOMPARE(asked.value(QStringLiteral("trace")).toObject()
+                     .value(QStringLiteral("averageAlpha")).toDouble(),
+                 double(averageAlphaForTimeMs(200, 20)));
+        QCOMPARE(asked.value(QStringLiteral("waterfall")).toObject()
+                     .value(QStringLiteral("averageAlpha")).toDouble(),
+                 double(averageAlphaForTimeMs(500, 20)));
+        QCOMPARE(asked.value(QStringLiteral("decimation")).toInt(), 4);
+
+        // Rendering > Decimation changed: asked again with it.
+        windowEngine.setDecimation(8);
+        QTRY_COMPARE(countControl(controls, QStringLiteral("subscribe")), 2);
+        QCOMPARE(lastControl(controls, QStringLiteral("subscribe"))
+                     .value(QStringLiteral("decimation")).toInt(), 8);
+
+        // A drag of the dBm strip: a new range at every planner tick, the
+        // clock never a frame period (50 ms at 20 frames a second) past the
+        // last step. Nothing is asked while it moves.
+        widget->setWfLowThreshold(-96.0f);
+        widget->setWfHighThreshold(-78.0f);
+        for (int step = 0; step < 5; ++step) {
+            widget->setDbmRange(-100.0f + float(step), -80.0f + float(step));
+            now += 10;
+            QTest::qWait(RemoteMediaController::kPlannerIntervalMs + 30);
+        }
+        QTest::qWait(RemoteMediaController::kPlannerIntervalMs + 30);
+        QCOMPARE(countControl(controls, QStringLiteral("subscribe")), 2);
+        // The last range holds for a frame period: asked once, for it.
+        now += 60;
+        QTRY_COMPARE(countControl(controls, QStringLiteral("subscribe")), 3);
+        asked = lastControl(controls, QStringLiteral("subscribe"));
+        const double low = asked.value(QStringLiteral("minDbm")).toDouble();
+        const double high = asked.value(QStringLiteral("maxDbm")).toDouble();
+        QCOMPARE(low, -96.0);
+        QCOMPARE(high, -76.0);
+        // A 20 dB range in 256 levels: steps under 0.1 dB.
+        QVERIFY((high - low) / 255.0 < 0.1);
+        QTest::qWait(RemoteMediaController::kPlannerIntervalMs * 2);
+        QCOMPARE(countControl(controls, QStringLiteral("subscribe")), 3);
+
+        // Normalise moves what the pan shows by -10 log10(bin width): the
+        // window follows, in the frame's own (un-normalised) values.
+        widget->setDispNormalize(true);
+        QTest::qWait(RemoteMediaController::kPlannerIntervalMs + 30);
+        now += 60;
+        QTRY_COMPARE(countControl(controls, QStringLiteral("subscribe")), 4);
+        asked = lastControl(controls, QStringLiteral("subscribe"));
+        SliceModel* mirrored = remote.sliceById(stationSlice->sliceIndex());
+        QVERIFY(mirrored);
+        const double binWidth = double(mirrored->sampleRateHz())
+            / asked.value(QStringLiteral("fftSize")).toDouble();
+        const double shift = -10.0 * std::log10(binWidth);
+        QVERIFY(std::abs(asked.value(QStringLiteral("maxDbm")).toDouble()
+                         - std::ceil((-76.0 - shift) * 10.0) / 10.0) < 1.0e-9);
+
+        client.disconnectFromStation(QStringLiteral("test complete"));
+        remote.setFftEngine(nullptr);
+    }
+
+    // Parity Task 17 follow-up (R-R3-01, R-R3-04): with waterfall AGC or
+    // Clarity the waterfall is coloured by the levels they set at run time,
+    // so the dBm window holds those levels (with headroom), not the stored
+    // ones: no colour clips at the window's edge and a remote pan colours as
+    // a local one does. The levels move a little every line; the window
+    // follows only when they leave it or it is far wider than they need.
+    void runtimeWaterfallLevelsWidenTheDbmWindow()
+    {
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        auto& appSettings = AppSettings::instance();
+        const bool hadFps = appSettings.contains(QStringLiteral("DisplaySpectrumFps"));
+        const QVariant savedFps = appSettings.value(QStringLiteral("DisplaySpectrumFps"));
+        appSettings.setValue(QStringLiteral("DisplaySpectrumFps"), QStringLiteral("20"));
+        const auto restoreFps = qScopeGuard([&] {
+            if (hadFps) { appSettings.setValue(QStringLiteral("DisplaySpectrumFps"), savedFps); }
+            else { appSettings.remove(QStringLiteral("DisplaySpectrumFps")); }
+        });
+        RadioModel station;
+        station.setBoardForTest(HPSDRHW::HermesLite);
+        station.setConnectionStateForTest(ConnectionState::Connected);
+        station.addSlice(QStringLiteral("pan-0"));
+        QVERIFY(!station.slices().isEmpty());
+        SliceModel* stationSlice = station.slices().first();
+        stationSlice->setStreamIndex(0);
+        stationSlice->setFrequency(14225000);
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
+        server.setMediaEnabled(true);
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true); // Display fixture opens no speaker.
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        PanadapterStack stack;
+        auto* applet = stack.addPanadapter(QStringLiteral("pan-0"));
+        applet->setActiveSliceIndex(stationSlice->sliceIndex());
+        auto* widget = applet->spectrumWidget();
+        widget->setDisplayWindowPreservingHistory(14225000, 24000);
+        widget->setDispNormalize(false);
+        widget->setWfUseSpectrumMinMax(false);
+        widget->setWfAgcEnabled(false);
+        widget->setWaterfallNFAGCEnabled(false);
+        widget->setDbmRange(-100.0f, -60.0f);
+        widget->setWfLowThreshold(-110.0f);
+        widget->setWfHighThreshold(-70.0f);
+        // Clarity drives the levels, below and above what the pan shows.
+        widget->setClarityActive(true);
+        widget->setClarityWaterfallThresholds(-150.0f, -40.0f);
+        stack.resize(600, 400);
+        stack.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&stack));
+        qint64 now = 1'000;
+        QPointer<DisplayTransport> media;
+        RemoteMediaController controller(&client, &remote, &stack, nullptr,
+            [&media](QObject* owner) -> IMediaTransport* {
+                media = new DisplayTransport(owner);
+                return media;
+            },
+            [&now] { return now; });
+        QSignalSpy controls(&server, &StationServer::mediaControlReceived);
+        auto* stationLink = new Test::LoopbackTransport(QStringLiteral("station"));
+        auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
+        stationLink->linkTo(clientLink);
+        client.startSession(clientLink, server.token());
+        server.acceptTransport(stationLink);
+        QTRY_VERIFY(client.mediaAvailable());
+        QTRY_VERIFY(media);
+        media->activate();
+        QTRY_COMPARE(countControl(controls, QStringLiteral("subscribe")), 1);
+
+        // Clarity's levels with 10 dB of headroom, not the stored -110..-70.
+        QJsonObject asked = lastControl(controls, QStringLiteral("subscribe"));
+        QCOMPARE(asked.value(QStringLiteral("minDbm")).toDouble(), -160.0);
+        QCOMPARE(asked.value(QStringLiteral("maxDbm")).toDouble(), -30.0);
+
+        const auto settle = [&] {
+            QTest::qWait(RemoteMediaController::kPlannerIntervalMs + 30);
+            now += 60; // past a frame period (50 ms at 20 frames a second)
+            QTest::qWait(RemoteMediaController::kPlannerIntervalMs + 30);
+        };
+
+        // A few dB of movement inside the window asks nothing.
+        widget->setClarityWaterfallThresholds(-147.0f, -44.0f);
+        settle();
+        widget->setClarityWaterfallThresholds(-153.0f, -37.0f);
+        settle();
+        QCOMPARE(countControl(controls, QStringLiteral("subscribe")), 1);
+
+        // The low level leaves the window: asked again, with headroom.
+        widget->setClarityWaterfallThresholds(-175.0f, -37.0f);
+        settle();
+        QTRY_COMPARE(countControl(controls, QStringLiteral("subscribe")), 2);
+        asked = lastControl(controls, QStringLiteral("subscribe"));
+        QCOMPARE(asked.value(QStringLiteral("minDbm")).toDouble(), -185.0);
+        QCOMPARE(asked.value(QStringLiteral("maxDbm")).toDouble(), -27.0);
+
+        // The levels close in far inside the window: it narrows to them,
+        // never inside what the pan shows.
+        widget->setClarityWaterfallThresholds(-120.0f, -90.0f);
+        settle();
+        QTRY_COMPARE(countControl(controls, QStringLiteral("subscribe")), 3);
+        asked = lastControl(controls, QStringLiteral("subscribe"));
+        QCOMPARE(asked.value(QStringLiteral("minDbm")).toDouble(), -130.0);
+        QCOMPARE(asked.value(QStringLiteral("maxDbm")).toDouble(), -60.0);
+
+        // Waterfall AGC works on the values the pan receives, which the
+        // Core clamps to the window: with nothing below it (no noise at all)
+        // its low level sits a margin under the edge wherever the edge is.
+        // The window goes no lower than 60 dB under the pan's floor or the
+        // stored low level (-110 here), so it does not walk down to -400.
+        widget->setClarityActive(false);
+        widget->setWfAgcEnabled(true);
+        widget->composeWaterfallActiveThresholds(QVector<float>(64, -300.0f));
+        QCOMPARE(widget->wfActiveLowThreshold(), -312.0f);
+        settle();
+        QTRY_COMPARE(countControl(controls, QStringLiteral("subscribe")), 4);
+        asked = lastControl(controls, QStringLiteral("subscribe"));
+        QCOMPARE(asked.value(QStringLiteral("minDbm")).toDouble(), -170.0);
+        QCOMPARE(asked.value(QStringLiteral("maxDbm")).toDouble(), -60.0);
+        // Held there, however long nothing arrives below it.
+        for (int line = 0; line < 20; ++line) {
+            widget->composeWaterfallActiveThresholds(QVector<float>(64, -170.0f));
+        }
+        settle();
+        QCOMPARE(countControl(controls, QStringLiteral("subscribe")), 4);
+
+        // The levels AGC sets from a line with a noise floor and a signal
+        // (12 dB past its lowest and highest values) are what the window
+        // holds, with headroom.
+        widget->setWfAgcEnabled(false);
+        widget->setWfAgcEnabled(true); // primes the AGC afresh
+        QVector<float> line(64, -125.0f);
+        line[10] = -20.0f;
+        widget->composeWaterfallActiveThresholds(line);
+        QCOMPARE(widget->wfActiveLowThreshold(), -137.0f);
+        QCOMPARE(widget->wfActiveHighThreshold(), -8.0f);
+        settle();
+        QTRY_COMPARE(countControl(controls, QStringLiteral("subscribe")), 5);
+        asked = lastControl(controls, QStringLiteral("subscribe"));
+        QCOMPARE(asked.value(QStringLiteral("minDbm")).toDouble(), -147.0);
+        QCOMPARE(asked.value(QStringLiteral("maxDbm")).toDouble(), 2.0);
+
+        // Back to the stored levels: the window is the pan and those levels.
+        widget->setWfAgcEnabled(false);
+        settle();
+        QTRY_COMPARE(countControl(controls, QStringLiteral("subscribe")), 6);
+        asked = lastControl(controls, QStringLiteral("subscribe"));
+        QCOMPARE(asked.value(QStringLiteral("minDbm")).toDouble(), -110.0);
+        QCOMPARE(asked.value(QStringLiteral("maxDbm")).toDouble(), -60.0);
+
+        client.disconnectFromStation(QStringLiteral("test complete"));
     }
 
     // R-R3-01/08/37: outside budget mode Core's five-key per-pan refusal

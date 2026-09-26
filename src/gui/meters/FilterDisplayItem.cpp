@@ -10,6 +10,11 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-26 - R-R3-49 (remote-window parity Task 16): the
+//                 high-resolution curve can come from a Core's bins
+//                 (setFilterResponseBins) in a remote window, resampled as
+//                 the local channel's is. J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -334,7 +339,7 @@ void FilterDisplayItem::paintFilterEdges(QPainter& p, const QRect& rect)
 // ---------------------------------------------------------------------------
 void FilterDisplayItem::paintHighResolutionFilterCurve(QPainter& p, const QRect& rect)
 {
-    if (!m_rxChannel || rect.isEmpty()) {
+    if ((!m_rxChannel && m_filterResponseBins.isEmpty()) || rect.isEmpty()) {
         return;
     }
 
@@ -343,7 +348,11 @@ void FilterDisplayItem::paintHighResolutionFilterCurve(QPainter& p, const QRect&
         return;
     }
 
-    const QVector<float> mag = m_rxChannel->filterResponseMagnitudes(nPoints);
+    // R-R3-49 (parity Task 16): the bound channel's own curve, or in a
+    // remote window the Core's bins resampled the same way.
+    const QVector<float> mag = m_rxChannel
+        ? m_rxChannel->filterResponseMagnitudes(nPoints)
+        : RxChannel::resampleFilterResponse(m_filterResponseBins, nPoints);
     if (mag.size() != nPoints) {
         // filterResponseMagnitudes() returns empty when WDSP/FFTW3 unavailable
         // or when nPoints is invalid — silently skip.

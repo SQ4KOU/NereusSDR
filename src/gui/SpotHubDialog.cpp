@@ -119,6 +119,12 @@
 //                                    saved IsSpotsOverrideToAuto...
 //                                    value stays in the file. AI
 //                                    tooling: Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Remote-window parity Task 18: the
+//                                    Display tab's Auto mode toggle
+//                                    (SpotAutoSwitchMode) from AetherSDR
+//                                    DxClusterDialog.cpp [@1e0718ad]: a
+//                                    spot click sets the slice's mode.
+//                                    AI tooling: Anthropic Claude Code.
 
 #include "SpotHubDialog.h"
 
@@ -2596,6 +2602,8 @@ void SpotHubDialog::buildDisplayTab(QTabWidget* tabs)
     // load persisted state for the knobs.
     bool spotsEnabled       = s.value("IsSpotsEnabled", "True").toString() == "True";
     bool memoriesEnabled    = s.value("IsMemorySpotsEnabled", "False").toString() == "True";
+    // Parity Task 18: from AetherSDR DxClusterDialog.cpp:2375 [@1e0718ad].
+    bool autoMode           = s.value("SpotAutoSwitchMode", "True").toString() == "True";
     bool overrideColors     = s.value("IsSpotsOverrideColorsEnabled", "False").toString() == "True";
     bool overrideBg         = s.value("IsSpotsOverrideBackgroundColorsEnabled", "True").toString() == "True";
     int  levelsVal   = s.value("SpotsMaxLevel", 3).toInt();
@@ -2670,6 +2678,27 @@ void SpotHubDialog::buildDisplayTab(QTabWidget* tabs)
     grid->addWidget(memoriesToggle, row++, 1, Qt::AlignLeft);
     // R-R3-49: memories are not built yet; the row is hidden until they are.
     UnbuiltFeatures::hideRowUnlessBuilt(memoriesToggle, UnbuiltFeature::Memories, grid);
+
+    // Parity Task 18: Auto mode, whether a left-click on a spot also sets
+    // the slice's mode. Toggle and tooltip from AetherSDR
+    // DxClusterDialog.cpp:2452-2457 [@1e0718ad], in this tab's
+    // Enabled/Disabled style.
+    grid->addWidget(new QLabel("Auto mode:"), row, 0);
+    auto* autoModeToggle = new QPushButton(autoMode ? "Enabled" : "Disabled");
+    autoModeToggle->setObjectName("displayAutoModeToggle");
+    autoModeToggle->setCheckable(true);
+    autoModeToggle->setChecked(autoMode);
+    autoModeToggle->setFixedWidth(80);
+    autoModeToggle->setToolTip(
+        "Automatically switch slice mode when clicking a spot\n"
+        "that includes mode information (e.g. CW, FT8, RTTY)");
+    autoModeToggle->setStyleSheet(kToggleStyle);
+    connect(autoModeToggle, &QPushButton::toggled, this,
+            [autoModeToggle, save](bool on) {
+        autoModeToggle->setText(on ? "Enabled" : "Disabled");
+        save("SpotAutoSwitchMode", on ? "True" : "False");
+    });
+    grid->addWidget(autoModeToggle, row++, 1, Qt::AlignLeft);
 
     // Levels slider. Upstream :91-106 [@0cd4559].
     grid->addWidget(new QLabel("Levels:"), row, 0);

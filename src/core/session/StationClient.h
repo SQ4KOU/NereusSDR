@@ -301,6 +301,14 @@
 //               and TUNE wait while another device holds. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 16):
+//                                    requestFilterResponse
+//                                    (dspInfoVersion 1).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 18 (B3.1):
+//                                    requestSelectBand (slice.selectBand,
+//                                    bandSelectVersion 1).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -599,6 +607,9 @@ public:
     /// Agreed minor 9 or later and advertised by Core: spectrum contexts
     /// report the grant Core made for the endpoint.
     bool spectrumGrantAvailable() const;
+    /// Parity Task 17 (R-R3-01): the Core takes a subscribe's `decimation`
+    /// (spectrumGrantVersion 2); a window below it never sends one.
+    bool spectrumDecimationAvailable() const;
     std::optional<DisplayBudgetLimits> remoteDisplayBudgetLimits() const;
     /// Why the Core's display budget is below its ceiling (R-R3-08, R-R3-37):
     /// CoreBusy while the Core computer is short of processing time. None
@@ -762,6 +773,9 @@ public:
     CommandOutcome requestAddSliceOnPan(const QString& panId) override;
     CommandOutcome requestRemoveSlice(int sliceId) override;
     CommandOutcome requestActiveSlice(int sliceId) override;
+    // Parity Task 18 (B3.1): slice.selectBand for a named slice.
+    bool bandSelectAvailable() const override;
+    CommandOutcome requestSelectBand(int sliceId, int band) override;
     CommandOutcome requestSliceSampleRate(int sliceId, int rateHz) override;
     CommandOutcome requestStreamCtunPinned(int sliceId, bool pinned) override;
     CommandOutcome requestStreamCentre(int sliceId, double centreHz) override;
@@ -861,6 +875,11 @@ public:
                                      int value) override;
     /// Parity Task 14 (radioHardwareVersion 7). Verb "setIoBoardOutput".
     CommandOutcome requestIoBoardOutput(int pin, bool on) override;
+    /// Parity Task 16 (dspInfoVersion 1). Verb "dsp.filterResponse". The
+    /// answer goes to RadioModel::reportStationFilterResponse.
+    CommandOutcome requestFilterResponse(int sliceId, bool highResolution) override;
+    /// Parity Task 16: minor 11 and dspInfoVersion at least 1.
+    bool dspInfoAvailable() const;
     /// R-R3-46 fix wave (radioHardwareVersion 3). Verb "setAlexRxAntenna":
     /// one band's RX antenna (rxOnly false, 1..3) or RX-only antenna
     /// (rxOnly true, 0..3) on the Core.

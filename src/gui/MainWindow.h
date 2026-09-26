@@ -34,6 +34,12 @@
 //   2026-09-25 - J.J. Boyd (KG4VCF). R-R3-49 (parity Task 7):
 //                 pureSignalArmingPermitted() and pureSignalArmingReason().
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26 - J.J. Boyd (KG4VCF). Remote-window parity Task 18:
+//                 refreshNoSliceHints(), wirePanDisplayFlyout(),
+//                 refreshClarityBadges(), clarityStreamIndex(),
+//                 panLayoutLimitFor(), applySpotModeToSlice(); the pan-0
+//                 strip pointer is gone. AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -267,6 +273,15 @@ public:
     /// indirectly through applyPanLayout, which needs a constructed
     /// MainWindow the test harness cannot build.
     static QStringList panIdsForLayout(const QString& layoutId);
+    /// Parity Task 18: how many pans Pan Layout and +PAN offer. The slice
+    /// limit is RadioModel::maxSlices(), which is the Core's advertised
+    /// limit in a remote window and the board's own locally, capped by the
+    /// receivers the radio can give separate pans.
+    static int panLayoutLimitFor(const RadioModel* model);
+    /// Parity Task 18: the mode half of a left-click on spot `spotIndex`
+    /// (the widget tunes first): `slice` takes the spot's mode, as in
+    /// AetherSDR, unless Auto mode is off in the Spot Hub.
+    static void applySpotModeToSlice(RadioModel* model, SliceModel* slice, int spotIndex);
     // Shared startup/operator boundary, exercised without booting MainWindow.
     static void populatePanSlices(RadioModel* model, const QStringList& panIds,
                                   bool operatorRequested, bool snapshotReady);
@@ -424,6 +439,18 @@ private slots:
     /// own panId and its controls act on that pan.
     void ensureOverlayPanels();
 
+    /// Parity Task 18: the Display flyout and the Clarity Re-tune of one
+    /// pan's strip act on that pan's own display (they were wired on
+    /// pan-0's strip only).
+    void wirePanDisplayFlyout(class SpectrumOverlayPanel* panel,
+                              class SpectrumWidget* sw, const QString& panId);
+    /// Parity Task 18: Clarity tunes the active pan (Setup's display pages
+    /// follow the same pan). Each strip's badge shows Clarity's state on
+    /// the pan it is tuning and nothing on the others.
+    void refreshClarityBadges();
+    /// The stream the pan Clarity tunes is fed from; -1 when it has none.
+    int clarityStreamIndex() const;
+
     /// TNF: push the global notch list at EVERY pan (design section 8.1).
     ///
     /// Under D1 the notch list is global, so each pan gets the same vector
@@ -544,6 +571,12 @@ private slots:
     /// radio is disconnected, so a widget that never receives this is inert to
     /// every mouse press.
     void pushConnectionStateToPans();
+
+    /// Parity Task 18 (C8, R-R3-24, R-R3-34): a connected pan with no slice
+    /// says so and how to add one. Allowed once the radio is connected and,
+    /// in a remote window, once the Core's slices have arrived; before that
+    /// an empty pan is only waiting for them.
+    void refreshNoSliceHints();
 
     /// The slice a pan hosts -- its own active slice if it has one, else the
     /// first slice associated with it. nullptr when the pan has no slices.
@@ -1540,15 +1573,19 @@ private:
     /// Called on show, on close, and on move/resize.
     void restackToasts();
 
-    // Spectrum overlay panel
-    /// Pan-0's strip. Kept as a stable target for the display-settings and
-    /// clarity wiring, which is still global rather than per-pan.
-    class SpectrumOverlayPanel* m_overlayPanel{nullptr};
-
+    // Spectrum overlay panels. Parity Task 18: the pan-0-only target the
+    // display-settings and Clarity wiring used is gone; each strip is wired
+    // to its own pan.
     /// One control strip per pan, keyed by pan id. QPointer because the widget
     /// is parented to its pan's SpectrumWidget and dies with it when a layout
     /// switch retires the pan.
     QHash<QString, QPointer<class SpectrumOverlayPanel>> m_overlayPanels;
+
+    // Parity Task 18: Clarity's badge state, shown on the strip of the pan
+    // Clarity tunes, and that pan (the active pan when it last moved).
+    bool m_clarityBadgeActive{false};
+    bool m_clarityBadgePaused{false};
+    QString m_clarityPanId;
 
     // Applet panel — scrollable content widget inside Container #0
     class AppletPanelWidget* m_appletPanel{nullptr};

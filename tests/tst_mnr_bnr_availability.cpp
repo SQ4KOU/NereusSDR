@@ -35,6 +35,7 @@
 #include "core/TciProtocol.h"
 #include "core/WdspTypes.h"
 #include "core/dsp/DspAssetService.h"
+#include "core/session/StationCapabilities.h"
 #include "gui/widgets/DspParamPopup.h"
 #include "gui/MainWindow.h"
 #include "gui/widgets/VfoWidget.h"
@@ -246,6 +247,19 @@ private slots:
         QVERIFY(assets->mnrRunnable());   // an older Core never says
         VfoWidget vfo;
         vfo.setRadioModel(&remote);
+        // Trunk merge (parity Task 16's rule): a Core below dspAssetVersion
+        // 4 does not say, so MNR is shown disabled with that reason.
+        QVERIFY(shownDisabledWith(vfo.mnrButtonForTest(),
+                                  RadioModel::noiseReductionNotSaidReason()));
+        StationCapabilities caps;
+        caps.dspAssetVersion = 3;
+        remote.applyStationCapabilities(caps);
+        QVERIFY(shownDisabledWith(vfo.mnrButtonForTest(),
+                                  RadioModel::noiseReductionNotSaidReason()));
+        QCOMPARE(remote.nrCannotRunReason(NrSlot::MNR),
+                 RadioModel::noiseReductionNotSaidReason());
+        caps.dspAssetVersion = 4;
+        remote.applyStationCapabilities(caps);
         QVERIFY(offered(vfo.mnrButtonForTest()));
 
         // A Mac window on a Linux Core.

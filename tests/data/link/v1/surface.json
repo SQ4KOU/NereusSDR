@@ -73,7 +73,7 @@
         {
             "kind": "i64",
             "name": "spectrumGrantVersion",
-            "value": 1
+            "value": 2
         },
         {
             "kind": "i64",
@@ -273,6 +273,11 @@
         {
             "kind": "i64",
             "name": "meterReadingsVersion",
+            "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "dspInfoVersion",
             "value": 1
         },
         {
@@ -1214,6 +1219,24 @@
             "capabilityVersion": 7,
             "minMinor": 11,
             "verb": "setIoBoardOutput"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "sliceId",
+                    "optional": false
+                },
+                {
+                    "kind": "bool",
+                    "name": "highResolution",
+                    "optional": false
+                }
+            ],
+            "capability": "dspInfoVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "dsp.filterResponse"
         },
         {
             "arguments": [
@@ -2208,6 +2231,9 @@
                     ],
                     "calibrationOffsetDb": [
                         "displayExtrasVersion"
+                    ],
+                    "decimation": [
+                        "spectrumGrantVersion"
                     ],
                     "extendedView": [
                         "remoteWidebandDisplayVersion"
@@ -3839,6 +3865,12 @@
                     "kind": "bool",
                     "name": "bandOutputsKeyed",
                     "ordinal": 23
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "dspOptionsLastApplyMs",
+                    "ordinal": 24
                 }
             ]
         },
@@ -5187,6 +5219,12 @@
                     "kind": "f64",
                     "name": "agcAverageDb",
                     "ordinal": 148
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "minNotchWidthHz",
+                    "ordinal": 149
                 }
             ]
         },

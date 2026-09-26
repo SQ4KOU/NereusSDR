@@ -31,6 +31,11 @@
 //                 [@0dea0dd7]; native child teardown only, preserving the
 //                 standalone QRhi owner's lifetime (OpenAI Codex).
 //   2026-09-22 J.J. Boyd / KG4VCF — share wing reference with Core (OpenAI Codex).
+//   2026-09-26 J.J. Boyd / KG4VCF - R-R3-01 / R-R3-08 / R-R3-12 (parity
+//                 Task 17): a remote pan's bin width, normalise shift and
+//                 Hz/bin readout follow the Core's granted FFT size, and its
+//                 peak hold, blob and noise floor decay follow the frame
+//                 rate the Core sends. AI-assisted via Anthropic Claude Code.
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
@@ -1372,6 +1377,8 @@ void SpectrumWidget::clearRemoteSpectrum()
     m_remoteWidebandAvailable = false;
     m_remoteWidebandActive = false;
     m_remoteWidebandAdcRateHz = 0.0;
+    m_remoteFftSize = 0;
+    m_remoteFps = 0;
     recomputeExtendedMode();
     m_dss.clear();
     m_dssRowsPushed = 0;
@@ -1380,9 +1387,11 @@ void SpectrumWidget::clearRemoteSpectrum()
 }
 
 void SpectrumWidget::setRemoteSpectrumContext(const SpectrumEndpointContext& context,
-                                               double sourceCentreHz, double sampleRateHz)
+                                               double sourceCentreHz, double sampleRateHz,
+                                               int grantedFftSize)
 {
     invalidateRemoteSpectrumFrame();
+    const double binWidthBefore = binWidthHz();
     // NereusSDR-original remote wiring: a new codec generation retires live
     // planes, not already-painted history. Core's accepted crop can differ
     // from the requested view by FFT-bin alignment; use the existing local
@@ -1402,10 +1411,20 @@ void SpectrumWidget::setRemoteSpectrumContext(const SpectrumEndpointContext& con
         ? context.wideband.adcRateHz : 0.0;
     m_remoteWideCentreHz = context.wideCentreHz;
     m_remoteWideSpanHz = context.wideSpanHz;
+    // Parity Task 17: what the Core runs for this pan, not this window's
+    // own (idle) engine or display timer.
+    m_remoteFftSize = grantedFftSize > 0 ? grantedFftSize : 0;
+    m_remoteFps = context.targetFps > 0 ? context.targetFps : 0;
     setDdcCenterFrequency(sourceCentreHz);
     setSampleRate(sampleRateHz);
     setDisplayWindowPreservingHistory(context.exactCentreHz, context.exactSpanHz);
     recomputeExtendedMode();
+    if (!qFuzzyCompare(1.0 + binWidthHz(), 1.0 + binWidthBefore)) {
+        // The normalise shift, the dBm scale and the Hz/bin readout move
+        // with the bin width.
+        markOverlayDirty();
+        emit remoteSpectrumGrantChanged();
+    }
 }
 
 bool SpectrumWidget::updateRemoteSpectrum(const DisplayCodecFrame& frame)
@@ -1813,6 +1832,15 @@ void SpectrumWidget::recomputeAverageAlphas()
     m_waterfallAverageAlpha = averageAlphaForTimeMs(m_waterfallAverageTimeMs, fps);
 }
 
+int SpectrumWidget::overlayFrameRate() const
+{
+    if (m_remoteSpectrum && m_remoteFps > 0) {
+        return m_remoteFps;
+    }
+    const int intervalMs = m_displayTimer.interval();
+    return (intervalMs > 0) ? qMax(1, 1000 / intervalMs) : 30;
+}
+
 void SpectrumWidget::setSpectrumAverageTimeMs(int ms)
 {
     ms = clampAverageTimeMs(ms);
@@ -2109,8 +2137,10 @@ double SpectrumWidget::binWidthHz() const
     // math" follow-up) was a pre-1A.4 bug that returned half the actual
     // bin width.  Phase 2 source-first port drops it.  m_fullLinearBins
     // is sized to the full FFT (matches FFTEngine::fftSize()).
-    const int fftSz = m_fullLinearBins.isEmpty() ? 4096
-                                                 : m_fullLinearBins.size();
+    // Parity Task 17 (R-R3-01/R-R3-08): a remote pan has no local bins;
+    // its FFT runs on the Core at the size the Core granted.
+    const int fftSz = (m_remoteSpectrum && m_remoteFftSize > 0) ? m_remoteFftSize
+        : (m_fullLinearBins.isEmpty() ? 4096 : m_fullLinearBins.size());
     if (fftSz <= 0 || m_sampleRateHz <= 0.0) { return 0.0; }
     return m_sampleRateHz / fftSz;
 }
@@ -2205,7 +2235,7 @@ void SpectrumWidget::processNoiseFloor()
     // takes the dented max - display.cs:5256-5259 [v2.10.3.15].
     const QVector<float>& src = measurementPixels();
     if (src.isEmpty()) { return; }
-    const int fps = qMax(1, 1000 / qMax(1, m_displayTimer.interval()));
+    const int fps = overlayFrameRate();
     if (m_noiseFloor.process(src, fps, QDateTime::currentMSecsSinceEpoch())) {
         if (m_showNoiseFloor) { markOverlayDirty(); }
     }
@@ -3183,7 +3213,8 @@ void SpectrumWidget::updateReducedSpectrumOverlays()
     // peak.max_dBm value.  Display.cs:5356 decays peak.max_dBm by
     // dBmSpectralPeakFall per second -> /fps per frame (analyzer-adjacent).
     const int intervalMs = m_displayTimer.interval();
-    const int fps = (intervalMs > 0) ? qMax(1, 1000 / intervalMs) : 30;
+    // Parity Task 17: a remote pan's frames arrive at the Core's rate.
+    const int fps = overlayFrameRate();
 
     if (m_activePeakHold.enabled()) {
         if (m_activePeakHold.size() != m_renderedPixels.size()) {
@@ -3207,7 +3238,9 @@ void SpectrumWidget::updateReducedSpectrumOverlays()
                 m_vfoHz + m_filterLowHz, m_vfoHz + m_filterHighHz);
         }
         m_peakBlobs.update(m_renderedPixels, filterLowPx, filterHighPx);
-        m_peakBlobs.tickFrame(fps, intervalMs > 0 ? intervalMs : 33);
+        const int frameMs = (m_remoteSpectrum && m_remoteFps > 0)
+            ? qMax(1, 1000 / m_remoteFps) : (intervalMs > 0 ? intervalMs : 33);
+        m_peakBlobs.tickFrame(fps, frameMs);
     }
 
     // Force GPU overlay texture re-render when any per-frame overlay is

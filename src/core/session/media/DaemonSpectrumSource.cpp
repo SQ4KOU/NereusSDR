@@ -259,6 +259,16 @@ quint64 DaemonSpectrumSource::publishedFrames(const MediaSourceKey& key) const
     return it->state->publishedFrames;
 }
 
+int DaemonSpectrumSource::engineDecimation(const MediaSourceKey& key) const
+{
+    const auto it = m_sources.constFind(key);
+    if (it == m_sources.cend() || !it->engine) {
+        return 0;
+    }
+    // FFTEngine keeps it in an atomic: safe to read off its thread.
+    return it->engine->decimation();
+}
+
 quint64 DaemonSpectrumSource::completedInputHandoffs(const MediaSourceKey& key) const
 {
     const auto it = m_sources.constFind(key);
@@ -324,7 +334,8 @@ bool DaemonSpectrumSource::isValidConfig(
         || config.fft.windowType < static_cast<int>(WindowFunction::Rectangular)
         || config.fft.windowType >= static_cast<int>(WindowFunction::Count)
         || !std::isfinite(config.fft.hzPerBinTarget)
-        || config.fft.hzPerBinTarget < 0.0) {
+        || config.fft.hzPerBinTarget < 0.0
+        || config.decimation < 1 || config.decimation > 32) {
         return false;
     }
     if (config.maxPendingIqFloats <= 0 || (config.maxPendingIqFloats % 2) != 0) {
@@ -344,7 +355,8 @@ bool DaemonSpectrumSource::inputHistoryIsCompatible(
     return before.centreHz == after.centreHz
         && before.sampleRateHz == after.sampleRateHz
         && before.fft.fftSize == after.fft.fftSize
-        && before.fft.windowType == after.fft.windowType;
+        && before.fft.windowType == after.fft.windowType
+        && before.decimation == after.decimation;
 }
 
 qint64 DaemonSpectrumSource::monotonicNowNs()
@@ -362,6 +374,7 @@ void DaemonSpectrumSource::applyEngineConfig(
     engine->setFftSize(config.fft.fftSize);
     engine->setWindowFunction(static_cast<WindowFunction>(config.fft.windowType));
     engine->setHzPerBinTarget(config.fft.hzPerBinTarget);
+    engine->setDecimation(config.decimation);
     engine->setSampleRate(config.sampleRateHz);
 }
 

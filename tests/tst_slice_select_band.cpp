@@ -270,10 +270,12 @@ void TstSliceSelectBand::theCapabilityIsLastInTheMinor11Block()
     caps.transmitSettingsVersion = 6;
     caps.bandSelectVersion = 1;
     const QList<MirrorUpdate> updates = caps.toUpdates();
-    // Parity Task 15's meterReadingsVersion follows it.
-    QCOMPARE(updates.at(updates.size() - 3).name, QByteArrayLiteral("transmitSettingsVersion"));
-    QCOMPARE(updates.at(updates.size() - 2).name, QByteArrayLiteral("bandSelectVersion"));
-    QCOMPARE(updates.last().name, QByteArrayLiteral("meterReadingsVersion"));
+    // Parity Task 15's meterReadingsVersion follows it, then parity Task
+    // 16's dspInfoVersion.
+    QCOMPARE(updates.at(updates.size() - 4).name, QByteArrayLiteral("transmitSettingsVersion"));
+    QCOMPARE(updates.at(updates.size() - 3).name, QByteArrayLiteral("bandSelectVersion"));
+    QCOMPARE(updates.at(updates.size() - 2).name, QByteArrayLiteral("meterReadingsVersion"));
+    QCOMPARE(updates.last().name, QByteArrayLiteral("dspInfoVersion"));
     QCOMPARE(StationCapabilities::fromUpdates(updates).bandSelectVersion, 1);
     QCOMPARE(StationCapabilities::fromUpdates(updates).transmitSettingsVersion, 6);
 

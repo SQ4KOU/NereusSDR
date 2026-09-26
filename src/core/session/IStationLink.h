@@ -129,6 +129,15 @@
 //                                    radioHardwareAvailable, the I/O board's
 //                                    I2C and output pin requests.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 16):
+//                                    requestFilterResponse (dspInfoVersion
+//                                    1).
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 18 (B3.1): a window's band
+//                                    buttons send slice.selectBand
+//                                    (bandSelectVersion 1) for a named
+//                                    slice. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include <QString>
@@ -180,6 +189,15 @@ public:
 
     /// Verb "requestSliceSampleRate", arguments sliceId and rateHz.
     virtual CommandOutcome requestSliceSampleRate(int sliceId, int rateHz) = 0;
+
+    /// Parity Task 18 (B3.1, R-IOS-27): verb "slice.selectBand"
+    /// (bandSelectVersion 1), arguments sliceId and band (the Band value).
+    /// The Core runs its own band change on that slice, with its own band
+    /// memory, exactly as a band button at the Core does. The defaults
+    /// refuse, for links that did not negotiate it.
+    virtual bool bandSelectAvailable() const { return false; }
+    virtual CommandOutcome requestSelectBand(int /*sliceId*/, int /*band*/)
+    { return { false, QStringLiteral("This Core cannot change bands for this app. Updating the Core may help.") }; }
 
     // R3 remote C-Tune. Default refusals retain source compatibility for
     // older test links and transports that do not negotiate this capability.
@@ -450,6 +468,14 @@ public:
     // I/O board outputs on or off.
     virtual CommandOutcome requestIoBoardOutput(int /*pin*/, bool /*on*/)
     { return { false, ioBoardI2cUnavailableReason() }; }
+
+    // R-R3-49 (parity Task 16): verb "dsp.filterResponse" (dspInfoVersion
+    // 1), the filter graph's curve for a slice's receiver on the Core. The
+    // answer arrives as RadioModel::reportStationFilterResponse.
+    static QString filterResponseUnavailableReason()
+    { return QStringLiteral("This Core does not send its filter curve. Updating the Core may help."); }
+    virtual CommandOutcome requestFilterResponse(int /*sliceId*/, bool /*highResolution*/)
+    { return { false, filterResponseUnavailableReason() }; }
 
     // R-R3-46 / R-R3-21 (radioHardwareVersion 4): the filter policy dialog
     // in a remote window. Whether the Core takes a filter policy change from

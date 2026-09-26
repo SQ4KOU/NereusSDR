@@ -114,6 +114,15 @@
 //               and TUNE wait while another device holds. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26 - R-R3-49 / R-R3-21 / R-R3-40 (parity Task 16): RadioModel
+//                 noiseReductionMethods and dspOptionsLastApplyMs, SliceModel
+//                 minNotchWidthHz, all Outbound. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-R3-49 (trunk merge of parity Tasks 16 to 18):
+//                 noiseReductionMethods dropped (DspAssetService is the one
+//                 noise reduction source); an older Core's DFNR and MNR are
+//                 shown disabled with the "does not say" reason. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -178,7 +187,7 @@ namespace {
 // WRITE. Listing them keeps the table total, so the guard can name a
 // newly added property instead of silently accepting it.
 const MirrorPolicy::Entry kEntries[] = {
-    // ---- SliceModel (149 entries) ----
+    // ---- SliceModel (150 entries) ----
     { "SliceModel", "frequency", MirrorDirection::Bidirectional },
     { "SliceModel", "dspMode", MirrorDirection::Bidirectional },
     { "SliceModel", "filterLow", MirrorDirection::Bidirectional },
@@ -370,6 +379,9 @@ const MirrorPolicy::Entry kEntries[] = {
     { "SliceModel", "agcGainDb", MirrorDirection::Outbound },
     { "SliceModel", "agcPeakDb", MirrorDirection::Outbound },
     { "SliceModel", "agcAverageDb", MirrorDirection::Outbound },
+    // R-R3-49 (parity Task 16, dspInfoVersion 1): the Core's channel's
+    // minimum notch width (RadioModel::refreshSliceMinNotchWidths).
+    { "SliceModel", "minNotchWidthHz", MirrorDirection::Outbound },
 
     // ---- TransmitModel (86 entries) ----
     // iPhone app plan Task 35 (R-IOS-13): MOX and TUNE travel from the
@@ -525,13 +537,16 @@ const MirrorPolicy::Entry kEntries[] = {
     // it and the window keeps its default, true.
     { "DspAssetService", "nr3Runnable", MirrorDirection::Outbound },
     // R-R3-49, Sub-epic C-1 (dspAssetVersion 3): the same pair for DFNR. A
-    // window hides DFNR while dfnrRunnable is false; an older Core never
-    // sends them and the window keeps its defaults (true, no reason).
+    // window shows DFNR disabled with dfnrModelStatus while dfnrRunnable is
+    // false. An older Core never sends them; the window then shows DFNR
+    // disabled with "This Core does not say which noise reduction it can
+    // run." (RadioModel::nrCannotRunReason, parity Task 16's rule).
     { "DspAssetService", "dfnrModelStatus", MirrorDirection::Outbound },
     { "DspAssetService", "dfnrRunnable", MirrorDirection::Outbound },
     // R-R3-49, Sub-epic C-1 (dspAssetVersion 4): the same pair for MNR,
     // which runs only on a Mac. A window shows MNR disabled with mnrStatus
-    // while mnrRunnable is false; an older Core never sends them.
+    // while mnrRunnable is false; an older Core (below 4) never sends them,
+    // and the window shows MNR disabled with the same "does not say" reason.
     { "DspAssetService", "mnrStatus", MirrorDirection::Outbound },
     { "DspAssetService", "mnrRunnable", MirrorDirection::Outbound },
 
@@ -848,7 +863,7 @@ const MirrorPolicy::Entry kEntries[] = {
     { "PureSignalSettings", "hardwarePeakOverride", MirrorDirection::Bidirectional },
     { "PureSignalSettings", "lastLoadError", MirrorDirection::Outbound },
 
-    // ---- RadioModel (24 entries) ----
+    // ---- RadioModel (26 entries) ----
     { "RadioModel", "settingsSaveError", MirrorDirection::Outbound },
     { "RadioModel", "receiveLayoutRestoreState", MirrorDirection::Outbound },
     { "RadioModel", "receiveLayoutRestoreMessage", MirrorDirection::Outbound },
@@ -884,6 +899,11 @@ const MirrorPolicy::Entry kEntries[] = {
     { "RadioModel", "transmitting", MirrorDirection::Outbound },
     // R-R3-49 (parity Task 6): the Core's TX inhibit, Core to window only.
     { "RadioModel", "txInhibited", MirrorDirection::Outbound },
+    // R-R3-49 / R-R3-21 / R-R3-40 (parity Task 16, dspInfoVersion 1): the
+    // Core's last DSP Options apply time, Core to window only. Which noise
+    // reduction the Core runs is DspAssetService's (dfnrRunnable,
+    // mnrRunnable), the one source.
+    { "RadioModel", "dspOptionsLastApplyMs", MirrorDirection::Outbound },
 
     // ---- PanadapterModel (4 entries) ----
     { "PanadapterModel", "centerFrequency", MirrorDirection::Bidirectional },

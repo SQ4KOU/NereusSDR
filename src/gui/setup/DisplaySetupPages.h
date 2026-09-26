@@ -108,6 +108,13 @@ private:
     void buildUI();
     void loadFromRenderer();
     void pushFps(int fps);
+    // Parity Task 17 (R-R3-01, R-R3-08): in a remote window the FFT size,
+    // window, Hz/bin target and FPS open on the Core's stored values (the
+    // station keys this window holds from the Core), and the size and bin
+    // width readouts show what the Core granted the active pan.
+    bool remoteWindow();
+    void loadStationSpectrumSettings();
+    void refreshGrantedReadouts();
 
     // Section: FFT
     // Phase 2: FFT size is a 0..6 slider (Thetis tbDisplayFFTSize per
