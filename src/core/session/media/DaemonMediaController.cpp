@@ -1338,10 +1338,23 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
     }
     const QString connectionId = control.value(QStringLiteral("connectionId")).toString();
     if (m_peer) {
-        if (m_peer->connectionId() != connectionId) {
-            sendRejected(connectionId, 0, 0, QStringLiteral("The Core is already sending audio and display on another connection."));
+        if (m_peer->connectionId() == connectionId) {
+            return true;
         }
-        return m_peer->connectionId() == connectionId;
+        // A start on a new connection. This controller serves one device's
+        // session, so the peer it holds is that device's own: its media died
+        // on the app's side before the Core noticed (a half-open peer still
+        // waiting for ICE consent to time out). The new start replaces it,
+        // as a new sign-in from the same device replaces its old session
+        // (the several-devices design, ruling 4.8): the old peer is torn
+        // down, its displays retired and its demand gone. The app already
+        // left the old connection, so nothing is sent for it.
+        qCInfo(lcDaemonMedia) << "media start on a new connection replaces this device's"
+                              << "earlier media connection";
+        retirePeerKeepingSession();
+        if (!m_server || !m_server->mediaAvailable(m_epoch)) {
+            return false;
+        }
     }
     m_peer = std::make_unique<MediaPeer>(this, m_peerFactory);
     MediaPeer* const peer = m_peer.get();
@@ -1377,9 +1390,35 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
             sendControl(outbound);
         }
     });
-    connect(peer, &MediaPeer::closed, this, [this, peer, peerEpoch]() {
+    // The transport reports a failed connection (ICE consent lost, a failed
+    // DTLS handshake) before it closes; a closing connection only closes.
+    m_peerLost = false;
+    connect(peer, &MediaPeer::connectionFailed, this,
+            [this, peer, peerEpoch](const QString& message) {
         if (m_peer.get() == peer && m_epoch == peerEpoch) {
-            clearSession();
+            m_peerLost = true;
+            qCInfo(lcDaemonMedia).noquote()
+                << QStringLiteral("media connection failed: %1").arg(message.left(256));
+        }
+    });
+    connect(peer, &MediaPeer::closed, this, [this, peer, peerEpoch, connectionId]() {
+        if (m_peer.get() == peer && m_epoch == peerEpoch) {
+            // The Core dropped this peer on its own. Tell the app at once,
+            // with the whole-peer refusal (endpointId 0, revision 0), so it
+            // starts media again now rather than when its own peer times
+            // out; then clear. The peer's own connection id is gone by now
+            // (MediaPeer clears it before it reports closed), so the one it
+            // started with is used.
+            const QPointer<DaemonMediaController> self(this);
+            sendRejected(connectionId, 0, 0,
+                         QString::fromLatin1(m_peerLost ? kMediaPeerLostReason
+                                                        : kMediaPeerClosedReason));
+            // Sending can end the session (its control link closing), which
+            // clears the peer already.
+            if (!self || m_peer.get() != peer || m_epoch != peerEpoch) {
+                return;
+            }
+            retirePeerKeepingSession();
         }
     });
     connect(peer, &MediaPeer::ready, this, [this, peer, peerEpoch]() {
@@ -3779,6 +3818,18 @@ void DaemonMediaController::clearSession()
     }
     clearProduction();
     clearAllocationIdentity();
+}
+
+void DaemonMediaController::retirePeerKeepingSession()
+{
+    // The peer goes and the session stays: every other device's display
+    // share follows this one's demand going (ruling 9.3), as when the radio
+    // drops.
+    const bool demanded = !m_displayDemand.empty();
+    clearSession();
+    if (demanded && m_server && m_boundEpoch != 0) {
+        m_server->publishDisplayBudgetCapabilities();
+    }
 }
 
 QList<quint32> DaemonMediaController::endpointIds() const

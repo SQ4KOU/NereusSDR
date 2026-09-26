@@ -385,6 +385,10 @@ private:
     bool acceptPeerControl(const QJsonObject& control);
 
     void clearSession();
+    /// Drops the media peer while the session stays (the Core dropped it,
+    /// or the device started media on a new connection), and splits the
+    /// display budget again when the peer had asked for displays.
+    void retirePeerKeepingSession();
     void clearProduction();
     QList<quint32> endpointIds() const;
     void removeEndpoint(quint32 endpointId, bool retainOperation = true);
@@ -506,6 +510,9 @@ private:
     // declares the receiver stream ids). Entries outlive their streams so a
     // stale revision stays refused; only slices that existed are entered.
     bool m_receiverAudioNegotiated{false};
+    /// The current peer's connection failed (ICE consent lost, DTLS failed)
+    /// before it closed: which reason the app is told.
+    bool m_peerLost{false};
     std::map<int, ReceiverAudioStream> m_receiverStreams;
     /// Per receiver stream id: the slice holding it (-1 free) and the next
     /// RTP sequence and timestamp, so each id's timeline continues across

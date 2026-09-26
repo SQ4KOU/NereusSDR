@@ -24,6 +24,33 @@ the offerer and the GUI the answerer. Every subsequent operation carries
 the same ID. Control-session replacement retires the old peer, subscriptions,
 codec histories and callbacks, including deliberate silent redials.
 
+A `start` on a new `connectionId` while the Core still holds a peer for the
+same session replaces that peer; it is never refused. One media controller
+serves one device's session, so the peer it holds is that device's own:
+usually a half-open one whose media died on the app's side before the Core's
+ICE consent check noticed. The old peer is torn down, its endpoints retired
+and its display demand removed (every other device's budget share follows,
+`DaemonMediaController::retirePeerKeepingSession`), and nothing is sent for
+the old `connectionId`. A different device has its own session and its own
+controller, so its media is untouched. A device that signs in again gets a
+new session; its older connection ends with `sameDevice` and its media with
+it (the several-devices design, ruling 4.8).
+
+When the Core drops a media peer on its own, it tells the app at once with
+the whole-peer `rejected` (`endpointId` 0, `revision` 0) for that peer's
+`connectionId`, before it clears the peer, so the app starts media again
+without waiting for its own peer to time out. It is sent when the Core's
+transport reports the connection failed (ICE consent lost, a failed DTLS
+handshake), reason exactly "The Core lost the audio and display
+connection.", and when the connection closes without a reported failure,
+reason exactly "The audio and display connection to the Core closed."
+(`kMediaPeerLostReason` and `kMediaPeerClosedReason`, `MediaPeer.h`). It is
+not sent when the session itself ends (the control link is gone) or when a
+new `start` replaces the peer. An app treats these two reasons as "media is
+gone, start again"; every other whole-peer `rejected` (the Core could not
+start a peer) ends media for that connection. The desktop's remote window
+starts its media over through its usual recovery on the two drop reasons.
+
 | Operation | Exact payload fields beyond `op` and `connectionId` |
 | --- | --- |
 | `start` | None; a GUI whose Core advertised `audioProfileVersion` adds `audioProfileVersion`, a whole number of at least 1 (anything else is refused and no peer starts); a GUI whose Core advertised `receiverAudioVersion` may add `receiverAudioVersion` the same way (see Receiver audio), and one whose Core advertised `headphonesMixVersion` may add `headphonesMixVersion` the same way (see Headphones mix) |

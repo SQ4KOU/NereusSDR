@@ -604,6 +604,75 @@ private slots:
         QCOMPARE(recoveries.constFirst().at(0).toUInt(), epoch);
     }
 
+    // The Core tells this computer when it dropped its media peer on its own
+    // (the whole-peer refusal with the Core's drop reason): media starts
+    // over at once through recovery, as when this computer's own peer
+    // fails. Every other whole-peer refusal still settles for good.
+    void coreDroppedPeerStartsMediaOverOtherRefusalsSettle_data()
+    {
+        QTest::addColumn<QString>("reason");
+        QTest::addColumn<bool>("recovers");
+        QTest::newRow("lost") << QString::fromLatin1(kMediaPeerLostReason) << true;
+        QTest::newRow("closed") << QString::fromLatin1(kMediaPeerClosedReason) << true;
+        QTest::newRow("could-not-start")
+            << QStringLiteral("The Core could not start audio and display.") << false;
+    }
+
+    void coreDroppedPeerStartsMediaOverOtherRefusalsSettle()
+    {
+        QFETCH(QString, reason);
+        QFETCH(bool, recovers);
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
+        server.setMediaEnabled(true);
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        QPointer<DisplayTransport> media;
+        RemoteMediaController controller(&client, &remote, nullptr, nullptr,
+            [&media](QObject* owner) -> IMediaTransport* {
+                media = new DisplayTransport(owner);
+                return media;
+            });
+        QSignalSpy recoveries(&controller, &RemoteMediaController::recoveryRequested);
+        QSignalSpy errors(&controller, &RemoteMediaController::errorOccurred);
+        QSignalSpy controls(&server, &StationServer::mediaControlReceived);
+        auto* stationLink = new Test::LoopbackTransport(QStringLiteral("station"));
+        auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
+        stationLink->linkTo(clientLink);
+        client.startSession(clientLink, server.token());
+        server.acceptTransport(stationLink);
+        QTRY_VERIFY(client.mediaAvailable());
+        QTRY_VERIFY(media);
+        QTRY_COMPARE(countControl(controls, QStringLiteral("start")), 1);
+        media->activate();
+        const quint32 epoch = client.sessionEpoch();
+        const QJsonValue connectionId =
+            lastControl(controls, QStringLiteral("start")).value(QStringLiteral("connectionId"));
+
+        // Exactly what DaemonMediaController sends for a whole peer.
+        QVERIFY(server.sendMediaControl({
+            {QStringLiteral("op"), QStringLiteral("rejected")},
+            {QStringLiteral("connectionId"), connectionId},
+            {QStringLiteral("endpointId"), 0},
+            {QStringLiteral("revision"), 0},
+            {QStringLiteral("reason"), reason}}, server.mediaSessionEpoch()));
+        QTRY_COMPARE(errors.size(), 1);
+        QCOMPARE(errors.constFirst().at(0).toString(), reason);
+        QTRY_VERIFY(!media);
+        if (recovers) {
+            QTRY_COMPARE(recoveries.size(), 1);
+            QCOMPARE(recoveries.constFirst().at(0).toUInt(), epoch);
+        } else {
+            QCoreApplication::processEvents();
+            QCOMPARE(recoveries.size(), 0);
+        }
+        client.disconnectFromStation(QStringLiteral("test completed"));
+    }
+
     void diagnosticConsumerMayDeleteControllerDuringRecovery()
     {
         QTemporaryDir dir;

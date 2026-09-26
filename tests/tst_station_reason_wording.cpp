@@ -948,10 +948,16 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("QString::fromLatin1(kRetireReasonSliceRemoved)"),
           // Fix wave 2: the budget refusal, shared with the client,
           // DisplayBudget.h (scanned below).
-          QStringLiteral("QString::fromLatin1(kDisplayBudgetRefusalReason)")}},
+          QStringLiteral("QString::fromLatin1(kDisplayBudgetRefusalReason)"),
+          // The Core's media-peer drop reasons, shared with the client,
+          // MediaPeer.h (scanned below).
+          QStringLiteral("QString::fromLatin1(m_peerLost ? kMediaPeerLostReason : "
+                         "kMediaPeerClosedReason)")}},
         {"src/core/session/media/SpectrumEndpoint.h", {}, {}, 3},
         // Fix wave 2: kDisplayBudgetRefusalReason.
         {"src/core/session/media/DisplayBudget.h", {}, {}, 1},
+        // kMediaPeerLostReason and kMediaPeerClosedReason.
+        {"src/core/session/media/MediaPeer.h", {}, {}, 2},
         {"src/models/AccessoryDataModel.cpp", {QStringLiteral("readOnlyReason")}, {}, 1},
         {"src/models/AccessorySettingsModel.cpp", {QStringLiteral("readOnlyReason")}, {}, 1},
         // A Power Genius or Tuner Genius on another network: its

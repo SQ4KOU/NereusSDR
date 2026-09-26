@@ -24,6 +24,20 @@
 
 namespace NereusSDR {
 
+// The reasons the Core gives in a whole-peer `rejected` (endpointId 0,
+// revision 0) when it drops a media peer on its own, so the app starts
+// media again at once instead of waiting for its own peer to time out.
+// Both ends read them: the Core sends them (DaemonMediaController) and the
+// desktop's remote window starts over on them (RemoteMediaController),
+// where every other whole-peer refusal settles for good. Plain words: the
+// app may show them as sent.
+/// The connection failed: ICE consent lost or the DTLS handshake failed.
+inline constexpr char kMediaPeerLostReason[] =
+    "The Core lost the audio and display connection.";
+/// The connection closed.
+inline constexpr char kMediaPeerClosedReason[] =
+    "The audio and display connection to the Core closed.";
+
 struct MediaPeerTelemetry {
     quint64 generation = 0;
     MediaTransportTelemetry traffic;

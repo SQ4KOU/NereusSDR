@@ -2689,6 +2689,133 @@ private slots:
         QVERIFY(transportA->readyState);
     }
 
+    // A device's media peer goes while its session stays: the Core dropped
+    // it, or the device started media again on a new connection (its old
+    // peer half-open). Its displays and its demand go with the peer, so the
+    // other device's share grows back at once; the other device's media is
+    // not touched.
+    void aDevicesPeerGoingGivesItsDisplayShareBack_data()
+    {
+        QTest::addColumn<bool>("newStart");
+        QTest::newRow("core-dropped") << false;
+        QTest::newRow("new-start") << true;
+    }
+
+    void aDevicesPeerGoingGivesItsDisplayShareBack()
+    {
+        QFETCH(bool, newStart);
+        const auto pan = spectrumDisplayCost(128, 60, false);
+        QVERIFY(pan.has_value());
+        const DisplayBudgetCharge p = pan->charge;
+        MediaCore m(DisplayBudgetLimits{4 * p.applicationBytesPerSecond,
+                                        4 * p.spectrumSampleUnitsPerSecond, 1});
+        m.signInBoth();
+        const int sliceA = m.sliceOf(m.epochOf(0));
+        const int sliceB = m.sliceOf(m.epochOf(1));
+        const double centreA =
+            m.core.model->streamCentreHz(m.core.model->sliceById(sliceA)->streamIndex());
+        const double centreB =
+            m.core.model->streamCentreHz(m.core.model->sliceById(sliceB)->streamIndex());
+        MediaFake* transportA = m.startMedia(m.appA);
+        MediaFake* transportB = m.startMedia(m.appB);
+        QVERIFY(transportA && transportB);
+        const QPointer<MediaFake> oldA(transportA);
+        const auto share = [](const LoopbackTransport* app) {
+            return static_cast<quint64>(
+                latestCapability(app->received(), QStringLiteral("displayApplicationBytesPerSecond"))
+                    .toInteger());
+        };
+        for (quint32 endpoint = 1; endpoint <= 3; ++endpoint) {
+            sendMedia(m.appA, displayRequestAt(endpoint, sliceA, centreA, 60));
+            sendMedia(m.appB, displayRequestAt(endpoint, sliceB, centreB, 60));
+        }
+        // Both ask for three pans: two each.
+        QTRY_COMPARE(share(m.appB), 2 * p.applicationBytesPerSecond);
+        DaemonMediaController* controllerA = m.hub->controllerFor(m.epochOf(0));
+        QVERIFY(controllerA);
+        QTRY_VERIFY(controllerA->activeEndpointCount() > 0);
+
+        if (newStart) {
+            QJsonObject start = mediaStart();
+            start.insert(QStringLiteral("connectionId"),
+                         QStringLiteral("22222222-3333-4444-8555-666666666666"));
+            sendMedia(m.appA, start);
+            QTRY_COMPARE(m.transports.size(), 3);
+            QVERIFY(m.transports.last()->started);
+        } else {
+            emit transportA->connectionFailed(QStringLiteral("ICE consent check failed"));
+            emit transportA->closed();
+            QTRY_VERIFY(!mediaOps(m.appA, QStringLiteral("rejected")).isEmpty());
+        }
+        QTRY_VERIFY(oldA.isNull() || !oldA->started);
+        QCOMPARE(controllerA->activeEndpointCount(), 0);
+        QCOMPARE(controllerA->displayDemand(), DisplayBudgetCharge{});
+        // B has A's room back, less the one useful pan every device is
+        // counted as asking for (DisplayBudgetSplit's minimum request).
+        QTRY_VERIFY(share(m.appB) > 2 * p.applicationBytesPerSecond);
+        QVERIFY(transportB->started && transportB->readyState);
+        QVERIFY(mediaOps(m.appB, QStringLiteral("rejected")).isEmpty());
+    }
+
+    // The same device signs in again while the Core still holds its old,
+    // half-open media peer (the link dropped; ICE consent has not timed out
+    // yet). Its new session's start is taken at once and replaces the old
+    // peer: torn down, its displays retired, its demand gone. The other
+    // device's media goes on untouched.
+    void theSameDeviceBackReplacesItsHalfOpenMediaPeer()
+    {
+        MediaCore m;
+        m.signInBoth();
+        const quint64 epochA = m.epochOf(0);
+        const int sliceA = m.sliceOf(epochA);
+        QVERIFY(sliceA >= 0);
+        MediaFake* halfOpen = m.startMedia(m.appA);
+        MediaFake* transportB = m.startMedia(m.appB);
+        QVERIFY(halfOpen && transportB);
+        const QPointer<MediaFake> oldPeer(halfOpen);
+        sendMedia(m.appA, displayRequest(3, sliceA,
+                                         m.core.model->sliceById(sliceA)->frequency()));
+        DaemonMediaController* oldController = m.hub->controllerFor(epochA);
+        QVERIFY(oldController);
+        QTRY_COMPARE(oldController->activeEndpointCount(), 1);
+        const QPointer<DaemonMediaController> retired(oldController);
+
+        // The same device again, on a new link; its old link is still open
+        // on the app's side as far as the Core can tell.
+        LoopbackTransport* again = m.core.signIn(m.a);
+        QVERIFY(admitted(again));
+        QCOMPARE(endOf(m.appA).value(QStringLiteral("code")).toString(),
+                 QStringLiteral("sameDevice"));
+        // The old peer is gone with its session; the old controller too.
+        QTRY_VERIFY(oldPeer.isNull() || !oldPeer->started);
+        QTRY_VERIFY(retired.isNull());
+        QTRY_COMPARE(m.hub->controllerCount(), 2);
+
+        // The new session's start is taken, not refused.
+        MediaFake* fresh = m.startMedia(again);
+        // A third transport made (a raw address may be reused once the old
+        // one is deleted, so count them).
+        QVERIFY(fresh);
+        QCOMPARE(m.transports.size(), 3);
+        QVERIFY(fresh->started);
+        QVERIFY(mediaOps(again, QStringLiteral("rejected")).isEmpty());
+        sendMedia(again, displayRequest(3, sliceA,
+                                        m.core.model->sliceById(sliceA)->frequency()));
+        // The device's new controller: a new session's, still owning A's slice.
+        DaemonMediaController* newController = nullptr;
+        for (DaemonMediaController* controller : m.hub->controllers()) {
+            if (controller->sessionEpoch() != epochA
+                && m.core.server->mediaSessionOwnsSlice(controller->sessionEpoch(), sliceA)) {
+                newController = controller;
+            }
+        }
+        QVERIFY(newController);
+        QTRY_COMPARE(newController->activeEndpointCount(), 1);
+        // B never noticed.
+        QVERIFY(transportB->started && transportB->readyState);
+        QVERIFY(m.appB->isOpen());
+    }
+
     // Each device hears only its own slices: distinct tones per slice, read
     // back from each device's lossless audio. The Core's local output
     // plays neither (both slices are devices', none is the station's).

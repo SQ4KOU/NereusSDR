@@ -3500,9 +3500,9 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
         }
         return;
     }
-    // Core refused this connection's media (its peer could not start, or
-    // one is already active): op, connectionId, endpointId 0, revision 0
-    // and reason, as DaemonMediaController::sendRejected() sends them.
+    // Core refused this connection's media (its peer could not start), or
+    // dropped it: op, connectionId, endpointId 0, revision 0 and reason, as
+    // DaemonMediaController::sendRejected() sends them.
     if (op == QLatin1String("rejected") && payload.size() == 5
         && payload.value(QStringLiteral("endpointId")).isDouble()
         && payload.value(QStringLiteral("endpointId")).toDouble() == 0
@@ -3510,6 +3510,14 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
         && payload.value(QStringLiteral("revision")).toDouble() == 0
         && payload.value(QStringLiteral("reason")).isString()) {
         const QString reason = payload.value(QStringLiteral("reason")).toString().left(512);
+        // The Core dropped its peer on its own (the connection failed or
+        // closed on its side): start media over now, as when this
+        // computer's own peer fails, instead of waiting for it to time out.
+        if (reason == QLatin1String(kMediaPeerLostReason)
+            || reason == QLatin1String(kMediaPeerClosedReason)) {
+            requestRecovery(epoch, reason);
+            return;
+        }
         settleWithoutRetry(epoch, reason);
         return;
     }
