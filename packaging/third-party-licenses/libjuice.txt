@@ -9,3 +9,12 @@ The pinned source is fetched from:
 libjuice is licensed under the Mozilla Public License 2.0. The complete
 license is supplied in MPLv2.txt. This backend does not supply the R5 TURN
 TCP/TLS fallback; that deployment acceptance remains separate.
+
+Modification (MPL-2.0 section 3.1): NereusSDR compiles one covered file,
+src/agent.c, with a change of its own. When an ICE agent is destroyed it
+gives each TURN allocation back with a Refresh of LIFETIME 0 (RFC 8656
+section 7.2). The change is the source file
+cmake/patches/libjuice-release-turn-allocations.c in the NereusSDR source,
+which cmake/NereusRemoteMedia.cmake inserts into a copy of agent.c in the
+build tree (nereus_patch_libjuice_turn_release); that source is available
+under the same terms as the rest of NereusSDR's (SOURCE-OFFER.txt).

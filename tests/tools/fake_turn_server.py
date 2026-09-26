@@ -28,7 +28,9 @@ It writes the UDP port it bound to --port-file, then prints one line to
 standard output for each allocation (ALLOCATED n) and, for datagrams it
 relays, at 1, 2, 4, 8 ... of them each way (RELAYED OUT n from a client to
 a peer, RELAYED IN n from a peer to a client), so a test can see the relay
-was used. It never prints a credential.
+was used, and RELEASED n for each allocation a client gives back with a
+Refresh of LIFETIME 0 (iPhone app plan Task 28). It never prints a
+credential.
 """
 
 from __future__ import annotations
@@ -167,6 +169,8 @@ class Server:
         self.allocations = {}
         self.relayed = 0
         self.relayed_out = 0
+        # iPhone app plan Task 28: allocations given back with LIFETIME 0.
+        self.released = 0
 
     def port(self) -> int:
         return self.sock.getsockname()[1]
@@ -293,6 +297,8 @@ class Server:
             allocation = self.allocations.pop(client)
             self.selector.unregister(allocation.relay)
             allocation.relay.close()
+            self.released += 1
+            self.say(f"RELEASED {self.released}")
         self.sock.sendto(build(REFRESH, SUCCESS, txid,
                                [(LIFETIME, struct.pack("!I", min(seconds, 600)))], key), client)
 
