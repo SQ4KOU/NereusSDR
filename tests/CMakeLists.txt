@@ -455,6 +455,18 @@ if(TARGET wdsp_static)
     set_source_files_properties(WdspEqProbe.c PROPERTIES SKIP_PRECOMPILE_HEADERS ON)
     target_include_directories(tst_wdsp_txa_eq_q PRIVATE ${FFTW3_INCLUDE_DIRS})
     target_compile_definitions(tst_wdsp_txa_eq_q PRIVATE WDSP_STATIC_BUILD)
+    # R-R3-49 (Task 27, row 15 of the TX display matrix): the transmit
+    # analyzer's skirt. A synthetic TUNE tone into Spectrum0 and a real TX
+    # channel's TUNE generator, both through the arguments TxAnalyzer gives
+    # SetAnalyzer with Blackman-Harris 4T, are at least 90 dB down 66 Hz from
+    # the peak and beyond; every DSP block reaches the siphon once, in order.
+    # Reads the analyzer's input ring (analyzer.h), hence the WDSP headers.
+    # REALTIME: real WDSP threads, and the first SetAnalyzer plans a
+    # 32768-point FFTW_PATIENT transform with no wisdom.
+    nereus_add_test(tst_tx_analyzer_skirt EXTRA_LABELS core REALTIME)
+    target_include_directories(tst_tx_analyzer_skirt PRIVATE ${FFTW3_INCLUDE_DIRS})
+    target_compile_definitions(tst_tx_analyzer_skirt PRIVATE WDSP_STATIC_BUILD)
+    set_tests_properties(tst_tx_analyzer_skirt PROPERTIES TIMEOUT 900)
 endif()
 
 # ── Issue #75: receiver leak across disconnect/reconnect ──────────────────

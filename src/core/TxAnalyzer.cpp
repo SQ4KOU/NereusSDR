@@ -43,6 +43,10 @@
 //                 holds the rate and frame rate MainWindow set, so nereusd
 //                 sets up its analyzer the same way. AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-26 : Task 27 (R-R3-49) by J.J. Boyd (KG4VCF): currentArgs()
+//                 computes the SetAnalyzer arguments once; applySetAnalyzer
+//                 passes them. AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include "TxAnalyzer.h"
@@ -403,13 +407,8 @@ void TxAnalyzer::setSpectrumWindow(int lowHz, int highHz)
     }
 }
 
-void TxAnalyzer::applySetAnalyzer()
+TxAnalyzerArgs TxAnalyzer::currentArgs() const
 {
-    // Held off until the first start(); see the constructor.
-    if (m_deferSetAnalyzer) {
-        return;
-    }
-
     // From Thetis specHPSDR.cs:529 + :534-643 [v2.10.3.13+501e3f51] —
     // initAnalyzer case 1 (complex FFT) + the SetAnalyzer call at :624.
     //
@@ -475,45 +474,56 @@ void TxAnalyzer::applySetAnalyzer()
     // 3M-5b BH4 divergence was reverted by 3M-5d per controller decision
     // 2026-05-10; user can still pick BH4 via Setup → Display → TX → FFT
     // → Window combo if splatter returns.
-    // R-R3-39: on the transmit lane with the values as they stand now.
-    runWdsp([dispId = m_dispId, nPixout = m_nPixout, fftSize = m_fftSize,
-             bfSz = (m_blockSize > 0 ? m_blockSize : m_fftSize),
-             windowType = m_windowType, overlap = ovrlp, clipBins = effectiveClip,
-             clipLow = fsclipL, clipHigh = fsclipH, numPixels = m_numPixels,
-             maxW = max_w, sampleRate = m_sampleRate]() {
-        int flpOnLane[1] = {0};
-        SetAnalyzer(
-            dispId,
-            /*n_pixout=*/nPixout,
-            /*n_fft=*/1,
-            /*typ=*/1,
-            flpOnLane,
-            /*sz=*/fftSize,
-            // bf_sz is the SIPHON's push size, not the FFT size. See
-            // setBlockSize. Falls back to m_fftSize only when nothing has told
-            // us the real block size yet.
-            /*bf_sz=*/bfSz,
-            /*win_type=*/windowType,
-            /*pi=*/14.0,               // Thetis default (unused for non-Kaiser)
-            /*ovrlp=*/overlap,
-            /*clp=*/clipBins,     // 0 while span-clipped; see above
-            // fscLin / fscHin are BIN COUNTS to clip from the low and high ends,
-            // not frequencies. Thetis computes them in CalcSpectrum
-            // (specHPSDR.cs:772-774 [v2.10.3.15]) and passes them in these two
-            // slots. Leaving them at zero, as this did before, is what made the
-            // transmit trace land at the wrong dial frequency: the analyzer
-            // emitted the whole baseband while the pan kept its RX window, and
-            // SpectrumWidget stretched one across the other.
-            /*fscLin=*/static_cast<double>(clipLow),
-            /*fscHin=*/static_cast<double>(clipHigh),
-            /*n_pix=*/numPixels,
-            /*n_stch=*/1,
-            /*calset=*/0,
-            /*fmin=*/0.0,
-            /*fmax=*/0.0,
-            /*max_w=*/maxW);
+    TxAnalyzerArgs args;
+    args.nPixout = m_nPixout;
+    args.nFft = 1;
+    args.typ = 1;
+    args.sz = m_fftSize;
+    // bf_sz is the SIPHON's push size, not the FFT size. See setBlockSize.
+    // Falls back to m_fftSize only when nothing has told us the real block
+    // size yet.
+    args.bfSz = (m_blockSize > 0 ? m_blockSize : m_fftSize);
+    args.winType = m_windowType;
+    args.pi = 14.0;   // Thetis default (unused for non-Kaiser)
+    args.ovrlp = ovrlp;
+    args.clp = effectiveClip;   // 0 while span-clipped; see above
+    // fscLin / fscHin are BIN COUNTS to clip from the low and high ends,
+    // not frequencies. Thetis computes them in CalcSpectrum
+    // (specHPSDR.cs:772-774 [v2.10.3.15]) and passes them in these two
+    // slots. Leaving them at zero, as this did before, is what made the
+    // transmit trace land at the wrong dial frequency: the analyzer
+    // emitted the whole baseband while the pan kept its RX window, and
+    // SpectrumWidget stretched one across the other.
+    args.fscLin = static_cast<double>(fsclipL);
+    args.fscHin = static_cast<double>(fsclipH);
+    args.nPix = m_numPixels;
+    args.nStch = 1;
+    args.calset = 0;
+    args.fmin = 0.0;
+    args.fmax = 0.0;
+    args.maxW = max_w;
+    args.sampleRateHz = m_sampleRate;
+    return args;
+}
 
-        SetDisplaySampleRate(dispId, static_cast<int>(sampleRate));
+void TxAnalyzer::applySetAnalyzer()
+{
+    // Held off until the first start(); see the constructor.
+    if (m_deferSetAnalyzer) {
+        return;
+    }
+
+    const TxAnalyzerArgs args = currentArgs();
+
+    // R-R3-39: on the transmit lane with the values as they stand now.
+    runWdsp([dispId = m_dispId, args]() {
+        int flpOnLane[1] = {0};
+        SetAnalyzer(dispId, args.nPixout, args.nFft, args.typ, flpOnLane, args.sz,
+                    args.bfSz, args.winType, args.pi, args.ovrlp, args.clp,
+                    args.fscLin, args.fscHin, args.nPix, args.nStch, args.calset,
+                    args.fmin, args.fmax, args.maxW);
+
+        SetDisplaySampleRate(dispId, static_cast<int>(args.sampleRateHz));
     });
     ++m_analyzerConfigCount;
 
@@ -524,15 +534,16 @@ void TxAnalyzer::applySetAnalyzer()
     // when the analyzer is reconfigured, not per frame.
     qCDebug(lcDsp).nospace()
         << "TxAnalyzer SetAnalyzer: disp=" << m_dispId
-        << " fft=" << m_fftSize
-        << " bf_sz=" << (m_blockSize > 0 ? m_blockSize : m_fftSize)
+        << " fft=" << args.sz
+        << " bf_sz=" << args.bfSz
         << " (blockSize=" << m_blockSize << ")"
-        << " win=" << m_windowType
-        << " ovrlp=" << ovrlp
-        << " clp=" << effectiveClip
-        << " fsclipL=" << fsclipL << " fsclipH=" << fsclipH
-        << " n_pix=" << m_numPixels
-        << " rate=" << m_sampleRate
+        << " win=" << args.winType
+        << " ovrlp=" << args.ovrlp
+        << " clp=" << args.clp
+        << " fsclipL=" << args.fscLin << " fsclipH=" << args.fscHin
+        << " n_pix=" << args.nPix
+        << " max_w=" << args.maxW
+        << " rate=" << args.sampleRateHz
         << " window=[" << m_spanLowHz << "," << m_spanHighHz << "]";
 }
 

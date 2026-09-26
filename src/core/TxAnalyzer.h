@@ -63,6 +63,10 @@
 //                 the rate and frame rate the desktop window and nereusd
 //                 both give their TX analyzer. AI-assisted implementation
 //                 via Anthropic Claude Code.
+//   2026-09-26 : Task 27 (R-R3-49) by J.J. Boyd (KG4VCF): TxAnalyzerArgs and
+//                 currentArgs(), the one computation of every SetAnalyzer
+//                 argument, read by applySetAnalyzer and the skirt test.
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -80,6 +84,31 @@
 namespace NereusSDR {
 
 class DspControlThread;
+
+/// Every value TxAnalyzer hands WDSP's SetAnalyzer and SetDisplaySampleRate,
+/// in SetAnalyzer's argument order (wdsp/analyzer.c SetAnalyzer). Filled by
+/// TxAnalyzer::currentArgs(), the one computation applySetAnalyzer passes to
+/// WDSP, so a test reads exactly what the analyzer is given.
+struct TxAnalyzerArgs {
+    int nPixout{0};
+    int nFft{0};
+    int typ{0};
+    int sz{0};
+    int bfSz{0};
+    int winType{0};
+    double pi{0.0};
+    int ovrlp{0};
+    int clp{0};
+    double fscLin{0.0};
+    double fscHin{0.0};
+    int nPix{0};
+    int nStch{0};
+    int calset{0};
+    double fmin{0.0};
+    double fmax{0.0};
+    int maxW{0};
+    double sampleRateHz{0.0};
+};
 
 class TxAnalyzer : public QObject {
     Q_OBJECT
@@ -132,6 +161,10 @@ public:
     void setBlockSize(int frames);
 
     int blockSize() const noexcept { return m_blockSize; }
+
+    /// The SetAnalyzer / SetDisplaySampleRate arguments for the state as it
+    /// stands now. applySetAnalyzer passes exactly these to WDSP.
+    TxAnalyzerArgs currentArgs() const;
 
     /// Restrict analyzer output to `lowHz`..`highHz` around the carrier.
     /// Pass {0, 0} to go back to the full unclipped span.
