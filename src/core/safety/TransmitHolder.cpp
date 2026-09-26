@@ -14,6 +14,10 @@
 //               station device's take ends with its key until Task 77.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave I3: assign and failTransfer clear
+//               a dropped holder's fence, so it never outlives the
+//               transfer that superseded it. J.J. Boyd (KG4VCF), with AI-
+//               assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/safety/TransmitHolder.h"
@@ -207,6 +211,11 @@ void TransmitHolder::assign(quint64 generation)
         return;
     }
     m_waitingMoxOff = false;
+    // Fix wave I3: a transfer supersedes a dropped holder's fence (its
+    // callbacks see the old generation); with MOX read off and the holder
+    // changed, the fence has nothing left to guard.
+    m_fenced = false;
+    m_fenceWaitingMoxOff = false;
     // Step 3: the new holder, unkeyed, or nobody; VOX disarmed; the epoch
     // advanced; published.
     const bool hadHolder = m_holder.has_value();
@@ -242,8 +251,12 @@ void TransmitHolder::failTransfer(quint64 generation)
         return;
     }
     // Step 2's end with MOX still on: transmit unheld, every key refused
-    // until MOX reads off.
+    // until MOX reads off (stopNotConfirmed, which onMoxReading clears).
+    // Fix wave I3: a dropped holder's fence ends here too; the refusal
+    // that stands is "did not confirm", never "changing hands".
     m_waitingMoxOff = false;
+    m_fenced = false;
+    m_fenceWaitingMoxOff = false;
     const bool hadHolder = m_holder.has_value();
     m_holder.reset();
     m_next.reset();

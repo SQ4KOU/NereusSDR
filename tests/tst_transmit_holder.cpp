@@ -14,6 +14,9 @@
 //   2026-09-25: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 34 (R-IOS-02), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave I3: a transfer during a dropped
+//               holder's fence leaves no fence. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -482,6 +485,51 @@ private slots:
                                                              QStringLiteral("iPhone"));
             QVERIFY2(OperatorWording::isPlain(sentence), qPrintable(r.text));
         }
+    }
+
+    // ---- Fix wave I3: a transfer clears a dropped holder's fence ---------
+
+    // A release while a dropped holder's unkey is still running: the
+    // transfer supersedes the fence, and once it assigns nobody, keys are
+    // admitted again (the fence never outlives the holder it was for).
+    void aReleaseDuringTheDroppedHoldersFenceLeavesNoFence()
+    {
+        Rig rig;
+        rig.holdAndKey("phone");
+        rig.holder.holderDropped("phone", QStringLiteral("dropped"));
+        QVERIFY(rig.holder.isFenced());
+        QVERIFY(rig.pendingUnkey);
+        rig.holder.release("phone", QStringLiteral("left"));
+        QCOMPARE(rig.holder.state(), State::Transferring);
+        rig.mox = false;
+        rig.holder.onMoxReading(false);
+        rig.answerUnkey(UnkeyOutcome::Confirmed);
+        QCOMPARE(rig.holder.state(), State::Unheld);
+        QVERIFY(!rig.holder.isFenced());
+        QCOMPARE(rig.key("pad").verdict, KeyingVerdict::Admit);
+        QVERIFY(rig.holder.isHeldBy("pad"));
+    }
+
+    // The same when the transfer ends with MOX still on: keys are refused
+    // "did not confirm" until MOX reads off, then admitted; never stuck on
+    // "changing hands".
+    void aFailedTransferDuringTheFenceClearsWhenMoxReadsOff()
+    {
+        Rig rig;
+        rig.holdAndKey("phone");
+        rig.holder.holderDropped("phone", QStringLiteral("dropped"));
+        QVERIFY(rig.holder.isFenced());
+        rig.holder.release("phone", QStringLiteral("left"));
+        rig.answerUnkey(UnkeyOutcome::TimedOut);
+        // MOX still reads on: StopAllTx, then 2000 ms, then the failure.
+        QVERIFY(!rig.timers.isEmpty());
+        rig.fireTimer(rig.timers.size() - 1);
+        QCOMPARE(rig.holder.state(), State::Unheld);
+        QVERIFY(!rig.holder.isFenced());
+        QVERIFY(refusedWith(rig.key("pad"), TxRefusals::stopNotConfirmed()));
+        rig.mox = false;
+        rig.holder.onMoxReading(false);
+        QCOMPARE(rig.key("pad").verdict, KeyingVerdict::Admit);
     }
 };
 
