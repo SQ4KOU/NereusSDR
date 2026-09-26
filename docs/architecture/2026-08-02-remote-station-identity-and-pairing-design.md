@@ -193,6 +193,19 @@ counted and no wait. A paired device cannot revoke the last device while no
 token is active, so the window never reopens by itself after the first pair.
 The link document's section 3.6 carries the numbers.
 
+**Note (2026-09-26, the operator's ruling on the iPhone plan's Task 27
+review, item I5).** The ceiling counts only codes burned on a direct
+connection. Codes burned through the remote access service's mailbox never
+close the window: an unclaimed Core holds the lowest free nameplate there,
+so anyone could otherwise shut a fresh Core's pairing from the internet in
+about a minute. Instead, five of them in a row pause pairing through the
+service: 1 minute, then twice as long each time it is hit again with no
+pairing in between, at most 60 minutes. While paused, a pairing through the
+service is refused before it takes a code, so it burns nothing. Pairing on
+a direct connection (the home network) stays open throughout. A pairing, or
+reopening the window, ends the pause and starts the ladder over. A burned
+code still rotates, after the same wait either way.
+
 That last route is what makes adding a second device pleasant: the operator adds
 a phone from an already-paired laptop and never approaches the radio.
 

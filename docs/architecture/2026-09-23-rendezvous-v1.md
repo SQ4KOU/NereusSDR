@@ -547,8 +547,12 @@ service -> other:    {"type":"mailbox.closed","code":"peerClosed"}
 The rendezvous learns nothing it could test guesses against (link section
 3.6): the SPAKE2 exchange runs inside the bodies. Anyone can open a
 mailbox on a guessed small number, which uses up the station's current
-code; the per-address limit on `mailbox.open` (section 9.1) and the link's
-attempt ceiling bound that.
+code; the per-address limit on `mailbox.open` (section 9.1) and the
+station's pause of pairing through the service bound that. A NereusSDR
+Core never closes its pairing window for codes burned through a mailbox:
+five in a row pause pairing through the service for 1 minute, doubling each
+time with no pairing in between, at most 60 minutes, while pairing on a
+direct connection stays open (link section 3.6, the attempt ceiling).
 
 ## 7. Errors
 

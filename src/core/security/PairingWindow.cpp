@@ -19,6 +19,10 @@
 //               per-address handshake cap and 0600 on load. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic Claude
 //               Code.
+//   2026-09-26: Task 27 fix wave (I5, the operator's ruling): codes burned
+//               through the service pause pairing through it (1 to 60
+//               minutes) instead of closing the window. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/security/PairingWindow.h"
@@ -91,6 +95,14 @@ void PairingWindow::startAfresh()
     m_failures = 0;
     m_nextCodeAt = 0;
     m_wait->stop();
+    endServicePause();
+}
+
+void PairingWindow::endServicePause()
+{
+    m_serviceFailures = 0;
+    m_servicePauses = 0;
+    m_servicePausedUntil = 0;
 }
 
 void PairingWindow::followDevices()
@@ -232,6 +244,9 @@ void PairingWindow::pairingSucceeded()
     m_failures = 0;
     m_nextCodeAt = 0;
     m_wait->stop();
+    // A pairing ends a pause of pairing through the service and starts its
+    // ladder over (the ruling on Task 27 item I5).
+    endServicePause();
     if (m_state == State::OpenReopened) {
         // One device per reopening.
         commit(State::ClosedClaimed, QString());
@@ -243,33 +258,65 @@ void PairingWindow::pairingSucceeded()
     }
 }
 
-void PairingWindow::pairingFailed()
+void PairingWindow::pairingFailed(Route route)
 {
     m_codeInUse = false;
-    ++m_failures;
-    if (isOpen() && m_failures >= kMaxConsecutiveFailures) {
-        // The attempt ceiling (fix wave R1-I2): the fifth burn in a row
-        // closes the window, reopened or unclaimed.
-        closeForCeiling();
-        return;
+    int streak = 0;
+    if (route == Route::Service) {
+        // Through the service (the ruling on Task 27 item I5): never toward
+        // the ceiling. The fifth in a row pauses pairing through the service
+        // instead, for twice as long as the last pause, 1 to 60 minutes.
+        streak = ++m_serviceFailures;
+        if (isOpen() && m_serviceFailures >= kMaxConsecutiveFailures) {
+            const int doublings = std::min(m_servicePauses, 16);
+            const qint64 pause =
+                std::min<qint64>(kFirstServicePauseMs << doublings, kMaxServicePauseMs);
+            ++m_servicePauses;
+            m_serviceFailures = 0;
+            m_servicePausedUntil = now() + pause;
+            qCInfo(lcPairing) << "Pairing from outside the Core's network paused for"
+                              << pause / 1000 << "s after" << kMaxConsecutiveFailures
+                              << "wrong pairing codes in a row";
+        }
+    } else {
+        streak = ++m_failures;
+        if (isOpen() && m_failures >= kMaxConsecutiveFailures) {
+            // The attempt ceiling (fix wave R1-I2): the fifth burn in a row
+            // on a direct connection closes the window, reopened or
+            // unclaimed.
+            closeForCeiling();
+            return;
+        }
     }
-    // 5 s, 10 s, 20 s, 40 s (the ceiling closes the window before 80 s).
-    const int doublings = std::min(m_failures - 1, 16);
+    // 5 s, 10 s, 20 s, 40 s (the ceiling closes the window before 80 s; a
+    // fifth burn through the service waits 80 s, and pauses the service).
+    const int doublings = std::min(streak - 1, 16);
     const qint64 wait = std::min<qint64>(kFirstRetryMs << doublings, kMaxRetryMs);
     m_nextCodeAt = now() + wait;
     qCInfo(lcPairing) << "Pairing failed; the next code follows in" << wait << "ms";
     commit(m_state, codeFor(m_state));
 }
 
-qint64 PairingWindow::retryAfterMs() const
+qint64 PairingWindow::retryAfterMs(Route route) const
 {
     if (!isOpen()) {
         return 0;
     }
-    if (m_codeInUse) {
-        return kFirstRetryMs;
+    const qint64 code = m_codeInUse ? kFirstRetryMs : std::max<qint64>(0, m_nextCodeAt - now());
+    return route == Route::Service ? std::max(code, servicePauseRemainingMs()) : code;
+}
+
+bool PairingWindow::isPaused(Route route) const
+{
+    return route == Route::Service && servicePauseRemainingMs() > 0;
+}
+
+qint64 PairingWindow::servicePauseRemainingMs() const
+{
+    if (!isOpen()) {
+        return 0;
     }
-    return std::max<qint64>(0, m_nextCodeAt - now());
+    return std::max<qint64>(0, m_servicePausedUntil - now());
 }
 
 void PairingWindow::poll()

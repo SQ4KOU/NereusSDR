@@ -93,6 +93,33 @@ struct Fixture {
         QVERIFY(window->takeCode(window->codeSerial()));
         window->pairingFailed();
     }
+
+    // One code burned through the remote access service.
+    void burnThroughService()
+    {
+        QVERIFY(window->takeCode(window->codeSerial()));
+        window->pairingFailed(PairingWindow::Route::Service);
+    }
+
+    // Waits for the next code, as a device on the home network would.
+    void untilTheNextCode()
+    {
+        advance(window->retryAfterMs());
+        QVERIFY(!window->currentCode().isEmpty());
+    }
+
+    // kMaxConsecutiveFailures codes burned through the service in a row.
+    void pauseTheService()
+    {
+        for (int i = 0; i < PairingWindow::kMaxConsecutiveFailures; ++i) {
+            if (window->currentCode().isEmpty()) {
+                untilTheNextCode();
+            }
+            QVERIFY(!window->isPaused(PairingWindow::Route::Service));
+            burnThroughService();
+        }
+        QVERIFY(window->isPaused(PairingWindow::Route::Service));
+    }
 };
 
 bool isWellFormedCode(const QString& code, int nameplate)
@@ -272,6 +299,126 @@ private slots:
         // Still unclaimed and with no timer.
         f.advance(24LL * 60 * 60 * 1000);
         QCOMPARE(f.window->state(), PairingWindow::State::OpenUnclaimed);
+    }
+
+    // ── Wrong codes through the remote access service (the operator's
+    //    ruling on Task 27 item I5, 2026-09-26) ─────────────────────────
+
+    // Five in a row pause pairing through the service, never pairing on the
+    // home network, and never close the window.
+    void fiveServiceBurnsPauseTheServiceNotTheWindow()
+    {
+        Fixture f;
+        QCOMPARE(PairingWindow::kFirstServicePauseMs, qint64(60 * 1000));
+        QCOMPARE(PairingWindow::kMaxServicePauseMs, qint64(60 * 60 * 1000));
+        QSignalSpy states(f.window.get(), &PairingWindow::stateChanged);
+        for (int i = 1; i < PairingWindow::kMaxConsecutiveFailures; ++i) {
+            f.burnThroughService();
+            QCOMPARE(f.window->consecutiveServiceFailures(), i);
+            // The code rotates after the same wait as a direct burn's.
+            QCOMPARE(f.window->retryAfterMs(), PairingWindow::kFirstRetryMs << (i - 1));
+            f.untilTheNextCode();
+        }
+        const QString before = f.window->currentCode();
+        f.burnThroughService();
+        QCOMPARE(f.window->state(), PairingWindow::State::OpenUnclaimed);
+        QVERIFY(f.window->isOpen());
+        QCOMPARE(states.size(), 0);
+        QCOMPARE(f.window->consecutiveFailures(), 0);
+        QVERIFY(f.window->isPaused(PairingWindow::Route::Service));
+        QVERIFY(!f.window->isPaused(PairingWindow::Route::Direct));
+        QCOMPARE(f.window->servicePauseRemainingMs(), PairingWindow::kFirstServicePauseMs);
+        QCOMPARE(f.window->retryAfterMs(PairingWindow::Route::Service),
+                 std::max(PairingWindow::kFirstServicePauseMs, f.window->retryAfterMs()));
+        // The burned code still rotates (after 80 s, past this first pause).
+        f.untilTheNextCode();
+        QVERIFY(f.window->currentCode() != before);
+        QVERIFY(!f.window->isPaused(PairingWindow::Route::Service));
+        // Paused again (2 minutes): the next code pairs on the home network
+        // while pairing through the service is still paused.
+        f.pauseTheService();
+        f.untilTheNextCode();
+        QVERIFY(f.window->isPaused(PairingWindow::Route::Service));
+        QVERIFY(!f.window->isPaused(PairingWindow::Route::Direct));
+        QCOMPARE(f.window->retryAfterMs(PairingWindow::Route::Direct), qint64(0));
+        QVERIFY(f.window->takeCode(f.window->codeSerial()));
+        f.window->pairingSucceeded();
+        QVERIFY(!f.window->isPaused(PairingWindow::Route::Service));
+        QCOMPARE(states.size(), 0);
+    }
+
+    // The pause lasts 1 minute, then twice as long each time it is hit
+    // again with no pairing in between, at most 60 minutes; the window
+    // stays open throughout.
+    void theServicePauseDoublesAndIsCappedAtAnHour()
+    {
+        Fixture f;
+        const QList<qint64> minutes{1, 2, 4, 8, 16, 32, 60, 60};
+        for (const qint64 expected : minutes) {
+            f.pauseTheService();
+            QCOMPARE(f.window->servicePauseRemainingMs(), expected * 60 * 1000);
+            QCOMPARE(f.window->state(), PairingWindow::State::OpenUnclaimed);
+            f.advance(expected * 60 * 1000 - 1);
+            QVERIFY(f.window->isPaused(PairingWindow::Route::Service));
+            f.advance(1);
+            QVERIFY(!f.window->isPaused(PairingWindow::Route::Service));
+            QCOMPARE(f.window->consecutiveServiceFailures(), 0);
+        }
+    }
+
+    // A pairing, or reopening the window, ends the pause and starts the
+    // ladder over.
+    void aPairingOrAReopeningResetsTheServicePause()
+    {
+        Fixture f;
+        QVERIFY(f.store->add(makeDevice()));
+        f.window->reopen();
+        f.pauseTheService();
+        f.advance(PairingWindow::kFirstServicePauseMs);
+        f.pauseTheService();
+        QCOMPARE(f.window->servicePauseRemainingMs(), 2 * PairingWindow::kFirstServicePauseMs);
+        // Paired on the home network: one device per reopening, so it
+        // closes; the pause is over.
+        f.untilTheNextCode();
+        QVERIFY(f.window->takeCode(f.window->codeSerial()));
+        f.window->pairingSucceeded();
+        QCOMPARE(f.window->servicePauseRemainingMs(), qint64(0));
+        f.window->reopen();
+        f.pauseTheService();
+        QCOMPARE(f.window->servicePauseRemainingMs(), PairingWindow::kFirstServicePauseMs);
+
+        // Reopened with no pairing in between: back to the first rung too.
+        f.advance(PairingWindow::kFirstServicePauseMs);
+        f.pauseTheService();
+        QCOMPARE(f.window->servicePauseRemainingMs(), 2 * PairingWindow::kFirstServicePauseMs);
+        f.window->close();
+        QVERIFY(!f.window->isPaused(PairingWindow::Route::Service));
+        f.window->reopen();
+        QVERIFY(!f.window->isPaused(PairingWindow::Route::Service));
+        QCOMPARE(f.window->consecutiveServiceFailures(), 0);
+        f.pauseTheService();
+        QCOMPARE(f.window->servicePauseRemainingMs(), PairingWindow::kFirstServicePauseMs);
+    }
+
+    // Burns through the service do not count toward the ceiling, and a
+    // streak of burns on a direct connection still closes the window as
+    // before.
+    void aDirectStreakStillClosesTheWindow()
+    {
+        Fixture f;
+        for (int i = 1; i < PairingWindow::kMaxConsecutiveFailures; ++i) {
+            f.burn();
+            f.untilTheNextCode();
+            f.burnThroughService();
+            f.untilTheNextCode();
+        }
+        QCOMPARE(f.window->consecutiveFailures(), PairingWindow::kMaxConsecutiveFailures - 1);
+        QCOMPARE(f.window->state(), PairingWindow::State::OpenUnclaimed);
+        f.burn();
+        QCOMPARE(f.window->state(), PairingWindow::State::ClosedUnclaimed);
+        QVERIFY(f.window->currentCode().isEmpty());
+        // Closed, nothing is paused: there is nothing to pair with.
+        QVERIFY(!f.window->isPaused(PairingWindow::Route::Service));
     }
 
     void fiveBurnedCodesCloseAReopenedWindow()

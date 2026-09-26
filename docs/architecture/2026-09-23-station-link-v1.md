@@ -333,12 +333,24 @@ connection's:
   closed. Nothing pairs until the console reopens it (`nereusd pairing
   open`); no device is paired to do it, so physical access decides.
 
-**The attempt ceiling.** Five burned codes in a row
-(`PairingWindow::kMaxConsecutiveFailures`) close any open window,
-reopened or unclaimed. A closed window opens again only from the Core's
-console or, on a claimed Core, from a paired device (`pairing.open`).
-Reopening starts afresh: no failures counted and no wait, so the code is
-there at once.
+**The attempt ceiling.** Five codes burned in a row on a direct
+connection (`PairingWindow::kMaxConsecutiveFailures`) close any open
+window, reopened or unclaimed. A closed window opens again only from the
+Core's console or, on a claimed Core, from a paired device
+(`pairing.open`). Reopening starts afresh: no failures counted and no wait,
+so the code is there at once.
+
+**Codes burned through the rendezvous** (a pairing mailbox, section 19)
+never count toward the ceiling and never close the window (the operator's
+ruling of 2026-09-26). Five of them in a row pause pairing through the
+rendezvous instead: 1 minute (`PairingWindow::kFirstServicePauseMs`), then
+twice as long each time it is hit again with no pairing in between, at
+most 60 minutes (`PairingWindow::kMaxServicePauseMs`). While paused, a
+mailbox's `pair.start` gets `pair.fail` with `retryAfterMs` the time left,
+before any code is taken, so it burns nothing. Pairing on a direct
+connection stays open throughout. A pairing, or reopening the window, ends
+the pause and starts over at 1 minute. A code burned either way rotates
+after the same wait.
 
 The first pairing closes an unclaimed window, for good. `devices.revoke`
 never removes the last device while no token is active (section 9.1), so a
