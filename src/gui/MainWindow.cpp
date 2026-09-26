@@ -270,6 +270,12 @@
 //                (MainWindow_Wiring.cpp:4382-4437 [@1e0718ad]); Pan Layout
 //                and +PAN follow RadioModel::maxSlices(). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  iPhone app plan Task 77 (R-IOS-02,
+//                                    R-IOS-03, R-IOS-13): every transmit
+//                                    control in a remote window follows the
+//                                    holder (the transmitter's settings and
+//                                    VOX disabled with the reason). AI-
+//                                    assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -1433,6 +1439,8 @@ void MainWindow::wireRemoteTransmitMeters()
         }
     };
     connect(state, &TransmitState::holderChanged, this, showHolder);
+    // iPhone app plan Task 77: every transmit control follows the holder.
+    connect(state, &TransmitState::holderChanged, this, &MainWindow::applyRemoteRoleGating);
     connect(m_stationClient, &StationClient::handshakeComplete, this, showHolder);
     showHolder();
 }
@@ -11830,26 +11838,54 @@ void MainWindow::applyRemoteRoleGating()
     refreshTciRemoteTransmit();
     // R-R3-49 (parity Task 1): the transmit settings that key nothing, live
     // while the Core takes them and its radio is off the air.
-    const bool settingsPermitted = transmitSettingsPermitted();
-    const QString settingsReason = transmitSettingsReason();
+    bool settingsPermitted = transmitSettingsPermitted();
+    QString settingsReason = transmitSettingsReason();
     // R-R3-49 (parity Task 2): the applets' other transmit settings came
     // with transmitSettingsVersion 2.
-    const bool chainPermitted = transmitSettingsPermitted(2);
-    const QString chainReason = transmitSettingsReason(2);
+    bool chainPermitted = transmitSettingsPermitted(2);
+    QString chainReason = transmitSettingsReason(2);
     // R-R3-49 (parity Task 3): the TX profiles, the radio microphone
     // settings and RADE's Reset vocoder came with transmitSettingsVersion 3.
-    const bool profilePermitted = transmitSettingsPermitted(3);
-    const QString profileReason = transmitSettingsReason(3);
+    bool profilePermitted = transmitSettingsPermitted(3);
+    QString profileReason = transmitSettingsReason(3);
     // R-R3-49 (parity Task 4): the TX EQ and CFC dialogs, Setup > DSP >
     // CFC and AGC/ALC's TX Leveler and ALC came with version 4.
-    const bool processingPermitted = transmitSettingsPermitted(4);
-    const QString processingReason = transmitSettingsReason(4);
-    TxEqDialog::setSettingsPermitted(processingPermitted, processingReason);
+    bool processingPermitted = transmitSettingsPermitted(4);
+    QString processingReason = transmitSettingsReason(4);
     // Fix wave 2 (M8): VOX listens to this computer's microphone line to
     // the Core; without one it is shown disabled with the reason (the
     // Core's refusal of arming it stays the backstop).
-    const bool voxLine = m_remoteMedia == nullptr || m_remoteMedia->micLineOpen();
-    const QString voxReason = voxLine ? QString() : TxRefusals::micNotConnected().text;
+    bool voxLine = m_remoteMedia == nullptr || m_remoteMedia->micLineOpen();
+    QString voxReason = voxLine ? QString() : TxRefusals::micNotConnected().text;
+    // iPhone app plan Task 77 (rulings 7.7, 8.4): while another device
+    // holds transmit, the transmitter's settings are its own, and VOX
+    // follows the holder: every transmit control here is shown disabled
+    // with the Core's reason, never hidden. The Core refuses them anyway.
+    const QString holderReason = m_stationClient && m_stationClient->knowsTransmitHolder()
+        ? m_stationClient->otherHolderReason()
+        : QString();
+    const auto settingsAt = [this, &holderReason](int version) {
+        return holderReason.isEmpty() && transmitSettingsPermitted(version);
+    };
+    const auto settingsReasonAt = [this, &holderReason](int version) {
+        return holderReason.isEmpty() || !transmitSettingsPermitted(version)
+            ? transmitSettingsReason(version)
+            : holderReason;
+    };
+    if (m_stationClient && m_stationClient->knowsTransmitHolder()) {
+        // A reason already shown (the radio on the air) stays.
+        if (!holderReason.isEmpty()) {
+            if (settingsPermitted) { settingsPermitted = false; settingsReason = holderReason; }
+            if (chainPermitted) { chainPermitted = false; chainReason = holderReason; }
+            if (profilePermitted) { profilePermitted = false; profileReason = holderReason; }
+            if (processingPermitted) { processingPermitted = false; processingReason = holderReason; }
+        }
+        if (voxLine && !m_stationClient->holdsTransmitHere()) {
+            voxLine = false;
+            voxReason = holderReason.isEmpty() ? TxRefusals::notHolder().text : holderReason;
+        }
+    }
+    TxEqDialog::setSettingsPermitted(processingPermitted, processingReason);
     if (m_txApplet) {
         m_txApplet->setTransmitPermitted(transmitPermitted, transmitReason);
         m_txApplet->setVoxPermitted(voxLine, voxReason);
@@ -11859,10 +11895,12 @@ void MainWindow::applyRemoteRoleGating()
         m_txApplet->setTxProcessingPermitted(processingPermitted, processingReason);
         // R-R3-49 (group A fix wave, M3): the RF Power slider's per-band
         // and drive-source writes came with version 5.
-        m_txApplet->setPowerByBandPermitted(transmitSettingsPermitted(5));
+        m_txApplet->setPowerByBandPermitted(settingsAt(5));
         // R-R3-49 (parity Task 7): PS-A arms PureSignal (version 7).
-        m_txApplet->setPureSignalArmingPermitted(pureSignalArmingPermitted(),
-                                                 pureSignalArmingReason());
+        m_txApplet->setPureSignalArmingPermitted(
+            holderReason.isEmpty() && pureSignalArmingPermitted(),
+            holderReason.isEmpty() || !pureSignalArmingPermitted() ? pureSignalArmingReason()
+                                                                   : holderReason);
     }
     if (m_phoneCwApplet) {
         m_phoneCwApplet->setTransmitPermitted(transmitPermitted, transmitReason);
@@ -11910,15 +11948,12 @@ void MainWindow::applyRemoteRoleGating()
         dialog->setTransmitSettingsPermitted(processingPermitted, processingReason, 4);
         // R-R3-49 (parity Task 5): Transmit > Power, DEXP/VOX and Test >
         // Two-Tone IMD came with version 5.
-        dialog->setTransmitSettingsPermitted(transmitSettingsPermitted(5),
-                                             transmitSettingsReason(5), 5);
+        dialog->setTransmitSettingsPermitted(settingsAt(5), settingsReasonAt(5), 5);
         // R-R3-49 (parity Task 6): Setup > PA came with version 6.
-        dialog->setTransmitSettingsPermitted(transmitSettingsPermitted(6),
-                                             transmitSettingsReason(6), 6);
+        dialog->setTransmitSettingsPermitted(settingsAt(6), settingsReasonAt(6), 6);
         // R-R3-49 (parity Task 13): Hardware Config's OC transmit pins, pin
         // actions and transmit calibration came with version 8.
-        dialog->setTransmitSettingsPermitted(transmitSettingsPermitted(8),
-                                             transmitSettingsReason(8), 8);
+        dialog->setTransmitSettingsPermitted(settingsAt(8), settingsReasonAt(8), 8);
         dialog->setStationSettingsAvailable(stationAvailable, stationSettingsReason());
     }
     if (m_actTxEqualizer) {
