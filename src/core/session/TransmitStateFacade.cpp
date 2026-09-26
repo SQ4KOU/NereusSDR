@@ -24,6 +24,11 @@
 //               and TUNE wait while another device holds. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: Parity Task 28 (R-R3-49, A11): highSwr and
+//               swrWindBackLatched, the high-SWR state the local window's
+//               border shows, appended (txDisplayVersion 1). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/TransmitStateFacade.h"
@@ -31,6 +36,7 @@
 #include "core/MoxController.h"
 #include "core/RadioStatus.h"
 #include "core/TxSliceArbiter.h"
+#include "core/safety/SwrProtectionController.h"
 #include "core/safety/RemoteTxWatchdog.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
@@ -143,6 +149,15 @@ void TransmitState::bind(RadioModel* model)
             Qt::QueuedConnection);
     });
 
+    // Parity Task 28: the high-SWR state RadioModel hands a local window's
+    // setHighSwrOverlay (RadioModel.cpp, the SwrProtectionController
+    // highSwrChanged and windBackLatchedChanged connects).
+    connect(&model->swrProt(), &safety::SwrProtectionController::highSwrChanged, this,
+            [this](bool) { refreshSwr(); });
+    connect(&model->swrProt(), &safety::SwrProtectionController::windBackLatchedChanged, this,
+            [this](bool) { refreshSwr(); });
+    refreshSwr();
+
     // The model as it is now.
     m_meters = m_pump->readNow();
     if (model->isTransmitting()) {
@@ -170,8 +185,24 @@ void TransmitState::unbind()
     if (MoxController* mox = model->moxController()) {
         disconnect(mox, nullptr, this, nullptr);
     }
+    disconnect(&model->swrProt(), nullptr, this, nullptr);
     m_pump->setModel(nullptr);
     m_model = nullptr;
+}
+
+void TransmitState::refreshSwr()
+{
+    if (m_model.isNull()) {
+        return;
+    }
+    const bool high = m_model->swrProt().highSwr();
+    const bool latched = m_model->swrProt().windBackLatched();
+    if (high == m_highSwr && latched == m_swrWindBackLatched) {
+        return;
+    }
+    m_highSwr = high;
+    m_swrWindBackLatched = latched;
+    emit swrChanged();
 }
 
 void TransmitState::setClock(Clock clock)
@@ -454,6 +485,14 @@ bool TransmitState::applyStationValue(const QByteArray& propertyName, const QVar
     } else if (propertyName == "stopEpoch") {
         stop = value.toLongLong() != m_stopEpoch;
         m_stopEpoch = value.toLongLong();
+    } else if (propertyName == "highSwr" || propertyName == "swrWindBackLatched") {
+        // Parity Task 28: the Core's high-SWR state.
+        bool& field = propertyName == "highSwr" ? m_highSwr : m_swrWindBackLatched;
+        if (value.toBool() != field) {
+            field = value.toBool();
+            emit swrChanged();
+        }
+        return true;
     } else if (propertyName == "keyedForSeconds") {
         state = value.toLongLong() != m_stationKeyedForSeconds;
         m_stationKeyedForSeconds = value.toLongLong();
@@ -535,6 +574,11 @@ void TransmitState::clearStationValues()
         emit timeOutChanged();
     }
     setMeters(TxMeterReadings{});
+    if (m_highSwr || m_swrWindBackLatched) {
+        m_highSwr = false;
+        m_swrWindBackLatched = false;
+        emit swrChanged();
+    }
     // The stop fields stay: they say what happened, and the next Core's
     // values replace them.
 }

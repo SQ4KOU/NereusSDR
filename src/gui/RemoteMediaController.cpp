@@ -19,6 +19,15 @@
 //               micLineChanged, so VOX shows disabled with its reason while
 //               this computer has no microphone line to the Core. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26: parity Task 28 (R-R3-49, A11, R-IOS-13): see
+//               RemoteMediaController.h. A Core at
+//               txDisplayVersion 1 is told at media start that this window
+//               takes its transmit display; each subscribe carries the pan's
+//               transmit window (txMinDbm, txMaxDbm), and a context the Core
+//               marks `transmit` and its frames are handed on
+//               (transmitContextReceived, transmitFrameReceived) instead of
+//               being drawn as receive; drawing them is Task 29. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #include "gui/RemoteMediaController.h"
 #include "core/AppSettings.h"
@@ -321,6 +330,8 @@ struct DbmWindow {
 struct RequestInputs {
     std::optional<DbmWindow> dbmWindow;
     std::optional<int> decimation;
+    // Parity Task 28: the transmit window, for a Core told txDisplayVersion.
+    std::optional<DbmWindow> txDbmWindow;
 };
 
 // Parity Task 17 follow-up (R-R3-01, R-R3-04): the headroom a waterfall
@@ -503,7 +514,36 @@ QJsonObject requestFor(SpectrumWidget* widget, SliceModel* slice,
         // Parity Task 17 (R-R3-01): spectrumGrantVersion 2.
         request.insert(QStringLiteral("decimation"), *inputs.decimation);
     }
+    if (inputs.txDbmWindow) {
+        // Parity Task 28 (R-R3-49, A11): txDisplayVersion 1.
+        request.insert(QStringLiteral("txMinDbm"), inputs.txDbmWindow->minDbm);
+        request.insert(QStringLiteral("txMaxDbm"), inputs.txDbmWindow->maxDbm);
+    }
     return request;
+}
+
+// Parity Task 28 (R-R3-49, A11): the window the Core quantises the pan's
+// transmit display to: its transmit grid (reference level down by its
+// dynamic range) widened by the transmit waterfall levels, which colour the
+// frame's values as they come (Thetis display.cs:6420-6427 [v2.10.3.15],
+// TXWFAmpMin / TXWFAmpMax while keyed). Each edge is rounded outward to a
+// tenth of a dB and held inside -400 to 100, as the receive window is.
+DbmWindow transmitDbmWindow(const SpectrumWidget* widget)
+{
+    const double gridMax = widget->transmitRefLevel();
+    const double gridMin = gridMax - widget->transmitDynamicRange();
+    double low = std::min(gridMin, double(widget->txWfLowLevel()));
+    double high = std::max(gridMax, double(widget->txWfHighLevel()));
+    low = std::clamp(std::floor(low * 10.0) / 10.0, kMinDbmLimit, kMaxDbmLimit);
+    high = std::clamp(std::ceil(high * 10.0) / 10.0, kMinDbmLimit, kMaxDbmLimit);
+    if (high <= low) {
+        if (low > kMinDbmLimit) {
+            low = high - 0.1;
+        } else {
+            high = low + 0.1;
+        }
+    }
+    return {low, high};
 }
 
 QJsonObject allocatedRequest(QJsonObject request, const RemoteDisplayQuality& quality,
@@ -632,6 +672,17 @@ struct RemoteMediaController::Private {
         bool retiring = false;
         bool suspending = false;
         bool receivedNoiseFloor = false;
+        /// Parity Task 28: the Core's transmit display is on this pan
+        /// (`transmit` true): its frames, at transmitGeneration, are handed
+        /// on and not drawn. `context`, `sourceCentreHz` and `grant` stay the
+        /// receive context's until the fall's context replaces them.
+        bool transmit = false;
+        quint32 transmitGeneration = 0;
+        /// The newest context generation accepted, receive or transmit.
+        quint32 acceptedGeneration() const
+        {
+            return transmit ? transmitGeneration : context.codec.contextGeneration;
+        }
         /// R-R3-37: when this pan began waiting for an accepted display
         /// (allocationClock), or -1 while it has one. See kPanWaitingGraceMs.
         qint64 waitingSinceMs = -1;
@@ -648,6 +699,8 @@ struct RemoteMediaController::Private {
     QPointer<StationClient> client;
     QPointer<RadioModel> model;
     QPointer<PanadapterStack> stack;
+    // Parity Task 28: this media start declared txDisplayVersion.
+    bool txDisplayNegotiated = false;
     QPointer<MediaPeer> peer;
     MediaPeer::TransportFactory factory;
     QTimer* timer = nullptr;
@@ -687,6 +740,9 @@ struct RemoteMediaController::Private {
         if (client && client->spectrumDecimationAvailable()) {
             inputs.decimation = model && model->fftEngine()
                 ? model->fftEngine()->decimation() : 1;
+        }
+        if (txDisplayNegotiated && widget) {
+            inputs.txDbmWindow = transmitDbmWindow(widget);
         }
         return requestFor(widget, slice, client && client->remoteWidebandAvailable(), inputs);
     }
@@ -1359,6 +1415,11 @@ bool RemoteMediaController::audioDetailNegotiated() const
 {
     return d->client && d->client->remoteAudioStatusAvailable();
 }
+bool RemoteMediaController::txDisplayNegotiated() const
+{
+    return d->txDisplayNegotiated;
+}
+
 bool RemoteMediaController::spectrumGrantNegotiated() const
 {
     return d->client && d->client->spectrumGrantAvailable();
@@ -2371,6 +2432,12 @@ void RemoteMediaController::start()
     // R-R3-45: likewise the headphones mix, only to a Core that offers it.
     if (headphonesMixNegotiated()) {
         startControl.insert(QStringLiteral("headphonesMixVersion"), 1);
+    }
+    // Parity Task 28 (R-R3-49, A11): likewise the transmit display, only to
+    // a Core that sends it.
+    d->txDisplayNegotiated = d->client && d->client->capabilities().txDisplayVersion >= 1;
+    if (d->txDisplayNegotiated) {
+        startControl.insert(QStringLiteral("txDisplayVersion"), 1);
     }
     // Task 36: likewise the microphone line, only to a Core that takes it.
     if (micLine) {
@@ -4194,7 +4261,8 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
     // The shape the agreed minor selects, with wideband exactly when this
     // subscription negotiated it.
     const std::optional<SpectrumContextMessage> decoded =
-        decodeRemoteSpectrumContext(payload, spectrumGrantNegotiated());
+        decodeRemoteSpectrumContext(payload, spectrumGrantNegotiated(),
+                                    d->txDisplayNegotiated);
     if (!decoded || decoded->wideband.has_value() != widebandRequested) { return; }
     // A gesture/rebind may arrive between the outgoing request and its ACK.
     // Issue the newer request before accepting an old view over that gesture.
@@ -4228,7 +4296,7 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
             || (context.wideband.active && !permission)) { return; }
     }
     if (binding.accepted && !isNewerGeneration(context.codec.contextGeneration,
-                                  binding.context.codec.contextGeneration)) { return; }
+                                  binding.acceptedGeneration())) { return; }
     context.codec.traceSamples = quint16(decoded->traceSamples);
     context.codec.waterfallSamples = quint16(decoded->waterfallSamples);
     context.codec.wideSamples = quint16(decoded->wideSamples);
@@ -4237,6 +4305,27 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
     context.source.streamIndex = decoded->sourceStream;
     context.targetFps = decoded->fps;
     context.framesPerLine = decoded->framesPerLine;
+    if (decoded->transmit.value_or(false)) {
+        // Parity Task 28 (R-R3-49, A11): the Core's transmit display for
+        // this pan while it is keyed. The pan's receive context, grant and
+        // status stay as they were; the transmit context and its frames go
+        // to whoever draws the transmit display (Task 29).
+        binding.contextRevision = revision;
+        binding.decoder.reset();
+        binding.accepted = true;
+        binding.rejected = false;
+        binding.transmit = true;
+        binding.transmitGeneration = context.codec.contextGeneration;
+        binding.receivedFrameTimesMs.clear();
+        const QPointer<RemoteMediaController> self(this);
+        const QString connectionId = d->connectionId;
+        emit transmitContextReceived(binding.panId, *decoded);
+        if (!self || d->connectionId != connectionId) { return; }
+        requestKeyframe(endpointId);
+        return;
+    }
+    binding.transmit = false;
+    binding.transmitGeneration = 0;
     if (decoded->grant && decoded->grant != binding.grant) {
         qCInfo(lcRemoteMedia).noquote()
             << QStringLiteral("Remote spectrum grant for %1: %2")
@@ -4311,7 +4400,7 @@ void RemoteMediaController::requestKeyframe(quint32 endpointId)
     binding.lastKeyframeMs = now;
     send({{QStringLiteral("op"), QStringLiteral("keyframe")},
           {QStringLiteral("endpointId"), double(endpointId)},
-          {QStringLiteral("contextGeneration"), double(binding.context.codec.contextGeneration)}});
+          {QStringLiteral("contextGeneration"), double(binding.acceptedGeneration())}});
 }
 
 void RemoteMediaController::receiveDisplay(const QByteArray& packet)
@@ -4342,7 +4431,7 @@ void RemoteMediaController::receiveDisplay(const QByteArray& packet)
         || !it->second.slice
         || it->second.observedStream != it->second.slice->streamIndex()
         || it->second.observedStreamEpoch != it->second.slice->streamEpoch()
-        || generation != it->second.context.codec.contextGeneration) { return; }
+        || generation != it->second.acceptedGeneration()) { return; }
     auto& binding = it->second;
     const DisplayCodecDecodeResult decoded = binding.decoder.decode(packet);
     if (decoded.disposition == DisplayCodecDisposition::NeedKeyframe) {
@@ -4350,6 +4439,14 @@ void RemoteMediaController::receiveDisplay(const QByteArray& packet)
     } else if (decoded.disposition == DisplayCodecDisposition::Accepted) {
         const QPointer<RemoteMediaController> self(this);
         const QString connectionId = d->connectionId;
+        if (binding.transmit) {
+            // Parity Task 28: a transmit display frame, handed on.
+            const QString panId = binding.panId;
+            emit transmitFrameReceived(panId, decoded.frame);
+            if (!self || d->connectionId != connectionId) { return; }
+            emit displayFrameReceived(id);
+            return;
+        }
         const bool rendered = binding.widget->updateRemoteSpectrum(decoded.frame);
         // Rendering emits application signals; a receiver may end this session.
         if (!self || d->connectionId != connectionId || !rendered) { return; }

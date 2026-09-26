@@ -134,6 +134,7 @@
 //   2026-09-26 - R-IOS-25 / R-R3-49 (parity Task 19): recordStreamVersion.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-26 - R-IOS-18 / R-R3-49 (parity Task 21): stationRadiosVersion.
+//   2026-09-26 - R-R3-49 / A11 (parity Task 28): txDisplayVersion.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
@@ -309,6 +310,14 @@ struct StationCapabilities {
     /// recordStreamVersion. 0 (a Core that is not nereusd, or older): a
     /// window shows This Core's Change radio disabled with a reason.
     int stationRadiosVersion = 0;
+    /// R-R3-49 / A11 (remote-window parity Task 28): 1 means the Core sends
+    /// the transmit analyzer's display, not the receiver's, for a pan on the
+    /// transmitting slice while it is keyed, to a media peer that declared
+    /// txDisplayVersion in its start (the media document's "Transmit
+    /// display"), and txState carries highSwr and swrWindBackLatched. Sent in
+    /// the same minor-11 block, after stationRadiosVersion. 0 without media
+    /// or on a station with no TX analyzer.
+    int txDisplayVersion = 0;
     /// iPhone app Task 71 (R-IOS-02; the several-devices design, ruling
     /// 10.1): 1 means the Core admits up to four devices at once, sends the
     /// `connectedDevices` object and takes session.leave. Sent last in the

@@ -41,6 +41,10 @@
 //                 AetherSDR src/gui/SpectrumWidget.cpp:2397-2420 [@0dea0dd7].
 //                 Keep a standalone widget's owning graphics window alive
 //                 until QRhiWidget teardown. AI-assisted via OpenAI Codex.
+//   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 28 (R-R3-49, A11):
+//                                    transmitRefLevel() and
+//                                    transmitDynamicRange() readers.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  enums.cs
@@ -446,6 +450,14 @@ public:
     void setDbmRange(float minDbm, float maxDbm);
     float refLevel() const { return m_refLevel; }
     float dynamicRange() const { return m_dynamicRange; }
+    /// Parity Task 28: the transmit grid's pair whether or not it is live
+    /// (setMoxOverlay swaps it in while keyed), for the transmit window a
+    /// remote pan asks the Core for.
+    float transmitRefLevel() const { return m_moxOverlay ? m_refLevel : m_txRefLevel; }
+    float transmitDynamicRange() const
+    {
+        return m_moxOverlay ? m_dynamicRange : m_txDynamicRange;
+    }
 
     // ---- Waterfall settings ----
     void setWfColorScheme(WfColorScheme scheme) override;

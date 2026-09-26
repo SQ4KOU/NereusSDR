@@ -8227,6 +8227,12 @@ endif()
 nereus_add_test(tst_daemon_media_controller
     fakes/LoopbackTransport.cpp)
 
+# Remote-window parity Task 28 (R-R3-49, A11): the Core sends the transmit
+# analyzer's display for the transmitting pan while keyed, to a media peer
+# that declared txDisplayVersion; txState's high-SWR state.
+nereus_add_test(tst_remote_tx_display
+    fakes/LoopbackTransport.cpp)
+
 # Remote Daemon R2: the GUI's slice controls reach the daemon.
 #
 # Task 11 built the command verbs, task 18 built the session that could

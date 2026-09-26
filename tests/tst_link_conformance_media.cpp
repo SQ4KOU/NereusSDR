@@ -66,6 +66,10 @@
 //               announcement-2-devices vector and the TXT record's sixth entry.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 28 (R-R3-49, A11): the
+//                                    transmit display's NSDC vector
+//                                    (nsdc1-transmit). AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -632,7 +636,8 @@ void TstLinkConformanceMedia::vectorsCoverThePlan()
           QStringLiteral("media-lan-announcement-2"),
           QStringLiteral("media-lan-announcement-2-devices"),
           QStringLiteral("media-lan-announcement-2-trailing"), QStringLiteral("media-dnssd-txt"),
-          QStringLiteral("media-ps3d-frame"), QStringLiteral("media-tx-keepalive")}) {
+          QStringLiteral("media-ps3d-frame"), QStringLiteral("media-tx-keepalive"),
+          QStringLiteral("media-nsdc1-transmit")}) {
         QVERIFY2(m_vectors.contains(id), qPrintable(id));
     }
     // iPhone app Task 16: the announcement vectors name their schema; the
@@ -717,6 +722,10 @@ void TstLinkConformanceMedia::nsdcVectorsAreTheStationsEncoderOutput()
              LinkMediaVectors::nsdcStaleTruncatedDelta(delta));
     QCOMPARE(m_vectors.value(QStringLiteral("media-nsdc1-malformed-keyframe")).bytes,
              LinkMediaVectors::nsdcBadBlockCountKeyframe(keyframe));
+    // Parity Task 28: a transmit display frame is an ordinary NSDC frame.
+    DisplayCodecEncoder transmitEncoder;
+    QCOMPARE(m_vectors.value(QStringLiteral("media-nsdc1-transmit")).bytes,
+             transmitEncoder.encode(LinkMediaVectors::nsdcTransmitFrame(), true));
 }
 
 void TstLinkConformanceMedia::nsdxVectorsAreTheStationsEncoderOutput()

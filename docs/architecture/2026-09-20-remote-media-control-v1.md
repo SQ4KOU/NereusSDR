@@ -53,7 +53,7 @@ starts its media over through its usual recovery on the two drop reasons.
 
 | Operation | Exact payload fields beyond `op` and `connectionId` |
 | --- | --- |
-| `start` | None; a GUI whose Core advertised `audioProfileVersion` adds `audioProfileVersion`, a whole number of at least 1 (anything else is refused and no peer starts); a GUI whose Core advertised `receiverAudioVersion` may add `receiverAudioVersion` the same way (see Receiver audio), one whose Core advertised `headphonesMixVersion` may add `headphonesMixVersion` the same way (see Headphones mix), and one whose Core advertised `remoteTxVersion` may add `remoteTxVersion` the same way (see Microphone line) |
+| `start` | None; a GUI whose Core advertised `audioProfileVersion` adds `audioProfileVersion`, a whole number of at least 1 (anything else is refused and no peer starts); a GUI whose Core advertised `receiverAudioVersion` may add `receiverAudioVersion` the same way (see Receiver audio), one whose Core advertised `headphonesMixVersion` may add `headphonesMixVersion` the same way (see Headphones mix), one whose Core advertised `remoteTxVersion` may add `remoteTxVersion` the same way (see Microphone line), and one whose Core advertised `txDisplayVersion` may add `txDisplayVersion` the same way (see Transmit display) |
 | `description` | `sdp`, `type` (`offer` or `answer`, appropriate to peer role) |
 | `candidate` | `candidate`, `mid` |
 
@@ -421,6 +421,115 @@ A peer the Core did not tell `displayExtrasVersion` 2 (an older Core, or a
 session below minor 11, which is never told the capability) gets exactly
 today's behaviour: the operation goes where an unknown operation always
 has, and nothing is answered. `tst_display_extras` holds all of this.
+
+## Transmit display
+
+Capability `txDisplayVersion=1` (remote-window parity Task 28, A11,
+R-R3-49) at agreed minor 11: while the Core's radio is keyed, the pan
+hosting the transmitting slice shows the transmit analyzer's display
+instead of the receiver's, as Thetis shows its transmit display on the
+transmitting receiver's display while keyed with display duplex off
+(`console.cs:24281-24338 [v2.10.3.15]`, DisplayThread). The Core sends 1
+while media is on and it has a TX analyzer (a Core that runs its own DSP),
+0 otherwise; a peer below minor 11 is never told it. Only a window that
+adds `txDisplayVersion` (a whole number of at least 1) to its `start`
+gets any of what follows; anything else in that field refuses the start
+and no peer starts. A window that does not add it gets exactly today's
+wire: no `transmit` field, and receive frames while keyed.
+
+**Subscribe.** A declaring window's `subscribe` may carry two more fields,
+both or neither: `txMinDbm` and `txMaxDbm`, the window the Core quantises
+the transmit display to (finite, `txMinDbm < txMaxDbm`, each inside -400
+to 100 dBm). Absent, the transmit display uses the endpoint's `minDbm` and
+`maxDbm`. Values outside those rules are refused as "The Core could not
+read this display request.", as the receive window's are; one edge alone,
+or either field from a window that did not declare it, is a subscribe of
+another shape. The desktop sends the pan's transmit grid (its transmit
+reference level down by its transmit dynamic range) widened by the
+transmit waterfall levels (Thetis `TXWFAmpMin` and `TXWFAmpMax`,
+`display.cs:6420-6427 [v2.10.3.15]`), each edge rounded outward to a tenth
+of a dB.
+
+**Context.** Every `context` a declaring window is sent carries one more
+field, `transmit` (boolean): 25 fields, or 26 with `wideband`. `false` is
+the receiver's display, exactly as before. Both sides use
+`RemoteSpectrumContext` (`decodeRemoteSpectrumContext`'s
+`transmitNegotiated`).
+
+**The rise.** On the Core's MOX rise (its `MoxController`, whatever keyed
+it: a MOX click, the radio's PTT, TUNE, VOX, another device), each endpoint
+of a declaring window whose slice is the transmit slice or shares its pan
+on the Core (`panKey`) becomes a viewer of the transmit display
+(`RadioModel::txDisplayFeed`, `TxDisplayFeed`), centred on the carrier at
+the endpoint's own span, as a local window re-centres its transmitting pan
+at the rise. It is sent a new context with `transmit` true:
+
+| Field | Value |
+| --- | --- |
+| `sourceStream` | the endpoint's receive stream, unchanged |
+| `sourceCentreHz` | the carrier: the transmit slice's frequency plus XIT when XIT is on (`RadioModel::txFrequencyForSlice`) |
+| `sampleRateHz` | 96000, the TX DSP rate |
+| `centreHz`, `spanHz` | the transmit display's view: the carrier plus the middle of the analyzer's window, and the window's width |
+| `traceSamples`, `waterfallSamples` | the view's pixels, never more than the endpoint's granted pixels |
+| `wideCentreHz`, `wideSpanHz`, `wideSamples` | 0 |
+| `minDbm`, `maxDbm` | the transmit window |
+| `fps` | the analyzer's output rate (15), never faster than the subscribe asked |
+| `framesPerLine` | 1: each analyzer frame brings a waterfall row |
+| `grantedFftSize` | the transmit analyzer's FFT size |
+| `grantedTier`, `requestedPixels` | as the endpoint's receive grant |
+| `grantedPixels` | `traceSamples` |
+| `limit` | `none` when this endpoint governs the view, `shared` when another does |
+| `transmit` | true |
+
+Then the endpoint gets the analyzer's trace (its pixout 0) and waterfall
+row (pixout 1), encoded by the display codec as receive frames are (a
+transmit frame is an ordinary NSDC frame, first a keyframe; the
+`nsdc1-transmit` vector), each plane the analyzer's pixels brought to
+`traceSamples` by keeping the highest of the pixels each sample covers.
+No receive frame and no `noise-floor` reaches that endpoint until the
+fall. `keyframe` for the transmit context's generation is honoured as for
+a receive one. Endpoints on other pans keep their receive frames and
+contexts through the whole key.
+
+**The view.** The analyzer runs one view for every viewer. The governing
+viewer sets it: a local viewer when there is one (a desktop window running
+its own DSP, or hosting the Core), otherwise the lowest viewer id; the
+view is held inside the analyzer's +/-48 kHz baseband around the carrier,
+its edges relative to the carrier in 100 Hz steps, and a span under
+1000 Hz keeps the last good view (`TxAnalyzer::clampViewToBaseband`). A
+later `subscribe` from a viewing endpoint while keyed moves its view (a
+pan or zoom on the transmitting pan moves the analyzer when it governs)
+and is answered with a new context for its revision. The view follows the
+carrier: a change of XIT, its offset or the transmit slice's frequency
+while keyed renews every viewer's context at the new carrier, as Thetis's
+display follows XIT while transmitting (`console.cs:22138-22150
+[v2.10.3.15]`, "xit, only when txing"). When the governing viewer leaves,
+the next governs and each viewer's context is renewed. The analyzer runs
+on every key whether or not anything watches.
+
+**The fall.** On the MOX fall each viewing endpoint stops viewing; the next
+receive source frame configures it again for the request it holds (the
+receive view it had before the rise, unless it subscribed again while
+keyed) and it is sent a context with `transmit` false, then receive
+frames. The window asks a keyframe as after any context.
+
+**Budget.** A transmit frame is charged to the display budget exactly as a
+receive frame of the same size: the same pacer, the endpoint's own admitted
+frame bytes and sample units, and the endpoint's own cadence, so a lowered
+share (a lower `fps` asked) lowers the transmit frame rate as it does the
+receive one.
+
+**txState.** A Core at `txDisplayVersion` 1 also sends `highSwr` and
+`swrWindBackLatched` on the `txState` object (station link section 18.8),
+for the transmitting pan's high-SWR border.
+
+`DaemonMediaController` (`reconcileTransmitDisplay`,
+`trySendTransmitFrame`) is the Core's code; `tst_remote_tx_display` and
+`tst_tx_display_feed` hold it. The desktop declares it at `start`, sends
+the transmit window and hands a transmit context and its frames on
+(`RemoteMediaController::transmitContextReceived`,
+`transmitFrameReceived`); drawing them is the MOX display controller's
+(parity Task 29).
 
 ## Receiver audio (receiver-audio and receiver-audio-context)
 

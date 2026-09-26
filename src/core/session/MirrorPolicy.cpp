@@ -125,6 +125,9 @@
 //                 noise reduction source); an older Core's DFNR and MNR are
 //                 shown disabled with the "does not say" reason. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - Parity Task 28 (R-R3-49, A11): TransmitState highSwr and
+//                 swrWindBackLatched Outbound (txDisplayVersion 1). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -864,6 +867,10 @@ const MirrorPolicy::Entry kEntries[] = {
     { "TransmitState", "keyedForSeconds", MirrorDirection::Outbound },
     // Fix wave 2: the keying epoch of the key the last stop ended.
     { "TransmitState", "stopEpoch", MirrorDirection::Outbound },
+    // Parity Task 28 (txDisplayVersion 1): the Core's high-SWR state, for a
+    // remote window's high-SWR border on its transmitting pan.
+    { "TransmitState", "highSwr", MirrorDirection::Outbound },
+    { "TransmitState", "swrWindBackLatched", MirrorDirection::Outbound },
 
     // Normal PS3 configuration is distinct from operational arming/actions.
     { "PureSignalSettings", "autoCalEnabled", MirrorDirection::Bidirectional },

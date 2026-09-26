@@ -43,6 +43,10 @@
 //   2026-09-26: transmit group fix wave M9: the "tx" channel keepalive.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 28 (R-R3-49, A11): the
+//                                    transmit display's NSDC vector
+//                                    (nsdc1-transmit). AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -81,6 +85,7 @@ private slots:
     void writeTxChannelKeepalive();
     void writePs3dFrame();
     void writeNsdcFrames();
+    void writeNsdcTransmitFrame();
     void writeNsdxDatagrams();
     void writeOpusPackets();
 
@@ -265,6 +270,24 @@ void TstLinkConformanceRegen::writeNsdcFrames()
                   expectation({full, lost}, LinkMediaVectors::nsdcBadBlockCountKeyframe(keyframe),
                               {QStringLiteral("media-nsdc1-full"),
                                QStringLiteral("media-nsdc1-delta-after-loss")})));
+}
+
+void TstLinkConformanceRegen::writeNsdcTransmitFrame()
+{
+    // Parity Task 28: the first frame of a transmit context, the station
+    // encoder's keyframe, as DaemonMediaController sends it.
+    DisplayCodecEncoder encoder;
+    const QByteArray packet = encoder.encode(LinkMediaVectors::nsdcTransmitFrame(),
+                                             /*requestKeyframe=*/true);
+    QVERIFY(!packet.isEmpty());
+    DisplayCodecDecoder decoder;
+    const DisplayCodecDecodeResult result = decoder.decode(packet);
+    QJsonObject expect = LinkMediaVectors::toJson(result);
+    expect.insert(QStringLiteral("keyframe"), (packet.at(5) & 0x01) != 0);
+    expect.insert(QStringLiteral("tolerance"), QJsonObject{{QStringLiteral("dbm"), 0.01}});
+    QVERIFY(write(QStringLiteral("nsdc1-transmit"), packet,
+                  QJsonObject{{QStringLiteral("codec"), QStringLiteral("nsdc1")},
+                              {QStringLiteral("expect"), expect}}));
 }
 
 void TstLinkConformanceRegen::writeNsdxDatagrams()

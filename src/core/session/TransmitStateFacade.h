@@ -37,6 +37,11 @@
 //                          (the epoch tx.key answered with), so a window
 //                          never ends a newer key of its own on an older
 //                          stop (fix wave 2, the M7 race); 0 when unknown
+//   highSwr, swrWindBackLatched
+//                          the Core's high-SWR protection has tripped, and
+//                          its drive fold-back has latched: what RadioModel
+//                          hands a local window's setHighSwrOverlay
+//                          (parity Task 28, txDisplayVersion 1)
 //
 // Updates: while keyed the meters are read ten times a second (the
 // transmit lane's cached readings; never a WDSP call on the event loop)
@@ -70,6 +75,11 @@
 //               a newer key is never ended by it; VOX at the Core listens
 //               only to the device that armed it; the window says why MOX
 //               and TUNE wait while another device holds. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
+//   2026-09-26: Parity Task 28 (R-R3-49, A11): highSwr and
+//               swrWindBackLatched, the high-SWR state the local window's
+//               border shows, appended (txDisplayVersion 1). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
 // =================================================================
@@ -129,6 +139,10 @@ class TransmitState final : public QObject {
     // Fix wave 2 (the M7 race): the keying epoch of the key the last stop
     // ended, appended so every earlier ordinal stays.
     Q_PROPERTY(qint64 stopEpoch READ stopEpoch NOTIFY stopChanged)
+    // Parity Task 28 (txDisplayVersion 1): the high-SWR border's state,
+    // appended so every earlier ordinal stays.
+    Q_PROPERTY(bool highSwr READ highSwr NOTIFY swrChanged)
+    Q_PROPERTY(bool swrWindBackLatched READ swrWindBackLatched NOTIFY swrChanged)
 
 public:
     // The link's stopReason values.
@@ -200,6 +214,8 @@ public:
     QString stopText() const { return m_stopText; }
     quint32 stopSerial() const { return m_stopSerial; }
     qint64 stopEpoch() const { return m_stopEpoch; }
+    bool highSwr() const { return m_highSwr; }
+    bool swrWindBackLatched() const { return m_swrWindBackLatched; }
     QString holderDeviceId() const { return m_holder.deviceId; }
     QString holderName() const { return m_holder.name; }
     QString holderShortName() const { return m_holder.shortName; }
@@ -261,6 +277,8 @@ signals:
     void stopChanged();
     /// Fix wave I4: the holder* properties.
     void holderChanged();
+    /// Parity Task 28: highSwr, swrWindBackLatched.
+    void swrChanged();
 
 private:
     void onTransmittingChanged(bool keyed);
@@ -268,6 +286,7 @@ private:
     void onPowerChanged();
     void refreshState();
     void refreshTimeOut();
+    void refreshSwr();
     void setMeters(const TxMeterReadings& readings);
     qint64 now() const;
 
@@ -291,6 +310,8 @@ private:
     QString m_stopText;
     quint32 m_stopSerial{0};
     qint64 m_stopEpoch{0};
+    bool m_highSwr{false};
+    bool m_swrWindBackLatched{false};
     // Fix wave I4: the holder; a window's copies of the two durations.
     Holder m_holder;
     qint64 m_stationHolderForSeconds{0};

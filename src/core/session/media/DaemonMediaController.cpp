@@ -25,6 +25,13 @@
 //               and TUNE wait while another device holds. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: Parity Task 28 (R-R3-49, A11, R-IOS-13): the transmit
+//               display for a media peer that declared txDisplayVersion:
+//               while keyed, each endpoint on the transmitting pan is a
+//               viewer of RadioModel's TxDisplayFeed and is sent its
+//               context (transmit true) and frames instead of the
+//               receiver's; the fall resumes receive. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/DaemonMediaController.h"
@@ -32,6 +39,9 @@
 
 #include "core/FFTEngine.h"
 #include "core/MoxController.h"
+#include "core/TxDisplayFeed.h"
+#include "core/TxSliceArbiter.h"
+#include "core/WdspEngine.h"
 #include "core/safety/TransmitHolder.h"
 #include "core/session/RemoteKeying.h"
 #include "core/session/StationServer.h"
@@ -293,6 +303,41 @@ std::optional<SpectrumDisplayCost> endpointDisplayCost(int pixels, int fps,
     return cost;
 }
 
+// Parity Task 28: an endpoint's place among the transmit display's viewers,
+// given back however the endpoint goes.
+struct TxViewerLease {
+    QPointer<TxDisplayFeed> feed;
+    int id{0};
+    ~TxViewerLease() { if (feed) { feed->removeViewer(id); } }
+};
+
+// Parity Task 28: the analyzer's pixels brought to the endpoint's sample
+// count, each sample the highest of the pixels it covers (the peak, as the
+// receive trace's detector keeps a signal's peak). Empty when the analyzer
+// has fewer pixels than the endpoint's samples (a poll from before a
+// resize).
+QVector<float> reduceTransmitPlane(const QVector<float>& dbm, int samples, float floorDbm)
+{
+    const int count = static_cast<int>(dbm.size());
+    if (samples <= 0 || count < samples) {
+        return {};
+    }
+    QVector<float> out(samples, floorDbm);
+    for (int i = 0; i < samples; ++i) {
+        const int begin = static_cast<int>(static_cast<qint64>(i) * count / samples);
+        const int end = std::max(begin + 1,
+                                 static_cast<int>(static_cast<qint64>(i + 1) * count / samples));
+        float peak = -std::numeric_limits<float>::infinity();
+        for (int j = begin; j < end && j < count; ++j) {
+            if (std::isfinite(dbm.at(j))) {
+                peak = std::max(peak, dbm.at(j));
+            }
+        }
+        out[i] = std::isfinite(peak) ? peak : floorDbm;
+    }
+    return out;
+}
+
 struct WidebandDemandLease {
     QPointer<RadioModel> model;
     RadioModel::WidebandDemandToken token{0};
@@ -339,6 +384,24 @@ struct DaemonMediaController::EndpointEntry {
     std::unique_ptr<DisplayExtrasProcessor> extras;
     QByteArray pendingExtras;
     quint64 pendingExtrasSamples{0};
+    // Parity Task 28 (R-R3-49, A11): the transmit display. The window the
+    // subscribe asked for it (txMinDbm, txMaxDbm), the endpoint's place
+    // among the feed's viewers while it shows it, the context it was last
+    // sent (without its generation, to tell when a new one is due), and the
+    // analyzer's newest planes waiting to go.
+    std::optional<std::pair<float, float>> txWindow;
+    std::unique_ptr<TxViewerLease> txViewer;
+    QJsonObject txSentShape;
+    bool txContextSent{false};
+    DisplayCodecContext txCodec;
+    int txFps{0};
+    quint32 txSequence{0};
+    qint64 txNextDueNs{0};
+    QVector<float> txTrace;
+    QVector<float> txWaterfall;
+    bool txNewWaterfall{false};
+    bool txPending{false};
+    qint64 txProducedAtNs{0};
 };
 
 // ── Shared spectrum engines (iPhone app Task 76, ruling 9.1) ─────────────
@@ -1421,6 +1484,21 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
             return false;
         }
     }
+    // Parity Task 28 (R-R3-49, A11): txDisplayVersion, from a peer the Core
+    // told txDisplayVersion 1 (minor 11, media on, a TX analyzer); only then
+    // does a subscribe carry the transmit window and a context `transmit`,
+    // and only then does the transmitting pan get the transmit display.
+    const bool declaresTxDisplay = control.contains(QStringLiteral("txDisplayVersion"));
+    if (declaresTxDisplay) {
+        legacyShape.remove(QStringLiteral("txDisplayVersion"));
+        quint32 txDisplayVersion = 0;
+        if (!m_server || !m_server->txDisplayAvailable(m_epoch)
+            || !exactUnsigned(control.value(QStringLiteral("txDisplayVersion")),
+                              txDisplayVersion, /*nonzero=*/true)
+            || txDisplayVersion < 1) {
+            return false;
+        }
+    }
     if (!exactKeys(legacyShape, {"op", "connectionId"})
         || !canonicalConnectionId(control.value(QStringLiteral("connectionId")))) {
         return false;
@@ -1562,6 +1640,10 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
     }
     m_receiverAudioNegotiated = declaresReceiverAudio;
     m_headphonesMixNegotiated = declaresHeadphonesMix;
+    m_txDisplayNegotiated = declaresTxDisplay;
+    if (declaresTxDisplay) {
+        wireTxDisplayFeed();
+    }
     if (declaresRemoteTx) {
         startMicLine(peer);
     }
@@ -1742,8 +1824,19 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
             legacyShape.remove(key);
         }
     }
+    // Parity Task 28 (R-R3-49, A11): the transmit window, only from a peer
+    // whose start declared txDisplayVersion, and both edges or neither.
+    const bool txWindowPresent = control.contains(QStringLiteral("txMinDbm"))
+        || control.contains(QStringLiteral("txMaxDbm"));
+    if (txWindowPresent) {
+        legacyShape.remove(QStringLiteral("txMinDbm"));
+        legacyShape.remove(QStringLiteral("txMaxDbm"));
+    }
     DisplayExtrasRequest extrasRequest;
-    if ((widebandNegotiated && (!m_server || !m_server->remoteWidebandAvailable(m_epoch)
+    if ((txWindowPresent && (!m_txDisplayNegotiated
+                             || !control.contains(QStringLiteral("txMinDbm"))
+                             || !control.contains(QStringLiteral("txMaxDbm"))))
+        || (widebandNegotiated && (!m_server || !m_server->remoteWidebandAvailable(m_epoch)
                                || !control.value(QStringLiteral("extendedView")).isBool()))
         || (extrasPresent && (!m_server || !m_server->displayExtrasAvailable(m_epoch)
                               || !parseDisplayExtrasRequest(control, extrasRequest)))
@@ -1811,6 +1904,8 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
     int framesPerLine = 0;
     double minDbm = 0.0;
     double maxDbm = 0.0;
+    double txMinDbm = 0.0;
+    double txMaxDbm = 0.0;
     FftTier tier = FftTier::Wide;
     SpectrumEndpointRequest request;
     if (!exactInt(control.value(QStringLiteral("sliceId")), 0, std::numeric_limits<int>::max(), sliceId)
@@ -1838,6 +1933,13 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
         || minDbm < kMinDbmLimit || minDbm > kMaxDbmLimit
         || maxDbm < kMinDbmLimit || maxDbm > kMaxDbmLimit
         || maxDbm <= minDbm
+        // Parity Task 28: the transmit window by the receive window's rule.
+        || (txWindowPresent
+            && (!finiteNumber(control.value(QStringLiteral("txMinDbm")), txMinDbm)
+                || !finiteNumber(control.value(QStringLiteral("txMaxDbm")), txMaxDbm)
+                || txMinDbm < kMinDbmLimit || txMinDbm > kMaxDbmLimit
+                || txMaxDbm < kMinDbmLimit || txMaxDbm > kMaxDbmLimit
+                || txMaxDbm <= txMinDbm))
         || !validRequestedFrequencyRange(request.centreHz, request.spanHz,
                                          request.requestedWideSpanFactor)) {
         return rejectAllocation(control, endpointId, revision,
@@ -2021,6 +2123,9 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
     entry.grant = grant;
     entry.allocation = {control, revision, true, false, {}};
     entry.extrasRequest = extrasRequest;
+    if (txWindowPresent) {
+        entry.txWindow = std::pair{static_cast<float>(txMinDbm), static_cast<float>(txMaxDbm)};
+    }
     if (!extrasRequest.empty()) {
         entry.extras = std::make_unique<DisplayExtrasProcessor>(extrasRequest);
     }
@@ -2048,6 +2153,20 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
         return rejectAllocation(control, endpointId, revision,
                                 QStringLiteral("The Core could not set up this receiver's spectrum."));
     }
+    // Parity Task 28: an endpoint showing the transmit display keeps its
+    // place among the viewers, and its new request moves its view (a pan or
+    // zoom on the transmitting pan moves the analyzer when it governs).
+    if (replaced.has_value() && replaced->txViewer) {
+        EndpointEntry& current = m_endpoints.at(endpointId);
+        current.txViewer = std::move(replaced->txViewer);
+        current.endpoint.reset();
+        current.contextSent = false;
+        current.latestInput.reset();
+        if (TxDisplayFeed* feed = current.txViewer->feed.data()) {
+            feed->updateViewer(current.txViewer->id, current.request.centreHz,
+                               current.request.spanHz, current.request.pixels);
+        }
+    }
     if (replaced.has_value() && !(replacedSource == source)) {
         releaseSourceIfUnused(replacedSource);
         rebalanceSourceAfterDeparture(replacedSource);
@@ -2056,6 +2175,13 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
     refreshDisplayBudgetPacer();
     if (revisioned) {
         sendAllocationResult(m_peer->connectionId(), endpointId, revision, true, {});
+    }
+    // Parity Task 28: while keyed, an endpoint on the transmitting pan shows
+    // the transmit display from its first context.
+    if (m_txDisplayNegotiated) {
+        const QPointer<DaemonMediaController> self(this);
+        reconcileTransmitDisplay();
+        if (!self) { return true; }
     }
     return true;
 }
@@ -2144,8 +2270,15 @@ bool DaemonMediaController::handleKeyframe(const QJsonObject& control)
         return false;
     }
     auto it = m_endpoints.find(endpointId);
-    if (it == m_endpoints.end() || !it->second.endpoint.configured()
-        || it->second.endpoint.context().codec.contextGeneration != contextGeneration) {
+    // Parity Task 28: a transmit context's generation while it shows the
+    // transmit display, the receive context's otherwise.
+    const bool transmitContext = it != m_endpoints.end() && it->second.txViewer
+        && it->second.txContextSent
+        && it->second.txCodec.contextGeneration == contextGeneration;
+    if (it == m_endpoints.end()
+        || (!transmitContext
+            && (!it->second.endpoint.configured()
+                || it->second.endpoint.context().codec.contextGeneration != contextGeneration))) {
         return false;
     }
     if (!it->second.keyframeWindow.isValid() || it->second.keyframeWindow.elapsed() >= 1000) {
@@ -2845,6 +2978,11 @@ void DaemonMediaController::onSourceFrame(const DaemonSpectrumFrame& sharedFrame
         if (!(entry.request.source == key)) {
             continue;
         }
+        // Parity Task 28: an endpoint showing the transmit display gets no
+        // receive frame until the fall.
+        if (entry.txViewer) {
+            continue;
+        }
         entry.stationOffsetDb = stationOffsetDb;
         entry.latestInput = frame;
         const auto wideband = widebandContext(entry);
@@ -2919,7 +3057,8 @@ void DaemonMediaController::onSourceFrame(const DaemonSpectrumFrame& sharedFrame
 
     for (auto& [unused, entry] : m_endpoints) {
         Q_UNUSED(unused);
-        if (entry.request.source == key && entry.endpoint.configured() && entry.contextSent
+        if (entry.request.source == key && !entry.txViewer
+            && entry.endpoint.configured() && entry.contextSent
             && entry.endpoint.context().sourceGeneration == frame.generation) {
             entry.latestInput = frame;
         }
@@ -3037,6 +3176,11 @@ void DaemonMediaController::sendContext(EndpointEntry& entry)
         contextMessage.wideband = context.wideband;
     }
     contextMessage.grant = spectrumContextGrant(entry.grant);
+    // Parity Task 28: a peer that declared txDisplayVersion is told this is
+    // the receiver's display; every other peer's context is unchanged.
+    if (m_txDisplayNegotiated) {
+        contextMessage.transmit = false;
+    }
     // A minor-8 peer receives exactly the context it already parses.
     const QJsonObject message = encodeRemoteSpectrumContext(
         contextMessage, m_server && m_server->spectrumGrantAvailable(m_epoch));
@@ -3170,6 +3314,22 @@ bool DaemonMediaController::trySendSpectrum(MediaPeer* peer, quint64 epoch, qint
     for (int offset = 0; offset < ids.size(); ++offset) {
         const int index = (m_roundRobinCursor + offset) % ids.size();
         const auto found = m_endpoints.find(ids.at(index));
+        // Parity Task 28: an endpoint showing the transmit display is a
+        // candidate with the analyzer's newest planes, due one of its own
+        // frame periods after they arrived.
+        if (found != m_endpoints.end() && found->second.txViewer) {
+            const EndpointEntry& tx = found->second;
+            if (!tx.txPending || !tx.txContextSent || tx.txFps <= 0) {
+                continue;
+            }
+            if (!earliestDeadlineFirst) {
+                candidates.append({0, 0, offset, index});
+            } else {
+                candidates.append({tx.txProducedAtNs + 1'000'000'000LL / tx.txFps, tx.txFps,
+                                   offset, index});
+            }
+            continue;
+        }
         if (found == m_endpoints.end() || !found->second.latestInput.has_value()
             || !found->second.contextSent) {
             continue;
@@ -3210,6 +3370,15 @@ bool DaemonMediaController::trySendSpectrum(MediaPeer* peer, quint64 epoch, qint
         auto it = m_endpoints.find(endpointId);
         if (it == m_endpoints.end()) { continue; }
         EndpointEntry& entry = it->second;
+        if (entry.txViewer) {
+            const int cursor = m_roundRobinCursor;
+            m_roundRobinCursor = (index + 1) % ids.size();
+            if (trySendTransmitFrame(endpointId, peer, epoch, nowNs)) {
+                return true;
+            }
+            m_roundRobinCursor = cursor;
+            continue;
+        }
         if (!entry.latestInput.has_value() || !entry.contextSent) {
             continue;
         }
@@ -3410,6 +3579,326 @@ void DaemonMediaController::onSendTick()
     }
 }
 
+// ---- Parity Task 28 (R-R3-49, A11): the transmit display --------------------
+
+bool DaemonMediaController::transmitDisplayActive(quint32 endpointId) const
+{
+    const auto it = m_endpoints.find(endpointId);
+    return it != m_endpoints.end() && it->second.txViewer != nullptr;
+}
+
+void DaemonMediaController::wireTxDisplayFeed()
+{
+    TxDisplayFeed* feed = m_radioModel ? m_radioModel->txDisplayFeed() : nullptr;
+    if (feed != m_txFeed.data()) {
+        if (!m_txFeed.isNull()) {
+            disconnect(m_txFeed.data(), nullptr, this, nullptr);
+        }
+        m_txFeed = feed;
+        if (feed != nullptr) {
+            // Queued: an endpoint's viewer is given back from inside the
+            // endpoint map's own erase, and the feed answers at once.
+            const auto reconcile = [this]() { reconcileTransmitDisplay(); };
+            connect(feed, &TxDisplayFeed::keyedChanged, this, reconcile, Qt::QueuedConnection);
+            connect(feed, &TxDisplayFeed::viewChanged, this, reconcile, Qt::QueuedConnection);
+            connect(feed, &TxDisplayFeed::governorChanged, this, reconcile,
+                    Qt::QueuedConnection);
+            connect(feed, &TxDisplayFeed::traceReady, this,
+                    [this](const QVector<float>& dbm) { onTransmitPlane(dbm, false); },
+                    Qt::QueuedConnection);
+            connect(feed, &TxDisplayFeed::waterfallReady, this,
+                    [this](const QVector<float>& dbm) { onTransmitPlane(dbm, true); },
+                    Qt::QueuedConnection);
+        }
+    }
+    // Which pan transmits follows the transmit slice.
+    if (!m_txArbiterConnection && m_radioModel) {
+        if (TxSliceArbiter* arbiter = m_radioModel->txSliceArbiter()) {
+            m_txArbiterConnection = connect(arbiter, &TxSliceArbiter::txBoundSliceChanged, this,
+                                            [this](int, int) { reconcileTransmitDisplay(); },
+                                            Qt::QueuedConnection);
+        }
+    }
+}
+
+bool DaemonMediaController::endpointOnTransmitPan(const EndpointEntry& entry) const
+{
+    if (!m_radioModel) {
+        return false;
+    }
+    // The pan hosting the transmitting slice, as the local window takes it
+    // over (MainWindow's MOX edge): the transmit slice, or a slice sharing
+    // its pan on the Core.
+    const SliceModel* const tx = m_radioModel->txBoundSlice();
+    const SliceModel* const slice = m_radioModel->sliceById(entry.sliceId);
+    if (tx == nullptr || slice == nullptr) {
+        return false;
+    }
+    return slice == tx || (!tx->panKey().isEmpty() && slice->panKey() == tx->panKey());
+}
+
+std::optional<QJsonObject> DaemonMediaController::transmitContextFor(
+    const EndpointEntry& entry) const
+{
+    if (!m_peer || m_txFeed.isNull() || !entry.txViewer) {
+        return std::nullopt;
+    }
+    const TxDisplayView view = m_txFeed->currentView();
+    if (view.empty()) {
+        return std::nullopt;
+    }
+    // The view's pixels, never more than the endpoint was admitted for (a
+    // viewer that does not govern shares the governing one's view).
+    const int samples = std::clamp(
+        view.pixels > 0 ? std::min(view.pixels, entry.request.pixels) : entry.request.pixels,
+        1, SpectrumEndpoint::kMaxPixels);
+    // The analyzer's output rate, never faster than the endpoint asked.
+    const int fps = std::clamp(std::min(std::max(1, m_txFeed->outputFps()),
+                                        entry.request.targetFps),
+                               1, 60);
+    const std::pair<float, float> window =
+        entry.txWindow.value_or(std::pair{entry.request.minDbm, entry.request.maxDbm});
+    SpectrumContextMessage message;
+    message.connectionId = m_peer->connectionId();
+    message.endpointId = entry.request.endpointId;
+    message.revision = entry.revision;
+    message.contextGeneration = 0; // given when it is sent
+    message.sourceStream = entry.request.source.streamIndex;
+    message.sourceCentreHz = view.carrierHz;
+    message.sampleRateHz = static_cast<double>(WdspEngine::kTxDspSampleRate);
+    message.centreHz = view.centreHz();
+    message.spanHz = view.spanHz();
+    message.traceSamples = samples;
+    message.waterfallSamples = samples;
+    message.wideSamples = 0;
+    message.minDbm = window.first;
+    message.maxDbm = window.second;
+    message.fps = fps;
+    // The analyzer hands one waterfall row with each frame.
+    message.framesPerLine = 1;
+    if (entry.widebandNegotiated) {
+        message.wideband = WidebandDisplayContext{};
+    }
+    SpectrumContextGrant grant;
+    grant.grantedFftSize = std::clamp(m_txFeed->fftSize(), 1, FFTEngine::maximumFftSize());
+    grant.grantedTier = entry.request.source.tier;
+    grant.requestedPixels = std::max(entry.grant.requestedPixels, samples);
+    grant.grantedPixels = samples;
+    grant.limit = m_txFeed->isGoverning(entry.txViewer->id) ? SpectrumLimitReason::None
+                                                              : SpectrumLimitReason::SharedEngine;
+    message.grant = grant;
+    message.transmit = true;
+    return encodeRemoteSpectrumContext(message, /*grantNegotiated=*/true);
+}
+
+void DaemonMediaController::reconcileTransmitDisplay()
+{
+    if (!m_peer) {
+        return;
+    }
+    MediaPeer* const peer = m_peer.get();
+    const quint64 epoch = m_epoch;
+    TxDisplayFeed* const feed = m_txFeed.data();
+    const bool keyed = m_txDisplayNegotiated && feed != nullptr && feed->isKeyed();
+    for (quint32 endpointId : endpointIds()) {
+        auto it = m_endpoints.find(endpointId);
+        if (it == m_endpoints.end()) { continue; }
+        EndpointEntry& entry = it->second;
+        const bool wanted = keyed && endpointOnTransmitPan(entry);
+        if (wanted && !entry.txViewer) {
+            // The rise, for this endpoint: no receive frame from now until
+            // the fall. It views the transmit display centred on the carrier
+            // at its own span, as the local window re-centres the
+            // transmitting pan on the carrier at the rise.
+            auto lease = std::make_unique<TxViewerLease>();
+            lease->feed = feed;
+            lease->id = feed->addViewer(feed->currentView().carrierHz, entry.request.spanHz,
+                                        entry.request.pixels, /*local=*/false);
+            entry.txViewer = std::move(lease);
+            entry.endpoint.reset();
+            entry.contextSent = false;
+            entry.latestInput.reset();
+            entry.pendingExtras.clear();
+            entry.pendingExtrasSamples = 0;
+            entry.txSentShape = {};
+            entry.txContextSent = false;
+            entry.txPending = false;
+            entry.txTrace.clear();
+            entry.txWaterfall.clear();
+        } else if (!wanted && entry.txViewer) {
+            // The fall: back to the receiver. The next source frame
+            // configures the endpoint for the request it holds (the receive
+            // view it had before the rise) and sends its context, `transmit`
+            // false; then receive frames.
+            entry.txViewer.reset();
+            entry.txSentShape = {};
+            entry.txContextSent = false;
+            entry.txPending = false;
+            entry.txTrace.clear();
+            entry.txWaterfall.clear();
+            entry.endpoint.reset();
+            entry.contextSent = false;
+            entry.latestInput.reset();
+            entry.forceKeyframe = true;
+        }
+    }
+    // Each viewer's context follows the view and whether it governs.
+    for (quint32 endpointId : endpointIds()) {
+        auto it = m_endpoints.find(endpointId);
+        if (it == m_endpoints.end() || !it->second.txViewer) { continue; }
+        std::optional<QJsonObject> message = transmitContextFor(it->second);
+        if (!message) { continue; }
+        QJsonObject shape = *message;
+        shape.remove(QStringLiteral("contextGeneration"));
+        EndpointEntry& entry = it->second;
+        if (entry.txContextSent && shape == entry.txSentShape) { continue; }
+        const quint32 generation = nextContextGeneration();
+        message->insert(QStringLiteral("contextGeneration"), static_cast<qint64>(generation));
+        const int samples = message->value(QStringLiteral("traceSamples")).toInt();
+        entry.txSentShape = shape;
+        entry.txCodec = DisplayCodecContext{};
+        entry.txCodec.endpointId = endpointId;
+        entry.txCodec.contextGeneration = generation;
+        entry.txCodec.minDbm = static_cast<float>(message->value(QStringLiteral("minDbm")).toDouble());
+        entry.txCodec.maxDbm = static_cast<float>(message->value(QStringLiteral("maxDbm")).toDouble());
+        entry.txCodec.traceSamples = static_cast<quint16>(samples);
+        entry.txCodec.waterfallSamples = static_cast<quint16>(samples);
+        entry.txCodec.wideSamples = 0;
+        entry.txFps = message->value(QStringLiteral("fps")).toInt();
+        entry.txSequence = 0;
+        entry.txNextDueNs = 0;
+        entry.txPending = false;
+        entry.txTrace.clear();
+        entry.txWaterfall.clear();
+        entry.txNewWaterfall = false;
+        entry.encoder.reset();
+        entry.forceKeyframe = true;
+        entry.txContextSent = false;
+        const quint32 revision = entry.revision;
+        const QPointer<DaemonMediaController> self(this);
+        const bool sent = sendControl(*message);
+        if (!self || m_peer.get() != peer || m_epoch != epoch) { return; }
+        it = m_endpoints.find(endpointId);
+        if (it != m_endpoints.end() && it->second.revision == revision && it->second.txViewer
+            && it->second.txCodec.contextGeneration == generation) {
+            it->second.txContextSent = sent;
+        }
+    }
+}
+
+void DaemonMediaController::onTransmitPlane(const QVector<float>& dbm, bool waterfall)
+{
+    if (!m_peer || m_txFeed.isNull() || !m_txFeed->isKeyed()) {
+        return;
+    }
+    // A poll made before the analyzer's pixel count last changed describes
+    // another view: drop it rather than draw it across this one.
+    if (dbm.size() != m_txFeed->currentView().pixels) {
+        return;
+    }
+    const qint64 nowNs = displayNowNs();
+    for (auto& [endpointId, entry] : m_endpoints) {
+        Q_UNUSED(endpointId);
+        if (!entry.txViewer || !entry.txContextSent) {
+            continue;
+        }
+        QVector<float> plane = reduceTransmitPlane(dbm, entry.txCodec.traceSamples,
+                                                   entry.txCodec.minDbm);
+        if (plane.isEmpty()) {
+            continue;
+        }
+        if (waterfall) {
+            entry.txWaterfall = std::move(plane);
+            entry.txNewWaterfall = true;
+        } else {
+            entry.txTrace = std::move(plane);
+        }
+        entry.txPending = true;
+        entry.txProducedAtNs = std::max(nowNs, entry.txProducedAtNs + 1);
+    }
+}
+
+bool DaemonMediaController::trySendTransmitFrame(quint32 endpointId, MediaPeer* peer,
+                                                 quint64 epoch, qint64 nowNs)
+{
+    auto it = m_endpoints.find(endpointId);
+    if (it == m_endpoints.end()) {
+        return false;
+    }
+    EndpointEntry& entry = it->second;
+    if (!entry.txViewer || !entry.txPending || !entry.txContextSent || entry.txFps <= 0) {
+        return false;
+    }
+    // The endpoint's own cadence, as a receive endpoint keeps one: an
+    // advancing schedule with 5% early tolerance.
+    const qint64 periodNs = 1'000'000'000LL / entry.txFps;
+    if (entry.txNextDueNs != 0 && nowNs < entry.txNextDueNs - periodNs / 20) {
+        return false;
+    }
+    // Charged to the display budget exactly as a receive frame of its size.
+    if (displayPacingRequired()
+        && (!m_displayPacerInitialized
+            || !m_displayPacer.canSpendSpectrum(entry.displayCost.maximumFrameBytes,
+                                                entry.displayCost.maximumFrameSampleUnits,
+                                                nowNs))) {
+        return false;
+    }
+    DisplayCodecFrame frame;
+    frame.context = entry.txCodec;
+    frame.encoderSequence = entry.txSequence++;
+    frame.producerTimestamp = static_cast<quint64>(std::max<qint64>(0, entry.txProducedAtNs));
+    frame.waterfallAdvance = entry.txNewWaterfall;
+    frame.traceDbm = entry.txTrace.isEmpty() ? entry.txWaterfall : entry.txTrace;
+    frame.waterfallDbm = entry.txWaterfall.isEmpty() ? entry.txTrace : entry.txWaterfall;
+    entry.txPending = false;
+    entry.txNewWaterfall = false;
+    const QByteArray bytes = entry.encoder.encode(frame, entry.forceKeyframe);
+    const bool keyframe = entry.encoder.lastEncodedKeyframe();
+    const quint64 samples = static_cast<quint64>(frame.traceDbm.size())
+        + static_cast<quint64>(frame.waterfallDbm.size());
+    if (bytes.isEmpty()) {
+        return false;
+    }
+    if (bytes.size() > static_cast<qsizetype>(entry.displayCost.maximumFrameBytes)
+        || samples > entry.displayCost.maximumFrameSampleUnits
+        || (displayPacingRequired()
+            && !m_displayPacer.spendSpectrum(static_cast<quint64>(bytes.size()), samples,
+                                             nowNs))) {
+        qCWarning(lcDaemonMedia) << "transmit display frame exceeded admitted display cost";
+        entry.forceKeyframe = true;
+        return false;
+    }
+    entry.forceKeyframe = false;
+    const qint64 followingDueNs = entry.txNextDueNs + periodNs;
+    entry.txNextDueNs = entry.txNextDueNs == 0 || nowNs >= followingDueNs
+        ? nowNs + periodNs : followingDueNs;
+    const quint32 revision = entry.revision;
+    const quint32 generation = entry.txCodec.contextGeneration;
+    m_lastDisplayAttemptWasPs3 = false;
+    const QPointer<DaemonMediaController> self(this);
+    const IMediaTransport::DisplaySendResult result = peer->submitDisplay(bytes);
+    if (!self || m_peer.get() != peer || m_epoch != epoch) {
+        return true;
+    }
+    const bool sent = result == IMediaTransport::DisplaySendResult::Sent
+        || result == IMediaTransport::DisplaySendResult::Queued;
+    if (sent) {
+        recordDisplaySent(bytes, keyframe);
+        if (result == IMediaTransport::DisplaySendResult::Queued) {
+            ++m_displayDiagnostics.displayQueuedLate;
+        }
+        return true;
+    }
+    ++m_displayDiagnostics.displaySendRefusals;
+    it = m_endpoints.find(endpointId);
+    if (it != m_endpoints.end() && it->second.revision == revision && it->second.txViewer
+        && it->second.txCodec.contextGeneration == generation) {
+        // Never resent: the delta chain restarts from a keyframe.
+        it->second.forceKeyframe = true;
+    }
+    return true;
+}
+
 bool DaemonMediaController::reconcileWidebandDemand(EndpointEntry& entry)
 {
     if (!m_radioModel) { return false; }
@@ -3466,6 +3955,8 @@ void DaemonMediaController::onWidebandSourceChanged(int)
         if (it == m_endpoints.end()) { continue; }
         EndpointEntry& entry = it->second;
         if (!entry.widebandNegotiated) { continue; }
+        // Parity Task 28: the fall configures a transmitting endpoint anew.
+        if (entry.txViewer) { continue; }
         if (!reconcileWidebandDemand(entry)) {
             entry.contextSent = false;
             entry.latestInput.reset();
@@ -4115,6 +4606,8 @@ void DaemonMediaController::clearSession()
     }
     clearProduction();
     clearAllocationIdentity();
+    // Parity Task 28: the next peer declares its own.
+    m_txDisplayNegotiated = false;
 }
 
 void DaemonMediaController::retirePeerKeepingSession()
