@@ -591,8 +591,9 @@ private slots:
         h.remote.setMoxFromButton(true);
         QTRY_COMPARE_WITH_TIMEOUT(refusedCodes.count(), 1, 5000);
         QCOMPARE(refusedCodes.first().at(1).toString(), QStringLiteral("micNotReady"));
-        QCOMPARE(refusedCodes.first().at(0).toString(),
-                 QStringLiteral("Microphone is not ready. Check Audio settings and retry."));
+        QCOMPARE(refusedCodes.first().at(0).toString(),   // fix wave M4
+                 QStringLiteral("No sound has reached the Core from this device's microphone "
+                                "yet. Wait a moment and try again."));
         QVERIFY(!h.station.moxController()->isMox());
         QVERIFY(!remoteMedia.micUplinkRunning());
         h.client.disconnectFromStation(QStringLiteral("test complete"));
@@ -628,6 +629,32 @@ private slots:
     // The window's VOX button arms the Core's VOX (transmit.voxEnabled); the
     // window then streams its microphone unkeyed, the Core's VOX keys from
     // it as this device, and disarming stops both.
+    // Fix wave M6: VOX the window did not arm (turned on at the Core
+    // itself, or by another device) never starts its microphone or its
+    // keepalives.
+    void voxArmedElsewhereDoesNotStreamTheWindowsMicrophone()
+    {
+        Test::RemoteAudioSessionHarness h;
+        h.pairWindow = true;
+        h.makeTransmitReady();
+        attachMicrophone(h, 0.3f);
+        RemoteMediaController remoteMedia(&h.client, &h.remote, nullptr);
+        DaemonMediaController daemonMedia(&h.server, &h.station);
+        h.connectSession();
+        QTRY_VERIFY_WITH_TIMEOUT(daemonMedia.micReceiver() != nullptr, 5000);
+        QTRY_VERIFY(h.client.capabilities().txPermitted);
+        h.station.transmitModel().setVoxEnabled(true);
+        QTRY_VERIFY(h.remote.transmitModel().voxEnabled());
+        QVERIFY(!h.client.voxArmedHere());
+        QTest::qWait(400);
+        QVERIFY(!remoteMedia.micUplinkRunning());
+        QCOMPARE(remoteMedia.micPacketsSent(), quint64(0));
+        QVERIFY(!h.client.remoteTransmit()->keepaliveRunning());
+        h.station.transmitModel().setVoxEnabled(false);
+        QTRY_VERIFY(!h.remote.transmitModel().voxEnabled());
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
     void voxArmedFromTheWindowKeysTheCoreFromItsMicrophone()
     {
         Test::RemoteAudioSessionHarness h;
@@ -783,7 +810,7 @@ private slots:
         });
         h.connectSession();
         QTRY_VERIFY(h.client.capabilities().txPermitted);
-        QCOMPARE(h.client.capabilities().txStateVersion, 1);
+        QCOMPARE(h.client.capabilities().txStateVersion, 2);   // fix wave I4
         QVERIFY(h.client.transmitTimeOutAvailable());
         TransmitState* state = h.client.transmitState();
         QVERIFY(state != nullptr);
@@ -926,6 +953,79 @@ private slots:
         QTRY_COMPARE(h.remote.transmitModel().tunePowerForTxBand(), tuneWanted);
         // Nothing keyed.
         QVERIFY(!h.station.moxController()->isMox());
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // Fix wave I4: the window says who holds transmit on the Core, from
+    // txState's holder: this window, the radio, another device, away, and
+    // changing hands.
+    void theWindowSaysWhoHoldsTransmit()
+    {
+        Test::RemoteAudioSessionHarness h;
+        h.pairWindow = true;
+        h.makeTransmitReady();
+        h.openFakeMicrophoneLine();   // fix wave C1: no media here
+        h.connectSession();
+        QTRY_VERIFY(h.client.capabilities().txPermitted);
+        QCOMPARE(h.client.capabilities().txStateVersion, 2);
+        WindowControls window(h);
+        const auto show = [&h, &window] {
+            window.applet.setTransmitHolderText(h.client.transmitHolderText());
+            return window.applet.transmitHolderText();
+        };
+        QCOMPARE(show(), QString());
+        // This window keys: it holds transmit.
+        h.remote.setMoxFromButton(true);
+        QTRY_VERIFY(h.station.moxController()->isMox());
+        QTRY_COMPARE(show(), QStringLiteral("This computer holds transmit."));
+        h.remote.setMoxFromButton(false);
+        QTRY_VERIFY(!h.station.moxController()->isMox());
+        QCOMPARE(show(), QStringLiteral("This computer holds transmit."));
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    void theWindowSaysTheRadioHoldsTransmit()
+    {
+        Test::RemoteAudioSessionHarness h;
+        h.pairWindow = true;
+        h.makeTransmitReady();
+        h.connectSession();
+        QTRY_VERIFY(h.client.capabilities().txPermitted);
+        h.station.moxController()->onMicPttFromRadio(true);
+        QTRY_VERIFY(h.station.moxController()->isMox());
+        QTRY_COMPARE(h.client.transmitHolderText(), QStringLiteral("Radio holds transmit."));
+        h.station.moxController()->onMicPttFromRadio(false);
+        QTRY_VERIFY(!h.station.moxController()->isMox());
+        QTRY_COMPARE(h.client.transmitHolderText(), QString());
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
+    }
+
+    // The words for another device, away, and a transfer, from the values a
+    // Core sends.
+    void theHolderWordsForAnotherDeviceAwayAndChangingHands()
+    {
+        Test::RemoteAudioSessionHarness h;
+        h.pairWindow = true;
+        h.makeTransmitReady();
+        h.connectSession();
+        QTRY_VERIFY(h.client.isHandshakeComplete());
+        TransmitState* tx = h.client.transmitState();
+        QVERIFY(tx != nullptr);
+        // As the Core would send them (no later delta arrives in between).
+        tx->applyStationValue("holderDeviceId", QStringLiteral("another"));
+        tx->applyStationValue("holderName", QStringLiteral("Grant's iPhone"));
+        QCOMPARE(h.client.transmitHolderText(), QStringLiteral("Grant's iPhone holds transmit."));
+        tx->applyStationValue("holderAway", true);
+        QCOMPARE(h.client.transmitHolderText(),
+                 QStringLiteral("Grant's iPhone holds transmit and is away."));
+        tx->applyStationValue("holderTransferring", true);
+        QCOMPARE(h.client.transmitHolderText(), QStringLiteral("Transmit is changing hands."));
+        // The device's name is the operator's own word, set aside here.
+        for (const QString& text : {QStringLiteral("Another device holds transmit and is away."),
+                                    QStringLiteral("Transmit is changing hands."),
+                                    QStringLiteral("This computer holds transmit.")}) {
+            QVERIFY2(OperatorWording::isPlain(text), qPrintable(text));
+        }
         h.client.disconnectFromStation(QStringLiteral("test complete"));
     }
 };

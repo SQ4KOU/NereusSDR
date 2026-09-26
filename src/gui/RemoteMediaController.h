@@ -13,6 +13,10 @@
 //               uplink follows the window's transmit client and the Core's
 //               mirrored VOX by itself. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-26: transmit group fix wave: I4 setTransmitHolder fed from
+//               txState's holder; M6 the microphone streams unkeyed only for
+//               VOX this window armed. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 
 #include "core/session/media/DisplayBudget.h"
 #include "core/session/media/IReceiverPcmSink.h"
@@ -271,10 +275,8 @@ public slots:
     /// rule 1 is not symmetric, so asking on them never loops. The same
     /// values again ask nothing. Epoch 0, not away, is the unheld start.
     ///
-    /// Not yet connected: this branch receives no holder notification (the
-    /// Core's holder is always unheld until Task 34). The merge with Task
-    /// 34 connects the client's `txState` (`holderEpoch`, `holderAway`) to
-    /// this slot.
+    /// The client's `txState` (`holderEpoch`, `holderAway`, fix wave I4)
+    /// calls it whenever the Core's holder changes.
     void setTransmitHolder(quint64 holderEpoch, bool holderAway);
 
 signals:

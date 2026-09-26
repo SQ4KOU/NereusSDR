@@ -235,6 +235,10 @@
 //   2026-09-25 - Receiver and transmit gaps plan, Task 16: the container
 //                buttons follow receive only (RadioModel::rxOnlyChanged).
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave: I4 the TX applet says who holds
+//               transmit; M8 a VOX arming the Core refuses is a toast.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -1389,6 +1393,15 @@ void MainWindow::wireRemoteTransmitMeters()
     if (m_phoneCwApplet) {
         m_phoneCwApplet->setCompressionUnavailable(MeterPoller::remoteTxMeterNotSentText());
     }
+    // Fix wave I4: who holds transmit on the Core, under MOX and TUNE.
+    const auto showHolder = [this]() {
+        if (m_txApplet && m_stationClient) {
+            m_txApplet->setTransmitHolderText(m_stationClient->transmitHolderText());
+        }
+    };
+    connect(state, &TransmitState::holderChanged, this, showHolder);
+    connect(m_stationClient, &StationClient::handshakeComplete, this, showHolder);
+    showHolder();
 }
 
 void MainWindow::ensureRemoteSession()
@@ -1580,10 +1593,13 @@ void MainWindow::ensureRemoteSession()
         // value (its radio's range, a mode the radio does not offer), or
         // that this window could not send, says why in user words.
         connect(m_stationClient, &StationClient::propertyWriteCompleted, this,
-                [this](const QByteArray& objectKey, const QByteArray&, quint32,
+                [this](const QByteArray& objectKey, const QByteArray& property, quint32,
                        bool accepted, const QString& reason) {
             // R-R3-46: so does an antenna edit (Setup > Hardware Config).
-            if ((objectKey == "stepAtt" || objectKey == "alexAntennas") && !accepted
+            // Fix wave M8: and VOX the Core would not arm (no microphone
+            // line from this window yet), whose button drops back.
+            const bool voxWrite = objectKey == "transmit" && property == "voxEnabled";
+            if ((objectKey == "stepAtt" || objectKey == "alexAntennas" || voxWrite) && !accepted
                 && !reason.isEmpty()) {
                 showToast(OperatorReasonText::forDisplay(reason), ToastSeverity::Warning, 4000);
             }

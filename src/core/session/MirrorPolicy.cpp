@@ -95,6 +95,9 @@
 //                 txAntennas, blockTxAnt2, blockTxAnt3, ext1OutOnTx,
 //                 ext2OutOnTx and rxOutOverride Bidirectional. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave: I4 TransmitState's holder
+//               properties Outbound. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -790,6 +793,18 @@ const MirrorPolicy::Entry kEntries[] = {
     { "TransmitState", "stopReason", MirrorDirection::Outbound },
     { "TransmitState", "stopText", MirrorDirection::Outbound },
     { "TransmitState", "stopSerial", MirrorDirection::Outbound },
+    // Fix wave I4 (txStateVersion 2): who holds transmit, and how long the
+    // key has been on. The Core's report.
+    { "TransmitState", "holderDeviceId", MirrorDirection::Outbound },
+    { "TransmitState", "holderName", MirrorDirection::Outbound },
+    { "TransmitState", "holderShortName", MirrorDirection::Outbound },
+    { "TransmitState", "holderKind", MirrorDirection::Outbound },
+    { "TransmitState", "holderSource", MirrorDirection::Outbound },
+    { "TransmitState", "holderForSeconds", MirrorDirection::Outbound },
+    { "TransmitState", "holderEpoch", MirrorDirection::Outbound },
+    { "TransmitState", "holderAway", MirrorDirection::Outbound },
+    { "TransmitState", "holderTransferring", MirrorDirection::Outbound },
+    { "TransmitState", "keyedForSeconds", MirrorDirection::Outbound },
 
     // Normal PS3 configuration is distinct from operational arming/actions.
     { "PureSignalSettings", "autoCalEnabled", MirrorDirection::Bidirectional },

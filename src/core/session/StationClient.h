@@ -282,6 +282,10 @@
 //                                    operate, antenna, TCI mode and address
 //                                    requests (remoteRfKitControlVersion 4).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave: I4 thisDeviceWireId and
+//               transmitHolderText; M6 voxArmedHere; M7 a Core stop ends
+//               this window's key. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -628,6 +632,20 @@ public:
     /// the Core does not send it (txStateVersion 0) and after a session
     /// ends; its stop fields keep the last stop until the next snapshot.
     TransmitState* transmitState() const { return m_transmitState; }
+    /// Fix wave I4: this window's device id as the Core sends device ids
+    /// (connectedDevices, txState's holderDeviceId), or empty without a
+    /// device identity.
+    QString thisDeviceWireId() const;
+    /// Fix wave M6: this window armed the Core's VOX (its own write turned
+    /// `transmit.voxEnabled` on, and VOX is still on). VOX another device
+    /// armed is not this window's: it neither streams its microphone for it
+    /// nor keeps its keepalives going.
+    bool voxArmedHere() const { return m_voxArmedHere; }
+    /// Fix wave I4: who holds transmit on the Core, in plain words for the
+    /// window ("This computer holds transmit.", "Grant's iPhone holds
+    /// transmit.", "... and is away.", "Transmit is changing hands."), or
+    /// empty while nobody does or the Core does not say (txStateVersion 2).
+    QString transmitHolderText() const;
     int coreStationTciStored() const override;
     /// Test seam: whether the Core counts as on this computer (a session
     /// started without a dial has no address to judge by).
@@ -865,6 +883,8 @@ public:
     int handshakeDeadlineMs() const { return m_handshakeDeadlineMs; }
 
 signals:
+    /// Fix wave M6: voxArmedHere() changed.
+    void voxArmedHereChanged(bool armed);
     void displayBudgetChanged();
     void ps3DisplaySubscriptionRequested(bool enabled);
     /// Published before transport callbacks can deliver a synchronous reply.
@@ -1117,6 +1137,7 @@ private:
     /// True for the duration of one inbound apply. See the class comment's
     /// echo-guard section.
     bool m_applyingInbound = false;
+    bool m_voxArmedHere = false;   // fix wave M6
 
     /// True once the snapshot-complete marker has arrived. Until then no
     /// local change is forwarded: everything moving is the station's own

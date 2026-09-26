@@ -298,7 +298,7 @@
         {
             "kind": "i64",
             "name": "txStateVersion",
-            "value": 1
+            "value": 2
         }
     ],
     "commands": [
@@ -5957,6 +5957,66 @@
                     "kind": "i64",
                     "name": "stopSerial",
                     "ordinal": 17
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "holderDeviceId",
+                    "ordinal": 18
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "holderName",
+                    "ordinal": 19
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "holderShortName",
+                    "ordinal": 20
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "holderKind",
+                    "ordinal": 21
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "holderSource",
+                    "ordinal": 22
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "holderForSeconds",
+                    "ordinal": 23
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "holderEpoch",
+                    "ordinal": 24
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "holderAway",
+                    "ordinal": 25
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "holderTransferring",
+                    "ordinal": 26
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "keyedForSeconds",
+                    "ordinal": 27
                 }
             ]
         },

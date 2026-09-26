@@ -12,6 +12,9 @@
 //   2026-09-25 - iPhone app plan Task 37 (R-IOS-13): the keepalive for the
 //                Core's transmit watchdog. J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave: M7 coreStopped. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/RemoteTransmitClient.h"
@@ -390,6 +393,33 @@ void RemoteTransmitClient::setCoreTransmitting(bool on)
         publish();
     }
     refreshKeepalive();
+}
+
+void RemoteTransmitClient::coreStopped(quint32 stopSerial, bool coreKeyed)
+{
+    if (stopSerial == m_coreStopSerial) {
+        return;
+    }
+    m_coreStopSerial = stopSerial;
+    if (coreKeyed) {
+        // Another key is on by now (this window's next one, answered
+        // already, or someone else's): nothing of this window's to end.
+        return;
+    }
+    bool ended = false;
+    for (Key* key : {&m_screen, &m_program}) {
+        if (key->phase == Phase::On) {
+            *key = Key{};
+            ended = true;
+        }
+    }
+    if (ended) {
+        m_tuneAsked = false;
+        m_twoToneAsked = false;
+        qCInfo(lcRemoteTransmit) << "The Core stopped this window's key";
+        publish();
+        refreshKeepalive();
+    }
 }
 
 bool RemoteTransmitClient::micKeyDown() const

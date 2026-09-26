@@ -558,6 +558,28 @@ private slots:
         QTRY_COMPARE(p.mox->state(), MoxState::Rx);
     }
 
+    // Fix wave M5: the holder's own press while its VOX key is on is that
+    // key, answered with its epoch (never "changing hands"), and its
+    // release ends the VOX key.
+    void theHoldersPressDuringItsVoxKeyIsItsKey()
+    {
+        Pair p;
+        QVERIFY(admitted(p.appA));
+        const QJsonObject key = p.send(p.appA, "tx.key", trigger("screen"));
+        QVERIFY(accepted(p.send(p.appA, "tx.unkey", {int64("epoch", epochOf(key))})));
+        QTRY_COMPARE(p.mox->state(), MoxState::Rx);
+        p.mox->onVoxActive(true);
+        QVERIFY(p.mox->isMox());
+        const quint32 voxEpoch = p.core.model->keyedBy().epoch;
+        const QJsonObject press = p.send(p.appA, "tx.key", trigger("screen"));
+        QVERIFY2(accepted(press), QJsonDocument(press).toJson().constData());
+        QCOMPARE(quint32(epochOf(press)), voxEpoch);
+        QVERIFY(accepted(p.send(p.appA, "tx.unkey", {int64("epoch", epochOf(press))})));
+        QVERIFY(!p.mox->isMox());
+        p.mox->onVoxActive(false);
+        QTRY_COMPARE(p.mox->state(), MoxState::Rx);
+    }
+
     void keyedByNamesTheRadioForTheRadiosOwnPtt()
     {
         Pair p;

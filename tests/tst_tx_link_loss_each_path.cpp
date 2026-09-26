@@ -358,10 +358,10 @@ private slots:
 
     // ---- VOX a device armed -------------------------------------------------
 
-    // The window arms the Core's VOX with no microphone line: its
-    // keepalives keep it armed, the Core's own VOX detector never keys from
-    // the Core's own microphone because of it, and the window's session
-    // ending turns it off.
+    // The window tries to arm the Core's VOX with no microphone line. Fix
+    // wave M8: VOX could never key from it, so the Core refuses the arming
+    // with the reason instead of holding VOX armed and silent; nothing is
+    // watched.
     void voxArmedByADeviceNeverKeysTheCoresOwnMicrophone()
     {
         Test::RemoteAudioSessionHarness h;
@@ -370,32 +370,24 @@ private slots:
         h.openFakeMicrophoneLine();   // fix wave C1: no media here
         h.connectSession();
         QTRY_VERIFY(h.client.capabilities().txPermitted);
-        QSignalSpy tripped(h.server.txWatchdog(), &RemoteTxWatchdog::tripped);
+        QSignalSpy completed(&h.client, &StationClient::propertyWriteCompleted);
 
         h.remote.transmitModel().setVoxEnabled(true);
-        QTRY_VERIFY(h.station.transmitModel().voxEnabled());
-        QCOMPARE(h.server.voxArmedBy(), h.windowKey->fingerprint());
-        QVERIFY(h.server.txWatchdog()->isWatching(h.windowKey->fingerprint()));
-        QVERIFY(h.station.remoteVoxDevice().isEmpty());  // no line
-
-        // The window keeps VOX armed with its keepalives.
-        QTest::qWait(1200);
-        QCOMPARE(tripped.count(), 0);
-        QVERIFY(h.station.transmitModel().voxEnabled());
-        QVERIFY(h.client.remoteTransmit()->sessionKeepalivesSent() >= 8);
-
-        // The Core's VOX detector fires on the Core's own microphone: VOX
-        // this device armed never keys from it.
-        h.station.moxController()->onVoxActive(true);
-        QTest::qWait(100);
-        QVERIFY(!h.station.moxController()->isMox());
-        h.station.moxController()->onVoxActive(false);
-
-        // The window's session ends: its VOX goes off.
-        h.stationLink->closeLink(QStringLiteral("the app went away"));
+        QTRY_VERIFY(!completed.isEmpty());
+        bool refusedWithReason = false;
+        for (const QList<QVariant>& call : completed) {
+            if (call.at(1).toByteArray() == "voxEnabled" && !call.at(3).toBool()
+                && call.at(4).toString() == TxRefusals::micNotConnected().text) {
+                refusedWithReason = true;
+            }
+        }
+        QVERIFY(refusedWithReason);
         QVERIFY(!h.station.transmitModel().voxEnabled());
+        QTRY_VERIFY(!h.remote.transmitModel().voxEnabled());
         QVERIFY(h.server.voxArmedBy().isEmpty());
         QVERIFY(!h.server.txWatchdog()->isWatchingAny());
+
+        h.client.disconnectFromStation(QStringLiteral("test complete"));
     }
 
     // VOX armed with the line, the link goes quiet: VOX goes off within

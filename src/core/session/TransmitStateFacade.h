@@ -55,6 +55,10 @@
 //               (KG4VCF), iPhone app plan Task 39 (D14, R-IOS-13,
 //               R-IOS-21), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: Transmit group fix wave: I4 txState names the holder
+//               (holder fields, keyedForSeconds, txStateVersion 2); M3
+//               one lost-link sentence. J.J. Boyd (KG4VCF), with AI-
+//               assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -93,6 +97,21 @@ class TransmitState final : public QObject {
     Q_PROPERTY(QString stopReason READ stopReason NOTIFY stopChanged)
     Q_PROPERTY(QString stopText READ stopText NOTIFY stopChanged)
     Q_PROPERTY(quint32 stopSerial READ stopSerial NOTIFY stopChanged)
+    // Fix wave I4 (txStateVersion 2; the several-devices design, ruling
+    // 8.1): who holds transmit, appended so every earlier ordinal stays.
+    Q_PROPERTY(QString holderDeviceId READ holderDeviceId NOTIFY holderChanged)
+    Q_PROPERTY(QString holderName READ holderName NOTIFY holderChanged)
+    Q_PROPERTY(QString holderShortName READ holderShortName NOTIFY holderChanged)
+    Q_PROPERTY(QString holderKind READ holderKind NOTIFY holderChanged)
+    Q_PROPERTY(QString holderSource READ holderSource NOTIFY holderChanged)
+    Q_PROPERTY(qint64 holderForSeconds READ holderForSeconds NOTIFY holderChanged)
+    Q_PROPERTY(qint64 holderEpoch READ holderEpoch NOTIFY holderChanged)
+    Q_PROPERTY(bool holderAway READ holderAway NOTIFY holderChanged)
+    Q_PROPERTY(bool holderTransferring READ holderTransferring NOTIFY holderChanged)
+    // Ruling 10.3: how long the key has been on, in whole seconds, on the
+    // Core's clock when it sends it (keyedSinceMs stays for a Core at
+    // txStateVersion 1's readers).
+    Q_PROPERTY(qint64 keyedForSeconds READ keyedForSeconds NOTIFY stateChanged)
 
 public:
     // The link's stopReason values.
@@ -105,6 +124,28 @@ public:
 
     /// Milliseconds on a monotonic clock.
     using Clock = std::function<qint64()>;
+
+    /// Fix wave I4: the holder of transmit as the Core names it (ruling
+    /// 8.1). Empty deviceId (with source empty) while unheld.
+    struct Holder {
+        /// The device id as connectedDevices sends it, "station" for the
+        /// station device.
+        QString deviceId;
+        QString name;
+        QString shortName;
+        QString kind;
+        /// "device", or "radioPtt" after a take by the radio's own PTT; ""
+        /// while unheld.
+        QString source;
+        /// When it took transmit, on the Core's clock.
+        qint64 sinceMs{0};
+        quint64 epoch{0};
+        bool away{false};
+        bool transferring{false};
+        bool operator==(const Holder& other) const = default;
+    };
+    /// The Core's: the holder now (StationServer, from TransmitHolder).
+    void setHolder(const Holder& holder);
 
     /// Unbound: a remote window's copy, or a Core's before bind().
     explicit TransmitState(QObject* parent = nullptr);
@@ -141,6 +182,18 @@ public:
     QString stopReason() const { return m_stopReason; }
     QString stopText() const { return m_stopText; }
     quint32 stopSerial() const { return m_stopSerial; }
+    QString holderDeviceId() const { return m_holder.deviceId; }
+    QString holderName() const { return m_holder.name; }
+    QString holderShortName() const { return m_holder.shortName; }
+    QString holderKind() const { return m_holder.kind; }
+    QString holderSource() const { return m_holder.source; }
+    /// Measured now on the Core; the Core's last value in a window.
+    qint64 holderForSeconds() const;
+    qint64 holderEpoch() const { return static_cast<qint64>(m_holder.epoch); }
+    bool holderAway() const { return m_holder.away; }
+    bool holderTransferring() const { return m_holder.transferring; }
+    /// Measured now on the Core; the Core's last value in a window.
+    qint64 keyedForSeconds() const;
 
     /// The Core stopped the current key (or the one that just ended) on its
     /// own, for `reason` (one of the kStop* values), told as `text`. The
@@ -185,6 +238,8 @@ signals:
     void metersChanged();
     /// stopReason, stopText, stopSerial.
     void stopChanged();
+    /// Fix wave I4: the holder* properties.
+    void holderChanged();
 
 private:
     void onTransmittingChanged(bool keyed);
@@ -214,6 +269,10 @@ private:
     QString m_stopReason;
     QString m_stopText;
     quint32 m_stopSerial{0};
+    // Fix wave I4: the holder; a window's copies of the two durations.
+    Holder m_holder;
+    qint64 m_stationHolderForSeconds{0};
+    qint64 m_stationKeyedForSeconds{0};
 
     // Each rising edge of keyed is a key; the first stop recorded for it
     // wins.

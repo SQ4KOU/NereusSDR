@@ -813,7 +813,7 @@ change shows as surface drift and as a change to this table.
 | `bandSelectVersion` | 1 |
 | `sessionHolderVersion` | 1 |
 | `remoteTxVersion` | 1 |
-| `txStateVersion` | 1 |
+| `txStateVersion` | 2 |
 
 <!-- /surface -->
 
@@ -1822,7 +1822,7 @@ An enum property lists the values its domain allows.
 | 84 | `twoToneDrivePowerSource` | `enum` | bidirectional | 0, 1, 2 |
 | 85 | `voxEnabled` | `bool` | bidirectional |  |
 
-**TransmitState** (18 properties)
+**TransmitState** (28 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -1844,6 +1844,16 @@ An enum property lists the values its domain allows.
 | 15 | `stopReason` | `utf8` | outbound |  |
 | 16 | `stopText` | `utf8` | outbound |  |
 | 17 | `stopSerial` | `i64` | outbound |  |
+| 18 | `holderDeviceId` | `utf8` | outbound |  |
+| 19 | `holderName` | `utf8` | outbound |  |
+| 20 | `holderShortName` | `utf8` | outbound |  |
+| 21 | `holderKind` | `utf8` | outbound |  |
+| 22 | `holderSource` | `utf8` | outbound |  |
+| 23 | `holderForSeconds` | `i64` | outbound |  |
+| 24 | `holderEpoch` | `i64` | outbound |  |
+| 25 | `holderAway` | `bool` | outbound |  |
+| 26 | `holderTransferring` | `bool` | outbound |  |
+| 27 | `keyedForSeconds` | `i64` | outbound |  |
 
 **TunerModel** (21 properties)
 
@@ -4258,7 +4268,7 @@ same on every machine.
 | `unheld-key` | On a Core with `remote_transmit` allow whose radio can key (stationSetup `transmitReady`) and whose device's media carries a microphone line (stationSetup `microphoneLine`), one device that declares `remoteTx`: each keying verb with an argument it does not take is refused "The Core could not read this request."; a program's `tx.key {trigger:"tci"}` on unheld transmit is refused `programNeedsTransmit` and nobody takes transmit; a person's `tx.key {trigger:"screen"}` takes it and keys (epoch 1; `transmitting` true, the device's entry transmitting); `tx.unkey {epoch:1}` unkeys; the same program's key then keys (epoch 2) and `tx.unkey {epoch:2}` unkeys; `tx.tune {on:true}` tunes (epoch 3, `transmit`'s `tune` true) and `{on:false}` ends it; `tx.twoTone {on:true}` on a radio with no transmit channel is refused "The two-tone test could not start on the Core." Each key and unkey also moves `txState` (section 18.8): `keyed`, who keyed and how (`keyedTrigger` `screen`, `tci`, `tune`), `keyedSinceMs` on the runner's virtual clock and 180 s left for the phone. Runs on the station and the app |
 | `key-without-microphone` | On the same Core as `unheld-key` but with no microphone line for the device (stationSetup `microphoneLine` absent): a person's `tx.key {trigger:"screen"}` is refused `micNotReady`, "This device's microphone is not connected to the Core yet. Wait a moment and try again.", and nothing keys; a program's key on unheld transmit is still refused `programNeedsTransmit` first. Runs on the station and the app |
 | `tx-keepalive` | On the same Core as `unheld-key`: `tx.keepalive` with an argument it does not take is refused "The Core could not read this request."; a keepalive while nothing of the device's is watched is accepted and changes nothing; the device keys (epoch 1) and sends keepalives 50 ms after the key and then 300 ms apart (sequences 2 to 4, epoch 1), each accepted, and the key stays on; then none for 450 ms: the watchdog stops transmitting (`transmitting` false, the device's entry no longer transmitting). `txState` follows the key (180 s left, 179 a second later), and the watchdog's stop is its stop: `stopReason` `linkLost`, `stopSerial` 1, "The link to Conformance device went quiet, so the Core stopped transmitting." Runs on the station and the app |
-| `grace-transmit-held` | Two devices that declare `remoteTx`: the other device keys and this one's permission goes false (`capabilities` sent again) and its `tx.key` is refused "Other device 1 has the transmitter."; the holder's link drops: this device is sent `capabilities` again with the refusal "Transmit is changing hands. Try again in a moment." and then "Other device 1 has the transmitter.", the Core stops transmitting at once (`transmitting` false) and the holder, away, still holds transmit (this device's `tx.key` is refused naming it); the holder signs in again a minute later, nothing keys until its own `tx.key` (epoch 2), and its `tx.unkey {epoch:2}` unkeys. `txState` follows each key, and the holder's dropped link is its stop: `stopReason` `linkLost`, `stopSerial` 1, "The link to Other device 1 was lost, so the Core stopped transmitting." Runs on the station and the app |
+| `grace-transmit-held` | Two devices that declare `remoteTx`: the other device keys and this one's permission goes false (`capabilities` sent again) and its `tx.key` is refused "Other device 1 has the transmitter."; the holder's link drops: this device is sent `capabilities` again with the refusal "Transmit is changing hands. Try again in a moment." and then "Other device 1 has the transmitter.", the Core stops transmitting at once (`transmitting` false) and the holder, away, still holds transmit (this device's `tx.key` is refused naming it); the holder signs in again a minute later, nothing keys until its own `tx.key` (epoch 2), and its `tx.unkey {epoch:2}` unkeys. `txState` follows each key, and the holder's dropped link is its stop: `stopReason` `linkLost`, `stopSerial` 1, "The link to Other device 1 went quiet, so the Core stopped transmitting." Runs on the station and the app |
 | `on-air-refusals` | While another device (short name "Tablet B") is keyed, this device's Protocol 1 rate change, `ps3.off`, its slice's `rxAntenna` and `transmit`'s `pureSig` are each refused "Tablet B is on the air. Try again when they stop." (commands with `refusalCode` `holderOnAir` and `refusalFix` `takeTransmit`). Runs on the station alone |
 | `share-receiver` | Another device's slice shares this device's receiver (this device anchors it); a C-Tune move that would leave it outside is answered "Waiting for you to confirm." with `phase` `needsConfirmation`, then a `confirm.request` `panMove` naming the other device and its slice's effect `moves`; `confirm.proceed` with a renamed argument is refused, with its own arguments it is accepted; the other device's slice moves to the free receiver and it is told (`notice` `sliceMoved`, no Take it back) |
 | `anchor-band-change` | The same two devices; this device retunes its slice from 20 m to 40 m: the write is answered "Waiting for you to confirm.", then `panMove` with `change` "Receiver 1", "20 m", "40 m"; `confirm.cancel` with a renamed argument is refused, with its own it changes nothing; the write again, `confirm.proceed`: its result carries `objectKey` and `frequency`, the receiver follows this device's slice and the other device's slice moves, the other device told |
@@ -4522,7 +4532,7 @@ sentence. A client shows the sentence as sent and may offer the fix.
 | `swr` | The SWR is over the interlock's limit. Check the antenna, or change the interlock in Setup. | |
 | `otherDeviceHolds` | <holder> has the transmitter. | `takeTransmit` |
 | `programNeedsTransmit` | A program can transmit only while this device has transmit. Take transmit here first. | `takeTransmit` |
-| `micNotReady` | Microphone is not ready. Check Audio settings and retry. (the Core's own microphone); This device's microphone is not connected to the Core yet. Wait a moment and try again. (a remote voice key with no microphone line, section 18.6) | |
+| `micNotReady` | Microphone is not ready. Check Audio settings and retry. (the Core's own microphone); This device's microphone is not connected to the Core yet. Wait a moment and try again. (a remote voice key with no microphone line, section 18.6); No sound has reached the Core from this device's microphone yet. Wait a moment and try again. (a remote key whose line carried no sound within 250 ms, section 18.6) | |
 | `changingHands` | Transmit is changing hands. Try again in a moment. | |
 | `stopNotConfirmed` | The radio did not confirm it stopped transmitting. | |
 | `holderOnAir` | <short name> is on the air. Try again when they stop. ("The radio is on the air. Try again when it stops." while the radio's own PTT, or the Core's own keys, hold transmit) | `takeTransmit` |
@@ -4586,9 +4596,11 @@ transmit through this Core."):
 - `tx.tune {on}`: TUNE on or off; on keys at the tune power.
 - `tx.twoTone {on}`: the two-tone test on or off.
 
-Every key passes the Core's gates in the order of section 18.1 and then
-TX inhibit, the PA trip, the band plan and the interlock, as every key at
-the Core does; a refused one is refused with its code (section 18.3).
+Every key passes the Core's gates in the order of section 18.1, then TX
+inhibit, the PA trip, receive only, the band plan and the interlock, and
+only then the holder's rule (section 18.2), as every key at the Core does;
+a refused one is refused with its code (section 18.3), and a key refused
+before the holder's rule takes nothing.
 
 **Who may key.** A person's key (`tx.key` with any trigger but `"tci"`,
 and `tx.tune` and `tx.twoTone` on) while transmit is unheld makes that
@@ -4601,8 +4613,8 @@ device already holds transmit, and is otherwise refused
 device), and nobody becomes the holder. While a device holds transmit, a
 VOX key at the Core is that device's.
 
-**Who may release.** `tx.unkey`, and `tx.tune` and `tx.twoTone` off, are
-the holder's: from a device that does not hold transmit they are refused
+**Who may release.** `tx.unkey`, `tx.tune` and `tx.twoTone` off, and
+`ps3.twoTone {enabled:false}`, are the holder's: from a device that does not hold transmit they are refused
 `otherDeviceHolds` ("<holder> has the transmitter. Take it to stop the
 transmission.") and the transmission continues. A release ends only that
 device's own key (a VOX key while it holds transmit is its own). The Core's
@@ -4638,7 +4650,8 @@ remote media control document, Microphone line) sends its microphone while
 it transmits. Its `tx.key`, in a mode that transmits the microphone (every
 mode but CWL and CWU), is answered once the line's buffer holds its 60 ms
 target, and then keys; when the buffer has not filled within 250 ms the key
-is refused `micNotReady`. The holder's own refusals come first, at once.
+is refused `micNotReady`, "No sound has reached the Core from this device's
+microphone yet. Wait a moment and try again." The holder's own refusals come first, at once.
 Copies of a waiting key, and a new `tx.key` from the same device, get the
 waiting key's answer; a `tx.unkey` from the device while its key waits
 answers that key `keyEnded`, and it never keys. `tx.tune` and
@@ -4747,8 +4760,11 @@ channel does (`tst_remote_tx_watchdog`). The rendezvous, relay and separate
 control connection (iPhone app plan Tasks 26 to 29) hand their keepalives
 to the same rules.
 
-**VOX a device armed.** It goes off when that device's session ends, when
-its link goes quiet and when its microphone line closes. While it is on
+**VOX a device armed.** A device whose media carries no microphone line
+cannot arm it: its `transmit.voxEnabled` write is refused "This device's
+microphone is not connected to the Core yet. Wait a moment and try again."
+It goes off when that device's session ends, when its link goes quiet and
+when its microphone line closes. While it is on
 and that device's line does not carry the audio VOX listens to, a VOX key
 at the Core is refused (`micNotReady`): the Core never keys from its own
 microphone because a device armed VOX.
@@ -4764,7 +4780,9 @@ two-tone use no microphone and are never stopped by it.
 ### 18.8 The transmit state (`txState`)
 
 iPhone app plan Task 39 (D14, R-IOS-13, R-IOS-21; spec section 5.5 items 5
-and 8). The `txState` object (`TransmitState`, `txStateVersion` 1) goes to
+and 8). The `txState` object (`TransmitState`, `txStateVersion` 1; 2 adds
+the holder of transmit and `keyedForSeconds`, appended after `stopSerial`)
+goes to
 a peer at minor 11 whose hello declared `remoteTx` 1, in its snapshot after
 `connectedDevices`, and as deltas. Every property is `outbound`; a write
 is refused as any outbound property's is.
@@ -4783,6 +4801,14 @@ is refused as any outbound property's is.
 | `stopReason` | Why the Core last stopped a transmission on its own: `""` (none since the Core started), `linkLost`, `micStarved`, `timeOut`, `takenOver`, `revoked` or `station` |
 | `stopText` | That stop in plain words, for an app to show as sent |
 | `stopSerial` | Advances by one with each such stop (serial-number arithmetic, as `devices`' `revision`); 0 before the first |
+| `holderDeviceId` | Who holds transmit (the several-devices design, ruling 8.1; `txStateVersion` 2): the device's id as `connectedDevices` sends it, `station` for the Core's own position (the radio's PTT, the Core's own keys); `""` while unheld |
+| `holderName`, `holderShortName`, `holderKind` | The holder's name and short name as `connectedDevices` numbers them, and its kind; "Radio", "Radio", `station` for the station device; `""` while unheld |
+| `holderSource` | How it got transmit: `device`, or `radioPtt` after a take by the radio's own PTT (a mic or a footswitch); read this, never the name, to tell the radio from a device; `""` while unheld |
+| `holderForSeconds` | How long it has held transmit, in whole seconds on the Core's clock when this is sent (ruling 10.3; the app counts on from its receipt); 0 while unheld |
+| `holderEpoch` | Advances with every change of holder (a take, a release); the same while the holder keys, unkeys or goes away |
+| `holderAway` | The holder's link dropped and it keeps transmit, unkeyed, for its 3 minutes |
+| `holderTransferring` | Transmit is changing hands: every key is refused "Transmit is changing hands." until the transfer ends |
+| `keyedForSeconds` | How long the key now on has been on, in whole seconds on the Core's clock when this is sent (ruling 10.3); 0 while unkeyed. It supersedes `keyedSinceMs`, which a Core still sends |
 
 **When it is sent.** While keyed the Core reads the meters ten times a
 second, from the transmit lane's last readings (never a DSP call on its
@@ -4804,11 +4830,10 @@ no stop. The reasons:
   check went unanswered for 3:00." for the ping time-out, each with its
   limit;
 - `linkLost`: the device on the air went quiet (the watchdog, section
-  18.7): "The link to <device> went quiet, so the Core stopped
-  transmitting."; or its session ended, or the holder connected again on
-  another link, while it was on the air: "The link to <device> was lost,
-  so the Core stopped transmitting." (the Core's own log and toast say
-  "went quiet" for both);
+  18.7), or its session ended, or the holder connected again on another
+  link, while it was on the air: "The link to <device> went quiet, so the
+  Core stopped transmitting.", the one sentence the Core's log and toast
+  say too;
 - `revoked`: the holder was removed from the Core while on the air:
   "<device> was removed from the Core, so the Core stopped transmitting.";
 - `micStarved`: no microphone audio arrived from the device on the air

@@ -11,6 +11,10 @@
 //               (KG4VCF), iPhone app plan Task 39 (D14, R-IOS-13,
 //               R-IOS-21), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: Transmit group fix wave: I4 txState names the holder
+//               (holder fields, keyedForSeconds, txStateVersion 2); M3
+//               one lost-link sentence. J.J. Boyd (KG4VCF), with AI-
+//               assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/TransmitStateFacade.h"
@@ -18,11 +22,13 @@
 #include "core/MoxController.h"
 #include "core/RadioStatus.h"
 #include "core/TxSliceArbiter.h"
+#include "core/safety/RemoteTxWatchdog.h"
 #include "models/RadioModel.h"
 #include "models/TransmitModel.h"
 
 #include <QMetaObject>
 
+#include <algorithm>
 #include <cmath>
 
 namespace NereusSDR {
@@ -270,6 +276,32 @@ void TransmitState::setMeters(const TxMeterReadings& readings)
     emit metersChanged();
 }
 
+void TransmitState::setHolder(const Holder& holder)
+{
+    if (holder == m_holder) {
+        return;
+    }
+    m_holder = holder;
+    emit holderChanged();
+}
+
+qint64 TransmitState::holderForSeconds() const
+{
+    if (m_model.isNull()) {
+        return m_stationHolderForSeconds;
+    }
+    // Ruling 10.3: whole seconds on the Core's clock, measured as it sends.
+    return m_holder.deviceId.isEmpty() ? 0 : std::max<qint64>(0, (now() - m_holder.sinceMs) / 1000);
+}
+
+qint64 TransmitState::keyedForSeconds() const
+{
+    if (m_model.isNull()) {
+        return m_stationKeyedForSeconds;
+    }
+    return m_keyed ? std::max<qint64>(0, (now() - m_keyedSinceMs) / 1000) : 0;
+}
+
 bool TransmitState::recordStop(const QByteArray& reason, const QString& text)
 {
     if (m_key == 0 || m_keyStopped) {
@@ -310,8 +342,9 @@ QString TransmitState::timeOutText(const QByteArray& which, int limitSeconds,
 
 QString TransmitState::linkLostText(const QString& deviceName)
 {
-    return QStringLiteral("The link to %1 was lost, so the Core stopped transmitting.")
-        .arg(deviceOrDefault(deviceName));
+    // Fix wave M3: one sentence for a lost link, the watchdog's, in the
+    // log, the toast and here alike.
+    return RemoteTxWatchdog::stopMessage(deviceOrDefault(deviceName));
 }
 
 QString TransmitState::micStarvedText(const QString& deviceName)
@@ -402,6 +435,40 @@ bool TransmitState::applyStationValue(const QByteArray& propertyName, const QVar
         const quint32 serial = static_cast<quint32>(value.toLongLong());
         stop = serial != m_stopSerial;
         m_stopSerial = serial;
+    } else if (propertyName == "keyedForSeconds") {
+        state = value.toLongLong() != m_stationKeyedForSeconds;
+        m_stationKeyedForSeconds = value.toLongLong();
+    } else if (propertyName.startsWith("holder")) {
+        // Fix wave I4: the holder, as the Core sends it.
+        Holder next = m_holder;
+        qint64 forSeconds = m_stationHolderForSeconds;
+        if (propertyName == "holderDeviceId") {
+            next.deviceId = value.toString();
+        } else if (propertyName == "holderName") {
+            next.name = value.toString();
+        } else if (propertyName == "holderShortName") {
+            next.shortName = value.toString();
+        } else if (propertyName == "holderKind") {
+            next.kind = value.toString();
+        } else if (propertyName == "holderSource") {
+            next.source = value.toString();
+        } else if (propertyName == "holderForSeconds") {
+            forSeconds = value.toLongLong();
+        } else if (propertyName == "holderEpoch") {
+            next.epoch = static_cast<quint64>(value.toLongLong());
+        } else if (propertyName == "holderAway") {
+            next.away = value.toBool();
+        } else if (propertyName == "holderTransferring") {
+            next.transferring = value.toBool();
+        } else {
+            return false;
+        }
+        if (!(next == m_holder) || forSeconds != m_stationHolderForSeconds) {
+            m_holder = next;
+            m_stationHolderForSeconds = forSeconds;
+            emit holderChanged();
+        }
+        return true;
     } else {
         return false;
     }
@@ -433,9 +500,16 @@ void TransmitState::clearStationValues()
     m_keyedByKind.clear();
     m_keyedTrigger.clear();
     m_keyedSinceMs = 0;
+    m_stationKeyedForSeconds = 0;
     m_txEnding = false;
     if (state) {
         emit stateChanged();
+    }
+    // Fix wave I4: nobody holds transmit on a Core that is gone.
+    if (!(m_holder == Holder{}) || m_stationHolderForSeconds != 0) {
+        m_holder = Holder{};
+        m_stationHolderForSeconds = 0;
+        emit holderChanged();
     }
     if (m_timeOutRemainingSeconds != -1) {
         m_timeOutRemainingSeconds = -1;

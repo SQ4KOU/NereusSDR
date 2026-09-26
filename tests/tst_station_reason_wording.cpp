@@ -843,6 +843,8 @@ const QList<ReasonSource>& reasonSources()
           // StationServer's transmit access.
           QStringLiteral("refusal.text"), QStringLiteral("result.refusal.text"),
           QStringLiteral("m_transmitAccess.onAir(m_requester)"),
+          // Fix wave M2: a release refused (TxRefusal.cpp's words).
+          QStringLiteral("m_transmitAccess.release(m_requester)"),
           QStringLiteral("m_transmitAccess.txSlice(m_requester)"),
           // Parity mini-round: its TX antenna refusal (setAlexTxAntenna),
           // scanned below.
@@ -1331,7 +1333,9 @@ const QList<ReasonSource>& propertyTextSources()
          {QStringLiteral("timeOutText"), QStringLiteral("linkLostText"),
           QStringLiteral("micStarvedText"), QStringLiteral("revokedText"),
           QStringLiteral("takenOverText"), QStringLiteral("stationText")},
-         {}, 8,
+         // Fix wave M3: linkLostText is the watchdog's sentence (scanned in
+         // RemoteTxWatchdog.cpp).
+         {}, 7,
          {QStringLiteral("after"), QStringLiteral("deviceOrDefault(deviceName)"),
           QStringLiteral("leadingDevice(deviceName)"), QStringLiteral("leadingDevice(takerName)")}},
     };

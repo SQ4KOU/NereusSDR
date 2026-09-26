@@ -166,6 +166,10 @@
 //                                    setRfKitOperate, setRfKitAntenna,
 //                                    setRfKitTciMode and setRfKitAddress.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave: M2 TransmitAccess::release, a
+//               two-tone stop from another device refused. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -336,6 +340,11 @@ public:
         /// refused stationReceiveOnly.
         std::function<void(const QByteArray& requester, quint64 sequence, quint32 epoch)>
             keepalive;
+        /// Fix wave M2 (ruling 8.5): a release of the transmission (the
+        /// PureSignal two-tone test off) from `requester`: empty when it may
+        /// (it holds transmit, or nobody does), or the refusal naming the
+        /// holder. Unset, every release is allowed.
+        std::function<TxRefusal(const QByteArray& requester)> release;
     };
     void setTransmitAccess(TransmitAccess access) { m_transmitAccess = std::move(access); }
     /// iPhone app Task 74 (R-IOS-30): the Core's confirm step, which

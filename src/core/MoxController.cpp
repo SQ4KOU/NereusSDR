@@ -143,6 +143,11 @@
 //   2026-09-25 - Task 16 fix wave (M2): transmitBlockReason (the words
 //                 setMox refuses with) and transmitBlockChanged. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave: M1 refusalBeforeTheGate, the
+//               checks that refuse a key are asked before the keying
+//               gate; M10 KeyerIdentity::session. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude
+//               Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -366,7 +371,10 @@ void MoxController::setMox(bool on, const KeyerIdentity& keyer)
         reportRefusal(refusal.text, refusal, /*quiet=*/false);
         return;
     }
-    if (m_keyingGate) {
+    // Fix wave M1: a key TX inhibit, the PA trip, receive only, the band
+    // plan or the interlock would refuse never reaches the gate, so it
+    // takes nothing; setMox(true) refuses it with its own words below.
+    if (m_keyingGate && refusalBeforeTheGate().isEmpty()) {
         const KeyingAnswer answer = m_keyingGate(keyer.source, keyer);
         if (answer.verdict != KeyingVerdict::Admit) {
             if (answer.verdict == KeyingVerdict::Refuse) {
@@ -436,6 +444,40 @@ TxRefusal MoxController::refusalForCheck(const safety::BandPlanGuard::MoxCheckRe
         return TxRefusals::stationReceiveOnly();
     }
     return TxRefusals::bandPlan(result.reason);
+}
+
+// ---------------------------------------------------------------------------
+// Fix wave M1: what setMox(true) would refuse before any keying state
+// changes (TX inhibit, the PA trip, receive only, the band plan and the
+// interlock), asked as a question: nothing is reported, no signal is sent.
+// The keying gate, which may make a device the holder of transmit, is
+// asked only after these pass, so a key they refuse takes nothing.
+// ---------------------------------------------------------------------------
+TxRefusal MoxController::refusalBeforeTheGate() const
+{
+    if (transmitBlocked()) {
+        return transmitBlockRefusal();
+    }
+    if (m_moxCheck) {
+        const auto result = m_moxCheck();
+        if (!result.ok) {
+            return refusalForCheck(result);
+        }
+    }
+    if (m_interlockPolicy) {
+        bool allowed = false;
+        {
+            const QSignalBlocker quiet(m_interlockPolicy);
+            allowed = m_interlockPolicy->evaluateTxRequest(m_ampPresent, m_ampInOperate, m_lastSwr);
+        }
+        if (!allowed) {
+            const TxInterlockPolicy::Denial denial = m_interlockPolicy->lastDenial();
+            return denial == TxInterlockPolicy::Denial::AmpStandby ? TxRefusals::ampStandby()
+                 : denial == TxInterlockPolicy::Denial::Swr        ? TxRefusals::swr()
+                                                                   : TxRefusals::interlock();
+        }
+    }
+    return {};
 }
 
 void MoxController::reportRefusal(const QString& reason, const TxRefusal& refusal, bool quiet)
@@ -826,7 +868,8 @@ void MoxController::setMox(bool on)
     // m_keyAdmitted set. Any other key here is the station device's: the
     // MOX and TUNE buttons, two-tone, a local caller. A repeated
     // setMox(true) while keyed is not a key, so it is not asked.
-    if (on && !m_mox && m_keyingGate && !m_keyAdmitted) {
+    // Fix wave M1: only a key the checks below would let through asks it.
+    if (on && !m_mox && m_keyingGate && !m_keyAdmitted && refusalBeforeTheGate().isEmpty()) {
         const KeyerIdentity keyer = KeyerIdentity::station(m_pttMode);
         const KeyingAnswer answer = m_keyingGate(m_pttMode, keyer);
         if (answer.verdict != KeyingVerdict::Admit) {
@@ -1135,7 +1178,10 @@ void MoxController::tryPollKey(PttMode mode, quint8 refusedBit)
     // released (m_notQueuedHeld): the radio repeats its PTT level on every
     // status frame, and the gate acts once per edge. A refused app level
     // (CAT, TCI) is dropped, so the app is answered that nothing keyed.
-    if (m_keyingGate) {
+    // Fix wave M1: a press TX inhibit, the PA trip, receive only, the band
+    // plan or the interlock would refuse is not asked (setMox refuses it
+    // below), so it takes nothing.
+    if (m_keyingGate && refusalBeforeTheGate().isEmpty()) {
         const KeyerIdentity keyer = KeyerIdentity::station(mode);
         const KeyingAnswer answer = m_keyingGate(mode, keyer);
         if (answer.verdict != KeyingVerdict::Admit) {

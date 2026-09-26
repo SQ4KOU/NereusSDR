@@ -300,6 +300,48 @@ private slots:
         QVERIFY(!KeyerIdentity::station(PttMode::Vox).program);
         QCOMPARE(KeyerIdentity::station(PttMode::Mic).deviceId, QByteArray("station"));
     }
+
+    // ---- Fix wave M1: checks before the gate ------------------------------
+
+    // TX inhibit, the PA trip, receive only, the band plan and the
+    // interlock refuse a key before the gate is asked, so it takes nothing:
+    // a remote key, a station button and a radio PTT press alike.
+    void aKeyRefusedBeforeTheGateNeverAsksIt()
+    {
+        Rig rig;
+        QSignalSpy refused(&rig.mox, &MoxController::moxRefused);
+        rig.mox.setTxInhibited(true);
+        rig.mox.setMox(true, remote("phone"));
+        rig.mox.setMox(true);
+        rig.mox.onMicPttFromRadio(true);
+        rig.mox.onMicPttFromRadio(false);
+        QCOMPARE(rig.gate.asked, 0);
+        QVERIFY(!rig.mox.isMox());
+        QVERIFY(refused.count() >= 1);
+        QCOMPARE(refused.first().first().value<TxRefusal>(), TxRefusals::txInhibited());
+        rig.mox.setTxInhibited(false);
+
+        // The band plan (the MOX check).
+        rig.mox.setMoxCheck([]() {
+            safety::BandPlanGuard::MoxCheckResult r;
+            r.ok = false;
+            r.reason = QStringLiteral("Frequency outside TX-allowed range");
+            return r;
+        });
+        rig.mox.setMox(true, remote("phone"));
+        rig.mox.setMox(true);
+        QCOMPARE(rig.gate.asked, 0);
+        QVERIFY(!rig.mox.isMox());
+        QCOMPARE(rig.mox.lastRefusal().code, QByteArray(TxRefusals::kBandPlan));
+
+        // With the checks passing the gate is asked, and the key keys.
+        rig.mox.setMoxCheck({});
+        rig.mox.setMox(true, remote("phone"));
+        QCOMPARE(rig.gate.asked, 1);
+        QVERIFY(rig.mox.isMox());
+        rig.mox.setMox(false, remote("phone"));
+        rig.settle();
+    }
 };
 
 QTEST_MAIN(TstKeyingGate)

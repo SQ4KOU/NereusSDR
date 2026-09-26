@@ -11,6 +11,10 @@
 //               goes on this media connection's "tx" data channel while it
 //               is open. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //               Claude Code.
+//   2026-09-26: transmit group fix wave: I4 setTransmitHolder fed from
+//               txState's holder; M6 the microphone streams unkeyed only for
+//               VOX this window armed. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 
 #include "gui/RemoteMediaController.h"
 #include "core/AppSettings.h"
@@ -24,6 +28,7 @@
 #include "core/ClarityController.h"
 #include "core/FFTEngine.h"
 #include "core/session/StationClient.h"
+#include "core/session/TransmitStateFacade.h"
 #include "core/session/RemoteTransmitClient.h"
 #include "core/safety/RemoteTxWatchdog.h"
 #include "models/TransmitModel.h"
@@ -873,12 +878,23 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
                 && self->d->peer->sendTx(RemoteTxWatchdog::channelKeepalive(sequence, epoch));
         });
     }
-    connect(&model->transmitModel(), &TransmitModel::voxEnabledChanged, this,
+    // Fix wave M6: the microphone streams unkeyed only for VOX this window
+    // armed, never for VOX another device armed on the Core.
+    connect(client, &StationClient::voxArmedHereChanged, this,
             &RemoteMediaController::setVoxArmed);
-    d->voxArmed = model->transmitModel().voxEnabled();
+    d->voxArmed = client->voxArmedHere();
     d->timer = new QTimer(this);
     d->timer->setInterval(kPlannerIntervalMs);
     connect(d->timer, &QTimer::timeout, this, &RemoteMediaController::refreshSubscriptions);
+    // The merge of the trunk into the transmit lane (fix wave I4): the
+    // display budget's holder is the Core's, from `txState`'s holderEpoch
+    // and holderAway (0 and not away while unheld or not sent).
+    if (TransmitState* txState = client->transmitState()) {
+        connect(txState, &TransmitState::holderChanged, this, [this, txState] {
+            setTransmitHolder(static_cast<quint64>(std::max<qint64>(0, txState->holderEpoch())),
+                              txState->holderAway());
+        });
+    }
     connect(client, &StationClient::displayBudgetChanged, this, [this] {
         if (!d->client) { return; }
         if (const auto limits = d->client->remoteDisplayBudgetLimits();

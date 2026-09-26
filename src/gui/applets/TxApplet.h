@@ -110,6 +110,9 @@
 //                 transmit permission's reason kept for the receive-only
 //                 lock (M6). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-26: Transmit group fix wave: I4 the line saying who holds
+//               transmit. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -365,6 +368,12 @@ public:
     QPushButton* voxButton()         const { return m_voxBtn; }
     // Issue #175 Task 7: HL2 slider rescale + dB label test access.
     QSlider*     rfPowerSlider()    const noexcept { return m_rfPowerSlider; }
+    /// Fix wave I4: a remote window's line under MOX and TUNE saying who
+    /// holds transmit on the Core ("Grant's iPhone holds transmit.",
+    /// "... holds transmit and is away.", "Transmit is changing hands.").
+    /// Empty hides it.
+    void setTransmitHolderText(const QString& text);
+    QString transmitHolderText() const;
     QSlider*     tunePowerSlider()  const noexcept { return m_tunePwrSlider; }
     QLabel*      rfPowerLabel()     const noexcept { return m_rfPowerValue; }
     QLabel*      tunePowerLabel()   const noexcept { return m_tunePwrValue; }
@@ -480,6 +489,7 @@ private:
 
     // 0. Mic-source badge (J.3 Phase 3M-1b) — read-only label above the gauges.
     QLabel*  m_micSourceBadge = nullptr;
+    QLabel*  m_holderLabel = nullptr;   // fix wave I4
     // 1. Forward Power gauge
     HGauge*  m_fwdPowerGauge  = nullptr;
     // 2. SWR gauge

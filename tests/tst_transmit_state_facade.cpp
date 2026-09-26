@@ -548,7 +548,7 @@ private slots:
         LoopbackTransport* listener = core.signIn(b, kHolder);
         QVERIFY(admitted(transmitter) && admitted(listener));
         QCOMPARE(capability(transmitter->received(), QStringLiteral("txStateVersion")),
-                 std::optional<qint64>(1));
+                 std::optional<qint64>(2));
         QVERIFY(hasObject(transmitter, QStringLiteral("txState")));
         QVERIFY(!capability(listener->received(), QStringLiteral("txStateVersion")).has_value());
         QVERIFY(!hasObject(listener, QStringLiteral("txState")));
@@ -573,7 +573,8 @@ private slots:
         QCOMPARE(p.state().stopSerial(), quint32(1));
         QCOMPARE(p.state().stopReason(), QStringLiteral("linkLost"));
         QCOMPARE(p.state().stopText(),
-                 QStringLiteral("The link to Grant's iPhone was lost, so the Core stopped "
+                 // Fix wave M3: the watchdog's sentence, one for every lost link.
+                 QStringLiteral("The link to Grant's iPhone went quiet, so the Core stopped "
                                 "transmitting."));
         QTRY_COMPARE(latest(p.appB->received(), QStringLiteral("txState"),
                             QStringLiteral("stopSerial")).toInteger(), 1);
@@ -698,6 +699,104 @@ private slots:
         QCOMPARE(p.state().stopSerial(), quint32(1));
         verifyStopSent(p.appA, QStringLiteral("timeOut"), text);
         verifyStopSent(p.appB, QStringLiteral("timeOut"), text);
+    }
+
+    // ---- Fix wave I4: txState names the holder (ruling 8.1) -------------
+
+    // The device that keys on unheld transmit holds it, and every device's
+    // txState names it: id, names, kind, source, epoch; how long, on the
+    // Core's clock when it is sent; away when its link drops.
+    void txStateNamesTheHolderForEveryDevice()
+    {
+        Pair p;
+        QVERIFY(admitted(p.appA) && admitted(p.appB));
+        QCOMPARE(p.state().holderDeviceId(), QString());
+        QCOMPARE(p.state().holderSource(), QString());
+        QVERIFY(p.keyA());
+        QTRY_VERIFY(p.state().keyed());
+        QCOMPARE(p.state().holderDeviceId(), p.a.id());
+        QCOMPARE(p.state().holderName(), QStringLiteral("Grant's iPhone"));
+        QCOMPARE(p.state().holderShortName(), QStringLiteral("iPhone"));
+        QCOMPARE(p.state().holderKind(), QStringLiteral("phone"));
+        QCOMPARE(p.state().holderSource(), QStringLiteral("device"));
+        QVERIFY(p.state().holderEpoch() > 0);
+        QVERIFY(!p.state().holderAway());
+        QVERIFY(!p.state().holderTransferring());
+        const qint64 epoch = p.state().holderEpoch();
+        // The other device reads the same holder.
+        const auto seenByB = [&p](const char* name) {
+            return latest(p.appB->received(), QStringLiteral("txState"), QString::fromLatin1(name));
+        };
+        QTRY_COMPARE(seenByB("holderDeviceId").toString(), p.a.id());
+        QCOMPARE(seenByB("holderName").toString(), QStringLiteral("Grant's iPhone"));
+        QCOMPARE(seenByB("holderShortName").toString(), QStringLiteral("iPhone"));
+        QCOMPARE(seenByB("holderKind").toString(), QStringLiteral("phone"));
+        QCOMPARE(seenByB("holderSource").toString(), QStringLiteral("device"));
+        QCOMPARE(seenByB("holderEpoch").toInteger(), epoch);
+        QCOMPARE(seenByB("holderAway").toBool(true), false);
+        QCOMPARE(seenByB("holderTransferring").toBool(true), false);
+        // The durations are whole seconds on the Core's clock.
+        p.core.now += 5500;
+        QCOMPARE(p.state().holderForSeconds(), qint64(5));
+        QCOMPARE(p.state().keyedForSeconds(), qint64(5));
+        // Unkeyed, still the holder.
+        const QJsonObject unkey = p.core.invoke(
+            p.appA, "tx.unkey", {int64("epoch", p.core.model->keyedBy().epoch)});
+        QVERIFY(unkey.value(QStringLiteral("accepted")).toBool());
+        QTRY_VERIFY(!p.state().keyed());
+        QCOMPARE(p.state().keyedForSeconds(), qint64(0));
+        QCOMPARE(p.state().holderDeviceId(), p.a.id());
+        // Its link drops: away, the same epoch.
+        p.appA->closeLink(QStringLiteral("lost"));
+        QTRY_VERIFY(p.state().holderAway());
+        QCOMPARE(p.state().holderEpoch(), epoch);
+        QTRY_COMPARE(seenByB("holderAway").toBool(false), true);
+    }
+
+    // The radio's own PTT holds transmit as "Radio", source radioPtt, and
+    // (fix wave I1) lets go when the press ends.
+    void theRadiosPttIsNamedRadioWithItsSource()
+    {
+        Pair p;
+        QVERIFY(admitted(p.appA));
+        MoxController* mox = p.core.model->moxController();
+        mox->onMicPttFromRadio(true);
+        QTRY_VERIFY(mox->isMox());
+        QCOMPARE(p.state().holderName(), QStringLiteral("Radio"));
+        QCOMPARE(p.state().holderShortName(), QStringLiteral("Radio"));
+        QCOMPARE(p.state().holderKind(), QStringLiteral("station"));
+        QCOMPARE(p.state().holderSource(), QStringLiteral("radioPtt"));
+        QCOMPARE(p.state().holderDeviceId(), QStringLiteral("station"));
+        mox->onMicPttFromRadio(false);
+        QTRY_VERIFY(!mox->isMox());
+        QTRY_COMPARE(p.state().holderDeviceId(), QString());
+        QCOMPARE(p.state().holderSource(), QString());
+    }
+
+    // A window's copy takes the holder as the Core sends it.
+    void aWindowsCopyTakesTheHolder()
+    {
+        TransmitState copy;
+        QSignalSpy changed(&copy, &TransmitState::holderChanged);
+        QVERIFY(copy.applyStationValue("holderDeviceId", QStringLiteral("abc")));
+        QVERIFY(copy.applyStationValue("holderName", QStringLiteral("Shack iPad")));
+        QVERIFY(copy.applyStationValue("holderForSeconds", qlonglong(42)));
+        QVERIFY(copy.applyStationValue("holderEpoch", qlonglong(7)));
+        QVERIFY(copy.applyStationValue("holderAway", true));
+        QVERIFY(copy.applyStationValue("holderTransferring", true));
+        QVERIFY(copy.applyStationValue("keyedForSeconds", qlonglong(3)));
+        QCOMPARE(copy.holderDeviceId(), QStringLiteral("abc"));
+        QCOMPARE(copy.holderName(), QStringLiteral("Shack iPad"));
+        QCOMPARE(copy.holderForSeconds(), qint64(42));
+        QCOMPARE(copy.holderEpoch(), qint64(7));
+        QVERIFY(copy.holderAway());
+        QVERIFY(copy.holderTransferring());
+        QCOMPARE(copy.keyedForSeconds(), qint64(3));
+        QVERIFY(changed.count() >= 6);
+        copy.clearStationValues();
+        QCOMPARE(copy.holderDeviceId(), QString());
+        QCOMPARE(copy.holderEpoch(), qint64(0));
+        QVERIFY(!copy.holderAway());
     }
 };
 

@@ -19,6 +19,11 @@
 //               on the Core's own microphone; setSessionGate. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: Transmit group fix wave: M4 a remote line with no sound
+//               says to wait for the device's microphone; M5 the holder's
+//               press during its own VOX key is that key; M10 keys name
+//               their connection. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/RemoteKeying.h"
@@ -215,7 +220,7 @@ void RemoteKeying::handle(const Command& command, Reply reply)
                 return;
             }
             const Command waited = it->command;
-            const Result result = ready ? self->keyNow(waited) : refused(TxRefusals::micNotReady());
+            const Result result = ready ? self->keyNow(waited) : refused(TxRefusals::remoteMicNotReady());
             if (!ready) {
                 qCInfo(lcDsp) << "Key from" << deviceId
                               << "refused: no microphone audio within the deadline";
@@ -385,11 +390,19 @@ RemoteKeying::Result RemoteKeying::keyNow(const Command& command)
     if (moxKeyedFor(command.deviceId)) {
         return accepted(m_model->keyedBy().epoch);
     }
+    // Fix wave M5: the holder's press while its own VOX key is on (ruling
+    // 8.4: that key is the holder's) is its key already on, answered with
+    // its epoch; its tx.unkey then ends the VOX key, as for any key of its.
+    if (mox->isMox() && mox->currentKeyer().isStation() && mox->currentKeyer().source == PttMode::Vox
+        && m_holder->isHeldBy(command.deviceId) && m_model->keyedBy().deviceId == command.deviceId) {
+        return accepted(m_model->keyedBy().epoch);
+    }
     KeyerIdentity keyer;
     keyer.deviceId = command.deviceId;
     keyer.source = PttMode::None;
     // D58: a program's key never takes transmit (TransmitHolder::askKey).
     keyer.program = command.trigger == kProgramTrigger;
+    keyer.session = command.session;   // fix wave M10
 
     // The key's epoch is the next one; it is spent only if the key keys.
     m_pending = Pending{command.deviceId, command.trigger, nextEpoch()};
@@ -476,6 +489,7 @@ RemoteKeying::Result RemoteKeying::tune(const Command& command)
     KeyerIdentity keyer;
     keyer.deviceId = command.deviceId;
     keyer.source = PttMode::Manual;
+    keyer.session = command.session;   // fix wave M10
     m_pending = Pending{command.deviceId, QByteArrayLiteral("tune"), nextEpoch()};
     RefusalCapture capture(mox, m_model.data());
     m_model->setTune(true, keyer);
@@ -517,6 +531,7 @@ RemoteKeying::Result RemoteKeying::twoTone(const Command& command)
     KeyerIdentity keyer;
     keyer.deviceId = command.deviceId;
     keyer.source = PttMode::None;
+    keyer.session = command.session;   // fix wave M10
     const quint32 epoch = nextEpoch();
     m_pending = Pending{command.deviceId, QByteArrayLiteral("twoTone"), epoch};
     RefusalCapture capture(mox, nullptr);

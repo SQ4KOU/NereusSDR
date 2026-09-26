@@ -196,6 +196,10 @@
 //                antenna at a time (setAlexTxAntenna) from
 //                radioHardwareVersion 6. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave: I4 thisDeviceWireId and
+//               transmitHolderText; M6 voxArmedHere; M7 a Core stop ends
+//               this window's key. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -567,8 +571,24 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
                 &RemoteTransmitClient::setCoreTransmitting);
         // Task 37: VOX armed (the Core's, mirrored) keeps the keepalive
         // going while the window streams unkeyed.
-        connect(&radioModel->transmitModel(), &TransmitModel::voxEnabledChanged, m_remoteTransmit,
-                &RemoteTransmitClient::setVoxArmed);
+        // Fix wave M7: a stop the Core records ends this window's key on,
+        // even one the mirrored `transmitting` never showed.
+        connect(m_transmitState, &TransmitState::stopChanged, m_remoteTransmit, [this]() {
+            m_remoteTransmit->coreStopped(m_transmitState->stopSerial(),
+                                          m_transmitState->keyed());
+        });
+        // Fix wave M6: only VOX this window armed (its own write, not the
+        // Core's value for another device's).
+        connect(&radioModel->transmitModel(), &TransmitModel::voxEnabledChanged, this,
+                [this](bool on) {
+                    const bool armedHere = on && (m_voxArmedHere || !m_applyingInbound);
+                    if (armedHere == m_voxArmedHere) {
+                        return;
+                    }
+                    m_voxArmedHere = armedHere;
+                    m_remoteTransmit->setVoxArmed(armedHere);
+                    emit voxArmedHereChanged(armedHere);
+                });
         // A refused press is shown in the Core's words, where a local
         // refusal shows (MainWindow's toast; the buttons follow the Core).
         const QPointer<RadioModel> model(radioModel);
@@ -4536,6 +4556,36 @@ QList<QByteArray> StationClient::mirroredObjectKeys() const
 QObject* StationClient::mirroredObject(const QByteArray& objectKey) const
 {
     return m_objects.value(objectKey).data();
+}
+
+QString StationClient::thisDeviceWireId() const
+{
+    return m_deviceIdentity ? StationIdentity::toBase64Url(m_deviceIdentity->fingerprint())
+                            : QString();
+}
+
+QString StationClient::transmitHolderText() const
+{
+    // Fix wave I4 (the several-devices design, ruling 8.1).
+    if (m_transmitState == nullptr || !isHandshakeComplete()
+        || capabilities().txStateVersion < 2) {
+        return {};
+    }
+    const TransmitState& tx = *m_transmitState;
+    if (tx.holderTransferring()) {
+        return QStringLiteral("Transmit is changing hands.");
+    }
+    if (tx.holderDeviceId().isEmpty()) {
+        return {};
+    }
+    const QString self = thisDeviceWireId();
+    if (!self.isEmpty() && tx.holderDeviceId() == self) {
+        return QStringLiteral("This computer holds transmit.");
+    }
+    const QString name = tx.holderName().isEmpty() ? QStringLiteral("Another device")
+                                                   : tx.holderName();
+    return tx.holderAway() ? QStringLiteral("%1 holds transmit and is away.").arg(name)
+                           : QStringLiteral("%1 holds transmit.").arg(name);
 }
 
 } // namespace NereusSDR

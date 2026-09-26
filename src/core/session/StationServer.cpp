@@ -432,6 +432,12 @@
 //               device armed goes off when that device's own line closes.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave: I4 txState's holder published
+//               from TransmitHolder, txStateVersion 2; M2 a two-tone stop
+//               is the holder's; M8 VOX from a device with no microphone
+//               line refused with the reason; M10 the keying gate judges
+//               the connection the key came on. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1242,11 +1248,19 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             if (!keyer.isStation()) {
                 // A remote key: the session's own gate first (remote_transmit,
                 // its hello, its pairing, its snapshot).
+                // Fix wave M10: the connection the key came on, when the
+                // key names it; otherwise the device's live connection.
                 SessionTransport* session = nullptr;
+                const quint64 sessionId = sessionIdOfOwner(keyer.session);
                 for (auto it = m_peers.cbegin(); it != m_peers.cend(); ++it) {
-                    if (it->sessionDeviceId == keyer.deviceId) {
+                    if (it->sessionDeviceId != keyer.deviceId) {
+                        continue;
+                    }
+                    if (sessionId != 0 ? it->sessionId == sessionId : session == nullptr) {
                         session = it.key();
-                        break;
+                        if (sessionId != 0) {
+                            break;
+                        }
                     }
                 }
                 if (session == nullptr) {
@@ -1897,6 +1911,14 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     {
         SessionCommandDispatcher::TransmitAccess access;
         access.onAir = [this](const QByteArray& requester) { return onAirRefusal(requester); };
+        // Fix wave M2 (ruling 8.5): a release is the holder's.
+        access.release = [this](const QByteArray& requester) -> TxRefusal {
+            const std::optional<TransmitHolder::Holder> holder = m_transmitHolder->holder();
+            if (!holder || requester.isEmpty() || holder->deviceId == requester) {
+                return {};
+            }
+            return TxRefusals::otherDeviceHoldsStop(holder->name);
+        };
         access.txSlice = [this](const QByteArray& requester) -> TxRefusal {
             // The session's own gate first (remote_transmit, pairing, ...).
             for (auto it = m_peers.cbegin(); it != m_peers.cend(); ++it) {
@@ -4490,6 +4512,16 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
         }
         // R-R3-49 (parity Task 1), merged: a receive-only Core's transmit
         // settings from a peer offered them are taken off the air above.
+        // Fix wave M8: VOX a device arms listens to its microphone line;
+        // with no line it could never key, so arming it is refused with the
+        // reason (never armed and silent).
+        if (transmitObjectWrite && update.name == "voxEnabled" && update.value.toBool()
+            && !writer.isEmpty() && txDecision.permitted && !m_radioModel.isNull()
+            && m_radioModel->role() == RadioModel::Role::Local
+            && !m_radioModel->remoteMicLineOpen(writer)) {
+            refusals.insert(update.name, TxRefusals::micNotConnected().text);
+            continue;
+        }
         if (transmitObjectWrite && !txDecision.permitted && !transmitSettingsWrite) {
             refusals.insert(update.name, txDecision.refusal.text);
             continue;
@@ -5326,6 +5358,28 @@ void StationServer::onTransmitHolderChanged()
     }
     m_connectedDevices->refresh();
     publishTxPermitted();
+    // Fix wave I4 (ruling 8.1): txState names the holder for every device.
+    if (m_transmitState) {
+        TransmitState::Holder published;
+        if (holder) {
+            if (holder->deviceId == KeyerIdentity::kStationDeviceId) {
+                published.deviceId = QString::fromLatin1(KeyerIdentity::kStationDeviceId);
+            } else if (const auto words = m_connectedDevices->describe(holder->deviceId)) {
+                published.deviceId = words->wireId;
+            }
+            published.name = holder->name;
+            published.shortName = holder->shortName;
+            published.kind = holder->kind;
+            published.source = holder->source == TransmitHolder::Source::RadioPtt
+                                   ? QStringLiteral("radioPtt")
+                                   : QStringLiteral("device");
+            published.sinceMs = holder->sinceMs;
+            published.away = holder->away;
+        }
+        published.epoch = m_transmitHolder->epoch();
+        published.transferring = m_transmitHolder->state() == TransmitHolder::State::Transferring;
+        m_transmitState->setHolder(published);
+    }
     // The merge of the trunk into the transmit lane (ruling 9.3): the
     // display budget is split around the holder, so a change of holder, or
     // of its away state, splits it again.

@@ -181,6 +181,10 @@
 //                                    setAlexTxAntenna, one band's TX
 //                                    antenna. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-26: Transmit group fix wave: M2 TransmitAccess::release, a
+//               two-tone stop from another device refused. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -1234,6 +1238,15 @@ void SessionCommandDispatcher::handlePureSignalAction(const SessionMessage& invo
         emitResult(invoke.commandVerb, invoke.commandId, false,
                    QStringLiteral("PureSignal cannot be run from a remote window yet."), {});
         return;
+    }
+    // Fix wave M2 (ruling 8.5): stopping the two-tone test is a release of
+    // the transmission, the holder's; another device stops it only by
+    // taking transmit.
+    if (*action == Ps3Action::SetTwoTone && stop && m_transmitAccess.release) {
+        if (const TxRefusal refusal = m_transmitAccess.release(m_requester); !refusal.isEmpty()) {
+            emitRefusal(invoke.commandVerb, invoke.commandId, refusal);
+            return;
+        }
     }
     if (arming) {
         QString onAir;

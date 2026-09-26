@@ -46,6 +46,9 @@
 //   2026-09-25 - iPhone app plan Task 37 (R-IOS-13): the keepalive for the
 //                Core's transmit watchdog. J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave: M7 coreStopped. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -136,6 +139,11 @@ public:
                          const QString& reason, const QList<MirrorUpdate>& values);
     /// The Core's real transmit state (RadioModel `transmitting`).
     void setCoreTransmitting(bool on);
+    /// Fix wave M7: the Core recorded a stop (`txState`'s stopSerial moved)
+    /// and says nothing is keyed now (`keyed`): a key of this window's that
+    /// is on ended at the Core, even one so short the mirrored
+    /// `transmitting` never rose. The next press is a new command.
+    void coreStopped(quint32 stopSerial, bool coreKeyed);
 
     /// The press is down (waiting for its answer, or keyed).
     bool micKeyDown() const;
@@ -190,6 +198,7 @@ private:
     quint64 m_sessionKeepalives{0};
     void refreshKeepalive();
     /// The Core's `transmitting` as last heard.
+    quint32 m_coreStopSerial{0};   // fix wave M7
     bool m_coreTransmitting{false};
     bool m_publishedKeyDown{false};
     bool m_publishedHolds{false};

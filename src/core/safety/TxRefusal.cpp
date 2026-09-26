@@ -17,6 +17,9 @@
 //               voice key with no microphone line. J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude
 //               Code.
+//   2026-09-26: Transmit group fix wave: M4 remoteMicNotReady. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/safety/TxRefusal.h"
@@ -131,6 +134,15 @@ TxRefusal micNotConnected()
     // microphone; the device waits for its line.
     return make(kMicNotReady,
                 QStringLiteral("This device's microphone is not connected to the Core yet. "
+                               "Wait a moment and try again."));
+}
+
+TxRefusal remoteMicNotReady()
+{
+    // Fix wave M4: the device's own microphone, not the Core's Audio
+    // settings, is what to wait for.
+    return make(kMicNotReady,
+                QStringLiteral("No sound has reached the Core from this device's microphone yet. "
                                "Wait a moment and try again."));
 }
 

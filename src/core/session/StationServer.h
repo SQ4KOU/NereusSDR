@@ -351,6 +351,9 @@
 //               device armed goes off when that device's own line closes.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave: I4 txStateVersion 2. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QHash>
@@ -961,7 +964,9 @@ public:
     TransmitState* transmitState() const { return m_transmitState; }
     /// 1: the Core sends `txState` to a peer at minor 11 whose hello
     /// declared remoteTx 1 (after remoteTxVersion in its capabilities).
-    int txStateVersion() const { return 1; }
+    /// 2 (fix wave I4): `txState` names the holder of transmit (ruling 8.1)
+    /// and carries keyedForSeconds.
+    int txStateVersion() const { return 2; }
     /// The gate's answer for `transport` (what its txPermitted says).
     TxDecision txDecisionFor(SessionTransport* transport) const;
     /// The refusal a capabilities message carries (empty without one).

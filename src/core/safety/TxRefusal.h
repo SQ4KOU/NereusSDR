@@ -26,6 +26,9 @@
 //               voice key with no microphone line. J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude
 //               Code.
+//   2026-09-26: Transmit group fix wave: M4 remoteMicNotReady. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 #pragma once
 
@@ -111,6 +114,9 @@ TxRefusal micNotReady();
 /// Fix wave C1 (code micNotReady): a remote device's voice or program key
 /// while its media carries no microphone line.
 TxRefusal micNotConnected();
+/// Fix wave M4 (code micNotReady): a remote device's line carried no sound
+/// within the key's wait; the device waits for its microphone.
+TxRefusal remoteMicNotReady();
 /// Every key during a transfer of transmit.
 TxRefusal changingHands();
 /// Every key after a transfer that ended with MOX still on, until it

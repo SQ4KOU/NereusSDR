@@ -199,6 +199,11 @@
 //                 transmitBlockChanged, so the TGXL autotune and the Tuner
 //                 applet follow the gate. J.J. Boyd (KG4VCF), AI-assisted
 //                 via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave: M1 refusalBeforeTheGate, the
+//               checks that refuse a key are asked before the keying
+//               gate; M10 KeyerIdentity::session. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude
+//               Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -260,12 +265,20 @@ struct KeyerIdentity {
     PttMode source{PttMode::None};
     /// A program's key (TCI, CAT): it never takes transmit (D58, D63).
     bool program{false};
+    /// Fix wave M10: the connection a remote key came on (the session
+    /// owner, "station:<id>"), so the keying gate judges that connection,
+    /// not another of the same device's; empty for the station's own keys.
+    /// Not part of who the keyer is (operator== leaves it out).
+    QString session;
 
     /// The same id as SliceOwnership::stationDevice().
     static constexpr char kStationDeviceId[] = "station";
     static KeyerIdentity station(PttMode source);
     bool isStation() const { return deviceId == kStationDeviceId; }
-    bool operator==(const KeyerIdentity& other) const = default;
+    bool operator==(const KeyerIdentity& other) const
+    {
+        return deviceId == other.deviceId && source == other.source && program == other.program;
+    }
 };
 
 // The keying gate's answer (ruling 8.13): admit the key; refuse it with a
@@ -407,9 +420,12 @@ public:
     // ── iPhone app plan Task 34: the keying gate (rulings 8.8, 8.13) ────────
     //
     // setKeyingGate: asked on every press edge and every remote key, with
-    // the source and the keyer, before the PTT mode or MOX changes. It sits
-    // beside the band-plan check and the interlock below: TX inhibit and the
-    // PA trip first, then this gate, then the band plan, then the interlock.
+    // the source and the keyer, before the PTT mode or MOX changes. Fix
+    // wave M1: it is asked last, after every check that refuses a key
+    // without deciding who holds transmit: TX inhibit, the PA trip and
+    // receive only, then the band plan (and the microphone check), then the
+    // interlock. A key those refuse never reaches the gate, so it takes
+    // nothing.
     // A Core that serves devices installs it (StationServer, from
     // TransmitHolder); with none installed every key is admitted as before,
     // so a desktop on its own is unchanged. Unkeying is never asked.
@@ -1293,6 +1309,10 @@ private:
     // `quiet` (a held source's repeat, M3) records it and says nothing.
     void reportRefusal(const QString& reason, const TxRefusal& refusal, bool quiet);
     static TxRefusal refusalForCheck(const safety::BandPlanGuard::MoxCheckResult& result);
+    // Fix wave M1: what setMox(true) would refuse before the keying gate
+    // (TX inhibit, the PA trip, receive only, the band plan, the
+    // interlock), asked without reporting anything. Empty when none would.
+    TxRefusal refusalBeforeTheGate() const;
     // isVoiceMode: true for the 8 voice-family DSP modes.
     //
     // Voice family (per Thetis CMSetTXAVoxRun, cmaster.cs:1043-1050

@@ -648,7 +648,9 @@ void TestTxWorkerRemoteRing::keyWithoutMicrophoneAudioIsRefusedMicNotReady()
     const QJsonObject result = resultFor(station.app, 3611);
     QVERIFY(!result.value(QStringLiteral("accepted")).toBool(true));
     QCOMPARE(refusalCode(result), QString::fromLatin1(TxRefusals::kMicNotReady));
-    QCOMPARE(result.value(QStringLiteral("reason")).toString(), TxRefusals::micNotReady().text);
+    // Fix wave M4: the words say to wait for the device's microphone.
+    QCOMPARE(result.value(QStringLiteral("reason")).toString(),
+             TxRefusals::remoteMicNotReady().text);
     QVERIFY(!station.core.model->moxController()->isMox());
     QVERIFY(!station.core.model->remoteMicInUse());
 }

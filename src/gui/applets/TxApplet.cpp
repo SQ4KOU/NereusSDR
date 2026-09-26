@@ -119,6 +119,9 @@
 //                 remote window MOX, TUNE and 2-TONE show the Core's state
 //                 and 2-TONE goes through RadioModel::setTwoTone. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave: I4 the line saying who holds
+//               transmit. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -507,6 +510,17 @@ void TxApplet::buildUI()
         row->addWidget(m_moxBtn, 1);
 
         vbox->addLayout(row);
+
+        // Fix wave I4: who holds transmit on the Core, in a remote window
+        // (setTransmitHolderText). Empty, and so not shown, otherwise.
+        m_holderLabel = new QLabel(this);
+        m_holderLabel->setObjectName(QStringLiteral("TxHolderLabel"));
+        m_holderLabel->setAccessibleName(QStringLiteral("Who holds transmit"));
+        m_holderLabel->setWordWrap(true);
+        m_holderLabel->setStyleSheet(QStringLiteral(
+            "QLabel { color: %1; font-size: 10px; }").arg(Style::kTextPrimary));
+        m_holderLabel->setVisible(false);
+        vbox->addWidget(m_holderLabel);
     }
 
     // ── 4b. VOX row (3M-3a-iii bench polish 2026-05-04) ───────────────────────
@@ -2546,6 +2560,18 @@ void TxApplet::setTxProfilePermitted(bool permitted, const QString& unavailableR
                         unavailableReason.isEmpty()
                             ? IStationLink::transmitSettingsUnavailableReason()
                             : unavailableReason);
+}
+
+void TxApplet::setTransmitHolderText(const QString& text)
+{
+    if (!m_holderLabel) { return; }
+    m_holderLabel->setText(text);
+    m_holderLabel->setVisible(!text.isEmpty());
+}
+
+QString TxApplet::transmitHolderText() const
+{
+    return m_holderLabel ? m_holderLabel->text() : QString();
 }
 
 bool TxApplet::remoteTunePower() const

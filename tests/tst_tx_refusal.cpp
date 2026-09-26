@@ -78,6 +78,11 @@ QList<Row> table()
          "takeTransmit"},
         {micNotReady(), "micNotReady",
          QStringLiteral("Microphone is not ready. Check Audio settings and retry."), {}},
+        // Fix wave M4: a remote line that carried no sound in time.
+        {remoteMicNotReady(), "micNotReady",
+         QStringLiteral("No sound has reached the Core from this device's microphone yet. "
+                        "Wait a moment and try again."),
+         {}},
         // Fix wave C1: a remote voice key with no microphone line.
         {micNotConnected(), "micNotReady",
          QStringLiteral("This device's microphone is not connected to the Core yet. "

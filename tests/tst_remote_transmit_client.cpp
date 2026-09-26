@@ -175,6 +175,34 @@ private slots:
         QVERIFY(core.sent.at(1).id != core.sent.at(0).id);
     }
 
+    // Fix wave M7: a key the Core ends so soon that the mirrored
+    // `transmitting` never rose still ends here: the Core's recorded stop
+    // (txState's stopSerial) with nothing keyed ends it, and the
+    // keepalives stop.
+    void aShortKeyTheCoreStoppedEndsOnItsStop()
+    {
+        Recorder core;
+        RemoteTransmitClient client(core.sender());
+        client.setAvailable(true);
+        client.setScreenKey(true);
+        answerCopies(client, core.sent.at(0), true, {}, epochValue(4));
+        QVERIFY(client.holdsTransmit());
+        QVERIFY(client.keepaliveRunning());
+        client.coreStopped(1, /*coreKeyed=*/false);
+        QVERIFY(!client.holdsTransmit());
+        QVERIFY(!client.micKeyDown());
+        QVERIFY(!client.keepaliveRunning());
+        // The next press is a new command.
+        client.setScreenKey(true);
+        QCOMPARE(core.sent.last().verb, QByteArrayLiteral("tx.key"));
+        QVERIFY(core.sent.last().id != core.sent.at(0).id);
+        // A stop while another key is on at the Core ends nothing here.
+        answerCopies(client, core.sent.last(), true, {}, epochValue(5));
+        QVERIFY(client.holdsTransmit());
+        client.coreStopped(2, /*coreKeyed=*/true);
+        QVERIFY(client.holdsTransmit());
+    }
+
     void aProgramsReleaseUnderTheOperatorsKeySendsNothing()
     {
         Recorder core;
