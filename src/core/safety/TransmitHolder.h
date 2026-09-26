@@ -56,6 +56,12 @@
 //               station device's take ends with its key until Task 77.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave 2, Important 2: a refused TUNE or
+//               two-tone takes nothing (admitKey asks TX inhibit, the PA
+//               trip, receive only and the interlock before the gate; a
+//               take whose key never starts is released). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 #pragma once
 
@@ -182,6 +188,15 @@ public:
     /// armed: its next VOX key takes transmit again. Nothing otherwise.
     void releaseStationTake();
 
+    /// Fix wave 2, Important 2: a take on unheld transmit whose key has not
+    /// started yet (askKey took; setKeyed(true) has not followed).
+    bool isTakeUnstarted() const { return m_takeUnstarted; }
+    /// A refused TUNE or two-tone takes nothing: when the take is still
+    /// unstarted, its holder unkeyed, MOX reads off and nothing is fenced,
+    /// transmit is unheld again at once (nothing to unkey; VOX as it was).
+    /// Nothing otherwise.
+    void releaseUnstartedTake();
+
     /// The holder's key started or ended (the owner reports MOX with the
     /// keyer it is for).
     void setKeyed(bool keyed);
@@ -213,6 +228,7 @@ private:
     bool m_fenced{false};
     bool m_fenceWaitingMoxOff{false};
     bool m_stopUnconfirmed{false};
+    bool m_takeUnstarted{false};
 };
 
 } // namespace NereusSDR

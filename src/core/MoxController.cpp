@@ -148,6 +148,12 @@
 //               gate; M10 KeyerIdentity::session. J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude
 //               Code.
+//   2026-09-26: Transmit group fix wave 2, Important 2: a refused TUNE or
+//               two-tone takes nothing (admitKey asks TX inhibit, the PA
+//               trip, receive only and the interlock before the gate; a
+//               take whose key never starts is released). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -422,6 +428,27 @@ bool MoxController::admitKey(const KeyerIdentity& keyer)
     if (m_mox && m_currentKeyer.deviceId == keyer.deviceId) {
         return true;   // the keyer's own key is on: nothing to ask
     }
+    // Fix wave 2, Important 2: a start TX inhibit, the PA trip, receive
+    // only or the interlock refuses never reaches the gate, so it takes
+    // nothing.
+    if (transmitBlocked()) {
+        const TxRefusal blocked = transmitBlockRefusal();
+        reportRefusal(blocked.text, blocked, /*quiet=*/false);
+        return false;
+    }
+    if (const TxRefusal interlocked = interlockRefusal(); !interlocked.isEmpty()) {
+        // Asked again aloud, as setMox asks it, so the denied toast and the
+        // fault log hear this refusal too.
+        QString deniedReason;
+        const QMetaObject::Connection capture =
+            connect(m_interlockPolicy, &TxInterlockPolicy::denied, this,
+                    [&deniedReason](const QString& reason) { deniedReason = reason; });
+        m_interlockPolicy->evaluateTxRequest(m_ampPresent, m_ampInOperate, m_lastSwr);
+        disconnect(capture);
+        reportRefusal(QStringLiteral("TX interlock blocked: %1").arg(deniedReason), interlocked,
+                      /*quiet=*/false);
+        return false;
+    }
     const KeyingAnswer answer = m_keyingGate(keyer.source, keyer);
     if (m_mox || answer.verdict != KeyingVerdict::Admit) {
         // Another device's key is on, or the gate refused or took.
@@ -464,6 +491,11 @@ TxRefusal MoxController::refusalBeforeTheGate() const
             return refusalForCheck(result);
         }
     }
+    return interlockRefusal();
+}
+
+TxRefusal MoxController::interlockRefusal() const
+{
     if (m_interlockPolicy) {
         bool allowed = false;
         {

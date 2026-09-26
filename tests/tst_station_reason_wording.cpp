@@ -962,7 +962,9 @@ const QList<ReasonSource>& reasonSources()
         // the reason setRxOnly was given.
         {"src/core/MoxController.cpp",
          {QStringLiteral("defaultRxOnlyReason"), QStringLiteral("transmitBlockReason"),
-          QStringLiteral("transmitBlockRefusal")}, {}, 3, {},
+          QStringLiteral("transmitBlockRefusal"),
+          // Fix wave 2: the interlock's refusal, TxRefusal.cpp's words.
+          QStringLiteral("interlockRefusal")}, {}, 3, {},
          // The reason setRxOnly was given (RadioModel::rxOnlyReason, scanned),
          // and TxRefusal.cpp's refusals (scanned there).
          {QStringLiteral("m_rxOnlyReason"), QStringLiteral("TxRefusals::stationReceiveOnly()")}},

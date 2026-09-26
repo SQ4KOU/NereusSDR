@@ -452,6 +452,12 @@
 //               every path (XIT, pan moves, a stored change at proceed); a
 //               hosting desktop's key named after it. J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave 2, Important 2: a refused TUNE or
+//               two-tone takes nothing (admitKey asks TX inhibit, the PA
+//               trip, receive only and the interlock before the gate; a
+//               take whose key never starts is released). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1330,7 +1336,15 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
             request.source = keyer.isStation() && source == PttMode::Mic
                                  ? TransmitHolder::Source::RadioPtt
                                  : TransmitHolder::Source::Device;
-            return m_transmitHolder->askKey(request);
+            const quint64 epochBefore = m_transmitHolder->epoch();
+            const KeyingAnswer answer = m_transmitHolder->askKey(request);
+            // Fix wave 2, Important 2: a take whose key never starts (a
+            // TUNE or two-tone refused after the gate) is released.
+            if (answer.verdict == KeyingVerdict::Admit && m_transmitHolder->isTakeUnstarted()
+                && m_transmitHolder->epoch() != epochBefore) {
+                watchUnstartedTake(m_transmitHolder->epoch());
+            }
+            return answer;
         });
         // Whether the holder is on the air, and MOX as the transfer reads it.
         connect(mox, &MoxController::stateChanged, this, [this, mox](MoxState state) {
@@ -5436,6 +5450,30 @@ void StationServer::onTransmitHolderChanged()
     // display budget is split around the holder, so a change of holder, or
     // of its away state, splits it again.
     publishDisplayBudgetCapabilities();
+}
+
+void StationServer::watchUnstartedTake(quint64 epoch)
+{
+    // After the call that took returns: its key has started (the holder is
+    // keyed), is still on its way (MOX rising, or a two-tone start walking
+    // its settle waits), or never will.
+    QTimer::singleShot(0, this, [this, epoch]() {
+        if (!m_transmitHolder || m_transmitHolder->epoch() != epoch
+            || !m_transmitHolder->isTakeUnstarted()) {
+            return;
+        }
+        const MoxController* mox = m_radioModel ? m_radioModel->moxController() : nullptr;
+        const bool moxOn = mox != nullptr && (mox->isMox() || mox->state() != MoxState::Rx);
+        const TwoToneController* twoTone =
+            m_radioModel ? m_radioModel->twoToneController() : nullptr;
+        const bool starting = twoTone != nullptr && twoTone->isActivationInFlight();
+        if (moxOn || starting) {
+            QTimer::singleShot(kUnstartedTakeRecheckMs, this,
+                               [this, epoch]() { watchUnstartedTake(epoch); });
+            return;
+        }
+        m_transmitHolder->releaseUnstartedTake();
+    });
 }
 
 void StationServer::releaseTransmitFor(const QByteArray& deviceId, const QString& reason)

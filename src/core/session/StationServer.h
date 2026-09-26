@@ -364,6 +364,12 @@
 //               every path (XIT, pan moves, a stored change at proceed); a
 //               hosting desktop's key named after it. J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave 2, Important 2: a refused TUNE or
+//               two-tone takes nothing (admitKey asks TX inhibit, the PA
+//               trip, receive only and the interlock before the gate; a
+//               take whose key never starts is released). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QHash>
@@ -1289,6 +1295,10 @@ private:
     /// The holder changed (who, keyed, away, a transfer): every session's
     /// txPermitted, connectedDevices, and the model's transmit holder.
     void onTransmitHolderChanged();
+    /// Fix wave 2, Important 2: releases the take of epoch `epoch` once it
+    /// is clear its key never started (TransmitHolder::releaseUnstartedTake).
+    void watchUnstartedTake(quint64 epoch);
+    static constexpr int kUnstartedTakeRecheckMs = 50;
     // Task 37: the watchdog follows who is keyed (RadioModel::keyedBy).
     void followKeyedForWatchdog();
     // Task 37: turns VOX off when `deviceId` armed it (its session ended,

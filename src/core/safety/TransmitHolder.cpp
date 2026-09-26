@@ -24,6 +24,12 @@
 //               every path (XIT, pan moves, a stored change at proceed); a
 //               hosting desktop's key named after it. J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave 2, Important 2: a refused TUNE or
+//               two-tone takes nothing (admitKey asks TX inhibit, the PA
+//               trip, receive only and the interlock before the gate; a
+//               take whose key never starts is released). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/safety/TransmitHolder.h"
@@ -153,6 +159,8 @@ KeyingAnswer TransmitHolder::askKey(const KeyRequest& request)
     next.sinceMs = now();
     m_holder = next;
     m_state = State::Held;
+    // Fix wave 2: until its key starts, the take can be released.
+    m_takeUnstarted = true;
     // Ruling 8.4: VOX is disarmed at every change of holder. The station
     // device's own VOX key is the one exception: disarming VOX would end
     // the very key being admitted. (Refusing to arm VOX without holding
@@ -226,6 +234,7 @@ void TransmitHolder::assign(quint64 generation)
         return;
     }
     m_waitingMoxOff = false;
+    m_takeUnstarted = false;
     // Fix wave I3: a transfer supersedes a dropped holder's fence (its
     // callbacks see the old generation); with MOX read off and the holder
     // changed, the fence has nothing left to guard.
@@ -272,6 +281,7 @@ void TransmitHolder::failTransfer(quint64 generation)
     m_waitingMoxOff = false;
     m_fenced = false;
     m_fenceWaitingMoxOff = false;
+    m_takeUnstarted = false;
     const bool hadHolder = m_holder.has_value();
     m_holder.reset();
     m_next.reset();
@@ -312,8 +322,24 @@ void TransmitHolder::releaseStationTake()
     }
     m_holder.reset();
     m_state = State::Unheld;
+    m_takeUnstarted = false;
     ++m_epoch;
     qCInfo(lcDsp) << "Transmit released by the station when its key ended";
+    emit changed();
+}
+
+void TransmitHolder::releaseUnstartedTake()
+{
+    if (!m_takeUnstarted || m_state != State::Held || !m_holder.has_value() || m_holder->keyed
+        || m_holder->away || m_fenced || m_stopUnconfirmed || moxOn()) {
+        return;
+    }
+    const QByteArray who = m_holder->deviceId;
+    m_holder.reset();
+    m_state = State::Unheld;
+    m_takeUnstarted = false;
+    ++m_epoch;
+    qCInfo(lcDsp) << "Transmit released: the key that took it by" << who << "never started";
     emit changed();
 }
 
@@ -324,6 +350,7 @@ void TransmitHolder::holderDropped(const QByteArray& deviceId, const QString& re
     }
     // Ruling 8.15: held for it, away, VOX disarmed; not a change of holder.
     m_holder->away = true;
+    m_takeUnstarted = false;
     disarmVox();
     if (m_holder->keyed || moxOn()) {
         startFence(reason);
@@ -394,6 +421,9 @@ void TransmitHolder::setKeyed(bool keyed)
     }
     m_holder->keyed = keyed;
     m_holder->keyedSinceMs = keyed ? now() : 0;
+    if (keyed) {
+        m_takeUnstarted = false;
+    }
     emit changed();
 }
 

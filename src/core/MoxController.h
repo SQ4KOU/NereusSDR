@@ -204,6 +204,12 @@
 //               gate; M10 KeyerIdentity::session. J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude
 //               Code.
+//   2026-09-26: Transmit group fix wave 2, Important 2: a refused TUNE or
+//               two-tone takes nothing (admitKey asks TX inhibit, the PA
+//               trip, receive only and the interlock before the gate; a
+//               take whose key never starts is released). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -1313,6 +1319,12 @@ private:
     // (TX inhibit, the PA trip, receive only, the band plan, the
     // interlock), asked without reporting anything. Empty when none would.
     TxRefusal refusalBeforeTheGate() const;
+    // Fix wave 2, Important 2: the interlock's refusal, asked quietly.
+    // admitKey asks TX inhibit, the PA trip, receive only and this before
+    // the gate, whatever the key sets up first; the band plan and the
+    // microphone are judged after TUNE's mode swap, in setMox, and a take
+    // whose key then never starts is released by its holder.
+    TxRefusal interlockRefusal() const;
     // isVoiceMode: true for the 8 voice-family DSP modes.
     //
     // Voice family (per Thetis CMSetTXAVoxRun, cmaster.cs:1043-1050

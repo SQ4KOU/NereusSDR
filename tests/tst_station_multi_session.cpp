@@ -116,6 +116,12 @@
 //               the radio's key ends; the station's own VOX stays armed.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave 2, Important 2: a refused TUNE or
+//               two-tone takes nothing (admitKey asks TX inhibit, the PA
+//               trip, receive only and the interlock before the gate; a
+//               take whose key never starts is released). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -129,6 +135,8 @@
 #include "core/session/media/DisplayLoadGovernor.h"
 #include "core/session/media/IMediaTransport.h"
 #include "core/session/media/SpectrumEndpoint.h"
+#include "core/TwoToneController.h"
+#include "core/TxInterlockPolicy.h"
 #include "models/Band.h"
 
 namespace {
@@ -1316,6 +1324,110 @@ private slots:
         QVERIFY2(keyB.value(QStringLiteral("accepted")).toBool(),
                  qPrintable(keyB.value(QStringLiteral("reason")).toString()));
         QVERIFY(holder->isHeldBy(b.key.fingerprint()));
+        mox->setMox(false, keyerFor(b));
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+    }
+
+    // Fix wave 2, Important 2: a TUNE or two-tone the interlock refuses
+    // (Block mode, the amplifier in standby) takes nothing: a device's
+    // tx.tune and tx.twoTone, the station's TUNE (the desktop's button, and
+    // the end of a Tuner Genius hardware TUNE, RadioModel::setTune from
+    // continueTgxlAutotuneAfterStandby), and its two-tone. Nobody holds
+    // afterwards, and the next remote key is not refused "Radio has the
+    // transmitter."
+    void aRefusedTuneOrTwoToneTakesNothing()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        Device b{QStringLiteral("iPad"), QStringLiteral("tablet")};
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        LoopbackTransport* appB = core.signIn(b, kTransmitter);
+        QVERIFY(admitted(appA) && admitted(appB));
+        MoxController* mox = core.model->moxController();
+        TransmitHolder* holder = core.server->transmitHolder();
+        TxInterlockPolicy policy;
+        policy.setMode(TxInterlockPolicy::Block);
+        mox->setInterlockPolicy(&policy);
+        const auto noPolicy = qScopeGuard([mox]() { mox->setInterlockPolicy(nullptr); });
+        mox->onAmpStateChanged(/*hasAmp=*/true, /*inOperate=*/false);
+        const QString standby = TxRefusals::ampStandby().text;
+        const auto nobodyHolds = [&]() {
+            QTest::qWait(20);
+            return holder->state() == TransmitHolder::State::Unheld && !holder->holder().has_value();
+        };
+
+        const QJsonObject tune = core.invoke(appA, "tx.tune",
+            {MirrorUpdate{0, "on", MirrorWireKind::Bool, QVariant(true)}});
+        QVERIFY(!tune.value(QStringLiteral("accepted")).toBool(true));
+        QCOMPARE(tune.value(QStringLiteral("reason")).toString(), standby);
+        QVERIFY(!core.model->isTune());
+        QVERIFY(nobodyHolds());
+
+        const QJsonObject twoTone = core.invoke(appA, "tx.twoTone",
+            {MirrorUpdate{0, "on", MirrorWireKind::Bool, QVariant(true)}});
+        QVERIFY(!twoTone.value(QStringLiteral("accepted")).toBool(true));
+        QVERIFY(nobodyHolds());
+
+        QSignalSpy tuneRefused(core.model.get(), &RadioModel::tuneRefused);
+        core.model->setTune(true);
+        QCOMPARE(tuneRefused.count(), 1);
+        QCOMPARE(tuneRefused.first().first().toString(), standby);
+        QVERIFY(!core.model->isTune());
+        QVERIFY(nobodyHolds());
+
+        core.model->twoToneController()->setActive(true);
+        QVERIFY(!mox->isMox());
+        QVERIFY(nobodyHolds());
+
+        // The amplifier back in operate: B's key goes, as transmit was never
+        // taken.
+        mox->onAmpStateChanged(/*hasAmp=*/true, /*inOperate=*/true);
+        const QJsonObject keyB =
+            core.invoke(appB, "tx.key", {utf8("trigger", QStringLiteral("screen"))});
+        QVERIFY2(keyB.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(keyB.value(QStringLiteral("reason")).toString()));
+        QVERIFY(holder->isHeldBy(b.key.fingerprint()));
+        mox->setMox(false, keyerFor(b));
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+    }
+
+    // Fix wave 2, Important 2: a TUNE the band plan refuses after the gate
+    // (TUNE judges the band plan in the mode it transmits in) never keys,
+    // and its take is released, for a device and for the station.
+    void aTuneTheBandPlanRefusesReleasesItsTake()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        Device b{QStringLiteral("iPad"), QStringLiteral("tablet")};
+        core.pair(a);
+        core.pair(b);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        LoopbackTransport* appB = core.signIn(b, kTransmitter);
+        QVERIFY(admitted(appA) && admitted(appB));
+        TransmitHolder* holder = core.server->transmitHolder();
+        MoxController* mox = core.model->moxController();
+        SliceModel* txSlice = core.model->txBoundSlice();
+        QVERIFY(txSlice != nullptr);
+        txSlice->setFrequency(2000.0);   // outside every band
+
+        const QJsonObject tune = core.invoke(appA, "tx.tune",
+            {MirrorUpdate{0, "on", MirrorWireKind::Bool, QVariant(true)}});
+        QVERIFY(!mox->isMox());
+        QTRY_COMPARE(holder->state(), TransmitHolder::State::Unheld);
+        Q_UNUSED(tune);
+        core.model->setTune(true);
+        QVERIFY(!mox->isMox());
+        QTRY_COMPARE(holder->state(), TransmitHolder::State::Unheld);
+
+        txSlice->setFrequency(14200000.0);
+        const QJsonObject keyB =
+            core.invoke(appB, "tx.key", {utf8("trigger", QStringLiteral("screen"))});
+        QVERIFY2(keyB.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(keyB.value(QStringLiteral("reason")).toString()));
         mox->setMox(false, keyerFor(b));
         QTRY_COMPARE(mox->state(), MoxState::Rx);
     }

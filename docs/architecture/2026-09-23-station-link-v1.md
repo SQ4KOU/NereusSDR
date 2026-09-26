@@ -4627,7 +4627,13 @@ Every key passes the Core's gates in the order of section 18.1, then TX
 inhibit, the PA trip, receive only, the band plan and the interlock, and
 only then the holder's rule (section 18.2), as every key at the Core does;
 a refused one is refused with its code (section 18.3), and a key refused
-before the holder's rule takes nothing.
+before the holder's rule takes nothing. TUNE and two-tone meet TX inhibit,
+the PA trip, receive only and the interlock before the holder's rule, and
+the band plan in the mode they transmit in (TUNE swaps CW for sideband
+first); a TUNE or two-tone refused after the holder's rule never keys, and
+the take it made is released, so a refused TUNE or two-tone, a device's or
+the station's (its TUNE button, a Tuner Genius hardware TUNE), takes
+nothing either.
 
 **Who may key.** A person's key (`tx.key` with any trigger but `"tci"`,
 and `tx.tune` and `tx.twoTone` on) while transmit is unheld makes that

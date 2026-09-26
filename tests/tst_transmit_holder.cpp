@@ -17,6 +17,12 @@
 //   2026-09-26: Transmit group fix wave I3: a transfer during a dropped
 //               holder's fence leaves no fence. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave 2, Important 2: a refused TUNE or
+//               two-tone takes nothing (admitKey asks TX inhibit, the PA
+//               trip, receive only and the interlock before the gate; a
+//               take whose key never starts is released). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -530,6 +536,36 @@ private slots:
         rig.mox = false;
         rig.holder.onMoxReading(false);
         QCOMPARE(rig.key("pad").verdict, KeyingVerdict::Admit);
+    }
+
+    // Fix wave 2, Important 2: a take whose key never started is released
+    // (nothing to unkey, VOX left as it was); a key that started, or MOX
+    // still reading on, keeps it.
+    void aTakeWhoseKeyNeverStartedIsReleased()
+    {
+        Rig rig;
+        QCOMPARE(rig.key("phone").verdict, KeyingVerdict::Admit);
+        QVERIFY(rig.holder.isTakeUnstarted());
+        const quint64 epoch = rig.holder.epoch();
+        const int disarmed = rig.voxDisarmed;
+        rig.mox = true;
+        rig.holder.releaseUnstartedTake();
+        QVERIFY(rig.holder.isHeldBy("phone"));
+        rig.mox = false;
+        rig.holder.releaseUnstartedTake();
+        QCOMPARE(rig.holder.state(), State::Unheld);
+        QVERIFY(!rig.holder.holder().has_value());
+        QVERIFY(rig.holder.epoch() > epoch);
+        QCOMPARE(rig.voxDisarmed, disarmed);
+        QVERIFY(rig.unkeys.isEmpty());
+
+        // A key that started keeps its take, keyed or after it ends.
+        rig.holdAndKey("pad");
+        QVERIFY(!rig.holder.isTakeUnstarted());
+        rig.mox = false;
+        rig.holder.onMoxReading(false);
+        rig.holder.releaseUnstartedTake();
+        QVERIFY(rig.holder.isHeldBy("pad"));
     }
 };
 
