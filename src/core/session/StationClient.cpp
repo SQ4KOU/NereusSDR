@@ -162,6 +162,10 @@
 //                and relays from radioHardwareVersion 6
 //                (remoteTransmitAntennasAvailable). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 / R-R3-46 (parity mini-round): one band's TX
+//                antenna at a time (setAlexTxAntenna) from
+//                radioHardwareVersion 6. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -1839,6 +1843,24 @@ void StationClient::handleCapabilities(const SessionMessage& message)
         } else {
             alex->setBandEditSender({});
         }
+        // Parity mini-round (radioHardwareVersion 6): one band's TX antenna
+        // at a time too (setAlexTxAntenna), so the grid cannot put back a
+        // TX antenna the Core changed on another band.
+        if (m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+            && m_capabilities.radioHardwareVersion >= 6) {
+            alex->setTxBandEditSender([self](Band band, int antenna, QString* reason) {
+                if (!self) {
+                    return false;
+                }
+                const CommandOutcome outcome = self->requestAlexTxAntenna(band, antenna);
+                if (!outcome.sent && reason) {
+                    *reason = outcome.reason;
+                }
+                return outcome.sent;
+            });
+        } else {
+            alex->setTxBandEditSender({});
+        }
     }
 
     // R-R3-46 fix wave (radioHardwareVersion 3): the Core's HL2 I/O board,
@@ -3085,6 +3107,17 @@ StationClient::CommandOutcome StationClient::requestAlexRxAntenna(Band band, int
                        QStringLiteral("the antenna change"));
 }
 
+StationClient::CommandOutcome StationClient::requestAlexTxAntenna(Band band, int antenna)
+{
+    if (!remoteTransmitAntennasAvailable()) {
+        return {false, transmitAntennasUnavailableReason()};
+    }
+    return sendCommand("setAlexTxAntenna", -1,
+                       { intArgument("band", static_cast<int>(band)),
+                         intArgument("antenna", antenna) },
+                       QStringLiteral("the antenna change"));
+}
+
 bool StationClient::filterPolicyEditAvailable() const
 {
     return remoteHardwareConfigAvailable() && m_capabilities.radioHardwareVersion >= 4;
@@ -3655,7 +3688,7 @@ void StationClient::handleCommandResult(const SessionMessage& message)
         }
         // R-R3-46 fix wave: a refused band antenna leaves the window's
         // values as the Core's; the Setup tab that showed the click re-reads.
-        if (pending.verb == "setAlexRxAntenna") {
+        if (pending.verb == "setAlexRxAntenna" || pending.verb == "setAlexTxAntenna") {
             if (AlexAntennaFacade* alex = m_radioModel->alexAntennaFacade()) {
                 alex->reportBandEditRefused();
             }

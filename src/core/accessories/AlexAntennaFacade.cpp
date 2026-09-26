@@ -25,6 +25,10 @@
 //                                    the window's transmit edit
 //                                    availability. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 / R-R3-46 parity mini-round:
+//                                    setTxAntForBand and the TX band edit
+//                                    sender. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include "core/accessories/AlexAntennaFacade.h"
@@ -516,6 +520,28 @@ QString AlexAntennaFacade::setRxOnlyAntForBand(Band band, int antenna)
         ? QString() : QStringLiteral("The Core kept this band's receive-only input.");
 }
 
+QString AlexAntennaFacade::setTxAntForBand(Band band, int antenna)
+{
+    AlexController* c = m_controller.data();
+    const int b = static_cast<int>(band);
+    if (!c) {
+        return QStringLiteral("The Core has no antenna settings ready.");
+    }
+    if (b < 0 || b >= kBandCount) {
+        return malformedListReason();
+    }
+    if (antenna < kAntFirst || antenna > kAntLast) {
+        return antennaRangeReason();
+    }
+    // The local grid's call: the controller keeps a band on its antenna
+    // when the one asked for is blocked for transmit.
+    if (c->txAnt(band) != antenna) {
+        c->setTxAnt(band, antenna);
+    }
+    refresh();
+    return c->txAnt(band) == antenna ? QString() : txBlockedReason();
+}
+
 QString AlexAntennaFacade::setBpfModeForChain(int chain, int mode)
 {
     AlexController* c = m_controller.data();
@@ -561,6 +587,26 @@ bool AlexAntennaFacade::sendBandEdit(const char* property, Band band, int ant, b
     return true;
 }
 
+bool AlexAntennaFacade::sendTxBandEdit(Band band, int ant)
+{
+    if (isBound() || !m_txBandEditSender) {
+        return false;
+    }
+    if (!beginEdit("txAntennas")) {
+        emit bandEditRefused();
+        return true;
+    }
+    QString reason;
+    if (!m_txBandEditSender(band, ant, &reason)) {
+        if (reason.isEmpty()) {
+            reason = QStringLiteral("The antennas cannot be changed from here right now.");
+        }
+        emit editRejected(reason);
+        emit bandEditRefused();
+    }
+    return true;
+}
+
 void AlexAntennaFacade::setRxAnt(Band band, int ant)
 {
     const int b = static_cast<int>(band);
@@ -593,6 +639,11 @@ void AlexAntennaFacade::setTxAnt(Band band, int ant)
 {
     const int b = static_cast<int>(band);
     if (b < 0 || b >= kBandCount) {
+        return;
+    }
+    // Parity mini-round: the band alone when the Core takes it
+    // (setAlexTxAntenna); otherwise the whole list, as before.
+    if (sendTxBandEdit(band, ant)) {
         return;
     }
     BandList list = m_values.txAnt;

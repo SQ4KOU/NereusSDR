@@ -129,6 +129,11 @@
 //                                    setRfKitTciMode and setRfKitAddress
 //                                    (remoteRfKitControlVersion 4).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 / R-R3-46 parity mini-round
+//                                    (radioHardwareVersion 6):
+//                                    setAlexTxAntenna, one band's TX
+//                                    antenna. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -327,6 +332,7 @@ QString notRepresentableReason()
 //                          accessoryDataAvailable() (version 1)
 //   requestIoBoardProbe    remoteHardwareConfigAvailable() (version 2)
 //   setAlexRxAntenna       radioHardwareVersion 3 (requestAlexRxAntenna)
+//   setAlexTxAntenna       radioHardwareVersion 6 (requestAlexTxAntenna)
 //   nnr.*                  nnrControlAvailable(); nnr.tryAgain adds
 //                          kNnrLimitSessionProtocolMinor
 //   nnr.applyModelSelection dspAssetVersion 1 (requestApplyNnrModels)
@@ -474,6 +480,8 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
          "radioHardwareVersion", 3, kRadioIdentitySessionProtocolMinor},
         {"setAlexBpfMode", {arg("chain", kInt), arg("mode", kInt)}, "radioHardwareVersion", 4,
          kRadioIdentitySessionProtocolMinor},
+        {"setAlexTxAntenna", {arg("band", kInt), arg("antenna", kInt)},
+         "radioHardwareVersion", 6, kRadioIdentitySessionProtocolMinor},
         // Neural noise reduction.
         {"nnr.setDiagnostics",
          {arg("sliceId", kInt), arg("testMode", kInt), arg("outputMode", kInt)},
@@ -719,6 +727,8 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleSetAlexRxAntenna(invoke);
     } else if (invoke.commandVerb == "setAlexBpfMode") {
         handleSetAlexBpfMode(invoke);
+    } else if (invoke.commandVerb == "setAlexTxAntenna") {
+        handleSetAlexTxAntenna(invoke);
     } else if (invoke.commandVerb == "nnr.setDiagnostics" || invoke.commandVerb == "nnr.resetTuning"
                || invoke.commandVerb == "nnr.tryAgain") {
         handleNnrAction(invoke);
@@ -2145,6 +2155,42 @@ void SessionCommandDispatcher::handleSetAlexRxAntenna(const SessionMessage& invo
     const bool receiveOnly = rxOnly.toBool();
     const QString reason = receiveOnly ? alex->setRxOnlyAntForBand(Band(band), antenna)
                                        : alex->setRxAntForBand(Band(band), antenna);
+    emitResult(invoke.commandVerb, invoke.commandId, reason.isEmpty(), reason, {});
+}
+
+// Parity mini-round (radioHardwareVersion 6): one band's TX antenna from a
+// remote window's Antenna Control grid. Parity Task 12 sent the whole
+// 14-band txAntennas list, so a list built before a change the Core made to
+// another band put that band back; the Core now changes only the band
+// named, through its own AlexAntennaFacade and AlexController (the local
+// grid's setTxAnt), and every window follows the `alexAntennas` delta. A
+// port blocked for transmit is kept off the band, with its reason. Like the
+// whole list, it keys nothing and is taken on the air and on a receive-only
+// Core, as Thetis's own TX antenna grid is (parity Task 12's reading of
+// setup.cs ProcessAlexAntRadioButton).
+void SessionCommandDispatcher::handleSetAlexTxAntenna(const SessionMessage& invoke)
+{
+    int band = 0;
+    int antenna = 0;
+    if (!hasExactlyArguments(invoke.arguments, { "band", "antenna" })
+        || findIntArgument(invoke.arguments, "band", &band) != ArgumentStatus::Ok
+        || findIntArgument(invoke.arguments, "antenna", &antenna) != ArgumentStatus::Ok) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core could not read this request."), {});
+        return;
+    }
+    AlexAntennaFacade* const alex = m_radioModel->alexAntennaFacade();
+    if (alex == nullptr || !alex->isBound()) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core has no antenna settings ready."), {});
+        return;
+    }
+    if (band < 0 || band >= AlexAntennaFacade::kBandCount) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core keeps antennas for 14 bands."), {});
+        return;
+    }
+    const QString reason = alex->setTxAntForBand(Band(band), antenna);
     emitResult(invoke.commandVerb, invoke.commandId, reason.isEmpty(), reason, {});
 }
 

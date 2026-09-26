@@ -134,7 +134,8 @@ struct StationCapabilities {
     /// R-R3-46 / R-R3-21); 5 `rxOutOnTx` two-way (group B fix wave); 6 the
     /// rest of the transmit antennas and relays two-way (`txAntennas`,
     /// `blockTxAnt2`, `blockTxAnt3`, `ext1OutOnTx`, `ext2OutOnTx`,
-    /// `rxOutOverride`; parity Task 12). Sent last in the same block as the three above,
+    /// `rxOutOverride`; parity Task 12) and the setAlexTxAntenna command
+    /// (one band's TX antenna; parity mini-round). Sent last in the same block as the three above,
     /// so only at minor 11. 0: a window keeps today's behaviour and does
     /// not write `stepAtt`.
     int radioHardwareVersion = 0;

@@ -984,6 +984,24 @@
             "arguments": [
                 {
                     "kind": "i64",
+                    "name": "band",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "antenna",
+                    "optional": false
+                }
+            ],
+            "capability": "radioHardwareVersion",
+            "capabilityVersion": 6,
+            "minMinor": 11,
+            "verb": "setAlexTxAntenna"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
                     "name": "sliceId",
                     "optional": false
                 },

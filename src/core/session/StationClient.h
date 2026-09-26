@@ -744,6 +744,9 @@ public:
     /// one band's RX antenna (rxOnly false, 1..3) or RX-only antenna
     /// (rxOnly true, 0..3) on the Core.
     CommandOutcome requestAlexRxAntenna(Band band, int antenna, bool rxOnly);
+    /// Parity mini-round (radioHardwareVersion 6). Verb "setAlexTxAntenna":
+    /// one band's TX antenna (1..3) on the Core.
+    CommandOutcome requestAlexTxAntenna(Band band, int antenna);
     /// R-R3-46 / R-R3-21 (radioHardwareVersion 4). Verb "setAlexBpfMode":
     /// one receive filter chain's filter policy on the Core.
     bool filterPolicyEditAvailable() const override;

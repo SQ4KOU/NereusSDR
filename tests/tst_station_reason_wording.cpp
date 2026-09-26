@@ -671,6 +671,9 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("notRepresentableReason()"),
           // AlexAntennaFacade's filter policy refusal, scanned below.
           QStringLiteral("alex->setBpfModeForChain(chain, mode)"),
+          // Parity mini-round: its TX antenna refusal (setAlexTxAntenna),
+          // scanned below.
+          QStringLiteral("alex->setTxAntForBand(Band(band), antenna)"),
           // R-R3-49 (parity Task 7): RadioModel::stationOnAirRefusal's
           // reason for a PureSignal arming verb (RadioModel::onAirReason,
           // scanned with StationServer).

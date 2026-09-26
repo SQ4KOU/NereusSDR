@@ -2735,7 +2735,8 @@ int StationServer::radioHardwareVersion() const
     // `alexAntennas` facade. 5: `rxOutOnTx` (RX bypass on TX) two-way,
     // group B fix wave. 6: the rest of the transmit half two-way (the TX
     // antenna for each band, Block TX on Ant 2 and 3, Ext 1 and Ext 2 on TX
-    // and the RX bypass relay override), parity Task 12.
+    // and the RX bypass relay override), parity Task 12, and the per-band
+    // TX antenna verb (setAlexTxAntenna), parity mini-round.
     //
     // None of them waits for the radio to leave the air, on this Core or in
     // a local window, because Thetis has no such rule: each Setup handler

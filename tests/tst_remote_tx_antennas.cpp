@@ -221,7 +221,20 @@ private slots:
         // TX antenna grid.
         tab->txButtonForTest(Band::Band20m, 3)->click();
         QTRY_COMPARE(core.txAnt(Band::Band20m), 3);
-        QVERIFY(tab->txButtonForTest(Band::Band20m, 3)->isChecked());
+        // The window shows the Core's value once its delta arrives.
+        QTRY_VERIFY(tab->txButtonForTest(Band::Band20m, 3)->isChecked());
+        // Parity mini-round: the grid sends only the band clicked
+        // (setAlexTxAntenna), so a TX antenna the Core changed on another
+        // band just before the click stays.
+        core.setTxAnt(Band::Band40m, 2);
+        tab->txButtonForTest(Band::Band80m, 3)->click();
+        QTRY_COMPARE(core.txAnt(Band::Band80m), 3);
+        QTest::qWait(100);
+        QCOMPARE(core.txAnt(Band::Band40m), 2);
+        QTRY_VERIFY(tab->txButtonForTest(Band::Band40m, 2)->isChecked());
+        core.setTxAnt(Band::Band40m, 1);
+        core.setTxAnt(Band::Band80m, 1);
+        QTRY_VERIFY(tab->txButtonForTest(Band::Band80m, 1)->isChecked());
         // Block TX on Ant 3: the Core moves 20 m back to Ant 1, and the
         // window shows it with Ant 3 greyed.
         tab->blockTxAnt3ForTest()->click();

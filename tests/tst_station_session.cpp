@@ -398,6 +398,7 @@ private slots:
     void receiveOnlyCoreRefusesTransmitHardwareKeys();
     void ioBoardProbeIsAskedOfTheCore();
     void windowBandAntennaEditKeepsTheCoresNewerBands();
+    void windowTxBandAntennaEditKeepsTheCoresNewerBands();
     void windowShowsTheCoresIoBoard();
     void windowForgetsTheIoBoardOfACoreThatDoesNotOfferIt();
     void windowOcMatrixFollowsTheCore();
@@ -5891,6 +5892,9 @@ void TstStationSession::windowAntennaEditsWaitForACoreThatOffersThem()
         QCOMPARE(client.rxBypassOnTxUnavailableReason().isEmpty(), version >= 5);
         // Parity Task 12: the rest of the transmit antennas and relays from 6.
         QCOMPARE(client.remoteTransmitAntennasAvailable(), version >= 6);
+        // Parity mini-round: and one band's TX antenna at a time
+        // (setAlexTxAntenna) from 6.
+        QCOMPARE(remote.alexAntennaFacade()->hasTxBandEditSender(), version >= 6);
         const QString txAntennasReason = client.transmitAntennasUnavailableReason();
         QCOMPARE(txAntennasReason.isEmpty(), version >= 6);
         if (version >= 2 && version < 6) {
@@ -6281,6 +6285,61 @@ void TstStationSession::windowBandAntennaEditKeepsTheCoresNewerBands()
     QVERIFY(OperatorWording::isPlain(toast.last().at(0).toString()));
     QCOMPARE(s.core->alexController().rxAnt(Band::Band17m), 1);
     QCOMPARE(window->rxAnt(Band::Band17m), 1);
+}
+
+void TstStationSession::windowTxBandAntennaEditKeepsTheCoresNewerBands()
+{
+    // Parity mini-round (radioHardwareVersion 6, setAlexTxAntenna). Task 12
+    // sent a window's TX antenna click as all 14 bands as the window last
+    // saw them, so a TX antenna the Core changed on another band in between
+    // (another window, the Core's own Setup) was put back. The window now
+    // sends only the band clicked, as setAlexRxAntenna does for receive.
+    AppSettings& coreStore = AppSettings::instance();
+    coreStore.clearHardwareValues(kHardwareMac);
+    const auto cleanStore = qScopeGuard([&coreStore] { coreStore.clearHardwareValues(kHardwareMac); });
+    HardwareSession s;
+    joinHardwareWindow(s, coreStore, this, m_securityDir.path());
+    const auto cleanup = qScopeGuard([&s] { leaveHardwareSession(s); });
+    if (QTest::currentTestFailed()) { return; }
+    QCOMPARE(s.client->capabilities().radioHardwareVersion, 6);
+    QVERIFY(s.client->remoteTransmitAntennasAvailable());
+    s.core->alexControllerMutable().setMacAddress(kHardwareMac);
+    AlexAntennaFacade* window = s.window->alexAntennaFacade();
+    QCOMPARE(window->txAnt(Band::Band20m), 1);
+
+    // The Core moves 20 m's TX antenna to Ant 3; before that reaches the
+    // window, the window's operator picks Ant 2 for 40 m.
+    QVERIFY(window->hasTxBandEditSender());
+    s.core->alexControllerMutable().setTxAnt(Band::Band20m, 3);
+    QCOMPARE(window->txAnt(Band::Band20m), 1);
+    window->setTxAnt(Band::Band40m, 2);
+    QTRY_COMPARE(s.core->alexController().txAnt(Band::Band40m), 2);
+    QTest::qWait(150);
+    QCOMPARE(s.core->alexController().txAnt(Band::Band20m), 3);
+    QTRY_COMPARE(window->txAnt(Band::Band20m), 3);
+    QTRY_COMPARE(window->txAnt(Band::Band40m), 2);
+
+    // A port blocked for transmit, and a value outside 1 to 3, are refused
+    // in plain words; the window's view re-reads the Core's value.
+    // (Block TX on Ant 2 moves 40 m back to Ant 1, as the local tab does.)
+    s.core->alexControllerMutable().setBlockTxAnt2(true);
+    QTRY_VERIFY(window->blockTxAnt2());
+    QTRY_COMPARE(window->txAnt(Band::Band40m), 1);
+    QSignalSpy resync(window, &AlexAntennaFacade::bandEditRefused);
+    QSignalSpy toast(s.window.get(), &RadioModel::sliceAddRejected);
+    window->setTxAnt(Band::Band17m, 2);
+    QTRY_COMPARE(resync.count(), 1);
+    QTRY_COMPARE(toast.count(), 1);
+    QCOMPARE(toast.last().at(0).toString(),
+             QStringLiteral("An antenna blocked for transmit cannot be a band's TX antenna."));
+    QCOMPARE(s.core->alexController().txAnt(Band::Band17m), 1);
+    QCOMPARE(window->txAnt(Band::Band17m), 1);
+    window->setTxAnt(Band::Band15m, 7);
+    QTRY_COMPARE(resync.count(), 2);
+    QTRY_COMPARE(toast.count(), 2);
+    QVERIFY(OperatorWording::isPlain(toast.last().at(0).toString()));
+    QCOMPARE(s.core->alexController().txAnt(Band::Band15m), 1);
+    QCOMPARE(s.core->alexController().txAnt(Band::Band20m), 3);
 }
 
 void TstStationSession::windowFilterPolicyReachesTheCore()
