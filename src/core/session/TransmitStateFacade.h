@@ -33,6 +33,10 @@
 //                          "" (none yet), linkLost, micStarved, timeOut,
 //                          takenOver, revoked or station
 //   stopSerial             advances by one with each such stop
+//   stopEpoch              the keying epoch of the key that stop ended
+//                          (the epoch tx.key answered with), so a window
+//                          never ends a newer key of its own on an older
+//                          stop (fix wave 2, the M7 race); 0 when unknown
 //
 // Updates: while keyed the meters are read ten times a second (the
 // transmit lane's cached readings; never a WDSP call on the event loop)
@@ -59,8 +63,18 @@
 //               (holder fields, keyedForSeconds, txStateVersion 2); M3
 //               one lost-link sentence. J.J. Boyd (KG4VCF), with AI-
 //               assisted implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave 2, the re-review's minors:
+//               holderTransferring true while keys are refused for a
+//               transfer's reasons (a dropped holder's fence, a transfer
+//               ended with MOX on); stopEpoch names the key a stop ended so
+//               a newer key is never ended by it; VOX at the Core listens
+//               only to the device that armed it; the window says why MOX
+//               and TUNE wait while another device holds. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
+#include <optional>
 #include <QByteArray>
 #include <QElapsedTimer>
 #include <QObject>
@@ -112,6 +126,9 @@ class TransmitState final : public QObject {
     // Core's clock when it sends it (keyedSinceMs stays for a Core at
     // txStateVersion 1's readers).
     Q_PROPERTY(qint64 keyedForSeconds READ keyedForSeconds NOTIFY stateChanged)
+    // Fix wave 2 (the M7 race): the keying epoch of the key the last stop
+    // ended, appended so every earlier ordinal stays.
+    Q_PROPERTY(qint64 stopEpoch READ stopEpoch NOTIFY stopChanged)
 
 public:
     // The link's stopReason values.
@@ -182,6 +199,7 @@ public:
     QString stopReason() const { return m_stopReason; }
     QString stopText() const { return m_stopText; }
     quint32 stopSerial() const { return m_stopSerial; }
+    qint64 stopEpoch() const { return m_stopEpoch; }
     QString holderDeviceId() const { return m_holder.deviceId; }
     QString holderName() const { return m_holder.name; }
     QString holderShortName() const { return m_holder.shortName; }
@@ -199,7 +217,10 @@ public:
     /// own, for `reason` (one of the kStop* values), told as `text`. The
     /// first reason for a key advances stopSerial and returns true; any
     /// later one for the same key, or one before any key, returns false.
-    bool recordStop(const QByteArray& reason, const QString& text);
+    /// Fix wave 2: the stop names the key it ended by its keying epoch,
+    /// `epoch` when given, otherwise the Core's keying epoch now.
+    bool recordStop(const QByteArray& reason, const QString& text,
+                    std::optional<quint32> epoch = std::nullopt);
 
     /// The name and kind of whoever keyed the current key (or the last
     /// one), kept after the key ends so a stop can name them.
@@ -236,7 +257,7 @@ signals:
     void stateChanged();
     void timeOutChanged();
     void metersChanged();
-    /// stopReason, stopText, stopSerial.
+    /// stopReason, stopText, stopSerial, stopEpoch.
     void stopChanged();
     /// Fix wave I4: the holder* properties.
     void holderChanged();
@@ -269,6 +290,7 @@ private:
     QString m_stopReason;
     QString m_stopText;
     quint32 m_stopSerial{0};
+    qint64 m_stopEpoch{0};
     // Fix wave I4: the holder; a window's copies of the two durations.
     Holder m_holder;
     qint64 m_stationHolderForSeconds{0};

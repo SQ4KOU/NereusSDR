@@ -458,6 +458,15 @@
 //               take whose key never starts is released). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: Transmit group fix wave 2, the re-review's minors:
+//               holderTransferring true while keys are refused for a
+//               transfer's reasons (a dropped holder's fence, a transfer
+//               ended with MOX on); stopEpoch names the key a stop ended so
+//               a newer key is never ended by it; VOX at the Core listens
+//               only to the device that armed it; the window says why MOX
+//               and TUNE wait while another device holds. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -5443,7 +5452,12 @@ void StationServer::onTransmitHolderChanged()
             published.away = holder->away;
         }
         published.epoch = m_transmitHolder->epoch();
-        published.transferring = m_transmitHolder->state() == TransmitHolder::State::Transferring;
+        // Fix wave 2 (the re-review's minor): true whenever every key is
+        // refused for a transfer's reasons, so the window matches the
+        // refusals: a transfer, a dropped holder's fence, and a transfer
+        // that ended with MOX still on (no holder then).
+        published.transferring = m_transmitHolder->state() == TransmitHolder::State::Transferring
+            || m_transmitHolder->isFenced() || m_transmitHolder->isStopUnconfirmed();
         m_transmitState->setHolder(published);
     }
     // The merge of the trunk into the transmit lane (ruling 9.3): the

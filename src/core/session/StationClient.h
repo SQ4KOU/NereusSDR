@@ -286,6 +286,15 @@
 //               transmitHolderText; M6 voxArmedHere; M7 a Core stop ends
 //               this window's key. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave 2, the re-review's minors:
+//               holderTransferring true while keys are refused for a
+//               transfer's reasons (a dropped holder's fence, a transfer
+//               ended with MOX on); stopEpoch names the key a stop ended so
+//               a newer key is never ended by it; VOX at the Core listens
+//               only to the device that armed it; the window says why MOX
+//               and TUNE wait while another device holds. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -643,8 +652,10 @@ public:
     bool voxArmedHere() const { return m_voxArmedHere; }
     /// Fix wave I4: who holds transmit on the Core, in plain words for the
     /// window ("This computer holds transmit.", "Grant's iPhone holds
-    /// transmit.", "... and is away.", "Transmit is changing hands."), or
-    /// empty while nobody does or the Core does not say (txStateVersion 2).
+    /// transmit. MOX and TUNE here wait until it lets go.", "... and is
+    /// away. ...", "Transmit is changing hands.", "The radio did not
+    /// confirm it stopped transmitting."), or empty while nobody does or
+    /// the Core does not say (txStateVersion 2).
     QString transmitHolderText() const;
     int coreStationTciStored() const override;
     /// Test seam: whether the Core counts as on this computer (a session

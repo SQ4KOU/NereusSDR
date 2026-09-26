@@ -17,6 +17,15 @@
 //                Anthropic Claude Code.
 //   2026-09-25 - iPhone app plan Task 37 (R-IOS-13): the keepalive. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave 2, the re-review's minors:
+//               holderTransferring true while keys are refused for a
+//               transfer's reasons (a dropped holder's fence, a transfer
+//               ended with MOX on); stopEpoch names the key a stop ended so
+//               a newer key is never ended by it; VOX at the Core listens
+//               only to the device that armed it; the window says why MOX
+//               and TUNE wait while another device holds. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -201,6 +210,28 @@ private slots:
         QVERIFY(client.holdsTransmit());
         client.coreStopped(2, /*coreKeyed=*/true);
         QVERIFY(client.holdsTransmit());
+    }
+
+    // Fix wave 2 (the M7 race): a stop that names the key it ended by its
+    // epoch never ends a newer key of this window's, pressed after the
+    // stop and answered before the stop's update arrived, even with the
+    // Core not yet transmitting it; the stop of that key itself does.
+    void aStopForAnOlderKeyLeavesTheNewKeyOn()
+    {
+        Recorder core;
+        RemoteTransmitClient client(core.sender());
+        client.setAvailable(true);
+        client.setScreenKey(true);
+        answerCopies(client, core.sent.at(0), true, {}, epochValue(7));
+        QVERIFY(client.holdsTransmit());
+        // The Core stopped key 6 (an earlier one); key 7 is not keyed yet.
+        client.coreStopped(1, /*coreKeyed=*/false, /*stopEpoch=*/6);
+        QVERIFY(client.holdsTransmit());
+        QVERIFY(client.keepaliveRunning());
+        // Its own stop ends it.
+        client.coreStopped(2, /*coreKeyed=*/true, /*stopEpoch=*/7);
+        QVERIFY(!client.holdsTransmit());
+        QVERIFY(!client.keepaliveRunning());
     }
 
     void aProgramsReleaseUnderTheOperatorsKeySendsNothing()

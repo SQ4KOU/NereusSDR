@@ -6017,6 +6017,12 @@
                     "kind": "i64",
                     "name": "keyedForSeconds",
                     "ordinal": 27
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "stopEpoch",
+                    "ordinal": 28
                 }
             ]
         },

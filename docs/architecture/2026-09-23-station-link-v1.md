@@ -1822,7 +1822,7 @@ An enum property lists the values its domain allows.
 | 84 | `twoToneDrivePowerSource` | `enum` | bidirectional | 0, 1, 2 |
 | 85 | `voxEnabled` | `bool` | bidirectional |  |
 
-**TransmitState** (28 properties)
+**TransmitState** (29 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -1854,6 +1854,7 @@ An enum property lists the values its domain allows.
 | 25 | `holderAway` | `bool` | outbound |  |
 | 26 | `holderTransferring` | `bool` | outbound |  |
 | 27 | `keyedForSeconds` | `i64` | outbound |  |
+| 28 | `stopEpoch` | `i64` | outbound |  |
 
 **TunerModel** (21 properties)
 
@@ -4817,8 +4818,8 @@ two-tone use no microphone and are never stopped by it.
 
 iPhone app plan Task 39 (D14, R-IOS-13, R-IOS-21; spec section 5.5 items 5
 and 8). The `txState` object (`TransmitState`, `txStateVersion` 1; 2 adds
-the holder of transmit and `keyedForSeconds`, appended after `stopSerial`)
-goes to
+the holder of transmit and `keyedForSeconds`, appended after `stopSerial`,
+and `stopEpoch` after them) goes to
 a peer at minor 11 whose hello declared `remoteTx` 1, in its snapshot after
 `connectedDevices`, and as deltas. Every property is `outbound`; a write
 is refused as any outbound property's is.
@@ -4837,13 +4838,14 @@ is refused as any outbound property's is.
 | `stopReason` | Why the Core last stopped a transmission on its own: `""` (none since the Core started), `linkLost`, `micStarved`, `timeOut`, `takenOver`, `revoked` or `station` |
 | `stopText` | That stop in plain words, for an app to show as sent |
 | `stopSerial` | Advances by one with each such stop (serial-number arithmetic, as `devices`' `revision`); 0 before the first |
+| `stopEpoch` | The keying epoch (the `epoch` `tx.key`, `tx.tune` or `tx.twoTone` answered with) of the key that stop ended; 0 before the first stop. An app ends only a key of its own whose epoch is this one or older: a key it pressed after the stop, answered before the stop's update arrived, goes on |
 | `holderDeviceId` | Who holds transmit (the several-devices design, ruling 8.1; `txStateVersion` 2): the device's id as `connectedDevices` sends it, `station` for the Core's own position (the radio's PTT, the Core's own keys); `""` while unheld |
-| `holderName`, `holderShortName`, `holderKind` | The holder's name and short name as `connectedDevices` numbers them, and its kind; "Radio", "Radio", `station` for the station device; `""` while unheld |
+| `holderName`, `holderShortName`, `holderKind` | The holder's name and short name as `connectedDevices` numbers them, and its kind; for the station device, kind `station`, named after the desktop that hosts the Core for that desktop's own MOX or TUNE (ruling 8.1), and "Radio", "Radio" after the radio's own PTT took transmit or on a Core no desktop hosts; `""` while unheld |
 | `holderSource` | How it got transmit: `device`, or `radioPtt` after a take by the radio's own PTT (a mic or a footswitch); read this, never the name, to tell the radio from a device; `""` while unheld |
 | `holderForSeconds` | How long it has held transmit, in whole seconds on the Core's clock when this is sent (ruling 10.3; the app counts on from its receipt); 0 while unheld |
 | `holderEpoch` | Advances with every change of holder (a take, a release); the same while the holder keys, unkeys or goes away |
 | `holderAway` | The holder's link dropped and it keeps transmit, unkeyed, for its 3 minutes |
-| `holderTransferring` | Transmit is changing hands: every key is refused "Transmit is changing hands." until the transfer ends |
+| `holderTransferring` | Every key is refused while it is true: transmit is changing hands, or a dropped holder's key is being stopped ("Transmit is changing hands."), or, with no holder, the radio did not confirm it stopped transmitting after a transfer ("The radio did not confirm it stopped transmitting.") until MOX reads off |
 | `keyedForSeconds` | How long the key now on has been on, in whole seconds on the Core's clock when this is sent (ruling 10.3); 0 while unkeyed. It supersedes `keyedSinceMs`, which a Core still sends |
 
 **When it is sent.** While keyed the Core reads the meters ten times a

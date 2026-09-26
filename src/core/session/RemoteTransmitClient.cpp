@@ -15,6 +15,15 @@
 //   2026-09-26: Transmit group fix wave: M7 coreStopped. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: Transmit group fix wave 2, the re-review's minors:
+//               holderTransferring true while keys are refused for a
+//               transfer's reasons (a dropped holder's fence, a transfer
+//               ended with MOX on); stopEpoch names the key a stop ended so
+//               a newer key is never ended by it; VOX at the Core listens
+//               only to the device that armed it; the window says why MOX
+//               and TUNE wait while another device holds. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/RemoteTransmitClient.h"
@@ -395,20 +404,24 @@ void RemoteTransmitClient::setCoreTransmitting(bool on)
     refreshKeepalive();
 }
 
-void RemoteTransmitClient::coreStopped(quint32 stopSerial, bool coreKeyed)
+void RemoteTransmitClient::coreStopped(quint32 stopSerial, bool coreKeyed, quint32 stopEpoch)
 {
     if (stopSerial == m_coreStopSerial) {
         return;
     }
     m_coreStopSerial = stopSerial;
-    if (coreKeyed) {
-        // Another key is on by now (this window's next one, answered
-        // already, or someone else's): nothing of this window's to end.
-        return;
-    }
     bool ended = false;
     for (Key* key : {&m_screen, &m_program}) {
-        if (key->phase == Phase::On) {
+        if (key->phase != Phase::On) {
+            continue;
+        }
+        // Fix wave 2 (the M7 race): the stop names the key it ended; a key
+        // of this window's pressed after it (a newer epoch, answered
+        // before the stop reached here) goes on. Without the epochs, a key
+        // on at the Core by now is not this stop's.
+        const bool stopped = stopEpoch != 0 && key->epoch != 0 ? key->epoch <= stopEpoch
+                                                               : !coreKeyed;
+        if (stopped) {
             *key = Key{};
             ended = true;
         }

@@ -46,6 +46,15 @@
 //   2026-09-26: merge of Tasks 37 to 39: the watchdog's, the starvation's
 //               and the time-out's stops over the wire. J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave 2, the re-review's minors:
+//               holderTransferring true while keys are refused for a
+//               transfer's reasons (a dropped holder's fence, a transfer
+//               ended with MOX on); stopEpoch names the key a stop ended so
+//               a newer key is never ended by it; VOX at the Core listens
+//               only to the device that armed it; the window says why MOX
+//               and TUNE wait while another device holds. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -424,6 +433,8 @@ private slots:
         QCOMPARE(rig.state.stopSerial(), quint32(1));
         QCOMPARE(rig.state.stopReason(), QStringLiteral("station"));
         QCOMPARE(rig.state.stopText(), QStringLiteral("The Core stopped transmitting."));
+        // Fix wave 2: the epoch of the key it stopped, taken as it stopped.
+        QCOMPARE(rig.state.stopEpoch(), static_cast<qint64>(rig.model.keyingEpoch()));
     }
 
     void aStarvationStopsOnceAndTheNextKeyCanStopAgain()
@@ -508,6 +519,7 @@ private slots:
         QVERIFY(copy.applyStationValue("micLevelDb", -9.0));
         QVERIFY(copy.applyStationValue("stopReason", QStringLiteral("timeOut")));
         QVERIFY(copy.applyStationValue("stopSerial", qlonglong(4)));
+        QVERIFY(copy.applyStationValue("stopEpoch", qlonglong(9)));
         QVERIFY(!copy.applyStationValue("notAProperty", 1));
         QVERIFY(copy.keyed());
         QCOMPARE(copy.keyedByName(), QStringLiteral("iPad"));
@@ -518,9 +530,10 @@ private slots:
         QCOMPARE(copy.alcDb(), -2.5);
         QCOMPARE(copy.micLevelDb(), -9.0);
         QCOMPARE(copy.stopSerial(), quint32(4));
+        QCOMPARE(copy.stopEpoch(), qint64(9));
         QCOMPARE(state.count(), 2);
         QCOMPARE(meters.count(), 5);
-        QCOMPARE(stops.count(), 2);
+        QCOMPARE(stops.count(), 3);
         // The same value again changes nothing.
         QVERIFY(copy.applyStationValue("keyed", true));
         QCOMPARE(state.count(), 2);
@@ -581,6 +594,12 @@ private slots:
         QCOMPARE(latest(p.appB->received(), QStringLiteral("txState"),
                         QStringLiteral("stopReason")).toString(),
                  QStringLiteral("linkLost"));
+        // Fix wave 2: the stop names the key it ended by its keying epoch.
+        QVERIFY(p.state().stopEpoch() > 0);
+        QCOMPARE(p.state().stopEpoch(), static_cast<qint64>(p.core.model->keyingEpoch()));
+        QCOMPARE(latest(p.appB->received(), QStringLiteral("txState"),
+                        QStringLiteral("stopEpoch")).toInteger(),
+                 p.state().stopEpoch());
         // Once: nothing later for the same key moves it.
         pumpEvents();
         QCOMPARE(p.state().stopSerial(), quint32(1));
@@ -751,6 +770,35 @@ private slots:
         QTRY_VERIFY(p.state().holderAway());
         QCOMPARE(p.state().holderEpoch(), epoch);
         QTRY_COMPARE(seenByB("holderAway").toBool(false), true);
+    }
+
+    // Fix wave 2 (the re-review's minor): holderTransferring is true
+    // whenever keys are refused for a transfer's reasons: during a dropped
+    // keyed holder's fence as much as during a transfer.
+    void aDroppedHoldersFenceShowsTransmitChangingHands()
+    {
+        Pair p;
+        QVERIFY(admitted(p.appA) && admitted(p.appB));
+        TransmitHolder* holder = p.core.server->transmitHolder();
+        QVERIFY(p.keyA());
+        QTRY_VERIFY(p.state().keyed());
+        bool sawFence = false;
+        QObject::connect(&p.state(), &TransmitState::holderChanged, &p.state(), [&]() {
+            if (holder->isFenced()) {
+                sawFence = true;
+                QVERIFY(p.state().holderTransferring());
+            }
+        });
+        p.appA->closeLink(QStringLiteral("lost"));
+        QTRY_VERIFY(p.state().holderAway());
+        QTRY_VERIFY(!holder->isFenced());
+        QVERIFY(sawFence);
+        QVERIFY(!p.state().holderTransferring());
+        // (The fence here lasts less than one 50 ms delta flush, so B may
+        // hear only its end.)
+        QTRY_COMPARE(latest(p.appB->received(), QStringLiteral("txState"),
+                            QStringLiteral("holderTransferring")).toBool(true),
+                     false);
     }
 
     // The radio's own PTT holds transmit as "Radio", source radioPtt, and

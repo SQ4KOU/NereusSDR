@@ -200,6 +200,15 @@
 //               transmitHolderText; M6 voxArmedHere; M7 a Core stop ends
 //               this window's key. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave 2, the re-review's minors:
+//               holderTransferring true while keys are refused for a
+//               transfer's reasons (a dropped holder's fence, a transfer
+//               ended with MOX on); stopEpoch names the key a stop ended so
+//               a newer key is never ended by it; VOX at the Core listens
+//               only to the device that armed it; the window says why MOX
+//               and TUNE wait while another device holds. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -573,10 +582,16 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
         // going while the window streams unkeyed.
         // Fix wave M7: a stop the Core records ends this window's key on,
         // even one the mirrored `transmitting` never showed.
-        connect(m_transmitState, &TransmitState::stopChanged, m_remoteTransmit, [this]() {
-            m_remoteTransmit->coreStopped(m_transmitState->stopSerial(),
-                                          m_transmitState->keyed());
-        });
+        // Fix wave 2: queued, so the whole update (stopSerial and the
+        // stopEpoch after it, and keyed) is applied before it is judged.
+        connect(
+            m_transmitState, &TransmitState::stopChanged, m_remoteTransmit,
+            [this]() {
+                m_remoteTransmit->coreStopped(
+                    m_transmitState->stopSerial(), m_transmitState->keyed(),
+                    static_cast<quint32>(m_transmitState->stopEpoch()));
+            },
+            Qt::QueuedConnection);
         // Fix wave M6: only VOX this window armed (its own write, not the
         // Core's value for another device's).
         connect(&radioModel->transmitModel(), &TransmitModel::voxEnabledChanged, this,
@@ -4573,7 +4588,11 @@ QString StationClient::transmitHolderText() const
     }
     const TransmitState& tx = *m_transmitState;
     if (tx.holderTransferring()) {
-        return QStringLiteral("Transmit is changing hands.");
+        // Fix wave 2: with nobody holding, a transfer ended with MOX still
+        // reading on (TxRefusals::stopNotConfirmed's words).
+        return tx.holderDeviceId().isEmpty()
+                   ? QStringLiteral("The radio did not confirm it stopped transmitting.")
+                   : QStringLiteral("Transmit is changing hands.");
     }
     if (tx.holderDeviceId().isEmpty()) {
         return {};
@@ -4584,8 +4603,14 @@ QString StationClient::transmitHolderText() const
     }
     const QString name = tx.holderName().isEmpty() ? QStringLiteral("Another device")
                                                    : tx.holderName();
-    return tx.holderAway() ? QStringLiteral("%1 holds transmit and is away.").arg(name)
-                           : QStringLiteral("%1 holds transmit.").arg(name);
+    // Fix wave 2: the name and why this window's MOX and TUNE are refused
+    // until the holder lets go (until taking transmit is built, Task 77).
+    return tx.holderAway()
+               ? QStringLiteral("%1 holds transmit and is away. MOX and TUNE here wait until "
+                                "it lets go.")
+                     .arg(name)
+               : QStringLiteral("%1 holds transmit. MOX and TUNE here wait until it lets go.")
+                     .arg(name);
 }
 
 } // namespace NereusSDR

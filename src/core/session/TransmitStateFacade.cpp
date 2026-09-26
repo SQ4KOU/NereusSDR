@@ -15,6 +15,15 @@
 //               (holder fields, keyedForSeconds, txStateVersion 2); M3
 //               one lost-link sentence. J.J. Boyd (KG4VCF), with AI-
 //               assisted implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave 2, the re-review's minors:
+//               holderTransferring true while keys are refused for a
+//               transfer's reasons (a dropped holder's fence, a transfer
+//               ended with MOX on); stopEpoch names the key a stop ended so
+//               a newer key is never ended by it; VOX at the Core listens
+//               only to the device that armed it; the window says why MOX
+//               and TUNE wait while another device holds. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/TransmitStateFacade.h"
@@ -121,11 +130,14 @@ void TransmitState::bind(RadioModel* model)
     // have run, and counts only when none did.
     connect(model, &RadioModel::transmitStopped, this, [this](const QString&) {
         const quint64 key = m_key;
+        // Fix wave 2: the key stopped is the one keyed now; a key that
+        // starts before the queued call runs has a newer epoch.
+        const quint32 epoch = m_model.isNull() ? 0 : m_model->keyingEpoch();
         QMetaObject::invokeMethod(
             this,
-            [this, key]() {
+            [this, key, epoch]() {
                 if (key == m_key) {
-                    recordStop(kStopStation, stationText());
+                    recordStop(kStopStation, stationText(), epoch);
                 }
             },
             Qt::QueuedConnection);
@@ -302,7 +314,8 @@ qint64 TransmitState::keyedForSeconds() const
     return m_keyed ? std::max<qint64>(0, (now() - m_keyedSinceMs) / 1000) : 0;
 }
 
-bool TransmitState::recordStop(const QByteArray& reason, const QString& text)
+bool TransmitState::recordStop(const QByteArray& reason, const QString& text,
+                               std::optional<quint32> epoch)
 {
     if (m_key == 0 || m_keyStopped) {
         return false;
@@ -310,6 +323,9 @@ bool TransmitState::recordStop(const QByteArray& reason, const QString& text)
     m_keyStopped = true;
     m_stopReason = QString::fromLatin1(reason);
     m_stopText = text;
+    m_stopEpoch = epoch.has_value() ? static_cast<qint64>(*epoch)
+                  : m_model.isNull() ? 0
+                                     : static_cast<qint64>(m_model->keyingEpoch());
     ++m_stopSerial;
     emit stopChanged();
     return true;
@@ -435,6 +451,9 @@ bool TransmitState::applyStationValue(const QByteArray& propertyName, const QVar
         const quint32 serial = static_cast<quint32>(value.toLongLong());
         stop = serial != m_stopSerial;
         m_stopSerial = serial;
+    } else if (propertyName == "stopEpoch") {
+        stop = value.toLongLong() != m_stopEpoch;
+        m_stopEpoch = value.toLongLong();
     } else if (propertyName == "keyedForSeconds") {
         state = value.toLongLong() != m_stationKeyedForSeconds;
         m_stationKeyedForSeconds = value.toLongLong();

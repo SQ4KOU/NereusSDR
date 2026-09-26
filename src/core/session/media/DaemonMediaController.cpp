@@ -16,6 +16,15 @@
 //               view of the lines by device; VOX another device armed is
 //               never this one's. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave 2, the re-review's minors:
+//               holderTransferring true while keys are refused for a
+//               transfer's reasons (a dropped holder's fence, a transfer
+//               ended with MOX on); stopEpoch names the key a stop ended so
+//               a newer key is never ended by it; VOX at the Core listens
+//               only to the device that armed it; the window says why MOX
+//               and TUNE wait while another device holds. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/media/DaemonMediaController.h"
@@ -1605,12 +1614,14 @@ void DaemonMediaController::refreshMicVoxArmed()
     // VOX armed for the device: the operator's VOX is on and its session
     // may transmit now (transmit unheld, or held by it). Its client then
     // streams the microphone unkeyed and VOX listens to it. Fix wave C2:
-    // VOX another device armed is that device's, never this one's.
+    // VOX another device armed is that device's, never this one's. Fix
+    // wave 2: VOX nobody armed from a device (turned on at the Core
+    // itself) listens to no device's line either.
     const QByteArray armer = m_server->voxArmedBy();
     m_radioModel->setRemoteMicVoxArmed(
         m_micDeviceId, m_radioModel->transmitModel().voxEnabled()
                            && m_server->mediaSessionTxPermitted(m_epoch)
-                           && (armer.isEmpty() || armer == m_micDeviceId));
+                           && !armer.isEmpty() && armer == m_micDeviceId);
 }
 
 void DaemonMediaController::refreshMicWatching()

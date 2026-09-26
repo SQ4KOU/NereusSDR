@@ -49,6 +49,15 @@
 //   2026-09-26: Transmit group fix wave: M7 coreStopped. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: Transmit group fix wave 2, the re-review's minors:
+//               holderTransferring true while keys are refused for a
+//               transfer's reasons (a dropped holder's fence, a transfer
+//               ended with MOX on); stopEpoch names the key a stop ended so
+//               a newer key is never ended by it; VOX at the Core listens
+//               only to the device that armed it; the window says why MOX
+//               and TUNE wait while another device holds. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -143,7 +152,12 @@ public:
     /// and says nothing is keyed now (`keyed`): a key of this window's that
     /// is on ended at the Core, even one so short the mirrored
     /// `transmitting` never rose. The next press is a new command.
-    void coreStopped(quint32 stopSerial, bool coreKeyed);
+    /// Fix wave 2 (the M7 race): `stopEpoch` (txState's stopEpoch) names
+    /// the key the stop ended; a key of this window's with a newer epoch
+    /// (pressed after the stop, before the stop's update arrived) is left
+    /// on. With no epoch (0, an older Core) a key on at the Core now
+    /// (`coreKeyed`) is not this stop's.
+    void coreStopped(quint32 stopSerial, bool coreKeyed, quint32 stopEpoch = 0);
 
     /// The press is down (waiting for its answer, or keyed).
     bool micKeyDown() const;

@@ -43,6 +43,15 @@
 //               teardown, keepalive attribution and a media restart. J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave 2, the re-review's minors:
+//               holderTransferring true while keys are refused for a
+//               transfer's reasons (a dropped holder's fence, a transfer
+//               ended with MOX on); stopEpoch names the key a stop ended so
+//               a newer key is never ended by it; VOX at the Core listens
+//               only to the device that armed it; the window says why MOX
+//               and TUNE wait while another device holds. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -920,7 +929,19 @@ void TestTxWorkerRemoteRing::voxFromTheDevicesMicrophoneIsTheDevices()
     QVERIFY(station.startMedia(true));
     RadioModel* model = station.core.model.get();
     QVERIFY(!model->remoteMicInUse());
+    // Fix wave 2: VOX turned on at the Core itself (nobody armed it from a
+    // device) never listens to a device's line.
     model->transmitModel().setVoxEnabled(true);
+    QTest::qWait(50);
+    QVERIFY(!model->remoteMicInUse());
+    QVERIFY(model->remoteVoxDevice().isEmpty());
+    model->transmitModel().setVoxEnabled(false);
+    // Armed from the device (its write), it listens to that device's line.
+    station.app->sendText(SessionMessages::encode(SessionMessages::propertyWrite(
+        QByteArrayLiteral("transmit"),
+        {MirrorUpdate{0, QByteArrayLiteral("voxEnabled"), MirrorWireKind::Bool, QVariant(true)}},
+        4401)));
+    QTRY_VERIFY(model->transmitModel().voxEnabled());
     QTRY_VERIFY(model->remoteMicInUse());
     QCOMPARE(model->remoteVoxDevice(), station.deviceId());
     QVERIFY(!model->moxController()->isMox());

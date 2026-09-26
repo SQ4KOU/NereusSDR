@@ -98,6 +98,15 @@
 //   2026-09-26: Transmit group fix wave: I4 TransmitState's holder
 //               properties Outbound. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave 2, the re-review's minors:
+//               holderTransferring true while keys are refused for a
+//               transfer's reasons (a dropped holder's fence, a transfer
+//               ended with MOX on); stopEpoch names the key a stop ended so
+//               a newer key is never ended by it; VOX at the Core listens
+//               only to the device that armed it; the window says why MOX
+//               and TUNE wait while another device holds. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -805,6 +814,8 @@ const MirrorPolicy::Entry kEntries[] = {
     { "TransmitState", "holderAway", MirrorDirection::Outbound },
     { "TransmitState", "holderTransferring", MirrorDirection::Outbound },
     { "TransmitState", "keyedForSeconds", MirrorDirection::Outbound },
+    // Fix wave 2: the keying epoch of the key the last stop ended.
+    { "TransmitState", "stopEpoch", MirrorDirection::Outbound },
 
     // Normal PS3 configuration is distinct from operational arming/actions.
     { "PureSignalSettings", "autoCalEnabled", MirrorDirection::Bidirectional },

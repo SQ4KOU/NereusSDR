@@ -35,6 +35,15 @@
 //               the Core; the Core's refusal stays the backstop. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: Transmit group fix wave 2, the re-review's minors:
+//               holderTransferring true while keys are refused for a
+//               transfer's reasons (a dropped holder's fence, a transfer
+//               ended with MOX on); stopEpoch names the key a stop ended so
+//               a newer key is never ended by it; VOX at the Core listens
+//               only to the device that armed it; the window says why MOX
+//               and TUNE wait while another device holds. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -1065,7 +1074,8 @@ private slots:
         QTRY_VERIFY(h.client.capabilities().txPermitted);
         h.station.moxController()->onMicPttFromRadio(true);
         QTRY_VERIFY(h.station.moxController()->isMox());
-        QTRY_COMPARE(h.client.transmitHolderText(), QStringLiteral("Radio holds transmit."));
+        QTRY_COMPARE(h.client.transmitHolderText(),
+                     QStringLiteral("Radio holds transmit. MOX and TUNE here wait until it lets go."));
         h.station.moxController()->onMicPttFromRadio(false);
         QTRY_VERIFY(!h.station.moxController()->isMox());
         QTRY_COMPARE(h.client.transmitHolderText(), QString());
@@ -1086,15 +1096,25 @@ private slots:
         // As the Core would send them (no later delta arrives in between).
         tx->applyStationValue("holderDeviceId", QStringLiteral("another"));
         tx->applyStationValue("holderName", QStringLiteral("Grant's iPhone"));
-        QCOMPARE(h.client.transmitHolderText(), QStringLiteral("Grant's iPhone holds transmit."));
+        QCOMPARE(h.client.transmitHolderText(),
+                 QStringLiteral("Grant's iPhone holds transmit. MOX and TUNE here wait until it "
+                                "lets go."));
         tx->applyStationValue("holderAway", true);
         QCOMPARE(h.client.transmitHolderText(),
-                 QStringLiteral("Grant's iPhone holds transmit and is away."));
+                 QStringLiteral("Grant's iPhone holds transmit and is away. MOX and TUNE here "
+                                "wait until it lets go."));
         tx->applyStationValue("holderTransferring", true);
         QCOMPARE(h.client.transmitHolderText(), QStringLiteral("Transmit is changing hands."));
+        // Fix wave 2: a transfer that ended with MOX still on leaves nobody
+        // holding and every key refused with the Core's words.
+        tx->applyStationValue("holderDeviceId", QString());
+        QCOMPARE(h.client.transmitHolderText(),
+                 QStringLiteral("The radio did not confirm it stopped transmitting."));
         // The device's name is the operator's own word, set aside here.
-        for (const QString& text : {QStringLiteral("Another device holds transmit and is away."),
+        for (const QString& text : {QStringLiteral("Another device holds transmit and is away. MOX "
+                                                   "and TUNE here wait until it lets go."),
                                     QStringLiteral("Transmit is changing hands."),
+                                    QStringLiteral("The radio did not confirm it stopped transmitting."),
                                     QStringLiteral("This computer holds transmit.")}) {
             QVERIFY2(OperatorWording::isPlain(text), qPrintable(text));
         }
