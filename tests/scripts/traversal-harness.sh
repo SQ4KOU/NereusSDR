@@ -35,9 +35,24 @@
 #                      CLAT, the Core on IPv4: the service's name answered
 #                      by DNS64, connected
 #   netem-loss         2 % loss and 40 ms delay on both uplinks: connected
+#                      (the display channel the echo rides never
+#                      retransmits, so a 60000-byte echo is not required)
 #   ipv6-both          routed IPv6 at both ends (behind their routers'
 #                      stateful firewalls) as well as IPv4 NAT, the relay
 #                      denied: direct, on an IPv6 pair
+#
+# and, plan Task 28, a whole session over the control connection the
+# service introduces (a Core as nereusd runs it, `core`, and a desktop,
+# `session`, StationClient::connectThroughService):
+#
+#   session-direct     both behind endpoint-independent NAT, the relay
+#                      denied: the session runs, direct
+#   session-relayed    UDP between the two ends' public addresses dropped:
+#                      the session runs through the relay, and both ends
+#                      give their allocations back when it ends
+#   session-loss       2 % loss and 40 ms delay on both uplinks: the
+#                      session's reliable channel still carries the whole
+#                      connect sequence
 #
 # Every secret (the TURN secret, the TLS key, both ends' keys) is made at
 # run time in a temporary directory and removed with it. It never touches
@@ -60,6 +75,14 @@
 #   2026-09-26: Task 27 fix wave: ipv6-both, DNS64 through an auth-zone,
 #               eim-nat with the relay denied. J.J. Boyd (KG4VCF),
 #               AI-assisted via Anthropic Claude Code.
+#   2026-09-26: iPhone app plan Task 28 (R-IOS-16): the local run's fixes
+#               (tayga 0.9.2 has no wkpf-strict, so NAT64 uses a
+#               network-specific prefix; the station runs under ip netns exec
+#               directly so stop_station stops it; coturn's per-user quota
+#               for a full run; the NAT routers drop unsolicited packets to
+#               their own WAN address, as a home router does); netem-loss
+#               asks for a connection, not an echo; the session-* scenarios.
+#               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 # =================================================================
 
 set -euo pipefail
@@ -210,6 +233,10 @@ table inet filter {
         ct state established,related accept
         iifname "lan" accept
     }
+    chain input {
+        type filter hook input priority 0; policy accept;
+        iifname "wan" ct state new drop
+    }
 }
 EOF
 }
@@ -247,7 +274,7 @@ server:
     use-syslog: no
     logfile: ""
     module-config: "dns64 iterator"
-    dns64-prefix: 64:ff9b::/96
+    dns64-prefix: 2001:db8:64::/96
     # harness.test is an auth-zone the iterator reads (for-upstream), not a
     # local-zone: a local-zone answers before the dns64 module runs, so the
     # IPv6-only client would get no synthesized AAAA for rv.harness.test and
@@ -278,22 +305,21 @@ PIDS+=($!)
 
 # ── NAT64 (the carrier's PLAT) and the client's CLAT ─────────────────
 
-# plat: tayga maps 64:ff9b::/96 to IPv4 through its own pool, which
+# plat: tayga maps 2001:db8:64::/96 to IPv4 through its own pool, which
 # nftables then masquerades onto its public address.
 mkdir -p "$WORK/tayga-plat"
 cat > "$WORK/tayga-plat.conf" <<EOF
 tun-device nat64
 ipv4-addr 192.168.255.1
 ipv6-addr 2001:db8:4::64
-prefix 64:ff9b::/96
-wkpf-strict no
+prefix 2001:db8:64::/96
 dynamic-pool 192.168.255.0/24
 data-dir $WORK/tayga-plat
 EOF
 in_ns plat tayga -c "$WORK/tayga-plat.conf" --mktun
 in_ns plat ip link set nat64 up
 in_ns plat ip route add 192.168.255.0/24 dev nat64
-in_ns plat ip -6 route add 64:ff9b::/96 dev nat64
+in_ns plat ip -6 route add 2001:db8:64::/96 dev nat64
 in_ns plat tayga -c "$WORK/tayga-plat.conf" -d >"$WORK/tayga-plat.log" 2>&1 &
 PIDS+=($!)
 in_ns plat nft -f - <<EOF
@@ -313,8 +339,7 @@ cat > "$WORK/tayga-clat.conf" <<EOF
 tun-device clat
 ipv4-addr 192.0.0.1
 ipv6-addr 2001:db8:6::1
-prefix 64:ff9b::/96
-wkpf-strict no
+prefix 2001:db8:64::/96
 map 192.0.0.2 2001:db8:6::464
 EOF
 in_ns cli6 sysctl -qw net.ipv6.conf.all.forwarding=1
@@ -336,7 +361,7 @@ in_ns rvsrv turnserver -n --no-cli --no-tls --no-dtls --fingerprint \
     --relay-ip=198.51.100.2 --relay-ip=2001:db8:1::2 \
     --realm=harness.test --use-auth-secret \
     --static-auth-secret="$(cat "$WORK/turn-secret")" \
-    --user-quota=4 --total-quota=64 \
+    --user-quota=64 --total-quota=64 \
     --allowed-peer-ip=198.51.100.0-198.51.100.255 \
     --allowed-peer-ip=2001:db8::-2001:db8:ffff:ffff:ffff:ffff:ffff:ffff \
     --log-file=stdout >"$WORK/coturn.log" 2>&1 &
@@ -380,11 +405,13 @@ SERVER="wss://rv.harness.test/"
 # ── The two ends ─────────────────────────────────────────────────────
 
 CLIENT_KEY="$("$PEER" key --dir "$WORK/client-key")"
+# Plan Task 28: the desktop's device key, for the session-* scenarios.
+DESKTOP_KEY="$("$PEER" device-key --dir "$WORK/desktop-key")"
 
 start_station() {
     local relay="$1"
     rm -f "$WORK/station-id"
-    in_ns sta "$PEER" station --dir "$WORK/station-key" --server "$SERVER" \
+    ip netns exec h-sta "$PEER" station --dir "$WORK/station-key" --server "$SERVER" \
         --paired "$CLIENT_KEY" --relay "$relay" --id-file "$WORK/station-id" \
         --ca "$WORK/ca.pem" >"$WORK/station.log" 2>&1 &
     STATION_PID=$!
@@ -413,6 +440,38 @@ run_client() {
 
 field() { python3 -c "import json,sys; print(json.loads(sys.argv[1]).get(sys.argv[2]))" "$1" "$2"; }
 
+# Plan Task 28: a Core as nereusd runs it, answering introductions with a
+# control connection, the desktop paired.
+start_core() {
+    local relay="$1"
+    rm -f "$WORK/core-id"
+    ip netns exec h-sta "$PEER" core --dir "$WORK/core" --server "$SERVER" \
+        --paired "$DESKTOP_KEY" --relay "$relay" --id-file "$WORK/core-id" \
+        --ca "$WORK/ca.pem" >"$WORK/core.log" 2>&1 &
+    CORE_PID=$!
+    PIDS+=("$CORE_PID")
+    for _ in $(seq 1 100); do
+        [[ -s "$WORK/core-id" ]] && return 0
+        sleep 0.2
+    done
+    say "the Core did not register"
+    cat "$WORK/core.log" "$WORK/rendezvous.log" >&2 || true
+    return 1
+}
+
+stop_core() {
+    kill "$CORE_PID" 2>/dev/null || true
+    wait "$CORE_PID" 2>/dev/null || true
+}
+
+# run_session NS: prints the desktop's JSON result line.
+run_session() {
+    local ns="$1"
+    in_ns "$ns" "$PEER" session --dir "$WORK/desktop-key" --server "$SERVER" \
+        --core "$WORK/core-id" --timeout-ms 120000 \
+        --ca "$WORK/ca.pem" 2>>"$WORK/session.log" | tail -n 1 || true
+}
+
 FAILED=0
 check() {
     local name="$1" result="$2" want_echo="$3" want_relay="$4"
@@ -421,6 +480,26 @@ check() {
     relayed="$(field "$result" relayed 2>/dev/null || echo None)"
     if [[ "$echoed" != "$want_echo" ]]; then
         say "FAIL $name: echoed=$echoed, expected $want_echo: $result"
+        FAILED=1
+        return
+    fi
+    if [[ "$want_relay" != "any" && "$relayed" != "$want_relay" ]]; then
+        say "FAIL $name: relayed=$relayed, expected $want_relay: $result"
+        FAILED=1
+        return
+    fi
+    say "PASS $name: $result"
+}
+
+# check_session NAME RESULT WANT_RELAY: it connected (for a session: the
+# whole connect sequence ran), on the path wanted.
+check_session() {
+    local name="$1" result="$2" want_relay="$3"
+    local connected relayed
+    connected="$(field "$result" connected 2>/dev/null || echo None)"
+    relayed="$(field "$result" relayed 2>/dev/null || echo None)"
+    if [[ "$connected" != "True" ]]; then
+        say "FAIL $name: connected=$connected: $result"
         FAILED=1
         return
     fi
@@ -522,12 +601,12 @@ fi
 
 # ipv6-only-nat64: the client has only IPv6 (with DNS64, NAT64 and a CLAT),
 # the Core only IPv4 behind NAT. The service's IPv4-only name must come back
-# from DNS64 as an address in 64:ff9b::/96, so the scenario proves DNS64 and
+# from DNS64 as an address in 2001:db8:64::/96, so the scenario proves DNS64 and
 # not only the CLAT.
 if scenario ipv6-only-nat64; then
     reset_rules
     synthesized="$(in_ns cli6 getent ahostsv6 rv.harness.test | awk '{print $1}' | sort -u | tr '\n' ' ' || true)"
-    if [[ "$synthesized" != *"64:ff9b::"* ]]; then
+    if [[ "$synthesized" != *"2001:db8:64::"* ]]; then
         say "FAIL ipv6-only-nat64: DNS64 did not answer rv.harness.test (got: ${synthesized:-nothing})"
         FAILED=1
     else
@@ -538,14 +617,18 @@ if scenario ipv6-only-nat64; then
     stop_station
 fi
 
-# netem-loss: 2 % loss and 40 ms each way on both uplinks.
+# netem-loss: 2 % loss and 40 ms each way on both uplinks. The echo rides
+# the display channel, which never retransmits (latest value wins), so one
+# 60000-byte message sent once is lost with most of its 60 datagrams each
+# way: the scenario asks for the connection. A whole session over the
+# reliable control channel under the same loss is session-loss.
 if scenario netem-loss; then
     reset_rules
     for ns in natc nats; do
         in_ns "$ns" tc qdisc add dev wan root netem loss 2% delay 40ms
     done
     start_station allow
-    check netem-loss "$(run_client cli)" True any
+    check_session netem-loss "$(run_client cli)" any
     stop_station
 fi
 
@@ -612,9 +695,59 @@ if scenario ipv6-both; then
     ipv6_both down
 fi
 
+# ── Plan Task 28: a whole session over an introduced connection ─────
+
+# session-direct: endpoint-independent NAT at both ends, the relay denied.
+if scenario session-direct; then
+    reset_rules
+    start_core deny
+    check_session session-direct "$(run_session cli)" False
+    stop_core
+fi
+
+# session-relayed: no UDP between the two NATs' public addresses; the
+# session runs through the relay, and when it ends each end gives its
+# allocation back (a Refresh of lifetime 0), which coturn logs.
+if scenario session-relayed; then
+    reset_rules
+    in_ns inet nft -f - <<EOF
+table inet filter {
+    chain forward {
+        type filter hook forward priority 0;
+        ip saddr 198.51.100.6 ip daddr 198.51.100.10 meta l4proto udp drop
+        ip saddr 198.51.100.10 ip daddr 198.51.100.6 meta l4proto udp drop
+    }
+}
+EOF
+    start_core allow
+    released_before="$(grep -c "lifetime=0" "$WORK/coturn.log" 2>/dev/null || true)"
+    check_session session-relayed "$(run_session cli)" True
+    sleep 2
+    released_after="$(grep -c "lifetime=0" "$WORK/coturn.log" 2>/dev/null || true)"
+    released=$(( ${released_after:-0} - ${released_before:-0} ))
+    if (( released >= 2 )); then
+        say "PASS session-relayed: both allocations given back ($released)"
+    else
+        say "FAIL session-relayed: allocations given back: $released, expected 2"
+        FAILED=1
+    fi
+    stop_core
+fi
+
+# session-loss: 2 % loss and 40 ms each way on both uplinks.
+if scenario session-loss; then
+    reset_rules
+    for ns in natc nats; do
+        in_ns "$ns" tc qdisc add dev wan root netem loss 2% delay 40ms
+    done
+    start_core allow
+    check_session session-loss "$(run_session cli)" any
+    stop_core
+fi
+
 if (( FAILED )); then
     say "logs:"
-    for log in rendezvous coturn station client unbound; do
+    for log in rendezvous coturn station client core session unbound; do
         echo "── $log ──" >&2
         tail -n 40 "$WORK/$log.log" >&2 2>/dev/null || true
     done
