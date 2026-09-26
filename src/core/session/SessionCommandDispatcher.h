@@ -199,6 +199,7 @@ namespace NereusSDR {
 
 class RadioModel;
 class SliceModel;
+class StationRadios;
 
 /// One named argument of a command verb, as dispatch() reads it: the name,
 /// the wire kind it must carry, and whether it may be left out.
@@ -371,6 +372,10 @@ public:
     /// answers them (and sends the backlog) through this; true when it did.
     using RecordAccess = std::function<bool(const NereusSDR::SessionMessage& invoke)>;
     void setRecordAccess(RecordAccess access) { m_recordAccess = std::move(access); }
+    /// Parity Task 21 (R-IOS-18): the Core's radios (nereusd), for the
+    /// station.selectRadio, station.rescanRadios, station.setRadioModel and
+    /// station.forgetRadio verbs.
+    void setStationRadios(StationRadios* radios);
 
     static const QList<CommandVerbSpec>& verbSpecs();
 
@@ -507,6 +512,8 @@ private:
     SliceAccess m_sliceAccess;
     ConfirmAnswer m_confirmAnswer;
     RecordAccess m_recordAccess;
+    QPointer<StationRadios> m_stationRadios;
+    void handleStationRadios(const NereusSDR::SessionMessage& invoke);
     void handleRecords(const NereusSDR::SessionMessage& invoke);
     void handleSpotSources(const NereusSDR::SessionMessage& invoke);
     /// Refuses (and answers) a verb whose sliceId names another device's

@@ -305,6 +305,10 @@
 //                                    requestFilterResponse
 //                                    (dspInfoVersion 1).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 21 (R-IOS-18): the Core's
+//                                    `stationRadios` stream and the station
+//                                    radio verbs. AI-assisted via Anthropic
+//                                    Claude Code.
 //   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 19 (R-IOS-25): the Core's
 //                                    record streams applied (spots and
 //                                    the spot consoles), the `spotSources`
@@ -893,6 +897,13 @@ public:
     /// source host (SpotSourceHost::reportStationRefusal).
     CommandOutcome requestSpotSource(const QByteArray& verb, const QString& source,
                                      const QString& text) override;
+    /// Parity Task 21 (R-IOS-18): minor 11 and stationRadiosVersion at
+    /// least 1 on a ready session.
+    bool stationRadiosAvailable() const override;
+    /// Parity Task 21. Verbs station.selectRadio, station.rescanRadios,
+    /// station.setRadioModel and station.forgetRadio.
+    CommandOutcome requestStationRadio(const QByteArray& verb, const QString& mac,
+                                       int model) override;
     /// R-R3-46 fix wave (radioHardwareVersion 3). Verb "setAlexRxAntenna":
     /// one band's RX antenna (rxOnly false, 1..3) or RX-only antenna
     /// (rxOnly true, 0..3) on the Core.

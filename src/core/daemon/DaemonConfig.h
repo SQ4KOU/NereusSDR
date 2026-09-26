@@ -26,8 +26,9 @@
 // sliceCount's further clamp to the connected board's
 // BoardCapabilities::maxSlices happens once a radio is actually discovered
 // (R1 Task 10, DaemonApp): this struct is parsed before any radio is
-// contacted, radioMac may be empty (meaning "first responder", so the
-// board is not even known yet), and BoardCapabilities' maxSlices is a
+// contacted, radioMac may be empty (parity Task 21: the Core then runs a
+// radio chosen from an app, or the one radio it can see, or waits for a
+// choice; so the board is not even known yet), and BoardCapabilities' maxSlices is a
 // per-SKU field (2 to 5 across the current board table) with no
 // board-independent ceiling to check here. validate() below therefore only
 // enforces the generic floor of 1.
@@ -51,6 +52,11 @@
 //   2026-09-24: iPhone app Task 17 (R-IOS-08): status_page, status_port
 //               and state_directory. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-26: parity Task 21 (R-IOS-18): radio_mac is second in the
+//               Core's choice order (a radio chosen from an app first; the one
+//               radio in sight only when exactly one is visible). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic Claude
+//               Code.
 // =================================================================
 
 #include <QHostAddress>
@@ -74,7 +80,10 @@ namespace NereusSDR {
 // LogManager makes), set from the systemd unit, which needs no field
 // here and no code at all.
 struct DaemonConfig {
-    QString radioMac;                          // empty = first discovered
+    QString radioMac;                          // empty = a radio chosen from
+                                                // an app, else the one radio
+                                                // in sight, else wait
+                                                // (StationRadios::choose)
     int     sampleRateHz {192000};             // seeded into the per-MAC
                                                 // AppSettings key the shared
                                                 // connect path reads; see

@@ -849,6 +849,18 @@ private slots:
                                 double dbmOffset);
 
 private:
+    // Parity Task 21 (R-IOS-18, B6.2, B6.3): the Core's radio from a remote
+    // window: Setup > This Core opened on what the menu asked for.
+    enum class ThisCoreFocus { ChangeRadio, EditRadio, ForgetRadio };
+    void openThisCore(ThisCoreFocus focus);
+    void addCoreRadioActions(QMenu& menu);
+    void refreshCoreRadioActions();
+    QString forgetCoreRadioReason() const;
+    QString coreRadioAddressText() const;
+    QString coreRadioMacText() const;
+    QAction* m_actChangeCoreRadio {nullptr};
+    QAction* m_actEditCoreRadio {nullptr};
+    QAction* m_actForgetCoreRadio {nullptr};
     void ensureRemoteSession();
     // iPhone app plan Task 39 (D14, R-IOS-13): a remote window's transmit
     // meters from the Core's `txState`.

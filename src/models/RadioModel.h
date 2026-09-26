@@ -285,6 +285,10 @@
 //                shows the Core's spots stream beside its own
 //                (applyStationRecordBatch). J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-26 - Parity Task 21 (R-IOS-18): a remote window's copy of the
+//                Core's radios (stationRadios, stationRadiosChanged) and the
+//                Core's refusals of a radio request (stationRadioRefused).
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -347,6 +351,7 @@
 #include "core/TgxlConnection.h"
 #include "core/FaultLog.h"
 #include "core/session/IStationLink.h"
+#include "core/station/StationRadios.h"
 // Remote-daemon R2 Task 18: the handshake descriptor applyStationCapabilities()
 // takes by const reference. A by-value struct member of a public method
 // signature, so a forward declaration would not do.
@@ -496,6 +501,7 @@ class FreeDVRadeReporterBridge;
 class PskReporterClient;
 class SpotSourceHost;
 struct RecordBatch;
+
 class DxccColorProvider;
 class SpotModel;
 class SpotTableModel;
@@ -2497,6 +2503,13 @@ public:
     void applyStationRecordBatch(const RecordBatch& batch);
     /// The session ended: the Core's spots leave this window.
     void clearStationRecords();
+
+    /// Parity Task 21 (R-IOS-18): a remote window's copy of the Core's
+    /// radios (the `stationRadios` stream), the Core's radio first.
+    QList<StationRadioEntry> stationRadios() const;
+    /// Parity Task 21: the Core refused a radio request (Change radio, Scan
+    /// again, Edit radio, Forget radio); This Core shows the reason.
+    void reportStationRadioRefused(const QString& reason);
 
     // ── TNF (design section 8.1): the canonical notch store ─────────────────
     //
@@ -4500,6 +4513,10 @@ signals:
     /// offset all agree again. `reason` is plain English, ready for a status
     /// bar, and names the frequency the slice stayed on.
     void sliceRetuneRejected(int sliceIndex, const QString& reason);
+    /// Parity Task 21 (R-IOS-18): the Core's radios changed (a remote
+    /// window), or the Core refused a radio request.
+    void stationRadiosChanged();
+    void stationRadioRefused(const QString& reason);
 
     /// Phase 3F Sub-Epic I: a stream's slice set changed. Consumers rebuild
     /// FFT routing; RadioModel republishes the set to RxDspWorker.
@@ -6584,6 +6601,8 @@ private:
     // stream's record ids) and the SpotModel index each is shown under,
     // beside this window's own WSJT-X and SpotCollector spots.
     QHash<QString, int>                   m_stationSpotIndex;
+    // Parity Task 21: the Core's radios, by stream id, in the Core's order.
+    QList<StationRadioEntry>              m_stationRadioEntries;
 
     // TNF (design section 5): notch store. Persisted globally rather than
     // per-MAC (design D3) because a notch tracks a QRM source at the

@@ -1070,14 +1070,16 @@ private slots:
         // then R-IOS-27's bandSelectVersion, then parity Task 15's
         // meterReadingsVersion, then parity Task 16's dspInfoVersion.
         // Then parity Task 19's recordStreamVersion.
-        QCOMPARE(updates.at(updates.size() - 8).name, QByteArray("pairingVersion"));
-        QCOMPARE(updates.at(updates.size() - 7).name, QByteArray("stationCatalogVersion"));
-        QCOMPARE(updates.at(updates.size() - 6).name, QByteArray("displayExtrasVersion"));
-        QCOMPARE(updates.at(updates.size() - 5).name, QByteArray("transmitSettingsVersion"));
-        QCOMPARE(updates.at(updates.size() - 4).name, QByteArray("bandSelectVersion"));
-        QCOMPARE(updates.at(updates.size() - 3).name, QByteArray("meterReadingsVersion"));
-        QCOMPARE(updates.at(updates.size() - 2).name, QByteArray("dspInfoVersion"));
-        QCOMPARE(updates.last().name, QByteArray("recordStreamVersion"));
+        // Then parity Task 21's stationRadiosVersion.
+        QCOMPARE(updates.at(updates.size() - 9).name, QByteArray("pairingVersion"));
+        QCOMPARE(updates.at(updates.size() - 8).name, QByteArray("stationCatalogVersion"));
+        QCOMPARE(updates.at(updates.size() - 7).name, QByteArray("displayExtrasVersion"));
+        QCOMPARE(updates.at(updates.size() - 6).name, QByteArray("transmitSettingsVersion"));
+        QCOMPARE(updates.at(updates.size() - 5).name, QByteArray("bandSelectVersion"));
+        QCOMPARE(updates.at(updates.size() - 4).name, QByteArray("meterReadingsVersion"));
+        QCOMPARE(updates.at(updates.size() - 3).name, QByteArray("dspInfoVersion"));
+        QCOMPARE(updates.at(updates.size() - 2).name, QByteArray("recordStreamVersion"));
+        QCOMPARE(updates.last().name, QByteArray("stationRadiosVersion"));
         QCOMPARE(StationCapabilities::fromUpdates(updates).pairingVersion, 1);
     }
 

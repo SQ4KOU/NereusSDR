@@ -133,6 +133,10 @@
 //                                    requestFilterResponse (dspInfoVersion
 //                                    1).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 21 (R-IOS-18): the Core's
+//                                    radio (stationRadiosVersion 1),
+//                                    requestStationRadio.
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 19 (R-IOS-25): the Core's
 //                                    spot sources (recordStreamVersion 1),
 //                                    requestSpotSource.
@@ -488,6 +492,18 @@ public:
     static QString spotSourcesUnavailableReason()
     { return QStringLiteral("This Core does not run its spot sources for this app. Updating the Core may help."); }
     virtual bool spotSourcesAvailable() const { return false; }
+
+    // R-IOS-18 / R-R3-49 (parity Task 21, stationRadiosVersion 1): This
+    // Core's Change radio. `verb` is station.selectRadio (mac),
+    // station.rescanRadios, station.setRadioModel (mac, model) or
+    // station.forgetRadio (mac); a refusal comes back as
+    // RadioModel::stationRadioRefused.
+    static QString stationRadiosUnavailableReason()
+    { return QStringLiteral("This Core does not let this app change its radio. Updating the Core may help."); }
+    virtual bool stationRadiosAvailable() const { return false; }
+    virtual CommandOutcome requestStationRadio(const QByteArray& /*verb*/, const QString& /*mac*/,
+                                               int /*model*/)
+    { return { false, stationRadiosUnavailableReason() }; }
     virtual CommandOutcome requestSpotSource(const QByteArray& /*verb*/, const QString& /*source*/,
                                              const QString& /*text*/)
     { return { false, spotSourcesUnavailableReason() }; }

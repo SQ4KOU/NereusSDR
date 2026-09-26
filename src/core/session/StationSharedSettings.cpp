@@ -72,9 +72,14 @@
 //               transmitter's settings (SettingsProxyServer::sharedFamilyOf),
 //               as the TX antennas are. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-26: parity Task 21 (R-IOS-18): station.selectRadio joins the
+//               list (every slice and the transmitter). J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
+
+#include "core/station/StationRadios.h"
 
 #include <QJsonObject>
 #include <QLoggingCategory>
@@ -1127,8 +1132,32 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
         words(label, asItIs, QStringLiteral("Your change"));
         return c;
     }
-    // The radio (Task 25's station.selectRadio) joins here when that task
-    // lands: every slice (c.scope.radio).
+    // The radio (design table 7.1's last row; parity Task 21): changing the
+    // Core's radio touches every slice and the transmitter.
+    if (verb == "station.selectRadio") {
+        const MirrorUpdate* macArgument = argumentNamed(args, "mac");
+        const QString mac = macArgument != nullptr
+            ? macArgument->value.toString().trimmed().toUpper()
+            : QString();
+        const QString current = m_stationRadios.isNull() ? QString()
+                                                         : m_stationRadios->currentMac();
+        everyReceiver();
+        transmitter();
+        c.target = QStringLiteral("radio");
+        c.targetValue = current;
+        c.shared = !mac.isEmpty() && mac != current;
+        const auto nameOf = [this](const QString& m) {
+            if (!m_stationRadios.isNull()) {
+                if (const auto radio = m_stationRadios->radioFor(m)) {
+                    return radio->displayName();
+                }
+            }
+            return m;
+        };
+        words(QStringLiteral("Radio"),
+              current.isEmpty() ? QStringLiteral("None") : nameOf(current), nameOf(mac));
+        return c;
+    }
     return c;
 }
 

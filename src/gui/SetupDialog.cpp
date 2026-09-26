@@ -177,6 +177,9 @@
 //               the Core; the Core's refusal stays the backstop. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26 - Parity Task 21 (R-IOS-18): Setup > This Core in a remote
+//                window (Change radio). J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include "SetupDialog.h"
@@ -193,6 +196,7 @@
 #include "setup/GeneralOptionsPage.h"
 // Hardware
 #include "setup/HardwarePage.h"
+#include "setup/ThisCorePage.h"
 #include "setup/HardwareDdcRoutingPage.h"
 // PA (Setup IA reshape Phase 2 — placeholder pages, content lands in Phase 3+)
 #include "setup/PaSetupPages.h"
@@ -1304,6 +1308,16 @@ void SetupDialog::buildTree()
                 this,    &SetupDialog::cpuMeterRateChanged);
         return genOpts;
     });
+
+    // Parity Task 21 (R-IOS-18; the operator's "Option A"): a remote
+    // window's Core, its radio first (Change radio). A window running its
+    // own radio has no Core; its radio is Radio > Manage Radios. Mixed, not
+    // Core: nothing on it is a setting the snapshot carries; it is built at
+    // once and says itself why it waits (ThisCorePage::unavailableReason).
+    if (remoteSession()) {
+        registerPage(general, "This Core", SetupScope::Mixed,
+                     [this] { return new ThisCorePage(m_model); });
+    }
 
     tick("General");
 

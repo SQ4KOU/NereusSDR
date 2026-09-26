@@ -133,6 +133,8 @@
 //                Anthropic Claude Code.
 //   2026-09-26 - R-IOS-25 / R-R3-49 (parity Task 19): recordStreamVersion.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-IOS-18 / R-R3-49 (parity Task 21): stationRadiosVersion.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -299,6 +301,14 @@ struct StationCapabilities {
     /// same minor-11 block, after dspInfoVersion. 0 (no local radio model):
     /// a window shows the station's spot sources disabled with a reason.
     int recordStreamVersion = 0;
+    /// R-IOS-18 / R-R3-49 (remote-window parity Task 21): 1 means the Core
+    /// chooses its radio from an app: it sends the `stationRadios` record
+    /// stream ({id, name, model, mac, address, protocol, inUse}) and takes
+    /// station.selectRadio, station.rescanRadios, station.setRadioModel and
+    /// station.forgetRadio. Sent in the same minor-11 block, after
+    /// recordStreamVersion. 0 (a Core that is not nereusd, or older): a
+    /// window shows This Core's Change radio disabled with a reason.
+    int stationRadiosVersion = 0;
     /// iPhone app Task 71 (R-IOS-02; the several-devices design, ruling
     /// 10.1): 1 means the Core admits up to four devices at once, sends the
     /// `connectedDevices` object and takes session.leave. Sent last in the

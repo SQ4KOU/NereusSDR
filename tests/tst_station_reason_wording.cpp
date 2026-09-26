@@ -145,6 +145,9 @@
 //                                    SpotSourceHost's refusals scanned and
 //                                    its readOnlyReason forwarded. AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 21 (R-IOS-18):
+//                                    StationRadios' refusals scanned.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -1064,6 +1067,16 @@ const QList<ReasonSource>& reasonSources()
         {"src/models/StationTciModel.cpp", {QStringLiteral("readOnlyReason")}, {}, 1},
         // Parity Task 19 (R-IOS-25): the spots.* refusals and the
         // `spotSources` object's read-only reason.
+        // Parity Task 21 (R-IOS-18): the station radio verbs' refusals and
+        // the Core's waiting lines.
+        {"src/core/station/StationRadios.cpp",
+         {QStringLiteral("choose"), QStringLiteral("unknownRadioReason"),
+          QStringLiteral("switchingReason"), QStringLiteral("inUseReason"),
+          QStringLiteral("select"), QStringLiteral("setModel"), QStringLiteral("forget")},
+         {}, 5, {},
+         {// The refuse helper's parameter and the three reasons above.
+          QStringLiteral("why"), QStringLiteral("inUseReason()"),
+          QStringLiteral("switchingReason()"), QStringLiteral("unknownRadioReason()")}},
         {"src/core/SpotSourceHost.cpp",
          {QStringLiteral("readOnlyReason"), QStringLiteral("connectSource"),
           QStringLiteral("disconnectSource"), QStringLiteral("sendCommand")},
@@ -1308,6 +1321,11 @@ const QList<AppSideReason>& appSideReasons()
         // R-R3-49 (parity Task 16): the filter graph's curve.
         {"src/core/session/IStationLink.h", "filterResponseUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
+        // R-IOS-18 (parity Task 21): the Core's radio.
+        {"src/core/session/IStationLink.h", "stationRadiosUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        {"src/core/station/StationRadios.h", "waitingReason",
+         "the Core's own line while it waits for a radio, kept with its list; no app is sent it"},
         // R-IOS-25 (parity Task 19): the Core's spot sources.
         {"src/core/session/IStationLink.h", "spotSourcesUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},

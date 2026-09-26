@@ -234,6 +234,10 @@
 //                slice.selectBand for a named slice to a Core at
 //                bandSelectVersion 1. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-26 - Parity Task 21 (R-IOS-18): the Core's `stationRadios`
+//                stream subscribed and applied; the station radio verbs,
+//                their refusals shown on This Core. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 //   2026-09-26 - Parity Task 19 (R-IOS-25): the Core's `spots` and
 //                spotConsole:<source> streams subscribed after the snapshot
 //                and applied to the window's model, the `spotSources`
@@ -1798,6 +1802,10 @@ void StationClient::onTransportText(const QByteArray& wire)
             for (const QString& source : SpotSourceHost::stationSources()) {
                 subscribe(SpotSourceHost::consoleStream(source), 200);
             }
+            // Parity Task 21 (R-IOS-18): the Core's radios, for This Core.
+            if (stationRadiosAvailable()) {
+                subscribe(QStringLiteral("stationRadios"), 64);
+            }
         }
         if (firstSnapshot) {
             qCInfo(lcStationClient) << "Session established with" << m_capabilities.stationName;
@@ -1811,7 +1819,7 @@ void StationClient::onTransportText(const QByteArray& wire)
         break;
     // Parity Task 19 (R-IOS-25): a stream this window subscribed to.
     case SessionMessageKind::RecordBatch:
-        if (spotSourcesAvailable() && !m_radioModel.isNull()) {
+        if ((spotSourcesAvailable() || stationRadiosAvailable()) && !m_radioModel.isNull()) {
             m_radioModel->applyStationRecordBatch(message.recordBatch);
         }
         break;
@@ -3752,6 +3760,30 @@ StationClient::CommandOutcome StationClient::requestSpotSource(const QByteArray&
     return sendCommand(verb, -1, arguments, QStringLiteral("the spot source request"));
 }
 
+bool StationClient::stationRadiosAvailable() const
+{
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.stationRadiosVersion >= 1;
+}
+
+StationClient::CommandOutcome StationClient::requestStationRadio(const QByteArray& verb,
+                                                                 const QString& mac, int model)
+{
+    if (!stationRadiosAvailable()) {
+        return {false, stationLinkReady() ? stationRadiosUnavailableReason()
+                                          : QStringLiteral("Not connected to the Core, so the "
+                                                           "radio request was not sent.")};
+    }
+    QList<MirrorUpdate> arguments;
+    if (verb != "station.rescanRadios") {
+        arguments.append(stringArgument("mac", mac));
+    }
+    if (verb == "station.setRadioModel") {
+        arguments.append(intArgument("model", model));
+    }
+    return sendCommand(verb, -1, arguments, QStringLiteral("the radio request"));
+}
+
 StationClient::CommandOutcome StationClient::requestFilterResponse(int sliceId,
                                                                   bool highResolution)
 {
@@ -4324,6 +4356,16 @@ void StationClient::handleCommandResult(const SessionMessage& message)
     // Parity Task 19: a spot source's refusal is shown on its Spot Hub tab;
     // a record subscription's is only logged (the window asks by itself).
     const bool spotRequest = pending.verb.startsWith("spots.");
+    // Parity Task 21: a radio request's refusal is shown on This Core.
+    const bool radioRequest = pending.verb == "station.selectRadio"
+        || pending.verb == "station.rescanRadios" || pending.verb == "station.setRadioModel"
+        || pending.verb == "station.forgetRadio";
+    if (radioRequest && !message.accepted && !m_radioModel.isNull()) {
+        m_radioModel->reportStationRadioRefused(
+            message.reason.isEmpty()
+                ? QStringLiteral("The Core refused the request without giving a reason.")
+                : message.reason);
+    }
     const bool recordRequest = pending.verb.startsWith("records.");
     if (spotRequest && !message.accepted && !m_radioModel.isNull()) {
         if (SpotSourceHost* spotSources = m_radioModel->spotSourceHost()) {
@@ -4334,7 +4376,7 @@ void StationClient::handleCommandResult(const SessionMessage& message)
         }
     }
     if (!message.accepted && !m_radioModel.isNull() && !ioBoardRequest
-        && !filterResponseRequest && !spotRequest && !recordRequest
+        && !filterResponseRequest && !spotRequest && !recordRequest && !radioRequest
         && !message.commandVerb.startsWith("ps3.") && !message.commandVerb.startsWith("dspAssets.")
         && !message.commandVerb.startsWith("notch.")) {
         // The station's OWN reason, relayed verbatim. Wording a refusal

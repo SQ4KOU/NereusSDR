@@ -287,6 +287,11 @@
         },
         {
             "kind": "i64",
+            "name": "stationRadiosVersion",
+            "value": 0
+        },
+        {
+            "kind": "i64",
             "name": "sessionHolderVersion",
             "value": 1
         },
@@ -1325,6 +1330,58 @@
             "capabilityVersion": 1,
             "minMinor": 11,
             "verb": "spots.clearAll"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "mac",
+                    "optional": false
+                }
+            ],
+            "capability": "stationRadiosVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "station.selectRadio"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "stationRadiosVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "station.rescanRadios"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "mac",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "model",
+                    "optional": false
+                }
+            ],
+            "capability": "stationRadiosVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "station.setRadioModel"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "mac",
+                    "optional": false
+                }
+            ],
+            "capability": "stationRadiosVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "station.forgetRadio"
         },
         {
             "arguments": [

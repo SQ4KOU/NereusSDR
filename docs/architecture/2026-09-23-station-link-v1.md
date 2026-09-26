@@ -815,6 +815,7 @@ change shows as surface drift and as a change to this table.
 | `meterReadingsVersion` | 1 |
 | `dspInfoVersion` | 1 |
 | `recordStreamVersion` | 1 |
+| `stationRadiosVersion` | 0 |
 | `sessionHolderVersion` | 1 |
 | `remoteTxVersion` | 1 |
 | `txStateVersion` | 2 |
@@ -1090,7 +1091,7 @@ When a feature is off, its version is 0:
   curve. Updating the Core may help.". It is followed by
   `recordStreamVersion`.
 - `recordStreamVersion` (parity Task 19, the iPhone app plan's Task 21):
-  sent only at agreed minor 11, last, and 0 on a station with no radio
+  sent only at agreed minor 11, and 0 on a station with no radio
   model of its own (a window's). At 1 the Core takes `records.subscribe`
   and `records.unsubscribe` and sends `record.batch` (section 7.7) for its
   `spots` stream and each station source's `spotConsole:<source>` stream,
@@ -1102,7 +1103,20 @@ When a feature is off, its version is 0:
   computer runs its own WSJT-X and SpotCollector listeners. On a Core that
   sends 0 or no entry a window shows the station's sources' buttons
   disabled with "This Core does not run its spot sources for this app.
-  Updating the Core may help.".
+  Updating the Core may help.". It is followed by `stationRadiosVersion`.
+- `stationRadiosVersion` (parity Task 21, the iPhone app plan's Task 25):
+  sent only at agreed minor 11, last, and 1 only on a Core that chooses
+  its own radio (`nereusd`; a Core a desktop window hosts sends 0). At 1
+  the Core sends the `stationRadios` record stream (section 7.7) and takes
+  `station.selectRadio`, `station.rescanRadios`, `station.setRadioModel`
+  and `station.forgetRadio` (section 9.1). Its choice of radio, in order:
+  a radio chosen from an app (saved in the Core's own settings, kept
+  across restarts), then `radio_mac` from `nereusd.conf`, then the one
+  radio in sight when exactly one is visible; otherwise it waits for a
+  choice. It never picks the first radio found. On a Core that sends 0 or
+  no entry a window shows This Core's Change radio disabled with "This
+  Core does not let this app change its radio. Updating the Core may
+  help.".
 
 - `sessionHolderVersion`: sent only at agreed minor 11, last, and only to
   a peer whose hello declared `sessionHolder` 1 with `deviceAuth` 1; any
@@ -1304,12 +1318,13 @@ older window sees only the values it was built for.
 | 55 | `meterReadingsVersion` | `i64` |
 | 56 | `dspInfoVersion` | `i64` |
 | 57 | `recordStreamVersion` | `i64` |
-| 58 | `sessionHolderVersion` | `i64` |
-| 59 | `remoteTxVersion` | `i64` |
-| 60 | `txRefusalCode` | `utf8` |
-| 61 | `txRefusalReason` | `utf8` |
-| 62 | `txRefusalFix` | `utf8` |
-| 63 | `txStateVersion` | `i64` |
+| 58 | `stationRadiosVersion` | `i64` |
+| 59 | `sessionHolderVersion` | `i64` |
+| 60 | `remoteTxVersion` | `i64` |
+| 61 | `txRefusalCode` | `utf8` |
+| 62 | `txRefusalReason` | `utf8` |
+| 63 | `txRefusalFix` | `utf8` |
+| 64 | `txStateVersion` | `i64` |
 
 <!-- /surface -->
 
@@ -2734,6 +2749,7 @@ requester's own slices never count, nor do slices nobody owns.
 | The amplifier, interlock, power limit | `amplifier` `operate`; `configurePgxl`, `disconnectPgxl`, `setPgxlConnectionSettings`, `setPgxlName`, `setPgxlHardware`, `setPgxlNetwork`, `savePgxlSettings`, `setTxInterlockPolicy`, `setPgxlPowerCap`, `configureRfKit`, `disconnectRfKit`, `setRfKitEnabled`; `settings.write` of `PGXL_...` | the transmitter |
 | 4O3A on or off | `setFourO3AEnabled` | as the tuner: ADC0's receivers on a 2-ADC board, every receiver on a 1-ADC board; the transmitter |
 | The tuner, the RF-Kit amplifier's antenna | `setTgxlAntenna`, `setTgxlOperate`, `setTgxlBypass`, `configureTgxl`, `disconnectTgxl`, `setTgxlName`, `setTgxlNetwork`, `saveTgxlSettings`; `settings.write` of `TGXL_...` and `RfKit_...` | ADC0's receivers on a 2-ADC board, every receiver on a 1-ADC board; the transmitter |
+| The radio | `station.selectRadio` (parity Task 21) | every receiver and the transmitter; `change` "Radio", the Core's radio's name, the chosen radio's name |
 
 A verb naming another device's slice is refused first, as section 7.3
 says. The words of `change` are the Core's: "Attenuator, ADC 1", "0 dB",
@@ -2873,6 +2889,7 @@ keeps:
 | --- | --- | --- |
 | `spots` | 500 | One spot the Core holds (its SpotModel: the station sources' spots, and FreeDV Reporter's once the Core runs it), `id` its index: `timeUtc` (string, ISO 8601 UTC), `frequencyHz` (number, whole Hz), `call`, `mode`, `source` (the source's label: `Cluster`, `RBN`, `POTA`, `PSK`, `FreeDV`), `spotter`, `comment` (strings), `band` (number, the Band as the catalogue's `bands` numbers it, 13 for GEN), `dxccColour` (string, `#rrggbb`, empty when the Core does not colour it) and `dxccPriority` (number: 4 a new DXCC entity, 3 a new band, 2 a new mode, 1 worked before, 0 not known or colouring off) |
 | `spotConsole:<source>` | 200 | One console line of a station source (`dxCluster`, `rbn`, `pota`, `pskReporter`), `id` a rising number: `line` (string). A command typed from any device shows as `> <command>` |
+| `stationRadios` | 64 | With `stationRadiosVersion` 1: one radio the Core can see, the Core's radio first, `id` its MAC in upper case: `id` and `mac` (strings, the same), `name` (string, as the radio reports itself), `model` (number, the `hpsdrModel` the Core runs it as: its saved override, else its board's), `address` (string, its IP address, empty when not known), `protocol` (number, 1 or 2) and `inUse` (boolean, true for the Core's radio). The list is what the Core's last scan found, with the Core's radio; a radio stays listed after it drops off until a scan misses it |
 
 A peer asks with `records.subscribe {stream, backlog}` (section 9.1); the
 Core answers, then sends at once a `record.batch` with `reset` true
@@ -3260,6 +3277,10 @@ refused.
 | `spots.disconnect` | `source` utf8 | `recordStreamVersion` | 1 | 11 |
 | `spots.sendCommand` | `source` utf8, `text` utf8 | `recordStreamVersion` | 1 | 11 |
 | `spots.clearAll` | none | `recordStreamVersion` | 1 | 11 |
+| `station.selectRadio` | `mac` utf8 | `stationRadiosVersion` | 1 | 11 |
+| `station.rescanRadios` | none | `stationRadiosVersion` | 1 | 11 |
+| `station.setRadioModel` | `mac` utf8, `model` i64 | `stationRadiosVersion` | 1 | 11 |
+| `station.forgetRadio` | `mac` utf8 | `stationRadiosVersion` | 1 | 11 |
 | `nnr.setDiagnostics` | `sliceId` i64, `testMode` i64, `outputMode` i64 | `nnrVersion` | 1 | 5 |
 | `nnr.resetTuning` | `sliceId` i64 | `nnrVersion` | 1 | 5 |
 | `nnr.tryAgain` | `sliceId` i64 | `nnrVersion` | 1 | 11 |
@@ -3374,6 +3395,29 @@ These command groups need a sentence beyond the table:
   "The Core could not read this request.", "This Core does not send its
   spots or console lines." without the feature, and "Update this app to
   see the Core's spots." below minor 11.
+- **The Core's radio** (parity Task 21, `stationRadiosVersion` 1; This
+  Core's Change radio). `station.selectRadio` (`mac` utf8) makes a radio
+  the Core's: the Core saves the choice first (so it holds across a
+  restart), then restarts its run on that radio, which comes up with its
+  own receive layout, per-radio settings, capabilities and catalogue, as
+  on the Core's next start; every connection ends and reconnects. It asks
+  the other devices first (section 7.6), since it reaches every slice and
+  the transmitter. Choosing the Core's radio again is taken and changes
+  nothing. `station.rescanRadios` looks for radios again (the list
+  follows as `stationRadios` records). `station.setRadioModel` (`mac`,
+  `model` i64) sets the model the Core runs that radio as, one its board
+  allows, saved for that radio and applied at its next connect (the
+  local Connection panel's model override). `station.forgetRadio` (`mac`)
+  removes a radio's saved entry, its model and a choice of it, and takes
+  it off the list until a scan finds it. Each is refused while the Core's
+  radio is on the air ("The radio is on the air. Try again when it
+  stops."). Other refusals: "The Core cannot see that radio. Scan again,
+  then choose it.", "That radio is in use by another program.", "The Core
+  is changing its radio. Try again when it has finished." (a choice while
+  the last one is still being made), "That model does not match this
+  radio.", "The Core is using this radio. Choose another radio first."
+  (forgetting the Core's radio), "This Core does not change its radio
+  from this app." and "The Core could not read this request.".
 - **The Core's spot sources** (parity Task 19, `recordStreamVersion` 1).
   `spots.connect` and `spots.disconnect` (`source` utf8: `dxCluster`,
   `rbn`, `pota` or `pskReporter`) start and stop one of the Core's
@@ -4633,7 +4677,7 @@ same on every machine.
 | `settings-write` | A station-scoped write echoed with its origin; an operator-local write rejected; a removal sent as `settings.value` with no entry; on the receive-only Core, a DSP > Options TX key and a PA forward-power table key (`paCalibration/calPoint1`, version 6) taken off the air, an OC transmit pin (`oc/tx/20m/pin3`), an OC pin action (`oc/actions/pin1/action`) and TX Display Cal (`cal/txDisplayOffset`) taken off the air (version 8), and a transmit hardware key refused |
 | `unknown-verb` | `command.result` refused, "The Core does not know this request. Updating the Core may help."; the connection stays up |
 | `unknown-kind` | `session.end` "The Core could not read a message from this app.", `retryable` false, `code` `protocolError` |
-| `verbs-*` | Each verb in `commands`, grouped by the capability that gates it, invoked with its own arguments (for `setPgxlHardware`, one of its three optional ones) and, where it takes any, with one argument renamed (and nothing else changed: the same values and kinds); the two get different answers, so each shows the station read the arguments (a PureSignal action with arguments it does not take is refused "The Core could not read this PureSignal request." before the transmit gate is asked); `verbs-ps3` (which requires `psAlgorithmVersion` 3) invokes the PureSignal verbs whose answers do not depend on arming (`ps3.off`, `ps3.twoTone` off and `ps3.saveCorrection`), and `verbs-ps3-arming` (which also requires `transmitSettingsVersion` 7) invokes `ps3.twoTone` with `enabled` true, refused "PureSignal cannot be run from a remote window yet.", and the arming verbs (`ps3.single`, `ps3.automatic`, `ps3.applyCurrent`, `ps3.restoreCorrection`), taken and then failing on the static station, which has no PureSignal running ("PureSignal is unavailable until the radio is ready."); `nnr.applyModelSelection` names the revision `dspAssets` gave in the snapshot; `verbs-tgxl-control` (which requires `remoteTgxlControlVersion` 2) invokes the antenna, operate and bypass switches, and `verbs-tgxl-relays` (which requires `remoteTgxlControlVersion` 4) matches `scanTgxlLan`'s `devicesJson` as any text, since a real Tuner Genius on the test computer's network may answer, and its accepted `setTgxlAddress` is followed by the `tuner` delta carrying the saved address, then a blank host, saved and shown as blank, and the address again; `verbs-pgxl-control` (which requires `remotePgxlControlVersion` 4) does the same for `scanPgxlLan` and `setPgxlAddress` (the `amplifier` delta, and the blank host), and its `setPgxlOperate` is refused on the static station, which has no amp connected ("The Core is not connected to the Power Genius."); `verbs-rfkit` (which requires `remoteRfKitControlVersion` 2) connects, disconnects and switches the RF-Kit, and `verbs-rfkit-control` (which requires `remoteRfKitControlVersion` 4) invokes `setRfKitOperate`, `setRfKitAntenna` and `setRfKitTciMode`, refused on the static station with no amp admitted ("The Core is not connected to the RF-Kit amplifier."), and its accepted `setRfKitAddress` is followed by the `rfkit` delta carrying the saved address, then the blank host and the address again; `verbs-tx-antenna` (which requires `radioHardwareVersion` 6) invokes `setAlexTxAntenna` with a band's current antenna (taken, no delta) and with `band` renamed; `verbs-io-board` (which requires `radioHardwareVersion` 7) invokes `requestIoBoardI2c` and `setIoBoardOutput`, each refused on the static station, which has no radio connection to reach the I2C bus through ("The radio is not connected, so its I2C bus cannot be reached."), and each with one argument renamed; `verbs-dsp-info` (which requires `dspInfoVersion` 1) invokes `dsp.filterResponse` with `highResolution` false (taken, `stepHz` 0 and an empty `magnitudesDbJson`), with `highResolution` true (refused on the static station, which runs no receiver channel: "The Core's receiver for this slice is not running.") and with one argument renamed; `verbs-records` (which requires `recordStreamVersion` 1) subscribes to `spots` with a backlog (taken, then the `record.batch` reset, empty on the static station), to a stream the Core does not keep (refused "The Core does not keep that list."), and with one argument renamed, then unsubscribes right and wrong; `verbs-spots` (which requires `recordStreamVersion` 1) invokes `spots.connect` for the DX cluster with no callsign saved (refused "Enter your callsign in Spot Hub first."), `spots.disconnect` for POTA (taken: it is not running), `spots.sendCommand` to a cluster that is not connected (refused "The DX cluster is not connected."), each with one argument renamed, and `spots.clearAll` (taken; no station source is ever dialled). A version's new verbs go in a fixture of their own, so an app at the older version still runs the older file |
+| `verbs-*` | Each verb in `commands`, grouped by the capability that gates it, invoked with its own arguments (for `setPgxlHardware`, one of its three optional ones) and, where it takes any, with one argument renamed (and nothing else changed: the same values and kinds); the two get different answers, so each shows the station read the arguments (a PureSignal action with arguments it does not take is refused "The Core could not read this PureSignal request." before the transmit gate is asked); `verbs-ps3` (which requires `psAlgorithmVersion` 3) invokes the PureSignal verbs whose answers do not depend on arming (`ps3.off`, `ps3.twoTone` off and `ps3.saveCorrection`), and `verbs-ps3-arming` (which also requires `transmitSettingsVersion` 7) invokes `ps3.twoTone` with `enabled` true, refused "PureSignal cannot be run from a remote window yet.", and the arming verbs (`ps3.single`, `ps3.automatic`, `ps3.applyCurrent`, `ps3.restoreCorrection`), taken and then failing on the static station, which has no PureSignal running ("PureSignal is unavailable until the radio is ready."); `nnr.applyModelSelection` names the revision `dspAssets` gave in the snapshot; `verbs-tgxl-control` (which requires `remoteTgxlControlVersion` 2) invokes the antenna, operate and bypass switches, and `verbs-tgxl-relays` (which requires `remoteTgxlControlVersion` 4) matches `scanTgxlLan`'s `devicesJson` as any text, since a real Tuner Genius on the test computer's network may answer, and its accepted `setTgxlAddress` is followed by the `tuner` delta carrying the saved address, then a blank host, saved and shown as blank, and the address again; `verbs-pgxl-control` (which requires `remotePgxlControlVersion` 4) does the same for `scanPgxlLan` and `setPgxlAddress` (the `amplifier` delta, and the blank host), and its `setPgxlOperate` is refused on the static station, which has no amp connected ("The Core is not connected to the Power Genius."); `verbs-rfkit` (which requires `remoteRfKitControlVersion` 2) connects, disconnects and switches the RF-Kit, and `verbs-rfkit-control` (which requires `remoteRfKitControlVersion` 4) invokes `setRfKitOperate`, `setRfKitAntenna` and `setRfKitTciMode`, refused on the static station with no amp admitted ("The Core is not connected to the RF-Kit amplifier."), and its accepted `setRfKitAddress` is followed by the `rfkit` delta carrying the saved address, then the blank host and the address again; `verbs-tx-antenna` (which requires `radioHardwareVersion` 6) invokes `setAlexTxAntenna` with a band's current antenna (taken, no delta) and with `band` renamed; `verbs-io-board` (which requires `radioHardwareVersion` 7) invokes `requestIoBoardI2c` and `setIoBoardOutput`, each refused on the static station, which has no radio connection to reach the I2C bus through ("The radio is not connected, so its I2C bus cannot be reached."), and each with one argument renamed; `verbs-dsp-info` (which requires `dspInfoVersion` 1) invokes `dsp.filterResponse` with `highResolution` false (taken, `stepHz` 0 and an empty `magnitudesDbJson`), with `highResolution` true (refused on the static station, which runs no receiver channel: "The Core's receiver for this slice is not running.") and with one argument renamed; `verbs-records` (which requires `recordStreamVersion` 1) subscribes to `spots` with a backlog (taken, then the `record.batch` reset, empty on the static station), to a stream the Core does not keep (refused "The Core does not keep that list."), and with one argument renamed, then unsubscribes right and wrong; `verbs-station-radios` (which requires `stationRadiosVersion` 1, on a station set up with `stationRadios`: its static radio and a second "Bench G2" in sight) subscribes to `stationRadios`, sets the second radio's model (taken, then the record's upsert), refuses forgetting the Core's radio, rescans, refuses a radio it cannot see and takes the second radio, each with one argument renamed where it takes any; `station-radio-confirm` chooses the second radio with another device listening, is asked (`confirm.request`, `change` "Radio"), proceeds, and the other device is told (`notice`); `verbs-spots` (which requires `recordStreamVersion` 1) invokes `spots.connect` for the DX cluster with no callsign saved (refused "Enter your callsign in Spot Hub first."), `spots.disconnect` for POTA (taken: it is not running), `spots.sendCommand` to a cluster that is not connected (refused "The DX cluster is not connected."), each with one argument renamed, and `spots.clearAll` (taken; no station source is ever dialled). A version's new verbs go in a fixture of their own, so an app at the older version still runs the older file |
 
 `tst_link_conformance_session` also checks that every verb in the
 `commands` table is invoked both ways by some fixture, and that the two

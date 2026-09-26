@@ -7680,6 +7680,17 @@ nereus_add_test(tst_remote_spots
     fakes/RemoteWindowHarness.cpp
     EXTRA_LABELS session)
 target_compile_definitions(tst_remote_spots PRIVATE NEREUS_BUILD_TESTS)
+# Parity Task 21 (R-IOS-18, R-R3-38): the Core's choice of radio (the
+# order, the requests, the on-air rule, DaemonApp's wait, switch and saved
+# choice). Discovery is the test's own list; nothing connects.
+nereus_add_test(tst_station_radios EXTRA_LABELS session)
+target_compile_definitions(tst_station_radios PRIVATE NEREUS_BUILD_TESTS)
+# Parity Task 21 (B6.2, B6.3): Setup > This Core and the menus in a real
+# remote window over a local WebSocket. No radio, no audio device.
+nereus_add_test(tst_this_core_page
+    fakes/RemoteWindowHarness.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_this_core_page PRIVATE NEREUS_BUILD_TESTS)
 # iPhone app Task 19 (R-IOS-06): the Core's catalogue; the G2 and HL2
 # catalogue fixtures against the desktop's own values, the revision, a
 # preset change reaching a client over the in-process loopback, the size.

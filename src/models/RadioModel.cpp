@@ -449,6 +449,10 @@
 //                shows the Core's spots stream beside its own
 //                (applyStationRecordBatch). J.J. Boyd (KG4VCF), AI-assisted
 //                via Anthropic Claude Code.
+//   2026-09-26 - Parity Task 21 (R-IOS-18): a remote window's copy of the
+//                Core's radios (stationRadios, stationRadiosChanged) and the
+//                Core's refusals of a radio request (stationRadioRefused).
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -3721,6 +3725,38 @@ StationSpotLook stationSpotLook(const QString& source)
 
 void RadioModel::applyStationRecordBatch(const RecordBatch& batch)
 {
+    // Parity Task 21 (R-IOS-18): the Core's radios, in the Core's order.
+    if (batch.stream == QLatin1String("stationRadios")) {
+        QList<StationRadioEntry> entries = batch.reset ? QList<StationRadioEntry>{}
+                                                       : m_stationRadioEntries;
+        for (const QString& id : batch.removes) {
+            entries.removeIf([&id](const StationRadioEntry& e) { return e.id == id; });
+        }
+        for (const RecordUpsert& u : batch.upserts) {
+            const std::optional<StationRadioEntry> entry =
+                StationRadioEntry::fromFields(u.id, u.fields);
+            if (!entry) {
+                continue;
+            }
+            const auto at = std::find_if(entries.begin(), entries.end(),
+                                         [&u](const StationRadioEntry& e) { return e.id == u.id; });
+            if (at != entries.end()) {
+                *at = *entry;
+            } else {
+                entries.append(*entry);
+            }
+        }
+        // The Core's radio first.
+        std::stable_sort(entries.begin(), entries.end(),
+                         [](const StationRadioEntry& a, const StationRadioEntry& b) {
+            return a.inUse && !b.inUse;
+        });
+        if (entries != m_stationRadioEntries) {
+            m_stationRadioEntries = entries;
+            emit stationRadiosChanged();
+        }
+        return;
+    }
     if (batch.stream.startsWith(QLatin1String("spotConsole:"))) {
         const QString source = batch.stream.mid(12);
         if (!SpotSourceHost::isStationSource(source) || !m_spotSourceHost) {
@@ -3794,8 +3830,22 @@ void RadioModel::applyStationRecordBatch(const RecordBatch& batch)
     }
 }
 
+QList<StationRadioEntry> RadioModel::stationRadios() const
+{
+    return m_stationRadioEntries;
+}
+
+void RadioModel::reportStationRadioRefused(const QString& reason)
+{
+    emit stationRadioRefused(reason);
+}
+
 void RadioModel::clearStationRecords()
 {
+    if (!m_stationRadioEntries.isEmpty()) {
+        m_stationRadioEntries.clear();
+        emit stationRadiosChanged();
+    }
     if (m_spotModel) {
         for (const int index : std::as_const(m_stationSpotIndex)) {
             m_spotModel->removeSpot(index);

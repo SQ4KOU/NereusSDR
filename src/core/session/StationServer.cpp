@@ -507,6 +507,11 @@
 //                                    streams and the read-only
 //                                    `spotSources` object.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  R-IOS-18 / R-R3-49 (parity Task 21):
+//                                    stationRadiosVersion 1: the
+//                                    `stationRadios` stream and the four
+//                                    station radio verbs.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -516,6 +521,7 @@
 #include "core/DxccColorProvider.h"
 #include "core/HardwareProfile.h"
 #include "core/SpotSourceHost.h"
+#include "core/station/StationRadios.h"
 #include "core/WdspEngine.h"
 #include "core/dsp/NnrSettings.h"
 #include "core/security/CertificateStore.h"
@@ -771,6 +777,8 @@ bool isSpotSourcesMessage(const SessionMessage& message)
 // streams" section): the newest 500 spots, the last 200 console lines.
 constexpr int kSpotsStreamCapacity = 500;
 constexpr int kSpotConsoleCapacity = 200;
+// Parity Task 21: the radios a Core can list.
+constexpr int kStationRadiosCapacity = 64;
 
 // R-R3-47 / R-R3-22 (accessoryDataVersion 1): the Core's accessory records
 // and settings, read-only, for a peer at kRadioIdentitySessionProtocolMinor
@@ -6785,6 +6793,70 @@ int StationServer::recordStreamVersion() const
         : 0;
 }
 
+int StationServer::stationRadiosVersion() const
+{
+    // R-IOS-18 / R-R3-49 (parity Task 21): only a Core that chooses its own
+    // radio (nereusd) offers it.
+    return !m_stationRadios.isNull() && m_radioModel
+            && m_radioModel->role() != RadioModel::Role::Remote
+        ? 1
+        : 0;
+}
+
+void StationServer::setStationRadios(StationRadios* radios)
+{
+    if (!m_stationRadios.isNull()) {
+        disconnect(m_stationRadios, nullptr, this, nullptr);
+    }
+    m_stationRadios = radios;
+    m_dispatcher->setStationRadios(radios);
+    if (radios == nullptr) {
+        return;
+    }
+    if (m_recordFlushTimer == nullptr) {
+        m_recordFlushTimer = new QTimer(this);
+        m_recordFlushTimer->setSingleShot(true);
+        m_recordFlushTimer->setInterval(kDefaultDeltaFlushMs);
+        connect(m_recordFlushTimer, &QTimer::timeout, this, &StationServer::flushRecordStreams);
+    }
+    const QString name = QStringLiteral("stationRadios");
+    if (m_recordStreams.find(name) == m_recordStreams.end()) {
+        m_recordStreams.emplace(name, std::make_unique<RecordStream>(name, kStationRadiosCapacity));
+    }
+    connect(radios, &StationRadios::entriesChanged, this, &StationServer::publishStationRadios);
+    publishStationRadios();
+}
+
+void StationServer::publishStationRadios()
+{
+    const auto it = m_recordStreams.find(QStringLiteral("stationRadios"));
+    if (it == m_recordStreams.end() || m_stationRadios.isNull()) {
+        return;
+    }
+    RecordStream& stream = *it->second;
+    const QList<StationRadioEntry> entries = m_stationRadios->entries();
+    QSet<QString> now;
+    for (const StationRadioEntry& entry : entries) {
+        now.insert(entry.id);
+    }
+    // What went, then what is (each upsert only when it changed).
+    QHash<QString, QJsonObject> held;
+    for (const RecordUpsert& record : stream.newest(stream.capacity())) {
+        if (!now.contains(record.id)) {
+            stream.remove(record.id);
+        } else {
+            held.insert(record.id, record.fields);
+        }
+    }
+    for (const StationRadioEntry& entry : entries) {
+        const QJsonObject fields = entry.toFields();
+        if (!held.contains(entry.id) || held.value(entry.id) != fields) {
+            stream.upsert(entry.id, fields);
+        }
+    }
+    scheduleRecordFlush();
+}
+
 RecordStream* StationServer::recordStreamForTest(const QString& name) const
 {
     const auto it = m_recordStreams.find(name);
@@ -7012,6 +7084,8 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             caps.dspInfoVersion = dspInfoVersion();
             // R-IOS-25 / R-R3-49 (parity Task 19): the record streams.
             caps.recordStreamVersion = recordStreamVersion();
+            // R-IOS-18 / R-R3-49 (parity Task 21): the Core's radio choice.
+            caps.stationRadiosVersion = stationRadiosVersion();
             // iPhone app Task 71 (ruling 10.1): several devices at once, for
             // a peer that declared sessionHolder with deviceAuth; any other
             // peer is sent no entry, so its capabilities are today's.

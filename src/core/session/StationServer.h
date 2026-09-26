@@ -443,6 +443,7 @@ class SettingsProxyServer;
 class StateMirror;
 class StationOpeningGate;
 class StationCatalog;
+class StationRadios;
 class StationDevicesFacade;
 class TokenStore;
 class TransmitHolder;
@@ -939,6 +940,14 @@ public:
     // spotConsole:<source>), the read-only `spotSources` object, and the
     // spots.* verbs; 0 otherwise.
     int recordStreamVersion() const;
+    // R-IOS-18 / R-R3-49 (parity Task 21): stationRadiosVersion. 1 when the
+    // Core chooses its own radio (nereusd attaches StationRadios): the
+    // `stationRadios` stream and the station.selectRadio,
+    // station.rescanRadios, station.setRadioModel and station.forgetRadio
+    // verbs; 0 otherwise.
+    int stationRadiosVersion() const;
+    /// Parity Task 21: the Core's radios (nereusd's DaemonApp owns it).
+    void setStationRadios(StationRadios* radios);
     /// For a test: the stream by name (spots, spotConsole:<source>), or
     /// null.
     RecordStream* recordStreamForTest(const QString& name) const;
@@ -1633,6 +1642,9 @@ private:
     std::map<QString, std::unique_ptr<RecordStream>> m_recordStreams;
     quint64 m_consoleLineId = 0;
     QTimer* m_recordFlushTimer = nullptr;
+    // Parity Task 21: the Core's radios and their stream.
+    QPointer<StationRadios> m_stationRadios;
+    void publishStationRadios();
     // iPhone app Task 71: who holds a place on the Core.
     std::unique_ptr<DeviceSessionRegistry> m_deviceSessions;
     // The connection whose command.invoke is being dispatched, and the end

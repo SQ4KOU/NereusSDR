@@ -103,6 +103,9 @@
 //               remote listener, the first start's notice, and the console
 //               socket (startControlSocket()). J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: Parity Task 21 (R-IOS-18): StationRadios, the radio switch
+//               and the connected rescan. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/RadioDiscovery.h"       // RadioInfo, RadioDiscovery, HPSDRHW
@@ -132,6 +135,7 @@ class QTimer;
 namespace NereusSDR {
 
 class RadioModel;
+class StationRadios;
 class StationServer;
 class StationLanAnnouncer;
 class DnsSdAdvertiser;
@@ -480,6 +484,16 @@ private:
     std::unique_ptr<RadioModel> m_radioModel;
     DaemonConfig m_radioConfig;
     QString m_selectedRadioMac;
+    // Parity Task 21 (R-IOS-18): the radios this Core finds, its choice of
+    // one and the requests that change it. Kept across a restart (a radio
+    // change restarts the run), so the list a window shows stays.
+    std::unique_ptr<StationRadios> m_stationRadios;
+    std::unique_ptr<QThread> m_radioScanThread;
+    quint64 m_radioScanGeneration {0};
+    void ensureStationRadios();
+    void switchRadio(const QString& mac);
+    void restartForRadioChange();
+    void rescanRadios();
     std::unique_ptr<QThread> m_radioDiscoveryThread;
     QTimer* m_radioRetryTimer {nullptr};
     quint64 m_radioRecoveryGeneration {0};

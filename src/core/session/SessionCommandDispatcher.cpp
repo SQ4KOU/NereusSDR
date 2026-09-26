@@ -198,12 +198,17 @@
 //                                    records.subscribe, records.unsubscribe
 //                                    and the spots.* verbs.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  R-IOS-18 / R-R3-49 (parity Task 21,
+//                                    stationRadiosVersion 1): the station
+//                                    radio verbs.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
 
 #include "core/SliceOwnership.h"
 #include "core/SpotSourceHost.h"
+#include "core/station/StationRadios.h"
 #include "core/session/ObjectRegistry.h"
 #include "core/dsp/DspAssetService.h"
 #include "DspCommandValues.h"
@@ -409,6 +414,8 @@ QString notRepresentableReason()
 //   spots.sendCommand, spots.clearAll
 //                          recordStreamVersion 1 (the window subscribes after
 //                          its snapshot; requestSpotSource)
+//   station.selectRadio, station.rescanRadios, station.setRadioModel,
+//   station.forgetRadio    stationRadiosVersion 1 (requestStationRadio)
 //   nnr.*                  nnrControlAvailable(); nnr.tryAgain adds
 //                          kNnrLimitSessionProtocolMinor
 //   nnr.applyModelSelection dspAssetVersion 1 (requestApplyNnrModels)
@@ -609,6 +616,15 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
         {"spots.sendCommand", {arg("source", kUtf8), arg("text", kUtf8)},
          "recordStreamVersion", 1, kRadioIdentitySessionProtocolMinor},
         {"spots.clearAll", {}, "recordStreamVersion", 1, kRadioIdentitySessionProtocolMinor},
+        // The Core's radio (R-IOS-18, R-R3-49, parity Task 21).
+        {"station.selectRadio", {arg("mac", kUtf8)}, "stationRadiosVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        {"station.rescanRadios", {}, "stationRadiosVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        {"station.setRadioModel", {arg("mac", kUtf8), arg("model", kInt)},
+         "stationRadiosVersion", 1, kRadioIdentitySessionProtocolMinor},
+        {"station.forgetRadio", {arg("mac", kUtf8)}, "stationRadiosVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
         // Neural noise reduction.
         {"nnr.setDiagnostics",
          {arg("sliceId", kInt), arg("testMode", kInt), arg("outputMode", kInt)},
@@ -964,6 +980,11 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
     } else if (invoke.commandVerb == "records.subscribe"
                || invoke.commandVerb == "records.unsubscribe") {
         handleRecords(invoke);
+    } else if (invoke.commandVerb == "station.selectRadio"
+               || invoke.commandVerb == "station.rescanRadios"
+               || invoke.commandVerb == "station.setRadioModel"
+               || invoke.commandVerb == "station.forgetRadio") {
+        handleStationRadios(invoke);
     } else if (invoke.commandVerb == "spots.connect" || invoke.commandVerb == "spots.disconnect"
                || invoke.commandVerb == "spots.sendCommand"
                || invoke.commandVerb == "spots.clearAll") {
@@ -3081,6 +3102,57 @@ void SessionCommandDispatcher::handleRecords(const SessionMessage& invoke)
     }
     emitResult(invoke.commandVerb, invoke.commandId, false,
                QStringLiteral("This Core does not send its spots or console lines."), {});
+}
+
+// R-IOS-18 / R-R3-49 (parity Task 21, stationRadiosVersion 1): This Core's
+// Change radio, Scan again, Edit radio and Forget radio. Each is refused
+// while the Core's radio is on the air (the parity plan's rule), and
+// nothing is saved or switched then.
+void SessionCommandDispatcher::setStationRadios(StationRadios* radios)
+{
+    m_stationRadios = radios;
+}
+
+void SessionCommandDispatcher::handleStationRadios(const SessionMessage& invoke)
+{
+    const bool rescan = invoke.commandVerb == "station.rescanRadios";
+    const bool setModel = invoke.commandVerb == "station.setRadioModel";
+    QVariant mac;
+    int model = 0;
+    const bool readable = rescan
+        ? invoke.arguments.isEmpty()
+        : (hasExactlyArguments(invoke.arguments,
+                               setModel ? std::initializer_list<QByteArray>{"mac", "model"}
+                                        : std::initializer_list<QByteArray>{"mac"})
+           && findArgument(invoke.arguments, "mac", &mac) && mac.typeId() == QMetaType::QString
+           && (!setModel
+               || findIntArgument(invoke.arguments, "model", &model) == ArgumentStatus::Ok));
+    if (!readable) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core could not read this request."), {});
+        return;
+    }
+    if (m_stationRadios.isNull()) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("This Core does not change its radio from this app."), {});
+        return;
+    }
+    QString reason;
+    if (m_radioModel->stationOnAirRefusal(&reason)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false, reason, {});
+        return;
+    }
+    bool accepted = false;
+    if (rescan) {
+        accepted = m_stationRadios->rescan(&reason);
+    } else if (setModel) {
+        accepted = m_stationRadios->setModel(mac.toString(), model, &reason);
+    } else if (invoke.commandVerb == "station.forgetRadio") {
+        accepted = m_stationRadios->forget(mac.toString(), &reason);
+    } else {
+        accepted = m_stationRadios->select(mac.toString(), &reason);
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, accepted, reason, {});
 }
 
 // R-IOS-25 / R-R3-49 (parity Task 19, recordStreamVersion 1): the Spot Hub's

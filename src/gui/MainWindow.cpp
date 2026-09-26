@@ -276,6 +276,13 @@
 //                Core's; the Spot Hub's Core settings are disabled with
 //                Setup's words while there is no Core session. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - Remote-window parity Task 21 (R-IOS-18, B6.2, B6.3): the
+//                Radio menu, the station block and the title bar offer
+//                Change radio, Edit radio and Forget radio for the Core's
+//                radio (Setup > This Core); the title bar copies the Core's
+//                radio's IP and MAC; an unmanaged remote window's Manage
+//                Radios opens This Core. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -585,6 +592,8 @@ warren@wpratt.com
 // Phase 3J-2 H1: Tools menu modeless singletons (Spot Hub + FreeDV Reporter).
 #include "SpotHubDialog.h"
 #include "core/SpotSourceHost.h"
+#include "core/station/StationRadios.h"
+#include "gui/setup/ThisCorePage.h"
 #include "FreeDVReporterDialog.h"
 // Phase 3F Sub-Epic G T4: bench-minimum Diversity dialog (Tools menu).
 #include "DiversityDialog.h"
@@ -7689,10 +7698,38 @@ void MainWindow::buildMenuBar()
 
     // Manage Radios — always enabled; sole purpose is to open the panel
     // (which has its own ↻ Scan button for fresh broadcast discovery).
+    // Parity Task 21 (R-IOS-18): in a remote window that is not managed by
+    // the Connections picker, the Core's radios are on Setup > This Core
+    // (the Connection panel is this computer's radios, which a remote
+    // window does not run).
     m_actManageRadios = radioMenu->addAction(QStringLiteral("&Manage Radios…"),
-        this, &MainWindow::showConnectionPanel);
+        this, [this]() {
+            if (!m_connectionPickerManaged && m_radioModel != nullptr
+                && !m_radioModel->ownsLocalDsp()) {
+                openThisCore(ThisCoreFocus::ChangeRadio);
+                return;
+            }
+            showConnectionPanel();
+        });
     m_actManageRadios->setToolTip(QStringLiteral(
         "Open the Connection Panel (radio list + ↻ Scan)"));
+    // Parity Task 21 (R-IOS-18, B6.2; the operator's "Option A"): a remote
+    // window's Core's radio, beside Connections. A window running its own
+    // radio changes it in the Connection panel.
+    m_actChangeCoreRadio = radioMenu->addAction(tr("Change radio…"), this, [this]() {
+        openThisCore(ThisCoreFocus::ChangeRadio);
+    });
+    m_actEditCoreRadio = radioMenu->addAction(tr("Edit radio…"), this, [this]() {
+        openThisCore(ThisCoreFocus::EditRadio);
+    });
+    m_actForgetCoreRadio = radioMenu->addAction(tr("Forget radio"), this, [this]() {
+        openThisCore(ThisCoreFocus::ForgetRadio);
+    });
+    radioMenu->setToolTipsVisible(true);
+    for (QAction* a : {m_actChangeCoreRadio, m_actEditCoreRadio, m_actForgetCoreRadio}) {
+        a->setVisible(m_radioModel != nullptr && !m_radioModel->ownsLocalDsp());
+    }
+    connect(radioMenu, &QMenu::aboutToShow, this, &MainWindow::refreshCoreRadioActions);
 
     radioMenu->addSeparator();
 
@@ -11684,6 +11721,82 @@ QString MainWindow::stationSettingsReason() const
     return tr("Connect to the Core to change these.");
 }
 
+// ── Parity Task 21 (R-IOS-18): the Core's radio from a remote window ──────
+
+QString MainWindow::coreRadioAddressText() const
+{
+    return m_stationClient != nullptr && m_stationClient->isConnectionActive()
+        ? m_stationClient->capabilities().radioAddress
+        : QString();
+}
+
+QString MainWindow::coreRadioMacText() const
+{
+    return m_stationClient != nullptr && m_stationClient->isConnectionActive()
+        ? m_stationClient->capabilities().macAddress
+        : QString();
+}
+
+QString MainWindow::forgetCoreRadioReason() const
+{
+    // The Core's own radio cannot be forgotten while it runs it (the
+    // Core's rule); This Core forgets the others.
+    for (const StationRadioEntry& radio : m_radioModel->stationRadios()) {
+        if (radio.inUse) {
+            return StationRadios::inUseReason();
+        }
+    }
+    return {};
+}
+
+void MainWindow::addCoreRadioActions(QMenu& menu)
+{
+    menu.addAction(tr("Change radio…"), this, [this]() {
+        openThisCore(ThisCoreFocus::ChangeRadio);
+    });
+    menu.addAction(tr("Edit radio…"), this, [this]() {
+        openThisCore(ThisCoreFocus::EditRadio);
+    });
+    QAction* forget = menu.addAction(tr("Forget radio"), this, [this]() {
+        openThisCore(ThisCoreFocus::ForgetRadio);
+    });
+    const QString why = forgetCoreRadioReason();
+    forget->setEnabled(why.isEmpty());
+    forget->setToolTip(why);
+}
+
+void MainWindow::refreshCoreRadioActions()
+{
+    if (m_actForgetCoreRadio == nullptr || m_radioModel == nullptr) {
+        return;
+    }
+    const QString why = forgetCoreRadioReason();
+    m_actForgetCoreRadio->setEnabled(why.isEmpty());
+    m_actForgetCoreRadio->setToolTip(why);
+}
+
+void MainWindow::openThisCore(ThisCoreFocus focus)
+{
+    auto* dialog = createSetupDialog();
+    if (dialog == nullptr) {
+        return;
+    }
+    // selectPage realizes the lazily built page before it returns.
+    dialog->selectPage(QStringLiteral("This Core"));
+    if (auto* page = dialog->findChild<ThisCorePage*>()) {
+        if (focus != ThisCoreFocus::ChangeRadio) {
+            page->selectCoreRadio();
+        }
+        if (focus == ThisCoreFocus::EditRadio) {
+            page->modelCombo()->setFocus();
+        } else if (focus == ThisCoreFocus::ForgetRadio) {
+            page->forgetButton()->setFocus();
+        }
+    }
+    dialog->show();
+    dialog->raise();
+}
+
 void MainWindow::refreshSpotHubAvailability()
 {
     // Parity Task 19 (R-IOS-25, B7.2): a window running its own radio runs
@@ -12008,12 +12121,13 @@ void MainWindow::applyRemoteRoleGating()
             tr("Disconnect from Core and stop automatic connection attempts"));
     }
     if (m_actManageRadios != nullptr) {
-        m_actManageRadios->setEnabled(m_connectionPickerManaged);
+        // Parity Task 21 (R-IOS-18): a window started for one Core manages
+        // that Core's radios on Setup > This Core.
+        m_actManageRadios->setEnabled(true);
         m_actManageRadios->setToolTip(
             m_connectionPickerManaged
                 ? tr("Choose a Core/radio pair or a radio for this computer")
-                : tr("Unavailable: this window was started for one Core with "
-                     "--station, so the radio list cannot change it."));
+                : tr("See and change the Core's radio (Setup > This Core)"));
     }
     // R-R3-46 / R-R3-21: the attenuator, preamp and auto-attenuate
     // controls (RX applet, Setup > General > Options) follow the Core's
@@ -12101,10 +12215,29 @@ void MainWindow::showSegmentContextMenu(const QPoint& globalPos)
 {
     QMenu menu(this);
     if (!m_radioModel->ownsLocalDsp()) {
+        menu.setToolTipsVisible(true);
         menu.addAction(m_actConnect);
         menu.addAction(m_actDisconnect);
         menu.addAction(tr("Core connection details..."),
                        this, &MainWindow::showRemoteConnectionPanel);
+        // Parity Task 21 (R-IOS-18, B6.2): the Core's radio.
+        menu.addSeparator();
+        addCoreRadioActions(menu);
+        // B6.3: the Core's radio's address, as a local window copies its own.
+        menu.addSeparator();
+        const QString ip = coreRadioAddressText();
+        const QString mac = coreRadioMacText();
+        QAction* copyIp = menu.addAction(tr("Copy IP address"), this, [ip]() {
+            QGuiApplication::clipboard()->setText(ip);
+        });
+        QAction* copyMac = menu.addAction(tr("Copy MAC address"), this, [mac]() {
+            QGuiApplication::clipboard()->setText(mac);
+        });
+        const QString none = tr("The Core has not reported its radio.");
+        copyIp->setEnabled(!ip.isEmpty());
+        copyIp->setToolTip(ip.isEmpty() ? none : QString());
+        copyMac->setEnabled(!mac.isEmpty());
+        copyMac->setToolTip(mac.isEmpty() ? none : QString());
         menu.exec(globalPos);
         return;
     }
@@ -12153,10 +12286,14 @@ void MainWindow::showStationContextMenu(const QPoint& globalPos)
 
     QMenu menu(this);
     if (!m_radioModel->ownsLocalDsp()) {
+        menu.setToolTipsVisible(true);
         menu.addAction(m_actConnect);
         menu.addAction(m_actDisconnect);
         menu.addAction(tr("Core connection details..."),
                        this, &MainWindow::showRemoteConnectionPanel);
+        // Parity Task 21 (R-IOS-18, B6.2): the Core's radio.
+        menu.addSeparator();
+        addCoreRadioActions(menu);
         menu.exec(globalPos);
         return;
     }
