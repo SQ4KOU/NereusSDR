@@ -66,8 +66,9 @@ void AudioJitterBuffer::shedExcess(qint64 nowNs)
     }
     // A standing excess only (CoDel's rule): above the target for a whole
     // interval without a dip. Any dip is jitter, and restarts the clock.
-    if (m_packets.empty()
-        || queuedSpanNs() + m_downstreamExcessNs <= m_holdNs + kShedReserveNs) {
+    const qint64 target = m_holdNs + kShedReserveNs;
+    const qint64 content = queuedSpanNs() + m_downstreamExcessNs;
+    if (m_packets.empty() || content <= target) {
         m_excessSinceNs.reset();
         if (m_holdNs <= kHoldNs) { m_lastLateNs.reset(); } // paid: disarm
         return;
@@ -77,20 +78,30 @@ void AudioJitterBuffer::shedExcess(qint64 nowNs)
         return;
     }
     if (nowNs - *m_excessSinceNs < kShrinkIntervalNs) { return; }
-    // One whole interval from the head, then a fresh interval. The skipped
-    // interval was never heard, so there is nothing for a late packet to
-    // find.
-    const auto first = m_packets.begin();
-    if (first->first == m_nextIndex) {
-        if (m_shedPackets.size() < static_cast<std::size_t>(windowPackets(kMaxWindowNs, m_packetDurationNs))) {
-            m_shedPackets.push_back(std::move(first->second.packet));
+    // The excess stood the whole interval: delay that never drained.
+    // Skip kShedStepNs of it, contiguous from the head (ceil(40 ms / the
+    // packet duration) intervals: one Opus interval, ten lossless ones),
+    // then a fresh interval. So a lossless context sheds as fast as an
+    // Opus one, 40 ms a second, twice the hold's easing, and the heard
+    // delay keeps up with the readout at any packet size instead of
+    // waiting on the rate matcher's slow resampling. At most one step
+    // below the target, which the reserve covers. The skipped intervals
+    // were never heard, so there is nothing for a late packet to find.
+    const qint64 intervals = (kShedStepNs + m_packetDurationNs - 1) / m_packetDurationNs;
+    const auto keep = static_cast<std::size_t>(windowPackets(kMaxWindowNs, m_packetDurationNs));
+    for (qint64 i = 0; i < intervals && !m_packets.empty(); ++i) {
+        const auto first = m_packets.begin();
+        QByteArray shed; // empty: a missing interval
+        if (first->first == m_nextIndex) {
+            shed = std::move(first->second.packet);
+            m_packets.erase(first);
+            ++m_trimmed;
         }
-        m_packets.erase(first);
-        ++m_trimmed;
+        if (m_shedPackets.size() < keep) { m_shedPackets.push_back(std::move(shed)); }
+        ++m_nextIndex;
+        m_nextTimestamp += quint32(m_packetFrames);
+        ++m_skipped;
     }
-    ++m_nextIndex;
-    m_nextTimestamp += quint32(m_packetFrames);
-    ++m_skipped;
     m_released.clear();
     m_excessSinceNs = nowNs;
 }
@@ -139,6 +150,7 @@ AudioJitterBuffer::Admission AudioJitterBuffer::insert(
                 return Admission::LateConcealed;
             }
             m_nextIndex -= back;
+            m_rewound += back;
             m_nextTimestamp = timestamp;
             m_released.erase(std::prev(it.base()), m_released.end());
             m_packets.try_emplace(m_nextIndex, Entry{packet, arrivalNs + m_holdNs});

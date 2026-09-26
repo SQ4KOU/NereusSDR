@@ -149,6 +149,12 @@ struct RemoteAudioReceiverTelemetry {
     // which is what the operator heard skipped.
     quint64 skippedIntervals = 0;
     double skippedAudioMs = 0.0;
+    // Intervals a rewind replayed: each was heard once concealed and again
+    // as its late audio, so decoded + concealed + skipped - rewound is the
+    // stream's own timeline.
+    quint64 rewoundIntervals = 0;
+    // burstDroppedPackets as audio time.
+    double burstDroppedAudioMs = 0.0;
     // The longest the receive worker went between wakes in this context:
     // a starved worker, not the network, when a speaker runs dry.
     double maxWorkerWakeGapMs = 0.0;

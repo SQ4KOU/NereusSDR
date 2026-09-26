@@ -5495,9 +5495,10 @@ private slots:
             [&] { QStringList parts; for (qint64 w : waits) parts << QString::number(w);
                   return parts.join(QStringLiteral(", ")); }());
         qInfo().noquote() << evidence;
-        // 2 s, 4 s, 4 s, each from the request before. Never sooner (a
-        // timer cannot fire early); a loaded machine may be later, so the
-        // upper bounds only tell the steps apart.
+        // 2 s, 4 s, 4 s, each from the request before. Never sooner (the
+        // retry timers are Qt::PreciseTimer, which does not fire early; a
+        // coarse one may, by up to 5%); a loaded machine may be later, so
+        // the upper bounds only tell the steps apart.
         QVERIFY2(waits.at(0) >= 1990 && waits.at(0) < 3500, qPrintable(evidence));
         QVERIFY2(waits.at(1) >= 3990 && waits.at(1) < 6000, qPrintable(evidence));
         QVERIFY2(waits.at(2) >= 3990 && waits.at(2) < 6000, qPrintable(evidence));

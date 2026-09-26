@@ -1051,7 +1051,7 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
             const quint32 revision = d->audioRevision;
             const int delay = int(d->audioRestartBackoff.nextDelayMs(d->clock.elapsed(),
                                                                      d->lastAudioRequestMs));
-            QTimer::singleShot(delay, this, [this, connection, revision] {
+            QTimer::singleShot(delay, Qt::PreciseTimer, this, [this, connection, revision] {
                 if (connection != d->connectionId || revision != d->audioRevision) { return; }
                 d->audioRetryPending = false;
                 requestAudio();
@@ -1924,7 +1924,7 @@ void RemoteMediaController::onHeadphonesRestart(const QString& reason,
         const quint32 revision = d->headphonesRevision;
         const int delay = int(d->headphonesRestartBackoff.nextDelayMs(
             d->clock.elapsed(), d->headphonesLastRequestMs));
-        QTimer::singleShot(delay, this, [this, connection, revision] {
+        QTimer::singleShot(delay, Qt::PreciseTimer, this, [this, connection, revision] {
             if (!d->headphonesRetryPending || connection != d->connectionId
                 || revision != d->headphonesRevision) { return; }
             d->headphonesRetryPending = false;
@@ -3783,7 +3783,7 @@ void RemoteMediaController::onReceiverRestart(int sliceId, RemoteAudioReceiver* 
         const quint32 revision = d->receiverRevisions.value(sliceId);
         const int delay = int(stream.restartBackoff.nextDelayMs(d->clock.elapsed(),
                                                                 stream.lastRequestMs));
-        QTimer::singleShot(delay, this, [this, sliceId, connection, revision] {
+        QTimer::singleShot(delay, Qt::PreciseTimer, this, [this, sliceId, connection, revision] {
             const auto again = d->receiverStreams.find(sliceId);
             if (again == d->receiverStreams.end() || !again->second.retryPending
                 || connection != d->connectionId

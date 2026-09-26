@@ -412,6 +412,7 @@ void RemoteTelemetryController::logDiagnostics(qint64 now) const
            << QStringLiteral("streamGapReanchors=%1").arg(p.streamGapReanchors)
            << QStringLiteral("trimmedPackets=%1").arg(p.trimmedPackets)
            << QStringLiteral("skippedAudioMs=%1").arg(p.skippedAudioMs, 0, 'f', 0)
+           << QStringLiteral("rewoundIntervals=%1").arg(p.rewoundIntervals)
            << QStringLiteral("linkInterruptions=%1").arg(p.linkInterruptions)
            << QStringLiteral("driftRatio=%1").arg(logged(p.driftRatio, 9))
            << QStringLiteral("driftPpm=%1").arg(logged(driftPpm, 1))
@@ -603,8 +604,9 @@ QString RemoteTelemetryController::detailText() const
             .arg(qRound(*p.jitterHoldMs));
     }
     if (p.linkInterruptions > 0 || p.skippedIntervals > 0) {
-        text << tr("Network stalls ridden through without restarting the audio: %1. Audio skipped to bring the delay back down: %2\u00A0ms.")
-            .arg(p.linkInterruptions).arg(qRound(p.skippedAudioMs));
+        text << tr("Network stalls, gaps and bursts ridden through without restarting the audio: %1. Audio lost at a burst: %2\u00A0ms. Audio skipped to bring the delay back down: %3\u00A0ms.")
+            .arg(p.linkInterruptions).arg(qRound(p.burstDroppedAudioMs))
+            .arg(qRound(p.skippedAudioMs));
     }
     // R-R3-07: the receiver reports its clock correction as a ratio near
     // 1.0; shown here as (ratio - 1) x 1e6 parts per million.

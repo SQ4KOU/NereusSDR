@@ -9,25 +9,32 @@ using namespace NereusSDR;
 using Admission = AudioJitterBuffer::Admission;
 namespace {
 // R-R3-21: a device and rate matcher for the queue, 1 ms a step. The
-// matcher starts at its 90 ms working level and plays 1 ms a step; the
-// queue releases into it what is due; when it is about to run dry the
-// device takes the expected packet on demand, or conceals the interval.
-// Its fill above the working level is the downstream excess.
+// matcher starts at its 90 ms working level in a 180 ms ring and plays
+// 1 ms a step; the queue releases into it what is due, while the ring has
+// room for two more packets (as the receiver's release loop does); when it
+// is about to run dry the device takes the expected packet on demand, or
+// conceals the interval. Its fill against the working level is the
+// downstream excess. Like WDSP rmatch it steers its fill toward the working
+// level by resampling: its proportional gain, 4e-6 a frame at 48 kHz
+// (third_party/wdsp/src/rmatch.c), reads about 1.9e-4 of rate per ms of
+// fill away from 90 ms.
 struct SimulatedDevice {
-    qint64 levelMs = 90;
+    double levelMs = 90.0;
     bool useMatcherExcess = true;
     void step(AudioJitterBuffer& queue, qint64 tMs)
     {
         constexpr qint64 ms = 1'000'000;
-        levelMs = std::max<qint64>(0, levelMs - 1);
-        if (useMatcherExcess) { queue.setDownstreamExcessNs((levelMs - 90) * ms); }
-        for (int i = 0; i < queue.maxPackets(); ++i) {
+        levelMs = std::max(0.0, levelMs - (1.0 + 1.92e-4 * (levelMs - 90.0)));
+        if (useMatcherExcess) { queue.setDownstreamExcessNs(qint64((levelMs - 90.0) * double(ms))); }
+        const qint64 packetMs = queue.packetDurationNs() / ms;
+        queue.tick(tMs * ms);
+        for (int i = 0; i < queue.maxPackets() && 180.0 - levelMs >= 2.0 * double(packetMs); ++i) {
             if (!queue.takeReady(tMs * ms)) { break; }
-            levelMs += queue.packetDurationNs() / ms;
+            levelMs += double(packetMs);
         }
-        if (levelMs < 10) {
+        if (levelMs < 10.0) {
             if (queue.takeExpectedPresentEarly(tMs * ms) || queue.concealExpectedNow(tMs * ms)) {
-                levelMs += queue.packetDurationNs() / ms;
+                levelMs += double(queue.packetDurationNs() / ms);
             }
         }
     }
@@ -354,21 +361,31 @@ private slots:
     // kShrinkIntervalNs, and then one interval at a time. Arrivals here are
     // jittered by up to 30 ms, as a real link's are. The shed packets are
     // handed back so an Opus decoder can stay continuous.
+    void easingShedsTheDelayARewindAdded_data()
+    {
+        QTest::addColumn<int>("packetFrames");
+        QTest::newRow("opus, 40 ms packets") << 1920;
+        QTest::newRow("lossless, 4 ms packets") << 192;
+    }
     void easingShedsTheDelayARewindAdded()
     {
+        QFETCH(int, packetFrames);
         constexpr qint64 ms = 1'000'000;
-        AudioJitterBuffer queue;
+        const qint64 packetMs = qint64(packetFrames) / 48;
+        AudioJitterBuffer queue(packetFrames, packetMs * ms);
         queue.reset(0);
         QRandomGenerator random(20260926);
         // A simulated link and device, 1 ms a step: packet p is sent at
-        // p * 40 ms, delayed 0-30 ms; packets 10..18 are held up by a
-        // 350 ms stall and arrive together.
+        // p * packetMs, delayed 0-30 ms; the packets sent from 10000 to
+        // 10350 ms are held up by a 350 ms stall and arrive together (the
+        // matcher has steered to its working level by then).
         struct Arrival { int packet; qint64 atMs; };
         std::vector<Arrival> arrivals;
-        constexpr int kPackets = 1000; // 40 s
-        for (int p = 0; p < kPackets; ++p) {
-            const qint64 sent = qint64(p) * 40;
-            const qint64 at = p >= 10 && p <= 18 ? 400 + 350 : sent + random.bounded(31);
+        constexpr qint64 kRunMs = 50'000;
+        const int packets = int(kRunMs / packetMs);
+        for (int p = 0; p < packets; ++p) {
+            const qint64 sent = qint64(p) * packetMs;
+            const qint64 at = sent >= 10'000 && sent < 10'350 ? 10'350 : sent + random.bounded(31);
             arrivals.push_back({p, at});
         }
         std::stable_sort(arrivals.begin(), arrivals.end(),
@@ -376,48 +393,94 @@ private slots:
         std::size_t next = 0;
         SimulatedDevice device;
         quint64 shedReturned = 0;
+        qint64 largestShedMs = 0;
         qint64 lastShedMs = -1;
         qint64 minShedGapMs = std::numeric_limits<qint64>::max();
         std::optional<qint64> peakHold;
+        std::optional<qint64> floorAtMs;
         qint64 spanAtEnd = 0;
         bool rewound = false;
-        for (qint64 t = 0; t <= kPackets * 40 + 200; ++t) {
+        // The delay the model plays at (queued span plus the matcher's
+        // fill): its baseline before the stall, and the worst lag behind
+        // the readout (the hold) once the hold has been easing for 3 s.
+        double baselineSum = 0.0;
+        int baselineCount = 0;
+        qint64 worstLagMs = std::numeric_limits<qint64>::min();
+        qint64 worstLagAtMs = -1;
+        std::optional<qint64> firstEaseMs;
+        QStringList series;
+        for (qint64 t = 0; t <= kRunMs + 200; ++t) {
             while (next < arrivals.size() && arrivals[next].atMs <= t) {
-                const auto admission = queue.insert("p", quint32(arrivals[next].packet) * 1920u,
-                                                    t * ms);
+                const auto admission = queue.insert(
+                    "p", quint32(arrivals[next].packet) * quint32(packetFrames), t * ms);
                 rewound = rewound || admission == Admission::Rewound;
                 ++next;
             }
+            const qint64 holdBefore = queue.holdNs();
             peakHold = std::max(peakHold.value_or(0), queue.holdNs());
             device.step(queue, t);
+            if (!firstEaseMs && queue.holdNs() < holdBefore) { firstEaseMs = t; }
+            if (!floorAtMs && *peakHold > AudioJitterBuffer::kHoldNs
+                && queue.holdNs() == AudioJitterBuffer::kHoldNs) {
+                floorAtMs = t;
+            }
             const std::vector<QByteArray> shed = queue.takeShedPackets();
             if (!shed.empty()) {
                 shedReturned += shed.size();
+                largestShedMs = std::max(largestShedMs, qint64(shed.size()) * packetMs);
                 if (lastShedMs >= 0) { minShedGapMs = std::min(minShedGapMs, t - lastShedMs); }
                 lastShedMs = t;
             }
-            if (t == kPackets * 40 - 20) { spanAtEnd = queue.queuedSpanNs(); }
+            const qint64 delayMs = queue.queuedSpanNs() / ms + qint64(device.levelMs);
+            if (t >= 7000 && t < 9990) { baselineSum += double(delayMs); ++baselineCount; }
+            if (firstEaseMs && t >= *firstEaseMs + 3000 && t < kRunMs - 100) {
+                const qint64 lag = delayMs - qint64(baselineSum / baselineCount)
+                    - (queue.holdNs() - AudioJitterBuffer::kHoldNs) / ms;
+                if (lag > worstLagMs) { worstLagMs = lag; worstLagAtMs = t; }
+            }
+            if (t == kRunMs - 20) { spanAtEnd = queue.queuedSpanNs(); }
+            if (t % 1000 == 0) {
+                series << QStringLiteral("%1/%2/%3").arg(queue.queuedSpanNs() / ms)
+                              .arg(qint64(device.levelMs)).arg(queue.holdNs() / ms);
+            }
         }
-        const QString evidence = QStringLiteral("rewound=%1 peakHold=%2 trimmed=%3 skipped=%4 "
-                                                "returned=%5 lastShed=%6 minGap=%7 spanAtEnd=%8 hold=%9")
+        qInfo().noquote() << "span/matcher/hold by second:" << series.join(QLatin1Char(' '));
+        const QString evidence = QStringLiteral(
+            "rewound=%1 peakHold=%2 trimmed=%3 skipped=%4 returned=%5 lastShed=%6 minGap=%7 "
+            "spanAtEnd=%8 hold=%9 baseline=%10 firstEase=%11 floorAt=%12 worstLag=%13 at %14 "
+            "largestShedMs=%15")
             .arg(rewound).arg(peakHold.value_or(0) / ms).arg(queue.trimmedPackets())
             .arg(queue.skippedIntervals()).arg(shedReturned).arg(lastShedMs).arg(minShedGapMs)
-            .arg(spanAtEnd / ms).arg(queue.holdNs() / ms);
+            .arg(spanAtEnd / ms).arg(queue.holdNs() / ms)
+            .arg(baselineSum / baselineCount, 0, 'f', 1).arg(firstEaseMs.value_or(-1))
+            .arg(floorAtMs.value_or(-1)).arg(worstLagMs).arg(worstLagAtMs).arg(largestShedMs);
+        qInfo().noquote() << evidence;
         QVERIFY2(rewound && *peakHold >= 300 * ms, qPrintable(evidence));
-        // Shed, handed back, never more than one interval a second, and
-        // done well before the end: the delay is back and stays back.
-        QVERIFY2(queue.trimmedPackets() > 0 && shedReturned == queue.trimmedPackets(),
+        // Shed, every skipped interval handed back (a missing one as an
+        // empty packet), at most one shed a second, and done well before
+        // the end: the delay is back and stays back.
+        QVERIFY2(queue.skippedIntervals() > 0 && shedReturned == queue.skippedIntervals(),
                  qPrintable(evidence));
         QVERIFY2(minShedGapMs >= AudioJitterBuffer::kShrinkIntervalNs / ms, qPrintable(evidence));
-        QVERIFY2(lastShedMs < kPackets * 40 - 5'000, qPrintable(evidence));
+        QVERIFY2(lastShedMs < kRunMs - 5'000, qPrintable(evidence));
         QCOMPARE(queue.holdNs(), AudioJitterBuffer::kHoldNs);
         QVERIFY2(spanAtEnd <= AudioJitterBuffer::kHoldNs + AudioJitterBuffer::kShedReserveNs
                                   + 40 * ms,
                  qPrintable(evidence));
+        // The heard delay keeps up with the readout while the hold eases,
+        // at either packet size: never more behind it than the reserve,
+        // one Opus interval, the link's 30 ms of jitter and the matcher's
+        // room above its working level (what rmatch then steers away).
+        QVERIFY2(worstLagMs <= 150, qPrintable(evidence));
+        // Each shed of a standing excess takes 40 ms at once at either
+        // packet size (one Opus interval, ten lossless ones), not one
+        // interval: a lossless context sheds as fast as an Opus one, so
+        // skips, not a long resampling correction, bring the delay back.
+        QVERIFY2(largestShedMs == AudioJitterBuffer::kShedStepNs / ms, qPrintable(evidence));
     }
     // R-R3-21 (re-review): once shedding is armed (a late packet, then 2 s
     // quiet), ordinary jitter is not a standing excess. A head delayed
-    // 50 ms, inside the 80 ms hold, with the rate matcher 30 ms above its
+    // 50 ms while armed, inside the hold, with the rate matcher 30 ms above its
     // working level, sheds nothing: the excess does not last a whole
     // kShrinkIntervalNs.
     void jitteredArrivalsNeverShedOnTimeAudio()
@@ -433,10 +496,11 @@ private slots:
         device.useMatcherExcess = false;
         queue.setDownstreamExcessNs(30 * ms);
         constexpr int kPackets = 750; // 30 s
-        // Packet p is sent at p * 40 ms, delayed 0-30 ms, and packet 400
-        // by 50 ms.
+        // Packet p is sent at p * 40 ms, delayed 0-30 ms, and packet 70
+        // by 50 ms: at 2.8 s, after shedding arms (2.2 s) and while the
+        // hold is still easing (back at 80 ms about 5.2 s), so armed.
         const auto arrival = [&](qint64 p) {
-            return p * 40 + (p == 400 ? 50 : random.bounded(31));
+            return p * 40 + (p == 70 ? 50 : random.bounded(31));
         };
         qint64 p = 3;
         qint64 nextAt = arrival(p);

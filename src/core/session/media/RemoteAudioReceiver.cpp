@@ -130,6 +130,7 @@ struct RemoteAudioReceiver::Private {
     std::atomic<quint64> streamGapReanchors{0};
     std::atomic<quint64> trimmed{0};
     std::atomic<quint64> skipped{0};
+    std::atomic<quint64> rewound{0};
     std::atomic<qint64> maxWakeGapNs{0};
     std::atomic<quint64> linkInterruptions{0};
     // Rate matcher ratio, published by the playback loop (R-R3-07). Like
@@ -274,6 +275,9 @@ RemoteAudioReceiverTelemetry RemoteAudioReceiver::telemetry() const
         snapshot.streamGapReanchors = d->streamGapReanchors.load();
         snapshot.trimmedPackets = d->trimmed.load();
         snapshot.skippedIntervals = d->skipped.load();
+        snapshot.rewoundIntervals = d->rewound.load();
+        snapshot.burstDroppedAudioMs = double(snapshot.burstDroppedPackets)
+            * (double(d->packetDurationNs.load()) / 1'000'000.0);
         snapshot.skippedAudioMs = double(snapshot.skippedIntervals)
             * (double(d->packetDurationNs.load()) / 1'000'000.0);
         snapshot.maxWorkerWakeGapMs = double(d->maxWakeGapNs.load()) / 1'000'000.0;
@@ -410,6 +414,7 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
     d->streamGapReanchors.store(0);
     d->trimmed.store(0);
     d->skipped.store(0);
+    d->rewound.store(0);
     d->maxWakeGapNs.store(0);
     d->linkInterruptions.store(0);
     d->hasDriftRatio.store(false);
@@ -464,6 +469,7 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
         jitter.setAdaptive(!sinkMode);
         quint64 publishedTrimmed = 0;
         quint64 publishedSkipped = 0;
+        quint64 publishedRewound = 0;
         // Only an Opus context needs the Opus decoder; a lossless packet is
         // read directly, and a lost one is silence.
         std::optional<OpusAudioDecoder> decoder;
@@ -680,6 +686,10 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
                 d->trimmed.fetch_add(jitter.trimmedPackets() - publishedTrimmed);
                 publishedTrimmed = jitter.trimmedPackets();
             }
+            if (jitter.rewoundIntervals() != publishedRewound) {
+                d->rewound.fetch_add(jitter.rewoundIntervals() - publishedRewound);
+                publishedRewound = jitter.rewoundIntervals();
+            }
             if (jitter.skippedIntervals() != publishedSkipped) {
                 d->skipped.fetch_add(jitter.skippedIntervals() - publishedSkipped);
                 publishedSkipped = jitter.skippedIntervals();
@@ -879,11 +889,15 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
             // Every wake, even one whose release the full matcher holds
             // back: that is when a backlog stands.
             jitter.tick(now);
-            // R-R3-21: a shed Opus packet is decoded and its audio thrown
-            // away, so the decoder's state runs on continuously across the
-            // skip instead of jumping (a click). Lossless needs nothing.
+            // R-R3-21: a shed Opus interval is decoded (a missing one
+            // concealed) and its audio thrown away, so the decoder's state
+            // (its prediction across frames) runs on as if nothing had been
+            // skipped. That keeps the decoder continuous; it does not smooth
+            // the splice itself. Lossless has no decoder state.
             for (const QByteArray& shed : jitter.takeShedPackets()) {
-                if (decoder) { decoder->decodeRtp(shed, ssrc); }
+                if (!decoder) { continue; }
+                if (shed.isEmpty()) { decoder->decodeMissing(); }
+                else { decoder->decodeRtp(shed, ssrc); }
             }
             // At most the bounded jitter window per wake, never an
             // unbounded catch-up burst.

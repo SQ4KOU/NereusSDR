@@ -68,6 +68,9 @@ public:
     /// Queued audio past the hold that shedding leaves alone: a packet in
     /// flight while arrival and release interleave.
     static constexpr qint64 kShedReserveNs = 40'000'000;
+    /// R-R3-21: how much a standing excess sheds each time: one Opus
+    /// interval, ten lossless ones.
+    static constexpr qint64 kShedStepNs = 40'000'000;
     /// The window at the deepest hold.
     static constexpr qint64 kMaxWindowNs = kWindowNs + (kMaxHoldNs - kHoldNs);
     /// R-R3-21. Late: behind the head (a copy of a packet that played, or
@@ -129,13 +132,17 @@ public:
     /// does first; for a consumer that may not reach takeReady() on a wake
     /// (the speaker's release is held back while the matcher is full).
     void tick(qint64 nowNs);
-    /// R-R3-21: the packets shed since the last call, oldest first (at most
-    /// a window's worth kept), so an Opus decoder can decode and discard
-    /// them and stay continuous across the skip.
+    /// R-R3-21: the intervals shed since the last call, oldest first (at
+    /// most a window's worth kept), a missing one as an empty packet, so
+    /// an Opus decoder can decode (or conceal) and discard each and keep
+    /// its state continuous across the skip.
     std::vector<QByteArray> takeShedPackets() { return std::exchange(m_shedPackets, {}); }
     /// Intervals skipped unheard to bound the delay, present or missing:
     /// by advanceToFit() and by shedding. Cumulative for this queue.
     quint64 skippedIntervals() const { return m_skipped; }
+    /// Intervals a rewind replayed (each heard once concealed, then again
+    /// as the late audio). Cumulative for this queue.
+    quint64 rewoundIntervals() const { return m_rewound; }
     /// R-R3-21: a packet at `timestamp` fell outside the window. Moves the
     /// head forward just far enough for it to fit, dropping the oldest
     /// queued packets and skipping missing intervals; with nothing queued
@@ -183,6 +190,7 @@ private:
     std::optional<qint64> m_excessSinceNs;
     std::vector<QByteArray> m_shedPackets;
     quint64 m_skipped{0};
+    quint64 m_rewound{0};
     qint64 m_lastEaseNs{0};
     bool m_adaptive{true};
     qint64 m_downstreamExcessNs{0};
