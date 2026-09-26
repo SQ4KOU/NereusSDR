@@ -24,6 +24,7 @@
 #include <QTreeWidget>
 
 #include <algorithm>
+#include <functional>
 
 using namespace NereusSDR;
 
@@ -61,6 +62,7 @@ private slots:
     void disconnectRemainsIndependentOfSelectedTarget();
     void editorValidatesAndPreservesSecrets();
     void editorCancelHasNoAcceptance();
+    void editorForgetsLastAddressesWhenTheCoreChanges();
     void controlsRemainReadableAndReachable();
     void rowSelectionNeverResizesTheWindow();
     void theCodeDialogNamesPlacesThatShowTheCode();
@@ -246,6 +248,54 @@ void ConnectionSelectorTest::editorCancelHasNoAcceptance()
     QVERIFY(cancel != nullptr);
     cancel->click();
     QCOMPARE(editor.result(), int(QDialog::Rejected));
+}
+
+// iPhone app plan Task 27 fix wave (I1): the Core's last good addresses
+// belong to the address, token, pin and identity they were reached with.
+// Changing any of those forgets them, so the next connect does not dial an
+// address the operator never approved for the new details.
+void ConnectionSelectorTest::editorForgetsLastAddressesWhenTheCoreChanges()
+{
+    const QStringList cached{QStringLiteral("wss://192.168.1.20:8443"),
+                             QStringLiteral("wss://10.0.0.7:8443")};
+    SavedCoreTarget initial = initialTarget();
+    initial.connection.cachedAddresses = cached;
+
+    {
+        // Nothing but the label changed: the addresses stay.
+        CoreTargetEditor editor(initial);
+        editor.findChild<QLineEdit*>(QStringLiteral("coreTargetEditorLabel"))
+            ->setText(QStringLiteral("Shack upstairs"));
+        QCOMPARE(editor.target().connection.cachedAddresses, cached);
+    }
+    const auto forgets = [&](const std::function<void(CoreTargetEditor&)>& change) {
+        CoreTargetEditor editor(initial);
+        change(editor);
+        return editor.target().connection.cachedAddresses.isEmpty();
+    };
+    QVERIFY(forgets([](CoreTargetEditor& editor) {
+        editor.findChild<QLineEdit*>(QStringLiteral("coreTargetEditorAddress"))
+            ->setText(QStringLiteral("wss://other.example:8443"));
+    }));
+    QVERIFY(forgets([](CoreTargetEditor& editor) {
+        editor.findChild<QLineEdit*>(QStringLiteral("coreTargetEditorToken"))
+            ->setText(QStringLiteral("another token"));
+    }));
+    QVERIFY(forgets([](CoreTargetEditor& editor) {
+        editor.findChild<QLineEdit*>(QStringLiteral("coreTargetEditorFingerprint"))
+            ->setText(QStringLiteral("another fingerprint"));
+    }));
+    QVERIFY(forgets([](CoreTargetEditor& editor) {
+        editor.findChild<QCheckBox*>(QStringLiteral("coreTargetEditorAllowUnpinned"))
+            ->setChecked(true);
+    }));
+    // Surrounding spaces on the address are not a change.
+    {
+        CoreTargetEditor editor(initial);
+        editor.findChild<QLineEdit*>(QStringLiteral("coreTargetEditorAddress"))
+            ->setText(QStringLiteral(" wss://shack.example:8443 "));
+        QCOMPARE(editor.target().connection.cachedAddresses, cached);
+    }
 }
 
 void ConnectionSelectorTest::controlsRemainReadableAndReachable()

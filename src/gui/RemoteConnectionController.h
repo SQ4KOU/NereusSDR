@@ -8,6 +8,7 @@
 #include <QDialog>
 
 #include <functional>
+#include <optional>
 
 class QLabel;
 class QPushButton;
@@ -59,6 +60,13 @@ public:
     // True when updating this app is the fix (Check for updates is shown
     // only where the app has an update check; see CoreStopBanner).
     bool updateThisAppHelps() const;
+    /// iPhone app plan Task 27 fix wave: where the saved Core was last
+    /// reached, read at each connectToStation() so a reconnect in the same
+    /// window tries the store's current list, not the one this window was
+    /// made with. Returns nullopt when it has none to say (the Core is not
+    /// a saved one); the options' own list is used then.
+    using CachedAddressSource = std::function<std::optional<QStringList>()>;
+    void setCachedAddressSource(CachedAddressSource source);
 public slots:
     void connectToStation();
     void disconnectFromStation();
@@ -85,6 +93,7 @@ private:
     quint32 m_pendingMediaRecoveryEpoch = 0;
     int m_retryAttempt = 0;
     int m_retryDelayMs = 0;
+    CachedAddressSource m_cachedAddressSource;
 };
 
 // A small modeless view of the configured Core. Full station selection and

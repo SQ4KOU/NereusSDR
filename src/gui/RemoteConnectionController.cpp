@@ -243,7 +243,14 @@ void RemoteConnectionController::connectToStation()
     if (!canConnect()) { return; }
     m_operatorDisconnected = false;
     m_retryAttempt = 0;
-    // iPhone app plan Task 27: where the Core was last reached, first.
+    // iPhone app plan Task 27: where the Core was last reached, first. The
+    // store's current list (fix wave): the one this window was made with is
+    // stale once a connection here has remembered an address.
+    if (m_cachedAddressSource) {
+        if (const std::optional<QStringList> current = m_cachedAddressSource()) {
+            m_options.cachedAddresses = *current;
+        }
+    }
     QList<QUrl> cached;
     for (const QString& address : std::as_const(m_options.cachedAddresses)) {
         cached.append(QUrl(address));
@@ -253,6 +260,11 @@ void RemoteConnectionController::connectToStation()
                                m_options.fingerprint, m_options.allowUnpinned,
                                m_options.identityFingerprint);
     emit changed();
+}
+
+void RemoteConnectionController::setCachedAddressSource(CachedAddressSource source)
+{
+    m_cachedAddressSource = std::move(source);
 }
 
 void RemoteConnectionController::disconnectFromStation()

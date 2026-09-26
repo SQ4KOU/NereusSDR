@@ -213,7 +213,15 @@ public:
         });
     }
 
-    ~ServicePlayer() override { qDeleteAll(m_inbox); }
+    ~ServicePlayer() override
+    {
+        // The sockets are children, destroyed after the members: silence
+        // them first, so a close during teardown touches nothing gone.
+        for (auto it = m_inbox.cbegin(); it != m_inbox.cend(); ++it) {
+            QObject::disconnect(it.key(), nullptr, this, nullptr);
+        }
+        qDeleteAll(m_inbox);
+    }
 
     QUrl url() const
     {
@@ -875,14 +883,25 @@ struct Core {
     std::unique_ptr<RadioModel> model;
     std::unique_ptr<StationServer> server;
 
-    Core()
+    // `upgraded`: a Core from before paired devices, which still signs a
+    // window in by its token (a new Core has none). `tokenLike` names
+    // another upgraded Core's security directory whose token this one
+    // shares, so a test can show the token was never sent to it.
+    explicit Core(bool upgraded = false, const QString& tokenLike = QString())
     {
         settings = std::make_unique<AppSettings>(
             settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
         settings->setValue(QStringLiteral("StationCallsign"), QStringLiteral("KG4VCF"));
         model = std::make_unique<RadioModel>();
-        server = std::make_unique<StationServer>(
-            model.get(), *settings, NereusSDR::Test::seedCoreIdentity(securityDir.path()));
+        const QString security = NereusSDR::Test::seedCoreIdentity(securityDir.path());
+        if (!tokenLike.isEmpty()) {
+            QFile::copy(QDir(tokenLike).filePath(QStringLiteral("station-token")),
+                        QDir(security).filePath(QStringLiteral("station-token")));
+        }
+        if (upgraded) {
+            NereusSDR::Test::seedUpgradedCoreToken(security);
+        }
+        server = std::make_unique<StationServer>(model.get(), *settings, security);
         server->setHeartbeatIntervalMs(0);
     }
 
@@ -1624,10 +1643,14 @@ private slots:
             client.setServers({service.url()});
             QSignalSpy answers(&client, &RendezvousClient::answerReceived);
             QSignalSpy errors(&client, &RendezvousClient::serviceError);
+            const quint64 droppedBefore = rendezvous.client()->droppedIntroductions();
             client.introduce(rendezvous.client()->stationId(), key->spki(),
                              [key](const QByteArray& message) { return key->sign(message); },
                              offer);
-            QTest::qWait(1500);
+            // The Core has decided once it counts the drop; an answer would
+            // have been sent before that, and the service forwards in order.
+            QTRY_COMPARE_WITH_TIMEOUT(rendezvous.client()->droppedIntroductions(),
+                                      droppedBefore + 1, 10000);
             QCOMPARE(answers.size(), 0);
             // Silence, not `offline`: the service cannot tell whether a
             // device is paired (section 6.4).
@@ -1885,17 +1908,99 @@ private slots:
         StationClient window(&remote, &proxy);
         window.setDeviceIdentity(key, QStringLiteral("Shack MacBook"));
         window.setCachedAddresses({QUrl(QStringLiteral("wss://127.0.0.1:%1").arg(silent.serverPort()))});
+        QCOMPARE(window.cachedAddressOpenTimeoutMs(), StationClient::kCachedAddressOpenTimeoutMs);
+        // The open time shortened through the injectable value, as the
+        // handshake deadline tests do; nothing here waits the real 4 s.
+        window.setCachedAddressOpenTimeoutMs(250);
         QElapsedTimer clock;
         clock.start();
         window.connectToStation(core.url(), QString(), QString(), false,
                                 core.server->stationIdentity().fingerprint());
         QTRY_VERIFY_WITH_TIMEOUT(window.isHandshakeComplete(), 20000);
-        QVERIFY(clock.elapsed() >= StationClient::kCachedAddressOpenTimeoutMs - 100);
+        QVERIFY(clock.elapsed() >= 250 - 50);
         const StationConnectionAttempt attempt = window.connectionAttempt();
         QCOMPARE(attempt.tries.size(), 2);
         QCOMPARE(attempt.tries.at(0).outcome, StationConnectionAttempt::Outcome::TimedOut);
         QCOMPARE(attempt.tries.at(1).outcome, StationConnectionAttempt::Outcome::Connected);
         window.disconnectFromStation(QStringLiteral("test done"));
+    }
+
+    // Fix wave I1 (b): a Core saved with "connect without a certificate
+    // fingerprint" has nothing that proves who answers, so its token never
+    // goes to an address the operator did not type: no cached address is
+    // dialled at all.
+    void anUnpinnedCoreNeverDialsACachedAddress()
+    {
+        QTcpServer trap;
+        QVERIFY(trap.listen(QHostAddress::LocalHost, 0));
+        QSignalSpy trapped(&trap, &QTcpServer::newConnection);
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient window(&remote, &proxy);
+        window.setCachedAddresses({QUrl(QStringLiteral("wss://127.0.0.1:%1").arg(trap.serverPort()))});
+        QSignalSpy ended(&window, &StationClient::sessionEnded);
+        const QUrl typed(QStringLiteral("wss://127.0.0.1:%1").arg(freeTcpPort()));
+        window.connectToStation(typed, QStringLiteral("secret-token"), QString(),
+                                /*allowUnpinned=*/true);
+        QCOMPARE(window.connectionAttempt().tries.size(), 1);
+        QCOMPARE(window.connectionAttempt().tries.at(0).address,
+                 QStringLiteral("127.0.0.1:%1").arg(typed.port()));
+        QTRY_VERIFY_WITH_TIMEOUT(!ended.isEmpty(), 10000);
+        QCOMPARE(window.connectionAttempt().tries.size(), 1);
+        QCOMPARE(trapped.size(), 0);
+        window.disconnectFromStation(QStringLiteral("test done"));
+    }
+
+    // Fix wave I1 (c): a pinned Core whose cached address now reaches
+    // another computer (another certificate) gives way to the next address
+    // with the token unsent, as a paired Core does on identityChanged; the
+    // other computer shares the token here, so a sent token would have
+    // signed it in.
+    void aPinMismatchAtACachedAddressGivesWayWithTheTokenUnsent()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("No TLS backend");
+        }
+        Core core(/*upgraded=*/true);
+        Core other(/*upgraded=*/true, core.securityDir.path());
+        QVERIFY(!core.server->token().isEmpty());
+        QCOMPARE(other.server->token(), core.server->token());
+        QVERIFY(core.server->certificateFingerprint() != other.server->certificateFingerprint());
+        QVERIFY(core.server->listen(QHostAddress::LocalHost, 0));
+        QVERIFY(other.server->listen(QHostAddress::LocalHost, 0));
+
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient window(&remote, &proxy);
+        window.setCachedAddresses({other.url()});
+        QSignalSpy endedEarly(&window, &StationClient::sessionEnded);
+        window.connectToStation(core.url(), core.server->token(),
+                                core.server->certificateFingerprint(), false);
+        QTRY_VERIFY_WITH_TIMEOUT(window.isHandshakeComplete(), 20000);
+        QCOMPARE(window.connectedUrl(), core.url());
+        const StationConnectionAttempt attempt = window.connectionAttempt();
+        QCOMPARE(attempt.tries.size(), 2);
+        QCOMPARE(attempt.tries.at(0).outcome, StationConnectionAttempt::Outcome::NotThisCore);
+        QCOMPARE(attempt.tries.at(1).outcome, StationConnectionAttempt::Outcome::Connected);
+        QVERIFY(!other.server->hasAuthenticatedSession());
+        QCOMPARE(window.lastEndReport().kind, StationEndReport::Kind::None);
+        // Giving way is not an end: nothing told the window it stopped.
+        QCOMPARE(endedEarly.size(), 0);
+        window.disconnectFromStation(QStringLiteral("test done"));
+
+        // At the last address the plan has, a mismatch still ends the
+        // attempt, with no retry, as before.
+        RadioModel remoteAlone(RadioModel::Role::Remote);
+        SettingsProxy proxyAlone;
+        StationClient alone(&remoteAlone, &proxyAlone);
+        QSignalSpy ended(&alone, &StationClient::sessionEnded);
+        alone.connectToStation(other.url(), core.server->token(),
+                               core.server->certificateFingerprint(), false);
+        QTRY_VERIFY_WITH_TIMEOUT(!ended.isEmpty(), 10000);
+        QCOMPARE(ended.first().first().toString(),
+                 QStringLiteral("Station certificate fingerprint does not match the saved pin."));
+        QVERIFY(!alone.isReconnectPending());
+        QVERIFY(!other.server->hasAuthenticatedSession());
     }
 
     void pathsAreNamedForTheOperator()

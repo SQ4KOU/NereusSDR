@@ -151,6 +151,7 @@ private slots:
     void explicitConnectToSavedBReplacesWholeLiveA();
     void disconnectCancelsRetryWithoutUsingHighlightedB();
     void connectionsDisconnectReopensConnectionsOnceWithoutDialling();
+    void aManualReconnectReadsTheStoresLastAddresses();
     void persistentLocalChoiceReturnsToEmbeddedCoreWithoutRadioAutoconnect();
     void savedCoreEditsDoNotChangeCurrentTupleBeforeConnect();
     void corruptStartupDocumentShowsIdleLocalAndNotice();
@@ -364,6 +365,41 @@ void TestGuiConnectionController::connectionsDisconnectReopensConnectionsOnceWit
     QVERIFY(!client->isReconnectPending());
     QVERIFY(!cores.firstServer.hasAuthenticatedSession());
     QCOMPARE(controller.sessions()->window(), window);
+    controller.shutdown();
+}
+
+// iPhone app plan Task 27 fix wave: a connect remembers where the Core
+// was reached in the store, and a manual reconnect in the same window
+// passes the store's current list, not the one the window was made with.
+void TestGuiConnectionController::aManualReconnectReadsTheStoresLastAddresses()
+{
+    LoopbackCores cores;
+    QVERIFY(cores.start());
+    const SavedCoreTarget saved = cores.firstTarget();
+    QVERIFY(saved.connection.cachedAddresses.isEmpty());
+    QVERIFY(installTargets({saved}, QStringLiteral("a")));
+
+    GuiConnectionController controller;
+    controller.start({});
+    QTRY_VERIFY(cores.firstServer.hasAuthenticatedSession());
+    MainWindow* window = controller.sessions()->window();
+    QPointer<StationClient> client = window->findChild<StationClient*>();
+    auto* remoteControls = window->findChild<RemoteConnectionController*>();
+    QVERIFY(client);
+    QVERIFY(remoteControls);
+    QTRY_VERIFY(client->isHandshakeComplete());
+    const QStringList remembered{saved.connection.url};
+    QTRY_VERIFY([&] {
+        CoreTargetStore store(AppSettings::instance());
+        return store.load() && store.target(QStringLiteral("a"))
+               && store.target(QStringLiteral("a"))->connection.cachedAddresses == remembered;
+    }());
+
+    remoteControls->disconnectFromStation();
+    QTRY_VERIFY(!client->isConnectionActive());
+    remoteControls->connectToStation();
+    QCOMPARE(client->cachedAddresses(), QList<QUrl>{QUrl(saved.connection.url)});
+    QTRY_VERIFY(client->isHandshakeComplete());
     controller.shutdown();
 }
 

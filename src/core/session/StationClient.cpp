@@ -795,10 +795,15 @@ void StationClient::connectToStation(const QUrl& url, const QString& token,
 
     // iPhone app plan Task 27: the Core's last good addresses first, then
     // the one asked for.
+    // Fix wave I1: never for a Core saved with "connect without a
+    // certificate fingerprint", whose token must go only where the operator
+    // pointed it.
     m_dialPlan.clear();
-    for (const QUrl& cached : std::as_const(m_cachedAddresses)) {
-        if (cached.isValid() && cached != url && !m_dialPlan.contains(cached)) {
-            m_dialPlan.append(cached);
+    if (!allowUnpinned) {
+        for (const QUrl& cached : std::as_const(m_cachedAddresses)) {
+            if (cached.isValid() && cached != url && !m_dialPlan.contains(cached)) {
+                m_dialPlan.append(cached);
+            }
         }
     }
     m_dialPlan.append(url);
@@ -811,6 +816,11 @@ void StationClient::connectToStation(const QUrl& url, const QString& token,
 void StationClient::setCachedAddresses(const QList<QUrl>& addresses)
 {
     m_cachedAddresses = addresses;
+}
+
+void StationClient::setCachedAddressOpenTimeoutMs(int ms)
+{
+    m_openTimer->setInterval(std::max(1, ms));
 }
 
 void StationClient::startDialPlan()
@@ -1114,6 +1124,16 @@ bool StationClient::ensurePinSatisfied()
     const QString pinned = m_lastFingerprint.toUpper();
     const QString actual = formatFingerprint(peerDigest);
     if (actual != pinned) {
+        // Fix wave I1: another computer at an address that is not the last
+        // this attempt has (a cached address given to something else since)
+        // gives way to the next, before the token was sent, as
+        // refuseStation() does for identityChanged. The redial retires this
+        // transport, so its later socket signals are ignored.
+        if (advanceDialPlan(StationConnectionAttempt::Outcome::NotThisCore)) {
+            qCInfo(lcStationClient)
+                << "Another certificate answered at a saved address of the Core";
+            return false;
+        }
         m_lastError = QStringLiteral("Station certificate fingerprint does not match the saved pin.");
         qCWarning(lcStationClient) << m_lastError;
         // See the ordering note above: endSession, then abort.

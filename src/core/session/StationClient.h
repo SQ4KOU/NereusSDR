@@ -536,9 +536,22 @@ public:
     /// at once; one that is not the last in the list has
     /// kCachedAddressOpenTimeoutMs to open before it gives way. Takes effect
     /// on the next connectToStation().
+    ///
+    /// Fix wave I1: a connect with allowUnpinned set dials only its own url,
+    /// never a cached address (nothing proves who answers there, and the
+    /// token would go to it). A pinned connect whose certificate does not
+    /// match at an address that is not the last in the list gives way to
+    /// the next with the token unsent, as a paired Core does on
+    /// identityChanged; only a mismatch at the last address ends it.
     void setCachedAddresses(const QList<QUrl>& addresses);
+    QList<QUrl> cachedAddresses() const { return m_cachedAddresses; }
     /// How long an address that is not the last to try may take to open.
     static constexpr int kCachedAddressOpenTimeoutMs = 4000;
+    /// The open time in use: kCachedAddressOpenTimeoutMs unless a test
+    /// shortened it (as setHandshakeDeadlineMs() is). Applies from the next
+    /// address dialled.
+    void setCachedAddressOpenTimeoutMs(int ms);
+    int cachedAddressOpenTimeoutMs() const { return m_openTimer->interval(); }
     /// The current (or last) connection attempt, path by path.
     const StationConnectionAttempt& connectionAttempt() const { return m_attempt; }
     /// The address this session reached the Core at; empty until the
