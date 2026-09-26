@@ -4,36 +4,43 @@
 // RxDspWorker feeds it, sampled every 500 ms through the real
 // ReceiverDspLoadSampler and NnrLoadGovernor.
 //
-// The reference is the worker's busy share measured the way the load is
-// defined (its time inside blocks over wall time), from each block's start
-// and end reported by dsplock.c's test-only block hook, independently of the
-// load counters and the sampler under test. The worker's own CPU clock
-// (captured through the thread-start hook) is checked too, one way: the load
-// never reads less than the CPU the worker used. On a busy machine a worker
-// preempted inside a block is still inside it, so its busy time grows while
-// its CPU time does not; comparing the load with the CPU share both ways
-// failed there (loads 7 to 70 on an 18-core Mac: load 0.59 against CPU 0.43)
-// although the load was right.
+// Two references, one per kind of defect:
+//   - The worker's busy share measured the way the load is defined (its time
+//     inside blocks over wall time), from each block's start and end reported
+//     by dsplock.c's test-only block hook, independently of the load counters
+//     and the sampler under test. Every interval reads it within
+//     kBusyAgreement. This catches a sampler that reads the counters wrongly,
+//     but not wrong block edges: the hook reports the same edges the counters
+//     use.
+//   - The worker's own CPU clock (captured through the thread-start hook),
+//     which knows nothing of dsplock.c's edges. It bounds the load from both
+//     sides, so an edge that takes waiting time into the block (a start
+//     stamped before the worker waits for its buffer or its lock) fails.
+//
+// The CPU comparison only holds while the worker ran whenever it was inside a
+// block. On a busy machine a worker preempted inside a block is still inside
+// it, so its busy time grows while its CPU time does not (loads 7 to 70 on an
+// 18-core Mac: load 0.59 against CPU 0.43 with the load right). So the CPU
+// claims are held in the intervals whose busy share is within the tolerance
+// of the CPU share (corroborated intervals; every interval on a quiet
+// machine), and each case needs at least kMinCorroborated of them. Waiting
+// time taken into the blocks raises the busy share over the CPU share in
+// every interval, so a wrong edge leaves too few and fails.
+//
+// Claims:
+//   - every interval reads the busy share within kBusyAgreement;
+//   - every corroborated interval reads the CPU share within the case's
+//     tolerance, both ways, and there are at least kMinCorroborated;
+//   - the frame-like load reads under the display line in every corroborated
+//     interval, and neither it nor the uniform load ever steps back (both are
+//     well under the governor's line of work, so a step-back is the Rock 5C
+//     symptom below);
+//   - the overload reads at least kOverloadMinLoad in every corroborated
+//     interval and steps back within kTicks.
 //
 // The feeder stands in for the radio, whose packets arrive in real time
 // however busy the computer is. It runs at the priority RxDspWorker, the
 // production feeder, takes (macOS: USER_INTERACTIVE).
-//
-// A busy machine can still take the worker's processor away for part of an
-// interval (every process started from one shell here runs at the same QoS,
-// so the worker's gives it no edge). A worker kept off its processor inside
-// a block really is inside it for longer, so its busy share rises, the load
-// says so, and the step-back may be right to trip; kept off it between
-// blocks, it is less busy. The claims are therefore held against what the
-// worker actually did, which the reference measures on any machine:
-//   - every interval reads the worker's busy share (within kBusyAgreement,
-//     tighter than the old CPU tolerance), and never less than its CPU;
-//   - a step-back only ever follows the busy share averaged over the
-//     governor's hold at the governor's line;
-//   - the frame-like load reads under the display line in every interval in
-//     which the worker ran whenever it was inside a block (CPU within the
-//     tolerance of its busy share), which on a quiet machine is all of them;
-//   - the overload steps back (sampling for up to kMaxTicks until it has).
 //
 // The frame-like case is the defect found on the Rock 5C: a stage that works
 // in frames longer than one block (neural noise reduction: a 768-sample hop at
@@ -100,10 +107,16 @@ constexpr int kPacket = 238;
 constexpr std::chrono::milliseconds kFeederResync{100};
 
 constexpr auto kSampleInterval = std::chrono::milliseconds(ReceiverDspLoadSampler::kSampleIntervalMs);
-// About 10 s of samples per case; the overload samples for up to kMaxTicks
-// until its step-back.
+// About 10 s of samples per case. The overload's step-back is due after
+// NnrLoadGovernor's kNnrStepDownHoldMs (2 s) at the line; kNnrStepSettleMs
+// (5 s) only delays a second step, which no case waits for.
 constexpr int kTicks = 20;
-constexpr int kMaxTicks = 3 * kTicks;
+// Corroborated intervals (busy share within the tolerance of the CPU share)
+// each case needs before its CPU claims count. A block start stamped before
+// the worker waits for its buffer left none of 20 in the frame-like and
+// uniform cases; a busy machine (load 19 to 25) left as few as 4 in the
+// uniform case with the edges right.
+constexpr int kMinCorroborated = 2;
 // Time for the worker to settle after a delay changes.
 constexpr std::chrono::milliseconds kSettle{1000};
 
@@ -118,6 +131,7 @@ constexpr double kUniformCpuTolerance = 0.10;   // relative, busy share and CPU
 // Real overload: 1400 us of a 1333 us block.
 constexpr int kOverloadDelayUs = 1400;
 constexpr double kOverloadMinLoad = 0.95;
+constexpr double kOverloadCpuTolerance = 0.10;  // absolute, busy share and CPU
 // A reading that is right agrees with the busy-share reference to within
 // this (the same clock and the same block edges; observed within 0.001).
 constexpr double kBusyAgreement = 0.02;
@@ -192,11 +206,23 @@ void clearBlocks()
 
 // The share of [fromNs, toNs] the worker spent inside blocks; a block still
 // running counts up to toNs, as the load counts the block in progress.
+// Intervals only move forward, so blocks that ended by fromNs are dropped.
+// The worker's hook takes g_blocksMutex inside its timed block, so the lock
+// is held only to trim and copy, and the walk runs outside it.
 double busyShare(qint64 fromNs, qint64 toNs)
 {
-    QMutexLocker lock(&g_blocksMutex);
+    std::vector<BlockSpan> spans;
+    {
+        QMutexLocker lock(&g_blocksMutex);
+        g_blocks.erase(std::remove_if(g_blocks.begin(), g_blocks.end(),
+                                      [fromNs](const BlockSpan& b) {
+                                          return b.endNs >= 0 && b.endNs <= fromNs;
+                                      }),
+                       g_blocks.end());
+        spans = g_blocks;
+    }
     qint64 busy = 0;
-    for (const BlockSpan& b : g_blocks) {
+    for (const BlockSpan& b : spans) {
         const qint64 end = b.endNs < 0 ? toNs : b.endNs;
         const qint64 overlap = std::min(end, toNs) - std::max(b.startNs, fromNs);
         if (overlap > 0) {
@@ -288,10 +314,9 @@ struct Run {
 };
 
 // Samples kSampleInterval apart through the real sampler and the real
-// step-back governor (a receiver running Premium NNR): `ticks` intervals, or
-// with `untilStepBack` more, up to kMaxTicks, until the governor steps back.
+// step-back governor (a receiver running Premium NNR) for `ticks` intervals.
 // The first reading only seeds the sampler and sets the governor's time base.
-Run sampleFor(int ticks, bool untilStepBack = false)
+Run sampleFor(int ticks)
 {
     ReceiverDspLoadSampler sampler;
     NnrLoadGovernor governor;
@@ -312,8 +337,7 @@ Run sampleFor(int ticks, bool untilStepBack = false)
     qint64 previousReadNs = reading.readNs;
     governor.observe(kSlice, monotonicMs(), receiver);
 
-    for (int tick = 0;
-         tick < ticks || (untilStepBack && run.stepBacks == 0 && tick < kMaxTicks); ++tick) {
+    for (int tick = 0; tick < ticks; ++tick) {
         next += kSampleInterval;
         std::this_thread::sleep_until(next);
         reading = readChannel();
@@ -358,29 +382,11 @@ Run sampleFor(int ticks, bool untilStepBack = false)
     return run;
 }
 
-// A step-back at sample `index` is the governor doing its job when the
-// worker's busy share (the reference, not the reading), averaged over the
-// governor's hold before it, was at the governor's line (NnrLoadGovernor:
-// the load averaged over kNnrStepDownHoldMs at least kNnrStepDownLoad).
-bool stepBackFollowsTheBusyShare(const Run& run, std::size_t index)
+// Whether the worker ran whenever it was inside a block in this interval:
+// its busy share is within `tolerance` of its CPU share.
+bool corroborated(const Sample& s, double tolerance)
 {
-    const double at = run.samples[index].atSeconds;
-    const double hold = double(NnrLoadGovernor::kNnrStepDownHoldMs) / 1000.0;
-    const double interval = double(ReceiverDspLoadSampler::kSampleIntervalMs) / 1000.0;
-    int covered = 0;
-    double sum = 0.0;
-    for (std::size_t i = 0; i <= index; ++i) {
-        const Sample& s = run.samples[i];
-        // Intervals that end inside the hold (each covers the interval
-        // before its own time).
-        if (s.atSeconds <= at - hold + interval / 2.0) {
-            continue;
-        }
-        sum += s.busyShare;
-        ++covered;
-    }
-    return covered >= int(NnrLoadGovernor::kNnrStepDownHoldMs / ReceiverDspLoadSampler::kSampleIntervalMs)
-        && sum / covered >= NnrLoadGovernor::kNnrStepDownLoad - kBusyAgreement;
+    return s.busyShare - s.cpuShare <= tolerance;
 }
 
 void logRun(const char* name, const Run& run)
@@ -482,54 +488,74 @@ private slots:
     }
 
     // The defect: one 9 ms block in 12 is about 60% of a core, not overload.
-    void aFrameLikeLoadReadsItsCpuShare()
+    void aFrameLikeLoadReadsItsBusyAndCpuShare()
     {
         WDSPSetTestPeriodicDelayUs(kChannel, kFrameDelayUs, kFrameEvery);
         std::this_thread::sleep_for(kSettle);
         const Run run = sampleFor(kTicks);
         logRun("frame-like", run);
         QVERIFY(run.samples.size() >= std::size_t(kTicks) - 2);
-        for (std::size_t i = 0; i < run.samples.size(); ++i) {
-            const Sample& s = run.samples[i];
+        int corroboratedIntervals = 0;
+        for (const Sample& s : run.samples) {
             QVERIFY2(!s.idle, qPrintable(QStringLiteral("idle at %1 s").arg(s.atSeconds)));
             QVERIFY2(std::abs(s.load - s.busyShare) <= kBusyAgreement,
                      qPrintable(QStringLiteral("load %1 vs worker busy share %2 at %3 s")
                                     .arg(s.load).arg(s.busyShare).arg(s.atSeconds)));
-            QVERIFY2(s.cpuShare <= s.load + kFrameCpuTolerance,
-                     qPrintable(QStringLiteral("load %1 under worker CPU %2 at %3 s")
-                                    .arg(s.load).arg(s.cpuShare).arg(s.atSeconds)));
-            // The worker ran whenever it was inside a block: the case as a
-            // quiet machine runs it.
-            if (s.busyShare - s.cpuShare <= kFrameCpuTolerance) {
+            if (corroborated(s, kFrameCpuTolerance)) {
+                ++corroboratedIntervals;
+                QVERIFY2(std::abs(s.load - s.cpuShare) <= kFrameCpuTolerance,
+                         qPrintable(QStringLiteral("load %1 vs worker CPU %2 at %3 s")
+                                        .arg(s.load).arg(s.cpuShare).arg(s.atSeconds)));
                 QVERIFY2(s.load < kFrameMaxLoad,
                          qPrintable(QStringLiteral("load %1 at %2 s (worker CPU %3)")
                                         .arg(s.load).arg(s.atSeconds).arg(s.cpuShare)));
             }
-            QVERIFY2(!s.steppedBack || stepBackFollowsTheBusyShare(run, i),
-                     qPrintable(QStringLiteral("the step-back tripped at %1 s").arg(s.atSeconds)));
+            // About 60% of a core of work, under the governor's line: a
+            // step-back here is the Rock 5C symptom.
+            QVERIFY2(!s.steppedBack,
+                     qPrintable(QStringLiteral("the step-back tripped at %1 s (load %2, worker CPU %3)")
+                                    .arg(s.atSeconds).arg(s.load).arg(s.cpuShare)));
         }
+        QVERIFY2(corroboratedIntervals >= kMinCorroborated,
+                 qPrintable(QStringLiteral("%1 of %2 intervals had the busy share within %3 of the "
+                                           "worker's CPU")
+                                .arg(corroboratedIntervals).arg(run.samples.size())
+                                .arg(kFrameCpuTolerance)));
+        QCOMPARE(run.stepBacks, 0);
     }
 
-    // Uniform loads read as before: close to the worker's CPU share.
-    void aUniformLoadReadsItsCpuShare()
+    // Uniform loads read as before: close to the worker's busy and CPU share.
+    void aUniformLoadReadsItsBusyAndCpuShare()
     {
         WDSPSetTestProcessDelayUs(kChannel, kUniformDelayUs);
         std::this_thread::sleep_for(kSettle);
         const Run run = sampleFor(kTicks);
         logRun("uniform-900us", run);
         QVERIFY(run.samples.size() >= std::size_t(kTicks) - 2);
-        for (std::size_t i = 0; i < run.samples.size(); ++i) {
-            const Sample& s = run.samples[i];
+        int corroboratedIntervals = 0;
+        for (const Sample& s : run.samples) {
             QVERIFY2(!s.idle, qPrintable(QStringLiteral("idle at %1 s").arg(s.atSeconds)));
             QVERIFY2(std::abs(s.load - s.busyShare) <= kBusyAgreement,
                      qPrintable(QStringLiteral("load %1 vs worker busy share %2 at %3 s")
                                     .arg(s.load).arg(s.busyShare).arg(s.atSeconds)));
-            QVERIFY2(s.cpuShare <= s.load * (1.0 + kUniformCpuTolerance),
-                     qPrintable(QStringLiteral("load %1 under worker CPU %2 at %3 s")
-                                    .arg(s.load).arg(s.cpuShare).arg(s.atSeconds)));
-            QVERIFY2(!s.steppedBack || stepBackFollowsTheBusyShare(run, i),
-                     qPrintable(QStringLiteral("the step-back tripped at %1 s").arg(s.atSeconds)));
+            const double tolerance = kUniformCpuTolerance * s.cpuShare;
+            if (corroborated(s, tolerance)) {
+                ++corroboratedIntervals;
+                QVERIFY2(std::abs(s.load - s.cpuShare) <= tolerance,
+                         qPrintable(QStringLiteral("load %1 vs worker CPU %2 at %3 s")
+                                        .arg(s.load).arg(s.cpuShare).arg(s.atSeconds)));
+            }
+            // About 70% of a core of work, under the governor's line.
+            QVERIFY2(!s.steppedBack,
+                     qPrintable(QStringLiteral("the step-back tripped at %1 s (load %2, worker CPU %3)")
+                                    .arg(s.atSeconds).arg(s.load).arg(s.cpuShare)));
         }
+        QVERIFY2(corroboratedIntervals >= kMinCorroborated,
+                 qPrintable(QStringLiteral("%1 of %2 intervals had the busy share within %3 of the "
+                                           "worker's CPU")
+                                .arg(corroboratedIntervals).arg(run.samples.size())
+                                .arg(kUniformCpuTolerance)));
+        QCOMPARE(run.stepBacks, 0);
     }
 
     // A worker that really cannot keep up still reads as overloaded, and
@@ -538,17 +564,30 @@ private slots:
     {
         WDSPSetTestProcessDelayUs(kChannel, kOverloadDelayUs);
         std::this_thread::sleep_for(kSettle);
-        const Run run = sampleFor(kTicks, /*untilStepBack=*/true);
+        const Run run = sampleFor(kTicks);
         logRun("overload-1400us", run);
-        for (std::size_t i = 0; i < run.samples.size(); ++i) {
-            const Sample& s = run.samples[i];
+        QVERIFY(run.samples.size() >= std::size_t(kTicks) - 2);
+        int corroboratedIntervals = 0;
+        for (const Sample& s : run.samples) {
             QVERIFY2(!s.idle, qPrintable(QStringLiteral("idle at %1 s").arg(s.atSeconds)));
             QVERIFY2(std::abs(s.load - s.busyShare) <= kBusyAgreement,
                      qPrintable(QStringLiteral("load %1 vs worker busy share %2 at %3 s")
                                     .arg(s.load).arg(s.busyShare).arg(s.atSeconds)));
-            QVERIFY2(!s.steppedBack || stepBackFollowsTheBusyShare(run, i),
-                     qPrintable(QStringLiteral("the step-back tripped at %1 s").arg(s.atSeconds)));
+            if (corroborated(s, kOverloadCpuTolerance)) {
+                ++corroboratedIntervals;
+                QVERIFY2(std::abs(s.load - s.cpuShare) <= kOverloadCpuTolerance,
+                         qPrintable(QStringLiteral("load %1 vs worker CPU %2 at %3 s")
+                                        .arg(s.load).arg(s.cpuShare).arg(s.atSeconds)));
+                QVERIFY2(s.load >= kOverloadMinLoad,
+                         qPrintable(QStringLiteral("load %1 at %2 s (worker CPU %3)")
+                                        .arg(s.load).arg(s.atSeconds).arg(s.cpuShare)));
+            }
         }
+        QVERIFY2(corroboratedIntervals >= kMinCorroborated,
+                 qPrintable(QStringLiteral("%1 of %2 intervals had the busy share within %3 of the "
+                                           "worker's CPU")
+                                .arg(corroboratedIntervals).arg(run.samples.size())
+                                .arg(kOverloadCpuTolerance)));
         QVERIFY2(run.stepBacks >= 1, "a real overload must step back");
     }
 
