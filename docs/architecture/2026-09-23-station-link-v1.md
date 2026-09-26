@@ -834,7 +834,10 @@ When a feature is off, its version is 0:
   control document, "Display subscriptions"). A client that compares the
   version as a minimum reads 2 as it read 1; a window told less than 2
   does not send `decimation`, and a Core refuses it from a peer below the
-  grant minor as a request it cannot read.
+  grant minor as a request it cannot read. An endpoint beside another on
+  its engine runs at the engine's decimation, and its context's `limit` is
+  then `shared` (no new field; a client that never sends `decimation` asks
+  for 1 and is told `shared` beside a decimated neighbour).
 - `radioHardwareVersion`: sent only at agreed minor 11. 0 without the step
   attenuator bound; 1 with it; 2 with the Alex antennas too; 4 with the HL2
   I/O board too: the `ioBoard` object, `setAlexRxAntenna` (which needs 3)

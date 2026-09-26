@@ -181,7 +181,10 @@ SpectrumLimitReason grantReason(const SpectrumGrant& grant)
 {
     const int largest = FFTEngine::maximumFftSize();
     const int clamped = std::min(grant.requestedFftSize, largest);
-    if (grant.grantedFftSize < clamped) {
+    // Parity Task 17 follow-up (R-R3-01): a pan beside another runs at the
+    // engine's decimation; told as the shared engine it is.
+    if (grant.grantedFftSize < clamped
+        || grant.grantedDecimation != grant.requestedDecimation) {
         return SpectrumLimitReason::SharedEngine;
     }
     if (grant.requestedFftSize > largest && grant.grantedFftSize < grant.requestedFftSize) {
@@ -1709,6 +1712,8 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
     });
     grant.grantedFftSize = sharedFftSize > 0
         ? sharedFftSize : std::min(fftSize, FFTEngine::maximumFftSize());
+    grant.requestedDecimation = decimation;
+    grant.grantedDecimation = sharedDecimation > 0 ? sharedDecimation : decimation;
     // The pixel grant is fixed here, where the source geometry and granted
     // FFT size are known, and the display budget charges what is granted.
     const bool extendedActive = widebandNegotiated && request.extendedView
@@ -1778,7 +1783,7 @@ bool DaemonMediaController::handleSubscribe(const QJsonObject& control)
     entry.sourceFftSize = grant.grantedFftSize;
     entry.sourceWindowType = windowType;
     entry.requestedDecimation = decimation;
-    entry.sourceDecimation = sharedDecimation > 0 ? sharedDecimation : decimation;
+    entry.sourceDecimation = grant.grantedDecimation;
     entry.request = request;
     entry.displayCost = *displayCost;
     entry.chargeCoversRequest = chargedPixels >= pixels || !displayBudgetWireAvailable();
@@ -2714,6 +2719,9 @@ void DaemonMediaController::configureEndpointFromFrame(EndpointEntry& entry,
     // own admitted display charge is not told the receiver lacks detail.
     SpectrumEndpointRequest asked = entry.request;
     asked.pixels = entry.grant.requestedPixels;
+    // The decimation the endpoint's engine runs at now (a lone pan's is
+    // its own again once a neighbour leaves).
+    entry.grant.grantedDecimation = entry.sourceDecimation;
     SpectrumGrant reasonGrant = entry.grant;
     reasonGrant.grantedPixels = SpectrumEndpoint::grantedPixels(
         asked, sourceContext.fftBins, sourceContext.centreHz, sourceContext.sampleRateHz,

@@ -640,6 +640,7 @@ private slots:
     void regrantAfterNeighbourLeavesStaysWithinAdmittedCharge();
     void sharedEngineRegrantsEverySurvivorWhenItsSizerLeaves();
     void subscribeDecimationReachesTheEndpointsEngine();
+    void peerBelowTheGrantMinorCannotAskForDecimation();
     void destroyingControllerWithLiveBudgetSessionIsQuiet();
     void outOfRangeRequestsAreRejectedAndLeaveEndpointUntouched();
     void displayDiagnosticsMeasureSentFramesRefusalsAndErrors();
@@ -5065,11 +5066,26 @@ void TstDaemonMediaController::subscribeDecimationReachesTheEndpointsEngine()
     QTest::qWait(50);
     QCOMPARE(h.controller.spectrumSourceDecimation(2).value_or(0), 2);
     QCOMPARE(h.controller.spectrumSourceDecimation(1).value_or(0), 2);
+    // Parity Task 17 follow-up: the window is told its pan runs at the
+    // shared engine's decimation (limit "shared", the reason a shared
+    // engine's size gives); the first pan runs at what it asked for.
+    QCOMPARE(messageFor(controls, QStringLiteral("context"), 2)
+                 .value(QStringLiteral("limit")).toString(), QStringLiteral("shared"));
+    QCOMPARE(int(h.controller.spectrumGrant(2).value_or(SpectrumGrant{}).reason),
+             int(SpectrumLimitReason::SharedEngine));
+    QCOMPARE(messageFor(controls, QStringLiteral("context"), 1)
+                 .value(QStringLiteral("limit")).toString(), QStringLiteral("none"));
 
-    // The first pan leaves: the one left gets the 8 it asked for.
+    // The first pan leaves: the one left gets the 8 it asked for, and its
+    // renewed context no longer says it is held.
     QVERIFY(h.client.sendMediaControl(unsubscription(1), h.client.sessionEpoch()));
     QTRY_COMPARE(h.controller.activeEndpointCount(), 1);
     QTRY_COMPARE(h.controller.spectrumSourceDecimation(2).value_or(0), 8);
+    QTRY_VERIFY(([&] {
+        h.feedRadio();
+        return messageFor(controls, QStringLiteral("context"), 2)
+                   .value(QStringLiteral("limit")).toString() == QLatin1String("none");
+    })());
 
     // Without the field a request runs undecimated.
     QVERIFY(h.client.sendMediaControl(
@@ -5078,6 +5094,45 @@ void TstDaemonMediaController::subscribeDecimationReachesTheEndpointsEngine()
     QTRY_VERIFY(([&] { h.feedRadio(); return contextRevision(2) == 2; })());
     QTRY_COMPARE(h.controller.spectrumSourceDecimation(2).value_or(0), 1);
     h.finish();
+}
+
+// Parity Task 17 follow-up (R-R3-01): `decimation` came with
+// spectrumGrantVersion 2, which the Core tells only a peer at the grant
+// minor. A peer below it that sends one anyway is refused, while the same
+// request without it is taken.
+void TstDaemonMediaController::peerBelowTheGrantMinorCannotAskForDecimation()
+{
+    Harness h;
+    auto* station = new Test::LoopbackTransport(QStringLiteral("minor8-station"), this);
+    auto* peer = new Test::LoopbackTransport(QStringLiteral("minor8-peer"), this);
+    station->linkTo(peer);
+    h.server.acceptTransport(station);
+    peer->sendText(SessionMessages::encode(SessionMessages::hello(
+        kSessionProtocolMajor, kRemoteSpectrumGrantSessionProtocolMinor - 1, 0,
+        QStringLiteral("minor-8 client"))));
+    peer->sendText(SessionMessages::encode(SessionMessages::authRequest(h.server.token())));
+    QTRY_VERIFY(h.server.mediaAvailable());
+    QVERIFY(!h.server.spectrumGrantAvailable());
+    const auto send = [&](const QJsonObject& payload) {
+        SessionMessage message;
+        message.kind = SessionMessageKind::MediaControl;
+        message.mediaPayload = payload;
+        peer->sendText(SessionMessages::encode(message));
+    };
+    send({{QStringLiteral("op"), QStringLiteral("start")},
+          {QStringLiteral("connectionId"), QLatin1String(kConnectionId)}});
+    QTRY_VERIFY(h.mediaTransport);
+    h.mediaTransport->becomeReady();
+    const double centre = h.radio.streamCentreHz(h.streamIndex);
+    QJsonObject decimated = subscription(83, 1, h.sliceId, centre);
+    decimated.insert(QStringLiteral("decimation"), 4);
+    send(decimated);
+    send(subscription(84, 1, h.sliceId, centre));
+    QTRY_COMPARE(h.controller.activeEndpointCount(), 1);
+    QVERIFY(!h.controller.spectrumGrant(83).has_value());
+    QVERIFY(h.controller.spectrumGrant(84).has_value());
+    QCOMPARE(h.controller.spectrumSourceDecimation(84).value_or(0), 1);
+    peer->closeLink(QStringLiteral("test complete"));
 }
 
 void TstDaemonMediaController::currentMinorSpectrumContextsReportTheGrant()

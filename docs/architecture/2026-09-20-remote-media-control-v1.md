@@ -144,21 +144,41 @@ Nth I/Q pair to its FFT (`FFTEngine::setDecimation`), as a local window's
 engine does. It follows the FFT size's sharing rule: a request sets its
 engine's decimation only while it is the engine's only subscriber (any
 device's); beside another endpoint it runs at the engine's decimation, and
-when it is left alone it gets its own. A change renews the context. Absent,
+when it is left alone it gets its own. An endpoint running at another
+decimation than it asked for is told so: its context's `limit` is `shared`
+(below), as for a shared engine's size, until it is left alone and its
+renewed context says `none`. A change renews the context. Absent,
 the engine runs undecimated (1). Only a peer at the grant minor may send it
 (`StationServer::spectrumGrantAvailable`); a value outside 1 to 32, or one
 that is not a whole number, is refused as a request the Core cannot read.
 The desktop sends it to a Core that advertised version 2 on every
-subscribe, from the value its Setup page keeps; a window told less does not
-send it.
+subscribe of every pan, from the value its Setup page keeps; a window told
+less does not send it. In a local window the same setting applies to every
+pan's engine (the FFT engine pool's `setDecimation`, which also reaches an
+engine made later), not only the first stream's.
 
 The quantisation window (`minDbm`, `maxDbm`) is what the pan shows (parity
 Task 17, R-R3-01, R-R3-04). The codec carries 256 levels across it, so the
 desktop asks for the pan's own dBm range (its reference level down by its
 dynamic range, less the normalise shift the pan adds when it draws, in the
-frame's own un-normalised values) widened by the waterfall's low and high
-levels, which colour the frame's values as they come; each edge is rounded
-outward to a tenth of a dB and held inside -400 to 100. A signal above 0
+frame's own un-normalised values) widened by the waterfall levels in force,
+which colour the frame's values as they come; each edge is rounded outward
+to a tenth of a dB and held inside -400 to 100. The levels in force are the
+stored low and high levels, unless waterfall AGC, noise-floor AGC or
+Clarity sets them at run time (parity Task 17 follow-up); then the window
+holds the run-time levels with 10 dB of headroom each side, rounded outward
+to a whole dB, so no colour clips at the window's edge and a remote pan
+colours as a local one does. Those levels move a little every line, so the
+window keeps them while they fit and it is no more than 20 dB wider than
+they need on either side, and asks again only when they leave it or it is
+wider than that. The AGCs work on the values the pan receives, which the
+Core clamps to the window, so with nothing below the window (a receiver
+passing no noise) their low level sits a margin under whatever edge the
+window has; an AGC's low level therefore takes the window no lower than
+60 dB under the pan's floor or the stored low level, whichever is lower,
+so the window does not walk down to -400 dBm a request at a time.
+Clarity's levels come from the Core's noise floor of the whole source and
+are not held to that. A signal above 0
 dBm on a pan whose reference level is above 0 is drawn at its level, and a
 20 dB pan with its waterfall levels inside it steps by 20/255 dB. A change
 of range asks the Core again once the new range has held for one frame
@@ -220,7 +240,8 @@ right when the budget lowers it. `grantedTier` is `wide` or `fine`. `requestedPi
 `grantedPixels` are 1..4096 with granted not above requested. `limit` names
 what reduced the grant: `none`, `largest-size` (the request was above the
 largest supported FFT size), `shared` (another endpoint uses the same stream
-and tier engine, so its size stands) or `source-bins` (the crop has fewer
+and tier engine, so its size stands, or its decimation when that is not the
+one this endpoint asked for) or `source-bins` (the crop has fewer
 source bins than the requested pixels). A minor 8 or older peer receives
 the 19- or 20-field context unchanged, and each side accepts only the shape
 it negotiated. Both sides use one codec, `RemoteSpectrumContext`. The GUI
