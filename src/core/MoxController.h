@@ -221,6 +221,13 @@
 //               (TUNE, two-tone, a tuner autotune, VOX). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: iPhone app plan Task 77 fix round 2 (R-IOS-02, R-IOS-03,
+//               R-IOS-13): anyPttSourceHeld and pttSourcesReleased (the
+//               amplifier's owed switch waits for every PTT source); the
+//               radio's mic keys after a take only while the press that
+//               took is still down (a second press during the take is
+//               refused and keys nothing later). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -407,6 +414,14 @@ public:
     // a manual key. TciServer reads it after a trx to give back the TX
     // audio lock when the trx keyed nothing (Task 7 follow-up, item 5).
     bool     isTciPttHeld()  const noexcept { return m_tciPtt; }
+
+    // iPhone app plan Task 77 fix round 2: a PTT source (mic, CAT, TCI, or
+    // VOX triggering) is down now, keyed or held off. The Core never
+    // switches the Power Genius while one is: a key may be about to start.
+    bool     anyPttSourceHeld() const noexcept
+    {
+        return m_micPtt || m_catPtt || m_voxPtt || m_tciPtt;
+    }
 
     // ── K.2: MOX pre-check callback ──────────────────────────────────────────
     //
@@ -1123,6 +1138,11 @@ signals:
     // refusal is quiet.
     void moxRefused(const NereusSDR::TxRefusal& refusal);
 
+    // iPhone app plan Task 77 fix round 2: a PTT source was released and
+    // none is down now (anyPttSourceHeld() false). RadioModel retries an
+    // amplifier switch it owes.
+    void pttSourcesReleased();
+
     // ── Phase signals (Codex P1) ──────────────────────────────────────────────
     //
     // Subscribers attach HERE, not to individual low-level setters.
@@ -1573,6 +1593,13 @@ private:
     bool     isHeldOff(quint8 bit) const noexcept { return (m_notQueuedHeld & bit) != 0; }
     bool     isLevelHeld(quint8 bit) const noexcept;
     void     clearHeldBits(quint8 bits);
+    // Task 77 fix round 2: emits pttSourcesReleased when none is down.
+    void     reportIfSourcesReleased();
+    // Task 77 fix round 2 (ruling 8.9): the radio's mic press that took
+    // transmit is still down; cleared on its release. onTakeFinished keys
+    // the mic only while it is set, so a later press made during the take
+    // (refused "changing hands") keys nothing once the take ends.
+    bool     m_micTakePressDown{false};
     // Task 7 follow-up, N3: TX inhibit or a PA trip drops the CAT and TCI
     // levels (an app's request is not held across the block).
     void     dropAppLevelsUnderBlock();

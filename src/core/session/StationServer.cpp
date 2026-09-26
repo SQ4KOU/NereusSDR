@@ -515,6 +515,11 @@
 //               needs transmit; transmittingOn; the arbiter's freeze. J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: iPhone app plan Task 77 fix round 2: the amplifier's
+//               pending-key probe (a take, a device's key waiting for its
+//               microphone or its two-tone settling) and the retries of an
+//               owed amplifier restore. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1567,6 +1572,18 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
         // Created after the holder's MOX follower above, so the holder
         // knows it is keyed before keyedBy is published.
         m_remoteKeying = std::make_unique<RemoteKeying>(m_radioModel, m_transmitHolder.get());
+        // iPhone app plan Task 77 fix round 2: the Core never switches the
+        // Power Genius while a take runs, a device's key waits for its
+        // microphone or its two-tone settles; a switch it owes is retried
+        // when those end.
+        m_radioModel->setAmpKeyPendingProbe([this]() {
+            return m_transmitHolder->state() == TransmitHolder::State::Transferring
+                || (m_remoteKeying && m_remoteKeying->keyPending());
+        });
+        connect(m_transmitHolder.get(), &TransmitHolder::changed, m_radioModel,
+                &RadioModel::retryOwedAmpRestore);
+        connect(m_remoteKeying.get(), &RemoteKeying::pendingKeyEnded, m_radioModel,
+                &RadioModel::retryOwedAmpRestore);
         // Fix wave C1: the session gate a key without a microphone line is
         // judged by first, on the connection the command came on.
         m_remoteKeying->setSessionGate([this](const RemoteKeying::Command& command) -> TxRefusal {
@@ -2307,6 +2324,8 @@ StationServer::~StationServer()
         && m_radioModel->role() == RadioModel::Role::Local) {
         m_radioModel->moxController()->setKeyingGate({});
         m_radioModel->moxController()->setOtherDeviceHolds({});
+        // Task 77 fix round 2: the amplifier's pending-key probe asks it too.
+        m_radioModel->setAmpKeyPendingProbe({});
     }
     // Task 77: the arbiter's freeze asks this object too.
     if (m_radioModel && m_radioModel->txSliceArbiter() != nullptr

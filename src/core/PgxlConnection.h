@@ -25,6 +25,10 @@
 //   2026-09-24  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code
 //                 (R-R3-47, R-R3-22): replyReceived, every answer of an
 //                 admitted amp by sequence, for the Core's device settings.
+//   2026-09-26  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code
+//                 (iPhone app plan Task 77 fix round 2; R-IOS-02, R-IOS-03,
+//                 R-IOS-13): operateCommanded, every operate=0 or operate=1
+//                 written, so the Core knows the amp is changing over.
 // =================================================================
 #pragma once
 
@@ -181,6 +185,11 @@ signals:
                                   const QString& version);
     void nativeInfoReceived(const NereusSDR::PgxlIdentityInfo& info);
     void identityAdmissionFailed(quint64 socketAttemptToken, const QString& reason);
+
+    /// iPhone app plan Task 77 fix round 2: an operate=1 (`operate` true)
+    /// or operate=0 was written to the amp, by any sender. The amp is
+    /// changing over until its status reports the commanded state.
+    void operateCommanded(bool operate);
 
     // Test seam: emitted from sendCommand so tests can assert frame format.
     void testFrameWrittenForTesting(const QString& frame);

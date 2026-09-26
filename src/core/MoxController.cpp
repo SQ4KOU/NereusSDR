@@ -165,6 +165,13 @@
 //               (TUNE, two-tone, a tuner autotune, VOX). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: iPhone app plan Task 77 fix round 2 (R-IOS-02, R-IOS-03,
+//               R-IOS-13): anyPttSourceHeld and pttSourcesReleased (the
+//               amplifier's owed switch waits for every PTT source); the
+//               radio's mic keys after a take only while the press that
+//               took is still down (a second press during the take is
+//               refused and keys nothing later). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -426,6 +433,14 @@ void MoxController::onTakeFinished(const KeyerIdentity& keyer, bool took)
                                                     : 0;
     if (bit == 0 || !isLevelHeld(bit)) {
         return;
+    }
+    if (bit == kRefusedMic) {
+        // Task 77 fix round 2: the mic that is down now is the press that
+        // took, not a later one refused while the take ran.
+        if (!m_micTakePressDown) {
+            return;
+        }
+        m_micTakePressDown = false;
     }
     clearHeldBits(bit);
     pollPtt();
@@ -1232,6 +1247,11 @@ void MoxController::tryPollKey(PttMode mode, quint8 refusedBit)
     if (m_keyingGate && refusalBeforeTheGate().isEmpty()) {
         const KeyerIdentity keyer = KeyerIdentity::station(mode);
         const KeyingAnswer answer = m_keyingGate(mode, keyer);
+        if (answer.verdict == KeyingVerdict::Take && mode == PttMode::Mic) {
+            // Task 77 fix round 2: this press took; it keys when the take
+            // ends if it is still down (onTakeFinished).
+            m_micTakePressDown = true;
+        }
         if (answer.verdict != KeyingVerdict::Admit) {
             if (answer.verdict == KeyingVerdict::Refuse) {
                 reportRefusal(answer.refusal.text, answer.refusal,
@@ -1294,6 +1314,16 @@ void MoxController::clearHeldBits(quint8 bits)
 {
     m_refusedHeld &= static_cast<quint8>(~bits);
     m_notQueuedHeld &= static_cast<quint8>(~bits);
+    reportIfSourcesReleased();
+}
+
+void MoxController::reportIfSourcesReleased()
+{
+    // iPhone app plan Task 77 fix round 2: every release path clears its
+    // held bits, so this is where the last release is seen.
+    if (!anyPttSourceHeld()) {
+        emit pttSourcesReleased();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1508,6 +1538,8 @@ void MoxController::clearPttSources()
     m_tciPtt = false;
     m_refusedHeld = 0;
     m_notQueuedHeld = 0;
+    m_micTakePressDown = false;
+    reportIfSourcesReleased();
 }
 
 // ---------------------------------------------------------------------------
@@ -2331,6 +2363,7 @@ void MoxController::onMicPttFromRadio(bool pressed)
     const bool pressEdge = pressed && !m_micPtt;
     m_micPtt = pressed;
     if (!pressed) {
+        m_micTakePressDown = false;   // Task 77 fix round 2
         clearHeldBits(kRefusedMic);   // M3 and R-R3-36: a new press
     }
     // iPhone app plan Task 77 (rulings 8.8, 8.9): while another device
@@ -2364,6 +2397,10 @@ void MoxController::onMicPttFromRadio(bool pressed)
             if (answer.verdict == KeyingVerdict::Refuse) {
                 reportRefusal(answer.refusal.text, answer.refusal, /*quiet=*/false);
             }
+            // Task 77 fix round 2: only the press that took keys once the
+            // take ends; one refused while a take runs ("Transmit is
+            // changing hands. Try again in a moment.") keys nothing later.
+            m_micTakePressDown = answer.verdict == KeyingVerdict::Take;
         }
         if (m_micPtt) {
             m_refusedHeld |= kRefusedMic;

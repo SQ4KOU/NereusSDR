@@ -30,6 +30,8 @@
 //   2026-09-24  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code
 //                 (R-R3-47, R-R3-22): replyReceived for every answer of a
 //                 connected amp (the Core's device settings).
+//   2026-09-26  J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code
+//                 (iPhone app plan Task 77 fix round 2): operateCommanded.
 // =================================================================
 #include "PgxlConnection.h"
 #include "AppSettings.h"
@@ -561,6 +563,10 @@ quint32 PgxlConnection::writeProtocolCommand(const QString& cmd)
     ++m_framesOut;
     m_bytesOut += quint64(line.size());
     emit testFrameWrittenForTesting(line.trimmed());  // test seam
+    // iPhone app plan Task 77 fix round 2: the amp starts changing over.
+    if (cmd == QLatin1String("operate=1") || cmd == QLatin1String("operate=0")) {
+        emit operateCommanded(cmd == QLatin1String("operate=1"));
+    }
     return seq;
 }
 

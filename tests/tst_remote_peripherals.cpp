@@ -4764,10 +4764,15 @@ void RemotePeripheralsTest::localWindowAmpAndTunerSwitchesWaitOnTheAir()
         QTRY_VERIFY(applet.relayBarForTesting(relay)->isScrollEnabled());
     }
     QVERIFY(applet.operateButtonForTesting()->isEnabled());
+    // Task 77 fix round 2: TUNE (it switches the Power Genius to standby
+    // first) follows the same on-air rule as OPERATE and ANT.
+    QVERIFY(applet.tuneButtonForTesting()->isEnabled());
     MoxController* const coreMox = station.moxController();
     coreMox->setMoxCheck({});
     coreMox->setMox(true);
     QTRY_VERIFY(station.isCoreOnAir());
+    QTRY_VERIFY(!applet.tuneButtonForTesting()->isEnabled());
+    QCOMPARE(applet.tuneButtonForTesting()->toolTip(), onAir);
     for (int relay = 0; relay < 3; ++relay) {
         QTRY_VERIFY(!applet.relayBarForTesting(relay)->isScrollEnabled());
         QCOMPARE(applet.relayBarForTesting(relay)->toolTip(), onAir);
@@ -4803,6 +4808,8 @@ void RemotePeripheralsTest::localWindowAmpAndTunerSwitchesWaitOnTheAir()
         QVERIFY(applet.relayBarForTesting(relay)->toolTip().isEmpty());
     }
     QVERIFY(applet.operateButtonForTesting()->isEnabled());
+    QTRY_VERIFY(applet.tuneButtonForTesting()->isEnabled());
+    QVERIFY(applet.tuneButtonForTesting()->toolTip().isEmpty());
     mark = tuner.commands.size();
     wheel(applet.relayBarForTesting(0), 120);
     QVERIFY(tuner.waitFor(QStringLiteral("tune relay=0 move=1"), mark) >= 0);

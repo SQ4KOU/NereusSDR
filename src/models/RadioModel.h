@@ -290,6 +290,15 @@
 //                                    standby wait; the amplifier's restore
 //                                    waits for receive. AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Task 77 fix round 2 (R-IOS-02,
+//                                    R-IOS-03, R-IOS-13): the Power Genius
+//                                    is switched only with nothing keyed or
+//                                    pending and one command in flight; a
+//                                    key's RF waits at the RF-flow gate
+//                                    while it changes over (stopped after
+//                                    1.5 s); every autotune refused on the
+//                                    air. AI-assisted via Anthropic Claude
+//                                    Code.
 // =================================================================
 
 //=================================================================
@@ -2778,6 +2787,35 @@ public:
     bool hasAmplifier() const { return m_hasAmplifier; }
     bool ampOperate()  const  { return m_ampOperate; }
 
+    // ── iPhone app plan Task 77 fix round 2: the Power Genius changeover ──
+    //
+    // The Core sends the amplifier operate=0 or operate=1 (an autotune's
+    // standby, the restore after it) only while MOX reads receive, no key
+    // is pending and no earlier command is still unconfirmed; otherwise
+    // the restore stays owed and is retried at each unkey and release.
+    //
+    // A key pending beyond this model's own view (a take running, a
+    // device's key waiting for its microphone, a device's two-tone
+    // settling): the Core's session server installs it. Unset: none.
+    using AmpKeyPendingFn = std::function<bool()>;
+    void setAmpKeyPendingProbe(AmpKeyPendingFn probe) { m_ampKeyPending = std::move(probe); }
+    /// The amplifier is changing over: from any operate=0 or operate=1
+    /// written to it (PgxlConnection::operateCommanded) until its status
+    /// reports the commanded state. Always false with no Power Genius
+    /// connected. While it is, a key holds its RF at the RF-flow gate (a
+    /// third condition beside txReady and interlockGranted); a key still
+    /// held kAmpChangeoverBoundMs after the command is stopped with
+    /// ampNotSwitchedText(), never let through.
+    bool ampChangingOver() const;
+    static constexpr int kAmpChangeoverBoundMs = 1500;
+    /// The stop's words (plain, for the operator and the device).
+    static QString ampNotSwitchedText();
+    /// The stop reason code lastTransmitStopReason() carries for it.
+    static constexpr char kAmpNotSwitchedStopCode[] = "ampNotSwitched";
+    /// An owed amplifier restore, sent now if nothing is pending. The
+    /// session server calls it when a take or a device's pending key ends.
+    void retryOwedAmpRestore();
+
     // Cross-vendor "is any external amp currently amplifying?" predicate.
     // True if PGXL is connected + in OPERATE OR if the RF-Kit RF2K-S is in
     // OPERATE.  Used by MainWindow's SMeterWidget wiring to decide whether
@@ -4730,6 +4768,10 @@ signals:
     void amplifierChanged(bool present);
     void ampStateChanged();
     void ampMetersChanged(float fwd, float swr);
+    /// iPhone app plan Task 77 fix round 2: a Tuner Genius autotune cycle
+    /// ended (keyed or not); `deviceId` is the device it was for, empty for
+    /// the Core's own.
+    void tgxlAutotuneEnded(const QByteArray& deviceId);
 
     // Phase 3P-III Task 13: cross-vendor external-amp aggregator signals.
     // Both PgxlConnection state transitions and Rf2ksConnection::operateModeUpdated
@@ -6759,8 +6801,35 @@ private:
     bool tgxlRfFlowing() const;
     /// Sends operate=1 to the Power Genius (the restore itself).
     void sendPgxlOperateRestore();
-    /// The cycle itself (startTgxlAutotune's body before Task 77).
-    void beginTgxlAutotune(bool fromHardware);
+    /// Task 77 fix round 2: operate=0 or operate=1 from this model (its own
+    /// command, so the owed restore survives it).
+    void sendPgxlOperate(bool operate);
+    /// Task 77 fix round 2: a key may be about to start (a PTT source
+    /// down, two-tone running or settling, the session server's probe).
+    bool ampKeyPending() const;
+    /// Task 77 fix round 2: the amplifier may be switched now.
+    bool ampSwitchAllowed() const;
+    AmpKeyPendingFn m_ampKeyPending;
+    /// The unconfirmed operate command (true: operate=1), and when it was
+    /// written. Empty while the amplifier is not changing over.
+    std::optional<bool> m_ampCommandedOperate;
+    QElapsedTimer m_ampCommandClock;
+    /// Set while this model writes its own operate command.
+    bool m_ampOwnCommand{false};
+    void onPgxlOperateCommanded(bool operate);
+    void endAmpChangeover();
+    /// The RF-flow gate's third condition: a key's RF waits here.
+    bool m_rfHeldForAmp{false};
+    QTimer* m_ampHoldTimer{nullptr};
+    /// Opens the RF gate (TxChannel::setRunningAsync(true)) once txReady
+    /// and the interlock have both come, unless the amplifier is changing
+    /// over; then the RF is held until it has.
+    void openTxRfGate();
+    void onAmpHoldDeadline();
+    /// The cycle itself (startTgxlAutotune's body before Task 77). Returns
+    /// the refusal when it did not start (empty when it started, or was a
+    /// hardware echo of a running cycle).
+    QString beginTgxlAutotune(bool fromHardware);
     bool m_awaitingInterlockForAutotune{false};
     void continueTgxlAutotuneAfterStandby();
     void sendTgxlAutotuneCmd();

@@ -4924,13 +4924,34 @@ transmit through this Core."):
   again when it stops." with no fix, since the amplifier is never switched
   between standby and operate while RF flows; then in plain words "No
   Tuner Genius is connected to the Core." when none is, and "The tuner is
-  already tuning." while any cycle runs. While this device's cycle waits
-  for the amplifier, its own `tx.key`, `tx.tune {on:true}`, `tx.twoTone
-  {on:true}` and `ps3.twoTone {enabled:true}` are refused "The tuner is
-  already tuning."; if the radio goes on the air meanwhile (a VOX key), the
-  cycle ends without keying and the amplifier returns to operate once the
-  radio is back on receive. A take (section 18.9) ends the old holder's
-  cycle before the transfer.
+  already tuning." while any cycle runs or any start is pending. The same
+  `holderOnAir` refusal comes while this device's own start is on its way
+  to keying (its `tx.key` waiting for its microphone, its two-tone
+  settling). After those, in plain words: "The amplifier is still
+  switching. Try again in a moment." while the Power Genius has not
+  reported the state it was last sent to, and "A transmission is about to
+  start. Try again when it ends." while a key is about to start at the
+  Core (a PTT held, a take running) and the amplifier would have to be
+  switched. While this device's cycle runs, waiting for the amplifier or
+  with its carrier up, its own `tx.key`, `tx.twoTone {on:true}` and
+  `ps3.twoTone {enabled:true}` are refused "The tuner is already tuning."
+  (and `tx.tune {on:true}` while it waits; with the carrier up it answers
+  with the carrier's epoch). If the radio goes on the air meanwhile (a VOX
+  key), the cycle ends without keying; so does a cycle whose amplifier
+  does not report standby within 1.5 s. The amplifier returns to operate
+  only once the radio reads receive, no key is on or about to start and
+  the amplifier has reported the state it was last sent to; until then it
+  stays in standby (a taker transmits barefoot). A take (section 18.9)
+  ends the old holder's cycle before the transfer.
+
+**The amplifier changing over.** From any `operate=0` or `operate=1` the
+Core's Power Genius is sent (by the autotune or by an operator) until it
+reports that state, every key holds its RF (MOX and `keyed` are on, the
+transmitter sends nothing): a device's key of any kind, VOX and the radio's
+own PTT alike. If the amplifier has not reported within 1.5 s of the
+command, the key is stopped (`stopReason` `station`, "The amplifier did not
+finish switching. Try again."). With no Power Genius connected nothing
+waits.
 
 Every key passes the Core's gates in the order of section 18.1, then TX
 inhibit, the PA trip, receive only, the band plan and the interlock, and
@@ -5193,7 +5214,9 @@ no stop. The reasons:
   Core stopped transmitting." ("Radio took transmit, ..." for the radio's
   own PTT);
 - `station`: any other stop the Core made itself: "The Core stopped
-  transmitting."
+  transmitting.", or, for a key whose RF waited for the Power Genius and
+  was stopped when it did not report within 1.5 s (iPhone app plan Task
+  77 fix round 2), "The amplifier did not finish switching. Try again."
 
 The Core sends the object to the holder and to every other declaring peer,
 so a device that lost its link learns why from the snapshot when it signs

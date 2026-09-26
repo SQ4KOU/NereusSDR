@@ -133,6 +133,14 @@
 //               the amplifier never switched under RF (I3, I4); tx.take
 //               copies (M6). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-26: Task 77 fix round 2: with a TX channel on the Core, no
+//               key's RF starts before the amplifier reports the state it
+//               was sent to, and the amplifier is never switched around a
+//               key; tx.tunerTune refused while the device's own start is
+//               pending; the device's tx.key refused under its autotune
+//               carrier; a second PTT press during a take keys nothing.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -149,7 +157,12 @@
 #include "core/PgxlConnection.h"
 #include "core/TgxlConnection.h"
 #include "core/TwoToneController.h"
+#include "core/TxChannel.h"
 #include "core/TxInterlockPolicy.h"
+#include "core/WdspEngine.h"
+#include "core/session/RemoteKeying.h"
+
+#include <atomic>
 #include "models/Band.h"
 
 namespace {
@@ -364,6 +377,74 @@ struct MediaCore {
         return transport;
     }
 };
+
+} // namespace
+
+namespace {
+
+// Fix round 2: the Core's model with a TX channel wired as the connect
+// path wires it (no WDSP channel: its RF gate is what is observed), and
+// every operate command the amplifier gets, with whether RF could flow
+// and whether the test held a PTT down when it went.
+struct CoreTx {
+    RadioModel* model;
+    TxChannel tx{WdspEngine::kTxChannelId};
+    std::atomic<int> opens{0};
+    explicit CoreTx(RadioModel* m)
+        : model(m)
+    {
+        model->injectTxChannelForTest(&tx);
+        model->wireTxChannelKeyingForTest();
+        tx.setRfGateObserverForTest([this](bool open) {
+            if (open) {
+                ++opens;
+            }
+        });
+    }
+    ~CoreTx()
+    {
+        tx.setRfGateObserverForTest({});
+        model->injectTxChannelForTest(nullptr);
+    }
+};
+struct AmpLog {
+    struct Sent {
+        QString command;
+        bool rf{false};
+        bool pttDown{false};
+    };
+    QList<Sent> sent;
+    bool pttDown{false};
+    int count(const QString& command) const
+    {
+        int n = 0;
+        for (const Sent& s : sent) {
+            n += s.command == command ? 1 : 0;
+        }
+        return n;
+    }
+    bool noneUnderAKey() const
+    {
+        for (const Sent& s : sent) {
+            if (s.rf || s.pttDown) {
+                return false;
+            }
+        }
+        return true;
+    }
+};
+void logAmp(PgxlConnection* pgxl, MoxController* mox, AmpLog* log)
+{
+    QObject::connect(pgxl, &PgxlConnection::testFrameWrittenForTesting, pgxl,
+            [log, mox](const QString& frame) {
+                const QString command = frame.mid(frame.indexOf(QLatin1Char('|')) + 1);
+                if (command.startsWith(QLatin1String("operate="))) {
+                    log->sent.append({command,
+                                      mox->isMox() || mox->state() != MoxState::Rx,
+                                      log->pttDown});
+                }
+            });
+}
 
 } // namespace
 
@@ -4420,12 +4501,14 @@ private slots:
         }
     }
 
-    // I3: a Tuner Genius autotune is refused while the radio is on the air
-    // (the amplifier would be switched under RF). While a device's cycle
-    // waits for the amplifier, its own key, TUNE and two-tone are refused;
-    // if MOX comes on meanwhile the cycle ends without keying, and the
-    // amplifier goes back to operate only once MOX reads receive.
-    void aTunerAutotuneNeverSwitchesTheAmplifierUnderRf()
+    // I3, fix round 2: a Tuner Genius autotune is refused while the radio
+    // is on the air (the amplifier would be switched under RF). While a
+    // device's cycle waits for the amplifier, its own key, TUNE and
+    // two-tone are refused; VOX keying meanwhile holds its RF until the
+    // amplifier reports standby (no RF into an amplifier changing over),
+    // the cycle ends without keying, and the amplifier goes back to
+    // operate only once nothing is keyed and no PTT is down.
+    void voxDuringAnAutotuneWaitStartsNoRfBeforeTheAmplifiersStandby()
     {
         Core core;
         allowTransmit(core);
@@ -4433,27 +4516,15 @@ private slots:
         core.pair(a);
         LoopbackTransport* appA = core.signIn(a, kTransmitter);
         QVERIFY(admitted(appA));
+        CoreTx txr(core.model.get());
         MoxController* mox = core.model->moxController();
         const MirrorUpdate on{0, "on", MirrorWireKind::Bool, QVariant(true)};
-        const MirrorUpdate off{0, "on", MirrorWireKind::Bool, QVariant(false)};
         core.model->tgxlConnection()->injectLineForTesting(QStringLiteral("V1.2.17"));
         PgxlConnection* pgxl = core.model->pgxlConnection();
         pgxl->injectLineForTesting(QStringLiteral("V3.8.9"));
         pgxl->injectLineForTesting(QStringLiteral("R1|0|state=OPERATE"));
-        QList<QPair<QString, bool>> frames;   // each command, and whether RF flowed
-        connect(pgxl, &PgxlConnection::testFrameWrittenForTesting, this,
-                [&frames, mox](const QString& frame) {
-                    frames.append({frame, mox->isMox() || mox->state() != MoxState::Rx});
-                });
-        const auto sent = [&frames](const QString& command) {
-            QList<bool> rf;
-            for (const auto& f : frames) {
-                if (f.first.endsWith(QLatin1Char('|') + command)) {
-                    rf.append(f.second);
-                }
-            }
-            return rf;
-        };
+        AmpLog amp;
+        logAmp(pgxl, mox, &amp);
 
         // On the air with its own voice key: refused, nothing switched.
         const QJsonObject keyed =
@@ -4464,17 +4535,15 @@ private slots:
         QVERIFY(!onAir.value(QStringLiteral("accepted")).toBool(true));
         QCOMPARE(onAir.value(QStringLiteral("reason")).toString(), TxRefusals::radioOnAir().text);
         QVERIFY(!core.model->isTgxlAutotuneInProgress());
-        QVERIFY(sent(QStringLiteral("operate=0")).isEmpty());
+        QCOMPARE(amp.sent.size(), 0);
         QVERIFY(!core.model->isTune());
-        QVERIFY(core.invoke(appA, "tx.unkey",
-                            {int64("epoch", core.model->keyedBy().epoch)})
+        QVERIFY(core.invoke(appA, "tx.unkey", {int64("epoch", core.model->keyedBy().epoch)})
                     .value(QStringLiteral("accepted")).toBool());
-        Q_UNUSED(keyed);
         QTRY_COMPARE(mox->state(), MoxState::Rx);
 
         // Off the air: the cycle starts and waits for the amplifier.
         QVERIFY(core.invoke(appA, "tx.tunerTune", {on}).value(QStringLiteral("accepted")).toBool());
-        QCOMPARE(sent(QStringLiteral("operate=0")), QList<bool>{false});
+        QCOMPARE(amp.count(QStringLiteral("operate=0")), 1);
         QVERIFY(core.model->isTgxlAutotuneInProgress());
         QVERIFY(!mox->isMox());
         // Its own key, TUNE and two-tone are refused while it waits.
@@ -4490,28 +4559,198 @@ private slots:
         QVERIFY(!mox->isMox());
         QVERIFY(core.model->isTgxlAutotuneInProgress());
 
-        // VOX keys (the holder's) during the wait; the amplifier's standby
-        // arrives: the cycle ends without keying the tune carrier.
+        // VOX keys (the holder's) during the wait: MOX comes on, its RF
+        // does not, until the amplifier reports standby.
+        txr.opens = 0;   // the voice key's own RF, above, is done
         core.model->transmitModel().setVoxEnabled(true);
+        amp.pttDown = true;
         mox->onVoxActive(true);
         QTRY_COMPARE(mox->state(), MoxState::Tx);
-        pgxl->injectLineForTesting(QStringLiteral("S0|state=STANDBY"));
+        QTest::qWait(200);
+        QCOMPARE(txr.opens.load(), 0);
+        QVERIFY(!txr.tx.isRfGateOpen());
+        pgxl->injectLineForTesting(QStringLiteral("S0|status state=STANDBY"));
+        // The cycle ends without keying the tune carrier; VOX goes out
+        // barefoot now the amplifier is in standby.
         QTRY_VERIFY(!core.model->isTgxlAutotuneInProgress());
+        QTRY_VERIFY(txr.tx.isRfGateOpen());
         QVERIFY(!core.model->isTune());
         QVERIFY(mox->isMox());
-        QVERIFY(sent(QStringLiteral("operate=1")).isEmpty());
-        // The amplifier goes back once MOX reads receive.
+        QCOMPARE(amp.count(QStringLiteral("operate=1")), 0);
+        // The amplifier goes back once MOX reads receive and VOX is down.
+        amp.pttDown = false;
         mox->onVoxActive(false);
         QTRY_COMPARE(mox->state(), MoxState::Rx);
-        QTRY_COMPARE(sent(QStringLiteral("operate=1")), QList<bool>{false});
+        QTRY_COMPARE(amp.count(QStringLiteral("operate=1")), 1);
+        QVERIFY(amp.noneUnderAKey());
         core.model->transmitModel().setVoxEnabled(false);
-        Q_UNUSED(off);
     }
 
-    // I4: the radio's PTT during a device's autotune that waits for the
-    // amplifier ends the cycle before the transfer, with the amplifier put
-    // back while nothing is keyed, and the cycle never keys afterwards.
-    void theRadiosPttEndsADevicesAutotuneWaitingForTheAmplifier()
+    // I4, fix round 2: the radio's PTT during a device's autotune that
+    // waits for the amplifier ends the cycle before the transfer. With the
+    // amplifier's operate=0 still unconfirmed nothing more is sent to it
+    // (one command in flight, never around the key); the station's key
+    // starts no RF until the amplifier reports standby, goes out barefoot,
+    // and the amplifier returns to operate only once the PTT is released.
+    void theRadiosPttDuringADevicesAutotuneWaitStartsNoRfBeforeTheStandby()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        QVERIFY(admitted(appA));
+        CoreTx txr(core.model.get());
+        MoxController* mox = core.model->moxController();
+        TransmitHolder* holder = core.server->transmitHolder();
+        const MirrorUpdate on{0, "on", MirrorWireKind::Bool, QVariant(true)};
+        core.model->tgxlConnection()->injectLineForTesting(QStringLiteral("V1.2.17"));
+        PgxlConnection* pgxl = core.model->pgxlConnection();
+        pgxl->injectLineForTesting(QStringLiteral("V3.8.9"));
+        pgxl->injectLineForTesting(QStringLiteral("R1|0|state=OPERATE"));
+        AmpLog amp;
+        logAmp(pgxl, mox, &amp);
+        QVERIFY(core.invoke(appA, "tx.tunerTune", {on}).value(QStringLiteral("accepted")).toBool());
+        QVERIFY(core.model->isTgxlAutotuneInProgress());
+        QCOMPARE(amp.count(QStringLiteral("operate=0")), 1);
+        QVERIFY(!mox->isMox());
+
+        amp.pttDown = true;
+        mox->onMicPttFromRadio(true);
+        QTRY_VERIFY(holder->isHeldBy(QByteArray(KeyerIdentity::kStationDeviceId)));
+        QVERIFY(!core.model->isTgxlAutotuneInProgress());
+        QTRY_VERIFY(mox->isMox() && mox->currentKeyer().isStation());
+        QTest::qWait(200);
+        QCOMPARE(amp.count(QStringLiteral("operate=1")), 0);
+        QCOMPARE(txr.opens.load(), 0);
+        // The standby arrives: the station's RF starts, barefoot.
+        pgxl->injectLineForTesting(QStringLiteral("S0|status state=STANDBY"));
+        QTRY_VERIFY(txr.tx.isRfGateOpen());
+        QVERIFY(!core.model->isTune());
+        QVERIFY(mox->isMox() && mox->currentKeyer().isStation());
+        QTest::qWait(200);
+        QCOMPARE(amp.count(QStringLiteral("operate=1")), 0);
+        amp.pttDown = false;
+        mox->onMicPttFromRadio(false);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QTRY_COMPARE(amp.count(QStringLiteral("operate=1")), 1);
+        QVERIFY(amp.noneUnderAKey());
+    }
+
+    // Fix round 2, Important 1: tx.tunerTune is refused while the device's
+    // own start is on its way to keying (its key waiting for its
+    // microphone, its two-tone settling), with the on-air words; nothing
+    // reaches the amplifier and the pending start is not overwritten.
+    void aTunerTuneIsRefusedWhileTheDevicesOwnStartIsPending()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        QVERIFY(admitted(appA));
+        CoreTx txr(core.model.get());
+        MoxController* mox = core.model->moxController();
+        const MirrorUpdate on{0, "on", MirrorWireKind::Bool, QVariant(true)};
+        const MirrorUpdate off{0, "on", MirrorWireKind::Bool, QVariant(false)};
+        core.model->tgxlConnection()->injectLineForTesting(QStringLiteral("V1.2.17"));
+        PgxlConnection* pgxl = core.model->pgxlConnection();
+        pgxl->injectLineForTesting(QStringLiteral("V3.8.9"));
+        pgxl->injectLineForTesting(QStringLiteral("R1|0|state=OPERATE"));
+        AmpLog amp;
+        logAmp(pgxl, mox, &amp);
+
+        // A voice key waiting for the device's microphone line.
+        SliceModel* slice = core.model->activeSlice();
+        QVERIFY(slice);
+        const DSPMode modeBefore = slice->dspMode();
+        slice->setDspMode(DSPMode::USB);
+        RemoteKeying::MicUplink uplink;
+        uplink.carriesMic = [](const QByteArray&) { return true; };
+        uplink.prime = [](const QByteArray&, std::function<void(bool)>) {};   // never fills
+        uplink.endPriming = [](const QByteArray&) {};
+        core.server->remoteKeying()->setMicUplink(uplink);
+        const quint32 keyId = core.nextCommandId++;
+        appA->sendText(SessionMessages::encode(SessionMessages::commandInvoke(
+            "tx.key", keyId, {utf8("trigger", QStringLiteral("screen"))})));
+        QTest::qWait(100);
+        QVERIFY(!mox->isMox());
+        const QJsonObject waiting = core.invoke(appA, "tx.tunerTune", {on});
+        QVERIFY(!waiting.value(QStringLiteral("accepted")).toBool(true));
+        QCOMPARE(waiting.value(QStringLiteral("reason")).toString(), TxRefusals::radioOnAir().text);
+        QVERIFY(!core.model->isTgxlAutotuneInProgress());
+        QCOMPARE(amp.sent.size(), 0);
+        // Released before it keyed: it never keys.
+        QVERIFY(core.invoke(appA, "tx.unkey", {int64("epoch", 0)}).contains(QStringLiteral("id")));
+        core.server->remoteKeying()->setMicUplink({});
+        slice->setDspMode(modeBefore);
+
+        // Its two-tone settling after its TUNE is turned off.
+        TwoToneController* tt = core.model->twoToneController();
+        QVERIFY(tt);
+        tt->setTxChannel(&txr.tx);
+        tt->setPowerOn(true);
+        tt->setSettleDelaysMs(0, 800);
+        QVERIFY(core.invoke(appA, "tx.tune", {on}).value(QStringLiteral("accepted")).toBool());
+        QTRY_VERIFY(core.model->isTune() && mox->isMox());
+        const QJsonObject twoTone = core.invoke(appA, "tx.twoTone", {on});
+        QVERIFY2(twoTone.value(QStringLiteral("accepted")).toBool(),
+                 qPrintable(twoTone.value(QStringLiteral("reason")).toString()));
+        QTRY_VERIFY(!core.model->isTune() && mox->state() == MoxState::Rx && !mox->isMox());
+        QVERIFY(tt->isActivationInFlight());
+        const QJsonObject settling = core.invoke(appA, "tx.tunerTune", {on});
+        QVERIFY(!settling.value(QStringLiteral("accepted")).toBool(true));
+        QCOMPARE(settling.value(QStringLiteral("reason")).toString(), TxRefusals::radioOnAir().text);
+        QVERIFY(!core.model->isTgxlAutotuneInProgress());
+        QCOMPARE(amp.sent.size(), 0);
+        // The two-tone keys after its settle, then ends.
+        QTRY_VERIFY(mox->isMox() && tt->isActive());
+        QCOMPARE(mox->currentKeyer().deviceId, a.key.fingerprint());
+        QVERIFY(core.invoke(appA, "tx.twoTone", {off}).value(QStringLiteral("accepted")).toBool());
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        tt->setTxChannel(nullptr);
+    }
+
+    // Fix round 2 (the re-review's out-of-scope item, now in): the device's
+    // own tx.key or two-tone while its autotune carrier is up is refused
+    // with the tuning words; the tune carrier stays while the tuner sweeps.
+    void theDevicesOwnKeyUnderItsAutotuneCarrierIsRefused()
+    {
+        Core core;
+        allowTransmit(core);
+        Device a;
+        core.pair(a);
+        LoopbackTransport* appA = core.signIn(a, kTransmitter);
+        QVERIFY(admitted(appA));
+        MoxController* mox = core.model->moxController();
+        const MirrorUpdate on{0, "on", MirrorWireKind::Bool, QVariant(true)};
+        const MirrorUpdate off{0, "on", MirrorWireKind::Bool, QVariant(false)};
+        core.model->tgxlConnection()->injectLineForTesting(QStringLiteral("V1.2.17"));
+        const QJsonObject started = core.invoke(appA, "tx.tunerTune", {on});
+        QVERIFY(started.value(QStringLiteral("accepted")).toBool());
+        QTRY_VERIFY(core.model->isTune() && mox->isMox());
+        QCOMPARE(mox->currentKeyer().deviceId, a.key.fingerprint());
+        const quint32 tuneEpoch = core.model->keyedBy().epoch;
+        for (const QByteArray& verb : {QByteArray("tx.key"), QByteArray("tx.twoTone")}) {
+            const QJsonObject refused = verb == "tx.key"
+                ? core.invoke(appA, verb, {utf8("trigger", QStringLiteral("screen"))})
+                : core.invoke(appA, verb, {on});
+            QVERIFY2(!refused.value(QStringLiteral("accepted")).toBool(true), verb.constData());
+            QCOMPARE(refused.value(QStringLiteral("reason")).toString(),
+                     QStringLiteral("The tuner is already tuning."));
+        }
+        QVERIFY(core.model->isTune() && mox->isMox());
+        QVERIFY(core.model->isTgxlAutotuneInProgress());
+        QCOMPARE(core.model->keyedBy().epoch, tuneEpoch);
+        QVERIFY(core.invoke(appA, "tx.tunerTune", {off}).value(QStringLiteral("accepted")).toBool());
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+    }
+
+    // Fix round 2 (the re-review's out-of-scope item, now in): a second
+    // press of the radio's PTT while its first press's take runs is told
+    // "Transmit is changing hands. Try again in a moment." and, as the
+    // words say, keys nothing once the take ends; a fresh press keys.
+    void aSecondRadioPttPressDuringATakeKeysNothingAfterIt()
     {
         Core core;
         allowTransmit(core);
@@ -4522,37 +4761,25 @@ private slots:
         MoxController* mox = core.model->moxController();
         TransmitHolder* holder = core.server->transmitHolder();
         const MirrorUpdate on{0, "on", MirrorWireKind::Bool, QVariant(true)};
-        core.model->tgxlConnection()->injectLineForTesting(QStringLiteral("V1.2.17"));
-        PgxlConnection* pgxl = core.model->pgxlConnection();
-        pgxl->injectLineForTesting(QStringLiteral("V3.8.9"));
-        pgxl->injectLineForTesting(QStringLiteral("R1|0|state=OPERATE"));
-        QList<QPair<QString, bool>> frames;
-        connect(pgxl, &PgxlConnection::testFrameWrittenForTesting, this,
-                [&frames, mox](const QString& frame) {
-                    frames.append({frame, mox->isMox() || mox->state() != MoxState::Rx});
-                });
-        QVERIFY(core.invoke(appA, "tx.tunerTune", {on}).value(QStringLiteral("accepted")).toBool());
-        QVERIFY(core.model->isTgxlAutotuneInProgress());
-        QVERIFY(!mox->isMox());
-
+        QVERIFY(core.invoke(appA, "tx.tune", {on}).value(QStringLiteral("accepted")).toBool());
+        QTRY_VERIFY(core.model->isTune() && mox->isMox());
+        // The walk back to receive takes real time, so the take runs while
+        // the press is released and pressed again.
+        mox->setTimerIntervals(0, 300, 0, 300, 300, 0);
+        QSignalSpy refusals(mox, &MoxController::moxRefused);
         mox->onMicPttFromRadio(true);
+        QTRY_COMPARE(holder->state(), TransmitHolder::State::Transferring);
+        mox->onMicPttFromRadio(false);
+        mox->onMicPttFromRadio(true);
+        QTRY_VERIFY(!refusals.isEmpty());
+        QCOMPARE(refusals.last().at(0).value<TxRefusal>().text, TxRefusals::changingHands().text);
         QTRY_VERIFY(holder->isHeldBy(QByteArray(KeyerIdentity::kStationDeviceId)));
-        QVERIFY(!core.model->isTgxlAutotuneInProgress());
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QTest::qWait(400);
+        QVERIFY(!mox->isMox());
+        mox->onMicPttFromRadio(false);
+        mox->onMicPttFromRadio(true);
         QTRY_VERIFY(mox->isMox() && mox->currentKeyer().isStation());
-        // The amplifier's standby confirmation arrives late, and the wait's
-        // own failsafe passes: the cycle is over, nothing more is switched.
-        pgxl->injectLineForTesting(QStringLiteral("S0|state=STANDBY"));
-        QTest::qWait(1700);
-        QVERIFY(!core.model->isTune());
-        QVERIFY(mox->isMox() && mox->currentKeyer().isStation());
-        int operateOn = 0;
-        for (const auto& f : frames) {
-            if (f.first.endsWith(QStringLiteral("|operate=1"))) {
-                ++operateOn;
-                QVERIFY2(!f.second, "operate=1 was sent while RF flowed");
-            }
-        }
-        QCOMPARE(operateOn, 1);
         mox->onMicPttFromRadio(false);
         QTRY_COMPARE(mox->state(), MoxState::Rx);
     }

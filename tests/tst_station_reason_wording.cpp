@@ -144,6 +144,10 @@
 //   2026-09-26  J.J. Boyd / KG4VCF  Task 77 fix wave, I3: the tuner's
 //                                    on-air refusal forward. AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Task 77 fix round 2: the autotune's
+//                                    own refusals (beginTgxlAutotune) are
+//                                    scanned and forwarded. AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -998,7 +1002,10 @@ const QList<ReasonSource>& reasonSources()
         {"src/models/RadioModel.cpp",
          {QStringLiteral("rxOnlyForcedReason"), QStringLiteral("rxOnlyReason"),
           // iPhone app plan Task 77: a device's Tuner Genius autotune.
-          QStringLiteral("startTgxlAutotuneFor")}, {}, 1, {},
+          QStringLiteral("startTgxlAutotuneFor"),
+          // Task 77 fix round 2: the cycle's own refusals, which
+          // startTgxlAutotuneFor passes on to the device.
+          QStringLiteral("beginTgxlAutotune")}, {}, 1, {},
          // Both scanned here and in MoxController.cpp.
          {QStringLiteral("m_rxOnlyForced ? rxOnlyForcedReason() : "
                          "MoxController::defaultRxOnlyReason()"),
@@ -1010,7 +1017,14 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("refusal"),
           // Task 77 fix wave, I3: the on-air refusal's words
           // (TxRefusal.cpp, scanned there).
-          QStringLiteral("TxRefusals::radioOnAir().text")}},
+          QStringLiteral("TxRefusals::radioOnAir().text"),
+          // Task 77 fix round 2: beginTgxlAutotune's refusal (its own
+          // literals and the words above, all scanned here), passed on by
+          // startTgxlAutotuneFor.
+          QStringLiteral("notStarted"), QStringLiteral("busy"),
+          // beginTgxlAutotune's transmit block, with its own literal
+          // alongside (both scanned: MoxController.cpp and here).
+          QStringLiteral("transmitBlockReasonAlongside(remoteReason)")}},
         // A receiver count, and a frequency in MHz.
         {"src/core/SliceStreamAllocator.cpp", {}, {}, 4,
          {QStringLiteral("count"),

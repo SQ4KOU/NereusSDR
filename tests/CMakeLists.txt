@@ -3634,6 +3634,14 @@ target_compile_definitions(tst_radio_model_mox_hardware_flip PRIVATE NEREUS_BUIL
 nereus_add_test(tst_radio_model_stop_all_tx)
 target_compile_definitions(tst_radio_model_stop_all_tx PRIVATE NEREUS_BUILD_TESTS)
 
+# iPhone app plan Task 77 fix round 2 (R-IOS-02, R-IOS-03, R-IOS-13): the
+# Power Genius changeover. A key's RF waits at the RF-flow gate from any
+# operate command until the amplifier reports that state (stopped after
+# 1.5 s); no Power Genius, nothing changes; the Core's own autotune is
+# refused on the air and its restore waits for every PTT source.
+nereus_add_test(tst_amp_changeover_gate)
+target_compile_definitions(tst_amp_changeover_gate PRIVATE NEREUS_BUILD_TESTS)
+
 # ── iPhone app plan Task 38 (R-IOS-04, D29): the transmit time-out ─────────
 # TxTimeOutTimer (Thetis TimeOutTimerManager) with an injected clock and
 # pinger: the MOX time-out from the rising edge, the ping time-out, the

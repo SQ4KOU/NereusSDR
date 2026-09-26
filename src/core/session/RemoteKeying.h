@@ -80,6 +80,14 @@
 //               tx.tunerTune (the Tuner Genius autotune) as a key; the
 //               session gate first for two-tone. J.J. Boyd (KG4VCF), with AI-
 //               assisted implementation via Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 77 fix round 2: keyPending (the Core
+//               never switches the Power Genius around it) and
+//               pendingKeyEnded; tx.tunerTune refused while the device's
+//               two-tone settles, its key waits for its microphone or any
+//               start is pending; the device's own tx.key and two-tone
+//               refused while its autotune carrier is up. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 #pragma once
 
@@ -189,6 +197,17 @@ public:
     /// Genius autotune (keyed or still waiting for the amplifier) before
     /// the transfer; its pending epoch goes with it.
     void endAutotuneFor(const QByteArray& deviceId);
+
+    /// iPhone app plan Task 77 fix round 2: a device's key is about to
+    /// start: one waiting for its microphone, or a two-tone admitted and
+    /// settling. (A device's Tuner Genius autotune waiting for the
+    /// amplifier is not counted: it is the cycle switching it.)
+    bool keyPending() const;
+
+signals:
+    /// Fix round 2: a pending key ended (keyed, refused or cancelled); the
+    /// Core retries an amplifier switch it owes.
+    void pendingKeyEnded();
 
 private:
     /// The key itself, after any wait: the gates, MOX, the epoch.

@@ -136,9 +136,28 @@ RemoteKeying::RemoteKeying(RadioModel* model, TransmitHolder* holder, QObject* p
                     if (!active && tt != nullptr && !tt->isActivationInFlight()
                         && m_pending.has_value() && m_pending->trigger == "twoTone") {
                         m_pending.reset();
+                        emit pendingKeyEnded();
                     }
                 });
     }
+    if (m_model != nullptr) {
+        // Task 77 fix round 2: a device's autotune that ended before its
+        // carrier keyed (the amplifier never reported standby, MOX came on,
+        // the carrier was refused) leaves no key to start.
+        connect(m_model, &RadioModel::tgxlAutotuneEnded, this, [this](const QByteArray& deviceId) {
+            if (!deviceId.isEmpty() && m_pending.has_value() && m_pending->deviceId == deviceId
+                && !moxKeyedFor(deviceId)) {
+                m_pending.reset();
+                emit pendingKeyEnded();
+            }
+        });
+    }
+}
+
+bool RemoteKeying::keyPending() const
+{
+    return !m_waiting.isEmpty()
+        || (m_pending.has_value() && twoToneRunningFor(m_pending->deviceId));
 }
 
 void RemoteKeying::setMicUplink(MicUplink uplink)
@@ -187,9 +206,13 @@ void RemoteKeying::handle(const Command& command, Reply reply)
     // for the amplifier's standby, its own key, TUNE and two-tone are
     // refused: the cycle keys the tune carrier itself, and its pending
     // epoch is never overwritten by another start.
+    // Fix round 2: once its carrier is up too, its tx.key and two-tone are
+    // refused (a voice key or the tones never replace the tune carrier
+    // while the tuner sweeps); its TUNE on is the carrier already on.
     const bool starts = command.verb == Verb::Key
         || ((command.verb == Verb::Tune || command.verb == Verb::TwoTone) && command.on);
-    if (starts && autotuneRunningFor(command.deviceId) && !moxKeyedFor(command.deviceId)) {
+    if (starts && autotuneRunningFor(command.deviceId)
+        && (command.verb != Verb::Tune || !moxKeyedFor(command.deviceId))) {
         const Result result = refusedPlain(QString::fromLatin1(kTunerTuning));
         remember(command, result);
         reply(result);
@@ -354,6 +377,7 @@ void RemoteKeying::finishWait(const QByteArray& deviceId, const Result& result)
             reply(result);
         }
     }
+    emit pendingKeyEnded();
 }
 
 // ---- Copies (the pairing design, section 9.6) ------------------------------
@@ -658,6 +682,16 @@ RemoteKeying::Result RemoteKeying::tunerTune(const Command& command)
     if (const MoxController* moxNow = m_model->moxController();
         moxNow->isMox() || moxNow->state() != MoxState::Rx || m_model->isTune()) {
         return refused(TxRefusals::radioOnAir());
+    }
+    // Fix round 2 (Important 1): nor while a start of this device's is on
+    // its way to keying (its two-tone settling, its key waiting for its
+    // microphone): that key would land while the amplifier changes over.
+    // Nothing pending is ever overwritten.
+    if (twoToneRunningFor(command.deviceId) || m_waiting.contains(command.deviceId)) {
+        return refused(TxRefusals::radioOnAir());
+    }
+    if (m_pending.has_value()) {
+        return refusedPlain(QString::fromLatin1(kTunerTuning));
     }
     QString unavailable;
     TgxlConnection* tgxl = m_model->tgxlConnection();

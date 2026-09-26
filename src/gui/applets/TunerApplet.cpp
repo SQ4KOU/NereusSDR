@@ -57,6 +57,10 @@
 //                 applet's TUNE is (Task 16 fix wave 2), by J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code. NereusSDR-native; no AetherSDR equivalent.
+//   2026-09-26  iPhone app plan Task 77 fix round 2 (R-IOS-02, R-IOS-03,
+//                 R-IOS-13): TUNE waits on the air with the reason, as
+//                 OPERATE and ANT do, by J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "TunerApplet.h"
@@ -580,6 +584,14 @@ void TunerApplet::updateActuatingControls()
     if (m_tuneBtn && m_model && transmitBlocked()) {
         m_tuneBtn->setEnabled(false);
         m_tuneBtn->setToolTip(m_model->transmitBlockReasonAlongside(tooltip));
+    }
+    // iPhone app plan Task 77 fix round 2 (one on-air rule in both windows):
+    // TUNE switches the Power Genius to standby first, so on the air it
+    // waits with the reason, as OPERATE and ANT do below (the Core refuses
+    // it there too: RadioModel::beginTgxlAutotune, tx.tunerTune).
+    if (m_tuneBtn && m_tuneBtn->isEnabled() && coreOnAir()) {
+        m_tuneBtn->setEnabled(false);
+        m_tuneBtn->setToolTip(onAirReason());
     }
     if (m_tuneBtn) {
         m_tuneBtn->setAccessibleDescription(m_tuneBtn->toolTip());
