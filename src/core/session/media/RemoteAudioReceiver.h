@@ -126,6 +126,15 @@ struct RemoteAudioReceiverTelemetry {
     // fields above, this is a live gauge: unavailable before a measurement
     // and for stopped or failed contexts, like speakerQueuedMs.
     std::optional<double> reorderQueuedMs;
+    // R-R3-21: how long the jitter queue holds each packet now, in ms. It
+    // starts at 80 ms, deepens (up to 500 ms) when packets arrive after
+    // their interval was concealed, and eases back while the link is
+    // steady. A live gauge like reorderQueuedMs.
+    std::optional<double> jitterHoldMs;
+    // R-R3-21: stream gaps and arrival bursts this context rode through by
+    // re-anchoring on this computer instead of asking the Core for a fresh
+    // context. Reset by a successful start(), kept after stop().
+    quint64 localReanchors = 0;
     // The continuous clock correction's current resample ratio (WDSP rmatch
     // `var`, read through RemoteAudioRateMatcherStats::currentRatio), the
     // same value restart fault text reports as `ratio=`. It is a ratio near
@@ -150,7 +159,11 @@ struct RemoteAudioReceiverTelemetry {
 // 96). submit() reads each packet's payload type and hands only the
 // context's own type to its decoder; the other type is a rejected header.
 // A lost lossless packet plays as 4 ms of silence. The jitter window and
-// the arrival bound are the same 320 ms for both profiles.
+// the arrival bound are the same 320 ms for both profiles, and both grow
+// with the adaptive hold (R-R3-21). Only a true outage (nothing arrives,
+// late packets included, for 500 ms once the speaker has started) or a
+// real fault asks for a fresh context; a stream gap or an arrival burst
+// re-anchors on this computer.
 // R-R3-23: the speaker plays at whatever rate and channel count it opened
 // at (AudioEngine::remotePlaybackFormat()): the rate matcher matches the
 // 48 kHz stream to the device's rate and clock, and a mono device hears
@@ -184,9 +197,9 @@ public:
     /// never asks for a restart because packets stopped: while the Core is
     /// quiet the sink hears missing-packet audio (silence) for 500 ms and
     /// then nothing, and the next packet to arrive starts the stream again
-    /// on its own timestamp. A stream gap, an arrival burst or a decode
-    /// failure still asks for a restart, and a decoder that cannot start is
-    /// still an error.
+    /// on its own timestamp. R-R3-21: a stream gap or an arrival burst
+    /// re-anchors locally, as for the speaker; a decode failure still asks
+    /// for a restart, and a decoder that cannot start is still an error.
     struct PcmSinkMode {
         PcmSink sink;
     };

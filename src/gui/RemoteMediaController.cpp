@@ -28,6 +28,7 @@
 #include "core/audio/CaptureSupervisor.h"
 #include "core/session/media/PcmAudioCodec.h"
 #include "core/session/media/RemoteAudioReceiver.h"
+#include "core/session/media/RemoteAudioRestartBackoff.h"
 #include "core/session/media/RemoteMicReceiver.h"
 #include "core/ClarityController.h"
 #include "core/FFTEngine.h"
@@ -801,6 +802,7 @@ struct RemoteMediaController::Private {
         bool faulted = false; // this computer stopped it; asked again only by a new choice
         bool retryPending = false;
         qint64 lastRequestMs = -1000;
+        RemoteAudioRestartBackoff restartBackoff; // R-R3-21
     };
     std::map<int, ReceiverStream> receiverStreams;
     // R-R3-43: the last receiver-audio revision sent for each slice id on
@@ -824,6 +826,7 @@ struct RemoteMediaController::Private {
     bool headphonesFaulted = false;
     bool headphonesRetryPending = false;
     qint64 headphonesLastRequestMs = -1000;
+    RemoteAudioRestartBackoff headphonesRestartBackoff; // R-R3-21
     QString headphonesProblem;
     bool destroying = false;
     std::optional<RemoteAudioContextMessage> acceptedAudioContext;
@@ -832,6 +835,8 @@ struct RemoteMediaController::Private {
     bool preparingAudio = false;
     bool audioEnabled = false;
     bool audioRetryPending = false;
+    // R-R3-21: repeated restarts wait 1, 2, 4 s, reset by a healthy 10 s.
+    RemoteAudioRestartBackoff audioRestartBackoff;
     // R-R3-23. The operator's choice, stored on this computer. Whether this
     // media session has sent Core a `profile` (its contexts then carry the
     // profile shape). Whether this media session's link trial failed, so
@@ -1044,7 +1049,8 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
             d->audioRetryPending = true;
             const QString connection = d->connectionId;
             const quint32 revision = d->audioRevision;
-            const int delay = int(std::max<qint64>(0, 1000 - (d->clock.elapsed() - d->lastAudioRequestMs)));
+            const int delay = int(d->audioRestartBackoff.nextDelayMs(d->clock.elapsed(),
+                                                                     d->lastAudioRequestMs));
             QTimer::singleShot(delay, this, [this, connection, revision] {
                 if (connection != d->connectionId || revision != d->audioRevision) { return; }
                 d->audioRetryPending = false;
@@ -1915,8 +1921,8 @@ void RemoteMediaController::onHeadphonesRestart(const QString& reason,
         d->headphonesRetryPending = true;
         const QString connection = d->connectionId;
         const quint32 revision = d->headphonesRevision;
-        const int delay = int(std::max<qint64>(
-            0, 1000 - (d->clock.elapsed() - d->headphonesLastRequestMs)));
+        const int delay = int(d->headphonesRestartBackoff.nextDelayMs(
+            d->clock.elapsed(), d->headphonesLastRequestMs));
         QTimer::singleShot(delay, this, [this, connection, revision] {
             if (!d->headphonesRetryPending || connection != d->connectionId
                 || revision != d->headphonesRevision) { return; }
@@ -2060,6 +2066,8 @@ void RemoteMediaController::stop()
     d->audio->stop();
     d->audioEnabled = false;
     d->audioRetryPending = false;
+    d->audioRestartBackoff.reset();
+    d->headphonesRestartBackoff.reset();
     d->audioRevision = 0;
     d->audioGeneration = 0;
     d->acceptedAudioContext.reset();
@@ -2103,6 +2111,7 @@ void RemoteMediaController::stop()
         stream.heldBy.reset();
         stream.faulted = false;
         stream.retryPending = false;
+        stream.restartBackoff.reset();
         interrupted.append(sliceId);
     }
     d->connectionId.clear();
@@ -3769,8 +3778,8 @@ void RemoteMediaController::onReceiverRestart(int sliceId, RemoteAudioReceiver* 
         stream.retryPending = true;
         const QString connection = d->connectionId;
         const quint32 revision = d->receiverRevisions.value(sliceId);
-        const int delay = int(std::max<qint64>(
-            0, 1000 - (d->clock.elapsed() - stream.lastRequestMs)));
+        const int delay = int(stream.restartBackoff.nextDelayMs(d->clock.elapsed(),
+                                                                stream.lastRequestMs));
         QTimer::singleShot(delay, this, [this, sliceId, connection, revision] {
             const auto again = d->receiverStreams.find(sliceId);
             if (again == d->receiverStreams.end() || !again->second.retryPending

@@ -7,6 +7,7 @@
 #include "gui/RemoteAudioStatus.h"
 #include "gui/OperatorReasonText.h"
 #include "gui/RemoteGeneration.h"
+#include "core/session/media/AudioJitterBuffer.h"
 
 #include <QStringList>
 
@@ -325,6 +326,16 @@ QString formatRemoteAudioDetails(const RemoteAudioStatus& status,
             ? QStringLiteral("Speaker buffer: %1\u00A0ms on this computer")
                   .arg(qRound(*playback.speakerQueuedMs))
             : QStringLiteral("Speaker buffer: not measured yet"));
+        // R-R3-21: how long arriving audio is held against late packets.
+        // It deepens after late packets and eases back on a steady link,
+        // so a rise in the delay below has its reason in plain sight.
+        if (playback.jitterHoldMs) {
+            lines << (*playback.jitterHoldMs > double(AudioJitterBuffer::kHoldNs) / 1e6 + 0.5
+                ? QStringLiteral("Network buffer: %1\u00A0ms on this computer, deepened after late packets")
+                      .arg(qRound(*playback.jitterHoldMs))
+                : QStringLiteral("Network buffer: %1\u00A0ms on this computer")
+                      .arg(qRound(*playback.jitterHoldMs)));
+        }
         // R-R3-35: only a Core that answers clock probes adds this line.
         if (delay.measurable) {
             lines << (delay.estimate

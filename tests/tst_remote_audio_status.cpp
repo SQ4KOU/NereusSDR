@@ -689,6 +689,37 @@ private slots:
         }
     }
 
+    // R-R3-21: the connection panel shows how long arriving audio is held
+    // against late packets, and says so when late packets deepened it,
+    // just before the delay it explains.
+    void networkBufferLineShowsTheAdaptiveHold()
+    {
+        RemoteAudioStatus status;
+        status.state = State::Playing;
+        status.detailNegotiated = true;
+        status.encoder = defaultProfile();
+        status.selectedOutput = QStringLiteral("System default");
+        RemoteAudioReceiverTelemetry playback;
+        const QString without = formatRemoteAudioDetails(status, playback);
+        QVERIFY(!without.contains(QStringLiteral("Network buffer")));
+        playback.jitterHoldMs = 80.0;
+        RemoteAudioDelayReport delay;
+        delay.measurable = true;
+        const QString steady = formatRemoteAudioDetails(status, playback, delay);
+        QVERIFY(steady.contains(QStringLiteral(
+            "Speaker buffer: not measured yet\nNetwork buffer: 80\u00A0ms on this computer\n"
+            "Audio delay: not measured yet")));
+        playback.jitterHoldMs = 372.4;
+        const QString deepened = formatRemoteAudioDetails(status, playback);
+        QVERIFY(deepened.contains(QStringLiteral(
+            "Network buffer: 372\u00A0ms on this computer, deepened after late packets")));
+        for (const QString& line : deepened.split(QLatin1Char('\n'))) {
+            if (line.startsWith(QStringLiteral("Network buffer"))) {
+                QVERIFY2(OperatorWording::isPlain(line), qPrintable(line));
+            }
+        }
+    }
+
     // R-R3-35: the connection panel's delay line. Only a Core that answers
     // clock probes adds it; the figure carries its accuracy, says when the
     // speaker device is not counted, and uses no internal terms.

@@ -24,9 +24,19 @@ private slots:
         const auto missing = queue.takeReady(160'000'000);
         QVERIFY(missing && missing->concealed());
         QCOMPARE(missing->timestamp, quint32(3940));
-        QCOMPARE(queue.insert("late third", 3940, 161'000'000), Admission::Late);
-        QVERIFY(!queue.takeReady(199'999'999));
-        QCOMPARE(queue.takeReady(200'000'000)->packet, QByteArray("fourth"));
+        // R-R3-21: the third came 1 ms after its interval was concealed.
+        // The queue rewinds to play it next (the concealment heard becomes
+        // one interval of added delay) and the hold grows by that interval
+        // plus the margin: 80 + 40 + 20 ms.
+        QCOMPARE(queue.insert("late third", 3940, 161'000'000), Admission::Rewound);
+        QCOMPARE(queue.holdNs(), qint64(140'000'000));
+        QCOMPARE(queue.nextTimestamp(), quint32(3940));
+        QVERIFY(!queue.takeReady(300'999'999));
+        QCOMPARE(queue.takeReady(301'000'000)->packet, QByteArray("late third"));
+        QCOMPARE(queue.takeReady(301'000'000)->packet, QByteArray("fourth"));
+        // A late copy of a packet that played is only late.
+        QCOMPARE(queue.insert("late copy", 3940, 302'000'000), Admission::Late);
+        QCOMPARE(queue.holdNs(), qint64(140'000'000));
     }
     void wrapBoundAndReset()
     {
@@ -218,6 +228,88 @@ private slots:
         QVERIFY(next && next->concealed());
         QCOMPARE(next->timestamp, quint32(576));
         QCOMPARE(queue.nextTimestamp(), quint32(768));
+    }
+    // R-R3-21: a packet that arrives after its interval was concealed
+    // deepens the hold by as much as it was late, plus the margin, up to
+    // 500 ms; the window grows with it. A late copy of a packet that did
+    // play changes nothing. After 2 s without a late packet the hold eases
+    // back 20 ms a second, down to the 80 ms it started at.
+    void lateArrivalDeepensTheHoldAndASteadyLinkEasesIt()
+    {
+        constexpr qint64 ms = 1'000'000;
+        AudioJitterBuffer queue;
+        queue.reset(0);
+        QCOMPARE(queue.holdNs(), AudioJitterBuffer::kHoldNs);
+        QCOMPARE(queue.insert("zero", 0, 0), Admission::Accepted);
+        QCOMPARE(queue.takeReady(80 * ms)->packet, QByteArray("zero"));
+        const auto missing = queue.takeReady(120 * ms);
+        QVERIFY(missing && missing->concealed());
+        QCOMPARE(missing->timestamp, quint32(1920));
+
+        // 230 ms after its interval was concealed: the queue rewinds to it
+        // and the hold grows by the lateness plus the margin.
+        QCOMPARE(queue.insert("one", 1920, 350 * ms), Admission::Rewound);
+        QCOMPARE(queue.nextTimestamp(), quint32(1920));
+        QCOMPARE(queue.holdNs(), (80 + 230 + 20) * ms);
+        QCOMPARE(queue.maxPackets(), AudioJitterBuffer::windowPackets((320 + 250) * ms, 40 * ms));
+        QCOMPARE(queue.maxPackets(), 14);
+        // A late copy of a packet that played leaves it.
+        QCOMPARE(queue.insert("zero again", 0, 355 * ms), Admission::Late);
+        QCOMPARE(queue.holdNs(), 330 * ms);
+
+        // Held for the deeper hold: the rewound packet, then the next.
+        QCOMPARE(queue.insert("two", 3840, 360 * ms), Admission::Accepted);
+        QVERIFY(!queue.takeReady(679 * ms));
+        QCOMPARE(queue.takeReady(680 * ms)->packet, QByteArray("one"));
+        QVERIFY(!queue.takeReady(689 * ms));
+        QCOMPARE(queue.takeReady(690 * ms)->packet, QByteArray("two"));
+
+        // Downstream about to run dry with the expected packet missing:
+        // conceal it now rather than wait for its deadline.
+        QCOMPARE(queue.insert("five", 5760 + 2 * 1920, 700 * ms), Admission::Accepted);
+        const auto now = queue.concealExpectedNow(701 * ms);
+        QVERIFY(now && now->concealed());
+        QCOMPARE(now->timestamp, quint32(5760));
+
+        // Never deeper than the ceiling, and far too late to rewind for.
+        QCOMPARE(queue.insert("three", 5760, 2730 * ms), Admission::Late);
+        QCOMPARE(queue.holdNs(), AudioJitterBuffer::kMaxHoldNs);
+        QCOMPARE(queue.maxPackets(), 18);
+        QCOMPARE(queue.nextTimestamp(), quint32(7680));
+        // A new anchor keeps the link's hold.
+        queue.reset(9600);
+        QCOMPARE(queue.holdNs(), AudioJitterBuffer::kMaxHoldNs);
+        QCOMPARE(queue.maxPackets(), 18);
+
+        // A steady link: nothing for 2 s, then 20 ms a second.
+        queue.takeReady(4729 * ms);
+        QCOMPARE(queue.holdNs(), 500 * ms);
+        queue.takeReady(4730 * ms);
+        QCOMPARE(queue.holdNs(), 480 * ms);
+        queue.takeReady(5729 * ms);
+        QCOMPARE(queue.holdNs(), 480 * ms);
+        queue.takeReady(5730 * ms);
+        QCOMPARE(queue.holdNs(), 460 * ms);
+        for (qint64 at = 6730; at < 60'000; at += 1000) { queue.takeReady(at * ms); }
+        QCOMPARE(queue.holdNs(), AudioJitterBuffer::kHoldNs);
+        QCOMPARE(queue.maxPackets(), 8);
+    }
+    // R-R3-21: a packet beyond the window moves the head just far enough
+    // for it to fit, dropping only the oldest queued packets.
+    void outsideWindowAdvancesOnlyAsFarAsNeeded()
+    {
+        AudioJitterBuffer queue;
+        queue.reset(0);
+        for (int i = 1; i < 8; ++i) {
+            QCOMPARE(queue.insert("queued", quint32(i) * 1920u, 0), Admission::Accepted);
+        }
+        QCOMPARE(queue.insert("far", 10u * 1920u, 0), Admission::OutsideWindow);
+        QCOMPARE(queue.advanceToFit(5u * 1920u), 0); // already fits
+        QCOMPARE(queue.advanceToFit(10u * 1920u), 2);  // drops 1 and 2
+        QCOMPARE(queue.nextTimestamp(), 3u * 1920u);
+        QCOMPARE(queue.insert("far", 10u * 1920u, 0), Admission::Accepted);
+        QCOMPARE(queue.queuedPackets(), 6);
+        QCOMPARE(queue.takeExpectedPresentEarly()->timestamp, 3u * 1920u);
     }
     void invalidShapeKeepsTheOpusDefault()
     {
