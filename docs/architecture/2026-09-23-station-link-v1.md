@@ -4652,7 +4652,14 @@ refusals and the holder's, and nothing keys: the Core never puts its own
 microphone on the air for a remote key. While a device is keyed on its
 line, or has VOX armed, the transmitter takes that line instead of the
 Core's configured microphone; at unkey the configured source returns with
-the line's buffer empty. A VOX key while the device has VOX armed is that
+the line's buffer empty. Several devices may carry a line at once (each
+media connection its own); one line feeds the transmitter at a time: the
+keyed device's, else the line of the device whose key is waiting for its
+buffer, else the VOX device's (the holder when it has VOX armed). Every
+other line is received and dropped, never mixed in, and a change of line
+starts from silence. One device's media ending never closes another's
+line, and a keyed device whose media restarts stays on silence until its
+new line carries audio. A VOX key while the device has VOX armed is that
 device's, as a VOX key while it holds transmit already is.
 
 **Programs through a remote window.** A remote window's TCI server

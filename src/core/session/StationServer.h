@@ -347,6 +347,10 @@
 //                                    size's memory figure follows
 //                                    kMaxConcurrentPeers 24 (48 GiB).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave C2: voxArmedByChanged; VOX a
+//               device armed goes off when that device's own line closes.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QHash>
@@ -984,6 +988,9 @@ public:
     SettingsProxyServer* settingsServer() const { return m_settingsServer; }
 
 signals:
+    /// Fix wave C2: voxArmedBy() changed (VOX follows the device that armed
+    /// it; the media controllers mark which line VOX listens to).
+    void voxArmedByChanged(const QByteArray& deviceId);
     void listeningChanged(bool listening);
     void displayBudgetChanged();
     void telemetrySessionStarted(quint64 epoch);

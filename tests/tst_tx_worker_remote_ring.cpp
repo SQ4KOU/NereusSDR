@@ -39,6 +39,10 @@
 //               line is refused and nothing keys. J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude
 //               Code.
+//   2026-09-26: Transmit group fix wave C2: two devices streaming,
+//               teardown, keepalive attribution and a media restart. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -52,12 +56,14 @@
 #include "core/TxWorkerThread.h"
 #include "core/audio/TxMicSource.h"
 #include "core/session/RemoteKeying.h"
+#include "core/safety/RemoteTxWatchdog.h"
 #include "core/session/media/DaemonMediaController.h"
 #include "core/session/media/MediaPeer.h"
 #include "core/session/media/RemoteMicReceiver.h"
 
 #include "fakes/FakeAudioBus.h"
 
+#include <QElapsedTimer>
 #include <QStandardPaths>
 
 #include <atomic>
@@ -213,6 +219,7 @@ public:
         emit ready();
     }
     void deliverMic(const QByteArray& packet) { emit micRtpReceived(packet); }
+    void deliverTx(const QByteArray& message) { emit txReceived(message); }
     void closeUnexpectedly()
     {
         started = false;
@@ -223,10 +230,10 @@ public:
     bool readyState{false};
 };
 
-QString mediaStart(bool remoteTx)
+QString mediaStart(bool remoteTx, const QString& connectionId = QLatin1String(kConnectionId))
 {
     QJsonObject payload{{QStringLiteral("op"), QStringLiteral("start")},
-                        {QStringLiteral("connectionId"), QLatin1String(kConnectionId)}};
+                        {QStringLiteral("connectionId"), connectionId}};
     if (remoteTx) {
         payload.insert(QStringLiteral("remoteTxVersion"), 1);
     }
@@ -313,6 +320,75 @@ struct Station {
     }
 };
 
+// Fix wave C2: two transmitting devices on one Core, each with its own
+// media controller (DaemonMediaHub) and microphone line.
+struct TwoStations {
+    static constexpr char kConnectionA[] = "3f2504e0-4f89-41d3-9a0c-0305e82c3311";
+    static constexpr char kConnectionB[] = "3f2504e0-4f89-41d3-9a0c-0305e82c3322";
+    Core core;
+    Device a{QStringLiteral("Grant's iPhone"), QStringLiteral("phone"), QStringLiteral("iPhone")};
+    Device b{QStringLiteral("Shack iPad"), QStringLiteral("tablet"), QStringLiteral("iPad")};
+    QPointer<MicTransport> transportA;
+    QPointer<MicTransport> transportB;
+    QPointer<MicTransport>* next{nullptr};
+    std::unique_ptr<DaemonMediaHub> hub;
+    LoopbackTransport* appA{nullptr};
+    LoopbackTransport* appB{nullptr};
+    RemoteMicEncoder encoderA;
+    RemoteMicEncoder encoderB;
+    quint16 sequenceA{0};
+    quint16 sequenceB{0};
+
+    TwoStations()
+    {
+        allowTransmit(core);
+        core.server->setMediaEnabled(true);
+        hub = std::make_unique<DaemonMediaHub>(
+            core.server.get(), core.model.get(), nullptr,
+            [this](QObject* parent) -> IMediaTransport* {
+                auto* t = new MicTransport(parent);
+                if (next != nullptr) {
+                    *next = t;
+                }
+                return t;
+            });
+        core.pair(a);
+        core.pair(b);
+        appA = core.signIn(a, kTransmitter);
+        appB = core.signIn(b, kTransmitter);
+    }
+
+    ~TwoStations() { hub.reset(); }
+
+    bool startMedia(LoopbackTransport* app, QPointer<MicTransport>& slot, const char* connection)
+    {
+        slot = nullptr;
+        next = &slot;
+        app->sendText(mediaStart(true, QLatin1String(connection)).toUtf8());
+        const bool made = QTest::qWaitFor([&slot] { return !slot.isNull(); }, 5000);
+        next = nullptr;
+        if (!made) {
+            return false;
+        }
+        slot->becomeReady();
+        return true;
+    }
+
+    // One 20 ms Opus packet of a tone on a device's line.
+    static void sendMic(MicTransport* transport, RemoteMicEncoder& encoder, quint16& sequence,
+                        const char* connection)
+    {
+        const std::vector<float> frame = tone(static_cast<qint64>(sequence) * 960, 960, 0.3f);
+        transport->deliverMic(encoder.encode(frame.data(), sequence,
+                                             static_cast<quint32>(sequence) * 960U,
+                                             MediaPeer::micAudioSsrcForConnection(
+                                                 QLatin1String(connection))));
+        ++sequence;
+    }
+    void sendMicA() { sendMic(transportA, encoderA, sequenceA, kConnectionA); }
+    void sendMicB() { sendMic(transportB, encoderB, sequenceB, kConnectionB); }
+};
+
 } // namespace
 
 class TestTxWorkerRemoteRing : public QObject {
@@ -339,6 +415,10 @@ private slots:
     void keyWithoutMicrophoneAudioIsRefusedMicNotReady();
     void tuneKeysAtOnceWithoutAMicrophone();
     void aVoiceKeyWithoutTheMicrophoneLineNeverUsesTheStationsMicrophone();
+    void onlyTheKeyedDevicesLineFeedsTheTransmitter();
+    void anotherDevicesTeardownLeavesTheHoldersLine();
+    void eachTxChannelKeepaliveCountsForItsOwnDevice();
+    void aMediaRestartKeepsTheHoldersSource();
     void releasedWhileWaitingItNeverKeys();
     void aLineLostMidKeyLeavesSilenceNotTheStationsMicrophone();
     void voxFromTheDevicesMicrophoneIsTheDevices();
@@ -473,7 +553,7 @@ void TestTxWorkerRemoteRing::micLineOnlyForAStartThatAsks()
         QVERIFY(station.startMedia(false));
         QCOMPARE(station.transport->options.micAudioSsrc, quint32(0));
         QVERIFY(station.media->micReceiver() == nullptr);
-        QVERIFY(station.core.model->remoteMicDevice().isEmpty());
+        QVERIFY(!station.core.model->remoteMicLineOpen(station.deviceId()));
     }
     {
         Station station;
@@ -481,7 +561,7 @@ void TestTxWorkerRemoteRing::micLineOnlyForAStartThatAsks()
         QCOMPARE(station.transport->options.micAudioSsrc,
                  MediaPeer::micAudioSsrcForConnection(QLatin1String(kConnectionId)));
         QVERIFY(station.media->micReceiver() != nullptr);
-        QCOMPARE(station.core.model->remoteMicDevice(), station.deviceId());
+        QVERIFY(station.core.model->remoteMicLineOpen(station.deviceId()));
         QVERIFY(!station.core.model->remoteMicInUse());
     }
     {
@@ -492,7 +572,7 @@ void TestTxWorkerRemoteRing::micLineOnlyForAStartThatAsks()
         station.app->sendText(mediaStart(true).toUtf8());
         QTest::qWait(50);
         QVERIFY(station.transport.isNull());
-        QVERIFY(station.core.model->remoteMicDevice().isEmpty());
+        QVERIFY(!station.core.model->remoteMicLineOpen(station.deviceId()));
     }
 }
 
@@ -630,6 +710,157 @@ void TestTxWorkerRemoteRing::aVoiceKeyWithoutTheMicrophoneLineNeverUsesTheStatio
     QTRY_VERIFY(!station.core.model->moxController()->isMox());
 }
 
+// Fix wave C2: with two devices streaming, only the keyed device's line
+// feeds the transmitter; the other's audio never reaches it.
+void TestTxWorkerRemoteRing::onlyTheKeyedDevicesLineFeedsTheTransmitter()
+{
+    TwoStations s;
+    QVERIFY(s.startMedia(s.appA, s.transportA, TwoStations::kConnectionA));
+    QVERIFY(s.startMedia(s.appB, s.transportB, TwoStations::kConnectionB));
+    RemoteMicFeed* feed = s.core.model->remoteMicFeed();
+    MoxController* mox = s.core.model->moxController();
+    sendCommand(s.appA, "tx.key", 3801, {utf8("trigger", QStringLiteral("screen"))});
+    for (int i = 0; i < 6 && !mox->isMox(); ++i) {
+        s.sendMicA();
+        s.sendMicB();
+        QTest::qWait(5);
+    }
+    QTRY_VERIFY(!resultFor(s.appA, 3801).isEmpty());
+    QVERIFY2(resultFor(s.appA, 3801).value(QStringLiteral("accepted")).toBool(),
+             qPrintable(resultFor(s.appA, 3801).value(QStringLiteral("reason")).toString()));
+    QTRY_VERIFY(mox->isMox());
+    QCOMPARE(s.core.model->keyedBy().deviceId, s.a.key.fingerprint());
+    QVERIFY(feed->inUse());
+    // B streams while A is keyed: nothing of B's reaches the transmitter.
+    const qint64 before = feed->framesSinceInUse();
+    for (int i = 0; i < 5; ++i) {
+        s.sendMicB();
+    }
+    QCOMPARE(feed->framesSinceInUse(), before);
+    // A's does.
+    s.sendMicA();
+    QCOMPARE(feed->framesSinceInUse(), before + 960);
+    // B's key is refused (A holds transmit), and still nothing of B's.
+    sendCommand(s.appB, "tx.key", 3802, {utf8("trigger", QStringLiteral("screen"))});
+    QTRY_VERIFY(!resultFor(s.appB, 3802).isEmpty());
+    QVERIFY(!resultFor(s.appB, 3802).value(QStringLiteral("accepted")).toBool(true));
+    s.sendMicB();
+    QCOMPARE(feed->framesSinceInUse(), before + 960);
+    sendCommand(s.appA, "tx.unkey", 3803, {int64("epoch", s.core.model->keyedBy().epoch)});
+    QTRY_VERIFY(!mox->isMox());
+}
+
+// Fix wave C2: B's media ending (its controller torn down) never clears
+// A's line: A keeps its uplink, keys on it, and its audio still reaches.
+void TestTxWorkerRemoteRing::anotherDevicesTeardownLeavesTheHoldersLine()
+{
+    TwoStations s;
+    QVERIFY(s.startMedia(s.appA, s.transportA, TwoStations::kConnectionA));
+    QVERIFY(s.startMedia(s.appB, s.transportB, TwoStations::kConnectionB));
+    QTRY_COMPARE(s.hub->controllerCount(), 2);
+    // B leaves: its controller goes.
+    s.core.invoke(s.appB, "session.leave");
+    QTRY_COMPARE(s.hub->controllerCount(), 1);
+    MoxController* mox = s.core.model->moxController();
+    sendCommand(s.appA, "tx.key", 3811, {utf8("trigger", QStringLiteral("screen"))});
+    for (int i = 0; i < 6 && !mox->isMox(); ++i) {
+        s.sendMicA();
+        QTest::qWait(5);
+    }
+    QTRY_VERIFY(!resultFor(s.appA, 3811).isEmpty());
+    QVERIFY2(resultFor(s.appA, 3811).value(QStringLiteral("accepted")).toBool(),
+             qPrintable(resultFor(s.appA, 3811).value(QStringLiteral("reason")).toString()));
+    QTRY_VERIFY(mox->isMox());
+    RemoteMicFeed* feed = s.core.model->remoteMicFeed();
+    const qint64 before = feed->framesSinceInUse();
+    s.sendMicA();
+    QCOMPARE(feed->framesSinceInUse(), before + 960);
+    sendCommand(s.appA, "tx.unkey", 3812, {int64("epoch", s.core.model->keyedBy().epoch)});
+    QTRY_VERIFY(!mox->isMox());
+}
+
+// Fix wave C2: a "tx" data channel keepalive counts for the device whose
+// media connection it came on: B's keepalives never keep A's key alive.
+void TestTxWorkerRemoteRing::eachTxChannelKeepaliveCountsForItsOwnDevice()
+{
+    TwoStations s;
+    QVERIFY(s.startMedia(s.appA, s.transportA, TwoStations::kConnectionA));
+    QVERIFY(s.startMedia(s.appB, s.transportB, TwoStations::kConnectionB));
+    MoxController* mox = s.core.model->moxController();
+    sendCommand(s.appA, "tx.key", 3821, {utf8("trigger", QStringLiteral("screen"))});
+    for (int i = 0; i < 6 && !mox->isMox(); ++i) {
+        s.sendMicA();
+        QTest::qWait(5);
+    }
+    QTRY_VERIFY(mox->isMox());
+    // A's own channel keepalives keep its key on past the deadline.
+    quint64 sequenceA = 1;
+    for (int i = 0; i < 16; ++i) {
+        s.transportA->deliverTx(RemoteTxWatchdog::channelKeepalive(sequenceA++, 4294967295U));
+        s.sendMicA();
+        QTest::qWait(20);
+        s.core.now += 50;
+    }
+    QVERIFY(mox->isMox());
+    // Only B keeps sending keepalives on its channel; A's key stops within
+    // the watchdog's deadline.
+    QElapsedTimer since;
+    since.start();
+    quint64 sequence = 1;
+    // The Core's clock is the harness's; it moves with the real time here.
+    qint64 moved = 0;
+    while (mox->isMox() && since.elapsed() < 3000) {
+        s.transportB->deliverTx(RemoteTxWatchdog::channelKeepalive(sequence++, 4294967295U));
+        s.sendMicA();   // A's audio keeps flowing: only its keepalives are missing
+        QTest::qWait(50);
+        s.core.now += 50;
+        moved += 50;
+    }
+    QVERIFY(!mox->isMox());
+    // Within the watchdog's deadline on the Core's clock (400 ms, plus a
+    // step of this loop and the timer's own).
+    QVERIFY2(moved <= 600, qPrintable(QString::number(moved)));
+}
+
+// Fix wave C2: the holder's media restarting mid-key leaves the ring the
+// source (silence) and never the station's microphone; the new line feeds
+// it again.
+void TestTxWorkerRemoteRing::aMediaRestartKeepsTheHoldersSource()
+{
+    TwoStations s;
+    QVERIFY(s.startMedia(s.appA, s.transportA, TwoStations::kConnectionA));
+    QVERIFY(s.startMedia(s.appB, s.transportB, TwoStations::kConnectionB));
+    MoxController* mox = s.core.model->moxController();
+    sendCommand(s.appA, "tx.key", 3831, {utf8("trigger", QStringLiteral("screen"))});
+    for (int i = 0; i < 6 && !mox->isMox(); ++i) {
+        s.sendMicA();
+        QTest::qWait(5);
+    }
+    QTRY_VERIFY(mox->isMox());
+    RemoteMicFeed* feed = s.core.model->remoteMicFeed();
+    s.transportA->closeUnexpectedly();
+    QTRY_VERIFY(s.hub->controllerFor(s.core.server->mediaSessionEpochs().first()) == nullptr
+                || s.hub->controllerFor(s.core.server->mediaSessionEpochs().first())->micReceiver()
+                       == nullptr);
+    QVERIFY(mox->isMox());
+    QVERIFY(s.core.model->remoteMicInUse());
+    QVERIFY(feed->inUse());
+    // B streams meanwhile: never the transmitter's source.
+    const qint64 before = feed->framesSinceInUse();
+    s.sendMicB();
+    QCOMPARE(feed->framesSinceInUse(), before);
+    // A's media starts again: its new line feeds the ring.
+    QVERIFY(s.startMedia(s.appA, s.transportA, TwoStations::kConnectionA));
+    QTRY_VERIFY([&]() {
+        const qint64 now = feed->framesSinceInUse();
+        s.sendMicA();
+        return feed->framesSinceInUse() > now;
+    }());
+    QVERIFY(mox->isMox());
+    mox->setMox(false);
+    QTRY_VERIFY(!mox->isMox());
+}
+
 // The device lets go before its buffer filled: the key never keys, and is
 // answered keyEnded.
 void TestTxWorkerRemoteRing::releasedWhileWaitingItNeverKeys()
@@ -666,7 +897,7 @@ void TestTxWorkerRemoteRing::aLineLostMidKeyLeavesSilenceNotTheStationsMicrophon
     QTRY_VERIFY(station.core.model->moxController()->isMox());
     station.transport->closeUnexpectedly();
     QTRY_VERIFY(station.media->micReceiver() == nullptr);
-    QVERIFY(station.core.model->remoteMicDevice().isEmpty());
+    QVERIFY(!station.core.model->remoteMicLineOpen(station.deviceId()));
     QVERIFY(station.core.model->moxController()->isMox());
     QVERIFY(station.core.model->remoteMicInUse());
     QVERIFY(station.core.model->remoteMicFeed()->inUse());

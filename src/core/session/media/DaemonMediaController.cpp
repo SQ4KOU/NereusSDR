@@ -10,6 +10,12 @@
 //               channel's keepalives to the transmit watchdog, and the
 //               line's starvation to the Core's per-mode action. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave C2: each controller opens and
+//               closes only its own device's line and writes the feed
+//               only while it is the writer; the hub routes the keying's
+//               view of the lines by device; VOX another device armed is
+//               never this one's. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/DaemonMediaController.h"
@@ -549,11 +555,22 @@ DaemonMediaController::DaemonMediaController(StationServer* server,
     // iPhone app plan Task 36 (R-IOS-13): keys wait on the microphone line,
     // VOX armed follows the operator's VOX and the session's permission,
     // and starvation is watched while the device is keyed on its line.
-    if (m_server->remoteKeying() != nullptr) {
+    // Fix wave C2: a controller on its own is the Core's only line; under a
+    // DaemonMediaHub the hub routes the keying's view by device.
+    if (m_boundEpoch == 0 && m_server->remoteKeying() != nullptr) {
         m_server->remoteKeying()->setMicUplink(micUplink());
     }
     connect(&m_radioModel->transmitModel(), &TransmitModel::voxEnabledChanged, this,
             [this](bool) { refreshMicVoxArmed(); });
+    connect(m_server, &StationServer::voxArmedByChanged, this,
+            [this](const QByteArray&) { refreshMicVoxArmed(); });
+    // Fix wave C2: one line writes the transmitter's feed at a time.
+    connect(m_radioModel, &RadioModel::remoteMicWriterChanged, this,
+            [this](const QByteArray& writer) {
+                if (m_micReceiver) {
+                    m_micReceiver->setFeedWriter(!m_micDeviceId.isEmpty() && writer == m_micDeviceId);
+                }
+            });
     if (m_server->transmitHolder() != nullptr) {
         connect(m_server->transmitHolder(), &TransmitHolder::changed, this,
                 &DaemonMediaController::refreshMicVoxArmed);
@@ -583,7 +600,7 @@ DaemonMediaController::~DaemonMediaController()
             m_server->setPs3DisplayAdmissionHandler({});
             m_server->setDisplayBudgetEnforcementEnabled(false);
         }
-        if (m_server->remoteKeying() != nullptr) {
+        if (m_boundEpoch == 0 && m_server->remoteKeying() != nullptr) {
             m_server->remoteKeying()->setMicUplink({});
         }
     }
@@ -1542,6 +1559,10 @@ void DaemonMediaController::startMicLine(MediaPeer* peer)
         return;
     }
     m_micDeviceId = m_server->mediaSessionDevice(m_epoch);
+    if (m_micDeviceId.isEmpty()) {
+        m_micReceiver.reset();
+        return;
+    }
     // Task 37 (remote design section 12.3): starvation while the device is
     // keyed on its line takes the Core's per-mode action.
     connect(m_micReceiver.get(), &RemoteMicReceiver::starved, this, [this](bool starved) {
@@ -1549,7 +1570,11 @@ void DaemonMediaController::startMicLine(MediaPeer* peer)
             m_server->remoteMicStarved(m_micDeviceId, starved);
         }
     });
-    m_radioModel->setRemoteMicDevice(m_micDeviceId);
+    // Fix wave C2: this device's line, by device; it writes the feed only
+    // while it is the writer.
+    m_micReceiver->setFeedWriter(false);
+    m_radioModel->openRemoteMicLine(m_micDeviceId);
+    m_micReceiver->setFeedWriter(m_radioModel->remoteMicWriter() == m_micDeviceId);
     refreshMicVoxArmed();
     refreshMicWatching();
     qCInfo(lcDaemonMedia) << "Microphone line open for" << m_micDeviceId;
@@ -1564,10 +1589,11 @@ void DaemonMediaController::stopMicLine()
         m_micReceiver->stop();
     }
     m_micReceiver.reset();
-    m_micDeviceId.clear();
-    if (m_radioModel) {
-        // The ring goes out of use with the device (priming and VOX with it).
-        m_radioModel->setRemoteMicDevice({});
+    const QByteArray device = std::exchange(m_micDeviceId, QByteArray());
+    if (m_radioModel && !device.isEmpty()) {
+        // Fix wave C2: only this device's line closes (its priming and VOX
+        // with its last line); every other device's stays as it is.
+        m_radioModel->closeRemoteMicLine(device);
     }
 }
 
@@ -1578,9 +1604,13 @@ void DaemonMediaController::refreshMicVoxArmed()
     }
     // VOX armed for the device: the operator's VOX is on and its session
     // may transmit now (transmit unheld, or held by it). Its client then
-    // streams the microphone unkeyed and VOX listens to it.
-    m_radioModel->setRemoteMicVoxArmed(m_radioModel->transmitModel().voxEnabled()
-                                       && m_server->mediaSessionTxPermitted(m_epoch));
+    // streams the microphone unkeyed and VOX listens to it. Fix wave C2:
+    // VOX another device armed is that device's, never this one's.
+    const QByteArray armer = m_server->voxArmedBy();
+    m_radioModel->setRemoteMicVoxArmed(
+        m_micDeviceId, m_radioModel->transmitModel().voxEnabled()
+                           && m_server->mediaSessionTxPermitted(m_epoch)
+                           && (armer.isEmpty() || armer == m_micDeviceId));
 }
 
 void DaemonMediaController::refreshMicWatching()
@@ -1595,33 +1625,51 @@ void DaemonMediaController::refreshMicWatching()
     m_micReceiver->setWatching(keyed);
 }
 
+bool DaemonMediaController::carriesMicFor(const QByteArray& deviceId) const
+{
+    return m_micReceiver && m_micReceiver->isRunning() && !deviceId.isEmpty()
+        && deviceId == m_micDeviceId;
+}
+
+void DaemonMediaController::primeMic(std::function<void(bool)> done)
+{
+    if (!m_micReceiver || !m_radioModel || m_micDeviceId.isEmpty()) {
+        done(false);
+        return;
+    }
+    // The ring is the source while the key waits (this line its writer),
+    // so the buffer fills.
+    m_radioModel->setRemoteMicPriming(m_micDeviceId, true);
+    m_micReceiver->awaitReady(std::move(done));
+}
+
+void DaemonMediaController::endMicPriming()
+{
+    if (m_micReceiver) {
+        m_micReceiver->cancelWait();
+    }
+    if (m_radioModel && !m_micDeviceId.isEmpty()) {
+        m_radioModel->setRemoteMicPriming(m_micDeviceId, false);
+    }
+}
+
 RemoteKeying::MicUplink DaemonMediaController::micUplink()
 {
     RemoteKeying::MicUplink uplink;
     const QPointer<DaemonMediaController> self(this);
     uplink.carriesMic = [self](const QByteArray& deviceId) {
-        return self && self->m_micReceiver && self->m_micReceiver->isRunning()
-            && !deviceId.isEmpty() && deviceId == self->m_micDeviceId;
+        return self && self->carriesMicFor(deviceId);
     };
     uplink.prime = [self](const QByteArray& deviceId, std::function<void(bool)> done) {
-        if (!self || !self->m_micReceiver || deviceId != self->m_micDeviceId
-            || !self->m_radioModel) {
+        if (!self || !self->carriesMicFor(deviceId)) {
             done(false);
             return;
         }
-        // The ring is the source while the key waits, so the buffer fills.
-        self->m_radioModel->setRemoteMicPriming(true);
-        self->m_micReceiver->awaitReady(std::move(done));
+        self->primeMic(std::move(done));
     };
     uplink.endPriming = [self](const QByteArray& deviceId) {
-        if (!self || deviceId != self->m_micDeviceId) {
-            return;
-        }
-        if (self->m_micReceiver) {
-            self->m_micReceiver->cancelWait();
-        }
-        if (self->m_radioModel) {
-            self->m_radioModel->setRemoteMicPriming(false);
+        if (self && deviceId == self->m_micDeviceId) {
+            self->endMicPriming();
         }
     };
     return uplink;
@@ -4118,9 +4166,55 @@ DaemonMediaHub::DaemonMediaHub(StationServer* server, RadioModel* radioModel, QO
             this, &DaemonMediaHub::onSessionStarted);
     connect(m_server, &StationServer::mediaSessionEnded,
             this, &DaemonMediaHub::onSessionEnded);
+    const QPointer<DaemonMediaHub> self(this);
+    // Fix wave C2: the keying's view of the microphone lines, by device: a
+    // key waits on, and is answered by, the line of the device it is for,
+    // whichever controller carries it; one controller's teardown never
+    // clears another's.
+    if (m_server->remoteKeying() != nullptr) {
+        RemoteKeying::MicUplink uplink;
+        const auto lineFor = [self](const QByteArray& deviceId) -> DaemonMediaController* {
+            if (!self) {
+                return nullptr;
+            }
+            for (const auto& [epoch, controller] : self->m_controllers) {
+                Q_UNUSED(epoch);
+                if (controller && controller->carriesMicFor(deviceId)) {
+                    return controller.get();
+                }
+            }
+            return nullptr;
+        };
+        uplink.carriesMic = [lineFor](const QByteArray& deviceId) {
+            return lineFor(deviceId) != nullptr;
+        };
+        uplink.prime = [lineFor](const QByteArray& deviceId, std::function<void(bool)> done) {
+            DaemonMediaController* controller = lineFor(deviceId);
+            if (controller == nullptr) {
+                done(false);
+                return;
+            }
+            controller->primeMic(std::move(done));
+        };
+        uplink.endPriming = [self](const QByteArray& deviceId) {
+            if (!self) {
+                return;
+            }
+            for (const auto& [epoch, controller] : self->m_controllers) {
+                Q_UNUSED(epoch);
+                if (controller && controller->micDeviceId() == deviceId) {
+                    controller->endMicPriming();
+                }
+            }
+            if (self->m_radioModel) {
+                // A line that closed while its key waited leaves no priming.
+                self->m_radioModel->setRemoteMicPriming(deviceId, false);
+            }
+        };
+        m_server->remoteKeying()->setMicUplink(uplink);
+    }
     // The PureSignal display gate: the asking session's controller answers
     // (ruling 9.3 item 4).
-    const QPointer<DaemonMediaHub> self(this);
     m_server->setSessionPs3DisplayAdmissionHandler(
         [self](quint64 epoch, bool enabled, QString* refusal) {
         DaemonMediaController* controller = self ? self->controllerFor(epoch) : nullptr;
@@ -4154,6 +4248,9 @@ DaemonMediaHub::~DaemonMediaHub()
 {
     if (m_server) {
         m_server->disconnect(this);
+        if (m_server->remoteKeying() != nullptr) {
+            m_server->remoteKeying()->setMicUplink({});
+        }
         m_server->setSessionPs3DisplayAdmissionHandler({});
         m_server->setDisplayDemandProvider({});
         m_server->setDisplayBudgetEnforcementEnabled(false);

@@ -5915,11 +5915,12 @@ private slots:
         QTRY_VERIFY_WITH_TIMEOUT(daemonMedia.micReceiver() != nullptr, 5000);
         RemoteMicFeed* feed = h.station.remoteMicFeed();
         QVERIFY(feed != nullptr);
-        QVERIFY(!h.station.remoteMicDevice().isEmpty());
+        const QByteArray micDevice = daemonMedia.micDeviceId();
+        QVERIFY(h.station.remoteMicLineOpen(micDevice));
         QTest::qWait(1500);
 
         // The Core's ring in use, as for a key waiting on it.
-        h.station.setRemoteMicPriming(true);
+        h.station.setRemoteMicPriming(micDevice, true);
         QVERIFY(feed->inUse());
         remoteMedia.setHoldsTransmit(true);
         QTRY_VERIFY_WITH_TIMEOUT(feed->framesSinceInUse() >= 4 * RemoteMicConfig::kTargetDepthFrames,
@@ -5933,8 +5934,8 @@ private slots:
 
         // A program's audio, 20 ms at a time at 48 kHz, in place of the
         // microphone.
-        h.station.setRemoteMicPriming(false);
-        h.station.setRemoteMicPriming(true);
+        h.station.setRemoteMicPriming(micDevice, false);
+        h.station.setRemoteMicPriming(micDevice, true);
         // The pump's next block takes the change (it drops what came before).
         pumpRms(feed, 1, 1);
         for (int chunk = 0; chunk < 25; ++chunk) {
@@ -5953,7 +5954,7 @@ private slots:
         QVERIFY2(std::abs(20.0 * std::log10(programLevel / (0.4 / std::sqrt(2.0)))) < 1.5,
                  qPrintable(QString::number(programLevel)));
         remoteMedia.setHoldsTransmit(false);
-        h.station.setRemoteMicPriming(false);
+        h.station.setRemoteMicPriming(micDevice, false);
         QVERIFY(!feed->inUse());
         h.client.disconnectFromStation(QStringLiteral("test complete"));
     }

@@ -39,6 +39,10 @@
 //   2026-09-25: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 36 (R-IOS-13), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave C2: setFeedWriter, one line
+//               writes the transmitter's feed at a time. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/audio/AudioRingSpsc.h"
@@ -251,6 +255,13 @@ public:
     void cancelWait();
     bool isWaiting() const { return static_cast<bool>(m_waitDone); }
 
+    /// Fix wave C2: whether this line writes the transmitter's feed now.
+    /// The Core has one writer at a time, the device the transmitter takes
+    /// its audio from (RadioModel::remoteMicWriter()); every other line is
+    /// decoded but dropped. True by default (one line on its own).
+    void setFeedWriter(bool writer);
+    bool isFeedWriter() const { return m_feedWriter; }
+
     /// Whether a device holding transmit is keyed on this line's audio now.
     /// While it is, 250 ms without audio emits starved(true), and audio
     /// arriving again starved(false). Turning it off ends a starvation.
@@ -289,6 +300,7 @@ private:
     std::function<void(bool)> m_waitDone;
     quint64 m_waitGeneration{0};
 
+    bool m_feedWriter{true};
     bool m_watching{false};
     bool m_starved{false};
     bool m_starvationCheckPending{false};

@@ -248,6 +248,11 @@
 //                mode (I3), rxOnlyReasonAlongside and
 //                transmitBlockReasonAlongside (M6, M2). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave C2: the microphone lines by
+//               device (openRemoteMicLine, closeRemoteMicLine, per-device
+//               priming and VOX), one writer at a time (remoteMicWriter),
+//               VOX following the holder. J.J. Boyd (KG4VCF), with AI-
+//               assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1834,17 +1839,34 @@ public:
     // only; the Core's media controller names the device and drives the
     // priming and VOX inputs.
 
+    //
+    // Fix wave C2: several devices may carry a line at once (one media
+    // controller each). Exactly one line writes the ring at a time, the
+    // writer (remoteMicWriter()): the keyed device's while MOX is on and it
+    // has a line; otherwise the device whose key is waiting for its buffer;
+    // otherwise the VOX device. A change of writer empties the ring, so one
+    // device's audio is never mixed into another's transmission.
+
     /// The ring the transmit pump pulls (null on a remote window's model).
     RemoteMicFeed* remoteMicFeed() const { return m_remoteMicFeed.get(); }
-    /// The device whose media carries a microphone line now; empty for none.
-    void setRemoteMicDevice(const QByteArray& deviceId);
-    QByteArray remoteMicDevice() const { return m_remoteMicDevice; }
-    void setRemoteMicPriming(bool priming);
-    void setRemoteMicVoxArmed(bool armed);
-    /// The pump takes the remote device's microphone now.
+    /// `deviceId`'s media carries a microphone line now (opened once per
+    /// media connection that carries one; closed as often).
+    void openRemoteMicLine(const QByteArray& deviceId);
+    void closeRemoteMicLine(const QByteArray& deviceId);
+    bool remoteMicLineOpen(const QByteArray& deviceId) const;
+    /// `deviceId`'s key is waiting for its line's buffer to fill.
+    void setRemoteMicPriming(const QByteArray& deviceId, bool priming);
+    /// `deviceId` has VOX armed (VOX on, its session may transmit, and VOX
+    /// was not armed by another device).
+    void setRemoteMicVoxArmed(const QByteArray& deviceId, bool armed);
+    /// The pump takes a remote device's microphone now.
     bool remoteMicInUse() const { return m_remoteMicInUse; }
+    /// The one line that writes the ring now, or empty (none, or a key
+    /// whose line was lost mid-key: silence).
+    QByteArray remoteMicWriter() const { return m_remoteMicWriter; }
     /// The device whose microphone VOX listens to now (its VOX key is its
-    /// own), or empty.
+    /// own), or empty: the transmit holder when it has VOX armed and a
+    /// line, else the one device with VOX armed and a line.
     QByteArray remoteVoxDevice() const;
 
     /// The lowest slice id not in use (the next letter a new slice takes),
@@ -4166,10 +4188,12 @@ signals:
     void keyedByChanged();
     // iPhone app plan Task 36: remoteMicInUse() changed.
     void remoteMicInUseChanged(bool inUse);
-    // iPhone app plan Task 37: the device whose media carries a microphone
-    // line changed (empty: none now). The Core turns off the VOX a device
-    // armed when its line closes.
-    void remoteMicDeviceChanged(const QByteArray& deviceId);
+    // iPhone app plan Task 37 (fix wave C2): a device's microphone line
+    // opened or closed. The Core turns off the VOX a device armed when its
+    // line closes.
+    void remoteMicLinesChanged();
+    // Fix wave C2: remoteMicWriter() changed.
+    void remoteMicWriterChanged(const QByteArray& deviceId);
     // Phase 3Q-1: parametrized — state passed so UI consumers can act without
     // a secondary RadioModel::connectionState() read under race conditions.
     // Existing no-arg slot connections (ConnectionPanel, MainWindow, SpectrumWidget)
@@ -5651,9 +5675,13 @@ private:
     // outlives the transmit pump, which holds a plain pointer to it) and
     // what puts it in use.
     std::unique_ptr<RemoteMicFeed> m_remoteMicFeed;
-    QByteArray m_remoteMicDevice;
-    bool m_remoteMicPriming{false};
-    bool m_remoteMicVoxArmed{false};
+    // Fix wave C2: every device with a line open (a count per device, one
+    // per media connection), the device priming, the devices with VOX
+    // armed, and the one writer.
+    QHash<QByteArray, int> m_remoteMicLines;
+    QByteArray m_remoteMicPrimingDevice;
+    QSet<QByteArray> m_remoteMicVoxArmed;
+    QByteArray m_remoteMicWriter;
     bool m_remoteMicInUse{false};
     // The device keyed on its line: if the line goes away mid-key, the
     // ring stays the source (silence) until that key ends, so a remote key

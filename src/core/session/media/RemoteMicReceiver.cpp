@@ -9,6 +9,10 @@
 //   2026-09-25: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 36 (R-IOS-13), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave C2: setFeedWriter, one line
+//               writes the transmitter's feed at a time. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/media/RemoteMicReceiver.h"
@@ -515,6 +519,12 @@ void RemoteMicReceiver::decodeL16(const QByteArray& packet, int missing)
 
 void RemoteMicReceiver::writeAudio(const float* mono, int frames)
 {
+    // Fix wave C2: one writer at a time. Another device's line is decoded
+    // (its starvation and its stream stay tracked) but never reaches the
+    // transmitter's feed.
+    if (!m_feedWriter) {
+        return;
+    }
     if (m_feed != nullptr && m_feed->write(mono, frames)) {
         m_stats.framesWritten += static_cast<quint64>(frames);
     }
@@ -547,7 +557,7 @@ void RemoteMicReceiver::cancelWait()
 
 void RemoteMicReceiver::checkReady()
 {
-    if (!m_waitDone || m_feed == nullptr || !m_feed->inUse()
+    if (!m_waitDone || !m_feedWriter || m_feed == nullptr || !m_feed->inUse()
         || m_feed->framesSinceInUse() < RemoteMicConfig::kTargetDepthFrames) {
         return;
     }
@@ -555,6 +565,16 @@ void RemoteMicReceiver::checkReady()
     m_waitDone = nullptr;
     ++m_waitGeneration;
     done(true);
+}
+
+void RemoteMicReceiver::setFeedWriter(bool writer)
+{
+    if (writer == m_feedWriter) {
+        return;
+    }
+    m_feedWriter = writer;
+    // A key waiting on this line fills from here.
+    checkReady();
 }
 
 void RemoteMicReceiver::setWatching(bool watching)

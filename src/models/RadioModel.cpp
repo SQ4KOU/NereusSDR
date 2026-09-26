@@ -407,6 +407,11 @@
 //                blocked, before it reaches the amplifier or the tuner
 //                (M2); both reasons where two apply (M6). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave C2: the microphone lines by
+//               device (openRemoteMicLine, closeRemoteMicLine, per-device
+//               priming and VOX), one writer at a time (remoteMicWriter),
+//               VOX following the holder. J.J. Boyd (KG4VCF), with AI-
+//               assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -11678,6 +11683,8 @@ void RadioModel::setTransmitHolder(const QByteArray& holder)
     }
     m_sliceOwnership->setTransmitHolder(holder);
     applyActiveSlices();
+    // Fix wave C2: VOX follows the holder (remoteVoxDevice).
+    updateRemoteMicSource();
 }
 
 // iPhone app plan Task 35 (R-IOS-13): who is keyed, and the keying epoch.
@@ -11706,46 +11713,98 @@ void RadioModel::setKeyedBy(const KeyedBy& keyedBy)
                || (m_radioStatus.activePttSource() == PttSource::Vox && wasRemoteVox)) {
         m_radioStatus.setActivePttSource(PttSource::None);
     }
+    // Fix wave C2: the writer follows who is keyed.
+    updateRemoteMicSource();
     emit keyedByChanged();
 }
 
-// iPhone app plan Task 36 (R-IOS-13): the remote microphone source.
-void RadioModel::setRemoteMicDevice(const QByteArray& deviceId)
+// iPhone app plan Task 36 (R-IOS-13): the remote microphone source. Fix
+// wave C2: by device, with one writer at a time.
+void RadioModel::openRemoteMicLine(const QByteArray& deviceId)
 {
-    if (m_role != Role::Local || m_remoteMicDevice == deviceId) {
+    if (m_role != Role::Local || deviceId.isEmpty()) {
         return;
     }
-    m_remoteMicDevice = deviceId;
-    if (deviceId.isEmpty()) {
-        m_remoteMicPriming = false;
-        m_remoteMicVoxArmed = false;
-    }
+    ++m_remoteMicLines[deviceId];
     updateRemoteMicSource();
     // iPhone app plan Task 37.
-    emit remoteMicDeviceChanged(deviceId);
+    emit remoteMicLinesChanged();
 }
 
-void RadioModel::setRemoteMicPriming(bool priming)
+void RadioModel::closeRemoteMicLine(const QByteArray& deviceId)
 {
-    if (m_role != Role::Local || m_remoteMicPriming == priming) {
+    const auto it = m_remoteMicLines.find(deviceId);
+    if (m_role != Role::Local || it == m_remoteMicLines.end()) {
         return;
     }
-    m_remoteMicPriming = priming;
+    if (--it.value() <= 0) {
+        m_remoteMicLines.erase(it);
+        // Its priming and VOX go with its last line.
+        if (m_remoteMicPrimingDevice == deviceId) {
+            m_remoteMicPrimingDevice.clear();
+        }
+        m_remoteMicVoxArmed.remove(deviceId);
+    }
+    updateRemoteMicSource();
+    emit remoteMicLinesChanged();
+}
+
+bool RadioModel::remoteMicLineOpen(const QByteArray& deviceId) const
+{
+    return !deviceId.isEmpty() && m_remoteMicLines.value(deviceId) > 0;
+}
+
+void RadioModel::setRemoteMicPriming(const QByteArray& deviceId, bool priming)
+{
+    if (m_role != Role::Local || deviceId.isEmpty()) {
+        return;
+    }
+    if (priming) {
+        if (m_remoteMicPrimingDevice == deviceId) {
+            return;
+        }
+        m_remoteMicPrimingDevice = deviceId;
+    } else {
+        if (m_remoteMicPrimingDevice != deviceId) {
+            return;
+        }
+        m_remoteMicPrimingDevice.clear();
+    }
     updateRemoteMicSource();
 }
 
-void RadioModel::setRemoteMicVoxArmed(bool armed)
+void RadioModel::setRemoteMicVoxArmed(const QByteArray& deviceId, bool armed)
 {
-    if (m_role != Role::Local || m_remoteMicVoxArmed == armed) {
+    if (m_role != Role::Local || deviceId.isEmpty()
+        || m_remoteMicVoxArmed.contains(deviceId) == armed) {
         return;
     }
-    m_remoteMicVoxArmed = armed;
+    if (armed) {
+        m_remoteMicVoxArmed.insert(deviceId);
+    } else {
+        m_remoteMicVoxArmed.remove(deviceId);
+    }
     updateRemoteMicSource();
 }
 
 QByteArray RadioModel::remoteVoxDevice() const
 {
-    return m_remoteMicVoxArmed ? m_remoteMicDevice : QByteArray();
+    // Ruling 8.4: VOX follows the holder. Otherwise the one device with VOX
+    // armed; with several (transmit unheld, VOX armed at the Core itself)
+    // none, and VOX listens to the Core's own source.
+    QByteArray armedWithLine;
+    int count = 0;
+    for (const QByteArray& device : m_remoteMicVoxArmed) {
+        if (remoteMicLineOpen(device)) {
+            armedWithLine = device;
+            ++count;
+        }
+    }
+    const QByteArray holder = m_sliceOwnership ? m_sliceOwnership->transmitHolder() : QByteArray();
+    if (!holder.isEmpty() && m_remoteMicVoxArmed.contains(holder) && remoteMicLineOpen(holder)) {
+        return holder;
+    }
+    return count == 1 ? armedWithLine : QByteArray();
 }
 
 void RadioModel::updateRemoteMicSource()
@@ -11754,21 +11813,44 @@ void RadioModel::updateRemoteMicSource()
         return;
     }
     const bool mox = m_moxController != nullptr && m_moxController->isMox();
-    const bool keyedByDevice =
-        !m_remoteMicDevice.isEmpty() && mox && m_keyedBy.deviceId == m_remoteMicDevice;
+    const QByteArray keyedDevice =
+        mox && remoteMicLineOpen(m_keyedBy.deviceId) ? m_keyedBy.deviceId : QByteArray();
     // A key that started on a device's line stays on the ring until it
     // ends, even if the line goes away meanwhile: the transmitter then
     // hears silence, never the station's own microphone.
-    if (keyedByDevice) {
-        m_remoteMicKeyedDevice = m_remoteMicDevice;
+    if (!keyedDevice.isEmpty()) {
+        m_remoteMicKeyedDevice = keyedDevice;
     } else if (!mox || m_keyedBy.deviceId != m_remoteMicKeyedDevice) {
         m_remoteMicKeyedDevice.clear();
     }
-    const bool lineLostMidKey = !m_remoteMicKeyedDevice.isEmpty() && !keyedByDevice;
-    const bool inUse = lineLostMidKey
-        || (!m_remoteMicDevice.isEmpty()
-            && (keyedByDevice || m_remoteMicVoxArmed || m_remoteMicPriming));
+    const bool lineLostMidKey = !m_remoteMicKeyedDevice.isEmpty() && keyedDevice.isEmpty();
+    // Fix wave C2: the one writer: the keyed device's line; else the line of
+    // the device whose key is waiting for it (also while that key's MOX
+    // rises, before it is attributed, so the filled buffer carries on);
+    // else, unkeyed, the VOX device's. While another key is on, none (that
+    // key's audio is its own source).
+    QByteArray writer = keyedDevice;
+    if (writer.isEmpty() && remoteMicLineOpen(m_remoteMicPrimingDevice)
+        && (!mox || m_keyedBy.isEmpty() || m_keyedBy.deviceId == m_remoteMicPrimingDevice)) {
+        writer = m_remoteMicPrimingDevice;
+    }
+    if (writer.isEmpty() && !mox) {
+        writer = remoteVoxDevice();
+    }
+    const bool inUse = lineLostMidKey || !writer.isEmpty();
+    const bool writerChanged = writer != m_remoteMicWriter;
+    m_remoteMicWriter = writer;
     if (inUse == m_remoteMicInUse) {
+        if (writerChanged && inUse) {
+            // A new writer starts from an empty ring: nothing of the last
+            // device's audio is heard in this one's transmission.
+            m_remoteMicFeed->setInUse(false);
+            m_remoteMicFeed->setInUse(true);
+            qCInfo(lcDsp) << "Transmit microphone: the remote device" << writer;
+        }
+        if (writerChanged) {
+            emit remoteMicWriterChanged(writer);
+        }
         return;
     }
     m_remoteMicInUse = inUse;
@@ -11776,7 +11858,10 @@ void RadioModel::updateRemoteMicSource()
     // when the operator's source returns, and a new key starts from silence.
     m_remoteMicFeed->setInUse(inUse);
     qCInfo(lcDsp) << "Transmit microphone:" << (inUse ? "the remote device" : "the station's own")
-                  << m_remoteMicDevice;
+                  << writer;
+    if (writerChanged) {
+        emit remoteMicWriterChanged(writer);
+    }
     emit remoteMicInUseChanged(inUse);
 }
 

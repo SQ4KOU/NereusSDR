@@ -428,6 +428,10 @@
 //               without a microphone line is judged by. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: Transmit group fix wave C2: voxArmedByChanged; VOX a
+//               device armed goes off when that device's own line closes.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1413,16 +1417,16 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                     if (m_txWatchdog) {
                         m_txWatchdog->setVoxArmed(was, false);
                     }
+                    emit voxArmedByChanged({});
                 });
-        connect(m_radioModel, &RadioModel::remoteMicDeviceChanged, this,
-                [this](const QByteArray& deviceId) {
-                    if (!m_voxArmedBy.isEmpty() && deviceId != m_voxArmedBy) {
-                        // The arming device's microphone line closed (or
-                        // another device's opened): VOX would otherwise
-                        // listen to the Core's own microphone.
-                        disarmVoxArmedBy(m_voxArmedBy, "its microphone line closed");
-                    }
-                });
+        connect(m_radioModel, &RadioModel::remoteMicLinesChanged, this, [this]() {
+            if (!m_voxArmedBy.isEmpty() && m_radioModel
+                && !m_radioModel->remoteMicLineOpen(m_voxArmedBy)) {
+                // The arming device's microphone line closed: VOX would
+                // otherwise listen to the Core's own microphone.
+                disarmVoxArmedBy(m_voxArmedBy, "its microphone line closed");
+            }
+        });
     }
     // iPhone app plan Task 39 (D14, R-IOS-13): the `txState` object, on the
     // devices' clock (keyedSinceMs).
@@ -4575,6 +4579,7 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
             if (m_txWatchdog) {
                 m_txWatchdog->setVoxArmed(writer, true);
             }
+            emit voxArmedByChanged(writer);
         }
     }
 
@@ -5265,6 +5270,7 @@ void StationServer::disarmVoxArmedBy(const QByteArray& deviceId, const char* why
     if (m_txWatchdog) {
         m_txWatchdog->setVoxArmed(deviceId, false);
     }
+    emit voxArmedByChanged({});
     if (m_radioModel && m_radioModel->transmitModel().voxEnabled()) {
         qCInfo(lcStation) << "VOX armed by" << deviceId << "turned off:" << why;
         m_radioModel->transmitModel().setVoxEnabled(false);

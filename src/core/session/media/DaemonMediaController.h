@@ -22,6 +22,12 @@
 //                PureSignal display only to its subscriber. J.J. Boyd
 //                (KG4VCF), with AI-assisted implementation via Anthropic
 //                Claude Code.
+//   2026-09-26: Transmit group fix wave C2: each controller opens and
+//               closes only its own device's line and writes the feed
+//               only while it is the writer; the hub routes the keying's
+//               view of the lines by device; VOX another device armed is
+//               never this one's. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/NoiseFloorEstimator.h"
@@ -291,8 +297,16 @@ public:
     /// otherwise. Its starved(bool) is the Core's starvation signal.
     RemoteMicReceiver* micReceiver() const { return m_micReceiver.get(); }
     /// Task 36: the keying's view of the line (RemoteKeying::setMicUplink;
-    /// the constructor installs it on the Core's RemoteKeying).
+    /// a controller on its own installs it on the Core's RemoteKeying, and
+    /// DaemonMediaHub installs one that routes by device, fix wave C2).
     RemoteKeying::MicUplink micUplink();
+    /// Fix wave C2: the device this controller's microphone line is for
+    /// (empty without a line), whether it carries the line now, and its
+    /// key's wait on the line's buffer.
+    QByteArray micDeviceId() const { return m_micDeviceId; }
+    bool carriesMicFor(const QByteArray& deviceId) const;
+    void primeMic(std::function<void(bool)> done);
+    void endMicPriming();
 
 private:
     struct EndpointEntry;
