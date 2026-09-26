@@ -118,6 +118,9 @@
 //               the Core; the Core's refusal stays the backstop. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  iPhone app plan Task 78 (R-IOS-02,
+//                R-IOS-30): a Take transmit button under the holder line.
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -383,6 +386,12 @@ public:
     /// "... holds transmit and is away.", "Transmit is changing hands.").
     /// Empty hides it.
     void setTransmitHolderText(const QString& text);
+    /// iPhone app plan Task 78: the Take transmit button under the holder
+    /// line, while another device (or the radio) holds transmit and this
+    /// window can take it. Outlined red while the holder is on the air.
+    void setTakeTransmitOffered(bool offered, bool holderOnAir);
+    bool takeTransmitOffered() const;
+    QPushButton* takeTransmitButton() const { return m_takeTransmitBtn; }
     QString transmitHolderText() const;
     QSlider*     tunePowerSlider()  const noexcept { return m_tunePwrSlider; }
     QLabel*      rfPowerLabel()     const noexcept { return m_rfPowerValue; }
@@ -410,6 +419,8 @@ public:
     void updatePowerSliderLabels();
 
 signals:
+    /// Task 78: the Take transmit button was clicked.
+    void takeTransmitRequested();
     // ── Phase 3M-1c J.1: right-click on TX Profile combo ────────────────────
     // Mirrors Thetis comboTXProfile_MouseDown (console.cs:44519-44522
     // [v2.10.3.13]):
@@ -500,6 +511,7 @@ private:
     // 0. Mic-source badge (J.3 Phase 3M-1b) — read-only label above the gauges.
     QLabel*  m_micSourceBadge = nullptr;
     QLabel*  m_holderLabel = nullptr;   // fix wave I4
+    QPushButton* m_takeTransmitBtn = nullptr;  // Task 78
     // 1. Forward Power gauge
     HGauge*  m_fwdPowerGauge  = nullptr;
     // 2. SWR gauge

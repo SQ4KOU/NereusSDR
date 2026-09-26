@@ -486,6 +486,12 @@
 //                Core's BandPlanName (stationSettingChanged), as RxOnly
 //                does. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-26 : iPhone app plan Task 78 (R-IOS-02, R-IOS-30): a remote
+//                window that shares the Core as a device accepts the Core
+//                closing its last slice (stationMayCloseLastSlice), and
+//                holds the window's copy of who else is on the Core
+//                (stationDevices). J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -697,6 +703,7 @@ warren@wpratt.com
 */
 
 #include "RadioModel.h"
+#include "core/session/RemoteDevicesState.h"
 #include "core/AmModulationAnalyzer.h"
 #include "BandDefaults.h"
 #include "BandGrid.h"
@@ -6956,6 +6963,16 @@ int RadioModel::addSliceWithStationId(int sliceId, const QString& initialPanId)
 // authority, its own operator, and letting a second one in is how the two
 // silently disagree.
 
+void RadioModel::setStationDevices(RemoteDevicesState* devices)
+{
+    m_stationDevices = devices;
+}
+
+RemoteDevicesState* RadioModel::stationDevices() const
+{
+    return qobject_cast<RemoteDevicesState*>(m_stationDevices.data());
+}
+
 void RadioModel::removeSliceWithStationId(int sliceId)
 {
     if (m_role != Role::Remote) {
@@ -11120,7 +11137,12 @@ void RadioModel::removeSliceImpl(int sliceId, bool persist)
     // Phase 3F Sub-Epic C Task 7: never remove the last remaining slice.
     // RadioModel always carries at least one SliceModel once any have been
     // created; the AetherSDR +RX/-RX UI relies on this invariant.
-    if (m_slices.size() == 1) {
+    // iPhone app plan Task 78: except the Core's own destroy of a remote
+    // window's last slice when the window shares the Core as a device
+    // (another device took its receiver); the window shows an empty band
+    // that offers a take (the several-devices design, section 12).
+    if (m_slices.size() == 1
+        && !(m_role == Role::Remote && m_stationMayCloseLastSlice)) {
         return;
     }
     // A later slice on this id was not restored from the saved layout.

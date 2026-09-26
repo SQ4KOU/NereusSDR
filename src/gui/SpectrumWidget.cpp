@@ -8,6 +8,10 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-26 J.J. Boyd / KG4VCF : other devices' slices drawn as markers
+//                 (drawForeignMarkers), their label's click says whose
+//                 they are (iPhone app plan Task 78, R-IOS-02, R-IOS-30).
+//                 AI-assisted via Anthropic Claude Code.
 //   2026-09-25 J.J. Boyd / KG4VCF : the band-plan strip's lowest-licence-
 //                 class rule moved unchanged to lowestLicenceClass() in
 //                 models/BandPlan.h, which the station catalogue also
@@ -6416,6 +6420,123 @@ void SpectrumWidget::drawVfoMarker(QPainter& p, const QRect& specRect, const QRe
     for (const SliceMarkerGeometry& g : sliceMarkerGeometry()) {
         drawSliceMarker(p, specRect, wfRect, g);
     }
+    // iPhone app plan Task 78: other devices' slices, under nothing of
+    // this window's own (their labels sit at the foot, flags at the top).
+    drawForeignMarkers(p, specRect, wfRect);
+}
+
+// ── iPhone app plan Task 78: other devices' slices (D46) ─────────────────
+//
+// NereusSDR-original, drawn as the phone draws them (the several-devices
+// design, section 12 item 1): no fill, dashed, and a label at the foot of
+// the spectrum instead of a flag, so nothing about them invites a drag.
+
+void SpectrumWidget::setForeignSliceMarkers(const QVector<ForeignSliceMarker>& markers)
+{
+    m_foreignMarkers = markers;
+    m_foreignLabelRects.clear();
+    markOverlayDirty();
+}
+
+QString SpectrumWidget::foreignMarkerLabel(const ForeignSliceMarker& marker)
+{
+    const QString name = marker.ownerShortName.isEmpty() ? marker.ownerName
+                                                         : marker.ownerShortName;
+    QString text = name.isEmpty() ? marker.letter
+                                  : QStringLiteral("%1 %2").arg(marker.letter, name);
+    if (marker.tx) {
+        text += QStringLiteral(" TX");
+    }
+    return text;
+}
+
+QString SpectrumWidget::foreignMarkerExplanation(const ForeignSliceMarker& marker)
+{
+    const QString name = marker.ownerName.isEmpty()
+        ? (marker.ownerShortName.isEmpty() ? QStringLiteral("another device")
+                                           : marker.ownerShortName)
+        : marker.ownerName;
+    return QStringLiteral("Slice %1 belongs to %2. Only %2 can tune it or close it.")
+        .arg(marker.letter, name);
+}
+
+void SpectrumWidget::drawForeignMarkers(QPainter& p, const QRect& specRect, const QRect& wfRect)
+{
+    m_foreignLabelRects.clear();
+    if (m_foreignMarkers.isEmpty()) {
+        return;
+    }
+    const int bandPlanH = (m_bandPlanMgr && m_bandPlanFontSize > 0)
+                          ? (m_bandPlanFontSize + 4) : 0;
+    const int specBottom = specRect.bottom() - bandPlanH;
+    QFont labelFont = p.font();
+    labelFont.setPixelSize(10);
+    labelFont.setBold(true);
+    const QFontMetrics fm(labelFont);
+    static constexpr int kTriHalf = 6;
+    static constexpr int kTriH = 10;
+    static constexpr int kLabelPadX = 4;
+    static constexpr int kLabelH = 14;
+    const QColor edgeGrey(0x9a, 0xa4, 0xb0, 170);
+
+    p.save();
+    for (const ForeignSliceMarker& m : m_foreignMarkers) {
+        if (m.centreHz <= 0.0) {
+            continue;
+        }
+        const int x = hzToX(m.centreHz, specRect);
+        int xLo = hzToX(m.centreHz + m.filterLowHz, specRect);
+        int xHi = hzToX(m.centreHz + m.filterHighHz, specRect);
+        if (xLo > xHi) {
+            std::swap(xLo, xHi);
+        }
+        if (xHi < specRect.left() || xLo > specRect.right()) {
+            continue;
+        }
+        const QColor colour = m.color.isValid() ? m.color : QColor(0x00, 0xd4, 0xff);
+        p.setBrush(Qt::NoBrush);
+
+        // Passband edges: dashed grey, no fill.
+        QPen edges(edgeGrey, 1.0, Qt::DashLine);
+        p.setPen(edges);
+        p.drawLine(xLo, specRect.top(), xLo, specBottom);
+        p.drawLine(xLo, wfRect.top(), xLo, wfRect.bottom());
+        p.drawLine(xHi, specRect.top(), xHi, specBottom);
+        p.drawLine(xHi, wfRect.top(), xHi, wfRect.bottom());
+
+        if (x < specRect.left() || x > specRect.right()) {
+            continue;
+        }
+        // Centre line: dashed, in the slice's colour.
+        QPen centre(colour, 1.5, Qt::DashLine);
+        p.setPen(centre);
+        p.drawLine(x, specRect.top(), x, specBottom);
+        p.drawLine(x, wfRect.top(), x, wfRect.bottom());
+
+        // Hollow triangle at the top.
+        p.setPen(QPen(colour, 1.5));
+        QPolygon tri;
+        tri << QPoint(x - kTriHalf, specRect.top()) << QPoint(x + kTriHalf, specRect.top())
+            << QPoint(x, specRect.top() + kTriH);
+        p.drawPolygon(tri);
+
+        // The label at the foot of the spectrum.
+        const QString text = foreignMarkerLabel(m);
+        const int labelW = fm.horizontalAdvance(text) + 2 * kLabelPadX;
+        int left = x - labelW / 2;
+        left = std::clamp(left, specRect.left(), std::max(specRect.left(),
+                                                           specRect.right() - labelW));
+        const QRect label(left, specBottom - kLabelH - 2, labelW, kLabelH);
+        p.setFont(labelFont);
+        p.setPen(QPen(m.tx ? QColor(0xff, 0x44, 0x44) : colour, 1.0));
+        p.setBrush(QColor(0x0f, 0x0f, 0x1a, 210));
+        p.drawRoundedRect(label, 3, 3);
+        p.setPen(m.away ? edgeGrey : colour);
+        p.drawText(label, Qt::AlignCenter, text);
+        p.setBrush(Qt::NoBrush);
+        m_foreignLabelRects.insert(m.sliceId, label);
+    }
+    p.restore();
 }
 
 // Ported from AetherSDR SpectrumWidget.cpp:3211-3294
@@ -8196,6 +8317,20 @@ void SpectrumWidget::mousePressEvent(QMouseEvent* event)
         && event->button() == Qt::LeftButton) {
         emit disconnectedClickRequest();
         return;
+    }
+
+    // iPhone app plan Task 78: a click on another device's slice label says
+    // whose it is; it tunes nothing and starts no drag.
+    if (event->button() == Qt::LeftButton) {
+        const QPoint at = event->position().toPoint();
+        for (const ForeignSliceMarker& m : m_foreignMarkers) {
+            const QRect label = m_foreignLabelRects.value(m.sliceId);
+            if (label.isValid() && label.contains(at)) {
+                emit foreignMarkerClicked(m.sliceId, foreignMarkerExplanation(m));
+                event->accept();
+                return;
+            }
+        }
     }
 
     int w = width();

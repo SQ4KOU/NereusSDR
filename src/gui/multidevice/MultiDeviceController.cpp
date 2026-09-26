@@ -1,0 +1,320 @@
+// no-port-check: NereusSDR-original.
+// =================================================================
+// src/gui/multidevice/MultiDeviceController.cpp  (NereusSDR)
+// =================================================================
+//
+// See MultiDeviceController.h.
+//
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-09-26: original implementation for NereusSDR by J.J. Boyd
+//               (KG4VCF), iPhone app plan Task 78 (R-IOS-02, R-IOS-30), with
+//               AI-assisted implementation via Anthropic Claude Code.
+// =================================================================
+
+#include "gui/multidevice/MultiDeviceController.h"
+
+#include "core/session/RemoteDevicesState.h"
+#include "core/session/StationClient.h"
+#include "core/session/TransmitStateFacade.h"
+#include "gui/multidevice/ConfirmChangeDialog.h"
+#include "gui/multidevice/NoticeCard.h"
+#include "gui/multidevice/TakeReceiverDialog.h"
+#include "gui/multidevice/TakeTransmitDialog.h"
+#include "gui/widgets/VfoWidget.h"
+
+#include <QDialog>
+#include <QSet>
+#include <QWidget>
+
+#include <algorithm>
+#include <functional>
+
+namespace NereusSDR {
+
+namespace {
+
+constexpr int kCardMargin = 10;
+constexpr int kCardGap = 6;
+constexpr int kCardMaxWidth = 520;
+
+} // namespace
+
+MultiDeviceController::MultiDeviceController(StationClient* client, QWidget* dialogParent,
+                                             QObject* parent)
+    : QObject(parent)
+    , m_client(client)
+    , m_dialogParent(dialogParent)
+{
+    if (!m_client) {
+        return;
+    }
+    RemoteDevicesState* devices = m_client->remoteDevices();
+    connect(devices, &RemoteDevicesState::questionChanged, this,
+            &MultiDeviceController::onQuestionChanged);
+    connect(devices, &RemoteDevicesState::noticesChanged, this,
+            &MultiDeviceController::onNoticesChanged);
+    connect(devices, &RemoteDevicesState::markersChanged, this,
+            &MultiDeviceController::markersChanged);
+    connect(m_client, &StationClient::deviceCommandFinished, this,
+            &MultiDeviceController::onCommandFinished);
+}
+
+MultiDeviceController::~MultiDeviceController()
+{
+    // A card with no band to sit on yet has no parent to delete it.
+    for (const QPointer<NoticeCard>& card : m_cards) {
+        if (card && card->parent() == nullptr) {
+            delete card.data();
+        }
+    }
+    closeDialogQuietly();
+}
+
+QList<NoticeCard*> MultiDeviceController::noticeCards() const
+{
+    QList<NoticeCard*> cards;
+    for (const QPointer<NoticeCard>& card : m_cards) {
+        if (card) {
+            cards.append(card.data());
+        }
+    }
+    return cards;
+}
+
+void MultiDeviceController::showDialog(QDialog* dialog)
+{
+    closeDialogQuietly();
+    m_dialog = dialog;
+    dialog->setAttribute(Qt::WA_DeleteOnClose, true);
+    // Window-modal and not blocking: the Core's next message (a newer
+    // question, the answer) still arrives while the operator reads.
+    dialog->open();
+}
+
+void MultiDeviceController::closeDialogQuietly()
+{
+    if (!m_dialog) {
+        return;
+    }
+    QPointer<QDialog> dialog = m_dialog;
+    m_dialog.clear();
+    m_dialogQuestionId = 0;
+    // Closed without answering: its accepted/rejected handlers check that
+    // they are still the open dialog.
+    dialog->close();
+}
+
+void MultiDeviceController::askTakeTransmit()
+{
+    if (!m_client || !m_client->transmitHeldElsewhere()) {
+        return;
+    }
+    const TransmitState& tx = *m_client->transmitState();
+    if (tx.holderTransferring()) {
+        emit refusal(QStringLiteral("Transmit is changing hands. Try again in a moment."));
+        return;
+    }
+    // What the operator is shown is what the take carries (ruling 8.7): the
+    // Core takes at once only if nothing changed since.
+    const qint64 shownEpoch = tx.holderEpoch();
+    const bool shownKeyed = tx.keyed();
+    auto* dialog = new TakeTransmitDialog(TakeTransmitDialog::fromTransmitState(tx),
+                                          m_dialogParent);
+    const QPointer<QDialog> self(dialog);
+    connect(dialog, &QDialog::accepted, this, [this, self, shownEpoch, shownKeyed]() {
+        if (m_dialog != self) { return; }
+        m_dialog.clear();
+        if (m_client) {
+            m_client->requestTakeTransmit(true, shownEpoch, shownKeyed);
+        }
+    });
+    connect(dialog, &QDialog::rejected, this, [this, self]() {
+        if (m_dialog == self) { m_dialog.clear(); }
+    });
+    showDialog(dialog);
+    m_dialogQuestionId = 0;
+}
+
+void MultiDeviceController::onQuestionChanged()
+{
+    if (!m_client) {
+        return;
+    }
+    const std::optional<RemotePrompt> question = m_client->remoteDevices()->question();
+    if (!question) {
+        // Answered, or dropped: a dialog for it has nothing left to ask.
+        if (m_dialog && m_dialogQuestionId != 0) {
+            closeDialogQuietly();
+        }
+        return;
+    }
+    if (m_dialog && m_dialogQuestionId == question->prompt.id) {
+        return;
+    }
+    const SessionPrompt& prompt = question->prompt;
+    const qint64 id = prompt.id;
+    QDialog* dialog = nullptr;
+    std::function<qint64()> choice = []() { return qint64(-1); };
+    if (prompt.kind == QStringLiteral("takeTransmit")) {
+        dialog = new TakeTransmitDialog(
+            TakeTransmitDialog::fromHolderEntry(prompt.holder.value_or(QJsonObject{})),
+            m_dialogParent);
+    } else if (prompt.kind == QStringLiteral("takeReceiver")
+               || prompt.kind == QStringLiteral("takeSlice")) {
+        auto* chooser = new TakeReceiverDialog(prompt, m_dialogParent);
+        const QPointer<TakeReceiverDialog> guard(chooser);
+        choice = [guard]() { return guard ? guard->pickedChoice() : qint64(-1); };
+        dialog = chooser;
+    } else {
+        // sharedSetting, panMove, and any kind a newer Core adds: the one
+        // shape that shows the change and who it reaches.
+        dialog = new ConfirmChangeDialog(prompt, m_dialogParent);
+    }
+    const QPointer<QDialog> self(dialog);
+    connect(dialog, &QDialog::accepted, this, [this, self, id, choice]() {
+        if (m_dialog != self) { return; }
+        const qint64 picked = choice();
+        m_dialog.clear();
+        m_dialogQuestionId = 0;
+        if (m_client) {
+            m_client->proceedQuestion(id, picked);
+        }
+    });
+    connect(dialog, &QDialog::rejected, this, [this, self, id]() {
+        if (m_dialog != self) { return; }
+        m_dialog.clear();
+        m_dialogQuestionId = 0;
+        if (m_client) {
+            m_client->cancelQuestion(id);
+        }
+    });
+    showDialog(dialog);
+    m_dialogQuestionId = id;
+}
+
+void MultiDeviceController::onNoticesChanged()
+{
+    if (!m_client) {
+        return;
+    }
+    const QList<RemotePrompt> notices = m_client->remoteDevices()->notices();
+    QSet<qint64> live;
+    for (const RemotePrompt& notice : notices) {
+        live.insert(notice.prompt.id);
+        QPointer<NoticeCard>& card = m_cards[notice.prompt.id];
+        if (card) {
+            continue;
+        }
+        card = new NoticeCard(notice, m_noticeHost);
+        connect(card, &NoticeCard::takeBackRequested, this, [this](qint64 id) {
+            if (m_client) {
+                m_client->takeBackNotice(id);
+            }
+        });
+        connect(card, &NoticeCard::dismissed, this, [this](qint64 id) {
+            if (m_client) {
+                m_client->remoteDevices()->dismissNotice(id);
+            }
+        });
+    }
+    for (auto it = m_cards.begin(); it != m_cards.end();) {
+        if (!live.contains(it.key()) || !it.value()) {
+            if (it.value()) {
+                it.value()->deleteLater();
+                it.value()->hide();
+            }
+            it = m_cards.erase(it);
+        } else {
+            ++it;
+        }
+    }
+    layoutNoticeCards();
+}
+
+void MultiDeviceController::setNoticeHost(QWidget* host)
+{
+    if (m_noticeHost == host) {
+        return;
+    }
+    m_noticeHost = host;
+    for (const QPointer<NoticeCard>& card : m_cards) {
+        if (card) {
+            card->setParent(host);
+        }
+    }
+    layoutNoticeCards();
+}
+
+void MultiDeviceController::layoutNoticeCards()
+{
+    if (!m_noticeHost) {
+        return;
+    }
+    // Stacked from the foot of the band upwards, newest at the foot.
+    const int width = std::min(kCardMaxWidth, m_noticeHost->width() - 2 * kCardMargin);
+    int bottom = m_noticeHost->height() - kCardMargin;
+    QList<NoticeCard*> cards = noticeCards();
+    std::sort(cards.begin(), cards.end(), [](const NoticeCard* a, const NoticeCard* b) {
+        return a->noticeId() > b->noticeId();
+    });
+    for (NoticeCard* card : cards) {
+        const int h = card->heightForWidth(width) > 0 ? card->heightForWidth(width)
+                                                      : card->sizeHint().height();
+        bottom -= h;
+        card->setGeometry(kCardMargin, std::max(kCardMargin, bottom), std::max(120, width), h);
+        card->show();
+        card->raise();
+        bottom -= kCardGap;
+    }
+}
+
+void MultiDeviceController::onCommandFinished(const QByteArray& verb, quint32 commandId,
+                                              bool accepted, const QString& reason,
+                                              bool awaitingConfirmation)
+{
+    Q_UNUSED(commandId)
+    if (awaitingConfirmation) {
+        // The Core's question follows; it is shown when it arrives.
+        return;
+    }
+    if (accepted) {
+        if (verb == "tx.take"
+            || (verb == "confirm.proceed" && m_client && m_client->holdsTransmitHere())) {
+            emit transmitTaken();
+        }
+        return;
+    }
+    if (verb == "session.leave" || verb == "confirm.cancel") {
+        return;
+    }
+    if (!reason.isEmpty()) {
+        emit refusal(reason);
+    }
+}
+
+QVector<SpectrumWidget::ForeignSliceMarker> MultiDeviceController::foreignMarkers(
+    const RemoteDevicesState& devices)
+{
+    QVector<SpectrumWidget::ForeignSliceMarker> out;
+    for (const RemoteSliceMarker& m : devices.markers()) {
+        SpectrumWidget::ForeignSliceMarker f;
+        f.sliceId = m.sliceId;
+        f.centreHz = m.frequencyHz;
+        f.filterLowHz = m.filterLowHz;
+        f.filterHighHz = m.filterHighHz;
+        // A marker's colour is its letter's (the several-devices design,
+        // section 5.4); the fifth letter shares A's, the label tells them
+        // apart.
+        f.color = VfoWidget::sliceColor(m.sliceId);
+        f.letter = m.letter();
+        f.ownerShortName = m.ownerShortName;
+        f.ownerName = m.ownerName;
+        f.tx = m.txSlice;
+        f.away = m.ownerAway;
+        out.append(f);
+    }
+    return out;
+}
+
+} // namespace NereusSDR

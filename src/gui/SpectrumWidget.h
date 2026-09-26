@@ -18,6 +18,10 @@
 //                 GPLv3).
 //   2026-09-24 : peakHoldEnabledChanged signal (R-R3-49, R-R3-21).
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 : iPhone app plan Task 78 (R-IOS-02, R-IOS-30): other
+//                 devices' slices drawn as markers (dashed, no flag, not
+//                 draggable) with a label that says whose they are.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-24 : WfGradientStop and wfSchemeStops() moved to
 //                 core/spectrum/WaterfallPalettes.h (iPhone app Task 19,
 //                 R-IOS-06). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
@@ -1331,6 +1335,37 @@ public:
         const VfoWidget* flag{nullptr};
     };
 
+    /// iPhone app plan Task 78 (the several-devices design, section 12
+    /// item 1; D46): another device's slice, drawn as the phone draws it: a
+    /// dashed centre line in the slice's colour with a hollow triangle,
+    /// dashed grey passband edges with no fill, and a label at the foot of
+    /// the spectrum (the letter and the device's short name, plus TX by
+    /// ruling 5.4a). No flag; not draggable.
+    struct ForeignSliceMarker {
+        int     sliceId{-1};
+        double  centreHz{0.0};
+        int     filterLowHz{0};
+        int     filterHighHz{0};
+        QColor  color;
+        QString letter;
+        QString ownerShortName;
+        QString ownerName;
+        bool    tx{false};
+        bool    away{false};
+    };
+    void setForeignSliceMarkers(const QVector<ForeignSliceMarker>& markers);
+    const QVector<ForeignSliceMarker>& foreignSliceMarkers() const { return m_foreignMarkers; }
+    /// The label's text: "B iPhone", "B iPhone TX".
+    static QString foreignMarkerLabel(const ForeignSliceMarker& marker);
+    /// What a click on the label says.
+    static QString foreignMarkerExplanation(const ForeignSliceMarker& marker);
+    /// Where the label was last drawn (an invalid rect before a paint, or
+    /// while the slice is off this pan).
+    QRect foreignMarkerLabelRect(int sliceId) const { return m_foreignLabelRects.value(sliceId); }
+    /// Test seam: paints the foreign markers alone, as paintEvent does.
+    void drawForeignMarkersForTest(QPainter& p, const QRect& specRect, const QRect& wfRect)
+    { drawForeignMarkers(p, specRect, wfRect); }
+
     /// Every RX marker this pan must paint, one per hosted slice, in slice
     /// order.
     ///
@@ -1795,6 +1830,8 @@ public:
     }
 
 signals:
+    /// Task 78: a click on another device's slice label, with what it says.
+    void foreignMarkerClicked(int sliceId, const QString& explanation);
     // 3M-5b: emitted when any TX waterfall colormap property changes.
     // Setup page wires this to update the preview / UI state.
     void txWfSettingsChanged();
@@ -2122,6 +2159,10 @@ private:
     void drawVfoMarker(QPainter& p, const QRect& specRect, const QRect& wfRect);
     void drawSliceMarker(QPainter& p, const QRect& specRect, const QRect& wfRect,
                          const SliceMarkerGeometry& g);
+    // Task 78: other devices' slices, after this window's own.
+    void drawForeignMarkers(QPainter& p, const QRect& specRect, const QRect& wfRect);
+    QVector<ForeignSliceMarker> m_foreignMarkers;
+    QHash<int, QRect> m_foreignLabelRects;
     void drawCursorInfo(QPainter& p, const QRect& specRect);
 
     // ---- Spot overlay (Phase 3J-2 Task E1) ----

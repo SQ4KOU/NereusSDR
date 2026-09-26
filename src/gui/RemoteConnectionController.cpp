@@ -284,6 +284,10 @@ void RemoteConnectionController::disconnectFromStation()
     // Latch before synchronous teardown emits state and retained-radio signals.
     m_operatorDisconnected = true;
     m_pendingMediaRecoveryEpoch = 0;
+    // iPhone app plan Task 78: the operator's Disconnect is leaving on
+    // purpose (the several-devices design, section 4.6): the Core frees
+    // this window's place, and transmit, now rather than after 3 minutes.
+    m_client->leaveSession();
     m_client->disconnectFromStation(QStringLiteral("operator disconnect"));
     emit changed();
     emit operatorDisconnected();

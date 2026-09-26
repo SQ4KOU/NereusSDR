@@ -47,6 +47,10 @@
 //   2026-09-26: Task 77 fix wave, M2: the holder line for the radio. J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  iPhone app plan Task 78 (R-IOS-02): a
+//                                    paired window can take transmit, and
+//                                    the holder line says how. AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -1112,13 +1116,16 @@ private slots:
         // As the Core would send them (no later delta arrives in between).
         tx->applyStationValue("holderDeviceId", QStringLiteral("another"));
         tx->applyStationValue("holderName", QStringLiteral("Grant's iPhone"));
+        // Task 78: a window that shares the Core as a device (signed in
+        // with its own key) can take transmit, and says how.
+        QTRY_VERIFY(h.client.transmitTakeAvailable());
         QCOMPARE(h.client.transmitHolderText(),
-                 QStringLiteral("Grant's iPhone holds transmit. MOX and TUNE here wait until it "
-                                "lets go."));
+                 QStringLiteral("Grant's iPhone holds transmit. Take transmit to use MOX and "
+                                "TUNE here."));
         tx->applyStationValue("holderAway", true);
         QCOMPARE(h.client.transmitHolderText(),
-                 QStringLiteral("Grant's iPhone holds transmit and is away. MOX and TUNE here "
-                                "wait until it lets go."));
+                 QStringLiteral("Grant's iPhone holds transmit and is away. Take transmit to use "
+                                "MOX and TUNE here."));
         tx->applyStationValue("holderTransferring", true);
         QCOMPARE(h.client.transmitHolderText(), QStringLiteral("Transmit is changing hands."));
         // Fix wave 2: a transfer that ended with MOX still on leaves nobody
@@ -1129,6 +1136,8 @@ private slots:
         // The device's name is the operator's own word, set aside here.
         for (const QString& text : {QStringLiteral("Another device holds transmit and is away. MOX "
                                                    "and TUNE here wait until it lets go."),
+                                    QStringLiteral("Another device holds transmit and is away. Take "
+                                                   "transmit to use MOX and TUNE here."),
                                     QStringLiteral("Transmit is changing hands."),
                                     QStringLiteral("The radio did not confirm it stopped transmitting."),
                                     QStringLiteral("This computer holds transmit.")}) {

@@ -127,6 +127,9 @@
 //               the Core; the Core's refusal stays the backstop. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  iPhone app plan Task 78 (R-IOS-02,
+//                R-IOS-30): a Take transmit button under the holder line.
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -526,6 +529,20 @@ void TxApplet::buildUI()
             "QLabel { color: %1; font-size: 10px; }").arg(Style::kTextPrimary));
         m_holderLabel->setVisible(false);
         vbox->addWidget(m_holderLabel);
+
+        // iPhone app plan Task 78 (R-IOS-02, R-IOS-30): beside the line
+        // that says another device (or the radio) holds transmit, the way
+        // to take it back; the pan's TX pill offers the same.
+        m_takeTransmitBtn = new QPushButton(QStringLiteral("Take transmit"), this);
+        m_takeTransmitBtn->setObjectName(QStringLiteral("TxTakeTransmitButton"));
+        m_takeTransmitBtn->setAccessibleName(QStringLiteral("Take transmit"));
+        m_takeTransmitBtn->setToolTip(
+            QStringLiteral("Ask to take transmit from the device that has it, so MOX and "
+                           "TUNE work here."));
+        m_takeTransmitBtn->setVisible(false);
+        connect(m_takeTransmitBtn, &QPushButton::clicked, this,
+                &TxApplet::takeTransmitRequested);
+        vbox->addWidget(m_takeTransmitBtn);
     }
 
     // ── 4b. VOX row (3M-3a-iii bench polish 2026-05-04) ───────────────────────
@@ -2577,6 +2594,22 @@ void TxApplet::setTxProfilePermitted(bool permitted, const QString& unavailableR
                         unavailableReason.isEmpty()
                             ? IStationLink::transmitSettingsUnavailableReason()
                             : unavailableReason);
+}
+
+void TxApplet::setTakeTransmitOffered(bool offered, bool holderOnAir)
+{
+    if (!m_takeTransmitBtn) { return; }
+    m_takeTransmitBtn->setVisible(offered);
+    m_takeTransmitBtn->setProperty("holderOnAir", offered && holderOnAir);
+    m_takeTransmitBtn->setStyleSheet(offered && holderOnAir
+        ? QStringLiteral("QPushButton { color: #ff8080; border: 1px solid #ff4444;"
+                         " border-radius: 3px; padding: 2px 8px; }")
+        : QString());
+}
+
+bool TxApplet::takeTransmitOffered() const
+{
+    return m_takeTransmitBtn && !m_takeTransmitBtn->isHidden();
 }
 
 void TxApplet::setTransmitHolderText(const QString& text)

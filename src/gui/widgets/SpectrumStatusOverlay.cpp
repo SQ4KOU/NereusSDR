@@ -70,7 +70,7 @@ QSize SpectrumStatusOverlay::sizeHint() const
     //
     // Mirrors paintEvent's and badgeRect's layout; all three must agree.
     int w = kLeftMargin + kChTagWidth;
-    const int lit = (m_txBound ? 1 : 0) + (m_wideBpf ? 1 : 0)
+    const int lit = (txPillLit() ? 1 : 0) + (m_wideBpf ? 1 : 0)
                   + (m_diversityActive ? 1 : 0) + (m_psPaused ? 1 : 0);
     w += lit * (kInterPillGap + kPillWidth);
     if (!m_remoteDisplayStatus.isEmpty()) {
@@ -117,6 +117,33 @@ void SpectrumStatusOverlay::setTxBound(bool tx)
     if (m_txBound == tx) { return; }
     m_txBound = tx;
     update();
+}
+
+void SpectrumStatusOverlay::setTakeTransmitOffered(bool offered, const QString& holderName,
+                                                   bool holderOnAir)
+{
+    if (m_takeOffered == offered && m_takeHolderName == holderName
+        && m_takeHolderOnAir == holderOnAir) {
+        return;
+    }
+    m_takeOffered = offered;
+    m_takeHolderName = offered ? holderName : QString();
+    m_takeHolderOnAir = offered && holderOnAir;
+    updateStatusToolTip();
+    updateGeometry();
+    update();
+}
+
+QString SpectrumStatusOverlay::takeTransmitToolTip() const
+{
+    if (!m_takeOffered || m_txBound) {
+        return {};
+    }
+    const QString name = m_takeHolderName.isEmpty() ? QStringLiteral("Another device")
+                                                    : m_takeHolderName;
+    return m_takeHolderOnAir
+               ? QStringLiteral("%1 is on the air. Click TX to take transmit.").arg(name)
+               : QStringLiteral("%1 has the transmitter. Click TX to take transmit.").arg(name);
 }
 
 void SpectrumStatusOverlay::setWideBpf(bool wide, const QString& reason)
@@ -215,6 +242,11 @@ void SpectrumStatusOverlay::updateStatusToolTip()
         if (!text.isEmpty()) { text += QLatin1Char('\n'); }
         text += m_wideReason;
     }
+    const QString take = takeTransmitToolTip();
+    if (!take.isEmpty()) {
+        if (!text.isEmpty()) { text += QLatin1Char('\n'); }
+        text += take;
+    }
     setToolTip(text);
 }
 
@@ -269,6 +301,13 @@ void SpectrumStatusOverlay::paintEvent(QPaintEvent*)
         drawPill(QStringLiteral("TX"),
                  QColor(0xcc, 0x22, 0x22), QColor(Qt::white),
                  QColor(0xff, 0x44, 0x44));
+    } else if (m_takeOffered) {
+        // iPhone app plan Task 78: another device holds transmit; the pill
+        // offers to take it. Outlined, not filled: this window is not on
+        // the air. Red outline while the holder is.
+        drawPill(QStringLiteral("TAKE TX"), QColor(0x1a, 0x2a, 0x3a),
+                 m_takeHolderOnAir ? QColor(0xff, 0x80, 0x80) : QColor(0xc8, 0xd8, 0xe8),
+                 m_takeHolderOnAir ? QColor(0xff, 0x44, 0x44) : QColor(0x60, 0x78, 0x90));
     }
     if (m_wideBpf) {
         drawPill(QStringLiteral("WIDE"),
@@ -318,7 +357,7 @@ QRect SpectrumStatusOverlay::badgeRect(Badge badge) const
     // Optional pills in paint order: TX, WIDE, DIV, PS HOLD. An unlit pill is
     // not painted and takes no width, so everything after it shifts left --
     // and the pill itself has no region at all.
-    if (m_txBound) {
+    if (txPillLit()) {
         if (badge == Badge::Tx) {
             return QRect(hitX, 0, kPillWidth, kOverlayHeight);
         }
@@ -351,7 +390,13 @@ void SpectrumStatusOverlay::mousePressEvent(QMouseEvent* event)
         return;
     }
     if (hits(badgeRect(Badge::Tx))) {
-        emit txBadgeClicked();
+        // Task 78: the pill that offers a take asks for it; the lit pill
+        // keeps its handoff meaning.
+        if (!m_txBound && m_takeOffered) {
+            emit takeTransmitClicked();
+        } else {
+            emit txBadgeClicked();
+        }
         return;
     }
     if (hits(badgeRect(Badge::Wide))) {

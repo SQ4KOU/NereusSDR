@@ -293,6 +293,14 @@
 //                follows planChanged, so a remote window's check follows
 //                the Core's plan. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-26 : iPhone app plan Task 78 (R-IOS-02, R-IOS-07, R-IOS-30):
+//                a remote window shares the Core as a device: the Core's
+//                questions and notices (MultiDeviceController), Take
+//                transmit from the pan's TX pill and the TX applet, the
+//                holder beside the TX badge, other devices' markers, the
+//                flags' TX from the Core and the radio's freeze, the empty
+//                band's offer of a take, session.leave on quit. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -514,6 +522,9 @@ warren@wpratt.com
 //============================================================================================//
 
 #include "MainWindow.h"
+#include "gui/multidevice/DeviceWords.h"
+#include "gui/multidevice/MultiDeviceController.h"
+#include "core/session/RemoteDevicesState.h"
 #include "ConnectionPanel.h"
 #include "NetworkDiagnosticsDialog.h"
 #include "OperatorReasonText.h"
@@ -857,6 +868,16 @@ MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent,
             // A receiver's audio stopping is toasted from
             // receiverStopNotice below, which names the receiver.
             if (!raiseToast || ReceiverStopNotices::isReceiverStop(reason)) { return; }
+            // iPhone app plan Task 78 (ruling 8.3; the several-devices
+            // design, section 12 item 2): a program's key refused because
+            // another device holds transmit says so in this window's terms.
+            if (m_stationClient && m_stationClient->transmitHeldElsewhere()) {
+                showToast(tr("A program using TCI can transmit only while this window has "
+                             "transmit. %1")
+                              .arg(OperatorReasonText::forDisplay(reason)),
+                          ToastSeverity::Warning, 5000);
+                return;
+            }
             showToast(tr("TCI: %1").arg(OperatorReasonText::forDisplay(reason)),
                       ToastSeverity::Warning, 5000);
         });
@@ -1330,6 +1351,9 @@ MainWindow::~MainWindow()
         }
     }
     if (m_stationClient) {
+        // Task 78: quitting is leaving on purpose; the Core frees this
+        // window's place (and transmit) now instead of after 3 minutes.
+        m_stationClient->leaveSession();
         m_stationClient->disconnectFromStation(QStringLiteral("client shutting down"));
     }
     delete m_remoteTelemetry;
@@ -1465,6 +1489,145 @@ void MainWindow::wireRemoteTransmitMeters()
     showHolder();
 }
 
+void MainWindow::wireRemoteDevices()
+{
+    // iPhone app plan Task 78 (R-IOS-02, R-IOS-07, R-IOS-30; the
+    // several-devices design, section 12).
+    if (m_stationClient == nullptr || m_multiDevice != nullptr) {
+        return;
+    }
+    m_multiDevice = new MultiDeviceController(m_stationClient, this, this);
+    connect(m_multiDevice, &MultiDeviceController::refusal, this, [this](const QString& reason) {
+        showToast(OperatorReasonText::forDisplay(reason), ToastSeverity::Warning, 5000);
+    });
+    connect(m_multiDevice, &MultiDeviceController::transmitTaken, this, [this]() {
+        showToast(tr("This window has transmit. Press MOX to transmit."), ToastSeverity::Info,
+                  4000);
+    });
+    connect(m_multiDevice, &MultiDeviceController::markersChanged, this,
+            &MainWindow::refreshForeignMarkers);
+    if (TransmitState* tx = m_stationClient->transmitState()) {
+        connect(tx, &TransmitState::holderChanged, this, &MainWindow::refreshRemoteDeviceScreens);
+        connect(tx, &TransmitState::stateChanged, this, &MainWindow::refreshRemoteDeviceScreens);
+    }
+    connect(m_stationClient, &StationClient::transmitTakeAvailabilityChanged, this,
+            &MainWindow::refreshRemoteDeviceScreens);
+    connect(m_stationClient, &StationClient::sessionEnded, this, [this]() {
+        m_hadSliceThisSession = false;
+        refreshRemoteDeviceScreens();
+    });
+    if (m_txApplet) {
+        connect(m_txApplet, &TxApplet::takeTransmitRequested, m_multiDevice,
+                &MultiDeviceController::askTakeTransmit);
+    }
+    // The empty band's offer of a take follows this window's slices.
+    connect(m_radioModel, &RadioModel::sliceAdded, this, [this]() {
+        m_hadSliceThisSession = true;
+        refreshTakeReceiverOffer();
+    });
+    connect(m_radioModel, &RadioModel::sliceRemoved, this,
+            &MainWindow::refreshTakeReceiverOffer);
+    if (m_panStack) {
+        connect(m_panStack, &PanadapterStack::activePanChanged, this,
+                &MainWindow::refreshRemoteDeviceScreens);
+    }
+    refreshRemoteDeviceScreens();
+}
+
+void MainWindow::refreshForeignMarkers()
+{
+    if (m_stationClient == nullptr || m_panStack == nullptr) {
+        return;
+    }
+    const QVector<SpectrumWidget::ForeignSliceMarker> markers =
+        MultiDeviceController::foreignMarkers(*m_stationClient->remoteDevices());
+    for (PanadapterApplet* applet : m_panStack->allApplets()) {
+        if (applet && applet->spectrumWidget()) {
+            applet->spectrumWidget()->setForeignSliceMarkers(markers);
+        }
+    }
+}
+
+void MainWindow::refreshTakeReceiverOffer()
+{
+    if (m_panStack == nullptr || m_radioModel == nullptr) {
+        return;
+    }
+    // Only after the Core closed this window's last slice (a take): an
+    // empty window that never had one keeps the +RX hint.
+    const bool offer = m_stationClient != nullptr && m_stationClient->sessionHolderAvailable()
+        && m_hadSliceThisSession && m_radioModel->slices().isEmpty();
+    for (PanadapterApplet* applet : m_panStack->allApplets()) {
+        if (applet) {
+            applet->setTakeReceiverOffered(offer);
+        }
+    }
+}
+
+void MainWindow::refreshRemoteDeviceScreens()
+{
+    if (m_stationClient == nullptr) {
+        return;
+    }
+    const TransmitState& tx = *m_stationClient->transmitState();
+    const bool known = m_stationClient->knowsTransmitHolder();
+    const bool elsewhere = m_stationClient->transmitHeldElsewhere();
+    const DeviceWords::HolderBadge badge =
+        known ? DeviceWords::holderBadge(tx, m_stationClient->thisDeviceWireId())
+              : DeviceWords::HolderBadge{};
+
+    // The bottom banner: who holds transmit, beside TX.
+    if (m_txHolderChip) {
+        m_txHolderChip->setLabel(badge.label);
+        switch (badge.tone) {
+        case DeviceWords::HolderBadge::Tone::OnAir:
+            m_txHolderChip->setVariant(StatusBadge::Variant::Tx);
+            break;
+        case DeviceWords::HolderBadge::Tone::Away:
+            m_txHolderChip->setVariant(StatusBadge::Variant::Warn);
+            break;
+        case DeviceWords::HolderBadge::Tone::ChangingHands:
+        case DeviceWords::HolderBadge::Tone::Listening:
+            m_txHolderChip->setVariant(StatusBadge::Variant::Info);
+            break;
+        }
+        m_txHolderChip->setToolTip(badge.toolTip);
+        m_txHolderChip->setVisible(badge.shown);
+        if (m_chromeBar && m_safetyGroup && m_chromeBarWidget) {
+            m_chromeBar->setNaturalWidth(m_safetyGroup, m_safetyGroup->sizeHint().width());
+            m_chromeBar->relayout(m_chromeBarWidget->width());
+        }
+    }
+
+    // Take transmit: the TX applet's button and every pan's TX pill.
+    const QString holderName = badge.shown ? badge.label : QString();
+    if (m_txApplet) {
+        m_txApplet->setTakeTransmitOffered(elsewhere, elsewhere && tx.keyed());
+    }
+    if (m_panStack) {
+        for (PanadapterApplet* applet : m_panStack->allApplets()) {
+            if (applet) {
+                applet->setTakeTransmitOffered(elsewhere, holderName, elsewhere && tx.keyed());
+            }
+        }
+    }
+
+    // Ruling 8.11: a slice the radio's own PTT transmits on.
+    const bool radioKeyed = known && tx.keyed()
+        && tx.holderSource() == QStringLiteral("radioPtt");
+    for (auto it = m_vfoWidgetsBySlice.constBegin(); it != m_vfoWidgetsBySlice.constEnd(); ++it) {
+        if (VfoWidget* flag = it.value()) {
+            flag->setInUseByRadio(radioKeyed && it.key() == tx.txSliceId());
+        }
+    }
+
+    // Notices sit on the active pan's band.
+    if (m_multiDevice && m_panStack) {
+        m_multiDevice->setNoticeHost(m_panStack->panadapter(m_panStack->activePanId()));
+    }
+    refreshTakeReceiverOffer();
+}
+
 void MainWindow::ensureRemoteSession()
 {
     if (!m_station.isRemote() || !m_radioModel || m_shuttingDown) { return; }
@@ -1502,6 +1665,8 @@ void MainWindow::ensureRemoteSession()
                                            ClientDeviceIdentity::machineShortName());
         // iPhone app plan Task 39: the Core's transmit meters.
         wireRemoteTransmitMeters();
+        // iPhone app plan Task 78: several devices on one Core.
+        wireRemoteDevices();
         m_remoteConnection = new RemoteConnectionController(
             m_stationClient, m_radioModel, m_station, this);
         connect(m_remoteConnection, &RemoteConnectionController::changed,
@@ -1666,8 +1831,9 @@ void MainWindow::ensureRemoteSession()
             // Fix wave M8: and VOX the Core would not arm (no microphone
             // line from this window yet), whose button drops back.
             const bool voxWrite = objectKey == "transmit" && property == "voxEnabled";
+            // Task 78: a write held for the Core's question is not refused.
             if ((objectKey == "stepAtt" || objectKey == "alexAntennas" || voxWrite) && !accepted
-                && !reason.isEmpty()) {
+                && !reason.isEmpty() && !StationClient::isAwaitingConfirmation(reason)) {
                 showToast(OperatorReasonText::forDisplay(reason), ToastSeverity::Warning, 4000);
             }
         });
@@ -2226,6 +2392,17 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
     wireRadeFlagForTest(m_radioModel, newFlag, sliceIndex);
     if (TxSliceArbiter* arb = m_radioModel->txSliceArbiter()) {
         newFlag->setTxSlice(arb->txBoundSliceId() == sliceIndex);
+    }
+    // iPhone app plan Task 78 (ruling 5.4a): a remote window's flag shows TX
+    // as the Core marks it, only while this window holds transmit on this
+    // slice; its arbiter binds nothing.
+    if (!m_radioModel->ownsLocalDsp()) {
+        newFlag->setTxSlice(slice->isTxSlice());
+        const QPointer<SliceModel> tracked(slice);
+        connect(slice, &SliceModel::txSliceChanged, newFlag, [newFlag, tracked]() {
+            if (tracked) { newFlag->setTxSlice(tracked->isTxSlice()); }
+        });
+        refreshRemoteDeviceScreens();
     }
 
     // --- Intent signals (Sub-Epic C T9 + Sub-Epic E T4 mirror) ---
@@ -3217,9 +3394,28 @@ void MainWindow::refreshNoSliceHints()
     }
 }
 
+void MainWindow::onPanTakeTransmitRequested(const QString& panId)
+{
+    Q_UNUSED(panId)
+    if (m_multiDevice) {
+        m_multiDevice->askTakeTransmit();
+    }
+}
+
 void MainWindow::wireSpectrumForPan(SpectrumWidget* sw, const QString& panId)
 {
     if (!sw || !m_radioModel) { return; }
+
+    // iPhone app plan Task 78: other devices' slices on this pan, and what a
+    // click on one's label says.
+    connect(sw, &SpectrumWidget::foreignMarkerClicked, this,
+            [this](int, const QString& explanation) {
+        showToast(explanation, ToastSeverity::Info, 4000);
+    });
+    if (m_stationClient) {
+        sw->setForeignSliceMarkers(
+            MultiDeviceController::foreignMarkers(*m_stationClient->remoteDevices()));
+    }
 
     configureSpectrumForPanForTest(sw, panId);
 
@@ -3628,6 +3824,10 @@ void MainWindow::wirePanBadgeHandlers()
                 Qt::UniqueConnection);
         connect(applet, &PanadapterApplet::txBadgeClicked,
                 this, &MainWindow::onPanTxBadgeClicked,
+                Qt::UniqueConnection);
+        // Task 78: the TX pill that offers Take transmit.
+        connect(applet, &PanadapterApplet::takeTransmitRequested,
+                this, &MainWindow::onPanTakeTransmitRequested,
                 Qt::UniqueConnection);
         // Task B5: add-slice / float, both carrying the applet's own panId().
         // Member-pointer targets, same reasoning as the three connects above:
@@ -9694,6 +9894,15 @@ void MainWindow::buildStatusBar()
     // neighbours. PA and TX stay narrow and learnable by position.
     addSlot(m_adcOvlBadge, kOverloadSlotWidthPx);
     addSlot(m_txStatusBadge);
+    // iPhone app plan Task 78 (the several-devices design, section 12
+    // item 2): who holds transmit when it is not this window, beside TX.
+    // Sized to its words; shown only while another device (or the radio)
+    // holds transmit, so the fixed slots before it never move.
+    m_txHolderChip = new StatusBadge(m_safetyGroup);
+    m_txHolderChip->setObjectName(QStringLiteral("txHolderBadge"));
+    m_txHolderChip->setVariant(StatusBadge::Variant::Info);
+    m_txHolderChip->setVisible(false);
+    safetyRow->addWidget(m_txHolderChip);
     hbox->addWidget(m_safetyGroup);
 
     // Wire TX badge to MoxController. MoxController lives on m_radioModel;

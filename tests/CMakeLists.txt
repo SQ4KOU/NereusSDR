@@ -7687,6 +7687,14 @@ nereus_add_test(tst_on_air_refusals
 nereus_add_test(tst_station_multi_session
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
+# iPhone app plan Task 78 (R-IOS-02, R-IOS-07, R-IOS-30): the desktop
+# remote window's screens for several devices on one Core, driven against a
+# real Core over a loopback link with a second device; offscreen renders of
+# every state (NEREUS_TASK78_SHOTS keeps them). No radio, no RF.
+nereus_add_test(tst_multi_device_screens
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_multi_device_screens PRIVATE NEREUS_BUILD_TESTS)
 # iPhone app plan Task 35 (R-IOS-13): keying from a remote device (tx.key,
 # tx.unkey, tx.tune, tx.twoTone): every refusal, holder and gate rule, the
 # keying epoch and its copies, the reconnect, and keyedBy.

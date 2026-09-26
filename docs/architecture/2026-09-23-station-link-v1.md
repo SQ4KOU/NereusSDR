@@ -741,7 +741,11 @@ capabilities (section 6.3) and the `connectedDevices` object (section
 sees exactly the wire it was built for. The desktop client declares `deviceAuth` 1
 when it holds its own device key (`device-identity.pem` in its profile
 directory, `ClientDeviceIdentity`; it always does unless that file cannot
-be read) and sends `{}` otherwise (iPhone app plan Task 18). A client's
+be read) and sends `{}` otherwise (iPhone app plan Task 18). Signing in
+with that key to a Core it paired with, it also declares `sessionHolder` 1
+(iPhone app plan Task 78), so it is asked, told and may take transmit as
+any device; a token sign-in does not, since it cannot know the id the Core
+numbers a token window by. A client's
 `deviceAuth` 1
 (or later) also asks for the `devices` object and its commands (section
 7.1): the station sends them to no other peer, so a window that declares

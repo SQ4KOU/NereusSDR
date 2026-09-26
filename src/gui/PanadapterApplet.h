@@ -54,6 +54,10 @@
 //                                    NereusSDR-original. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  iPhone app plan Task 78 (R-IOS-02,
+//                R-IOS-30): an empty pan offers Take a receiver after another
+//                device took this window's receiver; the TX pill offers Take
+//                transmit. AI-assisted via Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -67,6 +71,7 @@
 
 class QContextMenuEvent;
 class QLabel;
+class QPushButton;
 class QMenu;
 
 namespace NereusSDR {
@@ -165,6 +170,18 @@ public:
     void setNoSliceHintAllowed(bool allowed);
     /// The hint as shown now; empty when hidden.
     QString visibleNoSliceHint() const;
+    /// iPhone app plan Task 78 (the several-devices design, section 12):
+    /// another device took this window's receivers, so the empty pan offers
+    /// a take: the hint says so and a Take a receiver button asks the Core
+    /// for a slice here (addSliceRequested), which the Core answers with
+    /// its take-a-receiver question.
+    void setTakeReceiverOffered(bool offered);
+    bool takeReceiverOffered() const { return m_takeReceiverOffered; }
+    static QString takeReceiverHintText();
+    QPushButton* takeReceiverButton() const { return m_takeReceiverButton; }
+    /// Task 78: the TX pill offers Take transmit (SpectrumStatusOverlay).
+    void setTakeTransmitOffered(bool offered, const QString& holderName, bool holderOnAir);
+    SpectrumStatusOverlay* statusOverlay() const { return m_statusOverlay; }
     /// Remote display status (R-R3-37): the short line is painted under the
     /// badges, the explanation is the overlay's hover text.
     void setRemoteDisplayStatus(const PanStatusText& status);
@@ -225,6 +242,8 @@ signals:
     /// the far side of the window. A control drawn on a pan targets THAT
     /// pan.
     void addSliceRequested(const QString& panId);
+    /// Task 78: the pan's TAKE TX pill was clicked.
+    void takeTransmitRequested(const QString& panId);
     void floatRequested(const QString& panId);
 
     /// The floating-only title strip's Dock button. PanadapterStack wires it
@@ -271,6 +290,8 @@ private:
     // Parity Task 18 (C8): shown over an empty connected pan.
     QLabel*                 m_noSliceHint {nullptr};
     bool                    m_noSliceHintAllowed {false};
+    bool                    m_takeReceiverOffered {false};
+    QPushButton*            m_takeReceiverButton {nullptr};
     int                     m_activeSliceIndex {-1};
     QSet<int>               m_associatedSlices;
     double                  m_centerMhz {14.225};

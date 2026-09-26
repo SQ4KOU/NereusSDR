@@ -172,6 +172,7 @@ class StationBlock;
 class ChromeBarController;
 class SystemTile;
 class StatusBadge;
+class MultiDeviceController;
 class AdcOverloadBadge;
 class OverflowChip;
 class PsaIndicatorWidget;
@@ -865,6 +866,16 @@ private:
     // iPhone app plan Task 39 (D14, R-IOS-13): a remote window's transmit
     // meters from the Core's `txState`.
     void wireRemoteTransmitMeters();
+    // iPhone app plan Task 78 (R-IOS-02, R-IOS-30): the remote window's
+    // screens for several devices on one Core (MultiDeviceController), the
+    // bottom banner's holder, the TX pill and applet button that take
+    // transmit, the flags' radio freeze, other devices' markers and the
+    // empty band's offer of a take.
+    void wireRemoteDevices();
+    void refreshRemoteDeviceScreens();
+    void refreshForeignMarkers();
+    void refreshTakeReceiverOffer();
+    void onPanTakeTransmitRequested(const QString& panId);
     void buildUI();
     void buildMenuBar();
     void buildStatusBar();
@@ -1456,6 +1467,13 @@ private:
     QPointer<class StatusToast> m_txInhibitToast;
     StatusBadge* m_paStatusBadge{nullptr};
     StatusBadge* m_txStatusBadge{nullptr};
+    // Task 78: who holds transmit when it is another device (or the
+    // radio), beside the TX badge in the safety group. Hidden otherwise.
+    StatusBadge* m_txHolderChip{nullptr};
+    MultiDeviceController* m_multiDevice{nullptr};
+    // Task 78: this session had a slice of this window's; a later empty
+    // band means another device took it.
+    bool m_hadSliceThisSession{false};
     // Reserved safety slot group. Registered at rung 0 (never folds).
     QWidget* m_safetyGroup{nullptr};
     // Inactive slots dim rather than collapse, so geometry never moves

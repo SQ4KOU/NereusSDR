@@ -310,6 +310,9 @@
 //                Core's radios (stationRadios, stationRadiosChanged) and the
 //                Core's refusals of a radio request (stationRadioRefused).
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - iPhone app plan Task 78 (R-IOS-02, R-IOS-30):
+//                setStationMayCloseLastSlice and stationDevices. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -447,6 +450,7 @@
 namespace NereusSDR {
 
 class ReceiverManager;
+class RemoteDevicesState;
 class AudioEngine;
 class WdspEngine;
 class RxDspWorker;
@@ -805,6 +809,17 @@ public:
     /// object.destroy landing, not an operator asking for a removal, so
     /// it runs the local removal body rather than sending a verb.
     void removeSliceWithStationId(int sliceId);
+    /// iPhone app plan Task 78 (the several-devices design, section 12): a
+    /// remote window that shares the Core as a device accepts the Core
+    /// closing its last slice (another device took its receiver) and
+    /// shows an empty band; any other window keeps at least one slice, as
+    /// before. Role::Remote only; set by StationClient per session.
+    void setStationMayCloseLastSlice(bool may) { m_stationMayCloseLastSlice = may; }
+    bool stationMayCloseLastSlice() const { return m_stationMayCloseLastSlice; }
+    /// Task 78: the window's copy of who else is on the Core (set by the
+    /// StationClient that feeds it; null in a local window).
+    void setStationDevices(NereusSDR::RemoteDevicesState* devices);
+    NereusSDR::RemoteDevicesState* stationDevices() const;
 
     /// Adopt the station's choice of active slice. Role::Remote only.
     ///
@@ -6195,6 +6210,9 @@ private:
     // Remote-daemon R2 Task 4: non-owning; see attachStation()/
     // detachStation() above.
     NereusSDR::IStationLink* m_station{nullptr};
+    // iPhone app plan Task 78.
+    bool m_stationMayCloseLastSlice{false};
+    QPointer<QObject> m_stationDevices;
 
     // Remote-daemon R2 Task 18: the EFFECTIVE slice limit the station
     // advertised (parent design section 4.5 -- what the DAEMON can
