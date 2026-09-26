@@ -55,6 +55,9 @@ public:
 
     /// Why the controls are disabled now, empty when they are not.
     QString unavailableReason() const;
+    /// Follow-up N1: a token sign-in that enrolled this computer's key.
+    /// The Core takes the radio requests from the key's next sign-in.
+    static QString reconnectToChangeRadioReason();
 
     // For tests.
     QTreeWidget* radioList() const { return m_list; }

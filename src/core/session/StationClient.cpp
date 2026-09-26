@@ -1317,6 +1317,7 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
     m_handshakeComplete = false;
     m_authenticated = false;
     m_signedInWithDeviceKey = false;
+    m_enrolledDeviceKey = false;
     m_forwardLocalChanges = false;
     m_propertyWriteIds.clear();
     // Desktop remote transmit: the Core unkeys this device when the link
@@ -2033,6 +2034,7 @@ bool StationClient::signIn(const SessionMessage& hello)
             QString(), deviceBlockFor(*m_deviceIdentity, m_deviceName, m_deviceShortName,
                                       challenge, certificate, stationSpki)));
         m_signedInWithDeviceKey = true;
+        m_enrolledDeviceKey = false;
         return true;
     }
 
@@ -2067,6 +2069,7 @@ bool StationClient::signIn(const SessionMessage& hello)
     // The pairing token, even when this sign-in enrols the key: the Core
     // counts this session as a token sign-in (fix wave, I5).
     m_signedInWithDeviceKey = false;
+    m_enrolledDeviceKey = false;
     return true;
 }
 
@@ -2110,6 +2113,9 @@ void StationClient::handleAuthResult(const SessionMessage& message)
         const QByteArray learned = m_enrollingIdentity;
         m_enrollingIdentity.clear();
         m_stationIdentity = learned;
+        // Follow-up N1: still a token session, but this computer is paired;
+        // the window says to reconnect rather than to find a paired device.
+        m_enrolledDeviceKey = true;
         qCInfo(lcStationClient) << "This computer's key is paired with the Core; it signs in"
                                 << "by key from now on.";
         emit stationIdentityLearned(learned);

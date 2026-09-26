@@ -140,6 +140,11 @@ void ThisCorePage::setStationSettingsAvailable(bool available, const QString& re
     refreshControls();
 }
 
+QString ThisCorePage::reconnectToChangeRadioReason()
+{
+    return tr("Reconnect this window to change the Core's radio.");
+}
+
 QString ThisCorePage::unavailableReason() const
 {
     if (!m_stationAvailable) {
@@ -155,7 +160,10 @@ QString ThisCorePage::unavailableReason() const
     }
     // Fix wave (I5): the Core takes these only from a paired device.
     if (!link->signedInWithDeviceKey()) {
-        return StationRadios::pairedDeviceReason();
+        // Follow-up N1: a sign-in that enrolled this computer's key is from
+        // a paired device already; its next sign-in is by key.
+        return link->enrolledDeviceKeyThisSession() ? reconnectToChangeRadioReason()
+                                                    : StationRadios::pairedDeviceReason();
     }
     if (m_radioModel->isCoreOnAir()) {
         return RadioModel::onAirReason();

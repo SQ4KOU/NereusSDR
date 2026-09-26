@@ -584,7 +584,9 @@ public:
     StationEndReport lastEndReport() const { return m_lastEndReport; }
     /// The Core ended this session to change its radio (session.end code
     /// radioChanging) and this client is reconnecting: the Core's words,
-    /// until the next session is up. Empty otherwise.
+    /// until the next session is up, the Core answers with any other end,
+    /// or a redial fails after the backoff's longest wait (follow-up N2).
+    /// Empty otherwise.
     QString radioChangeReason() const { return m_radioChangeReason; }
 
     /// Test seam: production default is kDefaultReconnectBackoffUnitMs
@@ -907,9 +909,17 @@ public:
     /// Fix wave (I5): this session signed in with this computer's own key.
     bool signedInWithDeviceKey() const override
     { return m_deviceKeySignInForTest >= 0 ? m_deviceKeySignInForTest == 1 : m_signedInWithDeviceKey; }
+    /// Follow-up N1: this token sign-in enrolled this computer's key.
+    bool enrolledDeviceKeyThisSession() const override
+    { return m_enrolledKeyForTest >= 0 ? m_enrolledKeyForTest == 1 : m_enrolledDeviceKey; }
+#ifdef NEREUS_BUILD_TESTS
     /// Test seam: a bench link (no TLS pin) never signs in by key; a window
     /// test says it did (see StationServer::setTokenSessionsMayChangeRadioForTest).
     void setSignedInWithDeviceKeyForTest(bool byKey) { m_deviceKeySignInForTest = byKey ? 1 : 0; }
+    /// Test seam: a bench link cannot enrol its key either; a window test
+    /// says this token sign-in did (follow-up N1).
+    void setEnrolledDeviceKeyForTest(bool enrolled) { m_enrolledKeyForTest = enrolled ? 1 : 0; }
+#endif
     /// Parity Task 21. Verbs station.selectRadio, station.rescanRadios,
     /// station.setRadioModel and station.forgetRadio.
     CommandOutcome requestStationRadio(const QByteArray& verb, const QString& mac,
@@ -1164,6 +1174,8 @@ private:
     bool m_signedInWithDeviceKey = false;
     QString m_radioChangeReason;
     int m_deviceKeySignInForTest = -1;
+    bool m_enrolledDeviceKey = false;
+    int m_enrolledKeyForTest = -1;
     quint16 m_agreedMinor = 0;
 
     /// iPhone app Task 4: this client's link majors (oldest first) and

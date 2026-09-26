@@ -505,6 +505,10 @@ public:
     /// own device key. The Core takes the four radio requests only from
     /// such a session (StationRadios::pairedDeviceReason otherwise).
     virtual bool signedInWithDeviceKey() const { return false; }
+    /// Follow-up N1: this session signed in with the pairing token and
+    /// enrolled this computer's key in the same sign-in. Its next sign-in
+    /// is by key, so reconnecting is all the radio requests need.
+    virtual bool enrolledDeviceKeyThisSession() const { return false; }
     virtual CommandOutcome requestStationRadio(const QByteArray& /*verb*/, const QString& /*mac*/,
                                                int /*model*/)
     { return { false, stationRadiosUnavailableReason() }; }

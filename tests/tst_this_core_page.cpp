@@ -200,6 +200,27 @@ private slots:
         QCOMPARE(page->statusLabel()->text(), paired);
         QCOMPARE(h.client()->requestStationRadio("station.rescanRadios", {}, 0).sent, true);
         QTRY_COMPARE(page->statusLabel()->text(), paired);
+        // Follow-up N1: a token sign-in that enrolled this computer's key
+        // (a desktop window's first session after an upgrade) is told to
+        // reconnect, not to find a paired device: it is one.
+        h.client()->setEnrolledDeviceKeyForTest(true);
+        {
+            QAction* drop = h.menuAction(QStringLiteral("&Radio"), QStringLiteral("&Disconnect"));
+            QVERIFY(drop && drop->isEnabled());
+            drop->trigger();
+        }
+        QTRY_VERIFY(!h.client()->isHandshakeComplete());
+        connectWindow(h);
+        QTRY_VERIFY(!h.window()->findChildren<ThisCorePage*>().isEmpty()
+                    && h.window()->findChildren<ThisCorePage*>().constLast()->radioList()
+                               ->topLevelItemCount() == 2);
+        page = h.window()->findChildren<ThisCorePage*>().constLast();
+        const QString reconnect = ThisCorePage::reconnectToChangeRadioReason();
+        QCOMPARE(reconnect, QStringLiteral("Reconnect this window to change the Core's radio."));
+        QTRY_COMPARE(page->scanButton()->toolTip(), reconnect);
+        QVERIFY(!page->scanButton()->isEnabled());
+        QCOMPARE(page->statusLabel()->text(), reconnect);
+        h.client()->setEnrolledDeviceKeyForTest(false);
         // From here the window and the Core act as a window signed in with
         // its own key (a desktop window after its enrolment).
         h.client()->setSignedInWithDeviceKeyForTest(true);
