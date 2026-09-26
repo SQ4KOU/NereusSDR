@@ -316,6 +316,10 @@
 //                                    remoteRfKitControlVersion 4 and
 //                                    accessoryDataVersion 2.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Checkpoint carry: the uncapped message
+//                                    size's memory figure follows
+//                                    kMaxConcurrentPeers 24 (48 GiB).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QHash>
@@ -458,8 +462,8 @@ public:
     /// per socket. Qt buffers a complete message before it emits
     /// textMessageReceived, so kDefaultAuthDeadlineMs bounds how LONG an
     /// unauthenticated peer may sit here but bounds no BYTES at all.
-    /// Uncapped, kMaxConcurrentPeers of them come to roughly 16 GiB on a
-    /// daemon whose stated hardware floor is a Pi 4.
+    /// Uncapped, kMaxConcurrentPeers (24) of them come to roughly 48 GiB on
+    /// a daemon whose stated hardware floor is a Pi 4.
     ///
     /// Sized against the largest message a legitimate client can send,
     /// which is not a guess:
