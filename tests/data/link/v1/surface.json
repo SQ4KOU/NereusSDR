@@ -269,6 +269,11 @@
             "kind": "i64",
             "name": "remoteTxVersion",
             "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "txStateVersion",
+            "value": 1
         }
     ],
     "commands": [
@@ -4939,6 +4944,118 @@
                 }
             ]
         },
+        "TransmitState": {
+            "properties": [
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "keyed",
+                    "ordinal": 0
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "tuning",
+                    "ordinal": 1
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "twoTone",
+                    "ordinal": 2
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "txSliceId",
+                    "ordinal": 3
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "keyedByName",
+                    "ordinal": 4
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "keyedByKind",
+                    "ordinal": 5
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "keyedTrigger",
+                    "ordinal": 6
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "keyedSinceMs",
+                    "ordinal": 7
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "timeOutRemainingSeconds",
+                    "ordinal": 8
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "forwardPowerWatts",
+                    "ordinal": 9
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "reflectedPowerWatts",
+                    "ordinal": 10
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "swr",
+                    "ordinal": 11
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "alcDb",
+                    "ordinal": 12
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "micLevelDb",
+                    "ordinal": 13
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "txEnding",
+                    "ordinal": 14
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "stopReason",
+                    "ordinal": 15
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "stopText",
+                    "ordinal": 16
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "stopSerial",
+                    "ordinal": 17
+                }
+            ]
+        },
         "TunerModel": {
             "properties": [
                 {
@@ -5150,6 +5267,10 @@
             "key": "connectedDevices"
         },
         {
+            "class": "TransmitState",
+            "key": "txState"
+        },
+        {
             "class": "StationCatalog",
             "key": "catalog"
         },
@@ -5261,7 +5382,14 @@
             "TxInhibitMonitorReversed",
             "WindBackPowerSwr",
             "MultimeterDelayMs",
-            "NetworkWatchdogEnabled"
+            "NetworkWatchdogEnabled",
+            "MoxTimeOutEnabled",
+            "MoxTimeOutSeconds",
+            "PingTimeOutEnabled",
+            "PingTimeOutSeconds",
+            "PingTimeOutHost",
+            "RemoteMoxTimeOutEnabled",
+            "RemoteMoxTimeOutSeconds"
         ],
         "stationPrefixes": [
             "hardware/",

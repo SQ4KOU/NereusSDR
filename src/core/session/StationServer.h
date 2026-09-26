@@ -275,6 +275,12 @@
 //               button."; a session's keying commands are forgotten when it
 //               ends. J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 39 (D14, R-IOS-13, R-IOS-21): the
+//               `txState` object (TransmitState, txStateVersion 1) to a peer
+//               at minor 11 declaring remoteTx; a link lost and a device
+//               removed while keyed record their stop reasons. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QHash>
@@ -326,6 +332,7 @@ class StationCatalog;
 class StationDevicesFacade;
 class TokenStore;
 class TransmitHolder;
+class TransmitState;
 class RemoteKeying;
 
 class StationServer : public QObject {
@@ -735,6 +742,12 @@ public:
     int remoteTxVersion() const { return 1; }
     /// Task 35: keying from a remote device; null without a Local model.
     RemoteKeying* remoteKeying() const { return m_remoteKeying.get(); }
+    /// iPhone app plan Task 39 (D14, R-IOS-13): the mirrored `txState`
+    /// object (never null; follows a Local model).
+    TransmitState* transmitState() const { return m_transmitState; }
+    /// 1: the Core sends `txState` to a peer at minor 11 whose hello
+    /// declared remoteTx 1 (after remoteTxVersion in its capabilities).
+    int txStateVersion() const { return 1; }
     /// The gate's answer for `transport` (what its txPermitted says).
     TxDecision txDecisionFor(SessionTransport* transport) const;
     /// Releases transmit if `deviceId` holds it, through a transfer to
@@ -990,6 +1003,10 @@ private:
     /// The holder changed (who, keyed, away, a transfer): every session's
     /// txPermitted, connectedDevices, and the model's transmit holder.
     void onTransmitHolderChanged();
+    /// iPhone app plan Task 39: records on `txState` that the Core is
+    /// stopping `deviceId`'s key for `stopReason` (TransmitState::kStop*),
+    /// when that device holds transmit and is on the air.
+    void noteHolderStopped(const QByteArray& deviceId, const char* stopReason);
     /// Ruling 7.4 (D60): the on-air refusal for a change from `requester`,
     /// or empty (nobody on the air, or the holder's own change).
     TxRefusal onAirRefusal(const QByteArray& requester) const;
@@ -1080,6 +1097,10 @@ private:
     // iPhone app plan Task 35: keying from a remote device (a Local model
     // with a MoxController only).
     std::unique_ptr<RemoteKeying> m_remoteKeying;
+    // iPhone app plan Task 39: the `txState` object. Qt-parented to this, so
+    // its meter timer is one of the server's timers (the conformance
+    // runner's virtual clock drives them all).
+    TransmitState* m_transmitState = nullptr;
     // iPhone app Task 73: one marker per slice (Qt-parented to this).
     SliceMarkerSet* m_markers = nullptr;
     // True while a restored layout's owners are settled just before every

@@ -103,6 +103,9 @@
 //               (TxRefusal.cpp) and their forwards. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-25: iPhone app plan Task 39 (D14, R-IOS-13): txState's stop
+//               texts (TransmitStateFacade.cpp). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -896,6 +899,14 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("text"), QStringLiteral("result.reason"),
           QStringLiteral("outcome.reason"), QStringLiteral("kUnknownNotchReason"),
           QStringLiteral("kNotchListBusyReason")}},
+        // iPhone app plan Task 39: txState's stopReason is the wire code
+        // (linkLost, timeOut, ...), never shown; its words are stopText,
+        // scanned with the property texts. Task 38's lastTransmitStopReason
+        // is a code, which half and a limit, never shown either.
+        {"src/core/session/TransmitStateFacade.h", {QStringLiteral("stopReason")}, {}, 0, {},
+         {QStringLiteral("m_stopReason")}},
+        {"src/models/RadioModel.h", {QStringLiteral("lastTransmitStopReason")}, {}, 0, {},
+         {QStringLiteral("m_lastTransmitStopReason")}},
     };
     return sources;
 }
@@ -1028,6 +1039,15 @@ const QList<ReasonSource>& propertyTextSources()
         // The Power Genius's efficiency: the device's own reading (a
         // number and a unit), passed on as it reports it.
         {"src/core/PgxlStatusGauges.cpp", {}, {}, 0, {}, {}, true},
+        // iPhone app plan Task 39: txState's stopText. The limit ("3:00",
+        // durationText) and a device's name as the Core numbers it.
+        {"src/core/session/TransmitStateFacade.cpp",
+         {QStringLiteral("timeOutText"), QStringLiteral("linkLostText"),
+          QStringLiteral("micStarvedText"), QStringLiteral("revokedText"),
+          QStringLiteral("takenOverText"), QStringLiteral("stationText")},
+         {}, 8,
+         {QStringLiteral("after"), QStringLiteral("deviceOrDefault(deviceName)"),
+          QStringLiteral("leadingDevice(deviceName)"), QStringLiteral("leadingDevice(takerName)")}},
     };
     return sources;
 }

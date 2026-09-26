@@ -65,6 +65,9 @@
 //   2026-09-25 - iPhone app plan Task 35 (R-IOS-13): TransmitModel's mox
 //                 and tune Outbound (the transmit verbs key). J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 39 (D14, R-IOS-13): TransmitState,
+//                 all Outbound. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -627,6 +630,28 @@ const MirrorPolicy::Entry kEntries[] = {
     { "SliceMarker", "band", MirrorDirection::Outbound },
     { "SliceMarker", "streamIndex", MirrorDirection::Outbound },
     { "SliceMarker", "psPaused", MirrorDirection::Outbound },
+
+    // iPhone app plan Task 39 (D14, R-IOS-13, txStateVersion 1): the Core's
+    // transmitter, read-only. It changes only as the radio keys, unkeys and
+    // reads its meters, and as the Core stops a transmission.
+    { "TransmitState", "keyed", MirrorDirection::Outbound },
+    { "TransmitState", "tuning", MirrorDirection::Outbound },
+    { "TransmitState", "twoTone", MirrorDirection::Outbound },
+    { "TransmitState", "txSliceId", MirrorDirection::Outbound },
+    { "TransmitState", "keyedByName", MirrorDirection::Outbound },
+    { "TransmitState", "keyedByKind", MirrorDirection::Outbound },
+    { "TransmitState", "keyedTrigger", MirrorDirection::Outbound },
+    { "TransmitState", "keyedSinceMs", MirrorDirection::Outbound },
+    { "TransmitState", "timeOutRemainingSeconds", MirrorDirection::Outbound },
+    { "TransmitState", "forwardPowerWatts", MirrorDirection::Outbound },
+    { "TransmitState", "reflectedPowerWatts", MirrorDirection::Outbound },
+    { "TransmitState", "swr", MirrorDirection::Outbound },
+    { "TransmitState", "alcDb", MirrorDirection::Outbound },
+    { "TransmitState", "micLevelDb", MirrorDirection::Outbound },
+    { "TransmitState", "txEnding", MirrorDirection::Outbound },
+    { "TransmitState", "stopReason", MirrorDirection::Outbound },
+    { "TransmitState", "stopText", MirrorDirection::Outbound },
+    { "TransmitState", "stopSerial", MirrorDirection::Outbound },
 
     // Normal PS3 configuration is distinct from operational arming/actions.
     { "PureSignalSettings", "autoCalEnabled", MirrorDirection::Bidirectional },

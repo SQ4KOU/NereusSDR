@@ -103,6 +103,10 @@
 //               sent only to a peer whose hello declared remoteTx; txPermitted
 //               now the station transmit gate's answer. J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 39 (D14, R-IOS-13): txStateVersion,
+//               after remoteTxVersion and only with it (the `txState`
+//               object). J.J. Boyd (KG4VCF), with AI-assisted implementation
+//               via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -234,6 +238,11 @@ struct StationCapabilities {
     /// hello declared remoteTx 1 (remoteTxEntry); 0 otherwise.
     bool remoteTxEntry = false;
     int remoteTxVersion = 0;
+    /// iPhone app plan Task 39 (D14, R-IOS-13): 1 means the Core sends the
+    /// read-only `txState` object (TransmitState: keyed, who keyed, the
+    /// time left, the transmit meters and why the Core last stopped a
+    /// transmission). Sent right after remoteTxVersion and only with it.
+    int txStateVersion = 0;
 
     /// Whether the DAEMON currently holds a live radio connection. A
     /// client that authenticated against a daemon whose radio is powered

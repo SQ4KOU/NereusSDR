@@ -7499,6 +7499,14 @@ nereus_add_test(tst_station_multi_session
 nereus_add_test(tst_remote_keying
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
+# iPhone app plan Task 39 (D14, R-IOS-13, R-IOS-21): the Core's transmit
+# meter pump, and the mirrored `txState` object (TransmitState): who keyed,
+# the time left, the meters ten times a second while keyed, and why the Core
+# last stopped a transmission.
+nereus_add_test(tst_tx_meter_pump)
+nereus_add_test(tst_transmit_state_facade
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
 # iPhone app Task 73 (R-IOS-02): whose each slice is (owners, held for,
 # adoption, each owner's active slice and the station-level one), and each
 # device's closed slices kept for its return.

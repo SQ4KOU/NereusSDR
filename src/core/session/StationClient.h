@@ -250,6 +250,10 @@
 //   2026-09-24: Part C fix wave: the optional device shortName in
 //               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 39 (D14, R-IOS-13): the Core's
+//               `txState` object (TransmitState, txStateVersion 1), read-only,
+//               for the window's transmit meters. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -282,6 +286,7 @@ class ClientDeviceIdentity;
 class RadioModel;
 class SessionTransport;
 class SettingsProxy;
+class TransmitState;
 
 /// R-R3-21 / R-R3-23 / R-R3-38: how the last session ended, as far as it
 /// decides what a remote window offers next. Only an end that will not
@@ -574,6 +579,11 @@ public:
     bool tgxlOperateAppliesWhole() const override;
     bool stationTciAvailable() const override;
     bool coreServesTciOnThisComputer() const override;
+    /// iPhone app plan Task 39 (D14, R-IOS-13): the Core's `txState` as this
+    /// window last heard it (never null). Its values are the idle ones while
+    /// the Core does not send it (txStateVersion 0) and after a session
+    /// ends; its stop fields keep the last stop until the next snapshot.
+    TransmitState* transmitState() const { return m_transmitState; }
     int coreStationTciStored() const override;
     /// Test seam: whether the Core counts as on this computer (a session
     /// started without a dial has no address to judge by).
@@ -1014,6 +1024,8 @@ private:
     /// called on it -- that is the DAEMON's connect-time burst, and a
     /// client has nothing to burst.
     StateMirror* m_outboundMirror = nullptr;
+    // iPhone app plan Task 39: the Core's `txState` (Qt-parented to this).
+    TransmitState* m_transmitState = nullptr;
     MirrorCoalescer m_outboundCoalescer;
 
     /// True for the duration of one inbound apply. See the class comment's
