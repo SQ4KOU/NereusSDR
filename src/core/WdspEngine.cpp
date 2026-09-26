@@ -87,7 +87,11 @@ warren@wpratt.com
 #include "core/platform/ThreadPlacement.h"
 
 #ifdef HAVE_FFTW3
-#include <fftw3.h>       // fftw_make_planner_thread_safe (R-R3-39)
+// fftw_make_planner_thread_safe (R-R3-39). By full path, from CMake: a bare
+// <fftw3.h> finds WDSP's pinned older copy in third_party/wdsp/src first on
+// Linux, where the system header's /usr/include is never passed as -I, and
+// that copy does not declare it.
+#include NEREUS_FFTW3_HEADER
 #endif
 
 #include <QDir>

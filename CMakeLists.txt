@@ -713,6 +713,39 @@ if(FFTW3_FOUND)
                 "or build FFTW with --enable-threads.")
         endif()
     endif()
+    # R-R3-39: WdspEngine.cpp calls fftw_make_planner_thread_safe(), so it
+    # must see the fftw3.h that belongs to the FFTW library being linked.
+    # A plain <fftw3.h> is not enough: the WDSP include folder
+    # (third_party/wdsp/src, public on wdsp_static) carries WDSP's pinned
+    # copy of an older fftw3.h without that declaration, and on Linux the
+    # system header sits in /usr/include, an implicit folder CMake never
+    # passes as -I, so WDSP's copy is searched first and shadows it. Name
+    # the platform header by its full path instead: Debian/Ubuntu's
+    # /usr/include/fftw3.h, Homebrew's, or third_party/fftw3/include on
+    # Windows (the fftw.org 3.3.5 header, which declares it).
+    set(NEREUS_FFTW3_HEADER "")
+    foreach(_fftw3_inc_dir IN LISTS FFTW3_INCLUDE_DIRS FFTW3_INCLUDEDIR)
+        if(NOT NEREUS_FFTW3_HEADER AND EXISTS "${_fftw3_inc_dir}/fftw3.h")
+            set(NEREUS_FFTW3_HEADER "${_fftw3_inc_dir}/fftw3.h")
+        endif()
+    endforeach()
+    unset(_fftw3_inc_dir)
+    if(NOT NEREUS_FFTW3_HEADER)
+        find_path(NEREUS_FFTW3_INCLUDE_DIR fftw3.h)
+        if(NEREUS_FFTW3_INCLUDE_DIR)
+            set(NEREUS_FFTW3_HEADER "${NEREUS_FFTW3_INCLUDE_DIR}/fftw3.h")
+        endif()
+    endif()
+    if(NOT NEREUS_FFTW3_HEADER)
+        message(FATAL_ERROR
+            "FFTW3 was found but its fftw3.h was not. WdspEngine needs the "
+            "header that matches the FFTW library for fftw_make_planner_thread_safe().")
+    endif()
+    message(STATUS "FFTW3 header for the thread-safe planner: ${NEREUS_FFTW3_HEADER}")
+    # Only WdspEngine.cpp (NereusCore, NereusCore_LTO) includes it this way.
+    set_property(SOURCE ${CMAKE_SOURCE_DIR}/src/core/WdspEngine.cpp
+        APPEND PROPERTY COMPILE_DEFINITIONS
+        "NEREUS_FFTW3_HEADER=\"${NEREUS_FFTW3_HEADER}\"")
 else()
     message(STATUS "FFTW3 not found — client-side FFT disabled")
 endif()
