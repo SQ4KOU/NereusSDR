@@ -4,6 +4,8 @@
 #include <QtGlobal>
 #include <algorithm>
 #include <deque>
+#include <utility>
+#include <vector>
 #include <map>
 #include <optional>
 
@@ -31,9 +33,14 @@ namespace NereusSDR {
 /// audio plays after it, in order. When any of them played real audio, a
 /// rewind would replay out of order, so the packet stays late
 /// (LateConcealed). Once the link has been quiet for kShrinkQuietNs after
-/// a late packet, queued audio beyond the hold plus kShedReserveNs is shed
-/// a whole interval at a time, so as the hold eases the delay the
-/// operator hears comes back down with it, to what the readout shows.
+/// a late packet, a standing excess is shed: when the queued span plus the
+/// downstream excess has stayed above the hold plus kShedReserveNs for a
+/// whole kShrinkIntervalNs (CoDel's rule: a queue that never dips below
+/// its target is carrying delay, one that dips is only jittered), one
+/// interval is skipped, and the interval starts again. So as the hold
+/// eases the delay the operator hears comes back down with it, while
+/// ordinary jitter never costs on-time audio. Shedding disarms once the
+/// hold is back at kHoldNs with no excess.
 ///
 /// A fixed-hold queue (setAdaptive(false), the PCM sink's) never grows,
 /// rewinds or sheds: its consumer is paced by the hold alone, and a late
@@ -56,7 +63,7 @@ public:
     /// A steady link: this long without a late packet before the hold
     /// eases back, by kShrinkStepNs every kShrinkIntervalNs.
     static constexpr qint64 kShrinkQuietNs = 2'000'000'000;
-    static constexpr qint64 kShrinkStepNs = 40'000'000;
+    static constexpr qint64 kShrinkStepNs = 20'000'000;
     static constexpr qint64 kShrinkIntervalNs = 1'000'000'000;
     /// Queued audio past the hold that shedding leaves alone: a packet in
     /// flight while arrival and release interleave.
@@ -107,12 +114,28 @@ public:
     /// unconcealed until the rate matcher has run dry.
     std::optional<Playout> takeExpectedPresentEarly(std::optional<qint64> nowNs = std::nullopt);
     /// R-R3-21: conceals the expected interval now, when downstream PCM is
-    /// about to underflow, the expected packet is not here and a later one
-    /// is queued (a hole, whose deadline a deepened hold pushes out). An
-    /// underflow would cost a fresh context; one concealed interval costs
-    /// one packet of PLC. Nothing when the expected packet is present (use
-    /// takeExpectedPresentEarly()) or the queue is empty.
+    /// about to underflow and the expected packet is not here (a hole,
+    /// whose deadline a deepened hold pushes out). An underflow would cost
+    /// a fresh context; one concealed interval costs one packet of PLC.
+    /// Nothing when the expected packet is present (use
+    /// takeExpectedPresentEarly()).
+    /// R-R3-21 (re-review): also with the queue empty while the hold is
+    /// deepened (playback then runs on demand) once something has been
+    /// released, so a gap in arrivals is concealed before the matcher
+    /// underflows. At the base hold, and before the first release, an
+    /// empty queue is never concealed here.
     std::optional<Playout> concealExpectedNow(qint64 nowNs);
+    /// R-R3-21: eases the hold and sheds a standing excess, as takeReady()
+    /// does first; for a consumer that may not reach takeReady() on a wake
+    /// (the speaker's release is held back while the matcher is full).
+    void tick(qint64 nowNs);
+    /// R-R3-21: the packets shed since the last call, oldest first (at most
+    /// a window's worth kept), so an Opus decoder can decode and discard
+    /// them and stay continuous across the skip.
+    std::vector<QByteArray> takeShedPackets() { return std::exchange(m_shedPackets, {}); }
+    /// Intervals skipped unheard to bound the delay, present or missing:
+    /// by advanceToFit() and by shedding. Cumulative for this queue.
+    quint64 skippedIntervals() const { return m_skipped; }
     /// R-R3-21: a packet at `timestamp` fell outside the window. Moves the
     /// head forward just far enough for it to fit, dropping the oldest
     /// queued packets and skipping missing intervals; with nothing queued
@@ -130,8 +153,10 @@ public:
     /// R-R3-21: audio downstream (the rate matcher) holds beyond its own
     /// working level, which shedding counts with the queued span: a
     /// backlog released into the matcher is delay the same as one queued
-    /// here, and skipping an interval here lets the matcher drain it.
-    void setDownstreamExcessNs(qint64 excessNs) { m_downstreamExcessNs = std::max<qint64>(0, excessNs); }
+    /// here, and skipping an interval here lets the matcher drain it. A
+    /// matcher below its working level counts negative: the audio queued
+    /// here is then on its way to refill it, not excess delay.
+    void setDownstreamExcessNs(qint64 excessNs) { m_downstreamExcessNs = excessNs; }
     int queuedPackets() const { return static_cast<int>(m_packets.size()); }
     quint32 nextTimestamp() const { return m_nextTimestamp; }
     int packetFrames() const { return m_packetFrames; }
@@ -154,6 +179,10 @@ private:
     std::deque<Released> m_released;
     qint64 m_holdNs{kHoldNs};
     std::optional<qint64> m_lastLateNs;
+    // Since when the queue has stood above its target, while armed.
+    std::optional<qint64> m_excessSinceNs;
+    std::vector<QByteArray> m_shedPackets;
+    quint64 m_skipped{0};
     qint64 m_lastEaseNs{0};
     bool m_adaptive{true};
     qint64 m_downstreamExcessNs{0};

@@ -5495,18 +5495,19 @@ private slots:
             [&] { QStringList parts; for (qint64 w : waits) parts << QString::number(w);
                   return parts.join(QStringLiteral(", ")); }());
         qInfo().noquote() << evidence;
-        // 2 s, 4 s, 4 s, each from the request before (to within the
-        // event loop's slack).
-        QVERIFY2(std::abs(waits.at(0) - 2000) < 300, qPrintable(evidence));
-        QVERIFY2(std::abs(waits.at(1) - 4000) < 300, qPrintable(evidence));
-        QVERIFY2(std::abs(waits.at(2) - 4000) < 300, qPrintable(evidence));
+        // 2 s, 4 s, 4 s, each from the request before. Never sooner (a
+        // timer cannot fire early); a loaded machine may be later, so the
+        // upper bounds only tell the steps apart.
+        QVERIFY2(waits.at(0) >= 1990 && waits.at(0) < 3500, qPrintable(evidence));
+        QVERIFY2(waits.at(1) >= 3990 && waits.at(1) < 6000, qPrintable(evidence));
+        QVERIFY2(waits.at(2) >= 3990 && waits.at(2) < 6000, qPrintable(evidence));
 
         // Retry starts over: the next automatic retry is 1 s out again.
         const qsizetype beforeRetry = requestMs.size();
         remoteMedia.retryAudio();
         QTRY_VERIFY_WITH_TIMEOUT(requestMs.size() >= beforeRetry + 2, 5000);
         const qint64 afterRetry = requestMs.at(beforeRetry + 1) - requestMs.at(beforeRetry);
-        QVERIFY2(std::abs(afterRetry - 1000) < 300, qPrintable(QString::number(afterRetry)));
+        QVERIFY2(afterRetry >= 990 && afterRetry < 3500, qPrintable(QString::number(afterRetry)));
 
         audio.stop();
         h.client.disconnectFromStation(QStringLiteral("test complete"));

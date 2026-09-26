@@ -46,6 +46,13 @@ qint64 AudioJitterBuffer::queuedSpanNs() const
     return static_cast<qint64>(m_packets.rbegin()->first - m_nextIndex + 1) * m_packetDurationNs;
 }
 
+void AudioJitterBuffer::tick(qint64 nowNs)
+{
+    if (!m_adaptive) { return; }
+    easeHold(nowNs);
+    shedExcess(nowNs);
+}
+
 void AudioJitterBuffer::shedExcess(qint64 nowNs)
 {
     // Only after a late packet, once the link has been quiet as long as it
@@ -53,24 +60,39 @@ void AudioJitterBuffer::shedExcess(qint64 nowNs)
     // replayed intervals, a backlog released into the rate matcher) is
     // then no longer wanted. A context that never saw a late packet sheds
     // nothing, so a scheduling stall's backlog still plays whole.
-    if (!m_lastLateNs || nowNs - *m_lastLateNs < kShrinkQuietNs) { return; }
-    // One whole interval at a time from the head, while the queue and the
-    // downstream excess hold more than the hold plus the reserve. The
-    // skipped intervals were never heard, so there is nothing for a late
-    // packet to find.
-    bool shed = false;
-    while (!m_packets.empty()
-           && queuedSpanNs() + m_downstreamExcessNs > m_holdNs + kShedReserveNs) {
-        const auto first = m_packets.begin();
-        if (first->first == m_nextIndex) {
-            m_packets.erase(first);
-            ++m_trimmed;
-        }
-        ++m_nextIndex;
-        m_nextTimestamp += quint32(m_packetFrames);
-        shed = true;
+    if (!m_lastLateNs || nowNs - *m_lastLateNs < kShrinkQuietNs) {
+        m_excessSinceNs.reset();
+        return;
     }
-    if (shed) { m_released.clear(); }
+    // A standing excess only (CoDel's rule): above the target for a whole
+    // interval without a dip. Any dip is jitter, and restarts the clock.
+    if (m_packets.empty()
+        || queuedSpanNs() + m_downstreamExcessNs <= m_holdNs + kShedReserveNs) {
+        m_excessSinceNs.reset();
+        if (m_holdNs <= kHoldNs) { m_lastLateNs.reset(); } // paid: disarm
+        return;
+    }
+    if (!m_excessSinceNs) {
+        m_excessSinceNs = nowNs;
+        return;
+    }
+    if (nowNs - *m_excessSinceNs < kShrinkIntervalNs) { return; }
+    // One whole interval from the head, then a fresh interval. The skipped
+    // interval was never heard, so there is nothing for a late packet to
+    // find.
+    const auto first = m_packets.begin();
+    if (first->first == m_nextIndex) {
+        if (m_shedPackets.size() < static_cast<std::size_t>(windowPackets(kMaxWindowNs, m_packetDurationNs))) {
+            m_shedPackets.push_back(std::move(first->second.packet));
+        }
+        m_packets.erase(first);
+        ++m_trimmed;
+    }
+    ++m_nextIndex;
+    m_nextTimestamp += quint32(m_packetFrames);
+    ++m_skipped;
+    m_released.clear();
+    m_excessSinceNs = nowNs;
 }
 
 void AudioJitterBuffer::noteRelease(quint32 timestamp, qint64 releasedNs, bool concealed)
@@ -135,10 +157,7 @@ AudioJitterBuffer::Admission AudioJitterBuffer::insert(
 
 std::optional<AudioJitterBuffer::Playout> AudioJitterBuffer::takeReady(qint64 nowNs)
 {
-    if (m_adaptive) {
-        easeHold(nowNs);
-        shedExcess(nowNs);
-    }
+    tick(nowNs);
     auto first = m_packets.begin();
     std::optional<qint64> due;
     const bool present = first != m_packets.end() && first->first == m_nextIndex;
@@ -174,11 +193,17 @@ std::optional<AudioJitterBuffer::Playout> AudioJitterBuffer::takeReady(qint64 no
 
 std::optional<AudioJitterBuffer::Playout> AudioJitterBuffer::concealExpectedNow(qint64 nowNs)
 {
-    // Only a hole: the expected packet missing with a later one queued.
-    // An empty queue is a stall or a device outrunning the stream; its
-    // loss deadline and the rate matcher's own accounting keep that case.
+    // The expected packet missing: a hole (a later one queued), or an
+    // empty queue while the hold is deepened and something has played. A
+    // deeper hold runs playback on demand, with the matcher near empty, so
+    // a gap in arrivals is concealed before the matcher underflows into a
+    // restart; the loss deadline would come too late. At the base hold an
+    // empty queue keeps its deadline and the matcher's own accounting (a
+    // device outrunning the stream is still a clock-buffer fault). A true
+    // outage is still ended by the no-packet rule.
     const auto first = m_packets.begin();
-    if (first == m_packets.end() || first->first == m_nextIndex) {
+    if (first != m_packets.end() ? first->first == m_nextIndex
+                                 : (!m_nextMissingDue || m_holdNs <= kHoldNs)) {
         return std::nullopt;
     }
     Playout result;
@@ -209,6 +234,7 @@ int AudioJitterBuffer::advanceToFit(quint32 timestamp)
         ++dropped;
     }
     m_trimmed += quint64(dropped);
+    m_skipped += skip;
     // The skipped intervals were never heard: nothing to find later.
     m_released.clear();
     return dropped;

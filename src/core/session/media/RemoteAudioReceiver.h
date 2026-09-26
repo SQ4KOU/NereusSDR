@@ -144,6 +144,14 @@ struct RemoteAudioReceiverTelemetry {
     // stall, so the delay it added comes back down as the hold eases.
     // This computer's latency policy, not the network's loss.
     quint64 trimmedPackets = 0;
+    // Intervals skipped unheard for the same reasons, present or missing,
+    // and that as audio time (intervals x the context's packet duration),
+    // which is what the operator heard skipped.
+    quint64 skippedIntervals = 0;
+    double skippedAudioMs = 0.0;
+    // The longest the receive worker went between wakes in this context:
+    // a starved worker, not the network, when a speaker runs dry.
+    double maxWorkerWakeGapMs = 0.0;
     // Network interruptions, at most one a worker pass: an arrival burst,
     // a stream gap, or packets that came after their intervals were
     // concealed (a stall). The lossless link trial counts them as it
