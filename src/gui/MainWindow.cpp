@@ -128,9 +128,39 @@
 //                blocking Linux audio first-run dialog
 //                (firstRunPromptsBarredForTestRun). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-39 (station Task 32): the TX analyzer runs its WDSP
+//                calls on the model's transmit lane. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-39 / R-IOS-03: the TX analyzer's rate and frame rate
+//                come from TxAnalyzer::applyStationRates, shared with
+//                nereusd. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 //   2026-09-24: Part C fix wave: the optional device shortName in
 //               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25 - J.J. Boyd (KG4VCF). R-R3-49, Sub-epic C-1 (tx-followup-3):
+//                 the DSP menu's NR list shows DFNR, MNR and BNR always,
+//                 disabled with the plain reason while they cannot run.
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - J.J. Boyd (KG4VCF). R-R3-49, Sub-epic C-1 (tx-followup-4):
+//                 the DSP menu's NR list no longer offers BNR (operator:
+//                 not offered for now); its entries come from
+//                 nrMenuEntries(). AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - J.J. Boyd (KG4VCF). iPhone app plan, desktop remote
+//                 transmit (R-IOS-13, R-R3-42): the remote window's
+//                 transmit controls follow the Core's txPermitted with its
+//                 reason; a refused press is a toast; the TCI server
+//                 forwards a program's transmit to the Core. AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-09-25 - J.J. Boyd (KG4VCF). iPhone app plan Task 39 (D14,
+//                 R-IOS-13): a remote window's transmit meters follow the
+//                 Core's `txState`: forward and reflected power and SWR
+//                 through the window's RadioStatus (the S-meter's TX needle,
+//                 the TX applet's power gauge, the container meters), ALC
+//                 and MIC through MeterPoller, the keyed state to the S-meter
+//                 and the poller; the meters the Core does not send are
+//                 shown disabled with the reason. AI-assisted via Anthropic
+//                 Claude Code.
 //   2026-09-24 - R-R3-49 (parity Task 1): transmitSettingsPermitted(). The
 //                TX applet's RF Power and TX filter, the RX applet's and
 //                flag's Shift-click TX passband match and DSP > Options' TX
@@ -212,6 +242,15 @@
 //                window's ADC and AGC meters follow the Core's
 //                meterReadingsVersion. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave: I4 the TX applet says who holds
+//               transmit; M8 a VOX arming the Core refuses is a toast.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave 2 (M8): VOX shows disabled with the
+//               plain reason while this computer has no microphone line to
+//               the Core; the Core's refusal stays the backstop. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -447,6 +486,7 @@ warren@wpratt.com
 #include "PanadapterStack.h"
 #include "PanadapterApplet.h"
 #include "PanLayoutDialog.h"
+#include "core/safety/TxRefusal.h"
 #include "core/FFTRouter.h"
 #include "StyleConstants.h"
 #include "models/RadioModel.h"
@@ -555,6 +595,7 @@ warren@wpratt.com
 #  include "applets/ClientChainApplet.h"
 #  include "core/TciServer.h"
 #  include "core/TciSwitch.h"
+#  include "gui/RemoteTransmitForwarder.h"
 #  include "core/RfKitBandFollow.h"
 #  include "setup/TciLogWindow.h"  // Phase 3J-1 closeout Item 2 (2026-05-12)
 #  include <QWebSocket>
@@ -566,6 +607,7 @@ warren@wpratt.com
 // writes through. Both are used only on the m_station.isRemote() path.
 #include "core/security/ClientDeviceIdentity.h"
 #include "core/session/StationClient.h"
+#include "core/session/TransmitStateFacade.h"
 #include "models/RfKitModel.h"
 #include "RemoteConnectionController.h"
 #include "gui/RemoteMediaController.h"
@@ -971,6 +1013,20 @@ MainWindow::MainWindow(const RemoteStationOptions& station, QWidget* parent,
         showToast(reason, ToastSeverity::Warning, 3000);
     });
 
+    // Task 33: RadioModel::stopAllTx stopped a transmission. A non-empty
+    // message is shown for 10 s, as Thetis's StopAllTx does:
+    // From Thetis console.cs:45338-45341 [v2.10.3.15]:
+    //   if (!string.IsNullOrEmpty(msg))
+    //   {
+    //       infoBar.Warning(msg, false, 10000);
+    //   }
+    connect(m_radioModel, &RadioModel::transmitStopped,
+            this, [this](const QString& message) {
+        if (!message.isEmpty()) {
+            showToast(message, ToastSeverity::Warning, 10000);
+        }
+    });
+
     // Phase 3Q Task 10: auto-connect failure / ambiguity surface.
     //
     // autoConnectFailed — the probe timed out or the radio rejected the
@@ -1314,6 +1370,53 @@ void MainWindow::connectToStation()
     if (m_remoteConnection) { m_remoteConnection->connectToStation(); }
 }
 
+void MainWindow::wireRemoteTransmitMeters()
+{
+    // iPhone app plan Task 39 (D14, R-IOS-13): the remote window shows the
+    // transmit meters the local window shows, by the same meter items, from
+    // the Core's `txState` (MeterPoller::setRemoteTransmitState: power,
+    // reflected power and SWR through this window's RadioStatus, which the
+    // S-meter's TX needle, the TX applet's power gauge and the container
+    // meters already follow; ALC and MIC through the poller). A meter the
+    // Core does not send is shown disabled with the reason, never hidden.
+    TransmitState* state = m_stationClient ? m_stationClient->transmitState() : nullptr;
+    if (state == nullptr || m_radioModel == nullptr) {
+        return;
+    }
+    if (m_meterPoller) {
+        m_meterPoller->setRemoteTransmitState(state, [this]() -> QString {
+            if (m_stationClient == nullptr || !m_stationClient->isHandshakeComplete()) {
+                return tr("Connect to the Core to see transmit meters here.");
+            }
+            if (m_stationClient->capabilities().txStateVersion < 1) {
+                return tr("This Core does not send transmit meters. Update the Core to see "
+                          "them here.");
+            }
+            return {};
+        });
+    }
+    // The S-meter's TX needle follows the Core's keyed state (the local
+    // window's follows MoxController's walk).
+    connect(state, &TransmitState::stateChanged, this, [this, state]() {
+        if (SMeterWidget* sm = m_appletPanel ? m_appletPanel->smeterWidget() : nullptr) {
+            sm->setTransmitting(state->keyed());
+        }
+    });
+    // The compression reading is not in the Core's transmit state yet.
+    if (m_phoneCwApplet) {
+        m_phoneCwApplet->setCompressionUnavailable(MeterPoller::remoteTxMeterNotSentText());
+    }
+    // Fix wave I4: who holds transmit on the Core, under MOX and TUNE.
+    const auto showHolder = [this]() {
+        if (m_txApplet && m_stationClient) {
+            m_txApplet->setTransmitHolderText(m_stationClient->transmitHolderText());
+        }
+    };
+    connect(state, &TransmitState::holderChanged, this, showHolder);
+    connect(m_stationClient, &StationClient::handshakeComplete, this, showHolder);
+    showHolder();
+}
+
 void MainWindow::ensureRemoteSession()
 {
     if (!m_station.isRemote() || !m_radioModel || m_shuttingDown) { return; }
@@ -1349,6 +1452,8 @@ void MainWindow::ensureRemoteSession()
         m_stationClient->setDeviceIdentity(ClientDeviceIdentity::forThisProfile(),
                                            ClientDeviceIdentity::machineName(),
                                            ClientDeviceIdentity::machineShortName());
+        // iPhone app plan Task 39: the Core's transmit meters.
+        wireRemoteTransmitMeters();
         m_remoteConnection = new RemoteConnectionController(
             m_stationClient, m_radioModel, m_station, this);
         connect(m_remoteConnection, &RemoteConnectionController::changed,
@@ -1436,6 +1541,12 @@ void MainWindow::ensureRemoteSession()
         // Setup is open.
         wireReceiverAudioNotePush(this, m_remoteMedia, m_radioModel,
                                   [this] { return receiverAudioNoteFor(m_remoteMedia); });
+        // Fix wave 2 (M8): VOX follows this computer's microphone line.
+        connect(m_remoteMedia, &RemoteMediaController::micLineChanged, this, [this](bool) {
+            if (!m_shuttingDown) {
+                applyRemoteRoleGating();
+            }
+        });
         connect(m_remoteMedia, &RemoteMediaController::recoveryRequested,
                 m_remoteConnection, &RemoteConnectionController::recoverMediaSession,
                 Qt::QueuedConnection);
@@ -1501,10 +1612,13 @@ void MainWindow::ensureRemoteSession()
         // value (its radio's range, a mode the radio does not offer), or
         // that this window could not send, says why in user words.
         connect(m_stationClient, &StationClient::propertyWriteCompleted, this,
-                [this](const QByteArray& objectKey, const QByteArray&, quint32,
+                [this](const QByteArray& objectKey, const QByteArray& property, quint32,
                        bool accepted, const QString& reason) {
             // R-R3-46: so does an antenna edit (Setup > Hardware Config).
-            if ((objectKey == "stepAtt" || objectKey == "alexAntennas") && !accepted
+            // Fix wave M8: and VOX the Core would not arm (no microphone
+            // line from this window yet), whose button drops back.
+            const bool voxWrite = objectKey == "transmit" && property == "voxEnabled";
+            if ((objectKey == "stepAtt" || objectKey == "alexAntennas" || voxWrite) && !accepted
                 && !reason.isEmpty()) {
                 showToast(OperatorReasonText::forDisplay(reason), ToastSeverity::Warning, 4000);
             }
@@ -2894,6 +3008,24 @@ void MainWindow::onNotchRequestRefused(const QString& reason)
     showToast(OperatorReasonText::forDisplay(reason), ToastSeverity::Warning, 3000);
 }
 
+// R-R3-49, Sub-epic C-1 (tx-followup-4): the DSP > NR menu's entries, in
+// order. BNR (NVIDIA) is not offered (operator, 2026-09-25); NrSlot::BNR
+// keeps its value 6 so no saved or sent selection moves.
+QList<std::pair<QString, NereusSDR::NrSlot>> MainWindow::nrMenuEntries()
+{
+    using Slot = NereusSDR::NrSlot;
+    return {
+        { QStringLiteral("&Off"),  Slot::Off  },
+        { QStringLiteral("NR&1"),  Slot::NR1  },
+        { QStringLiteral("NR&2"),  Slot::NR2  },
+        { QStringLiteral("NR&3"),  Slot::NR3  },
+        { QStringLiteral("NR&4"),  Slot::NR4  },
+        { QStringLiteral("&DFNR"), Slot::DFNR },
+        { QStringLiteral("&NNR"),  Slot::NNR  },
+        { QStringLiteral("&MNR"),  Slot::MNR  },
+    };
+}
+
 // Fix wave I3 (R-R3-21): a noise reducer a receiver would not turn on, for
 // example NR3 on a Core with no NR3 model. The receiver is unchanged; the
 // menu says why, in local and remote windows alike. Follow-up item 3: only
@@ -4178,6 +4310,8 @@ void MainWindow::buildUI()
         hooks.pureSignalArmingReason = [this] { return pureSignalArmingReason(); };
         hooks.remoteTransmitReason =
             tr("Remote transmit controls are not available from this Core yet.");
+        // Desktop remote transmit: the Core's own reason when it gave one.
+        hooks.remoteTransmitReasonNow = [this] { return remoteTransmitReason(); };
         hooks.spectrumFor = [this](SliceModel* s) { return spectrumForSlice(s); };
         // R-R3-49: VAX 1 / VAX 2 open and close this computer's VAX
         // outputs, as Setup > Audio > VAX does (live in a remote window).
@@ -4211,6 +4345,11 @@ void MainWindow::buildUI()
                 this, refresh);
         connect(m_radioModel, &RadioModel::tuneRefused, this, refresh);
         connect(m_radioModel, &RadioModel::connectionStateChanged, this, refresh);
+        // Desktop remote transmit: a remote window's MOX, TUNE and 2-TONE
+        // light from the Core's state.
+        connect(m_radioModel, &RadioModel::transmittingChanged, this, refresh);
+        connect(m_radioModel, &RadioModel::remoteTransmitRefused, this, refresh);
+        connect(&m_radioModel->transmitModel(), &TransmitModel::tuneChanged, this, refresh);
         // Task 16: receive only disables TUN, MOX and 2TONE.
         connect(m_radioModel, &RadioModel::rxOnlyChanged, this, refresh);
         if (MoxController* mox = m_radioModel->moxController()) {
@@ -4688,12 +4827,12 @@ void MainWindow::buildUI()
     // analyzer on the local role so a mirrored station MOX state cannot start
     // a local WDSP analyzer or suppress a receive pan on the client.
     if (m_radioModel->ownsLocalDsp()) {
-        m_txAnalyzer = new TxAnalyzer(TxAnalyzer::kTxDispId, this);
-        // TX dsp_rate = 96 kHz per WdspEngine::kTxDspSampleRate (= cmaster.c:182
-        // [v2.10.3.13] hardcoded 96000). The siphon at TXA.c:586 delivers
-        // dsp_size = 4096 complex samples per fexchange0 cycle at this rate.
-        m_txAnalyzer->setSampleRate(96000.0);
-        m_txAnalyzer->setOutputFps(15);  // Thetis frame_rate default per specHPSDR.cs:335 [v2.10.3.13+501e3f51]
+        // R-R3-39: its WDSP calls run on the transmit lane, not here.
+        m_txAnalyzer = new TxAnalyzer(TxAnalyzer::kTxDispId, this,
+                                      m_radioModel->transmitLane());
+        // TX dsp_rate 96 kHz and Thetis's 15 fps; nereusd (DaemonApp) gives
+        // its analyzer the same set-up.
+        m_txAnalyzer->applyStationRates();
         // Phase 3M-5d: expose TxAnalyzer on RadioModel so Setup Display TX
         // page can reach it without depending on MainWindow.
         m_radioModel->setTxAnalyzer(m_txAnalyzer);
@@ -6091,6 +6230,12 @@ void MainWindow::buildUI()
             showToast(reason, ToastSeverity::Warning, 3000);
         });
     }
+    // Desktop remote transmit (R-IOS-13): the Core refused a remote
+    // window's MOX, TUNE or two-tone press; shown as a local refusal is.
+    connect(m_radioModel, &RadioModel::remoteTransmitRefused,
+            this, [this](const QString& reason) {
+        showToast(reason, ToastSeverity::Warning, 3000);
+    });
 
     // ── Phase 3M-0 Task 17: safety controller → status-bar wiring ────────────
     //
@@ -7664,44 +7809,21 @@ void MainWindow::buildMenuBar()
     QMenu* dspMenu = menuBar()->addMenu(QStringLiteral("&DSP"));
 
     // ── NR submenu — full slot bank, mutual exclusion via QActionGroup ─────
-    // Mirrors VfoWidget's 7-button NR bank. Off/NR1/NR2/NR3/NR4/DFNR are
-    // always present; MNR is gated by HAVE_MNR (macOS only) and BNR by
-    // HAVE_BNR (NVIDIA build, currently never defined). Hidden actions
-    // remain in the group so the activeNrChanged sync handler can find
-    // them by index.
+    // Mirrors VfoWidget's NR bank. Every filter is always listed (R-R3-49,
+    // Sub-epic C-1: never hidden); DFNR and MNR are disabled, with the
+    // plain reason as the tooltip, while they cannot run (RadioModel::
+    // nrCannotRunReason: the Core's word, mirrored, in a remote window).
+    // BNR (NVIDIA) is not offered (operator, 2026-09-25); see nrMenuEntries.
     {
         QMenu* nrMenu = dspMenu->addMenu(QStringLiteral("&NR"));
+        nrMenu->setToolTipsVisible(true);
         m_nrGroup = new QActionGroup(this);
         m_nrGroup->setExclusive(true);
 
         using Slot = NereusSDR::NrSlot;
-        struct Entry { const char* label; Slot slot; bool hidden; };
-        const Entry nrSlots[] = {
-            { "&Off",   Slot::Off,  false },
-            { "NR&1",   Slot::NR1,  false },
-            { "NR&2",   Slot::NR2,  false },
-            { "NR&3",   Slot::NR3,  false },
-            { "NR&4",   Slot::NR4,  false },
-            { "&DFNR",  Slot::DFNR, false },
-            { "&NNR",   Slot::NNR, false },
-            { "&MNR",   Slot::MNR,
-#ifdef HAVE_MNR
-                false
-#else
-                true
-#endif
-            },
-            { "&BNR",   Slot::BNR,
-#ifdef HAVE_BNR
-                false
-#else
-                true
-#endif
-            },
-        };
-        for (const auto& nr : nrSlots) {
-            Slot slot = nr.slot;
-            QAction* a = nrMenu->addAction(QString::fromUtf8(nr.label),
+        for (const auto& nr : nrMenuEntries()) {
+            Slot slot = nr.second;
+            QAction* a = nrMenu->addAction(nr.first,
                 this, [this, slot]() {
                     SliceModel* slice = m_radioModel->activeSlice();
                     if (!slice) { return; }
@@ -7721,7 +7843,6 @@ void MainWindow::buildMenuBar()
                 });
             a->setData(static_cast<int>(slot));
             a->setCheckable(true);
-            if (nr.hidden) { a->setVisible(false); }
             m_nrGroup->addAction(a);
         }
         connect(nrMenu, &QMenu::aboutToShow, this, [this]() {
@@ -7730,7 +7851,11 @@ void MainWindow::buildMenuBar()
                 const NrSlot slot = static_cast<NrSlot>(action->data().toInt());
                 QSignalBlocker blocker(action);
                 action->setChecked(slice && slice->activeNr() == slot);
-                action->setEnabled(slice && (slot != NrSlot::NNR || slice->nnrAvailable()));
+                const QString cannot = m_radioModel->nrCannotRunReason(slot);
+                action->setEnabled(slice && cannot.isEmpty()
+                                   && (slot != NrSlot::NNR || slice->nnrAvailable()));
+                action->setToolTip(cannot.isEmpty() ? action->text().remove(QLatin1Char('&'))
+                                                    : cannot);
             }
         });
     }
@@ -11382,6 +11507,10 @@ SetupDialog* MainWindow::createSetupDialog()
                                                  transmitSettingsReason(version), version);
         }
     }
+    // Fix wave 2 (M8): Enable VOX needs this computer's microphone line.
+    if (m_remoteMedia != nullptr && !m_remoteMedia->micLineOpen()) {
+        dialog->setVoxPermitted(false, TxRefusals::micNotConnected().text);
+    }
     dialog->setStationSettingsAvailable(stationSettingsAvailable(), stationSettingsReason());
     seedReceiverAudioNote(dialog, [this] { return receiverAudioNoteFor(m_remoteMedia); });
     dialog->setAttribute(Qt::WA_DeleteOnClose);
@@ -11454,9 +11583,23 @@ void MainWindow::seedReceiverAudioNote(SetupDialog* dialog, const ReceiverAudioN
 
 bool MainWindow::transmitControlsPermitted() const
 {
+    // Desktop remote transmit (R-IOS-13): a remote window's controls work
+    // while the Core takes its keys (remoteTxVersion) and permits it now.
     return m_radioModel && (m_radioModel->ownsLocalDsp()
         || (m_stationClient && m_stationClient->isHandshakeComplete()
+            && m_stationClient->remoteTransmitAvailable()
             && m_stationClient->capabilities().txPermitted));
+}
+
+QString MainWindow::remoteTransmitReason() const
+{
+    // The Core's own sentence (link section 18.3) when it takes this
+    // window's keys and gave one; otherwise today's words.
+    if (m_stationClient && m_stationClient->remoteTransmitAvailable()
+        && !m_stationClient->capabilities().txRefusalReason.isEmpty()) {
+        return m_stationClient->capabilities().txRefusalReason;
+    }
+    return tr("Remote transmit controls are not available from this Core yet.");
 }
 
 bool MainWindow::rxBypassPermitted() const
@@ -11511,7 +11654,25 @@ QString MainWindow::pureSignalArmingReason() const
     if (m_stationClient && m_stationClient->pureSignalArmingOffered()) {
         return transmitSettingsReason(7);
     }
-    return tr("Remote transmit controls are not available from this Core yet.");
+    return remoteTransmitReason();
+}
+
+void MainWindow::refreshTciRemoteTransmit()
+{
+#ifdef HAVE_WEBSOCKETS
+    if (!m_tciServer || !m_stationClient || m_radioModel == nullptr
+        || m_radioModel->ownsLocalDsp()) {
+        return;
+    }
+    const bool wanted = m_stationClient->remoteTransmitAvailable() && !m_shuttingDown;
+    if (wanted == m_tciRemoteTransmitInstalled) {
+        return;
+    }
+    m_tciRemoteTransmitInstalled = wanted;
+    m_tciServer->setRemoteTransmit(
+        wanted ? remoteTransmitForwarder(m_stationClient->remoteTransmit(), m_remoteMedia)
+               : TciServer::RemoteTransmit{});
+#endif
 }
 
 void MainWindow::applyRemoteRoleGating()
@@ -11525,7 +11686,9 @@ void MainWindow::applyRemoteRoleGating()
     const bool active = m_stationClient != nullptr
         && m_stationClient->isConnectionActive();
     const bool transmitPermitted = transmitControlsPermitted();
-    const QString transmitReason = tr("Remote transmit controls are not available from this Core yet.");
+    const QString transmitReason = remoteTransmitReason();
+    // Desktop remote transmit (R-R3-42): TCI programs key through the Core.
+    refreshTciRemoteTransmit();
     // R-R3-49 (parity Task 1): the transmit settings that key nothing, live
     // while the Core takes them and its radio is off the air.
     const bool settingsPermitted = transmitSettingsPermitted();
@@ -11543,8 +11706,14 @@ void MainWindow::applyRemoteRoleGating()
     const bool processingPermitted = transmitSettingsPermitted(4);
     const QString processingReason = transmitSettingsReason(4);
     TxEqDialog::setSettingsPermitted(processingPermitted, processingReason);
+    // Fix wave 2 (M8): VOX listens to this computer's microphone line to
+    // the Core; without one it is shown disabled with the reason (the
+    // Core's refusal of arming it stays the backstop).
+    const bool voxLine = m_remoteMedia == nullptr || m_remoteMedia->micLineOpen();
+    const QString voxReason = voxLine ? QString() : TxRefusals::micNotConnected().text;
     if (m_txApplet) {
         m_txApplet->setTransmitPermitted(transmitPermitted, transmitReason);
+        m_txApplet->setVoxPermitted(voxLine, voxReason);
         m_txApplet->setTransmitSettingsPermitted(settingsPermitted, settingsReason);
         m_txApplet->setTransmitChainSettingsPermitted(chainPermitted, chainReason);
         m_txApplet->setTxProfilePermitted(profilePermitted, profileReason);
@@ -11595,6 +11764,7 @@ void MainWindow::applyRemoteRoleGating()
     const bool stationAvailable = stationSettingsAvailable();
     for (SetupDialog* dialog : findChildren<SetupDialog*>()) {
         dialog->setTransmitPermitted(transmitPermitted, transmitReason);
+        dialog->setVoxPermitted(voxLine, voxReason);
         dialog->setTransmitSettingsPermitted(settingsPermitted, settingsReason);
         dialog->setTransmitSettingsPermitted(chainPermitted, chainReason, 2);
         dialog->setTransmitSettingsPermitted(profilePermitted, profileReason, 3);

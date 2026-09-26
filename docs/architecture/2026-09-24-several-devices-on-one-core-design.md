@@ -995,7 +995,7 @@ The "Saved as" column gives each setting's keys and their scope in the link's se
 | Noise blanker, shared receiver | a slice's `nbMode` and NB1/NB2 knobs | the `Slice` and `Nb` keys, Core scope (lines 1224, 1240) | that receiver's slices (`RadioModel.cpp:6737-6760`) |
 | Notches | `notch.*`, `notches.globalEnabled`, `notches.autoIncrease` | `NotchCount`, `Notch<N>...`, Core-owned (line 1323) | every slice whose passband holds the notch (one list for every slice: `RadioModel.cpp:5120-5135`; applied per channel, `RxChannel.cpp:1613`) |
 | Receive DSP options | `settings.write` (`RadioModel.cpp:18278-18290`) | `DspOptions...Rx`, Core scope (line 1239) | every receiver |
-| Transmit antenna | a slice's `txAntenna`; `alexAntennas` (`txAntennas`, `blockTxAnt2`, `blockTxAnt3`, `rxOutOnTx`, `ext1OutOnTx`, `ext2OutOnTx`); `setAlexTxAntenna` (these joined at the checkpoint carry of 2026-09-25) | `hardware/<mac>/alex/antenna/...`, Core-owned (line 1325) | the transmitter (7.5) |
+| Transmit antenna | a slice's `txAntenna`; `alexAntennas` (`txAntennas`, `blockTxAnt2`, `blockTxAnt3`, `rxOutOnTx`, `ext1OutOnTx`, `ext2OutOnTx`); `setAlexTxAntenna` (these joined at the checkpoint carry of 2026-09-25); the Alex tab's transmit high-pass switches, `hardware/<mac>/alex/master/{hpfBypassOnTx,hpfBypassOnPs,disable6mLnaOnTx}` (joined at the trunk merge of remote transmit, 2026-09-26) | `hardware/<mac>/alex/antenna/...`, Core-owned (line 1325) | the transmitter (7.5) |
 | The amplifier | `amp.operate`, `amp.standby` (Task 42); `configurePgxl` and its settings verbs; `setPgxlOperate`, `setPgxlAddress`, `setRfKitOperate`, `setRfKitTciMode`, `setRfKitAddress` (joined at the checkpoint carry of 2026-09-25; the scans only listen and join no list) | `PGXL_...`, Core scope (line 1226) | the transmitter |
 | The tuner, the RF-Kit amplifier's antenna | `tuner.operate`, `tuner.bypass`, `tuner.antenna`, `rfkit.antenna` (Task 42); `configureTgxl`; `moveTgxlRelay`, `setTgxlAddress`, `setRfKitAntenna` (joined at the checkpoint carry of 2026-09-25) | `TGXL_...`, `RfKit_...`, Core scope (lines 1227-1228) | ADC0's receivers on a 2-ADC board, every receiver on a 1-ADC board, and the transmitter |
 | 4O3A on or off | `setFourO3AEnabled` (added by the fix wave after the group review of Tasks 71 to 76) | `hardware/<mac>/peripherals/FourO3A_Enabled`, saved for its radio (`RadioModel::peripheralValue`) | what the tuner touches: ADC0's receivers on a 2-ADC board, every receiver on a 1-ADC board, and the transmitter, since it connects or drops the amplifier and the tuner together |
@@ -1059,6 +1059,18 @@ device's "Unkey and take over" (D51) end a transmission; the other device can us
 take over, then make the change. A change the holder makes itself is not refused by this rule.
 These refusals are built with `TransmitHolder` (Task 34), so they exist from the moment
 transmit does (13.3).
+
+The transmit group's second fix round (2026-09-26) settles who counts and what is exempt:
+every holder on the air counts, the station device's own keys included (the radio's PTT, a
+hosting desktop's MOX or TUNE, a Tuner Genius hardware TUNE); the exemptions are by change,
+not by holder. The saved accessory addresses (`setTgxlAddress`, `setPgxlAddress`,
+`setRfKitAddress`) and the LAN scans go ahead on the air (the operator's parity ruling), the
+addresses still asked of a device that holds transmit (table 7.1, ruling 7.8); the
+amplifier and tuner switches wait. The transmit antennas (a slice's `txAntenna`,
+`alexAntennas`, `setAlexTxAntenna`) change on the air only for the holder, as in Thetis for
+the operator who is transmitting; any other device's change waits (the controller's
+ruling). The station device has no session, so it is never asked or told: a change that
+would disturb only it applies at once, while ruling 7.4 still holds the changes it names.
 The operator confirmed this narrowing of D50 and D53 on 2026-09-24 (D60, D64).
 
 ### 7.3 The confirm step

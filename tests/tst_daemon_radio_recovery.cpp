@@ -42,6 +42,10 @@ NereusSDR::DaemonConfig testCoreConfig()
 {
     NereusSDR::DaemonConfig config = NereusSDR::DaemonConfig::defaults();
     config.remotePort = 0;
+    // iPhone app plan Task 34: remote_transmit deny, so these recoveries
+    // still prove the Core's receive-only policy survives them (allow, the
+    // default, installs no policy to keep).
+    config.remoteTransmitAllowed = false;
     return config;
 }
 } // namespace

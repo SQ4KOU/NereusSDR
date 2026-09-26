@@ -9,6 +9,12 @@
 // load 20-30; a failed case prints the load average. J.J. Boyd (KG4VCF),
 // AI-assisted via Anthropic Claude Code.
 //
+// 2026-09-25: iPhone app plan Task 36 (R-IOS-13): the microphone line (a
+// second audio m-line, mid "mic", receive-only at the offerer) is offered
+// only when asked, keeps today's offer otherwise, and carries the
+// answerer's microphone to the offerer alone. J.J. Boyd (KG4VCF),
+// AI-assisted via Anthropic Claude Code.
+//
 // =================================================================
 
 #include "RealtimeTestLoad.h"
@@ -143,6 +149,96 @@ bool waitForReceivedRtpBytes(const LibDataChannelMediaTransport& transport, quin
     return false;
 }
 
+// Task 36: the lines of the media section whose a=mid is `mid`, from its
+// m= line to the next m= line.
+QStringList mediaSectionLines(const QString& sdp, const QString& mid)
+{
+    QStringList section;
+    QStringList current;
+    const QStringList lines = sdp.split(QRegularExpression(QStringLiteral("\\r?\\n")));
+    const auto flush = [&section, &current, &mid] {
+        if (current.contains(QStringLiteral("a=mid:%1").arg(mid))) {
+            section = current;
+        }
+        current.clear();
+    };
+    for (const QString& line : lines) {
+        if (line.startsWith(QLatin1String("m="))) {
+            flush();
+        }
+        if (!line.isEmpty()) {
+            current << line;
+        }
+    }
+    flush();
+    return section;
+}
+
+// Task 36: a description without the microphone line's section, and with the
+// groups it joins taken out again: what a peer that never asked for the
+// line would have written.
+QString withoutMicSection(const QString& sdp)
+{
+    const QStringList mic = mediaSectionLines(sdp, QStringLiteral("mic"));
+    // The section is contiguous: take it out by position.
+    QStringList all = sdp.split(QStringLiteral("\r\n"));
+    if (!mic.isEmpty()) {
+        for (int start = 0; start + mic.size() <= all.size(); ++start) {
+            if (all.mid(start, mic.size()) == mic) {
+                all.remove(start, mic.size());
+                break;
+            }
+        }
+    }
+    for (QString& line : all) {
+        // The bundle and lip-sync groups name the line too.
+        if (line.startsWith(QLatin1String("a=group:"))) {
+            line.replace(QStringLiteral(" mic"), QString());
+        }
+    }
+    return all.join(QStringLiteral("\r\n"));
+}
+
+// Today's whole Core offer, per-run values aside (golden), for the main SSRC.
+QStringList todaysOfferGolden(quint32 mainSsrc)
+{
+    return {
+        QStringLiteral("v=0"),
+        QStringLiteral("o=rtc <per-run> 0 IN IP4 127.0.0.1"),
+        QStringLiteral("s=-"),
+        QStringLiteral("t=0 0"),
+        QStringLiteral("a=group:BUNDLE audio 0"),
+        QStringLiteral("a=group:LS audio"),
+        QStringLiteral("a=msid-semantic:WMS *"),
+        QStringLiteral("a=ice-options:ice2,trickle"),
+        QStringLiteral("a=fingerprint:sha-256 <per-run>"),
+        QStringLiteral("m=audio 9 UDP/TLS/RTP/SAVPF 111"),
+        QStringLiteral("c=IN IP4 0.0.0.0"),
+        QStringLiteral("a=mid:audio"),
+        QStringLiteral("a=sendonly"),
+        QStringLiteral("a=ssrc:%1 cname:nereus-mixed-stereo").arg(mainSsrc),
+        QStringLiteral("a=rtcp-mux"),
+        QStringLiteral("a=rtpmap:111 opus/48000/2"),
+        QStringLiteral("a=fmtp:111 minptime=10;maxaveragebitrate=24000;stereo=1;sprop-stereo=1"),
+        QStringLiteral("a=setup:actpass"),
+        QStringLiteral("a=ice-ufrag:<per-run>"),
+        QStringLiteral("a=ice-pwd:<per-run>"),
+        QStringLiteral("m=application 9 UDP/DTLS/SCTP webrtc-datachannel"),
+        QStringLiteral("c=IN IP4 0.0.0.0"),
+        QStringLiteral("a=mid:0"),
+        QStringLiteral("a=sendrecv"),
+        QStringLiteral("a=sctp-port:5000"),
+        QStringLiteral("a=max-message-size:65536"),
+        QStringLiteral("a=setup:actpass"),
+        QStringLiteral("a=ice-ufrag:<per-run>"),
+        QStringLiteral("a=ice-pwd:<per-run>"),
+        QString(),
+    };
+}
+
+// Task 36: the microphone line's SSRC in these tests.
+constexpr quint32 kTestMicSsrc = 0x4e523366U;
+
 // Set only in the child process that checks when SCTP settings are applied.
 constexpr const char* kFirstPeerChildVariable = "NEREUS_TST_MEDIA_TRANSPORT_FIRST_PEER";
 
@@ -182,6 +278,10 @@ private slots:
     void receiveQueueHoldsEveryDeclaredStream();
     void receiverStreamPreconditionsRefuseSilently();
     void headphonesMixIsDeclaredLastAndCrossesBesideTheOthers();
+    void micLineIsOfferedOnlyWhenAsked();
+    void micLineCarriesTheAnswerersMicrophoneAlone();
+    void micLineCarriesLosslessWhenOffered();
+    void micSsrcPreconditionsRefuseSilently();
 
 private:
     static void wireExchange(LibDataChannelMediaTransport& offerer,
@@ -1470,6 +1570,223 @@ void TestMediaTransport::headphonesMixIsDeclaredLastAndCrossesBesideTheOthers()
     QCOMPARE(answerErrors.count(), 0);
     offerer.stop();
     answerer.stop();
+}
+
+// Task 36: older peers get exactly today's offer (golden). A peer that asked
+// for the microphone line gets one more audio section, mid "mic",
+// receive-only at the Core, carrying Opus with the line's parameters and no
+// SSRC of the Core's; everything else in the offer is today's. The answer
+// takes the line send-only and declares the microphone's SSRC on it.
+void TestMediaTransport::micLineIsOfferedOnlyWhenAsked()
+{
+    const QStringList golden = todaysOfferGolden(kTestAudioSsrc);
+    QStringList answers[2];
+    for (const bool mic : {false, true}) {
+        LibDataChannelMediaTransport offerer;
+        LibDataChannelMediaTransport answerer;
+        QString offer;
+        QString answer;
+        wireExchange(offerer, answerer, &offer, &answer);
+        QSignalSpy offerReady(&offerer, &IMediaTransport::ready);
+        QSignalSpy answerReady(&answerer, &IMediaTransport::ready);
+        QSignalSpy answerErrors(&answerer, &IMediaTransport::errorOccurred);
+        QSignalSpy offerErrors(&offerer, &IMediaTransport::errorOccurred);
+        IMediaTransport::StartOptions answerOptions{IMediaTransport::Role::Answerer,
+                                                    kTestAudioSsrc};
+        IMediaTransport::StartOptions offerOptions{IMediaTransport::Role::Offerer,
+                                                   kTestAudioSsrc};
+        if (mic) {
+            answerOptions.micAudioSsrc = kTestMicSsrc;
+            offerOptions.micAudioSsrc = kTestMicSsrc;
+        }
+        QVERIFY(answerer.start(answerOptions));
+        QVERIFY(offerer.start(offerOptions));
+        QTRY_COMPARE_WITH_TIMEOUT(offerReady.count(), 1, 10000);
+        QTRY_COMPARE_WITH_TIMEOUT(answerReady.count(), 1, 10000);
+        QCOMPARE(answerErrors.count(), 0);
+        QCOMPARE(offerErrors.count(), 0);
+
+        if (!mic) {
+            QCOMPARE(stableDescriptionLines(offer), golden);
+            QVERIFY(mediaSectionLines(offer, QStringLiteral("mic")).isEmpty());
+            QVERIFY(mediaSectionLines(answer, QStringLiteral("mic")).isEmpty());
+        } else {
+            QCOMPARE(offer.count(QStringLiteral("m=audio")), 2);
+            const QStringList micOffer = mediaSectionLines(offer, QStringLiteral("mic"));
+            QVERIFY2(!micOffer.isEmpty(), qPrintable(offer));
+            QCOMPARE(micOffer.constFirst(), QStringLiteral("m=audio 9 UDP/TLS/RTP/SAVPF 111"));
+            QVERIFY(micOffer.contains(QStringLiteral("a=recvonly")));
+            QVERIFY(micOffer.contains(QStringLiteral("a=rtpmap:111 opus/48000/2")));
+            QVERIFY(micOffer.contains(QStringLiteral(
+                "a=fmtp:111 minptime=10;useinbandfec=1;stereo=0;maxaveragebitrate=24000")));
+            for (const QString& line : micOffer) {
+                QVERIFY2(!line.startsWith(QLatin1String("a=ssrc:")), qPrintable(line));
+                QVERIFY2(!line.contains(QLatin1String("L16")), qPrintable(line));
+            }
+            // Everything else is today's offer.
+            QCOMPARE(stableDescriptionLines(withoutMicSection(offer)), golden);
+
+            const QStringList micAnswer = mediaSectionLines(answer, QStringLiteral("mic"));
+            QVERIFY2(!micAnswer.isEmpty(), qPrintable(answer));
+            QVERIFY(micAnswer.contains(QStringLiteral("a=sendonly")));
+            QVERIFY(micAnswer.contains(
+                QStringLiteral("a=ssrc:%1 cname:nereus-microphone").arg(kTestMicSsrc)));
+        }
+        answers[mic ? 1 : 0] = stableDescriptionLines(withoutMicSection(answer));
+        offerer.stop();
+        answerer.stop();
+    }
+    // The answer's other sections do not change with the line.
+    QCOMPARE(answers[1], answers[0]);
+}
+
+// Task 36: the answerer's microphone crosses to the offerer on the
+// microphone line alone, and the Core's audio still crosses the other way on
+// the main line alone. Each side's send filter takes only its own line's
+// SSRC.
+void TestMediaTransport::micLineCarriesTheAnswerersMicrophoneAlone()
+{
+    LibDataChannelMediaTransport offerer;
+    LibDataChannelMediaTransport answerer;
+    QString offer;
+    QString answer;
+    wireExchange(offerer, answerer, &offer, &answer);
+    QSignalSpy offerReady(&offerer, &IMediaTransport::ready);
+    QSignalSpy answerReady(&answerer, &IMediaTransport::ready);
+    QSignalSpy offerErrors(&offerer, &IMediaTransport::errorOccurred);
+    QSignalSpy answerErrors(&answerer, &IMediaTransport::errorOccurred);
+    IMediaTransport::StartOptions answerOptions{IMediaTransport::Role::Answerer, kTestAudioSsrc};
+    answerOptions.micAudioSsrc = kTestMicSsrc;
+    IMediaTransport::StartOptions offerOptions{IMediaTransport::Role::Offerer, kTestAudioSsrc};
+    offerOptions.micAudioSsrc = kTestMicSsrc;
+    QVERIFY(answerer.start(answerOptions));
+    QVERIFY(offerer.start(offerOptions));
+    QTRY_COMPARE_WITH_TIMEOUT(offerReady.count(), 1, 10000);
+    QTRY_COMPARE_WITH_TIMEOUT(answerReady.count(), 1, 10000);
+
+    QList<QByteArray> offererMain;
+    QList<QByteArray> offererMic;
+    QList<QByteArray> answererMain;
+    QList<QByteArray> answererMic;
+    connect(&offerer, &IMediaTransport::rtpReceived, this,
+            [&offererMain](const QByteArray& packet) { offererMain.append(packet); });
+    connect(&offerer, &IMediaTransport::micRtpReceived, this,
+            [&offererMic](const QByteArray& packet) { offererMic.append(packet); });
+    connect(&answerer, &IMediaTransport::rtpReceived, this,
+            [&answererMain](const QByteArray& packet) { answererMain.append(packet); });
+    connect(&answerer, &IMediaTransport::micRtpReceived, this,
+            [&answererMic](const QByteArray& packet) { answererMic.append(packet); });
+
+    QList<QByteArray> micSent;
+    for (quint16 sequence = 1; sequence <= 20; ++sequence) {
+        micSent << rtpPacket(sequence, 40, kTestMicSsrc);
+    }
+    for (const QByteArray& packet : micSent) {
+        QVERIFY(answerer.sendMicRtp(packet));
+    }
+    const QList<QByteArray> mainSent{rtpPacket(100, 30, kTestAudioSsrc),
+                                     rtpPacket(101, 30, kTestAudioSsrc)};
+    for (const QByteArray& packet : mainSent) {
+        QVERIFY(offerer.sendRtp(packet));
+    }
+    // Each line's filter: the wrong SSRC, or the wrong side, is refused
+    // before the library.
+    QVERIFY(!answerer.sendMicRtp(rtpPacket(21, 40, kTestMicSsrc + 1)));
+    QVERIFY(!answerer.sendMicRtp(rtpPacket(22, 40, kTestAudioSsrc)));
+    QVERIFY(!answerer.sendRtp(rtpPacket(23, 40, kTestMicSsrc)));
+    QVERIFY(!offerer.sendMicRtp(rtpPacket(24, 40, kTestMicSsrc)));
+    QVERIFY(!offerer.sendRtp(rtpPacket(25, 40, kTestMicSsrc)));
+
+    QTRY_COMPARE_WITH_TIMEOUT(offererMic.size(), micSent.size(), 5000);
+    QTRY_COMPARE_WITH_TIMEOUT(answererMain.size(), mainSent.size(), 5000);
+    QTest::qWait(50);
+    QCOMPARE(offererMic, micSent);
+    QCOMPARE(answererMain, mainSent);
+    QVERIFY(offererMain.isEmpty());
+    QVERIFY(answererMic.isEmpty());
+    QCOMPARE(offerErrors.count(), 0);
+    QCOMPARE(answerErrors.count(), 0);
+    offerer.stop();
+    answerer.stop();
+}
+
+// Task 36: with the lossless profile offered (as for the main line), the
+// microphone line carries the L16 rtpmap too, both ends agree it, and an L16
+// microphone packet crosses intact. Without it the line is Opus only.
+void TestMediaTransport::micLineCarriesLosslessWhenOffered()
+{
+    for (const bool lossless : {false, true}) {
+        LibDataChannelMediaTransport offerer;
+        LibDataChannelMediaTransport answerer;
+        QString offer;
+        QString answer;
+        wireExchange(offerer, answerer, &offer, &answer);
+        QSignalSpy offerReady(&offerer, &IMediaTransport::ready);
+        QSignalSpy answerReady(&answerer, &IMediaTransport::ready);
+        IMediaTransport::StartOptions answerOptions{IMediaTransport::Role::Answerer,
+                                                    kTestAudioSsrc};
+        answerOptions.micAudioSsrc = kTestMicSsrc;
+        IMediaTransport::StartOptions offerOptions{IMediaTransport::Role::Offerer,
+                                                   kTestAudioSsrc};
+        offerOptions.micAudioSsrc = kTestMicSsrc;
+        offerOptions.offerLosslessAudio = lossless;
+        QVERIFY(answerer.start(answerOptions));
+        QVERIFY(offerer.start(offerOptions));
+        QTRY_COMPARE_WITH_TIMEOUT(offerReady.count(), 1, 10000);
+        QTRY_COMPARE_WITH_TIMEOUT(answerReady.count(), 1, 10000);
+
+        const QStringList micOffer = mediaSectionLines(offer, QStringLiteral("mic"));
+        QVERIFY2(!micOffer.isEmpty(), qPrintable(offer));
+        QCOMPARE(micOffer.contains(QStringLiteral("a=rtpmap:96 L16/48000/2")), lossless);
+        QCOMPARE(micOffer.constFirst(),
+                 lossless ? QStringLiteral("m=audio 9 UDP/TLS/RTP/SAVPF 111 96")
+                          : QStringLiteral("m=audio 9 UDP/TLS/RTP/SAVPF 111"));
+        QCOMPARE(offerer.micLosslessNegotiated(), lossless);
+        QCOMPARE(answerer.micLosslessNegotiated(), lossless);
+        QCOMPARE(offerer.losslessAudioNegotiated(), lossless);
+
+        if (lossless) {
+            QList<QByteArray> received;
+            connect(&offerer, &IMediaTransport::micRtpReceived, this,
+                    [&received](const QByteArray& packet) { received.append(packet); });
+            const QByteArray l16 = PcmAudioPacketiser{}.encode(
+                QVector<float>(PcmAudioCodecConfig::kPacketFrames * 2, 0.25f), 7, 1344,
+                kTestMicSsrc).packet;
+            QVERIFY(answerer.sendMicRtp(l16));
+            QTRY_COMPARE_WITH_TIMEOUT(received.size(), 1, 5000);
+            QCOMPARE(received.constFirst(), l16);
+        }
+        offerer.stop();
+        answerer.stop();
+        QVERIFY(!offerer.micLosslessNegotiated());
+        QVERIFY(!answerer.micLosslessNegotiated());
+    }
+}
+
+// Task 36: a microphone SSRC equal to the main, a receiver or the headphones
+// SSRC is a precondition refusal: false, no error, not started.
+void TestMediaTransport::micSsrcPreconditionsRefuseSilently()
+{
+    constexpr quint32 kHeadphones = 0x4e523355U;
+    for (const quint32 bad : {kTestAudioSsrc, kTestReceiverSsrcs.at(1), kHeadphones}) {
+        for (const IMediaTransport::Role role :
+             {IMediaTransport::Role::Offerer, IMediaTransport::Role::Answerer}) {
+            LibDataChannelMediaTransport transport;
+            QSignalSpy errors(&transport, &IMediaTransport::errorOccurred);
+            IMediaTransport::StartOptions options{role, kTestAudioSsrc};
+            options.receiverAudioSsrcs = kTestReceiverSsrcs;
+            options.headphonesAudioSsrc = kHeadphones;
+            options.micAudioSsrc = bad;
+            QVERIFY(!transport.start(options));
+            QCOMPARE(errors.size(), 0);
+            QVERIFY(!transport.telemetry().has_value());
+        }
+    }
+    LibDataChannelMediaTransport transport;
+    IMediaTransport::StartOptions options{IMediaTransport::Role::Offerer, kTestAudioSsrc};
+    options.micAudioSsrc = kTestMicSsrc;
+    QVERIFY(transport.start(options));
+    transport.stop();
 }
 
 QTEST_GUILESS_MAIN(TestMediaTransport)

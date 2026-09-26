@@ -25,6 +25,23 @@
 //   2026-09-24 : Task 8 by J.J. Boyd (KG4VCF): test-only friendship for
 //                 the stopping-channel feed test. AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-24 : R-R3-39 by J.J. Boyd (KG4VCF): the receive lane. RX
+//                 channel create, destroy, rebuild and rate change run as
+//                 lane barriers that quiesce the DSP worker; the PS
+//                 feedback channel's WDSP calls run there too; the RX
+//                 channel map is lock-guarded. NereusSDR-original.
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-09-25 : R-R3-39 (station Task 32) by J.J. Boyd (KG4VCF): the
+//                 transmit lane. TX channel create, destroy and rebuild
+//                 change the map at once and run their WDSP work as one
+//                 transmit-lane barrier each; the channel's wrapper keeps
+//                 the worker out of a channel that is closing; shutdown
+//                 drains the transmit lane before the receive teardown.
+//                 NereusSDR-original. AI-assisted via Anthropic Claude
+//                 Code.
+//   2026-09-25 : Task 33 by J.J. Boyd (KG4VCF): test-only friendship for
+//                 the stop-transmit test. AI-assisted via Anthropic Claude
+//                 Code.
 //   2026-09-25 : Test-only friendship for the confirm-step test (several-
 //                 devices fix wave 2). J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
@@ -105,8 +122,11 @@ warren@wpratt.com
 
 #include <array>
 #include <atomic>
+#include <functional>
 #include <map>
 #include <memory>
+#include <mutex>
+#include <shared_mutex>
 #include <vector>
 
 #ifdef NEREUS_BUILD_TESTS
@@ -155,6 +175,12 @@ class TestNnrRadioPersistence;
 // Task 8 (receiver and transmit gaps plan): the stopping-channel feed test
 // opens real RX channels and times their stops while I/Q keeps flowing.
 class TestRxChannelStopFeed;
+// R-R3-39: the receive-lane test opens real RX channels on a lane.
+class TestDspControlReceive;
+// R-R3-39: the transmit-lane test opens real TX and RX channels on lanes.
+class TestDspControlTransmit;
+// Task 33: the stop-transmit test opens real TX and RX channels on lanes.
+class TestStopTransmitNow;
 // Several-devices fix wave 2: the confirm-step test drives a Protocol 1
 // rate change, which needs an initialized engine with RX channels.
 class TstConfirmStep;
@@ -162,6 +188,7 @@ class TstConfirmStep;
 
 namespace NereusSDR {
 
+class DspControlThread;
 class RxChannel;
 class TxChannel;
 class PsFeedbackChannel;
@@ -330,7 +357,61 @@ public:
     void destroyRxChannel(int channelId);
 
     // Look up an existing RX channel by WDSP channel ID.
+    // Any thread (the map is lock-guarded, R-R3-39).
     RxChannel* rxChannel(int channelId) const;
+
+    // --- R-R3-39: the receive lane -------------------------------------
+    //
+    // With a lane set, every RX channel's WDSP calls run on it (see
+    // RxChannel::setControlLane), and createRxChannel, destroyRxChannel,
+    // rebuildRxChannel and setRxChannelRate(Async) change the channel map
+    // at once and run their WDSP work as one lane barrier each. The DSP
+    // worker is quiesced (setRxWorkerQuiesce) while a barrier opens a
+    // channel for processing, closes one, or changes its input geometry.
+    // A newly created channel outputs silence until its barrier has opened
+    // it. Null (the default) runs everything at once on the caller's
+    // thread, as before. Set it before any channel exists, or with the lane
+    // idle; the owner stops the lane before it is destroyed.
+    void setReceiveLane(DspControlThread* lane);
+    DspControlThread* receiveLane() const { return m_rxLane; }
+
+    // How a lane barrier quiesces the DSP worker: the function parks the
+    // worker (called on the lane) and returns the function that releases
+    // it, or an empty function when there is no worker to park.
+    using RxWorkerQuiesce = std::function<std::function<void()>()>;
+    void setRxWorkerQuiesce(RxWorkerQuiesce quiesce);
+
+    // Lane only: the WDSP half of a rate change whose carry
+    // (RxChannel::setSampleRateCarry) is already in place, for a caller
+    // that runs its own sequence on the lane (RadioModel's live rate
+    // change). No quiesce. False when the channel is gone.
+    bool applyRxChannelRateOnLane(int channelId, int rateHz, int bufferSize);
+
+    // Waits until every job already queued on the receive lane has run
+    // (the lane is stopped and started again). For teardown, on the lane
+    // owner's thread; blocks for as long as those jobs take. No-op without
+    // a lane.
+    void drainReceiveLane();
+
+    // --- R-R3-39: the transmit lane ------------------------------------
+    //
+    // With a lane set, every TX channel's WDSP calls run on it (see
+    // TxChannel::setControlLane): createTxChannel, destroyTxChannel and
+    // rebuildTxChannel change the map at once and run their WDSP work
+    // (OpenChannel, the seeds, DEXP, CloseChannel) as one barrier each. A
+    // new channel's wrapper keeps the TX worker out until its barrier has
+    // opened it, and a closing barrier waits for the worker to leave its
+    // block. Null (the default) runs everything at once on the caller's
+    // thread, as before. Set it before any TX channel exists; the owner
+    // stops the lane before it is destroyed.
+    void setTransmitLane(DspControlThread* lane);
+    DspControlThread* transmitLane() const { return m_txLane; }
+
+    // Waits until every job already queued on the transmit lane has run
+    // (the lane is stopped and started again), then deletes the retired TX
+    // wrappers. For teardown, on the lane owner's thread. No-op without a
+    // lane.
+    void drainTransmitLane();
 
     // --- External Diversity management ---------------------------------
     //
@@ -399,6 +480,16 @@ public:
     // the radio data flow before calling — see RadioModel::setSampleRateLive
     // for the full Thetis-faithful sequence ported from setup.cs:7003-7159.
     bool setRxChannelRate(int channelId, int newRateHz);
+
+    // R-R3-39: the same change as a lane barrier. The wrapper's rate and
+    // input size change at once; the lane quiesces the DSP worker, runs
+    // the NB rate propagation, SetInputSamplerate and SetInputBuffsize, and
+    // then `done(ok)` runs on `context`'s thread (never once `context` is
+    // gone; a null context means no answer). ok is false when the channel
+    // does not exist. Without a lane this runs at once and `done` is called
+    // before it returns.
+    void setRxChannelRateAsync(int channelId, int rateHz, QObject* context,
+                               std::function<void(bool)> done);
 
     // --- Per-board ChannelMaster-layer WDSP calls (Phase B4'/B5') ---
     //
@@ -593,6 +684,12 @@ public:
     //
     // Thread safety: call on main thread only. The TX worker thread must not
     // be running (setRunning(false) + thread stop before calling this).
+    //
+    // R-R3-39: with a transmit lane the old wrapper is retired at once, so
+    // every setter still queued for it (or posted through a stale pointer
+    // afterwards) is skipped, the new wrapper takes the captured state, and
+    // the close and reopen run as one barrier; the return value is then the
+    // time taken to queue it.
     qint64 rebuildTxChannel(int channelId, const ChannelConfig& cfg);
 
     // --- Metering ---
@@ -702,6 +799,9 @@ public slots:
 
 signals:
     void initializedChanged(bool initialized);
+    // R-R3-39: a new RxChannel exists (created or rebuilt), so an owner can
+    // connect its lane signals before its first lane job runs.
+    void rxChannelCreated(int channelId);
     // Emitted during wisdom generation. percent=0-100, status=what's being planned.
     void wisdomProgress(int percent, const QString& status);
 
@@ -743,8 +843,50 @@ private:
     // wisdomWasRebuilt: true when WDSPwisdom generated a new file this session.
     void finishInitialization(bool wisdomWasRebuilt);
 
-    // RX channels keyed by WDSP channel ID.
+    // RX channels keyed by WDSP channel ID. Guarded by m_rxChannelsMutex
+    // (R-R3-39): the DSP worker looks channels up while the owner changes
+    // the map; the lock is held only for a lookup or an insert or erase,
+    // never across a WDSP call.
     std::map<int, std::unique_ptr<RxChannel>> m_rxChannels;
+    mutable std::shared_mutex m_rxChannelsMutex;
+
+    // R-R3-39: the receive lane and how its barriers quiesce the worker.
+    DspControlThread* m_rxLane{nullptr};
+    std::mutex m_rxQuiesceMutex;
+    RxWorkerQuiesce m_rxQuiesce;
+    // Retired wrappers waiting to be deleted on this object's thread (the
+    // lane closes them; reapRetiredRxChannels deletes them).
+    std::mutex m_retiredMutex;
+    std::vector<std::shared_ptr<RxChannel>> m_retiredRxChannels;
+
+    // Parks the DSP worker through m_rxQuiesce; returns the release (empty
+    // when nothing was parked). Lane only.
+    std::function<void()> quiesceRxWorker();
+    // The rate change's WDSP half on the lane (NB, SetInputSamplerate,
+    // SetInputBuffsize), for a wrapper whose carry is in place.
+    void applyRateOnLane(RxChannel* channel, int rateHz, int bufferSize);
+    // Queues `channel` for deletion here and schedules the reaping.
+    void retireRxChannel(std::shared_ptr<RxChannel> channel);
+    void reapRetiredRxChannels();
+    // The OpenChannel call and the default seeds createRxChannel and
+    // rebuildRxChannel make.
+    void openRxChannelWdsp(int channelId, int inputBufferSize, int dspBufferSize,
+                           int inputSampleRate, int dspSampleRate, int outputSampleRate);
+
+    // R-R3-39: the transmit lane and the TX wrappers it has retired (deleted
+    // on this object's thread by reapRetiredTxChannels).
+    DspControlThread* m_txLane{nullptr};
+    std::mutex m_retiredTxMutex;
+    std::vector<std::shared_ptr<TxChannel>> m_retiredTxChannels;
+    void retireTxChannel(std::shared_ptr<TxChannel> channel);
+    void reapRetiredTxChannels();
+    // The WDSP half of createTxChannel before its wrapper exists: OpenChannel,
+    // the default seeds and create_dexp on `dexpBuf`.
+    void openTxChannelWdsp(int channelId, int inputBufferSize, int dspBufferSize,
+                           int inputSampleRate, int dspSampleRate, int outputSampleRate,
+                           double* dexpBuf);
+    // The seeds createTxChannel and rebuildTxChannel make after OpenChannel.
+    void seedTxChannelWdsp(int channelId);
 
     struct ExternalDiversitySlot {
         std::atomic_bool created{false};
@@ -897,6 +1039,12 @@ private:
     friend class ::TestNnrRadioPersistence;
     // Task 8: same friendship for the stopping-channel feed test.
     friend class ::TestRxChannelStopFeed;
+    // R-R3-39: same friendship for the receive-lane test.
+    friend class ::TestDspControlReceive;
+    // R-R3-39: same friendship for the transmit-lane test.
+    friend class ::TestDspControlTransmit;
+    // Task 33: same friendship for the stop-transmit test.
+    friend class ::TestStopTransmitNow;
     // Several-devices fix wave 2: same friendship for the confirm-step
     // test's Protocol 1 rate change (the synchronous init would open the
     // PureSignal feedback channel too, which the test does not need).

@@ -139,6 +139,11 @@
 //                 the only valid anti-VOX cancellation reference.  See
 //                 commit message for full rationale.  J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-25 : Task 33 (R-IOS-03): txDrainRequested, onTxDrained,
+//                 setAwaitsTxDrain and kTxDrainTimeoutMs (the TX→RX walk
+//                 drains before the hardware flip, as Thetis does);
+//                 latchStopAllTx and clearManualMox for StopAllTx.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-24 - Receiver and transmit gaps plan, Task 7: keying sources
 //                 follow Thetis PollPTT, chkMOX_Click and
 //                 chkMOX_CheckedChanged2 (console.cs [v2.10.3.15]). The
@@ -172,6 +177,19 @@
 //                 PA trip (N3). isTciPttHeld() for TciServer's TX audio
 //                 lock. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-25 - iPhone app plan Task 34 (R-IOS-02, R-IOS-13, rulings
+//                 8.8 and 8.13): the keying gate (setKeyingGate), asked on
+//                 every press edge and every remote key before the PTT
+//                 mode or MOX changes; KeyerIdentity and
+//                 setMox(bool, const KeyerIdentity&); a release unkeys only
+//                 its keyer's key; every refusal also as a TxRefusal
+//                 (moxRefused). NereusSDR-original. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 35 (R-IOS-13): admitKey(keyer) and
+//                 setTune(bool, const KeyerIdentity&), so a remote device's
+//                 TUNE and two-tone ask and key as that device.
+//                 NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 //   2026-09-25 - Receiver and transmit gaps plan, Task 16: setRxOnly /
 //                 isRxOnly, Thetis _rx_only (console.cs:15312-15334,
 //                 25470 and 29378 [v2.10.3.15]), the third gate that
@@ -181,6 +199,17 @@
 //                 transmitBlockChanged, so the TGXL autotune and the Tuner
 //                 applet follow the gate. J.J. Boyd (KG4VCF), AI-assisted
 //                 via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave: M1 refusalBeforeTheGate, the
+//               checks that refuse a key are asked before the keying
+//               gate; M10 KeyerIdentity::session. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude
+//               Code.
+//   2026-09-26: Transmit group fix wave 2, Important 2: a refused TUNE or
+//               two-tone takes nothing (admitKey asks TX inhibit, the PA
+//               trip, receive only and the interlock before the gate; a
+//               take whose key never starts is released). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -195,6 +224,7 @@
 #include "core/PttMode.h"
 #include "core/WdspTypes.h"
 #include "core/safety/BandPlanGuard.h"
+#include "core/safety/TxRefusal.h"
 // Phase 3P-II Task 87: TxInterlockPolicy gate in setMox(true).
 #include "core/TxInterlockPolicy.h"
 
@@ -225,6 +255,47 @@ enum class MoxState {
 };
 
 // ---------------------------------------------------------------------------
+// KeyerIdentity: who a key is for (iPhone app plan Task 34, ruling 8.13).
+//
+// The station device is the operating position at the radio: the radio's
+// own PTT and the Core's local callers of setMox(bool) (the MOX and TUNE
+// buttons, two-tone, a local TCI or CAT server). A remote device keys with
+// setMox(bool, const KeyerIdentity&) and its own device id.
+// ---------------------------------------------------------------------------
+struct KeyerIdentity {
+    /// The device the key is for: a device id as the Core's session
+    /// registry knows it, or kStationDeviceId.
+    QByteArray deviceId;
+    /// The keying source (PttMode::Mic for the radio's own PTT, Tci, Cat,
+    /// Vox, Manual for TUNE, None for a MOX button or a remote key).
+    PttMode source{PttMode::None};
+    /// A program's key (TCI, CAT): it never takes transmit (D58, D63).
+    bool program{false};
+    /// Fix wave M10: the connection a remote key came on (the session
+    /// owner, "station:<id>"), so the keying gate judges that connection,
+    /// not another of the same device's; empty for the station's own keys.
+    /// Not part of who the keyer is (operator== leaves it out).
+    QString session;
+
+    /// The same id as SliceOwnership::stationDevice().
+    static constexpr char kStationDeviceId[] = "station";
+    static KeyerIdentity station(PttMode source);
+    bool isStation() const { return deviceId == kStationDeviceId; }
+    bool operator==(const KeyerIdentity& other) const
+    {
+        return deviceId == other.deviceId && source == other.source && program == other.program;
+    }
+};
+
+// The keying gate's answer (ruling 8.13): admit the key; refuse it with a
+// reason; or take transmit first, then key if the press is still down.
+enum class KeyingVerdict { Admit, Refuse, Take };
+struct KeyingAnswer {
+    KeyingVerdict verdict{KeyingVerdict::Admit};
+    TxRefusal refusal;
+};
+
+// ---------------------------------------------------------------------------
 // MoxController — drives the MOX/PTT state machine.
 //
 // Lives on the main thread; will be owned by RadioModel (Task G.1).
@@ -236,8 +307,8 @@ enum class MoxState {
 //
 // Timer behaviour:
 //   RX→TX path: Rx → RxToTxRfDelay (30ms) → Tx
-//   TX→RX path: Tx → TxToRxInFlight (10ms, mox_delay) → TxToRxFlush
-//               (20ms, ptt_out_delay) → Rx
+//   TX→RX path: Tx → TxToRxInFlight (the TX drain when awaitsTxDrain,
+//               then 10ms mox_delay) → TxToRxFlush (20ms, ptt_out_delay) → Rx
 //   spaceDelay (0ms default): m_spaceDelayTimer declared but skipped
 //     when kSpaceDelayMs == 0, matching Thetis
 //     `if (space_mox_delay > 0) Thread.Sleep(...)` pattern.
@@ -270,6 +341,13 @@ public:
     // From Thetis console.cs:18494 — private double break_in_delay = 300 [v2.10.3.13]
     // 3M-2 CW QSK; not used in any 3M-1a path.
     static constexpr int kBreakInDelayMs = 300;
+    // Task 33: the longest the TX→RX walk waits for the TX channel's drain
+    // before it goes on to mox_delay. Thetis's drain blocks at most this
+    // long: WDSP SetChannelState's `const int timeout = 100;` loop of
+    // Sleep(1) (wdsp/channel.c SetChannelState [v2.10.3.15]). NereusSDR runs
+    // the drain on the transmit lane, so the walk must not wait on a lane
+    // that is busy for longer.
+    static constexpr int kTxDrainTimeoutMs = 100;
 
     // ── Getters ──────────────────────────────────────────────────────────────
     bool     isMox()      const noexcept { return m_mox; }
@@ -345,6 +423,52 @@ public:
     using MoxCheckFn = std::function<safety::BandPlanGuard::MoxCheckResult()>;
     void setMoxCheck(MoxCheckFn check);
 
+    // ── iPhone app plan Task 34: the keying gate (rulings 8.8, 8.13) ────────
+    //
+    // setKeyingGate: asked on every press edge and every remote key, with
+    // the source and the keyer, before the PTT mode or MOX changes. Fix
+    // wave M1: it is asked last, after every check that refuses a key
+    // without deciding who holds transmit: TX inhibit, the PA trip and
+    // receive only, then the band plan (and the microphone check), then the
+    // interlock. A key those refuse never reaches the gate, so it takes
+    // nothing.
+    // A Core that serves devices installs it (StationServer, from
+    // TransmitHolder); with none installed every key is admitted as before,
+    // so a desktop on its own is unchanged. Unkeying is never asked.
+    //
+    // A PTT source (mic, CAT, VOX, TCI) asks at its press edge in
+    // tryPollKey, before its mode is set; a refused or taken press is held
+    // off until the source is released, so a level every status frame
+    // repeats acts once per edge. setMox(true) asks for the local callers
+    // (the station device); setMox(true, keyer) for a remote key.
+    using KeyingGateFn = std::function<KeyingAnswer(PttMode source, const KeyerIdentity& keyer)>;
+    void setKeyingGate(KeyingGateFn gate);
+    bool hasKeyingGate() const noexcept { return static_cast<bool>(m_keyingGate); }
+
+    // The keyer of the key now on (station() while unkeyed).
+    const KeyerIdentity& currentKeyer() const noexcept { return m_currentKeyer; }
+
+    // The last refusal, as moxRefused sent it.
+    const TxRefusal& lastRefusal() const noexcept { return m_lastRefusal; }
+
+    // A take the gate asked for has ended (ruling 8.9): with `took` true
+    // and the keyer's press still down, the press keys now, as a new key
+    // through the gate. A station PTT source is still down when its level
+    // is; a remote keyer's press is its caller's to send again.
+    void onTakeFinished(const KeyerIdentity& keyer, bool took);
+
+    // A station key that starts more than MOX (TUNE, two-tone) asks the gate
+    // before it changes anything, so a refused start never releases or rides
+    // another device's key. True when admitted (the gate's side effects
+    // apply: transmit unheld becomes the station's); false after reporting
+    // the refusal through moxRejected / moxRefused. Always true with no
+    // gate installed.
+    bool admitStationKey(PttMode source);
+    // iPhone app plan Task 35: the same question for any keyer (a remote
+    // device's TUNE or two-tone). admitStationKey(source) is
+    // admitKey(KeyerIdentity::station(source)).
+    bool admitKey(const KeyerIdentity& keyer);
+
     // ── Setter ───────────────────────────────────────────────────────────────
     // setPttMode: idempotent; emits pttModeChanged on actual transition.
     void setPttMode(PttMode mode);
@@ -359,6 +483,37 @@ public:
     // without waiting for wall-clock time.
     void setTimerIntervals(int rfMs, int moxMs, int spaceMs,
                            int keyUpMs, int pttOutMs, int breakInMs);
+    // FOR TESTING ONLY: the drain wait's bound (kTxDrainTimeoutMs).
+    void setTxDrainTimeoutMsForTest(int ms);
+
+    // ── Task 33: the TX drain in the TX→RX walk ──────────────────────────────
+    //
+    // setAwaitsTxDrain(true): after txDrainRequested the walk waits for
+    // onTxDrained() (or kTxDrainTimeoutMs) before mox_delay starts, as
+    // Thetis's SetChannelState(tx, 0, 1) blocks before its Sleep(mox_delay).
+    // RadioModel sets it while a TX channel is wired; with it false (no TX
+    // channel) mox_delay starts at once.
+    void setAwaitsTxDrain(bool on);
+    bool awaitsTxDrain() const noexcept { return m_awaitTxDrain; }
+
+    // ── Task 33: StopAllTx's _stop_all_tx latch ──────────────────────────────
+    //
+    // From Thetis console.cs:45324-45342 [v2.10.3.15] (StopAllTx sets
+    // _stop_all_tx = true) and console.cs:25479-25492 [v2.10.3.15] (the PTT
+    // poll consumes it):
+    //   // we can come in here from a ToT ( StopAllTX() ) //[2.10.3.6]MWLGE fixes #518
+    //   // however we dont want switch anything back on, unless all of the above have been released
+    // latchStopAllTx: while a PTT source (mic, CAT, VOX, TCI) is still held,
+    // pollPtt keys nothing; the latch clears once every one of them has
+    // been released (at once when none is held).
+    void latchStopAllTx();
+    bool isStopAllTxLatched() const noexcept { return m_stopAllTxLatched; }
+
+    // Task 33: StopAllTx's `_manual_mox = false;` (console.cs:45332
+    // [v2.10.3.15]). Clears the flag and emits manualMoxChanged(false) if
+    // it was set, and clears PollPTT's manual key (setManualKey(false));
+    // setTune(false) remains the TUN path's release.
+    void clearManualMox();
 
 public slots:
     // setTune: engage / release the TUN function.
@@ -402,6 +557,9 @@ public slots:
     // owner of that completion (RadioModel::completeTuneOff) calls
     // setManualKey(false).
     void setTune(bool on);
+    // iPhone app plan Task 35: TUNE keyed as `keyer` (setMox(true, keyer));
+    // off is setTune(false).
+    void setTune(bool on, const KeyerIdentity& keyer);
 
     // onMoxButton: the MOX button (TxApplet, container buttons).
     //
@@ -461,6 +619,9 @@ public slots:
     // receive only, then TX inhibit); empty when none does. Task 16 fix
     // wave (M2). transmitBlockChanged reports a change.
     QString transmitBlockReason() const;
+    // iPhone app plan Task 34: the same gate as a TxRefusal (empty when
+    // none holds).
+    TxRefusal transmitBlockRefusal() const;
 
     // setVoxEnabled: engage/disengage VOX with voice-family mode-gate.
     //
@@ -893,6 +1054,19 @@ public slots:
     // call — that would regress Codex P2.
     void setMox(bool on);
 
+    // iPhone app plan Task 34 (ruling 8.13): a remote device's key and its
+    // release. On: the keying gate is asked with the keyer (and its
+    // source) before anything changes; an admitted key is the keyer's.
+    // Off: unkeys only when the key now on is this keyer's; another
+    // keyer's key is left alone (ruling 8.5). The Core's safety stops and
+    // local callers use setMox(false), which unkeys whoever is keyed.
+    void setMox(bool on, const KeyerIdentity& keyer);
+
+    // Task 33: the TX channel's unkey drain has finished (RadioModel relays
+    // TxChannel::txDrained for the drain it requested). Ignored unless the
+    // walk is waiting for it.
+    void onTxDrained();
+
 signals:
     // Task 16 fix wave (M2): transmitBlockReason() changed; `reason` is the
     // new value, empty when nothing blocks transmit any more.
@@ -914,6 +1088,12 @@ signals:
     // NOT emitted for setMox(false) — release is never rejected.
     void moxRejected(QString reason);
 
+    // iPhone app plan Task 34 (R-IOS-13): every refusal moxRejected reports,
+    // as the TxRefusal the link carries (its code, its sentence, its fix).
+    // Emitted right after moxRejected, or alone when a held source's repeat
+    // refusal is quiet.
+    void moxRefused(const NereusSDR::TxRefusal& refusal);
+
     // ── Phase signals (Codex P1) ──────────────────────────────────────────────
     //
     // Subscribers attach HERE, not to individual low-level setters.
@@ -934,14 +1114,19 @@ signals:
     //                     BEFORE Thread.Sleep(rf_delay)).
     //   txReady         — TX walk complete; TX I/Q stream + audio MOX on.
     //
-    // TX→RX phase signals (in order):
-    //   txAboutToEnd    — entry to TX→RX walk; teardown begins.
-    //   hardwareFlipped — hardware routing released (isTx=false); fired right
-    //                     after txAboutToEnd so routing clears before in-flight
-    //                     sample flush (symmetric with RX→TX position).
-    //   txaFlushed      — after mox_delay / key_up_delay (in-flight samples
-    //                     cleared); TX channel may now be torn down.
-    //   rxReady         — TX→RX walk complete; RX channels active.
+    // TX→RX phase signals (in order; Task 33 follows Thetis's unkey,
+    // console.cs:29651-29685 [v2.10.3.15]):
+    //   txAboutToEnd      : entry to TX→RX walk; teardown begins.
+    //   txDrainRequested  : the TX channel drains now, with the hardware
+    //                       still keyed (Thetis SetChannelState(tx, 0, 1)).
+    //                       The walk waits for onTxDrained() when
+    //                       awaitsTxDrain(), bounded by kTxDrainTimeoutMs.
+    //   txaFlushed        : after the drain and mox_delay / key_up_delay
+    //                       (in-flight samples cleared); the RF gate closes.
+    //   hardwareFlipped   : hardware routing released (isTx=false), right
+    //                       after txaFlushed (Thetis HdwMOXChanged follows
+    //                       Sleep(mox_delay)).
+    //   rxReady           : after ptt_out_delay; RX channels active.
     //
     // hardwareFlipped(bool isTx):
     //   true  — RX→TX: assert Alex routing, ATT-on-TX, MOX wire bit.
@@ -951,9 +1136,11 @@ signals:
     void txAboutToBegin();          // RX→TX phase 1 of 3 — synchronous; safety-relevant prep
     void hardwareFlipped(bool isTx);// Both directions; synchronous; subscribers wire Alex/ATT/MOX-bit
     void txReady();                 // RX→TX phase 3 of 3 — fires after rfDelay timer
-    void txAboutToEnd();            // TX→RX phase 1 of 4 — synchronous; teardown entry
-    void txaFlushed();              // TX→RX phase 3 of 4 — fires after keyUpDelay; in-flight samples cleared
-    void rxReady();                 // TX→RX phase 4 of 4 — fires after pttOutDelay
+    void txAboutToEnd();            // TX→RX phase 1 of 5: synchronous; teardown entry
+    void txDrainRequested();        // TX→RX phase 2 of 5: synchronous; TX channel drains (hardware still keyed)
+    void txaFlushed();              // TX→RX phase 3 of 5: after the drain and keyUpDelay; in-flight samples cleared
+                                    // (phase 4 of 5 is hardwareFlipped(false), right after txaFlushed)
+    void rxReady();                 // TX→RX phase 5 of 5: fires after pttOutDelay
 
     // voxRunRequested: emitted when the gated VOX-run state changes.
     //
@@ -1119,8 +1306,25 @@ private slots:
     void onKeyUpDelayElapsed();
     void onPttOutElapsed();
     void onBreakInDelayElapsed(); // declared for 3M-2 CW QSK; not started in 3M-1a
+    void onTxDrainTimedOut();     // Task 33: the drain wait's bound
 
 private:
+    // Task 33: the drain is done (or its wait timed out): start mox_delay.
+    void finishTxDrainWait();
+    // Task 34: a refusal, as moxRejected(reason) and moxRefused(refusal);
+    // `quiet` (a held source's repeat, M3) records it and says nothing.
+    void reportRefusal(const QString& reason, const TxRefusal& refusal, bool quiet);
+    static TxRefusal refusalForCheck(const safety::BandPlanGuard::MoxCheckResult& result);
+    // Fix wave M1: what setMox(true) would refuse before the keying gate
+    // (TX inhibit, the PA trip, receive only, the band plan, the
+    // interlock), asked without reporting anything. Empty when none would.
+    TxRefusal refusalBeforeTheGate() const;
+    // Fix wave 2, Important 2: the interlock's refusal, asked quietly.
+    // admitKey asks TX inhibit, the PA trip, receive only and this before
+    // the gate, whatever the key sets up first; the band plan and the
+    // microphone are judged after TUNE's mode swap, in setMox, and a take
+    // whose key then never starts is released by its holder.
+    TxRefusal interlockRefusal() const;
     // isVoiceMode: true for the 8 voice-family DSP modes.
     //
     // Voice family (per Thetis CMSetTXAVoxRun, cmaster.cs:1043-1050
@@ -1384,6 +1588,26 @@ private:
     QTimer m_keyUpDelayTimer;   // 10 ms — TX→RX: mox_delay (SSB) or key_up_delay (CW); drives TxToRxInFlight
     QTimer m_pttOutDelayTimer;  // 20 ms — TX→RX: HW settle before WDSP RX on; drives TxToRxFlush
     QTimer m_breakInDelayTimer; // 300 ms — 3M-2 CW QSK; NOT started from any B.3 logic
+    QTimer m_txDrainTimeoutTimer; // 100 ms: Task 33, bound on the TX→RX drain wait
+
+    // Task 33: the TX→RX walk waits for the TX channel's drain.
+    bool m_awaitTxDrain{false};
+    bool m_waitingForTxDrain{false};
+
+    // Task 33: StopAllTx's latch (Thetis _stop_all_tx). pollPtt consumes it
+    // against the PTT source levels (m_micPtt, m_catPtt, m_voxPtt, m_tciPtt).
+    bool m_stopAllTxLatched{false};
+
+    // iPhone app plan Task 34: the keying gate, who the key now on is for,
+    // and the keyer a gate-admitted setMox(true) keys for.
+    KeyingGateFn  m_keyingGate;
+    KeyerIdentity m_currentKeyer{KeyerIdentity::station(PttMode::None)};
+    KeyerIdentity m_admittedKeyer{KeyerIdentity::station(PttMode::None)};
+    // Task 35: setTune(true, keyer) in progress, and for whom.
+    KeyerIdentity m_tuneKeyer{KeyerIdentity::station(PttMode::Manual)};
+    bool m_tuneForKeyer{false};
+    bool          m_keyAdmitted{false};
+    TxRefusal     m_lastRefusal;
 };
 
 } // namespace NereusSDR

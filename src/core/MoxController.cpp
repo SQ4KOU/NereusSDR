@@ -108,6 +108,13 @@
 //                 (RX vs VAC at cmaster.cs:912-943 [v2.10.3.13]); see commit
 //                 message for rationale.  J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-25 : Task 33 (R-IOS-03): the TX→RX walk follows Thetis's
+//                 unkey (console.cs:29651-29685 [v2.10.3.15]): txDrainRequested
+//                 first, a bounded wait for the drain, mox_delay, then
+//                 txaFlushed and hardwareFlipped(false). StopAllTx's
+//                 _stop_all_tx latch (latchStopAllTx) and _manual_mox clear
+//                 (clearManualMox). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 //   2026-09-24 - Receiver and transmit gaps plan, Task 7 fix wave: TX
 //                 inhibit and the PA trip gate every keying source and
 //                 unkey (setTxInhibited, setPaTripped; console.cs:25470,
@@ -118,6 +125,16 @@
 //                 release that falls back to another source runs the MOX
 //                 pre-check first (M6, R-R3-36). J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - Task 34 merge with the gaps lane: StopAllTx's latch is read
+//                 in pollPtt's receive branch (console.cs:25479-25492
+//                 [v2.10.3.15]); clearManualMox clears the manual key too.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 34 (R-IOS-02, R-IOS-13, rulings 8.5,
+//                 8.8, 8.13): the keying gate at the press edge (tryPollKey)
+//                 and in setMox; setMox(bool, KeyerIdentity); releases by
+//                 keyer; admitStationKey; onTakeFinished; every refusal
+//                 also as a TxRefusal (moxRefused). NereusSDR-original.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-25 - Receiver and transmit gaps plan, Task 16: receive only
 //                 (setRxOnly, Thetis _rx_only; console.cs:15312-15334,
 //                 25470, 29378-29382 [v2.10.3.15]) refuses every key with
@@ -126,6 +143,17 @@
 //   2026-09-25 - Task 16 fix wave (M2): transmitBlockReason (the words
 //                 setMox refuses with) and transmitBlockChanged. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave: M1 refusalBeforeTheGate, the
+//               checks that refuse a key are asked before the keying
+//               gate; M10 KeyerIdentity::session. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude
+//               Code.
+//   2026-09-26: Transmit group fix wave 2, Important 2: a refused TUNE or
+//               two-tone takes nothing (admitKey asks TX inhibit, the PA
+//               trip, receive only and the interlock before the gate; a
+//               take whose key never starts is released). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
@@ -154,6 +182,7 @@ MoxController::MoxController(QObject* parent)
     , m_keyUpDelayTimer(this)
     , m_pttOutDelayTimer(this)
     , m_breakInDelayTimer(this)
+    , m_txDrainTimeoutTimer(this)
 {
     // All timers are single-shot — each fires once then stops.
     m_rfDelayTimer.setSingleShot(true);
@@ -162,6 +191,7 @@ MoxController::MoxController(QObject* parent)
     m_keyUpDelayTimer.setSingleShot(true);
     m_pttOutDelayTimer.setSingleShot(true);
     m_breakInDelayTimer.setSingleShot(true);
+    m_txDrainTimeoutTimer.setSingleShot(true);
 
     // Set default intervals from Thetis constants.
     // From Thetis console.cs:19687 — private int rf_delay = 30 [v2.10.3.13]
@@ -176,6 +206,9 @@ MoxController::MoxController(QObject* parent)
     m_pttOutDelayTimer.setInterval(kPttOutDelayMs);
     // From Thetis console.cs:18494 — private double break_in_delay = 300 [v2.10.3.13]
     m_breakInDelayTimer.setInterval(kBreakInDelayMs);
+    // Task 33: WDSP SetChannelState's 100 x Sleep(1) drain bound.
+    m_txDrainTimeoutTimer.setInterval(kTxDrainTimeoutMs);
+    m_txDrainTimeoutTimer.setTimerType(Qt::PreciseTimer);
 
     // Wire timer timeouts to their advancement slots.
     connect(&m_rfDelayTimer,      &QTimer::timeout, this, &MoxController::onRfDelayElapsed);
@@ -184,6 +217,7 @@ MoxController::MoxController(QObject* parent)
     connect(&m_keyUpDelayTimer,   &QTimer::timeout, this, &MoxController::onKeyUpDelayElapsed);
     connect(&m_pttOutDelayTimer,  &QTimer::timeout, this, &MoxController::onPttOutElapsed);
     connect(&m_breakInDelayTimer, &QTimer::timeout, this, &MoxController::onBreakInDelayElapsed);
+    connect(&m_txDrainTimeoutTimer, &QTimer::timeout, this, &MoxController::onTxDrainTimedOut);
 }
 
 MoxController::~MoxController() = default;
@@ -207,6 +241,83 @@ void MoxController::setTimerIntervals(int rfMs, int moxMs, int spaceMs,
     m_breakInDelayTimer.setInterval(breakInMs);
 }
 
+void MoxController::setTxDrainTimeoutMsForTest(int ms)
+{
+    m_txDrainTimeoutTimer.setInterval(ms);
+}
+
+// ---------------------------------------------------------------------------
+// Task 33: the TX drain wait and the StopAllTx latch.
+// ---------------------------------------------------------------------------
+void MoxController::setAwaitsTxDrain(bool on)
+{
+    m_awaitTxDrain = on;
+    if (!on && m_waitingForTxDrain) {
+        // Nothing will report the drain any more: go on with the walk.
+        finishTxDrainWait();
+    }
+}
+
+void MoxController::latchStopAllTx()
+{
+    // From Thetis console.cs:45329 [v2.10.3.15]: _stop_all_tx = true;
+    // The PTT poll then clears it once nothing is pressed
+    // (console.cs:25483-25491 [v2.10.3.15]). Thetis polls every millisecond,
+    // so with nothing held the latch is gone before the next press; this
+    // controller polls only on a source event, so it is clear at once when
+    // no source is held.
+    // //[2.10.3.6]MWLGE fixes #518  [original inline comment from console.cs:25481]
+    m_stopAllTxLatched = m_micPtt || m_catPtt || m_voxPtt || m_tciPtt;
+    if (m_stopAllTxLatched) {
+        qCInfo(lcDsp) << "MoxController: transmit stopped; a held PTT will not"
+                         " key again until it is released";
+    }
+}
+
+void MoxController::clearManualMox()
+{
+    // From Thetis console.cs:45332 [v2.10.3.15]: _manual_mox = false;
+    const bool wasManual = m_manualMox;
+    m_manualMox = false;
+    if (wasManual) {
+        emit manualMoxChanged(false);
+    }
+    // The same Thetis flag gates PollPTT (m_manualKey). Clearing it runs
+    // one poll pass, which the latch above keeps from keying.
+    setManualKey(false);
+}
+
+void MoxController::onTxDrained()
+{
+    if (!m_waitingForTxDrain) {
+        return;   // a drain this walk is not waiting for
+    }
+    finishTxDrainWait();
+}
+
+void MoxController::onTxDrainTimedOut()
+{
+    if (!m_waitingForTxDrain) {
+        return;
+    }
+    // Info, not a warning: WDSP's own drain timeout is silent, and the
+    // emergency stop (gate closed first) always ends here.
+    qCInfo(lcDsp) << "MoxController: the TX channel's drain did not report within"
+                  << m_txDrainTimeoutTimer.interval()
+                  << "ms; releasing the hardware without it";
+    finishTxDrainWait();
+}
+
+void MoxController::finishTxDrainWait()
+{
+    m_waitingForTxDrain = false;
+    m_txDrainTimeoutTimer.stop();
+    // From Thetis console.cs:29667-29669 [v2.10.3.15]:
+    //   if (mox_delay > 0)
+    //       Thread.Sleep(mox_delay); // default 10, allows in-flight samples to clear
+    m_keyUpDelayTimer.start();
+}
+
 // ---------------------------------------------------------------------------
 // setMoxCheck — install (or remove) the BandPlanGuard pre-check callback.
 //
@@ -218,6 +329,199 @@ void MoxController::setTimerIntervals(int rfMs, int moxMs, int spaceMs,
 // Must be called from the main thread before the first setMox() call, matching
 // MoxController's main-thread-only contract.
 // ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// iPhone app plan Task 34: the keying gate (rulings 8.8, 8.13).
+// ---------------------------------------------------------------------------
+KeyerIdentity KeyerIdentity::station(PttMode source)
+{
+    KeyerIdentity keyer;
+    keyer.deviceId = QByteArray(kStationDeviceId);
+    keyer.source = source;
+    keyer.program = source == PttMode::Tci || source == PttMode::Cat;
+    return keyer;
+}
+
+void MoxController::setKeyingGate(KeyingGateFn gate)
+{
+    m_keyingGate = std::move(gate);
+}
+
+void MoxController::setMox(bool on, const KeyerIdentity& keyer)
+{
+    if (!on) {
+        // Ruling 8.5: a release unkeys only its keyer's key. Unkeying is
+        // never asked of the gate.
+        if (m_mox && m_currentKeyer.deviceId == keyer.deviceId) {
+            setMox(false);
+        }
+        return;
+    }
+    if (m_mox) {
+        // Already keyed: this keyer's repeat runs the safety effects again
+        // (Codex P2). Another keyer's key is never replaced; it is refused
+        // with the gate's words (another device holds transmit).
+        if (m_currentKeyer.deviceId == keyer.deviceId) {
+            m_keyAdmitted = true;
+            m_admittedKeyer = keyer;
+            setMox(true);
+            m_keyAdmitted = false;
+            return;
+        }
+        KeyingAnswer answer;
+        if (m_keyingGate) {
+            answer = m_keyingGate(keyer.source, keyer);
+        }
+        const TxRefusal refusal = answer.verdict == KeyingVerdict::Refuse && !answer.refusal.isEmpty()
+            ? answer.refusal
+            : TxRefusals::changingHands();
+        reportRefusal(refusal.text, refusal, /*quiet=*/false);
+        return;
+    }
+    // Fix wave M1: a key TX inhibit, the PA trip, receive only, the band
+    // plan or the interlock would refuse never reaches the gate, so it
+    // takes nothing; setMox(true) refuses it with its own words below.
+    if (m_keyingGate && refusalBeforeTheGate().isEmpty()) {
+        const KeyingAnswer answer = m_keyingGate(keyer.source, keyer);
+        if (answer.verdict != KeyingVerdict::Admit) {
+            if (answer.verdict == KeyingVerdict::Refuse) {
+                reportRefusal(answer.refusal.text, answer.refusal, /*quiet=*/false);
+            }
+            return;
+        }
+    }
+    m_keyAdmitted = true;
+    m_admittedKeyer = keyer;
+    setMox(true);
+    m_keyAdmitted = false;
+}
+
+void MoxController::onTakeFinished(const KeyerIdentity& keyer, bool took)
+{
+    // Ruling 8.9: the press that asked for the take keys only if it is
+    // still down; a press released meanwhile keys nothing. Only a station
+    // PTT source is followed here; a remote keyer sends its key again.
+    if (!took || !keyer.isStation()) {
+        return;
+    }
+    const quint8 bit = keyer.source == PttMode::Tci ? kRefusedTci
+                     : keyer.source == PttMode::Cat ? kRefusedCat
+                     : keyer.source == PttMode::Mic ? kRefusedMic
+                     : keyer.source == PttMode::Vox ? kRefusedVox
+                                                    : 0;
+    if (bit == 0 || !isLevelHeld(bit)) {
+        return;
+    }
+    clearHeldBits(bit);
+    pollPtt();
+}
+
+bool MoxController::admitStationKey(PttMode source)
+{
+    return admitKey(KeyerIdentity::station(source));
+}
+
+bool MoxController::admitKey(const KeyerIdentity& keyer)
+{
+    if (!m_keyingGate) {
+        return true;
+    }
+    if (m_mox && m_currentKeyer.deviceId == keyer.deviceId) {
+        return true;   // the keyer's own key is on: nothing to ask
+    }
+    // Fix wave 2, Important 2: a start TX inhibit, the PA trip, receive
+    // only or the interlock refuses never reaches the gate, so it takes
+    // nothing.
+    if (transmitBlocked()) {
+        const TxRefusal blocked = transmitBlockRefusal();
+        reportRefusal(blocked.text, blocked, /*quiet=*/false);
+        return false;
+    }
+    if (const TxRefusal interlocked = interlockRefusal(); !interlocked.isEmpty()) {
+        // Asked again aloud, as setMox asks it, so the denied toast and the
+        // fault log hear this refusal too.
+        QString deniedReason;
+        const QMetaObject::Connection capture =
+            connect(m_interlockPolicy, &TxInterlockPolicy::denied, this,
+                    [&deniedReason](const QString& reason) { deniedReason = reason; });
+        m_interlockPolicy->evaluateTxRequest(m_ampPresent, m_ampInOperate, m_lastSwr);
+        disconnect(capture);
+        reportRefusal(QStringLiteral("TX interlock blocked: %1").arg(deniedReason), interlocked,
+                      /*quiet=*/false);
+        return false;
+    }
+    const KeyingAnswer answer = m_keyingGate(keyer.source, keyer);
+    if (m_mox || answer.verdict != KeyingVerdict::Admit) {
+        // Another device's key is on, or the gate refused or took.
+        const TxRefusal refusal = answer.refusal.isEmpty() ? TxRefusals::changingHands()
+                                                           : answer.refusal;
+        if (answer.verdict != KeyingVerdict::Take) {
+            reportRefusal(refusal.text, refusal, /*quiet=*/false);
+        }
+        return false;
+    }
+    return true;
+}
+
+TxRefusal MoxController::refusalForCheck(const safety::BandPlanGuard::MoxCheckResult& result)
+{
+    if (result.refusalCode == TxRefusals::kMicNotReady) {
+        return TxRefusals::micNotReady();
+    }
+    if (result.refusalCode == TxRefusals::kStationReceiveOnly) {
+        return TxRefusals::stationReceiveOnly();
+    }
+    return TxRefusals::bandPlan(result.reason);
+}
+
+// ---------------------------------------------------------------------------
+// Fix wave M1: what setMox(true) would refuse before any keying state
+// changes (TX inhibit, the PA trip, receive only, the band plan and the
+// interlock), asked as a question: nothing is reported, no signal is sent.
+// The keying gate, which may make a device the holder of transmit, is
+// asked only after these pass, so a key they refuse takes nothing.
+// ---------------------------------------------------------------------------
+TxRefusal MoxController::refusalBeforeTheGate() const
+{
+    if (transmitBlocked()) {
+        return transmitBlockRefusal();
+    }
+    if (m_moxCheck) {
+        const auto result = m_moxCheck();
+        if (!result.ok) {
+            return refusalForCheck(result);
+        }
+    }
+    return interlockRefusal();
+}
+
+TxRefusal MoxController::interlockRefusal() const
+{
+    if (m_interlockPolicy) {
+        bool allowed = false;
+        {
+            const QSignalBlocker quiet(m_interlockPolicy);
+            allowed = m_interlockPolicy->evaluateTxRequest(m_ampPresent, m_ampInOperate, m_lastSwr);
+        }
+        if (!allowed) {
+            const TxInterlockPolicy::Denial denial = m_interlockPolicy->lastDenial();
+            return denial == TxInterlockPolicy::Denial::AmpStandby ? TxRefusals::ampStandby()
+                 : denial == TxInterlockPolicy::Denial::Swr        ? TxRefusals::swr()
+                                                                   : TxRefusals::interlock();
+        }
+    }
+    return {};
+}
+
+void MoxController::reportRefusal(const QString& reason, const TxRefusal& refusal, bool quiet)
+{
+    m_lastRefusal = refusal;
+    if (quiet) {
+        return;
+    }
+    emit moxRejected(reason);
+    emit moxRefused(refusal);
+}
+
 void MoxController::setMoxCheck(MoxCheckFn check)
 {
     m_moxCheck = std::move(check);
@@ -446,6 +750,19 @@ void MoxController::onModeChanged(DSPMode mode)
 // path in chkMOX_CheckedChanged2 sets _current_ptt_mode = PTTMode.NONE
 // (console.cs:29547 [v2.10.3.15]).
 // ---------------------------------------------------------------------------
+void MoxController::setTune(bool on, const KeyerIdentity& keyer)
+{
+    // iPhone app plan Task 35: the TUN-on below, keyed as `keyer`.
+    if (!on) {
+        setTune(false);
+        return;
+    }
+    m_tuneKeyer = keyer;
+    m_tuneForKeyer = true;
+    setTune(true);
+    m_tuneForKeyer = false;
+}
+
 void MoxController::setTune(bool on)
 {
     if (on) {
@@ -472,7 +789,12 @@ void MoxController::setTune(bool on)
         // guard → state commit → emit txAboutToBegin → emit
         // hardwareFlipped(true) → start rfDelay → ... → txReady.
         // From Thetis console.cs:30081 [v2.10.3.13]: chkMOX.Checked = true;
-        setMox(true);
+        // Task 35: a remote device's TUNE keys as that device.
+        if (m_tuneForKeyer) {
+            setMox(true, m_tuneKeyer);
+        } else {
+            setMox(true);
+        }
 
     } else {
         // ── TUN-off: release MOX BEFORE clearing the flag ─────────────────
@@ -560,10 +882,49 @@ void MoxController::setMox(bool on)
     //       return;
     //   }
     if (on && transmitBlocked()) {
-        emit moxRejected(transmitBlockReason());
+        // Task 34: the same refusal as a TxRefusal (paProtection,
+        // stationReceiveOnly, or for the TX inhibit input, interlock).
+        reportRefusal(transmitBlockReason(), transmitBlockRefusal(), /*quiet=*/false);
         if (!m_mox) {
             dropPttOnUnkey();
         }
+        return;
+    }
+
+    // ── iPhone app plan Task 34: the keying gate (rulings 8.8, 8.13) ──────────
+    //
+    // Who may key: asked with the source and the keyer before MOX changes,
+    // beside the band plan below and the interlock after it. A PTT source
+    // asked already at its press edge (tryPollKey, before its mode was
+    // set), and a remote key in setMox(on, keyer); both arrive here with
+    // m_keyAdmitted set. Any other key here is the station device's: the
+    // MOX and TUNE buttons, two-tone, a local caller. A repeated
+    // setMox(true) while keyed is not a key, so it is not asked.
+    // Fix wave M1: only a key the checks below would let through asks it.
+    if (on && !m_mox && m_keyingGate && !m_keyAdmitted && refusalBeforeTheGate().isEmpty()) {
+        const KeyerIdentity keyer = KeyerIdentity::station(m_pttMode);
+        const KeyingAnswer answer = m_keyingGate(m_pttMode, keyer);
+        if (answer.verdict != KeyingVerdict::Admit) {
+            if (answer.verdict == KeyingVerdict::Refuse) {
+                reportRefusal(answer.refusal.text, answer.refusal, m_quietRefusal);
+            }
+            // A refused or taken key ends as every refused key does.
+            dropPttOnUnkey();
+            return;
+        }
+    }
+    // Task 34 (ruling 8.5): while another device's key is on, a station
+    // key (the MOX or TUNE button, two-tone) never rides on it: the carrier
+    // is that device's. Refused with the gate's words; nothing changes.
+    if (on && m_mox && !m_keyAdmitted && !m_currentKeyer.isStation()) {
+        KeyingAnswer answer;
+        if (m_keyingGate) {
+            answer = m_keyingGate(m_pttMode, KeyerIdentity::station(m_pttMode));
+        }
+        reportRefusal(answer.refusal.isEmpty() ? TxRefusals::changingHands().text
+                                               : answer.refusal.text,
+                      answer.refusal.isEmpty() ? TxRefusals::changingHands() : answer.refusal,
+                      /*quiet=*/false);
         return;
     }
 
@@ -588,9 +949,9 @@ void MoxController::setMox(bool on)
             // until it is pressed again (m_notQueuedHeld).
             m_lastRefusalNotQueued = result.notQueued;
             // Task 7 fix wave, M3: a held source's repeat refusal is quiet.
-            if (!m_quietRefusal) {
-                emit moxRejected(result.reason);
-            }
+            // Task 34: its TxRefusal by the code the check names (none: the
+            // band plan).
+            reportRefusal(result.reason, refusalForCheck(result), m_quietRefusal);
             // Thetis refuses a key by unchecking chkMOX, which runs the
             // TX-to-RX branch of chkMOX_CheckedChanged2 (PTT mode NONE, CAT
             // and TCI PTT dropped). Only from receive: a repeated
@@ -645,9 +1006,14 @@ void MoxController::setMox(bool on)
         }
         if (!allowed) {
             // denied() signal already emitted by the policy (unless quiet).
-            if (!m_quietRefusal) {
-                emit moxRejected(QStringLiteral("TX interlock blocked: %1").arg(deniedReason));
-            }
+            // Task 34: the amplifier in standby and the SWR over its limit
+            // have refusals of their own (ampStandby offers operateAmp).
+            const TxInterlockPolicy::Denial denial = m_interlockPolicy->lastDenial();
+            reportRefusal(QStringLiteral("TX interlock blocked: %1").arg(deniedReason),
+                          denial == TxInterlockPolicy::Denial::AmpStandby ? TxRefusals::ampStandby()
+                          : denial == TxInterlockPolicy::Denial::Swr      ? TxRefusals::swr()
+                                                                          : TxRefusals::interlock(),
+                          m_quietRefusal);
             // A refused key ends like a Thetis refusal (see above).
             if (!m_mox) {
                 dropPttOnUnkey();
@@ -693,6 +1059,10 @@ void MoxController::setMox(bool on)
 
     // ── Step 3: Commit new MOX state ─────────────────────────────────────────
     m_mox = on;
+    // Task 34: who this key is for (the gate admitted it for them, or the
+    // station device's own key); an unkey leaves nobody's key on.
+    m_currentKeyer = on ? (m_keyAdmitted ? m_admittedKeyer : KeyerIdentity::station(m_pttMode))
+                        : KeyerIdentity::station(PttMode::None);
 
     // ── Step 4: Start timer-driven walk ───────────────────────────────────────
     // Cancel any timers still running from a previous (rapid) transition.
@@ -720,31 +1090,53 @@ void MoxController::setMox(bool on)
         advanceState(MoxState::RxToTxRfDelay);
         m_rfDelayTimer.start();
     } else {
-        // TX→RX path:
-        // From Thetis console.cs:29602-29628 [v2.10.3.13]:
-        //   if (space_mox_delay > 0) Thread.Sleep(space_mox_delay);  // default 0 // from PSDR MW0LGE
-        //   ... WDSP TX off ...
-        //   if (mox_delay > 0) Thread.Sleep(mox_delay);              // 10ms, non-CW
-        //   ... AudioMOXChanged + HdwMOXChanged ...
-        //   if (ptt_out_delay > 0) Thread.Sleep(ptt_out_delay);      // 20ms
-        //   ... WDSP RX on ...
+        // TX→RX path (Task 33: Thetis's order, the drain first and the
+        // hardware after it).
+        // From Thetis console.cs:29651-29685 [v2.10.3.15]:
+        //   if (space_mox_delay > 0)
+        //       Thread.Sleep(space_mox_delay); // default 0 // from PSDR MW0LGE
+        //   _mox = tx;
+        //   psform.Mox = tx;
+        //   WDSP.SetChannelState(WDSP.id(1, 0), 0, 1);  // turn off the transmitter (no action if it's already off)
+        //   ... if (mox_delay > 0) Thread.Sleep(mox_delay); // default 10, allows in-flight samples to clear
+        //   UpdateDDCs(rx2_enabled);
+        //   UpdateAAudioMixerStates();
+        //   AudioMOXChanged(tx);    // set audio.cs to RX
+        //   HdwMOXChanged(tx, freq);// flip the hardware
+        //   ...
+        //   if (ptt_out_delay > 0)
+        //       Thread.Sleep(ptt_out_delay);  //wcp:  added 2018-12-24, time for HW to switch
+        //   WDSP.SetChannelState(WDSP.id(0, 0), 1, 0);  // turn on appropriate receivers
         //
-        // Phase signal ordering (Codex P1):
-        //   Phase 1 of 4 — emit txAboutToEnd()
-        //   Phase 2 of 4 — emit hardwareFlipped(false) — symmetric with RX→TX:
-        //                  routing clears before in-flight sample flush.
-        //   Walk: Tx → TxToRxInFlight (keyUpDelayTimer, 10ms) →
-        //              TxToRxFlush   (pttOutDelayTimer, 20ms) → Rx
-        //   Phase 3 of 4 — emit txaFlushed() in onKeyUpDelayElapsed()
-        //   Phase 4 of 4 — emit rxReady() in onPttOutElapsed()
+        // Phase signal ordering:
+        //   Phase 1 of 5: emit txAboutToEnd()
+        //   Phase 2 of 5: emit txDrainRequested(); the TX channel drains
+        //                  while the hardware is still keyed, so WDSP's
+        //                  down-slew goes out on the air.
+        //   Walk: Tx → TxToRxInFlight (the drain, then keyUpDelayTimer,
+        //              10 ms) → TxToRxFlush (pttOutDelayTimer, 20 ms) → Rx
+        //   Phase 3 of 5: emit txaFlushed() in onKeyUpDelayElapsed()
+        //   Phase 4 of 5: emit hardwareFlipped(false) right after it
+        //   Phase 5 of 5: emit rxReady() in onPttOutElapsed()
         //   moxStateChanged(false) emitted after rxReady() (diagnostic signal)
         //
         // spaceDelay is skipped when kSpaceDelayMs == 0 (matches the
         // Thetis `if (space_mox_delay > 0)` guard).
-        emit txAboutToEnd();                            // TX→RX phase 1 of 4
-        emit hardwareFlipped(false);                    // TX→RX phase 2 of 4 — before flush
+        emit txAboutToEnd();                            // TX→RX phase 1 of 5
         advanceState(MoxState::TxToRxInFlight);
-        m_keyUpDelayTimer.start();
+        const bool awaitDrain = m_awaitTxDrain;
+        if (awaitDrain) {
+            // Thetis's SetChannelState(tx, 0, 1) returns before mox_delay
+            // starts; the drain runs on the transmit lane here, so wait for
+            // it, bounded as WDSP bounds it. Armed before the request so a
+            // drain that reports at once (no lane) is not missed.
+            m_waitingForTxDrain = true;
+            m_txDrainTimeoutTimer.start();
+        }
+        emit txDrainRequested();                        // TX→RX phase 2 of 5
+        if (!awaitDrain) {
+            m_keyUpDelayTimer.start();
+        }
     }
     // NOTE: moxStateChanged is NOT emitted here.  It is emitted at the END
     // of the timer walk (in onRfDelayElapsed for TX, onPttOutElapsed for RX)
@@ -804,13 +1196,52 @@ void MoxController::dropPttOnUnkey()
 // ---------------------------------------------------------------------------
 void MoxController::tryPollKey(PttMode mode, quint8 refusedBit)
 {
-    setPttMode(mode);
     if (m_mox) {
+        // Task 34 (ruling 8.5): a station source never renames another
+        // keyer's key, or its release would unkey that keyer.
+        if (m_currentKeyer.isStation()) {
+            setPttMode(mode);
+        }
         return;
     }
+    // ── Task 34: the keying gate, at the press edge (ruling 8.8) ─────────────
+    // Asked before the mode is set, so a refused press leaves the PTT mode
+    // as it was. A refused or taken press is held off until its source is
+    // released (m_notQueuedHeld): the radio repeats its PTT level on every
+    // status frame, and the gate acts once per edge. A refused app level
+    // (CAT, TCI) is dropped, so the app is answered that nothing keyed.
+    // Fix wave M1: a press TX inhibit, the PA trip, receive only, the band
+    // plan or the interlock would refuse is not asked (setMox refuses it
+    // below), so it takes nothing.
+    if (m_keyingGate && refusalBeforeTheGate().isEmpty()) {
+        const KeyerIdentity keyer = KeyerIdentity::station(mode);
+        const KeyingAnswer answer = m_keyingGate(mode, keyer);
+        if (answer.verdict != KeyingVerdict::Admit) {
+            if (answer.verdict == KeyingVerdict::Refuse) {
+                reportRefusal(answer.refusal.text, answer.refusal,
+                              (m_refusedHeld & refusedBit) != 0);
+            }
+            m_refusedHeld |= refusedBit;
+            if (isLevelHeld(refusedBit)) {
+                m_notQueuedHeld |= refusedBit;
+            }
+            if (answer.verdict == KeyingVerdict::Refuse) {
+                if (refusedBit == kRefusedCat) {
+                    m_catPtt = false;
+                } else if (refusedBit == kRefusedTci) {
+                    m_tciPtt = false;
+                }
+            }
+            return;
+        }
+        m_admittedKeyer = keyer;
+        m_keyAdmitted = true;
+    }
+    setPttMode(mode);
     m_quietRefusal = (m_refusedHeld & refusedBit) != 0;
     m_lastRefusalNotQueued = false;
     setMox(true);
+    m_keyAdmitted = false;
     m_quietRefusal = false;
     if (m_mox) {
         m_refusedHeld &= static_cast<quint8>(~refusedBit);
@@ -890,6 +1321,10 @@ void MoxController::clearHeldBits(quint8 bits)
 // checked fires nothing in Thetis, so a later held source only renames the
 // mode (setMox(true) is not called again while m_mox is set).
 //
+// _stop_all_tx is ported (Task 33): RadioModel::stopAllTx sets it through
+// latchStopAllTx, and the receive branch below skips every source until all
+// are released.
+//
 // _tx_inhibit and _ganymede_pa_issue are ported (Task 7 fix wave, I2):
 // RadioModel feeds them from TxInhibitMonitor and RadioModel::paTripped()
 // (setTxInhibited, setPaTripped). While either is set the whole pass is
@@ -898,8 +1333,6 @@ void MoxController::clearHeldBits(quint8 bits)
 // Not ported, each for its own reason:
 //   - _disable_ptt, QSKEnabled: no NereusSDR equivalent in this
 //     controller; QSK is 3M-2. (_rx_only is ported by Task 16, setRxOnly.)
-//   - _stop_all_tx (the time-out timer hold-off): NereusSDR has no
-//     StopAllTx.
 //   - The CW branch and PTTMode.CW: CW keying is 3M-2 (onCwPtt refuses).
 //   - The mic's tx_mode gate (voice modes or _all_mode_mic_ptt): a mic PTT
 //     keys in every mode, as it did before. NereusSDR's RADE modes are not
@@ -918,6 +1351,25 @@ void MoxController::pollPtt()
     }
 
     if (!m_mox) {
+        // Task 33: StopAllTx's latch.
+        // From Thetis console.cs:25479-25492 [v2.10.3.15]:
+        //   // we can come in here from a ToT ( StopAllTX() ) //[2.10.3.6]MWLGE fixes #518
+        //   // however we dont want switch anything back on, unless all of the above have been released
+        //   if (_stop_all_tx)
+        //   {
+        //       if (mic_ptt || cw_ptt || cat_ptt || vox_ptt || _tci_ptt)
+        //       { await Task.Delay(1); continue; // skip all, and restart the loop }
+        //       else
+        //           _stop_all_tx = false;
+        //   }
+        // cw_ptt is 3M-2 (onCwPtt refuses every press).
+        if (m_stopAllTxLatched) {
+            if (m_micPtt || m_catPtt || m_voxPtt || m_tciPtt) {
+                return;
+            }
+            m_stopAllTxLatched = false;
+        }
+
         // From Thetis console.cs:25507-25511 [v2.10.3.15]
         // R-R3-36: a source refused because the microphone was not ready
         // is skipped until it is released (isHeldOff). Not in Thetis,
@@ -939,6 +1391,12 @@ void MoxController::pollPtt()
         if (m_voxPtt && isVoiceMode(m_currentMode) && !isHeldOff(kRefusedVox)) {
             tryPollKey(PttMode::Vox, kRefusedVox);
         }
+        return;
+    }
+
+    // Task 34 (ruling 8.5): the station's sources release only the station
+    // device's own key; a remote keyer's key is its own to release.
+    if (!m_currentKeyer.isStation()) {
         return;
     }
 
@@ -975,7 +1433,7 @@ void MoxController::pollPtt()
             if (m_moxCheck) {
                 const auto admit = m_moxCheck();
                 if (!admit.ok) {
-                    emit moxRejected(admit.reason);
+                    reportRefusal(admit.reason, refusalForCheck(admit), /*quiet=*/false);
                     // M3: that source, still held, is not told again.
                     const quint8 bit = (fallback == PttMode::Cat) ? kRefusedCat
                                      : (fallback == PttMode::Mic) ? kRefusedMic
@@ -1069,6 +1527,24 @@ void MoxController::clearPttSources()
 // checks it before it sends anything to the amplifier or the tuner, and the
 // Tuner applet's TUNE shows it (transmitBlockChanged).
 // ---------------------------------------------------------------------------
+TxRefusal MoxController::transmitBlockRefusal() const
+{
+    // iPhone app plan Task 34: transmitBlockReason's gate as a TxRefusal,
+    // in the same order.
+    if (m_paTripped) {
+        return TxRefusals::paProtection();
+    }
+    if (m_rxOnly) {
+        TxRefusal refusal = TxRefusals::stationReceiveOnly();
+        refusal.text = m_rxOnlyReason;
+        return refusal;
+    }
+    if (m_txInhibited) {
+        return TxRefusals::txInhibited();
+    }
+    return TxRefusal{};
+}
+
 QString MoxController::transmitBlockReason() const
 {
     if (m_paTripped) {
@@ -1229,12 +1705,18 @@ void MoxController::onMoxButton(bool on)
         m_manualKey = true;
         setMox(true);
         // A refused key leaves chkMOX unchecked, so chkMOX_Click takes its
-        // else branch: _manual_mox = false.
-        if (!m_mox) {
+        // else branch: _manual_mox = false. Task 34: so does a key refused
+        // while another device's key is on (MOX stays on, not the
+        // station's).
+        if (!m_mox || !m_currentKeyer.isStation()) {
             setManualKey(false);
         }
     } else {
-        setMox(false);
+        // Task 34 (ruling 8.5): the station's MOX button releases only the
+        // station device's own key.
+        if (m_currentKeyer.isStation()) {
+            setMox(false);
+        }
         setManualKey(false);
     }
 }
@@ -1286,6 +1768,8 @@ void MoxController::stopAllTimers()
     m_spaceDelayTimer.stop();
     m_keyUpDelayTimer.stop();
     m_pttOutDelayTimer.stop();
+    m_txDrainTimeoutTimer.stop();
+    m_waitingForTxDrain = false;
     // m_breakInDelayTimer is never started in 3M-1a so stop() is a no-op,
     // but include it for completeness so future 3M-2 CW code gets the guard
     // for free.
@@ -1378,13 +1862,16 @@ void MoxController::onSpaceDelayElapsed()
 //   Advance to TxToRxFlush state, then start ptt_out_delay timer
 void MoxController::onKeyUpDelayElapsed()
 {
-    // TODO [3M-1a F.1]: UpdateDDCs + UpdateAAudioMixerStates + AudioMOXChanged(false)
-    //                   + HdwMOXChanged(false) here.
     // DONE_WITH_CONCERNS [anan-g2e F2/F3]: When UpdateAAudioMixerStates is ported,
     // ANAN_G2E must join the HERMES 4-DDC (USB) group at console.cs:27653-27664
     // [v2.10.3.15] (F2) AND the HERMES 2-DDC (ETH) group at console.cs:27669-27679
     // [v2.10.3.15] (F3). //N1GP G2E added tags are on both cite lines in Thetis.
-    emit txaFlushed();                                  // TX→RX phase 3 of 4
+    emit txaFlushed();                                  // TX→RX phase 3 of 5
+    // Task 33: UpdateDDCs + AudioMOXChanged(false) + HdwMOXChanged(false)
+    // follow mox_delay in Thetis (console.cs:29670-29675 [v2.10.3.15]);
+    // hardwareFlipped(false) carries them (ReceiverManager::setMox,
+    // RadioModel::onMoxHardwareFlipped).
+    emit hardwareFlipped(false);                        // TX→RX phase 4 of 5
     advanceState(MoxState::TxToRxFlush);
     m_pttOutDelayTimer.start();
 }

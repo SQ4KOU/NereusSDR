@@ -36,6 +36,12 @@ void HGauge::setPeakValue(double val) {
     update();
 }
 void HGauge::setTickLabels(const QStringList& labels) { m_tickLabels = labels; update(); }
+void HGauge::setUnavailable(bool unavailable)
+{
+    if (m_unavailable == unavailable) { return; }
+    m_unavailable = unavailable;
+    update();
+}
 
 double HGauge::filledFraction() const noexcept
 {
@@ -53,6 +59,10 @@ void HGauge::paintEvent(QPaintEvent*)
 {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
+    // iPhone app plan Task 39: an unavailable gauge is drawn dimmed.
+    if (m_unavailable) {
+        p.setOpacity(0.4);
+    }
 
     const int w = width();
     const int h = height();

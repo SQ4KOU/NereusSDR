@@ -538,6 +538,64 @@ def _in_tree(sources: list[Path], include_dirs: list[Path], keep: Path) -> list[
 # converters), DirectSound, MME, WASAPI and WDM-KS; the Unix platform
 # sources; CoreAudio; JACK and ALSA. PA_ASIO_SOURCES and PA_ASIOSDK_SOURCES
 # are not read.
+# The libraries whose files come from a built tree (libsodium, SPAKE2+EE):
+# what that tree compiled, from its compile_commands.json.
+def _compile_entries(build: Path) -> list[tuple[Path, list[Path]]]:
+    """(source file, include directories) for every compile command."""
+    path = build / "compile_commands.json"
+    if not path.is_file():
+        raise SystemExit(f"{path} is missing; configure and build the tree first")
+    entries: list[tuple[Path, list[Path]]] = []
+    for entry in json.loads(path.read_text(encoding="utf-8")):
+        args = entry.get("arguments") or shlex.split(entry["command"])
+        directory = Path(entry["directory"])
+        dirs: list[Path] = []
+        i = 0
+        while i < len(args):
+            arg = args[i]
+            value = None
+            for flag in ("-I", "-isystem", "-iquote"):
+                if arg == flag and i + 1 < len(args):
+                    value = args[i + 1]
+                    i += 1
+                elif arg.startswith(flag) and len(arg) > len(flag) and flag == "-I":
+                    value = arg[2:]
+            if value is not None:
+                dirs.append((directory / value).resolve())
+            i += 1
+        entries.append(((directory / entry["file"]).resolve(), dirs))
+    return entries
+
+
+def _from_build(build: Path, keep: Path, seeds: Path,
+                extra: list[str] | None = None,
+                extra_dirs: list[str] | None = None) -> list[Path]:
+    """Files under keep that the build compiled, or that the compiled files
+    under seeds include, resolved with each command's own include path.
+    extra adds sources (relative to keep) other platforms compile."""
+    keep = keep.resolve()
+    seeds = seeds.resolve()
+    found: set[Path] = set()
+    for source, dirs in _compile_entries(build):
+        if not _within(source, seeds):
+            continue
+        for path in resolve_includes([source], dirs):
+            if _within(path, keep):
+                found.add(path)
+    if extra:
+        dirs = [keep / d for d in (extra_dirs or [])]
+        for path in resolve_includes([keep / name for name in extra], dirs):
+            if _within(path, keep):
+                found.add(path)
+    return sorted(found)
+
+
+def _need_build(args: argparse.Namespace) -> Path:
+    if args.build_dir is None:
+        raise SystemExit("this library needs --build-dir (a built tree)")
+    return args.build_dir.resolve()
+
+
 _PORTAUDIO_LISTS = [
     "PA_COMMON_SOURCES", "PA_SKELETON_SOURCES", "PA_PLATFORM_SOURCES",
     "PA_DS_SOURCES", "PA_WMME_SOURCES", "PA_WASAPI_SOURCES", "PA_WDMKS_SOURCES",

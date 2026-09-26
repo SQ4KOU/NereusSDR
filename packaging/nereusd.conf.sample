@@ -85,6 +85,15 @@ audio_device =
 # do not trust, set deny.
 pairing_lan_click = allow
 
+# Whether paired devices may transmit through this Core: allow (default) or
+# deny. With allow, a paired device whose app can transmit may key once it
+# has connected and while no other device has the transmitter; the Core's
+# own protections (the band plan, the transmit interlock, the amplifier and
+# SWR protection, the time-out) stay in charge. With deny the Core only
+# receives, and no device can transmit through it. Any other value is
+# treated as deny, with a warning.
+remote_transmit = allow
+
 # The Core's status page: a small read-only web page on this port showing
 # the Core's name, its radio, whether a device has paired with it, and,
 # only until the first device pairs, the pairing code. It answers only

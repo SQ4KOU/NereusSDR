@@ -29,6 +29,7 @@
 // =================================================================
 #include <QtTest/QtTest>
 #include <QSignalSpy>
+#include "core/DspControlThread.h"
 #include "core/P1RadioConnection.h"
 #include "core/ReceiverManager.h"
 #include "core/RxChannel.h"
@@ -38,6 +39,15 @@
 #include "models/SliceModel.h"
 
 using namespace NereusSDR;
+
+namespace {
+// R-R3-39: a RadioModel runs its receive WDSP calls on the receive lane
+// (the notch shift is written there); wait for it before reading back.
+bool laneIdle(RadioModel& model)
+{
+    return model.receiveLane() == nullptr || model.receiveLane()->waitIdleForTest(600000);
+}
+} // namespace
 
 namespace {
 
@@ -255,6 +265,7 @@ private slots:
 
         RxChannel* chB = engine->rxChannel(b);
         QVERIFY(chB != nullptr);
+        QVERIFY(laneIdle(model));
         QCOMPARE(chB->notchShiftHz(), 10000.0);
 
         // Pan out and back (4.3 at the model level). Slice A still holds the
@@ -263,6 +274,7 @@ private slots:
         sliceB->setFrequency(kSliceAFreqHz);
 
         QCOMPARE(chB->shiftOffsetHz(), 0.0);
+        QVERIFY(laneIdle(model));
         QCOMPARE(chB->notchShiftHz(), 0.0);
         QCOMPARE(chB->notchTuneFrequencyHz(), kSliceAFreqHz);
         QCOMPARE(chB->notchTuneFrequencyHz() + chB->shiftOffsetHz(),
@@ -542,6 +554,9 @@ private slots:
         QVERIFY(b->streamIndex() >= 0);
 
         const auto invariantHolds = [&](const char* whenLabel) {
+            if (!laneIdle(model)) {
+                return false;
+            }
             const double sum = ch->notchTuneFrequencyHz() + ch->notchShiftHz();
             const double want = b->frequency();
             if (std::abs(sum - want) > 1.0) {

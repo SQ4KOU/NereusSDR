@@ -10,6 +10,12 @@
 // Modification history (NereusSDR):
 //   2026-05-26 Created in C++20/Qt6 for NereusSDR by J.J. Boyd (KG4VCF),
 //              with AI-assisted transformation via Anthropic Claude Code.
+//   2026-09-25 iPhone app plan Task 34 (R-IOS-03; remote design section
+//              12.2): a handoff while keyed waits for the unkey-confirmed
+//              gate (setUnkeyGate) before the flag moves, local handoffs
+//              included, so the new slice's frequency never reaches the
+//              radio before MOX off. J.J. Boyd (KG4VCF), AI-assisted via
+//              Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -21,6 +27,7 @@ namespace NereusSDR {
 
 class SliceModel;
 class MoxController;
+class UnkeyGate;
 
 /// Enforces the single-TX invariant: exactly one slice is TX-bound at a time.
 /// Performs RF-safe handoff (drops MOX before flipping). RadioModel owns one
@@ -43,10 +50,22 @@ public:
     SliceModel* txBoundSlice() const;
 
     /// Inject the MoxController (called by RadioModel during construction wiring).
-    /// Arbiter calls mox->setMox(false) before flipping txSlice flags and
-    /// relies on setMox being synchronous: MoxController commits the new MOX
-    /// state before setMox returns, so there is no moxChanged wait.
+    /// Without an unkey gate, a handoff while keyed calls mox->setMox(false)
+    /// and flips the txSlice flags at once (MoxController commits m_mox
+    /// before setMox returns, but the hardware unkeys later, at the end of
+    /// its TX-to-RX walk).
     void setMoxController(MoxController* mox);
+
+    /// iPhone app plan Task 34 (R-IOS-03): with a gate set (RadioModel sets
+    /// its own), a handoff while keyed unkeys through the gate and moves the
+    /// flag only when it answers (Confirmed, or TimedOut with the emergency
+    /// stop applied), so the new slice's transmit frequency never reaches
+    /// the radio before MOX off. requestHandoff then returns true at once
+    /// and the flag moves later; a second request while one waits replaces
+    /// its target.
+    void setUnkeyGate(UnkeyGate* gate) { m_unkeyGate = gate; }
+    /// A handoff is waiting for the unkey gate.
+    bool isHandoffPending() const { return m_pendingHandoffId >= 0; }
 
     /// Inject the slice list owner (RadioModel) so arbiter can flip txSlice
     /// flags on SliceModel instances.
@@ -104,6 +123,11 @@ public slots:
     /// Returns false and emits handoffBlocked if requested slice doesn't exist.
     bool requestHandoff(int sliceId);
 
+private:
+    /// Moves the flag to `target` (the handoff's last step).
+    void flipTo(SliceModel* target);
+    SliceModel* sliceWithId(int sliceId) const;
+
 signals:
     /// Emitted after handoff completes. oldId may be -1 on initial bind.
     void txBoundSliceChanged(int oldId, int newId);
@@ -117,6 +141,8 @@ private:
     QVector<SliceModel*>*     m_slices {nullptr};  // non-owning pointer to RadioModel's list
     QString                   m_mac;               // per-radio AppSettings scope key
     bool                      m_remote {false};    // Remote-daemon R2 Task 5
+    UnkeyGate*                m_unkeyGate {nullptr};   // Task 34
+    int                       m_pendingHandoffId {-1}; // Task 34: waiting for the gate
 };
 
 } // namespace NereusSDR

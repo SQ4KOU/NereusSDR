@@ -48,6 +48,9 @@
 //   2026-09-25 - iPhone app Task 73 (R-IOS-02): SliceMarker mirrored
 //                 (`marker:<sliceId>`). J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 39 (D14, R-IOS-13): TransmitState
+//                 mirrored (`txState`). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorSchema.h"
@@ -125,6 +128,9 @@ const char* const kMirroredClasses[] = {
     // iPhone app Task 73 (R-IOS-02, sessionHolderVersion 1): what another
     // device sees of a slice that is not its own, read-only.
     "NereusSDR::SliceMarker",
+    // iPhone app plan Task 39 (D14, R-IOS-13, txStateVersion 1): the Core's
+    // transmitter, its meters and why it last stopped, read-only.
+    "NereusSDR::TransmitState",
 };
 
 // Per-property exclusions, as (class, property).

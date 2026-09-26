@@ -41,6 +41,12 @@ public:
     // rest of the page live. The default does nothing.
     virtual void setTransmitPermitted(bool permitted, const QString& reason);
 
+    // Fix wave 2 (M8): in a remote window VOX also needs this computer's
+    // microphone line to the Core. SetupDialog pushes it to every realized
+    // page; a page holding a VOX control overrides this and shows it
+    // disabled with `reason` while there is none. The default does nothing.
+    virtual void setVoxPermitted(bool permitted, const QString& reason);
+
     // R-R3-49 (parity Task 1): a page can hold transmit settings that key
     // nothing (DSP > Options TX combos). SetupDialog pushes the transmit
     // settings gate to every realized page; a page with such settings

@@ -241,6 +241,38 @@
 //                names the Core only on a Core (NereusSDR in a window with
 //                no Core); stale slice-limit comments corrected.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-39: receive DSP off the event loop. The receive lane,
+//                the live sample-rate change as a lane barrier in the order
+//                of Thetis setup.cs:7003-7159 [v2.10.3.13], and the calls
+//                into RxDspWorker that blocked the event loop moved to the
+//                lane. NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
+//   2026-09-25 - R-R3-39: transmit DSP off the event loop. The transmit
+//                lane; the TX channel is no longer moved to TxWorkerThread
+//                (its setters post to the lane); the keying connects moved
+//                into wireTxChannelKeying and call setRunningAsync; the TX
+//                channel's timed DSP-options apply reports through
+//                dspOptionsApplied; PsccPump pumps through the TX channel.
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-25 - Task 33 (R-IOS-03): stopTransmitNow (the emergency
+//                stop: RF gate, then MOX and relay off on the connection's
+//                thread; NereusSDR-original) and stopAllTx, ported from
+//                Thetis console.cs StopAllTx 45324-45342 [v2.10.3.15]. The
+//                unkey follows Thetis's order: the TX drain, then the
+//                hardware flip, then the receiver on rxReady.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49, Sub-epic C-1: the Core's DFNR availability
+//                (DspAssetService dfnrRunnable / dfnrModelStatus), set at
+//                start and when a channel's first DFNR load fails; DFNR is
+//                refused, and turned off on a slice, while it cannot run.
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-25 - R-R3-49, Sub-epic C-1: the Core's MNR availability
+//                (DspAssetService mnrRunnable / mnrStatus) and BNR's
+//                build-wide reason; both are refused, and turned off on a
+//                slice, while they cannot run. NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-24 - Receiver and transmit gaps plan, Task 7: TCI trx keys
 //                through MoxController::onTciPtt (PttMode::Tci); the MOX
 //                button is setMoxFromButton (chkMOX_Click); TUN-off clears
@@ -259,6 +291,47 @@
 //                [v2.10.3.15]); External TX Inhibit applies at once
 //                (setup.cs:16660-16667 [v2.10.3.15]). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - iPhone app Task 19 (R-IOS-06, D40): a remote window's
+//                 filter presets follow the Core's (FilterPresetStore::
+//                 followStationSetting on stationSettingChanged). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 34 (R-IOS-02, R-IOS-03): the
+//                unkey-confirmed gate (UnkeyGate, unkeyGate()), which the TX
+//                slice arbiter's handoff while keyed waits for; TUNE asks the
+//                keying gate before it starts (admitStationKey); the MOX
+//                check names its refusal codes (stationReceiveOnly,
+//                micNotReady); stopAllTx's MOX = false goes to the
+//                controller. NereusSDR-original. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 35 (R-IOS-13): keyedBy and the
+//                keying epoch; setTune(bool, const KeyerIdentity&) asks and
+//                keys TUNE for a remote device; PttSource::Remote while a
+//                device is keyed. NereusSDR-original. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 36 (R-IOS-13): the remote
+//                microphone ring (RemoteMicFeed) the transmit pump takes
+//                while a remote device transmits or has VOX armed; the PC
+//                microphone check stands aside for it; PttSource::Vox for a
+//                device's VOX key. NereusSDR-original. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan, desktop remote transmit (R-IOS-13,
+//                R-R3-42): in a remote window MOX, TUNE and two-tone go to
+//                the Core through the transmit verbs (setTwoTone added),
+//                never the window's own MoxController; the Core's refusal
+//                is reported (remoteTransmitRefused). NereusSDR-original.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 37 (R-IOS-13): remoteMicDeviceChanged,
+//                so the Core turns off VOX a device armed when its
+//                microphone line closes. NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 38 (R-IOS-04, D29): the transmit
+//                time-out. Ported timeOutTimer from console.cs:45343-45350
+//                [v2.10.3.15] (StopAllTx(msg + " Time Out Timer")); the
+//                TxTimeOutTimer wiring, its limit for whoever is keyed
+//                (Thetis's MOX and ping time-outs for the station and
+//                computers, the remote one for phones and tablets),
+//                timeOutRemainingSeconds and the timeOut stop reason.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-25 - iPhone app plan Task 74 (R-IOS-02, R-IOS-30): a slice's
 //                receiver reaches the anchors (SliceOwnership::noteStream);
 //                activateStreamAt (bindSliceToStream's claim arm, shared);
@@ -345,6 +418,11 @@
 //                blocked, before it reaches the amplifier or the tuner
 //                (M2); both reasons where two apply (M6). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave C2: the microphone lines by
+//               device (openRemoteMicLine, closeRemoteMicLine, per-device
+//               priming and VOX), one writer at a time (remoteMicWriter),
+//               VOX following the holder. J.J. Boyd (KG4VCF), with AI-
+//               assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -572,6 +650,7 @@ warren@wpratt.com
 #include "models/PureSignalSettings.h"
 #include "core/dsp/DspAssetService.h"
 #include "core/session/PureSignalSessionFacade.h"
+#include "core/session/RemoteTransmitClient.h"
 #include "core/StepAttenuatorFacade.h"
 #include "core/accessories/AlexAntennaFacade.h"
 #include "core/IoBoardHl2Facade.h"
@@ -581,6 +660,7 @@ warren@wpratt.com
 #include "core/TwoToneController.h"
 // Phase 3F Sub-Epic C Task 6: TxSliceArbiter integration.
 #include "core/TxSliceArbiter.h"
+#include "core/safety/UnkeyGate.h"
 #include "core/FFTRouter.h"  // Phase 3F Sub-Epic D Task 13
 #include "models/FilterPresetStore.h"
 #include "core/accessories/N2adrPreset.h"
@@ -589,6 +669,7 @@ warren@wpratt.com
 // 3M-1c TX pump architecture redesign — dedicated worker thread for
 // TX DSP pump (replaces D.1/E.1/L.4 chain).
 #include "core/TxWorkerThread.h"
+#include "core/session/media/RemoteMicReceiver.h"
 // 3M-1b L.1: concrete mic-source strategy objects.
 #include "core/audio/PcMicSource.h"
 #include "core/audio/PortAudioBus.h"
@@ -610,10 +691,12 @@ warren@wpratt.com
 #include "core/AudioEngine.h"
 #include "core/WdspEngine.h"
 #include "core/RxChannel.h"
+#include "core/DspControlThread.h"
 // Remote Daemon R2 Task 12: per-slice S-meter pump, constructed below only
 // for Role::Local.
 #include "core/meters/SliceMeterPump.h"
 #include "core/AppSettings.h"
+#include <QHostAddress>
 #include "core/SampleRateCatalog.h"
 #include "core/LogCategories.h"
 #include "core/NoiseFloorTracker.h"
@@ -678,11 +761,14 @@ warren@wpratt.com
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <condition_variable>
 #include <functional>
 #include <limits>
+#include <mutex>
 #include <tuple>
 #include <vector>
 
+#include <QCoreApplication>
 #include <QCryptographicHash>
 #include <QDateTime>
 #include <QElapsedTimer>
@@ -886,6 +972,63 @@ RadioModel::RadioModel(Role role, QObject* parent)
     , m_wdspEngine(new WdspEngine(this))
 {
     m_role = role;
+    // The lane is a Qt thread fed through Qt's event queue, which needs an
+    // application object: a model made without one (an app-less unit test)
+    // runs its WDSP calls at once, as before.
+    if (role == Role::Local && QCoreApplication::instance() != nullptr) {
+        // R-R3-39: every receive-side WDSP call runs on this lane, never on
+        // the event loop, so a slow DSP block cannot stall the timers,
+        // sessions and transmit safety that run here.
+        m_rxLane = std::make_unique<DspControlThread>(DspLane::Receive);
+        m_rxLane->start();
+        m_wdspEngine->setReceiveLane(m_rxLane.get());
+        // R-R3-39: every transmit-side WDSP call runs on its own lane, so a
+        // TX OpenChannel or filter change never waits on the receive lane's
+        // work, and the event loop never waits on either.
+        m_txLane = std::make_unique<DspControlThread>(DspLane::Transmit);
+        m_txLane->start();
+        m_wdspEngine->setTransmitLane(m_txLane.get());
+        // A lane barrier parks the DSP worker on its own thread for as long
+        // as it holds the release it returns. Called on the lane, so this
+        // never blocks the event loop.
+        m_wdspEngine->setRxWorkerQuiesce([target = m_rxWorkerTarget]() -> std::function<void()> {
+            RxDspWorker* worker = nullptr;
+            QThread* thread = nullptr;
+            {
+                std::lock_guard<std::mutex> lock(target->mutex);
+                worker = target->worker;
+                thread = target->thread;
+            }
+            if (worker == nullptr || thread == nullptr || !thread->isRunning()
+                || QThread::currentThread() == thread) {
+                return {};
+            }
+            struct Gate {
+                std::mutex mutex;
+                std::condition_variable changed;
+                bool parked{false};
+                bool released{false};
+            };
+            auto gate = std::make_shared<Gate>();
+            QMetaObject::invokeMethod(worker, [gate]() {
+                std::unique_lock<std::mutex> lock(gate->mutex);
+                gate->parked = true;
+                gate->changed.notify_all();
+                gate->changed.wait(lock, [&gate]() { return gate->released; });
+            }, Qt::QueuedConnection);
+            {
+                std::unique_lock<std::mutex> lock(gate->mutex);
+                gate->changed.wait(lock, [&gate]() { return gate->parked; });
+            }
+            return [gate]() {
+                std::lock_guard<std::mutex> lock(gate->mutex);
+                gate->released = true;
+                gate->changed.notify_all();
+            };
+        });
+        connect(m_wdspEngine, &WdspEngine::rxChannelCreated, this,
+                [this](int channelId) { wireRxChannelLaneSignals(channelId); });
+    }
     // iPhone app Task 73 (R-IOS-02): whose each slice is. A change of owner
     // is saved with the restart manifest (ruling 5.3).
     m_sliceOwnership = new SliceOwnership(this);
@@ -948,6 +1091,31 @@ RadioModel::RadioModel(Role role, QObject* parent)
         connect(m_dspAssets, &DspAssetService::nr3SelectionChanged, this, [this]() {
             for (SliceModel* slice : std::as_const(m_slices)) {
                 turnOffNr3WithoutModel(slice);
+            }
+        });
+        // R-R3-49, Sub-epic C-1: the Core says whether it can run DFNR
+        // (this build has it and the DeepFilterNet model file is there);
+        // a model that fails at a channel's first selection turns it off
+        // later (wireRxChannelLaneSignals). Any slice holding DFNR then
+        // turns it off with the reason, as NR3 does.
+        m_dspAssets->setDfnrAvailability(RxChannel::dfnrAvailable(),
+                                         dfnrCannotRunReason(true));
+        connect(m_dspAssets, &DspAssetService::dfnrAvailabilityChanged, this, [this]() {
+            for (SliceModel* slice : std::as_const(m_slices)) {
+                turnOffDfnrWithoutModel(slice);
+            }
+        });
+        // R-R3-49, Sub-epic C-1: and whether it can run MNR, which runs only
+        // on a Mac (a remote window reads it, mirrored, whatever computer
+        // the window runs on).
+#ifdef HAVE_MNR
+        m_dspAssets->setMnrAvailability(true, {});
+#else
+        m_dspAssets->setMnrAvailability(false, mnrCannotRunReason());
+#endif
+        connect(m_dspAssets, &DspAssetService::mnrAvailabilityChanged, this, [this]() {
+            for (SliceModel* slice : std::as_const(m_slices)) {
+                turnOffNrThatCannotRun(slice);
             }
         });
     }
@@ -1328,6 +1496,31 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // Display.TXAttenuatorOffset = 0; //[2.10.3.6]MW0LGE att_fixes  [console.cs:29659]
     m_moxController = new MoxController(this);
 
+    // iPhone app plan Task 36 (R-IOS-13): the remote microphone ring, on the
+    // Core's model only. Its source follows who is keyed and MOX itself.
+    if (m_role == Role::Local) {
+        m_remoteMicFeed = std::make_unique<RemoteMicFeed>();
+        connect(this, &RadioModel::keyedByChanged, this, &RadioModel::updateRemoteMicSource);
+        connect(m_moxController, &MoxController::stateChanged, this,
+                [this](MoxState) { updateRemoteMicSource(); });
+    }
+
+    // iPhone app plan Task 38 (R-IOS-04, D29): the transmit time-out, where
+    // the radio is. From Thetis console.cs:883 [v2.10.3.15]
+    // (TimeOutTimerManager.Initialise(this)) and console.cs:45276
+    // (TimeOutTimerManager.SetCallback(timeOutTimer)). The limit is read at
+    // every tick for whoever is keyed then.
+    if (m_role == Role::Local) {
+        m_txTimeOut = new TxTimeOutTimer(this);
+        m_txTimeOut->setSettingsSource([this]() {
+            return txTimeOutSettingsFor(m_keyedBy.deviceKind);
+        });
+        connect(m_moxController, &MoxController::moxChanged,
+                m_txTimeOut, &TxTimeOutTimer::onMox);
+        connect(m_txTimeOut, &TxTimeOutTimer::timedOut,
+                this, &RadioModel::onTxTimeOut);
+    }
+
     // R-R3-36: record whether the key-up now committing is Tune or
     // two-tone keying. moxChanging fires synchronously inside setMox(true),
     // after the pre-check and the interlock and before the commit, so the
@@ -1423,6 +1616,30 @@ RadioModel::RadioModel(Role role, QObject* parent)
     // inside this function body.
     m_txSliceArbiter->setRemote(m_role == Role::Remote);
 
+    // iPhone app plan Task 34 (R-IOS-03; remote design section 12.2): the
+    // unkey-confirmed gate. The normal unkey ends TUNE and two-tone their
+    // own way and any other key through MoxController; TimedOut (2000 ms
+    // without receive) has applied the emergency stop. The arbiter's
+    // handoff while keyed waits for it, local handoffs included.
+    m_unkeyGate = new UnkeyGate(
+        m_moxController,
+        [this]() {
+            if (m_isTuning) {
+                setTune(false);
+            } else if (m_twoToneController
+                       && (m_twoToneController->isActive()
+                           || m_twoToneController->isActivationInFlight())) {
+                m_twoToneController->setActive(false);
+            } else if (m_moxController) {
+                m_moxController->setMox(false);
+            }
+        },
+        [this](const QString& reason) { stopTransmitNow(reason); },
+        this);
+    if (m_role == Role::Local) {
+        m_txSliceArbiter->setUnkeyGate(m_unkeyGate);
+    }
+
     // RF-SAFETY: handing the transmitter to another slice moves the transmit
     // frequency, and with it the Alex TX low-pass. Push immediately rather
     // than waiting for the next retune, otherwise the new TX slice sits
@@ -1463,6 +1680,16 @@ RadioModel::RadioModel(Role role, QObject* parent)
     connect(m_moxController, &MoxController::hardwareFlipped,
             this, &RadioModel::onMoxHardwareFlipped,
             Qt::QueuedConnection);
+
+    // Task 33: a new key lifts stopTransmitNow's hold. Direct, so the hold
+    // is gone before this key's own hardwareFlipped(true) is queued.
+    connect(m_moxController, &MoxController::txAboutToBegin,
+            this, [this]() { m_transmitStopHold = false; });
+
+    // Task 33: the receiver comes back after ptt_out_delay, not with the
+    // hardware flip (Thetis console.cs:29678-29680 [v2.10.3.15]).
+    connect(m_moxController, &MoxController::rxReady,
+            this, &RadioModel::onMoxRxReady);
 
     // Phase 3M-4 Task 17 chunk A — wire MOX state into ReceiverManager so
     // the per-board codec re-emits PsDdcConfig on TX/RX transitions.  The
@@ -2323,7 +2550,11 @@ RadioModel::RadioModel(Role role, QObject* parent)
                                " (source=" << source
                             << ") AND txReady was already received -- starting"
                                " TxChannel now (carrier hits amp path)";
-                        m_txChannel->setRunning(true);
+                        // R-R3-39: channel on (transmit lane), then the RF gate.
+                        // Task 33: not for a key the emergency stop cut short.
+                        if (!m_transmitStopHold) {
+                            m_txChannel->setRunningAsync(true);
+                        }
                     }
                 } else {
                     // Grant arrived first (common: fast amp ACK lands
@@ -3032,6 +3263,21 @@ RadioModel::~RadioModel()
     m_rfKitBandFollow.reset();
     m_stationTci.reset();
     teardownConnection();
+    if (m_txLane) {
+        // R-R3-39: the transmit lane's jobs run before it goes (TX before RX,
+        // as WDSP's teardown order has it).
+        m_wdspEngine->drainTransmitLane();
+        m_txLane->stop();
+        m_wdspEngine->setTransmitLane(nullptr);
+    }
+    if (m_rxLane) {
+        // R-R3-39: every lane job runs before the lane goes; afterwards the
+        // engine (deleted after this body) runs its WDSP calls at once.
+        m_wdspEngine->drainReceiveLane();
+        m_rxLane->stop();
+        m_wdspEngine->setReceiveLane(nullptr);
+        m_wdspEngine->setRxWorkerQuiesce({});
+    }
     qDeleteAll(m_slices);
     qDeleteAll(m_panadapters);
 }
@@ -5077,30 +5323,6 @@ void RadioModel::wireTransmitProcessingChain()
     }
 }
 
-// F.1, txaFlushed: the TX channel stops, and PureSignal hears the radio
-// is back on receive. Moved out of connectToRadioImpl (group B fix wave)
-// so a test can wire it against a test channel.
-void RadioModel::wireTxaFlushed()
-{
-    if (!m_moxController || !m_txChannel) {
-        return;
-    }
-    // PureSignal lives on the main thread (group A's re-review): it hears
-    // the radio is back on receive here, in RadioModel's context, first, as
-    // it did before the TX channel's stop.
-    connect(m_moxController, &MoxController::txaFlushed, this, [this]() {
-        if (m_pureSignal) {
-            if (m_txaFlushedPureSignalObserverForTest) { m_txaFlushedPureSignalObserverForTest(); }
-            m_pureSignal->onMoxChanged(false);
-        }
-    });
-    // The TX channel's own stop, on its thread.
-    connect(m_moxController, &MoxController::txaFlushed,
-            m_txChannel, [this]() {
-        m_txChannel->setRunning(false);
-    });
-}
-
 #ifdef NEREUS_BUILD_TESTS
 // Declared in RadioModel.h's NEREUS_BUILD_TESTS block.
 void RadioModel::wireTransmitChainForTest(TxChannel* channel)
@@ -6922,6 +7144,24 @@ void RadioModel::wireNnrSettings(SliceModel* slice)
             }
             return false;
         }
+        // R-R3-49, Sub-epic C-1: nor DFNR when this Core cannot run it.
+        if (requested == NrSlot::DFNR && m_dspAssets && !m_dspAssets->dfnrRunnable()) {
+            if (reason) {
+                *reason = m_dspAssets->dfnrModelStatus();
+            }
+            return false;
+        }
+        // R-R3-49, Sub-epic C-1: nor MNR on a Core that is not a Mac, nor
+        // BNR, which is in no build.
+        if (requested == NrSlot::MNR || requested == NrSlot::BNR) {
+            const QString cannot = nrCannotRunReason(requested);
+            if (!cannot.isEmpty()) {
+                if (reason) {
+                    *reason = cannot;
+                }
+                return false;
+            }
+        }
         RxChannel* channel = m_wdspEngine ? m_wdspEngine->rxChannel(slice->sliceIndex()) : nullptr;
         // R-R3-40: turning NNR on or off clears a runtime limit. Cleared
         // before NNR goes on, and after it goes off, so an "off" limit never
@@ -6941,11 +7181,32 @@ void RadioModel::wireNnrSettings(SliceModel* slice)
         // before switching NNR on, so a receiver that refused it earlier
         // (for example because the model was missing then) cannot run a
         // different model while the slice shows the saved one.
-        if (requested == NrSlot::NNR && !channel->setNnrTuning(slice->nnrSettings(), reason)) {
-            slice->updateNnrDiagnostics(channel->nnrDiagnostics());
-            return false;
+        //
+        // R-R3-39: with a receive lane both run there as one job
+        // (RxChannel::selectNr), decided here from what the lane last read;
+        // a refusal WDSP still makes there comes back through
+        // nnrRequestRefused (wireRxChannelLaneSignals).
+        bool accepted = false;
+        if (channel->controlLane() != nullptr) {
+            const NnrSettings saved = slice->nnrSettings();
+            QString tuningReason;
+            accepted = channel->selectNr(requested,
+                                         requested == NrSlot::NNR ? &saved : nullptr,
+                                         slice->activeNr(), &tuningReason);
+            if (!accepted && !tuningReason.isEmpty()) {
+                if (reason) {
+                    *reason = tuningReason;
+                }
+                slice->updateNnrDiagnostics(channel->nnrDiagnostics());
+                return false;
+            }
+        } else {
+            if (requested == NrSlot::NNR && !channel->setNnrTuning(slice->nnrSettings(), reason)) {
+                slice->updateNnrDiagnostics(channel->nnrDiagnostics());
+                return false;
+            }
+            accepted = channel->setActiveNr(requested);
         }
-        const bool accepted = channel->setActiveNr(requested);
         if (limited && requested != NrSlot::NNR) {
             clearNnrLimit(slice);
         }
@@ -6972,6 +7233,10 @@ void RadioModel::wireNnrSettings(SliceModel* slice)
     // Follow-up item 1: the slice's saved choice was restored before this
     // refusal existed, so a saved NR3 is checked again now.
     turnOffNr3WithoutModel(slice);
+    // R-R3-49: and a saved DFNR the Core cannot run.
+    turnOffDfnrWithoutModel(slice);
+    // And a saved MNR or BNR it cannot run.
+    turnOffNrThatCannotRun(slice);
 }
 
 QString RadioModel::nr3CannotRunReason() const
@@ -6979,6 +7244,117 @@ QString RadioModel::nr3CannotRunReason() const
     return m_dspAssets->nr3ModelStatus().isEmpty()
         ? tr("NR3 cannot run on this Core: no NR3 model file was found.")
         : m_dspAssets->nr3ModelStatus();
+}
+
+QString RadioModel::dfnrCannotRunReason(bool modelMissing)
+{
+#ifdef HAVE_DFNR
+    return modelMissing
+        ? tr("No DFNR model file was found on this Core, so DFNR cannot run.")
+        : tr("The DFNR model file on this Core could not be loaded, so DFNR cannot run.");
+#else
+    Q_UNUSED(modelMissing);
+    return tr("This Core was built without DFNR, so DFNR cannot run.");
+#endif
+}
+
+QString RadioModel::mnrCannotRunReason()
+{
+    return tr("MNR runs only on a Mac, and this Core is not a Mac, so MNR cannot run.");
+}
+
+QString RadioModel::bnrCannotRunReason()
+{
+    return tr("NVIDIA noise removal is not in this version of NereusSDR.");
+}
+
+QString RadioModel::nrCannotRunReason(NrSlot slot) const
+{
+    // R-R3-49, Sub-epic C-1: the Core's word, mirrored in a remote window.
+    if (!m_dspAssets) {
+        return nrCannotRunInThisBuildReason(slot);
+    }
+    switch (slot) {
+    case NrSlot::DFNR:
+        if (m_dspAssets->dfnrRunnable()) {
+            return {};
+        }
+        return m_dspAssets->dfnrModelStatus().isEmpty()
+            ? tr("DFNR cannot run on this Core.")
+            : m_dspAssets->dfnrModelStatus();
+    case NrSlot::MNR:
+        if (m_dspAssets->mnrRunnable()) {
+            return {};
+        }
+        return m_dspAssets->mnrStatus().isEmpty() ? mnrCannotRunReason()
+                                                  : m_dspAssets->mnrStatus();
+    case NrSlot::BNR:
+        return bnrBuilt() ? QString() : bnrCannotRunReason();
+    default:
+        return {};
+    }
+}
+
+QString RadioModel::nrCannotRunInThisBuildReason(NrSlot slot)
+{
+    switch (slot) {
+    case NrSlot::DFNR:
+#ifdef HAVE_DFNR
+        return {};
+#else
+        return dfnrCannotRunReason(true);
+#endif
+    case NrSlot::MNR:
+#ifdef HAVE_MNR
+        return {};
+#else
+        return mnrCannotRunReason();
+#endif
+    case NrSlot::BNR:
+        return bnrBuilt() ? QString() : bnrCannotRunReason();
+    default:
+        return {};
+    }
+}
+
+void RadioModel::turnOffNrThatCannotRun(SliceModel* slice)
+{
+    // R-R3-49, Sub-epic C-1: MNR on a Core without it, and BNR anywhere,
+    // as turnOffDfnrWithoutModel does for DFNR.
+    if (!slice || role() != Role::Local) {
+        return;
+    }
+    const NrSlot active = slice->activeNr();
+    if (active != NrSlot::MNR && active != NrSlot::BNR) {
+        return;
+    }
+    const QString reason = nrCannotRunReason(active);
+    if (reason.isEmpty()) {
+        return;
+    }
+    // Off always passes the selection applier; the reason is set after,
+    // since setActiveNr clears it.
+    slice->setActiveNr(NrSlot::Off);
+    slice->reportNnrEditResult(reason);
+}
+
+void RadioModel::onRxChannelDfnrUnavailable(bool modelMissing)
+{
+    if (m_dspAssets) {
+        m_dspAssets->setDfnrAvailability(false, dfnrCannotRunReason(modelMissing));
+    }
+}
+
+void RadioModel::turnOffDfnrWithoutModel(SliceModel* slice)
+{
+    if (!slice || role() != Role::Local || !m_dspAssets || m_dspAssets->dfnrRunnable()
+        || slice->activeNr() != NrSlot::DFNR) {
+        return;
+    }
+    // As turnOffNr3WithoutModel: Off always passes the selection applier,
+    // and the reason is set after, since setActiveNr clears it.
+    slice->setActiveNr(NrSlot::Off);
+    slice->reportNnrEditResult(m_dspAssets->dfnrModelStatus());
 }
 
 void RadioModel::turnOffNr3WithoutModel(SliceModel* slice)
@@ -7070,6 +7446,20 @@ void RadioModel::applyNnrStateToChannel(SliceModel* slice, RxChannel* channel)
     // Follow-up item 1 (R-R3-21): WDSP is never asked to run NR3 without a
     // usable NR3 model; the slice shows NR off with the reason instead.
     turnOffNr3WithoutModel(slice);
+    turnOffDfnrWithoutModel(slice);   // R-R3-49: likewise DFNR
+    turnOffNrThatCannotRun(slice);    // R-R3-49: and MNR or BNR
+
+    if (channel->controlLane() != nullptr) {
+        // R-R3-39: the same steps as one receive-lane job
+        // (RxChannel::applyNnrState); its diagnostics, with the tuning's
+        // refusal as their explanation, reach the slice through
+        // nnrDiagnosticsRefreshed.
+        const bool nr3Blocked = slice->activeNr() == NrSlot::NR3 && m_dspAssets
+            && !m_dspAssets->nr3Runnable();
+        channel->applyNnrState(slice->nnrLimit(), slice->nnrSettings(), slice->activeNr(),
+                               nr3Blocked);
+        return;
+    }
     QString reason;
     // R-R3-40: a new or reopened channel starts with the slice's runtime
     // limit, applied by the tuning call below.
@@ -7135,16 +7525,9 @@ void RadioModel::reconcileNotchCount(RxChannel* ch)
     // UpdateNBPFilters, which every mutation already pays and which designs
     // two filters, nbp0 plus recalc_bpsnba_filter (nbp.c:345-359 ->
     // snb.c:814-828).
-    const int expected = m_notchModel->notches().size();
-    const int actual   = ch->notchCount();
-    if (actual == expected) {
-        return;
-    }
-    qCWarning(lcDsp) << "Notch index divergence on RX channel"
-                     << ch->channelId() << "- WDSP holds" << actual
-                     << "notches, the model holds" << expected
-                     << "- resyncing";
-    ch->syncNotches(m_notchModel->notches());
+    // R-R3-39: the comparison and the resync run on the receive lane
+    // (RxChannel::reconcileNotchCount).
+    ch->reconcileNotchCount(m_notchModel->notches());
 }
 
 void RadioModel::syncNotchesToChannel(RxChannel* ch, int channelId)
@@ -7178,11 +7561,10 @@ void RadioModel::syncNotchesToChannel(RxChannel* ch, int channelId)
     SliceModel* owner = sliceById(channelId);
     const bool originResolvable = (owner != nullptr && owner->streamIndex() >= 0);
     if (!originResolvable) {
-        if (ch->notchCount() > 0) {
-            // Leaving stale notches on a channel we are declining to own is
-            // how the bug survived a reconnect.
-            ch->syncNotches({});
-        }
+        // Leaving stale notches on a channel we are declining to own is
+        // how the bug survived a reconnect. R-R3-39: an empty resync deletes
+        // whatever WDSP holds (nothing when it holds none), on the lane.
+        ch->syncNotches({});
         qCDebug(lcDsp).nospace()
             << "notch sync skipped for channel " << channelId
             << " (slice=" << (owner ? owner->sliceIndex() : -1)
@@ -7271,10 +7653,8 @@ void RadioModel::wireNotchModel()
             // mutation at all (third_party/wdsp/src/nbp.c:362-390). Design
             // section 6.2: surface it, and recover with a full resync rather
             // than an assert, which a release build compiles out.
-            if (!ch->addNotch(index, *n)) {
-                ch->syncNotches(m_notchModel->notches());
-            }
-            reconcileNotchCount(ch);
+            // R-R3-39: as one receive-lane job (addNotchReconciled).
+            ch->addNotchReconciled(index, *n, m_notchModel->notches());
 
         }
     });
@@ -7294,10 +7674,8 @@ void RadioModel::wireNotchModel()
             // the time this lands. WDSP shifts its own array down internally
             // (nbp.c:418-441) and our list does the same, so positions stay
             // aligned (design section 5.2).
-            if (!ch->deleteNotch(formerIndex)) {
-                ch->syncNotches(m_notchModel->notches());
-            }
-            reconcileNotchCount(ch);
+            // R-R3-39: as one receive-lane job (deleteNotchReconciled).
+            ch->deleteNotchReconciled(formerIndex, m_notchModel->notches());
         }
     });
 
@@ -8005,6 +8383,13 @@ void RadioModel::republishStreamBindings(int streamIndex)
 // over-read this ordering exists to prevent.
 void RadioModel::applyStreamDspGeometry()
 {
+    if (m_sampleRateChangeInFlight) {
+        // R-R3-39: a live rate change is re-rating every channel on the
+        // receive lane; reconcile after it, against the state it leaves
+        // (finishSampleRateChange, abandonSampleRateChange).
+        m_streamGeometryPending = true;
+        return;
+    }
     const int streamCount = m_streamAllocator.streamCount();
     if (streamCount <= 0) {
         return;
@@ -8054,6 +8439,73 @@ void RadioModel::applyStreamDspGeometry()
         }
     }
     if (!outOfStep) {
+        return;
+    }
+
+    if (m_rxLane && m_wdspEngine) {
+        // R-R3-39: the same steps as one receive-lane barrier, in the order
+        // below (quiesce, the worker's drain thresholds, every channel's
+        // rate, reconnect). What the event loop owns changes at once: the
+        // published sizes and each wrapper's rate carry. The lane, not the
+        // event loop, waits for the DSP worker.
+        struct RateJob {
+            int channelId;
+            int rateHz;
+            int bufferSize;
+        };
+        std::vector<std::pair<int, int>> thresholds;   // stream, in_size
+        if (m_dspWorker) {
+            for (int st = 0; st < streamCount; ++st) {
+                if (m_streamInSizePushed.value(st, -1) == inSizeFor[st]) {
+                    continue;
+                }
+                m_streamInSizePushed.insert(st, inSizeFor[st]);
+                thresholds.emplace_back(st, inSizeFor[st]);
+            }
+        }
+        std::vector<RateJob> rates;
+        for (SliceModel* s : std::as_const(m_slices)) {
+            if (!s) { continue; }
+            const int st = s->streamIndex();
+            if (st < 0 || st >= streamCount) { continue; }
+            RxChannel* ch = m_wdspEngine->rxChannel(s->sliceIndex());
+            // Idempotent, as WdspEngine::setRxChannelRate is.
+            if (!ch || ch->sampleRate() == rateFor[st]) { continue; }
+            ch->setSampleRateCarry(rateFor[st]);
+            rates.push_back({s->sliceIndex(), rateFor[st], ch->bufferSize()});
+        }
+        RxDspWorker* const worker = m_dspWorker;
+        ReceiverManager* const receivers = m_receiverManager;
+        WdspEngine* const engine = m_wdspEngine;
+        m_rxLane->postBarrier([this, worker, receivers, engine, thresholds, rates]() {
+            // Quiesce, from the lane: see the ordering note below. Only
+            // while the worker's thread runs, as before.
+            const bool quiesce = worker != nullptr && receivers != nullptr
+                                 && dspWorkerThreadRunning(worker);
+            if (quiesce) {
+                QObject::disconnect(receivers, &ReceiverManager::iqDataForReceiverStamped,
+                                    worker, &RxDspWorker::processStampedIqBatch);
+                runOnDspWorkerFromLane(worker, [worker]() { worker->resetAccumulator(); });
+            }
+            // Half 1: the worker's per-stream drain thresholds, queued to its
+            // thread ahead of the first batch after the reconnect.
+            for (const auto& [st, inSize] : thresholds) {
+                QMetaObject::invokeMethod(worker, [worker, st = st, inSize = inSize]() {
+                    worker->setStreamInputChunk(st, inSize);
+                }, Qt::QueuedConnection);
+            }
+            // Half 2: every bound slice's channel (Thetis cmaster.c:473-475
+            // [v2.10.3.15], see below).
+            for (const RateJob& job : rates) {
+                engine->applyRxChannelRateOnLane(job.channelId, job.rateHz, job.bufferSize);
+            }
+            if (quiesce) {
+                connect(receivers, &ReceiverManager::iqDataForReceiverStamped,
+                        worker, &RxDspWorker::processStampedIqBatch,
+                        static_cast<Qt::ConnectionType>(Qt::QueuedConnection
+                                                        | Qt::UniqueConnection));
+            }
+        });
         return;
     }
 
@@ -8759,6 +9211,39 @@ bool RadioModel::setStreamSampleRateClosing(int streamIndex, int rateHz,
     }
 
     const bool isP1 = sampleRateIsRadioWide();
+    if (isP1 && m_rxLane) {
+        // R-R3-39: the radio-wide change runs on the receive lane. A refused
+        // wire update (no connection, WDSP not ready) is known now and
+        // leaves every client-side object intact; otherwise the plan is
+        // committed when the change finishes, so its DDC assignment reaches
+        // the connection after the stream restart, in the order the
+        // synchronous change kept.
+        if (rateHz != m_connectionSampleRateHz && !canChangeSampleRateLive()) {
+            qCWarning(lcConnection) << "setSampleRateLive: no active connection "
+                                       "or WDSP not initialized — ignoring";
+            return false;
+        }
+        const StreamRateChangePlan committed = *plan;
+        // Merge of the trunk into the transmit lane: the slices the plan set
+        // aside close once the change is certain (it finished), and only
+        // then, before the plan commits, as the synchronous path below does.
+        const std::function<void(int)> closeSlice = close;
+        requestSampleRateChange({rateHz, false, [this, committed, closing, closeSlice](bool ok) {
+            if (!ok) {
+                return;
+            }
+            if (closeSlice) {
+                const QList<SliceModel*> slices = m_slices;
+                for (SliceModel* slice : slices) {
+                    if (slice != nullptr && closing.contains(slice->sliceIndex())) {
+                        closeSlice(slice->sliceIndex());
+                    }
+                }
+            }
+            commitStreamSampleRateChange(committed);
+        }});
+        return true;
+    }
     if (isP1) {
         // Protocol 1 carries one radio-wide wire rate. The complete allocator
         // transition is known valid before this can stop the stream or touch
@@ -9269,7 +9754,13 @@ void RadioModel::governNnrLoadWith(qint64 nowMs,
             RxChannel::DspLoadCounters counters;
             if (!channel->dspLoad(counters) || counters.blocks >= pending.value() + 2) {
                 m_nnrLimitReadbackPending.remove(sliceId);
-                slice->updateNnrDiagnostics(channel->nnrDiagnostics());
+                if (channel->controlLane() != nullptr) {
+                    // R-R3-39: read on the lane; nnrDiagnosticsRefreshed
+                    // brings it to the slice.
+                    channel->refreshNnrDiagnostics();
+                } else {
+                    slice->updateNnrDiagnostics(channel->nnrDiagnostics());
+                }
             }
         }
         NnrLoadGovernor::Receiver receiver;
@@ -10330,7 +10821,160 @@ void RadioModel::attachDspWorkerForTest(RxDspWorker* worker)
 {
     attachRadeRxWorker(worker);
 }
+
+bool RadioModel::waitForReceiveLaneForTest(int timeoutMs)
+{
+    if (!m_rxLane) {
+        return true;
+    }
+    QElapsedTimer timer;
+    timer.start();
+    // Twice: an answer delivered by the first pass may post more lane work.
+    for (int pass = 0; pass < 2; ++pass) {
+        const int left = std::max(0, timeoutMs - static_cast<int>(timer.elapsed()));
+        if (!m_rxLane->waitIdleForTest(left)) {
+            return false;
+        }
+        QCoreApplication::sendPostedEvents();
+        QCoreApplication::processEvents();
+    }
+    return m_rxLane->waitIdleForTest(std::max(0, timeoutMs - static_cast<int>(timer.elapsed())));
+}
+
+bool RadioModel::waitForTransmitLaneForTest(int timeoutMs)
+{
+    if (!m_txLane) {
+        return true;
+    }
+    QElapsedTimer timer;
+    timer.start();
+    // Twice: an answer delivered by the first pass may post more lane work.
+    for (int pass = 0; pass < 2; ++pass) {
+        const int left = std::max(0, timeoutMs - static_cast<int>(timer.elapsed()));
+        if (!m_txLane->waitIdleForTest(left)) {
+            return false;
+        }
+        QCoreApplication::sendPostedEvents();
+        QCoreApplication::processEvents();
+    }
+    return m_txLane->waitIdleForTest(std::max(0, timeoutMs - static_cast<int>(timer.elapsed())));
+}
 #endif
+
+// ── R-R3-39: the receive lane ───────────────────────────────────────────────
+//
+// NereusSDR-original. The DSP worker and its thread, as the lane's barriers
+// see them. Set when the worker starts, cleared at teardown after the lane
+// has drained and before either object is deleted.
+void RadioModel::setRxWorkerTarget(RxDspWorker* worker, QThread* thread)
+{
+    std::lock_guard<std::mutex> lock(m_rxWorkerTarget->mutex);
+    m_rxWorkerTarget->worker = worker;
+    m_rxWorkerTarget->thread = thread;
+}
+
+bool RadioModel::dspWorkerThreadRunning(RxDspWorker* worker) const
+{
+    std::lock_guard<std::mutex> lock(m_rxWorkerTarget->mutex);
+    return worker != nullptr && m_rxWorkerTarget->worker == worker
+        && m_rxWorkerTarget->thread != nullptr && m_rxWorkerTarget->thread->isRunning()
+        && QThread::currentThread() != m_rxWorkerTarget->thread;
+}
+
+// What the BlockingQueuedConnection calls into RxDspWorker did, from the
+// lane: the event loop no longer waits on the DSP thread, the lane does.
+void RadioModel::runOnDspWorkerFromLane(RxDspWorker* worker, const std::function<void()>& fn)
+{
+    QThread* thread = nullptr;
+    {
+        std::lock_guard<std::mutex> lock(m_rxWorkerTarget->mutex);
+        if (m_rxWorkerTarget->worker == worker) {
+            thread = m_rxWorkerTarget->thread;
+        }
+    }
+    if (worker != nullptr && thread != nullptr && thread->isRunning()
+        && QThread::currentThread() != thread) {
+        QMetaObject::invokeMethod(worker, fn, Qt::BlockingQueuedConnection);
+    } else {
+        fn();
+    }
+}
+
+// R-R3-39: the RF-gain half of Thetis's AGC-T / RF-gain sync
+// (console.cs:45978 [v2.10.3.13], GetRXAAGCTop after SetRXAAGCThresh), as a
+// lane readback. The RF gain is written with m_syncingAgc set, so its own
+// handler neither turns auto AGC off nor calls WDSP again, as before.
+void RadioModel::syncRfGainFromAgcTop(SliceModel* slice, RxChannel* channel)
+{
+    const quint64 serial = ++m_agcReadbackSerial[slice];
+    channel->requestAgcReadBack(slice, [this, slice, serial](double top, double) {
+        // A newer AGC set on this slice has its own readback.
+        if (m_agcReadbackSerial.value(slice) != serial) {
+            return;
+        }
+        const int rfGain = static_cast<int>(std::round(top));
+        if (slice->rfGain() != rfGain) {
+            const bool wasSyncing = m_syncingAgc;
+            m_syncingAgc = true;
+            slice->setRfGain(rfGain);
+            m_syncingAgc = wasSyncing;
+        }
+    });
+}
+
+// A channel with a lane reports NNR back from the lane. Every signal looks
+// the channel up again: a queued signal from a retired wrapper finds a
+// different (or no) channel and does nothing.
+void RadioModel::wireRxChannelLaneSignals(int channelId)
+{
+    RxChannel* channel = m_wdspEngine ? m_wdspEngine->rxChannel(channelId) : nullptr;
+    if (channel == nullptr) {
+        return;
+    }
+    // R-R3-49, Sub-epic C-1: a channel's first DFNR selection found the
+    // model missing or unloadable: this Core cannot run DFNR (queued here
+    // from the receive lane).
+    connect(channel, &RxChannel::dfnrUnavailable, this, &RadioModel::onRxChannelDfnrUnavailable);
+    if (channel->controlLane() == nullptr) {
+        return;
+    }
+    connect(channel, &RxChannel::nnrDiagnosticsRefreshed, this, [this, channel, channelId]() {
+        RxChannel* live = m_wdspEngine ? m_wdspEngine->rxChannel(channelId) : nullptr;
+        if (live != channel) {
+            return;
+        }
+        if (SliceModel* slice = sliceById(channelId)) {
+            slice->updateNnrDiagnostics(live->nnrDiagnostics());
+        }
+    });
+    connect(channel, &RxChannel::nnrRequestRefused, this,
+            [this, channel, channelId](const QString& reason, int previousSlot) {
+        RxChannel* live = m_wdspEngine ? m_wdspEngine->rxChannel(channelId) : nullptr;
+        SliceModel* slice = sliceById(channelId);
+        if (live != channel || slice == nullptr) {
+            return;
+        }
+        // WDSP refused, on the lane, a selection the slice took at once: the
+        // slice goes back to the selection it had, which the channel runs
+        // again (the answer a refusal at once would have left).
+        if (previousSlot >= 0 && live->activeNr() != slice->activeNr()) {
+            slice->setActiveNr(static_cast<NrSlot>(previousSlot));
+        }
+        QString why = reason;
+        if (why.isEmpty()) {
+            why = slice->nnrStatus().isEmpty()
+                ? tr("The requested noise reduction is unavailable.") : slice->nnrStatus();
+        }
+        slice->reportNnrEditResult(why);
+    });
+    connect(channel, &RxChannel::dspOptionsApplied, this, [this](qint64 elapsedMs) {
+        // Same gate as the RX path's synchronous return: only a change
+        // that took measurable time is reported.
+        if (elapsedMs > 0) {
+            emit dspChangeMeasured(elapsedMs);
+        }
+    });
+}
 
 quint64 RadioModel::publishRadeRxTarget(int sliceId, RadeChannel* channel,
                                         SliceModel* slice)
@@ -11068,6 +11712,196 @@ void RadioModel::setTransmitHolder(const QByteArray& holder)
     }
     m_sliceOwnership->setTransmitHolder(holder);
     applyActiveSlices();
+    // Fix wave C2: VOX follows the holder (remoteVoxDevice).
+    updateRemoteMicSource();
+}
+
+// iPhone app plan Task 35 (R-IOS-13): who is keyed, and the keying epoch.
+void RadioModel::setKeyedBy(const KeyedBy& keyedBy)
+{
+    if (role() != Role::Local || m_keyedBy == keyedBy) {
+        return;
+    }
+    const bool wasRemoteVox = m_keyedBy.trigger == QByteArrayLiteral("vox")
+        && !m_keyedBy.isEmpty()
+        && m_keyedBy.deviceId != QByteArray(KeyerIdentity::kStationDeviceId);
+    m_keyedBy = keyedBy;
+    // The Radio Status page's PTT source: a paired device's key is Remote.
+    // Only Remote is set and cleared here; the other sources are not this
+    // record's.
+    const bool remote = !keyedBy.isEmpty()
+        && keyedBy.deviceId != QByteArray(KeyerIdentity::kStationDeviceId);
+    // iPhone app plan Task 36: a device's VOX key (VOX listening to its
+    // microphone) shows as VOX, attributed to it by keyedBy.
+    const bool remoteVox = remote && keyedBy.trigger == QByteArrayLiteral("vox");
+    if (remoteVox) {
+        m_radioStatus.setActivePttSource(PttSource::Vox);
+    } else if (remote) {
+        m_radioStatus.setActivePttSource(PttSource::Remote);
+    } else if (m_radioStatus.activePttSource() == PttSource::Remote
+               || (m_radioStatus.activePttSource() == PttSource::Vox && wasRemoteVox)) {
+        m_radioStatus.setActivePttSource(PttSource::None);
+    }
+    // Fix wave C2: the writer follows who is keyed.
+    updateRemoteMicSource();
+    emit keyedByChanged();
+}
+
+// iPhone app plan Task 36 (R-IOS-13): the remote microphone source. Fix
+// wave C2: by device, with one writer at a time.
+void RadioModel::openRemoteMicLine(const QByteArray& deviceId)
+{
+    if (m_role != Role::Local || deviceId.isEmpty()) {
+        return;
+    }
+    ++m_remoteMicLines[deviceId];
+    updateRemoteMicSource();
+    // iPhone app plan Task 37.
+    emit remoteMicLinesChanged();
+}
+
+void RadioModel::closeRemoteMicLine(const QByteArray& deviceId)
+{
+    const auto it = m_remoteMicLines.find(deviceId);
+    if (m_role != Role::Local || it == m_remoteMicLines.end()) {
+        return;
+    }
+    if (--it.value() <= 0) {
+        m_remoteMicLines.erase(it);
+        // Its priming and VOX go with its last line.
+        if (m_remoteMicPrimingDevice == deviceId) {
+            m_remoteMicPrimingDevice.clear();
+        }
+        m_remoteMicVoxArmed.remove(deviceId);
+    }
+    updateRemoteMicSource();
+    emit remoteMicLinesChanged();
+}
+
+bool RadioModel::remoteMicLineOpen(const QByteArray& deviceId) const
+{
+    return !deviceId.isEmpty() && m_remoteMicLines.value(deviceId) > 0;
+}
+
+void RadioModel::setRemoteMicPriming(const QByteArray& deviceId, bool priming)
+{
+    if (m_role != Role::Local || deviceId.isEmpty()) {
+        return;
+    }
+    if (priming) {
+        if (m_remoteMicPrimingDevice == deviceId) {
+            return;
+        }
+        m_remoteMicPrimingDevice = deviceId;
+    } else {
+        if (m_remoteMicPrimingDevice != deviceId) {
+            return;
+        }
+        m_remoteMicPrimingDevice.clear();
+    }
+    updateRemoteMicSource();
+}
+
+void RadioModel::setRemoteMicVoxArmed(const QByteArray& deviceId, bool armed)
+{
+    if (m_role != Role::Local || deviceId.isEmpty()
+        || m_remoteMicVoxArmed.contains(deviceId) == armed) {
+        return;
+    }
+    if (armed) {
+        m_remoteMicVoxArmed.insert(deviceId);
+    } else {
+        m_remoteMicVoxArmed.remove(deviceId);
+    }
+    updateRemoteMicSource();
+}
+
+QByteArray RadioModel::remoteVoxDevice() const
+{
+    // Ruling 8.4: VOX follows the holder. Otherwise the one device with VOX
+    // armed; with several (transmit unheld, VOX armed at the Core itself)
+    // none, and VOX listens to the Core's own source.
+    QByteArray armedWithLine;
+    int count = 0;
+    for (const QByteArray& device : m_remoteMicVoxArmed) {
+        if (remoteMicLineOpen(device)) {
+            armedWithLine = device;
+            ++count;
+        }
+    }
+    const QByteArray holder = m_sliceOwnership ? m_sliceOwnership->transmitHolder() : QByteArray();
+    if (!holder.isEmpty() && m_remoteMicVoxArmed.contains(holder) && remoteMicLineOpen(holder)) {
+        return holder;
+    }
+    return count == 1 ? armedWithLine : QByteArray();
+}
+
+void RadioModel::updateRemoteMicSource()
+{
+    if (!m_remoteMicFeed) {
+        return;
+    }
+    const bool mox = m_moxController != nullptr && m_moxController->isMox();
+    const QByteArray keyedDevice =
+        mox && remoteMicLineOpen(m_keyedBy.deviceId) ? m_keyedBy.deviceId : QByteArray();
+    // A key that started on a device's line stays on the ring until it
+    // ends, even if the line goes away meanwhile: the transmitter then
+    // hears silence, never the station's own microphone.
+    if (!keyedDevice.isEmpty()) {
+        m_remoteMicKeyedDevice = keyedDevice;
+    } else if (!mox || m_keyedBy.deviceId != m_remoteMicKeyedDevice) {
+        m_remoteMicKeyedDevice.clear();
+    }
+    const bool lineLostMidKey = !m_remoteMicKeyedDevice.isEmpty() && keyedDevice.isEmpty();
+    // Fix wave C2: the one writer: the keyed device's line; else the line of
+    // the device whose key is waiting for it (also while that key's MOX
+    // rises, before it is attributed, so the filled buffer carries on);
+    // else, unkeyed, the VOX device's. While another key is on, none (that
+    // key's audio is its own source).
+    QByteArray writer = keyedDevice;
+    if (writer.isEmpty() && remoteMicLineOpen(m_remoteMicPrimingDevice)
+        && (!mox || m_keyedBy.isEmpty() || m_keyedBy.deviceId == m_remoteMicPrimingDevice)) {
+        writer = m_remoteMicPrimingDevice;
+    }
+    if (writer.isEmpty() && !mox) {
+        writer = remoteVoxDevice();
+    }
+    const bool inUse = lineLostMidKey || !writer.isEmpty();
+    const bool writerChanged = writer != m_remoteMicWriter;
+    m_remoteMicWriter = writer;
+    if (inUse == m_remoteMicInUse) {
+        if (writerChanged && inUse) {
+            // A new writer starts from an empty ring: nothing of the last
+            // device's audio is heard in this one's transmission.
+            m_remoteMicFeed->setInUse(false);
+            m_remoteMicFeed->setInUse(true);
+            qCInfo(lcDsp) << "Transmit microphone: the remote device" << writer;
+        }
+        if (writerChanged) {
+            emit remoteMicWriterChanged(writer);
+        }
+        return;
+    }
+    m_remoteMicInUse = inUse;
+    // Every change empties the ring: nothing of the device's audio is left
+    // when the operator's source returns, and a new key starts from silence.
+    m_remoteMicFeed->setInUse(inUse);
+    qCInfo(lcDsp) << "Transmit microphone:" << (inUse ? "the remote device" : "the station's own")
+                  << writer;
+    if (writerChanged) {
+        emit remoteMicWriterChanged(writer);
+    }
+    emit remoteMicInUseChanged(inUse);
+}
+
+quint32 RadioModel::advanceKeyingEpoch()
+{
+    ++m_keyingEpoch;
+    if (m_keyingEpoch == 0) {
+        // uint32 wraps after four billion keys; 0 stays "no key".
+        m_keyingEpoch = 1;
+    }
+    return m_keyingEpoch;
 }
 
 int RadioModel::lowestFreeSliceId() const
@@ -12284,6 +13118,15 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
             // Task 4.2: give TxChannel a handle to WdspEngine so onModeChanged()
             // can call rebuild() when the active mode's DSP-Options settings change.
             m_txChannel->setWdspEngine(m_wdspEngine);
+            // R-R3-39: with the transmit lane, onModeChanged returns at once
+            // and the lane reports how long its WDSP work took. Same gate as
+            // the RX path's.
+            connect(m_txChannel, &TxChannel::dspOptionsApplied,
+                    this, [this](qint64 elapsedMs) {
+                if (elapsedMs > 0) {
+                    emit dspChangeMeasured(elapsedMs);
+                }
+            });
 
             // ── L.1: construct Pc + Radio mic sources + composite router ──────────
             // Construct after m_connection is live so RadioMicSource has a valid
@@ -12561,6 +13404,9 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
                 // RX channel and took the app down on key-down with
                 // PureSignal active.
                 m_psccPump->setTxChannelId(WdspEngine::kTxChannelId);
+                // R-R3-39: pscc() runs on the transmit lane through the TX
+                // channel, every block in arrival order.
+                m_psccPump->setTxChannel(m_txChannel);
 
                 // Chunk D — iqDataReceived is forked to PsccPump from the
                 // existing wireConnectionSignals lambda (the one wired in
@@ -12715,6 +13561,12 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
             // on the worker thread, where m_txChannel->setX() is a same-
             // thread direct call — no cross-thread setter race.
             //
+            // R-R3-39: m_txChannel is no longer moved to the worker. These
+            // connects are direct calls on this thread now; each setter
+            // changes the wrapper's state at once and posts its WDSP call to
+            // the transmit lane, so it applies even while no mic block
+            // arrives.
+            //
             // Why these are wired here (not in the RadioModel ctor):
             //   m_txChannel doesn't exist at construction time (createTxChannel
             //   runs inside this WDSP-init lambda).  Receiver thread affinity
@@ -12731,62 +13583,11 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
             // Source-of-truth: docs/architecture/phase3m-1c-tx-pump-architecture-plan.md
             // §5.2 last bullet (TxChannel cross-thread setter audit).
 
-            // F.1 — txReady → setRunning(true), GATED on interlockGranted.
-            // From Thetis console.cs:29595 [v2.10.3.13] — TX-on callsite after
-            // Thread.Sleep(rf_delay) in chkMOX_CheckedChanged2.
-            //
-            // 2026-05-20 bench fix (deck item #3 -- MOX RF-gate, then
-            // 21:19 ordering refactor): if an external amp is in the
-            // chain, we defer setRunning(true) until BOTH txReady AND
-            // interlockGranted have fired. Whichever fires SECOND
-            // triggers setRunning. We can't rely on a single arming
-            // point because the two signals can race in either order
-            // depending on amp ACK speed (fast TGXL ACK -> grant before
-            // txReady).
-            //
-            // The gate is ARMED at txAboutToBegin above (before PTT_-
-            // REQUESTED can fire any synchronous interlockGranted) and
-            // CLEARED by the interlockGranted handler in the listener
-            // wire above. Here we only flip m_txReadyReceived and call
-            // setRunning if interlockGranted has already cleared the
-            // gate. The grant handler does the symmetric check.
-            //
-            // 1500 ms failsafe armed if the grant never fires
-            // (e.g. amp disconnected mid-cycle).
-            connect(m_moxController, &MoxController::txReady,
-                    this, [this]() {
-                if (!m_txChannel) { return; }
-                m_txReadyReceived = true;
-                if (!m_awaitingInterlockForTx) {
-                    // Either no amp in chain (gate never armed) OR the
-                    // grant already cleared the gate (fast-ACK race).
-                    // Either way, start TxChannel now.
-                    qCInfo(lcConnection)
-                        << "RF-flow gate: txReady arrived; gate already"
-                           " released (or no amp). Starting TxChannel.";
-                    m_txChannel->setRunning(true);
-                    return;
-                }
-                qCInfo(lcConnection)
-                    << "RF-flow gate: txReady arrived; waiting interlock"
-                       "Granted before starting TxChannel";
-                QTimer::singleShot(1500, this, [this]() {
-                    if (m_awaitingInterlockForTx && m_txChannel) {
-                        qCWarning(lcConnection)
-                            << "RF-flow gate: interlockGranted didn't fire"
-                               " within 1.5 s, starting TxChannel anyway"
-                               " (failsafe)";
-                        m_awaitingInterlockForTx = false;
-                        m_txChannel->setRunning(true);
-                    }
-                });
-            });
-
-            // F.1 — txaFlushed → setRunning(false).
-            // From Thetis console.cs:29607 [v2.10.3.13] — TX-off callsite with
-            // dmode=1 (drain) in the TX→RX branch.
-            // Thread.Sleep(space_mox_delay); // default 0 // from PSDR MW0LGE  [console.cs:29603]
-            wireTxaFlushed();
+            // F.1 — txReady → setRunningAsync(true) and txaFlushed →
+            // setRunningAsync(false): see wireTxChannelKeying (R-R3-39 moved
+            // them into one method so the transmit-lane test can wire the
+            // same connections to an injected channel).
+            wireTxChannelKeying();
 
             // H.1 — voxRunRequested → setVoxRun.
             // From Thetis cmaster.cs:1039-1052 [v2.10.3.13] — CMSetTXAVoxRun.
@@ -12999,7 +13800,13 @@ void RadioModel::connectToRadioImpl(const RadioInfo& info, bool preserveSlices)
                 m_txWorker->setTxChannel(m_txChannel);
                 m_txWorker->setAudioEngine(m_audioEngine);
                 m_txWorker->setMicSource(m_txMicSource.get());
-                m_txChannel->moveToThread(m_txWorker.get());
+                // iPhone app plan Task 36: the remote microphone ring,
+                // which outlives the worker.
+                m_txWorker->setRemoteMicFeed(m_remoteMicFeed.get());
+                // R-R3-39: the TX channel stays on this thread. Its setters
+                // post their WDSP calls to the transmit lane (applied even
+                // while no mic block arrives); the worker only runs the
+                // per-block DEXP and fexchange0.
                 m_txWorker->startPump();
 
                 qCInfo(lcDsp) << "TX pump: TxWorkerThread started"
@@ -13843,6 +14650,8 @@ void RadioModel::wireConnectionSignals(int wdspInSize)
             m_dspWorker, &RxDspWorker::processStampedExternalDiversityIqBatch,
             Qt::QueuedConnection);
     m_dspThread->start();
+    // R-R3-39: what the receive lane's barriers park.
+    setRxWorkerTarget(m_dspWorker, m_dspThread);
 
     // ── Phase 3F Sub-Epic I closeout, defect F1 ─────────────────────────
     //
@@ -14397,9 +15206,15 @@ void RadioModel::installBandPlanMoxCheck()
         // remote refusals silent in exactly the path an operator watches.
         // Same reasoning recorded in the design addendum section 4.
         if (receiveOnlyTxOperationsBlocked()) {
-            return {false,
-                    QStringLiteral("Remote transmit controls are not available "
-                                   "from this Core yet.")};
+            // iPhone app plan Task 34: on a Core the policy is its
+            // remote_transmit = deny, named as the link names it.
+            safety::BandPlanGuard::MoxCheckResult refused{
+                false, m_role == Role::Remote
+                           ? QStringLiteral("Remote transmit controls are not available "
+                                            "from this Core yet.")
+                           : TxRefusals::stationReceiveOnly().text};
+            refused.refusalCode = TxRefusals::kStationReceiveOnly;
+            return refused;
         }
 
         const int regionInt = AppSettings::instance()
@@ -14436,10 +15251,13 @@ void RadioModel::installBandPlanMoxCheck()
         // controller does not try it again until it is released and
         // pressed again (MoxController::m_notQueuedHeld).
         if (pcCaptureGatesKeying() && !pcCaptureReady()) {
-            return {false,
-                    QStringLiteral("Microphone is not ready. Check Audio "
-                                   "settings and retry."),
-                    /*notQueued=*/true};
+            safety::BandPlanGuard::MoxCheckResult refused{
+                false,
+                QStringLiteral("Microphone is not ready. Check Audio "
+                               "settings and retry."),
+                /*notQueued=*/true};
+            refused.refusalCode = TxRefusals::kMicNotReady;   // Task 34
+            return refused;
         }
         return bandPlanResult;
     });
@@ -14453,6 +15271,12 @@ void RadioModel::installBandPlanMoxCheck()
 bool RadioModel::pcCaptureGatesKeying() const
 {
     if (!pcCaptureRequired()) {
+        return false;
+    }
+    // iPhone app plan Task 36: a remote device's microphone is the source
+    // now; the PC microphone is not read, so its readiness does not gate
+    // the key and its loss does not release it.
+    if (m_remoteMicInUse) {
         return false;
     }
     // TCI audio: the TX worker takes TCI audio instead of the microphone
@@ -14660,10 +15484,9 @@ void RadioModel::flushNotchEditPush()
             // once (nbp.c:345-359), which designs nbp0 AND recalculates bpsnba
             // (snb.c:814-828); syncNotches would pay that 2N times
             // (nbp.c:384, :435, :456). Design section 6.2.
-            if (!ch->editNotch(index, *n)) {
-                ch->syncNotches(m_notchModel->notches());
-            }
-            reconcileNotchCount(ch);
+            // R-R3-39: the edit, its resync and the count check run as one
+            // receive-lane job (RxChannel::editNotchReconciled).
+            ch->editNotchReconciled(index, *n, m_notchModel->notches());
         }
     }
 
@@ -15325,14 +16148,12 @@ void RadioModel::wireSliceSignals(SliceModel* slice)
         if (rxCh) {
             m_syncingAgc = true;
             rxCh->setAgcThreshold(dBu);
+            m_syncingAgc = false;
             // Read back resulting AGC Top and sync RF Gain display.
             // From Thetis console.cs:45978 — GetRXAAGCTop after SetRXAAGCThresh
-            double top = rxCh->readBackAgcTop();
-            int rfGain = static_cast<int>(std::round(top));
-            if (slice->rfGain() != rfGain) {
-                slice->setRfGain(rfGain);
-            }
-            m_syncingAgc = false;
+            // R-R3-39: read on the receive lane after the set; at once
+            // without a lane.
+            syncRfGainFromAgcTop(slice, rxCh);
         }
         scheduleSettingsSave();
     });
@@ -15946,13 +16767,24 @@ void RadioModel::wireSliceSignals(SliceModel* slice)
         if (rxCh) {
             m_syncingAgc = true;
             rxCh->setAgcTop(static_cast<double>(gain));
-            // Read back resulting threshold and sync AGC-T display.
-            double thresh = rxCh->readBackAgcThresh();
-            int threshInt = static_cast<int>(std::round(thresh));
-            if (slice->agcThreshold() != threshInt) {
-                slice->setAgcThreshold(threshInt);
-            }
             m_syncingAgc = false;
+            // Read back resulting threshold and sync AGC-T display.
+            // R-R3-39: read on the receive lane after the set; at once
+            // without a lane.
+            const quint64 serial = ++m_agcReadbackSerial[slice];
+            rxCh->requestAgcReadBack(slice, [this, slice, serial](double, double thresh) {
+                // A newer AGC set on this slice has its own readback.
+                if (m_agcReadbackSerial.value(slice) != serial) {
+                    return;
+                }
+                const int threshInt = static_cast<int>(std::round(thresh));
+                if (slice->agcThreshold() != threshInt) {
+                    const bool wasSyncing = m_syncingAgc;
+                    m_syncingAgc = true;
+                    slice->setAgcThreshold(threshInt);
+                    m_syncingAgc = wasSyncing;
+                }
+            });
         }
         scheduleSettingsSave();
     });
@@ -17326,11 +18158,8 @@ void RadioModel::updateAutoAgc()
             if (rxCh) {
                 rxCh->setAgcThreshold(threshInt);
                 // From Thetis v2.10.3.13 console.cs:45978 — readback AGC top
-                double top = rxCh->readBackAgcTop();
-                int rfGain = static_cast<int>(std::round(top));
-                if (slice->rfGain() != rfGain) {
-                    slice->setRfGain(rfGain);
-                }
+                // R-R3-39: read on the receive lane after the set.
+                syncRfGainFromAgcTop(slice, rxCh);
             }
 
             // Update model (UI sync) — handler won't re-enter WDSP
@@ -18078,6 +18907,16 @@ void RadioModel::teardownConnection()
     // BoardCapabilities::hasMicJack.
     m_transmitModel.setMicSourceLocked(false);
 
+    // R-R3-39: a live rate change still running tells its callers it did
+    // not finish, and every receive-lane job already queued runs now,
+    // while the DSP worker it may park is still alive. Nothing parks the
+    // worker after this.
+    abandonSampleRateChange();
+    if (m_wdspEngine) {
+        m_wdspEngine->drainReceiveLane();
+    }
+    setRxWorkerTarget(nullptr, nullptr);
+
     // Disconnect signals into the DSP worker first so no new I/Q
     // batches can be posted onto the worker thread, then quit and
     // join that thread before touching WDSP. The worker is queued
@@ -18303,6 +19142,10 @@ void RadioModel::teardownConnection()
     // slot calls are queued and will see m_txChannel == nullptr after this clear.
     // WdspEngine::shutdown() → destroyTxChannel(kTxChannelId) handles the actual WDSP teardown.
     m_txChannel = nullptr;
+    // Task 33: nothing reports a TX drain any more.
+    if (m_moxController) {
+        m_moxController->setAwaitsTxDrain(false);
+    }
 
     // Shutdown WDSP (destroys all channels, saves cache)
     m_wdspEngine->shutdown();
@@ -18876,6 +19719,335 @@ void RadioModel::setGanymedePresent(bool present)
     }
 }
 
+// ---------------------------------------------------------------------------
+// wireTxChannelKeying: MoxController's keying steps to the TX channel.
+//
+// NereusSDR-original wiring (moved out of the connect-time TX setup, R-R3-39,
+// unchanged in behaviour). With the transmit lane, setRunningAsync(true)
+// switches the WDSP channel on on the lane and then opens the RF gate, and
+// setRunningAsync(false) closes the gate at once and drains on the lane, so
+// the rf_delay ordering (MOX and relay first, the channel after txReady)
+// holds without the event loop waiting on WDSP.
+// ---------------------------------------------------------------------------
+void RadioModel::wireTxChannelKeying()
+{
+    if (!m_txChannel || !m_moxController) {
+        return;
+    }
+    // F.1 — txReady → setRunning(true), GATED on interlockGranted.
+    // From Thetis console.cs:29595 [v2.10.3.13] — TX-on callsite after
+    // Thread.Sleep(rf_delay) in chkMOX_CheckedChanged2.
+    //
+    // 2026-05-20 bench fix (deck item #3 -- MOX RF-gate, then
+    // 21:19 ordering refactor): if an external amp is in the
+    // chain, we defer setRunning(true) until BOTH txReady AND
+    // interlockGranted have fired. Whichever fires SECOND
+    // triggers setRunning. We can't rely on a single arming
+    // point because the two signals can race in either order
+    // depending on amp ACK speed (fast TGXL ACK -> grant before
+    // txReady).
+    //
+    // The gate is ARMED at txAboutToBegin above (before PTT_-
+    // REQUESTED can fire any synchronous interlockGranted) and
+    // CLEARED by the interlockGranted handler in the listener
+    // wire above. Here we only flip m_txReadyReceived and call
+    // setRunning if interlockGranted has already cleared the
+    // gate. The grant handler does the symmetric check.
+    //
+    // 1500 ms failsafe armed if the grant never fires
+    // (e.g. amp disconnected mid-cycle).
+    connect(m_moxController, &MoxController::txReady,
+            this, [this]() {
+        if (!m_txChannel) { return; }
+        // Task 33: a txReady from a key the emergency stop cut short.
+        if (m_transmitStopHold) { return; }
+        m_txReadyReceived = true;
+        if (!m_awaitingInterlockForTx) {
+            // Either no amp in chain (gate never armed) OR the
+            // grant already cleared the gate (fast-ACK race).
+            // Either way, start TxChannel now.
+            qCInfo(lcConnection)
+                << "RF-flow gate: txReady arrived; gate already"
+                   " released (or no amp). Starting TxChannel.";
+            m_txChannel->setRunningAsync(true);
+            return;
+        }
+        qCInfo(lcConnection)
+            << "RF-flow gate: txReady arrived; waiting interlock"
+               "Granted before starting TxChannel";
+        QTimer::singleShot(1500, this, [this]() {
+            if (m_awaitingInterlockForTx && m_txChannel && !m_transmitStopHold) {
+                qCWarning(lcConnection)
+                    << "RF-flow gate: interlockGranted didn't fire"
+                       " within 1.5 s, starting TxChannel anyway"
+                       " (failsafe)";
+                m_awaitingInterlockForTx = false;
+                m_txChannel->setRunningAsync(true);
+            }
+        });
+    });
+
+    // Task 33: txDrainRequested → setRunning(false): the TX channel
+    // drains first, with the RF gate open and the hardware still keyed,
+    // and the walk waits for it before mox_delay and the hardware flip.
+    // From Thetis console.cs:29651-29658 [v2.10.3.15]:
+    //   if (space_mox_delay > 0)
+    //       Thread.Sleep(space_mox_delay); // default 0 // from PSDR MW0LGE
+    //   _mox = tx;
+    //   psform.Mox = tx;
+    //   WDSP.SetChannelState(WDSP.id(1, 0), 0, 1);  // turn off the transmitter (no action if it's already off)
+    // PureSignal lives on the main thread (group A's re-review): it hears
+    // the radio is going back to receive here, in RadioModel's context,
+    // first, before the TX channel's drain (psform.Mox = tx comes before
+    // SetChannelState in the Thetis lines above).
+    connect(m_moxController, &MoxController::txDrainRequested, this, [this]() {
+        if (m_pureSignal) {
+            if (m_txaFlushedPureSignalObserverForTest) { m_txaFlushedPureSignalObserverForTest(); }
+            m_pureSignal->onMoxChanged(false);
+        }
+    });
+    connect(m_moxController, &MoxController::txDrainRequested,
+            m_txChannel, [this]() {
+        if (!m_txChannel) { return; }
+        m_pendingTxDrainSequence = m_txChannel->setRunningAsync(false);
+    });
+    connect(m_txChannel, &TxChannel::txDrained,
+            this, [this](quint64 sequence) {
+        // >= because without a lane the drain reports inside
+        // setRunningAsync, before its sequence is stored; an older drain
+        // arriving late is still ignored.
+        if (sequence >= m_pendingTxDrainSequence && m_moxController) {
+            m_moxController->onTxDrained();
+        }
+    });
+    // Task 33: txaFlushed: after the drain and mox_delay the RF gate is
+    // shut (it already is unless the drain wait timed out), just before
+    // hardwareFlipped(false) drops the MOX bit.
+    connect(m_moxController, &MoxController::txaFlushed,
+            m_txChannel, [this]() {
+        if (m_txChannel) {
+            m_txChannel->closeRfGate();
+        }
+    });
+    m_moxController->setAwaitsTxDrain(true);
+}
+
+// ---------------------------------------------------------------------------
+// Task 33 (R-IOS-03, remote design §12.1): stopTransmitNow, the emergency
+// stop. NereusSDR-original: the RF gate closes at once (no WDSP call) and
+// MOX and the T/R relay go off on the connection's thread, without waiting
+// for the TX channel's drain that Thetis's unkey runs first
+// (console.cs:29651-29658 [v2.10.3.15]; the drain's timeout is acceptable
+// here). A RADE end-of-over tail is never waited for.
+// ---------------------------------------------------------------------------
+void RadioModel::stopTransmitNow(const QString& reason)
+{
+    // Hold first: a key step already queued (hardwareFlipped(true), txReady,
+    // an interlock grant) must not key again once this returns.
+    m_transmitStopHold = true;
+
+    // No further TX I/Q block reaches the connection after this returns,
+    // and a queued channel-on no longer opens the gate.
+    if (m_txChannel) {
+        m_txChannel->closeRfGate();
+    }
+
+    // MOX and the relay off, on the connection's thread (at once when this
+    // is that thread). P1 puts bank 0 on its next frame and P2 sends its
+    // high-priority packet at once (their setMox / setTrxRelay).
+    if (m_connection) {
+        RadioConnection* const conn = m_connection;
+        QMetaObject::invokeMethod(conn, [conn]() {
+            conn->setMox(false);
+            conn->setTrxRelay(false);
+        });
+    }
+
+    qCInfo(lcConnection).noquote() << "Transmit stopped at once:" << reason;
+}
+
+// ---------------------------------------------------------------------------
+// Task 33: stopAllTx.
+// Porting from Thetis console.cs:45324-45342 [v2.10.3.15], StopAllTx.
+// Original C# logic:
+//
+//   private bool _stop_all_tx = false;
+//   public void StopAllTx(string msg = "")
+//   {
+//       if (MOX || _manual_mox || chkTUN.Checked || chk2TONE.Checked)
+//       {
+//           _stop_all_tx = true;
+//
+//           MOX = false;
+//           _manual_mox = false;
+//           if (chkTUN.Checked)
+//               chkTUN.Checked = false;
+//           if (chk2TONE.Checked)
+//               chk2TONE.Checked = false;
+//
+//           if (!string.IsNullOrEmpty(msg))
+//           {
+//               infoBar.Warning(msg, false, 10000);
+//           }
+//       }
+//   }
+//
+// NereusSDR: stopTransmitNow comes first, so RF stops before the normal
+// unkey (which Thetis runs synchronously) finishes on the lanes. The
+// warning is the transmitStopped signal; MainWindow shows a non-empty
+// message for 10 s.
+// ---------------------------------------------------------------------------
+void RadioModel::stopAllTx(const QString& message)
+{
+    // From Thetis console.cs:45324 [v2.10.3.15]: StopAllTx
+    const bool moxOn = mox();
+    const bool manualMoxOn = m_moxController && m_moxController->isManualMox();
+    const bool tuneOn = m_isTuning;
+    const bool twoToneOn = m_twoToneController
+        && (m_twoToneController->isActive()
+            || m_twoToneController->isActivationInFlight());
+    if (!moxOn && !manualMoxOn && !tuneOn && !twoToneOn) {
+        return;
+    }
+
+    // _stop_all_tx = true;
+    if (m_moxController) {
+        m_moxController->latchStopAllTx();
+    }
+
+    stopTransmitNow(message);
+
+    // MOX = false;
+    // Thetis's MOX property is chkMOX.Checked, the controller's own key.
+    // RadioModel::setMox is the TCI trx shim since the gaps plan's Task 7
+    // and releases only a TCI key, so the stop goes to the controller.
+    if (m_moxController) {
+        m_moxController->setMox(false);
+    } else {
+        m_transmitModel.setMox(false);
+    }
+    // _manual_mox = false;
+    if (m_moxController) {
+        m_moxController->clearManualMox();
+    }
+    // if (chkTUN.Checked) chkTUN.Checked = false;
+    if (tuneOn) {
+        setTune(false);
+    }
+    // if (chk2TONE.Checked) chk2TONE.Checked = false;
+    if (twoToneOn) {
+        m_twoToneController->setActive(false);
+    }
+
+    // if (!string.IsNullOrEmpty(msg)) infoBar.Warning(msg, false, 10000);
+    emit transmitStopped(message);
+}
+
+// ---------------------------------------------------------------------------
+// iPhone app plan Task 38 (R-IOS-04, D29): the transmit time-out.
+//
+// Porting from Thetis console.cs:45343-45350 [v2.10.3.15], timeOutTimer.
+// Original C# logic:
+//
+//   private void timeOutTimer(string msg)
+//   {
+//       if (MOX || _manual_mox || chkTUN.Checked || chk2TONE.Checked)
+//       {
+//           //everything off !!
+//           StopAllTx(msg + " Time Out Timer");
+//       }
+//   }
+//
+// NereusSDR: the stop reason (timeOut, with the limit) is recorded before
+// StopAllTx runs, so a transmitStopped listener reads it, and raised once
+// the stop is under way. The callback repeats every tick while the
+// condition holds, as Thetis's does; only a keyed tick stops anything.
+// ---------------------------------------------------------------------------
+void RadioModel::onTxTimeOut(const QString& which, int limitSeconds)
+{
+    // From Thetis console.cs:45345 [v2.10.3.15]:
+    //   if (MOX || _manual_mox || chkTUN.Checked || chk2TONE.Checked)
+    const bool moxOn = mox();
+    const bool manualMoxOn = m_moxController && m_moxController->isManualMox();
+    const bool tuneOn = m_isTuning;
+    const bool twoToneOn = m_twoToneController
+        && (m_twoToneController->isActive()
+            || m_twoToneController->isActivationInFlight());
+    if (!moxOn && !manualMoxOn && !tuneOn && !twoToneOn) {
+        return;
+    }
+
+    m_lastTransmitStopReason = TransmitStopReason{
+        QByteArrayLiteral("timeOut"), which.toLower().toLatin1(), limitSeconds};
+    qCInfo(lcConnection).noquote()
+        << "Transmit time-out:" << which << "after" << limitSeconds << "s";
+
+    //everything off !!
+    stopAllTx(which + QStringLiteral(" Time Out Timer"));
+
+    emit transmitStopReasonRaised(m_lastTransmitStopReason.code, limitSeconds);
+}
+
+// The limits for a key by a device of `deviceKind`.
+// The station and computers: Thetis's own time-outs, read as its setup page
+// applies them. From Thetis setup.cs:28539-28545 [v2.10.3.15]:
+//   private void chkToTMox_CheckedChanged(object sender, EventArgs e)
+//   {
+//       if (initializing) return;
+//       udMoxToTSeconds.Enabled = chkToTMox.Checked;
+//       lblMoxTotSec.Enabled = chkToTMox.Checked;
+//       TimeOutTimerManager.MoxTimeOut((int)udMoxToTSeconds.Value, chkToTMox.Checked);
+//   }
+// and setup.cs:28552-28568 (chkToTPing_CheckedChanged: PingTimeOut only for
+// a host that parses; the page saves only such a host). Defaults: both off
+// (TimeOutTimerManager.cs:87-88), 180 s (setup.designer.cs:10241, 10294),
+// 8.8.8.8 (setup.designer.cs:10190).
+// Phones and tablets (D29, R-IOS-04): on by default at 180 s, the same
+// range, and no ping time-out.
+TxTimeOutTimer::Settings RadioModel::txTimeOutSettingsFor(const QString& deviceKind)
+{
+    const AppSettings& settings = AppSettings::instance();
+    const auto readBool = [&settings](const QString& key, bool fallback) {
+        return settings.value(key, fallback ? QStringLiteral("True") : QStringLiteral("False"))
+                   .toString()
+               == QStringLiteral("True");
+    };
+    const auto readSeconds = [&settings](const QString& key) {
+        bool ok = false;
+        const int seconds = settings.value(key, TxTimeOutTimer::kDefaultSeconds).toInt(&ok);
+        if (!ok) {
+            return TxTimeOutTimer::kDefaultSeconds;
+        }
+        return std::clamp(seconds, TxTimeOutTimer::kMinimumSeconds,
+                          TxTimeOutTimer::kMaximumSeconds);
+    };
+
+    TxTimeOutTimer::Settings limits;
+    if (deviceKind == QLatin1String("phone") || deviceKind == QLatin1String("tablet")) {
+        limits.moxEnabled = readBool(QStringLiteral("RemoteMoxTimeOutEnabled"),
+                                     kRemoteMoxTimeOutDefault);
+        limits.moxSeconds = readSeconds(QStringLiteral("RemoteMoxTimeOutSeconds"));
+        limits.pingEnabled = false;
+        return limits;
+    }
+
+    limits.moxEnabled = readBool(QStringLiteral("MoxTimeOutEnabled"), false);
+    limits.moxSeconds = readSeconds(QStringLiteral("MoxTimeOutSeconds"));
+    limits.pingEnabled = readBool(QStringLiteral("PingTimeOutEnabled"), false);
+    limits.pingSeconds = readSeconds(QStringLiteral("PingTimeOutSeconds"));
+    const QString host = settings.value(QStringLiteral("PingTimeOutHost"),
+                                        QStringLiteral("8.8.8.8")).toString();
+    if (!QHostAddress(host).isNull()) {
+        limits.pingHost = host;
+    }
+    return limits;
+}
+
+int RadioModel::timeOutRemainingSeconds() const
+{
+    return m_txTimeOut ? m_txTimeOut->remainingSeconds() : -1;
+}
+
 // ── Phase 3M-1a Task F.1: MoxController::hardwareFlipped fan-out ────────────
 // Fans out hardware-flip side-effects in Thetis HdwMOXChanged step order.
 // Pre-code review §2.3 (3M-1a-relevant subset):
@@ -18915,8 +20087,31 @@ static bool isLsbFamily(DSPMode mode) noexcept
     return mode == DSPMode::LSB || mode == DSPMode::CWL || mode == DSPMode::DIGL;
 }
 
+void RadioModel::setTune(bool on, const KeyerIdentity& keyer)
+{
+    // iPhone app plan Task 35 (R-IOS-13): the same TUNE, asked and keyed for
+    // `keyer`. Only the TUN-on path reads m_tuneKeyer; TUN-off ends a TUNE
+    // whoever started it.
+    if (!on) {
+        setTune(false);
+        return;
+    }
+    const QScopedValueRollback<const KeyerIdentity*> scope(m_tuneKeyer, &keyer);
+    setTune(true);
+}
+
 void RadioModel::setTune(bool on)
 {
+    // iPhone app plan, desktop remote transmit (R-IOS-13): a remote
+    // window's TUNE is the Core's (tx.tune). Off goes while the Core's
+    // TUNE is on or this window asked it on (its answer may still be on
+    // the way), so an internal clear with neither never asks the Core.
+    if (remoteTransmitRouted()) {
+        if (on || m_transmitModel.isTune() || m_station->remoteTransmit()->tuneAsked()) {
+            m_station->remoteTransmit()->setTune(on);
+        }
+        return;
+    }
     // Porting from Thetis console.cs:29978-30157 [v2.10.3.13] — chkTUN_CheckedChanged.
     //
     // 3M-1a scope: all side-effects listed in pre-code review §3.2/§3.3 except:
@@ -18967,6 +20162,17 @@ void RadioModel::setTune(bool on)
             emit tuneRefused(
                 QStringLiteral("Remote transmit controls are not available "
                                "from this Core yet."));
+            return;
+        }
+
+        // iPhone app plan Task 34 (ruling 8.5): TUNE is a station key. The
+        // keying gate is asked before anything is saved or switched, so a
+        // refused TUNE never touches another device's transmission.
+        // Task 35: a remote device's TUNE asks for that device.
+        if (m_moxController
+            && !(m_tuneKeyer != nullptr ? m_moxController->admitKey(*m_tuneKeyer)
+                                        : m_moxController->admitStationKey(PttMode::Manual))) {
+            emit tuneRefused(m_moxController->lastRefusal().text);
             return;
         }
 
@@ -19257,7 +20463,12 @@ void RadioModel::setTune(bool on)
                 // R-R3-36: mark this call as Tune keying for the PC-microphone
                 // admission check (covers every caller, TGXL and TCI included).
                 const QScopedValueRollback<bool> tuneKey(m_tuneKeyInFlight, true);
-                m_moxController->setTune(true);
+                // Task 35: a remote device's TUNE keys as that device.
+                if (m_tuneKeyer != nullptr) {
+                    m_moxController->setTune(true, *m_tuneKeyer);
+                } else {
+                    m_moxController->setTune(true);
+                }
                 keyed = m_moxController->isMox();
                 // Tune pressed while already keyed commits no new key-up; the
                 // carrier now comes from the tune tone either way.
@@ -19387,9 +20598,10 @@ void RadioModel::setTune(bool on)
         // ── RELEASE MOX via MoxController ────────────────────────────────────
         // Cite: console.cs:30106 [v2.10.3.13]: chkMOX.Checked = false;
         // MoxController::setTune(false) drives the full TX→RX walk (B.5)
-        // when MOX is on: it fires hardwareFlipped(false) synchronously and
-        // then chains keyUpDelayTimer (mox_delay) → txaFlushed →
-        // pttOutDelayTimer (ptt_out_delay) → rxReady.  Always called (even
+        // when MOX is on: txDrainRequested (the TX channel drains), then,
+        // after the drain and keyUpDelayTimer (mox_delay), txaFlushed and
+        // hardwareFlipped(false), then pttOutDelayTimer (ptt_out_delay) →
+        // rxReady (Task 33, Thetis's order).  Always called (even
         // when MOX is already off) because it also clears m_manualMox and
         // emits manualMoxChanged(false) — Cite: console.cs:30142 [v2.10.3.13].
         // TUNE-release ordering, HL2, UNRESOLVED as of 2026-08-01.
@@ -19494,8 +20706,54 @@ void RadioModel::setMox(bool on)
     }
 }
 
+bool RadioModel::remoteTransmitRouted() const
+{
+    if (m_role != Role::Remote || m_station == nullptr) {
+        return false;
+    }
+    const RemoteTransmitClient* remote = m_station->remoteTransmit();
+    return remote != nullptr && remote->available();
+}
+
+void RadioModel::reportRemoteTransmitRefused(const QString& reason)
+{
+    emit remoteTransmitRefused(reason);
+}
+
+void RadioModel::setTwoTone(bool on)
+{
+    // Desktop remote transmit: the Core runs the test (tx.twoTone).
+    if (remoteTransmitRouted()) {
+        m_station->remoteTransmit()->setTwoTone(on);
+        return;
+    }
+    if (m_twoToneController) {
+        m_twoToneController->setActive(on);
+    }
+}
+
 void RadioModel::setMoxFromButton(bool on)
 {
+    // iPhone app plan, desktop remote transmit (R-IOS-13): a remote window
+    // keys the Core (tx.key {trigger:"screen"}), never its own controller.
+    // The way off follows chkMOX_Click as below: TUN and two-tone off
+    // first (the Core's, from its mirrored state), then this window's key.
+    if (remoteTransmitRouted()) {
+        RemoteTransmitClient* remote = m_station->remoteTransmit();
+        if (on) {
+            remote->setScreenKey(true);
+            return;
+        }
+        if (m_transmitModel.isTune() || remote->tuneAsked()) {
+            remote->setTune(false);
+        }
+        if (m_pureSignalFacade && m_pureSignalFacade->twoToneOn()) {
+            remote->setTwoTone(false);
+        }
+        remote->setScreenKey(false);
+        return;
+    }
+
     // Receiver and transmit gaps plan, Task 7. From Thetis chkMOX_Click,
     // console.cs:29730-29747 [v2.10.3.15], else branch:
     //   _manual_mox = false;
@@ -20474,6 +21732,13 @@ void RadioModel::applyRxOnly()
 
 void RadioModel::onMoxHardwareFlipped(bool isTx)
 {
+    // Task 33: a flip to TX queued before stopTransmitNow must not key the
+    // radio again after it.
+    if (isTx && m_transmitStopHold) {
+        qCInfo(lcConnection) << "Transmit stopped: ignoring a key queued before the stop";
+        return;
+    }
+
     // Step 1 — Alex antenna routing.  Resolves which TX/RX antenna ports
     // engage for the current band and tx/rx state.  AlexController state
     // is read inside applyAlexAntennaForBand; result is pushed to
@@ -20538,33 +21803,38 @@ void RadioModel::onMoxHardwareFlipped(bool isTx)
     //     moment as Alex routing / setMox wire bit — before the rfDelay.
     //     Thetis stops RX at this same point (line 29527-29543 is before
     //     HdwMOXChanged on line 29582 and the rf_delay on 29592).
-    //   - RX restore fires here on hardwareFlipped(false) rather than the
-    //     later rxReady phase signal.  Thetis restores at line 29629 which
-    //     is after HdwMOXChanged(false) and ptt_out_delay.  The early
-    //     restore is acceptable for TUN-only scope; if bench shows a click
-    //     on TX→RX, wire a separate rxReady slot in a follow-up.
-    if (m_wdspEngine) {
-        if (isTx) {
-            if (m_moxStoppedRxChannel < 0 && txSlice != nullptr) {
-                const int channelId = txSlice->sliceIndex();
-                if (auto* const rxCh = m_wdspEngine->rxChannel(channelId)) {
-                    // RX off + flush. SetChannelState(id, 0, 1), matching
-                    // Thetis console.cs:29534 [v2.10.3.13].
-                    rxCh->setActive(false);
-                    m_moxStoppedRxChannel = channelId;
-                }
-            }
-        } else {
-            const int channelId = m_moxStoppedRxChannel;
-            m_moxStoppedRxChannel = -1;
-            if (channelId >= 0) {
-                if (auto* const rxCh = m_wdspEngine->rxChannel(channelId)) {
-                    // RX on, no flush. SetChannelState(id, 1, 0), matching
-                    // Thetis console.cs:29629 [v2.10.3.13].
-                    rxCh->setActive(true);
-                }
+    //   - Task 33: RX restore fires on rxReady (onMoxRxReady), after
+    //     hardwareFlipped(false) and ptt_out_delay, as Thetis restores at
+    //     console.cs:29680 [v2.10.3.15].
+    if (m_wdspEngine && isTx) {
+        if (m_moxStoppedRxChannel < 0 && txSlice != nullptr) {
+            const int channelId = txSlice->sliceIndex();
+            if (auto* const rxCh = m_wdspEngine->rxChannel(channelId)) {
+                // RX off + flush. SetChannelState(id, 0, 1), matching
+                // Thetis console.cs:29534 [v2.10.3.13].
+                rxCh->setActive(false);
+                m_moxStoppedRxChannel = channelId;
             }
         }
+    }
+}
+
+// Task 33: the receiver MOX stopped comes back after the hardware flip and
+// ptt_out_delay.
+// From Thetis console.cs:29678-29680 [v2.10.3.15]:
+//   if (ptt_out_delay > 0)
+//       Thread.Sleep(ptt_out_delay);                 //wcp:  added 2018-12-24, time for HW to switch
+//   WDSP.SetChannelState(WDSP.id(0, 0), 1, 0);  // turn on appropriate receivers
+void RadioModel::onMoxRxReady()
+{
+    const int channelId = m_moxStoppedRxChannel;
+    m_moxStoppedRxChannel = -1;
+    if (channelId < 0 || !m_wdspEngine) {
+        return;
+    }
+    if (auto* const rxCh = m_wdspEngine->rxChannel(channelId)) {
+        // RX on, no flush. SetChannelState(id, 1, 0).
+        rxCh->setActive(true);
     }
 }
 
@@ -20674,16 +21944,102 @@ qint64 RadioModel::setSampleRateLive(int newRateHz,
 
     // Idempotent check first — safe even when disconnected, avoids the
     // spurious warning log on redundant calls from the settings-restore path.
-    if (newRateHz == m_connectionSampleRateHz) {
+    if (newRateHz == m_connectionSampleRateHz && !m_sampleRateChangeInFlight) {
         return 0;
     }
 
     // Guard: nothing to do if disconnected or WDSP not initialized.
-    if (!m_connection || !m_wdspEngine || !m_wdspEngine->isInitialized()) {
+    if (!canChangeSampleRateLive()) {
         qCWarning(lcConnection) << "setSampleRateLive: no active connection "
                                    "or WDSP not initialized — ignoring";
         return -1;
     }
+
+    // R-R3-39: the change runs on the receive lane; wait for it here, in a
+    // local event loop, for the callers that still want the old form.
+    bool finished = false;
+    bool finishedOk = false;
+    QEventLoop loop;
+    requestSampleRateChange({newRateHz, reconcileDiversity,
+                             [&finished, &finishedOk, &loop](bool ok) {
+                                 finished = true;
+                                 finishedOk = ok;
+                                 loop.quit();
+                             }});
+    if (!finished) {
+        loop.exec();
+    }
+    return finishedOk ? t.elapsed() : -1;
+}
+
+void RadioModel::setSampleRateLiveAsync(int rateHz, bool reconcileDiversity)
+{
+    requestSampleRateChange({rateHz, reconcileDiversity, {}});
+}
+
+bool RadioModel::canChangeSampleRateLive() const
+{
+    return m_connection != nullptr && m_wdspEngine != nullptr
+        && m_wdspEngine->isInitialized();
+}
+
+// R-R3-39. NereusSDR-original. One change at a time: a request made while a
+// change runs waits for it (the newest waiting request replaces an older
+// one, which finishes with ok false), and a request for the rate the radio
+// is at, or is changing to, starts nothing.
+void RadioModel::requestSampleRateChange(SampleRateRequest request)
+{
+    const int rateHz = request.rateHz;
+    if (m_sampleRateChangeInFlight) {
+        if (m_pendingSampleRateChange) {
+            SampleRateRequest replaced = std::move(*m_pendingSampleRateChange);
+            m_pendingSampleRateChange.reset();
+            emit sampleRateChangeFinished(replaced.rateHz, false);
+            if (replaced.onFinished) {
+                replaced.onFinished(false);
+            }
+        }
+        if (rateHz == m_sampleRateTargetHz) {
+            if (request.onFinished) {
+                m_sampleRateInFlightCallbacks.push_back(std::move(request.onFinished));
+            }
+            return;
+        }
+        m_pendingSampleRateChange = std::move(request);
+        return;
+    }
+    if (rateHz == m_connectionSampleRateHz) {
+        if (request.onFinished) {
+            request.onFinished(true);
+        }
+        return;
+    }
+    if (!canChangeSampleRateLive()) {
+        qCWarning(lcConnection) << "setSampleRateLiveAsync: no active connection "
+                                   "or WDSP not initialized — ignoring";
+        emit sampleRateChangeFinished(rateHz, false);
+        if (request.onFinished) {
+            request.onFinished(false);
+        }
+        return;
+    }
+    startSampleRateChange(std::move(request));
+}
+
+void RadioModel::startSampleRateChange(SampleRateRequest request)
+{
+    auto timer = std::make_shared<QElapsedTimer>();
+    timer->start();
+    const int newRateHz = request.rateHz;
+    const bool reconcileDiversity = request.reconcileDiversity;
+
+    m_sampleRateChangeInFlight = true;
+    m_sampleRateTargetHz = newRateHz;
+    m_sampleRateInFlightCallbacks.clear();
+    if (request.onFinished) {
+        m_sampleRateInFlightCallbacks.push_back(std::move(request.onFinished));
+    }
+    const quint64 generation = ++m_sampleRateChangeGeneration;
 
     qCInfo(lcConnection) << "setSampleRateLive:" << m_connectionSampleRateHz
                          << "Hz ->" << newRateHz << "Hz";
@@ -20692,6 +22048,7 @@ qint64 RadioModel::setSampleRateLive(int newRateHz,
     // target channel's input geometry. Stop its raw-DDC feed before changing
     // that geometry; it is recreated on the control path below, so the DSP hot
     // loop never has to allocate in response to a rate mismatch.
+    // (R-R3-39: its stop is itself a lane barrier, queued ahead of this one.)
     const bool restartExternalDiversity =
         m_externalDiversityRouteActive;
     if (restartExternalDiversity) {
@@ -20710,6 +22067,13 @@ qint64 RadioModel::setSampleRateLive(int newRateHz,
     // audio.cs::SampleRate1 setter [v2.10.3.13:637-649] only calls
     // SetXcmInrate(0, ...) for RX1 and SetXcmInrate(1, ...) for RX2;
     // SampleRateTX setter (lines 663-672) does NOT call SetXcmInrate.
+    //
+    // R-R3-39: the steps keep their order and their waits, but run as one
+    // receive-lane barrier, so the event loop never waits on the drain, the
+    // DSP worker or the sleeps. What the event loop owns (the allocator,
+    // the published sizes, the slices' rates) takes the new rate at once;
+    // each channel's rate changes at step 6 on the lane, and the wire rate
+    // when the lane is done (finishSampleRateChange).
 
     const int newInSize = bufferSizeForRate(newRateHz);
 
@@ -20727,35 +22091,6 @@ qint64 RadioModel::setSampleRateLive(int newRateHz,
     rxChannelIds.erase(std::unique(rxChannelIds.begin(), rxChannelIds.end()),
                        rxChannelIds.end());
 
-    // ── Step 1: Stop every running RX channel, the lowest last, drained ──
-    // Upstream switches off every receiver channel, the sub-receivers with
-    // no drain and the main channel last with a drain, while data is still
-    // flowing so each one slews down and flushes:
-    //   From Thetis setup.cs:7112-7115 [v2.10.3.15] (Protocol 1)
-    //     // turn OFF the RX DSP channels so they get flushed out (must do while data is flowing to get slew-down and flush)
-    //     WDSP.SetChannelState(3, 0, 0); // RX2_sub
-    //     WDSP.SetChannelState(2, 0, 0); // RX2_main
-    //     WDSP.SetChannelState(1, 0, 0); // RX1_sub
-    //     WDSP.SetChannelState(0, 0, 1);  // RX1_main
-    // Protocol 2 does the same for its pair at setup.cs:7043-7044
-    // [v2.10.3.15]: WDSP.id(0, 1) with no drain, then WDSP.id(0, 0) drained.
-    // Here that is every running slice's channel from the highest id down,
-    // each without a drain, and the lowest running channel (channel 0 while
-    // Slice A runs) last, drained, as upstream orders it.
-    //
-    // Both forms rely on I/Q still reaching the stopping channels: WDSP
-    // finishes a stop inside the channel's own exchanges, and a channel that
-    // is not fed is left with its slew-down pending (a no-drain stop) or
-    // waits out WDSP's 100 ms timeout (a draining one). The I/Q feed stays
-    // connected until step 2, and RxChannel keeps exchanging on a stopping
-    // channel until WDSP reports the stop done (Task 8, RxChannel::
-    // applyActive and processIq). So the drain takes a few blocks of input,
-    // not 100 ms, and the no-drain stops complete alongside it. A channel no
-    // I/Q reached after its stop is finished by its rebuild in step 6, or,
-    // when it is already at the new rate, by its restart in step 9
-    // (RxChannel::finishPendingStop). Fix wave 1 (C1) drained every channel
-    // until this was in place.
-    //
     // RxChannel is owned by WdspEngine; look each one up by channel ID rather
     // than caching a raw pointer. Record which were running, because step 9
     // restarts only those.
@@ -20766,97 +22101,30 @@ qint64 RadioModel::setSampleRateLive(int newRateHz,
             rxChannelsWereActive.push_back(*it);   // descending
         }
     }
-    for (std::size_t i = 0; i < rxChannelsWereActive.size(); ++i) {
-        RxChannel* rx = m_wdspEngine->rxChannel(rxChannelsWereActive[i]);
-        if (i + 1 < rxChannelsWereActive.size()) {
-            rx->deactivateWithoutDrain();   // dmode 0, as upstream's subs
-        } else {
-            rx->setActive(false);           // dmode 1: the last, drained
-        }
-    }
-    QThread::msleep(10);  // From Thetis setup.cs:7116 [v2.10.3.15]: Thread.Sleep(10)
 
-    // ── Step 2: Quiesce DSP worker ────────────────────────────────────────
-    // Disconnect the I/Q feed so no new batches land while the WDSP channel
-    // is being reconfigured.  resetAccumulator() via BlockingQueuedConnection
-    // ensures any in-flight batch completes before we proceed.
-    if (m_dspWorker && m_receiverManager) {
-        QObject::disconnect(m_receiverManager, &ReceiverManager::iqDataForReceiverStamped,
-                            m_dspWorker, &RxDspWorker::processStampedIqBatch);
-        if (m_dspThread && m_dspThread->isRunning()) {
-            QMetaObject::invokeMethod(m_dspWorker,
-                                      &RxDspWorker::resetAccumulator,
-                                      Qt::BlockingQueuedConnection);
+    // Step 6's idempotent guard (WdspEngine::setRxChannelRate), taken now.
+    // The wrappers' rate carry changes at step 6 itself, on the lane, as it
+    // did in the synchronous sequence: a channel reports the old rate while
+    // it stops and the new one when it restarts. applyStreamDspGeometry
+    // waits for the change (m_streamGeometryPending).
+    std::vector<int> rxChannelsToRate;
+    for (int ch : rxChannelIds) {
+        RxChannel* rx = m_wdspEngine->rxChannel(ch);
+        if (rx && rx->sampleRate() != newRateHz) {
+            rxChannelsToRate.push_back(ch);
         }
     }
 
     // ── Step 3: Pause AudioEngine ─────────────────────────────────────────
+    // (A hook with no work today, AudioEngine.cpp; called here on the event
+    // loop, which owns AudioEngine.)
     m_audioEngine->pauseInput();
 
-    // ── Step 4: Stop radio data flow ──────────────────────────────────────
-    // Thetis setup.cs:7020-7022 (P2 EnableRx) / 7092 (P1 SendStopToMetis)
-    // [v2.10.3.13].  In NereusSDR the stop+set-rate+start cycle is wrapped
-    // by P1RadioConnection::restartStreamWithRate (P1) or atomic-rate-update
-    // inside RadioConnection::setSampleRate (P2).  Both paths are queued
-    // to the connection thread; we wait below for inflight packets to drain.
-    if (auto* p1 = qobject_cast<P1RadioConnection*>(m_connection)) {
-        QMetaObject::invokeMethod(p1, [p1, newRateHz]() {
-            p1->restartStreamWithRate(newRateHz);
-        }, Qt::QueuedConnection);
-    } else {
-        QMetaObject::invokeMethod(m_connection,
-                                  [conn = m_connection, newRateHz]() {
-            conn->setSampleRate(newRateHz);
-        }, Qt::QueuedConnection);
-    }
-
-    // ── Step 5: Wait for inflight I/Q packets to clear ─────────────────────
-    // Thetis setup.cs:7025 / 7095 [v2.10.3.13]:
-    //   Thread.Sleep(20);   // P2 (ETH)
-    //   Thread.Sleep(25);   // P1 (USB)
-    QThread::msleep(25);  // P1 conservative bound covers both protocols
-
-    // ── Step 6: Update the live WDSP channel rate ─────────────────────────
-    // Thetis cmaster.c:473-474 [v2.10.3.13] via WdspEngine::setRxChannelRate.
-    // No destroy-and-recreate — the RxChannel C++ wrapper stays alive,
-    // m_rxChannel raw pointer (and every other holder) remains valid.
-    //
-    // Phase 3F Sub-Epic I closeout, defect H1: every slice's channel, not
-    // just channel 0. This is a radio-wide rate, and step 7 below gives the
-    // whole worker one drain size, so a channel left at the old rate would be
-    // handed a chunk sized for the new one. Upstream loops the same way:
-    //   From Thetis cmaster.c:473-475 [v2.10.3.15]
-    //     for (i = 0; i < pcm->cmSubRCVR; i++) {
-    //         SetInputSamplerate (chid (in_id, i), rate);
-    //         SetInputBuffsize (chid (in_id, i), pcm->xcm_insize[in_id]);
-    //     }
-    // Every channel in the list was stopped in step 1.
-    for (int ch : rxChannelIds) {
-        m_wdspEngine->setRxChannelRate(ch, newRateHz);
-    }
-
-    // ── Step 7: Reconfigure AudioEngine and DSP worker for new rate ───────
-    // WDSP always outputs 64 samples @ 48 kHz; AudioEngine's speakers bus
-    // doesn't need reopening but the input geometry follows the wire rate.
-    m_audioEngine->reinitForSampleRate(newRateHz);
-    if (m_dspWorker) {
-        m_dspWorker->setBufferSizes(newInSize, 64);
-        // Phase 3F Sub-Epic I closeout, defect H1: this is the radio-wide
-        // control, so it resets every stream's width. Per-stream overrides
-        // were published against the rate that just went away; leaving them
-        // would keep a stream draining a chunk size no channel is configured
-        // for any more. Queued to land on the DSP thread, and posted while
-        // the feed is still disconnected (step 2) so it is consumed before
-        // the first batch that follows the reconnect in step 10.
-        QMetaObject::invokeMethod(m_dspWorker,
-                                  &RxDspWorker::clearStreamInputChunks,
-                                  Qt::QueuedConnection);
-    }
-
-    // Keep the allocator and the published-size record agreeing with what was
-    // just pushed. Without this the next retune's applyStreamDspGeometry would
-    // read the allocator's stale per-stream rates and drag every channel back
-    // to the rate this call just left.
+    // Step 7's bookkeeping, owned by the event loop: keep the allocator and
+    // the published-size record agreeing with the rate the lane is applying.
+    // Without this the next retune's applyStreamDspGeometry would read the
+    // allocator's stale per-stream rates and drag every channel back to the
+    // rate this call just left.
     for (int st = 0; st < m_streamAllocator.streamCount(); ++st) {
         if (m_streamAllocator.isStreamActive(st)) {
             m_streamAllocator.activateStream(
@@ -20870,42 +22138,202 @@ qint64 RadioModel::setSampleRateLive(int newRateHz,
         }
     }
 
-    // ── Step 8: Brief wait for samples at the new rate to arrive ─────────
-    // Thetis setup.cs:7046 / 7129 [v2.10.3.13]:
-    //   Thread.Sleep(1);  // P2
-    //   Thread.Sleep(5);  // P1
-    QThread::msleep(5);
+    RxDspWorker* const worker = m_dspWorker;
+    ReceiverManager* const receivers = m_receiverManager;
+    RadioConnection* const connection = m_connection;
+    WdspEngine* const engine = m_wdspEngine;
 
-    // ── Step 9: Restart the RX channels that were running ────────────────
-    // Upstream switches the main channel on first, then each other channel
-    // only if it had been running:
-    //   From Thetis setup.cs:7175-7179 [v2.10.3.15] (Protocol 1)
-    //     WDSP.SetChannelState(0, 1, 0);              // RX1_main
-    //     if (console.radio.GetDSPRX(0, 1).Active)
-    //         WDSP.SetChannelState(1, 1, 0);          // RX1_sub
-    //     if (console.RX2Enabled)
-    //         WDSP.SetChannelState(2, 1, 0);          // RX2_main
-    // Protocol 2 gates its main channel on the state saved before the stop
-    // (setup.cs:7090-7091 [v2.10.3.15]), from setup.cs:7035 [v2.10.3.15]:
-    //     bool was_enabled = console.RX1Enabled;  //... was set to RX2 for some reason, it should be RX1 which always true. MW0LGE_21a
-    // Here: ascending, so channel 0 comes first, and only the channels step 1
-    // found running. A channel that was stopped before stays stopped.
-    // Re-look-up each one in case the engine state shifted.
-    std::sort(rxChannelsWereActive.begin(), rxChannelsWereActive.end());
-    for (int ch : rxChannelsWereActive) {
-        if (RxChannel* rx = m_wdspEngine->rxChannel(ch)) {
-            rx->setActive(true);
+    auto steps = [this, engine, worker, receivers, connection, newRateHz, newInSize,
+                  rxChannelsWereActive, rxChannelsToRate]() {
+        // ── Step 1: Stop every running RX channel, the lowest last, drained ──
+        // Upstream switches off every receiver channel, the sub-receivers with
+        // no drain and the main channel last with a drain, while data is still
+        // flowing so each one slews down and flushes:
+        //   From Thetis setup.cs:7112-7115 [v2.10.3.15] (Protocol 1)
+        //     // turn OFF the RX DSP channels so they get flushed out (must do while data is flowing to get slew-down and flush)
+        //     WDSP.SetChannelState(3, 0, 0); // RX2_sub
+        //     WDSP.SetChannelState(2, 0, 0); // RX2_main
+        //     WDSP.SetChannelState(1, 0, 0); // RX1_sub
+        //     WDSP.SetChannelState(0, 0, 1);  // RX1_main
+        // Protocol 2 does the same for its pair at setup.cs:7043-7044
+        // [v2.10.3.15]: WDSP.id(0, 1) with no drain, then WDSP.id(0, 0) drained.
+        // Here that is every running slice's channel from the highest id down,
+        // each without a drain, and the lowest running channel (channel 0 while
+        // Slice A runs) last, drained, as upstream orders it.
+        //
+        // Both forms rely on I/Q still reaching the stopping channels: WDSP
+        // finishes a stop inside the channel's own exchanges, and a channel that
+        // is not fed is left with its slew-down pending (a no-drain stop) or
+        // waits out WDSP's 100 ms timeout (a draining one). The I/Q feed stays
+        // connected until step 2, and RxChannel keeps exchanging on a stopping
+        // channel until WDSP reports the stop done (Task 8, RxChannel::
+        // applyActive and processIq). So the drain takes a few blocks of input,
+        // not 100 ms, and the no-drain stops complete alongside it. A channel no
+        // I/Q reached after its stop is finished by its rebuild in step 6, or,
+        // when it is already at the new rate, by its restart in step 9
+        // (RxChannel::finishPendingStop). Fix wave 1 (C1) drained every channel
+        // until this was in place.
+        for (std::size_t i = 0; i < rxChannelsWereActive.size(); ++i) {
+            RxChannel* rx = engine->rxChannel(rxChannelsWereActive[i]);
+            if (!rx) {
+                continue;
+            }
+            // On the lane these run at once, as they ran here before
+            // (RxChannel::applyActive), their drain included.
+            if (i + 1 < rxChannelsWereActive.size()) {
+                rx->deactivateWithoutDrain();   // dmode 0, as upstream's subs
+            } else {
+                rx->setActive(false);           // dmode 1: the last, drained
+            }
         }
-    }
+        QThread::msleep(10);  // From Thetis setup.cs:7116 [v2.10.3.15]: Thread.Sleep(10)
 
-    // ── Step 10: Reconnect I/Q feed ──────────────────────────────────────
-    if (m_dspWorker && m_receiverManager) {
-        connect(m_receiverManager, &ReceiverManager::iqDataForReceiverStamped,
-                m_dspWorker, &RxDspWorker::processStampedIqBatch,
-                Qt::QueuedConnection);
-    }
+        // ── Step 2: Quiesce DSP worker ────────────────────────────────────────
+        // Disconnect the I/Q feed so no new batches land while the WDSP channel
+        // is being reconfigured.  resetAccumulator() waited on the DSP thread
+        // (R-R3-39: from the lane now) ensures any in-flight batch completes
+        // before we proceed.
+        const bool workerRunning = dspWorkerThreadRunning(worker);
+        if (worker && receivers) {
+            QObject::disconnect(receivers, &ReceiverManager::iqDataForReceiverStamped,
+                                worker, &RxDspWorker::processStampedIqBatch);
+            if (workerRunning) {
+                runOnDspWorkerFromLane(worker, [worker]() { worker->resetAccumulator(); });
+            }
+        }
 
+        // ── Step 4: Stop radio data flow ──────────────────────────────────────
+        // Thetis setup.cs:7020-7022 (P2 EnableRx) / 7092 (P1 SendStopToMetis)
+        // [v2.10.3.13].  In NereusSDR the stop+set-rate+start cycle is wrapped
+        // by P1RadioConnection::restartStreamWithRate (P1) or atomic-rate-update
+        // inside RadioConnection::setSampleRate (P2).  Both paths are queued
+        // to the connection thread; we wait below for inflight packets to drain.
+        if (auto* p1 = qobject_cast<P1RadioConnection*>(connection)) {
+            QMetaObject::invokeMethod(p1, [p1, newRateHz]() {
+                p1->restartStreamWithRate(newRateHz);
+            }, Qt::QueuedConnection);
+        } else if (connection) {
+            QMetaObject::invokeMethod(connection,
+                                      [conn = connection, newRateHz]() {
+                conn->setSampleRate(newRateHz);
+            }, Qt::QueuedConnection);
+        }
+
+        // ── Step 5: Wait for inflight I/Q packets to clear ─────────────────────
+        // Thetis setup.cs:7025 / 7095 [v2.10.3.13]:
+        //   Thread.Sleep(20);   // P2 (ETH)
+        //   Thread.Sleep(25);   // P1 (USB)
+        QThread::msleep(25);  // P1 conservative bound covers both protocols
+
+        // ── Step 6: Update the live WDSP channel rate ─────────────────────────
+        // Thetis cmaster.c:473-474 [v2.10.3.13] via WdspEngine::setRxChannelRate.
+        // No destroy-and-recreate — the RxChannel C++ wrapper stays alive,
+        // m_rxChannel raw pointer (and every other holder) remains valid.
+        //
+        // Phase 3F Sub-Epic I closeout, defect H1: every slice's channel, not
+        // just channel 0. This is a radio-wide rate, and step 7 below gives the
+        // whole worker one drain size, so a channel left at the old rate would be
+        // handed a chunk sized for the new one. Upstream loops the same way:
+        //   From Thetis cmaster.c:473-475 [v2.10.3.15]
+        //     for (i = 0; i < pcm->cmSubRCVR; i++) {
+        //         SetInputSamplerate (chid (in_id, i), rate);
+        //         SetInputBuffsize (chid (in_id, i), pcm->xcm_insize[in_id]);
+        //     }
+        // Every channel in the list was stopped in step 1.
+        for (int ch : rxChannelsToRate) {
+            if (RxChannel* rx = engine->rxChannel(ch)) {
+                rx->setSampleRateCarry(newRateHz);
+                engine->applyRxChannelRateOnLane(ch, newRateHz, newInSize);
+            }
+        }
+
+        // ── Step 7: Reconfigure the DSP worker for new rate ───────────────────
+        // WDSP always outputs 64 samples @ 48 kHz; AudioEngine's speakers bus
+        // doesn't need reopening but the input geometry follows the wire rate.
+        if (worker) {
+            // R-R3-39: on the worker's own thread, ahead of the first batch
+            // after the reconnect (the feed is still disconnected).
+            if (workerRunning) {
+                QMetaObject::invokeMethod(worker, [worker, newInSize]() {
+                    worker->setBufferSizes(newInSize, 64);
+                }, Qt::QueuedConnection);
+            } else {
+                worker->setBufferSizes(newInSize, 64);
+            }
+            // Phase 3F Sub-Epic I closeout, defect H1: this is the radio-wide
+            // control, so it resets every stream's width. Per-stream overrides
+            // were published against the rate that just went away; leaving them
+            // would keep a stream draining a chunk size no channel is configured
+            // for any more. Queued to land on the DSP thread, and posted while
+            // the feed is still disconnected (step 2) so it is consumed before
+            // the first batch that follows the reconnect in step 10.
+            QMetaObject::invokeMethod(worker,
+                                      &RxDspWorker::clearStreamInputChunks,
+                                      Qt::QueuedConnection);
+        }
+
+        // ── Step 8: Brief wait for samples at the new rate to arrive ─────────
+        // Thetis setup.cs:7046 / 7129 [v2.10.3.13]:
+        //   Thread.Sleep(1);  // P2
+        //   Thread.Sleep(5);  // P1
+        QThread::msleep(5);
+
+        // ── Step 9: Restart the RX channels that were running ────────────────
+        // Upstream switches the main channel on first, then each other channel
+        // only if it had been running:
+        //   From Thetis setup.cs:7175-7179 [v2.10.3.15] (Protocol 1)
+        //     WDSP.SetChannelState(0, 1, 0);              // RX1_main
+        //     if (console.radio.GetDSPRX(0, 1).Active)
+        //         WDSP.SetChannelState(1, 1, 0);          // RX1_sub
+        //     if (console.RX2Enabled)
+        //         WDSP.SetChannelState(2, 1, 0);          // RX2_main
+        // Protocol 2 gates its main channel on the state saved before the stop
+        // (setup.cs:7090-7091 [v2.10.3.15]), from setup.cs:7035 [v2.10.3.15]:
+        //     bool was_enabled = console.RX1Enabled;  //... was set to RX2 for some reason, it should be RX1 which always true. MW0LGE_21a
+        // Here: ascending, so channel 0 comes first, and only the channels step 1
+        // found running. A channel that was stopped before stays stopped.
+        // Re-look-up each one in case the engine state shifted.
+        std::vector<int> restart = rxChannelsWereActive;
+        std::sort(restart.begin(), restart.end());
+        for (int ch : restart) {
+            if (RxChannel* rx = engine->rxChannel(ch)) {
+                rx->setActive(true);
+            }
+        }
+
+        // ── Step 10: Reconnect I/Q feed ──────────────────────────────────────
+        if (worker && receivers) {
+            connect(receivers, &ReceiverManager::iqDataForReceiverStamped,
+                    worker, &RxDspWorker::processStampedIqBatch,
+                    static_cast<Qt::ConnectionType>(Qt::QueuedConnection
+                                                    | Qt::UniqueConnection));
+        }
+    };
+
+    if (!m_rxLane) {
+        steps();
+        finishSampleRateChange(newRateHz, reconcileDiversity, restartExternalDiversity,
+                               timer->elapsed());
+        return;
+    }
+    m_rxLane->postBarrier(steps);
+    m_rxLane->request<int>([]() { return 0; }, this,
+                           [this, generation, newRateHz, reconcileDiversity,
+                            restartExternalDiversity, timer](int) {
+        if (generation != m_sampleRateChangeGeneration || !m_sampleRateChangeInFlight) {
+            return;   // abandoned at teardown
+        }
+        finishSampleRateChange(newRateHz, reconcileDiversity, restartExternalDiversity,
+                               timer->elapsed());
+    });
+}
+
+void RadioModel::finishSampleRateChange(int newRateHz, bool reconcileDiversity,
+                                        bool restartExternalDiversity, qint64 elapsedMs)
+{
     // ── Step 11: Resume audio ────────────────────────────────────────────
+    // (AudioEngine's step 7 hook first: the event loop owns AudioEngine.)
+    m_audioEngine->reinitForSampleRate(newRateHz);
     m_audioEngine->resumeInput();
 
     // ── Step 12: Update state and emit ───────────────────────────────────
@@ -20927,11 +22355,56 @@ qint64 RadioModel::setSampleRateLive(int newRateHz,
             newRateHz);
     }
 
-    const qint64 elapsedMs = t.elapsed();
     qCInfo(lcConnection) << "setSampleRateLive: done in" << elapsedMs << "ms";
 
     emit dspChangeMeasured(elapsedMs);
-    return elapsedMs;
+
+    m_sampleRateChangeInFlight = false;
+    if (m_streamGeometryPending) {
+        m_streamGeometryPending = false;
+        applyStreamDspGeometry();
+    }
+    std::vector<std::function<void(bool)>> callbacks;
+    callbacks.swap(m_sampleRateInFlightCallbacks);
+    emit sampleRateChangeFinished(newRateHz, true);
+    for (auto& callback : callbacks) {
+        if (callback) {
+            callback(true);
+        }
+    }
+
+    if (m_pendingSampleRateChange) {
+        SampleRateRequest next = std::move(*m_pendingSampleRateChange);
+        m_pendingSampleRateChange.reset();
+        requestSampleRateChange(std::move(next));
+    }
+}
+
+void RadioModel::abandonSampleRateChange()
+{
+    if (!m_sampleRateChangeInFlight) {
+        return;
+    }
+    const int rateHz = m_sampleRateTargetHz;
+    m_sampleRateChangeInFlight = false;
+    m_streamGeometryPending = false;
+    ++m_sampleRateChangeGeneration;
+    std::vector<std::function<void(bool)>> callbacks;
+    callbacks.swap(m_sampleRateInFlightCallbacks);
+    emit sampleRateChangeFinished(rateHz, false);
+    for (auto& callback : callbacks) {
+        if (callback) {
+            callback(false);
+        }
+    }
+    if (m_pendingSampleRateChange) {
+        SampleRateRequest pending = std::move(*m_pendingSampleRateChange);
+        m_pendingSampleRateChange.reset();
+        emit sampleRateChangeFinished(pending.rateHz, false);
+        if (pending.onFinished) {
+            pending.onFinished(false);
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -20981,13 +22454,20 @@ qint64 RadioModel::setActiveRxCountLive(int newCount)
 
     // ── Step 1: Quiesce DSP worker ────────────────────────────────────────────
     // Same pattern as setSampleRateLive step 1: disconnect I/Q feed and flush.
+    //
+    // R-R3-39: the flush is queued, not waited for: it runs on the DSP thread
+    // after every batch already posted and before any batch the reconnect
+    // below lets in. The channel creates and destroys in step 3 are
+    // receive-lane barriers that park the worker themselves, so no batch is
+    // inside a channel while it opens or closes.
     if (m_dspWorker && m_receiverManager) {
         QObject::disconnect(m_receiverManager, &ReceiverManager::iqDataForReceiverStamped,
                             m_dspWorker, &RxDspWorker::processStampedIqBatch);
         if (m_dspThread && m_dspThread->isRunning()) {
             QMetaObject::invokeMethod(m_dspWorker,
                                       &RxDspWorker::resetAccumulator,
-                                      Qt::BlockingQueuedConnection);
+                                      m_rxLane ? Qt::QueuedConnection
+                                               : Qt::BlockingQueuedConnection);
         }
     }
 
@@ -22795,10 +24275,19 @@ void RadioModel::configureExternalDiversityRotation(
     const double gainLin =
         std::pow(10.0, target->diversityGainDb() / 20.0);
     const double rad = target->diversityPhaseDeg() * M_PI / 180.0;
-    double iRot[2] = {1.0, gainLin * std::cos(rad)};
-    double qRot[2] = {0.0, gainLin * std::sin(rad)};
+    const std::array<double, 2> iRot{1.0, gainLin * std::cos(rad)};
+    const std::array<double, 2> qRot{0.0, gainLin * std::sin(rad)};
+    if (m_rxLane) {
+        // R-R3-39: in order on the receive lane (after a create queued there).
+        WdspEngine* const engine = m_wdspEngine;
+        m_rxLane->post([engine, iRot, qRot]() {
+            engine->configureExternalDiversity(
+                kExternalDiversityId, 2, iRot.data(), qRot.data(), 2);
+        });
+        return;
+    }
     m_wdspEngine->configureExternalDiversity(
-        kExternalDiversityId, 2, iRot, qRot, 2);
+        kExternalDiversityId, 2, iRot.data(), qRot.data(), 2);
 }
 
 void RadioModel::reconcileExternalDiversityRoute(
@@ -22849,6 +24338,56 @@ void RadioModel::reconcileExternalDiversityRoute(
         stopExternalDiversityRoute();
     }
 
+    if (m_rxLane) {
+        // R-R3-39: the same order as one receive-lane barrier (create, then
+        // configure, then publish the route to the worker, which the lane
+        // waits for, then run). The route counts as active at once; should
+        // the create be refused there, it is marked inactive again.
+        m_externalDiversityRouteActive = true;
+        m_externalDiversityPrimaryDdc = primaryDdc;
+        m_externalDiversitySecondaryDdc = secondaryDdc;
+        m_externalDiversityChunkSize = chunkSize;
+        const quint64 generation = ++m_externalDiversityRouteGeneration;
+        WdspEngine* const engine = m_wdspEngine;
+        RxDspWorker* const worker = m_dspWorker;
+        const int targetSliceId = target->sliceIndex();
+        auto created = std::make_shared<std::atomic<bool>>(false);
+        m_rxLane->postBarrier([engine, chunkSize, created]() {
+            // Upstream ordering: CreateRadio creates stopped; the console
+            // configures it; InboundBlock may only enter after the paired
+            // source route exists.
+            if (!engine->createExternalDiversity(kExternalDiversityId, 2, chunkSize)) {
+                return;
+            }
+            created->store(true);
+        });
+        configureExternalDiversityRotation(target);
+        m_rxLane->postBarrier([this, engine, worker, targetSliceId, primaryDdc,
+                               secondaryDdc, created]() {
+            if (!created->load()) {
+                return;
+            }
+            if (worker) {
+                runOnDspWorkerFromLane(worker, [worker, targetSliceId, primaryDdc,
+                                                secondaryDdc]() {
+                    worker->setExternalDiversityRoute(
+                        kExternalDiversityId, targetSliceId, primaryDdc, secondaryDdc);
+                });
+            }
+            engine->setExternalDiversityRunning(kExternalDiversityId, true);
+        });
+        m_rxLane->request<bool>([created]() { return created->load(); }, this,
+                                [this, generation](bool ok) {
+            if (!ok && generation == m_externalDiversityRouteGeneration) {
+                m_externalDiversityRouteActive = false;
+                m_externalDiversityPrimaryDdc = -1;
+                m_externalDiversitySecondaryDdc = -1;
+                m_externalDiversityChunkSize = 0;
+            }
+        });
+        return;
+    }
+
     // Upstream ordering: CreateRadio creates stopped; the console configures
     // it; InboundBlock may only enter after the paired source route exists.
     if (!m_wdspEngine->createExternalDiversity(
@@ -22882,6 +24421,32 @@ void RadioModel::reconcileExternalDiversityRoute(
 
 void RadioModel::stopExternalDiversityRoute()
 {
+    if (m_rxLane) {
+        // R-R3-39: the same order as one receive-lane barrier. The lane,
+        // not the event loop, waits for the worker to clear the route
+        // before the slot stops, so no raw I/Q event already ahead of the
+        // clear reaches WDSP after slot 0 is stopped or destroyed.
+        ++m_externalDiversityRouteGeneration;
+        WdspEngine* const engine = m_wdspEngine;
+        RxDspWorker* const worker = m_dspWorker;
+        m_rxLane->postBarrier([this, engine, worker]() {
+            if (worker) {
+                runOnDspWorkerFromLane(worker, [worker]() {
+                    worker->clearExternalDiversityRoute();
+                });
+            }
+            if (engine) {
+                engine->setExternalDiversityRunning(kExternalDiversityId, false);
+                engine->destroyExternalDiversity(kExternalDiversityId);
+            }
+        });
+        m_externalDiversityRouteActive = false;
+        m_externalDiversityPrimaryDdc = -1;
+        m_externalDiversitySecondaryDdc = -1;
+        m_externalDiversityChunkSize = 0;
+        return;
+    }
+
     // Clear the worker first. A BlockingQueuedConnection is the barrier that
     // prevents any raw I/Q event already ahead of this control call from
     // reaching WDSP after slot 0 is stopped or destroyed.

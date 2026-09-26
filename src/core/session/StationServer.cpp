@@ -185,6 +185,16 @@
 //                                    (setTgxlOperate on puts the tuner in
 //                                    OPERATE whole).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49, Sub-epic C-1: dspAssetVersion 3 (DspAssetService
+//                sends dfnrRunnable and dfnrModelStatus). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-R3-49, Sub-epic C-1: dspAssetVersion 4 (DspAssetService
+//                sends mnrRunnable and mnrStatus). J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  Receiver and transmit gaps plan,
+//                                    Task 13: a window's External TX
+//                                    Inhibit change reaches the Core's gate.
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 13 (R-IOS-08): the
 //                                    `devices` object and deviceAdminVersion
 //                                    1 for a device at minor 11 whose hello
@@ -308,6 +318,49 @@
 //               close, save or hold its slices; listeningOn. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-25: iPhone app plan Task 34 (R-IOS-02, R-IOS-03, R-IOS-13): the
+//               station transmit gate (txPermitted per session, sent again when
+//               it changes; remoteTxVersion 1 for a peer declaring remoteTx),
+//               TransmitHolder and the keying gate on the model's
+//               MoxController, a dropped holder, releases on leave, revoke and
+//               the end of its 180 s, the on-air refusals, tx.setTxSlice, and
+//               remote_transmit in place of the blanket receive-only policy.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 35 (R-IOS-13, R-IOS-02): keying from a
+//               remote device (tx.key, tx.unkey, tx.tune, tx.twoTone through
+//               RemoteKeying, for a peer at minor 11 declaring remoteTx); a
+//               VOX key while a device holds transmit is that device's; a
+//               write of transmit's mox or tune is refused "Use the transmit
+//               button."; a session's keying commands are forgotten when it
+//               ends. J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan, desktop remote transmit (R-IOS-13,
+//                R-R3-42): capabilities carry the transmit refusal
+//                (txRefusalCode/Reason/Fix) for a peer that declared
+//                remoteTx, sent again when it changes. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 37 (R-IOS-13): the transmit watchdog
+//               (tx.keepalive on the session and the media connection's
+//               "tx" data channel; a session that ends while its device is
+//               keyed stops transmitting at once), the per-mode microphone
+//               starvation action, and VOX a device armed turned off with
+//               its session, its link or its microphone line (a station VOX
+//               key is refused while that VOX has no line to listen to).
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 39 (D14, R-IOS-13, R-IOS-21): the
+//               `txState` object (TransmitState, txStateVersion 1) to a peer
+//               at minor 11 declaring remoteTx; a link lost and a device
+//               removed while keyed record their stop reasons. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
+//   2026-09-26: merge of Tasks 37 to 39: the watchdog's stop records
+//               linkLost (its "went quiet" sentence, or "was lost" when the
+//               session ended) and the starvation's records micStarved on
+//               `txState` before StopAllTx (recordTransmitStop). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 //   2026-09-25: iPhone app Task 74 (R-IOS-02, R-IOS-30): the receiver
 //               commands and a retune leaving a shared receiver go through
 //               the confirm step (StationReceivers.cpp); the property write
@@ -388,6 +441,54 @@
 //                                    Multimeter polling delay reaches the
 //                                    Core's meter pump at once.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave I1: the station device's take
+//               (the radio's PTT, the Core's own keys and VOX) is
+//               released when its key ends, until Task 77. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
+//   2026-09-26: Transmit group fix wave C1: the session gate a key
+//               without a microphone line is judged by. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
+//   2026-09-26: Transmit group fix wave C2: voxArmedByChanged; VOX a
+//               device armed goes off when that device's own line closes.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave: I4 txState's holder published
+//               from TransmitHolder, txStateVersion 2; M2 a two-tone stop
+//               is the holder's; M8 VOX from a device with no microphone
+//               line refused with the reason; M10 the keying gate judges
+//               the connection the key came on. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave I2: the transmit slice is frozen
+//               while the radio's own PTT keys it (ruling 8.11). J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave: the Core's own MOX is not a
+//               holder on the air for ruling 7.4; the freeze is the
+//               radio's own PTT's. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave 2: every holder on the air counts,
+//               the station device's own keys included (onAirHolder),
+//               exempt by change not by holder; ruling 8.11's freeze on
+//               every path (XIT, pan moves, a stored change at proceed); a
+//               hosting desktop's key named after it. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave 2, Important 2: a refused TUNE or
+//               two-tone takes nothing (admitKey asks TX inhibit, the PA
+//               trip, receive only and the interlock before the gate; a
+//               take whose key never starts is released). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
+//   2026-09-26: Transmit group fix wave 2, the re-review's minors:
+//               holderTransferring true while keys are refused for a
+//               transfer's reasons (a dropped holder's fence, a transfer
+//               ended with MOX on); stopEpoch names the key a stop ended so
+//               a newer key is never ended by it; VOX at the Core listens
+//               only to the device that armed it; the window says why MOX
+//               and TUNE wait while another device holds. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -406,12 +507,19 @@
 #include "core/security/StationIdentity.h"
 #include "core/security/TokenStore.h"
 #include "core/session/MirrorPolicy.h"
+#include "core/session/TransmitStateFacade.h"
 #include "core/session/MirrorSchema.h"
 #include "core/session/MirrorView.h"
 #include "core/session/ObjectRegistry.h"
 #include "core/session/SessionCommandDispatcher.h"
 #include "core/session/SliceMarker.h"
 #include "core/SliceOwnership.h"
+#include "core/MoxController.h"
+#include "core/safety/RemoteTxWatchdog.h"
+#include "core/safety/TransmitHolder.h"
+#include "core/TwoToneController.h"
+#include "core/session/RemoteKeying.h"
+#include "core/safety/UnkeyGate.h"
 #include "core/session/media/DisplayBudgetSplit.h"
 #include "core/session/media/DisplayLoadGovernor.h"
 #include "core/session/ConfirmStep.h"
@@ -727,6 +835,17 @@ bool isConnectedDevicesMessage(const SessionMessage& message)
             && message.className == "ConnectedDevicesFacade");
 }
 
+// iPhone app plan Task 39 (txStateVersion 1): the Core's transmit state and
+// meters, for a peer at kRadioIdentitySessionProtocolMinor whose hello
+// declared remoteTx 1. Any other peer never sees the object.
+constexpr const char* kTxStateKey = "txState";
+
+bool isTxStateMessage(const SessionMessage& message)
+{
+    return message.objectKey == kTxStateKey
+        || (message.kind == SessionMessageKind::Schema && message.className == "TransmitState");
+}
+
 // iPhone app Task 13: why a connection ends when its device is removed, and
 // when the token it signed in with is retired (Task 12's pairing text).
 constexpr const char* kDeviceRemovedReason = "This device was removed from the Core.";
@@ -794,6 +913,11 @@ constexpr const char* kRfKitSwitchWriteReason =
 constexpr const char* kReceiveOnlyTransmitReason =
     "Transmit configuration is unavailable on this receive-only Core.";
 
+// iPhone app plan Task 34: a property write never keys the transmitter. MOX
+// and TUNE come only from the transmit controls (the transmit verbs), which
+// pass the Core's gates.
+// Task 35: the words the plan gives it.
+constexpr const char* kPropertyNeverKeysReason = "Use the transmit button.";
 // R-R3-49 (parity Task 1): the `transmit` properties that key the radio or
 // arm it to key. A receive-only Core refuses a write of any of them, on and
 // off the air, whether or not it mirrors the property; every other
@@ -1171,13 +1295,15 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     std::sort(m_supportedMajors.begin(), m_supportedMajors.end());
     m_supportedMajors.erase(std::unique(m_supportedMajors.begin(), m_supportedMajors.end()),
                             m_supportedMajors.end());
-    // Every capability set this R3 server advertises is receive-only. Make
-    // that a persistent property of the hardware-owning model as well, so a
-    // standalone StationServer host cannot admit a TX/accessory side effect
-    // through a local callback. DaemonApp installs the same policy earlier,
-    // before startup; neither owner clears it when a session ends.
+    // iPhone app plan Task 34: the Core's blanket receive-only policy is now
+    // its remote_transmit setting (setRemoteTransmitAllowed). Deny, the
+    // default, keeps it as before: the hardware-owning model refuses every
+    // key and transmit side effect, so a standalone StationServer host
+    // cannot admit one through a local callback. DaemonApp applies its
+    // config (default allow) before startup; nothing clears it when a
+    // session ends.
     if (m_radioModel) {
-        m_radioModel->setReceiveOnlyStationPolicy(true);
+        m_radioModel->setReceiveOnlyStationPolicy(!m_txGate.remoteTransmitAllowed());
     }
 
     m_certificates = std::make_unique<CertificateStore>(m_securityDirectory);
@@ -1194,12 +1320,299 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     // iPhone app Task 74 (R-IOS-30): the questions asked and notices kept.
     m_confirm = std::make_unique<ConfirmStep>();
     m_connectedDevices = std::make_unique<ConnectedDevicesFacade>(*m_deviceSessions, *m_devices);
+
+    // iPhone app plan Task 34 (R-IOS-02, rulings 8.1, 8.2, 8.4, 8.15): who
+    // holds transmit. Its hooks reach the radio through the model: the
+    // unkey gate, StopAllTx, MOX as MoxController reads it, VOX, and the
+    // devices' words as connectedDevices numbers them.
+    m_transmitHolder = std::make_unique<TransmitHolder>();
+    {
+        TransmitHolder::Hooks hooks;
+        hooks.clock = [this]() { return m_deviceSessions->now(); };
+        hooks.moxOn = [this]() {
+            const MoxController* mox = m_radioModel ? m_radioModel->moxController() : nullptr;
+            return mox != nullptr && (mox->isMox() || mox->state() != MoxState::Rx);
+        };
+        hooks.unkey = [this](const QString& reason, std::function<void(UnkeyOutcome)> done) {
+            if (m_radioModel && m_radioModel->unkeyGate() != nullptr) {
+                m_radioModel->unkeyGate()->unkey(reason, this, std::move(done));
+            } else if (done) {
+                done(UnkeyOutcome::Confirmed);
+            }
+        };
+        hooks.stopAllTx = [this](const QString& reason) {
+            if (m_radioModel) {
+                m_radioModel->stopAllTx(reason);
+            }
+        };
+        hooks.disarmVox = [this]() {
+            if (m_radioModel && m_radioModel->transmitModel().voxEnabled()) {
+                m_radioModel->transmitModel().setVoxEnabled(false);
+            }
+        };
+        hooks.schedule = [this](int ms, std::function<void()> fire) {
+            QTimer::singleShot(ms, this, std::move(fire));
+        };
+        hooks.describe = [this](const QByteArray& id) -> std::optional<TransmitHolder::Words> {
+            if (id == KeyerIdentity::kStationDeviceId) {
+                // Fix wave 2 (ruling 8.1): the hosting desktop's words, when
+                // one hosts this Core.
+                if (m_stationWords.name.isEmpty()) {
+                    return std::nullopt;
+                }
+                return TransmitHolder::Words{m_stationWords.name, m_stationWords.shortName,
+                                             QStringLiteral("station")};
+            }
+            if (const auto words = m_connectedDevices->describe(id)) {
+                return TransmitHolder::Words{words->name, words->shortName, words->kind};
+            }
+            return std::nullopt;
+        };
+        m_transmitHolder->setHooks(std::move(hooks));
+    }
+    m_txGate.setTransmitHolder(m_transmitHolder.get());
+    connect(m_transmitHolder.get(), &TransmitHolder::changed, this,
+            &StationServer::onTransmitHolderChanged);
+    m_connectedDevices->setTransmitProvider([this]() {
+        ConnectedDevicesFacade::TransmitState state;
+        if (const auto holder = m_transmitHolder->holder()) {
+            state.holderDeviceId = holder->deviceId;
+            state.keyed = holder->keyed;
+            state.keyedSinceMs = holder->keyedSinceMs;
+        }
+        return state;
+    });
+    if (m_radioModel && m_radioModel->role() == RadioModel::Role::Local
+        && m_radioModel->moxController() != nullptr) {
+        MoxController* mox = m_radioModel->moxController();
+        // Rulings 8.8 and 8.13: every key, local or remote, asks here first.
+        mox->setKeyingGate([this](PttMode source, const KeyerIdentity& keyer) -> KeyingAnswer {
+            if (!keyer.isStation()) {
+                // A remote key: the session's own gate first (remote_transmit,
+                // its hello, its pairing, its snapshot).
+                // Fix wave M10: the connection the key came on, when the
+                // key names it; otherwise the device's live connection.
+                SessionTransport* session = nullptr;
+                const quint64 sessionId = sessionIdOfOwner(keyer.session);
+                for (auto it = m_peers.cbegin(); it != m_peers.cend(); ++it) {
+                    if (it->sessionDeviceId != keyer.deviceId) {
+                        continue;
+                    }
+                    if (sessionId != 0 ? it->sessionId == sessionId : session == nullptr) {
+                        session = it.key();
+                        if (sessionId != 0) {
+                            break;
+                        }
+                    }
+                }
+                if (session == nullptr) {
+                    return {KeyingVerdict::Refuse, TxRefusals::notReady()};
+                }
+                const SessionPeerInfo peer = peerInfoFor(session);
+                StationTxGate sessionOnly;
+                sessionOnly.setRemoteTransmitAllowed(m_txGate.remoteTransmitAllowed());
+                const TxDecision decision = sessionOnly.decide(peer);
+                if (!decision.permitted) {
+                    return {KeyingVerdict::Refuse, decision.refusal};
+                }
+            }
+            // iPhone app plan Task 37: VOX a remote device armed listens to
+            // that device's microphone line or keys nothing; the Core never
+            // keys from its own microphone because of it.
+            if (keyer.isStation() && source == PttMode::Vox && !m_voxArmedBy.isEmpty()
+                && m_radioModel && m_radioModel->remoteVoxDevice() != m_voxArmedBy) {
+                return {KeyingVerdict::Refuse, TxRefusals::micNotReady()};
+            }
+            TransmitHolder::KeyRequest request;
+            request.deviceId = keyer.deviceId;
+            request.program = keyer.program;
+            request.vox = source == PttMode::Vox;
+            // Task 35 (ruling 8.4): VOX keys on audio, not on a person, and
+            // follows the holder: while a device holds transmit (VOX is
+            // disarmed at every change of holder, so it was armed for that
+            // device), a VOX key is that device's.
+            if (keyer.isStation() && source == PttMode::Vox
+                && m_transmitHolder->state() == TransmitHolder::State::Held) {
+                if (const auto holder = m_transmitHolder->holder()) {
+                    request.deviceId = holder->deviceId;
+                }
+            } else if (keyer.isStation() && source == PttMode::Vox && m_radioModel
+                       && !m_radioModel->remoteVoxDevice().isEmpty()) {
+                // iPhone app plan Task 36: VOX is listening to a remote
+                // device's microphone (it has VOX armed), so its VOX key is
+                // that device's, on unheld transmit too: it becomes the
+                // holder as its own key would, and VOX stays armed.
+                request.deviceId = m_radioModel->remoteVoxDevice();
+            }
+            // The radio's own PTT (its mic or a footswitch) is PttMode::Mic
+            // from the station device (ruling 8.5).
+            request.source = keyer.isStation() && source == PttMode::Mic
+                                 ? TransmitHolder::Source::RadioPtt
+                                 : TransmitHolder::Source::Device;
+            const quint64 epochBefore = m_transmitHolder->epoch();
+            const KeyingAnswer answer = m_transmitHolder->askKey(request);
+            // Fix wave 2, Important 2: a take whose key never starts (a
+            // TUNE or two-tone refused after the gate) is released.
+            if (answer.verdict == KeyingVerdict::Admit && m_transmitHolder->isTakeUnstarted()
+                && m_transmitHolder->epoch() != epochBefore) {
+                watchUnstartedTake(m_transmitHolder->epoch());
+            }
+            return answer;
+        });
+        // Whether the holder is on the air, and MOX as the transfer reads it.
+        connect(mox, &MoxController::stateChanged, this, [this, mox](MoxState state) {
+            const bool on = mox->isMox() || state != MoxState::Rx;
+            if (on) {
+                const auto holder = m_transmitHolder->holder();
+                // Task 35 (ruling 8.4): a VOX key is the holder's.
+                const KeyerIdentity& keyer = mox->currentKeyer();
+                const bool holdersKey = holder
+                    && (keyer.deviceId == holder->deviceId
+                        || (keyer.isStation() && keyer.source == PttMode::Vox));
+                if (holdersKey && mox->isMox()) {
+                    m_transmitHolder->setKeyed(true);
+                }
+            } else {
+                m_transmitHolder->setKeyed(false);
+            }
+            m_transmitHolder->onMoxReading(on);
+            // Fix wave I1 (until Task 77): the station device's take (the
+            // radio's PTT, the Core's own keys, its VOX) ends with its key.
+            if (!on) {
+                m_transmitHolder->releaseStationTake();
+            }
+        });
+        // iPhone app plan Task 35 (R-IOS-13): keying from a remote device.
+        // Created after the holder's MOX follower above, so the holder
+        // knows it is keyed before keyedBy is published.
+        m_remoteKeying = std::make_unique<RemoteKeying>(m_radioModel, m_transmitHolder.get());
+        // Fix wave C1: the session gate a key without a microphone line is
+        // judged by first, on the connection the command came on.
+        m_remoteKeying->setSessionGate([this](const RemoteKeying::Command& command) -> TxRefusal {
+            const quint64 sessionId = sessionIdOfOwner(command.session);
+            for (auto it = m_peers.cbegin(); it != m_peers.cend(); ++it) {
+                if (it->sessionId == sessionId && it->sessionDeviceId == command.deviceId) {
+                    StationTxGate sessionOnly;
+                    sessionOnly.setRemoteTransmitAllowed(m_txGate.remoteTransmitAllowed());
+                    const TxDecision decision = sessionOnly.decide(peerInfoFor(it.key()));
+                    return decision.permitted ? TxRefusal{} : decision.refusal;
+                }
+            }
+            return TxRefusals::notReady();
+        });
+
+        // iPhone app plan Task 37 (R-IOS-13; remote design section 12.1):
+        // the transmit watchdog. It watches a device while keyedBy names it
+        // or while it has VOX armed, on the Core's clock (the session
+        // registry's, so the conformance player's virtual time moves it)
+        // and one child timer. Its stop turns off the VOX that device armed
+        // first, so VOX cannot key again after it, then stops transmitting
+        // when the key on the air is that device's.
+        m_txWatchdog = std::make_unique<RemoteTxWatchdog>();
+        m_txWatchdogTimer = new QTimer(this);
+        m_txWatchdogTimer->setSingleShot(true);
+        m_txWatchdogTimer->setTimerType(Qt::PreciseTimer);
+        connect(m_txWatchdogTimer, &QTimer::timeout, this, [this]() {
+            if (m_txWatchdog) {
+                m_txWatchdog->onTimer();
+            }
+        });
+        {
+            RemoteTxWatchdog::Hooks hooks;
+            hooks.clock = [this]() { return m_deviceSessions->now(); };
+            hooks.startTimer = [this](int ms) { m_txWatchdogTimer->start(ms); };
+            hooks.stopTimer = [this]() { m_txWatchdogTimer->stop(); };
+            hooks.stop = [this](const QByteArray& deviceId, const QString& message) {
+                disarmVoxArmedBy(deviceId, "its link went quiet");
+                if (m_radioModel && m_radioModel->keyedBy().deviceId == deviceId) {
+                    // Task 39: the window and the phone are told why, in the
+                    // words the Core stopped with, before the stop runs.
+                    recordTransmitStop(TransmitState::kStopLinkLost, message);
+                    m_radioModel->stopAllTx(message);
+                }
+            };
+            hooks.deviceName = [this](const QByteArray& id) { return deviceNameForStop(id); };
+            m_txWatchdog->setHooks(std::move(hooks));
+        }
+        connect(m_radioModel, &RadioModel::keyedByChanged, this,
+                &StationServer::followKeyedForWatchdog);
+
+        // Task 37 (remote design section 12.3): a keyed device's microphone
+        // line starving on a live link, per transmit mode.
+        {
+            StarvationPolicy::Hooks hooks;
+            hooks.transmitMode = [this]() -> std::optional<DSPMode> {
+                const SliceModel* slice = m_radioModel ? m_radioModel->txBoundSlice() : nullptr;
+                if (slice == nullptr) {
+                    return std::nullopt;
+                }
+                return slice->dspMode();
+            };
+            hooks.microphoneUnused = [this]() {
+                if (!m_radioModel) {
+                    return false;
+                }
+                const TwoToneController* twoTone = m_radioModel->twoToneController();
+                return m_radioModel->isTune()
+                    || (twoTone != nullptr
+                        && (twoTone->isActive() || twoTone->isActivationInFlight()));
+            };
+            hooks.stopAllTx = [this](const QString& message) {
+                if (m_radioModel) {
+                    // Task 39: the reason, before the stop runs.
+                    recordTransmitStop(TransmitState::kStopMicStarved, message);
+                    m_radioModel->stopAllTx(message);
+                }
+            };
+            hooks.deviceName = [this](const QByteArray& id) { return deviceNameForStop(id); };
+            m_starvation.setHooks(std::move(hooks));
+        }
+
+        // Task 37 (carried from the desktop's transmit): the device whose
+        // write turned VOX on is watched while VOX stays on, and VOX goes
+        // off with its session, its link or its microphone line. VOX off
+        // by anyone ends it.
+        connect(&m_radioModel->transmitModel(), &TransmitModel::voxEnabledChanged, this,
+                [this](bool on) {
+                    if (on || m_voxArmedBy.isEmpty()) {
+                        return;
+                    }
+                    const QByteArray was = std::exchange(m_voxArmedBy, QByteArray());
+                    if (m_txWatchdog) {
+                        m_txWatchdog->setVoxArmed(was, false);
+                    }
+                    emit voxArmedByChanged({});
+                });
+        connect(m_radioModel, &RadioModel::remoteMicLinesChanged, this, [this]() {
+            if (!m_voxArmedBy.isEmpty() && m_radioModel
+                && !m_radioModel->remoteMicLineOpen(m_voxArmedBy)) {
+                // The arming device's microphone line closed: VOX would
+                // otherwise listen to the Core's own microphone.
+                disarmVoxArmedBy(m_voxArmedBy, "its microphone line closed");
+            }
+        });
+    }
+    // iPhone app plan Task 39 (D14, R-IOS-13): the `txState` object, on the
+    // devices' clock (keyedSinceMs).
+    m_transmitState = new TransmitState(this);
+    m_transmitState->setClock([this]() { return m_deviceSessions->now(); });
+    if (m_radioModel && m_radioModel->role() == RadioModel::Role::Local) {
+        m_transmitState->bind(m_radioModel);
+    }
     // Revoking a device frees its place at once, live or away, and forgets
     // that its time ran out (ruling 4.11). Its live connection ends in the
     // next deviceRemoved handler, with no away state: the place is already
     // free.
     connect(m_devices.get(), &DeviceStore::deviceRemoved, this, [this](const QByteArray& id) {
         m_deviceSessions->remove(id);
+        // iPhone app plan Task 39: a revoked device that was on the air is
+        // stopped by the Core; recorded before the release unkeys it.
+        noteHolderStopped(id, TransmitState::kStopRevoked);
+        // iPhone app plan Task 34 (ruling 8.15): a revoked device's hold
+        // on transmit is released through a transfer to nobody.
+        if (m_transmitHolder) {
+            m_transmitHolder->release(id, QStringLiteral("The device was removed from the Core."));
+        }
     });
     // iPhone app Task 73 (ruling 4.11): revoking a device closes its slices,
     // held ones included, and forgets its saved layout. The Core's last
@@ -1230,6 +1643,11 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                 // Take it back is gone it is saved like the device's own.
                 saveTakenSlicesFor(deviceId);
                 releaseDeviceSlices(deviceId);
+            });
+    // iPhone app plan Task 34 (ruling 8.15): its 180 s ended.
+    connect(m_deviceSessions.get(), &DeviceSessionRegistry::graceEnded, this,
+            [this](const QByteArray& id) {
+                m_transmitHolder->release(id, QStringLiteral("The device was away too long."));
             });
     // iPhone app Task 13 (R-IOS-08): the `devices` object. A device removed
     // by anything (devices.revoke, the console, a reset) loses its
@@ -1638,6 +2056,58 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     m_dispatcher->setSliceAccess([this](const QByteArray& requester, int sliceId) {
         return sliceRefusal(requester, sliceId);
     });
+    // iPhone app plan Task 34: the on-air refusals (ruling 7.4) and the
+    // holder's tx.setTxSlice (ruling 8.10).
+    {
+        SessionCommandDispatcher::TransmitAccess access;
+        access.onAir = [this](const QByteArray& requester) { return onAirRefusal(requester); };
+        // Fix wave M2 (ruling 8.5): a release is the holder's.
+        access.release = [this](const QByteArray& requester) -> TxRefusal {
+            const std::optional<TransmitHolder::Holder> holder = m_transmitHolder->holder();
+            if (!holder || requester.isEmpty() || holder->deviceId == requester) {
+                return {};
+            }
+            return TxRefusals::otherDeviceHoldsStop(holder->name);
+        };
+        access.txSlice = [this](const QByteArray& requester) -> TxRefusal {
+            // The session's own gate first (remote_transmit, pairing, ...).
+            for (auto it = m_peers.cbegin(); it != m_peers.cend(); ++it) {
+                if (it->sessionDeviceId == requester) {
+                    const TxDecision decision = txDecisionFor(it.key());
+                    if (!decision.permitted) {
+                        return decision.refusal;
+                    }
+                    break;
+                }
+            }
+            // The holder's verb. With transmit unheld the design is silent:
+            // refused, and the device is asked to take transmit first.
+            if (m_transmitHolder->isHeldBy(requester)) {
+                return {};
+            }
+            const TxRefusal refusal = m_transmitHolder->keyRefusalFor(requester);
+            return refusal.isEmpty() ? TxRefusals::notHolder() : refusal;
+        };
+        // Task 35: tx.key, tx.unkey, tx.tune and tx.twoTone.
+        access.keying = [this](const RemoteKeying::Command& command, RemoteKeying::Reply reply) {
+            if (!m_remoteKeying) {
+                RemoteKeying::Result result;
+                result.reason = QStringLiteral("The Core has no radio ready.");
+                reply(result);
+                return;
+            }
+            // Task 36: a key waiting for its microphone buffer answers later.
+            m_remoteKeying->handle(command, std::move(reply));
+        };
+        // Task 37: tx.keepalive on the session's own link.
+        access.keepalive = [this](const QByteArray& requester, quint64 sequence, quint32 epoch) {
+            if (m_txWatchdog) {
+                m_txWatchdog->keepalive(requester, sequence, epoch,
+                                        RemoteTxWatchdog::Path::Session);
+            }
+        };
+        m_dispatcher->setTransmitAccess(std::move(access));
+    }
     if (radioModel) {
         connect(radioModel->sliceOwnership(), &SliceOwnership::markChanged, this,
                 &StationServer::onSliceOwnerChanged);
@@ -1704,6 +2174,18 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
 
 StationServer::~StationServer()
 {
+    // iPhone app plan Task 34: the keying gate asks this object; the model
+    // may outlive it.
+    if (m_radioModel && m_radioModel->moxController() != nullptr
+        && m_radioModel->role() == RadioModel::Role::Local) {
+        m_radioModel->moxController()->setKeyingGate({});
+    }
+    // iPhone app plan Task 39: the transmit state follows the model, which
+    // may outlive this object; it lets go first, before the devices' clock
+    // it reads is gone.
+    if (m_transmitState != nullptr) {
+        m_transmitState->unbind();
+    }
     // iPhone app Task 14: a pairing code being hashed finishes first; its
     // result is dropped with this object.
     if (m_pairingHashThread) {
@@ -2316,8 +2798,35 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
         view->close();
         view->deleteLater();
     }
+    // iPhone app plan Task 37 (R-IOS-13; remote design section 12.1, spec
+    // section 4.6 item 1): the session of a device that is keyed, or has
+    // VOX armed, ended (a drop, leaving, a replacement or a revocation).
+    // The VOX it armed goes off first, then its key stops at once (the
+    // emergency stop, not the normal unkey), before the holder's own
+    // rules below run.
+    if (!sessionDevice.isEmpty() && m_txWatchdog) {
+        disarmVoxArmedBy(sessionDevice, "its connection ended");
+        // Merge of Tasks 37 and 39: a session that ended (rather than went
+        // quiet) is told to the window and the phone as a lost link, in
+        // txState's own words; recorded before the stop, so the watchdog's
+        // "went quiet" reason below does not replace it.
+        if (m_radioModel && m_radioModel->keyedBy().deviceId == sessionDevice) {
+            recordTransmitStop(TransmitState::kStopLinkLost,
+                               TransmitState::linkLostText(deviceNameForStop(sessionDevice)));
+        }
+        if (m_txWatchdog->isWatching(sessionDevice)) {
+            m_txWatchdog->linkClosed(sessionDevice);
+        } else if (m_radioModel && m_radioModel->keyedBy().deviceId == sessionDevice) {
+            m_radioModel->stopAllTx(RemoteTxWatchdog::stopMessage(deviceNameForStop(sessionDevice)));
+        }
+    }
     if (!owner.isEmpty()) {
         m_dispatcher->endSessionOwner(owner);
+        // Task 35: its keying commands (and their copies) are forgotten, so
+        // a reconnect never replays a key.
+        if (m_remoteKeying) {
+            m_remoteKeying->forgetSession(owner);
+        }
     }
     for (auto route = m_resultRoutes.begin(); route != m_resultRoutes.end();) {
         route = route->isNull() || route->data() == transport ? m_resultRoutes.erase(route)
@@ -2342,6 +2851,19 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
         // for its 180 s (graceEnded).
         if (leaving || sessionDevice.startsWith("token:")) {
             releaseDeviceSlices(sessionDevice);
+        }
+        // iPhone app plan Task 34 (ruling 8.15): the holder that left on
+        // purpose (or a token window, which cannot be recognised again)
+        // releases transmit through a transfer to nobody; a dropped holder
+        // is unkeyed at once through the fence and keeps transmit, away.
+        if (leaving || sessionDevice.startsWith("token:")) {
+            m_transmitHolder->release(sessionDevice, QStringLiteral("The device left the Core."));
+        } else {
+            // iPhone app plan Task 39: a holder whose link dropped while it
+            // was on the air is stopped by the Core.
+            noteHolderStopped(sessionDevice, TransmitState::kStopLinkLost);
+            m_transmitHolder->holderDropped(sessionDevice,
+                                            QStringLiteral("The device's link was lost."));
         }
     }
     publishConnectedDevices();
@@ -2781,6 +3303,19 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                 QStringLiteral("Update this app to use C-Tune on this Core."), {}));
             break;
         }
+        // iPhone app plan Task 34: tx.setTxSlice came with remoteTxVersion
+        // 1, for a peer at minor 11 whose hello declared remoteTx; Task 35's
+        // keying verbs and Task 37's tx.keepalive with it.
+        if ((message.commandVerb == "tx.setTxSlice" || message.commandVerb == "tx.key"
+             || message.commandVerb == "tx.unkey" || message.commandVerb == "tx.tune"
+             || message.commandVerb == "tx.twoTone" || message.commandVerb == "tx.keepalive")
+            && (it->agreedMinor < kRadioIdentitySessionProtocolMinor
+                || !peerDeclares(transport, QByteArrayLiteral("remoteTx"), 1))) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                TxRefusals::appCannotTransmit().text, {}));
+            break;
+        }
         // iPhone app Task 13 (R-IOS-08): the device administration verbs
         // came with deviceAdminVersion 1, for a device at minor 11 that
         // declares deviceAuth (the peers the `devices` object goes to).
@@ -2841,7 +3376,17 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
             // (rulings 6.3, 6.4, 6.6) or a take (section 6.4).
             // iPhone app Task 75: a setting that affects every device
             // (the several-devices design, 7.1) is asked first.
-            if (!handleSharedSetting(transport, message)
+            // Fix wave I2 (ruling 8.11): closing the frozen transmit slice,
+            // or moving it to another band, waits for the radio's press to
+            // end.
+            const TxRefusal frozen = freezeRefusalFor(message);
+            if (!frozen.isEmpty()) {
+                send(transport, SessionMessages::commandResult(
+                    message.commandVerb, message.commandId, false, frozen.text, {},
+                    {{0, "refusalCode", MirrorWireKind::Utf8, QString::fromUtf8(frozen.code)},
+                     {0, "refusalFix", MirrorWireKind::Utf8, QString::fromUtf8(frozen.fix)}}));
+                m_resultSentInDispatch = true;
+            } else if (!handleSharedSetting(transport, message)
                 && !handleReceiverCommand(transport, message)) {
                 m_dispatcher->dispatch(message);
             }
@@ -3214,9 +3759,20 @@ void StationServer::admit(SessionTransport* transport, const QString& name,
                               << "connected again as" << description;
             // NOT retryable: a client that redialled would replace the newer
             // connection of its own device, and the two would trade places.
+            // iPhone app plan Task 34 (ruling 8.15): a key on the older
+            // connection is stopped through the fence; the hold carries
+            // over to the new connection, unkeyed.
+            // iPhone app plan Task 39: its older link is gone; a key on it
+            // is stopped by the Core.
+            noteHolderStopped(device.deviceId, TransmitState::kStopLinkLost);
+            m_transmitHolder->holderDropped(device.deviceId,
+                                            QStringLiteral("This device connected again."));
             dropPeer(older, QString::fromLatin1(kSameDeviceReason), true, /*retryable=*/false,
                      QString::fromLatin1(SessionEndCode::kSameDevice));
         }
+        // Back within its 180 s: still the holder, unkeyed; it keys with its
+        // next press.
+        m_transmitHolder->holderReturned(device.deviceId);
         break;
     }
     case DeviceSessionRegistry::Admission::Admitted:
@@ -3740,6 +4296,12 @@ void StationServer::promoteToSession(SessionTransport* transport)
         return;
     }
     m_peers[transport].snapshotComplete = true;
+    // iPhone app plan Task 34: txPermitted can be true only from here, so a
+    // permitted session is sent its capabilities again now.
+    publishTxPermitted();
+    if (!m_peers.contains(transport)) {
+        return;
+    }
     // R-R3-16/17: the connect sequence is finished; the deadline stands down.
     if (QTimer* deadline = m_peers[transport].authDeadline) {
         deadline->stop();
@@ -3820,6 +4382,9 @@ void StationServer::buildMirror()
     // only to a view at minor 11 that declared sessionHolder with
     // deviceAuth.
     m_mirror->watch(QByteArray(kConnectedDevicesKey), m_connectedDevices.get());
+    // iPhone app plan Task 39 (txStateVersion 1): the transmitter's state
+    // and meters. Sent only to a peer at minor 11 that declared remoteTx.
+    m_mirror->watch(QByteArray(kTxStateKey), m_transmitState);
     // iPhone app Task 19 (stationCatalogVersion 1): the Core's catalogue,
     // read again now so the snapshot carries the radio as it is. Sent only
     // to a peer at minor 11 (sendToPeer).
@@ -3863,10 +4428,15 @@ bool StationServer::sendCapabilitiesAndSettingsSnapshot(SessionTransport* transp
     // Capability exchange (section 7.0 step 4).  On the initial path this
     // remains before every model message; on the late-radio path it updates
     // only identity, board, effective limits, and connection state.
-    // iPhone app Task 76: what these capabilities say of the budget, so a
-    // later change is published once.
-    m_peers[transport].publishedBudget = budgetEntriesFor(transport);
-    send(transport, SessionMessages::capabilities(buildCapabilitiesFor(transport).toUpdates()));
+    const StationCapabilities caps = buildCapabilitiesFor(transport);
+    if (auto peer = m_peers.find(transport); peer != m_peers.end()) {
+        peer->txPermittedSent = caps.txPermitted;   // Task 34
+        peer->txRefusalSent = txRefusalOf(caps);
+        // iPhone app Task 76: what these capabilities say of the budget, so
+        // a later change is published once.
+        peer->publishedBudget = budgetEntriesFor(transport);
+    }
+    send(transport, SessionMessages::capabilities(caps.toUpdates()));
     if (!stillAdmitted()) {
         return false;
     }
@@ -3897,12 +4467,21 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
     // applied, with no value of the other device's slice in the answer.
     {
         QString refusal;
+        bool withValues = false;
         const QByteArray requester = m_peers.value(transport).sessionDeviceId;
         if (message.objectKey.startsWith("slice:")) {
             bool ok = false;
             const int sliceId = message.objectKey.mid(6).toInt(&ok);
             if (ok) {
                 refusal = sliceRefusal(requester, sliceId);
+                // Fix wave I2 (ruling 8.11): the transmit slice is frozen
+                // while the station device keys it.
+                if (refusal.isEmpty()) {
+                    refusal = freezeRefusalFor(message).text;
+                    // The requester's own slice: its answer carries the
+                    // values kept, so the window shows them again.
+                    withValues = !refusal.isEmpty();
+                }
             }
         } else if (message.objectKey.startsWith("marker:")) {
             const int sliceId = SliceMarkerSet::sliceIdOf(message.objectKey);
@@ -3911,6 +4490,12 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
             }
         }
         if (!refusal.isEmpty()) {
+            QHash<QByteArray, MirrorUpdate> kept;
+            if (withValues) {
+                for (const MirrorUpdate& value : m_mirror->snapshot(message.objectKey)) {
+                    kept.insert(value.name, value);
+                }
+            }
             QList<SessionPropertyResult> results;
             QSet<QByteArray> reported;
             for (const MirrorUpdate& update : message.updates) {
@@ -3922,6 +4507,10 @@ void StationServer::handlePropertyWrite(SessionTransport* transport,
                 result.property = update.name;
                 result.accepted = false;
                 result.reason = refusal;
+                result.hasValue = kept.contains(update.name);
+                if (result.hasValue) {
+                    result.value = kept.value(update.name);
+                }
                 results.append(result);
             }
             if (m_peers.value(transport).agreedMinor >= kDspControlSessionProtocolMinor
@@ -4029,14 +4618,22 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
     // every `transmit` write, as before.
     const bool transmitSettingsWrite = receiveOnlyTransmitWrite
         && transmitSettingsOffered(transport);
-    QString onAirRefusal;
+    QString settingsOnAirRefusal;
     if (transmitSettingsWrite) {
-        m_radioModel->stationOnAirRefusal(&onAirRefusal);
+        m_radioModel->stationOnAirRefusal(&settingsOnAirRefusal);
     }
     // R-R3-25: the tuner's operate, bypass and antenna, and the amplifier's
     // operate, on a receive-only Core.
     const bool receiveOnlyStation = !m_radioModel.isNull()
         && m_radioModel->receiveOnlyStationPolicy();
+    // iPhone app plan Task 34: with remote_transmit allow, the same writes
+    // are the permitted sessions' (the station transmit gate), and the
+    // transmit path waits while another device's holder is on the air
+    // (ruling 7.4). A property write never keys: MOX and TUNE are the
+    // transmit verbs' (the transmit safety boundary).
+    const bool transmitObjectWrite = message.objectKey == QByteArray(kTransmitKey);
+    const TxDecision txDecision = txDecisionFor(transport);
+    const QByteArray writer = m_peers.value(transport).sessionDeviceId;
     const bool tunerWrite = message.objectKey == QByteArray(kTunerKey);
     const bool amplifierWrite = message.objectKey == QByteArray(kAmplifierKey);
     // R-R3-49 (parity Task 5): `stepAtt`'s ATT on TX, its value and Force
@@ -4071,8 +4668,41 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
             refusals.insert(update.name, QStringLiteral("The Core does not have this setting, or not in this form."));
             continue;
         }
-        if (transmitSettingsWrite && !onAirRefusal.isEmpty()) {
-            refusals.insert(update.name, onAirRefusal);
+        if (transmitSettingsWrite && !settingsOnAirRefusal.isEmpty()) {
+            refusals.insert(update.name, settingsOnAirRefusal);
+            continue;
+        }
+        if (transmitObjectWrite && (update.name == "mox" || update.name == "tune")) {
+            refusals.insert(update.name, QString::fromLatin1(kPropertyNeverKeysReason));
+            continue;
+        }
+        // Ruling 7.4 (D60): the transmit path waits while the holder is on
+        // the air (the tuner and the amplifier count too).
+        {
+            TxRefusal onAir = onAirPropertyRefusal(writer, message.objectKey, update.name);
+            if (onAir.isEmpty() && ((tunerWrite && isTunerTransmitPathProperty(update.name))
+                                    || (amplifierWrite && update.name == "operate"))) {
+                onAir = onAirRefusal(writer);
+            }
+            if (!onAir.isEmpty()) {
+                refusals.insert(update.name, onAir.text);
+                continue;
+            }
+        }
+        // R-R3-49 (parity Task 1), merged: a receive-only Core's transmit
+        // settings from a peer offered them are taken off the air above.
+        // Fix wave M8: VOX a device arms listens to its microphone line;
+        // with no line it could never key, so arming it is refused with the
+        // reason (never armed and silent).
+        if (transmitObjectWrite && update.name == "voxEnabled" && update.value.toBool()
+            && !writer.isEmpty() && txDecision.permitted && !m_radioModel.isNull()
+            && m_radioModel->role() == RadioModel::Role::Local
+            && !m_radioModel->remoteMicLineOpen(writer)) {
+            refusals.insert(update.name, TxRefusals::micNotConnected().text);
+            continue;
+        }
+        if (transmitObjectWrite && !txDecision.permitted && !transmitSettingsWrite) {
+            refusals.insert(update.name, txDecision.refusal.text);
             continue;
         }
         if (receiveOnlyStation
@@ -4082,6 +4712,13 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
             refusals.insert(update.name, AmplifierModel::receiveOnlyOperateReason());
             continue;
         }
+        if (!txDecision.permitted
+            && ((tunerWrite && isTunerTransmitPathProperty(update.name))
+                || (amplifierWrite && update.name == "operate"))) {
+            refusals.insert(update.name, txDecision.refusal.text);
+            continue;
+        }
+
         if (!stepAttRefusal.isEmpty()) {
             refusals.insert(update.name, stepAttRefusal);
             continue;
@@ -4141,6 +4778,19 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
             message.objectKey, update.name, update.value, m_peers.value(transport).view.data());
         if (!result.accepted) {
             refusals.insert(update.name, result.reason);
+        } else if (transmitObjectWrite && update.name == "voxEnabled" && !writer.isEmpty()
+                   && m_radioModel && m_radioModel->transmitModel().voxEnabled()) {
+            // iPhone app plan Task 37: this device armed VOX. It is watched
+            // while VOX stays on (it sends keepalives), and VOX goes off
+            // with its session, its link or its microphone line.
+            if (!m_voxArmedBy.isEmpty() && m_voxArmedBy != writer && m_txWatchdog) {
+                m_txWatchdog->setVoxArmed(m_voxArmedBy, false);
+            }
+            m_voxArmedBy = writer;
+            if (m_txWatchdog) {
+                m_txWatchdog->setVoxArmed(writer, true);
+            }
+            emit voxArmedByChanged(writer);
         }
     }
 
@@ -4236,6 +4886,21 @@ void StationServer::handleSettingsWrite(SessionTransport* transport,
         send(transport, SessionMessages::settingsReject(key, restored.isValid(),
                                                         restored.toString(), reason));
         return;
+    }
+    // iPhone app plan Task 34: with remote_transmit allow, a transmit
+    // setting is a permitted session's (the station transmit gate).
+    if (isReceiveOnlyRefusedKey(key) && !m_radioModel.isNull()
+        && !m_radioModel->receiveOnlyStationPolicy()) {
+        const TxDecision decision = txDecisionFor(transport);
+        if (!decision.permitted) {
+            const QVariant restored = m_settings.value(key);
+            qCInfo(lcStation) << "Refused remote settings write" << key << ":"
+                              << decision.refusal.code;
+            send(transport, SessionMessages::settingsReject(key, restored.isValid(),
+                                                            restored.toString(),
+                                                            decision.refusal.text));
+            return;
+        }
     }
     // R-R3-49 (parity Task 1): a transmit setting a receive-only Core takes
     // off the air (DSP > Options TX) waits while the radio is on the air,
@@ -4372,6 +5037,21 @@ void StationServer::handleSettingsRemove(SessionTransport* transport, const Sess
         send(transport, SessionMessages::settingsReject(key, restored.isValid(),
                                                       restored.toString(), reason));
         return;
+    }
+    // iPhone app plan Task 34: with remote_transmit allow, a transmit
+    // setting is a permitted session's (the station transmit gate).
+    if (isReceiveOnlyRefusedKey(key) && !m_radioModel.isNull()
+        && !m_radioModel->receiveOnlyStationPolicy()) {
+        const TxDecision decision = txDecisionFor(transport);
+        if (!decision.permitted) {
+            const QVariant restored = m_settings.value(key);
+            qCInfo(lcStation) << "Refused remote settings remove" << key << ":"
+                              << decision.refusal.code;
+            send(transport, SessionMessages::settingsReject(key, restored.isValid(),
+                                                            restored.toString(),
+                                                            decision.refusal.text));
+            return;
+        }
     }
     // R-R3-49 (parity Task 1): the same wait for a remove while the radio
     // is on the air.
@@ -4612,6 +5292,14 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
         if (isConnectedDevicesMessage(message) && !peerHasSessionHolderVersion(transport)) {
             return;
         }
+        // iPhone app plan Task 39: nor the transmit state to anyone but a
+        // peer at minor 11 whose hello declared remoteTx (txStateVersion 1).
+        if (isTxStateMessage(message)
+            && (minor < kRadioIdentitySessionProtocolMinor
+                || !peerDeclares(transport, QByteArrayLiteral("remoteTx"), 1)
+                || txStateVersion() < 1)) {
+            return;
+        }
         // iPhone app Task 19: nor the catalogue to an older app.
         if (isCatalogMessage(message)
             && (minor < kRadioIdentitySessionProtocolMinor || stationCatalogVersion() < 1)) {
@@ -4694,6 +5382,379 @@ QString StationServer::ownedElsewhereReason(int sliceId) const
         return QStringLiteral("That slice belongs to the Core. It can be changed only there.");
     }
     return QStringLiteral("That slice belongs to %1. It can be changed only there.").arg(owner);
+}
+
+// ── iPhone app plan Task 34: transmit ────────────────────────────────────
+
+void StationServer::setRemoteTransmitAllowed(bool allowed)
+{
+    m_txGate.setRemoteTransmitAllowed(allowed);
+    if (m_radioModel) {
+        // The Core's blanket receive-only policy is the deny setting.
+        m_radioModel->setReceiveOnlyStationPolicy(!allowed);
+    }
+    publishTxPermitted();
+}
+
+SessionPeerInfo StationServer::peerInfoFor(SessionTransport* transport) const
+{
+    SessionPeerInfo info;
+    const auto it = m_peers.constFind(transport);
+    if (it == m_peers.cend()) {
+        return info;
+    }
+    info.deviceId = it->sessionDeviceId;
+    info.declaresRemoteTx = it->agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && peerDeclares(transport, QByteArrayLiteral("remoteTx"), 1);
+    info.paired = !it->deviceId.isEmpty() && !it->sessionDeviceId.isEmpty()
+        && !it->sessionDeviceId.startsWith("token:");
+    info.snapshotComplete = it->snapshotComplete;
+    return info;
+}
+
+TxRefusal StationServer::txRefusalOf(const StationCapabilities& caps)
+{
+    TxRefusal refusal;
+    refusal.code = caps.txRefusalCode.toLatin1();
+    refusal.text = caps.txRefusalReason;
+    refusal.fix = caps.txRefusalFix.toLatin1();
+    return refusal;
+}
+
+TxDecision StationServer::txDecisionFor(SessionTransport* transport) const
+{
+    return m_txGate.decide(peerInfoFor(transport));
+}
+
+void StationServer::publishTxPermitted()
+{
+    // A session learns its txPermitted in `capabilities`, sent again (as
+    // the display allowance's are, section 5.2) only when the value
+    // changed. Not before its snapshot is complete: until then it is false
+    // and the first capabilities already said so.
+    for (auto it = m_peers.begin(); it != m_peers.end(); ++it) {
+        if (!it->authenticated || !it->snapshotComplete) {
+            continue;
+        }
+        // Desktop remote transmit: a peer told why it may not transmit is
+        // told again when the reason changes (another holder, say).
+        const StationCapabilities caps = buildCapabilitiesFor(it.key());
+        const TxRefusal refusal = txRefusalOf(caps);
+        if (caps.txPermitted == it->txPermittedSent && refusal == it->txRefusalSent) {
+            continue;
+        }
+        it->txPermittedSent = caps.txPermitted;
+        it->txRefusalSent = refusal;
+        send(it.key(), SessionMessages::capabilities(caps.toUpdates()));
+    }
+}
+
+// ── iPhone app plan Task 37: the watchdog, starvation and VOX ─────────────
+
+void StationServer::followKeyedForWatchdog()
+{
+    if (!m_txWatchdog || !m_radioModel) {
+        return;
+    }
+    // The key on the air now: a remote device's (its own, its program's,
+    // TUNE, two-tone, or a VOX key that is its) is watched; the Core's own
+    // keys are not.
+    const RadioModel::KeyedBy keyedBy = m_radioModel->keyedBy();
+    const bool remoteKey = !keyedBy.isEmpty()
+        && keyedBy.deviceId != QByteArray(KeyerIdentity::kStationDeviceId);
+    if (!m_watchedKeyedDevice.isEmpty() && (!remoteKey || keyedBy.deviceId != m_watchedKeyedDevice)) {
+        // Ended (the device's release clears keyedBy at once, before MOX
+        // reads off), or another device's key now.
+        const QByteArray was = std::exchange(m_watchedKeyedDevice, QByteArray());
+        m_txWatchdog->setKeyed(was, false);
+    }
+    if (remoteKey) {
+        m_watchedKeyedDevice = keyedBy.deviceId;
+        // A VOX key was never answered to the device, so it has no epoch
+        // of it: any epoch counts.
+        m_txWatchdog->setKeyed(keyedBy.deviceId, true,
+                               keyedBy.trigger == QByteArrayLiteral("vox") ? 0 : keyedBy.epoch);
+    }
+}
+
+void StationServer::disarmVoxArmedBy(const QByteArray& deviceId, const char* why)
+{
+    if (deviceId.isEmpty() || m_voxArmedBy != deviceId) {
+        return;
+    }
+    m_voxArmedBy.clear();
+    if (m_txWatchdog) {
+        m_txWatchdog->setVoxArmed(deviceId, false);
+    }
+    emit voxArmedByChanged({});
+    if (m_radioModel && m_radioModel->transmitModel().voxEnabled()) {
+        qCInfo(lcStation) << "VOX armed by" << deviceId << "turned off:" << why;
+        m_radioModel->transmitModel().setVoxEnabled(false);
+    }
+}
+
+QString StationServer::deviceNameForStop(const QByteArray& deviceId) const
+{
+    if (m_connectedDevices) {
+        if (const auto words = m_connectedDevices->describe(deviceId)) {
+            if (!words->name.isEmpty()) {
+                return words->name;
+            }
+        }
+    }
+    return QStringLiteral("a device");
+}
+
+void StationServer::txChannelMessage(quint64 mediaEpoch, const QByteArray& message)
+{
+    quint64 sequence = 0;
+    quint32 epoch = 0;
+    if (!m_txWatchdog || !RemoteTxWatchdog::readChannelKeepalive(message, &sequence, &epoch)) {
+        return;
+    }
+    const QByteArray deviceId = mediaSessionDevice(mediaEpoch);
+    if (deviceId.isEmpty()) {
+        return;
+    }
+    m_txWatchdog->keepalive(deviceId, sequence, epoch, RemoteTxWatchdog::Path::TxChannel);
+}
+
+void StationServer::remoteMicStarved(const QByteArray& deviceId, bool starved)
+{
+    if (!m_radioModel || m_radioModel->keyedBy().deviceId != deviceId) {
+        // Only a key that is this device's is its line's to stop.
+        return;
+    }
+    m_starvation.onStarved(deviceId, starved);
+}
+
+void StationServer::onTransmitHolderChanged()
+{
+    const std::optional<TransmitHolder::Holder> holder = m_transmitHolder->holder();
+    if (m_radioModel && m_radioModel->role() == RadioModel::Role::Local) {
+        // Ruling 5.11: the holder's active slice is the station-level one.
+        const QByteArray id = holder && m_transmitHolder->state() == TransmitHolder::State::Held
+            ? holder->deviceId
+            : QByteArray();
+        if (m_radioModel->sliceOwnership()->transmitHolder() != id) {
+            m_radioModel->setTransmitHolder(id);
+        }
+    }
+    m_connectedDevices->refresh();
+    publishTxPermitted();
+    // Fix wave I4 (ruling 8.1): txState names the holder for every device.
+    if (m_transmitState) {
+        TransmitState::Holder published;
+        if (holder) {
+            if (holder->deviceId == KeyerIdentity::kStationDeviceId) {
+                published.deviceId = QString::fromLatin1(KeyerIdentity::kStationDeviceId);
+            } else if (const auto words = m_connectedDevices->describe(holder->deviceId)) {
+                published.deviceId = words->wireId;
+            }
+            published.name = holder->name;
+            published.shortName = holder->shortName;
+            published.kind = holder->kind;
+            published.source = holder->source == TransmitHolder::Source::RadioPtt
+                                   ? QStringLiteral("radioPtt")
+                                   : QStringLiteral("device");
+            published.sinceMs = holder->sinceMs;
+            published.away = holder->away;
+        }
+        published.epoch = m_transmitHolder->epoch();
+        // Fix wave 2 (the re-review's minor): true whenever every key is
+        // refused for a transfer's reasons, so the window matches the
+        // refusals: a transfer, a dropped holder's fence, and a transfer
+        // that ended with MOX still on (no holder then).
+        published.transferring = m_transmitHolder->state() == TransmitHolder::State::Transferring
+            || m_transmitHolder->isFenced() || m_transmitHolder->isStopUnconfirmed();
+        m_transmitState->setHolder(published);
+    }
+    // The merge of the trunk into the transmit lane (ruling 9.3): the
+    // display budget is split around the holder, so a change of holder, or
+    // of its away state, splits it again.
+    publishDisplayBudgetCapabilities();
+}
+
+void StationServer::watchUnstartedTake(quint64 epoch)
+{
+    // After the call that took returns: its key has started (the holder is
+    // keyed), is still on its way (MOX rising, or a two-tone start walking
+    // its settle waits), or never will.
+    QTimer::singleShot(0, this, [this, epoch]() {
+        if (!m_transmitHolder || m_transmitHolder->epoch() != epoch
+            || !m_transmitHolder->isTakeUnstarted()) {
+            return;
+        }
+        const MoxController* mox = m_radioModel ? m_radioModel->moxController() : nullptr;
+        const bool moxOn = mox != nullptr && (mox->isMox() || mox->state() != MoxState::Rx);
+        const TwoToneController* twoTone =
+            m_radioModel ? m_radioModel->twoToneController() : nullptr;
+        const bool starting = twoTone != nullptr && twoTone->isActivationInFlight();
+        if (moxOn || starting) {
+            QTimer::singleShot(kUnstartedTakeRecheckMs, this,
+                               [this, epoch]() { watchUnstartedTake(epoch); });
+            return;
+        }
+        m_transmitHolder->releaseUnstartedTake();
+    });
+}
+
+void StationServer::releaseTransmitFor(const QByteArray& deviceId, const QString& reason)
+{
+    m_transmitHolder->release(deviceId, reason);
+}
+
+void StationServer::recordTransmitStop(const char* stopReason, const QString& text)
+{
+    // The first reason for a key wins (TransmitState::recordStop), so a
+    // reason recorded here, before its StopAllTx, is not overwritten by the
+    // generic `station` one that the stop itself raises.
+    if (m_transmitState != nullptr) {
+        m_transmitState->recordStop(QByteArray(stopReason), text);
+    }
+}
+
+void StationServer::noteHolderStopped(const QByteArray& deviceId, const char* stopReason)
+{
+    // Only a holder on the air is stopped; the first reason for its key
+    // wins (TransmitState::recordStop).
+    const std::optional<TransmitHolder::Holder> holder = m_transmitHolder->holder();
+    if (m_transmitState == nullptr || !holder || holder->deviceId != deviceId) {
+        return;
+    }
+    const bool onAir = holder->keyed || (m_radioModel && m_radioModel->isTransmitting());
+    if (!onAir) {
+        return;
+    }
+    const QByteArray code(stopReason);
+    // A removed device is no longer in the store the holder's words are
+    // read from; the key it is on the air with still names it.
+    const QString name =
+        holder->name.isEmpty() ? m_transmitState->lastKeyedByName() : holder->name;
+    const QString text = code == TransmitState::kStopRevoked
+        ? TransmitState::revokedText(name)
+        : TransmitState::linkLostText(name);
+    m_transmitState->recordStop(code, text);
+}
+
+std::optional<TransmitHolder::Holder> StationServer::onAirHolder() const
+{
+    // Fix wave 2, Important 1: one notion of a holder on the air for
+    // ruling 7.4's refusals, the shared-settings check, the planner's
+    // takes and ruling 8.11's freeze. Every keyed holder counts, the
+    // station device's own keys (the radio's PTT, the Core's own MOX or
+    // TUNE, a Tuner Genius hardware TUNE) as much as a device's.
+    if (!m_transmitHolder) {
+        return std::nullopt;
+    }
+    std::optional<TransmitHolder::Holder> holder = m_transmitHolder->holder();
+    if (!holder || !holder->keyed) {
+        return std::nullopt;
+    }
+    return holder;
+}
+
+TxRefusal StationServer::onAirWords(const TransmitHolder::Holder& holder) const
+{
+    // D60's words with the holder's short name; "The radio is on the air."
+    // after the radio's own PTT took transmit (ruling 7.4), and for the
+    // station device's own keys on a Core no desktop hosts (the radio is
+    // the only station there). A hosting desktop's own key is named after
+    // the desktop (ruling 8.1).
+    const bool radio = holder.source == TransmitHolder::Source::RadioPtt
+        || (holder.deviceId == KeyerIdentity::kStationDeviceId && m_stationWords.name.isEmpty());
+    return TxRefusals::holderOnAir(holder.shortName, radio);
+}
+
+void StationServer::setStationDeviceWords(const QString& name, const QString& shortName)
+{
+    m_stationWords.name = name;
+    m_stationWords.shortName = shortName.isEmpty() ? name : shortName;
+    if (m_transmitHolder && m_transmitHolder->holder()) {
+        onTransmitHolderChanged();
+    }
+}
+
+TxRefusal StationServer::onAirRefusal(const QByteArray& requester) const
+{
+    // Ruling 7.4 (D60): while the holder is on the air, a change from any
+    // other device waits. The holder's own change, and the Core's own (no
+    // requester), are not refused by this rule.
+    const std::optional<TransmitHolder::Holder> holder = onAirHolder();
+    if (!holder || requester.isEmpty() || requester == holder->deviceId) {
+        return {};
+    }
+    return onAirWords(*holder);
+}
+
+int StationServer::stationFrozenSlice() const
+{
+    // Ruling 8.11 (D64): while the station device is keyed (the radio's
+    // own mic or footswitch, or the Core's own keys), the slice it
+    // transmits on cannot be retuned, changed, moved or closed until the
+    // key ends, whoever owns that slice.
+    if (m_radioModel.isNull()) {
+        return -1;
+    }
+    const std::optional<TransmitHolder::Holder> holder = onAirHolder();
+    if (!holder || holder->deviceId != KeyerIdentity::kStationDeviceId) {
+        return -1;
+    }
+    const SliceModel* slice = m_radioModel->txBoundSlice();
+    return slice != nullptr ? slice->sliceIndex() : -1;
+}
+
+TxRefusal StationServer::stationFreezeRefusal(int sliceId) const
+{
+    if (sliceId < 0 || sliceId != stationFrozenSlice()) {
+        return {};
+    }
+    const std::optional<TransmitHolder::Holder> holder = onAirHolder();
+    return holder ? onAirWords(*holder) : TxRefusal{};
+}
+
+TxRefusal StationServer::freezeRefusalFor(const SessionMessage& message) const
+{
+    // Ruling 8.11: what would retune, change, move or close the frozen
+    // transmit slice. Fix wave 2, Important 3: the XIT too, since it moves
+    // the transmitted frequency.
+    if (message.kind == SessionMessageKind::PropertyWrite && message.objectKey.startsWith("slice:")) {
+        bool ok = false;
+        const int sliceId = message.objectKey.mid(6).toInt(&ok);
+        if (!ok) {
+            return {};
+        }
+        for (const MirrorUpdate& update : message.updates) {
+            const QByteArray& n = update.name;
+            if (n == "frequency" || n == "dspMode" || n == "filterLow" || n == "filterHigh"
+                || n == "txAntenna" || n == "band" || n == "xitEnabled" || n == "xitHz") {
+                return stationFreezeRefusal(sliceId);
+            }
+        }
+        return {};
+    }
+    if (message.kind == SessionMessageKind::CommandInvoke
+        && (message.commandVerb == "removeSlice" || message.commandVerb == "slice.selectBand")) {
+        for (const MirrorUpdate& a : message.arguments) {
+            if (a.name == "sliceId") {
+                return stationFreezeRefusal(static_cast<int>(a.value.toLongLong()));
+            }
+        }
+    }
+    return {};
+}
+
+TxRefusal StationServer::onAirPropertyRefusal(const QByteArray& requester,
+                                              const QByteArray& objectKey,
+                                              const QByteArray& property) const
+{
+    // The transmit path (ruling 7.8): an antenna, receive or transmit (a
+    // slice's rxAntenna or txAntenna, the alexAntennas object), and
+    // PureSignal (pureSignalSettings, transmit.pureSig).
+    const bool transmitPath = objectKey == "alexAntennas" || objectKey == "pureSignalSettings"
+        || (objectKey == QByteArray(kTransmitKey) && property == "pureSig")
+        || (objectKey.startsWith("slice:") && (property == "rxAntenna" || property == "txAntenna"));
+    return transmitPath ? onAirRefusal(requester) : TxRefusal{};
 }
 
 QString StationServer::sliceRefusal(const QByteArray& requester, int sliceId) const
@@ -5090,8 +6151,10 @@ void StationServer::publishBudgetToChangedSessions()
             continue;
         }
         m_peers[transport].publishedBudget = entries;
-        send(transport,
-             SessionMessages::capabilities(buildCapabilitiesFor(transport).toUpdates()));
+        const StationCapabilities caps = buildCapabilitiesFor(transport);
+        m_peers[transport].txPermittedSent = caps.txPermitted;   // Task 34
+        m_peers[transport].txRefusalSent = txRefusalOf(caps);
+        send(transport, SessionMessages::capabilities(caps.toUpdates()));
     }
 }
 
@@ -5127,15 +6190,6 @@ std::optional<DisplayBudgetLimits> StationServer::displayBudgetTotalFor(
         }
     }
     return m_displayBudget;
-}
-
-void StationServer::setDisplayBudgetHolderForTest(DisplayBudgetHolderKind kind,
-                                                  quint64 holderEpoch, bool away)
-{
-    m_testBudgetHolderKind = kind;
-    m_testBudgetHolderEpoch = holderEpoch;
-    m_testBudgetHolderAway = away;
-    publishDisplayBudgetCapabilities();
 }
 
 int StationServer::displayBudgetSharingCount() const
@@ -5205,16 +6259,27 @@ QList<QPair<SessionTransport*, DisplayBudgetShare>> StationServer::splitDisplayB
         input.devices.append(device);
         sharing.append(transport);
     }
-    // Transmit joins here (Task 34): TransmitHolder's holder, as
+    // Task 34's holder (the merge of the trunk into the transmit lane):
     // DisplayBudgetHolderKind::Station for the station device, or ::Device
     // with the holder's media epoch as holderId and holderAway while it is
-    // away. Until then transmit is unheld (rule 3), except for a holder a
-    // test sets (setDisplayBudgetHolderForTest, fix wave 3), which the
-    // merge with Task 34 replaces with TransmitHolder's.
-    input.holderKind = m_testBudgetHolderKind;
-    if (m_testBudgetHolderKind == DisplayBudgetHolderKind::Device) {
-        input.holderId = QByteArray::number(m_testBudgetHolderEpoch);
-        input.holderAway = m_testBudgetHolderAway;
+    // away (it has no media then). Unheld otherwise (rule 3).
+    if (const std::optional<TransmitHolder::Holder> holder =
+            m_transmitHolder ? m_transmitHolder->holder() : std::nullopt) {
+        if (holder->deviceId == KeyerIdentity::kStationDeviceId) {
+            input.holderKind = DisplayBudgetHolderKind::Station;
+        } else {
+            input.holderKind = DisplayBudgetHolderKind::Device;
+            input.holderAway = holder->away;
+            for (quint64 epoch : mediaSessionEpochs()) {
+                if (mediaSessionDevice(epoch) == holder->deviceId) {
+                    input.holderId = QByteArray::number(epoch);
+                }
+            }
+            if (input.holderId.isEmpty()) {
+                // No media session: nothing to give it (rule 3, as away).
+                input.holderAway = true;
+            }
+        }
     }
     if (ps3Subscriber) {
         input.ps3Subscriber = QByteArray::number(*ps3Subscriber);
@@ -5446,6 +6511,21 @@ bool StationServer::displayExtrasAvailable(quint64 epoch) const
         && displayExtrasVersion() >= 1;
 }
 
+bool StationServer::remoteTxAvailableForMedia(quint64 epoch) const
+{
+    SessionTransport* transport = mediaSessionFor(epoch);
+    const auto it = m_peers.constFind(transport);
+    return mediaAvailable(epoch) && it != m_peers.cend()
+        && it->agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && peerDeclares(transport, QByteArrayLiteral("remoteTx"), 1);
+}
+
+bool StationServer::mediaSessionTxPermitted(quint64 epoch) const
+{
+    SessionTransport* transport = mediaSessionFor(epoch);
+    return transport != nullptr && txDecisionFor(transport).permitted;
+}
+
 void StationServer::setDisplayBudgetForReasonPeersOnly(bool reasonPeersOnly)
 {
     m_displayBudgetForReasonPeersOnly = reasonPeersOnly;
@@ -5589,13 +6669,23 @@ bool StationServer::receiveOnlyRefusesKey(SessionTransport* transport,
 QString StationServer::transmitSettingOnAirRefusal(const QString& key) const
 {
     QString reason;
-    if (m_radioModel.isNull() || !m_radioModel->receiveOnlyStationPolicy()
-        || !isTransmitSettingKeyAcceptedOffAir(key)) {
+    if (m_radioModel.isNull() || !isTransmitSettingKeyAcceptedOffAir(key)) {
         return reason;
     }
     // R-R3-46 / R-R3-49 (parity Task 13): Thetis has no on-air rule for
     // these; the Core follows it.
     if (isTransmitSettingKeyTakenOnAir(key)) {
+        return reason;
+    }
+    // Trunk merge of remote transmit (join c): with remote transmit
+    // allowed, a permitted session writes the transmit settings (the
+    // station transmit gate), and the on-air rule is the change's, not the
+    // holder's: the OC transmit pins wait while the radio is on the air,
+    // whoever holds transmit, as Thetis greys them while MOX is on
+    // (setup.cs:21944 [v2.10.3.15] UpdateForHotSwitch). The other keys on
+    // the off-air list keep the transmit lane's rule there.
+    if (!m_radioModel->receiveOnlyStationPolicy()
+        && !isOcTransmitPinKey(key.toLower().split(QLatin1Char('/')))) {
         return reason;
     }
     m_radioModel->stationOnAirRefusal(&reason);
@@ -5833,6 +6923,14 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
                 caps.sessionHolderEntry = true;
                 caps.sessionHolderVersion = sessionHolderVersion();
             }
+            // iPhone app plan Task 34: remote transmit, last, for a peer whose
+            // hello declared remoteTx 1; any other peer is sent no entry.
+            if (peerDeclares(transport, QByteArrayLiteral("remoteTx"), 1)) {
+                caps.remoteTxEntry = true;
+                caps.remoteTxVersion = remoteTxVersion();
+                // iPhone app plan Task 39: the `txState` object, with it.
+                caps.txStateVersion = txStateVersion();
+            }
             const HardwareProfile& profile = m_radioModel->hardwareProfile();
             caps.hpsdrModel = profile.caps != nullptr ? profile.model : HPSDRModel::FIRST;
             const RadioInfo& radio = m_radioModel->currentRadioInfo();
@@ -5859,8 +6957,20 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
                                   ? std::min(m_sustainableSliceLimit, caps.boardMaxSlices)
                                   : caps.boardMaxSlices;
 
-    // Always false in R2: TX is R4 in its entirety.
-    caps.txPermitted = false;
+    // iPhone app plan Task 34 (R-IOS-02): the station transmit gate's answer
+    // for this session. False until its snapshot is complete, for a hello
+    // without remoteTx, for every session with remote_transmit deny, and
+    // while another device holds transmit; sent again when it changes
+    // (publishTxPermitted).
+    const TxDecision txDecision = txDecisionFor(transport);
+    caps.txPermitted = txDecision.permitted;
+    // Desktop remote transmit: why not, in the Core's own words (section
+    // 18.3), for a peer that declared remoteTx; empty while permitted.
+    if (caps.remoteTxEntry && !txDecision.permitted) {
+        caps.txRefusalCode = QString::fromLatin1(txDecision.refusal.code);
+        caps.txRefusalReason = txDecision.refusal.text;
+        caps.txRefusalFix = QString::fromLatin1(txDecision.refusal.fix);
+    }
     caps.remoteMediaVersion = media ? 1 : 0;
     caps.remoteWidebandDisplayVersion = media ? 1 : 0;
     caps.remoteAudioStatusVersion = media ? 1 : 0;
@@ -5921,7 +7031,11 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
     caps.nnrVersion = 1;
     caps.psAlgorithmVersion = 3;
     // 2 (R-R3-21): NR3 models are Core assets (kind 2, selectNr3Model).
-    caps.dspAssetVersion = 2;
+    // 3 (R-R3-49, Sub-epic C-1): DspAssetService also sends dfnrRunnable
+    // and dfnrModelStatus, whether this Core can run DFNR.
+    // 4 (R-R3-49, Sub-epic C-1): and mnrRunnable and mnrStatus, whether
+    // this Core can run MNR (a Mac only).
+    caps.dspAssetVersion = 4;
     caps.psDisplayVersion = media ? 1 : 0;
 #endif
 

@@ -22,6 +22,14 @@
 //               harness; tst_station_multi_session includes it instead of
 //               its own copy. J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-26: merge of the trunk into the transmit lane: the transmit
+//               helpers of StationMultiSessionHarness.h (iPhone app plan
+//               Task 34), which it replaces; latestCapabilityIf is its
+//               latestCapability. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave C1: openFakeMicrophoneLines
+//               (allowTransmit). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -38,6 +46,7 @@
 
 #include <atomic>
 #include <memory>
+#include <optional>
 
 #include "core/AppSettings.h"
 #include "core/AudioEngine.h"
@@ -51,8 +60,14 @@
 #include "core/session/SessionMessages.h"
 #include "core/session/StationCapabilities.h"
 #include "core/session/ObjectRegistry.h"
+#include "core/session/RemoteKeying.h"
 #include "core/session/StationServer.h"
 #include "core/WdspTypes.h"
+#include "core/MoxController.h"
+#include "core/safety/TransmitHolder.h"
+#include "core/TxSliceArbiter.h"
+#include "core/audio/CompositeTxMicRouter.h"
+#include "models/TransmitModel.h"
 #include "core/dsp/DspAssetService.h"
 #include "models/NotchModel.h"
 #include "models/RadioModel.h"
@@ -520,6 +535,76 @@ int addCoHostedSlice(RadioModel& model)
     model.sliceById(0)->setFrequency(14200000.0);
     model.sliceById(second)->setFrequency(14210000.0);
     return second;
+}
+
+// ---- iPhone app plan Task 34: transmit ------------------------------------
+
+// A device that declares remote transmit (with several devices).
+const QHash<QByteArray, int> kTransmitter{{"deviceAuth", 1}, {"sessionHolder", 1}, {"remoteTx", 1}};
+
+// The latest value of capability `name` on `app` (capabilities is sent
+// again when txPermitted changes), or none when it was never sent.
+std::optional<QJsonValue> latestCapabilityIf(const QList<QByteArray>& received, const QString& name)
+{
+    std::optional<QJsonValue> value;
+    for (const QJsonObject& caps : ofType(received, QStringLiteral("capabilities"))) {
+        for (const QJsonValue& p : caps.value(QStringLiteral("properties")).toArray()) {
+            if (p.toObject().value(QStringLiteral("name")).toString() == name) {
+                value = p.toObject().value(QStringLiteral("value"));
+            }
+        }
+    }
+    return value;
+}
+
+bool txPermitted(const LoopbackTransport* app)
+{
+    const std::optional<QJsonValue> value = latestCapabilityIf(app->received(), QStringLiteral("txPermitted"));
+    return value.has_value() && value->toBool();
+}
+
+// Fix wave C1: a voice key needs the device's microphone line, which a
+// session-only test has no media for. Every device's line reads open and
+// its buffer full at once. A test that builds a DaemonMediaController after
+// this gets the real line instead.
+void openFakeMicrophoneLines(Core& core)
+{
+    RemoteKeying* keying = core.server->remoteKeying();
+    if (keying == nullptr) {
+        return;
+    }
+    RemoteKeying::MicUplink uplink;
+    uplink.carriesMic = [](const QByteArray&) { return true; };
+    uplink.prime = [](const QByteArray&, std::function<void(bool)> done) { done(true); };
+    uplink.endPriming = [](const QByteArray&) {};
+    keying->setMicUplink(uplink);
+}
+
+// The Core allows remote transmit; MOX walks with no delays; the slice is
+// on 20 m USB so the band plan admits a key.
+void allowTransmit(Core& core)
+{
+    core.server->setRemoteTransmitAllowed(true);
+    core.model->moxController()->setTimerIntervals(0, 0, 0, 0, 0, 0);
+    // No PC microphone in the test: the radio's own microphone carries the
+    // audio, so the microphone-ready check has nothing to wait for.
+    core.model->transmitModel().setMicSourceLocked(false);
+    core.model->transmitModel().setMicSource(MicSource::Radio);
+    if (SliceModel* slice = core.model->sliceById(0)) {
+        slice->setDspMode(DSPMode::USB);
+        slice->setFrequency(14200000.0);
+    }
+    // Fix wave C1: every device's microphone line reads open.
+    openFakeMicrophoneLines(core);
+}
+
+// A device's key, as a remote tx.key will send it (Task 35).
+KeyerIdentity keyerFor(const Device& device)
+{
+    KeyerIdentity keyer;
+    keyer.deviceId = device.key.fingerprint();
+    keyer.source = PttMode::None;
+    return keyer;
 }
 
 } // namespace

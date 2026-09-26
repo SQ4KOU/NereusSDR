@@ -115,6 +115,18 @@
 //                 transmit-permission layer holds MOX changes the tooltip
 //                 it gives back, not the reason shown. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan, desktop remote transmit (R-IOS-13): in a
+//                 remote window MOX, TUNE and 2-TONE show the Core's state
+//                 and 2-TONE goes through RadioModel::setTwoTone. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave: I4 the line saying who holds
+//               transmit. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave 2 (M8): VOX shows disabled with the
+//               plain reason while this computer has no microphone line to
+//               the Core; the Core's refusal stays the backstop. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 //=================================================================
@@ -503,6 +515,17 @@ void TxApplet::buildUI()
         row->addWidget(m_moxBtn, 1);
 
         vbox->addLayout(row);
+
+        // Fix wave I4: who holds transmit on the Core, in a remote window
+        // (setTransmitHolderText). Empty, and so not shown, otherwise.
+        m_holderLabel = new QLabel(this);
+        m_holderLabel->setObjectName(QStringLiteral("TxHolderLabel"));
+        m_holderLabel->setAccessibleName(QStringLiteral("Who holds transmit"));
+        m_holderLabel->setWordWrap(true);
+        m_holderLabel->setStyleSheet(QStringLiteral(
+            "QLabel { color: %1; font-size: 10px; }").arg(Style::kTextPrimary));
+        m_holderLabel->setVisible(false);
+        vbox->addWidget(m_holderLabel);
     }
 
     // ── 4b. VOX row (3M-3a-iii bench polish 2026-05-04) ───────────────────────
@@ -1660,9 +1683,48 @@ void TxApplet::wireControls()
     // toggled → TwoToneController::setActive.  Echo-guarded.
     connect(m_twoToneBtn, &QPushButton::toggled, this, [this](bool on) {
         if (m_updatingFromModel) { return; }
+        // Desktop remote transmit: a remote window asks the Core.
+        if (m_model && m_model->remoteTransmitRouted()) {
+            m_model->setTwoTone(on);
+            return;
+        }
         if (!m_twoToneCtrl) { return; }
         m_twoToneCtrl->setActive(on);
     });
+
+    // ── iPhone app plan, desktop remote transmit (R-IOS-13) ─────────────────
+    // A remote window's own MoxController never keys: MOX, TUNE and 2-TONE
+    // light from the Core's state (its `transmitting`, the transmit object's
+    // `tune`, PureSignal's two-tone), and a refused press puts them back.
+    if (m_model && m_model->role() == RadioModel::Role::Remote) {
+        const auto syncFromCore = [this]() {
+            if (!m_model) { return; }
+            m_updatingFromModel = true;
+            if (m_moxBtn) {
+                QSignalBlocker b(m_moxBtn);
+                m_moxBtn->setChecked(m_model->isTransmitting());
+            }
+            if (m_tuneBtn) {
+                const bool tuning = m_model->transmitModel().isTune();
+                QSignalBlocker b(m_tuneBtn);
+                m_tuneBtn->setChecked(tuning);
+                m_tuneBtn->setText(tuning ? QStringLiteral("TUNING...")
+                                          : QStringLiteral("TUNE"));
+            }
+            if (m_twoToneBtn) {
+                const PureSignalSessionFacade* ps = m_model->pureSignalFacade();
+                QSignalBlocker b(m_twoToneBtn);
+                m_twoToneBtn->setChecked(ps && ps->twoToneOn());
+            }
+            m_updatingFromModel = false;
+        };
+        connect(m_model, &RadioModel::transmittingChanged, this, syncFromCore);
+        connect(&m_model->transmitModel(), &TransmitModel::tuneChanged, this, syncFromCore);
+        connect(m_model, &RadioModel::remoteTransmitRefused, this, syncFromCore);
+        if (PureSignalSessionFacade* ps = m_model->pureSignalFacade()) {
+            connect(ps, &PureSignalSessionFacade::statusChanged, this, syncFromCore);
+        }
+    }
 
     // ── Phase 3M-4 / WDSP 2.10: PS-A button wiring ──────────────────────────
     // Source-first port of Thetis chkFWCATUBypass:
@@ -2437,9 +2499,21 @@ void TxApplet::setTransmitPermitted(bool permitted, const QString& unavailableRe
     // setPureSignalArmingPermitted. This gate keeps the rest.
     apply(m_tuneBtn);
     apply(m_moxBtn);
-    apply(m_voxBtn);
+    // Fix wave 2 (M8): VOX also needs this computer's microphone line.
+    gateTransmitControl(m_voxBtn, permitted && m_voxPermitted,
+                        permitted ? m_voxReason : reason);
     apply(m_twoToneBtn);
     // Task 16: the receive-only lock back on top (checkpoint join).
+    applyReceiveOnlyLock();
+}
+
+void TxApplet::setVoxPermitted(bool permitted, const QString& reason)
+{
+    removeReceiveOnlyLock();
+    m_voxPermitted = permitted;
+    m_voxReason = reason;
+    gateTransmitControl(m_voxBtn, m_transmitPermitted && permitted,
+                        m_transmitPermitted ? reason : m_transmitPermissionReason);
     applyReceiveOnlyLock();
 }
 
@@ -2503,6 +2577,18 @@ void TxApplet::setTxProfilePermitted(bool permitted, const QString& unavailableR
                         unavailableReason.isEmpty()
                             ? IStationLink::transmitSettingsUnavailableReason()
                             : unavailableReason);
+}
+
+void TxApplet::setTransmitHolderText(const QString& text)
+{
+    if (!m_holderLabel) { return; }
+    m_holderLabel->setText(text);
+    m_holderLabel->setVisible(!text.isEmpty());
+}
+
+QString TxApplet::transmitHolderText() const
+{
+    return m_holderLabel ? m_holderLabel->text() : QString();
 }
 
 bool TxApplet::remoteTunePower() const

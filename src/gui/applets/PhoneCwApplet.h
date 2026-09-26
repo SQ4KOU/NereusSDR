@@ -40,6 +40,10 @@
 //                 (#11) stays here — only VOX moves.  Members
 //                 m_voxBtn/m_voxSlider/m_voxLvlLabel/m_voxDlySlider/
 //                 m_voxDlyLabel/m_voxPeakMeter removed from this header.
+//   2026-09-25 - iPhone app plan Task 39 (D14, R-IOS-13): the compression
+//                 gauge can be shown unavailable with a reason (a remote
+//                 window's Core does not send it yet). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 //   2026-09-24 - R-R3-49 (parity Task 2): setTransmitSettingsPermitted for
 //                 the mic level, PROC and its level, AM carrier and DEXP.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
@@ -151,6 +155,13 @@ public slots:
     /// transmitting), max(-30, TXA_COMP_AV). MainWindow feeds it; receive
     /// puts it back to the -30 floor, an empty gauge.
     void setCompressionReading(double dB);
+
+public:
+    /// iPhone app plan Task 39: the compression gauge cannot show a reading
+    /// here (a remote window's Core does not send it yet). A non-empty
+    /// `reason` draws it dimmed with the reason as its tooltip; empty makes
+    /// it available again with its own tooltip.
+    void setCompressionUnavailable(const QString& reason);
 
 public:
     /// R-R3-21: the microphone source list, in combo order. Each entry

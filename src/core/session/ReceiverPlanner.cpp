@@ -154,8 +154,13 @@ QList<ReceiverPlanner::Choice> ReceiverPlanner::receiverChoices(const TakeReques
             }
         }
         // Ruling 6.8 (D64): a receiver carrying the transmit slice of a
-        // holder on the air is never takeable. Transmit has no holder until
-        // Task 34; its on-air refusal is wired with it.
+        // holder on the air is never takeable (Task 34's holder, joined at
+        // the merge of the trunk into the transmit lane).
+        if (m_onAir.sliceId >= 0 && m_onAir.holder != request.requester
+            && m_model.slicesOnStream(stream).contains(m_onAir.sliceId)) {
+            c.takeable = false;
+            c.why = m_onAir.why;
+        }
         choices.append(c);
     }
     return choices;

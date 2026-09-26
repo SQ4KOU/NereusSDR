@@ -175,10 +175,14 @@ private slots:
         app.stop();
     }
 
+    // iPhone app plan Task 34: remote_transmit deny installs the persistent
+    // receive-only policy before station startup, as every Core did before;
+    // allow (the default) leaves transmit to the station transmit gate.
     void installsReceiveOnlyPolicyBeforeStationStartup()
     {
         DaemonConfig cfg = testCoreConfig();
         cfg.sliceCount = 1;
+        cfg.remoteTransmitAllowed = false;
 
         DaemonApp app;
         app.primeBoardForTest(HPSDRHW::HermesLite);
@@ -186,8 +190,17 @@ private slots:
         QVERIFY(app.m_radioModel != nullptr);
         QVERIFY2(app.m_radioModel->receiveOnlyStationPolicy(),
                  "nereusd constructed a hardware-owning RadioModel without "
-                 "the persistent R3 receive-only policy");
+                 "the persistent receive-only policy remote_transmit deny asks for");
         app.stop();
+
+        DaemonApp allowing;
+        allowing.primeBoardForTest(HPSDRHW::HermesLite);
+        DaemonConfig allow = testCoreConfig();
+        allow.sliceCount = 1;
+        QVERIFY(allow.remoteTransmitAllowed);
+        QVERIFY(allowing.start(allow));
+        QVERIFY(!allowing.m_radioModel->receiveOnlyStationPolicy());
+        allowing.stop();
     }
 
     // The whole point of the task: a headless start must create the
@@ -442,6 +455,8 @@ private slots:
     {
         DaemonConfig cfg = testCoreConfig();
         cfg.sliceCount = 1;
+        // Task 34: receive-only, so the admission below still refuses.
+        cfg.remoteTransmitAllowed = false;
 
         DaemonApp app;
         app.primeBoardForTest(HPSDRHW::Saturn);

@@ -22,12 +22,23 @@
 //                 core-side src/core/meters/SliceMeterPump.{h,cpp}; smeterUpdated
 //                 removed with its only listener. J.J. Boyd (KG4VCF), with
 //                 AI-assisted transformation via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 39 (D14, R-IOS-13): a remote window's
+//               transmit meters: ALC and MIC from the Core's `txState`
+//               (setRemoteTransmitState), the meters the Core does not send
+//               shown disabled with the reason. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 //   2026-09-25 - R-R3-32 (remote-window parity Task 6):
 //                 setPaReadingsModel. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
 //   2026-09-26 - R-R3-13 / R-R3-49 (remote-window parity Task 15):
 //                 setRemoteMeterReadingsAvailable. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - Trunk merge of remote transmit (R-R3-49, R-IOS-13): a
+//                 connected Core below meterReadingsVersion 1 shows the
+//                 five ADC and AGC meters disabled with the reason
+//                 (remoteMeterReadingsNotSentText), as Task 39's transmit
+//                 meters are. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -89,6 +100,7 @@ class SMeterWidget;
 class WdspEngine;
 class RadioModel;
 class SliceModel;
+class TransmitState;
 
 // Binding IDs map to WDSP meter types (RxMeterType enum values)
 namespace MeterBinding {
@@ -182,9 +194,33 @@ public:
     // While true, a remote window's AdcPeak, AdcAvg, AgcGain, AgcPeak and
     // AgcAvg bindings read the active slice's adcPeakDbfs, adcAverageDbfs,
     // agcGainDb, agcPeakDb and agcAverageDb; unset or false, they get the
-    // no-reading sentinel (shown "--"), never a frozen value.
+    // no-reading sentinel (shown "--"), never a frozen value. While the
+    // window is connected (the snapshot is ready) and this is false, the
+    // five bindings are also shown disabled with
+    // remoteMeterReadingsNotSentText (MeterWidget::setBindingUnavailable).
     void setRemoteMeterReadingsAvailable(std::function<bool()> available);
+    /// The five ADC and AGC bindings the Core sends at meterReadingsVersion 1.
+    static const QList<int>& remoteMeterReadingBindings();
+    /// Why: a connected Core that does not send these readings.
+    static QString remoteMeterReadingsNotSentText();
 
+    // iPhone app plan Task 39 (D14, R-IOS-13): a remote window's transmit
+    // meters come from the Core's `txState` (StationClient::transmitState).
+    // While transmitting, the ALC and MIC bindings get its alcDb and
+    // micLevelDb; power, reflected power and SWR reach the meters through
+    // this window's RadioStatus, which MainWindow feeds from the same
+    // object. `unavailableText` returns why the window has no transmit
+    // meters from its Core right now (not connected, or a Core that does
+    // not send them), or empty when it has: then every transmit binding
+    // the object does not carry (remoteTxBindingsNotSent) is shown disabled
+    // with remoteTxMeterNotSentText; otherwise every transmit binding is,
+    // with that text. Remote role only.
+    void setRemoteTransmitState(TransmitState* state,
+                                std::function<QString()> unavailableText);
+    /// The transmit bindings the Core's `txState` does not carry.
+    static const QList<int>& remoteTxBindingsNotSent();
+    /// Why: the Core sends transmit state but not this meter.
+    static QString remoteTxMeterNotSentText();
     // R-R3-32 (remote-window parity Task 6): the model whose
     // paReadings() feed the HwVolts, HwAmps and HwTemperature bindings on
     // every poll, in a local window (this radio) and a remote one (the
@@ -275,6 +311,14 @@ public:
     /// xmeter), which reads -30; a non-finite value also reads -30.
     static double compressionReading(double rawTxaCompAv);
 
+    /// D14, R-R3-49: the value a transmit meter binding (MeterBinding Tx*,
+    /// WDSP-read ones) shows, worked from WDSP readings exactly as Thetis
+    /// works it (thetisTxReading in WdspTypes.h: CalculateTXMeter, then the
+    /// MOX reading step). `readRaw` returns one GetTXAMeter reading
+    /// (TxChannel::txMeter). -400 for a binding no WDSP meter feeds.
+    static double txReadingForBinding(int bindingId,
+                                      const std::function<double(TxMeterType)>& readRaw);
+
 public slots:
     // Switch between RX and TX meter polling.
     // Connected to MoxController::moxStateChanged(bool) by MainWindow (H.2).
@@ -294,16 +338,18 @@ private:
     // registered MeterWidget targets.
     // Porting from Thetis dsp.cs:999-1050 [v2.10.3.13] CalculateTXMeter.
     void pollTxMeters();
-    // pollTxMeters()'s hand-out of one raw reading (the Compression floor
-    // applies here).
-    void handOutTxReading(int bindingId, double rawValue);
+    // pollTxMeters()'s hand-out of one reading, already worked
+    // (txReadingForBinding), to the meters and txMeterReading.
+    void handOutTxReading(int bindingId, double value);
 
 #ifdef NEREUS_BUILD_TESTS
 public:
-    // Test seam: what pollTxMeters() does with one raw WDSP reading.
+    // Test seam: what pollTxMeters() does when every WDSP meter reads
+    // `rawValue`.
     void handOutTxReadingForTest(int bindingId, double rawValue)
     {
-        handOutTxReading(bindingId, rawValue);
+        handOutTxReading(bindingId, txReadingForBinding(
+            bindingId, [rawValue](TxMeterType) { return rawValue; }));
     }
 private:
 #endif
@@ -317,6 +363,14 @@ private:
     //   MaxBin               -> GetDetectMaxBin(disp=0)
     void pollSMeter();
     void pollRemoteRxMeters();
+    // Task 39: the ALC and MIC readings from the Core's transmit state.
+    void pollRemoteTxMeters();
+    // Task 39: marks each target's transmit bindings the Core cannot feed.
+    void refreshRemoteTxAvailability(bool force = false);
+    QString remoteTransmitUnavailableText() const;
+    // Trunk merge (R-R3-49): marks the five ADC and AGC bindings on a
+    // connected Core that does not send them.
+    void refreshRemoteMeterReadingsAvailability(bool force = false);
 
     // m_avgWindow: averaging window size set by MultimeterPage (Task 3.1).
     // Task 3.2 will use this value in dispatch; stored here for round-trip.
@@ -369,6 +423,15 @@ private:
     std::function<bool()> m_remoteSnapshotReady;
     std::function<double(const SliceModel*)> m_remoteMaxBinSource;
     std::function<bool()> m_remoteMeterReadingsAvailable;   // parity Task 15
+    // What the targets were last told about the five ADC and AGC bindings.
+    bool m_remoteReadingsAvailabilityShown{false};
+    QString m_remoteReadingsUnavailableShown;
+    // Task 39: the Core's transmit state and whether it sends it.
+    QPointer<TransmitState> m_remoteTransmitState;
+    std::function<QString()> m_remoteTransmitUnavailable;
+    // What the targets were last told (refreshRemoteTxAvailability).
+    bool m_remoteTxAvailabilityShown{false};
+    QString m_remoteTxUnavailableShown;
 };
 
 } // namespace NereusSDR

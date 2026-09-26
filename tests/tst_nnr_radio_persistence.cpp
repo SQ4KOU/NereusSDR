@@ -180,11 +180,15 @@ private slots:
         const int id = model.addSlice();
         SliceModel* slice = model.sliceById(id);
         QVERIFY(slice);
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(slice->nnrModelSlot(), 1);
         slice->setFrequency(14200000.0);
         model.openRxChannelPool(1, bufferSizeForRate(kRateHz), kRateHz);
+        QVERIFY(model.waitForReceiveLaneForTest());
         QVERIFY(engine->rxChannel(id));
+        QVERIFY(model.waitForReceiveLaneForTest());
         QVERIFY(!engine->rxChannel(id)->nnrDiagnostics().modelAvailable[1]);
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(slice->nnrModelSlot(), 1);   // the saved choice is kept
 
         // Premium becomes usable; the receiver is rebuilt underneath the slice.
@@ -196,15 +200,19 @@ private slots:
         QVERIFY(engine->rebuildRxChannel(id, config) >= 0);
         RxChannel* channel = engine->rxChannel(id);
         QVERIFY(channel);
+        QVERIFY(model.waitForReceiveLaneForTest());
         QVERIFY(channel->nnrDiagnostics().modelAvailable[1]);
 
         slice->setActiveNr(NrSlot::NNR);
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(slice->activeNr(), NrSlot::NNR);
+        QVERIFY(model.waitForReceiveLaneForTest());
         const int afterSelect = channel->nnrDiagnostics().actualModelSlot;
         const bool runningAfterSelect = channel->nnrDiagnostics().running;
         const int shownAfterSelect = slice->nnrActualModelSlot();
 
         slice->setNnrModelSlot(1);   // the operator chooses Premium again
+        QVERIFY(model.waitForReceiveLaneForTest());
         const int afterReselect = channel->nnrDiagnostics().actualModelSlot;
         qInfo("slice shows model %d; WDSP runs model %d after NNR on (running %d, "
               "shown actual %d), model %d after choosing Premium again",
@@ -214,7 +222,9 @@ private slots:
         QCOMPARE(afterSelect, 1);
         QCOMPARE(shownAfterSelect, 1);
         QCOMPARE(afterReselect, 1);
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(slice->nnrModelSlot(), 1);
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(slice->nnrActualModelSlot(), 1);
         model.flushPendingSettingsSave();
         QCOMPARE(settings.value("hardware/" + mac + "/slices/0/nnr/NnrModelSlot").toInt(), 1);
@@ -246,9 +256,13 @@ private slots:
         model.openRxChannelPool(1, bufferSizeForRate(kRateHz), kRateHz);
         RxChannel* channel = engine->rxChannel(id);
         QVERIFY(channel);
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(slice->activeNr(), NrSlot::NNR);
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(slice->nnrActualModelSlot(), 1);
+        QVERIFY(model.waitForReceiveLaneForTest());
         QVERIFY(slice->nnrRunning());
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(slice->nnrLimit(), 0);
 
         const qint64 tick = NnrLoadGovernor::kNnrCheckIntervalMs;
@@ -267,32 +281,46 @@ private slots:
         };
 
         QCOMPARE(runUntilStep(overloaded), 5);   // time base + 2 s
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(slice->nnrLimit(), static_cast<int>(NnrLimit::StandardOnly));
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(channel->nnrLimit(), static_cast<int>(NnrLimit::StandardOnly));
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(slice->nnrModelSlot(), 1);                 // saved choice kept
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(slice->activeNr(), NrSlot::NNR);
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(slice->nnrLimitText(),
                  QStringLiteral("Noise reduction is using the Standard model. "
                                 "This computer could not keep up with Premium."));
         // A tuning edit takes the DSP lock, which applies the pending limit:
         // WDSP runs Standard, the accepted choice stays Premium.
         slice->setNnrAlpha(2.0);
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(slice->nnrActualModelSlot(), 0);
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(slice->nnrModelSlot(), 1);
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(channel->nnrTuning().modelSlot, 1);
+        QVERIFY(model.waitForReceiveLaneForTest());
         QVERIFY(slice->nnrRunning());
 
         // Settle: nothing more for 5 s, then 2 s more of overload turns it off.
         const int settleChecks = runUntilStep(overloaded);
         QVERIFY2(settleChecks >= 10, "stepped again inside the settle time");
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(slice->nnrLimit(), static_cast<int>(NnrLimit::Off));
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(slice->nnrLimitText(),
                  QStringLiteral("Noise reduction was turned off. This computer could not keep up."));
         slice->setNnrAlpha(2.25);
+        QVERIFY(model.waitForReceiveLaneForTest());
         QVERIFY(!slice->nnrRunning());
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(slice->activeNr(), NrSlot::NNR);
         // Off is the floor, and light load never raises a level.
         runUntilStep({{id, 0.1}});
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(slice->nnrLimit(), static_cast<int>(NnrLimit::Off));
 
         model.flushPendingSettingsSave();
@@ -308,28 +336,40 @@ private slots:
 
         // "Try again" runs the saved choice at once.
         slice->requestNnrRetry();
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(slice->nnrLimit(), 0);
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(channel->nnrLimit(), 0);
+        QVERIFY(model.waitForReceiveLaneForTest());
         QVERIFY(slice->nnrRunning());
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(slice->nnrActualModelSlot(), 1);
 
         // Choosing the saved model again is the operator asking again too.
         QCOMPARE(runUntilStep(overloaded), 5);
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(slice->nnrLimit(), static_cast<int>(NnrLimit::StandardOnly));
         slice->setNnrModelSlot(1);
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(slice->nnrLimit(), 0);
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(slice->nnrActualModelSlot(), 1);
 
         // So is turning NNR off and on.
         QCOMPARE(runUntilStep(overloaded), 5);
         slice->setActiveNr(NrSlot::Off);
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(slice->nnrLimit(), 0);
+        QVERIFY(model.waitForReceiveLaneForTest());
         QVERIFY(!slice->nnrRunning());
         // NNR off: an overloaded receiver gets no step.
         QCOMPARE(runUntilStep(overloaded), 40);
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(slice->nnrLimit(), 0);
         slice->setActiveNr(NrSlot::NNR);
+        QVERIFY(model.waitForReceiveLaneForTest());
         QVERIFY(slice->nnrRunning());
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(slice->nnrActualModelSlot(), 1);
 
         // A Core restart starts with no limit: it is never saved.
@@ -373,8 +413,11 @@ private slots:
         QVERIFY(slice);
         slice->setFrequency(14200000.0);
         model.openRxChannelPool(1, bufferSizeForRate(kRateHz), kRateHz);
+        QVERIFY(model.waitForReceiveLaneForTest());
         QVERIFY(engine->rxChannel(id));
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(slice->activeNr(), NrSlot::NNR);
+        QVERIFY(model.waitForReceiveLaneForTest());
         QVERIFY(!slice->nnrRunning());
 
         qint64 now = 0;
@@ -382,6 +425,7 @@ private slots:
             model.governNnrLoadForTest(now, {{id, 0.95}});
             now += NnrLoadGovernor::kNnrCheckIntervalMs;
         }
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(slice->nnrLimit(), 0);
     }
 
@@ -395,16 +439,21 @@ private slots:
         QVERIFY(slice);
         QVERIFY(!model.wdspEngine() || !model.wdspEngine()->rxChannel(id));
         slice->setActiveNr(NrSlot::NNR);
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(slice->activeNr(), NrSlot::NNR);
 
         slice->setNnrLimit(static_cast<int>(NnrLimit::StandardOnly));
         slice->setActiveNr(NrSlot::Off);
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(slice->activeNr(), NrSlot::Off);
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(slice->nnrLimit(), 0);
 
         slice->setNnrLimit(static_cast<int>(NnrLimit::Off));
         slice->setActiveNr(NrSlot::NNR);
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(slice->activeNr(), NrSlot::NNR);
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(slice->nnrLimit(), 0);
     }
 
@@ -431,7 +480,9 @@ private slots:
         QVERIFY(slice);
         slice->setFrequency(14200000.0);
         model.openRxChannelPool(1, bufferSizeForRate(kRateHz), kRateHz);
+        QVERIFY(model.waitForReceiveLaneForTest());
         QVERIFY(engine->rxChannel(id));
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(slice->nnrActualModelSlot(), 1);
 
         qint64 now = 0;
@@ -439,16 +490,21 @@ private slots:
             model.governNnrLoadForTest(now, {{id, 0.95}});
             now += NnrLoadGovernor::kNnrCheckIntervalMs;
         }
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(slice->nnrLimit(), static_cast<int>(NnrLimit::StandardOnly));
         slice->setNnrAlpha(2.0);   // a locked call applies the pending limit
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(slice->nnrActualModelSlot(), 0);
 
         QList<int> running;
         connect(slice, &SliceModel::nnrDiagnosticsChanged, this,
                 [&running, slice] { running.append(slice->nnrActualModelSlot()); });
         slice->setNnrModelSlot(0);
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(slice->nnrLimit(), 0);
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(slice->nnrModelSlot(), 0);
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(slice->nnrActualModelSlot(), 0);
         QVERIFY2(!running.contains(1), "Premium ran while the operator chose Standard");
     }

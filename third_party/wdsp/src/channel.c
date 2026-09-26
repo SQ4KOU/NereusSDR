@@ -33,6 +33,12 @@ warren@wpratt.com
 // reports whether the worker started (dsplock.c WdspWorkerStarted), so a
 // teardown never waits for a worker that does not exist. Source DSP flow and
 // all upstream attribution are retained.
+//
+// NereusSDR modifications (2026-09-24, J.J. Boyd KG4VCF, with Anthropic
+// Claude Code, R-R3-39): OpenChannel and SetChannelState report each call to
+// the application's caller check (dsplock.h WdspCallerCheck) before any
+// of their work; with no check installed that is one pointer test. No DSP
+// flow changes.
 
 #include "comm.h"
 
@@ -89,6 +95,7 @@ PORT
 void OpenChannel (int channel, int in_size, int dsp_size, int input_samplerate, int dsp_rate, int output_samplerate, 
 	int type, int state, double tdelayup, double tslewup, double tdelaydown, double tslewdown, int bfo)
 {
+	WdspCallerCheck (channel, WDSP_CALLER_OPEN_CHANNEL);	// NereusSDR (R-R3-39)
 	ch[channel].in_size = in_size;
 	ch[channel].dsp_size = dsp_size;
 	ch[channel].in_rate = input_samplerate;
@@ -280,6 +287,7 @@ int SetChannelState (int channel, int state, int dmode)
 	int prior_state = ch[channel].state;
 	int count = 0;
 	const int timeout = 100;
+	WdspCallerCheck (channel, WDSP_CALLER_SET_CHANNEL_STATE);	// NereusSDR (R-R3-39)
 	if (ch[channel].state != state)
 	{
 		ch[channel].state = state;

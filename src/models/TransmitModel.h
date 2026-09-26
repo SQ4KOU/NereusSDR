@@ -264,6 +264,9 @@
 //                 anti-VOX gain and the two-tone settings; the tune drive
 //                 source becomes writable. NereusSDR-original. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan, desktop remote transmit (R-IOS-13):
+//                 voxEnabled is a Q_PROPERTY, mirrored both ways. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -1281,6 +1284,12 @@ public:
     Q_PROPERTY(NereusSDR::DrivePowerSource twoToneDrivePowerSource
                READ twoToneDrivePowerSource WRITE setTwoToneDrivePowerSource
                NOTIFY twoToneDrivePowerSourceChanged)
+    // iPhone app plan (desktop remote transmit, Task 40's name): VOX on the
+    // link as `transmit.voxEnabled`, so a remote window arms the Core's VOX
+    // as a local window arms its own. Declared last so every earlier
+    // property keeps its wire ordinal. Still never persisted: VOX always
+    // starts off.
+    Q_PROPERTY(bool voxEnabled READ voxEnabled WRITE setVoxEnabled NOTIFY voxEnabledChanged)
 
     /// Bypass PA settings flag. false (default) = use board-specific table.
     bool paSettingsBypass() const noexcept { return m_paSettingsBypass; }

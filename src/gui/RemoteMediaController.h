@@ -1,5 +1,26 @@
 #pragma once
 // no-port-check: NereusSDR-original. Remote daemon R3 receive display wiring.
+//
+// Modification history (NereusSDR):
+//   2026-09-25: iPhone app plan Task 36 (R-IOS-13): the microphone uplink.
+//               The window captures the microphone chosen in Audio > Devices
+//               through the capture helper and sends it on the media
+//               connection's microphone line while it transmits or has VOX
+//               armed; a program keying through its TCI server is sent in
+//               place of the microphone. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
+//   2026-09-25: iPhone app plan, desktop remote transmit (R-IOS-13): the
+//               uplink follows the window's transmit client and the Core's
+//               mirrored VOX by itself. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
+//   2026-09-26: transmit group fix wave: I4 setTransmitHolder fed from
+//               txState's holder; M6 the microphone streams unkeyed only for
+//               VOX this window armed. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
+//   2026-09-26: transmit group fix wave 2 (M8): micLineOpen and
+//               micLineChanged, so VOX shows disabled with its reason while
+//               this computer has no microphone line to the Core. J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #include "core/session/media/DisplayBudget.h"
 #include "core/session/media/IReceiverPcmSink.h"
@@ -13,6 +34,7 @@
 #include <functional>
 #include <memory>
 #include <optional>
+#include <vector>
 
 namespace NereusSDR {
 class StationClient;
@@ -178,6 +200,50 @@ public:
     RemoteAudioDelayReport audioDelay() const;
     /// R-R3-35: how often a clock probe goes out while audio plays.
     static constexpr int kClockProbeIntervalMs = 1000;
+
+    // ── iPhone app plan Task 36 (R-IOS-13): the microphone uplink ────────
+    //
+    // With a Core that takes this computer's microphone (micLineNegotiated)
+    // the media start carries remoteTxVersion and the connection gets a
+    // microphone line. The uplink runs (the capture helper open on the
+    // microphone chosen in Audio > Devices, packets sent) while this window
+    // holds transmit, its own key is down, or it has VOX armed (the Core's
+    // VOX on, and this session permitted to transmit), and never otherwise:
+    // no capture, no packet. Opus mono 20 ms frames; the lossless format
+    // instead while the operator chose lossless audio and the line agreed
+    // it. A program keying through this window's TCI server is sent in
+    // place of the microphone while its audio comes.
+
+    /// This Core takes this computer's microphone: it told this session
+    /// remoteTxVersion 1 or later (it does so only for a hello declaring
+    /// remoteTx). Without it the media start is today's.
+    bool micLineNegotiated() const;
+    /// Whether this window holds transmit, and whether its own key is down
+    /// (its transmit button, or a program keying through its TCI server).
+    /// Followed from the window's transmit client (StationClient's
+    /// RemoteTransmitClient) from construction on.
+    void setHoldsTransmit(bool holds);
+    void setMicKeyDown(bool down);
+    /// Whether the Core's VOX is on for this window: followed from the
+    /// mirrored transmit.voxEnabled from construction on. The uplink then
+    /// runs while this session is permitted to transmit.
+    void setVoxArmed(bool armed);
+    /// The uplink runs now.
+    bool micUplinkRunning() const;
+    /// Fix wave 2 (M8): this computer's microphone line to the Core is
+    /// open (the media connection is ready and carries it), so VOX armed
+    /// here can hear this computer. micLineChanged() follows it.
+    bool micLineOpen() const;
+    /// Packets sent on this media connection's microphone line.
+    quint64 micPacketsSent() const;
+    /// A program's transmit audio (TciServer::RemoteTransmit::audio): the
+    /// left channel, at any rate (resampled to 48 kHz), sent in place of
+    /// the microphone while it keeps coming.
+    void pushProgramAudio(const float* samples, int frames, int channels, int sampleRateHz);
+    /// How often the uplink moves captured audio to the line.
+    static constexpr int kMicPumpIntervalMs = 10;
+    /// How long after the last program audio the microphone is heard again.
+    static constexpr int kProgramAudioHoldMs = 200;
     /// R-R3-37: how long a pan in budget mode may wait for the Core's first
     /// answer before it says "Waiting for the Core". A Core that answers
     /// within this (the usual case at session start) never flashes the line.
@@ -217,10 +283,8 @@ public slots:
     /// rule 1 is not symmetric, so asking on them never loops. The same
     /// values again ask nothing. Epoch 0, not away, is the unheld start.
     ///
-    /// Not yet connected: this branch receives no holder notification (the
-    /// Core's holder is always unheld until Task 34). The merge with Task
-    /// 34 connects the client's `txState` (`holderEpoch`, `holderAway`) to
-    /// this slot.
+    /// The client's `txState` (`holderEpoch`, `holderAway`, fix wave I4)
+    /// calls it whenever the Core's holder changes.
     void setTransmitHolder(quint64 holderEpoch, bool holderAway);
 
 signals:
@@ -233,6 +297,8 @@ signals:
     void audioStatusChanged();
     /// R-R3-45: headphonesProblem() changed.
     void headphonesProblemChanged(const QString& problem);
+    /// Fix wave 2 (M8): micLineOpen() changed.
+    void micLineChanged(bool open);
 
 private:
     struct Private;
@@ -284,6 +350,13 @@ private:
     void fallBackToOpus(const QString& cause);
     void sendClockProbe();
     void reconcileClockProbe();
+    // Task 36: the microphone uplink.
+    bool micUplinkWanted() const;
+    void reconcileMicUplink();
+    // Fix wave 2 (M8): emits micLineChanged when micLineOpen() moved.
+    void noteMicLine();
+    /// Sends the whole packets `pending` holds and keeps the rest.
+    void sendMicAudio(std::vector<float>& pending);
     void receiveClockEcho(const QJsonObject& payload, qint64 receivedNs);
     bool send(QJsonObject payload);
 };

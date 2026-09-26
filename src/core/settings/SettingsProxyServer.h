@@ -316,8 +316,22 @@ public:
         /// antenna (ADC0's receivers, or every receiver on a 1-ADC board,
         /// and the transmitter).
         Tuner,
+        /// The transmitter's own Core settings (merge of the trunk into the
+        /// transmit lane, with Task 34's holder): External TX Inhibit
+        /// (TxInhibitMonitorEnabled, TxInhibitMonitorReversed) and Receive
+        /// Only (RxOnly); and (trunk merge of remote transmit) the Alex
+        /// tab's three transmit high-pass switches
+        /// (isAlexHpfTransmitSwitchKey). The transmit DSP options and the transmit
+        /// object's settings are a permitted session's (StationServer's
+        /// transmit gate), so a device that does not hold transmit is
+        /// refused them rather than asked.
+        Transmitter,
     };
     static SharedFamily sharedFamilyOf(const QString& key);
+    /// R-R3-46 (parity Task 14): hardware/.../alex/master/{hpfBypassOnTx,
+    /// hpfBypassOnPs,disable6mLnaOnTx}, the Alex tab's three transmit
+    /// high-pass switches (case-blind).
+    static bool isAlexHpfTransmitSwitchKey(const QString& key);
 
 signals:
     /// One Station-key change worth telling every connected client

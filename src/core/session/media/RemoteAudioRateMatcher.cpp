@@ -296,12 +296,20 @@ bool RemoteAudioRateMatcher::configure(int inputFrames, int outputFrames, int ri
 
 bool RemoteAudioRateMatcher::push(const QVector<float>& pcmInterleaved)
 {
-    if (!m_matcher || pcmInterleaved.size() != m_inputFrames * kChannels) {
+    if (pcmInterleaved.size() != m_inputFrames * kChannels) {
+        return false;
+    }
+    return push(pcmInterleaved.constData(), m_inputFrames);
+}
+
+bool RemoteAudioRateMatcher::push(const float* pcmInterleaved, int frameCount)
+{
+    if (!m_matcher || pcmInterleaved == nullptr || frameCount != m_inputFrames) {
         return false;
     }
 
-    for (float sample : pcmInterleaved) {
-        if (!std::isfinite(sample)) {
+    for (int index = 0; index < frameCount * kChannels; ++index) {
+        if (!std::isfinite(pcmInterleaved[index])) {
             return false;
         }
     }
@@ -314,8 +322,8 @@ bool RemoteAudioRateMatcher::push(const QVector<float>& pcmInterleaved)
         for (int frame = 0; frame < frames; ++frame) {
             const int carrySample = (m_inputCarryFrames + frame) * kChannels;
             const int sourceSample = (sourceFrame + frame) * kChannels;
-            m_inputCarry[carrySample] = pcmInterleaved.at(sourceSample);
-            m_inputCarry[carrySample + 1] = pcmInterleaved.at(sourceSample + 1);
+            m_inputCarry[carrySample] = pcmInterleaved[sourceSample];
+            m_inputCarry[carrySample + 1] = pcmInterleaved[sourceSample + 1];
         }
         m_inputCarryFrames += frames;
         sourceFrame += frames;
@@ -337,9 +345,20 @@ QVector<float> RemoteAudioRateMatcher::take()
     if (!m_matcher) {
         return {};
     }
+    QVector<float> pcm(m_outputFrames * kChannels);
+    if (!takeInto(pcm.data(), m_outputFrames)) {
+        return {};
+    }
+    return pcm;
+}
+
+bool RemoteAudioRateMatcher::takeInto(float* pcm, int frameCount)
+{
+    if (!m_matcher || pcm == nullptr || frameCount != m_outputFrames) {
+        return false;
+    }
 
 #ifdef HAVE_WDSP
-    QVector<float> pcm(m_outputFrames * kChannels);
     int destinationFrame = 0;
     while (destinationFrame < m_outputFrames) {
         if (m_outputCarryOffsetFrames == m_outputCarryFrames) {
@@ -360,9 +379,9 @@ QVector<float> RemoteAudioRateMatcher::take()
         m_outputCarryOffsetFrames += frames;
         destinationFrame += frames;
     }
-    return pcm;
+    return true;
 #else
-    return {};
+    return false;
 #endif
 }
 

@@ -46,6 +46,16 @@
 //                    run time, is paired before the client connects;
 //                    otherClients: iPhone app Task 71, other clients the
 //                    player signs in as paired devices, LinkFixtures.h)
+//   remoteTransmit   the Core's remote_transmit: "allow" or "deny"
+//                    ("deny", as every Core was before iPhone app plan
+//                    Task 34)
+//   transmitReady    iPhone app plan Task 35: the static radio's MOX walk
+//                    runs with no delays and the radio's own microphone
+//                    carries the audio, so a key can key it (false)
+//   microphoneLine   fix wave C1: with transmitReady, every device's media
+//                    carries a microphone line whose buffer is full at
+//                    once, so a voice key keys (false: no device has the
+//                    line, and a voice key is refused micNotReady)
 //   receivers        iPhone app Task 74: the static radio's receivers,
 //                    192 kHz each, sized before its slices are made, so
 //                    slices bind to them (absent: none, as before)
@@ -106,6 +116,15 @@
 //                                    arguments may be left out of either
 //                                    leg's check (setPgxlHardware).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49: the DFNR model is hidden
+//                                    too, so dfnrRunnable is false on
+//                                    every machine. AI-assisted via
+//                                    Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (tx-followup-3): the Core
+//                                    plays one that cannot run MNR, so
+//                                    mnrRunnable is false on every
+//                                    machine. AI-assisted via Anthropic
+//                                    Claude Code.
 //   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 12 (R-IOS-08):
 //                                    stationSetup "token" and
 //                                    "pairedDevice" for the device sign-in
@@ -128,6 +147,12 @@
 //                                    two (the catalogue's schema and
 //                                    object). AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app plan Task 34 (R-IOS-02):
+//                                    stationSetup "remoteTransmit".
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app plan Task 35 (R-IOS-13):
+//                                    stationSetup "transmitReady".
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 3): the static
 //                                    station's TX profile bank is its
 //                                    radio's, as a connect makes it.
@@ -165,6 +190,9 @@
 //                                    NEREUS_LINK_CONNECTABLE for the
 //                                    connectable fixture's own ctest entry.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave C1: stationSetup microphoneLine.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -182,16 +210,20 @@
 #include <memory>
 #include <vector>
 
+#include "core/ModelPaths.h"
 #include "core/AppSettings.h"
 #include "core/ConnectionState.h"
+#include "core/MoxController.h"
 #include "core/StepAttenuatorController.h"
 #include "core/accessories/AlexController.h"
 #include "core/dsp/DspAssetService.h"
 #include "core/meters/SliceMeterPump.h"
+#include "core/session/DeviceSessionRegistry.h"
 #include "core/session/LinkVersion.h"
 #include "core/session/PureSignalSessionFacade.h"
 #include "core/session/SessionCommandDispatcher.h"
 #include "core/session/SessionMessages.h"
+#include "core/session/RemoteKeying.h"
 #include "core/session/StationServer.h"
 #include "core/settings/SettingsScope.h"
 #include "models/Band.h"
@@ -221,7 +253,8 @@ const QStringList kSetupKeys{
     QStringLiteral("pairedDevice"),    QStringLiteral("otherPairedDevices"),
     QStringLiteral("board"),           QStringLiteral("receivers"),
     QStringLiteral("maxSlices"),       QStringLiteral("alexRxAntennas"),
-    QStringLiteral("lanScanWindowMs"),
+    QStringLiteral("lanScanWindowMs"), QStringLiteral("remoteTransmit"),
+    QStringLiteral("transmitReady"),   QStringLiteral("microphoneLine"),
 };
 
 // NEREUS_LINK_CONNECTABLE (see the file comment).
@@ -322,6 +355,12 @@ QString buildStation(const QJsonObject& setup, Station* station, quint16 major)
     } else {
         return QStringLiteral("stationSetup.radio must be \"static\" or \"connectable\"");
     }
+    // R-R3-49 (tx-followup-3): MNR runs only on a Mac Core. Every fixture
+    // plays a Core that cannot run it, so mnrRunnable and mnrStatus are the
+    // same on every machine the runner runs on.
+    if (DspAssetService* assets = station->model->dspAssets()) {
+        assets->setMnrAvailability(false, RadioModel::mnrCannotRunReason());
+    }
     if (radio != QStringLiteral("static") && setup.contains(QStringLiteral("board"))) {
         return QStringLiteral("stationSetup.board applies only to the static radio");
     }
@@ -412,6 +451,53 @@ QString buildStation(const QJsonObject& setup, Station* station, quint16 major)
                                                       QList<quint16>{major});
     if (setup.value(QStringLiteral("media")).toBool(false)) {
         station->server->setMediaEnabled(true);
+    }
+    // iPhone app plan Task 34: the station transmit gate's setting.
+    const QString remoteTransmit =
+        setup.value(QStringLiteral("remoteTransmit")).toString(QStringLiteral("deny"));
+    if (remoteTransmit != QStringLiteral("allow") && remoteTransmit != QStringLiteral("deny")) {
+        return QStringLiteral("stationSetup.remoteTransmit must be \"allow\" or \"deny\"");
+    }
+    station->server->setRemoteTransmitAllowed(remoteTransmit == QStringLiteral("allow"));
+    // iPhone app plan Task 35: a key can key the static radio. Its MOX walk
+    // runs with no delays (so a key's messages arrive in a fixed order),
+    // and the radio's own microphone carries the audio (no PC microphone
+    // to wait for). No radio is behind it; nothing reaches a transmitter.
+    const QJsonValue transmitReady = setup.value(QStringLiteral("transmitReady"));
+    if (!transmitReady.isUndefined() && !transmitReady.isBool()) {
+        return QStringLiteral("stationSetup.transmitReady must be true or false");
+    }
+    if (transmitReady.toBool(false)) {
+        if (setup.value(QStringLiteral("radio")).toString() != QStringLiteral("static")
+            || station->model->moxController() == nullptr) {
+            return QStringLiteral("stationSetup.transmitReady applies only to the static radio");
+        }
+        station->model->moxController()->setTimerIntervals(0, 0, 0, 0, 0, 0);
+        station->model->transmitModel().setMicSourceLocked(false);
+        station->model->transmitModel().setMicSource(MicSource::Radio);
+        // iPhone app plan Task 39: the time-out's clock is the Core's device
+        // clock, which the runner moves virtually, so `txState`'s time left
+        // reads the same on every machine.
+        StationServer* server = station->server.get();
+        station->model->txTimeOutTimer()->setClock(
+            [server]() { return server->deviceSessions()->now(); });
+    }
+    // Fix wave C1: a voice key needs the device's microphone line, which
+    // travels on media, not on this session. microphoneLine stands for a
+    // media connection that carries it, its buffer full at once.
+    const QJsonValue microphoneLine = setup.value(QStringLiteral("microphoneLine"));
+    if (!microphoneLine.isUndefined() && !microphoneLine.isBool()) {
+        return QStringLiteral("stationSetup.microphoneLine must be true or false");
+    }
+    if (microphoneLine.toBool(false)) {
+        if (!transmitReady.toBool(false) || station->server->remoteKeying() == nullptr) {
+            return QStringLiteral("stationSetup.microphoneLine needs transmitReady");
+        }
+        RemoteKeying::MicUplink uplink;
+        uplink.carriesMic = [](const QByteArray&) { return true; };
+        uplink.prime = [](const QByteArray&, std::function<void(bool)> done) { done(true); };
+        uplink.endPriming = [](const QByteArray&) {};
+        station->server->remoteKeying()->setMicUplink(uplink);
     }
     if (station->harness) {
         // A StationServer makes its radio receive-only
@@ -822,6 +908,10 @@ void TstLinkConformanceSession::initTestCase()
     // decides what the dspAssets object says about them. Fixtures are the
     // same on every machine, so none is found here.
     DspAssetService::setBundledNr3ModelPathsForTest([](const QString&) { return QString(); });
+    // R-R3-49: likewise the DFNR model, so dfnrRunnable is false on every
+    // machine. Its reason names what is missing (the model, or DFNR in this
+    // build), so the fixtures match it as any string.
+    ModelPaths::setDfnrModelTarballForTest(QString());
 
     QString error;
     m_manifest = LinkFixtures::readObject(
@@ -843,6 +933,7 @@ void TstLinkConformanceSession::init()
 void TstLinkConformanceSession::cleanupTestCase()
 {
     DspAssetService::setBundledNr3ModelPathsForTest({});
+    ModelPaths::clearDfnrModelTarballForTest();
     const QString path = AppSettings::instance().filePath();
     QFile::remove(path);
     QFile::remove(path + QStringLiteral(".bak"));

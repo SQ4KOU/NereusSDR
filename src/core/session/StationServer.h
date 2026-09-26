@@ -279,6 +279,33 @@
 //                                    leaves, is away past its 180 s or is
 //                                    revoked, and listeningOn. AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 34 (R-IOS-02, R-IOS-03, R-IOS-13): the
+//               station transmit gate (txPermitted per session, sent again when
+//               it changes; remoteTxVersion 1 for a peer declaring remoteTx),
+//               TransmitHolder and the keying gate on the model's
+//               MoxController, a dropped holder, releases on leave, revoke and
+//               the end of its 180 s, the on-air refusals, tx.setTxSlice, and
+//               remote_transmit in place of the blanket receive-only policy.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 35 (R-IOS-13, R-IOS-02): keying from a
+//               remote device (tx.key, tx.unkey, tx.tune, tx.twoTone through
+//               RemoteKeying, for a peer at minor 11 declaring remoteTx); a
+//               VOX key while a device holds transmit is that device's; a
+//               write of transmit's mox or tune is refused "Use the transmit
+//               button."; a session's keying commands are forgotten when it
+//               ends. J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan, desktop remote transmit (R-IOS-13,
+//                R-R3-42): txRefusalOf() and the refusal last sent to each
+//                peer. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                Code.
+//   2026-09-25: iPhone app plan Task 39 (D14, R-IOS-13, R-IOS-21): the
+//               `txState` object (TransmitState, txStateVersion 1) to a peer
+//               at minor 11 declaring remoteTx; a link lost and a device
+//               removed while keyed record their stop reasons. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 //   2026-09-25  J.J. Boyd / KG4VCF  iPhone app Task 74 (R-IOS-02,
 //                                    R-IOS-30): receivers several devices
 //                                    share (the anchor, the pin, pan
@@ -326,6 +353,29 @@
 //   2026-09-26  J.J. Boyd / KG4VCF  R-R3-13 / R-R3-49 (parity Task 15):
 //                                    meterReadingsVersion.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave C2: voxArmedByChanged; VOX a
+//               device armed goes off when that device's own line closes.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave: I4 txStateVersion 2. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
+//   2026-09-26: Transmit group fix wave I2: the transmit slice is frozen
+//               while the radio's own PTT keys it (ruling 8.11). J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave 2: every holder on the air counts,
+//               the station device's own keys included (onAirHolder),
+//               exempt by change not by holder; ruling 8.11's freeze on
+//               every path (XIT, pan moves, a stored change at proceed); a
+//               hosting desktop's key named after it. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave 2, Important 2: a refused TUNE or
+//               two-tone takes nothing (admitKey asks TX inhibit, the PA
+//               trip, receive only and the interlock before the gate; a
+//               take whose key never starts is released). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QHash>
@@ -351,6 +401,9 @@
 #include "core/DisturbanceCheck.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StationCapabilities.h"
+#include "core/safety/StarvationPolicy.h"
+#include "core/safety/StationTxGate.h"
+#include "core/safety/TransmitHolder.h"
 #include "core/session/media/DisplayBudgetSplit.h"
 
 QT_BEGIN_NAMESPACE
@@ -382,6 +435,10 @@ class StationOpeningGate;
 class StationCatalog;
 class StationDevicesFacade;
 class TokenStore;
+class TransmitHolder;
+class TransmitState;
+class RemoteKeying;
+class RemoteTxWatchdog;
 
 class StationServer : public QObject {
     Q_OBJECT
@@ -732,6 +789,14 @@ public:
     /// The media session the PureSignal display goes to (the one whose
     /// ps3.subscribeDisplay was last accepted), or 0 for none known.
     quint64 ps3DisplaySubscriberEpoch() const { return m_ps3SubscriberEpoch; }
+    /// iPhone app plan Task 36 (R-IOS-13): the media session `epoch` was
+    /// told remoteTxVersion (it agreed minor 11 and its hello declared
+    /// remoteTx 1), so its media start may carry remoteTxVersion and get the
+    /// microphone line.
+    bool remoteTxAvailableForMedia(quint64 epoch) const;
+    /// Task 36: whether the media session `epoch` may transmit now (its
+    /// txPermitted).
+    bool mediaSessionTxPermitted(quint64 epoch) const;
     /// Installs newer limits (a later generation) and why they are below the
     /// Core's ceiling (R-R3-08, R-R3-37). A new reason needs a new
     /// generation; the same limits with the same reason are accepted as-is.
@@ -767,13 +832,6 @@ public:
     /// splitDisplayBudget shares it with), 0 with no budget in force. The
     /// load governor keeps one floor pan for each.
     int displayBudgetSharingCount() const;
-    /// Fix wave 3 (ruling 9.3, asking again around the holder): who holds
-    /// transmit, as the display budget split sees it, for tests until Task
-    /// 34's TransmitHolder feeds splitDisplayBudget (the merge replaces this
-    /// seam with the holder: kind, the holder's media epoch, away). Splits
-    /// again and publishes each changed share.
-    void setDisplayBudgetHolderForTest(DisplayBudgetHolderKind kind, quint64 holderEpoch = 0,
-                                       bool away = false);
     void setDisplayBudgetEnforcementEnabled(bool enabled);
     bool displayBudgetAvailable() const;
     bool displayBudgetAvailable(quint64 epoch) const;
@@ -901,6 +959,61 @@ public:
     /// deviceAuth 1, at minor 11 (the design's ruling 10.1), and takes
     /// session.leave.
     int sessionHolderVersion() const { return 1; }
+
+    // ── iPhone app plan Task 34: transmit (R-IOS-02, R-IOS-03, R-IOS-13) ──
+
+    /// The config key remote_transmit (DaemonConfig): allow lets a session
+    /// the gate permits transmit (StationTxGate), and lifts the Core's
+    /// blanket receive-only policy; deny keeps it, and every session's
+    /// txPermitted is false. Deny by default, as every Core was before;
+    /// nereusd applies its config (default allow).
+    void setRemoteTransmitAllowed(bool allowed);
+    bool remoteTransmitAllowed() const { return m_txGate.remoteTransmitAllowed(); }
+    /// Who holds transmit (never null).
+    TransmitHolder* transmitHolder() const { return m_transmitHolder.get(); }
+    /// Fix wave 2 (ruling 8.1): a desktop that hosts this Core names the
+    /// station device after itself, so its own MOX or TUNE is published,
+    /// and refused on the air, in the desktop's words. Unset on a Core no
+    /// desktop hosts: the station device's own keys are "Radio".
+    void setStationDeviceWords(const QString& name, const QString& shortName);
+    /// 1: txPermitted per session, the `tx.setTxSlice` verb, the on-air
+    /// refusals, and (Task 35) keying: `tx.key`, `tx.unkey`, `tx.tune` and
+    /// `tx.twoTone`, for a peer at minor 11 whose hello declared remoteTx 1.
+    int remoteTxVersion() const { return 1; }
+    /// Task 35: keying from a remote device; null without a Local model.
+    RemoteKeying* remoteKeying() const { return m_remoteKeying.get(); }
+    /// Task 37 (R-IOS-13; remote design section 12.1): the transmit
+    /// watchdog; null without a Local model. It watches a device while it
+    /// is keyed or has VOX armed and stops transmitting when its
+    /// keepalives (tx.keepalive on the session, or the media connection's
+    /// "tx" data channel) stop for more than 400 ms, or its session ends.
+    RemoteTxWatchdog* txWatchdog() const { return m_txWatchdog.get(); }
+    /// Task 37: a keepalive from the media connection's "tx" data channel
+    /// (RemoteTxWatchdog::channelKeepalive's 13 bytes), for the device the
+    /// media session `epoch` is for. Anything else is ignored.
+    void txChannelMessage(quint64 epoch, const QByteArray& message);
+    /// Task 37 (remote design section 12.3): `deviceId`'s microphone line
+    /// starved (true) or carries audio again (false) while it is keyed on
+    /// it; the per-mode action (StarvationPolicy) follows.
+    void remoteMicStarved(const QByteArray& deviceId, bool starved);
+    /// Task 37: the device whose accepted write turned VOX on, while VOX is
+    /// on; empty when VOX is off or was turned on at the Core itself.
+    QByteArray voxArmedBy() const { return m_voxArmedBy; }
+    /// iPhone app plan Task 39 (D14, R-IOS-13): the mirrored `txState`
+    /// object (never null; follows a Local model).
+    TransmitState* transmitState() const { return m_transmitState; }
+    /// 1: the Core sends `txState` to a peer at minor 11 whose hello
+    /// declared remoteTx 1 (after remoteTxVersion in its capabilities).
+    /// 2 (fix wave I4): `txState` names the holder of transmit (ruling 8.1)
+    /// and carries keyedForSeconds.
+    int txStateVersion() const { return 2; }
+    /// The gate's answer for `transport` (what its txPermitted says).
+    TxDecision txDecisionFor(SessionTransport* transport) const;
+    /// The refusal a capabilities message carries (empty without one).
+    static TxRefusal txRefusalOf(const StationCapabilities& caps);
+    /// Releases transmit if `deviceId` holds it, through a transfer to
+    /// nobody (a fifth device replacing it, Task 41).
+    void releaseTransmitFor(const QByteArray& deviceId, const QString& reason);
     /// iPhone app Task 73 (ruling 5.2 step 2): the saved slices of
     /// `deviceId` that did not fit at its last admission (no free letter or
     /// no receiver), kept in its layout store and reported by Task 74's
@@ -920,6 +1033,9 @@ public:
     SettingsProxyServer* settingsServer() const { return m_settingsServer; }
 
 signals:
+    /// Fix wave C2: voxArmedBy() changed (VOX follows the device that armed
+    /// it; the media controllers mark which line VOX listens to).
+    void voxArmedByChanged(const QByteArray& deviceId);
     void listeningChanged(bool listening);
     void displayBudgetChanged();
     void telemetrySessionStarted(quint64 epoch);
@@ -1007,6 +1123,12 @@ private:
         /// id, for the dispatcher's owner string station:<sessionId>.
         QPointer<MirrorView> view;
         quint64 sessionId = 0;
+        /// iPhone app plan Task 34: the txPermitted this session was last
+        /// sent, so a change is sent again and nothing else is.
+        bool txPermittedSent = false;
+        /// Desktop remote transmit: the refusal it was last sent with it
+        /// (empty for a peer without remoteTx, or while permitted).
+        TxRefusal txRefusalSent;
         /// iPhone app Task 76: this admitted session's media epoch (never
         /// 0 once admitted, unique for the Core's life), its share of the
         /// display budget and why, and what its capabilities last said of
@@ -1182,6 +1304,66 @@ private:
     /// Ruling 5.9: the plain refusal when `requester` names another
     /// device's slice, else empty.
     QString sliceRefusal(const QByteArray& requester, int sliceId) const;
+
+    // ── iPhone app plan Task 34: transmit ───────────────────────────────
+    SessionPeerInfo peerInfoFor(SessionTransport* transport) const;
+    /// Sends `capabilities` again to every session whose txPermitted
+    /// changed.
+    void publishTxPermitted();
+    /// The holder changed (who, keyed, away, a transfer): every session's
+    /// txPermitted, connectedDevices, and the model's transmit holder.
+    void onTransmitHolderChanged();
+    /// Fix wave 2, Important 2: releases the take of epoch `epoch` once it
+    /// is clear its key never started (TransmitHolder::releaseUnstartedTake).
+    void watchUnstartedTake(quint64 epoch);
+    static constexpr int kUnstartedTakeRecheckMs = 50;
+    // Task 37: the watchdog follows who is keyed (RadioModel::keyedBy).
+    void followKeyedForWatchdog();
+    // Task 37: turns VOX off when `deviceId` armed it (its session ended,
+    // its link went quiet, its microphone line closed).
+    void disarmVoxArmedBy(const QByteArray& deviceId, const char* why);
+    // Task 37: the device's name for a stop sentence.
+    QString deviceNameForStop(const QByteArray& deviceId) const;
+    /// iPhone app plan Task 39: records on `txState` that the Core is
+    /// stopping `deviceId`'s key for `stopReason` (TransmitState::kStop*),
+    /// when that device holds transmit and is on the air.
+    void noteHolderStopped(const QByteArray& deviceId, const char* stopReason);
+    /// Merge of Tasks 37 and 39: records on `txState` why the Core is about
+    /// to stop transmitting (the watchdog's linkLost, the starvation's
+    /// micStarved), in the words it stops with. Called before StopAllTx.
+    void recordTransmitStop(const char* stopReason, const QString& text);
+    /// Ruling 7.4 (D60): the on-air refusal for a change from `requester`,
+    /// or empty (nobody on the air, or the holder's own change).
+    TxRefusal onAirRefusal(const QByteArray& requester) const;
+    /// Fix wave 2, Important 1: the holder while it is on the air (any
+    /// holder, the station device's own keys included); nullopt otherwise.
+    std::optional<TransmitHolder::Holder> onAirHolder() const;
+    /// Ruling 7.4's words for `holder` on the air.
+    TxRefusal onAirWords(const TransmitHolder::Holder& holder) const;
+    /// Fix wave I2 (ruling 8.11, D64): the slice frozen while the station
+    /// device is keyed (the radio's own PTT, or the Core's own keys): the
+    /// transmit slice, whoever owns it; -1 otherwise.
+    int stationFrozenSlice() const;
+    /// The refusal for a change to `sliceId` that the freeze stops (its
+    /// frequency, mode, filter, band or transmit antenna, or closing it),
+    /// or empty.
+    TxRefusal stationFreezeRefusal(int sliceId) const;
+    /// Fix wave 2, Important 3: the freeze's refusal for a whole message (a
+    /// slice property write naming a frozen property, removeSlice or
+    /// slice.selectBand), asked on arrival and again when a confirmed,
+    /// stored change is applied.
+    TxRefusal freezeRefusalFor(const SessionMessage& message) const;
+    /// Fix wave 2, Important 3: the refusal for proceeding with `question`
+    /// (answer `choice`, from `device`) while a holder is on the air: the
+    /// freeze of its stored change or of the slices it moves, or a take of
+    /// the transmit slice or its receiver. Empty when it may proceed.
+    TxRefusal proceedOnAirRefusal(const ConfirmStep::Question& question, int choice,
+                                  const QByteArray& device) const;
+    /// The same for a property write to `objectKey`.`property`: a change to
+    /// the transmit path (an antenna, PureSignal) while the holder is on
+    /// the air.
+    TxRefusal onAirPropertyRefusal(const QByteArray& requester, const QByteArray& objectKey,
+                                   const QByteArray& property) const;
     QString ownedElsewhereReason(int sliceId) const;
     /// What `deviceId` owns, for connectedDevices.listeningOn.
     QJsonArray listeningOn(const QByteArray& deviceId) const;
@@ -1233,9 +1415,12 @@ private:
                                  std::optional<qint64> timeRanOutAtMs);
     struct PanMoveCheck {
         /// None: not a pan move (today's path); Apply: nobody would be
-        /// asked; Ask: another device's slice moves or closes.
-        enum class Kind { None, Apply, Ask };
+        /// asked; Ask: another device's slice moves or closes; OnAir: it
+        /// would move or close the transmit slice of a holder on the air
+        /// (ruling 7.4, and ruling 8.11's freeze), refused with `onAir`.
+        enum class Kind { None, Apply, Ask, OnAir };
         Kind kind = Kind::None;
+        TxRefusal onAir;
         int stream = -1;
         double centreHz = 0.0;
         int exemptSliceId = -1;
@@ -1483,6 +1668,30 @@ private:
     QHash<ResultKey, QPointer<SessionTransport>> m_resultRoutes;
     bool m_resultSentInDispatch = false;
     std::unique_ptr<ConnectedDevicesFacade> m_connectedDevices;
+    // iPhone app plan Task 34: who holds transmit, and who may transmit.
+    std::unique_ptr<TransmitHolder> m_transmitHolder;
+    /// setStationDeviceWords.
+    struct StationWords {
+        QString name;
+        QString shortName;
+    } m_stationWords;
+    StationTxGate m_txGate;
+    // iPhone app plan Task 35: keying from a remote device (a Local model
+    // with a MoxController only).
+    std::unique_ptr<RemoteKeying> m_remoteKeying;
+    // iPhone app plan Task 37: the transmit watchdog, its one check timer
+    // (a child, so the conformance player's virtual clock drives it), the
+    // per-mode starvation action, the device whose key the watchdog
+    // follows now, and the device that armed VOX.
+    std::unique_ptr<RemoteTxWatchdog> m_txWatchdog;
+    QTimer* m_txWatchdogTimer = nullptr;
+    StarvationPolicy m_starvation;
+    QByteArray m_watchedKeyedDevice;
+    QByteArray m_voxArmedBy;
+    // iPhone app plan Task 39: the `txState` object. Qt-parented to this, so
+    // its meter timer is one of the server's timers (the conformance
+    // runner's virtual clock drives them all).
+    TransmitState* m_transmitState = nullptr;
     // iPhone app Task 73: one marker per slice (Qt-parented to this).
     SliceMarkerSet* m_markers = nullptr;
     // True while a restored layout's owners are settled just before every
@@ -1495,11 +1704,6 @@ private:
     std::optional<DisplayBudgetLimits> m_displayBudget;
     bool m_displayBudgetForReasonPeersOnly = false;
     DisplayBudgetReason m_displayBudgetReason = DisplayBudgetReason::None;
-    // Fix wave 3: setDisplayBudgetHolderForTest's holder (Unheld until Task
-    // 34's TransmitHolder replaces it).
-    DisplayBudgetHolderKind m_testBudgetHolderKind = DisplayBudgetHolderKind::Unheld;
-    quint64 m_testBudgetHolderEpoch = 0;
-    bool m_testBudgetHolderAway = false;
     bool m_telemetryEnabled = false;
     quint64 m_mediaSessionEpoch = 0;
 

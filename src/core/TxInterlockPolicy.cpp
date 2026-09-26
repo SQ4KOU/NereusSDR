@@ -11,6 +11,9 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  R-R3-47 / R-R3-22: reloadFromSettings()
 //                                    and applyMirrored(). AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app plan Task 34 (R-IOS-13):
+//                                    the refusal's kind for lastDenial().
+//                                    AI-assisted via Anthropic Claude Code.
 
 #include "core/TxInterlockPolicy.h"
 #include "core/AppSettings.h"
@@ -73,6 +76,7 @@ void TxInterlockPolicy::load()
 
 bool TxInterlockPolicy::evaluateTxRequest(bool ampPresent, bool ampInOperate, float currentSwr)
 {
+    m_lastDenial = Denial::None;
     if (m_mode == Disabled) {
         return true;
     }
@@ -81,6 +85,7 @@ bool TxInterlockPolicy::evaluateTxRequest(bool ampPresent, bool ampInOperate, fl
     if (ampPresent && !ampInOperate) {
         const QString reason = "Amplifier present but not in OPERATE";
         if (m_mode == Block) {
+            m_lastDenial = Denial::AmpStandby;
             emit denied(reason);
             return false;
         }
@@ -101,6 +106,7 @@ bool TxInterlockPolicy::evaluateTxRequest(bool ampPresent, bool ampInOperate, fl
                                        .arg(static_cast<double>(currentSwr))
                                        .arg(static_cast<double>(m_swrGateMax));
             if (m_mode == Block) {
+                m_lastDenial = Denial::Swr;
                 emit denied(reason);
                 return false;
             }

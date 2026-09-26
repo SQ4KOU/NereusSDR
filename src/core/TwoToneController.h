@@ -61,6 +61,10 @@
 //                 setTuneOffFn: a start with TUN on turns TUN off through
 //                 its own path first (item 6, console.cs:44805-44813
 //                 [v2.10.3.15]).
+//   2026-09-25 : iPhone app plan Task 35 (R-IOS-13), by J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//                 setActive(bool, const KeyerIdentity&): a remote device's
+//                 two-tone asks and keys as that device. NereusSDR-original.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis-derived activation
@@ -74,6 +78,7 @@
 
 #include <functional>
 
+#include "core/MoxController.h"    // KeyerIdentity (Task 35)
 #include "core/WdspTypes.h"
 #include "models/TransmitModel.h"  // for DrivePowerSource enum
 
@@ -273,6 +278,8 @@ public:
     // press. Unlike isActivationInFlight() it is false through the MOX
     // release settle, when a voice press may arrive.
     bool isKeyingMox() const noexcept { return m_keyingMox; }
+    // Task 35: whose two-tone this is (valid while active or starting).
+    const KeyerIdentity& keyer() const noexcept { return m_keyer; }
 
 public slots:
     // setActive — canonical entry point.  Drives the full activation /
@@ -281,6 +288,10 @@ public slots:
     // Idempotent: setActive(true) when already active is a no-op.  Same
     // for setActive(false) when already inactive.
     void setActive(bool on);
+    // iPhone app plan Task 35 (R-IOS-13): the same start, asked and keyed
+    // for `keyer` (a remote device's two-tone). setActive(true) alone is
+    // the station device's. Off ends it as setActive(false).
+    void setActive(bool on, const NereusSDR::KeyerIdentity& keyer);
 
 signals:
     // Emitted when m_active actually changes.  Subscribers should mirror
@@ -366,6 +377,10 @@ private:
 
     // True only across the activation walk's own setMox(true) call.
     bool m_keyingMox{false};
+    // Task 35: whose two-tone this is (the station device unless a remote
+    // device started it); its key is that keyer's.
+    KeyerIdentity m_keyer{KeyerIdentity::station(PttMode::None)};
+    bool m_keyerFromCaller{false};
 
     // Freq2Delay sub-state — true if pulsed at the time we deferred Mag2.
     bool m_pulsedAtMag2Defer{false};

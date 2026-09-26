@@ -68,6 +68,19 @@
 #include "models/SliceModel.h"
 
 using namespace NereusSDR;
+
+namespace {
+// R-R3-39: the pump reads the receive lane's meter cache, and its reads ask
+// the lane for a fresh one; a slice shows no reading until the lane has read
+// its channel. Poll, let the lane read, then poll again, as the pump's timer
+// would.
+void pollSettled(RadioModel& model, SliceMeterPump* pump)
+{
+    pump->poll();
+    QVERIFY(model.waitForReceiveLaneForTest());
+    pump->poll();
+}
+} // namespace
 using NereusSDR::Test::ConnectableRadioModel;
 
 class TestSliceMeterPump : public QObject {
@@ -177,7 +190,7 @@ private slots:
         QVERIFY(model.wdspEngine()->rxChannel(slice->sliceIndex()) == nullptr);
         QVERIFY(model.connectionState() != ConnectionState::Connected);
 
-        pump->poll();
+        pollSettled(model, pump);
 
         QCOMPARE(slice->signalStrengthDbm(), SliceMeterPump::kNoReadingDbm);
         QCOMPARE(slice->signalPeakDbm(), SliceMeterPump::kNoReadingDbm);
@@ -205,7 +218,7 @@ private slots:
         slice->setSignalAverageDbm(-75.0);
 
         model.setConnectionStateForTest(ConnectionState::Connected);
-        pump->poll();
+        pollSettled(model, pump);
 
         QCOMPARE(slice->signalStrengthDbm(), SliceMeterPump::kNoReadingDbm);
         QCOMPARE(slice->signalPeakDbm(), SliceMeterPump::kNoReadingDbm);
@@ -232,14 +245,14 @@ private slots:
         QVERIFY(ch != nullptr);
 
         // Connected first: a real reading lands.
-        pump->poll();
+        pollSettled(model, pump);
         QVERIFY(slice->signalAverageDbm() > SliceMeterPump::kNoReadingDbm);
 
         model.setConnectionStateForTest(ConnectionState::LinkLost);
         // The channel survives LinkLost; that is exactly why the gate is
         // needed.
         QVERIFY(model.wdspEngine()->rxChannel(slice->sliceIndex()) != nullptr);
-        pump->poll();
+        pollSettled(model, pump);
 
         QCOMPARE(slice->signalStrengthDbm(), SliceMeterPump::kNoReadingDbm);
         QCOMPARE(slice->signalPeakDbm(), SliceMeterPump::kNoReadingDbm);
@@ -250,7 +263,7 @@ private slots:
         slice->setSignalPeakDbm(-70.0);
         slice->setSignalAverageDbm(-75.0);
         model.radioStatus().setTransmitting(true);
-        pump->poll();
+        pollSettled(model, pump);
         QCOMPARE(slice->signalStrengthDbm(), SliceMeterPump::kNoReadingDbm);
         QCOMPARE(slice->signalPeakDbm(), SliceMeterPump::kNoReadingDbm);
         QCOMPARE(slice->signalAverageDbm(), SliceMeterPump::kNoReadingDbm);
@@ -258,7 +271,7 @@ private slots:
 
         // Recovery: Connected again publishes the live channel's readings.
         model.setConnectionStateForTest(ConnectionState::Connected);
-        pump->poll();
+        pollSettled(model, pump);
 
         const double average =
             ch->getMeter(RxMeterType::SignalAvg) + model.rxMeterOffsetDb();
@@ -325,7 +338,7 @@ private slots:
         slice->setSignalAverageDbm(seeded);
 
         model.radioStatus().setTransmitting(true);
-        pump->poll();
+        pollSettled(model, pump);
 
         QCOMPARE(slice->signalStrengthDbm(), seeded);
         QCOMPARE(slice->signalPeakDbm(), seeded);
@@ -365,7 +378,7 @@ private slots:
         RxChannel* ch = model.wdspEngine()->rxChannel(slice->sliceIndex());
         QVERIFY(ch != nullptr);
 
-        pump->poll();
+        pollSettled(model, pump);
 
         const double expected =
             ch->getMeter(RxMeterType::SignalAvg) + model.rxMeterOffsetDb();
@@ -401,7 +414,7 @@ private slots:
         QVERIFY(ch != nullptr);
 
         pump->setSourceSelector([]() { return SliceMeterPump::MeterSource::SignalPeak; });
-        pump->poll();
+        pollSettled(model, pump);
 
         const double expected =
             ch->getMeter(RxMeterType::SignalPeak) + model.rxMeterOffsetDb();
@@ -434,7 +447,7 @@ private slots:
         QCOMPARE(model.wdspEngine()->getMaxBinDbm(/*disp=*/0), -400.0);
 
         pump->setSourceSelector([]() { return SliceMeterPump::MeterSource::MaxBin; });
-        pump->poll();
+        pollSettled(model, pump);
 
         QCOMPARE(slice->signalStrengthDbm(), -400.0);
         QCOMPARE(slice->signalPeakDbm(),

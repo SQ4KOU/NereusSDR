@@ -22,6 +22,13 @@
 //                 cadence sourced from radio mic frames via
 //                 TxMicSource).  Plan:
 //                 docs/architecture/phase3m-1c-tx-pump-architecture-plan.md
+//   2026-09-25 : R-R3-39 (station Task 32) by J.J. Boyd (KG4VCF): lifecycle
+//                 note for the transmit lane (the TX channel stays on its
+//                 owner's thread). AI-assisted via Anthropic Claude Code.
+//   2026-09-25 : iPhone app plan Task 36 (R-IOS-13) by J.J. Boyd (KG4VCF):
+//                 the remote microphone ring (RemoteMicFeed), its own
+//                 branch ahead of the VAX and PC branches in the normal and
+//                 the RADE paths. AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file.  The Thetis cmbuffs.c /
@@ -47,6 +54,7 @@ namespace NereusSDR {
 
 class AudioEngine;
 class RadeChannel;
+class RemoteMicFeed;
 class TxChannel;
 class TxMicSource;
 
@@ -85,7 +93,10 @@ class TxMicSource;
 //   1. Construct (parent = RadioModel).
 //   2. setMicSource / setTxChannel / setAudioEngine — all required
 //      before startPump().  TxChannel must already be moveToThread()'d
-//      to this worker.
+//      to this worker.  (R-R3-39: with the transmit lane RadioModel no
+//      longer moves it; its setters post their WDSP calls to the lane,
+//      and the worker only runs the per-block DEXP and fexchange0. The
+//      per-block event pump runs only for a channel that does live here.)
 //   3. startPump() — calls QThread::start().  The new thread enters
 //      run(), which loops on the semaphore until isRunning() goes false.
 //   4. stopPump() — calls m_micSource->stop() (which posts the poison
@@ -138,6 +149,15 @@ public:
     /// and the matching path-flip back to Wdsp.
     void setRadeChannel(RadeChannel* channel);
 
+    /// iPhone app plan Task 36 (R-IOS-13): the remote device's microphone
+    /// (RadioModel's RemoteMicFeed, which outlives this worker). Pulled on
+    /// every block; while it is in use (the remote device holds transmit
+    /// and is keyed, has VOX armed, or its key is waiting for the buffer)
+    /// its audio replaces the operator's source, in the normal path and in
+    /// the RADE path, ahead of VAX and the PC microphone. The TCI branch
+    /// returns before RADE and is not reused. Null clears.
+    void setRemoteMicFeed(RemoteMicFeed* feed);
+
     /// Start the worker.  Internally calls QThread::start().  Idempotent.
     void startPump();
 
@@ -169,6 +189,11 @@ public:
     /// pointer without exposing the production member.  Tests verify
     /// setRadeChannel round-trip + null-clear via this accessor.
     RadeChannel* radeChannelForTest() const;
+
+    /// Task 36 test seam: dispatch one block from `radioMic` (kBlockFrames
+    /// mono samples) as run() would after draining the mic source, without
+    /// the source's semaphore.
+    void dispatchBlockForTest(const float* radioMic);
 #endif
 
 signals:
@@ -410,6 +435,10 @@ private:
     // PC-mic-override scratch — float buffer for AudioEngine::pullTxMic.
     // Sized kBlockFrames floats.
     std::vector<float> m_pcMicBuf;
+
+    // Task 36: the remote microphone ring, and one block of it.
+    std::atomic<RemoteMicFeed*> m_remoteMicFeed{nullptr};
+    std::vector<float> m_remoteMicBuf;
 
     // Anti-VOX run gate (3M-3a-iv).  Mirrors the most-recent
     // setAntiVoxRun(bool) call.  Read with acquire in

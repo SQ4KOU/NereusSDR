@@ -38,13 +38,21 @@
 // An older window (no sessionHolderVersion 1) is never asked (10.7): it
 // gets the refusal, in words that name the devices involved.
 //
-// Transmit has no holder until Task 34; the on-air refusals of ruling 7.4
-// and the transmit slice's `takeable` false (ruling 6.8) are wired with it.
+// Transmit's holder (Task 34, joined at the merge of the trunk into the
+// transmit lane): the on-air refusals of ruling 7.4 come through the
+// shared-settings check (transmitForCheck), and the receiver of a holder's
+// transmit slice is not takeable while it is on the air (ruling 6.8).
 //
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-09-25: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 74 (R-IOS-02, R-IOS-30),
+//               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave 2: every holder on the air counts,
+//               the station device's own keys included (onAirHolder),
+//               exempt by change not by holder; ruling 8.11's freeze on
+//               every path (XIT, pan moves, a stored change at proceed); a
+//               hosting desktop's key named after it. J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
@@ -60,6 +68,8 @@
 
 #include "core/AppSettings.h"
 #include "core/DeviceLayoutStore.h"
+#include "core/safety/TransmitHolder.h"
+#include "core/safety/TxRefusal.h"
 #include "core/SliceOwnership.h"
 #include "core/SliceStreamAllocator.h"
 #include "core/WdspEngine.h"
@@ -267,6 +277,13 @@ ReceiverPlanner::DeviceInfo StationServer::planDevice(const QByteArray& deviceId
     if (const auto entry = m_deviceSessions->entry(deviceId)) {
         info.state = entry->state == DeviceSessionRegistry::State::Away ? QStringLiteral("away")
                                                                         : QStringLiteral("listening");
+        // Task 34's holder: a device on the air is transmitting.
+        if (info.state != QLatin1String("away") && m_transmitHolder) {
+            const std::optional<TransmitHolder::Holder> holder = m_transmitHolder->holder();
+            if (holder && holder->keyed && holder->deviceId == deviceId) {
+                info.state = QStringLiteral("transmitting");
+            }
+        }
         info.lastActivitySeconds =
             std::max<qint64>(0, (m_deviceSessions->now() - entry->lastActivityMs) / 1000);
     } else {
@@ -277,8 +294,22 @@ ReceiverPlanner::DeviceInfo StationServer::planDevice(const QByteArray& deviceId
 
 ReceiverPlanner StationServer::receiverPlanner() const
 {
-    return ReceiverPlanner(*m_radioModel,
-                           [this](const QByteArray& id) { return planDevice(id); });
+    ReceiverPlanner planner(*m_radioModel,
+                            [this](const QByteArray& id) { return planDevice(id); });
+    // Ruling 6.8 (D64), Task 34's holder: the receiver of a holder's
+    // transmit slice is not takeable while it is on the air.
+    // Fix wave 2: the same holder on the air as the refusals and the
+    // freeze (onAirHolder).
+    if (const std::optional<TransmitHolder::Holder> holder = onAirHolder()) {
+        if (const SliceModel* txSlice = m_radioModel->txBoundSlice()) {
+            ReceiverPlanner::OnAirTransmit onAir;
+            onAir.sliceId = txSlice->sliceIndex();
+            onAir.holder = holder->deviceId;
+            onAir.why = onAirWords(*holder).text;
+            planner.setOnAirTransmit(onAir);
+        }
+    }
+    return planner;
 }
 
 SessionTransport* StationServer::liveTransportFor(const QByteArray& deviceId) const
@@ -414,6 +445,20 @@ StationServer::PanMoveCheck StationServer::checkPanMove(const QByteArray& reques
         // Today's C-Tune refusal; design ruling 6.5a for a band change.
         return check;
     }
+    // Fix wave 2, Important 3 (rulings 7.4 and 8.11): a pan move that
+    // would move or close the transmit slice of a holder on the air waits,
+    // whoever owns that slice.
+    if (const std::optional<TransmitHolder::Holder> holder = onAirHolder();
+        holder && holder->deviceId != requester) {
+        const SliceModel* txSlice = m_radioModel->txBoundSlice();
+        for (const ReceiverPlanner::Disturbed& d : check.plan.disturbed) {
+            if (txSlice != nullptr && d.sliceId == txSlice->sliceIndex()) {
+                check.kind = PanMoveCheck::Kind::OnAir;
+                check.onAir = onAirWords(*holder);
+                return check;
+            }
+        }
+    }
     for (const ReceiverPlanner::Disturbed& d : check.plan.disturbed) {
         if (!d.device.isEmpty()) {
             check.named.append(d);
@@ -455,6 +500,13 @@ bool StationServer::handleCentreMove(SessionTransport* transport, const SessionM
     if (anchor.isEmpty() || anchor == requester) {
         // Ruling 6.4: the anchor's move.
         const PanMoveCheck check = checkPanMove(requester, message);
+        if (check.kind == PanMoveCheck::Kind::OnAir) {
+            answerHere(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false, check.onAir.text, {},
+                {{0, "refusalCode", MirrorWireKind::Utf8, QString::fromUtf8(check.onAir.code)},
+                 {0, "refusalFix", MirrorWireKind::Utf8, QString::fromUtf8(check.onAir.fix)}}));
+            return true;
+        }
         if (check.kind == PanMoveCheck::Kind::Ask) {
             if (!peerHasSessionHolderVersion(transport)) {
                 answerHere(transport, SessionMessages::commandResult(
@@ -479,6 +531,19 @@ bool StationServer::handleCentreMove(SessionTransport* transport, const SessionM
     for (int id : m_radioModel->slicesOnStream(stream)) {
         if (m_radioModel->sliceOwnership()->mark(id).subject() == requester) {
             own.append(id);
+        }
+    }
+    // Fix wave 2, Important 3 (ruling 8.11): the requester's own slices
+    // move with its pan, so a frozen transmit slice among them keeps the
+    // pan where it is until the station device's key ends.
+    for (int id : own) {
+        const TxRefusal frozen = stationFreezeRefusal(id);
+        if (!frozen.isEmpty()) {
+            answerHere(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false, frozen.text, {},
+                {{0, "refusalCode", MirrorWireKind::Utf8, QString::fromUtf8(frozen.code)},
+                 {0, "refusalFix", MirrorWireKind::Utf8, QString::fromUtf8(frozen.fix)}}));
+            return true;
         }
     }
     const double half = live.streamSampleRateHz(stream) / 2.0;
@@ -600,6 +665,10 @@ bool StationServer::handleSliceRetune(SessionTransport* transport, const Session
         return false;
     }
     const PanMoveCheck check = checkPanMove(requester, message);
+    if (check.kind == PanMoveCheck::Kind::OnAir) {
+        answerWrite(transport, message, check.onAir.text);
+        return true;
+    }
     if (check.kind == PanMoveCheck::Kind::Ask) {
         if (!peerHasSessionHolderVersion(transport)) {
             answerWrite(transport, message, olderWindowAskReason(namesOf(check.named)));
@@ -1272,6 +1341,18 @@ SessionMessage StationServer::answerConfirm(const SessionMessage& invoke, int id
             return refuse(changedSinceAskedReason(question->kind));
         }
     }
+    // Fix wave 2, Important 3 (rulings 7.4 and 8.11): a stored change
+    // confirmed while a holder is on the air asks the freeze and the
+    // on-air take rule again before anything of it applies.
+    {
+        const TxRefusal frozen = proceedOnAirRefusal(*question, choice, device);
+        if (!frozen.isEmpty()) {
+            return SessionMessages::commandResult(
+                invoke.commandVerb, invoke.commandId, false, frozen.text, {},
+                {{0, "refusalCode", MirrorWireKind::Utf8, QString::fromUtf8(frozen.code)},
+                 {0, "refusalFix", MirrorWireKind::Utf8, QString::fromUtf8(frozen.fix)}});
+        }
+    }
     if (question->kind == QLatin1String("sharedSetting")) {
         return proceedSharedSetting(transport, *question, invoke);
     }
@@ -1290,6 +1371,37 @@ SessionMessage StationServer::answerConfirm(const SessionMessage& invoke, int id
     return refuse(QString::fromLatin1(kNoQuestionReason));
 }
 
+TxRefusal StationServer::proceedOnAirRefusal(const ConfirmStep::Question& question, int choice,
+                                             const QByteArray& device) const
+{
+    // The stored change itself (a slice property write, removeSlice,
+    // slice.selectBand) and the slices a pan move carries.
+    TxRefusal refusal = freezeRefusalFor(question.original);
+    for (int id : question.moving) {
+        if (refusal.isEmpty()) {
+            refusal = stationFreezeRefusal(id);
+        }
+    }
+    if (!refusal.isEmpty()) {
+        return refusal;
+    }
+    // A take whose receiver, or slice, carries the transmit slice of a
+    // holder on the air (ruling 6.8), which the chooser showed takeable
+    // before the key started.
+    const std::optional<TransmitHolder::Holder> holder = onAirHolder();
+    const SliceModel* txSlice = m_radioModel->txBoundSlice();
+    if (!holder || holder->deviceId == device || txSlice == nullptr || choice < 0
+        || choice >= question.choiceTargets.size()) {
+        return {};
+    }
+    const int target = question.choiceTargets.at(choice);
+    const bool touches = question.kind == QLatin1String("takeSlice")
+        ? target == txSlice->sliceIndex()
+        : question.kind == QLatin1String("takeReceiver")
+            && m_radioModel->slicesOnStream(target).contains(txSlice->sliceIndex());
+    return touches ? onAirWords(*holder) : TxRefusal{};
+}
+
 SessionMessage StationServer::askAgain(const SessionMessage& invoke)
 {
     return SessionMessages::commandResult(invoke.commandVerb, invoke.commandId, false,
@@ -1304,6 +1416,12 @@ SessionMessage StationServer::proceedPanMove(SessionTransport* transport,
     const QByteArray requester = question.device;
     // Step 5: the set again.
     const PanMoveCheck check = checkPanMove(requester, question.original);
+    if (check.kind == PanMoveCheck::Kind::OnAir) {
+        return SessionMessages::commandResult(
+            invoke.commandVerb, invoke.commandId, false, check.onAir.text, {},
+            {{0, "refusalCode", MirrorWireKind::Utf8, QString::fromUtf8(check.onAir.code)},
+             {0, "refusalFix", MirrorWireKind::Utf8, QString::fromUtf8(check.onAir.fix)}});
+    }
     if (check.kind == PanMoveCheck::Kind::None || check.stream != question.stream) {
         return SessionMessages::commandResult(invoke.commandVerb, invoke.commandId, false,
                                               QString::fromLatin1(kChangedReason), {});

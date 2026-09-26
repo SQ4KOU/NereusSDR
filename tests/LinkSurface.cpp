@@ -58,6 +58,10 @@
 //               sessionHolder), and the maxDeviceSessions, graceMs and
 //               lanAnnouncementMaxBytes limits. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan Task 34 (R-IOS-02): remoteTxVersion (the
+//               live client declares remoteTx) and tx.setTxSlice. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 //   2026-09-25: iPhone app Task 73 (R-IOS-02): SliceMarker and the
 //               `marker:<id>` key (a slice held for an away device in the
 //               live session). J.J. Boyd (KG4VCF), with AI-assisted
@@ -115,6 +119,7 @@
 #include "core/session/StationDevicesFacade.h"
 #include "core/session/ConnectedDevicesFacade.h"
 #include "core/session/SliceMarker.h"
+#include "core/session/TransmitStateFacade.h"
 #include "core/SliceOwnership.h"
 #include "core/session/ConfirmStep.h"
 #include "core/session/DeviceSessionRegistry.h"
@@ -423,10 +428,11 @@ std::optional<QList<QByteArray>> liveSessionWire(
     // Declaring deviceAuth, as a device that signs in by key does, so the
     // `devices` object (iPhone app Task 13) is among what the Core sends;
     // and sessionHolder (iPhone app Task 71), so `connectedDevices` and
-    // sessionHolderVersion are too.
+    // sessionHolderVersion are too; and remoteTx (iPhone app plan Task 34),
+    // so remoteTxVersion is.
     clientEnd->sendText(SessionMessages::encode(SessionMessages::hello(
         kSessionProtocolMajor, kSessionProtocolMinor, 0, QStringLiteral("link-surface"),
-        {kSessionProtocolMajor}, {{"deviceAuth", 1}, {"sessionHolder", 1}})));
+        {kSessionProtocolMajor}, {{"deviceAuth", 1}, {"sessionHolder", 1}, {"remoteTx", 1}})));
     clientEnd->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
 
     // The loopback delivers on later event-loop turns, as a socket would.
@@ -454,6 +460,8 @@ QJsonArray captureCapabilities()
     caps.radioIdentityEntries = true;
     // iPhone app Task 71: sent to a peer that declared sessionHolder.
     caps.sessionHolderEntry = true;
+    // iPhone app plan Task 34: sent to a peer that declared remoteTx.
+    caps.remoteTxEntry = true;
 
     // The values come from a live station with every feature a Core can
     // switch on: media, telemetry, an enforced display budget with its
@@ -886,6 +894,8 @@ QJsonObject guiToCoreOps()
         {QStringLiteral("audioProfileVersion"), {QStringLiteral("audioProfileVersion")}},
         {QStringLiteral("receiverAudioVersion"), {QStringLiteral("receiverAudioVersion")}},
         {QStringLiteral("headphonesMixVersion"), {QStringLiteral("headphonesMixVersion")}},
+        // iPhone app plan Task 36: the microphone line.
+        {QStringLiteral("remoteTxVersion"), {QStringLiteral("remoteTxVersion")}},
     }));
     // MediaPeer.cpp acceptControl: hasExactKeys for description / candidate.
     ops.insert(QStringLiteral("description"),
@@ -1401,7 +1411,8 @@ QList<const QMetaObject*> LinkSurface::mirroredMetaObjects()
             &StationDevicesFacade::staticMetaObject,
             &StationCatalog::staticMetaObject,
             &ConnectedDevicesFacade::staticMetaObject,
-            &SliceMarker::staticMetaObject};
+            &SliceMarker::staticMetaObject,
+            &TransmitState::staticMetaObject};
 }
 
 QJsonObject LinkSurface::capture()

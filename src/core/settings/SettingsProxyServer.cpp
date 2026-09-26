@@ -68,6 +68,10 @@
 //   2026-09-24 - iPhone app Task 4b (R-IOS-01, R-R3-21): the reasons this
 //                file sends an app are in operator words. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - Trunk merge of remote transmit (R-R3-46, R-IOS-02): the
+//                Alex tab's three transmit high-pass switches join the
+//                transmitter's family, as the TX antennas did. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/settings/SettingsProxyServer.h"
@@ -160,12 +164,47 @@ QMap<QString, QString> SettingsProxyServer::buildSnapshot(const QString& connect
     return out;
 }
 
+bool SettingsProxyServer::isAlexHpfTransmitSwitchKey(const QString& key)
+{
+    // R-R3-46 (parity Task 14): hardware/.../alex/master/{hpfBypassOnTx,
+    // hpfBypassOnPs,disable6mLnaOnTx}, compared as StationServer compares
+    // them (case-blind).
+    const QStringList parts = key.toLower().split(QLatin1Char('/'));
+    if (parts.isEmpty() || parts[0] != QLatin1String("hardware")) {
+        return false;
+    }
+    for (int i = 1; i + 2 < parts.size(); ++i) {
+        if (parts[i] == QLatin1String("alex") && parts[i + 1] == QLatin1String("master")) {
+            const QString& field = parts[i + 2];
+            return field == QLatin1String("hpfbypassontx")
+                || field == QLatin1String("hpfbypassonps")
+                || field == QLatin1String("disable6mlnaontx");
+        }
+    }
+    return false;
+}
+
 SettingsProxyServer::SharedFamily SettingsProxyServer::sharedFamilyOf(const QString& key)
 {
     // iPhone app Task 75. The receive options are the RX per-mode keys
     // DspOptionsPage writes and RxChannel reads (DspOptions<BufferSize|
     // FilterSize|FilterType><Phone|Cw|Dig|Fm>Rx), the keys the Core applies
     // live (RadioModel::scheduleRemoteDspOptionsApply).
+    // Merge of the trunk into the transmit lane: the transmitter's own
+    // settings, which disturb the holder of transmit.
+    if (key == QLatin1String("TxInhibitMonitorEnabled")
+        || key == QLatin1String("TxInhibitMonitorReversed") || key == QLatin1String("RxOnly")) {
+        return SharedFamily::Transmitter;
+    }
+    // Trunk merge of remote transmit (R-R3-46, parity Task 14 joined to
+    // Task 34's holder): the Alex tab's three transmit high-pass switches
+    // (HPF Bypass on TX, HPF Bypass on PureSignal, Disable 6m LNA on TX),
+    // under any hardware/.../alex/master/. They follow the TX antennas'
+    // rule: the device holding transmit changes them on the air, another
+    // device's change waits, and off the air one is asked of the holder.
+    if (isAlexHpfTransmitSwitchKey(key)) {
+        return SharedFamily::Transmitter;
+    }
     if (key.startsWith(QLatin1String("DspOptions")) && key.endsWith(QLatin1String("Rx"))) {
         static const QStringList kSettings{QStringLiteral("BufferSize"),
                                            QStringLiteral("FilterSize"),

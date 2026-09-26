@@ -100,6 +100,8 @@ private slots:
     void nr3LegacyPathImportsOnce();
     void nr3RemoteServiceMirrorsAndNeverLoads();
     void nr3CannotRunWithoutAnyModelFile();
+    void dfnrAvailabilityIsTheCoresAndMirrored();
+    void mnrAvailabilityIsTheCoresAndMirrored();
 };
 
 void TestDspAssetService::defaultsAndQueuedLocalRequest()
@@ -642,6 +644,92 @@ void TestDspAssetService::nr3CannotRunWithoutAnyModelFile()
     // A remote service keeps its own value when a local call tries.
     QVERIFY(!service.applyRemoteProperty("nr3Runnable", false));
     QVERIFY(service.nr3Runnable());
+}
+
+// R-R3-49, Sub-epic C-1: whether the Core can run DFNR, and why not. The
+// Core sets it; a window takes the Core's (true and no reason until a Core
+// says otherwise, so an older Core changes nothing), and a new session
+// starts from those defaults again.
+void TestDspAssetService::dfnrAvailabilityIsTheCoresAndMirrored()
+{
+    QTemporaryDir directory;
+    AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+    DspAssetService service(settings, true);
+    QVERIFY(service.dfnrRunnable());
+    QVERIFY(service.dfnrModelStatus().isEmpty());
+    QSignalSpy changed(&service, &DspAssetService::dfnrAvailabilityChanged);
+    const QString missing =
+        QStringLiteral("No DFNR model file was found on this Core, so DFNR cannot run.");
+    service.setDfnrAvailability(false, missing);
+    QVERIFY(!service.dfnrRunnable());
+    QCOMPARE(service.dfnrModelStatus(), missing);
+    QCOMPARE(changed.count(), 1);
+    service.setDfnrAvailability(false, missing);   // no change, no signal
+    QCOMPARE(changed.count(), 1);
+    service.setDfnrAvailability(true, missing);    // runnable carries no reason
+    QVERIFY(service.dfnrRunnable());
+    QVERIFY(service.dfnrModelStatus().isEmpty());
+    // A local service takes no remote value.
+    QVERIFY(!service.applyRemoteProperty("dfnrRunnable", false));
+    QVERIFY(service.dfnrRunnable());
+
+    DspAssetService remote(settings, false);
+    QVERIFY(remote.dfnrRunnable());
+    QSignalSpy remoteChanged(&remote, &DspAssetService::dfnrAvailabilityChanged);
+    remote.setDfnrAvailability(false, missing);    // only the Core sets it
+    QVERIFY(remote.dfnrRunnable());
+    QVERIFY(remote.applyRemoteProperty("dfnrModelStatus", missing));
+    QVERIFY(remote.applyRemoteProperty("dfnrRunnable", false));
+    QVERIFY(!remote.dfnrRunnable());
+    QCOMPARE(remote.dfnrModelStatus(), missing);
+    QCOMPARE(remoteChanged.count(), 2);
+    QVERIFY(!remote.applyRemoteProperty("dfnrRunnable", QStringLiteral("false")));
+    QVERIFY(!remote.applyRemoteProperty("dfnrModelStatus", 3));
+    remote.resetSession();
+    QVERIFY(remote.dfnrRunnable());
+    QVERIFY(remote.dfnrModelStatus().isEmpty());
+    QCOMPARE(remoteChanged.count(), 3);
+}
+
+void TestDspAssetService::mnrAvailabilityIsTheCoresAndMirrored()
+{
+    // R-R3-49, Sub-epic C-1 (dspAssetVersion 4): MNR's pair, as DFNR's.
+    QTemporaryDir directory;
+    AppSettings settings(directory.filePath(QStringLiteral("station.settings")));
+    DspAssetService service(settings, true);
+    QVERIFY(service.mnrRunnable());
+    QVERIFY(service.mnrStatus().isEmpty());
+    QSignalSpy changed(&service, &DspAssetService::mnrAvailabilityChanged);
+    const QString notMac =
+        QStringLiteral("MNR runs only on a Mac, and this Core is not a Mac, so MNR cannot run.");
+    service.setMnrAvailability(false, notMac);
+    QVERIFY(!service.mnrRunnable());
+    QCOMPARE(service.mnrStatus(), notMac);
+    QCOMPARE(changed.count(), 1);
+    service.setMnrAvailability(false, notMac);   // no change, no signal
+    QCOMPARE(changed.count(), 1);
+    service.setMnrAvailability(true, notMac);    // runnable carries no reason
+    QVERIFY(service.mnrRunnable());
+    QVERIFY(service.mnrStatus().isEmpty());
+    QVERIFY(!service.applyRemoteProperty("mnrRunnable", false));
+    QVERIFY(service.mnrRunnable());
+
+    DspAssetService remote(settings, false);
+    QVERIFY(remote.mnrRunnable());
+    QSignalSpy remoteChanged(&remote, &DspAssetService::mnrAvailabilityChanged);
+    remote.setMnrAvailability(false, notMac);    // only the Core sets it
+    QVERIFY(remote.mnrRunnable());
+    QVERIFY(remote.applyRemoteProperty("mnrStatus", notMac));
+    QVERIFY(remote.applyRemoteProperty("mnrRunnable", false));
+    QVERIFY(!remote.mnrRunnable());
+    QCOMPARE(remote.mnrStatus(), notMac);
+    QCOMPARE(remoteChanged.count(), 2);
+    QVERIFY(!remote.applyRemoteProperty("mnrRunnable", QStringLiteral("false")));
+    QVERIFY(!remote.applyRemoteProperty("mnrStatus", 3));
+    remote.resetSession();
+    QVERIFY(remote.mnrRunnable());
+    QVERIFY(remote.mnrStatus().isEmpty());
+    QCOMPARE(remoteChanged.count(), 3);
 }
 
 QTEST_GUILESS_MAIN(TestDspAssetService)

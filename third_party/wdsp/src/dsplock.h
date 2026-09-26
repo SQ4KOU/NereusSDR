@@ -83,6 +83,15 @@ boydsoftprez@gmail.com
 //                 and the test-only WDSPSetTestHoldLoadPair documented by
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code (R-R3-40).
+//   2026-09-24 - Caller check (WDSPSetCallerCheckHook, WdspCallerCheck and
+//                 the WDSP_CALLER_* kinds) added by J.J. Boyd (KG4VCF),
+//                 with AI-assisted implementation via Anthropic Claude Code
+//                 (R-R3-39).
+//   2026-09-25 - WDSP_CALLER_RESAMPLE_FV: resample.c's float resampler calls
+//                 (create_resampleFV, xresampleFV, destroy_resampleFV) report
+//                 to the caller check, by J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code
+//                 (R-R3-39).
 //   2026-09-25 - Test-only WDSPSetTestBlockHook declared by J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code (R-R3-40).
@@ -95,6 +104,44 @@ boydsoftprez@gmail.com
 
 // Target of comm.h's EnterCriticalSection redirect.
 void WdspEnterCS (LPCRITICAL_SECTION cs);
+
+// Caller check (R-R3-39). The application may install one function that
+// hears every WDSP entry point listed below, on the calling thread, before
+// the call does anything else; NereusSDR's debug and test builds use it to
+// count WDSP calls still made from the event loop. The hook must not block,
+// take a WDSP lock or call into WDSP. With no hook installed each check is
+// one pointer load and one null test. Kinds (the second argument; the
+// first is the channel, -1 when the lock is not a channel's csDSP):
+// src/core/wdsp_api.h mirrors these values as kWdspCaller*.
+enum
+{
+	WDSP_CALLER_ENTER_CS = 1,           // WdspEnterCS: any WDSP lock entry
+	WDSP_CALLER_WAIT_WORKER_EXIT = 2,   // WdspWaitWorkerExit: channel teardown
+	WDSP_CALLER_OPEN_CHANNEL = 3,       // OpenChannel (channel.c)
+	WDSP_CALLER_SET_CHANNEL_STATE = 4,  // SetChannelState (channel.c)
+	WDSP_CALLER_RESAMPLE_FV = 5         // create/x/destroy_resampleFV (resample.c)
+};
+
+typedef void (*WdspCallerCheckHook) (int channel, int kind);
+
+// Installs (or, with 0, removes) the caller check. Any thread.
+PORT void WDSPSetCallerCheckHook (WdspCallerCheckHook hook);
+
+// The installed hook (0 = none); written only by WDSPSetCallerCheckHook.
+extern WdspCallerCheckHook volatile wdsp_caller_check_hook;
+
+static __inline void WdspCallerCheck (int channel, int kind)
+{
+#ifdef _WIN32
+	const WdspCallerCheckHook hook = wdsp_caller_check_hook;
+#else
+	const WdspCallerCheckHook hook = __atomic_load_n (&wdsp_caller_check_hook, __ATOMIC_ACQUIRE);
+#endif
+	if (hook != 0)
+	{
+		hook (channel, kind);
+	}
+}
 
 // The channel worker's csDSP acquire and release for one block (main.c).
 void WdspWorkerEnter (int channel);

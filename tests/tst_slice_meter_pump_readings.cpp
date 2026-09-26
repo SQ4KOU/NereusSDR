@@ -25,6 +25,10 @@
 //   2026-09-26 -- New test file for remote-window parity Task 15. J.J.
 //                 Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-26 -- Trunk merge of remote transmit: the live channel's
+//                 readings are read once the receive lane has filled the
+//                 meter cache. J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -211,9 +215,19 @@ private slots:
         QVERIFY(ch != nullptr);
         expectNoReadings(slice);
 
+        // Trunk merge of remote transmit (R-R3-39): the pump reads the cache
+        // the receive lane refreshes. Its first poll asks the lane for one
+        // and shows no reading until the lane has read the channel; the
+        // poll after that carries the channel's readings.
+        const auto pollWithReadings = [&]() {
+            pump->poll();
+            QTRY_VERIFY(ch->meterReadingReady());
+            pump->poll();
+        };
+
         // The raw WDSP meters: no RXOffset on any of them (Thetis adds it to
         // the two signal readings only).
-        pump->poll();
+        pollWithReadings();
         QCOMPARE(slice->adcPeakDbfs(), ch->getMeter(RxMeterType::AdcPeak));
         QCOMPARE(slice->adcAverageDbfs(), ch->getMeter(RxMeterType::AdcAvg));
         QCOMPARE(slice->agcGainDb(),
@@ -239,7 +253,7 @@ private slots:
         // Back to Connected: the channel's readings again.
         seed();
         model.setConnectionStateForTest(ConnectionState::Connected);
-        pump->poll();
+        pollWithReadings();
         QCOMPARE(slice->agcGainDb(),
                  SliceMeterPump::thetisAgcGainReading(ch->getMeter(RxMeterType::AgcGain)));
         QCOMPARE(slice->agcAverageDb(), ch->getMeter(RxMeterType::AgcAvg));

@@ -8,6 +8,7 @@
 #include "FakeAudioBus.h"
 
 #include "core/AudioEngine.h"
+#include "core/DspControlThread.h"
 
 #include <QtTest/QtTest>
 
@@ -123,6 +124,20 @@ std::unique_ptr<ConnectableRadioModel> ConnectableRadioModel::create(
         // right order (see the header's member-order comment) -- a timed-
         // out connect leaks neither the socket nor the RadioModel.
         return nullptr;
+    }
+
+    // R-R3-39 (Task 32): the TX channel opens on the transmit lane now, not
+    // inside connectToRadio, so a connected model may still be planning its
+    // FFTs there (cold wisdom: tens of seconds). Wait for it the way the
+    // connect used to, with the event loop running so the fake keeps
+    // streaming; a test that then blocks the event loop on the receive lane
+    // no longer outlasts the connection watchdog.
+    if (NereusSDR::DspControlThread* lane = model->transmitLane()) {
+        constexpr int kTxOpenTimeoutMs = 600000;
+        if (!QTest::qWaitFor([lane]() { return lane->waitIdleForTest(0); },
+                             kTxOpenTimeoutMs)) {
+            return nullptr;
+        }
     }
 
     return harness;

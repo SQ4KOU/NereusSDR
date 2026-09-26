@@ -42,6 +42,12 @@
 //               link majors setLinkMajors() names (a debug build's
 //               --test-link-majors), by J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25: R-R3-39 / R-IOS-03: the Core creates and runs the desktop's
+//               TX analyzer (display 5, which the TX siphon feeds), so a
+//               keyed Core no longer dereferences a missing display, after
+//               Thetis ChannelMaster cmaster.c:192-198 [v2.10.3.15], by
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 //   2026-09-24: iPhone app Task 12 (R-IOS-08): an empty remote_bind
 //               listens on every interface, IPv4 and IPv6; the pairing
 //               token is no longer created; pairing_lan_click reaches the
@@ -62,6 +68,10 @@
 //               AI-assisted implementation via Anthropic Claude Code.
 //   2026-09-24: Part C fix wave: the pairing code is never printed
 //               to standard output (the journal on a packaged Core). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic Claude
+//               Code.
+//   2026-09-25: iPhone app plan Task 34 (R-IOS-02): remote_transmit sets the
+//               station transmit gate and the receive-only policy. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic Claude
 //               Code.
 //   2026-09-25: iPhone app Task 71 (R-IOS-02): the announcement and the
@@ -89,6 +99,8 @@
 #include "core/MoxController.h"
 #include "core/BoardCapabilities.h"
 #include "core/StepAttenuatorController.h"
+#include "core/TxAnalyzer.h"
+#include "core/TxChannel.h"
 #include "core/TxSliceArbiter.h"
 #include "core/WdspEngine.h"
 #include "core/daemon/StationControlCommands.h"
@@ -199,11 +211,14 @@ bool DaemonApp::start(const DaemonConfig& cfg)
             cancelRadioDiscovery();
         }
     });
-    // R3 remote operation is receive-only. Install the station-side policy
-    // before controllers, peripherals, slices, or the radio can produce a
+    // iPhone app plan Task 34: the station-side receive-only policy is the
+    // config's remote_transmit = deny (allow by default: the station
+    // transmit gate then decides per session). Installed before
+    // controllers, peripherals, slices, or the radio can produce a
     // callback: the daemon owns real hardware even though its model has the
     // normal local role.
-    m_radioModel->setReceiveOnlyStationPolicy(true);
+    m_radioModel->setReceiveOnlyStationPolicy(!cfg.remoteTransmitAllowed);
+    createTxAnalyzer();
     // R-R3-22 / R-R3-47: every station listener (4992, the Power Genius and
     // Tuner Genius discovery, the station TCI server) accepts connections on
     // the station network only: nereusd.conf's station_bind, else the
@@ -429,6 +444,10 @@ void DaemonApp::stop()
     // (sliceCount() == 0) state if it queries back into this object.
     m_radioModel->flushPendingSettingsSave();
     m_radioModel.reset();
+    // After the model: its TX channel, the one thing feeding display 5, has
+    // closed, and with the lane gone DestroyAnalyzer runs here (the order
+    // the desktop keeps, MainWindow deleting its RadioModel first).
+    m_txAnalyzer.reset();
     // Teardown also saves controller state. Commit the final accepted Core
     // configuration while AppSettings and the daemon profile still exist.
     AppSettings::instance().save();
@@ -436,6 +455,57 @@ void DaemonApp::stop()
     m_stepAttControllerConfigured = false;
 
     emit radioConnected(false);
+}
+
+void DaemonApp::createTxAnalyzer()
+{
+    // R-R3-39 / R-IOS-03: WdspEngine::createTxChannel points the TX siphon
+    // at analyzer display 5 (TXASetSipMode 1, TXASetSipDisplay 5), and
+    // Spectrum0 dereferences that display unchecked on every keyed block.
+    // Thetis creates the transmitter's display analyzer in ChannelMaster,
+    // right after the transmitter's DSP channel, whatever the display does.
+    // From Thetis ChannelMaster cmaster.c:192-198 [v2.10.3.15] (create_xmtr):
+    //     // display
+    //     XCreateAnalyzer (
+    //         in_id,
+    //         &rc,
+    //         262144,
+    //         1,
+    //         1,
+    //         "");
+    // NereusSDR's desktop makes the same call through TxAnalyzer, which
+    // MainWindow creates; nereusd has no MainWindow, so the Core creates
+    // the same TxAnalyzer here, on the model's transmit lane, with the same
+    // set-up. Its XCreateAnalyzer is queued on the lane now, ahead of any
+    // TX channel's create barrier, so display 5 exists before the first
+    // block. A remote window's transmit panadapter is planned separately;
+    // this keeps the siphon, which it will need, pointed at a real display.
+    if (!m_radioModel->ownsLocalDsp()) {
+        return;
+    }
+    m_txAnalyzer = std::make_unique<TxAnalyzer>(TxAnalyzer::kTxDispId, nullptr,
+                                                m_radioModel->transmitLane());
+    m_txAnalyzer->applyStationRates();
+    m_radioModel->setTxAnalyzer(m_txAnalyzer.get());
+
+    // Runs it as the desktop does on the MOX edge (MainWindow's
+    // moxStateChanged connect): SetAnalyzer's bf_sz from the TX channel's
+    // DSP block (TxAnalyzer::setBlockSize), then start; stop on unkey. The
+    // desktop's display-window and pixel-width steps follow a pan, which a
+    // Core does not have.
+    TxAnalyzer* analyzer = m_txAnalyzer.get();
+    RadioModel* model = m_radioModel.get();
+    connect(model->moxController(), &MoxController::moxStateChanged, analyzer,
+            [analyzer, model](bool isTx) {
+        if (isTx) {
+            if (TxChannel* txc = model->txChannel()) {
+                analyzer->setBlockSize(txc->dspBlockFrames());
+            }
+            analyzer->start();
+        } else {
+            analyzer->stop();
+        }
+    });
 }
 
 void DaemonApp::configureStepAttenuatorController(const QString& mac)
@@ -537,6 +607,10 @@ void DaemonApp::startStationServer(const DaemonConfig& cfg)
     // iPhone app Task 12: nereusd.conf's pairing_lan_click, read by the
     // pairing window (Task 14) for the one-click pairing on this network.
     m_stationServer->setPairingLanClickAllowed(cfg.pairingLanClickAllowed);
+    // iPhone app plan Task 34: nereusd.conf's remote_transmit (allow by
+    // default): the station transmit gate, and the model's receive-only
+    // policy when it is deny.
+    m_stationServer->setRemoteTransmitAllowed(cfg.remoteTransmitAllowed);
     // iPhone app Task 17 (R-IOS-08): the status page, bound exactly where the
     // listener binds: `bind` above, listenerAddressFor(remote_bind), which is
     // DaemonConfig::listenAddressFor's rule (R-R3-26). A Core bound to one

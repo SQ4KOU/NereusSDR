@@ -59,7 +59,7 @@ private slots:
     }
 
     // The poller's own hand-out (what pollTxMeters() does with each raw
-    // WDSP reading) applies the floor to Compression only.
+    // WDSP reading) applies Thetis's floor to each reading.
     void pollerHandsOutTheFlooredReading()
     {
         MeterPoller poller;
@@ -71,7 +71,10 @@ private slots:
         QCOMPARE(spy.at(0).at(0).toInt(), MeterBinding::TxComp);
         QCOMPARE(spy.at(0).at(1).toDouble(), -30.0);
         QCOMPARE(spy.at(1).at(1).toDouble(), -10.0);
-        QCOMPARE(spy.at(2).at(1).toDouble(), -400.0);  // other readings unchanged
+        // D14, R-R3-49: ALC takes Thetis's own -30 floor too
+        // (console.cs:46982 [v2.10.3.15]); every TX reading is covered in
+        // tst_tx_meter_reading.
+        QCOMPARE(spy.at(2).at(1).toDouble(), -30.0);
     }
 
     void containerBarAtRestProcOffAndCompressing()

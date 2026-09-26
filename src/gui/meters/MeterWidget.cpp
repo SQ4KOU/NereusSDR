@@ -18,6 +18,10 @@
 //                 dropped on load with one log line and the rest of the
 //                 container loads. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan Task 39 (D14, R-IOS-13): an unavailable
+//                 binding's items are drawn dimmed with the reason as their
+//                 tooltip (setBindingUnavailable). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -90,8 +94,10 @@ mw0lge@grange-lane.co.uk
 #include "ClickBoxItem.h"
 #include "DataOutItem.h"
 
+#include <QHelpEvent>
 #include <QPainter>
 #include <QPaintEvent>
+#include <QToolTip>
 #include <QResizeEvent>
 #include <QMouseEvent>
 #include <QStringList>
@@ -585,6 +591,77 @@ void MeterWidget::drawItems(QPainter& p)
         if (!shouldRender(item)) { continue; }
         item->paint(p, w, h);
     }
+    drawUnavailableVeils(p);
+}
+
+// iPhone app plan Task 39: an unavailable binding's items, dimmed by the
+// widget's own background colour over them.
+void MeterWidget::drawUnavailableVeils(QPainter& p) const
+{
+    if (m_unavailableBindings.isEmpty()) {
+        return;
+    }
+    const int w = width();
+    const int h = height();
+    for (const MeterItem* item : m_items) {
+        if (!shouldRender(item) || !m_unavailableBindings.contains(item->bindingId())) {
+            continue;
+        }
+        // The item's own rectangle (MeterItem::pixelRect's arithmetic).
+        const QRect rect(static_cast<int>(item->x() * w), static_cast<int>(item->y() * h),
+                         static_cast<int>(item->itemWidth() * w),
+                         static_cast<int>(item->itemHeight() * h));
+        p.fillRect(rect, QColor(0x0f, 0x0f, 0x1a, 170));
+    }
+}
+
+void MeterWidget::setBindingUnavailable(int bindingId, const QString& reason)
+{
+    const auto it = m_unavailableBindings.constFind(bindingId);
+    const bool unavailable = it != m_unavailableBindings.constEnd();
+    if ((!unavailable && reason.isEmpty()) || (unavailable && it.value() == reason)) {
+        return;
+    }
+    if (reason.isEmpty()) {
+        m_unavailableBindings.remove(bindingId);
+    } else {
+        m_unavailableBindings.insert(bindingId, reason);
+    }
+#ifdef NEREUS_GPU_SPECTRUM
+    markOverlayDirty();
+#else
+    update();
+#endif
+}
+
+QString MeterWidget::unavailableReasonAt(const QPointF& pos) const
+{
+    const int w = width();
+    const int h = height();
+    for (int i = m_items.size() - 1; i >= 0; --i) {
+        const MeterItem* item = m_items.at(i);
+        if (!shouldRender(item) || !item->hitTest(pos, w, h)) {
+            continue;
+        }
+        const auto it = m_unavailableBindings.constFind(item->bindingId());
+        if (it != m_unavailableBindings.constEnd()) {
+            return it.value();
+        }
+    }
+    return {};
+}
+
+bool MeterWidget::event(QEvent* event)
+{
+    if (event->type() == QEvent::ToolTip) {
+        auto* help = static_cast<QHelpEvent*>(event);
+        const QString reason = unavailableReasonAt(help->pos());
+        if (!reason.isEmpty()) {
+            QToolTip::showText(help->globalPos(), reason, this);
+            return true;
+        }
+    }
+    return MeterBaseClass::event(event);
 }
 
 // R-R3-49: false for an item that fronts a feature not built yet (the
@@ -952,6 +1029,9 @@ void MeterWidget::renderGpuFrame(QRhiCommandBuffer* cb)
                     item->paintForLayer(p, w, h, MeterItem::Layer::OverlayDynamic);
                 }
             }
+            // Task 39: over everything drawn so far (the overlay is the top
+            // layer), so an unavailable item's bar is dimmed too.
+            drawUnavailableVeils(p);
             m_overlayDynamicDirty = false;
             m_overlayNeedsUpload = true;
         }

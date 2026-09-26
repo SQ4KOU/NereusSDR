@@ -36,6 +36,11 @@
 //                 the gate for settings a later transmitSettingsVersion
 //                 brought. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-26: Transmit group fix wave 2 (M8): VOX shows disabled with the
+//               plain reason while this computer has no microphone line to
+//               the Core; the Core's refusal stays the backstop. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "SetupPage.h"
@@ -121,6 +126,10 @@ void SetupPage::syncFromModel()
 // ── Section helper ────────────────────────────────────────────────────────────
 
 void SetupPage::setTransmitPermitted(bool /*permitted*/, const QString& /*reason*/)
+{
+}
+
+void SetupPage::setVoxPermitted(bool /*permitted*/, const QString& /*reason*/)
 {
 }
 

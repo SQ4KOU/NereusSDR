@@ -271,6 +271,9 @@ private slots:
         QSignalSpy coreControls(&h.server, &StationServer::mediaControlReceived);
         h.hideAudioProfile = true;
         h.hideAudioClock = true;
+        // Desktop remote transmit: such a Core predates the microphone line
+        // too (the window is sent no remoteTxVersion).
+        h.declareRemoteTx = false;
         h.connectSession();
         QVERIFY(remoteMedia.audioDetailNegotiated());
         QVERIFY(!remoteMedia.audioProfileNegotiated());
@@ -973,6 +976,9 @@ private slots:
         QCOMPARE(app.stops().constLast().second, QStringLiteral("media-not-ready"));
 
         h.hideReceiverAudio = true;
+        // Desktop remote transmit: such a Core predates the microphone line
+        // too (the window is sent no remoteTxVersion).
+        h.declareRemoteTx = false;
         // R-R3-45: such a Core predates the headphones mix too.
         h.hideHeadphonesMix = true;
         h.connectSession();

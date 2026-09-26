@@ -31,6 +31,9 @@
 //   2026-09-24 -- iPhone app Part A fix wave (R-IOS-01): PureSignal's
 //                 readiness follows the receive-only policy at once.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 -- R-R3-39: wait for the receive lane before reading
+//                 state it owns (NNR tuning, NR slot). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -95,6 +98,9 @@ private slots:
         QVERIFY(!model.mox());
         QCOMPARE(a->nnrAlpha(), 1.75);
         QCOMPARE(b->nnrAlpha(), 2.25);
+        // R-R3-39: a receiver's NNR tuning is what the receive lane last
+        // wrote, and the reconnect only queued it there.
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(model.rxChannelForSlice(a->sliceIndex())->nnrTuning().alpha, 1.75);
         QCOMPARE(model.rxChannelForSlice(b->sliceIndex())->nnrTuning().alpha, 2.25);
 
@@ -107,6 +113,7 @@ private slots:
         QTRY_COMPARE_WITH_TIMEOUT(model.connectionState(), ConnectionState::Connected, 10000);
         QCOMPARE(model.activeSlice(), b);
         QCOMPARE(model.slices().first(), a);
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(model.rxChannelForSlice(a->sliceIndex())->nnrTuning().alpha, 1.75);
         QCOMPARE(model.rxChannelForSlice(b->sliceIndex())->nnrTuning().alpha, 2.25);
         QCOMPARE(activeChanges.count(), 0);
@@ -209,6 +216,9 @@ private slots:
         QCOMPARE(slice->nnrLastError(), none);
         RxChannel* channel = model.rxChannelForSlice(slice->sliceIndex());
         QVERIFY(channel != nullptr);
+        // R-R3-39: the receive lane settles the channel's NR slot, so read
+        // it only once the lane has run what the connect queued.
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(channel->activeNr(), NrSlot::Off);
         // The slice never held NR3, so no receiver push could carry it.
         QVERIFY(!sliceHistory.isEmpty());
@@ -218,6 +228,7 @@ private slots:
         // Turning NR3 on is still refused with the same reason.
         slice->setActiveNr(NrSlot::NR3);
         QCOMPARE(slice->activeNr(), NrSlot::Off);
+        QVERIFY(model.waitForReceiveLaneForTest());
         QCOMPARE(channel->activeNr(), NrSlot::Off);
         QCOMPARE(slice->nnrLastError(), none);
     }

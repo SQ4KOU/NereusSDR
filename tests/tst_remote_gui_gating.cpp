@@ -41,6 +41,9 @@
 // scanned until asked, and the Tools menu test entries case at the bottom
 // of this file drives real windows through it.
 //
+//   2026-09-25: iPhone app plan Task 39 run: General > Options gates three
+//               controls now, Task 38's Time Out Timers group the third.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-08-08 -- New test file for remote-daemon R2 Task 20. J.J. Boyd
@@ -108,6 +111,10 @@
 //   2026-09-24 -- R-R3-49: the Options page gates the Network Watchdog with
 //                 the Region (both the Core's). J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan, desktop remote transmit (R-IOS-13): a
+//                receive-only Core's transmit controls carry the Core's own
+//                reason. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 //   2026-09-24 -- R-R3-49 (parity Task 1): DSP > Options' TX combos, the TX
 //                 applet's RF Power and TX filter and the RX applet's
 //                 Shift-click follow the transmit settings gate, not the
@@ -2038,7 +2045,10 @@ private slots:
         // wave, final review I4); so is VAX (R-R3-44).
         const QMap<QString, int> coreControls{
             {QStringLiteral("Startup & Preferences"), 2}, // callsign, grid (R-R3-21)
-            {QStringLiteral("Options"), 3},             // General: Region, Network Watchdog (R-R3-49), Receive Only (Task 16)
+            // General: Region, Network Watchdog (R-R3-49), Receive Only
+            // (Task 16), and the Time Out Timers group (iPhone app plan
+            // Task 38, gated as one).
+            {QStringLiteral("Options"), 4},
             {QStringLiteral("Spectrum Defaults"), 5},   // FFT size, window, Hz/bin, fps x2
             {QStringLiteral("Grid & Scales"), 3},       // dB max, dB min, copy
             {QStringLiteral("Multimeter"), 1},          // sample interval
@@ -4207,9 +4217,12 @@ private slots:
             // the dialog shows why it is greyed when it is.
             QVERIFY(txEqualizer->isEnabled());
             remoteReason = toast->toolTip();
-            QVERIFY2(remoteReason.contains(QStringLiteral("transmit")),
+            // Desktop remote transmit (R-IOS-13): the window declares
+            // remoteTx, so the Core says why in its own words; this Core
+            // is receive-only (a StationServer's default).
+            QVERIFY2(remoteReason == QStringLiteral("This Core is set to receive only."),
                      qPrintable(QStringLiteral("the test entries no longer carry "
-                                               "the remote transmit reason: %1")
+                                               "the Core's transmit reason: %1")
                                     .arg(remoteReason)));
             QCOMPARE(reRoute->toolTip(), remoteReason);
 
@@ -4649,9 +4662,9 @@ private slots:
             QCOMPARE(station.sliceById(1)->anfEnabled(), anfB);
             QTRY_VERIFY(box.buttons->buttonState(Id::Anf));
 
-            // The transmit buttons say the transmit reason and change nothing.
-            const QString reason =
-                QStringLiteral("Remote transmit controls are not available from this Core yet.");
+            // The transmit buttons say the Core's reason and change nothing
+            // (desktop remote transmit: a receive-only Core says so).
+            const QString reason = QStringLiteral("This Core is set to receive only.");
             for (Id id : {Id::Tun, Id::Mox, Id::TwoTon}) {
                 QVERIFY(!box.buttons->isButtonAvailable(id));
                 QCOMPARE(box.buttons->buttonUnavailableReason(box.buttons->indexOf(id)), reason);
