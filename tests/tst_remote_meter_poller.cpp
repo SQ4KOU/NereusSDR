@@ -191,6 +191,90 @@ private slots:
         QCOMPARE(averageText->displayText(), QStringLiteral("-- dBm"));
     }
 
+    // R-R3-13 / R-R3-49 (parity Task 15, B2.5): container meters bound to
+    // ADC Peak, ADC Average, AGC Gain, AGC Peak and AGC Average move with
+    // the Core's readings for the active slice; on a Core below
+    // meterReadingsVersion 1 they show no reading, never a frozen value.
+    void adcAndAgcMetersFollowTheCoresReadings()
+    {
+        RadioModel model(RadioModel::Role::Remote);
+        model.setStationConnectionState(ConnectionState::Connected);
+        QVERIFY(model.addSliceWithStationId(4) >= 0);
+        QVERIFY(model.addSliceWithStationId(9) >= 0);
+        model.setActiveSlice(0);
+        SliceModel* first = model.sliceById(4);
+        SliceModel* second = model.sliceById(9);
+        QVERIFY(first && second);
+        const auto seed = [](SliceModel* slice, double base) {
+            slice->setAdcPeakDbfs(base);
+            slice->setAdcAverageDbfs(base - 10.0);
+            slice->setAgcGainDb(base + 60.0);
+            slice->setAgcPeakDb(base - 20.0);
+            slice->setAgcAverageDb(base - 30.0);
+        };
+        seed(first, -20.0);
+        seed(second, -40.0);
+
+        MeterWidget bars;
+        const int bindings[] = {MeterBinding::AdcPeak, MeterBinding::AdcAvg,
+                                MeterBinding::AgcGain, MeterBinding::AgcPeak,
+                                MeterBinding::AgcAvg};
+        QList<TextItem*> items;
+        for (int binding : bindings) {
+            auto* item = new TextItem(&bars);
+            item->setBindingId(binding);
+            bars.addItem(item);
+            items.append(item);
+        }
+        MeterPoller poller;
+        poller.addTarget(&bars);
+        int localCalibrationCalls = 0;
+        poller.setRxOffsetSource([&]() { ++localCalibrationCalls; return 37.0; });
+        poller.setRemoteRadioModel(&model, []() { return true; });
+        bool coreSendsReadings = false;
+        poller.setRemoteMeterReadingsAvailable([&]() { return coreSendsReadings; });
+        auto tick = [&]() {
+            QVERIFY(QMetaObject::invokeMethod(&poller, "poll", Qt::DirectConnection));
+        };
+        const auto expectValues = [&](const QList<double>& expected) {
+            for (int i = 0; i < items.size(); ++i) {
+                QCOMPARE(items.at(i)->value(), expected.at(i));
+            }
+        };
+
+        // A Core below version 1: no reading, even with values on the slice.
+        tick();
+        expectValues({-400.0, -400.0, -400.0, -400.0, -400.0});
+        for (TextItem* item : std::as_const(items)) {
+            QVERIFY(item->displayText().startsWith(QStringLiteral("--")));
+        }
+
+        coreSendsReadings = true;
+        tick();
+        expectValues({-20.0, -30.0, 40.0, -40.0, -50.0});
+        // They move with the Core's readings, and follow the active slice.
+        first->setAgcGainDb(47.5);
+        tick();
+        QCOMPARE(items.at(2)->value(), 47.5);
+        model.setActiveSlice(1);
+        tick();
+        expectValues({-40.0, -50.0, 20.0, -60.0, -70.0});
+        // The Core's values as sent: nothing added in this window.
+        QCOMPARE(localCalibrationCalls, 0);
+
+        // The Core stops sending (an older Core after a reconnect): no
+        // reading, not the last value.
+        coreSendsReadings = false;
+        tick();
+        expectValues({-400.0, -400.0, -400.0, -400.0, -400.0});
+
+        // No snapshot yet: no reading either.
+        coreSendsReadings = true;
+        poller.setRemoteRadioModel(&model, []() { return false; });
+        tick();
+        expectValues({-400.0, -400.0, -400.0, -400.0, -400.0});
+    }
+
     void localPollWithoutRxChannelShowsNoReading()
     {
         // R-R3-13: a local window with no RX channel (none yet, or the

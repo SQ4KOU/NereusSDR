@@ -46,6 +46,13 @@
 //                 and HwTemperature fed from RadioModel::paReadings() on
 //                 every poll (console.cs:47061-47068 [v2.10.3.15]).
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-R3-13 / R-R3-49 (remote-window parity Task 15): a
+//                 remote window's ADC Peak, ADC Average, AGC Gain, AGC Peak
+//                 and AGC Average bindings read the Core's slice readings
+//                 (meterReadingsVersion 1), no reading below it; the AGC
+//                 Gain binding shows Thetis's 0 - RXA_AGC_GAIN in both
+//                 windows (console.cs:46914 [v2.10.3.15]). J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -102,6 +109,8 @@ mw0lge@grange-lane.co.uk
 // Task 41 (Phase 3P-II): SMeterWidget + WdspEngine for the pollSMeter() path.
 #include "gui/SMeterWidget.h"
 #include "core/WdspEngine.h"
+// Parity Task 15: the AGC Gain reading both windows show.
+#include "core/meters/SliceMeterPump.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -171,6 +180,11 @@ void MeterPoller::setRemoteRadioModel(RadioModel* model,
     m_remoteModel = m_remoteRole ? model : nullptr;
     m_remoteSnapshotReady = std::move(snapshotReady);
     m_remoteMaxBinSource = std::move(maxBinSource);
+}
+
+void MeterPoller::setRemoteMeterReadingsAvailable(std::function<bool()> available)
+{
+    m_remoteMeterReadingsAvailable = std::move(available);
 }
 
 // RX meter cal offset source (Thetis-faithful port).
@@ -393,6 +407,12 @@ void MeterPoller::poll()
          || bindingId == MeterBinding::SignalAvg) {
             value += rxOffsetDb;
         }
+        // R-R3-13 (parity Task 15): the AGC Gain meter shows Thetis's
+        // reading, 0 - RXA_AGC_GAIN (console.cs:46914 [v2.10.3.15]), the
+        // value the Core sends a remote window (SliceMeterPump).
+        if (bindingId == MeterBinding::AgcGain) {
+            value = SliceMeterPump::thetisAgcGainReading(value);
+        }
         if (bindingId == MeterBinding::SignalAvg) {
             smeterDbm = value;   // post-offset; matches VfoWidget expectation
         }
@@ -480,12 +500,32 @@ void MeterPoller::pollRemoteRxMeters()
     const double average = slice ? finiteOr(slice->signalAverageDbm(), -140.0) : kNoReadingDbm;
     const double maxBin = slice && m_remoteMaxBinSource
         ? finiteOr(m_remoteMaxBinSource(slice), -400.0) : -400.0;
+    // R-R3-13 / R-R3-49 (parity Task 15): the ADC and AGC bindings read the
+    // Core's readings for the active slice. A Core below
+    // meterReadingsVersion 1 sends none, so they show no reading, as they
+    // do with no slice; never this window's inactive DSP or a frozen value.
+    const SliceModel* readings = slice && m_remoteMeterReadingsAvailable
+            && m_remoteMeterReadingsAvailable()
+        ? slice : nullptr;
+    const auto coreReading = [&](double (SliceModel::*reading)() const) {
+        return readings ? finiteOr((readings->*reading)(), kNoReadingDbm) : kNoReadingDbm;
+    };
+    const double adcPeak = coreReading(&SliceModel::adcPeakDbfs);
+    const double adcAverage = coreReading(&SliceModel::adcAverageDbfs);
+    const double agcGain = coreReading(&SliceModel::agcGainDb);
+    const double agcPeak = coreReading(&SliceModel::agcPeakDb);
+    const double agcAverage = coreReading(&SliceModel::agcAverageDb);
     for (const auto& guarded : m_targets) {
         MeterWidget* target = guarded.data();
         if (!target) { continue; }
         target->updateMeterValue(MeterBinding::SignalPeak, peak);
         target->updateMeterValue(MeterBinding::SignalAvg, average);
         target->updateMeterValue(MeterBinding::SignalMaxBin, maxBin);
+        target->updateMeterValue(MeterBinding::AdcPeak, adcPeak);
+        target->updateMeterValue(MeterBinding::AdcAvg, adcAverage);
+        target->updateMeterValue(MeterBinding::AgcGain, agcGain);
+        target->updateMeterValue(MeterBinding::AgcPeak, agcPeak);
+        target->updateMeterValue(MeterBinding::AgcAvg, agcAverage);
     }
     if (!m_sMeter) { return; }
     double level = slice ? peak : kNoReadingDbm;

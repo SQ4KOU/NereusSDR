@@ -208,6 +208,10 @@
 //   2026-09-25 - Receiver and transmit gaps plan, Task 16: the container
 //                buttons follow receive only (RadioModel::rxOnlyChanged).
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-R3-13 / R-R3-49 (remote-window parity Task 15): a remote
+//                window's ADC and AGC meters follow the Core's
+//                meterReadingsVersion. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -6312,6 +6316,12 @@ void MainWindow::populateDefaultMeter()
                     return sw->peakDbmInPassband(slice->frequency() + slice->filterLow(),
                                                 slice->frequency() + slice->filterHigh());
                 });
+            // R-R3-13 / R-R3-49 (parity Task 15): the ADC and AGC meters
+            // read the Core's slice readings when it sends them.
+            m_meterPoller->setRemoteMeterReadingsAvailable([this]() {
+                return m_stationClient
+                    && m_stationClient->capabilities().meterReadingsVersion >= 1;
+            });
             // Remote models never initialize a local RxChannel, so the
             // WDSP-ready callback cannot start this timer for them.
             m_meterPoller->start();

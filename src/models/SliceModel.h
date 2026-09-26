@@ -35,6 +35,11 @@
 //   2026-09-24 : R-IOS-01 activeWriteReason(): the refusal of a client's
 //                 write to `active`, in plain operator words. By J.J. Boyd
 //                 (KG4VCF), with Anthropic Claude Code assistance.
+//   2026-09-26 : R-R3-13 / R-R3-49 (remote-window parity Task 15): the
+//                 Core's ADC and AGC readings (adcPeakDbfs, adcAverageDbfs,
+//                 agcGainDb, agcPeakDb, agcAverageDb), outbound under
+//                 meterReadingsVersion 1. By J.J. Boyd (KG4VCF), with
+//                 Anthropic Claude Code assistance.
 // =================================================================
 
 //=================================================================
@@ -511,6 +516,19 @@ private:
     Q_PROPERTY(QString lastRadeRxCallsign READ lastRadeRxCallsign
                WRITE setLastRadeRxCallsign NOTIFY lastRadeRxCallsignChanged)
 
+    // R-R3-13 / R-R3-49 (remote-window parity Task 15): the Core's ADC and
+    // AGC readings for this slice's receiver, as its container meters bind
+    // them (ADC Peak, ADC Average, AGC Gain, AGC Peak, AGC Average).
+    // SliceMeterPump writes them at its rate, as it writes signalPeakDbm; a
+    // remote window's meters read them (meterReadingsVersion 1) and never
+    // its own inactive DSP. Outbound, no WRITE, same shape as the S-meter
+    // readings above. -400 (SliceMeterPump::kNoReadingDbm) is no reading.
+    Q_PROPERTY(double adcPeakDbfs    READ adcPeakDbfs    NOTIFY adcPeakDbfsChanged)
+    Q_PROPERTY(double adcAverageDbfs READ adcAverageDbfs NOTIFY adcAverageDbfsChanged)
+    Q_PROPERTY(double agcGainDb      READ agcGainDb      NOTIFY agcGainDbChanged)
+    Q_PROPERTY(double agcPeakDb      READ agcPeakDb      NOTIFY agcPeakDbChanged)
+    Q_PROPERTY(double agcAverageDb   READ agcAverageDb   NOTIFY agcAverageDbChanged)
+
 public:
     // Receive-layout admission bounds: general receive defaults, not a
     // per-radio/transverter capability.
@@ -640,6 +658,22 @@ public:
     void setSignalStrengthDbm(double dbm);
     void setSignalPeakDbm(double dbm);
     void setSignalAverageDbm(double dbm);
+
+    // Parity Task 15: the ADC and AGC readings (see their Q_PROPERTY
+    // comment). Plain setters, called by SliceMeterPump on the Core and
+    // reached through applyMirroredValue() in a remote window; each emits
+    // only on a change.
+    double adcPeakDbfs() const { return m_adcPeakDbfs; }
+    double adcAverageDbfs() const { return m_adcAverageDbfs; }
+    double agcGainDb() const { return m_agcGainDb; }
+    double agcPeakDb() const { return m_agcPeakDb; }
+    double agcAverageDb() const { return m_agcAverageDb; }
+    void setAdcPeakDbfs(double dbfs);
+    void setAdcAverageDbfs(double dbfs);
+    void setAgcGainDb(double db);
+    void setAgcPeakDb(double db);
+    void setAgcAverageDb(double db);
+
     double stationAutoAgcNoiseFloorDbm() const { return m_stationAutoAgcNoiseFloorDbm; }
     bool stationAutoAgcNoiseFloorValid() const { return m_stationAutoAgcNoiseFloorValid; }
     quint64 stationAutoAgcNoiseFloorGeneration() const { return m_stationAutoAgcNoiseFloorGeneration; }
@@ -1241,6 +1275,12 @@ signals:
     void signalStrengthDbmChanged(double dbm);
     void signalPeakDbmChanged(double dbm);
     void signalAverageDbmChanged(double dbm);
+    // Parity Task 15: the ADC and AGC readings changed.
+    void adcPeakDbfsChanged(double dbfs);
+    void adcAverageDbfsChanged(double dbfs);
+    void agcGainDbChanged(double db);
+    void agcPeakDbChanged(double db);
+    void agcAverageDbChanged(double db);
     void stationAutoAgcNoiseFloorChanged();
     void dspModeChanged(NereusSDR::DSPMode mode);
     void filterChanged(int low, int high);
@@ -1408,6 +1448,13 @@ private:
     double  m_signalStrengthDbm{-140.0};
     double  m_signalPeakDbm{-140.0};
     double  m_signalAverageDbm{-140.0};
+    // Parity Task 15: no reading (-400, SliceMeterPump::kNoReadingDbm)
+    // until the pump or the mirror writes one.
+    double  m_adcPeakDbfs{-400.0};
+    double  m_adcAverageDbfs{-400.0};
+    double  m_agcGainDb{-400.0};
+    double  m_agcPeakDb{-400.0};
+    double  m_agcAverageDb{-400.0};
     double  m_stationAutoAgcNoiseFloorDbm{-200.0};
     bool    m_stationAutoAgcNoiseFloorValid{false};
     quint64 m_stationAutoAgcNoiseFloorGeneration{0};

@@ -25,6 +25,9 @@
 //   2026-09-25 - R-R3-32 (remote-window parity Task 6):
 //                 setPaReadingsModel. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-26 - R-R3-13 / R-R3-49 (remote-window parity Task 15):
+//                 setRemoteMeterReadingsAvailable. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -173,6 +176,14 @@ public:
     void setRemoteRadioModel(RadioModel* model,
                              std::function<bool()> snapshotReady,
                              std::function<double(const SliceModel*)> maxBinSource = {});
+
+    // R-R3-13 / R-R3-49 (remote-window parity Task 15): whether the Core
+    // sends its ADC and AGC readings on its slices (meterReadingsVersion 1).
+    // While true, a remote window's AdcPeak, AdcAvg, AgcGain, AgcPeak and
+    // AgcAvg bindings read the active slice's adcPeakDbfs, adcAverageDbfs,
+    // agcGainDb, agcPeakDb and agcAverageDb; unset or false, they get the
+    // no-reading sentinel (shown "--"), never a frozen value.
+    void setRemoteMeterReadingsAvailable(std::function<bool()> available);
 
     // R-R3-32 (remote-window parity Task 6): the model whose
     // paReadings() feed the HwVolts, HwAmps and HwTemperature bindings on
@@ -357,6 +368,7 @@ private:
     void pollHardwareTelemetry();
     std::function<bool()> m_remoteSnapshotReady;
     std::function<double(const SliceModel*)> m_remoteMaxBinSource;
+    std::function<bool()> m_remoteMeterReadingsAvailable;   // parity Task 15
 };
 
 } // namespace NereusSDR

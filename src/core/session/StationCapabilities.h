@@ -114,6 +114,8 @@
 //   2026-09-26 - R-R3-46 / R-R3-32 (parity Task 14): radioHardwareVersion
 //                7 and stationTelemetryVersion 5 documented. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-R3-13 / R-R3-49 (parity Task 15): meterReadingsVersion.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -254,6 +256,14 @@ struct StationCapabilities {
     /// `bands` lists. Sent in the same minor-11 block, after
     /// transmitSettingsVersion. 0: an app's band buttons stay greyed.
     int bandSelectVersion = 0;
+    /// R-R3-13 / R-R3-49 (remote-window parity Task 15): 1 means the Core's
+    /// slices carry its ADC and AGC readings (adcPeakDbfs, adcAverageDbfs,
+    /// agcGainDb, agcPeakDb, agcAverageDb), refreshed at its meter pump's
+    /// rate, and a window's Multimeter polling delay sets that rate at once.
+    /// Sent in the same minor-11 block, after bandSelectVersion. 0 (no radio
+    /// model, or no meter pump): a window's ADC and AGC meters show no
+    /// reading.
+    int meterReadingsVersion = 0;
     /// iPhone app Task 71 (R-IOS-02; the several-devices design, ruling
     /// 10.1): 1 means the Core admits up to four devices at once, sends the
     /// `connectedDevices` object and takes session.leave. Sent last in the

@@ -890,10 +890,11 @@ private slots:
         caps.displayExtrasVersion = 2;
         const QList<MirrorUpdate> updates = caps.toUpdates();
         // R-R3-49's transmitSettingsVersion follows it, then R-IOS-27's
-        // bandSelectVersion.
-        QCOMPARE(updates.at(updates.size() - 3).name, QByteArray("displayExtrasVersion"));
-        QCOMPARE(updates.at(updates.size() - 2).name, QByteArray("transmitSettingsVersion"));
-        QCOMPARE(updates.last().name, QByteArray("bandSelectVersion"));
+        // bandSelectVersion, then parity Task 15's meterReadingsVersion.
+        QCOMPARE(updates.at(updates.size() - 4).name, QByteArray("displayExtrasVersion"));
+        QCOMPARE(updates.at(updates.size() - 3).name, QByteArray("transmitSettingsVersion"));
+        QCOMPARE(updates.at(updates.size() - 2).name, QByteArray("bandSelectVersion"));
+        QCOMPARE(updates.last().name, QByteArray("meterReadingsVersion"));
         QCOMPARE(StationCapabilities::fromUpdates(updates).displayExtrasVersion, 2);
         // An older peer's block (no minor-11 entries) carries none.
         StationCapabilities older;

@@ -795,6 +795,7 @@ change shows as surface drift and as a change to this table.
 | `displayExtrasVersion` | 2 |
 | `transmitSettingsVersion` | 8 |
 | `bandSelectVersion` | 1 |
+| `meterReadingsVersion` | 1 |
 | `sessionHolderVersion` | 1 |
 
 <!-- /surface -->
@@ -1007,11 +1008,22 @@ When a feature is off, its version is 0:
   offered it, and a receive-only Core refuses its transmit writes and DSP >
   Options TX keys as before. `transmitSettingsVersion` is followed by
   `bandSelectVersion`.
-- `bandSelectVersion`: sent only at agreed minor 11, last, and 0 on a
+- `bandSelectVersion`: sent only at agreed minor 11, and 0 on a
   station with no radio model. At 1 the Core takes `slice.selectBand`
   (section 9.1), a device's band button for a slice, for the bands the
   catalogue's `bands` lists (section 7.4). An app keeps its band buttons
-  greyed on a Core that sends 0 or no entry.
+  greyed on a Core that sends 0 or no entry. It is followed by
+  `meterReadingsVersion`.
+- `meterReadingsVersion`: sent only at agreed minor 11, last, and 0 on a
+  station whose radio model runs no meter pump (no radio model, or a
+  window's own). At 1 each slice carries the Core's ADC and AGC readings
+  (`adcPeakDbfs`, `adcAverageDbfs`, `agcGainDb`, `agcPeakDb`,
+  `agcAverageDb`, section 7.1), refreshed at the Core's meter pump rate as
+  `signalPeakDbm` is, and the Multimeter polling delay (`MultimeterDelayMs`,
+  section 8) sets that rate at once when a window writes it. A window's ADC
+  Peak, ADC Average, AGC Gain, AGC Peak and AGC Average meters read them;
+  on a Core that sends 0 or no entry those meters show no reading, never a
+  frozen value.
 
 - `sessionHolderVersion`: sent only at agreed minor 11, last, and only to
   a peer whose hello declared `sessionHolder` 1 with `deviceAuth` 1; any
@@ -1183,7 +1195,8 @@ older window sees only the values it was built for.
 | 52 | `displayExtrasVersion` | `i64` |
 | 53 | `transmitSettingsVersion` | `i64` |
 | 54 | `bandSelectVersion` | `i64` |
-| 55 | `sessionHolderVersion` | `i64` |
+| 55 | `meterReadingsVersion` | `i64` |
+| 56 | `sessionHolderVersion` | `i64` |
 
 <!-- /surface -->
 
@@ -1477,7 +1490,7 @@ An enum property lists the values its domain allows.
 | 12 | `streamIndex` | `i64` | outbound |  |
 | 13 | `psPaused` | `bool` | outbound |  |
 
-**SliceModel** (144 properties)
+**SliceModel** (149 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -1625,6 +1638,11 @@ An enum property lists the values its domain allows.
 | 141 | `rttyShiftHz` | `i64` | bidirectional |  |
 | 142 | `snrDb` | `f64` | outbound |  |
 | 143 | `lastRadeRxCallsign` | `utf8` | outbound |  |
+| 144 | `adcPeakDbfs` | `f64` | outbound |  |
+| 145 | `adcAverageDbfs` | `f64` | outbound |  |
+| 146 | `agcGainDb` | `f64` | outbound |  |
+| 147 | `agcPeakDb` | `f64` | outbound |  |
+| 148 | `agcAverageDb` | `f64` | outbound |  |
 
 **StationCatalog** (2 properties)
 
@@ -1859,6 +1877,19 @@ Notes on the keys:
   after each pin click). 0 until the Core has read it. `outbound`, from
   `radioHardwareVersion` 7 (parity Task 14); HL2 Options' output strip
   shows it in both windows.
+- **`slice:<id>` ADC and AGC readings.** `adcPeakDbfs`, `adcAverageDbfs`,
+  `agcGainDb`, `agcPeakDb` and `agcAverageDb` (f64, outbound, no WRITE;
+  parity Task 15) are the Core's receive meters for the slice's receiver,
+  the ones a container meter binds to ADC Peak, ADC Average, AGC Gain, AGC
+  Peak and AGC Average. The Core's meter pump reads them from WDSP each
+  tick as Thetis's CalculateRXMeter does (`RXA_ADC_PK`, `RXA_ADC_AV`,
+  `RXA_AGC_GAIN`, `RXA_AGC_PK`, `RXA_AGC_AV`), with no calibration offset;
+  AGC Gain is Thetis's reading, 0 minus `RXA_AGC_GAIN`, which a local window
+  shows too. -400 is no reading: before the radio link is up, with no
+  receiver for the slice, and before WDSP has measured a block. While the
+  radio is on the air the pump leaves them where they were. They reach a
+  window whatever `meterReadingsVersion` says; a window reads them only when
+  it is at least 1 (section 6.3). A window never writes them back.
 - **`devices`.** Sent only to a peer at agreed minor 11 whose hello
   declares `deviceAuth` 1 or later, while `deviceAdminVersion` is 1
   (`StationServer::sendToSession`). A window that declares nothing (today's
@@ -2768,6 +2799,11 @@ its removal, applies to the Core's SWR protection at once (a removal
 returns the default: off, limit 2.0, tune power to ignore 35 W). A taken
 External TX Inhibit key is stored on the Core, whose TX inhibit gate
 follows it (the receiver and transmit gaps plan, Task 13). At
+`meterReadingsVersion` 1 a taken `MultimeterDelayMs` (Setup > Display >
+Multimeter > Polling delay), or its removal, sets the Core's meter pump
+rate at once, clamped to 10 to 2000 ms (a removal returns the 100 ms
+default); it only changes how often the Core reads its meters, so it is
+taken on and off the air, as a local window changes it. At
 `transmitSettingsVersion` 6 the same off-air rule holds for Setup > PA's
 keys, `hardware/<mac>/pa/...` (the PA profiles: the profile list
 `pa/profile/_names`, each profile `pa/profile/<name>`, and the active

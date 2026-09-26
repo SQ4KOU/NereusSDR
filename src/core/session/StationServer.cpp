@@ -382,6 +382,12 @@
 //                                    Thetis); stationTelemetryVersion 5 (the
 //                                    Core's HL2 link).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  R-R3-13 / R-R3-49 (parity Task 15):
+//                                    meterReadingsVersion 1 (the slices'
+//                                    ADC and AGC readings); a window's
+//                                    Multimeter polling delay reaches the
+//                                    Core's meter pump at once.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -4327,6 +4333,9 @@ bool StationServer::applySettingsWrite(SessionTransport* transport, const Sessio
         // R-R3-49 (parity Task 5): so does an SWR protection setting, to the
         // Core's SwrProtectionController, as the local page's change does.
         m_radioModel->applySwrProtectionSetting(key, m_settings.value(key));
+        // R-R3-13 / R-R3-49 (parity Task 15): the Multimeter polling delay
+        // sets the Core's meter pump rate at once, as the local page does.
+        m_radioModel->applyMeterSetting(key, m_settings.value(key));
     }
     return true;
 }
@@ -4420,6 +4429,8 @@ void StationServer::applySettingsRemove(const SessionMessage& message)
         m_radioModel->applyRemoteAccessorySetting(key);
         // R-R3-49 (parity Task 5): the SWR protection default, at once.
         m_radioModel->applySwrProtectionSetting(key, QVariant());
+        // R-R3-13 / R-R3-49 (parity Task 15): the default meter pump rate.
+        m_radioModel->applyMeterSetting(key, QVariant());
     }
 }
 
@@ -5598,6 +5609,13 @@ int StationServer::bandSelectVersion() const
     return m_radioModel ? 1 : 0;
 }
 
+int StationServer::meterReadingsVersion() const
+{
+    // R-R3-13 / R-R3-49 (parity Task 15): the pump that fills the slices'
+    // ADC and AGC readings runs on a local radio model only.
+    return m_radioModel && m_radioModel->sliceMeterPump() != nullptr ? 1 : 0;
+}
+
 int StationServer::transmitSettingsVersion() const
 {
     // 1: `transmit` writes outside the keying set and the DspOptions*Tx
@@ -5806,6 +5824,8 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             caps.transmitSettingsVersion = transmitSettingsVersion();
             // R-IOS-27, R-IOS-06: slice.selectBand.
             caps.bandSelectVersion = bandSelectVersion();
+            // R-R3-13 / R-R3-49 (parity Task 15): the ADC and AGC readings.
+            caps.meterReadingsVersion = meterReadingsVersion();
             // iPhone app Task 71 (ruling 10.1): several devices at once, for
             // a peer that declared sessionHolder with deviceAuth; any other
             // peer is sent no entry, so its capabilities are today's.

@@ -65,6 +65,13 @@
 //                 the flag shows "-- dBm" instead of a frozen or floor
 //                 value. J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-26 -- R-R3-13 / R-R3-49 (remote-window parity Task 15): poll()
+//                 also writes each slice's ADC and AGC readings
+//                 (adcPeakDbfs, adcAverageDbfs, agcGainDb, agcPeakDb,
+//                 agcAverageDb) for a remote window's meters, the AGC gain
+//                 as Thetis shows it (thetisAgcGainReading); polled() for
+//                 each tick. J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -154,6 +161,20 @@ public:
 
     void start();
     void stop();
+
+    // R-R3-13 (parity Task 15): the AGC Gain meter's reading from WDSP's
+    // RXA_AGC_GAIN. WDSP reports the AGC's level over its output target
+    // (wcpAGC.c: gain = volts * inv_out_target), so Thetis negates it
+    // before any meter shows it. Used by this pump and by the local
+    // window's MeterPoller, so both windows show the same value. WDSP's
+    // -400 before a first measurement (or a non-finite value) stays the
+    // no-reading value, kNoReadingDbm.
+    static double thetisAgcGainReading(double rawRxaAgcGain);
+
+signals:
+    // Parity Task 15: one per poll() call (each timer tick), for a test
+    // that counts the pump's polls at a given rate.
+    void polled();
 
 public slots:
     // Public (unlike MeterPoller::poll(), a private slot) so a test can
