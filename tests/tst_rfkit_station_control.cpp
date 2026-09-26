@@ -254,11 +254,19 @@ private slots:
             QCOMPARE(reason, onAir);
             QVERIFY(!model.setRfKitTciModeForStation(&reason));
             QCOMPARE(reason, onAir);
-            QVERIFY(!model.setRfKitAddressForStation(QStringLiteral("192.0.2.9"), 8080, &reason));
-            QCOMPARE(reason, onAir);
+        };
+        // Parity mini-round (rulings a and b): the address is only saved, so
+        // it goes ahead on the air, as a local window's Save does; it
+        // switches nothing and sends the amp nothing.
+        const auto expectSaveTaken = [&](const QString& host) {
+            QVERIFY(model.setRfKitAddressForStation(host, 8080, &reason));
+            QVERIFY(reason.isEmpty());
+            QCOMPARE(model.peripheralValue(QStringLiteral("RfKit_ManualIp")), host);
         };
         model.transmitModel().setMox(true);
         expectRefused();
+        if (QTest::currentTestFailed()) { return; }
+        expectSaveTaken(QStringLiteral("192.0.2.7"));
         if (QTest::currentTestFailed()) { return; }
         model.transmitModel().setMox(false);
         model.transmitModel().setTune(true);
@@ -302,8 +310,6 @@ private slots:
         QTRY_VERIFY(mox->state() == MoxState::Rx);
         QTest::qWait(100);
         QVERIFY2(amp.writes().isEmpty(), qPrintable(amp.writes().join(QLatin1Char('\n'))));
-        QVERIFY(model.peripheralValue(QStringLiteral("RfKit_ManualIp"))
-                != QStringLiteral("192.0.2.9"));
 
         // Off the air, on a receive-only Core: the local applet's requests.
         QVERIFY(model.receiveOnlyStationPolicy());

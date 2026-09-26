@@ -158,8 +158,10 @@ private slots:
 private:
     QMenu* buildContextMenu(QObject* menuParent);
     bool   isRemoteModel() const;
-    // Group B fix wave (M5): a local window's own switch, refused on the air.
-    bool   localSwitchRefusedOnAir() const;
+    // Group B fix wave (M5): a local window's own switch, refused on the
+    // air; parity mini-round (ruling c): the refusal is shown with the
+    // remote window's reason (RadioModel::refuseLocalAccessorySwitchOnAir).
+    bool   refuseLocalSwitchOnAir();
     // R-R3-22: a remote window's Disconnect or Connect, sent to the Core.
     void   requestRemoteConnectionToggle();
     // R-R3-49 (parity Task 10): the Core switches its amp for this window.

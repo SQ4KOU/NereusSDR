@@ -188,7 +188,8 @@ AmpApplet::AmpApplet(RadioModel* model, QWidget* parent)
         }
         // Group B fix wave (M5, the operator's ruling 2026-09-25): this
         // computer's amp waits on the air too, by the Core's own rule.
-        if (m_model && m_model->stationOnAirRefusal(nullptr)) {
+        // Parity mini-round (ruling c): a click refused there says why.
+        if (m_model && m_model->refuseLocalAccessorySwitchOnAir(QStringLiteral("pgxl"))) {
             updateOperateButton();
             return;
         }

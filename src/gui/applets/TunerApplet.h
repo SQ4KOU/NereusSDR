@@ -228,8 +228,10 @@ private:
     void requestRelayMove(int relay, int direction);
     // The Core reports the radio on the air: MOX, TUNE or two-tone.
     bool coreOnAir() const;
-    // Group B fix wave (M5): a local window's own switch, refused on the air.
-    bool localSwitchRefusedOnAir() const;
+    // Group B fix wave (M5): a local window's own switch, refused on the
+    // air; parity mini-round (ruling c): the refusal is shown with the
+    // remote window's reason (RadioModel::refuseLocalAccessorySwitchOnAir).
+    bool refuseLocalSwitchOnAir();
     void requestAntenna(int port);
 
     TunerModel* m_tunerModel = nullptr;

@@ -136,10 +136,12 @@ private:
     // Rework follow-up 3: values saved and not yet echoed by the Core.
     QHash<QString, QString> m_savedPending;
     void settleSaved(const QString& key);
-    // R-R3-49 (parity Task 10): a remote window's TCI mode button and
-    // address fields: enabled on a Core at remoteRfKitControlVersion 4
-    // while the radio is off the air (the TCI mode button also only while
-    // the Core is connected to the amp); otherwise disabled with the reason.
+    // R-R3-49 (parity Task 10): a remote window's TCI mode button: enabled
+    // on a Core at remoteRfKitControlVersion 4 while the radio is off the
+    // air and the Core is connected to the amp; otherwise disabled with the
+    // reason. Parity mini-round (the operator's rulings a and b): the
+    // address fields only save, so they stay enabled on the air; a local
+    // window's TCI mode button waits on the air too, with the same reason.
     void refreshRemoteControls();
     void onSetTciClicked();
     void refreshBandFollow();

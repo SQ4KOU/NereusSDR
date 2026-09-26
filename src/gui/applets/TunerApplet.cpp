@@ -452,7 +452,7 @@ void TunerApplet::requestRelayMove(int relay, int direction)
         }
         return;
     }
-    if (m_transmitPermitted && m_tunerModel && !localSwitchRefusedOnAir()) {
+    if (m_transmitPermitted && m_tunerModel && !refuseLocalSwitchOnAir()) {
         m_tunerModel->adjustRelay(relay, direction);
     }
 }
@@ -480,13 +480,14 @@ QString TunerApplet::onAirReason()
     return RadioModel::onAirReason();
 }
 
-bool TunerApplet::localSwitchRefusedOnAir() const
+bool TunerApplet::refuseLocalSwitchOnAir()
 {
     // Group B fix wave (M5): this computer's own tuner, refused by the
     // Core's own on-the-air rule (RadioModel::stationOnAirRefusal), which
-    // also covers the hand-back to receive after MOX.
+    // also covers the hand-back to receive after MOX. Parity mini-round
+    // (ruling c): a refused click says why, as a remote window's Core does.
     return m_model && m_model->role() != RadioModel::Role::Remote
-        && m_model->stationOnAirRefusal(nullptr);
+        && m_model->refuseLocalAccessorySwitchOnAir(QStringLiteral("tgxl"));
 }
 
 // R-R3-49 / R-R3-47: a remote window asks the Core, which switches its own
@@ -499,7 +500,7 @@ void TunerApplet::requestAntenna(int port)
         }
         return;
     }
-    if (m_transmitPermitted && m_tunerModel && !localSwitchRefusedOnAir()) {
+    if (m_transmitPermitted && m_tunerModel && !refuseLocalSwitchOnAir()) {
         m_tunerModel->setAntennaA(port);
     }
 }
@@ -827,7 +828,7 @@ void TunerApplet::cycleOperateState()
     // follows its report.
     if (!m_tunerModel) return;
     const bool remote = remoteTunerControl();
-    if (remote ? coreOnAir() : (!m_transmitPermitted || localSwitchRefusedOnAir())) return;
+    if (remote ? coreOnAir() : (!m_transmitPermitted || refuseLocalSwitchOnAir())) return;
     IStationLink* link = remote ? m_model->stationLink() : nullptr;
     const auto setBypass = [this, link](bool on) {
         if (link) { link->requestTgxlBypass(on); } else { m_tunerModel->setBypass(on); }

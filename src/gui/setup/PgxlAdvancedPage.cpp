@@ -317,8 +317,13 @@ void PgxlAdvancedPage::onOperateClicked()
 {
     PgxlConnection* pgxl = m_model ? m_model->pgxlConnection() : nullptr;
     const AmplifierModel* amp = m_model ? m_model->amplifierModel() : nullptr;
+    if (!pgxl || !pgxl->isConnected() || !amp) {
+        updateOperateButton();
+        return;
+    }
     // Group B fix wave (M5): refused on the air, by the Core's own rule.
-    if (!pgxl || !pgxl->isConnected() || !amp || m_model->stationOnAirRefusal(nullptr)) {
+    // Parity mini-round (ruling c): with the remote window's reason.
+    if (m_model->refuseLocalAccessorySwitchOnAir(QStringLiteral("pgxl"))) {
         updateOperateButton();
         return;
     }

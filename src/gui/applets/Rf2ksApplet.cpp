@@ -99,7 +99,7 @@ Rf2ksApplet::Rf2ksApplet(RadioModel* model, QWidget* parent)
         }
         // Group B fix wave (M5, the operator's ruling 2026-09-25): this
         // computer's amp waits on the air too, by the Core's own rule.
-        if (localSwitchRefusedOnAir()) {
+        if (refuseLocalSwitchOnAir()) {
             updateRemoteControls();
             return;
         }
@@ -208,7 +208,7 @@ Rf2ksApplet::Rf2ksApplet(RadioModel* model, QWidget* parent)
                 }
                 return;
             }
-            if (localSwitchRefusedOnAir()) {   // group B fix wave (M5)
+            if (refuseLocalSwitchOnAir()) {   // group B fix wave (M5)
                 updateRemoteControls();
                 return;
             }
@@ -337,9 +337,12 @@ QString Rf2ksApplet::remoteControlReason() const
     return QString();
 }
 
-bool Rf2ksApplet::localSwitchRefusedOnAir() const
+bool Rf2ksApplet::refuseLocalSwitchOnAir()
 {
-    return m_model && !isRemoteModel() && m_model->stationOnAirRefusal(nullptr);
+    // Parity mini-round (ruling c): a refused click says why, as a remote
+    // window's Core does.
+    return m_model && !isRemoteModel()
+        && m_model->refuseLocalAccessorySwitchOnAir(QStringLiteral("rfkit"));
 }
 
 void Rf2ksApplet::updateRemoteControls()

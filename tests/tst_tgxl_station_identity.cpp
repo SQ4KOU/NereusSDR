@@ -842,18 +842,28 @@ private slots:
         // keyed by the radio's own PTT input (its receive-only pre-check
         // lifted, standing in for a Core that can transmit).
         const QString onAir = QStringLiteral("The radio is on the air. Try again when it stops.");
-        bool scanAnswered = false;
         const auto expectRefused = [&] {
             QVERIFY(!model.moveTgxlRelayForStation(0, 1, &reason));
             QCOMPARE(reason, onAir);
-            QVERIFY(!model.scanTgxlLanForStation(
+        };
+        // Parity mini-round (rulings a and b): Scan LAN only listens and the
+        // address is only saved, so both go ahead on the air, as a local
+        // window's do; neither switches the tuner nor sends it anything.
+        const auto expectListenAndSaveTaken = [&](const QString& host) {
+            bool scanAnswered = false;
+            QVERIFY(model.scanTgxlLanForStation(
                 [&scanAnswered](const QString&) { scanAnswered = true; }, &reason));
-            QCOMPARE(reason, onAir);
-            QVERIFY(!model.setTgxlAddressForStation(QStringLiteral("192.0.2.9"), 9010, &reason));
-            QCOMPARE(reason, onAir);
+            QVERIFY(reason.isEmpty());
+            QVERIFY(model.setTgxlAddressForStation(host, 9010, &reason));
+            QVERIFY(reason.isEmpty());
+            QCOMPARE(model.peripheralValue(QStringLiteral("TGXL_ManualIp")), host);
+            QTRY_VERIFY(scanAnswered);
+            QTRY_VERIFY(model.findChild<LanDiscovery*>(QStringLiteral("tgxlLanScan")) == nullptr);
         };
         model.transmitModel().setMox(true);
         expectRefused();
+        if (QTest::currentTestFailed()) { return; }
+        expectListenAndSaveTaken(QStringLiteral("192.0.2.7"));
         if (QTest::currentTestFailed()) { return; }
         model.transmitModel().setMox(false);
         model.transmitModel().setTune(true);
@@ -867,13 +877,12 @@ private slots:
         QVERIFY(mox->isMox());
         expectRefused();
         if (QTest::currentTestFailed()) { return; }
+        expectListenAndSaveTaken(QStringLiteral("192.0.2.8"));
+        if (QTest::currentTestFailed()) { return; }
         mox->onMicPttFromRadio(false);
         QTRY_VERIFY(mox->state() == MoxState::Rx);
         QTest::qWait(200);
         QVERIFY(!relaySent());
-        QVERIFY(!scanAnswered);
-        QVERIFY(model.findChild<LanDiscovery*>(QStringLiteral("tgxlLanScan")) == nullptr);
-        QVERIFY(model.peripheralValue(QStringLiteral("TGXL_ManualIp")) != QStringLiteral("192.0.2.9"));
 
         // Off the air, on a receive-only Core: each relay nudge reaches the
         // tuner as the local applet's own line, and keys nothing.

@@ -41,17 +41,29 @@ R-R3-49) adds the Tuner Genius's antenna, operate and bypass from a window
 parity plan's Task 8 (R-R3-49) adds the rest of a local window's Tuner
 Genius at `remoteTgxlControlVersion` 4: the relay nudges (`moveTgxlRelay`),
 the Core's own Scan LAN (`scanTgxlLan`) and the Peripherals row's address
-saved without Connect (`setTgxlAddress`), each refused while the radio is
-on the air. Its Task 9 (R-R3-49) does the same for the Power Genius at
-`remotePgxlControlVersion` 4: OPERATE and STANDBY (`setPgxlOperate`), the
-Core's own Scan LAN (`scanPgxlLan`) and the address saved without Connect
-(`setPgxlAddress`), each refused while the radio is on the air. Its Task 10
+saved without Connect (`setTgxlAddress`). Its Task 9 (R-R3-49) does the
+same for the Power Genius at `remotePgxlControlVersion` 4: OPERATE and
+STANDBY (`setPgxlOperate`), the Core's own Scan LAN (`scanPgxlLan`) and
+the address saved without Connect (`setPgxlAddress`). Its Task 10
 (R-R3-49) does the same for the RF-Kit RF2K-S at
 `remoteRfKitControlVersion` 4: OPERATE and STANDBY (`setRfKitOperate`),
 ANT 1 to 4 (`setRfKitAntenna`), TCI mode (`setRfKitTciMode`) and the
-address saved without Connect (`setRfKitAddress`), each refused while the
-radio is on the air, and at `accessoryDataVersion` 2 the Core's RF-Kit
-connection counts on `accessoryData`.
+address saved without Connect (`setRfKitAddress`), and at
+`accessoryDataVersion` 2 the Core's RF-Kit connection counts on
+`accessoryData`.
+
+**The on-air rule, by what a control does** (parity mini-round, the
+operator's rulings of 2026-09-25, the same in local and remote windows).
+What switches the amp or the tuner waits while the radio is on the air:
+the Tuner Genius antenna, operate, bypass and relays, the Power Genius
+OPERATE and STANDBY, and the RF-Kit OPERATE and STANDBY, ANT 1 to 4 and
+TCI mode. STANDBY waits too: switching the amp's relays under RF is what
+the rule guards, and the operator unkeys first. What only listens or saves
+does not wait: `scanTgxlLan`, `scanPgxlLan`, `setTgxlAddress`,
+`setPgxlAddress` and `setRfKitAddress` are taken on the air (before this
+round a Core refused them there with the on-air reason; a window written
+for that still works, it simply never sees that refusal now). The version
+numbers do not change.
 
 ## Wire conventions
 
@@ -94,17 +106,17 @@ contract; each feature has its own version.
 | `remoteRfKitControlVersion` | 11 | 1 | The Core mirrors its RF2K-S as the read-only `rfkit` object |
 | `remoteRfKitControlVersion` | 11 | 2 | Also: the interface, antenna, tuner and band-follow rows of `rfkit`; `configureRfKit`, `disconnectRfKit` and `setRfKitEnabled` work, and the Core identifies the RF2K-S itself |
 | `remoteRfKitControlVersion` | 11 | 3 | Also: `resetRfKitError` works, and the Core applies a window's `RfKit_AutoReconnect` and `RfKit_PollIntervalMs` station settings to its amp's connection at once, so the RF-Kit page's settings, antenna names and Reset amp error work from a remote window |
-| `remoteRfKitControlVersion` | 11 | 4 | Also: `setRfKitOperate` (OPERATE or STANDBY), `setRfKitAntenna` (ANT 1 to 4), `setRfKitTciMode` (the amp in TCI mode) and `setRfKitAddress` (the address saved without dialling) work whenever the radio is not on the air (see "Operating the RF-Kit amplifier") |
+| `remoteRfKitControlVersion` | 11 | 4 | Also: `setRfKitOperate` (OPERATE or STANDBY), `setRfKitAntenna` (ANT 1 to 4), `setRfKitTciMode` (the amp in TCI mode) work whenever the radio is not on the air, and `setRfKitAddress` (the address saved without dialling) works on the air too (see "Operating the RF-Kit amplifier") |
 | `stationTciVersion` | 11 | 1 | The Core runs its own TCI server on the station network: the read-only `stationTci` object, and `setStationTci` works |
 | `accessoryDataVersion` | 11 | 1 | The Core mirrors its accessory records and settings as the read-only `accessoryData` object, and `setTxInterlockPolicy`, `setPgxlPowerCap` and `clearAccessoryFaults` work |
 | `accessoryDataVersion` | 11 | 2 | Also: the RF-Kit's connection counts on `accessoryData` (`rfkitConnectedSinceMs`, `rfkitPollsOk`, `rfkitPollsFailed`, `rfkitReconnectCount`, `rfkitLastPollMs`) |
 | `accessoryDataVersion` | 11 | 3 | Also: the RF-Kit's average response time over its last ten polls on `accessoryData` (`rfkitRttAvgMs`), as a local window's RF-Kit page and Copy diagnostics show it |
 | `remotePgxlControlVersion` | 11 | 3 | Also: the amp's own settings. The `pgxl*` properties of the read-only `accessorySettings` object, and `setPgxlName`, `setPgxlHardware`, `setPgxlNetwork`, `savePgxlSettings` and `readPgxlSettings` work |
-| `remotePgxlControlVersion` | 11 | 4 | Also: `setPgxlOperate` (OPERATE or STANDBY), `scanPgxlLan` (the Core listens for Power Genius announcements) and `setPgxlAddress` (the address saved without dialling) work whenever the radio is not on the air (see "Operating the Power Genius" and "Scanning for the Power Genius and its saved address") |
+| `remotePgxlControlVersion` | 11 | 4 | Also: `setPgxlOperate` (OPERATE or STANDBY), `scanPgxlLan` (the Core listens for Power Genius announcements) and `setPgxlAddress` (the address saved without dialling): OPERATE and STANDBY work whenever the radio is not on the air, the scan and the address on the air too (see "Operating the Power Genius" and "Scanning for the Power Genius and its saved address") |
 | `remoteTgxlControlVersion` | 11 | 1 | The tuner's own settings: the `tgxl*` properties of `accessorySettings`, and `setTgxlName`, `setTgxlNetwork`, `saveTgxlSettings` and `readTgxlSettings` work |
 | `remoteTgxlControlVersion` | 11 | 2 | Also: the tuner's antenna, operate and bypass. `setTgxlAntenna`, `setTgxlOperate` and `setTgxlBypass` work whenever the radio is not on the air (see "Switching the Tuner Genius") |
 | `remoteTgxlControlVersion` | 11 | 3 | Also: `setTgxlOperate` with `on` true puts the tuner in OPERATE whole, bypass off and operate on from the one command, so STANDBY to OPERATE is one request |
-| `remoteTgxlControlVersion` | 11 | 4 | Also: `moveTgxlRelay` (a relay nudge), `scanTgxlLan` (the Core listens for Tuner Genius announcements) and `setTgxlAddress` (the address saved without dialling) work whenever the radio is not on the air (see "Switching the Tuner Genius" and "Scanning for the Tuner Genius and its saved address") |
+| `remoteTgxlControlVersion` | 11 | 4 | Also: `moveTgxlRelay` (a relay nudge), `scanTgxlLan` (the Core listens for Tuner Genius announcements) and `setTgxlAddress` (the address saved without dialling): the nudge works whenever the radio is not on the air, the scan and the address on the air too (see "Switching the Tuner Genius" and "Scanning for the Tuner Genius and its saved address") |
 
 - The Core advertises `remotePgxlControlVersion` as 4,
   `remoteRfKitControlVersion` as 4, `remoteTgxlControlVersion` as 4 and
@@ -332,13 +344,15 @@ computer:
   nothing to any device. The answer comes once, when the window ends; an
   answer due to an earlier app connection is not sent.
   The Core runs one scan per device at a time: a scan asked for while one
-  is listening joins it and gets the same answer when it ends.
+  is listening joins it and gets the same answer when it ends. It only
+  listens, so it is taken while the radio is on the air too.
 - `setTgxlAddress` (`host` utf8, `port` i64): the Core saves
   `TGXL_ManualIp` and `TGXL_ManualPort` for its radio without dialling,
   with `configureTgxl`'s address checks and reasons. The `tuner` object's
   `configuredHost` and `configuredPort` take the saved address while the
   Core is not connecting to or connected to a tuner (a running connection
-  keeps showing its own); `connectionPhase` does not change.
+  keeps showing its own); `connectionPhase` does not change. It is taken
+  while the radio is on the air too: saving switches nothing.
   A blank `host` (empty after trimming, with a port from 1 to 65535) is saved as blank, as a local window's blank Host is: it stops auto-connect, because the Core dials a saved address only when it is not blank, and `configuredHost` shows the blank.
 
 ## The `amplifier` object (PGXL)
@@ -423,14 +437,16 @@ does at its own computer, as for the Tuner Genius:
   answer comes once, when the window ends; an answer due to an earlier app
   connection is not sent.
   The Core runs one scan per device at a time: a scan asked for while one
-  is listening joins it and gets the same answer when it ends.
+  is listening joins it and gets the same answer when it ends. It only
+  listens, so it is taken while the radio is on the air too.
 - `setPgxlAddress` (`host` utf8, `port` i64): the Core saves
   `PGXL_ManualIp` and `PGXL_ManualPort` for its radio without dialling,
   with `configurePgxl`'s address checks and reasons (the 4O3A switch is
   not an address check: saving dials nothing). The `amplifier` object's
   `configuredHost` and `configuredPort` take the saved address while the
   Core is not connecting to or connected to an amp (a running connection
-  keeps showing its own); `connectionPhase` does not change.
+  keeps showing its own); `connectionPhase` does not change. It is taken
+  while the radio is on the air too: saving switches nothing.
   A blank `host` (empty after trimming, with a port from 1 to 65535) is saved as blank, as a local window's blank Host is: it stops auto-connect, because the Core dials a saved address only when it is not blank, and `configuredHost` shows the blank.
 
 ### How the Core reads the PGXL
@@ -634,7 +650,9 @@ address check: saving dials nothing). The `rfkit` object's
 `configuredHost` and `configuredPort` take the saved address while the
 Core is not connecting to or connected to an amp (a running connection
 keeps showing its own); `connectionPhase` does not change. The next
-Connect, or the switch turned on, dials it. A blank `host` (empty after trimming, with a port from 1 to 65535) is saved as blank, as a local window's blank Host is: it stops auto-connect, because the Core dials a saved address only when it is not blank, and `configuredHost` shows the blank.
+Connect, or the switch turned on, dials it. It is taken while the radio
+is on the air too, as a local window's Save is: saving switches nothing.
+A blank `host` (empty after trimming, with a port from 1 to 65535) is saved as blank, as a local window's blank Host is: it stops auto-connect, because the Core dials a saved address only when it is not blank, and `configuredHost` shows the blank.
 
 ## The `stationTci` object and the station TCI server
 
@@ -1080,7 +1098,7 @@ Commands:
 | `moveTgxlRelay` with other arguments, a `relay` outside 0 to 2 or a `direction` other than -1 or 1 | "The request to move a Tuner Genius relay was not understood." |
 | `scanTgxlLan` with arguments | "The request to scan for a Tuner Genius was not understood." |
 | `setTgxlAddress` with other arguments | "The request to save the Tuner Genius address was not understood." |
-| `moveTgxlRelay`, `scanTgxlLan`, `setTgxlAddress` while the radio is on the air (MOX, TUNE or two-tone, or the hand-back to receive after MOX) | "The radio is on the air. Try again when it stops." |
+| `moveTgxlRelay` while the radio is on the air (MOX, TUNE or two-tone, or the hand-back to receive after MOX) | "The radio is on the air. Try again when it stops." |
 | `moveTgxlRelay` while the Core has not admitted a tuner | "The Core is not connected to the Tuner Genius." |
 | `setTgxlAddress` with no radio | "Connect the Core to a radio before setting up its Tuner Genius XL." |
 | `setTgxlAddress` with a host that is not blank and not an IP address or host name, or a port outside 1 to 65535 | "Enter the Tuner Genius XL's IP address or host name, and a port from 1 to 65535." |
@@ -1089,7 +1107,7 @@ Commands:
 | `setPgxlOperate` with other arguments (or `on` not a bool) | "The request to put the Power Genius in operate or standby was not understood." |
 | `scanPgxlLan` with arguments | "The request to scan for a Power Genius was not understood." |
 | `setPgxlAddress` with other arguments | "The request to save the Power Genius address was not understood." |
-| `setPgxlOperate`, `scanPgxlLan`, `setPgxlAddress` while the radio is on the air (MOX, TUNE or two-tone, or the hand-back to receive after MOX) | "The radio is on the air. Try again when it stops." |
+| `setPgxlOperate` while the radio is on the air (MOX, TUNE or two-tone, or the hand-back to receive after MOX) | "The radio is on the air. Try again when it stops." |
 | `setPgxlOperate` while the Core is not connected to the amp | "The Core is not connected to the Power Genius." |
 | `setPgxlAddress` with no radio | "Connect the Core to a radio before setting up its Power Genius." |
 | `setPgxlAddress` with a host that is not blank and not an IP address or host name, or a port outside 1 to 65535 | "Enter the Power Genius's IP address or host name, and a port from 1 to 65535." |
@@ -1100,7 +1118,7 @@ Commands:
 | `setRfKitAntenna` with a port outside 1 to 4 | "Choose RF-Kit amplifier antenna 1, 2, 3 or 4." |
 | `setRfKitTciMode` with arguments | "The request to put the RF-Kit amplifier in TCI mode was not understood." |
 | `setRfKitAddress` with other arguments | "The request to save the RF-Kit amplifier address was not understood." |
-| `setRfKitOperate`, `setRfKitAntenna`, `setRfKitTciMode`, `setRfKitAddress` while the radio is on the air (MOX, TUNE or two-tone, or the hand-back to receive after MOX) | "The radio is on the air. Try again when it stops." |
+| `setRfKitOperate`, `setRfKitAntenna`, `setRfKitTciMode` while the radio is on the air (MOX, TUNE or two-tone, or the hand-back to receive after MOX) | "The radio is on the air. Try again when it stops." |
 | `setRfKitOperate`, `setRfKitAntenna`, `setRfKitTciMode` while the Core has not admitted an amp | "The Core is not connected to the RF-Kit amplifier." |
 | `setRfKitAntenna` for an antenna the amp lists as disabled, or does not list once it has listed its antennas | "This antenna is not available on the RF-Kit amplifier." |
 | `setRfKitAddress` with no radio | "Connect the Core to a radio before setting up its RF-Kit amplifier." |
@@ -1342,6 +1360,16 @@ nothing to this computer's accessory (`RadioModel::stationOnAirRefusal`,
 the Core's own check). TUNE keeps its transmit gate. `tst_remote_peripherals`
 (`localWindowAmpAndTunerSwitchesWaitOnTheAir`) checks each keyed and
 unkeyed; the remote window's cases check the same in a remote window.
+Parity mini-round (the operator's rulings of 2026-09-25): a local
+window's RF-Kit "Set amp to TCI mode" joins them (it switches the amp).
+Its buttons grey while `RadioModel::isCoreOnAir()` is true, which can
+read false a moment before the Core's own check stops refusing (the
+hand-back to receive); a local click refused then is never dropped
+silently: `RadioModel::refuseLocalAccessorySwitchOnAir` sends it out on
+`accessoryRequestRefused` with the same sentence a remote window's Core
+sends back, and the window shows it as it shows the Core's
+(`localClickRefusedAsTheRadioUnkeysSaysWhy`). Scan LAN, Host, Port and
+Save wait in neither window.
 
 A window reads `amplifier` and `rfkit` only while the Core offers them:
 
@@ -1391,9 +1419,9 @@ A window reads `amplifier` and `rfkit` only while the Core offers them:
   disabled with "This antenna is not available on the RF-Kit amplifier."
   The RF-Kit page's "Set amp to TCI mode" sends `setRfKitTciMode` and the
   amp's `operationalInterface` follows. While the Core reports the radio
-  on the air, OPERATE, ANT, "Set amp to TCI mode" and the page's Host and
-  Port are disabled with "The radio is on the air. Try again when it
-  stops."; while the Core is not connected to the amp, OPERATE, ANT and
+  on the air, OPERATE, ANT and "Set amp to TCI mode" are disabled with
+  "The radio is on the air. Try again when it stops." (the page's Host,
+  Port and Save stay live: they only save); while the Core is not connected to the amp, OPERATE, ANT and
   "Set amp to TCI mode" with "The Core is not connected to the RF-Kit
   amplifier." A refusal of the page's request shows in its status line;
   one of the applet's as a notice. The page's Save also keeps a Host or
@@ -1524,8 +1552,8 @@ A window reads `amplifier` and `rfkit` only while the Core offers them:
   Connect is sent with `setTgxlAddress` when editing finishes, and when
   Setup closes (or the row's tab is left) with an edit still unsent; the
   Core keeps it for its radio, so the next window shows it, and nothing is
-  dialled. A refusal shows as a notice. While the Core reports the radio
-  on the air Scan LAN, Host and Port are disabled with the on-air reason.
+  dialled. A refusal shows as a notice. Scan LAN, Host and Port stay live
+  while the radio is on the air (they only listen or save).
   Below version 4 Scan LAN stays off with "This Core does not scan for a
   Tuner Genius for this app. Updating the Core may help." and a typed
   address is only sent by Connect.
@@ -1785,9 +1813,10 @@ rewrite the fixtures, and update this document in the same commit.
   `tst_tgxl_station_identity` checks each relay nudge reaches the (fake)
   tuner as `tune relay=<relay> move=<move>` on a receive-only Core and
   keys nothing; the nudge, the scan and the saved address refused with
-  nothing sent on a non-owning Core, on the air (the MOX and TUNE latches
-  and a hardware PTT through the Core's MOX controller), and the nudge
-  with no tuner and out of range; the scan answering with the Tuner Genius
+  nothing sent on a non-owning Core, the nudge on the air (the MOX and
+  TUNE latches and a hardware PTT through the Core's MOX controller) while
+  the scan and the address are taken there (parity mini-round), and the
+  nudge with no tuner and out of range; the scan answering with the Tuner Genius
   announcements it heard and not a Power Genius's; the address checked,
   saved, shown on `tuner` once the Core is disconnected, and not dialled.
   `tst_station_accessory_state` checks version 4 and the three commands'
@@ -1796,7 +1825,8 @@ rewrite the fixtures, and update this document in the same commit.
   tuner, stop with the on-air reason, and a request sent anyway is
   refused; that Setup's Scan LAN lists what the Core heard and a pick,
   a finished edit and Setup closing each keep the address on the Core
-  (a later window reads it) with nothing dialled, and all wait on the air;
+  (a later window reads it) with nothing dialled, and Scan LAN and the
+  address stay live on the air and are taken there (parity mini-round);
   that Recall tune memory and Open TGXL Advanced work in a remote window
   and Copy diagnostics carries the Core's counters; and that the Advanced
   and interlock entries open their 4O3A tab in local and remote windows.
@@ -1809,9 +1839,10 @@ rewrite the fixtures, and update this document in the same commit.
   `setPgxlOperate` sends exactly `operate=1` and `operate=0` on a
   receive-only Core and keys nothing, and that the model follows the amp's
   report; the three commands refused with nothing sent on a non-owning
-  Core, on the air (the MOX and TUNE latches, a hardware PTT, the
+  Core, OPERATE on the air (the MOX and TUNE latches, a hardware PTT, the
   two-tone test and the hand-back to receive, through the Core's MOX
-  controller), OPERATE with no amp; the scan answering with the Power
+  controller) while the scan and the address are taken there (parity
+  mini-round), OPERATE with no amp; the scan answering with the Power
   Genius announcements it heard and not a Tuner Genius's; the address
   checked, saved, shown on `amplifier` once the Core is disconnected, and
   not dialled. `tst_station_accessory_state` checks version 4 and the
@@ -1822,7 +1853,8 @@ rewrite the fixtures, and update this document in the same commit.
   toggle; that Copy diagnostics carries the Core's counters; and that the
   Peripherals row's Scan LAN lists the Power Genius the Core heard and a
   pick, a finished edit and Setup closing keep the address on the Core,
-  with nothing dialled, all waiting on the air; and that a local window's
+  with nothing dialled, taken on the air too (parity mini-round); and that
+  a local window's
   PowerGenius XL tab Operate sends `operate=1` and `operate=0` to its own
   loopback amp, follows the amp's report and is disabled with its reason
   while not connected. `session-verbs-pgxl-control`
@@ -1834,9 +1866,10 @@ rewrite the fixtures, and update this document in the same commit.
   `setRfKitAntenna` and `setRfKitTciMode` send exactly the local applet's
   and page's `PUT` requests on a receive-only Core and key nothing, and
   that the `rfkit` object follows the amp's report; the four refused with
-  nothing sent on a non-owning Core, on the air (the MOX and TUNE latches,
-  a hardware PTT, the two-tone test and the hand-back to receive, through
-  the Core's MOX controller), with no amp admitted, for an antenna outside
+  nothing sent on a non-owning Core, the three switches on the air (the
+  MOX and TUNE latches, a hardware PTT, the two-tone test and the hand-back
+  to receive, through the Core's MOX controller) while the address is
+  taken there (parity mini-round), with no amp admitted, for an antenna outside
   1 to 4 and for one the amp lists as disabled or does not list; the
   address checked, saved, shown on `rfkit` once the Core is disconnected
   (and with the switch off), and not dialled; and the connection counts
@@ -1848,9 +1881,10 @@ rewrite the fixtures, and update this document in the same commit.
   follow its report, never emitting the local signals; that an antenna the
   amp does not offer is disabled with its reason; that Save keeps a
   changed Host and Port on the Core with nothing dialled; that Live
-  diagnostics and Copy diagnostics carry the Core's counts; that all of
-  them wait on the air with the reason (a request sent anyway refused,
-  nothing reaching the amp); that an older Core leaves them greyed and the
+  diagnostics and Copy diagnostics carry the Core's counts; that the
+  switches wait on the air with the reason (a request sent anyway refused,
+  nothing reaching the amp) while Host, Port and Save are taken there
+  (parity mini-round); that an older Core leaves them greyed and the
   window asks nothing; and that a local window's page shows the
   connected-since and last-poll readings and its TCI button still sends
   this computer's own request. `session-verbs-rfkit-control` invokes the

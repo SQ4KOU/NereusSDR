@@ -36,6 +36,12 @@
 //                 (accessoryData's rfkit*), and a local window's gains the
 //                 connected-since and last-poll readings. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 -- R-R3-49 (parity mini-round, the operator's rulings a to
+//                 c): Host, Port and Save no longer wait on the air in a
+//                 remote window; a local window's "Set amp to TCI mode"
+//                 waits on the air, and a click refused there shows the
+//                 remote window's reason. J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 #include "RfKitPage.h"
@@ -344,6 +350,12 @@ QWidget* RfKitPage::buildRf2ksTab()
                     [this, i] { m_touchedLabel[i] = true; });
         }
         refreshRemoteSettings();
+    } else if (m_model) {
+        // Parity mini-round (ruling a): the local TCI mode button waits on
+        // the air (refreshRemoteControls' local branch).
+        connect(m_model, &RadioModel::coreOnAirChanged,
+                this, &RfKitPage::refreshRemoteControls);
+        refreshRemoteControls();
     }
     return tab;
 }
@@ -409,7 +421,16 @@ void RfKitPage::refreshRemoteSettings()
 
 void RfKitPage::refreshRemoteControls()
 {
-    if (!isRemote() || !m_setTciBtn) {
+    if (!m_setTciBtn) {
+        return;
+    }
+    if (!isRemote()) {
+        // Parity mini-round (the operator's ruling a, 2026-09-25): TCI mode
+        // switches the amp, so a local window's waits on the air too, with
+        // the remote window's reason.
+        const bool onAir = m_model && m_model->isCoreOnAir();
+        m_setTciBtn->setEnabled(!onAir);
+        m_setTciBtn->setToolTip(onAir ? RadioModel::onAirReason() : QString());
         return;
     }
     const IStationLink* link = m_model->stationLink();
@@ -432,11 +453,11 @@ void RfKitPage::refreshRemoteControls()
     m_setTciBtn->setToolTip(tciReason.isEmpty() ? tr("Ask the Core to put the amplifier in TCI "
                                                      "mode.")
                                                 : tciReason);
-    // The address waits on the air; an older Core takes it only with Connect.
-    const QString addressReason = full && onAir ? RadioModel::onAirReason() : QString();
+    // Parity mini-round (rulings a and b): the address is only saved, so it
+    // does not wait on the air (an older Core takes it only with Connect).
     for (QWidget* w : std::initializer_list<QWidget*>{m_hostEdit, m_portSpin}) {
-        w->setEnabled(addressReason.isEmpty());
-        w->setToolTip(addressReason);
+        w->setEnabled(true);
+        w->setToolTip(QString());
     }
 }
 
@@ -452,6 +473,12 @@ void RfKitPage::onSetTciClicked()
         m_model->noteAccessoryRequestShownOnPage(outcome.commandId, this);
         m_remoteResult = outcome.sent ? QString() : OperatorReasonText::forDisplay(outcome.reason);
         refreshLiveStatus();
+        return;
+    }
+    // Parity mini-round (rulings a and c): refused on the air by the Core's
+    // own rule, with the remote window's reason.
+    if (m_model->refuseLocalAccessorySwitchOnAir(QStringLiteral("rfkit"))) {
+        refreshRemoteControls();
         return;
     }
     if (m_model->rfKitConnection()) {
@@ -574,13 +601,14 @@ void RfKitPage::saveRf2ksSettings()
         }
         // R-R3-49 (parity Task 10): a Host or Port changed here is kept on
         // the Core for its radio, as a local Save keeps it, without
-        // dialling (setRfKitAddress). Off the air only; an older Core takes
-        // the address only with Connect.
+        // dialling (setRfKitAddress), on the air too (parity mini-round,
+        // rulings a and b); an older Core takes the address only with
+        // Connect.
         IStationLink* link = m_model->stationLink();
         const RfKitModel* rfKit = m_model->rfKitModel();
         const QString host = m_hostEdit->text().trimmed();
         const int port = m_portSpin->value();
-        if (link && link->rfKitFullControlAvailable() && !m_model->isCoreOnAir() && rfKit
+        if (link && link->rfKitFullControlAvailable() && rfKit
             && (host != rfKit->configuredHost() || port != rfKit->configuredPort())) {
             const auto outcome = link->requestRfKitAddress(host, port);
             m_model->noteAccessoryRequestShownOnPage(outcome.commandId, this);

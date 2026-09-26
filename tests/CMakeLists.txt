@@ -6089,13 +6089,15 @@ target_link_libraries(tst_remote_peripherals PRIVATE Qt6::WebSockets)
 nereus_add_test(tst_station_pgxl_controller)
 # R-R3-49 (parity Task 9): a window's Power Genius OPERATE and STANDBY (the
 # local applet's operate=1 / operate=0 line through the Core's
-# PgxlConnection), the Core's LAN scan for it and its saved address; each
-# refused on the air with nothing sent to the (loopback) amp.
+# PgxlConnection), the Core's LAN scan for it and its saved address;
+# OPERATE and STANDBY refused on the air with nothing sent to the (loopback)
+# amp, the scan and the address taken there (parity mini-round).
 nereus_add_test(tst_pgxl_station_control)
 # R-R3-49 (parity Task 10): a window's RF-Kit RF2K-S OPERATE and STANDBY,
 # antenna, TCI mode (the local applet's and page's REST requests through the
-# Core's Rf2ksConnection) and saved address, each refused on the air with
-# nothing sent to the (in-process HTTP) amp; the Core's connection counts on
+# Core's Rf2ksConnection) and saved address; the switches refused on the air
+# with nothing sent to the (in-process HTTP) amp, the address taken there
+# (parity mini-round); the Core's connection counts on
 # accessoryData.
 nereus_add_test(tst_rfkit_station_control)
 target_link_libraries(tst_rfkit_station_control PRIVATE Qt6::Network)

@@ -1225,21 +1225,9 @@ void PeripheralsPage::wireStatusSignals()
             connect(tuner, &TunerModel::stationConnectionChanged,
                     this, &PeripheralsPage::refreshRemoteTgxlRow);
         }
-        // R-R3-49 (parity Task 8): Scan LAN and the address wait while the
-        // Core reports the radio on the air.
-        if (m_model) {
-            connect(m_model, &RadioModel::coreOnAirChanged,
-                    this, &PeripheralsPage::refreshRemoteTgxlRow);
-        }
         auto* amp = m_model ? m_model->amplifierModel() : nullptr;
         if (amp) {
             connect(amp, &AmplifierModel::stationConnectionChanged,
-                    this, &PeripheralsPage::refreshRemotePgxlRow);
-        }
-        // R-R3-49 (parity Task 9): the Power Genius row's Scan LAN and
-        // address wait while the Core reports the radio on the air too.
-        if (m_model) {
-            connect(m_model, &RadioModel::coreOnAirChanged,
                     this, &PeripheralsPage::refreshRemotePgxlRow);
         }
         if (m_model) {
@@ -1514,14 +1502,14 @@ void PeripheralsPage::refreshRemoteTgxlRow()
     const bool available = link && link->remoteTgxlConfigAvailable();
     // R-R3-49 (parity Task 8): on a Core at remoteTgxlControlVersion 4 the
     // Core scans its own network for this window, and keeps a typed
-    // address; both wait while the radio is on the air.
+    // address. Parity mini-round (the operator's rulings a and b): both
+    // only listen or save, so neither waits on the air, as in a local
+    // window.
     const bool full = link && link->tgxlFullControlAvailable();
-    const bool onAir = full && m_model->isCoreOnAir();
-    scanButton->setEnabled(full && !onAir);
+    scanButton->setEnabled(full);
     scanButton->setToolTip(!full
         ? tr("This Core does not scan for a Tuner Genius for this app. Updating the Core may help.")
-        : onAir ? RadioModel::onAirReason()
-                : tr("The Core listens for Tuner Genius announcements on its network for 3 seconds."));
+        : tr("The Core listens for Tuner Genius announcements on its network for 3 seconds."));
     const QString coreHost = tuner->configuredHost();
     const quint16 corePort = static_cast<quint16>(tuner->configuredPort());
     if (coreHost != m_lastDisplayedCoreTgxlHost
@@ -1544,13 +1532,11 @@ void PeripheralsPage::refreshRemoteTgxlRow()
     const bool connected = phase == TunerModel::ConnectionPhase::Connected;
     connectButton->setText(connected ? tr("Disconnect") : active ? tr("Cancel") : tr("Connect"));
     connectButton->setEnabled(available);
-    ipEdit->setEnabled(available && !connected && !active && !onAir);
-    portSpin->setEnabled(available && !connected && !active && !onAir);
-    ipEdit->setToolTip(onAir ? RadioModel::onAirReason()
-                             : tr("IP address or hostname of the Tuner Genius XL on your LAN. "
-                                  "Leave blank to disable auto-connect."));
-    portSpin->setToolTip(onAir ? RadioModel::onAirReason()
-                               : tr("TCP port the Tuner Genius XL listens on (default 9010)."));
+    ipEdit->setEnabled(available && !connected && !active);
+    portSpin->setEnabled(available && !connected && !active);
+    ipEdit->setToolTip(tr("IP address or hostname of the Tuner Genius XL on your LAN. "
+                          "Leave blank to disable auto-connect."));
+    portSpin->setToolTip(tr("TCP port the Tuner Genius XL listens on (default 9010)."));
     if (!available) {
         const QString reason = tr("This Core does not offer Tuner Genius XL control to this app.");
         status->setText(reason);
@@ -1600,14 +1586,13 @@ void PeripheralsPage::refreshRemotePgxlRow()
     const bool available = link && link->remotePgxlControlAvailable();
     // R-R3-49 (parity Task 9): on a Core at remotePgxlControlVersion 4 the
     // Core scans its own network for this window, and keeps a typed
-    // address; both wait while the radio is on the air.
+    // address. Parity mini-round (rulings a and b): neither waits on the
+    // air, as in a local window.
     const bool full = link && link->pgxlFullControlAvailable();
-    const bool onAir = full && m_model->isCoreOnAir();
-    scanButton->setEnabled(full && !onAir);
+    scanButton->setEnabled(full);
     scanButton->setToolTip(!full
         ? tr("This Core does not scan for a Power Genius for this app. Updating the Core may help.")
-        : onAir ? RadioModel::onAirReason()
-                : tr("The Core listens for Power Genius announcements on its network for 3 seconds."));
+        : tr("The Core listens for Power Genius announcements on its network for 3 seconds."));
     // The Core's address fills the fields only when it changes, so an
     // unsent draft survives a phase or error update.
     const QString coreHost = amp->configuredHost();
@@ -1630,13 +1615,11 @@ void PeripheralsPage::refreshRemotePgxlRow()
     const bool connected = phase == Phase::Connected;
     connectButton->setText(connected ? tr("Disconnect") : active ? tr("Cancel") : tr("Connect"));
     connectButton->setEnabled(available);
-    ipEdit->setEnabled(available && !connected && !active && !onAir);
-    portSpin->setEnabled(available && !connected && !active && !onAir);
-    ipEdit->setToolTip(onAir ? RadioModel::onAirReason()
-                             : tr("IP address or hostname of the Power Genius XL on your LAN. "
-                                  "Leave blank to disable auto-connect."));
-    portSpin->setToolTip(onAir ? RadioModel::onAirReason()
-                               : tr("TCP port the Power Genius XL listens on (default 9008)."));
+    ipEdit->setEnabled(available && !connected && !active);
+    portSpin->setEnabled(available && !connected && !active);
+    ipEdit->setToolTip(tr("IP address or hostname of the Power Genius XL on your LAN. "
+                          "Leave blank to disable auto-connect."));
+    portSpin->setToolTip(tr("TCP port the Power Genius XL listens on (default 9008)."));
     if (!available) {
         const QString reason = tr("This Core does not offer Power Genius XL control to this app.");
         status->setText(reason);
@@ -1676,7 +1659,7 @@ void PeripheralsPage::onScanLan(int rowIdx)
         // Power Genius row does the same (scanPgxlLan, setPgxlAddress).
         IStationLink* link = m_model ? m_model->stationLink() : nullptr;
         if (rowIdx == 1) {
-            if (!link || !link->pgxlFullControlAvailable() || m_model->isCoreOnAir()) {
+            if (!link || !link->pgxlFullControlAvailable()) {
                 return;
             }
             auto* pgxlIp = qobject_cast<QLineEdit*>(m_grid->itemAtPosition(2, 1)->widget());
@@ -1698,8 +1681,7 @@ void PeripheralsPage::onScanLan(int rowIdx)
             pgxlDialog->show();
             return;
         }
-        if (rowIdx != 0 || !link || !link->tgxlFullControlAvailable()
-            || m_model->isCoreOnAir()) {
+        if (rowIdx != 0 || !link || !link->tgxlFullControlAvailable()) {
             return;
         }
         auto* ipEdit = qobject_cast<QLineEdit*>(m_grid->itemAtPosition(1, 1)->widget());

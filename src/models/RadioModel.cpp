@@ -270,6 +270,12 @@
 //                does not leave the next connection's antenna changes on
 //                the TX routing. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity mini-round, the operator's rulings a to
+//                c): Scan LAN and the saved amp and tuner addresses go
+//                ahead on the air; refuseLocalAccessorySwitchOnAir gives a
+//                local click refused on the air the remote window's
+//                reason. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 //=================================================================
@@ -3953,6 +3959,21 @@ bool RadioModel::stationOnAirRefusal(QString* reason) const
     return onAir;
 }
 
+bool RadioModel::refuseLocalAccessorySwitchOnAir(const QString& device)
+{
+    if (m_role == Role::Remote) {
+        return false;
+    }
+    QString reason;
+    if (!stationOnAirRefusal(&reason)) {
+        return false;
+    }
+    // Parity mini-round (ruling c): the words a remote window's Core sends
+    // back for the same click, on the route MainWindow shows them from.
+    emit accessoryRequestRefused(device, reason, false);
+    return true;
+}
+
 // ---------------------------------------------------------------------------
 // R-R3-49 (parity Task 2, transmitSettingsVersion 2): the TX applet's Tune
 // Power slider from a window. The Core does what the local slider does
@@ -5009,12 +5030,11 @@ bool RadioModel::moveTgxlRelayForStation(int relay, int direction, QString* reas
 // R-R3-49 (parity Task 8): the Core's own Scan LAN for a window. Listening
 // sends nothing; the answer is what the Core heard in the local dialog's
 // window, Tuner Genius announcements only, from the station network.
+// Parity mini-round (the operator's rulings a and b, 2026-09-25): it only
+// listens, so it goes ahead on the air, as a local window's Scan LAN does.
 bool RadioModel::scanTgxlLanForStation(TgxlLanScanDone done, QString* reason)
 {
     if (m_role != Role::Local || !m_stationTgxl) { return refuseNoStationDevice(reason); }
-    if (stationOnAirRefusal(reason)) {
-        return false;
-    }
     // StationTgxlController admits the same two products.
     startStationLanScan(QStringLiteral("tgxlLanScan"),
                         {QStringLiteral("TunerGenius"), QStringLiteral("TunerGeniusXL")},
@@ -5111,13 +5131,12 @@ bool RadioModel::setPgxlOperateForStation(bool on, QString* reason)
 
 // R-R3-49 (parity Task 9): the Core's own Scan LAN for a window's Power
 // Genius row: Power Genius announcements only.
+// Parity mini-round (rulings a and b): it only listens, so it goes ahead
+// on the air, as a local window's Scan LAN does.
 bool RadioModel::scanPgxlLanForStation(std::function<void(const QString&)> done,
                                        QString* reason)
 {
     if (m_role != Role::Local || !m_stationPgxl) { return refuseNoStationDevice(reason); }
-    if (stationOnAirRefusal(reason)) {
-        return false;
-    }
     startStationLanScan(QStringLiteral("pgxlLanScan"),
                         {StationPgxlController::expectedProduct()},
                         m_pgxlLanScanWindowMs, std::move(done));
@@ -5185,9 +5204,8 @@ bool RadioModel::setTgxlAddressForStation(const QString& inputHost, int port, QS
     if (m_role != Role::Local || !m_stationTgxl) {
         return refuse(QStringLiteral("This Core cannot change its amplifier and tuner settings."));
     }
-    if (stationOnAirRefusal(reason)) {
-        return false;
-    }
+    // Parity mini-round (rulings a and b): saving switches nothing, so it
+    // goes ahead on the air, as a local window's Host and Port do.
     if (currentRadioMac().isEmpty()) {
         return refuse(QStringLiteral("Connect the Core to a radio before setting up its Tuner Genius XL."));
     }
@@ -5261,9 +5279,8 @@ bool RadioModel::setPgxlAddressForStation(const QString& inputHost, int port, QS
     if (m_role != Role::Local || !m_stationPgxl) {
         return refuse(QStringLiteral("This Core cannot change its amplifier and tuner settings."));
     }
-    if (stationOnAirRefusal(reason)) {
-        return false;
-    }
+    // Parity mini-round (rulings a and b): saving switches nothing, so it
+    // goes ahead on the air, as a local window's Host and Port do.
     if (currentRadioMac().isEmpty()) {
         return refuse(QStringLiteral("Connect the Core to a radio before setting up its Power Genius."));
     }
@@ -5623,14 +5640,18 @@ bool RadioModel::setRfKitTciModeForStation(QString* reason)
 }
 
 // configureRfKit's checks and reasons, less the dial and the switch check
-// (saving dials nothing).
+// (saving dials nothing). Parity mini-round (rulings a and b): saving
+// switches nothing, so it goes ahead on the air, as a local window's Save
+// does; OPERATE, the antennas and TCI mode above still wait.
 bool RadioModel::setRfKitAddressForStation(const QString& inputHost, int port, QString* reason)
 {
     const auto refuse = [reason](const QString& text) {
         if (reason) { *reason = text; }
         return false;
     };
-    if (!stationRfKitControlAllowed(reason)) { return false; }
+    if (m_role != Role::Local || !m_stationRfKit) {
+        return refuse(QStringLiteral("This Core cannot change its amplifier and tuner settings."));
+    }
     if (currentRadioMac().isEmpty()) {
         return refuse(QStringLiteral("Connect the Core to a radio before setting up its RF-Kit "
                                      "amplifier."));

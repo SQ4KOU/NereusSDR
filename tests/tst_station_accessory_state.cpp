@@ -597,6 +597,8 @@ private slots:
             if (owns) {
                 station.enableStationAccessoryIdentity();
             }
+            station.setTgxlLanScanWindowMsForTest(50);
+            station.setPgxlLanScanWindowMsForTest(50);
             // The Core's amp has sent one reading (the captured operate line).
             station.amplifierModel()->applyStatusFrame(
                 {{QStringLiteral("state"), QStringLiteral("OPERATE")},
@@ -772,6 +774,8 @@ private slots:
             if (owns) {
                 station.enableStationAccessoryIdentity();
             }
+            station.setTgxlLanScanWindowMsForTest(50);
+            station.setPgxlLanScanWindowMsForTest(50);
             AppSettings settings(dir.filePath(QStringLiteral("v-%1-%2.settings")
                                                   .arg(owns).arg(minor)));
             StationServer server(&station, settings, dir.path());
@@ -863,6 +867,8 @@ private slots:
             if (owns) {
                 station.enableStationAccessoryIdentity();
             }
+            station.setTgxlLanScanWindowMsForTest(50);
+            station.setPgxlLanScanWindowMsForTest(50);
             AppSettings settings(dir.filePath(QStringLiteral("t-%1-%2-%3.settings")
                                                   .arg(owns).arg(minor).arg(onAir)));
             StationServer server(&station, settings, dir.path());
@@ -934,8 +940,10 @@ private slots:
     // nudge, the Core's LAN scan and the saved address on the wire. An older
     // app, and a Core that does not own its accessories, are refused in
     // bfab2b9e's words; a malformed request is not understood; the nudge
-    // with no tuner and the address with no radio say so; on the air each
-    // is refused, on a receive-only Core as well.
+    // with no tuner and the address with no radio say so; on the air the
+    // nudge is refused, on a receive-only Core as well, while the scan and
+    // the address are taken (parity mini-round, the operator's rulings a
+    // and b: they only listen or save).
     void tunerRelayScanAndAddressVerbsNeedVersionFourAndAQuietRadio()
     {
         QTemporaryDir dir;
@@ -946,6 +954,8 @@ private slots:
             if (owns) {
                 station.enableStationAccessoryIdentity();
             }
+            station.setTgxlLanScanWindowMsForTest(50);
+            station.setPgxlLanScanWindowMsForTest(50);
             AppSettings settings(dir.filePath(QStringLiteral("r-%1-%2-%3.settings")
                                                   .arg(owns).arg(minor).arg(onAir)));
             StationServer server(&station, settings, dir.path());
@@ -993,11 +1003,12 @@ private slots:
         QCOMPARE(results(false, kRadioIdentitySessionProtocolMinor, false, right),
                  (QStringList{notOwning, notOwning, notOwning}));
         const QString onAir = QStringLiteral("The radio is on the air. Try again when it stops.");
-        QCOMPARE(results(true, kRadioIdentitySessionProtocolMinor, true, right),
-                 (QStringList{onAir, onAir, onAir}));
         const QString noTuner = QStringLiteral("The Core is not connected to the Tuner Genius.");
         const QString noRadio = QStringLiteral("Connect the Core to a radio before setting up its "
                                                "Tuner Genius XL.");
+        // The scan answers when its window ends, after the other two.
+        QCOMPARE(results(true, kRadioIdentitySessionProtocolMinor, true, right),
+                 (QStringList{onAir, noRadio, QStringLiteral("accepted")}));
         const QStringList wrong = results(true, kRadioIdentitySessionProtocolMinor, false, {
             right.at(0),
             right.at(2),
@@ -1035,6 +1046,8 @@ private slots:
             if (owns) {
                 station.enableStationAccessoryIdentity();
             }
+            station.setTgxlLanScanWindowMsForTest(50);
+            station.setPgxlLanScanWindowMsForTest(50);
             AppSettings settings(dir.filePath(QStringLiteral("p-%1-%2-%3.settings")
                                                   .arg(owns).arg(minor).arg(onAir)));
             StationServer server(&station, settings, dir.path());
@@ -1084,11 +1097,13 @@ private slots:
         QCOMPARE(results(false, kRadioIdentitySessionProtocolMinor, false, right),
                  (QStringList{notOwning, notOwning, notOwning}));
         const QString onAir = QStringLiteral("The radio is on the air. Try again when it stops.");
-        QCOMPARE(results(true, kRadioIdentitySessionProtocolMinor, true, right),
-                 (QStringList{onAir, onAir, onAir}));
         const QString noAmp = QStringLiteral("The Core is not connected to the Power Genius.");
         const QString noRadio = QStringLiteral("Connect the Core to a radio before setting up its "
                                                "Power Genius.");
+        // Parity mini-round (rulings a and b): OPERATE waits on the air; the
+        // scan (answered when its window ends) and the address do not.
+        QCOMPARE(results(true, kRadioIdentitySessionProtocolMinor, true, right),
+                 (QStringList{onAir, noRadio, QStringLiteral("accepted")}));
         const QStringList wrong = results(true, kRadioIdentitySessionProtocolMinor, false, {
             right.at(0),
             right.at(2),
@@ -1112,8 +1127,9 @@ private slots:
 
     // R-R3-49 (parity Task 10): the RF-Kit's OPERATE, antenna, TCI mode and
     // saved address on the wire: refused below minor 11, on a Core that
-    // does not own its accessories, on the air, and with the wrong
-    // arguments; nothing reaches an amp.
+    // does not own its accessories, on the air (the switches; the address
+    // is taken there, parity mini-round), and with the wrong arguments;
+    // nothing reaches an amp.
     void rfKitOperateAntennaTciAndAddressVerbsNeedVersionFourAndAQuietRadio()
     {
         QTemporaryDir dir;
@@ -1124,6 +1140,8 @@ private slots:
             if (owns) {
                 station.enableStationAccessoryIdentity();
             }
+            station.setTgxlLanScanWindowMsForTest(50);
+            station.setPgxlLanScanWindowMsForTest(50);
             AppSettings settings(dir.filePath(QStringLiteral("r-%1-%2-%3.settings")
                                                   .arg(owns).arg(minor).arg(onAir)));
             StationServer server(&station, settings, dir.path());
@@ -1174,11 +1192,13 @@ private slots:
         QCOMPARE(results(false, kRadioIdentitySessionProtocolMinor, false, right),
                  (QStringList{notOwning, notOwning, notOwning, notOwning}));
         const QString onAir = QStringLiteral("The radio is on the air. Try again when it stops.");
-        QCOMPARE(results(true, kRadioIdentitySessionProtocolMinor, true, right),
-                 (QStringList{onAir, onAir, onAir, onAir}));
         const QString noAmp = QStringLiteral("The Core is not connected to the RF-Kit amplifier.");
         const QString noRadio = QStringLiteral("Connect the Core to a radio before setting up its "
                                                "RF-Kit amplifier.");
+        // Parity mini-round (rulings a and b): the three switches wait on
+        // the air; the address does not (it only saves).
+        QCOMPARE(results(true, kRadioIdentitySessionProtocolMinor, true, right),
+                 (QStringList{onAir, onAir, onAir, noRadio}));
         const QStringList wrong = results(true, kRadioIdentitySessionProtocolMinor, false, {
             right.at(0),
             right.at(1),

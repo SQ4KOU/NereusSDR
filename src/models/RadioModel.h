@@ -136,6 +136,10 @@
 //                setRfKitAddressForStation (remoteRfKitControlVersion 4).
 //                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (parity mini-round, the operator's rulings a to
+//                c): refuseLocalAccessorySwitchOnAir; Scan LAN and the
+//                saved amp and tuner addresses go ahead on the air.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1751,6 +1755,16 @@ public:
     bool stationOnAirRefusal(QString* reason) const;
     // The sentence stationOnAirRefusal gives, for a window's own gate.
     static QString onAirReason();
+    // Parity mini-round (the operator's ruling c, 2026-09-25): a local
+    // window's own amp or tuner switch (`device` "pgxl", "tgxl" or
+    // "rfkit"), checked by stationOnAirRefusal. Its buttons are greyed by
+    // isCoreOnAir(), which can already read false while this still refuses
+    // (the hand-back to receive after MOX, the transmit model's MOX latch).
+    // True when refused: the click then goes out on accessoryRequestRefused
+    // with the reason a remote window gets from its Core, which MainWindow
+    // shows the same way, never a silent drop. False otherwise, and always
+    // false in a remote window, which asks its Core instead.
+    bool refuseLocalAccessorySwitchOnAir(const QString& device);
 
     // R-R3-49 (parity Task 7): PureSignal's operational permission. True
     // on a station, a receive-only Core included (a window arms PureSignal
@@ -2052,8 +2066,10 @@ public:
     // saves PGXL_ManualIp and PGXL_ManualPort for the Core's radio without
     // dialling, with configurePgxl's address checks and reasons. A blank
     // host is saved (group B fix wave, I1), as a local window's blank Host
-    // stops auto-connect. Refused while the radio is on the air. The `amplifier` object's configured
-    // address follows while the Core is not connecting or connected.
+    // stops auto-connect. It switches nothing, so it goes ahead on the air
+    // (parity mini-round, rulings a and b). The `amplifier` object's
+    // configured address follows while the Core is not connecting or
+    // connected.
     bool setPgxlAddressForStation(const QString& host, int port, QString* reason);
     // R-R3-47 / R-R3-22: the Core's RF-Kit RF2K-S. configure saves the
     // address for the Core's radio and starts identifying what answers
@@ -2081,7 +2097,8 @@ public:
     // dialling, with configureRfKit's address checks and reasons (the
     // RF-Kit switch is not an address check: saving dials nothing). A
     // blank host is saved (group B fix wave, I1), as a local window's
-    // blank Host stops auto-connect. Refused while the radio is on the air. The `rfkit` object's
+    // blank Host stops auto-connect. It switches nothing, so it goes ahead
+    // on the air (parity mini-round, rulings a and b). The `rfkit` object's
     // configured address follows while the Core is not connecting or
     // connected.
     bool setRfKitAddressForStation(const QString& host, int port, QString* reason);
@@ -2279,8 +2296,9 @@ public:
     // for the local Scan LAN dialog's own window (kTgxlLanScanWindowMs) and
     // calls `done` once with a JSON array of {"address","port","model",
     // "serial","nickname"}. Refused on a Core that does not own its
-    // accessories and while the radio is on the air; `done` is not called
-    // then. Nothing is sent to any device.
+    // accessories; `done` is not called then. It only listens, so it goes
+    // ahead on the air (parity mini-round, rulings a and b). Nothing is
+    // sent to any device.
     using TgxlLanScanDone = std::function<void(const QString& devicesJson)>;
     bool scanTgxlLanForStation(TgxlLanScanDone done, QString* reason);
     static constexpr int kTgxlLanScanWindowMs = 3000;
@@ -2288,7 +2306,8 @@ public:
     // saves TGXL_ManualIp and TGXL_ManualPort for the Core's radio without
     // dialling, with configureTgxl's address checks and reasons. A blank
     // host is saved (group B fix wave, I1), as a local window's blank Host
-    // stops auto-connect. Refused while the radio is on the air. The `tuner` object's configured
+    // stops auto-connect. It switches nothing, so it goes ahead on the air
+    // (parity mini-round, rulings a and b). The `tuner` object's configured
     // address follows while the Core is not connecting or connected.
     bool setTgxlAddressForStation(const QString& host, int port, QString* reason);
     // R-R3-49 (parity Task 2, transmitSettingsVersion 2): a window's Tune
@@ -3611,6 +3630,9 @@ signals:
     void sliceAddRejected(QString reason);
     /// R-R3-47 / R-R3-22: the Core refused a request for an accessory's own
     /// settings (`device` "pgxl" or "tgxl"); `reason` is the Core's words.
+    /// Parity mini-round (ruling c): a local window's own switch refused on
+    /// the air arrives here too, with the same words
+    /// (refuseLocalAccessorySwitchOnAir).
     void accessoryRequestRefused(const QString& device, const QString& reason,
                                  bool shownOnPage);
     /// Remote window: a Core station setting changed (empty: a snapshot).

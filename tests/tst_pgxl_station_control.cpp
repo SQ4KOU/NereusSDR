@@ -196,20 +196,30 @@ private slots:
 
         const QString onAir = QStringLiteral("The radio is on the air. Try again when it stops.");
         QString reason;
-        bool scanAnswered = false;
         const auto expectRefused = [&] {
             QVERIFY(!model.setPgxlOperateForStation(true, &reason));
             QCOMPARE(reason, onAir);
             QVERIFY(!model.setPgxlOperateForStation(false, &reason));
             QCOMPARE(reason, onAir);
-            QVERIFY(!model.scanPgxlLanForStation(
+        };
+        // Parity mini-round (rulings a and b): Scan LAN only listens and the
+        // address is only saved, so both go ahead on the air, as a local
+        // window's do; neither switches the amp nor sends it anything.
+        const auto expectListenAndSaveTaken = [&](const QString& host) {
+            bool scanAnswered = false;
+            QVERIFY(model.scanPgxlLanForStation(
                 [&scanAnswered](const QString&) { scanAnswered = true; }, &reason));
-            QCOMPARE(reason, onAir);
-            QVERIFY(!model.setPgxlAddressForStation(QStringLiteral("192.0.2.9"), 9008, &reason));
-            QCOMPARE(reason, onAir);
+            QVERIFY(reason.isEmpty());
+            QVERIFY(model.setPgxlAddressForStation(host, 9008, &reason));
+            QVERIFY(reason.isEmpty());
+            QCOMPARE(model.peripheralValue(QStringLiteral("PGXL_ManualIp")), host);
+            QTRY_VERIFY(scanAnswered);
+            QTRY_VERIFY(model.findChild<LanDiscovery*>(QStringLiteral("pgxlLanScan")) == nullptr);
         };
         model.transmitModel().setMox(true);
         expectRefused();
+        if (QTest::currentTestFailed()) { return; }
+        expectListenAndSaveTaken(QStringLiteral("192.0.2.7"));
         if (QTest::currentTestFailed()) { return; }
         model.transmitModel().setMox(false);
         model.transmitModel().setTune(true);
@@ -253,10 +263,6 @@ private slots:
         QTRY_VERIFY(mox->state() == MoxState::Rx);
         QTest::qWait(100);
         QVERIFY(operateLines().isEmpty());
-        QVERIFY(!scanAnswered);
-        QVERIFY(model.findChild<LanDiscovery*>(QStringLiteral("pgxlLanScan")) == nullptr);
-        QVERIFY(model.peripheralValue(QStringLiteral("PGXL_ManualIp"))
-                != QStringLiteral("192.0.2.9"));
 
         // Off the air, on a receive-only Core: the local applet's line.
         QVERIFY(model.receiveOnlyStationPolicy());
