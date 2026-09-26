@@ -63,6 +63,8 @@
 #include <QProcess>
 #include <QRandomGenerator>
 #include <QSignalSpy>
+#include <QSslCertificate>
+#include <QSslConfiguration>
 #include <QSslSocket>
 #include <QStandardPaths>
 #include <QTcpServer>
@@ -102,6 +104,11 @@
 #include "models/RadioModel.h"
 
 #include "fakes/UpgradedCoreToken.h"
+
+#include <openssl/evp.h>
+#include <openssl/pem.h>
+#include <openssl/x509.h>
+#include <openssl/x509v3.h>
 
 using namespace NereusSDR;
 namespace Wire = NereusSDR::RendezvousWire;
@@ -1100,6 +1107,98 @@ bool hasUsableIpv6()
     }
     return false;
 }
+
+// A certificate for 127.0.0.1 (in its subjectAltName) and its key, made at
+// run time and written where a Core's CertificateStore loads them, so a
+// test can add the certificate to the trust store and have a handshake to
+// that Core raise no TLS error at all. RSA, as CertificateStore uses.
+QSslCertificate writeLoopbackCertificate(const QString& directory)
+{
+    using KeyPtr = std::unique_ptr<EVP_PKEY, decltype(&EVP_PKEY_free)>;
+    using CertPtr = std::unique_ptr<X509, decltype(&X509_free)>;
+    using BioPtr = std::unique_ptr<BIO, decltype(&BIO_free)>;
+    KeyPtr key(EVP_RSA_gen(2048), &EVP_PKEY_free);
+    CertPtr cert(X509_new(), &X509_free);
+    if (!key || !cert || X509_set_version(cert.get(), 2) != 1
+        || ASN1_INTEGER_set_int64(X509_get_serialNumber(cert.get()),
+                                  QRandomGenerator::system()->bounded(1, 1 << 30))
+               != 1
+        || !X509_gmtime_adj(X509_getm_notBefore(cert.get()), -60)
+        || !X509_gmtime_adj(X509_getm_notAfter(cert.get()), 24 * 60 * 60)
+        || X509_set_pubkey(cert.get(), key.get()) != 1) {
+        return QSslCertificate();
+    }
+    X509_NAME* name = X509_get_subject_name(cert.get());
+    if (X509_NAME_add_entry_by_txt(name, "CN", MBSTRING_ASC,
+                                   reinterpret_cast<const unsigned char*>("127.0.0.1"), -1, -1, 0)
+            != 1
+        || X509_set_issuer_name(cert.get(), name) != 1) {
+        return QSslCertificate();
+    }
+    X509V3_CTX context;
+    X509V3_set_ctx(&context, cert.get(), cert.get(), nullptr, nullptr, 0);
+    const std::pair<int, const char*> extensions[] = {
+        {NID_basic_constraints, "critical,CA:TRUE"},
+        {NID_key_usage, "critical,digitalSignature,keyEncipherment,keyCertSign"},
+        {NID_ext_key_usage, "serverAuth"},
+        {NID_subject_alt_name, "IP:127.0.0.1"},
+    };
+    for (const auto& [nid, value] : extensions) {
+        X509_EXTENSION* extension = X509V3_EXT_conf_nid(nullptr, &context, nid, value);
+        const bool added = extension && X509_add_ext(cert.get(), extension, -1) == 1;
+        X509_EXTENSION_free(extension);
+        if (!added) {
+            return QSslCertificate();
+        }
+    }
+    if (X509_sign(cert.get(), key.get(), EVP_sha256()) == 0) {
+        return QSslCertificate();
+    }
+    BioPtr certBio(BIO_new(BIO_s_mem()), &BIO_free);
+    BioPtr keyBio(BIO_new(BIO_s_mem()), &BIO_free);
+    if (!certBio || !keyBio || PEM_write_bio_X509(certBio.get(), cert.get()) != 1
+        || PEM_write_bio_PrivateKey(keyBio.get(), key.get(), nullptr, nullptr, 0, nullptr,
+                                    nullptr)
+               != 1) {
+        return QSslCertificate();
+    }
+    const auto contents = [](BIO* bio) {
+        char* data = nullptr;
+        const long length = BIO_get_mem_data(bio, &data);
+        return QByteArray(data, static_cast<qsizetype>(length));
+    };
+    const QByteArray certPem = contents(certBio.get());
+    const std::pair<QString, QByteArray> files[] = {
+        {QStringLiteral("tls-cert.pem"), certPem},
+        {QStringLiteral("tls-key.pem"), contents(keyBio.get())},
+    };
+    for (const auto& [file, pem] : files) {
+        QFile out(QDir(directory).filePath(file));
+        if (!out.open(QIODevice::WriteOnly | QIODevice::Truncate) || out.write(pem) != pem.size()
+            || !out.setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner)) {
+            return QSslCertificate();
+        }
+    }
+    return QSslCertificate(certPem, QSsl::Pem);
+}
+
+// Adds a certificate authority to the trust store for as long as it lives.
+class TrustedAuthority {
+public:
+    explicit TrustedAuthority(const QSslCertificate& authority)
+        : m_saved(QSslConfiguration::defaultConfiguration())
+    {
+        QSslConfiguration configuration = m_saved;
+        configuration.addCaCertificate(authority);
+        QSslConfiguration::setDefaultConfiguration(configuration);
+    }
+    ~TrustedAuthority() { QSslConfiguration::setDefaultConfiguration(m_saved); }
+    TrustedAuthority(const TrustedAuthority&) = delete;
+    TrustedAuthority& operator=(const TrustedAuthority&) = delete;
+
+private:
+    QSslConfiguration m_saved;
+};
 
 } // namespace
 
@@ -2141,6 +2240,62 @@ private slots:
                  QStringLiteral("Station certificate fingerprint does not match the saved pin."));
         QVERIFY(!alone.isReconnectPending());
         QVERIFY(!other.server->hasAuthenticatedSession());
+    }
+
+    // The follow-up to the Task 27 re-review (new Minor 3): the other path
+    // to the same refusal. The other computer's certificate is one the
+    // trust store accepts (a certificate for 127.0.0.1 from an authority
+    // added to it), so the handshake raises no TLS error and the mismatch
+    // is caught when the socket connects (StationClient's connected()
+    // handler), not in the sslErrors handler. It still gives way to the
+    // next address with the token unsent.
+    void aPinMismatchOnATrustedCertificateGivesWayWithTheTokenUnsent()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("No TLS backend");
+        }
+        Core core(/*upgraded=*/true);
+        Core other(/*upgraded=*/true, core.securityDir.path());
+        other.server.reset();
+        const QSslCertificate trusted = writeLoopbackCertificate(other.securityDir.path());
+        QVERIFY(!trusted.isNull());
+        other.server = std::make_unique<StationServer>(other.model.get(), *other.settings,
+                                                       other.securityDir.path());
+        other.server->setHeartbeatIntervalMs(0);
+        QCOMPARE(other.server->token(), core.server->token());
+        QVERIFY(core.server->certificateFingerprint() != other.server->certificateFingerprint());
+        QVERIFY(core.server->listen(QHostAddress::LocalHost, 0));
+        QVERIFY(other.server->listen(QHostAddress::LocalHost, 0));
+        const TrustedAuthority authority(trusted);
+
+        // The trust store accepts the other computer: a handshake to it
+        // raises no TLS error.
+        {
+            QWebSocket probe;
+            QSignalSpy errors(&probe, &QWebSocket::sslErrors);
+            QSignalSpy opened(&probe, &QWebSocket::connected);
+            probe.open(other.url());
+            QTRY_VERIFY_WITH_TIMEOUT(!opened.isEmpty(), 10000);
+            QCOMPARE(errors.size(), 0);
+            probe.abort();
+        }
+
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient window(&remote, &proxy);
+        window.setCachedAddresses({other.url()});
+        QSignalSpy endedEarly(&window, &StationClient::sessionEnded);
+        window.connectToStation(core.url(), core.server->token(),
+                                core.server->certificateFingerprint(), false);
+        QTRY_VERIFY_WITH_TIMEOUT(window.isHandshakeComplete(), 20000);
+        QCOMPARE(window.connectedUrl(), core.url());
+        const StationConnectionAttempt attempt = window.connectionAttempt();
+        QCOMPARE(attempt.tries.size(), 2);
+        QCOMPARE(attempt.tries.at(0).outcome, StationConnectionAttempt::Outcome::NotThisCore);
+        QCOMPARE(attempt.tries.at(1).outcome, StationConnectionAttempt::Outcome::Connected);
+        QVERIFY(!other.server->hasAuthenticatedSession());
+        QCOMPARE(endedEarly.size(), 0);
+        window.disconnectFromStation(QStringLiteral("test done"));
     }
 
     void pathsAreNamedForTheOperator()
