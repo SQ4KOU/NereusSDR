@@ -87,6 +87,10 @@
 //                 AGC readings (adcPeakDbfs, adcAverageDbfs, agcGainDb,
 //                 agcPeakDb, agcAverageDb) Outbound. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-R3-49 / R-R3-21 / R-R3-40 (parity Task 16): RadioModel
+//                 noiseReductionMethods and dspOptionsLastApplyMs, SliceModel
+//                 minNotchWidthHz, all Outbound. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -151,7 +155,7 @@ namespace {
 // WRITE. Listing them keeps the table total, so the guard can name a
 // newly added property instead of silently accepting it.
 const MirrorPolicy::Entry kEntries[] = {
-    // ---- SliceModel (149 entries) ----
+    // ---- SliceModel (150 entries) ----
     { "SliceModel", "frequency", MirrorDirection::Bidirectional },
     { "SliceModel", "dspMode", MirrorDirection::Bidirectional },
     { "SliceModel", "filterLow", MirrorDirection::Bidirectional },
@@ -343,6 +347,9 @@ const MirrorPolicy::Entry kEntries[] = {
     { "SliceModel", "agcGainDb", MirrorDirection::Outbound },
     { "SliceModel", "agcPeakDb", MirrorDirection::Outbound },
     { "SliceModel", "agcAverageDb", MirrorDirection::Outbound },
+    // R-R3-49 (parity Task 16, dspInfoVersion 1): the Core's channel's
+    // minimum notch width (RadioModel::refreshSliceMinNotchWidths).
+    { "SliceModel", "minNotchWidthHz", MirrorDirection::Outbound },
 
     // ---- TransmitModel (85 entries) ----
     { "TransmitModel", "mox", MirrorDirection::Bidirectional },
@@ -767,7 +774,7 @@ const MirrorPolicy::Entry kEntries[] = {
     { "PureSignalSettings", "hardwarePeakOverride", MirrorDirection::Bidirectional },
     { "PureSignalSettings", "lastLoadError", MirrorDirection::Outbound },
 
-    // ---- RadioModel (24 entries) ----
+    // ---- RadioModel (26 entries) ----
     { "RadioModel", "settingsSaveError", MirrorDirection::Outbound },
     { "RadioModel", "receiveLayoutRestoreState", MirrorDirection::Outbound },
     { "RadioModel", "receiveLayoutRestoreMessage", MirrorDirection::Outbound },
@@ -803,6 +810,11 @@ const MirrorPolicy::Entry kEntries[] = {
     { "RadioModel", "transmitting", MirrorDirection::Outbound },
     // R-R3-49 (parity Task 6): the Core's TX inhibit, Core to window only.
     { "RadioModel", "txInhibited", MirrorDirection::Outbound },
+    // R-R3-49 / R-R3-21 / R-R3-40 (parity Task 16, dspInfoVersion 1): the
+    // noise reduction the Core can run and its last DSP Options apply time,
+    // Core to window only.
+    { "RadioModel", "noiseReductionMethods", MirrorDirection::Outbound },
+    { "RadioModel", "dspOptionsLastApplyMs", MirrorDirection::Outbound },
 
     // ---- PanadapterModel (4 entries) ----
     { "PanadapterModel", "centerFrequency", MirrorDirection::Bidirectional },

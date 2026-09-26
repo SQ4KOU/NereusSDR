@@ -121,6 +121,12 @@
 //                Multimeter polling delay applied to the meter pump when a
 //                window changes it. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-26 - R-R3-49 / R-R3-21 / R-R3-40 (parity Task 16): the DSP
+//                facts a window reads from its Core: noiseReductionMethods,
+//                dspOptionsLastApplyMs, each slice's minNotchWidthHz and
+//                the filter curve (filterResponseForStation,
+//                coreFilterResponse). NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-24 - R-R3-21: before a pool is sized, the slice-limit refusal
 //                names the Core only on a Core (NereusSDR in a window with
 //                no Core); stale slice-limit comments corrected.
@@ -488,6 +494,15 @@ class RadioModel : public QObject {
     Q_PROPERTY(int bandOutputsByte READ bandOutputsByte NOTIFY bandOutputsChanged)
     Q_PROPERTY(int bandOutputsBand READ bandOutputsBand NOTIFY bandOutputsChanged)
     Q_PROPERTY(bool bandOutputsKeyed READ bandOutputsKeyed NOTIFY bandOutputsChanged)
+    // R-R3-49 / R-R3-21 / R-R3-40 (remote-window parity Task 16, dspInfoVersion
+    // 1): the noise reduction this Core's build and computer can run, comma
+    // separated from nr1, nr2, nr3, nr4, dfnr, mnr and anf, as RxChannel's
+    // own build and platform checks decide; and how long the Core's last DSP
+    // Options apply took, in ms (0 before any). Core to window only.
+    Q_PROPERTY(QString noiseReductionMethods READ noiseReductionMethods
+                   NOTIFY noiseReductionMethodsChanged)
+    Q_PROPERTY(qint64 dspOptionsLastApplyMs READ dspOptionsLastApplyMs
+                   NOTIFY dspOptionsLastApplyMsChanged)
 
 
 public:
@@ -1092,6 +1107,62 @@ public:
     // R-R3-49 (parity Task 6): the radio's TX inhibit. Local: this model's
     // TxInhibitMonitor. Remote: the Core's, as the window last heard it.
     bool isTxInhibited() const;
+
+    // ── Remote-window parity Task 16 (R-R3-49, R-R3-21, R-R3-40) ──────────
+    // The noise reduction this station runs: a local model's own build and
+    // computer (localNoiseReductionMethods), a remote window's Core as it
+    // last said (empty until it does, and on a Core below dspInfoVersion 1).
+    QString noiseReductionMethods() const;
+    // nr1, nr2, nr3, nr4 and anf with WDSP; dfnr with HAVE_DFNR and its model
+    // found (RxChannel's DeepFilterFilter checks); mnr with HAVE_MNR (macOS).
+    static QString localNoiseReductionMethods();
+    // Why `slot` cannot be offered here, in plain words, or empty when it
+    // can. Only DFNR and MNR depend on the build or computer; a remote
+    // window asks its Core, and a Core below dspInfoVersion 1 does not say.
+    QString noiseReductionUnavailableReason(NrSlot slot) const;
+    static QString noiseReductionNotSaidReason();
+    // This build's and computer's reason alone (no model needed).
+    static QString localNoiseReductionUnavailableReason(NrSlot slot);
+    // The Core's dspInfoVersion as a remote window last heard it (0 on a
+    // local model, or before the Core says).
+    int stationDspInfoVersion() const { return m_stationDspInfoVersion; }
+    // How long the last DSP Options apply took (dspChangeMeasured), in ms;
+    // the Core's in a remote window. 0 before any.
+    qint64 dspOptionsLastApplyMs() const;
+
+    // The filter graph's high-resolution curve for a slice's receiver: the
+    // magnitudes (dB, 0 at the peak) at startHz + k * stepHz, k from 0, as
+    // RxChannel::filterResponseBins gives them.
+    struct FilterResponse {
+        double startHz = 0.0;
+        double stepHz = 0.0;
+        QVector<double> magnitudesDb;
+    };
+    // Core: the curve for `sliceId`'s receiver (dsp.filterResponse). With
+    // `highResolution` false no curve is wanted and an empty one is taken.
+    // False with `reason` when there is no such slice or receiver.
+    bool filterResponseForStation(int sliceId, bool highResolution, FilterResponse* out,
+                                  QString* reason) const;
+    // The JSON text of `magnitudesDb` (rounded to 0.001 dB) and back.
+    static QString filterResponseToJson(const QVector<double>& magnitudesDb);
+    static std::optional<QVector<double>> filterResponseFromJson(const QString& json);
+    // Remote window: the filter graph wants the Core's curve (Setup > DSP >
+    // Options > High-resolution filter characteristics on). While it does,
+    // the curve is fetched and fetched again when the slice's filter, mode
+    // or rate changes; coreFilterResponse() holds the latest.
+    void setCoreFilterResponseWanted(bool wanted);
+    const FilterResponse& coreFilterResponse() const { return m_coreFilterResponse; }
+    // Why a remote window cannot draw its Core's curve, or empty.
+    QString coreFilterResponseUnavailableReason() const;
+    // Remote window: the Core answered dsp.filterResponse `commandId`.
+    void reportStationFilterResponse(quint32 commandId, bool accepted, const QString& reason,
+                                     double startHz, double stepHz, const QString& json);
+    // Remote window: capabilities or the link changed.
+    void setStationDspInfoVersion(int version);
+    // Remote window: the link closed with a curve request unanswered.
+    void failStationFilterResponse();
+    // Core: each slice's minNotchWidthHz follows its receiver's channel.
+    void refreshSliceMinNotchWidths();
 
     // Settings hygiene validation — single instance owned here.
     // Call validate() after each successful connect.
@@ -4233,6 +4304,13 @@ signals:
     // elapsed wall-clock milliseconds for the rebuild. Used by
     // DspOptionsPage's "Time to last change" readout.
     void dspChangeMeasured(qint64 elapsedMs);
+    // Remote-window parity Task 16: noiseReductionMethods() or what a
+    // remote window knows of its Core's (stationDspInfoVersion) changed.
+    void noiseReductionMethodsChanged();
+    // Remote-window parity Task 16: dspOptionsLastApplyMs() changed.
+    void dspOptionsLastApplyMsChanged(qint64 elapsedMs);
+    // Remote-window parity Task 16: coreFilterResponse() changed.
+    void coreFilterResponseChanged();
 
     // Phase 3Q Task 10: auto-connect failure signals.
     //
@@ -6282,6 +6360,21 @@ private:
     // R-R3-49 (parity Task 6): the Core's TX inhibit as a remote window
     // last heard it.
     bool m_remoteTxInhibited{false};
+    // Remote-window parity Task 16: this computer's noise reduction (a
+    // local model), the Core's as a remote window last heard it, and its
+    // dspInfoVersion; the last DSP Options apply time; the filter curve.
+    QString m_localNoiseReductionMethods;
+    QString m_remoteNoiseReductionMethods;
+    int m_stationDspInfoVersion{0};
+    qint64 m_dspOptionsLastApplyMs{0};
+    FilterResponse m_coreFilterResponse;
+    bool m_coreFilterResponseWanted{false};
+    bool m_coreFilterResponseDirty{false};
+    quint32 m_coreFilterResponseCommand{0};
+    QList<QMetaObject::Connection> m_coreFilterResponseSliceConns;
+    void requestCoreFilterResponse();
+    void watchCoreFilterResponseSlice();
+    SliceModel* coreFilterResponseSlice() const;
     // R-R3-32 (parity Task 6): the Core's PA readings in a remote window,
     // and in a local one whether a telemetry sample has reported the PA
     // current and the PA temperature since connect.

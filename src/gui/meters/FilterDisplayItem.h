@@ -12,6 +12,11 @@
 //   2026-04-17 — Reimplemented in C++20/Qt6 for NereusSDR by J.J. Boyd
 //                 (KG4VCF), with AI-assisted transformation via Anthropic
 //                 Claude Code.
+//   2026-09-26 - R-R3-49 (remote-window parity Task 16): the
+//                 high-resolution curve can come from a Core's bins
+//                 (setFilterResponseBins) in a remote window, resampled as
+//                 the local channel's is. J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -131,6 +136,13 @@ public:
     // Bind the RxChannel whose filterResponseMagnitudes() provides the FIR curve.
     // Non-owning — caller is responsible for clearing before the channel is destroyed.
     void bindRxChannel(RxChannel* channel);
+    // R-R3-49 (parity Task 16): a remote window has no channel; it sets the
+    // Core's filter response bins (magnitudes, DC to Nyquist) here, and the
+    // curve is resampled from them as RxChannel::filterResponseMagnitudes
+    // resamples its own. Used only while no channel is bound. Empty: none.
+    void setFilterResponseBins(const QVector<double>& binMagnitudes)
+    { m_filterResponseBins = binMagnitudes; }
+    const QVector<double>& filterResponseBinsForTest() const { return m_filterResponseBins; }
 
     Layer renderLayer() const override { return Layer::OverlayDynamic; }
     void paint(QPainter& p, int widgetW, int widgetH) override;
@@ -142,7 +154,8 @@ private:
     void paintWaterfall(QPainter& p, const QRect& rect);
     void paintFilterEdges(QPainter& p, const QRect& rect);
     // High-res FIR magnitude curve overlay (Task 4.4, design Section 4D).
-    // Called from paintFilterEdges() when m_highResolution && m_rxChannel.
+    // Called from paintFilterEdges() when m_highResolution, with a channel
+    // or (parity Task 16) the Core's bins.
     void paintHighResolutionFilterCurve(QPainter& p, const QRect& rect);
     void paintNotches(QPainter& p, const QRect& rect);
     QColor dbToWaterfallColor(float db) const;
@@ -183,6 +196,7 @@ private:
     // High-resolution filter characteristics (Task 4.4)
     bool      m_highResolution{false};
     RxChannel* m_rxChannel{nullptr};  // non-owning
+    QVector<double> m_filterResponseBins;  // parity Task 16: the Core's
 };
 
 } // namespace NereusSDR

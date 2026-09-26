@@ -796,6 +796,7 @@ change shows as surface drift and as a change to this table.
 | `transmitSettingsVersion` | 8 |
 | `bandSelectVersion` | 1 |
 | `meterReadingsVersion` | 1 |
+| `dspInfoVersion` | 1 |
 | `sessionHolderVersion` | 1 |
 
 <!-- /surface -->
@@ -1014,7 +1015,7 @@ When a feature is off, its version is 0:
   catalogue's `bands` lists (section 7.4). An app keeps its band buttons
   greyed on a Core that sends 0 or no entry. It is followed by
   `meterReadingsVersion`.
-- `meterReadingsVersion`: sent only at agreed minor 11, last, and 0 on a
+- `meterReadingsVersion`: sent only at agreed minor 11, and 0 on a
   station whose radio model runs no meter pump (no radio model, or a
   window's own). At 1 each slice carries the Core's ADC and AGC readings
   (`adcPeakDbfs`, `adcAverageDbfs`, `agcGainDb`, `agcPeakDb`,
@@ -1023,7 +1024,21 @@ When a feature is off, its version is 0:
   section 8) sets that rate at once when a window writes it. A window's ADC
   Peak, ADC Average, AGC Gain, AGC Peak and AGC Average meters read them;
   on a Core that sends 0 or no entry those meters show no reading, never a
-  frozen value.
+  frozen value. It is followed by `dspInfoVersion`.
+- `dspInfoVersion`: sent only at agreed minor 11, last, and 0 on a station
+  with no radio model of its own (a window's). At 1 the Core says which
+  noise reduction it can run, as `radio`'s `noiseReductionMethods`, how
+  long its last DSP Options apply took, as `radio`'s
+  `dspOptionsLastApplyMs`, and each slice's receiver's narrowest notch, as
+  the slice's `minNotchWidthHz` (section 7.1), and it takes
+  `dsp.filterResponse`, the filter graph's curve (section 9.1). A window
+  offers DFNR and MNR on the VFO flag, in Setup > DSP > NR/ANF and in
+  DSP > NR by the Core's list, never by its own build: a Mac window on a
+  Linux Core offers no MNR, and a Linux window on a Mac Core does. On a
+  Core that sends 0 or no entry it shows DFNR and MNR disabled with "This
+  Core does not say which noise reduction it can run. Updating the Core
+  may help.", and the high-resolution filter graph box disabled with "This
+  Core does not send its filter curve. Updating the Core may help.".
 
 - `sessionHolderVersion`: sent only at agreed minor 11, last, and only to
   a peer whose hello declared `sessionHolder` 1 with `deviceAuth` 1; any
@@ -1196,7 +1211,8 @@ older window sees only the values it was built for.
 | 53 | `transmitSettingsVersion` | `i64` |
 | 54 | `bandSelectVersion` | `i64` |
 | 55 | `meterReadingsVersion` | `i64` |
-| 56 | `sessionHolderVersion` | `i64` |
+| 56 | `dspInfoVersion` | `i64` |
+| 57 | `sessionHolderVersion` | `i64` |
 
 <!-- /surface -->
 
@@ -1407,7 +1423,7 @@ An enum property lists the values its domain allows.
 | 8 | `hardwarePeakOverride` | `f64` | bidirectional |  |
 | 9 | `lastLoadError` | `utf8` | outbound |  |
 
-**RadioModel** (24 properties)
+**RadioModel** (26 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -1435,6 +1451,8 @@ An enum property lists the values its domain allows.
 | 21 | `bandOutputsByte` | `i64` | outbound |  |
 | 22 | `bandOutputsBand` | `i64` | outbound |  |
 | 23 | `bandOutputsKeyed` | `bool` | outbound |  |
+| 24 | `noiseReductionMethods` | `utf8` | outbound |  |
+| 25 | `dspOptionsLastApplyMs` | `i64` | outbound |  |
 
 **RfKitModel** (30 properties)
 
@@ -1490,7 +1508,7 @@ An enum property lists the values its domain allows.
 | 12 | `streamIndex` | `i64` | outbound |  |
 | 13 | `psPaused` | `bool` | outbound |  |
 
-**SliceModel** (149 properties)
+**SliceModel** (150 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -1643,6 +1661,7 @@ An enum property lists the values its domain allows.
 | 146 | `agcGainDb` | `f64` | outbound |  |
 | 147 | `agcPeakDb` | `f64` | outbound |  |
 | 148 | `agcAverageDb` | `f64` | outbound |  |
+| 149 | `minNotchWidthHz` | `f64` | outbound |  |
 
 **StationCatalog** (2 properties)
 
@@ -1877,6 +1896,13 @@ Notes on the keys:
   after each pin click). 0 until the Core has read it. `outbound`, from
   `radioHardwareVersion` 7 (parity Task 14); HL2 Options' output strip
   shows it in both windows.
+- **`slice:<id>` minimum notch width.** `minNotchWidthHz` (f64, outbound,
+  no WRITE; parity Task 16, `dspInfoVersion` 1) is the narrowest notch the
+  slice's receiver can make, in Hz, as the Core's own TNF page reads it
+  (WDSP's `RXANBPGetMinNotchWidth`, which moves with the channel's filter
+  size and rate), 0 while the slice has no receiver. A window's TNF page
+  shows it, and its pans check the notch width presets against it and
+  draw the notch dent with it.
 - **`slice:<id>` ADC and AGC readings.** `adcPeakDbfs`, `adcAverageDbfs`,
   `agcGainDb`, `agcPeakDb` and `agcAverageDb` (f64, outbound, no WRITE;
   parity Task 15) are the Core's receive meters for the slice's receiver,
@@ -2004,6 +2030,19 @@ Notes on the keys:
   needs no capability: a window that does not know it ignores it. A window
   clears its copy of `transmitting` and `txInhibited` when the session
   ends.
+- **`radio` DSP facts** (parity Task 16, `dspInfoVersion` 1). Both
+  outbound, no WRITE. `noiseReductionMethods` (`utf8`) is the noise
+  reduction this Core's build and computer can run, comma separated from
+  `nr1`, `nr2`, `nr3`, `nr4`, `dfnr`, `mnr` and `anf` in that order, read
+  from the same build and platform checks its receive channels use:
+  `nr1` to `nr4` and `anf` with WDSP, `dfnr` in a build with DeepFilter
+  whose model file is found, `mnr` in a macOS build (Apple Accelerate).
+  `dspOptionsLastApplyMs` (`i64`) is how long the Core's last DSP Options
+  apply took (a channel rebuild after a buffer size, filter size, filter
+  type or sample rate change), in milliseconds, 0 before any; a window's
+  Setup > DSP > Options "Time to last change" shows it. They reach a window
+  whatever `dspInfoVersion` says; a window reads them only when it is at
+  least 1 (section 6.3).
 - **`transmit` at `transmitSettingsVersion` 2.** Each property carries its
   setter's type: `tunePower` (i64, the fixed tune power Setup uses, 0 to
   100 W, 0 to 99 on a Hermes Lite 2), `voxThresholdDb` (i64, -80 to 0 dB),
@@ -2969,6 +3008,7 @@ refused.
 | `setAlexTxAntenna` | `band` i64, `antenna` i64 | `radioHardwareVersion` | 6 | 11 |
 | `requestIoBoardI2c` | `bus` i64, `address` i64, `register` i64, `write` bool, `value` i64 | `radioHardwareVersion` | 7 | 11 |
 | `setIoBoardOutput` | `pin` i64, `on` bool | `radioHardwareVersion` | 7 | 11 |
+| `dsp.filterResponse` | `sliceId` i64, `highResolution` bool | `dspInfoVersion` | 1 | 11 |
 | `nnr.setDiagnostics` | `sliceId` i64, `testMode` i64, `outputMode` i64 | `nnrVersion` | 1 | 5 |
 | `nnr.resetTuning` | `sliceId` i64 | `nnrVersion` | 1 | 5 |
 | `nnr.tryAgain` | `sliceId` i64 | `nnrVersion` | 1 | 11 |
@@ -3069,6 +3109,27 @@ These command groups need a sentence beyond the table:
   `radio` object (`rxFilter0Mode` to `rxFilter1Reason`) in a `delta`. The
   policy picks the receive band-pass filter only, so a receive-only Core
   applies it too.
+- **The filter graph's curve** (parity Task 16, `dspInfoVersion` 1).
+  `dsp.filterResponse` asks the Core for the high-resolution filter graph's
+  curve for the receiver of `sliceId`, computed from that receiver's
+  channel as the Core's own filter graph computes it (the channel's filter
+  edges and rate, WDSP's `fir_bandpass` taps, a 4096-point FFT). An
+  accepted result carries the `values` `startHz` and `stepHz` (f64) and
+  `magnitudesDbJson` (utf8, a JSON array): the magnitude at `startHz` +
+  k * `stepHz` for each k from 0, in dB with 0 at the peak and -120 at
+  the floor, rounded to 0.001 dB (today 2049 values from 0 Hz to half the
+  channel's rate). A window resamples them to its graph's width as it
+  would its own channel's curve. With `highResolution` false no curve is
+  wanted: the result is accepted with `stepHz` 0 and an empty array. A
+  window asks while Setup > DSP > Options > "High-resolution filter
+  characteristics in filter graph" is on, one request at a time, and asks
+  again when the slice's filter, mode or minimum notch width (which moves
+  with the rate) changes. It is a read: it reaches no radio, so it is
+  answered on and off the air, for any slice. Refusals: "The Core has no
+  such slice.", "The Core's receiver for this slice is not running.",
+  "The Core cannot work out this filter's curve.", and "The Core could not
+  read this request." for arguments it does not take. A window shows no
+  notice for a refusal; its graph keeps the plain passband.
 - **The HL2 I/O board's I2C tool and output pins** (parity Task 14,
   `radioHardwareVersion` 7). `requestIoBoardI2c` is HL2 Options' I2C
   Control tool: one read (`write` false) or write (`write` true) on the
@@ -4279,7 +4340,7 @@ same on every machine.
 | `settings-write` | A station-scoped write echoed with its origin; an operator-local write rejected; a removal sent as `settings.value` with no entry; on the receive-only Core, a DSP > Options TX key and a PA forward-power table key (`paCalibration/calPoint1`, version 6) taken off the air, an OC transmit pin (`oc/tx/20m/pin3`), an OC pin action (`oc/actions/pin1/action`) and TX Display Cal (`cal/txDisplayOffset`) taken off the air (version 8), and a transmit hardware key refused |
 | `unknown-verb` | `command.result` refused, "The Core does not know this request. Updating the Core may help."; the connection stays up |
 | `unknown-kind` | `session.end` "The Core could not read a message from this app.", `retryable` false, `code` `protocolError` |
-| `verbs-*` | Each verb in `commands`, grouped by the capability that gates it, invoked with its own arguments (for `setPgxlHardware`, one of its three optional ones) and, where it takes any, with one argument renamed (and nothing else changed: the same values and kinds); the two get different answers, so each shows the station read the arguments (a PureSignal action with arguments it does not take is refused "The Core could not read this PureSignal request." before the transmit gate is asked); `verbs-ps3` (which requires `psAlgorithmVersion` 3) invokes the PureSignal verbs whose answers do not depend on arming (`ps3.off`, `ps3.twoTone` off and `ps3.saveCorrection`), and `verbs-ps3-arming` (which also requires `transmitSettingsVersion` 7) invokes `ps3.twoTone` with `enabled` true, refused "PureSignal cannot be run from a remote window yet.", and the arming verbs (`ps3.single`, `ps3.automatic`, `ps3.applyCurrent`, `ps3.restoreCorrection`), taken and then failing on the static station, which has no PureSignal running ("PureSignal is unavailable until the radio is ready."); `nnr.applyModelSelection` names the revision `dspAssets` gave in the snapshot; `verbs-tgxl-control` (which requires `remoteTgxlControlVersion` 2) invokes the antenna, operate and bypass switches, and `verbs-tgxl-relays` (which requires `remoteTgxlControlVersion` 4) matches `scanTgxlLan`'s `devicesJson` as any text, since a real Tuner Genius on the test computer's network may answer, and its accepted `setTgxlAddress` is followed by the `tuner` delta carrying the saved address, then a blank host, saved and shown as blank, and the address again; `verbs-pgxl-control` (which requires `remotePgxlControlVersion` 4) does the same for `scanPgxlLan` and `setPgxlAddress` (the `amplifier` delta, and the blank host), and its `setPgxlOperate` is refused on the static station, which has no amp connected ("The Core is not connected to the Power Genius."); `verbs-rfkit` (which requires `remoteRfKitControlVersion` 2) connects, disconnects and switches the RF-Kit, and `verbs-rfkit-control` (which requires `remoteRfKitControlVersion` 4) invokes `setRfKitOperate`, `setRfKitAntenna` and `setRfKitTciMode`, refused on the static station with no amp admitted ("The Core is not connected to the RF-Kit amplifier."), and its accepted `setRfKitAddress` is followed by the `rfkit` delta carrying the saved address, then the blank host and the address again; `verbs-tx-antenna` (which requires `radioHardwareVersion` 6) invokes `setAlexTxAntenna` with a band's current antenna (taken, no delta) and with `band` renamed; `verbs-io-board` (which requires `radioHardwareVersion` 7) invokes `requestIoBoardI2c` and `setIoBoardOutput`, each refused on the static station, which has no radio connection to reach the I2C bus through ("The radio is not connected, so its I2C bus cannot be reached."), and each with one argument renamed. A version's new verbs go in a fixture of their own, so an app at the older version still runs the older file |
+| `verbs-*` | Each verb in `commands`, grouped by the capability that gates it, invoked with its own arguments (for `setPgxlHardware`, one of its three optional ones) and, where it takes any, with one argument renamed (and nothing else changed: the same values and kinds); the two get different answers, so each shows the station read the arguments (a PureSignal action with arguments it does not take is refused "The Core could not read this PureSignal request." before the transmit gate is asked); `verbs-ps3` (which requires `psAlgorithmVersion` 3) invokes the PureSignal verbs whose answers do not depend on arming (`ps3.off`, `ps3.twoTone` off and `ps3.saveCorrection`), and `verbs-ps3-arming` (which also requires `transmitSettingsVersion` 7) invokes `ps3.twoTone` with `enabled` true, refused "PureSignal cannot be run from a remote window yet.", and the arming verbs (`ps3.single`, `ps3.automatic`, `ps3.applyCurrent`, `ps3.restoreCorrection`), taken and then failing on the static station, which has no PureSignal running ("PureSignal is unavailable until the radio is ready."); `nnr.applyModelSelection` names the revision `dspAssets` gave in the snapshot; `verbs-tgxl-control` (which requires `remoteTgxlControlVersion` 2) invokes the antenna, operate and bypass switches, and `verbs-tgxl-relays` (which requires `remoteTgxlControlVersion` 4) matches `scanTgxlLan`'s `devicesJson` as any text, since a real Tuner Genius on the test computer's network may answer, and its accepted `setTgxlAddress` is followed by the `tuner` delta carrying the saved address, then a blank host, saved and shown as blank, and the address again; `verbs-pgxl-control` (which requires `remotePgxlControlVersion` 4) does the same for `scanPgxlLan` and `setPgxlAddress` (the `amplifier` delta, and the blank host), and its `setPgxlOperate` is refused on the static station, which has no amp connected ("The Core is not connected to the Power Genius."); `verbs-rfkit` (which requires `remoteRfKitControlVersion` 2) connects, disconnects and switches the RF-Kit, and `verbs-rfkit-control` (which requires `remoteRfKitControlVersion` 4) invokes `setRfKitOperate`, `setRfKitAntenna` and `setRfKitTciMode`, refused on the static station with no amp admitted ("The Core is not connected to the RF-Kit amplifier."), and its accepted `setRfKitAddress` is followed by the `rfkit` delta carrying the saved address, then the blank host and the address again; `verbs-tx-antenna` (which requires `radioHardwareVersion` 6) invokes `setAlexTxAntenna` with a band's current antenna (taken, no delta) and with `band` renamed; `verbs-io-board` (which requires `radioHardwareVersion` 7) invokes `requestIoBoardI2c` and `setIoBoardOutput`, each refused on the static station, which has no radio connection to reach the I2C bus through ("The radio is not connected, so its I2C bus cannot be reached."), and each with one argument renamed; `verbs-dsp-info` (which requires `dspInfoVersion` 1) invokes `dsp.filterResponse` with `highResolution` false (taken, `stepHz` 0 and an empty `magnitudesDbJson`), with `highResolution` true (refused on the static station, which runs no receiver channel: "The Core's receiver for this slice is not running.") and with one argument renamed. A version's new verbs go in a fixture of their own, so an app at the older version still runs the older file |
 
 `tst_link_conformance_session` also checks that every verb in the
 `commands` table is invoked both ways by some fixture, and that the two

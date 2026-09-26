@@ -212,6 +212,12 @@
 //                window's ADC and AGC meters follow the Core's
 //                meterReadingsVersion. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-26 - R-R3-49 / R-R3-21 (remote-window parity Task 16): DSP > NR
+//                offers DFNR and MNR by the station's noise reduction (the
+//                Core's in a remote window); a remote pan's minimum notch
+//                width is its slice's (the Core's); the filter graphs draw
+//                the Core's curve. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -2747,6 +2753,20 @@ void MainWindow::refreshPanNotchMinWidth()
         if (!applet) { continue; }
         SpectrumWidget* sw = applet->spectrumWidget();
         if (!sw) { continue; }
+        // R-R3-49 (parity Task 16): a remote window has no channel of its
+        // own; its slice carries the Core's channel's minimum (dspInfoVersion
+        // 1), 0 until the Core says, which keeps what the pan last had.
+        if (m_radioModel->role() == RadioModel::Role::Remote) {
+            SliceModel* slice = m_radioModel->sliceById(applet->activeSliceIndex());
+            if (!slice) { continue; }
+            connect(slice, &SliceModel::minNotchWidthHzChanged,
+                    this, &MainWindow::refreshPanNotchMinWidth,
+                    Qt::UniqueConnection);
+            if (slice->minNotchWidthHz() > 0.0) {
+                sw->setNotchMinWidthHz(slice->minNotchWidthHz());
+            }
+            continue;
+        }
         // Through RadioModel, not WdspEngine: scripts/verify-no-gui-dsp-
         // access.py fails the build on a bare rxChannel() from src/gui/.
         RxChannel* ch = m_radioModel->rxChannelForSlice(applet->activeSliceIndex());
@@ -4291,6 +4311,10 @@ void MainWindow::buildUI()
     // them until then. Apply the saved values to the restored meters now.
     MultimeterPage::applyPersistedSettings(m_radioModel);
     DspOptionsPage::applyPersistedHighResFilter(m_radioModel);
+    // R-R3-49 (parity Task 16): a remote window's filter graphs draw the
+    // Core's curve as it arrives.
+    connect(m_radioModel, &RadioModel::coreFilterResponseChanged, this,
+            [this]() { DspOptionsPage::applyCoreFilterResponse(m_radioModel); });
 
     // R-R3-21: the DXCC country table the spot colouring resolves against.
     // cty.dat is bundled as the ":/cty.dat" resource (resources.qrc), as
@@ -7664,11 +7688,12 @@ void MainWindow::buildMenuBar()
     QMenu* dspMenu = menuBar()->addMenu(QStringLiteral("&DSP"));
 
     // ── NR submenu — full slot bank, mutual exclusion via QActionGroup ─────
-    // Mirrors VfoWidget's 7-button NR bank. Off/NR1/NR2/NR3/NR4/DFNR are
-    // always present; MNR is gated by HAVE_MNR (macOS only) and BNR by
-    // HAVE_BNR (NVIDIA build, currently never defined). Hidden actions
-    // remain in the group so the activeNrChanged sync handler can find
-    // them by index.
+    // Mirrors VfoWidget's 7-button NR bank. Off/NR1/NR2/NR3/NR4/DFNR/MNR
+    // are always present (parity Task 16: DFNR and MNR are disabled with the
+    // plain reason when the station, the Core in a remote window, cannot run
+    // them); BNR is gated by HAVE_BNR (NVIDIA build, currently never
+    // defined). Hidden actions remain in the group so the activeNrChanged
+    // sync handler can find them by index.
     {
         QMenu* nrMenu = dspMenu->addMenu(QStringLiteral("&NR"));
         m_nrGroup = new QActionGroup(this);
@@ -7684,13 +7709,7 @@ void MainWindow::buildMenuBar()
             { "NR&4",   Slot::NR4,  false },
             { "&DFNR",  Slot::DFNR, false },
             { "&NNR",   Slot::NNR, false },
-            { "&MNR",   Slot::MNR,
-#ifdef HAVE_MNR
-                false
-#else
-                true
-#endif
-            },
+            { "&MNR",   Slot::MNR,  false },
             { "&BNR",   Slot::BNR,
 #ifdef HAVE_BNR
                 false
@@ -7730,9 +7749,14 @@ void MainWindow::buildMenuBar()
                 const NrSlot slot = static_cast<NrSlot>(action->data().toInt());
                 QSignalBlocker blocker(action);
                 action->setChecked(slice && slice->activeNr() == slot);
-                action->setEnabled(slice && (slot != NrSlot::NNR || slice->nnrAvailable()));
+                // Parity Task 16: DFNR and MNR by what the station runs.
+                const QString unavailable = m_radioModel->noiseReductionUnavailableReason(slot);
+                action->setToolTip(unavailable);
+                action->setEnabled(slice && unavailable.isEmpty()
+                                   && (slot != NrSlot::NNR || slice->nnrAvailable()));
             }
         });
+        nrMenu->setToolTipsVisible(true);
     }
 
     // ── NB submenu — Off/NB/NB2 mutual exclusion ───────────────────────────

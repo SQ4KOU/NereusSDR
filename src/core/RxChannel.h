@@ -31,6 +31,11 @@
 //                 section 3), after Thetis ChannelMaster cmaster.c:365-366
 //                 [v2.10.3.15], by J.J. Boyd (KG4VCF), with AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-26 - Remote-window parity Task 16 (R-R3-49): the filter
+//                 response split into filterResponseBins and
+//                 resampleFilterResponse, so a Core can send its bins.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code. NereusSDR-original.
 // =================================================================
 
 //=================================================================
@@ -805,6 +810,24 @@ public:
     ///
     /// NereusSDR-original — no Thetis source ported; algorithm is generic.
     QVector<float> filterResponseMagnitudes(int nPoints) const;
+
+    /// Remote-window parity Task 16 (R-R3-49): the FFT size the response
+    /// above is computed at, and its magnitude at every bin from DC to
+    /// Nyquist (kFilterResponseFftSize / 2 + 1 values, bin j at
+    /// j * sampleRate / kFilterResponseFftSize Hz), before any resampling.
+    /// `stepHz`, when given, receives that bin spacing. Empty, as above,
+    /// without WDSP or FFTW3. filterResponseMagnitudes(n) is
+    /// resampleFilterResponse(filterResponseBins(), n), so a Core can send
+    /// the bins and a window draw them exactly as a local window draws its
+    /// own channel's. NereusSDR-original.
+    static constexpr int kFilterResponseFftSize = 4096;
+    QVector<double> filterResponseBins(double* stepHz = nullptr) const;
+    /// The local filter graph's resampling: `nPoints` values in dB,
+    /// normalised to the peak (0 dB), clamped at -120 dB, spread uniformly
+    /// from the first bin to the last by linear interpolation of the
+    /// magnitudes. Empty for nPoints <= 0 or no bins.
+    static QVector<float> resampleFilterResponse(const QVector<double>& binMagnitudes,
+                                                 int nPoints);
 
     // --- State snapshot / restore (Task 1.2) ---
     // Capture all DSP state into a portable struct.

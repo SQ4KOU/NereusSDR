@@ -277,6 +277,11 @@
         },
         {
             "kind": "i64",
+            "name": "dspInfoVersion",
+            "value": 1
+        },
+        {
+            "kind": "i64",
             "name": "sessionHolderVersion",
             "value": 1
         }
@@ -1106,6 +1111,24 @@
             "capabilityVersion": 7,
             "minMinor": 11,
             "verb": "setIoBoardOutput"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "sliceId",
+                    "optional": false
+                },
+                {
+                    "kind": "bool",
+                    "name": "highResolution",
+                    "optional": false
+                }
+            ],
+            "capability": "dspInfoVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "dsp.filterResponse"
         },
         {
             "arguments": [
@@ -3704,6 +3727,18 @@
                     "kind": "bool",
                     "name": "bandOutputsKeyed",
                     "ordinal": 23
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "noiseReductionMethods",
+                    "ordinal": 24
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "dspOptionsLastApplyMs",
+                    "ordinal": 25
                 }
             ]
         },
@@ -5052,6 +5087,12 @@
                     "kind": "f64",
                     "name": "agcAverageDb",
                     "ordinal": 148
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "minNotchWidthHz",
+                    "ordinal": 149
                 }
             ]
         },

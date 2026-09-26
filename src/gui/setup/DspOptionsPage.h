@@ -22,6 +22,9 @@
 //   2026-09-24 - R-R3-49 (parity Task 1): the nine TX combos follow the
 //                 transmit settings gate. J.J. Boyd (KG4VCF), AI-assisted
 //                 via Anthropic Claude Code.
+//   2026-09-26 - R-R3-49 (parity Task 16): applyCoreFilterResponse, a
+//                 remote window's graphs drawing the Core's curve. J.J.
+//                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -132,6 +135,10 @@ public:
     static void applyPersistedHighResFilter(RadioModel* model);
     // The same for one meter item added while the window runs.
     static void applyPersistedHighResFilterTo(RadioModel* model, MeterItem* item);
+    // R-R3-49 (parity Task 16): a remote window's graphs draw the Core's
+    // curve (RadioModel::coreFilterResponse). MainWindow calls it when the
+    // curve changes. Nothing on a local model.
+    static void applyCoreFilterResponse(RadioModel* model);
 
     QCheckBox* highResolutionFilterCharacteristicsCheckBox() const noexcept
     {

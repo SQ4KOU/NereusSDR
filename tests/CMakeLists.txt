@@ -7158,6 +7158,21 @@ nereus_add_test(tst_slice_meter_pump_readings
     fakes/LoopbackTransport.cpp
     EXTRA_LABELS session)
 
+# Remote-window parity Task 16 (R-R3-49, R-R3-21, R-R3-40): DSP facts from the
+# Core under dspInfoVersion 1. The flag, NR/ANF and DSP > NR offer DFNR and
+# MNR by the Core's noiseReductionMethods; the TNF page and a real remote
+# window's pan follow the Core's minNotchWidthHz; dsp.filterResponse's bins,
+# resampled in the window, are the curve the Core's channel draws; "Time to
+# last change" is the Core's. Loopback and a fake radio only, no RF, no
+# audio device.
+nereus_add_test(tst_remote_dsp_info
+    fakes/P1FakeRadio.cpp
+    fakes/ConnectableRadioModel.cpp
+    fakes/LoopbackTransport.cpp
+    fakes/RemoteWindowHarness.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_remote_dsp_info PRIVATE NEREUS_BUILD_TESTS)
+
 # Remote Daemon R2, Task 13: AppSettings mutator funnel. Before this task
 # only setValue()/remove()/clear() touched the m_settings map directly;
 # everything else (setHardwareValue/hardwareValue/hardwareValues/

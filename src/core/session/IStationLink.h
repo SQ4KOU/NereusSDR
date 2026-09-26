@@ -124,6 +124,10 @@
 //                                    radioHardwareAvailable, the I/O board's
 //                                    I2C and output pin requests.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 16):
+//                                    requestFilterResponse (dspInfoVersion
+//                                    1).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QString>
@@ -438,6 +442,14 @@ public:
     // I/O board outputs on or off.
     virtual CommandOutcome requestIoBoardOutput(int /*pin*/, bool /*on*/)
     { return { false, ioBoardI2cUnavailableReason() }; }
+
+    // R-R3-49 (parity Task 16): verb "dsp.filterResponse" (dspInfoVersion
+    // 1), the filter graph's curve for a slice's receiver on the Core. The
+    // answer arrives as RadioModel::reportStationFilterResponse.
+    static QString filterResponseUnavailableReason()
+    { return QStringLiteral("This Core does not send its filter curve. Updating the Core may help."); }
+    virtual CommandOutcome requestFilterResponse(int /*sliceId*/, bool /*highResolution*/)
+    { return { false, filterResponseUnavailableReason() }; }
 
     // R-R3-46 / R-R3-21 (radioHardwareVersion 4): the filter policy dialog
     // in a remote window. Whether the Core takes a filter policy change from

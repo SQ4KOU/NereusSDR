@@ -116,6 +116,9 @@
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-26 - R-R3-13 / R-R3-49 (parity Task 15): meterReadingsVersion.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-R3-49 / R-R3-21 / R-R3-40 (parity Task 16):
+//                dspInfoVersion. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -264,6 +267,15 @@ struct StationCapabilities {
     /// model, or no meter pump): a window's ADC and AGC meters show no
     /// reading.
     int meterReadingsVersion = 0;
+    /// R-R3-49 / R-R3-21 / R-R3-40 (remote-window parity Task 16): 1 means
+    /// the Core says which noise reduction it can run (`radio`
+    /// noiseReductionMethods), how long its last DSP Options apply took
+    /// (`radio` dspOptionsLastApplyMs), each slice's minimum notch width
+    /// (minNotchWidthHz), and takes dsp.filterResponse for the filter
+    /// graph's curve. Sent in the same minor-11 block, after
+    /// meterReadingsVersion. 0 (no local radio model): a window shows DFNR
+    /// and MNR disabled with the reason and its filter curve unavailable.
+    int dspInfoVersion = 0;
     /// iPhone app Task 71 (R-IOS-02; the several-devices design, ruling
     /// 10.1): 1 means the Core admits up to four devices at once, sends the
     /// `connectedDevices` object and takes session.leave. Sent last in the

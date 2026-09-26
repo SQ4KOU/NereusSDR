@@ -186,6 +186,11 @@
 //                AGC slice readings applied as plain state, and
 //                meterReadingsVersion read from its capabilities. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-R3-49 / R-R3-21 / R-R3-40 (parity Task 16): the Core's
+//                noise reduction, DSP Options apply time and minimum notch
+//                widths applied as plain state; dsp.filterResponse sent and
+//                its answer handed to the model. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -1278,6 +1283,8 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
             // waiting on the Core gets no answer now.
             m_radioModel->failStationIoBoardRequests(
                 QStringLiteral("The link to the Core closed before the radio answered."));
+            // Parity Task 16: likewise a filter curve request.
+            m_radioModel->failStationFilterResponse();
             if (TunerModel* const tuner = m_radioModel->tunerModel()) {
                 TunerModel::StationConnectionState disconnected;
                 disconnected.configuredHost = tuner->configuredHost();
@@ -2794,6 +2801,10 @@ bool StationClient::applyOne(QObject* target, const MirrorProperty& prop,
         QByteArrayLiteral("RadioModel.transmitting"),
         // R-R3-49 (parity Task 6): likewise the Core's TX inhibit.
         QByteArrayLiteral("RadioModel.txInhibited"),
+        // Parity Task 16: likewise the Core's DSP facts.
+        QByteArrayLiteral("RadioModel.noiseReductionMethods"),
+        QByteArrayLiteral("RadioModel.dspOptionsLastApplyMs"),
+        QByteArrayLiteral("SliceModel.minNotchWidthHz"),
         QByteArrayLiteral("SliceModel.signalStrengthDbm"),
         QByteArrayLiteral("SliceModel.signalPeakDbm"),
         QByteArrayLiteral("SliceModel.signalAverageDbm"),
@@ -3456,6 +3467,24 @@ StationClient::CommandOutcome StationClient::requestIoBoardI2c(int bus, int addr
                        QStringLiteral("the I2C request"));
 }
 
+bool StationClient::dspInfoAvailable() const
+{
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.dspInfoVersion >= 1;
+}
+
+StationClient::CommandOutcome StationClient::requestFilterResponse(int sliceId,
+                                                                  bool highResolution)
+{
+    if (!dspInfoAvailable()) {
+        return {false, filterResponseUnavailableReason()};
+    }
+    return sendCommand("dsp.filterResponse", sliceId,
+                       { intArgument("sliceId", sliceId),
+                         boolArgument("highResolution", highResolution) },
+                       QStringLiteral("the filter curve request"));
+}
+
 StationClient::CommandOutcome StationClient::requestIoBoardOutput(int pin, bool on)
 {
     if (!radioHardwareAvailable(7)) {
@@ -3968,7 +3997,11 @@ void StationClient::handleCommandResult(const SessionMessage& message)
     // routing them here as well showed the same refusal twice.
     const bool ioBoardRequest = pending.verb == "requestIoBoardI2c"
         || pending.verb == "setIoBoardOutput";
+    // Parity Task 16: the filter graph asks for its curve by itself; a
+    // refusal (no receiver yet) leaves it on the passband, with no notice.
+    const bool filterResponseRequest = pending.verb == "dsp.filterResponse";
     if (!message.accepted && !m_radioModel.isNull() && !ioBoardRequest
+        && !filterResponseRequest
         && !message.commandVerb.startsWith("ps3.") && !message.commandVerb.startsWith("dspAssets.")
         && !message.commandVerb.startsWith("notch.")) {
         // The station's OWN reason, relayed verbatim. Wording a refusal
@@ -4084,6 +4117,25 @@ void StationClient::handleCommandResult(const SessionMessage& message)
         const QPointer<StationClient> self(this);
         m_radioModel->reportStationIoBoardResult(message.commandId, message.accepted,
                                                  message.reason, value);
+        if (!self) { return; }
+    }
+    // R-R3-49 (parity Task 16): the Core's filter curve, to the model.
+    if (filterResponseRequest && !m_radioModel.isNull()) {
+        double startHz = 0.0;
+        double stepHz = 0.0;
+        QString json;
+        for (const MirrorUpdate& update : message.updates) {
+            if (update.name == "startHz" && update.kind == MirrorWireKind::Float64) {
+                startHz = update.value.toDouble();
+            } else if (update.name == "stepHz" && update.kind == MirrorWireKind::Float64) {
+                stepHz = update.value.toDouble();
+            } else if (update.name == "magnitudesDbJson" && update.kind == MirrorWireKind::Utf8) {
+                json = update.value.toString();
+            }
+        }
+        const QPointer<StationClient> self(this);
+        m_radioModel->reportStationFilterResponse(message.commandId, message.accepted,
+                                                  message.reason, startHz, stepHz, json);
         if (!self) { return; }
     }
     // R-R3-49 (parity Task 8): the Core's Scan LAN answer, to the window's

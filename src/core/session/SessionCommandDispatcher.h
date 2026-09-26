@@ -157,6 +157,9 @@
 //                                    handleRequestIoBoardI2c and
 //                                    handleSetIoBoardOutput.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 16):
+//                                    handleFilterResponse.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -410,6 +413,9 @@ private:
     // Pin Control, run by the Core's RadioModel.
     void handleRequestIoBoardI2c(const NereusSDR::SessionMessage& invoke);
     void handleSetIoBoardOutput(const NereusSDR::SessionMessage& invoke);
+    // Parity Task 16 (dspInfoVersion 1): the filter graph's curve for a
+    // slice's receiver (RadioModel::filterResponseForStation).
+    void handleFilterResponse(const NereusSDR::SessionMessage& invoke);
     // R-R3-46 / R-R3-21 (radioHardwareVersion 4): one receive filter
     // chain's filter policy, applied through the Core's AlexAntennaFacade.
     void handleSetAlexBpfMode(const NereusSDR::SessionMessage& invoke);

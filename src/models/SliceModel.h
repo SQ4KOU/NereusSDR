@@ -40,6 +40,10 @@
 //                 agcGainDb, agcPeakDb, agcAverageDb), outbound under
 //                 meterReadingsVersion 1. By J.J. Boyd (KG4VCF), with
 //                 Anthropic Claude Code assistance.
+//   2026-09-26 : R-R3-49 (remote-window parity Task 16): minNotchWidthHz,
+//                 the Core's channel's minimum notch width, outbound under
+//                 dspInfoVersion 1. By J.J. Boyd (KG4VCF), with Anthropic
+//                 Claude Code assistance.
 // =================================================================
 
 //=================================================================
@@ -528,6 +532,13 @@ private:
     Q_PROPERTY(double agcGainDb      READ agcGainDb      NOTIFY agcGainDbChanged)
     Q_PROPERTY(double agcPeakDb      READ agcPeakDb      NOTIFY agcPeakDbChanged)
     Q_PROPERTY(double agcAverageDb   READ agcAverageDb   NOTIFY agcAverageDbChanged)
+    // R-R3-49 (remote-window parity Task 16, dspInfoVersion 1): the narrowest
+    // notch this slice's receiver can realise, in Hz, as the local TNF page
+    // reads it (RxChannel::minNotchWidthHz); 0 while it has no channel. The
+    // Core's RadioModel keeps it (refreshSliceMinNotchWidths); a remote
+    // window's notch width presets, trace dent and TNF page read it.
+    // Outbound, no WRITE.
+    Q_PROPERTY(double minNotchWidthHz READ minNotchWidthHz NOTIFY minNotchWidthHzChanged)
 
 public:
     // Receive-layout admission bounds: general receive defaults, not a
@@ -668,6 +679,9 @@ public:
     double agcGainDb() const { return m_agcGainDb; }
     double agcPeakDb() const { return m_agcPeakDb; }
     double agcAverageDb() const { return m_agcAverageDb; }
+    // Parity Task 16: see the minNotchWidthHz Q_PROPERTY. Change-only.
+    double minNotchWidthHz() const { return m_minNotchWidthHz; }
+    void setMinNotchWidthHz(double hz);
     void setAdcPeakDbfs(double dbfs);
     void setAdcAverageDbfs(double dbfs);
     void setAgcGainDb(double db);
@@ -1281,6 +1295,8 @@ signals:
     void agcGainDbChanged(double db);
     void agcPeakDbChanged(double db);
     void agcAverageDbChanged(double db);
+    // Parity Task 16: minNotchWidthHz changed.
+    void minNotchWidthHzChanged(double hz);
     void stationAutoAgcNoiseFloorChanged();
     void dspModeChanged(NereusSDR::DSPMode mode);
     void filterChanged(int low, int high);
@@ -1455,6 +1471,8 @@ private:
     double  m_agcGainDb{-400.0};
     double  m_agcPeakDb{-400.0};
     double  m_agcAverageDb{-400.0};
+    // Parity Task 16: 0 until a channel (or the Core) gives one.
+    double  m_minNotchWidthHz{0.0};
     double  m_stationAutoAgcNoiseFloorDbm{-200.0};
     bool    m_stationAutoAgcNoiseFloorValid{false};
     quint64 m_stationAutoAgcNoiseFloorGeneration{0};

@@ -27,6 +27,11 @@
 //                 block (VAX design 6.2), with a plain notice when the
 //                 headphones are chosen but none are set up. By J.J. Boyd
 //                 (KG4VCF), with Anthropic Claude Code assistance.
+//   2026-09-26 : R-R3-49 / R-R3-21 (remote-window parity Task 16) DFNR and
+//                 MNR offered by the station's noise reduction (the Core's
+//                 in a remote window), disabled with the plain reason and
+//                 never hidden (updateNrAvailability), by J.J. Boyd
+//                 (KG4VCF), with Anthropic Claude Code assistance.
 // =================================================================
 
 //=================================================================
@@ -522,6 +527,9 @@ public:
     QPushButton* playButtonForTest() const { return m_playBtn; }
     // Fix wave I3: the last refused noise-reducer choice this flag showed.
     QString nrRefusalForTest() const { return m_nrRefusal; }
+    // Parity Task 16: the DSP grid's DFNR and MNR buttons.
+    QPushButton* dfnrButtonForTest() const { return m_dfnrBtn; }
+    QPushButton* mnrButtonForTest() const { return m_mnrBtn; }
 
     int sliceIndex() const { return m_sliceIndex; }
 
@@ -700,6 +708,13 @@ private:
     void showDfnrPopup(const QPoint& globalPos);
     void showBnrPopup(const QPoint& globalPos);
     void showMnrPopup(const QPoint& globalPos);
+    // Parity Task 16: why DFNR or MNR cannot be offered (the model's word,
+    // the Core's in a remote window, or this build's with no model), empty
+    // when it can; and applying that to their buttons: shown always,
+    // disabled with the reason while it cannot.
+    QString nrUnavailableReason(NereusSDR::NrSlot slot) const;
+    void updateNrAvailability();
+    QMetaObject::Connection m_nrAvailabilityConn;
 
     // Guard to prevent signal re-emission during model updates
     bool m_updatingFromModel{false};
@@ -868,6 +883,8 @@ private:
     QPushButton* m_nnrBtn  = nullptr;
     QLabel*      m_nnrLimitIndicator = nullptr;   // R-R3-40
     QString      m_nnrToolTip;
+    QString      m_dfnrToolTip;   // Parity Task 16: each one's own tooltip
+    QString      m_mnrToolTip;
     QPushButton*        m_anfToggle{nullptr};
     QPushButton*        m_snbToggle{nullptr};
     QPushButton*        m_apfToggle{nullptr};

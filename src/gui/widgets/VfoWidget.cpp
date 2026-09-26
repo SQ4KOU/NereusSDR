@@ -66,6 +66,13 @@
 //                 and zero write the slice in a remote window as in a local
 //                 one; they no longer follow the transmit permission.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-R3-49 / R-R3-21 (parity Task 16): DFNR and MNR follow
+//                 the station's noise reduction (the Core's in a remote
+//                 window, RadioModel::noiseReductionUnavailableReason): shown
+//                 always, disabled with the plain reason while they cannot
+//                 run, with no quick controls. MNR is no longer hidden off a
+//                 Mac. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
 // =================================================================
 
 //=================================================================
@@ -1570,6 +1577,10 @@ void VfoWidget::buildDspTab()
     m_mnrBtn->setToolTip(QStringLiteral("MNR: macOS noise reduction. Left-click activates, right-click adjusts knobs"));
     m_nnrBtn->setToolTip(QStringLiteral("NNR: neural noise reduction. Left-click activates, right-click adjusts settings"));
     m_nnrToolTip = m_nnrBtn->toolTip();
+    // Parity Task 16: each filter's own tooltip, put back when it can run
+    // again (updateNrAvailability shows the reason while it cannot).
+    m_dfnrToolTip = m_dfnrBtn->toolTip();
+    m_mnrToolTip = m_mnrBtn->toolTip();
     dspGrid->addWidget(m_nr4Btn,  1, 0);
     dspGrid->addWidget(m_dfnrBtn, 1, 1);
     dspGrid->addWidget(m_mnrBtn,  1, 2);
@@ -1591,9 +1602,20 @@ void VfoWidget::buildDspTab()
     m_bnrBtn->hide();  // Hidden permanently: NVIDIA BNR integration deferred.
     // BNR not added to grid — hidden and parented to dspWidget for lifecycle.
 #endif
-#ifndef HAVE_MNR
-    m_mnrBtn->hide();  // Hidden on non-macOS platforms.
-#endif
+    // Parity Task 16 (R-R3-49, R-R3-21): DFNR and MNR are offered by what
+    // the station can run, the Core's in a remote window (a Mac window on a
+    // Linux Core has no MNR; a Linux window on a Mac Core has it). Never
+    // hidden: one that cannot run is disabled with the plain reason. The
+    // shared toggle style has no disabled look, so these two add the style
+    // guide's disabled colours (StyleConstants kDisabled*).
+    for (QPushButton* btn : {m_dfnrBtn, m_mnrBtn}) {
+        btn->setStyleSheet(vfoDspToggleStyle() + QStringLiteral(
+            "QPushButton:disabled {"
+            "  background: %1; color: %2; border: 1px solid %3;"
+            "}").arg(NereusSDR::Style::kDisabledBg, NereusSDR::Style::kDisabledText,
+                     NereusSDR::Style::kDisabledBorder));
+    }
+    updateNrAvailability();
 
     // Row 2: ANF | SNB | (cols 2-3 empty)
     m_anfToggle = makeToggle(QStringLiteral("ANF"));
@@ -3496,7 +3518,17 @@ void VfoWidget::setRxBypassActive(bool on)
 // is non-owning; lifetime is RadioModel-owned and MainWindow-scoped.
 void VfoWidget::setRadioModel(RadioModel* model)
 {
+    if (m_nrAvailabilityConn) {
+        disconnect(m_nrAvailabilityConn);
+        m_nrAvailabilityConn = {};
+    }
     m_radioModel = model;
+    // Parity Task 16: DFNR and MNR follow what the station can run.
+    if (model) {
+        m_nrAvailabilityConn = connect(model, &RadioModel::noiseReductionMethodsChanged,
+                                       this, &VfoWidget::updateNrAvailability);
+    }
+    updateNrAvailability();
     if (model && model->role() == RadioModel::Role::Remote) {
         setTransmitPermitted(false);
         // Group B fix wave: until MainWindow hears the Core takes it.
@@ -3506,6 +3538,37 @@ void VfoWidget::setRadioModel(RadioModel* model)
         // keeps the choice on this computer (RadioModel::
         // setRemoteVaxChannelStore) and RemoteVaxRouter feeds the channel
         // from the Core's receiver stream.
+    }
+}
+
+QString VfoWidget::nrUnavailableReason(NereusSDR::NrSlot slot) const
+{
+    // With a model it says (the Core's word in a remote window); without
+    // one, this build decides.
+    if (m_radioModel) {
+        return m_radioModel->noiseReductionUnavailableReason(slot);
+    }
+    return RadioModel::localNoiseReductionUnavailableReason(slot);
+}
+
+void VfoWidget::updateNrAvailability()
+{
+    const struct {
+        QPushButton* button;
+        NereusSDR::NrSlot slot;
+        const QString* ownTip;
+    } filters[] = {
+        {m_dfnrBtn, NereusSDR::NrSlot::DFNR, &m_dfnrToolTip},
+        {m_mnrBtn, NereusSDR::NrSlot::MNR, &m_mnrToolTip},
+    };
+    for (const auto& f : filters) {
+        if (!f.button) {
+            continue;
+        }
+        const QString reason = nrUnavailableReason(f.slot);
+        f.button->setEnabled(reason.isEmpty());
+        f.button->setToolTip(reason.isEmpty() ? *f.ownTip : reason);
+        f.button->setAccessibleDescription(reason);
     }
 }
 
@@ -3736,7 +3799,8 @@ void VfoWidget::showNr4Popup(const QPoint& globalPos)
 
 void VfoWidget::showDfnrPopup(const QPoint& globalPos)
 {
-    if (!m_slice) { return; }
+    // Parity Task 16: no quick controls for a DFNR that cannot run.
+    if (!m_slice || !nrUnavailableReason(NereusSDR::NrSlot::DFNR).isEmpty()) { return; }
     auto* p = new DspParamPopup(this);
 
     // DFNR (DeepFilterNet3) — AetherSDR post-WDSP filter, not in Thetis.
@@ -3783,7 +3847,8 @@ void VfoWidget::showBnrPopup(const QPoint& globalPos)
 
 void VfoWidget::showMnrPopup(const QPoint& globalPos)
 {
-    if (!m_slice) { return; }
+    // Parity Task 16: no quick controls for an MNR that cannot run.
+    if (!m_slice || !nrUnavailableReason(NereusSDR::NrSlot::MNR).isEmpty()) { return; }
     auto* p = new DspParamPopup(this);
 
     // MNR (macOS Accelerate MMSE-Wiener NR). 6 runtime-tunable knobs with

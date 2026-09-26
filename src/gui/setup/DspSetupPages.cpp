@@ -37,6 +37,11 @@
 //                 settings gate at version 4 (the Core mirrors them)
 //                 instead of the transmit permission. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-R3-49 / R-R3-21 (parity Task 16): NR/ANF's DFNR and MNR
+//                 tabs follow what the station can run (the Core's in a
+//                 remote window), disabled with the plain reason; TNF's
+//                 minimum notch width is the Core's in a remote window.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1249,20 +1254,31 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
     // integration; UI is always shown so users can understand the feature gate.
     {
         auto [tabPage, tabLay] = makeTab(tabs, "DFNR");
-        Q_UNUSED(tabPage)
 
         QVBoxLayout* grpLay = makeGroup(tabLay, "DeepFilter NR");
 
-#ifndef HAVE_DFNR
-        // Feature not compiled in — show a helpful note and gray out the group.
-        auto* note = new QLabel(
-            "DFNR is not enabled in this build.\n"
-            "Run ./setup-deepfilter.sh and rebuild to enable DeepFilter NR.");
-        note->setStyleSheet(kInfoLbl);
-        note->setWordWrap(true);
-        grpLay->addWidget(note);
-        grpLay->parentWidget()->setEnabled(false);
-#endif
+        // Parity Task 16 (R-R3-49, R-R3-21): offered by what the station
+        // can run (the Core's in a remote window, whatever this computer's
+        // build), never hidden; while it cannot, the group is disabled and
+        // the note says why.
+        auto* dfnrNote = new QLabel(QString(), tabPage);
+        dfnrNote->setObjectName(QStringLiteral("dfnrUnavailableNote"));
+        dfnrNote->setStyleSheet(kInfoLbl);
+        dfnrNote->setWordWrap(true);
+        tabLay->insertWidget(0, dfnrNote);
+        QWidget* dfnrGroup = grpLay->parentWidget();
+        const auto applyDfnr = [model, dfnrNote, dfnrGroup]() {
+            const QString reason = model ? model->noiseReductionUnavailableReason(NrSlot::DFNR)
+                                         : RadioModel::localNoiseReductionUnavailableReason(
+                                               NrSlot::DFNR);
+            dfnrNote->setText(reason);
+            dfnrNote->setVisible(!reason.isEmpty());
+            dfnrGroup->setEnabled(reason.isEmpty());
+        };
+        applyDfnr();
+        if (model) {
+            connect(model, &RadioModel::noiseReductionMethodsChanged, dfnrGroup, applyDfnr);
+        }
 
         // Attenuation Limit (0-100 dB) — use the shared addSliderRow helper
         // so the style matches NR1/NR2/NR4 (label | slider | value label).
@@ -1305,23 +1321,21 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
     }
 
     // ── MNR tab ───────────────────────────────────────────────────────────────
-    // AetherSDR-native macOS noise reduction (not in Thetis). Always shown
-    // so Windows/Linux users see the feature exists; controls grayed out on
-    // non-Apple builds.
+    // AetherSDR-native macOS noise reduction (not in Thetis). Always shown.
+    // Parity Task 16 (R-R3-49, R-R3-21): its controls follow what the
+    // station can run, the Core's in a remote window (a Linux window on a
+    // Mac Core tunes the Core's MNR), disabled with the plain reason while
+    // it cannot.
     {
         auto [tabPage, tabLay] = makeTab(tabs, "MNR");
-        Q_UNUSED(tabPage)
 
         QVBoxLayout* grpLay = makeGroup(tabLay, "macOS NR (MNR)");
 
-#ifndef Q_OS_APPLE
-        auto* note = new QLabel(
-            "MNR uses Apple Accelerate and is only available on macOS.\n"
-            "On this platform the MNR controls are inactive.");
-        note->setStyleSheet(kInfoLbl);
-        note->setWordWrap(true);
-        grpLay->addWidget(note);
-#endif
+        auto* mnrNote = new QLabel(QString(), tabPage);
+        mnrNote->setObjectName(QStringLiteral("mnrUnavailableNote"));
+        mnrNote->setStyleSheet(kInfoLbl);
+        mnrNote->setWordWrap(true);
+        tabLay->insertWidget(0, mnrNote);
 
         // Full 6-knob tuning surface matching the VFO right-click MNR popup
         // (see VfoWidget::showMnrPopup). Ranges + factory defaults identical.
@@ -1377,19 +1391,26 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
             QString());
         Q_UNUSED(gsmoothVal);
 
-#ifndef Q_OS_APPLE
-        strSl->setEnabled(false);
-        oversubSl->setEnabled(false);
-        floorSl->setEnabled(false);
-        alphaSl->setEnabled(false);
-        biasSl->setEnabled(false);
-        gsmoothSl->setEnabled(false);
-#endif
+        QWidget* mnrGroup = grpLay->parentWidget();
+        const auto applyMnr = [model, mnrNote, mnrGroup]() {
+            const QString reason = model ? model->noiseReductionUnavailableReason(NrSlot::MNR)
+                                         : RadioModel::localNoiseReductionUnavailableReason(
+                                               NrSlot::MNR);
+            mnrNote->setText(reason);
+            mnrNote->setVisible(!reason.isEmpty());
+            mnrGroup->setEnabled(reason.isEmpty());
+        };
+        applyMnr();
+        if (model) {
+            connect(model, &RadioModel::noiseReductionMethodsChanged, mnrGroup, applyMnr);
+        }
 
         tabLay->addStretch(1);
 
         // ── Wire MNR controls → SliceModel ──────────────────────────────────
-#ifdef Q_OS_APPLE
+        // Parity Task 16: wired on every build; the slice's MNR settings
+        // reach the Core that runs it (a remote window) or stay with the
+        // slice (a computer that cannot run it, with the group disabled).
         if (slice) {
             connect(strSl, &QSlider::valueChanged, slice, [slice](int v) {
                 slice->setMnrStrength(static_cast<double>(v) / 100.0);
@@ -1433,7 +1454,6 @@ NrAnfSetupPage::NrAnfSetupPage(RadioModel* model, QWidget* parent)
                 QSignalBlocker b(gsmoothSl); gsmoothSl->setValue(static_cast<int>(v * 100.0));
             });
         }
-#endif
     }
 
     // ── ANF tab ───────────────────────────────────────────────────────────────
@@ -2817,6 +2837,31 @@ void MnfSetupPage::refreshMinNotchWidth()
     RadioModel* rm = model();
     if (!rm) {
         m_minWidthLbl->setText(QStringLiteral("--"));
+        return;
+    }
+
+    // R-R3-49 (parity Task 16): a remote window has no channel; the active
+    // slice carries the Core's channel's minimum (dspInfoVersion 1).
+    if (rm->role() == RadioModel::Role::Remote) {
+        static const QString kOwnTip = QStringLiteral(
+            "Narrowest notch the current bandpass filter can realise");
+        const auto show = [this, rm](double minWidthHz) {
+            if (!m_minWidthLbl) { return; }
+            const bool known = rm->stationDspInfoVersion() >= 1 && minWidthHz > 0.0;
+            m_minWidthLbl->setText(known ? QStringLiteral("%1 Hz").arg(minWidthHz, 0, 'f', 1)
+                                         : QStringLiteral("--"));
+            m_minWidthLbl->setToolTip(rm->stationDspInfoVersion() >= 1
+                ? kOwnTip
+                : QStringLiteral("This Core does not say how narrow a notch it can make. "
+                                 "Updating the Core may help."));
+        };
+        SliceModel* slice = rm->activeSlice();
+        if (!slice) {
+            show(0.0);
+            return;
+        }
+        m_minWidthConn = connect(slice, &SliceModel::minNotchWidthHzChanged, this, show);
+        show(slice->minNotchWidthHz());
         return;
     }
 

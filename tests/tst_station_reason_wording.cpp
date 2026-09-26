@@ -1057,7 +1057,9 @@ const QList<ReasonSource>& reasonSources()
           // relay.
           QStringLiteral("requestIoBoardI2c"), QStringLiteral("setIoBoardOutput"),
           QStringLiteral("ioBoardNoAnswerReason"),
-          QStringLiteral("ioBoardI2cUnreachableReason")},
+          QStringLiteral("ioBoardI2cUnreachableReason"),
+          // R-R3-49 (parity Task 16): dsp.filterResponse's refusals.
+          QStringLiteral("filterResponseForStation")},
          {// This app's own branch in a remote window (role Remote), shown
           // through OperatorReasonText; never sent by the Core.
           "There is no station session."},
@@ -1169,6 +1171,16 @@ const QList<AppSideReason>& appSideReasons()
          "could not send"},
         {"src/models/RadioModel.cpp", "noStationReason",
          "a remote window's own notice when it has no link to the Core"},
+        // R-R3-49 (parity Task 16): why DFNR or MNR is disabled, the
+        // window's own words from the Core's list (or this computer's).
+        {"src/models/RadioModel.cpp", "noiseReductionNotSaidReason",
+         "a remote window's own reason DFNR and MNR are disabled"},
+        {"src/models/RadioModel.cpp", "localNoiseReductionUnavailableReason",
+         "a window's own reason DFNR and MNR are disabled"},
+        {"src/models/RadioModel.cpp", "noiseReductionUnavailableReason",
+         "a window's own reason DFNR and MNR are disabled"},
+        {"src/models/RadioModel.cpp", "coreFilterResponseUnavailableReason",
+         "a remote window's own reason the high-resolution filter graph is disabled"},
         {"src/models/RadioModel.cpp", "reportStationAccessoryRefusal",
          "a remote window passes the Core's refusal on to its own pages"},
         {"src/core/session/IStationLink.h", "pgxlDeviceSettingsUnavailableReason",
@@ -1196,6 +1208,9 @@ const QList<AppSideReason>& appSideReasons()
         {"src/core/session/IStationLink.h", "ioBoardI2cUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
         {"src/core/session/IStationLink.h", "alexHpfSwitchesUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        // R-R3-49 (parity Task 16): the filter graph's curve.
+        {"src/core/session/IStationLink.h", "filterResponseUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
         {"src/models/RadioModel.h", "rxFilter0Reason",
          "the filter badge's status label (AlexController), not a refusal"},

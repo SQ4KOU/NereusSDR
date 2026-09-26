@@ -134,6 +134,10 @@
 //                 the Core's too, so the Options page gates three controls.
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-26 -- Remote-window parity Task 16: the high-resolution filter
+//                 box is disabled only on a Core that does not send its
+//                 curve, with that reason. J.J. Boyd (KG4VCF), with
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -1458,6 +1462,10 @@ private slots:
         QVERIFY(!twoTone->isEnabled());
     }
 
+    // Parity Task 16 (R-R3-49): a remote window draws its Core's curve
+    // (dsp.filterResponse); on a Core that does not send it (below
+    // dspInfoVersion 1, as this bare remote model is) the box is disabled
+    // with the reason.
     void remoteHighResolutionFilterGraphControlIsExplicitlyUnavailable()
     {
         RadioModel model(RadioModel::Role::Remote);
@@ -1465,7 +1473,7 @@ private slots:
         QCheckBox* const highRes = page.highResolutionFilterCharacteristicsCheckBox();
         QVERIFY(highRes != nullptr);
         QVERIFY(!highRes->isEnabled());
-        QVERIFY(highRes->toolTip().contains(QStringLiteral("local direct mode")));
+        QCOMPARE(highRes->toolTip(), IStationLink::filterResponseUnavailableReason());
 
         QSignalSpy toggled(highRes, &QCheckBox::toggled);
         highRes->click();

@@ -54,6 +54,11 @@
 //                 transmit settings gate instead of the transmit
 //                 permission; the Core applies them to its TX channel.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-R3-49 (parity Task 16): the high-resolution filter
+//                 graph works in a remote window, drawing the Core's curve
+//                 (dsp.filterResponse); "Time to last change" shows the
+//                 Core's apply time. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -122,6 +127,8 @@
 #include <QHBoxLayout>
 #include <QLabel>
 #include <QVBoxLayout>
+
+#include <cmath>
 
 namespace NereusSDR {
 
@@ -220,6 +227,12 @@ static RxChannel* filterGraphChannel(RadioModel* rm)
 
 void DspOptionsPage::applyHighResFilter(RadioModel* rm, bool highRes)
 {
+    // R-R3-49 (parity Task 16): a remote window has no channel; while the
+    // curve is wanted it fetches the Core's (RadioModel::
+    // setCoreFilterResponseWanted) and the items draw that.
+    if (rm) {
+        rm->setCoreFilterResponseWanted(highRes);
+    }
     ContainerManager* cm = rm ? rm->containerManager() : nullptr;
     if (!cm) {
         return;
@@ -242,6 +255,28 @@ void DspOptionsPage::applyHighResFilter(RadioModel* rm, bool highRes)
             fdi->setHighResolution(highRes);
         }
     });
+    applyCoreFilterResponse(rm);
+}
+
+void DspOptionsPage::applyCoreFilterResponse(RadioModel* rm)
+{
+    ContainerManager* cm = rm ? rm->containerManager() : nullptr;
+    if (!cm || rm->role() != RadioModel::Role::Remote) {
+        return;
+    }
+    // The Core sends dB, 0 at the peak; the graph resamples magnitudes
+    // (RxChannel::resampleFilterResponse), as it does its own channel's.
+    const RadioModel::FilterResponse& response = rm->coreFilterResponse();
+    QVector<double> bins;
+    bins.reserve(response.magnitudesDb.size());
+    for (double db : response.magnitudesDb) {
+        bins.append(std::pow(10.0, db / 20.0));
+    }
+    cm->forEachMeterItem([&bins](MeterItem* item) {
+        if (auto* fdi = qobject_cast<FilterDisplayItem*>(item)) {
+            fdi->setFilterResponseBins(bins);
+        }
+    });
 }
 
 void DspOptionsPage::applyPersistedHighResFilterTo(RadioModel* rm, MeterItem* item)
@@ -255,6 +290,14 @@ void DspOptionsPage::applyPersistedHighResFilterTo(RadioModel* rm, MeterItem* it
         AppSettings::instance().value(
             QStringLiteral("DspOptionsHighResFilterCharacteristics"),
             QStringLiteral("False")).toString() == QLatin1String("True"));
+    // R-R3-49 (parity Task 16): and the Core's curve, in a remote window.
+    if (rm->role() == RadioModel::Role::Remote) {
+        QVector<double> bins;
+        for (double db : rm->coreFilterResponse().magnitudesDb) {
+            bins.append(std::pow(10.0, db / 20.0));
+        }
+        fdi->setFilterResponseBins(bins);
+    }
 }
 
 void DspOptionsPage::applyPersistedHighResFilter(RadioModel* rm)
@@ -593,15 +636,18 @@ void DspOptionsPage::buildUI()
            "magnitude response. When disabled, a simplified box-shape passband "
            "is shown instead."));
 
-    // A remote client has no local RxChannel from which FilterDisplayItem can
-    // obtain the computed FIR curve. This is a rendering enhancement, not a
-    // station DSP setting, so leave the rest of the station-scoped Options
-    // page available and make this one unavailable surface explicit.
-    if (RadioModel* rm = model(); rm && !rm->ownsLocalDsp()) {
-        m_highResFilterChars->setEnabled(false);
-        m_highResFilterChars->setToolTip(
-            tr("Actual FIR filter-curve rendering is available only in local "
-               "direct mode. Windows connected to a remote Core show the simplified passband."));
+    // R-R3-49 (parity Task 16): a remote window draws its Core's curve
+    // (dsp.filterResponse, dspInfoVersion 1). On a Core that does not send
+    // it the box is disabled with the reason.
+    if (RadioModel* rm = model(); rm && rm->role() == RadioModel::Role::Remote) {
+        const QString ownTip = m_highResFilterChars->toolTip();
+        const auto follow = [this, rm, ownTip]() {
+            const QString reason = rm->coreFilterResponseUnavailableReason();
+            m_highResFilterChars->setEnabled(reason.isEmpty());
+            m_highResFilterChars->setToolTip(reason.isEmpty() ? ownTip : reason);
+        };
+        follow();
+        connect(rm, &RadioModel::noiseReductionMethodsChanged, this, follow);
     }
 
     loadCheck(m_highResFilterChars, "DspOptionsHighResFilterCharacteristics", false);
@@ -638,17 +684,21 @@ void DspOptionsPage::buildUI()
     m_timeToLastChangeLabel = new QLabel(tr("Time to last change: none yet"), this);
     m_timeToLastChangeLabel->setStyleSheet(QStringLiteral("color: #888;"));
 
-    // Wire to RadioModel::dspChangeMeasured if model is available.
-    // The signal is emitted by RadioModel::rebuildDsp() (Task 1.8) with the
-    // elapsed milliseconds of the last WDSP channel rebuild.
+    // Follows RadioModel::dspOptionsLastApplyMs: the elapsed milliseconds
+    // of the last WDSP channel rebuild (dspChangeMeasured, Task 1.8), the
+    // Core's in a remote window (parity Task 16), 0 before any.
     if (model()) {
-        connect(model(), &RadioModel::dspChangeMeasured, this,
-            [this](qint64 ms) {
-                m_timeToLastChangeLabel->setText(
-                    tr("Time to last change: %1 ms").arg(ms));
-                m_timeToLastChangeLabel->setStyleSheet(
-                    QStringLiteral("color: #c8d8e8;"));
-            });
+        const auto show = [this](qint64 ms) {
+            if (ms <= 0) {
+                return;
+            }
+            m_timeToLastChangeLabel->setText(
+                tr("Time to last change: %1 ms").arg(ms));
+            m_timeToLastChangeLabel->setStyleSheet(
+                QStringLiteral("color: #c8d8e8;"));
+        };
+        connect(model(), &RadioModel::dspOptionsLastApplyMsChanged, this, show);
+        show(model()->dspOptionsLastApplyMs());
     }
 
     layout->addWidget(m_timeToLastChangeLabel);

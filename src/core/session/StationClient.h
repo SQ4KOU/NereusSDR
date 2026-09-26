@@ -279,6 +279,10 @@
 //                                    (radioHardwareVersion 7), and the HL2
 //                                    link (stationTelemetryVersion 5).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 16):
+//                                    requestFilterResponse
+//                                    (dspInfoVersion 1).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -814,6 +818,11 @@ public:
                                      int value) override;
     /// Parity Task 14 (radioHardwareVersion 7). Verb "setIoBoardOutput".
     CommandOutcome requestIoBoardOutput(int pin, bool on) override;
+    /// Parity Task 16 (dspInfoVersion 1). Verb "dsp.filterResponse". The
+    /// answer goes to RadioModel::reportStationFilterResponse.
+    CommandOutcome requestFilterResponse(int sliceId, bool highResolution) override;
+    /// Parity Task 16: minor 11 and dspInfoVersion at least 1.
+    bool dspInfoAvailable() const;
     /// R-R3-46 fix wave (radioHardwareVersion 3). Verb "setAlexRxAntenna":
     /// one band's RX antenna (rxOnly false, 1..3) or RX-only antenna
     /// (rxOnly true, 0..3) on the Core.

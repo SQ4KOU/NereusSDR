@@ -326,6 +326,9 @@
 //   2026-09-26  J.J. Boyd / KG4VCF  R-R3-13 / R-R3-49 (parity Task 15):
 //                                    meterReadingsVersion.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  R-R3-49 / R-R3-21 / R-R3-40 (parity
+//                                    Task 16): dspInfoVersion.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QHash>
@@ -860,6 +863,11 @@ public:
     // AGC readings, and a window's Multimeter polling delay sets the pump's
     // rate at once); 0 otherwise.
     int meterReadingsVersion() const;
+    // R-R3-49 / R-R3-21 / R-R3-40 (parity Task 16): dspInfoVersion. 1 on a
+    // Core with a local radio model: its `radio` object carries
+    // noiseReductionMethods and dspOptionsLastApplyMs, its slices
+    // minNotchWidthHz, and it takes dsp.filterResponse; 0 otherwise.
+    int dspInfoVersion() const;
     // R-R3-49 (parity Task 7): the peer was offered transmitSettingsVersion
     // 7: it arms PureSignal and changes pureSignalSettings off the air.
     bool pureSignalArmingOffered(SessionTransport* transport) const;

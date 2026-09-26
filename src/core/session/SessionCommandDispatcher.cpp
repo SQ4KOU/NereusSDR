@@ -170,6 +170,10 @@
 //                                    radioHardwareVersion 7):
 //                                    requestIoBoardI2c and setIoBoardOutput.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 16,
+//                                    dspInfoVersion 1): dsp.filterResponse,
+//                                    the filter graph's curve.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -375,6 +379,7 @@ QString notRepresentableReason()
 //   requestIoBoardI2c, setIoBoardOutput
 //                          radioHardwareVersion 7 (requestIoBoardI2c,
 //                          requestIoBoardOutput)
+//   dsp.filterResponse     dspInfoVersion 1 (requestFilterResponse)
 //   nnr.*                  nnrControlAvailable(); nnr.tryAgain adds
 //                          kNnrLimitSessionProtocolMinor
 //   nnr.applyModelSelection dspAssetVersion 1 (requestApplyNnrModels)
@@ -540,6 +545,9 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
          "radioHardwareVersion", 7, kRadioIdentitySessionProtocolMinor},
         {"setIoBoardOutput", {arg("pin", kInt), arg("on", kBool)}, "radioHardwareVersion", 7,
          kRadioIdentitySessionProtocolMinor},
+        // The filter graph's curve (R-R3-49, parity Task 16).
+        {"dsp.filterResponse", {arg("sliceId", kInt), arg("highResolution", kBool)},
+         "dspInfoVersion", 1, kRadioIdentitySessionProtocolMinor},
         // Neural noise reduction.
         {"nnr.setDiagnostics",
          {arg("sliceId", kInt), arg("testMode", kInt), arg("outputMode", kInt)},
@@ -866,6 +874,8 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
         handleRequestIoBoardI2c(invoke);
     } else if (invoke.commandVerb == "setIoBoardOutput") {
         handleSetIoBoardOutput(invoke);
+    } else if (invoke.commandVerb == "dsp.filterResponse") {
+        handleFilterResponse(invoke);
     } else if (invoke.commandVerb == "nnr.setDiagnostics" || invoke.commandVerb == "nnr.resetTuning"
                || invoke.commandVerb == "nnr.tryAgain") {
         handleNnrAction(invoke);
@@ -2702,6 +2712,41 @@ void SessionCommandDispatcher::handleRequestIoBoardI2c(const SessionMessage& inv
             self->emitResultAs(owner, SessionMessages::commandResult(
                 verb, commandId, ok, ok ? QString() : reason, {}, values));
         });
+}
+
+// R-R3-49 (parity Task 16, dspInfoVersion 1): Setup > DSP > Options >
+// High-resolution filter characteristics in a remote window. The Core
+// computes its slice's receiver's curve as the local filter graph does
+// (RadioModel::filterResponseForStation) and answers with `values`
+// startHz and stepHz (f64) and magnitudesDbJson (utf8, a JSON array of dB,
+// 0 at the peak). With `highResolution` false no curve is wanted and the
+// array is empty. A read: it reaches no radio, so it is answered on and off
+// the air.
+void SessionCommandDispatcher::handleFilterResponse(const SessionMessage& invoke)
+{
+    int sliceId = -1;
+    QVariant highResolution;
+    if (!hasExactlyArguments(invoke.arguments, { "sliceId", "highResolution" })
+        || findIntArgument(invoke.arguments, "sliceId", &sliceId) != ArgumentStatus::Ok
+        || !findArgument(invoke.arguments, "highResolution", &highResolution)
+        || highResolution.typeId() != QMetaType::Bool) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core could not read this request."), {});
+        return;
+    }
+    RadioModel::FilterResponse response;
+    QString reason;
+    if (!m_radioModel->filterResponseForStation(sliceId, highResolution.toBool(), &response,
+                                                &reason)) {
+        emitResult(invoke.commandVerb, invoke.commandId, false, reason, {});
+        return;
+    }
+    emit commandResultReady(SessionMessages::commandResult(
+        invoke.commandVerb, invoke.commandId, true, QString(), {},
+        {{0, "startHz", MirrorWireKind::Float64, response.startHz},
+         {0, "stepHz", MirrorWireKind::Float64, response.stepHz},
+         {0, "magnitudesDbJson", MirrorWireKind::Utf8,
+          RadioModel::filterResponseToJson(response.magnitudesDb)}}));
 }
 
 // R-R3-46 (parity Task 14, radioHardwareVersion 7): Pin Control on HL2
