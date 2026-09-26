@@ -15,6 +15,11 @@
 //               keepalive, created and taken only when asked, and the
 //               receive-severed test seam. J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 27 (R-IOS-16): the ICE settings of a
+//               connection that came through the remote access service
+//               (StartOptions::ice; see IceConfiguration.h for the pinned
+//               libdatachannel and libjuice limits they follow). J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 //
 // =================================================================
 
@@ -78,6 +83,8 @@ struct CallbackEvent {
         PeerFailed,
         // Task 37: a message on the "tx" channel (in `first`).
         TxMessage,
+        // Task 27: every local candidate has been reported.
+        GatheringComplete,
     };
 
     Kind kind;
@@ -470,6 +477,12 @@ struct LibDataChannelMediaTransport::Private {
     // R-R3-45: the declared headphones mix's SSRC, 0 for today.
     quint32 headphonesAudioSsrc = 0;
     CandidatePolicy candidatePolicy = CandidatePolicy::HostOnly;
+    // Task 27: the ICE settings of a connection through the remote access
+    // service, and where its gathering stands.
+    std::optional<IceConfiguration> ice;
+    bool gatherRequested = false;
+    bool gatheringStarted = false;
+    QList<IceRelayServer> relays;
     bool started = false;
     bool ready = false;
     bool remoteDescriptionAccepted = false;
@@ -528,6 +541,11 @@ bool LibDataChannelMediaTransport::start(const StartOptions& options)
     try {
         rtc::Configuration config;
         config.mtu = static_cast<std::size_t>(kConfiguredMtuBytes);
+        // Task 27: through the remote access service, the MTU leaves room
+        // for TURN's ChannelData header (IceConfiguration::kMtuBytes).
+        if (options.ice) {
+            config.mtu = static_cast<std::size_t>(IceConfiguration::kMtuBytes);
+        }
         // libdatachannel applies this before delivering a complete SCTP
         // message, so the allocation is bounded before our callback runs.
         config.maxMessageSize = static_cast<std::size_t>(kMaxDisplayMessageBytes);
@@ -535,6 +553,24 @@ bool LibDataChannelMediaTransport::start(const StartOptions& options)
         config.disableAutoNegotiation = true;
         config.enableIceTcp = false;
         config.iceServers.clear();
+        d->ice = options.ice;
+        d->gatherRequested = false;
+        d->gatheringStarted = false;
+        d->relays.clear();
+        if (options.ice) {
+            // One STUN server (libdatachannel picks one of its STUN servers
+            // at random, so there is only ever one to pick), and no
+            // gathering until the relay credentials are known: they are
+            // fixed when gathering starts (IceConfiguration.h).
+            if (const auto stun = options.ice->stunServer()) {
+                config.iceServers.emplace_back(stun->host.toStdString(), stun->port);
+            }
+            config.disableAutoGathering = true;
+            if (options.ice->relayKnown()) {
+                d->gatherRequested = true;
+                d->relays = options.ice->relayServers();
+            }
+        }
 
         applyMediaSctpSettingsOnce();
         d->peer = std::make_shared<rtc::PeerConnection>(std::move(config));
@@ -559,6 +595,11 @@ bool LibDataChannelMediaTransport::start(const StartOptions& options)
                 return;
             }
             queueEvent(weak, CallbackEvent::Kind::Candidate, value, mid);
+        });
+        d->peer->onGatheringStateChange([weak](rtc::PeerConnection::GatheringState state) {
+            if (state == rtc::PeerConnection::GatheringState::Complete) {
+                queueEvent(weak, CallbackEvent::Kind::GatheringComplete, std::string());
+            }
         });
         d->peer->onStateChange([weak](rtc::PeerConnection::State state) {
             if (state == rtc::PeerConnection::State::Failed) {
@@ -747,6 +788,7 @@ bool LibDataChannelMediaTransport::start(const StartOptions& options)
 
         if (options.role == Role::Offerer) {
             d->peer->setLocalDescription(rtc::Description::Type::Offer);
+            gatherIfReady();
         }
         return true;
     } catch (const std::exception& error) {
@@ -754,6 +796,75 @@ bool LibDataChannelMediaTransport::start(const StartOptions& options)
         stopInternal(false);
         emit errorOccurred(message);
         return false;
+    }
+}
+
+bool LibDataChannelMediaTransport::gatherCandidates(const QList<IceRelayServer>& relays)
+{
+    if (!d->started || !d->ice || d->gatherRequested) {
+        return false;
+    }
+    d->gatherRequested = true;
+    d->relays = d->ice->relayAllowed() ? relays : QList<IceRelayServer>();
+    gatherIfReady();
+    return true;
+}
+
+void LibDataChannelMediaTransport::gatherIfReady()
+{
+    if (!d->started || !d->peer || !d->ice || !d->gatherRequested || d->gatheringStarted
+        || !d->peer->localDescription()) {
+        return;
+    }
+    d->gatheringStarted = true;
+    std::vector<rtc::IceServer> relays;
+    for (const IceRelayServer& relay : std::as_const(d->relays)) {
+        if (relays.size() >= static_cast<std::size_t>(IceConfiguration::kMaxRelayServers)) {
+            break;
+        }
+        relays.emplace_back(relay.host.toStdString(), relay.port, relay.username.toStdString(),
+                            relay.password.toStdString(), rtc::IceServer::RelayType::TurnUdp);
+    }
+    try {
+        d->peer->gatherLocalCandidates(std::move(relays));
+    } catch (const std::exception& error) {
+        emit errorOccurred(QString::fromUtf8(error.what()));
+    }
+}
+
+std::optional<MediaIcePath> LibDataChannelMediaTransport::selectedPath() const
+{
+    if (!d->peer) {
+        return std::nullopt;
+    }
+    try {
+        rtc::Candidate local;
+        rtc::Candidate remote;
+        if (!d->peer->getSelectedCandidatePair(&local, &remote)) {
+            return std::nullopt;
+        }
+        const auto typeName = [](const rtc::Candidate& candidate) {
+            switch (candidate.type()) {
+            case rtc::Candidate::Type::Host:
+                return QStringLiteral("host");
+            case rtc::Candidate::Type::ServerReflexive:
+                return QStringLiteral("srflx");
+            case rtc::Candidate::Type::PeerReflexive:
+                return QStringLiteral("prflx");
+            case rtc::Candidate::Type::Relayed:
+                return QStringLiteral("relay");
+            default:
+                return QString();
+            }
+        };
+        MediaIcePath path;
+        path.localType = typeName(local);
+        path.remoteType = typeName(remote);
+        path.localAddress = QString::fromStdString(local.address().value_or(std::string()));
+        path.remoteAddress = QString::fromStdString(remote.address().value_or(std::string()));
+        return path;
+    } catch (const std::exception&) {
+        return std::nullopt;
     }
 }
 
@@ -779,6 +890,10 @@ void LibDataChannelMediaTransport::stopInternal(bool notify)
     d->remoteDescribesLossless = false;
     d->remoteDescribesMicLossless = false;
     d->acceptedCandidates = 0;
+    d->ice.reset();
+    d->gatherRequested = false;
+    d->gatheringStarted = false;
+    d->relays.clear();
     d->drainTimer->stop();
 
     std::shared_ptr<rtc::DataChannel> pendingDisplay;
@@ -884,6 +999,7 @@ bool LibDataChannelMediaTransport::acceptDescription(const QString& sdp,
         d->remoteDescribesMicLossless = describesMicLossless;
         if (d->role == Role::Answerer) {
             d->peer->setLocalDescription(rtc::Description::Type::Answer);
+            gatherIfReady();
         }
         return true;
     } catch (const std::exception& error) {
@@ -900,18 +1016,28 @@ bool LibDataChannelMediaTransport::acceptCandidate(const QString& candidate,
     }
     const QByteArray candidateBytes = candidate.toUtf8();
     const QByteArray midBytes = mid.toUtf8();
+    // Task 27: a candidate through the remote access service names no mid
+    // (the rendezvous document, section 5.2); the library takes the bundle's.
     if (candidateBytes.isEmpty() || candidateBytes.size() > kMaxCandidateBytes
-        || midBytes.isEmpty() || midBytes.size() > kMaxCandidateMidBytes
+        || (midBytes.isEmpty() && !d->ice) || midBytes.size() > kMaxCandidateMidBytes
         || candidateBytes.contains('\0') || midBytes.contains('\0')) {
         return false;
     }
 
     try {
         rtc::Candidate parsed(candidateBytes.toStdString(), midBytes.toStdString());
-        // R3 selects HostOnly. AnyIceType keeps the same transport interface
-        // usable by a later approved STUN or relay configuration.
-        if (d->candidatePolicy == CandidatePolicy::HostOnly
-            && parsed.type() != rtc::Candidate::Type::Host) {
+        if (d->ice) {
+            // Task 27: through the remote access service every candidate
+            // type is used, the far end's relay ones only when this side
+            // allows the relay (`relay = deny`: direct or nothing).
+            if (!d->ice->acceptsRemoteCandidate(QString::fromUtf8(candidateBytes))) {
+                return false;
+            }
+        } else if (d->candidatePolicy == CandidatePolicy::HostOnly
+                   && parsed.type() != rtc::Candidate::Type::Host) {
+            // R3 selects HostOnly. AnyIceType keeps the same transport
+            // interface usable by a later approved STUN or relay
+            // configuration.
             return false;
         }
         d->peer->addRemoteCandidate(std::move(parsed));
@@ -1201,6 +1327,9 @@ void LibDataChannelMediaTransport::drainCallbacks()
         case CallbackEvent::Kind::TxMessage:
             emit txReceived(QByteArray(event.first.data(),
                                        static_cast<qsizetype>(event.first.size())));
+            break;
+        case CallbackEvent::Kind::GatheringComplete:
+            emit gatheringComplete();
             break;
         }
         if (!isCurrentGeneration()) {

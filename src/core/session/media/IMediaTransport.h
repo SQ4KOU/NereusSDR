@@ -14,8 +14,14 @@
 //               (StartOptions::txChannel, sendTx, txReceived) for the
 //               transmit keepalive. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 27 (R-IOS-16): StartOptions::ice for a
+//               connection that came through the remote access service,
+//               gatherCandidates(), gatheringComplete() and selectedPath().
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //
 // =================================================================
+
+#include "core/session/IceConfiguration.h"
 
 #include <QByteArray>
 #include <QList>
@@ -25,6 +31,21 @@
 #include <optional>
 
 namespace NereusSDR {
+
+/// iPhone app plan Task 27: the pair of candidates a connection settled on,
+/// what the desktop's attempt record reads to tell a direct path from a
+/// relayed one. Types are RFC 8839's (`host`, `srflx`, `prflx`, `relay`).
+struct MediaIcePath {
+    QString localType;
+    QString remoteType;
+    QString localAddress;
+    QString remoteAddress;
+
+    bool relayed() const
+    {
+        return localType == QLatin1String("relay") || remoteType == QLatin1String("relay");
+    }
+};
 
 struct MediaTransportTelemetry {
     quint64 receivedDisplayPayloadBytes = 0;
@@ -110,6 +131,16 @@ public:
         // answerer takes one only when it was started with it (an answerer
         // from before refuses an unknown channel).
         bool txChannel = false;
+        // iPhone app plan Task 27 (R-IOS-16): set for a connection that came
+        // through the remote access service. Its one STUN server goes in at
+        // once; automatic gathering is off, and gathering starts with the
+        // relay servers once the credentials are known (at start() when
+        // ice->relayKnown(), otherwise at gatherCandidates()); the MTU is
+        // IceConfiguration::kMtuBytes; and candidates of every type are
+        // taken from the far end, relay ones only when the relay is
+        // allowed. Unset (the default): host candidates only, gathered at
+        // once, exactly as before.
+        std::optional<IceConfiguration> ice {};
     };
 
     /// Task 37: the largest message the "tx" channel carries.
@@ -236,6 +267,20 @@ public:
 
     virtual bool isReady() const = 0;
 
+    /// Task 27: starts gathering, with these relay servers (none when the
+    /// relay is not allowed or not offered), on a transport started with
+    /// StartOptions::ice whose relay was not yet known. Once, and only then:
+    /// false otherwise, and for a transport without that support.
+    virtual bool gatherCandidates(const QList<IceRelayServer>& relays)
+    {
+        Q_UNUSED(relays);
+        return false;
+    }
+
+    /// Task 27: the candidate pair in use once connected; nullopt before, or
+    /// where the transport cannot say.
+    virtual std::optional<MediaIcePath> selectedPath() const { return std::nullopt; }
+
     /// R-R3-23: true once both this side's description and the remote
     /// description carry the L16 rtpmap on the audio m-line, so lossless
     /// packets may be sent. False before negotiation and for a transport
@@ -258,6 +303,9 @@ public:
 signals:
     void localDescription(const QString& sdp, const QString& type);
     void localCandidate(const QString& candidate, const QString& mid);
+    /// Task 27: every local candidate has been reported; a connection
+    /// through the remote access service sends the end of candidates.
+    void gatheringComplete();
     void displayReceived(const QByteArray& message);
     void rtpReceived(const QByteArray& packet);
     /// Task 36: an RTP packet that arrived on the microphone line. Never

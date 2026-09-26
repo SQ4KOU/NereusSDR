@@ -83,6 +83,11 @@
 //               the governor fed every controller's charge and running
 //               while any media session is live. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 27 (R-IOS-08, R-IOS-16): the Core
+//               registers with the remote access service, holds a nameplate
+//               while its pairing window is open, and pairs through the
+//               service's mailbox (startRendezvous()). J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/daemon/DaemonApp.h"
@@ -107,6 +112,8 @@
 #include "core/daemon/StationControlSocket.h"
 #include "core/session/StationServer.h"
 #include "core/session/StationLanAnnouncer.h"
+#include "core/session/RendezvousClient.h"
+#include "core/session/StationRendezvous.h"
 #include "core/session/DnsSdAdvertiser.h"
 #include "core/session/StationDevicesFacade.h"
 #include "core/session/DeviceSessionRegistry.h"
@@ -356,6 +363,8 @@ void DaemonApp::stop()
     m_controlSocket.reset();
     m_controlCommands.reset();
     m_statusPage.reset();
+    // iPhone app plan Task 27: before the server its callbacks read.
+    m_rendezvous.reset();
     m_radioRecoveryEnabled = false;
     cancelRadioDiscovery();
     cancelStationServerListenRetry();
@@ -729,6 +738,28 @@ void DaemonApp::startStationServer(const DaemonConfig& cfg)
     m_stationListenArmed = true;
     m_stationListenPort = static_cast<quint16>(cfg.remotePort);
     attemptStationServerListen();
+    startRendezvous(cfg);
+}
+
+void DaemonApp::startRendezvous(const DaemonConfig& cfg)
+{
+    m_rendezvous.reset();
+    if (!m_stationServer) {
+        return;
+    }
+    const QList<QUrl> servers = RendezvousClient::serverUrls(cfg.rendezvousServers);
+    if (servers.isEmpty()) {
+        qCInfo(lcApp) << "DaemonApp: no remote access service configured "
+                         "(rendezvous_servers is empty)";
+        return;
+    }
+    m_rendezvous = std::make_unique<StationRendezvous>(m_stationServer.get(), servers,
+                                                       cfg.relayAllowed);
+    if (!m_rendezvous->start()) {
+        qCWarning(lcApp) << "DaemonApp: the Core has no usable identity key, so it does not "
+                            "register with the remote access service";
+        m_rendezvous.reset();
+    }
 }
 
 namespace {

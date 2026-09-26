@@ -7407,6 +7407,25 @@ nereus_add_test(tst_gui_connection_controller)
 nereus_add_test(tst_station_pairing_client fakes/LoopbackTransport.cpp)
 target_compile_definitions(tst_station_pairing_client PRIVATE
     NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+# iPhone app plan Task 27 (R-IOS-16): the ICE settings of a connection
+# through the remote access service, shaped by the pinned libdatachannel and
+# libjuice.
+nereus_add_test(tst_ice_configuration)
+# iPhone app plan Task 27 (R-IOS-08, R-IOS-16): the rendezvous wire and its
+# crypto and control vectors, the Core's and the desktop's conformance
+# runners (rendezvous/conformance/v1/), and the Core against the Python
+# service run on this computer: registration, introductions from paired and
+# unpaired devices, an ICE connection, pairing by code through the mailbox,
+# and a session that outlives the service.
+nereus_add_test(tst_rendezvous_client fakes/LoopbackTransport.cpp)
+target_compile_definitions(tst_rendezvous_client PRIVATE
+    NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+# Real ICE connections, each within the libraries' own deadlines. It runs
+# the Python service, which needs python3 with websockets and cryptography
+# (the Linux CI job installs them from apt).
+if(TEST tst_rendezvous_client)
+    set_tests_properties(tst_rendezvous_client PROPERTIES TIMEOUT 300)
+endif()
 
 # R3 remote window harness plan, Task 2 (R-R3-16/17/21/24): one real remote
 # MainWindow dialling an in-process StationServer over a loopback ws://

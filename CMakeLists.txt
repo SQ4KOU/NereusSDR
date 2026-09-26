@@ -1343,6 +1343,15 @@ list(APPEND CORE_SOURCES
     # client side of pairing.
     src/core/security/ClientDeviceIdentity.cpp
     src/core/session/StationPairingClient.cpp
+    # iPhone app plan Task 27 (R-IOS-08, R-IOS-16): the remote access
+    # service (the rendezvous): its wire, the Core's and the desktop's
+    # client of it, pairing through its mailbox, and the ICE settings of a
+    # connection it introduced.
+    src/core/session/RendezvousWire.cpp
+    src/core/session/RendezvousClient.cpp
+    src/core/session/RendezvousMailboxTransport.cpp
+    src/core/session/StationRendezvous.cpp
+    src/core/session/IceConfiguration.cpp
 )
 
 # CoreAudioHalBus — macOS-only IAudioBus implementation bridging to the

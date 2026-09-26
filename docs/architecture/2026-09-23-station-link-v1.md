@@ -349,8 +349,10 @@ claimed Core becomes unclaimed again only through its console's `reset
 example `7-anvil-harbor`. The words come from
 `resources/pairing-words-v1.txt`: 256 lowercase words of 4 to 7 letters,
 no two within one edit of each other and no two alike in sound. The
-number is the rendezvous nameplate (Part E); until the rendezvous exists
-the station picks one from 1 to 99 (`PairingWindow::kLocalNameplateMax`).
+number is the rendezvous nameplate: while the Core is registered with the
+rendezvous (section 19) it holds a nameplate there while its pairing window
+is open and shows that number; otherwise it picks one from 1 to 99
+(`PairingWindow::kLocalNameplateMax`).
 Both ends normalise a typed code before they use it
 (`PairingCode::normalise`). Normalising lowercases and trims, drops any
 leading zeros of the number, and joins the three parts with single
@@ -5044,3 +5046,16 @@ code carries section 3.6's `pair.*` messages, as text, inside the
 rendezvous's mailbox messages. The rendezvous introduces the two ends and
 mints relay credentials; the session that follows is this link, on its own
 connection, direct or through the relay, never through the rendezvous.
+
+**Pairing through a mailbox** (iPhone app plan Task 27). A mailbox carries
+the `pair.*` messages of section 3.6 and nothing else: no `hello` goes
+either way and no `session.end`. The device sends `pair.start` in code
+mode as the mailbox's first message (one tap never pairs through it: a
+mailbox has no address of its own), and the exchange then runs exactly as
+on a direct connection, the station's `pair.fail` or `pair.confirm` ending
+it. A message of any other kind from the device ends the pairing as a
+protocol error. A mailbox has no certificate, so the device keeps the
+Core's identity key from the station's box and checks the certificate
+binding against the certificate of its first sign-in (section 3.4). The
+Core gives its nameplate back only after that mailbox has closed, since
+releasing a nameplate ends its mailbox.

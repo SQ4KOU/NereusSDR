@@ -76,6 +76,10 @@
 //               per-address handshake cap and 0600 on load. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic Claude
 //               Code.
+//   2026-09-26: iPhone app plan Task 27 (R-IOS-08): the nameplate comes
+//               from the remote access service while the Core is
+//               registered. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QObject>
@@ -102,7 +106,8 @@ public:
     /// it doubles after each consecutive failure between the two.
     static constexpr qint64 kFirstRetryMs = 5000;
     static constexpr qint64 kMaxRetryMs = 300000;
-    /// The nameplate until the rendezvous supplies one: 1 to this.
+    /// The nameplate when the remote access service has supplied none: 1
+    /// to this.
     static constexpr int kLocalNameplateMax = 99;
     /// Fix wave R1-I2 (the controller's ruling, 2026-09-24): consecutive
     /// burned codes that close any open window, and how long a reopened
@@ -130,8 +135,13 @@ public:
     /// being tried, and while the wait after a failure runs.
     QString currentCode() const { return m_code; }
 
-    /// Task 27 supplies the rendezvous nameplate; until then a random
-    /// number from 1 to kLocalNameplateMax. A change makes a new code.
+    /// The number in the code. While the Core is registered with the
+    /// remote access service it is the nameplate the service gave it
+    /// (iPhone app plan Task 27: DaemonApp::startRendezvous() claims one
+    /// while the window is open and passes it here); otherwise a random
+    /// number from 1 to kLocalNameplateMax, for pairing on this network or
+    /// at a typed address. A change makes a new code, unless the code is in
+    /// use, when the next one carries it.
     void setNameplate(int nameplate);
     int nameplate() const { return m_nameplate; }
 

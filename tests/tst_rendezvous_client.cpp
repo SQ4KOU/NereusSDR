@@ -1,0 +1,1922 @@
+// no-port-check: NereusSDR-original.
+// =================================================================
+// tests/tst_rendezvous_client.cpp  (NereusSDR)
+// =================================================================
+//
+// iPhone app plan Task 27 (R-IOS-08, R-IOS-16): reaching the Core through
+// the remote access service (the rendezvous,
+// docs/architecture/2026-09-23-rendezvous-v1.md).
+//
+// The conformance suite, rendezvous/conformance/v1/ (section 10):
+//   - every crypto vector (strict base64url, the P-256 key check, the
+//     rendezvous id, the registration and introduction signatures, the
+//     TURN credentials);
+//   - every control fixture the Core and the desktop receive or send, each
+//     decoded (or refused) and encoded again;
+//   - the Core's runner (section 10.4): this test plays the service towards
+//     a RendezvousClient in the station role for every fixture whose runs
+//     include "core", and the desktop's runner does the same towards one in
+//     the client role for every fixture that includes "app".
+//
+// Then the Core against the real Python service (rendezvous/server), run
+// on this computer with a small STUN and TURN fake beside it
+// (tests/tools/fake_turn_server.py); nothing leaves this computer:
+//   - a Core registers, a paired device's introduction arrives, and an ICE
+//     connection completes with the service's STUN server in use;
+//   - with direct paths blocked in the test (only relay candidates pass),
+//     it completes through TURN over UDP;
+//   - an introduction from a device the Core never paired, and from one it
+//     revoked, is dropped without a reply and counted;
+//   - pairing by code works through a mailbox: a recording relay between
+//     the ends and the service sees every body forwarded unchanged and
+//     never the code, and the service's log shows the mailbox;
+//   - with the service stopped, a session that was running continues;
+//   - IPv6 is preferred where both ends have it.
+//
+// Keys, codes, nonces and secrets are made at run time; nothing secret is
+// printed.
+//
+// =================================================================
+// Modification history (NereusSDR):
+//   2026-09-26: original implementation for NereusSDR by J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
+// =================================================================
+
+#include <QtTest>
+
+#include <QDir>
+#include <QFile>
+#include <QHostAddress>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QMessageAuthenticationCode>
+#include <QNetworkInterface>
+#include <QProcess>
+#include <QRandomGenerator>
+#include <QSignalSpy>
+#include <QStandardPaths>
+#include <QTcpServer>
+#include <QTcpSocket>
+#include <QTemporaryDir>
+#include <QWebSocket>
+#include <QWebSocketServer>
+
+#include <functional>
+#include <memory>
+#include <optional>
+
+#ifdef Q_OS_UNIX
+#include <pwd.h>
+#include <unistd.h>
+#endif
+
+#include "core/AppSettings.h"
+#include "core/security/ClientDeviceIdentity.h"
+#include "core/security/DeviceStore.h"
+#include "core/security/PairingCode.h"
+#include "core/security/PairingWindow.h"
+#include "core/security/SpakeExchange.h"
+#include "core/security/StationIdentity.h"
+#include "core/session/IceConfiguration.h"
+#include "core/session/RendezvousClient.h"
+#include "core/session/RendezvousMailboxTransport.h"
+#include "core/session/RendezvousWire.h"
+#include "core/session/StationPairingClient.h"
+#include "core/session/StationRendezvous.h"
+#include "core/session/StationServer.h"
+#include "core/session/media/LibDataChannelMediaTransport.h"
+#include "models/RadioModel.h"
+
+#include "fakes/UpgradedCoreToken.h"
+
+using namespace NereusSDR;
+namespace Wire = NereusSDR::RendezvousWire;
+
+namespace {
+
+const QString kSuite = QStringLiteral(NEREUS_SOURCE_DIR "/rendezvous/conformance/v1");
+
+QJsonObject readJson(const QString& path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return {};
+    }
+    return QJsonDocument::fromJson(file.readAll()).object();
+}
+
+QString readText(const QString& path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly)) {
+        return {};
+    }
+    return QString::fromUtf8(file.readAll());
+}
+
+QByteArray randomBytes(int count)
+{
+    QByteArray bytes(count, Qt::Uninitialized);
+    for (int index = 0; index < count; ++index) {
+        bytes[index] = static_cast<char>(QRandomGenerator::system()->bounded(256));
+    }
+    return bytes;
+}
+
+QString b64(const QByteArray& bytes)
+{
+    return StationIdentity::toBase64Url(bytes);
+}
+
+QByteArray unb64(const QString& text)
+{
+    return StationIdentity::fromBase64Url(text);
+}
+
+// A P-256 key made at run time in a directory of its own.
+struct TestKey {
+    QTemporaryDir dir;
+    StationIdentity identity = StationIdentity::loadOrCreate(dir.path());
+
+    QByteArray spki() const { return identity.publicKeySpki(); }
+    QByteArray sign(const QByteArray& message) const { return identity.sign(message); }
+};
+
+std::shared_ptr<TestKey> makeKey()
+{
+    return std::make_shared<TestKey>();
+}
+
+QString turnPassword(const QByteArray& secret, const QString& username)
+{
+    return QString::fromLatin1(
+        QMessageAuthenticationCode::hash(username.toUtf8(), secret, QCryptographicHash::Sha1)
+            .toBase64());
+}
+
+// The Python the service runs on, with this user's own packages: ctest
+// gives every test a home of its own (tests/CMakeLists.txt), and Python
+// finds a user's packages under the home directory, so the service is
+// started with the account's real one.
+QProcessEnvironment pythonEnvironment()
+{
+    QProcessEnvironment env = QProcessEnvironment::systemEnvironment();
+#ifdef Q_OS_UNIX
+    if (const passwd* account = getpwuid(getuid()); account != nullptr && account->pw_dir != nullptr) {
+        env.insert(QStringLiteral("HOME"), QString::fromLocal8Bit(account->pw_dir));
+    }
+#endif
+    return env;
+}
+
+quint16 freeTcpPort()
+{
+    QTcpServer probe;
+    probe.listen(QHostAddress::LocalHost, 0);
+    return probe.serverPort();
+}
+
+// ── The service played by a runner (section 10.4) ──────────────────────
+
+class ServicePlayer : public QObject {
+public:
+    ServicePlayer() : m_server(QStringLiteral("rendezvous-runner"), QWebSocketServer::NonSecureMode)
+    {
+        m_server.listen(QHostAddress::LocalHost, 0);
+        QObject::connect(&m_server, &QWebSocketServer::newConnection, this, [this] {
+            while (m_server.hasPendingConnections()) {
+                QWebSocket* socket = m_server.nextPendingConnection();
+                socket->setParent(this);
+                auto* queue = new QStringList;
+                m_inbox.insert(socket, queue);
+                QObject::connect(socket, &QWebSocket::textMessageReceived, this,
+                                 [queue](const QString& text) { queue->append(text); });
+                QObject::connect(socket, &QWebSocket::disconnected, this,
+                                 [this, socket] { m_closed.insert(socket); });
+                m_pending.append(socket);
+            }
+        });
+    }
+
+    ~ServicePlayer() override { qDeleteAll(m_inbox); }
+
+    QUrl url() const
+    {
+        return QUrl(QStringLiteral("ws://127.0.0.1:%1/").arg(m_server.serverPort()));
+    }
+
+    QWebSocket* waitForConnection(int timeoutMs = 5000)
+    {
+        QDeadlineTimer deadline(timeoutMs);
+        while (m_pending.isEmpty() && !deadline.hasExpired()) {
+            QTest::qWait(5);
+        }
+        return m_pending.isEmpty() ? nullptr : m_pending.takeFirst();
+    }
+
+    std::optional<QString> waitForMessage(QWebSocket* socket, int timeoutMs = 5000)
+    {
+        QStringList* queue = m_inbox.value(socket);
+        if (queue == nullptr) {
+            return std::nullopt;
+        }
+        QDeadlineTimer deadline(timeoutMs);
+        while (queue->isEmpty() && !deadline.hasExpired()) {
+            QTest::qWait(5);
+        }
+        if (queue->isEmpty()) {
+            return std::nullopt;
+        }
+        return queue->takeFirst();
+    }
+
+    bool silentFor(QWebSocket* socket, int ms)
+    {
+        QTest::qWait(ms);
+        QStringList* queue = m_inbox.value(socket);
+        return queue == nullptr || queue->isEmpty();
+    }
+
+private:
+    QWebSocketServer m_server;
+    QList<QWebSocket*> m_pending;
+    QHash<QWebSocket*, QStringList*> m_inbox;
+    QSet<QWebSocket*> m_closed;
+};
+
+// ── Placeholders (section 10.4, and link section 16.1) ─────────────────
+
+struct Context {
+    bool coreMode = true;
+    QHash<QString, QJsonValue> recorded;
+    // Station keys by name: runner-made (a private key), or learned from
+    // the Core (its public key only).
+    QHash<QString, std::shared_ptr<TestKey>> stationKeys;
+    QHash<QString, QByteArray> stationSpki;
+    QHash<QString, std::shared_ptr<TestKey>> devices;
+    QByteArray turnSecret = randomBytes(24).toHex();
+    qint64 wallClock = 1800000000;
+    qint64 advancedMs = 0;
+    qint64 turnTtlSeconds = 86400;
+    QStringList stunUrls{QStringLiteral("stun:rv6.conformance.invalid:3478"),
+                         QStringLiteral("stun:rv4.conformance.invalid:3478")};
+    QStringList turnUrls{QStringLiteral("turn:rv6.conformance.invalid:3478?transport=udp"),
+                         QStringLiteral("turn:rv4.conformance.invalid:3478?transport=udp")};
+    QString offerSdp = readText(kSuite + QStringLiteral("/sdp/offer.sdp"));
+    QString answerSdp = readText(kSuite + QStringLiteral("/sdp/answer.sdp"));
+
+    void setup(const QJsonObject& serverSetup)
+    {
+        if (serverSetup.contains(QStringLiteral("stunUrls"))) {
+            stunUrls.clear();
+            for (const QJsonValue& url : serverSetup.value(QStringLiteral("stunUrls")).toArray()) {
+                stunUrls.append(url.toString());
+            }
+        }
+        if (serverSetup.contains(QStringLiteral("turnUrls"))) {
+            turnUrls.clear();
+            for (const QJsonValue& url : serverSetup.value(QStringLiteral("turnUrls")).toArray()) {
+                turnUrls.append(url.toString());
+            }
+        }
+        if (serverSetup.contains(QStringLiteral("turnTtlSeconds"))) {
+            turnTtlSeconds = serverSetup.value(QStringLiteral("turnTtlSeconds")).toInteger();
+        }
+        if (serverSetup.contains(QStringLiteral("wallClock"))) {
+            wallClock = serverSetup.value(QStringLiteral("wallClock")).toInteger();
+        }
+    }
+
+    QByteArray spkiOf(const QString& name)
+    {
+        if (stationSpki.contains(name)) {
+            return stationSpki.value(name);
+        }
+        auto key = makeKey();
+        stationKeys.insert(name, key);
+        stationSpki.insert(name, key->spki());
+        return key->spki();
+    }
+
+    std::shared_ptr<TestKey> device(const QString& name)
+    {
+        if (!devices.contains(name)) {
+            devices.insert(name, makeKey());
+        }
+        return devices.value(name);
+    }
+
+    QByteArray recordedBytes(const QString& name) const
+    {
+        return unb64(recorded.value(name).toString());
+    }
+
+    QJsonObject turnObject(const QString& station)
+    {
+        const qint64 expires = wallClock + advancedMs / 1000 + turnTtlSeconds;
+        const QString username = QStringLiteral("%1:%2").arg(expires).arg(
+            Wire::rendezvousId(spkiOf(station)));
+        return QJsonObject{
+            {QStringLiteral("username"), username},
+            {QStringLiteral("password"), turnPassword(turnSecret, username)},
+            {QStringLiteral("expires"), static_cast<double>(expires)},
+            {QStringLiteral("urls"), QJsonArray::fromStringList(turnUrls)},
+        };
+    }
+
+    QByteArray signatureCase(const std::shared_ptr<TestKey>& key, QByteArray transcript,
+                             const QString& which, const QByteArray& otherTranscript)
+    {
+        if (which == QLatin1String("otherNonce")) {
+            transcript = otherTranscript;
+        }
+        QByteArray signature = key ? key->sign(transcript) : QByteArray();
+        if (which == QLatin1String("flippedBit") && !signature.isEmpty()) {
+            signature[signature.size() - 1] = static_cast<char>(signature.back() ^ 0x01);
+        }
+        return signature;
+    }
+
+    QJsonValue fill(const QJsonValue& value)
+    {
+        if (value.isObject()) {
+            QJsonObject object = value.toObject();
+            for (auto it = object.begin(); it != object.end(); ++it) {
+                it.value() = fill(it.value());
+            }
+            return object;
+        }
+        if (value.isArray()) {
+            QJsonArray array;
+            for (const QJsonValue& entry : value.toArray()) {
+                array.append(fill(entry));
+            }
+            return array;
+        }
+        if (!value.isString() || !value.toString().startsWith(QLatin1Char('$'))) {
+            return value;
+        }
+        const QString text = value.toString();
+        const QStringList parts = text.split(QLatin1Char(':'));
+        const QString kind = parts.value(0);
+        if (kind == QLatin1String("$b64")) {
+            const QString filled = b64(randomBytes(parts.value(1).toInt()));
+            recorded.insert(parts.value(2), filled);
+            return filled;
+        }
+        if (kind == QLatin1String("$ref")) {
+            return recorded.value(parts.value(1));
+        }
+        if (kind == QLatin1String("$key")) {
+            const QByteArray spki = spkiOf(parts.value(1));
+            return parts.value(2) == QLatin1String("id") ? QJsonValue(Wire::rendezvousId(spki))
+                                                         : QJsonValue(b64(spki));
+        }
+        if (kind == QLatin1String("$device")) {
+            return b64(StationIdentity::fingerprintOf(device(parts.value(1))->spki()));
+        }
+        if (kind == QLatin1String("$introduce")) {
+            const QString id = Wire::rendezvousId(spkiOf(parts.value(2)));
+            const QByteArray signature = signatureCase(
+                device(parts.value(1)),
+                Wire::introduceTranscript(id, recordedBytes(parts.value(3))), parts.value(4),
+                Wire::introduceTranscript(id, randomBytes(32)));
+            recorded.insert(text, b64(signature));
+            return b64(signature);
+        }
+        if (kind == QLatin1String("$register")) {
+            spkiOf(parts.value(1));
+            const QByteArray signature = signatureCase(
+                stationKeys.value(parts.value(1)),
+                Wire::registerTranscript(recordedBytes(parts.value(2))), parts.value(3),
+                Wire::registerTranscript(randomBytes(32)));
+            recorded.insert(text, b64(signature));
+            return b64(signature);
+        }
+        if (kind == QLatin1String("$sdp")) {
+            const QString sdp = parts.value(1) == QLatin1String("offer") ? offerSdp : answerSdp;
+            recorded.insert(parts.value(2), sdp);
+            return sdp;
+        }
+        if (kind == QLatin1String("$candidate")) {
+            const QString candidate =
+                QStringLiteral("candidate:1 1 UDP 2122317823 127.0.0.1 50000 typ host");
+            recorded.insert(parts.value(1), candidate);
+            return candidate;
+        }
+        if (kind == QLatin1String("$turn")) {
+            const QJsonObject turn = turnObject(parts.value(1));
+            recorded.insert(parts.value(2), turn);
+            return turn;
+        }
+        return value;
+    }
+
+    bool match(const QJsonValue& expected, const QJsonValue& actual, QString* why)
+    {
+        const auto fail = [why](const QString& text) {
+            *why = text;
+            return false;
+        };
+        if (expected.isObject()) {
+            if (!actual.isObject()) {
+                return fail(QStringLiteral("not an object"));
+            }
+            const QJsonObject want = expected.toObject();
+            const QJsonObject got = actual.toObject();
+            QStringList wantKeys = want.keys();
+            QStringList gotKeys = got.keys();
+            wantKeys.sort();
+            gotKeys.sort();
+            if (wantKeys != gotKeys) {
+                return fail(QStringLiteral("keys %1, expected %2")
+                                .arg(gotKeys.join(QLatin1Char(',')),
+                                     wantKeys.join(QLatin1Char(','))));
+            }
+            // A public key before the id derived from it.
+            std::stable_sort(wantKeys.begin(), wantKeys.end(), [&want](const QString& a,
+                                                                      const QString& b) {
+                const bool aKey = want.value(a).toString().endsWith(QLatin1String(":publicKey"));
+                const bool bKey = want.value(b).toString().endsWith(QLatin1String(":publicKey"));
+                return aKey && !bKey;
+            });
+            for (const QString& key : std::as_const(wantKeys)) {
+                QString inner;
+                if (!match(want.value(key), got.value(key), &inner)) {
+                    return fail(key + QStringLiteral(": ") + inner);
+                }
+            }
+            return true;
+        }
+        if (expected.isArray()) {
+            const QJsonArray want = expected.toArray();
+            const QJsonArray got = actual.toArray();
+            if (!actual.isArray() || want.size() != got.size()) {
+                return fail(QStringLiteral("array differs"));
+            }
+            for (qsizetype index = 0; index < want.size(); ++index) {
+                if (!match(want.at(index), got.at(index), why)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+        if (!expected.isString() || !expected.toString().startsWith(QLatin1Char('$'))) {
+            return expected == actual ? true : fail(QStringLiteral("value differs"));
+        }
+        const QString text = expected.toString();
+        const QStringList parts = text.split(QLatin1Char(':'));
+        const QString kind = parts.value(0);
+        if (kind == QLatin1String("$any")) {
+            return true;
+        }
+        if (kind == QLatin1String("$string") || kind == QLatin1String("$capture")) {
+            if (kind == QLatin1String("$string") && !actual.isString()) {
+                return fail(QStringLiteral("not a string"));
+            }
+            if (parts.size() > 1) {
+                recorded.insert(parts.value(1), actual);
+            }
+            return true;
+        }
+        if (kind == QLatin1String("$int")) {
+            if (!actual.isDouble() || actual.toDouble() != std::floor(actual.toDouble())) {
+                return fail(QStringLiteral("not a whole number"));
+            }
+            if (parts.size() > 1) {
+                recorded.insert(parts.value(1), actual);
+            }
+            return true;
+        }
+        if (kind == QLatin1String("$b64")) {
+            bool ok = false;
+            const QByteArray bytes = StationIdentity::fromBase64Url(actual.toString(), &ok);
+            if (!actual.isString() || !ok || bytes.size() != parts.value(1).toInt()) {
+                return fail(QStringLiteral("not base64url of the right length"));
+            }
+            recorded.insert(parts.value(2), actual);
+            return true;
+        }
+        if (kind == QLatin1String("$ref")) {
+            return recorded.value(parts.value(1)) == actual ? true
+                                                           : fail(QStringLiteral("not the recorded value"));
+        }
+        if (kind == QLatin1String("$key")) {
+            const QString name = parts.value(1);
+            if (parts.value(2) == QLatin1String("publicKey")) {
+                bool ok = false;
+                const QByteArray spki = StationIdentity::fromBase64Url(actual.toString(), &ok);
+                if (!ok || !StationIdentity::isP256Spki(spki)) {
+                    return fail(QStringLiteral("not a canonical P-256 key"));
+                }
+                if (coreMode && !stationSpki.contains(name)) {
+                    stationSpki.insert(name, spki);
+                    return true;
+                }
+                return spki == spkiOf(name) ? true : fail(QStringLiteral("another key"));
+            }
+            return actual.toString() == Wire::rendezvousId(spkiOf(name))
+                       ? true
+                       : fail(QStringLiteral("not the id of the key"));
+        }
+        if (kind == QLatin1String("$device")) {
+            return actual.toString() == b64(StationIdentity::fingerprintOf(device(parts.value(1))->spki()))
+                       ? true
+                       : fail(QStringLiteral("not the device's id"));
+        }
+        if (kind == QLatin1String("$register")) {
+            const QByteArray signature = unb64(actual.toString());
+            return StationIdentity::verify(spkiOf(parts.value(1)),
+                                           Wire::registerTranscript(recordedBytes(parts.value(2))),
+                                           signature)
+                       ? true
+                       : fail(QStringLiteral("the registration signature does not verify"));
+        }
+        if (kind == QLatin1String("$introduce")) {
+            const QByteArray signature = unb64(actual.toString());
+            const QString id = Wire::rendezvousId(spkiOf(parts.value(2)));
+            return StationIdentity::verify(device(parts.value(1))->spki(),
+                                           Wire::introduceTranscript(id, recordedBytes(parts.value(3))),
+                                           signature)
+                       ? true
+                       : fail(QStringLiteral("the introduction signature does not verify"));
+        }
+        if (kind == QLatin1String("$sdp")) {
+            if (!actual.isString() || actual.toString().isEmpty()) {
+                return fail(QStringLiteral("not a description"));
+            }
+            recorded.insert(parts.value(2), actual);
+            return true;
+        }
+        if (kind == QLatin1String("$candidate")) {
+            if (!actual.isString() || !Wire::isCandidate(actual.toString())) {
+                return fail(QStringLiteral("not a candidate"));
+            }
+            recorded.insert(parts.value(1), actual);
+            return true;
+        }
+        if (kind == QLatin1String("$turn")) {
+            const QJsonObject turn = turnObject(parts.value(1));
+            recorded.insert(parts.value(2), turn);
+            return QJsonValue(turn) == actual ? true : fail(QStringLiteral("other credentials"));
+        }
+        return fail(QStringLiteral("unknown placeholder ") + kind);
+    }
+};
+
+QString compact(const QJsonValue& value)
+{
+    return QString::fromUtf8(QJsonDocument(value.toObject()).toJson(QJsonDocument::Compact));
+}
+
+// Section 5.3's listed keys, for the control fixtures' comparison.
+QStringList listedKeys(Wire::Direction direction, Wire::Kind kind)
+{
+    using D = Wire::Direction;
+    using K = Wire::Kind;
+    const bool fromStation = direction == D::StationToService;
+    const bool toStation = direction == D::ServiceToStation;
+    switch (kind) {
+    case K::Hello: return {"type", "version", "nonce", "stun"};
+    case K::Register: return {"type", "id", "publicKey"};
+    case K::Challenge: return {"type", "nonce"};
+    case K::Prove: return {"type", "signature"};
+    case K::Registered: return {"type", "id"};
+    case K::Introduce: return {"type", "id", "device", "deviceSignature", "offer"};
+    case K::Introduction: return {"type", "from", "device", "deviceSignature", "offer", "nonce"};
+    case K::Answer:
+        return fromStation ? QStringList{"type", "to", "answer", "turn"}
+                           : QStringList{"type", "answer", "turn"};
+    case K::Credentials: return {"type", "from", "turn"};
+    case K::Candidate:
+        if (fromStation) {
+            return {"type", "to", "candidate"};
+        }
+        return toStation ? QStringList{"type", "from", "candidate"}
+                         : QStringList{"type", "candidate"};
+    case K::IntroductionEnd:
+        return toStation ? QStringList{"type", "from", "code"} : QStringList{"type", "code"};
+    case K::Nameplate:
+    case K::MailboxOpen:
+    case K::MailboxOpened:
+        return {"type", "nameplate"};
+    case K::Mailbox: return {"type", "body"};
+    case K::MailboxClosed: return {"type", "code"};
+    case K::Error: return {"type", "code", "reason", "retryAfterMs"};
+    default: return {"type"};
+    }
+}
+
+QJsonObject restricted(const QJsonObject& object, const QStringList& keys)
+{
+    QJsonObject result;
+    for (const QString& key : keys) {
+        if (!object.contains(key)) {
+            continue;
+        }
+        QJsonValue value = object.value(key);
+        if (key == QLatin1String("turn") && value.isObject()) {
+            value = restricted(value.toObject(), {"username", "password", "expires", "urls"});
+        }
+        result.insert(key, value);
+    }
+    return result;
+}
+
+// ── The Python service and the STUN and TURN fake, on this computer ────
+
+class LocalService {
+public:
+    /// `stun`: the service's hello names the fake's STUN server. `relay`:
+    /// the service mints relay credentials for the fake's TURN server.
+    explicit LocalService(bool stun = true, bool relay = true) : m_stun(stun), m_relay(relay) {}
+
+    ~LocalService() { stop(); stopTurn(); }
+
+    bool start()
+    {
+        if ((m_stun || m_relay) && !startTurn()) {
+            return false;
+        }
+        m_port = freeTcpPort();
+        QFile secret(m_dir.filePath(QStringLiteral("turn-secret")));
+        if (!secret.open(QIODevice::WriteOnly)) {
+            return false;
+        }
+        secret.write(m_secret);
+        secret.close();
+        QFile config(m_dir.filePath(QStringLiteral("rendezvous.conf")));
+        if (!config.open(QIODevice::WriteOnly)) {
+            return false;
+        }
+        const QString stun = m_stun ? QStringLiteral("stun:127.0.0.1:%1").arg(m_turnPort)
+                                    : QString();
+        const QString turn = m_relay
+            ? QStringLiteral("turn:127.0.0.1:%1?transport=udp").arg(m_turnPort)
+            : QString();
+        config.write(QStringLiteral("[rendezvous]\n"
+                                    "listen = 127.0.0.1:%1\n"
+                                    "stun_urls = %2\n"
+                                    "turn_urls = %3\n"
+                                    "turn_secret_file = %4\n"
+                                    "log_level = info\n")
+                         .arg(m_port)
+                         .arg(stun, turn,
+                              m_relay ? secret.fileName() : QString())
+                         .toUtf8());
+        config.close();
+        return launch();
+    }
+
+    // Starts the service again on the same port, as after a restart.
+    bool launch()
+    {
+        m_process = std::make_unique<QProcess>();
+        QProcessEnvironment env = pythonEnvironment();
+        env.insert(QStringLiteral("PYTHONPATH"),
+                   QStringLiteral(NEREUS_SOURCE_DIR "/rendezvous/server"));
+        m_process->setProcessEnvironment(env);
+        m_process->setWorkingDirectory(m_dir.path());
+        m_process->start(QStringLiteral("python3"),
+                         {QStringLiteral("-m"), QStringLiteral("nereus_rendezvous"),
+                          QStringLiteral("--config"),
+                          m_dir.filePath(QStringLiteral("rendezvous.conf"))});
+        if (!m_process->waitForStarted(10000)) {
+            return false;
+        }
+        QDeadlineTimer deadline(15000);
+        while (!deadline.hasExpired()) {
+            QTcpSocket probe;
+            probe.connectToHost(QHostAddress::LocalHost, m_port);
+            if (probe.waitForConnected(200)) {
+                return true;
+            }
+            QTest::qWait(50);
+        }
+        return false;
+    }
+
+    void stop()
+    {
+        if (m_process) {
+            m_log += QString::fromUtf8(m_process->readAllStandardError());
+            m_process->terminate();
+            if (!m_process->waitForFinished(5000)) {
+                m_process->kill();
+                m_process->waitForFinished(2000);
+            }
+            m_log += QString::fromUtf8(m_process->readAllStandardError());
+            m_process.reset();
+        }
+    }
+
+    QString log()
+    {
+        if (m_process) {
+            m_log += QString::fromUtf8(m_process->readAllStandardError());
+        }
+        return m_log;
+    }
+
+    QString turnOutput()
+    {
+        if (m_turn) {
+            m_turnLog += QString::fromUtf8(m_turn->readAllStandardOutput());
+        }
+        return m_turnLog;
+    }
+
+    QUrl url() const { return QUrl(QStringLiteral("ws://127.0.0.1:%1/").arg(m_port)); }
+    quint16 port() const { return m_port; }
+
+private:
+    bool startTurn()
+    {
+        QFile secret(m_dir.filePath(QStringLiteral("turn-secret")));
+        if (!secret.open(QIODevice::WriteOnly)) {
+            return false;
+        }
+        secret.write(m_secret);
+        secret.close();
+        const QString portFile = m_dir.filePath(QStringLiteral("turn-port"));
+        m_turn = std::make_unique<QProcess>();
+        m_turn->setProcessEnvironment(pythonEnvironment());
+        m_turn->start(QStringLiteral("python3"),
+                      {QStringLiteral(NEREUS_SOURCE_DIR "/tests/tools/fake_turn_server.py"),
+                       QStringLiteral("--secret-file"), secret.fileName(),
+                       QStringLiteral("--port-file"), portFile});
+        if (!m_turn->waitForStarted(10000)) {
+            return false;
+        }
+        QDeadlineTimer deadline(10000);
+        while (!QFile::exists(portFile) && !deadline.hasExpired()) {
+            QTest::qWait(20);
+        }
+        m_turnPort = static_cast<quint16>(readText(portFile).toInt());
+        return m_turnPort != 0;
+    }
+
+    void stopTurn()
+    {
+        if (m_turn) {
+            m_turn->terminate();
+            if (!m_turn->waitForFinished(3000)) {
+                m_turn->kill();
+                m_turn->waitForFinished(2000);
+            }
+            m_turn.reset();
+        }
+    }
+
+    bool m_stun = true;
+    bool m_relay = true;
+    QTemporaryDir m_dir;
+    QByteArray m_secret = randomBytes(24).toHex();
+    quint16 m_port = 0;
+    quint16 m_turnPort = 0;
+    std::unique_ptr<QProcess> m_process;
+    std::unique_ptr<QProcess> m_turn;
+    QString m_log;
+    QString m_turnLog;
+};
+
+// A relay between the ends and the service that records every message
+// both ways, so a test can see what the service was given.
+class RecordingRelay : public QObject {
+public:
+    explicit RecordingRelay(const QUrl& service)
+        : m_service(service)
+        , m_server(QStringLiteral("recording-relay"), QWebSocketServer::NonSecureMode)
+    {
+        m_server.listen(QHostAddress::LocalHost, 0);
+        QObject::connect(&m_server, &QWebSocketServer::newConnection, this, [this] {
+            while (m_server.hasPendingConnections()) {
+                QWebSocket* inner = m_server.nextPendingConnection();
+                inner->setParent(this);
+                auto* outer = new QWebSocket(QString(), QWebSocketProtocol::VersionLatest, this);
+                auto* backlog = new QStringList;
+                m_backlogs.append(backlog);
+                QObject::connect(inner, &QWebSocket::textMessageReceived, this,
+                                 [this, outer, backlog](const QString& text) {
+                    toService.append(text);
+                    if (outer->state() == QAbstractSocket::ConnectedState) {
+                        outer->sendTextMessage(text);
+                    } else {
+                        backlog->append(text);
+                    }
+                });
+                QObject::connect(outer, &QWebSocket::connected, this, [outer, backlog] {
+                    for (const QString& text : std::as_const(*backlog)) {
+                        outer->sendTextMessage(text);
+                    }
+                    backlog->clear();
+                });
+                QObject::connect(outer, &QWebSocket::textMessageReceived, this,
+                                 [this, inner](const QString& text) {
+                    fromService.append(text);
+                    inner->sendTextMessage(text);
+                });
+                QObject::connect(inner, &QWebSocket::disconnected, outer, [outer] { outer->close(); });
+                QObject::connect(outer, &QWebSocket::disconnected, inner, [inner] { inner->close(); });
+                outer->open(m_service);
+            }
+        });
+    }
+
+    ~RecordingRelay() override { qDeleteAll(m_backlogs); }
+
+    QUrl url() const
+    {
+        return QUrl(QStringLiteral("ws://127.0.0.1:%1/").arg(m_server.serverPort()));
+    }
+
+    QStringList toService;
+    QStringList fromService;
+
+private:
+    QUrl m_service;
+    QWebSocketServer m_server;
+    QList<QStringList*> m_backlogs;
+};
+
+// One Core with its StationServer, as the pairing tests stand it up.
+struct Core {
+    QTemporaryDir settingsDir;
+    QTemporaryDir securityDir;
+    std::unique_ptr<AppSettings> settings;
+    std::unique_ptr<RadioModel> model;
+    std::unique_ptr<StationServer> server;
+
+    Core()
+    {
+        settings = std::make_unique<AppSettings>(
+            settingsDir.filePath(QStringLiteral("NereusSDR.settings")));
+        settings->setValue(QStringLiteral("StationCallsign"), QStringLiteral("KG4VCF"));
+        model = std::make_unique<RadioModel>();
+        server = std::make_unique<StationServer>(
+            model.get(), *settings, NereusSDR::Test::seedCoreIdentity(securityDir.path()));
+        server->setHeartbeatIntervalMs(0);
+    }
+
+    ~Core() { server.reset(); }
+
+    bool pair(const TestKey& key, const QString& name = QStringLiteral("Test phone"))
+    {
+        PairedDevice device;
+        device.id = StationIdentity::fingerprintOf(key.spki());
+        device.publicKeySpki = key.spki();
+        device.name = name;
+        device.kind = QStringLiteral("phone");
+        return server->deviceStore()->add(device);
+    }
+};
+
+// Both ends of one connection through the service: the client's offer and
+// the Core's answer each on a LibDataChannelMediaTransport started with the
+// service's ICE settings, candidates trickled through the service. With
+// `relayOnly`, only relay candidates are passed on in either direction:
+// the test's stand-in for a network where direct UDP is blocked.
+class IcePair : public QObject {
+public:
+    IcePair(RendezvousClient* station, RendezvousClient* client, bool relayOnly)
+        : m_station(station), m_client(client), m_relayOnly(relayOnly)
+    {
+        QObject::connect(station, &RendezvousClient::introduced, this,
+                         [this](const RendezvousIntroduction& introduction) {
+            onIntroduced(introduction);
+        });
+        QObject::connect(station, &RendezvousClient::credentialsReceived, this,
+                         [this](const QByteArray&, bool offered, const Wire::Turn& turn) {
+            IceConfiguration ice = *m_stationIce;
+            ice.setRelay(offered ? std::optional<Wire::Turn>(turn) : std::nullopt);
+            stationRelays = ice.relayServers().size();
+            m_answerer->gatherCandidates(ice.relayServers());
+        });
+        QObject::connect(station, &RendezvousClient::candidateReceived, this,
+                         [this](const QByteArray&, const QString& candidate) {
+            ++stationHeard;
+            if (!candidate.isEmpty() && m_answerer && passes(candidate)) {
+                m_answerer->acceptCandidate(candidate, QString());
+            }
+        });
+        QObject::connect(client, &RendezvousClient::answerReceived, this,
+                         [this](const QString& sdp, bool offered, const Wire::Turn& turn) {
+            QVERIFY(m_offerer->acceptDescription(sdp, QStringLiteral("answer")));
+            IceConfiguration ice = *m_clientIce;
+            ice.setRelay(offered ? std::optional<Wire::Turn>(turn) : std::nullopt);
+            clientRelays = ice.relayServers().size();
+            m_offerer->gatherCandidates(ice.relayServers());
+        });
+        QObject::connect(client, &RendezvousClient::candidateReceived, this,
+                         [this](const QByteArray&, const QString& candidate) {
+            if (!candidate.isEmpty() && passes(candidate)) {
+                m_offerer->acceptCandidate(candidate, QString());
+            }
+        });
+    }
+
+    // Connects the client to the service, then makes its offer with the
+    // service's STUN server and introduces it to the Core as `device`.
+    void start(const QString& stationId, std::shared_ptr<TestKey> device)
+    {
+        m_device = std::move(device);
+        QObject::connect(m_client, &RendezvousClient::connected, this, [this, stationId] {
+            if (m_offerer) {
+                return;
+            }
+            m_clientIce = IceConfiguration::throughRendezvous(m_client->stunUrls(), true);
+            m_offerer = std::make_unique<LibDataChannelMediaTransport>();
+            QObject::connect(m_offerer.get(), &IMediaTransport::localDescription, this,
+                             [this, stationId](const QString& sdp, const QString&) {
+                const std::shared_ptr<TestKey> key = m_device;
+                m_client->introduce(stationId, key->spki(),
+                                    [key](const QByteArray& message) { return key->sign(message); },
+                                    sdp);
+            });
+            QObject::connect(m_offerer.get(), &IMediaTransport::localCandidate, this,
+                             [this](const QString& candidate, const QString&) {
+                clientCandidates.append(candidate);
+                m_client->sendCandidate(candidate);
+            });
+            QObject::connect(m_offerer.get(), &IMediaTransport::gatheringComplete, this,
+                             [this] { m_client->sendCandidate(QString()); });
+            QObject::connect(m_offerer.get(), &IMediaTransport::ready, this,
+                             [this] { clientReady = true; });
+            QObject::connect(m_offerer.get(), &IMediaTransport::displayReceived, this,
+                             [this](const QByteArray& message) { clientReceived.append(message); });
+            IMediaTransport::StartOptions options{IMediaTransport::Role::Offerer, 0x1111};
+            options.ice = m_clientIce;
+            QVERIFY(m_offerer->start(options));
+        });
+        m_client->connectToService();
+    }
+
+    LibDataChannelMediaTransport* offerer() const { return m_offerer.get(); }
+    LibDataChannelMediaTransport* answerer() const { return m_answerer.get(); }
+
+    bool clientReady = false;
+    bool stationReady = false;
+    int stationHeard = 0;
+    qsizetype stationRelays = -1;
+    qsizetype clientRelays = -1;
+    QStringList clientCandidates;
+    QStringList stationCandidates;
+    QList<QByteArray> clientReceived;
+    QList<QByteArray> stationReceived;
+
+private:
+    bool passes(const QString& candidate) const
+    {
+        return !m_relayOnly || IceConfiguration::candidateType(candidate) == QLatin1String("relay");
+    }
+
+    void onIntroduced(const RendezvousIntroduction& introduction)
+    {
+        const QByteArray id = introduction.id;
+        m_stationIce = IceConfiguration::throughRendezvous(m_station->stunUrls(),
+                                                           m_station->relayAllowed());
+        m_answerer = std::make_unique<LibDataChannelMediaTransport>();
+        QObject::connect(m_answerer.get(), &IMediaTransport::localDescription, this,
+                         [this, id](const QString& sdp, const QString&) {
+            QVERIFY(m_station->answer(id, sdp));
+            // With the relay denied no credentials follow: gather now.
+            if (!m_station->relayAllowed()) {
+                m_answerer->gatherCandidates({});
+            }
+        });
+        QObject::connect(m_answerer.get(), &IMediaTransport::localCandidate, this,
+                         [this, id](const QString& candidate, const QString&) {
+            stationCandidates.append(candidate);
+            m_station->sendCandidate(id, candidate);
+        });
+        QObject::connect(m_answerer.get(), &IMediaTransport::gatheringComplete, this,
+                         [this, id] { m_station->sendCandidate(id, QString()); });
+        QObject::connect(m_answerer.get(), &IMediaTransport::ready, this,
+                         [this] { stationReady = true; });
+        QObject::connect(m_answerer.get(), &IMediaTransport::displayReceived, this,
+                         [this](const QByteArray& message) { stationReceived.append(message); });
+        IMediaTransport::StartOptions options{IMediaTransport::Role::Answerer, 0x2222};
+        options.ice = m_stationIce;
+        QVERIFY(m_answerer->start(options));
+        QVERIFY(m_answerer->acceptDescription(introduction.offer, QStringLiteral("offer")));
+    }
+
+    RendezvousClient* m_station;
+    RendezvousClient* m_client;
+    bool m_relayOnly;
+    std::shared_ptr<TestKey> m_device;
+    std::optional<IceConfiguration> m_stationIce;
+    std::optional<IceConfiguration> m_clientIce;
+    std::unique_ptr<LibDataChannelMediaTransport> m_offerer;
+    std::unique_ptr<LibDataChannelMediaTransport> m_answerer;
+};
+
+bool hasUsableIpv6()
+{
+    for (const QNetworkInterface& interface : QNetworkInterface::allInterfaces()) {
+        if (!(interface.flags() & QNetworkInterface::IsUp)
+            || (interface.flags() & QNetworkInterface::IsLoopBack)) {
+            continue;
+        }
+        for (const QNetworkAddressEntry& entry : interface.addressEntries()) {
+            const QHostAddress address = entry.ip();
+            if (address.protocol() == QAbstractSocket::IPv6Protocol && !address.isLinkLocal()
+                && !address.isLoopback()) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+} // namespace
+
+class TstRendezvousClient : public QObject {
+    Q_OBJECT
+
+private:
+    void runCoreFixture(const QString& file);
+    void runAppFixture(const QString& file);
+
+private slots:
+    void initTestCase()
+    {
+        qRegisterMetaType<RendezvousIntroduction>();
+        qRegisterMetaType<Wire::Turn>();
+        QVERIFY2(QFile::exists(kSuite + QStringLiteral("/manifest.json")), qPrintable(kSuite));
+    }
+
+    // ── Crypto vectors (section 10.2) ───────────────────────────────────
+
+    void base64urlVectors()
+    {
+        const QJsonArray cases =
+            readJson(kSuite + QStringLiteral("/crypto/base64url.json")).value(QStringLiteral("cases")).toArray();
+        QVERIFY(!cases.isEmpty());
+        for (const QJsonValue& value : cases) {
+            const QJsonObject c = value.toObject();
+            bool ok = false;
+            const QByteArray bytes =
+                StationIdentity::fromBase64Url(c.value(QStringLiteral("text")).toString(), &ok);
+            QCOMPARE(ok, c.value(QStringLiteral("valid")).toBool());
+            if (ok) {
+                QCOMPARE(bytes.toHex(), c.value(QStringLiteral("bytesHex")).toString().toLatin1());
+            }
+        }
+    }
+
+    void p256KeyVectors()
+    {
+        const QJsonArray cases =
+            readJson(kSuite + QStringLiteral("/crypto/p256-spki.json")).value(QStringLiteral("cases")).toArray();
+        QVERIFY(!cases.isEmpty());
+        for (const QJsonValue& value : cases) {
+            const QJsonObject c = value.toObject();
+            const QByteArray spki =
+                QByteArray::fromHex(c.value(QStringLiteral("spkiHex")).toString().toLatin1());
+            QVERIFY2(StationIdentity::isP256Spki(spki) == c.value(QStringLiteral("valid")).toBool(),
+                     qPrintable(c.value(QStringLiteral("name")).toString()));
+        }
+    }
+
+    void rendezvousIdVectors()
+    {
+        const QJsonObject file = readJson(kSuite + QStringLiteral("/crypto/rendezvous-id.json"));
+        QCOMPARE(QByteArray("NereusSDR rendezvous id v1\n").toHex(),
+                 file.value(QStringLiteral("prefixHex")).toString().toLatin1());
+        const QJsonArray cases = file.value(QStringLiteral("cases")).toArray();
+        QVERIFY(!cases.isEmpty());
+        for (const QJsonValue& value : cases) {
+            const QJsonObject c = value.toObject();
+            const QByteArray spki = unb64(c.value(QStringLiteral("publicKey")).toString());
+            QCOMPARE(QCryptographicHash::hash(QByteArray("NereusSDR rendezvous id v1\n") + spki,
+                                              QCryptographicHash::Sha256)
+                         .toHex(),
+                     c.value(QStringLiteral("digestHex")).toString().toLatin1());
+            const QString id = Wire::rendezvousId(spki);
+            QCOMPARE(id, c.value(QStringLiteral("id")).toString());
+            QVERIFY(Wire::isRendezvousId(id));
+        }
+        QVERIFY(!Wire::isRendezvousId(QStringLiteral("LWHU2KYJNRFDWVPXVDCKAO3LB7")));
+        QVERIFY(!Wire::isRendezvousId(QStringLiteral("lwhu2kyjnrfdwvpxvdckao3lb")));
+        QVERIFY(Wire::rendezvousId(QByteArray(90, 'x')).isEmpty());
+    }
+
+    void registerProofVectors()
+    {
+        const QJsonObject file = readJson(kSuite + QStringLiteral("/crypto/register-proof.json"));
+        const QJsonObject key = file.value(QStringLiteral("key")).toObject();
+        const QByteArray spki = unb64(key.value(QStringLiteral("publicKey")).toString());
+        QCOMPARE(Wire::rendezvousId(spki), key.value(QStringLiteral("id")).toString());
+        const QByteArray transcript =
+            Wire::registerTranscript(unb64(file.value(QStringLiteral("nonce")).toString()));
+        QCOMPARE(transcript.size(), 65);
+        QCOMPARE(transcript.toHex(), file.value(QStringLiteral("transcriptHex")).toString().toLatin1());
+        const QJsonArray cases = file.value(QStringLiteral("cases")).toArray();
+        QVERIFY(!cases.isEmpty());
+        for (const QJsonValue& value : cases) {
+            const QJsonObject c = value.toObject();
+            bool keyOk = false;
+            bool signatureOk = false;
+            const QByteArray caseKey =
+                StationIdentity::fromBase64Url(c.value(QStringLiteral("publicKey")).toString(), &keyOk);
+            const QByteArray signature =
+                StationIdentity::fromBase64Url(c.value(QStringLiteral("signature")).toString(), &signatureOk);
+            const bool verified = keyOk && signatureOk && StationIdentity::isP256Spki(caseKey)
+                                  && StationIdentity::verify(caseKey, transcript, signature);
+            QVERIFY2(verified == c.value(QStringLiteral("valid")).toBool(),
+                     qPrintable(c.value(QStringLiteral("name")).toString()));
+        }
+    }
+
+    void introduceSignatureVectors()
+    {
+        const QJsonObject file = readJson(kSuite + QStringLiteral("/crypto/introduce-signature.json"));
+        const QJsonObject device = file.value(QStringLiteral("device")).toObject();
+        const QByteArray spki = unb64(device.value(QStringLiteral("publicKey")).toString());
+        QCOMPARE(b64(StationIdentity::fingerprintOf(spki)), device.value(QStringLiteral("id")).toString());
+        const QByteArray transcript =
+            Wire::introduceTranscript(file.value(QStringLiteral("stationId")).toString(),
+                                      unb64(file.value(QStringLiteral("nonce")).toString()));
+        QCOMPARE(transcript.size(), 81);
+        QCOMPARE(transcript.toHex(), file.value(QStringLiteral("transcriptHex")).toString().toLatin1());
+        const QJsonArray cases = file.value(QStringLiteral("cases")).toArray();
+        QVERIFY(!cases.isEmpty());
+        for (const QJsonValue& value : cases) {
+            const QJsonObject c = value.toObject();
+            bool ok = false;
+            const QByteArray signature =
+                StationIdentity::fromBase64Url(c.value(QStringLiteral("signature")).toString(), &ok);
+            const bool verified = ok && StationIdentity::verify(spki, transcript, signature);
+            QVERIFY2(verified == c.value(QStringLiteral("valid")).toBool(),
+                     qPrintable(c.value(QStringLiteral("name")).toString()));
+        }
+    }
+
+    void turnCredentialVectors()
+    {
+        const QJsonArray cases =
+            readJson(kSuite + QStringLiteral("/crypto/turn-credentials.json")).value(QStringLiteral("cases")).toArray();
+        QVERIFY(!cases.isEmpty());
+        for (const QJsonValue& value : cases) {
+            const QJsonObject c = value.toObject();
+            const QString username = QStringLiteral("%1:%2")
+                                         .arg(c.value(QStringLiteral("expires")).toInteger())
+                                         .arg(c.value(QStringLiteral("stationId")).toString());
+            QCOMPARE(username, c.value(QStringLiteral("username")).toString());
+            QCOMPARE(turnPassword(c.value(QStringLiteral("secret")).toString().toUtf8(), username),
+                     c.value(QStringLiteral("password")).toString());
+        }
+    }
+
+    // ── Control fixtures (section 10.3) ─────────────────────────────────
+
+    void controlFixtures()
+    {
+        QDir dir(kSuite + QStringLiteral("/control"));
+        const QStringList files = dir.entryList({QStringLiteral("*.json")}, QDir::Files, QDir::Name);
+        QVERIFY(files.size() > 40);
+        int station = 0;
+        int client = 0;
+        for (const QString& name : files) {
+            const QJsonObject fixture = readJson(dir.filePath(name));
+            const QString from = fixture.value(QStringLiteral("from")).toString();
+            const QString to = fixture.value(QStringLiteral("to")).toString();
+            Wire::Direction direction;
+            if (from == QLatin1String("station")) {
+                direction = Wire::Direction::StationToService;
+                ++station;
+            } else if (from == QLatin1String("client")) {
+                direction = Wire::Direction::ClientToService;
+                ++client;
+            } else if (to == QLatin1String("station")) {
+                direction = Wire::Direction::ServiceToStation;
+                ++station;
+            } else {
+                direction = Wire::Direction::ServiceToClient;
+                ++client;
+            }
+            const QJsonObject wire = fixture.value(QStringLiteral("wire")).toObject();
+            const QByteArray text = QJsonDocument(wire).toJson(QJsonDocument::Compact);
+            Wire::Message message;
+            QString why;
+            const bool decoded = Wire::decode(direction, text, &message, &why);
+            QVERIFY2(decoded == fixture.value(QStringLiteral("decodes")).toBool(),
+                     qPrintable(name + QStringLiteral(": ") + why));
+            if (!decoded) {
+                continue;
+            }
+            const QByteArray again = Wire::encode(direction, message);
+            QVERIFY2(!again.isEmpty(), qPrintable(name));
+            const QStringList keys = listedKeys(direction, message.kind);
+            const QJsonObject ours = QJsonDocument::fromJson(again).object();
+            QStringList ourKeys = ours.keys();
+            QStringList wantKeys = keys;
+            ourKeys.sort();
+            wantKeys.sort();
+            QVERIFY2(ourKeys == wantKeys, qPrintable(name));
+            QVERIFY2(restricted(ours, keys) == restricted(wire, keys), qPrintable(name));
+        }
+        QVERIFY(station > 0);
+        QVERIFY(client > 0);
+    }
+
+    void theSenderKeepsToTheWire()
+    {
+        // Section 2: a message over the cap is not sent, whatever its kind.
+        Wire::Message mailbox;
+        mailbox.kind = Wire::Kind::Mailbox;
+        mailbox.body = QString(Wire::kMaxBodyBytes, QLatin1Char('b'));
+        QVERIFY(!Wire::encode(Wire::Direction::ClientToService, mailbox).isEmpty());
+        mailbox.body.append(QLatin1Char('b'));
+        QVERIFY(Wire::encode(Wire::Direction::ClientToService, mailbox).isEmpty());
+        // Control characters escape to six bytes each: the field fits, the
+        // message does not.
+        mailbox.body = QString(Wire::kMaxBodyBytes, QChar(0x01));
+        QVERIFY(Wire::encode(Wire::Direction::ClientToService, mailbox).size() == 0);
+        // A lone surrogate is never sent.
+        mailbox.body = QString(QChar(0xD800));
+        QVERIFY(Wire::encode(Wire::Direction::ClientToService, mailbox).isEmpty());
+        // An `a=` is taken off a candidate, and one that still does not
+        // start `candidate:` is refused.
+        QCOMPARE(Wire::wireCandidate(QStringLiteral("a=candidate:1 1 UDP 1 ::1 5 typ host")),
+                 QStringLiteral("candidate:1 1 UDP 1 ::1 5 typ host"));
+        Wire::Message candidate;
+        candidate.kind = Wire::Kind::Candidate;
+        candidate.candidate = QStringLiteral("a=candidate:1 1 UDP 1 ::1 5 typ host");
+        QVERIFY(Wire::encode(Wire::Direction::ClientToService, candidate).isEmpty());
+        // A station never sends a client's kinds, nor a client a station's.
+        Wire::Message claim;
+        claim.kind = Wire::Kind::NameplateClaim;
+        QVERIFY(Wire::encode(Wire::Direction::ClientToService, claim).isEmpty());
+        QVERIFY(!Wire::encode(Wire::Direction::StationToService, claim).isEmpty());
+    }
+
+    void serverAddressesAreRead()
+    {
+        QStringList rejected;
+        const QList<QUrl> urls = RendezvousClient::serverUrls(
+            {QStringLiteral("rv.nereussdr.com"), QStringLiteral("rv.example.net:8443"),
+             QStringLiteral("[2001:db8::5]:443"), QStringLiteral("wss://rv.example.org/path"),
+             QStringLiteral("ws://127.0.0.1:8710"), QStringLiteral("ws://rv.example.net"),
+             QStringLiteral("http://rv.example.net"), QStringLiteral("rv.nereussdr.com")},
+            &rejected);
+        QCOMPARE(urls,
+                 QList<QUrl>({QUrl(QStringLiteral("wss://rv.nereussdr.com/")),
+                              QUrl(QStringLiteral("wss://rv.example.net:8443/")),
+                              QUrl(QStringLiteral("wss://[2001:db8::5]:443/")),
+                              QUrl(QStringLiteral("wss://rv.example.org/path")),
+                              QUrl(QStringLiteral("ws://127.0.0.1:8710/"))}));
+        QCOMPARE(rejected, QStringList({QStringLiteral("ws://rv.example.net"),
+                                        QStringLiteral("http://rv.example.net")}));
+    }
+
+    // Every test binary runs in test mode (tests/TestSandboxInit.cpp): a
+    // Core started with the default server list, as tst_daemon_app starts
+    // one, never reaches rv.nereussdr.com from a test.
+    void aTestRunNeverLeavesThisComputer()
+    {
+        QVERIFY(QStandardPaths::isTestModeEnabled());
+        RendezvousClient client;
+        client.setServers(RendezvousClient::serverUrls({QString::fromLatin1(RendezvousClient::kDefaultServer)}));
+        QCOMPARE(client.servers(), QList<QUrl>({QUrl(QStringLiteral("wss://rv.nereussdr.com/"))}));
+        QSignalSpy unreachable(&client, &RendezvousClient::unreachable);
+        QSignalSpy connected(&client, &RendezvousClient::connected);
+        client.connectToService();
+        QTRY_COMPARE(unreachable.size(), 1);
+        QCOMPARE(connected.size(), 0);
+        QCOMPARE(client.findChildren<QWebSocket*>().size(), 0);
+    }
+
+    // ── The Core's and the desktop's runners (section 10.4) ────────────
+
+    void coreRunner_data()
+    {
+        QTest::addColumn<QString>("file");
+        const QJsonArray fixtures =
+            readJson(kSuite + QStringLiteral("/manifest.json")).value(QStringLiteral("fixtures")).toArray();
+        int count = 0;
+        for (const QJsonValue& value : fixtures) {
+            const QString file = value.toObject().value(QStringLiteral("file")).toString();
+            if (value.toObject().value(QStringLiteral("kind")).toString() != QLatin1String("session")) {
+                continue;
+            }
+            const QJsonArray runs = readJson(kSuite + QLatin1Char('/') + file).value(QStringLiteral("runs")).toArray();
+            if (runs.contains(QJsonValue(QStringLiteral("core")))) {
+                QTest::newRow(qPrintable(file)) << file;
+                ++count;
+            }
+        }
+        QVERIFY(count == 10);
+    }
+
+    void coreRunner()
+    {
+        QFETCH(QString, file);
+        runCoreFixture(file);
+    }
+
+    void appRunner_data()
+    {
+        QTest::addColumn<QString>("file");
+        const QJsonArray fixtures =
+            readJson(kSuite + QStringLiteral("/manifest.json")).value(QStringLiteral("fixtures")).toArray();
+        for (const QJsonValue& value : fixtures) {
+            const QString file = value.toObject().value(QStringLiteral("file")).toString();
+            if (value.toObject().value(QStringLiteral("kind")).toString() != QLatin1String("session")) {
+                continue;
+            }
+            const QJsonArray runs = readJson(kSuite + QLatin1Char('/') + file).value(QStringLiteral("runs")).toArray();
+            if (runs.contains(QJsonValue(QStringLiteral("app")))) {
+                QTest::newRow(qPrintable(file)) << file;
+            }
+        }
+    }
+
+    void appRunner()
+    {
+        QFETCH(QString, file);
+        runAppFixture(file);
+    }
+
+    // ── Against the Python service on this computer ────────────────────
+
+    void aPairedDeviceConnectsOverIceUsingStun()
+    {
+        // STUN only: the service has no relay, so the connection is direct.
+        LocalService service(/*stun=*/true, /*relay=*/false);
+        QVERIFY(service.start());
+        Core core;
+        auto phone = makeKey();
+        QVERIFY(core.pair(*phone));
+        StationRendezvous rendezvous(core.server.get(), {service.url()}, /*relayAllowed=*/true);
+        QSignalSpy registered(rendezvous.client(), &RendezvousClient::registered);
+        QVERIFY(rendezvous.start());
+        QTRY_COMPARE_WITH_TIMEOUT(registered.size(), 1, 10000);
+        // The id comes from the station identity key, never the TLS
+        // certificate's.
+        QCOMPARE(rendezvous.client()->stationId(),
+                 Wire::rendezvousId(core.server->stationIdentity().publicKeySpki()));
+
+        RendezvousClient client;
+        client.setServers({service.url()});
+        IcePair pair(rendezvous.client(), &client, /*relayOnly=*/false);
+        pair.start(rendezvous.client()->stationId(), phone);
+        QTRY_VERIFY_WITH_TIMEOUT(pair.clientReady && pair.stationReady, 30000);
+        const auto path = pair.offerer()->selectedPath();
+        QVERIFY(path.has_value());
+        QVERIFY(!path->relayed());
+        // The service's STUN server was used: both ends gathered a
+        // server-reflexive candidate from it.
+        const auto gatheredThroughServer = [](const QStringList& candidates) {
+            for (const QString& candidate : candidates) {
+                if (IceConfiguration::candidateType(candidate) == QLatin1String("srflx")) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        QTRY_VERIFY_WITH_TIMEOUT(gatheredThroughServer(pair.clientCandidates), 10000);
+        QTRY_VERIFY_WITH_TIMEOUT(gatheredThroughServer(pair.stationCandidates), 10000);
+        QCOMPARE(rendezvous.client()->droppedIntroductions(), quint64(0));
+    }
+
+    // With the relay on offer too, a working direct path is the one used.
+    void aDirectPathIsPreferredOverTheRelay()
+    {
+        LocalService service;
+        QVERIFY(service.start());
+        Core core;
+        auto phone = makeKey();
+        QVERIFY(core.pair(*phone));
+        StationRendezvous rendezvous(core.server.get(), {service.url()}, true);
+        QSignalSpy registered(rendezvous.client(), &RendezvousClient::registered);
+        QVERIFY(rendezvous.start());
+        QTRY_COMPARE_WITH_TIMEOUT(registered.size(), 1, 10000);
+        RendezvousClient client;
+        client.setServers({service.url()});
+        IcePair pair(rendezvous.client(), &client, /*relayOnly=*/false);
+        pair.start(rendezvous.client()->stationId(), phone);
+        QTRY_VERIFY_WITH_TIMEOUT(pair.clientReady && pair.stationReady, 30000);
+        QCOMPARE(pair.stationRelays, 1);
+        QCOMPARE(pair.clientRelays, 1);
+        QTRY_VERIFY_WITH_TIMEOUT(pair.offerer()->selectedPath().has_value()
+                                     && !pair.offerer()->selectedPath()->relayed(),
+                                 15000);
+    }
+
+    void withDirectBlockedItConnectsThroughTheRelay()
+    {
+        LocalService service;
+        QVERIFY(service.start());
+        Core core;
+        auto phone = makeKey();
+        QVERIFY(core.pair(*phone));
+        StationRendezvous rendezvous(core.server.get(), {service.url()}, true);
+        QSignalSpy registered(rendezvous.client(), &RendezvousClient::registered);
+        QVERIFY(rendezvous.start());
+        QTRY_COMPARE_WITH_TIMEOUT(registered.size(), 1, 10000);
+
+        RendezvousClient client;
+        client.setServers({service.url()});
+        IcePair pair(rendezvous.client(), &client, /*relayOnly=*/true);
+        pair.start(rendezvous.client()->stationId(), phone);
+        QTRY_VERIFY_WITH_TIMEOUT(pair.clientReady && pair.stationReady, 60000);
+        QCOMPARE(pair.stationRelays, 1);
+        QCOMPARE(pair.clientRelays, 1);
+        const auto path = pair.offerer()->selectedPath();
+        QVERIFY(path.has_value());
+        QVERIFY(path->relayed());
+        QVERIFY(service.turnOutput().contains(QLatin1String("ALLOCATED")));
+        // Data crosses the relayed connection.
+        QTRY_VERIFY_WITH_TIMEOUT(pair.offerer()->sendDisplay(QByteArrayLiteral("through the relay")),
+                                 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(pair.stationReceived.contains(QByteArrayLiteral("through the relay")),
+                                 5000);
+    }
+
+    void relayDeniedAsksForNoCredentials()
+    {
+        LocalService service;
+        QVERIFY(service.start());
+        Core core;
+        auto phone = makeKey();
+        QVERIFY(core.pair(*phone));
+        StationRendezvous rendezvous(core.server.get(), {service.url()}, /*relayAllowed=*/false);
+        QSignalSpy registered(rendezvous.client(), &RendezvousClient::registered);
+        QSignalSpy credentials(rendezvous.client(), &RendezvousClient::credentialsReceived);
+        QVERIFY(rendezvous.start());
+        QTRY_COMPARE_WITH_TIMEOUT(registered.size(), 1, 10000);
+        RendezvousClient client;
+        client.setServers({service.url()});
+        QSignalSpy answers(&client, &RendezvousClient::answerReceived);
+        IcePair pair(rendezvous.client(), &client, false);
+        pair.start(rendezvous.client()->stationId(), phone);
+        QTRY_VERIFY_WITH_TIMEOUT(pair.clientReady && pair.stationReady, 30000);
+        QCOMPARE(credentials.size(), 0);
+        QCOMPARE(answers.size(), 1);
+        QCOMPARE(answers.at(0).at(1).toBool(), false);
+        QVERIFY(!pair.offerer()->selectedPath()->relayed());
+    }
+
+    void unpairedAndRevokedDevicesGetNoAnswerAndAreCounted()
+    {
+        LocalService service;
+        QVERIFY(service.start());
+        Core core;
+        auto stranger = makeKey();
+        auto revoked = makeKey();
+        QVERIFY(core.pair(*revoked));
+        StationRendezvous rendezvous(core.server.get(), {service.url()}, true);
+        QSignalSpy registered(rendezvous.client(), &RendezvousClient::registered);
+        QSignalSpy introduced(rendezvous.client(), &RendezvousClient::introduced);
+        QVERIFY(rendezvous.start());
+        QTRY_COMPARE_WITH_TIMEOUT(registered.size(), 1, 10000);
+        QVERIFY(core.server->deviceStore()->remove(StationIdentity::fingerprintOf(revoked->spki())));
+
+        const QString offer = readText(kSuite + QStringLiteral("/sdp/offer.sdp"));
+        for (const auto& key : {stranger, revoked}) {
+            RendezvousClient client;
+            client.setServers({service.url()});
+            QSignalSpy answers(&client, &RendezvousClient::answerReceived);
+            QSignalSpy errors(&client, &RendezvousClient::serviceError);
+            client.introduce(rendezvous.client()->stationId(), key->spki(),
+                             [key](const QByteArray& message) { return key->sign(message); },
+                             offer);
+            QTest::qWait(1500);
+            QCOMPARE(answers.size(), 0);
+            // Silence, not `offline`: the service cannot tell whether a
+            // device is paired (section 6.4).
+            QCOMPARE(errors.size(), 0);
+        }
+        QCOMPARE(introduced.size(), 0);
+        QCOMPARE(rendezvous.client()->droppedIntroductions(), quint64(2));
+    }
+
+    void pairingByCodeGoesThroughTheMailboxWithoutTheCode()
+    {
+        QVERIFY(SpakeExchange::isAvailable());
+        LocalService service;
+        QVERIFY(service.start());
+        RecordingRelay relay(service.url());
+        Core core;
+        QVERIFY(core.server->pairingWindow()->isOpen());
+        StationRendezvous rendezvous(core.server.get(), {relay.url()}, true);
+        QSignalSpy nameplates(rendezvous.client(), &RendezvousClient::nameplateClaimed);
+        QVERIFY(rendezvous.start());
+        QTRY_COMPARE_WITH_TIMEOUT(nameplates.size(), 1, 10000);
+        // The code the Core shows carries the nameplate the service gave it.
+        const int nameplate = nameplates.at(0).at(0).toInt();
+        QTRY_VERIFY(core.server->pairingWindow()->currentCode().startsWith(
+            QString::number(nameplate) + QLatin1Char('-')));
+        const QString code = core.server->pairingWindow()->currentCode();
+
+        QTemporaryDir keyDir;
+        auto identity = std::make_shared<const ClientDeviceIdentity>(
+            ClientDeviceIdentity::loadOrCreate(keyDir.path()));
+        StationPairingClient pairing(identity, QStringLiteral("Shack MacBook"));
+        QSignalSpy paired(&pairing, &StationPairingClient::paired);
+        QSignalSpy failed(&pairing, &StationPairingClient::failed);
+        pairing.pairByCodeFromAnywhere(code, {relay.url()});
+        QTRY_VERIFY_WITH_TIMEOUT(!paired.isEmpty() || !failed.isEmpty(), 60000);
+        QVERIFY2(failed.isEmpty(), failed.isEmpty() ? "" : qPrintable(failed.at(0).at(0).toString()));
+        const PairedStationRecord record = paired.at(0).at(0).value<PairedStationRecord>();
+        QCOMPARE(record.identityKey, core.server->stationIdentity().publicKeySpki());
+        QVERIFY(core.server->deviceStore()->find(identity->fingerprint()).has_value());
+        // The first pairing claims the Core and closes its window; the
+        // nameplate goes back.
+        QTRY_VERIFY(!core.server->pairingWindow()->isOpen());
+
+        // What the service was given: pairing messages, forwarded
+        // unchanged, and never the code.
+        QStringList sent;
+        QStringList delivered;
+        for (const QString& text : std::as_const(relay.toService)) {
+            const QJsonObject message = QJsonDocument::fromJson(text.toUtf8()).object();
+            if (message.value(QStringLiteral("type")).toString() == QLatin1String("mailbox")) {
+                sent.append(message.value(QStringLiteral("body")).toString());
+            }
+        }
+        for (const QString& text : std::as_const(relay.fromService)) {
+            const QJsonObject message = QJsonDocument::fromJson(text.toUtf8()).object();
+            if (message.value(QStringLiteral("type")).toString() == QLatin1String("mailbox")) {
+                delivered.append(message.value(QStringLiteral("body")).toString());
+            }
+        }
+        QVERIFY(sent.size() >= 5);
+        QCOMPARE(delivered, sent);
+        for (const QString& body : std::as_const(sent)) {
+            QVERIFY(QJsonDocument::fromJson(body.toUtf8())
+                        .object()
+                        .value(QStringLiteral("type"))
+                        .toString()
+                        .startsWith(QLatin1String("pair.")));
+        }
+        const QStringList words = code.split(QLatin1Char('-')).mid(1);
+        QCOMPARE(words.size(), 2);
+        for (const QString& text : relay.toService + relay.fromService) {
+            QVERIFY(!text.contains(code));
+            for (const QString& word : words) {
+                QVERIFY(!text.contains(word, Qt::CaseInsensitive));
+            }
+        }
+        // The service's own log records the mailbox (never its bodies).
+        QTRY_VERIFY_WITH_TIMEOUT(service.log().contains(QLatin1String("mailbox opened")), 5000);
+        QVERIFY(!service.log().contains(code));
+    }
+
+    void aSessionOutlivesTheService()
+    {
+        LocalService service;
+        QVERIFY(service.start());
+        Core core;
+        auto phone = makeKey();
+        QVERIFY(core.pair(*phone));
+        StationRendezvous rendezvous(core.server.get(), {service.url()}, true);
+        rendezvous.client()->setReconnectDelaysMs({200});
+        QSignalSpy registered(rendezvous.client(), &RendezvousClient::registered);
+        QSignalSpy lost(rendezvous.client(), &RendezvousClient::connectionLost);
+        QVERIFY(rendezvous.start());
+        QTRY_COMPARE_WITH_TIMEOUT(registered.size(), 1, 10000);
+        RendezvousClient client;
+        client.setServers({service.url()});
+        IcePair pair(rendezvous.client(), &client, false);
+        pair.start(rendezvous.client()->stationId(), phone);
+        QTRY_VERIFY_WITH_TIMEOUT(pair.clientReady && pair.stationReady, 30000);
+
+        service.stop();
+        QTRY_VERIFY_WITH_TIMEOUT(lost.size() >= 1, 10000);
+        // The connection the service introduced carries on both ways.
+        QTRY_VERIFY_WITH_TIMEOUT(pair.offerer()->sendDisplay(QByteArrayLiteral("after the stop")), 5000);
+        QTRY_VERIFY_WITH_TIMEOUT(pair.stationReceived.contains(QByteArrayLiteral("after the stop")),
+                                 5000);
+        QVERIFY(pair.answerer()->sendDisplay(QByteArrayLiteral("and back")));
+        QTRY_VERIFY_WITH_TIMEOUT(pair.clientReceived.contains(QByteArrayLiteral("and back")), 5000);
+        QVERIFY(pair.offerer()->isReady());
+        QVERIFY(pair.answerer()->isReady());
+
+        // The Core registers again once the service is back.
+        QVERIFY(service.launch());
+        QTRY_VERIFY_WITH_TIMEOUT(registered.size() >= 2, 20000);
+        QVERIFY(pair.offerer()->isReady());
+    }
+
+    void ipv6IsPreferredWhenBothEndsHaveIt()
+    {
+        if (!hasUsableIpv6()) {
+            QSKIP("This computer has no IPv6 address beyond link-local and loopback.");
+        }
+        LocalService service;
+        QVERIFY(service.start());
+        Core core;
+        auto phone = makeKey();
+        QVERIFY(core.pair(*phone));
+        StationRendezvous rendezvous(core.server.get(), {service.url()}, true);
+        QSignalSpy registered(rendezvous.client(), &RendezvousClient::registered);
+        QVERIFY(rendezvous.start());
+        QTRY_COMPARE_WITH_TIMEOUT(registered.size(), 1, 10000);
+        RendezvousClient client;
+        client.setServers({service.url()});
+        IcePair pair(rendezvous.client(), &client, false);
+        pair.start(rendezvous.client()->stationId(), phone);
+        QTRY_VERIFY_WITH_TIMEOUT(pair.clientReady && pair.stationReady, 30000);
+        const auto hasFamily = [](const QStringList& candidates, QAbstractSocket::NetworkLayerProtocol family) {
+            for (const QString& candidate : candidates) {
+                const QStringList fields = candidate.split(QLatin1Char(' '));
+                if (QHostAddress(fields.value(4)).protocol() == family) {
+                    return true;
+                }
+            }
+            return false;
+        };
+        // Both ends gathered IPv6 host candidates (and IPv4 ones).
+        QVERIFY(hasFamily(pair.clientCandidates, QAbstractSocket::IPv6Protocol));
+        QVERIFY(hasFamily(pair.stationCandidates, QAbstractSocket::IPv6Protocol));
+        QVERIFY(hasFamily(pair.clientCandidates, QAbstractSocket::IPv4Protocol));
+        // Nomination settles on the highest priority pair; wait for it.
+        QTRY_VERIFY_WITH_TIMEOUT(pair.offerer()->selectedPath().has_value()
+                                     && QHostAddress(pair.offerer()->selectedPath()->localAddress)
+                                            .protocol() == QAbstractSocket::IPv6Protocol,
+                                 10000);
+        QCOMPARE(QHostAddress(pair.offerer()->selectedPath()->remoteAddress).protocol(),
+                 QAbstractSocket::IPv6Protocol);
+    }
+
+    void aClientTriesTheNextServerWhenTheCoreIsNotOnTheFirst()
+    {
+        LocalService first(/*stun=*/false, /*relay=*/false);
+        LocalService second(/*stun=*/false, /*relay=*/false);
+        QVERIFY(first.start());
+        QVERIFY(second.start());
+        Core core;
+        auto phone = makeKey();
+        QVERIFY(core.pair(*phone));
+        // The Core is registered only with the second server; the first
+        // answers `offline`, and the client moves on down its list.
+        StationRendezvous rendezvous(core.server.get(), {second.url()}, true);
+        QSignalSpy registered(rendezvous.client(), &RendezvousClient::registered);
+        QSignalSpy introduced(rendezvous.client(), &RendezvousClient::introduced);
+        QVERIFY(rendezvous.start());
+        QTRY_COMPARE_WITH_TIMEOUT(registered.size(), 1, 10000);
+        RendezvousClient client;
+        // A server that is not running at all comes first of all.
+        client.setServers({QUrl(QStringLiteral("ws://127.0.0.1:%1/").arg(freeTcpPort())),
+                           first.url(), second.url()});
+        client.introduce(rendezvous.client()->stationId(), phone->spki(),
+                         [phone](const QByteArray& message) { return phone->sign(message); },
+                         readText(kSuite + QStringLiteral("/sdp/offer.sdp")));
+        QTRY_COMPARE_WITH_TIMEOUT(introduced.size(), 1, 20000);
+        QCOMPARE(client.currentServer(), second.url());
+
+        // Nowhere to be found: the client says so in plain words.
+        RendezvousClient lonely;
+        lonely.setServers({first.url()});
+        QSignalSpy unreachable(&lonely, &RendezvousClient::unreachable);
+        lonely.introduce(Wire::rendezvousId(makeKey()->spki()), phone->spki(),
+                         [phone](const QByteArray& message) { return phone->sign(message); },
+                         readText(kSuite + QStringLiteral("/sdp/offer.sdp")));
+        QTRY_COMPARE_WITH_TIMEOUT(unreachable.size(), 1, 10000);
+        QCOMPARE(unreachable.at(0).at(0).toString(),
+                 QStringLiteral("The Core is not reachable right now. Check that it is running and "
+                                "connected to the internet."));
+    }
+};
+
+void TstRendezvousClient::runCoreFixture(const QString& file)
+{
+    const QJsonObject fixture = readJson(kSuite + QLatin1Char('/') + file);
+    Context ctx;
+    ctx.coreMode = true;
+    ctx.setup(fixture.value(QStringLiteral("serverSetup")).toObject());
+    ServicePlayer player;
+
+    // The Core: its station identity key and the devices it paired before
+    // the fixture starts, all made now.
+    auto coreKey = makeKey();
+    QHash<QByteArray, QByteArray> paired;
+    for (const QJsonValue& name : fixture.value(QStringLiteral("pairedDevices")).toArray()) {
+        const QByteArray spki = ctx.device(name.toString())->spki();
+        paired.insert(StationIdentity::fingerprintOf(spki), spki);
+    }
+    RendezvousClient core;
+    core.setServers({player.url()});
+    QList<RendezvousIntroduction> introductions;
+    connect(&core, &RendezvousClient::introduced, this,
+            [&introductions](const RendezvousIntroduction& introduction) {
+        introductions.append(introduction);
+    });
+    QWebSocket* station = nullptr;
+
+    for (const QJsonValue& value : fixture.value(QStringLiteral("steps")).toArray()) {
+        const QJsonObject step = value.toObject();
+        const QString where = file + QStringLiteral(": ") + compact(step).left(120);
+        if (step.contains(QStringLiteral("connect"))) {
+            if (step.value(QStringLiteral("connect")).toString() == QLatin1String("station")) {
+                core.registerStation(coreKey->spki(),
+                                     [coreKey](const QByteArray& message) { return coreKey->sign(message); },
+                                     [&paired](const QByteArray& id) { return paired.value(id); });
+                station = player.waitForConnection();
+                QVERIFY2(station != nullptr, qPrintable(where));
+            }
+            continue;
+        }
+        if (step.contains(QStringLiteral("advanceMs"))) {
+            ctx.advancedMs += step.value(QStringLiteral("advanceMs")).toInteger();
+            continue;
+        }
+        if (step.contains(QStringLiteral("disconnect"))) {
+            if (step.value(QStringLiteral("disconnect")).toString() == QLatin1String("station")) {
+                core.stop();
+            }
+            continue;
+        }
+        if (step.contains(QStringLiteral("expectSilent"))) {
+            QVERIFY2(station == nullptr || player.silentFor(station, 1000), qPrintable(where));
+            continue;
+        }
+        if (step.contains(QStringLiteral("expectClosed"))) {
+            if (step.value(QStringLiteral("expectClosed")).toString() == QLatin1String("station")
+                && station != nullptr) {
+                station->close(static_cast<QWebSocketProtocol::CloseCode>(
+                    step.value(QStringLiteral("code")).toInt()));
+                QVERIFY2(player.silentFor(station, 300), qPrintable(where));
+            }
+            continue;
+        }
+        const QString from = step.value(QStringLiteral("from")).toString();
+        const QJsonObject message = step.value(QStringLiteral("message")).toObject();
+        if (from == QLatin1String("server")) {
+            const QJsonValue filled = ctx.fill(message);
+            if (step.value(QStringLiteral("to")).toString() == QLatin1String("station")) {
+                QVERIFY2(station != nullptr, qPrintable(where));
+                station->sendTextMessage(compact(filled));
+            }
+            continue;
+        }
+        if (from != QLatin1String("station")
+            || step.value(QStringLiteral("role")).toString() != QLatin1String("behaviour")) {
+            // Another connection's message, or one a conformant Core never
+            // sends: its placeholders are recorded only.
+            ctx.fill(message);
+            continue;
+        }
+        // Drive the Core to this behaviour, then match what it sends.
+        const QString type = message.value(QStringLiteral("type")).toString();
+        if (type == QLatin1String("answer")) {
+            QTRY_VERIFY2(!introductions.isEmpty(), qPrintable(where));
+            QVERIFY2(core.answer(introductions.last().id, ctx.answerSdp), qPrintable(where));
+        } else if (type == QLatin1String("candidate")) {
+            QVERIFY2(!introductions.isEmpty(), qPrintable(where));
+            QVERIFY2(core.sendCandidate(introductions.last().id,
+                                        ctx.fill(message.value(QStringLiteral("candidate"))).toString()),
+                     qPrintable(where));
+        } else if (type == QLatin1String("nameplate.claim")) {
+            core.claimNameplate();
+        } else if (type == QLatin1String("nameplate.release")) {
+            core.releaseNameplate();
+        } else if (type == QLatin1String("mailbox")) {
+            QTRY_VERIFY2(core.isMailboxOpen(), qPrintable(where));
+            QVERIFY2(core.sendMailbox(message.value(QStringLiteral("body")).toString()), qPrintable(where));
+        } else if (type == QLatin1String("mailbox.close")) {
+            core.closeMailbox();
+        }
+        const std::optional<QString> sent = player.waitForMessage(station);
+        QVERIFY2(sent.has_value(), qPrintable(where + QStringLiteral(": nothing sent")));
+        QString why;
+        const QJsonObject actual = QJsonDocument::fromJson(sent->toUtf8()).object();
+        QVERIFY2(ctx.match(message, actual, &why), qPrintable(where + QStringLiteral(": ") + why));
+    }
+    // Nothing more from the Core.
+    if (station != nullptr) {
+        QVERIFY2(player.silentFor(station, 200), qPrintable(file));
+    }
+    core.stop();
+}
+
+void TstRendezvousClient::runAppFixture(const QString& file)
+{
+    const QJsonObject fixture = readJson(kSuite + QLatin1Char('/') + file);
+    Context ctx;
+    ctx.coreMode = false;
+    ctx.setup(fixture.value(QStringLiteral("serverSetup")).toObject());
+    ServicePlayer player;
+    RendezvousClient client;
+    client.setServers({player.url()});
+    QSignalSpy connected(&client, &RendezvousClient::connected);
+    QSignalSpy answers(&client, &RendezvousClient::answerReceived);
+    QSignalSpy mailboxes(&client, &RendezvousClient::mailboxOpened);
+    QSignalSpy closedMailboxes(&client, &RendezvousClient::mailboxClosed);
+    QSignalSpy ends(&client, &RendezvousClient::introductionEnded);
+    QSignalSpy errors(&client, &RendezvousClient::serviceError);
+    QWebSocket* socket = nullptr;
+    int expectedAnswers = 0;
+    int expectedOpened = 0;
+    int expectedClosed = 0;
+    int expectedEnds = 0;
+    int expectedErrors = 0;
+
+    for (const QJsonValue& value : fixture.value(QStringLiteral("steps")).toArray()) {
+        const QJsonObject step = value.toObject();
+        const QString where = file + QStringLiteral(": ") + compact(step).left(120);
+        if (step.contains(QStringLiteral("connect"))) {
+            if (step.value(QStringLiteral("connect")).toString() == QLatin1String("client")) {
+                client.connectToService();
+                socket = player.waitForConnection();
+                QVERIFY2(socket != nullptr, qPrintable(where));
+            }
+            continue;
+        }
+        if (step.contains(QStringLiteral("advanceMs"))) {
+            ctx.advancedMs += step.value(QStringLiteral("advanceMs")).toInteger();
+            continue;
+        }
+        if (step.contains(QStringLiteral("disconnect"))) {
+            if (step.value(QStringLiteral("disconnect")).toString() == QLatin1String("client")) {
+                client.stop();
+            }
+            continue;
+        }
+        if (step.contains(QStringLiteral("expectSilent"))) {
+            QVERIFY2(socket == nullptr || player.silentFor(socket, 1000), qPrintable(where));
+            continue;
+        }
+        if (step.contains(QStringLiteral("expectClosed"))) {
+            if (step.value(QStringLiteral("expectClosed")).toString() == QLatin1String("client")
+                && socket != nullptr) {
+                socket->close(static_cast<QWebSocketProtocol::CloseCode>(
+                    step.value(QStringLiteral("code")).toInt()));
+                QVERIFY2(player.silentFor(socket, 300), qPrintable(where));
+            }
+            continue;
+        }
+        const QString from = step.value(QStringLiteral("from")).toString();
+        const QJsonObject message = step.value(QStringLiteral("message")).toObject();
+        if (from == QLatin1String("server")) {
+            const QJsonValue filled = ctx.fill(message);
+            if (step.value(QStringLiteral("to")).toString() == QLatin1String("client")) {
+                QVERIFY2(socket != nullptr, qPrintable(where));
+                socket->sendTextMessage(compact(filled));
+                const QString type = message.value(QStringLiteral("type")).toString();
+                if (type == QLatin1String("hello")) {
+                    QTRY_VERIFY2(!connected.isEmpty(), qPrintable(where));
+                } else if (type == QLatin1String("answer")) {
+                    ++expectedAnswers;
+                } else if (type == QLatin1String("mailbox.opened")) {
+                    ++expectedOpened;
+                } else if (type == QLatin1String("mailbox.closed")) {
+                    ++expectedClosed;
+                } else if (type == QLatin1String("introduction.end")) {
+                    ++expectedEnds;
+                } else if (type == QLatin1String("error")) {
+                    ++expectedErrors;
+                }
+            }
+            continue;
+        }
+        if (from != QLatin1String("client")
+            || step.value(QStringLiteral("role")).toString() != QLatin1String("behaviour")) {
+            ctx.fill(message);
+            continue;
+        }
+        const QString type = message.value(QStringLiteral("type")).toString();
+        if (type == QLatin1String("introduce")) {
+            // The Core it paired with, and its own device key.
+            const QString station = message.value(QStringLiteral("id")).toString().split(QLatin1Char(':')).value(1);
+            const QString deviceName =
+                message.value(QStringLiteral("device")).toString().split(QLatin1Char(':')).value(1);
+            const std::shared_ptr<TestKey> device = ctx.device(deviceName);
+            client.introduce(Wire::rendezvousId(ctx.spkiOf(station)), device->spki(),
+                             [device](const QByteArray& m) { return device->sign(m); }, ctx.offerSdp);
+        } else if (type == QLatin1String("mailbox.open")) {
+            client.openMailbox(message.value(QStringLiteral("nameplate")).toInt());
+        } else if (type == QLatin1String("mailbox")) {
+            QTRY_VERIFY2(client.isMailboxOpen(), qPrintable(where));
+            QVERIFY2(client.sendMailbox(message.value(QStringLiteral("body")).toString()), qPrintable(where));
+        } else if (type == QLatin1String("mailbox.close")) {
+            client.closeMailbox();
+        } else if (type == QLatin1String("candidate")) {
+            QVERIFY2(client.sendCandidate(ctx.fill(message.value(QStringLiteral("candidate"))).toString()),
+                     qPrintable(where));
+        }
+        const std::optional<QString> sent = player.waitForMessage(socket);
+        QVERIFY2(sent.has_value(), qPrintable(where + QStringLiteral(": nothing sent")));
+        QString why;
+        const QJsonObject actual = QJsonDocument::fromJson(sent->toUtf8()).object();
+        QVERIFY2(ctx.match(message, actual, &why), qPrintable(where + QStringLiteral(": ") + why));
+    }
+    // The client read every message the service sent it.
+    QTRY_COMPARE(answers.size(), expectedAnswers);
+    QTRY_COMPARE(mailboxes.size(), expectedOpened);
+    QTRY_COMPARE(closedMailboxes.size(), expectedClosed);
+    QTRY_COMPARE(ends.size(), expectedEnds);
+    QTRY_COMPARE(errors.size(), expectedErrors);
+    if (socket != nullptr) {
+        QVERIFY2(player.silentFor(socket, 200), qPrintable(file));
+    }
+    client.stop();
+}
+
+QTEST_GUILESS_MAIN(TstRendezvousClient)
+#include "tst_rendezvous_client.moc"

@@ -489,6 +489,10 @@
 //               and TUNE wait while another device holds. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: iPhone app plan Task 27 (R-IOS-08): acceptPairingMailbox(),
+//               a pairing through the remote access service's mailbox (pair.*
+//               only, no hellos, no address). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -2618,6 +2622,16 @@ void StationServer::onNewWebSocketConnection()
 
 void StationServer::acceptTransport(SessionTransport* transport)
 {
+    adoptTransport(transport, /*mailbox=*/false);
+}
+
+void StationServer::acceptPairingMailbox(SessionTransport* transport)
+{
+    adoptTransport(transport, /*mailbox=*/true);
+}
+
+void StationServer::adoptTransport(SessionTransport* transport, bool mailbox)
+{
     if (transport == nullptr) {
         return;
     }
@@ -2705,6 +2719,11 @@ void StationServer::acceptTransport(SessionTransport* transport)
         peer.authDeadline = deadline;
     }
 
+    // iPhone app plan Task 27: a mailbox carries no hello either way; the
+    // pairing starts at pair.start.
+    peer.mailboxPairing = mailbox;
+    peer.helloReceived = mailbox;
+
     m_peers.insert(transport, peer);
 
     connect(transport, &SessionTransport::textReceived, this,
@@ -2720,6 +2739,11 @@ void StationServer::acceptTransport(SessionTransport* transport)
 
     if (!m_heartbeatTimer->isActive() && m_heartbeatIntervalMs > 0) {
         m_heartbeatTimer->start();
+    }
+
+    if (mailbox) {
+        qCDebug(lcStation) << "Pairing mailbox attached";
+        return;
     }
 
     // The daemon greets first, so a client can refuse on a major version
@@ -3021,6 +3045,16 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
     SessionMessage message;
     if (!SessionMessages::decode(wire, &message)) {
         dropPeer(transport, QStringLiteral("The Core could not read a message from this app."), true,
+                 /*retryable=*/false, QString::fromLatin1(SessionEndCode::kProtocolError));
+        return;
+    }
+
+    // iPhone app plan Task 27: a mailbox carries pairing messages only.
+    if (it->mailboxPairing && message.kind != SessionMessageKind::PairStart
+        && message.kind != SessionMessageKind::PairSpake
+        && message.kind != SessionMessageKind::PairConfirm
+        && message.kind != SessionMessageKind::PairFail) {
+        dropPeer(transport, QStringLiteral("This app started pairing out of order."), true,
                  /*retryable=*/false, QString::fromLatin1(SessionEndCode::kProtocolError));
         return;
     }
