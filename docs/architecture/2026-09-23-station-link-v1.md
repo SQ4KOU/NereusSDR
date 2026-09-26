@@ -4304,3 +4304,17 @@ how a fixture is written to what the code does.
   `isPlain`, whose terms would refuse an ordinary name such as "Grant's
   iPhone"; a sentence of the station's that carries one is checked with
   the name set aside.
+
+## 18. The rendezvous
+
+A client reaches a Core it cannot address directly through the rendezvous
+at `rv.nereussdr.com` (or a self-hosted one), specified in its own document,
+[2026-09-23-rendezvous-v1.md](2026-09-23-rendezvous-v1.md), with its
+conformance suite in `rendezvous/conformance/v1/`. It uses this document's
+identity values unchanged (section 3.4): the Core registers under an id
+derived from its station identity key, a device introduces itself by its
+device id (section 3.5) with a signature by its device key, and pairing by
+code carries section 3.6's `pair.*` messages, as text, inside the
+rendezvous's mailbox messages. The rendezvous introduces the two ends and
+mints relay credentials; the session that follows is this link, on its own
+connection, direct or through the relay, never through the rendezvous.
