@@ -49,17 +49,27 @@ IPAddressDeny=any
 IPAddressAllow=localhost
 RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
 
-# --- Memory -------------------------------------------------------------
-# The worst case the rendezvous document section 9.1 works out for the
-# default limits, kernel socket buffers included, is about 309 MiB. This
-# ceiling sits just above it, so it never ends the service at the
-# configured limits, and it keeps anything unforeseen from taking memory
-# the website and the relay need on a 1 GB server. Socket buffers are
-# charged to this unit too (cgroup v2); their size per connection is set by
-# the service itself (socket_buffer_bytes), not by any host setting.
-MemoryMax=320M
+# --- Memory and files -----------------------------------------------------
+# The rendezvous document section 9.1 has the measurements. At the default
+# pools (2000 registered Cores and 1024 other connections), all idle, the
+# service holds about 106 MiB. The ceiling leaves room for the 32 MiB send
+# budget and some hundreds of connections holding an unfinished message at
+# once, and keeps the service's share of a 1 GB server beside Caddy, coturn
+# and the host. It is a ceiling, not the worst case: every connection in
+# both pools holding an unfinished message at once would need about 840
+# MiB, more than the server has, so past this the kernel ends the service
+# alone, systemd starts it again (Restart=on-failure) and the Cores
+# register again; the website and the relay keep their memory. Socket
+# buffers are charged to this unit too (cgroup v2); their size per
+# connection is set by the service itself (socket_buffer_bytes).
+MemoryMax=256M
 MemorySwapMax=0
 TasksMax=64
+# One descriptor per connection: both pools (3024 by default), the
+# listening sockets and a margin for connections refused on arrival.
+# systemd's default of 1024 would stop the service accepting long before
+# its pools fill.
+LimitNOFILE=8192
 
 # --- Sandboxing ---------------------------------------------------------
 NoNewPrivileges=yes

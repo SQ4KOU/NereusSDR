@@ -13,6 +13,7 @@ here.
 from __future__ import annotations
 
 import asyncio
+import http
 import ipaddress
 import logging
 import socket
@@ -82,6 +83,50 @@ class WsTransport:
         return self.ws.__aiter__()
 
 
+# The answer to anything that is not a WebSocket upgrade. Caddy sends every
+# request for the service's host name here (website/deploy/Caddyfile), so
+# this is what a browser, or a probe, sees.
+NOT_A_WEBSOCKET_TEXT = (
+    "This address is the NereusSDR connection service. It takes WebSocket "
+    "connections from NereusSDR and the NereusSDR app only.\n"
+)
+_NOT_A_WEBSOCKET_HEADERS = (
+    ("Upgrade", "websocket"),
+    ("Content-Type", "text/plain; charset=utf-8"),
+    ("Cache-Control", "no-store"),
+)
+
+
+def is_websocket_upgrade(headers: Any) -> bool:
+    """True when the request asks for a WebSocket: an Upgrade header with
+    the token websocket, in any case (RFC 6455 section 4.2.1; Apple's
+    Network.framework writes "WebSocket"). The library then checks the
+    rest of the handshake as usual."""
+    values = list(headers.get_all("Upgrade")) if hasattr(headers, "get_all") else []
+    return any(token.strip().lower() == "websocket" for value in values for token in value.split(","))
+
+
+if NEW_API:
+
+    async def _process_request(connection: Any, request: Any) -> Any:
+        if is_websocket_upgrade(request.headers):
+            return None
+        response = connection.respond(http.HTTPStatus.UPGRADE_REQUIRED, NOT_A_WEBSOCKET_TEXT)
+        for name, value in _NOT_A_WEBSOCKET_HEADERS:
+            if name in response.headers:
+                del response.headers[name]
+            response.headers[name] = value
+        return response
+
+else:
+
+    async def _process_request(path: str, request_headers: Any) -> Any:  # type: ignore[misc]
+        if is_websocket_upgrade(request_headers):
+            return None
+        # The legacy implementation needs an HTTPStatus, not a number.
+        return http.HTTPStatus.UPGRADE_REQUIRED, list(_NOT_A_WEBSOCKET_HEADERS), NOT_A_WEBSOCKET_TEXT.encode("utf-8")
+
+
 MAX_QUEUE = 1
 WRITE_LIMIT_BYTES = 32768
 
@@ -102,6 +147,7 @@ def serve_kwargs(config: Any) -> dict:
         close_timeout=5,
         compression=None,
         server_header=None,
+        process_request=_process_request,
     )
     if NEW_API:
         kwargs["open_timeout"] = config.handshake_timeout_ms / 1000.0

@@ -7,14 +7,21 @@
 # --no-start, as the container has no systemd) and coturn is started the
 # way the unit and its drop-in start it: as the turnserver account with
 # CAP_NET_BIND_SERVICE only. A peer container on the same networks plays
-# the client and the relayed peer. Two networks stand in for the internet:
-# a public one (documentation ranges 192.0.2.0/24 and 2001:db8:77::/64) and
-# a private one (10.99.0.0/24 and fd99::/64) that the relay must never
-# reach, although it could.
+# the client and the relayed peer. Three networks: a public one standing in
+# for the internet (11.77.0.0/24 and the benchmarking prefix
+# 2001:2:0:77::/64, neither of them denied), a private one (10.99.0.0/24
+# and fd99::/64) and a documentation one (192.0.2.0/24 and
+# 2001:db8:77::/64), which the relay must never reach, although it could.
 #
 # It checks:
+#   - setup-server.sh when apt-get fails (policy-rc.d never left behind);
 #   - setup-server.sh (dry run, then real, then again: nothing changes),
-#     the files it writes and their modes;
+#     the files it writes and their modes, and the default relay sizing;
+#   - setup-server.sh where systemd runs (a stand-in systemctl that starts
+#     the units' programs): a TCP 443 holder is allowed, a UDP 443 or 3478
+#     holder refused; coturn is disabled right after it is installed;
+#     step 7 starts, then leaves alone, then restarts only after a change,
+#     and checks the ports each one holds; the TURN secret's backups;
 #   - coturn holds UDP 3478 and 443 on both addresses and no TCP port;
 #   - STUN answers on both ports in both families, without credentials;
 #   - turnutils_uclient: a valid allocation relays on both ports in both
@@ -22,7 +29,8 @@
 #   - every denied range, reachable ones included, in each written form
 #     (turn_probe.py, for the error codes);
 #   - no anonymous, wrongly signed or TCP relay allocation, no TCP listener;
-#   - the per-user and total quotas;
+#   - the per-user and total quotas (the relay's slots at a small test
+#     value, 6);
 #   - credentials minted by the running service verify with coturn;
 #   - what coturn does when an allocation is refreshed after its credential
 #     expired (the rendezvous document, section 8), with the real nonce
@@ -31,6 +39,8 @@
 #
 # Usage: rendezvous/tests/coturn-check.sh      (needs Docker; about 2 minutes)
 
+# "check && check || fail": fail exits, and runs exactly when a check fails.
+# shellcheck disable=SC2015
 set -euo pipefail
 
 repo="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)"
@@ -39,9 +49,11 @@ readonly image="nereus-rv-coturn:24.04"
 readonly tag="$$"
 readonly pub="nereus-rv-pub-${tag}" priv="nereus-rv-priv-${tag}"
 readonly server="nereus-rv-turn-${tag}" peer="nereus-rv-peer-${tag}"
-readonly s4="192.0.2.10" s6="2001:db8:77::10"
-readonly p4="192.0.2.20" p6="2001:db8:77::20"
+readonly doc="nereus-rv-doc-${tag}"
+readonly s4="11.77.0.10" s6="2001:2:0:77::10"
+readonly p4="11.77.0.20" p6="2001:2:0:77::20"
 readonly q4="10.99.0.20" q6="fd99::20"
+readonly d4="192.0.2.20" d6="2001:db8:77::20"
 
 passed=0
 pass() { passed=$((passed + 1)); printf 'ok %d - %s\n' "$passed" "$*"; }
@@ -49,7 +61,7 @@ fail() { printf 'not ok - %s\n' "$*" >&2; exit 1; }
 
 cleanup() {
     docker rm -f "$server" "$peer" >/dev/null 2>&1 || true
-    docker network rm "$pub" "$priv" >/dev/null 2>&1 || true
+    docker network rm "$pub" "$priv" "$doc" >/dev/null 2>&1 || true
 }
 trap cleanup EXIT
 
@@ -65,27 +77,35 @@ RUN apt-get update \
 EOF
 echo "# coturn $(docker run --rm "$image" dpkg-query -W -f='${Version}' coturn), $(docker run --rm "$image" turnserver --version 2>/dev/null | head -1)"
 
-docker network create --ipv6 --subnet 192.0.2.0/24 --subnet 2001:db8:77::/64 "$pub" >/dev/null
+docker network create --ipv6 --subnet 11.77.0.0/24 --subnet 2001:2:0:77::/64 "$pub" >/dev/null
 docker network create --ipv6 --subnet 10.99.0.0/24 --subnet fd99::/64 "$priv" >/dev/null
-docker run -d --name "$server" --network "$pub" --ip "$s4" --ip6 "$s6" \
+docker network create --ipv6 --subnet 192.0.2.0/24 --subnet 2001:db8:77::/64 "$doc" >/dev/null
+# --init reaps the programs the check stops. SYS_PTRACE: root on a real
+# server reads every process's sockets (setup's port checks name their
+# owners); root in a container needs it granted.
+docker run -d --init --name "$server" --network "$pub" --ip "$s4" --ip6 "$s6" --cap-add SYS_PTRACE \
     -v "${repo}:/repo:ro" "$image" sleep infinity >/dev/null
 docker network connect --ip 10.99.0.10 --ip6 fd99::10 "$priv" "$server"
+docker network connect --ip 192.0.2.10 --ip6 2001:db8:77::10 "$doc" "$server"
 docker run -d --name "$peer" --network "$pub" --ip "$p4" --ip6 "$p6" \
     -v "${repo}:/repo:ro" "$image" sleep infinity >/dev/null
 docker network connect --ip "$q4" --ip6 "$q6" "$priv" "$peer"
+docker network connect --ip "$d4" --ip6 "$d6" "$doc" "$peer"
 
 sx() { docker exec -i "$server" bash -s -- "$@"; }
 px() { docker exec -i "$peer" bash -s -- "$@"; }
 probe() { docker exec "$peer" python3 /repo/rendezvous/tests/turn_probe.py "$@"; }
-# Test-only settings for setup-server.sh: the documentation addresses stand
-# in for public ones.
-readonly setup_env="RV_PUBLIC_IPV4=${s4} RV_PUBLIC_IPV6=${s6} RV_ALLOW_DOCUMENTATION_ADDRESSES=1"
+# Test-only settings for setup-server.sh: the test addresses stand in for
+# public ones, and the relay has 6 slots so the total quota can be reached.
+readonly setup_env="RV_PUBLIC_IPV4=${s4} RV_PUBLIC_IPV6=${s6} RV_ALLOW_DOCUMENTATION_ADDRESSES=1 RV_RELAY_SLOTS=6"
 
 # --------------------------------------------------------------- setup
 sx <<'EOS'
 set -euo pipefail
 # The deploy account the website's setup makes on the real server.
 useradd -m -s /bin/bash nereusweb
+# Docker's ubuntu image ships a policy-rc.d of its own; a server has none.
+rm -f /usr/sbin/policy-rc.d
 # A syslog socket, as journald provides on the server, so coturn's log
 # lines can be read.
 cat > /usr/local/bin/syslog-capture <<'PY'
@@ -104,6 +124,47 @@ PY
 setsid python3 /usr/local/bin/syslog-capture </dev/null >/dev/null 2>&1 &
 EOS
 
+# ------------------------------------------------------ apt-get failures
+# Stand-ins: every package reads as missing, and apt-get fails at update
+# (then at install). Each records whether policy-rc.d was in place while it
+# ran, so the check knows the failure really happened inside the window.
+for failing in update install; do
+    out="$(sx "$failing" "$setup_env" <<'EOS' 2>&1
+set -uo pipefail
+failing="$1"
+mkdir -p /run/apt-standin
+printf '#!/bin/sh
+exit 1
+' > /run/apt-standin/dpkg-query
+cat > /run/apt-standin/apt-get <<'SH'
+#!/bin/sh
+test -e /usr/sbin/policy-rc.d && echo present >> /run/apt-standin/policy-seen
+for arg in "$@"; do
+    [ "$arg" = "$(cat /run/apt-standin/failing)" ] && exit 100
+done
+exit 0
+SH
+echo "$failing" > /run/apt-standin/failing
+chmod 755 /run/apt-standin/dpkg-query /run/apt-standin/apt-get
+# shellcheck disable=SC2086
+PATH=/run/apt-standin:$PATH env $2 bash /repo/rendezvous/deploy/setup-server.sh --no-start
+echo "exit $?"
+test -e /usr/sbin/policy-rc.d && echo "policy-rc.d left behind"
+cat /run/apt-standin/policy-seen 2>/dev/null
+rm -rf /run/apt-standin
+EOS
+)"
+    if ! grep -q "apt-get ${failing} failed" <<<"$out" || ! grep -qx 'exit 1' <<<"$out"             || ! grep -qx present <<<"$out" || grep -q 'left behind' <<<"$out"; then
+        printf '%s
+' "$out" >&2
+        fail "setup-server.sh with a failing apt-get ${failing}"
+    fi
+done
+sx <<'EOS' || fail "a failing apt-get left files behind"
+test ! -e /usr/sbin/policy-rc.d && test ! -e /etc/nereus-rendezvous
+EOS
+pass "a failing apt-get update, and a failing apt-get install, stop setup-server.sh with no policy-rc.d left behind (it was in place while apt-get ran)"
+
 out="$(sx <<EOS 2>&1
 set -euo pipefail
 env ${setup_env} bash /repo/rendezvous/deploy/setup-server.sh --dry-run --no-start
@@ -112,7 +173,18 @@ EOS
 sx <<'EOS' || fail "the dry run changed something"
 test ! -e /etc/nereus-rendezvous && test ! -e /etc/systemd/system/nereus-rendezvous.service
 EOS
-pass "setup-server.sh --dry-run passes and changes nothing"
+grep -q 'relay: 6 slots (total-quota), 4 per station id (user-quota), 80000 bytes/s each way per slot (max-bps): bps-capacity 480000 bytes/s' <<<"$out" \
+    || { printf '%s\n' "$out" >&2; fail "the dry run's sizing line (6 slots)"; }
+out="$(sx <<EOS 2>&1
+set -euo pipefail
+env RV_PUBLIC_IPV4=${s4} RV_PUBLIC_IPV6=${s6} RV_ALLOW_DOCUMENTATION_ADDRESSES=1 bash /repo/rendezvous/deploy/setup-server.sh --dry-run --no-start
+EOS
+)" || { printf '%s\n' "$out" >&2; fail "setup-server.sh --dry-run with the default sizing failed"; }
+grep -q 'relay: 64 slots (total-quota), 4 per station id (user-quota), 80000 bytes/s each way per slot (max-bps): bps-capacity 5120000 bytes/s, at most 40960 kbit/s out' <<<"$out" \
+    || { printf '%s\n' "$out" >&2; fail "the default sizing line"; }
+grep -Eq 'data-use report: outbound bytes on eth[0-9]+, a warning past 1000 GB' <<<"$out" \
+    || { printf '%s\n' "$out" >&2; fail "the data-use line"; }
+pass "setup-server.sh --dry-run passes and changes nothing; default relay 64 slots, bps-capacity 5120000 bytes/s (64 x 80000), user-quota 4; data use on the default route's interface, threshold 1000 GB"
 
 out="$(sx <<EOS 2>&1
 set -euo pipefail
@@ -142,12 +214,242 @@ check /etc/nereus-rendezvous/coturn/key.pem "root:turnserver 640"
 check /etc/nereus-rendezvous/rendezvous.conf "root:root 644"
 check /etc/systemd/system/nereus-rendezvous.service "root:root 644"
 check /etc/systemd/system/coturn.service.d/nereus.conf "root:root 644"
+check /etc/systemd/system/nereus-data-use.service "root:root 644"
+check /etc/systemd/system/nereus-data-use.timer "root:root 644"
+check /usr/local/libexec/nereus-rendezvous/data-use "root:root 755"
+check /etc/nereus-rendezvous/data-use.conf "root:root 644"
 check /opt/nereus-rendezvous "nereusweb:nereusweb 755"
+grep -Eqx 'RV_DATA_USE_INTERFACE=eth[0-9]+' /etc/nereus-rendezvous/data-use.conf
+grep -qx 'RV_TRANSFER_GB_PER_MONTH=1000' /etc/nereus-rendezvous/data-use.conf
+grep -qx 'total-quota=6' /etc/turnserver.conf
+grep -qx 'bps-capacity=480000' /etc/turnserver.conf
+grep -qx 'user-quota=4' /etc/turnserver.conf
 [[ "$(wc -c < /etc/nereus-rendezvous/turn-secret)" -eq 65 ]]
 grep -qx "static-auth-secret=$(cat /etc/nereus-rendezvous/turn-secret)" /etc/turnserver.conf
 grep -qx 'turn_secret_file = /run/credentials/nereus-rendezvous.service/turn-secret' /etc/nereus-rendezvous/rendezvous.conf
+# The URLs setup writes are the service's built-in defaults and the
+# sample's, in the same order (IPv4 first; rendezvous document section 8).
+sed 's|^turn_secret_file = .*|turn_secret_file =|' /etc/nereus-rendezvous/rendezvous.conf > /tmp/urls.conf
+PYTHONPATH=/repo/rendezvous/server PYTHONDONTWRITEBYTECODE=1 python3 - <<'PY'
+from nereus_rendezvous import config
+written = config.load("/tmp/urls.conf")
+sample = config.load("/repo/rendezvous/server/rendezvous.conf.sample")
+defaults = config.Config()
+for name in ("stun_urls", "turn_urls"):
+    assert getattr(written, name) == getattr(defaults, name) == getattr(sample, name), name
+assert written.stun_urls[0].startswith("stun:rv4.") and written.turn_urls[0].startswith("turn:rv4."), written
+PY
 EOS
-pass "secret (root 600, 64 hex characters), coturn configuration (root:turnserver 640), service configuration, units and code directory"
+pass "secret (root 600, 64 hex characters), coturn configuration (root:turnserver 640, total-quota 6, bps-capacity 480000, user-quota 4), service configuration (STUN and TURN URLs the same, in the same order, as the service's defaults and the sample: rv4 first), units, data-use report and code directory"
+
+# The data-use report as installed, run once the way its unit runs it.
+out="$(sx <<'EOS' 2>&1
+set -euo pipefail
+set -a; . /etc/nereus-rendezvous/data-use.conf; set +a
+/usr/local/libexec/nereus-rendezvous/data-use --interface "$RV_DATA_USE_INTERFACE" \
+    --threshold-gb "$RV_TRANSFER_GB_PER_MONTH" --state /tmp/data-use-state.json
+EOS
+)" || { printf '%s\n' "$out" >&2; fail "the installed data-use report did not run"; }
+printf '%s\n' "$out" | sed 's/^/# /'
+grep -Eq '^<6>data use: 0.00 GB so far this month \([0-9-]+\) on eth[0-9]+.*report threshold 1000 GB$' <<<"$out" || fail "the data-use report's line"
+pass "the installed data-use report reads the interface's counter and writes its line"
+
+# ------------------------------------------------ where systemd runs
+# setup-server.sh believes systemd runs when /run/systemd/system exists.
+# A stand-in systemctl logs every call and starts the programs the units
+# name, as their accounts, so step 7 runs whole: enabling, starting,
+# restarting only after a change, and checking the sockets.
+sx <<'EOS'
+set -euo pipefail
+mkdir -p /run/systemd/system
+cat > /usr/local/sbin/systemctl <<'SH'
+#!/bin/bash
+# A stand-in for systemctl, for coturn-check.sh.
+echo "$*" >> /run/systemctl.log
+running() {
+    local p
+    for p in /proc/[0-9]*; do
+        if [[ "$(cat "$p/comm" 2>/dev/null)" == "$1" ]] && tr '\0' ' ' < "$p/cmdline" 2>/dev/null | grep -q -- "$2"; then
+            echo "${p#/proc/}"
+        fi
+    done
+}
+unit_of() { case "$1" in coturn | coturn.service) echo coturn ;; nereus-rendezvous | nereus-rendezvous.service) echo service ;; *) echo other ;; esac; }
+active() {
+    case "$(unit_of "$1")" in
+        coturn) [[ -n "$(running turnserver turnserver)" ]] ;;
+        service) [[ -n "$(running python3 nereus_rendezvous)" ]] ;;
+        *) [[ -e "/run/standin-active-$1" ]] ;;
+    esac
+}
+stop() {
+    local pid
+    case "$(unit_of "$1")" in
+        coturn) for pid in $(running turnserver turnserver); do kill "$pid"; done ;;
+        service) for pid in $(running python3 nereus_rendezvous); do kill "$pid"; done ;;
+        *) rm -f "/run/standin-active-$1" ;;
+    esac
+    sleep 1
+}
+start() {
+    cd /
+    case "$(unit_of "$1")" in
+        coturn)
+            exec_start="$(sed -n 's/^ExecStart=//p' /usr/lib/systemd/system/coturn.service)"
+            # shellcheck disable=SC2086
+            setsid setpriv --reuid=turnserver --regid=turnserver --init-groups \
+                --inh-caps=-all,+net_bind_service --ambient-caps=-all,+net_bind_service \
+                --bounding-set=-all,+net_bind_service $exec_start </dev/null >/dev/null 2>&1 &
+            sleep 2 ;;
+        service)
+            unit=/etc/systemd/system/nereus-rendezvous.service
+            install -d -m 0755 /run/credentials/nereus-rendezvous.service
+            install -m 0400 -o nobody "$(sed -n 's/^LoadCredential=turn-secret://p' "$unit")" \
+                /run/credentials/nereus-rendezvous.service/turn-secret
+            envs=()
+            while IFS= read -r line; do envs+=("$line"); done < <(sed -n 's/^Environment=//p' "$unit")
+            exec_start="$(sed -n 's/^ExecStart=//p' "$unit")"
+            # shellcheck disable=SC2086
+            setsid env "${envs[@]}" setpriv --reuid=nobody --regid=nogroup --clear-groups $exec_start \
+                </dev/null >>/run/nereus-rendezvous.log 2>&1 &
+            for _ in $(seq 50); do active nereus-rendezvous && break; sleep 0.2; done
+            sleep 1 ;;
+        *) touch "/run/standin-active-$1" ;;
+    esac
+}
+cmd="$1"; shift
+[[ "$cmd" == --quiet ]] && { cmd="$1"; shift; }
+[[ "${1:-}" == --quiet ]] && shift
+case "$cmd" in
+    daemon-reload | enable) exit 0 ;;
+    disable) if [[ "${1:-}" == --now ]]; then shift; for u in "$@"; do stop "$u"; done; fi; exit 0 ;;
+    is-active) active "$1" ;;
+    start) for u in "$@"; do active "$u" || start "$u"; done ;;
+    stop) for u in "$@"; do stop "$u"; done ;;
+    restart) for u in "$@"; do stop "$u"; start "$u"; done ;;
+    *) echo "systemctl stand-in: $cmd not handled" >&2; exit 1 ;;
+esac
+SH
+chmod 755 /usr/local/sbin/systemctl
+# The service's code, where deploy.sh would put it.
+cp -R /repo/rendezvous/server/nereus_rendezvous /opt/nereus-rendezvous/
+chown -R nereusweb:nereusweb /opt/nereus-rendezvous
+EOS
+
+# Holders of the relay's port numbers, then a dry run each time.
+holder_case() {
+    # $1: tcp or udp; $2: port. Prints the dry run's output and exit status.
+    sx "$1" "$2" "$setup_env" <<'EOS' 2>&1
+set -uo pipefail
+python3 -c 'import socket, sys, time
+kind = socket.SOCK_STREAM if sys.argv[1] == "tcp" else socket.SOCK_DGRAM
+s = socket.socket(socket.AF_INET, kind); s.bind(("0.0.0.0", int(sys.argv[2])))
+if kind == socket.SOCK_STREAM: s.listen()
+time.sleep(30)' "$1" "$2" &
+holder=$!
+sleep 1
+# shellcheck disable=SC2086
+env $3 bash /repo/rendezvous/deploy/setup-server.sh --dry-run
+echo "exit $?"
+kill "$holder"
+EOS
+}
+out="$(holder_case tcp 443)"
+grep -qx 'exit 0' <<<"$out" && grep -q 'UDP 3478 and 443 are free or held by coturn' <<<"$out" \
+    || { printf '%s\n' "$out" >&2; fail "a TCP 443 holder (Caddy's port) was refused"; }
+for port in 443 3478; do
+    out="$(holder_case udp "$port")"
+    grep -qx 'exit 1' <<<"$out" && grep -q 'another process holds UDP 3478 or 443' <<<"$out" \
+        && grep -Eq "^udp ${port} 0\.0\.0\.0 [0-9]+ python3$" <<<"$out" \
+        || { printf '%s\n' "$out" >&2; fail "a UDP ${port} holder was not refused"; }
+done
+pass "where systemd runs: a TCP 443 holder (Caddy's) is allowed, a UDP 443 holder and a UDP 3478 holder are refused, each named"
+
+# The whole script where systemd runs, with coturn reading as missing so
+# step 2 runs with apt-get standing in (it installs nothing; coturn is
+# already on the image).
+out="$(sx "$setup_env" <<'EOS' 2>&1
+set -euo pipefail
+mkdir -p /run/apt-standin
+printf '#!/bin/sh
+exit 1
+' > /run/apt-standin/dpkg-query
+printf '#!/bin/sh
+exit 0
+' > /run/apt-standin/apt-get
+chmod 755 /run/apt-standin/*
+rm -f /run/systemctl.log
+# shellcheck disable=SC2086
+PATH=/run/apt-standin:$PATH env $1 bash /repo/rendezvous/deploy/setup-server.sh
+rm -rf /run/apt-standin
+echo "--- systemctl calls"
+cat /run/systemctl.log
+EOS
+)" || { printf '%s
+' "$out" >&2; fail "setup-server.sh where systemd runs failed"; }
+printf '%s\n' "$out" | sed -n '/sockets on UDP/,/no TCP port/p; /--- systemctl calls/,$p' | sed 's/^/# /'
+python3 - <<PY || { printf '%s\n' "$out" >&2; fail "step 2 or step 7 where systemd runs"; }
+out = """${out}"""
+calls = out.split("--- systemctl calls\n", 1)[1].splitlines()
+assert "disable --now coturn" in calls, calls
+first_disable = calls.index("disable --now coturn")
+enable = calls.index("enable coturn nereus-rendezvous.service nereus-data-use.timer")
+assert first_disable < enable, calls
+assert "start coturn" in calls and "start nereus-rendezvous.service" in calls and "start nereus-data-use.timer" in calls, calls
+assert not any(c.startswith("restart") for c in calls), calls
+assert "coturn is disabled until its configuration is in place" in out
+assert "coturn holds UDP 3478 and 443 on both addresses and no TCP port" in out
+PY
+pass "where systemd runs: coturn is disabled right after its install, then step 7 enables and starts coturn, the service and the timer, and finds coturn on exactly UDP 3478 and 443 on both addresses and no TCP port"
+
+rerun() {
+    # $@: extra arguments. Prints the output and the systemctl calls.
+    sx "$setup_env" "$@" <<'EOS' 2>&1
+set -euo pipefail
+settings="$1"
+shift
+rm -f /run/systemctl.log
+# shellcheck disable=SC2086
+env $settings bash /repo/rendezvous/deploy/setup-server.sh "$@"
+echo "--- systemctl calls"
+cat /run/systemctl.log 2>/dev/null || true
+EOS
+}
+out="$(rerun)" || { printf '%s\n' "$out" >&2; fail "a second run where systemd runs failed"; }
+grep -q 'coturn is running and none of its files changed: left as it is' <<<"$out" \
+    && grep -q 'nereus-rendezvous.service is running and none of its files changed: left as it is' <<<"$out" \
+    && ! sed -n '/--- systemctl calls/,$p' <<<"$out" | grep -q '^restart' \
+    && grep -q 'coturn holds UDP 3478 and 443 on both addresses' <<<"$out" \
+    || { printf '%s\n' "$out" >&2; fail "a second run restarted something"; }
+out="$(rerun --dry-run --rotate-secret)" || { printf '%s\n' "$out" >&2; fail "--dry-run --rotate-secret failed"; }
+grep -q 'would make a new secret in /etc/nereus-rendezvous/turn-secret (--rotate-secret)' <<<"$out" \
+    && grep -q 'coturn would be restarted (its files changed); a restart drops every live relay' <<<"$out" \
+    && grep -q 'nereus-rendezvous.service would be restarted' <<<"$out" \
+    || { printf '%s\n' "$out" >&2; fail "--dry-run --rotate-secret did not say what it would do"; }
+out="$(rerun --dry-run)" || { printf '%s\n' "$out" >&2; fail "--dry-run failed"; }
+grep -q 'coturn would be left running (none of its files changed)' <<<"$out" \
+    || { printf '%s\n' "$out" >&2; fail "a plain dry run did not say coturn would be left running"; }
+before="$(sx <<<'cat /etc/nereus-rendezvous/turn-secret')"
+out="$(rerun --rotate-secret)" || { printf '%s\n' "$out" >&2; fail "--rotate-secret failed"; }
+sed -n '/--- systemctl calls/,$p' <<<"$out" | grep -qx 'restart coturn' \
+    && sed -n '/--- systemctl calls/,$p' <<<"$out" | grep -qx 'restart nereus-rendezvous.service' \
+    || { printf '%s\n' "$out" >&2; fail "--rotate-secret did not restart coturn and the service"; }
+sx "$before" <<'EOS' || fail "the secret's backups are not as expected"
+set -euo pipefail
+[[ "$(cat /etc/nereus-rendezvous/turn-secret)" != "$1" ]]
+backups=(/etc/turnserver.conf.bak-*)
+[[ ${#backups[@]} -eq 1 ]] || { echo "backups: ${backups[*]}" >&2; exit 1; }
+[[ "$(stat -c '%U:%G %a' "${backups[0]}")" == "root:root 600" ]] || { stat -c '%U:%G %a' "${backups[0]}" >&2; exit 1; }
+grep -qx "static-auth-secret=$1" "${backups[0]}"
+EOS
+pass "where systemd runs: a second run leaves coturn and the service running; --dry-run --rotate-secret says it would make a new secret and restart both (dropping live relays); --rotate-secret restarts both; one backup of /etc/turnserver.conf remains, root 600"
+
+# Back to no systemd for the rest: the check starts coturn itself.
+sx <<'EOS'
+set -euo pipefail
+systemctl stop coturn nereus-rendezvous.service
+rm -rf /run/systemd/system /usr/local/sbin/systemctl /run/credentials /opt/nereus-rendezvous/nereus_rendezvous
+EOS
 
 # --------------------------------------------------------------- coturn
 start_coturn() {
@@ -217,6 +519,8 @@ expected="$(printf 'udp %s 3478\nudp %s 443\nudp %s 3478\nudp %s 443\n' "$s6" "$
 grep -q '^process 100 0000000000000400$' <<<"$sockets" \
     || fail "coturn does not run as turnserver with CAP_NET_BIND_SERVICE only"
 pass "coturn (as turnserver, CAP_NET_BIND_SERVICE only) holds exactly UDP 3478 and 443 on ${s4} and ${s6}, and no TCP port"
+# shellcheck disable=SC2016  # expanded in the container
+echo "# coturn resident memory at start: $(sx <<<'for p in /proc/[0-9]*; do [[ "$(cat $p/comm 2>/dev/null)" == turnserver ]] && grep VmRSS $p/status; done' | awk '{print $2, $3}')"
 
 for host in "$s4" "$s6"; do
     for port in 3478 443; do
@@ -228,7 +532,7 @@ pass "STUN binding without credentials answers on UDP 3478 and 443, IPv4 and IPv
 
 # Relay peers: an echo on the public network, and echoes the relay must
 # never reach (private network, and loopback on the server itself).
-docker exec -d "$peer" turnutils_peer -L "$p4" -L "$p6" -L "$q4" -L "$q6" -p 3480
+docker exec -d "$peer" turnutils_peer -L "$p4" -L "$p6" -L "$q4" -L "$q6" -L "$d4" -L "$d6" -p 3480
 docker exec -d "$server" turnutils_peer -L 127.0.0.1 -L ::1 -p 3480
 sleep 1
 
@@ -293,17 +597,32 @@ for target in "$q4" "$q6"; do
 done
 pass "turnutils_uclient: nothing reaches the reachable private peers ${q4} and ${q6}"
 
+for target in "$d4" "$d6"; do
+    stop_coturn
+    start_coturn /etc/turnserver.conf
+    read -r user password < <(creds 600 uclientffffffffffffffffffff)
+    out="$(uclient "$user" "$password" "$s4" 3478 "$target")"
+    if grep -q 'Total lost packets 0 (0.000000%)' <<<"$out"; then
+        printf '%s\n' "$out" >&2
+        fail "uclient reached ${target} through the relay"
+    fi
+done
+pass "turnutils_uclient: nothing reaches the reachable documentation-range peers ${d4} and ${d6}"
+
 stop_coturn
 start_coturn /etc/turnserver.conf
 
 # Every denied range, in each written form, with coturn's answer.
-v4peers=(--peer "${p4}:3480" --peer "${q4}:3480" --peer 127.0.0.1:3480 --peer 0.0.0.0:3480
+v4peers=(--peer "${p4}:3480" --peer "${q4}:3480" --peer "${d4}:3480" --peer 127.0.0.1:3480 --peer 0.0.0.0:3480
     --peer 172.16.0.1:3480 --peer 192.168.1.1:3480 --peer 100.64.0.1:3480 --peer 169.254.1.1:3480
-    --peer 224.0.0.1:3480 --peer 255.255.255.255:3480)
-v6peers=(--peer "[${p6}]:3480" --peer "[${q6}]:3480" --peer "[::1]:3480" --peer "[::]:3480"
+    --peer 169.254.169.254:3480 --peer 224.0.0.1:3480 --peer 255.255.255.255:3480
+    --peer 192.0.0.1:3480 --peer 198.18.0.1:3480 --peer 198.19.255.1:3480 --peer 198.51.100.1:3480
+    --peer 203.0.113.1:3480)
+v6peers=(--peer "[${p6}]:3480" --peer "[${q6}]:3480" --peer "[${d6}]:3480" --peer "[::1]:3480" --peer "[::]:3480"
     --peer "[fe80::1]:3480" --peer "[ff02::1]:3480" --peer "[::ffff:127.0.0.1]:3480"
     --peer "[::ffff:${q4}]:3480" --peer "[::ffff:${p4}]:3480" --peer "[64:ff9b::a63:14]:3480"
-    --peer "[64:ff9b:1::a63:14]:3480")
+    --peer "[64:ff9b:1::a63:14]:3480" --peer "[100::1]:3480" --peer "[2001::1]:3480"
+    --peer "[2001:db8::1]:3480" --peer "[2002::1]:3480")
 peers4="$(probe allocate "$s4" 3478 --secret-file /tmp/turn-secret --id peersipv4peersipv4peersipv "${v4peers[@]}")"
 peers6="$(probe allocate "$s6" 443 --secret-file /tmp/turn-secret --id peersipv6peersipv6peersipv "${v6peers[@]}")"
 printf '%s\n%s\n' "$peers4" "$peers6" | sed 's/^/# /'
@@ -313,14 +632,14 @@ lines = [json.loads(l) for l in """${peers4}
 ${peers6}""".splitlines()]
 public = {"%s:3480" % sys.argv[1], "[%s]:3480" % sys.argv[2]}
 peers = [l for l in lines if l["step"] == "peer"]
-assert len(peers) == 21, len(peers)
+assert len(peers) == 33, len(peers)
 for l in peers:
     if l["peer"] in public:
         assert l["permission"]["ok"] and l["relayed"], l
     else:
         assert not l["permission"]["ok"] and l["permission"]["error"] in (403, 443), l
 PY
-pass "denied peers: loopback, 0/8, RFC 1918, 100.64/10, link-local, multicast, broadcast, ::, unique-local, and IPv4-mapped and NAT64 forms all refused (403); the public peer relays in both families"
+pass "denied peers: loopback, 0/8, RFC 1918, 100.64/10, link-local (the cloud metadata address too), multicast, broadcast, ::, unique-local, IPv4-mapped and NAT64 forms, and coturn's recommended ranges (192.0.0/24, documentation, benchmarking, 100::/64, Teredo, 6to4; the documentation peers reachable) all refused (403); the public peer relays in both families"
 
 out="$(probe allocate "$s4" 3478 --anonymous || true)"
 grep -q '"error": 401' <<<"$out" || fail "an anonymous allocation was not refused: ${out}"
@@ -364,14 +683,14 @@ for sid in ids:
     print(sid[:6], "ok" if r["ok"] else r["error"])
     clients.append(c)
 PY
-python3 hold.py "$1" useraaaaaaaaaaaaaaaaaaaaaa useraaaaaaaaaaaaaaaaaaaaaa useraaaaaaaaaaaaaaaaaaaaaa \
-    userbbbbbbbbbbbbbbbbbbbbbb userbbbbbbbbbbbbbbbbbbbbbb usercccccccccccccccccccccc
+a=useraaaaaaaaaaaaaaaaaaaaaa b=userbbbbbbbbbbbbbbbbbbbbbb
+python3 hold.py "$1" "$a" "$a" "$a" "$a" "$a" "$b" "$b" usercccccccccccccccccccccc
 EOS
 )"
 printf '%s\n' "$quota" | sed 's/^/# /'
-[[ "$(printf '%s\n' "$quota" | tr '\n' ' ')" == "useraa ok useraa ok useraa 486 userbb ok userbb ok usercc 486 " ]] \
-    || fail "quotas: expected ok ok 486 ok ok 486"
-pass "quotas: a third allocation by one station id is refused (486, user-quota 2); a fifth on the server is refused (486, total-quota 4 from bps-capacity 347222 / max-bps 80000)"
+[[ "$(printf '%s\n' "$quota" | tr '\n' ' ')" == "useraa ok useraa ok useraa ok useraa ok useraa 486 userbb ok userbb ok usercc 486 " ]] \
+    || fail "quotas: expected ok ok ok ok 486 ok ok 486"
+pass "quotas: a fourth allocation by one station id is accepted and a fifth refused (486, user-quota 4); with 6 slots the seventh on the server is refused (486, total-quota 6), and bps-capacity 480000 (6 x 80000) never refuses first"
 
 # --------------------------------------------------- the service's credentials
 stop_coturn

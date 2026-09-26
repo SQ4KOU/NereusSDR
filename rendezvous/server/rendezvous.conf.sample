@@ -12,12 +12,15 @@ listen = 127.0.0.1:8710 [::1]:8710
 # client's). Anything else counts as the client itself.
 trusted_proxies = 127.0.0.1 ::1
 
-# Sent to every connection in hello. One IPv6-only and one IPv4-only name.
-stun_urls = stun:rv6.nereussdr.com:3478 stun:rv4.nereussdr.com:3478
+# Sent to every connection in hello. One IPv4-only and one IPv6-only name,
+# IPv4 first: the pinned libjuice uses only the first STUN server, and an
+# IPv4-only peer behind NAT needs its server-reflexive candidate (section 8).
+stun_urls = stun:rv4.nereussdr.com:3478 stun:rv6.nereussdr.com:3478
 
-# Handed out with relay credentials, each name on UDP 3478 and UDP 443.
-# Printable ASCII only, at most 768 bytes as a JSON list together.
-turn_urls = turn:rv6.nereussdr.com:3478?transport=udp turn:rv6.nereussdr.com:443?transport=udp turn:rv4.nereussdr.com:3478?transport=udp turn:rv4.nereussdr.com:443?transport=udp
+# Handed out with relay credentials, each name on UDP 3478 and UDP 443, in
+# the same order as stun_urls (IPv4 first). Printable ASCII only, at most
+# 768 bytes as a JSON list together.
+turn_urls = turn:rv4.nereussdr.com:3478?transport=udp turn:rv4.nereussdr.com:443?transport=udp turn:rv6.nereussdr.com:3478?transport=udp turn:rv6.nereussdr.com:443?transport=udp
 
 # The file holding coturn's static-auth-secret, and nothing else. Empty: no
 # relay (answers carry turn null). Under systemd, LoadCredential= hands it
@@ -41,10 +44,10 @@ mailbox_messages_per_side = 32
 # Connections that are not registered stations (clients, and connections
 # still starting), per address group and in total.
 connections_per_address = 16
-max_connections = 512
+max_connections = 1024
 # Registered stations, per address group and in total: a pool of their own.
 stations_per_address = 4
-max_stations = 512
+max_stations = 2000
 handshake_timeout_ms = 10000
 idle_timeout_ms = 30000
 introduction_lifetime_ms = 120000

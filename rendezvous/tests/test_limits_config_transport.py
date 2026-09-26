@@ -130,9 +130,19 @@ def test_defaults():
     assert config.candidates_per_side == 64
     assert config.introduction_lifetime_ms == 120000
     assert (config.connections_per_address, config.stations_per_address) == (16, 4)
-    assert (config.max_connections, config.max_stations) == (512, 512)
+    assert (config.max_connections, config.max_stations) == (1024, 2000)
     assert (config.send_queue_bytes, config.send_budget_bytes) == (1048576, 33554432)
     assert config.send_stall_ms == 30000
+    # IPv4 first in both lists (rendezvous document section 8); the sample
+    # matches (test_sample_configuration_is_the_defaults) and coturn-check.sh
+    # compares what setup-server.sh writes with these.
+    assert config.stun_urls == ["stun:rv4.nereussdr.com:3478", "stun:rv6.nereussdr.com:3478"]
+    assert config.turn_urls == [
+        "turn:rv4.nereussdr.com:3478?transport=udp",
+        "turn:rv4.nereussdr.com:443?transport=udp",
+        "turn:rv6.nereussdr.com:3478?transport=udp",
+        "turn:rv6.nereussdr.com:443?transport=udp",
+    ]
     assert all("rv4.nereussdr.com" in u or "rv6.nereussdr.com" in u for u in config.turn_urls + config.stun_urls)
     assert {u.split(":")[2].split("?")[0] for u in config.turn_urls} == {"3478", "443"}
 
@@ -234,6 +244,9 @@ def test_sample_configuration_is_the_defaults():
     loaded = cfg.load(str(sample))
     defaults = cfg.Config()
     assert loaded == defaults
+    # Order matters (section 8), and dataclass equality compares the lists in
+    # order; said outright for the two URL lists.
+    assert (loaded.stun_urls, loaded.turn_urls) == (defaults.stun_urls, defaults.turn_urls)
 
 
 def test_missing_secret_file_is_a_configuration_error(tmp_path):
@@ -282,3 +295,84 @@ def test_socket_buffer_bytes_may_be_zero_but_not_negative(tmp_path):
     path.write_text("[limits]\nsocket_buffer_bytes = -1\n")
     with pytest.raises(cfg.ConfigError):
         cfg.load(str(path))
+
+
+async def _raw_request(port: int, request: bytes) -> bytes:
+    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+    try:
+        writer.write(request)
+        await writer.drain()
+        head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 5)
+        rest = b""
+        if head.startswith(b"HTTP/1.1 101"):
+            # The first frame: the service's hello, unmasked, a short text.
+            first = await asyncio.wait_for(reader.readexactly(2), 5)
+            length = first[1] & 0x7F
+            if length == 126:
+                length = int.from_bytes(await reader.readexactly(2), "big")
+            rest = await asyncio.wait_for(reader.readexactly(length), 5)
+        else:
+            try:
+                rest = await asyncio.wait_for(reader.read(), 5)
+            except asyncio.IncompleteReadError:
+                pass
+        return head + rest
+    finally:
+        writer.close()
+
+
+def _live(go):
+    async def wrapper():
+        config = cfg.Config()
+        config.ping_interval_seconds = 0
+        service = Service(config, ManualClock())
+        server = await transport.start(service, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        try:
+            await go(port)
+        finally:
+            await transport.stop([server], service, grace_s=0.05, timeout_s=5)
+
+    asyncio.run(wrapper())
+
+
+def test_a_request_that_is_not_a_websocket_gets_426():
+    """Caddy sends every request for rv to the service
+    (website/deploy/Caddyfile), so the service answers the rest itself:
+    426, a short plain text, Upgrade: websocket, and no Server header."""
+
+    async def go(port):
+        answer = await _raw_request(port, b"GET / HTTP/1.1\r\nHost: rv.nereussdr.com\r\nConnection: keep-alive\r\n\r\n")
+        head, _, body = answer.partition(b"\r\n\r\n")
+        lines = head.decode("latin-1").split("\r\n")
+        assert lines[0].startswith("HTTP/1.1 426"), lines[0]
+        headers = {k.lower(): v.strip() for k, _, v in (line.partition(":") for line in lines[1:])}
+        assert headers["upgrade"] == "websocket"
+        assert headers["content-type"] == "text/plain; charset=utf-8"
+        assert headers["cache-control"] == "no-store"
+        assert "server" not in headers
+        assert body.decode("utf-8") == transport.NOT_A_WEBSOCKET_TEXT
+
+    _live(go)
+
+
+@pytest.mark.parametrize(
+    "upgrade,host",
+    [
+        ("websocket", "rv.nereussdr.com"),
+        # Apple's Network.framework, as captured by the phone session.
+        ("WebSocket", "rv.nereussdr.com:443"),
+    ],
+)
+def test_websocket_upgrade_in_any_case_and_with_a_port_in_host(upgrade, host):
+    async def go(port):
+        request = (
+            "GET / HTTP/1.1\r\nHost: %s\r\nUpgrade: %s\r\nConnection: Upgrade\r\n"
+            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n" % (host, upgrade)
+        ).encode("ascii")
+        answer = await _raw_request(port, request)
+        head, _, frame = answer.partition(b"\r\n\r\n")
+        assert head.startswith(b"HTTP/1.1 101"), head
+        assert b'"type":"hello"' in frame, frame
+
+    _live(go)

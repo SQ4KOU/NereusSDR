@@ -11,13 +11,19 @@
 #      bodies with the rendezvous site as without it (the part of the
 #      Caddyfile before the rendezvous site, run on its own).
 #   3. A WebSocket to rv.nereussdr.com upgrades and reaches the service by
-#      host name; a WebSocket to the website's names does not.
+#      host name; a WebSocket to the website's names does not. Written byte
+#      for byte, both the usual request (Upgrade: websocket, Host without a
+#      port) and Apple's Network.framework's (Upgrade: WebSocket, Host with
+#      :443) upgrade.
 #   4. The service sees each client's own address, whatever X-Forwarded-For
 #      the client sends: with two connections allowed per address, a third
 #      from one client is refused while another client, over IPv4 or IPv6,
 #      is still let in.
-#   5. A plain request to rv gets the short plain answer and the headers.
-#   6. Caddy holds no UDP port (HTTP/3 stays off).
+#   5. A plain request to rv gets the service's short plain answer (426)
+#      and the headers, "Upgrade: websocket" included over HTTP/1.1.
+#   6. What an HTTP/2 client gets: a plain GET, and whether Caddy offers
+#      WebSockets over HTTP/2 (RFC 8441) and what one gets.
+#   7. Caddy holds no UDP port (HTTP/3 stays off).
 #
 # Certificates come from Caddy's own local authority, switched on for the
 # test only (local_certs in a copy of the Caddyfile); the real file is
@@ -218,24 +224,67 @@ code="$(docker exec "$client_a" curl -sS --cacert /tmp/ca.crt -o /dev/null -w '%
 [[ "$code" != "101" ]] || fail "a WebSocket to nereussdr.com was upgraded"
 pass "a WebSocket request to nereussdr.com is not upgraded (answered ${code})"
 
-# 5. A plain request to rv.
-docker exec "$client_a" curl -sS --cacert /tmp/ca.crt -o /tmp/rv-body -D /tmp/rv-head https://rv.nereussdr.com/
-docker exec "$client_a" cat /tmp/rv-head /tmp/rv-body | tr -d '\r' > "${work}/rv.txt"
-sed 's/^/# /' "${work}/rv.txt"
-grep -q '^HTTP/2 426' "${work}/rv.txt" || fail "a plain request to rv did not get 426"
-for h in 'strict-transport-security: max-age=31536000' 'x-content-type-options: nosniff' \
-         'referrer-policy: no-referrer' 'x-frame-options: DENY' 'cache-control: no-store' \
-         "content-security-policy: default-src 'none'; frame-ancestors 'none'" \
-         'content-type: text/plain; charset=utf-8'; do
-    grep -qixF "$h" "${work}/rv.txt" || fail "rv's answer lacks: ${h}"
-done
-if grep -qi '^server:' "${work}/rv.txt"; then
-    fail "rv's answer names the server"
-fi
-grep -q 'NereusSDR connection service' "${work}/rv.txt" || fail "rv's answer lacks its text"
-pass "a plain request to rv gets 426, its short text and the security headers, no Server header"
+# 3, byte for byte: the usual request, and Apple's.
+raws="$(for pair in "websocket rv.nereussdr.com" "WebSocket rv.nereussdr.com:443"; do
+    read -r upgrade host_header <<<"$pair"
+    docker exec "$client_a" python3 /repo/rendezvous/tests/caddy_probe.py raw rv.nereussdr.com \
+        --cacert /tmp/ca.crt --upgrade "$upgrade" --host-header "$host_header"
+done)"
+printf '%s\n' "$raws" | sed 's/^/# /'
+python3 - <<PY || fail "a WebSocket request written byte for byte did not upgrade"
+import json
+lines = [json.loads(l) for l in """${raws}""".splitlines()]
+assert len(lines) == 2, lines
+for l in lines:
+    assert l["status"].startswith("HTTP/1.1 101") and l["hello"], l
+PY
+pass "byte for byte over HTTP/1.1, 'Upgrade: websocket' with 'Host: rv.nereussdr.com' and Apple's 'Upgrade: WebSocket' with 'Host: rv.nereussdr.com:443' both upgrade and get hello"
 
-# 6. HTTP/3 stays off.
+# 5. A plain request to rv, over HTTP/1.1 and over HTTP/2.
+for version in http1.1 http2; do
+    docker exec "$client_a" curl -sS "--${version}" --cacert /tmp/ca.crt -o /tmp/rv-body -D /tmp/rv-head https://rv.nereussdr.com/
+    docker exec "$client_a" cat /tmp/rv-head /tmp/rv-body | tr -d '\r' > "${work}/rv-${version}.txt"
+    sed "s/^/# ${version}: /" "${work}/rv-${version}.txt"
+    grep -Eq '^HTTP/(1.1|2) 426' "${work}/rv-${version}.txt" || fail "a plain ${version} request to rv did not get 426"
+    for h in 'strict-transport-security: max-age=31536000' 'x-content-type-options: nosniff' \
+             'referrer-policy: no-referrer' 'x-frame-options: DENY' 'cache-control: no-store' \
+             "content-security-policy: default-src 'none'; frame-ancestors 'none'" \
+             'content-type: text/plain; charset=utf-8'; do
+        grep -qixF "$h" "${work}/rv-${version}.txt" || fail "rv's ${version} answer lacks: ${h}"
+    done
+    if grep -Eqi '^(server|via):' "${work}/rv-${version}.txt"; then
+        fail "rv's ${version} answer names the server or the proxy"
+    fi
+    grep -q 'NereusSDR connection service' "${work}/rv-${version}.txt" || fail "rv's ${version} answer lacks its text"
+done
+grep -qixF 'upgrade: websocket' "${work}/rv-http1.1.txt" || fail "rv's HTTP/1.1 426 lacks Upgrade: websocket"
+h2_upgrade="absent"
+if grep -qi '^upgrade:' "${work}/rv-http2.txt"; then
+    h2_upgrade="present"
+fi
+pass "a plain request to rv gets the service's 426, its short text and the security headers, no Server or Via header; over HTTP/1.1 with Upgrade: websocket (over HTTP/2 the Upgrade header is ${h2_upgrade}: HTTP/2 has no Upgrade)"
+
+# 6. What an HTTP/2 client gets.
+h2="$(docker exec "$client_a" python3 /repo/rendezvous/tests/caddy_probe.py h2 rv.nereussdr.com --cacert /tmp/ca.crt)"
+printf '%s\n' "$h2" | sed 's/^/# h2: /'
+h2_summary="$(python3 - "$h2" <<'PY'
+import json, sys
+r = json.loads(sys.argv[1])
+assert r["alpn"] == "h2", r
+assert r["get"]["status"] == 426, r
+assert r["serverSettings"], r  # the SETTINGS of the server were read
+if not r["enableConnectProtocol"]:
+    print("Caddy does not offer WebSockets over HTTP/2 (no SETTINGS_ENABLE_CONNECT_PROTOCOL), so an RFC 8441 client opens its WebSocket over HTTP/1.1")
+elif r["connect"]["hello"]:
+    print("Caddy offers WebSockets over HTTP/2 and an extended CONNECT reaches the service (hello)")
+else:
+    print("Caddy offers WebSockets over HTTP/2 but an extended CONNECT gets status %s, reset %s, and no hello" % (
+        r["connect"]["status"], r["connect"]["reset"]))
+PY
+)" || fail "the HTTP/2 probe: ${h2}"
+pass "HTTP/2: a plain GET gets 426; ${h2_summary}"
+
+# 7. HTTP/3 stays off.
 udp="$(docker exec -i "$server" python3 - <<'PY'
 import os
 inodes = set()

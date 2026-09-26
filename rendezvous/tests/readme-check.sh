@@ -7,7 +7,7 @@
 #
 # The README marks each shell block it expects to be run:
 #   <!-- check: server -->    run as written, as root, on the server
-#   <!-- check: settings -->  the names and allowance; the check uses its own
+#   <!-- check: settings -->  the names and sizing; the check uses its own
 #                             test names instead (the block must set the same
 #                             variables), exported for every server block
 #   <!-- check: copy -->      scp to the server: done with docker cp
@@ -18,8 +18,10 @@
 #                             check starts the same programs the units start,
 #                             as the same accounts with the same arguments
 # Unmarked blocks (DNS, the firewall, the checks against a live server) are
-# not run. The server's public addresses are documentation addresses on a
-# Docker network, passed to setup-server.sh as RV_PUBLIC_IPV4/IPV6, and
+# not run. The server's public addresses are stand-ins on a Docker network
+# (11.99.0.0/24 and the benchmarking prefix 2001:2:0:99::/64; the relay
+# refuses documentation ranges as peers), passed to setup-server.sh as
+# RV_PUBLIC_IPV4/IPV6, and
 # Caddy uses its own local certificate authority (local_certs, added for the
 # test only) instead of Let's Encrypt.
 #
@@ -34,9 +36,9 @@ readonly readme="${repo}/rendezvous/README.md"
 readonly tag="$$"
 readonly net="nereus-rv-readme-${tag}"
 readonly server="nereus-rv-readme-server-${tag}" client="nereus-rv-readme-client-${tag}"
-readonly s4="203.0.113.10" s6="2001:db8:99::10"
-readonly c4="203.0.113.20" c6="2001:db8:99::20"
-readonly test_settings="export RV_HOST=rv.test RV_RELAY_HOST4=rv4.test RV_RELAY_HOST6=rv6.test RV_TRANSFER_GB_PER_MONTH=1000"
+readonly s4="11.99.0.10" s6="2001:2:0:99::10"
+readonly c4="11.99.0.20" c6="2001:2:0:99::20"
+readonly test_settings="export RV_HOST=rv.test RV_RELAY_HOST4=rv4.test RV_RELAY_HOST6=rv6.test RV_RELAY_SLOTS=64 RV_TRANSFER_GB_PER_MONTH=1000"
 readonly test_env="export RV_PUBLIC_IPV4=${s4} RV_PUBLIC_IPV6=${s6} RV_ALLOW_DOCUMENTATION_ADDRESSES=1 DEBIAN_FRONTEND=noninteractive"
 
 passed=0
@@ -67,7 +69,7 @@ blocks=("$work"/blocks/*.sh)
 echo "# ${#blocks[@]} marked blocks in rendezvous/README.md: $(for b in "${blocks[@]}"; do basename "$b" .sh; done | tr '\n' ' ')"
 [[ ${#blocks[@]} -ge 7 ]] || fail "too few marked blocks in the README"
 
-docker network create --ipv6 --subnet 203.0.113.0/24 --subnet 2001:db8:99::/64 "$net" >/dev/null
+docker network create --ipv6 --subnet 11.99.0.0/24 --subnet 2001:2:0:99::/64 "$net" >/dev/null
 # A plain ubuntu:24.04: everything on it comes from the README's blocks.
 docker run -d --name "$server" --network "$net" --ip "$s4" --ip6 "$s6" ubuntu:24.04 sleep infinity >/dev/null
 
@@ -130,10 +132,10 @@ for block in "${blocks[@]}"; do
     kind="${name#*-}"
     case "$kind" in
         settings)
-            for var in RV_HOST RV_RELAY_HOST4 RV_RELAY_HOST6 RV_TRANSFER_GB_PER_MONTH; do
+            for var in RV_HOST RV_RELAY_HOST4 RV_RELAY_HOST6 RV_RELAY_SLOTS RV_TRANSFER_GB_PER_MONTH; do
                 grep -q "^export ${var}=" "$block" || fail "the settings block does not set ${var}"
             done
-            pass "${name}: sets RV_HOST, RV_RELAY_HOST4/6 and RV_TRANSFER_GB_PER_MONTH (test names used instead)"
+            pass "${name}: sets RV_HOST, RV_RELAY_HOST4/6, RV_RELAY_SLOTS and RV_TRANSFER_GB_PER_MONTH (test names used instead)"
             ;;
         copy)
             grep -q 'rendezvous root@.*:/root/rendezvous$' "$block" || fail "the copy block does not copy rendezvous to /root/rendezvous"
@@ -143,7 +145,7 @@ for block in "${blocks[@]}"; do
         server)
             out="$(run_server_block "$block" 2>&1)" || { printf '%s\n' "$out" | tail -30 >&2; fail "${name} failed"; }
             if grep -q 'setup-server.sh$' "$block"; then
-                printf '%s\n' "$out" | grep -E 'bps-capacity|systemd is not running' | sed 's/^/# /'
+                printf '%s\n' "$out" | grep -E 'relay: |data-use report|systemd is not running' | sed 's/^/# /'
             fi
             pass "${name}: run as written ($(grep -c . "$block") lines)"
             ;;
@@ -197,7 +199,7 @@ async def meet(uri):
     st, _, sid = await register(uri)
     cl = await ws_connect(uri, "192.0.2.99")
     hello = await recv_json(cl)
-    assert hello["stun"] == ["stun:rv6.test:3478", "stun:rv4.test:3478"], hello["stun"]
+    assert hello["stun"] == ["stun:rv4.test:3478", "stun:rv6.test:3478"], hello["stun"]
     await cl.send(protocol.encode(introduce_message(sid, hello["nonce"])))
     intro = await recv_json(st)
     await st.send(protocol.encode({"type": "answer", "to": intro["from"], "answer": "v=0\r\n", "turn": True}))
@@ -205,9 +207,8 @@ async def meet(uri):
     assert answer["turn"] == (await recv_json(st))["turn"]
     print(json.dumps(answer["turn"]))
 async def go():
-    # Two Cores: coturn allows two relays per Core id (user-quota), and a
-    # released relay slot comes back only when its session times out,
-    # so the four relay URLs are tried two per Core.
+    # Two Cores, the four relay URLs tried two per Core: the relays of each
+    # Core stay allocated until they time out, well within user-quota 4.
     for _ in range(2):
         await meet("wss://rv.test/")
 asyncio.run(go())
@@ -222,7 +223,7 @@ urls=()
 while IFS= read -r url; do
     urls+=("$url")
 done < <(python3 -c 'import json,sys; print("\n".join(json.loads(sys.argv[1])["urls"]))' "$first")
-[[ "${urls[*]}" == "turn:rv6.test:3478?transport=udp turn:rv6.test:443?transport=udp turn:rv4.test:3478?transport=udp turn:rv4.test:443?transport=udp" ]] \
+[[ "${urls[*]}" == "turn:rv4.test:3478?transport=udp turn:rv4.test:443?transport=udp turn:rv6.test:3478?transport=udp turn:rv6.test:443?transport=udp" ]] \
     || fail "unexpected relay URLs: ${urls[*]}"
 for url in "${urls[@]}"; do
     hostport="${url#turn:}"
