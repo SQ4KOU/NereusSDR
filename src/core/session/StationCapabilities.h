@@ -131,6 +131,8 @@
 //   2026-09-26 - R-R3-49 / R-R3-21 / R-R3-40 (parity Task 16):
 //                dspInfoVersion. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-26 - R-IOS-25 / R-R3-49 (parity Task 19): recordStreamVersion.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -288,6 +290,15 @@ struct StationCapabilities {
     /// filter curve unavailable. Which noise reduction the Core runs is
     /// DspAssetService's (dspAssetVersion 3 and 4).
     int dspInfoVersion = 0;
+    /// R-IOS-25 / R-R3-49 (remote-window parity Task 19): 1 means the Core
+    /// takes records.subscribe and records.unsubscribe and sends
+    /// record.batch for its `spots` stream (the newest 500) and each station
+    /// source's spotConsole:<source> stream (the last 200 lines), sends the
+    /// read-only `spotSources` object, and takes spots.connect,
+    /// spots.disconnect, spots.sendCommand and spots.clearAll. Sent in the
+    /// same minor-11 block, after dspInfoVersion. 0 (no local radio model):
+    /// a window shows the station's spot sources disabled with a reason.
+    int recordStreamVersion = 0;
     /// iPhone app Task 71 (R-IOS-02; the several-devices design, ruling
     /// 10.1): 1 means the Core admits up to four devices at once, sends the
     /// `connectedDevices` object and takes session.leave. Sent last in the

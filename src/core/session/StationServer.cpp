@@ -499,13 +499,23 @@
 //                                    spectrumGrantVersion 2 (a subscribe's
 //                                    decimation reaches the pan's engine).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  R-IOS-25 / R-R3-49 (parity Task 19):
+//                                    recordStreamVersion 1: the record
+//                                    streams (records.subscribe,
+//                                    records.unsubscribe, record.batch),
+//                                    the `spots` and spotConsole:<source>
+//                                    streams and the read-only
+//                                    `spotSources` object.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
 
 #include "core/AppSettings.h"
 #include "core/BoardCapabilities.h"
+#include "core/DxccColorProvider.h"
 #include "core/HardwareProfile.h"
+#include "core/SpotSourceHost.h"
 #include "core/WdspEngine.h"
 #include "core/dsp/NnrSettings.h"
 #include "core/security/CertificateStore.h"
@@ -558,6 +568,7 @@
 #include "models/TransmitModel.h"
 #include "models/AmplifierModel.h"
 #include "models/RfKitModel.h"
+#include "models/SpotModel.h"
 #include "models/StationTciModel.h"
 #include "models/AccessoryDataModel.h"
 #include "models/AccessorySettingsModel.h"
@@ -743,6 +754,23 @@ bool isStationTciMessage(const SessionMessage& message)
         || (message.kind == SessionMessageKind::Schema
             && message.className == "StationTciModel");
 }
+
+// R-IOS-25 / R-R3-49 (parity Task 19, recordStreamVersion 1): the Core's
+// spot sources, read-only, for a peer at kRadioIdentitySessionProtocolMinor
+// on a Core with a local radio model.
+constexpr const char* kSpotSourcesKey = "spotSources";
+
+bool isSpotSourcesMessage(const SessionMessage& message)
+{
+    return message.objectKey == kSpotSourcesKey
+        || (message.kind == SessionMessageKind::Schema
+            && message.className == "SpotSourceHost");
+}
+
+// Parity Task 19: the streams and their capacities (the link's "Record
+// streams" section): the newest 500 spots, the last 200 console lines.
+constexpr int kSpotsStreamCapacity = 500;
+constexpr int kSpotConsoleCapacity = 200;
 
 // R-R3-47 / R-R3-22 (accessoryDataVersion 1): the Core's accessory records
 // and settings, read-only, for a peer at kRadioIdentitySessionProtocolMinor
@@ -1679,6 +1707,9 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
     // its filter presets and its band plans from here on.
     m_catalog = std::make_unique<StationCatalog>();
     m_catalog->bind(radioModel);
+    // Parity Task 19 (R-IOS-25): the record streams follow the Core's spots
+    // and its spot sources' consoles from here on.
+    setUpRecordStreams();
 
     connect(m_devicesFacade.get(), &StationDevicesFacade::tokenRetired, this, [this]() {
         endAuthenticatedPeers([](const Peer& peer) { return peer.signedInWithToken; },
@@ -1807,6 +1838,16 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                 }
             }
         }
+    });
+    // Parity Task 19 (R-IOS-25): a subscription belongs to the connection
+    // that asked, so the Core answers it (and sends the backlog) itself.
+    m_dispatcher->setRecordAccess([this](const SessionMessage& invoke) {
+        if (m_dispatchingTransport == nullptr) {
+            return false;
+        }
+        handleRecordsCommand(m_dispatchingTransport, invoke);
+        m_resultSentInDispatch = true;
+        return true;
     });
     // iPhone app Task 74 (R-IOS-30): confirm.proceed, confirm.cancel and
     // notice.takeBack are answered by the confirm step.
@@ -2804,6 +2845,11 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
     // iPhone app Task 76: this session's own media ends with it.
     const quint64 mediaEpoch = it->mediaEpoch;
     m_peers.erase(it);
+    // Parity Task 19: nothing more from any record stream.
+    for (auto& [name, stream] : m_recordStreams) {
+        Q_UNUSED(name);
+        stream->unsubscribe(transport);
+    }
     if (!view.isNull()) {
         view->close();
         view->deleteLater();
@@ -4400,6 +4446,11 @@ void StationServer::buildMirror()
     // to a peer at minor 11 (sendToPeer).
     m_catalog->refresh();
     m_mirror->watch(QByteArray(kCatalogKey), m_catalog.get());
+    // Parity Task 19 (recordStreamVersion 1): the Core's spot sources. Sent
+    // only to a peer at minor 11 (sendToPeer).
+    if (m_radioModel->spotSourceHost() != nullptr) {
+        m_mirror->watch(QByteArray(kSpotSourcesKey), m_radioModel->spotSourceHost());
+    }
     const QList<PanadapterModel*> pans = m_radioModel->panadapters();
     for (int i = 0; i < pans.size(); ++i) {
         m_mirror->watch(panKey(i), pans.at(i));
@@ -4609,6 +4660,9 @@ QList<SessionPropertyResult> StationServer::applyPropertyWrite(
     } else if (message.objectKey == kStationTciKey) {
         // R-R3-48: the switch changes only through setStationTci.
         stepAttRefusal = StationTciModel::readOnlyReason();
+    } else if (message.objectKey == kSpotSourcesKey) {
+        // Parity Task 19: the spot sources change only through spots.*.
+        stepAttRefusal = SpotSourceHost::readOnlyReason();
     } else if (message.objectKey == kAccessoryDataKey) {
         // R-R3-47: changed only through its commands.
         stepAttRefusal = AccessoryDataModel::readOnlyReason();
@@ -5313,6 +5367,11 @@ void StationServer::sendToPeer(SessionTransport* transport, const SessionMessage
         // iPhone app Task 19: nor the catalogue to an older app.
         if (isCatalogMessage(message)
             && (minor < kRadioIdentitySessionProtocolMinor || stationCatalogVersion() < 1)) {
+            return;
+        }
+        // Parity Task 19: nor the spot sources to an older app.
+        if (isSpotSourcesMessage(message)
+            && (minor < kRadioIdentitySessionProtocolMinor || recordStreamVersion() < 1)) {
             return;
         }
         if (!needsNnrFit(message, minor)) {
@@ -6716,6 +6775,22 @@ int StationServer::dspInfoVersion() const
     return m_radioModel && m_radioModel->role() != RadioModel::Role::Remote ? 1 : 0;
 }
 
+int StationServer::recordStreamVersion() const
+{
+    // R-IOS-25 / R-R3-49 (parity Task 19): the spots and the spot sources
+    // are the Core's own, so a local radio model.
+    return m_radioModel && m_radioModel->role() != RadioModel::Role::Remote
+            && m_radioModel->spotSourceHost() != nullptr
+        ? 1
+        : 0;
+}
+
+RecordStream* StationServer::recordStreamForTest(const QString& name) const
+{
+    const auto it = m_recordStreams.find(name);
+    return it == m_recordStreams.end() ? nullptr : it->second.get();
+}
+
 int StationServer::meterReadingsVersion() const
 {
     // R-R3-13 / R-R3-49 (parity Task 15): the pump that fills the slices'
@@ -6935,6 +7010,8 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             caps.meterReadingsVersion = meterReadingsVersion();
             // R-R3-49 / R-R3-21 / R-R3-40 (parity Task 16): the DSP facts.
             caps.dspInfoVersion = dspInfoVersion();
+            // R-IOS-25 / R-R3-49 (parity Task 19): the record streams.
+            caps.recordStreamVersion = recordStreamVersion();
             // iPhone app Task 71 (ruling 10.1): several devices at once, for
             // a peer that declared sessionHolder with deviceAuth; any other
             // peer is sent no entry, so its capabilities are today's.
@@ -7061,6 +7138,140 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
 #endif
 
     return caps;
+}
+
+
+// ── Parity Task 19 (R-IOS-25): record streams ────────────────────────────
+
+void StationServer::setUpRecordStreams()
+{
+    if (m_radioModel.isNull() || m_radioModel->role() == RadioModel::Role::Remote
+        || m_radioModel->spotSourceHost() == nullptr || m_radioModel->spotModel() == nullptr) {
+        return;
+    }
+    m_recordFlushTimer = new QTimer(this);
+    m_recordFlushTimer->setSingleShot(true);
+    m_recordFlushTimer->setInterval(kDefaultDeltaFlushMs);
+    connect(m_recordFlushTimer, &QTimer::timeout, this, &StationServer::flushRecordStreams);
+
+    auto spots = std::make_unique<RecordStream>(QStringLiteral("spots"), kSpotsStreamCapacity);
+    RecordStream* spotStream = spots.get();
+    m_recordStreams.emplace(spotStream->name(), std::move(spots));
+    for (const QString& source : SpotSourceHost::stationSources()) {
+        const QString name = SpotSourceHost::consoleStream(source);
+        m_recordStreams.emplace(name, std::make_unique<RecordStream>(name, kSpotConsoleCapacity));
+    }
+
+    SpotModel* model = m_radioModel->spotModel();
+    const QPointer<RadioModel> radio(m_radioModel);
+    const auto fields = [radio](const SpotData& spot) {
+        return SpotSourceHost::spotRecordFields(
+            spot, radio ? radio->dxccColorProvider() : nullptr);
+    };
+    // The spots the Core already holds are the first backlog.
+    for (const SpotData& spot : model->spots()) {
+        spotStream->upsert(QString::number(spot.index), fields(spot));
+    }
+    const auto upsert = [this, spotStream, fields](const SpotData& spot) {
+        spotStream->upsert(QString::number(spot.index), fields(spot));
+        scheduleRecordFlush();
+    };
+    connect(model, &SpotModel::spotAdded, this, upsert);
+    connect(model, &SpotModel::spotUpdated, this, upsert);
+    connect(model, &SpotModel::spotRemoved, this, [this, spotStream](int index) {
+        spotStream->remove(QString::number(index));
+        scheduleRecordFlush();
+    });
+    connect(model, &SpotModel::spotsCleared, this, [this, spotStream]() {
+        spotStream->reset();
+        scheduleRecordFlush();
+    });
+    connect(m_radioModel->spotSourceHost(), &SpotSourceHost::consoleLine, this,
+            [this](const QString& source, const QString& line) {
+        const auto it = m_recordStreams.find(SpotSourceHost::consoleStream(source));
+        if (it == m_recordStreams.end()) {
+            return; // a window's own listener, never the Core's
+        }
+        it->second->upsert(QString::number(++m_consoleLineId),
+                           QJsonObject{{QStringLiteral("line"), line}});
+        scheduleRecordFlush();
+    });
+}
+
+void StationServer::scheduleRecordFlush()
+{
+    if (m_recordFlushTimer != nullptr && !m_recordFlushTimer->isActive()) {
+        m_recordFlushTimer->start();
+    }
+}
+
+void StationServer::flushRecordStreams()
+{
+    for (auto& [name, stream] : m_recordStreams) {
+        Q_UNUSED(name);
+        for (const auto& [subscriber, batch] : stream->takePending()) {
+            // The subscriber is the peer's connection, still attached
+            // (dropPeer unsubscribes it before it goes).
+            auto* transport = static_cast<SessionTransport*>(const_cast<void*>(subscriber));
+            if (m_peers.contains(transport)) {
+                send(transport, SessionMessages::recordBatch(batch));
+            }
+        }
+    }
+}
+
+void StationServer::handleRecordsCommand(SessionTransport* transport, const SessionMessage& message)
+{
+    const auto answer = [this, transport, &message](bool accepted, const QString& reason) {
+        send(transport, SessionMessages::commandResult(message.commandVerb, message.commandId,
+                                                       accepted, reason, {}));
+    };
+    if (m_peers.value(transport).agreedMinor < kRadioIdentitySessionProtocolMinor) {
+        answer(false, QStringLiteral("Update this app to see the Core's spots."));
+        return;
+    }
+    if (recordStreamVersion() < 1) {
+        answer(false, QStringLiteral("This Core does not send its spots or console lines."));
+        return;
+    }
+    const bool subscribe = message.commandVerb == "records.subscribe";
+    const QSet<QByteArray> expected = subscribe ? QSet<QByteArray>{"stream", "backlog"}
+                                                : QSet<QByteArray>{"stream"};
+    QSet<QByteArray> names;
+    QString streamName;
+    qint64 backlog = 0;
+    bool readable = message.arguments.size() == expected.size();
+    for (const MirrorUpdate& a : message.arguments) {
+        names.insert(a.name);
+        if (a.name == "stream") {
+            readable = readable && a.kind == MirrorWireKind::Utf8
+                && a.value.typeId() == QMetaType::QString;
+            streamName = a.value.toString();
+        } else if (a.name == "backlog") {
+            readable = readable && a.kind == MirrorWireKind::Int64;
+            backlog = a.value.toLongLong();
+        }
+    }
+    if (!readable || names != expected || backlog < 0) {
+        answer(false, QStringLiteral("The Core could not read this request."));
+        return;
+    }
+    const auto it = m_recordStreams.find(streamName);
+    if (it == m_recordStreams.end()) {
+        answer(false, QStringLiteral("The Core does not keep that list."));
+        return;
+    }
+    if (!subscribe) {
+        it->second->unsubscribe(transport);
+        answer(true, QString());
+        return;
+    }
+    // The answer, then the backlog as a reset: the peer's copy starts from
+    // this batch.
+    const int wanted = static_cast<int>(std::min<qint64>(backlog, it->second->capacity()));
+    const RecordBatch first = it->second->subscribe(transport, wanted);
+    answer(true, QString());
+    send(transport, SessionMessages::recordBatch(first));
 }
 
 } // namespace NereusSDR

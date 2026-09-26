@@ -278,6 +278,13 @@
 //   2026-09-26 - R-R3-01 (parity Task 17 follow-up): fftEnginePool view
 //                hook, so Rendering > Decimation reaches every pan.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - Parity Task 19 (R-IOS-25): SpotSourceHost starts and
+//                stops the spot sources (the restore moved there; the Core
+//                runs the station's with restoreStationSpotSources, a remote
+//                window its own WSJT-X and SpotCollector); a remote window
+//                shows the Core's spots stream beside its own
+//                (applyStationRecordBatch). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -487,6 +494,8 @@ class PotaClient;
 class FreeDVReporterClient;
 class FreeDVRadeReporterBridge;
 class PskReporterClient;
+class SpotSourceHost;
+struct RecordBatch;
 class DxccColorProvider;
 class SpotModel;
 class SpotTableModel;
@@ -2477,6 +2486,17 @@ public:
     PotaClient*           pota()                const { return m_pota.get(); }
     FreeDVReporterClient* freeDvReporter()      const { return m_freeDvReporter.get(); }
     PskReporterClient*    pskReporter()         const { return m_pskReporter.get(); }
+    // Parity Task 19 (R-IOS-25): the spot sources' starts and stops.
+    SpotSourceHost*       spotSourceHost()      const { return m_spotSourceHost.get(); }
+
+    /// Parity Task 19 (R-IOS-25): a remote window applies the Core's
+    /// `spots` stream (the Core's cluster, RBN, POTA and PSK Reporter
+    /// spots) into its SpotModel and Spot List, beside its own WSJT-X and
+    /// SpotCollector spots, and the Core's spotConsole:<source> streams
+    /// into the Spot Hub's consoles. A reset replaces the Core's spots.
+    void applyStationRecordBatch(const RecordBatch& batch);
+    /// The session ended: the Core's spots leave this window.
+    void clearStationRecords();
 
     // ── TNF (design section 8.1): the canonical notch store ─────────────────
     //
@@ -2509,6 +2529,12 @@ public:
     // Safe to call multiple times. Each client's start method already
     // guards against double-start.
     void restoreSpotClientAutoStartState();
+    /// Parity Task 19 (R-IOS-25): the Core (nereusd) starts the station's
+    /// sources (DX cluster, RBN, POTA, PSK Reporter) whose Auto-Connect or
+    /// Auto-Start is on, with no window. A window's restore above starts
+    /// every source when it runs its own radio, and only its own WSJT-X and
+    /// SpotCollector listeners in a remote window.
+    void restoreStationSpotSources();
 
     // ── Phase 3R Task I5: RadeChannel slot-graph wiring ─────────────────────
     //
@@ -6550,6 +6576,14 @@ private:
     std::unique_ptr<PotaClient>           m_pota;
     std::unique_ptr<FreeDVReporterClient> m_freeDvReporter;
     std::unique_ptr<PskReporterClient>    m_pskReporter;
+    // Parity Task 19 (R-IOS-25): starts, stops and follows the clients
+    // above (all but FreeDV Reporter), locally and on the Core; the
+    // mirrored `spotSources` object.
+    std::unique_ptr<SpotSourceHost>       m_spotSourceHost;
+    // Parity Task 19: in a remote window, the Core's spot ids (the `spots`
+    // stream's record ids) and the SpotModel index each is shown under,
+    // beside this window's own WSJT-X and SpotCollector spots.
+    QHash<QString, int>                   m_stationSpotIndex;
 
     // TNF (design section 5): notch store. Persisted globally rather than
     // per-MAC (design D3) because a notch tracks a QRM source at the

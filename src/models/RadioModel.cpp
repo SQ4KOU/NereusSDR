@@ -442,6 +442,13 @@
 //                bandSelectVersion 1, so the Core changes that slice with
 //                its own band memory. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-26 - Parity Task 19 (R-IOS-25): SpotSourceHost starts and
+//                stops the spot sources (the restore moved there; the Core
+//                runs the station's with restoreStationSpotSources, a remote
+//                window its own WSJT-X and SpotCollector); a remote window
+//                shows the Core's spots stream beside its own
+//                (applyStationRecordBatch). J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -732,6 +739,8 @@ warren@wpratt.com
 #include "core/FreeDVReporterClient.h"
 #include "core/FreeDVRadeReporterBridge.h"
 #include "core/PskReporterClient.h"
+#include "core/SpotSourceHost.h"
+#include "core/session/RecordStream.h"
 #include "core/DxccColorProvider.h"
 #include "core/DxSpot.h"
 #include "core/FreeDVStation.h"
@@ -2930,6 +2939,34 @@ RadioModel::RadioModel(Role role, QObject* parent)
     wireSpotTable(m_freeDvReporter.get());
     wireSpotTable(m_pskReporter.get());
 
+    // Parity Task 19 (R-IOS-25): one place starts, stops and follows the
+    // spot sources, for a window running its own radio, the Core and a
+    // remote window alike (SpotSourceHost.h).
+    m_spotSourceHost = std::make_unique<SpotSourceHost>(
+        m_dxCluster.get(), m_rbn.get(), m_wsjtx.get(), m_spotCollector.get(), m_pota.get(),
+        m_pskReporter.get(), m_spotModel.get(), this);
+    // A remote window: the station's sources are the Core's, so their
+    // buttons ask the Core (spots.*, recordStreamVersion 1).
+    if (m_role == Role::Remote) {
+        m_spotSourceHost->setStationForwarder(
+            [this](const QByteArray& verb, const QString& source, const QString& text,
+                   QString* reason) {
+            if (m_station == nullptr) {
+                if (reason != nullptr) {
+                    *reason = QStringLiteral("Not connected to the Core, so the spot source "
+                                             "request was not sent.");
+                }
+                return false;
+            }
+            const IStationLink::CommandOutcome outcome =
+                m_station->requestSpotSource(verb, source, text);
+            if (!outcome.sent && reason != nullptr) {
+                *reason = outcome.reason;
+            }
+            return outcome.sent;
+        });
+    }
+
     // ── Phase 3R-bridge: RADE Path B (sync-only) rx_report upload ─────────
     // Ported from freedv-gui src/main.cpp:1971-1996 [@77e793a]
     // (MainFrame::OnTimer's FREEDV_MODE_RADE && syncState else-if).
@@ -3641,6 +3678,132 @@ void RadioModel::onPskReporterSpotReceived(const DxSpot& spot)
     m_spotModel->applySpotStatus(idx, kvsFromSpot(spot, lifetime, color));
 }
 
+// ── Parity Task 19 (R-IOS-25): the Core's spots in a remote window ────────
+//
+// NereusSDR-original. The Core sends its spots as the `spots` record stream
+// (SpotSourceHost::spotRecordFields) and its cluster consoles as
+// spotConsole:<source>. A remote window shows the Core's spots in its own
+// SpotModel (the panadapter overlay) and Spot List, beside its own WSJT-X and
+// SpotCollector spots, under indices of its own. Colour and lifetime follow
+// each source's Spot Hub settings, which are the Core's (Station scope).
+
+namespace {
+
+struct StationSpotLook {
+    const char* colourKey;
+    const char* colourDefault;
+    const char* lifetimeKey;
+    int lifetimeDefault;
+};
+
+// The per-source keys and defaults the on*SpotReceived slots above read.
+StationSpotLook stationSpotLook(const QString& source)
+{
+    if (source == QLatin1String("RBN")) {
+        return {"RbnSpotColor", "#4488FF", "RbnSpotLifetimeSec", 1800};
+    }
+    if (source == QLatin1String("POTA")) {
+        return {"PotaSpotColor", "#FFFF00", "PotaSpotLifetimeSec", 1800};
+    }
+    if (source == QLatin1String("PSK")) {
+        return {"PskReporterSpotColor", "#FF00FF", "PskReporterSpotLifetimeSec", 1800};
+    }
+    if (source == QLatin1String("FreeDV")) {
+        return {"FreeDvSpotColor", "#FF8C00", "FreeDvSpotLifetimeSec", 1800};
+    }
+    if (source == QLatin1String("SpotCollector")) {
+        return {"SpotCollectorSpotColor", "#B0C4DE", "SpotCollectorSpotLifetimeSec", 1800};
+    }
+    return {"DxClusterSpotColor", "#D2B48C", "DxClusterSpotLifetimeSec", 1800};
+}
+
+} // namespace
+
+void RadioModel::applyStationRecordBatch(const RecordBatch& batch)
+{
+    if (batch.stream.startsWith(QLatin1String("spotConsole:"))) {
+        const QString source = batch.stream.mid(12);
+        if (!SpotSourceHost::isStationSource(source) || !m_spotSourceHost) {
+            return;
+        }
+        QStringList lines;
+        for (const RecordUpsert& u : batch.upserts) {
+            lines.append(u.fields.value(QStringLiteral("line")).toString());
+        }
+        m_spotSourceHost->appendStationConsole(source, lines);
+        return;
+    }
+    if (batch.stream != QLatin1String("spots") || !m_spotModel) {
+        return;
+    }
+    if (batch.reset) {
+        clearStationRecords();
+    }
+    for (const QString& id : batch.removes) {
+        const auto it = m_stationSpotIndex.find(id);
+        if (it != m_stationSpotIndex.end()) {
+            m_spotModel->removeSpot(it.value());
+            m_stationSpotIndex.erase(it);
+        }
+    }
+    auto& s = AppSettings::instance();
+    for (const RecordUpsert& u : batch.upserts) {
+        const QJsonObject& f = u.fields;
+        const QString source = f.value(QStringLiteral("source")).toString();
+        const StationSpotLook look = stationSpotLook(source);
+        const double mhz = f.value(QStringLiteral("frequencyHz")).toDouble() / 1.0e6;
+        const QDateTime when = QDateTime::fromString(f.value(QStringLiteral("timeUtc")).toString(),
+                                                     Qt::ISODate);
+        QMap<QString, QString> kvs;
+        kvs[QStringLiteral("callsign")] = f.value(QStringLiteral("call")).toString();
+        kvs[QStringLiteral("rx_freq")] = QString::number(mhz, 'f', 4);
+        kvs[QStringLiteral("tx_freq")] = QString::number(mhz, 'f', 4);
+        const QString mode = f.value(QStringLiteral("mode")).toString();
+        if (!mode.isEmpty()) {
+            kvs[QStringLiteral("mode")] = mode;
+        }
+        kvs[QStringLiteral("source")] = source;
+        kvs[QStringLiteral("spotter_callsign")] = f.value(QStringLiteral("spotter")).toString();
+        kvs[QStringLiteral("comment")] = f.value(QStringLiteral("comment")).toString();
+        kvs[QStringLiteral("timestamp")] = QString::number(
+            when.isValid() ? when.toSecsSinceEpoch() : QDateTime::currentSecsSinceEpoch());
+        kvs[QStringLiteral("lifetime_seconds")] = QString::number(
+            s.value(QString::fromLatin1(look.lifetimeKey), look.lifetimeDefault).toInt());
+        kvs[QStringLiteral("color")] =
+            s.value(QString::fromLatin1(look.colourKey), QString::fromLatin1(look.colourDefault))
+                .toString();
+        kvs[QStringLiteral("priority")] =
+            QString::number(f.value(QStringLiteral("dxccPriority")).toInt());
+        const bool isNew = !m_stationSpotIndex.contains(u.id);
+        if (isNew) {
+            m_stationSpotIndex.insert(u.id, m_spotModel->mintIndex());
+        }
+        m_spotModel->applySpotStatus(m_stationSpotIndex.value(u.id), kvs);
+        // The Spot List lists each spot once, as a local source's arrival
+        // does.
+        if (isNew && m_spotTableModel) {
+            DxSpot row;
+            row.dxCall = kvs.value(QStringLiteral("callsign"));
+            row.freqMhz = mhz;
+            row.spotterCall = kvs.value(QStringLiteral("spotter_callsign"));
+            row.comment = kvs.value(QStringLiteral("comment"));
+            row.utcTime = when.isValid() ? when.toUTC().time() : QDateTime::currentDateTimeUtc().time();
+            row.source = source;
+            m_spotTableModel->addSpot(row);
+        }
+    }
+}
+
+void RadioModel::clearStationRecords()
+{
+    if (m_spotModel) {
+        for (const int index : std::as_const(m_stationSpotIndex)) {
+            m_spotModel->removeSpot(index);
+        }
+    }
+    m_stationSpotIndex.clear();
+}
+
 // ── Phase 3J-2 + 3R M3: spot-client auto-start state restore ───────────────
 //
 // Reads each per-source AutoConnect / AutoStart key from AppSettings and,
@@ -3672,7 +3835,15 @@ void RadioModel::restoreSpotClientAutoStartState()
     // issues.md and this task's verification README paragraph for the
     // per-source breakdown. Do not read this gate as having decided
     // that question; it has not.
-    if (role() != Role::Local) { return; }
+    //
+    // Parity Task 19 (R-IOS-25) settles the question for the spot sources:
+    // the station's (DX cluster, RBN, POTA, PSK Reporter) run on the Core
+    // (restoreStationSpotSources), and each computer runs its own WSJT-X
+    // and SpotCollector listeners, so a remote window starts those alone.
+    if (role() != Role::Local) {
+        m_spotSourceHost->restoreAutoStart(SpotSourceHost::Placement::WindowSources);
+        return;
+    }
 
     auto& s = AppSettings::instance();
     auto isTrue = [&s](const QString& key) {
@@ -3695,48 +3866,9 @@ void RadioModel::restoreSpotClientAutoStartState()
         return v;
     };
 
-    // DxCluster
-    if (m_dxCluster && isTrue(QStringLiteral("DxClusterAutoConnect"))) {
-        m_dxCluster->connectToCluster(
-            s.value(QStringLiteral("DxClusterHost"),
-                    QStringLiteral("dxc.nc7j.com")).toString(),
-            static_cast<quint16>(
-                s.value(QStringLiteral("DxClusterPort"), 7300).toInt()),
-            resolveCall(QStringLiteral("DxClusterCallsign")));
-    }
-
-    // RBN (same DxClusterClient class, different keys / default host).
-    if (m_rbn && isTrue(QStringLiteral("RbnAutoConnect"))) {
-        m_rbn->connectToCluster(
-            s.value(QStringLiteral("RbnHost"),
-                    QStringLiteral("telnet.reversebeacon.net")).toString(),
-            static_cast<quint16>(
-                s.value(QStringLiteral("RbnPort"), 7000).toInt()),
-            resolveCall(QStringLiteral("RbnCallsign")));
-    }
-
-    // WSJT-X (UDP bind on the configured address / port).
-    if (m_wsjtx && isTrue(QStringLiteral("WsjtxAutoStart"))) {
-        m_wsjtx->startListening(
-            s.value(QStringLiteral("WsjtxAddress"),
-                    QStringLiteral("224.0.0.1")).toString(),
-            static_cast<quint16>(
-                s.value(QStringLiteral("WsjtxPort"), 2237).toInt()));
-    }
-
-    // SpotCollector (UDP bind).
-    if (m_spotCollector
-        && isTrue(QStringLiteral("SpotCollectorAutoStart"))) {
-        m_spotCollector->startListening(
-            static_cast<quint16>(
-                s.value(QStringLiteral("SpotCollectorPort"), 9999).toInt()));
-    }
-
-    // POTA (HTTPS poll loop).
-    if (m_pota && isTrue(QStringLiteral("PotaAutoStart"))) {
-        m_pota->startPolling(
-            s.value(QStringLiteral("PotaPollInterval"), 30).toInt());
-    }
+    // Parity Task 19: every source but FreeDV Reporter starts through the
+    // spot source host, with the same settings and calls as before.
+    m_spotSourceHost->restoreAutoStart(SpotSourceHost::Placement::Everything);
 
     // FreeDV Reporter (WebSocket connect; identity / URL already plumbed
     // in ctor at lines 936-953).
@@ -3776,33 +3908,12 @@ void RadioModel::restoreSpotClientAutoStartState()
             m_freeDvReporter->startConnection();
         }
     }
+}
 
-    // PSK Reporter: send-only.  Identity refreshed from User/* fall-
-    // back chain.  2026-05-12 bench fix: if PskReporterAutoStart is
-    // True, arm the 5-minute auto-send timer now — source-first port
-    // from freedv-gui main.cpp:2575-2597 [@77e793a] which adds
-    // PskReporter to m_reporters[] AND starts m_pskReporterTimer at
-    // audio start time.  Previously the AutoStart flag persisted but
-    // had no effect (it only set identity), so users with auto-start
-    // checked would never see any spots reach pskreporter.info.
-    if (m_pskReporter) {
-        const QString pskCall = resolveCall(
-            QStringLiteral("PskReporter/Callsign"));
-        QString pskGrid =
-            s.value(QStringLiteral("PskReporter/GridSquare")).toString();
-        if (pskGrid.isEmpty()) pskGrid = userGrid;
-        if (!pskCall.isEmpty()) {
-            m_pskReporter->setIdentity(pskCall, pskGrid,
-                                       QStringLiteral("NereusSDR ") + QStringLiteral(NEREUSSDR_VERSION));
-            if (isTrue(QStringLiteral("PskReporterAutoStart"))) {
-                m_pskReporter->setAutoSendIntervalSec(
-                    PskReporterClient::kReportingIntervalSec);
-                qCInfo(lcDsp)
-                    << "PskReporter: auto-start armed (5-min interval)"
-                    << "callsign=" << pskCall;
-            }
-        }
-    }
+void RadioModel::restoreStationSpotSources()
+{
+    // Parity Task 19 (R-IOS-25): the Core's own settings; no window needed.
+    m_spotSourceHost->restoreAutoStart(SpotSourceHost::Placement::StationSources);
 }
 
 bool RadioModel::isConnected() const

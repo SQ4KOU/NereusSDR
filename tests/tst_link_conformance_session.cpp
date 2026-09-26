@@ -193,6 +193,10 @@
 //   2026-09-26: Transmit group fix wave C1: stationSetup microphoneLine.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 19 (R-IOS-25):
+//                                    recordStreamVersion and the record
+//                                    streams. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -1386,7 +1390,7 @@ void TstLinkConformanceSession::theConformanceCheckCatchesWhatAnAppCannotSend()
     QVERIFY2(found.contains(QStringLiteral("a device sign-in is")), qPrintable(found));
     // A verb with arguments it does not take, and one not advertised
     // (PureSignal's gate is psAlgorithmVersion equal to 3; 4 fails it).
-    found = planted(ps3, 29, [&setIn](QJsonObject& step) {
+    found = planted(ps3, 31, [&setIn](QJsonObject& step) {
         setIn(step, QStringLiteral("args"),
               QJsonArray{QJsonObject{{QStringLiteral("ordinal"), 0},
                                      {QStringLiteral("name"), QStringLiteral("enabled")},
@@ -1409,7 +1413,7 @@ void TstLinkConformanceSession::theConformanceCheckCatchesWhatAnAppCannotSend()
     });
     QVERIFY2(found.contains(QStringLiteral("ps3.off was not advertised")), qPrintable(found));
     // A placeholder among a behaviour step's arguments.
-    found = planted(ps3, 36, [&setIn](QJsonObject& step) {
+    found = planted(ps3, 38, [&setIn](QJsonObject& step) {
         setIn(step, QStringLiteral("args"),
               QJsonArray{QJsonObject{{QStringLiteral("ordinal"), 0},
                                      {QStringLiteral("name"), QStringLiteral("label")},
@@ -1418,20 +1422,20 @@ void TstLinkConformanceSession::theConformanceCheckCatchesWhatAnAppCannotSend()
     });
     QVERIFY2(found.contains(QStringLiteral("never placeholders")), qPrintable(found));
     // An id without the link's range, or from 0 where 1 is the least.
-    found = planted(ps3, 25, [&setIn](QJsonObject& step) {
+    found = planted(ps3, 27, [&setIn](QJsonObject& step) {
         setIn(step, QStringLiteral("id"), QStringLiteral("$int:invoke23"));
     });
     QVERIFY2(found.contains(QStringLiteral(":1:4294967295")), qPrintable(found));
-    found = planted(ps3, 25, [&setIn](QJsonObject& step) {
+    found = planted(ps3, 27, [&setIn](QJsonObject& step) {
         setIn(step, QStringLiteral("id"), QStringLiteral("$int:invoke23:0:4294967295"));
     });
     QVERIFY2(found.contains(QStringLiteral(":1:4294967295")), qPrintable(found));
     // A scripted id below 1000, and a scripted message naming a value.
-    found = planted(ps3, 33, [&setIn](QJsonObject& step) {
+    found = planted(ps3, 35, [&setIn](QJsonObject& step) {
         setIn(step, QStringLiteral("id"), 167);
     });
     QVERIFY2(found.contains(QStringLiteral("from 1000 up")), qPrintable(found));
-    found = planted(ps3, 33, [&setIn](QJsonObject& step) {
+    found = planted(ps3, 35, [&setIn](QJsonObject& step) {
         setIn(step, QStringLiteral("id"), QStringLiteral("$int:scripted"));
     });
     QVERIFY2(found.contains(QStringLiteral("a scripted message holds $int:scripted")),

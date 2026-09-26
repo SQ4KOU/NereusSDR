@@ -55,6 +55,10 @@
 //               per-address handshake cap and 0600 on load. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic Claude
 //               Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 19 (R-IOS-25):
+//                                    recordStreamVersion and the record
+//                                    streams. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -1065,13 +1069,15 @@ private slots:
         // 20's displayExtrasVersion, then R-R3-49's transmitSettingsVersion,
         // then R-IOS-27's bandSelectVersion, then parity Task 15's
         // meterReadingsVersion, then parity Task 16's dspInfoVersion.
-        QCOMPARE(updates.at(updates.size() - 7).name, QByteArray("pairingVersion"));
-        QCOMPARE(updates.at(updates.size() - 6).name, QByteArray("stationCatalogVersion"));
-        QCOMPARE(updates.at(updates.size() - 5).name, QByteArray("displayExtrasVersion"));
-        QCOMPARE(updates.at(updates.size() - 4).name, QByteArray("transmitSettingsVersion"));
-        QCOMPARE(updates.at(updates.size() - 3).name, QByteArray("bandSelectVersion"));
-        QCOMPARE(updates.at(updates.size() - 2).name, QByteArray("meterReadingsVersion"));
-        QCOMPARE(updates.last().name, QByteArray("dspInfoVersion"));
+        // Then parity Task 19's recordStreamVersion.
+        QCOMPARE(updates.at(updates.size() - 8).name, QByteArray("pairingVersion"));
+        QCOMPARE(updates.at(updates.size() - 7).name, QByteArray("stationCatalogVersion"));
+        QCOMPARE(updates.at(updates.size() - 6).name, QByteArray("displayExtrasVersion"));
+        QCOMPARE(updates.at(updates.size() - 5).name, QByteArray("transmitSettingsVersion"));
+        QCOMPARE(updates.at(updates.size() - 4).name, QByteArray("bandSelectVersion"));
+        QCOMPARE(updates.at(updates.size() - 3).name, QByteArray("meterReadingsVersion"));
+        QCOMPARE(updates.at(updates.size() - 2).name, QByteArray("dspInfoVersion"));
+        QCOMPARE(updates.last().name, QByteArray("recordStreamVersion"));
         QCOMPARE(StationCapabilities::fromUpdates(updates).pairingVersion, 1);
     }
 

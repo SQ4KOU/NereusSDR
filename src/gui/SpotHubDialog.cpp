@@ -125,6 +125,14 @@
 //                                    DxClusterDialog.cpp [@1e0718ad]: a
 //                                    spot click sets the slice's mode.
 //                                    AI tooling: Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Remote-window parity Task 19
+//                                    (R-IOS-25): in a remote window the
+//                                    Cluster, RBN, POTA and PSK Reporter
+//                                    tabs are the Core's (SpotSourceHost);
+//                                    the Core's settings disabled with a
+//                                    reason while there is no Core
+//                                    session. AI tooling: Anthropic Claude
+//                                    Code.
 
 #include "SpotHubDialog.h"
 
@@ -136,6 +144,7 @@
 #include "core/PotaClient.h"
 #include "core/PskReporterClient.h"
 #include "core/SpotCollectorClient.h"
+#include "core/SpotSourceHost.h"
 #include "core/WsjtxClient.h"
 #include "gui/UnbuiltFeatures.h"
 #include "gui/widgets/GuardedSlider.h"
@@ -743,7 +752,8 @@ void SpotHubDialog::buildClusterTab(QTabWidget* tabs)
     m_connectBtn->setFixedWidth(100);
     m_connectBtn->setStyleSheet(kStartBtnStyle);
     connect(m_connectBtn, &QPushButton::clicked, this, [this] {
-        if (m_clusterClient && m_clusterClient->isConnected()) {
+        if (sourceRunning(SpotSourceHost::kDxCluster,
+                          m_clusterClient && m_clusterClient->isConnected())) {
             emit disconnectRequested();
             return;
         }
@@ -859,6 +869,13 @@ void SpotHubDialog::buildClusterTab(QTabWidget* tabs)
     m_cmdEdit->setEnabled(m_clusterClient && m_clusterClient->isConnected());
     connect(m_cmdEdit, &QLineEdit::returnPressed, this, [this] {
         QString cmd = m_cmdEdit->text().trimmed();
+        // Parity Task 19: the Core's cluster in a remote window; its
+        // console echoes the command from the Core.
+        if (stationRemote() && !cmd.isEmpty()) {
+            m_sourceHost->typeCommand(SpotSourceHost::kDxCluster, cmd);
+            m_cmdEdit->clear();
+            return;
+        }
         if (cmd.isEmpty() || !m_clusterClient || !m_clusterClient->isConnected()) {
             return;
         }
@@ -992,7 +1009,7 @@ void SpotHubDialog::buildRbnTab(QTabWidget* tabs)
     m_rbnConnectBtn->setFixedWidth(100);
     m_rbnConnectBtn->setStyleSheet(kStartBtnStyle);
     connect(m_rbnConnectBtn, &QPushButton::clicked, this, [this] {
-        if (m_rbnClient && m_rbnClient->isConnected()) {
+        if (sourceRunning(SpotSourceHost::kRbn, m_rbnClient && m_rbnClient->isConnected())) {
             emit rbnDisconnectRequested();
             return;
         }
@@ -1099,6 +1116,11 @@ void SpotHubDialog::buildRbnTab(QTabWidget* tabs)
     m_rbnCmdEdit->setEnabled(m_rbnClient && m_rbnClient->isConnected());
     connect(m_rbnCmdEdit, &QLineEdit::returnPressed, this, [this] {
         QString cmd = m_rbnCmdEdit->text().trimmed();
+        if (stationRemote() && !cmd.isEmpty()) {
+            m_sourceHost->typeCommand(SpotSourceHost::kRbn, cmd);
+            m_rbnCmdEdit->clear();
+            return;
+        }
         if (cmd.isEmpty() || !m_rbnClient || !m_rbnClient->isConnected()) {
             return;
         }
@@ -1633,7 +1655,7 @@ void SpotHubDialog::buildPotaTab(QTabWidget* tabs)
     m_potaStartBtn->setFixedWidth(100);
     m_potaStartBtn->setStyleSheet(kStartBtnStyle);
     connect(m_potaStartBtn, &QPushButton::clicked, this, [this] {
-        if (m_potaClient && m_potaClient->isPolling()) {
+        if (sourceRunning(SpotSourceHost::kPota, m_potaClient && m_potaClient->isPolling())) {
             emit potaStopRequested();
             return;
         }
@@ -2176,7 +2198,8 @@ void SpotHubDialog::buildPskTab(QTabWidget* tabs)
     m_pskStartBtn->setFixedWidth(100);
     m_pskStartBtn->setStyleSheet(kStartBtnStyle);
     connect(m_pskStartBtn, &QPushButton::clicked, this, [this] {
-        if (m_pskClient && m_pskClient->isListening()) {
+        if (sourceRunning(SpotSourceHost::kPskReporter,
+                          m_pskClient && m_pskClient->isListening())) {
             emit pskStopRequested();
             return;
         }
@@ -2228,6 +2251,10 @@ void SpotHubDialog::buildPskTab(QTabWidget* tabs)
     connect(this, &SpotHubDialog::pskStartRequested,
             this, [this](const QString& /*call*/,
                          const QString& /*grid*/) {
+        // Parity Task 19: the Core's state shows in a remote window.
+        if (stationRemote()) {
+            return;
+        }
         if (m_pskStatusLabel) {
             m_pskStatusLabel->setText(
                 "Auto-send every 5 minutes");
@@ -2237,6 +2264,9 @@ void SpotHubDialog::buildPskTab(QTabWidget* tabs)
     });
     connect(this, &SpotHubDialog::pskStopRequested,
             this, [this]() {
+        if (stationRemote()) {
+            return;
+        }
         if (m_pskStatusLabel) {
             m_pskStatusLabel->setText("Stopped");
             m_pskStatusLabel->setStyleSheet(kStatusIdleStyle);
@@ -3077,6 +3107,212 @@ void SpotHubDialog::buildDisplayTab(QTabWidget* tabs)
 // view's autoscroll-on-selection-change default).
 //
 // -1 sentinel clears the selection ("mouse is no longer over a spot").
+// ── Parity Task 19 (R-IOS-25): the Core's spot sources ──────────────────
+
+void SpotHubDialog::setSourceHost(SpotSourceHost* host)
+{
+    if (m_sourceHost == host) {
+        return;
+    }
+    if (m_sourceHost) {
+        disconnect(m_sourceHost, nullptr, this, nullptr);
+    }
+    m_sourceHost = host;
+    if (host == nullptr) {
+        return;
+    }
+    connect(host, &SpotSourceHost::sourceChanged, this, &SpotHubDialog::refreshStationSource);
+    connect(host, &SpotSourceHost::consoleLine, this,
+            [this](const QString& source, const QString& line) {
+        // A window running its own radio fills its consoles from the
+        // clients directly (above); only the Core's lines come this way.
+        if (!stationRemote() || !SpotSourceHost::isStationSource(source)) {
+            return;
+        }
+        if (QPlainTextEdit* console = consoleFor(source)) {
+            console->appendPlainText(line);
+        }
+    });
+    connect(host, &SpotSourceHost::sourceRefused, this,
+            [this](const QString& source, const QString& reason) {
+        QLabel* label = source == SpotSourceHost::kDxCluster ? m_statusLabel
+            : source == SpotSourceHost::kRbn                  ? m_rbnStatusLabel
+            : source == SpotSourceHost::kPota                 ? m_potaStatusLabel
+            : source == SpotSourceHost::kPskReporter          ? m_pskStatusLabel
+                                                              : nullptr;
+        if (label != nullptr && !reason.isEmpty()) {
+            label->setText(reason);
+            label->setStyleSheet(QStringLiteral("QLabel { color: #ff4444; font-size: 11px; }"));
+        }
+    });
+    for (const QString& source : SpotSourceHost::stationSources()) {
+        refreshStationSource(source);
+    }
+}
+
+void SpotHubDialog::setStationSettingsAvailable(bool available, const QString& reason)
+{
+    m_stationSettingsAvailable = available;
+    m_stationSettingsReason = reason;
+    applyStationAvailability();
+}
+
+void SpotHubDialog::setStationSourcesAvailable(bool available, const QString& reason)
+{
+    m_stationSourcesAvailable = available;
+    m_stationSourcesReason = reason;
+    applyStationAvailability();
+    for (const QString& source : SpotSourceHost::stationSources()) {
+        refreshStationSource(source);
+    }
+}
+
+bool SpotHubDialog::stationRemote() const
+{
+    return m_sourceHost && m_sourceHost->forwardsStationSources();
+}
+
+bool SpotHubDialog::sourceRunning(const QString& source, bool localRunning) const
+{
+    if (stationRemote() && SpotSourceHost::isStationSource(source)) {
+        return m_sourceHost->isRunning(source);
+    }
+    return localRunning;
+}
+
+QPlainTextEdit* SpotHubDialog::consoleFor(const QString& source) const
+{
+    if (source == SpotSourceHost::kDxCluster) {
+        return m_console;
+    }
+    if (source == SpotSourceHost::kRbn) {
+        return m_rbnConsole;
+    }
+    if (source == SpotSourceHost::kPota) {
+        return m_potaConsole;
+    }
+    if (source == SpotSourceHost::kPskReporter) {
+        return m_pskConsole;
+    }
+    return nullptr;
+}
+
+void SpotHubDialog::refreshStationSource(const QString& source)
+{
+    if (!stationRemote()) {
+        return;
+    }
+    const QString state = m_sourceHost->state(source);
+    const QString text = m_sourceHost->text(source);
+    const bool running = m_sourceHost->isRunning(source);
+    const bool cluster = source == SpotSourceHost::kDxCluster || source == SpotSourceHost::kRbn;
+    QLabel* label = nullptr;
+    QPushButton* button = nullptr;
+    QLineEdit* cmdEdit = nullptr;
+    QPushButton* sendBtn = nullptr;
+    if (source == SpotSourceHost::kDxCluster) {
+        label = m_statusLabel;
+        button = m_connectBtn;
+        cmdEdit = m_cmdEdit;
+        sendBtn = m_sendBtn;
+    } else if (source == SpotSourceHost::kRbn) {
+        label = m_rbnStatusLabel;
+        button = m_rbnConnectBtn;
+        cmdEdit = m_rbnCmdEdit;
+        sendBtn = m_rbnSendBtn;
+    } else if (source == SpotSourceHost::kPota) {
+        label = m_potaStatusLabel;
+        button = m_potaStartBtn;
+    } else if (source == SpotSourceHost::kPskReporter) {
+        label = m_pskStatusLabel;
+        button = m_pskStartBtn;
+    }
+    if (label != nullptr) {
+        // The words each tab uses locally, for the Core's source.
+        QString words;
+        if (state == SpotSourceHost::kConnected) {
+            words = !text.isEmpty() ? text
+                : cluster           ? QStringLiteral("Connected")
+                                    : QStringLiteral("Running");
+            label->setStyleSheet(kStatusActiveStyle);
+        } else if (state == SpotSourceHost::kConnecting) {
+            words = QStringLiteral("Connecting");
+            label->setStyleSheet(kStatusIdleStyle);
+        } else if (state == SpotSourceHost::kError) {
+            words = QStringLiteral("Error: %1").arg(text);
+            label->setStyleSheet(QStringLiteral("QLabel { color: #e6c200; font-size: 11px; }"));
+        } else {
+            words = cluster ? QStringLiteral("Disconnected") : QStringLiteral("Stopped");
+            label->setStyleSheet(kStatusIdleStyle);
+        }
+        label->setText(words);
+    }
+    if (button != nullptr) {
+        button->setText(cluster ? (running ? QStringLiteral("Disconnect")
+                                           : QStringLiteral("Connect"))
+                                : (running ? QStringLiteral("Stop") : QStringLiteral("Start")));
+    }
+    const bool typeable = m_stationSourcesAvailable && state == SpotSourceHost::kConnected;
+    if (cmdEdit != nullptr) {
+        cmdEdit->setEnabled(typeable);
+    }
+    if (sendBtn != nullptr) {
+        sendBtn->setEnabled(typeable);
+    }
+}
+
+void SpotHubDialog::applyStationAvailability()
+{
+    // A widget's own tooltip comes back when it is enabled again.
+    const auto gate = [](QWidget* w, bool enabled, const QString& reason) {
+        if (w == nullptr) {
+            return;
+        }
+        if (!w->property("nereusBaseToolTip").isValid()) {
+            w->setProperty("nereusBaseToolTip", w->toolTip());
+        }
+        w->setEnabled(enabled);
+        w->setToolTip(enabled ? w->property("nereusBaseToolTip").toString() : reason);
+    };
+    // The Core's settings on these tabs (Station scope): everything but
+    // the WSJT-X and SpotCollector tabs, which are this computer's.
+    const QList<QWidget*> settings{
+        m_settingsCallEdit, m_settingsGridEdit, m_settingsFreedvMsgEdit, m_settingsSaveBtn,
+        m_hostEdit, m_portSpin, m_callEdit, m_autoConnectBtn,
+        findChild<QPushButton*>(QStringLiteral("clusterColorBtn")),
+        m_rbnHostEdit, m_rbnPortSpin, m_rbnCallEdit, m_rbnAutoConnectBtn,
+        findChild<QPushButton*>(QStringLiteral("rbnColorBtn")),
+        m_potaIntervalSpin, m_potaAutoStartBtn,
+        findChild<QPushButton*>(QStringLiteral("potaColorBtn")),
+        m_freedvAutoStartBtn, findChild<QPushButton*>(QStringLiteral("freedvColorBtn")),
+        m_pskCallEdit, m_pskGridEdit, m_pskAutoStartBtn,
+    };
+    for (QWidget* w : settings) {
+        gate(w, m_stationSettingsAvailable, m_stationSettingsReason);
+    }
+    // The station sources' buttons: the Core's own availability, and the
+    // Core's settings (a Connect saves them first).
+    const bool sources = m_stationSourcesAvailable && m_stationSettingsAvailable;
+    const QString why = !m_stationSettingsAvailable ? m_stationSettingsReason
+                                                    : m_stationSourcesReason;
+    for (QPushButton* b : {m_connectBtn, m_rbnConnectBtn, m_potaStartBtn, m_pskStartBtn}) {
+        gate(b, sources, why);
+    }
+    // The command lines follow their source's state as well
+    // (refreshStationSource); here only the reason they cannot be used.
+    for (QWidget* w : std::initializer_list<QWidget*>{m_cmdEdit, m_sendBtn, m_rbnCmdEdit,
+                                                      m_rbnSendBtn}) {
+        if (w == nullptr) {
+            continue;
+        }
+        if (!sources) {
+            gate(w, false, why);
+        } else if (w->property("nereusBaseToolTip").isValid()) {
+            w->setToolTip(w->property("nereusBaseToolTip").toString());
+        }
+    }
+}
+
 void SpotHubDialog::setHoveredPanadapterSpot(int spotIdx)
 {
     if (!m_spotTable || !m_spotTableModel) {

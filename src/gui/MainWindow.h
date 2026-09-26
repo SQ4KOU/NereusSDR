@@ -691,6 +691,9 @@ private slots:
     /// while connected without them).
     bool stationSettingsAvailable() const;
     QString stationSettingsReason() const;
+    // Parity Task 19 (R-IOS-25, B7.2): the Spot Hub's Core settings and the
+    // station's spot sources, available or disabled with a reason.
+    void refreshSpotHubAvailability();
 
     /// The one place in src/gui that runs `new SetupDialog`.
     ///

@@ -752,7 +752,9 @@ private slots:
                                    // readings.
                                    "meterReadingsVersion",
                                    // Parity Task 16: the DSP facts.
-                                   "dspInfoVersion"});
+                                   "dspInfoVersion",
+                                   // Parity Task 19: the record streams.
+                                   "recordStreamVersion"});
                 QCOMPARE(names, withReason);
                 const int reason = updateIndex(last.updates,
                                                QByteArrayLiteral("displayBudgetReason"));
@@ -797,7 +799,8 @@ private slots:
                                            QByteArrayLiteral("transmitSettingsVersion"),
                                            QByteArrayLiteral("bandSelectVersion"),
                                            QByteArrayLiteral("meterReadingsVersion"),
-                                           QByteArrayLiteral("dspInfoVersion")}) {
+                                           QByteArrayLiteral("dspInfoVersion"),
+                                           QByteArrayLiteral("recordStreamVersion")}) {
                 stripped.removeAt(updateIndex(stripped, name));
             }
             QCOMPARE(SessionMessages::encode(SessionMessages::capabilities(stripped)), older);

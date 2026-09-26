@@ -38,6 +38,9 @@
 //                                    confirm.request and notice, from the
 //                                    station. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 19 (R-IOS-25): record.batch
+//                                    placed as a station kind. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -91,6 +94,8 @@ const QStringList& stationKinds()
         QStringLiteral("pair.confirm"),    QStringLiteral("pair.fail"),
         // iPhone app Task 74: asking first, telling afterwards.
         QStringLiteral("confirm.request"), QStringLiteral("notice"),
+        // Parity Task 19: a record stream's changes.
+        QStringLiteral("record.batch"),
     };
     return kinds;
 }

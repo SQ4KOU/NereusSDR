@@ -270,6 +270,12 @@
 //                (MainWindow_Wiring.cpp:4382-4437 [@1e0718ad]); Pan Layout
 //                and +PAN follow RadioModel::maxSlices(). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - Remote-window parity Task 19 (R-IOS-25): the Spot Hub's
+//                starts and stops go through SpotSourceHost; a remote
+//                window's cluster, RBN, POTA and PSK Reporter are the
+//                Core's; the Spot Hub's Core settings are disabled with
+//                Setup's words while there is no Core session. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -578,6 +584,7 @@ warren@wpratt.com
 #include "applets/TxEqDialog.h"
 // Phase 3J-2 H1: Tools menu modeless singletons (Spot Hub + FreeDV Reporter).
 #include "SpotHubDialog.h"
+#include "core/SpotSourceHost.h"
 #include "FreeDVReporterDialog.h"
 // Phase 3F Sub-Epic G T4: bench-minimum Diversity dialog (Tools menu).
 #include "DiversityDialog.h"
@@ -11677,6 +11684,27 @@ QString MainWindow::stationSettingsReason() const
     return tr("Connect to the Core to change these.");
 }
 
+void MainWindow::refreshSpotHubAvailability()
+{
+    // Parity Task 19 (R-IOS-25, B7.2): a window running its own radio runs
+    // every source itself. A remote window's Spot Hub edits the Core's
+    // settings (Setup's words while there is no Core session) and asks the
+    // Core to run the station's sources.
+    if (!m_spotHubDialog || m_radioModel == nullptr) {
+        return;
+    }
+    if (m_radioModel->ownsLocalDsp()) {
+        m_spotHubDialog->setStationSettingsAvailable(true, QString());
+        m_spotHubDialog->setStationSourcesAvailable(true, QString());
+        return;
+    }
+    const bool settings = stationSettingsAvailable();
+    m_spotHubDialog->setStationSettingsAvailable(settings, stationSettingsReason());
+    const bool sources = m_stationClient != nullptr && m_stationClient->spotSourcesAvailable();
+    m_spotHubDialog->setStationSourcesAvailable(
+        sources, settings ? IStationLink::spotSourcesUnavailableReason() : stationSettingsReason());
+}
+
 RemoteReceiverAudioNote MainWindow::receiverAudioNoteFor(const RemoteMediaController* media)
 {
     // Only a remote window has remote media, and only a Core that sends
@@ -11921,6 +11949,8 @@ void MainWindow::applyRemoteRoleGating()
                                              transmitSettingsReason(8), 8);
         dialog->setStationSettingsAvailable(stationAvailable, stationSettingsReason());
     }
+    // Parity Task 19 (B7.2): and the Spot Hub's Core settings and sources.
+    refreshSpotHubAvailability();
     if (m_actTxEqualizer) {
         // R-R3-49 (parity Task 4): opens whatever the Core says; the dialog
         // shows why it is greyed.
@@ -12276,8 +12306,10 @@ void MainWindow::openSpotHub()
         // Bridge spotsClearedAll (Display tab's "Clear All Spots" button)
         // to SpotModel::clear so the global QShortcut and the dialog
         // button share one truth-source.
+        // Parity Task 19 (R-IOS-25): through the spot source host, which
+        // clears this window's spots and, in a remote window, the Core's.
         connect(m_spotHubDialog.data(), &SpotHubDialog::spotsClearedAll,
-                m_radioModel->spotModel(), &SpotModel::clear);
+                m_radioModel->spotSourceHost(), &SpotSourceHost::clearAllSpots);
         // Spot List double-click tuneRequested(double Mhz) drives the
         // active slice. SliceModel::setFrequency takes Hz (double), so
         // multiply by 1e6 to convert MHz to Hz.
@@ -12334,96 +12366,37 @@ void MainWindow::openSpotHub()
         // these connects the per-tab Connect / Start / Stop buttons in
         // SpotHubDialog emit signals into the void — the FreeDV pair
         // above was wired but DX Cluster, RBN, WSJT-X, SpotCollector,
-        // and POTA buttons all silently no-op'd.  The auto-start path
-        // (RadioModel::restoreSpotClientAutoStartState) calls the same
-        // client methods directly and worked; only the manual-button
-        // path was broken.  Clients themselves are correct — proven by
-        // the spotReceived → spotModel wires at RadioModel.cpp:973-981.
-        if (auto* dxc = m_radioModel->dxCluster()) {
-            connect(m_spotHubDialog.data(),
-                    &SpotHubDialog::connectRequested,
-                    dxc, &DxClusterClient::connectToCluster);
-            connect(m_spotHubDialog.data(),
-                    &SpotHubDialog::disconnectRequested,
-                    dxc, &DxClusterClient::disconnect);
-        }
-        if (auto* rbn = m_radioModel->rbn()) {
-            connect(m_spotHubDialog.data(),
-                    &SpotHubDialog::rbnConnectRequested,
-                    rbn, &DxClusterClient::connectToCluster);
-            connect(m_spotHubDialog.data(),
-                    &SpotHubDialog::rbnDisconnectRequested,
-                    rbn, &DxClusterClient::disconnect);
-        }
-        if (auto* wsjtx = m_radioModel->wsjtx()) {
-            connect(m_spotHubDialog.data(),
-                    &SpotHubDialog::wsjtxStartRequested,
-                    wsjtx, &WsjtxClient::startListening);
-            connect(m_spotHubDialog.data(),
-                    &SpotHubDialog::wsjtxStopRequested,
-                    wsjtx, &WsjtxClient::stopListening);
-        }
-        if (auto* sc = m_radioModel->spotCollector()) {
-            connect(m_spotHubDialog.data(),
-                    &SpotHubDialog::spotCollectorStartRequested,
-                    sc, &SpotCollectorClient::startListening);
-            connect(m_spotHubDialog.data(),
-                    &SpotHubDialog::spotCollectorStopRequested,
-                    sc, &SpotCollectorClient::stopListening);
-        }
-        if (auto* pota = m_radioModel->pota()) {
-            connect(m_spotHubDialog.data(),
-                    &SpotHubDialog::potaStartRequested,
-                    pota, &PotaClient::startPolling);
-            connect(m_spotHubDialog.data(),
-                    &SpotHubDialog::potaStopRequested,
-                    pota, &PotaClient::stopPolling);
-        }
-
-        // 2026-05-12 bench fix: PSK Reporter Start button source-first
-        // port from freedv-gui.  The dialog emitted pskStartRequested
-        // but nothing in MainWindow handled it.
+        // and POTA buttons all silently no-op'd.
         //
-        // From freedv-gui main.cpp:2597 [@77e793a]:
-        //   m_pskReporterTimer.Start(5 * 60 * 1000);
-        // and main.cpp:1609-1616 [@77e793a]:
-        //   if (timerId == ID_TIMER_PSKREPORTER) {
-        //       for (auto& obj : wxGetApp().m_reporters) obj->send();
-        //   }
-        // PSK Reporter is a send-only IPFIX client (pskreporter.h:65-68
-        // [@77e793a] — freqChange / transmit / inAnalogMode are no-ops).
-        // "Start" = arm the 5-minute auto-send timer.
-        //
-        // From freedv-gui main.cpp:2694 [@77e793a]:
-        //   m_pskReporterTimer.Stop();
-        // "Stop" = disarm the timer.  Any queued records flush on
-        // ~PskReporterClient when the client tears down (mirrors
-        // pskreporter.cpp:171-181 [@77e793a]).
-        if (auto* psk = m_radioModel->pskReporter()) {
-            connect(m_spotHubDialog.data(),
-                    &SpotHubDialog::pskStartRequested,
-                    psk, [psk](const QString& call,
-                               const QString& grid) {
-                        // 2026-05-12 bench fix (PR #238 review P2):
-                        // apply the freshly-validated identity to the
-                        // live client BEFORE arming the timer.  Without
-                        // this call, the client keeps the (often empty)
-                        // identity set at RadioModel construction time
-                        // and emits IPFIX datagrams with empty receiver
-                        // fields.  pskreporter.cpp:148-169 [@77e793a].
-                        psk->setIdentity(
-                            call, grid,
-                            QStringLiteral("NereusSDR ") +
-                                QStringLiteral(NEREUSSDR_VERSION));
-                        psk->setAutoSendIntervalSec(
-                            PskReporterClient::kReportingIntervalSec);
-                    });
-            connect(m_spotHubDialog.data(),
-                    &SpotHubDialog::pskStopRequested,
-                    psk, [psk]() {
-                        psk->setAutoSendIntervalSec(0);
-                    });
+        // Parity Task 19 (R-IOS-25): the starts and stops moved into the
+        // spot source host (the same client calls, and the PSK Reporter
+        // Start that arms the client's reporting interval after setting
+        // the freshly checked identity). In a remote window it sends the
+        // DX cluster, RBN, POTA and PSK Reporter buttons to the Core, which
+        // runs them; WSJT-X and SpotCollector listen on this computer.
+        if (SpotSourceHost* host = m_radioModel->spotSourceHost()) {
+            SpotHubDialog* hub = m_spotHubDialog.data();
+            connect(hub, &SpotHubDialog::connectRequested, host, &SpotSourceHost::connectCluster);
+            connect(hub, &SpotHubDialog::disconnectRequested, host,
+                    &SpotSourceHost::disconnectCluster);
+            connect(hub, &SpotHubDialog::rbnConnectRequested, host, &SpotSourceHost::connectRbn);
+            connect(hub, &SpotHubDialog::rbnDisconnectRequested, host,
+                    &SpotSourceHost::disconnectRbn);
+            connect(hub, &SpotHubDialog::wsjtxStartRequested, host, &SpotSourceHost::startWsjtx);
+            connect(hub, &SpotHubDialog::wsjtxStopRequested, host, &SpotSourceHost::stopWsjtx);
+            connect(hub, &SpotHubDialog::spotCollectorStartRequested, host,
+                    &SpotSourceHost::startSpotCollector);
+            connect(hub, &SpotHubDialog::spotCollectorStopRequested, host,
+                    &SpotSourceHost::stopSpotCollector);
+            connect(hub, &SpotHubDialog::potaStartRequested, host, &SpotSourceHost::startPota);
+            connect(hub, &SpotHubDialog::potaStopRequested, host, &SpotSourceHost::stopPota);
+            connect(hub, &SpotHubDialog::pskStartRequested, host,
+                    &SpotSourceHost::startPskReporter);
+            connect(hub, &SpotHubDialog::pskStopRequested, host,
+                    &SpotSourceHost::stopPskReporter);
+            hub->setSourceHost(host);
         }
+        refreshSpotHubAvailability();
 
         // 2026-05-12 bench fix: Save & Propagate writes User/GridSquare
         // to AppSettings but the FreeDVStationModel only reads its

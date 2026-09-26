@@ -133,6 +133,10 @@
 //                                    requestFilterResponse (dspInfoVersion
 //                                    1).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 19 (R-IOS-25): the Core's
+//                                    spot sources (recordStreamVersion 1),
+//                                    requestSpotSource.
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 18 (B3.1): a window's band
 //                                    buttons send slice.selectBand
 //                                    (bandSelectVersion 1) for a named
@@ -476,6 +480,17 @@ public:
     { return QStringLiteral("This Core does not send its filter curve. Updating the Core may help."); }
     virtual CommandOutcome requestFilterResponse(int /*sliceId*/, bool /*highResolution*/)
     { return { false, filterResponseUnavailableReason() }; }
+
+    // R-IOS-25 / R-R3-49 (parity Task 19, recordStreamVersion 1): the Core
+    // runs the station's spot sources (DX cluster, RBN, POTA, PSK
+    // Reporter). `verb` is spots.connect, spots.disconnect,
+    // spots.sendCommand (with `text`) or spots.clearAll (no source).
+    static QString spotSourcesUnavailableReason()
+    { return QStringLiteral("This Core does not run its spot sources for this app. Updating the Core may help."); }
+    virtual bool spotSourcesAvailable() const { return false; }
+    virtual CommandOutcome requestSpotSource(const QByteArray& /*verb*/, const QString& /*source*/,
+                                             const QString& /*text*/)
+    { return { false, spotSourcesUnavailableReason() }; }
 
     // R-R3-46 / R-R3-21 (radioHardwareVersion 4): the filter policy dialog
     // in a remote window. Whether the Core takes a filter policy change from

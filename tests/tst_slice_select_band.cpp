@@ -27,6 +27,10 @@
 //                                    the Core's own key freezes the
 //                                    transmit slice for another device.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 19 (R-IOS-25):
+//                                    recordStreamVersion and the record
+//                                    streams. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -272,10 +276,12 @@ void TstSliceSelectBand::theCapabilityIsLastInTheMinor11Block()
     const QList<MirrorUpdate> updates = caps.toUpdates();
     // Parity Task 15's meterReadingsVersion follows it, then parity Task
     // 16's dspInfoVersion.
-    QCOMPARE(updates.at(updates.size() - 4).name, QByteArrayLiteral("transmitSettingsVersion"));
-    QCOMPARE(updates.at(updates.size() - 3).name, QByteArrayLiteral("bandSelectVersion"));
-    QCOMPARE(updates.at(updates.size() - 2).name, QByteArrayLiteral("meterReadingsVersion"));
-    QCOMPARE(updates.last().name, QByteArrayLiteral("dspInfoVersion"));
+    // Then parity Task 19's recordStreamVersion.
+    QCOMPARE(updates.at(updates.size() - 5).name, QByteArrayLiteral("transmitSettingsVersion"));
+    QCOMPARE(updates.at(updates.size() - 4).name, QByteArrayLiteral("bandSelectVersion"));
+    QCOMPARE(updates.at(updates.size() - 3).name, QByteArrayLiteral("meterReadingsVersion"));
+    QCOMPARE(updates.at(updates.size() - 2).name, QByteArrayLiteral("dspInfoVersion"));
+    QCOMPARE(updates.last().name, QByteArrayLiteral("recordStreamVersion"));
     QCOMPARE(StationCapabilities::fromUpdates(updates).bandSelectVersion, 1);
     QCOMPARE(StationCapabilities::fromUpdates(updates).transmitSettingsVersion, 6);
 

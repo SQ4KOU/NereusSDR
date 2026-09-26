@@ -141,6 +141,10 @@
 //                                    the freeze and on-air refusals' new
 //                                    forwards. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 19 (R-IOS-25):
+//                                    SpotSourceHost's refusals scanned and
+//                                    its readOnlyReason forwarded. AI-assisted
+//                                    via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -689,6 +693,8 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("AmplifierModel::readOnlyReason()"),
           QStringLiteral("RfKitModel::readOnlyReason()"),
           QStringLiteral("StationTciModel::readOnlyReason()"),
+          // Parity Task 19: the `spotSources` object's, scanned below.
+          QStringLiteral("SpotSourceHost::readOnlyReason()"),
           QStringLiteral("AccessoryDataModel::readOnlyReason()"),
           QStringLiteral("AccessorySettingsModel::readOnlyReason()"),
           // Literals inserted into `refusals` in this file.
@@ -1056,6 +1062,14 @@ const QList<ReasonSource>& reasonSources()
          {QStringLiteral("readOnlyReason"), QStringLiteral("receiveOnlyOperateReason")}, {}, 2},
         {"src/models/RfKitModel.cpp", {QStringLiteral("readOnlyReason")}, {}, 1},
         {"src/models/StationTciModel.cpp", {QStringLiteral("readOnlyReason")}, {}, 1},
+        // Parity Task 19 (R-IOS-25): the spots.* refusals and the
+        // `spotSources` object's read-only reason.
+        {"src/core/SpotSourceHost.cpp",
+         {QStringLiteral("readOnlyReason"), QStringLiteral("connectSource"),
+          QStringLiteral("disconnectSource"), QStringLiteral("sendCommand")},
+         {}, 10, {},
+         {// The refuse helper's parameter: this entry's own literals.
+          QStringLiteral("why")}},
         {"src/models/SliceModel.cpp",
          {QStringLiteral("activeWriteReason"), QStringLiteral("applyMirroredValue")}, {}, 5},
         {"src/models/TunerModel.cpp", {QStringLiteral("applyMirroredValue")}, {}, 2},
@@ -1294,6 +1308,11 @@ const QList<AppSideReason>& appSideReasons()
         // R-R3-49 (parity Task 16): the filter graph's curve.
         {"src/core/session/IStationLink.h", "filterResponseUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
+        // R-IOS-25 (parity Task 19): the Core's spot sources.
+        {"src/core/session/IStationLink.h", "spotSourcesUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        {"src/core/SpotSourceHost.cpp", "reportStationRefusal",
+         "a remote window shows the Core's refusal it was given"},
         {"src/models/RadioModel.h", "rxFilter0Reason",
          "the filter badge's status label (AlexController), not a refusal"},
         {"src/models/RadioModel.h", "rxFilter1Reason",

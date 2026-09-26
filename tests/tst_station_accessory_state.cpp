@@ -655,47 +655,50 @@ private slots:
         for (const SessionMessage& m : current) {
             if (m.kind == SessionMessageKind::Capabilities) {
                 caps = StationCapabilities::fromUpdates(m.updates);
-                QCOMPARE(m.updates.at(m.updates.size() - 14).name,
+                QCOMPARE(m.updates.at(m.updates.size() - 15).name,
                          QByteArrayLiteral("remotePgxlControlVersion"));
-                QCOMPARE(m.updates.at(m.updates.size() - 13).name,
+                QCOMPARE(m.updates.at(m.updates.size() - 14).name,
                          QByteArrayLiteral("remoteRfKitControlVersion"));
                 // R-R3-48: then the station TCI server's version.
-                QCOMPARE(m.updates.at(m.updates.size() - 12).name,
+                QCOMPARE(m.updates.at(m.updates.size() - 13).name,
                          QByteArrayLiteral("stationTciVersion"));
                 // R-R3-47: then the accessory records' version.
-                QCOMPARE(m.updates.at(m.updates.size() - 11).name,
+                QCOMPARE(m.updates.at(m.updates.size() - 12).name,
                          QByteArrayLiteral("accessoryDataVersion"));
                 // R-R3-47: then the Tuner Genius's own settings.
-                QCOMPARE(m.updates.at(m.updates.size() - 10).name,
+                QCOMPARE(m.updates.at(m.updates.size() - 11).name,
                          QByteArrayLiteral("remoteTgxlControlVersion"));
                 // iPhone app Task 12: then device sign-in by key.
-                QCOMPARE(m.updates.at(m.updates.size() - 9).name,
+                QCOMPARE(m.updates.at(m.updates.size() - 10).name,
                          QByteArrayLiteral("stationIdentityVersion"));
                 // iPhone app Task 13: then device administration.
-                QCOMPARE(m.updates.at(m.updates.size() - 8).name,
+                QCOMPARE(m.updates.at(m.updates.size() - 9).name,
                          QByteArrayLiteral("deviceAdminVersion"));
                 // iPhone app Task 14: then pairing.
-                QCOMPARE(m.updates.at(m.updates.size() - 7).name,
+                QCOMPARE(m.updates.at(m.updates.size() - 8).name,
                          QByteArrayLiteral("pairingVersion"));
                 // iPhone app Task 19: then the catalogue.
-                QCOMPARE(m.updates.at(m.updates.size() - 6).name,
+                QCOMPARE(m.updates.at(m.updates.size() - 7).name,
                          QByteArrayLiteral("stationCatalogVersion"));
                 // iPhone app Task 20: then display extras.
-                QCOMPARE(m.updates.at(m.updates.size() - 5).name,
+                QCOMPARE(m.updates.at(m.updates.size() - 6).name,
                          QByteArrayLiteral("displayExtrasVersion"));
                 // R-R3-49 (parity Task 1): then the transmit settings.
-                QCOMPARE(m.updates.at(m.updates.size() - 4).name,
+                QCOMPARE(m.updates.at(m.updates.size() - 5).name,
                          QByteArrayLiteral("transmitSettingsVersion"));
                 // R-IOS-27, R-IOS-06: then a slice's band buttons.
-                QCOMPARE(m.updates.at(m.updates.size() - 3).name,
+                QCOMPARE(m.updates.at(m.updates.size() - 4).name,
                          QByteArrayLiteral("bandSelectVersion"));
                 // R-R3-13 / R-R3-49 (parity Task 15): the ADC and AGC
                 // readings.
-                QCOMPARE(m.updates.at(m.updates.size() - 2).name,
+                QCOMPARE(m.updates.at(m.updates.size() - 3).name,
                          QByteArrayLiteral("meterReadingsVersion"));
-                // R-R3-49 (parity Task 16): the DSP facts travel last.
-                QCOMPARE(m.updates.constLast().name,
+                // R-R3-49 (parity Task 16): the DSP facts.
+                QCOMPARE(m.updates.at(m.updates.size() - 2).name,
                          QByteArrayLiteral("dspInfoVersion"));
+                // R-IOS-25 (parity Task 19): the record streams travel last.
+                QCOMPARE(m.updates.constLast().name,
+                         QByteArrayLiteral("recordStreamVersion"));
             }
             if (m.kind == SessionMessageKind::ObjectCreate && m.objectKey == "amplifier") {
                 sawAmplifier = true;

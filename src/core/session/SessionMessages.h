@@ -153,6 +153,7 @@
 #include <optional>
 
 #include "core/session/MirrorSchema.h"
+#include "core/session/RecordStream.h"
 #include "core/session/StationTelemetry.h"
 
 namespace NereusSDR {
@@ -207,6 +208,10 @@ enum class SessionMessageKind {
     // afterwards (notice).
     ConfirmRequest,
     Notice,
+    // Parity Task 19 (R-IOS-25; the link's "Record streams" section): Core
+    // -> peer, only to a peer that subscribed with records.subscribe
+    // (recordStreamVersion 1). Upserts and removes for one stream.
+    RecordBatch,
 };
 
 /// The session protocol's own semantic version, advertised by BOTH ends in
@@ -637,6 +642,9 @@ struct SessionMessage {
 
     /// iPhone app Task 74: ConfirmRequest and Notice only.
     SessionPrompt prompt;
+
+    /// Parity Task 19: RecordBatch only.
+    NereusSDR::RecordBatch recordBatch;
 };
 
 /// Builders plus the JSON codec. A static-method utility class with no
@@ -796,6 +804,9 @@ public:
     /// iPhone app Task 74 (R-IOS-30): Core to device, what another device
     /// did to it, or what happened to its own state.
     static SessionMessage notice(const SessionPrompt& prompt, const QString& reason);
+    /// Parity Task 19 (R-IOS-25): Core to peer, one stream's upserts and
+    /// removes, or its reset.
+    static SessionMessage recordBatch(const NereusSDR::RecordBatch& batch);
 
     static SessionMessage settingsReject(const QString& key, bool hasRestoredValue,
                                          const QString& restoredValue,

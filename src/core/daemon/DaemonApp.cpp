@@ -83,6 +83,10 @@
 //               the governor fed every controller's charge and running
 //               while any media session is live. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: Parity Task 19 (R-IOS-25): the Core starts the station's
+//               spot sources whose Auto-Connect or Auto-Start is on, with
+//               no window. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/daemon/DaemonApp.h"
@@ -336,6 +340,13 @@ bool DaemonApp::start(const DaemonConfig& cfg)
     // own ObjectRegistry::backfillExistingSlices() covers the case either
     // way, but there is no reason to make it the only cover.
     startStationServer(cfg);
+
+    // Parity Task 19 (R-IOS-25; remote design section 6.4): the station's
+    // spot sources (DX cluster, RBN, POTA, PSK Reporter) whose Auto-Connect
+    // or Auto-Start is on in the Core's settings run here, with no window.
+    // After the station server, so its streams hold the first console
+    // lines. Each window runs its own WSJT-X and SpotCollector listeners.
+    m_radioModel->restoreStationSpotSources();
 
     // Fix round 1, Finding 1: mintFftEndpoints() only fills m_topology's
     // own private bookkeeping. Without this call the subscriptions never

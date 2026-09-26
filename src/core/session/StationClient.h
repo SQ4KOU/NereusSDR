@@ -305,6 +305,11 @@
 //                                    requestFilterResponse
 //                                    (dspInfoVersion 1).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 19 (R-IOS-25): the Core's
+//                                    record streams applied (spots and
+//                                    the spot consoles), the `spotSources`
+//                                    object and the spots.* verbs.
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 18 (B3.1):
 //                                    requestSelectBand (slice.selectBand,
 //                                    bandSelectVersion 1).
@@ -880,6 +885,14 @@ public:
     CommandOutcome requestFilterResponse(int sliceId, bool highResolution) override;
     /// Parity Task 16: minor 11 and dspInfoVersion at least 1.
     bool dspInfoAvailable() const;
+    /// Parity Task 19 (R-IOS-25): minor 11 and recordStreamVersion at least
+    /// 1 on a ready session.
+    bool spotSourcesAvailable() const override;
+    /// Parity Task 19. Verbs spots.connect, spots.disconnect,
+    /// spots.sendCommand and spots.clearAll; a refusal goes to the spot
+    /// source host (SpotSourceHost::reportStationRefusal).
+    CommandOutcome requestSpotSource(const QByteArray& verb, const QString& source,
+                                     const QString& text) override;
     /// R-R3-46 fix wave (radioHardwareVersion 3). Verb "setAlexRxAntenna":
     /// one band's RX antenna (rxOnly false, 1..3) or RX-only antenna
     /// (rxOnly true, 0..3) on the Core.
@@ -1232,6 +1245,8 @@ private:
         bool requestedPin = false;
         // clearAccessoryFaults: which device's history (L1 routing).
         QString faultsDevice;
+        // spots.*: which spot source (parity Task 19), for its refusal.
+        QString spotSource;
     };
     QHash<quint32, PendingCommand> m_pendingCommands;
     std::optional<QPair<quint32, bool>> m_pendingPs3Display;

@@ -57,6 +57,8 @@
 //   2026-09-25 - iPhone app Task 71 (R-IOS-02): ConnectedDevicesFacade,
 //                 all Outbound. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-26 - Parity Task 19 (R-IOS-25): SpotSourceHost, all Outbound.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-24 - iPhone app Task 19 (R-IOS-06): StationCatalog, all
 //   2026-09-24 - R-R3-49 (parity Task 2): the TX and Phone/CW applets'
 //                 thirteen TransmitModel settings Bidirectional;
@@ -790,6 +792,18 @@ const MirrorPolicy::Entry kEntries[] = {
     // only with the Core's presets, band plans and radio.
     { "StationCatalog", "json", MirrorDirection::Outbound },
     { "StationCatalog", "revision", MirrorDirection::Outbound },
+
+    // R-IOS-25 / R-R3-49 (parity Task 19, recordStreamVersion 1): the Core's
+    // spot sources, read-only. They change only through spots.connect,
+    // spots.disconnect and the sources themselves.
+    { "SpotSourceHost", "dxClusterState", MirrorDirection::Outbound },
+    { "SpotSourceHost", "dxClusterText", MirrorDirection::Outbound },
+    { "SpotSourceHost", "rbnState", MirrorDirection::Outbound },
+    { "SpotSourceHost", "rbnText", MirrorDirection::Outbound },
+    { "SpotSourceHost", "potaState", MirrorDirection::Outbound },
+    { "SpotSourceHost", "potaText", MirrorDirection::Outbound },
+    { "SpotSourceHost", "pskReporterState", MirrorDirection::Outbound },
+    { "SpotSourceHost", "pskReporterText", MirrorDirection::Outbound },
 
     // iPhone app Task 71 (R-IOS-02, sessionHolderVersion 1): who is on the
     // Core, read-only. It changes only as devices come, go, go away and act.

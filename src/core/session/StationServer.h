@@ -379,6 +379,11 @@
 //   2026-09-26  J.J. Boyd / KG4VCF  R-R3-49 / R-R3-21 / R-R3-40 (parity
 //                                    Task 16): dspInfoVersion.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  R-IOS-25 / R-R3-49 (parity Task 19):
+//                                    recordStreamVersion, the record
+//                                    streams (spots, spotConsole:<source>)
+//                                    and the `spotSources` object.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QHash>
@@ -392,6 +397,7 @@
 #include <QSslConfiguration>
 #include <QString>
 
+#include <map>
 #include <memory>
 #include <functional>
 #include <optional>
@@ -402,6 +408,7 @@
 #include "core/session/LinkVersion.h"
 #include "core/session/ReceiverPlanner.h"
 #include "core/DisturbanceCheck.h"
+#include "core/session/RecordStream.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StationCapabilities.h"
 #include "core/safety/StarvationPolicy.h"
@@ -926,6 +933,15 @@ public:
     // dspOptionsLastApplyMs, its slices
     // minNotchWidthHz, and it takes dsp.filterResponse; 0 otherwise.
     int dspInfoVersion() const;
+    // R-IOS-25 / R-R3-49 (parity Task 19): recordStreamVersion. 1 on a Core
+    // with a local radio model: records.subscribe / records.unsubscribe
+    // and record.batch (the `spots` stream and each station source's
+    // spotConsole:<source>), the read-only `spotSources` object, and the
+    // spots.* verbs; 0 otherwise.
+    int recordStreamVersion() const;
+    /// For a test: the stream by name (spots, spotConsole:<source>), or
+    /// null.
+    RecordStream* recordStreamForTest(const QString& name) const;
     // R-R3-49 (parity Task 7): the peer was offered transmitSettingsVersion
     // 7: it arms PureSignal and changes pureSignalSettings off the air.
     bool pureSignalArmingOffered(SessionTransport* transport) const;
@@ -1174,6 +1190,11 @@ private:
     void handleHello(SessionTransport* transport, const SessionMessage& message);
     void handleAuthRequest(SessionTransport* transport, const SessionMessage& message);
     void handlePropertyWrite(SessionTransport* transport, const SessionMessage& message);
+    // Parity Task 19 (R-IOS-25): the record streams.
+    void setUpRecordStreams();
+    void handleRecordsCommand(SessionTransport* transport, const SessionMessage& message);
+    void scheduleRecordFlush();
+    void flushRecordStreams();
     void handleSettingsWrite(SessionTransport* transport, const SessionMessage& message);
     /// The body of handleSettingsWrite after its checks: applies the write
     /// through the settings proxy. A refusal goes to `refusal` when given,
@@ -1607,6 +1628,11 @@ private:
     std::unique_ptr<StationDevicesFacade> m_devicesFacade;
     // iPhone app Task 19: the Core's catalogue.
     std::unique_ptr<StationCatalog> m_catalog;
+    // Parity Task 19 (R-IOS-25): the record streams by name, the id of the
+    // last console line, and the send that follows a change.
+    std::map<QString, std::unique_ptr<RecordStream>> m_recordStreams;
+    quint64 m_consoleLineId = 0;
+    QTimer* m_recordFlushTimer = nullptr;
     // iPhone app Task 71: who holds a place on the Core.
     std::unique_ptr<DeviceSessionRegistry> m_deviceSessions;
     // The connection whose command.invoke is being dispatched, and the end
