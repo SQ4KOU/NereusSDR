@@ -181,6 +181,9 @@ public:
     /// text that is not one.
     static QHostAddress listenerAddressFor(const QString& bind);
 
+    /// The session end every app gets when the Core switches to `radioName`.
+    static QString radioChangeReason(const QString& radioName);
+
     explicit DaemonApp(QObject* parent = nullptr);
     ~DaemonApp() override;
 
@@ -521,10 +524,6 @@ private:
     // I1: the console commands survive that restart (stop() keeps them
     // while this is set).
     bool m_keepConsoleOnStop {false};
-public:
-    /// The session end every app gets when the Core switches to `radioName`.
-    static QString radioChangeReason(const QString& radioName);
-private:
     std::unique_ptr<QThread> m_radioDiscoveryThread;
     QTimer* m_radioRetryTimer {nullptr};
     quint64 m_radioRecoveryGeneration {0};

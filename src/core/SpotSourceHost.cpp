@@ -353,7 +353,7 @@ void SpotSourceHost::restoreAutoStart(Placement placement)
 
     // PSK Reporter: send-only.  Identity refreshed from User/* fall-
     // back chain.  2026-05-12 bench fix: if PskReporterAutoStart is
-    // True, arm the 5-minute auto-send timer now — source-first port
+    // True, arm the 5-minute auto-send timer now: source-first port
     // from freedv-gui main.cpp:2575-2597 [@77e793a] which adds
     // PskReporter to m_reporters[] AND starts m_pskReporterTimer at
     // audio start time.  Previously the AutoStart flag persisted but
@@ -367,6 +367,7 @@ void SpotSourceHost::restoreAutoStart(Placement placement)
         if (!pskCall.isEmpty()) {
             m_pskReporter->setIdentity(pskCall, pskGrid, versionString());
             if (settingIsTrue(QStringLiteral("PskReporterAutoStart"))) {
+                // Enable FreeDV Reporter timer (every 5 minutes).  [original inline comment from main.cpp:2594]
                 m_pskReporter->setAutoSendIntervalSec(PskReporterClient::kReportingIntervalSec);
                 setSource(kPskReporter, kConnected,
                           QStringLiteral("Reporting every 5 minutes"));
@@ -743,14 +744,16 @@ void SpotSourceHost::startPskReporterWith(const QString& callsign, const QString
     // port from freedv-gui.  The dialog emitted pskStartRequested
     // but nothing in MainWindow handled it.
     //
-    // From freedv-gui main.cpp:2597 [@77e793a]:
+    // From freedv-gui main.cpp:2594-2597 [@77e793a]:
+    //   // Enable FreeDV Reporter timer (every 5 minutes).
     //   m_pskReporterTimer.Start(5 * 60 * 1000);
     // and main.cpp:1609-1616 [@77e793a]:
     //   if (timerId == ID_TIMER_PSKREPORTER) {
+    //       // Reporter timer fired; send in-progress packet.
     //       for (auto& obj : wxGetApp().m_reporters) obj->send();
     //   }
     // PSK Reporter is a send-only IPFIX client (pskreporter.h:65-68
-    // [@77e793a] — freqChange / transmit / inAnalogMode are no-ops).
+    // [@77e793a]: freqChange / transmit / inAnalogMode are no-ops).
     // "Start" = arm the 5-minute auto-send timer.
     //
     // 2026-05-12 bench fix (PR #238 review P2):
@@ -762,6 +765,9 @@ void SpotSourceHost::startPskReporterWith(const QString& callsign, const QString
     // fields.  pskreporter.cpp:148-169 [@77e793a].
     // [moved from MainWindow::openSpotHub in parity Task 19]
     m_pskReporter->setIdentity(callsign, gridSquare, versionString());
+    // Enable FreeDV Reporter timer (every 5 minutes).  [original inline comment from main.cpp:2594]
+    // Reporter timer fired; send in-progress packet.  [original inline comment from main.cpp:1611;
+    // the tick is PskReporterClient's own timer, armed here]
     m_pskReporter->setAutoSendIntervalSec(PskReporterClient::kReportingIntervalSec);
     setSource(kPskReporter, kConnected, QStringLiteral("Reporting every 5 minutes"));
 }
