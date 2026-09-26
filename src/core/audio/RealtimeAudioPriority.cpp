@@ -209,11 +209,13 @@ void elevateComputeThreadPriority()
     }
 }
 
-void elevateLatencyCriticalThreadPriority()
+void elevateLatencyCriticalThreadPriority([[maybe_unused]] bool logSuccess)
 {
     const int err = pthread_set_qos_class_self_np(QOS_CLASS_USER_INTERACTIVE, 0);
     if (err == 0) {
-        qCInfo(lcRtAudio) << "Latency-critical thread elevated to USER_INTERACTIVE QoS";
+        if (logSuccess) {
+            qCInfo(lcRtAudio) << "Latency-critical thread elevated to USER_INTERACTIVE QoS";
+        }
     } else {
         qCWarning(lcRtAudio) << "Failed to elevate latency-critical thread (errno"
                              << err << "); continuing at default QoS.";
@@ -312,7 +314,7 @@ void elevateComputeThreadPriority()
     }
 }
 
-void elevateLatencyCriticalThreadPriority()
+void elevateLatencyCriticalThreadPriority([[maybe_unused]] bool logSuccess)
 {
     // Same -5 nice as the GUI main thread on Linux -- USER_INTERACTIVE
     // tier equivalent.  Requires CAP_SYS_NICE or rtprio rlimit for
@@ -383,7 +385,7 @@ void elevateComputeThreadPriority()
     }
 }
 
-void elevateLatencyCriticalThreadPriority()
+void elevateLatencyCriticalThreadPriority([[maybe_unused]] bool logSuccess)
 {
     // HIGHEST sits one step above ABOVE_NORMAL -- same tier as the
     // GUI main thread; below TIME_CRITICAL which is reserved for
@@ -408,7 +410,7 @@ AudioPriorityToken* elevateAudioThreadPriority() { return nullptr; }
 void leaveAudioThreadPriority(AudioPriorityToken*) {}
 void elevateGuiMainThreadPriority() {}
 void elevateComputeThreadPriority() {}
-void elevateLatencyCriticalThreadPriority() {}
+void elevateLatencyCriticalThreadPriority(bool) {}
 
 } // namespace NereusSDR
 

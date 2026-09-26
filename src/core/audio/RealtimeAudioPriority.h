@@ -95,7 +95,11 @@ void elevateComputeThreadPriority();
 // USER_INTERACTIVE puts them in the same scheduling class as the GUI
 // and DSP threads -- compile workers (DEFAULT QoS) consistently lose
 // the time slice race.
-void elevateLatencyCriticalThreadPriority();
+//
+// logSuccess false keeps a success out of the log (R-R3-21: the remote
+// audio receiver elevates a thread per audio context and says so once
+// per process). Failures are logged either way.
+void elevateLatencyCriticalThreadPriority(bool logSuccess = true);
 
 // Record that the OS refused a priority elevation for the calling thread.
 // The first refusal in the process logs one plain-English warning; every

@@ -236,10 +236,13 @@ public:
     /// traffic, never forces Opus on a link that carries lossless otherwise.
     static constexpr double kSustainedLossLimit = 0.01;
     static constexpr int kSustainedWindows = 3;
-    /// Interruptions the receiver restarts from (an arrival burst, a stream
-    /// gap, no packets): any one during the first window fails it, because a
-    /// link that needs a restart within 5 s cannot carry the stream; later,
-    /// the second within kRestartSpanMs fails, one being a passing event.
+    /// Interruptions of the stream: a restart for no packets, and (R-R3-21)
+    /// an arrival burst, a stream gap or a stall the receiver now rides
+    /// through on this computer (its linkInterruptions, read from each
+    /// sample, at most one a sample). Any one during the first window fails
+    /// it, because a link that stalls within 5 s cannot carry the stream;
+    /// later, the second within kRestartSpanMs fails, one being a passing
+    /// event.
     static constexpr int kTrialRestartLimit = 1;
     static constexpr int kSustainedRestartLimit = 2;
     static constexpr qint64 kRestartSpanMs = 60'000;
@@ -270,6 +273,8 @@ public:
     Verdict noteInterruption(qint64 nowMs);
     /// The loss of the last closed window, for the log; absent before one.
     std::optional<double> lastWindowLoss() const { return m_lastWindowLoss; }
+    /// R-R3-21: the last Failed verdict came from interruptions, not loss.
+    bool failedOnInterruptions() const { return m_failedOnInterruptions; }
 
 private:
     struct Counters {
@@ -277,6 +282,7 @@ private:
         quint64 missing = 0;
         quint64 concealed = 0;
         quint64 played = 0;
+        quint64 interruptions = 0; // R-R3-21: linkInterruptions
     };
     struct StreamBase {
         quint64 generation = 0;
@@ -290,6 +296,7 @@ private:
     Counters m_window;
     std::deque<qint64> m_interruptions;
     std::optional<double> m_lastWindowLoss;
+    bool m_failedOnInterruptions = false;
 };
 
 } // namespace NereusSDR

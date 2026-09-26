@@ -8190,6 +8190,10 @@ nereus_add_test(tst_remote_spectrum_render)
 # subscription lifecycle, stale context rejection, and teardown.
 nereus_add_test(tst_remote_media_controller
     fakes/LoopbackTransport.cpp)
+# R-R3-21: its real-session cases take about 115 s alone on a quiet Mac
+# (repeatedAudioRestartsBackOff waits out the 1, 2, 4, 4 s retry backoff),
+# too close to the default 120 s, and a loaded machine stretches them.
+set_tests_properties(tst_remote_media_controller PROPERTIES TIMEOUT 300)
 
 # iPhone app plan, desktop remote transmit (R-IOS-13, R-R3-42): the window's
 # side of the transmit verbs (copies, epochs, releases) on its own.

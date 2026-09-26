@@ -407,6 +407,13 @@ void RemoteTelemetryController::logDiagnostics(qint64 now) const
            << QStringLiteral("arrivalJitterMs=%1").arg(logged(p.arrivalJitterMs))
            << QStringLiteral("speakerQueuedMs=%1").arg(logged(p.speakerQueuedMs))
            << QStringLiteral("reorderQueuedMs=%1").arg(logged(p.reorderQueuedMs))
+           << QStringLiteral("jitterHoldMs=%1").arg(logged(p.jitterHoldMs))
+           << QStringLiteral("burstDroppedPackets=%1").arg(p.burstDroppedPackets)
+           << QStringLiteral("streamGapReanchors=%1").arg(p.streamGapReanchors)
+           << QStringLiteral("trimmedPackets=%1").arg(p.trimmedPackets)
+           << QStringLiteral("skippedAudioMs=%1").arg(p.skippedAudioMs, 0, 'f', 0)
+           << QStringLiteral("rewoundIntervals=%1").arg(p.rewoundIntervals)
+           << QStringLiteral("linkInterruptions=%1").arg(p.linkInterruptions)
            << QStringLiteral("driftRatio=%1").arg(logged(p.driftRatio, 9))
            << QStringLiteral("driftPpm=%1").arg(logged(driftPpm, 1))
            << QStringLiteral("audioDelayMs=%1").arg(logged(m_view.audioDelay.estimate
@@ -591,6 +598,16 @@ QString RemoteTelemetryController::detailText() const
         ? tr("Reorder buffer: %1\u00A0ms on this computer, packets held so that late arrivals play in order.")
               .arg(qRound(*p.reorderQueuedMs))
         : tr("Reorder buffer: not measured yet."));
+    // R-R3-21: the adaptive hold behind the reorder buffer.
+    if (p.jitterHoldMs) {
+        text << tr("Network buffer: %1\u00A0ms on this computer, how long arriving audio waits for late packets; it deepens after late packets and eases back when the link is steady.")
+            .arg(qRound(*p.jitterHoldMs));
+    }
+    if (p.linkInterruptions > 0 || p.skippedIntervals > 0) {
+        text << tr("Network stalls, gaps and bursts ridden through without restarting the audio: %1. Audio lost at a burst: %2\u00A0ms. Audio skipped to bring the delay back down: %3\u00A0ms.")
+            .arg(p.linkInterruptions).arg(qRound(p.burstDroppedAudioMs))
+            .arg(qRound(p.skippedAudioMs));
+    }
     // R-R3-07: the receiver reports its clock correction as a ratio near
     // 1.0; shown here as (ratio - 1) x 1e6 parts per million.
     text << (p.driftRatio

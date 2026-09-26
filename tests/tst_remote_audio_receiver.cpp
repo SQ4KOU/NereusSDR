@@ -4,6 +4,7 @@
 #include <QTimer>
 #include <QElapsedTimer>
 #include <QSignalSpy>
+#include <QRandomGenerator>
 #include <cmath>
 #include <chrono>
 #include <mutex>
@@ -15,6 +16,7 @@
 #include "core/session/media/PcmAudioCodec.h"
 #include "core/session/media/RemoteAudioRateMatcher.h"
 #include "core/session/media/RemoteAudioReceiver.h"
+#include "core/session/media/RemoteAudioRestartBackoff.h"
 #include "fakes/PacedAudioBus.h"
 #include "OperatorWording.h"
 #include <functional>
@@ -1016,19 +1018,22 @@ private slots:
     }
 
     // Fix wave, Important 3: once playback has begun the start phase is over
-    // and the normal overflow rule applies again. A burst larger than the
-    // arrival queue after the first decoded packet must request a restart
-    // (Fault::ArrivalBurst), not be silently trimmed as a connect backlog.
-    void burstAfterPlaybackStartsStillRestarts()
+    // and the normal overflow rule applies again: a burst larger than the
+    // arrival queue after the first decoded packet is not trimmed as a
+    // connect backlog. R-R3-21: nor does it ask the Core for a fresh
+    // context; the packets past the bound are dropped at the door and
+    // concealed, and the stream plays on, counted as a local re-anchor.
+    void burstAfterPlaybackStartsPlaysOnWithoutRestart()
     {
         constexpr quint32 kSsrc = 845;
         constexpr int kFirst = 3;
         constexpr int kBurst = AudioJitterBuffer::windowPackets(
             AudioJitterBuffer::kDefaultPacketDurationNs) + 4;
+        constexpr int kAfter = 25; // the stream goes on after the burst
         OpusAudioEncoder encoder;
         const QVector<float> pcm(3840, 0.1f);
         QVector<QByteArray> packets;
-        for (int packet = 0; packet < kFirst + kBurst; ++packet) {
+        for (int packet = 0; packet < kFirst + kBurst + kAfter; ++packet) {
             const auto encoded = encoder.encode(
                 pcm, quint16(packet), quint32(packet) * 1920u, kSsrc);
             QCOMPARE(encoded.status, OpusAudioCodecStatus::Accepted);
@@ -1079,15 +1084,28 @@ private slots:
             receiver.submit(packets.at(packet));
         }
         bus->releaseOutputPacingGateForTesting();
-
-        QTRY_COMPARE_WITH_TIMEOUT(restarts.count(), 1, 1000);
+        const auto after = Clock::now();
+        for (int packet = kFirst + kBurst; packet < kFirst + kBurst + kAfter; ++packet) {
+            std::this_thread::sleep_until(
+                after + std::chrono::milliseconds(40 * (packet - kFirst - kBurst + 1)));
+            receiver.submit(packets.at(packet));
+        }
+        QCoreApplication::processEvents();
+        QVERIFY(receiver.telemetry().burstDroppedPackets >= 1);
+        QVERIFY(receiver.telemetry().linkInterruptions >= 1);
+        // The stream plays through to its last packet. What the window
+        // could not hold was dropped oldest first to bound the delay.
+        const quint32 end = quint32(kFirst + kBurst + kAfter) * 1920u;
+        QTRY_VERIFY_WITH_TIMEOUT((receiver.telemetry().release
+                                  && receiver.telemetry().release->rtpTimestamp == end)
+                                 || !restarts.isEmpty(), 2000);
         device.request_stop();
         device.join();
-        const QString reason = restarts.first().at(0).toString();
-        QVERIFY2(reason.contains(QStringLiteral("arrival queue exceeded its latency bound")),
-                 qPrintable(reason));
-        QCOMPARE(restarts.first().at(1).value<RemoteAudioReceiver::Fault>(),
-                 RemoteAudioReceiver::Fault::ArrivalBurst);
+        QCoreApplication::processEvents();
+        QVERIFY2(restarts.isEmpty(),
+                 restarts.isEmpty() ? "" : qPrintable(restarts.first().first().toString()));
+        QVERIFY(receiver.isRunning());
+        QVERIFY(receiver.decodedPackets() > quint64(kFirst));
         QCOMPARE(receiver.telemetry().startDiscardedPackets, startDiscarded);
         QCOMPARE(errors.count(), 0);
         receiver.stop();
@@ -1470,21 +1488,80 @@ private slots:
         receiver.stop();
     }
 
+    // R-R3-21 (review I4): a receiver stream for apps stalls for 200 ms and
+    // then delivers what it held back to back. The app hears concealment
+    // (silence, lossless) for the intervals that came too late, then the
+    // stream again exactly where it belongs: each interval once, no pause,
+    // no replay, and the hold stays at 80 ms. The sink's release is paced
+    // by the hold alone, so a rewind or a deeper hold there would hand the
+    // app a silent pause and then a burst mid-transmission.
+    void pcmSinkStallIsConcealedInPlace()
+    {
+        constexpr quint32 kSsrc = 0x4e520003;
+        constexpr int kPackets = 150;         // 600 ms at 4 ms
+        constexpr qint64 kStallFromMs = 200;  // packets 50..99 held
+        constexpr qint64 kStallToMs = 400;    // and delivered with packet 100
+        CollectedPcm collected;
+        RemoteAudioReceiver receiver(RemoteAudioReceiver::PcmSinkMode{collected.sink()});
+        QSignalSpy errors(&receiver, &RemoteAudioReceiver::errorOccurred);
+        QSignalSpy restarts(&receiver, &RemoteAudioReceiver::restartRequested);
+        QVERIFY(receiver.start(kSsrc, 0, RemoteAudioProfile::Lossless));
+        const auto level = [](int packet) { return float(packet + 1) / 1024.0f; };
+        using Clock = std::chrono::steady_clock;
+        const auto started = Clock::now();
+        for (int packet = 0; packet < kPackets; ++packet) {
+            const qint64 nominal = qint64(packet) * 4;
+            const qint64 at = nominal >= kStallFromMs && nominal < kStallToMs ? kStallToMs : nominal;
+            std::this_thread::sleep_until(started + std::chrono::milliseconds(at));
+            receiver.submit(losslessLevelPacket(packet, kSsrc, level(packet)));
+        }
+        QTRY_VERIFY_WITH_TIMEOUT(collected.count() >= kPackets || !restarts.isEmpty()
+                                 || !errors.isEmpty(), 3000);
+        const RemoteAudioReceiverTelemetry telemetry = receiver.telemetry();
+        receiver.stop();
+        QCOMPARE(restarts.count(), 0);
+        QCOMPARE(errors.count(), 0);
+        const QList<QVector<float>> blocks = collected.snapshot();
+        QString heard;
+        int concealed = 0;
+        for (int k = 0; k < kPackets; ++k) {
+            const float first = blocks.at(k).constFirst();
+            const bool played = std::abs(first - level(k)) < 1.0f / 16384.0f;
+            const bool silent = first == 0.0f;
+            heard += played ? QLatin1Char('p') : silent ? QLatin1Char('.') : QLatin1Char('?');
+            concealed += silent ? 1 : 0;
+        }
+        const QString evidence = QStringLiteral("heard=%1 late=%2 interruptions=%3 hold=%4")
+            .arg(heard).arg(telemetry.latePackets).arg(telemetry.linkInterruptions)
+            .arg(telemetry.jitterHoldMs.value_or(-1));
+        // Every interval in its own place: the audio, or silence for one
+        // that came too late; the stall's silence is one run, and after it
+        // the stream plays on in place to its last packet.
+        QVERIFY2(!heard.contains(QLatin1Char('?')), qPrintable(evidence));
+        QVERIFY2(concealed > 0 && heard.indexOf(QLatin1Char('.')) >= 50, qPrintable(evidence));
+        QVERIFY2(heard.lastIndexOf(QLatin1Char('.')) - heard.indexOf(QLatin1Char('.')) + 1
+                     == concealed, qPrintable(evidence));
+        QVERIFY2(heard.mid(100) == QString(kPackets - 100, QLatin1Char('p')), qPrintable(evidence));
+        QVERIFY2(telemetry.latePackets > 0 && telemetry.linkInterruptions > 0, qPrintable(evidence));
+        QVERIFY2(telemetry.jitterHoldMs && *telemetry.jitterHoldMs == 80.0, qPrintable(evidence));
+    }
+
     // R-R3-23: the arrival queue is bounded in time, 320 ms, not in packets.
     // A 160 ms stall of lossless packets (forty, five times the old eight-
-    // packet bound that restarted after 32 ms) plays on; a stall past 320 ms
-    // still restarts as an arrival burst.
+    // packet bound that restarted after 32 ms) plays on whole. R-R3-21: a
+    // stall past 320 ms no longer restarts either; the packets past the
+    // bound are dropped at the door and concealed, and the stream plays on.
     void losslessStallIsBoundedInTime_data()
     {
         QTest::addColumn<int>("burst");
-        QTest::addColumn<bool>("restarts");
+        QTest::addColumn<bool>("overflows");
         QTest::newRow("160 ms stall plays on") << 40 << false;
-        QTest::newRow("340 ms stall restarts") << 85 << true;
+        QTest::newRow("340 ms stall plays on past the bound") << 85 << true;
     }
     void losslessStallIsBoundedInTime()
     {
         QFETCH(int, burst);
-        QFETCH(bool, restarts);
+        QFETCH(bool, overflows);
         constexpr quint32 kSsrc = 846;
         constexpr int kFirst = 30;
         AudioEngine engine;
@@ -1534,10 +1611,16 @@ private slots:
         }
         bus->releaseOutputPacingGateForTesting();
 
-        if (restarts) {
-            QTRY_COMPARE_WITH_TIMEOUT(restartSpy.count(), 1, 1000);
-            QCOMPARE(restartSpy.first().at(1).value<RemoteAudioReceiver::Fault>(),
-                     RemoteAudioReceiver::Fault::ArrivalBurst);
+        if (overflows) {
+            // Played on: every interval decoded or concealed, no restart.
+            QTRY_VERIFY_WITH_TIMEOUT(receiver.decodedPackets() + receiver.concealedPackets()
+                                         >= quint64(kFirst + burst)
+                                     || !restartSpy.isEmpty(), 1000);
+            QVERIFY2(restartSpy.isEmpty(),
+                     restartSpy.isEmpty() ? "" : qPrintable(restartSpy.first().first().toString()));
+            QVERIFY(receiver.telemetry().burstDroppedPackets >= 1);
+            QVERIFY(receiver.telemetry().linkInterruptions >= 1);
+            QVERIFY(receiver.isRunning());
         } else {
             // Every packet of the stall is played, none of it concealed and
             // no restart, well before the 500 ms no-packet rule.
@@ -1546,6 +1629,8 @@ private slots:
             QVERIFY2(restartSpy.isEmpty(),
                      restartSpy.isEmpty() ? "" : qPrintable(restartSpy.first().first().toString()));
             QCOMPARE(receiver.telemetry().missingPackets, quint64(0));
+            QCOMPARE(receiver.telemetry().burstDroppedPackets, quint64(0));
+            QCOMPARE(receiver.telemetry().linkInterruptions, quint64(0));
             QCOMPARE(receiver.rateMatcherOverflows(), 0);
         }
         device.request_stop();
@@ -1825,10 +1910,31 @@ private slots:
         const qint64 sourceOriginNs = clock.nsecsElapsed();
         int packet = 0;
         QVector<float> toneHeard;
+        // R-R3-21: each timer's largest gap between ticks, so a dry event
+        // says whether the harness starved (a late speaker or source tick)
+        // or the receiver did.
+        qint64 lastSourceTickNs = -1, maxSourceGapNs = 0;
+        qint64 lastSpeakerTickNs = -1, maxSpeakerGapNs = 0;
+        const auto noteTick = [&clock](qint64& last, qint64& maxGap) {
+            const qint64 now = clock.nsecsElapsed();
+            const qint64 gap = last >= 0 ? now - last : 0;
+            maxGap = std::max(maxGap, gap);
+            last = now;
+            return gap;
+        };
+        // R-R3-21: taken on the speaker tick that first sees each dry
+        // event after the first push (so within a tick of it): the
+        // receiver's counters, the deepest hold so far, and the gaps of
+        // that tick and of the source's latest tick.
+        double peakHoldMs = 0.0;
+        qint64 lastSourceGapNs = 0;
+        std::size_t dryEventsSeen = 0;
+        QStringList drySnapshots;
         QTimer source;
         source.setTimerType(Qt::PreciseTimer);
         source.setInterval(1);
         connect(&source, &QTimer::timeout, this, [&] {
+            lastSourceGapNs = noteTick(lastSourceTickNs, maxSourceGapNs);
             const qint64 dueFrames = (clock.nsecsElapsed() - sourceOriginNs) * 48 / 1'000'000;
             while (qint64(packet + 1) * PcmAudioCodecConfig::kPacketFrames <= dueFrames) {
                 receiver.submit(losslessPacketOf(packet, kSsrc, frameAt));
@@ -1841,6 +1947,29 @@ private slots:
         speaker.setTimerType(Qt::PreciseTimer);
         speaker.setInterval(1);
         connect(&speaker, &QTimer::timeout, this, [&] {
+            const qint64 speakerGapNs = noteTick(lastSpeakerTickNs, maxSpeakerGapNs);
+            {
+                const RemoteAudioReceiverTelemetry t = receiver.telemetry();
+                peakHoldMs = std::max(peakHoldMs, t.jitterHoldMs.value_or(0.0));
+                const auto events = bus->dryEventsForTesting();
+                for (; dryEventsSeen < events.size(); ++dryEventsSeen) {
+                    if (dryEventsSeen == 0) { continue; } // the first push's own
+                    drySnapshots << QStringLiteral(
+                        "%1 dry at %2 ms: late=%3 interruptions=%4 burstDropped=%5 gaps=%6 "
+                        "skipped=%7 concealed=%8 holdMs=%9 peakHoldMs=%10 underflows=%11 "
+                        "speakerQueuedMs=%12 maxWorkerWakeGapMs=%13 speakerTickGapMs=%14 "
+                        "sourceTickGapMs=%15")
+                        .arg(events[dryEventsSeen].frames)
+                        .arg(double(events[dryEventsSeen].atFrame) * 1000.0 / rate, 0, 'f', 1)
+                        .arg(t.latePackets).arg(t.linkInterruptions).arg(t.burstDroppedPackets)
+                        .arg(t.streamGapReanchors).arg(t.skippedIntervals).arg(t.concealedPackets)
+                        .arg(t.jitterHoldMs.value_or(-1)).arg(peakHoldMs).arg(t.underflows)
+                        .arg(t.speakerQueuedMs.value_or(-1), 0, 'f', 1)
+                        .arg(t.maxWorkerWakeGapMs, 0, 'f', 1)
+                        .arg(double(speakerGapNs) / 1e6, 0, 'f', 1)
+                        .arg(double(lastSourceGapNs) / 1e6, 0, 'f', 1);
+                }
+            }
             const qint64 before = bus->heard.size() / channels;
             if (bus->renderDue() <= 0) { return; }
             if (toneHeard.isEmpty()
@@ -1905,6 +2034,17 @@ private slots:
             qInfo().noquote() << QStringLiteral("first push at %1 ms; dry events: %2")
                 .arg(double(bus->firstPushDueFrameForTesting()) * 1000.0 / rate, 0, 'f', 1)
                 .arg(events.join(QStringLiteral(", ")));
+            // R-R3-21: counters at zero, a peak hold of 80 and a tick gap
+            // longer than the speaker's queue say the harness starved; late
+            // packets, interruptions, skips or a deeper hold say the new
+            // path ran. A dry event the speaker timer never saw (it ended
+            // first) has no snapshot.
+            for (const QString& snapshot : std::as_const(drySnapshots)) {
+                qInfo().noquote() << snapshot;
+            }
+            qInfo().noquote() << QStringLiteral("largest tick gaps: source %1 ms, speaker %2 ms")
+                .arg(double(maxSourceGapNs) / 1e6, 0, 'f', 1)
+                .arg(double(maxSpeakerGapNs) / 1e6, 0, 'f', 1);
         }
         QCOMPARE(bus->playedDryFramesForTesting(), bus->playedDryFramesAtFirstPushForTesting());
 
@@ -1944,6 +2084,515 @@ private slots:
         QVERIFY2(std::abs(missMs) <= accuracyMs + kToleranceMs,
                  qPrintable(QStringLiteral("missed by %1 ms, accuracy %2 ms").arg(missMs).arg(accuracyMs)));
         receiver.stop();
+    }
+
+    // R-R3-21, the operator's live test (2026-09-26): a jittery WAN path
+    // stalls for 250-480 ms and then delivers what it held back to back.
+    // 200 Opus packets at 40 ms, each delayed 0-30 ms on the way (seeded);
+    // every 2 s the link holds some of them and delivers them in one
+    // burst; 2% never arrive (seeded). Two rows: a
+    // 390 ms arrival gap (350 ms held, nine packets) and the top of the
+    // operator's range, a 460 ms gap (420 ms held, eleven packets). The
+    // window must ride through: no restart, no error, every interval of
+    // the timeline decoded, concealed or skipped (decoded + concealed +
+    // skipped intervals cover it), and the hold deepens after the first
+    // stall's late packets. A jittered steady stretch after it lets the
+    // hold ease back at 20 ms a second, and (review I2) the delay the
+    // operator hears comes back down with it, to near where it was before
+    // the first stall, after which nothing more is skipped. A
+    // restart here is answered as the window would, with a fresh context
+    // on the next packet, so the count is the count.
+    void wifiStallBurstConcealsWithoutRestart_data()
+    {
+        QTest::addColumn<qint64>("heldMs");
+        QTest::addColumn<int>("burst");
+        QTest::newRow("390 ms gaps") << qint64(350) << 9;
+        QTest::newRow("460 ms gaps") << qint64(420) << 11;
+    }
+    void wifiStallBurstConcealsWithoutRestart()
+    {
+        QFETCH(qint64, heldMs);
+        QFETCH(int, burst);
+        constexpr quint32 kSsrc = 761;
+        constexpr int kStallPackets = 200;
+        constexpr int kSteadyPackets = 650; // 26 s of steady link after
+        constexpr int kTotal = kStallPackets + kSteadyPackets;
+        constexpr int kCallbackFrames = 128;
+        constexpr qint64 kStallEveryMs = 2000;
+        constexpr qint64 kLeadMs = 200; // setup time before the first packet
+
+        OpusAudioEncoder encoder;
+        const QVector<float> pcm(3840, 0.1f);
+        QVector<QByteArray> packets;
+        for (int packet = 0; packet < kTotal; ++packet) {
+            const auto encoded = encoder.encode(pcm, quint16(packet), quint32(packet) * 1920u, kSsrc);
+            QCOMPARE(encoded.status, OpusAudioCodecStatus::Accepted);
+            packets.append(encoded.packet);
+        }
+        // When each packet arrives (ms from the start), or -1 if never.
+        QRandomGenerator random(20260926);
+        QVector<qint64> arrivalMs(kTotal);
+        int dropped = 0;
+        int largestBurst = 0;
+        for (int packet = 0, run = 0; packet < kTotal; ++packet) {
+            const qint64 nominal = qint64(packet) * 40;
+            const qint64 phase = nominal % kStallEveryMs;
+            const bool stalled = packet < kStallPackets && nominal >= kStallEveryMs && phase < heldMs;
+            run = stalled ? run + 1 : 0;
+            largestBurst = std::max(largestBurst, run);
+            arrivalMs[packet] = kLeadMs + (stalled ? nominal - phase + heldMs
+                                                   : nominal + random.bounded(31));
+            if (packet < kStallPackets && random.bounded(100) < 2) {
+                arrivalMs[packet] = -1;
+                ++dropped;
+            }
+        }
+        QCOMPARE(largestBurst, burst);
+
+        using Clock = std::chrono::steady_clock;
+        const auto started = Clock::now();
+        AudioEngine engine;
+        engine.setVolume(1.0f);
+        auto sink = std::make_unique<PacedAudioBus>();
+        auto* bus = sink.get();
+        bus->callbackFrames = kCallbackFrames;
+        engine.setSpeakersBusForTest(std::move(sink));
+        // The receiver's clock counts from the test's start, so a playout
+        // point says how long after its capture a sample is heard (up to a
+        // constant: the lead and the packet's own length).
+        RemoteAudioReceiver receiver(&engine, nullptr, [started] {
+            return qint64(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                Clock::now() - started).count());
+        });
+        QSignalSpy errors(&receiver, &RemoteAudioReceiver::errorOccurred);
+        QStringList restartReasons;
+        int next = 0;
+        connect(&receiver, &RemoteAudioReceiver::restartRequested, this,
+                [&](const QString& reason, RemoteAudioReceiver::Fault) {
+            restartReasons << reason;
+            receiver.start(kSsrc, quint32(next) * 1920u);
+        });
+        QVERIFY(receiver.start(kSsrc, 0));
+
+        std::jthread device([bus](std::stop_token stop) {
+            const auto begun = Clock::now();
+            quint64 callback = 1;
+            while (!stop.stop_requested()) {
+                std::this_thread::sleep_until(begun + std::chrono::nanoseconds(
+                    callback * quint64(kCallbackFrames) * 1'000'000'000ull / 48'000ull));
+                if (stop.stop_requested()) { break; }
+                bus->render(kCallbackFrames);
+                ++callback;
+            }
+        });
+
+        double peakHoldMs = 0.0;
+        const qint64 endMs = kLeadMs + qint64(kTotal) * 40;
+        // Skipped intervals as of 3 s before the end, to show nothing more
+        // is skipped once the delay is back.
+        quint64 skippedBeforeLast3s = 0;
+        // The heard delay (ms, up to a constant) sampled over the run, by
+        // when it was sampled (ms from the start).
+        QList<std::pair<qint64, double>> heardDelay;
+        // The same samples' reorder queue and rate-matcher fill (ms), for
+        // a failure's log.
+        QList<std::pair<double, double>> buffers;
+        const auto sample = [&] {
+            const auto telemetry = receiver.telemetry();
+            if (telemetry.jitterHoldMs) {
+                peakHoldMs = std::max(peakHoldMs, *telemetry.jitterHoldMs);
+            }
+            if (std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - started).count()
+                < endMs - 3000) {
+                skippedBeforeLast3s = telemetry.skippedIntervals;
+            }
+            if (telemetry.playout) {
+                const RemoteAudioPlayoutPoint& point = *telemetry.playout;
+                const qint64 capturedNs = qint64(point.rtpTimestamp) * 1'000'000'000 / 48'000;
+                // As the app reads it: less the matcher's stretch while it
+                // corrects (see playsOnEverySpeakerFormat).
+                heardDelay.append({std::chrono::duration_cast<std::chrono::milliseconds>(
+                                       Clock::now() - started).count(),
+                                   double(point.playoutNs() - point.matcherStretchNs() - capturedNs)
+                                       / 1e6});
+                buffers.append({telemetry.reorderQueuedMs.value_or(-1),
+                                double(point.matcherFillFrames) / 48.0});
+            }
+        };
+        for (next = 0; next < kTotal; ++next) {
+            if (arrivalMs.at(next) < 0) { continue; }
+            const auto due = started + std::chrono::milliseconds(arrivalMs.at(next));
+            // The Qt loop runs while waiting, so a restart is answered.
+            while (Clock::now() < due) {
+                QCoreApplication::processEvents();
+                sample();
+                std::this_thread::sleep_until(std::min(due, Clock::now() + std::chrono::milliseconds(2)));
+            }
+            receiver.submit(packets.at(next));
+        }
+        // Wait until the last packet has been released for playback.
+        RemoteAudioReceiverTelemetry telemetry;
+        const auto deadline = Clock::now() + std::chrono::milliseconds(1500);
+        while (Clock::now() < deadline) {
+            QCoreApplication::processEvents();
+            telemetry = receiver.telemetry();
+            if (telemetry.release && telemetry.release->rtpTimestamp >= quint32(kTotal) * 1920u) {
+                break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(2));
+        }
+        const std::optional<double> holdAtEnd = telemetry.jitterHoldMs;
+        const std::optional<double> queuedAtEnd = telemetry.reorderQueuedMs;
+        device.request_stop();
+        device.join();
+        QCoreApplication::processEvents();
+        receiver.stop();
+
+        // Before the first stall (after start-up settles), and over the
+        // last second of the steady stretch.
+        const auto meanDelay = [&](qint64 fromMs, qint64 toMs) {
+            double sum = 0.0;
+            int count = 0;
+            for (const auto& [atMs, delayMs] : heardDelay) {
+                if (atMs >= fromMs && atMs < toMs) { sum += delayMs; ++count; }
+            }
+            return count > 0 ? sum / count : -1.0;
+        };
+        const double baselineDelayMs = meanDelay(kLeadMs + 800, kLeadMs + kStallEveryMs - 50);
+        const double endDelayMs = meanDelay(endMs - 1000, endMs);
+        double peakDelayMs = 0.0;
+        for (const auto& entry : heardDelay) { peakDelayMs = std::max(peakDelayMs, entry.second); }
+
+        const QString evidence = QStringLiteral(
+            "restarts=%1 errors=%2 decoded=%3 concealed=%4 late=%5 dropped=%6 skipped=%7 "
+            "gaps=%8 burstDropped=%9 interruptions=%10/rewound %19 peakHoldMs=%11 holdAtEndMs=%12 "
+            "queuedAtEndMs=%13 delayMs baseline=%14 peak=%15 end=%16 maxWorkerWakeGapMs=%17 "
+            "first=%18")
+            .arg(restartReasons.size()).arg(errors.count())
+            .arg(telemetry.decodedPackets).arg(telemetry.concealedPackets)
+            .arg(telemetry.latePackets).arg(dropped).arg(telemetry.skippedIntervals)
+            .arg(telemetry.streamGapReanchors).arg(telemetry.burstDroppedPackets)
+            .arg(telemetry.linkInterruptions)
+            .arg(peakHoldMs).arg(holdAtEnd.value_or(-1)).arg(queuedAtEnd.value_or(-1))
+            .arg(baselineDelayMs, 0, 'f', 1).arg(peakDelayMs, 0, 'f', 1).arg(endDelayMs, 0, 'f', 1)
+            .arg(telemetry.maxWorkerWakeGapMs, 0, 'f', 1)
+            .arg(restartReasons.isEmpty() ? QStringLiteral("none") : restartReasons.first())
+            .arg(telemetry.rewoundIntervals);
+        qInfo().noquote() << evidence;
+        {
+            // The heard delay second by second, for a failure's log.
+            QStringList series;
+            for (qint64 second = 0; second * 1000 < endMs; ++second) {
+                double reorder = 0.0, fill = 0.0;
+                int count = 0;
+                for (qsizetype i = 0; i < heardDelay.size(); ++i) {
+                    if (heardDelay.at(i).first / 1000 == second) {
+                        reorder += buffers.at(i).first;
+                        fill += buffers.at(i).second;
+                        ++count;
+                    }
+                }
+                series << QStringLiteral("%1/%2/%3")
+                              .arg(meanDelay(second * 1000, second * 1000 + 1000), 0, 'f', 0)
+                              .arg(count ? reorder / count : -1, 0, 'f', 0)
+                              .arg(count ? fill / count : -1, 0, 'f', 0);
+            }
+            qInfo().noquote() << QStringLiteral("heard delay/reorder/matcher ms by second: %1")
+                                     .arg(series.join(QLatin1Char(' ')));
+        }
+        QVERIFY2(restartReasons.isEmpty(), qPrintable(evidence));
+        QVERIFY2(errors.isEmpty(), qPrintable(evidence));
+        QVERIFY2(telemetry.release && telemetry.release->rtpTimestamp == quint32(kTotal) * 1920u,
+                 qPrintable(evidence));
+        // The whole timeline, exactly: every interval decoded, concealed or
+        // skipped, less the intervals a rewind replayed (heard concealed,
+        // then decoded).
+        QVERIFY2(telemetry.decodedPackets + telemetry.concealedPackets + telemetry.skippedIntervals
+                         - telemetry.rewoundIntervals == quint64(kTotal),
+                 qPrintable(evidence));
+        // Nearly all of it is the real audio: beyond the packets the link
+        // lost, at most one burst's worth was concealed instead of played,
+        // and what was skipped to bring the delay back down.
+        QVERIFY2(telemetry.decodedPackets + telemetry.trimmedPackets
+                     >= quint64(kTotal - dropped - largestBurst),
+                 qPrintable(evidence));
+        // Once the delay is back, on-time audio is not skipped: the jitter
+        // of the steady stretch is no standing excess.
+        QVERIFY2(telemetry.skippedIntervals == skippedBeforeLast3s, qPrintable(evidence));
+        // The first stall's packets came in late and deepened the hold.
+        QVERIFY2(telemetry.latePackets > 0 && telemetry.linkInterruptions > 0, qPrintable(evidence));
+        QVERIFY2(peakHoldMs > double(AudioJitterBuffer::kHoldNs) / 1e6 + 100.0,
+                 qPrintable(evidence));
+        QVERIFY2(peakHoldMs <= double(AudioJitterBuffer::kMaxHoldNs) / 1e6, qPrintable(evidence));
+        // The steady stretch eased the hold all the way back, and the delay
+        // with it: the readout's hold and what the operator hears agree.
+        QVERIFY2(holdAtEnd && *holdAtEnd == double(AudioJitterBuffer::kHoldNs) / 1e6,
+                 qPrintable(evidence));
+        QVERIFY2(baselineDelayMs > 0.0 && peakDelayMs > baselineDelayMs + 150.0,
+                 qPrintable(evidence));
+        // A receive-worker stall leaves its backlog standing with no late
+        // packet, which is not shed (see the report's follow-up); only a
+        // worker that kept waking is held to the delay's return.
+        if (telemetry.maxWorkerWakeGapMs < 50.0) {
+            QVERIFY2(endDelayMs > 0.0 && endDelayMs <= baselineDelayMs + 80.0,
+                     qPrintable(evidence));
+        } else {
+            qInfo().noquote() << QStringLiteral("delay-return check not applied: the worker went "
+                                                "%1 ms between wakes")
+                .arg(telemetry.maxWorkerWakeGapMs, 0, 'f', 1);
+        }
+    }
+
+    // R-R3-21 (re-review, item 6): a deterministic look at the path the
+    // playsOnEverySpeakerFormat dry events could come from. A lossless
+    // stream on a 1 ms callback speaker with its own play clock: one packet
+    // comes 180 ms late, after later packets have played, so it stays late
+    // and deepens the hold without adding audio, and playback runs on
+    // demand, with the deeper hold's audio queued ahead (about 200 ms).
+    // Then the producer pauses (the paused packets arrive together at its
+    // end): 40 ms, well inside that lead, and 248 ms, more than it, so the
+    // queue runs empty mid-stream and the rate matcher would underflow. The
+    // window must stay on the air through the stream: no restart, no
+    // error, and the speaker never runs dry once playing. (The stream's
+    // end, a true outage, is not judged here.)
+    void lateAfterPlayedAudioThenAPauseStaysOnTheAir_data()
+    {
+        QTest::addColumn<int>("pausePackets");
+        // Item 6's own question: a short pause after a grow-without-rewind
+        // does not starve the speaker (about 200 ms is queued ahead).
+        QTest::newRow("40 ms pause") << 10;
+        // A pause longer than that lead runs the queue empty.
+        QTest::newRow("248 ms pause") << 62;
+    }
+    void lateAfterPlayedAudioThenAPauseStaysOnTheAir()
+    {
+        QFETCH(int, pausePackets);
+        constexpr quint32 kSsrc = 764;
+        constexpr int kPackets = 750;               // 3 s at 4 ms
+        constexpr int kLate = 250;                  // sent 180 ms late
+        constexpr int kPauseFrom = 400;             // then held for the pause
+        const int kPauseTo = kPauseFrom + pausePackets;
+        AudioEngine engine;
+        engine.setVolume(1.0f);
+        auto sink = std::make_unique<PacedAudioBus>();
+        auto* bus = sink.get();
+        bus->callbackFrames = 48; // a 1 ms callback device
+        engine.setSpeakersBusForTest(std::move(sink));
+        QElapsedTimer clock;
+        clock.start();
+        RemoteAudioReceiver receiver(&engine, nullptr, [&clock] { return clock.nsecsElapsed(); });
+        QSignalSpy errors(&receiver, &RemoteAudioReceiver::errorOccurred);
+        QSignalSpy restarts(&receiver, &RemoteAudioReceiver::restartRequested);
+        QVERIFY(receiver.start(kSsrc, 0, RemoteAudioProfile::Lossless));
+        bus->setPlayClockForTesting([&clock] { return clock.nsecsElapsed(); });
+        std::jthread device([bus](std::stop_token stop) {
+            while (!stop.stop_requested()) {
+                bus->renderDue();
+                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+            }
+        });
+        std::vector<std::pair<qint64, int>> schedule; // (ms, packet)
+        for (int p = 0; p < kPackets; ++p) {
+            qint64 at = qint64(p) * 4;
+            if (p == kLate) { at += 180; }
+            if (p >= kPauseFrom && p < kPauseTo) { at = qint64(kPauseTo) * 4; }
+            schedule.push_back({at, p});
+        }
+        std::stable_sort(schedule.begin(), schedule.end(),
+                         [](const auto& a, const auto& b) { return a.first < b.first; });
+        using Clock = std::chrono::steady_clock;
+        const auto started = Clock::now() + std::chrono::milliseconds(50);
+        for (const auto& [at, p] : schedule) {
+            std::this_thread::sleep_until(started + std::chrono::milliseconds(at));
+            receiver.submit(losslessTonePacket(p, kSsrc));
+        }
+        // The stream's last packet is in; judge up to here.
+        const qint64 streamEndFrame = (clock.nsecsElapsed() - bus->playClockOriginNs()) * 48 / 1'000'000;
+        QCoreApplication::processEvents();
+        const RemoteAudioReceiverTelemetry telemetry = receiver.telemetry();
+        device.request_stop();
+        device.join();
+        receiver.stop();
+        QStringList dry;
+        qint64 dryInStream = 0;
+        for (const auto& e : bus->dryEventsForTesting()) {
+            dry << QStringLiteral("%1 at %2 ms").arg(e.frames).arg(double(e.atFrame) / 48.0, 0, 'f', 1);
+            if (e.atFrame < streamEndFrame) { dryInStream += e.frames; }
+        }
+        const QString evidence = QStringLiteral(
+            "restarts=%1 errors=%2 reason=%3 late=%4 interruptions=%5 concealed=%6 decoded=%7 "
+            "holdMs=%8 underflows=%9 maxWakeGapMs=%10 firstPushMs=%11 dry=[%12] "
+            "accepted=%13 gaps=%14 skipped=%15 burstDropped=%16 duplicate=%17 missing=%18")
+            .arg(restarts.count()).arg(errors.count())
+            .arg(restarts.isEmpty() ? QStringLiteral("none") : restarts.first().first().toString())
+            .arg(telemetry.latePackets).arg(telemetry.linkInterruptions)
+            .arg(telemetry.concealedPackets).arg(telemetry.decodedPackets)
+            .arg(telemetry.jitterHoldMs.value_or(-1)).arg(telemetry.underflows)
+            .arg(telemetry.maxWorkerWakeGapMs, 0, 'f', 1)
+            .arg(double(bus->firstPushDueFrameForTesting()) / 48.0, 0, 'f', 1)
+            .arg(dry.join(QStringLiteral(", ")))
+            .arg(telemetry.acceptedPackets).arg(telemetry.streamGapReanchors)
+            .arg(telemetry.skippedIntervals).arg(telemetry.burstDroppedPackets)
+            .arg(telemetry.duplicatePackets).arg(telemetry.missingPackets);
+        qInfo().noquote() << evidence;
+        QVERIFY2(restarts.isEmpty() && errors.isEmpty(), qPrintable(evidence));
+        QVERIFY2(telemetry.latePackets >= 1 && telemetry.linkInterruptions >= 1, qPrintable(evidence));
+        // The long pause did run the queue dry: its intervals were
+        // concealed. The short one needed none.
+        if (pausePackets > 50) {
+            QVERIFY2(telemetry.concealedPackets > 1, qPrintable(evidence));
+        } else {
+            QVERIFY2(telemetry.concealedPackets == 1, qPrintable(evidence));
+        }
+        // The speaker keeps 20 ms queued; a receive worker the machine left
+        // unscheduled longer than that runs it dry whatever the stream does
+        // (the harness starved, not this path), so only a worker that kept
+        // waking is held to it. The counters above still apply.
+        if (telemetry.maxWorkerWakeGapMs < 15.0) {
+            QVERIFY2(dryInStream == bus->playedDryFramesAtFirstPushForTesting(),
+                     qPrintable(evidence));
+        } else {
+            qInfo().noquote() << QStringLiteral("dry check not applied: the worker went %1 ms "
+                                                "between wakes")
+                .arg(telemetry.maxWorkerWakeGapMs, 0, 'f', 1);
+        }
+    }
+
+    // R-R3-21: a speaker device that takes 400 ms to start pulling audio is
+    // a slow device, not a dead link. Packets keep arriving at 40 ms; the
+    // window must not ask the Core for a fresh context while it waits.
+    void speakerThatStartsLateCausesNoRestart()
+    {
+        constexpr quint32 kSsrc = 762;
+        constexpr int kPackets = 60;
+        OpusAudioEncoder encoder;
+        const QVector<float> pcm(3840, 0.1f);
+        QVector<QByteArray> packets;
+        for (int packet = 0; packet < kPackets; ++packet) {
+            const auto encoded = encoder.encode(pcm, quint16(packet), quint32(packet) * 1920u, kSsrc);
+            QCOMPARE(encoded.status, OpusAudioCodecStatus::Accepted);
+            packets.append(encoded.packet);
+        }
+        AudioEngine engine;
+        engine.setVolume(1.0f);
+        auto sink = std::make_unique<PacedAudioBus>();
+        auto* bus = sink.get();
+        engine.setSpeakersBusForTest(std::move(sink));
+        RemoteAudioReceiver receiver(&engine);
+        QSignalSpy errors(&receiver, &RemoteAudioReceiver::errorOccurred);
+        QSignalSpy restarts(&receiver, &RemoteAudioReceiver::restartRequested);
+        QVERIFY(receiver.start(kSsrc, 0));
+        using Clock = std::chrono::steady_clock;
+        const auto started = Clock::now();
+        std::jthread device([bus, started](std::stop_token stop) {
+            // Nothing is pulled for the first 400 ms.
+            const auto first = started + std::chrono::milliseconds(400);
+            quint64 callback = 0;
+            while (!stop.stop_requested()) {
+                std::this_thread::sleep_until(first + std::chrono::nanoseconds(
+                    callback * 480ull * 1'000'000'000ull / 48'000ull));
+                if (stop.stop_requested()) { break; }
+                bus->render(480);
+                ++callback;
+            }
+        });
+        for (int packet = 0; packet < kPackets; ++packet) {
+            std::this_thread::sleep_until(started + std::chrono::milliseconds(40 * packet));
+            receiver.submit(packets.at(packet));
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        device.request_stop();
+        device.join();
+        QCoreApplication::processEvents();
+        const bool running = receiver.isRunning();
+        const auto telemetry = receiver.telemetry();
+        receiver.stop();
+        const QString evidence = QStringLiteral("running=%1 restarts=%2 errors=%3 decoded=%4 "
+                                                "concealed=%5 gaps=%6 reason=%7")
+            .arg(running).arg(restarts.count()).arg(errors.count())
+            .arg(telemetry.decodedPackets).arg(telemetry.concealedPackets)
+            .arg(telemetry.streamGapReanchors)
+            .arg(restarts.isEmpty() ? (errors.isEmpty() ? QStringLiteral("none")
+                                                        : errors.first().first().toString())
+                                    : restarts.first().first().toString());
+        QVERIFY2(running && restarts.isEmpty() && errors.isEmpty(), qPrintable(evidence));
+        QVERIFY2(telemetry.decodedPackets >= quint64(kPackets / 2), qPrintable(evidence));
+    }
+
+    // R-R3-21: a true outage still asks for a fresh context, once. The
+    // Core's packets stop entirely (late ones included) for 600 ms while
+    // the speaker plays on; the window asks for a new context after the
+    // 500 ms bound, with the no-packets fault.
+    void trueOutageAsksForOneFreshContext()
+    {
+        constexpr quint32 kSsrc = 763;
+        constexpr int kPackets = 25;
+        OpusAudioEncoder encoder;
+        const QVector<float> pcm(3840, 0.1f);
+        AudioEngine engine;
+        engine.setVolume(1.0f);
+        auto sink = std::make_unique<PacedAudioBus>();
+        auto* bus = sink.get();
+        engine.setSpeakersBusForTest(std::move(sink));
+        RemoteAudioReceiver receiver(&engine);
+        QSignalSpy errors(&receiver, &RemoteAudioReceiver::errorOccurred);
+        QSignalSpy restarts(&receiver, &RemoteAudioReceiver::restartRequested);
+        QVERIFY(receiver.start(kSsrc, 0));
+        using Clock = std::chrono::steady_clock;
+        const auto started = Clock::now();
+        std::jthread device([bus, started](std::stop_token stop) {
+            quint64 callback = 1;
+            while (!stop.stop_requested()) {
+                std::this_thread::sleep_until(started + std::chrono::nanoseconds(
+                    callback * 480ull * 1'000'000'000ull / 48'000ull));
+                if (stop.stop_requested()) { break; }
+                bus->render(480);
+                ++callback;
+            }
+        });
+        for (int packet = 0; packet < kPackets; ++packet) {
+            std::this_thread::sleep_until(started + std::chrono::milliseconds(40 * packet));
+            const auto encoded = encoder.encode(pcm, quint16(packet), quint32(packet) * 1920u, kSsrc);
+            receiver.submit(encoded.packet);
+        }
+        QCOMPARE(restarts.count(), 0);
+        // 600 ms with nothing at all.
+        QTRY_VERIFY_WITH_TIMEOUT(!restarts.isEmpty() || !errors.isEmpty(), 1000);
+        QTest::qWait(600 - 500);
+        device.request_stop();
+        device.join();
+        QCOMPARE(errors.count(), 0);
+        QCOMPARE(restarts.count(), 1);
+        QCOMPARE(restarts.first().at(1).value<RemoteAudioReceiver::Fault>(),
+                 RemoteAudioReceiver::Fault::NoPackets);
+        receiver.stop();
+    }
+
+    // R-R3-21: repeated true outages back off. The window waits 1, 2, 4 s
+    // (counted from its last request, capped at 4 s) before asking the
+    // Core again, and a context that stays healthy for 10 s starts the
+    // count over.
+    void repeatedOutagesBackOff()
+    {
+        RemoteAudioRestartBackoff backoff;
+        // Each context fails 500 ms after it was requested.
+        qint64 requestedAt = 0;
+        QList<qint64> waits;
+        for (int outage = 0; outage < 5; ++outage) {
+            const qint64 failedAt = requestedAt + 500;
+            const qint64 wait = backoff.nextDelayMs(failedAt, requestedAt);
+            waits << wait + 500; // from the previous request
+            requestedAt = failedAt + wait;
+        }
+        QCOMPARE(waits, (QList<qint64>{1000, 2000, 4000, 4000, 4000}));
+        // A context that ran 10 s is healthy: the next wait is 1 s again
+        // (already past, so none), then 2 s.
+        QCOMPARE(backoff.nextDelayMs(requestedAt + 10'000, requestedAt), qint64(0));
+        QCOMPARE(backoff.streak(), 1);
+        requestedAt += 10'000;
+        QCOMPARE(backoff.nextDelayMs(requestedAt + 500, requestedAt), qint64(1500));
+        backoff.reset();
+        QCOMPARE(backoff.nextDelayMs(700, 0), qint64(300));
     }
 };
 QTEST_GUILESS_MAIN(TstRemoteAudioReceiver)

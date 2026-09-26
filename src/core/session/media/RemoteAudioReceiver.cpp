@@ -1,6 +1,7 @@
 // no-port-check: NereusSDR-original remote audio lifecycle and worker wiring.
 #include "core/session/media/RemoteAudioReceiver.h"
 #include "core/AudioEngine.h"
+#include "core/audio/RealtimeAudioPriority.h"
 #include "core/session/media/AudioJitterBuffer.h"
 #include "core/session/media/OpusAudioCodec.h"
 #include "core/session/media/PcmAudioCodec.h"
@@ -121,6 +122,17 @@ struct RemoteAudioReceiver::Private {
     std::atomic<bool> hasArrivalJitterMs{false};
     std::atomic<double> arrivalJitterMs{0.0};
     std::atomic<int> reorderQueuedPackets{-1};
+    // R-R3-21: the jitter queue's adaptive hold, a live gauge like
+    // reorderQueuedPackets (-1: not measured), and the counters of what
+    // this context rode through on this computer (see the telemetry).
+    std::atomic<qint64> jitterHoldNs{-1};
+    std::atomic<quint64> burstDropped{0};
+    std::atomic<quint64> streamGapReanchors{0};
+    std::atomic<quint64> trimmed{0};
+    std::atomic<quint64> skipped{0};
+    std::atomic<quint64> rewound{0};
+    std::atomic<qint64> maxWakeGapNs{0};
+    std::atomic<quint64> linkInterruptions{0};
     // Rate matcher ratio, published by the playback loop (R-R3-07). Like
     // reorderQueuedPackets it is reported only for a running context.
     std::atomic<bool> hasDriftRatio{false};
@@ -137,7 +149,8 @@ struct RemoteAudioReceiver::Private {
     // The context's profile and its arrival bound: the jitter window in
     // packets (8 Opus, 80 lossless), so the bound is the same 320 ms for
     // both. Set by start() before the worker runs; read by submit() only
-    // while running.
+    // while running. R-R3-21: the worker moves the bound with the jitter
+    // window as the hold adapts.
     std::atomic<RemoteAudioProfile> profile{RemoteAudioProfile::Opus};
     std::atomic<int> arrivalBoundPackets{
         AudioJitterBuffer::windowPackets(AudioJitterBuffer::kDefaultPacketDurationNs)};
@@ -258,6 +271,17 @@ RemoteAudioReceiverTelemetry RemoteAudioReceiver::telemetry() const
         snapshot.duplicatePackets = d->duplicate.load();
         snapshot.rejectedHeaders = d->rejectedHeaders.load();
         snapshot.startDiscardedPackets = d->startDiscarded.load();
+        snapshot.burstDroppedPackets = d->burstDropped.load();
+        snapshot.streamGapReanchors = d->streamGapReanchors.load();
+        snapshot.trimmedPackets = d->trimmed.load();
+        snapshot.skippedIntervals = d->skipped.load();
+        snapshot.rewoundIntervals = d->rewound.load();
+        snapshot.burstDroppedAudioMs = double(snapshot.burstDroppedPackets)
+            * (double(d->packetDurationNs.load()) / 1'000'000.0);
+        snapshot.skippedAudioMs = double(snapshot.skippedIntervals)
+            * (double(d->packetDurationNs.load()) / 1'000'000.0);
+        snapshot.maxWorkerWakeGapMs = double(d->maxWakeGapNs.load()) / 1'000'000.0;
+        snapshot.linkInterruptions = d->linkInterruptions.load();
         snapshot.receivedAudioPayloadBytes = d->receivedAudioPayloadBytes.load();
         snapshot.deviceConsumedFrames = d->deviceConsumedFrames.load();
         snapshot.underflows = d->underflows.load();
@@ -286,6 +310,10 @@ RemoteAudioReceiverTelemetry RemoteAudioReceiver::telemetry() const
                 snapshot.reorderQueuedMs = double(reorderQueued)
                     * (double(d->packetDurationNs.load()) / 1'000'000.0);
             }
+            const qint64 holdNs = d->jitterHoldNs.load();
+            if (holdNs >= 0) {
+                snapshot.jitterHoldMs = double(holdNs) / 1'000'000.0;
+            }
             if (d->hasDriftRatio.load()) {
                 snapshot.driftRatio = d->driftRatio.load();
             }
@@ -311,6 +339,7 @@ void RemoteAudioReceiver::stop()
     d->running.store(false);
     d->speakerQueuedFrames.store(-1);
     d->reorderQueuedPackets.store(-1);
+    d->jitterHoldNs.store(-1);
     ++d->generation;
     if (d->worker.joinable()) {
         d->worker.request_stop();
@@ -380,6 +409,14 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
     d->hasArrivalJitterMs.store(false);
     d->arrivalJitterMs.store(0.0);
     d->reorderQueuedPackets.store(-1);
+    d->jitterHoldNs.store(-1);
+    d->burstDropped.store(0);
+    d->streamGapReanchors.store(0);
+    d->trimmed.store(0);
+    d->skipped.store(0);
+    d->rewound.store(0);
+    d->maxWakeGapNs.store(0);
+    d->linkInterruptions.store(0);
     d->hasDriftRatio.store(false);
     d->driftRatio.store(1.0);
     d->deviceRateHz.store(speakerFormat.sampleRate);
@@ -395,6 +432,15 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
     const quint64 generation = d->generation;
     d->worker = std::jthread([this, ssrc, firstTimestamp, generation, profile,
                               speakerFormat](std::stop_token stop) {
+        // R-R3-21: this thread feeds the speaker's 20 ms queue, so it runs
+        // in the latency-critical class, as the local DSP feeders do
+        // (RxDspWorker, TxWorkerThread). At the default class a busy Mac
+        // left it unscheduled for over 20 ms mid-stream and the speaker
+        // ran dry (tst_remote_audio_receiver playsOnEverySpeakerFormat).
+        // A per-thread attribute: it ends with the thread. Said in the log
+        // once per process, not once per context.
+        static std::atomic<bool> priorityLogged{false};
+        elevateLatencyCriticalThreadPriority(!priorityLogged.exchange(true));
         const bool lossless = profile == RemoteAudioProfile::Lossless;
         const bool sinkMode = bool(d->sink);
         const int packetFrames = packetFramesFor(profile);
@@ -417,6 +463,13 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
         };
         AudioJitterBuffer jitter(packetFrames, packetDurationNsFor(profile));
         jitter.reset(firstTimestamp);
+        // R-R3-21: the PCM sink is paced by the hold alone, so a late packet
+        // there only stays late: no rewind and no deeper hold, which would
+        // hand an app a silent pause and then a burst mid-transmission.
+        jitter.setAdaptive(!sinkMode);
+        quint64 publishedTrimmed = 0;
+        quint64 publishedSkipped = 0;
+        quint64 publishedRewound = 0;
         // Only an Opus context needs the Opus decoder; a lossless packet is
         // read directly, and a lost one is silence.
         std::optional<OpusAudioDecoder> decoder;
@@ -471,6 +524,7 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
         const auto notify = [&](const QString& reason, Fault fault, bool fatal = false) {
             d->speakerQueuedFrames.store(-1);
             d->reorderQueuedPackets.store(-1);
+            d->jitterHoldNs.store(-1);
             d->running.store(false);
             const auto stats = publishMatcherStats();
             const auto pacing = d->engine ? d->engine->remotePlaybackPacing(d->output)
@@ -482,7 +536,7 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
                 " [ageMs=%1 accepted=%2 decoded=%3 plc=%4 late=%5 invalid=%6 duplicate=%7"
                 " rejectedHeaders=%8 lastPacketMs=%9 maxArrivalGapMs=%10 maxWakeGapMs=%11"
                 " jitterPackets=%12 ratio=%13 fill=%14 callback=%15 deviceQueued=%16"
-                " startDiscarded=%17]")
+                " startDiscarded=%17 holdMs=%18 interruptions=%19]")
                 .arg((now - startedAt) / 1'000'000).arg(accepted)
                 .arg(d->decoded.load()).arg(d->concealed.load()).arg(late).arg(invalid)
                 .arg(duplicate).arg(d->rejectedHeaders.load())
@@ -491,7 +545,8 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
                 .arg(stats.currentRatio, 0, 'f', 7).arg(stats.ringFillFrames)
                 .arg(pacing ? pacing->callbackFrames : 0)
                 .arg(pacing ? pacing->queuedFrames : 0)
-                .arg(d->startDiscarded.load());
+                .arg(d->startDiscarded.load())
+                .arg(jitter.holdNs() / 1'000'000).arg(d->linkInterruptions.load());
             QMetaObject::invokeMethod(this, [this, generation, detail, fault, fatal] {
                 if (d->generation != generation) { return; }
                 if (fatal) { emit errorOccurred(detail, fault); }
@@ -618,6 +673,33 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
         bool sinkIdle = false;
         quint64 telemetryDeviceFrames = deviceConsumedBase;
         qint64 lastDeviceProgress = lastPacket;
+        // R-R3-21: when the speaker first took audio in this context. Until
+        // it has, a stream that is playing is waiting on a device that is
+        // still starting, not on the network, so the no-packet rule waits.
+        std::optional<qint64> speakerStartedAt;
+        // R-R3-21: the hold and the arrival bound it sets, as published.
+        qint64 publishedHoldNs = -1;
+        const auto publishHold = [&] {
+            // Shedding happens as packets are released; published here,
+            // at most a wake later.
+            if (jitter.trimmedPackets() != publishedTrimmed) {
+                d->trimmed.fetch_add(jitter.trimmedPackets() - publishedTrimmed);
+                publishedTrimmed = jitter.trimmedPackets();
+            }
+            if (jitter.rewoundIntervals() != publishedRewound) {
+                d->rewound.fetch_add(jitter.rewoundIntervals() - publishedRewound);
+                publishedRewound = jitter.rewoundIntervals();
+            }
+            if (jitter.skippedIntervals() != publishedSkipped) {
+                d->skipped.fetch_add(jitter.skippedIntervals() - publishedSkipped);
+                publishedSkipped = jitter.skippedIntervals();
+            }
+            if (jitter.holdNs() == publishedHoldNs) { return; }
+            publishedHoldNs = jitter.holdNs();
+            d->jitterHoldNs.store(publishedHoldNs);
+            d->arrivalBoundPackets.store(jitter.maxPackets());
+        };
+        publishHold();
         while (!stop.stop_requested()) {
             std::deque<Private::Packet> incoming;
             bool overflow = false;
@@ -634,13 +716,24 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
                 d->startBacklog = false;
             }
             if (stop.stop_requested()) { break; }
+            publishHold();
             const qint64 wakeAt = d->now();
             maxWakeGap = std::max(maxWakeGap, wakeAt - previousWake);
+            d->maxWakeGapNs.store(maxWakeGap);
             previousWake = wakeAt;
+            // R-R3-21: a network interruption this wake (an arrival burst,
+            // a stream gap, or packets that came after their intervals were
+            // concealed), counted once for the lossless link trial.
+            bool interrupted = false;
             if (overflow) {
-                notify(QStringLiteral("Remote audio arrival queue exceeded its latency bound"),
-                       Fault::ArrivalBurst);
-                return;
+                // R-R3-21: more packets arrived at once than the arrival
+                // bound holds, and the newest were dropped at the door
+                // (counted in submit()). The link is alive, so this is
+                // concealed loss, not a reason to ask the Core for a fresh
+                // context: the batch plays on and the jitter queue conceals
+                // what was dropped. Only a true outage (no packets at all)
+                // or a real fault restarts.
+                interrupted = true;
             }
             if (sinkIdle && !incoming.empty()) {
                 // R-R3-43: the quiet stream starts again on the earliest
@@ -664,11 +757,17 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
                     maxArrivalGap = std::max(maxArrivalGap, packet.arrival - previousArrival);
                 }
                 previousArrival = packet.arrival;
-                const auto admitted = jitter.insert(packet.bytes, packet.timestamp, packet.arrival);
+                auto admitted = jitter.insert(packet.bytes, packet.timestamp, packet.arrival);
                 if (admitted == AudioJitterBuffer::Admission::OutsideWindow) {
-                    notify(QStringLiteral("Remote audio needs a fresh context after a stream gap"),
-                           Fault::StreamGap);
-                    return;
+                    // R-R3-21: a stream gap re-anchors here: the head moves
+                    // forward just far enough for this packet to fit the
+                    // window, dropping only the oldest queued audio. The
+                    // Core is not asked for a fresh context; its stream is
+                    // alive.
+                    ++d->streamGapReanchors;
+                    interrupted = true;
+                    jitter.advanceToFit(packet.timestamp);
+                    admitted = jitter.insert(packet.bytes, packet.timestamp, packet.arrival);
                 }
                 switch (admitted) {
                 case AudioJitterBuffer::Admission::Accepted:
@@ -680,9 +779,32 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
                     d->hasLastAdmittedPacket.store(true);
                     receptionStats.observe(packet.sequence, packet.timestamp, packet.arrival);
                     break;
+                case AudioJitterBuffer::Admission::Rewound:
+                    // R-R3-21: late, after its interval was concealed; the
+                    // queue rewound to play it, so it is admitted as well
+                    // as counted late.
+                    interrupted = true;
+                    admittedAny = true;
+                    ++accepted;
+                    ++d->accepted;
+                    ++late;
+                    ++d->late;
+                    lastPacket = packet.arrival;
+                    d->lastAdmittedPacketNs.store(packet.arrival);
+                    d->hasLastAdmittedPacket.store(true);
+                    receptionStats.observe(packet.sequence, packet.timestamp, packet.arrival);
+                    break;
+                case AudioJitterBuffer::Admission::LateConcealed:
+                    // R-R3-21: its interval was concealed: the link stalled.
+                    interrupted = true;
+                    [[fallthrough]];
                 case AudioJitterBuffer::Admission::Late:
                     ++late;
                     ++d->late;
+                    // R-R3-21: a late packet proves the link is alive. Too
+                    // late to rewind for, it still deepened the hold (a
+                    // late copy of a packet that played changes nothing).
+                    lastPacket = packet.arrival;
                     receptionStats.observe(packet.sequence, packet.timestamp, packet.arrival);
                     break;
                 case AudioJitterBuffer::Admission::Invalid:
@@ -696,6 +818,8 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
                 case AudioJitterBuffer::Admission::OutsideWindow: break;
                 }
             }
+            publishHold();
+            if (interrupted) { ++d->linkInterruptions; }
             d->expectedPackets.store(receptionStats.expectedPackets());
             d->missingPackets.store(receptionStats.missingPackets());
             if (const auto measuredJitterMs = receptionStats.jitterMs()) {
@@ -740,13 +864,43 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
                 }
                 continue;
             }
-            if (now - lastPacket > 500'000'000) {
+            // A true outage: nothing, late packets included, for 500 ms.
+            // R-R3-21: once audio is playing the clock starts only when the
+            // speaker has taken its first frames, so a device that is slow
+            // to start cannot look like a dead link. Before anything plays
+            // it runs from the start, so a context that never receives a
+            // packet still asks for a fresh one.
+            if ((!playing || speakerStartedAt)
+                && now - std::max(lastPacket, speakerStartedAt.value_or(lastPacket))
+                    > 500'000'000) {
                 notify(QStringLiteral("Remote audio had no admitted/playable packets for 500 ms"),
                        Fault::NoPackets);
                 return;
             }
-            // At most the bounded jitter window per wake. A long scheduling
-            // stall causes a fresh context, never an unbounded catch-up burst.
+            // R-R3-21: the rate matcher's fill above its working level
+            // (half its ring, where WDSP rmatch starts and steers) is delay
+            // too; shedding as the hold eases counts it.
+            {
+                const auto fill = matcher.stats();
+                jitter.setDownstreamExcessNs(
+                    qint64(fill.ringFillFrames - fill.ringCapacityFrames / 2) * 1'000'000'000
+                    / deviceRate);
+            }
+            // Every wake, even one whose release the full matcher holds
+            // back: that is when a backlog stands.
+            jitter.tick(now);
+            // R-R3-21: a shed Opus interval is decoded (a missing one
+            // concealed) and its audio thrown away, so the decoder's state
+            // (its prediction across frames) runs on as if nothing had been
+            // skipped. That keeps the decoder continuous; it does not smooth
+            // the splice itself. Lossless has no decoder state.
+            for (const QByteArray& shed : jitter.takeShedPackets()) {
+                if (!decoder) { continue; }
+                if (shed.isEmpty()) { decoder->decodeMissing(); }
+                else { decoder->decodeRtp(shed, ssrc); }
+            }
+            // At most the bounded jitter window per wake, never an
+            // unbounded catch-up burst.
             for (int i = 0; i < jitter.maxPackets(); ++i) {
                 // A network burst stays in the bounded jitter queue until
                 // the device has drained room. Reserve two input packets, a
@@ -783,6 +937,9 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
                        Fault::SpeakerTimingUnavailable, true);
                 return;
             }
+            if (!speakerStartedAt && pacing->consumedFrames > deviceConsumedBase) {
+                speakerStartedAt = now;
+            }
             if (pacing->consumedFrames != lastDeviceFrames) {
                 lastDeviceFrames = pacing->consumedFrames;
                 lastDeviceProgress = now;
@@ -814,22 +971,28 @@ bool RemoteAudioReceiver::start(quint32 ssrc, quint32 firstTimestamp, RemoteAudi
                 // per-arrival reorder hold while the independently clocked
                 // speaker consumes the final usable matcher block. There is
                 // no ordering benefit in retaining the exact expected packet
-                // at that point. Never use this demand path for a missing head
-                // or a future packet: those retain the normal PLC deadline.
-                // One 40 ms Opus packet always covers an output block; 4 ms
-                // lossless packets may take several, each the exact
-                // expected packet, bounded by the jitter window.
+                // at that point. One 40 ms Opus packet always covers an
+                // output block; 4 ms lossless packets may take several, each
+                // the exact expected packet, bounded by the jitter window.
+                // R-R3-21: with the expected packet not here but a later one
+                // queued (a hole), conceal it now. Waiting for its deadline
+                // (which a deepened hold pushes later) would underflow the
+                // rate matcher, and that costs a fresh context. An empty
+                // queue keeps its normal loss deadline.
                 for (int early = 0; early < jitter.maxPackets()
                      && !matcher.canTakeWithoutUnderflow(); ++early) {
-                    const auto present = jitter.takeExpectedPresentEarly();
-                    if (!present) { break; }
-                    const QVector<float> audio = decodePacket(present->packet);
+                    const qint64 concealAt = d->now();
+                    auto next = jitter.takeExpectedPresentEarly(concealAt);
+                    if (!next) { next = jitter.concealExpectedNow(concealAt); }
+                    if (!next) { break; }
+                    const QVector<float> audio = decodePacket(next->packet);
                     if (audio.isEmpty() || !matcher.push(audio)) {
                         notify(QStringLiteral("Remote audio decode failed"), Fault::DecodeFailed);
                         return;
                     }
-                    ++d->decoded;
-                    noteReleased(present->timestamp, false, d->now());
+                    if (next->concealed()) { ++d->concealed; }
+                    else { ++d->decoded; }
+                    noteReleased(next->timestamp, next->concealed(), concealAt);
                 }
                 QVector<float> pcm = matcher.take();
                 if (pcm.size() != 2 * blockFrames) { pcm.clear(); }
@@ -921,7 +1084,11 @@ void RemoteAudioReceiver::submit(const QByteArray& packet)
         // Bounded in time: the jitter window's 320 ms of packets.
         const bool full = d->incoming.size()
             >= static_cast<std::size_t>(d->arrivalBoundPackets.load());
-        if (full && !d->startPhase) { d->overflow = true; }
+        if (full && !d->startPhase) {
+            // R-R3-21: dropped at the door, counted per packet.
+            d->overflow = true;
+            ++d->burstDropped;
+        }
         else {
             if (full) {
                 // A connect-time backlog: nothing has been heard yet, so the

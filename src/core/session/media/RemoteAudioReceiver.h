@@ -126,6 +126,43 @@ struct RemoteAudioReceiverTelemetry {
     // fields above, this is a live gauge: unavailable before a measurement
     // and for stopped or failed contexts, like speakerQueuedMs.
     std::optional<double> reorderQueuedMs;
+    // R-R3-21: how long the jitter queue holds each packet now, in ms. It
+    // starts at 80 ms, deepens (up to 500 ms) when packets arrive after
+    // their interval was concealed, and eases back while the link is
+    // steady. A live gauge like reorderQueuedMs.
+    std::optional<double> jitterHoldMs;
+    // R-R3-21: what this context rode through on this computer instead of
+    // asking the Core for a fresh context. Like the packet counters, reset
+    // by a successful start() and kept after stop().
+    // Packets dropped at the arrival bound during playback (a burst larger
+    // than the bound), one per packet; each interval is then concealed.
+    quint64 burstDroppedPackets = 0;
+    // Stream gaps: a packet beyond the jitter window moved the head to it.
+    quint64 streamGapReanchors = 0;
+    // Queued packets dropped unheard to bound the delay: those a stream
+    // gap moved past, and those shed once the link was quiet again after a
+    // stall, so the delay it added comes back down as the hold eases.
+    // This computer's latency policy, not the network's loss.
+    quint64 trimmedPackets = 0;
+    // Intervals skipped unheard for the same reasons, present or missing,
+    // and that as audio time (intervals x the context's packet duration),
+    // which is what the operator heard skipped.
+    quint64 skippedIntervals = 0;
+    double skippedAudioMs = 0.0;
+    // Intervals a rewind replayed: each was heard once concealed and again
+    // as its late audio, so decoded + concealed + skipped - rewound is the
+    // stream's own timeline.
+    quint64 rewoundIntervals = 0;
+    // burstDroppedPackets as audio time.
+    double burstDroppedAudioMs = 0.0;
+    // The longest the receive worker went between wakes in this context:
+    // a starved worker, not the network, when a speaker runs dry.
+    double maxWorkerWakeGapMs = 0.0;
+    // Network interruptions, at most one a worker pass: an arrival burst,
+    // a stream gap, or packets that came after their intervals were
+    // concealed (a stall). The lossless link trial counts them as it
+    // counted the restarts they used to cause.
+    quint64 linkInterruptions = 0;
     // The continuous clock correction's current resample ratio (WDSP rmatch
     // `var`, read through RemoteAudioRateMatcherStats::currentRatio), the
     // same value restart fault text reports as `ratio=`. It is a ratio near
@@ -150,7 +187,11 @@ struct RemoteAudioReceiverTelemetry {
 // 96). submit() reads each packet's payload type and hands only the
 // context's own type to its decoder; the other type is a rejected header.
 // A lost lossless packet plays as 4 ms of silence. The jitter window and
-// the arrival bound are the same 320 ms for both profiles.
+// the arrival bound are the same 320 ms for both profiles, and both grow
+// with the adaptive hold (R-R3-21). Only a true outage (nothing arrives,
+// late packets included, for 500 ms once the speaker has started) or a
+// real fault asks for a fresh context; a stream gap or an arrival burst
+// re-anchors on this computer.
 // R-R3-23: the speaker plays at whatever rate and channel count it opened
 // at (AudioEngine::remotePlaybackFormat()): the rate matcher matches the
 // 48 kHz stream to the device's rate and clock, and a mono device hears
@@ -164,7 +205,10 @@ public:
     enum class Fault {
         SpeakerOpenFailed, SpeakerTimingUnavailable, SpeakerCallbackTooLarge,
         SpeakerStalled, SpeakerWriteFailed, DecoderUnavailable,
-        ArrivalBurst, StreamGap, NoPackets, DecodeFailed, ClockBuffer,
+        // R-R3-21: an arrival burst and a stream gap no longer end a
+        // context (they re-anchor locally and count in linkInterruptions),
+        // so they are no longer faults.
+        NoPackets, DecodeFailed, ClockBuffer,
     };
     Q_ENUM(Fault)
 
@@ -184,9 +228,12 @@ public:
     /// never asks for a restart because packets stopped: while the Core is
     /// quiet the sink hears missing-packet audio (silence) for 500 ms and
     /// then nothing, and the next packet to arrive starts the stream again
-    /// on its own timestamp. A stream gap, an arrival burst or a decode
-    /// failure still asks for a restart, and a decoder that cannot start is
-    /// still an error.
+    /// on its own timestamp. R-R3-21: a stream gap or an arrival burst
+    /// re-anchors locally, as for the speaker; a decode failure still asks
+    /// for a restart, and a decoder that cannot start is still an error.
+    /// Its hold stays fixed: a late packet is only late (no rewind and no
+    /// deeper hold), so an app hears concealment for a stall and then the
+    /// stream in place, never a pause and a burst.
     struct PcmSinkMode {
         PcmSink sink;
     };
