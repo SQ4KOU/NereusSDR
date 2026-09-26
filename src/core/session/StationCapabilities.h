@@ -103,6 +103,10 @@
 //               sent only to a peer whose hello declared remoteTx; txPermitted
 //               now the station transmit gate's answer. J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan, desktop remote transmit (R-IOS-13,
+//               R-R3-42): txRefusalCode, txRefusalReason and txRefusalFix
+//               after remoteTxVersion. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -234,6 +238,13 @@ struct StationCapabilities {
     /// hello declared remoteTx 1 (remoteTxEntry); 0 otherwise.
     bool remoteTxEntry = false;
     int remoteTxVersion = 0;
+    /// Desktop remote transmit (R-IOS-13, R-R3-42): why txPermitted is
+    /// false, as the Core's refusal (link section 18.3): its code, its
+    /// sentence and its fix. Sent right after remoteTxVersion and only with
+    /// it; all three empty while permitted.
+    QString txRefusalCode;
+    QString txRefusalReason;
+    QString txRefusalFix;
 
     /// Whether the DAEMON currently holds a live radio connection. A
     /// client that authenticated against a daemon whose radio is powered

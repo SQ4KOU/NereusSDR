@@ -237,6 +237,9 @@
 //   2026-09-23 - R-R3-46 fix wave: setHpsdrModel moved out of line; the
 //                 tune power is clamped at the settings load (2026-09-24).
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan, desktop remote transmit (R-IOS-13):
+//                 voxEnabled is a Q_PROPERTY, mirrored both ways. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -1015,6 +1018,13 @@ public:
 
     Q_PROPERTY(bool paSettingsBypass READ paSettingsBypass WRITE setPaSettingsBypass
                                      NOTIFY paSettingsBypassChanged)
+
+    // iPhone app plan (desktop remote transmit, Task 40's name): VOX on the
+    // link as `transmit.voxEnabled`, so a remote window arms the Core's VOX
+    // as a local window arms its own. Declared last so every earlier
+    // property keeps its wire ordinal. Still never persisted: VOX always
+    // starts off.
+    Q_PROPERTY(bool voxEnabled READ voxEnabled WRITE setVoxEnabled NOTIFY voxEnabledChanged)
 
     /// Bypass PA settings flag. false (default) = use board-specific table.
     bool paSettingsBypass() const noexcept { return m_paSettingsBypass; }

@@ -54,6 +54,10 @@
 //               sent only to a peer whose hello declared remoteTx; txPermitted
 //               now the station transmit gate's answer. J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan, desktop remote transmit (R-IOS-13,
+//               R-R3-42): txRefusalCode, txRefusalReason and txRefusalFix
+//               after remoteTxVersion. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationCapabilities.h"
@@ -171,6 +175,10 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         // peer that declared the feature.
         if (remoteTxEntry) {
             updates.append(intEntry("remoteTxVersion", remoteTxVersion));
+            // Desktop remote transmit: the Core's reason with it.
+            updates.append(stringEntry("txRefusalCode", txRefusalCode));
+            updates.append(stringEntry("txRefusalReason", txRefusalReason));
+            updates.append(stringEntry("txRefusalFix", txRefusalFix));
         }
     }
     return updates;
@@ -394,6 +402,20 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                 } else {
                     caps.remoteTgxlControlVersion = version;
                 }
+            }
+        } else if (u.name == "txRefusalCode" || u.name == "txRefusalReason"
+                   || u.name == "txRefusalFix") {
+            // Desktop remote transmit: text only; anything else reads empty.
+            const QString text = u.kind == MirrorWireKind::Utf8
+                    && u.value.typeId() == QMetaType::QString
+                ? u.value.toString()
+                : QString();
+            if (u.name == "txRefusalCode") {
+                caps.txRefusalCode = text;
+            } else if (u.name == "txRefusalReason") {
+                caps.txRefusalReason = text;
+            } else {
+                caps.txRefusalFix = text;
             }
         } else if (u.name == "settingsSchemaVersion") {
             caps.settingsSchemaVersion = static_cast<qint32>(u.value.toLongLong());

@@ -275,6 +275,10 @@
 //               button."; a session's keying commands are forgotten when it
 //               ends. J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan, desktop remote transmit (R-IOS-13,
+//                R-R3-42): txRefusalOf() and the refusal last sent to each
+//                peer. J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                Code.
 // =================================================================
 
 #include <QHash>
@@ -737,6 +741,8 @@ public:
     RemoteKeying* remoteKeying() const { return m_remoteKeying.get(); }
     /// The gate's answer for `transport` (what its txPermitted says).
     TxDecision txDecisionFor(SessionTransport* transport) const;
+    /// The refusal a capabilities message carries (empty without one).
+    static TxRefusal txRefusalOf(const StationCapabilities& caps);
     /// Releases transmit if `deviceId` holds it, through a transfer to
     /// nobody (a fifth device replacing it, Task 41).
     void releaseTransmitFor(const QByteArray& deviceId, const QString& reason);
@@ -837,6 +843,9 @@ private:
         /// iPhone app plan Task 34: the txPermitted this session was last
         /// sent, so a change is sent again and nothing else is.
         bool txPermittedSent = false;
+        /// Desktop remote transmit: the refusal it was last sent with it
+        /// (empty for a peer without remoteTx, or while permitted).
+        TxRefusal txRefusalSent;
 
         /// Pings sent since the last pong. Reset to 0 by every pong; the
         /// heartbeat tick declares death when it reaches maxMissedPongs().

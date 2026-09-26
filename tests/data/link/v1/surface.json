@@ -269,6 +269,21 @@
             "kind": "i64",
             "name": "remoteTxVersion",
             "value": 1
+        },
+        {
+            "kind": "utf8",
+            "name": "txRefusalCode",
+            "value": "stationReceiveOnly"
+        },
+        {
+            "kind": "utf8",
+            "name": "txRefusalReason",
+            "value": "This Core is set to receive only."
+        },
+        {
+            "kind": "utf8",
+            "name": "txRefusalFix",
+            "value": ""
         }
     ],
     "commands": [
@@ -4936,6 +4951,12 @@
                     "kind": "bool",
                     "name": "paSettingsBypass",
                     "ordinal": 14
+                },
+                {
+                    "direction": "bidirectional",
+                    "kind": "bool",
+                    "name": "voxEnabled",
+                    "ordinal": 15
                 }
             ]
         },

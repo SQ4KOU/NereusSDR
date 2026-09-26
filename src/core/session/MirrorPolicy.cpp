@@ -65,6 +65,9 @@
 //   2026-09-25 - iPhone app plan Task 35 (R-IOS-13): TransmitModel's mox
 //                 and tune Outbound (the transmit verbs key). J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan, desktop remote transmit (R-IOS-13):
+//                 TransmitModel's voxEnabled Bidirectional. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -313,7 +316,7 @@ const MirrorPolicy::Entry kEntries[] = {
     { "SliceModel", "snrDb", MirrorDirection::Outbound },
     { "SliceModel", "lastRadeRxCallsign", MirrorDirection::Outbound },
 
-    // ---- TransmitModel (15 entries) ----
+    // ---- TransmitModel (16 entries) ----
     // iPhone app plan Task 35 (R-IOS-13): MOX and TUNE travel from the
     // Core only. A remote device keys with the transmit verbs (tx.key,
     // tx.tune), which pass the Core's gates; a property write never keys
@@ -333,6 +336,10 @@ const MirrorPolicy::Entry kEntries[] = {
     { "TransmitModel", "antiVoxTauMs", MirrorDirection::Bidirectional },
     { "TransmitModel", "antiVoxRun", MirrorDirection::Bidirectional },
     { "TransmitModel", "paSettingsBypass", MirrorDirection::Bidirectional },
+    // Desktop remote transmit (R-IOS-13): a remote window arms the Core's
+    // VOX. A write is the permitted sessions' only (the station transmit
+    // gate), and the Core turns VOX off at every change of holder.
+    { "TransmitModel", "voxEnabled", MirrorDirection::Bidirectional },
 
     // ---- TunerModel (21 entries) ----
     { "TunerModel", "relayC1", MirrorDirection::Outbound },

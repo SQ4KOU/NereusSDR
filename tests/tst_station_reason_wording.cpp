@@ -103,6 +103,9 @@
 //               (TxRefusal.cpp) and their forwards. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-25 - iPhone app plan, desktop remote transmit (R-IOS-13): the
+//                refusal sent with txPermitted is named as a forward. J.J.
+//                Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -673,7 +676,11 @@ const QList<ReasonSource>& reasonSources()
           // written in src/core/safety/TxRefusal.cpp (scanned below).
           QStringLiteral("m_transmitHolder->keyRefusalFor(requester)"),
           QStringLiteral("TxRefusals::appCannotTransmit().text"),
-          QStringLiteral("decision.refusal.text")}},
+          QStringLiteral("decision.refusal.text"),
+          // Desktop remote transmit: the same sentences, sent with
+          // txPermitted in capabilities (txRefusalReason) and remembered.
+          QStringLiteral("txRefusalOf(caps)"),
+          QStringLiteral("txDecision.refusal.text")}},
         // command.result for every verb.
         // The device's name ("Power Genius", "Tuner Genius") and what the
         // request asked, both this file's own literals

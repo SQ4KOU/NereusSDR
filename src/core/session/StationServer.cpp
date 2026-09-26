@@ -280,6 +280,11 @@
 //               button."; a session's keying commands are forgotten when it
 //               ends. J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan, desktop remote transmit (R-IOS-13,
+//                R-R3-42): capabilities carry the transmit refusal
+//                (txRefusalCode/Reason/Fix) for a peer that declared
+//                remoteTx, sent again when it changes. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -3525,6 +3530,7 @@ bool StationServer::sendCapabilitiesAndSettingsSnapshot(SessionTransport* transp
     const StationCapabilities caps = buildCapabilitiesFor(transport);
     if (auto peer = m_peers.find(transport); peer != m_peers.end()) {
         peer->txPermittedSent = caps.txPermitted;   // Task 34
+        peer->txRefusalSent = txRefusalOf(caps);
     }
     send(transport, SessionMessages::capabilities(caps.toUpdates()));
     if (!stillAdmitted()) {
@@ -4218,6 +4224,15 @@ SessionPeerInfo StationServer::peerInfoFor(SessionTransport* transport) const
     return info;
 }
 
+TxRefusal StationServer::txRefusalOf(const StationCapabilities& caps)
+{
+    TxRefusal refusal;
+    refusal.code = caps.txRefusalCode.toLatin1();
+    refusal.text = caps.txRefusalReason;
+    refusal.fix = caps.txRefusalFix.toLatin1();
+    return refusal;
+}
+
 TxDecision StationServer::txDecisionFor(SessionTransport* transport) const
 {
     return m_txGate.decide(peerInfoFor(transport));
@@ -4233,12 +4248,16 @@ void StationServer::publishTxPermitted()
         if (!it->authenticated || !it->snapshotComplete) {
             continue;
         }
-        const bool permitted = txDecisionFor(it.key()).permitted;
-        if (permitted == it->txPermittedSent) {
+        // Desktop remote transmit: a peer told why it may not transmit is
+        // told again when the reason changes (another holder, say).
+        const StationCapabilities caps = buildCapabilitiesFor(it.key());
+        const TxRefusal refusal = txRefusalOf(caps);
+        if (caps.txPermitted == it->txPermittedSent && refusal == it->txRefusalSent) {
             continue;
         }
-        it->txPermittedSent = permitted;
-        send(it.key(), SessionMessages::capabilities(buildCapabilitiesFor(it.key()).toUpdates()));
+        it->txPermittedSent = caps.txPermitted;
+        it->txRefusalSent = refusal;
+        send(it.key(), SessionMessages::capabilities(caps.toUpdates()));
     }
 }
 
@@ -4598,6 +4617,7 @@ void StationServer::publishDisplayBudgetCapabilities()
         const StationCapabilities caps = buildCapabilitiesFor(m_mediaSession);
         if (auto peer = m_peers.find(m_mediaSession); peer != m_peers.end()) {
             peer->txPermittedSent = caps.txPermitted;   // Task 34
+        peer->txRefusalSent = txRefusalOf(caps);
         }
         send(m_mediaSession, SessionMessages::capabilities(caps.toUpdates()));
     }
@@ -4914,7 +4934,15 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
     // without remoteTx, for every session with remote_transmit deny, and
     // while another device holds transmit; sent again when it changes
     // (publishTxPermitted).
-    caps.txPermitted = txDecisionFor(transport).permitted;
+    const TxDecision txDecision = txDecisionFor(transport);
+    caps.txPermitted = txDecision.permitted;
+    // Desktop remote transmit: why not, in the Core's own words (section
+    // 18.3), for a peer that declared remoteTx; empty while permitted.
+    if (caps.remoteTxEntry && !txDecision.permitted) {
+        caps.txRefusalCode = QString::fromLatin1(txDecision.refusal.code);
+        caps.txRefusalReason = txDecision.refusal.text;
+        caps.txRefusalFix = QString::fromLatin1(txDecision.refusal.fix);
+    }
     caps.remoteMediaVersion = media ? 1 : 0;
     caps.remoteWidebandDisplayVersion = media ? 1 : 0;
     caps.remoteAudioStatusVersion = media ? 1 : 0;

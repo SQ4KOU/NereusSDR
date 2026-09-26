@@ -663,7 +663,9 @@ declares `deviceAuth` 1 (section 3.5), `pairing` 1 (section 3.6) and
 remote transmit: `txPermitted`, the transmit refusals, `tx.setTxSlice` and
 keying (`tx.key`, `tx.unkey`, `tx.tune`, `tx.twoTone`, section 18.6). A peer that declares it at minor 11 is sent
 `remoteTxVersion` (section 6.3); `txPermitted` is true only for a peer that
-declares it. The station does not declare it.
+declares it. The station does not declare it. The desktop's remote window
+declares it (desktop remote transmit): its MOX, TUNE, two-tone, microphone,
+VOX and TCI programs transmit through the Core.
 
 **`sessionHolder` 1** (iPhone app plan Task 71; the several-devices
 design, ruling 10.1): the Core admits up to four devices at once (section
@@ -874,6 +876,12 @@ When a feature is off, its version is 0:
   for that session, `tx.setTxSlice` and the keying verbs `tx.key`,
   `tx.unkey`, `tx.tune` and `tx.twoTone` (section 9.1), and the refusals
   of section 18. The table above shows the value a declaring peer is sent.
+- `txRefusalCode`, `txRefusalReason`, `txRefusalFix` (utf8, desktop remote
+  transmit): sent right after `remoteTxVersion` and only with it. While
+  `txPermitted` is false they are the gate's refusal for that session
+  (section 18.3: its code, its sentence as the operator reads it, and its
+  fix or empty); while it is true all three are empty. A client shows the
+  sentence on its disabled transmit controls as sent.
 
 `txPermitted` (iPhone app plan Task 34) is true only for a session the
 station transmit gate permits (section 18.1): false until
@@ -881,7 +889,9 @@ station transmit gate permits (section 18.1): false until
 not declare `remoteTx`, false for every peer while the Core's
 `remote_transmit` is deny, and false while another device holds transmit.
 A session learns a change from a new `capabilities` message (section 5.2);
-nothing else is sent again. An older window that reads the flag without
+nothing else is sent again. A peer that declared `remoteTx` is also sent a
+new `capabilities` when only the refusal changes (for example from
+"Transmit is changing hands." to "<holder> has the transmitter."). An older window that reads the flag without
 declaring `remoteTx` therefore never sees it true.
 
 ### 6.4 The capabilities message
@@ -893,7 +903,8 @@ The display budget entries (`displayApplicationBytesPerSecond`,
 usable budget, and `displayBudgetReason` only at agreed minor 11. The radio
 identity entries from `hpsdrModel` onwards are present only at agreed minor
 11, and `sessionHolderVersion`, last, only for a peer that declared
-`sessionHolder` (section 6.1). A client ignores a capability it does not know
+`sessionHolder` (section 6.1); `remoteTxVersion` and the three
+`txRefusal` entries after it only for a peer that declared `remoteTx`. A client ignores a capability it does not know
 (`StationCapabilities::fromUpdates`).
 
 <!-- surface:capabilities -->
@@ -955,6 +966,9 @@ identity entries from `hpsdrModel` onwards are present only at agreed minor
 | 52 | `displayExtrasVersion` | `i64` |
 | 53 | `sessionHolderVersion` | `i64` |
 | 54 | `remoteTxVersion` | `i64` |
+| 55 | `txRefusalCode` | `utf8` |
+| 56 | `txRefusalReason` | `utf8` |
+| 57 | `txRefusalFix` | `utf8` |
 
 <!-- /surface -->
 
@@ -1444,7 +1458,7 @@ An enum property lists the values its domain allows.
 | 13 | `overloadAdc1` | `i64` | outbound |  |
 | 14 | `adcLinked` | `bool` | outbound |  |
 
-**TransmitModel** (15 properties)
+**TransmitModel** (16 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -1463,6 +1477,7 @@ An enum property lists the values its domain allows.
 | 12 | `antiVoxTauMs` | `i64` | bidirectional |  |
 | 13 | `antiVoxRun` | `bool` | bidirectional |  |
 | 14 | `paSettingsBypass` | `bool` | bidirectional |  |
+| 15 | `voxEnabled` | `bool` | bidirectional |  |
 
 **TunerModel** (21 properties)
 
@@ -3091,9 +3106,9 @@ same on every machine.
 | `two-devices` | Another device holds the Core's slice; this device is let in with a slice of its own (`slice:1`) and the other's as `marker:0`, naming its owner, with the `SliceMarker` schema; the other device is sent `marker:1` for this device's slice, and when this device tunes its slice the other sees the marker move, never the slice |
 | `foreign-write-refused` | This device holds slice 0 and another device slice 1: a `property.write` to `slice:1` and to `marker:1`, and `removeSlice` and `setActiveSliceById` naming slice 1, are refused "That slice belongs to Other device 1. It can be changed only there.", with no value sent back and nothing changed; its own slice it may make active |
 | `held-for-device` | Another device, alone on the Core, leaves with `session.leave`: its slice keeps running, held for it. This device, let in meanwhile, does not adopt it: it gets a slice of its own and the other's as a marker with `ownerAway` true; the other device signs in again and the marker's `ownerAway` turns false (the slice is its own again) |
-| `verbs-tx-set-tx-slice` | On a Core with `remote_transmit` allow (stationSetup `remoteTransmit`), a device that declares `remoteTx` is sent `txPermitted` false in its first `capabilities` and true in the `capabilities` sent again after `snapshot.complete`, each with `remoteTxVersion` 1; `tx.setTxSlice` with an argument it does not take is refused "The Core could not read this request."; with `sliceId` while nobody holds transmit it is refused "Take transmit on this device first." with the values `refusalCode` `notHolder` and `refusalFix` `takeTransmit`. Runs on the station alone |
+| `verbs-tx-set-tx-slice` | On a Core with `remote_transmit` allow (stationSetup `remoteTransmit`), a device that declares `remoteTx` is sent `txPermitted` false in its first `capabilities` and true in the `capabilities` sent again after `snapshot.complete`, each with `remoteTxVersion` 1 and the `txRefusal` entries (`notReady` first, empty once permitted); `tx.setTxSlice` with an argument it does not take is refused "The Core could not read this request."; with `sliceId` while nobody holds transmit it is refused "Take transmit on this device first." with the values `refusalCode` `notHolder` and `refusalFix` `takeTransmit`. Runs on the station alone |
 | `unheld-key` | On a Core with `remote_transmit` allow whose radio can key (stationSetup `transmitReady`), one device that declares `remoteTx`: each keying verb with an argument it does not take is refused "The Core could not read this request."; a program's `tx.key {trigger:"tci"}` on unheld transmit is refused `programNeedsTransmit` and nobody takes transmit; a person's `tx.key {trigger:"screen"}` takes it and keys (epoch 1; `transmitting` true, the device's entry transmitting); `tx.unkey {epoch:1}` unkeys; the same program's key then keys (epoch 2) and `tx.unkey {epoch:2}` unkeys; `tx.tune {on:true}` tunes (epoch 3, `transmit`'s `tune` true) and `{on:false}` ends it; `tx.twoTone {on:true}` on a radio with no transmit channel is refused "The two-tone test could not start on the Core." Runs on the station and the app |
-| `grace-transmit-held` | Two devices that declare `remoteTx`: the other device keys and this one's permission goes false (`capabilities` sent again) and its `tx.key` is refused "Other device 1 has the transmitter."; the holder's link drops: the Core stops transmitting at once (`transmitting` false) and the holder, away, still holds transmit (this device's `tx.key` is refused naming it); the holder signs in again a minute later, nothing keys until its own `tx.key` (epoch 2), and its `tx.unkey {epoch:2}` unkeys. Runs on the station and the app |
+| `grace-transmit-held` | Two devices that declare `remoteTx`: the other device keys and this one's permission goes false (`capabilities` sent again) and its `tx.key` is refused "Other device 1 has the transmitter."; the holder's link drops: this device is sent `capabilities` again with the refusal "Transmit is changing hands. Try again in a moment." and then "Other device 1 has the transmitter.", the Core stops transmitting at once (`transmitting` false) and the holder, away, still holds transmit (this device's `tx.key` is refused naming it); the holder signs in again a minute later, nothing keys until its own `tx.key` (epoch 2), and its `tx.unkey {epoch:2}` unkeys. Runs on the station and the app |
 | `on-air-refusals` | While another device (short name "Tablet B") is keyed, this device's Protocol 1 rate change, `ps3.off`, its slice's `rxAntenna` and `transmit`'s `pureSig` are each refused "Tablet B is on the air. Try again when they stop." (commands with `refusalCode` `holderOnAir` and `refusalFix` `takeTransmit`). Runs on the station alone |
 | `verbs-session-leave` | `session.leave` with an argument is refused, "The request to leave the Core was not understood."; without, it is accepted and the station closes the connection with no `session.end`. Runs on the station alone |
 | `heartbeat-answered`, `heartbeat-missed` | The heartbeat, above |
@@ -3460,4 +3475,19 @@ transmit audio for the app only after the Core accepts the key; a refused
 key takes nothing, and the app hears `trx:N,false` while the window shows
 the Core's sentence. The Core's own TCI server stays receive-only: a
 program through it never keys, held or unheld.
+
+**The desktop's remote window.** It keys as a phone does: its MOX (the TX
+applet's button and the container's) sends `tx.key {trigger:"screen"}`, its
+TUNE `tx.tune`, its two-tone `tx.twoTone`, each command three times under
+one `id`; its own MoxController keys nothing. A release names the key's
+epoch, or 4294967295 when released before the answer came (never older
+than the device's live key, so a key accepted just before the release
+still stops). After the Core ends a key on its own (its `transmitting`
+falls), the next press is a new command. Its TUNE off goes whenever it
+asked TUNE on, even before the Core's `tune` reached it. A program's
+release while the operator's own MOX holds the same key on sends nothing;
+the operator's MOX off ends a program's key too. The window's VOX button
+writes `transmit.voxEnabled` (a permitted session's write, section 18.1),
+and while it is on the window streams its microphone on the microphone
+line unkeyed.
 
