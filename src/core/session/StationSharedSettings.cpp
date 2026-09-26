@@ -1491,6 +1491,28 @@ SessionMessage StationServer::proceedSharedSetting(SessionTransport* transport,
     } else {
         result = applyHeld(transport, question, -1, invoke);
     }
+    // Follow-up N3: a radio change answers, and tells the others, on the
+    // Core's restart turn (finishRadioChange), as a rate change's proceed
+    // does when its result arrives; one dropped there tells nobody.
+    if (result.accepted && m_holdingRadioChange && !m_heldRadioChange
+        && question.target == QLatin1String("radio")) {
+        HeldRadioChange held;
+        held.key = ResultKey{m_peers.value(transport).sessionId, invoke.commandVerb,
+                             invoke.commandId};
+        held.result = result;
+        held.proceed = true;
+        held.later.transport = transport;
+        held.later.proceedVerb = invoke.commandVerb;
+        held.later.proceedId = invoke.commandId;
+        held.later.affected = affected;
+        held.later.sliceWords = sliceWords;
+        held.later.change = question.change;
+        held.later.requester = requester;
+        held.later.closedDevices = closedDevices;
+        m_heldRadioChange = held;
+        m_proceedAnsweredLater = held.key;
+        return result;
+    }
     if (result.accepted) {
         tellSettingChanged(affected, sliceWords, question.change, requester);
     }

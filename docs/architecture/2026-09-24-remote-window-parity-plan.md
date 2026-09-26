@@ -1271,7 +1271,10 @@ verbs `station.selectRadio {mac}`, `station.rescanRadios {}` as Task 25 writes t
 while on the air or mid-switch; saved once the chosen radio connects; the Core restarts its
 radio run; windows reconnect by themselves with the Core's reason, "The Core is switching to
 <radio name>. This app reconnects by itself.", `session.end` retryable with code
-`radioChanging`: the operator's ruling of 2026-09-26), gated on a new `stationRadiosVersion` 1; plus `station.setRadioModel {mac, model}` (the
+`radioChanging`: the operator's ruling of 2026-09-26; the chooser's answer and the other
+devices' notices go out on the restart turn, before the ends, and a change dropped there
+because the radio is on the air is answered refused with the on-air reason and tells
+nobody: the coordinator's ruling on follow-up N3), gated on a new `stationRadiosVersion` 1; plus `station.setRadioModel {mac, model}` (the
 local Edit radio's model override, saved for that MAC on the Core and applied at the next
 connect) and `station.forgetRadio {mac}` (refused for the radio in use).
 

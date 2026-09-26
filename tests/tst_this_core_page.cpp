@@ -163,7 +163,12 @@ private slots:
         AppSettings coreSettings(dir.filePath(QStringLiteral("core.settings")));
         StationRadios radios(coreSettings);
         QStringList selected;
-        radios.onSelect = [&](const QString& mac) { selected.append(mac); };
+        // As the Core's DaemonApp does (follow-up N3): an accepted change
+        // holds its answer until the restart turn.
+        radios.onSelect = [&](const QString& mac) {
+            selected.append(mac);
+            h.server().holdRadioChangeAnswers();
+        };
         radios.setVisible({g2Radio(), hl2Radio()});
         radios.setCurrent(g2Radio());
         h.server().setStationRadios(&radios);
@@ -258,6 +263,17 @@ private slots:
         // Fix wave, I6: this run's choice until it connects.
         QCOMPARE(radios.pendingChoice(), kHl2Mac);
         QVERIFY(radios.savedChoice().isEmpty());
+        // Follow-up N3: the answer waits for the restart turn. There the
+        // radio was found on the air, so the change is dropped and this
+        // window is told why, in the Core's on-air words.
+        const QString changing =
+            QStringLiteral("The Core is changing its radio. This window reconnects when it is ready.");
+        QCOMPARE(page->statusLabel()->text(), changing);
+        QTest::qWait(200);
+        QCOMPARE(page->statusLabel()->text(), changing);
+        radios.dropPendingChoice();
+        h.server().finishRadioChange(false, RadioModel::onAirReason());
+        QTRY_COMPARE(page->statusLabel()->text(), RadioModel::onAirReason());
 
         // B6.3: the title bar copies the Core's radio's address.
         QGuiApplication::clipboard()->clear();

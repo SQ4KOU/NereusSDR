@@ -3420,8 +3420,11 @@ These command groups need a sentence beyond the table:
   from the last radio that connected, or `radio_mac`); the Core restarts
   its run on that radio, which comes up with its own receive layout,
   per-radio settings, capabilities and catalogue, as on the Core's next
-  start. Every connection ends a turn after the answer (and the confirm
-  step's notices) have gone out, with `session.end` "The Core is switching
+  start. An accepted change is answered on the turn the Core restarts, not
+  at once: the chooser's `station.selectRadio` answer (or, after the
+  confirm step, its `confirm.proceed` answer) and the other devices'
+  `settingChanged` notices go out then, in that order, and every
+  connection ends after them with `session.end` "The Core is switching
   to <radio name>. This app reconnects by itself.", `retryable` true, code
   `radioChanging` (section 12.4), and each app reconnects by itself; the
   Core's console commands keep answering through the restart. The change ends (another
@@ -3432,7 +3435,9 @@ These command groups need a sentence beyond the table:
   while the Core changes its radio is refused ("The Core is changing its
   radio. Try again when it has finished.", code `notReady`), and were the
   radio on the air all the same when the change runs, the change is
-  dropped and nothing keyed is torn down. It asks
+  dropped and nothing keyed is torn down: the chooser's answer is then
+  refused with the on-air reason ("The radio is on the air. Try again when
+  it stops."), no device is told the radio changed, and no session ends. It asks
   the other devices first (section 7.6), since it reaches every slice and
   the transmitter. Choosing the Core's radio again is taken and changes
   nothing. `station.rescanRadios` looks for radios again (the list

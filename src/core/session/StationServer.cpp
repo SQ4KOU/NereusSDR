@@ -1889,6 +1889,13 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                 if (m_resultHook && !m_resultHook(result)) {
                     return;
                 }
+                // Follow-up N3: an accepted radio change answers on the
+                // restart turn (finishRadioChange).
+                if (m_holdingRadioChange && !m_heldRadioChange && result.accepted
+                    && result.commandVerb == "station.selectRadio") {
+                    m_heldRadioChange = HeldRadioChange{key, result, false, {}};
+                    return;
+                }
                 SessionTransport* to = nullptr;
                 const auto dispatching = m_peers.constFind(m_dispatchingTransport);
                 if (dispatching != m_peers.cend() && dispatching->sessionId == key.sessionId) {
@@ -2377,6 +2384,46 @@ void StationServer::endSessionsForRadioChange(const QString& reason)
     }
     m_lingerOnDrop = false;
     m_closing = false;
+}
+
+void StationServer::holdRadioChangeAnswers()
+{
+    m_holdingRadioChange = true;
+}
+
+void StationServer::finishRadioChange(bool proceeded, const QString& refusal)
+{
+    m_holdingRadioChange = false;
+    if (!m_heldRadioChange) {
+        return;
+    }
+    const HeldRadioChange held = *m_heldRadioChange;
+    m_heldRadioChange.reset();
+    // The answer's route (recorded because it was not sent in dispatch).
+    SessionTransport* to = nullptr;
+    const auto route = m_resultRoutes.find(held.key);
+    if (route != m_resultRoutes.end()) {
+        to = route->data();
+        m_resultRoutes.erase(route);
+    }
+    if (held.proceed) {
+        to = held.later.transport.data();
+    }
+    // Dropped: the change did not happen, in the Core's own words.
+    const SessionMessage answer = proceeded
+        ? held.result
+        : SessionMessages::commandResult(held.result.commandVerb, held.result.commandId, false,
+                                         refusal, {});
+    if (to != nullptr && m_peers.contains(to)) {
+        sendToPeer(to, answer);
+    }
+    if (held.proceed) {
+        if (proceeded) {
+            tellSettingChanged(held.later.affected, held.later.sliceWords, held.later.change,
+                               held.later.requester);
+        }
+        endOlderWindowsWithoutSlices(held.later.closedDevices, held.later.requester);
+    }
 }
 
 bool StationServer::isListening() const

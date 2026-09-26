@@ -1561,13 +1561,19 @@ void DaemonApp::switchRadio(const QString& mac)
     // layout refuses another identity), so the new radio comes up exactly
     // as it would on the Core's next start, with its own layout, settings,
     // capabilities, catalogue and announcement. Every window reconnects.
-    // After this turn: the command's answer goes out first.
+    // After this turn: the change itself, preceded by its held answer.
     qCInfo(lcApp) << "DaemonApp: changing the Core's radio to" << mac;
     const std::optional<RadioInfo> radio =
         m_stationRadios ? m_stationRadios->radioFor(mac) : std::nullopt;
     m_radioChangeReason = radioChangeReason(radio ? radio->displayName() : mac);
     if (m_radioModel) {
         m_radioModel->setStationRadioChangeUnderway(true);
+    }
+    // Follow-up N3 (ruling (a)): the chooser's answer and the other
+    // devices' notices wait for the restart turn, which says whether the
+    // change happens.
+    if (m_stationServer) {
+        m_stationServer->holdRadioChangeAnswers();
     }
     QTimer::singleShot(0, this, &DaemonApp::restartForRadioChange);
 }
@@ -1599,6 +1605,11 @@ bool DaemonApp::refuseRadioChangeOnAir()
     if (m_stationRadios) {
         m_stationRadios->dropPendingChoice();
     }
+    // Follow-up N3: the chooser is answered refused with the on-air reason;
+    // nobody is told the radio changed.
+    if (m_stationServer) {
+        m_stationServer->finishRadioChange(false, reason);
+    }
     endRadioSwitch();
     return true;
 }
@@ -1616,10 +1627,12 @@ void DaemonApp::restartForRadioChange()
         return;
     }
     // The operator's ruling of 2026-09-26 (I2): every app is told why and
-    // reconnects by itself. This runs a turn after the command's answer
-    // (and the confirm step's notices) were written, and each connection
-    // outlives the station server until its end is on the wire.
+    // reconnects by itself. The command's answer and the confirm step's
+    // notices, held until now (follow-up N3), are written first, and each
+    // connection outlives the station server until its end is on the wire.
     if (m_stationServer) {
+        // Follow-up N3: the held answer, then the notices, then each end.
+        m_stationServer->finishRadioChange(true, {});
         m_stationServer->endSessionsForRadioChange(m_radioChangeReason);
     }
     const DaemonConfig cfg = m_radioConfig;

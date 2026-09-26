@@ -603,6 +603,17 @@ public:
     /// it (a command's answer, the confirm step's notices) and the end
     /// itself reach the wire.
     void endSessionsForRadioChange(const QString& reason);
+    /// Follow-up N3 (the coordinator's ruling (a)): the Core's DaemonApp
+    /// accepted a radio change (StationRadios::onSelect). Until
+    /// finishRadioChange, the chooser's accepted station.selectRadio answer
+    /// (or, after the confirm step, its confirm.proceed answer) and the
+    /// other devices' settingChanged notices are held, as a rate change's
+    /// proceed is (DeferredProceed).
+    void holdRadioChangeAnswers();
+    /// The restart turn: sends what was held. `proceeded`: the answer as
+    /// accepted, then the notices (before endSessionsForRadioChange).
+    /// Otherwise the answer is refused with `refusal` and nobody is told.
+    void finishRadioChange(bool proceeded, const QString& refusal);
     /// NereusSDR-original bound: how long an ended connection waits for its
     /// close to be written before it is deleted.
     static constexpr int kRadioChangeLingerMs = 5000;
@@ -1611,6 +1622,16 @@ private:
         QList<QByteArray> closedDevices;
     };
     QHash<ResultKey, DeferredProceed> m_deferredProceeds;
+    /// Follow-up N3: a radio change's answer (and, after the confirm step,
+    /// its notices), held from holdRadioChangeAnswers to finishRadioChange.
+    struct HeldRadioChange {
+        ResultKey key;
+        SessionMessage result;
+        bool proceed = false;  // a confirm.proceed answer, with `later`
+        DeferredProceed later;
+    };
+    bool m_holdingRadioChange = false;
+    std::optional<HeldRadioChange> m_heldRadioChange;
     /// The proceed answered later, whose immediate answer is not sent.
     std::optional<ResultKey> m_proceedAnsweredLater;
     /// True when `result`, keyed `key`, finished a deferred proceed (and
