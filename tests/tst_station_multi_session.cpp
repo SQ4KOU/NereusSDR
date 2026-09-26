@@ -112,6 +112,10 @@
 //               helpers come from MultiDeviceHarness.h too
 //               (latestCapabilityIf). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave I1: nobody holds transmit after
+//               the radio's key ends; the station's own VOX stays armed.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "MultiDeviceHarness.h"
@@ -1175,6 +1179,40 @@ private slots:
                  TxRefusals::otherDeviceHolds(QStringLiteral("Radio")));
         mox->onMicPttFromRadio(false);
         QTRY_COMPARE(mox->state(), MoxState::Rx);
+        // Fix wave I1: until Task 77 turns a press against another holder
+        // into a take, the radio's take ends with its key: nobody holds
+        // transmit afterwards, and the device may transmit again.
+        TransmitHolder* holder = core.server->transmitHolder();
+        QTRY_COMPARE(holder->state(), TransmitHolder::State::Unheld);
+        QVERIFY(!holder->holder().has_value());
+        QTRY_VERIFY(txPermitted(appA));
+        mox->setMox(true, keyerFor(a));
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+        QVERIFY(holder->isHeldBy(a.key.fingerprint()));
+        mox->setMox(false, keyerFor(a));
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        // A device's own take is not released by its key's end.
+        QVERIFY(holder->isHeldBy(a.key.fingerprint()));
+    }
+
+    // Fix wave I1: the station's own VOX, armed at the Core, stays armed
+    // when its take ends with its key.
+    void theStationsOwnVoxStaysArmedWhenItsTakeEnds()
+    {
+        Core core;
+        allowTransmit(core);
+        MoxController* mox = core.model->moxController();
+        TransmitModel& tx = core.model->transmitModel();
+        tx.setVoxEnabled(true);
+        mox->onVoxActive(true);   // the station's own VOX key
+        QTRY_COMPARE(mox->state(), MoxState::Tx);
+        TransmitHolder* holder = core.server->transmitHolder();
+        QVERIFY(holder->isHeldBy(QByteArray(KeyerIdentity::kStationDeviceId)));
+        mox->onVoxActive(false);
+        QTRY_COMPARE(mox->state(), MoxState::Rx);
+        QTRY_COMPARE(holder->state(), TransmitHolder::State::Unheld);
+        QVERIFY(tx.voxEnabled());
+        tx.setVoxEnabled(false);
     }
 
     // tx.setTxSlice: the holder's verb (ruling 8.10), by slice id.

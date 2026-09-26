@@ -52,6 +52,10 @@
 //   2026-09-25: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 34 (R-IOS-02), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave I1: releaseStationTake, the
+//               station device's take ends with its key until Task 77.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 #pragma once
 
@@ -170,6 +174,13 @@ public:
     void holderDropped(const QByteArray& deviceId, const QString& reason);
     /// The same device signed in again within its 180 s.
     void holderReturned(const QByteArray& deviceId);
+
+    /// Fix wave I1 (until Task 77): the station device's take ends with its
+    /// key. When the station device holds transmit, unkeyed, with MOX off
+    /// and nothing fenced, transmit becomes unheld at once (a transfer to
+    /// nobody with nothing to unkey). VOX the station armed itself stays
+    /// armed: its next VOX key takes transmit again. Nothing otherwise.
+    void releaseStationTake();
 
     /// The holder's key started or ended (the owner reports MOX with the
     /// keyer it is for).

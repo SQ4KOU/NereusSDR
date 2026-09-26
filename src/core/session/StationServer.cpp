@@ -419,6 +419,11 @@
 //                                    Task 16: a window's Receive Only change
 //                                    reaches the Core's gate. AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave I1: the station device's take
+//               (the radio's PTT, the Core's own keys and VOX) is
+//               released when its key ends, until Task 77. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1299,6 +1304,11 @@ StationServer::StationServer(RadioModel* radioModel, AppSettings& settings,
                 m_transmitHolder->setKeyed(false);
             }
             m_transmitHolder->onMoxReading(on);
+            // Fix wave I1 (until Task 77): the station device's take (the
+            // radio's PTT, the Core's own keys, its VOX) ends with its key.
+            if (!on) {
+                m_transmitHolder->releaseStationTake();
+            }
         });
         // iPhone app plan Task 35 (R-IOS-13): keying from a remote device.
         // Created after the holder's MOX follower above, so the holder

@@ -10,6 +10,10 @@
 //   2026-09-25: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 34 (R-IOS-02), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: Transmit group fix wave I1: releaseStationTake, the
+//               station device's take ends with its key until Task 77.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/safety/TransmitHolder.h"
@@ -266,6 +270,23 @@ void TransmitHolder::release(const QByteArray& deviceId, const QString& reason)
         return;
     }
     transferTo(std::nullopt, reason);
+}
+
+void TransmitHolder::releaseStationTake()
+{
+    // Fix wave I1: until Task 77 turns a press against another holder into
+    // a take (ruling 8.9), a station take that outlived its key would lock
+    // every device out. Nothing to unkey and MOX reads off, so step 3 runs
+    // at once: unheld, the epoch advanced, published.
+    if (m_state != State::Held || !m_holder.has_value() || m_holder->deviceId != kStation
+        || m_holder->keyed || m_fenced || m_stopUnconfirmed || moxOn()) {
+        return;
+    }
+    m_holder.reset();
+    m_state = State::Unheld;
+    ++m_epoch;
+    qCInfo(lcDsp) << "Transmit released by the station when its key ended";
+    emit changed();
 }
 
 void TransmitHolder::holderDropped(const QByteArray& deviceId, const QString& reason)
