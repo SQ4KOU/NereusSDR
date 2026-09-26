@@ -146,7 +146,7 @@ private slots:
     void onI2cReadClicked();
     void onI2cWriteClicked();
     void onOutputPinClicked(int idx);
-    void onIoBoardOcByteChanged(quint8 ocByte, int bandIdx, bool mox);
+    void onBandOutputsChanged();
 
     // Recomputes m_btnWrite's enabled state from the two gating checkboxes
     // (chkI2cEnable + chkI2cWriteEnable). Wired once in buildI2cControl, and

@@ -160,16 +160,16 @@ private slots:
         QCOMPARE(tab.txLatencyMsForTest(), 33);
     }
 
-    // I/O Pin State output strip starts blank; receiving a currentOcByteChanged
-    // signal from the IoBoardHl2 model updates the visible bits.
-    void output_strip_reflects_io_board_oc_byte()
+    // I/O Pin State output strip starts blank; the byte the connection
+    // composed (RadioModel::bandOutputsByte, plan Task 14 fix wave) updates
+    // the visible bits, locally and in a remote window.
+    void output_strip_reflects_the_composed_oc_byte()
     {
         RadioModel model;
         Hl2OptionsTab tab(&model);
         QCOMPARE(tab.outputBitsForTest(), quint8(0));
 
-        emit model.ioBoardMutable().currentOcByteChanged(
-            /*ocByte=*/0x42, /*bandIdx=*/3, /*mox=*/false);
+        model.reportBandOutputsForTest(/*ocByte=*/0x42, /*band=*/3, /*keyed=*/false);
         QCOMPARE(tab.outputBitsForTest(), quint8(0x42));
     }
 

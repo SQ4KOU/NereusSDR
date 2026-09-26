@@ -48,8 +48,21 @@
 
 #include "fakes/LoopbackTransport.h"
 #include "OperatorWording.h"
+#include "fakes/UpgradedCoreToken.h"
 
 using namespace NereusSDR;
+
+namespace {
+// iPhone app Task 12 put the Core's listener on by default (TCP 47910 on
+// every interface). A test Core opens no listener unless the test asks for
+// one on a port of its own.
+NereusSDR::DaemonConfig testCoreConfig()
+{
+    NereusSDR::DaemonConfig config = NereusSDR::DaemonConfig::defaults();
+    config.remotePort = 0;
+    return config;
+}
+} // namespace
 using NereusSDR::Test::LoopbackTransport;
 
 namespace {
@@ -159,7 +172,7 @@ private:
         s->mac = mac;
         s->stationSettings = std::make_unique<AppSettings>(
             s->dir.filePath(QStringLiteral("NereusSDR.settings")));
-        DaemonConfig cfg = DaemonConfig::defaults();
+        DaemonConfig cfg = testCoreConfig();
         cfg.sliceCount = 1;
         s->app.primeBoardForTest(board, mac);
         if (!s->app.start(cfg)) {
@@ -168,7 +181,7 @@ private:
         s->controller()->setRadioConnection(&s->radio);
         s->controller()->setTickTimerEnabled(false);
         s->server = std::make_unique<StationServer>(s->app.m_radioModel.get(),
-                                                    *s->stationSettings, m_securityDir.path());
+                                                    *s->stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
         s->window = std::make_unique<RadioModel>(RadioModel::Role::Remote);
         s->proxy = std::make_unique<SettingsProxy>();
         s->client = std::make_unique<StationClient>(s->window.get(), s->proxy.get());

@@ -692,12 +692,14 @@ public:
     //   - Removes DisplayPeakHold + DisplayPeakHoldDelayMs (→ ActivePeakHold keys, Task 2.5)
     //   - Removes DisplayReverseWaterfallScroll (W5 removed in Task 2.8)
     //   - v7 (R-R3-49): resets NetworkWatchdogEnabled once
+    //   - v8 (R-R3-49): drops TciRateLimitMsgsPerSec (old msg/s unit) once
     //   - Sets SettingsSchemaVersion=currentVersion
     void ensureSettingsAtVersion(int currentVersion);
 
     // One-shot migration: legacy global "hl2IoBoard/n2adrFilter" (Bug 2 in
     // hermes-filter-debug) → per-MAC "hardware/<mac>/hl2IoBoard/n2adrFilter"
-    // for every saved radio whose boardType is HermesLite. Removes the global
+    // for every saved radio whose boardType is HermesLite or HermesLiteRxOnly
+    // (the receive-only kit, Task 16). Removes the global
     // key after migration. Idempotent (no-op if global key absent).
     //
     // Why per-MAC: NereusSDR scopes radio-specific settings under

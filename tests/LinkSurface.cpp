@@ -34,6 +34,40 @@
 //                                    R-R3-47): the `accessorySettings`
 //                                    class. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 13 (R-IOS-08): the
+//                                    `devices` class; the live session's
+//                                    client declares deviceAuth so the
+//                                    object is sent. AI-assisted via
+//                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 14 (R-IOS-08): the
+//                                    five pair.* kinds' sample messages.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave: the optional device shortName in
+//               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave (security Minors R1-M1, M2, M4,
+//               M5): the confirm-step recheck, the step 1 point check, the
+//               per-address handshake cap and 0600 on load. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic Claude
+//               Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 19 (R-IOS-06): the
+//                                    `catalog` class. AI-assisted via
+//                                    Anthropic Claude Code.
+//   2026-09-25: iPhone app Task 71 (R-IOS-02): ConnectedDevicesFacade,
+//               sessionHolderVersion (the live client declares
+//               sessionHolder), and the maxDeviceSessions, graceMs and
+//               lanAnnouncementMaxBytes limits. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app Task 73 (R-IOS-02): SliceMarker and the
+//               `marker:<id>` key (a slice held for an away device in the
+//               live session). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app Task 74 (R-IOS-30): confirm.request and notice
+//               samples, and the confirmExpiryMs limit. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-IOS-27, R-IOS-06: the clarity-retune
+//                                    media operation. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "LinkSurface.h"
@@ -64,8 +98,8 @@
 #include "core/StepAttenuatorController.h"
 #include "core/StepAttenuatorFacade.h"
 #include "core/accessories/AlexAntennaFacade.h"
-#include "core/security/TokenStore.h"
 #include "core/dsp/DspAssetService.h"
+#include "core/security/DeviceStore.h"
 #include "core/session/MirrorEnumDomain.h"
 #include "core/session/MirrorPolicy.h"
 #include "core/session/MirrorSchema.h"
@@ -74,6 +108,14 @@
 #include "core/session/SessionMessages.h"
 #include "core/session/StationCapabilities.h"
 #include "core/session/StationClient.h"
+#include "core/session/StationCatalog.h"
+#include "core/session/StationDevicesFacade.h"
+#include "core/session/ConnectedDevicesFacade.h"
+#include "core/session/SliceMarker.h"
+#include "core/SliceOwnership.h"
+#include "core/session/ConfirmStep.h"
+#include "core/session/DeviceSessionRegistry.h"
+#include "core/session/StationLanAnnouncement.h"
 #include "core/session/StationServer.h"
 #include "core/session/StationTelemetry.h"
 #include "core/session/media/DisplayBudget.h"
@@ -97,6 +139,7 @@
 #include "models/TunerModel.h"
 
 #include "fakes/LoopbackTransport.h"
+#include "fakes/UpgradedCoreToken.h"
 
 namespace NereusSDR::Test {
 
@@ -146,21 +189,36 @@ std::optional<SessionMessage> sampleMessage(SessionMessageKind kind)
     case SessionMessageKind::CommandResult:
         return SessionMessages::commandResult("removeSlice", 1, true, QString(), {"slice:0"},
                                               {sampleUpdate("revision")});
-    case SessionMessageKind::Hello:
+    case SessionMessageKind::Hello: {
         // With the Task 4 declarations, so `majors` and `features` are
-        // recorded (as optional: an older peer sends neither).
-        return SessionMessages::hello(kSessionProtocolMajor, kSessionProtocolMinor, 1,
-                                      QStringLiteral("link-surface"), {kSessionProtocolMajor},
-                                      {{"linkSurface", 1}});
+        // recorded (as optional: an older peer sends neither), and the
+        // Core's Task 12 `identity` and `challenge` (optional: a client's
+        // hello, and an older Core's, carry neither). Placeholders, not keys.
+        SessionMessage m =
+            SessionMessages::hello(kSessionProtocolMajor, kSessionProtocolMinor, 1,
+                                   QStringLiteral("link-surface"), {kSessionProtocolMajor},
+                                   {{"linkSurface", 1}});
+        m.stationIdentity = SessionStationIdentity{QStringLiteral("key"),
+                                                   QStringLiteral("binding")};
+        m.challenge = QStringLiteral("challenge");
+        return m;
+    }
     case SessionMessageKind::AuthRequest:
-        // A placeholder, never a real token.
-        return SessionMessages::authRequest(QStringLiteral("placeholder"));
+        // Placeholders, never a real token, key or signature. With Task 12's
+        // `device` (optional: a token sign-in carries none).
+        return SessionMessages::authRequest(
+            QStringLiteral("placeholder"),
+            SessionDeviceBlock{QStringLiteral("id"), QStringLiteral("key"),
+                               QStringLiteral("name"), QStringLiteral("phone"),
+                               QStringLiteral("signature"), QStringLiteral("short")});
     case SessionMessageKind::AuthResult:
-        return SessionMessages::authResult(false, QStringLiteral("refused"), true);
+        // With Task 12's end `code` (optional).
+        return SessionMessages::authResult(false, QStringLiteral("refused"), true,
+                                           QStringLiteral("code"));
     case SessionMessageKind::Capabilities:
         return SessionMessages::capabilities({sampleUpdate("remoteMediaVersion")});
     case SessionMessageKind::SessionEnd:
-        return SessionMessages::sessionEnd(QStringLiteral("ended"), true);
+        return SessionMessages::sessionEnd(QStringLiteral("ended"), true, QStringLiteral("code"));
     case SessionMessageKind::PropertyWrite:
         return SessionMessages::propertyWrite("slice:0", {sampleUpdate("frequency")}, 7);
     case SessionMessageKind::PropertyResult: {
@@ -196,6 +254,52 @@ std::optional<SessionMessage> sampleMessage(SessionMessageKind kind)
         m.kind = SessionMessageKind::StationTelemetry;
         m.telemetry = sampleTelemetry(4);
         return m;
+    }
+    // iPhone app Task 14: the pair.* kinds. Placeholders, never a real key,
+    // code, share or box.
+    case SessionMessageKind::PairStart:
+        return SessionMessages::pairStart(
+            QStringLiteral("code"),
+            SessionPairDevice{QStringLiteral("key"), QStringLiteral("name"),
+                              QStringLiteral("phone")});
+    case SessionMessageKind::PairAccept:
+        return SessionMessages::pairAccept(
+            SessionStationIdentity{QStringLiteral("key"), QStringLiteral("binding")},
+            QStringLiteral("KG4VCF/shack"));
+    case SessionMessageKind::PairSpake:
+        return SessionMessages::pairSpake(1, QStringLiteral("share"));
+    case SessionMessageKind::PairConfirm:
+        return SessionMessages::pairConfirm(QStringLiteral("box"));
+    case SessionMessageKind::PairFail:
+        return SessionMessages::pairFail(QStringLiteral("refused"), 5000);
+    // iPhone app Task 74: every optional key present.
+    case SessionMessageKind::ConfirmRequest: {
+        SessionPrompt prompt;
+        prompt.id = 1;
+        prompt.kind = QStringLiteral("panMove");
+        prompt.affected = QJsonArray{QJsonObject{}};
+        prompt.expiresInMs = 60000;
+        prompt.change = QJsonObject{{QStringLiteral("label"), QStringLiteral("Receiver 1")}};
+        prompt.choices = QJsonArray{QJsonObject{}};
+        prompt.forCommandId = 2;
+        prompt.forWriteId = 3;
+        prompt.forSettingsKey = QStringLiteral("StationCallsign");
+        return SessionMessages::confirmRequest(prompt, QStringLiteral("asked"));
+    }
+    case SessionMessageKind::Notice: {
+        SessionPrompt prompt;
+        prompt.id = 1;
+        prompt.kind = QStringLiteral("receiverTaken");
+        prompt.secondsAgo = 3;
+        prompt.takeBack = true;
+        prompt.byDeviceId = QStringLiteral("id");
+        prompt.byName = QStringLiteral("name");
+        prompt.byShortName = QStringLiteral("short");
+        prompt.byKind = QStringLiteral("phone");
+        prompt.bySource = QStringLiteral("device");
+        prompt.slices = QJsonArray{QJsonObject{}};
+        prompt.change = QJsonObject{{QStringLiteral("label"), QStringLiteral("Receiver 1")}};
+        return SessionMessages::notice(prompt, QStringLiteral("told"));
     }
     }
     return std::nullopt;
@@ -295,24 +399,31 @@ std::optional<QList<QByteArray>> liveSessionWire(
     model->setLastRadioInfoForTest(info);
     model->setConnectionStateForTest(ConnectionState::Connected);
     model->addSlice(QStringLiteral("pan-0"));
+    // iPhone app Task 73: a second slice the Core runs for another device
+    // that is away, so the session this peer sees holds a `marker:<id>` as
+    // well as its own `slice:<id>`.
+    const int held = model->addSlice(QStringLiteral("pan-0"));
+    model->sliceOwnership()->hold(held, QByteArray(32, '\x5a'));
     model->addPanadapter();
 
-    // Provision the throwaway token first, so the server loads it rather
-    // than generating one and printing its first-run pairing banner.
-    { TokenStore provision(dir.path()); }
 
     // Declared before the server so it outlives it; the server owns the
     // station end once it accepts it.
     auto clientEnd = std::make_unique<LoopbackTransport>(QStringLiteral("link-surface-client"));
-    StationServer server(model.get(), stationSettings, dir.path());
+    StationServer server(model.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
     if (configure) {
         configure(server);
     }
     auto* stationEnd = new LoopbackTransport(QStringLiteral("link-surface-station"), &server);
     stationEnd->linkTo(clientEnd.get());
     server.acceptTransport(stationEnd);
+    // Declaring deviceAuth, as a device that signs in by key does, so the
+    // `devices` object (iPhone app Task 13) is among what the Core sends;
+    // and sessionHolder (iPhone app Task 71), so `connectedDevices` and
+    // sessionHolderVersion are too.
     clientEnd->sendText(SessionMessages::encode(SessionMessages::hello(
-        kSessionProtocolMajor, kSessionProtocolMinor, 0, QStringLiteral("link-surface"))));
+        kSessionProtocolMajor, kSessionProtocolMinor, 0, QStringLiteral("link-surface"),
+        {kSessionProtocolMajor}, {{"deviceAuth", 1}, {"sessionHolder", 1}})));
     clientEnd->sendText(SessionMessages::encode(SessionMessages::authRequest(server.token())));
 
     // The loopback delivers on later event-loop turns, as a socket would.
@@ -338,6 +449,8 @@ QJsonArray captureCapabilities()
     caps.displayBudget = DisplayBudgetLimits{1, 1, 1};
     caps.displayBudgetReason = DisplayBudgetReason::CoreBusy;
     caps.radioIdentityEntries = true;
+    // iPhone app Task 71: sent to a peer that declared sessionHolder.
+    caps.sessionHolderEntry = true;
 
     // The values come from a live station with every feature a Core can
     // switch on: media, telemetry, an enforced display budget with its
@@ -457,6 +570,7 @@ QJsonArray captureObjectKeys()
 
     static const QRegularExpression kPan(QStringLiteral("^pan:[0-9]+$"));
     static const QRegularExpression kSlice(QStringLiteral("^slice:[0-9]+$"));
+    static const QRegularExpression kMarker(QStringLiteral("^marker:[0-9]+$"));
     QSet<QString> seen;
     for (const QByteArray& message : *wire) {
         SessionMessage decoded;
@@ -469,6 +583,8 @@ QJsonArray captureObjectKeys()
             pattern = QStringLiteral("pan:<i>");
         } else if (kSlice.match(pattern).hasMatch()) {
             pattern = QStringLiteral("slice:<id>");
+        } else if (kMarker.match(pattern).hasMatch()) {
+            pattern = QStringLiteral("marker:<id>");
         }
         if (seen.contains(pattern)) {
             continue;
@@ -764,8 +880,10 @@ QJsonObject guiToCoreOps()
                declaredOp(kMedia, peer + QStringList{QStringLiteral("sdp"), QStringLiteral("type")}));
     ops.insert(QStringLiteral("candidate"),
                declaredOp(kMedia, peer + QStringList{QStringLiteral("candidate"), QStringLiteral("mid")}));
-    // DaemonMediaController.cpp handleSubscribe (extendedView removed before
-    // exactKeys) and parsePlane.
+    // DaemonMediaController.cpp handleSubscribe (extendedView and the
+    // display extras fields removed before exactKeys), parsePlane, and
+    // DisplayExtras.cpp parseDisplayExtrasRequest (iPhone app Task 20).
+    const QString extras = QStringLiteral("displayExtrasVersion");
     ops.insert(QStringLiteral("subscribe"), declaredOp(kMedia,
         peer + QStringList{QStringLiteral("endpointId"), QStringLiteral("revision"),
                            QStringLiteral("sliceId"), QStringLiteral("tier"),
@@ -775,8 +893,27 @@ QJsonObject guiToCoreOps()
                            QStringLiteral("framesPerLine"), QStringLiteral("trace"),
                            QStringLiteral("waterfall"), QStringLiteral("minDbm"),
                            QStringLiteral("maxDbm"), QStringLiteral("wideSpanFactor")},
-        {{QStringLiteral("extendedView"), {QStringLiteral("remoteWidebandDisplayVersion")}}},
-        {{QStringLiteral("trace"), plane}, {QStringLiteral("waterfall"), plane}}));
+        {{QStringLiteral("extendedView"), {QStringLiteral("remoteWidebandDisplayVersion")}},
+         {QStringLiteral("peakBlobs"), {extras}},
+         {QStringLiteral("activePeakHold"), {extras}},
+         {QStringLiteral("noiseFloor"), {extras}},
+         {QStringLiteral("waterfallLevels"), {extras}},
+         {QStringLiteral("normalize"), {extras}},
+         {QStringLiteral("calibrationOffsetDb"), {extras}},
+         {QStringLiteral("averageTimeMs"), {extras}},
+         {QStringLiteral("waterfallAverageTimeMs"), {extras}}},
+        {{QStringLiteral("trace"), plane}, {QStringLiteral("waterfall"), plane},
+         {QStringLiteral("peakBlobs"),
+          {QStringLiteral("count"), QStringLiteral("holdMs"),
+           QStringLiteral("fallDbPerSec"), QStringLiteral("insideOnly")}},
+         {QStringLiteral("activePeakHold"),
+          {QStringLiteral("enabled"), QStringLiteral("holdMs"),
+           QStringLiteral("fallDbPerSec")}},
+         {QStringLiteral("noiseFloor"),
+          {QStringLiteral("enabled"), QStringLiteral("shiftDb")}},
+         {QStringLiteral("waterfallLevels"),
+          {QStringLiteral("mode"), QStringLiteral("lowDbm"), QStringLiteral("highDbm"),
+           QStringLiteral("offsetDb")}}}));
     // DaemonMediaController.cpp handleUnsubscribe: revision only with the
     // display budget.
     ops.insert(QStringLiteral("unsubscribe"),
@@ -786,6 +923,10 @@ QJsonObject guiToCoreOps()
     ops.insert(QStringLiteral("keyframe"),
                declaredOp(kMedia, peer + QStringList{QStringLiteral("endpointId"),
                                                      QStringLiteral("contextGeneration")}));
+    // DaemonMediaController.cpp handleClarityRetune (R-IOS-27, R-IOS-06):
+    // displayExtrasVersion 2.
+    ops.insert(QStringLiteral("clarity-retune"),
+               declaredOp(extras, peer + QStringList{QStringLiteral("endpointId")}));
     // DaemonMediaController.cpp handleAudio: profile only from a GUI that
     // negotiated the audio detail and the Core's audio profiles.
     ops.insert(QStringLiteral("audio"),
@@ -1037,6 +1178,31 @@ QJsonObject captureLimits()
     limits.insert(QStringLiteral("maxPeers"),
                   limit(StationServer::kMaxConcurrentPeers, QStringLiteral("count"),
                         QStringLiteral("StationServer::kMaxConcurrentPeers")));
+    // Part C fix wave (R1-M4): connecting peers one address may hold.
+    limits.insert(QStringLiteral("maxHandshakesPerAddress"),
+                  limit(StationServer::kMaxHandshakesPerAddress, QStringLiteral("count"),
+                        QStringLiteral("StationServer::kMaxHandshakesPerAddress")));
+    // iPhone app Task 71 (R-IOS-02): the devices that hold a place at once,
+    // how long a dropped one keeps it, and the LAN announcement's largest
+    // schema-2 datagram now that it carries the count.
+    limits.insert(QStringLiteral("maxDeviceSessions"),
+                  limit(StationServer::kMaxDeviceSessions, QStringLiteral("count"),
+                        QStringLiteral("StationServer::kMaxDeviceSessions")));
+    limits.insert(QStringLiteral("graceMs"),
+                  limit(static_cast<qint64>(DeviceSessionRegistry::kGraceMs), QStringLiteral("ms"),
+                        QStringLiteral("DeviceSessionRegistry::kGraceMs")));
+    // iPhone app Task 74 (R-IOS-30): how long a question stays open
+    // (ruling 7.5; sent as expiresInMs, enforced from Task 75).
+    limits.insert(QStringLiteral("confirmExpiryMs"),
+                  limit(static_cast<qint64>(ConfirmStep::kExpiryMs), QStringLiteral("ms"),
+                        QStringLiteral("ConfirmStep::kExpiryMs")));
+    limits.insert(QStringLiteral("lanAnnouncementMaxBytes"),
+                  limit(kStationLanMaxSchema2DatagramBytes, QStringLiteral("bytes"),
+                        QStringLiteral("kStationLanMaxSchema2DatagramBytes")));
+    // Part C fix wave: auth.request's optional device `shortName`.
+    limits.insert(QStringLiteral("shortNameMaxBytes"),
+                  limit(DeviceStore::kMaxShortNameBytes, QStringLiteral("bytes"),
+                        QStringLiteral("DeviceStore::kMaxShortNameBytes")));
     // DaemonMediaController.cpp:35 [file scope, unreachable here]:
     //   constexpr int kMaxEndpoints = 8;
     limits.insert(QStringLiteral("maxDisplayEndpoints"),
@@ -1219,7 +1385,11 @@ QList<const QMetaObject*> LinkSurface::mirroredMetaObjects()
             &RfKitModel::staticMetaObject,
             &StationTciModel::staticMetaObject,
             &AccessoryDataModel::staticMetaObject,
-            &AccessorySettingsModel::staticMetaObject};
+            &AccessorySettingsModel::staticMetaObject,
+            &StationDevicesFacade::staticMetaObject,
+            &StationCatalog::staticMetaObject,
+            &ConnectedDevicesFacade::staticMetaObject,
+            &SliceMarker::staticMetaObject};
 }
 
 QJsonObject LinkSurface::capture()

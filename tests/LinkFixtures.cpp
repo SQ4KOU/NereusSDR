@@ -23,6 +23,32 @@
 //                                    each client step's role; placeholders
 //                                    in client messages.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 12 (R-IOS-08):
+//                                    "$device:<case>" and the runner's own
+//                                    device key, made at run time.
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 13 (R-IOS-08):
+//                                    stationSetup "otherPairedDevices" and
+//                                    the device ids it records, with the
+//                                    runner's own, for "$ref:device:<n>"
+//                                    and "$ref:device:self".
+//                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave: the optional device shortName in
+//               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app Task 71 (R-IOS-02): the several-client player
+//               (stationSetup.otherClients, "client" and "to", the connect
+//               and close steps, a named expectClosed); preemptingClient
+//               withdrawn. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app Task 73 (R-IOS-02): the session registry counts
+//               on the virtual clock, so advanceMs reaches the end of a
+//               device's 180 s. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app (R-IOS-01, R-IOS-02): {"$json": <expectation>}
+//               matches a station string holding JSON; a client message
+//               holding one is refused. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "LinkFixtures.h"
@@ -39,9 +65,11 @@
 #include <QJsonDocument>
 #include <QMetaObject>
 #include <QPointer>
+#include <QRandomGenerator>
 #include <QRegularExpression>
 #include <QSet>
 #include <QStringList>
+#include <QTemporaryDir>
 #include <QTimer>
 
 #include <algorithm>
@@ -50,9 +78,14 @@
 #include <vector>
 
 #include "core/dsp/Ps3Snapshot.h"
+#include "core/security/DeviceAuthenticator.h"
+#include "core/security/DeviceStore.h"
+#include "core/security/StationIdentity.h"
 #include "core/session/LinkVersion.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StationLanAnnouncement.h"
+#include "core/session/DnsSdAdvertiser.h"
+#include "core/session/DeviceSessionRegistry.h"
 #include "core/session/StationServer.h"
 #include "fakes/LoopbackTransport.h"
 
@@ -109,6 +142,7 @@ QString placeholderArgument(const QString& text, const QString& prefix)
 //   $within:<t>:<v>      a number no further than <t> from <v>
 //   $majors              only as a hello's "majors": whole numbers from 0 to
 //                        65535, ascending, no repeats, naming its "major"
+// and one object form, {"$json": <expectation>} (isJsonForm below).
 bool isPlaceholder(const QJsonValue& value)
 {
     if (!value.isString()) {
@@ -123,6 +157,37 @@ bool isPlaceholder(const QJsonValue& value)
         || (text.startsWith(QStringLiteral("$capture:")) && text.size() > 9)
         || (text.startsWith(QStringLiteral("$ref:")) && text.size() > 5)
         || text.startsWith(QStringLiteral("$within:"));
+}
+
+// Whether `value` is the form {"$json": <expectation>} (section 16.1): an
+// object holding the key "$json". It stands where the station sends a
+// string holding JSON; a second key beside "$json" is a malformed fixture,
+// which the matcher reports.
+bool isJsonForm(const QJsonValue& value)
+{
+    return value.isObject() && value.toObject().contains(QStringLiteral("$json"));
+}
+
+// `text` parsed as one JSON value of any kind (an object, an array, a
+// string, a number, true, false or null); `why` set, and undefined
+// returned, when it is not exactly one. QJsonDocument parses only an
+// object or an array at the top, so the text is read as the one element
+// of an array.
+QJsonValue parseJsonText(const QString& text, QString* why)
+{
+    QJsonParseError error{};
+    const QJsonDocument document = QJsonDocument::fromJson(
+        QByteArrayLiteral("[") + text.toUtf8() + QByteArrayLiteral("]"), &error);
+    if (error.error != QJsonParseError::NoError) {
+        *why = error.errorString();
+        return QJsonValue(QJsonValue::Undefined);
+    }
+    if (document.array().size() != 1) {
+        *why = document.array().isEmpty() ? QStringLiteral("empty")
+                                           : QStringLiteral("more than one value");
+        return QJsonValue(QJsonValue::Undefined);
+    }
+    return document.array().at(0);
 }
 
 // Why `actual` is not a list of majors naming `major`, or an empty
@@ -567,6 +632,31 @@ QString LinkFixtures::match(const QJsonValue& expected, const QJsonValue& actual
         return match(captures->value(ref), actual, captures, path);
     }
 
+    if (isJsonForm(expected)) {
+        // {"$json": <expectation>}: a string the station sends, holding
+        // JSON, matched against the expectation (section 16.1). Object key
+        // order inside it is the parser's business; array order matters.
+        const QJsonObject form = expected.toObject();
+        if (form.size() != 1) {
+            return QStringLiteral("%1: {\"$json\": ...} stands alone in its object").arg(path);
+        }
+        if (actual.isUndefined()) {
+            return QStringLiteral("%1: expected a string holding JSON, the key is absent")
+                .arg(path);
+        }
+        if (!actual.isString()) {
+            return QStringLiteral("%1: expected a string holding JSON, got %2")
+                .arg(path, shown(actual));
+        }
+        QString why;
+        const QJsonValue parsed = parseJsonText(actual.toString(), &why);
+        if (!why.isEmpty()) {
+            return QStringLiteral("%1: not JSON (%2), got %3").arg(path, why, shown(actual));
+        }
+        return match(form.value(QStringLiteral("$json")), parsed, captures,
+                     path + QStringLiteral("($json)"));
+    }
+
     if (expected.isObject()) {
         if (!actual.isObject()) {
             return QStringLiteral("%1: expected an object, got %2").arg(path, shown(actual));
@@ -684,6 +774,11 @@ QJsonValue LinkFixtures::substitute(const QJsonValue& value, Captures* captures,
             return {};
         }
         return captures->value(ref);
+    }
+    if (isJsonForm(value)) {
+        // Only the station sends a {"$json": ...}; no runner fills one.
+        *error = QStringLiteral("{\"$json\": ...} cannot stand in a client message");
+        return {};
     }
     if (value.isObject()) {
         QJsonObject out;
@@ -805,6 +900,44 @@ QString LinkFixtures::checkSessionFormat(const QJsonObject& fixture)
     if (!fixture.value(QStringLiteral("stationSetup")).isObject()) {
         return QStringLiteral("session fixture: stationSetup must be an object");
     }
+    // iPhone app Task 71: the other clients a fixture names, by name.
+    QSet<QString> others;
+    const QJsonValue otherClients =
+        fixture.value(QStringLiteral("stationSetup")).toObject().value(QStringLiteral("otherClients"));
+    if (!otherClients.isUndefined()) {
+        if (!otherClients.isArray()) {
+            return QStringLiteral("session fixture: stationSetup.otherClients must be an array");
+        }
+        for (const QJsonValue& value : otherClients.toArray()) {
+            const QJsonObject other = value.toObject();
+            problem = expectKeys(other,
+                                 {QStringLiteral("name"), QStringLiteral("device"),
+                                  QStringLiteral("features")},
+                                 {QStringLiteral("shortName")},
+                                 QStringLiteral("stationSetup.otherClients entry"));
+            if (!problem.isEmpty()) {
+                return problem;
+            }
+            const QString name = other.value(QStringLiteral("name")).toString();
+            const QJsonValue device = other.value(QStringLiteral("device"));
+            if (name.isEmpty() || others.contains(name)
+                || (!(device.isDouble() && device.toDouble() >= 1.0
+                      && device.toDouble() == static_cast<double>(device.toInt()))
+                    && device.toString() != QStringLiteral("self"))
+                || !other.value(QStringLiteral("features")).isObject()
+                || (other.contains(QStringLiteral("shortName"))
+                    && !other.value(QStringLiteral("shortName")).isString())) {
+                return QStringLiteral("session fixture: stationSetup.otherClients: each needs a "
+                                      "unique name, a device (a whole number from 1, or "
+                                      "\"self\"), features (an object) and, if any, a string "
+                                      "shortName");
+            }
+            others.insert(name);
+        }
+    }
+    const auto knownClient = [&others](const QJsonObject& step, const QString& key) {
+        return !step.contains(key) || others.contains(step.value(key).toString());
+    };
     const QJsonArray steps = fixture.value(QStringLiteral("steps")).toArray();
     if (steps.isEmpty()) {
         return QStringLiteral("session fixture: no steps");
@@ -821,16 +954,22 @@ QString LinkFixtures::checkSessionFormat(const QJsonObject& fixture)
                 problem = expectKeys(step,
                                      {QStringLiteral("from"), QStringLiteral("role"),
                                       QStringLiteral("message")},
-                                     {}, where);
+                                     {QStringLiteral("client")}, where);
                 const QString role = step.value(QStringLiteral("role")).toString();
                 if (problem.isEmpty() && role != QStringLiteral("behaviour")
                     && role != QStringLiteral("scripted")) {
                     problem = where + QStringLiteral(": role must be \"behaviour\" or "
                                                      "\"scripted\"");
                 }
+                if (problem.isEmpty() && !knownClient(step, QStringLiteral("client"))) {
+                    problem = where + QStringLiteral(": client names no other client");
+                }
             } else if (from == QStringLiteral("station")) {
                 problem = expectKeys(step, {QStringLiteral("from"), QStringLiteral("message")},
-                                     {}, where);
+                                     {QStringLiteral("to")}, where);
+                if (problem.isEmpty() && !knownClient(step, QStringLiteral("to"))) {
+                    problem = where + QStringLiteral(": to names no other client");
+                }
             } else {
                 problem = where + QStringLiteral(": from must be \"station\" or \"client\"");
             }
@@ -848,12 +987,30 @@ QString LinkFixtures::checkSessionFormat(const QJsonObject& fixture)
         } else if (step.contains(QStringLiteral("expectClosed"))) {
             problem = expectKeys(step, {QStringLiteral("expectClosed")}, {}, where);
             if (problem.isEmpty()) {
-                problem = expectKeys(step.value(QStringLiteral("expectClosed")).toObject(),
-                                     {QStringLiteral("retryable")}, {},
+                const QJsonObject closed = step.value(QStringLiteral("expectClosed")).toObject();
+                problem = expectKeys(closed, {QStringLiteral("retryable")},
+                                     {QStringLiteral("client")},
                                      where + QStringLiteral(" expectClosed"));
+                if (problem.isEmpty() && !knownClient(closed, QStringLiteral("client"))) {
+                    problem = where + QStringLiteral(" expectClosed: client names no other "
+                                                     "client");
+                }
+            }
+        } else if (step.contains(QStringLiteral("connect")) || step.contains(QStringLiteral("close"))) {
+            // iPhone app Task 71: another client's whole connect sequence,
+            // or its close.
+            const QString key = step.contains(QStringLiteral("connect")) ? QStringLiteral("connect")
+                                                                         : QStringLiteral("close");
+            problem = expectKeys(step, {key}, {}, where);
+            if (problem.isEmpty()
+                && (!step.value(key).isString()
+                    || !others.contains(step.value(key).toString()))) {
+                problem = where + QStringLiteral(": %1 must name one of "
+                                                 "stationSetup.otherClients").arg(key);
             }
         } else {
-            problem = where + QStringLiteral(": not a message, advanceMs or expectClosed step");
+            problem = where + QStringLiteral(": not a message, advanceMs, expectClosed, "
+                                             "connect or close step");
         }
         if (!problem.isEmpty()) {
             return problem;
@@ -861,6 +1018,124 @@ QString LinkFixtures::checkSessionFormat(const QJsonObject& fixture)
     }
     return QString();
 }
+
+namespace {
+
+// iPhone app Task 12: the runner's own device for "$device:<case>" (the
+// link document, section 16.1). Its key is made at run time in a scratch
+// directory; stationSetup's "pairedDevice" puts it in the Core's paired
+// devices before the client connects.
+struct ConformanceDevice {
+    QTemporaryDir dir;
+    StationIdentity key = StationIdentity::loadOrCreate(dir.path());
+};
+
+bool mentionsDevice(const QJsonValue& value)
+{
+    if (value.isString()) {
+        return value.toString().startsWith(QStringLiteral("$device:"));
+    }
+    if (value.isObject()) {
+        const QJsonObject object = value.toObject();
+        return std::any_of(object.begin(), object.end(),
+                           [](const QJsonValue& v) { return mentionsDevice(v); });
+    }
+    if (value.isArray()) {
+        const QJsonArray array = value.toArray();
+        return std::any_of(array.begin(), array.end(),
+                           [](const QJsonValue& v) { return mentionsDevice(v); });
+    }
+    return false;
+}
+
+// Fills every "$device:<case>" with the device block the runner's device
+// sends: "signed" signs this connection's transcript (the challenge the
+// station's hello gave, recorded as "challenge"); "otherChallenge" signs one
+// with a challenge of the runner's own; "otherCertificate" signs one that
+// binds a certificate other than the station's.
+QJsonValue fillDevice(const QJsonValue& value, const ConformanceDevice& device,
+                      const StationServer& server, const LinkFixtures::Captures& captures,
+                      QString* error)
+{
+    if (value.isString() && value.toString().startsWith(QStringLiteral("$device:"))) {
+        const QString which = value.toString().mid(8);
+        if (!captures.contains(QStringLiteral("challenge"))) {
+            *error = QStringLiteral("$device needs the station's challenge recorded as "
+                                    "\"challenge\"");
+            return {};
+        }
+        bool ok = false;
+        QByteArray challenge = StationIdentity::fromBase64Url(
+            captures.value(QStringLiteral("challenge")).toString(), &ok);
+        QString pin = server.certificateFingerprint();
+        pin.remove(QLatin1Char(':'));
+        QByteArray certSha256 = QByteArray::fromHex(pin.toLatin1());
+        if (which == QStringLiteral("otherChallenge")) {
+            quint32 words[DeviceAuthenticator::kChallengeBytes / sizeof(quint32)]{};
+            QRandomGenerator::system()->fillRange(words);
+            challenge = QByteArray(reinterpret_cast<const char*>(words), sizeof(words));
+        } else if (which == QStringLiteral("otherCertificate")) {
+            certSha256 = StationIdentity::fingerprintOf(QByteArrayLiteral("another certificate"));
+        } else if (which != QStringLiteral("signed")) {
+            *error = QStringLiteral("%1 is not $device:signed, $device:otherChallenge or "
+                                    "$device:otherCertificate").arg(value.toString());
+            return {};
+        }
+        if (!ok || !device.key.isValid()) {
+            *error = QStringLiteral("$device: no usable challenge or device key");
+            return {};
+        }
+        const QByteArray transcript = DeviceAuthenticator::transcript(
+            challenge, certSha256, server.stationIdentity().publicKeySpki(),
+            device.key.publicKeySpki());
+        return QJsonObject{
+            {QStringLiteral("id"), StationIdentity::toBase64Url(device.key.fingerprint())},
+            {QStringLiteral("publicKey"), StationIdentity::toBase64Url(device.key.publicKeySpki())},
+            {QStringLiteral("name"), QStringLiteral("Conformance device")},
+            {QStringLiteral("kind"), QStringLiteral("phone")},
+            {QStringLiteral("signature"),
+             StationIdentity::toBase64Url(device.key.sign(transcript))},
+            // Part C fix wave: every sign-in the station's runner makes
+            // carries a short name, as the app's does.
+            {QStringLiteral("shortName"), QStringLiteral("Conformance")},
+        };
+    }
+    if (value.isObject()) {
+        QJsonObject out;
+        const QJsonObject in = value.toObject();
+        for (auto it = in.constBegin(); it != in.constEnd(); ++it) {
+            out.insert(it.key(), fillDevice(it.value(), device, server, captures, error));
+        }
+        return out;
+    }
+    return value;
+}
+
+} // namespace
+
+namespace {
+
+// iPhone app Task 71: one client the player plays. The fixture's own client
+// is the caller's transport; each of stationSetup's otherClients is made
+// here when its {"connect"} step comes. Each client's station messages are
+// matched in its own arrival order.
+struct PlayedClient {
+    QString name;
+    LoopbackTransport* transport = nullptr;
+    std::unique_ptr<LoopbackTransport> owned;
+    int consumed = 0;
+    bool lastRetryable = false;
+    bool sawEnding = false;
+    // For an other client: its device (the runner's own for "self") and
+    // what its hello and sign-in carry.
+    const ConformanceDevice* device = nullptr;
+    QString deviceName;
+    QString deviceKind;
+    QString shortName;
+    QHash<QByteArray, int> features;
+};
+
+} // namespace
 
 QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& server,
                                  LoopbackTransport& transport)
@@ -879,25 +1154,117 @@ QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& serv
     }
 
     transport.setAnswersPings(setup.value(QStringLiteral("clientAnswersPings")).toBool(true));
-    int preemptAfter = -1;
-    if (setup.contains(QStringLiteral("preemptingClient"))) {
-        preemptAfter = setup.value(QStringLiteral("preemptingClient"))
-                           .toObject()
-                           .value(QStringLiteral("afterStep"))
-                           .toInt(-1);
-        if (preemptAfter < 0 || preemptAfter >= steps.size()) {
-            return QStringLiteral("stationSetup.preemptingClient.afterStep must name a step");
-        }
-    }
 
     Captures captures;
     captures.insert(QStringLiteral("token"), server.token());
     int counter = 0;
+
+    // iPhone app Task 12: the runner's device, when the fixture uses one.
+    std::unique_ptr<ConformanceDevice> device;
+    const bool paired = setup.value(QStringLiteral("pairedDevice")).toBool(false);
+    const QJsonArray otherClientsSetup = setup.value(QStringLiteral("otherClients")).toArray();
+    bool selfClient = false;
+    for (const QJsonValue& other : otherClientsSetup) {
+        selfClient = selfClient
+            || other.toObject().value(QStringLiteral("device")).toString() == QStringLiteral("self");
+    }
+    if (paired || selfClient || mentionsDevice(QJsonValue(steps))) {
+        device = std::make_unique<ConformanceDevice>();
+        if (!device->key.isValid()) {
+            return QStringLiteral("the runner's device key could not be made");
+        }
+    }
+    if (paired) {
+        PairedDevice record;
+        record.id = device->key.fingerprint();
+        record.publicKeySpki = device->key.publicKeySpki();
+        record.name = QStringLiteral("Conformance device");
+        record.kind = QStringLiteral("phone");
+        if (server.deviceStore() == nullptr || !server.deviceStore()->add(record)) {
+            return QStringLiteral("stationSetup.pairedDevice: the device could not be paired");
+        }
+        captures.insert(QStringLiteral("device:self"),
+                        StationIdentity::toBase64Url(device->key.fingerprint()));
+    }
+    // iPhone app Task 13: devices besides the runner's own, paired before
+    // the client connects, their keys made here and their ids recorded as
+    // "device:1" to "device:<n>" in the order they were paired.
+    std::vector<std::unique_ptr<ConformanceDevice>> otherDevices;
+    const QJsonValue othersValue = setup.value(QStringLiteral("otherPairedDevices"));
+    const double othersCount = othersValue.toDouble(0.0);
+    if (!othersValue.isUndefined()
+        && (!othersValue.isDouble() || othersCount < 0.0 || othersCount > 16.0
+            || othersCount != static_cast<double>(static_cast<int>(othersCount)))) {
+        return QStringLiteral("stationSetup.otherPairedDevices must be a whole number from 0 "
+                              "to 16");
+    }
+    for (int n = 1; n <= static_cast<int>(othersCount); ++n) {
+        auto other = std::make_unique<ConformanceDevice>();
+        PairedDevice record;
+        record.id = other->key.fingerprint();
+        record.publicKeySpki = other->key.publicKeySpki();
+        record.name = QStringLiteral("Other device %1").arg(n);
+        record.kind = QStringLiteral("tablet");
+        if (!other->key.isValid() || server.deviceStore() == nullptr
+            || !server.deviceStore()->add(record)) {
+            return QStringLiteral("stationSetup.otherPairedDevices: device %1 could not be "
+                                  "paired").arg(n);
+        }
+        captures.insert(QStringLiteral("device:%1").arg(n),
+                        StationIdentity::toBase64Url(record.id));
+        otherDevices.push_back(std::move(other));
+    }
+
+    // iPhone app Task 71: the clients the player plays, its own first.
+    std::vector<std::unique_ptr<PlayedClient>> clients;
+    {
+        auto own = std::make_unique<PlayedClient>();
+        own->transport = &transport;
+        clients.push_back(std::move(own));
+    }
+    for (const QJsonValue& value : otherClientsSetup) {
+        const QJsonObject other = value.toObject();
+        auto client = std::make_unique<PlayedClient>();
+        client->name = other.value(QStringLiteral("name")).toString();
+        const QJsonValue which = other.value(QStringLiteral("device"));
+        if (which.toString() == QStringLiteral("self")) {
+            client->device = device.get();
+            client->deviceName = QStringLiteral("Conformance device");
+            client->deviceKind = QStringLiteral("phone");
+        } else {
+            const int n = which.toInt();
+            if (n < 1 || n > static_cast<int>(otherDevices.size())) {
+                return QStringLiteral("stationSetup.otherClients: %1 names device %2, which "
+                                      "otherPairedDevices does not pair")
+                    .arg(client->name)
+                    .arg(n);
+            }
+            client->device = otherDevices.at(static_cast<size_t>(n - 1)).get();
+            client->deviceName = QStringLiteral("Other device %1").arg(n);
+            client->deviceKind = QStringLiteral("tablet");
+        }
+        client->shortName = other.value(QStringLiteral("shortName")).toString();
+        const QJsonObject features = other.value(QStringLiteral("features")).toObject();
+        for (auto it = features.constBegin(); it != features.constEnd(); ++it) {
+            client->features.insert(it.key().toUtf8(), it.value().toInt());
+        }
+        clients.push_back(std::move(client));
+    }
+    const auto clientNamed = [&clients](const QString& name) -> PlayedClient* {
+        for (const auto& client : clients) {
+            if (client->name == name) {
+                return client.get();
+            }
+        }
+        return nullptr;
+    };
+
     VirtualClock clock(&server);
-    int consumed = 0;
-    bool lastRetryable = false;
-    bool sawEnding = false;
-    std::unique_ptr<LoopbackTransport> preempting;
+    // iPhone app Task 73: a device's 180 s count on the same virtual time as
+    // the timer that ends them, so an advanceMs of 180000 ends them.
+    if (server.deviceSessions() != nullptr) {
+        server.deviceSessions()->setClock([&clock]() { return clock.now(); });
+    }
 
     const auto describe = [&steps](int index) {
         const QJsonObject step = steps.at(index).toObject();
@@ -909,21 +1276,45 @@ QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& serv
                                 .toObject()
                                 .value(QStringLiteral("type"))
                                 .toString());
+            const QString who = step.value(QStringLiteral("client"))
+                                    .toString(step.value(QStringLiteral("to")).toString());
+            if (!who.isEmpty()) {
+                what += QStringLiteral(" (%1)").arg(who);
+            }
         } else if (step.contains(QStringLiteral("advanceMs"))) {
             what = QStringLiteral("advanceMs");
+        } else if (step.contains(QStringLiteral("connect"))) {
+            what = QStringLiteral("connect %1").arg(step.value(QStringLiteral("connect")).toString());
+        } else if (step.contains(QStringLiteral("close"))) {
+            what = QStringLiteral("close %1").arg(step.value(QStringLiteral("close")).toString());
         } else {
             what = QStringLiteral("expectClosed");
         }
         return QStringLiteral("step %1 (%2)").arg(index).arg(what);
     };
 
-    const auto unconsumed = [&transport, &consumed]() {
+    const auto unconsumed = [](const PlayedClient& client) {
         QStringList kinds;
-        const QList<QByteArray> received = transport.received();
-        for (int i = consumed; i < received.size(); ++i) {
+        const QList<QByteArray> received = client.transport->received();
+        for (int i = client.consumed; i < received.size(); ++i) {
             kinds.append(QString::fromUtf8(received.at(i).left(kMaxShownChars)));
         }
         return kinds;
+    };
+
+    // Waits, in real time, for `client` to have received more than it
+    // consumed (work on another thread of the fake radio).
+    const auto waitForMessage = [&clock](const PlayedClient& client) {
+        drain();
+        if (client.transport->received().size() <= client.consumed) {
+            const QDeadlineTimer deadline(kStationReplyWaitMs);
+            while (client.transport->received().size() <= client.consumed
+                   && !deadline.hasExpired()) {
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+                QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+            }
+        }
+        clock.scan();
     };
 
     drain();
@@ -941,40 +1332,51 @@ QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& serv
             if (!message.isObject()) {
                 return QStringLiteral("%1: message must be an object").arg(describe(index));
             }
+            const QString who = step.value(from == QStringLiteral("client")
+                                               ? QStringLiteral("client")
+                                               : QStringLiteral("to"))
+                                    .toString();
+            PlayedClient* client = clientNamed(who);
+            if (client == nullptr) {
+                return QStringLiteral("%1: no such client").arg(describe(index));
+            }
             if (from == QStringLiteral("client")) {
                 QString error;
                 // Behaviour or scripted, the station's runner sends the
                 // message itself, placeholders filled (section 16.3).
-                const QJsonValue sent = substitute(message, &captures, &counter, &error);
+                QJsonValue outgoing = message;
+                if (device && client == clients.front().get()) {
+                    outgoing = fillDevice(message, *device, server, captures, &error);
+                    if (!error.isEmpty()) {
+                        return QStringLiteral("%1: %2").arg(describe(index), error);
+                    }
+                }
+                const QJsonValue sent = substitute(outgoing, &captures, &counter, &error);
                 if (!error.isEmpty()) {
                     return QStringLiteral("%1: %2").arg(describe(index), error);
                 }
-                if (!transport.isOpen()) {
+                if (client->transport == nullptr || !client->transport->isOpen()) {
                     return QStringLiteral("%1: the link is already closed").arg(describe(index));
                 }
-                transport.sendText(QJsonDocument(sent.toObject()).toJson(QJsonDocument::Compact));
+                client->transport->sendText(
+                    QJsonDocument(sent.toObject()).toJson(QJsonDocument::Compact));
                 drain();
                 clock.scan();
             } else if (from == QStringLiteral("station")) {
-                drain();
-                if (transport.received().size() <= consumed) {
-                    const QDeadlineTimer deadline(kStationReplyWaitMs);
-                    while (transport.received().size() <= consumed && !deadline.hasExpired()) {
-                        QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
-                        QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
-                    }
+                if (client->transport == nullptr) {
+                    return QStringLiteral("%1: that client has not connected").arg(describe(index));
                 }
-                clock.scan();
-                const QList<QByteArray> received = transport.received();
-                if (received.size() <= consumed) {
+                waitForMessage(*client);
+                const QList<QByteArray> received = client->transport->received();
+                if (received.size() <= client->consumed) {
                     return QStringLiteral("%1: the station sent nothing more (the link is %2); "
                                           "expected %3")
                         .arg(describe(index),
-                             transport.isOpen() ? QStringLiteral("open")
-                                                : QStringLiteral("closed"),
+                             client->transport->isOpen() ? QStringLiteral("open")
+                                                         : QStringLiteral("closed"),
                              shown(message));
                 }
-                const QByteArray wire = received.at(consumed++);
+                const QByteArray wire = received.at(client->consumed++);
                 const QJsonDocument doc = QJsonDocument::fromJson(wire);
                 if (!doc.isObject()) {
                     return QStringLiteral("%1: the station sent something that is not a JSON "
@@ -989,8 +1391,8 @@ QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& serv
                 }
                 const QString type = actual.value(QStringLiteral("type")).toString();
                 if (type == QStringLiteral("session.end") || type == QStringLiteral("auth.result")) {
-                    lastRetryable = actual.value(QStringLiteral("retryable")).toBool(false);
-                    sawEnding = true;
+                    client->lastRetryable = actual.value(QStringLiteral("retryable")).toBool(false);
+                    client->sawEnding = true;
                 }
             } else {
                 return QStringLiteral("step %1: from must be \"station\" or \"client\"").arg(index);
@@ -1007,28 +1409,99 @@ QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& serv
             if (!error.isEmpty()) {
                 return QStringLiteral("%1: %2").arg(describe(index), error);
             }
+        } else if (step.contains(QStringLiteral("connect"))) {
+            // iPhone app Task 71: another client's whole connect sequence;
+            // its messages up to snapshot.complete are taken unmatched.
+            PlayedClient* client = clientNamed(step.value(QStringLiteral("connect")).toString());
+            if (client == nullptr || client->transport != nullptr || client->device == nullptr) {
+                return QStringLiteral("%1: that client cannot connect").arg(describe(index));
+            }
+            client->owned = std::make_unique<LoopbackTransport>(
+                QStringLiteral("conformance-%1-client").arg(client->name));
+            client->transport = client->owned.get();
+            auto* stationEnd =
+                new LoopbackTransport(QStringLiteral("conformance-%1").arg(client->name), &server);
+            stationEnd->linkTo(client->transport);
+            server.acceptTransport(stationEnd);
+            waitForMessage(*client);
+            const QJsonObject hello =
+                QJsonDocument::fromJson(client->transport->received().value(0)).object();
+            bool ok = false;
+            const QByteArray challenge = StationIdentity::fromBase64Url(
+                hello.value(QStringLiteral("challenge")).toString(), &ok);
+            if (!ok || hello.value(QStringLiteral("type")).toString() != QStringLiteral("hello")) {
+                return QStringLiteral("%1: the station did not greet that client").arg(describe(index));
+            }
+            QString pin = server.certificateFingerprint();
+            pin.remove(QLatin1Char(':'));
+            const ConformanceDevice& key = *client->device;
+            const SessionDeviceBlock block{
+                StationIdentity::toBase64Url(key.key.fingerprint()),
+                StationIdentity::toBase64Url(key.key.publicKeySpki()), client->deviceName,
+                client->deviceKind,
+                StationIdentity::toBase64Url(key.key.sign(DeviceAuthenticator::transcript(
+                    challenge, QByteArray::fromHex(pin.toLatin1()),
+                    server.stationIdentity().publicKeySpki(), key.key.publicKeySpki()))),
+                client->shortName};
+            const QList<quint16> majors = server.supportedMajors();
+            client->transport->sendText(SessionMessages::encode(SessionMessages::hello(
+                majors.last(), kSessionProtocolMinor, 0,
+                QStringLiteral("conformance-%1").arg(client->name), {majors.last()},
+                client->features)));
+            client->transport->sendText(
+                SessionMessages::encode(SessionMessages::authRequest(QString(), block)));
+            const QDeadlineTimer deadline(kStationReplyWaitMs);
+            while (!client->transport->receivedKinds().contains(QByteArrayLiteral("snapshot.complete"))
+                   && client->transport->isOpen() && !deadline.hasExpired()) {
+                QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
+                QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+            }
+            clock.scan();
+            const int complete =
+                client->transport->receivedKinds().indexOf(QByteArrayLiteral("snapshot.complete"));
+            if (complete < 0) {
+                return QStringLiteral("%1: that client did not finish connecting (the link is "
+                                      "%2)")
+                    .arg(describe(index),
+                         client->transport->isOpen() ? QStringLiteral("open")
+                                                     : QStringLiteral("closed"));
+            }
+            client->consumed = complete + 1;
+        } else if (step.contains(QStringLiteral("close"))) {
+            PlayedClient* client = clientNamed(step.value(QStringLiteral("close")).toString());
+            if (client == nullptr || client->transport == nullptr) {
+                return QStringLiteral("%1: that client has not connected").arg(describe(index));
+            }
+            client->transport->closeLink(QStringLiteral("conformance close"));
+            drain();
+            clock.scan();
         } else if (step.contains(QStringLiteral("expectClosed"))) {
             problem = expectKeys(step, {QStringLiteral("expectClosed")}, {},
                                  QStringLiteral("step %1").arg(index));
             const QJsonObject closed = step.value(QStringLiteral("expectClosed")).toObject();
             if (problem.isEmpty()) {
-                problem = expectKeys(closed, {QStringLiteral("retryable")}, {},
+                problem = expectKeys(closed, {QStringLiteral("retryable")},
+                                     {QStringLiteral("client")},
                                      QStringLiteral("step %1 expectClosed").arg(index));
             }
             if (!problem.isEmpty()) {
                 return problem;
             }
+            PlayedClient* client = clientNamed(closed.value(QStringLiteral("client")).toString());
+            if (client == nullptr || client->transport == nullptr) {
+                return QStringLiteral("%1: that client has not connected").arg(describe(index));
+            }
             drain();
-            if (transport.isOpen()) {
+            if (client->transport->isOpen()) {
                 const QDeadlineTimer deadline(kStationReplyWaitMs);
-                while (transport.isOpen() && !deadline.hasExpired()) {
+                while (client->transport->isOpen() && !deadline.hasExpired()) {
                     QCoreApplication::processEvents(QEventLoop::AllEvents, 10);
                 }
             }
-            if (transport.isOpen()) {
+            if (client->transport->isOpen()) {
                 return QStringLiteral("%1: the station did not close the link").arg(describe(index));
             }
-            const QStringList left = unconsumed();
+            const QStringList left = unconsumed(*client);
             if (!left.isEmpty()) {
                 return QStringLiteral("%1: the station sent %2 message(s) the fixture does not "
                                       "list before closing, first: %3")
@@ -1036,41 +1509,28 @@ QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& serv
                     .arg(left.size())
                     .arg(left.first());
             }
-            if (!sawEnding) {
+            if (!client->sawEnding) {
                 return QStringLiteral("%1: the station closed without a session.end or "
                                       "auth.result")
                     .arg(describe(index));
             }
             const bool retryable = closed.value(QStringLiteral("retryable")).toBool();
-            if (retryable != lastRetryable) {
+            if (retryable != client->lastRetryable) {
                 return QStringLiteral("%1: expected retryable %2, the station said %3")
                     .arg(describe(index))
                     .arg(retryable ? QStringLiteral("true") : QStringLiteral("false"))
-                    .arg(lastRetryable ? QStringLiteral("true") : QStringLiteral("false"));
+                    .arg(client->lastRetryable ? QStringLiteral("true") : QStringLiteral("false"));
             }
         } else {
-            return QStringLiteral("step %1: not a message, advanceMs or expectClosed step")
+            return QStringLiteral("step %1: not a message, advanceMs, expectClosed, connect or "
+                                  "close step")
                 .arg(index);
-        }
-
-        if (index == preemptAfter) {
-            preempting = std::make_unique<LoopbackTransport>(
-                QStringLiteral("conformance-second-client"));
-            auto* stationEnd = new LoopbackTransport(QStringLiteral("conformance-second"), &server);
-            stationEnd->linkTo(preempting.get());
-            server.acceptTransport(stationEnd);
-            preempting->sendText(SessionMessages::encode(SessionMessages::hello(
-                kSessionProtocolMajor, kSessionProtocolMinor, 0,
-                QStringLiteral("conformance-second"))));
-            preempting->sendText(
-                SessionMessages::encode(SessionMessages::authRequest(server.token())));
-            drain();
-            clock.scan();
         }
     }
 
     const QJsonObject last = steps.last().toObject();
-    if (!last.contains(QStringLiteral("expectClosed"))) {
+    if (!last.contains(QStringLiteral("expectClosed"))
+        || last.value(QStringLiteral("expectClosed")).toObject().contains(QStringLiteral("client"))) {
         drain();
         if (!transport.isOpen()) {
             return QStringLiteral("after the last step: the station closed the link; the "
@@ -1145,9 +1605,53 @@ StationLanAnnouncement LinkMediaVectors::lanAnnouncement()
     return value;
 }
 
+namespace {
+
+// A made-up identity fingerprint, 32 bytes. Not any Core's.
+QByteArray vectorIdentity()
+{
+    QByteArray identity;
+    for (int i = 0; i < kStationLanIdentityBytes; ++i) {
+        identity.append(static_cast<char>(0x10 + i * 7));
+    }
+    return identity;
+}
+
+QByteArray base64Url(const QByteArray& bytes)
+{
+    return bytes.toBase64(QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals);
+}
+
+} // namespace
+
+StationLanAnnouncement LinkMediaVectors::lanAnnouncement2()
+{
+    StationLanAnnouncement value = lanAnnouncement();
+    value.schema = kStationLanAnnouncementSchema2;
+    value.claimed = true;
+    value.identity = vectorIdentity();
+    value.label = QStringLiteral("KG4VCF/shack");
+    value.pairing = StationLanPairing::Code;
+    return value;
+}
+
+StationLanAnnouncement LinkMediaVectors::lanAnnouncement2Devices()
+{
+    StationLanAnnouncement value = lanAnnouncement2();
+    value.devicesConnected = 2;
+    return value;
+}
+
+QByteArray LinkMediaVectors::lanAnnouncementTrailingBytes()
+{
+    // Shaped like a future field: a tag, a length and three bytes.
+    return QByteArray("\x07\x03\x61\x62\x63", 5);
+}
+
 QJsonObject LinkMediaVectors::toJson(const StationLanAnnouncement& value)
 {
-    return QJsonObject{
+    QJsonObject json{
+        {QStringLiteral("schema"), int(value.schema)},
         {QStringLiteral("controlPort"), value.controlPort},
         {QStringLiteral("fingerprint"), value.fingerprint},
         {QStringLiteral("coreName"), value.coreName},
@@ -1155,35 +1659,102 @@ QJsonObject LinkMediaVectors::toJson(const StationLanAnnouncement& value)
         {QStringLiteral("radioMac"), value.radioMac},
         {QStringLiteral("radioConnected"), value.radioConnected},
     };
+    if (value.schema == kStationLanAnnouncementSchema2) {
+        json.insert(QStringLiteral("claimed"), value.claimed);
+        json.insert(QStringLiteral("identity"), QString::fromLatin1(base64Url(value.identity)));
+        json.insert(QStringLiteral("label"), value.label);
+        json.insert(QStringLiteral("pairing"), stationLanPairingName(value.pairing));
+        if (value.devicesConnected) {
+            json.insert(QStringLiteral("devicesConnected"), *value.devicesConnected);
+        }
+    }
+    return json;
 }
 
 bool LinkMediaVectors::fromJson(const QJsonObject& json, StationLanAnnouncement* value,
                                 QString* error)
 {
+    const QStringList schemaOne{QStringLiteral("schema"), QStringLiteral("controlPort"),
+                                QStringLiteral("fingerprint"), QStringLiteral("coreName"),
+                                QStringLiteral("radioName"), QStringLiteral("radioMac"),
+                                QStringLiteral("radioConnected")};
+    const QStringList schemaTwo{QStringLiteral("claimed"), QStringLiteral("identity"),
+                                QStringLiteral("label"), QStringLiteral("pairing")};
+    const int schema = json.value(QStringLiteral("schema")).toInt(-1);
     const QString problem = expectKeys(
-        json,
-        {QStringLiteral("controlPort"), QStringLiteral("fingerprint"), QStringLiteral("coreName"),
-         QStringLiteral("radioName"), QStringLiteral("radioMac"), QStringLiteral("radioConnected")},
-        {}, QStringLiteral("announcement expect"));
+        json, schema == kStationLanAnnouncementSchema2 ? schemaOne + schemaTwo : schemaOne,
+        schema == kStationLanAnnouncementSchema2 ? QStringList{QStringLiteral("devicesConnected")}
+                                                 : QStringList{},
+        QStringLiteral("announcement expect"));
     if (!problem.isEmpty()) {
         *error = problem;
         return false;
     }
     qint64 port = 0;
     if (!readWhole(json, QStringLiteral("controlPort"), &port, error) || port < 0 || port > 65535
-        || !json.value(QStringLiteral("radioConnected")).isBool()) {
+        || !json.value(QStringLiteral("radioConnected")).isBool()
+        || (schema != kStationLanAnnouncementSchema1 && schema != kStationLanAnnouncementSchema2)) {
         if (error->isEmpty()) {
-            *error = QStringLiteral("controlPort or radioConnected is out of range");
+            *error = QStringLiteral("schema, controlPort or radioConnected is out of range");
         }
         return false;
     }
+    value->schema = static_cast<quint8>(schema);
     value->controlPort = static_cast<quint16>(port);
     value->fingerprint = json.value(QStringLiteral("fingerprint")).toString();
     value->coreName = json.value(QStringLiteral("coreName")).toString();
     value->radioName = json.value(QStringLiteral("radioName")).toString();
     value->radioMac = json.value(QStringLiteral("radioMac")).toString();
     value->radioConnected = json.value(QStringLiteral("radioConnected")).toBool();
+    if (schema == kStationLanAnnouncementSchema2) {
+        const auto pairing =
+            stationLanPairingFromName(json.value(QStringLiteral("pairing")).toString());
+        const auto identity = QByteArray::fromBase64Encoding(
+            json.value(QStringLiteral("identity")).toString().toLatin1(),
+            QByteArray::Base64UrlEncoding | QByteArray::OmitTrailingEquals
+                | QByteArray::AbortOnBase64DecodingErrors);
+        if (!json.value(QStringLiteral("claimed")).isBool() || !pairing || !identity) {
+            *error = QStringLiteral("claimed, identity or pairing is not readable");
+            return false;
+        }
+        value->claimed = json.value(QStringLiteral("claimed")).toBool();
+        value->identity = *identity;
+        value->label = json.value(QStringLiteral("label")).toString();
+        value->pairing = *pairing;
+        // iPhone app Task 71: absent is a Core from before the count.
+        value->devicesConnected.reset();
+        if (json.contains(QStringLiteral("devicesConnected"))) {
+            qint64 count = 0;
+            if (!readWhole(json, QStringLiteral("devicesConnected"), &count, error)) {
+                return false;
+            }
+            value->devicesConnected = static_cast<int>(count);
+        }
+    }
     return true;
+}
+
+DnsSdRecord LinkMediaVectors::dnsSdRecord()
+{
+    const StationLanAnnouncement announcement = lanAnnouncement2Devices();
+    DnsSdRecord record;
+    record.instanceName = dnsSdInstanceName(announcement.displayName());
+    record.label = announcement.label;
+    record.identity = announcement.identity;
+    record.claimed = announcement.claimed;
+    record.pairing = announcement.pairing;
+    record.devicesConnected = announcement.devicesConnected.value_or(0);
+    return record;
+}
+
+QJsonObject LinkMediaVectors::toJson(const DnsSdRecord& record)
+{
+    QJsonObject txt;
+    for (const auto& [key, value] : dnsSdTxtEntries(record)) {
+        txt.insert(QString::fromLatin1(key), QString::fromLatin1(value));
+    }
+    return QJsonObject{{QStringLiteral("serviceType"), QString::fromLatin1(kDnsSdServiceType)},
+                       {QStringLiteral("txt"), txt}};
 }
 
 Ps3Snapshot LinkMediaVectors::ps3Snapshot()
@@ -1324,6 +1895,36 @@ QList<DisplayCodecFrame> LinkMediaVectors::nsdcFrames()
     return frames;
 }
 
+// The first plane's prefix starts right after the 42-byte header:
+// blockSizeCode at 42, blockCount at 43..44; the sequence is at 16..19.
+QByteArray LinkMediaVectors::nsdcBadPlaneDelta(const QByteArray& delta)
+{
+    QByteArray bytes = delta;
+    bytes[42] = 4;
+    return bytes;
+}
+
+QByteArray LinkMediaVectors::nsdcStaleTruncatedDelta(const QByteArray& delta)
+{
+    QByteArray bytes = delta;
+    for (int i = 16; i < 20; ++i) {
+        bytes[i] = 0;
+    }
+    bytes.chop(1);
+    return bytes;
+}
+
+QByteArray LinkMediaVectors::nsdcBadBlockCountKeyframe(const QByteArray& keyframe)
+{
+    QByteArray bytes = keyframe;
+    const quint16 count = static_cast<quint16>(
+        (static_cast<quint8>(bytes.at(43)) << 8) | static_cast<quint8>(bytes.at(44)));
+    const quint16 wrong = static_cast<quint16>(count + 1U);
+    bytes[43] = static_cast<char>(wrong >> 8);
+    bytes[44] = static_cast<char>(wrong & 0xFF);
+    return bytes;
+}
+
 QString LinkMediaVectors::nsdcDispositionName(DisplayCodecDisposition disposition)
 {
     switch (disposition) {
@@ -1382,6 +1983,151 @@ QJsonObject LinkMediaVectors::toJson(const DisplayCodecDecodeResult& result)
     out.insert(QStringLiteral("traceDbm"), rows(frame.traceDbm));
     out.insert(QStringLiteral("waterfallDbm"), rows(frame.waterfallDbm));
     out.insert(QStringLiteral("wideDbm"), rows(frame.wideDbm));
+    return out;
+}
+
+DisplayCodecContext LinkMediaVectors::nsdxContext()
+{
+    DisplayCodecContext context;
+    context.endpointId = 1;
+    context.contextGeneration = 1;
+    context.minDbm = -140.0f;
+    context.maxDbm = -40.0f;
+    context.traceSamples = 32;
+    context.waterfallSamples = 32;
+    context.wideSamples = 0;
+    return context;
+}
+
+DisplayExtrasFrame LinkMediaVectors::nsdxFrame()
+{
+    // Beside nsdcFrames()'s frame 1: three blobs, the hold row a little
+    // above that frame's trace, the noise floor and the waterfall's levels.
+    DisplayExtrasFrame frame;
+    frame.endpointId = 1;
+    frame.contextGeneration = 1;
+    frame.encoderSequence = 1;
+    frame.peakBlobs = QVector<DisplayExtrasBlob>{{5, -100.5f}, {26, -101.25f}, {15, -118.0f}};
+    QVector<float> hold;
+    for (int i = 0; i < 32; ++i) {
+        hold.append(-117.0f + 20.0f * static_cast<float>(std::sin(0.3 * i)));
+    }
+    frame.peakHoldDbm = hold;
+    frame.noiseFloorDbm = -127.5f;
+    frame.waterfallLevelsDbm = std::make_pair(-131.0f, -71.0f);
+    return frame;
+}
+
+DisplayExtrasFrame LinkMediaVectors::nsdxNoiseFloorFrame()
+{
+    DisplayExtrasFrame frame;
+    frame.endpointId = 1;
+    frame.contextGeneration = 1;
+    frame.encoderSequence = 2;
+    frame.noiseFloorDbm = -126.75f;
+    return frame;
+}
+
+QByteArray LinkMediaVectors::nsdxUnknownSection(const QByteArray& full)
+{
+    QByteArray bytes = full;
+    bytes[5] = static_cast<char>(static_cast<quint8>(bytes.at(5)) | 0x10);
+    return bytes;
+}
+
+QJsonObject LinkMediaVectors::toJson(const DisplayCodecContext& context)
+{
+    return {{QStringLiteral("endpointId"), static_cast<qint64>(context.endpointId)},
+            {QStringLiteral("contextGeneration"), static_cast<qint64>(context.contextGeneration)},
+            {QStringLiteral("minDbm"), static_cast<double>(context.minDbm)},
+            {QStringLiteral("maxDbm"), static_cast<double>(context.maxDbm)},
+            {QStringLiteral("traceSamples"), static_cast<int>(context.traceSamples)}};
+}
+
+bool LinkMediaVectors::fromJson(const QJsonObject& json, DisplayCodecContext* context,
+                                QString* error)
+{
+    const QStringList keys{QStringLiteral("contextGeneration"), QStringLiteral("endpointId"),
+                           QStringLiteral("maxDbm"), QStringLiteral("minDbm"),
+                           QStringLiteral("traceSamples")};
+    QStringList present = json.keys();
+    present.sort();
+    if (present != keys) {
+        *error = QStringLiteral("an NSDX context is {endpointId, contextGeneration, minDbm, "
+                                "maxDbm, traceSamples}");
+        return false;
+    }
+    for (const QString& key : keys) {
+        if (!json.value(key).isDouble()) {
+            *error = QStringLiteral("NSDX context %1 is not a number").arg(key);
+            return false;
+        }
+    }
+    DisplayCodecContext out;
+    out.endpointId = static_cast<quint32>(json.value(QStringLiteral("endpointId")).toDouble());
+    out.contextGeneration =
+        static_cast<quint32>(json.value(QStringLiteral("contextGeneration")).toDouble());
+    out.minDbm = static_cast<float>(json.value(QStringLiteral("minDbm")).toDouble());
+    out.maxDbm = static_cast<float>(json.value(QStringLiteral("maxDbm")).toDouble());
+    out.traceSamples = static_cast<quint16>(json.value(QStringLiteral("traceSamples")).toInt());
+    out.waterfallSamples = out.traceSamples;
+    *context = out;
+    return true;
+}
+
+QString LinkMediaVectors::nsdxReasonName(DisplayExtrasReason reason)
+{
+    switch (reason) {
+    case DisplayExtrasReason::None: return QStringLiteral("none");
+    case DisplayExtrasReason::BadMagic: return QStringLiteral("badMagic");
+    case DisplayExtrasReason::UnsupportedVersion: return QStringLiteral("unsupportedVersion");
+    case DisplayExtrasReason::UnknownSections: return QStringLiteral("unknownSections");
+    case DisplayExtrasReason::Truncated: return QStringLiteral("truncated");
+    case DisplayExtrasReason::Oversized: return QStringLiteral("oversized");
+    case DisplayExtrasReason::Malformed: return QStringLiteral("malformed");
+    case DisplayExtrasReason::ContextMismatch: return QStringLiteral("contextMismatch");
+    }
+    return QString();
+}
+
+QJsonObject LinkMediaVectors::toJson(const DisplayExtrasDecodeResult& result)
+{
+    QJsonObject out{
+        {QStringLiteral("accepted"), result.accepted},
+        {QStringLiteral("reason"), nsdxReasonName(result.reason)},
+    };
+    if (!result.accepted) {
+        return out;
+    }
+    const DisplayExtrasFrame& frame = result.frame;
+    out.insert(QStringLiteral("endpointId"), static_cast<qint64>(frame.endpointId));
+    out.insert(QStringLiteral("contextGeneration"), static_cast<qint64>(frame.contextGeneration));
+    out.insert(QStringLiteral("encoderSequence"), static_cast<qint64>(frame.encoderSequence));
+    if (frame.peakBlobs) {
+        QJsonArray blobs;
+        for (const DisplayExtrasBlob& blob : *frame.peakBlobs) {
+            blobs.append(QJsonObject{{QStringLiteral("pixel"), static_cast<int>(blob.pixel)},
+                                     {QStringLiteral("dbm"), static_cast<double>(blob.dbm)}});
+        }
+        out.insert(QStringLiteral("peakBlobs"), blobs);
+    }
+    if (frame.peakHoldDbm) {
+        QJsonArray row;
+        for (const float value : *frame.peakHoldDbm) {
+            row.append(static_cast<double>(value));
+        }
+        out.insert(QStringLiteral("peakHoldDbm"), row);
+    }
+    if (frame.noiseFloorDbm) {
+        out.insert(QStringLiteral("noiseFloorDbm"), static_cast<double>(*frame.noiseFloorDbm));
+    }
+    if (frame.waterfallLevelsDbm) {
+        out.insert(QStringLiteral("waterfallLevelsDbm"),
+                   QJsonObject{{QStringLiteral("lowDbm"),
+                                static_cast<double>(frame.waterfallLevelsDbm->first)},
+                               {QStringLiteral("highDbm"),
+                                static_cast<double>(frame.waterfallLevelsDbm->second)}});
+    }
     return out;
 }
 

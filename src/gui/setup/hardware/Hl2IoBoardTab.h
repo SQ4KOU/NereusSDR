@@ -153,6 +153,11 @@ public:
     /// The N2ADR switch's tooltip line while only the receive half applies.
     static QString receiveOnlyN2adrNote();
     QString n2adrToolTipForTest() const;
+    // The OC byte the strip shows, or -1 when it shows none.
+    int ocShownByteForTest() const { return m_ocShownByte; }
+    QString ocByteTextForTest() const;
+    QString ocBandTextForTest() const;
+    QString ocKeyedTextForTest() const;
 
     // Phase 3P-H Task 5c test seams.
     // Register-table poll interval, in ms.  Matches spec §13 "register state
@@ -239,14 +244,17 @@ private:
     QLabel*  m_lastProbeLabel{nullptr};
 
     // ── Live OC byte indicator ────────────────────────────────────────────────
-    // Shows current band, ocByte hex, and 7 pin LEDs for the per-band pattern
-    // currently being sent on bank 0 C2.  Updates on band/MOX change via
-    // IoBoardHl2::currentOcByteChanged signal from buildCodecContext().
+    // Shows current band, ocByte hex, and 7 pin LEDs for the pattern
+    // currently being sent on bank 0 C2. Plan Task 14 fix wave (R-R3-49):
+    // it shows the byte the connection composed (RadioModel::bandOutputsByte,
+    // the Core's in a remote window), never one of its own.
     QLabel*  m_ocBandLabel{nullptr};
     QLabel*  m_ocByteLabel{nullptr};
     QLabel*  m_ocMoxLabel{nullptr};
     std::array<QFrame*, 7> m_ocPinLeds{};
+    int      m_ocShownByte{-1};   // -1 = nothing composed yet
     void updateOcIndicator(quint8 ocByte, int bandIdx, bool mox);
+    void refreshOcIndicator();
 
     // ── Configuration (left column) ───────────────────────────────────────────
     // From mi0bot setup.cs:20234-20238 chkHERCULES [@c26a8a4]

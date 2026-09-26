@@ -51,6 +51,7 @@
 #include "core/session/StationServer.h"
 #include "core/settings/SettingsProxy.h"
 #include "fakes/LoopbackTransport.h"
+#include "fakes/UpgradedCoreToken.h"
 #include "gui/UnbuiltFeatures.h"
 #include "gui/setup/HardwarePage.h"
 #include "gui/setup/hardware/CalibrationTab.h"
@@ -107,7 +108,8 @@ struct Session {
         core->wireTransmitChainForTest(&txChannel);
         core->ocMatrixMutable().setMacAddress(kMac);
         core->calibrationControllerMutable().setMacAddress(kMac);
-        server = std::make_unique<StationServer>(core.get(), settings, securityDir);
+        server = std::make_unique<StationServer>(
+            core.get(), settings, NereusSDR::Test::seedUpgradedCoreToken(securityDir));
         client = std::make_unique<StationClient>(&window, &proxy);
         coreEnd = new LoopbackTransport(QStringLiteral("station-end"), parent);
         windowEnd = new LoopbackTransport(QStringLiteral("client-end"), parent);
@@ -579,9 +581,11 @@ void TstRemoteOcCal::localHardwarePageClosesTxPinsOnTheAirOnly()
     local.injectTxChannelForTest(nullptr);
 }
 
-// C5, C6: the Alex-1 TX filter options and the HL2 TX timings are hidden
-// (in both windows, through the list: tst_unbuilt_features), and the values
-// users saved stay in the settings file when the page loads and saves.
+// C5, C6: the Alex-1 LPF band edges and the HL2 TX timings are hidden (in
+// both windows, through the list: tst_unbuilt_features), and the values
+// users saved stay in the settings file when the page loads and saves. The
+// Alex-1 high-pass switches C5 also named are applied since plan Task 14,
+// so they stay shown, their saved values kept too.
 void TstRemoteOcCal::hiddenAlexAndHl2ControlsKeepTheirSavedValues()
 {
     auto& settings = AppSettings::instance();
@@ -609,8 +613,12 @@ void TstRemoteOcCal::hiddenAlexAndHl2ControlsKeepTheirSavedValues()
         QCoreApplication::processEvents();
         for (const QString& name : {QStringLiteral("alexHpfBypassOnTx"),
                                     QStringLiteral("alexHpfBypassOnPs"),
-                                    QStringLiteral("alexDisable6mLnaOnTx"),
-                                    QStringLiteral("alexLpfStart_20m"),
+                                    QStringLiteral("alexDisable6mLnaOnTx")}) {
+            auto* w = page.findChild<QWidget*>(name);
+            QVERIFY2(w != nullptr, qPrintable(name));
+            QVERIFY2(!w->isHidden(), qPrintable(name));
+        }
+        for (const QString& name : {QStringLiteral("alexLpfStart_20m"),
                                     QStringLiteral("alexLpfEnd_20m"),
                                     QStringLiteral("hl2TxBufferLatency"),
                                     QStringLiteral("hl2PttHang")}) {

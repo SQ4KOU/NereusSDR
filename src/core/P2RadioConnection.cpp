@@ -70,6 +70,9 @@
 //   2026-09-25 - R-R3-32 / R-R3-49 (remote-window parity Task 6): every datagram from the radio,
 //                 the per-DDC sequence errors and the DDC arrivals feed the link counters
 //                 (RadioLinkStats). J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - Receiver and transmit gaps plan, Task 13: high-priority status ReadBufp[55] (datagram byte 59)
+//                 reported as the user digital inputs (network.c:756 [v2.10.3.15]). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*
@@ -942,6 +945,28 @@ void P2RadioConnection::setReceiverFrequency(int receiverIndex, quint64 frequenc
         return;
     }
     m_rx[receiverIndex].frequency = static_cast<int>(frequencyHz);
+    m_lastRetunedDdc = receiverIndex;
+    recomputeReceiveFilters();
+
+    if (m_running) {
+        sendCmdHighPriority();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// recomputeReceiveFilters: the receive-side Alex selections (the fallback
+// high-pass m_alex.hpfBits and the receive low-pass m_alex.lpfBitsRx) from
+// the RX1 stand-in (rx1Ddc, plan Task 14, Phase 3F section 16.3.2). Until a
+// live-slot mask arrives the stand-in is the DDC retuned last, which is
+// exactly the selection this made before.
+// ---------------------------------------------------------------------------
+void P2RadioConnection::recomputeReceiveFilters()
+{
+    const int rx1 = rx1Ddc();
+    const int rx1Hz = m_rx[static_cast<size_t>(rx1)].frequency;
+    if (rx1Hz <= 0) {
+        return;
+    }
 
     // Update Alex HPF/LPF based on new frequency
     // From Thetis console.cs:6830-7234 [@501e3f5] — auto-select band filters
@@ -955,7 +980,7 @@ void P2RadioConnection::setReceiverFrequency(int receiverIndex, quint64 frequenc
     // silent on the air: the radio still hears the band, just through the
     // neighbouring filter.
     // From Thetis console.cs:6827-6837 setAlex1HPF [v2.10.3.15]
-    double freqMhz = frequencyHz / 1e6;
+    const double freqMhz = rx1Hz / 1e6;
     m_alex.hpfBits = NereusSDR::codec::alex::computeRxPreselector(
         freqMhz, m_caps ? m_caps->board : HPSDRHW::Unknown);
 
@@ -980,12 +1005,40 @@ void P2RadioConnection::setReceiverFrequency(int receiverIndex, quint64 frequenc
     // That `if (!_mox)` wrapper is why this is gated on the transmit state:
     // Thetis cannot reach the receive-derived write at all while keyed, so a
     // retune arriving mid-transmission must leave both words untouched.
+    //
+    // Which receive frequency: Thetis's rule, RX1 alone, or the HIGHER of
+    // RX1 and RX2 when RX2 shares this filter (no RX2 front end of its own),
+    // because a low-pass passes everything below its corner:
+    //   From Thetis console.cs:15487-15498 UpdateAlexTXFilter [v2.10.3.15]
+    //     if (!_rx2_preamp_present && chkRX2.Checked)
+    //     {
+    //         if (rx1_dds_freq_mhz > rx2_dds_freq_mhz) setAlexLPF(rx1_dds_freq_mhz, false);
+    //         else setAlexLPF(rx2_dds_freq_mhz, false);
+    //     }
+    //     else setAlexLPF(rx1_dds_freq_mhz, false);
+    // Plan Task 14: this used to be whichever DDC was retuned last, so on
+    // the G2 (RX2 has its own front end) adding slice B on a lower band put
+    // slice A behind B's low-pass. RX1 is the stand-in (rx1Ddc).
+    //
+    // Fix wave M6: RX2 is the highest live receiver other than RX1, not the
+    // next one above it. Thetis has exactly two receivers; with more live
+    // slices on a shared front end the low-pass has to pass the highest of
+    // them, as the rule's "higher of the two" passes RX2, or a third slice
+    // on a higher band is filtered out. Where RX2 has its own front end
+    // (rx2PreampPresent) RX1 still decides alone.
     if (!m_mox) {
-        m_alex.lpfBitsRx = NereusSDR::codec::alex::computeLpf(freqMhz);
-    }
-
-    if (m_running) {
-        sendCmdHighPriority();
+        bool rx2Live = false;
+        double rx2Mhz = 0.0;
+        for (int ddc = 0; ddc < kMaxRxStreams; ++ddc) {
+            if (ddc == rx1 || (m_liveSlotMask & (1u << ddc)) == 0) { continue; }
+            const int hz = m_rx[static_cast<size_t>(ddc)].frequency;
+            if (hz <= 0) { continue; }
+            rx2Live = true;
+            rx2Mhz = std::max(rx2Mhz, hz / 1e6);
+        }
+        m_alex.lpfBitsRx = NereusSDR::codec::alex::computeLpf(
+            NereusSDR::codec::alex::receiveLpfFrequencyMhz(
+                freqMhz, rx2Mhz, rx2Live, m_caps ? m_caps->rx2PreampPresent : false));
     }
 }
 
@@ -1372,6 +1425,213 @@ quint8 P2RadioConnection::effectiveRxHpfBitsAdc0() const
 quint8 P2RadioConnection::effectiveLpfBitsAlex0() const
 {
     return static_cast<quint8>(m_mox ? m_alex.lpfBitsTx : m_alex.lpfBitsRx);
+}
+
+// ---------------------------------------------------------------------------
+// setLiveReceiverSlots: which DDCs carry a live receiver.
+//
+// Phase 3F section 16.3.2, plan Task 14. Thetis takes the OC band from RX1
+// (VFO A). Slice A can be closed in NereusSDR, so the live receiver on the
+// LOWEST DDC stands in for RX1, as on Protocol 1
+// (P1RadioConnection::setLiveReceiverSlots). On the G2 slice A is DDC2 and
+// slice B DDC3 (P2CodecOrionMkII::applyDdcAssignment), so with A open this
+// is A. The PureSignal and diversity DDC0/DDC1 pair is not a receiver and
+// never appears in the mask. An empty mask keeps the previous stand-in.
+// ---------------------------------------------------------------------------
+void P2RadioConnection::setLiveReceiverSlots(quint32 slotMask)
+{
+    m_liveSlotMask = slotMask;
+    if (slotMask == 0) {
+        return;
+    }
+    int lowest = 0;
+    while (lowest < 31 && (slotMask & (1u << lowest)) == 0) { ++lowest; }
+    if (lowest < kMaxRxStreams) {
+        m_rx1Slot = lowest;
+    }
+    // The stand-in or the receiver beside it may have changed.
+    recomputeReceiveFilters();
+    if (m_running) {
+        sendCmdHighPriority();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// setHpfBypassOnTx: "HPF Bypass on TX" (plan Task 14). Stored by the base
+// and read by buildCodecContext; sent at once, because Thetis's setter
+// re-applies the high-pass immediately (console.cs:18754-18762
+// DisableHPFonTX [v2.10.3.15]) and a Protocol 2 high-priority packet goes
+// out only when something changes.
+// ---------------------------------------------------------------------------
+void P2RadioConnection::setHpfBypassOnTx(bool on)
+{
+    if (on == m_hpfBypassOnTx) {
+        return;
+    }
+    RadioConnection::setHpfBypassOnTx(on);
+    if (m_running) {
+        sendCmdHighPriority();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// setHpfBypassOnPs: "HPF Bypass on PureSignal feedback" (plan Task 14 fix
+// wave). Sent at once, as for HPF Bypass on TX: Thetis's setter re-applies
+// the high-pass (console.cs:18764-18773 DisableHPFonPS [v2.10.3.15]).
+// ---------------------------------------------------------------------------
+void P2RadioConnection::setHpfBypassOnPs(bool on)
+{
+    if (on == m_hpfBypassOnPs) {
+        return;
+    }
+    RadioConnection::setHpfBypassOnPs(on);
+    if (m_running) {
+        sendCmdHighPriority();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// setAlexHpfBypass: "HPF Bypass" (plan Task 14 fix wave). Sent at once:
+// Thetis's setter re-applies the high-pass (console.cs:18793-18803
+// AlexHPFBypass [v2.10.3.15]).
+// ---------------------------------------------------------------------------
+void P2RadioConnection::setAlexHpfBypass(bool on)
+{
+    if (on == m_alexHpfBypass) {
+        return;
+    }
+    RadioConnection::setAlexHpfBypass(on);
+    if (m_running) {
+        sendCmdHighPriority();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// setDisable6mLna: "Disable 6m LNA on RX / TX" (plan Task 14 fix wave). Sent
+// at once: Thetis's setters re-apply the high-pass (console.cs:18719-18751
+// Disable6mLNAonRX / Disable6mLNAonTX [v2.10.3.15]).
+// ---------------------------------------------------------------------------
+void P2RadioConnection::setDisable6mLna(bool onRx, bool onTx)
+{
+    if (onRx == m_disable6mLnaOnRx && onTx == m_disable6mLnaOnTx) {
+        return;
+    }
+    RadioConnection::setDisable6mLna(onRx, onTx);
+    if (m_running) {
+        sendCmdHighPriority();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// setReceiverVfoFrequencies: each DDC's slice VFO, for the OC band.
+// ---------------------------------------------------------------------------
+void P2RadioConnection::setReceiverVfoFrequencies(const QVector<quint64>& vfoHzBySlot)
+{
+    bool changed = false;
+    for (int ddc = 0; ddc < kMaxRxStreams; ++ddc) {
+        const quint64 hz = (ddc < vfoHzBySlot.size()) ? vfoHzBySlot.at(ddc) : 0;
+        if (m_rxVfoHz[static_cast<size_t>(ddc)] != hz) {
+            m_rxVfoHz[static_cast<size_t>(ddc)] = hz;
+            changed = true;
+        }
+    }
+    // Fix wave M3: a VFO step sends a packet only when the OC byte it
+    // selects changes, as SetOCBits does. It used to send on every step.
+    if (changed) {
+        pushBandOutputsIfChanged();
+    }
+}
+
+// ---------------------------------------------------------------------------
+// ocBandFrequencyHz: the frequency whose band selects the OC outputs.
+//
+// Plan Task 14. The rule is Penny.cs's, which Thetis applies on every
+// protocol before NetworkIO.SetOCBits hands the bits to network.c:
+//   From Thetis HPSDR/Penny.cs:174-177 [v2.10.3.15]
+//     if (tx && VFOBTX)
+//         bits = TXABitMasks[idxb];
+//     else if (tx)
+//         bits = TXABitMasks[idx];
+//     else bits = RXABitMasks[idx];
+// Keyed: the transmitting slice's frequency plus XIT (m_tx[0], fed by
+// RadioModel::pushTxFrequencyFromTxSlice, the frequency the Alex transmit
+// low-pass uses). Unkeyed: the RX1 stand-in's VFO, falling back to its DDC
+// centre when no VFO has been told. Thetis's band is the VFO's:
+//   From Thetis console.cs:29101-29106 [v2.10.3.15] (HdwMOXChanged)
+//     Band lo_band = BandByFreq(XVTRForm.TranslateFreq(VFOAFreq), rx1_xvtr_index, current_region);
+//     Band lo_bandb = BandByFreq(XVTRForm.TranslateFreq(VFOBFreq), rx2_xvtr_index, current_region);
+//     if (penny_ext_ctrl_enabled) //MW0LGE_21k
+//     {
+//         int bits = Penny.getPenny().UpdateExtCtrl(lo_band, lo_bandb, _mox, _tuning, SetupForm.TestIMD, chkExternalPA.Checked); //MW0LGE_21j
+// A transmit frequency of 0 has never been pushed, and keeps the receive
+// band.
+// ---------------------------------------------------------------------------
+quint64 P2RadioConnection::ocBandFrequencyHz() const
+{
+    if (m_mox && m_tx[0].frequency > 0) {
+        return static_cast<quint64>(m_tx[0].frequency);
+    }
+    const auto slot = static_cast<size_t>(rx1Ddc());
+    if (m_rxVfoHz[slot] != 0) {
+        return m_rxVfoHz[slot];
+    }
+    return m_rx[slot].frequency > 0 ? static_cast<quint64>(m_rx[slot].frequency) : 0;
+}
+
+// ---------------------------------------------------------------------------
+// composedOcByte: the OC byte buildCodecContext puts in byte 1401. Only a
+// board with OC outputs (ocOutputCount, every Protocol 2 row) drives them.
+// ---------------------------------------------------------------------------
+quint8 P2RadioConnection::composedOcByte() const
+{
+    if (m_ocMatrix && m_caps && m_caps->ocOutputCount > 0) {
+        const Band currentBand = bandFromFrequency(static_cast<double>(ocBandFrequencyHz()));
+        return m_ocMatrix->maskFor(currentBand, m_mox);  // 3M-1a E.7: was m_tx[0].pttOut != 0
+    }
+    return 0;
+}
+
+// ---------------------------------------------------------------------------
+// pushBandOutputsIfChanged: send a high-priority packet when the OC byte it
+// would carry differs from the one last sent (plan Task 14 fix wave, M2 and
+// M3). Thetis sends one exactly then:
+//   From Thetis ChannelMaster/netInterface.c:399-407 [v2.10.3.15]
+//     void SetOCBits(int b)
+//     {
+//         if (prn->oc_output != b)
+//         {
+//             prn->oc_output = b;
+//             if (listenSock != INVALID_SOCKET && prn->sendHighPriority != 0)
+//                 CmdHighPriority();
+// A band change that leaves the byte alone sends nothing; the band shown
+// with the byte is still updated.
+// ---------------------------------------------------------------------------
+void P2RadioConnection::pushBandOutputsIfChanged()
+{
+    if (!m_running) {
+        return;
+    }
+    const quint8 byte = (m_useLegacyP2Codec || !m_codec) ? quint8(0) : composedOcByte();
+    if (int(byte) != publishedOcByte()) {
+        sendCmdHighPriority();
+        return;
+    }
+    publishBandOutputs(byte,
+                       int(bandFromFrequency(static_cast<double>(ocBandFrequencyHz()))),
+                       m_mox);
+}
+
+// ---------------------------------------------------------------------------
+// onBandOutputPinsChanged: a band-output pin was edited, on this window or
+// from a remote one (plan Task 14 fix wave, M2). Thetis pushes a pin edit to
+// the radio at once:
+//   From Thetis setup.cs:12718 [v2.10.3.15] (chkPenOCrcv160_CheckedChanged)
+//     console.PennyExtCtrlEnabled = chkPennyExtCtrl.Checked;  // need side effect of this to push change to native code
+// whose setter ends in NetworkIO.SetOCBits (Penny.cs:134-194 ExtCtrlEnable).
+// ---------------------------------------------------------------------------
+void P2RadioConnection::onBandOutputPinsChanged()
+{
+    pushBandOutputsIfChanged();
 }
 
 // ---------------------------------------------------------------------------
@@ -2879,21 +3139,52 @@ CodecContext P2RadioConnection::buildCodecContext() const
     ctx.alexLpfBits     = effectiveLpfBitsAlex0();
     ctx.alexLpfBitsTx   = static_cast<quint8>(m_alex.lpfBitsTx);
 
+    // The Alex tab's high-pass switches (plan Task 14 and its fix wave).
+    //
     // ANAN-G2E bench-fix 2026-05-23 (JJ Boyd): HPF Bypass during MOX+PS.
     // From Thetis console.cs:6957 setBPF1ForOrionIISaturn [v2.10.3.13]:
     //   if (_mox && (disable_hpf_on_tx || (disable_hpf_on_ps && PureSignalEnabled)))
     //       NetworkIO.SetAlexHPFBits(0x20);   // Bypass — bit 12 of Alex0
     // HermesC10 dispatches into this branch (console.cs:6830 //N1GP G2E
-    // added).  When MOX is on AND PureSignal is running AND the user has
-    // "HPF Bypass on PureSignal" enabled, OR 0x20 into alexHpfBits so the
-    // codec emits bit 12 (_Bypass) in Alex0.  Without this on a 1-ADC G2E
-    // the FB DDC sees HPF-attenuated coupler signal which calcc can't fit,
-    // and PureSignal oscillates instead of locking.
+    // added).  Without this on a 1-ADC G2E the FB DDC sees HPF-attenuated
+    // coupler signal which calcc can't fit, and PureSignal oscillates
+    // instead of locking.
     // Wire-confirmed by diffing Thetis-locked pcap (Alex0=0x09441C00, bit 12
     // set) against our pre-fix pcap (Alex0=0x09240C20, bit 12 clear) on
     // 2026-05-23 at /tmp/nereus-g2e-ps.pcap{.first, current}.
-    if (m_mox && m_puresignalRun && m_hpfBypassOnPs) {
-        ctx.alexHpfBits = static_cast<quint8>(ctx.alexHpfBits | 0x20);
+    //
+    // Fix wave: the word is now 0x20 in place of the band's selection, not
+    // the selection with 0x20 added. That is what SetAlexHPFBits(0x20)
+    // leaves (netInterface.c:604-621 [v2.10.3.15]), and what the pcap above
+    // shows: Thetis's 0x...1C00 has the 6.5 MHz relay (bit 5) clear, where
+    // the OR-in kept it. The PureSignal arm now also runs only on the boards
+    // setAlex1HPF sends to setBPF1ForOrionIISaturn (Orion MkII, Saturn,
+    // HermesC10), and follows the Alex tab's check box, which it did not.
+    //
+    // "HPF Bypass on TX" (plan Task 14): keyed, Alex0's high-pass word is
+    // 0x20, whatever the receive selection was.
+    //   From Thetis console.cs:6843-6848 [v2.10.3.15] (setAlexHPF)
+    //     if (_mox && disable_hpf_on_tx)
+    //     { NetworkIO.SetAlexHPFBits(0x20); ... return; }
+    // "HPF Bypass" (fix wave): 0x20 keyed or not (console.cs:6850-6855).
+    // "Disable 6m LNA on RX / TX" (fix wave): on 6 m the BPF/LNA (0x40)
+    // becomes 0x20 (console.cs:6935, 7050).
+    //
+    // SetAlexHPFBits writes prbpfilter (Alex0) only (netInterface.c:604-621
+    // [v2.10.3.15]); Alex1's high-pass is not touched. Alex1 mirrors Alex0's
+    // filter bits when ADC1 has no decision of its own
+    // (P2CodecOrionMkII::buildAlex1), so that mirror is pinned to the
+    // selection Alex0 had before a switch replaced it.
+    if (m_caps && m_caps->hasAlexFilters) {
+        const quint8 selected = ctx.alexHpfBits;
+        const quint8 applied = NereusSDR::codec::alex::applyAlex1HpfSwitches(
+            selected, m_caps->board, m_mox, m_puresignalRun, alexHpfSwitches());
+        if (applied != selected) {
+            if (ctx.alexHpfBitsAdc1 < 0) {
+                ctx.alexHpfBitsAdc1 = static_cast<int>(selected & ~0x20u);
+            }
+            ctx.alexHpfBits = applied;
+        }
     }
 
     // Port / wideband config
@@ -2923,16 +3214,15 @@ CodecContext P2RadioConnection::buildCodecContext() const
     ctx.p2SaturnBpfLpfBits = 0;
 
     // OC output byte — sourced from OcMatrix when wired; legacy 0 otherwise.
-    // No P2 codec reads ctx.ocByte yet; populated here symmetrically with P1
-    // so Phase F P2 OC wiring can consume it without further changes.
     // Phase 3P-D Task 3 — From Thetis HPSDR/Penny.cs:117-132 [@501e3f5]
-    if (m_ocMatrix) {
-        const quint64 rx0Hz = static_cast<quint64>(m_rx[0].frequency);
-        const Band currentBand = bandFromFrequency(static_cast<double>(rx0Hz));
-        ctx.ocByte = m_ocMatrix->maskFor(currentBand, m_mox);  // 3M-1a E.7: was m_tx[0].pttOut != 0
-    } else {
-        ctx.ocByte = 0;
-    }
+    //
+    // Plan Task 14: the codecs now write it to high-priority byte 1401
+    // (P2CodecOrionMkII::composeCmdHighPriority, network.c:1031). The band
+    // was DDC0's centre, which on the G2 is not a receiver at all; it is now
+    // the transmitting slice's band while keyed and the RX1 stand-in's VFO
+    // band while not (ocBandFrequencyHz). Only a board with OC outputs
+    // (ocOutputCount, every Protocol 2 row) drives the pins.
+    ctx.ocByte = composedOcByte();
 
     // From Thetis cmaster.SetADCSupply / NetworkIO.LRAudioSwap [v2.10.3.15]
     // Per clsHardwareSpecific.cs:85-191 — forwarded to WDSP, not a P2 wire byte.
@@ -2964,14 +3254,23 @@ void P2RadioConnection::composeCmdGeneral(char buf[60]) const
 
 void P2RadioConnection::composeCmdHighPriority(char buf[kBufLen]) const
 {
+    // Plan Task 14 fix wave (R-R3-49): byte 1401 of this packet is the band
+    // outputs, so the byte composed here is the one the radio gets. Every
+    // window shows it (RadioModel::bandOutputsByte), as Thetis's LED strip
+    // shows the bits UpdateExtCtrl returned (console.cs:29106-29107
+    // [v2.10.3.15]).
+    const int band = int(bandFromFrequency(static_cast<double>(ocBandFrequencyHz())));
     if (m_useLegacyP2Codec || !m_codec) {
         composeCmdHighPriorityLegacy(buf);
+        // The rollback compose does not write byte 1401: the radio gets 0.
+        publishBandOutputs(0, band, m_mox);
         return;
     }
     const CodecContext ctx = buildCodecContext();
     quint8 tmp[kBufLen] = {};
     m_codec->composeCmdHighPriority(ctx, tmp);
     memcpy(buf, tmp, kBufLen);
+    publishBandOutputs(ctx.ocByte, band, m_mox);
 }
 
 void P2RadioConnection::composeCmdRx(char buf[kBufLen]) const
@@ -3641,6 +3940,21 @@ void P2RadioConnection::processHighPriorityStatus(const QByteArray& data)
         default:
             break;
         }
+    }
+
+    // Task 13: the user digital inputs, which carry the TX inhibit input
+    // TxInhibitMonitor reads. ReadBufp[55] is raw[59]: ReadUDPFrame copies
+    // readbuf + 4 (network.c:531 [v2.10.3.15]). console.cs's "byte 59"
+    // comments count from the datagram; network.c counts from ReadBufp.
+    // From Thetis network.c:750-756 [v2.10.3.15]:
+    //   //Byte 55 - Bit [0] - User I/O (IO4) 1 = active, 0 = inactive
+    //   //          Bit [1] - User I/O (IO5) 1 = active, 0 = inactive
+    //   //          Bit [2] - User I/O (IO6) 1 = active, 0 = inactive
+    //   //          Bit [3] - User I/O (IO8) 1 = active, 0 = inactive
+    //   //          Bit [4] - User I/O (IO2) 1 = active, 0 = inactive
+    //   prn->user_dig_in = prn->ReadBufp[55];
+    if (data.size() >= 4 + 56) {
+        reportUserDigitalInputs(raw[4 + 55]);
     }
 
     // Shell-chrome sub-PR-2 B.2: complete the ping RTT measurement.

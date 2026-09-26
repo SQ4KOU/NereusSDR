@@ -4,6 +4,18 @@
 // =================================================================
 // no-port-check: NereusSDR-original. Session-owned daemon display media
 // coordination; it contains neither GUI nor radio control policy.
+//
+// Modification history (NereusSDR):
+//   2026-09-25 - iPhone app plan Task 76 (R-IOS-31; the several-devices
+//                design, rulings 9.1 to 9.4): one controller per admitted
+//                session (DaemonMediaHub), each bound to its session's
+//                media epoch; a receiver's FFT shared between every
+//                controller watching it (DaemonSharedSpectrum); each
+//                device's audio from its own owner mix; displays and
+//                receiver streams only for the device's own slices; the
+//                PureSignal display only to its subscriber. J.J. Boyd
+//                (KG4VCF), with AI-assisted implementation via Anthropic
+//                Claude Code.
 // =================================================================
 
 #include "core/NoiseFloorEstimator.h"
@@ -11,6 +23,7 @@
 #include "core/session/media/DaemonSpectrumSource.h"
 #include "core/session/media/DisplayBudget.h"
 #include "core/session/media/DisplayCodec.h"
+#include "core/session/media/DisplayExtras.h"
 #include "core/session/media/MediaPeer.h"
 #include "core/session/media/RemoteAudioContext.h"
 #include "core/session/media/SpectrumEndpoint.h"
@@ -35,7 +48,42 @@ namespace NereusSDR {
 class RadioModel;
 class SliceModel;
 class StationServer;
+class DaemonMediaController;
 enum class ConnectionState;
+
+/// iPhone app Task 76 (ruling 9.1): the spectrum engines every media
+/// controller on the Core draws from, so a receiver's FFT is shared between
+/// everyone watching it. Each engine runs at the largest size and the
+/// highest rate any controller's endpoints on it were granted; each frame
+/// is taken once and handed to every controller. Lives on the station
+/// thread with its controllers.
+class DaemonSharedSpectrum final : public QObject {
+    Q_OBJECT
+public:
+    struct SourceRuntime {
+        DaemonSpectrumSourceConfig config;
+        bool configured{false};
+    };
+
+    explicit DaemonSharedSpectrum(RadioModel* radioModel, QObject* parent = nullptr);
+    ~DaemonSharedSpectrum() override;
+
+    DaemonSpectrumSource& source() { return m_source; }
+    const DaemonSpectrumSource& source() const { return m_source; }
+    QMap<MediaSourceKey, SourceRuntime>& runtimes() { return m_runtimes; }
+    const QMap<MediaSourceKey, SourceRuntime>& runtimes() const { return m_runtimes; }
+    /// The controllers drawing from these engines, this one included.
+    QList<DaemonMediaController*> members() const;
+    void join(DaemonMediaController* controller);
+    void leave(DaemonMediaController* controller);
+
+private:
+    void onFrameAvailable(MediaSourceKey key);
+
+    DaemonSpectrumSource m_source;
+    QMap<MediaSourceKey, SourceRuntime> m_runtimes;
+    QList<QPointer<DaemonMediaController>> m_members;
+};
 
 /// Read-only diagnostics for the most recent active daemon audio context.
 /// A successful send means the media transport accepted the RTP packet; it is
@@ -91,11 +139,71 @@ public:
     /// times of audio blocks, which the DSP thread reads, so an injected
     /// clock must be safe to call from any thread.
     using MonotonicClock = std::function<qint64()>;
+    /// A controller on its own: it serves one media session at a time (the
+    /// first that starts while it has none live), owns its spectrum engines
+    /// and installs the Core's PureSignal display gate itself. Tests and a
+    /// Core with a single controller use it.
     explicit DaemonMediaController(StationServer* server, RadioModel* radioModel,
                                    QObject* parent = nullptr,
                                    MediaPeer::TransportFactory peerFactory = {},
                                    MonotonicClock monotonicClock = {});
+    /// iPhone app Task 76: a controller for the one media session `epoch`
+    /// names, drawing from `spectrum` with the others (DaemonMediaHub makes
+    /// these). It starts at once when that session's media is available and
+    /// never serves another session.
+    DaemonMediaController(StationServer* server, RadioModel* radioModel,
+                          quint64 boundEpoch,
+                          std::shared_ptr<DaemonSharedSpectrum> spectrum,
+                          QObject* parent = nullptr,
+                          MediaPeer::TransportFactory peerFactory = {},
+                          MonotonicClock monotonicClock = {});
     ~DaemonMediaController() override;
+
+    /// The media session this controller serves now (0 with none).
+    quint64 sessionEpoch() const noexcept { return m_epoch; }
+    /// The spectrum engines this controller draws from (Task 76: shared
+    /// with every other controller of the same hub).
+    DaemonSharedSpectrum* sharedSpectrum() const noexcept { return m_shared.get(); }
+    /// Task 76: the owner mix of AudioEngine this controller's session
+    /// hears (-1 while none is held), and its slices.
+    int ownerMixSlot() const noexcept { return m_ownerMix; }
+    /// Task 76: this controller's own display charge (its spectrum
+    /// endpoints, plus the PureSignal display when its session is the
+    /// subscriber). DaemonMediaHub sums them for the governor.
+    DisplayBudgetCharge ownDisplayCharge() const;
+    /// Fix wave I5 (ruling 9.3): this controller's display demand, the
+    /// charges its displays asked for as subscribed (at the requested
+    /// frame rate and the requested pixels clamped to the source bins its
+    /// window can carry, fix wave 3; before the budget clamps them), a
+    /// display refused for the budget included, until it is closed. The
+    /// PureSignal display is not in it (the split charges it to its
+    /// subscriber).
+    DisplayBudgetCharge displayDemand() const;
+    /// Fix wave 2 after the several-devices re-review (Important 2): how
+    /// long a subscription refused for the budget still counts in this
+    /// device's request once the refusal is sent, unless the client asks
+    /// for that endpoint again (subscribe or unsubscribe) first. The
+    /// refusal follows the capabilities carrying the share its request
+    /// produced (the budget generation it was sent); a client that still
+    /// wants the display re-plans at once (the desktop's planner runs on
+    /// every capabilities change and every 100 ms) and subscribes again
+    /// inside its share, replacing the refused request. The hold is the
+    /// app's own allocation acknowledgement timeout
+    /// (kDisplayAllocationAckTimeoutMs, 10 s): the longest the app waits
+    /// for the Core's answer on a slow link, so a client's re-ask within
+    /// the same round trip is never missed, while a display the client
+    /// dropped without saying so stops cutting the other devices then.
+    static constexpr int kRefusedDisplayDemandHoldMs = kDisplayAllocationAckTimeoutMs;
+    /// Tests only: a shorter hold. Applies to refusals from now on.
+    void setRefusedDisplayDemandHoldMsForTest(int ms) { m_refusedDemandHoldMs = ms; }
+    /// Task 76 (ruling 9.3 item 4): the PureSignal display goes to this
+    /// controller's session.
+    bool ps3DisplayHere() const;
+    /// Task 76: the PureSignal display gate for this controller's session.
+    bool admitPs3DisplayForSession(bool enabled, QString* refusal)
+    {
+        return admitPs3Display(enabled, refusal);
+    }
 
     /// Small read-only lifecycle telemetry for daemon diagnostics and core
     /// integration tests. Endpoint internals remain session-private.
@@ -148,6 +256,19 @@ public:
     /// The frame rate Core configured on the engine that feeds a live
     /// spectrum endpoint (R-R3-01, R-R3-08). Empty for an unknown endpoint.
     std::optional<int> spectrumSourceFps(quint32 endpointId) const;
+    /// iPhone app follow-up (R-IOS-27): the averaging constants a live
+    /// spectrum endpoint's trace and waterfall planes run with, after
+    /// display extras' averageTimeMs and waterfallAverageTimeMs. Empty for
+    /// an unknown endpoint.
+    struct SpectrumAveraging {
+        double traceAlpha{0.0};
+        double waterfallAlpha{0.0};
+    };
+    std::optional<SpectrumAveraging> spectrumAveraging(quint32 endpointId) const;
+    /// R-IOS-27, R-IOS-06: a live endpoint's display extras, for tests that
+    /// drive its computations directly (nullptr for an unknown endpoint or
+    /// one that asked for none).
+    DisplayExtrasProcessor* displayExtrasForTest(quint32 endpointId);
     /// Whether that engine's transforms follow its frame rate: true only
     /// while the display budget is lowered because the Core is busy
     /// (R-R3-08, R-R3-40). Empty for an unknown endpoint.
@@ -166,7 +287,7 @@ private:
         bool explicitlyRetired{false};
         QString reason;
     };
-    struct SourceRuntime;
+    using SourceRuntime = DaemonSharedSpectrum::SourceRuntime;
     /// R-R3-43: one slice's receiver audio request and, while it holds a
     /// receiver stream id, the sender capturing that slice.
     struct ReceiverAudioStream {
@@ -203,10 +324,22 @@ private:
         std::optional<RemoteAudioProfileRefusal> refusal;
     };
 
+    void wireUp();
     void onSessionStarted(quint64 epoch);
     void onSessionEnded(quint64 epoch);
     void onControl(const QJsonObject& control, quint64 epoch);
-    void onSourceFrame(MediaSourceKey key);
+    friend class DaemonSharedSpectrum;
+    /// One frame of a shared engine, taken once by DaemonSharedSpectrum.
+    void onSourceFrame(const DaemonSpectrumFrame& frame);
+    /// Task 76: the owner mix follows the session's own slices.
+    void acquireOwnerMix();
+    void releaseOwnerMix();
+    void refreshOwnerMixMask();
+    bool ownsSlice(int sliceId) const;
+    /// Every endpoint on `key` of every controller sharing the engines.
+    template <typename Fn>
+    void forEachSharedEndpoint(const MediaSourceKey& key, Fn&& fn);
+    bool anySharedEndpointOn(const MediaSourceKey& key) const;
     void onWidebandSourceChanged(int adc);
     bool reconcileWidebandDemand(EndpointEntry& entry);
     std::optional<WidebandDisplayContext> widebandContext(const EndpointEntry& entry) const;
@@ -214,12 +347,22 @@ private:
     void onStreamGeometryChanged(int streamIndex, double centreHz, int sampleRateHz);
     void onStreamBindingsChanged(int streamIndex, const QVector<int>& sliceIds);
     void onSliceRemoved(int sliceId);
+    /// Fix wave after the several-devices group review: retires this
+    /// session's display endpoints on `sliceId` with the slice-removed
+    /// reason. False when the peer or session changed while doing so.
+    bool retireSliceDisplays(int sliceId);
     void onRadioConnectionStateChanged(ConnectionState state);
 
     bool handleStart(const QJsonObject& control);
     bool handleSubscribe(const QJsonObject& control);
     bool handleUnsubscribe(const QJsonObject& control);
     bool handleKeyframe(const QJsonObject& control);
+    /// R-IOS-27, R-IOS-06 (displayExtrasVersion 2): {op:"clarity-retune",
+    /// connectionId, endpointId}. Clarity's Re-tune for that endpoint, what
+    /// the desktop's Re-tune button does for its pan. Nothing is sent when
+    /// it runs; a refusal is a `rejected` naming the endpoint with
+    /// revision 0. A request of another shape is ignored.
+    bool handleClarityRetune(const QJsonObject& control);
     bool handleAudio(const QJsonObject& control);
     /// R-R3-43: {op:"receiver-audio", connectionId, sliceId, revision,
     /// enabled, profile}, only from a GUI that declared receiverAudioVersion
@@ -242,6 +385,10 @@ private:
     bool acceptPeerControl(const QJsonObject& control);
 
     void clearSession();
+    /// Drops the media peer while the session stays (the Core dropped it,
+    /// or the device started media on a new connection), and splits the
+    /// display budget again when the peer had asked for displays.
+    void retirePeerKeepingSession();
     void clearProduction();
     QList<quint32> endpointIds() const;
     void removeEndpoint(quint32 endpointId, bool retainOperation = true);
@@ -281,6 +428,11 @@ private:
     void promoteLatestPs3Frame();
     bool trySendPs3(MediaPeer* peer, quint64 epoch, qint64 nowNs);
     bool trySendSpectrum(MediaPeer* peer, quint64 epoch, qint64 nowNs);
+    /// iPhone app Task 20 (R-IOS-27): sends one endpoint's waiting NSDX
+    /// datagram, the extras of the frame it last sent. True when it tried.
+    bool trySendDisplayExtras(MediaPeer* peer, quint64 epoch, qint64 nowNs);
+    DisplayExtrasInputs displayExtrasInputs(const EndpointEntry& entry, double binWidthHz,
+                                            qint64 nowNs) const;
     void reconcileAudio();
     void stopAudioCapture();
     /// `reason` travels only in a disabled context, and only to a peer that
@@ -330,7 +482,13 @@ private:
 
     QPointer<StationServer> m_server;
     QPointer<RadioModel> m_radioModel;
-    DaemonSpectrumSource m_source;
+    /// Task 76: the session this controller alone serves (0: one session at
+    /// a time, whichever starts while it has none).
+    quint64 m_boundEpoch{0};
+    std::shared_ptr<DaemonSharedSpectrum> m_shared;
+    DaemonSpectrumSource& m_source;
+    QMap<MediaSourceKey, SourceRuntime>& m_sources;
+    int m_ownerMix{-1};
     /// coreBusyLimitsSources() as last applied to the sources.
     bool m_transformsFollowFrameRate = false;
     NoiseFloorEstimator m_noiseFloorEstimator;
@@ -352,6 +510,9 @@ private:
     // declares the receiver stream ids). Entries outlive their streams so a
     // stale revision stays refused; only slices that existed are entered.
     bool m_receiverAudioNegotiated{false};
+    /// The current peer's connection failed (ICE consent lost, DTLS failed)
+    /// before it closed: which reason the app is told.
+    bool m_peerLost{false};
     std::map<int, ReceiverAudioStream> m_receiverStreams;
     /// Per receiver stream id: the slice holding it (-1 free) and the next
     /// RTP sequence and timestamp, so each id's timeline continues across
@@ -370,7 +531,6 @@ private:
     quint32 m_nextHeadphonesContextGeneration{0};
     bool m_headphonesRouted{false};
     std::map<quint32, EndpointEntry> m_endpoints;
-    QMap<MediaSourceKey, SourceRuntime> m_sources;
     QTimer m_sendTimer;
     QTimer m_audioDiagnosticsTimer;
     QElapsedTimer m_displayClock;
@@ -396,8 +556,72 @@ private:
     bool m_ps3CurrentAttempted{false};
     bool m_lastDisplayAttemptWasPs3{false};
     quint32 m_endpointHighWater{0};
+    /// Fix wave I5: each display's requested charge, by endpoint id.
+    std::map<quint32, DisplayBudgetCharge> m_displayDemand;
+    /// Fix wave 2 (Important 2): a subscription refused for the budget
+    /// keeps its request in m_displayDemand only until the client asks for
+    /// that endpoint again (subscribe or unsubscribe) or the hold runs
+    /// out; then the endpoint asks for what it asked before the refusal
+    /// (`before`: its live display's request, or nothing).
+    struct RefusedDemand {
+        std::optional<DisplayBudgetCharge> before;
+        qint64 endsAtNs{0};
+    };
+    std::map<quint32, RefusedDemand> m_refusedDemand;
+    QTimer* m_refusedDemandTimer{nullptr};
+    int m_refusedDemandHoldMs{kRefusedDisplayDemandHoldMs};
+    /// Records `endpointId`'s refused request, held until kept, replaced
+    /// or run out.
+    void holdRefusedDemand(quint32 endpointId, std::optional<DisplayBudgetCharge> before);
+    /// Ends every refused request whose hold ran out, and re-arms the timer.
+    void endRefusedDemands();
+    /// Sets (or, with nullopt, forgets) one display's demand and has the
+    /// Core split its budget again when the demand changed.
+    void setDisplayDemand(quint32 endpointId, std::optional<DisplayBudgetCharge> demand);
     std::map<quint32, AllocationRecord> m_nonliveOperations;
     QList<quint32> m_nonliveOperationOrder;
+};
+
+/// iPhone app Task 76 (ruling 9.1): one DaemonMediaController per admitted
+/// session. Makes a controller bound to each media session as it starts and
+/// retires it when that session ends; all of them share one set of spectrum
+/// engines. Installs the Core's PureSignal display gate (the subscribing
+/// session's controller answers it) and turns display budget enforcement
+/// on. A hosting desktop's own window draws locally and has no controller.
+class DaemonMediaHub final : public QObject {
+    Q_OBJECT
+public:
+    explicit DaemonMediaHub(StationServer* server, RadioModel* radioModel,
+                            QObject* parent = nullptr,
+                            MediaPeer::TransportFactory peerFactory = {},
+                            DaemonMediaController::MonotonicClock monotonicClock = {});
+    ~DaemonMediaHub() override;
+
+    /// Applied to every controller now and later (R-R3-23).
+    void setAudioTargetBitrate(int bitsPerSecond);
+    void setAudioLosslessAllowed(bool allowed);
+    /// The controller for a media session, or null.
+    DaemonMediaController* controllerFor(quint64 epoch) const;
+    QList<DaemonMediaController*> controllers() const;
+    int controllerCount() const { return static_cast<int>(m_controllers.size()); }
+    /// Display traffic accepted now across every controller, PureSignal's
+    /// display counted once: what the display load governor scales.
+    DisplayBudgetCharge acceptedDisplayCharge() const;
+    DaemonAudioDiagnostics audioDiagnostics(quint64 epoch) const;
+    const std::shared_ptr<DaemonSharedSpectrum>& sharedSpectrum() const { return m_spectrum; }
+
+private:
+    void onSessionStarted(quint64 epoch);
+    void onSessionEnded(quint64 epoch);
+
+    QPointer<StationServer> m_server;
+    QPointer<RadioModel> m_radioModel;
+    MediaPeer::TransportFactory m_peerFactory;
+    DaemonMediaController::MonotonicClock m_monotonicClock;
+    std::shared_ptr<DaemonSharedSpectrum> m_spectrum;
+    std::map<quint64, std::unique_ptr<DaemonMediaController>> m_controllers;
+    std::optional<int> m_audioTargetBitrate;
+    std::optional<bool> m_audioLosslessAllowed;
 };
 
 } // namespace NereusSDR

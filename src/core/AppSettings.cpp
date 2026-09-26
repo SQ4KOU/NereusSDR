@@ -15,6 +15,12 @@
 //   2026-09-23 - R-R3-21: migrateRenamedKeys() one-shot rename for keys
 //                 whose writer and reader disagreed (WsjtxSpotLifetime).
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - R-R3-49: settings schema v8 drops the TCI rate limit
+//                 saved in messages per second (TciRateLimitMsgsPerSec).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - Receiver and transmit gaps plan, Task 16: the N2ADR
+//                 filter migration covers the HL2 receive-only kit.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1373,7 +1379,12 @@ void AppSettings::migrateLegacyN2adrFilter(AppSettings& s)
     int hl2Count      = 0;
     int migratedCount = 0;
     for (const SavedRadio& r : s.savedRadios()) {
-        if (r.info.boardType != HPSDRHW::HermesLite) {
+        // Task 16 (receiver and transmit gaps plan): the HL2 receive-only
+        // kit is an HL2 (Task 15) and has the HL2's I/O board
+        // (hasIoBoardHl2), so a kit saved while the global setting was in
+        // use gets the value too.
+        if (r.info.boardType != HPSDRHW::HermesLite
+            && r.info.boardType != HPSDRHW::HermesLiteRxOnly) {
             continue;
         }
         ++hl2Count;
@@ -1613,6 +1624,18 @@ void AppSettings::ensureSettingsAtVersion(int currentVersion)
         qDebug() << "Migrating settings to schema v7 (Network Watchdog reset)";
         remove(QStringLiteral("NetworkWatchdogEnabled"));
         qDebug() << "Settings migration to schema v7 complete";
+    }
+
+    // v7 -> v8 migration (R-R3-49). Setup > Network > TCI Server > Rate
+    // limit was a messages-per-second box (TciRateLimitMsgsPerSec) that
+    // nothing read. It is now Thetis's udTCIRateLimit, the shortest gap in
+    // ms between frequency updates sent to each TCI app (TciRateLimitMs,
+    // default 100). A number saved in the old unit means nothing in the new
+    // one, so drop it once; every operator starts from the default.
+    if (storedVersion < 8 && currentVersion >= 8) {
+        qDebug() << "Migrating settings to schema v8 (TCI rate limit in ms)";
+        remove(QStringLiteral("TciRateLimitMsgsPerSec"));
+        qDebug() << "Settings migration to schema v8 complete";
     }
 
     setValue(versionKey, QString::number(currentVersion));

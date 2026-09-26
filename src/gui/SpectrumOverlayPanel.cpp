@@ -57,6 +57,10 @@
 //   2026-09-24 - R-R3-49 / R-R3-21 fix wave: the VAX combo's tooltip before
 //                 a radio is set reads "waiting for the radio". J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-IOS-27, R-IOS-06: the band table moved to
+//                 models/BandGrid.h, shared with the Core's catalogue; the
+//                 grid draws as before. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #include "SpectrumOverlayPanel.h"
@@ -67,6 +71,7 @@
 #include "core/SkuUiProfile.h"
 #include "core/StepAttenuatorFacade.h"
 #include "gui/AntennaPopupBuilder.h"
+#include "models/BandGrid.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 
@@ -157,30 +162,10 @@ static QPushButton* makeMenuBtn(const QString& text, QWidget* parent)
     return btn;
 }
 
-// ── Band table (from AetherSDR SpectrumOverlayMenu.cpp, reduced to HF + WWV) ─
-struct BandEntry {
-    const char* label;
-    const char* name;
-    double      freqHz;
-    const char* mode;
-};
-
-// Frequencies in Hz (task spec: 1.8e6, 3.5e6, etc.)
-static constexpr BandEntry kBands[] = {
-    {"160", "160m",  1.8e6,    "LSB"},
-    {"80",  "80m",   3.5e6,    "LSB"},
-    {"60",  "60m",   5.3e6,    "USB"},
-    {"40",  "40m",   7.0e6,    "LSB"},
-    {"30",  "30m",  10.1e6,    "DIGU"},
-    {"20",  "20m",  14.0e6,    "USB"},
-    {"17",  "17m",  18.068e6,  "USB"},
-    {"15",  "15m",  21.0e6,    "USB"},
-    {"12",  "12m",  24.89e6,   "USB"},
-    {"10",  "10m",  28.0e6,    "USB"},
-    {"6",   "6m",   50.0e6,    "USB"},
-    {"WWV", "WWV",  10.0e6,    "AM"},
-};
-static constexpr int kBandCount = static_cast<int>(sizeof(kBands) / sizeof(kBands[0]));
+// ── Band table ────────────────────────────────────────────────────────────────
+// From AetherSDR SpectrumOverlayMenu.cpp, reduced to HF + WWV. It lives in
+// models/BandGrid.h (kBandGrid) so the Core's catalogue lists the same bands
+// in the same order (R-IOS-27).
 
 // ── Constructor ───────────────────────────────────────────────────────────────
 
@@ -414,17 +399,17 @@ void SpectrumOverlayPanel::buildBandFlyout()
     // Row 1: 30, 20, 17, 15
     // Row 2: 12, 10, 6, WWV
     static constexpr int kCols = 4;
-    for (int i = 0; i < kBandCount; ++i) {
+    for (int i = 0; i < kBandGridCount; ++i) {
         int row = i / kCols;
         int col = i % kCols;
 
-        auto* btn = new QPushButton(QString::fromLatin1(kBands[i].label), m_bandFlyout);
+        auto* btn = new QPushButton(QString::fromLatin1(kBandGrid[i].label), m_bandFlyout);
         btn->setFixedSize(kBandBtnW, kBandBtnH);
         btn->setStyleSheet(bandBtnStyle);
 
-        QString bandName = QString::fromLatin1(kBands[i].name);
-        double  freqHz   = kBands[i].freqHz;
-        QString mode     = QString::fromLatin1(kBands[i].mode);
+        QString bandName = QString::fromLatin1(kBandGrid[i].name);
+        double  freqHz   = kBandGrid[i].freqHz;
+        QString mode     = QString::fromLatin1(kBandGrid[i].mode);
 
         connect(btn, &QPushButton::clicked, this, [this, bandName, freqHz, mode]() {
             hideFlyout();

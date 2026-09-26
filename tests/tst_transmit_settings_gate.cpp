@@ -19,6 +19,11 @@
 //   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 3): the Core offers
 //                                    transmitSettingsVersion 3.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  Integration carry: the window signs in
+//                                    to an upgraded Core with its token
+//                                    (seedUpgradedCoreToken), as Part C's
+//                                    paired-device sign-in requires.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -44,6 +49,7 @@
 #include "core/session/StationServer.h"
 #include "core/settings/SettingsProxy.h"
 #include "fakes/LoopbackTransport.h"
+#include "fakes/UpgradedCoreToken.h"
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "models/TransmitModel.h"
@@ -77,7 +83,8 @@ struct Session {
         : settings(settingsDir.filePath(QStringLiteral("NereusSDR.settings")))
     {
         core = makeStationRadioModel();
-        server = std::make_unique<StationServer>(core.get(), settings, securityDir);
+        server = std::make_unique<StationServer>(
+            core.get(), settings, NereusSDR::Test::seedUpgradedCoreToken(securityDir));
         client = std::make_unique<StationClient>(&window, &proxy);
         coreEnd = new LoopbackTransport(QStringLiteral("station-end"), parent);
         windowEnd = new LoopbackTransport(QStringLiteral("client-end"), parent);
@@ -234,10 +241,15 @@ void TstTransmitSettingsGate::olderCoreOffersNoTransmitSettings()
     caps.remoteTgxlControlVersion = 3;
     caps.transmitSettingsVersion = 1;
     QList<MirrorUpdate> updates = caps.toUpdates();
+    // R-IOS-27's bandSelectVersion now follows it; a Core from before
+    // either sends neither.
+    QCOMPARE(updates.last().name, QByteArrayLiteral("bandSelectVersion"));
+    updates.removeLast();
     QCOMPARE(updates.last().name, QByteArrayLiteral("transmitSettingsVersion"));
     QCOMPARE(StationCapabilities::fromUpdates(updates).transmitSettingsVersion, 1);
     updates.removeLast();
-    QCOMPARE(updates.last().name, QByteArrayLiteral("remoteTgxlControlVersion"));
+    // The iPhone app's display extras entry now comes just before it.
+    QCOMPARE(updates.last().name, QByteArrayLiteral("displayExtrasVersion"));
     const StationCapabilities older = StationCapabilities::fromUpdates(updates);
     QCOMPARE(older.transmitSettingsVersion, 0);
     QCOMPARE(older.remoteTgxlControlVersion, 3);
@@ -251,7 +263,8 @@ void TstTransmitSettingsGate::olderAppIsNotOfferedTransmitSettings()
     QTemporaryDir dir;
     AppSettings settings(dir.filePath(QStringLiteral("older.settings")));
     settings.setValue(QStringLiteral("DspOptionsBufferSizePhoneTx"), QStringLiteral("1024"));
-    StationServer server(core.get(), settings, m_securityDir.path());
+    StationServer server(core.get(), settings,
+                         NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     auto* coreEnd = new LoopbackTransport(QStringLiteral("core"), this);
     auto* peer = new LoopbackTransport(QStringLiteral("older-app"), this);
     coreEnd->linkTo(peer);

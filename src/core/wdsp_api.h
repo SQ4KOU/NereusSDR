@@ -216,6 +216,12 @@
 //                 (KG4VCF) (R-R3-40). NereusSDR-original, exported from
 //                 third_party/wdsp/src/dsplock.c; no Thetis counterpart.
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25  WDSPSetTestBlockHook declaration added by J.J. Boyd
+//                 (KG4VCF) so a load test measures the worker's busy share
+//                 the way the load counters do, without them (R-R3-40).
+//                 NereusSDR-original test seam exported from
+//                 third_party/wdsp/src/dsplock.c; no Thetis counterpart.
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 /*  wdsp.cs
@@ -397,6 +403,12 @@ void WDSPSetTestPeriodicDelayUs(int channel, int microseconds, int everyBlocks);
 // GetChannelDspLoad read of the channel finds its load pair changing and
 // returns 1; hold 0 releases it. Never call it in production code.
 void WDSPSetTestHoldLoadPair(int channel, int hold);
+
+// Test-only (NereusSDR dsplock.c): install (or, with nullptr, remove) a
+// function every channel worker calls on itself at each block's start (endNs
+// 0) and end, with the block's start and end on the monotonic clock
+// GetChannelDspLoad's readNs uses. Never call it in production code.
+void WDSPSetTestBlockHook(void (*hook)(int channel, long long startNs, long long endNs));
 
 // Test-only (NereusSDR dsplock.c): how long, in microseconds, the channel's
 // latest teardown waited for its worker to leave its loop (that wait alone,

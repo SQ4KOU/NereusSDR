@@ -76,6 +76,7 @@
 #include "core/settings/SettingsScope.h"
 
 #include <QScopeGuard>
+#include <QStringList>
 
 namespace NereusSDR {
 
@@ -157,6 +158,35 @@ QMap<QString, QString> SettingsProxyServer::buildSnapshot(const QString& connect
     }
 
     return out;
+}
+
+SettingsProxyServer::SharedFamily SettingsProxyServer::sharedFamilyOf(const QString& key)
+{
+    // iPhone app Task 75. The receive options are the RX per-mode keys
+    // DspOptionsPage writes and RxChannel reads (DspOptions<BufferSize|
+    // FilterSize|FilterType><Phone|Cw|Dig|Fm>Rx), the keys the Core applies
+    // live (RadioModel::scheduleRemoteDspOptionsApply).
+    if (key.startsWith(QLatin1String("DspOptions")) && key.endsWith(QLatin1String("Rx"))) {
+        static const QStringList kSettings{QStringLiteral("BufferSize"),
+                                           QStringLiteral("FilterSize"),
+                                           QStringLiteral("FilterType")};
+        static const QStringList kGroups{QStringLiteral("Phone"), QStringLiteral("Cw"),
+                                         QStringLiteral("Dig"), QStringLiteral("Fm")};
+        const QString body = key.mid(10, key.size() - 12);
+        for (const QString& setting : kSettings) {
+            if (body.startsWith(setting) && kGroups.contains(body.mid(setting.size()))) {
+                return SharedFamily::ReceiveOptions;
+            }
+        }
+        return SharedFamily::None;
+    }
+    if (key.startsWith(QLatin1String("PGXL_"))) {
+        return SharedFamily::Amplifier;
+    }
+    if (key.startsWith(QLatin1String("TGXL_")) || key.startsWith(QLatin1String("RfKit_"))) {
+        return SharedFamily::Tuner;
+    }
+    return SharedFamily::None;
 }
 
 QString SettingsProxyServer::otherRadioRefusal(const QString& key) const

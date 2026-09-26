@@ -141,8 +141,9 @@ public:
     bool txPinCheckedForTest(int bandIdx, int pin) const;
 
     // Phase 3P-H Task 5b test seams.
-    // Current OC byte displayed by the live LED row — mirrors the last
-    // OcMatrix::maskFor(currentBand, isTx) passed to updateLiveLeds().
+    // Current OC byte displayed by the live LED row. Plan Task 14 fix wave
+    // (R-R3-49): the byte the connection composed (RadioModel::
+    // bandOutputsByte, the Core's in a remote window), 0 when none is known.
     quint8 currentOcByteForTest() const { return m_currentOcByte; }
     bool   livePinLitForTest(int pin) const;
 
@@ -168,7 +169,7 @@ public:
 private slots:
     void onMatrixChanged();
     void onResetClicked();
-    // Phase 3P-H Task 5b: recompute OC byte from current band + MOX state.
+    // Phase 3P-H Task 5b; plan Task 14 fix wave: show the composed byte.
     void onLiveStateChanged();
 
 private:
@@ -216,9 +217,11 @@ private:
     // Guard against feedback loops between matrix changed() and checkbox toggled()
     bool m_syncing{false};
 
-    // Phase 3P-H Task 5b: last computed OC byte for the live-LED row.
-    // bit N == 1 means pin N lit. Recomputed on OcMatrix::changed,
-    // PanadapterModel::bandChanged, and TransmitModel::moxChanged.
+    // Phase 3P-H Task 5b: the OC byte the live-LED row shows; bit N == 1
+    // means pin N lit. Plan Task 14 fix wave: this is the byte the
+    // connection composed (RadioModel::bandOutputsByte), refreshed on
+    // RadioModel::bandOutputsChanged and connectionStateChanged; 0 (nothing
+    // lit) until a byte is known. The tab computes no byte of its own.
     quint8 m_currentOcByte{0};
 };
 

@@ -95,7 +95,7 @@ enum class UnbuiltFeature {
     WsjtxFilters,     // Spot Hub WSJT-X filters (three) (built after R4)
     RbnRateLimit,     // Spot Hub RBN rate limit (built after R4)
     FreeDvToPsk,      // Spot Hub report FreeDV decodes to PSK Reporter (built after R4)
-    TciExtras,        // TCI rate limit, CW to CWU, TX channel, sensor intervals, RX2 VFO options,
+    TciExtras,        // TCI CW to CWU, TX channel, sensor intervals, RX2 VFO options,
                       // stream channels (built after R4)
     SmallFilter,      // Setup > Appearance small filter display on the VFO flag
     ApfParams,        // Setup > DSP > CW peak filter bandwidth and gain (built after R4)
@@ -110,8 +110,8 @@ enum class UnbuiltFeature {
     FrequencyCalibration, // Setup > Hardware > Calibration: the frequency calibration Start button
     FmTones,          // CTCSS tone encode and tone squelch: the VFO flag's FM tone mode and tone
                       // choices (plan row fm-flag)
-    AlexTxFilterOptions, // Setup > Hardware > Alex-1 Filters: HPF bypass on TX, HPF bypass on
-                         // PureSignal, Disable 6 m LNA on TX, the LPF band edges (plan C5)
+    AlexTxFilterOptions, // Setup > Hardware > Alex-1 Filters: the LPF band edges (plan C5;
+                         // its high-pass switches are applied since plan Task 14)
     Hl2TxTiming,      // Setup > Hardware > HL2 Options: TX buffer latency, PTT hang (plan C6)
 };
 

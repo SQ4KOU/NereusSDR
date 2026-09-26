@@ -719,7 +719,6 @@ QMap<F, QList<Surface>> surfaces()
                                     [](Hosts& h) { return textShown(h.spotHub(), QStringLiteral("Rate Limit:")); }}};
     map[F::FreeDvToPsk] = {spot(QStringLiteral("freedvReportToPskChk"))};
     map[F::TciExtras] = {
-        onPage(QStringLiteral("TCI Server"), QStringLiteral("rate limit"), text(QStringLiteral("Rate limit:"))),
         onPage(QStringLiteral("TCI Server"), QStringLiteral("CW to CWU"),
                text(QStringLiteral("CW becomes CWU above 10 MHz"))),
         onPage(QStringLiteral("TCI Server"), QStringLiteral("TX channel"), text(QStringLiteral("TX channel:"))),
@@ -775,15 +774,9 @@ QMap<F, QList<Surface>> surfaces()
     map[F::FrequencyCalibration] = {onPage(QStringLiteral("Hardware Config"),
                                            QStringLiteral("frequency calibration Start"),
                                            named(QStringLiteral("freqCalStartButton")))};
-    // Plan C5 and C6 (parity Task 13): nothing reads the Alex-1 TX filter
-    // options in any window; the HL2 wire always carries its own timings.
+    // Plan C5 and C6 (parity Task 13): nothing reads the Alex-1 LPF band
+    // edges in any window; the HL2 wire always carries its own timings.
     map[F::AlexTxFilterOptions] = {
-        onPage(QStringLiteral("Hardware Config"), QStringLiteral("HPF bypass on TX"),
-               named(QStringLiteral("alexHpfBypassOnTx"))),
-        onPage(QStringLiteral("Hardware Config"), QStringLiteral("HPF bypass on PureSignal"),
-               named(QStringLiteral("alexHpfBypassOnPs"))),
-        onPage(QStringLiteral("Hardware Config"), QStringLiteral("Disable 6 m LNA on TX"),
-               named(QStringLiteral("alexDisable6mLnaOnTx"))),
         onPage(QStringLiteral("Hardware Config"), QStringLiteral("LPF band edges"),
                [](QWidget* root) {
                    for (QDoubleSpinBox* spin : root->findChildren<QDoubleSpinBox*>()) {
@@ -940,7 +933,6 @@ private slots:
     void savedValuesOfHiddenControlsSurviveAStartAndASave()
     {
         const QMap<QString, QString> seeded = {
-            {QStringLiteral("TciRateLimitMsgsPerSec"), QStringLiteral("25")},
             {QStringLiteral("TciCwBecomesCwuAbove10mhz"), QStringLiteral("True")},
             {QStringLiteral("TciTxChannel"), QStringLiteral("Left")},
             {QStringLiteral("TciRxSensorIntervalMs"), QStringLiteral("450")},
@@ -1322,8 +1314,7 @@ private slots:
             }
 
             // No page the tree offers has nothing to show. (A leaf or a
-            // category the tree hides, such as PA without a radio that has
-            // one, is not offered.)
+            // category the tree hides is not offered.)
             QStringList empty;
             int offered = 0;
             for (int i = 0; i < tree->topLevelItemCount(); ++i) {
@@ -1340,6 +1331,14 @@ private slots:
                     // reason line, not an empty page.
                     if (page != nullptr
                         && page->objectName() == QStringLiteral("setupStationPlaceholder")) {
+                        continue;
+                    }
+                    // A PA page on a radio without power amplifier settings
+                    // (no radio here) is shown disabled under the dialog's
+                    // reason line (Task 16 fix wave 2: never hidden), not
+                    // offered as a page to use.
+                    if (page != nullptr && category->text(0) == QStringLiteral("PA")
+                        && !page->isEnabled() && !leaf->toolTip(0).isEmpty()) {
                         continue;
                     }
                     ++offered;

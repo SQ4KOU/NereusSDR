@@ -64,6 +64,10 @@
 //                 row, with a plain notice when the headphones are chosen
 //                 and not open. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-24 - iPhone app Task 19 (R-IOS-06): the SWR gauge's range and
+//                 the RF power gauge's headroom come from ControlRanges.h,
+//                 which the Core's catalogue reads too. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 //   2026-09-24 : R-R3-49 (parity Task 1): setTransmitSettingsPermitted.
 //                 RF Power and the TX filter low and high follow the
 //                 transmit settings gate in a remote window; the keying
@@ -89,10 +93,28 @@
 //                 An RF Power move writes the band slot and the tune drive
 //                 source only where the Core takes them (version 5).
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 : Receiver and transmit gaps plan, Task 7: the MOX button
+//                 keys through RadioModel::setMoxFromButton (a manual key,
+//                 Thetis chkMOX_Click). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 //   2026-09-25 : R-R3-49 (parity Task 7): PS-A follows
 //                 setPureSignalArmingPermitted and the facade's canArm, no
 //                 longer the keying gate. J.J. Boyd (KG4VCF), AI-assisted
 //                 via Anthropic Claude Code.
+//   2026-09-25 : Receiver and transmit gaps plan, Task 16: receive only
+//                 disables MOX (outside SPEC and DRM), TUNE, 2-Tone and VOX
+//                 with its reason (console.RXOnly, console.cs:15312-15334
+//                 [v2.10.3.15]). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-09-25 : Task 16 fix wave: MOX disabled in every mode (I3), the
+//                 MOX tooltip and lock follow the active slice (M3), and
+//                 the lock names the remote transmit reason too (M6).
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+//                 Code.
+//   2026-09-25 : Task 16 fix wave 2: a mode or slice change while the
+//                 transmit-permission layer holds MOX changes the tooltip
+//                 it gives back, not the reason shown. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -203,6 +225,7 @@
 #include "gui/widgets/DexpPeakMeter.h"
 #include "gui/widgets/VfoWidget.h"
 #include "core/AudioEngine.h"
+#include "core/ControlRanges.h"
 #include "core/audio/CompositeTxMicRouter.h"
 #include "core/MicProfileManager.h"
 #include "core/MoxController.h"
@@ -243,6 +266,10 @@ namespace {
 QString monitorSpeakersCaption()   { return QStringLiteral("SPEAKERS"); }
 QString monitorHeadphonesCaption() { return QStringLiteral("PHONES"); }
 
+// The tooltip a control had before the transmit-permission layer
+// (setTransmitPermitted) disabled it, given back when permission returns.
+constexpr auto kTransmitSavedTooltip = "TxAppletSavedTransmitTooltip";
+
 // Disable a control with `reason` as its tooltip, remembering what it had,
 // or put back what it had. Shared by the keying gate and the transmit
 // settings gate, which hold disjoint controls. No model state is written.
@@ -250,7 +277,7 @@ void gateTransmitControl(QWidget* control, bool permitted, const QString& reason
 {
     if (!control) { return; }
 
-    static constexpr auto kSavedTooltip = "TxAppletSavedTransmitTooltip";
+    static constexpr auto kSavedTooltip = kTransmitSavedTooltip;
     static constexpr auto kSavedDescription = "TxAppletSavedTransmitDescription";
     static constexpr auto kSavedEnabled = "TxAppletSavedTransmitEnabled";
     if (!permitted) {
@@ -353,9 +380,11 @@ void TxApplet::buildUI()
     // ── 2. SWR gauge ── 1.0–3.0, redStart 2.5 ───────────────────────────────
     // Ticks: 1 / 1.5 / 2.5 / 3  (AetherSDR TxApplet.cpp:77)
     auto* swrGauge = new HGauge(this);
-    swrGauge->setRange(1.0, 3.0);
-    swrGauge->setRedStart(2.5);
-    swrGauge->setYellowStart(2.5);
+    // Range and red zone from ControlRanges.h, which the Core's catalogue
+    // reads too (iPhone app Task 19).
+    swrGauge->setRange(ControlRanges::kSwrGaugeMin, ControlRanges::kSwrGaugeMax);
+    swrGauge->setRedStart(ControlRanges::kSwrGaugeRedFrom);
+    swrGauge->setYellowStart(ControlRanges::kSwrGaugeRedFrom);
     swrGauge->setTitle(QStringLiteral("SWR"));
     swrGauge->setTickLabels({QStringLiteral("1"), QStringLiteral("1.5"),
                               QStringLiteral("2.5"), QStringLiteral("3")});
@@ -1178,16 +1207,20 @@ void TxApplet::wireControls()
         m_updatingFromModel = false;
     });
 
-    // ── MOX button → MoxController::setMox(bool) ────────────────────────────
+    // ── MOX button → RadioModel::setMoxFromButton(bool) ─────────────────────
     // B.5 setter: drives state machine through RX→TX or TX→RX transitions.
     // From Thetis console.cs:29311-29678 [v2.10.3.13] chkMOX_CheckedChanged2.
     // //[2.10.1.0]MW0LGE changed  [original inline comment from console.cs:29355]
     // //MW0LGE [2.9.0.7]  [original inline comment from console.cs:29400, 29561]
     // //[2.10.3.6]MW0LGE att_fixes  [original inline comment from console.cs:29567-29568, 29659]
     if (mox) {
-        connect(m_moxBtn, &QPushButton::toggled, this, [this, mox](bool on) {
+        // Receiver and transmit gaps plan, Task 7: the MOX button is a manual
+        // key (Thetis chkMOX_Click, console.cs:29730-29747 [v2.10.3.15]);
+        // RadioModel::setMoxFromButton also turns TUN and two-tone off on
+        // the way off, as chkMOX_Click does.
+        connect(m_moxBtn, &QPushButton::toggled, this, [this](bool on) {
             if (m_updatingFromModel) { return; }
-            mox->setMox(on);
+            m_model->setMoxFromButton(on);
         });
 
         // Reverse: MoxController::moxStateChanged → button checked state.
@@ -1249,13 +1282,19 @@ void TxApplet::wireControls()
     // Wired here (wireControls) rather than syncFromModel because the active
     // slice can change after construction.
     if (m_model) {
-        if (SliceModel* slice = m_model->activeSlice()) {
-            // Wire the active slice's dspModeChanged to onMoxModeChanged.
-            connect(slice, &SliceModel::dspModeChanged,
-                    this, &TxApplet::onMoxModeChanged);
-            // Set initial tooltip from current mode.
-            onMoxModeChanged(slice->dspMode());
-        }
+        // Task 16 fix wave (M3): the MOX tooltip, and the receive-only lock
+        // over it, follow the active slice when it changes, not only the
+        // slice that was active here.
+        followActiveSliceMode();
+        connect(m_model, &RadioModel::activeSliceChanged,
+                this, [this](int) { followActiveSliceMode(); });
+        // Task 16: receive only turning on or off, or its reason changing
+        // (a radio with no transmitter).
+        connect(m_model, &RadioModel::rxOnlyChanged, this, [this](bool) {
+            removeReceiveOnlyLock();
+            applyReceiveOnlyLock();
+        });
+        applyReceiveOnlyLock();
     }
 
     // ── 4b. VOX row wiring (3M-3a-iii bench polish 2026-05-04) ────────────────
@@ -1826,7 +1865,9 @@ void TxApplet::rescaleFwdGaugeForModel(HPSDRModel model)
     // ANAN-G2-1K (1000 W max) both show meaningless bar widths.
     const int maxW   = paMaxWattsFor(model);
     const double red = static_cast<double>(maxW);
-    const double top = red * 1.2;   // 20% headroom past the red zone
+    // 20% headroom past the red zone (ControlRanges.h, which the Core's
+    // catalogue reads too).
+    const double top = red * ControlRanges::kRfPowerGaugeHeadroom;
 
     m_fwdPowerGauge->setRange(0.0, top);
     m_fwdPowerGauge->setRedStart(red);
@@ -2074,11 +2115,106 @@ QString TxApplet::tooltipForMode(DSPMode mode)
 // tooltip text and installs it on m_moxBtn. If the mode is an allowed SSB
 // mode the tooltip reverts to the normal "Manual transmit (MOX)".
 // ---------------------------------------------------------------------------
+// Wires the active slice's dspModeChanged to onMoxModeChanged, dropping the
+// previous slice's connection, and sets the tooltip from its mode.
+void TxApplet::followActiveSliceMode()
+{
+    disconnect(m_moxModeConnection);
+    m_moxModeConnection = {};
+    SliceModel* slice = m_model ? m_model->activeSlice() : nullptr;
+    if (!slice) {
+        return;
+    }
+    m_moxModeConnection = connect(slice, &SliceModel::dspModeChanged,
+                                  this, &TxApplet::onMoxModeChanged);
+    onMoxModeChanged(slice->dspMode());
+}
+
 void TxApplet::onMoxModeChanged(DSPMode mode)
 {
+    // Task 16: the receive-only lock sits on top of the tooltip; take it
+    // off, change the tooltip under it, and put it back.
+    removeReceiveOnlyLock();
     if (m_moxBtn) {
-        m_moxBtn->setToolTip(tooltipForMode(mode));
+        // Task 16 fix wave 2 (Minor 2): while the transmit-permission layer
+        // holds the button, its reason stays visible and the mode's tooltip
+        // goes into the tooltip that layer gives back.
+        if (m_moxBtn->property(kTransmitSavedTooltip).isValid()) {
+            m_moxBtn->setProperty(kTransmitSavedTooltip, tooltipForMode(mode));
+        } else {
+            m_moxBtn->setToolTip(tooltipForMode(mode));
+        }
     }
+    applyReceiveOnlyLock();
+}
+
+// ---------------------------------------------------------------------------
+// Task 16: receive only.
+//
+// From Thetis console.cs:15318-15324 [v2.10.3.15] (RXOnly setter):
+//   if (_rx1_dsp_mode != DSPMode.SPEC &&
+//       _rx1_dsp_mode != DSPMode.DRM &&
+//       chkPower.Checked)
+//       chkMOX.Enabled = !_rx_only;
+//   chkTUN.Enabled = !_rx_only;
+//   chk2TONE.Enabled = !_rx_only; // MW0LGE_21a
+//   chkVOX.Enabled = !_rx_only;
+// Disabled, with the reason as the tooltip (the operator, 2026-09-25: a
+// control that cannot run is shown disabled with its reason). The keying
+// gate refuses every key whatever the buttons show (MoxController::setRxOnly).
+// MOX is disabled in every mode, SPEC and DRM included, where Thetis leaves
+// it alone (RadioModel::receiveOnlyDisablesMoxButton says why; fix wave I3).
+// Under a remote window's transmit gate both reasons show (M6).
+// ---------------------------------------------------------------------------
+namespace {
+constexpr auto kRxOnlySavedTooltip = "TxAppletRxOnlySavedTooltip";
+constexpr auto kRxOnlySavedDescription = "TxAppletRxOnlySavedDescription";
+constexpr auto kRxOnlySavedEnabled = "TxAppletRxOnlySavedEnabled";
+}
+
+void TxApplet::removeReceiveOnlyLock()
+{
+    for (QWidget* control : {static_cast<QWidget*>(m_moxBtn),
+                             static_cast<QWidget*>(m_tuneBtn),
+                             static_cast<QWidget*>(m_twoToneBtn),
+                             static_cast<QWidget*>(m_voxBtn)}) {
+        if (!control || !control->property(kRxOnlySavedTooltip).isValid()) {
+            continue;
+        }
+        control->setEnabled(control->property(kRxOnlySavedEnabled).toBool());
+        control->setToolTip(control->property(kRxOnlySavedTooltip).toString());
+        control->setAccessibleDescription(
+            control->property(kRxOnlySavedDescription).toString());
+        control->setProperty(kRxOnlySavedTooltip, QVariant());
+        control->setProperty(kRxOnlySavedDescription, QVariant());
+        control->setProperty(kRxOnlySavedEnabled, QVariant());
+    }
+}
+
+void TxApplet::applyReceiveOnlyLock()
+{
+    if (!m_model || !m_model->isRxOnly()) {
+        return;
+    }
+    const QString reason = m_model->rxOnlyReasonAlongside(
+        m_transmitPermitted ? QString() : m_transmitPermissionReason);
+    const auto lock = [&reason](QWidget* control) {
+        if (!control || control->property(kRxOnlySavedTooltip).isValid()) {
+            return;
+        }
+        control->setProperty(kRxOnlySavedTooltip, control->toolTip());
+        control->setProperty(kRxOnlySavedDescription, control->accessibleDescription());
+        control->setProperty(kRxOnlySavedEnabled, control->isEnabled());
+        control->setEnabled(false);
+        control->setToolTip(reason);
+        control->setAccessibleDescription(reason);
+    };
+    if (m_model->receiveOnlyDisablesMoxButton()) {
+        lock(m_moxBtn);
+    }
+    lock(m_tuneBtn);
+    lock(m_twoToneBtn);   // MW0LGE_21a
+    lock(m_voxBtn);
 }
 
 // ── pollVoxMeter — Phase 3M-3a-iii bench polish 2026-05-04 ─────────────────
@@ -2280,11 +2416,14 @@ void TxApplet::updateMonitorOutputNotice()
 // ---------------------------------------------------------------------------
 void TxApplet::setTransmitPermitted(bool permitted, const QString& unavailableReason)
 {
+    // Task 16: the receive-only lock goes back on top afterwards.
+    removeReceiveOnlyLock();
     m_transmitPermitted = permitted;
     const QString reason = unavailableReason.isEmpty()
         ? tr("Transmit controls are unavailable until the Core confirms "
              "transmit permission.")
         : unavailableReason;
+    m_transmitPermissionReason = reason;   // Task 16 fix wave (M6)
 
     const auto apply = [permitted, &reason](QWidget* control) {
         gateTransmitControl(control, permitted, reason);
@@ -2300,6 +2439,8 @@ void TxApplet::setTransmitPermitted(bool permitted, const QString& unavailableRe
     apply(m_moxBtn);
     apply(m_voxBtn);
     apply(m_twoToneBtn);
+    // Task 16: the receive-only lock back on top (checkpoint join).
+    applyReceiveOnlyLock();
 }
 
 void TxApplet::setPureSignalArmingPermitted(bool permitted, const QString& unavailableReason)
@@ -2310,6 +2451,7 @@ void TxApplet::setPureSignalArmingPermitted(bool permitted, const QString& unava
         : unavailableReason;
     gateTransmitControl(m_psaBtn, permitted, reason);
     syncPsaFromFacade();
+    applyReceiveOnlyLock();
 }
 
 // R-R3-49 (parity Task 1): the transmit settings that key nothing. In a

@@ -130,6 +130,10 @@
 //                 transmit slice with no toast, and the VAX first-run check
 //                 runs in a remote window as in a local one. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 -- Receiver and transmit gaps plan, Task 16: Receive Only is
+//                 the Core's too, so the Options page gates three controls.
+//                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//                 Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -246,6 +250,7 @@
 #include "models/TransmitModel.h"
 #include "fakes/FakeAudioBus.h"
 #include "fakes/MainWindowTestSettings.h"
+#include "fakes/UpgradedCoreToken.h"
 
 using namespace NereusSDR;
 
@@ -752,6 +757,10 @@ private slots:
     void theSameSweepAgainstALocalModelDisablesNothing()
     {
         RadioModel model;
+        // A radio with power amplifier settings (an ANAN-G2): with no radio
+        // the PA pages are disabled with the reason (Task 16 fix wave 2),
+        // which is the radio's doing, not local mode's.
+        model.setBoardForTest(HPSDRHW::Saturn);
         SetupDialog dialog(&model);
 
         // By index, for the same reason as the remote twin above: the
@@ -2029,7 +2038,7 @@ private slots:
         // wave, final review I4); so is VAX (R-R3-44).
         const QMap<QString, int> coreControls{
             {QStringLiteral("Startup & Preferences"), 2}, // callsign, grid (R-R3-21)
-            {QStringLiteral("Options"), 2},             // General: Region, Network Watchdog (R-R3-49)
+            {QStringLiteral("Options"), 3},             // General: Region, Network Watchdog (R-R3-49), Receive Only (Task 16)
             {QStringLiteral("Spectrum Defaults"), 5},   // FFT size, window, Hz/bin, fps x2
             {QStringLiteral("Grid & Scales"), 3},       // dB max, dB min, copy
             {QStringLiteral("Multimeter"), 1},          // sample interval
@@ -3038,11 +3047,12 @@ private slots:
         QVERIFY(page.sidetoneRowVisibleForTest());
     }
 
-    // The PA category is not shown in a remote session: a remote model has
-    // no hardware profile, so its capabilities are the Unknown board's and
-    // hasPaProfile is false (SetupDialog::applyPaVisibility). The inventory
-    // records it as unavailable by absence; this pins that.
-    void remotePaCategoryIsNotShown()
+    // A remote window that does not know the Core's radio yet: its
+    // capabilities are the Unknown board's and hasPaProfile is false. Task 16
+    // fix wave 2 (the operator's rule, 2026-09-25: disabled with its reason,
+    // never hidden): the PA category and its pages are shown, disabled, and
+    // say why.
+    void remotePaCategoryIsShownDisabledWithTheReason()
     {
         RadioModel remote(RadioModel::Role::Remote);
         SetupDialog dialog(&remote);
@@ -3055,7 +3065,21 @@ private slots:
             }
         }
         QVERIFY(pa != nullptr);
-        QVERIFY(pa->isHidden());
+        QVERIFY(!pa->isHidden());
+        QVERIFY(!pa->toolTip(0).isEmpty());
+        QVERIFY(OperatorWording::isPlain(pa->toolTip(0)));
+        for (const QString& label : {QStringLiteral("PA Gain"), QStringLiteral("Watt Meter"),
+                                     QStringLiteral("PA Values")}) {
+            QTreeWidgetItem* const leaf = setupLeaf(dialog, label);
+            QVERIFY2(leaf != nullptr, qPrintable(label));
+            QVERIFY2(!leaf->isHidden(), qPrintable(label));
+            QVERIFY2(!leaf->toolTip(0).isEmpty(), qPrintable(label));
+            dialog.selectPage(label);
+            QWidget* const page = dialog.realizedPageForTest(label);
+            QVERIFY2(page != nullptr, qPrintable(label));
+            QVERIFY2(!page->isEnabled(), qPrintable(label));
+            QVERIFY(OperatorWording::isPlain(page->toolTip()));
+        }
     }
 
     // R-R3-46 / R-R3-10: with the Core's radio known (a Saturn ANAN-G2 1K,
@@ -4095,7 +4119,7 @@ private slots:
         stationSettings.ensureSettingsAtVersion(kMigratedSchema);
 
         RadioModel station;
-        StationServer server(&station, stationSettings, stationDir.path());
+        StationServer server(&station, stationSettings, NereusSDR::Test::seedUpgradedCoreToken(stationDir.path()));
         QWebSocketServer listener(QStringLiteral("core"), QWebSocketServer::NonSecureMode);
         QVERIFY(listener.listen(QHostAddress::LocalHost, 0));
         connect(&listener, &QWebSocketServer::newConnection, &server, [&listener, &server] {
@@ -4571,7 +4595,7 @@ private slots:
         station.sliceById(0)->setFrequency(14100000.0);
         station.sliceById(1)->setFrequency(7100000.0);
         station.setActiveSliceById(1);
-        StationServer server(&station, stationSettings, stationDir.path());
+        StationServer server(&station, stationSettings, NereusSDR::Test::seedUpgradedCoreToken(stationDir.path()));
         QWebSocketServer listener(QStringLiteral("core"), QWebSocketServer::NonSecureMode);
         QVERIFY(listener.listen(QHostAddress::LocalHost, 0));
         connect(&listener, &QWebSocketServer::newConnection, &server, [&listener, &server] {

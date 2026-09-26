@@ -38,6 +38,13 @@ inline constexpr quint32 kDisplaySenderMessagesPerSecond =
 /// before judging it.
 inline constexpr int kDisplayAllocationAckTimeoutMs = 10'000;
 
+/// The reason a display subscription is refused because it does not fit
+/// the device's display budget share (DaemonMediaController). Fix wave 2
+/// (Critical 1, ruling 9.3): the desktop's planner reads it as the answer to
+/// asking for what the operator wants, and plans inside the share the Core
+/// published with it. Clients compare it exactly, so it never changes.
+inline constexpr char kDisplayBudgetRefusalReason[] = "The Core's display limit has no room left.";
+
 /// Current NSDC schema-1 header and daemon subscribe validation maximum
 /// (DisplayCodec.cpp and DaemonMediaController.cpp respectively).
 inline constexpr quint32 kDisplayCodecHeaderBytes = DisplayCodecEncoder::kHeaderBytes;
@@ -79,15 +86,31 @@ struct DisplayBudgetLimits {
 /// lowered spectrum quality so audio and receive processing keep priority.
 /// Carried in the capability descriptor's displayBudgetReason entry, only to
 /// peers that negotiated kDisplayBudgetReasonSessionProtocolMinor.
+///
+/// iPhone app Task 76 (the several-devices design, ruling 9.3 and design
+/// ruling 9.3a): while another device is admitted and a device's share is
+/// below its request, one of two values takes the place of CoreBusy, and
+/// only a device that declared sessionHolder receives them:
+/// SharedConnection: the devices share what the Core sends and the load
+/// governor has cut nothing (the total is the configured display allowance
+/// or the Core's computed ceiling). SharedProcessing: the governor has cut
+/// the total because the Core computer is short of processing time.
 enum class DisplayBudgetReason : quint8 {
     None = 0,
     CoreBusy = 1,
+    SharedConnection = 2,
+    SharedProcessing = 3,
 };
 
-/// "none" or "coreBusy".
+/// "none", "coreBusy", "sharedConnection" or "sharedProcessing".
 QString displayBudgetReasonWireName(DisplayBudgetReason reason);
 /// The reason a wire name names, or nullopt for a name this build does not know.
 std::optional<DisplayBudgetReason> displayBudgetReasonFromWireName(const QString& name);
+/// What a device that did not declare sessionHolder is told instead of a
+/// shared reason (Task 76): SharedProcessing is the governor's cut, so
+/// CoreBusy; SharedConnection cuts nothing of the Core's own, so None. The
+/// other two values are returned unchanged.
+DisplayBudgetReason displayBudgetReasonForOlderDevice(DisplayBudgetReason reason);
 
 struct DisplayBudgetCharge {
     quint64 applicationBytesPerSecond = 0;

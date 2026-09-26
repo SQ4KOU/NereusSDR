@@ -155,6 +155,14 @@
 //                 feeder, a per-channel lock around VAX output replacement,
 //                 and setVaxOutputsAllowed(false) so nereusd publishes no VAX
 //                 devices. The local VAX tee is unchanged.
+//   2026-09-25: iPhone app plan Task 73 (R-IOS-02, ruling 5.14) by J.J.
+//                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code. The
+//                 local VAX tee skips a slice setVaxSliceMask() leaves out.
+//                 NereusSDR-original.
+//   2026-09-25: iPhone app plan Task 76 (R-IOS-31, ruling 9.2) by J.J.
+//                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code. One
+//                 mix per owner from the one drain (owner mixes with their
+//                 own taps), and a local output mask. NereusSDR-original.
 // =================================================================
 
 #include "AudioEngine.h"
@@ -234,6 +242,12 @@ AudioEngine::AudioEngine(QObject* parent)
     m_programScratch.assign(static_cast<size_t>(kMixScratchMinFrames) * 2, 0.0f);
     m_avMixScratch.assign(static_cast<size_t>(kMixScratchMinFrames) * 2, 0.0f);
     m_vaxScratch.assign(static_cast<size_t>(kMixScratchMinFrames) * 2, 0.0f);
+    for (int k = 0; k < kMaxOwnerMixes; ++k) {
+        m_ownerSpeakersScratch[static_cast<size_t>(k)].assign(
+            static_cast<size_t>(kMixScratchMinFrames) * 2, 0.0f);
+        m_ownerHeadphonesScratch[static_cast<size_t>(k)].assign(
+            static_cast<size_t>(kMixScratchMinFrames) * 2, 0.0f);
+    }
     m_mixScratchFrames.store(kMixScratchMinFrames, std::memory_order_seq_cst);
 #if defined(Q_OS_LINUX)
     // Cache the Linux audio backend detection result up front so Task 14's
@@ -1724,6 +1738,154 @@ void AudioEngine::clearMasterMixAudioTap(MasterMixAudioTap* tap)
     m_masterMixTapAdmissionClosed.store(false, std::memory_order_seq_cst);
 }
 
+void AudioEngine::closeAndDrainMixTap(MixTapGate& gate)
+{
+    // As the master tap: close first, then wait for an admitted callback.
+    gate.admissionClosed.store(true, std::memory_order_seq_cst);
+    unsigned calls = gate.callsInFlight.load(std::memory_order_seq_cst);
+    while (calls != 0) {
+        gate.callsInFlight.wait(calls, std::memory_order_relaxed);
+        calls = gate.callsInFlight.load(std::memory_order_seq_cst);
+    }
+}
+
+void AudioEngine::invokeMixTap(MixTapGate& gate, const float* samples, int frames) noexcept
+{
+    // DSP thread: the master tap's admission, on this gate.
+    if (gate.admissionClosed.load(std::memory_order_seq_cst)) {
+        return;
+    }
+    gate.callsInFlight.fetch_add(1, std::memory_order_seq_cst);
+    if (!gate.admissionClosed.load(std::memory_order_seq_cst)) {
+        MasterMixAudioTap* tap = gate.tap.load(std::memory_order_seq_cst);
+        if (tap != nullptr) {
+            tap->consume(samples, frames, kMasterMixSampleRateHz);
+        }
+    }
+    if (gate.callsInFlight.fetch_sub(1, std::memory_order_seq_cst) == 1) {
+        gate.callsInFlight.notify_all();
+    }
+}
+
+int AudioEngine::acquireOwnerMix()
+{
+    std::lock_guard<std::mutex> lock(m_ownerMixControlMutex);
+    for (int k = 0; k < kMaxOwnerMixes; ++k) {
+        OwnerMixSlot& slot = m_ownerMixes[static_cast<size_t>(k)];
+        if (!slot.taken.load(std::memory_order_acquire)) {
+            slot.sliceMask.store(0, std::memory_order_release);
+            slot.taken.store(true, std::memory_order_release);
+            return k;
+        }
+    }
+    return -1;
+}
+
+void AudioEngine::releaseOwnerMix(int slot)
+{
+    if (!validOwnerMixSlot(slot)) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(m_ownerMixControlMutex);
+    OwnerMixSlot& owner = m_ownerMixes[static_cast<size_t>(slot)];
+    closeAndDrainMixTap(owner.program);
+    owner.program.tap.store(nullptr, std::memory_order_seq_cst);
+    owner.program.admissionClosed.store(false, std::memory_order_seq_cst);
+    closeAndDrainMixTap(owner.headphones);
+    owner.headphones.tap.store(nullptr, std::memory_order_seq_cst);
+    owner.headphones.admissionClosed.store(false, std::memory_order_seq_cst);
+    owner.sliceMask.store(0, std::memory_order_release);
+    owner.taken.store(false, std::memory_order_release);
+}
+
+void AudioEngine::setOwnerMixSliceMask(int slot, quint32 mask)
+{
+    if (!validOwnerMixSlot(slot)) {
+        return;
+    }
+    m_ownerMixes[static_cast<size_t>(slot)].sliceMask.store(mask, std::memory_order_release);
+}
+
+quint32 AudioEngine::ownerMixSliceMask(int slot) const
+{
+    return validOwnerMixSlot(slot)
+        ? m_ownerMixes[static_cast<size_t>(slot)].sliceMask.load(std::memory_order_acquire)
+        : 0u;
+}
+
+bool AudioEngine::setOwnerMixAudioTap(int slot, MasterMixAudioTap* tap, bool speakersOnly)
+{
+    if (!validOwnerMixSlot(slot)) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(m_ownerMixControlMutex);
+    OwnerMixSlot& owner = m_ownerMixes[static_cast<size_t>(slot)];
+    if (!owner.taken.load(std::memory_order_acquire)) {
+        return false;
+    }
+    closeAndDrainMixTap(owner.program);
+    owner.programSpeakersOnly.store(speakersOnly, std::memory_order_seq_cst);
+    owner.program.tap.store(tap, std::memory_order_seq_cst);
+    owner.program.admissionClosed.store(false, std::memory_order_seq_cst);
+    return true;
+}
+
+void AudioEngine::clearOwnerMixAudioTap(int slot, MasterMixAudioTap* tap)
+{
+    if (!validOwnerMixSlot(slot) || tap == nullptr) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(m_ownerMixControlMutex);
+    OwnerMixSlot& owner = m_ownerMixes[static_cast<size_t>(slot)];
+    closeAndDrainMixTap(owner.program);
+    MasterMixAudioTap* expected = tap;
+    owner.program.tap.compare_exchange_strong(expected, nullptr, std::memory_order_seq_cst,
+                                              std::memory_order_seq_cst);
+    owner.program.admissionClosed.store(false, std::memory_order_seq_cst);
+}
+
+bool AudioEngine::setOwnerHeadphonesMixAudioTap(int slot, MasterMixAudioTap* tap)
+{
+    if (!validOwnerMixSlot(slot)) {
+        return false;
+    }
+    std::lock_guard<std::mutex> lock(m_ownerMixControlMutex);
+    OwnerMixSlot& owner = m_ownerMixes[static_cast<size_t>(slot)];
+    if (!owner.taken.load(std::memory_order_acquire)) {
+        return false;
+    }
+    closeAndDrainMixTap(owner.headphones);
+    owner.headphones.tap.store(tap, std::memory_order_seq_cst);
+    owner.headphones.admissionClosed.store(false, std::memory_order_seq_cst);
+    return true;
+}
+
+void AudioEngine::clearOwnerHeadphonesMixAudioTap(int slot, MasterMixAudioTap* tap)
+{
+    if (!validOwnerMixSlot(slot) || tap == nullptr) {
+        return;
+    }
+    std::lock_guard<std::mutex> lock(m_ownerMixControlMutex);
+    OwnerMixSlot& owner = m_ownerMixes[static_cast<size_t>(slot)];
+    closeAndDrainMixTap(owner.headphones);
+    MasterMixAudioTap* expected = tap;
+    owner.headphones.tap.compare_exchange_strong(expected, nullptr, std::memory_order_seq_cst,
+                                                 std::memory_order_seq_cst);
+    owner.headphones.admissionClosed.store(false, std::memory_order_seq_cst);
+}
+
+int AudioEngine::ownerMixCount() const
+{
+    std::lock_guard<std::mutex> lock(m_ownerMixControlMutex);
+    int count = 0;
+    for (const OwnerMixSlot& slot : m_ownerMixes) {
+        if (slot.taken.load(std::memory_order_acquire)) {
+            ++count;
+        }
+    }
+    return count;
+}
+
 void AudioEngine::closeAndDrainSliceTap(SliceTapSlot& slot)
 {
     // As the master tap: close first, then wait for an admitted callback.
@@ -2010,7 +2172,12 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
     // real period and its device ring overran.
     static_assert(VaxChannelMixer::kMaxSlices >= WdspEngine::kMaxSliceChannels,
                   "every slice id needs a VAX mix slot");
-    const int vaxCh = slice->vaxChannel();
+    // iPhone app Task 73 (ruling 5.14): VAX on this computer carries only
+    // the slices its mask allows (the station device's own on a Core with
+    // several devices); another device's slice is heard on that device.
+    const bool vaxCarried = sliceId < 0 || sliceId >= 32
+        || ((m_vaxSliceMask.load(std::memory_order_acquire) >> sliceId) & 1u) != 0;
+    const int vaxCh = vaxCarried ? slice->vaxChannel() : 0;
     const bool vaxValid = vaxCh >= 1 && vaxCh <= 4;
     float vaxGain = 1.0f;
     if (vaxValid) {
@@ -2111,7 +2278,28 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
     // R-R3-45: the same drain builds the headphones sum, the slices routed
     // there, so both outputs are paced by one barrier.
     std::vector<float>& hpMix = m_hpMixScratch;
-    const int mixed = m_masterMix.tryDrain(mix.data(), hpMix.data(), drainFrames);
+    // iPhone app Task 76 (ruling 9.2): the same drain builds one mix per
+    // owner with a tap on it, each of its own slices, and the local sums
+    // carry only the local output's slices (the station device's).
+    std::array<MasterMixer::OwnerOutput, kMaxOwnerMixes> owners{};
+    int ownerCount = 0;
+    for (int k = 0; k < kMaxOwnerMixes; ++k) {
+        OwnerMixSlot& slot = m_ownerMixes[static_cast<size_t>(k)];
+        MasterMixer::OwnerOutput& owner = owners[static_cast<size_t>(ownerCount)];
+        owner = {};
+        if (!slot.taken.load(std::memory_order_acquire)
+            || (slot.program.tap.load(std::memory_order_acquire) == nullptr
+                && slot.headphones.tap.load(std::memory_order_acquire) == nullptr)) {
+            continue;
+        }
+        owner.sliceMask = slot.sliceMask.load(std::memory_order_acquire);
+        owner.speakers = m_ownerSpeakersScratch[static_cast<size_t>(k)].data();
+        owner.headphones = m_ownerHeadphonesScratch[static_cast<size_t>(k)].data();
+        ++ownerCount;
+    }
+    const int mixed = m_masterMix.tryDrain(
+        mix.data(), hpMix.data(), drainFrames,
+        m_localOutputSliceMask.load(std::memory_order_acquire), owners.data(), ownerCount);
 
     // Drain the anti-VOX reference in the same call stack, so both mixes are
     // paced by their own barrier over the same period.
@@ -2203,6 +2391,31 @@ void AudioEngine::rxBlockReady(int sliceId, const float* samples, int frames)
         }
         if (m_headphonesMixTapCallsInFlight.fetch_sub(1, std::memory_order_seq_cst) == 1) {
             m_headphonesMixTapCallsInFlight.notify_all();
+        }
+    }
+
+    // iPhone app Task 76: each owner's taps, on their own gates. The owner
+    // outputs were built in slot order, skipping slots without a tap, so
+    // walk the slots the same way. A program tap takes the owner's two
+    // sums added, in place (the speakers scratch is this owner's alone),
+    // unless it takes the speakers' mix alone.
+    {
+        int built = 0;
+        for (int k = 0; k < kMaxOwnerMixes && built < ownerCount; ++k) {
+            OwnerMixSlot& slot = m_ownerMixes[static_cast<size_t>(k)];
+            float* const speakers = m_ownerSpeakersScratch[static_cast<size_t>(k)].data();
+            if (owners[static_cast<size_t>(built)].speakers != speakers) {
+                continue;
+            }
+            ++built;
+            float* const headphones = m_ownerHeadphonesScratch[static_cast<size_t>(k)].data();
+            invokeMixTap(slot.headphones, headphones, mixed);
+            if (!slot.programSpeakersOnly.load(std::memory_order_acquire)) {
+                for (int i = 0; i < stereoFloats; ++i) {
+                    speakers[i] += headphones[i];
+                }
+            }
+            invokeMixTap(slot.program, speakers, mixed);
         }
     }
 
@@ -2813,6 +3026,10 @@ void AudioEngine::ensureMixScratchFrames(int frames)
     m_programScratch.assign(floats, 0.0f);
     m_avMixScratch.assign(floats, 0.0f);
     m_vaxScratch.assign(floats, 0.0f);
+    for (int k = 0; k < kMaxOwnerMixes; ++k) {
+        m_ownerSpeakersScratch[static_cast<size_t>(k)].assign(floats, 0.0f);
+        m_ownerHeadphonesScratch[static_cast<size_t>(k)].assign(floats, 0.0f);
+    }
     m_mixScratchFrames.store(frames, std::memory_order_seq_cst);
     m_mixAdmissionClosed.store(false, std::memory_order_seq_cst);
 }

@@ -15,6 +15,11 @@
 //                                    test stays with remote transmit; the
 //                                    window's controls follow. AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  Checkpoint carry: the window signs in
+//                                    to an upgraded Core with its token
+//                                    (seedUpgradedCoreToken), as Part C's
+//                                    paired-device sign-in requires.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -44,6 +49,7 @@
 #include "core/session/StationServer.h"
 #include "core/settings/SettingsProxy.h"
 #include "fakes/LoopbackTransport.h"
+#include "fakes/UpgradedCoreToken.h"
 #include "gui/PsForm.h"
 #include "gui/applets/PureSignalApplet.h"
 #include "gui/applets/TxApplet.h"
@@ -97,7 +103,8 @@ struct Session {
         core = makeStationRadioModel();
         coordinator = core->installPureSignalForTest(&tx);
         coordinator->setTimersEnabled(false);
-        server = std::make_unique<StationServer>(core.get(), settings, securityDir);
+        server = std::make_unique<StationServer>(
+            core.get(), settings, NereusSDR::Test::seedUpgradedCoreToken(securityDir));
         client = std::make_unique<StationClient>(&window, &proxy);
         coreEnd = new LoopbackTransport(QStringLiteral("station-end"), parent);
         windowEnd = new LoopbackTransport(QStringLiteral("client-end"), parent);
@@ -366,7 +373,8 @@ void TstRemotePureSignalArming::olderAppKeepsTodaysReason()
     coordinator->setTimersEnabled(false);
     QTemporaryDir dir;
     AppSettings settings(dir.filePath(QStringLiteral("older.settings")));
-    StationServer server(core.get(), settings, m_securityDir.path());
+    StationServer server(core.get(), settings,
+                         NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     auto* coreEnd = new LoopbackTransport(QStringLiteral("core"), this);
     auto* peer = new LoopbackTransport(QStringLiteral("older-app"), this);
     coreEnd->linkTo(peer);

@@ -54,6 +54,9 @@ void StationLanAnnouncer::update(const QHostAddress& listenerAddress,
     QString error;
     if (listenerAddress.isNull() || listenerAddress.isLoopback()
         || listenerAddress.isMulticast() || listenerAddress == QHostAddress::Broadcast
+        // iPhone app Task 16: a station sends schema 2 only. Sending schema 1
+        // as well would make a desktop from before Task 16 flap between them.
+        || announcement.schema != kStationLanAnnouncementSchema
         || encodeStationLanAnnouncement(announcement, &error).isEmpty()) {
         stop();
         return;

@@ -9,6 +9,11 @@
 // Modification history (NereusSDR):
 //   2026-09-25  J.J. Boyd / KG4VCF  R-R3-49 (parity Task 3): created.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  Integration carry: the window signs in
+//                                    to an upgraded Core with its token
+//                                    (seedUpgradedCoreToken), as Part C's
+//                                    paired-device sign-in requires.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -40,6 +45,7 @@
 #include "core/session/StationServer.h"
 #include "core/settings/SettingsProxy.h"
 #include "fakes/LoopbackTransport.h"
+#include "fakes/UpgradedCoreToken.h"
 #include "gui/SetupDialog.h"
 #include "gui/applets/PhoneCwApplet.h"
 #include "gui/applets/RadeApplet.h"
@@ -83,7 +89,8 @@ struct Session {
     {
         core = makeStationRadioModel();
         core->wireTransmitChainForTest(&txChannel);
-        server = std::make_unique<StationServer>(core.get(), settings, securityDir);
+        server = std::make_unique<StationServer>(
+            core.get(), settings, NereusSDR::Test::seedUpgradedCoreToken(securityDir));
         client = std::make_unique<StationClient>(&window, &proxy);
         coreEnd = new LoopbackTransport(QStringLiteral("station-end"), parent);
         windowEnd = new LoopbackTransport(QStringLiteral("client-end"), parent);

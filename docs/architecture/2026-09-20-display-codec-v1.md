@@ -105,6 +105,25 @@ plane count/length, block overrun, invalid packing, truncation, or packet over
 the codec bound) returns `Rejected` without changing the prior accepted frame
 or reconstruction history.
 
+The decoder checks a datagram in this order:
+
+1. The whole datagram's structure: the codec bound, the header, and every
+   plane (plane count and lengths, block sizes, packing, overrun,
+   truncation, floats).
+2. Then the endpoint, context, generation, sequence and history rules.
+3. Then the datagram is applied.
+
+A malformed datagram returns `Rejected` with its structure reason, whatever
+state the decoder is in, and history is untouched. A delta with a malformed
+plane sent to a fresh decoder is `Rejected` `Malformed`, not `NeedKeyframe`
+`NoHistory`; a malformed delta with a stale sequence is `Rejected`
+`Malformed`, not `StaleSequence`. The only check left for step 3 is one that
+needs history: a residual that would take a reconstructed value outside
+`[0,255]` returns `Rejected` `Malformed`, also without changing history. A
+delta that arrives after a gap is checked for structure and then returns
+`NeedKeyframe` without being applied, so that check never runs against a
+stale plane.
+
 ## Measured sizes and fragments (R-R3-03, R-R3-05)
 
 A plane of `n` samples costs at most `A(n) = 3 + 5*ceil(n/128) + n` bytes:

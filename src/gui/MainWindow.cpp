@@ -128,6 +128,9 @@
 //                blocking Linux audio first-run dialog
 //                (firstRunPromptsBarredForTestRun). J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave: the optional device shortName in
+//               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 //   2026-09-24 - R-R3-49 (parity Task 1): transmitSettingsPermitted(). The
 //                TX applet's RF Power and TX filter, the RX applet's and
 //                flag's Shift-click TX passband match and DSP > Options' TX
@@ -160,6 +163,10 @@
 //                RadioModel::paReadings() (the Core's in a remote window);
 //                the TX badge follows RadioModel::txInhibitedChanged.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - R-IOS-27, R-IOS-06: onAddTnfClicked calls
+//                RadioModel::addTnfForSlice, the +TNF add the Core's
+//                notch.addAtSlice shares. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 //   2026-09-25 - R-R3-49 (parity Task 7): PS-A on the TX applet and the
 //                container follows pureSignalArmingPermitted(), which a
 //                Core at transmitSettingsVersion 7 offers off the air; the
@@ -198,6 +205,9 @@
 //   2026-09-25 - R-R3-49 (remote-window parity Task 13): the Setup dialog
 //                 gets the transmitSettingsVersion 8 gate. J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - Receiver and transmit gaps plan, Task 16: the container
+//                buttons follow receive only (RadioModel::rxOnlyChanged).
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -550,6 +560,7 @@ warren@wpratt.com
 #include "UnbuiltFeatures.h"
 // Remote-daemon R2 Task 20: the wss client and the settings backend it
 // writes through. Both are used only on the m_station.isRemote() path.
+#include "core/security/ClientDeviceIdentity.h"
 #include "core/session/StationClient.h"
 #include "models/RfKitModel.h"
 #include "RemoteConnectionController.h"
@@ -1326,6 +1337,14 @@ void MainWindow::ensureRemoteSession()
         }
 
         m_stationClient = new StationClient(m_radioModel, proxy, this);
+        // iPhone app Task 18 (R-IOS-08): this computer's own device key.
+        // A Core it paired with is signed in to by key, and a token
+        // sign-in to a Core with an identity enrols the key (the link
+        // document, section 3.5). The Core lists it by the machine's name,
+        // and its short name is the short host name (Part C fix wave).
+        m_stationClient->setDeviceIdentity(ClientDeviceIdentity::forThisProfile(),
+                                           ClientDeviceIdentity::machineName(),
+                                           ClientDeviceIdentity::machineShortName());
         m_remoteConnection = new RemoteConnectionController(
             m_stationClient, m_radioModel, m_station, this);
         connect(m_remoteConnection, &RemoteConnectionController::changed,
@@ -2152,18 +2171,18 @@ VfoWidget* MainWindow::createSliceFlag(SliceModel* slice, SpectrumWidget* sw)
             // Phase 3F Sub-Epic J Task 11: resolved through RadioModel's
             // accessor rather than wdspEngine()->rxChannel() directly --
             // src/gui/ no longer reaches into WdspEngine for a channel.
-            if (RxChannel* ch = m_radioModel->rxChannelForSlice(slice->sliceIndex())) {
-                ch->setShiftFrequency(0.0);
-            }
+            // The model and WDSP together (R-R3-49): the pan now sits on
+            // the slice, so its offset is zero in both halves.
+            m_radioModel->applySliceStreamCentre(slice, hz);
             if (wasCtun && m_radioModel->receiverManager()) {
                 m_radioModel->receiverManager()->setDdcFrequencyLocked(true);
             }
             m_handlingBandJump = false;
         } else {
             // CTUN, still on-screen: the DDC stays put and WDSP shifts.
-            if (RxChannel* ch = m_radioModel->rxChannelForSlice(slice->sliceIndex())) {
-                ch->setShiftFrequency(hz - center);
-            }
+            // Written to the model and WDSP together (R-R3-49), so the
+            // slice's shiftOffsetHz names the centre the demodulator uses.
+            m_radioModel->applySliceStreamCentre(slice, center);
         }
         host->setVfoFrequency(hz);
     };
@@ -2848,15 +2867,9 @@ void MainWindow::onAddTnfClicked(const QString& panId)
     if (!m_radioModel) { return; }
     SliceModel* slice = sliceForPan(panId);
     if (!m_radioModel->notchModel() || !slice) { return; }
-    // demodulatedRxFrequency(), not effectiveRxFrequency(): composedShiftHz
-    // feeds WDSP the notch origin including the DIG click-tune offset, so a
-    // centre computed without it lands displaced by exactly that offset in
-    // DIGU/DIGL. Codex review of PR #313.
-    m_radioModel->addNotchForSlice(
-        slice,
-        NotchModel::tnfAddCenterHz(slice->demodulatedRxFrequency(),
-                                   slice->filterLow(), slice->filterHigh()),
-        NotchModel::kDefaultNotchWidthHz);
+    // The centre and width live in RadioModel::addTnfForSlice, which the
+    // Core's notch.addAtSlice runs too (R-IOS-27, R-IOS-06).
+    m_radioModel->addTnfForSlice(slice);
 }
 
 // A rejected add is not a failure worth an error badge, but it must not be
@@ -4194,6 +4207,8 @@ void MainWindow::buildUI()
                 this, refresh);
         connect(m_radioModel, &RadioModel::tuneRefused, this, refresh);
         connect(m_radioModel, &RadioModel::connectionStateChanged, this, refresh);
+        // Task 16: receive only disables TUN, MOX and 2TONE.
+        connect(m_radioModel, &RadioModel::rxOnlyChanged, this, refresh);
         if (MoxController* mox = m_radioModel->moxController()) {
             connect(mox, &MoxController::moxStateChanged, this, refresh);
             connect(mox, &MoxController::moxRejected, this, refresh);
@@ -5633,11 +5648,6 @@ void MainWindow::buildUI()
         });
     }
 
-    // Phase 3F Sub-Epic C Task 8: toast on slice-add rejection.
-    // RadioModel::addSliceOnPan() emits sliceAddRejected(reason) when the
-    // SKU cap blocks a +RX click (e.g. "Hermes Lite 2 supports a maximum
-    // of 1 slices"). Surface that for 4 seconds so the operator sees why
-    // the click did nothing.
     connect(m_radioModel, &RadioModel::settingsSaveErrorChanged, this,
             [this](const QString& reason) {
         if (!reason.isEmpty()) {
@@ -5647,6 +5657,11 @@ void MainWindow::buildUI()
             showToast(OperatorReasonText::forDisplay(reason), ToastSeverity::Error, 10000);
         }
     });
+    // Phase 3F Sub-Epic C Task 8: toast on slice-add rejection.
+    // RadioModel::addSliceOnPan() and addSlice() emit sliceAddRejected(reason)
+    // when the slice limit blocks a +RX click (e.g. "Hermes Lite 2 supports
+    // a maximum of 1 slice"). Surface that for 4 seconds so the operator
+    // sees why the click did nothing.
     connect(m_radioModel, &RadioModel::sliceAddRejected, this,
             [this](const QString& reason) {
         // A remote window's refusal is the Core's text; shown in user words.
@@ -12360,8 +12375,10 @@ void MainWindow::showPanLayoutDialog()
     // userDdcCount=2) can never fill more than 2 independent pans even
     // though it can host 5 slices total. Gating on maxSlices alone showed
     // tiles the board could paint but never fill (final-fix-wave finding 2).
+    // userStreamCount() is the one stream count (plan Task 11): it knows the
+    // protocol (four on Protocol 1) and, on a remote window, the Core's.
     const auto& caps = m_radioModel->boardCapabilities();
-    const int maxPanCount = qMin(caps.maxSlices, caps.userDdcCount);
+    const int maxPanCount = qMin(caps.maxSlices, m_radioModel->userStreamCount());
     const QString boardName = m_radioModel->name();
     PanLayoutDialog dlg(maxPanCount,
                         m_panStack ? m_panStack->currentLayoutId()

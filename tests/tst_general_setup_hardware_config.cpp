@@ -22,7 +22,7 @@ class TestGeneralSetupHardwareConfig : public QObject
 private slots:
     void regionCombo_24Entries_defaultUnitedStates();
     void chkExtended_present_withWarningLabel();
-    void chkGeneralRXOnly_hiddenByDefault();
+    void chkGeneralRXOnly_shownOnEveryRadio();
     void chkNetworkWDT_present_defaultChecked();
 };
 
@@ -68,9 +68,12 @@ void TestGeneralSetupHardwareConfig::chkExtended_present_withWarningLabel()
              "Warning label must have red/bold styling");
 }
 
-void TestGeneralSetupHardwareConfig::chkGeneralRXOnly_hiddenByDefault()
+void TestGeneralSetupHardwareConfig::chkGeneralRXOnly_shownOnEveryRadio()
 {
-    // From Thetis setup.designer.cs:8535-8544 [v2.10.3.13] — Visible=false by default.
+    // From Thetis setup.designer.cs:8535-8544 [v2.10.3.13] (text and
+    // tooltip). The designer hides it (Visible=false) and Thetis shows it
+    // for every model (setup.cs:19878 and on [v2.10.3.15]); NereusSDR shows
+    // it on every radio (Task 16, receiver and transmit gaps plan).
     GeneralOptionsPage page(/*model=*/nullptr);
     auto* group = page.findChild<QGroupBox*>("grpHardwareConfig");
     QVERIFY2(group, "grpHardwareConfig not found");
@@ -79,7 +82,7 @@ void TestGeneralSetupHardwareConfig::chkGeneralRXOnly_hiddenByDefault()
     QVERIFY2(chk, "chkGeneralRXOnly not found");
     QCOMPARE(chk->text(), QString("Receive Only"));
     QCOMPARE(chk->toolTip(), QString("Check to disable transmit functionality."));
-    QVERIFY2(!chk->isVisible(), "chkGeneralRXOnly must be hidden by default");
+    QVERIFY2(!chk->isHidden(), "chkGeneralRXOnly must be shown");
 }
 
 void TestGeneralSetupHardwareConfig::chkNetworkWDT_present_defaultChecked()

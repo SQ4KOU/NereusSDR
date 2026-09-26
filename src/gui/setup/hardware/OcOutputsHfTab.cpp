@@ -82,9 +82,7 @@
 #include "core/accessories/PennyLaneController.h"
 #include "gui/ComboStyle.h"
 #include "models/Band.h"
-#include "models/PanadapterModel.h"
 #include "models/RadioModel.h"
-#include "models/TransmitModel.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -441,18 +439,18 @@ OcOutputsHfTab::OcOutputsHfTab(RadioModel* model, OcMatrix* ocMatrix,
     }
 
     // ── Phase 3P-H Task 5b: live OC pin state wiring ────────────────────────
-    // Recompute the 7-bit OC byte = OcMatrix::maskFor(currentBand, isTx)
-    // whenever: the matrix mutates, the panadapter crosses a band
-    // boundary, or MOX toggles. Thetis sends this byte via
-    // console.cs UpdateOCBits (grep reveals it is called from each of
-    // the above state transitions at [@501e3f5]).
+    // Plan Task 14 fix wave (R-R3-49): the row shows the byte the connection
+    // composed (RadioModel::bandOutputsByte), not one computed here. It was
+    // OcMatrix::maskFor(pan 1's band, MOX), which in a cross-band split is
+    // the other slice's pins, and ignores the HL2's receive bypass. Thetis
+    // shows the bits UpdateExtCtrl returned:
+    //   UpdateOCLedStrip(_mox, bits) (console.cs:29106-29107 [v2.10.3.15]).
+    // In a remote window the model carries the Core's byte, so the row
+    // shows what the radio gets there too.
     if (m_model) {
-        const auto pans = m_model->panadapters();
-        if (!pans.isEmpty()) {
-            connect(pans.first(), &PanadapterModel::bandChanged,
-                    this, &OcOutputsHfTab::onLiveStateChanged);
-        }
-        connect(&m_model->transmitModel(), &TransmitModel::moxChanged,
+        connect(m_model, &RadioModel::bandOutputsChanged,
+                this, &OcOutputsHfTab::onLiveStateChanged);
+        connect(m_model, &RadioModel::connectionStateChanged,
                 this, &OcOutputsHfTab::onLiveStateChanged);
     }
     // Initial paint.
@@ -576,29 +574,20 @@ void OcOutputsHfTab::syncFromMatrix()
 void OcOutputsHfTab::onMatrixChanged()
 {
     syncFromMatrix();
-    // Phase 3P-H Task 5b: the mask for the current band may have changed.
-    onLiveStateChanged();
+    // The live row follows the connection: a pin edit reaches the byte it
+    // composes (and, on Protocol 2, is sent at once), which then arrives
+    // here through bandOutputsChanged.
 }
 
 // ── onLiveStateChanged (Phase 3P-H Task 5b) ──────────────────────────────────
 
-// Recomputes the OC byte from OcMatrix::maskFor(currentBand, isTx) for
-// the active panadapter band and the current MOX state. Mirrors the
-// dispatch in Thetis console.cs UpdateOCBits: band change, MOX change,
-// and OcMatrix mutation all feed into the same 7-bit output [@501e3f5].
+// Shows the OC byte the connection composed. Plan Task 14 fix wave: this
+// no longer computes a byte from the matrix, a band and MOX; nothing is lit
+// until a byte is known.
 void OcOutputsHfTab::onLiveStateChanged()
 {
-    if (!m_ocMatrix || !m_model) { setCurrentOcByte(0); return; }
-
-    // Current band: first panadapter is the RX1 source of truth (see
-    // PanadapterModel::setCenterFrequency → bandFromFrequency()).
-    Band band = Band::Band20m;  // harmless default if no panadapter yet
-    const auto pans = m_model->panadapters();
-    if (!pans.isEmpty()) {
-        band = pans.first()->band();
-    }
-    const bool isTx = m_model->transmitModel().isMox();
-    setCurrentOcByte(m_ocMatrix->maskFor(band, isTx));
+    if (!m_model || !m_model->bandOutputsKnown()) { setCurrentOcByte(0); return; }
+    setCurrentOcByte(static_cast<quint8>(m_model->bandOutputsByte()));
 }
 
 // ── setCurrentOcByte / repaintLiveLeds (Phase 3P-H Task 5b) ──────────────────

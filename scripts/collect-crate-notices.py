@@ -21,7 +21,10 @@ script lists them from the checkout's Cargo.lock:
     its manifest, then the licence and notice files from its source
     directory (LICENSE*, LICENCE*, COPYING*, NOTICE*, and the manifest's
     license-file), byte for byte. A text identical to one already written
-    is named rather than repeated.
+    is named rather than repeated;
+  * a crate that ships no licence or notice file, and has an entry in
+    SUPPLEMENTS below (by exact name and version), gets that entry's
+    upstream text, byte for byte, marked as not from the crate's source.
 
 Usage (what the setup scripts run after `cargo cbuild`; --offline means it
 reads only what the build already fetched):
@@ -53,6 +56,79 @@ import sys
 from pathlib import Path
 
 _NOTICE_NAME = re.compile(r"^(licen[cs]e|copying|notice)([-_.].*)?$", re.IGNORECASE)
+
+
+# Licence texts for crates that ship none in their source (R-R3-50). Keyed by
+# the exact (name, version) cargo reports, so a new version of either crate
+# falls back to "no licence or notice file" until it is looked at again.
+# Each text is copied byte for byte from `source` at `pin`; `sha256` is the
+# hash of those bytes, checked by tests/compliance/test_crate_notices.py.
+# `note` is printed with the text; `authors` asks for the manifest's authors
+# after the note (the text itself names no copyright holder).
+_CRUNCHY_0_2_2_LICENSE = '''The MIT License (MIT)
+
+Copyright 2017-2019 Vurich.
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+'''
+
+_SPDX_MIT = '''MIT License
+
+Copyright (c) <year> <copyright holders>
+
+Permission is hereby granted, free of charge, to any person obtaining a copy of this software and
+associated documentation files (the "Software"), to deal in the Software without restriction, including
+without limitation the rights to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is furnished to do so, subject to the
+following conditions:
+
+The above copyright notice and this permission notice shall be included in all copies or substantial
+portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT
+LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO
+EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
+IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE
+USE OR OTHER DEALINGS IN THE SOFTWARE.
+'''
+
+SUPPLEMENTS: dict[tuple[str, str], dict] = {
+    ("crunchy", "0.2.2"): {
+        "file": "LICENSE",
+        "source": "https://github.com/eira-fransham/crunchy (LICENSE)",
+        "pin": "dbc2ec80924bdcc7479f7b5442d9f23c510c9d5b",
+        "sha256": "16aff589670d49c45bac12e1dbb9279594d11e5dd9e555541d2e2fcc4b85c5ae",
+        "note": "added upstream after 0.2.2 (commit dbc2ec80, 2021); covers 2017-2019",
+        "authors": False,
+        "text": _CRUNCHY_0_2_2_LICENSE,
+    },
+    ("realfft", "3.3.0"): {
+        "file": "MIT.txt",
+        "source": "https://github.com/spdx/license-list-data (text/MIT.txt, tag v3.29.0)",
+        "pin": "31ba1a50e5397e00a304dbadc76531740e89ee48",
+        "sha256": "b05785f9f18e6716bab63424b11454513b9943a222595b70411009202fc592b5",
+        "note": "realfft ships no licence text upstream; its manifest declares MIT; "
+                "this is the SPDX list's MIT text",
+        "authors": True,
+        "text": _SPDX_MIT,
+    },
+}
 
 
 def run_cargo_metadata(manifest: Path, features: str | None) -> dict:
@@ -184,6 +260,29 @@ def _source_label(package: dict) -> str:
     return source
 
 
+def supplement_lines(package: dict) -> list[str]:
+    """The SUPPLEMENTS entry for a crate that ships no licence text, as lines
+    of its entry: a marked heading, the note (and the manifest's authors when
+    asked for), then the upstream text byte for byte. Empty when the crate
+    has no entry."""
+    entry = SUPPLEMENTS.get((package["name"], package["version"]))
+    if entry is None:
+        return []
+    lines = [
+        "",
+        f"---- {entry['file']}, from upstream, not from the crate's source ----",
+        f"Note: {entry['note']}.",
+    ]
+    if entry["authors"]:
+        authors = package.get("authors") or []
+        lines.append("Authors (as its Cargo.toml lists them): "
+                     + (", ".join(authors) if authors else "(none listed)"))
+    lines.append(f"From: {entry['source']} at {entry['pin']}")
+    lines.append("")
+    lines.append(entry["text"].rstrip("\n"))
+    return lines
+
+
 def render(packages: list[dict], commit: str, command: str,
            target: str = "all") -> str:
     rule = "=" * 72
@@ -195,7 +294,9 @@ def render(packages: list[dict], commit: str, command: str,
         "listed here. Each entry gives the crate, its version, the licence",
         "expression in its manifest, and the licence and notice files from its",
         "source, copied byte for byte. A text identical to one written earlier",
-        "in this file is named instead of repeated.",
+        "in this file is named instead of repeated. Where a crate's source has",
+        "no licence text, a text from upstream is added, marked as such, with",
+        "its source and commit.",
         "",
         f"DeepFilterNet commit: {commit}",
         "The crates are those locked by that commit's Cargo.lock.",
@@ -222,6 +323,7 @@ def render(packages: list[dict], commit: str, command: str,
         if not files:
             lines.append("")
             lines.append("(no licence or notice file in the crate's source directory)")
+            lines += supplement_lines(package)
         for path in files:
             text = _read(path)
             lines.append("")

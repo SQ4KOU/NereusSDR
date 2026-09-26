@@ -250,8 +250,15 @@ Hl2IoBoardTab::Hl2IoBoardTab(RadioModel* model, QWidget* parent)
                         .arg(b3, 2, 16, QLatin1Char('0'))
                         .toUpper());
             });
-    connect(m_ioBoard, &IoBoardHl2::currentOcByteChanged,
-            this, &Hl2IoBoardTab::updateOcIndicator);
+    // Plan Task 14 fix wave (R-R3-49): the strip shows the byte the
+    // connection composed, from the model, so a remote window shows the
+    // Core's. It no longer listens to IoBoardHl2::currentOcByteChanged, which
+    // only the Core's own connection emits.
+    connect(m_model, &RadioModel::bandOutputsChanged,
+            this, &Hl2IoBoardTab::refreshOcIndicator);
+    connect(m_model, &RadioModel::connectionStateChanged,
+            this, &Hl2IoBoardTab::refreshOcIndicator);
+    refreshOcIndicator();
     connect(m_bwMonitor, &HermesLiteBandwidthMonitor::throttledChanged,
             this, &Hl2IoBoardTab::onThrottledChanged);
 
@@ -641,10 +648,48 @@ void Hl2IoBoardTab::updateStatusBar(bool detected)
     }
 }
 
-// ── updateOcIndicator ─────────────────────────────────────────────────────────
+// ── refreshOcIndicator / updateOcIndicator ───────────────────────────────────
+
+void Hl2IoBoardTab::refreshOcIndicator()
+{
+    if (!m_model->bandOutputsKnown()) {
+        m_ocShownByte = -1;
+        if (m_ocBandLabel) { m_ocBandLabel->setText(QStringLiteral("band=--")); }
+        if (m_ocByteLabel) { m_ocByteLabel->setText(QStringLiteral("--")); }
+        if (m_ocMoxLabel) {
+            m_ocMoxLabel->setText(QStringLiteral("--"));
+            m_ocMoxLabel->setStyleSheet(QStringLiteral("color: #888888; font-weight: bold;"));
+        }
+        for (QFrame* led : m_ocPinLeds) {
+            if (led) {
+                led->setStyleSheet(QStringLiteral(
+                    "QFrame { background: #222; border: 1px solid #555; border-radius: 5px; }"));
+            }
+        }
+        return;
+    }
+    updateOcIndicator(static_cast<quint8>(m_model->bandOutputsByte()),
+                      m_model->bandOutputsBand(), m_model->bandOutputsKeyed());
+}
+
+QString Hl2IoBoardTab::ocByteTextForTest() const
+{
+    return m_ocByteLabel ? m_ocByteLabel->text() : QString();
+}
+
+QString Hl2IoBoardTab::ocBandTextForTest() const
+{
+    return m_ocBandLabel ? m_ocBandLabel->text() : QString();
+}
+
+QString Hl2IoBoardTab::ocKeyedTextForTest() const
+{
+    return m_ocMoxLabel ? m_ocMoxLabel->text() : QString();
+}
 
 void Hl2IoBoardTab::updateOcIndicator(quint8 ocByte, int bandIdx, bool mox)
 {
+    m_ocShownByte = int(ocByte);
     static constexpr const char* kBandLabels[] = {
         "160m", "80m", "60m", "40m", "30m", "20m", "17m",
         "15m", "12m", "10m", "6m", "GEN", "WWV", "XVTR"

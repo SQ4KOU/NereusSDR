@@ -102,6 +102,17 @@ void AlexController::setWidebandActive(int adc, bool on)
     recomputeBpf(adc);
 }
 
+// Plan Task 14 re-review N4 (Phase 3F design section 16.4.1): WIDE means
+// the chain is bypassed on the wire. An Alex tab switch can put the bypass
+// there over a filtered band, so the chain's state has to know about it.
+void AlexController::setSwitchBypass(int adc, SwitchBypass cause)
+{
+    if (adc < 0 || adc >= 2) { return; }
+    if (m_switchBypass[adc] == cause) { return; }
+    m_switchBypass[adc] = cause;
+    recomputeBpf(adc);
+}
+
 // Phase 3F: slice-aware recompute trigger.
 // Band::Count is the sentinel for "no slice in this position".
 void AlexController::notifySlicesOnAdc(int adc, const std::array<Band, 5>& slicesOnAdc)
@@ -151,6 +162,35 @@ void AlexController::recomputeBpf(int adc)
             QStringList bandList;
             for (Band b : uniqueBands) { bandList << bandLabel(b); }
             s.reasonText = QStringLiteral("BYPASS (multi-band: %1)").arg(bandList.join(QStringLiteral(" + ")));
+        }
+    }
+
+    // An Alex tab switch bypasses a chain the policy left filtered (plan
+    // Task 14 re-review N4). A chain already bypassed or wide is on the
+    // bypass anyway, and keeps its own reason.
+    s.bypassSwitch = SwitchBypass::None;
+    if (s.effective == BpfEffective::Filtered && m_switchBypass[adc] != SwitchBypass::None) {
+        s.effective = BpfEffective::Bypass;
+        s.bypassSwitch = m_switchBypass[adc];
+        switch (m_switchBypass[adc]) {
+        case SwitchBypass::HpfBypass:
+            s.reasonText = QStringLiteral("BYPASS (HPF Bypass setting)");
+            break;
+        case SwitchBypass::Disable6mLnaOnRx:
+            s.reasonText = QStringLiteral("BYPASS (6m LNA off on RX)");
+            break;
+        // Task 14 follow-up 2: the keyed arms, on the wire while keyed.
+        case SwitchBypass::HpfBypassOnTx:
+            s.reasonText = QStringLiteral("BYPASS (HPF Bypass on TX)");
+            break;
+        case SwitchBypass::PureSignalTx:
+            s.reasonText = QStringLiteral("BYPASS (PureSignal TX)");
+            break;
+        case SwitchBypass::Disable6mLnaOnTx:
+            s.reasonText = QStringLiteral("BYPASS (6m LNA off on TX)");
+            break;
+        case SwitchBypass::None:
+            break;
         }
     }
 

@@ -34,6 +34,10 @@ RemoteConnectionController::RemoteConnectionController(
         m_pendingMediaRecoveryEpoch = 0;
         emit changed();
     });
+    // iPhone app Task 18: once this computer's key is enrolled with the
+    // Core, a later Connect signs in by key as well.
+    connect(client, &StationClient::stationIdentityLearned, this,
+            [this](const QByteArray& identity) { m_options.identityFingerprint = identity; });
     connect(client, &StationClient::reconnectScheduled, this,
             [this](int attempt, int delayMs) {
         m_retryAttempt = attempt;
@@ -144,6 +148,9 @@ CoreStopNotice RemoteConnectionController::stopNotice() const
         }
         return CoreStopNotice::UpdateOlderSide;
     case StationEndReport::Kind::Refused: return CoreStopNotice::Refused;
+    case StationEndReport::Kind::DeviceRemoved: return CoreStopNotice::DeviceRemoved;
+    case StationEndReport::Kind::PairingRequired: return CoreStopNotice::PairingRequired;
+    case StationEndReport::Kind::IdentityChanged: return CoreStopNotice::IdentityChanged;
     }
     return CoreStopNotice::None;
 }
@@ -157,6 +164,9 @@ QString RemoteConnectionController::stopTitle() const
     case CoreStopNotice::UpdateCore: return tr("Update the Core");
     case CoreStopNotice::UpdateOlderSide: return tr("Core version does not match");
     case CoreStopNotice::Refused: return tr("Core refused this window");
+    case CoreStopNotice::DeviceRemoved: return tr("Removed from the Core");
+    case CoreStopNotice::PairingRequired: return tr("Pair with the Core");
+    case CoreStopNotice::IdentityChanged: return tr("Core not recognised");
     }
     return {};
 }
@@ -187,6 +197,19 @@ QString RemoteConnectionController::stopText() const
     case CoreStopNotice::Refused:
         // The Core's own reason in user words (R-R3-17, R-R3-21).
         return OperatorReasonText::forDisplay(reason) + QLatin1Char(' ') + noRetry;
+    // iPhone app Task 18: chosen by the end's code, so the words are this
+    // app's own and the same whichever Core version sent the end.
+    case CoreStopNotice::DeviceRemoved:
+        return tr("The Core no longer has this computer among its paired devices. "
+                  "Pair this computer with the Core again to use it here.")
+             + QLatin1Char(' ') + noRetry;
+    case CoreStopNotice::PairingRequired:
+        return tr("The Core now signs in paired devices only. Pair this computer "
+                  "with the Core to use it here.")
+             + QLatin1Char(' ') + noRetry;
+    case CoreStopNotice::IdentityChanged:
+        // This app's own words: it refused the Core before sending anything.
+        return OperatorReasonText::forDisplay(reason) + QLatin1Char(' ') + noRetry;
     }
     return {};
 }
@@ -215,7 +238,8 @@ void RemoteConnectionController::connectToStation()
     m_operatorDisconnected = false;
     m_retryAttempt = 0;
     m_client->connectToStation(QUrl(m_options.url), m_options.token,
-                               m_options.fingerprint, m_options.allowUnpinned);
+                               m_options.fingerprint, m_options.allowUnpinned,
+                               m_options.identityFingerprint);
     emit changed();
 }
 

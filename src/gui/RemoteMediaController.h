@@ -182,6 +182,15 @@ public:
     /// answer before it says "Waiting for the Core". A Core that answers
     /// within this (the usual case at session start) never flashes the line.
     static constexpr int kPanWaitingGraceMs = 2000;
+    /// The display planner runs this often while a media session is live
+    /// (and on every budget change and allocation answer).
+    static constexpr int kPlannerIntervalMs = 100;
+    /// Fix wave 3 (the several-devices re-review's Minor 3): how long pans
+    /// must keep their widths before a resize that made them wider asks the
+    /// Core again for what the operator wants: two of the planner's ticks
+    /// (kPlannerIntervalMs), so a drag, whose steps come far faster, asks
+    /// once when it stops, not at every step.
+    static constexpr int kResizeSettleMs = 2 * kPlannerIntervalMs;
     /// R-R3-37: what the pan named `panId` was last told about its remote
     /// display, including its zoom-detail limit. The pan paints
     /// buildPanStatusText() of this.
@@ -196,6 +205,23 @@ public slots:
     /// Core for it at once. Choosing again also ends an earlier fallback to
     /// Opus and starts a new link trial.
     void setAudioProfileChoice(NereusSDR::RemoteAudioProfile profile);
+    /// Fix wave 3 (the several-devices design, ruling 9.3, asking again
+    /// around the transmit holder): who holds transmit, as the Core's
+    /// holder notification says (Task 34's `txState`: `holderEpoch`, which
+    /// moves with every change of holder, a release included, and
+    /// `holderAway`). A change of either asks again for the displays the
+    /// operator wants: this device became the present holder (rule 1 gives
+    /// a holder its whole request only once it asks for it), the holder
+    /// changed, or a holder left or went away (the others' equal shares,
+    /// rule 3, come back only once they ask). These are operator events and
+    /// rule 1 is not symmetric, so asking on them never loops. The same
+    /// values again ask nothing. Epoch 0, not away, is the unheld start.
+    ///
+    /// Not yet connected: this branch receives no holder notification (the
+    /// Core's holder is always unheld until Task 34). The merge with Task
+    /// 34 connects the client's `txState` (`holderEpoch`, `holderAway`) to
+    /// this slot.
+    void setTransmitHolder(quint64 holderEpoch, bool holderAway);
 
 signals:
     void recoveryRequested(quint32 expectedEpoch, const QString& reason);
@@ -218,6 +244,10 @@ private:
     void refreshSubscriptions();
     void refreshBudgetSubscriptions();
     bool retireSubscriptions(const QList<quint32>& endpointIds);
+    /// Fix wave 2 (Important 2): unsubscribes an endpoint the Core refused
+    /// (never accepted) after its binding is dropped, the next revision
+    /// after `lastRevision`. False when the session ended while sending.
+    bool sendRefusedRelease(quint32 endpointId, quint32 lastRevision);
     void receiveAllocationResult(const QJsonObject& payload);
     void setPanStatus(const QString& panId, const PanDisplayState& status);
     PanDisplayState statusWithGrant(const QString& panId, PanDisplayState status) const;

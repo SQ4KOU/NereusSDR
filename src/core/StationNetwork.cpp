@@ -4,7 +4,12 @@
 // 2026-09-24: Lane B takes integration (R-IOS-01, R-R3-21): the off-network reason
 // names amplifiers and tuners and the Core's configuration file. J.J. Boyd
 // (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-24: R-R3-26: station_bind = "::" listens on IPv4 and IPv6, through
+// the remote listener's DaemonConfig::listenAddressFor. J.J. Boyd (KG4VCF),
+// AI-assisted via Anthropic Claude Code.
 #include "core/StationNetwork.h"
+
+#include "core/daemon/DaemonConfig.h"
 
 #include <QNetworkInterface>
 
@@ -86,7 +91,12 @@ QHostAddress StationBind::stationAddress() const
 QList<QHostAddress> StationBind::listenAddresses() const
 {
     QList<QHostAddress> addresses;
-    const QHostAddress station = stationAddress();
+    // The override is read as remote_bind is (R-R3-26): "::" becomes Qt's
+    // dual-stack any-address, since Qt binds a parsed "::" IPv6-only and the
+    // station network's IPv4 amplifiers and tuners would be refused.
+    const QHostAddress station = bindOverride.isEmpty()
+                                     ? stationAddress()
+                                     : DaemonConfig::listenAddressFor(bindOverride);
     if (!station.isNull()) {
         addresses.append(station);
     }

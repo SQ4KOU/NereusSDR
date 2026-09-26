@@ -22,6 +22,7 @@
 #include <QThread>
 
 #include <memory>
+#include "fakes/UpgradedCoreToken.h"
 
 using namespace NereusSDR;
 using NereusSDR::Test::LoopbackTransport;
@@ -82,7 +83,7 @@ struct SessionHarness {
 
     SessionHarness()
         : settings(directory.filePath(QStringLiteral("station.settings")))
-        , server(&station, settings, directory.path())
+        , server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(directory.path()))
     {
         Q_ASSERT(directory.isValid());
     }

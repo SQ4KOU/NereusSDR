@@ -138,7 +138,7 @@
         {
             "kind": "i64",
             "name": "notchControlVersion",
-            "value": 1
+            "value": 2
         },
         {
             "kind": "i64",
@@ -237,8 +237,43 @@
         },
         {
             "kind": "i64",
+            "name": "stationIdentityVersion",
+            "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "deviceAdminVersion",
+            "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "pairingVersion",
+            "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "stationCatalogVersion",
+            "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "displayExtrasVersion",
+            "value": 2
+        },
+        {
+            "kind": "i64",
             "name": "transmitSettingsVersion",
             "value": 8
+        },
+        {
+            "kind": "i64",
+            "name": "bandSelectVersion",
+            "value": 1
+        },
+        {
+            "kind": "i64",
+            "name": "sessionHolderVersion",
+            "value": 1
         }
     ],
     "commands": [
@@ -311,6 +346,24 @@
             "capabilityVersion": 0,
             "minMinor": 0,
             "verb": "setActiveSliceById"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "sliceId",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "band",
+                    "optional": false
+                }
+            ],
+            "capability": "bandSelectVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "slice.selectBand"
         },
         {
             "arguments": [
@@ -1359,6 +1412,129 @@
             "capabilityVersion": 1,
             "minMinor": 5,
             "verb": "notch.delete"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "sliceId",
+                    "optional": false
+                }
+            ],
+            "capability": "notchControlVersion",
+            "capabilityVersion": 2,
+            "minMinor": 5,
+            "verb": "notch.addAtSlice"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "id",
+                    "optional": false
+                }
+            ],
+            "capability": "deviceAdminVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "devices.revoke"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "utf8",
+                    "name": "label",
+                    "optional": false
+                }
+            ],
+            "capability": "deviceAdminVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "station.rename"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "deviceAdminVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "station.acknowledgeKeyBackup"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "deviceAdminVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "station.retireToken"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "pairingVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "pairing.open"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "pairingVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "pairing.close"
+        },
+        {
+            "arguments": [
+            ],
+            "capability": "sessionHolderVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "session.leave"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "id",
+                    "optional": false
+                },
+                {
+                    "kind": "i64",
+                    "name": "choice",
+                    "optional": false
+                }
+            ],
+            "capability": "sessionHolderVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "confirm.proceed"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "id",
+                    "optional": false
+                }
+            ],
+            "capability": "sessionHolderVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "confirm.cancel"
+        },
+        {
+            "arguments": [
+                {
+                    "kind": "i64",
+                    "name": "id",
+                    "optional": false
+                }
+            ],
+            "capability": "sessionHolderVersion",
+            "capabilityVersion": 1,
+            "minMinor": 11,
+            "verb": "notice.takeBack"
         }
     ],
     "limits": {
@@ -1378,6 +1554,11 @@
                 30000,
                 60000
             ]
+        },
+        "confirmExpiryMs": {
+            "source": "ConfirmStep::kExpiryMs",
+            "unit": "ms",
+            "value": 60000
         },
         "connectDeadlineMs": {
             "source": "kStationHandshakeDeadlineMs",
@@ -1405,20 +1586,40 @@
                 "min": 1
             }
         },
+        "graceMs": {
+            "source": "DeviceSessionRegistry::kGraceMs",
+            "unit": "ms",
+            "value": 180000
+        },
         "heartbeatIntervalMs": {
             "source": "StationServer::kDefaultHeartbeatIntervalMs",
             "unit": "ms",
             "value": 20000
+        },
+        "lanAnnouncementMaxBytes": {
+            "source": "kStationLanMaxSchema2DatagramBytes",
+            "unit": "bytes",
+            "value": 480
+        },
+        "maxDeviceSessions": {
+            "source": "StationServer::kMaxDeviceSessions",
+            "unit": "count",
+            "value": 4
         },
         "maxDisplayEndpoints": {
             "source": "DaemonMediaController.cpp kMaxEndpoints",
             "unit": "count",
             "value": 8
         },
+        "maxHandshakesPerAddress": {
+            "source": "StationServer::kMaxHandshakesPerAddress",
+            "unit": "count",
+            "value": 2
+        },
         "maxPeers": {
             "source": "StationServer::kMaxConcurrentPeers",
             "unit": "count",
-            "value": 8
+            "value": 24
         },
         "mediaControlBytes": {
             "source": "kMaxMediaControlBytes",
@@ -1429,6 +1630,11 @@
             "source": "StationServer::kDefaultMaxMissedPongs",
             "unit": "count",
             "value": 2
+        },
+        "shortNameMaxBytes": {
+            "source": "DeviceStore::kMaxShortNameBytes",
+            "unit": "bytes",
+            "value": 32
         },
         "stationInboundMessageBytes": {
             "source": "StationServer::kMaxIncomingMessageBytes",
@@ -1750,6 +1956,14 @@
                     "op"
                 ]
             },
+            "clarity-retune": {
+                "capability": "displayExtrasVersion",
+                "fields": [
+                    "connectionId",
+                    "endpointId",
+                    "op"
+                ]
+            },
             "clock-probe": {
                 "capability": "audioClockVersion",
                 "fields": [
@@ -1819,8 +2033,32 @@
             "subscribe": {
                 "capability": "remoteMediaVersion",
                 "conditional": {
+                    "activePeakHold": [
+                        "displayExtrasVersion"
+                    ],
+                    "averageTimeMs": [
+                        "displayExtrasVersion"
+                    ],
+                    "calibrationOffsetDb": [
+                        "displayExtrasVersion"
+                    ],
                     "extendedView": [
                         "remoteWidebandDisplayVersion"
+                    ],
+                    "noiseFloor": [
+                        "displayExtrasVersion"
+                    ],
+                    "normalize": [
+                        "displayExtrasVersion"
+                    ],
+                    "peakBlobs": [
+                        "displayExtrasVersion"
+                    ],
+                    "waterfallAverageTimeMs": [
+                        "displayExtrasVersion"
+                    ],
+                    "waterfallLevels": [
+                        "displayExtrasVersion"
                     ]
                 },
                 "fields": [
@@ -1844,6 +2082,27 @@
                     "windowType"
                 ],
                 "nested": {
+                    "activePeakHold": [
+                        [
+                            "enabled",
+                            "fallDbPerSec",
+                            "holdMs"
+                        ]
+                    ],
+                    "noiseFloor": [
+                        [
+                            "enabled",
+                            "shiftDb"
+                        ]
+                    ],
+                    "peakBlobs": [
+                        [
+                            "count",
+                            "fallDbPerSec",
+                            "holdMs",
+                            "insideOnly"
+                        ]
+                    ],
                     "trace": [
                         [
                             "averageAlpha",
@@ -1856,6 +2115,14 @@
                             "averageAlpha",
                             "averageMode",
                             "detector"
+                        ]
+                    ],
+                    "waterfallLevels": [
+                        [
+                            "highDbm",
+                            "lowDbm",
+                            "mode",
+                            "offsetDb"
                         ]
                     ]
                 }
@@ -1879,18 +2146,21 @@
     "messageKinds": {
         "auth.request": {
             "optional": [
+                "device"
             ],
             "required": [
                 "token",
                 "type"
             ],
             "types": {
+                "device": "object",
                 "token": "string",
                 "type": "string"
             }
         },
         "auth.result": {
             "optional": [
+                "code",
                 "retryable"
             ],
             "required": [
@@ -1900,6 +2170,7 @@
             ],
             "types": {
                 "accepted": "boolean",
+                "code": "string",
                 "reason": "string",
                 "retryable": "boolean",
                 "type": "string"
@@ -1955,6 +2226,36 @@
                 "verb": "string"
             }
         },
+        "confirm.request": {
+            "optional": [
+                "change",
+                "choices",
+                "forCommandId",
+                "forSettingsKey",
+                "forWriteId"
+            ],
+            "required": [
+                "affected",
+                "expiresInMs",
+                "id",
+                "kind",
+                "reason",
+                "type"
+            ],
+            "types": {
+                "affected": "array",
+                "change": "object",
+                "choices": "array",
+                "expiresInMs": "number",
+                "forCommandId": "number",
+                "forSettingsKey": "string",
+                "forWriteId": "number",
+                "id": "number",
+                "kind": "string",
+                "reason": "string",
+                "type": "string"
+            }
+        },
         "delta": {
             "optional": [
             ],
@@ -1971,7 +2272,9 @@
         },
         "hello": {
             "optional": [
+                "challenge",
                 "features",
+                "identity",
                 "majors"
             ],
             "required": [
@@ -1982,7 +2285,9 @@
                 "type"
             ],
             "types": {
+                "challenge": "string",
                 "features": "object",
+                "identity": "object",
                 "major": "number",
                 "majors": "array",
                 "minor": "number",
@@ -2000,6 +2305,40 @@
             ],
             "types": {
                 "payload": "object",
+                "type": "string"
+            }
+        },
+        "notice": {
+            "optional": [
+                "byDeviceId",
+                "byKind",
+                "byName",
+                "byShortName",
+                "bySource",
+                "change",
+                "slices"
+            ],
+            "required": [
+                "id",
+                "kind",
+                "reason",
+                "secondsAgo",
+                "takeBack",
+                "type"
+            ],
+            "types": {
+                "byDeviceId": "string",
+                "byKind": "string",
+                "byName": "string",
+                "byShortName": "string",
+                "bySource": "string",
+                "change": "object",
+                "id": "number",
+                "kind": "string",
+                "reason": "string",
+                "secondsAgo": "number",
+                "slices": "array",
+                "takeBack": "boolean",
                 "type": "string"
             }
         },
@@ -2030,6 +2369,74 @@
             "types": {
                 "class": "string",
                 "key": "string",
+                "type": "string"
+            }
+        },
+        "pair.accept": {
+            "optional": [
+            ],
+            "required": [
+                "identity",
+                "label",
+                "type"
+            ],
+            "types": {
+                "identity": "object",
+                "label": "string",
+                "type": "string"
+            }
+        },
+        "pair.confirm": {
+            "optional": [
+            ],
+            "required": [
+                "box",
+                "type"
+            ],
+            "types": {
+                "box": "string",
+                "type": "string"
+            }
+        },
+        "pair.fail": {
+            "optional": [
+            ],
+            "required": [
+                "reason",
+                "retryAfterMs",
+                "type"
+            ],
+            "types": {
+                "reason": "string",
+                "retryAfterMs": "number",
+                "type": "string"
+            }
+        },
+        "pair.spake": {
+            "optional": [
+            ],
+            "required": [
+                "data",
+                "step",
+                "type"
+            ],
+            "types": {
+                "data": "string",
+                "step": "number",
+                "type": "string"
+            }
+        },
+        "pair.start": {
+            "optional": [
+            ],
+            "required": [
+                "device",
+                "mode",
+                "type"
+            ],
+            "types": {
+                "device": "object",
+                "mode": "string",
                 "type": "string"
             }
         },
@@ -2081,6 +2488,7 @@
         },
         "session.end": {
             "optional": [
+                "code",
                 "retryable"
             ],
             "required": [
@@ -2088,6 +2496,7 @@
                 "type"
             ],
             "types": {
+                "code": "string",
                 "reason": "string",
                 "retryable": "boolean",
                 "type": "string"
@@ -2832,6 +3241,28 @@
                 }
             ]
         },
+        "ConnectedDevicesFacade": {
+            "properties": [
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "listJson",
+                    "ordinal": 0
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "revision",
+                    "ordinal": 1
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "deviceLimit",
+                    "ordinal": 2
+                }
+            ]
+        },
         "DspAssetService": {
             "properties": [
                 {
@@ -3193,6 +3624,24 @@
                     "kind": "bool",
                     "name": "txInhibited",
                     "ordinal": 20
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "bandOutputsByte",
+                    "ordinal": 21
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "bandOutputsBand",
+                    "ordinal": 22
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "bandOutputsKeyed",
+                    "ordinal": 23
                 }
             ]
         },
@@ -3400,6 +3849,139 @@
                     "kind": "i64",
                     "name": "bandFollowPort",
                     "ordinal": 29
+                }
+            ]
+        },
+        "SliceMarker": {
+            "properties": [
+                {
+                    "direction": "constantSnapshot",
+                    "kind": "i64",
+                    "name": "sliceId",
+                    "ordinal": 0
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "ownerDeviceId",
+                    "ordinal": 1
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "ownerName",
+                    "ordinal": 2
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "ownerShortName",
+                    "ordinal": 3
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "ownerKind",
+                    "ordinal": 4
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "ownerAway",
+                    "ordinal": 5
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "frequency",
+                    "ordinal": 6
+                },
+                {
+                    "direction": "outbound",
+                    "enumValues": [
+                        0,
+                        1,
+                        2,
+                        3,
+                        4,
+                        5,
+                        6,
+                        7,
+                        8,
+                        9,
+                        10,
+                        11,
+                        12,
+                        13
+                    ],
+                    "kind": "enum",
+                    "name": "dspMode",
+                    "ordinal": 7
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "filterLow",
+                    "ordinal": 8
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "filterHigh",
+                    "ordinal": 9
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "txSlice",
+                    "ordinal": 10
+                },
+                {
+                    "direction": "outbound",
+                    "enumValues": [
+                        0,
+                        1,
+                        2,
+                        3,
+                        4,
+                        5,
+                        6,
+                        7,
+                        8,
+                        9,
+                        10,
+                        11,
+                        12,
+                        13,
+                        14,
+                        15,
+                        16,
+                        17,
+                        18,
+                        19,
+                        20,
+                        21,
+                        22,
+                        23,
+                        24,
+                        25,
+                        26
+                    ],
+                    "kind": "enum",
+                    "name": "band",
+                    "ordinal": 11
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "streamIndex",
+                    "ordinal": 12
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "psPaused",
+                    "ordinal": 13
                 }
             ]
         },
@@ -4381,6 +4963,80 @@
                 }
             ]
         },
+        "StationCatalog": {
+            "properties": [
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "json",
+                    "ordinal": 0
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "revision",
+                    "ordinal": 1
+                }
+            ]
+        },
+        "StationDevicesFacade": {
+            "properties": [
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "listJson",
+                    "ordinal": 0
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "revision",
+                    "ordinal": 1
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "stationLabel",
+                    "ordinal": 2
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "claimed",
+                    "ordinal": 3
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "tokenActive",
+                    "ordinal": 4
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "keyBackupAcknowledged",
+                    "ordinal": 5
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "keyPath",
+                    "ordinal": 6
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "bool",
+                    "name": "pairingWindowOpen",
+                    "ordinal": 7
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "pairingCode",
+                    "ordinal": 8
+                }
+            ]
+        },
         "StationTciModel": {
             "properties": [
                 {
@@ -5254,12 +5910,28 @@
             "key": "accessorySettings"
         },
         {
+            "class": "StationDevicesFacade",
+            "key": "devices"
+        },
+        {
+            "class": "ConnectedDevicesFacade",
+            "key": "connectedDevices"
+        },
+        {
+            "class": "StationCatalog",
+            "key": "catalog"
+        },
+        {
             "class": "PanadapterModel",
             "key": "pan:<i>"
         },
         {
             "class": "SliceModel",
             "key": "slice:<id>"
+        },
+        {
+            "class": "SliceMarker",
+            "key": "marker:<id>"
         }
     ],
     "settingsScope": {
@@ -5316,8 +5988,7 @@
         "operatorLocalKeys": [
             "DisableHfPa",
             "ExtendedTxAllowed",
-            "PreventTxOnDifferentBandToRx",
-            "RxOnly"
+            "PreventTxOnDifferentBandToRx"
         ],
         "operatorLocalPrefixes": [
             "Tci",
@@ -5357,7 +6028,8 @@
             "TxInhibitMonitorReversed",
             "WindBackPowerSwr",
             "MultimeterDelayMs",
-            "NetworkWatchdogEnabled"
+            "NetworkWatchdogEnabled",
+            "RxOnly"
         ],
         "stationPrefixes": [
             "hardware/",
@@ -5379,7 +6051,8 @@
             "DspOptions",
             "Nb",
             "Snb",
-            "Rade"
+            "Rade",
+            "filters/"
         ]
     },
     "telemetry": {

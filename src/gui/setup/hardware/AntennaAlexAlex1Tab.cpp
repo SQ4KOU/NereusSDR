@@ -14,11 +14,11 @@
 //   2026-09-24 - R-R3-46: transmit permission for the TX low-pass table
 //                and TX master switches. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
-//   2026-09-25 - R-R3-49 (remote-window parity Task 13, plan C5): HPF
-//                 bypass on TX and on PureSignal, Disable 6 m LNA on TX and
-//                 the LPF band edges are hidden until built
-//                 (UnbuiltFeatures). J.J. Boyd (KG4VCF), AI-assisted via
-//                 Anthropic Claude Code.
+//   2026-09-25 - R-R3-49 (remote-window parity Task 13, plan C5): the
+//                 LPF band edges are hidden until built (UnbuiltFeatures);
+//                 HPF bypass on TX and on PureSignal and Disable 6 m LNA on
+//                 TX stay shown, since plan Task 14 applies them. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 //
 //=================================================================
@@ -378,15 +378,12 @@ AntennaAlexAlex1Tab::AntennaAlexAlex1Tab(RadioModel* model, QWidget* parent)
                              m_disable6mLnaOnTx, m_disable6mLnaOnRx }) {
         hpfVBox->addWidget(chk);
     }
-    // R-R3-49 (remote-window parity Task 13, plan C5): nothing reads these
-    // three in any window yet, so they are hidden until built; their saved
-    // values stay in the settings file.
+    // R-R3-49 (remote-window parity Task 13): named for the tests. Plan
+    // Task 14 applies these three (RadioModel::applyAlexHpfSwitchSettings),
+    // so they are shown; only the LPF band edges below wait (plan C5).
     m_hpfBypassOnTx->setObjectName(QStringLiteral("alexHpfBypassOnTx"));
     m_hpfBypassOnPs->setObjectName(QStringLiteral("alexHpfBypassOnPs"));
     m_disable6mLnaOnTx->setObjectName(QStringLiteral("alexDisable6mLnaOnTx"));
-    for (QCheckBox* chk : { m_hpfBypassOnTx, m_hpfBypassOnPs, m_disable6mLnaOnTx }) {
-        UnbuiltFeatures::hideUnlessBuilt(chk, UnbuiltFeature::AlexTxFilterOptions);
-    }
 
     auto wireMaster = [this](QCheckBox* chk, const QString& key) {
         connect(chk, &QCheckBox::toggled, this,
@@ -976,6 +973,16 @@ void AntennaAlexAlex1Tab::onMasterCheckChanged(bool checked, const QString& sett
         AppSettings::instance().setHardwareValue(
             m_currentMac, settingsKey, checked ? QStringLiteral("True") : QStringLiteral("False"));
         AppSettings::instance().save();
+    }
+    // Plan Task 14 and its fix wave (R-R3-49): the high-pass switches reach
+    // the radio at once, as Thetis's setters re-apply the high-pass
+    // (console.cs:18719-18803 Disable6mLNAonRX / Disable6mLNAonTX /
+    // DisableHPFonTX / DisableHPFonPS / AlexHPFBypass [v2.10.3.15]).
+    // In a remote window the save above goes to the Core, which applies it
+    // there (scheduleRemoteHardwareApply); the window's own model has no
+    // radio and does nothing.
+    if (m_model && settingsKey.startsWith(QLatin1String("alex/master/"))) {
+        m_model->applyAlexHpfSwitchSettings();
     }
     emit settingChanged(settingsKey, checked);
 }

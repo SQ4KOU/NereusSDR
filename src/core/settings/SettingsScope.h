@@ -51,6 +51,9 @@
 //                                    Classification unchanged. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 13 (R-IOS-08):
+//                                    isCoreOwnedIdentitySettingsKey().
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QList>
@@ -108,6 +111,10 @@ bool isModelOwnedStepAttenuatorSettingsKey(QStringView key);
 // again at teardown), so a raw write would be overwritten; a window changes
 // the receive ones through the mirrored `alexAntennas` object.
 bool isModelOwnedAlexAntennaSettingsKey(QStringView key);
+// iPhone app Task 13 (R-IOS-08): the Core's name (StationLabel) and its
+// identity key backup acknowledgement (StationKeyBackupAcknowledged), which
+// change only through station.rename and station.acknowledgeKeyBackup.
+bool isCoreOwnedIdentitySettingsKey(QStringView key);
 // The reason a raw write or remove of a model-owned key is refused, in the
 // operator's words.
 QString modelOwnedSettingsRefusal(QStringView key);

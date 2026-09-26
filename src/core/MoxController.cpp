@@ -108,12 +108,32 @@
 //                 (RX vs VAC at cmaster.cs:912-943 [v2.10.3.13]); see commit
 //                 message for rationale.  J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-24 - Receiver and transmit gaps plan, Task 7 fix wave: TX
+//                 inhibit and the PA trip gate every keying source and
+//                 unkey (setTxInhibited, setPaTripped; console.cs:25470,
+//                 15341-15363, 29364-29371 [v2.10.3.15]). A TX-interlock
+//                 refusal emits moxRejected (M2); a held source's repeat
+//                 refusal is quiet, one message per press (M3). A VOX
+//                 level is dropped when VOX stops running (M5), and a TCI
+//                 release that falls back to another source runs the MOX
+//                 pre-check first (M6, R-R3-36). J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - Receiver and transmit gaps plan, Task 16: receive only
+//                 (setRxOnly, Thetis _rx_only; console.cs:15312-15334,
+//                 25470, 29378-29382 [v2.10.3.15]) refuses every key with
+//                 its reason and unkeys. J.J. Boyd (KG4VCF), AI-assisted
+//                 via Anthropic Claude Code.
+//   2026-09-25 - Task 16 fix wave (M2): transmitBlockReason (the words
+//                 setMox refuses with) and transmitBlockChanged. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis state-machine
 // derived values are cited inline below.
 
 #include "core/MoxController.h"
+
+#include <QSignalBlocker>
 #include "core/LogCategories.h"
 
 #include <algorithm>
@@ -313,11 +333,24 @@ bool MoxController::isVoiceMode(DSPMode mode) const noexcept
 void MoxController::recomputeVoxRun()
 {
     const bool gated = m_voxEnabled && isVoiceMode(m_currentMode);
-    if (gated == m_lastVoxRunGated) {
-        return;  // idempotent on emitted state; no spurious emit
+    if (gated != m_lastVoxRunGated) {
+        m_lastVoxRunGated = gated;
+        emit voxRunRequested(gated);
     }
-    m_lastVoxRunGated = gated;
-    emit voxRunRequested(gated);
+
+    // Task 7 fix wave, M5: once VOX stops running, DEXP pushes nothing, not
+    // even pushvox(0) (Thetis wdsp dexp.c:328-339 [v2.10.3.15]: both pushes
+    // sit under a->run_vox). A level left set by a switch to a non-voice
+    // mode (or TUN-off restoring CW) would then key VOX on the first pass
+    // after a return to a voice mode, before DEXP's first push. Thetis has
+    // the same stale Audio.VOXActive (set only at cmaster.cs:1945), but its
+    // VOX could not key from it before PollPTT; NereusSDR's now can, so the
+    // level is dropped here and the pass releases a VOX key.
+    if (!gated && m_voxPtt) {
+        m_voxPtt = false;
+        clearHeldBits(kRefusedVox);
+        pollPtt();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -338,6 +371,16 @@ void MoxController::setVoxEnabled(bool on)
 {
     m_voxEnabled = on;
     recomputeVoxRun();
+    // Receiver and transmit gaps plan, Task 7. From Thetis
+    // chkVOX_CheckedChanged, console.cs:28904-28906 [v2.10.3.15]:
+    //   else { Audio.VOXActive = false; ... }
+    // WDSP sends no pushvox(0) once VOX stops running, so without this a
+    // VOX key would never release. The next PollPTT pass releases it.
+    if (!on && m_voxPtt) {
+        m_voxPtt = false;
+        clearHeldBits(kRefusedVox);
+        pollPtt();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -399,10 +442,9 @@ void MoxController::onModeChanged(DSPMode mode)
 // spirit of Thetis (line 30106 precedes 30142) and ensuring that any
 // phase-signal subscriber that fires during the TX→RX walk (e.g.
 // txAboutToEnd, hardwareFlipped(false)) still observes m_manualMox=true.
-// m_pttMode is NOT reset here: per Thetis, it clears indirectly via the
-// TX→RX path in chkMOX_CheckedChanged2 (console.cs:29496 [v2.10.3.13])
-// which sets _current_ptt_mode = PTTMode.NONE. In NereusSDR that reset
-// belongs to the F.1 hardwareFlipped(false) subscriber in RadioModel.
+// m_pttMode is not reset here: setMox(false) clears it, as the TX-to-RX
+// path in chkMOX_CheckedChanged2 sets _current_ptt_mode = PTTMode.NONE
+// (console.cs:29547 [v2.10.3.15]).
 // ---------------------------------------------------------------------------
 void MoxController::setTune(bool on)
 {
@@ -422,6 +464,9 @@ void MoxController::setTune(bool on)
         if (!wasManual) {
             emit manualMoxChanged(true);
         }
+        // The same Thetis flag gates PollPTT (isManualKey()). Receiver and
+        // transmit gaps plan, Task 7.
+        m_manualKey = true;
 
         // Engage MOX. setMox runs Codex P2 (safety effect) → idempotent
         // guard → state commit → emit txAboutToBegin → emit
@@ -440,10 +485,14 @@ void MoxController::setTune(bool on)
         if (wasManual) {
             emit manualMoxChanged(false);
         }
-        // NOTE: m_pttMode is intentionally NOT reset here.
-        // Thetis clears _current_ptt_mode indirectly via the TX→RX path
-        // in chkMOX_CheckedChanged2 (console.cs:29496 [v2.10.3.13]).
-        // In NereusSDR that belongs to F.1's hardwareFlipped(false) subscriber.
+        // NOTE: m_pttMode is not reset here: the setMox(false) above
+        // cleared it, as chkMOX_CheckedChanged2's TX-to-RX branch does
+        // (console.cs:29547 [v2.10.3.15]).
+        //
+        // m_manualKey stays set: Thetis clears _manual_mox only at the end
+        // of TUN-off, after the tone and power are restored
+        // (console.cs:30193 [v2.10.3.15]). RadioModel::completeTuneOff calls
+        // setManualKey(false) there.
     }
 }
 
@@ -477,6 +526,47 @@ void MoxController::setTune(bool on)
 // ---------------------------------------------------------------------------
 void MoxController::setMox(bool on)
 {
+    // ── Task 7 fix wave, I2: TX inhibit and the PA trip refuse every key ─────
+    //
+    // From Thetis chkMOX_CheckedChanged2, console.cs:29364-29371 [v2.10.3.15]:
+    //   if(chkMOX.Checked && _ganymede_pa_issue)
+    //   {
+    //       // abort the change if there is a ganymede pa issue
+    //       chkMOX.CheckedChanged -= chkMOX_CheckedChanged2;
+    //       chkMOX.Checked = false;
+    //       chkMOX.CheckedChanged += chkMOX_CheckedChanged2;
+    //       return;
+    //   }
+    // and the TXInhibit setter, console.cs:15341-15363 [v2.10.3.15], which
+    // disables the MOX, TUN, two-tone and VOX buttons while inhibited:
+    //   chkTUN.Enabled = !_tx_inhibit;
+    //   chk2TONE.Enabled = !_tx_inhibit; //MW0LGE_21a
+    //   chkVOX.Enabled = !_tx_inhibit;
+    // NereusSDR refuses here, where every key passes (MOX button, container
+    // button, TUN, two-tone, and the PollPTT sources if one got past the
+    // gate in pollPtt), rather than greying the buttons. This is stricter
+    // than Thetis for TX inhibit: Thetis disables the buttons but a CAT or
+    // programmatic MOX write is not refused. A refusal is reported through
+    // moxRejected, so the MOX button drops back, TUN runs its TUN-off path
+    // and two-tone cleans up, as for any refused key. The PollPTT sources
+    // never reach this: the gate in pollPtt skips them silently, as
+    // Thetis's PollPTT does.
+    //
+    // Task 16: receive only refuses here too. From Thetis
+    // chkMOX_CheckedChanged2, console.cs:29378-29382 [v2.10.3.15]:
+    //   if (_rx_only && chkMOX.Checked)
+    //   {
+    //       chkMOX.Checked = false;
+    //       return;
+    //   }
+    if (on && transmitBlocked()) {
+        emit moxRejected(transmitBlockReason());
+        if (!m_mox) {
+            dropPttOnUnkey();
+        }
+        return;
+    }
+
     // ── K.2: BandPlanGuard pre-check (BEFORE Codex P2 safety effects) ────────
     //
     // When a MoxCheckFn is installed and the caller is requesting TX-on,
@@ -494,7 +584,20 @@ void MoxController::setMox(bool on)
     if (on && m_moxCheck) {
         const auto result = m_moxCheck();
         if (!result.ok) {
-            emit moxRejected(result.reason);
+            // R-R3-36: tryPollKey reads this to hold a refused source off
+            // until it is pressed again (m_notQueuedHeld).
+            m_lastRefusalNotQueued = result.notQueued;
+            // Task 7 fix wave, M3: a held source's repeat refusal is quiet.
+            if (!m_quietRefusal) {
+                emit moxRejected(result.reason);
+            }
+            // Thetis refuses a key by unchecking chkMOX, which runs the
+            // TX-to-RX branch of chkMOX_CheckedChanged2 (PTT mode NONE, CAT
+            // and TCI PTT dropped). Only from receive: a repeated
+            // setMox(true) while keyed is not a key in Thetis at all.
+            if (!m_mox) {
+                dropPttOnUnkey();
+            }
             return;
         }
     }
@@ -510,8 +613,45 @@ void MoxController::setMox(bool on)
     // object.  The warned/denied signals are plumbed to the operator UI toast
     // in Task 97.  For this task the signals exist but have no UI subscriber.
     if (on && m_interlockPolicy) {
-        if (!m_interlockPolicy->evaluateTxRequest(m_ampPresent, m_ampInOperate, m_lastSwr)) {
-            // denied() signal already emitted by the policy.
+        // Task 7 fix wave, M2: a refusal here is reported through
+        // moxRejected like the check above, so the MOX button drops back,
+        // TUN runs its TUN-off path and two-tone cleans up (it listens only
+        // to moxRejected). The text matches MainWindow's denied toast, which
+        // folds a repeat of the same message into one.
+        //
+        // M3: a held source's repeat refusal is quiet: the policy is asked
+        // with its signals blocked. evaluateTxRequest only reads state, so
+        // when it allows the key it is asked again unblocked, so a Warn-mode
+        // warning still reaches the operator.
+        QString deniedReason;
+        bool allowed = false;
+        if (m_quietRefusal) {
+            {
+                const QSignalBlocker quiet(m_interlockPolicy);
+                allowed = m_interlockPolicy->evaluateTxRequest(
+                    m_ampPresent, m_ampInOperate, m_lastSwr);
+            }
+            if (allowed) {
+                allowed = m_interlockPolicy->evaluateTxRequest(
+                    m_ampPresent, m_ampInOperate, m_lastSwr);
+            }
+        } else {
+            const QMetaObject::Connection capture =
+                connect(m_interlockPolicy, &TxInterlockPolicy::denied, this,
+                        [&deniedReason](const QString& reason) { deniedReason = reason; });
+            allowed = m_interlockPolicy->evaluateTxRequest(
+                m_ampPresent, m_ampInOperate, m_lastSwr);
+            disconnect(capture);
+        }
+        if (!allowed) {
+            // denied() signal already emitted by the policy (unless quiet).
+            if (!m_quietRefusal) {
+                emit moxRejected(QStringLiteral("TX interlock blocked: %1").arg(deniedReason));
+            }
+            // A refused key ends like a Thetis refusal (see above).
+            if (!m_mox) {
+                dropPttOnUnkey();
+            }
             return;
         }
     }
@@ -543,6 +683,13 @@ void MoxController::setMox(bool on)
     // BETWEEN the idempotent guard and the m_mox commit is the most faithful
     // translation. By construction, m_mox != on here (idempotent guard passed).
     emit moxChanging(activeRxForTx(), m_mox, on);  // MW0LGE_21k8 — Pre
+
+    // ── Task 7: an unkey clears the PTT state ─────────────────────────────────
+    // chkMOX_CheckedChanged2 does this on every unkey, whichever source
+    // unchecked chkMOX (see dropPttOnUnkey).
+    if (!on) {
+        dropPttOnUnkey();
+    }
 
     // ── Step 3: Commit new MOX state ─────────────────────────────────────────
     m_mox = on;
@@ -614,6 +761,500 @@ void MoxController::setPttMode(PttMode mode)
     }
     m_pttMode = mode;
     emit pttModeChanged(mode);
+}
+
+// ---------------------------------------------------------------------------
+// dropPttOnUnkey: the PTT state after an unkey (or a refused key).
+//
+// Receiver and transmit gaps plan, Task 7. From Thetis
+// chkMOX_CheckedChanged2, console.cs:29404-29411 [v2.10.3.15]:
+//   bool tx = chkMOX.Checked;
+//
+//   //[2.10.1.0]MW0LGE changed
+//   if (!tx)
+//   {
+//       if (CATPTT) CATPTT = false;
+//       if (TCIPTT) TCIPTT = false;
+//   }
+// and its TX-to-RX branch, console.cs:29545-29547 [v2.10.3.15]:
+//   else
+//   {
+//       _current_ptt_mode = PTTMode.NONE;
+// Every source unkeys through chkMOX.Checked = false, so this runs on every
+// unkey. A refused key ends the same way: Thetis refuses by unchecking
+// chkMOX, which re-enters this branch.
+// ---------------------------------------------------------------------------
+void MoxController::dropPttOnUnkey()
+{
+    //[2.10.1.0]MW0LGE changed  [original inline comment from console.cs:29406]
+    m_catPtt = false;
+    m_tciPtt = false;
+    clearHeldBits(kRefusedCat | kRefusedTci);
+    setPttMode(PttMode::None);
+}
+
+// ---------------------------------------------------------------------------
+// tryPollKey: `_current_ptt_mode = X; chkMOX.Checked = true;` for one
+// PollPTT source (console.cs:25507-25555 [v2.10.3.15]). chkMOX.Checked =
+// true on a checked box fires nothing, so a key is tried only from receive.
+//
+// Task 7 fix wave, M3: the keying is PollPTT's, tried on every pass while
+// the source is held; only the refusal message is limited to the first
+// refusal of each press (see m_refusedHeld).
+// ---------------------------------------------------------------------------
+void MoxController::tryPollKey(PttMode mode, quint8 refusedBit)
+{
+    setPttMode(mode);
+    if (m_mox) {
+        return;
+    }
+    m_quietRefusal = (m_refusedHeld & refusedBit) != 0;
+    m_lastRefusalNotQueued = false;
+    setMox(true);
+    m_quietRefusal = false;
+    if (m_mox) {
+        m_refusedHeld &= static_cast<quint8>(~refusedBit);
+    } else {
+        m_refusedHeld |= refusedBit;
+        // R-R3-36: refused because the microphone is not ready, and never
+        // queued. pollPtt skips this source until its level drops. A CAT or
+        // TCI level is already dropped by the refusal (dropPttOnUnkey), so
+        // only a source still held is latched.
+        if (m_lastRefusalNotQueued && isLevelHeld(refusedBit)) {
+            m_notQueuedHeld |= refusedBit;
+        }
+    }
+    m_lastRefusalNotQueued = false;
+}
+
+// ---------------------------------------------------------------------------
+// clearHeldBits: a source's level dropped (or was dropped), so its next
+// level is a new press: it is told of a refusal again (M3) and is tried
+// again after a never-queued refusal (R-R3-36).
+// ---------------------------------------------------------------------------
+bool MoxController::isLevelHeld(quint8 bit) const noexcept
+{
+    switch (bit) {
+    case kRefusedTci: return m_tciPtt;
+    case kRefusedCat: return m_catPtt;
+    case kRefusedMic: return m_micPtt;
+    case kRefusedVox: return m_voxPtt;
+    default:          return false;
+    }
+}
+
+void MoxController::clearHeldBits(quint8 bits)
+{
+    m_refusedHeld &= static_cast<quint8>(~bits);
+    m_notQueuedHeld &= static_cast<quint8>(~bits);
+}
+
+// ---------------------------------------------------------------------------
+// pollPtt: one pass of Thetis PollPTT over the recorded source levels.
+//
+// Receiver and transmit gaps plan, Task 7. From Thetis PollPTT,
+// console.cs:25463-25623 [v2.10.3.15]. The pass, with what is ported:
+//
+//   if (!_manual_mox && !_disable_ptt && !_rx_only && !_tx_inhibit && !QSKEnabled && !_ganymede_pa_issue)
+//   {
+//       bool mic_ptt = (dotdashptt & 0x01) != 0; // PTT from radio
+//       bool cw_ptt = CWInput.KeyerPTT && _current_breakin_mode == BreakIn.Semi; // CW serial PTT  //[2.10.3.9]MW0LGE only want to do this on semi breakin
+//       ...
+//       if (!_mox)
+//       {
+//           // we can come in here from a ToT ( StopAllTX() ) //[2.10.3.6]MWLGE fixes #518
+//           ...
+//           if (_tci_ptt) { _current_ptt_mode = PTTMode.TCI; chkMOX.Checked = true; }
+//           if (cat_ptt)  { _current_ptt_mode = PTTMode.CAT; chkMOX.Checked = true; }
+//           if ((tx_mode == CWL || CWU) && (cw_ptt || mic_ptt)) { ...CW... }
+//           if ((voice modes || _all_mode_mic_ptt) && mic_ptt && _current_ptt_mode != PTTMode.CW)
+//               { _current_ptt_mode = PTTMode.MIC; chkMOX.Checked = true; }
+//           if (voice modes && vox_ptt) { _current_ptt_mode = PTTMode.VOX; chkMOX.Checked = true; }
+//       }
+//       else // else if(mox)
+//       {
+//           switch (_current_ptt_mode)
+//           {
+//               case PTTMode.TCI: if (!_tci_ptt) fallback or chkMOX.Checked = false
+//               case PTTMode.CAT: if (!cat_ptt) chkMOX.Checked = false;
+//               case PTTMode.MIC: if (!mic_ptt) chkMOX.Checked = false;
+//               case PTTMode.CW:  if (!cw_ptt && !mic_ptt) chkMOX.Checked = false;
+//               case PTTMode.VOX: if (!vox_ptt) chkMOX.Checked = false;
+//           }
+//       }
+//   }
+//
+// Ported: the _manual_mox gate (m_manualKey), keying from receive in
+// Thetis's order with the mode set just before the key, and the release
+// switch for TCI, CAT, MIC and VOX. chkMOX.Checked = true on a box already
+// checked fires nothing in Thetis, so a later held source only renames the
+// mode (setMox(true) is not called again while m_mox is set).
+//
+// _tx_inhibit and _ganymede_pa_issue are ported (Task 7 fix wave, I2):
+// RadioModel feeds them from TxInhibitMonitor and RadioModel::paTripped()
+// (setTxInhibited, setPaTripped). While either is set the whole pass is
+// skipped, as in Thetis: no source keys and none is refused per frame.
+//
+// Not ported, each for its own reason:
+//   - _disable_ptt, QSKEnabled: no NereusSDR equivalent in this
+//     controller; QSK is 3M-2. (_rx_only is ported by Task 16, setRxOnly.)
+//   - _stop_all_tx (the time-out timer hold-off): NereusSDR has no
+//     StopAllTx.
+//   - The CW branch and PTTMode.CW: CW keying is 3M-2 (onCwPtt refuses).
+//   - The mic's tx_mode gate (voice modes or _all_mode_mic_ptt): a mic PTT
+//     keys in every mode, as it did before. NereusSDR's RADE modes are not
+//     in Thetis's voice list and RADE transmits from the mic PTT.
+//   - VACBypass: VAX is not VAC.
+// ---------------------------------------------------------------------------
+void MoxController::pollPtt()
+{
+    // From Thetis console.cs:25470 [v2.10.3.15]:
+    //   if (!_manual_mox && !_disable_ptt && !_rx_only && !_tx_inhibit && !QSKEnabled && !_ganymede_pa_issue)
+    // (cw_ptt, on the lines below it, carries: //[2.10.3.9]MW0LGE only want to do this on semi breakin  [original inline comment from console.cs:25473])
+    // The manual key, TX inhibit and the PA trip are ported (Task 7 and
+    // its fix wave, I2); _rx_only is ported by Task 16 (setRxOnly).
+    if (m_manualKey || transmitBlocked()) {
+        return;
+    }
+
+    if (!m_mox) {
+        // From Thetis console.cs:25507-25511 [v2.10.3.15]
+        // R-R3-36: a source refused because the microphone was not ready
+        // is skipped until it is released (isHeldOff). Not in Thetis,
+        // which has no microphone admission; its band-plan and interlock
+        // refusals are still retried on every pass, as PollPTT does.
+        if (m_tciPtt && !isHeldOff(kRefusedTci)) {
+            tryPollKey(PttMode::Tci, kRefusedTci);
+        }
+        // From Thetis console.cs:25513-25517 [v2.10.3.15]
+        if (m_catPtt && !isHeldOff(kRefusedCat)) {
+            tryPollKey(PttMode::Cat, kRefusedCat);
+        }
+        // From Thetis console.cs:25526-25541 [v2.10.3.15] (mode gate not
+        // ported, see above; PTTMode.CW is never set before 3M-2)
+        if (m_micPtt && m_pttMode != PttMode::Cw && !isHeldOff(kRefusedMic)) {
+            tryPollKey(PttMode::Mic, kRefusedMic);
+        }
+        // From Thetis console.cs:25543-25555 [v2.10.3.15]
+        if (m_voxPtt && isVoiceMode(m_currentMode) && !isHeldOff(kRefusedVox)) {
+            tryPollKey(PttMode::Vox, kRefusedVox);
+        }
+        return;
+    }
+
+    switch (m_pttMode) {
+    case PttMode::Tci:
+        // From Thetis console.cs:25562-25581 [v2.10.3.15]
+        if (!m_tciPtt) {
+            // From Thetis getFallbackPTTModeAfterTCIRelease,
+            // console.cs:25429-25461 [v2.10.3.15]: CAT, then CW (3M-2),
+            // then MIC, then VOX (voice modes), else NONE. The mic's
+            // tx_mode gate is left out as on the keying side.
+            // R-R3-36: a source held off after a never-queued refusal is
+            // not a fallback either; taking the key would key it without a
+            // new press.
+            PttMode fallback = PttMode::None;
+            if (m_catPtt && !isHeldOff(kRefusedCat)) {
+                fallback = PttMode::Cat;
+            } else if (m_micPtt && !isHeldOff(kRefusedMic)) {
+                fallback = PttMode::Mic;
+            } else if (m_voxPtt && isVoiceMode(m_currentMode) && !isHeldOff(kRefusedVox)) {
+                fallback = PttMode::Vox;
+            }
+            if (fallback == PttMode::None) {
+                setMox(false);
+                break;
+            }
+            // Task 7 fix wave, M6 (R-R3-36): the key moves off TCI audio to
+            // a source that reads the PC microphone, so it is admitted as a
+            // new key would be: the MOX pre-check, which holds the
+            // microphone-ready check, runs first, and a refusal ends the
+            // key. Not in Thetis (it has no microphone admission); applied
+            // to every fallback, since CAT and VOX transmit the microphone
+            // too.
+            if (m_moxCheck) {
+                const auto admit = m_moxCheck();
+                if (!admit.ok) {
+                    emit moxRejected(admit.reason);
+                    // M3: that source, still held, is not told again.
+                    const quint8 bit = (fallback == PttMode::Cat) ? kRefusedCat
+                                     : (fallback == PttMode::Mic) ? kRefusedMic
+                                                                  : kRefusedVox;
+                    m_refusedHeld |= bit;
+                    // R-R3-36: and, refused for the microphone, it is not
+                    // keyed later without a new press.
+                    if (admit.notQueued) {
+                        m_notQueuedHeld |= bit;
+                    }
+                    setMox(false);
+                    break;
+                }
+            }
+            setPttMode(fallback);
+        }
+        break;
+    case PttMode::Cat:
+        // From Thetis console.cs:25582-25588 [v2.10.3.15]
+        if (!m_catPtt) {
+            setMox(false);
+        }
+        break;
+    case PttMode::Mic:
+        // From Thetis console.cs:25589-25595 [v2.10.3.15]
+        if (!m_micPtt) {
+            setMox(false);
+        }
+        break;
+    case PttMode::Vox:
+        // From Thetis console.cs:25603-25608 [v2.10.3.15]
+        if (!m_voxPtt) {
+            setMox(false);
+        }
+        break;
+    default:
+        // NONE, MANUAL, SPACE, X2: PollPTT has no case; no source releases.
+        break;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// clearPttSources: the radio is going away.
+//
+// Receiver and transmit gaps plan, Task 7. Thetis polls PTT only while the
+// radio is on: `while (chkPower.Checked)` (console.cs:25465 [v2.10.3.15]).
+// NereusSDR drops the recorded levels at disconnect instead: the TX channel
+// that reports VOX is destroyed and no status frame will report the mic, so
+// a level left set would key on the next connection's first pass.
+// ---------------------------------------------------------------------------
+void MoxController::clearPttSources()
+{
+    m_micPtt = false;
+    m_catPtt = false;
+    m_voxPtt = false;
+    m_tciPtt = false;
+    m_refusedHeld = 0;
+    m_notQueuedHeld = 0;
+}
+
+// ---------------------------------------------------------------------------
+// setTxInhibited: Thetis console.TXInhibit.
+//
+// Task 7 fix wave, I2. From Thetis console.cs:15341-15363 [v2.10.3.15]:
+//   public bool TXInhibit
+//   {
+//       get { return _tx_inhibit; }
+//       set
+//       {
+//           _tx_inhibit = value;
+//           ... chkMOX.Enabled = !_tx_inhibit;
+//           chkTUN.Enabled = !_tx_inhibit;
+//           chk2TONE.Enabled = !_tx_inhibit; //MW0LGE_21a
+//           chkVOX.Enabled = !_tx_inhibit;
+//           ...
+//           if (_tx_inhibit && chkMOX.Checked)
+//               chkMOX.Checked = false;
+//           toolStripStatusLabel_TXInhibit.Visible = _tx_inhibit;
+//       }
+//   }
+// PollPTT skips every source while it is set (console.cs:25470) and
+// setMox(true) refuses every other key. An active transmission unkeys
+// here; RadioModel turns TUN and two-tone off with it. The manual key is
+// left alone, as chkMOX.Checked = false (not chkMOX_Click) leaves
+// _manual_mox in Thetis.
+// ---------------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// transmitBlockReason: the words setMox(true) refuses with while one of the
+// three gates holds, the PA trip first, then receive only, then TX inhibit;
+// empty when none does. Task 16 fix wave (M2): RadioModel's TGXL autotune
+// checks it before it sends anything to the amplifier or the tuner, and the
+// Tuner applet's TUNE shows it (transmitBlockChanged).
+// ---------------------------------------------------------------------------
+QString MoxController::transmitBlockReason() const
+{
+    if (m_paTripped) {
+        return QStringLiteral("The amplifier has tripped. Reset it before transmitting.");
+    }
+    if (m_rxOnly) {
+        return m_rxOnlyReason;
+    }
+    if (m_txInhibited) {
+        return QStringLiteral("Transmit is inhibited.");
+    }
+    return QString();
+}
+
+void MoxController::emitTransmitBlockIfChanged(const QString& before)
+{
+    const QString after = transmitBlockReason();
+    if (after != before) {
+        emit transmitBlockChanged(after);
+    }
+}
+
+void MoxController::setTxInhibited(bool on)
+{
+    const QString before = transmitBlockReason();
+    m_txInhibited = on;
+    emitTransmitBlockIfChanged(before);
+    if (on) {
+        dropAppLevelsUnderBlock();
+    }
+    if (on && m_mox) {
+        setMox(false);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// dropAppLevelsUnderBlock: Task 7 follow-up, N3.
+//
+// Thetis keeps _cat_ptt and _tci_ptt through an inhibit or a PA trip, and
+// PollPTT keys from them on its first pass after the block lifts (for
+// example right after an amplifier reset), with the app's audio. NereusSDR
+// drops them when the block is asserted, and onCatPtt / onTciPtt refuse a
+// new request while it holds, so the app is answered trx:0,false and
+// nothing keys later without a new request. The mic and VOX keep Thetis's
+// behaviour: a person is holding them, and they key after the block lifts.
+// ---------------------------------------------------------------------------
+void MoxController::dropAppLevelsUnderBlock()
+{
+    m_catPtt = false;
+    m_tciPtt = false;
+    clearHeldBits(kRefusedCat | kRefusedTci);
+}
+
+// ---------------------------------------------------------------------------
+// setPaTripped: Thetis _ganymede_pa_issue.
+//
+// Task 7 fix wave, I2. PollPTT skips every source while it is set
+// (console.cs:25470 [v2.10.3.15]) and chkMOX_CheckedChanged2 aborts any key
+// (console.cs:29364-29371). RadioModel::handleGanymedeTrip carries the
+// trip handler that sets it and unkeys (Andromeda.cs, G8NJJ); an active
+// transmission unkeys here too, so the controller's own MOX follows it.
+// Called on every trip message, so a repeated trip unkeys again.
+// ---------------------------------------------------------------------------
+void MoxController::setPaTripped(bool on)
+{
+    const QString before = transmitBlockReason();
+    m_paTripped = on;
+    emitTransmitBlockIfChanged(before);
+    if (on) {
+        dropAppLevelsUnderBlock();   // Task 7 follow-up, N3
+    }
+    if (on && m_mox) {
+        setMox(false);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// setRxOnly: Thetis console.RXOnly (receiver and transmit gaps plan, Task 16).
+//
+// From Thetis console.cs:15312-15334 [v2.10.3.15]:
+//   public bool RXOnly
+//   {
+//       get { return _rx_only; }
+//       set
+//       {
+//           _rx_only = value;
+//           if (_rx1_dsp_mode != DSPMode.SPEC &&
+//               _rx1_dsp_mode != DSPMode.DRM &&
+//               chkPower.Checked)
+//               chkMOX.Enabled = !_rx_only;
+//           chkTUN.Enabled = !_rx_only;
+//           chk2TONE.Enabled = !_rx_only; // MW0LGE_21a
+//           chkVOX.Enabled = !_rx_only;
+//           if (_rx_only && chkMOX.Checked)
+//               chkMOX.Checked = false;
+//
+//           if (!IsSetupFormNull)
+//           {
+//               if (SetupForm.RXOnly != _rx_only)
+//                   SetupForm.RXOnly = _rx_only;
+//           }
+//       }
+//   }
+// The button enables are the window's (TxApplet, the container buttons,
+// RadioModel::receiveOnlyDisablesMoxButton); Setup follows
+// RadioModel::rxOnlyChanged. Here: the PollPTT gate (console.cs:25470),
+// the refusal of every other key (setMox, console.cs:29378), and the unkey.
+// CAT and TCI requests are dropped as under TX inhibit (Task 7 follow-up,
+// N3), so nothing keys later without a new request.
+// ---------------------------------------------------------------------------
+QString MoxController::defaultRxOnlyReason()
+{
+    return QStringLiteral("Receive Only is on, so this radio does not transmit. "
+                          "Turn it off under Setup > General > Options.");
+}
+
+void MoxController::setRxOnly(bool on, const QString& reason)
+{
+    const QString before = transmitBlockReason();
+    m_rxOnly = on;
+    m_rxOnlyReason = reason.isEmpty() ? defaultRxOnlyReason() : reason;
+    emitTransmitBlockIfChanged(before);
+    if (on) {
+        dropAppLevelsUnderBlock();
+    }
+    if (on && m_mox) {
+        setMox(false);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// onMoxButton: the MOX button.
+//
+// Receiver and transmit gaps plan, Task 7. From Thetis chkMOX_Click,
+// console.cs:29730-29747 [v2.10.3.15], which runs after the CheckedChanged
+// that keys or unkeys:
+//   if (chkMOX.Checked)			// because the CheckedChanged event fires first
+//   {
+//       _manual_mox = true;
+//       ... (CW firmware keyer PTT out: 3M-2)
+//   }
+//   else
+//   {
+//       _manual_mox = false;
+//       if (chkTUN.Checked)
+//           chkTUN.Checked = false;
+//       if (chk2TONE.Checked) //MW0LGE_21a
+//           chk2TONE.Checked = false;
+//   }
+// The manual key is set before setMox(true), as setTune does, so the walk's
+// subscribers and any source event during it see it; Thetis cannot poll
+// inside the synchronous CheckedChanged, so the order makes no difference
+// there. The TUN and two-tone part lives in RadioModel::setMoxFromButton.
+// ---------------------------------------------------------------------------
+void MoxController::onMoxButton(bool on)
+{
+    if (on) {
+        m_manualKey = true;
+        setMox(true);
+        // A refused key leaves chkMOX unchecked, so chkMOX_Click takes its
+        // else branch: _manual_mox = false.
+        if (!m_mox) {
+            setManualKey(false);
+        }
+    } else {
+        setMox(false);
+        setManualKey(false);
+    }
+}
+
+// ---------------------------------------------------------------------------
+// setManualKey: Thetis console.ManualMox.
+//
+// From Thetis console.cs:10668-10672 [v2.10.3.15]:
+//   public bool ManualMox { get { return _manual_mox; } set { _manual_mox = value; } }
+// Clearing it runs one PollPTT pass, as Thetis's next poll would.
+// ---------------------------------------------------------------------------
+void MoxController::setManualKey(bool on)
+{
+    if (m_manualKey == on) {
+        return;
+    }
+    m_manualKey = on;
+    if (!on) {
+        pollPtt();
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -1150,29 +1791,19 @@ void MoxController::primeWdspState()
 //   path is present in Thetis network-level status decoding but not in the
 //   PollPTT loop directly.  NereusSDR pre-wires the slot for parity.
 //
-// DISPATCH PATTERN (5 accepted slots — verbatim for each):
-//   1. If (pressed): setPttMode(PttMode::Xxx)     — PttMode set BEFORE setMox
-//   2. setMox(pressed)                            — drives state machine
+// PollPTT SOURCES (mic, CAT, VOX, TCI; receiver and transmit gaps plan,
+// Task 7): each slot records its level and runs pollPtt(), one pass of
+// Thetis PollPTT. See pollPtt() for the rules and what is not ported, and
+// dropPttOnUnkey() for the unkey (setMox(false) clears the PTT mode itself;
+// the RadioModel hardwareFlipped(false) subscriber the H.4 note named never
+// existed).
 //
-//   PttMode is set before setMox(true) so that phase-signal subscribers
-//   see a consistent m_pttMode snapshot when their hardwareFlipped / txAboutToBegin
-//   slots fire.  Matches setTune() ordering (MoxController.cpp, setTune body)
-//   and the Thetis PollPTT dispatch where _current_ptt_mode is assigned
-//   immediately before chkMOX.Checked = true.
+// SPACE and X2 keep the H.4 pattern: set the mode on press, then
+// setMox(pressed).
 //
-//   setMox(false) does NOT clear m_pttMode here.  Clearing is the
-//   responsibility of the RadioModel hardwareFlipped(false) subscriber (F.1
-//   contract), symmetric with setTune(false) at MoxController.cpp:329.
-//
-// REJECTION PATTERN (2 rejected slots):
-//   qCWarning(lcDsp) << "... rejected — deferred to 3M-2/3J";
+// REJECTION PATTERN (CW):
+//   qCWarning(lcDsp) << "... rejected, deferred to 3M-2";
 //   return;  — no setMox(), no setPttMode() update
-//   (qCWarning-and-return shape; formerly modeled on the
-//   setAntiVoxSourceVax(true) rejection from H.3, removed in 3M-3a-iv.)
-//
-// CROSS-SOURCE SWITCHING SEMANTIC: last-setter-wins.  The slots do not
-// refcount or arbitrate — callers (PollPTT equivalent in NereusSDR) are
-// responsible for arbitration before invoking these slots.
 // ===========================================================================
 
 // ---------------------------------------------------------------------------
@@ -1183,31 +1814,22 @@ void MoxController::primeWdspState()
 //   _current_ptt_mode = PTTMode.MIC;  console.cs:25492 [v2.10.3.13]
 //   chkMOX.Checked = true;            console.cs:25494 [v2.10.3.13]
 //
-// H.5 will extract mic_ptt from the P1/P2 status frame and call this slot.
-// Wiring deferred to H.5; this slot establishes the API.
+// RadioConnection::micPttFromRadio calls this on every P1/P2 status frame.
 // ---------------------------------------------------------------------------
 void MoxController::onMicPttFromRadio(bool pressed)
 {
-    if (pressed) {
-        // Mic PTT pressed: claim MOX, set PttMode::Mic.
-        // From Thetis console.cs:25492-25494 [v2.10.3.13]:
-        //   _current_ptt_mode = PTTMode.MIC; chkMOX.Checked = true;
-        // PttMode set BEFORE setMox(true) per the dispatch pattern.
-        setPttMode(PttMode::Mic);
-        setMox(true);
-    } else {
-        // Mic PTT released: only drop MOX if THIS source engaged it.
-        // RadioConnection::micPttFromRadio fires unconditionally on every
-        // P1/P2 status frame (~50–100 Hz); without this source-arbitration
-        // guard the constant mic_ptt=0 stream from a radio whose mic
-        // isn't pressed would un-key MOX whenever the user clicked the
-        // MOX button (PttMode::Manual) or TUN, or any other PTT source
-        // had engaged transmit. Only the source that owns the current
-        // MOX may release it.
-        if (m_pttMode == PttMode::Mic) {
-            setMox(false);
-        }
+    // From Thetis console.cs:25472 [v2.10.3.15]:
+    //   bool mic_ptt = (dotdashptt & 0x01) != 0; // PTT from radio
+    // (the next line, cw_ptt, carries: //[2.10.3.9]MW0LGE only want to do this on semi breakin  [original inline comment from console.cs:25473])
+    // The level is recorded and one PollPTT pass decides: a press keys with
+    // PTTMode.MIC from receive (console.cs:25526-25541), a release unkeys
+    // only in PTTMode.MIC (console.cs:25589-25595), and neither does
+    // anything during a manual key. Receiver and transmit gaps plan, Task 7.
+    m_micPtt = pressed;
+    if (!pressed) {
+        clearHeldBits(kRefusedMic);   // M3 and R-R3-36: a new press
     }
+    pollPtt();
 }
 
 // ---------------------------------------------------------------------------
@@ -1222,14 +1844,29 @@ void MoxController::onMicPttFromRadio(bool pressed)
 // ---------------------------------------------------------------------------
 void MoxController::onCatPtt(bool pressed)
 {
-    // From Thetis console.cs:25469 [v2.10.3.13]: _current_ptt_mode = PTTMode.CAT;
-    // Upstream tags preserved: //MW0LGE (from cited console.cs:25473) [v2.10.3.15]
-    if (pressed) {
-        setPttMode(PttMode::Cat);
+    // From Thetis console.cs:25476-25477 [v2.10.3.15]:
+    // (nearby: //[2.10.3.9]MW0LGE only want to do this on semi breakin  [original inline comment from console.cs:25473];
+    //  //[2.10.3.6]MWLGE fixes #518  [original inline comment from console.cs:25481])
+    //   bool cat_ptt = (_ptt_bit_bang_enabled && serialPTT != null && serialPTT.isPTT()) | // CAT serial PTT
+    //                  (!_ptt_bit_bang_enabled && CWInput.CATPTT) | _cat_ptt;
+    // Keys with PTTMode.CAT from receive (console.cs:25513-25517); a release
+    // unkeys only in PTTMode.CAT (console.cs:25582-25588).
+    // Task 7 follow-up, N3: refused, not kept, while TX inhibit or a PA
+    // trip holds (see dropAppLevelsUnderBlock). Silent, as PollPTT's gate
+    // is for every source.
+    if (pressed && transmitBlocked()) {   // Task 16: and receive only
+        qCInfo(lcDsp) << "MoxController: CAT PTT refused while transmit is blocked";
+        return;
     }
-    // From Thetis console.cs:25471 [v2.10.3.13]: chkMOX.Checked = true;
-    // Upstream tags preserved: //MW0LGE (from cited console.cs:25473) [v2.10.3.15]
-    setMox(pressed);
+    // Task 7 follow-up, N2: a rising edge is a new press too. A refusal
+    // drops the CAT level (dropPttOnUnkey) and then marks it refused, so a
+    // second request with no release between would otherwise be refused
+    // without telling the operator.
+    if (!pressed || !m_catPtt) {
+        clearHeldBits(kRefusedCat);   // M3 and R-R3-36: a new press
+    }
+    m_catPtt = pressed;
+    pollPtt();
 }
 
 // ---------------------------------------------------------------------------
@@ -1240,17 +1877,22 @@ void MoxController::onCatPtt(bool pressed)
 //   _current_ptt_mode = PTTMode.VOX;  console.cs:25507 [v2.10.3.13]
 //   chkMOX.Checked = true;            console.cs:25508 [v2.10.3.13]
 //
-// In NereusSDR, the VOX active event is driven by WDSP DEXP detection
-// polling (TxChannel TX-meter readback).  Wiring deferred to 3M-3a.
+// TxChannel::voxActiveChanged (the DEXP pushvox callback) calls this.
 // ---------------------------------------------------------------------------
 void MoxController::onVoxActive(bool active)
 {
-    // From Thetis console.cs:25507 [v2.10.3.13]: _current_ptt_mode = PTTMode.VOX;
-    if (active) {
-        setPttMode(PttMode::Vox);
+    // From Thetis console.cs:25475 [v2.10.3.15]:
+    //   bool vox_ptt = vox_ok && Audio.VOXActive;
+    // (cw_ptt, two lines above it, carries: //[2.10.3.9]MW0LGE only want to do this on semi breakin  [original inline comment from console.cs:25473])
+    // Keys with PTTMode.VOX from receive in the voice modes
+    // (console.cs:25543-25555); a release unkeys only in PTTMode.VOX
+    // (console.cs:25603-25608). vox_ok (mic mute / VAC bypass) is not
+    // ported: VAX is not VAC.
+    m_voxPtt = active;
+    if (!active) {
+        clearHeldBits(kRefusedVox);   // M3 and R-R3-36: a new press
     }
-    // From Thetis console.cs:25508 [v2.10.3.13]: chkMOX.Checked = true;
-    setMox(active);
+    pollPtt();
 }
 
 // ---------------------------------------------------------------------------
@@ -1316,23 +1958,32 @@ void MoxController::onCwPtt(bool /*pressed*/)
 }
 
 // ---------------------------------------------------------------------------
-// onTciPtt — TCI (transceiver control interface) PTT — REJECTED (deferred to 3J).
+// onTciPtt: TCI trx, the console side of Thetis TCIPTT.
 //
-// Porting from Thetis Project Files/Source/Console/console.cs [v2.10.3.13]:
-//   PollPTT: if (_tci_ptt) _current_ptt_mode = PTTMode.TCI;
-//   From Thetis console.cs:25463 [v2.10.3.13]
-//
-// 3J will implement the TCI server.  This slot rejects the call to prevent
-// accidental TCI MOX assertion before the full TCI infrastructure is ready.
-// Rejection follows the qCWarning-and-return shape (formerly modeled on
-// setAntiVoxSourceVax(true) from H.3, removed in 3M-3a-iv).
+// From Thetis console.cs:2456-2466 [v2.10.3.15] (TCIPTT setter):
+//   _tci_ptt = value && !_disable_ptt; // only use when we allow ptt control
+// PollPTT keys with PTTMode.TCI from receive (console.cs:25507-25511); a
+// release in PTTMode.TCI falls back to a still-held source or unkeys
+// (console.cs:25562-25581). _disable_ptt has no NereusSDR equivalent.
+// RadioModel::setMox, the shim TciProtocol invokes for trx, calls this.
 // ---------------------------------------------------------------------------
-void MoxController::onTciPtt(bool /*pressed*/)
+void MoxController::onTciPtt(bool pressed)
 {
-    qCWarning(lcDsp) << "MoxController::onTciPtt rejected —"
-                        " TCI PTT is deferred to 3J."
-                        " No MOX state change.";
-    return;
+    // Task 7 follow-up, N3: refused, not kept, while TX inhibit or a PA
+    // trip holds (see dropAppLevelsUnderBlock); the app is answered
+    // trx:N,false.
+    if (pressed && transmitBlocked()) {   // Task 16: and receive only
+        qCInfo(lcDsp) << "MoxController: TCI PTT refused while transmit is blocked";
+        return;
+    }
+    // Task 7 follow-up, N2: a rising edge is a new press too (see
+    // onCatPtt): an app's second trx:N,true after a refusal is told again.
+    if (!pressed || !m_tciPtt) {
+        clearHeldBits(kRefusedTci);   // M3 and R-R3-36: a new press
+    }
+    m_tciPtt = pressed;
+    pollPtt();
 }
 
 } // namespace NereusSDR
+

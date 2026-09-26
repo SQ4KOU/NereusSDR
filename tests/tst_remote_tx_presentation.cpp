@@ -37,6 +37,7 @@
 #include "models/TransmitModel.h"
 #include "fakes/LoopbackTransport.h"
 #include "fakes/MainWindowTestSettings.h"
+#include "fakes/UpgradedCoreToken.h"
 
 using namespace NereusSDR;
 
@@ -193,7 +194,7 @@ private slots:
         SliceModel* stationSlice = station.sliceById(id);
         QVERIFY(stationSlice);
         stationSlice->setXitHz(230);
-        StationServer server(&station, stationSettings, directory.path());
+        StationServer server(&station, stationSettings, NereusSDR::Test::seedUpgradedCoreToken(directory.path()));
         SettingsProxy proxy;
         BackendScope backend(&proxy);
         MainWindow window({QStringLiteral("ws://127.0.0.1:1"), {}, {}, true}, nullptr,

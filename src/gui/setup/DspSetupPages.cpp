@@ -28,6 +28,10 @@
 //                 squelch maximum tail, the FM receive deviation and
 //                 de-emphasis. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-24 - iPhone app follow-up (R-IOS-06): the AM and FM squelch
+//                 threshold ranges come from ControlRanges.h, which the
+//                 Core's catalogue reads too. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 //   2026-09-25 - R-R3-49 (parity Task 4): AGC/ALC's TX Leveler and TX ALC
 //                 groups and every CFC page setting follow the transmit
 //                 settings gate at version 4 (the Core mirrors them)
@@ -84,6 +88,7 @@
 
 #include "core/AppSettings.h"
 #include "core/BoardCapabilities.h"
+#include "core/ControlRanges.h"
 #include "core/RadioConnection.h"
 #include "core/RxChannel.h"
 #include "core/WdspEngine.h"
@@ -2031,7 +2036,8 @@ AmSamSetupPage::AmSamSetupPage(RadioModel* model, QWidget* parent)
     // amsqThresh, dB, sent to WDSP SetRXAAMSQThreshold by RadioModel).
     auto* sqThresh = new QSlider(Qt::Horizontal);
     sqThresh->setObjectName(QStringLiteral("amSquelchThresholdSlider"));
-    sqThresh->setRange(-160, 0);
+    sqThresh->setRange(ControlRanges::kAmsqThreshMinDb, ControlRanges::kAmsqThreshMaxDb);
+    sqThresh->setSingleStep(ControlRanges::kAmsqThreshStepDb);
     auto* sqThreshValue = new QLabel;
     addLabeledSlider(sqLay, "AM Squelch Threshold", sqThresh, sqThreshValue);
     bindSquelchThreshold(this, model, sqThresh, sqThreshValue,
@@ -2075,7 +2081,8 @@ FmSetupPage::FmSetupPage(RadioModel* model, QWidget* parent)
     // fmsqThresh, dB; RxChannel::setFmsqThresh converts it for WDSP).
     auto* squelchThresh = new QSlider(Qt::Horizontal);
     squelchThresh->setObjectName(QStringLiteral("fmSquelchThresholdSlider"));
-    squelchThresh->setRange(-160, 0);
+    squelchThresh->setRange(ControlRanges::kFmsqThreshMinDb, ControlRanges::kFmsqThreshMaxDb);
+    squelchThresh->setSingleStep(ControlRanges::kFmsqThreshStepDb);
     auto* squelchThreshValue = new QLabel;
     addLabeledSlider(rxLay, "Squelch Threshold", squelchThresh, squelchThreshValue);
     bindSquelchThreshold(this, model, squelchThresh,

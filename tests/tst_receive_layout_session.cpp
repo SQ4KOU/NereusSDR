@@ -23,6 +23,7 @@
 #include "models/RadioModel.h"
 #include "models/SliceModel.h"
 #include "fakes/LoopbackTransport.h"
+#include "fakes/UpgradedCoreToken.h"
 
 using namespace NereusSDR;
 using NereusSDR::Test::LoopbackTransport;
@@ -202,7 +203,7 @@ private slots:
                  qPrintable(error));
         QVERIFY2(settings.save(&error), qPrintable(error));
 
-        StationServer server(&core, settings, securityDirectory.path());
+        StationServer server(&core, settings, NereusSDR::Test::seedUpgradedCoreToken(securityDirectory.path()));
         server.setMediaEnabled(true);
 
         RadioModel remote(RadioModel::Role::Remote);
@@ -311,7 +312,7 @@ private slots:
                  qPrintable(error));
         QVERIFY2(settings.save(&error), qPrintable(error));
 
-        StationServer server(&core, settings, securityDirectory.path());
+        StationServer server(&core, settings, NereusSDR::Test::seedUpgradedCoreToken(securityDirectory.path()));
         RadioModel remote(RadioModel::Role::Remote);
         SettingsProxy proxy;
         StationClient client(&remote, &proxy);
@@ -357,7 +358,7 @@ private slots:
 
         RadioModel core;
         core.prepareReceiveLayout(kMac);
-        StationServer server(&core, AppSettings::instance(), securityDirectory.path());
+        StationServer server(&core, AppSettings::instance(), NereusSDR::Test::seedUpgradedCoreToken(securityDirectory.path()));
         RadioModel remote(RadioModel::Role::Remote);
         SettingsProxy proxy;
         StationClient client(&remote, &proxy);

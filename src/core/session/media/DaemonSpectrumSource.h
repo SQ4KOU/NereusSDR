@@ -114,6 +114,11 @@ public:
     /// or one whose engine has not yet taken its configuration.
     bool publishFrameForTest(const MediaSourceKey& key, qint64 producedAtNs,
                              float binLinear = 1.0e-6f);
+    /// As above with the engine's bins given: `binsLinear` holds one power
+    /// per bin, exactly the source's FFT size (false otherwise), so a test
+    /// can drive a shaped spectrum on a clock of its own.
+    bool publishFrameForTest(const MediaSourceKey& key, qint64 producedAtNs,
+                             const QVector<float>& binsLinear);
 
 signals:
     /// At most one queued notification per active source exists at a time.

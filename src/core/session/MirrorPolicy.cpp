@@ -42,6 +42,16 @@
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-24 - R-R3-49 fix wave: RadioModel transmitting Outbound. J.J.
 //                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - iPhone app Task 13 (R-IOS-08): StationDevicesFacade, all
+//                 Outbound. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
+//   2026-09-24 - iPhone app Task 14 (R-IOS-08): StationDevicesFacade's
+//                 pairingWindowOpen and pairingCode, Outbound. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app Task 71 (R-IOS-02): ConnectedDevicesFacade,
+//                 all Outbound. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-09-24 - iPhone app Task 19 (R-IOS-06): StationCatalog, all
 //   2026-09-24 - R-R3-49 (parity Task 2): the TX and Phone/CW applets'
 //                 thirteen TransmitModel settings Bidirectional;
 //                 tunePowerForTxBand and tuneDrivePowerSource Outbound.
@@ -61,6 +71,8 @@
 //   2026-09-25 - R-R3-49 (parity Task 6): RadioModel txInhibited
 //                 Outbound. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-25 - iPhone app Task 73 (R-IOS-02): SliceMarker, all Outbound.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-25 - R-R3-49 (parity Task 10): AccessoryDataModel's five
 //                 rfkit* connection counts Outbound. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
@@ -676,6 +688,54 @@ const MirrorPolicy::Entry kEntries[] = {
     { "AccessorySettingsModel", "tgxlAnswerAccepted", MirrorDirection::Outbound },
     { "AccessorySettingsModel", "tgxlAnswerCount", MirrorDirection::Outbound },
 
+    // iPhone app Task 13 (R-IOS-08, deviceAdminVersion 1): the Core's paired
+    // devices, label, claim, token and key backup, read-only. A device
+    // changes them only through devices.revoke, station.rename,
+    // station.acknowledgeKeyBackup and station.retireToken.
+    { "StationDevicesFacade", "listJson", MirrorDirection::Outbound },
+    { "StationDevicesFacade", "revision", MirrorDirection::Outbound },
+    { "StationDevicesFacade", "stationLabel", MirrorDirection::Outbound },
+    { "StationDevicesFacade", "claimed", MirrorDirection::Outbound },
+    { "StationDevicesFacade", "tokenActive", MirrorDirection::Outbound },
+    { "StationDevicesFacade", "keyBackupAcknowledged", MirrorDirection::Outbound },
+    { "StationDevicesFacade", "keyPath", MirrorDirection::Outbound },
+    // iPhone app Task 14 (R-IOS-08, pairingVersion 1): the pairing window,
+    // changed only through pairing.open and pairing.close. The code reaches
+    // only a connection signed in with a paired device's key
+    // (StationServer::sendToSession).
+    { "StationDevicesFacade", "pairingWindowOpen", MirrorDirection::Outbound },
+    { "StationDevicesFacade", "pairingCode", MirrorDirection::Outbound },
+
+    // iPhone app Task 19 (R-IOS-06, stationCatalogVersion 1): the values the
+    // Core owns and an app draws its controls from, read-only. They change
+    // only with the Core's presets, band plans and radio.
+    { "StationCatalog", "json", MirrorDirection::Outbound },
+    { "StationCatalog", "revision", MirrorDirection::Outbound },
+
+    // iPhone app Task 71 (R-IOS-02, sessionHolderVersion 1): who is on the
+    // Core, read-only. It changes only as devices come, go, go away and act.
+    { "ConnectedDevicesFacade", "listJson", MirrorDirection::Outbound },
+    { "ConnectedDevicesFacade", "revision", MirrorDirection::Outbound },
+    { "ConnectedDevicesFacade", "deviceLimit", MirrorDirection::Outbound },
+
+    // iPhone app Task 73 (R-IOS-02, sessionHolderVersion 1): another device's
+    // slice, read-only (ruling 5.4). Only its owner changes the slice; a
+    // write to a marker is refused with the owner named (ruling 5.9).
+    { "SliceMarker", "sliceId", MirrorDirection::ConstantSnapshot },
+    { "SliceMarker", "ownerDeviceId", MirrorDirection::Outbound },
+    { "SliceMarker", "ownerName", MirrorDirection::Outbound },
+    { "SliceMarker", "ownerShortName", MirrorDirection::Outbound },
+    { "SliceMarker", "ownerKind", MirrorDirection::Outbound },
+    { "SliceMarker", "ownerAway", MirrorDirection::Outbound },
+    { "SliceMarker", "frequency", MirrorDirection::Outbound },
+    { "SliceMarker", "dspMode", MirrorDirection::Outbound },
+    { "SliceMarker", "filterLow", MirrorDirection::Outbound },
+    { "SliceMarker", "filterHigh", MirrorDirection::Outbound },
+    { "SliceMarker", "txSlice", MirrorDirection::Outbound },
+    { "SliceMarker", "band", MirrorDirection::Outbound },
+    { "SliceMarker", "streamIndex", MirrorDirection::Outbound },
+    { "SliceMarker", "psPaused", MirrorDirection::Outbound },
+
     // Normal PS3 configuration is distinct from operational arming/actions.
     { "PureSignalSettings", "autoCalEnabled", MirrorDirection::Bidirectional },
     { "PureSignalSettings", "runCalibrationProcessing", MirrorDirection::Bidirectional },
@@ -688,7 +748,7 @@ const MirrorPolicy::Entry kEntries[] = {
     { "PureSignalSettings", "hardwarePeakOverride", MirrorDirection::Bidirectional },
     { "PureSignalSettings", "lastLoadError", MirrorDirection::Outbound },
 
-    // ---- RadioModel (20 entries) ----
+    // ---- RadioModel (24 entries) ----
     { "RadioModel", "settingsSaveError", MirrorDirection::Outbound },
     { "RadioModel", "receiveLayoutRestoreState", MirrorDirection::Outbound },
     { "RadioModel", "receiveLayoutRestoreMessage", MirrorDirection::Outbound },
@@ -704,6 +764,12 @@ const MirrorPolicy::Entry kEntries[] = {
     { "RadioModel", "rxFilter1Effective", MirrorDirection::Outbound },
     { "RadioModel", "rxFilter1Band", MirrorDirection::Outbound },
     { "RadioModel", "rxFilter1Reason", MirrorDirection::Outbound },
+    // Plan Task 14 fix wave (R-R3-49): the band-output byte the Core's
+    // connection composed, its band and the keyed state. Read-only: the
+    // windows' OC and HL2 I/O displays show these.
+    { "RadioModel", "bandOutputsByte", MirrorDirection::Outbound },
+    { "RadioModel", "bandOutputsBand", MirrorDirection::Outbound },
+    { "RadioModel", "bandOutputsKeyed", MirrorDirection::Outbound },
     // R-R3-47: the Core's RF-Kit switch. A window changes it with the
     // setRfKitEnabled command; a raw write is refused.
     { "RadioModel", "rfKitEnabled", MirrorDirection::Outbound },

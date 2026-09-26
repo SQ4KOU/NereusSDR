@@ -4,6 +4,12 @@
 // no-port-check: NereusSDR-original. See DaemonConfig.h for the on-disk
 // format and the design rationale. 2026-09-24: station_bind (R-R3-22 /
 // R-R3-47), J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+// 2026-09-24: iPhone app Task 12 (R-IOS-08): the listener defaults and
+// pairing_lan_click, J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+// Code.
+// 2026-09-24: iPhone app Task 17 (R-IOS-08): status_page, status_port and
+// state_directory, J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude
+// Code.
 // =================================================================
 
 #include "DaemonConfig.h"
@@ -11,6 +17,7 @@
 #include "core/AppSettings.h"
 #include "core/LogCategories.h"
 
+#include <QDir>
 #include <QFile>
 #include <QHostAddress>
 #include <QRegularExpression>
@@ -39,6 +46,8 @@ DaemonConfig DaemonConfig::fromFile(const QString& path, QString* errorOut)
     QTextStream in(&file);
     int lineNo = 0;
     QString olderStationBind; // station_tci_bind, read when station_bind is empty
+    bool sawRemotePort = false;
+    bool sawRemoteBind = false;
     while (!in.atEnd()) {
         ++lineNo;
         QString line = in.readLine();
@@ -94,14 +103,20 @@ DaemonConfig DaemonConfig::fromFile(const QString& path, QString* errorOut)
                                   << cfg.sliceCount << ":" << value;
             }
         } else if (key == QLatin1String("remote_port")) {
+            sawRemotePort = true;
             bool ok = false;
             const int v = value.toInt(&ok);
             if (ok) {
                 cfg.remotePort = v;
             } else {
+                // iPhone app Task 12: a remote_port line that is not a
+                // number leaves the listener off, as it did when off was
+                // the default, rather than falling back to listening on
+                // every interface because of a typo.
+                cfg.remotePort = kExplicitConfigRemotePort;
                 qCWarning(lcApp) << "nereusd.conf" << path << "line" << lineNo
-                                  << "remote_port is not a number, keeping"
-                                  << cfg.remotePort << ":" << value;
+                                  << "remote_port is not a number, the listener stays off:"
+                                  << value;
             }
         } else if (key == QLatin1String("audio_bitrate")) {
             bool ok = false;
@@ -150,7 +165,41 @@ DaemonConfig DaemonConfig::fromFile(const QString& path, QString* errorOut)
         } else if (key == QLatin1String("core_name")) {
             cfg.coreName = value;
         } else if (key == QLatin1String("remote_bind")) {
+            sawRemoteBind = true;
             cfg.remoteBind = value;
+        } else if (key == QLatin1String("pairing_lan_click")) {
+            if (value.compare(QLatin1String("allow"), Qt::CaseInsensitive) == 0) {
+                cfg.pairingLanClickAllowed = true;
+            } else if (value.compare(QLatin1String("deny"), Qt::CaseInsensitive) == 0) {
+                cfg.pairingLanClickAllowed = false;
+            } else {
+                cfg.pairingLanClickAllowed = true;
+                qCWarning(lcApp) << "nereusd.conf" << path << "line" << lineNo
+                                  << "pairing_lan_click must be allow or deny, keeping allow:"
+                                  << value;
+            }
+        } else if (key == QLatin1String("status_page")) {
+            if (value.compare(QLatin1String("on"), Qt::CaseInsensitive) == 0) {
+                cfg.statusPage = true;
+            } else if (value.compare(QLatin1String("off"), Qt::CaseInsensitive) == 0) {
+                cfg.statusPage = false;
+            } else {
+                cfg.statusPage = true;
+                qCWarning(lcApp) << "nereusd.conf" << path << "line" << lineNo
+                                  << "status_page must be on or off, keeping on:" << value;
+            }
+        } else if (key == QLatin1String("status_port")) {
+            bool ok = false;
+            const int v = value.toInt(&ok);
+            if (ok) {
+                cfg.statusPort = v;
+            } else {
+                qCWarning(lcApp) << "nereusd.conf" << path << "line" << lineNo
+                                  << "status_port is not a number, keeping"
+                                  << cfg.statusPort << ":" << value;
+            }
+        } else if (key == QLatin1String("state_directory")) {
+            cfg.stateDirectory = value;
         } else if (key == QLatin1String("station_bind")) {
             cfg.stationBind = value;
         } else if (key == QLatin1String("station_tci_bind")) {
@@ -174,6 +223,18 @@ DaemonConfig DaemonConfig::fromFile(const QString& path, QString* errorOut)
 
     if (cfg.stationBind.isEmpty() && !olderStationBind.isEmpty()) {
         cfg.stationBind = olderStationBind;
+    }
+
+    // iPhone app Task 12: a file that sets either listener key keeps the
+    // meaning it had before the listener was on by default; the key it
+    // leaves out takes the earlier default (DaemonConfig.h).
+    if (sawRemotePort || sawRemoteBind) {
+        if (!sawRemotePort) {
+            cfg.remotePort = kExplicitConfigRemotePort;
+        }
+        if (!sawRemoteBind) {
+            cfg.remoteBind = QString::fromLatin1(kExplicitConfigRemoteBind);
+        }
     }
 
     if (errorOut) {
@@ -204,6 +265,13 @@ bool DaemonConfig::validate(QString* errorOut) const
             *errorOut = QStringLiteral("display_application_bytes_per_second and "
                 "spectrum_sample_units_per_second must both be positive integers "
                 "no greater than 9007199254740991");
+        }
+        return false;
+    }
+    if (!remoteBind.isEmpty() && QHostAddress(remoteBind).isNull()) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("remote_bind must be empty or an IP address, got %1")
+                            .arg(remoteBind);
         }
         return false;
     }
@@ -244,6 +312,19 @@ bool DaemonConfig::validate(QString* errorOut) const
             *errorOut = QStringLiteral(
                             "remote_port must be 0 (disabled) or 1-65535, got %1")
                             .arg(remotePort);
+        }
+        return false;
+    }
+    if (statusPort < 1 || statusPort > 65535) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("status_port must be 1-65535, got %1").arg(statusPort);
+        }
+        return false;
+    }
+    if (!stateDirectory.isEmpty() && !QDir::isAbsolutePath(stateDirectory)) {
+        if (errorOut) {
+            *errorOut = QStringLiteral("state_directory must be empty or an absolute path, got %1")
+                            .arg(stateDirectory);
         }
         return false;
     }

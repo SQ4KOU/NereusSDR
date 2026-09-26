@@ -64,8 +64,14 @@
 //                 Setup > Appearance > Meter Styles follows a right-click
 //                 change while it is open.
 //                 NereusSDR-native; no upstream equivalent.
+//   2026-09-24  The S-unit reference moved to core/ControlRanges.h (iPhone
+//                 app Task 19, R-IOS-06) by J.J. Boyd (KG4VCF), with
+//                 AI-assisted transformation via Anthropic Claude Code; the
+//                 Core's catalogue sends the same scale to an app.
 // =================================================================
 #pragma once
+
+#include "core/ControlRanges.h"
 
 #include <QWidget>
 #include <QPixmap>
@@ -350,12 +356,13 @@ private:
     // updatePeakHoldValue(). Always 0 in production; testAdvanceTime() sets it.
     qint64         m_testTimeOffsetMs{0};
 
-    // S-unit reference: S0 = -127 dBm, each S-unit = 6 dB
-    // From AetherSDR src/gui/SMeterWidget.h:114-117 [@0cd4559]
-    static constexpr float S0_DBM  = -127.0f;
-    static constexpr float S9_DBM  = -73.0f;
-    static constexpr float MAX_DBM = -13.0f;  // S9+60
-    static constexpr float DB_PER_S = 6.0f;
+    // S-unit reference: S0 = -127 dBm, each S-unit = 6 dB. The values (with
+    // their AetherSDR cite, src/gui/SMeterWidget.h:114-117 [@0cd4559]) live
+    // in core/ControlRanges.h, which the Core's catalogue reads too.
+    static constexpr float S0_DBM  = ControlRanges::kSMeterS0Dbm;
+    static constexpr float S9_DBM  = ControlRanges::kSMeterS9Dbm;
+    static constexpr float MAX_DBM = ControlRanges::kSMeterMaxDbm;  // S9+60
+    static constexpr float DB_PER_S = ControlRanges::kSMeterDbPerSUnit;
 
     // At or below this level, or not finite, the widget has no reading.
     // -400 dBm is the value MeterPoller feeds when Max Bin has nothing to

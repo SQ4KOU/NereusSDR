@@ -29,6 +29,10 @@
 // Modification history (NereusSDR):
 //   2026-09-25: created (R-R3-49, R-R3-46), by J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25: checkpoint carry: the window signs in to an upgraded Core
+//               with its token (seedUpgradedCoreToken), as Part C's
+//               paired-device sign-in requires. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 
 #include <QtTest/QtTest>
 
@@ -68,6 +72,7 @@
 #include "models/RadioModel.h"
 
 #include "fakes/LoopbackTransport.h"
+#include "fakes/UpgradedCoreToken.h"
 #include "fakes/RemoteWindowHarness.h"
 
 using namespace NereusSDR;
@@ -365,7 +370,8 @@ private slots:
             core.setStepAttController(nullptr);
             delete coreRadio;
         });
-        StationServer server(&core, serverSettings, m_securityDir.path());
+        StationServer server(&core, serverSettings,
+                             NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
         RadioModel window(RadioModel::Role::Remote);
         SettingsProxy proxy;
         StationClient client(&window, &proxy);

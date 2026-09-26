@@ -31,8 +31,30 @@
 //   2026-09-24 - R-R3-47 / R-R3-22: remoteTgxlControlVersion, last in the
 //                minor-11 block. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-24 - iPhone app Task 12 (R-IOS-08): stationIdentityVersion,
+//                last in the minor-11 block. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - iPhone app Task 13 (R-IOS-08): deviceAdminVersion, last
+//                in the minor-11 block. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-24 - iPhone app Task 14 (R-IOS-08): pairingVersion, last in
+//                the minor-11 block. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-24 - iPhone app Task 19 (R-IOS-06): stationCatalogVersion,
+//                last in the minor-11 block. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
+//   2026-09-24 - iPhone app Task 20 (R-IOS-27): displayExtrasVersion,
+//                last in the minor-11 block. J.J. Boyd (KG4VCF), AI-assisted
+//                via Anthropic Claude Code.
 //   2026-09-24 - R-R3-49 (parity Task 1): transmitSettingsVersion, last
 //                in the minor-11 block. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
+//   2026-09-25: iPhone app Task 71 (R-IOS-02): sessionHolderVersion,
+//               last in the minor-11 block, for a peer that declared
+//               sessionHolder. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
+//   2026-09-25 - R-IOS-27, R-IOS-06: bandSelectVersion, last in the
+//                minor-11 block. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
 // =================================================================
 
@@ -132,9 +154,26 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         updates.append(intEntry("accessoryDataVersion", accessoryDataVersion));
         // R-R3-47 / R-R3-22: the Tuner Genius's own settings.
         updates.append(intEntry("remoteTgxlControlVersion", remoteTgxlControlVersion));
+        // iPhone app Task 12: device sign-in by key, last.
+        updates.append(intEntry("stationIdentityVersion", stationIdentityVersion));
+        // iPhone app Task 13: the devices object and its verbs.
+        updates.append(intEntry("deviceAdminVersion", deviceAdminVersion));
+        // iPhone app Task 14: pairing, the pairing window and its verbs.
+        updates.append(intEntry("pairingVersion", pairingVersion));
+        // iPhone app Task 19: the catalogue.
+        updates.append(intEntry("stationCatalogVersion", stationCatalogVersion));
+        // iPhone app Task 20: display extras.
+        updates.append(intEntry("displayExtrasVersion", displayExtrasVersion));
         // R-R3-49 (parity Task 1): the transmit settings a receive-only
-        // Core takes while the radio is off the air, last.
+        // Core takes while the radio is off the air.
         updates.append(intEntry("transmitSettingsVersion", transmitSettingsVersion));
+        // R-IOS-27, R-IOS-06: slice.selectBand.
+        updates.append(intEntry("bandSelectVersion", bandSelectVersion));
+        // iPhone app Task 71: several devices at once, last, and only for
+        // a peer that declared the feature.
+        if (sessionHolderEntry) {
+            updates.append(intEntry("sessionHolderVersion", sessionHolderVersion));
+        }
     }
     return updates;
 }
@@ -317,7 +356,14 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "stationTciVersion"
                    || u.name == "accessoryDataVersion"
                    || u.name == "remoteTgxlControlVersion"
-                   || u.name == "transmitSettingsVersion") {
+                   || u.name == "stationIdentityVersion"
+                   || u.name == "deviceAdminVersion"
+                   || u.name == "pairingVersion"
+                   || u.name == "stationCatalogVersion"
+                   || u.name == "displayExtrasVersion"
+                   || u.name == "transmitSettingsVersion"
+                   || u.name == "bandSelectVersion"
+                   || u.name == "sessionHolderVersion") {
             // R-R3-47 / R-R3-22 / R-R3-48: sent in the same block as the
             // four above.
             caps.radioIdentityEntries = true;
@@ -332,10 +378,25 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                     caps.stationTciVersion = version;
                 } else if (u.name == "accessoryDataVersion") {
                     caps.accessoryDataVersion = version;
+                } else if (u.name == "stationIdentityVersion") {
+                    caps.stationIdentityVersion = version;
+                } else if (u.name == "deviceAdminVersion") {
+                    caps.deviceAdminVersion = version;
+                } else if (u.name == "pairingVersion") {
+                    caps.pairingVersion = version;
+                } else if (u.name == "stationCatalogVersion") {
+                    caps.stationCatalogVersion = version;
+                } else if (u.name == "displayExtrasVersion") {
+                    caps.displayExtrasVersion = version;
+                } else if (u.name == "sessionHolderVersion") {
+                    caps.sessionHolderEntry = true;
+                    caps.sessionHolderVersion = version;
                 } else if (u.name == "remoteTgxlControlVersion") {
                     caps.remoteTgxlControlVersion = version;
-                } else {
+                } else if (u.name == "transmitSettingsVersion") {
                     caps.transmitSettingsVersion = version;
+                } else {
+                    caps.bandSelectVersion = version;
                 }
             }
         } else if (u.name == "settingsSchemaVersion") {

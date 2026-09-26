@@ -17,6 +17,10 @@ For one library it:
      byte for byte. Comments NereusSDR wrote (modification histories, port
      notes, NereusSDR-original file headers: any comment naming NereusSDR
      or KG4VCF) are left out, so the file holds upstream notices only;
+     For a library whose preset asks for it (libsodium), a comment that
+     dedicates its code to the public domain or waives copyright (a
+     "Public domain." line, a CC0 dedication or waiver) is a notice block
+     too, the whole comment, though it holds no copyright line;
   3. drops blocks the library's licence text already carries: every
      copyright line in the block appears in the text, and the rest of the
      block is either in the text or holds no licence terms;
@@ -32,12 +36,17 @@ Usage:
 
 LIBRARY is one of the presets: fftw3, rade, opus, r8brain, rnnoise,
 libspecbleach, wdsp, and the fetched libraries portaudio, libdatachannel,
-libjuice, usrsctp, libsrtp, plog and nlohmann-json. rnnoise and
+libjuice, usrsctp, libsrtp, plog, nlohmann-json, libsodium and spake2-ee. rnnoise and
 libspecbleach read the FetchContent sources under --build-dir/_deps. The
-fetched libraries need --build-dir to be a built tree: they read its
-compile_commands.json for the files the build compiled and each file's
-include path (libjuice, usrsctp, libsrtp, plog and json are built from
-the copies under nereus_libdatachannel-src/deps/). opus needs
+fetched libraries up to nlohmann-json need --build-dir to be a configured
+tree for their sources only: the files surveyed are the ones any supported
+platform compiles, read from each library's own CMake lists, so the output
+does not depend on which platform's tree is given (libjuice, usrsctp,
+libsrtp, plog and json are built from the copies under
+nereus_libdatachannel-src/deps/). libsodium and spake2-ee need --build-dir
+to be a built tree: they read its compile_commands.json for the files the
+build compiled and each file's include path.
+opus needs
 --opus-source, an extracted Opus source tree at the pinned commit (a
 built tree has one at
 <build>/third_party/rade/build_opus-prefix/src/build_opus).
@@ -72,6 +81,11 @@ _COPYRIGHT_RE = re.compile(
 _LICENCE_MARKERS = ("redistribut", "permission", "warrant", "public license",
                     "licensed under", "spdx-license-identifier",
                     "free software")
+
+# A dedication instead of a copyright line: "Public domain.", a CC0 waiver or
+# dedication, "has waived all copyright". Read only for presets that ask for
+# it (SourceSet.dedications).
+_DEDICATION_RE = re.compile(r"(?i)\bpublic\s+domain\b|\bCC0\b|\bwaived\s+all\s+copyright\b")
 
 # A holder line continuing a copyright statement: "   2012-2017 Jean-Marc
 # Valin */" under a "Copyright (c) ..." line.
@@ -136,11 +150,14 @@ def is_nereussdr_comment(comment: str) -> bool:
     return "NereusSDR" in comment or "KG4VCF" in comment
 
 
-def extract_blocks(text: str) -> list[str]:
+def extract_blocks(text: str, dedications: bool = False) -> list[str]:
     """Every upstream notice block in a source file, byte for byte.
 
     Comments NereusSDR wrote are left out: a run of comments is cut at
-    each of them, and the pieces either side are read separately.
+    each of them, and the pieces either side are read separately. With
+    dedications, a block whose comment dedicates the code to the public
+    domain before its copyright line starts at the comment's start, so the
+    dedication is kept with it.
     """
     blocks: list[str] = []
     for group in _comment_groups(text):
@@ -158,7 +175,24 @@ def extract_blocks(text: str) -> list[str]:
             if not match:
                 continue
             line_start = comment.rfind("\n", 0, match.start()) + 1
+            if dedications and _DEDICATION_RE.search(comment[:line_start]):
+                line_start = 0
             blocks.append(comment[line_start:])
+    return blocks
+
+
+def extract_dedications(text: str) -> list[str]:
+    """Every upstream comment that dedicates its code to the public domain
+    or waives copyright but holds no copyright line (those are notice
+    blocks already), whole and byte for byte."""
+    blocks: list[str] = []
+    for group in _comment_groups(text):
+        for start, end in group:
+            comment = text[start:end]
+            if (is_nereussdr_comment(comment) or _COPYRIGHT_RE.search(comment)
+                    or not _DEDICATION_RE.search(comment)):
+                continue
+            blocks.append(comment)
     return blocks
 
 
@@ -269,6 +303,7 @@ class SourceSet:
     licence_files: list[str]   # names in packaging/third-party-licenses/
     extra: list[tuple[Path, str]] = field(default_factory=list)  # (file, label)
     regen: str = ""            # extra arguments the regeneration command needs
+    dedications: bool = False  # public-domain and CC0 comments are notices too
 
 
 def _rade(root: Path, _args: argparse.Namespace) -> SourceSet:
@@ -380,6 +415,226 @@ def _wdsp(root: Path, _args: argparse.Namespace) -> SourceSet:
                      files, ["wdsp.txt", "GPLv2.txt"])
 
 
+# ---------------------------------------------------------------------------
+# Fetched libraries: every source any supported platform compiles, read from
+# the library's own CMake lists, so every machine writes the same file.
+
+_CMAKE_IF_RE = re.compile(r"^\s*(if|elseif|else|endif)\s*\((.*)\)\s*$", re.IGNORECASE)
+
+
+def _cmake_lines(cmake_text: str) -> list[str]:
+    return [line.split("#", 1)[0] for line in cmake_text.splitlines()]
+
+
+def cmake_keep_branch(cmake_text: str, condition: str) -> str:
+    """The CMake text with each if/elseif/else chain that tests `condition`
+    reduced to that branch's body. Every other chain keeps all its branches,
+    so a list set on any platform is read. Comments are dropped."""
+    lines = _cmake_lines(cmake_text)
+
+    def parse(i: int, top: bool) -> tuple[list, int]:
+        nodes: list = []
+        while i < len(lines):
+            match = _CMAKE_IF_RE.match(lines[i])
+            keyword = match.group(1).lower() if match else ""
+            if keyword == "if":
+                branches = [(match.group(2).strip(), [])]
+                i += 1
+                while True:
+                    body, i = parse(i, False)
+                    branches[-1][1].extend(body)
+                    if i >= len(lines):
+                        break
+                    inner = _CMAKE_IF_RE.match(lines[i])
+                    kw = inner.group(1).lower()
+                    i += 1
+                    if kw == "endif":
+                        break
+                    branches.append((inner.group(2).strip() if kw == "elseif" else None, []))
+                nodes.append(branches)
+            elif keyword in ("elseif", "else", "endif") and not top:
+                return nodes, i
+            else:
+                nodes.append(lines[i])
+                i += 1
+        return nodes, i
+
+    def render(nodes: list) -> list[str]:
+        out: list[str] = []
+        for node in nodes:
+            if isinstance(node, str):
+                out.append(node)
+                continue
+            chosen = [body for cond, body in node if cond == condition]
+            for body in (chosen or [body for _cond, body in node]):
+                out.extend(render(body))
+        return out
+
+    nodes, _ = parse(0, True)
+    return "\n".join(render(nodes))
+
+
+def cmake_values(cmake_text: str, variable: str) -> list[str]:
+    """Words given to `variable` by every set(VARIABLE ...) and
+    list(APPEND VARIABLE ...) in the text, in order, commands matched in
+    any case. References to other variables are left out."""
+    body = "\n".join(_cmake_lines(cmake_text))
+    pattern = re.compile(
+        rf"\b(?:set\s*\(\s*|list\s*\(\s*APPEND\s+){re.escape(variable)}\b([^)]*)\)",
+        re.IGNORECASE)
+    words: list[str] = []
+    for match in pattern.finditer(body):
+        words.extend(w for w in match.group(1).split() if not w.startswith("${") or
+                     w.startswith("${CMAKE_CURRENT_SOURCE_DIR}/"))
+    return words
+
+
+def cmake_sources(cmake_file: Path, variables: list[str], keep: str | None = None
+                  ) -> list[Path]:
+    """The C/C++ files the named lists of a CMake file compile, relative to
+    that file's directory. keep names the option branch this build takes
+    (cmake_keep_branch); without it every branch is read."""
+    text = read_source(cmake_file)
+    if keep is not None:
+        text = cmake_keep_branch(text, keep)
+    base = cmake_file.parent
+    files: list[Path] = []
+    for variable in variables:
+        values = cmake_values(text, variable)
+        if not values:
+            raise SystemExit(f"{variable} not found in {cmake_file}")
+        for word in values:
+            word = word.replace("${CMAKE_CURRENT_SOURCE_DIR}/", "")
+            if word.endswith((".c", ".cc", ".cpp")):
+                path = base / word
+                if path not in files:
+                    files.append(path)
+    return files
+
+
+def _within(path: Path, root: Path) -> bool:
+    try:
+        path.relative_to(root)
+    except ValueError:
+        return False
+    return True
+
+
+def _in_tree(sources: list[Path], include_dirs: list[Path], keep: Path) -> list[Path]:
+    """The sources and the headers they include, kept to the files under keep."""
+    keep = keep.resolve()
+    return [p for p in resolve_includes(sources, include_dirs) if _within(p, keep)]
+
+
+# The fetched libraries are read from their FetchContent sources under
+# --build-dir/_deps. Those sources are pinned by hash, so they are the same
+# on every platform; only the lists below decide what is surveyed, never
+# what the given tree happened to compile.
+
+# PortAudio v19.7.0 (portaudio-src/CMakeLists.txt): the common and skeleton
+# sources and every host API a supported platform builds with NereusSDR's
+# options (CMakeLists.txt forces PA_USE_ASIO OFF and, on Linux, ALSA and
+# JACK ON): the Windows platform sources (with the MSVC-only x86 plain
+# converters), DirectSound, MME, WASAPI and WDM-KS; the Unix platform
+# sources; CoreAudio; JACK and ALSA. PA_ASIO_SOURCES and PA_ASIOSDK_SOURCES
+# are not read.
+_PORTAUDIO_LISTS = [
+    "PA_COMMON_SOURCES", "PA_SKELETON_SOURCES", "PA_PLATFORM_SOURCES",
+    "PA_DS_SOURCES", "PA_WMME_SOURCES", "PA_WASAPI_SOURCES", "PA_WDMKS_SOURCES",
+    "PA_COREAUDIO_SOURCES", "PA_JACK_SOURCES", "PA_ALSA_SOURCES",
+]
+# PA_PRIVATE_INCLUDE_PATHS on every platform, plus the public headers.
+_PORTAUDIO_INCLUDES = ["include", "src/common", "src/os/win", "src/os/unix"]
+
+
+def _portaudio(_root: Path, args: argparse.Namespace) -> SourceSet:
+    base = _deps(args, "portaudio")
+    sources = cmake_sources(base / "CMakeLists.txt", _PORTAUDIO_LISTS)
+    files = _in_tree(sources, [base / d for d in _PORTAUDIO_INCLUDES], base)
+    return SourceSet("PortAudio", base, "portaudio", "v19.7.0", files,
+                     ["portaudio.txt"], regen=" --build-dir <a configured build>")
+
+
+# libdatachannel v0.24.5 (CMakeLists.txt): add_library(datachannel) compiles
+# LIBDATACHANNEL_SOURCES and LIBDATACHANNEL_IMPL_SOURCES on every platform
+# (NO_WEBSOCKET and NO_MEDIA only set compile definitions). Its include path
+# is its own include, include/rtc and src, plus the headers of the
+# dependencies it links (target_include_directories and the deps' public
+# include directories).
+_DATACHANNEL_INCLUDES = [
+    "include", "include/rtc", "src", "deps/usrsctp/usrsctplib", "deps/plog/include",
+    "deps/libsrtp/crypto/include", "deps/libsrtp/include", "deps/libjuice/include",
+]
+
+
+def _datachannel(args: argparse.Namespace) -> tuple[Path, list[Path], list[Path]]:
+    """libdatachannel's tree, its compiled sources and its include path."""
+    dc = _deps(args, "nereus_libdatachannel")
+    sources = cmake_sources(dc / "CMakeLists.txt",
+                            ["LIBDATACHANNEL_SOURCES", "LIBDATACHANNEL_IMPL_SOURCES"])
+    return dc, sources, [dc / d for d in _DATACHANNEL_INCLUDES]
+
+
+# The libraries libdatachannel builds from its deps/<name> copies
+# (NereusRemoteMedia.cmake copies each fetched source there): the CMake
+# file and lists that compile each one, the option branch taken (libSRTP's
+# crypto engine: libdatachannel turns ENABLE_OPENSSL on because NereusSDR
+# sets USE_GNUTLS and USE_MBEDTLS OFF on every platform), and its include
+# path. Every one is also searched from libdatachannel's own sources, which
+# include their public headers; plog and json are header-only and reached
+# only that way.
+_DATACHANNEL_DEPS = {
+    "libjuice": ("CMakeLists.txt", ["LIBJUICE_SOURCES"], None,
+                 ["include", "include/juice", "src"]),
+    "usrsctp": ("usrsctplib/CMakeLists.txt", ["usrsctp_sources"], None, ["usrsctplib"]),
+    "libsrtp": ("CMakeLists.txt",
+                ["SOURCES_C", "CIPHERS_SOURCES_C", "HASHES_SOURCES_C", "KERNEL_SOURCES_C",
+                 "MATH_SOURCES_C", "REPLAY_SOURCES_C"],
+                "ENABLE_OPENSSL", ["crypto/include", "include"]),
+}
+
+
+def _datachannel_dep(name: str, library: str, pin: str, texts: list[str]):
+    """A library libdatachannel builds from its deps/<name> copy."""
+    def preset(_root: Path, args: argparse.Namespace) -> SourceSet:
+        dc, dc_sources, dc_includes = _datachannel(args)
+        base = dc / "deps" / name
+        # Its headers libdatachannel's own sources include (usrsctp.h is
+        # reached only that way), plus its own compiled sources.
+        found = set(_in_tree(dc_sources, dc_includes, base))
+        if name in _DATACHANNEL_DEPS:
+            cmake, lists, keep, includes = _DATACHANNEL_DEPS[name]
+            sources = cmake_sources(base / cmake, lists, keep)
+            found.update(_in_tree(sources, [base / d for d in includes], base))
+        files = sorted(found)
+        return SourceSet(library, base, name, pin, files, texts,
+                         regen=" --build-dir <a configured build>")
+    return preset
+
+
+def _libdatachannel(_root: Path, args: argparse.Namespace) -> SourceSet:
+    dc, sources, includes = _datachannel(args)
+    files = [f for f in _in_tree(sources, includes, dc)
+             if not _within(f, (dc / "deps").resolve())]
+    return SourceSet("libdatachannel", dc, "libdatachannel", "v0.24.5", files,
+                     ["libdatachannel.txt", "MPLv2.txt"],
+                     regen=" --build-dir <a configured build>")
+
+
+def _fftw3(root: Path, _args: argparse.Namespace) -> SourceSet:
+    # NereusSDR compiles against FFTW's public header; the library itself
+    # arrives prebuilt (Windows DLL) or from the system. The header in
+    # third_party/fftw3 is the one the Windows build uses.
+    base = root / "third_party/fftw3"
+    return SourceSet("FFTW3", base, "third_party/fftw3", "3.3.5 (Windows header)",
+                     [base / "include/fftw3.h"], ["fftw3.txt", "GPLv2.txt"])
+
+
+# ---------------------------------------------------------------------------
+# libsodium and SPAKE2+EE (cmake/NereusPairing.cmake) are read from a built
+# tree: the files its compile_commands.json lists and the headers they
+# include, each resolved with its own command's include path.
+
 def _compile_entries(build: Path) -> list[tuple[Path, list[Path]]]:
     """(source file, include directories) for every compile command."""
     path = build / "compile_commands.json"
@@ -407,20 +662,9 @@ def _compile_entries(build: Path) -> list[tuple[Path, list[Path]]]:
     return entries
 
 
-def _within(path: Path, root: Path) -> bool:
-    try:
-        path.relative_to(root)
-    except ValueError:
-        return False
-    return True
-
-
-def _from_build(build: Path, keep: Path, seeds: Path,
-                extra: list[str] | None = None,
-                extra_dirs: list[str] | None = None) -> list[Path]:
+def _from_build(build: Path, keep: Path, seeds: Path) -> list[Path]:
     """Files under keep that the build compiled, or that the compiled files
-    under seeds include, resolved with each command's own include path.
-    extra adds sources (relative to keep) other platforms compile."""
+    under seeds include, resolved with each command's own include path."""
     keep = keep.resolve()
     seeds = seeds.resolve()
     found: set[Path] = set()
@@ -428,11 +672,6 @@ def _from_build(build: Path, keep: Path, seeds: Path,
         if not _within(source, seeds):
             continue
         for path in resolve_includes([source], dirs):
-            if _within(path, keep):
-                found.add(path)
-    if extra:
-        dirs = [keep / d for d in (extra_dirs or [])]
-        for path in resolve_includes([keep / name for name in extra], dirs):
             if _within(path, keep):
                 found.add(path)
     return sorted(found)
@@ -444,65 +683,36 @@ def _need_build(args: argparse.Namespace) -> Path:
     return args.build_dir.resolve()
 
 
-# PortAudio host API and platform sources the Windows and Linux packages
-# compile (portaudio-src/CMakeLists.txt at v19.7.0 with NereusSDR's options:
-# ASIO off; MME, DirectSound, WASAPI and WDM-KS on Windows; ALSA and JACK
-# on Linux). A macOS build tree lists only the CoreAudio ones.
-_PORTAUDIO_OTHER_PLATFORMS = [
-    "src/os/win/pa_win_hostapis.c", "src/os/win/pa_win_util.c",
-    "src/os/win/pa_win_waveformat.c", "src/os/win/pa_win_wdmks_utils.c",
-    "src/os/win/pa_win_coinitialize.c", "src/os/win/pa_x86_plain_converters.c",
-    "src/hostapi/dsound/pa_win_ds.c", "src/hostapi/dsound/pa_win_ds_dynlink.c",
-    "src/hostapi/wmme/pa_win_wmme.c", "src/hostapi/wasapi/pa_win_wasapi.c",
-    "src/hostapi/wdmks/pa_win_wdmks.c",
-    "src/os/unix/pa_unix_hostapis.c", "src/os/unix/pa_unix_util.c",
-    "src/hostapi/alsa/pa_linux_alsa.c", "src/hostapi/jack/pa_jack.c",
-]
-
-
-def _portaudio(_root: Path, args: argparse.Namespace) -> SourceSet:
+def _libsodium(_root: Path, args: argparse.Namespace) -> SourceSet:
+    # cmake/NereusPairing.cmake compiles every src/libsodium/**/*.c of the
+    # fetched archive (on MSVC the SIMD files hold their code too; with GCC
+    # and Clang they compile empty, and are listed all the same). Its
+    # headers are compiled from a copy of the include tree under
+    # _deps/nereus_libsodium-include; each is read at its place in the
+    # archive, where the copy came from.
     build = _need_build(args)
-    base = build / "_deps/portaudio-src"
-    files = _from_build(build, base, base, _PORTAUDIO_OTHER_PLATFORMS,
-                        ["include", "src/common", "src/os/win", "src/os/unix"])
-    return SourceSet("PortAudio", base, "portaudio", "v19.7.0", files,
-                     ["portaudio.txt"], regen=" --build-dir <a built tree>")
+    base = build / "_deps/nereus_libsodium-src"
+    source = (base / "src/libsodium").resolve()
+    copy = (build / "_deps/nereus_libsodium-include").resolve()
+    files: set[Path] = set()
+    for path in _from_build(build, build / "_deps", source):
+        if _within(path, source):
+            files.add(path)
+        elif _within(path, copy):
+            original = source / "include" / path.relative_to(copy)
+            if original.is_file():
+                files.add(original.resolve())
+    return SourceSet("libsodium", base, "libsodium", "1.0.22 (1.0.22-RELEASE)",
+                     sorted(files), ["libsodium.txt"],
+                     regen=" --build-dir <a built tree>", dedications=True)
 
 
-def _datachannel_dep(name: str, library: str, pin: str, texts: list[str]):
-    """A library libdatachannel builds from its deps/<name> copy.
-
-    NereusRemoteMedia.cmake copies each fetched source into
-    nereus_libdatachannel-src/deps/<name> and builds it from there; the
-    header-only ones (plog, json) are reached through libdatachannel's
-    includes, so every compiled libdatachannel file seeds the search."""
-    def preset(_root: Path, args: argparse.Namespace) -> SourceSet:
-        build = _need_build(args)
-        dc = build / "_deps/nereus_libdatachannel-src"
-        base = dc / "deps" / name
-        files = _from_build(build, base, dc)
-        return SourceSet(library, base, name, pin, files, texts,
-                         regen=" --build-dir <a built tree>")
-    return preset
-
-
-def _libdatachannel(_root: Path, args: argparse.Namespace) -> SourceSet:
+def _spake2ee(_root: Path, args: argparse.Namespace) -> SourceSet:
     build = _need_build(args)
-    base = build / "_deps/nereus_libdatachannel-src"
-    files = [f for f in _from_build(build, base, base)
-             if not _within(f, (base / "deps").resolve())]
-    return SourceSet("libdatachannel", base, "libdatachannel", "v0.24.5", files,
-                     ["libdatachannel.txt", "MPLv2.txt"],
-                     regen=" --build-dir <a built tree>")
-
-
-def _fftw3(root: Path, _args: argparse.Namespace) -> SourceSet:
-    # NereusSDR compiles against FFTW's public header; the library itself
-    # arrives prebuilt (Windows DLL) or from the system. The header in
-    # third_party/fftw3 is the one the Windows build uses.
-    base = root / "third_party/fftw3"
-    return SourceSet("FFTW3", base, "third_party/fftw3", "3.3.5 (Windows header)",
-                     [base / "include/fftw3.h"], ["fftw3.txt", "GPLv2.txt"])
+    base = build / "_deps/nereus_spake2ee-src"
+    return SourceSet("SPAKE2+EE", base, "spake2-ee", "fd3ea61f",
+                     _from_build(build, base, base), ["spake2-ee.txt"],
+                     regen=" --build-dir <a built tree>", dedications=True)
 
 
 PRESETS = {
@@ -522,6 +732,8 @@ PRESETS = {
     "rnnoise": _rnnoise,
     "libspecbleach": _libspecbleach,
     "wdsp": _wdsp,
+    "libsodium": _libsodium,
+    "spake2-ee": _spake2ee,
 }
 
 
@@ -534,9 +746,11 @@ class Notice:
     files: list[str]
 
 
-def collect(files: list[tuple[Path, str]], licence_texts: list[str]
-            ) -> tuple[list[Notice], dict[str, int]]:
-    """Distinct uncarried notices over (path, display name) pairs."""
+def collect(files: list[tuple[Path, str]], licence_texts: list[str],
+            dedications: bool = False) -> tuple[list[Notice], dict[str, int]]:
+    """Distinct uncarried notices over (path, display name) pairs. With
+    dedications, public-domain and CC0 comments count as notices, carried
+    only when the licence text holds them word for word."""
     by_key: dict[str, Notice] = {}
     counts = {"files": 0, "files_with_notice": 0, "blocks": 0,
               "distinct": 0, "carried": 0}
@@ -544,17 +758,23 @@ def collect(files: list[tuple[Path, str]], licence_texts: list[str]
     for path, display in files:
         counts["files"] += 1
         text = read_source(path)
-        blocks = extract_blocks(text)
+        blocks = extract_blocks(text, dedications)
+        dedicated = extract_dedications(text) if dedications else []
+        blocks += dedicated
         if blocks:
             counts["files_with_notice"] += 1
         for block in blocks:
             counts["blocks"] += 1
             key = normalise(block)
+            if block in dedicated:
+                carried = any(key in normalise(t) for t in licence_texts)
+            else:
+                carried = is_carried(block, licence_texts)
             if key not in distinct:
                 distinct.add(key)
-                if is_carried(block, licence_texts):
+                if carried:
                     counts["carried"] += 1
-            if is_carried(block, licence_texts):
+            if carried:
                 continue
             notice = by_key.setdefault(key, Notice(block, []))
             if display not in notice.files:
@@ -598,7 +818,7 @@ def build(library: str, root: Path, args: argparse.Namespace
     pairs += source_set.extra
     licence_texts = [(root / LICENSE_DIR / name).read_text(encoding="utf-8")
                      for name in source_set.licence_files]
-    notices, counts = collect(pairs, licence_texts)
+    notices, counts = collect(pairs, licence_texts, source_set.dedications)
     return source_set, notices, counts
 
 

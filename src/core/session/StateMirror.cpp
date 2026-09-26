@@ -30,11 +30,18 @@
 //   2026-09-24 - iPhone app Task 4b (R-IOS-01, R-R3-21): the reasons this
 //                file sends an app are in operator words. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app Task 72 (R-IOS-02): changes
+//                                    go to every MirrorView but the
+//                                    writer's (WriterScope replaces
+//                                    ApplyingGuard); the single-session API
+//                                    is served by a view of its own. AI-
+//                                    assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StateMirror.h"
 
 #include "core/session/MirrorPolicy.h"
+#include "core/session/MirrorView.h"
 
 #include <QLoggingCategory>
 #include <QMetaMethod>
@@ -114,23 +121,8 @@ QString writableButOutboundReason(const QByteArray& shortClassName,
 // still leaves it false afterward (prev == false), and a nested call now
 // leaves it true afterward -- exactly what lets the outer call's own
 // cleanup, moments later, do the actual final reset.
-class ApplyingGuard {
-public:
-    explicit ApplyingGuard(bool& flag)
-        : m_flag(flag)
-        , m_previous(flag)
-    {
-        m_flag = true;
-    }
-    ~ApplyingGuard() { m_flag = m_previous; }
-
-    ApplyingGuard(const ApplyingGuard&) = delete;
-    ApplyingGuard& operator=(const ApplyingGuard&) = delete;
-
-private:
-    bool& m_flag;
-    bool m_previous;
-};
+// iPhone app Task 72: the same save/restore now lives in
+// StateMirror::WriterScope, which saves the writer beside the flag.
 
 // Resolved once. Renaming the slot without updating this string would
 // strand every watched object silently, so the lookup is loud on failure
@@ -149,27 +141,6 @@ const QMetaMethod& watcherSlot()
         return StateMirror::staticMetaObject.method(index);
     }();
     return slot;
-}
-
-// The property TABLE for a Schema message: every property the schema
-// walked, minus anything with no wire representation (MirrorWireKind::
-// Unsupported -- kept in MirrorSchema's own table so tst_mirror_schema's
-// membership guard can name it, per MirrorSchema.h, but useless to
-// declare to a client that will never receive a value for it). No
-// currently mirrored property actually falls in this bucket (MirrorSchema.h
-// section 6's "type surface is small" inventory), so this filter is
-// defensive for a future property type rather than live behaviour today.
-QList<SessionSchemaField> schemaFieldsFor(const MirrorSchema& schema)
-{
-    QList<SessionSchemaField> fields;
-    fields.reserve(schema.size());
-    for (const MirrorProperty& prop : schema.properties()) {
-        if (prop.kind == MirrorWireKind::Unsupported) {
-            continue;
-        }
-        fields.append(SessionSchemaField{ prop.ordinal, prop.name, prop.kind });
-    }
-    return fields;
 }
 
 } // namespace
@@ -248,7 +219,77 @@ StateMirror::StateMirror(QObject* parent)
 
 StateMirror::~StateMirror()
 {
+    // The mirror's own view first, while the mirror is still whole; a view
+    // owned elsewhere outlives nothing here (it holds a QPointer back).
+    m_legacyView.reset();
     unwatchAll();
+}
+
+// ── Views (iPhone app Task 72) ───────────────────────────────────────────
+
+StateMirror::WriterScope::WriterScope(StateMirror& mirror, const MirrorView* writer)
+    : m_mirror(mirror)
+    , m_previousApplying(mirror.m_applying)
+    , m_previousWriter(mirror.m_applyingWriter)
+{
+    m_mirror.m_applying = true;
+    m_mirror.m_applyingWriter = writer;
+}
+
+StateMirror::WriterScope::~WriterScope()
+{
+    m_mirror.m_applying = m_previousApplying;
+    m_mirror.m_applyingWriter = m_previousWriter;
+}
+
+void StateMirror::addView(MirrorView* view)
+{
+    if (view != nullptr && !m_views.contains(QPointer<MirrorView>(view))) {
+        m_views.append(QPointer<MirrorView>(view));
+    }
+}
+
+void StateMirror::removeView(MirrorView* view)
+{
+    m_views.removeIf([view](const QPointer<MirrorView>& held) {
+        return held.isNull() || held.data() == view;
+    });
+}
+
+MirrorView* StateMirror::legacyView()
+{
+    if (!m_legacyView) {
+        m_legacyView = std::make_unique<MirrorView>(
+            this, [this](const SessionMessage& message) { emit sessionMessageReady(message); });
+    }
+    return m_legacyView.get();
+}
+
+QList<MirrorUpdate> StateMirror::currentValues(const QByteArray& objectKey,
+                                               const QList<quint16>& ordinals) const
+{
+    const int index = indexOfKey(objectKey);
+    if (index < 0) {
+        return {};
+    }
+    const Watch& watch = m_watches.at(index);
+    if (watch.object == nullptr || watch.schema == nullptr) {
+        return {};
+    }
+    QList<MirrorUpdate> values;
+    values.reserve(ordinals.size());
+    for (quint16 ordinal : ordinals) {
+        const MirrorProperty* prop = watch.schema->byOrdinal(ordinal);
+        if (prop == nullptr) {
+            continue;
+        }
+        const QVariant value = watch.schema->read(*prop, watch.object);
+        if (!value.isValid()) {
+            continue;
+        }
+        values.append(MirrorUpdate{ prop->ordinal, prop->name, prop->kind, value });
+    }
+    return values;
 }
 
 // ── Lookup helpers ────────────────────────────────────────────────────────
@@ -419,16 +460,21 @@ QByteArray StateMirror::keyFor(const QObject* object) const
 
 void StateMirror::onWatchedPropertyChanged()
 {
-    // An inbound apply is in flight on THIS mirror: applyInbound() is still
-    // on the call stack, either writing the property this notify is FOR
-    // directly, or -- same-thread, synchronous, still nested inside that
-    // same write -- a side effect it triggered on a DIFFERENT watched
-    // object. RadioModel::addSlice()'s co-hosted-slice NB-mode/NB-tuning
-    // peer mirrors are exactly the second case: peer->setNbMode() fires
-    // nbModeChanged on the PEER object, not the one applyInbound() was
-    // asked to write. Checked before even asking which object fired, so
-    // both cases are covered by one flag regardless of source.
-    if (m_applying) {
+    // iPhone app Task 72 (ruling 5.7): an inbound apply in flight no longer
+    // ends this slot here. While applyInbound() (or a WriterScope) is on
+    // the call stack, writing the property this notify is FOR directly, or
+    // -- same-thread, synchronous, still nested inside that same write --
+    // causing a side effect on a DIFFERENT watched object (RadioModel::
+    // addSlice()'s co-hosted-slice NB-mode/NB-tuning peer mirrors:
+    // peer->setNbMode() fires nbModeChanged on the PEER object), the change
+    // is withheld from the WRITER's view alone, below, and still reaches
+    // every other device's view. Whichever object fired, one check covers
+    // both cases, as the single flag did.
+    const bool applying = m_applying;
+    const MirrorView* writer = m_applyingWriter;
+    if (applying && m_views.isEmpty()) {
+        // Nothing but propertiesChanged() could hear it, and that stays
+        // silent while a write is applied.
         return;
     }
 
@@ -485,25 +531,28 @@ void StateMirror::onWatchedPropertyChanged()
         return;
     }
 
-    // Task 10: once a session has attached, every change also feeds the
-    // outbound coalescer, unconditionally -- this is the WHOLE mechanism
-    // behind flushCoalescedDeltas() being able to report the same value a
-    // live re-read would (see MirrorCoalescer's class comment), and it is
-    // what stops a change triggered synchronously from inside
-    // attachSession()'s own burst from reaching sessionMessageReady()
-    // ahead of the snapshot-complete marker: a Delta is only ever emitted
-    // from flushCoalescedDeltas(), never from here. Before the first
-    // attachSession() call, m_hasAttachedSession is false and this whole
-    // block is skipped -- the coalescer never sees a single update, which
-    // is what "the coalescer must not change any behaviour when no
-    // session is attached" rests on.
-    if (m_hasAttachedSession) {
-        for (const MirrorUpdate& update : updates) {
-            m_coalescer.update(key, update);
+    // Task 10, per view since Task 72: every change feeds each attached
+    // view's outbound coalescer -- the WHOLE mechanism behind a view's
+    // flush() reporting the same value a live re-read would (see
+    // MirrorCoalescer's class comment), and what stops a change triggered
+    // synchronously from inside a view's own attach burst from reaching
+    // the wire ahead of its snapshot-complete marker: a Delta is only ever
+    // sent from a flush, never from here. A view that has not attached
+    // yet collects nothing (MirrorView::noteChange), which is what "the
+    // coalescer must not change any behaviour when no session is
+    // attached" rests on. The writer's own view is skipped (ruling 5.7).
+    // Copied: a view may leave (its session ended) while this runs.
+    const QList<QPointer<MirrorView>> views = m_views;
+    for (const QPointer<MirrorView>& view : views) {
+        if (view.isNull() || (applying && view.data() == writer)) {
+            continue;
         }
+        view->noteChange(key, updates);
     }
 
-    emit propertiesChanged(key, updates);
+    if (!applying) {
+        emit propertiesChanged(key, updates);
+    }
 }
 
 // ── Snapshot ──────────────────────────────────────────────────────────────
@@ -553,122 +602,25 @@ QList<QPair<QByteArray, QList<MirrorUpdate>>> StateMirror::snapshotAll() const
 
 void StateMirror::attachSession()
 {
-    m_hasAttachedSession = true;
+    // iPhone app Task 72: Task 10's burst is MirrorView::attach(), here on
+    // the mirror's own view, whose messages leave through
+    // sessionMessageReady(). Its order and its coalescer rules are
+    // unchanged: a schema per distinct class, an object.create per watched
+    // object, the marker, then whatever the burst itself caused to change.
+    legacyView()->attach();
+}
 
-    // "clear the dirty set": discard anything pending from before this
-    // session existed to see it. The burst below reads every watched
-    // object's CURRENT state, so nothing queued here could tell a
-    // brand-new client anything its own object.create will not already
-    // say.
-    m_coalescer.clear();
-
-    // Copied out of m_watches before either loop below emits anything: a
-    // receiver may watch() or unwatch() synchronously in response to one
-    // of this burst's own messages, which would reallocate the live QList
-    // out from under a range-for iterator into it. The identical hazard,
-    // and the identical fix, already exist in onWatchedPropertyChanged()
-    // (see its own "Copied out of m_watches" comment) -- applied here for
-    // the same reason. schema and key are all either loop below actually
-    // needs; schema pointers are cache-lifetime stable regardless of what
-    // happens to m_watches (MirrorSchema::forMetaObject() never frees
-    // one), and the create loop resolves state through snapshot(key),
-    // which re-looks-up the CURRENT m_watches by key rather than
-    // dereferencing anything out of this copy.
-    const QList<Watch> watches = m_watches;
-
-    // One schema message per DISTINCT class among what is currently
-    // watched, in first-watched order. shortClassName() matches
-    // ObjectRegistry::createForSlice()'s own choice: the wire-facing class
-    // name is always the short form ("SliceModel"), never the
-    // QMetaObject-qualified one ("NereusSDR::SliceModel").
-    QSet<QByteArray> announced;
-    for (const Watch& watch : watches) {
-        if (watch.object == nullptr || watch.schema == nullptr) {
-            continue;
-        }
-        const QByteArray shortName = MirrorSchema::shortClassName(watch.schema->className());
-        if (announced.contains(shortName)) {
-            continue;
-        }
-        announced.insert(shortName);
-        emit sessionMessageReady(SessionMessages::schema(shortName, schemaFieldsFor(*watch.schema)));
-    }
-
-    // One object.create per watched object, watch order, each carrying the
-    // FULL settled property bag -- reuses snapshot(), the same path Task 7
-    // proved reaches CONSTANT properties such as sliceIndex.
-    for (const Watch& watch : watches) {
-        if (watch.object == nullptr || watch.schema == nullptr) {
-            continue;
-        }
-        const QByteArray shortName = MirrorSchema::shortClassName(watch.schema->className());
-        emit sessionMessageReady(
-            SessionMessages::objectCreate(watch.key, shortName, snapshot(watch.key)));
-    }
-
-    emit sessionMessageReady(SessionMessages::snapshotComplete());
-
-    // "resume flushing": anything the burst itself caused to go dirty --
-    // a synchronous, same-thread reaction to one of the messages just
-    // emitted above, writing an object this mirror watches -- has been
-    // sitting in the coalescer the whole time (onWatchedPropertyChanged()
-    // never emits a Delta directly; see its own comment), never flushed
-    // because nothing called flushCoalescedDeltas() until here. Draining
-    // it now, as the LAST step, is what keeps it from being lost while
-    // guaranteeing it cannot be observed until after the marker above.
-    flushCoalescedDeltas();
+bool StateMirror::hasAttachedSession() const
+{
+    return m_legacyView && m_legacyView->isAttached();
 }
 
 int StateMirror::flushCoalescedDeltas()
 {
-    const QList<QPair<QByteArray, QList<MirrorUpdate>>> pending = m_coalescer.flush();
-    int emitted = 0;
-    for (const auto& batch : pending) {
-        // Re-resolve against the LIVE watch list rather than trusting
-        // batch.second's values, which are only the PROVISIONAL ones
-        // MirrorCoalescer::update() was called with (see its class
-        // comment). Two things this single lookup closes together:
-        //
-        //   - A key no longer watched -- unwatched, or its object
-        //     destroyed, since the property went dirty -- resolves to
-        //     nothing here and the whole batch is dropped. No Delta
-        //     naming a dead object is possible.
-        //   - A key still watched gets each ordinal re-read fresh, so a
-        //     write that landed through applyInbound() (which suppresses
-        //     the notify that would otherwise have kept the coalescer's
-        //     own copy current -- see onWatchedPropertyChanged()'s
-        //     m_applying check) is not superseded by a stale pending
-        //     value from before it.
-        const int index = indexOfKey(batch.first);
-        if (index < 0) {
-            continue;
-        }
-        const Watch& watch = m_watches.at(index);
-        if (watch.object == nullptr || watch.schema == nullptr) {
-            continue;
-        }
-
-        QList<MirrorUpdate> fresh;
-        fresh.reserve(batch.second.size());
-        for (const MirrorUpdate& pendingUpdate : batch.second) {
-            const MirrorProperty* prop = watch.schema->byOrdinal(pendingUpdate.ordinal);
-            if (prop == nullptr) {
-                continue;
-            }
-            const QVariant value = watch.schema->read(*prop, watch.object);
-            if (!value.isValid()) {
-                continue;
-            }
-            fresh.append(MirrorUpdate{ prop->ordinal, prop->name, prop->kind, value });
-        }
-        if (fresh.isEmpty()) {
-            continue;
-        }
-
-        emit sessionMessageReady(SessionMessages::delta(batch.first, fresh));
-        ++emitted;
-    }
-    return emitted;
+    // Re-resolved against the live watch list inside the view's flush (see
+    // MirrorView::flush and currentValues()): a key no longer watched is
+    // dropped, and a key still watched is read fresh.
+    return m_legacyView ? m_legacyView->flush() : 0;
 }
 
 // ── Inbound apply ────────────────────────────────────────────────────────
@@ -694,7 +646,32 @@ MirrorApplyResult StateMirror::applyInbound(const QByteArray& objectKey,
         result.reason = QStringLiteral("The Core does not have this setting.");
         return result;
     }
-    return applyInboundToProperty(watch, *prop, wireValue);
+    return applyInboundToProperty(watch, *prop, wireValue, m_legacyView.get());
+}
+
+MirrorApplyResult StateMirror::applyInbound(const QByteArray& objectKey,
+                                            const QByteArray& propertyName,
+                                            const QVariant& wireValue,
+                                            const MirrorView* writer)
+{
+    MirrorApplyResult result;
+    result.objectKey = objectKey;
+    result.property = propertyName;
+
+    const int index = indexOfKey(objectKey);
+    if (index < 0 || m_watches.at(index).object == nullptr
+        || m_watches.at(index).schema == nullptr) {
+        result.reason = QStringLiteral("The Core does not have this setting.");
+        return result;
+    }
+    const Watch& watch = m_watches.at(index);
+
+    const MirrorProperty* prop = watch.schema->byName(propertyName);
+    if (prop == nullptr) {
+        result.reason = QStringLiteral("The Core does not have this setting.");
+        return result;
+    }
+    return applyInboundToProperty(watch, *prop, wireValue, writer);
 }
 
 MirrorApplyResult StateMirror::applyInbound(const QByteArray& objectKey,
@@ -717,12 +694,13 @@ MirrorApplyResult StateMirror::applyInbound(const QByteArray& objectKey,
         result.reason = QStringLiteral("The Core does not have this setting.");
         return result;
     }
-    return applyInboundToProperty(watch, *prop, wireValue);
+    return applyInboundToProperty(watch, *prop, wireValue, m_legacyView.get());
 }
 
 MirrorApplyResult StateMirror::applyInboundToProperty(const Watch& watch,
                                                        const MirrorProperty& prop,
-                                                       const QVariant& wireValue)
+                                                       const QVariant& wireValue,
+                                                       const MirrorView* writer)
 {
     MirrorApplyResult result;
     result.objectKey = watch.key;
@@ -762,12 +740,13 @@ MirrorApplyResult StateMirror::applyInboundToProperty(const Watch& watch,
         }
         bool ok = false;
         {
-            // See ApplyingGuard's own comment (top of this file) for why
-            // this must save/restore rather than hardcode m_applying back
+            // See the save/restore comment (top of this file; WriterScope
+            // since Task 72) for why this must restore rather than hardcode
+            // m_applying back
             // to false: watch.schema->write() can synchronously re-enter
             // applyInbound() through a command handler's RadioModel call,
             // and the guard has to survive that nesting intact.
-            ApplyingGuard guard(m_applying);
+            WriterScope guard(*this, writer);
             ok = watch.schema->write(prop, watch.object, wireValue);
         }
         if (!ok) {
@@ -799,7 +778,7 @@ MirrorApplyResult StateMirror::applyInboundToProperty(const Watch& watch,
         // Same reentrancy hazard as the writable path above: the hook may
         // itself call a RadioModel entry point that leads back into
         // applyInbound() before invokeMethod() returns.
-        ApplyingGuard guard(m_applying);
+        WriterScope guard(*this, writer);
         invoked = QMetaObject::invokeMethod(
             watch.object, "applyMirroredValue", Qt::DirectConnection,
             Q_RETURN_ARG(QString, hookReason),

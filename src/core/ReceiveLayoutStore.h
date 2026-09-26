@@ -8,12 +8,17 @@
 // Modification history (NereusSDR):
 //   2026-09-22: Original implementation for R-R3-34 by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Codex.
+//   2026-09-25: iPhone app plan Task 73 (R-IOS-02, ruling 5.3): each entry
+//               keeps its owner or the device it is held for. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #pragma once
 
 #include "core/WdspTypes.h"
 
+#include <QByteArray>
 #include <QList>
 #include <QString>
 
@@ -29,6 +34,17 @@ struct ReceiveSliceState {
     QString panKey;
     double frequencyHz {0.0};
     DSPMode dspMode {DSPMode::USB};
+    /// iPhone app Task 73 (ruling 5.3): whose the slice is
+    /// (SliceOwnership's owner: a paired device's raw id, or the station
+    /// device), empty for none; and, when the station device runs it for
+    /// an absent device, that device. Stored as the device's base64url id
+    /// ("station" for the station device) and only when set, so a layout
+    /// with no owners is written exactly as before. A window signed in
+    /// with the older token is written as no owner: it cannot be
+    /// recognised when it comes back. An entry without either restores
+    /// with no owner.
+    QByteArray owner;
+    QByteArray heldFor;
 };
 
 /// Per-radio persistence adapter for the bounded receive-layout manifest.

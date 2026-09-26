@@ -19,6 +19,22 @@
 //   2026-09-23 : R-R3-36 gate fix by J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code. onMoxRejected reacts only to a
 //                rejection of two-tone's own key. NereusSDR-original.
+//   2026-09-24 : Receiver and transmit gaps plan, Task 7, by J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code. Two-tone
+//                holds the manual key (console.ManualMox) around its key,
+//                so no mic PTT or VOX releases or takes it.
+//   2026-09-24 : Receiver and transmit gaps plan, Task 7 fix wave, by
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//                A start waits out a TUN-off still completing (M9,
+//                console.cs:44805-44813 [v2.10.3.15]); a refused start
+//                keeps the manual key through the 200 ms settle (M2,
+//                setup.cs:11190-11193).
+//   2026-09-24 : Receiver and transmit gaps plan, Task 7 follow-up, by
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//                A refused start's settle leaves a manual key another key
+//                took (N1). A start with TUN on turns TUN off through its
+//                own TUN-off path first, then keys (item 6, ported from
+//                console.cs:44805-44813 [v2.10.3.15]).
 // =================================================================
 
 // no-port-check: NereusSDR-original file; Thetis-derived activation flow
@@ -65,6 +81,11 @@ TwoToneController::TwoToneController(QObject* parent)
     m_deactivationSettleTimer.setInterval(kMoxReleaseSettleMs);
     connect(&m_deactivationSettleTimer, &QTimer::timeout,
             this, &TwoToneController::onDeactivationSettleElapsed);
+
+    m_rejectSettleTimer.setSingleShot(true);
+    m_rejectSettleTimer.setInterval(kMoxReleaseSettleMs);
+    connect(&m_rejectSettleTimer, &QTimer::timeout,
+            this, &TwoToneController::onRejectSettleElapsed);
 }
 
 TwoToneController::~TwoToneController() = default;
@@ -117,11 +138,27 @@ void TwoToneController::setPowerOn(bool on)
     m_powerOn = on;
 }
 
+void TwoToneController::setTuneOffPendingFn(std::function<bool()> fn)
+{
+    m_tuneOffPending = std::move(fn);
+}
+
+void TwoToneController::setTuneActiveFn(std::function<bool()> fn)
+{
+    m_tuneActive = std::move(fn);
+}
+
+void TwoToneController::setTuneOffFn(std::function<void()> fn)
+{
+    m_tuneOff = std::move(fn);
+}
+
 void TwoToneController::setSettleDelaysMs(int moxReleaseMs, int tuneReleaseMs)
 {
     m_moxReleaseSettleTimer.setInterval(moxReleaseMs);
     m_tuneReleaseSettleTimer.setInterval(tuneReleaseMs);
     m_deactivationSettleTimer.setInterval(moxReleaseMs);
+    m_rejectSettleTimer.setInterval(moxReleaseMs);
 }
 
 // ---------------------------------------------------------------------------
@@ -167,37 +204,55 @@ void TwoToneController::setActive(bool on)
         }
 
         m_activationInFlight = true;
+        // Task 7 fix wave, M2: a new start owns the manual key from here.
+        m_rejectSettleTimer.stop();
 
-        // ── Stage 2: if MOX is currently engaged, release first.  From Thetis
-        //     setup.cs:11072-11077 [v2.10.3.13]:
-        //       if (console.MOX) {
-        //           Audio.MOX = false;
-        //           console.MOX = false;
-        //           await Task.Delay(200); // MW0LGE_21a
+        // ── Stage 2a: if TUN is on, turn it off first.  Porting from Thetis
+        //     console.cs:44805-44813 [v2.10.3.15], chk2TONE_CheckedChanged,
+        //     original C# logic:
+        //       // stop tune if currently running and we want to run 2tone
+        //       if (chk2TONE.Checked && chkTUN.Checked)
+        //       {
+        //           //dont want this to fire the checked changed event late, so unlink it, call it, then relink it
+        //           chkTUN.CheckedChanged -= new System.EventHandler(chkTUN_CheckedChanged);
+        //           chkTUN.Checked = false;
+        //           chkTUN_CheckedChanged(this, EventArgs.Empty); // it needs to happen here and now
+        //           chkTUN.CheckedChanged += new System.EventHandler(chkTUN_CheckedChanged);
+        //           await Task.Delay(300);
         //       }
-        if (m_moxController->isMox()) {
-            m_moxController->setMox(false);
-            m_moxReleaseSettleTimer.start();
+        //     and only then SetupForm.TestIMD = true, whose Stage 2 below
+        //     releases MOX if anything still holds it.
+        //
+        // Task 7 follow-up, item 6: TUN ends through its own TUN-off path
+        // (RadioModel::setTune(false): tune tone off, mode, power and TX
+        // VFO back, TUN no longer counted on at tune power), not through a
+        // bare setMox(false) that left RadioModel's TUN state on. This
+        // replaces the 3M-1c TODO that left Stage 2b unported. The 300 ms
+        // wait (kTuneReleaseSettleMs) then also waits until that TUN-off
+        // has completed (M9, below).
+        if (m_tuneActive && m_tuneActive()
+            && !(m_tuneOffPending && m_tuneOffPending()) && m_tuneOff) {
+            // chkTUN.Checked = false; chkTUN_CheckedChanged(this, EventArgs.Empty); // it needs to happen here and now  [original inline comment from console.cs:44810]
+            m_tuneOff();
+            // await Task.Delay(300);  [console.cs:44812]
+            m_tuneReleaseSettleTimer.start();
             return;
         }
 
-        // ── Stage 2b: if TUN is currently active, release first.  From Thetis
-        //     console.cs:44732-44741 [v2.10.3.13] — chk2TONE_CheckedChanged:
-        //       if (chk2TONE.Checked && chkTUN.Checked) {
-        //           chkTUN.Checked = false;
-        //           ...
-        //           await Task.Delay(300);
-        //       }
-        //
-        // NOTE: TxChannel currently has no published "isTuneToneActive()"
-        //       getter (the gen1 PostGen state is internal).  Adding one
-        //       just for this check is out of I scope; punt the auto-stop
-        //       path until a future polish phase that surfaces TUN state
-        //       upward.  See I.3 note in the plan + DONE_WITH_CONCERNS.
-        // TODO(3M-1c-polish): expose TxChannel TUN-active state so we can
-        //                     trigger m_tuneReleaseSettleTimer here.
+        // Task 7 fix wave, M9: a TUN-off already under way is waited out.
+        // Keying now would cancel the TX-to-RX walk its completion waits for
+        // and leave the tune tone running under two-tone. Thetis waits
+        // 300 ms after turning TUN off (console.cs:44805-44813 [v2.10.3.15]):
+        //   chkTUN.Checked = false;
+        //   chkTUN_CheckedChanged(this, EventArgs.Empty); // it needs to happen here and now
+        //   ...
+        //   await Task.Delay(300);
+        if (m_tuneOffPending && m_tuneOffPending()) {
+            m_tuneReleaseSettleTimer.start();
+            return;
+        }
 
-        continueActivation();
+        releaseMoxThenContinue();
     } else {
         // Deactivation.  From Thetis setup.cs:11149-11177 [v2.10.3.13].
         if (!m_active && !m_activationInFlight) {
@@ -220,13 +275,37 @@ void TwoToneController::setActive(bool on)
 }
 
 // ---------------------------------------------------------------------------
+// releaseMoxThenContinue: Stage 2 of activation (the TestIMD setter, after
+// chk2TONE_CheckedChanged has turned TUN off).
+// ---------------------------------------------------------------------------
+void TwoToneController::releaseMoxThenContinue()
+{
+    if (m_moxController == nullptr) {
+        m_activationInFlight = false;
+        return;
+    }
+    // ── Stage 2: if MOX is currently engaged, release first.  From Thetis
+    //     setup.cs:11072-11077 [v2.10.3.13]:
+    //       if (console.MOX) {
+    //           Audio.MOX = false;
+    //           console.MOX = false;
+    //           await Task.Delay(200); // MW0LGE_21a
+    //       }
+    if (m_moxController->isMox()) {
+        m_moxController->setMox(false);
+        m_moxReleaseSettleTimer.start();
+        return;
+    }
+    continueActivation();
+}
+
+// ---------------------------------------------------------------------------
 // onMoxReleaseSettleElapsed — Stage 2 of activation
 // ---------------------------------------------------------------------------
 void TwoToneController::onMoxReleaseSettleElapsed()
 {
     // After the 200 ms MOX-release settle, continue the activation walk.
-    // (Stage 2b — TUN auto-stop — is currently a TODO; if it lands later,
-    // it would chain in here.)
+    // (TUN, Stage 2a, is turned off before this stage; Task 7 follow-up.)
     continueActivation();
 }
 
@@ -237,7 +316,22 @@ void TwoToneController::onTuneReleaseSettleElapsed()
 {
     // From Thetis console.cs:44740 [v2.10.3.13]:
     //   await Task.Delay(300);
-    continueActivation();
+    // Task 7 fix wave, M9: never key while the TUN-off is still completing
+    // (it holds the manual key and the tune tone until then).
+    if (m_tuneOffPending && m_tuneOffPending()) {
+        m_tuneReleaseSettleTimer.start();
+        return;
+    }
+    // Task 7 follow-up, item 6: TUN pressed on again inside the wait is
+    // turned off again (Stage 2a); two-tone never keys with TUN on.
+    if (m_tuneActive && m_tuneActive() && m_tuneOff) {
+        m_tuneOff();
+        m_tuneReleaseSettleTimer.start();
+        return;
+    }
+    // Then the TestIMD setter's own Stage 2 (setup.cs:11072-11077): a key
+    // made after the TUN-off completed (a held mic) is released first.
+    releaseMoxThenContinue();
 }
 
 // ---------------------------------------------------------------------------
@@ -392,6 +486,12 @@ void TwoToneController::continueActivation()
     // we catch that via onMoxRejected() and run the cleanup there.
     // R-R3-36: m_keyingMox marks this call (and only this call) as
     // two-tone keying for the PC-microphone admission check.
+    //
+    // Receiver and transmit gaps plan, Task 7: console.ManualMox = true is
+    // MoxController::setManualKey(true), set before the key as Thetis does
+    // (setup.cs:11162 [v2.10.3.15]). While it is set no mic PTT, VOX, CAT or
+    // TCI keys or releases (PollPTT, console.cs:25470 [v2.10.3.15]).
+    m_moxController->setManualKey(true);
     {
         const QScopedValueRollback<bool> keying(m_keyingMox, true);
         m_moxController->setMox(true);
@@ -566,6 +666,12 @@ void TwoToneController::continueDeactivation()
         m_txChannel->setTxPostGenRun(false);
     }
 
+    // Receiver and transmit gaps plan, Task 7: console.ManualMox = false
+    // after the release settle (setup.cs:11193 [v2.10.3.15]).
+    if (m_moxController) {
+        m_moxController->setManualKey(false);
+    }
+
     if (m_savedPwrValid && m_tx) {
         m_tx->setPower(m_savedPwr);
         m_savedPwrValid = false;
@@ -590,6 +696,27 @@ void TwoToneController::continueDeactivation()
         emit twoToneActiveChanged(false);
     }
     m_activationInFlight = false;
+}
+
+// ---------------------------------------------------------------------------
+// onRejectSettleElapsed: Task 7 fix wave, M2 (see onMoxRejected).
+// ---------------------------------------------------------------------------
+void TwoToneController::onRejectSettleElapsed()
+{
+    if (m_active || m_activationInFlight || m_moxController == nullptr) {
+        return;   // a new start owns the manual key now
+    }
+    // Task 7 follow-up, N1: inside the settle another manual key may have
+    // taken over (the MOX button or TUN keyed, or a TUN-off is still
+    // completing). That key is theirs and ends on its own path (chkMOX_Click,
+    // completeTuneOff). Clearing it here let a held mic key inside the
+    // TUN-off window and leave the tune tone on air under it.
+    if (m_moxController->isMox()
+        || (m_tuneActive && m_tuneActive())
+        || (m_tuneOffPending && m_tuneOffPending())) {
+        return;
+    }
+    m_moxController->setManualKey(false);
 }
 
 // ---------------------------------------------------------------------------
@@ -631,6 +758,21 @@ void TwoToneController::onMoxRejected(const QString& reason)
     if (m_txChannel) {
         m_txChannel->setTxPostGenRun(false);
     }
+
+    // Receiver and transmit gaps plan, Task 7: a refused key unchecks
+    // chkTestIMD in Thetis, whose off branch ends with console.ManualMox =
+    // false (setup.cs:11193 [v2.10.3.15]).
+    //
+    // Task 7 fix wave, M2: after the 200 ms settle, not here. From Thetis
+    // setup.cs:11190-11193 [v2.10.3.15]:
+    //   console.MOX = false;
+    //   await Task.Delay(200); //MW0LGE_21a
+    //   Audio.MOX = false;//
+    //   console.ManualMox = false;
+    // Clearing it inside this refused call ran a PollPTT pass while
+    // m_keyingMox was still set: a held mic was tried at once, refused
+    // again, re-entered here and raised a second message.
+    m_rejectSettleTimer.start();
 
     // Restore PWR if we had snapshotted it.
     if (m_savedPwrValid && m_tx) {

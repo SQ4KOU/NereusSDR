@@ -835,8 +835,10 @@ private slots:
         // Defaults, 3D View, Export / Import); a registration regex that
         // stopped matching would otherwise pass vacuously. Startup &
         // Preferences became Mixed when its callsign and grid were
-        // connected to the station identity (R3 controls that work).
-        QVERIFY2(pages.size() >= 21,
+        // connected to the station identity (R3 controls that work), and
+        // Filter Presets became a Core page when the presets moved to the
+        // Core (iPhone app Task 19, D40).
+        QVERIFY2(pages.size() >= 20,
                  qPrintable(QStringLiteral("only %1 ThisComputer registrations found")
                                 .arg(pages.size())));
 
@@ -902,6 +904,42 @@ private slots:
             }
         }
         QVERIFY2(found, "Audio > VAX is not registered ThisComputer");
+    }
+
+    // iPhone app Task 19 (D40): DSP > Filter Presets is a Core page, and
+    // every preset key FilterPresetStore writes (filters/<mode>/<slot>/
+    // {name,low,high}, built at run time, so the sweeps cannot see them) is
+    // the Core's, for each of the 14 modes by SliceModel::modeName. Any key
+    // the page writes literally is the Core's too.
+    void filterPresetsAreTheCores()
+    {
+        const QString root = QStringLiteral(NEREUS_SOURCE_DIR);
+        QFile dialog(root + QStringLiteral("/src/gui/SetupDialog.cpp"));
+        QVERIFY(dialog.open(QIODevice::ReadOnly | QIODevice::Text));
+        const QString source = QString::fromUtf8(dialog.readAll());
+        const QRegularExpression registration(QStringLiteral(
+            "registerPage\\(\\s*[\\w>-]+\\s*,\\s*\"Filter Presets\"\\s*,\\s*SetupScope::(\\w+)"));
+        const QRegularExpressionMatch match = registration.match(source);
+        QVERIFY2(match.hasMatch(), "DSP > Filter Presets is not registered");
+        QCOMPARE(match.captured(1), QStringLiteral("Core"));
+
+        for (const char* mode : {"LSB", "USB", "DSB", "CWL", "CWU", "FM", "AM", "DIGU",
+                                 "SPEC", "DIGL", "SAM", "DRM", "RADE-U", "RADE-L"}) {
+            for (const char* field : {"name", "low", "high"}) {
+                const QString key = QStringLiteral("filters/%1/9/%2")
+                                        .arg(QLatin1String(mode), QLatin1String(field));
+                QVERIFY2(classifySettingsKey(key) == SettingsScope::Station, qPrintable(key));
+            }
+        }
+
+        const QStringList bodies =
+            classBodies(root + QStringLiteral("/src/gui"), QStringLiteral("FilterPresetsSetupPage"));
+        QVERIFY2(!bodies.isEmpty(), "no source found for FilterPresetsSetupPage");
+        for (const QString& body : bodies) {
+            for (const QString& key : keysIn(body)) {
+                QVERIFY2(classifySettingsKey(key) == SettingsScope::Station, qPrintable(key));
+            }
+        }
     }
 
     // The sweep above must be able to fail: a Core key in a ThisComputer

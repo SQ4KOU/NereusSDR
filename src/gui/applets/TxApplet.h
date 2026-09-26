@@ -106,6 +106,10 @@
 //                 PS-A, which arms PureSignal on the Core from a remote
 //                 window off the air. J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-25 : Task 16 fix wave: followActiveSliceMode (M3) and the
+//                 transmit permission's reason kept for the receive-only
+//                 lock (M6). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                 Claude Code.
 // =================================================================
 
 //=================================================================
@@ -355,6 +359,10 @@ public:
     // TestTwoTonePage (matches AudioTxInputPage / RxApplet patterns).
     QComboBox*   profileCombo()      const { return m_profileCombo; }
     QPushButton* twoToneButton()     const { return m_twoToneBtn; }
+    // Task 16: the keying buttons receive only disables.
+    QPushButton* moxButton()         const { return m_moxBtn; }
+    QPushButton* tuneButton()        const { return m_tuneBtn; }
+    QPushButton* voxButton()         const { return m_voxBtn; }
     // Issue #175 Task 7: HL2 slider rescale + dB label test access.
     QSlider*     rfPowerSlider()    const noexcept { return m_rfPowerSlider; }
     QSlider*     tunePowerSlider()  const noexcept { return m_tunePwrSlider; }
@@ -434,6 +442,18 @@ private:
     // K.2: slot called when SliceModel::dspModeChanged fires (via RadioModel).
     // Updates m_moxBtn->setToolTip(tooltipForMode(mode)).
     void onMoxModeChanged(DSPMode mode);
+
+    // Task 16: receive only disables MOX (in every mode, fix wave I3), TUNE,
+    // 2-Tone and VOX with its reason, as Thetis console.RXOnly does
+    // (console.cs:15318-15324 [v2.10.3.15]). It sits on top of the remote
+    // transmit-permission gate: remove it, change the layer below, put it
+    // back.
+    void removeReceiveOnlyLock();
+    void applyReceiveOnlyLock();
+    // Task 16 fix wave (M3): follow the active slice's mode for the MOX
+    // tooltip; m_moxModeConnection is the current slice's connection.
+    void followActiveSliceMode();
+    QMetaObject::Connection m_moxModeConnection;
 
     // Canonical TX band derived from the active slice's frequency.  This
     // is the band the radio actually transmits on (RadioModel.cpp:903-905
@@ -587,6 +607,9 @@ private:
     bool remoteTunePower() const;
     int  shownTunePower(Band band) const;
     void requestRemoteTunePower(int watts);
+    // The words the transmit-permission gate shows while it holds; the
+    // receive-only lock names them beside its own (Task 16 fix wave, M6).
+    QString m_transmitPermissionReason;
 };
 
 } // namespace NereusSDR

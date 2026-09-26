@@ -119,13 +119,38 @@
 //                                    hello's `majors` and `features`.
 //                                    AI-assisted transformation via
 //                                    Anthropic Claude Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 12 (R-IOS-08,
+//                                    R-IOS-01): the Core hello's
+//                                    `identity` and `challenge`,
+//                                    auth.request's `device`, and the end
+//                                    `code` on auth.result and
+//                                    session.end. AI-assisted
+//                                    implementation via Anthropic Claude
+//                                    Code.
+//   2026-09-24  J.J. Boyd / KG4VCF  iPhone app Task 14 (R-IOS-08): the
+//                                    five pair.* kinds (pair.start,
+//                                    pair.accept, pair.spake, pair.confirm,
+//                                    pair.fail). AI-assisted implementation
+//                                    via Anthropic Claude Code.
+//   2026-09-24: Part C fix wave: the optional device shortName in
+//               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app Task 71 (R-IOS-02):
+//               SessionEndCode::kSameDevice. J.J. Boyd (KG4VCF), with AI-
+//               assisted implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app Task 74 (R-IOS-30): confirm.request and notice
+//               (SessionPrompt). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
 #include <QHash>
 #include <QList>
 #include <QMetaType>
+#include <QJsonArray>
 #include <QJsonObject>
+
+#include <optional>
 
 #include "core/session/MirrorSchema.h"
 #include "core/session/StationTelemetry.h"
@@ -165,6 +190,23 @@ enum class SessionMessageKind {
     // R3: bounded, capability-gated station observations. Never a command.
     StationTelemetry,
     PropertyResult,
+    // iPhone app Task 14 (R-IOS-08): pairing a device, on a connection
+    // that sends pair.start after its hello instead of auth.request, and
+    // only to a Core whose hello declares features.pairing (the link
+    // document's Pairing section). The connection ends after pair.accept,
+    // the Core's pair.confirm, or pair.fail.
+    PairStart,    // device -> Core: mode "lan" or "code", and the device
+    PairAccept,   // Core -> device: one tap succeeded; the Core's identity
+    PairSpake,    // both: one SPAKE2+EE step, 0 to 3
+    PairConfirm,  // both: a confirmation box under the agreed keys
+    PairFail,     // Core -> device: why not, and when to try again
+    // iPhone app Task 74 (R-IOS-30; the several-devices design, sections
+    // 7.3 and 7.4): Core -> device, only to a device with
+    // sessionHolderVersion 1. A change that reaches another device, or a
+    // take, asks first (confirm.request); what another device did is told
+    // afterwards (notice).
+    ConfirmRequest,
+    Notice,
 };
 
 /// The session protocol's own semantic version, advertised by BOTH ends in
@@ -239,6 +281,115 @@ inline constexpr qsizetype kMaxMediaControlBytes = 128 * 1024;
 // session the other has already given up on for long.
 inline constexpr int kStationHandshakeDeadlineMs = 30000;
 inline constexpr qsizetype kMaxStationTelemetryBytes = 16 * 1024;
+
+// iPhone app Task 12 (R-IOS-08): the machine-readable end codes an
+// auth.result refusal or a session.end may carry in `code` (the link
+// document, section 12.4). A client reads the code where it is present and
+// falls back to the reason text for an older Core, which sends none. A
+// code is a stable token, never shown; the reason beside it is what the
+// operator reads.
+namespace SessionEndCode {
+/// Another app signed in and took the session.
+inline constexpr const char* kTakenOver = "takenOver";
+/// The two ends share no link major.
+inline constexpr const char* kLinkVersion = "linkVersion";
+/// A sign-in with the pairing token on a Core that has none (a new Core,
+/// or one whose token was retired): "This Core uses paired devices. Pair
+/// this device first."
+inline constexpr const char* kPairingRequired = "pairingRequired";
+/// The pairing token was wrong.
+inline constexpr const char* kWrongToken = "wrongToken";
+/// A well-formed device sign-in from a key the Core has not paired.
+inline constexpr const char* kDeviceNotPaired = "deviceNotPaired";
+/// A device sign-in that did not prove itself: a bad signature, one over
+/// another connection's challenge or another certificate, or a malformed
+/// device block.
+inline constexpr const char* kDeviceProofFailed = "deviceProofFailed";
+/// The device was removed from the Core (Task 13's revoke).
+inline constexpr const char* kDeviceRemoved = "deviceRemoved";
+/// iPhone app Task 71 (ruling 4.8): the same device signed in on a newer
+/// connection, which replaced this one: "This device connected again."
+inline constexpr const char* kSameDevice = "sameDevice";
+/// The client's own reason, never sent by a Core: the Core's certificate
+/// or identity key is not the one this device paired with.
+inline constexpr const char* kIdentityChanged = "identityChanged";
+/// The app broke the connect sequence or sent a message the Core cannot
+/// read.
+inline constexpr const char* kProtocolError = "protocolError";
+} // namespace SessionEndCode
+
+/// iPhone app Task 12: the Core hello's `identity`, base64url text as on
+/// the wire (the link document, section 3.4).
+struct SessionStationIdentity {
+    QString publicKey;    // the Core's identity key, SPKI DER
+    QString certBinding;  // raw r || s over "NereusSDR cert-binding v1\n" || SHA-256(cert)
+};
+
+/// iPhone app Task 12: auth.request's `device`, base64url text as on the
+/// wire (the link document, section 3.5).
+/// iPhone app Task 74 (R-IOS-30): the body of a confirm.request or a
+/// notice (the several-devices design, sections 7.3 and 7.4; the link
+/// document, section 7.3). Its `reason` rides in SessionMessage::reason.
+/// The nested values (affected, change, choices, slices) are JSON the Core
+/// builds and the device reads as the link document describes them.
+struct SessionPrompt {
+    /// Both: the question's or the notice's id, unique on this Core.
+    qint64 id = 0;
+    /// Both: confirm.request panMove, takeReceiver, takeSlice (Tasks 75 and
+    /// 77 add sharedSetting and takeTransmit); notice sliceMoved,
+    /// sliceClosed, receiverTaken, sliceTaken, graceEnded,
+    /// slicesNotRestored.
+    QString kind;
+
+    // ── confirm.request ─────────────────────────────────────────────────
+    /// One entry per disturbed device.
+    QJsonArray affected;
+    qint64 expiresInMs = 0;
+    /// {label, from, to}; absent for a take.
+    std::optional<QJsonObject> change;
+    /// A take's list, one entry per receiver or slice.
+    std::optional<QJsonArray> choices;
+    std::optional<qint64> forCommandId;
+    std::optional<qint64> forWriteId;
+    /// Sent when not empty.
+    QString forSettingsKey;
+
+    // ── notice ──────────────────────────────────────────────────────────
+    /// Whole seconds since it happened, measured when it is sent.
+    qint64 secondsAgo = 0;
+    bool takeBack = false;
+    /// Who did it; each sent when not empty. None on a notice about the
+    /// device's own state.
+    QString byDeviceId;
+    QString byName;
+    QString byShortName;
+    QString byKind;
+    QString bySource;
+    /// [{sliceId, letter, frequencyHz, mode, band}], closed ones included.
+    std::optional<QJsonArray> slices;
+};
+
+/// iPhone app Task 14: the device pair.start names (its key as base64url of
+/// SPKI DER, a name and a kind). In code mode the name and kind inside the
+/// device's confirmation box win over these.
+struct SessionPairDevice {
+    QString publicKey;
+    QString name;
+    QString kind;       // "phone", "tablet", "computer"
+};
+
+struct SessionDeviceBlock {
+    QString id;         // SHA-256 of the device key's SPKI DER
+    QString publicKey;  // the device key, SPKI DER
+    QString name;
+    QString kind;       // "phone", "tablet", "computer"
+    QString signature;  // raw r || s over the device-auth transcript
+    /// Optional (Part C fix wave, settled with the phone session): the
+    /// device's own short name, at most DeviceStore::kMaxShortNameBytes of
+    /// UTF-8; "" when absent, and then not encoded. Outside the signed
+    /// transcript, as `name` is.
+    QString shortName;
+};
 
 /// One property's WIRE DECLARATION: name, ordinal and kind, carrying no
 /// live value. This is what a Schema message announces once per class per
@@ -425,11 +576,32 @@ struct SessionMessage {
     bool majorsOnWire = false;
     bool featuresOnWire = false;
 
+    // ── iPhone app Task 12 (R-IOS-08): the Core's Hello only ────────────
+
+    /// The Core's identity key and its binding to the TLS certificate. On
+    /// the wire as `identity`; a hello without it (a client's, or an
+    /// older Core's) decodes as nullopt.
+    std::optional<SessionStationIdentity> stationIdentity;
+    /// This connection's device sign-in challenge, base64url of 32 bytes.
+    /// On the wire as `challenge` when not empty.
+    QString challenge;
+
     // ── Task 18: AuthRequest only ───────────────────────────────────────
 
     /// The pre-shared token (TokenStore). NEVER logged: StationServer logs
-    /// the OUTCOME of a verify, never the candidate.
+    /// the OUTCOME of a verify, never the candidate. Empty in a device
+    /// sign-in.
     QString token;
+
+    /// iPhone app Task 12: the device sign-in block. On the wire as
+    /// `device`; absent decodes as nullopt.
+    std::optional<SessionDeviceBlock> device;
+
+    // ── iPhone app Task 12: AuthResult and SessionEnd only ──────────────
+
+    /// A SessionEndCode token, on the wire as `code` when not empty. A
+    /// client that does not know the code reads `reason`.
+    QString endCode;
 
     // ── Task 18: SettingsWrite / SettingsValue only ─────────────────────
 
@@ -440,10 +612,31 @@ struct SessionMessage {
     /// paragraph.
     QString originTag;
 
+    // ── iPhone app Task 14: the pair.* kinds ───────────────────────────
+
+    /// PairStart: "lan" (one tap) or "code".
+    QString pairMode;
+    /// PairStart: the device asking to pair.
+    std::optional<SessionPairDevice> pairDevice;
+    /// PairAccept: the Core's label (its identity rides in stationIdentity).
+    QString pairLabel;
+    /// PairSpake: the step, 0 to 3, and its bytes as base64url.
+    int pairStep = 0;
+    QString pairData;
+    /// PairConfirm: the box as base64url (a 24-byte nonce, then the
+    /// ciphertext).
+    QString pairBox;
+    /// PairFail: milliseconds until trying again makes sense (0: now, or
+    /// never with this Core as it stands). Its reason rides in `reason`.
+    qint64 retryAfterMs = 0;
+
     /// R3 MediaControl only. Individual media operations validate their own
     /// fields after the authenticated, snapshot-ready session gate. This
     /// envelope carries signalling/subscriptions, never audio or FFT arrays.
     QJsonObject mediaPayload;
+
+    /// iPhone app Task 74: ConfirmRequest and Notice only.
+    SessionPrompt prompt;
 };
 
 /// Builders plus the JSON codec. A static-method utility class with no
@@ -498,6 +691,11 @@ public:
     /// Client to daemon, once the daemon's Hello has been accepted.
     static SessionMessage authRequest(const QString& token);
 
+    /// iPhone app Task 12: a device sign-in (`token` empty), or a window
+    /// signing in with the pairing token and enrolling its device key in
+    /// the same step (`token` set).
+    static SessionMessage authRequest(const QString& token, const SessionDeviceBlock& device);
+
     /// Daemon to client. A false `accepted` is always followed by the
     /// daemon closing the socket; `reason` is what the operator sees and
     /// `retryable` is what the client's reconnect policy reads. Both are
@@ -506,6 +704,9 @@ public:
     /// SessionMessage::retryable.
     static SessionMessage authResult(bool accepted, const QString& reason,
                                      bool retryable);
+    /// iPhone app Task 12: a refusal with its SessionEndCode.
+    static SessionMessage authResult(bool accepted, const QString& reason, bool retryable,
+                                     const QString& endCode);
 
     /// Daemon to client, after a successful AuthResult. `descriptor` is
     /// StationCapabilities::toUpdates() -- MirrorUpdate reused as a generic
@@ -520,6 +721,9 @@ public:
     /// session is told why"). `retryable` is required for the same reason
     /// it is on authResult(); see SessionMessage::retryable.
     static SessionMessage sessionEnd(const QString& reason, bool retryable);
+    /// iPhone app Task 12: an end with its SessionEndCode.
+    static SessionMessage sessionEnd(const QString& reason, bool retryable,
+                                     const QString& endCode);
 
     /// Client to daemon: apply these property values to this object. The
     /// mirror-image of a Delta, deliberately a DISTINCT kind rather than a
@@ -575,6 +779,24 @@ public:
     /// unset, which SettingsProxy::applyRejection() distinguishes from a
     /// restored empty string) and is encoded as an EMPTY entry list rather
     /// than an entry carrying an empty value.
+    // ── iPhone app Task 14: pairing ─────────────────────────────────────
+
+    static SessionMessage pairStart(const QString& mode, const SessionPairDevice& device);
+    static SessionMessage pairAccept(const SessionStationIdentity& identity,
+                                     const QString& label);
+    static SessionMessage pairSpake(int step, const QString& data);
+    static SessionMessage pairConfirm(const QString& box);
+    /// `reason` is what the operator reads; `retryAfterMs` is when trying
+    /// again makes sense.
+    static SessionMessage pairFail(const QString& reason, qint64 retryAfterMs);
+
+    /// iPhone app Task 74 (R-IOS-30): Core to device, a question before a
+    /// change that reaches another device, or a take.
+    static SessionMessage confirmRequest(const SessionPrompt& prompt, const QString& reason);
+    /// iPhone app Task 74 (R-IOS-30): Core to device, what another device
+    /// did to it, or what happened to its own state.
+    static SessionMessage notice(const SessionPrompt& prompt, const QString& reason);
+
     static SessionMessage settingsReject(const QString& key, bool hasRestoredValue,
                                          const QString& restoredValue,
                                          const QString& reason = {});

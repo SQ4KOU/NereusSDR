@@ -55,6 +55,13 @@
 //                 capitals like the flag's other buttons (operator's
 //                 captions). J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-24 - iPhone app Task 19 (R-IOS-06): the AGC labels, the AGC-T
+//                 range and the slice colours come from ControlRanges.h,
+//                 which the Core's catalogue reads too. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - iPhone app follow-up (R-IOS-06): the AF and SQL slider
+//                 ranges come from ControlRanges.h too. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 //   2026-09-25 - R-R3-49, R-R3-21 (parity Task 11): the XIT button, offset
 //                 and zero write the slice in a remote window as in a local
 //                 one; they no longer follow the transmit permission.
@@ -312,6 +319,7 @@ warren@wpratt.com
 #include "gui/UnbuiltFeatures.h"
 #include "gui/OperatorReasonText.h"
 #include "core/BoardCapabilities.h"
+#include "core/ControlRanges.h"
 #include "core/SkuUiProfile.h"
 #include "core/HpsdrModel.h"
 #include "core/accessories/AlexController.h"
@@ -1152,7 +1160,8 @@ void VfoWidget::buildAudioTab()
         row->addWidget(label);
 
         m_afGainSlider = new QSlider(Qt::Horizontal, audioWidget);
-        m_afGainSlider->setRange(0, 100);
+        m_afGainSlider->setRange(ControlRanges::kAfGainMin, ControlRanges::kAfGainMax);
+        m_afGainSlider->setSingleStep(ControlRanges::kAfGainStep);
         m_afGainSlider->setValue(50);
         m_afGainSlider->setStyleSheet(
             QStringLiteral("QSlider::groove:horizontal { background: #1a2a3a; height: 6px; border-radius: 3px; }"
@@ -1184,7 +1193,10 @@ void VfoWidget::buildAudioTab()
 
     // 2. AGC 5-button row — replaces m_agcCmb (live-wired, no NYI badge)
     {
-        static const char* kAgcLabels[] = { "Off", "Long", "Slow", "Med", "Fast" };
+        // The labels come from ControlRanges.h, which the Core's catalogue
+        // reads too (iPhone app Task 19).
+        static_assert(ControlRanges::kAgcModes.size() == 5,
+                      "the flag's AGC row has five buttons");
         // From Thetis console.resx:4554 (comboAGC.ToolTip) + console.cs:27987-28041
         // Thetis sets dynamic tooltip per AGC mode change; we use static variants.
         static const char* kAgcTooltips[] = {
@@ -1199,7 +1211,8 @@ void VfoWidget::buildAudioTab()
         row->setContentsMargins(0, 0, 0, 0);
         for (int i = 0; i < 5; ++i) {
             m_agcBtns[i] = new QPushButton(
-                QString::fromLatin1(kAgcLabels[i]), audioWidget);
+                QString::fromLatin1(ControlRanges::kAgcModes[static_cast<std::size_t>(i)].label),
+                audioWidget);
             m_agcBtns[i]->setCheckable(true);
             m_agcBtns[i]->setStyleSheet(vfoDspToggleStyle());
             m_agcBtns[i]->setToolTip(QString::fromLatin1(kAgcTooltips[i]));
@@ -1364,8 +1377,8 @@ void VfoWidget::buildAudioTab()
         row->addWidget(m_sqlBtn);
 
         m_sqlSlider = new QSlider(Qt::Horizontal, audioWidget);
-        m_sqlSlider->setRange(0, 100);
-        m_sqlSlider->setSingleStep(1);
+        m_sqlSlider->setRange(ControlRanges::kSsqlThreshMin, ControlRanges::kSsqlThreshMax);
+        m_sqlSlider->setSingleStep(ControlRanges::kSsqlThreshStep);
         m_sqlSlider->setValue(0);
         m_sqlSlider->setStyleSheet(
             QStringLiteral("QSlider::groove:horizontal { background: #1a2a3a; height: 6px; border-radius: 3px; }"
@@ -1389,7 +1402,8 @@ void VfoWidget::buildAudioTab()
     }
 
     // 6. AGC threshold slider row
-    // From Thetis Project Files/Source/Console/console.cs:45977 — agc_thresh_point, range -160..0
+    // From Thetis Project Files/Source/Console/console.cs:46048-46049 [v2.10.3.15] — agc_thresh_point, range -160..+2
+    // (MW0LGE_21k9d: values are already offset as part of Display)
     {
         m_agcTContainer = new QWidget(audioWidget);
         auto* containerLayout = new QVBoxLayout(m_agcTContainer);
@@ -1404,8 +1418,9 @@ void VfoWidget::buildAudioTab()
         row->addWidget(m_agcTLabelWidget);
 
         m_agcTSlider = new QSlider(Qt::Horizontal, m_agcTContainer);
-        m_agcTSlider->setRange(-160, 0);
-        m_agcTSlider->setSingleStep(1);
+        m_agcTSlider->setRange(ControlRanges::kAgcThresholdMinDb,
+                               ControlRanges::kAgcThresholdMaxDb);
+        m_agcTSlider->setSingleStep(ControlRanges::kAgcThresholdStepDb);
         m_agcTSlider->setValue(-20);
         m_agcTSlider->setStyleSheet(
             QStringLiteral("QSlider::groove:horizontal { background: #1a2a3a; height: 6px; border-radius: 3px; }"
@@ -2618,7 +2633,8 @@ void VfoWidget::setSsqlThresh(double dB)
 void VfoWidget::setAgcThreshold(int dBu)
 {
     if (m_agcTSlider) {
-        int val = std::max(-160, std::min(0, dBu));
+        int val = std::max(ControlRanges::kAgcThresholdMinDb,
+                           std::min(ControlRanges::kAgcThresholdMaxDb, dBu));
         if (m_agcTSlider->value() != val) {
             m_updatingFromModel = true;
             m_agcTSlider->setValue(val);
@@ -3423,14 +3439,9 @@ QString VfoWidget::formatFilterWidth(int low, int high) const
 
 QColor VfoWidget::sliceColor(int index)
 {
-    // From AetherSDR SliceColors.h
-    switch (index) {
-    case 0: return QColor(0x00, 0xd4, 0xff);  // cyan
-    case 1: return QColor(0xff, 0x40, 0xff);  // magenta
-    case 2: return QColor(0x40, 0xff, 0x40);  // green
-    case 3: return QColor(0xff, 0xff, 0x00);  // yellow
-    default: return QColor(0x00, 0xd4, 0xff);
-    }
+    // From AetherSDR SliceColors.h (the table is ControlRanges.h's
+    // kSliceColours, which the Core's catalogue reads too).
+    return QColor(static_cast<QRgb>(ControlRanges::sliceColour(index)));
 }
 
 // Phase 3P-I-a T15 — gate RX/TX ANT buttons on Alex presence and antenna count.

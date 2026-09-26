@@ -196,7 +196,7 @@ const QList<Entry>& all()
         {F::FreeDvToPsk, QStringLiteral("freedv-psk"),
          QStringLiteral("Spot Hub report FreeDV decodes to PSK Reporter")},
         {F::TciExtras, QStringLiteral("tci-extras"),
-         QStringLiteral("TCI rate limit, CW to CWU, TX channel, sensor intervals, the three "
+         QStringLiteral("TCI CW to CWU, TX channel, sensor intervals, the three "
                         "RX2 VFO options, stream channels")},
         {F::SmallFilter, QStringLiteral("small-filter"),
          QStringLiteral("Setup > Appearance small filter display on the VFO flag")},
@@ -226,9 +226,10 @@ const QList<Entry>& all()
                         "tone choices")},
         // Plan C5 and C6 (parity Task 13): nothing reads these keys in any
         // window; the HL2 wire always carries PTT hang 12 and TX latency 20.
+        // The Alex-1 high-pass switches C5 also named are applied since plan
+        // Task 14 and stay shown.
         {F::AlexTxFilterOptions, QStringLiteral("alex-tx-filters"),
-         QStringLiteral("Setup > Hardware > Alex-1 Filters: HPF bypass on TX, HPF bypass on "
-                        "PureSignal, Disable 6 m LNA on TX, the LPF band edges")},
+         QStringLiteral("Setup > Hardware > Alex-1 Filters: the LPF band edges")},
         {F::Hl2TxTiming, QStringLiteral("hl2-tx-timing"),
          QStringLiteral("Setup > Hardware > HL2 Options: TX buffer latency, PTT hang")},
     };

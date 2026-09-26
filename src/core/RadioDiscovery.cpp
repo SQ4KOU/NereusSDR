@@ -17,6 +17,10 @@
 //                 Claude Code.
 //                 Structural pattern follows AetherSDR (ten9876/AetherSDR,
 //                 GPLv3).
+//   2026-09-25 - Receiver and transmit gaps plan, Task 5: a Protocol 1
+//                 reply's top rate follows the board (384 kHz for the HL2,
+//                 192 kHz for the others) instead of 384 kHz for all.
+//                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  clsRadioDiscovery.cs
@@ -63,6 +67,7 @@ mw0lge@grange-lane.co.uk
 #include <QThread>
 #include <QMutexLocker>
 #include "BoardCapabilities.h"
+#include "HardwareProfile.h"
 #include "LogCategories.h"
 
 #include <QDateTime>
@@ -108,6 +113,9 @@ int RadioInfo::maxReceiversForBoard(HPSDRHW type)
     case HPSDRHW::Hermes:       return 4;
     case HPSDRHW::HermesII:     return 4;
     case HPSDRHW::HermesLite:   return 4;
+    case HPSDRHW::HermesLiteRxOnly: return 4; // Plan Task 15: the kit is an HL2
+                                              // (mi0bot console.cs:8409 HERMESLITE
+                                              // P1_rxcount = 4 [v2.10.3.13-beta2])
     case HPSDRHW::HermesC10:    return 4; // ANAN-G2E: HERMES-class single-ADC nrx=4
                                           // [N1GP G2E added; Thetis network.h:425 v2.10.3.15]
     case HPSDRHW::Angelia:      return 7;
@@ -326,7 +334,16 @@ bool RadioDiscovery::parseP1Reply(const QByteArray& bytes, const QHostAddress& s
     out.name                = QString::fromLatin1(BoardCapsTable::forBoard(out.boardType).displayName);
     out.hasDiversityReceiver = (out.adcCount >= 2);
     out.hasPureSignal        = (out.boardType != HPSDRHW::Atlas && out.boardType != HPSDRHW::Unknown);
-    out.maxSampleRate        = 384000;  // P1 max
+    // Plan Task 5: the top Protocol 1 rate for this board, not 384 kHz for
+    // every reply. On Protocol 1 only the RedPitaya (Thetis) and the HL2
+    // (mi0bot) reach 384 kHz; every other board tops out at 192 kHz. The
+    // cited ladder is BoardCapsTable::sampleRatesFor. A reply carries the board, not the model, so the board's default
+    // model stands in. A RedPitaya answers as a Hermes or OrionMKII board
+    // and is told apart only by the model the operator picks; the rate
+    // list and Radio Info read that model.
+    out.maxSampleRate = BoardCapsTable::maxSampleRateFor(
+        BoardCapsTable::forBoard(out.boardType), ProtocolVersion::Protocol1,
+        defaultModelForBoard(out.boardType));
 
     return true;
 }

@@ -106,6 +106,22 @@
 // (Tasks 7-8's own signal) is untouched and fires exactly as it always
 // has, which is what keeps local direct mode from regressing.
 //
+// iPhone app Task 72 (R-IOS-02; the several-devices design, rulings 5.6
+// and 5.7): the mirror keeps its one set of watches, and each admitted
+// device gets a MirrorView (MirrorView.h) with its own coalescer, its own
+// attach burst and its own sink. The guard above is now PER WRITER:
+// applyInbound() names the view of the device whose write it applies, and
+// a notify raised while it runs (the property written or a side effect on
+// another object) is withheld from that view only and reaches every other
+// view. A write with no view (a window's StationClient mirror) still
+// suppresses propertiesChanged() while it runs, exactly as before.
+// WriterScope marks changes made outside applyInbound() as one device's
+// write (a change applied on confirm.proceed, Task 74). attachSession(),
+// flushCoalescedDeltas() and sessionMessageReady() remain, served by one
+// view the mirror owns itself, and the three-argument applyInbound()
+// names that view as its writer, so a single-session caller sees exactly
+// the old behaviour.
+//
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-08-05  J.J. Boyd / KG4VCF  Remote daemon R2 Task 7: outbound
@@ -137,6 +153,10 @@
 //                                    frame is keyed by. AI-assisted
 //                                    transformation via Anthropic Claude
 //                                    Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app Task 72 (R-IOS-02): a
+//                                    MirrorView per device, echo per
+//                                    writer, WriterScope, currentValues().
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -145,14 +165,19 @@
 #include <QMutex>
 #include <QObject>
 #include <QPair>
+#include <QPointer>
 #include <QQueue>
 #include <QString>
 #include <QVariant>
+
+#include <memory>
 
 #include "core/session/MirrorSchema.h"
 #include "core/session/SessionMessages.h"
 
 namespace NereusSDR {
+
+class MirrorView;
 
 /// Outbound delta coalescer: TciVfoCoalescer's shape (TciVfoCoalescer.h --
 /// QHash latest-wins storage plus a QQueue for arrival order, mutex
@@ -353,7 +378,36 @@ public:
     /// (propertiesChanged(), Tasks 7-8) never checks this; it exists so a
     /// test -- or a future caller -- can tell without depending on
     /// sessionMessageReady() having fired anything yet.
-    bool hasAttachedSession() const { return m_hasAttachedSession; }
+    bool hasAttachedSession() const;
+
+    /// iPhone app Task 72: the current value of each of `ordinals` on the
+    /// watched object `objectKey`, read from the live object, in the order
+    /// given; a property that is unknown or reads invalid is left out.
+    /// Empty for an unwatched key. A MirrorView's flush decides its deltas
+    /// with this.
+    QList<MirrorUpdate> currentValues(const QByteArray& objectKey,
+                                      const QList<quint16>& ordinals) const;
+
+    /// iPhone app Task 72 (ruling 5.7): marks every change made while it
+    /// lives as `writer`'s write. Such a change is withheld from `writer`
+    /// (when it is not null) and reaches every other view;
+    /// propertiesChanged() stays silent throughout. Save and restore, so a
+    /// nested scope (or a nested applyInbound()) never clears its caller's.
+    /// applyInbound() opens one itself; a caller that applies a device's
+    /// change another way (a change applied on confirm.proceed, Task 74)
+    /// opens one around it.
+    class WriterScope {
+    public:
+        WriterScope(StateMirror& mirror, const MirrorView* writer);
+        ~WriterScope();
+        WriterScope(const WriterScope&) = delete;
+        WriterScope& operator=(const WriterScope&) = delete;
+
+    private:
+        StateMirror& m_mirror;
+        bool m_previousApplying;
+        const MirrorView* m_previousWriter;
+    };
 
     /// Apply one write a remote peer sent for a watched object's property,
     /// looked up by NAME. See the class-level comment for the three-way
@@ -369,6 +423,16 @@ public:
     MirrorApplyResult applyInbound(const QByteArray& objectKey,
                                    const QByteArray& propertyName,
                                    const QVariant& wireValue);
+
+    /// iPhone app Task 72: the same, as the write of the device whose view
+    /// is `writer` (ruling 5.7). What the write changes, here or on another
+    /// object, is withheld from `writer` only and reaches every other view.
+    /// The three-argument form above is this with the mirror's own
+    /// attachSession() view as the writer.
+    MirrorApplyResult applyInbound(const QByteArray& objectKey,
+                                   const QByteArray& propertyName,
+                                   const QVariant& wireValue,
+                                   const MirrorView* writer);
 
     /// Same, keyed by the property's wire ordinal rather than its name.
     ///
@@ -416,43 +480,50 @@ private:
         const MirrorSchema* schema = nullptr;
     };
 
+    friend class MirrorView;
+
     int indexOfKey(const QByteArray& objectKey) const;
     int indexOfObject(const QObject* object) const;
     void detach(const Watch& watch);
 
-    /// Shared body of both applyInbound() overloads once the property has
+    /// Shared body of the applyInbound() overloads once the property has
     /// been resolved.
     MirrorApplyResult applyInboundToProperty(const Watch& watch,
                                              const MirrorProperty& prop,
-                                             const QVariant& wireValue);
+                                             const QVariant& wireValue,
+                                             const MirrorView* writer);
+
+    /// The attachSession() view, made on its first call.
+    MirrorView* legacyView();
+
+    /// MirrorView's own constructor and destructor call these.
+    void addView(MirrorView* view);
+    void removeView(MirrorView* view);
 
     QList<Watch> m_watches;
 
-    /// True for the duration of one applyInbound() call, INCLUDING any call
-    /// nested inside it. Checked first in onWatchedPropertyChanged(),
-    /// before that slot asks which object fired it, so it suppresses every
-    /// notify produced while true -- not only on the property
-    /// applyInbound() is writing, but on any other watched object a same-
-    /// thread, synchronous side effect of that write touches. Set and
-    /// cleared only through ApplyingGuard (StateMirror.cpp), which
-    /// saves/restores rather than hardcoding false, so a nested apply
-    /// cannot clear its caller's still-in-flight guard. See the class-level
-    /// comment.
+    /// True for the duration of one applyInbound() call or WriterScope,
+    /// INCLUDING any nested inside it; m_applyingWriter is the view of the
+    /// device whose write it is (null for a write with no view). While
+    /// true, onWatchedPropertyChanged() withholds every change from that
+    /// view alone, not only the property written but any other watched
+    /// object a same-thread, synchronous side effect of the write touches,
+    /// and emits no propertiesChanged(). Set and cleared only through
+    /// WriterScope, which saves/restores rather than hardcoding false, so a
+    /// nested apply cannot clear its caller's still-in-flight guard. See
+    /// the class-level comment.
     bool m_applying = false;
+    const MirrorView* m_applyingWriter = nullptr;
 
-    /// True from the first attachSession() call onward. Gates whether
-    /// onWatchedPropertyChanged() feeds m_coalescer at all: while false
-    /// (no session has ever attached, which is every Task 7/8/9 test and
-    /// every use of this class before Task 10), NOTHING about this task's
-    /// changes runs, which is the mechanism behind "the coalescer must
-    /// not change any behaviour when no session is attached."
-    bool m_hasAttachedSession = false;
+    /// iPhone app Task 72: every view, in the order they joined. A view
+    /// that is deleted leaves on its own (MirrorView's destructor).
+    QList<QPointer<MirrorView>> m_views;
 
-    /// Task 10's outbound coalescer. See MirrorCoalescer's own class
-    /// comment and attachSession()'s doc comment for how the two
-    /// cooperate to keep a mid-burst change from being observed ahead of
-    /// the snapshot-complete marker.
-    MirrorCoalescer m_coalescer;
+    /// The one view attachSession(), flushCoalescedDeltas() and
+    /// sessionMessageReady() serve (Task 10's single-session API). Made on
+    /// the first attachSession(); until then no change is collected for
+    /// it, which is what keeps local direct mode unaffected.
+    std::unique_ptr<MirrorView> m_legacyView;
 };
 
 } // namespace NereusSDR

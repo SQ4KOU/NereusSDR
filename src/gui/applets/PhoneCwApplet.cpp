@@ -37,6 +37,10 @@
 //                 level, and the CW and FM pages are hidden (UnbuiltFeatures)
 //                 until built; with one page left there are no page tabs.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-24 - iPhone app Task 19 (R-IOS-06): the mic level gauge's range
+//                 and zones come from ControlRanges.h, which the Core's
+//                 catalogue reads too. J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 //   2026-09-24 - R-R3-49 (parity Task 2): the mic level, PROC and its
 //                 level, AM carrier and DEXP follow the transmit settings
 //                 gate (setTransmitSettingsPermitted), not the keying gate.
@@ -98,6 +102,7 @@
 #include "gui/ComboStyle.h"
 #include "gui/widgets/DexpPeakMeter.h"
 #include "core/BoardCapabilities.h"
+#include "core/ControlRanges.h"
 #include "core/HpsdrModel.h"
 #include "core/MicProfileManager.h"
 #include "core/AudioEngine.h"
@@ -287,9 +292,11 @@ void PhoneCwApplet::buildPhonePage(QWidget* page)
     // HGauge(-40, +10, redStart=0, yellowStart=-10)
     // Ticks: -40/-30/-20/-10/0/+5/+10
     m_levelGauge = new HGauge(page);
-    m_levelGauge->setRange(-40.0, 10.0);
-    m_levelGauge->setYellowStart(-10.0);
-    m_levelGauge->setRedStart(0.0);
+    // The values are ControlRanges.h's, which the Core's catalogue reads too
+    // (iPhone app Task 19).
+    m_levelGauge->setRange(ControlRanges::kMicLevelMinDb, ControlRanges::kMicLevelMaxDb);
+    m_levelGauge->setYellowStart(ControlRanges::kMicLevelYellowFromDb);
+    m_levelGauge->setRedStart(ControlRanges::kMicLevelRedFromDb);
     m_levelGauge->setTitle(QStringLiteral("Level"));
     m_levelGauge->setUnit(QStringLiteral("dB"));
     m_levelGauge->setTickLabels({QStringLiteral("-40dB"), QStringLiteral("-30"),
@@ -1238,7 +1245,8 @@ void PhoneCwApplet::wireControls()
         }
 
         // Clamp to gauge range [-40, +10].
-        m_levelGauge->setValue(qBound(-40.0, dB, 10.0));
+        m_levelGauge->setValue(qBound(ControlRanges::kMicLevelMinDb, dB,
+                                      ControlRanges::kMicLevelMaxDb));
     });
     m_micLevelTimer->start();
 }

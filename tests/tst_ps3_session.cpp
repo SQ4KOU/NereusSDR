@@ -27,6 +27,7 @@
 #include "gui/PsForm.h"
 #include "gui/DspAssetDialog.h"
 #include "fakes/LoopbackTransport.h"
+#include "fakes/UpgradedCoreToken.h"
 
 using namespace NereusSDR;
 
@@ -196,7 +197,7 @@ private slots:
         QTemporaryDir directory;
         QVERIFY(directory.isValid());
         RadioModel station;
-        StationServer server(&station, AppSettings::instance(), directory.path());
+        StationServer server(&station, AppSettings::instance(), NereusSDR::Test::seedUpgradedCoreToken(directory.path()));
         server.setMediaEnabled(true);
         DaemonMediaController controller(&server, &station);
         QVERIFY(server.setDisplayBudgetLimits({1, 1, 1}));
@@ -242,7 +243,7 @@ private slots:
         RadioModel station;
         PureSignal* coordinator = station.installPureSignalForTest(nullptr);
         QSignalSpy started(coordinator, &PureSignal::calibrationStarted);
-        StationServer server(&station, AppSettings::instance(), security.path());
+        StationServer server(&station, AppSettings::instance(), NereusSDR::Test::seedUpgradedCoreToken(security.path()));
         RadioModel remote(RadioModel::Role::Remote);
         SettingsProxy proxy;
         StationClient client(&remote, &proxy);
@@ -297,7 +298,7 @@ private slots:
         station.setConnectionStateForTest(ConnectionState::Connected);
         station.dspAssets()->setRadioIdentity(info.macAddress);
         station.installPureSignalForTest(nullptr);
-        StationServer server(&station, AppSettings::instance(), directory.path());
+        StationServer server(&station, AppSettings::instance(), NereusSDR::Test::seedUpgradedCoreToken(directory.path()));
         RadioModel remote(RadioModel::Role::Remote);
         SettingsProxy proxy;
         StationClient client(&remote, &proxy);

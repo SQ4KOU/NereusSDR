@@ -37,6 +37,9 @@
 // setRfKitTciMode and setRfKitAddress on the wire, and the RF-Kit's
 // connection counts in the accessoryData fixture. J.J. Boyd (KG4VCF),
 // AI-assisted via Anthropic Claude Code.
+// 2026-09-25: checkpoint carry: parity Tasks 8 to 10's stations sign the
+// peer in with an upgraded Core's token (seedUpgradedCoreToken). J.J. Boyd
+// (KG4VCF), AI-assisted via Anthropic Claude Code.
 #include <QtTest/QtTest>
 #include <QFile>
 #include <QJsonArray>
@@ -75,6 +78,7 @@
 #include "models/SliceModel.h"
 
 #include "fakes/LoopbackTransport.h"
+#include "fakes/UpgradedCoreToken.h"
 
 using namespace NereusSDR;
 using NereusSDR::Test::LoopbackTransport;
@@ -606,7 +610,7 @@ private slots:
                  {QStringLiteral("vac"), QStringLiteral("240")}});
             AppSettings settings(dir.filePath(QStringLiteral("s-%1-%2.settings")
                                                   .arg(owns).arg(minor)));
-            StationServer server(&station, settings, dir.path());
+            StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
             LoopbackTransport* peer = nullptr;
             connectRawPeer(this, server, minor, &peer);
             QTRY_VERIFY(snapshotDone(peer));
@@ -651,22 +655,40 @@ private slots:
         for (const SessionMessage& m : current) {
             if (m.kind == SessionMessageKind::Capabilities) {
                 caps = StationCapabilities::fromUpdates(m.updates);
-                QCOMPARE(m.updates.at(m.updates.size() - 6).name,
+                QCOMPARE(m.updates.at(m.updates.size() - 12).name,
                          QByteArrayLiteral("remotePgxlControlVersion"));
-                QCOMPARE(m.updates.at(m.updates.size() - 5).name,
+                QCOMPARE(m.updates.at(m.updates.size() - 11).name,
                          QByteArrayLiteral("remoteRfKitControlVersion"));
                 // R-R3-48: then the station TCI server's version.
-                QCOMPARE(m.updates.at(m.updates.size() - 4).name,
+                QCOMPARE(m.updates.at(m.updates.size() - 10).name,
                          QByteArrayLiteral("stationTciVersion"));
                 // R-R3-47: then the accessory records' version.
-                QCOMPARE(m.updates.at(m.updates.size() - 3).name,
+                QCOMPARE(m.updates.at(m.updates.size() - 9).name,
                          QByteArrayLiteral("accessoryDataVersion"));
                 // R-R3-47: then the Tuner Genius's own settings.
-                QCOMPARE(m.updates.at(m.updates.size() - 2).name,
+                QCOMPARE(m.updates.at(m.updates.size() - 8).name,
                          QByteArrayLiteral("remoteTgxlControlVersion"));
-                // R-R3-49 (parity Task 1): the transmit settings travel last.
-                QCOMPARE(m.updates.constLast().name,
+                // iPhone app Task 12: then device sign-in by key.
+                QCOMPARE(m.updates.at(m.updates.size() - 7).name,
+                         QByteArrayLiteral("stationIdentityVersion"));
+                // iPhone app Task 13: then device administration.
+                QCOMPARE(m.updates.at(m.updates.size() - 6).name,
+                         QByteArrayLiteral("deviceAdminVersion"));
+                // iPhone app Task 14: then pairing.
+                QCOMPARE(m.updates.at(m.updates.size() - 5).name,
+                         QByteArrayLiteral("pairingVersion"));
+                // iPhone app Task 19: then the catalogue.
+                QCOMPARE(m.updates.at(m.updates.size() - 4).name,
+                         QByteArrayLiteral("stationCatalogVersion"));
+                // iPhone app Task 20: then display extras.
+                QCOMPARE(m.updates.at(m.updates.size() - 3).name,
+                         QByteArrayLiteral("displayExtrasVersion"));
+                // R-R3-49 (parity Task 1): then the transmit settings.
+                QCOMPARE(m.updates.at(m.updates.size() - 2).name,
                          QByteArrayLiteral("transmitSettingsVersion"));
+                // R-IOS-27, R-IOS-06: a slice's band buttons travel last.
+                QCOMPARE(m.updates.constLast().name,
+                         QByteArrayLiteral("bandSelectVersion"));
             }
             if (m.kind == SessionMessageKind::ObjectCreate && m.objectKey == "amplifier") {
                 sawAmplifier = true;
@@ -778,7 +800,7 @@ private slots:
             station.setPgxlLanScanWindowMsForTest(50);
             AppSettings settings(dir.filePath(QStringLiteral("v-%1-%2.settings")
                                                   .arg(owns).arg(minor)));
-            StationServer server(&station, settings, dir.path());
+            StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
             LoopbackTransport* peer = nullptr;
             connectRawPeer(this, server, minor, &peer);
             [&] { QTRY_VERIFY(snapshotDone(peer)); }();
@@ -871,7 +893,7 @@ private slots:
             station.setPgxlLanScanWindowMsForTest(50);
             AppSettings settings(dir.filePath(QStringLiteral("t-%1-%2-%3.settings")
                                                   .arg(owns).arg(minor).arg(onAir)));
-            StationServer server(&station, settings, dir.path());
+            StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
             if (onAir) {
                 station.transmitModel().setMox(true);
             }
@@ -958,7 +980,7 @@ private slots:
             station.setPgxlLanScanWindowMsForTest(50);
             AppSettings settings(dir.filePath(QStringLiteral("r-%1-%2-%3.settings")
                                                   .arg(owns).arg(minor).arg(onAir)));
-            StationServer server(&station, settings, dir.path());
+            StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
             if (onAir) {
                 station.transmitModel().setMox(true);
             }
@@ -1050,7 +1072,7 @@ private slots:
             station.setPgxlLanScanWindowMsForTest(50);
             AppSettings settings(dir.filePath(QStringLiteral("p-%1-%2-%3.settings")
                                                   .arg(owns).arg(minor).arg(onAir)));
-            StationServer server(&station, settings, dir.path());
+            StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
             if (onAir) {
                 station.transmitModel().setMox(true);
             }
@@ -1144,7 +1166,7 @@ private slots:
             station.setPgxlLanScanWindowMsForTest(50);
             AppSettings settings(dir.filePath(QStringLiteral("r-%1-%2-%3.settings")
                                                   .arg(owns).arg(minor).arg(onAir)));
-            StationServer server(&station, settings, dir.path());
+            StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
             if (onAir) {
                 station.transmitModel().setMox(true);
             }

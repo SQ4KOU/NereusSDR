@@ -1,4 +1,7 @@
 // Focused transport regressions for bounded, untrusted LAN Core discovery.
+// iPhone app Task 71 (R-IOS-02, ruling 10.4): the "Devices connected" byte
+// appended after Pairing, its absence, and its bound. J.J. Boyd (KG4VCF),
+// 2026-09-25, AI-assisted via Anthropic Claude Code.
 #include <QtTest>
 
 #include <QSignalSpy>
@@ -28,6 +31,17 @@ StationLanAnnouncement announcement(int seed = 0)
 {
     return {47910, pin(seed), QStringLiteral("Core"), QStringLiteral("Radio"),
             QStringLiteral("AA:BB:CC:DD:EE:FF"), true};
+}
+
+// iPhone app Task 16: what a Core sends now.
+StationLanAnnouncement announcementV2(int seed = 0)
+{
+    StationLanAnnouncement value = announcement(seed);
+    value.schema = kStationLanAnnouncementSchema;
+    value.identity = QByteArray(kStationLanIdentityBytes, static_cast<char>(0x30 + seed));
+    value.label = QStringLiteral("KG4VCF/shack");
+    value.pairing = StationLanPairing::Click;
+    return value;
 }
 
 QByteArray datagram(int seed = 0)
@@ -184,10 +198,122 @@ private slots:
         QCOMPARE(changed.count(), 2);
     }
 
+    void schemaOneAndSchemaTwoAreBothRead()
+    {
+        // A Core from before Task 16 (schema 1) and one from after it
+        // (schema 2), heard on the same socket.
+        StationLanDiscovery discovery;
+        QVERIFY(discovery.start(0));
+        QUdpSocket sender;
+        QString error;
+        const StationLanAnnouncement newer = announcementV2(1);
+        sendLoopback(&sender, encodeStationLanAnnouncement(newer, &error), discovery.port());
+        sendLoopback(&sender, datagram(2), discovery.port());
+        QTRY_COMPARE(discovery.endpoints().size(), 2);
+        QList<StationLanAnnouncement> heard;
+        for (const StationLanEndpoint& endpoint : discovery.endpoints()) {
+            heard.append(endpoint.announcement);
+        }
+        QVERIFY(heard.contains(newer));
+        QVERIFY(heard.contains(announcement(2)));
+    }
+
+    void theDeviceCountIsOneByteAfterPairing()
+    {
+        QString error;
+        StationLanAnnouncement counted = announcementV2();
+        const QByteArray without = encodeStationLanAnnouncement(counted, &error);
+        QVERIFY2(!without.isEmpty(), qPrintable(error));
+        counted.devicesConnected = 3;
+        const QByteArray with = encodeStationLanAnnouncement(counted, &error);
+        QVERIFY2(!with.isEmpty(), qPrintable(error));
+        QCOMPARE(with.size(), without.size() + 1);
+        QCOMPARE(with.left(without.size()), without);
+        QCOMPARE(with.back(), char(3));
+        const auto decoded = decodeStationLanAnnouncement(with, &error);
+        QVERIFY2(decoded, qPrintable(error));
+        QCOMPARE(decoded->devicesConnected, std::optional<int>(3));
+        QCOMPARE(*decoded, counted);
+
+        // A datagram from a Core before the count: decoded, count unknown.
+        const auto older = decodeStationLanAnnouncement(without, &error);
+        QVERIFY2(older, qPrintable(error));
+        QVERIFY(!older->devicesConnected);
+
+        // Bytes after the count are ignored, as any appended field's are.
+        const auto extended =
+            decodeStationLanAnnouncement(with + QByteArray("\x07\x01\x00", 3), &error);
+        QVERIFY2(extended, qPrintable(error));
+        QCOMPARE(extended->devicesConnected, std::optional<int>(3));
+
+        // 0 to 4 only, either way.
+        StationLanAnnouncement tooMany = announcementV2();
+        tooMany.devicesConnected = kStationLanMaxDevicesConnected + 1;
+        QVERIFY(encodeStationLanAnnouncement(tooMany, &error).isEmpty());
+        QByteArray five = with;
+        five.back() = char(5);
+        QVERIFY(!decodeStationLanAnnouncement(five, &error));
+        // Schema 1 has nowhere to put it.
+        StationLanAnnouncement schemaOne = announcement();
+        schemaOne.devicesConnected = 1;
+        QVERIFY(encodeStationLanAnnouncement(schemaOne, &error).isEmpty());
+
+        // The largest datagram, both names and the label at their limits
+        // and the count, is 480 bytes, under a listener's 512.
+        StationLanAnnouncement largest = announcementV2();
+        largest.coreName = QString(kStationLanMaxCoreNameBytes, QLatin1Char('c'));
+        largest.radioName = QString(kStationLanMaxRadioNameBytes, QLatin1Char('r'));
+        largest.label = QString(32, QLatin1Char('K')) + QLatin1Char('/')
+            + QString(32, QLatin1Char('s'));
+        largest.devicesConnected = kStationLanMaxDevicesConnected;
+        const QByteArray biggest = encodeStationLanAnnouncement(largest, &error);
+        QVERIFY2(!biggest.isEmpty(), qPrintable(error));
+        QCOMPARE(biggest.size(), kStationLanMaxSchema2DatagramBytes);
+        QCOMPARE(kStationLanMaxSchema2DatagramBytes, 480);
+        QVERIFY(kStationLanMaxSchema2DatagramBytes <= kStationLanMaxDatagramBytes);
+    }
+
+    void aSchemaOneDatagramKeepsTheDeviceCount()
+    {
+        StationLanDiscovery discovery;
+        QVERIFY(discovery.start(0));
+        QUdpSocket sender;
+        QString error;
+        StationLanAnnouncement counted = announcementV2(4);
+        counted.devicesConnected = 2;
+        sendLoopback(&sender, encodeStationLanAnnouncement(counted, &error), discovery.port());
+        QTRY_COMPARE(discovery.endpoints().size(), 1);
+        QCOMPARE(discovery.endpoints().first().announcement.devicesConnected,
+                 std::optional<int>(2));
+        // The same endpoint in schema 1 refreshes what schema 1 carries.
+        sendLoopback(&sender, datagram(4), discovery.port());
+        QTest::qWait(50);
+        QCOMPARE(discovery.endpoints().size(), 1);
+        QCOMPARE(discovery.endpoints().first().announcement.devicesConnected,
+                 std::optional<int>(2));
+    }
+
     void announcerRejectsInvalidState()
     {
         StationLanAnnouncer announcer;
         announcer.update(QHostAddress::LocalHost, announcement());
+        QVERIFY(!announcer.isActive());
+        // A listener on loopback only is never announced, in either schema.
+        announcer.update(QHostAddress::LocalHost, announcementV2());
+        QVERIFY(!announcer.isActive());
+        announcer.update(QHostAddress::LocalHostIPv6, announcementV2());
+        QVERIFY(!announcer.isActive());
+
+        // A station sends schema 2 only: a schema-1 announcement is refused
+        // before anything is sent.
+        announcer.update(QHostAddress(QStringLiteral("192.0.2.200")), announcement());
+        QVERIFY(!announcer.isActive());
+        // Schema 2 is accepted. The listener address is TEST-NET-1, which no
+        // interface holds, so nothing reaches a network.
+        announcer.update(QHostAddress(QStringLiteral("192.0.2.200")), announcementV2());
+        QVERIFY(announcer.isActive());
+        QCOMPARE(announcer.announcement().schema, kStationLanAnnouncementSchema2);
+        announcer.stop();
         QVERIFY(!announcer.isActive());
 
         StationLanAnnouncement invalid = announcement();

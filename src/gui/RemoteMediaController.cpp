@@ -606,6 +606,32 @@ struct RemoteMediaController::Private {
     QString allocationCacheIdentity;
     std::optional<RemoteDisplayAllocation> cachedAllocation;
     QString cachedAllocationError;
+    /// Fix wave 2 (Critical 1, the several-devices design, ruling 9.3):
+    /// the Core splits the display budget by what each device asks for, so
+    /// the planner asks for the displays the operator wants, not only what
+    /// the share allows. While askingWanted, every pan is subscribed at its
+    /// wanted quality; a refusal for the budget (answered by the smaller
+    /// share the Core publishes with it) ends the ask, and the planner plans
+    /// inside the share again. It asks again whenever what the operator
+    /// wants grows (a new pan, a wider or faster one; a resize once it
+    /// settles, fix wave 3) and when the transmit holder changes
+    /// (setTransmitHolder): wantedCharge is the charge of the displays
+    /// wanted at the last plan.
+    bool askingWanted = false;
+    DisplayBudgetCharge wantedCharge;
+    /// Fix wave 3 (Minor 3): the displays wanted at the last plan, and a
+    /// resize's growth waiting to settle before it asks: the wanted charge
+    /// before the resize began, and when a width last moved.
+    QList<RemoteDisplayIntent> wantedIntents;
+    struct ResizeAsk {
+        DisplayBudgetCharge base;
+        qint64 movedAtMs = 0;
+    };
+    std::optional<ResizeAsk> resizeAsk;
+    /// Fix wave 3: the transmit holder last notified (setTransmitHolder);
+    /// a change asks again. Kept across media sessions: it is the station's.
+    quint64 holderEpoch = 0;
+    bool holderAway = false;
 };
 
 RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* model,
@@ -782,7 +808,7 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
         if (!d->preparingAudio) { requestAudio(); }
     });
     d->timer = new QTimer(this);
-    d->timer->setInterval(100);
+    d->timer->setInterval(kPlannerIntervalMs);
     connect(d->timer, &QTimer::timeout, this, &RemoteMediaController::refreshSubscriptions);
     connect(client, &StationClient::displayBudgetChanged, this, [this] {
         if (!d->client) { return; }
@@ -1101,6 +1127,22 @@ void RemoteMediaController::receiveClockEcho(const QJsonObject& payload, qint64 
     } else {
         d->captureAnchor.reset();
     }
+}
+
+void RemoteMediaController::setTransmitHolder(quint64 holderEpoch, bool holderAway)
+{
+    if (d->holderEpoch == holderEpoch && d->holderAway == holderAway) {
+        return;
+    }
+    d->holderEpoch = holderEpoch;
+    d->holderAway = holderAway;
+    // Fix wave 3 (ruling 9.3): the split changed its rule for this device
+    // or the others, and the demand the Core holds is the plan made inside
+    // the old share. Asking for what the operator wants again is what lets
+    // a new present holder keep its whole request, and the others their
+    // equal shares once a holder lets go.
+    d->askingWanted = true;
+    QTimer::singleShot(0, this, &RemoteMediaController::refreshSubscriptions);
 }
 
 void RemoteMediaController::setAudioProfileChoice(RemoteAudioProfile profile)
@@ -1532,6 +1574,10 @@ void RemoteMediaController::stop()
     d->allocationCacheIdentity.clear();
     d->cachedAllocation.reset();
     d->cachedAllocationError.clear();
+    d->askingWanted = false;
+    d->wantedCharge = {};
+    d->wantedIntents.clear();
+    d->resizeAsk.reset();
     if (d->peer) {
         MediaPeer* old = d->peer;
         d->peer = nullptr;
@@ -1812,6 +1858,22 @@ bool RemoteMediaController::send(QJsonObject payload)
     return d->client->sendMediaControl(payload, d->epoch);
 }
 
+bool RemoteMediaController::sendRefusedRelease(quint32 endpointId, quint32 lastRevision)
+{
+    // The binding is already gone here: its answer finds no binding and is
+    // ignored. False when the session ended while sending.
+    const QPointer<RemoteMediaController> self(this);
+    const QPointer<MediaPeer> peer = d->peer;
+    const quint32 epoch = d->epoch;
+    const QString connectionId = d->connectionId;
+    quint32 revision = lastRevision + 1;
+    if (revision == 0) { ++revision; }
+    send({{QStringLiteral("op"), QStringLiteral("unsubscribe")},
+          {QStringLiteral("endpointId"), static_cast<qint64>(endpointId)},
+          {QStringLiteral("revision"), static_cast<qint64>(revision)}});
+    return self && d->peer == peer && d->epoch == epoch && d->connectionId == connectionId;
+}
+
 bool RemoteMediaController::retireSubscriptions(const QList<quint32>& endpointIds)
 {
     const bool budgetMode = d->client && d->client->remoteDisplayBudgetLimits().has_value();
@@ -1847,7 +1909,12 @@ bool RemoteMediaController::retireSubscriptions(const QList<quint32>& endpointId
                 continue;
             }
             if (found->second.acceptedRevision == 0) {
+                // Fix wave 2 (Important 2): a display the Core refused
+                // still counts in this device's request there until it is
+                // asked for again or closed, so close it.
+                const quint32 sent = found->second.revision;
                 d->bindings.erase(found);
+                if (sent != 0 && !sendRefusedRelease(id, sent)) { return false; }
                 continue;
             }
             ++found->second.revision;
@@ -2276,8 +2343,73 @@ void RemoteMediaController::refreshBudgetSubscriptions()
         || (d->desiredPs3 && !d->ps3Refused);
     const bool retainedPs3ExceedsCap = d->accountedPs3
         && !displayChargeFits(*limits, ps3DisplayCharge());
+    // Fix wave 2 (Critical 1, ruling 9.3): ask for what the operator wants
+    // whenever that grows. The Core counts what a device asks for when it
+    // splits the budget, so a planner that only ever asked for what its
+    // share allows would never show its demand, and a device that joined
+    // second would stay at the share it was first given.
+    {
+        QList<DisplayBudgetCharge> wantedCharges;
+        for (const RemoteDisplayIntent& intent : intents) {
+            if (const auto cost = spectrumDisplayCost(intent.pixels, intent.fps,
+                                                      intent.includeWidePlane)) {
+                wantedCharges.append(cost->charge);
+            }
+        }
+        const DisplayBudgetCharge wanted =
+            sumDisplayCharges(wantedCharges).value_or(DisplayBudgetCharge{});
+        // Fix wave 3 (Minor 3): a resize (the same pans at the same frame
+        // rates, only their widths changed) asks once its widths have
+        // settled for kResizeSettleMs, not at every step of a drag; any
+        // other growth asks at once.
+        bool sameDisplays = !d->wantedIntents.isEmpty()
+            && d->wantedIntents.size() == intents.size();
+        bool widthsMoved = false;
+        for (qsizetype i = 0; sameDisplays && i < intents.size(); ++i) {
+            const RemoteDisplayIntent& was = d->wantedIntents.at(i);
+            const RemoteDisplayIntent& is = intents.at(i);
+            sameDisplays = was.panId == is.panId && was.fps == is.fps
+                && was.includeWidePlane == is.includeWidePlane;
+            widthsMoved = widthsMoved || was.pixels != is.pixels;
+        }
+        if (d->resizeAsk && !sameDisplays) {
+            // The displays changed shape mid-resize: the resize's growth is
+            // asked for now, with whatever else changed.
+            if (!nonIncreasing(wanted, d->resizeAsk->base)) {
+                d->askingWanted = true;
+            }
+            d->resizeAsk.reset();
+        } else if (d->resizeAsk && widthsMoved) {
+            d->resizeAsk->movedAtMs = now;
+        }
+        if (!nonIncreasing(wanted, d->wantedCharge)) {
+            if (sameDisplays) {
+                if (!d->resizeAsk) {
+                    d->resizeAsk = Private::ResizeAsk{d->wantedCharge, now};
+                }
+            } else {
+                d->askingWanted = true;
+            }
+        }
+        if (d->resizeAsk && now - d->resizeAsk->movedAtMs >= kResizeSettleMs) {
+            if (!nonIncreasing(wanted, d->resizeAsk->base)) {
+                d->askingWanted = true;
+            }
+            d->resizeAsk.reset();
+        }
+        d->wantedCharge = wanted;
+        d->wantedIntents = intents;
+    }
+    const bool askWanted = d->askingWanted && !retainedPs3ExceedsCap;
+    // While asking, plan without the share: every pan at its wanted quality.
+    // The Core admits or refuses each against the share it gives this
+    // device with the new request.
+    const DisplayBudgetLimits planLimits = askWanted
+        ? DisplayBudgetLimits{kDisplayBudgetJsonSafePositiveLimit,
+                              kDisplayBudgetJsonSafePositiveLimit, limits->generation}
+        : *limits;
     const QString cacheIdentity = allocationIdentity(
-        *limits, intents, targetPs3, retainedPs3ExceedsCap);
+        planLimits, intents, targetPs3, retainedPs3ExceedsCap);
     if (d->allocationCacheIdentity != cacheIdentity) {
         d->allocationCacheIdentity = cacheIdentity;
         d->cachedAllocation.reset();
@@ -2294,7 +2426,7 @@ void RemoteMediaController::refreshBudgetSubscriptions()
             d->cachedAllocation = paused;
         } else {
             d->cachedAllocation = allocateRemoteDisplay(
-                *limits, intents, targetPs3, &d->cachedAllocationError);
+                planLimits, intents, targetPs3, &d->cachedAllocationError);
             if (!d->cachedAllocation) {
                 qCInfo(lcRemoteMedia).noquote() << "Remote display allocation failed:"
                                                 << d->cachedAllocationError;
@@ -2494,7 +2626,25 @@ void RemoteMediaController::refreshBudgetSubscriptions()
         (candidate.reduction ? reductions : increases).append(std::move(candidate));
     }
 
-    for (quint32 endpointId : eraseUnaccepted) { d->bindings.erase(endpointId); }
+    for (quint32 endpointId : eraseUnaccepted) {
+        // Fix wave 2 (Important 2): a pan paused before the Core accepted
+        // it; a display the Core refused is closed there too, so its
+        // request stops counting against the other devices.
+        const auto found = d->bindings.find(endpointId);
+        const quint32 sent = found == d->bindings.end() ? 0 : found->second.revision;
+        d->bindings.erase(endpointId);
+        if (sent != 0 && !sendRefusedRelease(endpointId, sent)) { return; }
+    }
+
+    if (askWanted && reductions.isEmpty() && increases.isEmpty()
+        && std::none_of(d->bindings.cbegin(), d->bindings.cend(),
+                        [](const auto& entry) { return entry.second.pending.has_value(); })) {
+        // Every pan was answered at what the operator wants (or refused for
+        // a reason other than the budget, which asking again does not
+        // change): the ask is over, and the planner plans inside the share.
+        d->askingWanted = false;
+        d->budgetReplanRequested = true;
+    }
 
     const QPointer<MediaPeer> peer = d->peer;
     const quint32 epoch = d->epoch;
@@ -2573,6 +2723,12 @@ void RemoteMediaController::refreshBudgetSubscriptions()
     if (d->pendingPs3) { return; }
 
     for (const Candidate& candidate : increases) {
+        if (askWanted) {
+            // Asking for what the operator wants: the Core decides.
+            sendCandidate(candidate);
+            if (!current()) { return; }
+            continue;
+        }
         QList<DisplayBudgetCharge> potential;
         if (d->accountedPs3) { potential.append(ps3DisplayCharge()); }
         for (const auto& [id, binding] : d->bindings) {
@@ -3177,6 +3333,12 @@ void RemoteMediaController::receiveAllocationResult(const QJsonObject& payload)
             binding.refusedIdentity = pending.identity;
             binding.refusalReason = reason.isEmpty()
                 ? QStringLiteral("Core refused the display allocation.") : reason;
+            if (reason == QLatin1String(kDisplayBudgetRefusalReason)) {
+                // Fix wave 2 (Critical 1): the ask for what the operator
+                // wants is answered. The share the Core published with it
+                // is what the planner now plans inside.
+                d->askingWanted = false;
+            }
             // The raw reason is kept for the log; the pan shows it translated.
             qCInfo(lcRemoteMedia).noquote() << "Remote display allocation refused:"
                                             << endpointId << binding.refusalReason;
@@ -3338,9 +3500,9 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
         }
         return;
     }
-    // Core refused this connection's media (its peer could not start, or
-    // one is already active): op, connectionId, endpointId 0, revision 0
-    // and reason, as DaemonMediaController::sendRejected() sends them.
+    // Core refused this connection's media (its peer could not start), or
+    // dropped it: op, connectionId, endpointId 0, revision 0 and reason, as
+    // DaemonMediaController::sendRejected() sends them.
     if (op == QLatin1String("rejected") && payload.size() == 5
         && payload.value(QStringLiteral("endpointId")).isDouble()
         && payload.value(QStringLiteral("endpointId")).toDouble() == 0
@@ -3348,6 +3510,14 @@ void RemoteMediaController::receiveControl(const QJsonObject& payload, quint32 e
         && payload.value(QStringLiteral("revision")).toDouble() == 0
         && payload.value(QStringLiteral("reason")).isString()) {
         const QString reason = payload.value(QStringLiteral("reason")).toString().left(512);
+        // The Core dropped its peer on its own (the connection failed or
+        // closed on its side): start media over now, as when this
+        // computer's own peer fails, instead of waiting for it to time out.
+        if (reason == QLatin1String(kMediaPeerLostReason)
+            || reason == QLatin1String(kMediaPeerClosedReason)) {
+            requestRecovery(epoch, reason);
+            return;
+        }
         settleWithoutRetry(epoch, reason);
         return;
     }

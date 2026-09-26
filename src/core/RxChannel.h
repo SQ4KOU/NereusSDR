@@ -26,6 +26,11 @@
 //                 reads busy time over wall time (R-R3-40, R-R3-37).
 //                 Later the same day: DspLoadCounters::consistent, false for
 //                 a read whose busy pair may be torn (R-R3-40).
+//   2026-09-24 - A stopping channel is fed until WDSP finishes its stop
+//                 (Task 8 of the receiver and transmit gaps plan, Phase 3F
+//                 section 3), after Thetis ChannelMaster cmaster.c:365-366
+//                 [v2.10.3.15], by J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -282,6 +287,8 @@ public:
     // setSampleRateLive crash on PR #221.
     //
     // Idempotent: a no-op when newRate equals the cached current rate.
+    // A no-drain stop still pending is dropped here: the caller's rebuild
+    // finishes it (Task 8).
     // Caller is responsible for the surrounding orchestration (drain via
     // setActive(false), stop radio, wait for inflight, then call this,
     // then restart radio, then setActive(true)) — see
@@ -323,9 +330,9 @@ public:
 
     // Read back AGC threshold from WDSP after top/RF gain change.
     // From Thetis console.cs:50350 pattern — GetRXAAGCThresh after SetRXAAGCTop
-    // Upstream inline attribution preserved verbatim (console.cs:50345):
+    // Upstream inline attribution preserved verbatim (console.cs:50424 [v2.10.3.15]):
     //   if (agc_thresh_point < -160.0) agc_thresh_point = -160.0; //[2.10.3.6]MW0LGE changed from -143
-    // Returns clamped value in -160..0 dB range.
+    // Returns clamped value in -160..+2 dB range (Thetis console.cs:50423-50424 [v2.10.3.15]).
     double readBackAgcThresh() const;
 
     // AGC advanced parameters
@@ -858,20 +865,34 @@ public:
 
     // --- Channel state ---
 
+    // True while the channel runs. setActive(false) is the draining stop
+    // (SetChannelState dmode 1): the channel stays active, and processIq keeps
+    // exchanging on it, until WDSP has slewed it down and flushed it, a few
+    // blocks of input while I/Q flows (Task 8). Then it counts as inactive
+    // and activeChanged(false) is emitted. With no I/Q arriving the stop ends
+    // at WDSP's 100 ms drain timeout.
     bool isActive() const { return m_active.load(); }
+
+#ifdef NEREUS_BUILD_TESTS
+    // Test-only: true while a no-drain stop is waiting for WDSP to report it
+    // done (m_pendingStop). Lets a test see processIq's feed finish the stop
+    // rather than the restart's finishPendingStop fallback.
+    bool stopPendingForTest() const
+    {
+        return m_pendingStop.load(std::memory_order_acquire) != 0;
+    }
+#endif
     void setActive(bool active);
 
     // Switch the channel off without waiting for WDSP to drain it
     // (SetChannelState dmode 0), the form upstream uses for sub-receiver
-    // channels. It sets WDSP's slew-down and flush flags and leaves them for
-    // the channel's next exchange to clear, and in NereusSDR that exchange
-    // never comes: processIq returns early once the channel is off. Only a
-    // rebuild of the channel (SetInputSamplerate) clears them otherwise, so a
-    // channel stopped this way and restarted unrebuilt slews down on its
-    // first block and goes silent while isActive() reports true. Use it only
-    // where I/Q keeps reaching the channel through the stop. setActive(false)
-    // is the draining form, whose timeout clears those flags itself, and is
-    // what RadioModel::setSampleRateLive uses for every channel.
+    // channels. It returns at once and the channel counts as inactive, but
+    // processIq keeps exchanging on it until WDSP reports the slew-down done,
+    // which clears the flags the stop set (Task 8). A restart before that
+    // (no I/Q reached the channel after the stop) first finishes the stop
+    // with a drain, so the channel never restarts silent (fix wave 1, C1);
+    // a rebuild of the channel (setSampleRate, then SetInputSamplerate) also
+    // finishes it.
     void deactivateWithoutDrain();
 
     // --- Audio processing (called from audio thread) ---
@@ -1000,6 +1021,8 @@ signals:
 private:
     // Shared body of setActive / deactivateWithoutDrain.
     void applyActive(bool active, bool drainOnStop);
+    // Completes a no-drain stop WDSP has not reported done (Task 8).
+    void finishPendingStop();
 
     const int m_channelId;
     // m_bufferSize and m_sampleRate are mutated by setSampleRate() — they
@@ -1051,6 +1074,13 @@ private:
     // From Thetis radio.cs:1145-1162 — bin_on = false
     std::atomic<bool> m_binauralEnabled{false};
     std::atomic<bool> m_active{false};
+    // Task 8: nonzero while a no-drain stop is waiting for WDSP to report it
+    // done. processIq keeps exchanging on the channel meanwhile and clears it
+    // (compare-and-swap, so a newer stop's token survives); applyActive and
+    // setSampleRate clear it on the control thread. m_stopSerial issues the
+    // tokens and is touched only by the control thread.
+    std::atomic<quint32> m_pendingStop{0};
+    quint32 m_stopSerial{0};
 
     // AGC advanced parameters — atomic for thread-safe reads from audio thread
     // Defaults from Thetis Project Files/Source/Console/radio.cs:1037-1124

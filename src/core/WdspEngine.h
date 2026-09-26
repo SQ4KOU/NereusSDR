@@ -22,6 +22,12 @@
 //   2026-09-23 : R-R3-40 by J.J. Boyd (KG4VCF): test-only friendship for
 //                 the NNR slice-state test. AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-24 : Task 8 by J.J. Boyd (KG4VCF): test-only friendship for
+//                 the stopping-channel feed test. AI-assisted via
+//                 Anthropic Claude Code.
+//   2026-09-25 : Test-only friendship for the confirm-step test (several-
+//                 devices fix wave 2). J.J. Boyd (KG4VCF), AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 /*  cmaster.cs
@@ -146,6 +152,12 @@ class TestMnfSetupPage;
 // R-R3-40: the NNR slice-state test opens real RX channels under a
 // RadioModel so the model the receiver runs can be read back from WDSP.
 class TestNnrRadioPersistence;
+// Task 8 (receiver and transmit gaps plan): the stopping-channel feed test
+// opens real RX channels and times their stops while I/Q keeps flowing.
+class TestRxChannelStopFeed;
+// Several-devices fix wave 2: the confirm-step test drives a Protocol 1
+// rate change, which needs an initialized engine with RX channels.
+class TstConfirmStep;
 #endif
 
 namespace NereusSDR {
@@ -883,6 +895,12 @@ private:
     // R-R3-40: same friendship for the NNR slice-state test, which opens
     // real RX channels so the running model can be read back from WDSP.
     friend class ::TestNnrRadioPersistence;
+    // Task 8: same friendship for the stopping-channel feed test.
+    friend class ::TestRxChannelStopFeed;
+    // Several-devices fix wave 2: same friendship for the confirm-step
+    // test's Protocol 1 rate change (the synchronous init would open the
+    // PureSignal feedback channel too, which the test does not need).
+    friend class ::TstConfirmStep;
 #endif
 };
 

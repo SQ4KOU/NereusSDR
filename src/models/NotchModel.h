@@ -52,6 +52,11 @@
 //                 notch.setActive / notch.delete requests. NereusSDR-original
 //                 session code, no Thetis logic added. AI-assisted via
 //                 Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  R-R3-21, R-IOS-27: the Core's
+//                 notchControlVersion and requestAddAtSlice, so a remote
+//                 window's +TNF sends notch.addAtSlice to a version 2 Core.
+//                 NereusSDR-original session code. AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 // --- From radio.cs ---
@@ -345,6 +350,19 @@ public:
     /// carries the reason). The Core's id arrives with its list.
     quint32 requestAdd(int sliceId, double centreHz, double widthHz);
 
+    /// Mirror mode, R-R3-21 / R-IOS-27: the Core's notchControlVersion, set
+    /// by StationClient with mirror mode (0 when there is none).
+    void setRemoteControlVersion(int version);
+    int remoteControlVersion() const { return m_remoteControlVersion; }
+
+    /// Mirror mode against a Core at notchControlVersion 2 or more: ask the
+    /// Core to add its +TNF notch on its own slice `sliceId`
+    /// (notch.addAtSlice), so the Core's slice decides the centre. Returns
+    /// the request id, or 0 when nothing could be sent (below version 2
+    /// nothing is sent and nothing is emitted; otherwise notchAddRejected
+    /// carries the reason). The Core's id arrives with its list.
+    quint32 requestAddAtSlice(int sliceId);
+
     /// Send any held move now: the end of a drag or of a table edit.
     void flushPendingMoves();
 
@@ -408,6 +426,9 @@ private:
     void sendMove(int id);
     void onMoveTimer();
     quint32 sendRequest(const QByteArray& verb, const QVariantMap& arguments, int notchId);
+    // notch.add and notch.addAtSlice: the window's own edit lock, then the
+    // request; either refusal reaches notchAddRejected.
+    quint32 sendAddRequest(const QByteArray& verb, const QVariantMap& arguments);
 
     // Persist the whole store. Called at the tail of every mutation that
     // actually changed something; suppressed while restoreFromSettings() is
@@ -450,6 +471,7 @@ private:
     // Window mirror mode state; see setMirrorMode().
     bool                 m_mirrorMode{false};
     RemoteRequestHandler m_remoteRequest;
+    int                  m_remoteControlVersion{0};
     QList<Notch>         m_mirrorList;
     bool                 m_haveMirrorList{false};
     quint32              m_mirrorRevision{0};

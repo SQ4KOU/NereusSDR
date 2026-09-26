@@ -33,6 +33,9 @@
 //                 AI-assisted transformation via Anthropic Claude Code.
 //                 Remote relay nudges, tune memory recall, Open TGXL
 //                 Advanced and the Core's diagnostics (see .cpp).
+//   2026-09-25  transmitBlocked(): TUNE follows the transmit block (Task
+//                 16 fix wave M2), by J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -215,6 +218,9 @@ private:
     // Build a TuneMemory from the applet's current state.
     TuneMemory currentMem() const;
     void updateActuatingControls();
+    // Task 16 fix wave (M2): receive only, TX inhibit or a PA trip holds
+    // (MoxController::transmitBlockReason).
+    bool transmitBlocked() const;
     void updateStationAvailability();
     // R-R3-49 / R-R3-47: a remote window on a Core that switches its
     // Tuner Genius for this app (remoteTgxlControlVersion 2). ANT and

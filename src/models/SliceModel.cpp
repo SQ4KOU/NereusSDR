@@ -51,6 +51,10 @@
 //                notice (nnrLastError) is in operator words; the setting
 //                names go to the log. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-24 - iPhone app follow-up (R-IOS-06): setAfGain clamps to
+//                ControlRanges.h's AF range, which the Core's catalogue
+//                reads too. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 //=================================================================
@@ -154,6 +158,7 @@
 
 #include "Band.h"
 #include "core/AppSettings.h"
+#include "core/ControlRanges.h"
 #include "core/LogCategories.h"
 #include "core/RadeChannel.h"
 #include "core/WdspEngine.h"
@@ -552,7 +557,7 @@ void SliceModel::setStepHz(int hz)
 
 void SliceModel::setAfGain(int gain)
 {
-    gain = std::clamp(gain, 0, 100);
+    gain = std::clamp(gain, ControlRanges::kAfGainMin, ControlRanges::kAfGainMax);
     if (m_afGain != gain) {
         m_afGain = gain;
         emit afGainChanged(gain);

@@ -9,7 +9,9 @@
 // + PROVENANCE row already cover it.
 
 #include <QtTest/QtTest>
+#include "core/SampleRateCatalog.h"
 #include "gui/setup/HardwarePage.h"
+#include "gui/setup/hardware/RadioInfoTab.h"
 #include "gui/UnbuiltFeatures.h"
 #include "core/HpsdrModel.h"
 #include "core/BoardCapabilities.h"
@@ -169,6 +171,132 @@ private slots:
         QVERIFY(!page.isTabVisibleForTest(HardwarePage::Tab::BandwidthMonitor));
         // Non-HL2 boards must NOT see the HL2 Options tab.
         QVERIFY(!page.isTabVisibleForTest(HardwarePage::Tab::Hl2Options));
+    }
+
+    // Plan Task 5: Radio Info shows the top rate for the protocol the radio
+    // is running. An ANAN-100D tops out at 192 kHz on Protocol 1 and at
+    // 1536 kHz on Protocol 2 (Thetis setup.cs:848-850 [v2.10.3.15]).
+    void angelia_radio_info_top_rate_follows_the_protocol()
+    {
+        for (const auto& [proto, expected] :
+             {std::pair{ProtocolVersion::Protocol1, 192000},
+              std::pair{ProtocolVersion::Protocol2, 1536000}}) {
+            RadioModel model;
+            model.setBoardForTest(HPSDRHW::Angelia);
+            HardwarePage page(&model);
+
+            RadioInfo info;
+            info.boardType  = HPSDRHW::Angelia;
+            info.protocol   = proto;
+            info.macAddress = QStringLiteral("aa:bb:cc:44:55:66");
+            page.onCurrentRadioChanged(info);
+
+            auto* tab = qobject_cast<RadioInfoTab*>(
+                page.tabWidgetForTest(HardwarePage::Tab::RadioInfo));
+            QVERIFY(tab);
+            QVERIFY2(tab->supportInfoForTest().contains(
+                         QStringLiteral("Max sample rate: %1 Hz").arg(expected)),
+                     qPrintable(tab->supportInfoForTest()));
+        }
+    }
+
+    // Plan Task 15: the older radios and the HL2 on Protocol 2 top out at
+    // Thetis's 1536 kHz (setup.cs:850 [v2.10.3.15]); on Protocol 1 at 192,
+    // or 384 for the HL2 and its receive-only kit (mi0bot setup.cs:849-851
+    // [v2.10.3.13-beta2]). The kit's Radio Info reads the HL2 model.
+    void older_radios_radio_info_top_rate_follows_the_protocol_data()
+    {
+        QTest::addColumn<int>("board");
+        QTest::addColumn<int>("protocol1");
+        QTest::addColumn<int>("protocol2");
+        QTest::newRow("Atlas")            << int(HPSDRHW::Atlas)            << 192000 << 1536000;
+        QTest::newRow("Hermes")           << int(HPSDRHW::Hermes)           << 192000 << 1536000;
+        QTest::newRow("HermesII")         << int(HPSDRHW::HermesII)         << 192000 << 1536000;
+        QTest::newRow("HermesLite")       << int(HPSDRHW::HermesLite)       << 384000 << 1536000;
+        QTest::newRow("HermesLiteRxOnly") << int(HPSDRHW::HermesLiteRxOnly) << 384000 << 1536000;
+    }
+
+    void older_radios_radio_info_top_rate_follows_the_protocol()
+    {
+        QFETCH(int, board);
+        QFETCH(int, protocol1);
+        QFETCH(int, protocol2);
+        const auto hw = static_cast<HPSDRHW>(board);
+        for (const auto& [proto, expected] :
+             {std::pair{ProtocolVersion::Protocol1, protocol1},
+              std::pair{ProtocolVersion::Protocol2, protocol2}}) {
+            RadioModel model;
+            model.setBoardForTest(hw);
+            QCOMPARE(model.boardCapabilities().board, hw);
+            HardwarePage page(&model);
+
+            RadioInfo info;
+            info.boardType  = hw;
+            info.protocol   = proto;
+            info.macAddress = QStringLiteral("aa:bb:cc:44:55:67");
+            page.onCurrentRadioChanged(info);
+
+            auto* tab = qobject_cast<RadioInfoTab*>(
+                page.tabWidgetForTest(HardwarePage::Tab::RadioInfo));
+            QVERIFY(tab);
+            QVERIFY2(tab->supportInfoForTest().contains(
+                         QStringLiteral("Max sample rate: %1 Hz").arg(expected)),
+                     qPrintable(tab->supportInfoForTest()));
+        }
+    }
+
+    // The kit keeps its own row (the transmit block) under the HL2 model.
+    void hl2_receive_only_kit_is_an_hl2_that_cannot_transmit()
+    {
+        RadioModel model;
+        model.setBoardForTest(HPSDRHW::HermesLiteRxOnly);
+        QCOMPARE(model.hardwareProfile().model, HPSDRModel::HERMESLITE);
+        QCOMPARE(model.boardCapabilities().board, HPSDRHW::HermesLiteRxOnly);
+        QVERIFY(model.boardCapabilities().isRxOnlySku);
+    }
+
+    // Plan Task 15: a remote window on a Core running the kit (or an HL2 on
+    // Protocol 2) offers the Core's rates: the same profile, row and list a
+    // local window builds.
+    void remote_window_offers_the_cores_rates_data()
+    {
+        QTest::addColumn<int>("board");
+        QTest::addColumn<int>("coreModel");
+        QTest::addColumn<int>("protocol");
+        QTest::newRow("kit P1") << int(HPSDRHW::HermesLiteRxOnly) << int(HPSDRModel::HERMESLITE) << 1;
+        QTest::newRow("kit P1, no model") << int(HPSDRHW::HermesLiteRxOnly) << int(HPSDRModel::FIRST) << 1;
+        QTest::newRow("HL2 P2") << int(HPSDRHW::HermesLite) << int(HPSDRModel::HERMESLITE) << 2;
+        QTest::newRow("Hermes P2") << int(HPSDRHW::Hermes) << int(HPSDRModel::HERMES) << 2;
+    }
+
+    void remote_window_offers_the_cores_rates()
+    {
+        QFETCH(int, board);
+        QFETCH(int, coreModel);
+        QFETCH(int, protocol);
+        const auto hw = static_cast<HPSDRHW>(board);
+        const auto proto = protocol == 2 ? ProtocolVersion::Protocol2 : ProtocolVersion::Protocol1;
+
+        RadioModel local;
+        local.setBoardForTest(hw);
+
+        RadioModel remote(RadioModel::Role::Remote);
+        StationCapabilities caps;
+        caps.macAddress = QStringLiteral("AA:BB:CC:DD:EE:15");
+        caps.board = hw;
+        caps.radioConnected = true;
+        caps.radioIdentityEntries = true;
+        caps.hpsdrModel = static_cast<HPSDRModel>(coreModel);
+        caps.radioProtocol = protocol;
+        remote.applyStationCapabilities(caps);
+
+        QCOMPARE(remote.hardwareProfile().model, local.hardwareProfile().model);
+        QCOMPARE(&remote.boardCapabilities(), &local.boardCapabilities());
+        QCOMPARE(allowedSampleRates(proto, remote.boardCapabilities(),
+                                    remote.hardwareProfile().model),
+                 allowedSampleRates(proto, local.boardCapabilities(),
+                                    local.hardwareProfile().model));
+        QCOMPARE(remote.boardCapabilities().isRxOnlySku, hw == HPSDRHW::HermesLiteRxOnly);
     }
 
     void atlas_shows_only_radio_info()

@@ -61,6 +61,7 @@
 #include "models/RadioModel.h"
 
 #include "fakes/LoopbackTransport.h"
+#include "fakes/UpgradedCoreToken.h"
 
 using namespace NereusSDR;
 using NereusSDR::Test::LoopbackTransport;
@@ -501,7 +502,7 @@ void TstStationHandshakeDeadline::coreBlockedPastTheDeadlineThenResponsiveSuccee
     stationSettings.setValue(QStringLiteral("SettingsSchemaVersion"),
                              QString::fromLatin1(kSchemaVersion));
     auto stationModel = makeStationRadioModel();
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     QVERIFY2(server.listen(QHostAddress::LocalHost, 0), qPrintable(server.lastError()));
 
     StallingRelay relay(server.serverPort());
@@ -542,7 +543,7 @@ void TstStationHandshakeDeadline::handshakeThatCompletesInTimeIsUnaffected()
     stationSettings.setValue(QStringLiteral("SettingsSchemaVersion"),
                              QString::fromLatin1(kSchemaVersion));
     auto stationModel = makeStationRadioModel();
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     server.setAuthDeadlineMs(300);
 
     RadioModel clientModel(RadioModel::Role::Remote);
@@ -576,7 +577,7 @@ void TstStationHandshakeDeadline::coreDetachesAGuiThatNeverSendsItsHelloWithOneL
     stationSettings.setValue(QStringLiteral("SettingsSchemaVersion"),
                              QString::fromLatin1(kSchemaVersion));
     auto stationModel = makeStationRadioModel();
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     server.setAuthDeadlineMs(100);
     QSignalSpy dropped(&server, &StationServer::peerDisconnected);
     QSignalSpy mediaStarted(&server, &StationServer::mediaSessionStarted);
@@ -626,7 +627,7 @@ void TstStationHandshakeDeadline::coreRetiresTheMediaContextWhenTheGuiGivesUp()
     stationSettings.setValue(QStringLiteral("SettingsSchemaVersion"),
                              QString::fromLatin1(kSchemaVersion));
     auto stationModel = makeStationRadioModel();
-    StationServer server(stationModel.get(), stationSettings, m_securityDir.path());
+    StationServer server(stationModel.get(), stationSettings, NereusSDR::Test::seedUpgradedCoreToken(m_securityDir.path()));
     server.setMediaEnabled(true);
     QSignalSpy mediaStarted(&server, &StationServer::mediaSessionStarted);
     QSignalSpy mediaEnded(&server, &StationServer::mediaSessionEnded);
