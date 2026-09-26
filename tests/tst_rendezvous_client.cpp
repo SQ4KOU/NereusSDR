@@ -951,7 +951,7 @@ public:
         QObject::connect(station, &RendezvousClient::credentialsReceived, this,
                          [this](const QByteArray&, bool offered, const Wire::Turn& turn) {
             IceConfiguration ice = *m_stationIce;
-            ice.setRelay(offered ? std::optional<Wire::Turn>(turn) : std::nullopt);
+            ice.setRelay(offered ? std::optional<Wire::Turn>(turn) : std::nullopt, 1);
             stationRelays = ice.relayServers().size();
             m_answerer->gatherCandidates(ice.relayServers());
         });
@@ -966,7 +966,7 @@ public:
                          [this](const QString& sdp, bool offered, const Wire::Turn& turn) {
             QVERIFY(m_offerer->acceptDescription(sdp, QStringLiteral("answer")));
             IceConfiguration ice = *m_clientIce;
-            ice.setRelay(offered ? std::optional<Wire::Turn>(turn) : std::nullopt);
+            ice.setRelay(offered ? std::optional<Wire::Turn>(turn) : std::nullopt, 1);
             clientRelays = ice.relayServers().size();
             m_offerer->gatherCandidates(ice.relayServers());
         });
@@ -987,7 +987,10 @@ public:
             if (m_offerer) {
                 return;
             }
-            m_clientIce = IceConfiguration::throughRendezvous(m_client->stunUrls(), true);
+            // Nothing known about either family on the loopback: the service's
+            // first entry, one relay.
+            m_clientIce = IceConfiguration::throughRendezvous(m_client->stunUrls(), true,
+                                                              AddressFamilies{}, HostFamilies{});
             m_offerer = std::make_unique<LibDataChannelMediaTransport>();
             QObject::connect(m_offerer.get(), &IMediaTransport::localDescription, this,
                              [this, stationId](const QString& sdp, const QString&) {
@@ -1040,8 +1043,8 @@ private:
     void onIntroduced(const RendezvousIntroduction& introduction)
     {
         const QByteArray id = introduction.id;
-        m_stationIce = IceConfiguration::throughRendezvous(m_station->stunUrls(),
-                                                           m_station->relayAllowed());
+        m_stationIce = IceConfiguration::throughRendezvous(
+            m_station->stunUrls(), m_station->relayAllowed(), AddressFamilies{}, HostFamilies{});
         m_answerer = std::make_unique<LibDataChannelMediaTransport>();
         QObject::connect(m_answerer.get(), &IMediaTransport::localDescription, this,
                          [this, id](const QString& sdp, const QString&) {

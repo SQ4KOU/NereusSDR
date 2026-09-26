@@ -34,7 +34,11 @@
 //     resolved). An IPv4-only end behind NAT so gets the IPv4-only name
 //     whichever the service lists first, and an IPv6-only end the IPv6-only
 //     one. The names are resolved before the choice (resolveHostFamilies());
-//     an IP literal needs no lookup.
+//     an IP literal needs no lookup. An end with one family whose relay
+//     names did not resolve gets both relay hosts rather than the first
+//     (the follow-up to the Task 27 re-review, new Minor 1): libjuice fails
+//     the unreachable family's allocation without taking a slot, so it
+//     still relays on its own family, once.
 //   - A full relay (TURN 486, Allocation Quota Reached) is an ordinary
 //     outcome, not an error: libjuice marks that relay failed and finishes
 //     gathering without it (agent.c:1941-1949), and the connection goes on
@@ -63,6 +67,9 @@
 //   2026-09-26: fix wave I2, the STUN server and relay host chosen by this
 //               end's address families. J.J. Boyd (KG4VCF), AI-assisted
 //               via Anthropic Claude Code.
+//   2026-09-26: Task 27 follow-up (new Minor 1): no default families, and
+//               both relay hosts for a one-family end that cannot tell.
+//               J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/RendezvousWire.h"
@@ -147,11 +154,13 @@ public:
     /// hello listed them; `relayAllowed` the station's `relay` setting (a
     /// client allows it); `local` this end's usable address families
     /// (localAddressFamilies()); `hosts` the families of the names in the
-    /// service's lists, resolved on this end. No relay servers until
-    /// setRelay().
+    /// service's lists, resolved on this end. No defaults: every caller
+    /// states what it knows, an empty AddressFamilies or HostFamilies when
+    /// it knows nothing (the follow-up to the Task 27 re-review, new Minor
+    /// 1). No relay servers until setRelay().
     static IceConfiguration throughRendezvous(const QStringList& stunUrls, bool relayAllowed,
-                                              const AddressFamilies& local = {},
-                                              const HostFamilies& hosts = {});
+                                              const AddressFamilies& local,
+                                              const HostFamilies& hosts);
 
     /// Adds resolved names (the relay's, which arrive after the hello) for
     /// setRelay() to choose by.
@@ -159,13 +168,16 @@ public:
 
     /// The relay credentials the introduction brought (the service's
     /// `turn`; nullopt when it sent null). Ignored when the relay is not
-    /// allowed. `families` is how many relay hosts to allocate on: 1, the
-    /// host chosen by this end's address families (above), or 2, the first
-    /// two the service lists (one for each address family, only where an
-    /// end needs both); each allocation takes one of the relay's slots for
-    /// this Core. Returns how many relay servers the configuration now
+    /// allowed. `families` is how many address families to relay on, with
+    /// no default: 1, the host chosen by this end's address families
+    /// (above), or 2, the first two the service lists (one for each
+    /// address family, only where an end needs both); each allocation
+    /// takes one of the relay's slots for this Core. With 1, an end that
+    /// has one family and knows no relay name's family gets the first two
+    /// hosts, since libjuice fails the other family's allocation without
+    /// taking a slot. Returns how many relay servers the configuration now
     /// holds.
-    int setRelay(const std::optional<RendezvousWire::Turn>& turn, int families = 1);
+    int setRelay(const std::optional<RendezvousWire::Turn>& turn, int families);
 
     AddressFamilies localFamilies() const { return m_local; }
 

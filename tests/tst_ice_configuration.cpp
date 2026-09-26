@@ -36,6 +36,7 @@
 
 #include "core/session/IceConfiguration.h"
 #include "core/session/media/LibDataChannelMediaTransport.h"
+#include "tools/StunLookupGate.h"
 
 using namespace NereusSDR;
 
@@ -125,17 +126,20 @@ private slots:
     void oneStunServerTheFirstUsable()
     {
         // Nothing known about this end: the first usable entry.
-        const IceConfiguration ice = IceConfiguration::throughRendezvous(kStun6First, true);
+        const IceConfiguration ice = IceConfiguration::throughRendezvous(
+            kStun6First, true, AddressFamilies{}, HostFamilies{});
         QCOMPARE(ice.stunServer(),
                  std::optional<IceServerAddress>(IceServerAddress{QStringLiteral("rv6.nereussdr.com"), 3478}));
         QVERIFY(!ice.relayKnown());
         QVERIFY(ice.relayServers().isEmpty());
 
         const IceConfiguration skipped = IceConfiguration::throughRendezvous(
-            {QStringLiteral("stuns:bad.example"), QStringLiteral("stun:good.example:3479")}, true);
+            {QStringLiteral("stuns:bad.example"), QStringLiteral("stun:good.example:3479")}, true,
+            AddressFamilies{}, HostFamilies{});
         QCOMPARE(skipped.stunServer(),
                  std::optional<IceServerAddress>(IceServerAddress{QStringLiteral("good.example"), 3479}));
-        QVERIFY(!IceConfiguration::throughRendezvous({}, true).stunServer());
+        QVERIFY(!IceConfiguration::throughRendezvous({}, true, AddressFamilies{}, HostFamilies{})
+                     .stunServer());
     }
 
     // Fix wave I2: the STUN server and the one relay host follow this end's
@@ -170,29 +174,65 @@ private slots:
             IceConfiguration::throughRendezvous(stun, true, AddressFamilies{ipv4, ipv6}, kResolved);
         QVERIFY(ice.stunServer().has_value());
         QCOMPARE(ice.stunServer()->host, expected);
-        QCOMPARE(ice.setRelay(turnWith(turn)), 1);
+        QCOMPARE(ice.setRelay(turnWith(turn), 1), 1);
         QCOMPARE(ice.relayServers().at(0).host, expected);
         // The first URL for that host.
         QCOMPARE(ice.relayServers().at(0).port, quint16(3478));
     }
 
-    // Names that did not resolve cannot be told: the first entry, as
-    // before. The relay's names may resolve later than the STUN names.
-    void unresolvedNamesKeepTheFirstEntry()
+    // Names that did not resolve cannot be told. The STUN server is the
+    // first entry. The relay (the follow-up to Task 27's re-review, new
+    // Minor 1): an end with one family and no relay name's family known is
+    // given both hosts, since libjuice fails the unreachable family's
+    // allocation without using a slot; once a name's family is known, one.
+    // An end with both families, or none seen, keeps the first entry.
+    void unresolvedNamesGiveAOneFamilyEndBothRelays()
     {
-        IceConfiguration ice = IceConfiguration::throughRendezvous(kStun6First, true, kIpv4Only);
-        QCOMPARE(ice.stunServer()->host, QStringLiteral("rv6.nereussdr.com"));
-        QCOMPARE(ice.setRelay(turnWith(kTurn6First)), 1);
-        QCOMPARE(ice.relayServers().at(0).host, QStringLiteral("rv6.nereussdr.com"));
-        ice.addHostFamilies(kResolved);
-        QCOMPARE(ice.setRelay(turnWith(kTurn6First)), 1);
-        QCOMPARE(ice.relayServers().at(0).host, QStringLiteral("rv4.nereussdr.com"));
+        const QString rv4 = QStringLiteral("rv4.nereussdr.com");
+        const QString rv6 = QStringLiteral("rv6.nereussdr.com");
+        for (const AddressFamilies& local : {kIpv4Only, kIpv6Only}) {
+            for (const QStringList& list : {kTurn4First, kTurn6First}) {
+                IceConfiguration ice =
+                    IceConfiguration::throughRendezvous(kStun6First, true, local, HostFamilies{});
+                QCOMPARE(ice.stunServer()->host, rv6);
+                QCOMPARE(ice.setRelay(turnWith(list), 1), 2);
+                QStringList hosts{ice.relayServers().at(0).host, ice.relayServers().at(1).host};
+                hosts.sort();
+                QCOMPARE(hosts, (QStringList{rv4, rv6}));
+                // The relay's names resolved later: one relay, this end's.
+                ice.addHostFamilies(kResolved);
+                QCOMPARE(ice.setRelay(turnWith(list), 1), 1);
+                QCOMPARE(ice.relayServers().at(0).host, local.ipv4 ? rv4 : rv6);
+            }
+        }
+        // One name known is enough to choose one.
+        IceConfiguration known = IceConfiguration::throughRendezvous(
+            kStun6First, true, kIpv4Only,
+            HostFamilies{{QStringLiteral("rv4.nereussdr.com"), kIpv4Only}});
+        QCOMPARE(known.setRelay(turnWith(kTurn6First), 1), 1);
+        QCOMPARE(known.relayServers().at(0).host, rv4);
+        // Both families, or none seen: any entry is as reachable, the first.
+        for (const AddressFamilies& local : {kDualStack, AddressFamilies{}}) {
+            IceConfiguration ice =
+                IceConfiguration::throughRendezvous(kStun6First, true, local, HostFamilies{});
+            QCOMPARE(ice.setRelay(turnWith(kTurn6First), 1), 1);
+            QCOMPARE(ice.relayServers().at(0).host, rv6);
+        }
+        // A single relay host: that one.
+        IceConfiguration single =
+            IceConfiguration::throughRendezvous(kStun, true, kIpv4Only, HostFamilies{});
+        QCOMPARE(single.setRelay(turnWith({QStringLiteral("turn:relay.example:3478")}), 1), 1);
 
         // An IP literal needs no lookup.
         IceConfiguration literal = IceConfiguration::throughRendezvous(
             {QStringLiteral("stun:[2001:db8::7]:3478"), QStringLiteral("stun:203.0.113.7:3478")},
-            true, kIpv4Only);
+            true, kIpv4Only, HostFamilies{});
         QCOMPARE(literal.stunServer()->host, QStringLiteral("203.0.113.7"));
+        QCOMPARE(literal.setRelay(turnWith({QStringLiteral("turn:[2001:db8::1]:3478"),
+                                            QStringLiteral("turn:203.0.113.8:3478")}),
+                                  1),
+                 1);
+        QCOMPARE(literal.relayServers().at(0).host, QStringLiteral("203.0.113.8"));
         // A resolver that answered with an IPv4-mapped address: IPv4.
         QCOMPARE(IceConfiguration::familiesOf({QHostAddress(QStringLiteral("::ffff:203.0.113.7"))}),
                  kIpv4Only);
@@ -201,7 +241,7 @@ private slots:
     void oneRelayServerUnlessBothFamiliesAreAskedFor()
     {
         IceConfiguration one = IceConfiguration::throughRendezvous(kStun, true, kIpv4Only, kResolved);
-        QCOMPARE(one.setRelay(turnWith(kTurn)), 1);
+        QCOMPARE(one.setRelay(turnWith(kTurn), 1), 1);
         QVERIFY(one.relayKnown());
         QCOMPARE(one.relayServers().at(0).host, QStringLiteral("rv4.nereussdr.com"));
         QCOMPARE(one.setRelay(turnWith(kTurn), 0), 1);
@@ -226,7 +266,8 @@ private slots:
         }
 
         // Unusable URLs are passed over; a third host gets no slot.
-        IceConfiguration mixed = IceConfiguration::throughRendezvous(kStun, true);
+        IceConfiguration mixed =
+            IceConfiguration::throughRendezvous(kStun, true, AddressFamilies{}, HostFamilies{});
         QCOMPARE(mixed.setRelay(turnWith({QStringLiteral("turns:a.example:443"),
                                           QStringLiteral("turn:b.example:3478?transport=tcp"),
                                           QStringLiteral("turn:c.example:3478?transport=udp"),
@@ -237,6 +278,65 @@ private slots:
         QCOMPARE(mixed.relayServers().at(0).host, QStringLiteral("c.example"));
         QCOMPARE(mixed.relayServers().at(1).host, QStringLiteral("d.example"));
         QCOMPARE(mixed.relayServers().at(1).port, quint16(443));
+    }
+
+    // The follow-up to Task 27's re-review (new Minor 2): the harness's
+    // station chooses an introduction's STUN server only once the hello's
+    // STUN names are resolved. An introduction that arrives during the
+    // lookup waits for it; one after is handed on at once; a new
+    // connection's lookup drops what the old one held and ignores the old
+    // lookup's late answer.
+    void anIntroductionWaitsForTheStunNames()
+    {
+        QList<QPair<QByteArray, HostFamilies>> handed;
+        Test::StunLookupGate gate([&handed](const RendezvousIntroduction& introduction,
+                                            const HostFamilies& stun) {
+            handed.append({introduction.id, stun});
+        });
+        const auto introduction = [](char id) {
+            RendezvousIntroduction made;
+            made.id = QByteArray(16, id);
+            return made;
+        };
+
+        const quint64 first = gate.lookupStarted();
+        gate.introduce(introduction('a'));
+        gate.introduce(introduction('b'));
+        QVERIFY(handed.isEmpty());
+        QCOMPARE(gate.waiting(), qsizetype(2));
+        gate.lookupFinished(first, kResolved);
+        QCOMPARE(handed.size(), 2);
+        QCOMPARE(handed.at(0).first, QByteArray(16, 'a'));
+        QCOMPARE(handed.at(1).first, QByteArray(16, 'b'));
+        QCOMPARE(handed.at(0).second, kResolved);
+        QCOMPARE(gate.waiting(), qsizetype(0));
+        gate.introduce(introduction('c'));
+        QCOMPARE(handed.size(), 3);
+        QCOMPARE(handed.at(2).second, kResolved);
+        // The same lookup answering twice hands nothing on again.
+        gate.lookupFinished(first, HostFamilies{});
+        QCOMPARE(handed.size(), 3);
+
+        // A reconnect: the old lookup's late answer is ignored, and what
+        // the new one resolves is what its introductions get.
+        const quint64 stale = gate.lookupStarted();
+        const quint64 current = gate.lookupStarted();
+        gate.introduce(introduction('d'));
+        gate.lookupFinished(stale, kResolved);
+        QCOMPARE(handed.size(), 3);
+        const HostFamilies ipv4Only{{QStringLiteral("rv4.nereussdr.com"), kIpv4Only}};
+        gate.lookupFinished(current, ipv4Only);
+        QCOMPARE(handed.size(), 4);
+        QCOMPARE(handed.at(3).first, QByteArray(16, 'd'));
+        QCOMPARE(handed.at(3).second, ipv4Only);
+
+        // Held from a connection that dropped before its lookup finished:
+        // dropped, as that connection can no longer answer it.
+        gate.lookupStarted();
+        gate.introduce(introduction('e'));
+        const quint64 after = gate.lookupStarted();
+        gate.lookupFinished(after, kResolved);
+        QCOMPARE(handed.size(), 4);
     }
 
     // Which of this end's addresses count, and the names a list uses.
@@ -288,15 +388,17 @@ private slots:
 
     void noRelayOfferedMeansKnownAndNone()
     {
-        IceConfiguration ice = IceConfiguration::throughRendezvous(kStun, true);
-        QCOMPARE(ice.setRelay(std::nullopt), 0);
+        IceConfiguration ice =
+            IceConfiguration::throughRendezvous(kStun, true, AddressFamilies{}, HostFamilies{});
+        QCOMPARE(ice.setRelay(std::nullopt, 1), 0);
         QVERIFY(ice.relayKnown());
         QVERIFY(ice.relayServers().isEmpty());
     }
 
     void relayDeniedMeansDirectOrNothing()
     {
-        IceConfiguration ice = IceConfiguration::throughRendezvous(kStun, false);
+        IceConfiguration ice =
+            IceConfiguration::throughRendezvous(kStun, false, AddressFamilies{}, HostFamilies{});
         QVERIFY(!ice.relayAllowed());
         QCOMPARE(ice.setRelay(turnWith(kTurn), 2), 0);
         QVERIFY(ice.relayServers().isEmpty());
@@ -309,7 +411,8 @@ private slots:
         QVERIFY(ice.acceptsRemoteCandidate(host));
         QVERIFY(ice.acceptsRemoteCandidate(srflx));
 
-        const IceConfiguration allowed = IceConfiguration::throughRendezvous(kStun, true);
+        const IceConfiguration allowed =
+            IceConfiguration::throughRendezvous(kStun, true, AddressFamilies{}, HostFamilies{});
         QVERIFY(allowed.acceptsRemoteCandidate(relay));
         QVERIFY(!allowed.acceptsRemoteCandidate(QString()));
         QVERIFY(!allowed.acceptsRemoteCandidate(QStringLiteral("a=") + host));
@@ -329,7 +432,7 @@ private slots:
         QSignalSpy complete(&transport, &IMediaTransport::gatheringComplete);
         IMediaTransport::StartOptions options{IMediaTransport::Role::Offerer, 0x1234};
         // No STUN server: nothing may leave this computer.
-        options.ice = IceConfiguration::throughRendezvous({}, true);
+        options.ice = IceConfiguration::throughRendezvous({}, true, AddressFamilies{}, HostFamilies{});
         QVERIFY(transport.start(options));
         QTRY_COMPARE(descriptions.size(), 1);
         QVERIFY(!descriptions.at(0).at(0).toString().contains(QLatin1String("a=candidate")));

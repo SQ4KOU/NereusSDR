@@ -39,6 +39,9 @@
 //   2026-09-26: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: Task 27 follow-up (new Minor 2): the station answers an
+//               introduction only once its STUN names are resolved. J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QCoreApplication>
@@ -59,6 +62,8 @@
 #include "core/session/RendezvousClient.h"
 #include "core/session/RendezvousWire.h"
 #include "core/session/media/LibDataChannelMediaTransport.h"
+
+#include "StunLookupGate.h"
 
 using namespace NereusSDR;
 
@@ -132,21 +137,19 @@ int runStation(const QStringList& args)
         }
         printLine({{QStringLiteral("event"), QStringLiteral("registered")}});
     });
-    // The STUN names resolved once the hello lists them, so an
-    // introduction chooses its STUN server by this end's address families
-    // (IceConfiguration, fix wave I2).
-    auto stunFamilies = std::make_shared<HostFamilies>();
-    QObject::connect(client, &RendezvousClient::connected, client, [client, stunFamilies] {
-        IceConfiguration::resolveHostFamilies(
-            IceConfiguration::hostNames(client->stunUrls()), client,
-            [stunFamilies](const HostFamilies& families) { *stunFamilies = families; });
-    });
-    QObject::connect(client, &RendezvousClient::introduced, client,
-                     [client, relayAllowed, stunFamilies](const RendezvousIntroduction& introduction) {
+    // Each introduction is answered once the STUN names the hello lists
+    // are resolved, so it chooses its STUN server by this end's address
+    // families (IceConfiguration, fix wave I2). RendezvousClient registers
+    // as the hello arrives, so an introduction that comes during the lookup
+    // waits for it (StunLookupGate, the follow-up to the re-review, new
+    // Minor 2) rather than choosing from families not yet known.
+    auto gate = std::make_shared<Test::StunLookupGate>(
+        [client, relayAllowed](const RendezvousIntroduction& introduction,
+                               const HostFamilies& stunFamilies) {
         const QByteArray id = introduction.id;
         auto ice = std::make_shared<IceConfiguration>(IceConfiguration::throughRendezvous(
             client->stunUrls(), relayAllowed, IceConfiguration::localAddressFamilies(),
-            *stunFamilies));
+            stunFamilies));
         auto* answerer = new LibDataChannelMediaTransport(client);
         QObject::connect(answerer, &IMediaTransport::localDescription, client,
                          [client, answerer, id, relayAllowed](const QString& sdp, const QString&) {
@@ -173,7 +176,7 @@ int runStation(const QStringList& args)
                 relay ? IceConfiguration::hostNames(relay->urls) : QStringList(), answerer,
                 [answerer, ice, relay](const HostFamilies& families) {
                     ice->addHostFamilies(families);
-                    ice->setRelay(relay);
+                    ice->setRelay(relay, 1);
                     answerer->gatherCandidates(ice->relayServers());
                 });
         });
@@ -196,6 +199,18 @@ int runStation(const QStringList& args)
             || !answerer->acceptDescription(introduction.offer, QStringLiteral("offer"))) {
             printLine({{QStringLiteral("event"), QStringLiteral("refused")}});
         }
+    });
+    QObject::connect(client, &RendezvousClient::connected, client, [client, gate] {
+        const quint64 lookup = gate->lookupStarted();
+        IceConfiguration::resolveHostFamilies(
+            IceConfiguration::hostNames(client->stunUrls()), client,
+            [gate, lookup](const HostFamilies& families) {
+                gate->lookupFinished(lookup, families);
+            });
+    });
+    QObject::connect(client, &RendezvousClient::introduced, client,
+                     [gate](const RendezvousIntroduction& introduction) {
+        gate->introduce(introduction);
     });
     client->registerStation(key.publicKeySpki(),
                             [key](const QByteArray& message) { return key.sign(message); },
@@ -275,7 +290,7 @@ int runClient(const QStringList& args)
             relay ? IceConfiguration::hostNames(relay->urls) : QStringList(), offerer,
             [offerer, ice, relay](const HostFamilies& families) {
                 ice->addHostFamilies(families);
-                ice->setRelay(relay);
+                ice->setRelay(relay, 1);
                 offerer->gatherCandidates(ice->relayServers());
             });
     });

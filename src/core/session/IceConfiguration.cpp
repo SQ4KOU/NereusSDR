@@ -10,6 +10,9 @@
 //   2026-09-26: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: Task 27 follow-up (new Minor 1): both relay hosts for a
+//               one-family end that cannot tell. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -157,7 +160,18 @@ int IceConfiguration::setRelay(const std::optional<RendezvousWire::Turn>& turn, 
                                     turn->password});
         names.append(address->host);
     }
-    if (wanted == 1) {
+    bool anyHostKnown = false;
+    for (const QString& name : std::as_const(names)) {
+        anyHostKnown = anyHostKnown || familiesOfHost(name).known();
+    }
+    if (wanted == 1 && m_local.known() && !m_local.both() && !anyHostKnown) {
+        // This end has one family and no relay name's family is known (the
+        // follow-up to the Task 27 re-review, new Minor 1): both hosts, as
+        // the service's first could be the other family's. libjuice fails
+        // the unreachable family's allocation (no route) without taking a
+        // relay slot, so this end still allocates once.
+        m_relays = hosts.mid(0, kMaxRelayServers);
+    } else if (wanted == 1) {
         // One allocation: the host this end can reach (fix wave I2).
         const int chosen = chooseByFamily(names);
         if (chosen >= 0) {
