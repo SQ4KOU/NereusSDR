@@ -6761,6 +6761,13 @@ nereus_add_test(tst_wideband_frame_accumulator)
 # Design: docs/architecture/2026-05-26-phase3f-sub-epic-f-wideband-plan.md Task 4.
 nereus_add_test(tst_wideband_fft_engine)
 
+# R-R3-39: the display FFTs plan with single-precision FFTW on more than
+# one thread (every FFTEngine replans on its own spectrum thread, and
+# WidebandFftEngine plans in its constructor), and FFTW's thread-safe
+# planner switch is per precision library. Plans from four threads at
+# once, with no WdspEngine in the process; CORE_ONLY, as nereusd links.
+nereus_add_test(tst_fftw_planner_threads CORE_ONLY)
+
 # R3 Task 4b: the shared Core/local reference consumes real FFT output and
 # preserves detector-specific bandwidth normalization without GUI dependencies.
 nereus_add_test(tst_wideband_display_reference)

@@ -5,8 +5,13 @@
 // no-port-check: NereusSDR-original. See WidebandFftEngine.h for
 // design context.
 //
+// Modification history (NereusSDR):
+//   2026-09-26: the constructor makes FFTW's single-precision planner
+//               thread-safe before it plans (R-R3-39). J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 #include "core/WidebandFftEngine.h"
+#include "core/FftwPlanner.h"
 
 #include <limits>
 #include <chrono>
@@ -19,6 +24,9 @@ namespace NereusSDR {
 WidebandFftEngine::WidebandFftEngine(QObject* parent)
     : QObject(parent)
 {
+    // R-R3-39: the plan below may run beside FFTEngine replans on spectrum
+    // threads; FFTW's float planner must be thread-safe first.
+    makeFftwPlannersThreadSafe();
     m_input  = fftwf_alloc_real(kFftSize);
     m_output = fftwf_alloc_complex(kFftSize / 2 + 1);
     // Zero once: everything past kCaptureSamples stays zero for the life of

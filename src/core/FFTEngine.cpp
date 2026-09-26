@@ -15,6 +15,11 @@
 //               period, so a lower frame rate saves FFT work (R-R3-08,
 //               R-R3-40). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-26: the constructor makes FFTW's single-precision planner
+//               thread-safe before replanFft() can plan: every pan's
+//               engine replans on its own spectrum thread (R-R3-39).
+//               NereusSDR-original. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -64,6 +69,7 @@
 //============================================================================================//
 
 #include "FFTEngine.h"
+#include "FftwPlanner.h"
 #include "LogCategories.h"
 #include "MemoryLock.h"
 #include "PerfMonitor.h"
@@ -80,6 +86,12 @@ FFTEngine::FFTEngine(int receiverId, QObject* parent)
     : QObject(parent)
     , m_receiverId(receiverId)
 {
+    // R-R3-39: replanFft() plans with single-precision FFTW on this
+    // engine's spectrum thread while other engines, and WDSP in double
+    // precision, plan on theirs. FFTW's thread-safe switch is per
+    // precision library, so the float planner is made thread-safe here,
+    // before any plan, whether or not a WdspEngine exists.
+    makeFftwPlannersThreadSafe();
 }
 
 FFTEngine::~FFTEngine()

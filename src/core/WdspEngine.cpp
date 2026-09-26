@@ -45,6 +45,11 @@
 //                 wrapper's TCI transmit resampler on the transmit lane.
 //                 J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //                 Anthropic Claude Code.
+//   2026-09-26 - R-R3-39: the thread-safe planner call moves to
+//                 makeFftwPlannersThreadSafe() (FftwPlanner.cpp), which also
+//                 covers single-precision FFTW. NereusSDR-original. J.J. Boyd
+//                 (KG4VCF), with AI-assisted implementation via Anthropic
+//                 Claude Code.
 // =================================================================
 
 /*  cmaster.c
@@ -86,13 +91,7 @@ warren@wpratt.com
 #include "wdsp_api.h"
 #include "core/platform/ThreadPlacement.h"
 
-#ifdef HAVE_FFTW3
-// fftw_make_planner_thread_safe (R-R3-39). By full path, from CMake: a bare
-// <fftw3.h> finds WDSP's pinned older copy in third_party/wdsp/src first on
-// Linux, where the system header's /usr/include is never passed as -I, and
-// that copy does not declare it.
-#include NEREUS_FFTW3_HEADER
-#endif
+#include "core/FftwPlanner.h"  // makeFftwPlannersThreadSafe (R-R3-39)
 
 #include <QDir>
 #include <QElapsedTimer>
@@ -114,7 +113,6 @@ extern _dexp* pdexp[];
 
 namespace NereusSDR {
 
-namespace {
 // R-R3-39: WDSP plans its FFTs with double-precision FFTW, and FFTW's
 // planner is not thread-safe by default. The receive lane (every RX
 // channel's OpenChannel, SetInputSamplerate, RXASetNC, SetDSPBuffsize) and
@@ -123,22 +121,16 @@ namespace {
 // its hash table and spin (seen as a hung connect: createTxChannel and the
 // PS feedback OpenChannel both inside fftw's hinsert0). Made thread-safe
 // once per process, before any plan or wisdom import. The operator chose
-// FFTW's thread-safe planner (2026-09-24).
-void makeFftwPlannerThreadSafe()
-{
-#ifdef HAVE_FFTW3
-    static std::once_flag once;
-    std::call_once(once, []() { fftw_make_planner_thread_safe(); });
-#endif
-}
-} // namespace
+// FFTW's thread-safe planner (2026-09-24). makeFftwPlannersThreadSafe()
+// (FftwPlanner.h) covers both precisions, since the display FFTs plan with
+// single-precision FFTW in this same process.
 
 WdspEngine::WdspEngine(QObject* parent)
     : QObject(parent)
 {
     // Before anything this engine does can plan (a test may open channels
     // without initialize()).
-    makeFftwPlannerThreadSafe();
+    makeFftwPlannersThreadSafe();
 #ifdef HAVE_WDSP
     m_extDivCreate = &create_divEXT;
     m_extDivDestroy = &destroy_divEXT;
@@ -252,8 +244,8 @@ bool WdspEngine::initialize(const QString& configDir)
     }
     m_initializationInProgress = true;
     // R-R3-39: before the wisdom import below and before any channel plans
-    // (see makeFftwPlannerThreadSafe).
-    makeFftwPlannerThreadSafe();
+    // (see makeFftwPlannersThreadSafe).
+    makeFftwPlannersThreadSafe();
 #ifndef Q_OS_WIN
     // R-R3-41: nereusd places each channel's worker as it starts. Installed
     // before any channel opens; the GUI never turns placement on.

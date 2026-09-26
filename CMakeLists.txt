@@ -712,9 +712,38 @@ if(FFTW3_FOUND)
                 "Install it with FFTW (Homebrew: fftw; Debian/Ubuntu: libfftw3-dev) "
                 "or build FFTW with --enable-threads.")
         endif()
+        # R-R3-39: the thread-safe switch is per precision library. The
+        # display FFTs plan with single-precision FFTW on every spectrum
+        # thread (FFTEngine::replanFft, WidebandFftEngine), so
+        # fftwf_make_planner_thread_safe() is needed too, and it lives in
+        # libfftw3f_threads. Found beside libfftw3f; Homebrew's fftw and
+        # Debian/Ubuntu's libfftw3-dev (runtime: libfftw3-single3) ship it.
+        # Windows: the fftw.org 3.3.5 libfftw3f-3.dll has it built in.
+        if(FFTW3F_LIB)
+            get_filename_component(_fftw3f_dir "${FFTW3F_LIB}" DIRECTORY)
+            find_library(FFTW3F_THREADS_LIB fftw3f_threads
+                HINTS "${_fftw3f_dir}" ${FFTW3_LIBRARY_DIRS})
+            unset(_fftw3f_dir)
+            if(FFTW3F_THREADS_LIB)
+                # Ahead of libfftw3f, which it depends on (matters for
+                # static archives only).
+                list(FIND FFTW3_LIBRARIES "${FFTW3F_LIB}" _fftw3f_pos)
+                list(INSERT FFTW3_LIBRARIES ${_fftw3f_pos} ${FFTW3F_THREADS_LIB})
+                unset(_fftw3f_pos)
+                message(STATUS "FFTW3F threads found: thread-safe float FFT planner: ${FFTW3F_THREADS_LIB}")
+            else()
+                message(FATAL_ERROR
+                    "libfftw3f_threads not found beside libfftw3f. The display FFTs "
+                    "plan in single precision on more than one thread and need FFTW's "
+                    "thread-safe planner. Install it with FFTW (Homebrew: fftw; "
+                    "Debian/Ubuntu: libfftw3-dev) or build FFTW with --enable-float "
+                    "--enable-threads.")
+            endif()
+        endif()
     endif()
-    # R-R3-39: WdspEngine.cpp calls fftw_make_planner_thread_safe(), so it
-    # must see the fftw3.h that belongs to the FFTW library being linked.
+    # R-R3-39: FftwPlanner.cpp calls fftw_make_planner_thread_safe() and
+    # fftwf_make_planner_thread_safe(), so it must see the fftw3.h that
+    # belongs to the FFTW library being linked.
     # A plain <fftw3.h> is not enough: the WDSP include folder
     # (third_party/wdsp/src, public on wdsp_static) carries WDSP's pinned
     # copy of an older fftw3.h without that declaration, and on Linux the
@@ -738,12 +767,12 @@ if(FFTW3_FOUND)
     endif()
     if(NOT NEREUS_FFTW3_HEADER)
         message(FATAL_ERROR
-            "FFTW3 was found but its fftw3.h was not. WdspEngine needs the "
-            "header that matches the FFTW library for fftw_make_planner_thread_safe().")
+            "FFTW3 was found but its fftw3.h was not. FftwPlanner.cpp needs the "
+            "header that matches the FFTW library for the thread-safe planner calls.")
     endif()
     message(STATUS "FFTW3 header for the thread-safe planner: ${NEREUS_FFTW3_HEADER}")
-    # Only WdspEngine.cpp (NereusCore, NereusCore_LTO) includes it this way.
-    set_property(SOURCE ${CMAKE_SOURCE_DIR}/src/core/WdspEngine.cpp
+    # Only FftwPlanner.cpp (NereusCore, NereusCore_LTO) includes it this way.
+    set_property(SOURCE ${CMAKE_SOURCE_DIR}/src/core/FftwPlanner.cpp
         APPEND PROPERTY COMPILE_DEFINITIONS
         "NEREUS_FFTW3_HEADER=\"${NEREUS_FFTW3_HEADER}\"")
 else()
@@ -947,6 +976,8 @@ set(CORE_SOURCES
     src/core/ReceiverManager.cpp
     src/core/AudioEngine.cpp
     src/core/WdspEngine.cpp
+    # R-R3-39: FFTW's planners made thread-safe, double and single precision.
+    src/core/FftwPlanner.cpp
     src/core/WdspThreadCheck.cpp
     src/core/DspControlThread.cpp
     src/core/RxChannel.cpp
