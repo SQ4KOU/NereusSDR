@@ -23,6 +23,11 @@
 //                 dBm no-reading value on all three readings. J.J. Boyd
 //                 (KG4VCF), with AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-09-26 -- R-R3-13 / R-R3-49 (remote-window parity Task 15): the
+//                 ADC and AGC readings (dsp.cs CalculateRXMeter, console.cs
+//                 :46910-46914 [v2.10.3.15]) per slice, cleared with the
+//                 rest; polled(). J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -116,6 +121,19 @@ int SliceMeterPump::intervalMs() const
     return m_timer.interval();
 }
 
+// From Thetis console.cs:46914 [v2.10.3.15]:
+//   if (MeterManager.RequiresUpdate(1, Reading.AGC_GAIN)) _RX1MeterValues[Reading.AGC_GAIN] = 0 - WDSP.CalculateRXMeter(0, 0, WDSP.MeterType.AGC_GAIN);
+double SliceMeterPump::thetisAgcGainReading(double rawRxaAgcGain)
+{
+    // NereusSDR (R-R3-13): WDSP's meter reads -400 until it has measured a
+    // block (its no-reading floor); negated, that would show as a 400 dB
+    // gain. It stays the no-reading value, shown as "--".
+    if (!(rawRxaAgcGain > kNoReadingDbm)) {
+        return kNoReadingDbm;
+    }
+    return 0.0 - rawRxaAgcGain;
+}
+
 void SliceMeterPump::start()
 {
     m_timer.start();
@@ -129,17 +147,24 @@ void SliceMeterPump::stop()
 namespace {
 
 // R-R3-13: all three readings of one slice go to the no-reading value.
+// Parity Task 15: the ADC and AGC readings with them.
 void clearSliceReadings(SliceModel* slice)
 {
     slice->setSignalStrengthDbm(SliceMeterPump::kNoReadingDbm);
     slice->setSignalPeakDbm(SliceMeterPump::kNoReadingDbm);
     slice->setSignalAverageDbm(SliceMeterPump::kNoReadingDbm);
+    slice->setAdcPeakDbfs(SliceMeterPump::kNoReadingDbm);
+    slice->setAdcAverageDbfs(SliceMeterPump::kNoReadingDbm);
+    slice->setAgcGainDb(SliceMeterPump::kNoReadingDbm);
+    slice->setAgcPeakDb(SliceMeterPump::kNoReadingDbm);
+    slice->setAgcAverageDb(SliceMeterPump::kNoReadingDbm);
 }
 
 } // namespace
 
 void SliceMeterPump::poll()
 {
+    emit polled();
     if (!m_radioModel) { return; }
 
     // NereusSDR (R-R3-13): only a Connected link carries receive readings.
@@ -264,6 +289,26 @@ void SliceMeterPump::poll()
         slice->setSignalStrengthDbm(dbm);
         slice->setSignalPeakDbm(signalPeakDbm);
         slice->setSignalAverageDbm(signalAverageDbm);
+
+        // R-R3-13 / R-R3-49 (parity Task 15): the ADC and AGC readings a
+        // container meter binds, for a remote window's meters. The same
+        // WDSP meters the local MeterPoller reads (MeterPoller.cpp poll()),
+        // with no RXOffset: Thetis adds it to the two signal readings only.
+        // From Thetis Console/dsp.cs:959-974 [v2.10.3.15] (CalculateRXMeter):
+        //   case MeterType.ADC_REAL:  // MW0LGE [2.9.0.7] not sure how these are real + imaginary values, they are ADC peak, and ADC average, according to rxa.c and rxa.h
+        //       val = GetRXAMeter(channel, rxaMeterType.RXA_ADC_PK); // input peak MW0LGE [2.9.0.7]
+        //   case MeterType.ADC_IMAG:
+        //       val = GetRXAMeter(channel, rxaMeterType.RXA_ADC_AV); // input average MW0LGE [2.9.0.7]
+        //   case MeterType.AGC_GAIN: val = GetRXAMeter(channel, rxaMeterType.RXA_AGC_GAIN);
+        //   case MeterType.AGC_PK:   val = GetRXAMeter(channel, rxaMeterType.RXA_AGC_PK);
+        //   case MeterType.AGC_AV:   val = GetRXAMeter(channel, rxaMeterType.RXA_AGC_AV);
+        // and console.cs:46910-46914 [v2.10.3.15], no offset on any of them;
+        // AGC_GAIN is 0 - the reading (thetisAgcGainReading).
+        slice->setAdcPeakDbfs(ch->getMeter(RxMeterType::AdcPeak));
+        slice->setAdcAverageDbfs(ch->getMeter(RxMeterType::AdcAvg));
+        slice->setAgcGainDb(thetisAgcGainReading(ch->getMeter(RxMeterType::AgcGain)));
+        slice->setAgcPeakDb(ch->getMeter(RxMeterType::AgcPeak));
+        slice->setAgcAverageDb(ch->getMeter(RxMeterType::AgcAvg));
     }
 }
 

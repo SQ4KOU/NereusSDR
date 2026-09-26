@@ -272,6 +272,11 @@
         },
         {
             "kind": "i64",
+            "name": "meterReadingsVersion",
+            "value": 1
+        },
+        {
+            "kind": "i64",
             "name": "sessionHolderVersion",
             "value": 1
         }
@@ -5017,6 +5022,36 @@
                     "kind": "utf8",
                     "name": "lastRadeRxCallsign",
                     "ordinal": 143
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "adcPeakDbfs",
+                    "ordinal": 144
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "adcAverageDbfs",
+                    "ordinal": 145
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "agcGainDb",
+                    "ordinal": 146
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "agcPeakDb",
+                    "ordinal": 147
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "agcAverageDb",
+                    "ordinal": 148
                 }
             ]
         },

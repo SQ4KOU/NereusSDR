@@ -55,6 +55,10 @@
 //                ControlRanges.h's AF range, which the Core's catalogue
 //                reads too. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-26 - Remote-window parity Task 15 (R-R3-13, R-R3-49): the ADC
+//                and AGC reading setters, applied from the mirror in a
+//                remote window. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code. NereusSDR-original.
 // =================================================================
 
 //=================================================================
@@ -702,6 +706,53 @@ void SliceModel::setSignalAverageDbm(double dbm)
     emit signalAverageDbmChanged(dbm);
 }
 
+// Parity Task 15: the ADC and AGC readings, the same change-only shape as
+// the S-meter readings above.
+void SliceModel::setAdcPeakDbfs(double dbfs)
+{
+    if (qFuzzyIsNull(m_adcPeakDbfs - dbfs)) {
+        return;
+    }
+    m_adcPeakDbfs = dbfs;
+    emit adcPeakDbfsChanged(dbfs);
+}
+
+void SliceModel::setAdcAverageDbfs(double dbfs)
+{
+    if (qFuzzyIsNull(m_adcAverageDbfs - dbfs)) {
+        return;
+    }
+    m_adcAverageDbfs = dbfs;
+    emit adcAverageDbfsChanged(dbfs);
+}
+
+void SliceModel::setAgcGainDb(double db)
+{
+    if (qFuzzyIsNull(m_agcGainDb - db)) {
+        return;
+    }
+    m_agcGainDb = db;
+    emit agcGainDbChanged(db);
+}
+
+void SliceModel::setAgcPeakDb(double db)
+{
+    if (qFuzzyIsNull(m_agcPeakDb - db)) {
+        return;
+    }
+    m_agcPeakDb = db;
+    emit agcPeakDbChanged(db);
+}
+
+void SliceModel::setAgcAverageDb(double db)
+{
+    if (qFuzzyIsNull(m_agcAverageDb - db)) {
+        return;
+    }
+    m_agcAverageDb = db;
+    emit agcAverageDbChanged(db);
+}
+
 void SliceModel::setStationAutoAgcNoiseFloor(double dbm, bool valid, quint64 generation)
 {
     if (!std::isfinite(dbm)) { return; }
@@ -747,6 +798,28 @@ QString SliceModel::applyMirroredValue(const QByteArray& propertyName, const QVa
     }
     if (propertyName == "signalAverageDbm") {
         setSignalAverageDbm(value.toDouble());
+        return QString();
+    }
+    // Parity Task 15: the Core's ADC and AGC readings, applied as the
+    // S-meter readings are (the mirror is their only writer here).
+    if (propertyName == "adcPeakDbfs") {
+        setAdcPeakDbfs(value.toDouble());
+        return QString();
+    }
+    if (propertyName == "adcAverageDbfs") {
+        setAdcAverageDbfs(value.toDouble());
+        return QString();
+    }
+    if (propertyName == "agcGainDb") {
+        setAgcGainDb(value.toDouble());
+        return QString();
+    }
+    if (propertyName == "agcPeakDb") {
+        setAgcPeakDb(value.toDouble());
+        return QString();
+    }
+    if (propertyName == "agcAverageDb") {
+        setAgcAverageDb(value.toDouble());
         return QString();
     }
     if (propertyName == "stationAutoAgcNoiseFloorDbm") {

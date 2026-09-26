@@ -747,7 +747,10 @@ private slots:
                                    // R-R3-49: the transmit settings.
                                    "transmitSettingsVersion",
                                    // R-IOS-27: a slice's band buttons.
-                                   "bandSelectVersion"});
+                                   "bandSelectVersion",
+                                   // Parity Task 15: the ADC and AGC
+                                   // readings.
+                                   "meterReadingsVersion"});
                 QCOMPARE(names, withReason);
                 const int reason = updateIndex(last.updates,
                                                QByteArrayLiteral("displayBudgetReason"));
@@ -790,7 +793,8 @@ private slots:
                                            QByteArrayLiteral("stationCatalogVersion"),
                                            QByteArrayLiteral("displayExtrasVersion"),
                                            QByteArrayLiteral("transmitSettingsVersion"),
-                                           QByteArrayLiteral("bandSelectVersion")}) {
+                                           QByteArrayLiteral("bandSelectVersion"),
+                                           QByteArrayLiteral("meterReadingsVersion")}) {
                 stripped.removeAt(updateIndex(stripped, name));
             }
             QCOMPARE(SessionMessages::encode(SessionMessages::capabilities(stripped)), older);

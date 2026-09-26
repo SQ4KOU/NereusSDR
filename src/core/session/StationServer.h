@@ -323,6 +323,9 @@
 //                                    size's memory figure follows
 //                                    kMaxConcurrentPeers 24 (48 GiB).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  R-R3-13 / R-R3-49 (parity Task 15):
+//                                    meterReadingsVersion.
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QHash>
@@ -852,6 +855,11 @@ public:
     // R-IOS-27, R-IOS-06: bandSelectVersion. 1 on a Core with a radio
     // model: it takes slice.selectBand from a peer at minor 11; 0 otherwise.
     int bandSelectVersion() const;
+    // R-R3-13 / R-R3-49 (parity Task 15): meterReadingsVersion. 1 on a Core
+    // whose radio model runs its meter pump (the slices carry the ADC and
+    // AGC readings, and a window's Multimeter polling delay sets the pump's
+    // rate at once); 0 otherwise.
+    int meterReadingsVersion() const;
     // R-R3-49 (parity Task 7): the peer was offered transmitSettingsVersion
     // 7: it arms PureSignal and changes pureSignalSettings off the air.
     bool pureSignalArmingOffered(SessionTransport* transport) const;

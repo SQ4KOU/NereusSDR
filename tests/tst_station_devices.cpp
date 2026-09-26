@@ -405,14 +405,16 @@ private slots:
         const QList<MirrorUpdate> updates = caps.toUpdates();
         // iPhone app Task 14's pairingVersion follows it, then Task 19's
         // stationCatalogVersion, Task 20's displayExtrasVersion and R-R3-49's
-        // transmitSettingsVersion, then R-IOS-27's bandSelectVersion.
-        QCOMPARE(updates.last().name, QByteArray("bandSelectVersion"));
-        QCOMPARE(updates.at(updates.size() - 2).name, QByteArray("transmitSettingsVersion"));
-        QCOMPARE(updates.at(updates.size() - 3).name, QByteArray("displayExtrasVersion"));
-        QCOMPARE(updates.at(updates.size() - 4).name, QByteArray("stationCatalogVersion"));
-        QCOMPARE(updates.at(updates.size() - 5).name, QByteArray("pairingVersion"));
-        QCOMPARE(updates.at(updates.size() - 6).name, QByteArray("deviceAdminVersion"));
-        QCOMPARE(updates.at(updates.size() - 7).name, QByteArray("stationIdentityVersion"));
+        // transmitSettingsVersion, then R-IOS-27's bandSelectVersion, then
+        // parity Task 15's meterReadingsVersion.
+        QCOMPARE(updates.last().name, QByteArray("meterReadingsVersion"));
+        QCOMPARE(updates.at(updates.size() - 2).name, QByteArray("bandSelectVersion"));
+        QCOMPARE(updates.at(updates.size() - 3).name, QByteArray("transmitSettingsVersion"));
+        QCOMPARE(updates.at(updates.size() - 4).name, QByteArray("displayExtrasVersion"));
+        QCOMPARE(updates.at(updates.size() - 5).name, QByteArray("stationCatalogVersion"));
+        QCOMPARE(updates.at(updates.size() - 6).name, QByteArray("pairingVersion"));
+        QCOMPARE(updates.at(updates.size() - 7).name, QByteArray("deviceAdminVersion"));
+        QCOMPARE(updates.at(updates.size() - 8).name, QByteArray("stationIdentityVersion"));
         QCOMPARE(StationCapabilities::fromUpdates(updates).deviceAdminVersion, 1);
 
         caps.radioIdentityEntries = false;

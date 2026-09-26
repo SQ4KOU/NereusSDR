@@ -223,6 +223,11 @@
 //                [v2.10.3.15]), for the local page and a window's change
 //                on the Core. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                Claude Code.
+//   2026-09-26 - R-R3-13 / R-R3-49 (parity Task 15): applyMeterSetting, a
+//                window's Multimeter polling delay applied to the Core's
+//                SliceMeterPump at once (setup.cs
+//                udDisplayMeterDelay_ValueChanged [v2.10.3.15]). J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-25 - R-R3-32 / R-R3-46 / R-R3-49 (parity Task 6): paReadings
 //                and paRowVolts, the one PA reading source (the Core's in a
 //                remote window, applyCorePaReadings); `txInhibited` follows
@@ -6476,6 +6481,24 @@ bool RadioModel::isSwrProtectionSettingKey(const QString& key)
         || key == QLatin1String("SwrTuneProtectionEnabled")
         || key == QLatin1String("TunePowerSwrIgnore")
         || key == QLatin1String("WindBackPowerSwr");
+}
+
+bool RadioModel::applyMeterSetting(const QString& key, const QVariant& value)
+{
+    if (key != QLatin1String("MultimeterDelayMs") || m_sliceMeterPump == nullptr) {
+        return false;
+    }
+    // From Thetis setup.cs:8148-8151 [v2.10.3.15]:
+    //   private void udDisplayMeterDelay_ValueChanged(object sender, System.EventArgs e)
+    //   {
+    //       if (initializing) return;
+    //       console.MeterDelay = (int)udDisplayMeterDelay.Value;
+    // The pump clamps (SliceMeterPump::setIntervalMs); 100 is the key's
+    // default, as the pump's constructor reads it.
+    bool ok = false;
+    const int ms = value.isValid() ? value.toString().toInt(&ok) : 100;
+    m_sliceMeterPump->setIntervalMs(value.isValid() && !ok ? 100 : ms);
+    return true;
 }
 
 bool RadioModel::applySwrProtectionSetting(const QString& key, const QVariant& value)

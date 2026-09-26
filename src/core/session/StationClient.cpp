@@ -182,6 +182,10 @@
 //                or output pin is shown once, by the tab that asked, not
 //                also through the general refusal notice. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-R3-13 / R-R3-49 (parity Task 15): the Core's ADC and
+//                AGC slice readings applied as plain state, and
+//                meterReadingsVersion read from its capabilities. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -2793,6 +2797,12 @@ bool StationClient::applyOne(QObject* target, const MirrorProperty& prop,
         QByteArrayLiteral("SliceModel.signalStrengthDbm"),
         QByteArrayLiteral("SliceModel.signalPeakDbm"),
         QByteArrayLiteral("SliceModel.signalAverageDbm"),
+        // Parity Task 15: likewise the Core's ADC and AGC readings.
+        QByteArrayLiteral("SliceModel.adcPeakDbfs"),
+        QByteArrayLiteral("SliceModel.adcAverageDbfs"),
+        QByteArrayLiteral("SliceModel.agcGainDb"),
+        QByteArrayLiteral("SliceModel.agcPeakDb"),
+        QByteArrayLiteral("SliceModel.agcAverageDb"),
         QByteArrayLiteral("SliceModel.stationAutoAgcNoiseFloorDbm"),
         QByteArrayLiteral("SliceModel.stationAutoAgcNoiseFloorValid"),
         QByteArrayLiteral("SliceModel.stationAutoAgcNoiseFloorGeneration"),

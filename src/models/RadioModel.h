@@ -117,6 +117,10 @@
 //                SWR protection settings applied to the live controller
 //                when they change, not only at start. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-R3-13 / R-R3-49 (parity Task 15): applyMeterSetting, the
+//                Multimeter polling delay applied to the meter pump when a
+//                window changes it. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 //   2026-09-24 - R-R3-21: before a pool is sized, the slice-limit refusal
 //                names the Core only on a Core (NereusSDR in a window with
 //                no Core); stale slice-limit comments corrected.
@@ -758,6 +762,15 @@ public:
     // calls it for a window's accepted change (StationServer). False for
     // any other key.
     bool applySwrProtectionSetting(const QString& key, const QVariant& value);
+    // R-R3-13 / R-R3-49 (remote-window parity Task 15): Setup > Display >
+    // Multimeter's polling delay (MultimeterDelayMs) sets this model's
+    // SliceMeterPump rate at once, clamped to the pump's [10, 2000] ms, as
+    // Thetis applies udDisplayMeterDelay when it changes. `value` is the
+    // saved string; an invalid QVariant (the key removed) applies the 100 ms
+    // default the pump's constructor reads. The Core calls it for a
+    // window's accepted change (StationServer); the local page sets the
+    // pump itself. False for any other key or with no pump.
+    bool applyMeterSetting(const QString& key, const QVariant& value);
     static bool isSwrProtectionSettingKey(const QString& key);
 
     // Task 13: External TX Inhibit (Setup > Transmit > Power, grpExtTXInhibit)

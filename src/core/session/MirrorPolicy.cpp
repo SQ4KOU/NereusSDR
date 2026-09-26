@@ -83,6 +83,10 @@
 //   2026-09-26 - R-R3-46 (parity Task 14): IoBoardHl2Facade outputs,
 //                 Outbound. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
 //                 Claude Code.
+//   2026-09-26 - R-R3-13 / R-R3-49 (parity Task 15): SliceModel's ADC and
+//                 AGC readings (adcPeakDbfs, adcAverageDbfs, agcGainDb,
+//                 agcPeakDb, agcAverageDb) Outbound. J.J. Boyd (KG4VCF),
+//                 AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/MirrorPolicy.h"
@@ -147,7 +151,7 @@ namespace {
 // WRITE. Listing them keeps the table total, so the guard can name a
 // newly added property instead of silently accepting it.
 const MirrorPolicy::Entry kEntries[] = {
-    // ---- SliceModel (144 entries) ----
+    // ---- SliceModel (149 entries) ----
     { "SliceModel", "frequency", MirrorDirection::Bidirectional },
     { "SliceModel", "dspMode", MirrorDirection::Bidirectional },
     { "SliceModel", "filterLow", MirrorDirection::Bidirectional },
@@ -330,6 +334,15 @@ const MirrorPolicy::Entry kEntries[] = {
     // Outbound here too.
     { "SliceModel", "snrDb", MirrorDirection::Outbound },
     { "SliceModel", "lastRadeRxCallsign", MirrorDirection::Outbound },
+    // R-R3-13 / R-R3-49 (parity Task 15, meterReadingsVersion 1): the
+    // Core's ADC and AGC readings, produced by its SliceMeterPump as the
+    // S-meter readings above are; no WRITE, applied in a window through
+    // SliceModel::applyMirroredValue's hook.
+    { "SliceModel", "adcPeakDbfs", MirrorDirection::Outbound },
+    { "SliceModel", "adcAverageDbfs", MirrorDirection::Outbound },
+    { "SliceModel", "agcGainDb", MirrorDirection::Outbound },
+    { "SliceModel", "agcPeakDb", MirrorDirection::Outbound },
+    { "SliceModel", "agcAverageDb", MirrorDirection::Outbound },
 
     // ---- TransmitModel (85 entries) ----
     { "TransmitModel", "mox", MirrorDirection::Bidirectional },

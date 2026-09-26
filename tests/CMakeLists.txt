@@ -7153,6 +7153,17 @@ nereus_add_test(tst_slice_meter_pump
     fakes/P1FakeRadio.cpp
     fakes/ConnectableRadioModel.cpp)
 
+# Remote-window parity Task 15 (R-R3-13, R-R3-49): meters from the Core. The
+# pump's ADC and AGC readings per slice (a real connected channel), their
+# trip to a window under meterReadingsVersion 1, and a window's Multimeter
+# polling delay setting the Core's pump rate at once (its polls counted).
+# Loopback only, no RF, no audio device.
+nereus_add_test(tst_slice_meter_pump_readings
+    fakes/P1FakeRadio.cpp
+    fakes/ConnectableRadioModel.cpp
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+
 # Remote Daemon R2, Task 13: AppSettings mutator funnel. Before this task
 # only setValue()/remove()/clear() touched the m_settings map directly;
 # everything else (setHardwareValue/hardwareValue/hardwareValues/
