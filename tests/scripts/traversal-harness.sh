@@ -360,7 +360,7 @@ PIDS+=($!)
 
 python3 -c 'import secrets; print(secrets.token_hex(24))' > "$WORK/turn-secret"
 chmod 600 "$WORK/turn-secret"
-ip netns exec h-rvsrv turnserver -n --no-cli --no-tls --no-dtls --fingerprint \
+ip netns exec h-rvsrv turnserver -n -v --no-cli --no-tls --no-dtls --fingerprint \
     --listening-ip=198.51.100.2 --listening-ip=2001:db8:1::2 --listening-port=3478 \
     --relay-ip=198.51.100.2 --relay-ip=2001:db8:1::2 \
     --realm=harness.test --use-auth-secret \
@@ -711,7 +711,8 @@ fi
 
 # session-relayed: no UDP between the two NATs' public addresses; the
 # session runs through the relay, and when it ends each end gives its
-# allocation back (a Refresh of lifetime 0), which coturn logs.
+# allocation back (a Refresh of lifetime 0), which coturn logs with -v as
+# "refreshed, ..., lifetime=0".
 if scenario session-relayed; then
     reset_rules
     in_ns inet nft -f - <<EOF
