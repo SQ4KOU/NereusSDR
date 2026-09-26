@@ -295,13 +295,82 @@ struct RequestInputs {
     std::optional<int> decimation;
 };
 
-DbmWindow liveDbmWindow(const SpectrumWidget* widget, double binWidthHz)
+// Parity Task 17 follow-up (R-R3-01, R-R3-04): the headroom a waterfall
+// level set at run time (waterfall AGC, noise-floor AGC, Clarity) is given
+// in the dBm window, and twice it the slack the window keeps before it
+// narrows. Those levels move a little every line; the window follows them
+// only when they leave it or it is far wider than they need, so the Core
+// is not asked again at every line.
+constexpr double kRuntimeLevelHeadroomDb = 10.0;
+
+// How far below the pan's floor (or the stored low level, when lower) a
+// run-time low level may take the window. Waterfall AGC works on the values
+// the pan receives, which the Core clamps to the window: with nothing below
+// the window's floor (a receiver passing no noise) its low level sits one
+// AGC margin under the edge whatever the edge is, and would walk the window
+// down to -400 dBm one request at a time. A real noise floor is found well
+// inside this.
+constexpr double kRuntimeLowLevelReachDb = 60.0;
+
+// Whether the pan's waterfall levels are set at run time rather than the
+// stored low and high levels (SpectrumWidget::composeWaterfallActiveThresholds).
+bool runtimeWaterfallLevels(const SpectrumWidget* widget)
+{
+    return widget->clarityActive() || widget->wfAgcEnabled()
+        || widget->waterfallNFAGCEnabled();
+}
+
+// The waterfall levels the dBm window must hold: the stored levels while
+// they are what colours the waterfall; otherwise the levels in force now
+// (wfActiveLow/HighThreshold, which AGC and Clarity set) with headroom,
+// kept from `held` while they still fit it.
+// `panLowDbm` is the pan's own floor in the frame's values (liveDbmWindow).
+DbmWindow waterfallLevelsWindow(const SpectrumWidget* widget,
+                                const std::optional<DbmWindow>& held, double panLowDbm)
+{
+    const DbmWindow stored{double(widget->wfLowThreshold()), double(widget->wfHighThreshold())};
+    if (!runtimeWaterfallLevels(widget)) {
+        return stored;
+    }
+    // Clarity's levels come from the Core's noise floor of the whole
+    // source, not from these values, so only the AGCs are held to the reach.
+    double activeLow = double(widget->wfActiveLowThreshold());
+    if (!widget->clarityActive()) {
+        const double reach = std::floor(std::min(panLowDbm, stored.minDbm)
+                                        - kRuntimeLowLevelReachDb);
+        activeLow = std::max(activeLow, reach + kRuntimeLevelHeadroomDb);
+    }
+    const double activeHigh = std::max(double(widget->wfActiveHighThreshold()), activeLow);
+    if (!std::isfinite(activeLow) || !std::isfinite(activeHigh)) {
+        return held.value_or(stored);
+    }
+    if (held && activeLow >= held->minDbm && activeHigh <= held->maxDbm
+        && held->minDbm >= activeLow - 2.0 * kRuntimeLevelHeadroomDb
+        && held->maxDbm <= activeHigh + 2.0 * kRuntimeLevelHeadroomDb) {
+        return *held;
+    }
+    return {std::floor(activeLow - kRuntimeLevelHeadroomDb),
+            std::ceil(activeHigh + kRuntimeLevelHeadroomDb)};
+}
+
+// The pan's own floor, in the frame's un-normalised values.
+double panLowDbm(const SpectrumWidget* widget, double binWidthHz)
+{
+    return double(widget->refLevel()) - normalizeShiftDb(widget->dispNormalize(), binWidthHz)
+        - double(widget->dynamicRange());
+}
+
+DbmWindow liveDbmWindow(const SpectrumWidget* widget, double binWidthHz,
+                        const DbmWindow& levels)
 {
     const double shift = normalizeShiftDb(widget->dispNormalize(), binWidthHz);
     const double panHigh = double(widget->refLevel()) - shift;
-    const double panLow = panHigh - double(widget->dynamicRange());
-    double low = std::min(panLow, double(widget->wfLowThreshold()));
-    double high = std::max(panHigh, double(widget->wfHighThreshold()));
+    const double panLow = panLowDbm(widget, binWidthHz);
+    // Parity Task 17 follow-up: the waterfall's levels colour the frame's
+    // values directly, so the window holds the levels in force (the run-time
+    // ones with waterfall AGC or Clarity), and no colour clips at its edge.
+    double low = std::min(panLow, levels.minDbm);
+    double high = std::max(panHigh, levels.maxDbm);
     if (!std::isfinite(low) || !std::isfinite(high)) {
         return {};
     }
@@ -379,8 +448,11 @@ QJsonObject requestFor(SpectrumWidget* widget, SliceModel* slice,
         double(widget->wfUpdatePeriodMs()) * fps / 1000.0)), kMaxFramesPerLine);
     const double wideFactor = widget->spectrumRenderMode() == int(SpectrumRenderMode::Mode3D)
         ? dssMaxRowSpanFactor(dssShapeForAngle(0)) : 0.0;
+    const double binWidthHz = double(slice->sampleRateHz()) / size;
     const DbmWindow dbm = inputs.dbmWindow.value_or(
-        liveDbmWindow(widget, double(slice->sampleRateHz()) / size));
+        liveDbmWindow(widget, binWidthHz,
+                      waterfallLevelsWindow(widget, std::nullopt,
+                                            panLowDbm(widget, binWidthHz))));
     QJsonObject request{{QStringLiteral("sliceId"), slice->sliceIndex()},
             {QStringLiteral("tier"), size > baseSize ? QStringLiteral("fine") : QStringLiteral("wide")},
             {QStringLiteral("fftSize"), size}, {QStringLiteral("windowType"), window},
@@ -568,6 +640,9 @@ struct RemoteMediaController::Private {
         DbmWindow settled;
         DbmWindow live;
         qint64 liveSinceMs = 0;
+        // Parity Task 17 follow-up: the waterfall levels the window holds
+        // (waterfallLevelsWindow), kept while the run-time levels fit.
+        DbmWindow levels;
     };
     QHash<const SpectrumWidget*, DbmWindowState> dbmWindows;
 
@@ -604,13 +679,20 @@ struct RemoteMediaController::Private {
             const int size = plannedFftSize(widget, slice);
             if (size <= 0) { continue; }
             seen.insert(widget);
-            const DbmWindow live = liveDbmWindow(widget, double(slice->sampleRateHz()) / size);
             auto found = dbmWindows.find(widget);
+            const double binWidthHz = double(slice->sampleRateHz()) / size;
+            const DbmWindow levels = waterfallLevelsWindow(
+                widget,
+                found == dbmWindows.end() ? std::nullopt
+                                          : std::optional<DbmWindow>(found->levels),
+                panLowDbm(widget, binWidthHz));
+            const DbmWindow live = liveDbmWindow(widget, binWidthHz, levels);
             if (found == dbmWindows.end()) {
-                dbmWindows.insert(widget, {live, live, now});
+                dbmWindows.insert(widget, {live, live, now, levels});
                 continue;
             }
             DbmWindowState& state = *found;
+            state.levels = levels;
             if (live != state.live) {
                 state.live = live;
                 state.liveSinceMs = now;

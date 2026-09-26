@@ -1291,6 +1291,12 @@ private slots:
         auto* widget = first->spectrumWidget();
         widget->setCtunEnabled(true);
         cohost->spectrumWidget()->setCtunEnabled(false);
+        // Parity Task 17 follow-up: with waterfall AGC the dBm window follows
+        // the levels AGC sets from the first frames and asks again once,
+        // blanking the trace until the new context. This test is about the
+        // C-Tune centre, so its pans use the stored levels.
+        widget->setWfAgcEnabled(false);
+        cohost->spectrumWidget()->setWfAgcEnabled(false);
         // This is the existing MainWindow click/wheel -> mirrored VFO path.
         connect(widget, &SpectrumWidget::frequencyClicked, &remote,
             [&remote, sliceId](double hz) { remote.sliceById(sliceId)->setFrequency(hz); });
@@ -3729,6 +3735,12 @@ private slots:
             widget->setClarityActive(true);
             widget->setClarityWaterfallThresholds(low, high);
         });
+        // Parity Task 17 follow-up: the dBm window holds the run-time
+        // waterfall levels with headroom. Levels that already take in the
+        // ones Clarity sets below (-137.375 to -77.375) keep this test's
+        // request count about the context, not about the window.
+        widget->setWfLowThreshold(-140.0f);
+        widget->setWfHighThreshold(-70.0f);
         const float savedLow = widget->wfLowThreshold();
         const float savedHigh = widget->wfHighThreshold();
         widget->setDisplayWindowPreservingHistory(14225000, 24000);
@@ -4167,6 +4179,9 @@ private slots:
         widget->setDisplayWindowPreservingHistory(14225000, 24000);
         widget->setDispNormalize(false);
         widget->setWfUseSpectrumMinMax(false);
+        // The stored levels colour the waterfall (no AGC, no Clarity); the
+        // run-time levels are runtimeWaterfallLevelsWidenTheDbmWindow's.
+        widget->setWfAgcEnabled(false);
         widget->setDbmRange(-100.0f, 20.0f); // Ref Level above 0 dBm.
         widget->setWfLowThreshold(-130.0f);
         widget->setWfHighThreshold(-70.0f);
@@ -4259,6 +4274,158 @@ private slots:
 
         client.disconnectFromStation(QStringLiteral("test complete"));
         remote.setFftEngine(nullptr);
+    }
+
+    // Parity Task 17 follow-up (R-R3-01, R-R3-04): with waterfall AGC or
+    // Clarity the waterfall is coloured by the levels they set at run time,
+    // so the dBm window holds those levels (with headroom), not the stored
+    // ones: no colour clips at the window's edge and a remote pan colours as
+    // a local one does. The levels move a little every line; the window
+    // follows only when they leave it or it is far wider than they need.
+    void runtimeWaterfallLevelsWidenTheDbmWindow()
+    {
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        auto& appSettings = AppSettings::instance();
+        const bool hadFps = appSettings.contains(QStringLiteral("DisplaySpectrumFps"));
+        const QVariant savedFps = appSettings.value(QStringLiteral("DisplaySpectrumFps"));
+        appSettings.setValue(QStringLiteral("DisplaySpectrumFps"), QStringLiteral("20"));
+        const auto restoreFps = qScopeGuard([&] {
+            if (hadFps) { appSettings.setValue(QStringLiteral("DisplaySpectrumFps"), savedFps); }
+            else { appSettings.remove(QStringLiteral("DisplaySpectrumFps")); }
+        });
+        RadioModel station;
+        station.setBoardForTest(HPSDRHW::HermesLite);
+        station.setConnectionStateForTest(ConnectionState::Connected);
+        station.addSlice(QStringLiteral("pan-0"));
+        QVERIFY(!station.slices().isEmpty());
+        SliceModel* stationSlice = station.slices().first();
+        stationSlice->setStreamIndex(0);
+        stationSlice->setFrequency(14225000);
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
+        server.setMediaEnabled(true);
+        RadioModel remote(RadioModel::Role::Remote);
+        remote.audioEngine()->setMasterMuted(true); // Display fixture opens no speaker.
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        PanadapterStack stack;
+        auto* applet = stack.addPanadapter(QStringLiteral("pan-0"));
+        applet->setActiveSliceIndex(stationSlice->sliceIndex());
+        auto* widget = applet->spectrumWidget();
+        widget->setDisplayWindowPreservingHistory(14225000, 24000);
+        widget->setDispNormalize(false);
+        widget->setWfUseSpectrumMinMax(false);
+        widget->setWfAgcEnabled(false);
+        widget->setWaterfallNFAGCEnabled(false);
+        widget->setDbmRange(-100.0f, -60.0f);
+        widget->setWfLowThreshold(-110.0f);
+        widget->setWfHighThreshold(-70.0f);
+        // Clarity drives the levels, below and above what the pan shows.
+        widget->setClarityActive(true);
+        widget->setClarityWaterfallThresholds(-150.0f, -40.0f);
+        stack.resize(600, 400);
+        stack.show();
+        QVERIFY(QTest::qWaitForWindowExposed(&stack));
+        qint64 now = 1'000;
+        QPointer<DisplayTransport> media;
+        RemoteMediaController controller(&client, &remote, &stack, nullptr,
+            [&media](QObject* owner) -> IMediaTransport* {
+                media = new DisplayTransport(owner);
+                return media;
+            },
+            [&now] { return now; });
+        QSignalSpy controls(&server, &StationServer::mediaControlReceived);
+        auto* stationLink = new Test::LoopbackTransport(QStringLiteral("station"));
+        auto* clientLink = new Test::LoopbackTransport(QStringLiteral("client"));
+        stationLink->linkTo(clientLink);
+        client.startSession(clientLink, server.token());
+        server.acceptTransport(stationLink);
+        QTRY_VERIFY(client.mediaAvailable());
+        QTRY_VERIFY(media);
+        media->activate();
+        QTRY_COMPARE(countControl(controls, QStringLiteral("subscribe")), 1);
+
+        // Clarity's levels with 10 dB of headroom, not the stored -110..-70.
+        QJsonObject asked = lastControl(controls, QStringLiteral("subscribe"));
+        QCOMPARE(asked.value(QStringLiteral("minDbm")).toDouble(), -160.0);
+        QCOMPARE(asked.value(QStringLiteral("maxDbm")).toDouble(), -30.0);
+
+        const auto settle = [&] {
+            QTest::qWait(RemoteMediaController::kPlannerIntervalMs + 30);
+            now += 60; // past a frame period (50 ms at 20 frames a second)
+            QTest::qWait(RemoteMediaController::kPlannerIntervalMs + 30);
+        };
+
+        // A few dB of movement inside the window asks nothing.
+        widget->setClarityWaterfallThresholds(-147.0f, -44.0f);
+        settle();
+        widget->setClarityWaterfallThresholds(-153.0f, -37.0f);
+        settle();
+        QCOMPARE(countControl(controls, QStringLiteral("subscribe")), 1);
+
+        // The low level leaves the window: asked again, with headroom.
+        widget->setClarityWaterfallThresholds(-175.0f, -37.0f);
+        settle();
+        QTRY_COMPARE(countControl(controls, QStringLiteral("subscribe")), 2);
+        asked = lastControl(controls, QStringLiteral("subscribe"));
+        QCOMPARE(asked.value(QStringLiteral("minDbm")).toDouble(), -185.0);
+        QCOMPARE(asked.value(QStringLiteral("maxDbm")).toDouble(), -27.0);
+
+        // The levels close in far inside the window: it narrows to them,
+        // never inside what the pan shows.
+        widget->setClarityWaterfallThresholds(-120.0f, -90.0f);
+        settle();
+        QTRY_COMPARE(countControl(controls, QStringLiteral("subscribe")), 3);
+        asked = lastControl(controls, QStringLiteral("subscribe"));
+        QCOMPARE(asked.value(QStringLiteral("minDbm")).toDouble(), -130.0);
+        QCOMPARE(asked.value(QStringLiteral("maxDbm")).toDouble(), -60.0);
+
+        // Waterfall AGC works on the values the pan receives, which the
+        // Core clamps to the window: with nothing below it (no noise at all)
+        // its low level sits a margin under the edge wherever the edge is.
+        // The window goes no lower than 60 dB under the pan's floor or the
+        // stored low level (-110 here), so it does not walk down to -400.
+        widget->setClarityActive(false);
+        widget->setWfAgcEnabled(true);
+        widget->composeWaterfallActiveThresholds(QVector<float>(64, -300.0f));
+        QCOMPARE(widget->wfActiveLowThreshold(), -312.0f);
+        settle();
+        QTRY_COMPARE(countControl(controls, QStringLiteral("subscribe")), 4);
+        asked = lastControl(controls, QStringLiteral("subscribe"));
+        QCOMPARE(asked.value(QStringLiteral("minDbm")).toDouble(), -170.0);
+        QCOMPARE(asked.value(QStringLiteral("maxDbm")).toDouble(), -60.0);
+        // Held there, however long nothing arrives below it.
+        for (int line = 0; line < 20; ++line) {
+            widget->composeWaterfallActiveThresholds(QVector<float>(64, -170.0f));
+        }
+        settle();
+        QCOMPARE(countControl(controls, QStringLiteral("subscribe")), 4);
+
+        // The levels AGC sets from a line with a noise floor and a signal
+        // (12 dB past its lowest and highest values) are what the window
+        // holds, with headroom.
+        widget->setWfAgcEnabled(false);
+        widget->setWfAgcEnabled(true); // primes the AGC afresh
+        QVector<float> line(64, -125.0f);
+        line[10] = -20.0f;
+        widget->composeWaterfallActiveThresholds(line);
+        QCOMPARE(widget->wfActiveLowThreshold(), -137.0f);
+        QCOMPARE(widget->wfActiveHighThreshold(), -8.0f);
+        settle();
+        QTRY_COMPARE(countControl(controls, QStringLiteral("subscribe")), 5);
+        asked = lastControl(controls, QStringLiteral("subscribe"));
+        QCOMPARE(asked.value(QStringLiteral("minDbm")).toDouble(), -147.0);
+        QCOMPARE(asked.value(QStringLiteral("maxDbm")).toDouble(), 2.0);
+
+        // Back to the stored levels: the window is the pan and those levels.
+        widget->setWfAgcEnabled(false);
+        settle();
+        QTRY_COMPARE(countControl(controls, QStringLiteral("subscribe")), 6);
+        asked = lastControl(controls, QStringLiteral("subscribe"));
+        QCOMPARE(asked.value(QStringLiteral("minDbm")).toDouble(), -110.0);
+        QCOMPARE(asked.value(QStringLiteral("maxDbm")).toDouble(), -60.0);
+
+        client.disconnectFromStation(QStringLiteral("test complete"));
     }
 
     // R-R3-01/08/37: outside budget mode Core's five-key per-pan refusal
