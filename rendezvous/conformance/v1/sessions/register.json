@@ -16,8 +16,8 @@
         "version": 1,
         "nonce": "$b64:32:stationNonce",
         "stun": [
-          "stun:rv6.conformance.invalid:3478",
-          "stun:rv4.conformance.invalid:3478"
+          "stun:rv4.conformance.invalid:3478",
+          "stun:rv6.conformance.invalid:3478"
         ]
       }
     },

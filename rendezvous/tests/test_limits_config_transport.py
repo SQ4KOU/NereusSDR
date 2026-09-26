@@ -4,6 +4,7 @@ address rule, nameplate allocation and listening in both address
 families."""
 
 import asyncio
+import sys
 import socket
 
 import pytest
@@ -129,9 +130,19 @@ def test_defaults():
     assert config.candidates_per_side == 64
     assert config.introduction_lifetime_ms == 120000
     assert (config.connections_per_address, config.stations_per_address) == (16, 4)
-    assert (config.max_connections, config.max_stations) == (512, 512)
+    assert (config.max_connections, config.max_stations) == (256, 2000)
     assert (config.send_queue_bytes, config.send_budget_bytes) == (1048576, 33554432)
     assert config.send_stall_ms == 30000
+    # IPv4 first in both lists (rendezvous document section 8); the sample
+    # matches (test_sample_configuration_is_the_defaults) and coturn-check.sh
+    # compares what setup-server.sh writes with these.
+    assert config.stun_urls == ["stun:rv4.nereussdr.com:3478", "stun:rv6.nereussdr.com:3478"]
+    assert config.turn_urls == [
+        "turn:rv4.nereussdr.com:3478?transport=udp",
+        "turn:rv4.nereussdr.com:443?transport=udp",
+        "turn:rv6.nereussdr.com:3478?transport=udp",
+        "turn:rv6.nereussdr.com:443?transport=udp",
+    ]
     assert all("rv4.nereussdr.com" in u or "rv6.nereussdr.com" in u for u in config.turn_urls + config.stun_urls)
     assert {u.split(":")[2].split("?")[0] for u in config.turn_urls} == {"3478", "443"}
 
@@ -233,6 +244,9 @@ def test_sample_configuration_is_the_defaults():
     loaded = cfg.load(str(sample))
     defaults = cfg.Config()
     assert loaded == defaults
+    # Order matters (section 8), and dataclass equality compares the lists in
+    # order; said outright for the two URL lists.
+    assert (loaded.stun_urls, loaded.turn_urls) == (defaults.stun_urls, defaults.turn_urls)
 
 
 def test_missing_secret_file_is_a_configuration_error(tmp_path):
@@ -240,3 +254,156 @@ def test_missing_secret_file_is_a_configuration_error(tmp_path):
     path.write_text("[rendezvous]\nturn_secret_file = %s\n" % (tmp_path / "absent"))
     with pytest.raises(cfg.ConfigError):
         cfg.load(str(path))
+
+
+def test_each_connection_gets_the_configured_socket_buffers():
+    """Section 9.1: the kernel buffers of every accepted connection are set
+    by the service (SO_RCVBUF and SO_SNDBUF, inherited from the listening
+    socket), so the kernel memory a connection can hold is bounded without
+    a host setting. Linux reports twice the value it was given."""
+
+    async def go():
+        config = cfg.Config()
+        config.ping_interval_seconds = 0
+        assert config.socket_buffer_bytes == 16384
+        service = Service(config, ManualClock())
+        server = await transport.start(service, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        try:
+            ws = await ws_connect(f"ws://127.0.0.1:{port}/", "192.0.2.1")
+            await recv_json(ws)
+            (conn,) = service.connections
+            sock = conn.transport.ws.transport.get_extra_info("socket")
+            options = [socket.SO_SNDBUF]
+            # macOS grows a connected socket's receive buffer on its own
+            # whatever it was set to; Linux, where the service runs, keeps it.
+            if sys.platform.startswith("linux"):
+                options.append(socket.SO_RCVBUF)
+            for option in options:
+                assert sock.getsockopt(socket.SOL_SOCKET, option) in (16384, 32768), option
+            await ws.close()
+        finally:
+            await transport.stop([server], service, grace_s=0.05, timeout_s=5)
+
+    asyncio.run(go())
+
+
+def test_socket_buffer_bytes_may_be_zero_but_not_negative(tmp_path):
+    path = tmp_path / "r.conf"
+    path.write_text("[limits]\nsocket_buffer_bytes = 0\n")
+    assert cfg.load(str(path)).socket_buffer_bytes == 0
+    path.write_text("[limits]\nsocket_buffer_bytes = -1\n")
+    with pytest.raises(cfg.ConfigError):
+        cfg.load(str(path))
+
+
+async def _raw_request(port: int, request: bytes) -> bytes:
+    reader, writer = await asyncio.open_connection("127.0.0.1", port)
+    try:
+        writer.write(request)
+        await writer.drain()
+        head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 5)
+        rest = b""
+        if head.startswith(b"HTTP/1.1 101"):
+            # The first frame: the service's hello, unmasked, a short text.
+            first = await asyncio.wait_for(reader.readexactly(2), 5)
+            length = first[1] & 0x7F
+            if length == 126:
+                length = int.from_bytes(await reader.readexactly(2), "big")
+            rest = await asyncio.wait_for(reader.readexactly(length), 5)
+        else:
+            try:
+                rest = await asyncio.wait_for(reader.read(), 5)
+            except asyncio.IncompleteReadError:
+                pass
+        return head + rest
+    finally:
+        writer.close()
+
+
+def _live(go):
+    async def wrapper():
+        config = cfg.Config()
+        config.ping_interval_seconds = 0
+        service = Service(config, ManualClock())
+        server = await transport.start(service, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        try:
+            await go(port)
+        finally:
+            await transport.stop([server], service, grace_s=0.05, timeout_s=5)
+
+    asyncio.run(wrapper())
+
+
+def test_a_request_that_is_not_a_websocket_gets_426():
+    """Caddy sends every request for rv to the service
+    (rendezvous/deploy/Caddyfile), so the service answers the rest itself:
+    426, a short plain text, Upgrade: websocket, and no Server header."""
+
+    async def go(port):
+        answer = await _raw_request(port, b"GET / HTTP/1.1\r\nHost: rv.nereussdr.com\r\nConnection: keep-alive\r\n\r\n")
+        head, _, body = answer.partition(b"\r\n\r\n")
+        lines = head.decode("latin-1").split("\r\n")
+        assert lines[0].startswith("HTTP/1.1 426"), lines[0]
+        headers = {k.lower(): v.strip() for k, _, v in (line.partition(":") for line in lines[1:])}
+        assert headers["upgrade"] == "websocket"
+        assert headers["connection"] == "upgrade, close"
+        assert headers["content-type"] == "text/plain; charset=utf-8"
+        assert headers["cache-control"] == "no-store"
+        assert "server" not in headers
+        assert body.decode("utf-8") == transport.NOT_A_WEBSOCKET_TEXT
+
+    _live(go)
+
+
+@pytest.mark.parametrize(
+    "upgrade,host",
+    [
+        ("websocket", "rv.nereussdr.com"),
+        # Apple's Network.framework, as captured by the phone session.
+        ("WebSocket", "rv.nereussdr.com:443"),
+    ],
+)
+def test_websocket_upgrade_in_any_case_and_with_a_port_in_host(upgrade, host):
+    async def go(port):
+        request = (
+            "GET / HTTP/1.1\r\nHost: %s\r\nUpgrade: %s\r\nConnection: Upgrade\r\n"
+            "Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==\r\nSec-WebSocket-Version: 13\r\n\r\n" % (host, upgrade)
+        ).encode("ascii")
+        answer = await _raw_request(port, request)
+        head, _, frame = answer.partition(b"\r\n\r\n")
+        assert head.startswith(b"HTTP/1.1 101"), head
+        assert b'"type":"hello"' in frame, frame
+
+    _live(go)
+
+
+def _url_lists(value):
+    if isinstance(value, list):
+        if value and all(isinstance(x, str) and x.startswith(("stun:", "turn:")) for x in value):
+            yield value
+        for item in value:
+            yield from _url_lists(item)
+    elif isinstance(value, dict):
+        for item in value.values():
+            yield from _url_lists(item)
+
+
+def test_every_url_list_puts_the_ipv4_name_first():
+    """Section 8: IPv4 first, in the service's defaults, the sample, the
+    runner's fixture settings and every URL list in the conformance
+    vectors (coturn-check.sh checks what setup-server.sh writes)."""
+    import json
+    from pathlib import Path
+
+    import runner
+
+    root = Path(__file__).resolve().parent.parent / "conformance"
+    lists = [runner.FIXTURE_STUN, runner.FIXTURE_TURN, cfg.Config().stun_urls, cfg.Config().turn_urls]
+    for path in sorted(root.rglob("*.json")):
+        lists.extend(_url_lists(json.loads(path.read_text(encoding="utf-8"))))
+    assert len(lists) > 60
+    for urls in lists:
+        families = ["rv4" if "rv4." in u else "rv6" if "rv6." in u else "other" for u in urls]
+        assert families == sorted(families, key=lambda f: {"rv4": 0, "rv6": 1, "other": 2}[f]), urls

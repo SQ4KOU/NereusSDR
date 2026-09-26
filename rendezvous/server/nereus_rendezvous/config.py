@@ -32,16 +32,20 @@ class Config:
     trusted_proxies: List[str] = field(default_factory=lambda: ["127.0.0.1", "::1"])
     stun_urls: List[str] = field(
         default_factory=lambda: [
-            "stun:rv6.nereussdr.com:3478",
+            # IPv4 first: the pinned libjuice uses only the first STUN
+            # server, and an IPv4-only peer behind NAT needs its
+            # server-reflexive candidate (rendezvous document section 8).
             "stun:rv4.nereussdr.com:3478",
+            "stun:rv6.nereussdr.com:3478",
         ]
     )
+    # The same order as stun_urls, IPv4 first (rendezvous document section 8).
     turn_urls: List[str] = field(
         default_factory=lambda: [
-            "turn:rv6.nereussdr.com:3478?transport=udp",
-            "turn:rv6.nereussdr.com:443?transport=udp",
             "turn:rv4.nereussdr.com:3478?transport=udp",
             "turn:rv4.nereussdr.com:443?transport=udp",
+            "turn:rv6.nereussdr.com:3478?transport=udp",
+            "turn:rv6.nereussdr.com:443?transport=udp",
         ]
     )
     turn_secret_file: str = ""
@@ -55,8 +59,8 @@ class Config:
     mailbox_messages_per_side: int = 32
     connections_per_address: int = 16
     stations_per_address: int = 4
-    max_connections: int = 512
-    max_stations: int = 512
+    max_connections: int = 256
+    max_stations: int = 2000
     handshake_timeout_ms: int = 10000
     idle_timeout_ms: int = 30000
     introduction_lifetime_ms: int = 120000
@@ -67,6 +71,7 @@ class Config:
     send_queue_bytes: int = 1048576
     send_budget_bytes: int = 33554432
     send_stall_ms: int = 30000
+    socket_buffer_bytes: int = 16384
     # Not from the file: the secret's bytes, read from turn_secret_file.
     turn_secret: Optional[bytes] = field(default=None, repr=False)
 
@@ -101,6 +106,7 @@ _SECTIONS = {
         "send_queue_bytes",
         "send_budget_bytes",
         "send_stall_ms",
+        "socket_buffer_bytes",
     ],
 }
 
@@ -166,9 +172,10 @@ def load(path: Optional[str]) -> Config:
     return config
 
 
-# Zero turns the WebSocket ping off; every other number must be at least 1,
-# because 0 would make the service refuse everything, or nothing.
-_MAY_BE_ZERO = ("ping_interval_seconds", "ping_timeout_seconds")
+# Zero turns the WebSocket ping off, and leaves the kernel's own socket
+# buffer sizing; every other number must be at least 1, because 0 would make
+# the service refuse everything, or nothing.
+_MAY_BE_ZERO = ("ping_interval_seconds", "ping_timeout_seconds", "socket_buffer_bytes")
 
 
 def check(config: Config) -> None:

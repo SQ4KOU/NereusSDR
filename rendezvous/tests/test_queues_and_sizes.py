@@ -142,6 +142,88 @@ def test_the_budget_for_every_queue_together_closes_the_largest_holder():
     asyncio.run(go())
 
 
+async def _registered_station(service, io, address):
+    station, task = await _start(service, io, address)
+    key = ec.generate_private_key(ec.SECP256R1())
+    spki = identity.spki_of(key.public_key())
+    sid = identity.rendezvous_id(spki)
+    await io.incoming.put(protocol.encode({"type": "register", "id": sid, "publicKey": identity.to_b64url(spki)}))
+    await _settle()
+    nonce = identity.from_b64url(json.loads(io.sent[-1])["nonce"])
+    proof = identity.to_b64url(identity.sign_raw(key, identity.register_transcript(nonce)))
+    await io.incoming.put(protocol.encode({"type": "prove", "signature": proof}))
+    await _settle()
+    assert json.loads(io.sent[-1])["type"] == "registered"
+    return station, sid
+
+
+def _fill(conn, total):
+    """Queue at least `total` bytes, in steps of about 1 KiB, on a
+    connection whose peer never reads."""
+    filler = {"type": "mailbox", "body": "f" * 1000}
+    while conn.queued_bytes < total:
+        conn.send(filler)
+
+
+@pytest.mark.parametrize("path", ["mailbox", "candidate"])
+def test_an_evicted_sender_is_cleaned_up_after_its_own_message(path):
+    """When forwarding a peer's message passes the budget and the sender is
+    the largest holder, the sender is closed (1008), but what it sent still
+    reaches the other end first, and only then the cleanup its leaving
+    causes (mailbox.closed peerLeft, introduction.end clientLeft): the
+    service's sends keep the order it read."""
+
+    async def go():
+        service = _service(
+            send_queue_bytes=400000, send_budget_bytes=400000, send_queue_messages=1000, handshake_timeout_ms=600000
+        )
+        station_io = FakeTransport(reads=True)
+        station, sid = await _registered_station(service, station_io, "192.0.2.1")
+        client_io = FakeTransport(reads=False)
+        client, client_task = await _start(service, client_io, "198.51.100.1")
+        if path == "mailbox":
+            await station_io.incoming.put(protocol.encode({"type": "nameplate.claim"}))
+            await _settle()
+            number = json.loads(station_io.sent[-1])["nameplate"]
+            await client_io.incoming.put(protocol.encode({"type": "mailbox.open", "nameplate": number}))
+            await _settle()
+            assert json.loads(station_io.sent[-1])["type"] == "mailbox.opened"
+            forwarded = {"type": "mailbox", "body": "m" * 60000}
+            expected_forward = forwarded
+            expected_cleanup = {"type": "mailbox.closed", "code": "peerLeft"}
+        else:
+            nonce = json.loads(client_io.sent[0])["nonce"]
+            await client_io.incoming.put(protocol.encode(introduce_message(sid, nonce)))
+            await _settle()
+            intro = json.loads(station_io.sent[-1])
+            assert intro["type"] == "introduction"
+            await station_io.incoming.put(
+                protocol.encode({"type": "answer", "to": intro["from"], "answer": "v=0\r\n", "turn": False})
+            )
+            await _settle()
+            candidate = "candidate:1 1 udp 2130706431 192.0.2.10 50000 typ host " + "x" * 3000
+            forwarded = {"type": "candidate", "candidate": candidate}
+            expected_forward = {"type": "candidate", "from": intro["from"], "candidate": candidate}
+            expected_cleanup = {"type": "introduction.end", "from": intro["from"], "code": "clientLeft"}
+        # The client stops reading and holds the most queued bytes; the
+        # station reads everything and holds none.
+        # Short of the budget by less than the forwarded message.
+        _fill(client, 400000 - len(protocol.encode(expected_forward)) + 100)
+        assert not client.closing and service.queued_bytes < 400000
+        assert service.largest_holder() is client and not station.queued_bytes
+        before = len(station_io.sent)
+        await client_io.incoming.put(protocol.encode(forwarded))
+        await _settle()
+        assert client.closing and client_io.closed_with == CLOSE_NOT_READING
+        after = [json.loads(t) for t in station_io.sent[before:]]
+        assert after == [expected_forward, expected_cleanup], after
+        assert not station.closing
+        await client_task
+        assert client not in service.connections
+
+    asyncio.run(go())
+
+
 def test_a_writer_blocked_too_long_is_closed():
     """Section 9.1: a connection whose writer spends longer than
     send_stall_ms (30000 by default) on one message is closed with 1008,

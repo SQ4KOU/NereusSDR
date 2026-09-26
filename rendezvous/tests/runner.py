@@ -40,10 +40,10 @@ from websockets.exceptions import ConnectionClosed
 CONFORMANCE = Path(__file__).resolve().parent.parent / "conformance" / "v1"
 DEFAULT_ADDRESS = "192.0.2.1"
 DEFAULT_WALL_CLOCK = 1800000000
-FIXTURE_STUN = ["stun:rv6.conformance.invalid:3478", "stun:rv4.conformance.invalid:3478"]
+FIXTURE_STUN = ["stun:rv4.conformance.invalid:3478", "stun:rv6.conformance.invalid:3478"]
 FIXTURE_TURN = [
-    "turn:rv6.conformance.invalid:3478?transport=udp",
     "turn:rv4.conformance.invalid:3478?transport=udp",
+    "turn:rv6.conformance.invalid:3478?transport=udp",
 ]
 RECV_TIMEOUT_S = 5.0
 SILENCE_S = 0.1
