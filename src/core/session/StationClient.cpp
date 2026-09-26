@@ -244,6 +244,9 @@
 //               tgxlAutotuneAvailable, holdsTransmitHere, otherHolderReason.
 //               J.J. Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-26: Task 77 fix wave, M2: the holder line for the radio says
+//               how to get transmit back. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -4933,6 +4936,14 @@ QString StationClient::transmitHolderText() const
     const QString self = thisDeviceWireId();
     if (!self.isEmpty() && tx.holderDeviceId() == self) {
         return QStringLiteral("This computer holds transmit.");
+    }
+    // Task 77 fix wave, M2 (ruling 8.1): the radio keeps transmit after its
+    // own PTT until a device takes it; it never lets go. Taking it from this
+    // window is Task 78's; until then MOX and TUNE stay disabled.
+    if (tx.holderSource() == QStringLiteral("radioPtt")
+        || tx.holderKind() == QStringLiteral("station")) {
+        return QStringLiteral("The radio has the transmitter. Take it from this window to "
+                              "transmit.");
     }
     const QString name = tx.holderName().isEmpty() ? QStringLiteral("Another device")
                                                    : tx.holderName();

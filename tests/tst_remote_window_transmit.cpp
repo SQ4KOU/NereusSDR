@@ -44,6 +44,9 @@
 //               and TUNE wait while another device holds. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: Task 77 fix wave, M2: the holder line for the radio. J.J.
+//               Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -1083,13 +1086,15 @@ private slots:
         h.station.moxController()->onMicPttFromRadio(true);
         QTRY_VERIFY(h.station.moxController()->isMox());
         QTRY_COMPARE(h.client.transmitHolderText(),
-                     QStringLiteral("Radio holds transmit. MOX and TUNE here wait until it lets go."));
+                     QStringLiteral("The radio has the transmitter. Take it from this window to "
+                                    "transmit."));
         h.station.moxController()->onMicPttFromRadio(false);
         QTRY_VERIFY(!h.station.moxController()->isMox());
         // Task 77 (ruling 8.1): the radio keeps transmit after its press.
         QTest::qWait(100);
         QCOMPARE(h.client.transmitHolderText(),
-                 QStringLiteral("Radio holds transmit. MOX and TUNE here wait until it lets go."));
+                 QStringLiteral("The radio has the transmitter. Take it from this window to "
+                                    "transmit."));
         h.client.disconnectFromStation(QStringLiteral("test complete"));
     }
 
