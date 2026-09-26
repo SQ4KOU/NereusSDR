@@ -1314,6 +1314,16 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
     }
     m_sessionActive = false;
 
+    // Follow-up N2: a radio change the Core never comes back from. The
+    // reading holds through the backoff's steps; the failed redial after
+    // the longest wait drops it, so this failure is what the window shows
+    // (status, detail and toast). The radio-change end itself carries the
+    // reason just recorded and keeps it.
+    if (!m_radioChangeReason.isEmpty() && attemptReconnect && reconnectBackoffExhausted()
+        && reason != m_radioChangeReason) {
+        m_radioChangeReason.clear();
+    }
+
     m_handshakeComplete = false;
     m_authenticated = false;
     m_signedInWithDeviceKey = false;
@@ -1854,6 +1864,9 @@ void StationClient::onTransportText(const QByteArray& wire)
         if (message.retryable
             && message.endCode == QLatin1String(SessionEndCode::kRadioChanging)) {
             m_radioChangeReason = message.reason;
+        } else {
+            // Follow-up N2: any other end from the Core is shown as itself.
+            m_radioChangeReason.clear();
         }
         // The station's own classification, not this end's guess at one
         // and not a match against its English prose. Every station-sent
@@ -2086,6 +2099,9 @@ void StationClient::handleAuthResult(const SessionMessage& message)
     if (!message.accepted) {
         m_lastError = message.reason;
         m_enrollingIdentity.clear();
+        // Follow-up N2: the Core answered the redial with a refusal; that is
+        // the reading now, not the radio change.
+        m_radioChangeReason.clear();
         qCWarning(lcStationClient) << "Station refused authentication:" << message.reason
                                    << message.endCode;
         // iPhone app Task 18: a refusal that will not fix itself (a removed

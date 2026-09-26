@@ -503,6 +503,131 @@ private slots:
         controls.disconnectFromStation();
     }
 
+    // Follow-up N2: a Core that never comes back after a radio change. The
+    // change reading holds through the backoff's steps, and the failed
+    // redial after the longest (60 s) wait drops it, so the real failure
+    // shows in the status, the detail and the toast.
+    void aRadioChangeThatNeverComesBackShowsTheRealFailure()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt SSL support is unavailable");
+        }
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        station.setBoardForTest(HPSDRHW::Saturn);
+        station.configureStreamPool(5, 5, 192000);
+        station.setConnectionStateForTest(ConnectionState::Connected);
+        QVERIFY(station.addSlice(QStringLiteral("pan-0")) >= 0);
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
+        QVERIFY2(server.listen(QHostAddress::LocalHost, 0), qPrintable(server.lastError()));
+
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        client.setReconnectBackoffUnitMs(400);
+        RemoteConnectionController controls(&client, &remote,
+            {QStringLiteral("wss://127.0.0.1:%1").arg(server.serverPort()),
+             server.token(), server.certificateFingerprint(), false});
+        QSignalSpy handshakes(&client, &StationClient::handshakeComplete);
+        controls.connectToStation();
+        QTRY_COMPARE_WITH_TIMEOUT(handshakes.size(), 1, 15000);
+
+        // What the window reads as each failed redial ends (sessionEnded
+        // comes before the next retry is scheduled).
+        QStringList readingAtEachEnd;
+        connect(&client, &StationClient::sessionEnded, &client,
+                [&client, &readingAtEachEnd](const QString&) {
+                    readingAtEachEnd.append(client.radioChangeReason());
+                });
+        const QString reason =
+            QStringLiteral("The Core is switching to Bench G2. This app reconnects by itself.");
+        server.endSessionsForRadioChange(reason);
+        QTRY_VERIFY(client.isReconnectPending());
+        QCOMPARE(client.radioChangeReason(), reason);
+        // The Core never comes back; the schedule shrinks so the test does
+        // not wait out a minute.
+        server.close();
+        client.setReconnectBackoffUnitMs(5);
+
+        // The radio-change end, then one failed redial per step: 1, 2, 5,
+        // 10, 30 and 60. The redial after the 60 s wait is the seventh end.
+        QTRY_VERIFY_WITH_TIMEOUT(readingAtEachEnd.size() >= 7, 30000);
+        for (int i = 0; i < 6; ++i) {
+            QCOMPARE(readingAtEachEnd.at(i), reason);
+        }
+        QVERIFY(readingAtEachEnd.at(6).isEmpty());
+        QVERIFY(client.radioChangeReason().isEmpty());
+        QTRY_VERIFY(client.isReconnectPending());
+        QCOMPARE(controls.statusText().left(14), QStringLiteral("Retrying Core "));
+        QVERIFY2(controls.detailText().contains(QStringLiteral("Last failure:")),
+                 qPrintable(controls.detailText()));
+        QVERIFY(!controls.detailText().contains(reason));
+        controls.disconnectFromStation();
+    }
+
+    // Follow-up N2: the Core answers the redial with some other end. That
+    // end is the reading from then on, not the radio change.
+    void anotherEndAfterARadioChangeIsShownAsItself()
+    {
+        if (!QSslSocket::supportsSsl()) {
+            QSKIP("Qt SSL support is unavailable");
+        }
+        QTemporaryDir dir;
+        AppSettings settings(dir.filePath(QStringLiteral("station.settings")));
+        RadioModel station;
+        station.setBoardForTest(HPSDRHW::Saturn);
+        station.configureStreamPool(5, 5, 192000);
+        station.setConnectionStateForTest(ConnectionState::Connected);
+        QVERIFY(station.addSlice(QStringLiteral("pan-0")) >= 0);
+        StationServer server(&station, settings, NereusSDR::Test::seedUpgradedCoreToken(dir.path()));
+        // One wrong token locks sign-in, which the Core answers with a
+        // retryable refusal.
+        server.setAuthRateLimit(1, 60000);
+        QVERIFY2(server.listen(QHostAddress::LocalHost, 0), qPrintable(server.lastError()));
+        const QUrl url(QStringLiteral("wss://127.0.0.1:%1").arg(server.serverPort()));
+
+        RadioModel remote(RadioModel::Role::Remote);
+        SettingsProxy proxy;
+        StationClient client(&remote, &proxy);
+        client.setReconnectBackoffUnitMs(50);
+        RemoteConnectionController controls(&client, &remote,
+            {url.toString(), server.token(), server.certificateFingerprint(), false});
+        QSignalSpy handshakes(&client, &StationClient::handshakeComplete);
+        controls.connectToStation();
+        QTRY_COMPARE_WITH_TIMEOUT(handshakes.size(), 1, 15000);
+
+        // A stranger's wrong token locks sign-in; the window's session
+        // stays up.
+        RadioModel strangerModel(RadioModel::Role::Remote);
+        SettingsProxy strangerProxy;
+        StationClient stranger(&strangerModel, &strangerProxy);
+        QSignalSpy strangerEnded(&stranger, &StationClient::sessionEnded);
+        stranger.connectToStation(url, QStringLiteral("not-the-token"),
+                                  server.certificateFingerprint());
+        QTRY_COMPARE_WITH_TIMEOUT(strangerEnded.count(), 1, 15000);
+        QVERIFY(client.isHandshakeComplete());
+
+        QSignalSpy ended(&client, &StationClient::sessionEnded);
+        const QString reason =
+            QStringLiteral("The Core is switching to Bench G2. This app reconnects by itself.");
+        server.endSessionsForRadioChange(reason);
+        QTRY_COMPARE_WITH_TIMEOUT(ended.count(), 1, 15000);
+        QCOMPARE(client.radioChangeReason(), reason);
+
+        // The window's own redial meets the lockout.
+        QTRY_COMPARE_WITH_TIMEOUT(ended.count(), 2, 15000);
+        QVERIFY2(client.lastError().contains(QStringLiteral("too many wrong ones")),
+                 qPrintable(client.lastError()));
+        QVERIFY(client.radioChangeReason().isEmpty());
+        QVERIFY(client.isReconnectPending());
+        QVERIFY(controls.statusText() != QStringLiteral("Core changing radio, reconnecting"));
+        QVERIFY2(controls.detailText().contains(QStringLiteral("Last failure:")),
+                 qPrintable(controls.detailText()));
+        controls.disconnectFromStation();
+        server.close();
+    }
+
     void mediaRecoveryUsesPinnedCoreReconnectAndRetainsSlice()
     {
         if (!QSslSocket::supportsSsl()) {
