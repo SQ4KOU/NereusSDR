@@ -47,6 +47,10 @@
 //                 computes the SetAnalyzer arguments once; applySetAnalyzer
 //                 passes them. AI-assisted implementation via Anthropic
 //                 Claude Code.
+//   2026-09-26 : Task 28 (R-R3-49, A11) by J.J. Boyd (KG4VCF):
+//                 clampViewToBaseband(), MainWindow's syncTxAnalyzerToView
+//                 rule moved here unchanged for TxDisplayFeed. AI-assisted
+//                 implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "TxAnalyzer.h"
@@ -358,6 +362,45 @@ void TxAnalyzer::poll()
 // port; it is what upstream does, and it biases the surviving span to
 // sit inside the requested window rather than overhang it.
 // ---------------------------------------------------------------------------
+TxDisplayView TxAnalyzer::clampViewToBaseband(double carrierHz, double centreHz,
+                                               double spanHz, int pixels)
+{
+    // Task 28: moved unchanged from MainWindow's syncTxAnalyzerToView (the
+    // PR #317 rule), so a local pan and a remote one get the same view.
+    TxDisplayView view;
+    view.carrierHz = carrierHz;
+    view.pixels = pixels;
+    if (!std::isfinite(carrierHz) || !std::isfinite(centreHz) || !std::isfinite(spanHz)
+        || spanHz <= 0.0) {
+        return view;
+    }
+
+    // Nothing exists outside the siphon's baseband.
+    constexpr double kHalfBaseband = 48000.0;
+
+    // Clamp the VIEW, not only the analyzer's span: the transmit display
+    // cannot show more than 96 kHz, so a view past the baseband is pulled
+    // back inside it rather than stretched (Codex, PR #317).
+    const double viewBw = std::min(spanHz, 2.0 * kHalfBaseband);
+    double lo = centreHz - viewBw / 2.0 - carrierHz;
+    double hi = lo + viewBw;
+    if (lo < -kHalfBaseband) { lo = -kHalfBaseband; hi = lo + viewBw; }
+    if (hi >  kHalfBaseband) { hi =  kHalfBaseband; lo = hi - viewBw; }
+
+    // lo / hi are RELATIVE TO THE CARRIER, because that is where the
+    // siphon's baseband sits; asymmetric on purpose, so a panned view keeps
+    // the trace under the cursor (bench 2026-08-05).
+    if (hi - lo < 1000.0) {
+        return view; // empty: the caller keeps its last good view
+    }
+
+    // Quantised to 100 Hz: SetAnalyzer reconfigures the analyzer, and a
+    // sub-bin change nobody can see is not worth a reconfiguration.
+    view.lowHz = static_cast<int>(std::round(lo / 100.0)) * 100;
+    view.highHz = static_cast<int>(std::round(hi / 100.0)) * 100;
+    return view;
+}
+
 std::pair<int, int> TxAnalyzer::spanClipBins(int lowHz, int highHz,
                                              double sampleRateHz, int fftSize)
 {

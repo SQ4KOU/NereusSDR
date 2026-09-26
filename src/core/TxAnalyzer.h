@@ -67,6 +67,11 @@
 //                 currentArgs(), the one computation of every SetAnalyzer
 //                 argument, read by applySetAnalyzer and the skirt test.
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26 : Task 28 (R-R3-49, A11) by J.J. Boyd (KG4VCF): TxDisplayView
+//                 and clampViewToBaseband(), the rule MainWindow's
+//                 syncTxAnalyzerToView applied, moved here unchanged for
+//                 TxDisplayFeed; numPixels() and outputFps() readers.
+//                 AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -110,6 +115,23 @@ struct TxAnalyzerArgs {
     double sampleRateHz{0.0};
 };
 
+/// The transmit display's view (Task 28): the carrier it sits on, the
+/// analyzer's window edges relative to that carrier (100 Hz steps, what
+/// TxAnalyzer::setSpectrumWindow takes) and the analyzer's pixel count.
+/// An empty window (lowHz == highHz) from clampViewToBaseband means "keep
+/// the last good view".
+struct TxDisplayView {
+    double carrierHz{0.0};
+    int lowHz{0};
+    int highHz{0};
+    int pixels{0};
+
+    bool empty() const noexcept { return highHz <= lowHz; }
+    double centreHz() const noexcept { return carrierHz + (lowHz + highHz) / 2.0; }
+    double spanHz() const noexcept { return static_cast<double>(highHz - lowHz); }
+    bool operator==(const TxDisplayView&) const = default;
+};
+
 class TxAnalyzer : public QObject {
     Q_OBJECT
 
@@ -140,6 +162,15 @@ public:
     /// and is preserved.
     ///
     /// Returned as {fsclipL, fsclipH}.
+    /// The view a pan asks for (`centreHz`, `spanHz`), held inside the
+    /// siphon's +/-48 kHz baseband around `carrierHz`, its edges relative to
+    /// the carrier and quantised to 100 Hz. A clamped span under 1000 Hz
+    /// comes back empty (lowHz == highHz == 0): the caller keeps the last
+    /// good view. The rule MainWindow's syncTxAnalyzerToView applied, moved
+    /// here unchanged so every viewer of the transmit display shares it.
+    static TxDisplayView clampViewToBaseband(double carrierHz, double centreHz,
+                                             double spanHz, int pixels);
+
     static std::pair<int, int> spanClipBins(int lowHz, int highHz,
                                             double sampleRateHz, int fftSize);
 
@@ -184,6 +215,7 @@ public:
     /// with the new n_pix; safe to call from the main thread (WDSP's
     /// SetAnalyzerSection blocks briefly while the analyzer reconfigures).
     void setNumPixels(int n);
+    int numPixels() const noexcept { return m_numPixels; }
 
     /// Update analyzer sample rate.  TX is always at the WDSP DSP rate
     /// (96 kHz — see WdspEngine::kTxDspSampleRate, matches Thetis
@@ -195,6 +227,7 @@ public:
     /// analyzer overlap calculation per specHPSDR.cs:784 [v2.10.3.13+501e3f51].
     /// Default 15 fps per specHPSDR.cs:335 [v2.10.3.13+501e3f51].
     void setOutputFps(int fps);
+    int outputFps() const noexcept { return m_outputFps; }
 
     /// The station's set-up of this analyzer, shared by the desktop window
     /// and nereusd so the two cannot drift: the TX DSP rate (96 kHz, see

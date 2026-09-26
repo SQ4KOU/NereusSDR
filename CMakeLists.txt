@@ -1018,6 +1018,8 @@ set(CORE_SOURCES
     src/core/TxSliceArbiter.h
     src/core/FFTEngine.cpp
     src/core/TxAnalyzer.cpp
+    src/core/TxDisplayFeed.cpp
+    src/core/TxDisplayFeed.h
     src/core/AmModulationAnalyzer.cpp
     src/core/NoiseFloorEstimator.cpp
     src/core/NoiseFloorTracker.cpp

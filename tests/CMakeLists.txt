@@ -5460,6 +5460,11 @@ nereus_add_test(tst_tx_analyzer_settings)
 # dial frequency; clipped to the wrong width it left too few points and the
 # trace was a blob. Pure, so it needs no WDSP channel and no bench.
 nereus_add_test(tst_tx_display_window)
+# Remote-window parity Task 28 (R-R3-49, A11): TxDisplayFeed, the one
+# owner of the transmit analyzer's view (start and stop on every key, the
+# governing viewer's window and pixels, the carrier following XIT), and
+# TxAnalyzer::clampViewToBaseband.
+nereus_add_test(tst_tx_display_feed)
 # ── Phase 3J-1 Task 2.1: TciServer + ClientSession lifecycle ─────────────────
 # 3 tests: start/listen/signal, double-start rejection, stop/clear.
 # Gated on Qt6WebSockets_FOUND — TciServer.h/.cpp are #ifdef HAVE_WEBSOCKETS.
