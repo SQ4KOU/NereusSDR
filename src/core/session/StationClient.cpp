@@ -130,6 +130,11 @@
 //   2026-09-24: Part C fix wave: the optional device shortName in
 //               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan, desktop remote transmit (R-IOS-13,
+//                R-R3-42): the hello declares remoteTx 1; the transmit
+//                verbs go out three times each through RemoteTransmitClient
+//                and their answers come back to it. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -449,6 +454,40 @@ StationClient::StationClient(RadioModel* radioModel, SettingsProxy* settingsProx
     // never consults the link at all.
     if (radioModel != nullptr) {
         radioModel->attachStation(this);
+    }
+
+    // iPhone app plan, desktop remote transmit (R-IOS-13, R-R3-42): this
+    // window transmits through the Core (link section 18.6), so its hello
+    // says so and the Core answers with txPermitted and remoteTxVersion.
+    m_declaredFeatures.insert(QByteArrayLiteral("remoteTx"), 1);
+    // Each transmit verb goes out as the same command three times (the
+    // copies rule); the Core acts on the first and answers every copy.
+    m_remoteTransmit = new RemoteTransmitClient(
+        [this](const QByteArray& verb, const QList<MirrorUpdate>& arguments) -> quint32 {
+            if (!remoteTransmitAvailable()) {
+                return 0;
+            }
+            const quint32 id = m_nextCommandId++;
+            if (m_nextCommandId == 0) {
+                ++m_nextCommandId;
+            }
+            const SessionMessage command = SessionMessages::commandInvoke(verb, id, arguments);
+            for (int copy = 0; copy < RemoteTransmitClient::kCopies; ++copy) {
+                send(command);
+            }
+            return id;
+        },
+        this);
+    if (radioModel != nullptr) {
+        connect(radioModel, &RadioModel::transmittingChanged, m_remoteTransmit,
+                &RemoteTransmitClient::setCoreTransmitting);
+        // A refused press is shown in the Core's words, where a local
+        // refusal shows (MainWindow's toast; the buttons follow the Core).
+        const QPointer<RadioModel> model(radioModel);
+        connect(m_remoteTransmit, &RemoteTransmitClient::refused, this,
+                [model](const QString& reason, const QString&, const QString&) {
+                    if (model) { model->reportRemoteTransmitRefused(reason); }
+                });
     }
 
     m_outboundMirror = new StateMirror(this);
@@ -1116,6 +1155,9 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
     m_authenticated = false;
     m_forwardLocalChanges = false;
     m_propertyWriteIds.clear();
+    // Desktop remote transmit: the Core unkeys this device when the link
+    // drops and never keys it again by itself; nothing of it is kept.
+    refreshRemoteTransmit();
     if (m_radioModel) {
         m_radioModel->dspAssets()->resetSession();
         m_radioModel->dspAssets()->setRemoteNr3ModelsSupported(false);
@@ -1549,6 +1591,7 @@ void StationClient::onTransportText(const QByteArray& wire)
         // the station its own state back.
         m_forwardLocalChanges = true;
         m_writeFlushTimer->start();
+        refreshRemoteTransmit();
         if (firstSnapshot) {
             qCInfo(lcStationClient) << "Session established with" << m_capabilities.stationName;
             emit handshakeComplete();
@@ -1859,6 +1902,7 @@ void StationClient::handleCapabilities(const SessionMessage& message)
         }
     }
     m_capabilities = incoming;
+    refreshRemoteTransmit();
 
     if (m_capabilities.effectiveMaxSlices < m_capabilities.boardMaxSlices) {
         qCInfo(lcStationClient)
@@ -3594,6 +3638,19 @@ StationClient::CommandOutcome StationClient::requestFourO3AEnabled(bool enabled)
                        QStringLiteral("the 4O3A master change"));
 }
 
+bool StationClient::remoteTransmitAvailable() const
+{
+    return stationLinkReady() && m_agreedMinor >= kRadioIdentitySessionProtocolMinor
+        && m_capabilities.remoteTxVersion >= 1;
+}
+
+void StationClient::refreshRemoteTransmit()
+{
+    if (m_remoteTransmit != nullptr) {
+        m_remoteTransmit->setAvailable(remoteTransmitAvailable());
+    }
+}
+
 void StationClient::handleCommandResult(const SessionMessage& message)
 {
     // R-R3-21: the app shows a refusal in user words (OperatorReasonText),
@@ -3602,6 +3659,22 @@ void StationClient::handleCommandResult(const SessionMessage& message)
         qCInfo(lcStationClient).noquote()
             << "Station refused" << QString::fromUtf8(message.commandVerb)
             << "command" << message.commandId << ":" << message.reason;
+    }
+    // Desktop remote transmit: the transmit verbs' answers (every copy's)
+    // go to the window's transmit client, which shows a refusal once, in
+    // the words a local refusal uses; none takes the generic routes below.
+    if (message.commandVerb == "tx.key" || message.commandVerb == "tx.unkey"
+        || message.commandVerb == "tx.tune" || message.commandVerb == "tx.twoTone") {
+        const QPointer<StationClient> self(this);
+        if (m_remoteTransmit != nullptr) {
+            m_remoteTransmit->commandFinished(message.commandId, message.commandVerb,
+                                              message.accepted, message.reason, message.updates);
+        }
+        if (!self) { return; }
+        emit commandResponse(message);
+        if (!self) { return; }
+        emit commandResult(message.commandId, message.accepted, message.reason);
+        return;
     }
     if (message.commandVerb == "ps3.subscribeDisplay" && m_pendingPs3Display
         && m_pendingPs3Display->first == message.commandId) {

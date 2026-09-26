@@ -7826,6 +7826,20 @@ nereus_add_test(tst_remote_spectrum_render)
 nereus_add_test(tst_remote_media_controller
     fakes/LoopbackTransport.cpp)
 
+# iPhone app plan, desktop remote transmit (R-IOS-13, R-R3-42): the window's
+# side of the transmit verbs (copies, epochs, releases) on its own.
+nereus_add_test(tst_remote_transmit_client EXTRA_LABELS session)
+
+# iPhone app plan, desktop remote transmit (R-IOS-13, R-R3-42): a remote
+# window keys a real in-process Core (MOX, TUNE, two-tone, the microphone,
+# VOX and TCI) through the transmit verbs; nothing keys a real radio and
+# the window's microphone is a test bus.
+if(Qt6WebSockets_FOUND)
+    nereus_add_test(tst_remote_window_transmit
+        fakes/LoopbackTransport.cpp)
+    target_link_libraries(tst_remote_window_transmit PRIVATE Qt6::WebSockets)
+endif()
+
 # Remote Daemon R3 daemon controller: authenticated session/media lifecycle,
 # real FFT/display production, stale control rejection, and slice cleanup.
 nereus_add_test(tst_daemon_media_controller

@@ -72,6 +72,10 @@
 //                 the RF power gauge's headroom come from ControlRanges.h,
 //                 which the Core's catalogue reads too. J.J. Boyd (KG4VCF),
 //                 AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan, desktop remote transmit (R-IOS-13): in a
+//                 remote window MOX, TUNE and 2-TONE show the Core's state
+//                 and 2-TONE goes through RadioModel::setTwoTone. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1536,9 +1540,48 @@ void TxApplet::wireControls()
     // toggled → TwoToneController::setActive.  Echo-guarded.
     connect(m_twoToneBtn, &QPushButton::toggled, this, [this](bool on) {
         if (m_updatingFromModel) { return; }
+        // Desktop remote transmit: a remote window asks the Core.
+        if (m_model && m_model->remoteTransmitRouted()) {
+            m_model->setTwoTone(on);
+            return;
+        }
         if (!m_twoToneCtrl) { return; }
         m_twoToneCtrl->setActive(on);
     });
+
+    // ── iPhone app plan, desktop remote transmit (R-IOS-13) ─────────────────
+    // A remote window's own MoxController never keys: MOX, TUNE and 2-TONE
+    // light from the Core's state (its `transmitting`, the transmit object's
+    // `tune`, PureSignal's two-tone), and a refused press puts them back.
+    if (m_model && m_model->role() == RadioModel::Role::Remote) {
+        const auto syncFromCore = [this]() {
+            if (!m_model) { return; }
+            m_updatingFromModel = true;
+            if (m_moxBtn) {
+                QSignalBlocker b(m_moxBtn);
+                m_moxBtn->setChecked(m_model->isTransmitting());
+            }
+            if (m_tuneBtn) {
+                const bool tuning = m_model->transmitModel().isTune();
+                QSignalBlocker b(m_tuneBtn);
+                m_tuneBtn->setChecked(tuning);
+                m_tuneBtn->setText(tuning ? QStringLiteral("TUNING...")
+                                          : QStringLiteral("TUNE"));
+            }
+            if (m_twoToneBtn) {
+                const PureSignalSessionFacade* ps = m_model->pureSignalFacade();
+                QSignalBlocker b(m_twoToneBtn);
+                m_twoToneBtn->setChecked(ps && ps->twoToneOn());
+            }
+            m_updatingFromModel = false;
+        };
+        connect(m_model, &RadioModel::transmittingChanged, this, syncFromCore);
+        connect(&m_model->transmitModel(), &TransmitModel::tuneChanged, this, syncFromCore);
+        connect(m_model, &RadioModel::remoteTransmitRefused, this, syncFromCore);
+        if (PureSignalSessionFacade* ps = m_model->pureSignalFacade()) {
+            connect(ps, &PureSignalSessionFacade::statusChanged, this, syncFromCore);
+        }
+    }
 
     // ── Phase 3M-4 / WDSP 2.10: PS-A button wiring ──────────────────────────
     // Source-first port of Thetis chkFWCATUBypass:

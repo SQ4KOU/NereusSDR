@@ -263,6 +263,12 @@
 //                microphone check stands aside for it; PttSource::Vox for a
 //                device's VOX key. NereusSDR-original. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan, desktop remote transmit (R-IOS-13,
+//                R-R3-42): in a remote window MOX, TUNE and two-tone go to
+//                the Core through the transmit verbs (setTwoTone added),
+//                never the window's own MoxController; the Core's refusal
+//                is reported (remoteTransmitRefused). NereusSDR-original.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -489,6 +495,7 @@ warren@wpratt.com
 #include "models/PureSignalSettings.h"
 #include "core/dsp/DspAssetService.h"
 #include "core/session/PureSignalSessionFacade.h"
+#include "core/session/RemoteTransmitClient.h"
 #include "core/StepAttenuatorFacade.h"
 #include "core/accessories/AlexAntennaFacade.h"
 #include "core/IoBoardHl2Facade.h"
@@ -18262,6 +18269,16 @@ void RadioModel::setTune(bool on, const KeyerIdentity& keyer)
 
 void RadioModel::setTune(bool on)
 {
+    // iPhone app plan, desktop remote transmit (R-IOS-13): a remote
+    // window's TUNE is the Core's (tx.tune). Off goes while the Core's
+    // TUNE is on or this window asked it on (its answer may still be on
+    // the way), so an internal clear with neither never asks the Core.
+    if (remoteTransmitRouted()) {
+        if (on || m_transmitModel.isTune() || m_station->remoteTransmit()->tuneAsked()) {
+            m_station->remoteTransmit()->setTune(on);
+        }
+        return;
+    }
     // Porting from Thetis console.cs:29978-30157 [v2.10.3.13] — chkTUN_CheckedChanged.
     //
     // 3M-1a scope: all side-effects listed in pre-code review §3.2/§3.3 except:
@@ -18856,8 +18873,54 @@ void RadioModel::setMox(bool on)
     }
 }
 
+bool RadioModel::remoteTransmitRouted() const
+{
+    if (m_role != Role::Remote || m_station == nullptr) {
+        return false;
+    }
+    const RemoteTransmitClient* remote = m_station->remoteTransmit();
+    return remote != nullptr && remote->available();
+}
+
+void RadioModel::reportRemoteTransmitRefused(const QString& reason)
+{
+    emit remoteTransmitRefused(reason);
+}
+
+void RadioModel::setTwoTone(bool on)
+{
+    // Desktop remote transmit: the Core runs the test (tx.twoTone).
+    if (remoteTransmitRouted()) {
+        m_station->remoteTransmit()->setTwoTone(on);
+        return;
+    }
+    if (m_twoToneController) {
+        m_twoToneController->setActive(on);
+    }
+}
+
 void RadioModel::setMoxFromButton(bool on)
 {
+    // iPhone app plan, desktop remote transmit (R-IOS-13): a remote window
+    // keys the Core (tx.key {trigger:"screen"}), never its own controller.
+    // The way off follows chkMOX_Click as below: TUN and two-tone off
+    // first (the Core's, from its mirrored state), then this window's key.
+    if (remoteTransmitRouted()) {
+        RemoteTransmitClient* remote = m_station->remoteTransmit();
+        if (on) {
+            remote->setScreenKey(true);
+            return;
+        }
+        if (m_transmitModel.isTune() || remote->tuneAsked()) {
+            remote->setTune(false);
+        }
+        if (m_pureSignalFacade && m_pureSignalFacade->twoToneOn()) {
+            remote->setTwoTone(false);
+        }
+        remote->setScreenKey(false);
+        return;
+    }
+
     // Receiver and transmit gaps plan, Task 7. From Thetis chkMOX_Click,
     // console.cs:29730-29747 [v2.10.3.15], else branch:
     //   _manual_mox = false;

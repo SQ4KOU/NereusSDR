@@ -108,6 +108,10 @@
 //   2026-09-24 -- R-R3-49: the Options page gates the Network Watchdog with
 //                 the Region (both the Core's). J.J. Boyd (KG4VCF), with
 //                 AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan, desktop remote transmit (R-IOS-13): a
+//                receive-only Core's transmit controls carry the Core's own
+//                reason. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -3943,9 +3947,12 @@ private slots:
             QVERIFY(!reRoute->isEnabled());
             QVERIFY(!txEqualizer->isEnabled());
             remoteReason = txEqualizer->toolTip();
-            QVERIFY2(remoteReason.contains(QStringLiteral("transmit")),
+            // Desktop remote transmit (R-IOS-13): the window declares
+            // remoteTx, so the Core says why in its own words; this Core
+            // is receive-only (a StationServer's default).
+            QVERIFY2(remoteReason == QStringLiteral("This Core is set to receive only."),
                      qPrintable(QStringLiteral("the TX Equalizer entry no longer "
-                                               "carries the remote transmit reason: %1")
+                                               "carries the Core's transmit reason: %1")
                                     .arg(remoteReason)));
             QCOMPARE(toast->toolTip(), remoteReason);
             QCOMPARE(reRoute->toolTip(), remoteReason);
@@ -4333,9 +4340,9 @@ private slots:
             QCOMPARE(station.sliceById(1)->anfEnabled(), anfB);
             QTRY_VERIFY(box.buttons->buttonState(Id::Anf));
 
-            // The transmit buttons say the transmit reason and change nothing.
-            const QString reason =
-                QStringLiteral("Remote transmit controls are not available from this Core yet.");
+            // The transmit buttons say the Core's reason and change nothing
+            // (desktop remote transmit: a receive-only Core says so).
+            const QString reason = QStringLiteral("This Core is set to receive only.");
             for (Id id : {Id::Mon, Id::Tun, Id::Mox, Id::TwoTon, Id::PsA}) {
                 QVERIFY(!box.buttons->isButtonAvailable(id));
                 QCOMPARE(box.buttons->buttonUnavailableReason(box.buttons->indexOf(id)), reason);

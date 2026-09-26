@@ -3,6 +3,10 @@
 //   2026-09-25: iPhone app plan Task 36 (R-IOS-13): the microphone uplink
 //               (see RemoteMediaController.h). J.J. Boyd (KG4VCF),
 //               AI-assisted via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan, desktop remote transmit (R-IOS-13): the
+//               uplink's production callers (the window's transmit client
+//               and the Core's mirrored VOX). J.J. Boyd (KG4VCF), AI-assisted
+//               via Anthropic Claude Code.
 
 #include "gui/RemoteMediaController.h"
 #include "core/AppSettings.h"
@@ -16,6 +20,8 @@
 #include "core/ClarityController.h"
 #include "core/FFTEngine.h"
 #include "core/session/StationClient.h"
+#include "core/session/RemoteTransmitClient.h"
+#include "models/TransmitModel.h"
 #include "core/session/media/DisplayCodec.h"
 #include "core/session/media/DisplayBudget.h"
 #include "core/session/media/RemoteSpectrumContext.h"
@@ -816,6 +822,21 @@ RemoteMediaController::RemoteMediaController(StationClient* client, RadioModel* 
     connect(d->micTimer, &QTimer::timeout, this, &RemoteMediaController::reconcileMicUplink);
     d->micEncoder = std::make_unique<RemoteMicEncoder>();
     d->micScratch.resize(static_cast<size_t>(RemoteMicConfig::kOpusFrameSamples));
+    // Desktop remote transmit (R-IOS-13): the uplink's production callers.
+    // The window's transmit client says when its key is down and when its
+    // key is on at the Core; the Core's VOX, mirrored to the window
+    // (transmit.voxEnabled), says when VOX is armed.
+    if (RemoteTransmitClient* transmit = client->remoteTransmit()) {
+        connect(transmit, &RemoteTransmitClient::micKeyDownChanged, this,
+                &RemoteMediaController::setMicKeyDown);
+        connect(transmit, &RemoteTransmitClient::holdsTransmitChanged, this,
+                &RemoteMediaController::setHoldsTransmit);
+        d->micKeyDown = transmit->micKeyDown();
+        d->holdsTransmit = transmit->holdsTransmit();
+    }
+    connect(&model->transmitModel(), &TransmitModel::voxEnabledChanged, this,
+            &RemoteMediaController::setVoxArmed);
+    d->voxArmed = model->transmitModel().voxEnabled();
     d->timer = new QTimer(this);
     d->timer->setInterval(100);
     connect(d->timer, &QTimer::timeout, this, &RemoteMediaController::refreshSubscriptions);

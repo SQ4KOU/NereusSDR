@@ -9,6 +9,10 @@
 //               armed; a program keying through its TCI server is sent in
 //               place of the microphone. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-25: iPhone app plan, desktop remote transmit (R-IOS-13): the
+//               uplink follows the window's transmit client and the Core's
+//               mirrored VOX by itself. J.J. Boyd (KG4VCF), AI-assisted via
+//               Anthropic Claude Code.
 
 #include "core/session/media/DisplayBudget.h"
 #include "core/session/media/IReceiverPcmSink.h"
@@ -208,12 +212,13 @@ public:
     bool micLineNegotiated() const;
     /// Whether this window holds transmit, and whether its own key is down
     /// (its transmit button, or a program keying through its TCI server).
-    /// Set by whoever knows (the window's transmit controls).
+    /// Followed from the window's transmit client (StationClient's
+    /// RemoteTransmitClient) from construction on.
     void setHoldsTransmit(bool holds);
     void setMicKeyDown(bool down);
-    /// Whether the Core's VOX is on for this window. The Core's voxEnabled
-    /// is not mirrored to windows, so whoever arms it here says so; the
-    /// uplink then runs while this session is permitted to transmit.
+    /// Whether the Core's VOX is on for this window: followed from the
+    /// mirrored transmit.voxEnabled from construction on. The uplink then
+    /// runs while this session is permitted to transmit.
     void setVoxArmed(bool armed);
     /// The uplink runs now.
     bool micUplinkRunning() const;

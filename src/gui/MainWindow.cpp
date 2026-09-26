@@ -146,6 +146,12 @@
 //                 the DSP menu's NR list no longer offers BNR (operator:
 //                 not offered for now); its entries come from
 //                 nrMenuEntries(). AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - J.J. Boyd (KG4VCF). iPhone app plan, desktop remote
+//                 transmit (R-IOS-13, R-R3-42): the remote window's
+//                 transmit controls follow the Core's txPermitted with its
+//                 reason; a refused press is a toast; the TCI server
+//                 forwards a program's transmit to the Core. AI-assisted via
+//                 Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -489,6 +495,7 @@ warren@wpratt.com
 #  include "applets/ClientChainApplet.h"
 #  include "core/TciServer.h"
 #  include "core/TciSwitch.h"
+#  include "gui/RemoteTransmitForwarder.h"
 #  include "core/RfKitBandFollow.h"
 #  include "setup/TciLogWindow.h"  // Phase 3J-1 closeout Item 2 (2026-05-12)
 #  include <QWebSocket>
@@ -4131,6 +4138,8 @@ void MainWindow::buildUI()
         hooks.transmitPermitted = [this] { return transmitControlsPermitted(); };
         hooks.remoteTransmitReason =
             tr("Remote transmit controls are not available from this Core yet.");
+        // Desktop remote transmit: the Core's own reason when it gave one.
+        hooks.remoteTransmitReasonNow = [this] { return remoteTransmitReason(); };
         hooks.spectrumFor = [this](SliceModel* s) { return spectrumForSlice(s); };
         // R-R3-49: VAX 1 / VAX 2 open and close this computer's VAX
         // outputs, as Setup > Audio > VAX does (live in a remote window).
@@ -4164,6 +4173,11 @@ void MainWindow::buildUI()
                 this, refresh);
         connect(m_radioModel, &RadioModel::tuneRefused, this, refresh);
         connect(m_radioModel, &RadioModel::connectionStateChanged, this, refresh);
+        // Desktop remote transmit: a remote window's MOX, TUNE and 2-TONE
+        // light from the Core's state.
+        connect(m_radioModel, &RadioModel::transmittingChanged, this, refresh);
+        connect(m_radioModel, &RadioModel::remoteTransmitRefused, this, refresh);
+        connect(&m_radioModel->transmitModel(), &TransmitModel::tuneChanged, this, refresh);
         if (MoxController* mox = m_radioModel->moxController()) {
             connect(mox, &MoxController::moxStateChanged, this, refresh);
             connect(mox, &MoxController::moxRejected, this, refresh);
@@ -6039,6 +6053,12 @@ void MainWindow::buildUI()
             showToast(reason, ToastSeverity::Warning, 3000);
         });
     }
+    // Desktop remote transmit (R-IOS-13): the Core refused a remote
+    // window's MOX, TUNE or two-tone press; shown as a local refusal is.
+    connect(m_radioModel, &RadioModel::remoteTransmitRefused,
+            this, [this](const QString& reason) {
+        showToast(reason, ToastSeverity::Warning, 3000);
+    });
 
     // ── Phase 3M-0 Task 17: safety controller → status-bar wiring ────────────
     //
@@ -11363,9 +11383,41 @@ void MainWindow::seedReceiverAudioNote(SetupDialog* dialog, const ReceiverAudioN
 
 bool MainWindow::transmitControlsPermitted() const
 {
+    // Desktop remote transmit (R-IOS-13): a remote window's controls work
+    // while the Core takes its keys (remoteTxVersion) and permits it now.
     return m_radioModel && (m_radioModel->ownsLocalDsp()
         || (m_stationClient && m_stationClient->isHandshakeComplete()
+            && m_stationClient->remoteTransmitAvailable()
             && m_stationClient->capabilities().txPermitted));
+}
+
+QString MainWindow::remoteTransmitReason() const
+{
+    // The Core's own sentence (link section 18.3) when it takes this
+    // window's keys and gave one; otherwise today's words.
+    if (m_stationClient && m_stationClient->remoteTransmitAvailable()
+        && !m_stationClient->capabilities().txRefusalReason.isEmpty()) {
+        return m_stationClient->capabilities().txRefusalReason;
+    }
+    return tr("Remote transmit controls are not available from this Core yet.");
+}
+
+void MainWindow::refreshTciRemoteTransmit()
+{
+#ifdef HAVE_WEBSOCKETS
+    if (!m_tciServer || !m_stationClient || m_radioModel == nullptr
+        || m_radioModel->ownsLocalDsp()) {
+        return;
+    }
+    const bool wanted = m_stationClient->remoteTransmitAvailable() && !m_shuttingDown;
+    if (wanted == m_tciRemoteTransmitInstalled) {
+        return;
+    }
+    m_tciRemoteTransmitInstalled = wanted;
+    m_tciServer->setRemoteTransmit(
+        wanted ? remoteTransmitForwarder(m_stationClient->remoteTransmit(), m_remoteMedia)
+               : TciServer::RemoteTransmit{});
+#endif
 }
 
 void MainWindow::applyRemoteRoleGating()
@@ -11379,7 +11431,9 @@ void MainWindow::applyRemoteRoleGating()
     const bool active = m_stationClient != nullptr
         && m_stationClient->isConnectionActive();
     const bool transmitPermitted = transmitControlsPermitted();
-    const QString transmitReason = tr("Remote transmit controls are not available from this Core yet.");
+    const QString transmitReason = remoteTransmitReason();
+    // Desktop remote transmit (R-R3-42): TCI programs key through the Core.
+    refreshTciRemoteTransmit();
     if (m_txApplet) {
         m_txApplet->setTransmitPermitted(transmitPermitted, transmitReason);
     }

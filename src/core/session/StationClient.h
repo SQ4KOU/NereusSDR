@@ -250,6 +250,11 @@
 //   2026-09-24: Part C fix wave: the optional device shortName in
 //               auth.request, stored with the device. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-25: iPhone app plan, desktop remote transmit (R-IOS-13,
+//               R-R3-42): the hello declares remoteTx 1; the transmit verbs
+//               go out through RemoteTransmitClient, three copies each.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -264,6 +269,7 @@
 #include <memory>
 
 #include "core/session/IStationLink.h"
+#include "core/session/RemoteTransmitClient.h"
 #include "core/session/LinkVersion.h"
 #include "models/Band.h"
 #include "core/session/MirrorSchema.h"
@@ -752,6 +758,12 @@ public:
     /// operator's own action only, never for a station echo.
     CommandOutcome requestNnrRetry(int sliceId);
 
+    /// iPhone app plan, desktop remote transmit (R-IOS-13): the transmit
+    /// verbs (link section 18.6). Available while the session is up and
+    /// the Core told this window remoteTxVersion 1 or later.
+    RemoteTransmitClient* remoteTransmit() override { return m_remoteTransmit; }
+    bool remoteTransmitAvailable() const;
+
     void setHeartbeatIntervalMs(int ms);
     int heartbeatIntervalMs() const { return m_heartbeatIntervalMs; }
     void setMaxMissedPongs(int misses);
@@ -976,6 +988,9 @@ private:
     /// features, and what the current station's hello declared.
     QList<quint16> m_supportedMajors;
     QHash<QByteArray, int> m_declaredFeatures;
+    /// Desktop remote transmit: owned (child).
+    RemoteTransmitClient* m_remoteTransmit = nullptr;
+    void refreshRemoteTransmit();
 
     /// iPhone app Task 18: this computer's device key and name, the paired
     /// Core's identity fingerprint this client trusts (latched across

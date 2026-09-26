@@ -1310,6 +1310,9 @@ list(APPEND CORE_SOURCES
     src/core/session/ConnectedDevicesFacade.cpp
     # iPhone app plan Task 35 (R-IOS-13): keying from a remote device.
     src/core/session/RemoteKeying.cpp
+    # iPhone app plan, desktop remote transmit (R-IOS-13, R-R3-42): the
+    # window's side of the transmit verbs.
+    src/core/session/RemoteTransmitClient.cpp
     # iPhone app Task 14 (R-IOS-08, D37): the pairing window, its code and
     # the SPAKE2+EE exchange (libsodium, cmake/NereusPairing.cmake).
     src/core/security/PairingCode.cpp
@@ -1380,6 +1383,9 @@ set(GUI_SOURCES
     src/gui/SliceFlagPresentationBinding.cpp
     src/gui/SliceFlagPresentationBinding.h
     src/gui/RemoteMediaController.cpp
+    # iPhone app plan, desktop remote transmit (R-IOS-13, R-R3-42): the
+    # remote window's TCI transmit forwarder.
+    src/gui/RemoteTransmitForwarder.cpp
     # R-R3-44: a remote window's VAX channels, fed by receiver streams.
     src/gui/RemoteVaxRouter.cpp
     src/gui/RemoteAudioStatus.cpp

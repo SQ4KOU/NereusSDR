@@ -85,12 +85,17 @@
 //   2026-09-24  J.J. Boyd / KG4VCF  R-R3-49 fix wave: tgxlOperateAppliesWhole
 //                                    (remoteTgxlControlVersion 3).
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app plan, desktop remote
+//                                    transmit (R-IOS-13): remoteTransmit().
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include <QString>
 #include <QtGlobal>
 
 namespace NereusSDR {
+
+class RemoteTransmitClient;
 
 /// Non-owning control-plane seam. RadioModel holds a pointer to one via
 /// attachStation()/detachStation() without owning or including anything
@@ -301,6 +306,13 @@ public:
     { return QStringLiteral("This Core cannot change its filter policy for this app. Updating the Core may help."); }
     virtual CommandOutcome requestFilterPolicy(int /*chain*/, int /*mode*/)
     { return { false, filterPolicyUnavailableReason() }; }
+
+    /// iPhone app plan, desktop remote transmit (R-IOS-13): the window's
+    /// side of the transmit verbs, or null for a link without them. A
+    /// remote window keys through it and never through its own
+    /// MoxController; RadioModel routes MOX, TUNE and two-tone here while
+    /// it is available().
+    virtual RemoteTransmitClient* remoteTransmit() { return nullptr; }
 };
 
 } // namespace NereusSDR

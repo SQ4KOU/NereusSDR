@@ -161,6 +161,12 @@
 //                while it transmits or has VOX armed; PttSource::Vox for a
 //                device's VOX key. NereusSDR-original. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-25 - iPhone app plan, desktop remote transmit (R-IOS-13,
+//                R-R3-42): in a remote window MOX, TUNE and two-tone go to
+//                the Core through the transmit verbs (setTwoTone added),
+//                never the window's own MoxController; the Core's refusal
+//                is reported (remoteTransmitRefused). NereusSDR-original.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -3298,6 +3304,19 @@ public slots:
     /// (first, keeping the manual key until their own ends; see the .cpp).
     void setMoxFromButton(bool on);
 
+    /// iPhone app plan, desktop remote transmit (R-IOS-13): the 2-TONE
+    /// buttons (TxApplet and the container). A local window starts or stops
+    /// its TwoToneController; a remote window asks the Core (tx.twoTone).
+    void setTwoTone(bool on);
+
+    /// A remote window whose Core takes its keys: MOX, TUNE and two-tone go
+    /// to the Core through the transmit verbs (RemoteTransmitClient) and the
+    /// window's own MoxController keys nothing. False in a local window.
+    bool remoteTransmitRouted() const;
+
+    /// The Core refused this remote window's press, in the Core's words.
+    void reportRemoteTransmitRefused(const QString& reason);
+
     /// Query MOX (PTT).  Returns the current MOX latch state.
     /// From Thetis TCIServer.cs:3555-3558 [v2.10.3.13] — sendMOX.
     Q_INVOKABLE bool mox() const;
@@ -3901,6 +3920,11 @@ signals:
     // NereusSDR equivalent: emit signal; UI reacts with a toast or status bar message.
     // Subscribers should uncheck the TUN button and display `reason` to the user.
     void tuneRefused(const QString& reason);
+
+    /// iPhone app plan, desktop remote transmit (R-IOS-13): the Core
+    /// refused a MOX, TUNE or two-tone press from this remote window (or its
+    /// release). Shown as a local refusal is; the buttons follow the Core.
+    void remoteTransmitRefused(const QString& reason);
 
     // ── Plan 4 D8: per-profile TX filter relay signal ─────────────────────────
     //

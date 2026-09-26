@@ -18,6 +18,12 @@
 //                                    RadioModel::setMoxFromButton (a manual
 //                                    key). AI-assisted via Anthropic Claude
 //                                    Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app plan, desktop remote
+//                                    transmit (R-IOS-13): a remote window's
+//                                    MOX, TUNE and 2-TONE light from the
+//                                    Core; 2-TONE goes through
+//                                    RadioModel::setTwoTone. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include "gui/containers/ContainerButtonDispatcher.h"
@@ -123,9 +129,13 @@ ContainerButtonDispatcher::stateOf(Id id, int rxSource) const
         st.available = false;
         st.reason = reason;
     };
-    const QString remoteReason = m_hooks.remoteTransmitReason.isEmpty()
-        ? QStringLiteral("Remote transmit controls are not available from this Core yet.")
-        : m_hooks.remoteTransmitReason;
+    QString remoteReason = m_hooks.remoteTransmitReasonNow ? m_hooks.remoteTransmitReasonNow()
+                                                           : QString();
+    if (remoteReason.isEmpty()) {
+        remoteReason = m_hooks.remoteTransmitReason.isEmpty()
+            ? QStringLiteral("Remote transmit controls are not available from this Core yet.")
+            : m_hooks.remoteTransmitReason;
+    }
 
     switch (id) {
     case Id::Power:
@@ -141,7 +151,14 @@ ContainerButtonDispatcher::stateOf(Id id, int rxSource) const
     case Id::Tun:
     case Id::Mox:
     case Id::TwoTon:
-        if (id == Id::Tun) {
+        if (m_model->role() == RadioModel::Role::Remote) {
+            // Desktop remote transmit (R-IOS-13): the Core's state, as the
+            // TX applet shows it; this window's own controller never keys.
+            const PureSignalSessionFacade* ps = m_model->pureSignalFacade();
+            st.on = id == Id::Tun ? m_model->transmitModel().isTune()
+                  : id == Id::Mox ? m_model->isTransmitting()
+                                  : ps && ps->twoToneOn();
+        } else if (id == Id::Tun) {
             st.on = m_model->isTune();
         } else if (id == Id::Mox) {
             st.on = m_model->moxController() && m_model->moxController()->isMox();
@@ -259,8 +276,9 @@ QString ContainerButtonDispatcher::click(Id id, int rxSource)
         m_model->setMoxFromButton(turnOn);
         break;
     case Id::TwoTon:
-        // TxApplet's 2-TONE button (TwoToneController::setActive).
-        m_model->twoToneController()->setActive(turnOn);
+        // TxApplet's 2-TONE button (RadioModel::setTwoTone: the
+        // TwoToneController here, the Core's in a remote window).
+        m_model->setTwoTone(turnOn);
         break;
     case Id::PsA:
         // TxApplet's PS-A button: automatic calibration on, or Off/reset.

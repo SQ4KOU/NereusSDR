@@ -24,6 +24,10 @@
 //   2026-09-24 - J.J. Boyd (KG4VCF). R-R3-49 / R-R3-21:
 //                 firstRunPromptsBarredForTestRun(). AI-assisted
 //                 implementation via Anthropic Claude Code.
+//   2026-09-25 - J.J. Boyd (KG4VCF). iPhone app plan, desktop remote
+//                 transmit (R-IOS-13, R-R3-42): remoteTransmitReason() and
+//                 the TCI transmit forwarder. AI-assisted implementation
+//                 via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -610,6 +614,13 @@ private slots:
     /// content, keeping the layout under it.
     void placeCoreStopBanner();
     bool transmitControlsPermitted() const;
+    /// Desktop remote transmit (R-IOS-13): why this remote window may not
+    /// transmit now, in the Core's words when the Core gave them.
+    QString remoteTransmitReason() const;
+    /// Desktop remote transmit (R-R3-42): the TCI server forwards a
+    /// program's transmit to the Core while the Core takes this window's
+    /// keys, and not otherwise.
+    void refreshTciRemoteTransmit();
     /// R-R3-21 / R-R3-10: whether the Core's settings can be changed from
     /// this window (always in local direct mode; in a remote window only
     /// while connected and holding the Core's settings snapshot), and the
@@ -1436,6 +1447,8 @@ private:
     // Phase 23: TCI server + applets.
     // m_tciServer is nullptr in non-WebSocket builds (HAVE_WEBSOCKETS not defined).
     TciServer*         m_tciServer{nullptr};
+    // Desktop remote transmit (R-R3-42): the forwarder is installed.
+    bool               m_tciRemoteTransmitInstalled{false};
     // R-R3-48: the one TCI switch (this window's server and, on a Core with
     // a station server, the Core's) and the RF-Kit's band follow over this
     // window's server in a local window.

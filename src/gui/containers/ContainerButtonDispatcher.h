@@ -33,6 +33,10 @@
 // Modification history (NereusSDR):
 //   2026-09-24  J.J. Boyd / KG4VCF  Created (R-R3-49, R-R3-21). AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-25  J.J. Boyd / KG4VCF  iPhone app plan, desktop remote
+//                                    transmit (R-IOS-13): the Core's reason
+//                                    now (remoteTransmitReasonNow).
+//                                    AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #pragma once
@@ -68,6 +72,9 @@ public:
         // controls, and the reason shown when it does not.
         std::function<bool()> transmitPermitted;
         QString remoteTransmitReason;
+        // Desktop remote transmit (R-IOS-13): the Core's own reason now,
+        // when set; preferred over remoteTransmitReason.
+        std::function<QString()> remoteTransmitReasonNow;
         // The panadapter that shows a slice (Peak, CTUN).
         std::function<SpectrumWidget*(SliceModel*)> spectrumFor;
         // This computer's VAX outputs (VAX 1, VAX 2). May be null.
