@@ -2999,6 +2999,12 @@ nereus_add_test(tst_general_setup_hardware_config)
 nereus_add_test(tst_general_options_page_rx_only)
 target_compile_definitions(tst_general_options_page_rx_only PRIVATE NEREUS_BUILD_TESTS)
 
+# A disabled control on a page styled by Style::applyDarkPageStyle looks
+# disabled (the style guide's disabled colours) and an enabled one keeps the
+# page style: the operator's rule that a control that cannot run is shown
+# disabled with its reason.
+nereus_add_test(tst_dark_page_disabled_look)
+
 # ── Phase 3M-0 Task 13: Options group box on Setup → General ─────────────────
 # Verifies grpGeneralOptions has chkPreventTXonDifferentBandToRX per
 # Thetis setup.designer.cs:9050-9059 [v2.10.3.13]. Tooltip NereusSDR-original
