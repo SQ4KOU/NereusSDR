@@ -15,6 +15,7 @@ from __future__ import annotations
 import asyncio
 import ipaddress
 import logging
+import socket
 from typing import Any, Iterable, List, Optional
 
 from . import protocol
@@ -107,15 +108,62 @@ def serve_kwargs(config: Any) -> dict:
     return kwargs
 
 
+def listening_socket(host: str, port: int, buffer_bytes: int) -> socket.socket:
+    """The listening socket, made here rather than by asyncio so its kernel
+    buffers can be set before it listens: a connection it accepts inherits
+    them, so the kernel memory each connection can hold is bounded by the
+    service itself, without any host setting (rendezvous document section
+    9.1). 0 leaves the kernel's own sizing."""
+    family = socket.AF_INET6 if ":" in host else socket.AF_INET
+    sock = socket.socket(family, socket.SOCK_STREAM)
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        if family == socket.AF_INET6:
+            sock.setsockopt(socket.IPPROTO_IPV6, socket.IPV6_V6ONLY, 1)
+        if buffer_bytes:
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, buffer_bytes)
+            sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, buffer_bytes)
+        sock.bind((host, port))
+        sock.setblocking(False)
+    except OSError:
+        sock.close()
+        raise
+    return sock
+
+
+def set_buffers(ws: Any, buffer_bytes: int) -> None:
+    """Set the accepted connection's buffers again. Linux already gave it
+    the listening socket's; macOS, where the tests also run, does not pass
+    them on."""
+    if not buffer_bytes:
+        return
+    transport = getattr(ws, "transport", None)
+    sock = transport.get_extra_info("socket") if transport is not None else None
+    if sock is None:
+        return
+    try:
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, buffer_bytes)
+        sock.setsockopt(socket.SOL_SOCKET, socket.SO_SNDBUF, buffer_bytes)
+    except OSError:
+        return
+
+
 async def start(service: Any, host: str, port: int) -> Any:
     """Listen on one address; returns the server (use .sockets for the
     bound port and .close() / .wait_closed() to stop)."""
 
     async def handler(ws: Any) -> None:
+        set_buffers(ws, service.config.socket_buffer_bytes)
         address = client_address(ws, service.config.trusted_proxies)
         await service.run_connection(WsTransport(ws), address)
 
-    return await _serve(handler, host, port, logger=logging.getLogger("websockets.quiet"), **serve_kwargs(service.config))
+    sock = listening_socket(host, port, service.config.socket_buffer_bytes)
+    return await _serve(
+        handler,
+        sock=sock,
+        logger=logging.getLogger("websockets.quiet"),
+        **serve_kwargs(service.config),
+    )
 
 
 async def stop(servers: List[Any], service: Any, grace_s: float = 0.5, timeout_s: float = 10.0) -> None:

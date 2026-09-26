@@ -67,6 +67,7 @@ class Config:
     send_queue_bytes: int = 1048576
     send_budget_bytes: int = 33554432
     send_stall_ms: int = 30000
+    socket_buffer_bytes: int = 16384
     # Not from the file: the secret's bytes, read from turn_secret_file.
     turn_secret: Optional[bytes] = field(default=None, repr=False)
 
@@ -101,6 +102,7 @@ _SECTIONS = {
         "send_queue_bytes",
         "send_budget_bytes",
         "send_stall_ms",
+        "socket_buffer_bytes",
     ],
 }
 
@@ -166,9 +168,10 @@ def load(path: Optional[str]) -> Config:
     return config
 
 
-# Zero turns the WebSocket ping off; every other number must be at least 1,
-# because 0 would make the service refuse everything, or nothing.
-_MAY_BE_ZERO = ("ping_interval_seconds", "ping_timeout_seconds")
+# Zero turns the WebSocket ping off, and leaves the kernel's own socket
+# buffer sizing; every other number must be at least 1, because 0 would make
+# the service refuse everything, or nothing.
+_MAY_BE_ZERO = ("ping_interval_seconds", "ping_timeout_seconds", "socket_buffer_bytes")
 
 
 def check(config: Config) -> None:

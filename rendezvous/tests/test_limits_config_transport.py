@@ -4,6 +4,7 @@ address rule, nameplate allocation and listening in both address
 families."""
 
 import asyncio
+import sys
 import socket
 
 import pytest
@@ -238,5 +239,46 @@ def test_sample_configuration_is_the_defaults():
 def test_missing_secret_file_is_a_configuration_error(tmp_path):
     path = tmp_path / "r.conf"
     path.write_text("[rendezvous]\nturn_secret_file = %s\n" % (tmp_path / "absent"))
+    with pytest.raises(cfg.ConfigError):
+        cfg.load(str(path))
+
+
+def test_each_connection_gets_the_configured_socket_buffers():
+    """Section 9.1: the kernel buffers of every accepted connection are set
+    by the service (SO_RCVBUF and SO_SNDBUF, inherited from the listening
+    socket), so the kernel memory a connection can hold is bounded without
+    a host setting. Linux reports twice the value it was given."""
+
+    async def go():
+        config = cfg.Config()
+        config.ping_interval_seconds = 0
+        assert config.socket_buffer_bytes == 16384
+        service = Service(config, ManualClock())
+        server = await transport.start(service, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        try:
+            ws = await ws_connect(f"ws://127.0.0.1:{port}/", "192.0.2.1")
+            await recv_json(ws)
+            (conn,) = service.connections
+            sock = conn.transport.ws.transport.get_extra_info("socket")
+            options = [socket.SO_SNDBUF]
+            # macOS grows a connected socket's receive buffer on its own
+            # whatever it was set to; Linux, where the service runs, keeps it.
+            if sys.platform.startswith("linux"):
+                options.append(socket.SO_RCVBUF)
+            for option in options:
+                assert sock.getsockopt(socket.SOL_SOCKET, option) in (16384, 32768), option
+            await ws.close()
+        finally:
+            await transport.stop([server], service, grace_s=0.05, timeout_s=5)
+
+    asyncio.run(go())
+
+
+def test_socket_buffer_bytes_may_be_zero_but_not_negative(tmp_path):
+    path = tmp_path / "r.conf"
+    path.write_text("[limits]\nsocket_buffer_bytes = 0\n")
+    assert cfg.load(str(path)).socket_buffer_bytes == 0
+    path.write_text("[limits]\nsocket_buffer_bytes = -1\n")
     with pytest.raises(cfg.ConfigError):
         cfg.load(str(path))

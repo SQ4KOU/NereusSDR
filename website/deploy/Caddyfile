@@ -79,3 +79,57 @@ nereussdr.com {
 		}
 	}
 }
+
+# The NereusSDR rendezvous service (rendezvous/README.md). Caddy terminates
+# TLS for rv.nereussdr.com and forwards each WebSocket to the service, which
+# listens on loopback only (127.0.0.1 and ::1, port 8710) and is set up by
+# rendezvous/deploy/setup-server.sh. The relay (coturn, UDP 3478 and 443)
+# does not pass through Caddy. The website's blocks above are unchanged by
+# this one, and it adds no log.
+(rv_headers) {
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "no-referrer"
+		X-Frame-Options "DENY"
+		Content-Security-Policy "default-src 'none'; frame-ancestors 'none'"
+		-Server
+	}
+}
+
+rv.nereussdr.com {
+	import rv_headers
+
+	@websocket {
+		header Connection *Upgrade*
+		header Upgrade websocket
+	}
+	handle @websocket {
+		reverse_proxy 127.0.0.1:8710 [::1]:8710 {
+			lb_policy first
+			# Exactly one address: the client's as Caddy sees it. The
+			# service believes the last address in X-Forwarded-For only
+			# from a loopback peer (rendezvous document section 9.1), so
+			# whatever a client sends in its own header never counts.
+			header_up X-Forwarded-For {remote_host}
+			# A Caddy reload (a website deploy runs one) keeps open
+			# WebSockets for up to 5 minutes instead of cutting every
+			# registered Core off at once.
+			stream_close_delay 5m
+		}
+	}
+
+	# Anything that is not a WebSocket gets a short plain answer.
+	handle {
+		header Content-Type "text/plain; charset=utf-8"
+		header Cache-Control "no-store"
+		respond "This address is the NereusSDR connection service. It takes WebSocket connections from NereusSDR and the NereusSDR app only.
+" 426
+	}
+
+	handle_errors {
+		import rv_headers
+		respond "{err.status_code}
+" {err.status_code}
+	}
+}

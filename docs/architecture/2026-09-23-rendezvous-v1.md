@@ -98,6 +98,11 @@ addresses of both ends, that an id is online, and traffic timing.
   every queue together when that budget runs out, or one message has taken
   longer than 30 s to send (section 9.1). It would not read an error
   message either.
+- The service sends in the order it reads. When a peer closed with 1008
+  was itself sending (its own message took the service past its budget),
+  the message it sent still reaches the other end first, and only then
+  what its leaving causes (`mailbox.closed` `peerLeft`,
+  `introduction.end` `clientLeft` or `stationLeft`).
 
 ## 3. Roles and the life of a connection
 
@@ -624,10 +629,21 @@ password = base64(HMAC-SHA1(secret, username)) standard base64, with padding
   and its bandwidth caps, which Task 26's second part sizes to the server's
   transfer allowance. The per-station quota only keeps one Core's sessions
   from taking all of that by themselves.
-- What coturn does when an allocation is refreshed after its credential has
-  expired is recorded by the coturn check in Docker (Task 26's second part,
-  `rendezvous/tests/coturn-check.sh`), and decides whether clients refresh
-  credentials sooner (Task 29).
+- **A relay outlives its credential.** Observed with Ubuntu 24.04's coturn
+  4.6.1 (package `4.6.1-1build4`) and the configuration in
+  `rendezvous/deploy/turnserver.conf`, by `rendezvous/tests/coturn-check.sh`:
+  coturn checks a credential's expiry only when an allocation is made. An
+  allocation made while its credential was valid goes on being refreshed
+  (`Refresh`, answered with success), and goes on getting permissions
+  that relay (`CreatePermission`), after the credential has expired; this
+  holds through a stale-nonce challenge too (a `438` with a new nonce,
+  after which the same credential is accepted), which coturn issues every
+  600 s (`stale-nonce`). Only a new allocation with the expired credential
+  is refused (`401`). So a session relayed through coturn is never cut at
+  the credential's expiry; a client needs fresh credentials only to make a
+  new allocation (after losing the old one, or for a new session), which
+  is what decides Task 29's refresh timing. This is an observation of
+  coturn, not part of the wire.
 
 `crypto/turn-credentials.json` gives secrets, expiries, ids, usernames and
 passwords, the passwords computed with `openssl dgst -sha1 -hmac`, not with
@@ -639,7 +655,8 @@ the service's code.
 
 Every value is configurable (`rendezvous.conf`, `[limits]`); these are the
 defaults. Every value must be at least 1, except that 0 turns the pings
-off; the service refuses to start otherwise.
+off and leaves the kernel's socket buffer sizing (`socket_buffer_bytes`);
+the service refuses to start otherwise.
 
 **Address groups.** Every count and limit "per address" is kept per
 address group: an IPv4 address by itself (an IPv4-mapped IPv6 address
@@ -676,10 +693,11 @@ of the same id (section 6.2) does not count the older one.
 | Outbound queue per connection | 256 messages or 1048576 bytes (1 MiB), whichever comes first | a peer that stops reading is closed (1008, section 2) rather than buffered without bound; 1 MiB holds 16 of the largest messages |
 | Outbound queues together | 33554432 bytes (32 MiB) | a budget for every connection's queue at once; a message that would pass it closes (1008) the connection holding the most queued bytes, and the next largest, until it fits, so the peer that stopped reading goes, not whoever happens to be sent to next (the recipient goes only when it is itself the largest) |
 | One message's send | 30 s | a connection whose writer has spent longer than this on one message is closed (1008): a peer that stops reading stops the WebSocket pings too (on websockets 10.4 a ping waits behind the same blocked write), so the ping timeout alone would never end it; 30 s is far longer than any real message takes |
+| Kernel buffers per connection | 16384 bytes each way (`socket_buffer_bytes`) | the receive and send buffers (SO_RCVBUF, SO_SNDBUF) of every connection, set by the service on its own sockets, so the kernel memory a connection can hold is bounded without changing any host setting; Linux doubles the value, so each connection holds at most 64 KiB in the kernel. Caddy is the only peer, on loopback, where such buffers cost no speed. 0 leaves the kernel's own sizing, which can grow each buffer to megabytes |
 
 **Sizing the totals.** The defaults fit a server of 1 GB of memory and one
 virtual CPU that also runs the website (Caddy) and the relay (coturn),
-leaving the service about 256 MiB. Measured in an `ubuntu:24.04` container
+leaving the service about 320 MiB. Measured in an `ubuntu:24.04` container
 with Ubuntu's `python3-websockets` 10.4 on Python 3.12: the process starts
 at about 28 MiB; each idle connection adds about 24 KiB (a client) to
 27 KiB (a registered station), 1000 of each coming to about 50 MiB; and
@@ -689,12 +707,19 @@ service hold on the way in (the cap of section 2, with at most one whole
 message waiting behind it, `max_queue` 1, and the service reads each
 message as it arrives). On the way out a connection can add its WebSocket
 write buffer (32 KiB, `write_limit`), and every queue together at most the
-32 MiB budget. So the worst case for 1024 connections (512 in each pool)
-is about 28 + 1024 x (153 + 32) KiB + 32 MiB, near 245 MiB, where real
-traffic uses a small fraction of it. Caddy holds each proxied WebSocket
-too, estimated (not measured) at under 100 KiB with its TLS buffers. A
-larger server raises both totals; a deployment can also set a memory
-ceiling (systemd `MemoryMax`) as a backstop. One vCPU is not the limit:
+32 MiB budget. Below all of that the kernel holds each connection's socket
+buffers, which the service fixes at 16384 bytes each way
+(`socket_buffer_bytes`; Linux doubles it), at most 64 KiB a connection;
+under systemd they are charged to the service's own memory. So the worst
+case for 1024 connections (512 in each pool) is about
+28 MiB + 1024 x (153 + 32 + 64) KiB + 32 MiB, near 309 MiB, where real
+traffic uses a small fraction of it. The unit
+(`rendezvous/deploy/nereus-rendezvous.service`) sets `MemoryMax=320M`, just
+above that worst case, so the ceiling never ends the service at these
+limits and keeps anything unforeseen from taking the website's and the
+relay's memory. Caddy holds each proxied WebSocket too, estimated (not
+measured) at under 100 KiB with its TLS buffers. A larger server raises
+both totals, and the ceiling with them. One vCPU is not the limit:
 the service's work is a JSON decode per message and one signature check
 per registration.
 
