@@ -3133,6 +3133,14 @@ void SpotHubDialog::setSourceHost(SpotSourceHost* host)
             console->appendPlainText(line);
         }
     });
+    connect(host, &SpotSourceHost::consoleCleared, this, [this](const QString& source) {
+        if (!stationRemote() || !SpotSourceHost::isStationSource(source)) {
+            return;
+        }
+        if (QPlainTextEdit* console = consoleFor(source)) {
+            console->clear();
+        }
+    });
     connect(host, &SpotSourceHost::sourceRefused, this,
             [this](const QString& source, const QString& reason) {
         QLabel* label = source == SpotSourceHost::kDxCluster ? m_statusLabel

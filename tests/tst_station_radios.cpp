@@ -163,8 +163,9 @@ private slots:
         QStringList selected;
         int rescans = 0;
         radios.onSelect = [&](const QString& mac) {
-            // Saved before the switch starts.
-            QCOMPARE(radios.savedChoice(), mac);
+            // Fix wave, I6: pending, not saved, when the switch starts.
+            QCOMPARE(radios.pendingChoice(), mac);
+            QVERIFY(radios.savedChoice().isEmpty());
             selected.append(mac);
         };
         radios.onRescan = [&]() { ++rescans; };
@@ -189,10 +190,25 @@ private slots:
         QVERIFY(selected.isEmpty());
         QVERIFY(radios.select(kG2.toLower(), &reason));
         QCOMPARE(selected, QStringList{kG2});
-        QCOMPARE(settings.value(QLatin1String(StationRadios::kChoiceKey)).toString(), kG2);
+        QVERIFY(settings.value(QLatin1String(StationRadios::kChoiceKey)).toString().isEmpty());
         QVERIFY(!radios.select(kG2, &reason));
         QCOMPARE(reason, StationRadios::switchingReason());
+        // Fix wave, M1: the pending choice is not forgotten.
+        QVERIFY(!radios.forget(kG2, &reason));
+        QCOMPARE(reason, StationRadios::inUseReason());
+        // Another radio's connect does not save it; its own does.
+        radios.confirmChoice(kHl2);
+        QVERIFY(radios.savedChoice().isEmpty());
+        radios.confirmChoice(kG2);
+        QCOMPARE(settings.value(QLatin1String(StationRadios::kChoiceKey)).toString(), kG2);
+        QVERIFY(radios.pendingChoice().isEmpty());
         radios.setSwitching(false);
+        // Fix wave, M1: nor the radio the Core is reconnecting to or waiting
+        // for.
+        radios.setTarget(kG2.toLower());
+        QVERIFY(!radios.forget(kG2, &reason));
+        QCOMPARE(reason, StationRadios::inUseReason());
+        radios.setTarget(kHl2);
 
         QVERIFY(radios.rescan(&reason));
         QCOMPARE(rescans, 1);
@@ -303,17 +319,34 @@ private slots:
             QVERIFY(app.m_radioModel->connection() == nullptr);
             QVERIFY(app.m_selectedRadioMac.isEmpty());
 
-            // A choice from an app: saved, then the Core restarts on it
+            // A choice from an app: pending, then the Core restarts on it
             // (nothing is in sight afterwards, so nothing connects here).
             offer = false;
             QString reason;
             QVERIFY(app.m_stationRadios->select(kG2, &reason));
             QTRY_COMPARE(app.m_selectedRadioMac, kG2);
-            QCOMPARE(app.m_stationRadios->savedChoice(), kG2);
+            QCOMPARE(app.m_stationRadios->pendingChoice(), kG2);
+            // Fix wave, I6: never saved, since it never connected.
+            QVERIFY(app.m_stationRadios->savedChoice().isEmpty());
+            // Fix wave, M1: the radio the Core waits for is not forgotten.
+            QVERIFY(!app.m_stationRadios->forget(kG2, &reason));
+            QCOMPARE(reason, StationRadios::inUseReason());
             app.stop();
         }
         {
-            // The next start: the saved choice beats radio_mac.
+            // Fix wave, I6 (a crash loop): a restarted Core does not reload
+            // the pending choice; radio_mac holds.
+            DaemonApp app;
+            app.m_discoveryProviderForTest = []() { return QList<RadioInfo>{}; };
+            DaemonConfig cfg = testCoreConfig();
+            cfg.radioMac = kHl2;
+            QVERIFY(app.start(cfg));
+            QCOMPARE(app.m_selectedRadioMac, kHl2);
+            app.stop();
+        }
+        {
+            // A choice that connected (saved) beats radio_mac.
+            StationRadios(AppSettings::instance()).saveChoice(kG2);
             DaemonApp app;
             app.m_discoveryProviderForTest = []() { return QList<RadioInfo>{}; };
             DaemonConfig cfg = testCoreConfig();

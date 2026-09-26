@@ -453,6 +453,12 @@
 //                Core's radios (stationRadios, stationRadiosChanged) and the
 //                Core's refusals of a radio request (stationRadioRefused).
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - Fix wave after parity Tasks 19 and 21: a spots reset no
+//                longer clears the Core's radio list (clearStationSpots,
+//                clearStationRadios), a console reset replaces the console,
+//                the Core's waiting reason (stationRadioWaiting), and a key
+//                refused while the Core changes its radio. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -3405,6 +3411,12 @@ QString RadioModel::applyMirroredValue(const QByteArray& propertyName, const QVa
             }
             return {};
         }
+        if (propertyName == "stationRadioWaiting") {
+            // Fix wave (M2): why the Core waits for a radio, observed.
+            if (value.typeId() != QMetaType::QString) { return QStringLiteral("Expected text."); }
+            setStationRadioWaiting(value.toString());
+            return {};
+        }
         if (propertyName == "dspOptionsLastApplyMs") {
             // R-R3-49 (parity Task 16): the Core's last DSP Options apply.
             bool ok = false;
@@ -3766,14 +3778,19 @@ void RadioModel::applyStationRecordBatch(const RecordBatch& batch)
         for (const RecordUpsert& u : batch.upserts) {
             lines.append(u.fields.value(QStringLiteral("line")).toString());
         }
-        m_spotSourceHost->appendStationConsole(source, lines);
+        // Fix wave, M5: a reset (each subscribe, a reconnect) carries the
+        // Core's backlog again, so it replaces the console rather than
+        // adding to it.
+        m_spotSourceHost->appendStationConsole(source, lines, batch.reset);
         return;
     }
     if (batch.stream != QLatin1String("spots") || !m_spotModel) {
         return;
     }
     if (batch.reset) {
-        clearStationRecords();
+        // Fix wave, I3: the Core's spots only; its radio list is another
+        // stream.
+        clearStationSpots();
     }
     for (const QString& id : batch.removes) {
         const auto it = m_stationSpotIndex.find(id);
@@ -3842,10 +3859,32 @@ void RadioModel::reportStationRadioRefused(const QString& reason)
 
 void RadioModel::clearStationRecords()
 {
+    clearStationRadios();
+    clearStationSpots();
+}
+
+void RadioModel::clearStationRadios()
+{
     if (!m_stationRadioEntries.isEmpty()) {
         m_stationRadioEntries.clear();
         emit stationRadiosChanged();
     }
+    if (m_role == Role::Remote) {
+        setStationRadioWaiting(QString());
+    }
+}
+
+void RadioModel::setStationRadioWaiting(const QString& reason)
+{
+    if (m_stationRadioWaiting == reason) {
+        return;
+    }
+    m_stationRadioWaiting = reason;
+    emit stationRadioWaitingChanged(reason);
+}
+
+void RadioModel::clearStationSpots()
+{
     if (m_spotModel) {
         for (const int index : std::as_const(m_stationSpotIndex)) {
             m_spotModel->removeSpot(index);
@@ -15730,6 +15769,16 @@ void RadioModel::installBandPlanMoxCheck()
                                             "from this Core yet.")
                            : TxRefusals::stationReceiveOnly().text};
             refused.refusalCode = TxRefusals::kStationReceiveOnly;
+            return refused;
+        }
+        // Fix wave (M3, parity Task 21): the Core is changing its radio; a
+        // key now would be torn down by the change.
+        // Never queued: the operator presses again once the change ends. The
+        // notReady code: the Core's radio is not ready to key.
+        if (m_stationRadioChangeUnderway) {
+            safety::BandPlanGuard::MoxCheckResult refused{
+                false, StationRadios::switchingReason(), /*notQueued=*/true};
+            refused.refusalCode = TxRefusals::kNotReady;
             return refused;
         }
 

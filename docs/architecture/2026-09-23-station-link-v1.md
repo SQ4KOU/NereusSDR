@@ -1105,13 +1105,16 @@ When a feature is off, its version is 0:
   disabled with "This Core does not run its spot sources for this app.
   Updating the Core may help.". It is followed by `stationRadiosVersion`.
 - `stationRadiosVersion` (parity Task 21, the iPhone app plan's Task 25):
-  sent only at agreed minor 11, last, and 1 only on a Core that chooses
+  sent only at agreed minor 11, after `recordStreamVersion` in the minor-11
+  block (`sessionHolderVersion` and the remote transmit entries follow
+  it), and 1 only on a Core that chooses
   its own radio (`nereusd`; a Core a desktop window hosts sends 0). At 1
-  the Core sends the `stationRadios` record stream (section 7.7) and takes
+  the Core sends the `stationRadios` record stream (section 7.7) and
+  `radio`'s `stationRadioWaiting` (section 7.1), and takes
   `station.selectRadio`, `station.rescanRadios`, `station.setRadioModel`
   and `station.forgetRadio` (section 9.1). Its choice of radio, in order:
-  a radio chosen from an app (saved in the Core's own settings, kept
-  across restarts), then `radio_mac` from `nereusd.conf`, then the one
+  a radio chosen from an app (saved in the Core's own settings once it has
+  connected, kept across restarts), then `radio_mac` from `nereusd.conf`, then the one
   radio in sight when exactly one is visible; otherwise it waits for a
   choice. It never picks the first radio found. On a Core that sends 0 or
   no entry a window shows This Core's Change radio disabled with "This
@@ -1539,7 +1542,7 @@ An enum property lists the values its domain allows.
 | 8 | `hardwarePeakOverride` | `f64` | bidirectional |  |
 | 9 | `lastLoadError` | `utf8` | outbound |  |
 
-**RadioModel** (25 properties)
+**RadioModel** (26 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -1568,6 +1571,7 @@ An enum property lists the values its domain allows.
 | 22 | `bandOutputsBand` | `i64` | outbound |  |
 | 23 | `bandOutputsKeyed` | `bool` | outbound |  |
 | 24 | `dspOptionsLastApplyMs` | `i64` | outbound |  |
+| 25 | `stationRadioWaiting` | `utf8` | outbound |  |
 
 **RfKitModel** (30 properties)
 
@@ -2221,6 +2225,16 @@ Notes on the keys:
   Setup > DSP > Options "Time to last change" shows it. It reaches a window
   whatever `dspInfoVersion` says; a window reads it only when it is at
   least 1 (section 6.3).
+- **`radio`'s `stationRadioWaiting`** (the fix wave after parity Tasks 19
+  and 21; `stationRadiosVersion` 1). Outbound, no WRITE, `utf8`: why the
+  Core has no radio, in plain words ("The Core can see more than one
+  radio. Choose which one it runs.", "The Core is waiting for its radio to
+  appear on the network.", "The Core cannot see a radio on its network.",
+  or that its radio is in use by another program), empty while it has a
+  radio or is connecting one. This Core shows it when the Core has no
+  radio. A Core that does not choose its own radio always sends it empty;
+  a window that does not know it ignores it, and clears its copy when the
+  session ends.
 - **`transmit` at `transmitSettingsVersion` 2.** Each property carries its
   setter's type: `tunePower` (i64, the fixed tune power Setup uses, 0 to
   100 W, 0 to 99 on a Hermes Lite 2), `voxThresholdDb` (i64, -80 to 0 dB),
@@ -2896,7 +2910,9 @@ Core answers, then sends at once a `record.batch` with `reset` true
 carrying the newest `backlog` records (at most the capacity), oldest
 first. After that it sends only what changes, to that peer only: upserts
 (a new record, or a changed one) and removes, merged by `id` between sends
-and sent at most every 50 ms (`deltaFlushMs`). `records.unsubscribe
+and sent at most every 50 ms (`deltaFlushMs`). A record removed while a
+change to it waits is always sent as a remove (the peer may hold it); a
+peer ignores a remove for an `id` it does not hold. `records.unsubscribe
 {stream}` stops them. A subscription ends with its connection.
 
 ```json
@@ -2919,7 +2935,9 @@ console (backlog 200) once its snapshot is complete, again on every
 reconnect. It shows the Core's spots in its panadapters and its Spot List
 beside its own WSJT-X and SpotCollector spots, in the colours and
 lifetimes of the Core's Spot Hub settings, and drops them when the session
-ends.
+ends. A reset of a console stream (each subscribe's backlog) replaces that
+console in the Spot Hub rather than adding to it, so a reconnect never
+repeats the backlog; a `spots` reset replaces only the Core's spots.
 
 ## 8. The settings proxy
 
@@ -3397,10 +3415,20 @@ These command groups need a sentence beyond the table:
   see the Core's spots." below minor 11.
 - **The Core's radio** (parity Task 21, `stationRadiosVersion` 1; This
   Core's Change radio). `station.selectRadio` (`mac` utf8) makes a radio
-  the Core's: the Core saves the choice first (so it holds across a
-  restart), then restarts its run on that radio, which comes up with its
-  own receive layout, per-radio settings, capabilities and catalogue, as
-  on the Core's next start; every connection ends and reconnects. It asks
+  the Core's: the choice is the Core's pending choice until that radio
+  connects, and only then saved (a Core that restarts before then starts
+  from the last radio that connected, or `radio_mac`); the Core restarts
+  its run on that radio, which comes up with its own receive layout,
+  per-radio settings, capabilities and catalogue, as on the Core's next
+  start; every connection ends and reconnects. The change ends (another
+  choice is taken again) when the radio connects, when its connect fails
+  or its link is lost, when a scan does not find it, or two seconds after
+  its connect starts (the radio connections' own connect bound) with none
+  of those; the Core keeps trying the chosen radio. A key that arrives
+  while the Core changes its radio is refused ("The Core is changing its
+  radio. Try again when it has finished.", code `notReady`), and were the
+  radio on the air all the same when the change runs, the change is
+  dropped and nothing keyed is torn down. It asks
   the other devices first (section 7.6), since it reaches every slice and
   the transmitter. Choosing the Core's radio again is taken and changes
   nothing. `station.rescanRadios` looks for radios again (the list
@@ -3411,12 +3439,16 @@ These command groups need a sentence beyond the table:
   removes a radio's saved entry, its model and a choice of it, and takes
   it off the list until a scan finds it. Each is refused while the Core's
   radio is on the air ("The radio is on the air. Try again when it
-  stops."). Other refusals: "The Core cannot see that radio. Scan again,
+  stops."), and to a connection signed in with the pairing token rather
+  than its own device key ("Change the Core's radio from a paired
+  device.", as `pairing.open`; a desktop window signs in with its key
+  once its first sign-in has enrolled it). Other refusals: "The Core cannot see that radio. Scan again,
   then choose it.", "That radio is in use by another program.", "The Core
   is changing its radio. Try again when it has finished." (a choice while
   the last one is still being made), "That model does not match this
   radio.", "The Core is using this radio. Choose another radio first."
-  (forgetting the Core's radio), "This Core does not change its radio
+  (forgetting the Core's radio, the radio it is reconnecting to or
+  waiting for, or a choice still pending), "This Core does not change its radio
   from this app." and "The Core could not read this request.".
 - **The Core's spot sources** (parity Task 19, `recordStreamVersion` 1).
   `spots.connect` and `spots.disconnect` (`source` utf8: `dxCluster`,
@@ -3429,9 +3461,14 @@ These command groups need a sentence beyond the table:
   settings (section 8) before it sends them. `spots.sendCommand`
   (`source`, `text` utf8) types a line into the DX cluster's or RBN's
   console; every device's console shows it as `> <text>`.
-  `spots.clearAll` clears every spot the Core holds (a `spots` reset).
-  None reaches the radio, so each is answered on and off the air; none is
-  on the several-devices list (section 7.6). Stopping a source that is
+  `spots.clearAll` clears every spot the Core holds (a `spots` reset; a
+  window's copy of the Core's radios, a stream of its own, is untouched).
+  None reaches the radio, so each is answered on and off the air, and
+  `records.subscribe` and `records.unsubscribe` likewise: the record and
+  spot verbs are exempt from the on-the-air rule (ruling M4 of the fix
+  wave after parity Tasks 19 and 21; refusing a subscribe on the air would
+  blank a reconnecting window's spots). None is on the several-devices
+  list (section 7.6). Stopping a source that is
   not running is taken. Refusals: "The Core does not run that spot
   source.", "WSJT-X and SpotCollector listen on each computer, not on the
   Core.", "Enter your callsign in Spot Hub first.", "Enter your callsign
@@ -4677,7 +4714,7 @@ same on every machine.
 | `settings-write` | A station-scoped write echoed with its origin; an operator-local write rejected; a removal sent as `settings.value` with no entry; on the receive-only Core, a DSP > Options TX key and a PA forward-power table key (`paCalibration/calPoint1`, version 6) taken off the air, an OC transmit pin (`oc/tx/20m/pin3`), an OC pin action (`oc/actions/pin1/action`) and TX Display Cal (`cal/txDisplayOffset`) taken off the air (version 8), and a transmit hardware key refused |
 | `unknown-verb` | `command.result` refused, "The Core does not know this request. Updating the Core may help."; the connection stays up |
 | `unknown-kind` | `session.end` "The Core could not read a message from this app.", `retryable` false, `code` `protocolError` |
-| `verbs-*` | Each verb in `commands`, grouped by the capability that gates it, invoked with its own arguments (for `setPgxlHardware`, one of its three optional ones) and, where it takes any, with one argument renamed (and nothing else changed: the same values and kinds); the two get different answers, so each shows the station read the arguments (a PureSignal action with arguments it does not take is refused "The Core could not read this PureSignal request." before the transmit gate is asked); `verbs-ps3` (which requires `psAlgorithmVersion` 3) invokes the PureSignal verbs whose answers do not depend on arming (`ps3.off`, `ps3.twoTone` off and `ps3.saveCorrection`), and `verbs-ps3-arming` (which also requires `transmitSettingsVersion` 7) invokes `ps3.twoTone` with `enabled` true, refused "PureSignal cannot be run from a remote window yet.", and the arming verbs (`ps3.single`, `ps3.automatic`, `ps3.applyCurrent`, `ps3.restoreCorrection`), taken and then failing on the static station, which has no PureSignal running ("PureSignal is unavailable until the radio is ready."); `nnr.applyModelSelection` names the revision `dspAssets` gave in the snapshot; `verbs-tgxl-control` (which requires `remoteTgxlControlVersion` 2) invokes the antenna, operate and bypass switches, and `verbs-tgxl-relays` (which requires `remoteTgxlControlVersion` 4) matches `scanTgxlLan`'s `devicesJson` as any text, since a real Tuner Genius on the test computer's network may answer, and its accepted `setTgxlAddress` is followed by the `tuner` delta carrying the saved address, then a blank host, saved and shown as blank, and the address again; `verbs-pgxl-control` (which requires `remotePgxlControlVersion` 4) does the same for `scanPgxlLan` and `setPgxlAddress` (the `amplifier` delta, and the blank host), and its `setPgxlOperate` is refused on the static station, which has no amp connected ("The Core is not connected to the Power Genius."); `verbs-rfkit` (which requires `remoteRfKitControlVersion` 2) connects, disconnects and switches the RF-Kit, and `verbs-rfkit-control` (which requires `remoteRfKitControlVersion` 4) invokes `setRfKitOperate`, `setRfKitAntenna` and `setRfKitTciMode`, refused on the static station with no amp admitted ("The Core is not connected to the RF-Kit amplifier."), and its accepted `setRfKitAddress` is followed by the `rfkit` delta carrying the saved address, then the blank host and the address again; `verbs-tx-antenna` (which requires `radioHardwareVersion` 6) invokes `setAlexTxAntenna` with a band's current antenna (taken, no delta) and with `band` renamed; `verbs-io-board` (which requires `radioHardwareVersion` 7) invokes `requestIoBoardI2c` and `setIoBoardOutput`, each refused on the static station, which has no radio connection to reach the I2C bus through ("The radio is not connected, so its I2C bus cannot be reached."), and each with one argument renamed; `verbs-dsp-info` (which requires `dspInfoVersion` 1) invokes `dsp.filterResponse` with `highResolution` false (taken, `stepHz` 0 and an empty `magnitudesDbJson`), with `highResolution` true (refused on the static station, which runs no receiver channel: "The Core's receiver for this slice is not running.") and with one argument renamed; `verbs-records` (which requires `recordStreamVersion` 1) subscribes to `spots` with a backlog (taken, then the `record.batch` reset, empty on the static station), to a stream the Core does not keep (refused "The Core does not keep that list."), and with one argument renamed, then unsubscribes right and wrong; `verbs-station-radios` (which requires `stationRadiosVersion` 1, on a station set up with `stationRadios`: its static radio and a second "Bench G2" in sight) subscribes to `stationRadios`, sets the second radio's model (taken, then the record's upsert), refuses forgetting the Core's radio, rescans, refuses a radio it cannot see and takes the second radio, each with one argument renamed where it takes any; `station-radio-confirm` chooses the second radio with another device listening, is asked (`confirm.request`, `change` "Radio"), proceeds, and the other device is told (`notice`); `verbs-spots` (which requires `recordStreamVersion` 1) invokes `spots.connect` for the DX cluster with no callsign saved (refused "Enter your callsign in Spot Hub first."), `spots.disconnect` for POTA (taken: it is not running), `spots.sendCommand` to a cluster that is not connected (refused "The DX cluster is not connected."), each with one argument renamed, and `spots.clearAll` (taken; no station source is ever dialled). A version's new verbs go in a fixture of their own, so an app at the older version still runs the older file |
+| `verbs-*` | Each verb in `commands`, grouped by the capability that gates it, invoked with its own arguments (for `setPgxlHardware`, one of its three optional ones) and, where it takes any, with one argument renamed (and nothing else changed: the same values and kinds); the two get different answers, so each shows the station read the arguments (a PureSignal action with arguments it does not take is refused "The Core could not read this PureSignal request." before the transmit gate is asked); `verbs-ps3` (which requires `psAlgorithmVersion` 3) invokes the PureSignal verbs whose answers do not depend on arming (`ps3.off`, `ps3.twoTone` off and `ps3.saveCorrection`), and `verbs-ps3-arming` (which also requires `transmitSettingsVersion` 7) invokes `ps3.twoTone` with `enabled` true, refused "PureSignal cannot be run from a remote window yet.", and the arming verbs (`ps3.single`, `ps3.automatic`, `ps3.applyCurrent`, `ps3.restoreCorrection`), taken and then failing on the static station, which has no PureSignal running ("PureSignal is unavailable until the radio is ready."); `nnr.applyModelSelection` names the revision `dspAssets` gave in the snapshot; `verbs-tgxl-control` (which requires `remoteTgxlControlVersion` 2) invokes the antenna, operate and bypass switches, and `verbs-tgxl-relays` (which requires `remoteTgxlControlVersion` 4) matches `scanTgxlLan`'s `devicesJson` as any text, since a real Tuner Genius on the test computer's network may answer, and its accepted `setTgxlAddress` is followed by the `tuner` delta carrying the saved address, then a blank host, saved and shown as blank, and the address again; `verbs-pgxl-control` (which requires `remotePgxlControlVersion` 4) does the same for `scanPgxlLan` and `setPgxlAddress` (the `amplifier` delta, and the blank host), and its `setPgxlOperate` is refused on the static station, which has no amp connected ("The Core is not connected to the Power Genius."); `verbs-rfkit` (which requires `remoteRfKitControlVersion` 2) connects, disconnects and switches the RF-Kit, and `verbs-rfkit-control` (which requires `remoteRfKitControlVersion` 4) invokes `setRfKitOperate`, `setRfKitAntenna` and `setRfKitTciMode`, refused on the static station with no amp admitted ("The Core is not connected to the RF-Kit amplifier."), and its accepted `setRfKitAddress` is followed by the `rfkit` delta carrying the saved address, then the blank host and the address again; `verbs-tx-antenna` (which requires `radioHardwareVersion` 6) invokes `setAlexTxAntenna` with a band's current antenna (taken, no delta) and with `band` renamed; `verbs-io-board` (which requires `radioHardwareVersion` 7) invokes `requestIoBoardI2c` and `setIoBoardOutput`, each refused on the static station, which has no radio connection to reach the I2C bus through ("The radio is not connected, so its I2C bus cannot be reached."), and each with one argument renamed; `verbs-dsp-info` (which requires `dspInfoVersion` 1) invokes `dsp.filterResponse` with `highResolution` false (taken, `stepHz` 0 and an empty `magnitudesDbJson`), with `highResolution` true (refused on the static station, which runs no receiver channel: "The Core's receiver for this slice is not running.") and with one argument renamed; `verbs-records` (which requires `recordStreamVersion` 1) subscribes to `spots` with a backlog (taken, then the `record.batch` reset, empty on the static station), to a stream the Core does not keep (refused "The Core does not keep that list."), and with one argument renamed, then unsubscribes right and wrong; `verbs-station-radios` (which requires `stationRadiosVersion` 1, on a station set up with `stationRadios`: its static radio and a second "Bench G2" in sight, signed in as a paired device, since the Core refuses these verbs to a pairing-token sign-in) subscribes to `stationRadios`, sets the second radio's model (taken, then the record's upsert), refuses forgetting the Core's radio, rescans, refuses a radio it cannot see and takes the second radio, each with one argument renamed where it takes any; `station-radio-confirm` chooses the second radio with another device listening, is asked (`confirm.request`, `change` "Radio"), proceeds, and the other device is told (`notice`); `verbs-spots` (which requires `recordStreamVersion` 1) invokes `spots.connect` for the DX cluster with no callsign saved (refused "Enter your callsign in Spot Hub first."), `spots.disconnect` for POTA (taken: it is not running), `spots.sendCommand` to a cluster that is not connected (refused "The DX cluster is not connected."), each with one argument renamed, and `spots.clearAll` (taken; no station source is ever dialled). A version's new verbs go in a fixture of their own, so an app at the older version still runs the older file |
 
 `tst_link_conformance_session` also checks that every verb in the
 `commands` table is invoked both ways by some fixture, and that the two

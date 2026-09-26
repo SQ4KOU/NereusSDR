@@ -26,6 +26,11 @@
 // station.forgetRadio {mac} (refused for the radio in use). The Core's
 // DaemonApp does the switching and scanning through the handlers.
 //
+// Fix wave (I6): a choice is this run's pending choice until that radio
+// connects; only then is it saved. A Core that restarts before it connected
+// (a radio gone for good, a crash at connect) starts from the last radio
+// that did connect, or radio_mac, never from the pending choice.
+//
 // =================================================================
 // Modification history (NereusSDR):
 //   2026-09-26  J.J. Boyd / KG4VCF  Created (parity Task 21, R-IOS-18,
@@ -93,8 +98,19 @@ public:
 
     explicit StationRadios(AppSettings& settings, QObject* parent = nullptr);
 
+    /// The last choice that connected (the saved one).
     QString savedChoice() const;
     void saveChoice(const QString& mac);
+    /// This run's choice, not yet connected (empty when none). Never saved.
+    QString pendingChoice() const { return m_pending; }
+    /// A radio connected: a pending choice of it becomes the saved choice.
+    void confirmChoice(const QString& mac);
+    /// The change was refused at the moment it ran: the pending choice goes.
+    void dropPendingChoice();
+    /// The radio this run is aimed at: connected, reconnecting to or waiting
+    /// for (the Core's DaemonApp). Forgetting it is refused.
+    void setTarget(const QString& mac);
+    QString target() const { return m_target; }
 
     /// The radios the last scan found (replacing the list).
     void setVisible(const QList<RadioInfo>& found);
@@ -107,8 +123,9 @@ public:
     void setWaiting(const QString& reason);
     QString waitingReason() const { return m_waiting; }
 
-    /// A switch is under way: from a select until the new run connects or
-    /// its first scan finishes.
+    /// A switch is under way: from a select until the new radio connects,
+    /// its connect fails or its link is lost, the Core's connect bound
+    /// passes, or a scan does not pick it.
     void setSwitching(bool switching);
     bool switching() const { return m_switching; }
 
@@ -133,6 +150,8 @@ public:
     static QString unknownRadioReason();
     static QString switchingReason();
     static QString inUseReason();
+    /// Fix wave (I5): a window signed in with the pairing token and no key.
+    static QString pairedDeviceReason();
 
 signals:
     void entriesChanged();
@@ -144,6 +163,8 @@ private:
     bool m_hasCurrent = false;
     bool m_switching = false;
     QString m_waiting;
+    QString m_pending;
+    QString m_target;
 };
 
 } // namespace NereusSDR

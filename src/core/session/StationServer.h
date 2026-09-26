@@ -739,6 +739,11 @@ public:
     /// kMaxUnfinishedOpenings and kMaxHandshakesPerAddress, from the next
     /// listen() on, so a test on one loopback address can reach the total.
     void setOpeningLimitsForTest(int total, int perAddress);
+    /// A window over a bench link (no TLS pin) cannot enrol its key, so it
+    /// always signs in with the token. This lets such a window's session
+    /// change the Core's radio, so a window test can reach the Core's
+    /// answers (fix wave, I5).
+    void setTokenSessionsMayChangeRadioForTest(bool may) { m_tokenSessionsMayChangeRadioForTest = may; }
 #endif
 
     /// See kDefaultAuthDeadlineMs. Values below 1 disable the deadline,
@@ -1758,6 +1763,7 @@ private:
 
     int m_authDeadlineMs = kDefaultAuthDeadlineMs;
     int m_heartbeatIntervalMs = kDefaultHeartbeatIntervalMs;
+    bool m_tokenSessionsMayChangeRadioForTest = false;
     int m_maxMissedPongs = kDefaultMaxMissedPongs;
     int m_sustainableSliceLimit = 0;
 };

@@ -89,7 +89,9 @@ transmitting, and are refused while someone is on the air.
   In a window, the control is disabled with that reason while the Core reports the same
   (Task 1's `RadioModel::isCoreOnAir()`). A receive-only Core accepts every such change when
   the radio is not on the air. Nothing in this plan keys the radio, starts a tune or two-tone,
-  or arms VOX.
+  or arms VOX. Exempt (ruling M4, the fix wave after Tasks 19 and 21): `records.*` and
+  `spots.*` never touch the radio and are answered on and off the air; refusing
+  `records.subscribe` on the air would blank a reconnecting window's spots.
 - **Wording.** User-facing strings in plain operator words; each new or changed string passes
   `OperatorWording::isPlain` and the wording sweep (`tst_operator_wording_sweep`,
   `tst_station_reason_wording`); "Core" means the NereusSDR computer; no source cites inside

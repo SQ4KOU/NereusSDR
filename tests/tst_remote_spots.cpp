@@ -37,7 +37,9 @@
 
 #include <QtTest>
 
+#include <QJsonObject>
 #include <QLineEdit>
+#include <QPlainTextEdit>
 #include <QPushButton>
 #include <QSignalSpy>
 #include <QSpinBox>
@@ -47,6 +49,8 @@
 #include "core/DxClusterClient.h"
 #include "core/SpotSourceHost.h"
 #include "core/WsjtxClient.h"
+#include "core/session/RecordStream.h"
+#include "core/station/StationRadios.h"
 #include "core/session/SessionMessages.h"
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
@@ -251,6 +255,61 @@ private slots:
         windowHost->typeCommand(SpotSourceHost::kDxCluster, QStringLiteral("sh/dx"));
         QTRY_COMPARE(refused.count(), 2);
         QCOMPARE(refused.last().at(1).toString(), QStringLiteral("The DX cluster is not connected."));
+    }
+
+    // Fix wave, I3 and M5: a `spots` reset leaves the Core's radio list
+    // alone, and each console reset (a reconnect's backlog again) replaces
+    // the Spot Hub's console rather than repeating it.
+    void aSpotsResetKeepsTheRadiosAndTheBacklogIsNotRepeated()
+    {
+        RadioModel window{RadioModel::Role::Remote};
+        QVERIFY(window.spotSourceHost()->forwardsStationSources());
+        RecordBatch radios;
+        radios.stream = QStringLiteral("stationRadios");
+        radios.reset = true;
+        StationRadioEntry hl2;
+        hl2.id = hl2.mac = QStringLiteral("AA:BB:CC:00:00:01");
+        hl2.name = QStringLiteral("HL2");
+        hl2.model = 1;
+        hl2.inUse = true;
+        radios.upserts.append({hl2.id, hl2.toFields()});
+        window.applyStationRecordBatch(radios);
+        QCOMPARE(window.stationRadios().size(), 1);
+
+        RecordBatch spots;
+        spots.stream = QStringLiteral("spots");
+        spots.reset = true;
+        QSignalSpy radiosChanged(&window, &RadioModel::stationRadiosChanged);
+        window.applyStationRecordBatch(spots);
+        QCOMPARE(window.stationRadios().size(), 1);
+        QCOMPARE(radiosChanged.count(), 0);
+
+        SpotHubDialog hub(window.dxCluster(), window.rbn(), window.wsjtx(),
+                          window.spotCollector(), window.pota(), window.freeDvReporter(),
+                          window.pskReporter(), window.spotModel(), window.spotTableModel(),
+                          window.dxccColorProvider());
+        hub.setSourceHost(window.spotSourceHost());
+        auto* console = hub.findChild<QPlainTextEdit*>(QStringLiteral("clusterConsole"));
+        QVERIFY(console);
+        RecordBatch backlog;
+        backlog.stream = QStringLiteral("spotConsole:dxCluster");
+        backlog.reset = true;
+        backlog.upserts.append({QStringLiteral("1"),
+                                QJsonObject{{QStringLiteral("line"), QStringLiteral("line one")}}});
+        backlog.upserts.append({QStringLiteral("2"),
+                                QJsonObject{{QStringLiteral("line"), QStringLiteral("line two")}}});
+        window.applyStationRecordBatch(backlog);
+        QCOMPARE(console->toPlainText(), QStringLiteral("line one\nline two"));
+        // The window reconnects: the same backlog arrives again.
+        window.applyStationRecordBatch(backlog);
+        QCOMPARE(console->toPlainText(), QStringLiteral("line one\nline two"));
+        // A live line adds to it.
+        RecordBatch live;
+        live.stream = backlog.stream;
+        live.upserts.append({QStringLiteral("3"),
+                             QJsonObject{{QStringLiteral("line"), QStringLiteral("line three")}}});
+        window.applyStationRecordBatch(live);
+        QCOMPARE(console->toPlainText(), QStringLiteral("line one\nline two\nline three"));
     }
 
     void theWindowRunsOnlyItsOwnListeners()

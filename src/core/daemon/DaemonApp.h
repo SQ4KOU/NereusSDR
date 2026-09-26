@@ -494,6 +494,24 @@ private:
     void switchRadio(const QString& mac);
     void restartForRadioChange();
     void rescanRadios();
+    // Fix wave (C1): a radio change ends (the "switching" flag clears, so a
+    // window can choose again) when the new radio connects, its connect
+    // fails, its link is lost, a scan does not pick it, or the Core's
+    // connect bound passes with none of those. The pending choice is kept
+    // as this run's radio either way.
+    void endRadioSwitch();
+    // Fix wave (M3): the on-the-air rule, again at the moment the change
+    // runs. True when the radio is on the air: the change is refused and
+    // nothing is torn down.
+    bool refuseRadioChangeOnAir();
+    // The connect watchdog budget of both OpenHPSDR connections:
+    // P1RadioConnection.h kConnectTimeoutMs (2000 ms, "Connect watchdog:
+    // fires this many ms after connectToRadio() if no first ep6 frame
+    // arrives") and P2RadioConnection.h kConnectTimeoutMs (2000 ms, "Connect
+    // watchdog budget -- 2 s matches P1"). NereusSDR-original values.
+    static constexpr int kRadioSwitchConnectBoundMs = 2000;
+    int m_radioSwitchBoundMs {kRadioSwitchConnectBoundMs};
+    QTimer* m_radioSwitchDeadline {nullptr};
     std::unique_ptr<QThread> m_radioDiscoveryThread;
     QTimer* m_radioRetryTimer {nullptr};
     quint64 m_radioRecoveryGeneration {0};

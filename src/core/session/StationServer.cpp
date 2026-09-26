@@ -3420,6 +3420,20 @@ void StationServer::onTransportText(SessionTransport* transport, const QByteArra
                 {}));
             break;
         }
+        // Fix wave, I5 (the iPhone plan's Task 25: selectRadio is for paired
+        // devices only): the four radio verbs are refused the same way to a
+        // window signed in with the pairing token and no device key. A
+        // desktop window signs in with its own key once enrolled.
+        if ((message.commandVerb == "station.selectRadio"
+             || message.commandVerb == "station.setRadioModel"
+             || message.commandVerb == "station.forgetRadio"
+             || message.commandVerb == "station.rescanRadios")
+            && !peerSeesPairingCode(transport) && !m_tokenSessionsMayChangeRadioForTest) {
+            send(transport, SessionMessages::commandResult(
+                message.commandVerb, message.commandId, false,
+                StationRadios::pairedDeviceReason(), {}));
+            break;
+        }
         {
             // A revoke of the requester's own device, or a token session
             // retiring the token, ends this connection only after its

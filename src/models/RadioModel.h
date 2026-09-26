@@ -599,6 +599,13 @@ class RadioModel : public QObject {
     // from DspAssetService (dfnrRunnable, mnrRunnable), the one source.
     Q_PROPERTY(qint64 dspOptionsLastApplyMs READ dspOptionsLastApplyMs
                    NOTIFY dspOptionsLastApplyMsChanged)
+    // Fix wave after parity Tasks 19 and 21 (M2, R-IOS-18): why the Core
+    // has no radio (it waits for a choice, for its chosen radio to appear,
+    // or for a radio another program holds), in plain words; empty while it
+    // has one or is connecting one. Set by nereusd's DaemonApp; Core to
+    // window only. This Core shows it.
+    Q_PROPERTY(QString stationRadioWaiting READ stationRadioWaiting
+                   NOTIFY stationRadioWaitingChanged)
 
 
 public:
@@ -2501,8 +2508,14 @@ public:
     /// SpotCollector spots, and the Core's spotConsole:<source> streams
     /// into the Spot Hub's consoles. A reset replaces the Core's spots.
     void applyStationRecordBatch(const RecordBatch& batch);
-    /// The session ended: the Core's spots leave this window.
+    /// The session ended: the Core's spots and its radio list leave this
+    /// window.
     void clearStationRecords();
+    /// The Core's spots only (a `spots` reset, a new snapshot). Never the
+    /// Core's radio list, which has its own stream (fix wave, I3).
+    void clearStationSpots();
+    /// The Core's radio list only.
+    void clearStationRadios();
 
     /// Parity Task 21 (R-IOS-18): a remote window's copy of the Core's
     /// radios (the `stationRadios` stream), the Core's radio first.
@@ -2510,6 +2523,14 @@ public:
     /// Parity Task 21: the Core refused a radio request (Change radio, Scan
     /// again, Edit radio, Forget radio); This Core shows the reason.
     void reportStationRadioRefused(const QString& reason);
+    /// Fix wave (M3): the Core is changing its radio (nereusd's DaemonApp).
+    /// Keying is refused until the change ends, so nothing keyed is torn
+    /// down by it.
+    void setStationRadioChangeUnderway(bool underway) { m_stationRadioChangeUnderway = underway; }
+    /// Fix wave (M2): the Core's waiting reason (see the property).
+    QString stationRadioWaiting() const { return m_stationRadioWaiting; }
+    void setStationRadioWaiting(const QString& reason);
+    bool stationRadioChangeUnderway() const { return m_stationRadioChangeUnderway; }
 
     // ── TNF (design section 8.1): the canonical notch store ─────────────────
     //
@@ -4663,6 +4684,8 @@ signals:
     void nrAvailabilityChanged();
     // Remote-window parity Task 16: dspOptionsLastApplyMs() changed.
     void dspOptionsLastApplyMsChanged(qint64 elapsedMs);
+    // Fix wave (M2): stationRadioWaiting() changed.
+    void stationRadioWaitingChanged(const QString& reason);
     // Remote-window parity Task 16: coreFilterResponse() changed.
     void coreFilterResponseChanged();
 
@@ -6869,6 +6892,8 @@ private:
     int m_stationDspInfoVersion{0};
     int m_stationDspAssetVersion{0};
     qint64 m_dspOptionsLastApplyMs{0};
+    bool m_stationRadioChangeUnderway{false};
+    QString m_stationRadioWaiting;
     FilterResponse m_coreFilterResponse;
     bool m_coreFilterResponseWanted{false};
     bool m_coreFilterResponseDirty{false};

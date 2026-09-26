@@ -877,7 +877,7 @@ const MirrorPolicy::Entry kEntries[] = {
     { "PureSignalSettings", "hardwarePeakOverride", MirrorDirection::Bidirectional },
     { "PureSignalSettings", "lastLoadError", MirrorDirection::Outbound },
 
-    // ---- RadioModel (26 entries) ----
+    // ---- RadioModel (27 entries) ----
     { "RadioModel", "settingsSaveError", MirrorDirection::Outbound },
     { "RadioModel", "receiveLayoutRestoreState", MirrorDirection::Outbound },
     { "RadioModel", "receiveLayoutRestoreMessage", MirrorDirection::Outbound },
@@ -918,6 +918,9 @@ const MirrorPolicy::Entry kEntries[] = {
     // reduction the Core runs is DspAssetService's (dfnrRunnable,
     // mnrRunnable), the one source.
     { "RadioModel", "dspOptionsLastApplyMs", MirrorDirection::Outbound },
+    // Fix wave after parity Tasks 19 and 21 (M2, R-IOS-18): why the Core
+    // waits for a radio, Core to window only (nereusd's StationRadios).
+    { "RadioModel", "stationRadioWaiting", MirrorDirection::Outbound },
 
     // ---- PanadapterModel (4 entries) ----
     { "PanadapterModel", "centerFrequency", MirrorDirection::Bidirectional },

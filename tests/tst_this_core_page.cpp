@@ -189,6 +189,32 @@ private slots:
         QCOMPARE(list->topLevelItem(0)->text(3), kG2Mac);
         QVERIFY(!list->topLevelItem(0)->text(4).isEmpty());
         QCOMPARE(list->topLevelItem(1)->text(3), kHl2Mac);
+
+        // Fix wave, I5: this window signed in with the pairing token (a
+        // bench link cannot enrol its key), so every control waits, with
+        // the reason; and were one sent, the Core refuses it the same way.
+        const QString paired = StationRadios::pairedDeviceReason();
+        QTRY_COMPARE(page->scanButton()->toolTip(), paired);
+        QVERIFY(!page->scanButton()->isEnabled());
+        QVERIFY(!page->useButton()->isEnabled());
+        QCOMPARE(page->statusLabel()->text(), paired);
+        QCOMPARE(h.client()->requestStationRadio("station.rescanRadios", {}, 0).sent, true);
+        QTRY_COMPARE(page->statusLabel()->text(), paired);
+        // From here the window and the Core act as a window signed in with
+        // its own key (a desktop window after its enrolment).
+        h.client()->setSignedInWithDeviceKeyForTest(true);
+        h.server().setTokenSessionsMayChangeRadioForTest(true);
+        QAction* disconnect = h.menuAction(QStringLiteral("&Radio"), QStringLiteral("&Disconnect"));
+        QVERIFY(disconnect && disconnect->isEnabled());
+        disconnect->trigger();
+        QTRY_VERIFY(!h.client()->isHandshakeComplete());
+        connectWindow(h);
+        QTRY_VERIFY(!h.window()->findChildren<ThisCorePage*>().isEmpty()
+                    && h.window()->findChildren<ThisCorePage*>().constLast()->radioList()
+                               ->topLevelItemCount() == 2);
+        page = h.window()->findChildren<ThisCorePage*>().constLast();
+        list = page->radioList();
+        list->setCurrentItem(list->topLevelItem(0));
         QTRY_VERIFY(page->scanButton()->isEnabled());
 
         // The Core's radio: nothing to use, and it cannot be forgotten.
@@ -208,7 +234,9 @@ private slots:
         QVERIFY(page->forgetButton()->isEnabled());
         page->useButton()->click();
         QTRY_COMPARE(selected, QStringList{kHl2Mac});
-        QCOMPARE(radios.savedChoice(), kHl2Mac);
+        // Fix wave, I6: this run's choice until it connects.
+        QCOMPARE(radios.pendingChoice(), kHl2Mac);
+        QVERIFY(radios.savedChoice().isEmpty());
 
         // B6.3: the title bar copies the Core's radio's address.
         QGuiApplication::clipboard()->clear();
@@ -256,6 +284,17 @@ private slots:
         QCOMPARE(page->statusLabel()->text(), RadioModel::onAirReason());
         mox->setMox(false);
         QTRY_VERIFY(page->scanButton()->isEnabled());
+
+        // Fix wave, M2: with no radio, the page shows the Core's own words
+        // for why it waits.
+        radios.clearCurrent();
+        const QString waiting =
+            QStringLiteral("The Core is waiting for its radio to appear on the network.");
+        h.station().setStationRadioWaiting(waiting);
+        QTRY_COMPARE(page->statusLabel()->text(), waiting);
+        h.station().setStationRadioWaiting(QString());
+        QTRY_COMPARE(page->statusLabel()->text(),
+                     QStringLiteral("The Core is waiting for you to choose its radio."));
     }
 
     void aCoreThatDoesNotChooseItsRadioSaysSo()

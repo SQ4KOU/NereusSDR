@@ -1311,6 +1311,7 @@ void StationClient::endSession(const QString& reason, bool attemptReconnect,
 
     m_handshakeComplete = false;
     m_authenticated = false;
+    m_signedInWithDeviceKey = false;
     m_forwardLocalChanges = false;
     m_propertyWriteIds.clear();
     // Desktop remote transmit: the Core unkeys this device when the link
@@ -1790,7 +1791,9 @@ void StationClient::onTransportText(const QByteArray& wire)
         // the Core's newest records.
         if (spotSourcesAvailable()) {
             if (!m_radioModel.isNull()) {
-                m_radioModel->clearStationRecords();
+                // Fix wave, I3: the spots only; the radio list's own
+                // subscription replaces it.
+                m_radioModel->clearStationSpots();
             }
             const auto subscribe = [this](const QString& stream, int backlog) {
                 invokeCommand("records.subscribe",
@@ -2016,6 +2019,7 @@ bool StationClient::signIn(const SessionMessage& hello)
         send(SessionMessages::authRequest(
             QString(), deviceBlockFor(*m_deviceIdentity, m_deviceName, m_deviceShortName,
                                       challenge, certificate, stationSpki)));
+        m_signedInWithDeviceKey = true;
         return true;
     }
 
@@ -2047,6 +2051,9 @@ bool StationClient::signIn(const SessionMessage& hello)
                                 m_declaredFeatures));
     send(m_enrollingIdentity.isEmpty() ? SessionMessages::authRequest(m_token)
                                        : SessionMessages::authRequest(m_token, block));
+    // The pairing token, even when this sign-in enrols the key: the Core
+    // counts this session as a token sign-in (fix wave, I5).
+    m_signedInWithDeviceKey = false;
     return true;
 }
 
@@ -3007,6 +3014,8 @@ bool StationClient::applyOne(QObject* target, const MirrorProperty& prop,
         QByteArrayLiteral("RadioModel.txInhibited"),
         // Parity Task 16: likewise the Core's DSP facts.
         QByteArrayLiteral("RadioModel.dspOptionsLastApplyMs"),
+        // Fix wave (M2): likewise the Core's waiting reason.
+        QByteArrayLiteral("RadioModel.stationRadioWaiting"),
         QByteArrayLiteral("SliceModel.minNotchWidthHz"),
         QByteArrayLiteral("SliceModel.signalStrengthDbm"),
         QByteArrayLiteral("SliceModel.signalPeakDbm"),

@@ -698,6 +698,9 @@ const QList<ReasonSource>& reasonSources()
           QStringLiteral("StationTciModel::readOnlyReason()"),
           // Parity Task 19: the `spotSources` object's, scanned below.
           QStringLiteral("SpotSourceHost::readOnlyReason()"),
+          // Fix wave after parity Tasks 19 and 21 (I5): the radio verbs'
+          // refusal to a token sign-in, scanned in StationRadios.cpp.
+          QStringLiteral("StationRadios::pairedDeviceReason()"),
           QStringLiteral("AccessoryDataModel::readOnlyReason()"),
           QStringLiteral("AccessorySettingsModel::readOnlyReason()"),
           // Literals inserted into `refusals` in this file.
@@ -1072,8 +1075,9 @@ const QList<ReasonSource>& reasonSources()
         {"src/core/station/StationRadios.cpp",
          {QStringLiteral("choose"), QStringLiteral("unknownRadioReason"),
           QStringLiteral("switchingReason"), QStringLiteral("inUseReason"),
+          QStringLiteral("pairedDeviceReason"),
           QStringLiteral("select"), QStringLiteral("setModel"), QStringLiteral("forget")},
-         {}, 5, {},
+         {}, 6, {},
          {// The refuse helper's parameter and the three reasons above.
           QStringLiteral("why"), QStringLiteral("inUseReason()"),
           QStringLiteral("switchingReason()"), QStringLiteral("unknownRadioReason()")}},

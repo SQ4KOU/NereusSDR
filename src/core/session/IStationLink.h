@@ -501,6 +501,10 @@ public:
     static QString stationRadiosUnavailableReason()
     { return QStringLiteral("This Core does not let this app change its radio. Updating the Core may help."); }
     virtual bool stationRadiosAvailable() const { return false; }
+    /// Fix wave (I5): whether this session signed in with this computer's
+    /// own device key. The Core takes the four radio requests only from
+    /// such a session (StationRadios::pairedDeviceReason otherwise).
+    virtual bool signedInWithDeviceKey() const { return false; }
     virtual CommandOutcome requestStationRadio(const QByteArray& /*verb*/, const QString& /*mac*/,
                                                int /*model*/)
     { return { false, stationRadiosUnavailableReason() }; }

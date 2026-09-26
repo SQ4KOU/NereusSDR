@@ -126,6 +126,9 @@ ThisCorePage::ThisCorePage(RadioModel* model, QWidget* parent)
                 &ThisCorePage::refreshControls);
         connect(m_radioModel, &RadioModel::coreOnAirChanged, this,
                 &ThisCorePage::refreshControls);
+        // Fix wave (M2): the Core's own words for why it waits.
+        connect(m_radioModel, &RadioModel::stationRadioWaitingChanged, this,
+                &ThisCorePage::refreshControls);
     }
     rebuildList();
 }
@@ -149,6 +152,10 @@ QString ThisCorePage::unavailableReason() const
     }
     if (!link->stationRadiosAvailable()) {
         return IStationLink::stationRadiosUnavailableReason();
+    }
+    // Fix wave (I5): the Core takes these only from a paired device.
+    if (!link->signedInWithDeviceKey()) {
+        return StationRadios::pairedDeviceReason();
     }
     if (m_radioModel->isCoreOnAir()) {
         return RadioModel::onAirReason();
@@ -247,8 +254,14 @@ void ThisCorePage::refreshControls()
         m_status->setText(why);
         m_statusIsPage = true;
     } else if (m_statusIsPage || m_status->text().isEmpty()) {
-        const QString line = m_list->topLevelItemCount() == 0
-            ? tr("The Core has not found a radio yet. Scan again.")
+        // Fix wave (M2): the Core says why it waits (for a choice, for its
+        // chosen radio to appear, for a radio another program holds); the
+        // page's own words stand in for a Core that does not.
+        const QString waiting =
+            m_radioModel != nullptr ? m_radioModel->stationRadioWaiting() : QString();
+        const QString line = !hasCore && !waiting.isEmpty() ? waiting
+            : m_list->topLevelItemCount() == 0
+                ? tr("The Core has not found a radio yet. Scan again.")
             : !hasCore ? tr("The Core is waiting for you to choose its radio.")
                        : QString();
         m_status->setText(line);

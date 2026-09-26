@@ -162,6 +162,25 @@ void StationRadios::saveChoice(const QString& mac)
     m_settings.save();
 }
 
+void StationRadios::confirmChoice(const QString& mac)
+{
+    if (m_pending.isEmpty() || !sameMac(m_pending, mac)) {
+        return;
+    }
+    saveChoice(m_pending);
+    m_pending.clear();
+}
+
+void StationRadios::dropPendingChoice()
+{
+    m_pending.clear();
+}
+
+void StationRadios::setTarget(const QString& mac)
+{
+    m_target = normalized(mac);
+}
+
 void StationRadios::setVisible(const QList<RadioInfo>& found)
 {
     m_visible.clear();
@@ -292,6 +311,11 @@ QString StationRadios::inUseReason()
     return QStringLiteral("The Core is using this radio. Choose another radio first.");
 }
 
+QString StationRadios::pairedDeviceReason()
+{
+    return QStringLiteral("Change the Core's radio from a paired device.");
+}
+
 bool StationRadios::select(const QString& mac, QString* reason)
 {
     const auto refuse = [reason](const QString& why) {
@@ -313,8 +337,9 @@ bool StationRadios::select(const QString& mac, QString* reason)
     if (radio->inUse) {
         return refuse(QStringLiteral("That radio is in use by another program."));
     }
-    // Saved before acting, so the choice holds across a restart.
-    saveChoice(mac);
+    // Fix wave, I6: this run's pending choice; saved only once it connects
+    // (confirmChoice), so a Core restarted before then never reloads it.
+    m_pending = normalized(mac);
     m_switching = true;
     if (onSelect) {
         onSelect(normalized(mac));
@@ -355,7 +380,10 @@ bool StationRadios::setModel(const QString& mac, int model, QString* reason)
 
 bool StationRadios::forget(const QString& mac, QString* reason)
 {
-    if (m_hasCurrent && sameMac(m_current.macAddress, mac)) {
+    // Fix wave, M1: also the radio the Core is reconnecting to or waiting
+    // for, and a pending choice.
+    if ((m_hasCurrent && sameMac(m_current.macAddress, mac)) || sameMac(m_target, mac)
+        || sameMac(m_pending, mac)) {
         if (reason != nullptr) {
             *reason = inUseReason();
         }

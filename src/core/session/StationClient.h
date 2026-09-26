@@ -900,6 +900,12 @@ public:
     /// Parity Task 21 (R-IOS-18): minor 11 and stationRadiosVersion at
     /// least 1 on a ready session.
     bool stationRadiosAvailable() const override;
+    /// Fix wave (I5): this session signed in with this computer's own key.
+    bool signedInWithDeviceKey() const override
+    { return m_deviceKeySignInForTest >= 0 ? m_deviceKeySignInForTest == 1 : m_signedInWithDeviceKey; }
+    /// Test seam: a bench link (no TLS pin) never signs in by key; a window
+    /// test says it did (see StationServer::setTokenSessionsMayChangeRadioForTest).
+    void setSignedInWithDeviceKeyForTest(bool byKey) { m_deviceKeySignInForTest = byKey ? 1 : 0; }
     /// Parity Task 21. Verbs station.selectRadio, station.rescanRadios,
     /// station.setRadioModel and station.forgetRadio.
     CommandOutcome requestStationRadio(const QByteArray& verb, const QString& mac,
@@ -1151,6 +1157,8 @@ private:
     StationEndReport m_lastEndReport;
     bool m_handshakeComplete = false;
     bool m_authenticated = false;
+    bool m_signedInWithDeviceKey = false;
+    int m_deviceKeySignInForTest = -1;
     quint16 m_agreedMinor = 0;
 
     /// iPhone app Task 4: this client's link majors (oldest first) and

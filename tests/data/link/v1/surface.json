@@ -4036,6 +4036,12 @@
                     "kind": "i64",
                     "name": "dspOptionsLastApplyMs",
                     "ordinal": 24
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "utf8",
+                    "name": "stationRadioWaiting",
+                    "ordinal": 25
                 }
             ]
         },

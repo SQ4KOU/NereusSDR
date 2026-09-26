@@ -89,7 +89,7 @@ private slots:
         stream.upsert(QStringLiteral("2"), fields(2));
         stream.upsert(QStringLiteral("1"), fields(11)); // a change
         stream.upsert(QStringLiteral("3"), fields(3));
-        stream.remove(QStringLiteral("3"));               // never sent
+        stream.remove(QStringLiteral("3"));               // never sent: removed anyway
         stream.upsert(QStringLiteral("2"), fields(22));   // merged
 
         const auto pending = stream.takePending();
@@ -100,7 +100,8 @@ private slots:
         QCOMPARE(ids(batch.upserts), (QStringList{"1", "2"}));
         QCOMPARE(batch.upserts.at(0).fields, fields(11));
         QCOMPARE(batch.upserts.at(1).fields, fields(22));
-        QVERIFY(batch.removes.isEmpty());
+        // The window ignores a remove for an id it never held.
+        QCOMPARE(batch.removes, QStringList{QStringLiteral("3")});
 
         // Nothing owed now.
         QVERIFY(stream.takePending().isEmpty());
@@ -109,6 +110,23 @@ private slots:
         const auto removed = stream.takePending();
         QCOMPARE(removed.size(), 1);
         QCOMPARE(removed.first().second.removes, QStringList{QStringLiteral("1")});
+    }
+
+    void aRemoveAfterAWaitingUpdateReachesThePeer()
+    {
+        // Fix wave, I4: the peer holds record 1; an update of it waits, then
+        // the record goes. The peer must be told to remove it.
+        RecordStream stream(QStringLiteral("spots"), 10);
+        stream.upsert(QStringLiteral("1"), fields(1));
+        const RecordBatch first = stream.subscribe(&peerA, 10);
+        QCOMPARE(ids(first.upserts), QStringList{QStringLiteral("1")});
+        stream.upsert(QStringLiteral("1"), fields(11));
+        stream.remove(QStringLiteral("1"));
+        const auto pending = stream.takePending();
+        QCOMPARE(pending.size(), 1);
+        const RecordBatch& batch = pending.first().second;
+        QVERIFY(batch.upserts.isEmpty());
+        QCOMPARE(batch.removes, QStringList{QStringLiteral("1")});
     }
 
     void anUnsubscribedPeerGetsNothing()
