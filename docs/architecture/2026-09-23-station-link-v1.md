@@ -351,8 +351,12 @@ example `7-anvil-harbor`. The words come from
 no two within one edit of each other and no two alike in sound. The
 number is the rendezvous nameplate: while the Core is registered with the
 rendezvous (section 19) it holds a nameplate there while its pairing window
-is open and shows that number; otherwise it picks one from 1 to 99
-(`PairingWindow::kLocalNameplateMax`).
+is open and shows that number. A Core that has never held one picks a
+number from 1 to 99 (`PairingWindow::kLocalNameplateMax`). A Core that
+loses the rendezvous keeps showing the number it last held, since the code
+still pairs on a direct connection (the number is part of the password, not
+an address there), and shows the new number when it registers again and
+claims one; a change makes a new code unless the code is being tried.
 Both ends normalise a typed code before they use it
 (`PairingCode::normalise`). Normalising lowercases and trims, drops any
 leading zeros of the number, and joins the three parts with single
