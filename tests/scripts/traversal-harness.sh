@@ -77,8 +77,9 @@
 #               AI-assisted via Anthropic Claude Code.
 #   2026-09-26: iPhone app plan Task 28 (R-IOS-16): the local run's fixes
 #               (tayga 0.9.2 has no wkpf-strict, so NAT64 uses a
-#               network-specific prefix; the station runs under ip netns exec
-#               directly so stop_station stops it; coturn's per-user quota
+#               network-specific prefix; every program started in the
+#               background runs under ip netns exec directly, so
+#               stop_station and cleanup stop it; coturn's per-user quota
 #               for a full run; the NAT routers drop unsolicited packets to
 #               their own WAN address, as a home router does); netem-loss
 #               asks for a connection, not an echo; the session-* scenarios.
@@ -146,6 +147,9 @@ trap cleanup EXIT
 
 say() { echo "[traversal] $*"; }
 in_ns() { local ns="$1"; shift; ip netns exec "h-$ns" "$@"; }
+# A program started in the background runs under `ip netns exec` directly,
+# never through in_ns: `in_ns ... &` backgrounds a subshell, so $! would
+# name the subshell and cleanup would orphan the program itself.
 
 # ── The small internet ────────────────────────────────────────────────
 
@@ -300,7 +304,7 @@ rv   IN A    198.51.100.2
 rv4  IN A    198.51.100.2
 rv6  IN AAAA 2001:db8:1::2
 EOF
-in_ns rvsrv unbound -d -c "$WORK/unbound.conf" >"$WORK/unbound.log" 2>&1 &
+ip netns exec h-rvsrv unbound -d -c "$WORK/unbound.conf" >"$WORK/unbound.log" 2>&1 &
 PIDS+=($!)
 
 # ── NAT64 (the carrier's PLAT) and the client's CLAT ─────────────────
@@ -320,7 +324,7 @@ in_ns plat tayga -c "$WORK/tayga-plat.conf" --mktun
 in_ns plat ip link set nat64 up
 in_ns plat ip route add 192.168.255.0/24 dev nat64
 in_ns plat ip -6 route add 2001:db8:64::/96 dev nat64
-in_ns plat tayga -c "$WORK/tayga-plat.conf" -d >"$WORK/tayga-plat.log" 2>&1 &
+ip netns exec h-plat tayga -c "$WORK/tayga-plat.conf" -d >"$WORK/tayga-plat.log" 2>&1 &
 PIDS+=($!)
 in_ns plat nft -f - <<EOF
 flush ruleset
@@ -349,14 +353,14 @@ in_ns cli6 ip addr add 192.0.0.2/32 dev clat
 in_ns cli6 ip route add default dev clat mtu 1260
 in_ns cli6 ip -6 route add 2001:db8:6::/64 dev clat
 in_ns plat ip -6 route add 2001:db8:6::/64 via 2001:db8:5::2
-in_ns cli6 tayga -c "$WORK/tayga-clat.conf" -d >"$WORK/tayga-clat.log" 2>&1 &
+ip netns exec h-cli6 tayga -c "$WORK/tayga-clat.conf" -d >"$WORK/tayga-clat.log" 2>&1 &
 PIDS+=($!)
 
 # ── The service: coturn, the rendezvous behind TLS ──────────────────
 
 python3 -c 'import secrets; print(secrets.token_hex(24))' > "$WORK/turn-secret"
 chmod 600 "$WORK/turn-secret"
-in_ns rvsrv turnserver -n --no-cli --no-tls --no-dtls --fingerprint \
+ip netns exec h-rvsrv turnserver -n --no-cli --no-tls --no-dtls --fingerprint \
     --listening-ip=198.51.100.2 --listening-ip=2001:db8:1::2 --listening-port=3478 \
     --relay-ip=198.51.100.2 --relay-ip=2001:db8:1::2 \
     --realm=harness.test --use-auth-secret \
@@ -375,7 +379,7 @@ turn_urls = turn:rv4.harness.test:3478?transport=udp turn:rv6.harness.test:3478?
 turn_secret_file = $WORK/turn-secret
 log_level = info
 EOF
-in_ns rvsrv env PYTHONPATH="$SOURCE/rendezvous/server" \
+ip netns exec h-rvsrv env PYTHONPATH="$SOURCE/rendezvous/server" \
     python3 -m nereus_rendezvous --config "$WORK/rendezvous.conf" >"$WORK/rendezvous.log" 2>&1 &
 PIDS+=($!)
 
@@ -394,7 +398,7 @@ cat "$WORK/rv.pem" "$WORK/rv.key" > "$WORK/rv-bundle.pem"
 chmod 600 "$WORK"/*.key "$WORK/rv-bundle.pem"
 for listen in "OPENSSL-LISTEN:443,bind=198.51.100.2,reuseaddr,fork" \
               "OPENSSL-LISTEN:443,bind=[2001:db8:1::2],pf=ip6,reuseaddr,fork"; do
-    in_ns rvsrv socat "$listen,cert=$WORK/rv-bundle.pem,verify=0" TCP:127.0.0.1:8710 \
+    ip netns exec h-rvsrv socat "$listen,cert=$WORK/rv-bundle.pem,verify=0" TCP:127.0.0.1:8710 \
         >>"$WORK/socat.log" 2>&1 &
     PIDS+=($!)
 done
