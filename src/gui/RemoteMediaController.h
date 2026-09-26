@@ -29,6 +29,11 @@
 //               (transmitContextReceived, transmitFrameReceived) instead of
 //               being drawn as receive; drawing them is Task 29. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26: parity Task 29 (A11, R-R3-49): setPanTransmitting holds a
+//               transmitting pan's receive frames while keyed and says when
+//               the Core sends no transmit display; refreshTransmitView asks
+//               again at once for the transmitting pan's moved view. J.J.
+//               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #include "core/session/media/DisplayBudget.h"
 #include "core/session/media/DisplayCodec.h"
@@ -187,6 +192,17 @@ public:
     /// at txDisplayVersion 1 that it takes the transmit display: its
     /// subscribes carry the transmit window and its contexts `transmit`.
     bool txDisplayNegotiated() const;
+    /// Parity Task 29 (A11): the pan shows the transmit display while the
+    /// Core is keyed (MoxDisplayController's rise and fall). While it does,
+    /// the pan's receive frames are decoded but not drawn, so the receiver
+    /// hearing its own transmitter never reaches the trace or the waterfall.
+    /// With `displayMissing` (a Core below txDisplayVersion 1) the pan's
+    /// status line says the Core does not send its transmit display.
+    void setPanTransmitting(const QString& panId, bool transmitting, bool displayMissing);
+    bool isPanTransmitting(const QString& panId) const;
+    /// Parity Task 29: the transmitting pan's view moved while keyed; ask
+    /// the Core again now rather than on the next planner pass.
+    void refreshTransmitView();
     /// R-R3-45: why a receiver routed to the headphones is not heard, for
     /// the slice flags; empty when nothing is wrong on the Core's side or
     /// this computer's headphones device. Plain words, shown as they are.

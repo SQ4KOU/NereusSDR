@@ -28,6 +28,9 @@
 //               (transmitContextReceived, transmitFrameReceived) instead of
 //               being drawn as receive; drawing them is Task 29. J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26: parity Task 29 (A11, R-R3-49): see RemoteMediaController.h
+//               (setPanTransmitting, refreshTransmitView). J.J. Boyd
+//               (KG4VCF), AI-assisted via Anthropic Claude Code.
 
 #include "gui/RemoteMediaController.h"
 #include "core/AppSettings.h"
@@ -701,6 +704,10 @@ struct RemoteMediaController::Private {
     QPointer<PanadapterStack> stack;
     // Parity Task 28: this media start declared txDisplayVersion.
     bool txDisplayNegotiated = false;
+    // Parity Task 29: pans showing the transmit display (receive frames
+    // held), and those whose Core sends none (the status line says so).
+    QSet<QString> transmittingPans;
+    QSet<QString> transmitDisplayMissingPans;
     QPointer<MediaPeer> peer;
     MediaPeer::TransportFactory factory;
     QTimer* timer = nullptr;
@@ -1415,6 +1422,37 @@ bool RemoteMediaController::audioDetailNegotiated() const
 {
     return d->client && d->client->remoteAudioStatusAvailable();
 }
+void RemoteMediaController::setPanTransmitting(const QString& panId, bool transmitting,
+                                               bool displayMissing)
+{
+    if (panId.isEmpty()) { return; }
+    if (transmitting) {
+        d->transmittingPans.insert(panId);
+    } else {
+        d->transmittingPans.remove(panId);
+    }
+    const bool missing = transmitting && displayMissing;
+    const bool wasMissing = d->transmitDisplayMissingPans.contains(panId);
+    if (missing) {
+        d->transmitDisplayMissingPans.insert(panId);
+    } else {
+        d->transmitDisplayMissingPans.remove(panId);
+    }
+    if (missing != wasMissing) {
+        refreshPanGrantStatus(panId);
+    }
+}
+
+bool RemoteMediaController::isPanTransmitting(const QString& panId) const
+{
+    return d->transmittingPans.contains(panId);
+}
+
+void RemoteMediaController::refreshTransmitView()
+{
+    refreshSubscriptions();
+}
+
 bool RemoteMediaController::txDisplayNegotiated() const
 {
     return d->txDisplayNegotiated;
@@ -2779,7 +2817,7 @@ void RemoteMediaController::setPanStatus(const QString& panId, const PanDisplayS
     d->panBaseStatus.insert(panId, status);
     for (PanadapterApplet* applet : d->stack->allApplets()) {
         if (applet && applet->panId() == panId) {
-            applet->setRemoteDisplayStatus(buildPanStatusText(statusWithGrant(panId, status)));
+            applet->setRemoteDisplayStatus(buildPanStatusText(panDisplayState(panId)));
             return;
         }
     }
@@ -2787,7 +2825,10 @@ void RemoteMediaController::setPanStatus(const QString& panId, const PanDisplayS
 
 PanDisplayState RemoteMediaController::panDisplayState(const QString& panId) const
 {
-    return statusWithGrant(panId, d->panBaseStatus.value(panId));
+    PanDisplayState state = statusWithGrant(panId, d->panBaseStatus.value(panId));
+    // Parity Task 29: while keyed on a Core that sends no transmit display.
+    state.transmitDisplayMissing = d->transmitDisplayMissingPans.contains(panId);
+    return state;
 }
 
 void RemoteMediaController::refreshPanGrantStatus(const QString& panId)
@@ -4445,6 +4486,13 @@ void RemoteMediaController::receiveDisplay(const QByteArray& packet)
             emit transmitFrameReceived(panId, decoded.frame);
             if (!self || d->connectionId != connectionId) { return; }
             emit displayFrameReceived(id);
+            return;
+        }
+        if (d->transmittingPans.contains(binding.panId)) {
+            // Parity Task 29 (A11): the pan shows the transmit display; a
+            // receive frame now is the receiver hearing its own
+            // transmitter. Decoded (the next delta needs it), never drawn:
+            // the trace and waterfall hold.
             return;
         }
         const bool rendered = binding.widget->updateRemoteSpectrum(decoded.frame);

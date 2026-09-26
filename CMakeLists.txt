@@ -1487,6 +1487,10 @@ set(GUI_SOURCES
     src/gui/SliceFlagPresentationBinding.cpp
     src/gui/SliceFlagPresentationBinding.h
     src/gui/RemoteMediaController.cpp
+    # Remote-window parity Task 29 (A11, R-R3-49): one MOX display
+    # controller for both windows, and its local and remote sources.
+    src/gui/MoxDisplayController.cpp
+    src/gui/TxDisplaySource.cpp
     # iPhone app plan, desktop remote transmit (R-IOS-13, R-R3-42): the
     # remote window's TCI transmit forwarder.
     src/gui/RemoteTransmitForwarder.cpp

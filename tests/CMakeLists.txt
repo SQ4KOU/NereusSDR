@@ -8233,6 +8233,15 @@ nereus_add_test(tst_daemon_media_controller
 nereus_add_test(tst_remote_tx_display
     fakes/LoopbackTransport.cpp)
 
+# Remote-window parity Task 29 (A11, R-R3-49, R-R3-12, rows 14 and 16): one
+# MOX display controller for a local and a remote window. The local rise and
+# fall make the old MainWindow lambda's calls; a remote window shows the
+# Core's transmit display with the transmit grid, palette, waterfall levels
+# and red border; XIT while keyed, tuning while keyed, high SWR and a layout
+# change while keyed, in both windows.
+nereus_add_test(tst_mox_display_controller
+    fakes/LoopbackTransport.cpp)
+
 # Remote Daemon R2: the GUI's slice controls reach the daemon.
 #
 # Task 11 built the command verbs, task 18 built the session that could
