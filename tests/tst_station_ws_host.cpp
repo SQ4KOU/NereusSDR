@@ -520,10 +520,14 @@ private slots:
         }
         Core core(m_securityDir.path());
         QVERIFY(core.server->listen(QHostAddress::LocalHost, 0));
-        auto client = tlsClient(core.server->serverPort());
-        QVERIFY(client);
+        // The gate starts its deadline when it accepts the TCP connection,
+        // before the TLS handshake; the clock here starts before the client
+        // connects, so a slow handshake under load cannot eat into the
+        // lower bound.
         QElapsedTimer timer;
         timer.start();
+        auto client = tlsClient(core.server->serverPort());
+        QVERIFY(client);
         client->write("GET / HTTP/1.1\r\nHost: ::1\r\n"); // never finished
         QTRY_COMPARE_WITH_TIMEOUT(core.server->openingCount(), 1, 1000);
         QTRY_VERIFY_WITH_TIMEOUT(client->state() != QAbstractSocket::ConnectedState,
