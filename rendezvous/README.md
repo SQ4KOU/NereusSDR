@@ -94,6 +94,42 @@ ufw enable
 both IPv4 and IPv6.) Nothing else needs to be reachable: the service listens
 on loopback only. `setup-server.sh` never changes the firewall.
 
+### fail2ban for SSH
+
+fail2ban for SSH is recommended on the server. It is optional: `setup-server.sh`
+does not install it.
+
+```sh
+apt install fail2ban
+```
+
+Ubuntu's package enables the `sshd` jail with the systemd backend on install.
+
+**The Ubuntu 24.04 trap:** sshd runs as `ssh.service`, but fail2ban 1.0.2's
+`sshd` filter matches `_SYSTEMD_UNIT=sshd.service`, so the stock jail never
+sees a failed login. The fix, observed on the live server on 2026-09-26:
+create `/etc/fail2ban/jail.d/nereus-sshd.local` with exactly
+
+```
+# Ubuntu 24.04 runs sshd as ssh.service; the stock filter matches sshd.service and would see nothing.
+[sshd]
+enabled = true
+journalmatch = _SYSTEMD_UNIT=ssh.service + _COMM=sshd
+```
+
+then `fail2ban-client reload`, and check with `fail2ban-client get sshd
+journalmatch` and `fail2ban-client status sshd` (a failed login from another
+machine shows as "Currently failed: 1"). Defaults are 5 failures, a 10 minute
+ban. With password login off (key only), this mostly quiets the log and
+slows scanners.
+
+Do not point fail2ban at the rendezvous service or coturn. Cellular carriers
+put many phones behind one shared IPv4 address, so a ban would cut off every
+user on it; the service's log leaves out addresses on purpose, so there is
+nothing to match; and the misuse that matters there (too many connections,
+introductions or relay slots) is already limited by the service and coturn
+per network, which "Limits" below describes.
+
 ### 3. Copy the files to the server
 
 From a checkout of NereusSDR on your own computer:
