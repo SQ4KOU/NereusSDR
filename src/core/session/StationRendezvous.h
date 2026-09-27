@@ -15,8 +15,18 @@
 //     it registered.
 //   - Introductions: only a paired device (StationServer::deviceStore())
 //     whose signature verifies is reported (RendezvousClient::introduced);
-//     every other is dropped without a reply and counted. Answering one
-//     with a connection is the control session's (plan Task 28).
+//     every other is dropped without a reply and counted.
+//   - Plan Task 28: each reported introduction is answered with a control
+//     connection (DataChannelTransport, the Core's own certificate in
+//     DTLS): the STUN server chosen by this computer's address families
+//     once the hello's names are resolved (an introduction that arrives
+//     during the lookup waits for it), the relay host chosen the same way
+//     once the credentials arrive (or no relay, when they have not come
+//     within kCredentialsTimeoutMs of the answer), candidates both ways
+//     through the service. When the channel opens it becomes one of
+//     StationServer's connections (acceptTransport()), exactly like a
+//     WebSocket's, and the introduction is retired at once; one that fails
+//     or has not opened within kAnswerDeadlineMs is retired and dropped.
 //   - Holds a nameplate while the pairing window is open, gives it back
 //     when it closes (after the mailbox of the pairing that closed it has
 //     closed, since releasing a nameplate ends its mailbox), and hands the
@@ -34,16 +44,32 @@
 //   2026-09-26: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: iPhone app plan Task 28 (R-IOS-16): introductions answered
+//               with a control connection. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: Task 28 fix wave: connections handed over as introduced
+//               (review Important 1 and 2), an unopened answer freed when
+//               the device leaves, answers owned by std::unique_ptr (Minors
+//               1 and 4). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
+#include "core/session/IceConfiguration.h"
+#include "core/session/RendezvousClient.h"
+
+#include <QByteArray>
+#include <QHash>
 #include <QList>
 #include <QObject>
 #include <QPointer>
 #include <QUrl>
 
+#include <memory>
+#include <unordered_map>
+
 namespace NereusSDR {
 
-class RendezvousClient;
+class DataChannelTransport;
 class StationServer;
 
 class StationRendezvous : public QObject {
@@ -66,8 +92,39 @@ public:
 
     RendezvousClient* client() const { return m_client; }
 
+    /// How long the Core waits for the relay credentials after answering
+    /// with the relay allowed before it gathers without them. NereusSDR's
+    /// own bound: the service sends them straight after the answer (the
+    /// rendezvous document, section 6.3), so a few seconds is plenty and
+    /// costs the connection little of its time.
+    static constexpr int kCredentialsTimeoutMs = 5000;
+    /// How long an answered introduction may take to open its control
+    /// connection: credentials, gathering and the connectivity checks
+    /// (IceConfiguration::kConnectDeadlineMs), plus the two lookups
+    /// (IceConfiguration::kHostLookupTimeoutMs). Then it is retired and
+    /// its connection dropped.
+    static constexpr int kAnswerDeadlineMs = kCredentialsTimeoutMs
+        + 2 * IceConfiguration::kHostLookupTimeoutMs + IceConfiguration::kConnectDeadlineMs;
+
+    /// Test seam: while false, introductions are reported and nothing
+    /// answers them here (a test that answers them itself). Default true.
+    void setAnswersIntroductionsForTest(bool answers) { m_answersIntroductions = answers; }
+
+    /// Test seams: the two bounds above.
+    void setCredentialsTimeoutMs(int ms) { m_credentialsTimeoutMs = ms; }
+    void setAnswerDeadlineMs(int ms) { m_answerDeadlineMs = ms; }
+
+    /// Answered introductions whose connection has not opened yet.
+    int pendingAnswers() const { return static_cast<int>(m_answers.size()); }
+
 private:
+    struct Answer;
+
     void followPairingWindow();
+    void answerIntroduction(const RendezvousIntroduction& introduction);
+    void finishAnswer(const QByteArray& id, bool opened);
+    /// The answer for `id`, or null.
+    Answer* answerFor(const QByteArray& id) const;
 
     QPointer<StationServer> m_server;
     RendezvousClient* m_client = nullptr;
@@ -76,6 +133,18 @@ private:
     /// once that mailbox has closed, so the Core's last pairing message is
     /// not cut off by the release.
     bool m_releaseAfterMailbox = false;
+
+    // Task 28.
+    /// The STUN names of the current connection's hello, resolved: until
+    /// then introductions wait in m_waiting.
+    quint64 m_lookup = 0;
+    bool m_stunResolved = false;
+    HostFamilies m_stunFamilies;
+    QList<RendezvousIntroduction> m_waiting;
+    std::unordered_map<QByteArray, std::unique_ptr<Answer>> m_answers;
+    int m_credentialsTimeoutMs = kCredentialsTimeoutMs;
+    int m_answerDeadlineMs = kAnswerDeadlineMs;
+    bool m_answersIntroductions = true;
 };
 
 } // namespace NereusSDR

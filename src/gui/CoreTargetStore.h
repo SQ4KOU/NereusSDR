@@ -58,6 +58,12 @@ public:
     /// last good addresses (at most RemoteStationOptions::
     /// kMaxCachedAddresses), which the next connect tries first.
     bool rememberAddress(const QString& id, const QString& url, QString* error = nullptr);
+    /// iPhone app plan Task 28 fix wave (R-IOS-16): the controlChannelVersion
+    /// the saved Core `id` sent at this computer's sign-in (0 for no
+    /// entry), which decides whether connecting from anywhere is offered
+    /// (RemoteStationOptions::serviceConnectRefusal()).
+    bool rememberControlChannelVersion(const QString& id, int version,
+                                       QString* error = nullptr);
     bool select(const QString& id, QString* error = nullptr);
 
     static QString createId();

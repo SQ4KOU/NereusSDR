@@ -61,6 +61,10 @@
 //                                    transmit display's NSDC vector
 //                                    (nsdc1-transmit). AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 28 (R-IOS-16): runFraming(),
+//               setSettleCheck() and setConnectClient(). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -73,6 +77,8 @@
 #include <QJsonArray>
 
 #include <QVector>
+
+#include <functional>
 
 #include "core/session/media/DisplayCodec.h"
 #include "core/session/media/DisplayExtras.h"
@@ -112,7 +118,8 @@ public:
     /// each one LinkVersion::supportedMajors() holds), every entry's fields,
     /// unique ids, a known kind, an existing file (a media entry names its
     /// .bin and needs the .expect.json beside it), and every file under
-    /// control/, sessions/ and media/ listed exactly once. Empty on pass.
+    /// control/, sessions/, media/ and framing/ listed exactly once. Empty
+    /// on pass.
     static QString checkManifest(const QJsonObject& manifest, const QString& directory);
 
     /// The manifest's linkMajors. Every runner runs its fixtures once per
@@ -179,6 +186,26 @@ public:
     /// arrival order. "$ref:token" in a client message is the station's
     /// token, read at run time; no fixture holds one.
     /// Returns an empty string on pass, else the failing step and why.
+    /// iPhone app plan Task 28: one framing fixture (the link document,
+    /// section 16.1, framing/): the message built from its pieces, its
+    /// frames, and, when `encodes`, that ControlFraming::chunk() makes
+    /// exactly those frames; then the frames fed to a receiver with the
+    /// named end's inbound cap, which must deliver the message once and
+    /// answer with `replies`, or end the connection having delivered
+    /// nothing. Empty on pass.
+    static QString runFraming(const QJsonObject& fixture);
+
+    /// iPhone app plan Task 28: set by the session runner's data-channel
+    /// mode. drain() and every wait for the station also wait, in real
+    /// time, until this returns true (both ends of the control channel have
+    /// handled everything the other sent). Unset: no wait.
+    static void setSettleCheck(std::function<bool()> settled);
+    /// Also for the data-channel mode: how a client the player adds
+    /// (stationSetup.otherClients' {"connect"} step) is joined to the
+    /// station. Unset: a LoopbackTransport pair, as always.
+    static void setConnectClient(
+        std::function<void(LoopbackTransport* client, NereusSDR::StationServer& server)> connect);
+
     static QString runSession(const QJsonObject& fixture, NereusSDR::StationServer& server,
                               LoopbackTransport& transport);
 };

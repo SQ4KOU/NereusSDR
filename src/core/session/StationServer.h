@@ -396,7 +396,13 @@
 //   2026-09-26: D79 (R-IOS-11, R-R3-49): bandPlanRefusal() and
 //               applyBandPlanSetting(). J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 28 (R-IOS-16): certificatePemPath()
+//               and privateKeyPemPath(), for the control connection through
+//               the remote access service. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
+
+#include "core/session/IceConfiguration.h"
 
 #include <QHash>
 #include <QHostAddress>
@@ -660,6 +666,13 @@ public:
     /// is generated any more). And the TLS fingerprint a client pins.
     QString token() const;
     QString certificateFingerprint() const;
+    /// iPhone app plan Task 28 (R-IOS-16): the PEM files of the Core's own
+    /// TLS certificate and its key, what a control connection through the
+    /// remote access service presents in DTLS (DataChannelTransport), so a
+    /// device sees there the certificate the hello binds. Empty when the
+    /// certificate is not usable.
+    QString certificatePemPath() const;
+    QString privateKeyPemPath() const;
 
     /// iPhone app Task 12 (R-IOS-08): the Core's paired devices and its
     /// identity key. Never null / always present; the identity may be
@@ -709,6 +722,19 @@ public:
     /// expected, and any other kind ends it as a protocol error. It has no
     /// address, so one tap is refused and only the code pairs.
     void acceptPairingMailbox(SessionTransport* transport);
+    /// iPhone app plan Task 28 fix wave (R-IOS-16; review Important 1 and
+    /// 2): adopts a control connection the remote access service
+    /// introduced (StationRendezvous, a DataChannelTransport once open).
+    /// The session is the same as a direct one's, with three differences
+    /// the link document's section 20 states: pair.* is refused (pairing
+    /// through the service stays the mailbox's, with the code), a token
+    /// auth.request is refused (the device's key only), and every such
+    /// connection still connecting counts as one source against
+    /// kMaxHandshakesPerAddress, whatever address it reports, because the
+    /// service can replay an introduction (the rendezvous document's
+    /// "not device authentication"). `introductionId` is the service's id
+    /// for it, handed to the sign-in limits.
+    void acceptIntroducedTransport(SessionTransport* transport, const QString& introductionId);
 
     /// Parent design section 4.5's EFFECTIVE slice limit: what this daemon
     /// can sustain, which on the Pi 4 floor may be fewer than the radio
@@ -821,6 +847,13 @@ public:
     /// the primary media session: the earliest admitted of those live.
     bool mediaAvailable() const;
     bool mediaAvailable(quint64 epoch) const;
+    /// iPhone app plan Task 28 (R-IOS-16): the ICE settings of the session
+    /// `epoch`'s media when the session came through the remote access
+    /// service (a DataChannelTransport): the control connection's STUN
+    /// server, and its relay only when the control connection's path is
+    /// relayed (DataChannelTransport::mediaIceConfiguration(), the safety
+    /// review's Important 4). None for a WebSocket session.
+    std::optional<IceConfiguration> sessionIceConfiguration(quint64 epoch) const;
     bool remoteWidebandAvailable() const;
     bool remoteWidebandAvailable(quint64 epoch) const;
     /// The session agreed minor 8 or later: audio contexts carry the encoder
@@ -998,6 +1031,12 @@ public:
     // 11 and was told it, so its media start may declare it.
     int txDisplayVersion() const;
     bool txDisplayAvailable(quint64 epoch) const;
+    // R-IOS-16 (iPhone app plan Task 28 fix wave, the safety review's
+    // Important 5): controlChannelVersion. 1 when the Core has a bound
+    // certificate, so it can answer an introduction through the remote
+    // access service with the control session over a data channel (link
+    // section 20); 0 otherwise.
+    int controlChannelVersion() const;
     /// Parity Task 21: the Core's radios (nereusd's DaemonApp owns it).
     void setStationRadios(StationRadios* radios);
     /// For a test: the stream by name (spots, spotConsole:<source>), or
@@ -1188,6 +1227,15 @@ private:
         /// iPhone app plan Task 27: a pairing through the rendezvous's
         /// mailbox (acceptPairingMailbox()), which carries pair.* only.
         bool mailboxPairing = false;
+        /// iPhone app plan Task 28 fix wave (review Important 1 and 2): a
+        /// control connection the remote access service introduced
+        /// (acceptIntroducedTransport()). It never pairs and signs in by
+        /// device key only; while it is still connecting it counts against
+        /// the one source every introduced connection shares.
+        bool introduced = false;
+        /// The service's id for that introduction (DeviceAuthRequest's
+        /// `introduction`, which the sign-in limits key on).
+        QString introductionId;
         bool authenticated = false;
         quint16 agreedMinor = 0;
         /// iPhone app Task 4: the major the peer's hello chose (0 until
@@ -1306,9 +1354,11 @@ private:
     SessionMessage withPairingCodeFor(SessionTransport* transport,
                                       const SessionMessage& message) const;
 
-    /// acceptTransport() and acceptPairingMailbox(): `mailbox` skips the
-    /// hello and admits pair.* only.
-    void adoptTransport(SessionTransport* transport, bool mailbox);
+    /// acceptTransport(), acceptPairingMailbox() and
+    /// acceptIntroducedTransport(): `mailbox` skips the hello and admits
+    /// pair.* only; `introduced` marks a connection the service introduced.
+    void adoptTransport(SessionTransport* transport, bool mailbox,
+                        bool introduced = false, const QString& introductionId = QString());
     /// iPhone app Task 71: after an accepted sign-in, asks the registry
     /// who is let in (ruling 4.4) and ends the device's own older
     /// connection (sameDevice), admits, or turns a full Core's newcomer

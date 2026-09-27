@@ -56,6 +56,10 @@
 //                                    transmit display's NSDC vector
 //                                    (nsdc1-transmit). AI-assisted via
 //                                    Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 28 (R-IOS-16): framing fixtures
+//               (runFraming) and the session player's data-channel mode
+//               (setSettleCheck, setConnectClient). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "LinkFixtures.h"
@@ -95,6 +99,8 @@
 #include "models/RadioModel.h"
 #include "core/session/DnsSdAdvertiser.h"
 #include "core/session/DeviceSessionRegistry.h"
+#include "core/session/DataChannelTransport.h"
+#include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
 #include "fakes/LoopbackTransport.h"
 
@@ -299,9 +305,24 @@ QString expectKeys(const QJsonObject& object, const QStringList& required,
     return QString();
 }
 
-// Runs the queued work of every object on this thread until the queue is
-// idle, including deleteLater(). No real time passes on purpose.
-void drain()
+// Task 28: the data-channel mode's settle check and client joiner.
+std::function<bool()>& settleCheck()
+{
+    static std::function<bool()> check;
+    return check;
+}
+
+std::function<void(LoopbackTransport*, StationServer&)>& connectClientHook()
+{
+    static std::function<void(LoopbackTransport*, StationServer&)> hook;
+    return hook;
+}
+
+// How long drain() waits, in real time, for the control channel to settle
+// in the data-channel mode. A passing fixture settles in milliseconds.
+constexpr int kSettleWaitMs = 5000;
+
+void drainQueue()
 {
     QAbstractEventDispatcher* dispatcher = QAbstractEventDispatcher::instance();
     int idle = 0;
@@ -312,6 +333,31 @@ void drain()
         idle = worked ? 0 : idle + 1;
     }
     QCoreApplication::sendPostedEvents(nullptr, QEvent::DeferredDelete);
+}
+
+// Runs the queued work of every object on this thread until the queue is
+// idle, including deleteLater(). No real time passes on purpose, except in
+// the data-channel mode, where it also waits until the control channel has
+// carried everything either end sent (work on the library's threads).
+void drain()
+{
+    drainQueue();
+    if (!settleCheck()) {
+        return;
+    }
+    const QDeadlineTimer deadline(kSettleWaitMs);
+    // Settled twice in a row with the queue drained between: nothing
+    // handled in between sent anything more.
+    int settled = 0;
+    while (settled < 2 && !deadline.hasExpired()) {
+        if (settleCheck()()) {
+            ++settled;
+        } else {
+            settled = 0;
+            QCoreApplication::processEvents(QEventLoop::AllEvents, 5);
+        }
+        drainQueue();
+    }
 }
 
 // A virtual clock over every QTimer the station server owns (its heartbeat
@@ -508,6 +554,7 @@ QString LinkFixtures::checkManifest(const QJsonObject& manifest, const QString& 
         const QString folder = kind == QStringLiteral("control")   ? QStringLiteral("control/")
                                : kind == QStringLiteral("session") ? QStringLiteral("sessions/")
                                : kind == QStringLiteral("media")   ? QStringLiteral("media/")
+                               : kind == QStringLiteral("framing") ? QStringLiteral("framing/")
                                                                    : QString();
         if (folder.isEmpty()) {
             return QStringLiteral("%1: unknown kind \"%2\"").arg(where, kind);
@@ -532,7 +579,7 @@ QString LinkFixtures::checkManifest(const QJsonObject& manifest, const QString& 
         }
     }
     for (const QString& folder : {QStringLiteral("control"), QStringLiteral("sessions"),
-                                  QStringLiteral("media")}) {
+                                  QStringLiteral("media"), QStringLiteral("framing")}) {
         QDirIterator it(root.filePath(folder), QDir::Files);
         while (it.hasNext()) {
             const QString relative = root.relativeFilePath(it.next());
@@ -1157,6 +1204,244 @@ struct PlayedClient {
 
 } // namespace
 
+void LinkFixtures::setSettleCheck(std::function<bool()> settled)
+{
+    settleCheck() = std::move(settled);
+}
+
+void LinkFixtures::setConnectClient(
+    std::function<void(LoopbackTransport* client, StationServer& server)> connect)
+{
+    connectClientHook() = std::move(connect);
+}
+
+namespace {
+
+// The most bytes a framing fixture's message may hold: the desktop's cap
+// and one more, for the fixture that passes it.
+constexpr qint64 kMaxFramingMessageBytes =
+    static_cast<qint64>(StationClient::kMaxIncomingMessageBytes) + 1;
+
+// A framing fixture's message: its pieces joined.
+QString framingMessage(const QJsonArray& pieces, QByteArray* message)
+{
+    message->clear();
+    if (pieces.isEmpty()) {
+        return QStringLiteral("message: no pieces");
+    }
+    for (int i = 0; i < pieces.size(); ++i) {
+        const QString where = QStringLiteral("message[%1]").arg(i);
+        if (!pieces.at(i).isObject()) {
+            return where + QStringLiteral(": not an object");
+        }
+        const QJsonObject piece = pieces.at(i).toObject();
+        QByteArray bytes;
+        qint64 times = 1;
+        if (piece.contains(QStringLiteral("text"))) {
+            const QString problem = expectKeys(piece, {QStringLiteral("text")}, {}, where);
+            if (!problem.isEmpty()) {
+                return problem;
+            }
+            bytes = piece.value(QStringLiteral("text")).toString().toUtf8();
+        } else {
+            const QString problem = expectKeys(
+                piece, {QStringLiteral("repeat"), QStringLiteral("times")}, {}, where);
+            if (!problem.isEmpty()) {
+                return problem;
+            }
+            bytes = piece.value(QStringLiteral("repeat")).toString().toUtf8();
+            const double value = piece.value(QStringLiteral("times")).toDouble(-1.0);
+            if (value < 1.0 || value != static_cast<double>(static_cast<qint64>(value))) {
+                return where + QStringLiteral(": times must be a whole number of at least 1");
+            }
+            times = static_cast<qint64>(value);
+        }
+        if (bytes.isEmpty()) {
+            return where + QStringLiteral(": an empty piece");
+        }
+        if (message->size() + bytes.size() * times > kMaxFramingMessageBytes) {
+            return where + QStringLiteral(": the message is longer than a fixture may hold");
+        }
+        for (qint64 n = 0; n < times; ++n) {
+            message->append(bytes);
+        }
+    }
+    return QString();
+}
+
+// A framing fixture's frames, over its message.
+QString framingFrames(const QJsonArray& frames, const QByteArray& message, QList<QByteArray>* out,
+                      bool* allChunks)
+{
+    out->clear();
+    *allChunks = true;
+    if (frames.isEmpty()) {
+        return QStringLiteral("frames: none");
+    }
+    for (int i = 0; i < frames.size(); ++i) {
+        const QString where = QStringLiteral("frames[%1]").arg(i);
+        if (!frames.at(i).isObject()) {
+            return where + QStringLiteral(": not an object");
+        }
+        const QJsonObject frame = frames.at(i).toObject();
+        if (frame.contains(QStringLiteral("hex"))) {
+            const QString problem = expectKeys(frame, {QStringLiteral("hex")}, {}, where);
+            if (!problem.isEmpty()) {
+                return problem;
+            }
+            const QString hex = frame.value(QStringLiteral("hex")).toString();
+            static const QRegularExpression lowerHex(QStringLiteral("^([0-9a-f]{2})*$"));
+            if (!frame.value(QStringLiteral("hex")).isString() || !lowerHex.match(hex).hasMatch()) {
+                return where + QStringLiteral(": hex must be pairs of lower-case hex digits");
+            }
+            out->append(QByteArray::fromHex(hex.toLatin1()));
+            *allChunks = false;
+            continue;
+        }
+        const QString problem = expectKeys(
+            frame, {QStringLiteral("chunk"), QStringLiteral("from"), QStringLiteral("length")}, {},
+            where);
+        if (!problem.isEmpty()) {
+            return problem;
+        }
+        const QString chunk = frame.value(QStringLiteral("chunk")).toString();
+        if (chunk != QStringLiteral("more") && chunk != QStringLiteral("last")) {
+            return where + QStringLiteral(": chunk must be \"more\" or \"last\"");
+        }
+        const double from = frame.value(QStringLiteral("from")).toDouble(-1.0);
+        const double length = frame.value(QStringLiteral("length")).toDouble(-1.0);
+        if (from < 0.0 || length < 0.0 || from != static_cast<double>(static_cast<qint64>(from))
+            || length != static_cast<double>(static_cast<qint64>(length))
+            || from + length > static_cast<double>(message.size())) {
+            return where + QStringLiteral(": from and length must be whole numbers within the "
+                                          "message");
+        }
+        QByteArray bytes(1, static_cast<char>(chunk == QStringLiteral("more")
+                                                  ? ControlFraming::kChunkMore
+                                                  : ControlFraming::kChunkLast));
+        bytes.append(message.mid(static_cast<qsizetype>(from), static_cast<qsizetype>(length)));
+        out->append(bytes);
+    }
+    return QString();
+}
+
+} // namespace
+
+QString LinkFixtures::runFraming(const QJsonObject& fixture)
+{
+    QString problem = expectKeys(fixture,
+                                 {QStringLiteral("receiver"), QStringLiteral("message"),
+                                  QStringLiteral("frames"), QStringLiteral("encodes"),
+                                  QStringLiteral("outcome"), QStringLiteral("replies")},
+                                 {}, QStringLiteral("framing fixture"));
+    if (!problem.isEmpty()) {
+        return problem;
+    }
+    const QString receiver = fixture.value(QStringLiteral("receiver")).toString();
+    if (receiver != QStringLiteral("station") && receiver != QStringLiteral("client")) {
+        return QStringLiteral("receiver must be \"station\" or \"client\"");
+    }
+    const QString outcome = fixture.value(QStringLiteral("outcome")).toString();
+    if (outcome != QStringLiteral("delivered") && outcome != QStringLiteral("refused")) {
+        return QStringLiteral("outcome must be \"delivered\" or \"refused\"");
+    }
+    if (!fixture.value(QStringLiteral("encodes")).isBool()) {
+        return QStringLiteral("encodes must be true or false");
+    }
+    QByteArray message;
+    problem = framingMessage(fixture.value(QStringLiteral("message")).toArray(), &message);
+    if (!problem.isEmpty()) {
+        return problem;
+    }
+    QList<QByteArray> frames;
+    bool allChunks = true;
+    problem = framingFrames(fixture.value(QStringLiteral("frames")).toArray(), message, &frames,
+                            &allChunks);
+    if (!problem.isEmpty()) {
+        return problem;
+    }
+    QList<QByteArray> replies;
+    for (const QJsonValue& value : fixture.value(QStringLiteral("replies")).toArray()) {
+        replies.append(QByteArray::fromHex(value.toString().toLatin1()));
+    }
+
+    // The sender: the fixture's frames are exactly what cutting the message
+    // makes.
+    if (fixture.value(QStringLiteral("encodes")).toBool()) {
+        if (!allChunks) {
+            return QStringLiteral("a fixture that encodes holds chunks only");
+        }
+        const QList<QByteArray> made = ControlFraming::chunk(message);
+        if (made.size() != frames.size()) {
+            return QStringLiteral("sender: %1 chunks, the fixture has %2")
+                .arg(made.size())
+                .arg(frames.size());
+        }
+        for (int i = 0; i < made.size(); ++i) {
+            if (made.at(i) != frames.at(i)) {
+                return QStringLiteral("sender: chunk %1 differs (%2 bytes, the fixture's %3)")
+                    .arg(i)
+                    .arg(made.at(i).size())
+                    .arg(frames.at(i).size());
+            }
+        }
+    }
+
+    // The receiver.
+    ControlFraming::Reassembler joiner(receiver == QStringLiteral("station")
+                                           ? StationServer::kMaxIncomingMessageBytes
+                                           : StationClient::kMaxIncomingMessageBytes);
+    QList<QByteArray> delivered;
+    QList<QByteArray> answered;
+    bool refused = false;
+    int refusedAt = -1;
+    for (int i = 0; i < frames.size() && !refused; ++i) {
+        switch (joiner.feed(frames.at(i))) {
+        case ControlFraming::Reassembler::Result::Pending:
+        case ControlFraming::Reassembler::Result::Pong:
+            break;
+        case ControlFraming::Reassembler::Result::Message:
+            delivered.append(joiner.message());
+            break;
+        case ControlFraming::Reassembler::Result::Ping:
+            answered.append(ControlFraming::pong(joiner.id()));
+            break;
+        case ControlFraming::Reassembler::Result::Refused:
+            refused = true;
+            refusedAt = i;
+            break;
+        }
+    }
+    if (answered != replies) {
+        return QStringLiteral("receiver: answered %1 pings, the fixture expects %2 replies (or "
+                              "they differ)")
+            .arg(answered.size())
+            .arg(replies.size());
+    }
+    if (outcome == QStringLiteral("refused")) {
+        if (!refused) {
+            return QStringLiteral("receiver: the connection was not ended");
+        }
+        if (!delivered.isEmpty()) {
+            return QStringLiteral("receiver: delivered a message before ending the connection");
+        }
+        return QString();
+    }
+    if (refused) {
+        return QStringLiteral("receiver: ended the connection at frame %1 (%2)")
+            .arg(refusedAt)
+            .arg(joiner.reason());
+    }
+    if (delivered.size() != 1 || delivered.first() != message) {
+        return QStringLiteral("receiver: delivered %1 messages, not the fixture's one")
+            .arg(delivered.size());
+    }
+    if (joiner.pendingBytes() != 0) {
+        return QStringLiteral("receiver: bytes left over after the last chunk");
+    }
+    return QString();
+}
+
 QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& server,
                                  LoopbackTransport& transport)
 {
@@ -1451,10 +1736,15 @@ QString LinkFixtures::runSession(const QJsonObject& fixture, StationServer& serv
             client->owned = std::make_unique<LoopbackTransport>(
                 QStringLiteral("conformance-%1-client").arg(client->name));
             client->transport = client->owned.get();
-            auto* stationEnd =
-                new LoopbackTransport(QStringLiteral("conformance-%1").arg(client->name), &server);
-            stationEnd->linkTo(client->transport);
-            server.acceptTransport(stationEnd);
+            if (connectClientHook()) {
+                // Task 28: over a control channel of its own.
+                connectClientHook()(client->transport, server);
+            } else {
+                auto* stationEnd = new LoopbackTransport(
+                    QStringLiteral("conformance-%1").arg(client->name), &server);
+                stationEnd->linkTo(client->transport);
+                server.acceptTransport(stationEnd);
+            }
             waitForMessage(*client);
             const QJsonObject hello =
                 QJsonDocument::fromJson(client->transport->received().value(0)).object();

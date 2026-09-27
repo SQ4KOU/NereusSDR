@@ -206,6 +206,26 @@ struct Core {
         return app;
     }
 
+    // A connection the remote access service introduced, as
+    // StationRendezvous hands one over once its channel is open, reporting
+    // `address` (empty when relayed).
+    LoopbackTransport* openIntroduced(const QString& introductionId,
+                                      const QString& address = QString(), bool waitForHello = true)
+    {
+        auto* app = new LoopbackTransport(QStringLiteral("app"));
+        auto* station = new LoopbackTransport(QStringLiteral("introduced"));
+        station->setPeerAddress(address);
+        station->linkTo(app);
+        clients.append(app);
+        server->acceptIntroducedTransport(station, introductionId);
+        if (waitForHello) {
+            const bool greeted =
+                QTest::qWaitFor([app]() { return !app->received().isEmpty(); }, 5000);
+            Q_UNUSED(greeted);
+        }
+        return app;
+    }
+
     static QByteArray challengeOf(LoopbackTransport* app)
     {
         const QJsonObject hello = firstOfType(app->received(), QStringLiteral("hello"));
@@ -558,6 +578,116 @@ private slots:
         Device stranger;
         verifyRefusal(core.deviceSignIn(stranger), kDeviceLimited, QString(), /*retryable=*/true);
         verifyAdmitted(core.tokenSignIn(core.server->token()));
+    }
+
+    // ── Through the remote access service (Task 28 fix wave) ─────────────
+
+    // Review Important 1: a connection the service introduced signs in by
+    // a paired device's own key only (the link document, section 20).
+    void aConnectionThroughTheServiceRefusesTheToken()
+    {
+        Core core(true);
+        const QString token = core.server->token();
+        const QString reason = QStringLiteral(
+            "Through the remote access service, a device signs in with its own key. Pair this "
+            "device with the Core first.");
+        verifyRefusal(Core::signIn(core.openIntroduced(QStringLiteral("intro-1")),
+                                   SessionMessages::authRequest(token)),
+                      reason, QStringLiteral("protocolError"));
+        // Nor may a token enrol a key there.
+        Device window;
+        LoopbackTransport* app = core.openIntroduced(QStringLiteral("intro-2"), QStringLiteral("192.0.2.9"));
+        verifyRefusal(Core::signIn(app, SessionMessages::authRequest(
+                                            token, window.block(Core::challengeOf(app),
+                                                                core.certSha256(),
+                                                                core.stationSpki()))),
+                      reason, QStringLiteral("protocolError"));
+        QVERIFY(core.server->deviceStore()->list().isEmpty());
+        // The same token on a direct connection still signs in.
+        verifyAdmitted(core.tokenSignIn(token));
+    }
+
+    void aPairedDeviceSignsInThroughTheService()
+    {
+        Core core(false);
+        Device phone;
+        QVERIFY(core.server->deviceStore()->add(phone.record()));
+        LoopbackTransport* app = core.openIntroduced(QStringLiteral("intro-1"));
+        verifyAdmitted(Core::signIn(
+            app, SessionMessages::authRequest(
+                     QString(), phone.block(Core::challengeOf(app), core.certSha256(),
+                                            core.stationSpki()))));
+        QTRY_VERIFY(core.server->hasAuthenticatedSession());
+    }
+
+    // Review Important 2: every connection the service introduced that is
+    // still connecting is one source, capped as one address is, whatever
+    // address each reports; home-network devices still get in.
+    void theServiceHoldsNoMoreConnectingPlacesThanOneAddress()
+    {
+        Core core(false);
+        Device phone;
+        QVERIFY(core.server->deviceStore()->add(phone.record()));
+        QList<LoopbackTransport*> held;
+        for (int i = 0; i < StationServer::kMaxHandshakesPerAddress; ++i) {
+            held.append(core.openIntroduced(QStringLiteral("replayed-%1").arg(i),
+                                            i == 0 ? QString() : QStringLiteral("198.51.100.%1").arg(i)));
+            QVERIFY(held.last()->isOpen());
+        }
+        // The service replays more: each is turned away at once, retryably.
+        for (int i = 0; i < 6; ++i) {
+            LoopbackTransport* refused = core.openIntroduced(
+                QStringLiteral("replayed-more-%1").arg(i),
+                i % 2 == 0 ? QString() : QStringLiteral("203.0.113.%1").arg(i), false);
+            QTRY_VERIFY(!refused->isOpen());
+            const QJsonObject end = firstOfType(refused->received(), QStringLiteral("session.end"));
+            QCOMPARE(end.value(QStringLiteral("retryable")).toBool(false), true);
+            QCOMPARE(end.value(QStringLiteral("reason")).toString(),
+                     QStringLiteral("The Core already has as many connections as it allows. Try "
+                                    "again shortly."));
+        }
+        // The held ones are still there, and a device on the home network
+        // signs in beside them.
+        for (LoopbackTransport* app : std::as_const(held)) {
+            QVERIFY(app->isOpen());
+        }
+        verifyAdmitted(core.deviceSignIn(phone, QStringLiteral("192.168.1.20")));
+        // Once one of the service's connections signs in, it no longer
+        // holds a connecting place, and the next introduction is let in.
+        LoopbackTransport* first = held.first();
+        verifyAdmitted(Core::signIn(
+            first, SessionMessages::authRequest(
+                       QString(), phone.block(Core::challengeOf(first), core.certSha256(),
+                                              core.stationSpki()))));
+        QTRY_VERIFY(first->receivedKinds().contains(QByteArrayLiteral("snapshot.complete")));
+        LoopbackTransport* next = core.openIntroduced(QStringLiteral("after"));
+        QVERIFY(next->isOpen());
+        QVERIFY(firstOfType(next->received(), QStringLiteral("session.end")).isEmpty());
+    }
+
+    // Review Important 2: the sign-in limits key on the introduction, so
+    // failures through one introduction refuse that introduction, and
+    // another is not refused for them.
+    void failuresThroughOneIntroductionLimitThatIntroduction()
+    {
+        Core core(false);
+        Device phone;
+        QVERIFY(core.server->deviceStore()->add(phone.record()));
+        const auto signInThrough = [&core](const Device& device, const QString& introduction) {
+            LoopbackTransport* app = core.openIntroduced(introduction);
+            return Core::signIn(app, SessionMessages::authRequest(
+                                         QString(), device.block(Core::challengeOf(app),
+                                                                 core.certSha256(),
+                                                                 core.stationSpki())));
+        };
+        for (int i = 0; i < DeviceAuthenticator::kMaxFailures; ++i) {
+            Device stranger;
+            verifyRefusal(signInThrough(stranger, QStringLiteral("introduction-a")), kNotPaired,
+                          QStringLiteral("deviceNotPaired"));
+        }
+        verifyRefusal(signInThrough(phone, QStringLiteral("introduction-a")), kDeviceLimited,
+                      QString(), /*retryable=*/true);
+        verifyAdmitted(signInThrough(phone, QStringLiteral("introduction-b")));
     }
 
     // ── On the link: the admit path ──────────────────────────────────────

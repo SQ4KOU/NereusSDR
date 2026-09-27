@@ -942,17 +942,19 @@ private slots:
         // dspInfoVersion.
         // Then parity Task 19's recordStreamVersion.
         // Then parity Task 21's stationRadiosVersion.
-        // Then parity Task 28's txDisplayVersion, then R-R3-21's displayClockVersion.
-        QCOMPARE(updates.at(updates.size() - 10).name, QByteArray("stationCatalogVersion"));
-        QCOMPARE(updates.at(updates.size() - 9).name, QByteArray("displayExtrasVersion"));
-        QCOMPARE(updates.at(updates.size() - 8).name, QByteArray("transmitSettingsVersion"));
-        QCOMPARE(updates.at(updates.size() - 7).name, QByteArray("bandSelectVersion"));
-        QCOMPARE(updates.at(updates.size() - 6).name, QByteArray("meterReadingsVersion"));
-        QCOMPARE(updates.at(updates.size() - 5).name, QByteArray("dspInfoVersion"));
-        QCOMPARE(updates.at(updates.size() - 4).name, QByteArray("recordStreamVersion"));
-        QCOMPARE(updates.at(updates.size() - 3).name, QByteArray("stationRadiosVersion"));
-        QCOMPARE(updates.at(updates.size() - 2).name, QByteArray("txDisplayVersion"));
-        QCOMPARE(updates.last().name, QByteArray("displayClockVersion"));
+        // Then parity Task 28's txDisplayVersion, R-R3-21's displayClockVersion and
+        // the Task 28 fix wave's controlChannelVersion.
+        QCOMPARE(updates.at(updates.size() - 11).name, QByteArray("stationCatalogVersion"));
+        QCOMPARE(updates.at(updates.size() - 10).name, QByteArray("displayExtrasVersion"));
+        QCOMPARE(updates.at(updates.size() - 9).name, QByteArray("transmitSettingsVersion"));
+        QCOMPARE(updates.at(updates.size() - 8).name, QByteArray("bandSelectVersion"));
+        QCOMPARE(updates.at(updates.size() - 7).name, QByteArray("meterReadingsVersion"));
+        QCOMPARE(updates.at(updates.size() - 6).name, QByteArray("dspInfoVersion"));
+        QCOMPARE(updates.at(updates.size() - 5).name, QByteArray("recordStreamVersion"));
+        QCOMPARE(updates.at(updates.size() - 4).name, QByteArray("stationRadiosVersion"));
+        QCOMPARE(updates.at(updates.size() - 3).name, QByteArray("txDisplayVersion"));
+        QCOMPARE(updates.at(updates.size() - 2).name, QByteArray("displayClockVersion"));
+        QCOMPARE(updates.last().name, QByteArray("controlChannelVersion"));
         QCOMPARE(StationCapabilities::fromUpdates(updates).stationCatalogVersion, 1);
         StationCapabilities older;
         older.stationCatalogVersion = 1;

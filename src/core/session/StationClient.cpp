@@ -263,6 +263,10 @@
 //                and applied to the window's model, the `spotSources`
 //                object, and the spots.* verbs. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 28 (R-IOS-16):
+//               connectThroughService(), its retries through the service,
+//               and sessionIceConfiguration(). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationClient.h"
@@ -276,6 +280,10 @@
 #include "core/MicProfileManager.h"
 #include "core/session/MirrorPolicy.h"
 #include "core/session/ObjectRegistry.h"
+#include "core/session/DataChannelTransport.h"
+#include "core/session/IceConfiguration.h"
+#include "core/session/RendezvousDialer.h"
+#include "core/session/RendezvousWire.h"
 #include "core/session/SessionEndReasons.h"
 #include "core/session/SessionTransport.h"
 #include "core/session/TransmitStateFacade.h"
@@ -835,6 +843,10 @@ void StationClient::connectToStation(const QUrl& url, const QString& token,
     // moment an unrelated refusal runs. dialStation()'s own redial entry,
     // onReconnectTimeout(), deliberately does not reset this at all.
     m_reconnectAttempts = 0;
+    // Task 28: a connection by address is not retried through the service.
+    stopServiceDial();
+    m_serviceServers.clear();
+    m_serviceStationId.clear();
 
     // iPhone app plan Task 27: the Core's last good addresses first, then
     // the one asked for.
@@ -859,6 +871,116 @@ void StationClient::connectToStation(const QUrl& url, const QString& token,
 void StationClient::setCachedAddresses(const QList<QUrl>& addresses)
 {
     m_cachedAddresses = addresses;
+}
+
+void StationClient::connectThroughService(const QList<QUrl>& servers,
+                                          const QString& stationRendezvousId,
+                                          const QByteArray& stationIdentityFingerprint)
+{
+    // As connectToStation(): a fresh attempt cancels a pending retry and
+    // starts the backoff over.
+    m_reconnectTimer->stop();
+    m_lastError.clear();
+    if (servers.isEmpty() || !RendezvousWire::isRendezvousId(stationRendezvousId)
+        || stationIdentityFingerprint.isEmpty() || !m_deviceIdentity
+        || !m_deviceIdentity->isValid()) {
+        m_lastError = QStringLiteral(
+            "This computer can reach the Core from anywhere only once it is paired with it.");
+        qCWarning(lcStationClient) << "Not connecting through the remote access service:"
+                                   << "no paired Core or no device key";
+        emit sessionEnded(m_lastError);
+        emit connectionActivityChanged();
+        return;
+    }
+    m_reconnectAttempts = 0;
+    m_dialPlan.clear();
+    m_lastUrl.clear();
+    m_planToken.clear();
+    m_lastFingerprint.clear();
+    m_lastAllowUnpinned = false;
+    m_serviceServers = servers;
+    m_serviceStationId = stationRendezvousId;
+    m_stationIdentity = stationIdentityFingerprint;
+    startDialPlan();
+    dialThroughService();
+}
+
+void StationClient::stopServiceDial()
+{
+    m_serviceDialing = false;
+    if (m_serviceDialer) {
+        RendezvousDialer* dialer = m_serviceDialer;
+        m_serviceDialer = nullptr;
+        dialer->disconnect(this);
+        dialer->cancel();
+        dialer->deleteLater();
+    }
+}
+
+void StationClient::dialThroughService()
+{
+    stopServiceDial();
+    m_lastError.clear();
+    // The attempt record: through the service, direct until the connection
+    // shows it went through the relay.
+    StationConnectionAttempt::Try attempt;
+    attempt.path = StationConnectionAttempt::Path::Direct;
+    attempt.address = m_serviceServers.first().host();
+    m_attempt.tries.append(attempt);
+    emit connectionAttemptChanged();
+
+    auto* dialer = new RendezvousDialer(this);
+    if (m_serviceDialDeadlineMs > 0) {
+        dialer->setDialDeadlineMs(m_serviceDialDeadlineMs);
+    }
+    m_serviceDialer = dialer;
+    m_serviceDialing = true;
+    connect(dialer, &RendezvousDialer::ready, this, [this, dialer](DataChannelTransport* transport) {
+        if (m_serviceDialer != dialer) {
+            transport->closeLink(QStringLiteral("replaced"));
+            transport->deleteLater();
+            return;
+        }
+        m_serviceDialer = nullptr;
+        m_serviceDialing = false;
+        dialer->deleteLater();
+        const std::optional<MediaIcePath> path = transport->selectedPath();
+        if (path && path->relayed() && !m_attempt.tries.isEmpty()) {
+            m_attempt.tries.last().path = StationConnectionAttempt::Path::Relay;
+            emit connectionAttemptChanged();
+        }
+        qCInfo(lcStationClient) << "Connected to the Core through the remote access service"
+                                << (path && path->relayed() ? "(relayed)" : "(direct)");
+        // Trusted by the identity key alone: the hello's binding is checked
+        // against the certificate the Core presented in DTLS before
+        // anything is sent (handleHello()).
+        m_pinRequired = false;
+        m_transportOpened = true;
+        attachTransport(transport, QString());
+    });
+    connect(dialer, &RendezvousDialer::failed, this, [this, dialer](const QString& reason) {
+        if (m_serviceDialer != dialer) {
+            return;
+        }
+        m_serviceDialer = nullptr;
+        m_serviceDialing = false;
+        dialer->deleteLater();
+        recordOutcome(StationConnectionAttempt::Outcome::NoAnswer);
+        m_lastError = reason;
+        qCInfo(lcStationClient) << "Could not connect through the remote access service";
+        // As a failed first connect by address: reported, then retried.
+        emit sessionEnded(reason);
+        scheduleReconnect();
+        emit connectionActivityChanged();
+    });
+    dialer->dial(m_serviceServers, m_serviceStationId, m_deviceIdentity);
+    emit connectionActivityChanged();
+}
+
+std::optional<IceConfiguration> StationClient::sessionIceConfiguration() const
+{
+    const auto* transport = qobject_cast<const DataChannelTransport*>(m_transport);
+    return transport != nullptr ? transport->mediaIceConfiguration() : std::nullopt;
 }
 
 void StationClient::setCachedAddressOpenTimeoutMs(int ms)
@@ -1227,6 +1349,10 @@ void StationClient::startSession(SessionTransport* transport, const QString& tok
     m_lastUrl.clear();
     // iPhone app plan Task 27: nothing to redial, so no addresses either.
     m_dialPlan.clear();
+    // Task 28: nor a route through the service.
+    stopServiceDial();
+    m_serviceServers.clear();
+    m_serviceStationId.clear();
     m_openTimer->stop();
     m_lastFingerprint = expectedFingerprint;
     m_lastAllowUnpinned = false;
@@ -1386,6 +1512,8 @@ void StationClient::disconnectFromStation(const QString& reason, bool attemptRec
     if (m_reconnectTimer->isActive()) {
         m_reconnectTimer->stop();
     }
+    // Task 28: an attempt through the service still making its connection.
+    stopServiceDial();
 
     // endSession FIRST, closeLink second. A transport can deliver its
     // closed() signal synchronously (the in-process one does, and nothing
@@ -1811,6 +1939,12 @@ void StationClient::scheduleReconnect()
 
 void StationClient::onReconnectTimeout()
 {
+    // Task 28: a session through the service is retried through it.
+    if (!m_serviceServers.isEmpty()) {
+        startDialPlan();
+        dialThroughService();
+        return;
+    }
     if (!m_lastUrl.isValid()) {
         // Defensive: disconnectFromStation() and attachTransport() both
         // stop this timer unconditionally, so a fired-with-nothing-to-

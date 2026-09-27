@@ -27,6 +27,26 @@
 //        "remoteType","localAddress","remoteAddress","ms","reason"} and
 //       exits 0 when the message came back, 1 otherwise.
 //
+//   nereus_rendezvous_peer device-key --dir DIR
+//       Prints the public key (base64url SPKI) of a desktop's device key in
+//       DIR (ClientDeviceIdentity), making it on first use.
+//   nereus_rendezvous_peer core --dir DIR --server URL --paired KEY
+//                          [--relay deny] [--id-file FILE] [--ca FILE]
+//       Plan Task 28: a Core, as nereusd runs it (a StationServer with no
+//       radio, and StationRendezvous), with the desktop whose device key is
+//       KEY paired. It answers introductions with a control connection and
+//       runs the session over it. Writes "<rendezvous id> <identity
+//       fingerprint, base64url>" to FILE once registered. Runs until
+//       killed.
+//   nereus_rendezvous_peer session --dir DIR --server URL --core FILE
+//                          [--timeout-ms T] [--ca FILE]
+//       Plan Task 28: a desktop (StationClient::connectThroughService) with
+//       DIR's device key reaches the Core named in FILE through the service
+//       and runs the whole connect sequence. Prints one JSON line
+//       {"connected":bool,"relayed":bool,"localType","remoteType",
+//        "localAddress","remoteAddress","ms","reason"} and
+//       exits 0 when the session was established, 1 otherwise.
+//
 // --ca adds a certificate authority the harness made at run time, so the
 // service's TLS (a test certificate for its test name) verifies. Nothing
 // secret is printed; keys stay in DIR.
@@ -42,6 +62,10 @@
 //   2026-09-26: Task 27 follow-up (new Minor 2): the station answers an
 //               introduction only once its STUN names are resolved. J.J.
 //               Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 28 (R-IOS-16): the device-key, core and
+//               session modes, a whole session over an introduced control
+//               connection. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <QCoreApplication>
@@ -57,11 +81,20 @@
 #include <cstdio>
 #include <memory>
 
+#include "core/AppSettings.h"
+#include "core/security/ClientDeviceIdentity.h"
+#include "core/security/DeviceStore.h"
 #include "core/security/StationIdentity.h"
+#include "core/session/DataChannelTransport.h"
 #include "core/session/IceConfiguration.h"
 #include "core/session/RendezvousClient.h"
 #include "core/session/RendezvousWire.h"
+#include "core/session/StationClient.h"
+#include "core/session/StationRendezvous.h"
+#include "core/session/StationServer.h"
 #include "core/session/media/LibDataChannelMediaTransport.h"
+#include "core/settings/SettingsProxy.h"
+#include "models/RadioModel.h"
 
 #include "StunLookupGate.h"
 
@@ -327,6 +360,133 @@ int runClient(const QStringList& args)
     return QCoreApplication::exec();
 }
 
+// Plan Task 28: a Core as nereusd runs it, for a session over an introduced
+// control connection.
+int runCore(const QStringList& args)
+{
+    const QString dir = option(args, QStringLiteral("--dir"));
+    bool ok = false;
+    const QByteArray paired = StationIdentity::fromBase64Url(option(args, QStringLiteral("--paired")), &ok);
+    if (dir.isEmpty() || !ok || !StationIdentity::isP256Spki(paired)) {
+        std::fputs("core: an argument is not usable\n", stderr);
+        return 2;
+    }
+    const bool relayAllowed = option(args, QStringLiteral("--relay"), QStringLiteral("allow"))
+                              != QLatin1String("deny");
+    auto* settings = new AppSettings(dir + QStringLiteral("/NereusSDR.settings"));
+    settings->setValue(QStringLiteral("StationCallsign"), QStringLiteral("N0CALL"));
+    auto* model = new RadioModel();
+    auto* server = new StationServer(model, *settings, dir + QStringLiteral("/security"),
+                                     QCoreApplication::instance());
+    PairedDevice device;
+    device.id = StationIdentity::fingerprintOf(paired);
+    device.publicKeySpki = paired;
+    device.name = QStringLiteral("Harness desktop");
+    device.kind = QStringLiteral("computer");
+    if (server->deviceStore() == nullptr
+        || (!server->deviceStore()->find(device.id) && !server->deviceStore()->add(device))) {
+        std::fputs("core: the desktop could not be paired\n", stderr);
+        return 2;
+    }
+    auto* rendezvous = new StationRendezvous(
+        server, RendezvousClient::serverUrls({option(args, QStringLiteral("--server"))}),
+        relayAllowed, QCoreApplication::instance());
+    const QString idFile = option(args, QStringLiteral("--id-file"));
+    QObject::connect(rendezvous->client(), &RendezvousClient::registered, server,
+                     [rendezvous, server, idFile] {
+        if (!idFile.isEmpty()) {
+            QFile file(idFile + QStringLiteral(".part"));
+            if (file.open(QIODevice::WriteOnly)) {
+                file.write(rendezvous->client()->stationId().toLatin1() + ' '
+                           + StationIdentity::toBase64Url(server->stationIdentity().fingerprint())
+                                 .toLatin1());
+                file.close();
+                QFile::remove(idFile);
+                file.rename(idFile);
+            }
+        }
+        printLine({{QStringLiteral("event"), QStringLiteral("registered")}});
+    });
+    QObject::connect(server, &StationServer::clientAuthenticated, server,
+                     [](const QString& peer) {
+        printLine({{QStringLiteral("event"), QStringLiteral("session")},
+                   {QStringLiteral("peer"), peer}});
+    });
+    if (!rendezvous->start()) {
+        std::fputs("core: the remote access service could not be used\n", stderr);
+        return 2;
+    }
+    return QCoreApplication::exec();
+}
+
+// Plan Task 28: a desktop reaching the Core through the service.
+int runSession(const QStringList& args)
+{
+    const QString dir = option(args, QStringLiteral("--dir"));
+    const int timeoutMs = option(args, QStringLiteral("--timeout-ms"), QStringLiteral("120000")).toInt();
+    QFile coreFile(option(args, QStringLiteral("--core")));
+    const QStringList core = coreFile.open(QIODevice::ReadOnly)
+        ? QString::fromLatin1(coreFile.readAll()).split(QLatin1Char(' '))
+        : QStringList();
+    bool ok = false;
+    const QByteArray fingerprint =
+        core.size() == 2 ? StationIdentity::fromBase64Url(core.at(1).trimmed(), &ok) : QByteArray();
+    auto key = std::make_shared<const ClientDeviceIdentity>(ClientDeviceIdentity::loadOrCreate(dir));
+    if (!key->isValid() || !ok || fingerprint.size() != 32
+        || !RendezvousWire::isRendezvousId(core.value(0))) {
+        std::fputs("session: an argument is not usable\n", stderr);
+        return 2;
+    }
+    QElapsedTimer clock;
+    clock.start();
+    auto* model = new RadioModel(RadioModel::Role::Remote);
+    auto* proxy = new SettingsProxy();
+    auto* window = new StationClient(model, proxy, QCoreApplication::instance());
+    window->setDeviceIdentity(key, QStringLiteral("Harness desktop"));
+    // One attempt: a failure is reported, not retried.
+    window->setReconnectBackoffUnitMs(3600 * 1000);
+    auto done = std::make_shared<bool>(false);
+    const auto finish = [window, &clock, done](bool connected, const QString& reason) {
+        if (*done) {
+            return;
+        }
+        *done = true;
+        QJsonObject result;
+        result.insert(QStringLiteral("relayed"), false);
+        if (const auto* transport = qobject_cast<const DataChannelTransport*>(window->transport())) {
+            if (const auto path = transport->selectedPath()) {
+                result.insert(QStringLiteral("relayed"), path->relayed());
+                result.insert(QStringLiteral("localType"), path->localType);
+                result.insert(QStringLiteral("remoteType"), path->remoteType);
+                result.insert(QStringLiteral("localAddress"), path->localAddress);
+                result.insert(QStringLiteral("remoteAddress"), path->remoteAddress);
+            }
+        }
+        result.insert(QStringLiteral("connected"), connected);
+        result.insert(QStringLiteral("ms"), static_cast<double>(clock.elapsed()));
+        if (!reason.isEmpty()) {
+            result.insert(QStringLiteral("reason"), reason);
+        }
+        printLine(result);
+        window->disconnectFromStation(QStringLiteral("harness done"));
+        // Let the close (and the relay's release) go out before leaving.
+        QTimer::singleShot(1500, QCoreApplication::instance(),
+                           [connected] { QCoreApplication::exit(connected ? 0 : 1); });
+    };
+    QObject::connect(window, &StationClient::handshakeComplete, window, [finish] {
+        finish(true, QString());
+    });
+    QObject::connect(window, &StationClient::sessionEnded, window,
+                     [finish](const QString& reason) { finish(false, reason); });
+    QTimer::singleShot(timeoutMs, window, [finish] {
+        finish(false, QStringLiteral("No session in time."));
+    });
+    window->connectThroughService(
+        RendezvousClient::serverUrls({option(args, QStringLiteral("--server"))}), core.value(0),
+        fingerprint);
+    return QCoreApplication::exec();
+}
+
 } // namespace
 
 int main(int argc, char** argv)
@@ -346,12 +506,28 @@ int main(int argc, char** argv)
         QTextStream(stdout) << StationIdentity::toBase64Url(key.publicKeySpki()) << "\n";
         return 0;
     }
+    if (mode == QLatin1String("device-key")) {
+        const ClientDeviceIdentity key =
+            ClientDeviceIdentity::loadOrCreate(option(args, QStringLiteral("--dir")));
+        if (!key.isValid()) {
+            return 2;
+        }
+        QTextStream(stdout) << StationIdentity::toBase64Url(key.publicKeySpki()) << "\n";
+        return 0;
+    }
+    if (mode == QLatin1String("core")) {
+        return runCore(args);
+    }
+    if (mode == QLatin1String("session")) {
+        return runSession(args);
+    }
     if (mode == QLatin1String("station")) {
         return runStation(args);
     }
     if (mode == QLatin1String("client")) {
         return runClient(args);
     }
-    std::fputs("usage: nereus_rendezvous_peer key|station|client ...\n", stderr);
+    std::fputs("usage: nereus_rendezvous_peer key|device-key|station|client|core|session ...\n",
+               stderr);
     return 2;
 }

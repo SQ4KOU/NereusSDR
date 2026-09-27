@@ -13,11 +13,16 @@
 //               per-address handshake cap and 0600 on load. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic Claude
 //               Code.
+//   2026-09-26: iPhone app Task 28 fix wave (review Important 3): every
+//               OpenSSL entry point leaves this thread's error queue empty
+//               (OpenSslErrorScope). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/security/StationIdentity.h"
 
 #include "core/LogCategories.h"
+#include "core/security/OpenSslErrorScope.h"
 
 #include <openssl/bio.h>
 #include <openssl/bn.h>
@@ -185,6 +190,7 @@ StationIdentity StationIdentity::loadOrCreateKeyFile(const QString& profileDir,
                                                      const QString& fileName,
                                                      const QString& whose)
 {
+    const OpenSslErrorScope openSslErrors;
     StationIdentity identity;
     identity.m_keyPath = QDir(profileDir).filePath(fileName);
     // Only this function's own log text uses it ("The Core's", "This
@@ -268,6 +274,7 @@ QByteArray StationIdentity::fingerprint() const
 
 QByteArray StationIdentity::sign(const QByteArray& message) const
 {
+    const OpenSslErrorScope openSslErrors;
     if (!isValid()) {
         return {};
     }
@@ -295,6 +302,9 @@ QByteArray StationIdentity::sign(const QByteArray& message) const
 bool StationIdentity::verify(const QByteArray& spki, const QByteArray& message,
                              const QByteArray& signature)
 {
+    // A device's key or signature can be anything before sign-in: an
+    // off-curve point or r = 0 makes OpenSSL queue an error.
+    const OpenSslErrorScope openSslErrors;
     if (!isP256Spki(spki) || signature.size() != kSignatureBytes) {
         return false;
     }
@@ -331,6 +341,7 @@ QByteArray StationIdentity::fingerprintOf(const QByteArray& spki)
 
 bool StationIdentity::isP256Spki(const QByteArray& spki)
 {
+    const OpenSslErrorScope openSslErrors;
     if (spki.size() != kSpkiBytes) {
         return false;
     }

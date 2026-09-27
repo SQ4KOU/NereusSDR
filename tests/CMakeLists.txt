@@ -7472,6 +7472,17 @@ nereus_add_test(tst_ice_configuration)
 nereus_add_test(tst_rendezvous_client fakes/LoopbackTransport.cpp)
 target_compile_definitions(tst_rendezvous_client PRIVATE
     NEREUS_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+# iPhone app plan Task 28 (R-IOS-16): the control session over a data
+# channel on this computer: the chunking and heartbeat bytes and the framing
+# fixtures (tests/data/link/v1/framing/), each end's cap, a whole session
+# signed in by device key, a Core whose DTLS certificate is not the bound
+# one refused before anything is sent, and the heartbeat at both ends.
+nereus_add_test(tst_data_channel_transport
+    LinkFixtures.cpp
+    fakes/LoopbackTransport.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_data_channel_transport PRIVATE
+    NEREUS_LINK_DATA_DIR="${CMAKE_SOURCE_DIR}/tests/data/link/v1")
 # iPhone app plan Task 27: one end of a connection through the remote
 # access service, for the traversal harness below. Not linked with the test
 # sandbox: it reaches a service in another network namespace, which a
@@ -7479,6 +7490,16 @@ target_compile_definitions(tst_rendezvous_client PRIVATE
 add_executable(nereus_rendezvous_peer EXCLUDE_FROM_ALL tools/nereus_rendezvous_peer.cpp)
 target_link_libraries(nereus_rendezvous_peer PRIVATE NereusCore)
 set_target_properties(nereus_rendezvous_peer PROPERTIES AUTOMOC ON)
+# iPhone app plan Task 29 Step 1 (R-IOS-16): the relay floor measurement's
+# probe (tests/scripts/floor-measurement.sh), with the prototypes of options
+# (C) and (E) it measures. Test tooling only; neither prototype is product
+# code.
+add_executable(nereus_floor_probe EXCLUDE_FROM_ALL
+    tools/nereus_floor_probe.cpp
+    tools/floor/TurnTlsShimPrototype.cpp
+    tools/floor/WsRelayPrototype.cpp)
+target_link_libraries(nereus_floor_probe PRIVATE NereusCore)
+set_target_properties(nereus_floor_probe PROPERTIES AUTOMOC ON)
 # The traversal harness (tests/scripts/traversal-harness.sh): Linux network
 # namespaces with nftables NATs (endpoint-independent, port-randomising at
 # both ends), UDP blocked, large datagrams dropped, an IPv6-only client
@@ -7488,6 +7509,18 @@ set_target_properties(nereus_rendezvous_peer PROPERTIES AUTOMOC ON)
 # -DNEREUS_TRAVERSAL_TESTS=ON; it needs root and runs under the ctest label
 # `traversal` (the CI job of the same name, started by hand), never on the
 # live server.
+# iPhone app plan Task 28 fix wave (R-IOS-16; review Minor 6): the libjuice
+# TURN release change finds agent.c by the file, not the spelling of its
+# directory. Configures a small project only; nothing is built or fetched.
+if(DEFINED libjuice_SOURCE_DIR AND EXISTS "${libjuice_SOURCE_DIR}/src/agent.c")
+    add_test(NAME libjuice_patch_paths
+        COMMAND ${CMAKE_COMMAND}
+            -DREPO=${CMAKE_SOURCE_DIR}
+            -DAGENT_C=${libjuice_SOURCE_DIR}/src/agent.c
+            -DWORK=${CMAKE_CURRENT_BINARY_DIR}/libjuice-patch-paths
+            -P ${CMAKE_SOURCE_DIR}/tests/scripts/check-libjuice-patch-paths.cmake)
+    set_tests_properties(libjuice_patch_paths PROPERTIES LABELS "session" TIMEOUT 120)
+endif()
 option(NEREUS_TRAVERSAL_TESTS "Register the traversal harness (Linux, root)" OFF)
 if(NEREUS_TRAVERSAL_TESTS AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
     add_test(NAME traversal_harness
@@ -8017,7 +8050,38 @@ if(TEST tst_link_conformance_session)
     set_property(TEST tst_link_conformance_session APPEND PROPERTY ENVIRONMENT
         "NEREUS_LINK_CONNECTABLE=skip")
     set_property(TEST tst_link_conformance_session_connectable APPEND PROPERTY ENVIRONMENT
-        "NEREUS_LINK_CONNECTABLE=only")
+        "NEREUS_LINK_CONNECTABLE=only" "NEREUS_LINK_MODE=loopback")
+    # iPhone app plan Task 28 (R-IOS-16): the first entry runs every other
+    # fixture over both transports (the in-process pipe and the control data
+    # channel), so it gets more time; the connectable fixture over the data
+    # channel runs in its own process, as the in-process one does.
+    set_tests_properties(tst_link_conformance_session PROPERTIES TIMEOUT 300)
+    add_test(NAME tst_link_conformance_session_connectable_datachannel
+        COMMAND tst_link_conformance_session)
+    set_tests_properties(tst_link_conformance_session_connectable_datachannel PROPERTIES
+        LABELS "${_lcs_labels}"
+        TIMEOUT ${_lcs_timeout})
+    if(_lcs_env_mod)
+        set_property(TEST tst_link_conformance_session_connectable_datachannel
+            PROPERTY ENVIRONMENT_MODIFICATION ${_lcs_env_mod})
+    endif()
+    if(NEREUS_TESTS_OFFSCREEN AND CMAKE_VERSION VERSION_LESS 3.22)
+        set_property(TEST tst_link_conformance_session_connectable_datachannel APPEND PROPERTY
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen")
+    endif()
+    if(NOT WIN32)
+        set(_lcs_dc_home
+            "${CMAKE_CURRENT_BINARY_DIR}/test-home/tst_link_conformance_session_connectable_datachannel")
+        file(MAKE_DIRECTORY "${_lcs_dc_home}")
+        set_property(TEST tst_link_conformance_session_connectable_datachannel APPEND PROPERTY
+            ENVIRONMENT "HOME=${_lcs_dc_home}")
+        if(APPLE)
+            set_property(TEST tst_link_conformance_session_connectable_datachannel APPEND
+                PROPERTY ENVIRONMENT "CFFIXED_USER_HOME=${_lcs_dc_home}")
+        endif()
+    endif()
+    set_property(TEST tst_link_conformance_session_connectable_datachannel APPEND PROPERTY
+        ENVIRONMENT "NEREUS_LINK_CONNECTABLE=only" "NEREUS_LINK_MODE=datachannel")
     # iPhone app plan Task 77 fix wave, M4: the fixtures whose MOX walk runs
     # in real time (stationSetup.unkeyWalkMs, transfer-refuses-keys) run as
     # a third entry of the same binary, NEREUS_LINK_REALTIME=only, labelled
@@ -8050,7 +8114,8 @@ if(TEST tst_link_conformance_session)
                 "CFFIXED_USER_HOME=${_lcs_rt_home}")
         endif()
     endif()
-    foreach(_lcs_entry tst_link_conformance_session tst_link_conformance_session_connectable)
+    foreach(_lcs_entry tst_link_conformance_session tst_link_conformance_session_connectable
+            tst_link_conformance_session_connectable_datachannel)
         set_property(TEST ${_lcs_entry} APPEND PROPERTY ENVIRONMENT "NEREUS_LINK_REALTIME=skip")
     endforeach()
     set_property(TEST tst_link_conformance_session_realtime APPEND PROPERTY ENVIRONMENT

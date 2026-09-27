@@ -87,6 +87,11 @@
 //   2026-09-26 - R-R3-21 / R-R3-08: displayClockVersion, after
 //                txDisplayVersion (merge with parity Task 28). J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-26 - R-IOS-16 (iPhone app plan Task 28 fix wave):
+//                controlChannelVersion, after displayClockVersion (merged
+//                into the trunk after txDisplayVersion and
+//                displayClockVersion). J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationCapabilities.h"
@@ -212,6 +217,9 @@ QList<MirrorUpdate> StationCapabilities::toUpdates() const
         updates.append(intEntry("txDisplayVersion", txDisplayVersion));
         // R-R3-21 / R-R3-08: display frames and audio on one Core clock.
         updates.append(intEntry("displayClockVersion", displayClockVersion));
+        // R-IOS-16 (Task 28 fix wave): the control session through the
+        // remote access service.
+        updates.append(intEntry("controlChannelVersion", controlChannelVersion));
         // iPhone app Task 71: several devices at once, last, and only for
         // a peer that declared the feature.
         if (sessionHolderEntry) {
@@ -423,6 +431,7 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                    || u.name == "stationRadiosVersion"
                    || u.name == "txDisplayVersion"
                    || u.name == "displayClockVersion"
+                   || u.name == "controlChannelVersion"
                    || u.name == "sessionHolderVersion"
                    || u.name == "remoteTxVersion"
                    || u.name == "txStateVersion") {
@@ -474,6 +483,8 @@ StationCapabilities StationCapabilities::fromUpdates(const QList<MirrorUpdate>& 
                     caps.txDisplayVersion = version;
                 } else if (u.name == "displayClockVersion") {
                     caps.displayClockVersion = version;
+                } else if (u.name == "controlChannelVersion") {
+                    caps.controlChannelVersion = version;
                 } else {
                     caps.bandSelectVersion = version;
                 }

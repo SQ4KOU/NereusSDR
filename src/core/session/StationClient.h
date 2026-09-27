@@ -335,6 +335,11 @@
 //               confirm.cancel, notice.takeBack and session.leave. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: iPhone app plan Task 28 (R-IOS-16): connectThroughService(),
+//               a session over a control connection the remote access
+//               service introduced, retried the same way, and
+//               sessionIceConfiguration() for its media. J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -349,6 +354,7 @@
 #include <QUrl>
 
 #include <memory>
+#include <optional>
 
 #include "core/session/IStationLink.h"
 #include "core/session/RemoteTransmitClient.h"
@@ -367,7 +373,9 @@ QT_END_NAMESPACE
 namespace NereusSDR {
 
 class ClientDeviceIdentity;
+class IceConfiguration;
 class RadioModel;
+class RendezvousDialer;
 class SessionTransport;
 class RemoteDevicesState;
 class SettingsProxy;
@@ -573,6 +581,29 @@ public:
     /// the next with the token unsent, as a paired Core does on
     /// identityChanged; only a mismatch at the last address ends it.
     void setCachedAddresses(const QList<QUrl>& addresses);
+
+    /// iPhone app plan Task 28 (R-IOS-16): connects to the paired Core
+    /// through the remote access service: `servers` in order
+    /// (RendezvousClient::serverUrls), the Core's rendezvous id
+    /// (RendezvousWire::rendezvousId of its identity key) and its identity
+    /// fingerprint, which trusts it exactly as connectToStation() does for
+    /// a paired Core (the hello must show that key, and its certificate
+    /// binding must verify for the certificate the Core presents in DTLS,
+    /// before anything is sent). Needs this computer's device key
+    /// (setDeviceIdentity()): only a paired device is introduced. The
+    /// session runs over the control connection (DataChannelTransport) and
+    /// is retried like any other, through the service again.
+    void connectThroughService(const QList<QUrl>& servers, const QString& stationRendezvousId,
+                               const QByteArray& stationIdentityFingerprint);
+    /// The ICE settings of the session's media when the session came
+    /// through the service: the control connection's STUN server, and its
+    /// relay only when the control connection's path is relayed
+    /// (DataChannelTransport::mediaIceConfiguration()); none for a
+    /// WebSocket session.
+    std::optional<IceConfiguration> sessionIceConfiguration() const;
+    /// Test seam: the service attempt's bound
+    /// (RendezvousDialer::kDialDeadlineMs).
+    void setServiceDialDeadlineMs(int ms) { m_serviceDialDeadlineMs = ms; }
     QList<QUrl> cachedAddresses() const { return m_cachedAddresses; }
     /// How long an address that is not the last to try may take to open.
     static constexpr int kCachedAddressOpenTimeoutMs = 4000;
@@ -663,7 +694,10 @@ public:
     /// A dial, live session or automatic retry is in progress. Unlike the
     /// mirrored radio state, this remains true when Core is reachable but
     /// its radio is offline. Used by the operator's Connect/Disconnect actions.
-    bool isConnectionActive() const { return m_sessionActive || isReconnectPending(); }
+    bool isConnectionActive() const
+    {
+        return m_sessionActive || isReconnectPending() || m_serviceDialing;
+    }
 
     /// R-R3-38: the last end that will not fix itself (a takeover, a
     /// version refusal, or any other end the Core marked not retryable).
@@ -1195,6 +1229,10 @@ private:
     /// here); onReconnectTimeout() is the automatic-retry entry (it must
     /// NOT reset the attempt counter, or the backoff would never advance
     /// past its first step).
+    /// Task 28: one attempt through the service (connectThroughService()
+    /// and each retry).
+    void dialThroughService();
+    void stopServiceDial();
     void dialStation(const QUrl& url, const QString& token,
                      const QString& expectedFingerprint, bool allowUnpinned,
                      const QByteArray& stationIdentityFingerprint);
@@ -1489,6 +1527,13 @@ private:
     /// was asked with, and its record.
     QList<QUrl> m_cachedAddresses;
     QList<QUrl> m_dialPlan;
+    /// Task 28: the service route of the last connectThroughService(),
+    /// what a retry dials again; empty for a WebSocket connection.
+    QList<QUrl> m_serviceServers;
+    QString m_serviceStationId;
+    QPointer<RendezvousDialer> m_serviceDialer;
+    int m_serviceDialDeadlineMs = 0;
+    bool m_serviceDialing = false;
     int m_dialIndex = 0;
     QString m_planToken;
     bool m_transportOpened = false;

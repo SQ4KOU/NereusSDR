@@ -48,6 +48,9 @@
 //   2026-09-26: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: iPhone app plan Task 28 (R-IOS-16): retireIntroduction()
+//               and liveIntroductions(). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/RendezvousWire.h"
@@ -169,6 +172,16 @@ public:
     /// One candidate for an answered introduction; an empty one ends them.
     /// An `a=` in front is removed. False when it is not sent.
     bool sendCandidate(const QByteArray& introductionId, const QString& candidate);
+
+    /// iPhone app plan Task 28 (R-IOS-16): forgets an introduction this
+    /// Core has finished with (its connection opened, failed or ran out of
+    /// time), at once, so it no longer holds one of kMaxLiveIntroductions
+    /// until the service ends it. Nothing goes on the wire (the rendezvous
+    /// document, section 6.3: an end only ever means the introduction is
+    /// over); later messages for it are ignored, and the same id introduced
+    /// again is dropped. False when it was not live.
+    bool retireIntroduction(const QByteArray& introductionId);
+    int liveIntroductions() const { return static_cast<int>(m_liveIntroductions.size()); }
 
     bool isRegistered() const { return m_registered; }
     QString stationId() const { return m_stationId; }
@@ -308,6 +321,9 @@ private:
     /// how many candidates each has had.
     QSet<QByteArray> m_liveIntroductions;
     QHash<QByteArray, int> m_answered;
+    /// Task 28: introductions retired here, newest last, at most
+    /// kMaxLiveIntroductions * 4, so the service cannot hand one back.
+    QList<QByteArray> m_retiredIntroductions;
 
     // Client.
     Pending m_pending = Pending::None;

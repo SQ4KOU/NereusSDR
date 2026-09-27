@@ -32,6 +32,10 @@
 //               context (transmit true) and frames instead of the
 //               receiver's; the fall resumes receive. J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: iPhone app plan Task 28 (R-IOS-16): the media connection of
+//               a session through the remote access service uses its ICE
+//               settings. J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/DaemonMediaController.h"
@@ -1636,6 +1640,12 @@ bool DaemonMediaController::handleStart(const QJsonObject& control)
         }
     });
     const bool offerLossless = declaresAudioProfile && m_audioLosslessAllowed;
+    // iPhone app plan Task 28 (R-IOS-16): a session through the remote
+    // access service makes its media connection with its control
+    // connection's STUN server, and its relay only when the control path
+    // is relayed (the fix wave, Important 4).
+    peer->setIceConfiguration(m_server ? m_server->sessionIceConfiguration(m_epoch)
+                                       : std::nullopt);
     if (!peer->start(IMediaTransport::Role::Offerer, connectionId,
                      m_audioTargetBitrate, offerLossless, declaresReceiverAudio,
                      declaresHeadphonesMix, declaresRemoteTx)) {

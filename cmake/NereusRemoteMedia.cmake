@@ -17,9 +17,91 @@
 # selected without changing session callers. DTLS-SRTP over TURN/UDP must not
 # be described as client-to-relay TLS transport.
 #
+# Modification history (NereusSDR):
+#   2026-09-26: iPhone app plan Task 28 (R-IOS-16): libjuice gives its TURN
+#               allocations back when an agent is destroyed
+#               (nereus_patch_libjuice_turn_release(), the change in
+#               cmake/patches/libjuice-release-turn-allocations.c). J.J. Boyd
+#               (KG4VCF), with AI-assisted implementation via Anthropic
+#               Claude Code.
+#   2026-09-26: Task 28 fix wave (review Minor 6): agent.c is found among
+#               the targets' sources by the file it names, not its spelling.
+#               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+#               Anthropic Claude Code.
+#
 # =================================================================
 
 include(FetchContent)
+
+set(_NEREUS_REMOTE_MEDIA_CMAKE_DIR "${CMAKE_CURRENT_LIST_DIR}")
+
+# iPhone app plan Task 28 (R-IOS-16): libjuice 3c40a354 never gives a TURN
+# allocation back; the relay holds it (and one of its per-user quota places)
+# for TURN_LIFETIME after the connection ends. This compiles libjuice's
+# targets from a copy of src/agent.c in the build tree that, when an agent
+# is destroyed, sends each allocation a Refresh with LIFETIME 0 (RFC 8656
+# section 7.2). The fetched source is left as it is. The copy is rewritten
+# only when its content changes, so a configure does not rebuild libjuice.
+# A pinned libjuice whose agent.c no longer has the two places the change
+# goes stops the configure rather than build without it.
+function(nereus_patch_libjuice_turn_release juice_dir)
+    set(_source "${juice_dir}/src/agent.c")
+    file(READ "${_source}" _agent)
+    file(READ "${_NEREUS_REMOTE_MEDIA_CMAKE_DIR}/patches/libjuice-release-turn-allocations.c"
+         _release)
+    set(_destroy "void agent_destroy(juice_agent_t *agent) {\n")
+    set(_conn "\tif (agent->conn_impl) {\n\t\tconn_destroy(agent);\n\t}\n")
+    foreach(_anchor IN ITEMS _destroy _conn)
+        string(FIND "${_agent}" "${${_anchor}}" _first)
+        string(FIND "${_agent}" "${${_anchor}}" _last REVERSE)
+        if(_first EQUAL -1 OR NOT _first EQUAL _last)
+            message(FATAL_ERROR
+                "libjuice ${_source} does not have exactly one place for the TURN "
+                "release change (${_anchor}); update "
+                "cmake/patches/libjuice-release-turn-allocations.c for this libjuice.")
+        endif()
+    endforeach()
+    string(REPLACE "${_conn}" "\tnereus_release_turn_allocations(agent);\n\n${_conn}"
+           _agent "${_agent}")
+    string(REPLACE "${_destroy}" "${_release}${_destroy}" _agent "${_agent}")
+
+    set(_patched "${CMAKE_BINARY_DIR}/_deps/nereus-patched/libjuice/src/agent.c")
+    set(_old "")
+    if(EXISTS "${_patched}")
+        file(READ "${_patched}" _old)
+    endif()
+    if(NOT _old STREQUAL _agent)
+        file(WRITE "${_patched}" "${_agent}")
+    endif()
+
+    foreach(_target IN ITEMS juice juice-static)
+        if(TARGET ${_target})
+            get_target_property(_sources ${_target} SOURCES)
+            get_target_property(_target_dir ${_target} SOURCE_DIR)
+            # Matched by the file each entry names, not its spelling: a
+            # FETCHCONTENT_SOURCE_DIR given with a trailing slash, a `..` or
+            # through a symbolic link names the same agent.c differently.
+            file(REAL_PATH "${_source}" _source_real)
+            set(_index -1)
+            set(_position 0)
+            foreach(_entry IN LISTS _sources)
+                if(_index EQUAL -1 AND NOT _entry MATCHES "^\\$<")
+                    file(REAL_PATH "${_entry}" _entry_real BASE_DIRECTORY "${_target_dir}")
+                    if(_entry_real STREQUAL _source_real)
+                        set(_index ${_position})
+                    endif()
+                endif()
+                math(EXPR _position "${_position} + 1")
+            endforeach()
+            if(_index EQUAL -1)
+                message(FATAL_ERROR "libjuice target ${_target} does not compile ${_source}")
+            endif()
+            list(REMOVE_AT _sources ${_index})
+            list(INSERT _sources ${_index} "${_patched}")
+            set_property(TARGET ${_target} PROPERTY SOURCES ${_sources})
+        endif()
+    endforeach()
+endfunction()
 
 function(nereus_add_remote_media_dependency)
     if(TARGET LibDataChannel::LibDataChannelStatic)
@@ -100,6 +182,7 @@ function(nereus_add_remote_media_dependency)
         "${nereus_libdatachannel_SOURCE_DIR}"
         "${CMAKE_BINARY_DIR}/_deps/nereus_libdatachannel-build"
         EXCLUDE_FROM_ALL)
+    nereus_patch_libjuice_turn_release("${nereus_libdatachannel_SOURCE_DIR}/deps/libjuice")
 
     # Older nested projects can still materialize these implementation
     # options in the parent cache. They are not NereusSDR user options.

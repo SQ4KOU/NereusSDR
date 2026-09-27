@@ -760,7 +760,9 @@ private slots:
                                    // Parity Task 28: the transmit display.
                                    "txDisplayVersion",
                                    // R-R3-21: the display on the audio's clock.
-                                   "displayClockVersion"});
+                                   "displayClockVersion",
+                                   // Task 28 fix wave: the control channel.
+                                   "controlChannelVersion"});
                 QCOMPARE(names, withReason);
                 const int reason = updateIndex(last.updates,
                                                QByteArrayLiteral("displayBudgetReason"));
@@ -809,7 +811,8 @@ private slots:
                                            QByteArrayLiteral("recordStreamVersion"),
                                            QByteArrayLiteral("stationRadiosVersion"),
                                            QByteArrayLiteral("txDisplayVersion"),
-                                           QByteArrayLiteral("displayClockVersion")}) {
+                                           QByteArrayLiteral("displayClockVersion"),
+                                           QByteArrayLiteral("controlChannelVersion")}) {
                 stripped.removeAt(updateIndex(stripped, name));
             }
             QCOMPARE(SessionMessages::encode(SessionMessages::capabilities(stripped)), older);

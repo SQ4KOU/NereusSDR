@@ -248,8 +248,11 @@ void TstTransmitSettingsGate::olderCoreOffersNoTransmitSettings()
     // R-IOS-27's bandSelectVersion now follows it, then parity Task 15's
     // meterReadingsVersion, parity Task 16's dspInfoVersion and parity Task
     // 19's recordStreamVersion, parity Task 21's stationRadiosVersion,
-    // parity Task 28's txDisplayVersion and R-R3-21's displayClockVersion;
-    // a Core from before them sends none.
+    // parity Task 28's txDisplayVersion, R-R3-21's displayClockVersion and
+    // the Task 28 fix wave's controlChannelVersion; a Core from before them
+    // sends none.
+    QCOMPARE(updates.last().name, QByteArrayLiteral("controlChannelVersion"));
+    updates.removeLast();
     QCOMPARE(updates.last().name, QByteArrayLiteral("displayClockVersion"));
     updates.removeLast();
     QCOMPARE(updates.last().name, QByteArrayLiteral("txDisplayVersion"));

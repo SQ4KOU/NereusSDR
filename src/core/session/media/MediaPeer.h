@@ -14,6 +14,9 @@
 //               with the microphone line (sendTx, txReceived). J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
 //
+//   2026-09-26: iPhone app plan Task 28 (R-IOS-16): setIceConfiguration()
+//               and usesIce(). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/media/IMediaTransport.h"
@@ -85,6 +88,14 @@ public:
                bool headphonesMixStream = false,
                bool micLine = false);
     void stop();
+
+    /// iPhone app plan Task 28 (R-IOS-16): for a session whose control
+    /// connection came through the remote access service, the ICE settings
+    /// the media connection uses too (the same STUN server and relay,
+    /// IMediaTransport::StartOptions::ice). Applies from the next start();
+    /// none (the default) keeps host candidates only.
+    void setIceConfiguration(const std::optional<IceConfiguration>& ice);
+    bool usesIce() const;
 
     bool acceptControl(const QJsonObject& control);
     bool sendDisplay(const QByteArray& message);

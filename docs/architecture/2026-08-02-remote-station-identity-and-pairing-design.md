@@ -236,8 +236,15 @@ in [2026-09-23-rendezvous-v1.md](2026-09-23-rendezvous-v1.md), section 4.2.
 | IP addresses of both ends | Callsign or label |
 | That an opaque identifier is online | Which operator or station it belongs to |
 | Traffic volume and timing when relaying | Any relayed content, which is encrypted end to end |
+| The SHA-256 fingerprint of the Core's TLS certificate, in the `a=fingerprint` line of every answer to an introduction (the control connection presents it in DTLS), and of each device's one-off DTLS certificate in its offer. The Core's direct listener serves the same certificate to anyone who reaches it. | The Core's identity key, a device's key pair, or anything a fingerprint could be used to sign or decrypt |
 
 It cannot enumerate stations, and it cannot answer "is KG4VCF on the air".
+
+The certificate fingerprint is a stable value per Core, so like the scrambled
+name it lets the service correlate one Core's sessions over time; it adds
+nothing the IP addresses and the fixed identifier do not already give it, and a
+device never trusts it from the SDP alone (it checks the certificate the DTLS
+handshake carried against the Core's signed binding, link document section 20).
 
 **Rotation is deferred.** Rotating the scrambled name would defeat long-term
 correlation by an observer, at the cost of clock agreement, drift handling, and

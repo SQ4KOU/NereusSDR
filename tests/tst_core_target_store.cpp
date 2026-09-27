@@ -26,6 +26,8 @@
 #include "core/security/StationIdentity.h"
 #include "gui/CoreTargetStore.h"
 
+#include "OperatorWording.h"
+
 using namespace NereusSDR;
 
 namespace {
@@ -620,6 +622,66 @@ private slots:
         settings.setValue(QLatin1String(kTargetKey),
                           documentFor(QJsonArray{noIdentityKey}, QStringLiteral("one")));
         QVERIFY(!store.load(&error));
+    }
+
+    // iPhone app plan Task 28 fix wave (review Important 5): the Core's
+    // controlChannelVersion is kept with it: absent until a sign-in
+    // records it, round-tripped, refused when it is not a whole number.
+    void controlChannelVersionIsRecordedWithTheCore()
+    {
+        QTemporaryDir directory;
+        QVERIFY(directory.isValid());
+        const QString path = directory.filePath(QStringLiteral("settings.xml"));
+        AppSettings settings(path);
+        CoreTargetStore store(settings);
+        QVERIFY(store.load());
+        SavedCoreTarget paired = makeTarget(QStringLiteral("paired"), QString());
+        paired.connection.fingerprint.clear();
+        paired.connection.identityFingerprint = someIdentity();
+        QVERIFY(store.upsert(paired));
+        QCOMPARE(store.target(QStringLiteral("paired"))->connection.controlChannelVersion, -1);
+        QVERIFY(!settings.value(QLatin1String(kTargetKey)).toString()
+                     .contains(QLatin1String("controlChannelVersion")));
+
+        QVERIFY(store.rememberControlChannelVersion(QStringLiteral("paired"), 1));
+        AppSettings reloadedSettings(path);
+        reloadedSettings.load();
+        CoreTargetStore reloaded(reloadedSettings);
+        QVERIFY(reloaded.load());
+        QCOMPARE(reloaded.target(QStringLiteral("paired"))->connection.controlChannelVersion, 1);
+        QVERIFY(store.rememberControlChannelVersion(QStringLiteral("paired"), 0));
+        QCOMPARE(store.target(QStringLiteral("paired"))->connection.controlChannelVersion, 0);
+        QVERIFY(!store.rememberControlChannelVersion(QStringLiteral("nobody"), 1));
+
+        QString error;
+        for (const QJsonValue& bad : {QJsonValue(QStringLiteral("1")), QJsonValue(-1),
+                                      QJsonValue(1.5), QJsonValue(true)}) {
+            QJsonObject record = jsonTarget(QStringLiteral("one"),
+                                            StationIdentity::toBase64Url(someIdentity()));
+            record.insert(QStringLiteral("controlChannelVersion"), bad);
+            settings.setValue(QLatin1String(kTargetKey),
+                              documentFor(QJsonArray{record}, QStringLiteral("one")));
+            QVERIFY(!store.load(&error));
+        }
+    }
+
+    // Connecting from anywhere is offered to a paired Core that declared
+    // the control channel or has had no session yet, and refused in plain
+    // words otherwise.
+    void connectingFromAnywhereIsOfferedOnlyToACoreThatTakesIt()
+    {
+        RemoteStationOptions options;
+        options.url = QStringLiteral("wss://192.0.2.5:47910");
+        QCOMPARE(options.serviceConnectRefusal(),
+                 QStringLiteral("Pair with the Core to reach it from anywhere."));
+        options.identityFingerprint = someIdentity();
+        QVERIFY(options.serviceConnectRefusal().isEmpty());  // nothing recorded yet
+        options.controlChannelVersion = 1;
+        QVERIFY(options.serviceConnectRefusal().isEmpty());
+        options.controlChannelVersion = 0;
+        QCOMPARE(options.serviceConnectRefusal(),
+                 QStringLiteral("Update the Core to reach it from anywhere."));
+        QVERIFY(NereusSDR::OperatorWording::isPlain(options.serviceConnectRefusal()));
     }
 };
 

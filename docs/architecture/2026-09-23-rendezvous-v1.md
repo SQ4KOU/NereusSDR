@@ -47,7 +47,9 @@ It never learns a label, a callsign, a pairing code's words or a device's
 name, and it cannot tell whether a device is paired: it matches opaque ids,
 forwards what it is given untouched, and keeps everything in memory
 (section 9). What it can see is in the pairing design, section 5.2: the
-addresses of both ends, that an id is online, and traffic timing.
+addresses of both ends, that an id is online, traffic timing, and the
+fingerprints of the DTLS certificates in the offers and answers it carries
+(the Core's is its TLS certificate's).
 
 ## 2. Transport
 
