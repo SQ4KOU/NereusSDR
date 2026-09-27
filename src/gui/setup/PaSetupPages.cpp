@@ -119,6 +119,17 @@
 //                 RadioModel::paReadings() (the Core's in a remote window),
 //                 unavailable when absent. J.J. Boyd (KG4VCF), AI-assisted
 //                 via Anthropic Claude Code.
+//   2026-09-27 - R-R3-49 / R-R3-32 (remote-window parity Task 33): PA
+//                 Values in a remote window shows the Core's forward,
+//                 reflected and SWR readings and its raw forward and
+//                 reflected readings (scaled here with the Core's radio
+//                 model, as the local page scales its own), with the same
+//                 peak and minimum tracking, and ADC overload from the
+//                 mirrored step attenuator; each says it is the Core's, and
+//                 a Core below txReadingsVersion 1 shows each unavailable
+//                 with the reason. The local page's two handlers became
+//                 applyPowerReadings and applyRawAdc, unchanged. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -181,7 +192,9 @@
 #include "core/PaTelemetryScaling.h"
 #include "core/RadioConnection.h"
 #include "core/RadioStatus.h"
+#include "core/StepAttenuatorFacade.h"
 #include "core/session/IStationLink.h"
+#include "core/session/TransmitStateFacade.h"
 #include "gui/StyleConstants.h"
 #include "gui/setup/hardware/PaCalibrationGroup.h"
 #include "gui/widgets/MetricLabel.h"
@@ -2287,24 +2300,7 @@ PaValuesPage::PaValuesPage(RadioModel* model, QWidget* parent)
     connect(&rs, &RadioStatus::powerChanged, this,
             [this, model](double fwdW, double revW, double swr) {
                 if (model->paReadingsFromCore()) { return; }  // see the ctor's end
-                m_fwdCurrent = fwdW;
-                m_revCurrent = revW;
-                m_swrCurrent = swr;
-                m_fwdPeakMin.update(fwdW);
-                m_revPeakMin.update(revW);
-                m_swrPeakMin.update(swr);
-                if (m_fwdCalibratedLabel) {
-                    m_fwdCalibratedLabel->setValue(formatWithPeakMin(
-                        fwdW, m_fwdPeakMin, QStringLiteral(" W"), 2));
-                }
-                if (m_revPowerLabel) {
-                    m_revPowerLabel->setValue(formatWithPeakMin(
-                        revW, m_revPeakMin, QStringLiteral(" W"), 2));
-                }
-                if (m_swrLabel) {
-                    m_swrLabel->setValue(formatWithPeakMin(
-                        swr, m_swrPeakMin, QString(), 2));
-                }
+                applyPowerReadings(fwdW, revW, swr);
             });
 
     // R-R3-32 / R-R3-46 (parity Task 6): PA current, PA temperature and
@@ -2371,40 +2367,7 @@ PaValuesPage::PaValuesPage(RadioModel* model, QWidget* parent)
                 [this, hpsdrModel](quint16 fwdRaw, quint16 revRaw,
                                    quint16 /*exciterRaw*/, quint16 /*userAdc0*/,
                                    quint16 /*userAdc1*/,   quint16 /*supply*/) {
-                    if (m_fwdAdcLabel) {
-                        m_fwdAdcLabel->setValue(QString::number(fwdRaw));
-                    }
-                    if (m_revAdcLabel) {
-                        m_revAdcLabel->setValue(QString::number(revRaw));
-                    }
-                    // Phase 5B (#167) — Raw FWD power label, scaled via
-                    // PaTelemetryScaling::scaleFwdPowerWatts (Phase 1B).
-                    // From Thetis console.cs computeAlexFwdPower
-                    // [v2.10.3.13] — the raw alex_fwd shown on
-                    // textPAFwdPower at console.cs:24670.
-                    if (m_fwdRawLabel) {
-                        const double watts = scaleFwdPowerWatts(hpsdrModel, fwdRaw);
-                        m_fwdRawLabel->setValue(
-                            QString::number(watts, 'f', 2)
-                            + QStringLiteral(" W"));
-                    }
-                    // Phase 5B (#167) — FWD/REV voltage labels.  Both use
-                    // the FWD-side scaler curve per Phase 1B's combined-API
-                    // design (REV-side per-board offset difference is below
-                    // the f2 UI display resolution).
-                    // From Thetis console.cs:25068 / :25002 [v2.10.3.13].
-                    if (m_fwdVoltageLabel) {
-                        const double v = scaleFwdRevVoltage(hpsdrModel, fwdRaw);
-                        m_fwdVoltageLabel->setValue(
-                            QString::number(v, 'f', 2)
-                            + QStringLiteral(" V"));
-                    }
-                    if (m_revVoltageLabel) {
-                        const double v = scaleFwdRevVoltage(hpsdrModel, revRaw);
-                        m_revVoltageLabel->setValue(
-                            QString::number(v, 'f', 2)
-                            + QStringLiteral(" V"));
-                    }
+                    applyRawAdc(hpsdrModel, fwdRaw, revRaw);
                 });
 
         connect(conn, &RadioConnection::adcOverflow, this,
@@ -2425,20 +2388,176 @@ PaValuesPage::PaValuesPage(RadioModel* model, QWidget* parent)
     }
 
     // R-R3-32 / R-R3-46 (parity Task 6): in a remote window the power,
-    // raw ADC and RF voltage readings are the Core's transmit readings,
-    // which come with remote transmit; until then each says unavailable
-    // rather than showing a 0 nothing measured. The PA readings above are
-    // the Core's.
+    // raw ADC and RF voltage readings are the Core's transmit readings.
+    // R-R3-49 / R-R3-32 (parity Task 33): a Core at txReadingsVersion 1
+    // sends them in `txState`; below it each says unavailable with the
+    // reason rather than showing a 0 nothing measured.
     if (model->paReadingsFromCore()) {
-        const QString waits = tr("The Core sends this reading when this window can transmit.");
-        for (MetricLabel* label : {m_fwdCalibratedLabel, m_fwdRawLabel, m_revPowerLabel,
-                                   m_swrLabel, m_fwdVoltageLabel, m_revVoltageLabel,
-                                   m_adcOverloadLabel, m_fwdAdcLabel, m_revAdcLabel}) {
+        if (TransmitState* coreTx = model->stationTransmitState()) {
+            // As the local page: power on each power reading, the raw
+            // readings on each raw sample.
+            connect(coreTx, &TransmitState::metersChanged, this, [this, coreTx]() {
+                if (coreSendsTransmitReadings() && m_coreReadingsShown) {
+                    applyPowerReadings(coreTx->forwardPowerWatts(),
+                                       coreTx->reflectedPowerWatts(), coreTx->swr());
+                }
+            });
+            connect(coreTx, &TransmitState::adcRawChanged, this, [this, model, coreTx]() {
+                if (coreSendsTransmitReadings() && m_coreReadingsShown) {
+                    applyRawAdc(model->hardwareProfile().model,
+                                static_cast<quint16>(std::clamp<qint64>(coreTx->forwardAdcRaw(), 0, 65535)),
+                                static_cast<quint16>(std::clamp<qint64>(coreTx->reflectedAdcRaw(), 0, 65535)));
+                }
+            });
+        }
+        connect(model, &RadioModel::stationTxReadingsVersionChanged, this,
+                &PaValuesPage::refreshCoreTransmitReadings);
+        // The Core's ADC overload, as its step attenuator reports it.
+        if (StepAttenuatorFacade* stepAtt = model->stepAttFacade()) {
+            connect(stepAtt, &StepAttenuatorFacade::overloadAdc0Changed, this,
+                    [this](int) { refreshCoreAdcOverload(); });
+            connect(stepAtt, &StepAttenuatorFacade::overloadAdc1Changed, this,
+                    [this](int) { refreshCoreAdcOverload(); });
+        }
+        refreshCoreTransmitReadings();
+    }
+}
+
+void PaValuesPage::applyPowerReadings(double fwdW, double revW, double swr)
+{
+    m_fwdCurrent = fwdW;
+    m_revCurrent = revW;
+    m_swrCurrent = swr;
+    m_fwdPeakMin.update(fwdW);
+    m_revPeakMin.update(revW);
+    m_swrPeakMin.update(swr);
+    if (m_fwdCalibratedLabel) {
+        m_fwdCalibratedLabel->setValue(formatWithPeakMin(
+            fwdW, m_fwdPeakMin, QStringLiteral(" W"), 2));
+    }
+    if (m_revPowerLabel) {
+        m_revPowerLabel->setValue(formatWithPeakMin(
+            revW, m_revPeakMin, QStringLiteral(" W"), 2));
+    }
+    if (m_swrLabel) {
+        m_swrLabel->setValue(formatWithPeakMin(
+            swr, m_swrPeakMin, QString(), 2));
+    }
+}
+
+void PaValuesPage::applyRawAdc(HPSDRModel hpsdrModel, quint16 fwdRaw, quint16 revRaw)
+{
+    if (m_fwdAdcLabel) {
+        m_fwdAdcLabel->setValue(QString::number(fwdRaw));
+    }
+    if (m_revAdcLabel) {
+        m_revAdcLabel->setValue(QString::number(revRaw));
+    }
+    // Phase 5B (#167) — Raw FWD power label, scaled via
+    // PaTelemetryScaling::scaleFwdPowerWatts (Phase 1B).
+    // From Thetis console.cs computeAlexFwdPower
+    // [v2.10.3.13] — the raw alex_fwd shown on
+    // textPAFwdPower at console.cs:24670.
+    if (m_fwdRawLabel) {
+        const double watts = scaleFwdPowerWatts(hpsdrModel, fwdRaw);
+        m_fwdRawLabel->setValue(
+            QString::number(watts, 'f', 2)
+            + QStringLiteral(" W"));
+    }
+    // Phase 5B (#167) — FWD/REV voltage labels.  Both use
+    // the FWD-side scaler curve per Phase 1B's combined-API
+    // design (REV-side per-board offset difference is below
+    // the f2 UI display resolution).
+    // From Thetis console.cs:25068 / :25002 [v2.10.3.13].
+    if (m_fwdVoltageLabel) {
+        const double v = scaleFwdRevVoltage(hpsdrModel, fwdRaw);
+        m_fwdVoltageLabel->setValue(
+            QString::number(v, 'f', 2)
+            + QStringLiteral(" V"));
+    }
+    if (m_revVoltageLabel) {
+        const double v = scaleFwdRevVoltage(hpsdrModel, revRaw);
+        m_revVoltageLabel->setValue(
+            QString::number(v, 'f', 2)
+            + QStringLiteral(" V"));
+    }
+}
+
+bool PaValuesPage::coreSendsTransmitReadings()
+{
+    RadioModel* const radio = model();
+    return radio != nullptr && radio->paReadingsFromCore()
+        && radio->stationTransmitState() != nullptr && radio->stationTxReadingsVersion() >= 1;
+}
+
+void PaValuesPage::refreshCoreTransmitReadings()
+{
+    RadioModel* const radio = model();
+    if (radio == nullptr || !radio->paReadingsFromCore()) {
+        return;
+    }
+    const QList<MetricLabel*> labels{m_fwdCalibratedLabel, m_fwdRawLabel, m_revPowerLabel,
+                                     m_swrLabel, m_fwdVoltageLabel, m_revVoltageLabel,
+                                     m_adcOverloadLabel, m_fwdAdcLabel, m_revAdcLabel};
+    if (!coreSendsTransmitReadings()) {
+        m_coreReadingsShown = false;
+        const QString reason = TransmitState::txReadingNotSentText();
+        for (MetricLabel* label : labels) {
             if (label) {
                 label->setValue(tr("Unavailable"));
-                label->setToolTip(waits);
+                label->setToolTip(reason);
             }
         }
+        return;
+    }
+    const TransmitState* tx = radio->stationTransmitState();
+    // As the local page does at construction, the readings the page opens
+    // on are shown without starting the peak and minimum tracking; each
+    // change after that is tracked (the handlers in the constructor).
+    m_coreReadingsShown = true;
+    m_fwdCurrent = tx->forwardPowerWatts();
+    m_revCurrent = tx->reflectedPowerWatts();
+    m_swrCurrent = tx->swr();
+    m_fwdCalibratedLabel->setValue(formatWithPeakMin(
+        m_fwdCurrent, m_fwdPeakMin, QStringLiteral(" W"), 2));
+    m_revPowerLabel->setValue(formatWithPeakMin(
+        m_revCurrent, m_revPeakMin, QStringLiteral(" W"), 2));
+    m_swrLabel->setValue(formatWithPeakMin(
+        m_swrCurrent, m_swrPeakMin, QString(), 2));
+    const auto rawOf = [](qint64 v) {
+        return static_cast<quint16>(std::clamp<qint64>(v, 0, 65535));
+    };
+    applyRawAdc(radio->hardwareProfile().model, rawOf(tx->forwardAdcRaw()),
+                rawOf(tx->reflectedAdcRaw()));
+    refreshCoreAdcOverload();
+    // R-R3-32: each says it is the Core's.
+    for (MetricLabel* label : labels) {
+        if (label) {
+            label->setToolTip(tr("From the Core"));
+        }
+    }
+}
+
+void PaValuesPage::refreshCoreAdcOverload()
+{
+    RadioModel* const radio = model();
+    if (!m_adcOverloadLabel || !coreSendsTransmitReadings()) {
+        return;
+    }
+    // The Core's step attenuator reports each ADC's overload (0 none,
+    // 1 yellow, 2 red); either one overloaded reads as the local page's
+    // "Yes (ADC n)" does, until it clears.
+    const StepAttenuatorFacade* stepAtt = radio->stepAttFacade();
+    if (stepAtt == nullptr) {
+        m_adcOverloadLabel->setValue(tr("Unavailable"));
+        return;
+    }
+    if (stepAtt->overloadAdc0() > 0) {
+        m_adcOverloadLabel->setValue(QStringLiteral("Yes (ADC %1)").arg(0));
+    } else if (stepAtt->overloadAdc1() > 0) {
+        m_adcOverloadLabel->setValue(QStringLiteral("Yes (ADC %1)").arg(1));
+    } else {
+        m_adcOverloadLabel->setValue(QStringLiteral("No"));
     }
 }
 
@@ -2524,7 +2643,8 @@ void PaValuesPage::resetPaValues()
     // when telemetry is paused (e.g. radio disconnected).
     // R-R3-32 (parity Task 6): a remote window's power readings stay
     // unavailable (see the ctor's end).
-    const bool powerFromCore = model() && model()->paReadingsFromCore();
+    const bool powerFromCore = model() && model()->paReadingsFromCore()
+        && !coreSendsTransmitReadings();
     if (m_fwdCalibratedLabel && !powerFromCore) {
         m_fwdCalibratedLabel->setValue(formatWithPeakMin(
             m_fwdCurrent, m_fwdPeakMin, QStringLiteral(" W"), 2));

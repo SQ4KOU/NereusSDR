@@ -68,12 +68,20 @@
 //                 app Task 19, R-IOS-06) by J.J. Boyd (KG4VCF), with
 //                 AI-assisted transformation via Anthropic Claude Code; the
 //                 Core's catalogue sends the same scale to an app.
+//   2026-09-27  TX modes without a reading (R-R3-49, remote-window parity
+//                 Task 33) by J.J. Boyd (KG4VCF), with AI-assisted
+//                 implementation via Anthropic Claude Code.
+//                 setTxModeUnavailable(): a TX mode a remote window's Core
+//                 does not send shows "--" with the reason, never 0.  The TX
+//                 readout text of both faces moved unchanged into txReadout().
+//                 NereusSDR-native; no upstream equivalent.
 // =================================================================
 #pragma once
 
 #include "core/ControlRanges.h"
 
 #include <QWidget>
+#include <array>
 #include <QPixmap>
 #include <QTimer>
 #include <QElapsedTimer>
@@ -180,6 +188,11 @@ public:
     QString testDbmReadout() const { return rxDbmReadout(); }
     bool testPeakMarkersShown() const { return peakMarkerVisible() || peakHoldLineVisible(); }
 
+    // Test-only: the TX value the needle heads for and the TX readout the
+    // faces draw, in the current TX mode.  NereusSDR-native.
+    float testTxValue() const { return currentTxValue(); }
+    QString testTxReadout() const { return txReadout(false); }
+
     // Test-only: where the pointer is heading and where it is now
     // (0.0 = scale minimum, 1.0 = scale maximum).
     float testNeedleTarget() const { return m_targetNeedleFraction; }
@@ -229,6 +242,15 @@ public slots:
     // NereusSDR-native; no upstream equivalent.
     void setFaceStyle(FaceStyle style);
 
+    // R-R3-49 (remote-window parity Task 33): a TX mode this window has no
+    // reading for (a remote window whose Core does not send it).  While
+    // transmitting in that mode both faces show "--", the pointer rests at
+    // the scale minimum and the widget's tool tip says `reason`, never a 0
+    // standing in for a reading.  An empty reason clears it.  The mode stays
+    // offered in the right-click menu.  NereusSDR-native.
+    void setTxModeUnavailable(TxMode mode, const QString& reason);
+    QString txModeUnavailableReason(TxMode mode) const;
+
     // Persisted name <-> enum for SMeter_FaceStyle, and the menu label.
     // Public for Setup > Appearance > Meter Styles, which offers the same
     // faces (R-R3-21).
@@ -260,6 +282,12 @@ private:
     // is no reading.  NereusSDR-native.
     QString rxSUnitsReadout() const;
     QString rxDbmReadout() const;
+    // TX readout in the current TX mode ("--" when the mode has no
+    // reading); `swrRatio` draws SWR as "1.5 : 1" (the vintage faces).
+    // NereusSDR-native (the per-mode text is the faces' existing text).
+    QString txReadout(bool swrRatio) const;
+    bool currentTxModeUnavailable() const;
+    void refreshTxToolTip();
 
     // Whether a face draws the RX Signal Peak marker / the peak hold line.
     // The conditions both faces share; false while there is no reading.
@@ -323,6 +351,8 @@ private:
     // Mode state
     // From AetherSDR src/gui/SMeterWidget.h:92-94 [@0cd4559]
     TxMode  m_txMode{TxMode::Power};
+    // Parity Task 33: why each TX mode has no reading here (by TxMode).
+    std::array<QString, 4> m_txUnavailable;
     RxMode  m_rxMode{RxMode::SMeter};
     bool    m_transmitting{false};
 

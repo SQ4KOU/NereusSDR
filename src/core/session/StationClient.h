@@ -351,6 +351,10 @@
 //               supportBundleAvailable(), requestSupportBundle(),
 //               requestLogCategories() and requestCoreLog(). J.J. Boyd
 //               (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27: Parity Task 33 (R-R3-49, R-R3-32): txReadingsAvailable(),
+//               setCfcCompressionWanted() and cfcCompressionReceived (the
+//               Core's txCfcCompression stream). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QAbstractSocket>
@@ -868,6 +872,16 @@ public:
     /// the Core does not send it (txStateVersion 0) and after a session
     /// ends; its stop fields keep the last stop until the next snapshot.
     TransmitState* transmitState() const { return m_transmitState; }
+    /// Parity Task 33 (R-R3-49, R-R3-32): the Core sends its transmit
+    /// readings (txReadingsVersion 1): `txState`'s forwardAdcRaw and
+    /// reflectedAdcRaw, and the txCfcCompression stream.
+    bool txReadingsAvailable() const;
+    /// Parity Task 33: whether this window shows the CFC bar chart. While
+    /// true (and the Core sends it) the window subscribes to the Core's
+    /// txCfcCompression stream, again after each reconnect; false
+    /// unsubscribes, so the Core stops reading.
+    void setCfcCompressionWanted(bool wanted);
+    bool cfcCompressionWanted() const { return m_cfcCompressionWanted; }
     /// Fix wave I4: this window's device id as the Core sends device ids
     /// (connectedDevices, txState's holderDeviceId), or empty without a
     /// device identity.
@@ -1240,6 +1254,10 @@ public:
     int handshakeDeadlineMs() const { return m_handshakeDeadlineMs; }
 
 signals:
+    /// Parity Task 33: the Core's CFC display, one value per bin
+    /// (TxChannel::kCfcDisplayBinCount, in dB to a tenth), read at
+    /// `atMs` on the Core's clock.
+    void cfcCompressionReceived(const QList<double>& binsDb, qint64 atMs);
     /// iPhone app plan Task 78: a several-devices verb was answered
     /// (tx.take, confirm.proceed, confirm.cancel, notice.takeBack).
     /// `awaitingConfirmation` when the Core asked a question instead (it
@@ -1490,6 +1508,9 @@ private:
     bool m_enrolledDeviceKey = false;
     int m_enrolledKeyForTest = -1;
     quint16 m_agreedMinor = 0;
+    // Parity Task 33: this window shows the CFC bar chart.
+    bool m_cfcCompressionWanted = false;
+    void sendCfcCompressionSubscription(bool subscribe);
 
     /// iPhone app Task 4: this client's link majors (oldest first) and
     /// features, and what the current station's hello declared.

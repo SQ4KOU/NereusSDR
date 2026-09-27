@@ -410,6 +410,10 @@
 //               under every session, session.pathTicket and path.join, the
 //               Task 29 capabilities. J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-27: Parity Task 33 (R-R3-49, R-R3-32): txReadingsVersion()
+//               and the txCfcCompression stream's reader. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -1210,6 +1214,18 @@ public:
     /// 2 (fix wave I4): `txState` names the holder of transmit (ruling 8.1)
     /// and carries keyedForSeconds.
     int txStateVersion() const { return 2; }
+    /// Parity Task 33 (R-R3-49, R-R3-32): 1 when `txState` also carries
+    /// forwardAdcRaw and reflectedAdcRaw and the Core keeps the
+    /// txCfcCompression record stream (a Core with its own radio model and
+    /// record streams); sent right after txStateVersion and only with it.
+    int txReadingsVersion() const;
+    /// Parity Task 33: whether the Core reads the CFC display now (a peer
+    /// subscribes to txCfcCompression, the radio is keyed and CFC is on).
+    bool cfcCompressionPollingForTest() const;
+    /// Parity Task 33: replaces TxChannel::getCfcDisplayCompression for a
+    /// test (same contract: fills kCfcDisplayBinCount values, true when
+    /// WDSP has new data).
+    void setCfcDisplayReaderForTest(std::function<bool(double*, int)> reader);
     /// The gate's answer for `transport` (what its txPermitted says).
     TxDecision txDecisionFor(SessionTransport* transport) const;
     /// The refusal a capabilities message carries (empty without one).
@@ -1402,6 +1418,9 @@ private:
     void handleRecordsCommand(SessionTransport* transport, const SessionMessage& message);
     void scheduleRecordFlush();
     void flushRecordStreams();
+    // Parity Task 33: the CFC display read every 50 ms while it is wanted.
+    void updateCfcCompressionPolling();
+    void pollCfcCompression();
     void handleSettingsWrite(SessionTransport* transport, const SessionMessage& message);
     /// The body of handleSettingsWrite after its checks: applies the write
     /// through the settings proxy. A refusal goes to `refusal` when given,
@@ -1952,6 +1971,9 @@ private:
     QJsonObject m_lastTelemetry;
     qint64 m_lastTelemetryAtMs = 0;
     QString m_supportConfigPath;
+    // Parity Task 33: the txCfcCompression stream's reader and its timer.
+    QTimer* m_cfcPollTimer = nullptr;
+    std::function<bool(double*, int)> m_cfcDisplayReader;
     // Parity Task 21: the Core's radios and their stream.
     QPointer<StationRadios> m_stationRadios;
     void publishStationRadios();

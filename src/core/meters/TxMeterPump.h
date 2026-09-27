@@ -18,6 +18,8 @@
 //                 Thetis's ALC and MIC readings (thetisTxReading in
 //                 WdspTypes.h, as MeterPoller shows them on the desktop),
 //                 worked from TxChannel::txMeter.
+//   compressionDb Thetis's COMP reading, worked the same way (parity
+//                 Task 33 follow-up, txReadingsVersion 1).
 //
 // R-R3-39 (the plan's Task 32): TxChannel::txMeter returns the transmit
 // lane's last reading and asks the lane for a fresh one, so a poll here
@@ -34,6 +36,9 @@
 // Modification history (NereusSDR):
 //   2026-09-25: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 39 (D14, R-IOS-13), with
+//               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27: Remote-window parity Task 33 follow-up (R-R3-49): the COMP
+//               reading (compressionDb). J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
@@ -64,6 +69,8 @@ struct TxMeterReadings {
     double swr{1.0};
     double alcDb{kNoReadingDb};
     double micLevelDb{kNoReadingDb};
+    /// Parity Task 33 follow-up: Thetis's COMP reading.
+    double compressionDb{kNoReadingDb};
 
     bool operator==(const TxMeterReadings& other) const = default;
 };

@@ -143,6 +143,12 @@
 //                R-R3-49): setMonitorOutputPermitted, the MON output pair
 //                in a remote window on a Core that does not send the
 //                transmit monitor. AI-assisted via Anthropic Claude Code.
+//   2026-09-27  J.J. Boyd / KG4VCF  Remote-window parity Task 33 (R-R3-49,
+//                R-IOS-13): the CFC dialog's bar chart from the Core's
+//                stream (setStationCfcBarChart); in a remote window the RF
+//                Pwr and SWR bars fall at the Core's unkey as a local
+//                window's do at its own. AI-assisted via Anthropic Claude
+//                Code.
 // =================================================================
 
 //=================================================================
@@ -1073,6 +1079,17 @@ void TxApplet::wireControls()
         connect(m_model->moxController(), &MoxController::moxStateChanged,
                 this, [this](bool active) {
             if (active) { return; }      // rising-edge: smoothing takes over
+            m_fwdPowerSmoothedW = 0.0;
+            if (m_fwdPowerGauge) { m_fwdPowerGauge->setValue(0.0); }
+            if (m_swrGauge)      { m_swrGauge->setValue(1.0); }
+        });
+    }
+    // R-R3-49 (parity Task 33): a remote window's MoxController never keys;
+    // the Core's unkey (its mirrored transmit state) clears the two bars
+    // the same way.
+    if (m_model && m_model->role() == RadioModel::Role::Remote) {
+        connect(m_model, &RadioModel::transmittingChanged, this, [this](bool active) {
+            if (active) { return; }
             m_fwdPowerSmoothedW = 0.0;
             if (m_fwdPowerGauge) { m_fwdPowerGauge->setValue(0.0); }
             if (m_swrGauge)      { m_swrGauge->setValue(1.0); }
@@ -2450,9 +2467,37 @@ void TxApplet::requestOpenCfcDialog()
         m_cfcDialog->setTxChannel(m_model->txChannel());
     }
     m_cfcDialog->setSettingsPermitted(m_txProcessingPermitted, m_txProcessingReason);
+    // Parity Task 33: a remote window's chart reads the Core's stream.
+    if (m_stationCfcBarChart) {
+        m_cfcDialog->setStationBarChart(m_stationCfcBarChart);
+        m_cfcDialog->setBarChartUnavailable(m_stationCfcBarChartReason);
+    }
     m_cfcDialog->show();
     m_cfcDialog->raise();
     m_cfcDialog->activateWindow();
+}
+
+void TxApplet::setStationCfcBarChart(std::function<void(bool)> setWanted)
+{
+    m_stationCfcBarChart = std::move(setWanted);
+    if (m_cfcDialog && m_stationCfcBarChart) {
+        m_cfcDialog->setStationBarChart(m_stationCfcBarChart);
+    }
+}
+
+void TxApplet::applyStationCfcCompression(const QList<double>& binsDb)
+{
+    if (m_cfcDialog) {
+        m_cfcDialog->applyStationCompression(binsDb);
+    }
+}
+
+void TxApplet::setStationCfcBarChartUnavailable(const QString& reason)
+{
+    m_stationCfcBarChartReason = reason;
+    if (m_cfcDialog) {
+        m_cfcDialog->setBarChartUnavailable(reason);
+    }
 }
 
 void TxApplet::setTxProcessingPermitted(bool permitted, const QString& unavailableReason)

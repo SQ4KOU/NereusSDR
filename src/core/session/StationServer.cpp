@@ -593,6 +593,12 @@
 //               implementation via Anthropic Claude Code.
 //   2026-09-27: bounded support collection and Core-log credential redaction
 //               refined with OpenAI Codex assistance.
+//   2026-09-27: Parity Task 33 (R-R3-49, R-R3-32, R-IOS-13):
+//               txReadingsVersion 1, right after txStateVersion; the
+//               txCfcCompression record stream, read every 50 ms (Thetis
+//               frmCFCConfig.cs timerTick) only while a peer subscribes and
+//               the radio is keyed with CFC on. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -624,6 +630,7 @@
 #include "core/security/TokenStore.h"
 #include "core/session/MirrorPolicy.h"
 #include "core/session/TransmitStateFacade.h"
+#include "core/TxChannel.h"
 #include "core/session/MirrorSchema.h"
 #include "core/session/MirrorView.h"
 #include "core/session/ObjectRegistry.h"
@@ -675,6 +682,7 @@
 
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <array>
 #include <QLoggingCategory>
 #include <QNetworkInterface>
 #include <QRegularExpression>
@@ -879,6 +887,8 @@ constexpr int kStationRadiosCapacity = 64;
 // iPhone plan Task 22 / parity Task 20: the FreeDV Reporter stations a Core
 // lists at once (qso.freedv.org lists a few hundred).
 constexpr int kFreedvStationsCapacity = 1000;
+// Parity Task 33: Thetis's CFC display interval, 50 ms.
+constexpr int kCfcDisplayPollMs = 50;
 
 // R-R3-47 / R-R3-22 (accessoryDataVersion 1): the Core's accessory records
 // and settings, read-only, for a peer at kRadioIdentitySessionProtocolMinor
@@ -3246,6 +3256,8 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
         Q_UNUSED(name);
         stream->unsubscribe(transport);
     }
+    // Parity Task 33: a gone viewer of the CFC display may end the reads.
+    updateCfcCompressionPolling();
     if (!view.isNull()) {
         view->close();
         view->deleteLater();
@@ -7979,6 +7991,8 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
                 caps.remoteTxVersion = remoteTxVersion();
                 // iPhone app plan Task 39: the `txState` object, with it.
                 caps.txStateVersion = txStateVersion();
+                // Parity Task 33: the transmit readings, right after it.
+                caps.txReadingsVersion = txReadingsVersion();
             }
             const HardwareProfile& profile = m_radioModel->hardwareProfile();
             caps.hpsdrModel = profile.caps != nullptr ? profile.model : HPSDRModel::FIRST;
@@ -8185,6 +8199,23 @@ void StationServer::setUpRecordStreams()
                            QJsonObject{{QStringLiteral("line"), line}});
         scheduleRecordFlush();
     });
+
+    // Parity Task 33 (R-R3-49, R-IOS-13): the CFC bar chart's data, one
+    // record (id "0") replaced as WDSP produces it. Read every 50 ms, the
+    // interval of Thetis's frmCFCConfig timer:
+    // From Thetis frmCFCConfig.cs:443-447 [v2.10.3.15] (setTimer):
+    //   _timer = new System.Threading.Timer(timerTick, null, 100, 50);
+    // only while a peer subscribes and the radio is keyed with CFC on.
+    m_recordStreams.emplace(QString::fromLatin1(TransmitState::kCfcStream),
+                            std::make_unique<RecordStream>(
+                                QString::fromLatin1(TransmitState::kCfcStream), 1));
+    m_cfcPollTimer = new QTimer(this);
+    m_cfcPollTimer->setInterval(kCfcDisplayPollMs);
+    connect(m_cfcPollTimer, &QTimer::timeout, this, &StationServer::pollCfcCompression);
+    connect(m_radioModel, &RadioModel::transmittingChanged, this,
+            [this](bool) { updateCfcCompressionPolling(); });
+    connect(&m_radioModel->transmitModel(), &TransmitModel::cfcEnabledChanged, this,
+            [this](bool) { updateCfcCompressionPolling(); });
 }
 
 void StationServer::scheduleRecordFlush()
@@ -8262,6 +8293,8 @@ void StationServer::handleRecordsCommand(SessionTransport* transport, const Sess
     if (!subscribe) {
         it->second->unsubscribe(transport);
         answer(true, QString());
+        // Parity Task 33: the last viewer gone, the Core stops reading.
+        updateCfcCompressionPolling();
         return;
     }
     // The answer, then the backlog as a reset: the peer's copy starts from
@@ -8270,6 +8303,8 @@ void StationServer::handleRecordsCommand(SessionTransport* transport, const Sess
     const RecordBatch first = it->second->subscribe(transport, wanted);
     answer(true, QString());
     send(transport, SessionMessages::recordBatch(first));
+    // Parity Task 33: a viewer of the CFC display may start the reads.
+    updateCfcCompressionPolling();
     if (coreLog && m_coreLogTimer != nullptr && !m_coreLogTimer->isActive()) {
         m_coreLogTimer->start();
     }
@@ -8357,6 +8392,78 @@ void StationServer::pullCoreLog()
     }
     m_coreLogInPrivateKey = inPrivateKey;
     m_coreLogSequence = lines.last().sequence;
+    scheduleRecordFlush();
+}
+
+int StationServer::txReadingsVersion() const
+{
+    // Parity Task 33 (R-R3-49, R-R3-32): the raw PA readings come from the
+    // Core's own radio model, and the CFC display travels as a record
+    // stream, which a Core without record streams does not keep.
+    return m_recordStreams.find(QString::fromLatin1(TransmitState::kCfcStream))
+            != m_recordStreams.end()
+        ? 1
+        : 0;
+}
+
+bool StationServer::cfcCompressionPollingForTest() const
+{
+    return m_cfcPollTimer != nullptr && m_cfcPollTimer->isActive();
+}
+
+void StationServer::setCfcDisplayReaderForTest(std::function<bool(double*, int)> reader)
+{
+    m_cfcDisplayReader = std::move(reader);
+}
+
+void StationServer::updateCfcCompressionPolling()
+{
+    if (m_cfcPollTimer == nullptr) {
+        return;
+    }
+    const auto it = m_recordStreams.find(QString::fromLatin1(TransmitState::kCfcStream));
+    // Only while a peer looks at the chart, the radio is on the air and CFC
+    // runs: the local dialog reads only while it is shown, and the display
+    // has data only while CFC compresses a transmission.
+    const bool wanted = it != m_recordStreams.end() && it->second->subscriberCount() > 0
+        && !m_radioModel.isNull() && m_radioModel->isTransmitting()
+        && m_radioModel->transmitModel().cfcEnabled();
+    if (wanted && !m_cfcPollTimer->isActive()) {
+        m_cfcPollTimer->start();
+    } else if (!wanted && m_cfcPollTimer->isActive()) {
+        m_cfcPollTimer->stop();
+    }
+}
+
+void StationServer::pollCfcCompression()
+{
+    const auto it = m_recordStreams.find(QString::fromLatin1(TransmitState::kCfcStream));
+    if (it == m_recordStreams.end() || m_radioModel.isNull()) {
+        return;
+    }
+    // From Thetis frmCFCConfig.cs:404-407 [v2.10.3.15] (timerTick):
+    //   WDSP.GetTXACFCOMPDisplayCompression(WDSP.id(1, 0), ptrCompValues, &ready);
+    //   if (ready == 1)
+    // A record goes out only when WDSP says there is new data; the window
+    // maps the bins to its chart's range as the local dialog does.
+    std::array<double, TxChannel::kCfcDisplayBinCount> bins{};
+    bool ready = false;
+    if (m_cfcDisplayReader) {
+        ready = m_cfcDisplayReader(bins.data(), TxChannel::kCfcDisplayBinCount);
+    } else if (TxChannel* tx = m_radioModel->txChannel()) {
+        ready = tx->getCfcDisplayCompression(bins.data(), TxChannel::kCfcDisplayBinCount);
+    }
+    if (!ready) {
+        return;
+    }
+    it->second->upsert(QString::fromLatin1(TransmitState::kCfcRecordId),
+                       QJsonObject{
+                           {QStringLiteral("atMs"),
+                            static_cast<double>(m_deviceSessions->now())},
+                           {QStringLiteral("binsDbTenths"),
+                            TransmitState::encodeCfcBins(bins.data(),
+                                                         TxChannel::kCfcDisplayBinCount)},
+                       });
     scheduleRecordFlush();
 }
 

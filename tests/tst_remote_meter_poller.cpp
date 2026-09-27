@@ -9,6 +9,10 @@
 //               meters shown disabled with the reason on a connected Core
 //               below meterReadingsVersion 1. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27: remote-window parity Task 33 (R-R3-49): the window's SWR is
+//               the Core's, sent in txState; TxComp waits for
+//               txReadingsVersion 1. J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 #include <QTest>
 #include <QSignalSpy>
 
@@ -429,14 +433,20 @@ private slots:
             QCOMPARE(bars.bindingUnavailableReason(binding), MeterPoller::remoteTxMeterNotSentText());
         }
         QCOMPARE(bars.items().size(), bindings.size());   // none hidden
-        QCOMPARE(bars.unavailableReasonAt(QPointF(10, 0.1 * 200 * 5 + 5)),
-                 MeterPoller::remoteTxMeterNotSentText());  // the TxComp row
+        QCOMPARE(bars.unavailableReasonAt(QPointF(10, 0.1 * 200 * 6 + 5)),
+                 MeterPoller::remoteTxMeterNotSentText());  // the TxEq row
+        // Parity Task 33 follow-up: TxComp waits for txReadingsVersion 1.
+        QCOMPARE(bars.bindingUnavailableReason(MeterBinding::TxComp),
+                 TransmitState::txReadingNotSentText());
         QVERIFY(bars.unavailableReasonAt(QPointF(10, 5)).isEmpty());  // TxPower
 
         // The Core keys and reads its meters.
         QVERIFY(state.applyStationValue("keyed", true));
         QVERIFY(state.applyStationValue("forwardPowerWatts", 50.0));
         QVERIFY(state.applyStationValue("reflectedPowerWatts", 2.0));
+        // Parity Task 33: SWR as the Core worked it (50 W forward, 2 W
+        // reflected: rho 0.2, 1.2 / 0.8).
+        QVERIFY(state.applyStationValue("swr", 1.5));
         QVERIFY(state.applyStationValue("alcDb", -3.0));
         QVERIFY(state.applyStationValue("micLevelDb", -12.0));
         tick();
@@ -453,6 +463,7 @@ private slots:
         QVERIFY(state.applyStationValue("keyed", false));
         QVERIFY(state.applyStationValue("forwardPowerWatts", 0.0));
         QVERIFY(state.applyStationValue("reflectedPowerWatts", 0.0));
+        QVERIFY(state.applyStationValue("swr", 1.0));
         tick();
         QCOMPARE(items.value(MeterBinding::TxPower)->value(), 0.0);
         QCOMPARE(items.value(MeterBinding::TxSwr)->value(), 1.0);

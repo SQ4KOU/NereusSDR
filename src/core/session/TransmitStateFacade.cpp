@@ -37,6 +37,12 @@
 //               border shows, appended (txDisplayVersion 1). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-27: Parity Task 33 (R-R3-49, R-R3-32): forwardAdcRaw and
+//               reflectedAdcRaw from RadioModel::paRawAdc (txReadingsVersion
+//               1); encodeCfcBins / decodeCfcBins for the txCfcCompression
+//               record; compressionDb, the pump's COMP reading. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/TransmitStateFacade.h"
@@ -83,7 +89,8 @@ bool sameReadings(const TxMeterReadings& a, const TxMeterReadings& b)
     return sameReading(a.forwardPowerWatts, b.forwardPowerWatts)
         && sameReading(a.reflectedPowerWatts, b.reflectedPowerWatts)
         && sameReading(a.swr, b.swr) && sameReading(a.alcDb, b.alcDb)
-        && sameReading(a.micLevelDb, b.micLevelDb);
+        && sameReading(a.micLevelDb, b.micLevelDb)
+        && sameReading(a.compressionDb, b.compressionDb);
 }
 
 } // namespace
@@ -182,6 +189,16 @@ void TransmitState::bind(RadioModel* model)
             [this](bool) { refreshSwr(); });
     refreshSwr();
 
+    // Parity Task 33: the raw PA readings. Unkeyed they follow the radio's
+    // samples as they change; keyed the meter pump sets the pace
+    // (onMeterReadings).
+    connect(model, &RadioModel::paRawAdcChanged, this, [this]() {
+        if (!m_keyed) {
+            refreshAdcRaw();
+        }
+    });
+    refreshAdcRaw();
+
     // The model as it is now.
     m_meters = m_pump->readNow();
     if (model->isTransmitting()) {
@@ -227,6 +244,55 @@ void TransmitState::refreshSwr()
     m_highSwr = high;
     m_swrWindBackLatched = latched;
     emit swrChanged();
+}
+
+void TransmitState::refreshAdcRaw()
+{
+    if (m_model.isNull()) {
+        return;
+    }
+    const RadioModel::PaRawAdc raw = m_model->paRawAdc();
+    const qint64 forward = raw.forward;
+    const qint64 reflected = raw.reflected;
+    if (forward == m_forwardAdcRaw && reflected == m_reflectedAdcRaw) {
+        return;
+    }
+    m_forwardAdcRaw = forward;
+    m_reflectedAdcRaw = reflected;
+    emit adcRawChanged();
+}
+
+QString TransmitState::encodeCfcBins(const double* bins, int count)
+{
+    QByteArray bytes;
+    bytes.reserve(count * 2);
+    for (int i = 0; i < count; ++i) {
+        const double v = bins[i];
+        const double tenths = std::isfinite(v) ? std::round(v * 10.0) : 0.0;
+        const auto clamped = static_cast<qint16>(std::clamp(tenths, -32768.0, 32767.0));
+        const auto u = static_cast<quint16>(clamped);
+        bytes.append(static_cast<char>(u & 0xFF));
+        bytes.append(static_cast<char>((u >> 8) & 0xFF));
+    }
+    return QString::fromLatin1(bytes.toBase64());
+}
+
+QList<double> TransmitState::decodeCfcBins(const QString& text)
+{
+    const QByteArray::FromBase64Result decoded =
+        QByteArray::fromBase64Encoding(text.toLatin1(), QByteArray::AbortOnBase64DecodingErrors);
+    if (!decoded || decoded.decoded.size() % 2 != 0) {
+        return {};
+    }
+    const QByteArray& bytes = decoded.decoded;
+    QList<double> bins;
+    bins.reserve(bytes.size() / 2);
+    for (qsizetype i = 0; i + 1 < bytes.size(); i += 2) {
+        const auto u = static_cast<quint16>(static_cast<quint8>(bytes.at(i))
+                                            | (static_cast<quint8>(bytes.at(i + 1)) << 8));
+        bins.append(static_cast<qint16>(u) / 10.0);
+    }
+    return bins;
 }
 
 void TransmitState::setClock(Clock clock)
@@ -316,6 +382,8 @@ void TransmitState::refreshTimeOut()
 void TransmitState::onMeterReadings(const TxMeterReadings& readings)
 {
     setMeters(readings);
+    // Parity Task 33: the raw PA readings at the meters' pace while keyed.
+    refreshAdcRaw();
     refreshTimeOut();
 }
 
@@ -437,6 +505,11 @@ QString TransmitState::takenOverText(const QString& takerName)
         .arg(leadingDevice(takerName));
 }
 
+QString TransmitState::txReadingNotSentText()
+{
+    return QStringLiteral("This Core does not send this reading. Updating the Core may help.");
+}
+
 QString TransmitState::stationText()
 {
     return QStringLiteral("The Core stopped transmitting.");
@@ -496,6 +569,10 @@ bool TransmitState::applyStationValue(const QByteArray& propertyName, const QVar
     } else if (propertyName == "micLevelDb") {
         readings.micLevelDb = value.toDouble();
         meters = true;
+    } else if (propertyName == "compressionDb") {
+        // Parity Task 33 follow-up: the Core's COMP reading.
+        readings.compressionDb = value.toDouble();
+        meters = true;
     } else if (propertyName == "stopReason") {
         stop = value.toString() != m_stopReason;
         m_stopReason = value.toString();
@@ -515,6 +592,14 @@ bool TransmitState::applyStationValue(const QByteArray& propertyName, const QVar
         if (value.toBool() != field) {
             field = value.toBool();
             emit swrChanged();
+        }
+        return true;
+    } else if (propertyName == "forwardAdcRaw" || propertyName == "reflectedAdcRaw") {
+        // Parity Task 33: the radio's raw PA readings, as the Core sends them.
+        qint64& field = propertyName == "forwardAdcRaw" ? m_forwardAdcRaw : m_reflectedAdcRaw;
+        if (value.toLongLong() != field) {
+            field = value.toLongLong();
+            emit adcRawChanged();
         }
         return true;
     } else if (propertyName == "keyedForSeconds") {
@@ -598,6 +683,11 @@ void TransmitState::clearStationValues()
         emit timeOutChanged();
     }
     setMeters(TxMeterReadings{});
+    if (m_forwardAdcRaw != 0 || m_reflectedAdcRaw != 0) {
+        m_forwardAdcRaw = 0;
+        m_reflectedAdcRaw = 0;
+        emit adcRawChanged();
+    }
     if (m_highSwr || m_swrWindBackLatched) {
         m_highSwr = false;
         m_swrWindBackLatched = false;

@@ -349,6 +349,12 @@
 //                remove, layout restore and change, so the audio thread
 //                never walks m_slices. NereusSDR-original. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27 - Parity Task 33 (R-R3-49, R-R3-32): paRawAdc() and
+//                paRawAdcChanged, the radio's raw forward and reflected
+//                power readings the Core sends in txState; a remote window's
+//                stationTransmitState() and stationTxReadingsVersion().
+//                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -544,6 +550,7 @@ class TxWorkerThread;
 // iPhone app plan Task 36: the remote microphone ring.
 class RemoteMicFeed;
 class TxDisplayFeed;
+class TransmitState;
 // Stage C2 filter preset editor — user-override layer over Thetis defaults.
 class FilterPresetStore;
 
@@ -1314,6 +1321,30 @@ public:
     // settings from this window.
     int stationTxDisplayVersion() const { return m_stationTxDisplayVersion; }
     void setStationTxDisplayVersion(int version);
+    // Remote-window parity Task 33 (R-R3-49, R-R3-32): the Core's
+    // txReadingsVersion as a remote window last heard it (0 on a local
+    // model, or before the Core says). At 1 the Core's `txState` carries
+    // forwardAdcRaw and reflectedAdcRaw and the Core keeps the
+    // txCfcCompression stream.
+    int stationTxReadingsVersion() const { return m_stationTxReadingsVersion; }
+    void setStationTxReadingsVersion(int version);
+    // A remote window's copy of the Core's `txState` (StationClient owns it
+    // and sets it here), for pages that show the Core's transmit readings:
+    // PA Values. Null on a local model.
+    TransmitState* stationTransmitState() const;
+    void setStationTransmitState(TransmitState* state);
+
+    // Parity Task 33: the radio's raw forward and reflected power readings
+    // (the ADC counts RadioConnection::paTelemetryUpdated carries), as the
+    // last sample reported them, transmitting or not. The Core sends them in
+    // `txState` (forwardAdcRaw, reflectedAdcRaw); PA Values shows them.
+    struct PaRawAdc {
+        quint16 forward = 0;
+        quint16 reflected = 0;
+        bool reported = false;
+        bool operator==(const PaRawAdc&) const = default;
+    };
+    PaRawAdc paRawAdc() const { return m_paRawAdc; }
     // How long the last DSP Options apply took (dspChangeMeasured), in ms;
     // the Core's in a remote window. 0 before any.
     qint64 dspOptionsLastApplyMs() const;
@@ -4728,6 +4759,10 @@ signals:
     void coreOnAirChanged(bool onAir);
     // R-R3-32 (parity Task 6): paReadings() changed.
     void paReadingsChanged();
+    // Parity Task 33: paRawAdc() changed.
+    void paRawAdcChanged();
+    // Parity Task 33: stationTxReadingsVersion() changed.
+    void stationTxReadingsVersionChanged();
     // R-R3-49 (parity Task 6): isTxInhibited() changed.
     void txInhibitedChanged(bool inhibited);
     // Fires on each transition to Connected with the RadioInfo of the live
@@ -7282,6 +7317,11 @@ private:
     int m_stationDspInfoVersion{0};
     // Remote-window parity Task 30: the Core's txDisplayVersion.
     int m_stationTxDisplayVersion{0};
+    // Remote-window parity Task 33: the Core's txReadingsVersion and the
+    // window's copy of its `txState`; the radio's last raw PA readings.
+    int m_stationTxReadingsVersion{0};
+    QPointer<TransmitState> m_stationTransmitState;
+    PaRawAdc m_paRawAdc;
     int m_stationDspAssetVersion{0};
     qint64 m_dspOptionsLastApplyMs{0};
     bool m_stationRadioChangeUnderway{false};

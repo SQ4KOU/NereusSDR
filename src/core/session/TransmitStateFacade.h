@@ -42,6 +42,15 @@
 //                          its drive fold-back has latched: what RadioModel
 //                          hands a local window's setHighSwrOverlay
 //                          (parity Task 28, txDisplayVersion 1)
+//   forwardAdcRaw, reflectedAdcRaw
+//                          the radio's raw forward and reflected power
+//                          readings (the ADC counts of its last PA sample),
+//                          refreshed with the meters, keyed or not; a
+//                          window scales them as its own PA Values page
+//                          does (parity Task 33, txReadingsVersion 1)
+//   compressionDb          Thetis's COMP reading (max(-30, TXA_COMP_AV)), with
+//                          the meters, as the local Compression meters
+//                          show it (Task 33 follow-up, txReadingsVersion 1)
 //
 // Updates: while keyed the meters are read ten times a second (the
 // transmit lane's cached readings; never a WDSP call on the event loop)
@@ -82,11 +91,18 @@
 //               border shows, appended (txDisplayVersion 1). J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-27: Parity Task 33 (R-R3-49, R-R3-32): forwardAdcRaw and
+//               reflectedAdcRaw appended (txReadingsVersion 1), and the
+//               txCfcCompression record's bins encoding; then
+//               compressionDb, the COMP reading. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include <optional>
 #include <QByteArray>
 #include <QElapsedTimer>
+#include <QList>
 #include <QObject>
 #include <QPointer>
 #include <QString>
@@ -143,6 +159,12 @@ class TransmitState final : public QObject {
     // appended so every earlier ordinal stays.
     Q_PROPERTY(bool highSwr READ highSwr NOTIFY swrChanged)
     Q_PROPERTY(bool swrWindBackLatched READ swrWindBackLatched NOTIFY swrChanged)
+    // Parity Task 33 (txReadingsVersion 1): the radio's raw forward and
+    // reflected power readings, appended so every earlier ordinal stays.
+    Q_PROPERTY(qint64 forwardAdcRaw READ forwardAdcRaw NOTIFY adcRawChanged)
+    Q_PROPERTY(qint64 reflectedAdcRaw READ reflectedAdcRaw NOTIFY adcRawChanged)
+    // Task 33 follow-up (txReadingsVersion 1): the COMP reading, appended.
+    Q_PROPERTY(double compressionDb READ compressionDb NOTIFY metersChanged)
 
 public:
     // The link's stopReason values.
@@ -208,6 +230,7 @@ public:
     double swr() const { return m_meters.swr; }
     double alcDb() const { return m_meters.alcDb; }
     double micLevelDb() const { return m_meters.micLevelDb; }
+    double compressionDb() const { return m_meters.compressionDb; }
     TxMeterReadings meters() const { return m_meters; }
     bool txEnding() const { return m_txEnding; }
     QString stopReason() const { return m_stopReason; }
@@ -216,6 +239,22 @@ public:
     qint64 stopEpoch() const { return m_stopEpoch; }
     bool highSwr() const { return m_highSwr; }
     bool swrWindBackLatched() const { return m_swrWindBackLatched; }
+    qint64 forwardAdcRaw() const { return m_forwardAdcRaw; }
+    qint64 reflectedAdcRaw() const { return m_reflectedAdcRaw; }
+
+    // ---- Parity Task 33: the txCfcCompression record ----
+
+    /// The record stream's name, its one record's id, and its fields.
+    static constexpr const char* kCfcStream = "txCfcCompression";
+    static constexpr const char* kCfcRecordId = "0";
+    /// The bins as the record carries them: each value rounded to a tenth
+    /// of a dB, as a little-endian int16 (tenths), all in base64.
+    static QString encodeCfcBins(const double* bins, int count);
+    /// Back to dB; empty for text that is not base64 of whole int16s.
+    static QList<double> decodeCfcBins(const QString& text);
+    /// Why a window has no transmit reading from its Core: a Core below
+    /// txReadingsVersion 1 (PA Values, the CFC bar chart).
+    static QString txReadingNotSentText();
     QString holderDeviceId() const { return m_holder.deviceId; }
     QString holderName() const { return m_holder.name; }
     QString holderShortName() const { return m_holder.shortName; }
@@ -279,6 +318,8 @@ signals:
     void holderChanged();
     /// Parity Task 28: highSwr, swrWindBackLatched.
     void swrChanged();
+    /// Parity Task 33: forwardAdcRaw, reflectedAdcRaw.
+    void adcRawChanged();
 
 private:
     void onTransmittingChanged(bool keyed);
@@ -287,6 +328,7 @@ private:
     void refreshState();
     void refreshTimeOut();
     void refreshSwr();
+    void refreshAdcRaw();
     void setMeters(const TxMeterReadings& readings);
     qint64 now() const;
 
@@ -312,6 +354,8 @@ private:
     qint64 m_stopEpoch{0};
     bool m_highSwr{false};
     bool m_swrWindBackLatched{false};
+    qint64 m_forwardAdcRaw{0};
+    qint64 m_reflectedAdcRaw{0};
     // Fix wave I4: the holder; a window's copies of the two durations.
     Holder m_holder;
     qint64 m_stationHolderForSeconds{0};

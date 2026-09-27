@@ -81,6 +81,15 @@
 //                 bindings are shown disabled with the reason
 //                 (setBindingUnavailable), as Task 39's transmit meters are.
 //                 J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27 - R-R3-49 (remote-window parity Task 33): a remote window's
+//                 power, reflected power and SWR reach its RadioStatus as the
+//                 Core read them (setPowerReadings, SWR included); the
+//                 S-meter's Level and Compression TX modes follow the MIC and
+//                 COMP readings handed out (local and remote alike), and a
+//                 remote window's S-meter shows each TX mode its Core does
+//                 not send with the reason; panMaxBinSource, a remote
+//                 window's Max Bin from the slice's own pan. J.J. Boyd
+//                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -136,6 +145,7 @@ mw0lge@grange-lane.co.uk
 #include "core/mmio/MmioEndpoint.h"
 // Task 41 (Phase 3P-II): SMeterWidget + WdspEngine for the pollSMeter() path.
 #include "gui/SMeterWidget.h"
+#include "gui/SpectrumWidget.h"
 #include "core/WdspEngine.h"
 // Parity Task 15: the AGC Gain reading both windows show.
 #include "core/meters/SliceMeterPump.h"
@@ -191,6 +201,9 @@ void MeterPoller::setSMeter(SMeterWidget* widget)
 {
     m_sMeter = widget;
     qCDebug(lcMeter) << "MeterPoller: SMeterWidget set:" << (widget ? "yes" : "nullptr");
+    // Parity Task 33: a remote window's S-meter learns which TX modes its
+    // Core cannot feed.
+    refreshRemoteTxAvailability(/*force=*/true);
 }
 
 // Task 41 (Phase 3P-II): store non-owning pointer to WdspEngine for getMaxBinDbm.
@@ -233,8 +246,10 @@ void MeterPoller::setRemoteTransmitState(TransmitState* state,
             if (s == nullptr || model == nullptr) {
                 return;
             }
-            model->radioStatus().setForwardPower(s->forwardPowerWatts());
-            model->radioStatus().setReflectedPower(s->reflectedPowerWatts());
+            // Parity Task 33 (R-R3-49): the three as the Core read them,
+            // SWR included, as one sample.
+            model->radioStatus().setPowerReadings(s->forwardPowerWatts(),
+                                                  s->reflectedPowerWatts(), s->swr());
         });
         // The local window switches on MoxController's walk; a remote
         // window's controller never keys, so the Core's keyed state does.
@@ -250,10 +265,11 @@ void MeterPoller::setRemoteTransmitState(TransmitState* state,
 const QList<int>& MeterPoller::remoteTxBindingsNotSent()
 {
     // Task 39: txState v1 carries forward and reflected power, SWR, ALC and
-    // MIC. These eight readings stay on the Core.
+    // MIC; parity Task 33's txReadingsVersion 1 adds COMP (compressionDb).
+    // These seven readings stay on the Core.
     static const QList<int> bindings{
         MeterBinding::TxEq,       MeterBinding::TxLeveler, MeterBinding::TxLevelerGain,
-        MeterBinding::TxCfc,      MeterBinding::TxCfcGain, MeterBinding::TxComp,
+        MeterBinding::TxCfc,      MeterBinding::TxCfcGain,
         MeterBinding::TxAlcGain,  MeterBinding::TxAlcGroup,
     };
     return bindings;
@@ -275,11 +291,17 @@ void MeterPoller::refreshRemoteTxAvailability(bool force)
         return;
     }
     const QString unavailable = remoteTransmitUnavailableText();
-    if (!force && m_remoteTxAvailabilityShown && unavailable == m_remoteTxUnavailableShown) {
+    const bool readings = remoteTxReadingsAvailable();
+    if (!force && m_remoteTxAvailabilityShown && unavailable == m_remoteTxUnavailableShown
+        && readings == m_remoteTxReadingsShown) {
         return;
     }
     m_remoteTxAvailabilityShown = true;
     m_remoteTxUnavailableShown = unavailable;
+    m_remoteTxReadingsShown = readings;
+    // Parity Task 33 follow-up: the COMP reading comes with the Core's
+    // transmit readings (txReadingsVersion 1).
+    const QString compReason = readings ? QString() : TransmitState::txReadingNotSentText();
     const QList<int>& notSent = remoteTxBindingsNotSent();
     for (const auto& guarded : m_targets) {
         MeterWidget* target = guarded.data();
@@ -290,7 +312,27 @@ void MeterPoller::refreshRemoteTxAvailability(bool force)
             if (reason.isEmpty() && notSent.contains(bindingId)) {
                 reason = remoteTxMeterNotSentText();
             }
+            if (reason.isEmpty() && bindingId == MeterBinding::TxComp) {
+                reason = compReason;
+            }
             target->setBindingUnavailable(bindingId, reason);
+        }
+    }
+    // R-R3-49 (parity Task 33): the S-meter's TX modes from the same
+    // readings a local window's read: Power and SWR txState's
+    // forwardPowerWatts and swr (through this window's RadioStatus), Level
+    // its micLevelDb (the MIC reading, TxMic) and Compression its
+    // compressionDb (the COMP reading, TxComp), as handOutTxReading feeds
+    // the local widget. Compression waits for txReadingsVersion 1.
+    if (SMeterWidget* sm = m_sMeter.data()) {
+        for (SMeterWidget::TxMode mode : {SMeterWidget::TxMode::Power, SMeterWidget::TxMode::SWR,
+                                          SMeterWidget::TxMode::Level,
+                                          SMeterWidget::TxMode::Compression}) {
+            QString reason = unavailable;
+            if (reason.isEmpty() && mode == SMeterWidget::TxMode::Compression) {
+                reason = compReason;
+            }
+            sm->setTxModeUnavailable(mode, reason);
         }
     }
 }
@@ -305,6 +347,21 @@ void MeterPoller::pollRemoteTxMeters()
     // (TxMeterPump: thetisTxReading ALC and MIC).
     handOutTxReading(MeterBinding::TxAlc, state->alcDb());
     handOutTxReading(MeterBinding::TxMic, state->micLevelDb());
+    // Parity Task 33 follow-up: the COMP reading, from a Core that sends it.
+    if (remoteTxReadingsAvailable()) {
+        handOutTxReading(MeterBinding::TxComp, state->compressionDb());
+    }
+}
+
+void MeterPoller::setRemoteTxReadingsAvailable(std::function<bool()> available)
+{
+    m_remoteTxReadingsAvailable = std::move(available);
+    refreshRemoteTxAvailability(/*force=*/true);
+}
+
+bool MeterPoller::remoteTxReadingsAvailable() const
+{
+    return m_remoteTxReadingsAvailable && m_remoteTxReadingsAvailable();
 }
 
 void MeterPoller::setRemoteMeterReadingsAvailable(std::function<bool()> available)
@@ -890,7 +947,41 @@ void MeterPoller::handOutTxReading(int bindingId, double value)
         if (!target) { continue; }
         target->updateMeterValue(bindingId, value);
     }
+    // R-R3-49 (parity Task 33): the S-meter's Level and Compression TX
+    // modes. AetherSDR feeds them from its meter model's mic and
+    // compression peaks:
+    // From AetherSDR src/gui/MainWindow_Wiring.cpp:5506-5507 [@1e0718ad]:
+    //   connect(&m_radioModel.meterModel(), &MeterModel::micMetersChanged,
+    //           m_appletPanel->sMeterWidget(), &SMeterWidget::setMicMeters);
+    // NereusSDR's are the MIC and COMP readings handed out here: WDSP's in
+    // a local window, the Core's `txState` in a remote one, so both windows
+    // show the same value for the same reading.
+    if (bindingId == MeterBinding::TxMic || bindingId == MeterBinding::TxComp) {
+        if (bindingId == MeterBinding::TxMic) {
+            m_sMeterMicDb = static_cast<float>(value);
+        } else {
+            m_sMeterCompDb = static_cast<float>(value);
+        }
+        if (SMeterWidget* sm = m_sMeter.data()) {
+            sm->setMicMeters(m_sMeterMicDb, m_sMeterCompDb, m_sMeterMicDb, m_sMeterCompDb);
+        }
+    }
     emit txMeterReading(bindingId, value);
+}
+
+std::function<double(const SliceModel*)> MeterPoller::panMaxBinSource(
+    std::function<SpectrumWidget*(const QString& panKey)> spectrumFor)
+{
+    return [spectrumFor = std::move(spectrumFor)](const SliceModel* slice) -> double {
+        SpectrumWidget* sw = slice && spectrumFor ? spectrumFor(slice->panKey()) : nullptr;
+        if (!sw) {
+            return -400.0;
+        }
+        // The same passband bounds the local reading takes from its
+        // widget's VFO and filter (SpectrumWidget::peakDbmInSlicePassband).
+        return sw->peakDbmInPassband(slice->frequency() + slice->filterLow(),
+                                     slice->frequency() + slice->filterHigh());
+    };
 }
 
 // From Thetis console.cs:46979 [v2.10.3.15]:

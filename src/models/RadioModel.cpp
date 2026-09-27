@@ -540,6 +540,11 @@
 //                remove, layout restore and change, so the audio thread
 //                never walks m_slices. NereusSDR-original. J.J. Boyd
 //                (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27 - Parity Task 33 (R-R3-49, R-R3-32): handlePaTelemetry
+//                keeps the raw forward and reflected readings (paRawAdc,
+//                paRawAdcChanged); a remote window holds the Core's
+//                txReadingsVersion and its `txState` copy. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -770,6 +775,7 @@ warren@wpratt.com
 #include "core/dsp/DspAssetService.h"
 #include "core/session/PureSignalSessionFacade.h"
 #include "core/session/RemoteTransmitClient.h"
+#include "core/session/TransmitStateFacade.h"
 #include "core/StepAttenuatorFacade.h"
 #include "core/accessories/AlexAntennaFacade.h"
 #include "core/IoBoardHl2Facade.h"
@@ -7196,6 +7202,8 @@ void RadioModel::applyStationCapabilities(const NereusSDR::StationCapabilities& 
     setStationDspInfoVersion(caps.dspInfoVersion);
     // Parity Task 30: whether the Core applies TX Display's settings.
     setStationTxDisplayVersion(caps.txDisplayVersion);
+    // Parity Task 33: whether the Core sends its transmit readings.
+    setStationTxReadingsVersion(caps.txReadingsVersion);
     setStationDspAssetVersion(caps.dspAssetVersion);
 
     if (infoMoved) {
@@ -7654,6 +7662,27 @@ void RadioModel::applyRemoteTxDisplaySetting(const QString& key)
         return;
     }
     m_txAnalyzer->reloadSetting(key);
+}
+
+void RadioModel::setStationTxReadingsVersion(int version)
+{
+    if (m_role != Role::Remote || m_stationTxReadingsVersion == version) {
+        return;
+    }
+    m_stationTxReadingsVersion = version;
+    emit stationTxReadingsVersionChanged();
+}
+
+TransmitState* RadioModel::stationTransmitState() const
+{
+    return m_stationTransmitState.data();
+}
+
+void RadioModel::setStationTransmitState(TransmitState* state)
+{
+    if (m_role == Role::Remote) {
+        m_stationTransmitState = state;
+    }
 }
 
 void RadioModel::setStationTxDisplayVersion(int version)
@@ -16160,6 +16189,14 @@ void RadioModel::handlePaTelemetry(quint16 fwdRaw, quint16 revRaw,
                                    quint16 userAdc1Raw, quint16 supplyRaw)
 {
     const HPSDRModel model = m_hardwareProfile.model;
+    // Parity Task 33 (R-R3-49, R-R3-32): the raw forward and reflected
+    // readings as the radio reported them, transmitting or not, which the
+    // local PA Values page shows and the Core sends in `txState`.
+    const PaRawAdc raw{fwdRaw, revRaw, true};
+    if (!(raw == m_paRawAdc)) {
+        m_paRawAdc = raw;
+        emit paRawAdcChanged();
+    }
     // Phase 4 Agent 4A of issue #167 — scaleFwdPowerWatts lifted from this
     // file's anonymous namespace into the public PaTelemetryScaling API
     // (Phase 1B).  Same Thetis-canonical math, same per-board triplet

@@ -364,6 +364,11 @@
             "kind": "i64",
             "name": "txStateVersion",
             "value": 2
+        },
+        {
+            "kind": "i64",
+            "name": "txReadingsVersion",
+            "value": 1
         }
     ],
     "commands": [
@@ -6677,6 +6682,24 @@
                     "kind": "bool",
                     "name": "swrWindBackLatched",
                     "ordinal": 30
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "forwardAdcRaw",
+                    "ordinal": 31
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "i64",
+                    "name": "reflectedAdcRaw",
+                    "ordinal": 32
+                },
+                {
+                    "direction": "outbound",
+                    "kind": "f64",
+                    "name": "compressionDb",
+                    "ordinal": 33
                 }
             ]
         },

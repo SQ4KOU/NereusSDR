@@ -14,6 +14,9 @@
 //                 SWR formula from console.cs:6642 SWR(adc_fwd,adc_rev)
 //                 [@501e3f5].  PA forward/reflected power getters from
 //                 NetworkIOImports.cs:264-267 [@501e3f5].
+//   2026-09-27 - Parity Task 33 (R-R3-49): setPowerReadings, a remote
+//                 window's copy of the Core's readings. J.J. Boyd (KG4VCF),
+//                 with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 // --- From console.cs ---
@@ -116,6 +119,19 @@ void RadioStatus::setReflectedPower(double watts)
     if (qFuzzyCompare(m_reflected, watts)) { return; }
     m_reflected = watts;
     m_swr = computeSwr(m_forward, m_reflected);
+    emit powerChanged(m_forward, m_reflected, m_swr);
+}
+
+void RadioStatus::setPowerReadings(double forwardWatts, double reflectedWatts, double swr)
+{
+    if (qFuzzyCompare(1.0 + m_forward, 1.0 + forwardWatts)
+        && qFuzzyCompare(1.0 + m_reflected, 1.0 + reflectedWatts)
+        && qFuzzyCompare(1.0 + m_swr, 1.0 + swr)) {
+        return;
+    }
+    m_forward = forwardWatts;
+    m_reflected = reflectedWatts;
+    m_swr = swr;
     emit powerChanged(m_forward, m_reflected, m_swr);
 }
 
