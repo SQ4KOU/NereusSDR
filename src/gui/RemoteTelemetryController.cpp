@@ -435,6 +435,8 @@ void RemoteTelemetryController::logDiagnostics(qint64 now) const
            << QStringLiteral("displayRowsRepeated=%1").arg(display.rowsRepeated)
            << QStringLiteral("displayLargestArrivalGapMs=%1").arg(logged(display.largestArrivalGapMs))
            << QStringLiteral("displayDelayMs=%1").arg(logged(display.displayDelayMs))
+           << QStringLiteral("displayItemsDropped=%1").arg(display.itemsDropped)
+           << QStringLiteral("displayRowsDropped=%1").arg(display.rowsDropped)
            << QStringLiteral("coreTelemetryAgeMs=%1").arg(logged(m_station
                   ? std::optional<qint64>(qMax<qint64>(0, now - m_stationReceivedMs)) : std::nullopt))
            << QStringLiteral("coreSystemCpuPercent=%1").arg(logged(host.systemCpuPercent))

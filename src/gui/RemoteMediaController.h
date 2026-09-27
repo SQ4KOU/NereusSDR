@@ -43,6 +43,9 @@
 
 namespace NereusSDR {
 class StationClient;
+class RadioModel;
+class PanadapterStack;
+class SpectrumWidget;
 
 /// R-R3-21 / R-R3-08: this window's display counters for its media session
 /// (every pan together), for the diagnostics line.
@@ -54,16 +57,18 @@ struct RemoteDisplayTelemetry {
     /// Waterfall rows blended across a gap, and repeated while waiting.
     quint64 rowsBlended = 0;
     quint64 rowsRepeated = 0;
-    /// The largest time between two display messages arriving, this session.
+    /// The largest time between two display messages of one pan arriving,
+    /// in the last 10 s (any pan).
     std::optional<double> largestArrivalGapMs;
+    /// Decoded frames the presenter dropped because its queue was full, and
+    /// rows the pans' waterfalls dropped for the same reason (never expected).
+    quint64 itemsDropped = 0;
+    quint64 rowsDropped = 0;
     /// How far behind the Core's capture the display is presented now (the
     /// audio's delay, or the last known one), or nothing while each frame is
     /// drawn on arrival (an older Core, or no clock echo yet).
     std::optional<double> displayDelayMs;
 };
-class RadioModel;
-class PanadapterStack;
-class SpectrumWidget;
 
 /// Owns the GUI's media session and one bounded subscription per logical pan.
 /// Layout reparenting does not retire a pan; removing it from the stack does.
@@ -139,9 +144,6 @@ public:
     /// probes run while the display does; without it each frame is drawn on
     /// arrival, as before.
     bool displayClockNegotiated() const;
-    /// Test seam: behave as with a Core that does not advertise
-    /// displayClockVersion (an older Core).
-    void setIgnoreDisplayClockForTest(bool ignore);
     RemoteAudioReceiverTelemetry audioTelemetry() const;
     /// The audio context most recently accepted from Core. Its encoder and
     /// off reason are present only when audioDetailNegotiated().

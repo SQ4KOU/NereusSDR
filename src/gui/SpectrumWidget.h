@@ -409,6 +409,13 @@ public:
                                    double centreHz, double spanHz);
     /// Rows the ticker has not drawn yet; beyond this the oldest is dropped.
     static constexpr int kMaxRemoteRowQueue = 32;
+    /// R-R3-21: a remote trace captured at centreHz and spanHz, drawn on the
+    /// current axis (a frame presented after its pan was tuned). False
+    /// outside a remote window, during MOX, or for a non-finite trace.
+    bool presentRemoteTraceCaptured(const QVector<float>& traceDbm,
+                                    double centreHz, double spanHz);
+    /// Rows dropped because the queue was full, this widget's life.
+    quint64 remoteRowsDropped() const { return m_remoteRowsDropped; }
     /// The Core's granted FFT size for this pan, 0 outside a remote window
     /// or before its first context.
     int remoteGrantedFftSize() const { return m_remoteSpectrum ? m_remoteFftSize : 0; }
@@ -2543,6 +2550,13 @@ private:
     bool m_waterfallTickerPausedForTest{false};
     void onWaterfallTick();
     void drainRemoteWaterfallRows();
+    QVector<float> reprojectedToView(const QVector<float>& pixelsDbm,
+                                     double centreHz, double spanHz) const;
+    void refreshRemoteTraceProjection();
+    // R-R3-21: the last trace the Core sent, as sent, and its window.
+    QVector<float> m_remoteTraceCaptured;
+    double m_remoteTraceCentreHz{0.0};
+    double m_remoteTraceSpanHz{0.0};
     double m_remoteWideCentreHz{0.0};
     double m_remoteWideSpanHz{0.0};
 

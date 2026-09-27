@@ -29,18 +29,43 @@ std::optional<qint64> audioPresentationMapNs(const AudioDelayInputs& inputs)
 void DisplayDelayFollower::reset()
 {
     m_mapNs.reset();
+    m_pendingStepNs.reset();
+    m_holdNs.reset();
     m_smoothNs = 0;
     m_lastNs = 0;
 }
 
-void DisplayDelayFollower::observe(qint64 mapNs, qint64 nowNs)
+void DisplayDelayFollower::set(qint64 mapNs, qint64 nowNs)
 {
-    if (!m_mapNs || std::llabs(mapNs - *m_mapNs) >= kStepNs) {
-        m_mapNs = mapNs;
-        m_smoothNs = double(mapNs);
-        m_lastNs = nowNs;
+    m_mapNs = mapNs;
+    m_smoothNs = double(mapNs);
+    m_lastNs = nowNs;
+    m_pendingStepNs.reset();
+}
+
+void DisplayDelayFollower::observe(qint64 mapNs, qint64 nowNs, qint64 accuracyNs,
+                                   std::optional<qint64> holdNs)
+{
+    const bool holdStepped = holdNs && m_holdNs && std::llabs(*holdNs - *m_holdNs) >= kStepNs;
+    if (holdNs) {
+        m_holdNs = holdNs;
+    }
+    if (!m_mapNs || holdStepped) {
+        set(mapNs, nowNs);
         return;
     }
+    const qint64 thresholdNs = std::max<qint64>(kStepNs, 2 * std::max<qint64>(0, accuracyNs));
+    if (std::llabs(mapNs - *m_mapNs) >= thresholdNs) {
+        // One reading this far off may be the reading's noise; two in a row
+        // that agree are a change of delay.
+        if (m_pendingStepNs && std::llabs(mapNs - *m_pendingStepNs) < thresholdNs) {
+            set(mapNs, nowNs);
+        } else {
+            m_pendingStepNs = mapNs;
+        }
+        return;
+    }
+    m_pendingStepNs.reset();
     const double elapsed = double(std::max<qint64>(0, nowNs - m_lastNs));
     m_lastNs = nowNs;
     const double alpha = std::min(1.0, elapsed / double(kSmoothingNs));
@@ -58,6 +83,7 @@ void RemoteDisplayPresenter::restartChain()
 {
     m_lastRow.reset();
     m_repeats = 0;
+    m_rowDebt = 0;
     m_waiting = false;
 }
 
@@ -92,6 +118,11 @@ void RemoteDisplayPresenter::push(const DisplayCodecFrame& frame, double centreH
             const qint64 gapNs = item.producerNs - m_lastRow->producerNs;
             const qint64 gapSlots =
                 std::llround(double(gapNs) / double(m_rowPeriodNs)) - 1;
+            if (m_repeats > gapSlots) {
+                // The keyframe came after the slots already repeated: those
+                // rows stood in for this one and the next ones too.
+                m_rowDebt = m_repeats - int(std::max<qint64>(0, gapSlots));
+            }
             if (gapSlots > 0 && gapSlots <= kMaxGapRows) {
                 const bool blendWide = !m_lastRow->wideDbm.isEmpty()
                     && m_lastRow->wideDbm.size() == frame.wideDbm.size();
@@ -128,6 +159,11 @@ void RemoteDisplayPresenter::push(const DisplayCodecFrame& frame, double centreH
         m_lastRow = LastRow{item.producerNs, frame.waterfallDbm, frame.wideDbm,
                             frame.context, centreHz, spanHz, std::nullopt};
         m_repeats = 0;
+        if (m_rowDebt > 0) {
+            // Its slot was already drawn by a repeat: the trace only.
+            item.frame.waterfallAdvance = false;
+            --m_rowDebt;
+        }
     }
     // Any decoded frame ends a wait: the decoder took a keyframe.
     m_waiting = false;
@@ -168,7 +204,7 @@ std::vector<RemoteDisplayPresenter::Item> RemoteDisplayPresenter::takeDue(
     while (!m_queue.empty() && dueNs(m_queue.front(), nowNs, mapNs) <= nowNs) {
         Item item = std::move(m_queue.front());
         m_queue.pop_front();
-        if (item.kind == Kind::Frame && m_lastRow && item.frame.waterfallAdvance
+        if (item.kind == Kind::Frame && m_lastRow
             && item.producerNs == m_lastRow->producerNs) {
             m_lastRow->presentedNs = nowNs;
         }

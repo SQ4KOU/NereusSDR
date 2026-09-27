@@ -1020,7 +1020,8 @@ private slots:
         QVERIFY2(g_diagnosticsLines.constLast().contains(QStringLiteral(
             "deliveryDelayMs=60.0 displayKeyframeWaits=0 displayKeyframeRequests=0 "
             "displayRowsBlended=0 displayRowsRepeated=0 "
-            "displayLargestArrivalGapMs=not measured displayDelayMs=not measured")),
+            "displayLargestArrivalGapMs=not measured displayDelayMs=not measured "
+            "displayItemsDropped=0 displayRowsDropped=0")),
                  qPrintable(g_diagnosticsLines.constLast()));
 
         // A reconnect: the first figure after it starts a new line.

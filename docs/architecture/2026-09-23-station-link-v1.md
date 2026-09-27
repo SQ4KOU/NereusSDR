@@ -1146,7 +1146,9 @@ When a feature is off, its version is 0:
   waterfall on its audio's playout clock (the remote media control
   document, "Display on the audio's clock"). No message changes shape. On
   a Core that sends 0 or no entry a window draws each display frame on
-  arrival.
+  arrival, with no delay; its waterfall row queue, gap blending and repeats
+  while waiting for a keyframe still apply. Capabilities are read by name:
+  entries added later move the position of those after them.
 
 - `sessionHolderVersion`: sent only at agreed minor 11, last, and only to
   a peer whose hello declared `sessionHolder` 1 with `deviceAuth` 1; any

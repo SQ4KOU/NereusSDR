@@ -19,6 +19,7 @@
 #include <QtTest>
 
 #include <cmath>
+#include <limits>
 
 using namespace NereusSDR;
 
@@ -127,13 +128,17 @@ private slots:
         // Audio delay over time: 180 ms clean, 480 ms after the stall at
         // packet 50, then shed 40 ms every 25 packets (1 s) back to 180,
         // with +-4 ms of playout-reading jitter throughout.
-        const auto delayAt = [](int n) -> qint64 {
+        // The jitter hold is the step: the delay less a constant 100 ms.
+        const auto holdAt = [](int n) -> qint64 {
             qint64 delay = 180 * kMs;
             if (n >= 50) {
                 const int sheds = std::max(0, (n - 100) / 25 + 1);
                 delay = std::max<qint64>(180 * kMs, 480 * kMs - qint64(sheds) * 40 * kMs);
             }
-            return delay + ((n % 3) - 1) * 4 * kMs;
+            return delay - 100 * kMs;
+        };
+        const auto delayAt = [&](int n) -> qint64 {
+            return holdAt(n) + 100 * kMs + ((n % 3) - 1) * 4 * kMs;
         };
         qint64 worstNs = 0;
         int checked = 0;
@@ -143,7 +148,7 @@ private slots:
             const qint64 nowNs = inputs.playout->measuredNs;
             const std::optional<qint64> measured = audioPresentationMapNs(inputs);
             QVERIFY(measured);
-            follower.observe(*measured, nowNs);
+            follower.observe(*measured, nowNs, 4 * kMs, holdAt(n));
             // The display frame captured with this audio packet.
             const qint64 producerNs = kAnchorCoreNs + qint64(n) * 40 * kMs;
             const qint64 presentNs = producerNs + *follower.mapNs();
@@ -166,12 +171,94 @@ private slots:
         follower.observe(205 * kMs, 50 * kMs);
         QVERIFY(*follower.mapNs() > 200 * kMs && *follower.mapNs() < 202 * kMs);
         // A deepened hold is taken at once; so is a shed.
-        follower.observe(500 * kMs, 100 * kMs);
+        follower.observe(201 * kMs, 60 * kMs, 5 * kMs, 80 * kMs);
+        follower.observe(500 * kMs, 100 * kMs, 5 * kMs, 380 * kMs);
         QCOMPARE(*follower.mapNs(), 500 * kMs);
-        follower.observe(460 * kMs, 150 * kMs);
+        follower.observe(460 * kMs, 150 * kMs, 5 * kMs, 340 * kMs);
         QCOMPARE(*follower.mapNs(), 460 * kMs);
+        // Without a hold change one far reading waits for the next to agree.
+        follower.observe(520 * kMs, 200 * kMs, 5 * kMs, 340 * kMs);
+        QCOMPARE(*follower.mapNs(), 460 * kMs);
+        follower.observe(521 * kMs, 250 * kMs, 5 * kMs, 340 * kMs);
+        QCOMPARE(*follower.mapNs(), 521 * kMs);
+        // A far reading the next one does not confirm is noise.
+        follower.observe(600 * kMs, 300 * kMs, 5 * kMs, 340 * kMs);
+        follower.observe(522 * kMs, 350 * kMs, 5 * kMs, 340 * kMs);
+        QVERIFY(*follower.mapNs() >= 521 * kMs && *follower.mapNs() < 523 * kMs);
         follower.reset();
         QVERIFY(!follower.mapNs());
+    }
+
+    // Review Important 2: a 1024-frame device quantum (PipeWire's default at
+    // 48 kHz, 21 ms) or a Bluetooth sink makes the playout reading swing
+    // +-11 ms from one reading to the next with no change of delay. The rows
+    // still come out one a period: none bunch into pairs, none skip a tick.
+    void playoutReadingJitterDoesNotBunchRows()
+    {
+        DisplayDelayFollower follower;
+        RemoteDisplayPresenter presenter;
+        presenter.setRowPeriodNs(kPeriodNs);
+        const qint64 map = 200 * kMs;
+        const qint64 accuracy = 11 * kMs; // half a 1024-frame callback
+        const qint64 hold = 80 * kMs;
+        QList<Presented> shown;
+        for (int i = 0; i < 90; ++i) {
+            presenter.push(frameAt(i, i * kPeriodNs, -100.0f), 14.0e6, 24000.0);
+        }
+        int reading = 0;
+        for (qint64 now = 0; now <= 90 * kPeriodNs + map + 50 * kMs; now += kMs) {
+            if (now % (20 * kMs) == 0) {
+                // A reading every 20 ms, alternating 11 ms early and late.
+                const qint64 noise = (reading++ % 2 == 0) ? accuracy : -accuracy;
+                follower.observe(map + noise, now, accuracy, hold);
+            }
+            for (auto& item : presenter.takeDue(now, follower.mapNs())) {
+                shown.append({std::move(item), now});
+            }
+        }
+        QCOMPARE(shown.size(), 90);
+        qint64 shortest = std::numeric_limits<qint64>::max();
+        qint64 longest = 0;
+        for (int i = 11; i < shown.size(); ++i) {
+            const qint64 interval = shown.at(i).atNs - shown.at(i - 1).atNs;
+            shortest = std::min(shortest, interval);
+            longest = std::max(longest, interval);
+        }
+        QVERIFY2(shortest >= kPeriodNs - 5 * kMs && longest <= kPeriodNs + 5 * kMs,
+                 qPrintable(QStringLiteral("row intervals %1..%2 ms")
+                                .arg(double(shortest) / kMs).arg(double(longest) / kMs)));
+    }
+
+    // Review Minor 1: a keyframe that comes after its own slot, the slots
+    // repeated meanwhile standing in for it and the next rows: the waterfall
+    // still gets exactly one row per slot.
+    void lateKeyframeKeepsOneRowPerSlot()
+    {
+        RemoteDisplayPresenter presenter;
+        presenter.setRowPeriodNs(kPeriodNs);
+        const qint64 map = 100 * kMs;
+        QList<Presented> shown;
+        for (int i = 0; i < 5; ++i) {
+            presenter.push(frameAt(i, i * kPeriodNs, -120.0f), 14.0e6, 24000.0);
+        }
+        run(presenter, 0, 4 * kPeriodNs + map + kMs, map, shown);
+        presenter.noteLoss();
+        // Frame 10 is the keyframe; it arrives 300 ms after its slot was due.
+        const qint64 keyArrivalNs = 10 * kPeriodNs + map + 300 * kMs;
+        run(presenter, 4 * kPeriodNs + map + 2 * kMs, keyArrivalNs, map, shown);
+        QVERIFY(presenter.counters().rowsRepeated > 5);
+        for (int i = 10; i < 30; ++i) {
+            presenter.push(frameAt(i, i * kPeriodNs, -60.0f), 14.0e6, 24000.0);
+        }
+        run(presenter, keyArrivalNs + kMs, 30 * kPeriodNs + map + 50 * kMs, map, shown);
+        int rows = 0;
+        for (const Presented& p : shown) {
+            if (p.item.frame.waterfallAdvance) {
+                ++rows;
+            }
+        }
+        // Frames 0..4 and 10..29 plus the 5 gap slots: 30 slots, 30 rows.
+        QCOMPARE(rows, 30);
     }
 
     // The diagnosis's pure-delay burst: 40 frames at 33 ms, frames 10 to 23

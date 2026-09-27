@@ -741,15 +741,20 @@ probes while it shows a display, whether or not audio plays. The map is the
 measured audio delay minus the clock offset, that is the time a sample
 plays here minus the Core time it was captured, so a display frame appears
 when the audio captured with it is heard. The offset's own error cancels.
-The map follows the audio's delay: a change of 15 ms or more (a hold
-deepened after a stall, or shed as it eases) is taken at once, smaller ones
-are smoothed over 500 ms. With no audio playing (muted, no stream, a restart
-before its first echo) the window uses the last delay the audio had, or,
-before any, half the round trip plus the audio's 80 ms base hold, against
-the current offset. After an audio restart it keeps the last map until the
-next echo. An item the map would hold longer than 1.5 s is shown at once.
-A window without a map (an older Core, or no echo yet) draws each frame on
-arrival, as before.
+The map follows the audio's delay without taking the playout reading's
+noise (up to half a device callback: 11 ms at a 1024-frame quantum) for a
+change: a change of the audio's jitter hold of 15 ms or more (deepened after
+a stall, or shed as it eases) is taken at once; any other change of at least
+the larger of 15 ms and twice the reading's accuracy is taken when the next
+reading confirms it; smaller changes are smoothed over 500 ms. With no audio
+playing (muted, no stream, a restart before its first echo) the window keeps
+the last map, which needs no offset, and replaces it (with the last delay the
+audio had, or, before any, half the round trip plus the audio's 80 ms base
+hold, against the current offset) only when the two differ by more than the
+offset's error bound, which is clock drift. An item the map would hold longer
+than 1.5 s is shown at once. Without a map (an older Core, or no echo yet)
+each frame is drawn on arrival; the row queue and gap filling below still
+apply.
 
 Between the transport and the widget the window keeps the decoded frames of
 each pan in order. A lost display message makes the decoder refuse the
@@ -763,15 +768,22 @@ never sent) are blended the same way; a gap of more than 64 rows is a pause
 and is not filled. The row period is `framesPerLine` frames at the context's
 `fps`. The widget queues up to 32 rows and draws one a waterfall tick, two
 while more than two wait. Only incoming content waits: tuning, the pan,
-zoom and every overlay move at once, and a row captured before a tune is
-drawn at the frequency it was captured at.
+zoom and every overlay move at once. A trace or row captured before a tune
+is drawn at the frequency it was captured at, and the last trace stays drawn
+that way until a frame of the new window presents, so a tune or pan drag
+never blanks the trace. A keyframe later than the slots already repeated
+takes those rows back from its own row and the next ones (their traces are
+drawn, their rows are not), so the waterfall keeps one row per slot.
 
 The window's diagnostics line carries `displayKeyframeWaits`,
 `displayKeyframeRequests`, `displayRowsBlended`, `displayRowsRepeated`,
-`displayLargestArrivalGapMs` and `displayDelayMs`. The Core logs each
-keyframe request, and its display diagnostics line counts them
-(`keyframeRequests`, `keyframeRequestsRefused` for those over its five a
-second).
+`displayLargestArrivalGapMs` (the largest wait between two display
+messages of one pan in the last 10 s), `displayDelayMs`,
+`displayItemsDropped` and `displayRowsDropped` (queue overflows, never
+expected). The Core logs each keyframe request it takes (refusals, over its
+five a second, at most once every 10 s with their count), and its display
+diagnostics line counts them (`keyframeRequests`,
+`keyframeRequestsRefused`).
 
 The audio enable/context lifecycle, playback buffering and adaptive session
 budget are still being implemented. Their acceptance remains open in the

@@ -2163,11 +2163,16 @@ bool DaemonMediaController::handleKeyframe(const QJsonObject& control)
     ++m_displayDiagnostics.displayKeyframeRequests;
     if (it->second.keyframesInWindow >= kMaxKeyframesPerSecond) {
         ++m_displayDiagnostics.displayKeyframeRequestsRefused;
-        qCInfo(lcDaemonMedia).noquote()
-            << QStringLiteral("display keyframe request refused endpoint=%1 generation=%2"
-                              " (more than %3 this second) requests=%4")
-                   .arg(endpointId).arg(contextGeneration).arg(kMaxKeyframesPerSecond)
-                   .arg(m_displayDiagnostics.displayKeyframeRequests);
+        // The peer drives these: at most one line every 10 s, with the count.
+        if (!m_keyframeRefusalLog.isValid() || m_keyframeRefusalLog.elapsed() >= 10'000) {
+            qCInfo(lcDaemonMedia).noquote()
+                << QStringLiteral("display keyframe request refused endpoint=%1 generation=%2"
+                                  " (more than %3 a second) refused=%4 requests=%5")
+                       .arg(endpointId).arg(contextGeneration).arg(kMaxKeyframesPerSecond)
+                       .arg(m_displayDiagnostics.displayKeyframeRequestsRefused)
+                       .arg(m_displayDiagnostics.displayKeyframeRequests);
+            m_keyframeRefusalLog.start();
+        }
         return false;
     }
     ++it->second.keyframesInWindow;

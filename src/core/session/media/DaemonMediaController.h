@@ -597,6 +597,8 @@ private:
     bool m_audioDesiredEnabled{false};
     DaemonAudioDiagnostics m_audioDiagnostics;
     QElapsedTimer m_audioDiagnosticsClock;
+    // R-R3-21: paces the refused-keyframe log line.
+    QElapsedTimer m_keyframeRefusalLog;
     qint64 m_audioDiagnosticsLastLogMs{0};
     QTimer m_displayDiagnosticsTimer;
     DaemonDisplayDiagnostics m_displayDiagnostics;

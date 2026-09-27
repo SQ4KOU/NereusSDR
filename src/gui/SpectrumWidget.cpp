@@ -1353,6 +1353,7 @@ void SpectrumWidget::invalidateRemoteSpectrumFrame()
     m_pendingRemoteWide.clear();
     m_lastFullBinsDbm.clear();
     m_hasNewSpectrum = true;
+    refreshRemoteTraceProjection();
 }
 
 void SpectrumWidget::clearRemoteSpectrum()
@@ -1369,8 +1370,11 @@ void SpectrumWidget::clearRemoteSpectrum()
     m_dssScrollProgressRows = 0.0f;
     // R-R3-21: rows not yet drawn go with the history. A renewal
     // (invalidateRemoteSpectrumFrame) keeps them: each carries the RF window
-    // it was captured at.
+    // it was captured at. So does the last trace.
     m_remoteRowQueue.clear();
+    m_remoteTraceCaptured.clear();
+    m_renderedPixels.clear();
+    m_undentedPixels.clear();
     clearWaterfallHistory();
 }
 
@@ -1476,6 +1480,10 @@ bool SpectrumWidget::updateRemoteSpectrum(const DisplayCodecFrame& frame)
     }
     m_renderedPixels = frame.traceDbm;
     m_wfRenderedPixels = frame.waterfallDbm;
+    // R-R3-21: kept with its window, so a tune reprojects it, not blanks it.
+    m_remoteTraceCaptured = frame.traceDbm;
+    m_remoteTraceCentreHz = m_remoteExactCentreHz;
+    m_remoteTraceSpanHz = m_remoteExactSpanHz;
     if (visualNotchWillDent()) {
         m_undentedPixels = m_renderedPixels;
         applyVisualNotchDent(m_renderedPixels);
@@ -1524,6 +1532,66 @@ bool SpectrumWidget::enqueueRemoteWaterfallRow(const QVector<float>& pixelsDbm,
     return true;
 }
 
+QVector<float> SpectrumWidget::reprojectedToView(const QVector<float>& pixelsDbm,
+                                                 double centreHz, double spanHz) const
+{
+    // R-R3-21: pixels captured across centreHz +- spanHz / 2, placed on the
+    // current axis; where the capture did not reach, its own floor.
+    const int n = pixelsDbm.size();
+    if (n == 0 || spanHz <= 0.0 || m_bandwidthHz <= 0.0) {
+        return pixelsDbm;
+    }
+    const float floorDbm = *std::min_element(pixelsDbm.cbegin(), pixelsDbm.cend());
+    const double oldStartHz = centreHz - spanHz / 2.0;
+    const double newStartHz = m_centerHz - m_bandwidthHz / 2.0;
+    QVector<float> moved(n, floorDbm);
+    for (int x = 0; x < n; ++x) {
+        const double hz = newStartHz + (x + 0.5) * m_bandwidthHz / n;
+        const double source = (hz - oldStartHz) / spanHz * n;
+        if (source >= 0.0 && source < n) {
+            moved[x] = pixelsDbm.at(int(source));
+        }
+    }
+    return moved;
+}
+
+bool SpectrumWidget::presentRemoteTraceCaptured(const QVector<float>& traceDbm,
+                                                double centreHz, double spanHz)
+{
+    if (!m_remoteSpectrum || m_moxOverlay || traceDbm.isEmpty() || spanHz <= 0.0
+        || !std::all_of(traceDbm.cbegin(), traceDbm.cend(),
+                        [](float value) { return std::isfinite(value); })) {
+        return false;
+    }
+    m_remoteTraceCaptured = traceDbm;
+    m_remoteTraceCentreHz = centreHz;
+    m_remoteTraceSpanHz = spanHz;
+    refreshRemoteTraceProjection();
+    return true;
+}
+
+void SpectrumWidget::refreshRemoteTraceProjection()
+{
+    // R-R3-21: a tune, zoom or pan drag never blanks the trace. The last
+    // trace the Core sent is drawn at the frequency it was captured at until
+    // a frame of the new window presents, which runs an audio delay behind.
+    if (!m_remoteSpectrum || m_moxOverlay || m_remoteTraceCaptured.isEmpty()) {
+        return;
+    }
+    const bool sameWindow = qFuzzyCompare(m_remoteTraceCentreHz, m_centerHz)
+        && qFuzzyCompare(m_remoteTraceSpanHz, m_bandwidthHz);
+    m_renderedPixels = sameWindow ? m_remoteTraceCaptured
+        : reprojectedToView(m_remoteTraceCaptured, m_remoteTraceCentreHz, m_remoteTraceSpanHz);
+    if (visualNotchWillDent()) {
+        m_undentedPixels = m_renderedPixels;
+        applyVisualNotchDent(m_renderedPixels);
+    } else {
+        m_undentedPixels.clear();
+    }
+    m_hasNewSpectrum = true;
+    update();
+}
+
 void SpectrumWidget::drainRemoteWaterfallRows()
 {
     // One row a tick keeps the Core's cadence; two while more than two wait
@@ -1535,20 +1603,7 @@ void SpectrumWidget::drainRemoteWaterfallRows()
             || !qFuzzyCompare(row.spanHz, m_bandwidthHz)) {
             // Captured before a tune or zoom: draw it at the frequency it
             // was captured at, as the painted history was reprojected.
-            const int n = row.pixelsDbm.size();
-            const float floorDbm =
-                *std::min_element(row.pixelsDbm.cbegin(), row.pixelsDbm.cend());
-            const double oldStartHz = row.centreHz - row.spanHz / 2.0;
-            const double newStartHz = m_centerHz - m_bandwidthHz / 2.0;
-            QVector<float> moved(n, floorDbm);
-            for (int x = 0; x < n; ++x) {
-                const double hz = newStartHz + (x + 0.5) * m_bandwidthHz / n;
-                const double source = (hz - oldStartHz) / row.spanHz * n;
-                if (source >= 0.0 && source < n) {
-                    moved[x] = row.pixelsDbm.at(int(source));
-                }
-            }
-            row.pixelsDbm = std::move(moved);
+            row.pixelsDbm = reprojectedToView(row.pixelsDbm, row.centreHz, row.spanHz);
             row.wideDbm.clear();
         }
         m_pendingRemoteWide = row.wideDbm;
@@ -9315,6 +9370,9 @@ void SpectrumWidget::applyViewWindow(double centreHz, double bandwidthHz)
         m_pendingWfPixelsDbm.clear();
         m_pendingWfPixelsDbmDirty = false;
         m_hasNewSpectrum = true;
+        // R-R3-21: the last trace, drawn at the frequency it was captured
+        // at, so a drag never blanks it.
+        refreshRemoteTraceProjection();
     }
 
     // The scale and grid are cached chrome; the trace is not. Without this

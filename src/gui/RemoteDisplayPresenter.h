@@ -35,23 +35,35 @@ namespace NereusSDR {
 /// Nothing when the delay cannot be measured (see measureAudioDelay).
 std::optional<qint64> audioPresentationMapNs(const AudioDelayInputs& inputs);
 
-/// Follows the presentation map as the audio's delay changes. A change of
-/// kStepNs or more (the audio's hold deepened after a stall, or shed some
-/// of it) is taken at once, so the picture stays with the sound; smaller
-/// ones (the playout reading's own jitter, the rate matcher's slow
-/// correction) are smoothed over kSmoothingNs.
+/// Follows the presentation map as the audio's delay changes, so the
+/// picture stays with the sound without taking the playout reading's own
+/// noise for a change of delay:
+/// - a change of the audio's jitter hold of kStepNs or more (deepened after
+///   a stall, or shed) is taken at once, with the map measured with it;
+/// - otherwise a change of at least max(kStepNs, twice the reading's
+///   accuracy) is taken only when the next reading confirms it (two in a
+///   row, within that threshold of each other);
+/// - smaller changes (reading jitter, the rate matcher's slow correction)
+///   are smoothed over kSmoothingNs.
 class DisplayDelayFollower {
 public:
     static constexpr qint64 kStepNs = 15'000'000;
     static constexpr qint64 kSmoothingNs = 500'000'000;
 
     void reset();
-    /// A measurement of the map at local time nowNs.
-    void observe(qint64 mapNs, qint64 nowNs);
+    /// A measurement of the map at local time nowNs: accuracyNs is how far
+    /// the playout reading may be off (RemoteAudioPlayoutPoint::accuracyNs),
+    /// holdNs the audio's jitter hold with it, when known.
+    void observe(qint64 mapNs, qint64 nowNs, qint64 accuracyNs = 0,
+                 std::optional<qint64> holdNs = std::nullopt);
+    /// Take mapNs as it is (a map not measured from audio).
+    void set(qint64 mapNs, qint64 nowNs);
     std::optional<qint64> mapNs() const { return m_mapNs; }
 
 private:
     std::optional<qint64> m_mapNs;
+    std::optional<qint64> m_pendingStepNs;
+    std::optional<qint64> m_holdNs;
     double m_smoothNs = 0;
     qint64 m_lastNs = 0;
 };
@@ -106,6 +118,9 @@ public:
     void push(const DisplayCodecFrame& frame, double centreHz, double spanHz);
     /// A lost message: the decoder waits for a keyframe. While it waits,
     /// each row slot that passes with nothing to show repeats the last row.
+    /// A keyframe later than the slots already repeated owes those rows back:
+    /// its row and the next ones up to the overrun draw their trace only, so
+    /// the waterfall keeps one row per slot.
     void noteLoss();
     bool waitingForKeyframe() const { return m_waiting; }
 
@@ -137,6 +152,8 @@ private:
     std::optional<LastRow> m_lastRow;
     /// Rows repeated since the last good row, each one of its slots.
     int m_repeats = 0;
+    /// Rows repeated beyond a gap's end, taken back from the next rows.
+    int m_rowDebt = 0;
     bool m_waiting = false;
     qint64 m_rowPeriodNs = 0;
     Counters m_counters;
