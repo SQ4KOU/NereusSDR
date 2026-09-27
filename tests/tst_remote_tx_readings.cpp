@@ -40,6 +40,7 @@
 #include "core/session/StationClient.h"
 #include "core/session/StationServer.h"
 #include "core/session/TransmitStateFacade.h"
+#include "core/meters/TxMeterPump.h"
 #include "core/session/media/SpectrumEndpoint.h"
 #include "core/settings/SettingsProxy.h"
 #include "fakes/LoopbackTransport.h"
@@ -198,6 +199,7 @@ struct RemoteMeters {
         poller.setSMeter(&smeter);
         poller.setRadioStatus(&model.radioStatus());
         poller.setRemoteRadioModel(&model, []() { return true; });
+        poller.setRemoteTxReadingsAvailable([]() { return true; });
         poller.setRemoteTransmitState(&state, [this]() { return unavailable; });
         QObject::connect(&state, &TransmitState::stateChanged, &smeter,
                          [this, &state]() { smeter.setTransmitting(state.keyed()); });
@@ -239,6 +241,7 @@ private slots:
     void sMeterMenuOffersEveryItemInARemoteWindow();
     void maxBinReadsTheSlicesOwnPanAsALocalWindowDoes();
     void cfcBinsRoundTripToATenth();
+    void pumpWorksTheCompressionReadingAsThetis();
     void newWordingIsPlain();
 
 private:
@@ -331,6 +334,12 @@ void TstRemoteTxReadings::coreSendsItsRawPaReadingsKeyedOrNot()
     QTRY_COMPARE(s.window.radioStatus().forwardPowerWatts(), coreWatts);
     QTRY_VERIFY(applet.fwdPowerGauge()->value() > 0.25 * coreWatts);
     QCOMPARE(s.window.radioStatus().swrRatio(), s.core->radioStatus().swrRatio());
+
+    // The COMP reading travels with the other meters, keyed: the Core's
+    // pump works it as Thetis does (console.cs:46979, max(-30, COMP)).
+    QVERIFY(s.server->transmitState()->property("compressionDb").isValid());
+    QTRY_COMPARE(windowTx->property("compressionDb").toDouble(),
+                 s.server->transmitState()->property("compressionDb").toDouble());
     s.unkeyCore();
     QTRY_VERIFY(!s.core->isTransmitting());
 }
@@ -693,6 +702,11 @@ void TstRemoteTxReadings::sMeterTxModesMatchALocalWindow()
     QVERIFY(state.applyStationValue("reflectedPowerWatts", 3.0));
     QVERIFY(state.applyStationValue("swr", localStatus.swrRatio()));
     QVERIFY(state.applyStationValue("micLevelDb", micReading));
+    // The follow-up to Task 33: the COMP reading, as the Core works it
+    // (thetisTxReading Comp, the reading the local poller hands out).
+    const double compReading = thetisTxReading(ThetisTxReading::Comp,
+                                               [](TxMeterType) { return -6.0; });
+    QVERIFY(state.applyStationValue("compressionDb", compReading));
     tick(remote.poller);
 
     for (const QString& mode : {QStringLiteral("Power"), QStringLiteral("SWR"),
@@ -703,13 +717,15 @@ void TstRemoteTxReadings::sMeterTxModesMatchALocalWindow()
         QCOMPARE(remote.smeter.testTxReadout(), localMeter.testTxReadout());
         QVERIFY(remote.smeter.toolTip().isEmpty());
     }
-    // Compression: txState carries no compression reading yet.
+    // Compression: txState's compressionDb, as the local window reads its
+    // own COMP reading.
     localMeter.setTxMode(QStringLiteral("Compression"));
     remote.smeter.setTxMode(QStringLiteral("Compression"));
     QVERIFY(localMeter.testTxReadout() != QStringLiteral("--"));
-    QCOMPARE(remote.smeter.testTxReadout(), QStringLiteral("--"));
-    QCOMPARE(remote.smeter.toolTip(), MeterPoller::remoteTxMeterNotSentText());
-    QCOMPARE(remote.smeter.testNeedleTarget(), 0.0f);
+    QCOMPARE(remote.smeter.testTxValue(), localMeter.testTxValue());
+    QCOMPARE(remote.smeter.testTxReadout(), localMeter.testTxReadout());
+    QVERIFY(remote.smeter.toolTip().isEmpty());
+    QVERIFY(remote.smeter.txModeUnavailableReason(SMeterWidget::TxMode::Compression).isEmpty());
 
     // A Core that sends no transmit state: every TX mode says so.
     remote.unavailable = QStringLiteral("This Core does not send transmit meters.");
@@ -736,7 +752,10 @@ void TstRemoteTxReadings::sMeterMenuOffersEveryItemInARemoteWindow()
     TransmitState state;
     RemoteMeters remote(window, state);
     tick(remote.poller);
-    QVERIFY(!remote.smeter.txModeUnavailableReason(SMeterWidget::TxMode::Compression).isEmpty());
+    // Every TX mode has a reading from this Core (Compression included).
+    QVERIFY(remote.smeter.txModeUnavailableReason(SMeterWidget::TxMode::Compression).isEmpty());
+    remote.smeter.setTxModeUnavailable(SMeterWidget::TxMode::Compression,
+                                       MeterPoller::remoteTxMeterNotSentText());
 
     std::unique_ptr<QMenu> menu(remote.smeter.buildContextMenuForTesting());
     int actions = 0;
@@ -840,6 +859,27 @@ void TstRemoteTxReadings::cfcBinsRoundTripToATenth()
     }
     QVERIFY(TransmitState::decodeCfcBins(QStringLiteral("not base64!")).isEmpty());
     QVERIFY(TransmitState::decodeCfcBins(QStringLiteral("AA==")).isEmpty());  // one byte: no int16
+}
+
+// The pump's COMP reading is Thetis's: max(-30, TXA_COMP_AV); with no
+// transmit channel it is the no-reading value.
+void TstRemoteTxReadings::pumpWorksTheCompressionReadingAsThetis()
+{
+    RadioStatus status;
+    const TxMeterReadings none = TxMeterPump::read(status, nullptr);
+    QCOMPARE(none.compressionDb, TxMeterReadings::kNoReadingDb);
+    // The pump works it with the local poller's function: max(-30, raw).
+    QCOMPARE(thetisTxReading(ThetisTxReading::Comp, [](TxMeterType) { return -400.0; }), -30.0);
+    QCOMPARE(MeterPoller::compressionReading(-6.0),
+             thetisTxReading(ThetisTxReading::Comp, [](TxMeterType) { return -6.0; }));
+    TransmitState state;
+    QVERIFY(state.applyStationValue("compressionDb", -12.5));
+    QCOMPARE(state.property("compressionDb").toDouble(), -12.5);
+    state.clearStationValues();
+    QCOMPARE(state.property("compressionDb").toDouble(), TxMeterReadings::kNoReadingDb);
+    // A window's transmit meters: only the eight readings txState does not
+    // carry stay disabled, and Compression is no longer one of them.
+    QVERIFY(!MeterPoller::remoteTxBindingsNotSent().contains(MeterBinding::TxComp));
 }
 
 void TstRemoteTxReadings::newWordingIsPlain()

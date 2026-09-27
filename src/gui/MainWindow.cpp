@@ -337,7 +337,8 @@
 //   2026-09-27 - Parity Task 33 (R-R3-49, R-R3-32, R-IOS-13): the CFC
 //                dialog's bar chart from the Core's txCfcCompression stream
 //                in a remote window (disabled with the reason on a Core that
-//                does not send it); the remote Max Bin source moved to
+//                does not send it), the Core's COMP reading for the
+//                compression meters; the remote Max Bin source moved to
 //                MeterPoller::panMaxBinSource, unchanged. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
 // =================================================================
@@ -1504,6 +1505,10 @@ void MainWindow::wireRemoteTransmitMeters()
         return;
     }
     if (m_meterPoller) {
+        // Parity Task 33 follow-up: the COMP reading, txReadingsVersion 1.
+        m_meterPoller->setRemoteTxReadingsAvailable([this]() {
+            return m_stationClient != nullptr && m_stationClient->txReadingsAvailable();
+        });
         m_meterPoller->setRemoteTransmitState(state, [this]() -> QString {
             if (m_stationClient == nullptr || !m_stationClient->isHandshakeComplete()) {
                 return tr("Connect to the Core to see transmit meters here.");
@@ -1522,10 +1527,24 @@ void MainWindow::wireRemoteTransmitMeters()
             sm->setTransmitting(state->keyed());
         }
     });
-    // The compression reading is not in the Core's transmit state yet.
-    if (m_phoneCwApplet) {
-        m_phoneCwApplet->setCompressionUnavailable(MeterPoller::remoteTxMeterNotSentText());
-    }
+    // Parity Task 33 follow-up: the compression gauge reads the Core's COMP
+    // reading (txState's compressionDb) from a Core at txReadingsVersion 1.
+    const auto showCompressionReason = [this]() {
+        if (!m_phoneCwApplet || !m_stationClient) {
+            return;
+        }
+        if (m_stationClient->txReadingsAvailable()) {
+            m_phoneCwApplet->setCompressionUnavailable(QString());
+        } else if (m_stationClient->isHandshakeComplete()) {
+            m_phoneCwApplet->setCompressionUnavailable(TransmitState::txReadingNotSentText());
+        } else {
+            m_phoneCwApplet->setCompressionUnavailable(
+                tr("Connect to the Core to see transmit meters here."));
+        }
+    };
+    connect(m_stationClient, &StationClient::handshakeComplete, this, showCompressionReason);
+    connect(m_stationClient, &StationClient::stateSnapshotApplied, this, showCompressionReason);
+    showCompressionReason();
     // R-R3-49 (parity Task 33): the CFC dialog's bar chart reads the Core's
     // txCfcCompression stream while it is shown; a Core that does not keep
     // it (txReadingsVersion 0) is named as the reason.

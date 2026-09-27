@@ -133,7 +133,7 @@
 //                 swrWindBackLatched Outbound (txDisplayVersion 1). J.J. Boyd
 //                 (KG4VCF), AI-assisted via Anthropic Claude Code.
 //   2026-09-27 - Parity Task 33 (R-R3-49, R-R3-32): TransmitState
-//                 forwardAdcRaw and reflectedAdcRaw Outbound
+//                 forwardAdcRaw, reflectedAdcRaw and compressionDb Outbound
 //                 (txReadingsVersion 1). J.J. Boyd (KG4VCF), AI-assisted via
 //                 Anthropic Claude Code.
 // =================================================================
@@ -889,6 +889,8 @@ const MirrorPolicy::Entry kEntries[] = {
     // reflected power readings, for a remote window's PA Values page.
     { "TransmitState", "forwardAdcRaw", MirrorDirection::Outbound },
     { "TransmitState", "reflectedAdcRaw", MirrorDirection::Outbound },
+    // Task 33 follow-up (txReadingsVersion 1): the COMP reading.
+    { "TransmitState", "compressionDb", MirrorDirection::Outbound },
 
     // Normal PS3 configuration is distinct from operational arming/actions.
     { "PureSignalSettings", "autoCalEnabled", MirrorDirection::Bidirectional },

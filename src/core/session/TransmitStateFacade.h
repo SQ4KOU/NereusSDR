@@ -48,6 +48,9 @@
 //                          refreshed with the meters, keyed or not; a
 //                          window scales them as its own PA Values page
 //                          does (parity Task 33, txReadingsVersion 1)
+//   compressionDb          Thetis's COMP reading (max(-30, TXA_COMP_AV)), with
+//                          the meters, as the local Compression meters
+//                          show it (Task 33 follow-up, txReadingsVersion 1)
 //
 // Updates: while keyed the meters are read ten times a second (the
 // transmit lane's cached readings; never a WDSP call on the event loop)
@@ -90,7 +93,8 @@
 //               Claude Code.
 //   2026-09-27: Parity Task 33 (R-R3-49, R-R3-32): forwardAdcRaw and
 //               reflectedAdcRaw appended (txReadingsVersion 1), and the
-//               txCfcCompression record's bins encoding. J.J. Boyd
+//               txCfcCompression record's bins encoding; then
+//               compressionDb, the COMP reading. J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
 // =================================================================
@@ -159,6 +163,8 @@ class TransmitState final : public QObject {
     // reflected power readings, appended so every earlier ordinal stays.
     Q_PROPERTY(qint64 forwardAdcRaw READ forwardAdcRaw NOTIFY adcRawChanged)
     Q_PROPERTY(qint64 reflectedAdcRaw READ reflectedAdcRaw NOTIFY adcRawChanged)
+    // Task 33 follow-up (txReadingsVersion 1): the COMP reading, appended.
+    Q_PROPERTY(double compressionDb READ compressionDb NOTIFY metersChanged)
 
 public:
     // The link's stopReason values.
@@ -224,6 +230,7 @@ public:
     double swr() const { return m_meters.swr; }
     double alcDb() const { return m_meters.alcDb; }
     double micLevelDb() const { return m_meters.micLevelDb; }
+    double compressionDb() const { return m_meters.compressionDb; }
     TxMeterReadings meters() const { return m_meters; }
     bool txEnding() const { return m_txEnding; }
     QString stopReason() const { return m_stopReason; }

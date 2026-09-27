@@ -10,6 +10,10 @@
 //   2026-09-25: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), iPhone app plan Task 39 (D14, R-IOS-13), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27: Remote-window parity Task 33 follow-up (R-R3-49): read()
+//               works the COMP reading too (compressionDb). J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/meters/TxMeterPump.h"
@@ -59,6 +63,14 @@ TxMeterReadings TxMeterPump::read(const RadioStatus& status, const TxChannel* tx
         const auto readRaw = [tx](TxMeterType meter) { return tx->txMeter(meter); };
         readings.alcDb = thetisTxReading(ThetisTxReading::Alc, readRaw);
         readings.micLevelDb = thetisTxReading(ThetisTxReading::Mic, readRaw);
+        // Parity Task 33 follow-up (R-R3-49): the COMP reading the
+        // desktop's Compression meters show (MeterPoller: TxComp).
+        // From Thetis console.cs:46979 [v2.10.3.15]:
+        //   updateMetersReading(Reading.COMP, (float)Math.Max(-30.0f, -WDSP.CalculateTXMeter(1, WDSP.MeterType.COMP)), 0);
+        // with dsp.cs:1013-1014 [v2.10.3.15]:
+        //   case MeterType.COMP:
+        //       val = GetTXAMeter(channel, txaMeterType.TXA_COMP_AV);
+        readings.compressionDb = thetisTxReading(ThetisTxReading::Comp, readRaw);
     }
     return readings;
 }

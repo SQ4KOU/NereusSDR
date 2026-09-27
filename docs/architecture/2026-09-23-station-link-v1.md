@@ -1304,8 +1304,8 @@ When a feature is off, its version is 0:
   sent right after `txStateVersion` and only with it. 1 on a Core with its
   own radio model and record streams (`recordStreamVersion` 1), 0
   otherwise. At 1 `txState` also carries `forwardAdcRaw` and
-  `reflectedAdcRaw`, the radio's raw forward and reflected power readings
-  (section 18.8), and the Core keeps the `txCfcCompression` record stream,
+  `reflectedAdcRaw`, the radio's raw forward and reflected power readings,
+  and `compressionDb`, the COMP reading (section 18.8), and the Core keeps the `txCfcCompression` record stream,
   the CFC bar chart's data (section 7.7). A window's PA Values page and
   CFC dialog show their transmit readings from these; on a Core that sends
   0 or no entry each shows "This Core does not send this reading. Updating
@@ -2105,7 +2105,7 @@ An enum property lists the values its domain allows.
 | 84 | `twoToneDrivePowerSource` | `enum` | bidirectional | 0, 1, 2 |
 | 85 | `voxEnabled` | `bool` | bidirectional |  |
 
-**TransmitState** (33 properties)
+**TransmitState** (34 properties)
 
 | Ordinal | Property | Wire kind | Direction | Enum values |
 | --- | --- | --- | --- | --- |
@@ -2142,6 +2142,7 @@ An enum property lists the values its domain allows.
 | 30 | `swrWindBackLatched` | `bool` | outbound |  |
 | 31 | `forwardAdcRaw` | `i64` | outbound |  |
 | 32 | `reflectedAdcRaw` | `i64` | outbound |  |
+| 33 | `compressionDb` | `f64` | outbound |  |
 
 **TunerModel** (21 properties)
 
@@ -2405,7 +2406,8 @@ Notes on the keys:
   peer whose hello declared `remoteTx` 1; every property is `outbound`.
   With `txReadingsVersion` 1 (parity Task 33) it also carries the radio's
   raw forward and reflected power readings, `forwardAdcRaw` and
-  `reflectedAdcRaw` (i64), appended after `swrWindBackLatched`.
+  `reflectedAdcRaw` (i64), appended after `swrWindBackLatched`, and the COMP
+  reading, `compressionDb` (f64), after them.
 - **`catalog`.** The values the Core owns and an app draws its controls
   from (section 7.4). Both properties are `outbound`
   (`StationCatalog`): `json` (`utf8`), the catalogue, and `revision`
@@ -5814,8 +5816,8 @@ and 8). The `txState` object (`TransmitState`, `txStateVersion` 1; 2 adds
 the holder of transmit and `keyedForSeconds`, appended after `stopSerial`,
 and `stopEpoch` after them, then `highSwr` and `swrWindBackLatched`,
 added with `txDisplayVersion` 1 and sent by every Core whatever its
-`txDisplayVersion`, as `stopEpoch` is; then `forwardAdcRaw` and
-`reflectedAdcRaw`, with `txReadingsVersion` 1) goes to
+`txDisplayVersion`, as `stopEpoch` is; then `forwardAdcRaw`,
+`reflectedAdcRaw` and `compressionDb`, with `txReadingsVersion` 1) goes to
 a peer at minor 11 whose hello declared `remoteTx` 1, in its snapshot after
 `connectedDevices`, and as deltas. Every property is `outbound`; a write
 is refused as any outbound property's is.
@@ -5846,6 +5848,7 @@ is refused as any outbound property's is.
 | `highSwr` | The Core's high-SWR protection has tripped (parity Task 28, appended after `stopEpoch`; sent by every Core that sends `txState`, whatever its `txDisplayVersion`): what the Core's own window hands its transmitting pan's high-SWR border |
 | `swrWindBackLatched` | The protection's drive fold-back has latched; the border shows fold-back while this and `highSwr` are both true |
 | `forwardAdcRaw`, `reflectedAdcRaw` | The radio's raw forward and reflected power readings (i64, the ADC counts of its last PA sample, transmitting or not; parity Task 33, `txReadingsVersion` 1; 0 before the first sample). A window scales them exactly as its own PA Values page scales a local radio's (`PaTelemetryScaling`: raw forward power by `computeAlexFwdPower`, the forward and reflected RF voltage), with the Core's `hpsdrModel`; the Core sends the raw values, never a scaled one |
+| `compressionDb` | The COMP reading (f64, dB; parity Task 33 follow-up, `txReadingsVersion` 1), as the Core's own Compression meters show it: Thetis's reading, the transmit channel's `TXA_COMP_AV` floored at -30 dB (console.cs:46979, dsp.cs:1013-1014 [v2.10.3.15]), so -30 with the speech processor off; -400, no reading, while the Core has no transmit channel. Read with the other meters |
 
 **When it is sent.** While keyed the Core reads the meters ten times a
 second, from the transmit lane's last readings (never a DSP call on its
@@ -5860,12 +5863,24 @@ applet's RF Pwr and SWR bars and the container Power, Reflected Power and
 SWR meters read `forwardPowerWatts`, `reflectedPowerWatts` and `swr`
 (through the window's radio status, as one sample); the ALC and MIC
 meters read `alcDb` and `micLevelDb`. The S-meter's TX modes: Power reads
-`forwardPowerWatts`, SWR `swr`, Level `micLevelDb` (the MIC reading, as
-AetherSDR's Level mode reads its mic peak) and Compression the COMP
-reading, which `txState` does not carry yet: that mode, and each container
-meter bound to a reading `txState` does not carry (EQ, Leveler, Leveler
-Gain, CFC, CFC Gain, Compression, ALC Gain, ALC Group), shows no reading
-with its reason, never 0. Changes
+`forwardPowerWatts`, SWR `swr`, Level `micLevelDb` (the MIC reading, the
+one a local window's Level mode reads) and Compression `compressionDb` (the
+COMP reading, the one a local window's Compression mode, its Compression
+meters and the Phone/CW compression gauge read). On a Core below
+`txReadingsVersion` 1 Compression shows no reading with "This Core does not
+send this reading. Updating the Core may help." Each container meter bound
+to a reading `txState` does not carry (EQ, Leveler, Leveler Gain, CFC, CFC
+Gain, ALC Gain, ALC Group) shows no reading with its reason, never 0.
+
+**PA Values in a remote window** reads `forwardPowerWatts`,
+`reflectedPowerWatts` and `swr` for its power rows and `forwardAdcRaw`
+and `reflectedAdcRaw` for its raw rows, with the local page's peak and
+minimum tracking. One difference is accepted: a local window's radio
+status takes forward and then reflected power as two steps, so its page
+also sees an SWR worked from the new forward reading and the previous
+reflected one and may track it as a peak. The Core sends each sample's
+three readings together, so a remote page never sees that in-between pair;
+its SWR value matches, and its SWR peak can be lower. Changes
 travel in the 50 ms delta flush like any other.
 
 **Stops.** Each key (each rise of `keyed`) is stopped at most once: the

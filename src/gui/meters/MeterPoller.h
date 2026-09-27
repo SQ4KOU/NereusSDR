@@ -42,8 +42,9 @@
 //   2026-09-27 - R-R3-49 (remote-window parity Task 33): panMaxBinSource
 //                 (Max Bin measured by each window from its own pan); the
 //                 S-meter's Level and Compression TX modes from the handed-
-//                 out MIC and COMP readings. J.J. Boyd (KG4VCF), AI-assisted
-//                 via Anthropic Claude Code.
+//                 out MIC and COMP readings; setRemoteTxReadingsAvailable,
+//                 the Core's COMP reading (txState's compressionDb). J.J.
+//                 Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -236,6 +237,11 @@ public:
                                 std::function<QString()> unavailableText);
     /// The transmit bindings the Core's `txState` does not carry.
     static const QList<int>& remoteTxBindingsNotSent();
+    // R-R3-49 (parity Task 33 follow-up): whether the Core sends its
+    // transmit readings (txReadingsVersion 1), which carry the COMP reading
+    // (`txState`'s compressionDb). While false the TxComp binding and the
+    // S-meter's Compression mode show TransmitState::txReadingNotSentText.
+    void setRemoteTxReadingsAvailable(std::function<bool()> available);
     /// Why: the Core sends transmit state but not this meter.
     static QString remoteTxMeterNotSentText();
     // R-R3-32 (remote-window parity Task 6): the model whose
@@ -453,6 +459,10 @@ private:
     // What the targets were last told (refreshRemoteTxAvailability).
     bool m_remoteTxAvailabilityShown{false};
     QString m_remoteTxUnavailableShown;
+    // Parity Task 33 follow-up: the Core sends the COMP reading.
+    std::function<bool()> m_remoteTxReadingsAvailable;
+    bool m_remoteTxReadingsShown{false};
+    bool remoteTxReadingsAvailable() const;
 };
 
 } // namespace NereusSDR

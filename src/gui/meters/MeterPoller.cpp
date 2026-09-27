@@ -265,10 +265,11 @@ void MeterPoller::setRemoteTransmitState(TransmitState* state,
 const QList<int>& MeterPoller::remoteTxBindingsNotSent()
 {
     // Task 39: txState v1 carries forward and reflected power, SWR, ALC and
-    // MIC. These eight readings stay on the Core.
+    // MIC; parity Task 33's txReadingsVersion 1 adds COMP (compressionDb).
+    // These seven readings stay on the Core.
     static const QList<int> bindings{
         MeterBinding::TxEq,       MeterBinding::TxLeveler, MeterBinding::TxLevelerGain,
-        MeterBinding::TxCfc,      MeterBinding::TxCfcGain, MeterBinding::TxComp,
+        MeterBinding::TxCfc,      MeterBinding::TxCfcGain,
         MeterBinding::TxAlcGain,  MeterBinding::TxAlcGroup,
     };
     return bindings;
@@ -290,11 +291,17 @@ void MeterPoller::refreshRemoteTxAvailability(bool force)
         return;
     }
     const QString unavailable = remoteTransmitUnavailableText();
-    if (!force && m_remoteTxAvailabilityShown && unavailable == m_remoteTxUnavailableShown) {
+    const bool readings = remoteTxReadingsAvailable();
+    if (!force && m_remoteTxAvailabilityShown && unavailable == m_remoteTxUnavailableShown
+        && readings == m_remoteTxReadingsShown) {
         return;
     }
     m_remoteTxAvailabilityShown = true;
     m_remoteTxUnavailableShown = unavailable;
+    m_remoteTxReadingsShown = readings;
+    // Parity Task 33 follow-up: the COMP reading comes with the Core's
+    // transmit readings (txReadingsVersion 1).
+    const QString compReason = readings ? QString() : TransmitState::txReadingNotSentText();
     const QList<int>& notSent = remoteTxBindingsNotSent();
     for (const auto& guarded : m_targets) {
         MeterWidget* target = guarded.data();
@@ -305,22 +312,25 @@ void MeterPoller::refreshRemoteTxAvailability(bool force)
             if (reason.isEmpty() && notSent.contains(bindingId)) {
                 reason = remoteTxMeterNotSentText();
             }
+            if (reason.isEmpty() && bindingId == MeterBinding::TxComp) {
+                reason = compReason;
+            }
             target->setBindingUnavailable(bindingId, reason);
         }
     }
     // R-R3-49 (parity Task 33): the S-meter's TX modes from the same
-    // readings. Power and SWR read txState's forwardPowerWatts and swr
-    // (through this window's RadioStatus), Level its micLevelDb (the MIC
-    // reading, txMeterReading TxMic); Compression has no txState property
-    // yet, so that mode shows no reading with the reason, as the TxComp
-    // meter does.
+    // readings a local window's read: Power and SWR txState's
+    // forwardPowerWatts and swr (through this window's RadioStatus), Level
+    // its micLevelDb (the MIC reading, TxMic) and Compression its
+    // compressionDb (the COMP reading, TxComp), as handOutTxReading feeds
+    // the local widget. Compression waits for txReadingsVersion 1.
     if (SMeterWidget* sm = m_sMeter.data()) {
         for (SMeterWidget::TxMode mode : {SMeterWidget::TxMode::Power, SMeterWidget::TxMode::SWR,
                                           SMeterWidget::TxMode::Level,
                                           SMeterWidget::TxMode::Compression}) {
             QString reason = unavailable;
             if (reason.isEmpty() && mode == SMeterWidget::TxMode::Compression) {
-                reason = remoteTxMeterNotSentText();
+                reason = compReason;
             }
             sm->setTxModeUnavailable(mode, reason);
         }
@@ -337,6 +347,21 @@ void MeterPoller::pollRemoteTxMeters()
     // (TxMeterPump: thetisTxReading ALC and MIC).
     handOutTxReading(MeterBinding::TxAlc, state->alcDb());
     handOutTxReading(MeterBinding::TxMic, state->micLevelDb());
+    // Parity Task 33 follow-up: the COMP reading, from a Core that sends it.
+    if (remoteTxReadingsAvailable()) {
+        handOutTxReading(MeterBinding::TxComp, state->compressionDb());
+    }
+}
+
+void MeterPoller::setRemoteTxReadingsAvailable(std::function<bool()> available)
+{
+    m_remoteTxReadingsAvailable = std::move(available);
+    refreshRemoteTxAvailability(/*force=*/true);
+}
+
+bool MeterPoller::remoteTxReadingsAvailable() const
+{
+    return m_remoteTxReadingsAvailable && m_remoteTxReadingsAvailable();
 }
 
 void MeterPoller::setRemoteMeterReadingsAvailable(std::function<bool()> available)

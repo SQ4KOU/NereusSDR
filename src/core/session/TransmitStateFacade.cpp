@@ -40,8 +40,9 @@
 //   2026-09-27: Parity Task 33 (R-R3-49, R-R3-32): forwardAdcRaw and
 //               reflectedAdcRaw from RadioModel::paRawAdc (txReadingsVersion
 //               1); encodeCfcBins / decodeCfcBins for the txCfcCompression
-//               record. J.J. Boyd (KG4VCF), with AI-assisted implementation
-//               via Anthropic Claude Code.
+//               record; compressionDb, the pump's COMP reading. J.J. Boyd
+//               (KG4VCF), with AI-assisted implementation via Anthropic
+//               Claude Code.
 // =================================================================
 
 #include "core/session/TransmitStateFacade.h"
@@ -88,7 +89,8 @@ bool sameReadings(const TxMeterReadings& a, const TxMeterReadings& b)
     return sameReading(a.forwardPowerWatts, b.forwardPowerWatts)
         && sameReading(a.reflectedPowerWatts, b.reflectedPowerWatts)
         && sameReading(a.swr, b.swr) && sameReading(a.alcDb, b.alcDb)
-        && sameReading(a.micLevelDb, b.micLevelDb);
+        && sameReading(a.micLevelDb, b.micLevelDb)
+        && sameReading(a.compressionDb, b.compressionDb);
 }
 
 } // namespace
@@ -566,6 +568,10 @@ bool TransmitState::applyStationValue(const QByteArray& propertyName, const QVar
         meters = true;
     } else if (propertyName == "micLevelDb") {
         readings.micLevelDb = value.toDouble();
+        meters = true;
+    } else if (propertyName == "compressionDb") {
+        // Parity Task 33 follow-up: the Core's COMP reading.
+        readings.compressionDb = value.toDouble();
         meters = true;
     } else if (propertyName == "stopReason") {
         stop = value.toString() != m_stopReason;
