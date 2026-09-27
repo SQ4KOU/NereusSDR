@@ -75,6 +75,11 @@
 //   2026-09-26: parity Task 21 (R-IOS-18): station.selectRadio joins the
 //               list (every slice and the transmitter). J.J. Boyd (KG4VCF),
 //               with AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27: setTgxlAntenna's question counts the tuner's 0-based
+//               antennaA from 1, as its port and buttons do; an RF-Kit
+//               external antenna in use is never the internal one tapped.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -1019,8 +1024,12 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
         }
         tuner();
         if (verb == "setTgxlAntenna") {
+            // R-IOS-30: the port is the button's number, 1 to 3 (activate
+            // ant=N); the tuner reports antA 0-based (0 is ANT 1), and the
+            // mirror's antennaA carries it as reported. Compare and name
+            // both in the buttons' numbers.
             const int port = intArgument(args, "port");
-            const int was = now.value("antennaA").toInt();
+            const int was = now.value("antennaA").toInt() + 1;
             c.target = QStringLiteral("tuner:antenna");
             c.targetValue = QString::number(was);
             c.shared = port != was;
@@ -1057,13 +1066,24 @@ StationServer::SharedChange StationServer::classifyShared(const SessionMessage& 
         }
         if (verb == "setRfKitAntenna") {
             tuner();
+            // R-IOS-30: the port and activeAntennaNumber both count from 1
+            // (0 is none reported), but the amp numbers its external
+            // antennas from 1 too, and the port is always an internal one
+            // (Rf2ksApplet::setActiveAntenna), so an external antenna in
+            // use is never the one tapped.
             const int port = intArgument(args, "port");
-            const int was = now.value("activeAntennaNumber").toInt();
+            const int number = now.value("activeAntennaNumber").toInt();
+            const bool external = now.value("activeAntennaExternal").toBool();
             c.target = QStringLiteral("rfkit:antenna");
-            c.targetValue = QString::number(was);
-            c.shared = port != was;
-            words(QStringLiteral("RF-Kit antenna"), QStringLiteral("ANT%1").arg(was),
-                  QStringLiteral("ANT%1").arg(port));
+            c.targetValue = (external ? QStringLiteral("E") : QString()) + QString::number(number);
+            c.shared = external || port != number;
+            QString from = QStringLiteral("ANT%1").arg(number);
+            if (number <= 0) {
+                from = QStringLiteral("None");
+            } else if (external) {
+                from = QStringLiteral("External antenna %1").arg(number);
+            }
+            words(QStringLiteral("RF-Kit antenna"), from, QStringLiteral("ANT%1").arg(port));
             return c;
         }
         transmitter();
