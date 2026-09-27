@@ -34,6 +34,10 @@
 #               libdatachannel-keep-remote-description-first.cpp). J.J. Boyd
 #               (KG4VCF), with AI-assisted implementation via Anthropic
 #               Claude Code.
+#   2026-09-27: R-R3-49: usrsctp compiles without NOMINMAX under MinGW, so
+#               windows.h gives it the min() and max() it uses (PR #327's
+#               Windows link). J.J. Boyd (KG4VCF), with AI-assisted
+#               implementation via Anthropic Claude Code.
 #
 # =================================================================
 
@@ -257,6 +261,30 @@ function(nereus_add_remote_media_dependency)
         "${nereus_libdatachannel_SOURCE_DIR}"
         "${CMAKE_BINARY_DIR}/_deps/nereus_libdatachannel-build"
         EXCLUDE_FROM_ALL)
+    # PR #327 (Windows x64, MinGW): usrsctp's user_environment.h defines its
+    # min() and max() macros only when neither _MSC_VER nor __MINGW32__ is
+    # set. MSVC's C <stdlib.h> supplies them; under MinGW they come only from
+    # windows.h (minwindef.h), which the top-level CMakeLists' global
+    # NOMINMAX turns off. libdatachannel itself defines NOMINMAX for MSVC
+    # only. So usrsctp compiled min() and max() as implicit function
+    # declarations and libNereusCore.dll failed to link ("undefined
+    # reference to `min'", user_socket.c, sctp_output.c, sctputil.c and
+    # more). Undefining NOMINMAX for the usrsctp target alone gives MinGW
+    # back windows.h's macros, as portaudio_static and wdsp_static do for
+    # the same reason; the fetched source is unchanged. MSVC is left as it
+    # is. A pinned libdatachannel that no longer builds a usrsctp target
+    # stops the configure on Windows rather than build without this.
+    if(WIN32)
+        if(NOT TARGET usrsctp)
+            message(FATAL_ERROR
+                "libdatachannel no longer builds a usrsctp target; the MinGW "
+                "NOMINMAX exception in cmake/NereusRemoteMedia.cmake needs its "
+                "new name.")
+        endif()
+        target_compile_options(usrsctp PRIVATE
+            $<$<C_COMPILER_ID:GNU,Clang>:-UNOMINMAX>)
+    endif()
+
     nereus_patch_libjuice_turn_release("${nereus_libdatachannel_SOURCE_DIR}/deps/libjuice")
     nereus_patch_libdatachannel_remote_description_first("${nereus_libdatachannel_SOURCE_DIR}")
 
