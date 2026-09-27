@@ -25,3 +25,17 @@ part of a covered file, the change is licensed under the Mozilla Public
 License 2.0, like the rest of peerconnection.cpp, and carries that file's
 MPL-2.0 notice at the top; it is not under NereusSDR's GPLv3. Its source is
 offered with NereusSDR's (SOURCE-OFFER.txt).
+
+Modification (MPL-2.0 section 3.1): NereusSDR also compiles
+src/impl/dtlstransport.cpp with a change of its own. The OpenSSL
+DtlsTransport::start() sets the DTLS MTU before it registers for incoming
+records, instead of after, so a peer's ClientHello arriving at once is
+never handled with no MTU set (which failed the handshake). The change is
+the source file cmake/patches/libdatachannel-set-dtls-mtu-before-incoming.cpp
+in the NereusSDR source, which cmake/NereusRemoteMedia.cmake puts in place
+of the first lines of that function in a copy of dtlstransport.cpp in the
+build tree (nereus_patch_libdatachannel_dtls_mtu_first). Because it becomes
+part of a covered file, the change is licensed under the Mozilla Public
+License 2.0, like the rest of dtlstransport.cpp, and carries that file's
+MPL-2.0 notice at the top; it is not under NereusSDR's GPLv3. Its source is
+offered with NereusSDR's (SOURCE-OFFER.txt).

@@ -7542,15 +7542,17 @@ if(DEFINED libjuice_SOURCE_DIR AND EXISTS "${libjuice_SOURCE_DIR}/src/agent.c")
     set_tests_properties(libjuice_patch_paths PROPERTIES LABELS "session" TIMEOUT 120)
 endif()
 # R-R3-49: libdatachannel's remote description change
-# (cmake/patches/libdatachannel-keep-remote-description-first.cpp) still
-# applies to the pinned source, both library targets compile it, and it
-# opens with the pinned file's own licence notice. Configures a small
+# (cmake/patches/libdatachannel-keep-remote-description-first.cpp) and its
+# DTLS MTU change (cmake/patches/libdatachannel-set-dtls-mtu-before-incoming.cpp)
+# still apply to the pinned source, both library targets compile them, and
+# each opens with its pinned file's own licence notice. Configures a small
 # project only; nothing is built or fetched.
 if(DEFINED libdatachannel_SOURCE_DIR AND EXISTS "${libdatachannel_SOURCE_DIR}/src/peerconnection.cpp")
     add_test(NAME libdatachannel_patch_applies
         COMMAND ${CMAKE_COMMAND}
             -DREPO=${CMAKE_SOURCE_DIR}
             -DPC_CPP=${libdatachannel_SOURCE_DIR}/src/peerconnection.cpp
+            -DDTLS_CPP=${libdatachannel_SOURCE_DIR}/src/impl/dtlstransport.cpp
             -DWORK=${CMAKE_CURRENT_BINARY_DIR}/libdatachannel-patch
             -P ${CMAKE_SOURCE_DIR}/tests/scripts/check-libdatachannel-patch.cmake)
     set_tests_properties(libdatachannel_patch_applies PROPERTIES LABELS "session" TIMEOUT 120)

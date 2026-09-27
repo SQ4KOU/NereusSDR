@@ -27,6 +27,9 @@
 //   2026-09-27: each end keeps the far end's description before its ICE
 //               agent takes it (R-R3-49). J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27: each end sets the DTLS MTU before it takes incoming
+//               records (R-R3-49). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -307,6 +310,56 @@ private slots:
         // One description each way: the offer, then the answer.
         QCOMPARE(kept, 2);
         QCOMPARE(taken, 2);
+    }
+
+    // R-R3-49: "the data channel did not open", still now and then after
+    // the change above. libdatachannel v0.24.5's DtlsTransport::start()
+    // took incoming records before it set the DTLS MTU, and a ClientHello
+    // arriving in between ran the handshake with none; OpenSSL could not
+    // write the server's flight and the answering end failed with "DTLS
+    // recv: Handshake failed: fatal I/O error". NereusSDR compiles it with
+    // the MTU set first
+    // (cmake/patches/libdatachannel-set-dtls-mtu-before-incoming.cpp). What
+    // each end logs shows the order: every DTLS start sets the MTU, then
+    // registers for incoming records, on the same thread.
+    void eachEndSetsTheDtlsMtuBeforeItTakesIncomingRecords()
+    {
+        QMutex mutex;
+        QList<QPair<quintptr, QString>> lines;
+        DataChannelTransport::setLibraryLogForTest([&](quintptr thread, const QString& line) {
+            const QMutexLocker lock(&mutex);
+            lines.append({thread, line});
+        });
+        const auto logOff = qScopeGuard([] { DataChannelTransport::setLibraryLogForTest({}); });
+        OpenPair pair;
+        QVERIFY(pair.open());
+        DataChannelTransport::setLibraryLogForTest({});
+
+        const QMutexLocker lock(&mutex);
+        // A DTLS start on a thread, waiting for its MTU line.
+        QHash<quintptr, bool> starting;
+        QHash<quintptr, bool> mtuSet;
+        int starts = 0;
+        int inOrder = 0;
+        for (const auto& [thread, line] : std::as_const(lines)) {
+            if (line.contains(QLatin1String("DtlsTransport::start"))
+                && line.contains(QLatin1String("Starting DTLS transport"))) {
+                ++starts;
+                starting[thread] = true;
+                mtuSet[thread] = false;
+            } else if (starting.value(thread)
+                       && line.contains(QLatin1String("before incoming records are taken"))) {
+                mtuSet[thread] = true;
+            } else if (starting.value(thread)
+                       && line.contains(QLatin1String("Registering incoming callback"))) {
+                QVERIFY2(mtuSet.value(thread), qPrintable(line));
+                starting[thread] = false;
+                ++inOrder;
+            }
+        }
+        // One DTLS transport at each end.
+        QCOMPARE(starts, 2);
+        QCOMPARE(inOrder, 2);
     }
 
     void a300KiBSettingsSnapshotCrossesInChunks()
