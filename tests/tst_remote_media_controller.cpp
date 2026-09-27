@@ -6590,6 +6590,11 @@ private slots:
         PacedRemoteAudio audio(h);
         h.connectSession();
         QVERIFY(remoteMedia.audioProfileNegotiated());
+        // R-R3-49: the window's media start reaches the Core one queued
+        // delivery after the handshake; read it once it has (a busy
+        // computer read an empty list here and crashed on constFirst()).
+        QTRY_VERIFY_WITH_TIMEOUT(!controlsFor(coreControls, QStringLiteral("start")).isEmpty(),
+                                 5000);
         QCOMPARE(controlsFor(coreControls, QStringLiteral("start")).constFirst()
                      .value(QStringLiteral("audioProfileVersion")).toInteger(), qint64{1});
 
