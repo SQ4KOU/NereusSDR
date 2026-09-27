@@ -10,6 +10,10 @@
 //   2026-09-26: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-26: Task 28 fix wave (review Minor 1): an ended introduction
+//               or a lost service connection ends the attempt at once.
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/RendezvousDialer.h"
@@ -114,6 +118,28 @@ void RendezvousDialer::dial(const QList<QUrl>& servers, const QString& stationId
         if (!m_done && m_transport && !candidate.isEmpty()) {
             m_transport->acceptCandidate(candidate);
         }
+    });
+    // Task 28 fix wave (review Minor 1): once the introduction has ended
+    // (the Core left the service, it expired, or this computer's
+    // connection to the service was lost) no answer or candidate can come
+    // any more, so the attempt ends now rather than at the deadline, and
+    // the next try goes through the service again.
+    connect(m_client, &RendezvousClient::introductionEnded, this,
+            [this](const QByteArray&, const QString& code) {
+        if (m_done) {
+            return;
+        }
+        qCInfo(lcRendezvousDialer) << "The introduction ended before the connection opened:"
+                                   << code;
+        fail(QString::fromLatin1(kNotReached));
+    });
+    connect(m_client, &RendezvousClient::connectionLost, this, [this] {
+        if (m_done) {
+            return;
+        }
+        qCInfo(lcRendezvousDialer) << "The connection to the remote access service ended "
+                                      "before the Core's connection opened";
+        fail(QString::fromLatin1(kNotReached));
     });
     connect(m_client, &RendezvousClient::serviceError, this,
             [](const QString& code, const QString&, qint64) {

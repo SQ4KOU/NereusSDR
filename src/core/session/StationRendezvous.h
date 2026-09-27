@@ -47,6 +47,11 @@
 //   2026-09-26: iPhone app plan Task 28 (R-IOS-16): introductions answered
 //               with a control connection. J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-26: Task 28 fix wave: connections handed over as introduced
+//               (review Important 1 and 2), an unopened answer freed when
+//               the device leaves, answers owned by std::unique_ptr (Minors
+//               1 and 4). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -58,6 +63,9 @@
 #include <QObject>
 #include <QPointer>
 #include <QUrl>
+
+#include <memory>
+#include <unordered_map>
 
 namespace NereusSDR {
 
@@ -115,6 +123,8 @@ private:
     void followPairingWindow();
     void answerIntroduction(const RendezvousIntroduction& introduction);
     void finishAnswer(const QByteArray& id, bool opened);
+    /// The answer for `id`, or null.
+    Answer* answerFor(const QByteArray& id) const;
 
     QPointer<StationServer> m_server;
     RendezvousClient* m_client = nullptr;
@@ -131,7 +141,7 @@ private:
     bool m_stunResolved = false;
     HostFamilies m_stunFamilies;
     QList<RendezvousIntroduction> m_waiting;
-    QHash<QByteArray, Answer*> m_answers;
+    std::unordered_map<QByteArray, std::unique_ptr<Answer>> m_answers;
     int m_credentialsTimeoutMs = kCredentialsTimeoutMs;
     int m_answerDeadlineMs = kAnswerDeadlineMs;
     bool m_answersIntroductions = true;

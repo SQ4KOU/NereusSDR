@@ -2532,6 +2532,102 @@ private slots:
         rendezvous.client()->stop();
     }
 
+    // Task 28 fix wave (review Minor 1): the Core leaving the service, or
+    // this computer losing its connection to it, ends a dial at once
+    // rather than at kDialDeadlineMs (79 s).
+    void aDialEndsAtOnceWhenItsIntroductionEnds_data()
+    {
+        QTest::addColumn<bool>("connectionLost");
+        QTest::newRow("stationLeft") << false;
+        QTest::newRow("connectionLost") << true;
+    }
+
+    void aDialEndsAtOnceWhenItsIntroductionEnds()
+    {
+        QFETCH(bool, connectionLost);
+        ServicePlayer player;
+        QTemporaryDir keyDir;
+        auto key = std::make_shared<const ClientDeviceIdentity>(
+            ClientDeviceIdentity::loadOrCreate(keyDir.path()));
+        RendezvousDialer dialer;
+        QSignalSpy failed(&dialer, &RendezvousDialer::failed);
+        dialer.dial({player.url()}, QStringLiteral("aaaaaaaaaaaaaaaaaaaaaaaaaa"), key);
+        QWebSocket* service = player.waitForConnection();
+        QVERIFY(service != nullptr);
+        service->sendTextMessage(compact(QJsonObject{{"type", "hello"}, {"version", 1},
+                                                     {"nonce", b64(randomBytes(32))},
+                                                     {"stun", QJsonArray()}}));
+        const std::optional<QString> introduce = player.waitForMessage(service);
+        QVERIFY(introduce.has_value());
+        QCOMPARE(QJsonDocument::fromJson(introduce->toUtf8()).object().value("type").toString(),
+                 QStringLiteral("introduce"));
+        QElapsedTimer elapsed;
+        elapsed.start();
+        if (connectionLost) {
+            service->close();
+        } else {
+            service->sendTextMessage(
+                compact(QJsonObject{{"type", "introduction.end"}, {"code", "stationLeft"}}));
+        }
+        QTRY_COMPARE_WITH_TIMEOUT(failed.size(), 1, 5000);
+        QVERIFY(elapsed.elapsed() < 5000);
+        QCOMPARE(failed.at(0).at(0).toString(),
+                 QStringLiteral("The Core could not be reached from here."));
+        QVERIFY(NereusSDR::OperatorWording::isPlain(failed.at(0).at(0).toString()));
+    }
+
+    // Task 28 fix wave (review Minor 1): the device leaving before its
+    // connection opened frees the Core's answer at once (its peer
+    // connection and any relay allocation), not at kAnswerDeadlineMs.
+    void anUnopenedAnswerIsFreedWhenTheDeviceLeaves()
+    {
+        ServicePlayer player;
+        Core core;
+        auto device = makeKey();
+        QVERIFY(core.pair(*device));
+        StationRendezvous rendezvous(core.server.get(), {player.url()}, /*relayAllowed=*/false);
+        QVERIFY(rendezvous.start());
+        QWebSocket* station = player.waitForConnection();
+        QVERIFY(station != nullptr);
+        const auto send = [station](const QJsonObject& message) {
+            station->sendTextMessage(compact(message));
+        };
+        send({{"type", "hello"}, {"version", 1}, {"nonce", b64(randomBytes(32))},
+              {"stun", QJsonArray()}});
+        QVERIFY(player.waitForMessage(station).has_value());  // register
+        send({{"type", "challenge"}, {"nonce", b64(randomBytes(32))}});
+        QVERIFY(player.waitForMessage(station).has_value());  // prove
+        const QString id = Wire::rendezvousId(core.server->stationIdentity().publicKeySpki());
+        send({{"type", "registered"}, {"id", id}});
+        QTRY_VERIFY(rendezvous.client()->isRegistered());
+
+        DataChannelTransport offerer;
+        QSignalSpy offered(&offerer, &DataChannelTransport::localDescription);
+        DataChannelTransport::Options options;
+        options.role = DataChannelTransport::Role::Offerer;
+        options.maxIncomingBytes = StationClient::kMaxIncomingMessageBytes;
+        options.ice = IceConfiguration::throughRendezvous({}, false, AddressFamilies{},
+                                                          HostFamilies{});
+        QVERIFY(offerer.start(options));
+        QTRY_COMPARE(offered.size(), 1);
+        const QByteArray nonce = randomBytes(32);
+        const QByteArray intro = randomBytes(16);
+        send({{"type", "introduction"}, {"from", b64(intro)},
+              {"device", b64(StationIdentity::fingerprintOf(device->spki()))},
+              {"deviceSignature", b64(device->sign(Wire::introduceTranscript(id, nonce)))},
+              {"offer", offered.at(0).at(0).toString()}, {"nonce", b64(nonce)}});
+        const std::optional<QString> answer = player.waitForMessage(station);
+        QVERIFY(answer.has_value());
+        QCOMPARE(QJsonDocument::fromJson(answer->toUtf8()).object().value("type").toString(),
+                 QStringLiteral("answer"));
+        QCOMPARE(rendezvous.pendingAnswers(), 1);
+
+        send({{"type", "introduction.end"}, {"from", b64(intro)}, {"code", "clientLeft"}});
+        QTRY_COMPARE_WITH_TIMEOUT(rendezvous.pendingAnswers(), 0, 2000);
+        QCOMPARE(rendezvous.client()->liveIntroductions(), 0);
+        rendezvous.client()->stop();
+    }
+
     // A client with no paired Core, or no key, is told plainly and nothing
     // is dialled.
     void connectingThroughTheServiceNeedsAPairedCore()

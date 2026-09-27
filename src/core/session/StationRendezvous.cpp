@@ -56,9 +56,6 @@ StationRendezvous::StationRendezvous(StationServer* server, const QList<QUrl>& s
 
 StationRendezvous::~StationRendezvous()
 {
-    for (Answer* answer : std::as_const(m_answers)) {
-        delete answer;
-    }
     m_answers.clear();
     if (m_client != nullptr) {
         m_client->stop();
@@ -140,7 +137,7 @@ bool StationRendezvous::start()
     });
     connect(m_client, &RendezvousClient::credentialsReceived, this,
             [this](const QByteArray& id, bool offered, const RendezvousWire::Turn& turn) {
-        Answer* answer = m_answers.value(id);
+        Answer* answer = answerFor(id);
         if (answer == nullptr || answer->gathering) {
             return;
         }
@@ -152,7 +149,7 @@ bool StationRendezvous::start()
         IceConfiguration::resolveHostFamilies(
             relay ? IceConfiguration::hostNames(relay->urls) : QStringList(), this,
             [this, id, relay, transport](const HostFamilies& families) {
-                Answer* current = m_answers.value(id);
+                Answer* current = answerFor(id);
                 if (current == nullptr || current->transport != transport || current->gathering) {
                     return;
                 }
@@ -162,9 +159,25 @@ bool StationRendezvous::start()
                 current->transport->gatherCandidates(current->ice);
             });
     });
+    // Task 28 fix wave (review Minor 1): the device left, or the
+    // introduction expired, before its connection opened: nothing more can
+    // come for it, so its peer connection and any relay allocation go now
+    // rather than at kAnswerDeadlineMs. A connection that opened is a
+    // session and is not touched.
+    connect(m_client, &RendezvousClient::introductionEnded, this,
+            [this](const QByteArray& id, const QString& code) {
+        if (answerFor(id) == nullptr) {
+            return;
+        }
+        if (code == QLatin1String("clientLeft") || code == QLatin1String("expired")) {
+            qCInfo(lcStationRendezvous) << "An introduction ended before its connection opened:"
+                                        << code;
+            finishAnswer(id, false);
+        }
+    });
     connect(m_client, &RendezvousClient::candidateReceived, this,
             [this](const QByteArray& id, const QString& candidate) {
-        Answer* answer = m_answers.value(id);
+        Answer* answer = answerFor(id);
         if (answer != nullptr && !candidate.isEmpty()) {
             answer->transport->acceptCandidate(candidate);
         }
@@ -191,7 +204,7 @@ bool StationRendezvous::start()
 
 void StationRendezvous::answerIntroduction(const RendezvousIntroduction& introduction)
 {
-    if (!m_server || m_answers.contains(introduction.id)) {
+    if (!m_server || m_answers.count(introduction.id) != 0) {
         return;
     }
     const QString certificate = m_server->certificatePemPath();
@@ -202,7 +215,8 @@ void StationRendezvous::answerIntroduction(const RendezvousIntroduction& introdu
         return;
     }
     const QByteArray id = introduction.id;
-    auto* answer = new Answer;
+    auto owned = std::make_unique<Answer>();
+    Answer* answer = owned.get();
     answer->id = id;
     answer->ice = IceConfiguration::throughRendezvous(m_client->stunUrls(),
                                                       m_client->relayAllowed(),
@@ -213,12 +227,12 @@ void StationRendezvous::answerIntroduction(const RendezvousIntroduction& introdu
     answer->credentialsTimer->setSingleShot(true);
     answer->deadline = new QTimer(answer->transport);
     answer->deadline->setSingleShot(true);
-    m_answers.insert(id, answer);
+    m_answers.emplace(id, std::move(owned));
 
     DataChannelTransport* transport = answer->transport;
     connect(transport, &DataChannelTransport::localDescription, this,
             [this, id](const QString& sdp, const QString&) {
-        Answer* current = m_answers.value(id);
+        Answer* current = answerFor(id);
         if (current == nullptr) {
             return;
         }
@@ -235,7 +249,7 @@ void StationRendezvous::answerIntroduction(const RendezvousIntroduction& introdu
         }
     });
     connect(answer->credentialsTimer, &QTimer::timeout, this, [this, id] {
-        Answer* current = m_answers.value(id);
+        Answer* current = answerFor(id);
         if (current == nullptr || current->gathering) {
             return;
         }
@@ -278,17 +292,20 @@ void StationRendezvous::answerIntroduction(const RendezvousIntroduction& introdu
 
 void StationRendezvous::finishAnswer(const QByteArray& id, bool opened)
 {
-    Answer* answer = m_answers.take(id);
-    if (answer == nullptr) {
+    const auto found = m_answers.find(id);
+    if (found == m_answers.end()) {
         return;
     }
+    const std::unique_ptr<Answer> answer = std::move(found->second);
+    m_answers.erase(found);
     // Retired here, whatever happened, so it holds no place for the rest of
     // its lifetime at the service.
     m_client->retireIntroduction(id);
     DataChannelTransport* transport = answer->transport;
+    // The timers are the transport's children; they go before it is
+    // handed on.
     delete answer->credentialsTimer;
     delete answer->deadline;
-    delete answer;
     transport->disconnect(this);
     if (opened && m_server) {
         // One of the Core's connections from here on, as a WebSocket's is,
@@ -300,6 +317,12 @@ void StationRendezvous::finishAnswer(const QByteArray& id, bool opened)
     }
     transport->closeLink(QStringLiteral("not connected"));
     transport->deleteLater();
+}
+
+StationRendezvous::Answer* StationRendezvous::answerFor(const QByteArray& id) const
+{
+    const auto found = m_answers.find(id);
+    return found == m_answers.end() ? nullptr : found->second.get();
 }
 
 void StationRendezvous::followPairingWindow()
