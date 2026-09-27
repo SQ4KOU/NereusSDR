@@ -1,6 +1,7 @@
 // no-port-check: NereusSDR-original remote audio receiver integration tests.
 #include <QtTest>
 #include "RealtimeTestLoad.h"
+#include "TestFunctionGroups.h"
 #include <QTimer>
 #include <QElapsedTimer>
 #include <QSignalSpy>
@@ -2622,5 +2623,20 @@ private slots:
         QCOMPARE(backoff.nextDelayMs(700, 0), qint64(300));
     }
 };
-QTEST_GUILESS_MAIN(TstRemoteAudioReceiver)
+
+int main(int argc, char** argv)
+{
+    QCoreApplication app(argc, argv);
+    TstRemoteAudioReceiver test;
+    QTEST_SET_MAIN_SOURCE_PATH
+    // R-R3-49 load round: the whole run is about 118 s of wall-clock
+    // playback, against ctest's 120 s limit whatever the load; the two
+    // Wi-Fi stall rows (about 35 s each) run as their own ctest entry,
+    // tst_remote_audio_receiver_wifi (tests/CMakeLists.txt).
+    const std::optional<QStringList> arguments = NereusSDR::TestFunctionGroups::arguments(
+        test.metaObject(), app.arguments(), "NEREUS_REMOTE_AUDIO_RECEIVER_GROUP",
+        {{QStringLiteral("wifi"), {QStringLiteral("wifiStallBurstConcealsWithoutRestart")}}});
+    return arguments ? QTest::qExec(&test, *arguments) : 1;
+}
+
 #include "tst_remote_audio_receiver.moc"
