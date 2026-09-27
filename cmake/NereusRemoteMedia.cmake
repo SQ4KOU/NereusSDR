@@ -24,6 +24,10 @@
 #               cmake/patches/libjuice-release-turn-allocations.c). J.J. Boyd
 #               (KG4VCF), with AI-assisted implementation via Anthropic
 #               Claude Code.
+#   2026-09-26: Task 28 fix wave (review Minor 6): agent.c is found among
+#               the targets' sources by the file it names, not its spelling.
+#               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+#               Anthropic Claude Code.
 #
 # =================================================================
 
@@ -73,7 +77,22 @@ function(nereus_patch_libjuice_turn_release juice_dir)
     foreach(_target IN ITEMS juice juice-static)
         if(TARGET ${_target})
             get_target_property(_sources ${_target} SOURCES)
-            list(FIND _sources "${_source}" _index)
+            get_target_property(_target_dir ${_target} SOURCE_DIR)
+            # Matched by the file each entry names, not its spelling: a
+            # FETCHCONTENT_SOURCE_DIR given with a trailing slash, a `..` or
+            # through a symbolic link names the same agent.c differently.
+            file(REAL_PATH "${_source}" _source_real)
+            set(_index -1)
+            set(_position 0)
+            foreach(_entry IN LISTS _sources)
+                if(_index EQUAL -1 AND NOT _entry MATCHES "^\\$<")
+                    file(REAL_PATH "${_entry}" _entry_real BASE_DIRECTORY "${_target_dir}")
+                    if(_entry_real STREQUAL _source_real)
+                        set(_index ${_position})
+                    endif()
+                endif()
+                math(EXPR _position "${_position} + 1")
+            endforeach()
             if(_index EQUAL -1)
                 message(FATAL_ERROR "libjuice target ${_target} does not compile ${_source}")
             endif()
