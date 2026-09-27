@@ -7,12 +7,16 @@
 // environment variable naming the group, and gives the test's own entry
 // `rest`. The test's main() hands its arguments through arguments() below.
 //
-// A group names whole test functions, never single data rows: QtTest
-// cannot list a function's rows before it runs them, so a row added later
-// would run in no entry. `rest` runs every test function no group names.
-// The variable unset, or a run that names its own functions or options,
-// runs as asked. A group naming something that is not a test function
-// stops the run, so a rename cannot quietly drop a case from every entry.
+// A group names whole test functions, or single data rows as
+// "function:tag". QtTest cannot list a function's rows before it runs them,
+// so split a function by rows only when main() builds the rows from the
+// same list its _data function reads, every row in one group: a row named
+// by hand would drop any row added later from every entry. `rest` runs
+// every test function no group names, whole or by row. The variable unset,
+// or a run that names its own functions or options, runs as asked. A group
+// naming something that is not a test function stops the run, so a rename
+// cannot quietly drop a case from every entry; a row tag that is not the
+// function's fails in QtTest itself.
 //
 // Modification history (NereusSDR):
 //   2026-09-27: original implementation for NereusSDR by J.J. Boyd
@@ -33,8 +37,8 @@ namespace NereusSDR::TestFunctionGroups {
 
 struct Group {
     QString name;
-    /// Whole test functions.
-    QStringList functions;
+    /// Whole test functions, or "function:tag" for one data row.
+    QStringList entries;
 };
 
 /// The test functions QtTest would run: private slots with no arguments,
@@ -58,7 +62,7 @@ inline QStringList testFunctions(const QMetaObject* meta)
 }
 
 /// The arguments to hand QTest::qExec() for the group `variable` names;
-/// nullopt (after a message) when the group or one of its functions is
+/// nullopt (after a message) when the group or one of its entries is
 /// unknown.
 inline std::optional<QStringList> arguments(const QMetaObject* meta,
                                             const QStringList& appArguments,
@@ -72,7 +76,8 @@ inline std::optional<QStringList> arguments(const QMetaObject* meta,
     const QStringList all = testFunctions(meta);
     QStringList grouped;
     for (const Group& group : groups) {
-        for (const QString& function : group.functions) {
+        for (const QString& entry : group.entries) {
+            const QString function = entry.section(QLatin1Char(':'), 0, 0);
             if (!all.contains(function)) {
                 qCritical("%s group %s names %s, which is not a test function", variable,
                           qPrintable(group.name), qPrintable(function));
@@ -92,7 +97,7 @@ inline std::optional<QStringList> arguments(const QMetaObject* meta,
     }
     for (const Group& group : groups) {
         if (group.name == chosen) {
-            out += group.functions;
+            out += group.entries;
             return out;
         }
     }
