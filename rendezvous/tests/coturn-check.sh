@@ -26,7 +26,9 @@
 #     step 9 starts Caddy, coturn, the service and the WebSocket relay,
 #     then leaves them alone,
 #     reloads Caddy after a Caddyfile change and restarts only after a unit
-#     or configuration change, and checks the ports each one holds; a
+#     or configuration change, also when a --no-start run made the change
+#     (the next real run does what it left pending, and a run after that
+#     nothing), and checks the ports each one holds; a
 #     failing systemctl enable and a failing file install stop it with a
 #     message; the TURN secret's backups; the deploy account and its key;
 #     the Caddyfile, Caddy's drop-in and the memory limits; the relay
@@ -585,6 +587,45 @@ out="$(rerun)" || { printf '%s\n' "$out" >&2; fail "a run after a Caddyfile chan
 calls="$(sed -n '/--- systemctl calls/,$p' <<<"$out")"
 grep -qx 'reload caddy' <<<"$calls" && ! grep -Eq '^restart' <<<"$calls" \
     || { printf '%s\n' "$out" >&2; fail "a Caddyfile change did not reload Caddy alone"; }
+# A --no-start run between a change and the real run (the live steps:
+# verify with --no-start, then start): the real run still does what the
+# change calls for, and a run after it does nothing.
+sx <<'EOS'
+set -euo pipefail
+echo "# changed by hand" >> /etc/caddy/Caddyfile
+echo "# changed by hand" >> /etc/systemd/system/nereus-rendezvous.service
+EOS
+out="$(rerun --no-start)" || { printf '%s\n' "$out" >&2; fail "a --no-start run after a Caddyfile and unit change failed"; }
+calls="$(sed -n '/--- systemctl calls/,$p' <<<"$out")"
+! grep -Eq '^(start|restart|reload|enable|daemon-reload)' <<<"$calls" \
+    && grep -q 'left in /etc/nereus-rendezvous/pending-actions for the next run without --no-start: systemctl daemon-reload; reload caddy; restart nereus-rendezvous.service$' <<<"$out" \
+    || { printf '%s\n' "$out" >&2; fail "--no-start started something, or did not say what it left pending"; }
+sx <<'EOS' || fail "the pending-actions file after --no-start is not as expected"
+set -euo pipefail
+[[ "$(stat -c '%U:%G %a' /etc/nereus-rendezvous/pending-actions)" == "root:root 600" ]]
+[[ "$(cat /etc/nereus-rendezvous/pending-actions)" == $'units_changed\ncaddyfile_changed\nservice_changed' ]]
+sha256sum /etc/nereus-rendezvous/pending-actions > /run/pending.sum
+EOS
+out="$(rerun --dry-run)" || { printf '%s\n' "$out" >&2; fail "a dry run with actions pending failed"; }
+grep -q 'pending from an earlier run that started no service (--no-start) or stopped early: systemctl daemon-reload; reload caddy; restart nereus-rendezvous.service$' <<<"$out" \
+    && grep -q 'caddy would reload its configuration (open WebSockets are kept)' <<<"$out" \
+    && grep -q 'nereus-rendezvous.service would be restarted' <<<"$out" \
+    && grep -q 'coturn would be left running (none of its files changed)' <<<"$out" \
+    && grep -q 'nereus-relay.service would be left running (none of its files changed)' <<<"$out" \
+    || { printf '%s\n' "$out" >&2; fail "the dry run did not report the pending reload and restart"; }
+sx <<<'sha256sum --quiet -c /run/pending.sum' || fail "the dry run changed the pending-actions file"
+out="$(rerun)" || { printf '%s\n' "$out" >&2; fail "the real run after --no-start failed"; }
+calls="$(sed -n '/--- systemctl calls/,$p' <<<"$out")"
+grep -qx 'daemon-reload' <<<"$calls" && grep -qx 'reload caddy' <<<"$calls" \
+    && grep -qx 'restart nereus-rendezvous.service' <<<"$calls" \
+    && [[ "$(grep -Ec '^(restart|reload)' <<<"$calls")" -eq 2 ]] \
+    || { printf '%s\n' "$out" >&2; fail "the real run after --no-start did not reload Caddy and restart the service alone"; }
+sx <<<'test ! -e /etc/nereus-rendezvous/pending-actions' || fail "the real run left the pending-actions file"
+out="$(rerun)" || { printf '%s\n' "$out" >&2; fail "a second real run after --no-start failed"; }
+calls="$(sed -n '/--- systemctl calls/,$p' <<<"$out")"
+! grep -Eq '^(restart|reload|daemon-reload)' <<<"$calls" \
+    || { printf '%s\n' "$out" >&2; fail "a second real run after --no-start reloaded or restarted something"; }
+pass "where systemd runs: a --no-start run that changes the Caddyfile and the service's unit starts nothing and leaves the reload and restart pending (root 600; the dry run reports them and changes nothing); the next real run runs daemon-reload, reloads Caddy and restarts the service and nothing else; a run after that does neither"
 # A failing systemctl enable says so.
 sx <<<'touch /run/standin-fail-enable'
 out="$(rerun)" && { printf '%s\n' "$out" >&2; fail "a failing systemctl enable did not stop setup-server.sh"; }

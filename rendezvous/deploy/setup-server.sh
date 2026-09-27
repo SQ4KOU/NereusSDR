@@ -16,7 +16,10 @@
 #                    nothing
 #   --no-start       install and configure, but start, stop or enable no
 #                    service (the default on a host not booted with systemd,
-#                    such as the containers of the checks in rendezvous/tests/)
+#                    such as the containers of the checks in rendezvous/tests/);
+#                    the reloads and restarts its changes call for are kept
+#                    in /etc/nereus-rendezvous/pending-actions, and the next
+#                    run that starts services carries them out
 #   --rotate-secret  make a new TURN secret and a new relay secret (see
 #                    rendezvous/README.md, "Rotating the secret")
 #
@@ -82,7 +85,9 @@
 #      start what is stopped, reload Caddy after a Caddyfile change, and
 #      restart only what had a unit or configuration change (a coturn
 #      restart drops every live relay, a WebSocket relay restart makes every
-#      leg join again); check exactly which ports each one holds.
+#      leg join again), in this run or in an earlier one that did not get
+#      this far (--no-start, or a run that stopped with an error); check
+#      exactly which ports each one holds.
 #  10. Print a summary.
 #
 # It never changes the firewall (the README lists the rules) or the SSH
@@ -115,6 +120,14 @@ readonly USE_TIMER_DEST="/etc/systemd/system/nereus-data-use.timer"
 readonly USE_SCRIPT_DEST="/usr/local/libexec/nereus-rendezvous/data-use"
 readonly USE_CONF="${ETC_DIR}/data-use.conf"
 readonly SYSCTL_DEST="/etc/sysctl.d/60-nereus-rendezvous.conf"
+# What changed on disk and has not yet been acted on in step 9: one name of
+# PENDING_FLAGS a line, root only. Every change is written here the moment
+# it is made, and step 9 takes each one off once it has done what it calls
+# for, so a run with --no-start (or one that stopped with an error) leaves
+# the reloads and restarts to the next run instead of losing them: that run
+# finds its files "same".
+readonly PENDING_FILE="${ETC_DIR}/pending-actions"
+readonly PENDING_FLAGS=(units_changed caddy_changed caddyfile_changed coturn_changed service_changed relay_changed)
 readonly CREDENTIAL_PATH="/run/credentials/${UNIT_NAME}/turn-secret"
 readonly RELAY_CREDENTIAL_PATH="/run/credentials/${UNIT_NAME}/relay-secret"
 readonly RELAY_OWN_CREDENTIAL_PATH="/run/credentials/${RELAY_UNIT_NAME}/relay-secret"
@@ -407,6 +420,70 @@ install_file() {
     echo changed
 }
 
+# What each pending flag calls for, for the notes.
+pending_action() {
+    case "$1" in
+        units_changed) echo "systemctl daemon-reload" ;;
+        caddy_changed) echo "restart caddy" ;;
+        caddyfile_changed) echo "reload caddy" ;;
+        coturn_changed) echo "restart coturn" ;;
+        service_changed) echo "restart ${UNIT_NAME}" ;;
+        relay_changed) echo "restart ${RELAY_UNIT_NAME}" ;;
+    esac
+}
+
+# The actions of every pending flag that is set, joined by "; ".
+pending_list() {
+    local flag text=""
+    for flag in "${PENDING_FLAGS[@]}"; do
+        if (( ${!flag} )); then
+            text+="${text:+; }$(pending_action "$flag")"
+        fi
+    done
+    printf '%s\n' "$text"
+}
+
+# Writes the pending flags that are set to PENDING_FILE (root 600, renamed
+# into place), or removes it when none is. Nothing in a dry run.
+save_pending() {
+    (( dry_run )) && return 0
+    [[ -L "$PENDING_FILE" ]] && die "${PENDING_FILE} is a symlink; refusing to follow it as root"
+    local flag lines=""
+    for flag in "${PENDING_FLAGS[@]}"; do
+        if (( ${!flag} )); then
+            lines+="${flag}"$'\n'
+        fi
+    done
+    if [[ -z "$lines" ]]; then
+        rm -f -- "$PENDING_FILE"
+        return 0
+    fi
+    local staged
+    staged="$(mktemp "${ETC_DIR}/.pending-actions.XXXXXX")"
+    tmp_paths+=("$staged")
+    chmod 600 "$staged"
+    printf '%s' "$lines" > "$staged"
+    mv -f -- "$staged" "$PENDING_FILE"
+}
+
+# Sets each named flag and records it at once.
+mark_changed() {
+    local flag
+    for flag in "$@"; do
+        printf -v "$flag" 1
+    done
+    save_pending
+}
+
+# Takes each named flag off once its action is done.
+mark_done() {
+    local flag
+    for flag in "$@"; do
+        printf -v "$flag" 0
+    done
+    save_pending
+}
+
 # Rule (as in website/deploy/setup-server.sh): root does no file operation
 # inside a directory the deploy account can write (its home and ~/.ssh);
 # that work runs as the account, where a symlink it planted reaches only
@@ -685,11 +762,35 @@ fi
 log "4/10 TURN secret, relay secret and coturn's DTLS key pair"
 
 # What changes, for step 9: coturn and the service are restarted only when
-# one of their own files changed.
+# one of their own files changed, in this run or in an earlier one that
+# left it pending.
 coturn_changed=0
 service_changed=0
 relay_changed=0
 units_changed=0
+caddy_changed=0
+caddyfile_changed=0
+if [[ -L "$PENDING_FILE" ]]; then
+    die "${PENDING_FILE} is a symlink; refusing to follow it as root"
+fi
+if [[ -f "$PENDING_FILE" ]]; then
+    while IFS= read -r line; do
+        known=0
+        for flag in "${PENDING_FLAGS[@]}"; do
+            if [[ "$line" == "$flag" ]]; then
+                printf -v "$flag" 1
+                known=1
+            fi
+        done
+        if ! (( known )) && [[ -n "$line" ]]; then
+            note "${PENDING_FILE}: ignoring an unknown line"
+        fi
+    done < "$PENDING_FILE"
+    pending="$(pending_list)"
+    if [[ -n "$pending" ]]; then
+        note "pending from an earlier run that started no service (--no-start) or stopped early: ${pending}"
+    fi
+fi
 if (( dry_run )); then
     if [[ -s "$SECRET_FILE" && "$rotate" -eq 0 ]]; then
         note "secret present"
@@ -730,7 +831,7 @@ else
         python3 -c 'import secrets; print(secrets.token_hex(32))' > "$staged"
         mv -f -- "$staged" "$SECRET_FILE"
         note "made a new secret in ${SECRET_FILE} (root only)"
-        coturn_changed=1 service_changed=1
+        mark_changed coturn_changed service_changed
     fi
     chown root:root "$SECRET_FILE"
     chmod 600 "$SECRET_FILE"
@@ -746,7 +847,7 @@ else
         python3 -c 'import secrets; print(secrets.token_hex(32))' > "$staged"
         mv -f -- "$staged" "$RELAY_SECRET_FILE"
         note "made a new relay secret in ${RELAY_SECRET_FILE} (root only)"
-        service_changed=1 relay_changed=1
+        mark_changed service_changed relay_changed
     fi
     chown root:root "$RELAY_SECRET_FILE"
     chmod 600 "$RELAY_SECRET_FILE"
@@ -781,7 +882,7 @@ os.replace(key_path + ".new", key_path)
 os.replace(cert_path + ".new", cert_path)
 PY
         note "made ${DTLS_CERT} and ${DTLS_KEY}"
-        coturn_changed=1
+        mark_changed coturn_changed
     fi
     chown root:turnserver "$DTLS_CERT" "$DTLS_KEY"
     chmod 640 "$DTLS_CERT" "$DTLS_KEY"
@@ -818,7 +919,7 @@ if (( dry_run )); then
 fi
 result="$(install_file "${work_dir}/turnserver.conf" "$TURNSERVER_CONF" 640 root:turnserver secret)"
 if [[ "$result" == changed ]]; then
-    coturn_changed=1
+    mark_changed coturn_changed
 fi
 note "${TURNSERVER_CONF}${would}: ${result}"
 
@@ -879,7 +980,7 @@ if [[ -f "${CODE_DIR}/nereus_rendezvous/config.py" ]]; then
 fi
 result="$(install_file "${work_dir}/rendezvous.conf" "$SERVICE_CONF" 644 root:root)"
 if [[ "$result" == changed ]]; then
-    service_changed=1
+    mark_changed service_changed
 fi
 note "${SERVICE_CONF}${would}: ${result}"
 {
@@ -910,14 +1011,13 @@ if [[ -f "${CODE_DIR}/nereus_relay/config.py" ]]; then
 fi
 result="$(install_file "${work_dir}/relay.conf" "$RELAY_CONF" 644 root:root)"
 if [[ "$result" == changed ]]; then
-    relay_changed=1
+    mark_changed relay_changed
 fi
 note "${RELAY_CONF}${would}: ${result}"
 
 # ---------------------------------------------------------------------------
 log "7/10 ${CADDYFILE_DEST}"
 
-caddyfile_changed=0
 if [[ "$manage_caddy" == no ]]; then
     note "RV_MANAGE_CADDY=no: Caddy and its configuration are left alone (add the ${rv_host} site yourself; see the README)"
 else
@@ -936,7 +1036,7 @@ else
     fi
     result="$(install_file "${work_dir}/Caddyfile" "$CADDYFILE_DEST" 644 root:root)"
     if [[ "$result" == changed ]]; then
-        caddyfile_changed=1
+        mark_changed caddyfile_changed
     fi
     note "${CADDYFILE_DEST}${would}: ${result}"
 fi
@@ -944,7 +1044,6 @@ fi
 # ---------------------------------------------------------------------------
 log "8/10 Units, drop-ins and ${CODE_DIR}"
 
-caddy_changed=0
 printf 'RV_DATA_USE_INTERFACE=%s\nRV_TRANSFER_GB_PER_MONTH=%s\n' "$data_use_iface" "$transfer_gb" > "${work_dir}/data-use.conf"
 {
     printf '# Written by rendezvous/deploy/setup-server.sh from the server'"'"'s memory\n'
@@ -967,17 +1066,14 @@ if ! (( dry_run )); then
 fi
 # $1 source, $2 destination, $3 mode, $4..: flags to set when it changed.
 place() {
-    local src="$1" dest="$2" mode="$3" result flag
+    local src="$1" dest="$2" mode="$3" result
     shift 3
     result="$(install_file "$src" "$dest" "$mode" root:root)"
     note "${dest}${would}: ${result}"
-    if [[ "$result" == changed ]]; then
-        for flag in "$@"; do
-            printf -v "$flag" 1
-        done
+    if [[ "$result" == changed && $# -gt 0 ]]; then
+        mark_changed "$@"
     fi
 }
-units_changed=0
 place "$repo_unit" "$UNIT_DEST" 644 service_changed units_changed
 place "${work_dir}/memory.conf" "$MEMORY_DROPIN_DEST" 644 service_changed units_changed
 place "$repo_relay_unit" "$RELAY_UNIT_DEST" 644 relay_changed units_changed
@@ -1090,9 +1186,14 @@ if (( dry_run )); then
     note "dry run: no service is started, stopped or enabled"
 elif (( no_start )); then
     note "--no-start: no service is started, stopped or enabled"
+    pending="$(pending_list)"
+    if [[ -n "$pending" ]]; then
+        note "left in ${PENDING_FILE} for the next run without --no-start: ${pending}"
+    fi
 else
     if (( units_changed )); then
         systemctl daemon-reload
+        mark_done units_changed
     fi
     if [[ "$manage_caddy" == yes ]]; then
         enable_units caddy
@@ -1102,20 +1203,27 @@ else
     getent group "$WS_RELAY_SOCKET_GROUP" >/dev/null \
         || die "there is no ${WS_RELAY_SOCKET_GROUP} group (Caddy's package makes it); the WebSocket relay needs it for its socket"
     enable_units coturn "$UNIT_NAME" "$RELAY_UNIT_NAME" nereus-data-use.timer
+    # Each pending flag comes off once its unit is done; one that stops
+    # the script stays for the next run. Without code the service (or the
+    # relay) cannot be running, so it has nothing to restart.
     if [[ "$manage_caddy" == yes ]]; then
         apply_plan caddy "$caddy_plan"
     fi
+    mark_done caddy_changed caddyfile_changed
     apply_plan coturn "$coturn_plan"
+    mark_done coturn_changed
     if (( code_present )); then
         apply_plan "$UNIT_NAME" "$service_plan"
     else
         note "${CODE_DIR} holds no code yet: run rendezvous/deploy.sh, then: systemctl restart ${UNIT_NAME}"
     fi
+    mark_done service_changed
     if (( relay_code_present )); then
         apply_plan "$RELAY_UNIT_NAME" "$relay_plan"
     else
         note "${CODE_DIR} holds no relay code yet: run rendezvous/deploy.sh, then: systemctl restart ${RELAY_UNIT_NAME}"
     fi
+    mark_done relay_changed
     systemctl start nereus-data-use.timer || die "nereus-data-use.timer did not start"
     note "nereus-data-use.timer is active (a journal line a day: journalctl -u nereus-data-use)"
 fi

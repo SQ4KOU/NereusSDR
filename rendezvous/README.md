@@ -220,8 +220,12 @@ bash /root/rendezvous/deploy/setup-server.sh
 
 Run again, it reloads Caddy after a Caddyfile change (open connections are
 kept) and restarts a service only when one of its files changed (a coturn
-restart drops every relay in use); the dry run says which it would do. It
-refuses to go on while another program holds UDP 3478 or 443.
+restart drops every relay in use); the dry run says which it would do. A
+run with `--no-start` starts nothing and keeps the reloads and restarts its
+changes call for in `/etc/nereus-rendezvous/pending-actions` (root only);
+the next run without it carries them out and the dry run lists them, so a
+check with `--no-start` before the real run loses none. It refuses to go on
+while another program holds UDP 3478 or 443.
 
 ### 6. The service's code
 

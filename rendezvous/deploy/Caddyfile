@@ -16,7 +16,6 @@
 #
 # No access log is configured on purpose. Caddy still writes its own errors
 # to the systemd journal (journalctl -u caddy).
-
 {
 	# HTTP/3 is switched off. It runs over QUIC on UDP 443, which is
 	# coturn's on this server. Serving HTTP/1.1 and HTTP/2 only keeps Caddy
@@ -60,10 +59,9 @@ rv.nereussdr.com {
 	# the relay and Caddy is what the relay allows (section 12.5).
 	handle /v1/relay* {
 		reverse_proxy unix//run/nereus-relay/relay.sock {
-			# The client's own address only, as for the service below. A
-			# Unix socket has no peer address, so the relay takes this
-			# one and refuses a request without it.
-			header_up X-Forwarded-For {remote_host}
+			# X-Forwarded-For holds the client's own address only, as for
+			# the service below. A Unix socket has no peer address, so the
+			# relay takes this one and refuses a request without it.
 			# A reload keeps open relay legs for up to 5 minutes too.
 			stream_close_delay 5m
 		}
@@ -72,11 +70,14 @@ rv.nereussdr.com {
 	handle {
 		reverse_proxy 127.0.0.1:8710 [::1]:8710 {
 			lb_policy first
-			# Exactly one address: the client's as Caddy sees it. The
-			# service believes the last address in X-Forwarded-For only
-			# from a loopback peer (rendezvous document section 9.1), so
+			# X-Forwarded-For holds exactly one address: the client's as
+			# Caddy sees it. Caddy does this by itself: with no
+			# trusted_proxies set it trusts no client's own header and
+			# replaces it, so no header_up is needed (caddy-check.sh
+			# shows the one entry at both upstreams). The service
+			# believes the last address in X-Forwarded-For only from a
+			# loopback peer (rendezvous document section 9.1), so
 			# whatever a client sends in its own header never counts.
-			header_up X-Forwarded-For {remote_host}
 			# A Caddy reload (setup-server.sh runs one after a Caddyfile
 			# change) keeps open WebSockets for up to 5 minutes instead of
 			# cutting every registered Core off at once.
