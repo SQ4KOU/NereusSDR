@@ -535,6 +535,9 @@ private:
     void handleStationRadios(const NereusSDR::SessionMessage& invoke);
     void handleRecords(const NereusSDR::SessionMessage& invoke);
     void handleSpotSources(const NereusSDR::SessionMessage& invoke);
+    // R-IOS-26 (iPhone plan Task 22, parity Task 20): freedv.setMessage,
+    // freedv.sendQsy and freedv.setHidden.
+    void handleFreedv(const NereusSDR::SessionMessage& invoke);
     /// Refuses (and answers) a verb whose sliceId names another device's
     /// slice. True when it did.
     bool refusedForAnotherDevice(const NereusSDR::SessionMessage& invoke);

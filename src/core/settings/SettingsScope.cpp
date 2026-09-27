@@ -6,7 +6,7 @@
 //
 // The ordered rule table, first match wins:
 //   1. Explicit exceptions -- a key that would otherwise be caught by a
-//      prefix rule below but needs the opposite answer. The ten
+//      prefix rule below but needs the opposite answer. The nine
 //      FreeDvReporter/* window-presentation keys (which would match
 //      "FreeDv") qualify under that strict definition. The two
 //      TciLogWindow* keys are listed there too, unchanged, although since
@@ -163,6 +163,12 @@
 //                keys are this computer's (OperatorLocal); the Core runs
 //                the station's other spot sources. J.J. Boyd (KG4VCF),
 //                AI-assisted via Anthropic Claude Code.
+//   2026-09-27 - iPhone plan Task 22 / parity Task 20 (R-IOS-26): the Core
+//                runs FreeDV Reporter, so "Hide my station"
+//                (FreeDvReporter/Hidden) is the Core's (Station) and no
+//                longer a window exception; the saved status messages
+//                (FreeDvReporter/SavedMessages) are recorded as Station.
+//                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/settings/SettingsScope.h"
@@ -230,8 +236,8 @@ const Rule kExceptions[] = {
     // only presenting what it already collected. That holds for
     // FreeDvReporter/{Callsign,GridSquare,Message,ServerUrl}, which
     // src/models/RadioModel.cpp really does read. It does not hold for the
-    // ten below: table geometry, sort state, column visibility, per-column
-    // filters, the hide-self toggle and three display-unit toggles, whose
+    // nine below: table geometry, sort state, column visibility, per-column
+    // filters and three display-unit toggles, whose
     // only reader or writer anywhere in the tree is
     // src/gui/FreeDVReporterDialog.cpp or src/gui/SpotHubDialog.cpp.
     //
@@ -252,7 +258,9 @@ const Rule kExceptions[] = {
     // src/gui and are deliberately NOT moved here, because each is a
     // judgement rather than a presentation fact and none was in the
     // review's scope: SavedMessages (the operator's canned status-message
-    // presets, whose SENT counterpart Message is Station), ReportToPsk (a
+    // presets, whose SENT counterpart Message is Station; iPhone plan Task
+    // 22 confirms Station: every device offers the Core's saved messages),
+    // ReportToPsk (a
     // reporting BEHAVIOUR flag that has no runtime consumer at all today,
     // the same shape as the five reviewed-and-pinned entries at the bottom
     // of kWholeKeys), and IdleTimeoutMinutes (the dialog's own idle-sweep
@@ -264,7 +272,9 @@ const Rule kExceptions[] = {
     { "FreeDvReporter/VisibleColumns", SettingsScope::OperatorLocal },
     { "FreeDvReporter/ColumnFilters", SettingsScope::OperatorLocal },
     { "FreeDvReporter/BandFilter", SettingsScope::OperatorLocal },
-    { "FreeDvReporter/Hidden", SettingsScope::OperatorLocal },
+    // FreeDvReporter/Hidden left this list with iPhone plan Task 22: the
+    // Core runs FreeDV Reporter, so "Hide my station" is the Core's
+    // (freedv.setHidden) and the "FreeDv" prefix rule makes it Station.
     { "FreeDvReporter/DistanceMiles", SettingsScope::OperatorLocal },
     { "FreeDvReporter/DirectionAsCardinal", SettingsScope::OperatorLocal },
     { "FreeDvReporter/FrequencyAsKhz", SettingsScope::OperatorLocal },
@@ -391,7 +401,7 @@ const Rule kPrefixes[] = {
     // The first half is true of the collected SPOTS; the second is false
     // of the FreeDV Reporter window's own table geometry, sort state,
     // column visibility, view filters and display-unit toggles, which
-    // RadioModel never reads and which are now ten explicit exceptions in
+    // RadioModel never reads and which are now nine explicit exceptions in
     // step 1 above. What survives, and is what actually justifies these
     // prefix rules, is narrower: the CONNECTION half and the SPOT-DISPLAY
     // half of each source are read by src/models/RadioModel.cpp. A key

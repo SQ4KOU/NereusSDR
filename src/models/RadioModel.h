@@ -341,6 +341,9 @@
 //                applySavedSliceSampleRates), and a rate change saves it.
 //                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-27 - iPhone plan Task 22 / parity Task 20 (R-IOS-26):
+//                clearStationFreedv(). NereusSDR-original. J.J. Boyd
+//                (KG4VCF), AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -2657,6 +2660,10 @@ public:
     void clearStationSpots();
     /// The Core's radio list only.
     void clearStationRadios();
+    /// iPhone plan Task 22 / parity Task 20: the Core's FreeDV Reporter
+    /// list only (a remote window's; a new subscription or the session's
+    /// end).
+    void clearStationFreedv();
 
     /// Parity Task 21 (R-IOS-18): a remote window's copy of the Core's
     /// radios (the `stationRadios` stream), the Core's radio first.
@@ -3082,6 +3089,10 @@ public:
     /// antenna names, fault logs and RF-Kit auto-reconnect and poll
     /// interval follow it at once. Other keys ignored.
     void applyRemoteAccessorySetting(const QString& key);
+    /// iPhone plan Task 22 / parity Task 20 (B7.3): a window's grid square
+    /// write reaches the Core's FreeDV Reporter list (distance and heading)
+    /// at once. Other keys: no change.
+    void applyRemoteFreedvSetting(const QString& key);
 
     // R-R3-47 / R-R3-22: the Power Genius's and Tuner Genius's own settings
     // (`accessorySettings`, remotePgxlControlVersion 3 and

@@ -403,6 +403,9 @@
 //   2026-09-27: Parity Task 32 (R-IOS-13, R-R3-49): txMonitorAudioVersion()
 //               and txMonitorAudioAvailable(). J.J. Boyd (KG4VCF), with
 //               AI-assisted implementation via Anthropic Claude Code.
+//   2026-09-27: iPhone plan Task 22 / parity Task 20 (R-IOS-26):
+//               stationFreedvVersion(). J.J. Boyd (KG4VCF), with
+//               AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/IceConfiguration.h"
@@ -1048,6 +1051,12 @@ public:
     // and was told it, so its media start may declare it.
     int txMonitorAudioVersion() const;
     bool txMonitorAudioAvailable(quint64 epoch) const;
+    // R-IOS-26 / R-R3-49 (iPhone plan Task 22, parity Task 20):
+    // stationFreedvVersion. 1 with recordStreamVersion 1 and the Core's own
+    // FreeDV Reporter: the freedvStations stream, the FreeDV Reporter
+    // console and state in spotSources, and the freedv.* verbs; 0
+    // otherwise.
+    int stationFreedvVersion() const;
     /// Parity Task 21: the Core's radios (nereusd's DaemonApp owns it).
     void setStationRadios(StationRadios* radios);
     /// For a test: the stream by name (spots, spotConsole:<source>), or
