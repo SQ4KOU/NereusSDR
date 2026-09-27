@@ -203,6 +203,13 @@
 //                                    plain reason while there is no Core
 //                                    session. AI tooling: Anthropic Claude
 //                                    Code.
+//   2026-09-27  J.J. Boyd / KG4VCF  iPhone plan Task 22 / parity Task 20
+//                                    (R-IOS-26): the FreeDV tab shows and
+//                                    drives the Core's FreeDV Reporter in
+//                                    a remote window (state, console,
+//                                    Start / Stop, "Hide my station",
+//                                    refusals); setStationFreedvAvailable.
+//                                    AI tooling: Anthropic Claude Code.
 
 #pragma once
 
@@ -299,6 +306,10 @@ public:
     /// Parity Task 19: the station sources' Connect, Start and command
     /// lines are disabled with `reason` while the Core cannot run them.
     void setStationSourcesAvailable(bool available, const QString& reason);
+    /// iPhone plan Task 22 / parity Task 20: FreeDV Reporter's Start and
+    /// "Hide my station" are disabled with `reason` while the Core does not
+    /// run FreeDV Reporter for this app.
+    void setStationFreedvAvailable(bool available, const QString& reason);
 
 public slots:
     void setHoveredPanadapterSpot(int spotIdx);
@@ -362,12 +373,16 @@ private:
     void refreshStationSource(const QString& source);
     void applyStationAvailability();
     QPlainTextEdit* consoleFor(const QString& source) const;
+    /// "Hide my station" as the spot source host holds it.
+    void syncFreedvHidden();
 
     QPointer<SpotSourceHost> m_sourceHost;
     bool m_stationSettingsAvailable{true};
     QString m_stationSettingsReason;
     bool m_stationSourcesAvailable{true};
     QString m_stationSourcesReason;
+    bool m_stationFreedvAvailable{true};
+    QString m_stationFreedvReason;
 
     // NereusSDR-native Settings tab (first position) for central
     // operator identity. Post-3J-2 UX fix.

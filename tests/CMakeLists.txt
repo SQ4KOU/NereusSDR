@@ -7843,6 +7843,16 @@ nereus_add_test(tst_remote_spots
     fakes/RemoteWindowHarness.cpp
     EXTRA_LABELS session)
 target_compile_definitions(tst_remote_spots PRIVATE NEREUS_BUILD_TESTS)
+# iPhone plan Task 22 / parity Task 20 (R-IOS-26, B7.3, B7.4): FreeDV
+# Reporter at the Core: its own registration (never the Core's label), the
+# freedvStations stream in a remote window, the freedv.* verbs, the RADE
+# slice's listing, and a real remote window's FreeDV tab and dialog. A fake
+# Socket.IO server on 127.0.0.1 only; no RF, no audio device.
+nereus_add_test(tst_freedv_reporter_station
+    fakes/LoopbackTransport.cpp
+    fakes/RemoteWindowHarness.cpp
+    EXTRA_LABELS session)
+target_compile_definitions(tst_freedv_reporter_station PRIVATE NEREUS_BUILD_TESTS)
 # Parity Task 21 (R-IOS-18, R-R3-38): the Core's choice of radio (the
 # order, the requests, the on-air rule, DaemonApp's wait, switch and saved
 # choice). Discovery is the test's own list; nothing connects.

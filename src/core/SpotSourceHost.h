@@ -30,9 +30,13 @@
 //     to the Core, their state comes from the Core's `spotSources` object
 //     and their console lines from the Core's spotConsole:<source> streams.
 //
-// Source names on the wire: dxCluster, rbn, pota, pskReporter (the
-// station's) and wsjtx, spotCollector (each computer's own). FreeDV
-// Reporter is not here; it joins with the FreeDV Reporter task.
+// Source names on the wire: dxCluster, rbn, pota, freedvReporter,
+// pskReporter (the station's) and wsjtx, spotCollector (each computer's
+// own). FreeDV Reporter joined with the iPhone plan's Task 22 (parity Task
+// 20, stationFreedvVersion 1): the Core registers with its own callsign,
+// grid and message and lists its own RADE slice, and a window's FreeDV
+// Reporter dialog and FreeDV tab drive it (freedv.setMessage,
+// freedv.sendQsy, freedv.setHidden).
 //
 // =================================================================
 // Modification history (NereusSDR):
@@ -40,6 +44,12 @@
 //                                    R-R3-49): the spot sources moved out of
 //                                    MainWindow and RadioModel's restore.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-27  J.J. Boyd / KG4VCF  iPhone plan Task 22 / parity Task 20
+//                                    (R-IOS-26, R-R3-49): FreeDV Reporter
+//                                    as a station source: its state, start
+//                                    and stop, status message, QSY request
+//                                    and "hide my station". AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QHash>
@@ -56,6 +66,8 @@ namespace NereusSDR {
 
 class DxccColorProvider;
 class DxClusterClient;
+class FreeDVReporterClient;
+class FreeDVStationModel;
 class PotaClient;
 class PskReporterClient;
 class SpotCollectorClient;
@@ -77,6 +89,13 @@ class SpotSourceHost : public QObject {
     Q_PROPERTY(QString potaText READ potaText NOTIFY sourcesChanged)
     Q_PROPERTY(QString pskReporterState READ pskReporterState NOTIFY sourcesChanged)
     Q_PROPERTY(QString pskReporterText READ pskReporterText NOTIFY sourcesChanged)
+    // iPhone plan Task 22 / parity Task 20 (stationFreedvVersion 1): FreeDV
+    // Reporter, the same shape, and whether the operator hid the station
+    // from the FreeDV Reporter list ("Hide my station"). After the
+    // others, so an older peer's property ordinals do not move.
+    Q_PROPERTY(QString freedvReporterState READ freedvReporterState NOTIFY sourcesChanged)
+    Q_PROPERTY(QString freedvReporterText READ freedvReporterText NOTIFY sourcesChanged)
+    Q_PROPERTY(bool freedvReporterHidden READ freedvReporterHidden NOTIFY sourcesChanged)
 
 public:
     enum class Placement {
@@ -88,6 +107,7 @@ public:
     static const QString kDxCluster;
     static const QString kRbn;
     static const QString kPota;
+    static const QString kFreedvReporter;
     static const QString kPskReporter;
     static const QString kWsjtx;
     static const QString kSpotCollector;
@@ -99,6 +119,9 @@ public:
 
     /// The sources the Core runs, in the order the Spot Hub shows them.
     static QStringList stationSources();
+    /// The station sources a Core with recordStreamVersion 1 runs whatever
+    /// its stationFreedvVersion (every one but FreeDV Reporter).
+    static QStringList recordStreamSources();
     /// The sources each computer runs for itself.
     static QStringList windowSources();
     static bool isStationSource(const QString& source);
@@ -128,6 +151,19 @@ public:
                    PskReporterClient* pskReporter, SpotModel* spots,
                    QObject* parent = nullptr);
 
+    /// FreeDV Reporter's client (RadioModel owns it). Set once, after
+    /// construction.
+    void setFreedvReporter(FreeDVReporterClient* client);
+    /// The list the client feeds, cleared when the client connects and
+    /// when its connection ends (where this computer runs FreeDV Reporter
+    /// itself: the Core, or a window with its own radio). After
+    /// setFreedvReporter.
+    void setFreedvStationList(FreeDVStationModel* list);
+    /// Whether the station is hidden from the FreeDV Reporter list, given
+    /// whether the slice it lists is in RADE: while "Hide my station" is on
+    /// or that slice is not in RADE.
+    bool freedvHides(bool listedSliceInRade) const;
+
     /// Starts every source of this placement whose Auto-Connect or
     /// Auto-Start is on, from the saved settings (RadioModel's restore).
     void restoreAutoStart(Placement placement);
@@ -143,6 +179,25 @@ public:
     /// The Core's spots.clearAll: every spot the Core holds.
     void clearAll();
 
+    // ── FreeDV Reporter (iPhone plan Task 22, stationFreedvVersion 1) ────
+    /// The callsign FreeDV Reporter registers with: FreeDvReporter/Callsign,
+    /// else User/Callsign, else StationCallsign. Never the Core's label
+    /// (R-IOS-26).
+    static QString freedvCallsign();
+    /// The grid square: FreeDvReporter/GridSquare, else User/GridSquare.
+    static QString freedvGridSquare();
+    /// The Core's freedv.setMessage: the status message shown beside the
+    /// station on the list.
+    bool setFreedvMessage(const QString& text, QString* reason);
+    /// The Core's freedv.sendQsy: asks the station listed with `callsign`
+    /// to move to `frequencyHz`.
+    bool sendFreedvQsy(const QString& callsign, qint64 frequencyHz, QString* reason);
+    /// The Core's freedv.setHidden: "Hide my station" (saved as
+    /// FreeDvReporter/Hidden). The station is shown only while it is not
+    /// hidden and its reported slice is in RADE (RadioModel).
+    bool setFreedvHidden(bool on, QString* reason);
+    bool freedvReporterHidden() const;
+
     QString state(const QString& source) const;
     QString text(const QString& source) const;
     bool isRunning(const QString& source) const;
@@ -153,6 +208,8 @@ public:
     QString rbnText() const { return text(kRbn); }
     QString potaState() const { return state(kPota); }
     QString potaText() const { return text(kPota); }
+    QString freedvReporterState() const { return state(kFreedvReporter); }
+    QString freedvReporterText() const { return text(kFreedvReporter); }
     QString pskReporterState() const { return state(kPskReporter); }
     QString pskReporterText() const { return text(kPskReporter); }
 
@@ -172,6 +229,13 @@ public:
     /// The Core refused a request for a source.
     void reportStationRefusal(const QString& source, const QString& reason);
 
+    /// What a remote window's FreeDV Reporter requests send: the verb
+    /// (freedv.setMessage, freedv.sendQsy, freedv.setHidden) and its
+    /// arguments. False with the reason when it could not be sent.
+    using FreedvForwarder = std::function<bool(const QByteArray& verb, const QVariantMap& args,
+                                               QString* reason)>;
+    void setFreedvForwarder(FreedvForwarder forwarder);
+
 public slots:
     // The Spot Hub's buttons (each tab saves its settings first). In a
     // remote window the station's sources are sent to the Core.
@@ -187,6 +251,16 @@ public slots:
     void stopPota();
     void startPskReporter(const QString& callsign, const QString& gridSquare);
     void stopPskReporter();
+    /// FreeDV Reporter's Start and Stop (the FreeDV tab), from the saved
+    /// identity. The Core's in a remote window.
+    void startFreedvReporter();
+    void stopFreedvReporter();
+    /// The FreeDV Reporter dialog's Send and Clear, Send QSY and the FreeDV
+    /// tab's "Hide my station". The Core's in a remote window; a refusal
+    /// comes back as sourceRefused(kFreedvReporter, reason).
+    void sendFreedvMessage(const QString& text);
+    void requestFreedvQsy(const QString& callsign, qint64 frequencyHz);
+    void hideFreedvStation(bool on);
     /// A line typed into a cluster console (sent to the Core in a remote
     /// window). The refusal, if any, comes back as sourceRefused.
     void typeCommand(const QString& source, const QString& text);
@@ -201,6 +275,8 @@ signals:
     /// The Core's console for a source starts again (its backlog follows).
     void consoleCleared(const QString& source);
     void sourceRefused(const QString& source, const QString& reason);
+    /// "Hide my station" changed (the station shows or hides at once).
+    void freedvHiddenChanged(bool hidden);
 
 private:
     struct SourceState {
@@ -211,6 +287,8 @@ private:
     void setSource(const QString& source, const QString& state, const QString& text = {});
     bool forward(const QByteArray& verb, const QString& source, const QString& text = {});
     void startPskReporterWith(const QString& callsign, const QString& gridSquare);
+    bool startFreedvWith(QString* reason);
+    bool forwardFreedv(const QByteArray& verb, const QVariantMap& args);
 
     QPointer<DxClusterClient> m_dxCluster;
     QPointer<DxClusterClient> m_rbn;
@@ -218,10 +296,15 @@ private:
     QPointer<SpotCollectorClient> m_spotCollector;
     QPointer<PotaClient> m_pota;
     QPointer<PskReporterClient> m_pskReporter;
+    QPointer<FreeDVReporterClient> m_freedv;
+    QPointer<FreeDVStationModel> m_freedvList;
     QPointer<SpotModel> m_spots;
     QHash<QString, SourceState> m_local;
     QHash<QString, SourceState> m_station;
     StationForwarder m_forwarder;
+    FreedvForwarder m_freedvForwarder;
+    bool m_freedvHidden = false;
+    bool m_stationFreedvHidden = false;
 };
 
 } // namespace NereusSDR

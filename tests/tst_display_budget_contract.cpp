@@ -764,7 +764,9 @@ private slots:
                                    // Task 28 fix wave: the control channel.
                                    "controlChannelVersion",
                                    // Parity Task 32: the transmit monitor.
-                                   "txMonitorAudioVersion"});
+                                   "txMonitorAudioVersion",
+                                   // iPhone plan Task 22: FreeDV Reporter.
+                                   "stationFreedvVersion"});
                 QCOMPARE(names, withReason);
                 const int reason = updateIndex(last.updates,
                                                QByteArrayLiteral("displayBudgetReason"));
@@ -815,7 +817,8 @@ private slots:
                                            QByteArrayLiteral("txDisplayVersion"),
                                            QByteArrayLiteral("displayClockVersion"),
                                            QByteArrayLiteral("controlChannelVersion"),
-                                           QByteArrayLiteral("txMonitorAudioVersion")}) {
+                                           QByteArrayLiteral("txMonitorAudioVersion"),
+                                           QByteArrayLiteral("stationFreedvVersion")}) {
                 stripped.removeAt(updateIndex(stripped, name));
             }
             QCOMPARE(SessionMessages::encode(SessionMessages::capabilities(stripped)), older);

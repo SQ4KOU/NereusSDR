@@ -251,6 +251,9 @@ void TstTransmitSettingsGate::olderCoreOffersNoTransmitSettings()
     // parity Task 28's txDisplayVersion, R-R3-21's displayClockVersion and
     // the Task 28 fix wave's controlChannelVersion; a Core from before them
     // sends none.
+    // Then iPhone plan Task 22 / parity Task 20's stationFreedvVersion.
+    QCOMPARE(updates.last().name, QByteArrayLiteral("stationFreedvVersion"));
+    updates.removeLast();
     // Then parity Task 32's txMonitorAudioVersion.
     QCOMPARE(updates.last().name, QByteArrayLiteral("txMonitorAudioVersion"));
     updates.removeLast();

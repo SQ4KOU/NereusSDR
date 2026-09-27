@@ -520,6 +520,16 @@
 //                applySavedSliceSampleRates), and a rate change saves it.
 //                NereusSDR-original. J.J. Boyd (KG4VCF), AI-assisted via
 //                Anthropic Claude Code.
+//   2026-09-27 - iPhone plan Task 22 / parity Task 20 (R-IOS-26, R-R3-49,
+//                B7.3, B7.4): FreeDV Reporter runs through the spot source
+//                host (the Core's own start, a remote window's requests to
+//                the Core, the Core's distance and heading in a remote
+//                window's list); the station shows while its listed slice
+//                is in RADE and "Hide my station" is off, and the list
+//                clears on each connect and disconnect (both decided in
+//                SpotSourceHost); a remote window applies the Core's
+//                freedvStations stream. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -3119,6 +3129,39 @@ RadioModel::RadioModel(Role role, QObject* parent)
             }
             return outcome.sent;
         });
+        // iPhone plan Task 22 / parity Task 20 (stationFreedvVersion 1):
+        // FreeDV Reporter's status message, QSY request and "hide my
+        // station" are the Core's too.
+        m_spotSourceHost->setFreedvForwarder(
+            [this](const QByteArray& verb, const QVariantMap& args, QString* reason) {
+            if (m_station == nullptr) {
+                if (reason != nullptr) {
+                    *reason = QStringLiteral("Not connected to the Core, so the FreeDV Reporter "
+                                             "request was not sent.");
+                }
+                return false;
+            }
+            const IStationLink::CommandOutcome outcome = m_station->requestFreedv(verb, args);
+            if (!outcome.sent && reason != nullptr) {
+                *reason = outcome.reason;
+            }
+            return outcome.sent;
+        });
+        // The Core computes distance and heading from its own grid; a
+        // remote window keeps what the Core's stream says (B7.3).
+        m_freeDvStationModel->setComputesDistance(false);
+    }
+    // iPhone plan Task 22 / parity Task 20 (R-IOS-26): FreeDV Reporter
+    // starts, stops and is followed by the spot source host too, so the
+    // Core runs it from its own settings with no window.
+    m_spotSourceHost->setFreedvReporter(m_freeDvReporter.get());
+    // "Hide my station" shows or hides the station at once.
+    connect(m_spotSourceHost.get(), &SpotSourceHost::freedvHiddenChanged, this,
+            [this]() { updateFreedvReporterVisibility(); });
+    // The list starts again on each connect and empties on a disconnect
+    // (SpotSourceHost::setFreedvStationList, from freedv-gui).
+    if (m_role == Role::Local) {
+        m_spotSourceHost->setFreedvStationList(m_freeDvStationModel.get());
     }
 
     // ── Phase 3R-bridge: RADE Path B (sync-only) rx_report upload ─────────
@@ -3237,7 +3280,11 @@ RadioModel::RadioModel(Role role, QObject* parent)
     connect(m_freeDvReporter.get(), &FreeDVReporterClient::connected,
             this, [this]() {
                 qCInfo(lcDsp) << "FreeDVReporter: connected signal fired";
-                if (!m_freeDvReporter || !m_activeSlice) {
+                // iPhone plan Task 22 (B7.4): the slice the reporter lists
+                // (a RADE slice when there is one, else the station-level
+                // active slice; ruling 5.11), not always the active one.
+                const SliceModel* listed = freedvReportedSlice();
+                if (!m_freeDvReporter || listed == nullptr) {
                     qCWarning(lcDsp)
                         << "FreeDVReporter connected but"
                         << (m_freeDvReporter ? "no active slice"
@@ -3245,7 +3292,7 @@ RadioModel::RadioModel(Role role, QObject* parent)
                     return;
                 }
                 const quint64 freqHz =
-                    static_cast<quint64>(m_activeSlice->frequency());
+                    static_cast<quint64>(listed->frequency());
                 qCInfo(lcDsp) << "FreeDVReporter: pushing initial freq="
                               << freqHz << "Hz";
                 m_freeDvReporter->setFrequency(freqHz);
@@ -3263,10 +3310,11 @@ RadioModel::RadioModel(Role role, QObject* parent)
                 // (delta from 0 -> band freq is huge), bypassing the
                 // dwell on what is usually a deliberate first tune.
                 m_freedvLastPublishedHz = freqHz;
+                m_freedvWantedHz = freqHz;
                 if (m_freedvFreqDwellTimer) {
                     m_freedvFreqDwellTimer->stop();
                 }
-                const DSPMode m = m_activeSlice->dspMode();
+                const DSPMode m = listed->dspMode();
                 const QString modeStr =
                     (m == DSPMode::RADE_U || m == DSPMode::RADE_L)
                         ? QStringLiteral("RADEV1")
@@ -3913,6 +3961,23 @@ void RadioModel::applyStationRecordBatch(const RecordBatch& batch)
         }
         return;
     }
+    // iPhone plan Task 22 / parity Task 20 (stationFreedvVersion 1): the
+    // Core's FreeDV Reporter list, with the Core's distance and heading.
+    if (batch.stream == QLatin1String("freedvStations")) {
+        if (!m_freeDvStationModel) {
+            return;
+        }
+        if (batch.reset) {
+            m_freeDvStationModel->clear();
+        }
+        for (const QString& id : batch.removes) {
+            m_freeDvStationModel->onStationRemoved(id);
+        }
+        for (const RecordUpsert& u : batch.upserts) {
+            m_freeDvStationModel->applyStationRecord(u.id, u.fields);
+        }
+        return;
+    }
     if (batch.stream.startsWith(QLatin1String("spotConsole:"))) {
         const QString source = batch.stream.mid(12);
         if (!SpotSourceHost::isStationSource(source) || !m_spotSourceHost) {
@@ -4005,6 +4070,16 @@ void RadioModel::clearStationRecords()
 {
     clearStationRadios();
     clearStationSpots();
+    clearStationFreedv();
+}
+
+void RadioModel::clearStationFreedv()
+{
+    // Only a remote window's list is the Core's.
+    if (m_role == Role::Remote && m_freeDvStationModel
+        && m_freeDvStationModel->stationCount() > 0) {
+        m_freeDvStationModel->clear();
+    }
 }
 
 void RadioModel::clearStationRadios()
@@ -4078,69 +4153,18 @@ void RadioModel::restoreSpotClientAutoStartState()
         return;
     }
 
-    auto& s = AppSettings::instance();
-    auto isTrue = [&s](const QString& key) {
-        return s.value(key, QStringLiteral("False")).toString()
-               == QStringLiteral("True");
-    };
-
     // Post-3J-2 UX fix: identity fall-back chain. The SpotHub Settings
-    // tab writes a canonical User/Callsign + User/GridSquare pair. Each
-    // per-source loader first checks its own legacy key, then falls
-    // back to the canonical key. Loaders that need identity skip the
-    // auto-start when no callsign is configured anywhere.
-    const QString userCallsign =
-        s.value(QStringLiteral("User/Callsign")).toString();
-    const QString userGrid =
-        s.value(QStringLiteral("User/GridSquare")).toString();
-    auto resolveCall = [&s, &userCallsign](const QString& perSourceKey) {
-        QString v = s.value(perSourceKey).toString();
-        if (v.isEmpty()) v = userCallsign;
-        return v;
-    };
+    // tab writes a canonical User/Callsign + User/GridSquare pair; each
+    // source first checks its own key, then the canonical one, and a
+    // source that needs an identity skips its auto-start with none
+    // (SpotSourceHost's resolveCall / resolveGrid, since parity Task 19).
 
-    // Parity Task 19: every source but FreeDV Reporter starts through the
-    // spot source host, with the same settings and calls as before.
+    // Parity Task 19: every source starts through the spot source host,
+    // with the same settings and calls as before. FreeDV Reporter too,
+    // since iPhone plan Task 22: its identity is resolved from the saved
+    // settings first and a start with none is skipped, as this function
+    // did.
     m_spotSourceHost->restoreAutoStart(SpotSourceHost::Placement::Everything);
-
-    // FreeDV Reporter (WebSocket connect; identity / URL already plumbed
-    // in ctor at lines 936-953).
-    //
-    // Post-3J-2 UX fix: re-resolve identity from the User/* fall-back
-    // chain and call setIdentity() before startConnection(). The ctor
-    // only reads FreeDvReporter/Callsign + FreeDvReporter/GridSquare;
-    // if those are empty but the user has set User/Callsign via the
-    // Settings tab, the connection used to fire anonymously and the
-    // qso.freedv.org server would drop it. Now: (1) re-apply identity
-    // from User/* if the per-source keys are empty, (2) skip the
-    // connect entirely when no callsign is configured anywhere.
-    if (m_freeDvReporter && isTrue(QStringLiteral("FreeDvAutoStart"))) {
-        const QString freedvCall = resolveCall(
-            QStringLiteral("FreeDvReporter/Callsign"));
-        QString freedvGrid =
-            s.value(QStringLiteral("FreeDvReporter/GridSquare")).toString();
-        if (freedvGrid.isEmpty()) freedvGrid = userGrid;
-        if (freedvCall.isEmpty() || freedvGrid.isEmpty()) {
-            qWarning("RadioModel: FreeDV Reporter auto-start skipped - "
-                     "no identity configured. Set callsign and grid in "
-                     "SpotHub > Settings tab.");
-        } else {
-            const QString message =
-                s.value(QStringLiteral("FreeDvReporter/Message")).toString();
-            const QString versionStr =
-                QStringLiteral("NereusSDR ")
-                    + QStringLiteral(NEREUSSDR_VERSION);
-            qCInfo(lcDsp)
-                << "FreeDVReporter: starting connection with identity"
-                << "callsign=" << freedvCall
-                << "grid=" << freedvGrid
-                << "msg=" << message
-                << "version=" << versionStr;
-            m_freeDvReporter->setIdentity(
-                freedvCall, freedvGrid, message, versionStr);
-            m_freeDvReporter->startConnection();
-        }
-    }
 }
 
 void RadioModel::restoreStationSpotSources()
@@ -4632,6 +4656,24 @@ bool RadioModel::clearAccessoryFaultsForStation(const QString& device, QString* 
         return false;
     }
     return m_stationAccessoryData->clearFaults(device, reason);
+}
+
+void RadioModel::applyRemoteFreedvSetting(const QString& key)
+{
+    // iPhone plan Task 22 / parity Task 20 (B7.3): a window's Save &
+    // Propagate reaches the Core's FreeDV Reporter list at once: distance
+    // and heading follow the Core's grid square. The callsign, grid and
+    // message the reporter registers with are read at its next start.
+    if (m_role != Role::Local || !m_freeDvStationModel) {
+        return;
+    }
+    if (key == QLatin1String("User/GridSquare")
+        || key == QLatin1String("FreeDvReporter/GridSquare")) {
+        const QString grid = SpotSourceHost::freedvGridSquare();
+        if (!grid.isEmpty()) {
+            m_freeDvStationModel->setOurGridSquare(grid);
+        }
+    }
 }
 
 void RadioModel::applyRemoteAccessorySetting(const QString& key)
@@ -12501,17 +12543,25 @@ void RadioModel::flushFreedvFrequencyDwell()
 // sendRxReport when our RadeChannel pulls an EOO callsign.
 void RadioModel::updateFreedvReporterVisibility()
 {
-    if (!m_freeDvReporter) { return; }
+    if (!m_freeDvReporter || m_role != Role::Local) { return; }
 
-    const SliceModel* slice = activeSlice();
+    // iPhone plan Task 22 (B7.4): the slice the reporter lists (a RADE
+    // slice when there is one, ruling 5.11), so a switch into RADE on any
+    // slice shows the station.
+    const SliceModel* slice = freedvReportedSlice();
     const bool inRade = slice
         && (slice->dspMode() == DSPMode::RADE_U
          || slice->dspMode() == DSPMode::RADE_L);
 
-    // setHiddenFromView no-ops on the network side when the requested
-    // state matches the server's view, so this is safe to call on every
-    // mode change without flooding qso.freedv.org with hide/show events.
-    m_freeDvReporter->setHiddenFromView(!inRade);
+    // "Hide my station" wins over RADE (SpotSourceHost::freedvHides,
+    // from freedv-gui).
+    const bool hide = m_spotSourceHost ? m_spotSourceHost->freedvHides(inRade) : !inRade;
+
+    // setHiddenFromView sends hide_self / show_self each time it is
+    // called, so only a change is sent (the client re-asserts its flag at
+    // each connect itself).
+    if (m_freeDvReporter->isHiddenFromView() == hide) { return; }
+    m_freeDvReporter->setHiddenFromView(hide);
 }
 
 void RadioModel::setActiveSlice(int index)
@@ -12583,6 +12633,9 @@ SliceModel* RadioModel::freedvReportedSlice() const
 
 void RadioModel::refreshFreedvReportedFrequency()
 {
+    // iPhone plan Task 22 (B7.4): whether the station shows follows the
+    // listed slice too.
+    updateFreedvReporterVisibility();
     const SliceModel* listed = freedvReportedSlice();
     if (listed == nullptr) {
         return;
@@ -17016,10 +17069,10 @@ void RadioModel::wireSliceSignals(SliceModel* slice)
     // filter/filter-type) and rebuild the WDSP channel if any setting changed.
     // dspChangeMeasured is emitted with elapsed ms when a rebuild occurs.
     connect(slice, &SliceModel::dspModeChanged, this, [this, slice](DSPMode mode) {
-        // Phase 3J-1 closeout follow-up (2026-05-12): re-evaluate FreeDV
-        // Reporter visibility on every mode change.  Show our station on
-        // the dashboard only when we're in RADE_U / RADE_L.
-        updateFreedvReporterVisibility();
+        // Phase 3J-1 closeout follow-up (2026-05-12): FreeDV Reporter
+        // visibility is re-evaluated on every mode change. iPhone plan
+        // Task 22 (B7.4): from addSliceImpl's handler, wired for every
+        // slice whatever the connection does, as the listed frequency is.
 
         RxChannel* rxCh = m_wdspEngine->rxChannel(slice->sliceIndex());
         if (rxCh) {

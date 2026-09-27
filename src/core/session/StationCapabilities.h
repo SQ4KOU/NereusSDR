@@ -143,6 +143,9 @@
 //                Anthropic Claude Code.
 //   2026-09-27 - R-IOS-13 / R-R3-49 (parity Task 32): txMonitorAudioVersion.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27 - R-IOS-26 / R-R3-49 (iPhone plan Task 22, parity Task 20):
+//                stationFreedvVersion. J.J. Boyd (KG4VCF), AI-assisted via
+//                Anthropic Claude Code.
 // =================================================================
 
 #include <QByteArray>
@@ -360,6 +363,19 @@ struct StationCapabilities {
     /// radio model, 0 otherwise. 0 (an older Core): a window shows its MON
     /// output pair disabled with a reason.
     int txMonitorAudioVersion = 0;
+    /// R-IOS-26 / R-R3-49 (iPhone app plan Task 22, remote-window parity
+    /// Task 20): 1 means the Core runs FreeDV Reporter itself, registered
+    /// with its own callsign, grid square and message and listing its own
+    /// RADE slice: it sends the `freedvStations` record stream (the newest
+    /// 1000 stations), the FreeDV Reporter console as
+    /// spotConsole:freedvReporter and its state in `spotSources`
+    /// (freedvReporterState, freedvReporterText, freedvReporterHidden), and
+    /// takes spots.connect / spots.disconnect for source freedvReporter and
+    /// freedv.setMessage, freedv.sendQsy and freedv.setHidden. Sent in the
+    /// same minor-11 block, after txMonitorAudioVersion; 1 whenever
+    /// recordStreamVersion is 1. 0 (an older Core): a window shows its
+    /// FreeDV Reporter controls disabled with a reason.
+    int stationFreedvVersion = 0;
     /// iPhone app Task 71 (R-IOS-02; the several-devices design, ruling
     /// 10.1): 1 means the Core admits up to four devices at once, sends the
     /// `connectedDevices` object and takes session.leave. Sent last in the

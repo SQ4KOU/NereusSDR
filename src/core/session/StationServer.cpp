@@ -570,6 +570,12 @@
 //               transmit the Core's own outputs leave MON out (JJ's MON
 //               ruling of 2026-09-26). J.J. Boyd (KG4VCF), AI-assisted via
 //               Anthropic Claude Code.
+//   2026-09-27: iPhone plan Task 22 / parity Task 20 (R-IOS-26, R-R3-49):
+//               stationFreedvVersion 1, after txMonitorAudioVersion: the
+//               Core runs FreeDV Reporter and sends its list as the
+//               freedvStations stream (the newest 1000 stations) and its
+//               console as spotConsole:freedvReporter. J.J. Boyd (KG4VCF),
+//               AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationServer.h"
@@ -621,6 +627,7 @@
 #include "core/settings/SettingsProxyServer.h"
 #include "core/settings/SettingsScope.h"
 #include "models/NotchModel.h"
+#include "models/FreeDVStationModel.h"
 #include "models/PanadapterModel.h"
 #include "models/PureSignalSettings.h"
 #include "core/dsp/DspAssetService.h"
@@ -842,6 +849,9 @@ constexpr int kSpotsStreamCapacity = 500;
 constexpr int kSpotConsoleCapacity = 200;
 // Parity Task 21: the radios a Core can list.
 constexpr int kStationRadiosCapacity = 64;
+// iPhone plan Task 22 / parity Task 20: the FreeDV Reporter stations a Core
+// lists at once (qso.freedv.org lists a few hundred).
+constexpr int kFreedvStationsCapacity = 1000;
 
 // R-R3-47 / R-R3-22 (accessoryDataVersion 1): the Core's accessory records
 // and settings, read-only, for a peer at kRadioIdentitySessionProtocolMinor
@@ -5512,6 +5522,9 @@ bool StationServer::applySettingsWrite(SessionTransport* transport, const Sessio
         // tune memory, antenna names, a fault history) reaches the Core's
         // live objects now, not at the next restart.
         m_radioModel->applyRemoteAccessorySetting(key);
+        // iPhone plan Task 22 / parity Task 20 (B7.3): a grid square change
+        // reaches the Core's FreeDV Reporter list at once.
+        m_radioModel->applyRemoteFreedvSetting(key);
         // R-R3-49 (parity Task 5): so does an SWR protection setting, to the
         // Core's SwrProtectionController, as the local page's change does.
         m_radioModel->applySwrProtectionSetting(key, m_settings.value(key));
@@ -5631,6 +5644,9 @@ void StationServer::applySettingsRemove(const SessionMessage& message)
         m_radioModel->scheduleRemoteDspOptionsApply(key);
         m_radioModel->scheduleRemoteHardwareApply(key);
         m_radioModel->applyRemoteAccessorySetting(key);
+        // iPhone plan Task 22 / parity Task 20 (B7.3): a grid square change
+        // reaches the Core's FreeDV Reporter list at once.
+        m_radioModel->applyRemoteFreedvSetting(key);
         // R-R3-49 (parity Task 5): the SWR protection default, at once.
         m_radioModel->applySwrProtectionSetting(key, QVariant());
         // R-R3-13 / R-R3-49 (parity Task 15): the default meter pump rate.
@@ -7274,6 +7290,16 @@ int StationServer::recordStreamVersion() const
         : 0;
 }
 
+int StationServer::stationFreedvVersion() const
+{
+    // R-IOS-26 / R-R3-49 (iPhone plan Task 22, parity Task 20): the Core
+    // runs FreeDV Reporter itself, with the record streams.
+    return recordStreamVersion() >= 1 && m_radioModel->freeDvReporter() != nullptr
+            && m_radioModel->freeDvStationModel() != nullptr
+        ? 1
+        : 0;
+}
+
 int StationServer::controlChannelVersion() const
 {
     // R-IOS-16 (Task 28 fix wave, Important 5): a Core answers an
@@ -7626,6 +7652,9 @@ StationCapabilities StationServer::buildCapabilitiesFor(SessionTransport* transp
             // the device that holds transmit, with media, appended after
             // controlChannelVersion.
             caps.txMonitorAudioVersion = media ? txMonitorAudioVersion() : 0;
+            // R-IOS-26 / R-R3-49 (iPhone plan Task 22, parity Task 20): the
+            // Core's FreeDV Reporter, appended after txMonitorAudioVersion.
+            caps.stationFreedvVersion = stationFreedvVersion();
             // iPhone app Task 71 (ruling 10.1): several devices at once, for
             // a peer that declared sessionHolder with deviceAuth; any other
             // peer is sent no entry, so its capabilities are today's.
@@ -7803,6 +7832,39 @@ void StationServer::setUpRecordStreams()
         spotStream->reset();
         scheduleRecordFlush();
     });
+    // iPhone plan Task 22 / parity Task 20 (stationFreedvVersion 1): the
+    // Core's FreeDV Reporter list, each station by its session id, with
+    // the Core's distance and heading.
+    if (stationFreedvVersion() >= 1) {
+        FreeDVStationModel* freedv = m_radioModel->freeDvStationModel();
+        auto stations = std::make_unique<RecordStream>(QStringLiteral("freedvStations"),
+                                                       kFreedvStationsCapacity);
+        RecordStream* freedvStream = stations.get();
+        m_recordStreams.emplace(freedvStream->name(), std::move(stations));
+        const QHash<QString, FreeDVStation> held = freedv->stations();
+        for (auto it = held.cbegin(); it != held.cend(); ++it) {
+            freedvStream->upsert(it.key(), FreeDVStationModel::recordFields(
+                                               it.value(), freedv->messageChangedAtMs(it.key())));
+        }
+        const QPointer<FreeDVStationModel> model(freedv);
+        const auto upsertStation = [this, freedvStream, model](const QString& sid,
+                                                               const FreeDVStation& info) {
+            freedvStream->upsert(sid, FreeDVStationModel::recordFields(
+                                          info, model ? model->messageChangedAtMs(sid) : 0));
+            scheduleRecordFlush();
+        };
+        connect(freedv, &FreeDVStationModel::stationAdded, this, upsertStation);
+        connect(freedv, &FreeDVStationModel::stationUpdated, this, upsertStation);
+        connect(freedv, &FreeDVStationModel::stationRemoved, this,
+                [this, freedvStream](const QString& sid) {
+            freedvStream->remove(sid);
+            scheduleRecordFlush();
+        });
+        connect(freedv, &FreeDVStationModel::cleared, this, [this, freedvStream]() {
+            freedvStream->reset();
+            scheduleRecordFlush();
+        });
+    }
     connect(m_radioModel->spotSourceHost(), &SpotSourceHost::consoleLine, this,
             [this](const QString& source, const QString& line) {
         const auto it = m_recordStreams.find(SpotSourceHost::consoleStream(source));

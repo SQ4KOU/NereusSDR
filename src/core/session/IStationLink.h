@@ -141,6 +141,11 @@
 //                                    spot sources (recordStreamVersion 1),
 //                                    requestSpotSource.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-27  J.J. Boyd / KG4VCF  iPhone plan Task 22 / parity Task 20
+//                                    (R-IOS-26): the Core's FreeDV Reporter
+//                                    (stationFreedvVersion 1),
+//                                    stationFreedvAvailable, requestFreedv.
+//                                    AI-assisted via Anthropic Claude Code.
 //   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 18 (B3.1): a window's band
 //                                    buttons send slice.selectBand
 //                                    (bandSelectVersion 1) for a named
@@ -153,6 +158,7 @@
 // =================================================================
 
 #include <QString>
+#include <QVariantMap>
 #include <QtGlobal>
 
 namespace NereusSDR {
@@ -523,6 +529,17 @@ public:
     virtual CommandOutcome requestSpotSource(const QByteArray& /*verb*/, const QString& /*source*/,
                                              const QString& /*text*/)
     { return { false, spotSourcesUnavailableReason() }; }
+
+    // iPhone plan Task 22 / parity Task 20 (R-IOS-26, stationFreedvVersion
+    // 1): the Core runs FreeDV Reporter. `verb` is freedv.setMessage
+    // (`text`), freedv.sendQsy (`callsign`, `frequencyHz`) or
+    // freedv.setHidden (`on`); spots.connect / spots.disconnect with source
+    // freedvReporter start and stop it.
+    static QString stationFreedvUnavailableReason()
+    { return QStringLiteral("This Core does not run FreeDV Reporter for this app. Updating the Core may help."); }
+    virtual bool stationFreedvAvailable() const { return false; }
+    virtual CommandOutcome requestFreedv(const QByteArray& /*verb*/, const QVariantMap& /*args*/)
+    { return { false, stationFreedvUnavailableReason() }; }
 
     // R-R3-46 / R-R3-21 (radioHardwareVersion 4): the filter policy dialog
     // in a remote window. Whether the Core takes a filter policy change from

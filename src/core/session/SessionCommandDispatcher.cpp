@@ -209,6 +209,11 @@
 //                                    stationRadiosVersion 1): the station
 //                                    radio verbs.
 //                                    AI-assisted via Anthropic Claude Code.
+//   2026-09-27  J.J. Boyd / KG4VCF  R-IOS-26 / R-R3-49 (iPhone plan Task
+//                                    22, parity Task 20,
+//                                    stationFreedvVersion 1): the freedv.*
+//                                    verbs. AI-assisted via Anthropic
+//                                    Claude Code.
 // =================================================================
 
 #include "core/session/SessionCommandDispatcher.h"
@@ -425,6 +430,8 @@ QString notRepresentableReason()
 //                          its snapshot; requestSpotSource)
 //   station.selectRadio, station.rescanRadios, station.setRadioModel,
 //   station.forgetRadio    stationRadiosVersion 1 (requestStationRadio)
+//   freedv.setMessage, freedv.sendQsy, freedv.setHidden
+//                          stationFreedvVersion 1 (requestFreedv)
 //   nnr.*                  nnrControlAvailable(); nnr.tryAgain adds
 //                          kNnrLimitSessionProtocolMinor
 //   nnr.applyModelSelection dspAssetVersion 1 (requestApplyNnrModels)
@@ -641,6 +648,14 @@ const QList<CommandVerbSpec>& SessionCommandDispatcher::verbSpecs()
         {"station.setRadioModel", {arg("mac", kUtf8), arg("model", kInt)},
          "stationRadiosVersion", 1, kRadioIdentitySessionProtocolMinor},
         {"station.forgetRadio", {arg("mac", kUtf8)}, "stationRadiosVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        // The Core's FreeDV Reporter (R-IOS-26, R-R3-49, iPhone plan Task
+        // 22, parity Task 20).
+        {"freedv.setMessage", {arg("text", kUtf8)}, "stationFreedvVersion", 1,
+         kRadioIdentitySessionProtocolMinor},
+        {"freedv.sendQsy", {arg("callsign", kUtf8), arg("frequencyHz", kInt)},
+         "stationFreedvVersion", 1, kRadioIdentitySessionProtocolMinor},
+        {"freedv.setHidden", {arg("on", kBool)}, "stationFreedvVersion", 1,
          kRadioIdentitySessionProtocolMinor},
         // Neural noise reduction.
         {"nnr.setDiagnostics",
@@ -1011,6 +1026,9 @@ void SessionCommandDispatcher::dispatch(const SessionMessage& invoke)
                || invoke.commandVerb == "spots.sendCommand"
                || invoke.commandVerb == "spots.clearAll") {
         handleSpotSources(invoke);
+    } else if (invoke.commandVerb == "freedv.setMessage" || invoke.commandVerb == "freedv.sendQsy"
+               || invoke.commandVerb == "freedv.setHidden") {
+        handleFreedv(invoke);
     } else if (invoke.commandVerb == "nnr.setDiagnostics" || invoke.commandVerb == "nnr.resetTuning"
                || invoke.commandVerb == "nnr.tryAgain") {
         handleNnrAction(invoke);
@@ -3331,6 +3349,57 @@ void SessionCommandDispatcher::handleSpotSources(const SessionMessage& invoke)
         accepted = host->disconnectSource(source.toString(), &reason);
     } else {
         accepted = host->sendCommand(source.toString(), text.toString(), &reason);
+    }
+    emitResult(invoke.commandVerb, invoke.commandId, accepted, reason, {});
+}
+
+// R-IOS-26 / R-R3-49 (iPhone plan Task 22, parity Task 20,
+// stationFreedvVersion 1): the FreeDV Reporter dialog's Send and Clear, its
+// Send QSY and the FreeDV tab's "Hide my station", for the Core's own
+// FreeDV Reporter (SpotSourceHost). None touches the radio, so none waits
+// while it is on the air.
+void SessionCommandDispatcher::handleFreedv(const SessionMessage& invoke)
+{
+    SpotSourceHost* host = m_radioModel->spotSourceHost();
+    QVariant text;
+    QVariant callsign;
+    QVariant on;
+    qint64 frequencyHz = 0;
+    bool readable = false;
+    if (invoke.commandVerb == "freedv.setMessage") {
+        readable = hasExactlyArguments(invoke.arguments, {"text"})
+            && findArgument(invoke.arguments, "text", &text)
+            && text.typeId() == QMetaType::QString;
+    } else if (invoke.commandVerb == "freedv.sendQsy") {
+        QVariant hz;
+        readable = hasExactlyArguments(invoke.arguments, {"callsign", "frequencyHz"})
+            && findArgument(invoke.arguments, "callsign", &callsign)
+            && callsign.typeId() == QMetaType::QString
+            && findArgument(invoke.arguments, "frequencyHz", &hz)
+            && hz.typeId() == QMetaType::LongLong;
+        frequencyHz = hz.toLongLong();
+    } else {
+        readable = hasExactlyArguments(invoke.arguments, {"on"})
+            && findArgument(invoke.arguments, "on", &on) && on.typeId() == QMetaType::Bool;
+    }
+    if (!readable) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core could not read this request."), {});
+        return;
+    }
+    if (host == nullptr || m_radioModel->freeDvReporter() == nullptr) {
+        emitResult(invoke.commandVerb, invoke.commandId, false,
+                   QStringLiteral("The Core does not run FreeDV Reporter."), {});
+        return;
+    }
+    QString reason;
+    bool accepted = false;
+    if (invoke.commandVerb == "freedv.setMessage") {
+        accepted = host->setFreedvMessage(text.toString(), &reason);
+    } else if (invoke.commandVerb == "freedv.sendQsy") {
+        accepted = host->sendFreedvQsy(callsign.toString(), frequencyHz, &reason);
+    } else {
+        accepted = host->setFreedvHidden(on.toBool(), &reason);
     }
     emitResult(invoke.commandVerb, invoke.commandId, accepted, reason, {});
 }

@@ -160,6 +160,9 @@
 //                                    SpotSourceHost's refusals scanned and
 //                                    its readOnlyReason forwarded. AI-assisted
 //                                    via Anthropic Claude Code.
+//   2026-09-27  J.J. Boyd / KG4VCF  iPhone plan Task 22 (R-IOS-26): the
+//                                    freedv.* refusals scanned. AI-assisted
+//                                    via Anthropic Claude Code.
 //   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 21 (R-IOS-18):
 //                                    StationRadios' refusals scanned.
 //                                    AI-assisted via Anthropic Claude Code.
@@ -1146,10 +1149,14 @@ const QList<ReasonSource>& reasonSources()
          {// The refuse helper's parameter and the three reasons above.
           QStringLiteral("why"), QStringLiteral("inUseReason()"),
           QStringLiteral("switchingReason()"), QStringLiteral("unknownRadioReason()")}},
+        // iPhone plan Task 22 (R-IOS-26): and the freedv.* refusals and
+        // FreeDV Reporter's start (the reason it did not register).
         {"src/core/SpotSourceHost.cpp",
          {QStringLiteral("readOnlyReason"), QStringLiteral("connectSource"),
-          QStringLiteral("disconnectSource"), QStringLiteral("sendCommand")},
-         {}, 10, {},
+          QStringLiteral("disconnectSource"), QStringLiteral("sendCommand"),
+          QStringLiteral("setFreedvMessage"), QStringLiteral("sendFreedvQsy"),
+          QStringLiteral("startFreedvWith"), QStringLiteral("setFreedvHidden")},
+         {}, 16, {QStringLiteral("wanted")},
          {// The refuse helper's parameter: this entry's own literals.
           QStringLiteral("why")}},
         {"src/models/SliceModel.cpp",
@@ -1410,6 +1417,9 @@ const QList<AppSideReason>& appSideReasons()
          "the Core's own line while it waits for a radio, kept with its list; no app is sent it"},
         // R-IOS-25 (parity Task 19): the Core's spot sources.
         {"src/core/session/IStationLink.h", "spotSourcesUnavailableReason",
+         "a remote window's own reason when its Core cannot take the request"},
+        // R-IOS-26 (iPhone plan Task 22): the Core's FreeDV Reporter.
+        {"src/core/session/IStationLink.h", "stationFreedvUnavailableReason",
          "a remote window's own reason when its Core cannot take the request"},
         {"src/core/SpotSourceHost.cpp", "reportStationRefusal",
          "a remote window shows the Core's refusal it was given"},

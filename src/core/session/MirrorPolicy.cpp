@@ -59,6 +59,10 @@
 //                 Anthropic Claude Code.
 //   2026-09-26 - Parity Task 19 (R-IOS-25): SpotSourceHost, all Outbound.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27 - iPhone plan Task 22 / parity Task 20 (R-IOS-26):
+//                SpotSourceHost's FreeDV Reporter state and hidden flag,
+//                Outbound. J.J. Boyd (KG4VCF), AI-assisted via Anthropic
+//                Claude Code.
 //   2026-09-24 - iPhone app Task 19 (R-IOS-06): StationCatalog, all
 //   2026-09-24 - R-R3-49 (parity Task 2): the TX and Phone/CW applets'
 //                 thirteen TransmitModel settings Bidirectional;
@@ -805,6 +809,12 @@ const MirrorPolicy::Entry kEntries[] = {
     { "SpotSourceHost", "rbnText", MirrorDirection::Outbound },
     { "SpotSourceHost", "potaState", MirrorDirection::Outbound },
     { "SpotSourceHost", "potaText", MirrorDirection::Outbound },
+    // R-IOS-26 / R-R3-49 (iPhone plan Task 22, parity Task 20,
+    // stationFreedvVersion 1): FreeDV Reporter, the same shape, and "Hide
+    // my station" (changed only through freedv.setHidden).
+    { "SpotSourceHost", "freedvReporterState", MirrorDirection::Outbound },
+    { "SpotSourceHost", "freedvReporterText", MirrorDirection::Outbound },
+    { "SpotSourceHost", "freedvReporterHidden", MirrorDirection::Outbound },
     { "SpotSourceHost", "pskReporterState", MirrorDirection::Outbound },
     { "SpotSourceHost", "pskReporterText", MirrorDirection::Outbound },
 
