@@ -8,6 +8,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-27 J.J. Boyd / KG4VCF : local receive waterfall rows use
+//                 RX1Offset before colour and level tracking, matching
+//                 Core-calibrated remote rows. AI-assisted via OpenAI Codex.
 //   2026-09-26 J.J. Boyd / KG4VCF : other devices' slices drawn as markers
 //                 (drawForeignMarkers), their label's click says whose
 //                 they are (iPhone app plan Task 78, R-IOS-02, R-IOS-30).
@@ -6161,13 +6164,28 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& wfPixelsDbm)
         return;
     }
 
+    // Thetis display.cs:6588-6605 [v2.10.3.15] adds RX1Offset to each
+    // receive waterfall sample before noise-floor and colour processing.
+    //MW0LGE [2.9.0.7]
+    // Remote rows already carry Core calibration; txWaterfallRow() already
+    // added the keyed offset. Only the local receive row needs it here.
+    QVector<float> calibratedPixelsDbm = wfPixelsDbm;
+    if (!m_remoteSpectrum && !m_moxOverlay) {
+        const float offset = displayCalOffsetDb();
+        if (offset != 0.0f) {
+            for (float& dbm : calibratedPixelsDbm) {
+                dbm += offset;
+            }
+        }
+    }
+
     // 3DSS: feed the stacked-trace ring from the same call, downstream of the
     // stop-on-TX gate above, so the perspective stack and the flat waterfall
     // beneath it advance and freeze in lockstep. Teeing at the WaterfallTicker
     // callback instead would sit upstream of that gate and let the 3D surface
     // keep scrolling through an over.
     if (m_spectrumRenderMode == SpectrumRenderMode::Mode3D) {
-        pushDssRow(wfPixelsDbm);
+        pushDssRow(calibratedPixelsDbm);
     }
 
     // 2026-05-25 KG4VCF bench fix: cadence is now driven by
@@ -6184,9 +6202,9 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& wfPixelsDbm)
     // the render-active mirror (m_wfActiveLow/High), never the
     // persisted user fields. Thetis-faithful per Thetis
     // display.cs:6575-6594 [v2.10.3.13].
-    composeWaterfallActiveThresholds(wfPixelsDbm);
+    composeWaterfallActiveThresholds(calibratedPixelsDbm);
 
-    const int n = wfPixelsDbm.size();
+    const int n = calibratedPixelsDbm.size();
     int h = m_waterfall.height();
     // Decrement write pointer so newest row is always at m_wfWriteRow.
     m_wfWriteRow = (m_wfWriteRow - 1 + h) % h;
@@ -6201,7 +6219,7 @@ void SpectrumWidget::pushWaterfallRow(const QVector<float>& wfPixelsDbm)
     for (int x = 0; x < w; ++x) {
         int srcPx = static_cast<int>(static_cast<float>(x) * pxScale);
         srcPx = qBound(0, srcPx, n - 1);
-        scanline[x] = dbmToRgb(wfPixelsDbm[srcPx]);
+        scanline[x] = dbmToRgb(calibratedPixelsDbm[srcPx]);
     }
 
     // ── Sub-epic E: mirror the just-written row into the history ring ───
@@ -6416,6 +6434,14 @@ void SpectrumWidget::pushDssRow(const QVector<float>& wfPixelsDbm)
     } else if (!m_moxOverlay) {
         wide = buildDssWideRow(
             m_lastFullBinsDbm, wideCenterMhz, wideBandwidthMhz);
+        // The off-screen DDC bins share the local receive row's raw dBm
+        // scale; calibrate this 3D continuation once as well.
+        const float offset = displayCalOffsetDb();
+        if (offset != 0.0f) {
+            for (float& dbm : wide) {
+                dbm += offset;
+            }
+        }
     }
     if (wide.isEmpty()) {
         m_dss.pushRow(wfPixelsDbm, centerMhz, bandwidthMhz);

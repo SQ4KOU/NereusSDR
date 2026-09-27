@@ -444,7 +444,8 @@ colours for the same signal.
 - Ruling: JJ approved on 2026-09-27: "Apply calibration in both windows (recommended)".
 - Status: signed implementation `f7af7860f` applies local receive calibration once before
   colours, threshold tracking and 3D history. Six focused tests passed in 7.83 s, including
-  positive/negative offsets and remote/TX no-double-calibration checks. Integration is pending.
+  positive/negative offsets and remote/TX no-double-calibration checks. The integrated
+  trunk passed the same six targets in 7.64 s.
   The colour shift is explicitly approved.
 - Plan: parity Task 31 (A11, R-R3-49).
 
@@ -542,6 +543,18 @@ colours for the same signal.
   with focused nonzero-receiver/rate-change/refusal checks. Remote I/Q remains under
   implementation and is not advertised as available yet.
 - Plan: remote-window parity TCI raw I/Q.
+
+### G-38: Settings reset labels and remote hygiene commands disagree with behavior
+
+- Evidence: local Reset to defaults only repairs invalid board settings; Forget removes
+  per-MAC settings. Existing station.forgetRadio instead removes a saved radio entry and
+  refuses the current radio, so it cannot implement remote hygiene parity.
+- Ruling: OPEN for reset semantics. JJ has been asked whether Reset should reset all
+  saved settings for the radio or retain repair behavior under a clearer label.
+- Status: the approved remote diagnostics work is adding separate capability-gated hygiene
+  operations, with Core-owned MAC validation and paired-device/on-air gates for mutations.
+  Reset behavior awaits the answer; independent diagnostics/preferences work continues.
+- Plan: remote-window parity Setup diagnostics and preferences.
 
 ## How this addendum is kept
 
