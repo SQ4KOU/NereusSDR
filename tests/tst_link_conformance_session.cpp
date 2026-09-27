@@ -205,6 +205,13 @@
 //   2026-09-26  J.J. Boyd / KG4VCF  Parity Task 21 (R-IOS-18): stationSetup
 //                                    stationRadios. AI-assisted via Anthropic
 //                                    Claude Code.
+//   2026-09-26  J.J. Boyd / KG4VCF  Tasks 27-29 fix wave (R-R3-49): the
+//                                    connectable station's readings wait
+//                                    for the meter pump's own poll, not
+//                                    the slice's construction default; run
+//                                    after another fixture the wait passed
+//                                    before the first poll. AI-assisted via
+//                                    Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest/QtTest>
@@ -549,8 +556,23 @@ QString buildStation(const QJsonObject& setup, Station* station, quint16 major)
                                   "station");
         }
         // Each slice's signal readings: the meter pump writes the
-        // no-reading value until the receiver's meter has one.
-        const bool readings = QTest::qWaitFor([station]() {
+        // no-reading value until the receiver's meter has one. Only a
+        // reading the pump wrote counts: before its first poll a slice
+        // holds its construction default (-140 dBm), above the no-reading
+        // value. The first station in a process is slow enough to set up
+        // that a poll always landed first; a later one is not, and the
+        // wait passed on the default, so the pump's first real poll (the
+        // no-reading value while the channel's meter was not yet ready)
+        // landed inside the script instead.
+        SliceMeterPump* const pump = station->model->sliceMeterPump();
+        if (pump == nullptr) {
+            return QStringLiteral("the connectable station has no meter pump");
+        }
+        QSignalSpy polls(pump, &SliceMeterPump::polled);
+        const bool readings = QTest::qWaitFor([station, &polls]() {
+            if (polls.isEmpty()) {
+                return false;
+            }
             for (SliceModel* slice : station->model->slices()) {
                 if (slice->signalStrengthDbm() <= SliceMeterPump::kNoReadingDbm
                     || slice->signalPeakDbm() <= SliceMeterPump::kNoReadingDbm
