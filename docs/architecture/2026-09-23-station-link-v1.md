@@ -2914,7 +2914,8 @@ transmitter disturbs nobody and applies at once, and `state` is never
 The `catalog` object's `json` is one JSON object (RFC 8259, UTF-8,
 compact) holding the values the Core owns and an app shows: the modes, the
 Core's filter presets, the tune steps, the AGC, receive and gauge ranges,
-Setup > Display's controls, the radio's capabilities, the band buttons, the band plans, the waterfall
+Setup > Display's controls, the noise-reduction quick controls, the radio's
+capabilities and transmit ranges, the band buttons, the band plans, the waterfall
 palettes, the slice colours and the Core's tools (`StationCatalog`, spec section 4.10). An app
 draws its controls from it and carries no table of its own, so a Hermes
 Lite 2 and an ANAN-G2 each get their own. It is the same for every device
@@ -2933,7 +2934,7 @@ moves it by one, so the three settings of one preset move it once. The new
 value reaches a connected client as a `delta` (section 7.2).
 
 **Size.** At most 256 KiB of `json` for the largest radio
-(`StationCatalog::kMaxJsonBytes`); today's are about 65 KiB, most of it the
+(`StationCatalog::kMaxJsonBytes`); today's are about 71 KiB, most of it the
 band plans and their spots.
 
 **Units and forms.** A key names its unit (`Hz`, `Db`, `Dbm`, `W`);
@@ -2942,8 +2943,10 @@ Colours are `#RRGGBB`, upper case. Labels are the desktop's own words,
 shown as sent. A key an app does not know is ignored; an app given an
 empty `json` (the stand-in of section 16.3) has no catalogue yet.
 
-The object has exactly these fifteen keys (a Core from before `display`
-sends fourteen; an app detects `display` by its presence):
+The object has exactly these sixteen keys (a Core from before
+`noiseReduction` sends fifteen, and one from before `display` fourteen; an
+app detects each by its presence, as it does `board`'s `transmit`,
+`rx1Preamp` and `relays`):
 
 | Key | Holds |
 | --- | --- |
@@ -2954,6 +2957,7 @@ sends fourteen; an app detects `display` by its presence):
 | `receive` | `{afGain, ssqlThresh, amsqThresh, fmsqThresh}`, each `{min, max, step}` for the slice setting of that name, as the desktop's own control holds it: `afGain` 0 to 100 in the AF slider's units, `ssqlThresh` 0 to 100 in the SQL slider's units, `amsqThresh` and `fmsqThresh` -160 to 0 dB; every step 1 |
 | `meters` | The gauges an app draws (below) |
 | `display` | Setup > Display's FFT, rendering and waterfall controls (below) |
+| `noiseReduction` | The VFO flag's noise-reduction quick controls, slot by slot (below) |
 | `board` | The radio (below) |
 | `bands` | `[{id, label}]`: the desktop's per-pan BAND grid, in its order (160, 80, 60, 40, 30, 20, 17, 15, 12, 10, 6, WWV); `id` is the band as `slice.selectBand` takes it (0 for 160 m to 10 for 6 m, 12 for WWV) and `label` is the button's text. The desktop draws its grid from the same table, so the two cannot differ |
 | `bandPlans` | `[{id, name, default, active, segments: [{lowHz, highHz, label, licence, lowestClass, colour}], spots: [{hz, label}]}]`: every bundled plan, `id` its file's name (`arrl-us`), `default` true on ARRL (US) alone, `active` true on the Core's own plan alone (the plan settings `BandPlanName` names; a Core from before `active` sends none, and an app then reads `BandPlanName`); `spots` are the plan's marked frequencies, as its file lists them, `hz` the frequency in whole hertz and `label` the file's text (the desktop's strip draws each as a dot, without its label); `licence` lists the licence classes (`E,G`), empty for a beacon or no transmit; `lowestClass` is the lowest class the segment allows, as the desktop's band-plan strip names it after the label (`PHONE General`): `Tech` when `licence` holds T, else `General` when it holds G, `Extra` when it is exactly `E`, and empty otherwise |
@@ -2987,6 +2991,70 @@ sends fourteen; an app detects `display` by its presence):
 | `pureSignal` | Whether it has PureSignal |
 | `paRatingW` | Its PA rating in watts |
 | `micJack` | Whether it has a microphone input of its own |
+| `transmit` | `{power, tunePowerForTxBand, tunePower, micGainDb}`: the transmit controls' ranges on this radio (below) |
+| `rx1Preamp` | Whether it has the RX applet's RX1 preamp toggle (the dual-ADC boards; `rx1Preamp` true is refused elsewhere) |
+| `relays` | `{rxOutOnTx, ext1OutOnTx, ext2OutOnTx, rxOutOverride}`: the antenna relays it has (below) |
+
+`board.transmit`: each key is `{min, max, step}` in the property's own
+units, as the desktop's control ranges it (the TX applet's RF Power and Tune
+sliders, Setup > Transmit > Power's fixed tune spinbox, the Phone/CW
+applet's mic level). The three power keys add `shown: {min, max, decimals,
+unit}`: what the control shows at `min` and at `max`, linear in between
+(`shown.min + (value - min) x (shown.max - shown.min) / (max - min)`), to
+`decimals` places, `unit` `""`, `W` or `dB`. The PA profile changes none of
+it.
+
+| Key | Property | ANAN-G2 | Hermes Lite 2 |
+| --- | --- | --- | --- |
+| `power` | `power` | 0 to 100 step 1, shown as the number | 0 to 90 step 6, shown -7.5 to 0 dB, 1 place |
+| `tunePowerForTxBand` | `tunePowerForTxBand` (verb `setTunePowerForTxBand`) | 0 to 100 step 1, shown as the number | 0 to 99 step 3, shown -16.5 to 0 dB, 1 place |
+| `tunePower` | `tunePower` | 0 to 100 step 1, shown 0 to 100 W | 0 to 99 step 3, shown -16.5 to 0 dB, 1 place |
+| `micGainDb` | `micGainDb` | -40 to +10 dB step 1 | -40 to +10 dB step 1 |
+
+The Core accepts what the desktop accepts: `power` has no range check (the
+desktop's TX applet slider holds it in range, and `powerByBandJson` spans 0
+to 100 on every board); `tunePowerForTxBand` and `tunePower` outside 0 to 99
+on a Hermes Lite 2 (0 to 100 elsewhere) are refused; `micGainDb` is
+accepted from -50 to +70 dB on every radio, wider than the control shows.
+
+`board.relays`: the desktop hides a control for a relay the radio lacks,
+and an app does the same from these. `rxOutOnTx` is true when the radio has
+RX out on TX (the RX bypass relay, the VFO flag's BYPS button: the board's
+relay and the product's control, `rxOutOnTxPresent`); `ext1OutOnTx` and
+`ext2OutOnTx` are the Ext-on-TX switches' labels as Setup > Antenna Control
+shows them (`Ext 1 on Tx`, `Ext 2 on Tx`; a G2E's Ext 2 is `Rx BYPASS on
+Tx`), `null` where the radio has none; `rxOutOverride` is whether it has
+the RX out override. An ANAN-G2 has Ext 1 and Ext 2 on TX only; a Hermes
+Lite 2 has none of them.
+
+`noiseReduction`: `{nr1, nr2, nr3, nr4, dfnr, mnr, nnr}`, each a list of
+the slot's quick controls in the VFO flag's order, from the one table the
+popups, NNR's controls and a new slice's values read (`ControlRanges.h`),
+so they cannot differ. It is the same on every radio. Each entry names the
+slice property it writes (`property`, a two-way `SliceModel` property) and
+the control's `label`, and by `kind`:
+
+- `slider`: `min`, `max`, `step` in the control's own units; the property
+  is `value x scale`; the readout is `value / divide` to `decimals` places
+  followed by `suffix`; `default` is a new slice's value in the property's
+  units; `reset` is the control value its Reset restores, or `null` where
+  it has none (DFNR's and MNR's popups and NNR's "Reset tuning" have one).
+- `switch`: `default` true or false.
+- `choice`: `options: [{id, label}]`, `id` the property's value; `default`
+  the default `id`; `reset` the `id` Reset restores, or `null`.
+
+The Core refuses none of the NR1 to NR4, DFNR and MNR values; NNR's values
+outside their range are refused.
+
+| Slot | Controls |
+| --- | --- |
+| `nr1` | Taps 1 to 1024 (64), Delay 1 to 1023 (16), Gain 1 to 1000 x 1e-6 (100), Leak 1 to 1000 x 1e-3 (100): Thetis's NR spinboxes and conversion; Position Pre-AGC or Post-AGC (Post-AGC) |
+| `nr2` | Gain Method Linear, Log, Gamma, Trained (Gamma); NPE Method OSMS, MMSE, NSTAT (OSMS); AE Filter (on); Noise post proc (off); Factor 0 to 30 (15); Rate 0 to 30 (5) |
+| `nr3` | Position (Post-AGC); Use fixed gain for input samples (on) |
+| `nr4` | Reduction 0 to 20 dB (10), Smoothing 0 to 100% (65), Whitening 0 to 100% (2), Rescale 0 to 20 dB (2), SNRthresh -30 to 0 dB (-10); Algo 1, 2 or 3 (Algo 2) |
+| `dfnr` | Attenuation Limit 0 to 100 dB (100, Reset 100), Post-Filter Beta 0 to 100 x 0.01 shown to 2 places (0, Reset 0) |
+| `mnr` | Strength 0 to 200 x 0.01 shown as % (1.0, Reset 100), Aggressiveness 1 to 1000 (4, Reset 4), Floor 0 to 2000 x 0.001 shown with `m` (0.05, Reset 50), Alpha 0 to 100 x 0.01 (0.92, Reset 92), Bias 0 to 100 x 0.1 (1.2, Reset 12), Gsmooth 0 to 100 x 0.01 (0.70, Reset 70) |
+| `nnr` | Model Standard or Premium (Standard, kept by Reset); Suppression -50 to -10 dB step 0.01 (-25); Position (Post-AGC); Alpha 0 to 4 step 0.01 (1); Alpha knee 0 to 40 dB step 0.1 (10); Noise time 0.05 to 30 s step 0.05 (2); Maximum gain 0 to 24 dB step 0.1 (12); Attack and Release 0 to 500 ms step 0.1 (0); each Reset to its default |
 
 `display`: `{controls, binWidth, fftPlan}`, the desktop's Spectrum Defaults
 and Waterfall Defaults controls from the one table the desktop page reads
@@ -4900,7 +4968,7 @@ same on every machine.
 | `devices-not-offered` | A window at minor 11 that declares no features receives no `devices` object, and `station.rename` is refused "Update this app to manage this Core's paired devices." Runs on the station alone |
 | `devices-pairing` | On the same Core as `devices`, `pairing.open` and `pairing.close` each with a renamed argument are refused; `pairing.open` is accepted with `values` `code` as `"$string"`, and the object's next `delta` has `pairingWindowOpen` true and `pairingCode` `"$string"`; `pairing.close` is accepted and the next `delta` has them false and `""`. Runs on the station alone |
 | `devices-retire-token-refused`, `devices-retire-token` | On an upgraded Core, a token connection that declares `deviceAuth` receives the object with `tokenActive` true; `station.retireToken` is refused with no device paired, and with one paired it is accepted and the connection ends: `session.end` `pairingRequired`, `retryable` false. Run on the station alone |
-| `catalog-anan-g2`, `catalog-hermes-lite-2` | The connect sequence to `snapshot.complete` on the static radio as an ANAN-G2 and as a Hermes Lite 2: the capabilities in full, and the `catalog` object with its `json` in full and `revision` 1 (section 7.4). The two differ exactly where the radios do: the board's model, name, attenuator (0 to 31 against -28 to 31), sample rates (six against four), antennas (three plus three receive-only against one plus none), PA rating and microphone input, and the RF power gauge its rating scales; `display` is the same on both. On a Core that has not changed its plan, ARRL (US) is both `default` and `active`, and every plan carries its file's `spots` |
+| `catalog-anan-g2`, `catalog-hermes-lite-2` | The connect sequence to `snapshot.complete` on the static radio as an ANAN-G2 and as a Hermes Lite 2: the capabilities in full, and the `catalog` object with its `json` in full and `revision` 1 (section 7.4). The two differ exactly where the radios do: the board's model, name, attenuator (0 to 31 against -28 to 31), sample rates (six against four), antennas (three plus three receive-only against one plus none), PA rating and microphone input, transmit ranges (`board.transmit`: the HL2's power and tune in dB) and relays (the G2's Ext 1 and Ext 2 on TX), and the RF power gauge its rating scales; `display` and `noiseReduction` are the same on both, and neither has the RX1 preamp. On a Core that has not changed its plan, ARRL (US) is both `default` and `active`, and every plan carries its file's `spots` |
 | `settings-band-plan` | Two devices on a new Core: the fixture's device writes `BandPlanName` "IARU Region 1", and both devices get `settings.value` for it, then one catalogue `delta` each (`revision` 2) whose `json` marks `iaru-region1` alone `active` (`default` stays on ARRL (US)); a write of a plan the Core does not have gets `settings.reject` with the Core's value "IARU Region 1" and "This Core does not have that band plan.", to the writer alone; a `settings.remove` reaches both devices as an absent value, and the next `delta` (`revision` 3) marks ARRL (US) `active` again. The writing device's two deltas carry the catalogue's `json` in full; the other device's carry `active` and `default` for each plan and `"$any"` for the rest |
 | `connection-limit` | With twenty-four other connections still connecting, the station sends no `hello`: `session.end` "The Core already has as many connections as it allows. Try again shortly.", `retryable` true, then the close |
 | `lockout` | After five wrong tokens from other clients, the right token is refused as rate limited, `retryable` true |

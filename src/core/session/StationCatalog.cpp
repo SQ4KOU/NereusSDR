@@ -32,6 +32,13 @@
 //               desktop page reads (R-IOS-18, R-IOS-27, R-IOS-06,
 //               R-R3-08). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-27: board.transmit (the transmit controls' ranges and what
+//               they show, from HpsdrModel.h and the board's mic range),
+//               board.rx1Preamp, board.relays (rxOutOnTxPresent and
+//               SkuUiProfile) and the top-level `noiseReduction` (the NR
+//               quick controls from ControlRanges.h; R-IOS-06, R-IOS-27).
+//               J.J. Boyd (KG4VCF), with AI-assisted implementation via
+//               Anthropic Claude Code.
 // =================================================================
 
 #include "core/session/StationCatalog.h"
@@ -400,6 +407,140 @@ QJsonObject metersObject(const StationCatalog::Inputs& inputs)
                        {QStringLiteral("swr"), swr}};
 }
 
+// ── noiseReduction ──────────────────────────────────────────────────────
+//
+// The VFO flag's noise-reduction quick controls, slot by slot in the
+// flag's order, from the table the popups, NnrControls and SliceModel's
+// defaults read (ControlRanges.h). The same on every radio.
+
+QJsonObject noiseReductionControl(const ControlRanges::NrControl& control)
+{
+    using ControlRanges::NrControlKind;
+    QJsonObject entry{
+        {QStringLiteral("property"), QString::fromLatin1(control.property)},
+        {QStringLiteral("label"), QString::fromUtf8(control.label)},
+    };
+    switch (control.kind) {
+    case NrControlKind::Slider:
+        entry.insert(QStringLiteral("kind"), QStringLiteral("slider"));
+        entry.insert(QStringLiteral("min"), control.min);
+        entry.insert(QStringLiteral("max"), control.max);
+        entry.insert(QStringLiteral("step"), control.step);
+        entry.insert(QStringLiteral("scale"), control.scale);
+        entry.insert(QStringLiteral("divide"), control.divide);
+        entry.insert(QStringLiteral("decimals"), control.decimals);
+        entry.insert(QStringLiteral("suffix"), QString::fromUtf8(control.suffix));
+        entry.insert(QStringLiteral("default"), control.defaultValue);
+        entry.insert(QStringLiteral("reset"),
+                     control.hasReset ? QJsonValue(control.reset) : QJsonValue(QJsonValue::Null));
+        break;
+    case NrControlKind::Switch:
+        entry.insert(QStringLiteral("kind"), QStringLiteral("switch"));
+        entry.insert(QStringLiteral("default"), control.defaultValue != 0.0);
+        break;
+    case NrControlKind::Choice: {
+        entry.insert(QStringLiteral("kind"), QStringLiteral("choice"));
+        QJsonArray options;
+        for (std::size_t i = 0; i < control.optionCount; ++i) {
+            options.append(QJsonObject{
+                {QStringLiteral("id"), control.options[i].id},
+                {QStringLiteral("label"), QString::fromUtf8(control.options[i].label)}});
+        }
+        entry.insert(QStringLiteral("options"), options);
+        entry.insert(QStringLiteral("default"), static_cast<int>(control.defaultValue));
+        entry.insert(QStringLiteral("reset"),
+                     control.hasReset ? QJsonValue(static_cast<int>(control.reset))
+                                      : QJsonValue(QJsonValue::Null));
+        break;
+    }
+    }
+    return entry;
+}
+
+QJsonObject noiseReductionObject()
+{
+    QJsonObject sections;
+    for (const ControlRanges::NrSlotControls& slot : ControlRanges::kNoiseReductionSlots) {
+        QJsonArray controls;
+        for (std::size_t i = 0; i < slot.count; ++i) {
+            controls.append(noiseReductionControl(slot.controls[i]));
+        }
+        sections.insert(QString::fromLatin1(slot.key), controls);
+    }
+    return sections;
+}
+
+// ── board.transmit ──────────────────────────────────────────────────────
+//
+// The transmit controls' ranges on this board, each in its property's
+// units, as the TX applet, the Phone/CW applet and Setup > Transmit >
+// Power range them (HpsdrModel.h, caps.micGainMinDb/MaxDb). The power
+// controls add `shown`: what the control shows at its two ends, linear in
+// between, to `decimals` places in `unit`.
+
+QJsonObject shownObject(double min, double max, int decimals, const QString& unit)
+{
+    return QJsonObject{{QStringLiteral("min"), min},
+                       {QStringLiteral("max"), max},
+                       {QStringLiteral("decimals"), decimals},
+                       {QStringLiteral("unit"), unit}};
+}
+
+QJsonObject transmitObject(const StationCatalog::Inputs& inputs)
+{
+    const HPSDRModel m = inputs.model;
+    const int decimals = powerSliderShownDecimalsFor(m);
+    const QString sliderUnit = QString::fromLatin1(powerSliderShownUnitFor(m));
+
+    QJsonObject power = rangeObject(0, rfPowerSliderMaxFor(m), rfPowerSliderStepFor(m));
+    power.insert(QStringLiteral("shown"),
+                 shownObject(rfPowerShownFor(m, 0), rfPowerShownFor(m, rfPowerSliderMaxFor(m)),
+                             decimals, sliderUnit));
+
+    QJsonObject tune = rangeObject(0, tuneSliderMaxFor(m), tuneSliderStepFor(m));
+    tune.insert(QStringLiteral("shown"),
+                shownObject(tunePowerShownFor(m, 0), tunePowerShownFor(m, tuneSliderMaxFor(m)),
+                            decimals, sliderUnit));
+
+    // Setup's fixed tune spinbox: its shown range and step, and the stored
+    // values they write.
+    const double shownMin = fixedTuneSpinboxMinFor(m);
+    const double shownMax = fixedTuneSpinboxMaxFor(m);
+    const int storedMin = tunePowerStoredFromShown(m, shownMin);
+    const int storedMax = tunePowerStoredFromShown(m, shownMax);
+    const int storedStep =
+        tunePowerStoredFromShown(m, shownMin + fixedTuneSpinboxStepFor(m)) - storedMin;
+    QJsonObject fixedTune = rangeObject(storedMin, storedMax, storedStep);
+    fixedTune.insert(QStringLiteral("shown"),
+                     shownObject(shownMin, shownMax, fixedTuneSpinboxDecimalsFor(m),
+                                 QString::fromLatin1(fixedTuneSpinboxSuffixFor(m)).trimmed()));
+
+    return QJsonObject{
+        {QStringLiteral("power"), power},
+        {QStringLiteral("tunePowerForTxBand"), tune},
+        {QStringLiteral("tunePower"), fixedTune},
+        {QStringLiteral("micGainDb"),
+         rangeObject(inputs.board.micGainMinDb, inputs.board.micGainMaxDb, 1)},
+    };
+}
+
+// The antenna relays this radio has, as the VFO flag and Setup > Antenna
+// Control show them (hidden where absent): RX out on TX on the BYPS gate,
+// the Ext-on-TX switches by their labels (null where absent), and the RX
+// out override.
+QJsonObject relaysObject(const StationCatalog::Inputs& inputs, const SkuUiProfile& sku)
+{
+    const auto labelOrNull = [](bool present, const QString& label) {
+        return present ? QJsonValue(label) : QJsonValue(QJsonValue::Null);
+    };
+    return QJsonObject{
+        {QStringLiteral("rxOutOnTx"), rxOutOnTxPresent(inputs.board, sku)},
+        {QStringLiteral("ext1OutOnTx"), labelOrNull(sku.hasExt1OutOnTx, sku.ext1OutOnTxLabel)},
+        {QStringLiteral("ext2OutOnTx"), labelOrNull(sku.hasExt2OutOnTx, sku.ext2OutOnTxLabel)},
+        {QStringLiteral("rxOutOverride"), sku.hasRxBypassUi},
+    };
+}
+
 int boardMaxSlices(const BoardCapabilities& caps)
 {
     return caps.maxSlices > 0 ? caps.maxSlices : 1;
@@ -461,6 +602,10 @@ QJsonObject boardObject(const StationCatalog::Inputs& inputs)
         {QStringLiteral("pureSignal"), caps.hasPureSignal},
         {QStringLiteral("paRatingW"), paMaxWattsFor(inputs.model)},
         {QStringLiteral("micJack"), caps.hasMicJack},
+        {QStringLiteral("transmit"), transmitObject(inputs)},
+        // The RX applet's RX1 preamp toggle: dual-ADC boards alone.
+        {QStringLiteral("rx1Preamp"), caps.p2PreampPerAdc},
+        {QStringLiteral("relays"), relaysObject(inputs, sku)},
     };
 }
 
@@ -647,6 +792,7 @@ QJsonObject StationCatalog::build(const Inputs& inputs)
         {QStringLiteral("receive"), receiveObject()},
         {QStringLiteral("meters"), metersObject(inputs)},
         {QStringLiteral("display"), displayObject()},
+        {QStringLiteral("noiseReduction"), noiseReductionObject()},
         {QStringLiteral("board"), boardObject(inputs)},
         {QStringLiteral("bandPlans"), bandPlansArray(inputs)},
         {QStringLiteral("bands"), bandsArray()},

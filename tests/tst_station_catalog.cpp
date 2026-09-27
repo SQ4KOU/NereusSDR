@@ -45,6 +45,10 @@
 //   2026-09-27: the `display` key (R-IOS-18, R-IOS-27, R-R3-08). J.J.
 //               Boyd (KG4VCF), with AI-assisted implementation via
 //               Anthropic Claude Code.
+//   2026-09-27: the `noiseReduction` key, and board.transmit and
+//               board.relays among the keys the G2 and HL2 differ in
+//               (R-IOS-06, R-IOS-27). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 // =================================================================
 
 #include <QtTest>
@@ -89,7 +93,7 @@ namespace {
 const QSet<QString> kTopLevelKeys{
     QStringLiteral("modes"),       QStringLiteral("filterPresets"), QStringLiteral("tuneSteps"),
     QStringLiteral("agc"),         QStringLiteral("receive"),       QStringLiteral("meters"),
-    QStringLiteral("display"),
+    QStringLiteral("display"),     QStringLiteral("noiseReduction"),
     QStringLiteral("board"),       QStringLiteral("bands"),
     QStringLiteral("bandPlans"),   QStringLiteral("palettes"),      QStringLiteral("sliceColours"),
     QStringLiteral("tools"),       QStringLiteral("radioItems"),    QStringLiteral("audio"),
@@ -748,7 +752,14 @@ private slots:
                                 QStringLiteral("attenuator"), QStringLiteral("rxAntennas"),
                                 QStringLiteral("rxOnlyInputs"), QStringLiteral("txAntennas"),
                                 QStringLiteral("sampleRates"), QStringLiteral("paRatingW"),
-                                QStringLiteral("micJack")}));
+                                QStringLiteral("micJack"), QStringLiteral("transmit"),
+                                QStringLiteral("relays")}));
+        // Neither has the RX1 preamp (tst_catalogue_ranges holds the
+        // transmit ranges and the relays against the widgets).
+        QCOMPARE(g2.value(QStringLiteral("board")).toObject().value(QStringLiteral("rx1Preamp")),
+                 QJsonValue(false));
+        QCOMPARE(hl2.value(QStringLiteral("board")).toObject().value(QStringLiteral("rx1Preamp")),
+                 QJsonValue(false));
 
         const QJsonObject g2Board = g2.value(QStringLiteral("board")).toObject();
         const QJsonObject hl2Board = hl2.value(QStringLiteral("board")).toObject();
