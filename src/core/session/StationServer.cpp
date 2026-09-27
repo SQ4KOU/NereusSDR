@@ -1,3 +1,6 @@
+// Modification history (NereusSDR):
+// 2026-09-27: Preserve final pairing output through connection drain.
+// J.J. Boyd (KG4VCF), AI-assisted implementation via OpenAI Codex.
 // =================================================================
 // src/core/session/StationServer.cpp  (NereusSDR)
 // =================================================================
@@ -2593,12 +2596,10 @@ void StationServer::endSessionsForRadioChange(const QString& reason)
 {
     const QList<SessionTransport*> transports = m_peers.keys();
     m_closing = true;
-    m_lingerOnDrop = true;
     for (SessionTransport* transport : transports) {
         dropPeer(transport, reason, true, /*retryable=*/true,
                  QString::fromLatin1(SessionEndCode::kRadioChanging));
     }
-    m_lingerOnDrop = false;
     m_closing = false;
 }
 
@@ -3327,17 +3328,14 @@ void StationServer::dropPeer(SessionTransport* transport, const QString& reason,
         m_deltaFlushTimer->stop();
     }
 
+    // Keep queued final output (including pair.confirm) alive until close
+    // completes. Detach from the server so destroying it cannot truncate
+    // the drain. Register first: some transports emit closed synchronously.
+    // The existing radio-change bound also limits an unresponsive close.
+    transport->setParent(nullptr);
+    connect(transport, &SessionTransport::closed, transport, &QObject::deleteLater);
+    QTimer::singleShot(kRadioChangeLingerMs, transport, &QObject::deleteLater);
     transport->closeLink(reason);
-    if (m_lingerOnDrop) {
-        // A radio change: this server is destroyed next, and its children
-        // with it. The connection leaves it and goes once its close is
-        // written, so its last messages are not cut off.
-        transport->setParent(nullptr);
-        connect(transport, &SessionTransport::closed, transport, &QObject::deleteLater);
-        QTimer::singleShot(kRadioChangeLingerMs, transport, &QObject::deleteLater);
-    } else {
-        transport->deleteLater();
-    }
 
     if (m_peers.isEmpty() && m_heartbeatTimer != nullptr) {
         m_heartbeatTimer->stop();
