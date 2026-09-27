@@ -25,17 +25,21 @@
 //   2026-09-27: original implementation for NereusSDR by J.J. Boyd
 //               (KG4VCF), with AI-assisted implementation via Anthropic
 //               Claude Code.
+//   2026-09-27: sustained-producer drain regression added with OpenAI
+//               Codex assistance.
 // =================================================================
 
 #include <QtTest>
 
 #include <QFile>
+#include <QSemaphore>
 #include <QTemporaryDir>
 
 #include "core/LogSink.h"
 
 #include <atomic>
 #include <chrono>
+#include <future>
 #include <thread>
 #include <vector>
 
@@ -141,6 +145,43 @@ private slots:
         const QList<LogSinkLine> lines = sink.linesSince(0);
         QCOMPARE(lines.size(), 1);
         QCOMPARE(lines.first().text, QStringLiteral("before any writer"));
+    }
+
+    void oneDrainReturnsWhileAProducerRefillsEverySlot()
+    {
+        LogSink sink(8);
+        for (int i = 0; i < 8; ++i) {
+            QVERIFY(sink.offer(QStringLiteral("initial %1\n").arg(i)));
+        }
+        QSemaphore refillRequested;
+        QSemaphore refillDone;
+        std::atomic<bool> stop{false};
+        sink.setAfterTakeForTest([&]() {
+            refillRequested.release();
+            refillDone.acquire();
+        });
+        std::thread producer([&]() {
+            while (true) {
+                refillRequested.acquire();
+                if (stop.load()) { return; }
+                while (!sink.offer(QStringLiteral("refill\n"))) {
+                    std::this_thread::yield();
+                }
+                refillDone.release();
+            }
+        });
+        auto drain = std::async(std::launch::async, [&]() { sink.drainNow(); });
+        const bool returned = drain.wait_for(std::chrono::seconds(10)) == std::future_status::ready;
+        stop.store(true);
+        refillDone.release(16);
+        refillRequested.release();
+        producer.join();
+        drain.get();
+        QVERIFY2(returned, "one drain kept taking lines from a producer that refilled the ring");
+        sink.setAfterTakeForTest({});
+        QCOMPARE(sink.linesSince(0).size(), 8);
+        sink.drainNow();
+        QCOMPARE(sink.linesSince(0).size(), 16);
     }
 };
 

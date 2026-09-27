@@ -104,6 +104,9 @@ public:
     /// For a test: runs before each line is written, on the writer's thread
     /// (to stand in for a slow disk).
     void setBeforeWriteForTest(std::function<void()> hook) { m_beforeWrite = std::move(hook); }
+    /// For a test: runs after a line is removed from the ring, before the
+    /// next take. Used to hold a producer refill at every drain step.
+    void setAfterTakeForTest(std::function<void()> hook) { m_afterTake = std::move(hook); }
 
 private:
     struct Cell {
@@ -126,6 +129,7 @@ private:
     QFile* m_file = nullptr;
     bool m_toStderr = false;
     std::function<void()> m_beforeWrite;
+    std::function<void()> m_afterTake;
 
     mutable std::mutex m_recentMutex; // the writer and linesSince()
     std::vector<LogSinkLine> m_recent; // oldest first

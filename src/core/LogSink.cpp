@@ -13,8 +13,9 @@
 //   2026-09-27  J.J. Boyd / KG4VCF  Created (remote-window parity Task 22,
 //                                    R-R3-49). AI-assisted via Anthropic
 //                                    Claude Code.
-//   2026-09-27  J.J. Boyd / KG4VCF  Bounded producer retries, refined with
-//                                    OpenAI Codex assistance.
+//   2026-09-27  J.J. Boyd / KG4VCF  Bounded producer retries and drain
+//                                    batches, refined with OpenAI Codex
+//                                    assistance.
 // =================================================================
 
 #include "LogSink.h"
@@ -175,8 +176,13 @@ void LogSink::drainLocked()
 {
     QList<QString> lines;
     QString line;
-    while (take(&line)) {
+    // A producer can refill every slot as fast as it is consumed. A drain
+    // takes no more than one ring's worth, so it always returns even then.
+    // A following writer turn handles what arrived during this batch.
+    const std::size_t batchLimit = m_mask + 1;
+    for (std::size_t taken = 0; taken < batchLimit && take(&line); ++taken) {
         lines.append(std::move(line));
+        if (m_afterTake) { m_afterTake(); }
     }
     const quint64 dropped = m_dropped.load(std::memory_order_relaxed);
     if (dropped != m_droppedReported) {
