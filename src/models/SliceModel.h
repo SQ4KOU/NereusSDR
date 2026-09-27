@@ -56,6 +56,9 @@
 //                                    Claude Code. MNR's defaults read from
 //                                    there too, and NR2, NR3, NR4 and
 //                                    DFNR's (values unchanged).
+//   2026-09-27 - R-R3-49: savedSampleRateHz, the rate saved for a band,
+//                read at connect. NereusSDR-original. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -1206,6 +1209,13 @@ public:
     // Used by RadioModel::onBandButtonClicked (#118) to decide whether a
     // band click should seed defaults or restore last-used state.
     bool hasSettingsFor(Band band) const;
+
+    // R-R3-49: the sample rate saved for `band` (the per-band SampleRate
+    // key saveToSettings writes), or 0 when none is saved or the saved
+    // value is not a positive integer. Reads settings only; changes
+    // nothing. RadioModel reads it at connect, before a bind makes the
+    // slice adopt its stream's rate.
+    int savedSampleRateHz(Band band) const;
 
     void saveToSettings(NereusSDR::Band band);
     void restoreFromSettings(NereusSDR::Band band);

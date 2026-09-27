@@ -31,8 +31,10 @@ radio_mac =
 # line, the saved rate wins on every later start and after an update, and
 # this line is ignored for that radio. Leave it unset and a new radio
 # starts at 192000. It must be a rate the connected board actually
-# supports; one it cannot run falls back to the board's default. See
-# docs/protocols/openhpsdr-protocol2.md.
+# supports; one it cannot run falls back to the board's default. On a
+# Protocol 2 radio (ANAN-G2, ANAN-7000 and the like) each receiver then
+# comes back at the rate it last used on its band, where one was chosen.
+# See docs/protocols/openhpsdr-protocol2.md.
 # sample_rate_hz = <rate in Hz, e.g. 192000>
 
 # Number of receive slices to bring up. Must be at least 1; further
