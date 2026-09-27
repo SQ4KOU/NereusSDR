@@ -17,6 +17,9 @@
 //               period, so a lower frame rate saves FFT work (R-R3-08,
 //               R-R3-40). J.J. Boyd (KG4VCF), with AI-assisted
 //               implementation via Anthropic Claude Code.
+//   2026-09-27: the decimation cite corrected: Thetis's range is 1 to 16;
+//               1 to 32 is NereusSDR's own (R-IOS-06). J.J. Boyd (KG4VCF),
+//               with AI-assisted implementation via Anthropic Claude Code.
 // =================================================================
 
 //=================================================================
@@ -281,8 +284,9 @@ private:
     std::atomic<double> m_sampleRate{48000.0};
     std::atomic<int>    m_targetFps{30};
     std::atomic<bool>   m_transformsFollowFrameRate{false};
-    // From Thetis setup.designer.cs:33732 udDisplayDecimation [v2.10.3.13].
-    // Range 1..32; 1 = no decimation (pass every sample).
+    // Thetis's udDisplayDecimation (setup.designer.cs:33732 [v2.10.3.13])
+    // spans 1..16 (setup.designer.cs:33834 [v2.10.3.15]); NereusSDR extends
+    // it to 1..32 as its own range. 1 = no decimation (pass every sample).
     std::atomic<int>    m_decimation{1};
 
     // Internal state (only accessed on worker thread)

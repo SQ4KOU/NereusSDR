@@ -52,6 +52,11 @@
 //               settings, and its connection stage the gathering bound
 //               more. J.J. Boyd (KG4VCF), with AI-assisted implementation
 //               via Anthropic Claude Code.
+//   2026-09-27: the station display keys' defaults and the FFT sizes a
+//               pan asks for come from ControlRanges.h, the table the
+//               catalogue's `display` key reads (R-IOS-18, R-IOS-27,
+//               R-R3-08). J.J. Boyd (KG4VCF), with AI-assisted
+//               implementation via Anthropic Claude Code.
 
 #include "gui/RemoteMediaController.h"
 #include "core/AppSettings.h"
@@ -64,6 +69,7 @@
 #include "core/session/media/RemoteAudioRestartBackoff.h"
 #include "core/session/media/RemoteMicReceiver.h"
 #include "core/ClarityController.h"
+#include "core/ControlRanges.h"
 #include "core/FFTEngine.h"
 #include "core/session/StationClient.h"
 #include "core/session/TransmitStateFacade.h"
@@ -315,9 +321,13 @@ bool geometryNeedsWideband(double centreHz, double spanHz,
     return viewLow < lowLimit || viewHigh > highLimit;
 }
 
+// The smallest power of two from ControlRanges::kDisplayFftPlanMinSize up
+// that reaches `target`, at most the engine's largest (the catalogue's
+// `display.fftPlan`, which an app follows to ask for the same sizes).
 int fftSizeFor(double target)
 {
-    int size = 1024;
+    static_assert(ControlRanges::kDisplayFftPlanMaxSize == FFTEngine::maximumFftSize());
+    int size = ControlRanges::kDisplayFftPlanMinSize;
     while (size < FFTEngine::maximumFftSize() && size < target) {
         size *= 2;
     }
@@ -458,8 +468,10 @@ DbmWindow liveDbmWindow(const SpectrumWidget* widget, double binWidthHz,
 
 int requestedFps()
 {
-    return qBound(1, AppSettings::instance().value(QStringLiteral("DisplaySpectrumFps"),
-                         QStringLiteral("30")).toString().toInt(), 60);
+    return qBound(1, AppSettings::instance().value(
+                         QLatin1String(ControlRanges::kDisplaySpectrumFpsKey),
+                         QString::number(ControlRanges::kDisplaySpectrumFpsDefault))
+                         .toString().toInt(), 60);
 }
 
 // The FFT size a pan asks for: the stored size, raised by a deep zoom or
@@ -467,8 +479,9 @@ int requestedFps()
 int plannedFftSize(SpectrumWidget* widget, SliceModel* slice, int* baseSizeOut = nullptr)
 {
     auto& settings = AppSettings::instance();
-    const int baseSize = fftSizeFor(settings.value(QStringLiteral("DisplayFftSize"),
-                                          QStringLiteral("4096")).toString().toInt());
+    const int baseSize = fftSizeFor(settings.value(
+        QLatin1String(ControlRanges::kDisplayFftSizeKey),
+        QString::number(ControlRanges::kDisplayFftSizeDefault)).toString().toInt());
     if (baseSizeOut) { *baseSizeOut = baseSize; }
     const int pixels = qBound(1, widget->width() - widget->reservedRightEdgeWidth(),
                              SpectrumEndpoint::kMaxPixels);
@@ -480,8 +493,9 @@ int plannedFftSize(SpectrumWidget* widget, SliceModel* slice, int* baseSizeOut =
     // R-R3-08: a deep zoom requests its own tier; it cannot lengthen the
     // shared Wide engine. Size is capped to the actual FFT engine limit.
     double target = double(slice->sampleRateHz()) * pixels / span;
-    const double hzPerBin = settings.value(QStringLiteral("DisplayHzPerBinTarget"),
-                                               QStringLiteral("0")).toString().toDouble();
+    const double hzPerBin = settings.value(
+        QLatin1String(ControlRanges::kDisplayHzPerBinTargetKey),
+        QString::number(ControlRanges::kDisplayHzPerBinTargetDefault)).toString().toDouble();
     if (std::isfinite(hzPerBin) && hzPerBin > 0) {
         target = std::max(target, slice->sampleRateHz() / hzPerBin);
     }
@@ -508,8 +522,8 @@ QJsonObject requestFor(SpectrumWidget* widget, SliceModel* slice,
 {
     auto& settings = AppSettings::instance();
     const int fps = requestedFps();
-    const int window = qBound(0, settings.value(QStringLiteral("DisplayFftWindow"),
-                                    QString::number(int(WindowFunction::BlackmanHarris4)))
+    const int window = qBound(0, settings.value(QLatin1String(ControlRanges::kDisplayFftWindowKey),
+                                    QString::number(ControlRanges::kDisplayFftWindowDefault))
                                     .toString().toInt(), int(WindowFunction::Count) - 1);
     const int pixels = qBound(1, widget->width() - widget->reservedRightEdgeWidth(),
                              SpectrumEndpoint::kMaxPixels);

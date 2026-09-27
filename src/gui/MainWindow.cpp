@@ -310,6 +310,10 @@
 //                which a remote window drives from the Core's txState; this
 //                window's pan is the transmit analyzer feed's local viewer.
 //                J.J. Boyd (KG4VCF), AI-assisted via Anthropic Claude Code.
+//   2026-09-27 - R-IOS-18 / R-IOS-27 / R-R3-08: the FFT pool's display
+//                keys and their defaults come from core/ControlRanges.h,
+//                the table the Core's catalogue reads. J.J. Boyd (KG4VCF),
+//                AI-assisted via Anthropic Claude Code.
 // =================================================================
 
 /*  MeterManager.cs
@@ -564,6 +568,7 @@ warren@wpratt.com
 #include "core/TxChannel.h"  // H.2: setTxChannel wiring
 #include "core/ReceiverManager.h"
 #include "core/AppSettings.h"
+#include "core/ControlRanges.h"
 #include "core/BuildIdentity.h"
 #include "core/PaTempUnit.h"
 #include "core/RadioStatus.h"
@@ -2832,25 +2837,31 @@ void MainWindow::refreshFftPoolConfig()
     if (!m_fftEnginePool) { return; }
     auto& s = AppSettings::instance();
     FftPoolConfig cfg;
+    // The keys and their defaults come from ControlRanges.h, the table
+    // Setup > Display and the Core's catalogue read.
     cfg.fps = qBound(1,
-        s.value(QStringLiteral("DisplaySpectrumFps"),
-                QStringLiteral("30")).toString().toInt(),
+        s.value(QLatin1String(ControlRanges::kDisplaySpectrumFpsKey),
+                QString::number(ControlRanges::kDisplaySpectrumFpsDefault)).toString().toInt(),
         60);
-    cfg.fftSize = s.value(QStringLiteral("DisplayFftSize"),
-                          QStringLiteral("4096")).toString().toInt();
+    cfg.fftSize = s.value(QLatin1String(ControlRanges::kDisplayFftSizeKey),
+                          QString::number(ControlRanges::kDisplayFftSizeDefault))
+                      .toString().toInt();
     // Fallback default matches FFTEngine's own constructor default
     // (WindowFunction::BlackmanHarris4 == 1).  The pre-extraction code
     // computed this by querying a freshly constructed engine's
     // windowFunction(); there is no throwaway engine to query here now
     // that engine construction lives inside the pool, so the equivalent
     // literal is used directly.
-    const int defaultWin = static_cast<int>(WindowFunction::BlackmanHarris4);
+    static_assert(ControlRanges::kDisplayFftWindowDefault
+                  == static_cast<int>(WindowFunction::BlackmanHarris4));
+    const int defaultWin = ControlRanges::kDisplayFftWindowDefault;
     cfg.windowType = qBound(0,
-        s.value(QStringLiteral("DisplayFftWindow"),
+        s.value(QLatin1String(ControlRanges::kDisplayFftWindowKey),
                 QString::number(defaultWin)).toString().toInt(),
         static_cast<int>(WindowFunction::Count) - 1);
-    cfg.hzPerBinTarget = s.value(QStringLiteral("DisplayHzPerBinTarget"),
-                                 QStringLiteral("0")).toString().toDouble();
+    cfg.hzPerBinTarget = s.value(QLatin1String(ControlRanges::kDisplayHzPerBinTargetKey),
+                                 QString::number(ControlRanges::kDisplayHzPerBinTargetDefault))
+                             .toString().toDouble();
     m_fftEnginePool->setConfigForNewStreams(cfg);
 }
 
@@ -5231,8 +5242,8 @@ void MainWindow::buildUI()
     {
         const int persistedFps = qBound(1,
             AppSettings::instance().value(
-                QStringLiteral("DisplaySpectrumFps"),
-                QStringLiteral("30")).toString().toInt(),
+                QLatin1String(ControlRanges::kDisplaySpectrumFpsKey),
+                QString::number(ControlRanges::kDisplaySpectrumFpsDefault)).toString().toInt(),
             60);
         if (activeSpectrumWidget()) {
             activeSpectrumWidget()->setDisplayFps(persistedFps);
