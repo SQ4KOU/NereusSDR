@@ -241,7 +241,7 @@ void SettingsValidationPage::setStationSettingsAvailable(bool available, const Q
             : QStringLiteral("Pair this computer with the Core to forget its radio settings."));
     const bool localReset = !m_model || m_model->ownsLocalDsp();
     gateStationControls({m_resetBtn}, available && localReset,
-        localReset ? reason : QStringLiteral("Remote Reset to Defaults is awaiting an approved definition."));
+        localReset ? reason : QStringLiteral("Reset to defaults is not available on this Core."));
 }
 
 void SettingsValidationPage::onResetClicked()

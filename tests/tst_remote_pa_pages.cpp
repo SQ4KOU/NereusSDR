@@ -599,7 +599,7 @@ void TstRemotePaPages::remoteSettingsResetAndTokenMutationGivePlainDisabledReaso
     QVERIFY(validate && validate->isEnabled());
     for (QPushButton* reset : {validationReset, statusReset}) {
         QVERIFY(reset && !reset->isEnabled());
-        QVERIFY(reset->toolTip().contains(QStringLiteral("approved definition")));
+        QCOMPARE(reset->toolTip(), QStringLiteral("Reset to defaults is not available on this Core."));
     }
     for (QPushButton* forget : {validationForget, statusForget}) {
         QVERIFY(forget && !forget->isEnabled());

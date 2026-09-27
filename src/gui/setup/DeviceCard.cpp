@@ -19,6 +19,7 @@
 #include "core/AppSettings.h"
 #include "core/AudioDeviceConfig.h"
 #include "core/audio/PortAudioBus.h"
+#include "gui/UnbuiltFeatures.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -257,6 +258,7 @@ void DeviceCard::buildLayout()
         srRow->addWidget(m_autoMatchSampleRate);
         srRow->addStretch();
         form->addRow(makeLabel(QStringLiteral("Sample rate:")), srRow);
+        UnbuiltFeatures::hideUnlessBuilt(m_autoMatchSampleRate, UnbuiltFeature::AudioAutoMatch);
     }
 
     // ── Row 4: Bit depth ─────────────────────────────────────────────────
@@ -266,6 +268,7 @@ void DeviceCard::buildLayout()
         m_bitDepthCombo->addItem(d + QStringLiteral(" bit"), d.toInt());
     }
     form->addRow(makeLabel(QStringLiteral("Bit depth:")), m_bitDepthCombo);
+    UnbuiltFeatures::hideRowUnlessBuilt(m_bitDepthCombo, UnbuiltFeature::AudioBitDepth, form);
 
     // ── Row 5: Channels ──────────────────────────────────────────────────
     m_channelsCombo = new QComboBox;
@@ -329,6 +332,10 @@ void DeviceCard::buildLayout()
 
         form->addRow(makeLabel(QString()), m_monitorDuringTxChk);
         form->addRow(makeLabel(QString()), m_toneCheckChk);
+        UnbuiltFeatures::hideRowUnlessBuilt(m_monitorDuringTxChk,
+                                           UnbuiltFeature::AudioMonitorTxInput, form);
+        UnbuiltFeatures::hideRowUnlessBuilt(m_toneCheckChk,
+                                           UnbuiltFeature::AudioToneCheck, form);
     }
 
     outer->addLayout(form);

@@ -198,6 +198,7 @@
 //               a stored value between steps shows as mi0bot shows it.
 // =================================================================
 #include "TransmitSetupPages.h"
+#include "gui/UnbuiltFeatures.h"
 #include "gui/StyleConstants.h"
 #include "core/AppSettings.h"
 #include "core/MicProfileManager.h"
@@ -1019,6 +1020,7 @@ void PowerPage::buildHfPaGroup()
     layout->addWidget(m_chkHFTRRelay);
 
     contentLayout()->addWidget(group);
+    UnbuiltFeatures::hideUnlessBuilt(group, UnbuiltFeature::DisableHfPa);
 }
 
 // ---------------------------------------------------------------------------

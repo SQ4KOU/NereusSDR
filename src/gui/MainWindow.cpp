@@ -11,6 +11,9 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-27 - Task 25: hide the PA-trip slot until its Andromeda/Ganymede
+//                 CAT producer is ported. J.J. Boyd (KG4VCF), AI-assisted
+//                 via OpenAI Codex.
 //   2026-09-24 - J.J. Boyd (KG4VCF). R-R3-49 / R-R3-21: menu items and
 //                 status bar items whose feature is not built yet are
 //                 hidden through UnbuiltFeatures (local and remote
@@ -9652,6 +9655,10 @@ void MainWindow::buildStatusBar()
     };
 
     addSlot(m_paStatusBadge);
+    // The trip input is specific to an unported Andromeda/Ganymede CAT
+    // producer. Hide the whole reserved slot until that hardware path exists.
+    UnbuiltFeatures::hideUnlessBuilt(m_paStatusBadge->parentWidget(),
+                                    UnbuiltFeature::GanymedeTrip);
     // The alarm gets a slot sized to its own content, not to its
     // neighbours. PA and TX stay narrow and learnable by position.
     addSlot(m_adcOvlBadge, kOverloadSlotWidthPx);

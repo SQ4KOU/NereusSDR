@@ -161,6 +161,7 @@ void MultimeterPage::buildUI()
         1);
     m_avgWindow->setToolTip(tr("Number of samples averaged per meter update. "
                                 "1 = no averaging (fastest response). Higher values smooth rapid fluctuations."));
+    UnbuiltFeatures::hideRowUnlessBuilt(m_avgWindow, UnbuiltFeature::MultimeterAveraging);
 
     m_digitalDelayMs = addLabeledSpinner(
         tr("Digital delay:"), 10, 2000,

@@ -12,6 +12,7 @@
 #include <QComboBox>
 #include <QLabel>
 #include "gui/setup/GeneralOptionsPage.h"
+#include "core/AppSettings.h"
 #include "OperatorWording.h"
 
 using namespace NereusSDR;
@@ -24,6 +25,7 @@ private slots:
     void chkExtended_present_withWarningLabel();
     void chkGeneralRXOnly_shownOnEveryRadio();
     void chkNetworkWDT_present_defaultChecked();
+    void disabledTxPolicyShowsEnforcedValuesWithoutChangingSavedKeys();
 };
 
 void TestGeneralSetupHardwareConfig::regionCombo_24Entries_defaultUnitedStates()
@@ -37,7 +39,8 @@ void TestGeneralSetupHardwareConfig::regionCombo_24Entries_defaultUnitedStates()
     QVERIFY2(combo, "comboFRSRegion not found");
     QCOMPARE(combo->count(), 24);
     QCOMPARE(combo->currentText(), QString("United States"));
-    QCOMPARE(combo->toolTip(), QString("Select Region for your location"));
+    QCOMPARE(combo->toolTip(), QString("Region selection is not available for transmit on this Core."));
+    QVERIFY(!combo->isEnabled());
 
     // Spot-check: Australia/Japan/Germany are findable
     QVERIFY(combo->findText("Australia") >= 0);
@@ -56,16 +59,45 @@ void TestGeneralSetupHardwareConfig::chkExtended_present_withWarningLabel()
     auto* chk = group->findChild<QCheckBox*>("chkExtended");
     QVERIFY2(chk, "chkExtended not found");
     QCOMPARE(chk->text(), QString("Extended"));
-    QCOMPARE(chk->toolTip(), QString("Enable extended TX (out of band)"));
+    QCOMPARE(chk->toolTip(), QString("Extended transmit is not available on this Core."));
+    QVERIFY(!chk->isEnabled());
     QCOMPARE(chk->isChecked(), false);
 
     auto* lbl = group->findChild<QLabel*>("lblWarningRegionExtended");
     QVERIFY2(lbl, "lblWarningRegionExtended not found");
     QCOMPARE(lbl->text(), QString("Changing this setting will reset your band stack entries"));
+    QVERIFY(lbl->isHidden());
     // Verify red bold styling is applied (stylesheet contains "red" or "bold")
     QString ss = lbl->styleSheet();
     QVERIFY2(ss.contains("red", Qt::CaseInsensitive) || ss.contains("bold", Qt::CaseInsensitive),
              "Warning label must have red/bold styling");
+}
+
+void TestGeneralSetupHardwareConfig::disabledTxPolicyShowsEnforcedValuesWithoutChangingSavedKeys()
+{
+    auto& settings = AppSettings::instance();
+    const QVariant oldRegion = settings.value(QStringLiteral("Region"));
+    const QVariant oldBandPlan = settings.value(QStringLiteral("BandPlanRegion"));
+    const QVariant oldExtended = settings.value(QStringLiteral("ExtendedTxAllowed"));
+    settings.setValue(QStringLiteral("Region"), QStringLiteral("Italy"));
+    settings.setValue(QStringLiteral("BandPlanRegion"), QStringLiteral("5"));
+    settings.setValue(QStringLiteral("ExtendedTxAllowed"), QStringLiteral("True"));
+    {
+        GeneralOptionsPage page(/*model=*/nullptr);
+        auto* region = page.findChild<QComboBox*>(QStringLiteral("comboFRSRegion"));
+        auto* extended = page.findChild<QCheckBox*>(QStringLiteral("chkExtended"));
+        QVERIFY(region && extended);
+        QCOMPARE(region->currentText(), QStringLiteral("Japan"));
+        QVERIFY(!region->isEnabled());
+        QVERIFY(!extended->isChecked());
+        QVERIFY(!extended->isEnabled());
+        QCOMPARE(settings.value(QStringLiteral("Region")).toString(), QStringLiteral("Italy"));
+        QCOMPARE(settings.value(QStringLiteral("ExtendedTxAllowed")).toString(),
+                 QStringLiteral("True"));
+    }
+    settings.setValue(QStringLiteral("Region"), oldRegion);
+    settings.setValue(QStringLiteral("BandPlanRegion"), oldBandPlan);
+    settings.setValue(QStringLiteral("ExtendedTxAllowed"), oldExtended);
 }
 
 void TestGeneralSetupHardwareConfig::chkGeneralRXOnly_shownOnEveryRadio()

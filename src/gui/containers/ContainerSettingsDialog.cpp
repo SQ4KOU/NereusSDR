@@ -1170,7 +1170,8 @@ void ContainerSettingsDialog::onAddItem()
     // --- Display ---
     QMenu* displayMenu = menu->addMenu(QStringLiteral("Display"));
     displayMenu->setStyleSheet(menu->styleSheet());
-    displayMenu->addAction(QStringLiteral("Filter Display"), this, [this]{ addNewItem(QStringLiteral("FILTERDISPLAY")); });
+    QAction* filterDisplayAction = displayMenu->addAction(QStringLiteral("Filter Display"), this, [this]{ addNewItem(QStringLiteral("FILTERDISPLAY")); });
+    UnbuiltFeatures::hideUnlessBuilt(filterDisplayAction, UnbuiltFeature::ContainerFilterDisplay);
     displayMenu->addAction(QStringLiteral("Rotator"),        this, [this]{ addNewItem(QStringLiteral("ROTATOR")); });
 
     // --- Layout ---
@@ -1181,7 +1182,8 @@ void ContainerSettingsDialog::onAddItem()
     layoutMenu->addAction(QStringLiteral("Web Image"),   this, [this]{ addNewItem(QStringLiteral("WEBIMAGE")); });
     layoutMenu->addAction(QStringLiteral("Spacer"),      this, [this]{ addNewItem(QStringLiteral("SPACER")); });
     layoutMenu->addAction(QStringLiteral("Fade Cover"),  this, [this]{ addNewItem(QStringLiteral("FADECOVER")); });
-    layoutMenu->addAction(QStringLiteral("Click Box"),   this, [this]{ addNewItem(QStringLiteral("CLICKBOX")); });
+    QAction* clickBoxAction = layoutMenu->addAction(QStringLiteral("Click Box"), this, [this]{ addNewItem(QStringLiteral("CLICKBOX")); });
+    UnbuiltFeatures::hideUnlessBuilt(clickBoxAction, UnbuiltFeature::ContainerClickBox);
     layoutMenu->addAction(QStringLiteral("Scale"),       this, [this]{ addNewItem(QStringLiteral("SCALE")); });
 
     // --- Data ---

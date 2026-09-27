@@ -476,6 +476,34 @@ void connectDialog(SettingsProxy& proxy, SetupDialog& dialog,
     QCoreApplication::processEvents();
 }
 
+// Settings Validation is available only after the Core advertises the
+// hygiene capability and this computer signs in with its paired key.
+class PairedHygieneLink final : public IStationLink {
+public:
+    int requests{0};
+    CommandOutcome requestAddSlice(const QString&) override { return {}; }
+    CommandOutcome requestAddSliceOnPan(const QString&) override { return {}; }
+    CommandOutcome requestRemoveSlice(int) override { return {}; }
+    CommandOutcome requestActiveSlice(int) override { return {}; }
+    CommandOutcome requestSliceSampleRate(int, int) override { return {}; }
+    bool stationLinkReady() const override { return true; }
+    bool settingsHygieneAvailable() const override { return true; }
+    bool signedInWithDeviceKey() const override { return true; }
+    CommandOutcome requestSettingsHygiene(const QByteArray&, const QString&) override
+    {
+        ++requests;
+        return {true, {}};
+    }
+};
+
+void bindHygieneRadio(RadioModel& model)
+{
+    RadioInfo radio;
+    radio.macAddress = QStringLiteral("AA:BB:CC:DD:EE:FF");
+    model.setLastRadioInfoForTest(radio);
+    model.setConnectionStateForTest(ConnectionState::Connected);
+}
+
 } // namespace
 
 class TstRemoteGuiGating : public QObject {
@@ -1710,12 +1738,7 @@ private slots:
             if (box->text() == QStringLiteral("Send IQ to VAX")) { sendIq = box; }
         }
         QVERIFY(sendIq != nullptr);
-        QVERIFY(!sendIq->isEnabled());
-        QCOMPARE(sendIq->toolTip(), AudioAdvancedPage::remoteSendIqReason());
-        QVERIFY2(OperatorWording::isPlain(sendIq->toolTip()), qPrintable(sendIq->toolTip()));
-        const bool wasChecked = sendIq->isChecked();
-        QTest::mouseClick(sendIq, Qt::LeftButton);
-        QCOMPARE(sendIq->isChecked(), wasChecked);
+        QVERIFY(sendIq->isHidden());
         QVERIFY(!AppSettings::instance().contains(QStringLiteral("audio/SendIqToVax")));
 
         dialog.setStationSettingsAvailable(false, kStationReason);
@@ -2061,7 +2084,9 @@ private slots:
             {QStringLiteral("Grid & Scales"), 3},       // dB max, dB min, copy
             {QStringLiteral("Multimeter"), 1},          // sample interval
             {QStringLiteral("TX Display"), 9},          // TX analyzer
-            {QStringLiteral("Settings Validation"), 2}, // Reset, Forget
+            // Without a negotiated hygiene capability, this page uses its
+            // feature-specific reason rather than the generic Core reason.
+            {QStringLiteral("Settings Validation"), 0},
             {QStringLiteral("Advanced"), 2},            // DSP rate, DSP block size (R-R3-44)
         };
 
@@ -2112,13 +2137,29 @@ private slots:
                     QVERIFY(gated.size() >= 2);
                     break;
                 }
+                if (label == QStringLiteral("Settings Validation")) {
+                    for (const QString& text : {QStringLiteral("Re-validate"),
+                                                QStringLiteral("Forget This Radio"),
+                                                QStringLiteral("Reset to Defaults")}) {
+                        QPushButton* button = buttonWithText(page, text);
+                        QVERIFY(button != nullptr);
+                        QVERIFY(!button->isEnabled());
+                        QVERIFY2(OperatorWording::isPlain(button->toolTip()),
+                                 qPrintable(button->toolTip()));
+                    }
+                }
                 QVERIFY2(gated.size() == coreControls.value(label, 0),
                          qPrintable(QStringLiteral("%1: %2 controls gated, expected %3")
                                         .arg(label).arg(gated.size())
                                         .arg(coreControls.value(label, 0))));
                 for (QWidget* control : gated) {
                     QVERIFY2(!control->isEnabled(), qPrintable(label));
-                    QCOMPARE(control->toolTip(), kStationReason);
+                    if (control->objectName() == QStringLiteral("comboFRSRegion")) {
+                        QCOMPARE(control->toolTip(),
+                                 QStringLiteral("Region selection is not available for transmit on this Core."));
+                    } else {
+                        QCOMPARE(control->toolTip(), kStationReason);
+                    }
                 }
                 break;
             }
@@ -2180,7 +2221,8 @@ private slots:
         // snapshot's own queued rebuild runs first and finds the settings
         // still unavailable, so it is the push that rebuilds.
         proxy.applySnapshot({{QLatin1String(AppSettings::kDaemonProfileSeededKey), QStringLiteral("True")},
-                             {QStringLiteral("Region"), QStringLiteral("Japan")},
+                             {QStringLiteral("Region"), QStringLiteral("Italy")},
+                             {QStringLiteral("BandPlanRegion"), QStringLiteral("5")},
                              {QStringLiteral("MultimeterDelayMs"), QStringLiteral("250")}});
         proxy.setReady(true);
         QCoreApplication::processEvents();
@@ -2191,7 +2233,9 @@ private slots:
         QWidget* const options = dialog.realizedPageForTest(QStringLiteral("Options"));
         region = options->findChild<QComboBox*>(QStringLiteral("comboFRSRegion"));
         QCOMPARE(region->currentText(), QStringLiteral("Japan"));
-        QVERIFY(region->isEnabled());
+        QVERIFY(!region->isEnabled());
+        QCOMPARE(region->toolTip(),
+                 QStringLiteral("Region selection is not available for transmit on this Core."));
         QVERIFY(!dialog.isPagePlaceholderForTest(QStringLiteral("NB/SNB")));
         QWidget* const nb = dialog.realizedPageForTest(QStringLiteral("NB/SNB"));
         QVERIFY(nb->isEnabled());
@@ -2211,7 +2255,8 @@ private slots:
         // A later snapshot on the same live session (a Core whose radio
         // came online sends one): rebuilt again, queued.
         QPointer<QWidget> connectedOptions = options;
-        proxy.applySnapshot({{QStringLiteral("Region"), QStringLiteral("Italy")}});
+        proxy.applySnapshot({{QStringLiteral("Region"), QStringLiteral("Japan")},
+                             {QStringLiteral("BandPlanRegion"), QStringLiteral("3")}});
         QTRY_VERIFY(!connectedOptions);
         region = dialog.realizedPageForTest(QStringLiteral("Options"))
                      ->findChild<QComboBox*>(QStringLiteral("comboFRSRegion"));
@@ -2354,6 +2399,9 @@ private slots:
         SettingsProxy proxy;
         AppSettings::instance().setRemoteBackend(&proxy);
         RadioModel remote(RadioModel::Role::Remote);
+        PairedHygieneLink link;
+        remote.attachStation(&link);
+        bindHygieneRadio(remote);
         SetupDialog dialog(&remote);
         connectDialog(proxy, dialog, {{QStringLiteral("Region"), QStringLiteral("Japan")}});
 
@@ -2394,6 +2442,9 @@ private slots:
         SettingsProxy proxy;
         AppSettings::instance().setRemoteBackend(&proxy);
         RadioModel remote(RadioModel::Role::Remote);
+        PairedHygieneLink link;
+        remote.attachStation(&link);
+        bindHygieneRadio(remote);
         SetupDialog dialog(&remote);
         connectDialog(proxy, dialog);
         const QString label = QStringLiteral("Settings Validation");
@@ -2404,8 +2455,10 @@ private slots:
         QSignalSpy removes(&proxy, &SettingsProxy::outboundRemoveRequested);
         const QSet<QString> heldBefore = proxy.droppedWhileOffline();
 
-        for (const QString& text : {QStringLiteral("Forget This Radio"),
-                                    QStringLiteral("Reset to Defaults")}) {
+        QPushButton* const reset = buttonWithText(page, QStringLiteral("Reset to Defaults"));
+        QVERIFY(reset != nullptr);
+        QVERIFY(!reset->isEnabled());
+        for (const QString& text : {QStringLiteral("Forget This Radio")}) {
             QPushButton* const button = buttonWithText(page, text);
             QVERIFY(button != nullptr);
             proxy.setReady(true);
@@ -2419,6 +2472,7 @@ private slots:
                 // MainWindow pushes the change to the open dialog.
                 proxy.setReady(false);
                 dialog.setStationSettingsAvailable(false, kStationReason);
+                remote.setConnectionStateForTest(ConnectionState::Disconnected);
                 box->button(QMessageBox::Yes)->click();
                 answered = true;
             });
@@ -2427,6 +2481,7 @@ private slots:
         }
         QCOMPARE(writes.size(), 0);
         QCOMPARE(removes.size(), 0);
+        QCOMPARE(link.requests, 0);
         const QSet<QString> held = proxy.droppedWhileOffline() - heldBefore;
         QVERIFY2(held.isEmpty(),
                  qPrintable(QStringList(held.cbegin(), held.cend()).join(QStringLiteral(", "))));

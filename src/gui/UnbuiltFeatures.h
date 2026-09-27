@@ -23,6 +23,8 @@
 //
 // =================================================================
 // Modification history (NereusSDR):
+//   2026-09-27 - Task 25 dead-control audit adds explicit missing-port
+//                 entries. J.J. Boyd (KG4VCF), AI-assisted via OpenAI Codex.
 //   2026-09-24  J.J. Boyd / KG4VCF  Created (R-R3-49, R-R3-21). AI-assisted
 //                                    via Anthropic Claude Code.
 //   2026-09-24  J.J. Boyd / KG4VCF  Fix wave: one entry per feature for the
@@ -117,6 +119,19 @@ enum class UnbuiltFeature {
     AlexTxFilterOptions, // Setup > Hardware > Alex-1 Filters: the LPF band edges (plan C5;
                          // its high-pass switches are applied since plan Task 14)
     Hl2TxTiming,      // Setup > Hardware > HL2 Options: TX buffer latency, PTT hang (plan C6)
+    GanymedeTrip,     // Status PA badge: Andromeda/Ganymede CAT trip input is not ported
+    DisableHfPa,      // Setup > Transmit > Power: HF PA relay routing refresh is not ported
+    PbSnr,            // Multimeter PBSNR binding has no producer
+    ContainerFilterDisplay, // Container FIR curve binds, but spectrum/waterfall feed is absent
+    ContainerClickBox, // Container click box has no host action routing
+    AudioBitDepth,    // Audio Devices bit-depth hint is not consumed by an audio backend
+    AudioAutoMatch,   // Audio Devices default sample-rate lookup is not ported
+    AudioMonitorTxInput, // Audio Devices microphone monitor routing is not ported
+    AudioToneCheck,   // Audio Devices first-PTT tone generator is not ported
+    WaterfallLowColor, // Colors & Theme low-level color has no gradient setter
+    MultimeterAveraging, // MeterPoller stores window size but does not average readings
+    TxGridScale,      // TX Display grid controls are an inert placeholder
+    CrossBandSplitGuard, // Thetis VFO-B split guard is retired in Phase 3F
 };
 
 namespace UnbuiltFeatures {
